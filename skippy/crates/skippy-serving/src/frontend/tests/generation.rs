@@ -2,7 +2,7 @@ use super::*;
 use crate::frontend::backend::run_blocking_generation_worker;
 use std::sync::atomic::AtomicBool;
 
-fn assert_generation_rate_limit(error: OpenAiError, message_fragment: &str) {
+fn assert_generation_rate_limit(error: InferenceError, message_fragment: &str) {
     assert_eq!(error.status(), StatusCode::TOO_MANY_REQUESTS);
     let body = error.body();
     assert_eq!(body.error.code.as_deref(), Some("rate_limit_exceeded"));
@@ -212,7 +212,7 @@ async fn cancelled_worker_stops_before_the_next_request_acquires_the_only_lane()
     )
     .await
     .unwrap();
-    let first_context = OpenAiRequestContext::new();
+    let first_context = InferenceRequestContext::new();
     let worker_started = Arc::new(AtomicBool::new(false));
     let worker_stopped = Arc::new(AtomicBool::new(false));
     let started = worker_started.clone();

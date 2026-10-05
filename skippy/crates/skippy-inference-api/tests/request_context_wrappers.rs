@@ -4,26 +4,27 @@ use async_trait::async_trait;
 use futures_util::stream;
 use serde_json::json;
 use skippy_inference_api::{
-    ChatCompletionRequest, ChatCompletionResponse, ChatCompletionStream, CompactingOpenAiBackend,
-    CompactionConfig, GuardedOpenAiBackend, GuardrailPolicy, HookedOpenAiBackend, ModelObject,
-    OpenAiBackend, OpenAiHookPolicy, OpenAiRequestContext, OpenAiResult, Usage, parse_request_id,
+    ChatCompletionRequest, ChatCompletionResponse, ChatCompletionStream,
+    CompactingInferenceBackend, CompactionConfig, GuardedInferenceBackend, GuardrailPolicy,
+    HookedInferenceBackend, InferenceBackend, InferenceHookPolicy, InferenceRequestContext,
+    InferenceResult, ModelObject, Usage, parse_request_id,
 };
 
 #[derive(Default)]
 struct ContextCaptureBackend {
-    contexts: Mutex<Vec<OpenAiRequestContext>>,
+    contexts: Mutex<Vec<InferenceRequestContext>>,
 }
 
 #[async_trait]
-impl OpenAiBackend for ContextCaptureBackend {
-    async fn models(&self) -> OpenAiResult<Vec<ModelObject>> {
+impl InferenceBackend for ContextCaptureBackend {
+    async fn models(&self) -> InferenceResult<Vec<ModelObject>> {
         Ok(vec![ModelObject::new("context-model")])
     }
 
     async fn chat_completion(
         &self,
         request: ChatCompletionRequest,
-    ) -> OpenAiResult<ChatCompletionResponse> {
+    ) -> InferenceResult<ChatCompletionResponse> {
         Ok(ChatCompletionResponse::new(
             request.model,
             "ok",
@@ -34,8 +35,8 @@ impl OpenAiBackend for ContextCaptureBackend {
     async fn chat_completion_with_context(
         &self,
         request: ChatCompletionRequest,
-        context: OpenAiRequestContext,
-    ) -> OpenAiResult<ChatCompletionResponse> {
+        context: InferenceRequestContext,
+    ) -> InferenceResult<ChatCompletionResponse> {
         self.contexts.lock().expect("context lock").push(context);
         self.chat_completion(request).await
     }
@@ -43,8 +44,8 @@ impl OpenAiBackend for ContextCaptureBackend {
     async fn chat_completion_stream(
         &self,
         _request: ChatCompletionRequest,
-        context: OpenAiRequestContext,
-    ) -> OpenAiResult<ChatCompletionStream> {
+        context: InferenceRequestContext,
+    ) -> InferenceResult<ChatCompletionStream> {
         self.contexts.lock().expect("context lock").push(context);
         Ok(Box::pin(stream::empty()))
     }
@@ -53,20 +54,20 @@ impl OpenAiBackend for ContextCaptureBackend {
 struct NoopHook;
 
 #[async_trait]
-impl OpenAiHookPolicy for NoopHook {}
+impl InferenceHookPolicy for NoopHook {}
 
 #[tokio::test]
 async fn backend_wrapper_stack_preserves_authoritative_request_context() {
     let capture = Arc::new(ContextCaptureBackend::default());
-    let compacting = Arc::new(CompactingOpenAiBackend::new(
+    let compacting = Arc::new(CompactingInferenceBackend::new(
         capture.clone(),
         CompactionConfig::default(),
     ));
-    let guarded = Arc::new(GuardedOpenAiBackend::new(
+    let guarded = Arc::new(GuardedInferenceBackend::new(
         compacting,
         GuardrailPolicy::default(),
     ));
-    let hooked = HookedOpenAiBackend::new(guarded, Arc::new(NoopHook));
+    let hooked = HookedInferenceBackend::new(guarded, Arc::new(NoopHook));
     let request: ChatCompletionRequest = serde_json::from_value(json!({
         "model": "context-model",
         "messages": [{"role": "user", "content": "private prompt"}]
@@ -78,14 +79,14 @@ async fn backend_wrapper_stack_preserves_authoritative_request_context() {
     hooked
         .chat_completion_with_context(
             request.clone(),
-            OpenAiRequestContext::with_request_id(unary_id),
+            InferenceRequestContext::with_request_id(unary_id),
         )
         .await
         .expect("unary wrapper call");
     let _stream = hooked
         .chat_completion_stream(
             request,
-            OpenAiRequestContext::with_request_id(stream_id).with_stream_usage_observation(),
+            InferenceRequestContext::with_request_id(stream_id).with_stream_usage_observation(),
         )
         .await
         .expect("stream wrapper call");

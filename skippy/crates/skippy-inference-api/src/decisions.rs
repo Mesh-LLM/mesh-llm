@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, HashSet};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    errors::OpenAiError,
+    errors::InferenceError,
     system_one::{
         SystemOneAnswer, SystemOneJson, SystemOneJsonObject, SystemOneQuestion, SystemOneRequest,
         SystemOneResponse, SystemOneUsage,
@@ -60,7 +60,7 @@ impl DecisionsQuestion {
         }
     }
 
-    fn to_system_one(&self) -> Result<SystemOneQuestion, OpenAiError> {
+    fn to_system_one(&self) -> Result<SystemOneQuestion, InferenceError> {
         let instruction = |value: &Option<String>| value.as_deref().map(SystemOneJson::from);
         match self {
             Self::Predicate { instructions, .. } => Ok(SystemOneQuestion::Noul {
@@ -78,7 +78,7 @@ impl DecisionsQuestion {
                         .iter()
                         .any(|choice| choice.value.is_empty() || !seen.insert(&choice.value))
                 {
-                    return Err(OpenAiError::invalid_request(format!(
+                    return Err(InferenceError::invalid_request(format!(
                         "question {name:?} must have distinct, nonempty choice values"
                     )));
                 }
@@ -103,7 +103,7 @@ impl DecisionsQuestion {
                         .iter()
                         .any(|level| level.label.is_empty() || !seen.insert(&level.label))
                 {
-                    return Err(OpenAiError::invalid_request(format!(
+                    return Err(InferenceError::invalid_request(format!(
                         "question {name:?} must have distinct, nonempty level labels"
                     )));
                 }
@@ -124,9 +124,9 @@ impl DecisionsQuestion {
 }
 
 impl DecisionsRequest {
-    pub(crate) fn to_system_one(&self) -> Result<SystemOneRequest, OpenAiError> {
+    pub(crate) fn to_system_one(&self) -> Result<SystemOneRequest, InferenceError> {
         if self.model.trim().is_empty() || self.questions.is_empty() {
-            return Err(OpenAiError::invalid_request(
+            return Err(InferenceError::invalid_request(
                 "Decisions needs a model and at least one question",
             ));
         }
@@ -138,7 +138,7 @@ impl DecisionsRequest {
                     .insert(name.to_string(), question.to_system_one()?)
                     .is_some()
             {
-                return Err(OpenAiError::invalid_request(
+                return Err(InferenceError::invalid_request(
                     "Decisions question names must be distinct and nonempty",
                 ));
             }
@@ -158,34 +158,34 @@ impl DecisionsRequest {
     pub(crate) fn response(
         &self,
         result: SystemOneResponse,
-    ) -> Result<DecisionsResponse, OpenAiError> {
+    ) -> Result<DecisionsResponse, InferenceError> {
         let answers = self.questions.iter().map(|question| {
             let name = question.name();
-            let answer = result.answers.get(name).ok_or_else(|| OpenAiError::backend(format!("Decisions backend omitted answer {name:?}")))?;
+            let answer = result.answers.get(name).ok_or_else(|| InferenceError::backend(format!("Decisions backend omitted answer {name:?}")))?;
             match (question, answer) {
                 (DecisionsQuestion::Predicate { .. }, SystemOneAnswer::Noul { noul }) =>
                     Ok(DecisionsAnswer::Predicate { name: name.to_string(), probability: *noul }),
                 (DecisionsQuestion::Choice { choices, .. }, SystemOneAnswer::Choice { choice, probabilities, confidence }) => {
                     if !choices.iter().any(|option| option.value == *choice) {
-                        return Err(OpenAiError::backend(format!("Decisions backend returned unknown choice for {name:?}")));
+                        return Err(InferenceError::backend(format!("Decisions backend returned unknown choice for {name:?}")));
                     }
                     let probabilities = choices.iter().map(|option| Ok(ChoiceProbability {
                         value: option.value.clone(),
-                        probability: *probabilities.get(&option.value).ok_or_else(|| OpenAiError::backend(format!("Decisions backend omitted probability for {:?}", option.value)))?,
-                    })).collect::<Result<Vec<_>, OpenAiError>>()?;
+                        probability: *probabilities.get(&option.value).ok_or_else(|| InferenceError::backend(format!("Decisions backend omitted probability for {:?}", option.value)))?,
+                    })).collect::<Result<Vec<_>, InferenceError>>()?;
                     Ok(DecisionsAnswer::Choice { name: name.to_string(), choice: choice.clone(), probabilities, confidence: *confidence })
                 }
                 (DecisionsQuestion::Score { levels, .. }, SystemOneAnswer::Score { score, probabilities, confidence, .. }) => {
                     let probabilities = levels.iter().enumerate().map(|(index, level)| Ok(ScoreProbability {
                         value: index,
                         label: level.label.clone(),
-                        probability: *probabilities.get(&index.to_string()).ok_or_else(|| OpenAiError::backend(format!("Decisions backend omitted score probability {index}")))?,
-                    })).collect::<Result<Vec<_>, OpenAiError>>()?;
+                        probability: *probabilities.get(&index.to_string()).ok_or_else(|| InferenceError::backend(format!("Decisions backend omitted score probability {index}")))?,
+                    })).collect::<Result<Vec<_>, InferenceError>>()?;
                     Ok(DecisionsAnswer::Score { name: name.to_string(), score: *score, probabilities, confidence: *confidence })
                 }
-                _ => Err(OpenAiError::backend(format!("Decisions backend returned wrong answer type for {name:?}"))),
+                _ => Err(InferenceError::backend(format!("Decisions backend returned wrong answer type for {name:?}"))),
             }
-        }).collect::<Result<Vec<_>, OpenAiError>>()?;
+        }).collect::<Result<Vec<_>, InferenceError>>()?;
         Ok(DecisionsResponse {
             model: result.model,
             answers,

@@ -5,7 +5,7 @@ use crate::frontend::generation::{
 };
 use crate::frontend::util::{generation_stop_values, openai_backend_error};
 use serde_json::json;
-use skippy_inference_api::{ChatCompletionRequest, OpenAiError, OpenAiResult};
+use skippy_inference_api::{ChatCompletionRequest, InferenceError, InferenceResult};
 use skippy_runtime::{ModelWorkload, SamplingConfig};
 
 pub(super) fn resident_capacity_target_tokens(prompt_token_count: usize) -> u64 {
@@ -18,7 +18,7 @@ impl StageOpenAiBackend {
         prompt: &PreparedGenerationPrompt,
         max_tokens: GenerationTokenLimit,
         ids: &OpenAiGenerationIds,
-    ) -> OpenAiResult<PreparedTextPrompt> {
+    ) -> InferenceResult<PreparedTextPrompt> {
         let tokenize_timer = PhaseTimer::start();
         let token_ids = self.tokenize(&prompt.text)?;
         let mut tokenize_attrs = self.openai_attrs(ids);
@@ -32,7 +32,7 @@ impl StageOpenAiBackend {
         );
         self.emit_openai_phase("stage.openai_tokenize", tokenize_timer, tokenize_attrs);
         if token_ids.is_empty() {
-            return Err(OpenAiError::invalid_request("prompt produced no tokens"));
+            return Err(InferenceError::invalid_request("prompt produced no tokens"));
         }
         let max_tokens = max_tokens.resolve(token_ids.len(), self.ctx_size)?;
         Ok(PreparedTextPrompt {
@@ -54,23 +54,23 @@ impl StageOpenAiBackend {
         hook_runtime: Option<tokio::runtime::Handle>,
         cancellation: Option<&skippy_inference_api::CancellationToken>,
         ids: OpenAiGenerationIds,
-        on_text_chunk: impl FnMut(&str) -> OpenAiResult<()>,
-    ) -> OpenAiResult<GeneratedText> {
+        on_text_chunk: impl FnMut(&str) -> InferenceResult<()>,
+    ) -> InferenceResult<GeneratedText> {
         let payment_gate = crate::frontend::generation_gate::find(ids.frontend_request_id)?;
         if payment_gate.is_some()
             && (prompt.has_media()
                 || matches!(&self.mode, OpenAiBackendMode::EmbeddedStageZero { config, .. } if config.downstream.is_some()))
         {
-            return Err(OpenAiError::unsupported(
+            return Err(InferenceError::unsupported(
                 "paid inference currently requires a single-node text model",
             ));
         }
         let generation_timer = PhaseTimer::start();
         if cancellation.is_some_and(skippy_inference_api::CancellationToken::is_cancelled) {
-            return Err(OpenAiError::backend("request cancelled"));
+            return Err(InferenceError::backend("request cancelled"));
         }
         if prompt.text.is_empty() {
-            return Err(OpenAiError::invalid_request(
+            return Err(InferenceError::invalid_request(
                 "request prompt/messages produced no text",
             ));
         }
@@ -117,7 +117,7 @@ impl StageOpenAiBackend {
             return collector.finish(prompt_token_ids.len(), cache_stats);
         }
         if workload != ModelWorkload::CausalGeneration {
-            return Err(OpenAiError::unsupported(format!(
+            return Err(InferenceError::unsupported(format!(
                 "model workload is {workload:?}; chat and completion endpoints require a generative model"
             )));
         }
@@ -149,10 +149,10 @@ impl StageOpenAiBackend {
                     && prompt_token_ids.starts_with(prefix)
             });
         if cancellation.is_some_and(skippy_inference_api::CancellationToken::is_cancelled) {
-            return Err(OpenAiError::backend("request cancelled"));
+            return Err(InferenceError::backend("request cancelled"));
         }
         if cancellation.is_some_and(skippy_inference_api::CancellationToken::is_cancelled) {
-            return Err(OpenAiError::backend("request cancelled"));
+            return Err(InferenceError::backend("request cancelled"));
         }
         let token_admit_timer = PhaseTimer::start();
         let (reserved_tokens, active_reserved_tokens) = token_budget_stats;

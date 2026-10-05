@@ -1,18 +1,18 @@
 use super::*;
 
 /// Reject an invalid model descriptor before allocating any embedding sessions.
-pub(super) fn embedding_output_dimensions(dimensions: u32) -> OpenAiResult<usize> {
+pub(super) fn embedding_output_dimensions(dimensions: u32) -> InferenceResult<usize> {
     if dimensions == 0 {
-        return Err(OpenAiError::backend(
+        return Err(InferenceError::backend(
             "model did not report an embedding output dimension",
         ));
     }
     usize::try_from(dimensions)
-        .map_err(|_| OpenAiError::backend("embedding dimensions exceed usize"))
+        .map_err(|_| InferenceError::backend("embedding dimensions exceed usize"))
 }
 
 /// Validate the same documents that execution consumes before estimating admission.
-pub(super) fn rerank_prompt_tokens_estimate(request: &RerankRequest) -> OpenAiResult<usize> {
+pub(super) fn rerank_prompt_tokens_estimate(request: &RerankRequest) -> InferenceResult<usize> {
     request.validate()?;
     request
         .documents
@@ -48,19 +48,19 @@ where
 }
 
 /// Preserve structured frontend errors while adding context to native failures.
-fn workload_error(error: anyhow::Error) -> OpenAiError {
-    if let Some(openai_error) = error.downcast_ref::<OpenAiError>() {
+fn workload_error(error: anyhow::Error) -> InferenceError {
+    if let Some(openai_error) = error.downcast_ref::<InferenceError>() {
         return openai_error.clone();
     }
-    OpenAiError::backend(format!("workload execution failed: {error:#}"))
+    InferenceError::backend(format!("workload execution failed: {error:#}"))
 }
 
 /// Accept only the implemented default speaker; do not reinterpret voice as language.
-pub(super) fn validate_speech_voice(voice: &str) -> OpenAiResult<()> {
+pub(super) fn validate_speech_voice(voice: &str) -> InferenceResult<()> {
     if voice == "default" {
         Ok(())
     } else {
-        Err(OpenAiError::unsupported(
+        Err(InferenceError::unsupported(
             "native speech synthesis currently supports only voice 'default'; speaker selection is not implemented",
         )
         .with_param("voice"))
@@ -95,11 +95,11 @@ impl StageOpenAiBackend {
         &self,
         request: AudioTranscriptionRequest,
         translate_to_english: bool,
-        context: OpenAiRequestContext,
-    ) -> OpenAiResult<AudioTranscriptionResponse> {
+        context: InferenceRequestContext,
+    ) -> InferenceResult<AudioTranscriptionResponse> {
         self.ensure_model(&request.model)?;
         if !self.has_unsplit_full_model_topology() {
-            return Err(OpenAiError::unsupported(
+            return Err(InferenceError::unsupported(
                 "audio transcription currently requires an unsplit local runtime",
             ));
         }
@@ -107,12 +107,12 @@ impl StageOpenAiBackend {
             let runtime = self
                 .runtime
                 .lock()
-                .map_err(|_| OpenAiError::backend("runtime lock poisoned"))?;
+                .map_err(|_| InferenceError::backend("runtime lock poisoned"))?;
             if runtime.input_activation_boundary().is_some()
                 || runtime.output_activation_boundary().is_some()
                 || !runtime.has_media_projector()
             {
-                return Err(OpenAiError::unsupported(
+                return Err(InferenceError::unsupported(
                     "model does not expose full-model multimodal audio input",
                 ));
             }
@@ -163,28 +163,28 @@ impl StageOpenAiBackend {
     pub(in crate::frontend) fn ensure_local_workload(
         &self,
         expected: ModelWorkload,
-    ) -> OpenAiResult<WorkloadInfo> {
+    ) -> InferenceResult<WorkloadInfo> {
         if !self.has_unsplit_full_model_topology() {
-            return Err(OpenAiError::unsupported(
+            return Err(InferenceError::unsupported(
                 "non-chat workloads currently require an unsplit local runtime",
             ));
         }
         let runtime = self
             .runtime
             .lock()
-            .map_err(|_| OpenAiError::backend("runtime lock poisoned"))?;
+            .map_err(|_| InferenceError::backend("runtime lock poisoned"))?;
         if runtime.input_activation_boundary().is_some()
             || runtime.output_activation_boundary().is_some()
         {
-            return Err(OpenAiError::unsupported(
+            return Err(InferenceError::unsupported(
                 "non-chat workloads currently require an unsplit full model",
             ));
         }
         let info = runtime
             .workload_info()
-            .map_err(|error| OpenAiError::backend(format!("read model workload: {error:#}")))?;
+            .map_err(|error| InferenceError::backend(format!("read model workload: {error:#}")))?;
         if info.kind != expected {
-            return Err(OpenAiError::unsupported(format!(
+            return Err(InferenceError::unsupported(format!(
                 "model workload is {:?}; endpoint requires {:?}",
                 info.kind, expected
             )));
@@ -196,23 +196,23 @@ impl StageOpenAiBackend {
     pub(super) fn prepare_embedding_inputs(
         &self,
         request: EmbeddingsRequest,
-    ) -> OpenAiResult<Vec<Vec<i32>>> {
+    ) -> InferenceResult<Vec<Vec<i32>>> {
         let reader = self
             .runtime
             .lock()
-            .map_err(|_| OpenAiError::backend("runtime lock poisoned"))?
+            .map_err(|_| InferenceError::backend("runtime lock poisoned"))?
             .model
             .reader();
         match request.input {
             EmbeddingInput::Text(text) => reader
                 .tokenize(&text, true)
                 .map(|tokens| vec![tokens])
-                .map_err(|error| OpenAiError::backend(format!("tokenize embedding: {error:#}"))),
+                .map_err(|error| InferenceError::backend(format!("tokenize embedding: {error:#}"))),
             EmbeddingInput::Texts(texts) => texts
                 .into_iter()
                 .map(|text| {
                     reader.tokenize(&text, true).map_err(|error| {
-                        OpenAiError::backend(format!("tokenize embedding: {error:#}"))
+                        InferenceError::backend(format!("tokenize embedding: {error:#}"))
                     })
                 })
                 .collect(),
@@ -224,11 +224,11 @@ impl StageOpenAiBackend {
     /// Execute admitted blocking work with cancellation, slot ownership, and cleanup.
     pub(super) async fn run_local_workload<T, F>(
         &self,
-        context: OpenAiRequestContext,
+        context: InferenceRequestContext,
         ids: OpenAiGenerationIds,
         prompt_tokens: usize,
         work: F,
-    ) -> OpenAiResult<T>
+    ) -> InferenceResult<T>
     where
         T: Send + 'static,
         F: FnOnce(&mut crate::runtime_state::RuntimeState, &str) -> anyhow::Result<T>
@@ -254,10 +254,10 @@ impl StageOpenAiBackend {
             }
             let mut runtime = runtime
                 .lock()
-                .map_err(|_| OpenAiError::backend("runtime lock poisoned"))?;
+                .map_err(|_| InferenceError::backend("runtime lock poisoned"))?;
             let result = work(&mut runtime, &session_id).map_err(workload_error);
             let cleanup = runtime.drop_session_timed(&session_id).map_err(|error| {
-                OpenAiError::backend(format!("workload session cleanup failed: {error:#}"))
+                InferenceError::backend(format!("workload session cleanup failed: {error:#}"))
             });
             match (result, cleanup) {
                 (Ok(value), Ok(_)) => Ok(value),
@@ -266,7 +266,7 @@ impl StageOpenAiBackend {
             }
         })
         .await
-        .map_err(|error| OpenAiError::backend(format!("workload task failed: {error}")))?;
+        .map_err(|error| InferenceError::backend(format!("workload task failed: {error}")))?;
         if worker_context.is_cancelled() {
             Err(request_cancelled_error())
         } else {

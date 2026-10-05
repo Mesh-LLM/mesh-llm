@@ -308,9 +308,9 @@ impl InvoiceGate {
         &self,
         cap: u64,
         max_pause: std::time::Duration,
-    ) -> skippy_inference_api::OpenAiResult<()> {
+    ) -> skippy_inference_api::InferenceResult<()> {
         let cancelled = || {
-            Err(skippy_inference_api::OpenAiError::backend(
+            Err(skippy_inference_api::InferenceError::backend(
                 "paid request cancelled",
             ))
         };
@@ -337,7 +337,7 @@ impl InvoiceGate {
             };
             if gave_up {
                 self.cancelled.store(true, Ordering::Release);
-                return Err(skippy_inference_api::OpenAiError::backend(
+                return Err(skippy_inference_api::InferenceError::backend(
                     "input payment did not arrive",
                 ));
             }
@@ -347,15 +347,19 @@ impl InvoiceGate {
 }
 
 impl GenerationGate for InvoiceGate {
-    fn after_prefill(&self, input: usize, output: u32) -> skippy_inference_api::OpenAiResult<()> {
+    fn after_prefill(
+        &self,
+        input: usize,
+        output: u32,
+    ) -> skippy_inference_api::InferenceResult<()> {
         let authorization = self.prepare_authorization(input, output).map_err(|_| {
-            skippy_inference_api::OpenAiError::backend("inference payment was not authorized")
+            skippy_inference_api::InferenceError::backend("inference payment was not authorized")
         })?;
         self.spawn_authorization(authorization);
         Ok(())
     }
 
-    fn before_token(&self) -> skippy_inference_api::OpenAiResult<()> {
+    fn before_token(&self) -> skippy_inference_api::InferenceResult<()> {
         self.wait_for_decode_allowance(
             PRE_PAYMENT_OUTPUT_TOKENS,
             INPUT_ARRIVAL_WAIT + PRE_PAYMENT_PAUSE_SLACK,
@@ -366,7 +370,7 @@ impl GenerationGate for InvoiceGate {
         self.output_tokens.load(Ordering::Acquire)
     }
 
-    fn committed_token(&self) -> skippy_inference_api::OpenAiResult<()> {
+    fn committed_token(&self) -> skippy_inference_api::InferenceResult<()> {
         self.output_tokens.fetch_add(1, Ordering::AcqRel);
         Ok(())
     }

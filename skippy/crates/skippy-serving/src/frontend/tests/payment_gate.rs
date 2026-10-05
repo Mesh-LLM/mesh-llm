@@ -10,22 +10,22 @@ struct TestGate {
     output: AtomicU64,
 }
 impl GenerationGate for TestGate {
-    fn after_prefill(&self, input: usize, _: u32) -> OpenAiResult<()> {
+    fn after_prefill(&self, input: usize, _: u32) -> InferenceResult<()> {
         self.input.store(input, Ordering::Release);
         self.prefilled.notify_one();
         let deadline = std::time::Instant::now() + Duration::from_secs(10);
         while !self.released.load(Ordering::Acquire) {
             if std::time::Instant::now() > deadline {
-                return Err(OpenAiError::backend("test approval timed out"));
+                return Err(InferenceError::backend("test approval timed out"));
             }
             std::thread::sleep(Duration::from_millis(10));
         }
         if self.expired.load(Ordering::Acquire) {
-            return Err(OpenAiError::backend("test invoice expired"));
+            return Err(InferenceError::backend("test invoice expired"));
         }
         Ok(())
     }
-    fn committed_token(&self) -> OpenAiResult<()> {
+    fn committed_token(&self) -> InferenceResult<()> {
         self.output.fetch_add(1, Ordering::AcqRel);
         Ok(())
     }
@@ -125,12 +125,15 @@ async fn payments_real_model_prefills_before_gate_and_streams_usage_after_releas
     Ok(())
 }
 
-async fn collect_completion(backend: &impl OpenAiBackend, id: [u8; 16]) -> Result<(String, u32)> {
+async fn collect_completion(
+    backend: &impl InferenceBackend,
+    id: [u8; 16],
+) -> Result<(String, u32)> {
     use futures_util::StreamExt;
     let request: CompletionRequest = serde_json::from_value(
         json!({"model":"mm-smoke","prompt":"The sun is","max_tokens":8,"stream":true,"stream_options":{"include_usage":true},"temperature":0}),
     )?;
-    let context = OpenAiRequestContext::with_request_id(uuid::Uuid::from_bytes(id).into());
+    let context = InferenceRequestContext::with_request_id(uuid::Uuid::from_bytes(id).into());
     let mut stream = backend.completion_stream(request, context).await?;
     let mut tokens = 0;
     let mut text = String::new();

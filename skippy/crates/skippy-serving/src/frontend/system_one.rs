@@ -9,8 +9,8 @@ use std::collections::BTreeMap;
 
 use sha2::{Digest, Sha256};
 use skippy_inference_api::{
-    OpenAiError, OpenAiResult, SystemOneAnswer, SystemOneJson, SystemOneQuestion, SystemOneRequest,
-    SystemOneResponse, SystemOneUsage,
+    InferenceError, InferenceResult, SystemOneAnswer, SystemOneJson, SystemOneQuestion,
+    SystemOneRequest, SystemOneResponse, SystemOneUsage,
 };
 use skippy_runtime::{
     DecisionError, DecisionModel, DecisionOutput, DecisionQuestion, DecisionQuestionKind,
@@ -31,7 +31,7 @@ impl StageOpenAiBackend {
     pub(super) fn run_system_one(
         &self,
         request: SystemOneRequest,
-    ) -> OpenAiResult<SystemOneResponse> {
+    ) -> InferenceResult<SystemOneResponse> {
         self.validate_system_one_request(&request)?;
         let decision = decision_request(&request)?;
         let output = self
@@ -42,14 +42,14 @@ impl StageOpenAiBackend {
         response(request, output)
     }
 
-    fn validate_system_one_request(&self, request: &SystemOneRequest) -> OpenAiResult<()> {
+    fn validate_system_one_request(&self, request: &SystemOneRequest) -> InferenceResult<()> {
         validate_request_fields(request, &self.model_id)?;
         match &self.mode {
             OpenAiBackendMode::LocalRuntime => Ok(()),
             OpenAiBackendMode::EmbeddedStageZero { config, .. } if config.downstream.is_none() => {
                 Ok(())
             }
-            OpenAiBackendMode::EmbeddedStageZero { .. } => Err(OpenAiError::unsupported(
+            OpenAiBackendMode::EmbeddedStageZero { .. } => Err(InferenceError::unsupported(
                 "System One reads currently require a complete model on one Skippy worker",
             )),
         }
@@ -61,7 +61,7 @@ fn run_on_model(
     model: &dyn DecisionModel,
     model_id: &str,
     request: SystemOneRequest,
-) -> OpenAiResult<SystemOneResponse> {
+) -> InferenceResult<SystemOneResponse> {
     validate_request_fields(&request, model_id)?;
     let decision = decision_request(&request)?;
     let output = model.decide(&decision).map_err(decision_error)?;
@@ -70,16 +70,16 @@ fn run_on_model(
 
 /// Checks the request fields every System One backend shares: the model name
 /// or a Jev alias, a non-empty question set, and the one-read text-only subset.
-fn validate_request_fields(request: &SystemOneRequest, model_id: &str) -> OpenAiResult<()> {
+fn validate_request_fields(request: &SystemOneRequest, model_id: &str) -> InferenceResult<()> {
     const ALIASES: &[&str] = &["openjev-latest", "openjev-0.1", "jev-latest", "jev-preview"];
     if request.model != model_id && !ALIASES.contains(&request.model.as_str()) {
-        return Err(OpenAiError::invalid_request(format!(
+        return Err(InferenceError::invalid_request(format!(
             "model {:?} is not loaded; use {:?} or openjev-latest",
             request.model, model_id
         )));
     }
     if request.questions.is_empty() {
-        return Err(OpenAiError::invalid_request(
+        return Err(InferenceError::invalid_request(
             "System One needs at least one question",
         ));
     }
@@ -92,7 +92,7 @@ fn validate_request_fields(request: &SystemOneRequest, model_id: &str) -> OpenAi
         || request.think.is_some_and(|think| think != 0)
         || request.sequential.unwrap_or(false)
     {
-        return Err(OpenAiError::unsupported(
+        return Err(InferenceError::unsupported(
             "this PoC supports one text-only System One read; images, multiple steps/samples, thinking, and sequential reads are not yet supported",
         ));
     }
@@ -101,15 +101,15 @@ fn validate_request_fields(request: &SystemOneRequest, model_id: &str) -> OpenAi
 
 /// Translates a Jev request into the model-neutral decision request, enforcing
 /// Jev's option bounds. Questions keep the frontend's key order.
-fn decision_request(request: &SystemOneRequest) -> OpenAiResult<DecisionRequest> {
+fn decision_request(request: &SystemOneRequest) -> InferenceResult<DecisionRequest> {
     let canonical = serde_json::to_vec(&(&request.state, &request.questions)).map_err(|error| {
-        OpenAiError::invalid_request(format!("serialize System One request: {error}"))
+        InferenceError::invalid_request(format!("serialize System One request: {error}"))
     })?;
     let questions = request
         .questions
         .iter()
         .map(|(key, question)| decision_question(key, question))
-        .collect::<OpenAiResult<Vec<_>>>()?;
+        .collect::<InferenceResult<Vec<_>>>()?;
     Ok(DecisionRequest {
         state: decision_value(&request.state),
         questions,
@@ -117,7 +117,7 @@ fn decision_request(request: &SystemOneRequest) -> OpenAiResult<DecisionRequest>
     })
 }
 
-fn decision_question(key: &str, question: &SystemOneQuestion) -> OpenAiResult<DecisionQuestion> {
+fn decision_question(key: &str, question: &SystemOneQuestion) -> InferenceResult<DecisionQuestion> {
     let (instructions, kind) = match question {
         SystemOneQuestion::Noul {
             instructions,
@@ -140,7 +140,7 @@ fn decision_question(key: &str, question: &SystemOneQuestion) -> OpenAiResult<De
             criteria,
         } => {
             if !(2..=MAX_CHOICES).contains(&criteria.len()) {
-                return Err(OpenAiError::invalid_request(format!(
+                return Err(InferenceError::invalid_request(format!(
                     "question {key:?}: choice criteria must contain 2 to {MAX_CHOICES} options"
                 )));
             }
@@ -159,7 +159,7 @@ fn decision_question(key: &str, question: &SystemOneQuestion) -> OpenAiResult<De
             criteria,
         } => {
             if !(2..=MAX_SCORE_LEVELS).contains(&criteria.len()) {
-                return Err(OpenAiError::invalid_request(format!(
+                return Err(InferenceError::invalid_request(format!(
                     "question {key:?}: score criteria must contain 2 to {MAX_SCORE_LEVELS} levels"
                 )));
             }
@@ -196,15 +196,18 @@ fn decision_value(value: &SystemOneJson) -> DecisionValue {
     }
 }
 
-fn decision_error(error: DecisionError) -> OpenAiError {
+fn decision_error(error: DecisionError) -> InferenceError {
     match error {
-        DecisionError::InvalidRequest(message) => OpenAiError::invalid_request(message),
-        DecisionError::Unsupported(message) => OpenAiError::unsupported(message),
-        DecisionError::Backend(error) => OpenAiError::backend(format!("{error:#}")),
+        DecisionError::InvalidRequest(message) => InferenceError::invalid_request(message),
+        DecisionError::Unsupported(message) => InferenceError::unsupported(message),
+        DecisionError::Backend(error) => InferenceError::backend(format!("{error:#}")),
     }
 }
 
-fn response(request: SystemOneRequest, output: DecisionOutput) -> OpenAiResult<SystemOneResponse> {
+fn response(
+    request: SystemOneRequest,
+    output: DecisionOutput,
+) -> InferenceResult<SystemOneResponse> {
     Ok(SystemOneResponse {
         answers: answers(&request.questions, &output.probabilities)?,
         model: request.model,
@@ -229,9 +232,9 @@ fn confidence(probabilities: &[f32]) -> f32 {
 fn answers(
     questions: &BTreeMap<String, SystemOneQuestion>,
     probabilities: &[Vec<f32>],
-) -> OpenAiResult<BTreeMap<String, SystemOneAnswer>> {
+) -> InferenceResult<BTreeMap<String, SystemOneAnswer>> {
     if questions.len() != probabilities.len() {
-        return Err(OpenAiError::backend(
+        return Err(InferenceError::backend(
             "System One output did not match the question count",
         ));
     }

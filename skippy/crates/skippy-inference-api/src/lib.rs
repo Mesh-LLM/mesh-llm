@@ -25,8 +25,8 @@ pub use audio::{
     AudioTranscriptionResponse,
 };
 pub use backend::{
-    CancellationToken, ChatCompletionStream, CompletionStream, OpenAiBackend, OpenAiRequestContext,
-    OpenAiResult,
+    CancellationToken, ChatCompletionStream, CompletionStream, InferenceBackend,
+    InferenceRequestContext, InferenceResult,
 };
 pub use chat::{
     AssistantMessage, CapsuleMarker, ChatCompletionChoice, ChatCompletionChunk,
@@ -47,27 +47,30 @@ pub use completions::{
 pub use embeddings::{
     Embedding, EmbeddingInput, EmbeddingOutput, EmbeddingResponse, EmbeddingsRequest,
 };
-pub use errors::{OpenAiError, OpenAiErrorKind, already_openai_error, map_upstream_error_body};
+pub use errors::{
+    InferenceError, InferenceErrorKind, already_openai_error, map_upstream_error_body,
+};
 pub use guardrails::{
-    CompactingOpenAiBackend, CompactionConfig, CompactionDecision, CompactionOverride,
-    CompactionReport, GuardedOpenAiBackend, GuardrailMode, GuardrailPolicy, GuardrailPolicyHandle,
-    GuardrailTelemetrySink, MESH_COMPACT_FIELD, MESH_RESPOND_TOOL_NAME, RetryExhaustionMode,
-    StreamingGuardrailMode,
+    CompactingInferenceBackend, CompactionConfig, CompactionDecision, CompactionOverride,
+    CompactionReport, GuardedInferenceBackend, GuardrailMode, GuardrailPolicy,
+    GuardrailPolicyHandle, GuardrailTelemetrySink, MESH_COMPACT_FIELD, MESH_RESPOND_TOOL_NAME,
+    RetryExhaustionMode, StreamingGuardrailMode,
 };
 pub use hooks::{
     ChatCompletionOutcome, ChatExchangeRoute, ChatHookAction, ChatHookOutcome, ChatMediaKind,
-    ChatMediaRef, GenerationHookSignals, HookedOpenAiBackend, LEGACY_MESH_HOOKS_FIELD,
-    MESH_HOOKS_FIELD, OpenAiHookPolicy, PrefillHookSignals, SKIPPY_HOOKS_FIELD, TerminalGuard,
-    TerminalGuardedChatStream, apply_chat_hook_outcome, chat_mesh_hooks_enabled,
+    ChatMediaRef, GenerationHookSignals, HookedInferenceBackend, InferenceHookPolicy,
+    LEGACY_MESH_HOOKS_FIELD, MESH_HOOKS_FIELD, PrefillHookSignals, SKIPPY_HOOKS_FIELD,
+    TerminalGuard, TerminalGuardedChatStream, apply_chat_hook_outcome, chat_mesh_hooks_enabled,
     chat_skippy_hooks_enabled, first_chat_media, inject_text_into_chat_messages,
     set_chat_mesh_hooks_enabled, set_chat_skippy_hooks_enabled,
 };
 pub use lifecycle::{
-    OpenAiBackendOperation, OpenAiFailure, OpenAiFrontendRoute, OpenAiLifecycleContext,
-    OpenAiLifecycleEvent, OpenAiLifecycleObserver, OpenAiRejection, OpenAiRequestMethod,
-    OpenAiTerminalResult, OpenAiUsage, REQUEST_ID_HEADER, RequestId, generate_request_id,
-    parse_client_nonce, parse_request_id, parse_request_id_header, parse_single_client_nonce,
-    parse_single_request_id, request_id_from_headers_or_generate, request_id_response_header,
+    InferenceBackendOperation, InferenceFailure, InferenceFrontendRoute, InferenceLifecycleContext,
+    InferenceLifecycleEvent, InferenceLifecycleObserver, InferenceRejection,
+    InferenceRequestMethod, InferenceTerminalResult, InferenceUsage, REQUEST_ID_HEADER, RequestId,
+    generate_request_id, parse_client_nonce, parse_request_id, parse_request_id_header,
+    parse_single_client_nonce, parse_single_request_id, request_id_from_headers_or_generate,
+    request_id_response_header,
 };
 pub use models::{ModelId, ModelIdError, ModelObject, ModelsResponse};
 pub use rerank::{RerankDocument, RerankRequest, RerankResponse, RerankResult};
@@ -86,7 +89,7 @@ pub use responses::{
     translate_chat_completion_response_to_responses, translate_chat_completion_to_responses,
 };
 pub use router::{
-    OpenAiFrontendConfig, router, router_for, router_for_with_config, router_with_config,
+    InferenceFrontendConfig, router, router_for, router_for_with_config, router_with_config,
 };
 pub use system_one::{
     SystemOneAnswer, SystemOneJson, SystemOneJsonObject, SystemOneNoulCriteria, SystemOneQuestion,

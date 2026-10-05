@@ -1,5 +1,5 @@
 //! Product-neutral options for local and staged OpenAI model serving.
-use skippy_inference_api::OpenAiHookPolicy;
+use skippy_inference_api::InferenceHookPolicy;
 use skippy_protocol::StageConfig;
 use skippy_serving::{
     DEFAULT_GENERATION_ADMISSION_TIMEOUT_SECS, EmbeddedOpenAiArgs, EmbeddedOpenAiRequestDefaults,
@@ -130,7 +130,7 @@ impl OpenAiOptions {
         config: StageConfig,
         runtime: Arc<Mutex<skippy_serving::runtime_state::RuntimeState>>,
         telemetry: Telemetry,
-        hook_policy: Option<Arc<dyn OpenAiHookPolicy>>,
+        hook_policy: Option<Arc<dyn InferenceHookPolicy>>,
     ) -> EmbeddedOpenAiArgs {
         EmbeddedOpenAiArgs {
             bind_addr,

@@ -53,7 +53,7 @@ impl SkippyModelHandle {
 
     pub(crate) fn load_with_hooks(
         options: SkippyModelLoadOptions,
-        hook_policy: Option<Arc<dyn OpenAiHookPolicy>>,
+        hook_policy: Option<Arc<dyn InferenceHookPolicy>>,
         guardrail_telemetry: survey::SurveyTelemetry,
     ) -> Result<Self> {
         audit_load(|| Self::load_local(options, hook_policy, guardrail_telemetry, None))
@@ -61,7 +61,7 @@ impl SkippyModelHandle {
 
     pub(crate) fn load_with_hooks_and_open_events(
         options: SkippyModelLoadOptions,
-        hook_policy: Option<Arc<dyn OpenAiHookPolicy>>,
+        hook_policy: Option<Arc<dyn InferenceHookPolicy>>,
         model_open_events: Option<NativeModelOpenEvents>,
         guardrail_telemetry: survey::SurveyTelemetry,
     ) -> Result<Self> {
@@ -72,7 +72,7 @@ impl SkippyModelHandle {
 
     fn load_local(
         options: SkippyModelLoadOptions,
-        hook_policy: Option<Arc<dyn OpenAiHookPolicy>>,
+        hook_policy: Option<Arc<dyn InferenceHookPolicy>>,
         guardrail_telemetry: survey::SurveyTelemetry,
         model_open_events: Option<NativeModelOpenEvents>,
     ) -> Result<Self> {
@@ -120,7 +120,7 @@ impl SkippyModelHandle {
         activation_width: i32,
         generation_concurrency: usize,
         default_max_tokens: u32,
-        hook_policy: Option<Arc<dyn OpenAiHookPolicy>>,
+        hook_policy: Option<Arc<dyn InferenceHookPolicy>>,
         telemetry: SkippyTelemetryOptions,
         guardrails: SkippyOpenAiGuardrailOptions,
     ) -> Result<Self> {
@@ -144,7 +144,7 @@ impl SkippyModelHandle {
     pub(crate) fn load_stage0_config_with_openai_args(
         config: StageConfig,
         embedded_args: resolver::ResolvedEmbeddedOpenAiArgs,
-        hook_policy: Option<Arc<dyn OpenAiHookPolicy>>,
+        hook_policy: Option<Arc<dyn InferenceHookPolicy>>,
         telemetry: SkippyTelemetryOptions,
         guardrails: SkippyOpenAiGuardrailOptions,
     ) -> Result<Self> {
@@ -177,7 +177,7 @@ impl SkippyModelHandle {
     pub(crate) fn load_stage0_runtime_options_with_openai_args(
         runtime_options: EmbeddedRuntimeOptions,
         embedded_args: resolver::ResolvedEmbeddedOpenAiArgs,
-        hook_policy: Option<Arc<dyn OpenAiHookPolicy>>,
+        hook_policy: Option<Arc<dyn InferenceHookPolicy>>,
         telemetry: SkippyTelemetryOptions,
         guardrails: SkippyOpenAiGuardrailOptions,
         serving_hooks_factory: Option<SharedModelServingHooksFactory>,
@@ -198,7 +198,7 @@ impl SkippyModelHandle {
     pub(crate) fn load_stage0_runtime_options_with_openai_args_and_open_events(
         runtime_options: EmbeddedRuntimeOptions,
         embedded_args: resolver::ResolvedEmbeddedOpenAiArgs,
-        hook_policy: Option<Arc<dyn OpenAiHookPolicy>>,
+        hook_policy: Option<Arc<dyn InferenceHookPolicy>>,
         telemetry: SkippyTelemetryOptions,
         model_open_events: Option<NativeModelOpenEvents>,
         guardrails: SkippyOpenAiGuardrailOptions,
@@ -220,7 +220,7 @@ impl SkippyModelHandle {
     fn load_stage0_prepared(
         mut runtime_options: EmbeddedRuntimeOptions,
         mut embedded_args: resolver::ResolvedEmbeddedOpenAiArgs,
-        hook_policy: Option<Arc<dyn OpenAiHookPolicy>>,
+        hook_policy: Option<Arc<dyn InferenceHookPolicy>>,
         telemetry: SkippyTelemetryOptions,
         guardrails: SkippyOpenAiGuardrailOptions,
         serving_hooks_factory: Option<SharedModelServingHooksFactory>,
@@ -258,7 +258,7 @@ impl SkippyModelHandle {
     fn load_prepared(
         runtime_options: EmbeddedRuntimeOptions,
         embedded_args: resolver::ResolvedEmbeddedOpenAiArgs,
-        hook_policy: Option<Arc<dyn OpenAiHookPolicy>>,
+        hook_policy: Option<Arc<dyn InferenceHookPolicy>>,
         guardrails: SkippyOpenAiGuardrailOptions,
         serving_hooks_factory: Option<SharedModelServingHooksFactory>,
         model_open_events: Option<NativeModelOpenEvents>,
@@ -277,7 +277,7 @@ impl SkippyModelHandle {
     fn model_load_request(
         runtime: EmbeddedRuntimeOptions,
         openai: resolver::ResolvedEmbeddedOpenAiArgs,
-        hook_policy: Option<Arc<dyn OpenAiHookPolicy>>,
+        hook_policy: Option<Arc<dyn InferenceHookPolicy>>,
         guardrails: &SkippyOpenAiGuardrailOptions,
         hooks_factory: Option<SharedModelServingHooksFactory>,
         open_events: skippy_api::serving::ModelOpenEvents,

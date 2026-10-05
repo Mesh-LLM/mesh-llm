@@ -45,8 +45,8 @@ use skippy_inference_api::{
     AudioResponse, AudioSpeechRequest, AudioTranscriptionRequest, AudioTranscriptionResponse,
     ChatCompletionRequest, ChatCompletionResponse, ChatCompletionStream, CompletionRequest,
     CompletionResponse, CompletionStream, EmbeddingResponse, EmbeddingsRequest, GuardrailMode,
-    GuardrailPolicy, GuardrailPolicyHandle, ModelObject, OpenAiBackend, OpenAiHookPolicy,
-    OpenAiRequestContext, OpenAiResult, RerankRequest, RerankResponse,
+    GuardrailPolicy, GuardrailPolicyHandle, InferenceBackend, InferenceHookPolicy,
+    InferenceRequestContext, InferenceResult, ModelObject, RerankRequest, RerankResponse,
 };
 use skippy_protocol::{FlashAttentionType, LoadMode, StageConfig};
 use skippy_runtime::{ModelInfo, MtpSource};
@@ -233,7 +233,7 @@ struct HandleState {
 
 pub(crate) struct SkippyModelHandle {
     runtime: SkippyRuntimeHandle,
-    backend: Arc<dyn OpenAiBackend>,
+    backend: Arc<dyn InferenceBackend>,
     openai_guardrails: Option<OpenAiGuardrailsConfig>,
     config: StageConfig,
     started_at_unix_nanos: i64,
@@ -311,7 +311,7 @@ impl SkippyHttpHandle {
 }
 
 impl SkippyModelHandle {
-    pub(crate) fn backend(&self) -> Arc<dyn OpenAiBackend> {
+    pub(crate) fn backend(&self) -> Arc<dyn InferenceBackend> {
         self.backend.clone()
     }
 
@@ -393,11 +393,11 @@ impl Drop for SkippyModelHandle {
 
 #[cfg(test)]
 fn wrap_host_guardrail_backend(
-    backend: Arc<dyn OpenAiBackend>,
+    backend: Arc<dyn InferenceBackend>,
     openai_guardrails: Option<&OpenAiGuardrailsConfig>,
     context_limit_tokens: Option<usize>,
     telemetry: Option<Arc<dyn skippy_inference_api::GuardrailTelemetrySink>>,
-) -> Arc<dyn OpenAiBackend> {
+) -> Arc<dyn InferenceBackend> {
     match openai_guardrails {
         Some(config) => {
             config.wrap_backend_with_telemetry(backend, context_limit_tokens, telemetry)
@@ -407,39 +407,39 @@ fn wrap_host_guardrail_backend(
 }
 
 #[async_trait]
-impl OpenAiBackend for SkippyModelHandle {
-    async fn count_chat_tokens(&self, request: ChatCompletionRequest) -> OpenAiResult<u32> {
+impl InferenceBackend for SkippyModelHandle {
+    async fn count_chat_tokens(&self, request: ChatCompletionRequest) -> InferenceResult<u32> {
         self.backend.count_chat_tokens(request).await
     }
 
-    async fn models(&self) -> OpenAiResult<Vec<ModelObject>> {
+    async fn models(&self) -> InferenceResult<Vec<ModelObject>> {
         self.backend.models().await
     }
 
     async fn chat_completion(
         &self,
         request: ChatCompletionRequest,
-    ) -> OpenAiResult<ChatCompletionResponse> {
+    ) -> InferenceResult<ChatCompletionResponse> {
         self.backend.chat_completion(request).await
     }
 
     async fn chat_completion_stream(
         &self,
         request: ChatCompletionRequest,
-        context: OpenAiRequestContext,
-    ) -> OpenAiResult<ChatCompletionStream> {
+        context: InferenceRequestContext,
+    ) -> InferenceResult<ChatCompletionStream> {
         self.backend.chat_completion_stream(request, context).await
     }
 
-    async fn completion(&self, request: CompletionRequest) -> OpenAiResult<CompletionResponse> {
+    async fn completion(&self, request: CompletionRequest) -> InferenceResult<CompletionResponse> {
         self.backend.completion(request).await
     }
 
     async fn completion_stream(
         &self,
         request: CompletionRequest,
-        context: OpenAiRequestContext,
-    ) -> OpenAiResult<CompletionStream> {
+        context: InferenceRequestContext,
+    ) -> InferenceResult<CompletionStream> {
         self.backend.completion_stream(request, context).await
     }
 
@@ -447,8 +447,8 @@ impl OpenAiBackend for SkippyModelHandle {
     async fn embeddings(
         &self,
         request: EmbeddingsRequest,
-        context: OpenAiRequestContext,
-    ) -> OpenAiResult<EmbeddingResponse> {
+        context: InferenceRequestContext,
+    ) -> InferenceResult<EmbeddingResponse> {
         self.backend.embeddings(request, context).await
     }
 
@@ -456,8 +456,8 @@ impl OpenAiBackend for SkippyModelHandle {
     async fn rerank(
         &self,
         request: RerankRequest,
-        context: OpenAiRequestContext,
-    ) -> OpenAiResult<RerankResponse> {
+        context: InferenceRequestContext,
+    ) -> InferenceResult<RerankResponse> {
         self.backend.rerank(request, context).await
     }
 
@@ -465,8 +465,8 @@ impl OpenAiBackend for SkippyModelHandle {
     async fn audio_speech(
         &self,
         request: AudioSpeechRequest,
-        context: OpenAiRequestContext,
-    ) -> OpenAiResult<AudioResponse> {
+        context: InferenceRequestContext,
+    ) -> InferenceResult<AudioResponse> {
         self.backend.audio_speech(request, context).await
     }
 
@@ -474,8 +474,8 @@ impl OpenAiBackend for SkippyModelHandle {
     async fn audio_transcription(
         &self,
         request: AudioTranscriptionRequest,
-        context: OpenAiRequestContext,
-    ) -> OpenAiResult<AudioTranscriptionResponse> {
+        context: InferenceRequestContext,
+    ) -> InferenceResult<AudioTranscriptionResponse> {
         self.backend.audio_transcription(request, context).await
     }
 
@@ -483,8 +483,8 @@ impl OpenAiBackend for SkippyModelHandle {
     async fn audio_translation(
         &self,
         request: AudioTranscriptionRequest,
-        context: OpenAiRequestContext,
-    ) -> OpenAiResult<AudioTranscriptionResponse> {
+        context: InferenceRequestContext,
+    ) -> InferenceResult<AudioTranscriptionResponse> {
         self.backend.audio_translation(request, context).await
     }
 }
@@ -620,7 +620,7 @@ pub(crate) fn forget_stage0_compute_meter(run_id: &str) {
 mod tests {
     use super::*;
     use serde_json::json;
-    use skippy_inference_api::{MESH_COMPACT_FIELD, OpenAiError};
+    use skippy_inference_api::{InferenceError, MESH_COMPACT_FIELD};
     use skippy_serving::runtime_state::RuntimeSessionStats;
     use skippy_serving::telemetry::TelemetryStats;
 
@@ -662,15 +662,15 @@ mod tests {
     }
 
     #[async_trait]
-    impl OpenAiBackend for RecordingHostBackend {
-        async fn models(&self) -> OpenAiResult<Vec<ModelObject>> {
+    impl InferenceBackend for RecordingHostBackend {
+        async fn models(&self) -> InferenceResult<Vec<ModelObject>> {
             Ok(vec![ModelObject::new("host-skippy")])
         }
 
         async fn chat_completion(
             &self,
             request: ChatCompletionRequest,
-        ) -> OpenAiResult<ChatCompletionResponse> {
+        ) -> InferenceResult<ChatCompletionResponse> {
             *self.seen_chat.lock().expect("seen chat lock poisoned") = Some(request.clone());
             Ok(ChatCompletionResponse::new(
                 request.model,
@@ -682,9 +682,9 @@ mod tests {
         async fn chat_completion_stream(
             &self,
             _request: ChatCompletionRequest,
-            _context: OpenAiRequestContext,
-        ) -> OpenAiResult<ChatCompletionStream> {
-            Err(OpenAiError::unsupported(
+            _context: InferenceRequestContext,
+        ) -> InferenceResult<ChatCompletionStream> {
+            Err(InferenceError::unsupported(
                 "streaming is not needed by this host wrapper test",
             ))
         }

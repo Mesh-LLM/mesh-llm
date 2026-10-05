@@ -29,7 +29,7 @@ use serde_json::Value;
 use serde_json::json;
 use skippy_inference_api::ChatCompletionRequest;
 use skippy_inference_api::FinishReason;
-use skippy_inference_api::OpenAiHookPolicy;
+use skippy_inference_api::InferenceHookPolicy;
 use skippy_inference_api::Usage;
 use skippy_protocol::StageConfig;
 use skippy_protocol::binary::StageReply;
@@ -71,7 +71,7 @@ pub(in crate::frontend) struct StageOpenAiBackend {
     pub(in crate::frontend) generation_session_locks:
         Arc<Mutex<BTreeMap<String, Arc<GenerationSessionLockEntry>>>>,
     pub(in crate::frontend) generation_token_budget: Arc<GenerationTokenBudget>,
-    pub(in crate::frontend) hook_policy: Option<Arc<dyn OpenAiHookPolicy>>,
+    pub(in crate::frontend) hook_policy: Option<Arc<dyn InferenceHookPolicy>>,
     pub(in crate::frontend) generation_receipt: Option<GenerationReceiptConfig>,
     pub(in crate::frontend) generation_lifecycle: Option<GenerationLifecycleConfig>,
     pub(in crate::frontend) linear_proposal_ingress: Option<LinearProposalIngressConfig>,

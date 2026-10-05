@@ -267,13 +267,13 @@ fn backend_timeout_parser_rejects_non_numeric_values() {
 fn default_backend_timeout_exceeds_a_cold_large_prompt_prefill() {
     // A 60k-token cold prefill on a single Apple-silicon host measures ~250s.
     // The default must leave headroom above that, not abort it.
-    assert!(OpenAiFrontendConfig::DEFAULT_BACKEND_TIMEOUT >= Duration::from_secs(600));
+    assert!(InferenceFrontendConfig::DEFAULT_BACKEND_TIMEOUT >= Duration::from_secs(600));
 }
 use crate::{
     FinishReason,
     backend::{
-        CancellationToken, ChatCompletionStream, CompletionStream, OpenAiRequestContext,
-        OpenAiResult,
+        CancellationToken, ChatCompletionStream, CompletionStream, InferenceRequestContext,
+        InferenceResult,
     },
     chat::{
         AssistantMessage, ChatCompletionChoice, ChatCompletionResponse, ChatMessage,
@@ -281,9 +281,9 @@ use crate::{
     },
     common::Usage,
     completions::{CompletionPrompt, CompletionResponse},
-    errors::{OpenAiErrorKind, already_openai_error, map_upstream_error_body},
-    guardrails::{GuardedOpenAiBackend, GuardrailMode, GuardrailPolicy},
-    lifecycle::{OpenAiFailure, OpenAiTerminalResult},
+    errors::{InferenceErrorKind, already_openai_error, map_upstream_error_body},
+    guardrails::{GuardedInferenceBackend, GuardrailMode, GuardrailPolicy},
+    lifecycle::{InferenceFailure, InferenceTerminalResult},
     models::ModelObject,
 };
 
@@ -295,15 +295,15 @@ struct GuardrailRescueBackend {
 }
 
 #[async_trait]
-impl OpenAiBackend for GuardrailRescueBackend {
-    async fn models(&self) -> OpenAiResult<Vec<ModelObject>> {
+impl InferenceBackend for GuardrailRescueBackend {
+    async fn models(&self) -> InferenceResult<Vec<ModelObject>> {
         Ok(vec![ModelObject::new("Qwen3-8B-Q4_K_M")])
     }
 
     async fn chat_completion(
         &self,
         request: ChatCompletionRequest,
-    ) -> OpenAiResult<ChatCompletionResponse> {
+    ) -> InferenceResult<ChatCompletionResponse> {
         self.seen_chat_requests
             .lock()
             .unwrap()
@@ -341,26 +341,26 @@ impl OpenAiBackend for GuardrailRescueBackend {
     async fn chat_completion_stream(
         &self,
         _request: ChatCompletionRequest,
-        _context: OpenAiRequestContext,
-    ) -> OpenAiResult<ChatCompletionStream> {
+        _context: InferenceRequestContext,
+    ) -> InferenceResult<ChatCompletionStream> {
         unreachable!("guardrail rescue test uses non-streaming requests")
     }
 
-    async fn completion(&self, _request: CompletionRequest) -> OpenAiResult<CompletionResponse> {
+    async fn completion(&self, _request: CompletionRequest) -> InferenceResult<CompletionResponse> {
         unreachable!("guardrail rescue test only calls chat")
     }
 
     async fn completion_stream(
         &self,
         _request: CompletionRequest,
-        _context: OpenAiRequestContext,
-    ) -> OpenAiResult<CompletionStream> {
+        _context: InferenceRequestContext,
+    ) -> InferenceResult<CompletionStream> {
         unreachable!("guardrail rescue test only calls chat")
     }
 }
 
 fn guarded_test_app(backend: Arc<GuardrailRescueBackend>) -> Router {
-    let guarded = Arc::new(GuardedOpenAiBackend::new(
+    let guarded = Arc::new(GuardedInferenceBackend::new(
         backend,
         GuardrailPolicy {
             mode: GuardrailMode::Enforce,
@@ -370,17 +370,17 @@ fn guarded_test_app(backend: Arc<GuardrailRescueBackend>) -> Router {
     ));
     router_for_with_config(
         guarded,
-        OpenAiFrontendConfig::default().without_backend_timeout(),
+        InferenceFrontendConfig::default().without_backend_timeout(),
     )
 }
 
 #[derive(Default)]
 struct RecordingLifecycleObserver {
-    events: Mutex<Vec<OpenAiLifecycleEvent>>,
+    events: Mutex<Vec<InferenceLifecycleEvent>>,
 }
 
 impl RecordingLifecycleObserver {
-    fn events(&self) -> Vec<OpenAiLifecycleEvent> {
+    fn events(&self) -> Vec<InferenceLifecycleEvent> {
         self.events
             .lock()
             .expect("lifecycle observer lock poisoned")
@@ -388,8 +388,8 @@ impl RecordingLifecycleObserver {
     }
 }
 
-impl OpenAiLifecycleObserver for RecordingLifecycleObserver {
-    fn observe(&self, event: &OpenAiLifecycleEvent) {
+impl InferenceLifecycleObserver for RecordingLifecycleObserver {
+    fn observe(&self, event: &InferenceLifecycleEvent) {
         self.events
             .lock()
             .expect("lifecycle observer lock poisoned")
@@ -405,8 +405,8 @@ fn assert_stream_terminal_usage(
 ) {
     assert!(observer.events().iter().any(|event| matches!(
         event,
-        OpenAiLifecycleEvent::StreamTerminal {
-            result: OpenAiTerminalResult::CompletedWithUsage {
+        InferenceLifecycleEvent::StreamTerminal {
+            result: InferenceTerminalResult::CompletedWithUsage {
                 status_code: 200,
                 usage: TokenUsage {
                     prompt_tokens: Some(prompt),
@@ -423,12 +423,12 @@ fn assert_stream_terminal_usage(
 }
 
 #[async_trait]
-impl OpenAiBackend for FakeBackend {
-    async fn models(&self) -> OpenAiResult<Vec<ModelObject>> {
+impl InferenceBackend for FakeBackend {
+    async fn models(&self) -> InferenceResult<Vec<ModelObject>> {
         Ok(vec![ModelObject::new("org/repo:Q4_K_M")])
     }
 
-    async fn system_one(&self, request: SystemOneRequest) -> OpenAiResult<SystemOneResponse> {
+    async fn system_one(&self, request: SystemOneRequest) -> InferenceResult<SystemOneResponse> {
         if request.questions.contains_key("urgent") {
             return Ok(SystemOneResponse {
                 model: request.model,
@@ -489,12 +489,12 @@ impl OpenAiBackend for FakeBackend {
     async fn chat_completion(
         &self,
         request: ChatCompletionRequest,
-    ) -> OpenAiResult<ChatCompletionResponse> {
+    ) -> InferenceResult<ChatCompletionResponse> {
         if request.model == "missing" {
-            return Err(OpenAiError::model_not_found(request.model));
+            return Err(InferenceError::model_not_found(request.model));
         }
         if request.model == "unsupported-feature" {
-            return Err(OpenAiError::unsupported(
+            return Err(InferenceError::unsupported(
                 "structured output is parsed but not yet implemented by skippy runtime",
             ));
         }
@@ -552,18 +552,18 @@ impl OpenAiBackend for FakeBackend {
     async fn chat_completion_stream(
         &self,
         request: ChatCompletionRequest,
-        _context: OpenAiRequestContext,
-    ) -> OpenAiResult<ChatCompletionStream> {
+        _context: InferenceRequestContext,
+    ) -> InferenceResult<ChatCompletionStream> {
         if request.model == "missing" {
-            return Err(OpenAiError::model_not_found(request.model));
+            return Err(InferenceError::model_not_found(request.model));
         }
         if request.model == "context-overflow" {
-            return Err(OpenAiError::context_length_exceeded(
+            return Err(InferenceError::context_length_exceeded(
                 "prompt tokens plus requested completion exceed context window",
             ));
         }
         if request.model == "stream-error" {
-            return Ok(Box::pin(stream::iter(vec![Err(OpenAiError::backend(
+            return Ok(Box::pin(stream::iter(vec![Err(InferenceError::backend(
                 "stream backend failed",
             ))])));
         }
@@ -609,7 +609,7 @@ impl OpenAiBackend for FakeBackend {
         ])))
     }
 
-    async fn completion(&self, request: CompletionRequest) -> OpenAiResult<CompletionResponse> {
+    async fn completion(&self, request: CompletionRequest) -> InferenceResult<CompletionResponse> {
         Ok(CompletionResponse::new(
             request.model,
             format!("echo: {}", request.prompt.text_lossy()),
@@ -620,8 +620,8 @@ impl OpenAiBackend for FakeBackend {
     async fn completion_stream(
         &self,
         request: CompletionRequest,
-        _context: OpenAiRequestContext,
-    ) -> OpenAiResult<CompletionStream> {
+        _context: InferenceRequestContext,
+    ) -> InferenceResult<CompletionStream> {
         let model = request.model;
         Ok(Box::pin(stream::iter(vec![
             Ok(crate::CompletionChunk::delta(model.clone(), "a")),
@@ -640,8 +640,8 @@ impl OpenAiBackend for FakeBackend {
     async fn embeddings(
         &self,
         request: EmbeddingsRequest,
-        _context: OpenAiRequestContext,
-    ) -> OpenAiResult<EmbeddingResponse> {
+        _context: InferenceRequestContext,
+    ) -> InferenceResult<EmbeddingResponse> {
         let embeddings = (0..request.input.len())
             .map(|index| crate::Embedding {
                 values: vec![index as f32 + 1.0, -0.5],
@@ -660,8 +660,8 @@ impl OpenAiBackend for FakeBackend {
     async fn rerank(
         &self,
         request: RerankRequest,
-        _context: OpenAiRequestContext,
-    ) -> OpenAiResult<RerankResponse> {
+        _context: InferenceRequestContext,
+    ) -> InferenceResult<RerankResponse> {
         let mut results = request
             .documents
             .iter()
@@ -685,8 +685,8 @@ impl OpenAiBackend for FakeBackend {
     async fn audio_speech(
         &self,
         request: AudioSpeechRequest,
-        _context: OpenAiRequestContext,
-    ) -> OpenAiResult<AudioResponse> {
+        _context: InferenceRequestContext,
+    ) -> InferenceResult<AudioResponse> {
         AudioResponse::new(
             vec![0x52, 0x49, 0x46, 0x46],
             request.response_format.content_type(),
@@ -697,8 +697,8 @@ impl OpenAiBackend for FakeBackend {
     async fn audio_transcription(
         &self,
         request: AudioTranscriptionRequest,
-        _context: OpenAiRequestContext,
-    ) -> OpenAiResult<AudioTranscriptionResponse> {
+        _context: InferenceRequestContext,
+    ) -> InferenceResult<AudioTranscriptionResponse> {
         Ok(AudioTranscriptionResponse {
             text: format!("transcribed {} bytes", request.file.len()),
         })
@@ -708,8 +708,8 @@ impl OpenAiBackend for FakeBackend {
     async fn audio_translation(
         &self,
         request: AudioTranscriptionRequest,
-        _context: OpenAiRequestContext,
-    ) -> OpenAiResult<AudioTranscriptionResponse> {
+        _context: InferenceRequestContext,
+    ) -> InferenceResult<AudioTranscriptionResponse> {
         Ok(AudioTranscriptionResponse {
             text: format!("translated {} bytes", request.file.len()),
         })
@@ -719,8 +719,8 @@ impl OpenAiBackend for FakeBackend {
 struct SlowBackend;
 
 #[async_trait]
-impl OpenAiBackend for SlowBackend {
-    async fn models(&self) -> OpenAiResult<Vec<ModelObject>> {
+impl InferenceBackend for SlowBackend {
+    async fn models(&self) -> InferenceResult<Vec<ModelObject>> {
         tokio::time::sleep(Duration::from_millis(50)).await;
         Ok(vec![ModelObject::new("slow-model")])
     }
@@ -728,27 +728,27 @@ impl OpenAiBackend for SlowBackend {
     async fn chat_completion(
         &self,
         _request: ChatCompletionRequest,
-    ) -> OpenAiResult<ChatCompletionResponse> {
+    ) -> InferenceResult<ChatCompletionResponse> {
         unreachable!("slow backend test only calls readiness")
     }
 
     async fn chat_completion_stream(
         &self,
         _request: ChatCompletionRequest,
-        _context: OpenAiRequestContext,
-    ) -> OpenAiResult<ChatCompletionStream> {
+        _context: InferenceRequestContext,
+    ) -> InferenceResult<ChatCompletionStream> {
         unreachable!("slow backend test only calls readiness")
     }
 
-    async fn completion(&self, _request: CompletionRequest) -> OpenAiResult<CompletionResponse> {
+    async fn completion(&self, _request: CompletionRequest) -> InferenceResult<CompletionResponse> {
         unreachable!("slow backend test only calls readiness")
     }
 
     async fn completion_stream(
         &self,
         _request: CompletionRequest,
-        _context: OpenAiRequestContext,
-    ) -> OpenAiResult<CompletionStream> {
+        _context: InferenceRequestContext,
+    ) -> InferenceResult<CompletionStream> {
         unreachable!("slow backend test only calls readiness")
     }
 }
@@ -763,15 +763,15 @@ struct SessionCaptureBackend {
 }
 
 #[async_trait]
-impl OpenAiBackend for SessionCaptureBackend {
-    async fn models(&self) -> OpenAiResult<Vec<ModelObject>> {
+impl InferenceBackend for SessionCaptureBackend {
+    async fn models(&self) -> InferenceResult<Vec<ModelObject>> {
         Ok(vec![ModelObject::new("capture-model")])
     }
 
     async fn chat_completion(
         &self,
         request: ChatCompletionRequest,
-    ) -> OpenAiResult<ChatCompletionResponse> {
+    ) -> InferenceResult<ChatCompletionResponse> {
         self.requests.lock().unwrap().push(request.clone());
         Ok(ChatCompletionResponse::new(
             request.model,
@@ -783,29 +783,29 @@ impl OpenAiBackend for SessionCaptureBackend {
     async fn chat_completion_stream(
         &self,
         _request: ChatCompletionRequest,
-        _context: OpenAiRequestContext,
-    ) -> OpenAiResult<ChatCompletionStream> {
+        _context: InferenceRequestContext,
+    ) -> InferenceResult<ChatCompletionStream> {
         unreachable!("agent-session tests use non-streaming requests")
     }
 }
 #[async_trait]
-impl OpenAiBackend for CancellationBackend {
-    async fn models(&self) -> OpenAiResult<Vec<ModelObject>> {
+impl InferenceBackend for CancellationBackend {
+    async fn models(&self) -> InferenceResult<Vec<ModelObject>> {
         Ok(vec![ModelObject::new("cancel-model")])
     }
 
     async fn chat_completion(
         &self,
         _request: ChatCompletionRequest,
-    ) -> OpenAiResult<ChatCompletionResponse> {
+    ) -> InferenceResult<ChatCompletionResponse> {
         unreachable!("cancellation backend test only calls streaming")
     }
 
     async fn chat_completion_stream(
         &self,
         _request: ChatCompletionRequest,
-        context: OpenAiRequestContext,
-    ) -> OpenAiResult<ChatCompletionStream> {
+        context: InferenceRequestContext,
+    ) -> InferenceResult<ChatCompletionStream> {
         *self.token.lock().expect("token lock poisoned") = Some(context.cancellation_token());
         Ok(Box::pin(stream::pending()))
     }
@@ -857,9 +857,9 @@ fn completion_prompt_text_lossy_for_string_arrays() {
 
 #[test]
 fn strict_error_body_uses_openai_shape() {
-    let error = OpenAiError::from_kind(
+    let error = InferenceError::from_kind(
         StatusCode::SERVICE_UNAVAILABLE,
-        OpenAiErrorKind::ServiceUnavailable,
+        InferenceErrorKind::ServiceUnavailable,
         "upstream down",
     );
     let value = serde_json::to_value(error.body()).unwrap();
@@ -953,7 +953,7 @@ async fn healthz_observer_records_completed_terminal() {
     let observer = Arc::new(RecordingLifecycleObserver::default());
     let app = router_for_with_config(
         Arc::new(FakeBackend),
-        OpenAiFrontendConfig::default().with_lifecycle_observer(observer.clone()),
+        InferenceFrontendConfig::default().with_lifecycle_observer(observer.clone()),
     );
     let response = app
         .oneshot(
@@ -971,10 +971,10 @@ async fn healthz_observer_records_completed_terminal() {
     assert!(matches!(
         events.as_slice(),
         [
-            OpenAiLifecycleEvent::Admitted { context },
-            OpenAiLifecycleEvent::NonStreamTerminal { context: terminal_context, result: OpenAiTerminalResult::Completed { status_code: 200 }, .. },
-        ] if context.route == OpenAiFrontendRoute::Healthz
-            && context.method == OpenAiRequestMethod::Get
+            InferenceLifecycleEvent::Admitted { context },
+            InferenceLifecycleEvent::NonStreamTerminal { context: terminal_context, result: InferenceTerminalResult::Completed { status_code: 200 }, .. },
+        ] if context.route == InferenceFrontendRoute::Healthz
+            && context.method == InferenceRequestMethod::Get
             && context == terminal_context
     ));
 }
@@ -1000,7 +1000,7 @@ async fn readiness_route_checks_backend_models() {
 async fn backend_timeout_returns_openai_error_shape() {
     let app = router_for_with_config(
         Arc::new(SlowBackend),
-        OpenAiFrontendConfig::default().with_backend_timeout(Duration::from_millis(1)),
+        InferenceFrontendConfig::default().with_backend_timeout(Duration::from_millis(1)),
     );
     let response = app
         .oneshot(
@@ -1022,7 +1022,7 @@ async fn timeout_observer_records_failed_terminal() {
     let observer = Arc::new(RecordingLifecycleObserver::default());
     let app = router_for_with_config(
         Arc::new(SlowBackend),
-        OpenAiFrontendConfig::default()
+        InferenceFrontendConfig::default()
             .with_backend_timeout(Duration::from_millis(1))
             .with_lifecycle_observer(observer.clone()),
     );
@@ -1042,19 +1042,19 @@ async fn timeout_observer_records_failed_terminal() {
     assert!(matches!(
         events.as_slice(),
         [
-            OpenAiLifecycleEvent::Admitted { context },
-            OpenAiLifecycleEvent::BackendDispatched { context: dispatched_context, operation: OpenAiBackendOperation::Models },
-            OpenAiLifecycleEvent::BackendTerminal {
+            InferenceLifecycleEvent::Admitted { context },
+            InferenceLifecycleEvent::BackendDispatched { context: dispatched_context, operation: InferenceBackendOperation::Models },
+            InferenceLifecycleEvent::BackendTerminal {
                 context: backend_terminal_context,
-                operation: OpenAiBackendOperation::Models,
-                result: OpenAiTerminalResult::Failed {
+                operation: InferenceBackendOperation::Models,
+                result: InferenceTerminalResult::Failed {
                     status_code: 504,
-                    failure: OpenAiFailure::Timeout,
+                    failure: InferenceFailure::Timeout,
                 },
             },
-            OpenAiLifecycleEvent::NonStreamTerminal { context: terminal_context, result: OpenAiTerminalResult::Failed { status_code: 504, failure: OpenAiFailure::Timeout }, .. },
-        ] if context.route == OpenAiFrontendRoute::Readyz
-            && context.method == OpenAiRequestMethod::Get
+            InferenceLifecycleEvent::NonStreamTerminal { context: terminal_context, result: InferenceTerminalResult::Failed { status_code: 504, failure: InferenceFailure::Timeout }, .. },
+        ] if context.route == InferenceFrontendRoute::Readyz
+            && context.method == InferenceRequestMethod::Get
             && context == dispatched_context
             && context == backend_terminal_context
             && context == terminal_context
@@ -1067,7 +1067,7 @@ async fn configured_trusted_header_reaches_backend_as_agent_session_identity() {
     let backend = Arc::new(SessionCaptureBackend::default());
     let app = router_for_with_config(
         backend.clone(),
-        OpenAiFrontendConfig::default()
+        InferenceFrontendConfig::default()
             .with_agent_session_header(HeaderName::from_static("x-litellm-session-id")),
     );
     let response = app
@@ -1165,7 +1165,7 @@ async fn conflicting_header_and_responses_conversation_fail_closed() {
     let backend = Arc::new(SessionCaptureBackend::default());
     let app = router_for_with_config(
         backend.clone(),
-        OpenAiFrontendConfig::default()
+        InferenceFrontendConfig::default()
             .with_agent_session_header(HeaderName::from_static("x-litellm-session-id")),
     );
     let response = app
@@ -1226,7 +1226,7 @@ async fn request_id_is_returned_on_success_and_errors() {
 struct CapsuleMintingHook;
 
 #[async_trait]
-impl crate::hooks::OpenAiHookPolicy for CapsuleMintingHook {
+impl crate::hooks::InferenceHookPolicy for CapsuleMintingHook {
     async fn capsule_marker_for_response(
         &self,
         _request: &ChatCompletionRequest,
@@ -1246,8 +1246,10 @@ impl crate::hooks::OpenAiHookPolicy for CapsuleMintingHook {
 /// write path, `frontend_lifecycle_middleware` runs after every hook call).
 #[tokio::test]
 async fn hook_minted_capsule_marker_is_exposed_as_x_capsule_id_response_header() {
-    let backend =
-        crate::hooks::HookedOpenAiBackend::new(Arc::new(FakeBackend), Arc::new(CapsuleMintingHook));
+    let backend = crate::hooks::HookedInferenceBackend::new(
+        Arc::new(FakeBackend),
+        Arc::new(CapsuleMintingHook),
+    );
     let app = router_for(Arc::new(backend));
 
     let response = app
@@ -1285,8 +1287,10 @@ async fn hook_minted_capsule_marker_is_exposed_as_x_capsule_id_response_header()
 /// extension before `frontend_lifecycle_middleware` could read it.
 #[tokio::test]
 async fn hook_minted_capsule_marker_is_exposed_on_non_streaming_responses() {
-    let backend =
-        crate::hooks::HookedOpenAiBackend::new(Arc::new(FakeBackend), Arc::new(CapsuleMintingHook));
+    let backend = crate::hooks::HookedInferenceBackend::new(
+        Arc::new(FakeBackend),
+        Arc::new(CapsuleMintingHook),
+    );
     let app = router_for(Arc::new(backend));
 
     let response = app
@@ -1383,8 +1387,10 @@ async fn backend_exchange_id_is_exposed_as_x_exchange_id_response_header() {
 
 #[tokio::test]
 async fn hooked_stream_exposes_exchange_id_response_header() {
-    let backend =
-        crate::hooks::HookedOpenAiBackend::new(Arc::new(FakeBackend), Arc::new(CapsuleMintingHook));
+    let backend = crate::hooks::HookedInferenceBackend::new(
+        Arc::new(FakeBackend),
+        Arc::new(CapsuleMintingHook),
+    );
     let app = router_for(Arc::new(backend));
     let response = app
         .oneshot(
@@ -1510,7 +1516,7 @@ async fn chat_completion_lifecycle_reports_authoritative_usage() {
     let observer = Arc::new(RecordingLifecycleObserver::default());
     let app = router_for_with_config(
         Arc::new(FakeBackend),
-        OpenAiFrontendConfig::default().with_lifecycle_observer(observer.clone()),
+        InferenceFrontendConfig::default().with_lifecycle_observer(observer.clone()),
     );
     let response = post_json_with_app_and_request_id(
         app,
@@ -1526,8 +1532,8 @@ async fn chat_completion_lifecycle_reports_authoritative_usage() {
 
     assert!(observer.events().iter().any(|event| matches!(
         event,
-        OpenAiLifecycleEvent::NonStreamTerminal {
-            result: OpenAiTerminalResult::CompletedWithUsage {
+        InferenceLifecycleEvent::NonStreamTerminal {
+            result: InferenceTerminalResult::CompletedWithUsage {
                 status_code: 200,
                 usage: TokenUsage {
                     prompt_tokens: Some(3),
@@ -1546,7 +1552,7 @@ async fn chat_completion_stream_route_returns_sse() {
     let observer = Arc::new(RecordingLifecycleObserver::default());
     let app = router_for_with_config(
         Arc::new(FakeBackend),
-        OpenAiFrontendConfig::default().with_lifecycle_observer(observer.clone()),
+        InferenceFrontendConfig::default().with_lifecycle_observer(observer.clone()),
     );
     let response = post_json_with_app_and_request_id(
         app,
@@ -1575,7 +1581,7 @@ async fn chat_completion_stream_suppresses_usage_unless_requested() {
     let observer = Arc::new(RecordingLifecycleObserver::default());
     let app = router_for_with_config(
         Arc::new(FakeBackend),
-        OpenAiFrontendConfig::default().with_lifecycle_observer(observer.clone()),
+        InferenceFrontendConfig::default().with_lifecycle_observer(observer.clone()),
     );
     let response = post_json_with_app_and_request_id(
         app,
@@ -1984,7 +1990,7 @@ async fn completion_stream_route_returns_sse() {
     let observer = Arc::new(RecordingLifecycleObserver::default());
     let app = router_for_with_config(
         Arc::new(FakeBackend),
-        OpenAiFrontendConfig::default().with_lifecycle_observer(observer.clone()),
+        InferenceFrontendConfig::default().with_lifecycle_observer(observer.clone()),
     );
     let response = post_json_with_app_and_request_id(
         app,
@@ -2012,7 +2018,7 @@ async fn completion_stream_suppresses_usage_unless_requested() {
     let observer = Arc::new(RecordingLifecycleObserver::default());
     let app = router_for_with_config(
         Arc::new(FakeBackend),
-        OpenAiFrontendConfig::default().with_lifecycle_observer(observer.clone()),
+        InferenceFrontendConfig::default().with_lifecycle_observer(observer.clone()),
     );
     let response = post_json_with_app_and_request_id(
         app,
@@ -2136,7 +2142,7 @@ async fn invalid_json_maps_to_strict_error_shape() {
 async fn oversized_json_maps_to_strict_error_shape() {
     let app = router_for_with_config(
         Arc::new(FakeBackend),
-        OpenAiFrontendConfig::default().with_max_request_body_bytes(64),
+        InferenceFrontendConfig::default().with_max_request_body_bytes(64),
     );
     let response = app
             .oneshot(

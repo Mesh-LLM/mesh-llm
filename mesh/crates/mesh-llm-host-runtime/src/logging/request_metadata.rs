@@ -5,7 +5,7 @@
 //! transport targets.
 
 use mesh_llm_events::logging::envelope::{closed_method, closed_source};
-use skippy_inference_api::OpenAiFrontendRoute;
+use skippy_inference_api::InferenceFrontendRoute;
 
 use super::policy::{RedactMode, apply_redaction};
 
@@ -89,7 +89,7 @@ impl RequestSummaryMetadata {
 
     /// Capture only the closed frontend route vocabulary. Unknown routes stay
     /// absent rather than retaining an arbitrary path.
-    pub(crate) fn from_openai_frontend_route(route: OpenAiFrontendRoute) -> Self {
+    pub(crate) fn from_openai_frontend_route(route: InferenceFrontendRoute) -> Self {
         Self::from_parts(openai_route_label(route), None, None, None)
     }
 
@@ -192,25 +192,25 @@ impl RequestSummaryMetadata {
 }
 
 /// Project known endpoints to fixed log labels; unknown paths contribute no label.
-const fn openai_route_label(route: OpenAiFrontendRoute) -> Option<&'static str> {
+const fn openai_route_label(route: InferenceFrontendRoute) -> Option<&'static str> {
     match route {
-        OpenAiFrontendRoute::Health => Some("health"),
-        OpenAiFrontendRoute::Healthz => Some("healthz"),
-        OpenAiFrontendRoute::Readyz => Some("readyz"),
-        OpenAiFrontendRoute::Models => Some("models"),
-        OpenAiFrontendRoute::Embeddings => Some("embeddings"),
-        OpenAiFrontendRoute::Rerank => Some("rerank"),
-        OpenAiFrontendRoute::AudioSpeech => Some("audio_speech"),
-        OpenAiFrontendRoute::AudioTranscriptions => Some("audio_transcriptions"),
-        OpenAiFrontendRoute::AudioTranslations => Some("audio_translations"),
-        OpenAiFrontendRoute::ChatCompletions => Some("chat_completions"),
-        OpenAiFrontendRoute::Completions => Some("completions"),
-        OpenAiFrontendRoute::Responses => Some("responses"),
-        OpenAiFrontendRoute::Decisions => Some("decisions"),
-        OpenAiFrontendRoute::Messages => Some("messages"),
-        OpenAiFrontendRoute::MessagesCountTokens => Some("messages_count_tokens"),
-        OpenAiFrontendRoute::SystemOne => Some("system_one"),
-        OpenAiFrontendRoute::Unknown => None,
+        InferenceFrontendRoute::Health => Some("health"),
+        InferenceFrontendRoute::Healthz => Some("healthz"),
+        InferenceFrontendRoute::Readyz => Some("readyz"),
+        InferenceFrontendRoute::Models => Some("models"),
+        InferenceFrontendRoute::Embeddings => Some("embeddings"),
+        InferenceFrontendRoute::Rerank => Some("rerank"),
+        InferenceFrontendRoute::AudioSpeech => Some("audio_speech"),
+        InferenceFrontendRoute::AudioTranscriptions => Some("audio_transcriptions"),
+        InferenceFrontendRoute::AudioTranslations => Some("audio_translations"),
+        InferenceFrontendRoute::ChatCompletions => Some("chat_completions"),
+        InferenceFrontendRoute::Completions => Some("completions"),
+        InferenceFrontendRoute::Responses => Some("responses"),
+        InferenceFrontendRoute::Decisions => Some("decisions"),
+        InferenceFrontendRoute::Messages => Some("messages"),
+        InferenceFrontendRoute::MessagesCountTokens => Some("messages_count_tokens"),
+        InferenceFrontendRoute::SystemOne => Some("system_one"),
+        InferenceFrontendRoute::Unknown => None,
     }
 }
 
@@ -301,16 +301,16 @@ mod tests {
     #[test]
     fn non_chat_ingress_labels_match_frontend_without_retaining_query() {
         for (path, route) in [
-            ("/v1/embeddings", OpenAiFrontendRoute::Embeddings),
-            ("/v1/rerank", OpenAiFrontendRoute::Rerank),
-            ("/v1/audio/speech", OpenAiFrontendRoute::AudioSpeech),
+            ("/v1/embeddings", InferenceFrontendRoute::Embeddings),
+            ("/v1/rerank", InferenceFrontendRoute::Rerank),
+            ("/v1/audio/speech", InferenceFrontendRoute::AudioSpeech),
             (
                 "/v1/audio/transcriptions",
-                OpenAiFrontendRoute::AudioTranscriptions,
+                InferenceFrontendRoute::AudioTranscriptions,
             ),
             (
                 "/v1/audio/translations",
-                OpenAiFrontendRoute::AudioTranslations,
+                InferenceFrontendRoute::AudioTranslations,
             ),
         ] {
             for suffix in ["", "?token=secret"] {

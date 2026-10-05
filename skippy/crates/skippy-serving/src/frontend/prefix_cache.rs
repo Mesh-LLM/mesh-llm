@@ -27,8 +27,8 @@ use crate::kv_integration::proactive_eviction_error_kind;
 use anyhow::Context;
 use serde_json::Value;
 use serde_json::json;
-use skippy_inference_api::OpenAiError;
-use skippy_inference_api::OpenAiResult;
+use skippy_inference_api::InferenceError;
+use skippy_inference_api::InferenceResult;
 use skippy_protocol::MessageBase;
 use skippy_protocol::SCHEMA_VERSION;
 use skippy_protocol::StageConfig;
@@ -232,7 +232,7 @@ impl StageOpenAiBackend {
         session_id: &str,
         ids: &OpenAiGenerationIds,
         target_tokens: Option<u64>,
-    ) -> OpenAiResult<()> {
+    ) -> InferenceResult<()> {
         let Some(kv) = self.kv.as_ref() else {
             return Ok(());
         };
@@ -308,7 +308,7 @@ impl StageOpenAiBackend {
         token_start: u64,
         token_ids: &[i32],
         activation_width: i32,
-    ) -> OpenAiResult<Option<ActivationFrame>> {
+    ) -> InferenceResult<Option<ActivationFrame>> {
         if token_start != 0 {
             return Ok(None);
         }
@@ -409,7 +409,7 @@ impl StageOpenAiBackend {
         token_ids: &[i32],
         activation_width: i32,
         output: &ActivationFrame,
-    ) -> OpenAiResult<()> {
+    ) -> InferenceResult<()> {
         if token_start != 0 {
             return Ok(());
         }
@@ -445,7 +445,7 @@ impl StageOpenAiBackend {
                                 )
                                 .map_err(openai_backend_error)
                         })
-                        .collect::<OpenAiResult<Vec<_>>>()
+                        .collect::<InferenceResult<Vec<_>>>()
                 })?;
         let activation_records = kv.record_resident_activation(
             &self.config,
@@ -523,7 +523,7 @@ impl StageOpenAiBackend {
         session_id: &str,
         ids: &OpenAiGenerationIds,
         token_ids: &[i32],
-    ) -> OpenAiResult<bool> {
+    ) -> InferenceResult<bool> {
         let Some(kv) = self.kv.as_ref() else {
             return Ok(false);
         };
@@ -557,7 +557,7 @@ impl StageOpenAiBackend {
                             )
                             .map_err(openai_backend_error)
                     })
-                    .collect::<OpenAiResult<Vec<_>>>()
+                    .collect::<InferenceResult<Vec<_>>>()
             },
         )?;
         let exact_record_queued = kv.payload_is_exact_state()
@@ -619,7 +619,7 @@ impl StageOpenAiBackend {
         ids: &OpenAiGenerationIds,
         checkpoint_tokens: &[i32],
         write_through_l3: bool,
-    ) -> OpenAiResult<bool> {
+    ) -> InferenceResult<bool> {
         let Some(kv) = self.kv.as_ref() else {
             return Ok(false);
         };
@@ -653,7 +653,7 @@ impl StageOpenAiBackend {
         predicted: i32,
         sampling: &SamplingConfig,
         chat_sampling_metadata: Option<&str>,
-    ) -> OpenAiResult<bool> {
+    ) -> InferenceResult<bool> {
         let Some(kv) = self.kv.as_ref() else {
             return Ok(false);
         };
@@ -700,7 +700,7 @@ impl StageOpenAiBackend {
     pub(super) fn record_embedded_stage0_replay_checkpoint(
         &self,
         record: EmbeddedReplayCheckpointRecord<'_>,
-    ) -> OpenAiResult<bool> {
+    ) -> InferenceResult<bool> {
         let Some(kv) = self.kv.as_ref() else {
             return Ok(false);
         };
@@ -773,7 +773,7 @@ impl StageOpenAiBackend {
         request: &EmbeddedStageZeroGeneration<'_>,
         session_key: &str,
         downstream: &mut TcpStream,
-    ) -> OpenAiResult<Option<EmbeddedFusedFirstDecode>> {
+    ) -> InferenceResult<Option<EmbeddedFusedFirstDecode>> {
         let Some(kv) = self.kv.as_ref() else {
             return Ok(None);
         };
@@ -881,7 +881,7 @@ impl StageOpenAiBackend {
         request: &EmbeddedStageZeroGeneration<'_>,
         session_key: &str,
         downstream: &mut TcpStream,
-    ) -> OpenAiResult<Option<EmbeddedFusedFirstDecode>> {
+    ) -> InferenceResult<Option<EmbeddedFusedFirstDecode>> {
         let Some(kv) = self.kv.as_ref() else {
             return Ok(None);
         };
@@ -963,7 +963,7 @@ impl StageOpenAiBackend {
         prefill_tokens: &[i32],
         current: i32,
         wire_sampling: Option<WireSamplingConfig>,
-    ) -> OpenAiResult<Option<EmbeddedFusedFirstDecode>> {
+    ) -> InferenceResult<Option<EmbeddedFusedFirstDecode>> {
         let Some(kv) = self.kv.as_ref() else {
             return Ok(None);
         };

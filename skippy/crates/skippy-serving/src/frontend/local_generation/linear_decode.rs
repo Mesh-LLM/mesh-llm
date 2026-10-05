@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 
 use serde_json::json;
-use skippy_inference_api::{OpenAiError, OpenAiResult};
+use skippy_inference_api::{InferenceError, InferenceResult};
 
 use crate::frontend::generation::{LocalGeneration, StageOpenAiBackend, TokenControl};
 use crate::frontend::linear_proposal::{
@@ -20,8 +20,8 @@ impl StageOpenAiBackend {
         request: &LocalGeneration<'_>,
         session_id: &str,
         state: &mut DecodeState,
-        emit_token: &mut impl FnMut(i32) -> OpenAiResult<TokenControl>,
-    ) -> OpenAiResult<LinearProposalProgress> {
+        emit_token: &mut impl FnMut(i32) -> InferenceResult<TokenControl>,
+    ) -> InferenceResult<LinearProposalProgress> {
         self.try_execute_linear_proposal_with_executor(
             request,
             session_id,
@@ -38,17 +38,17 @@ impl StageOpenAiBackend {
         request: &LocalGeneration<'_>,
         session_id: &str,
         state: &mut DecodeState,
-        emit_token: &mut impl FnMut(i32) -> OpenAiResult<TokenControl>,
+        emit_token: &mut impl FnMut(i32) -> InferenceResult<TokenControl>,
         execute: F,
-    ) -> OpenAiResult<LinearProposalProgress>
+    ) -> InferenceResult<LinearProposalProgress>
     where
         F: for<'a> FnOnce(
             &StageOpenAiBackend,
             LinearProposalExecutionParams<'a>,
             crate::frontend::linear_proposal::QueriedLinearProposal,
             Option<&'a skippy_inference_api::CancellationToken>,
-            &'a mut dyn FnMut(i32) -> OpenAiResult<TokenControl>,
-        ) -> OpenAiResult<
+            &'a mut dyn FnMut(i32) -> InferenceResult<TokenControl>,
+        ) -> InferenceResult<
             Option<crate::frontend::linear_proposal::LinearProposalReceipt>,
         >,
     {
@@ -62,7 +62,7 @@ impl StageOpenAiBackend {
             .cancellation
             .is_some_and(skippy_inference_api::CancellationToken::is_cancelled)
         {
-            return Err(OpenAiError::backend("request cancelled"));
+            return Err(InferenceError::backend("request cancelled"));
         }
         let remaining_new_tokens =
             (request.max_tokens as usize).saturating_sub(state.decoded_tokens);
@@ -76,10 +76,10 @@ impl StageOpenAiBackend {
                 .saturating_sub(1)
                 .checked_add(state.decoded_tokens)
                 .ok_or_else(|| {
-                    OpenAiError::backend("linear proposal base position exceeds usize")
+                    InferenceError::backend("linear proposal base position exceeds usize")
                 })?,
         )
-        .map_err(|_| OpenAiError::backend("linear proposal base position exceeds u64"))?;
+        .map_err(|_| InferenceError::backend("linear proposal base position exceeds u64"))?;
         let queried = match query_linear_proposal(
             config,
             LinearProposalQueryParams {
@@ -162,7 +162,7 @@ impl StageOpenAiBackend {
             .cancellation
             .is_some_and(skippy_inference_api::CancellationToken::is_cancelled)
         {
-            return Err(OpenAiError::backend("request cancelled"));
+            return Err(InferenceError::backend("request cancelled"));
         }
         let Some(queried) = queried else {
             return Ok(LinearProposalProgress::NotUsed);
@@ -234,11 +234,10 @@ impl StageOpenAiBackend {
         state.decoded_tokens = state
             .decoded_tokens
             .checked_add(receipt.committed_tokens.len())
-            .ok_or_else(|| OpenAiError::backend("linear proposal decode count overflow"))?;
-        state.current = *receipt
-            .committed_tokens
-            .last()
-            .ok_or_else(|| OpenAiError::backend("linear proposal receipt committed no tokens"))?;
+            .ok_or_else(|| InferenceError::backend("linear proposal decode count overflow"))?;
+        state.current = *receipt.committed_tokens.last().ok_or_else(|| {
+            InferenceError::backend("linear proposal receipt committed no tokens")
+        })?;
         append_pending_linear_proposal_tokens(
             &mut state.pending_linear_proposal_tokens,
             &receipt.committed_tokens,

@@ -24,7 +24,7 @@ use crate::kv_integration::KvStageIntegration;
 use crate::runtime_state::{RuntimeState, load_runtime};
 use crate::telemetry::{Telemetry, TelemetryLevel};
 use anyhow::{Result, bail};
-use skippy_inference_api::{ChatCompletionRequest, OpenAiBackend};
+use skippy_inference_api::{ChatCompletionRequest, InferenceBackend};
 use skippy_protocol::{
     LoadMode, StageConfig, StageKvCacheConfig, StageKvCacheMode, StageKvCachePayload,
 };

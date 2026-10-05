@@ -20,7 +20,7 @@ use crate::runtime_data::{
 };
 use anyhow::{Context, Result};
 use mesh_llm_events::{OutputEvent, emit_event};
-use skippy_inference_api::OpenAiHookPolicy;
+use skippy_inference_api::InferenceHookPolicy;
 use skippy_protocol::{FlashAttentionType, LoadMode};
 use skippy_serving::serving_hooks::SharedModelServingHooksFactory;
 use std::net::SocketAddr;
@@ -291,7 +291,7 @@ pub(super) struct LocalOpenAiModelStartSpec<'a> {
     pub(super) openai_guardrail_policy: OpenAiGuardrailPolicyHandle,
     pub(super) skippy_telemetry: skippy::SkippyTelemetryOptions,
     pub(super) survey_telemetry: survey::SurveyTelemetry,
-    pub(super) hook_policy: Option<Arc<dyn OpenAiHookPolicy>>,
+    pub(super) hook_policy: Option<Arc<dyn InferenceHookPolicy>>,
     pub(super) serving_hooks_factory: Option<SharedModelServingHooksFactory>,
     pub(super) http_bind_addr: SocketAddr,
 }
@@ -826,7 +826,7 @@ pub(super) async fn start_runtime_local_model(
         .unwrap_or_else(|| spec.node.vram_bytes());
     let http_bind_addr = ([127, 0, 0, 1], alloc_local_port().await?).into();
     let hook_policy =
-        Some(skippy::MeshAutoHookPolicy::new(spec.node.clone()) as Arc<dyn OpenAiHookPolicy>);
+        Some(skippy::MeshAutoHookPolicy::new(spec.node.clone()) as Arc<dyn InferenceHookPolicy>);
     let start_result = start_local_openai_model(
         LocalOpenAiModelStartSpec {
             mesh_config: spec.mesh_config,

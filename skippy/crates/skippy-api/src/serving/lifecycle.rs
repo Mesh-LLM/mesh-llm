@@ -2,7 +2,7 @@
 use std::sync::Arc;
 
 use anyhow::{Context, Result, ensure};
-use skippy_inference_api::{GuardrailTelemetrySink, OpenAiBackend, OpenAiHookPolicy};
+use skippy_inference_api::{GuardrailTelemetrySink, InferenceBackend, InferenceHookPolicy};
 use skippy_protocol::{LoadMode, StageConfig};
 use skippy_serving::{
     EmbeddedRuntimeOptions, OpenAiGuardrailsConfig, SkippyRuntimeHandle,
@@ -30,7 +30,7 @@ pub struct ModelLoadRequest {
     pub hooks_factory: Option<SharedModelServingHooksFactory>,
     pub generation_observer: Option<Arc<dyn GenerationLifecycleIngress>>,
     pub kv_observer: Option<Arc<dyn KvLifecycleObserver>>,
-    pub hook_policy: Option<Arc<dyn OpenAiHookPolicy>>,
+    pub hook_policy: Option<Arc<dyn InferenceHookPolicy>>,
     pub guardrails: Option<OpenAiGuardrailsConfig>,
     pub guardrail_telemetry: Option<Arc<dyn GuardrailTelemetrySink>>,
     pub downstream_wire_condition: WireCondition,
@@ -41,7 +41,7 @@ pub struct ModelLoadRequest {
 /// Keep the native runtime and prediction listener alive for the backend's lifetime.
 pub struct LoadedModelBackend {
     pub runtime: SkippyRuntimeHandle,
-    pub backend: Arc<dyn OpenAiBackend>,
+    pub backend: Arc<dyn InferenceBackend>,
     pub config: StageConfig,
     pub prediction_return_listener: Option<PredictionReturnListener>,
     telemetry: Telemetry,

@@ -1,7 +1,7 @@
 use std::{borrow::Cow, collections::VecDeque, time::Instant};
 
 use serde_json::json;
-use skippy_inference_api::{OpenAiError, OpenAiResult};
+use skippy_inference_api::{InferenceError, InferenceResult};
 use skippy_protocol::binary::{StageWireMessage, WireReplyKind, recv_reply, write_stage_message};
 
 use crate::frontend::{
@@ -35,8 +35,8 @@ pub(super) fn begin_generation_lifecycle(
 pub(super) fn lifecycle_on_token<'a>(
     lifecycle: &'a mut GenerationLifecycleState,
     request: &EmbeddedStageZeroGeneration<'_>,
-    mut on_token: impl FnMut(i32) -> OpenAiResult<TokenControl> + 'a,
-) -> impl FnMut(i32) -> OpenAiResult<TokenControl> + 'a {
+    mut on_token: impl FnMut(i32) -> InferenceResult<TokenControl> + 'a,
+) -> impl FnMut(i32) -> InferenceResult<TokenControl> + 'a {
     let request_started_at: Instant = request.ids.request_started_at;
     move |token_id| {
         lifecycle.commit(token_id, request_started_at.elapsed());
@@ -129,7 +129,7 @@ pub(super) fn compose_target_predictions(
     proposal_count: usize,
     prior_boundary_prediction: Option<i32>,
     traversal_predictions: &[i32],
-) -> OpenAiResult<Vec<i32>> {
+) -> InferenceResult<Vec<i32>> {
     let required = proposal_count.saturating_add(1);
     // Stateful chat sampling stops verifying at the first mismatched row and
     // returns only the rows it sampled, so a shorter prediction array is a
@@ -138,7 +138,7 @@ pub(super) fn compose_target_predictions(
     // protocol error.
     if starts_epoch {
         if traversal_predictions.is_empty() {
-            return Err(OpenAiError::backend(
+            return Err(InferenceError::backend(
                 "epoch-start verify window returned no predictions",
             ));
         }
@@ -147,10 +147,10 @@ pub(super) fn compose_target_predictions(
     }
 
     let boundary = prior_boundary_prediction.ok_or_else(|| {
-        OpenAiError::backend("continuation verify window has no prior boundary prediction")
+        InferenceError::backend("continuation verify window has no prior boundary prediction")
     })?;
     if traversal_predictions.is_empty() {
-        return Err(OpenAiError::backend(
+        return Err(InferenceError::backend(
             "continuation verify window returned no predictions",
         ));
     }
@@ -208,12 +208,12 @@ pub(super) fn direct_prediction_return_path(
     verify_windows_enabled: bool,
     receiver_registered: bool,
     upstream_opened: bool,
-) -> OpenAiResult<Option<DirectPredictionReturnPath>> {
+) -> InferenceResult<Option<DirectPredictionReturnPath>> {
     if !verify_windows_enabled {
         return Ok(None);
     }
     if !receiver_registered {
-        return Err(OpenAiError::backend(
+        return Err(InferenceError::backend(
             "native MTP verify windows require direct prediction return",
         ));
     }
@@ -320,7 +320,7 @@ pub(super) fn refill_pipeline_ngram_candidates(
     committed_tokens: &[i32],
     cached_ngram_proposer: &mut Option<HistoryNgramProposer>,
     max_tokens: usize,
-) -> OpenAiResult<usize> {
+) -> InferenceResult<usize> {
     if max_tokens == 0 {
         return Ok(0);
     }
@@ -357,8 +357,8 @@ impl StageOpenAiBackend {
     pub(super) fn generate_embedded_request_locally(
         &self,
         request: EmbeddedStageZeroGeneration<'_>,
-        on_token: impl FnMut(i32) -> OpenAiResult<TokenControl>,
-    ) -> OpenAiResult<GenerationCacheStats> {
+        on_token: impl FnMut(i32) -> InferenceResult<TokenControl>,
+    ) -> InferenceResult<GenerationCacheStats> {
         self.generate_local_tokens(
             LocalGeneration {
                 prompt_token_ids: request.prompt_token_ids,
@@ -467,9 +467,9 @@ impl StageOpenAiBackend {
         request: &EmbeddedStageZeroGeneration<'_>,
         lane_pool: &PersistentStageLanePool,
         mut lane: PersistentStageLane,
-        result: &OpenAiResult<()>,
+        result: &InferenceResult<()>,
         session_key: &str,
-    ) -> OpenAiResult<()> {
+    ) -> InferenceResult<()> {
         if result.is_err() {
             // The generation error may be the downstream peer disappearing.
             // A graceful Stop/ACK exchange would then turn the bounded decode

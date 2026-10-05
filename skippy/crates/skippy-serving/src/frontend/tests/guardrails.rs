@@ -22,15 +22,15 @@ struct StructuredGuardrailRecordingBackend {
 }
 
 #[async_trait]
-impl OpenAiBackend for StructuredGuardrailRecordingBackend {
-    async fn models(&self) -> OpenAiResult<Vec<ModelObject>> {
+impl InferenceBackend for StructuredGuardrailRecordingBackend {
+    async fn models(&self) -> InferenceResult<Vec<ModelObject>> {
         Ok(vec![ModelObject::new("test")])
     }
 
     async fn chat_completion(
         &self,
         request: ChatCompletionRequest,
-    ) -> OpenAiResult<ChatCompletionResponse> {
+    ) -> InferenceResult<ChatCompletionResponse> {
         ensure_chat_runtime_features_supported(&request)
             .expect("guarded wrapper should downgrade backend-facing structured requests");
         *self.seen.lock().unwrap() = Some(request);
@@ -64,20 +64,20 @@ impl OpenAiBackend for StructuredGuardrailRecordingBackend {
     async fn chat_completion_stream(
         &self,
         _request: ChatCompletionRequest,
-        _context: OpenAiRequestContext,
-    ) -> OpenAiResult<ChatCompletionStream> {
+        _context: InferenceRequestContext,
+    ) -> InferenceResult<ChatCompletionStream> {
         unreachable!("streaming is not used in this test")
     }
 
-    async fn completion(&self, _request: CompletionRequest) -> OpenAiResult<CompletionResponse> {
+    async fn completion(&self, _request: CompletionRequest) -> InferenceResult<CompletionResponse> {
         unreachable!("completions are not used in this test")
     }
 
     async fn completion_stream(
         &self,
         _request: CompletionRequest,
-        _context: OpenAiRequestContext,
-    ) -> OpenAiResult<CompletionStream> {
+        _context: InferenceRequestContext,
+    ) -> InferenceResult<CompletionStream> {
         unreachable!("completions are not used in this test")
     }
 }

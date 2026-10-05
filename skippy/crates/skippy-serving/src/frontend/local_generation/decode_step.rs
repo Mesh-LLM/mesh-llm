@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use serde_json::json;
-use skippy_inference_api::OpenAiResult;
+use skippy_inference_api::InferenceResult;
 
 use crate::frontend::generation::{
     GenerationCacheStats, LocalGeneration, PhaseTimer, StageOpenAiBackend, TokenControl,
@@ -28,8 +28,8 @@ impl StageOpenAiBackend {
         request: &LocalGeneration<'_>,
         session_id: &str,
         state: &mut DecodeState,
-        emit_token: &mut impl FnMut(i32) -> OpenAiResult<TokenControl>,
-    ) -> OpenAiResult<TokenControl> {
+        emit_token: &mut impl FnMut(i32) -> InferenceResult<TokenControl>,
+    ) -> InferenceResult<TokenControl> {
         let decode_step = state.decoded_tokens;
         let token_timer = PhaseTimer::start();
         let decode_call_timer = PhaseTimer::start();
@@ -229,7 +229,7 @@ impl StageOpenAiBackend {
         state: &mut DecodeState,
         cache_stats: &mut GenerationCacheStats,
         decode_timer: PhaseTimer,
-    ) -> OpenAiResult<Duration> {
+    ) -> InferenceResult<Duration> {
         let mut attrs = self.openai_attrs(request.ids);
         attrs.insert(
             "llama_stage.decode_token_count".to_string(),

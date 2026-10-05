@@ -42,9 +42,9 @@ use axum::middleware::Next;
 use axum::response::Response;
 use serde_json::Value;
 use serde_json::json;
+use skippy_inference_api::InferenceBackend;
+use skippy_inference_api::InferenceHookPolicy;
 use skippy_inference_api::ModelId;
-use skippy_inference_api::OpenAiBackend;
-use skippy_inference_api::OpenAiHookPolicy;
 use skippy_protocol::StageConfig;
 use std::collections::BTreeMap;
 use std::future::Future;
@@ -58,7 +58,7 @@ use std::time::Duration;
 /// Serve a caller-owned backend and tokenizer, awaiting all accepted HTTP work on shutdown.
 pub async fn serve_openai_backend_with_shutdown(
     bind_addr: SocketAddr,
-    backend: Arc<dyn OpenAiBackend>,
+    backend: Arc<dyn InferenceBackend>,
     tokenizer: TokenizerCapability,
     telemetry: Telemetry,
     shutdown: impl Future<Output = ()> + Send + 'static,
@@ -112,7 +112,7 @@ pub struct EmbeddedOpenAiArgs {
     pub downstream_wire_condition: WireCondition,
     pub prediction_returns: Option<Arc<PredictionReturnHub>>,
     pub telemetry: Telemetry,
-    pub hook_policy: Option<Arc<dyn OpenAiHookPolicy>>,
+    pub hook_policy: Option<Arc<dyn InferenceHookPolicy>>,
     pub generation_receipt: Option<GenerationReceiptConfig>,
     pub generation_lifecycle: Option<GenerationLifecycleConfig>,
     pub linear_proposal_ingress: Option<LinearProposalIngressConfig>,
@@ -178,7 +178,7 @@ pub struct EmbeddedOpenAiRouter {
 }
 
 pub struct EmbeddedOpenAiBackend {
-    pub backend: Arc<dyn OpenAiBackend>,
+    pub backend: Arc<dyn InferenceBackend>,
     pub model_id: String,
     pub generation_concurrency: usize,
     pub generation_queue_capacity: usize,
@@ -338,7 +338,7 @@ fn embedded_openai_backend_with_scheduler(
             args.telemetry.clone(),
         )?,
     };
-    let backend: Arc<dyn OpenAiBackend> = Arc::new(StageOpenAiBackend {
+    let backend: Arc<dyn InferenceBackend> = Arc::new(StageOpenAiBackend {
         runtime: args.runtime,
         workload: Default::default(),
         config: args.config.clone(),
@@ -461,7 +461,7 @@ fn insert_generation_admission_config_attrs(
 }
 
 pub(in crate::frontend) fn instrumented_openai_router(
-    backend: Arc<dyn OpenAiBackend>,
+    backend: Arc<dyn InferenceBackend>,
     tokenizer: TokenizerCapability,
     telemetry: Telemetry,
 ) -> Router {
