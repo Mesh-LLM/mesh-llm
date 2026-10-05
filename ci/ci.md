@@ -14,9 +14,12 @@ For a selected Linux, macOS, or Windows runtime row, the lane now builds the
 backend-neutral Skippy CLI independently of the console UI, composes it with
 the exact native runtime archive, and verifies source, target, backend,
 release, ABI, import policy, checksums, and no-driver runtime discovery before the Mesh host starts. The
-standalone product is an immutable run artifact. This phase is an artifact
-integrity gate; model and hardware qualification are still pending in the
-audit's acceptance checklist.
+standalone product is an immutable run artifact. The Linux CPU product job
+also restores the pinned SmolLM2 dense fixture and requires real prefill and
+decode through that composed CLI/runtime pair before uploading the product.
+It uploads a digest-bound pilot evidence file. This pilot covers only load and
+prefill/decode; the full six-suite, nine-row model and hardware qualification
+gate remains pending in the audit's acceptance checklist.
 
 The affected-crate fallback roster in `scripts/affected-crates.sh` includes
 `mesh-llm-moa-plugin` and `mesh-llm-wallet` alongside their related workspace
