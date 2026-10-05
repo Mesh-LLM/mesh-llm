@@ -37,10 +37,6 @@ pub(crate) const TEST_LLAMA_ARCHITECTURE_CATALOG: &[TestLlamaArchitecture] = &[
         family_id: "deepseek2ocr",
     },
     TestLlamaArchitecture {
-        llama_architecture: "deepseek4",
-        family_id: "deepseek4",
-    },
-    TestLlamaArchitecture {
         llama_architecture: "exaone",
         family_id: "exaone",
     },
@@ -526,24 +522,6 @@ pub fn deepseek3_capability(layer_count: u32, activation_width: u32) -> FamilyCa
     )
 }
 
-pub fn deepseek4_capability(layer_count: u32, activation_width: u32) -> FamilyCapabilityRecord {
-    FamilyCapabilityRecord {
-        family_id: "deepseek4".to_string(),
-        layer_count,
-        activation_width,
-        exact_state_mobility: ExactStateMobility::Untested,
-        // llama.cpp classifies this model as hybrid. The exact graph will
-        // refine state ownership during admission; this topology hint must
-        // not claim that any layer is stateless before that happens.
-        recurrent_ranges: vec![LayerRange {
-            start: 0,
-            end: layer_count,
-        }],
-        split_constraints: Vec::new(),
-        sidebands: Vec::new(),
-    }
-}
-
 pub fn glm47_flash_capability(layer_count: u32, activation_width: u32) -> FamilyCapabilityRecord {
     dense_family_capability(
         "glm47_flash",
@@ -930,9 +908,6 @@ fn infer_falcon_minimax_glm_deepseek_capability(
     layer_count: u32,
     activation_width: u32,
 ) -> Option<FamilyCapabilityRecord> {
-    if compact.contains("deepseek4") || compact.contains("deepseekv4") {
-        return Some(deepseek4_capability(layer_count, activation_width));
-    }
     if compact.contains("falconh1") {
         return Some(falcon_h1_capability(layer_count, activation_width));
     }

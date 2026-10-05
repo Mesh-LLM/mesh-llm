@@ -412,6 +412,14 @@ pub fn validate_stage_admission_descriptor(
             "unsupported descriptor version",
         ));
     }
+    if !matches!(
+        descriptor.kv_graph_state.as_str(),
+        "" | "dense" | "recurrent" | "full-state"
+    ) {
+        return Err(StageFrameError::InvalidStageAdmissionDescriptor(
+            "unsupported graph state summary",
+        ));
+    }
     if !valid_prefixed_sha256(&descriptor.package_id, "sha256:") {
         return Err(StageFrameError::InvalidStageAdmissionDescriptor(
             "package_id must be a canonical sha256 digest",

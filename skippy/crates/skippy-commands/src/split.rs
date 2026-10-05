@@ -288,6 +288,7 @@ mod tests {
             resident_tensor_ids: vec![],
             sidecars: vec![],
             profiles: vec![profile],
+            kv_graph_state: String::new(),
         };
         let mut second = first.clone();
         second.layer_start = 1;

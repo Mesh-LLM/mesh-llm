@@ -845,6 +845,7 @@ mod proactive_eviction_tests {
     #[test]
     fn admitted_capacity_eviction_reports_the_removed_entries() {
         let config = StageConfig {
+            kv_graph_state: "dense".into(),
             ctx_size: 10,
             lane_count: 1,
             kv_cache: Some(StageKvCacheConfig {

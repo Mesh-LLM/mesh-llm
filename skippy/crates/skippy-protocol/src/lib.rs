@@ -89,6 +89,7 @@ mod tests {
                 activation_import_bindings: Vec::new(),
                 activation_export_bindings: Vec::new(),
             }],
+            kv_graph_state: "dense".into(),
         }
     }
 

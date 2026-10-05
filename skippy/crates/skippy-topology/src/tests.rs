@@ -963,35 +963,6 @@ fn stage_runtime_test_catalog_has_unique_architectures() {
     }
 }
 
-#[test]
-fn deepseek4_certification_has_a_matching_family_capability() {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../skippy-api/src/split-certified.json");
-    let roster: serde_json::Value = serde_json::from_str(
-        &std::fs::read_to_string(path).expect("read split certification roster"),
-    )
-    .expect("split certification roster must parse");
-    let architectures = roster["architectures"]
-        .as_array()
-        .expect("split certification roster has architectures");
-    assert!(
-        architectures
-            .iter()
-            .any(|architecture| architecture == "deepseek4")
-    );
-    let capability = infer_family_capability("deepseek4", 43, 4096)
-        .expect("certified DeepSeek V4 has a runtime family view");
-    assert_eq!(capability.family_id, "deepseek4");
-    assert_eq!(
-        capability.recurrent_ranges,
-        vec![LayerRange { start: 0, end: 43 }]
-    );
-    assert_eq!(
-        capability.exact_state_mobility,
-        ExactStateMobility::Untested
-    );
-}
-
 #[derive(Debug, Deserialize)]
 struct ParityCandidateManifest {
     candidates: Vec<ParityCandidate>,

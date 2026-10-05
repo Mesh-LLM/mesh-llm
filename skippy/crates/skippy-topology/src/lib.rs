@@ -11,14 +11,14 @@ pub use edge_order::StageEdgeSignal;
 #[cfg(test)]
 pub(crate) use family_capability::TEST_LLAMA_ARCHITECTURE_CATALOG;
 pub use family_capability::{
-    deepseek2_capability, deepseek2ocr_capability, deepseek3_capability, deepseek4_capability,
-    dense_attention_layers, dense_family_capability, falcon_h1_capability, falcon_h1_layers,
-    gemma2_capability, gemma3_capability, gemma3n_capability, gemma4_a4b_capability,
-    gemma4_e4b_capability, glm4_capability, glm47_flash_capability, infer_family_capability,
-    kimi_linear_capability, laguna_capability, llama_capability, minimax_m27_capability,
-    olmo_capability, qwen2moe_capability, qwen3_dense_capability, qwen3moe_capability,
-    qwen3next_capability, qwen3next_layers, qwen4exp_capability, qwen35_series_capability,
-    recurrent_family_capability, rwkv6_capability, rwkv7_capability,
+    deepseek2_capability, deepseek2ocr_capability, deepseek3_capability, dense_attention_layers,
+    dense_family_capability, falcon_h1_capability, falcon_h1_layers, gemma2_capability,
+    gemma3_capability, gemma3n_capability, gemma4_a4b_capability, gemma4_e4b_capability,
+    glm4_capability, glm47_flash_capability, infer_family_capability, kimi_linear_capability,
+    laguna_capability, llama_capability, minimax_m27_capability, olmo_capability,
+    qwen2moe_capability, qwen3_dense_capability, qwen3moe_capability, qwen3next_capability,
+    qwen3next_layers, qwen4exp_capability, qwen35_series_capability, recurrent_family_capability,
+    rwkv6_capability, rwkv7_capability,
 };
 pub use phase_placement::{HandoffCostModel, PhaseAssignment, PhaseCandidate, assign_phase_roles};
 pub use planning::{

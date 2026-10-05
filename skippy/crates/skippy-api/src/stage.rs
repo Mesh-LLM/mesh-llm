@@ -198,6 +198,7 @@ pub fn single_stage_config(
         cache_idle_slots: options.cache_idle_slots,
         resident_tensor_names: Vec::new(),
         execution_contract: String::new(),
+        kv_graph_state: String::new(),
         activation_import_identities: Vec::new(),
         activation_import_bindings: Vec::new(),
         activation_export_identities: Vec::new(),
