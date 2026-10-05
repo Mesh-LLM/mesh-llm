@@ -16,7 +16,7 @@ why the M1 seam alone could not do either.
 
 ## What #1331 assumed vs. what's actually there
 
-#1331's framing (`InferenceHookPolicy` only fires before-chat; `MeshEvent` is
+Issue #1331's framing (`InferenceHookPolicy` only fires before-chat; `MeshEvent` is
 topology-only; the real path is somewhere in `inference::provider()`) is close but
 imprecise about the codebase, and the imprecision matters for design:
 
