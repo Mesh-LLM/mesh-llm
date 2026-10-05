@@ -577,7 +577,10 @@ closed.
 
 `scripts/plan-ci.py` is the sole Clippy and Rust-test batch allocator;
 `ci-crate-lists` validates that the main `matrices.rust_tests` covers every
-workspace crate exactly once.
+workspace crate exactly once. Planned `skippy-ffi` packages execute their
+tests and run Clippy in an isolated dynamic-runtime feature graph rather than
+being silently skipped by a batch. Selected SafeTensors executable coverage
+runs on PR, exhaustive main and manual-full sources.
 
 Control-plane changes fail open through the selected profile. When they
 require the `web` slice, both console and website rows execute even without a
@@ -622,7 +625,7 @@ runtime producers are not duplicated.
   epoch. Batches that exercise Skippy correctness tests restore an
   exact revision- and SHA-256-pinned model cache, verify the file before use,
   and leave publication to one trusted-main batch. Related Skippy crate changes
-  on pull requests also compile the adapter-owned
+  on PR, main, and manual-full sources also compile the adapter-owned
   `config::hardware_translation_tests::safetensors_checkpoint_reaches_mesh_host_runtime`
   library test in `mesh-llm-skippy-adapter`, fail if that
   test is absent, then run its binary against an immutable SmolLM2 revision

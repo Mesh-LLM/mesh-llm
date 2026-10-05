@@ -246,7 +246,6 @@ jobs:
           set -euo pipefail
           mapfile -t crates < <(jq -r '.[]' <<<"$TEST_CRATES")
           for crate in ${crates[@]+"${crates[@]}"}; do
-            [[ "$crate" == "skippy-ffi" ]] && continue
             echo "::group::cargo test -p $crate"
             cargo test --locked -p "$crate"
             if [[ "$crate" == "mesh-llm-host-runtime" ]]; then
@@ -269,7 +268,7 @@ jobs:
   safetensors_runtime_smoke:
     name: SafeTensors runtime smoke
     needs: runner_policy
-    if: ${{ inputs.original_event_name == 'pull_request' && (contains(inputs.rust_tests_matrix, 'skippy-model') || contains(inputs.rust_tests_matrix, 'skippy-runtime') || contains(inputs.rust_tests_matrix, 'skippy-quantize') || contains(inputs.rust_tests_matrix, 'skippy-ffi') || contains(inputs.rust_tests_matrix, 'skippy-server') || contains(inputs.rust_tests_matrix, 'skippy-serving') || contains(inputs.rust_tests_matrix, 'skippy-cli') || contains(inputs.rust_tests_matrix, 'mesh-llm-skippy-adapter') || contains(inputs.rust_tests_matrix, 'skippy-protocol') || contains(inputs.rust_tests_matrix, 'skippy-cache') || contains(inputs.rust_tests_matrix, 'mesh-llm-config') || contains(inputs.rust_tests_matrix, 'mesh-llm-host-runtime') || contains(inputs.rust_tests_matrix, 'mesh-llm-cli')) }}
+    if: ${{ (inputs.original_event_name == 'pull_request' || inputs.original_event_name == 'push' || inputs.original_event_name == 'workflow_dispatch') && (contains(inputs.rust_tests_matrix, 'skippy-model') || contains(inputs.rust_tests_matrix, 'skippy-runtime') || contains(inputs.rust_tests_matrix, 'skippy-quantize') || contains(inputs.rust_tests_matrix, 'skippy-ffi') || contains(inputs.rust_tests_matrix, 'skippy-server') || contains(inputs.rust_tests_matrix, 'skippy-serving') || contains(inputs.rust_tests_matrix, 'skippy-cli') || contains(inputs.rust_tests_matrix, 'mesh-llm-skippy-adapter') || contains(inputs.rust_tests_matrix, 'skippy-protocol') || contains(inputs.rust_tests_matrix, 'skippy-cache') || contains(inputs.rust_tests_matrix, 'mesh-llm-config') || contains(inputs.rust_tests_matrix, 'mesh-llm-host-runtime') || contains(inputs.rust_tests_matrix, 'mesh-llm-cli')) }}
     runs-on: ${{ needs.runner_policy.outputs.runner }}
     timeout-minutes: 60
     container:

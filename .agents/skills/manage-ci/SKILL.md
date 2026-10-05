@@ -206,6 +206,10 @@ owning source, and update the inventory and topology in the same change.
 - Pull requests test affected crates plus reverse dependents. Main tests every
   workspace member exactly once. Workspace discovery belongs to Cargo metadata,
   not a workflow-maintained allowlist.
+- A planned Rust package must execute its Clippy and test checks. When a package
+  needs an isolated feature graph, run a separate Cargo invocation and include
+  its result in the same required lane. The selected SafeTensors executable
+  smoke runs with the same required cases on PR, main, and manual-full sources.
 - Use measured workload data to rebalance deterministic shards, but keep the
   checked-in algorithm reproducible. Use one Cargo invocation per shard unless
   a documented package-isolation check requires otherwise.

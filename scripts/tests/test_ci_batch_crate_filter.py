@@ -225,6 +225,21 @@ class BatchCrateFilterTest(unittest.TestCase):
                 self.assertIn("mesh-llm", executed)
                 self.assertIn("mesh-llm-host-runtime", executed)
 
+    @unittest.skipUnless(BASH, "needs bash >= 4 for mapfile")
+    def test_skippy_ffi_is_executed_in_both_owning_budgets(self) -> None:
+        for workflow, _, _ in _BATCH_STEPS:
+            with self.subTest(workflow=workflow):
+                resolved, completed, calls = self._execute(
+                    workflow,
+                    ["skippy-ffi", "mesh-llm"],
+                    members=["skippy-ffi", "mesh-llm"],
+                )
+                self.assertEqual(resolved.returncode, 0, resolved.stderr)
+                self.assertEqual(completed.returncode, 0, completed.stderr)
+                executed = self._executed_batches(calls)
+                self.assertIn("-p skippy-ffi", executed)
+                self.assertEqual(executed.count("-p skippy-ffi"), 1)
+
     def test_renamed_batches_are_translated_before_the_workspace_filter(self) -> None:
         """A planned batch is translated first, then filtered by this revision.
 

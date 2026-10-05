@@ -341,11 +341,18 @@ jobs:
           fi
           args=()
           for crate in "${crates[@]}"; do
+            # skippy-ffi has a distinct dynamic-runtime feature graph. Run it
+            # separately so a batched Cargo invocation cannot unify features
+            # from another package and conceal its own warnings.
             [[ "$crate" == "skippy-ffi" ]] && continue
             args+=("-p" "$crate")
           done
-          [[ "${#args[@]}" -gt 0 ]] || exit 0
-          cargo clippy "${args[@]}" --all-targets -- -D warnings
+          if [[ "${#args[@]}" -gt 0 ]]; then
+            cargo clippy "${args[@]}" --all-targets -- -D warnings
+          fi
+          if printf '%s\n' "${crates[@]}" | grep -qxF skippy-ffi; then
+            cargo clippy --locked -p skippy-ffi --all-targets -- -D warnings
+          fi
       - name: Capture Clippy cache evidence
         if: ${{ !cancelled() }}
         uses: ./.github/actions/capture-sccache-stats
