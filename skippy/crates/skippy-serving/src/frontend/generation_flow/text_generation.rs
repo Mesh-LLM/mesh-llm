@@ -203,6 +203,7 @@ impl StageOpenAiBackend {
         // The gate's verdict, applied once for this request rather than looked
         // up per token: a request that straddles a flip is correct either way,
         // since speculation is a throughput choice and never a correctness one.
+        let speculating = self.gate_allows_speculation();
         let gated_speculative = self.gated_speculative();
 
         let cache_stats = match self.mode.clone() {
@@ -244,7 +245,16 @@ impl StageOpenAiBackend {
                         .map(|hub| hub.register(ids.request_id, ids.session_id))
                         .transpose()
                         .map_err(openai_backend_error)?,
-                    draft: self.draft.clone(),
+                    // Stood down with the proposers. Clearing `ngram` and
+                    // `extension` while still handing over a draft runner
+                    // leaves the classic serial draft loop able to propose,
+                    // so the gate would not actually have turned speculation
+                    // off.
+                    draft: if speculating {
+                        self.draft.clone()
+                    } else {
+                        None
+                    },
                     speculative_window: self.speculative_window,
                     adaptive_speculative_window: self.adaptive_speculative_window,
                     speculative: &gated_speculative,
@@ -309,7 +319,7 @@ impl StageOpenAiBackend {
             generation_timer,
             summary_attrs,
         );
-        self.record_speculation_outcome(&output);
+        self.record_speculation_outcome(&output, speculating);
         Ok(output)
     }
 }

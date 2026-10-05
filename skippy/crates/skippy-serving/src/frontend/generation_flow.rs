@@ -78,19 +78,30 @@ const GRAPH_REUSE_LOG_STRIDE: usize = 256;
 impl StageOpenAiBackend {
     /// Fold a finished request into the speculation gate, and log a verdict.
     ///
-    /// Called after the summary so a flip is attributable to the window that
-    /// caused it. Counters move on every request; the gate only decides once a
+    /// Called after the summary so a flip is attributable to the request that
+    /// caused it. Every request is folded in; the gate only decides once a
     /// window has closed.
-    fn record_speculation_outcome(&self, output: &GeneratedText) {
+    fn record_speculation_outcome(&self, output: &GeneratedText, speculated: bool) {
         let Some(governor) = self.speculation_governor.as_ref() else {
             return;
         };
         let (proposed, accepted) = output.speculative_stats.as_ref().map_or((0, 0), |stats| {
             (stats.draft_tokens as u64, stats.accepted_tokens as u64)
         });
-        let Some(decision) =
-            governor.record(u64::from(output.completion_tokens), proposed, accepted)
-        else {
+        // This request's own decode rate, not a window rate over wall clock.
+        // Below saturation a window rate is the offered load: it would not move
+        // when the setting changed, so a losing configuration would survive
+        // every trial by looking unchanged.
+        if output.predicted_ms <= 0.0 || output.completion_tokens == 0 {
+            return;
+        }
+        let decode_rate = f64::from(output.completion_tokens) * 1000.0 / output.predicted_ms;
+        let Some(decision) = governor.record(super::speculation_gate::RequestOutcome {
+            decode_tokens_per_second: decode_rate,
+            proposed_tokens: proposed,
+            accepted_tokens: accepted,
+            speculated,
+        }) else {
             return;
         };
         let mut attrs = std::collections::BTreeMap::new();
@@ -103,6 +114,13 @@ impl StageOpenAiBackend {
             serde_json::json!(governor.allows_speculation()),
         );
         self.telemetry.emit("stage.openai_speculation_gate", attrs);
+    }
+
+    /// Whether the gate currently allows speculation. `true` when ungoverned.
+    fn gate_allows_speculation(&self) -> bool {
+        self.speculation_governor
+            .as_ref()
+            .is_none_or(|governor| governor.allows_speculation())
     }
 
     /// The resolved speculation plan, with the gate's verdict applied.

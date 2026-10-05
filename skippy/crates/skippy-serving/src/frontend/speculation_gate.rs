@@ -55,12 +55,12 @@ use std::time::{Duration, Instant};
 pub(crate) struct SpeculationGateConfig {
     /// Shortest window a decision is made on.
     pub(crate) min_window: Duration,
-    /// Completion throughput below which the model is treated as idle. An idle
-    /// window measures the idle share, not the setting.
-    pub(crate) min_completion_tokens_per_second: f64,
-    /// Fractional throughput change needed to call a trial decisive. Must sit
-    /// above run-to-run noise, which sustained split runs showed at roughly
-    /// ±8% window to window.
+    /// Matching requests a window needs before it can be judged. One request's
+    /// rate is noise; a verdict on it would be a coin flip.
+    pub(crate) min_requests: u64,
+    /// Fractional change in mean decode rate needed to call a trial decisive.
+    /// Must sit above run-to-run noise, which sustained split runs showed at
+    /// roughly ±8% window to window.
     pub(crate) decisive_margin: f64,
     /// Quiet period after a verdict, so the gate cannot oscillate.
     pub(crate) cooldown: Duration,
@@ -70,7 +70,7 @@ impl Default for SpeculationGateConfig {
     fn default() -> Self {
         Self {
             min_window: Duration::from_secs(60),
-            min_completion_tokens_per_second: 1.0,
+            min_requests: 3,
             // Comfortably above the ~8% noise floor, so a verdict is a signal
             // and not a coin flip.
             decisive_margin: 0.15,
@@ -83,28 +83,31 @@ impl Default for SpeculationGateConfig {
     }
 }
 
-/// Cumulative counters for one model at one instant.
+/// One finished request, as the gate needs to see it.
 ///
-/// Cumulative rather than per-window so a dropped or late sample cannot lose
-/// tokens: every window is a difference of two totals.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct SpeculationSample {
-    pub(crate) at: Instant,
-    /// Cumulative completion tokens emitted to callers.
-    pub(crate) completion_tokens: u64,
-    /// Cumulative speculative tokens drafted.
+/// `decode_tokens_per_second` is the request's **own** decode rate — the
+/// engine's `predicted_per_second`, completion tokens over decode time. Not a
+/// window rate over wall clock, which is the mistake this type exists to
+/// prevent: below saturation a window rate equals the offered load, so it does
+/// not move when the setting changes, and a losing configuration would survive
+/// every trial. It also mis-attributes a long request's whole output to
+/// whichever window it happened to finish in.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct RequestOutcome {
+    pub(crate) decode_tokens_per_second: f64,
     pub(crate) proposed_tokens: u64,
-    /// Cumulative speculative tokens the target accepted.
     pub(crate) accepted_tokens: u64,
-    /// Whether speculation was enabled for the window ending at this sample.
-    pub(crate) speculating: bool,
+    /// What this request actually used, which may differ from what the gate
+    /// wants now if it finished across a flip.
+    pub(crate) speculated: bool,
 }
 
 /// What a measured window says.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct GateWindow {
-    pub(crate) seconds: f64,
-    pub(crate) completion_tokens_per_second: f64,
+    pub(crate) requests: u64,
+    /// Mean of the per-request decode rates in the window.
+    pub(crate) mean_decode_tokens_per_second: f64,
     /// `None` when nothing was drafted, which is not the same as 0.0: a
     /// proposer that never fired has no acceptance to judge.
     pub(crate) accept_rate: Option<f64>,
@@ -133,20 +136,64 @@ pub(crate) enum GateDecision {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Trial {
-    /// Throughput of the setting we flipped *away* from.
+    /// Mean decode rate of the setting we flipped away from.
     baseline: f64,
     /// What the flip set speculation to.
     enabled: bool,
 }
 
-/// Decides whether speculation is earning its keep, from observed throughput.
+/// Requests accumulated for the setting currently under measurement.
 ///
-/// Only decides. The caller owns the gate state the generation path reads and
-/// the telemetry that explains a flip.
+/// Per-window rather than cumulative. Cumulative totals would have to be
+/// differenced across samples, and a concurrent pair of completions can read
+/// those totals out of order — which looks exactly like a counter restart and
+/// would drop a trial and push the cooldown out, repeatedly. There is nothing
+/// to difference here.
+#[derive(Clone, Copy, Debug)]
+struct Window {
+    opened: Instant,
+    /// The setting this window is measuring. A request that used the other
+    /// setting straddled a flip and is discarded.
+    speculating: bool,
+    rate_sum: f64,
+    requests: u64,
+    proposed: u64,
+    accepted: u64,
+}
+
+impl Window {
+    fn open(at: Instant, speculating: bool) -> Self {
+        Self {
+            opened: at,
+            speculating,
+            rate_sum: 0.0,
+            requests: 0,
+            proposed: 0,
+            accepted: 0,
+        }
+    }
+
+    fn measure(&self) -> GateWindow {
+        GateWindow {
+            requests: self.requests,
+            mean_decode_tokens_per_second: if self.requests == 0 {
+                0.0
+            } else {
+                self.rate_sum / self.requests as f64
+            },
+            accept_rate: (self.proposed > 0).then(|| self.accepted as f64 / self.proposed as f64),
+        }
+    }
+}
+
+/// Decides whether speculation is earning its keep, from measured decode rate.
+///
+/// Only decides. The caller owns the switch the generation path reads and the
+/// telemetry that explains a flip.
 #[derive(Debug)]
 pub(crate) struct SpeculationGate {
     config: SpeculationGateConfig,
-    last: Option<SpeculationSample>,
+    window: Option<Window>,
     cooldown_until: Option<Instant>,
     trial: Option<Trial>,
 }
@@ -155,82 +202,93 @@ impl SpeculationGate {
     pub(crate) fn new(config: SpeculationGateConfig) -> Self {
         Self {
             config,
-            last: None,
-            // The first trial waits a full cooldown rather than firing on the
-            // first loaded window, so a model that has just come up is not
-            // flipped while its caches are still cold.
+            window: None,
             cooldown_until: None,
             trial: None,
         }
     }
 
-    /// Feed the latest cumulative counters and get a decision.
-    pub(crate) fn observe(&mut self, sample: SpeculationSample) -> GateDecision {
-        let Some(last) = self.last else {
-            self.last = Some(sample);
-            self.cooldown_until = Some(sample.at + self.config.cooldown);
-            return GateDecision::Hold {
-                why: "first sample",
-            };
-        };
+    /// Fold one finished request in, and decide if its window has closed.
+    ///
+    /// `speculating` is the gate's current setting, which the caller owns.
+    pub(crate) fn observe(
+        &mut self,
+        at: Instant,
+        speculating: bool,
+        outcome: RequestOutcome,
+    ) -> GateDecision {
+        if self.window.is_none() {
+            // The first trial waits a full cooldown, so a model that has just
+            // come up is not flipped while its caches are still cold.
+            self.cooldown_until = Some(at + self.config.cooldown);
+            self.window = Some(Window::open(at, speculating));
+        }
+        let window = self.window.as_mut().expect("opened just above");
 
-        // Counters only ever climb, so a drop means the model reloaded and the
-        // totals restarted. Differencing across that reads as a huge negative
-        // window; re-baseline instead, and drop a trial that was measured
-        // against counters which no longer exist.
-        if sample.completion_tokens < last.completion_tokens
-            || sample.proposed_tokens < last.proposed_tokens
-        {
-            self.reset(sample);
+        // The setting changed under us (a flip, or a caller that switched for
+        // its own reasons): the requests gathered so far measured the old one.
+        if window.speculating != speculating {
+            *window = Window::open(at, speculating);
+            if self.cooldown_until.is_none() {
+                self.cooldown_until = Some(at + self.config.cooldown);
+            }
             return GateDecision::Hold {
-                why: "counters restarted; new window",
+                why: "setting changed; new window",
             };
         }
 
-        let elapsed = sample.at.saturating_duration_since(last.at);
-        if elapsed < self.config.min_window {
+        if outcome.speculated != speculating {
+            // Straddled a flip: its tokens were produced under the other
+            // setting, so counting them would blend the two.
+            return GateDecision::Hold {
+                why: "request straddled a flip; discarded",
+            };
+        }
+
+        window.rate_sum += outcome.decode_tokens_per_second;
+        window.requests += 1;
+        window.proposed += outcome.proposed_tokens;
+        window.accepted += outcome.accepted_tokens;
+
+        if at.saturating_duration_since(window.opened) < self.config.min_window {
             return GateDecision::Hold {
                 why: "window not yet full",
             };
         }
-
-        let window = measure(&last, &sample, elapsed);
-        self.last = Some(sample);
-
-        if window.completion_tokens_per_second < self.config.min_completion_tokens_per_second {
-            // An idle window measures idleness. Judging a trial on one would
-            // revert a setting for not being used, and starting one would
-            // measure noise.
-            return GateDecision::Hold { why: "idle" };
+        if window.requests < self.config.min_requests {
+            return GateDecision::Hold {
+                why: "too few requests to judge",
+            };
         }
+
+        let measured = window.measure();
+        self.window = Some(Window::open(at, speculating));
 
         if let Some(trial) = self.trial.take() {
-            return self.judge(trial, window, sample.at);
+            return self.judge(trial, measured, at);
         }
-
         if let Some(until) = self.cooldown_until
-            && sample.at < until
+            && at < until
         {
             return GateDecision::Hold { why: "cooldown" };
         }
 
         // Periodic, because no cheap signal reliably predicts which setting
-        // wins — see the module docs on acceptance. Flip whatever is running
-        // and measure it against the window just observed.
-        let enable = !sample.speculating;
+        // wins — see the module docs on acceptance.
+        let enable = !speculating;
         self.trial = Some(Trial {
-            baseline: window.completion_tokens_per_second,
+            baseline: measured.mean_decode_tokens_per_second,
             enabled: enable,
         });
         GateDecision::Trial {
             enable,
-            baseline: window.completion_tokens_per_second,
+            baseline: measured.mean_decode_tokens_per_second,
         }
     }
 
     /// Verdict on a flip, from the window that followed it.
     fn judge(&mut self, trial: Trial, window: GateWindow, at: Instant) -> GateDecision {
-        let observed = window.completion_tokens_per_second;
+        let observed = window.mean_decode_tokens_per_second;
         self.cooldown_until = Some(at + self.config.cooldown);
 
         // Required to *beat* the baseline by the margin, not merely match it.
@@ -250,12 +308,6 @@ impl SpeculationGate {
                 observed,
             }
         }
-    }
-
-    fn reset(&mut self, sample: SpeculationSample) {
-        self.last = Some(sample);
-        self.trial = None;
-        self.cooldown_until = Some(sample.at + self.config.cooldown);
     }
 }
 
@@ -294,18 +346,18 @@ pub(crate) fn speculation_plan_is_active(
     config.ngram.is_some() || config.native_mtp.enabled
 }
 
-/// Owns the gate, the counters that feed it, and the switch it throws.
+/// Owns the gate and the switch it throws.
 ///
-/// Shared per model and read on the generation path, so the read is a single
-/// relaxed atomic load: the gate changes at most once per window, and a request
-/// that straddles a flip is correct either way — speculation is a throughput
-/// choice, never a correctness one.
+/// The switch is an atomic because the generation path reads it per request;
+/// everything the gate decides from lives under the mutex. An earlier version
+/// kept cumulative counters as atomics and read them *before* taking the lock,
+/// which let two concurrent completions reach `observe` out of order — the
+/// smaller total read as a counter restart, dropping the trial and pushing the
+/// cooldown out. Repeatedly, that is the "never adapts" failure these docs set
+/// out to prevent. There are no cumulative totals now.
 #[derive(Debug)]
 pub(crate) struct SpeculationGovernor {
     gate: std::sync::Mutex<SpeculationGate>,
-    completion_tokens: std::sync::atomic::AtomicU64,
-    proposed_tokens: std::sync::atomic::AtomicU64,
-    accepted_tokens: std::sync::atomic::AtomicU64,
     /// The switch the generation path reads.
     speculating: std::sync::atomic::AtomicBool,
 }
@@ -316,9 +368,6 @@ impl SpeculationGovernor {
     pub(crate) fn new(config: SpeculationGateConfig, speculating: bool) -> Self {
         Self {
             gate: std::sync::Mutex::new(SpeculationGate::new(config)),
-            completion_tokens: std::sync::atomic::AtomicU64::new(0),
-            proposed_tokens: std::sync::atomic::AtomicU64::new(0),
-            accepted_tokens: std::sync::atomic::AtomicU64::new(0),
             speculating: std::sync::atomic::AtomicBool::new(speculating),
         }
     }
@@ -328,34 +377,18 @@ impl SpeculationGovernor {
         self.speculating.load(std::sync::atomic::Ordering::Relaxed)
     }
 
-    /// Fold one finished request into the counters and, if a window has
-    /// closed, act on the verdict.
+    /// Fold one finished request into the gate and act on any verdict.
     ///
-    /// Returns the decision so the caller can log it; `None` means the gate
-    /// was not consulted or had nothing to say.
-    pub(crate) fn record(
-        &self,
-        completion_tokens: u64,
-        proposed_tokens: u64,
-        accepted_tokens: u64,
-    ) -> Option<GateDecision> {
+    /// Returns the decision so the caller can log it; `None` means the gate had
+    /// nothing to say.
+    pub(crate) fn record(&self, outcome: RequestOutcome) -> Option<GateDecision> {
         use std::sync::atomic::Ordering::Relaxed;
-        let completion =
-            self.completion_tokens.fetch_add(completion_tokens, Relaxed) + completion_tokens;
-        let proposed = self.proposed_tokens.fetch_add(proposed_tokens, Relaxed) + proposed_tokens;
-        let accepted = self.accepted_tokens.fetch_add(accepted_tokens, Relaxed) + accepted_tokens;
-
-        // A poisoned gate must not take serving down with it: speculation is
-        // an optimisation, so losing the controller means losing adaptation,
-        // not correctness.
+        // A poisoned gate must not take serving down with it: speculation is an
+        // optimisation, so losing the controller means losing adaptation, not
+        // correctness.
         let mut gate = self.gate.lock().ok()?;
-        let decision = gate.observe(SpeculationSample {
-            at: Instant::now(),
-            completion_tokens: completion,
-            proposed_tokens: proposed,
-            accepted_tokens: accepted,
-            speculating: self.allows_speculation(),
-        });
+        let speculating = self.speculating.load(Relaxed);
+        let decision = gate.observe(Instant::now(), speculating, outcome);
         match decision {
             GateDecision::Hold { .. } => None,
             GateDecision::Trial { enable, .. } | GateDecision::Revert { enable, .. } => {
@@ -370,112 +403,78 @@ impl SpeculationGovernor {
     }
 }
 
-fn measure(last: &SpeculationSample, now: &SpeculationSample, elapsed: Duration) -> GateWindow {
-    let seconds = elapsed.as_secs_f64().max(f64::MIN_POSITIVE);
-    let completed = now.completion_tokens.saturating_sub(last.completion_tokens);
-    let proposed = now.proposed_tokens.saturating_sub(last.proposed_tokens);
-    let accepted = now.accepted_tokens.saturating_sub(last.accepted_tokens);
-    GateWindow {
-        seconds,
-        completion_tokens_per_second: completed as f64 / seconds,
-        accept_rate: (proposed > 0).then(|| accepted as f64 / proposed as f64),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    const WINDOW_S: u64 = 60;
+    const WINDOW: Duration = Duration::from_secs(60);
 
     fn config() -> SpeculationGateConfig {
         SpeculationGateConfig {
-            min_window: Duration::from_secs(WINDOW_S),
+            min_window: WINDOW,
+            min_requests: 2,
             // Two windows of cooldown keeps the tests readable; the shipped
             // default is half an hour.
-            cooldown: Duration::from_secs(WINDOW_S * 2),
+            cooldown: Duration::from_secs(120),
             ..Default::default()
         }
     }
 
-    /// Cumulative counters advanced one window at a time, which is the shape
-    /// the gate actually consumes.
-    struct Counters {
-        at: Instant,
-        completion: u64,
-        proposed: u64,
-        accepted: u64,
-    }
-
-    impl Counters {
-        fn new() -> Self {
-            Self {
-                at: Instant::now(),
-                completion: 0,
-                proposed: 0,
-                accepted: 0,
-            }
-        }
-
-        fn window(
-            &mut self,
-            tokens_per_second: f64,
-            drafted: u64,
-            landed: u64,
-            speculating: bool,
-        ) -> SpeculationSample {
-            self.at += Duration::from_secs(WINDOW_S);
-            self.completion += (tokens_per_second * WINDOW_S as f64) as u64;
-            self.proposed += drafted;
-            self.accepted += landed;
-            SpeculationSample {
-                at: self.at,
-                completion_tokens: self.completion,
-                proposed_tokens: self.proposed,
-                accepted_tokens: self.accepted,
-                speculating,
-            }
+    fn outcome(rate: f64, drafted: u64, landed: u64, speculated: bool) -> RequestOutcome {
+        RequestOutcome {
+            decode_tokens_per_second: rate,
+            proposed_tokens: drafted,
+            accepted_tokens: landed,
+            speculated,
         }
     }
 
-    /// Run the one window that sits inside the initial cooldown, so the next
-    /// observation is the one that trials. With a two-window cooldown and the
-    /// first sample landing at one window, exactly one window is held.
-    fn settle(gate: &mut SpeculationGate, c: &mut Counters, speculating: bool) {
-        let decision = gate.observe(c.window(12.0, 2200, 660, speculating));
-        assert_eq!(
-            decision,
-            GateDecision::Hold { why: "cooldown" },
-            "settling should sit inside the initial cooldown"
-        );
-    }
-
-    #[test]
-    fn the_first_sample_only_establishes_a_baseline() {
-        let mut gate = SpeculationGate::new(config());
-        let mut c = Counters::new();
-        assert_eq!(
-            gate.observe(c.window(0.0, 0, 0, true)),
-            GateDecision::Hold {
-                why: "first sample"
-            }
-        );
+    /// Feed a full window of matching requests and return the last decision.
+    ///
+    /// Three requests: the first may be absorbed opening a window after a
+    /// setting change, leaving two to satisfy `min_requests`, with the last
+    /// landing once the window is long enough to judge.
+    fn window(
+        gate: &mut SpeculationGate,
+        at: &mut Instant,
+        speculating: bool,
+        rate: f64,
+        drafted: u64,
+        landed: u64,
+    ) -> GateDecision {
+        let one = outcome(rate, drafted, landed, speculating);
+        gate.observe(*at, speculating, one);
+        gate.observe(*at, speculating, one);
+        *at += WINDOW;
+        gate.observe(*at, speculating, one)
     }
 
     #[test]
     fn a_short_window_is_not_judged() {
         let mut gate = SpeculationGate::new(config());
-        let mut c = Counters::new();
-        gate.observe(c.window(0.0, 0, 0, true));
-        let early = SpeculationSample {
-            at: c.at + Duration::from_secs(10),
-            completion_tokens: c.completion + 200,
-            ..c.window(0.0, 0, 0, true)
-        };
+        let at = Instant::now();
         assert_eq!(
-            gate.observe(early),
+            gate.observe(at, true, outcome(60.0, 400, 340, true)),
             GateDecision::Hold {
                 why: "window not yet full"
+            }
+        );
+    }
+
+    /// A long-enough window that is too sparse is still not a verdict: a
+    /// couple of rates is noise, and judging on them would be a coin flip.
+    #[test]
+    fn a_window_with_too_few_requests_is_not_judged() {
+        let mut gate = SpeculationGate::new(SpeculationGateConfig {
+            min_requests: 5,
+            ..config()
+        });
+        let at = Instant::now();
+        gate.observe(at, true, outcome(60.0, 400, 340, true));
+        assert_eq!(
+            gate.observe(at + WINDOW, true, outcome(60.0, 400, 340, true)),
+            GateDecision::Hold {
+                why: "too few requests to judge"
             }
         );
     }
@@ -484,10 +483,9 @@ mod tests {
     #[test]
     fn the_first_trial_waits_a_full_cooldown() {
         let mut gate = SpeculationGate::new(config());
-        let mut c = Counters::new();
-        gate.observe(c.window(0.0, 0, 0, true));
+        let mut at = Instant::now();
         assert_eq!(
-            gate.observe(c.window(60.0, 400, 340, true)),
+            window(&mut gate, &mut at, true, 60.0, 400, 340),
             GateDecision::Hold { why: "cooldown" }
         );
     }
@@ -495,30 +493,27 @@ mod tests {
     /// The `window_shrinks 0` bug as a test: a configuration that loses has to
     /// actually be stood down.
     ///
-    /// The numbers are the losing run from `WAN_SPLIT_PERF.md` — 660 accepted
-    /// of 2200 drafted, 12 tok/s against 17 for plain decode. Note the 29.8%
-    /// acceptance: healthy-looking, which is exactly why acceptance is not the
-    /// trigger.
+    /// Numbers are the losing run from `WAN_SPLIT_PERF.md` — 660 accepted of
+    /// 2200 drafted, 12 tok/s against 17 for plain decode. Note the 29.8%
+    /// acceptance: healthy-looking, which is why acceptance is not the trigger.
     #[test]
     fn a_losing_configuration_is_stood_down() {
         let mut gate = SpeculationGate::new(config());
-        let mut c = Counters::new();
-        gate.observe(c.window(0.0, 0, 0, true));
-        settle(&mut gate, &mut c, true);
-
+        let mut at = Instant::now();
+        window(&mut gate, &mut at, true, 12.0, 2200, 660); // cooldown
         assert_eq!(
-            gate.observe(c.window(12.0, 2200, 660, true)),
+            window(&mut gate, &mut at, true, 12.0, 2200, 660),
             GateDecision::Trial {
                 enable: false,
-                baseline: 12.0,
+                baseline: 12.0
             }
         );
         assert_eq!(
-            gate.observe(c.window(17.0, 0, 0, false)),
+            window(&mut gate, &mut at, false, 17.0, 0, 0),
             GateDecision::Keep {
                 speculating: false,
                 baseline: 12.0,
-                observed: 17.0,
+                observed: 17.0
             }
         );
     }
@@ -527,42 +522,15 @@ mod tests {
     #[test]
     fn a_stand_down_that_does_not_pay_is_reverted() {
         let mut gate = SpeculationGate::new(config());
-        let mut c = Counters::new();
-        gate.observe(c.window(0.0, 0, 0, true));
-        settle(&mut gate, &mut c, true);
-        gate.observe(c.window(12.0, 2200, 660, true));
-
+        let mut at = Instant::now();
+        window(&mut gate, &mut at, true, 12.0, 2200, 660);
+        window(&mut gate, &mut at, true, 12.0, 2200, 660);
         assert_eq!(
-            gate.observe(c.window(12.2, 0, 0, false)),
+            window(&mut gate, &mut at, false, 12.2, 0, 0),
             GateDecision::Revert {
                 enable: true,
                 baseline: 12.0,
-                observed: 12.2,
-            }
-        );
-    }
-
-    /// A workload that suits the proposer keeps it: #1037's re-emit arm ran
-    /// several times plain decode, which is decisive by any margin.
-    #[test]
-    fn a_winning_configuration_is_kept() {
-        let mut gate = SpeculationGate::new(config());
-        let mut c = Counters::new();
-        gate.observe(c.window(0.0, 0, 0, false));
-        gate.observe(c.window(20.0, 0, 0, false));
-        assert_eq!(
-            gate.observe(c.window(20.0, 0, 0, false)),
-            GateDecision::Trial {
-                enable: true,
-                baseline: 20.0,
-            }
-        );
-        assert_eq!(
-            gate.observe(c.window(68.0, 425, 361, true)),
-            GateDecision::Keep {
-                speculating: true,
-                baseline: 20.0,
-                observed: 68.0,
+                observed: 12.2
             }
         );
     }
@@ -572,17 +540,15 @@ mod tests {
     #[test]
     fn an_improvement_inside_the_noise_margin_is_not_decisive() {
         let mut gate = SpeculationGate::new(config());
-        let mut c = Counters::new();
-        gate.observe(c.window(0.0, 0, 0, true));
-        settle(&mut gate, &mut c, true);
-        gate.observe(c.window(20.0, 2000, 200, true));
-
+        let mut at = Instant::now();
+        window(&mut gate, &mut at, true, 20.0, 2000, 200);
+        window(&mut gate, &mut at, true, 20.0, 2000, 200);
         assert_eq!(
-            gate.observe(c.window(22.0, 0, 0, false)),
+            window(&mut gate, &mut at, false, 22.0, 0, 0),
             GateDecision::Revert {
                 enable: true,
                 baseline: 20.0,
-                observed: 22.0,
+                observed: 22.0
             }
         );
     }
@@ -590,128 +556,90 @@ mod tests {
     #[test]
     fn a_verdict_is_followed_by_a_cooldown() {
         let mut gate = SpeculationGate::new(config());
-        let mut c = Counters::new();
-        gate.observe(c.window(0.0, 0, 0, true));
-        settle(&mut gate, &mut c, true);
-        gate.observe(c.window(12.0, 2200, 660, true));
-        gate.observe(c.window(17.0, 0, 0, false));
-
+        let mut at = Instant::now();
+        window(&mut gate, &mut at, true, 12.0, 2200, 660);
+        window(&mut gate, &mut at, true, 12.0, 2200, 660);
+        window(&mut gate, &mut at, false, 17.0, 0, 0);
         assert_eq!(
-            gate.observe(c.window(17.0, 0, 0, false)),
+            window(&mut gate, &mut at, false, 17.0, 0, 0),
             GateDecision::Hold { why: "cooldown" }
         );
     }
 
-    /// Standing down must not be permanent: a deployment whose work turns
-    /// input-grounded should pick speculation back up on its own.
+    /// Standing down must not be permanent: work that turns input-grounded
+    /// should pick speculation back up on its own.
     #[test]
     fn speculation_is_retried_after_the_cooldown() {
         let mut gate = SpeculationGate::new(config());
-        let mut c = Counters::new();
-        gate.observe(c.window(0.0, 0, 0, true));
-        settle(&mut gate, &mut c, true);
-        gate.observe(c.window(12.0, 2200, 660, true));
-        gate.observe(c.window(17.0, 0, 0, false));
-
-        // One window inside the post-verdict cooldown, then the gate looks
-        // again — and this time the flip is back towards speculation.
+        let mut at = Instant::now();
+        window(&mut gate, &mut at, true, 12.0, 2200, 660);
+        window(&mut gate, &mut at, true, 12.0, 2200, 660);
+        window(&mut gate, &mut at, false, 17.0, 0, 0);
+        window(&mut gate, &mut at, false, 17.0, 0, 0); // inside the cooldown
         assert_eq!(
-            gate.observe(c.window(17.0, 0, 0, false)),
-            GateDecision::Hold { why: "cooldown" }
-        );
-        assert_eq!(
-            gate.observe(c.window(17.0, 0, 0, false)),
+            window(&mut gate, &mut at, false, 17.0, 0, 0),
             GateDecision::Trial {
                 enable: true,
-                baseline: 17.0,
+                baseline: 17.0
             }
         );
     }
 
+    /// The finding this signal exists for: a request that finished across a
+    /// flip produced its tokens under the other setting, so counting it would
+    /// blend the two and could manufacture a verdict.
     #[test]
-    fn an_idle_window_is_never_a_verdict() {
+    fn a_request_that_straddled_a_flip_is_discarded() {
         let mut gate = SpeculationGate::new(config());
-        let mut c = Counters::new();
-        gate.observe(c.window(0.0, 0, 0, true));
-        settle(&mut gate, &mut c, true);
+        let at = Instant::now();
         assert_eq!(
-            gate.observe(c.window(12.0, 2200, 660, true)),
-            GateDecision::Trial {
-                enable: false,
-                baseline: 12.0,
-            }
-        );
-        // The trial window was idle: judging it would stand a setting down for
-        // not being used.
-        assert_eq!(
-            gate.observe(c.window(0.0, 0, 0, false)),
-            GateDecision::Hold { why: "idle" }
-        );
-    }
-
-    /// A model reload restarts the counters. Differencing across that would
-    /// read as an enormous negative window.
-    #[test]
-    fn restarted_counters_re_baseline_and_cancel_a_trial() {
-        let mut gate = SpeculationGate::new(config());
-        let mut c = Counters::new();
-        gate.observe(c.window(0.0, 0, 0, true));
-        settle(&mut gate, &mut c, true);
-        assert_eq!(
-            gate.observe(c.window(12.0, 2200, 660, true)),
-            GateDecision::Trial {
-                enable: false,
-                baseline: 12.0,
-            }
-        );
-
-        let reloaded = SpeculationSample {
-            at: c.at + Duration::from_secs(WINDOW_S),
-            completion_tokens: 0,
-            proposed_tokens: 0,
-            accepted_tokens: 0,
-            speculating: false,
-        };
-        assert_eq!(
-            gate.observe(reloaded),
+            gate.observe(at, false, outcome(99.0, 500, 450, true)),
             GateDecision::Hold {
-                why: "counters restarted; new window"
+                why: "request straddled a flip; discarded"
             }
-        );
-
-        // The cancelled trial is not judged later against totals that no
-        // longer exist, and the fresh baseline starts its own cooldown.
-        let mut after = Counters::new();
-        after.at = reloaded.at;
-        assert_eq!(
-            gate.observe(after.window(30.0, 0, 0, false)),
-            GateDecision::Hold { why: "cooldown" }
         );
     }
 
-    /// Acceptance is reported per window, not over the model's lifetime: a
-    /// long healthy history must not hide a workload that just changed.
+    /// And a setting change starts a fresh window rather than mixing the
+    /// requests gathered under the previous one.
     #[test]
-    fn acceptance_is_measured_over_the_window_not_the_lifetime() {
+    fn a_setting_change_opens_a_new_window() {
         let mut gate = SpeculationGate::new(config());
-        let mut c = Counters::new();
-        gate.observe(c.window(0.0, 0, 0, true));
-        for _ in 0..10 {
-            gate.observe(c.window(60.0, 1000, 900, true));
-        }
-        // Those windows have already produced a verdict or two; take the gate
-        // back to a point where the next loaded window trials.
-        while !matches!(
-            gate.observe(c.window(60.0, 1000, 900, true)),
+        let mut at = Instant::now();
+        gate.observe(at, true, outcome(12.0, 2200, 660, true));
+        at += WINDOW;
+        assert_eq!(
+            gate.observe(at, false, outcome(17.0, 0, 0, false)),
+            GateDecision::Hold {
+                why: "setting changed; new window"
+            }
+        );
+    }
+
+    /// The verdict is a mean of per-request rates, so a slow request and a
+    /// fast one do not average into whichever happened to be longer.
+    #[test]
+    fn the_window_rate_is_the_mean_of_per_request_rates() {
+        let mut gate = SpeculationGate::new(config());
+        let mut at = Instant::now();
+        gate.observe(at, true, outcome(10.0, 100, 50, true));
+        gate.observe(at, true, outcome(30.0, 100, 50, true));
+        at += WINDOW;
+        // Inside the opening cooldown, so no verdict — but the window has
+        // closed, and the next one starts clean.
+        assert_eq!(
+            gate.observe(at, true, outcome(20.0, 100, 50, true)),
             GateDecision::Hold { why: "cooldown" }
-        ) {}
-        // This window drafted 2200 and landed 300; lifetime acceptance would
-        // still read about 0.78.
-        let decision = gate.observe(c.window(12.0, 2200, 300, true));
-        let GateDecision::Trial { baseline, .. } = decision else {
-            panic!("expected a trial, got {decision:?}");
-        };
-        assert!((baseline - 12.0).abs() < 0.001, "baseline {baseline}");
+        );
+        // A second window of three equal rates then trials against that mean,
+        // proving the rate is the mean of per-request rates and nothing else.
+        assert_eq!(
+            window(&mut gate, &mut at, true, 42.0, 100, 50),
+            GateDecision::Trial {
+                enable: false,
+                baseline: 42.0
+            }
+        );
     }
 
     /// A silent proposer still gets trialled — it costs a lookup per token and
@@ -719,36 +647,31 @@ mod tests {
     #[test]
     fn a_silent_proposer_is_still_measured() {
         let mut gate = SpeculationGate::new(config());
-        let mut c = Counters::new();
-        gate.observe(c.window(0.0, 0, 0, true));
-        gate.observe(c.window(15.0, 0, 0, true));
+        let mut at = Instant::now();
+        window(&mut gate, &mut at, true, 15.0, 0, 0);
         assert_eq!(
-            gate.observe(c.window(15.0, 0, 0, true)),
+            window(&mut gate, &mut at, true, 15.0, 0, 0),
             GateDecision::Trial {
                 enable: false,
-                baseline: 15.0,
+                baseline: 15.0
             }
         );
     }
 
     #[test]
     fn a_window_with_no_drafts_reports_no_accept_rate() {
-        let a = SpeculationSample {
-            at: Instant::now(),
-            completion_tokens: 0,
-            proposed_tokens: 0,
-            accepted_tokens: 0,
+        let w = Window {
+            opened: Instant::now(),
             speculating: false,
+            rate_sum: 20.0,
+            requests: 2,
+            proposed: 0,
+            accepted: 0,
         };
-        let b = SpeculationSample {
-            at: a.at + Duration::from_secs(60),
-            completion_tokens: 600,
-            ..a
-        };
-        let window = measure(&a, &b, Duration::from_secs(60));
+        let measured = w.measure();
         // None, not 0.0: a proposer that never fired has no acceptance to
         // judge, and reporting zero would read as total rejection.
-        assert_eq!(window.accept_rate, None);
-        assert!((window.completion_tokens_per_second - 10.0).abs() < 0.001);
+        assert_eq!(measured.accept_rate, None);
+        assert!((measured.mean_decode_tokens_per_second - 10.0).abs() < 0.001);
     }
 }
