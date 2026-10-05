@@ -1,0 +1,33 @@
+[package]
+name = "skippy-model-hf"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+description = "Hugging Face model repository integration for Skippy and MeshLLM"
+repository = "https://github.com/Mesh-LLM/mesh-llm"
+homepage = "https://github.com/Mesh-LLM/mesh-llm"
+
+[dependencies]
+hex = "0.4"
+anyhow.workspace = true
+async-trait = "0.1"
+chrono = { version = "0.4", features = ["serde"] }
+dirs = "6.0.0"
+hf_hub = { package = "skippy-hf-hub", path = "../skippy-hf-hub", version = "0.78.0", default-features = false, features = ["blocking"] }
+libc = "0.2"
+regex-lite = "0.1"
+skippy-model-artifact = { path = "../skippy-model-artifact", version = "0.78.0" }
+skippy-model-ref = { path = "../skippy-model-ref", version = "0.78.0" }
+skippy-model-resolver = { path = "../skippy-model-resolver", version = "0.78.0" }
+rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", "ring", "std", "tls12", "logging"] }
+serde.workspace = true
+serde_json.workspace = true
+sha2 = "0.11"
+tokio = { version = "1", features = ["rt"] }
+tokio-stream = "0.1"
+tracing = "0.1"
+
+[dev-dependencies]
+serial_test = "4"
+tempfile = "3"
+tokio = { version = "1", features = ["macros", "rt"] }

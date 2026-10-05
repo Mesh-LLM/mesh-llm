@@ -4,6 +4,7 @@ set -euo pipefail
 HOSTS="${HOSTS:-192.168.0.2,192.168.0.4,192.168.0.3}"
 PORTS="${PORTS:-9337 14317 19031 19032 19033 19131 19132 19214 19227 19231 19232 19241}"
 SSH_OPTS="${SSH_OPTS:--o BatchMode=yes -o ConnectTimeout=5}"
+read -r -a SSH_ARGS <<<"$SSH_OPTS"
 KILL_STALE=0
 CLEAN_TMP=0
 MIN_FREE_GB="${MIN_FREE_GB:-20}"
@@ -70,9 +71,11 @@ overall_status=0
 for host in "${HOST_ARRAY[@]}"; do
   echo "== qwen lab preflight: $host =="
   remote_cmd="$(printf 'PORTS=%q KILL_STALE=%q CLEAN_TMP=%q MIN_FREE_GB=%q bash -s' "$PORTS" "$KILL_STALE" "$CLEAN_TMP" "$MIN_FREE_GB")"
-  if ! ssh $SSH_OPTS "$host" "$remote_cmd" <<'REMOTE'
+  # remote_cmd is intentionally constructed on the client.
+  # shellcheck disable=SC2029
+  if ! ssh "${SSH_ARGS[@]}" "$host" "$remote_cmd" <<'REMOTE'
 set -euo pipefail
-PROCESS_PATTERN='(skippy-server|skippy-correctness|skippy-prompt|kv-server|/(llama-server|llama-cli|llama-bench|llama-run|main)( |$)|(^| )llama-(server|cli|bench|run)( |$)|mesh-llm|mesh-server|/(mesh)( |$)|(^| )mesh( |$)|ollama)'
+PROCESS_PATTERN='(skippy-serving|/(skippy)( |$)|(^| )skippy( |$)|skippy-correctness|kv-server|/(llama-server|llama-cli|llama-bench|llama-run|main)( |$)|(^| )llama-(server|cli|bench|run)( |$)|mesh-llm|mesh-server|/(mesh)( |$)|(^| )mesh( |$)|ollama)'
 
 scan_processes() {
   ps -axo pid=,etime=,user=,command= \

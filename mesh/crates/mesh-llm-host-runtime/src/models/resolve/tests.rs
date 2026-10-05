@@ -1,0 +1,1217 @@
+use super::*;
+use serde::Deserialize;
+use serial_test::serial;
+use std::cmp::Ordering;
+use std::collections::HashMap;
+
+#[derive(Debug, Deserialize)]
+struct HfRepoFixture {
+    repo: String,
+    siblings: Vec<String>,
+    size_bytes: HashMap<String, u64>,
+}
+
+fn load_gemma_live_fixture() -> HfRepoFixture {
+    serde_json::from_str(include_str!(
+        "../testdata/unsloth_gemma_4_31b_it_gguf.live.json"
+    ))
+    .expect("parse live Hugging Face fixture")
+}
+
+/// Isolates a parser test from the live remote catalog by installing an empty
+/// catalog override. `parse_exact_model_ref` consults the catalog before the
+/// Hugging Face parser branches, so without this a live catalog entry (e.g. a
+/// real `unsloth/gemma-4-31B-it-GGUF` package) would be returned as
+/// `ExactModelRef::Catalog` instead of the `HuggingFace` ref these tests
+/// assert. Tests using this must be `#[serial]` because the override is global.
+fn empty_catalog_guard() -> crate::models::remote_catalog::CatalogEntriesOverrideGuard {
+    crate::models::remote_catalog::set_catalog_entries_for_test(Vec::new())
+}
+
+struct EnvGuard {
+    key: &'static str,
+    previous: Option<std::ffi::OsString>,
+}
+
+impl EnvGuard {
+    fn set_path(key: &'static str, value: &Path) -> Self {
+        let previous = std::env::var_os(key);
+        unsafe { std::env::set_var(key, value) };
+        Self { key, previous }
+    }
+
+    fn remove(key: &'static str) -> Self {
+        let previous = std::env::var_os(key);
+        unsafe { std::env::remove_var(key) };
+        Self { key, previous }
+    }
+}
+
+impl Drop for EnvGuard {
+    fn drop(&mut self) {
+        match &self.previous {
+            Some(value) => unsafe { std::env::set_var(self.key, value) },
+            None => unsafe { std::env::remove_var(self.key) },
+        }
+    }
+}
+
+fn remote_catalog_entry(
+    variant_name: &str,
+    curated_name: &str,
+    source_repo: &str,
+    source_file: &str,
+) -> crate::models::remote_catalog::CatalogEntry {
+    let mut variants = HashMap::new();
+    variants.insert(
+        variant_name.to_string(),
+        crate::models::remote_catalog::CatalogVariant {
+            source: crate::models::remote_catalog::CatalogSource {
+                repo: source_repo.to_string(),
+                revision: Some("main".to_string()),
+                file: Some(source_file.to_string()),
+            },
+            curated: crate::models::remote_catalog::CatalogCurated {
+                name: curated_name.to_string(),
+                size: Some("1GB".to_string()),
+                description: None,
+                draft: None,
+                moe: None,
+                extra_files: Vec::new(),
+                mmproj: None,
+            },
+            packages: Vec::new(),
+        },
+    );
+    crate::models::remote_catalog::CatalogEntry {
+        schema_version: 1,
+        source_repo: source_repo.to_string(),
+        variants,
+    }
+}
+
+fn remote_catalog_entry_with_mmproj(
+    variant_name: &str,
+    curated_name: &str,
+    source_repo: &str,
+    source_file: &str,
+    mmproj: &str,
+) -> crate::models::remote_catalog::CatalogEntry {
+    let mut entry = remote_catalog_entry(variant_name, curated_name, source_repo, source_file);
+    let variant = entry.variants.get_mut(variant_name).unwrap();
+    variant.curated.mmproj = Some(crate::models::remote_catalog::CatalogSidecar::Ref(
+        mmproj.to_string(),
+    ));
+    entry
+}
+
+#[cfg(unix)]
+fn hf_snapshot_symlink(
+    cache: &Path,
+    repo: &str,
+    revision: &str,
+    filename: &str,
+) -> (PathBuf, PathBuf) {
+    use std::os::unix::fs::symlink;
+
+    let repo_dir = cache.join(format!("models--{}", repo.replace('/', "--")));
+    let blob_name = "78f1dbb60dedc080b99d26b8098f719f020b0f9bafe9e12a20c7d25652d4fd86";
+    let blob = repo_dir.join("blobs").join(blob_name);
+    let snapshot = repo_dir.join("snapshots").join(revision).join(filename);
+    std::fs::create_dir_all(blob.parent().unwrap()).unwrap();
+    std::fs::create_dir_all(snapshot.parent().unwrap()).unwrap();
+    std::fs::create_dir_all(repo_dir.join("refs")).unwrap();
+    std::fs::write(&blob, b"verified gguf bytes").unwrap();
+    std::fs::write(repo_dir.join("refs").join("main"), revision).unwrap();
+    symlink(Path::new("../../blobs").join(blob_name), &snapshot).unwrap();
+    (snapshot, blob)
+}
+
+#[cfg(unix)]
+#[tokio::test]
+#[serial]
+async fn fresh_hf_snapshot_symlink_resolves_to_verified_blob() {
+    let cache = tempfile::tempdir().unwrap();
+    let variant = "Fresh-HF-Snapshot-Q8_0";
+    let repo = "mesh-test/fresh-hf-snapshot";
+    let filename = "Fresh-HF-Snapshot-Q8_0.gguf";
+    let (snapshot, blob) = hf_snapshot_symlink(cache.path(), repo, "revision-a", filename);
+    let _cache_guard = EnvGuard::set_path("HF_HUB_CACHE", cache.path());
+    let _hf_home_guard = EnvGuard::remove("HF_HOME");
+    let _catalog_guard =
+        crate::models::remote_catalog::set_catalog_entries_for_test(vec![remote_catalog_entry(
+            variant, variant, repo, filename,
+        )]);
+    let _download_guard = crate::models::catalog::set_download_hf_assets_label_override(
+        variant.to_string(),
+        Arc::new({
+            let snapshot = snapshot.clone();
+            move |_| Ok(vec![snapshot.clone()])
+        }),
+    );
+
+    let resolved = resolve_model_spec_with_progress(Path::new(variant), false)
+        .await
+        .unwrap();
+
+    assert_eq!(resolved, blob.canonicalize().unwrap());
+    assert!(
+        !std::fs::symlink_metadata(resolved)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+#[serial]
+async fn cached_hf_snapshot_symlink_resolves_to_verified_blob() {
+    let cache = tempfile::tempdir().unwrap();
+    let repo = "mesh-test/cached-hf-snapshot";
+    let revision = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    let filename = "Cached-HF-Snapshot-Q8_0.gguf";
+    let (_snapshot, blob) = hf_snapshot_symlink(cache.path(), repo, revision, filename);
+    let _cache_guard = EnvGuard::set_path("HF_HUB_CACHE", cache.path());
+    let _hf_home_guard = EnvGuard::remove("HF_HOME");
+    let _catalog_guard = crate::models::remote_catalog::set_catalog_entries_for_test(Vec::new());
+    let model_ref = format!("{repo}@{revision}:Q8_0");
+
+    let resolved = resolve_model_spec_with_progress(Path::new(&model_ref), false)
+        .await
+        .unwrap();
+
+    assert_eq!(resolved, blob.canonicalize().unwrap());
+    assert!(
+        !std::fs::symlink_metadata(resolved)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+#[serial]
+async fn existing_hf_multipart_snapshot_path_keeps_its_shard_name() {
+    let cache = tempfile::tempdir().unwrap();
+    let repo = "mesh-test/cached-hf-multipart";
+    let revision = "cccccccccccccccccccccccccccccccccccccccc";
+    let filename = "Cached-HF-Multipart-Q8_0-00001-of-00002.gguf";
+    let (snapshot, _blob) = hf_snapshot_symlink(cache.path(), repo, revision, filename);
+    let _cache_guard = EnvGuard::set_path("HF_HUB_CACHE", cache.path());
+    let _hf_home_guard = EnvGuard::remove("HF_HOME");
+
+    let resolved = resolve_model_spec_with_progress(&snapshot, false)
+        .await
+        .unwrap();
+
+    assert_eq!(resolved, snapshot);
+    assert!(
+        std::fs::symlink_metadata(resolved)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+}
+
+#[tokio::test]
+async fn existing_model_path_resolves_to_canonical_path() {
+    let temp = tempfile::tempdir().expect("create temp model dir");
+    let model_dir = temp.path().join("models");
+    std::fs::create_dir_all(&model_dir).expect("create model dir");
+    let model_path = model_dir.join("model.gguf");
+    std::fs::write(&model_path, b"gguf").expect("write model file");
+
+    let non_canonical = model_dir.join("..").join("models").join("model.gguf");
+    let resolved = resolve_model_spec_with_progress(&non_canonical, false)
+        .await
+        .expect("resolve existing model path");
+
+    assert_eq!(resolved, model_path.canonicalize().unwrap());
+}
+
+#[tokio::test]
+#[serial]
+async fn synthetic_local_gguf_ref_resolves_from_hf_cache() {
+    let temp = tempfile::tempdir().expect("create temp HF cache");
+    let model_path = temp.path().join("local-model.gguf");
+    std::fs::write(&model_path, b"gguf").expect("write local GGUF");
+    let model_ref = synthetic_local_gguf_ref_for_test(&model_path);
+
+    let _hub_cache_guard = EnvGuard::set_path("HF_HUB_CACHE", temp.path());
+    let _hf_home_guard = EnvGuard::remove("HF_HOME");
+
+    let resolved = resolve_model_spec_with_progress(Path::new(&model_ref), false)
+        .await
+        .expect("resolve synthetic local GGUF ref");
+
+    assert_eq!(resolved, model_path);
+}
+
+fn synthetic_local_gguf_ref_for_test(path: &Path) -> String {
+    use sha2::{Digest, Sha256};
+    use std::time::UNIX_EPOCH;
+
+    let filename = path.file_name().and_then(|value| value.to_str()).unwrap();
+    let metadata = std::fs::metadata(path).expect("read model metadata");
+    let len = metadata.len();
+    let modified = metadata
+        .modified()
+        .expect("read model modified time")
+        .duration_since(UNIX_EPOCH)
+        .expect("model modified after epoch")
+        .as_nanos();
+    let mut hasher = Sha256::new();
+    hasher.update(path.to_string_lossy().as_bytes());
+    hasher.update(b"\0");
+    hasher.update(filename.as_bytes());
+    hasher.update(b"\0");
+    hasher.update(len.to_le_bytes());
+    hasher.update(modified.to_le_bytes());
+    let digest = hex::encode(hasher.finalize());
+    format!("local-gguf/sha256-{}", &digest[..16])
+}
+
+#[tokio::test]
+#[serial]
+async fn bare_name_resolves_from_remote_catalog() {
+    let query = "RemoteOnlyResolverFallbackModel-Q4_K_M";
+    let source_file = "RemoteOnlyResolverFallbackModel-Q4_K_M.gguf";
+    let cache = tempfile::tempdir().unwrap();
+    let downloaded = cache.path().join(source_file);
+    std::fs::write(&downloaded, b"gguf").unwrap();
+
+    let _catalog_guard =
+        crate::models::remote_catalog::set_catalog_entries_for_test(vec![remote_catalog_entry(
+            query,
+            query,
+            "mesh-test/remote-only-resolver-fallback",
+            source_file,
+        )]);
+    let _download_guard = catalog::set_download_hf_assets_label_override(
+        query.to_string(),
+        Arc::new({
+            let downloaded = downloaded.clone();
+            move |_| Ok(vec![downloaded.clone()])
+        }),
+    );
+
+    let resolved = resolve_model_spec_with_progress(Path::new(query), false)
+        .await
+        .unwrap();
+
+    assert_eq!(resolved, downloaded);
+}
+
+#[tokio::test]
+#[serial]
+async fn bare_name_resolution_prefers_remote_catalog_over_baked_catalog() {
+    let query = "Qwen3-8B-Q4_K_M";
+    let source_file = "RemotePreferred-Q4_K_M.gguf";
+    let cache = tempfile::tempdir().unwrap();
+    let downloaded = cache.path().join(source_file);
+    std::fs::write(&downloaded, b"gguf").unwrap();
+    let _catalog_guard =
+        crate::models::remote_catalog::set_catalog_entries_for_test(vec![remote_catalog_entry(
+            query,
+            "Remote Preferred Catalog Model",
+            "mesh-test/remote-preferred-catalog-model",
+            source_file,
+        )]);
+    let _download_guard = catalog::set_download_hf_assets_label_override(
+        "Remote Preferred Catalog Model".to_string(),
+        Arc::new({
+            let downloaded = downloaded.clone();
+            move |_| Ok(vec![downloaded.clone()])
+        }),
+    );
+
+    let resolved = resolve_model_spec_with_progress(Path::new(query), false)
+        .await
+        .unwrap();
+
+    assert_eq!(resolved, downloaded);
+}
+
+#[test]
+#[serial]
+fn primary_hf_ref_maps_to_full_remote_catalog_download() {
+    let _catalog_guard = crate::models::remote_catalog::set_catalog_entries_for_test(vec![
+        remote_catalog_entry_with_mmproj(
+            "Qwen3.5-0.8B-Q4_K_M",
+            "Qwen3.5-0.8B-Vision-Q4_K_M",
+            "unsloth/Qwen3.5-0.8B-GGUF",
+            "Qwen3.5-0.8B-Q4_K_M.gguf",
+            "unsloth/Qwen3.5-0.8B-GGUF@main/mmproj-BF16.gguf",
+        ),
+    ]);
+    let model = matching_remote_catalog_primary_for_huggingface(
+        "unsloth/Qwen3.5-0.8B-GGUF",
+        Some("main"),
+        "Qwen3.5-0.8B-Q4_K_M.gguf",
+    )
+    .expect("primary model file should map to catalog download");
+    assert_eq!(model.name, "Qwen3.5-0.8B-Vision-Q4_K_M");
+    assert!(model.mmproj.is_some());
+}
+
+#[test]
+#[serial]
+fn mmproj_hf_ref_does_not_expand_to_full_remote_catalog_download() {
+    let _catalog_guard = crate::models::remote_catalog::set_catalog_entries_for_test(vec![
+        remote_catalog_entry_with_mmproj(
+            "Qwen3.5-0.8B-Q4_K_M",
+            "Qwen3.5-0.8B-Vision-Q4_K_M",
+            "unsloth/Qwen3.5-0.8B-GGUF",
+            "Qwen3.5-0.8B-Q4_K_M.gguf",
+            "unsloth/Qwen3.5-0.8B-GGUF@main/mmproj-BF16.gguf",
+        ),
+    ]);
+    assert!(
+        matching_remote_catalog_primary_for_huggingface(
+            "unsloth/Qwen3.5-0.8B-GGUF",
+            Some("main"),
+            "mmproj-BF16.gguf",
+        )
+        .is_none()
+    );
+}
+
+#[test]
+#[serial]
+fn primary_url_maps_to_full_remote_catalog_download() {
+    let _catalog_guard = crate::models::remote_catalog::set_catalog_entries_for_test(vec![
+        remote_catalog_entry_with_mmproj(
+            "Qwen3.5-0.8B-Q4_K_M",
+            "Qwen3.5-0.8B-Vision-Q4_K_M",
+            "unsloth/Qwen3.5-0.8B-GGUF",
+            "Qwen3.5-0.8B-Q4_K_M.gguf",
+            "unsloth/Qwen3.5-0.8B-GGUF@main/mmproj-BF16.gguf",
+        ),
+    ]);
+    let model = matching_remote_catalog_primary_for_url(
+        "https://huggingface.co/unsloth/Qwen3.5-0.8B-GGUF/resolve/main/Qwen3.5-0.8B-Q4_K_M.gguf",
+    )
+    .expect("primary model url should map to catalog download");
+    assert_eq!(model.name, "Qwen3.5-0.8B-Vision-Q4_K_M");
+    assert!(model.mmproj.is_some());
+}
+
+#[test]
+#[serial]
+fn mmproj_url_does_not_expand_to_full_remote_catalog_download() {
+    let _catalog_guard = crate::models::remote_catalog::set_catalog_entries_for_test(vec![
+        remote_catalog_entry_with_mmproj(
+            "Qwen3.5-0.8B-Q4_K_M",
+            "Qwen3.5-0.8B-Vision-Q4_K_M",
+            "unsloth/Qwen3.5-0.8B-GGUF",
+            "Qwen3.5-0.8B-Q4_K_M.gguf",
+            "unsloth/Qwen3.5-0.8B-GGUF@main/mmproj-BF16.gguf",
+        ),
+    ]);
+    assert!(
+        matching_remote_catalog_primary_for_url(
+            "https://huggingface.co/unsloth/Qwen3.5-0.8B-GGUF/resolve/main/mmproj-BF16.gguf",
+        )
+        .is_none()
+    );
+}
+
+#[tokio::test]
+#[serial]
+async fn direct_mmproj_url_materializes_only_the_projector_file() {
+    let url = "https://huggingface.co/unsloth/Qwen3.5-0.8B-GGUF/resolve/main/mmproj-BF16.gguf";
+    let cache = tempfile::tempdir().unwrap();
+    let downloaded = cache.path().join("mmproj-BF16.gguf");
+    std::fs::write(&downloaded, b"mmproj").unwrap();
+    let _catalog_guard = crate::models::remote_catalog::set_catalog_entries_for_test(vec![
+        remote_catalog_entry_with_mmproj(
+            "Qwen3.5-0.8B-Q4_K_M",
+            "Qwen3.5-0.8B-Vision-Q4_K_M",
+            "unsloth/Qwen3.5-0.8B-GGUF",
+            "Qwen3.5-0.8B-Q4_K_M.gguf",
+            "unsloth/Qwen3.5-0.8B-GGUF@main/mmproj-BF16.gguf",
+        ),
+    ]);
+    let _siblings_guard = RepoSiblingEntriesOverrideGuard::set(Arc::new(|repo, revision| {
+        assert_eq!(repo, "unsloth/Qwen3.5-0.8B-GGUF");
+        assert_eq!(revision, "main");
+        Some(vec![("mmproj-BF16.gguf".to_string(), Some(6))])
+    }));
+    let _download_guard = catalog::set_download_hf_assets_label_override(
+        url.to_string(),
+        Arc::new({
+            let downloaded = downloaded.clone();
+            move |_| Ok(vec![downloaded.clone()])
+        }),
+    );
+
+    let materialized = download_direct_ref_with_progress(url, false)
+        .await
+        .expect("projector URL should download directly");
+
+    assert_eq!(materialized, downloaded);
+}
+
+#[test]
+fn split_stem_resolves_to_first_part() {
+    let siblings = vec![
+        "zai-org.GLM-5.1.Q2_K-00002-of-00018.gguf".to_string(),
+        "zai-org.GLM-5.1.Q2_K-00001-of-00018.gguf".to_string(),
+    ];
+    let resolved = resolve_hf_file_from_siblings("zai-org.GLM-5.1.Q2_K", &siblings).unwrap();
+    assert_eq!(resolved, "zai-org.GLM-5.1.Q2_K-00001-of-00018.gguf");
+}
+
+#[test]
+fn stem_without_split_resolves_to_gguf() {
+    let siblings = vec![
+        "Qwen3-8B-Q4_K_M.gguf".to_string(),
+        "Qwen3-8B-Q8_0.gguf".to_string(),
+    ];
+    let resolved = resolve_hf_file_from_siblings("Qwen3-8B-Q4_K_M", &siblings).unwrap();
+    assert_eq!(resolved, "Qwen3-8B-Q4_K_M.gguf");
+}
+
+#[test]
+fn mlx_stem_resolves_to_model_safetensors() {
+    let siblings = vec![
+        "model.safetensors.index.json".to_string(),
+        "model.safetensors".to_string(),
+    ];
+    let resolved = resolve_hf_file_from_siblings("model", &siblings).unwrap();
+    assert_eq!(resolved, "model.safetensors");
+}
+
+#[test]
+fn mlx_stem_resolves_to_first_split_shard() {
+    let siblings = vec![
+        "model-00002-of-00048.safetensors".to_string(),
+        "model-00001-of-00048.safetensors".to_string(),
+        "model.safetensors.index.json".to_string(),
+    ];
+    let resolved = resolve_hf_file_from_siblings("model", &siblings).unwrap();
+    assert_eq!(resolved, "model-00001-of-00048.safetensors");
+}
+
+#[test]
+fn repo_only_resolution_prefers_mlx_model_safetensors() {
+    let siblings = vec![
+        "Qwen3-8B-Q4_K_M.gguf".to_string(),
+        "model.safetensors".to_string(),
+        "model.safetensors.index.json".to_string(),
+    ];
+    let resolved = resolve_hf_file_from_siblings("", &siblings).unwrap();
+    assert_eq!(resolved, "model.safetensors");
+}
+
+#[test]
+fn repo_only_resolution_falls_back_to_gguf_when_no_mlx_weights() {
+    let siblings = vec![
+        "Qwen3-8B-Q8_0.gguf".to_string(),
+        "Qwen3-8B-Q4_K_M.gguf".to_string(),
+    ];
+    let resolved = resolve_hf_file_from_siblings("", &siblings).unwrap();
+    assert_eq!(resolved, "Qwen3-8B-Q4_K_M.gguf");
+}
+
+#[test]
+#[serial]
+fn canonicalize_interest_model_ref_accepts_catalog_names() {
+    use std::collections::HashMap;
+    let mut variants = HashMap::new();
+    variants.insert(
+        "Q4_K_M".to_string(),
+        crate::models::remote_catalog::CatalogVariant {
+            source: crate::models::remote_catalog::CatalogSource {
+                repo: "unsloth/Qwen3-8B-GGUF".to_string(),
+                revision: None,
+                file: Some("Qwen3-8B-Q4_K_M.gguf".to_string()),
+            },
+            curated: crate::models::remote_catalog::CatalogCurated {
+                name: "Qwen3-8B-Q4_K_M".to_string(),
+                size: None,
+                description: None,
+                draft: None,
+                moe: None,
+                extra_files: Vec::new(),
+                mmproj: None,
+            },
+            packages: Vec::new(),
+        },
+    );
+    let entry = crate::models::remote_catalog::CatalogEntry {
+        schema_version: 1,
+        source_repo: "unsloth/Qwen3-8B-GGUF".to_string(),
+        variants,
+    };
+    let _catalog_guard = crate::models::remote_catalog::set_catalog_entries_for_test(vec![entry]);
+    let canonical = canonicalize_interest_model_ref("Qwen3-8B-Q4_K_M").unwrap();
+    assert_eq!(canonical, "unsloth/Qwen3-8B-GGUF:Q4_K_M");
+}
+
+#[test]
+fn canonicalize_interest_model_ref_normalizes_huggingface_selectors() {
+    let canonical =
+        canonicalize_interest_model_ref("unsloth/gemma-4-31B-it-GGUF@main:UD-Q4_K_XL").unwrap();
+    assert_eq!(canonical, "unsloth/gemma-4-31B-it-GGUF@main:UD-Q4_K_XL");
+}
+
+#[test]
+fn canonicalize_interest_model_ref_normalizes_huggingface_file_refs() {
+    let canonical =
+        canonicalize_interest_model_ref("example-org/example-model-GGUF/example-model-custom.gguf")
+            .unwrap();
+    assert_eq!(
+        canonical,
+        "example-org/example-model-GGUF/example-model-custom.gguf"
+    );
+}
+
+#[test]
+fn canonicalize_interest_model_ref_normalizes_legacy_selector_revision_order() {
+    let canonical =
+        canonicalize_interest_model_ref("unsloth/gemma-4-31B-it-GGUF:UD-Q4_K_XL@main").unwrap();
+    assert_eq!(canonical, "unsloth/gemma-4-31B-it-GGUF@main:UD-Q4_K_XL");
+}
+
+#[test]
+fn canonicalize_interest_model_ref_rejects_direct_urls() {
+    let err = canonicalize_interest_model_ref(
+        "https://huggingface.co/Qwen/Qwen3-8B-GGUF/resolve/main/Qwen3-8B-Q4_K_M.gguf",
+    )
+    .unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        "Invalid 'model_ref'. Use a canonical ref returned by /api/search, not a direct URL"
+    );
+}
+
+#[test]
+fn parse_huggingface_ref_rejects_http_url() {
+    assert!(parse_huggingface_ref("https://example.com/model.gguf").is_none());
+}
+
+#[test]
+fn parse_huggingface_repo_ref_parses_repo_only() {
+    let parsed = parse_huggingface_repo_ref("GreenBitAI/Llama-2-7B-layer-mix-bpw-2.2-mlx");
+    assert_eq!(
+        parsed,
+        Some((
+            "GreenBitAI/Llama-2-7B-layer-mix-bpw-2.2-mlx".to_string(),
+            None,
+            None
+        ))
+    );
+}
+
+#[test]
+fn parse_huggingface_repo_ref_parses_quant_selector() {
+    let parsed = parse_huggingface_repo_ref("unsloth/gemma-4-31B-it-GGUF:UD-Q4_K_XL");
+    assert_eq!(
+        parsed,
+        Some((
+            "unsloth/gemma-4-31B-it-GGUF".to_string(),
+            None,
+            Some("UD-Q4_K_XL".to_string())
+        ))
+    );
+}
+
+#[test]
+fn parse_huggingface_repo_ref_parses_revisioned_quant_selector() {
+    let parsed = parse_huggingface_repo_ref("unsloth/gemma-4-31B-it-GGUF@main:UD-Q4_K_XL");
+    assert_eq!(
+        parsed,
+        Some((
+            "unsloth/gemma-4-31B-it-GGUF".to_string(),
+            Some("main".to_string()),
+            Some("UD-Q4_K_XL".to_string())
+        ))
+    );
+}
+
+#[test]
+fn parse_huggingface_repo_ref_accepts_legacy_revision_after_selector() {
+    let parsed = parse_huggingface_repo_ref("unsloth/gemma-4-31B-it-GGUF:UD-Q4_K_XL@main");
+    assert_eq!(
+        parsed,
+        Some((
+            "unsloth/gemma-4-31B-it-GGUF".to_string(),
+            Some("main".to_string()),
+            Some("UD-Q4_K_XL".to_string())
+        ))
+    );
+}
+
+#[test]
+fn parse_huggingface_repo_url_parses_repo_only() {
+    let parsed = parse_huggingface_repo_url("https://huggingface.co/unsloth/gemma-4-31B-it-GGUF");
+    assert_eq!(
+        parsed,
+        Some(("unsloth/gemma-4-31B-it-GGUF".to_string(), None, None))
+    );
+}
+
+#[test]
+fn parse_huggingface_repo_url_parses_tree_revision() {
+    let parsed =
+        parse_huggingface_repo_url("https://huggingface.co/unsloth/gemma-4-31B-it-GGUF/tree/main");
+    assert_eq!(
+        parsed,
+        Some((
+            "unsloth/gemma-4-31B-it-GGUF".to_string(),
+            Some("main".to_string()),
+            None
+        ))
+    );
+}
+
+#[test]
+fn quant_selector_resolves_to_single_file_gguf() {
+    let fixture = load_gemma_live_fixture();
+    let resolved = resolve_hf_file_from_siblings("UD-Q4_K_XL", &fixture.siblings).unwrap();
+    assert_eq!(resolved, "gemma-4-31B-it-UD-Q4_K_XL.gguf");
+}
+
+#[test]
+fn dotted_quant_selector_resolves_to_single_file_gguf() {
+    let siblings = vec![
+        "Qwen3-Tiny.Q2_K.gguf".to_string(),
+        "Qwen3-Tiny.Q4_K_M.gguf".to_string(),
+    ];
+    let resolved = resolve_hf_file_from_siblings("Q2_K", &siblings).unwrap();
+    assert_eq!(resolved, "Qwen3-Tiny.Q2_K.gguf");
+}
+
+#[test]
+fn gemma_bf16_selector_resolves_to_first_split_shard() {
+    let fixture = load_gemma_live_fixture();
+    let resolved = resolve_hf_file_from_siblings("BF16", &fixture.siblings).unwrap();
+    assert_eq!(resolved, "BF16/gemma-4-31B-it-BF16-00001-of-00002.gguf");
+}
+
+#[test]
+fn fit_aware_gguf_prefers_largest_comfortable_candidate() {
+    let available = 20_000_000_000u64;
+    let ordering = compare_gguf_candidates_by_fit(
+        "repo/model-q4.gguf",
+        Some(12_000_000_000),
+        "repo/model-q5.gguf",
+        Some(17_000_000_000),
+        available,
+    );
+    assert_eq!(ordering, Ordering::Greater);
+}
+
+#[test]
+fn fit_aware_gguf_prefers_smaller_when_both_too_large() {
+    let available = 20_000_000_000u64;
+    let ordering = compare_gguf_candidates_by_fit(
+        "repo/model-q8.gguf",
+        Some(29_000_000_000),
+        "repo/model-bf16.gguf",
+        Some(35_000_000_000),
+        available,
+    );
+    assert_eq!(ordering, Ordering::Less);
+}
+
+#[test]
+fn gemma_repo_default_prefers_q4_over_bf16_at_local_fit_budget() {
+    let fixture = load_gemma_live_fixture();
+    let q4 = fixture
+        .size_bytes
+        .get("gemma-4-31B-it-Q4_0.gguf")
+        .copied()
+        .expect("fixture Q4_0 size");
+    let bf16 = fixture
+        .size_bytes
+        .get("BF16/gemma-4-31B-it-BF16-00001-of-00002.gguf")
+        .copied()
+        .expect("fixture BF16 size");
+    let available = 19_300_000_000u64;
+    let ordering = compare_gguf_candidates_by_fit(
+        "unsloth/gemma-4-31B-it-GGUF/gemma-4-31B-it-Q4_0.gguf",
+        Some(q4),
+        "unsloth/gemma-4-31B-it-GGUF/BF16/gemma-4-31B-it-BF16-00001-of-00002.gguf",
+        Some(bf16),
+        available,
+    );
+    assert_eq!(ordering, Ordering::Less);
+}
+
+#[test]
+fn repo_name_can_signal_gguf_intent() {
+    assert!(repo_prefers_gguf_only("unsloth/gemma-4-31B-it-GGUF"));
+    assert!(!repo_prefers_gguf_only(
+        "mlx-community/Llama-3.2-3B-Instruct-4bit"
+    ));
+}
+
+#[test]
+#[serial]
+fn parse_exact_model_ref_accepts_unsloth_gemma_repo_ref() {
+    let _catalog_guard = empty_catalog_guard();
+    let parsed = parse_exact_model_ref("unsloth/gemma-4-31B-it-GGUF").unwrap();
+    match parsed {
+        ExactModelRef::HuggingFace {
+            repo,
+            revision,
+            file,
+        } => {
+            assert_eq!(repo, "unsloth/gemma-4-31B-it-GGUF");
+            assert_eq!(revision, None);
+            assert_eq!(file, "");
+        }
+        other => panic!("expected HuggingFace repo ref, got {other:?}"),
+    }
+}
+
+#[test]
+#[serial]
+fn parse_exact_model_ref_accepts_unsloth_gemma_repo_url() {
+    let _catalog_guard = empty_catalog_guard();
+    let parsed =
+        parse_exact_model_ref("https://huggingface.co/unsloth/gemma-4-31B-it-GGUF").unwrap();
+    match parsed {
+        ExactModelRef::HuggingFace {
+            repo,
+            revision,
+            file,
+        } => {
+            assert_eq!(repo, "unsloth/gemma-4-31B-it-GGUF");
+            assert_eq!(revision, None);
+            assert_eq!(file, "");
+        }
+        other => panic!("expected HuggingFace repo ref from URL, got {other:?}"),
+    }
+}
+
+#[test]
+#[serial]
+fn parse_exact_model_ref_accepts_unsloth_gemma_quant_selector() {
+    let _catalog_guard = empty_catalog_guard();
+    let parsed = parse_exact_model_ref("unsloth/gemma-4-31B-it-GGUF:UD-Q4_K_XL").unwrap();
+    match parsed {
+        ExactModelRef::HuggingFace {
+            repo,
+            revision,
+            file,
+        } => {
+            assert_eq!(repo, "unsloth/gemma-4-31B-it-GGUF");
+            assert_eq!(revision, None);
+            assert_eq!(file, "UD-Q4_K_XL");
+        }
+        other => panic!("expected HuggingFace quant selector ref, got {other:?}"),
+    }
+}
+
+#[test]
+#[serial]
+fn parse_exact_model_ref_accepts_revisioned_quant_selector() {
+    let _catalog_guard = empty_catalog_guard();
+    let parsed = parse_exact_model_ref("unsloth/gemma-4-31B-it-GGUF@main:UD-Q4_K_XL").unwrap();
+    match parsed {
+        ExactModelRef::HuggingFace {
+            repo,
+            revision,
+            file,
+        } => {
+            assert_eq!(repo, "unsloth/gemma-4-31B-it-GGUF");
+            assert_eq!(revision.as_deref(), Some("main"));
+            assert_eq!(file, "UD-Q4_K_XL");
+        }
+        other => panic!("expected HuggingFace revisioned quant selector ref, got {other:?}"),
+    }
+}
+
+#[test]
+fn simulated_name_and_repo_quant_inputs_converge_to_same_ref() {
+    let fixture = load_gemma_live_fixture();
+    let discovered_repo = fixture.repo.as_str();
+    let selector = "UD-Q4_K_XL";
+
+    let from_name = format!(
+        "{}/{}",
+        discovered_repo,
+        resolve_hf_file_from_siblings(selector, &fixture.siblings).unwrap()
+    );
+    let from_repo = format!(
+        "{}/{}",
+        discovered_repo,
+        resolve_hf_file_from_siblings(selector, &fixture.siblings).unwrap()
+    );
+
+    assert_eq!(
+        from_name,
+        "unsloth/gemma-4-31B-it-GGUF/gemma-4-31B-it-UD-Q4_K_XL.gguf"
+    );
+    assert_eq!(from_name, from_repo);
+}
+
+#[test]
+#[serial]
+fn parse_exact_model_ref_accepts_unsloth_gemma_repo_url_with_quant_selector() {
+    let _catalog_guard = empty_catalog_guard();
+    let parsed =
+        parse_exact_model_ref("https://huggingface.co/unsloth/gemma-4-31B-it-GGUF:UD-Q4_K_XL")
+            .unwrap();
+    match parsed {
+        ExactModelRef::HuggingFace {
+            repo,
+            revision,
+            file,
+        } => {
+            assert_eq!(repo, "unsloth/gemma-4-31B-it-GGUF");
+            assert_eq!(revision, None);
+            assert_eq!(file, "UD-Q4_K_XL");
+        }
+        other => panic!("expected HuggingFace repo URL quant selector ref, got {other:?}"),
+    }
+}
+
+#[test]
+fn split_bare_name_selector_supports_name_quant_shorthand() {
+    assert_eq!(
+        split_bare_name_selector("gemma-4-31B-it-GGUF:UD-Q4_K_XL"),
+        ("gemma-4-31B-it-GGUF", Some("UD-Q4_K_XL"))
+    );
+    assert_eq!(
+        split_bare_name_selector("unsloth/gemma-4-31B-it-GGUF:UD-Q4_K_XL"),
+        ("unsloth/gemma-4-31B-it-GGUF:UD-Q4_K_XL", None)
+    );
+}
+
+#[test]
+fn select_strong_repo_hit_prefers_exact_leaf_name() {
+    let repos = vec![
+        "ggml-org/gemma-4-31B-it-GGUF".to_string(),
+        "unsloth/gemma-4-31B-it-GGUF".to_string(),
+        "bartowski/google_gemma-4-31B-it-GGUF".to_string(),
+    ];
+    let picked = select_strong_repo_hit("gemma-4-31B-it-GGUF", &repos);
+    assert_eq!(picked, Some("ggml-org/gemma-4-31B-it-GGUF".to_string()));
+}
+
+#[test]
+fn bare_name_quant_can_be_formatted_with_discovered_repo() {
+    let (name, selector) = split_bare_name_selector("gemma-4-31B-it-GGUF:UD-Q4_K_XL");
+    assert_eq!(name, "gemma-4-31B-it-GGUF");
+    let selector = selector.expect("selector");
+    let canonical = format!("{}:{}", "unsloth/gemma-4-31B-it-GGUF", selector);
+    assert_eq!(canonical, "unsloth/gemma-4-31B-it-GGUF:UD-Q4_K_XL");
+}
+
+#[test]
+fn quant_selector_from_gguf_file_extracts_expected_forms() {
+    assert_eq!(
+        quant_selector_from_gguf_file("gemma-4-31B-it-UD-Q4_K_XL.gguf"),
+        Some("UD-Q4_K_XL".to_string())
+    );
+    assert_eq!(
+        quant_selector_from_gguf_file("Meta-Llama-3.1-8B-Instruct.Q4_K_M.gguf"),
+        Some("Q4_K_M".to_string())
+    );
+    assert_eq!(
+        quant_selector_from_gguf_file("BF16/gemma-4-31B-it-BF16-00001-of-00002.gguf"),
+        Some("BF16".to_string())
+    );
+    assert_eq!(
+        quant_selector_from_gguf_file("gemma-4-31B-it-Q4_0.gguf"),
+        Some("Q4_0".to_string())
+    );
+    assert_eq!(
+        quant_selector_from_gguf_file("Qwen3-Tiny.Q2_K.gguf"),
+        Some("Q2_K".to_string())
+    );
+}
+
+#[test]
+fn format_huggingface_display_ref_prefers_selector_form_for_gguf() {
+    assert_eq!(
+        format_huggingface_display_ref(
+            "unsloth/gemma-4-31B-it-GGUF",
+            None,
+            "gemma-4-31B-it-UD-Q4_K_XL.gguf"
+        ),
+        "unsloth/gemma-4-31B-it-GGUF:UD-Q4_K_XL"
+    );
+    assert_eq!(
+        format_huggingface_display_ref(
+            "QuantFactory/Meta-Llama-3.1-8B-Instruct-GGUF",
+            None,
+            "Meta-Llama-3.1-8B-Instruct.Q4_K_M.gguf"
+        ),
+        "QuantFactory/Meta-Llama-3.1-8B-Instruct-GGUF:Q4_K_M"
+    );
+}
+
+#[test]
+fn format_huggingface_display_ref_uses_selector_for_split_gguf() {
+    assert_eq!(
+        format_huggingface_display_ref(
+            "unsloth/gemma-4-31B-it-GGUF",
+            None,
+            "BF16/gemma-4-31B-it-BF16-00001-of-00002.gguf"
+        ),
+        "unsloth/gemma-4-31B-it-GGUF:BF16"
+    );
+}
+
+#[tokio::test]
+#[serial]
+async fn download_exact_ref_bf16_shorthand_downloads_full_split_model() {
+    let fixture = load_gemma_live_fixture();
+    let cache = tempfile::tempdir().unwrap();
+    let bf16_dir = cache.path().join("BF16");
+    let shard_one = bf16_dir.join("gemma-4-31B-it-BF16-00001-of-00002.gguf");
+    let shard_two = bf16_dir.join("gemma-4-31B-it-BF16-00002-of-00002.gguf");
+    std::fs::create_dir_all(&bf16_dir).unwrap();
+    std::fs::write(&shard_one, b"gguf-one").unwrap();
+    std::fs::write(&shard_two, b"gguf-two").unwrap();
+    let _siblings_guard = RepoSiblingEntriesOverrideGuard::set(Arc::new({
+        let repo = fixture.repo.clone();
+        let siblings = fixture
+            .siblings
+            .iter()
+            .map(|file| (file.clone(), fixture.size_bytes.get(file).copied()))
+            .collect::<Vec<_>>();
+        move |requested_repo, requested_revision| {
+            if requested_repo == repo && requested_revision == "main" {
+                Some(siblings.clone())
+            } else {
+                None
+            }
+        }
+    }));
+
+    let planned = Arc::new(Mutex::new(Vec::<(bool, String)>::new()));
+    let _plan_guard = catalog::DownloadPlanObserverGuard::set(Arc::new({
+        let planned = Arc::clone(&planned);
+        move |label, entries| {
+            if label == "unsloth/gemma-4-31B-it-GGUF:BF16" {
+                *planned.lock().unwrap() = entries;
+            }
+        }
+    }));
+    let _download_guard = catalog::set_download_hf_assets_label_override(
+        "unsloth/gemma-4-31B-it-GGUF:BF16".to_string(),
+        Arc::new({
+            let shard_one = shard_one.clone();
+            let shard_two = shard_two.clone();
+            move |_| Ok(vec![shard_one.clone(), shard_two.clone()])
+        }),
+    );
+
+    let resolved = download_exact_ref_with_progress("unsloth/gemma-4-31B-it-GGUF:BF16", false)
+        .await
+        .unwrap();
+
+    assert_eq!(resolved, shard_one);
+    assert_eq!(
+        *planned.lock().unwrap(),
+        vec![
+            (false, "config.json".to_string()),
+            (
+                true,
+                "BF16/gemma-4-31B-it-BF16-00001-of-00002.gguf".to_string()
+            ),
+            (
+                true,
+                "BF16/gemma-4-31B-it-BF16-00002-of-00002.gguf".to_string()
+            ),
+        ]
+    );
+}
+
+#[tokio::test]
+#[serial]
+async fn show_model_variants_accepts_selected_quant_ref() {
+    let fixture = load_gemma_live_fixture();
+    let _siblings_guard = RepoSiblingEntriesOverrideGuard::set(Arc::new({
+        let repo = fixture.repo.clone();
+        let siblings = fixture
+            .siblings
+            .iter()
+            // Keep this fixture hermetic: missing sizes would trigger live HEAD requests.
+            .map(|file| {
+                (
+                    file.clone(),
+                    Some(fixture.size_bytes.get(file).copied().unwrap_or(1)),
+                )
+            })
+            .collect::<Vec<_>>();
+        move |requested_repo, requested_revision| {
+            if requested_repo == repo && requested_revision == "main" {
+                Some(siblings.clone())
+            } else {
+                None
+            }
+        }
+    }));
+
+    let variants = show_model_variants_with_progress("unsloth/gemma-4-31B-it-GGUF:BF16", |_| {})
+        .await
+        .unwrap()
+        .expect("repo-backed GGUF refs should enumerate variants");
+
+    assert!(!variants.is_empty());
+    assert!(
+        variants
+            .iter()
+            .any(|variant| { variant.exact_ref == "unsloth/gemma-4-31B-it-GGUF:BF16" })
+    );
+    assert!(
+        variants
+            .iter()
+            .any(|variant| { variant.exact_ref == "unsloth/gemma-4-31B-it-GGUF:UD-Q4_K_XL" })
+    );
+}
+
+#[test]
+fn format_huggingface_display_ref_prefers_repo_form_for_mlx() {
+    assert_eq!(
+        format_huggingface_display_ref("mlx-community/SmolLM-135M-8bit", None, "model.safetensors"),
+        "mlx-community/SmolLM-135M-8bit"
+    );
+    assert_eq!(
+        format_huggingface_display_ref(
+            "avlp12/GLM-5.1-Alis-MLX-Dynamic-2.7bpw",
+            None,
+            "model-00001-of-00010.safetensors"
+        ),
+        "avlp12/GLM-5.1-Alis-MLX-Dynamic-2.7bpw"
+    );
+}
+
+#[test]
+#[serial]
+fn parse_exact_model_ref_accepts_legacy_mlx_model_path_shape() {
+    let _catalog_guard = empty_catalog_guard();
+    let parsed = parse_exact_model_ref("mlx-community/SmolLM-135M-8bit/model").unwrap();
+    match parsed {
+        ExactModelRef::HuggingFace {
+            repo,
+            revision,
+            file,
+        } => {
+            assert_eq!(repo, "mlx-community/SmolLM-135M-8bit");
+            assert_eq!(revision, None);
+            assert_eq!(file, "model");
+        }
+        _ => panic!("expected HuggingFace ref"),
+    }
+}
+
+#[test]
+fn collect_show_gguf_variants_excludes_mmproj_and_nonfirst_split() {
+    let siblings = vec![
+        ("mmproj-BF16.gguf".to_string(), Some(1_200_000_000)),
+        (
+            "gemma-4-26B-A4B-it-UD-Q3_K_S-00002-of-00009.gguf".to_string(),
+            Some(12_500_000_000),
+        ),
+        (
+            "gemma-4-26B-A4B-it-UD-Q3_K_S-00001-of-00009.gguf".to_string(),
+            Some(12_500_000_000),
+        ),
+        (
+            "gemma-4-26B-A4B-it-UD-Q4_K_M.gguf".to_string(),
+            Some(16_900_000_000),
+        ),
+    ];
+    let files: Vec<_> = collect_show_gguf_variants_from_siblings(&siblings, 0)
+        .into_iter()
+        .map(|(file, _)| file)
+        .collect();
+    assert_eq!(
+        files,
+        vec![
+            "gemma-4-26B-A4B-it-UD-Q3_K_S-00001-of-00009.gguf".to_string(),
+            "gemma-4-26B-A4B-it-UD-Q4_K_M.gguf".to_string(),
+        ]
+    );
+}
+
+#[test]
+fn collect_show_gguf_variants_uses_total_split_size() {
+    let siblings = vec![
+        (
+            "IQ3_K/Kimi-K2.6-IQ3_K-00001-of-00012.gguf".to_string(),
+            Some(6_912_800),
+        ),
+        (
+            "IQ3_K/Kimi-K2.6-IQ3_K-00002-of-00012.gguf".to_string(),
+            Some(45_004_320_032),
+        ),
+        (
+            "IQ3_K/Kimi-K2.6-IQ3_K-00003-of-00012.gguf".to_string(),
+            Some(45_669_680_480),
+        ),
+    ];
+    let variants = collect_show_gguf_variants_from_siblings(&siblings, 0);
+    assert_eq!(variants.len(), 1);
+    assert_eq!(variants[0].0, "IQ3_K/Kimi-K2.6-IQ3_K-00001-of-00012.gguf");
+    assert_eq!(variants[0].1, Some(90_680_913_312));
+}
+
+#[test]
+fn collect_show_gguf_variants_orders_by_fit_when_memory_known() {
+    let siblings = vec![
+        ("model-UD-Q5_K_M.gguf".to_string(), Some(21_200_000_000)),
+        ("model-UD-Q4_K_M.gguf".to_string(), Some(16_900_000_000)),
+        ("model-UD-Q3_K_S.gguf".to_string(), Some(12_500_000_000)),
+    ];
+    let files: Vec<_> = collect_show_gguf_variants_from_siblings(&siblings, 19_300_000_000)
+        .into_iter()
+        .map(|(file, _)| file)
+        .collect();
+    assert_eq!(
+        files,
+        vec![
+            "model-UD-Q4_K_M.gguf".to_string(),
+            "model-UD-Q3_K_S.gguf".to_string(),
+            "model-UD-Q5_K_M.gguf".to_string(),
+        ]
+    );
+}
+
+#[test]
+fn default_hf_file_follows_the_local_fit_budget_not_the_ram_credit() {
+    use crate::system::hardware::{GpuFacts, HardwareSurvey};
+    use mesh_llm_system::capacity::local_fit_capacity_bytes;
+
+    // A 12 GB RTX 4070 Ti in a 31 GiB host, as surveyed on Windows.
+    let hw = HardwareSurvey {
+        vram_bytes: 31_427_447_193,
+        gpu_vram: vec![12_878_610_432],
+        gpu_reserved: vec![None],
+        gpus: vec![GpuFacts {
+            vram_bytes: 12_878_610_432,
+            ..GpuFacts::default()
+        }],
+        ram_offload_bytes: 18_548_836_761,
+        ..HardwareSurvey::default()
+    };
+    let candidates = vec![
+        ("model-Q8_0.gguf".to_string(), Some(21_000_000_000)),
+        ("model-Q4_K_M.gguf".to_string(), Some(11_000_000_000)),
+    ];
+
+    // Default: only the file that fits the GPU.
+    assert_eq!(
+        pick_gguf_for_budget(
+            candidates.clone(),
+            local_fit_capacity_bytes(&hw, None, false)
+        )
+        .as_deref(),
+        Some("model-Q4_K_M.gguf")
+    );
+    // Opted into host-RAM offload: the larger file fits the local budget.
+    assert_eq!(
+        pick_gguf_for_budget(candidates, local_fit_capacity_bytes(&hw, None, true)).as_deref(),
+        Some("model-Q8_0.gguf")
+    );
+}

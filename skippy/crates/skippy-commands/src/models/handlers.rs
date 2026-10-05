@@ -1,0 +1,834 @@
+use super::formatters::DownloadStats;
+use crate::models::acquisition::{
+    DownloadTransferStats, download_model_ref_with_progress_details,
+    download_model_ref_with_progress_details_direct,
+};
+use crate::models::cli::ModelSearchSort;
+use crate::models::details::{
+    ShowVariantsProgress, find_remote_catalog_model_exact, remote_catalog_model_ref,
+    show_exact_model, show_model_variants_with_progress,
+};
+use crate::models::output::{DeterminateProgressLine, clear_stderr_line, start_spinner};
+use crate::models::search::{
+    SearchArtifactFilter, SearchProgress, SearchSort, search_catalog_models, search_huggingface,
+};
+use crate::models::stage_cache::{
+    CertificationGateStatus, SkippyCertificationRequest, certify_layer_package,
+    download_package_v2_to_local, is_layer_package_ref,
+};
+use crate::models::storage::{
+    ModelCleanupPlan, ModelCleanupResult, delete, model_usage_cache_dir, plan_model_cleanup,
+    remote_catalog,
+};
+use anyhow::{Result, anyhow, bail};
+use serde_json::json;
+
+use std::io::Write;
+use std::time::Duration;
+use std::time::Instant;
+
+use super::formatters::{
+    DownloadRenderInput, catalog_model_is_mlx, format_installed_size, format_relative_timestamp,
+    model_kind_code, models_formatter, search_formatter,
+};
+
+pub async fn run_model_search(
+    query: &[String],
+    _prefer_gguf: bool,
+    prefer_mlx: bool,
+    catalog_only: bool,
+    limit: usize,
+    sort: ModelSearchSort,
+    json_output: bool,
+) -> Result<()> {
+    let formatter = search_formatter(json_output);
+    let query = query.join(" ");
+    let filter = if prefer_mlx {
+        SearchArtifactFilter::Mlx
+    } else {
+        SearchArtifactFilter::Gguf
+    };
+    let search_sort = map_search_sort(sort);
+
+    if catalog_only {
+        let results: Vec<_> = search_catalog_models(&query)?
+            .into_iter()
+            .filter(|model| match filter {
+                SearchArtifactFilter::Gguf => !catalog_model_is_mlx(model),
+                SearchArtifactFilter::Mlx => catalog_model_is_mlx(model),
+            })
+            .collect();
+        if results.is_empty() {
+            return formatter.render_catalog_empty(&query, filter, search_sort);
+        }
+        return formatter.render_catalog_results(&query, filter, &results, limit, search_sort);
+    }
+
+    let mut announced_repo_scan = false;
+    let mut last_reported_completed = 0usize;
+    let mut search_spinner = if formatter.is_json() {
+        None
+    } else {
+        Some(start_spinner(&format!(
+            "Searching Hugging Face {} repos for '{}'",
+            super::formatters::filter_label(filter),
+            query
+        )))
+    };
+    let mut repo_spinner = None;
+    let repo_progress = DeterminateProgressLine::new("🔎");
+    let results = search_huggingface(
+        &query,
+        limit,
+        filter,
+        search_sort,
+        |progress| match progress {
+            SearchProgress::SearchingHub => {}
+            SearchProgress::InspectingRepos { completed, total } => {
+                if formatter.is_json() {
+                    return;
+                }
+                if let Some(mut spinner) = search_spinner.take() {
+                    spinner.finish();
+                }
+                if total == 0 {
+                    return;
+                }
+                if !announced_repo_scan {
+                    announced_repo_scan = true;
+                    repo_spinner = Some(start_spinner(&format!(
+                        "Inspecting {total} candidate repos..."
+                    )));
+                }
+                if completed == 0 {
+                    return;
+                }
+                if let Some(mut spinner) = repo_spinner.take() {
+                    spinner.finish();
+                }
+                if completed < total && completed < last_reported_completed.saturating_add(5) {
+                    return;
+                }
+                last_reported_completed = completed;
+                let _ = repo_progress.draw_counts(
+                    "Inspecting repos",
+                    completed,
+                    total,
+                    Some(" candidate repos"),
+                );
+                if completed == total {
+                    let _ = clear_stderr_line();
+                    let mut err = crate::models::output::console_err();
+                    let _ = writeln!(err, "   Inspected {completed}/{total} candidate repos...");
+                }
+            }
+        },
+    )
+    .await?;
+    if let Some(mut spinner) = search_spinner.take() {
+        spinner.finish();
+    }
+    if let Some(mut spinner) = repo_spinner.take() {
+        spinner.finish();
+    }
+    if results.is_empty() {
+        return formatter.render_hf_empty(&query, filter, search_sort);
+    }
+    formatter.render_hf_results(&query, filter, search_sort, &results)
+}
+
+pub fn run_model_recommended(json_output: bool) -> Result<()> {
+    let formatter = models_formatter(json_output);
+    remote_catalog::ensure_catalog()?;
+    let models = remote_catalog::loaded_models()?;
+    formatter.render_recommended(&models)
+}
+
+pub async fn run_model_certify(
+    model: &str,
+    report_out: Option<&std::path::Path>,
+    json_output: bool,
+    package_only: bool,
+    api_base: Option<&str>,
+    prompt: &str,
+    max_tokens: u32,
+) -> Result<()> {
+    let api_base = api_base.map(str::trim).filter(|value| !value.is_empty());
+    validate_model_certify_options(package_only, api_base, prompt, max_tokens)?;
+
+    let report = certify_layer_package(SkippyCertificationRequest {
+        model_ref: model.to_string(),
+        package_only,
+        api_base: api_base.map(ToString::to_string),
+        prompt: prompt.to_string(),
+        max_tokens,
+    })
+    .await?;
+    let report_json = serde_json::to_string_pretty(&report)?;
+    if let Some(path) = report_out {
+        if let Some(parent) = path.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(path, format!("{report_json}\n"))?;
+    }
+    if json_output {
+        let mut out = crate::models::output::machine_out();
+        writeln!(out, "{report_json}")?;
+    } else {
+        let mut out = crate::models::output::console_out();
+        writeln!(
+            out,
+            "Skippy package certification: {}",
+            status_label(report.status)
+        )?;
+        writeln!(out, "Model: {}", report.model_id)?;
+        writeln!(out, "Package: {}", report.resolved_package_ref)?;
+        writeln!(out, "Manifest: {}", report.manifest_sha256)?;
+        writeln!(out, "Layers: {}", report.layer_count)?;
+        if let Some(path) = report_out {
+            writeln!(out, "Report: {}", path.display())?;
+        }
+    }
+    if report.status != CertificationGateStatus::Passed {
+        bail!(
+            "skippy package certification {}",
+            status_label(report.status)
+        );
+    }
+    Ok(())
+}
+
+fn validate_model_certify_options(
+    package_only: bool,
+    api_base: Option<&str>,
+    prompt: &str,
+    max_tokens: u32,
+) -> Result<()> {
+    let api_base = api_base.map(str::trim).filter(|value| !value.is_empty());
+    if package_only {
+        if api_base.is_some() {
+            bail!(
+                "Do not combine --package-only with --api-base; remove --package-only to run runtime smoke gates."
+            );
+        }
+        return Ok(());
+    }
+
+    let Some(api_base) = api_base else {
+        bail!(
+            "models certify requires either --package-only or --api-base for runtime smoke gates"
+        );
+    };
+    let parsed = reqwest::Url::parse(api_base)
+        .map_err(|error| anyhow!("invalid --api-base {api_base:?}: {error}"))?;
+    if !matches!(parsed.scheme(), "http" | "https") || parsed.host_str().is_none() {
+        bail!("--api-base must be an http(s) URL with a host");
+    }
+    if prompt.trim().is_empty() {
+        bail!("--prompt must not be empty when runtime smoke gates are enabled");
+    }
+    if max_tokens == 0 {
+        bail!("--max-tokens must be greater than 0 when runtime smoke gates are enabled");
+    }
+    Ok(())
+}
+
+fn status_label(status: CertificationGateStatus) -> &'static str {
+    match status {
+        CertificationGateStatus::Passed => "passed",
+        CertificationGateStatus::Failed => "failed",
+        CertificationGateStatus::Incomplete => "incomplete",
+        CertificationGateStatus::NotRequired => "not required",
+    }
+}
+
+pub fn run_model_cleanup(unused_since: Option<&str>, yes: bool, json_output: bool) -> Result<()> {
+    let unused_duration = unused_since.map(parse_cleanup_age).transpose()?;
+    let plan = plan_model_cleanup(unused_duration)?;
+    if yes {
+        let result = crate::models::storage::execute_model_cleanup(unused_duration)?;
+        if json_output {
+            render_cleanup_json(unused_since, &plan, Some(&result))?;
+        } else {
+            render_cleanup_console(unused_since, &plan, Some(&result))?;
+        }
+    } else if json_output {
+        render_cleanup_json(unused_since, &plan, None)?;
+    } else {
+        render_cleanup_console(unused_since, &plan, None)?;
+    }
+    Ok(())
+}
+
+pub async fn run_model_show(model_ref: &str, json_output: bool) -> Result<()> {
+    let formatter = models_formatter(json_output);
+    let interactive = !json_output && crate::console::stdout_is_terminal();
+    let detail_started = Instant::now();
+    if interactive {
+        let mut err = crate::models::output::console_err();
+        writeln!(err, "🔎 Resolving model details from Hugging Face...")?;
+    }
+    let details = show_exact_model(model_ref).await?;
+    if interactive {
+        let mut err = crate::models::output::console_err();
+        writeln!(
+            err,
+            "✅ Resolved model details ({:.1}s)",
+            detail_started.elapsed().as_secs_f32()
+        )?;
+    }
+    let is_gguf = model_kind_code(details.kind) == "gguf";
+    let variants = if is_gguf {
+        let variants_started = Instant::now();
+        if interactive {
+            let mut err = crate::models::output::console_err();
+            writeln!(err, "🔎 Fetching GGUF variants from Hugging Face...")?;
+        }
+        let variants_progress = DeterminateProgressLine::new("🔎");
+        let variants = show_model_variants_with_progress(&details.exact_ref, |progress| {
+            if !interactive {
+                return;
+            }
+            match progress {
+                ShowVariantsProgress::Inspecting { completed, total } => {
+                    if total == 0 {
+                        return;
+                    }
+                    let _ = variants_progress.draw_counts(
+                        "Inspecting variant sizes",
+                        completed,
+                        total,
+                        None,
+                    );
+                    if completed == total {
+                        let _ = clear_stderr_line();
+                    }
+                }
+            }
+        })
+        .await?;
+        if let Some(variants) = &variants {
+            if interactive {
+                let mut err = crate::models::output::console_err();
+                writeln!(
+                    err,
+                    "✅ Fetched {} GGUF variants ({:.1}s)",
+                    variants.len(),
+                    variants_started.elapsed().as_secs_f32()
+                )?;
+            }
+        } else if interactive {
+            let mut err = crate::models::output::console_err();
+            writeln!(
+                err,
+                "✅ No GGUF variants for this ref ({:.1}s)",
+                variants_started.elapsed().as_secs_f32()
+            )?;
+        }
+        variants
+    } else {
+        None
+    };
+    formatter.render_show(&details, variants.as_deref())
+}
+
+pub async fn run_model_download(
+    model_ref: &str,
+    include_draft: bool,
+    direct: bool,
+    json_output: bool,
+) -> Result<()> {
+    let formatter = models_formatter(json_output);
+    let progress = !json_output || super::output::context().byte_progress.is_some();
+    if !direct
+        && let Some((package_ref, package_dir)) =
+            download_layer_package_for_model_ref(model_ref).await?
+    {
+        let mut err = crate::models::output::console_err();
+        if !json_output {
+            writeln!(err, "ℹ Using repackaged model from catalog: {package_ref}")?;
+        }
+        if include_draft && !json_output {
+            writeln!(err, "⚠ Draft download is not available for layer packages")?;
+        }
+        return formatter.render_layer_package_download(model_ref, &package_ref, &package_dir);
+    }
+
+    let download = if direct {
+        download_model_ref_with_progress_details_direct(model_ref, progress, true).await?
+    } else {
+        download_model_ref_with_progress_details(model_ref, progress).await?
+    };
+    let download_stats = download_stats_from_transfer(download.transfer_stats);
+    let download_paths = download
+        .paths
+        .iter()
+        .map(std::path::PathBuf::as_path)
+        .collect::<Vec<_>>();
+    if !include_draft {
+        return formatter.render_download(DownloadRenderInput {
+            model_ref,
+            path: &download.path,
+            paths: &download_paths,
+            details: download.details.as_ref(),
+            stats: download_stats.as_ref(),
+            include_draft: false,
+            draft: None,
+        });
+    }
+
+    let mut draft_out: Option<(String, std::path::PathBuf)> = None;
+    if let Some(details_ref) = download.details.as_ref() {
+        if let Some(draft_name) = details_ref.draft.as_deref() {
+            let draft_ref = find_remote_catalog_model_exact(draft_name)
+                .map(|model| remote_catalog_model_ref(&model))
+                .unwrap_or_else(|| draft_name.to_string());
+            let draft_download = if direct {
+                download_model_ref_with_progress_details_direct(&draft_ref, progress, true).await?
+            } else {
+                download_model_ref_with_progress_details(&draft_ref, progress).await?
+            };
+            draft_out = Some((draft_name.to_string(), draft_download.path));
+        } else if !json_output {
+            let mut err = crate::models::output::console_err();
+            writeln!(
+                err,
+                "⚠ No draft model available for {}",
+                details_ref.display_name
+            )?;
+        }
+    }
+    formatter.render_download(DownloadRenderInput {
+        model_ref,
+        path: &download.path,
+        paths: &download_paths,
+        details: download.details.as_ref(),
+        stats: download_stats.as_ref(),
+        include_draft: true,
+        draft: draft_out.as_ref().map(|(n, p)| (n.as_str(), p.as_path())),
+    })
+}
+
+fn download_stats_from_transfer(stats: Option<DownloadTransferStats>) -> Option<DownloadStats> {
+    stats.map(|stats| DownloadStats {
+        bytes: Some(stats.bytes),
+        elapsed: stats.elapsed,
+        bytes_per_second: stats.bytes_per_sec.and_then(rounded_positive_rate),
+    })
+}
+
+fn rounded_positive_rate(value: f64) -> Option<u64> {
+    (value.is_finite() && value > 0.0).then(|| value.round() as u64)
+}
+
+async fn download_layer_package_for_model_ref(
+    model_ref: &str,
+) -> Result<Option<(String, std::path::PathBuf)>> {
+    let Some(package_ref) = resolve_download_layer_package_ref(model_ref) else {
+        return Ok(None);
+    };
+    let package_dir = tokio::task::spawn_blocking({
+        let package_ref = package_ref.clone();
+        move || download_package_v2_to_local(&package_ref)
+    })
+    .await??;
+    Ok(Some((package_ref, package_dir)))
+}
+
+fn resolve_download_layer_package_ref(model_ref: &str) -> Option<String> {
+    if is_layer_package_ref(model_ref) {
+        return Some(model_ref.to_string());
+    }
+    remote_catalog::resolve_layer_package_download(model_ref)
+}
+
+pub(super) fn run_model_prune(yes: bool, json_output: bool) -> Result<()> {
+    let cache_dir = crate::models::stage_cache::materialized_stage_cache_dir();
+    if !yes {
+        if json_output {
+            let mut out = crate::models::output::machine_out();
+            writeln!(
+                out,
+                "{}",
+                serde_json::to_string_pretty(&json!({
+                    "dry_run": true,
+                    "cache_dir": cache_dir,
+                    "apply": format!("{} models prune --yes", crate::models::output::program()),
+                }))?
+            )?;
+        } else {
+            let mut out = crate::models::output::console_out();
+            writeln!(out, "🧹 Derived stage cache prune preview")?;
+            writeln!(out, "📁 Cache: {}", cache_dir.display())?;
+            writeln!(out, "Apply with:")?;
+            writeln!(
+                out,
+                "  {program} models prune --yes",
+                program = crate::models::output::program()
+            )?;
+        }
+        return Ok(());
+    }
+    let removed = crate::models::stage_cache::prune_unpinned_materialized_stages()?;
+    if json_output {
+        let mut out = crate::models::output::machine_out();
+        writeln!(
+            out,
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "dry_run": false,
+                "cache_dir": cache_dir,
+                "removed_files": removed,
+            }))?
+        )?;
+    } else {
+        let mut out = crate::models::output::console_out();
+        writeln!(out, "✅ Derived stage cache pruned")?;
+        writeln!(out, "Removed files: {}", removed)?;
+    }
+    Ok(())
+}
+
+fn parse_cleanup_age(value: &str) -> Result<Duration> {
+    let value = value.trim();
+    if value.is_empty() {
+        bail!("Cleanup age must not be empty");
+    }
+    let split_index = value
+        .find(|ch: char| !ch.is_ascii_digit())
+        .unwrap_or(value.len());
+    if split_index == 0 || split_index == value.len() {
+        bail!("Use a cleanup age like 12h, 7d, or 30m");
+    }
+    let amount: u64 = value[..split_index]
+        .parse()
+        .map_err(|_| anyhow!("Invalid cleanup age: {value}"))?;
+    let unit = value[split_index..].to_ascii_lowercase();
+    let seconds = match unit.as_str() {
+        "m" | "min" | "mins" | "minute" | "minutes" => amount.saturating_mul(60),
+        "h" | "hr" | "hrs" | "hour" | "hours" => amount.saturating_mul(60 * 60),
+        "d" | "day" | "days" => amount.saturating_mul(60 * 60 * 24),
+        "w" | "week" | "weeks" => amount.saturating_mul(60 * 60 * 24 * 7),
+        _ => bail!("Unsupported cleanup age unit '{unit}'. Use m, h, d, or w."),
+    };
+    Ok(Duration::from_secs(seconds))
+}
+
+fn render_cleanup_console(
+    unused_since: Option<&str>,
+    plan: &ModelCleanupPlan,
+    result: Option<&ModelCleanupResult>,
+) -> Result<()> {
+    let mut out = crate::models::output::console_out();
+    let executed = result.is_some();
+    if executed {
+        writeln!(out, "✅ Model cleanup complete")?;
+    } else {
+        writeln!(out, "🧹 Model cleanup preview")?;
+    }
+    writeln!(
+        out,
+        "📁 HF cache: {}",
+        crate::models::storage::huggingface_hub_cache_dir().display()
+    )?;
+    writeln!(out, "📁 Mesh cache: {}", model_usage_cache_dir().display())?;
+    writeln!(out, "🛡️ Scope: mesh-managed records only")?;
+    if let Some(unused_since) = unused_since {
+        writeln!(out, "⏱️ Filter: unused for at least {}", unused_since)?;
+    }
+    writeln!(out)?;
+
+    if plan.candidates.is_empty() {
+        writeln!(out, "No mesh-managed models matched the cleanup filters.")?;
+    } else {
+        for candidate in &plan.candidates {
+            writeln!(out, "📦 {}", candidate.display_name)?;
+            if candidate.stale_record_only {
+                writeln!(out, "   would remove: stale usage record only")?;
+            } else {
+                writeln!(
+                    out,
+                    "   would remove: {} across {} file{}",
+                    format_installed_size(candidate.total_bytes),
+                    candidate.file_count,
+                    if candidate.file_count == 1 { "" } else { "s" }
+                )?;
+            }
+            if let Some(model_ref) = candidate.model_ref.as_deref() {
+                writeln!(out, "   ref: {}", model_ref)?;
+            }
+            writeln!(out, "   source: {}", candidate.source)?;
+            if let Some(label) = format_relative_timestamp(&candidate.last_used_at) {
+                writeln!(out, "   last used: {}", label)?;
+            }
+            writeln!(out, "   path: {}", candidate.primary_path.display())?;
+            if candidate.stale_record_only {
+                writeln!(
+                    out,
+                    "   note: no managed files remain on disk; cleanup only removes the usage record"
+                )?;
+            }
+            writeln!(out)?;
+        }
+    }
+
+    if let Some(result) = result {
+        writeln!(out, "Removed model records: {}", result.removed_candidates)?;
+        writeln!(out, "Removed files: {}", result.removed_files)?;
+        writeln!(
+            out,
+            "Removed metadata cache files: {}",
+            result.removed_metadata_files
+        )?;
+        writeln!(out, "Removed usage records: {}", result.removed_records)?;
+        writeln!(
+            out,
+            "Reclaimed: {}",
+            format_installed_size(result.reclaimed_bytes)
+        )?;
+    } else {
+        writeln!(
+            out,
+            "Would remove: {} across {} file{}",
+            format_installed_size(plan.total_bytes),
+            plan.total_files,
+            if plan.total_files == 1 { "" } else { "s" }
+        )?;
+        if plan.stale_record_only > 0 {
+            writeln!(
+                out,
+                "Would also clear {} stale usage record{}",
+                plan.stale_record_only,
+                if plan.stale_record_only == 1 { "" } else { "s" }
+            )?;
+        }
+        if plan.skipped_recent > 0 {
+            writeln!(
+                out,
+                "Skipped recent mesh-managed record{}: {}",
+                if plan.skipped_recent == 1 { "" } else { "s" },
+                plan.skipped_recent
+            )?;
+        }
+        writeln!(out)?;
+        writeln!(out, "Apply with:")?;
+        write!(
+            out,
+            "  {program} models cleanup",
+            program = crate::models::output::program()
+        )?;
+        if let Some(unused_since) = unused_since {
+            write!(out, " --unused-since {}", unused_since)?;
+        }
+        writeln!(out, " --yes")?;
+    }
+    Ok(())
+}
+
+fn render_cleanup_json(
+    unused_since: Option<&str>,
+    plan: &ModelCleanupPlan,
+    result: Option<&ModelCleanupResult>,
+) -> Result<()> {
+    let mut out = crate::models::output::machine_out();
+    writeln!(
+        out,
+        "{}",
+        serde_json::to_string_pretty(&json!({
+            "hf_cache_dir": crate::models::storage::huggingface_hub_cache_dir(),
+            "mesh_cache_dir": model_usage_cache_dir(),
+            "mesh_managed_only": true,
+            "unused_since": unused_since,
+            "dry_run": result.is_none(),
+            "plan": plan,
+            "result": result,
+        }))?
+    )?;
+    Ok(())
+}
+
+pub async fn run_model_delete(model: &str, yes: bool, json_output: bool) -> Result<()> {
+    let paths = match delete::resolve_model_identifier(model).await {
+        Ok(p) => p,
+        Err(e) => bail!("{e}"),
+    };
+
+    if paths.is_empty() {
+        bail!("Model not found: {}", model);
+    }
+
+    if !yes {
+        let derived_stage_paths =
+            crate::models::stage_cache::materialized_stages_for_sources(&paths)?;
+        let resolved = build_delete_preview_model(model, &paths, derived_stage_paths);
+        let formatter = models_formatter(json_output);
+        return formatter.render_delete_preview(&resolved);
+    }
+
+    let removed_derived_cache_files =
+        crate::models::stage_cache::remove_materialized_stages_for_sources(&paths)?;
+    let mut result = delete::delete_model_by_identifier(model).await?;
+    result.removed_derived_cache_files = removed_derived_cache_files;
+    let formatter = models_formatter(json_output);
+    formatter.render_delete_result(&result)
+}
+
+fn build_delete_preview_model(
+    model: &str,
+    paths: &[std::path::PathBuf],
+    derived_stage_paths: Vec<std::path::PathBuf>,
+) -> crate::models::storage::ResolvedModel {
+    let primary_path = paths[0].clone();
+    let display_name = if paths.len() > 1 {
+        format!("{model} ({} files)", paths.len())
+    } else {
+        primary_path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("unknown")
+            .to_string()
+    };
+
+    crate::models::storage::ResolvedModel {
+        path: primary_path,
+        paths: paths.to_vec(),
+        derived_stage_paths,
+        display_name,
+        is_exact_path: false,
+        matched_records: vec![],
+    }
+}
+
+fn map_search_sort(sort: ModelSearchSort) -> SearchSort {
+    match sort {
+        ModelSearchSort::Trending => SearchSort::Trending,
+        ModelSearchSort::Downloads => SearchSort::Downloads,
+        ModelSearchSort::Likes => SearchSort::Likes,
+        ModelSearchSort::Created => SearchSort::Created,
+        ModelSearchSort::Updated => SearchSort::Updated,
+        ModelSearchSort::ParametersDesc => SearchSort::ParametersDesc,
+        ModelSearchSort::ParametersAsc => SearchSort::ParametersAsc,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        build_delete_preview_model, parse_cleanup_age, resolve_download_layer_package_ref,
+        validate_model_certify_options,
+    };
+    use serial_test::serial;
+    use std::path::PathBuf;
+
+    #[test]
+    fn cleanup_age_parser_accepts_common_units() {
+        assert_eq!(
+            parse_cleanup_age("30m").expect("minutes should parse"),
+            std::time::Duration::from_secs(30 * 60)
+        );
+        assert_eq!(
+            parse_cleanup_age("12h").expect("hours should parse"),
+            std::time::Duration::from_secs(12 * 60 * 60)
+        );
+        assert_eq!(
+            parse_cleanup_age("7d").expect("days should parse"),
+            std::time::Duration::from_secs(7 * 24 * 60 * 60)
+        );
+    }
+
+    #[test]
+    fn cleanup_age_parser_rejects_missing_or_unknown_units() {
+        assert!(parse_cleanup_age("30").is_err());
+        assert!(parse_cleanup_age("2months").is_err());
+        assert!(parse_cleanup_age("").is_err());
+    }
+
+    #[test]
+    fn model_certify_requires_explicit_certification_mode() {
+        let error = validate_model_certify_options(false, None, "Say ok.", 2)
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("--package-only"), "{error}");
+        assert!(error.contains("--api-base"), "{error}");
+    }
+
+    #[test]
+    fn model_certify_rejects_ambiguous_package_and_runtime_modes() {
+        let error =
+            validate_model_certify_options(true, Some("http://127.0.0.1:9337"), "Say ok.", 2)
+                .unwrap_err()
+                .to_string();
+
+        assert!(error.contains("Do not combine"), "{error}");
+    }
+
+    #[test]
+    fn model_certify_rejects_empty_runtime_prompt() {
+        let error = validate_model_certify_options(false, Some("http://127.0.0.1:9337"), "   ", 2)
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("--prompt"), "{error}");
+    }
+
+    #[test]
+    fn model_certify_rejects_zero_runtime_tokens() {
+        let error =
+            validate_model_certify_options(false, Some("http://127.0.0.1:9337"), "Say ok.", 0)
+                .unwrap_err()
+                .to_string();
+
+        assert!(error.contains("--max-tokens"), "{error}");
+    }
+
+    #[test]
+    fn model_certify_rejects_non_http_runtime_base() {
+        let error = validate_model_certify_options(false, Some("file:///tmp/api"), "Say ok.", 2)
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("--api-base"), "{error}");
+        assert!(error.contains("http"), "{error}");
+    }
+
+    #[test]
+    fn model_download_accepts_explicit_hf_layer_package_ref() {
+        assert_eq!(
+            resolve_download_layer_package_ref("hf://meshllm/Qwen3-8B-Q4_K_M-layers@abc123"),
+            Some("hf://meshllm/Qwen3-8B-Q4_K_M-layers@abc123".to_string())
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn model_download_without_package_mapping_falls_back_to_model_download() {
+        let _catalog =
+            crate::models::storage::remote_catalog::set_catalog_entries_for_test(Vec::new());
+        assert_eq!(
+            resolve_download_layer_package_ref("plain-local-model"),
+            None
+        );
+    }
+
+    #[test]
+    fn delete_preview_model_retains_all_resolved_package_paths() {
+        let paths = vec![
+            PathBuf::from("/tmp/demo-layers/layers/layer-000.gguf"),
+            PathBuf::from("/tmp/demo-layers/layers/layer-001.gguf"),
+            PathBuf::from("/tmp/demo-layers/shared/embeddings.gguf"),
+        ];
+
+        let derived_stage_paths =
+            vec![PathBuf::from("/tmp/mesh-llm/skippy-stages/demo-stage.gguf")];
+        let resolved =
+            build_delete_preview_model("meshllm/Demo-layers", &paths, derived_stage_paths.clone());
+
+        assert_eq!(resolved.path, paths[0]);
+        assert_eq!(resolved.paths, paths);
+        assert_eq!(resolved.derived_stage_paths, derived_stage_paths);
+        assert_eq!(resolved.display_name, "meshllm/Demo-layers (3 files)");
+    }
+}

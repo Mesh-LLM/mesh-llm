@@ -204,7 +204,7 @@ jobs:
         id: windows_packages
         uses: Mesh-LLM/mesh-llm/.github/actions/resolve-cargo-packages@5c8fb4d472bc57058c8153761c561daa77dd5b94 # product-layout compatibility helpers
         with:
-          generation: legacy
+          generation: current
           # The `platform-windows-cfg` catalog routes these crates to the
           # Windows unit row because they carry their own cfg(windows)/cfg(unix)
           # code, so they run here without widening the shared macOS owners.

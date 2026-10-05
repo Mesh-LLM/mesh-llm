@@ -2,7 +2,7 @@
 # Run the real native runtime-event gate against a built native runtime and
 # a real model, and write its evidence file.
 #
-# `crates/skippy-runtime/tests/runtime_events_native.rs` is the only test
+# `skippy/crates/skippy-runtime/tests/runtime_events_native.rs` is the only test
 # that exercises the reporter against actual native code: install the
 # process-global reporter, open a real model, observe structured production
 # callbacks, exercise unload, clear the reporter. It is gated behind

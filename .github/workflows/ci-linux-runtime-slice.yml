@@ -63,6 +63,8 @@ jobs:
       allow_depot_remote_cache: ${{ steps.policy.outputs.allow_depot_remote_cache }}
       allow_native_github_cache: ${{ steps.policy.outputs.allow_native_github_cache }}
       allow_trusted_sccache_seed: ${{ steps.policy.outputs.allow_trusted_sccache_seed }}
+      runner_cpu: ${{ steps.cpu_policy.outputs.runner_16 }}
+      allow_native_github_cache_cpu: ${{ steps.cpu_policy.outputs.allow_native_github_cache }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
@@ -85,12 +87,26 @@ jobs:
           pr_approved_sha: ${{ vars.DEPOT_PR_APPROVED_SHA }}
           force_hosted: ${{ inputs.force_hosted }}
           manual_use_depot: ${{ inputs.use_depot }}
+      - name: Select hosted CPU runtime cache producer
+        id: cpu_policy
+        uses: ./.github/actions/select-ci-runners
+        with:
+          event_name: ${{ github.event_name }}
+          original_event_name: ${{ inputs.original_event_name }}
+          repository: ${{ github.repository }}
+          head_repository: ${{ github.event.pull_request.head.repo.full_name }}
+          head_sha: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ github.ref }}
+          depot_main_enabled: ${{ vars.DEPOT_RUNNERS_ENABLED == 'true' }}
+          depot_pr_enabled: ${{ vars.DEPOT_PR_RUNNERS_ENABLED == 'true' }}
+          pr_canary_ref: ${{ vars.DEPOT_PR_CANARY_REF }}
+          force_hosted: true
 
   linux_runtime:
     name: Linux runtime (${{ matrix.runtime.backend }})
     needs: runner_policy
     if: ${{ !cancelled() && inputs.runtime_matrix != '[]' && needs.runner_policy.result == 'success' }}
-    runs-on: ${{ needs.runner_policy.outputs.runner_16 }}
+    runs-on: ${{ matrix.runtime.backend == 'cpu' && needs.runner_policy.outputs.runner_cpu || needs.runner_policy.outputs.runner_16 }}
     timeout-minutes: 75
     strategy:
       fail-fast: ${{ inputs.fail_fast }}
@@ -116,9 +132,9 @@ jobs:
       - uses: Mesh-LLM/mesh-llm/.github/actions/audit-depot-pr-isolation@ed07043b84d720aab30e75ed2f038f7042576f16
         with:
           original_event_name: ${{ inputs.original_event_name }}
-          depot_selected: ${{ startsWith(needs.runner_policy.outputs.runner_16, 'depot-') }}
-          allow_native_github_cache: ${{ needs.runner_policy.outputs.allow_native_github_cache }}
-          allow_depot_remote_cache: ${{ needs.runner_policy.outputs.allow_depot_remote_cache }}
+          depot_selected: ${{ matrix.runtime.backend != 'cpu' && startsWith(needs.runner_policy.outputs.runner_16, 'depot-') }}
+          allow_native_github_cache: ${{ matrix.runtime.backend == 'cpu' && needs.runner_policy.outputs.allow_native_github_cache_cpu || needs.runner_policy.outputs.allow_native_github_cache }}
+          allow_depot_remote_cache: ${{ matrix.runtime.backend != 'cpu' && needs.runner_policy.outputs.allow_depot_remote_cache }}
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           ref: ${{ inputs.source_sha || github.sha }}
@@ -142,10 +158,50 @@ jobs:
           cache_key: mesh-llm-sccache-seed-linux-x86_64-img-f499b79b-epoch-f499b79b-v3-${{ hashFiles('Cargo.lock', '.github/cache-version.txt', '.cargo/config.toml', 'scripts/cargo-linker', 'scripts/cargo-linker-linux-*', 'scripts/lib/lld.sh', 'Justfile', 'just/**') }}
       - uses: ./.github/actions/configure-sccache-gha
         with:
-          allow_depot_remote_cache: ${{ needs.runner_policy.outputs.allow_depot_remote_cache }}
-          allow_native_github_cache: ${{ needs.runner_policy.outputs.allow_native_github_cache }}
+          allow_depot_remote_cache: ${{ matrix.runtime.backend != 'cpu' && needs.runner_policy.outputs.allow_depot_remote_cache }}
+          allow_native_github_cache: ${{ matrix.runtime.backend == 'cpu' && needs.runner_policy.outputs.allow_native_github_cache_cpu || needs.runner_policy.outputs.allow_native_github_cache }}
+      - name: Restore exact Linux CPU runtime
+        id: runtime_cache
+        if: ${{ matrix.runtime.backend == 'cpu' && needs.runner_policy.outputs.allow_native_github_cache_cpu == 'true' && !startsWith(needs.runner_policy.outputs.runner_cpu, 'depot-') }}
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: runtime-input
+          key: skippy-runtime-linux-${{ matrix.runtime.target }}-${{ matrix.runtime.toolchain_epoch }}-${{ hashFiles('skippy/**', 'Cargo.toml', 'Cargo.lock', '.cargo/**', 'Justfile', 'just/**', 'scripts/**', 'ci/slices.yml', '.github/actions/prepare-native-runtime-input/**', '.github/cache-version.txt') }}
+      - name: Verify restored Linux CPU runtime
+        id: cached_runtime
+        if: ${{ steps.runtime_cache.outputs.cache-hit == 'true' }}
+        env:
+          EXPECTED_BACKEND: ${{ matrix.runtime.backend }}
+          EXPECTED_TARGET: ${{ matrix.runtime.target }}
+        run: |
+          set -euo pipefail
+          mapfile -t manifests < <(find runtime-input -mindepth 2 -maxdepth 2 -type f -name manifest.json -print)
+          if [[ "${#manifests[@]}" -ne 1 ]]; then
+            echo "expected exactly one cached native runtime" >&2
+            exit 1
+          fi
+          runtime_dir="$(dirname "${manifests[0]}")"
+          python3 - "$runtime_dir/manifest.json" <<'PY'
+          import json
+          import os
+          import sys
+
+          with open(sys.argv[1], encoding="utf-8") as manifest_file:
+              runtime = json.load(manifest_file)["runtime"]
+          if runtime["backend"]["kind"] != os.environ["EXPECTED_BACKEND"]:
+              raise SystemExit("cached runtime backend does not match the planned row")
+          if runtime["platform"]["target"] != os.environ["EXPECTED_TARGET"]:
+              raise SystemExit("cached runtime target does not match the planned row")
+          PY
+          scripts/verify-native-runtime-package.sh "$runtime_dir" "$runtime_dir.tar.gz"
+          if ! tar -xOzf "$runtime_dir.tar.gz" "$(basename "$runtime_dir")/manifest.json" | cmp -s "$runtime_dir/manifest.json" -; then
+            echo "cached runtime directory and archive manifests differ" >&2
+            exit 1
+          fi
+          echo "runtime_dir=$PWD/$runtime_dir" >> "$GITHUB_OUTPUT"
       - name: Prepare immutable Linux native runtime
         id: native_runtime
+        if: ${{ steps.runtime_cache.outputs.cache-hit != 'true' }}
         uses: ./.github/actions/prepare-native-runtime-input
         with:
           backend: ${{ matrix.runtime.backend }}
@@ -154,8 +210,8 @@ jobs:
       # The native runtime-event gate is the only test that exercises the
       # reporter against actual native code. It is env-gated so an ordinary
       # `cargo test` never touches a native symbol, which also meant nothing
-      # in CI ever ran it. This is the one lane that already has a freshly
-      # built native runtime, so it is the cheapest place to run it: CPU
+      # in CI ever ran it. This lane already has a verified native runtime,
+      # so it is the cheapest place to run it: CPU
       # only, because the reporter is backend-independent and a second
       # backend would buy a duplicate of the same evidence.
       - name: Restore runtime-event gate model
@@ -170,10 +226,13 @@ jobs:
           save_model_cache: ${{ github.ref == 'refs/heads/main' && inputs.original_event_name != 'pull_request' && inputs.original_event_name != 'pull_request_target' }}
       - name: Run native runtime-event gate
         if: ${{ matrix.runtime.backend == 'cpu' }}
+        env:
+          RUNTIME_DIR: ${{ steps.cached_runtime.outputs.runtime_dir || steps.native_runtime.outputs.runtime_dir }}
+          MODEL_PATH: ${{ steps.gate_model.outputs.model_path }}
         run: |
           scripts/ci-runtime-events-native-gate.sh \
-            --bundle-dir "$(dirname "${{ steps.native_runtime.outputs.runtime_dir }}")" \
-            --model "${{ steps.gate_model.outputs.model_path }}" \
+            --bundle-dir "$(dirname "$RUNTIME_DIR")" \
+            --model "$MODEL_PATH" \
             --evidence runtime-events-native-evidence.txt
       - name: Upload native runtime-event gate evidence
         if: ${{ !cancelled() && matrix.runtime.backend == 'cpu' }}
@@ -192,6 +251,12 @@ jobs:
             runtime-input/*.sha256
           if-no-files-found: error
           retention-days: 1
+      - name: Save exact Linux CPU runtime from trusted main
+        if: ${{ matrix.runtime.backend == 'cpu' && github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.runner_policy.outputs.allow_native_github_cache_cpu == 'true' && !startsWith(needs.runner_policy.outputs.runner_cpu, 'depot-') && steps.runtime_cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: runtime-input
+          key: ${{ steps.runtime_cache.outputs.cache-primary-key }}
       - name: Capture native cache evidence
         if: ${{ !cancelled() }}
         uses: ./.github/actions/capture-sccache-stats

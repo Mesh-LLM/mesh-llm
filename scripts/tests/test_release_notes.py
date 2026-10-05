@@ -689,8 +689,8 @@ class CommitConventionEnforcementTest(unittest.TestCase):
 class LocalHookActivationTest(unittest.TestCase):
     """Git cannot activate a committed hook on clone, so builds do it."""
 
-    UNIX = ROOT / "scripts" / "build-development-product.sh"
-    WINDOWS = ROOT / "scripts" / "build-windows.ps1"
+    UNIX = ROOT / "mesh" / "scripts" / "build-development-product.sh"
+    WINDOWS = ROOT / "mesh" / "scripts" / "build-windows.ps1"
 
     def test_every_platform_build_entry_point_enables_hooks(self):
         self.assertIn("core.hooksPath scripts/hooks", self.UNIX.read_text(encoding="utf-8"))

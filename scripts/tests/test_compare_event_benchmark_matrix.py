@@ -1048,7 +1048,7 @@ class P99BudgetProvenanceTests(unittest.TestCase):
     the in-process gate would have failed, or the reverse.
     """
 
-    CONFIG = ROOT / "crates/mesh-llm-host-runtime/src/runtime_events/config.rs"
+    CONFIG = ROOT / "mesh/crates/mesh-llm-host-runtime/src/runtime_events/config.rs"
 
     def rust_budget_micros(self) -> int:
         source = self.CONFIG.read_text(encoding="utf-8")

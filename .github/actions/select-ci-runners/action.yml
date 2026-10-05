@@ -220,6 +220,12 @@ runs:
             ;;
         esac
 
+        # A caller that requires a hosted runner must win over every Depot
+        # eligibility path, including trusted-main push and manual dispatch.
+        if [[ "$INPUT_FORCE_HOSTED" == "true" ]]; then
+          depot_enabled=false
+        fi
+
         # Depot remote build-tool cache remains disabled. During the bounded
         # risk exception, selected PR jobs and eligible trusted-main jobs may
         # use the GitHub Actions cache API, which Depot transparently maps to

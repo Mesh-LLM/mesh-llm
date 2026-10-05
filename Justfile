@@ -2,13 +2,11 @@
 
 llama_dir := env("MESH_LLM_LLAMA_DIR", ".deps/llama.cpp")
 llama_build_root := env("MESH_LLM_LLAMA_BUILD_ROOT", ".deps/llama-build")
-mesh_dir := "crates/mesh-llm"
-ui_dir := "crates/mesh-llm-ui"
-# Product source layout: the reviewed extraction relocates the website to
-# mesh/website. CI sets MESH_LLM_WEBSITE_DIR from the directory
-# .github/actions/resolve-source-layout resolved; otherwise the legacy
-# directory wins and a relocated-only checkout falls back to mesh/website.
-website_dir := env("MESH_LLM_WEBSITE_DIR", if path_exists(justfile_directory() / "website") == "true" { "website" } else if path_exists(justfile_directory() / "mesh/website") == "true" { "mesh/website" } else { "website" })
+mesh_dir := "mesh/crates/mesh-llm"
+ui_dir := "mesh/crates/mesh-llm-ui"
+# CI resolves this explicitly for dual-layout compatibility. A standalone
+# checkout only carries the relocated tree, so use it as the local default.
+website_dir := env("MESH_LLM_WEBSITE_DIR", "mesh/website")
 home_dir := if os_family() == "windows" { env("USERPROFILE") } else { env("HOME") }
 xdg_cache_dir := env("XDG_CACHE_HOME", home_dir / ".cache")
 hf_home := env("HF_HOME", xdg_cache_dir / "huggingface")
@@ -20,7 +18,7 @@ model := models_dir / "GLM-4.7-Flash-Q4_K_M.gguf"
 macos_deployment_target := env("MACOSX_DEPLOYMENT_TARGET", "")
 export MACOSX_DEPLOYMENT_TARGET := if macos_deployment_target == "" { trim(read(justfile_directory() / "scripts/lib/macos-deployment-target.txt")) } else { macos_deployment_target }
 
-# Build for the current platform.
+# Bare `just` builds both products in order: Skippy, then MeshLLM.
 default: build
 
 import 'just/build.just'
