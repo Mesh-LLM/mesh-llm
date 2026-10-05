@@ -344,13 +344,6 @@ pub(super) async fn run_runtime_cli(
             auto_balance_requested: options.auto_balance,
         },
     );
-    options.placement = crate::runtime::serving_strategy::strategy_placement_policy(
-        options.strategy,
-        crate::runtime::serving_strategy::StrategyContext {
-            split: options.split,
-            auto_balance_requested: options.auto_balance,
-        },
-    );
     crate::runtime::serving_strategy::log_strategy_plan(&strategy_plan);
     apply_runtime_cli_speculative_overrides(&mut config, options.speculative_overrides.as_ref());
     apply_runtime_cli_parallel_override(&mut config, options.parallel);
@@ -1496,7 +1489,7 @@ pub(super) async fn spawn_run_auto_startup_model_tasks(ctx: RunAutoStartupTasksC
             .is_some_and(|model| model.local_source_required),
         allow_uncertified_split: options.allow_uncertified_split,
         split_topology_lock: options.split_topology_lock.clone(),
-        placement: options.placement,
+        placement: super::placement_policy_for(options),
         resource_planning_profile,
         openai_guardrail_policy: openai_guardrail_policy.clone(),
         split: options.split,

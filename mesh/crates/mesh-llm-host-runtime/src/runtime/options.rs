@@ -82,9 +82,6 @@ pub struct RuntimeOptions {
     pub allow_uncertified_split: bool,
     pub split_topology_lock: Option<PathBuf>,
     pub auto_balance: bool,
-    /// Placement policy derived from `auto_balance` and `strategy`. Set by the
-    /// runtime during startup, not by the caller.
-    pub(crate) placement: crate::runtime::split_planning::SplitPlacementPolicy,
     pub ctx_size: Option<u32>,
     pub parallel: Option<usize>,
     pub max_vram: Option<f64>,
@@ -171,7 +168,6 @@ impl Default for RuntimeOptions {
             no_draft: false,
             speculative_overrides: None,
             strategy: None,
-            placement: Default::default(),
             split: false,
             allow_uncertified_split: false,
             split_topology_lock: None,
