@@ -2,7 +2,8 @@ use std::io::Write;
 
 use anyhow::{Result, bail};
 use mesh_llm_plugin_manager::defaults::{
-    DEFAULT_PLUGINS, DefaultPluginOutcome, default_plugins_opted_out, install_default_plugins,
+    DEFAULT_PLUGINS, DefaultPluginOutcome, default_plugin, default_plugins_opted_out,
+    install_default_plugins,
 };
 use mesh_llm_plugin_manager::install::install_plugin_archive;
 use mesh_llm_plugin_manager::{
@@ -110,6 +111,7 @@ async fn install_defaults() -> Result<()> {
             DefaultPluginOutcome::AlreadyCurrent => {}
             other @ (DefaultPluginOutcome::OperatorManaged
             | DefaultPluginOutcome::Disabled
+            | DefaultPluginOutcome::TurnedOff
             | DefaultPluginOutcome::UnsupportedPlatform) => {
                 if let Some(line) = left_alone_line(name, &other) {
                     writeln!(err, "{line}")?;
@@ -172,8 +174,25 @@ async fn update(name: &str) -> Result<()> {
 
 fn set_enabled(name: &str, enabled: bool) -> Result<()> {
     let store = PluginStore::new(default_store_root()?);
-    let metadata = store.set_enabled(name, enabled)?;
     let mut err = mesh_llm_events::console_err();
+    // A default that is not installed (for example right after a delete) is
+    // turned off, or back on, by a record the installers and update respect.
+    if default_plugin(name).is_some() && store.load_optional(name)?.is_none() {
+        store.set_default_turned_off(name, !enabled)?;
+        if enabled {
+            writeln!(
+                err,
+                "✅ Enabled {name}: the next installer or mesh-llm update run installs it"
+            )?;
+        } else {
+            writeln!(
+                err,
+                "⏸️  Disabled {name}: the installers and mesh-llm update will not install it again"
+            )?;
+        }
+        return Ok(());
+    }
+    let metadata = store.set_enabled(name, enabled)?;
     if metadata.enabled {
         writeln!(err, "✅ Enabled {}", metadata.name)?;
     } else {
@@ -199,6 +218,10 @@ fn left_alone_line(name: &str, outcome: &DefaultPluginOutcome) -> Option<String>
         DefaultPluginOutcome::Disabled => Some(format!(
             "ℹ️  Default {name} left at its installed version: it is disabled \
              (enable it, then run `mesh-llm plugins update {name}` to move to the reviewed pin)"
+        )),
+        DefaultPluginOutcome::TurnedOff => Some(format!(
+            "ℹ️  Default {name} not installed: you turned it off \
+             (run `mesh-llm plugins enable {name}` to have it installed again)"
         )),
         DefaultPluginOutcome::UnsupportedPlatform => Some(format!(
             "ℹ️  No reviewed {name} release for this platform; not installed"
@@ -546,6 +569,11 @@ url = "unix:///run/remote.sock"
             line(DefaultPluginOutcome::UnsupportedPlatform)
                 .unwrap()
                 .contains("this platform")
+        );
+        assert!(
+            line(DefaultPluginOutcome::TurnedOff)
+                .unwrap()
+                .contains("plugins enable capsules")
         );
         assert!(line(DefaultPluginOutcome::AlreadyCurrent).is_none());
     }

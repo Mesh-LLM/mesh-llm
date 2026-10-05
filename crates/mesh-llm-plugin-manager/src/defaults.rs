@@ -142,6 +142,8 @@ pub enum DefaultPluginOutcome {
     AlreadyCurrent,
     OperatorManaged,
     Disabled,
+    /// Turned off with `plugins disable` while it was not installed.
+    TurnedOff,
     UnsupportedPlatform,
     NotInstalled(String),
 }
@@ -187,6 +189,10 @@ pub async fn install_default_plugins(
     for default in defaults {
         if configured.contains(default.name) {
             outcomes.push((default.name, DefaultPluginOutcome::OperatorManaged));
+            continue;
+        }
+        if store.default_turned_off(default.name) {
+            outcomes.push((default.name, DefaultPluginOutcome::TurnedOff));
             continue;
         }
         let outcome = match store.load_optional(default.name) {
@@ -362,6 +368,45 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_default_disabled_after_a_delete_stays_off() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = PluginStore::new(temp.path());
+        let mut record = installed("v1.0.0", true, true);
+        record.install_path = temp.path().join("installed").join("notes");
+        std::fs::create_dir_all(&record.install_path).unwrap();
+        store.save(&record).unwrap();
+
+        // plugins delete, then plugins disable on the now-uninstalled default.
+        store.delete("notes").unwrap();
+        store.set_default_turned_off("notes", true).unwrap();
+        assert!(store.load_optional("notes").unwrap().is_none());
+        assert!(store.list().unwrap().is_empty(), "a turned-off default is not listed");
+
+        // The next installer or update run leaves it off and fetches nothing.
+        let options = PluginInstallOptions {
+            store_root: temp.path().to_path_buf(),
+            install_root: temp.path().join("installed"),
+            catalog_url: "http://127.0.0.1:9/unreachable".into(),
+            target: crate::target::PluginTarget::from_os_arch("linux", "x86_64").unwrap(),
+        };
+        let mut events = 0;
+        let outcomes = install_default_plugins(&[NOTES], &BTreeSet::new(), &options, &mut |_: crate::install::PluginProgressEvent| {
+            events += 1
+        })
+        .await;
+        assert!(matches!(
+            outcomes.as_slice(),
+            [("notes", DefaultPluginOutcome::TurnedOff)]
+        ));
+        assert_eq!(events, 0, "nothing was fetched");
+        assert!(store.load_optional("notes").unwrap().is_none());
+
+        // plugins enable undoes it.
+        store.set_default_turned_off("notes", false).unwrap();
+        assert!(!store.default_turned_off("notes"));
     }
 
     #[test]

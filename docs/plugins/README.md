@@ -565,7 +565,9 @@ default managed;
 plugins. Disabling a default preserves the installed record and prevents an
 automatic upgrade. Deleting it removes that record, so the next installer or
 update run installs it again. To keep a default off across upgrades, disable
-it rather than delete it. There is no separate offered-defaults state file.
+it. `mesh-llm plugins disable <name>` also works after a delete: it records in
+the plugin store that the default stays off, and `mesh-llm plugins enable
+<name>` undoes that. There is no separate offered-defaults state file.
 
 A default plugin that fails to start is optional: its failure is reported as
 an inactive plugin and does not abort node startup. A default-managed plugin

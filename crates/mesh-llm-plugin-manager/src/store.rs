@@ -20,6 +20,8 @@ pub use control_behavior::{
 };
 
 const METADATA_FILE: &str = "plugin-install.json";
+/// Marks a default plugin the operator turned off while it was not installed.
+const DEFAULT_OFF_FILE: &str = "default-off";
 pub const SUPPORTED_PLUGIN_SCHEMA_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -410,6 +412,31 @@ impl PluginStore {
                 .with_context(|| format!("delete plugin metadata {}", plugin_dir.display()))?;
         }
         Ok(())
+    }
+
+    /// Record whether a default plugin is turned off: while it is, the
+    /// installers and `mesh-llm update` do not install it. This works when
+    /// the plugin is not installed, for example right after `plugins
+    /// delete`; deleting the plugin later removes the record with the rest.
+    pub fn set_default_turned_off(&self, name: &str, off: bool) -> Result<()> {
+        validate_plugin_name(name)?;
+        let marker = self.plugin_dir(name).join(DEFAULT_OFF_FILE);
+        if off {
+            let plugin_dir = self.plugin_dir(name);
+            fs::create_dir_all(&plugin_dir).with_context(|| {
+                format!("create plugin metadata directory {}", plugin_dir.display())
+            })?;
+            fs::write(&marker, b"")
+                .with_context(|| format!("write {}", marker.display()))?;
+        } else if marker.exists() {
+            fs::remove_file(&marker).with_context(|| format!("remove {}", marker.display()))?;
+        }
+        Ok(())
+    }
+
+    /// Whether `plugins disable` turned this default off while it was not installed.
+    pub fn default_turned_off(&self, name: &str) -> bool {
+        is_valid_name(name) && self.plugin_dir(name).join(DEFAULT_OFF_FILE).exists()
     }
 
     fn plugin_dir(&self, name: &str) -> PathBuf {
