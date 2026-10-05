@@ -273,7 +273,7 @@
     "meshllm-favicon-32.png": "2a09863b9594014984e364e9e0100016a1dad91a58a8faedb46745ac02474081",
     "meshllm-favicon.ico": "a286897058b86fa71f3e5e4782372551cd4b00b80dcf8fd7ab9628b966ec1e8d"
   },
-  "release_tag": "v0.78.0",
+  "release_tag": "v0.78.1",
   "schema": 1,
-  "source_sha": "adf85a8142cc2fc27d038e6500c5b4a53d755b71"
+  "source_sha": "70238ad1048498b24c524453800599b591131d35"
 }
