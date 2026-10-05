@@ -110,8 +110,8 @@ class CiQualificationContractTests(unittest.TestCase):
         self.availability_path.write_text(json.dumps(self.availability), encoding="utf-8")
         self.receipt["product_manifest_sha256"] = hashlib.sha256(self.product_path.read_bytes()).hexdigest()
         self.receipt["availability_sha256"] = hashlib.sha256(self.availability_path.read_bytes()).hexdigest()
-        if self.availability["state"] == "available":
-            for name, result in self.receipt["suites"].items():
+        for name, result in self.receipt["suites"].items():
+            if result["status"] == "passed":
                 path = self.evidence_dir / f"{name}.json"
                 evidence = {
                     "schema_version": 1, "source_sha": SHA, "row_id": self.availability["row_id"],
@@ -126,7 +126,7 @@ class CiQualificationContractTests(unittest.TestCase):
         contract.validate_receipt(
             self.receipt, self.product, self.product_path, self.product_dir, self.availability,
             self.availability_path, self.evidence_dir, source_sha=SHA, plan_digest=PLAN,
-            row_id="linux-cuda",
+            row_id=self.availability["row_id"],
         )
 
     def test_all_nine_core_rows_match_runtime_catalog(self) -> None:
@@ -166,6 +166,9 @@ class CiQualificationContractTests(unittest.TestCase):
                 self.receipt = saved
 
     def test_unavailable_hardware_cannot_report_positive_execution(self) -> None:
+        self.product["backend"] = "rocm"
+        self.availability["row_id"] = "linux-rocm"
+        self.receipt["row_id"] = "linux-rocm"
         self.availability.update({"state": "hardware-unavailable", "reason": "no approved GPU runner"})
         self.availability.pop("runner")
         self.receipt["status"] = "hardware-unavailable"
@@ -180,6 +183,9 @@ class CiQualificationContractTests(unittest.TestCase):
             self.validate()
 
     def test_unavailable_hardware_still_requires_packaging_checks(self) -> None:
+        self.product["backend"] = "rocm"
+        self.availability["row_id"] = "linux-rocm"
+        self.receipt["row_id"] = "linux-rocm"
         self.availability.update({"state": "hardware-unavailable", "reason": "no approved GPU runner"})
         self.availability.pop("runner")
         self.receipt["status"] = "hardware-unavailable"
@@ -196,11 +202,35 @@ class CiQualificationContractTests(unittest.TestCase):
         self.receipt["hardware"] = None
         self.receipt["suites"] = {name: {"status": "not-executed"} for name in contract.REQUIRED_SUITES}
         self.refresh_hashes()
-        with self.assertRaisesRegex(ValueError, "CPU row cannot be hardware-unavailable"):
+        with self.assertRaisesRegex(ValueError, "required available row cannot be hardware-unavailable"):
             contract.validate_receipt(
                 self.receipt, self.product, self.product_path, self.product_dir, self.availability,
                 self.availability_path, self.evidence_dir, source_sha=SHA, plan_digest=PLAN,
                 row_id="linux-cpu",
+            )
+
+    def test_available_gpu_row_cannot_be_downgraded_to_unavailable(self) -> None:
+        self.availability.update({"state": "hardware-unavailable", "reason": "runner disappeared"})
+        self.availability.pop("runner")
+        self.receipt["status"] = "hardware-unavailable"
+        self.receipt["hardware"] = None
+        self.receipt["suites"] = {name: {"status": "not-executed"} for name in contract.REQUIRED_SUITES}
+        self.refresh_hashes()
+        with self.assertRaisesRegex(ValueError, "required available row cannot be hardware-unavailable"):
+            self.validate()
+
+    def test_metal_row_cannot_be_downgraded_to_unavailable(self) -> None:
+        self.product.update({"backend": "metal", "target": "aarch64-apple-darwin"})
+        self.availability.update({"row_id": "macos-metal", "state": "hardware-unavailable", "reason": "runner disappeared"})
+        self.availability.pop("runner")
+        self.receipt.update({"row_id": "macos-metal", "status": "hardware-unavailable", "hardware": None})
+        self.receipt["suites"] = {name: {"status": "not-executed"} for name in contract.REQUIRED_SUITES}
+        self.refresh_hashes()
+        with self.assertRaisesRegex(ValueError, "required available row cannot be hardware-unavailable"):
+            contract.validate_receipt(
+                self.receipt, self.product, self.product_path, self.product_dir, self.availability,
+                self.availability_path, self.evidence_dir, source_sha=SHA, plan_digest=PLAN,
+                row_id="macos-metal",
             )
 
     def test_duplicate_json_key_cannot_hide_a_failed_suite(self) -> None:

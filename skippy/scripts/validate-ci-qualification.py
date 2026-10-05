@@ -17,6 +17,7 @@ CORE_ROWS = {
     "macos-metal", "windows-cpu", "windows-cuda", "windows-rocm",
     "windows-vulkan",
 }
+REQUIRED_AVAILABLE_ROWS = {"linux-cpu", "linux-cuda", "macos-metal", "windows-cpu"}
 SUITE_CASES = {
     "packaging-runtime": {"archive-integrity", "imports", "abi", "discovery", "version", "no-driver"},
     "dense": {"load", "prefill-decode", "stream", "stop-cancel", "concurrent", "continuation", "restart", "staged-parity"},
@@ -168,8 +169,8 @@ def validate_receipt(
     require(availability.get("policy_source") == "protected-ci", "hardware availability is not from the protected policy")
     state = availability.get("state")
     require(state in {"available", "hardware-unavailable"}, "invalid hardware availability state")
-    if row["backend"] == "cpu":
-        require(state == "available", "CPU row cannot be hardware-unavailable")
+    if row_id in REQUIRED_AVAILABLE_ROWS:
+        require(state == "available", "required available row cannot be hardware-unavailable")
     if state == "hardware-unavailable":
         require(isinstance(availability.get("reason"), str) and bool(availability["reason"].strip()), "unavailable hardware needs a reason")
         require(receipt.get("status") == "hardware-unavailable", "unavailable row cannot claim qualification")
