@@ -247,7 +247,7 @@ jobs:
           SOURCE_SHA: ${{ inputs.source_sha }}
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test "$(git -c safe.directory="$GITHUB_WORKSPACE" rev-parse HEAD)" = "$SOURCE_SHA"
           printf '{"source_sha":"%s"}\n' "$SOURCE_SHA" > runtime-input/ci-source.json
       - name: Upload immutable Linux runtime input
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0

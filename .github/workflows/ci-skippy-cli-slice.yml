@@ -106,6 +106,7 @@ jobs:
           allow_native_github_cache: 'false'
       - uses: ./.github/actions/prepare-skippy-cli-input
         with:
+          source_sha: ${{ inputs.source_sha }}
           profile: ${{ inputs.profile }}
       - name: Upload immutable Linux Skippy CLI
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
@@ -136,6 +137,7 @@ jobs:
           allow_native_github_cache: 'false'
       - uses: ./.github/actions/prepare-skippy-cli-input
         with:
+          source_sha: ${{ inputs.source_sha }}
           profile: ${{ inputs.profile }}
       - name: Upload immutable macOS Skippy CLI
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
@@ -175,6 +177,7 @@ jobs:
           arch: x64
       - uses: ./.github/actions/prepare-skippy-cli-input
         with:
+          source_sha: ${{ inputs.source_sha }}
           profile: ${{ inputs.profile }}
       - name: Upload immutable Windows Skippy CLI
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0

@@ -5,8 +5,8 @@ from pathlib import Path
 import unittest
 
 
-SCRIPT = Path(__file__).resolve().parents[2] / "skippy/scripts/ci-dense-standalone-smoke.py"
-SPEC = importlib.util.spec_from_file_location("ci_dense_standalone_smoke", SCRIPT)
+SCRIPT = Path(__file__).resolve().parents[2] / "skippy/scripts/ci-model-standalone-smoke.py"
+SPEC = importlib.util.spec_from_file_location("ci_model_standalone_smoke", SCRIPT)
 MODULE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(MODULE)
 

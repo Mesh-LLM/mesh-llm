@@ -317,6 +317,7 @@ jobs:
       - name: Prepare standalone Skippy CLI
         uses: ./.github/actions/prepare-skippy-cli-input
         with:
+          source_sha: ${{ needs.metadata.outputs.source_sha }}
           profile: release
       - name: Package standalone Skippy CLI
         env:
@@ -933,6 +934,7 @@ jobs:
       - name: Prepare standalone Skippy CLI
         uses: ./.github/actions/prepare-skippy-cli-input
         with:
+          source_sha: ${{ needs.metadata.outputs.source_sha }}
           profile: release
       - name: Package standalone ARM64 Skippy CLI
         env:
@@ -1392,6 +1394,7 @@ jobs:
       - name: Prepare standalone Skippy CLI
         uses: ./.github/actions/prepare-skippy-cli-input
         with:
+          source_sha: ${{ needs.metadata.outputs.source_sha }}
           profile: release
       - name: Package standalone Windows Skippy CLI
         shell: bash

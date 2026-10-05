@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run a pinned dense model through the composed standalone Skippy product."""
+"""Run a pinned dense or recurrent model through a composed standalone product."""
 
 from __future__ import annotations
 
@@ -52,11 +52,11 @@ def request_json(url: str, payload: dict | None = None) -> dict:
     return value
 
 
-def run(product_dir: Path, model: Path, model_sha256: str, model_id: str) -> dict:
+def run(product_dir: Path, model: Path, model_sha256: str, model_id: str, suite: str) -> dict:
     manifest_path = product_dir / "product-manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     require(manifest.get("contract") == "skippy-product-v1" and manifest.get("backend") == "cpu",
-            "dense pilot requires a composed CPU product")
+            "model pilot requires a composed CPU product")
     binary = product_dir / manifest["cli"]["path"]
     runtime = product_dir / manifest["runtime"]["path"]
     require(binary.is_file() and not binary.is_symlink() and runtime.is_dir() and not runtime.is_symlink(),
@@ -102,7 +102,7 @@ def run(product_dir: Path, model: Path, model_sha256: str, model_id: str) -> dic
                 except subprocess.TimeoutExpired:
                     process.kill()
                     process.wait()
-    return {"schema_version": 1, "suite": "dense-pilot", "source_sha": manifest["source_sha"],
+    return {"schema_version": 1, "suite": suite, "source_sha": manifest["source_sha"],
             "product_manifest_sha256": sha256(manifest_path), "model_id": model_id,
             "model_sha256": model_sha256, "backend": "cpu", "cases": ["load", "prefill-decode"],
             "usage": usage}
@@ -114,13 +114,14 @@ def main() -> int:
     parser.add_argument("--model", type=Path, required=True)
     parser.add_argument("--model-sha256", required=True)
     parser.add_argument("--model-id", required=True)
+    parser.add_argument("--suite", choices=("dense-pilot", "recurrent-pilot"), required=True)
     parser.add_argument("--evidence", type=Path, required=True)
     args = parser.parse_args()
     try:
-        evidence = run(args.product_dir.resolve(), args.model.resolve(), args.model_sha256, args.model_id)
+        evidence = run(args.product_dir.resolve(), args.model.resolve(), args.model_sha256, args.model_id, args.suite)
         args.evidence.write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     except (OSError, ValueError, KeyError, subprocess.SubprocessError) as error:
-        print(f"standalone dense smoke failed: {error}", file=sys.stderr)
+        print(f"standalone model smoke failed: {error}", file=sys.stderr)
         return 1
     return 0
 

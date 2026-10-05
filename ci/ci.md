@@ -15,10 +15,10 @@ backend-neutral Skippy CLI independently of the console UI, composes it with
 the exact native runtime archive, and verifies source, target, backend,
 release, ABI, import policy, checksums, and no-driver runtime discovery before the Mesh host starts. The
 standalone product is an immutable run artifact. The Linux CPU product job
-also restores the pinned SmolLM2 dense fixture and requires real prefill and
-decode through that composed CLI/runtime pair before uploading the product.
-It uploads a digest-bound pilot evidence file. This pilot covers only load and
-prefill/decode; the full six-suite, nine-row model and hardware qualification
+also restores pinned SmolLM2 dense and Granite hybrid fixtures and requires
+real prefill and decode through that composed CLI/runtime pair before uploading
+the product. It uploads digest-bound pilot evidence files. These pilots cover
+only load and prefill/decode; the full six-suite, nine-row model and hardware qualification
 gate remains pending in the audit's acceptance checklist.
 
 The affected-crate fallback roster in `scripts/affected-crates.sh` includes

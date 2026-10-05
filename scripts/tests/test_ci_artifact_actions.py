@@ -98,6 +98,14 @@ class CiArtifactActionTests(unittest.TestCase):
         script = action["runs"]["steps"][0]["run"]
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
+            subprocess.run(["git", "init", "-q", str(root)], check=True)
+            subprocess.run(
+                ["git", "-C", str(root), "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "--allow-empty", "-qm", "fixture"],
+                check=True,
+            )
+            source_sha = subprocess.check_output(
+                ["git", "-C", str(root), "rev-parse", "HEAD"], text=True
+            ).strip()
             binary = root / "target" / "release" / "skippy"
             binary.parent.mkdir(parents=True)
             binary.write_bytes(b"\x7fELFtest-cli")
@@ -129,6 +137,8 @@ class CiArtifactActionTests(unittest.TestCase):
                     "PATH": f"{tools}{os.pathsep}{os.environ['PATH']}",
                     "INPUT_PROFILE": "release",
                     "INPUT_OUTPUT_DIR": "cli-input",
+                    "INPUT_SOURCE_SHA": source_sha,
+                    "GITHUB_WORKSPACE": str(root),
                 },
                 capture_output=True,
                 text=True,
