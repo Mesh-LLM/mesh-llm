@@ -3,11 +3,11 @@ use serde_json::json;
 
 const CATALOG: &[u8] = include_bytes!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../evals/skippy-scheduler-fixtures.json"
+    "/../../skippy/evals/skippy-scheduler-fixtures.json"
 ));
 const CAPACITY: &[u8] = include_bytes!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../evals/skippy-capacity-acceptance.json"
+    "/../../skippy/evals/skippy-capacity-acceptance.json"
 ));
 
 fn prepared() -> (Value, Vec<u8>) {

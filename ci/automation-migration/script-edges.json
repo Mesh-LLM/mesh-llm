@@ -289,11 +289,11 @@
       "members": [
         [
           32,
-          "afa4a27d5cbba7f4",
+          "423f46d8dbf215ca",
           1,
           "environment",
-          "explicit surviving32 scripts.tests modules",
-          "All19 CI artifact graph and adapter intents have required native owners;32 transitional modules remain selected."
+          "explicit surviving30 scripts.tests modules",
+          "All17 scheduler and waiting-prefix fixture intents have required native behavioral owners;30 transitional modules remain selected."
         ]
       ]
     },
@@ -11263,6 +11263,25 @@
       "sha256": "4d9c2fba2b4606756c4b7351832c757da7c82fb092b4af79b52960ffdd1522b4",
       "roster_line": 32,
       "count": 32
+    }
+  },
+  "scheduler_waiting_test_retirement": {
+    "status": "OWNERSHIP_TRANSFERRED_POSTIMAGE_NORMAL_VALIDATION_PENDING",
+    "python_paths_after": 89,
+    "core_modules_after": 30,
+    "durable_coverage": {
+      "path": "ci/automation-migration/scheduler-waiting-test-retirement-coverage.json",
+      "sha256": "065da4ff840d303ee4deedcf0216760658f4646f8d33fc417c460200c176a334"
+    },
+    "current_test_tree": {
+      "sha256": "84f61f2d3b2c97cb191bfa4e7af480a69ee883c498248eeeb8598a8edcfff274",
+      "paths": 28
+    },
+    "current_just": {
+      "path": "just/ci.just",
+      "sha256": "8aace3684b9fe9774542d1d827d5300031d68c08680b32b072eb9a7ae8258929",
+      "roster_line": 32,
+      "count": 30
     }
   }
 }

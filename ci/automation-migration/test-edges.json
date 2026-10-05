@@ -506,34 +506,6 @@
       ]
     },
     {
-      "file": "scripts/tests/test_skippy_scheduler_fixtures.py",
-      "members": [
-        [
-          19,
-          "65decad2cd329ec1",
-          1,
-          "dynamic-import",
-          "import",
-          "evals/skippy-scheduler-fixtures.py",
-          "fixed path in loader"
-        ]
-      ]
-    },
-    {
-      "file": "scripts/tests/test_skippy_waiting_prefix_ab.py",
-      "members": [
-        [
-          17,
-          "ad47df8cb757ee39",
-          1,
-          "dynamic-import",
-          "import",
-          "evals/skippy-waiting-prefix-ab.py",
-          "fixed evals path in loader"
-        ]
-      ]
-    },
-    {
       "file": "scripts/tests/test_kv_restart_replay.py",
       "members": [
         [
@@ -726,7 +698,7 @@
     "target_or_boundary",
     "source_specific_reason"
   ],
-  "observed_source_sha256": "068e1fc68453d292cdf5ac5746334cf65363f7ae59541203c63f12bcd22ee742",
+  "observed_source_sha256": "84f61f2d3b2c97cb191bfa4e7af480a69ee883c498248eeeb8598a8edcfff274",
   "schema_version": 1,
   "scope": "tracked scripts/tests/**/*.py; source candidate shard, not global acceptance",
   "status": "All observed test-source scanner candidates are bound; transitive child closure and global task 1 remain incomplete. No optional subprocess test is asserted to be a production dependency.",
@@ -9886,6 +9858,25 @@
       "sha256": "4d9c2fba2b4606756c4b7351832c757da7c82fb092b4af79b52960ffdd1522b4",
       "roster_line": 32,
       "count": 32
+    }
+  },
+  "scheduler_waiting_test_retirement": {
+    "status": "OWNERSHIP_TRANSFERRED_POSTIMAGE_NORMAL_VALIDATION_PENDING",
+    "python_paths_after": 89,
+    "core_modules_after": 30,
+    "durable_coverage": {
+      "path": "ci/automation-migration/scheduler-waiting-test-retirement-coverage.json",
+      "sha256": "065da4ff840d303ee4deedcf0216760658f4646f8d33fc417c460200c176a334"
+    },
+    "current_test_tree": {
+      "sha256": "84f61f2d3b2c97cb191bfa4e7af480a69ee883c498248eeeb8598a8edcfff274",
+      "paths": 28
+    },
+    "current_just": {
+      "path": "just/ci.just",
+      "sha256": "8aace3684b9fe9774542d1d827d5300031d68c08680b32b072eb9a7ae8258929",
+      "roster_line": 32,
+      "count": 30
     }
   }
 }

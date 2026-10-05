@@ -17082,5 +17082,24 @@
       "roster_line": 32,
       "count": 32
     }
+  },
+  "scheduler_waiting_test_retirement": {
+    "status": "OWNERSHIP_TRANSFERRED_POSTIMAGE_NORMAL_VALIDATION_PENDING",
+    "python_paths_after": 89,
+    "core_modules_after": 30,
+    "durable_coverage": {
+      "path": "ci/automation-migration/scheduler-waiting-test-retirement-coverage.json",
+      "sha256": "065da4ff840d303ee4deedcf0216760658f4646f8d33fc417c460200c176a334"
+    },
+    "current_test_tree": {
+      "sha256": "84f61f2d3b2c97cb191bfa4e7af480a69ee883c498248eeeb8598a8edcfff274",
+      "paths": 28
+    },
+    "current_just": {
+      "path": "just/ci.just",
+      "sha256": "8aace3684b9fe9774542d1d827d5300031d68c08680b32b072eb9a7ae8258929",
+      "roster_line": 32,
+      "count": 30
+    }
   }
 }

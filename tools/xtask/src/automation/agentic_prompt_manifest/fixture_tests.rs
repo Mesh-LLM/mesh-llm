@@ -6,7 +6,7 @@ use super::{fixture_catalog, fixture_materialization, selection::Trajectory};
 fn checked_in() -> Value {
     serde_json::from_str(include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../evals/skippy-scheduler-fixtures.json"
+        "/../../skippy/evals/skippy-scheduler-fixtures.json"
     )))
     .unwrap()
 }
@@ -39,6 +39,51 @@ fn canned() -> (Value, Trajectory, String) {
 #[test]
 fn checked_in_scheduler_catalog_pins_valid_context_model_and_trace() {
     fixture_catalog::validate(&checked_in()).unwrap();
+}
+
+#[test]
+fn scheduler_catalog_preserves_measured_pressure_rows_and_immutable_inputs() {
+    let catalog = checked_in();
+    fixture_catalog::validate(&catalog).unwrap();
+    let profile = &catalog["profiles"]["agentic-eviction-pressure"];
+    assert_eq!(profile["workload"]["families"], 8);
+    assert_eq!(profile["workload"]["ctx_size"], 131072);
+    assert_eq!(profile["corpus"]["rows"].as_array().unwrap().len(), 8);
+    assert_eq!(
+        profile["model"]["sha256"],
+        "603bd3f8a0281d16571da7c08bd661ee17ff0d1be6fcbd1b42242da257ef0bb8"
+    );
+    assert_eq!(
+        profile["corpus"]["prompt_manifest_sha256"],
+        "f1ddbe3d5974f3f4bd06f5d70fa45d0e10305bbafa4eb7399a0f972458d1beef"
+    );
+    assert_eq!(
+        catalog["datasets"]["agentic-coding-trajectories"]["revision"],
+        "cef72d1f4d0caabf85937adf8337a14b7522c782"
+    );
+}
+
+#[test]
+fn scheduler_catalog_requires_complete_context_and_every_model_identity_field() {
+    for context in [65536, 131071] {
+        let mut catalog = checked_in();
+        catalog["profiles"]["agentic-eviction-pressure"]["workload"]["ctx_size"] = context.into();
+        let error = fixture_catalog::validate(&catalog).unwrap_err().to_string();
+        assert!(error.contains("pinned row totals"), "{error}");
+        assert!(error.contains("131072"), "{error}");
+    }
+    for field in ["id", "repo", "filename", "revision", "sha256"] {
+        let mut catalog = checked_in();
+        catalog["profiles"]["warm-affinity"]["model"]
+            .as_object_mut()
+            .unwrap()
+            .remove(field)
+            .unwrap();
+        assert!(
+            fixture_catalog::validate(&catalog).is_err(),
+            "field={field}"
+        );
+    }
 }
 
 #[test]
