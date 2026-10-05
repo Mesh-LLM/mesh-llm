@@ -124,8 +124,9 @@ pub struct RuntimeConfig {
     /// K/V cache backend offload. `None` preserves llama.cpp's derived
     /// default (offloaded); `Some` forces the value.
     pub kv_offload: Option<bool>,
-    /// Legacy unified-KV setting. `None` and `Some(true)` use Skippy's
-    /// mandatory unified pool; `Some(false)` is rejected.
+    /// Whether the KV cache is unified across lanes. `None` derives the value
+    /// from lane count; `Some(true)` and `Some(false)` select it explicitly.
+    /// Recurrent and hybrid models always use unified KV.
     pub kv_unified: Option<bool>,
     /// Sliding-window-attention full (unshifted) cache window. `None`
     /// preserves llama.cpp's built-in default (full).

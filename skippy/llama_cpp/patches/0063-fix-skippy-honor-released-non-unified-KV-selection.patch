@@ -5,9 +5,9 @@ Subject: [PATCH] fix(skippy): honor released non-unified KV selection
 
 ---
  include/skippy/runtime.h                      |  2 +-
- src/skippy/model_loading.cpp                  | 38 +++++++++----------
+ src/skippy/model_loading.cpp                  | 41 +++++++++++++------------
  .../tests/hardware_application_probe.cpp      |  4 +-
- 3 files changed, 21 insertions(+), 23 deletions(-)
+ 3 files changed, 24 insertions(+), 23 deletions(-)
 
 diff --git a/include/skippy/runtime.h b/include/skippy/runtime.h
 index 371353a7b..b668b87ac 100644
@@ -23,7 +23,7 @@ index 371353a7b..b668b87ac 100644
      /** @brief Whether sliding-window-attention layers use a full, unshifted cache window (mirrors upstream `swa_full`). */
      int32_t swa_full;
 diff --git a/src/skippy/model_loading.cpp b/src/skippy/model_loading.cpp
-index 9b2e245fe..4ad37d8b9 100644
+index 9b2e245fe..5c71c424e 100644
 --- a/src/skippy/model_loading.cpp
 +++ b/src/skippy/model_loading.cpp
 @@ -606,7 +606,7 @@ struct skippy_runtime_config skippy_runtime_config_default(void) {
@@ -103,7 +103,7 @@ index 9b2e245fe..4ad37d8b9 100644
      uint32_t context_size_per_lane = 0;
      uint32_t context_size_total = 0;
      if (!skippy_context_capacity(
-@@ -1198,8 +1195,9 @@ enum skippy_status skippy_model_attach_mtp_draft_model(
+@@ -1198,12 +1195,16 @@ enum skippy_status skippy_model_attach_mtp_draft_model(
      ctx_params.n_threads = config != nullptr && config->n_threads > 0 ? config->n_threads : skippy_default_thread_count();
      ctx_params.n_threads_batch = config != nullptr && config->n_threads_batch > 0 ? config->n_threads_batch : ctx_params.n_threads;
      ctx_params.n_seq_max = target_model->lane_count;
@@ -114,6 +114,13 @@ index 9b2e245fe..4ad37d8b9 100644
          ctx_params.offload_kqv = skippy_resolve_tristate(config->kv_offload, ctx_params.offload_kqv);
          ctx_params.swa_full = skippy_resolve_tristate(config->swa_full, ctx_params.swa_full);
          skippy_apply_context_hardware_config(config, ctx_params);
+     }
++    if (llm_arch_is_recurrent(draft_model->arch) || llm_arch_is_hybrid(draft_model->arch)) {
++        ctx_params.kv_unified = true;
++    }
+     ctx_params.flash_attn_type = config != nullptr ? static_cast<llama_flash_attn_type>(config->flash_attn_type) : LLAMA_FLASH_ATTN_TYPE_AUTO;
+ 
+     target_model->mtp_ctx = llama_init_from_model(draft_model, ctx_params);
 diff --git a/src/skippy/tests/hardware_application_probe.cpp b/src/skippy/tests/hardware_application_probe.cpp
 index 43c4e97df..471968158 100644
 --- a/src/skippy/tests/hardware_application_probe.cpp
@@ -131,4 +138,3 @@ index 43c4e97df..471968158 100644
      passed &= require(config.op_offload == SKIPPY_TRISTATE_AUTO,
 -- 
 2.54.0 (Apple Git-157)
-
