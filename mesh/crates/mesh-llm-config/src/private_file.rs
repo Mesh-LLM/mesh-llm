@@ -116,10 +116,18 @@ fn create_private_temp(parent: &Path, target: &Path) -> io::Result<(PathBuf, fs:
         #[cfg(windows)]
         {
             use std::os::windows::fs::OpenOptionsExt;
+            use windows_sys::Win32::Storage::FileSystem::{
+                FILE_GENERIC_WRITE, WRITE_DAC, WRITE_OWNER,
+            };
             // Deny every other open (share mode 0) until `restrict_file` has
             // applied the owner-only DACL through this handle, so the file is
             // never readable while it still carries the parent's inherited ACL.
-            options.share_mode(0);
+            // `write(true)` alone asks for GENERIC_WRITE, which has neither
+            // WRITE_DAC nor WRITE_OWNER, and `restrict_file` sets both the DACL
+            // and the owner through this handle.
+            options
+                .access_mode(FILE_GENERIC_WRITE | WRITE_DAC | WRITE_OWNER)
+                .share_mode(0);
         }
         match options.open(&tmp) {
             Ok(file) => {
@@ -196,7 +204,7 @@ mod platform {
     pub(super) fn restrict_file(file: &fs::File) -> io::Result<()> {
         with_current_user_sid(|sid| {
             let acl = user_only_acl(sid, false)?;
-            set_handle(file.as_raw_handle(), &acl)?;
+            set_handle(file.as_raw_handle(), sid, &acl)?;
             verify_handle(file.as_raw_handle(), sid, ace_flags(false))
         })
     }
@@ -261,16 +269,18 @@ mod platform {
         Ok(())
     }
 
-    // The creator owns the file it just made, and an object's owner is
-    // implicitly granted WRITE_DAC, so this handle can replace the DACL it
-    // inherited without a second, separate writable open.
-    fn set_handle(handle: HANDLE, acl: &[u64]) -> io::Result<()> {
+    // The handle must carry WRITE_DAC and WRITE_OWNER (see `create_private_temp`).
+    // The owner is set too: in an elevated session a new file is owned by the
+    // Administrators group, not by the current user.
+    fn set_handle(handle: HANDLE, sid: PSID, acl: &[u64]) -> io::Result<()> {
         let result = unsafe {
             SetSecurityInfo(
                 handle,
                 SE_FILE_OBJECT,
-                DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
-                null_mut(),
+                OWNER_SECURITY_INFORMATION
+                    | DACL_SECURITY_INFORMATION
+                    | PROTECTED_DACL_SECURITY_INFORMATION,
+                sid,
                 null_mut(),
                 acl.as_ptr().cast::<ACL>(),
                 null(),
