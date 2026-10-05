@@ -39,7 +39,14 @@ pub(super) fn exchange_grant_settings(prefix: &str) -> Vec<ConfigSettingSchema> 
     ] {
         let mut setting = grant_setting(&format!("{prefix}.{key}"), ConfigValueSchema::Integer);
         setting.constraints.push(ConfigConstraint::Range {
-            min: Some("1".into()),
+            min: Some(
+                if key == "max_delegation_ttl_secs" {
+                    "0"
+                } else {
+                    "1"
+                }
+                .into(),
+            ),
             max: Some(maximum.to_string()),
         });
         settings.push(setting);
@@ -62,4 +69,40 @@ fn grant_setting(path: &str, schema: ConfigValueSchema) -> ConfigSettingSchema {
     setting.restart_scope = ConfigRestartScope::None;
     setting.description = Some("Operator-owned OpenAI lifecycle permission; owner apply refreshes grants immediately. Absent grants provide no access.".into());
     setting
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn non_delegating_grants_expose_their_valid_zero_ttl() {
+        let grant = crate::OpenAiExchangeGrant {
+            endpoints: vec!["chat_completions".into()],
+            phases: vec!["request_received".into()],
+            deadline_ms: 250,
+            max_body_bytes: 1024,
+            max_queue_bytes: 1024,
+            max_in_flight: 1,
+            ..Default::default()
+        };
+        assert!(grant.validate().is_ok());
+        let ttl = exchange_grant_settings("plugins[0]")
+            .into_iter()
+            .find(|setting| setting.path.render().ends_with("max_delegation_ttl_secs"))
+            .unwrap();
+        assert!(ttl.constraints.iter().any(|constraint| matches!(
+            constraint,
+            ConfigConstraint::Range { min, max }
+                if min.as_deref() == Some("0") && max.as_deref() == Some("86400")
+        )));
+        assert!(
+            crate::OpenAiExchangeGrant {
+                delegate_signing_key: true,
+                ..grant
+            }
+            .validate()
+            .is_err()
+        );
+    }
 }

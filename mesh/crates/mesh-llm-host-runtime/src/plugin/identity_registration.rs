@@ -74,6 +74,11 @@ impl PluginManager {
             .plugins
             .get(plugin_name)
             .ok_or_else(|| anyhow::anyhow!("authenticated plugin registration unavailable"))?;
+        let executable = plugin.installed_identity_executable().ok_or_else(|| {
+            anyhow::anyhow!(
+                "identity services require the configured command to match the installed executable"
+            )
+        })?;
         let grant = self
             .effective_exchange_grant(plugin_name)
             .ok_or_else(|| anyhow::anyhow!("plugin has no host identity grant"))?;
@@ -110,11 +115,8 @@ impl PluginManager {
         if metadata.name != plugin_name {
             bail!("installed plugin identity differs from authenticated connection");
         }
-        let (digest, status) = inspect_artifact(
-            &metadata.executable_path(),
-            plugin.installed_artifact_sha256(),
-        )
-        .await?;
+        let (digest, status) =
+            inspect_artifact(&executable, plugin.installed_artifact_sha256()).await?;
         Ok((grants, digest, status))
     }
 }

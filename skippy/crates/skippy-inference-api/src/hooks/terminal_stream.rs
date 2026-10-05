@@ -28,6 +28,15 @@ impl TerminalGuardedChatStream {
         })
     }
 }
+impl Drop for TerminalGuardedChatStream {
+    fn drop(&mut self) {
+        if let Some(terminal) = self.terminal.take()
+            && let Ok(runtime) = tokio::runtime::Handle::try_current()
+        {
+            runtime.spawn(terminal);
+        }
+    }
+}
 impl futures_core::Stream for TerminalGuardedChatStream {
     type Item = OpenAiResult<ChatCompletionChunk>;
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
@@ -70,11 +79,15 @@ mod tests {
     use crate::OpenAiError;
     use async_trait::async_trait;
     use futures_util::StreamExt;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use tokio::sync::Notify;
 
     struct BlockingTerminal {
         started: Notify,
         release: Notify,
+        completed: Notify,
+        calls: AtomicUsize,
+        expected_error: bool,
     }
     #[async_trait]
     impl OpenAiHookPolicy for BlockingTerminal {
@@ -82,10 +95,20 @@ mod tests {
             &self,
             _request: &ChatCompletionRequest,
             _id: &str,
-            _outcome: &ChatCompletionOutcome<'_>,
+            outcome: &ChatCompletionOutcome<'_>,
         ) {
+            assert!(matches!(
+                outcome,
+                ChatCompletionOutcome::Error { .. } | ChatCompletionOutcome::StreamCompleted
+            ));
+            assert_eq!(
+                matches!(outcome, ChatCompletionOutcome::Error { .. }),
+                self.expected_error
+            );
+            self.calls.fetch_add(1, Ordering::SeqCst);
             self.started.notify_one();
             self.release.notified().await;
+            self.completed.notify_one();
         }
     }
     #[tokio::test]
@@ -94,6 +117,9 @@ mod tests {
             let hooks = Arc::new(BlockingTerminal {
                 started: Notify::new(),
                 release: Notify::new(),
+                completed: Notify::new(),
+                calls: AtomicUsize::new(0),
+                expected_error: error,
             });
             let inner: ChatCompletionStream = if error {
                 Box::pin(futures_util::stream::once(async {
@@ -114,6 +140,40 @@ mod tests {
             hooks.release.notify_one();
             let result = pending.await.unwrap();
             assert_eq!(result.is_some(), error);
+        }
+    }
+
+    #[tokio::test]
+    async fn dropping_pending_terminal_resumes_chat_callback_exactly_once() {
+        for error in [false, true] {
+            let hooks = Arc::new(BlockingTerminal {
+                started: Notify::new(),
+                release: Notify::new(),
+                completed: Notify::new(),
+                calls: AtomicUsize::new(0),
+                expected_error: error,
+            });
+            let inner: ChatCompletionStream = if error {
+                Box::pin(futures_util::stream::once(async {
+                    Err(OpenAiError::backend("failure"))
+                }))
+            } else {
+                Box::pin(futures_util::stream::empty())
+            };
+            let guard =
+                TerminalGuard::new(hooks.clone(), ChatCompletionRequest::default(), "id".into());
+            let mut stream = TerminalGuardedChatStream::pinned(inner, guard);
+            assert!(futures_util::poll!(stream.next()).is_pending());
+            hooks.started.notified().await;
+            drop(stream);
+            hooks.release.notify_one();
+            tokio::time::timeout(
+                std::time::Duration::from_secs(1),
+                hooks.completed.notified(),
+            )
+            .await
+            .expect("dropping the body must preserve the pending callback");
+            assert_eq!(hooks.calls.load(Ordering::SeqCst), 1);
         }
     }
 }

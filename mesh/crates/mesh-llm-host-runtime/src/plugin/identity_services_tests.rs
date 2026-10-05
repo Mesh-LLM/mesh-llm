@@ -172,6 +172,37 @@ fn request_shape_is_rejected_before_artifact_work() {
     }
 }
 
+#[test]
+fn early_signing_key_gate_matches_canonical_ed25519_validation() {
+    let valid = "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a";
+    let invalid_point = (0u8..=255)
+        .map(|byte| [byte; 32])
+        .find(|bytes| ed25519_dalek::VerifyingKey::from_bytes(bytes).is_err())
+        .expect("non-point encoding");
+    for (key, expected) in [
+        (valid.to_owned(), true),
+        (valid.to_uppercase(), false),
+        (hex::encode([0; 32]), false),
+        (format!("01{}", "00".repeat(31)), false),
+        (hex::encode(invalid_point), false),
+        (valid[..62].to_owned(), false),
+    ] {
+        let request = super::super::proto::RpcRequest {
+            method: "DelegatePluginSigningKey".into(),
+            params_json: serde_json::json!({"lifetime_ms":1000,"signing_public_key":key,"scope":"mesh.openai.exchange.evidence.sign.v1"}).to_string(),
+        };
+        let result = validate_identity_input(&request);
+        assert_eq!(result.is_ok(), expected);
+        if let Err(error) = result {
+            assert!(
+                error
+                    .to_string()
+                    .contains("64 lowercase hexadecimal characters")
+            );
+        }
+    }
+}
+
 #[tokio::test]
 async fn callback_renewal_gate_is_per_authenticated_plugin_and_precedes_artifact_work() {
     let manager = super::super::PluginManager::for_test_summaries(Vec::new());

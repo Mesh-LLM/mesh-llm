@@ -111,6 +111,10 @@ pub fn safe_exchange_header(header: &str) -> bool {
         && !lower.contains("token")
         && !lower.contains("secret")
         && !lower.contains("key")
+        && !lower.contains("auth")
+        && !lower.contains("cookie")
+        && !lower.contains("session")
+        && !lower.contains("jwt")
         && !lower.starts_with("x-owner-")
         && !lower.starts_with("x-mesh-owner-")
         && !lower.starts_with("x-mesh-control-")
@@ -187,6 +191,10 @@ max_in_flight = 2
             "x-owner-signature",
             "x-mesh-owner-control",
             "x-mesh-control-auth",
+            "x-custom-auth",
+            "x-browser-cookie",
+            "x-session-id",
+            "x-jwt-assertion",
         ] {
             assert!(!safe_exchange_header(header));
         }

@@ -53,6 +53,15 @@ struct GuardedCompletionStream {
     terminal: Option<TerminalFuture>,
     pending: Option<PendingEmission>,
 }
+impl Drop for GuardedCompletionStream {
+    fn drop(&mut self) {
+        if let Some(terminal) = self.terminal.take()
+            && let Ok(runtime) = tokio::runtime::Handle::try_current()
+        {
+            runtime.spawn(terminal);
+        }
+    }
+}
 enum PendingEmission {
     Error(OpenAiError),
     End,
@@ -112,18 +121,24 @@ mod tests {
     use super::*;
     use async_trait::async_trait;
     use futures_util::StreamExt;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use tokio::sync::Notify;
 
     struct BlockingTerminal {
         started: Notify,
         release: Notify,
+        completed: Notify,
+        calls: AtomicUsize,
+        expected: &'static str,
     }
     #[async_trait]
     impl OpenAiHookPolicy for BlockingTerminal {
         async fn on_completion_terminal(&self, _id: &str, outcome: &str) {
-            assert_eq!(outcome, "backend_error");
+            assert_eq!(outcome, self.expected);
+            self.calls.fetch_add(1, Ordering::SeqCst);
             self.started.notify_one();
             self.release.notified().await;
+            self.completed.notify_one();
         }
     }
     #[tokio::test]
@@ -131,6 +146,9 @@ mod tests {
         let hooks = Arc::new(BlockingTerminal {
             started: Notify::new(),
             release: Notify::new(),
+            completed: Notify::new(),
+            calls: AtomicUsize::new(0),
+            expected: "backend_error",
         });
         let inner: CompletionStream = Box::pin(futures_util::stream::once(async {
             Err(OpenAiError::backend("failure"))
@@ -144,5 +162,37 @@ mod tests {
         assert!(!pending.is_finished());
         hooks.release.notify_one();
         assert!(pending.await.unwrap().unwrap().is_err());
+    }
+
+    #[tokio::test]
+    async fn dropping_pending_terminal_resumes_completion_callback_exactly_once() {
+        for error in [false, true] {
+            let hooks = Arc::new(BlockingTerminal {
+                started: Notify::new(),
+                release: Notify::new(),
+                completed: Notify::new(),
+                calls: AtomicUsize::new(0),
+                expected: if error { "backend_error" } else { "completed" },
+            });
+            let inner: CompletionStream = if error {
+                Box::pin(futures_util::stream::once(async {
+                    Err(OpenAiError::backend("failure"))
+                }))
+            } else {
+                Box::pin(futures_util::stream::empty())
+            };
+            let mut stream = guarded(
+                inner,
+                Some(CompletionTerminalGuard::new(hooks.clone(), "id".into())),
+            );
+            assert!(futures_util::poll!(stream.next()).is_pending());
+            hooks.started.notified().await;
+            drop(stream);
+            hooks.release.notify_one();
+            tokio::time::timeout(Duration::from_secs(1), hooks.completed.notified())
+                .await
+                .expect("dropping the body must preserve the pending callback");
+            assert_eq!(hooks.calls.load(Ordering::SeqCst), 1);
+        }
     }
 }

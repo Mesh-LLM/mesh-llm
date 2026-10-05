@@ -110,12 +110,12 @@ impl StreamEvidence {
                 if kind != "openai_exchange_response" {
                     let parsed = serde_json::from_slice(&request_body).ok();
                     let mut bodies = evidence.1.lock().await;
-                    let total: u64 = bodies.values().map(|(_, bytes)| bytes.len() as u64).sum();
-                    anyhow::ensure!(
-                        total + count <= 16_777_216,
-                        "exemplar request retention limit exceeded"
-                    );
-                    bodies.insert((exchange_id.clone(), kind.clone()), (parsed, request_body));
+                    retain_request(
+                        &mut bodies,
+                        (exchange_id.clone(), kind.clone()),
+                        parsed,
+                        request_body,
+                    )?;
                 }
                 let hash = hex::encode(digest.finalize());
                 let mut receipts = evidence.0.lock().await;
@@ -195,6 +195,29 @@ impl StreamEvidence {
     }
 }
 
+fn retain_request(
+    bodies: &mut RetainedRequests,
+    key: (String, String),
+    parsed: Option<serde_json::Value>,
+    bytes: Vec<u8>,
+) -> anyhow::Result<()> {
+    const MAX_BYTES: usize = 16_777_216;
+    anyhow::ensure!(
+        bytes.len() <= MAX_BYTES,
+        "exemplar request retention limit exceeded"
+    );
+    bodies.remove(&key);
+    let mut total: usize = bodies.values().map(|(_, body)| body.len()).sum();
+    while total + bytes.len() > MAX_BYTES || bodies.len() >= 1024 {
+        let Some((_, (_, evicted))) = bodies.pop_first() else {
+            break;
+        };
+        total -= evicted.len();
+    }
+    bodies.insert(key, (parsed, bytes));
+    Ok(())
+}
+
 async fn log_receipt(
     metadata: &serde_json::Value,
     receipt: &serde_json::Value,
@@ -220,6 +243,31 @@ async fn log_receipt(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn abandoned_body_retention_cannot_block_later_exchanges() {
+        let mut bodies = RetainedRequests::new();
+        retain_request(
+            &mut bodies,
+            ("abandoned".into(), "original".into()),
+            None,
+            vec![0; 16_777_216],
+        )
+        .unwrap();
+        let key = ("next".into(), "original".into());
+        retain_request(&mut bodies, key.clone(), None, b"next body".to_vec()).unwrap();
+        assert_eq!(bodies.len(), 1);
+        assert_eq!(bodies[&key].1, b"next body");
+        for index in 0..2048 {
+            retain_request(
+                &mut bodies,
+                (index.to_string(), "original".into()),
+                None,
+                Vec::new(),
+            )
+            .unwrap();
+        }
+        assert_eq!(bodies.len(), 1024);
+    }
     #[tokio::test]
     async fn body_lookup_preserves_original_and_never_substitutes_it_for_effective() {
         let evidence = StreamEvidence::default();

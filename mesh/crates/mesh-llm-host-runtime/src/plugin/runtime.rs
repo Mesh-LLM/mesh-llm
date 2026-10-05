@@ -24,6 +24,7 @@ use tokio::sync::{Mutex, mpsc, oneshot};
 mod exchange_request;
 #[cfg(test)]
 mod exchange_request_tests;
+mod identity_artifact;
 
 pub(crate) struct ExternalPlugin {
     spec: ExternalPluginSpec,
@@ -66,6 +67,9 @@ async fn stop_runtime(runtime: PluginRuntime, reason: &str) {
 }
 
 impl ExternalPlugin {
+    pub(crate) fn installed_identity_executable(&self) -> Option<PathBuf> {
+        identity_artifact::installed_executable(&self.spec)
+    }
     pub(crate) fn installed_artifact_sha256(&self) -> Option<&str> {
         self.installed_artifact_sha256.as_deref()
     }
@@ -89,21 +93,7 @@ impl ExternalPlugin {
         in_process: Option<super::InProcessPluginRunner>,
     ) -> Result<Self> {
         let in_process = in_process.filter(|_| spec.command.is_empty());
-        let installed_artifact_sha256 = if spec
-            .openai_exchange_grant
-            .as_ref()
-            .is_some_and(|grant| grant.read_identity_bundle || grant.delegate_signing_key)
-        {
-            match &spec.installed_metadata {
-                Some(metadata) => Some(
-                    super::identity_registration::artifact_sha256(&metadata.executable_path())
-                        .await?,
-                ),
-                None => None,
-            }
-        } else {
-            None
-        };
+        let installed_artifact_sha256 = identity_artifact::capture_startup_digest(spec).await?;
         let plugin = Self {
             spec: spec.clone(),
             installed_artifact_sha256,

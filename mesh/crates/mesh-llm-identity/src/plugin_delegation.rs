@@ -95,6 +95,13 @@ fn valid_hex<const N: usize>(value: &str) -> Option<[u8; N]> {
     hex::decode(value).ok()?.try_into().ok()
 }
 
+/// Require the canonical lowercase encoding of a non-weak Ed25519 public key.
+pub fn is_valid_plugin_signing_key(value: &str) -> bool {
+    valid_hex::<32>(value)
+        .and_then(|key| VerifyingKey::from_bytes(&key).ok())
+        .is_some_and(|key| !key.is_weak())
+}
+
 fn valid_claim(claim: &PluginSigningDelegationClaim) -> bool {
     claim.version == PLUGIN_DELEGATION_VERSION
         && !claim.delegation_id.is_empty()
@@ -106,9 +113,7 @@ fn valid_claim(claim: &PluginSigningDelegationClaim) -> bool {
         && valid_hex::<32>(&claim.owner_id).is_some()
         && valid_hex::<32>(&claim.node_endpoint_id).is_some()
         && valid_hex::<32>(&claim.plugin.artifact_sha256).is_some()
-        && valid_hex::<32>(&claim.plugin.signing_public_key)
-            .and_then(|key| VerifyingKey::from_bytes(&key).ok())
-            .is_some_and(|key| !key.is_weak())
+        && is_valid_plugin_signing_key(&claim.plugin.signing_public_key)
         && claim.expires_at_unix_ms > claim.issued_at_unix_ms
         && claim.expires_at_unix_ms - claim.issued_at_unix_ms <= MAX_DELEGATION_LIFETIME_MS
 }

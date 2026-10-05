@@ -607,25 +607,25 @@ impl ExchangeSession {
             _ => "backend_error",
         }
     }
-    pub(crate) async fn begin(manager: &PluginManager, event: Value) -> (Self, PhaseResult) {
+    pub(crate) async fn begin(manager: &PluginManager, mut event: Value) -> (Self, PhaseResult) {
         let started = Instant::now();
-        let deadline = Instant::now()
-            + Duration::from_millis(
-                manager
-                    .inner
-                    .plugins
-                    .keys()
-                    .filter_map(|name| manager.effective_exchange_grant(name))
-                    .filter(|grant| {
-                        grant
-                            .endpoints
-                            .iter()
-                            .any(|endpoint| event["endpoint"] == endpoint.as_str())
-                    })
-                    .map(|grant| grant.deadline_ms)
-                    .min()
-                    .unwrap_or(1),
-            );
+        let budget = Duration::from_millis(
+            manager
+                .inner
+                .plugins
+                .keys()
+                .filter_map(|name| manager.effective_exchange_grant(name))
+                .filter(|grant| {
+                    grant
+                        .endpoints
+                        .iter()
+                        .any(|endpoint| event["endpoint"] == endpoint.as_str())
+                })
+                .map(|grant| grant.deadline_ms)
+                .min()
+                .unwrap_or(1),
+        );
+        let deadline = Instant::now() + budget;
         let mut result = manager
             .exchange_permissions_preflight(event["endpoint"].as_str().unwrap_or_default())
             .await;
@@ -634,7 +634,11 @@ impl ExchangeSession {
                 .exchange_phase_before(event.clone(), Some(deadline))
                 .await,
         );
-        let copies = super::exchange_streams::ResponseCopies::open(manager, &event, deadline).await;
+        // Response-stream negotiation has its own bounded phase budget. A slow
+        // successful request hook must not exhaust a required response observer.
+        let copies =
+            super::exchange_streams::ResponseCopies::open(manager, &event, Instant::now() + budget)
+                .await;
         let (unavailable, required) = copies.admission_failure();
         result.incomplete |= unavailable;
         result.evidence_unavailable |= unavailable;
@@ -662,6 +666,12 @@ impl ExchangeSession {
                 event["observation_id"].as_str().unwrap().into(),
                 Arc::downgrade(&emission),
             );
+        // The admission callbacks have consumed these fields. The terminal owner
+        // needs only metadata and commitments, not a retained prompt copy.
+        if let Some(fields) = event.as_object_mut() {
+            fields.remove("body");
+            fields.remove("body_hex");
+        }
         (
             Self {
                 started,
@@ -820,6 +830,10 @@ impl Drop for ExchangeSession {
 #[cfg(test)]
 #[path = "exchange_terminal_tests.rs"]
 mod terminal_tests;
+
+#[cfg(all(test, unix))]
+#[path = "exchange_session_tests.rs"]
+mod session_tests;
 
 pub(crate) fn request_event(
     id: String,

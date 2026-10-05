@@ -349,10 +349,12 @@ fn validate_identity_input(request: &super::proto::RpcRequest) -> Result<()> {
         "DelegatePluginSigningKey" => {
             let params: DelegatePluginSigningKeyRequest =
                 serde_json::from_str(&request.params_json)?;
-            if params.signing_public_key.len() != 64
-                || hex::decode(&params.signing_public_key).is_err()
-            {
-                bail!("delegation signing key must contain 32 hexadecimal public-key bytes");
+            if !mesh_llm_identity::plugin_delegation::is_valid_plugin_signing_key(
+                &params.signing_public_key,
+            ) {
+                bail!(
+                    "delegation signing key must be exactly 64 lowercase hexadecimal characters encoding a valid, non-weak Ed25519 public key"
+                );
             }
             if !(1000..=MAX_DELEGATION_LIFETIME_MS).contains(&params.lifetime_ms) {
                 bail!("delegation lifetime outside protocol bounds");

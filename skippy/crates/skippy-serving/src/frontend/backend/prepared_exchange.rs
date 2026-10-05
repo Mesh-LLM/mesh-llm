@@ -25,8 +25,10 @@ impl PreparedExchangeAdmission {
         }
     }
     pub(super) async fn admit(&self, request: &ChatCompletionRequest) -> OpenAiResult<()> {
-        self.state.lock().unwrap().request = Some(request.clone());
         if let Some(hooks) = &self.hooks {
+            if hooks.observes_dispatched_request() {
+                self.state.lock().unwrap().request = Some(request.clone());
+            }
             let route = ChatExchangeRoute::for_request(request, self.exchange_id.clone());
             if let Err(error) = hooks.admit_effective_chat_completion(request, &route).await {
                 self.state.lock().unwrap().denied = true;
@@ -79,5 +81,55 @@ impl StageOpenAiBackend {
             return Err(error);
         }
         Ok(Some(guard))
+    }
+}
+
+#[cfg(test)]
+mod retention_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct AdmissionPolicy {
+        observe: bool,
+        calls: AtomicUsize,
+    }
+    #[async_trait]
+    impl OpenAiHookPolicy for AdmissionPolicy {
+        fn observes_dispatched_request(&self) -> bool {
+            self.observe
+        }
+        async fn admit_effective_chat_completion(
+            &self,
+            _request: &ChatCompletionRequest,
+            _route: &ChatExchangeRoute,
+        ) -> OpenAiResult<()> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn prepared_request_retention_requires_observation_without_skipping_admission() {
+        let request = ChatCompletionRequest {
+            model: "prepared-model".into(),
+            ..Default::default()
+        };
+        let absent = PreparedExchangeAdmission::new(None, "absent".into());
+        absent.admit(&request).await.unwrap();
+        assert!(absent.state.lock().unwrap().request.is_none());
+        for observe in [false, true] {
+            let policy = Arc::new(AdmissionPolicy {
+                observe,
+                calls: AtomicUsize::new(0),
+            });
+            let admission = PreparedExchangeAdmission::new(Some(policy.clone()), "id".into());
+            admission.admit(&request).await.unwrap();
+            assert_eq!(policy.calls.load(Ordering::SeqCst), 1);
+            let retained = admission.state.lock().unwrap().request.clone();
+            assert_eq!(retained.is_some(), observe);
+            if let Some(retained) = retained {
+                assert_eq!(retained.model, "prepared-model");
+            }
+        }
     }
 }
