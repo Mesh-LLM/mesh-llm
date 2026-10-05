@@ -7,8 +7,11 @@
 //! anywhere, and its parent is not ours to tighten.
 //!
 //! The Windows half follows `mesh-llm-log-store`'s artifact privacy: a
-//! protected DACL with a single full-control ACE for the current token user,
-//! verified after it is applied. Failures are reported, never ignored.
+//! protected DACL with a single full-control ACE for the current token user.
+//! The temporary file is opened denying every other open, and that DACL is
+//! applied and verified through the same handle, so no other principal can read
+//! the config in the interval before it is restricted. Failures are reported,
+//! never ignored.
 
 use std::fs;
 use std::io::{self, Write};
@@ -110,9 +113,17 @@ fn create_private_temp(parent: &Path, target: &Path) -> io::Result<(PathBuf, fs:
             use std::os::unix::fs::OpenOptionsExt;
             options.mode(0o600);
         }
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::OpenOptionsExt;
+            // Deny every other open (share mode 0) until `restrict_file` has
+            // applied the owner-only DACL through this handle, so the file is
+            // never readable while it still carries the parent's inherited ACL.
+            options.share_mode(0);
+        }
         match options.open(&tmp) {
             Ok(file) => {
-                if let Err(error) = platform::restrict_file(&tmp, &file) {
+                if let Err(error) = platform::restrict_file(&file) {
                     drop(file);
                     let _ = fs::remove_file(&tmp);
                     return Err(error);
@@ -141,7 +152,7 @@ mod platform {
     }
 
     // The mode passed to open() is masked by the umask; set it explicitly too.
-    pub(super) fn restrict_file(_path: &Path, file: &fs::File) -> io::Result<()> {
+    pub(super) fn restrict_file(file: &fs::File) -> io::Result<()> {
         file.set_permissions(fs::Permissions::from_mode(0o600))
     }
 }
@@ -153,11 +164,13 @@ mod platform {
     use std::io;
     use std::mem::{align_of, size_of};
     use std::os::windows::ffi::OsStrExt;
+    use std::os::windows::io::AsRawHandle;
     use std::path::Path;
     use std::ptr::{null, null_mut};
-    use windows_sys::Win32::Foundation::{CloseHandle, LocalFree};
+    use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, LocalFree};
     use windows_sys::Win32::Security::Authorization::{
-        GetNamedSecurityInfoW, SE_FILE_OBJECT, SetNamedSecurityInfoW,
+        GetNamedSecurityInfoW, GetSecurityInfo, SE_FILE_OBJECT, SetNamedSecurityInfoW,
+        SetSecurityInfo,
     };
     use windows_sys::Win32::Security::{
         ACCESS_ALLOWED_ACE, ACL, ACL_REVISION, AddAccessAllowedAceEx, CONTAINER_INHERIT_ACE,
@@ -170,11 +183,22 @@ mod platform {
     use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 
     pub(super) fn restrict_directory(path: &Path) -> io::Result<()> {
-        apply_and_verify(path, true)
+        with_current_user_sid(|sid| {
+            let acl = user_only_acl(sid, true)?;
+            set_named(path, sid, &acl)?;
+            verify_user_only_dacl(path, sid, ace_flags(true))
+        })
     }
 
-    pub(super) fn restrict_file(path: &Path, _file: &fs::File) -> io::Result<()> {
-        apply_and_verify(path, false)
+    // The file was opened with share mode 0, so no other open can reach it, and
+    // the DACL is applied and verified through that same handle: there is no
+    // interval in which it carries the ACL it inherited from the parent.
+    pub(super) fn restrict_file(file: &fs::File) -> io::Result<()> {
+        with_current_user_sid(|sid| {
+            let acl = user_only_acl(sid, false)?;
+            set_handle(file.as_raw_handle(), &acl)?;
+            verify_handle(file.as_raw_handle(), sid, ace_flags(false))
+        })
     }
 
     #[cfg(test)]
@@ -197,43 +221,65 @@ mod platform {
         }
     }
 
-    fn apply_and_verify(path: &Path, is_directory: bool) -> io::Result<()> {
-        with_current_user_sid(|sid| {
-            let acl_bytes = size_of::<ACL>() + size_of::<ACCESS_ALLOWED_ACE>() - size_of::<u32>()
-                + unsafe { GetLengthSid(sid) as usize };
-            let words = acl_bytes.div_ceil(size_of::<u64>());
-            let mut acl_storage = vec![0_u64; words];
-            let acl = acl_storage.as_mut_ptr().cast::<ACL>();
-            let flags = ace_flags(is_directory);
+    // Exactly one full-control ACE for `sid`, matching `ace_flags`.
+    fn user_only_acl(sid: PSID, is_directory: bool) -> io::Result<Vec<u64>> {
+        let acl_bytes = size_of::<ACL>() + size_of::<ACCESS_ALLOWED_ACE>() - size_of::<u32>()
+            + unsafe { GetLengthSid(sid) as usize };
+        let words = acl_bytes.div_ceil(size_of::<u64>());
+        let mut storage = vec![0_u64; words];
+        let acl = storage.as_mut_ptr().cast::<ACL>();
+        let flags = ace_flags(is_directory);
 
-            unsafe {
-                if InitializeAcl(acl, acl_bytes as u32, ACL_REVISION) == 0
-                    || AddAccessAllowedAceEx(acl, ACL_REVISION, flags, FILE_ALL_ACCESS, sid) == 0
-                {
-                    return Err(not_guaranteed());
-                }
-            }
-
-            let path_wide = to_wide(path);
-            let result = unsafe {
-                SetNamedSecurityInfoW(
-                    path_wide.as_ptr(),
-                    SE_FILE_OBJECT,
-                    OWNER_SECURITY_INFORMATION
-                        | DACL_SECURITY_INFORMATION
-                        | PROTECTED_DACL_SECURITY_INFORMATION,
-                    sid,
-                    null_mut(),
-                    acl,
-                    null(),
-                )
-            };
-            if result != 0 {
+        unsafe {
+            if InitializeAcl(acl, acl_bytes as u32, ACL_REVISION) == 0
+                || AddAccessAllowedAceEx(acl, ACL_REVISION, flags, FILE_ALL_ACCESS, sid) == 0
+            {
                 return Err(not_guaranteed());
             }
+        }
+        Ok(storage)
+    }
 
-            verify_user_only_dacl(path, sid, flags)
-        })
+    fn set_named(path: &Path, sid: PSID, acl: &[u64]) -> io::Result<()> {
+        let path_wide = to_wide(path);
+        let result = unsafe {
+            SetNamedSecurityInfoW(
+                path_wide.as_ptr(),
+                SE_FILE_OBJECT,
+                OWNER_SECURITY_INFORMATION
+                    | DACL_SECURITY_INFORMATION
+                    | PROTECTED_DACL_SECURITY_INFORMATION,
+                sid,
+                null_mut(),
+                acl.as_ptr().cast::<ACL>(),
+                null(),
+            )
+        };
+        if result != 0 {
+            return Err(not_guaranteed());
+        }
+        Ok(())
+    }
+
+    // The creator owns the file it just made, and an object's owner is
+    // implicitly granted WRITE_DAC, so this handle can replace the DACL it
+    // inherited without a second, separate writable open.
+    fn set_handle(handle: HANDLE, acl: &[u64]) -> io::Result<()> {
+        let result = unsafe {
+            SetSecurityInfo(
+                handle,
+                SE_FILE_OBJECT,
+                DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+                null_mut(),
+                null_mut(),
+                acl.as_ptr().cast::<ACL>(),
+                null(),
+            )
+        };
+        if result != 0 {
+            return Err(not_guaranteed());
+        }
+        Ok(())
     }
 
     fn with_current_user_sid<T>(f: impl FnOnce(PSID) -> io::Result<T>) -> io::Result<T> {
@@ -301,7 +347,43 @@ mod platform {
             return Err(not_guaranteed());
         }
         let _descriptor = SecurityDescriptor(descriptor);
+        check_user_only(owner, dacl, descriptor, current_user, expected_ace_flags)
+    }
 
+    fn verify_handle(
+        handle: HANDLE,
+        current_user: PSID,
+        expected_ace_flags: u32,
+    ) -> io::Result<()> {
+        let mut owner = null_mut();
+        let mut dacl = null_mut();
+        let mut descriptor: PSECURITY_DESCRIPTOR = null_mut();
+        let result = unsafe {
+            GetSecurityInfo(
+                handle,
+                SE_FILE_OBJECT,
+                OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
+                &mut owner,
+                null_mut(),
+                &mut dacl,
+                null_mut(),
+                &mut descriptor,
+            )
+        };
+        if result != 0 || owner.is_null() || dacl.is_null() || descriptor.is_null() {
+            return Err(not_guaranteed());
+        }
+        let _descriptor = SecurityDescriptor(descriptor);
+        check_user_only(owner, dacl, descriptor, current_user, expected_ace_flags)
+    }
+
+    fn check_user_only(
+        owner: PSID,
+        dacl: *mut ACL,
+        descriptor: PSECURITY_DESCRIPTOR,
+        current_user: PSID,
+        expected_ace_flags: u32,
+    ) -> io::Result<()> {
         if unsafe { EqualSid(owner, current_user) } == 0 {
             return Err(not_guaranteed());
         }
