@@ -289,11 +289,11 @@
       "members": [
         [
           32,
-          "423f46d8dbf215ca",
+          "3fe73301eda1cdb0",
           1,
           "environment",
-          "explicit surviving30 scripts.tests modules",
-          "All17 scheduler and waiting-prefix fixture intents have required native behavioral owners;30 transitional modules remain selected."
+          "explicit surviving28 scripts.tests modules",
+          "Event benchmark runner91/comparator58 have candidate native retirement coverage; root must admit qualified source-bound proof before this last-caller cutover.28 transitional modules remain selected."
         ]
       ]
     },
@@ -369,7 +369,9 @@
     "immediate_target_or_boundary",
     "caller_contract"
   ],
-  "python_implementation_edges": [],
+  "python_implementation_edges": [
+
+  ],
   "python_implementation_groups": [
     {
       "boundary": "--current-binary, --released-binary, --model and --output are operator paths; no wallet funding or remote mutation",
@@ -605,40 +607,6 @@
       "root": "optional Hugging Face MTP composition job"
     },
     {
-      "boundary": "binary/model/port/mode selected per trial; HTTP readiness and request calls are not subprocess candidates",
-      "file": "scripts/run-event-benchmark-matrix.py",
-      "members": [
-        [
-          233,
-          "0bb8fafe2022eacf",
-          1,
-          "subprocess-or-interpreter",
-          "execution",
-          "<selected binary> --version",
-          "_run_real_version_probe captures text stdout/stderr check=False timeout=30; error returns None, stdout then stderr used as version even if nonzero; read-only"
-        ],
-        [
-          290,
-          "13ca18bc3a83fc8c",
-          1,
-          "subprocess-or-interpreter",
-          "execution",
-          "pmset -g therm",
-          "_run_pmset_therm captures text stdout/stderr check=False timeout=5; unavailable/errors return None; Darwin thermal evidence only"
-        ],
-        [
-          830,
-          "b3c92311eb4695bd",
-          1,
-          "subprocess-or-interpreter",
-          "execution",
-          "<selected binary> serve --local-model-only --model <model> --port <port> --speculative-strategy disabled --log-format json",
-          "execute_trial writes combined stdout/stderr to binary log, sets MESH_LLM_BENCHMARK_TUNE_TRIAL=1 and trial mode; manages readiness/HTTP requests then terminate/kill with bounded wait; server effects local"
-        ]
-      ],
-      "root": "optional local benchmark trial matrix"
-    },
-    {
       "boundary": "pin/source and family/model filters selected by CLI; local supplied source can skip Git clone/fetch",
       "file": "scripts/skippy-llama-parity.py",
       "members": [
@@ -689,11 +657,6 @@
       "scripts/qa-lightning-compatibility.py",
       "729066935dc2a4d345e68b5554be825c3b3617d855e571e35e70d610213dd9aa",
       184
-    ],
-    [
-      "scripts/run-event-benchmark-matrix.py",
-      "9762da302f5be3dfaa5aa0f7db8a0dac37dbea66ae083a49be2ed72d6ad2628f",
-      1311
     ],
     [
       "scripts/skippy-llama-parity.py",
@@ -10265,7 +10228,9 @@
     ],
     "native_tests": ".omo/evidence/resume-20261002/linux-native-focused-v3-tests.log",
     "native_clippy": ".omo/evidence/resume-20261002/linux-native-focused-v3-clippy.log",
-    "remaining_python": [],
+    "remaining_python": [
+
+    ],
     "limits": "No live OpenCode/model/SDK or whole Python-free path claim.",
     "prior_source_sha256": "30b8293e0d23277c1be54db86f4d8a2ae9ff4d7740328309ad57b2ae9955e9e2",
     "successor_record": "agent_coding_recording_proxy_cutover",
@@ -10498,7 +10463,9 @@
         "target": "generated workspace fixture path"
       }
     ],
-    "remaining_python": [],
+    "remaining_python": [
+
+    ],
     "regression": ".omo/evidence/resume-20261002/agent-surface-maximum-input-v1.json",
     "limits": "Maintained corrected full normal gate required. Private Linux fixtures do not prove live OpenCode/model/SDK, Windows or hosted execution.",
     "prior_source_sha256": "30b8293e0d23277c1be54db86f4d8a2ae9ff4d7740328309ad57b2ae9955e9e2",
@@ -10822,7 +10789,9 @@
       "Goose/Pi answer and editing tool-event requirements remain required",
       "Captured automation HOME survives isolated Pi client HOME"
     ],
-    "remaining_python_in_these_adapters": [],
+    "remaining_python_in_these_adapters": [
+
+    ],
     "limits": "Applied source only, full maintained postimage gate required. Private Linux fixtures do not prove live OpenCode/Goose/Pi/model/SDK, hosted or Windows execution. Repository Python inventory remains 96 files and 37 transitional core modules.",
     "prior_qualified_cutovers": {
       "opencode_coding_capture_cutover": {
@@ -11282,6 +11251,115 @@
       "sha256": "8aace3684b9fe9774542d1d827d5300031d68c08680b32b072eb9a7ae8258929",
       "roster_line": 32,
       "count": 30
+    }
+  },
+  "event_benchmark_last_caller_retirement": {
+    "status": "PREPARED_NOT_APPLIED_OR_QUALIFIED",
+    "python_paths_after": 85,
+    "core_modules_after": 28,
+    "removed_paths": [
+      "scripts/run-event-benchmark-matrix.py",
+      "scripts/compare-event-benchmark-matrix.py",
+      "scripts/tests/test_run_event_benchmark_matrix.py",
+      "scripts/tests/test_compare_event_benchmark_matrix.py"
+    ],
+    "original_methods": 149,
+    "durable_coverage": {
+      "path": "ci/automation-migration/event-benchmark-retirement-coverage.json",
+      "sha256": "28977e51809b81492a1b470753b23eface498e24fc30d2e6fbe6b81c7078e59f"
+    },
+    "current_just": {
+      "path": "just/ci.just",
+      "sha256": "419e4e4ae461a94dda332e85a5aafa371cccd5918d2e39fbb0260f3ce1a5a452",
+      "roster_line": 32,
+      "count": 28
+    },
+    "admission_prerequisites": ".omo/evidence/resume-20261002/event-benchmark-last-caller-retirement-rebind-v3/prerequisites.json",
+    "qualification": null,
+    "native_source_freeze": {
+      "path": ".omo/evidence/resume-20261002/migration-current-batch-normal-freeze-v1.json",
+      "sha256": "fa4342e63b8d4f93e425e88f106d9585ba5ef3e06a057cff3c83ad2ed92c9d5c",
+      "head": "3fbd1fcbcd390c86083a8265de3a4ce4734e3a58",
+      "status": "FROZEN_SOURCES_NOT_TERMINAL_EXECUTION",
+      "drift": [
+
+      ],
+      "additional_native_sources": [
+        {
+          "path": "tools/xtask/src/automation/event_benchmark_comparison/manifest_tests.rs",
+          "sha256": "8ec09288b54096ddffa8f0b2d225edc7dceb9781b3c94bfa2404e9e2f48a49fe",
+          "qualification": null
+        },
+        {
+          "path": "tools/xtask/src/automation/event_benchmark_comparison/environment_identity_tests.rs",
+          "sha256": "36427c1426f2ff93fe0b8205424e079c6dbcb461fd3183621180b3dae421ed79",
+          "qualification": null
+        },
+        {
+          "path": "tools/xtask/src/automation/event_benchmark_comparison/pairing_tests.rs",
+          "sha256": "3e49cd0840be9a1ca8dc1557142bbe1a87225ab221205fab66ac109b0f2eaf0d",
+          "qualification": null
+        },
+        {
+          "path": "tools/xtask/src/automation/event_benchmark_comparison/statistics_tests.rs",
+          "sha256": "bfc7671031f4f3ac81b2b36c6521264d47d42792dbdb6b403201d38f307d259e",
+          "qualification": null
+        },
+        {
+          "path": "tools/xtask/tests/migration_cli/event_benchmark_comparison.rs",
+          "sha256": "c4a80a500fccf7578779ce24a3b07bcf45ac792494bc3455f11a359875e8c5d4",
+          "qualification": null
+        },
+        {
+          "path": "tools/xtask/src/automation/event_benchmark_comparison/screening_tests.rs",
+          "sha256": "a4137d22bac57e6985a9d8d447502c46a9ba89a5e8b095342bb30207d3d919cb",
+          "qualification": null
+        },
+        {
+          "path": "tools/xtask/src/automation/event_benchmark_comparison/resampling_tests.rs",
+          "sha256": "1eeda9f12510daa19de4f23d7838f74b666329f70dab1a0d384bbd7f9494d3ed",
+          "qualification": null
+        },
+        {
+          "path": "tools/xtask/src/automation/event_benchmark_comparison/retry.rs",
+          "sha256": "6fa6e4623c111f79ee847b0bb24f006b9c85c78c79a81d8aaf1cc659779728d5",
+          "qualification": null
+        },
+        {
+          "path": "tools/xtask/src/automation/event_benchmark_comparison/callback_latency_tests.rs",
+          "sha256": "5c6542ddc2acc2bfd07532223658058023b67c2ec55f0d9c2bd3fb8e8ba8f440",
+          "qualification": null
+        },
+        {
+          "path": "tools/xtask/src/automation/event_benchmark_comparison/health_tests.rs",
+          "sha256": "3b8f810fb522d7e852a17bd4416026116bbe6e66f1cdb83d7504743accd4abe2",
+          "qualification": null
+        },
+        {
+          "path": "tools/xtask/src/automation/event_benchmark_comparison/order_identity_tests.rs",
+          "sha256": "16f17f447b6f1960de04ed0a36be6ff97707ae674b3ab751b754da18a6cee468",
+          "qualification": null
+        },
+        {
+          "path": "tools/xtask/src/automation/event_benchmark_comparison/report_tests.rs",
+          "sha256": "70182a488f5e5b4c7c2bc759f4d35129acfa0334b1589d14c08a47b9436baa81",
+          "qualification": null
+        },
+        {
+          "path": "tools/xtask/src/automation/event_benchmark_comparison/command_tests.rs",
+          "sha256": "421dc4f3a83fdc467887e6bba66a52e9622ef78ecc35543f741f44b104d46cac",
+          "qualification": null
+        }
+      ],
+      "supplemental_baseline": {
+        "path": ".omo/evidence/resume-20261002/event-benchmark-last-caller-retirement-rebind-v2/supplemental-comparator-baseline.json",
+        "sha256": "fb9f3f75c56e046ecc58253ce1947008522442b3d8749c38e8b61626b6e2fb59",
+        "qualification": null
+      }
+    },
+    "current_method_map": {
+      "path": ".omo/evidence/resume-20261002/event-benchmark-last-caller-retirement-rebind-v2/current-method-map149.json",
+      "sha256": "568fce59980878bc9d619ea6301b81da250ebb99885d5532bdf6f07dd289995c"
     }
   }
 }

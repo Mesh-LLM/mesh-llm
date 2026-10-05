@@ -2021,8 +2021,12 @@
       }
     ],
     "limits": "Source-bound caller reconciliation only. Generic Python implementations and unqualified test methods retained; required SDK, native, model, platform and protected gates unchanged. Literal typed command selection and continued argv are reviewed, but runtime dynamic expansion is not parser-complete reachability proof.",
-    "removed_edges": [],
-    "rebound_rows": []
+    "removed_edges": [
+
+    ],
+    "rebound_rows": [
+
+    ]
   },
   "next_wave_comparator_and_test_retirement": {
     "coverage": "ci/automation-migration/next-wave-test-tts-retirement-coverage.json",
@@ -2121,7 +2125,9 @@
     },
     "qualification": "Authored, unrun; parent must qualify the transaction before any legacy retirement",
     "retained": "All Python helpers and legacy tests remain. Normal verify timeout helper remains reachable; no inventory/roster reductions.",
-    "rebound_rows": []
+    "rebound_rows": [
+
+    ]
   },
   "projected_final_repair_caller_binding": {
     "source": "scripts/llama-canary-agent-repair.sh",
@@ -11416,6 +11422,119 @@
       "sha256": "8aace3684b9fe9774542d1d827d5300031d68c08680b32b072eb9a7ae8258929",
       "roster_line": 32,
       "count": 30
+    }
+  },
+  "event_benchmark_last_caller_retirement": {
+    "status": "PREPARED_NOT_APPLIED_OR_QUALIFIED",
+    "python_paths_after": 85,
+    "core_modules_after": 28,
+    "removed_paths": [
+      "scripts/run-event-benchmark-matrix.py",
+      "scripts/compare-event-benchmark-matrix.py",
+      "scripts/tests/test_run_event_benchmark_matrix.py",
+      "scripts/tests/test_compare_event_benchmark_matrix.py"
+    ],
+    "original_methods": 149,
+    "durable_coverage": {
+      "path": "ci/automation-migration/event-benchmark-retirement-coverage.json",
+      "sha256": "28977e51809b81492a1b470753b23eface498e24fc30d2e6fbe6b81c7078e59f"
+    },
+    "current_just": {
+      "path": "just/ci.just",
+      "sha256": "419e4e4ae461a94dda332e85a5aafa371cccd5918d2e39fbb0260f3ce1a5a452",
+      "roster_line": 32,
+      "count": 28
+    },
+    "admission_prerequisites": ".omo/evidence/resume-20261002/event-benchmark-last-caller-retirement-rebind-v3/prerequisites.json",
+    "qualification": null,
+    "current_test_tree": {
+      "sha256": "298eef2e7c8c0386c3182f75fed4f5d72d6bec84705fb9e01f159c32f5c7e7f0",
+      "paths": 26
+    },
+    "native_source_freeze": {
+      "path": ".omo/evidence/resume-20261002/migration-current-batch-normal-freeze-v1.json",
+      "sha256": "fa4342e63b8d4f93e425e88f106d9585ba5ef3e06a057cff3c83ad2ed92c9d5c",
+      "head": "3fbd1fcbcd390c86083a8265de3a4ce4734e3a58",
+      "status": "FROZEN_SOURCES_NOT_TERMINAL_EXECUTION",
+      "drift": [
+
+      ],
+      "additional_native_sources": [
+        {
+          "path": "tools/xtask/src/automation/event_benchmark_comparison/manifest_tests.rs",
+          "sha256": "8ec09288b54096ddffa8f0b2d225edc7dceb9781b3c94bfa2404e9e2f48a49fe",
+          "qualification": null
+        },
+        {
+          "path": "tools/xtask/src/automation/event_benchmark_comparison/environment_identity_tests.rs",
+          "sha256": "36427c1426f2ff93fe0b8205424e079c6dbcb461fd3183621180b3dae421ed79",
+          "qualification": null
+        },
+        {
+          "path": "tools/xtask/src/automation/event_benchmark_comparison/pairing_tests.rs",
+          "sha256": "3e49cd0840be9a1ca8dc1557142bbe1a87225ab221205fab66ac109b0f2eaf0d",
+          "qualification": null
+        },
+        {
+          "path": "tools/xtask/src/automation/event_benchmark_comparison/statistics_tests.rs",
+          "sha256": "bfc7671031f4f3ac81b2b36c6521264d47d42792dbdb6b403201d38f307d259e",
+          "qualification": null
+        },
+        {
+          "path": "tools/xtask/tests/migration_cli/event_benchmark_comparison.rs",
+          "sha256": "c4a80a500fccf7578779ce24a3b07bcf45ac792494bc3455f11a359875e8c5d4",
+          "qualification": null
+        },
+        {
+          "path": "tools/xtask/src/automation/event_benchmark_comparison/screening_tests.rs",
+          "sha256": "a4137d22bac57e6985a9d8d447502c46a9ba89a5e8b095342bb30207d3d919cb",
+          "qualification": null
+        },
+        {
+          "path": "tools/xtask/src/automation/event_benchmark_comparison/resampling_tests.rs",
+          "sha256": "1eeda9f12510daa19de4f23d7838f74b666329f70dab1a0d384bbd7f9494d3ed",
+          "qualification": null
+        },
+        {
+          "path": "tools/xtask/src/automation/event_benchmark_comparison/retry.rs",
+          "sha256": "6fa6e4623c111f79ee847b0bb24f006b9c85c78c79a81d8aaf1cc659779728d5",
+          "qualification": null
+        },
+        {
+          "path": "tools/xtask/src/automation/event_benchmark_comparison/callback_latency_tests.rs",
+          "sha256": "5c6542ddc2acc2bfd07532223658058023b67c2ec55f0d9c2bd3fb8e8ba8f440",
+          "qualification": null
+        },
+        {
+          "path": "tools/xtask/src/automation/event_benchmark_comparison/health_tests.rs",
+          "sha256": "3b8f810fb522d7e852a17bd4416026116bbe6e66f1cdb83d7504743accd4abe2",
+          "qualification": null
+        },
+        {
+          "path": "tools/xtask/src/automation/event_benchmark_comparison/order_identity_tests.rs",
+          "sha256": "16f17f447b6f1960de04ed0a36be6ff97707ae674b3ab751b754da18a6cee468",
+          "qualification": null
+        },
+        {
+          "path": "tools/xtask/src/automation/event_benchmark_comparison/report_tests.rs",
+          "sha256": "70182a488f5e5b4c7c2bc759f4d35129acfa0334b1589d14c08a47b9436baa81",
+          "qualification": null
+        },
+        {
+          "path": "tools/xtask/src/automation/event_benchmark_comparison/command_tests.rs",
+          "sha256": "421dc4f3a83fdc467887e6bba66a52e9622ef78ecc35543f741f44b104d46cac",
+          "qualification": null
+        }
+      ],
+      "supplemental_baseline": {
+        "path": ".omo/evidence/resume-20261002/event-benchmark-last-caller-retirement-rebind-v2/supplemental-comparator-baseline.json",
+        "sha256": "fb9f3f75c56e046ecc58253ce1947008522442b3d8749c38e8b61626b6e2fb59",
+        "qualification": null
+      }
+    },
+    "current_method_map": {
+      "path": ".omo/evidence/resume-20261002/event-benchmark-last-caller-retirement-rebind-v2/current-method-map149.json",
+      "sha256": "568fce59980878bc9d619ea6301b81da250ebb99885d5532bdf6f07dd289995c"
     }
   }
 }
