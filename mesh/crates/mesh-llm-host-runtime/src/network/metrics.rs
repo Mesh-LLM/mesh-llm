@@ -10,7 +10,10 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 #[cfg(test)]
-use mesh_llm_membership::advertised_throughput::MAX_ADVERTISED_MODEL_NAME_BYTES;
+use mesh_llm_membership::advertised_throughput::{
+    MAX_ADVERTISED_MODEL_NAME_BYTES, MAX_ADVERTISED_STAGE_TIMING_AGE_MS,
+    MAX_ADVERTISED_STAGE_US_PER_LAYER,
+};
 
 pub(crate) use mesh_llm_membership::advertised_throughput::{
     MAX_ADVERTISED_MODEL_THROUGHPUT_HINTS, MAX_ADVERTISED_THROUGHPUT_SAMPLES,
@@ -508,6 +511,9 @@ impl RoutingMetrics {
                 avg_tokens_per_second_milli: avg_tokens_per_second_milli
                     .min(MAX_ADVERTISED_TPS_MILLI),
                 throughput_samples: samples.min(MAX_ADVERTISED_THROUGHPUT_SAMPLES),
+                observed_stage_us_per_layer: None,
+                stage_timing_samples: None,
+                stage_timing_age_ms: None,
             });
             if hints.len() >= MAX_ADVERTISED_MODEL_THROUGHPUT_HINTS {
                 break;
@@ -539,6 +545,9 @@ impl RoutingMetrics {
             model_name: model.to_string(),
             avg_tokens_per_second_milli,
             throughput_samples: samples,
+            observed_stage_us_per_layer: None,
+            stage_timing_samples: None,
+            stage_timing_age_ms: None,
         })
     }
 
@@ -1567,35 +1576,61 @@ mod tests {
                 model_name: "  qwen  ".to_string(),
                 avg_tokens_per_second_milli: MAX_ADVERTISED_TPS_MILLI + 1,
                 throughput_samples: MAX_ADVERTISED_THROUGHPUT_SAMPLES + 1,
+                observed_stage_us_per_layer: Some(MAX_ADVERTISED_STAGE_US_PER_LAYER + 1),
+                stage_timing_samples: Some(MAX_ADVERTISED_THROUGHPUT_SAMPLES + 1),
+                stage_timing_age_ms: Some(MAX_ADVERTISED_STAGE_TIMING_AGE_MS + 1),
             },
             ModelThroughputHint {
                 model_name: "qwen".to_string(),
                 avg_tokens_per_second_milli: 42_000,
                 throughput_samples: 7,
+                observed_stage_us_per_layer: None,
+                stage_timing_samples: None,
+                stage_timing_age_ms: None,
             },
             ModelThroughputHint {
                 model_name: "".to_string(),
                 avg_tokens_per_second_milli: 42_000,
                 throughput_samples: 7,
+                observed_stage_us_per_layer: None,
+                stage_timing_samples: None,
+                stage_timing_age_ms: None,
             },
             ModelThroughputHint {
                 model_name: "x".repeat(MAX_ADVERTISED_MODEL_NAME_BYTES + 1),
                 avg_tokens_per_second_milli: 42_000,
                 throughput_samples: 7,
+                observed_stage_us_per_layer: None,
+                stage_timing_samples: None,
+                stage_timing_age_ms: None,
             },
             ModelThroughputHint {
                 model_name: "empty-speed".to_string(),
                 avg_tokens_per_second_milli: 0,
                 throughput_samples: 7,
+                observed_stage_us_per_layer: None,
+                stage_timing_samples: None,
+                stage_timing_age_ms: None,
             },
             ModelThroughputHint {
                 model_name: "empty-samples".to_string(),
                 avg_tokens_per_second_milli: 42_000,
                 throughput_samples: 0,
+                observed_stage_us_per_layer: None,
+                stage_timing_samples: None,
+                stage_timing_age_ms: None,
+            },
+            ModelThroughputHint {
+                model_name: "timing-only".to_string(),
+                avg_tokens_per_second_milli: 0,
+                throughput_samples: 0,
+                observed_stage_us_per_layer: Some(2_500),
+                stage_timing_samples: Some(12),
+                stage_timing_age_ms: Some(500),
             },
         ]);
 
-        assert_eq!(hints.len(), 1);
+        assert_eq!(hints.len(), 2);
         assert_eq!(hints[0].model_name, "qwen");
         assert_eq!(
             hints[0].avg_tokens_per_second_milli,
@@ -1605,6 +1640,8 @@ mod tests {
             hints[0].throughput_samples,
             MAX_ADVERTISED_THROUGHPUT_SAMPLES
         );
+        assert_eq!(hints[1].model_name, "timing-only");
+        assert_eq!(hints[1].observed_stage_us_per_layer, Some(2_500));
     }
 
     #[test]

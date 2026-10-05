@@ -216,6 +216,9 @@ mod tests {
             node_id: id.to_string(),
             usable_vram_bytes: usable,
             stage_transfer_latency_ms: None,
+            sustained_mem_bandwidth_mib_per_s: None,
+            sustained_compute_gflop_per_s: None,
+            observed_decode_us_per_layer: None,
             decode_bytes_per_second: speed,
         }
     }

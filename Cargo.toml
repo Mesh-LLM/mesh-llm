@@ -54,6 +54,7 @@ members = [
     "skippy/crates/skippy-tokenizer",
     "skippy/crates/skippy-protocol",
     "skippy/crates/skippy-coordinator",
+    "skippy/crates/skippy-topology-sim",
     "skippy/crates/skippy-topology",
     "skippy/crates/skippy-cache",
     "skippy/crates/skippy-metrics",

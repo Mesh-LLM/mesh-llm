@@ -66,16 +66,31 @@ async fn test_rtt_cannot_regress() -> Result<()> {
     node.update_peer_rtt(peer_id, 2600).await;
     {
         let state = node.state.lock().await;
-        let rtt = state.peers.get(&peer_id).unwrap().rtt_ms;
+        let peer = state.peers.get(&peer_id).unwrap();
+        let rtt = peer.rtt_ms;
         assert_eq!(rtt, Some(20), "RTT must not increase from 20 to 2600");
+        assert_eq!(
+            peer.rtt_observation_window
+                .as_ref()
+                .map(|window| window.sample_count),
+            Some(1),
+            "higher samples must still contribute corroboration evidence"
+        );
     }
 
     // Lower RTT — should be accepted
     node.update_peer_rtt(peer_id, 10).await;
     {
         let state = node.state.lock().await;
-        let rtt = state.peers.get(&peer_id).unwrap().rtt_ms;
+        let peer = state.peers.get(&peer_id).unwrap();
+        let rtt = peer.rtt_ms;
         assert_eq!(rtt, Some(10), "RTT must decrease from 20 to 10");
+        assert_eq!(
+            peer.rtt_observation_window
+                .as_ref()
+                .map(|window| window.sample_count),
+            Some(2)
+        );
     }
 
     Ok(())

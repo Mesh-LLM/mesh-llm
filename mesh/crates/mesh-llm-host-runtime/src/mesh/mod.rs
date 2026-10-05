@@ -168,9 +168,9 @@ pub use node::{
 };
 pub(crate) use node::{PeerDownReport, peer_down_endpoint_id};
 pub(crate) use peer_state::{
-    ClaimedLogHead, ControlListenerLifecycle, DEAD_PEER_TTL, PEER_STALE_SECS, http_routable_models,
-    peer_has_observed_liveness, resolve_peer_leaving, routable_models, routes_http_model,
-    routes_model,
+    ClaimedLogHead, ControlListenerLifecycle, DEAD_PEER_TTL, PEER_STALE_SECS, RttObservationAges,
+    http_routable_models, peer_has_observed_liveness, resolve_peer_leaving, routable_models,
+    routes_http_model, routes_model,
 };
 #[expect(
     unused_imports,
