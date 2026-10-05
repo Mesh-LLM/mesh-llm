@@ -64,8 +64,8 @@ impl MeshNodeHandle {
             .streams
             .lock()
             .map_err(|e| FfiError::HostUnavailable(e.to_string()))?;
-        for (_, handle) in streams.drain() {
-            handle.abort();
+        for (_, cancel) in streams.drain() {
+            let _ = cancel.send(());
         }
         drop(streams);
         let node = self
@@ -168,12 +168,22 @@ impl MeshNodeHandle {
         let request_id = format!("stream-{}", uuid::Uuid::new_v4());
         let id = request_id.clone();
         let streams = self.streams.clone();
+        let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel();
         let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
-        let task = crate::SDK_RUNTIME.spawn(async move {
+        crate::SDK_RUNTIME.spawn(async move {
             if ready_rx.await.is_err() {
                 return;
             }
-            send_stream_events(response, &id, listener).await;
+            tokio::select! {
+                biased;
+                () = send_stream_events(response, &id, &*listener) => {}
+                _ = cancel_rx => listener.on_event(OpenAiStreamEventNative::Failed {
+                    request_id: id.clone(),
+                    status_code: None,
+                    error: "stream cancelled".to_string(),
+                    body: None,
+                }),
+            }
             if let Ok(mut guard) = streams.lock() {
                 guard.remove(&id);
             }
@@ -181,16 +191,16 @@ impl MeshNodeHandle {
         self.streams
             .lock()
             .map_err(|e| FfiError::StreamFailed(e.to_string()))?
-            .insert(request_id.clone(), task.abort_handle());
+            .insert(request_id.clone(), cancel_tx);
         let _ = ready_tx.send(());
         Ok(request_id)
     }
 
     pub fn cancel(&self, request_id: String) {
         if let Ok(mut streams) = self.streams.lock()
-            && let Some(task) = streams.remove(&request_id)
+            && let Some(cancel) = streams.remove(&request_id)
         {
-            task.abort();
+            let _ = cancel.send(());
         }
     }
 }
@@ -218,7 +228,7 @@ fn mode_name(builder: &MeshNodeBuilder) -> String {
 async fn send_stream_events(
     mut response: reqwest::Response,
     request_id: &str,
-    listener: Box<dyn OpenAiStreamListener>,
+    listener: &dyn OpenAiStreamListener,
 ) {
     let status_code = response.status().as_u16();
     let content_type = response
@@ -251,20 +261,20 @@ async fn send_stream_events(
             Ok(Some(chunk)) => match decoder.push(&chunk) {
                 Ok(frames) => {
                     for frame in frames {
-                        emit_frame(&*listener, request_id, frame);
+                        emit_frame(listener, request_id, frame);
                     }
                 }
                 Err(error) => {
-                    stream_failed(&*listener, request_id, status_code, error.to_string());
+                    stream_failed(listener, request_id, status_code, error.to_string());
                     return;
                 }
             },
             Ok(None) => {
                 match decoder.finish() {
-                    Ok(Some(frame)) => emit_frame(&*listener, request_id, frame),
+                    Ok(Some(frame)) => emit_frame(listener, request_id, frame),
                     Ok(None) => {}
                     Err(error) => {
-                        stream_failed(&*listener, request_id, status_code, error.to_string());
+                        stream_failed(listener, request_id, status_code, error.to_string());
                         return;
                     }
                 }
@@ -274,7 +284,7 @@ async fn send_stream_events(
                 return;
             }
             Err(error) => {
-                stream_failed(&*listener, request_id, status_code, error.to_string());
+                stream_failed(listener, request_id, status_code, error.to_string());
                 return;
             }
         }

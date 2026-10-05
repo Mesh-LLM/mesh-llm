@@ -12,14 +12,20 @@ struct MeshExampleApp {
             ownerKeyPath: ProcessInfo.processInfo.environment["MESH_SDK_OWNER_KEY_PATH"]
         )
         try await node.start()
-        defer { Task { try? await node.stop() } }
-        let models = try await node.inference.listModels()
-        print("[models] \(models.count)")
-        guard let model = models.first else { return }
-        let response = try await node.inference.chatCompletions([
-            "model": model.id,
-            "messages": [["role": "user", "content": "hello"]],
-        ])
-        print(response.body)
+        do {
+            let models = try await node.inference.listModels()
+            print("[models] \(models.count)")
+            if let model = models.first {
+                let response = try await node.inference.chatCompletions([
+                    "model": model.id,
+                    "messages": [["role": "user", "content": "hello"]],
+                ])
+                print(response.body)
+            }
+        } catch {
+            try? await node.stop()
+            throw error
+        }
+        try await node.stop()
     }
 }

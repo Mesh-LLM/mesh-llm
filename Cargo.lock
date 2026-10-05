@@ -5024,6 +5024,7 @@ dependencies = [
  "serde",
  "serde_json",
  "skippy-runtime-install",
+ "tokio",
 ]
 
 [[package]]

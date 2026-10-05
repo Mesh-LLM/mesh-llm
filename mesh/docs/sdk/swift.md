@@ -1,5 +1,21 @@
 # Swift SDK
 
+Add the tagged Swift package to `Package.swift`:
+
+```swift
+dependencies: [
+    .package(url: "https://github.com/Mesh-LLM/mesh-llm", from: "0.78.0"),
+],
+targets: [
+    .target(name: "YourApp", dependencies: [
+        .product(name: "MeshLLM", package: "mesh-llm"),
+    ]),
+]
+```
+
+The release XCFramework supports arm64 macOS, Mac Catalyst, iOS devices, and
+iOS simulators. Intel Apple machines are not supported for MeshLLM inference.
+
 The Swift package exposes one embedded `Node` with `.client`, `.serve`, and
 `.combined` roles. `.serve` is serve-only.
 

@@ -1,5 +1,8 @@
 # Node.js SDK
 
+Install the package with `npm install @mesh-llm/sdk`. When developing from this
+checkout, run `npm run build:native` in `mesh/sdk/node` before using the SDK.
+
 The npm package exposes one embedded `Node` with `client`, `serve`, and
 `combined` roles. `serve` is serve-only.
 

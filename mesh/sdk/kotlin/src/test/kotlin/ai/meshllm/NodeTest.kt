@@ -2,9 +2,11 @@ package ai.meshllm
 
 import io.mockk.every
 import io.mockk.mockk
+import io.mockk.slot
 import io.mockk.verify
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -39,7 +41,8 @@ class NodeTest {
     fun requestPreservesAgentPayload() = runTest {
         val handle = mockk<MeshNodeHandleInterface>()
         val source = """{"model":"test","tools":[{"type":"function"}]}"""
-        every { handle.openaiRequest("/v1/chat/completions", source) } returns OpenAiResponseNative(
+        val request = slot<String>()
+        every { handle.openaiRequest("/v1/chat/completions", capture(request)) } returns OpenAiResponseNative(
             statusCode = 200u.toUShort(),
             contentType = "application/json",
             body = """{"choices":[{"message":{"tool_calls":[{"id":"call-1"}]}}]}""",
@@ -48,6 +51,7 @@ class NodeTest {
         val response = Node(handle).inference.chatCompletions(body)
         assertEquals(200u.toUShort(), response.statusCode)
         assertTrue(response.body.contains("tool_calls"))
-        verify { handle.openaiRequest("/v1/chat/completions", source) }
+        verify { handle.openaiRequest("/v1/chat/completions", any()) }
+        assertEquals(JsonPrimitive(false), Json.parseToJsonElement(request.captured).jsonObject["stream"])
     }
 }

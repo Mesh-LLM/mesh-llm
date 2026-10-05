@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use tokio::task::AbortHandle;
+use tokio::sync::oneshot;
 
 fn parse_json(source: &str) -> Result<Value> {
     serde_json::from_str(source).map_err(to_napi_error)
@@ -89,7 +89,7 @@ pub struct Node {
     builder: MeshNodeBuilder,
     node: tokio::sync::Mutex<Option<MeshNode>>,
     mode: String,
-    streams: Arc<Mutex<HashMap<String, AbortHandle>>>,
+    streams: Arc<Mutex<HashMap<String, oneshot::Sender<()>>>>,
 }
 
 #[napi]
@@ -138,8 +138,8 @@ impl Node {
 
     #[napi]
     pub async fn stop(&self) -> Result<()> {
-        for (_, task) in self.streams.lock().map_err(to_napi_error)?.drain() {
-            task.abort();
+        for (_, cancel) in self.streams.lock().map_err(to_napi_error)?.drain() {
+            let _ = cancel.send(());
         }
         if let Some(node) = self.node.lock().await.take() {
             node.stop().await.map_err(to_napi_error)?;
@@ -222,12 +222,20 @@ impl Node {
         let id = format!("stream-{}", uuid::Uuid::new_v4());
         let task_id = id.clone();
         let streams = self.streams.clone();
-        let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
-        let task = tokio::spawn(async move {
+        let (cancel_tx, cancel_rx) = oneshot::channel();
+        let (ready_tx, ready_rx) = oneshot::channel();
+        tokio::spawn(async move {
             if ready_rx.await.is_err() {
                 return;
             }
-            emit_stream(response, task_id.clone(), callback).await;
+            tokio::select! {
+                biased;
+                () = emit_stream(response, task_id.clone(), &callback) => {}
+                _ = cancel_rx => emit(&callback, json!({
+                    "type": "failed", "requestId": task_id,
+                    "statusCode": null, "error": "stream cancelled", "body": null,
+                })),
+            }
             if let Ok(mut guard) = streams.lock() {
                 guard.remove(&task_id);
             }
@@ -235,20 +243,20 @@ impl Node {
         self.streams
             .lock()
             .map_err(to_napi_error)?
-            .insert(id.clone(), task.abort_handle());
+            .insert(id.clone(), cancel_tx);
         let _ = ready_tx.send(());
         Ok(id)
     }
 
     #[napi]
     pub async fn cancel(&self, request_id: String) -> Result<()> {
-        if let Some(task) = self
+        if let Some(cancel) = self
             .streams
             .lock()
             .map_err(to_napi_error)?
             .remove(&request_id)
         {
-            task.abort();
+            let _ = cancel.send(());
         }
         Ok(())
     }
@@ -269,7 +277,7 @@ impl Node {
 async fn emit_stream(
     mut response: reqwest::Response,
     request_id: String,
-    callback: ThreadsafeFunction<String>,
+    callback: &ThreadsafeFunction<String>,
 ) {
     let status_code = response.status().as_u16();
     let content_type = response
@@ -278,7 +286,7 @@ async fn emit_stream(
         .and_then(|value| value.to_str().ok())
         .map(ToString::to_string);
     emit(
-        &callback,
+        callback,
         json!({
             "type": "started", "requestId": request_id,
             "statusCode": status_code, "contentType": content_type,
@@ -291,7 +299,7 @@ async fn emit_stream(
     {
         let body = response.text().await.ok();
         emit(
-            &callback,
+            callback,
             json!({
                 "type": "failed", "requestId": request_id,
                 "statusCode": status_code, "error": format!("expected streaming response; HTTP {status_code}"), "body": body,
@@ -305,31 +313,31 @@ async fn emit_stream(
             Ok(Some(chunk)) => match decoder.push(&chunk) {
                 Ok(frames) => {
                     for frame in frames {
-                        emit_frame(&callback, &request_id, frame);
+                        emit_frame(callback, &request_id, frame);
                     }
                 }
                 Err(error) => {
-                    emit_stream_error(&callback, &request_id, status_code, error.to_string());
+                    emit_stream_error(callback, &request_id, status_code, error.to_string());
                     return;
                 }
             },
             Ok(None) => {
                 match decoder.finish() {
-                    Ok(Some(frame)) => emit_frame(&callback, &request_id, frame),
+                    Ok(Some(frame)) => emit_frame(callback, &request_id, frame),
                     Ok(None) => {}
                     Err(error) => {
-                        emit_stream_error(&callback, &request_id, status_code, error.to_string());
+                        emit_stream_error(callback, &request_id, status_code, error.to_string());
                         return;
                     }
                 }
                 emit(
-                    &callback,
+                    callback,
                     json!({"type": "completed", "requestId": request_id}),
                 );
                 return;
             }
             Err(error) => {
-                emit_stream_error(&callback, &request_id, status_code, error.to_string());
+                emit_stream_error(callback, &request_id, status_code, error.to_string());
                 return;
             }
         }

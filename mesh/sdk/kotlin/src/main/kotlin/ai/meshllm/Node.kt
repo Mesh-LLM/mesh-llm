@@ -8,6 +8,8 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.jsonObject
 import uniffi.mesh_ffi.MeshNodeHandleInterface
 import uniffi.mesh_ffi.OpenAiStreamEventNative
 import uniffi.mesh_ffi.OpenAiStreamListener
@@ -109,19 +111,24 @@ class Node internal constructor(private val handle: MeshNodeHandleInterface) {
             }
 
         suspend fun chatCompletions(body: JsonObject): OpenAIResponse =
-            request("/v1/chat/completions", body)
+            request("/v1/chat/completions", withStreamFlag(body, false))
 
         suspend fun responses(body: JsonObject): OpenAIResponse =
-            request("/v1/responses", body)
+            request("/v1/responses", withStreamFlag(body, false))
 
         fun stream(path: String, bodyJson: String): Flow<OpenAIStreamEvent> = callbackFlow {
+            fun deliver(value: OpenAIStreamEvent) {
+                if (trySend(value).isFailure) {
+                    close(IllegalStateException("MeshLLM stream consumer fell behind the event buffer"))
+                }
+            }
             val listener = object : OpenAiStreamListener {
                 override fun onEvent(event: OpenAiStreamEventNative) {
                     when (event) {
-                        is OpenAiStreamEventNative.Started -> trySend(
+                        is OpenAiStreamEventNative.Started -> deliver(
                             OpenAIStreamEvent.Started(event.requestId, event.statusCode, event.contentType)
                         )
-                        is OpenAiStreamEventNative.Sse -> trySend(
+                        is OpenAiStreamEventNative.Sse -> deliver(
                             OpenAIStreamEvent.Sse(event.requestId, event.eventType, event.data, event.raw)
                         )
                         is OpenAiStreamEventNative.Completed -> close()
@@ -138,9 +145,12 @@ class Node internal constructor(private val handle: MeshNodeHandleInterface) {
         }
 
         fun streamChatCompletions(bodyJson: String): Flow<OpenAIStreamEvent> =
-            stream("/v1/chat/completions", bodyJson)
+            stream("/v1/chat/completions", withStreamFlag(Json.parseToJsonElement(bodyJson).jsonObject, true).toString())
 
         fun streamResponses(bodyJson: String): Flow<OpenAIStreamEvent> =
-            stream("/v1/responses", bodyJson)
+            stream("/v1/responses", withStreamFlag(Json.parseToJsonElement(bodyJson).jsonObject, true).toString())
+
+        private fun withStreamFlag(body: JsonObject, enabled: Boolean): JsonObject =
+            JsonObject(body + ("stream" to JsonPrimitive(enabled)))
     }
 }

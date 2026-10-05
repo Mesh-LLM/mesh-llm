@@ -21,6 +21,7 @@ serving = [
     "dep:reqwest",
     "dep:serde",
     "dep:serde_json",
+    "dep:tokio",
 ]
 # Opt-in paid inference on top of the serving path: ledger, gates and the
 # `wallet.v1` plugin adapter. Off by default: an embedding consumer (e.g. Buzz)
@@ -41,3 +42,4 @@ skippy-runtime-install = { path = "../../../skippy/crates/skippy-runtime-install
 reqwest = { version = "0.13", features = ["json"], optional = true }
 serde = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
+tokio = { version = "1", optional = true, features = ["time"] }

@@ -2199,55 +2199,55 @@ private let initializationResult: InitializationResult = {
     if bindings_contract_version != scaffolding_contract_version {
         return InitializationResult.contractVersionMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_func_create_node() != 63700) {
+    if (uniffi_meshllm_ffi_checksum_func_create_node() != 7741) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_func_current_mesh_version() != 41756) {
+    if (uniffi_meshllm_ffi_checksum_func_current_mesh_version() != 50997) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_func_current_skippy_abi_version() != 53670) {
+    if (uniffi_meshllm_ffi_checksum_func_current_skippy_abi_version() != 63557) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_func_install_native_runtime() != 48746) {
+    if (uniffi_meshllm_ffi_checksum_func_install_native_runtime() != 10411) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_func_installed_native_runtimes() != 16961) {
+    if (uniffi_meshllm_ffi_checksum_func_installed_native_runtimes() != 6385) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_func_prune_native_runtimes() != 11380) {
+    if (uniffi_meshllm_ffi_checksum_func_prune_native_runtimes() != 43279) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_func_remove_native_runtime() != 54339) {
+    if (uniffi_meshllm_ffi_checksum_func_remove_native_runtime() != 6828) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_cancel() != 47545) {
+    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_cancel() != 153) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_inference_list_models() != 41613) {
+    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_inference_list_models() != 32986) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_join_token() != 57356) {
+    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_join_token() != 55229) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_openai_request() != 19585) {
+    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_openai_request() != 65095) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_openai_stream() != 40368) {
+    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_openai_stream() != 24624) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_start() != 46124) {
+    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_start() != 16152) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_status() != 42366) {
+    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_status() != 3924) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_stop() != 10537) {
+    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_stop() != 25964) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_nativeruntimeprogresslistener_on_progress() != 40900) {
+    if (uniffi_meshllm_ffi_checksum_method_nativeruntimeprogresslistener_on_progress() != 47323) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_openaistreamlistener_on_event() != 35774) {
+    if (uniffi_meshllm_ffi_checksum_method_openaistreamlistener_on_event() != 60558) {
         return InitializationResult.apiChecksumMismatch
     }
 

@@ -377,7 +377,7 @@ impl OpenAiClient {
     ) -> anyhow::Result<RawOpenAiResponse> {
         let response = self
             .http
-            .post(self.url(path.trim_start_matches("/v1/")))
+            .post(self.url(path))
             .bearer_auth(&self.api_key)
             .header(reqwest::header::CONTENT_TYPE, "application/json")
             .body(body_json)
@@ -398,14 +398,16 @@ impl OpenAiClient {
     }
 
     pub async fn stream(&self, path: &str, body_json: String) -> anyhow::Result<reqwest::Response> {
-        Ok(self
-            .http
-            .post(self.url(path.trim_start_matches("/v1/")))
-            .bearer_auth(&self.api_key)
-            .header(reqwest::header::CONTENT_TYPE, "application/json")
-            .body(body_json)
-            .send()
-            .await?)
+        Ok(tokio::time::timeout(
+            Duration::from_secs(120),
+            self.http
+                .post(self.url(path))
+                .bearer_auth(&self.api_key)
+                .header(reqwest::header::CONTENT_TYPE, "application/json")
+                .body(body_json)
+                .send(),
+        )
+        .await??)
     }
 
     pub async fn models(&self) -> anyhow::Result<serde_json::Value> {
@@ -454,6 +456,8 @@ impl OpenAiClient {
     }
 
     fn url(&self, path: &str) -> String {
+        let path = path.trim_start_matches('/');
+        let path = path.strip_prefix("v1/").unwrap_or(path);
         format!("{}/{}", self.base_url.trim_end_matches('/'), path)
     }
 }
@@ -592,6 +596,16 @@ mod tests {
             client.url("chat/completions"),
             "http://127.0.0.1:9337/v1/chat/completions"
         );
+        for path in [
+            "/v1/chat/completions",
+            "v1/chat/completions",
+            "/chat/completions",
+        ] {
+            assert_eq!(
+                client.url(path),
+                "http://127.0.0.1:9337/v1/chat/completions"
+            );
+        }
     }
 
     #[test]

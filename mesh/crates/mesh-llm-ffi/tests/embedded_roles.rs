@@ -1,6 +1,22 @@
 use meshllm_ffi::{FfiError, create_node};
 use std::net::TcpListener;
+use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
+
+struct NodeCleanup {
+    nodes: Vec<Arc<meshllm_ffi::MeshNodeHandle>>,
+    key_dir: PathBuf,
+}
+
+impl Drop for NodeCleanup {
+    fn drop(&mut self) {
+        for node in self.nodes.iter().rev() {
+            let _ = node.stop();
+        }
+        let _ = std::fs::remove_dir_all(&self.key_dir);
+    }
+}
 
 fn free_port() -> u16 {
     TcpListener::bind("127.0.0.1:0")
@@ -58,6 +74,10 @@ fn local_model_serves_client_and_combined_inference() {
     };
     let key_dir = std::env::temp_dir().join(format!("mesh-sdk-roles-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&key_dir).expect("create role test directory");
+    let mut cleanup = NodeCleanup {
+        nodes: Vec::new(),
+        key_dir: key_dir.clone(),
+    };
     let make_node = |mode: &str, models: Vec<String>, join_tokens: Vec<String>| {
         let api_port = free_port();
         let mut console_port = free_port();
@@ -82,6 +102,7 @@ fn local_model_serves_client_and_combined_inference() {
     };
 
     let server = make_node("serve", vec![model_path.clone()], vec![]);
+    cleanup.nodes.push(server.clone());
     server.start().expect("start serving node");
     assert!(matches!(
         server.inference_list_models(),
@@ -97,11 +118,13 @@ fn local_model_serves_client_and_combined_inference() {
     let model_id = wait_for_model(&server_status.api_base_url);
 
     let client = make_node("client", vec![], vec![token.clone()]);
+    cleanup.nodes.push(client.clone());
     client.start().expect("start client node");
     wait_for_client_model(&client, &model_id);
     assert_chat(&client, &model_id);
 
     let combined = make_node("combined", vec![model_path], vec![token]);
+    cleanup.nodes.push(combined.clone());
     combined.start().expect("start combined node");
     wait_for_client_model(&combined, &model_id);
     assert_chat(&combined, &model_id);
@@ -109,7 +132,7 @@ fn local_model_serves_client_and_combined_inference() {
     combined.stop().expect("stop combined node");
     client.stop().expect("stop client node");
     server.stop().expect("stop serving node");
-    std::fs::remove_dir_all(key_dir).expect("remove role test directory");
+    std::fs::remove_dir_all(&key_dir).expect("remove role test directory");
 }
 
 fn wait_for_model(base_url: &str) -> String {

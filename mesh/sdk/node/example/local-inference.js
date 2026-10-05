@@ -10,6 +10,9 @@ async function main() {
     allowDownload: process.env.MESH_SDK_RUNTIME_ALLOW_DOWNLOAD === '1'
   })
   console.log(`using native runtime ${runtime.nativeRuntimeId}`)
+  if (process.env.MESHLLM_NATIVE_RUNTIME_ARTIFACT_DIR) {
+    process.env.MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR = process.env.MESHLLM_NATIVE_RUNTIME_ARTIFACT_DIR
+  }
   const node = Node.create({
     mode: 'combined',
     models: [modelRef],
@@ -18,8 +21,17 @@ async function main() {
   })
   await node.start()
   try {
+    const requestedModel = modelRef.split(/[\\/]/).pop().replace(/\.gguf$/i, '')
+    let model
+    for (let attempt = 0; attempt < 120; attempt++) {
+      const models = await node.inference.listModels()
+      model = models.find(item => item.id === modelRef || item.id === requestedModel)
+      if (model) break
+      await new Promise(resolve => setTimeout(resolve, 1000))
+    }
+    if (!model) throw new Error(`Model ${modelRef} did not become available within two minutes`)
     const result = await node.inference.chatCompletions({
-      model: modelRef,
+      model: model.id,
       messages: [{ role: 'user', content: process.env.MESH_SDK_PROMPT || 'hello' }]
     })
     console.log(result.choices?.[0]?.message?.content)

@@ -1,5 +1,22 @@
 # Kotlin/Android SDK
 
+Install `ai.meshllm:meshllm-android:<version>` from GitHub Packages. Configure
+the repository and credentials in Gradle:
+
+```kotlin
+repositories {
+    maven {
+        url = uri("https://maven.pkg.github.com/Mesh-LLM/mesh-llm")
+        credentials {
+            username = providers.gradleProperty("gpr.user")
+                .orElse(System.getenv("GITHUB_ACTOR")).get()
+            password = providers.gradleProperty("gpr.key")
+                .orElse(System.getenv("GITHUB_TOKEN")).get()
+        }
+    }
+}
+```
+
 The Kotlin package exposes one embedded `Node` with `CLIENT`, `SERVE`, and
 `COMBINED` roles. `SERVE` is serve-only.
 

@@ -68,8 +68,8 @@ class Node {
       options.models || [],
       options.autoJoin === true,
       options.ownerKeyPath || null,
-      options.apiPort || 9337,
-      options.consolePort || 3131
+      options.apiPort ?? 9337,
+      options.consolePort ?? 3131
     )
     return new Node(handle)
   }
