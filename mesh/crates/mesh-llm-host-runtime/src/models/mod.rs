@@ -1,0 +1,170 @@
+pub(crate) mod artifact_transfer;
+pub mod capabilities;
+pub mod catalog;
+pub mod delete;
+pub use delete::DeleteResult;
+mod download_parts;
+mod download_transfer;
+mod external_inference;
+pub mod gguf;
+pub mod inventory;
+pub mod local;
+mod maintenance;
+mod profile;
+pub mod remote_catalog;
+pub mod resolve;
+pub use resolve::ResolvedModel;
+#[cfg(test)]
+mod delete_tests;
+pub mod search;
+pub mod topology;
+mod usage;
+
+use anyhow::{Context, Result};
+use hf_hub::{HFClient, HFClientBuilder, HFClientSync};
+
+pub use capabilities::{
+    CapabilityLevel, ModelCapabilities, RuntimeMediaCapabilityEvidence,
+    runtime_media_capability_evidence, runtime_verified_model_capabilities,
+};
+pub use download_transfer::DownloadTransferStats;
+pub(crate) use external_inference::append_external_inference_models;
+pub use inventory::{LocalModelInventorySnapshot, scan_local_inventory_snapshot_with_progress};
+pub use local::{
+    HuggingFaceModelIdentity, InstalledModelArtifact, find_mmproj_path, find_model_path,
+    huggingface_hub_cache_dir, huggingface_identity_for_path, layered_package_layer_count_for_path,
+    layered_package_total_bytes_for_path, mesh_llm_cache_dir, model_ref_for_path,
+    scan_installed_artifacts_in, scan_installed_models, scan_installed_models_in,
+    scan_local_models,
+};
+pub use maintenance::{run_update, warn_about_updates_for_paths};
+pub(crate) use profile::served_model_metadata_for_model;
+pub use resolve::{
+    ModelDetails, ShowVariantsProgress, canonicalize_interest_model_ref,
+    download_model_ref_with_progress_details, download_model_ref_with_progress_details_direct,
+    find_loaded_remote_catalog_model_exact, find_remote_catalog_model_exact,
+    installed_model_capabilities, installed_model_display_name, installed_model_huggingface_ref,
+    loaded_remote_catalog_display_name, remote_catalog_model_draft_ref, remote_catalog_model_ref,
+    resolve_model_spec, resolve_model_spec_with_progress, show_exact_model,
+    show_model_variants_with_progress,
+};
+pub use search::{
+    SearchArtifactFilter, SearchHit, SearchProgress, SearchSort, search_catalog_json_payload,
+    search_catalog_models, search_huggingface, search_huggingface_json_payload,
+};
+pub use topology::{ModelMoeInfo, ModelTopology, infer_local_model_topology};
+pub use usage::{
+    ModelCleanupPlan, ModelCleanupResult, execute_model_cleanup, load_model_usage_record_for_path,
+    model_usage_cache_dir, plan_model_cleanup, track_managed_model_usage, track_model_usage,
+};
+
+pub use skippy_model_hf::PreparedDownloadDirectories;
+
+/// Prepare the same CLI fallback roots used by standalone Skippy.
+pub fn prepare_download_directories() -> Result<PreparedDownloadDirectories> {
+    skippy_model_hf::prepare_cli_download_directories()
+}
+
+pub(crate) fn build_hf_api(_progress: bool) -> Result<HFClientSync> {
+    let _ = skippy_model_hf::configure_hf_tls_provider();
+    let mut builder = HFClientBuilder::new().cache_dir(huggingface_hub_cache_dir());
+    if let Ok(endpoint) = std::env::var("HF_ENDPOINT") {
+        let endpoint = endpoint.trim();
+        if !endpoint.is_empty() {
+            builder = builder.endpoint(endpoint.to_string());
+        }
+    }
+    if let Some(token) = hf_token_override() {
+        builder = builder.token(token);
+    }
+    HFClientSync::from_inner(builder.build().context("Build Hugging Face API client")?)
+        .context("Build Hugging Face sync API client")
+}
+
+pub(crate) use skippy_model_hf::blocking::run_hf_sync;
+
+pub(crate) fn build_hf_tokio_api(_progress: bool) -> Result<HFClient> {
+    let _ = skippy_model_hf::configure_hf_tls_provider();
+    let mut builder = HFClientBuilder::new().cache_dir(huggingface_hub_cache_dir());
+    if let Ok(endpoint) = std::env::var("HF_ENDPOINT") {
+        let endpoint = endpoint.trim();
+        if !endpoint.is_empty() {
+            builder = builder.endpoint(endpoint.to_string());
+        }
+    }
+    if let Some(token) = hf_token_override() {
+        builder = builder.token(token);
+    }
+    builder
+        .build()
+        .context("Build Hugging Face async API client")
+}
+
+pub(crate) fn hf_token_override() -> Option<String> {
+    for key in ["HF_TOKEN", "HUGGING_FACE_HUB_TOKEN"] {
+        if let Ok(token) = std::env::var(key) {
+            let token = token.trim();
+            if !token.is_empty() {
+                return Some(token.to_string());
+            }
+        }
+    }
+    None
+}
+
+fn format_size_bytes(bytes: u64) -> String {
+    if bytes >= 1_000_000_000 {
+        format!("{:.1}GB", bytes as f64 / 1e9)
+    } else {
+        format!("{:.0}MB", bytes as f64 / 1e6)
+    }
+}
+
+fn short_revision(revision: &str) -> String {
+    if revision.len() <= 12 {
+        revision.to_string()
+    } else {
+        revision[..12].to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::models::maintenance::cache_repo_id_from_dir;
+    use crate::models::resolve::{parse_hf_resolve_url, parse_huggingface_ref};
+
+    #[test]
+    fn parse_hf_resolve_url_extracts_repo_revision_and_file() {
+        let (repo, revision, file) = parse_hf_resolve_url(
+            "https://huggingface.co/Qwen/Qwen3-8B-GGUF/resolve/main/Qwen3-8B-Q4_K_M.gguf",
+        )
+        .unwrap();
+        assert_eq!(repo, "Qwen/Qwen3-8B-GGUF");
+        assert_eq!(revision.as_deref(), Some("main"));
+        assert_eq!(file, "Qwen3-8B-Q4_K_M.gguf");
+    }
+
+    #[test]
+    fn cache_repo_id_from_dir_decodes_hf_cache_names() {
+        assert_eq!(
+            cache_repo_id_from_dir("models--Qwen--Qwen3-8B-GGUF"),
+            Some("Qwen/Qwen3-8B-GGUF".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_huggingface_ref_accepts_revision_shorthand() {
+        let (repo, revision, file) =
+            parse_huggingface_ref("Qwen/Qwen3-8B-GGUF@main/Qwen3-8B-Q4_K_M.gguf").unwrap();
+        assert_eq!(repo, "Qwen/Qwen3-8B-GGUF");
+        assert_eq!(revision.as_deref(), Some("main"));
+        assert_eq!(file, "Qwen3-8B-Q4_K_M.gguf");
+    }
+
+    #[tokio::test]
+    async fn run_hf_sync_leaves_tokio_runtime_context() {
+        let saw_runtime = super::run_hf_sync(|| Ok(tokio::runtime::Handle::try_current().is_ok()))
+            .expect("sync operation should run");
+        assert!(!saw_runtime);
+    }
+}

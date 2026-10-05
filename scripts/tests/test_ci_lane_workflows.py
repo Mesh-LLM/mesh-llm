@@ -384,6 +384,31 @@ class CiLaneWorkflowTests(unittest.TestCase):
         self.assertNotIn("git checkout", action)
         self.assertNotIn('git archive --format=tar "$SOURCE_SHA" -- .', action)
 
+    def test_planner_keeps_large_change_lists_out_of_process_arguments(self) -> None:
+        action = (ROOT / ".github/actions/plan-ci/action.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("jq -Rsc", action)
+        self.assertIn("/tmp/changed_files.txt > \"$changed_files_json_file\"", action)
+        self.assertIn('--slurpfile changed_files "$changed_files_json_file"', action)
+        self.assertNotIn("CHANGED_FILES: ${{ inputs.changed_files }}", action)
+        self.assertNotIn('--argjson changed_files "$changed_files_json"', action)
+        for workflow in (ROOT / ".github/workflows").glob("*.yml"):
+            source = workflow.read_text(encoding="utf-8")
+            if "uses: ./.github/actions/plan-ci" in source:
+                self.assertIn("id: change_limit", source, workflow.name)
+                self.assertIn("wc -c < /tmp/changed_files.txt", source, workflow.name)
+                self.assertIn(
+                    "changed_files: ${{ steps.change_limit.outputs.force_all",
+                    source,
+                    workflow.name,
+                )
+                self.assertNotIn(
+                    "changed_files: ${{ steps.changes.outputs.changed_files }}",
+                    source,
+                    workflow.name,
+                )
+
     def test_topic_lane_projections_are_valid_jq(self) -> None:
         action = (ROOT / ".github/actions/plan-ci/action.yml").read_text(
             encoding="utf-8"

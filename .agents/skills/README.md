@@ -22,9 +22,9 @@ Ground rules baked into all of these:
 - `--headless` only hides the web UI; it is not a backgrounding mechanism.
 - Prefer `mesh-llm stop` over `pkill`.
 
-Related docs: `docs/USAGE.md` (install/service/storage), `docs/CLI.md`
-(commands and model refs), `docs/MESHES.md` (mesh workflows),
-`docs/AGENTS.md` (agent clients), `docs/SKIPPY_SPLITS.md` (big-model splits).
+Related docs: `mesh/docs/USAGE.md` (install/service/storage), `mesh/docs/CLI.md`
+(commands and model refs), `mesh/docs/MESHES.md` (mesh workflows),
+`mesh/docs/AGENTS.md` (agent clients), `skippy/docs/SKIPPY_SPLITS.md` (big-model splits).
 
 The other directories beside these operator workflows are maintainer-facing
 skills for release validation, release notes, Skippy internals, patch queues,

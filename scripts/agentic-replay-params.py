@@ -86,7 +86,7 @@ def replay_command(matrix_path, family, refs, dataset_file, output):
         raise ValueError("model native context is below the required window")
     command = [
         sys.executable,
-        str(Path(__file__).resolve().parents[1] / "evals/agentic-replay.py"),
+        str(Path(__file__).resolve().parents[1] / "mesh/evals/agentic-replay.py"),
         "run",
         "--model",
         f"{model['repo']}@{model['revision']}/{model['file']}",

@@ -1,0 +1,22 @@
+[package]
+name = "skippy-correctness"
+description = "Correctness checker for staged versus full-model Skippy execution"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+hex = "0.4"
+anyhow.workspace = true
+blake3.workspace = true
+clap.workspace = true
+skippy-cache = { path = "../skippy-cache" }
+skippy-protocol = { path = "../skippy-protocol" }
+skippy-runtime = { path = "../skippy-runtime" }
+skippy-model-artifact = { path = "../skippy-model-artifact" }
+skippy-model-hf = { path = "../skippy-model-hf" }
+skippy-model-ref = { path = "../skippy-model-ref" }
+reqwest = { version = "0.13", default-features = false, features = ["blocking", "json", "rustls"] }
+serde.workspace = true
+serde_json.workspace = true
+sha2 = "0.11"

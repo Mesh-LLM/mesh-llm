@@ -1,0 +1,161 @@
+[package]
+name = "mesh-llm-host-runtime"
+version.workspace = true
+edition = "2024"
+license.workspace = true
+description = "Host runtime orchestration for mesh-llm nodes"
+repository = "https://github.com/Mesh-LLM/mesh-llm"
+homepage = "https://github.com/Mesh-LLM/mesh-llm"
+readme = "README.md"
+
+[features]
+default = ["web-ui", "dynamic-native-runtime", "payments"]
+# Paid-inference ledger, gates and the `wallet.v1` plugin adapter. Never links
+# a wallet SDK: the wallet is a plugin process resolved by capability.
+# Consumers that reach host-runtime with `default-features = false` (e.g. via
+# the SDK serving path) stay payment-free and drop the rusqlite /
+# lightning-invoice / bitcoin stack unless they opt back in.
+payments = ["dep:mesh-llm-payments-types", "mesh-llm-payments-types/engine", "dep:mesh-llm-wallet", "mesh-llm-membership/payments"]
+# Embed the React web console into the binary. Default on; turn off for
+# lib-style / headless consumers that don't need the console assets.
+# Propagates to `mesh-llm-ui/embed-assets`.
+web-ui = ["mesh-llm-ui/embed-assets"]
+dynamic-native-runtime = [
+    "mesh-llm-skippy-adapter/dynamic-native-runtime",
+    "skippy-api/dynamic-native-runtime",
+    "mesh-llm-system/dynamic-native-runtime",
+    "skippy-runtime/dynamic-native-runtime",
+    "skippy-serving/dynamic-native-runtime",
+]
+# Runs the installed Claude Code executable through the real host ingress.
+# CI pins and installs the client before enabling this feature.
+claude-code-integration = []
+# Extends the real-client smoke through a credentialed Anthropic Claude model.
+claude-live-model-integration = ["claude-code-integration"]
+
+[lints]
+workspace = true
+
+[dependencies]
+mesh-llm-moa-plugin = { path = "../mesh-llm-moa-plugin", version = "0.78.0" }
+mesh-llm-control-api = { path = "../mesh-llm-control-api", version = "0.78.0" }
+mesh-llm-skippy-adapter = { path = "../mesh-llm-skippy-adapter", version = "0.78.0" }
+mesh-llm-transport = { path = "../mesh-llm-transport", version = "0.78.0" }
+skippy-api = { path = "../../../skippy/crates/skippy-api", version = "0.78.0" }
+skippy-events = { path = "../../../skippy/crates/skippy-events", version = "0.78.0" }
+mesh-llm-payments-types = { path = "../mesh-llm-payments-types", version = "0.78.0", optional = true }
+mesh-llm-wallet = { path = "../mesh-llm-wallet", version = "0.78.0", optional = true }
+bytes = "1"
+mesh-llm-build-info.workspace = true
+mesh-llm-config = { path = "../mesh-llm-config", version = "0.78.0"  }
+mesh-llm-runtime-event-contracts = { path = "../mesh-llm-runtime-event-contracts", version = "0.78.0" }
+mesh-llm-events = { path = "../mesh-llm-events", version = "0.78.0"  }
+mesh-llm-log-store = { path = "../mesh-llm-log-store", version = "0.78.0"  }
+mesh-llm-membership = { path = "../mesh-llm-membership", version = "0.78.0", features = ["host-io"] }
+mesh-llm-plugin = { path = "../mesh-llm-plugin", version = "0.78.0"  }
+mesh-llm-plugin-manager = { path = "../mesh-llm-plugin-manager", version = "0.78.0"  }
+mesh-llm-identity = { path = "../mesh-llm-identity", version = "0.78.0", features = ["host-io"]  }
+skippy-native-runtime = { path = "../../../skippy/crates/skippy-native-runtime", version = "0.78.0"  }
+mesh-native-serving-plugin-host = { path = "../mesh-native-serving-plugin-host", version = "0.78.0" }
+skippy-guardrails = { path = "../../../skippy/crates/skippy-guardrails", version = "0.78.0"  }
+mesh-llm-protocol = { path = "../mesh-llm-protocol", version = "0.78.0"  }
+mesh-llm-routing = { path = "../mesh-llm-routing", version = "0.78.0"  }
+mesh-llm-system = { path = "../mesh-llm-system", version = "0.78.0", features = ["skippy-devices"]  }
+mesh-llm-types = { path = "../mesh-llm-types", version = "0.78.0"  }
+mesh-llm-ui = { path = "../mesh-llm-ui", version = "0.78.0", default-features = false  }
+mesh-llm-node = { path = "../mesh-llm-node", version = "0.78.0"  }
+mesh-client = { package = "mesh-llm-client", path = "../mesh-client", version = "0.78.0", features = ["host-io"]  }
+skippy-model-artifact = { path = "../../../skippy/crates/skippy-model-artifact", version = "0.78.0"  }
+skippy-model-hf = { path = "../../../skippy/crates/skippy-model-hf", version = "0.78.0"  }
+skippy-model-ref = { path = "../../../skippy/crates/skippy-model-ref", version = "0.78.0"  }
+skippy-model-resolver = { path = "../../../skippy/crates/skippy-model-resolver", version = "0.78.0"  }
+skippy-inference-api = { path = "../../../skippy/crates/skippy-inference-api", version = "0.78.0"  }
+skippy-protocol = { path = "../../../skippy/crates/skippy-protocol", version = "0.78.0"  }
+skippy-cache = { path = "../../../skippy/crates/skippy-cache", version = "0.78.0"  }
+skippy-coordinator = { path = "../../../skippy/crates/skippy-coordinator", version = "0.78.0"  }
+skippy-runtime = { path = "../../../skippy/crates/skippy-runtime", version = "0.78.0"  }
+skippy-ffi = { path = "../../../skippy/crates/skippy-ffi", version = "0.78.0", default-features = false }
+skippy-model = { path = "../../../skippy/crates/skippy-model", version = "0.78.0" }
+skippy-serving = { path = "../../../skippy/crates/skippy-serving", version = "0.78.0"  }
+skippy-topology = { path = "../../../skippy/crates/skippy-topology", version = "0.78.0"  }
+skippy-package-format = { path = "../../../skippy/crates/skippy-package-format", version = "0.78.0"  }
+iroh = { version = "1.0.3", default-features = false, features = ["metrics", "fast-apple-datapath", "portmapper", "tls-aws-lc-rs", "unstable-net-report"] }
+tokio = { version = "1", features = ["full"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+socket2 = { version = "0.6", features = ["all"] }
+anyhow = "1"
+async-trait = "0.1"
+crossbeam-queue.workspace = true
+rand = "0.10"
+base64 = "0.23"
+dirs = "6.0.0"
+hex = "0.4.3"
+nostr-sdk = { version = "0.45.1", default-features = false }
+opentelemetry = { version = "0.32.0", default-features = false, features = ["metrics"] }
+opentelemetry_sdk = { version = "0.32.1", default-features = false, features = ["metrics"] }
+opentelemetry-otlp = { version = "0.32.0", default-features = false, features = ["metrics", "http-proto", "reqwest-blocking-client"] }
+rustls = "0.23.36"
+mesh-llm-analytics = { path = "../mesh-llm-analytics", version = "0.78.0" }
+ryu = "1"
+reqwest = { version = "0.13", features = ["stream", "json"] }
+futures-util = "0.3"
+sha2 = "0.11"
+ed25519-dalek = { version = "=3.0.0", features = ["rand_core"] }
+thiserror = "2"
+zeroize = { version = "1", features = ["derive"] }
+rpassword = "7.5"
+chrono = { version = "0.4", features = ["serde"] }
+httparse = "1"
+http = "1"
+http-body-util = "0.1"
+tokio-stream = "0.1"
+crossterm = "0.29"
+url = "2"
+urlencoding = "2"
+uuid = { version = "1", features = ["v4"] }
+libc = "0.2.183"
+mdns-sd = "0.21"
+regex-lite = "0.1"
+rmcp = { version = "3", features = ["client", "server", "transport-child-process", "transport-io", "transport-streamable-http-client-reqwest", "transport-streamable-http-server"] }
+axum = "0.8"
+tower = { version = "0.5", features = ["util"] }
+schemars = "1"
+prost = "0.14"
+toml = "1.1"
+hf_hub = { package = "skippy-hf-hub", path = "../../../skippy/crates/skippy-hf-hub", version = "0.78.0", default-features = false, features = ["blocking"] }
+tempfile = "3"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Globalization",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Com",
+    "Win32_UI_Shell",
+] }
+
+[dev-dependencies]
+mesh-llm-skippy-adapter = { path = "../mesh-llm-skippy-adapter", version = "0.78.0", features = ["test-support"] }
+mesh-llm-payments = { path = "../mesh-llm-payments", version = "0.78.0", features = ["plugin-server"] }
+# start_paused test clocks for the probe cooldown regression tests.
+tokio = { version = "1", features = ["full", "test-util"] }
+bitcoin = { version = "0.32", features = ["secp-recovery"] }
+lightning-invoice = { version = "0.35.0-rc1", features = ["std"] }
+serial_test = "4"
+skippy-serving = { path = "../../../skippy/crates/skippy-serving", version = "0.78.0", features = ["test-support"] }
+opentelemetry_sdk = { version = "0.32.1", default-features = false, features = ["metrics", "testing"] }
+mesh-client = { package = "mesh-llm-client", path = "../mesh-client", version = "0.78.0"  }
+# Enables the membership crate's `test-support` home override during the host's
+# own test build, so cross-crate callers (where the membership crate's
+# `cfg(test)` is false) still honor `MESH_LLM_TEST_HOME`. Not in
+# `[dependencies]`: a library consumer must never get the env-var override.
+mesh-llm-membership = { path = "../mesh-llm-membership", version = "0.78.0", features = ["test-support"] }
+# Used by the gated-relay regression test to spawn an in-process iroh-relay
+# with AccessConfig::Restricted, then build a real iroh::Endpoint from our
+# relay_map_from_urls output and verify --relay-auth tokens reach the relay
+# on the WebSocket upgrade (and that the wrong token is rejected).
+iroh = { version = "1.0.3", features = ["test-utils"] }
+iroh-relay = { version = "1.0.3", features = ["server", "test-utils"] }

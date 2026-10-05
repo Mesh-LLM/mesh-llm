@@ -379,57 +379,67 @@ should_skip_initial_dry_run() {
 
 publish_crates=(
     mesh-llm-identity
+    skippy-events
     skippy-tokenizer
     mesh-llm-protocol
+    mesh-llm-transport
     mesh-llm-routing
+    skippy-model-ref
+    skippy-model-artifact
     mesh-llm-types
-    mesh-llm-guardrails
+    skippy-guardrails
     mesh-native-serving-plugin-api
     mesh-llm-skills
-    mesh-llm-gpu-bench
+    skippy-gpu-bench
     skippy-ffi
     skippy-package-format
     skippy-model
     skippy-protocol
+    skippy-native-runtime
+    mesh-llm-config
+    mesh-llm-plugin
+    mesh-llm-wallet
+    mesh-llm-payments-types
+    mesh-llm-membership
     skippy-coordinator
     skippy-topology
     skippy-metrics
     skippy-cache
-    model-ref
-    model-artifact
-    model-resolver
+    skippy-model-resolver
     mesh-llm-client
     mesh-llm-api-client
     mesh-llm-events
+    mesh-llm-control-api
     mesh-llm-runtime-event-contracts
     mesh-llm-log-store
     mesh-llm-build-info
     mesh-llm-analytics
     mesh-llm-release-footer
-    mesh-llm-native-runtime
-    mesh-llm-config
-    mesh-llm-plugin
-    mesh-llm-wallet
-    mesh-llm-payments-types
     mesh-llm-payments
     mesh-llm-ui
     mesh-llm-console-server
     mesh-llm-tui
-    mesh-llm-cli
-    model-hf
-    model-package
+    skippy-hf-hub
+    skippy-model-hf
+    skippy-model-package
     mesh-llm-node
     mesh-llm-api-server
-    mesh-llm-hardware-profile
+    skippy-hardware-profile
     skippy-runtime
     skippy-scheduler
-    openai-frontend
-    skippy-server
+    skippy-inference-api
+    skippy-runtime-install
+    skippy-config
+    skippy-serving
+    skippy-api
+    mesh-llm-skippy-adapter
+    skippy-commands
+    mesh-llm-cli
+    skippy-cli
     mesh-native-serving-plugin-host
     mesh-llm-plugin-manager
     mesh-mixture-of-agents
     mesh-llm-moa-plugin
-    mesh-llm-runtime-install
     mesh-llm-system
     mesh-llm-host-runtime
     mesh-llm-embedded-runtime

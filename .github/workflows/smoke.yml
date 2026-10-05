@@ -252,7 +252,7 @@ jobs:
       - name: Dense constrained-stack smoke
         # Canary that detects pathologically oversized spawned futures by
         # running the smoke under a reduced tokio worker stack. The default
-        # at runtime is 8 MiB (see crates/mesh-llm/src/main.rs); the canary
+        # at runtime is 8 MiB (see mesh/crates/mesh-llm/src/main.rs); the canary
         # currently allows 2 MiB, which gives normal owner-control,
         # mesh, and inference startup state machines headroom while still
         # catching multi-megabyte regressions in spawn sites.
@@ -421,7 +421,7 @@ jobs:
       - name: Dense constrained-stack smoke
         # Canary that detects pathologically oversized spawned futures by
         # running the smoke under a reduced tokio worker stack. The default
-        # at runtime is 8 MiB (see crates/mesh-llm/src/main.rs); the canary
+        # at runtime is 8 MiB (see mesh/crates/mesh-llm/src/main.rs); the canary
         # currently allows 2 MiB, which gives normal owner-control,
         # mesh, and inference startup state machines headroom while still
         # catching multi-megabyte regressions in spawn sites.

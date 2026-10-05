@@ -8,7 +8,7 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(ROOT / "evals"))
+sys.path.insert(0, str(ROOT / "mesh" / "evals"))
 import agentic_replay_evidence as evidence
 
 

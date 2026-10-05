@@ -77,11 +77,11 @@
       "reason": "metadata.gguf has no immutable revision and file digest/size in the checked-in source; leave outside the registry until verified"
     },
     {
-      "path": "evals/skippy-radix-cache-models.json#qwen35-hybrid",
+      "path": "skippy/evals/skippy-radix-cache-models.json#qwen35-hybrid",
       "reason": "the source has an immutable revision but no verified size or SHA-256 yet"
     },
     {
-      "path": "evals/skippy-radix-cache-models.json#qwen3next-linear",
+      "path": "skippy/evals/skippy-radix-cache-models.json#qwen3next-linear",
       "reason": "the source has an immutable revision but no verified size or SHA-256 yet"
     }
   ],
@@ -4165,7 +4165,7 @@
           }
         ]
       },
-      "notes": "Pinned Skippy runtime/model-package correctness fixture."
+      "notes": "Pinned Skippy runtime/skippy-model-package correctness fixture."
     },
     {
       "id": "smollm2-safetensors",
@@ -4776,9 +4776,9 @@
         "resources": {
           "runner_role": "family-certify",
           "cache_policy": "immutable-local",
-          "estimated_model_bytes": 96824555936
+          "estimated_model_bytes": 96827207004
         },
-        "notes": "deepseek4 hybrid-connection MoE with a vision projector; ~97 GB Q2 artifact, so manual-full only; estimated_model_bytes is the declared file set minus ~8 MB of GGUF metadata",
+        "notes": "deepseek4 hybrid-connection MoE with a vision projector; ~97 GB Q2 artifact, so manual-full only; estimated_model_bytes is the exact pinned GGUF tensor byte sum",
         "mmproj_artifact": {
           "repo": "unsloth/DeepSeek-V4-Flash-Vision-Exp-GGUF",
           "revision": "87ce15810931a270f165e5e50439cd446f6b4ba5",
@@ -4842,9 +4842,9 @@
         "resources": {
           "runner_role": "family-certify",
           "cache_policy": "immutable-local",
-          "estimated_model_bytes": 93629298368
+          "estimated_model_bytes": 93629009920
         },
-        "notes": "minimax-m2 MoE (256 experts, 8 active); smallest 3-bit artifact is ~94 GB, so this row is manual-full only; estimated_model_bytes is the declared file set minus ~8 MB of GGUF metadata"
+        "notes": "minimax-m2 MoE (256 experts, 8 active); smallest 3-bit artifact is ~94 GB, so this row is manual-full only; estimated_model_bytes is the exact pinned GGUF tensor byte sum"
       }
     },
     {
@@ -4912,9 +4912,9 @@
         "resources": {
           "runner_role": "family-certify",
           "cache_policy": "immutable-local",
-          "estimated_model_bytes": 19562785664
+          "estimated_model_bytes": 19564087808
         },
-        "notes": "bailingmoe2 MoE (128 experts, 6 active) shipping only as a six-shard Q4_K_M set; estimated_model_bytes is the declared file set minus ~8 MB of GGUF metadata"
+        "notes": "bailingmoe2 MoE (128 experts, 6 active) shipping only as a six-shard Q4_K_M set; estimated_model_bytes is the exact pinned GGUF tensor byte sum"
       }
     },
     {
@@ -4958,9 +4958,9 @@
         "resources": {
           "runner_role": "family-certify",
           "cache_policy": "immutable-local",
-          "estimated_model_bytes": 16748683904
+          "estimated_model_bytes": 16743567360
         },
-        "notes": "dense 30B with a vision projector and a paired dflash speculative drafter; estimated_model_bytes is the declared file set minus ~8 MB of GGUF metadata",
+        "notes": "dense 30B with a vision projector and a paired dflash speculative drafter; estimated_model_bytes is the exact pinned GGUF tensor byte sum",
         "mmproj_artifact": {
           "repo": "meta-models/Muse-Glimmer-30B-GGUF",
           "revision": "70bf1b61ac09f91b24d39038091b41c582bc5d7a",
@@ -5028,9 +5028,9 @@
         "resources": {
           "runner_role": "family-certify",
           "cache_policy": "immutable-local",
-          "estimated_model_bytes": 8231591488
+          "estimated_model_bytes": 8231178240
         },
-        "notes": "dense mistral3 with a separate BF16 vision projector; distinct repository from family-mistral-small; estimated_model_bytes is the declared file set minus ~8 MB of GGUF metadata",
+        "notes": "dense mistral3 with a separate BF16 vision projector; distinct repository from family-mistral-small; estimated_model_bytes is the exact pinned GGUF tensor byte sum",
         "mmproj_artifact": {
           "repo": "mistralai/Ministral-3-14B-Reasoning-2512-GGUF",
           "revision": "fe3b038f30334729263d860d5dadbaa34e0f2a18",
@@ -5085,9 +5085,9 @@
         "resources": {
           "runner_role": "family-certify",
           "cache_policy": "immutable-local",
-          "estimated_model_bytes": 2829072864
+          "estimated_model_bytes": 2829187200
         },
-        "notes": "nemotron_h hybrid (Mamba2 + attention) Nano 4B; head_count_kv is per-layer and zero on non-attention layers; estimated_model_bytes is the declared file set minus ~8 MB of GGUF metadata"
+        "notes": "nemotron_h hybrid (Mamba2 + attention) Nano 4B; head_count_kv is per-layer and zero on non-attention layers; estimated_model_bytes is the exact pinned GGUF tensor byte sum"
       }
     },
     {

@@ -7,7 +7,7 @@ metadata:
 
 # HF Layer Package Jobs
 
-Use this skill for the `models package` CLI, the `model-package` crate, and the
+Use this skill for the `models package` CLI, the `skippy-model-package` crate, and the
 daily Unsloth queue workflow. This skill starts after a quantized GGUF artifact
 exists. It does not quantize models; use `hf-gguf-quant-jobs` first or
 `hf-quant-and-layer-package-jobs` when quantization and layer packaging should
@@ -53,17 +53,20 @@ mesh-llm models certify <layer-package-ref> --package-only --json
 ## Local Package Workflow
 
 When the quantized GGUF is already available on the local machine, build the
-package locally with `skippy-model-package`, then publish the package directory
-to a Hugging Face model repo:
+package locally with `skippy-package-builder`, then publish the package directory
+to a Hugging Face model repo. On macOS or Linux, the runtime recipe builds and
+packages the helper with its native libraries. Replace `<runtime-id>` below
+with the CPU runtime directory produced under `dist/native-runtimes`:
 
 ```bash
-just build
+just release-runtime-build cpu
+package_builder="dist/native-runtimes/<runtime-id>/tools/skippy-package-builder"
 
-target/debug/skippy-model-package write-package \
+"$package_builder" write-package \
   <org>/<gguf-repo>:<quant-selector> \
   --out-dir /tmp/<model>-layers
 
-target/debug/skippy-model-package preflight \
+"$package_builder" preflight \
   /tmp/<model>-layers \
   --verify-sha256
 
@@ -109,7 +112,7 @@ mesh-llm models package <gguf-repo>:<quant-selector> \
 
 The dry run prints the proposed profiles and provenance. Re-run with `--confirm`
 only after checking those citations. The job embeds the same JSON through
-`skippy-model-package write-package --generation-defaults`; the runtime never
+`skippy-package-builder write-package --generation-defaults`; the runtime never
 fetches or parses model cards.
 
 ## Validation
@@ -117,13 +120,13 @@ fetches or parses model cards.
 Run Rust formatting and the focused package checks before committing:
 
 ```bash
-cargo fmt --all -- --check
-cargo test -p model-package
-cargo check -p mesh-llm-host-runtime
+just with-lld cargo fmt --all -- --check
+just with-lld cargo test -p skippy-model-package
+just with-lld cargo check -p mesh-llm-host-runtime
 ```
 
 For behavior smoke tests, use a tiny dry run first:
 
 ```bash
-cargo run -p model-package --bin queue-unsloth-layer-packages -- --max-jobs 1 --recent-limit 3 --popular-limit 3 --dry-run
+just with-lld cargo run -p skippy-model-package --bin queue-unsloth-layer-packages -- --max-jobs 1 --recent-limit 3 --popular-limit 3 --dry-run
 ```

@@ -8,7 +8,7 @@ Implemented. Heuristic classifier detects Code/Reasoning/Chat/Creative/ToolCall 
 
 ## Mixture of Agents (MoA) ✅
 
-Implemented as the `mesh` virtual model. Fan-out across multiple worker models on the mesh, reducer synthesizes the result. Streaming output, tool-call passthrough, opinionated no-think default, configurable first-answer grace. See [docs/design/MOA_GATEWAY.md](docs/design/MOA_GATEWAY.md).
+Implemented as the `mesh` virtual model. Fan-out across multiple worker models on the mesh, reducer synthesizes the result. Streaming output, tool-call passthrough, opinionated no-think default, configurable first-answer grace. See [docs/design/MOA_GATEWAY.md](mesh/docs/design/MOA_GATEWAY.md).
 
 This could do with ongoing development and benchmarking to improve. 
 
@@ -26,7 +26,7 @@ This is the best way to show what mesh-llm does: zero setup, zero config, just s
 
 ## Multimodal
 
-Vision, audio, and image generation/editing routed across the mesh. Capability advertisement gossiped so requests find compatible peers automatically. See [docs/design/MULTI_MODAL.md](docs/design/MULTI_MODAL.md).
+Vision, audio, and image generation/editing routed across the mesh. Capability advertisement gossiped so requests find compatible peers automatically. See [docs/design/MULTI_MODAL.md](mesh/docs/design/MULTI_MODAL.md).
 
 Done:
 - Vision input on capable models (Qwen3-VL, MiniMax-M2.5, etc.)

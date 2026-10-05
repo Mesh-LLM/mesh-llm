@@ -1,0 +1,26 @@
+[package]
+name = "skippy-package-builder"
+description = "CLI for inspecting models and building source-complete Skippy packages"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+same-file = "1.0.6"
+clap.workspace = true
+skippy-ffi = { path = "../skippy-ffi", default-features = false }
+skippy-model = { path = "../skippy-model" }
+skippy-package-format = { path = "../skippy-package-format" }
+skippy-runtime = { path = "../skippy-runtime" }
+skippy-model-artifact = { path = "../skippy-model-artifact" }
+skippy-model-hf = { path = "../skippy-model-hf" }
+skippy-model-ref = { path = "../skippy-model-ref" }
+ratatui = "0.30"
+serde.workspace = true
+serde_json.workspace = true
+sha2 = "0.11"
+tokio = { version = "1", features = ["rt"] }
+
+[dev-dependencies]
+tempfile = "3"

@@ -79,7 +79,7 @@ test-all:
     just with-lld cargo fmt --all -- --check
     echo ""
     echo "=== 3/11 GPU bench crate check ==="
-    just with-lld cargo check -p mesh-llm-gpu-bench
+    just with-lld cargo check -p skippy-gpu-bench
     echo ""
     echo "=== 4-5/11 Rust validation ==="
     # Keep Clippy and tests adjacent for each compatible feature graph. Switching
@@ -110,21 +110,24 @@ test-all:
         --exclude mesh-llm-nodejs \
         --exclude skippy-ffi \
         --exclude skippy-quantize \
-        --exclude skippy-model-package \
+        --exclude skippy-package-builder \
         --exclude skippy-runtime \
-        --exclude skippy-server
-    echo "--- Static Skippy model-package tests ---"
-    just with-lld cargo test --package skippy-model-package --no-default-features
+        --exclude skippy-serving \
+        --exclude skippy-cli
+    echo "--- Static Skippy package-builder tests ---"
+    just with-lld cargo test --package skippy-package-builder --no-default-features
     echo "--- Static Skippy runtime tests ---"
     just with-lld cargo test --package skippy-runtime --no-default-features --lib
     echo "--- Static Skippy server tests ---"
-    just with-lld cargo test --package skippy-server --no-default-features --lib
+    just with-lld cargo test --package skippy-serving --no-default-features --lib
     echo ""
+    echo "--- Static Skippy CLI tests ---"
+    just with-lld cargo test --package skippy-cli --no-default-features
     echo "=== 6/11 Plugin author exemplar ==="
     just test-openai-exchange-conformance
-    just with-lld cargo run --quiet --manifest-path docs/plugins/exemplars/web-ui/Cargo.toml -- --print-package-manifest > target/web-ui-exemplar-manifest.json
-    diff -u <(jq -S . docs/plugins/exemplars/web-ui/plugin.package.json) <(jq -S . target/web-ui-exemplar-manifest.json)
-    node --check docs/plugins/exemplars/web-ui/bundle/register-mesh-plugin-ui.js
+    just with-lld cargo run --quiet --manifest-path mesh/docs/plugins/exemplars/web-ui/Cargo.toml -- --print-package-manifest > target/web-ui-exemplar-manifest.json
+    diff -u <(jq -S . mesh/docs/plugins/exemplars/web-ui/plugin.package.json) <(jq -S . target/web-ui-exemplar-manifest.json)
+    node --check mesh/docs/plugins/exemplars/web-ui/bundle/register-mesh-plugin-ui.js
     (cd "{{ ui_dir }}" && pnpm exec tsc --ignoreConfig --noEmit --target ES2022 --module ESNext --moduleResolution Bundler --lib ES2022,DOM ../../docs/plugins/exemplars/web-ui/bundle/register-mesh-plugin-ui.ts)
     echo ""
     echo "=== 7-10/11 Parallel portable checks and builds ==="

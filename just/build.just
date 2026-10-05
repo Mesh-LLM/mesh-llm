@@ -31,8 +31,8 @@ with-lld *COMMAND:
     @powershell -NoProfile -ExecutionPolicy Bypass -Command "$$ErrorActionPreference = 'Stop'; if (-not (Get-Command sccache -ErrorAction SilentlyContinue)) { throw 'sccache is required; install it and retry.' }; Invoke-Expression '{{ COMMAND }}'"
 
 
-# Build a local product for the current platform. This is always a
-# backend-neutral dynamic host plus an adjacent packaged runtime.
+# Build both local products for the current platform: Skippy, then MeshLLM.
+# The MeshLLM host stays backend-neutral beside Skippy's packaged runtime.
 [macos]
 build backend="" cuda_arch="" rocm_arch="":
     @python3 scripts/manage-build-cache.py build -- scripts/build-development-product.sh --backend "{{ backend }}" --cuda-arch "{{ cuda_arch }}" --rocm-arch "{{ rocm_arch }}"
@@ -69,31 +69,6 @@ build backend="" cuda_arch="" rocm_arch="":
 [windows]
 build-dev backend="" cuda_arch="" rocm_arch="":
     @powershell -NoProfile -ExecutionPolicy Bypass -Command "$env:MESH_LLM_BUILD_PROFILE='dev'; & './scripts/build-windows.ps1' -Backend '{{ backend }}' -CudaArch '{{ cuda_arch }}' -RocmArch '{{ rocm_arch }}' -DynamicHost"
-
-# Low-level static ABI primitive. This builds only the native runtime; it never
-# builds a MeshLLM host. Use `just build` for normal development.
-build-mac:
-    @scripts/package-native-runtime.sh --build --backend metal
-
-# Low-level static ABI primitive. This builds only the native runtime; it never
-# builds a MeshLLM host. Use `just build` for normal development.
-build-linux backend="" cuda_arch="" rocm_arch="":
-    #!/usr/bin/env bash
-    set -euo pipefail
-    backend="{{ backend }}"
-    [[ -n "$backend" ]] || backend=cpu
-    LLAMA_STAGE_CUDA_ARCHITECTURES="{{ cuda_arch }}" LLAMA_STAGE_AMDGPU_TARGETS="{{ rocm_arch }}" scripts/package-native-runtime.sh --build --backend "$backend"
-
-# Backward-compatible spelling for the explicit native-runtime primitive.
-[linux]
-build-runtime backend="" cuda_arch="" rocm_arch="":
-    #!/usr/bin/env bash
-    set -euo pipefail
-    backend="{{ backend }}"
-    [[ -n "$backend" ]] || backend=cpu
-    LLAMA_STAGE_CUDA_ARCHITECTURES="{{ cuda_arch }}" \
-      LLAMA_STAGE_AMDGPU_TARGETS="{{ rocm_arch }}" \
-      scripts/package-native-runtime.sh --build --backend "$backend"
 
 # Build the installable host-private OpenAI lifecycle observer exemplar.
 build-openai-exchange-exemplar:

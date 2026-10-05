@@ -8,7 +8,7 @@ metadata:
 # connect-agents
 
 Use this when pointing an agent harness or any OpenAI client at a running
-mesh-llm node. Full reference: `docs/AGENTS.md`.
+mesh-llm node. Full reference: `mesh/docs/AGENTS.md`.
 
 ## Mental model
 
@@ -60,7 +60,7 @@ curl -s http://localhost:9337/v1/chat/completions \
   -d '{"model":"auto","messages":[{"role":"user","content":"hello"}]}'
 ```
 
-Exact manual provider JSON for OpenCode and Pi is in `docs/AGENTS.md`.
+Exact manual provider JSON for OpenCode and Pi is in `mesh/docs/AGENTS.md`.
 
 ## Validating agent behavior
 
@@ -73,7 +73,7 @@ scripts/qa-agent-tool-call-reliability.py \
 ```
 
 Broader harness (models, chat, streaming, plus optional Goose/OpenCode/Pi
-smokes): `scripts/qa-nightly-stability.py` — see `docs/AGENTS.md`. Use
+smokes): `scripts/qa-nightly-stability.py` — see `mesh/docs/AGENTS.md`. Use
 `--print-plan` on either script for a side-effect-free preview.
 
 ## Blackboard (cross-mesh agent coordination)

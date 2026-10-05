@@ -32,7 +32,7 @@ def resolve(root: Path, ref: str, upstream: str = "") -> dict[str, str]:
     source = git(root, "rev-parse", "--verify", target + "^{commit}")
     if not git(root, "for-each-ref", "--format=%(refname)", "--contains=" + source, "refs/canary-mesh/"):
         raise ValueError("mesh_ref commit is not reachable from a same-repository branch")
-    paths = ("third_party/llama.cpp/upstream.txt", "skippy/third_party/llama.cpp/upstream.txt")
+    paths = ("third_party/llama.cpp/upstream.txt", "skippy/llama_cpp/upstream.txt")
     present = git(root, "ls-tree", "--name-only", source, "--", *paths).splitlines()
     if len(present) != 1:
         raise ValueError("selected MeshLLM revision must have exactly one llama.cpp pin")

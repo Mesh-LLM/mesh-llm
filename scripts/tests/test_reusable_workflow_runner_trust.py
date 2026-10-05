@@ -187,6 +187,10 @@ class ReusableWorkflowRunnerTrustTests(unittest.TestCase):
                             break
                         block_lines.append(line)
                     block = "\n".join(block_lines)
+                    is_cpu_cache_policy = any(
+                        "id: cpu_policy" in line
+                        for line in lines[max(0, index - 2) : index]
+                    )
                     common_values = (
                         "event_name: ${{ github.event_name }}",
                         "original_event_name: ${{ inputs.original_event_name }}",
@@ -194,16 +198,25 @@ class ReusableWorkflowRunnerTrustTests(unittest.TestCase):
                         "head_repository: ${{ github.event.pull_request.head.repo.full_name }}",
                         "head_sha: ${{ github.event.pull_request.head.sha || github.sha }}",
                         "ref: ${{ github.ref }}",
-                        "force_hosted: ${{ inputs.force_hosted }}",
                     )
                     for value in common_values:
                         self.assertIn(value, block, value)
+                    self.assertIn(
+                        "force_hosted: true" if is_cpu_cache_policy else "force_hosted: ${{ inputs.force_hosted }}",
+                        block,
+                    )
 
                     is_sentinel = any(
                         "id: sentinel_policy" in line
                         for line in lines[max(0, index - 2) : index]
                     )
-                    if is_sentinel:
+                    if is_cpu_cache_policy:
+                        bounded_values = (
+                            "depot_main_enabled: ${{ vars.DEPOT_RUNNERS_ENABLED == 'true' }}",
+                            "depot_pr_enabled: ${{ vars.DEPOT_PR_RUNNERS_ENABLED == 'true' }}",
+                            "pr_canary_ref: ${{ vars.DEPOT_PR_CANARY_REF }}",
+                        )
+                    elif is_sentinel:
                         bounded_values = (
                             "depot_main_enabled: 'false'",
                             "depot_pr_enabled: 'false'",
@@ -244,6 +257,11 @@ class ReusableWorkflowRunnerTrustTests(unittest.TestCase):
                     )
                     self.assertIn(
                         "runs-on: ${{ fromJSON(needs.runner_policy.outputs.runner_by_platform)[matrix.check.platform] }}",
+                        workflow,
+                    )
+                elif name == "ci-linux-runtime-slice.yml":
+                    self.assertIn(
+                        "runs-on: ${{ matrix.runtime.backend == 'cpu' && needs.runner_policy.outputs.runner_cpu || needs.runner_policy.outputs.runner_16 }}",
                         workflow,
                     )
                 else:

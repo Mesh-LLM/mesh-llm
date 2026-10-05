@@ -1,0 +1,13 @@
+[package]
+name = "llama-spec-bench"
+description = "Local speculative-decoding checker and benchmark for target and draft GGUF models"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+skippy-runtime = { path = "../skippy-runtime" }
+serde.workspace = true
+serde_json.workspace = true

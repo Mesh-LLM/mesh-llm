@@ -19,7 +19,7 @@ from scripts.tests.justfile_source import read_justfile_source
 ROOT = Path(__file__).resolve().parents[2]
 LIB = ROOT / "scripts" / "lib" / "lld.sh"
 JUSTFILE = ROOT / "Justfile"
-BUILD_HOST = ROOT / "scripts" / "build-host.sh"
+BUILD_HOST = ROOT / "mesh" / "scripts" / "build-host.sh"
 MACOS_SETUP = ROOT / ".github" / "actions" / "setup-macos-lld" / "action.yml"
 
 WORKING_CC = "#!/bin/sh\nexit 0\n"

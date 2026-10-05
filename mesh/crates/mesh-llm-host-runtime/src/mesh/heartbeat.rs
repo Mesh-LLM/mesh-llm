@@ -1,0 +1,1115 @@
+//! Heartbeat loop, peer death detection, and PeerDown handling.
+//!
+//! The heartbeat runs every 60s, gossips with a random subset of peers,
+//! and removes peers that fail to respond after repeated attempts.
+//! PeerDown messages are broadcast to the mesh when a peer is confirmed dead.
+
+use super::direct_rescue::DirectRescueEndpoint;
+use super::node::startup_transport_config;
+use super::{
+    ConnectionCaptureEvent, ControlProtocol, MeshPeerRemovalReason, Node, PEER_STALE_SECS,
+    PeerInfo, PeerLifecycleCaptureEvent, connect_mesh, connection_protocol,
+    selected_path_observation,
+};
+use crate::protocol::{
+    NODE_PROTOCOL_GENERATION, STREAM_PEER_DOWN, STREAM_PEER_LEAVING, write_len_prefixed,
+};
+use iroh::{Endpoint, EndpointAddr, EndpointId, TransportAddr, endpoint::Connection};
+use mesh_llm_membership::peer_health::{
+    HeartbeatFailurePolicy, HomeRelayStatusTransition, RELAY_HEALTH_CHECK_SECS, RelayPathSnapshot,
+    RelayPeerObservation, RelayReconnectController, RelayReconnectReason, SelectedPathKind,
+    classify_relay_only_for_policy, default_heartbeat_failure_policy, heartbeat_failure_policy,
+    is_relay_only_path_set, should_remove_connection,
+};
+use prost::Message;
+
+const DIRECT_RESCUE_CONNECT_TIMEOUT_SECS: u64 = 10;
+
+pub(crate) fn selected_connection_is_direct(conn: &Connection) -> bool {
+    conn.paths()
+        .iter()
+        .any(|path| path.is_selected() && path.is_ip())
+}
+
+pub(crate) fn direct_only_addr(mut addr: EndpointAddr) -> Option<EndpointAddr> {
+    addr.addrs
+        .retain(|candidate| matches!(candidate, TransportAddr::Ip(_)));
+    (!addr.addrs.is_empty()).then_some(addr)
+}
+
+pub(super) fn selected_path_snapshot(conn: &Connection) -> RelayPathSnapshot {
+    let path_list = conn.paths();
+    for path_info in &path_list {
+        if path_info.is_selected() {
+            let rtt = path_info.rtt();
+            return RelayPathSnapshot {
+                kind: if path_info.is_ip() {
+                    SelectedPathKind::Direct
+                } else {
+                    SelectedPathKind::Relay
+                },
+                rtt_ms: if rtt.is_zero() {
+                    None
+                } else {
+                    Some(rtt.as_millis() as u32)
+                },
+            };
+        }
+    }
+    RelayPathSnapshot::default()
+}
+
+/// Does this connection only have relay (non-IP) paths available?
+///
+/// Robust to the mid-failure case where `selected_path_snapshot` returns
+/// `Unknown` because no path is currently selected (e.g. the heartbeat is
+/// timing out and the connection is between selections). The original
+/// failure-policy lookup used `selected_path_snapshot().kind == Relay`,
+/// which returned `false` exactly when we most needed it (during a
+/// failure), forcing relay-only peers onto the stricter direct threshold.
+///
+/// Inspect every advertised path: if *none* of them is IP, treat the
+/// connection as relay-only for failure-tolerance purposes.
+pub(super) fn is_relay_only_connection(conn: &Connection) -> bool {
+    is_relay_only_path_set(conn.paths().iter().map(|p| p.is_ip()))
+}
+
+pub(crate) fn select_heartbeat_gossip_peers(
+    mut peers_and_conns: Vec<(EndpointId, Option<Connection>)>,
+) -> Vec<(EndpointId, Option<Connection>)> {
+    const GOSSIP_K: usize = 5;
+    if peers_and_conns.len() > GOSSIP_K {
+        use rand::seq::SliceRandom;
+        peers_and_conns.shuffle(&mut rand::rng());
+        peers_and_conns.truncate(GOSSIP_K);
+    }
+    peers_and_conns
+}
+
+pub(crate) fn warn_heartbeat_retry(peer_id: EndpointId, count: u32, threshold: u32) {
+    super::emit_mesh_warning(format!(
+        "💛 Heartbeat: {} unreachable ({}/{}), will retry",
+        peer_id.fmt_short(),
+        count,
+        threshold
+    ));
+}
+
+pub(crate) fn warn_heartbeat_peer_down(peer_id: EndpointId, count: u32) {
+    super::emit_mesh_warning(format!(
+        "💔 Heartbeat: {} unreachable ({} failure{}), removing + broadcasting death",
+        peer_id.fmt_short(),
+        count,
+        if count == 1 { "" } else { "s" }
+    ));
+}
+
+impl Node {
+    const RTT_REFRESH_SECS: u64 = 15;
+
+    pub(crate) async fn relay_refresh_target(
+        &self,
+        peer_id: EndpointId,
+    ) -> Option<(EndpointAddr, Connection)> {
+        let state = self.state.lock().await;
+        let peer = state.peers.get(&peer_id).cloned()?;
+        let conn = state.connections.get(&peer_id).cloned()?;
+        Some((peer.addr, conn))
+    }
+
+    pub(crate) async fn dial_refreshed_peer_connection(
+        &self,
+        peer_id: EndpointId,
+        addr: EndpointAddr,
+    ) -> Option<Connection> {
+        match tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            connect_mesh(&self.endpoint, addr),
+        )
+        .await
+        {
+            Ok(Ok(conn)) => Some(conn),
+            Ok(Err(err)) => {
+                tracing::debug!(
+                    "Relay health refresh dial to {} failed: {err}",
+                    peer_id.fmt_short()
+                );
+                None
+            }
+            Err(_) => {
+                tracing::debug!(
+                    "Relay health refresh dial to {} timed out",
+                    peer_id.fmt_short()
+                );
+                None
+            }
+        }
+    }
+
+    pub(crate) async fn release_direct_rescue_endpoint(
+        &self,
+        peer_id: EndpointId,
+        closing_stable_id: usize,
+    ) {
+        let endpoint = self
+            .direct_rescue_endpoints
+            .take_if_owns(peer_id, closing_stable_id)
+            .await;
+        if let Some(endpoint) = endpoint {
+            endpoint.close().await;
+        }
+    }
+
+    async fn bind_direct_rescue_endpoint(&self, peer_id: EndpointId) -> Option<Endpoint> {
+        let mut builder = Endpoint::builder(iroh::endpoint::presets::Minimal)
+            .secret_key(self.endpoint_secret_key.clone())
+            .alpns(vec![
+                super::ALPN_V1.to_vec(),
+                skippy_protocol::STAGE_ALPN_V2.to_vec(),
+            ])
+            .transport_config(startup_transport_config())
+            .relay_mode(iroh::endpoint::RelayMode::Disabled);
+        if let Some(ip) = self.quic_bind.ip {
+            if ip.is_ipv4() {
+                builder = builder.clear_ip_transports();
+            }
+            builder = match builder.bind_addr(std::net::SocketAddr::new(ip, 0)) {
+                Ok(bound) => bound,
+                Err(error) => {
+                    tracing::debug!(
+                        peer = %peer_id.fmt_short(),
+                        error = %error,
+                        "Relay health direct rescue bind address was invalid"
+                    );
+                    return None;
+                }
+            };
+        }
+        match builder.bind().await {
+            Ok(endpoint) => Some(endpoint),
+            Err(error) => {
+                tracing::debug!(
+                    peer = %peer_id.fmt_short(),
+                    error = %error,
+                    "Relay health direct rescue endpoint bind failed"
+                );
+                None
+            }
+        }
+    }
+
+    async fn reject_direct_rescue_candidate(
+        peer_id: EndpointId,
+        endpoint: Endpoint,
+        conn: Connection,
+    ) -> Option<(Endpoint, Connection)> {
+        conn.close(0u32.into(), b"direct-rescue-not-direct");
+        endpoint.close().await;
+        tracing::debug!(
+            peer = %peer_id.fmt_short(),
+            "Relay health direct rescue candidate did not prove an IP path"
+        );
+        None
+    }
+
+    async fn fail_direct_rescue_dial(
+        peer_id: EndpointId,
+        endpoint: Endpoint,
+        error: Option<anyhow::Error>,
+    ) -> Option<(Endpoint, Connection)> {
+        endpoint.close().await;
+        if let Some(error) = error {
+            tracing::debug!(
+                peer = %peer_id.fmt_short(),
+                error = %error,
+                "Relay health direct rescue dial failed"
+            );
+        } else {
+            tracing::debug!(
+                peer = %peer_id.fmt_short(),
+                "Relay health direct rescue dial timed out"
+            );
+        }
+        None
+    }
+
+    async fn connect_direct_rescue_endpoint(
+        peer_id: EndpointId,
+        endpoint: Endpoint,
+        addr: EndpointAddr,
+    ) -> Option<(Endpoint, Connection)> {
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(DIRECT_RESCUE_CONNECT_TIMEOUT_SECS),
+            connect_mesh(&endpoint, addr),
+        )
+        .await;
+        match result {
+            Ok(Ok(conn)) if selected_connection_is_direct(&conn) => Some((endpoint, conn)),
+            Ok(Ok(conn)) => Self::reject_direct_rescue_candidate(peer_id, endpoint, conn).await,
+            Ok(Err(error)) => Self::fail_direct_rescue_dial(peer_id, endpoint, Some(error)).await,
+            Err(_) => Self::fail_direct_rescue_dial(peer_id, endpoint, None).await,
+        }
+    }
+
+    pub(crate) async fn dial_direct_rescue_connection(
+        &self,
+        peer_id: EndpointId,
+        addr: EndpointAddr,
+    ) -> Option<(Endpoint, Connection)> {
+        let addr = direct_only_addr(addr)?;
+        let endpoint = self.bind_direct_rescue_endpoint(peer_id).await?;
+        Self::connect_direct_rescue_endpoint(peer_id, endpoint, addr).await
+    }
+
+    pub(crate) async fn refreshed_connection_completed_gossip(
+        &self,
+        peer_id: EndpointId,
+        conn: &Connection,
+    ) -> bool {
+        let gossip_ok = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            self.initiate_gossip_inner(conn.clone(), peer_id, false),
+        )
+        .await
+        .map(|result| result.is_ok())
+        .unwrap_or(false);
+        if !gossip_ok {
+            tracing::debug!(
+                "Relay health refresh gossip with {} failed",
+                peer_id.fmt_short()
+            );
+        }
+        gossip_ok
+    }
+
+    /// Publish `new_conn` as the tracked connection for `peer_id`, taking
+    /// ownership of `rescue_endpoint` if one dialled it.
+    ///
+    /// Returns `Ok(displaced endpoint)` on success for the caller to close
+    /// outside the state lock, or `Err(())` when the swap must be abandoned.
+    /// Endpoint ownership is claimed BEFORE the connection is published: if
+    /// shutdown has already drained the registry the endpoint would never be
+    /// closed by that drain, and publishing first would leave a window with no
+    /// tracked connection at all.
+    async fn claim_refreshed_connection_slot(
+        &self,
+        peer_id: EndpointId,
+        new_conn: &Connection,
+        rescue_endpoint: Option<Endpoint>,
+        state: &mut tokio::sync::MutexGuard<'_, super::MembershipState>,
+    ) -> Result<Option<Endpoint>, ()> {
+        let displaced = match rescue_endpoint {
+            Some(endpoint) => self
+                .direct_rescue_endpoints
+                .install(
+                    peer_id,
+                    DirectRescueEndpoint {
+                        endpoint,
+                        connection_stable_id: new_conn.stable_id(),
+                    },
+                )
+                .await
+                .map_err(|endpoint| (endpoint,)),
+            None => Ok(self.direct_rescue_endpoints.take(peer_id).await),
+        };
+
+        match displaced {
+            Ok(displaced) => {
+                state.connections.insert(peer_id, new_conn.clone());
+                Ok(displaced)
+            }
+            Err((endpoint,)) => {
+                tracing::debug!(
+                    peer = %peer_id.fmt_short(),
+                    "Relay health refresh raced node shutdown; discarding rescued connection"
+                );
+                endpoint.close().await;
+                Err(())
+            }
+        }
+    }
+
+    pub(crate) async fn install_refreshed_peer_connection(
+        &self,
+        peer_id: EndpointId,
+        existing_id: usize,
+        new_conn: Connection,
+        rescue_endpoint: Option<Endpoint>,
+    ) -> bool {
+        let claimed = {
+            let mut state = self.state.lock().await;
+            if !should_remove_connection(
+                state.connections.get(&peer_id).map(|conn| conn.stable_id()),
+                existing_id,
+            ) {
+                tracing::debug!(
+                    "Relay health refresh for {} raced with another reconnect; keeping newer connection",
+                    peer_id.fmt_short()
+                );
+                drop(state);
+                new_conn.close(0u32.into(), b"relay-health-raced");
+                if let Some(endpoint) = rescue_endpoint {
+                    endpoint.close().await;
+                }
+                return false;
+            }
+            // Claimed while holding the state lock: a stale dispatcher must
+            // observe both the newer stable ID and matching endpoint
+            // ownership, never a half-swap.
+            self.claim_refreshed_connection_slot(peer_id, &new_conn, rescue_endpoint, &mut state)
+                .await
+        };
+
+        let Ok(replaced_endpoint) = claimed else {
+            new_conn.close(0u32.into(), b"relay-health-shutdown");
+            return false;
+        };
+
+        if let Some(replaced_endpoint) = replaced_endpoint {
+            replaced_endpoint.close().await;
+        }
+
+        let node_for_dispatch = self.clone();
+        let conn_for_dispatch = new_conn;
+        tokio::spawn(async move {
+            node_for_dispatch
+                .dispatch_streams(conn_for_dispatch, peer_id)
+                .await;
+        });
+        true
+    }
+
+    pub fn start_rtt_refresh(&self) {
+        let node = self.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(Self::RTT_REFRESH_SECS)).await;
+
+                let connections: Vec<(EndpointId, Connection)> = {
+                    let state = node.state.lock().await;
+                    state
+                        .connections
+                        .iter()
+                        .map(|(id, c)| (*id, c.clone()))
+                        .collect()
+                };
+
+                for (peer_id, conn) in connections {
+                    if let Some(observation) = selected_path_observation(&conn) {
+                        node.update_peer_selected_path(peer_id, observation).await;
+                    }
+                }
+            }
+        });
+    }
+
+    /// Start a background task that watches relay-backed connections and
+    /// refreshes one degraded relay path at a time.
+    pub fn start_relay_health_monitor(&self) {
+        let node = self.clone();
+        tokio::spawn(async move {
+            let mut addr_watch = node.endpoint.watch_addr();
+            let mut controller = RelayReconnectController::default();
+
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(RELAY_HEALTH_CHECK_SECS)).await;
+
+                let now = std::time::Instant::now();
+                let endpoint_addr = iroh::Watcher::get(&mut addr_watch);
+                let has_home_relay = endpoint_addr.relay_urls().next().is_some();
+
+                match controller.observe_home_relay(has_home_relay, now) {
+                    Some(HomeRelayStatusTransition::Restored) => {
+                        tracing::info!("Relay health: home relay restored");
+                    }
+                    Some(HomeRelayStatusTransition::Missing { missing_secs }) => {
+                        tracing::warn!("Relay health: no home relay for {}s", missing_secs);
+                    }
+                    None => {}
+                }
+
+                let inflight_requests = node.inflight_requests();
+                let connections: Vec<(EndpointId, EndpointAddr, Connection)> = {
+                    let state = node.state.lock().await;
+                    state
+                        .peers
+                        .iter()
+                        .filter_map(|(id, peer)| {
+                            state
+                                .connections
+                                .get(id)
+                                .cloned()
+                                .map(|conn| (*id, peer.addr.clone(), conn))
+                        })
+                        .collect()
+                };
+                let observations: Vec<RelayPeerObservation> = connections
+                    .into_iter()
+                    .map(|(peer_id, addr, conn)| RelayPeerObservation {
+                        peer_id,
+                        snapshot: selected_path_snapshot(&conn),
+                        has_direct_candidate: direct_only_addr(addr).is_some(),
+                    })
+                    .collect();
+
+                let Some((peer_id, reason)) =
+                    controller.plan_reconnect(observations, now, inflight_requests, has_home_relay)
+                else {
+                    continue;
+                };
+
+                controller.record_reconnect_attempt(peer_id, reason, now);
+
+                let refreshed = node.refresh_peer_connection(peer_id, reason).await;
+                controller.record_reconnect_result(peer_id, refreshed, now);
+            }
+        });
+    }
+
+    /// Start a background task that periodically checks peer health.
+    /// Probes each peer by attempting a gossip exchange. If the probe fails
+    /// (connection dead, peer unresponsive), removes the peer immediately
+    /// rather than waiting for QUIC idle timeout.
+    /// Start a slow heartbeat (60s) that gossips with a random subset of peers.
+    /// At small mesh sizes (≤5 peers), talks to everyone. At larger sizes,
+    /// picks K random peers per cycle. Information propagates infectiously —
+    /// changes reach all nodes in O(log N) cycles.
+    /// Death detection primarily happens on the data path (tunnel fails →
+    /// broadcast_peer_down), not via heartbeat.
+    pub fn start_heartbeat(&self) {
+        let node = self.clone();
+        tokio::spawn(async move {
+            let mut fail_counts: std::collections::HashMap<EndpointId, u32> =
+                std::collections::HashMap::new();
+
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+                node.run_heartbeat_cycle(&mut fail_counts).await;
+            }
+        });
+    }
+
+    pub(crate) async fn run_heartbeat_cycle(
+        &self,
+        fail_counts: &mut std::collections::HashMap<EndpointId, u32>,
+    ) {
+        for (peer_id, conn) in self.selected_heartbeat_peers().await {
+            let alive = self.probe_heartbeat_peer(peer_id, conn).await;
+            self.record_heartbeat_result(peer_id, alive, fail_counts)
+                .await;
+        }
+
+        self.prune_stale_heartbeat_peers().await;
+        self.gc_heartbeat_state().await;
+        self.gc_demand().await;
+    }
+
+    pub(crate) async fn selected_heartbeat_peers(&self) -> Vec<(EndpointId, Option<Connection>)> {
+        let peers_and_conns = self.heartbeat_peer_targets().await;
+        tracing::debug!("Heartbeat tick: {} peers to check", peers_and_conns.len());
+        select_heartbeat_gossip_peers(peers_and_conns)
+    }
+
+    pub(crate) async fn heartbeat_peer_targets(&self) -> Vec<(EndpointId, Option<Connection>)> {
+        let state = self.state.lock().await;
+        state
+            .peers
+            .keys()
+            .map(|id| (*id, state.connections.get(id).cloned()))
+            .collect()
+    }
+
+    pub(crate) async fn probe_heartbeat_peer(
+        &self,
+        peer_id: EndpointId,
+        conn: Option<Connection>,
+    ) -> bool {
+        if let Some(conn) = conn {
+            self.gossip_existing_heartbeat_connection(peer_id, conn)
+                .await
+        } else {
+            self.reconnect_heartbeat_peer(peer_id).await
+        }
+    }
+
+    pub(crate) async fn gossip_existing_heartbeat_connection(
+        &self,
+        peer_id: EndpointId,
+        conn: Connection,
+    ) -> bool {
+        let hb_start = std::time::Instant::now();
+        let protocol = connection_protocol(&conn);
+        let gossip_ok = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            self.initiate_gossip_inner(conn, peer_id, false),
+        )
+        .await
+        .map(|result| result.is_ok())
+        .unwrap_or(false);
+        tracing::debug!(
+            "Heartbeat gossip {} = {} ({}ms)",
+            peer_id.fmt_short(),
+            if gossip_ok { "ok" } else { "fail" },
+            hb_start.elapsed().as_millis()
+        );
+        if gossip_ok {
+            self.capture_direct_proof_of_life(peer_id, protocol, 0, false, "heartbeat");
+        }
+        gossip_ok
+    }
+
+    pub(crate) async fn reconnect_heartbeat_peer(&self, peer_id: EndpointId) -> bool {
+        let Some(addr) = self.heartbeat_peer_addr(peer_id).await else {
+            return false;
+        };
+
+        match tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            connect_mesh(&self.endpoint, addr),
+        )
+        .await
+        {
+            Ok(Ok(new_conn)) => self.install_heartbeat_reconnect(peer_id, new_conn).await,
+            _ => {
+                self.capture_heartbeat_reconnect_failure(peer_id, None, "heartbeat_reconnect");
+                false
+            }
+        }
+    }
+
+    pub(crate) async fn heartbeat_peer_addr(&self, peer_id: EndpointId) -> Option<EndpointAddr> {
+        let state = self.state.lock().await;
+        state.peers.get(&peer_id).map(|peer| peer.addr.clone())
+    }
+
+    pub(crate) async fn install_heartbeat_reconnect(
+        &self,
+        peer_id: EndpointId,
+        new_conn: Connection,
+    ) -> bool {
+        super::emit_mesh_info(format!(
+            "💚 Heartbeat: reconnected to {}",
+            peer_id.fmt_short()
+        ));
+        self.capture_selected_connection_path(peer_id, &new_conn, "heartbeat_reconnect_path");
+        self.capture_heartbeat_reconnect_opened(peer_id, &new_conn);
+        self.state
+            .lock()
+            .await
+            .connections
+            .insert(peer_id, new_conn.clone());
+        self.spawn_heartbeat_reconnect_dispatch(peer_id, new_conn.clone());
+        self.gossip_heartbeat_reconnect(peer_id, new_conn).await
+    }
+
+    pub(crate) fn spawn_heartbeat_reconnect_dispatch(
+        &self,
+        peer_id: EndpointId,
+        new_conn: Connection,
+    ) {
+        let node = self.clone();
+        tokio::spawn(async move {
+            node.dispatch_streams(new_conn, peer_id).await;
+        });
+    }
+
+    pub(crate) async fn gossip_heartbeat_reconnect(
+        &self,
+        peer_id: EndpointId,
+        new_conn: Connection,
+    ) -> bool {
+        let protocol = connection_protocol(&new_conn);
+        let gossip_ok = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            self.initiate_gossip_inner(new_conn, peer_id, false),
+        )
+        .await
+        .map(|result| result.is_ok())
+        .unwrap_or(false);
+        if gossip_ok {
+            self.capture_direct_proof_of_life(peer_id, protocol, 0, false, "heartbeat_reconnect");
+        } else {
+            self.capture_heartbeat_reconnect_failure(
+                peer_id,
+                Some(protocol),
+                "heartbeat_reconnect_gossip",
+            );
+        }
+        gossip_ok
+    }
+
+    pub(crate) fn capture_heartbeat_reconnect_opened(
+        &self,
+        peer_id: EndpointId,
+        new_conn: &Connection,
+    ) {
+        self.capture_connection_event(ConnectionCaptureEvent {
+            event: "peer_connection_opened",
+            remote: peer_id,
+            direction: "outbound",
+            phase: "heartbeat_reconnect",
+            protocol: Some(connection_protocol(new_conn)),
+            path_type: None,
+            rtt_ms: None,
+            admitted_peer: Some(true),
+            reason: None,
+        });
+    }
+
+    pub(crate) fn capture_heartbeat_reconnect_failure(
+        &self,
+        peer_id: EndpointId,
+        protocol: Option<ControlProtocol>,
+        phase: &'static str,
+    ) {
+        self.capture_connection_event(ConnectionCaptureEvent {
+            event: "peer_connection_failed",
+            remote: peer_id,
+            direction: "outbound",
+            phase,
+            protocol,
+            path_type: None,
+            rtt_ms: None,
+            admitted_peer: Some(true),
+            reason: Some(if protocol.is_some() {
+                "gossip_timeout_or_error"
+            } else {
+                "connect_timeout_or_error"
+            }),
+        });
+    }
+
+    pub(crate) async fn record_heartbeat_result(
+        &self,
+        peer_id: EndpointId,
+        alive: bool,
+        fail_counts: &mut std::collections::HashMap<EndpointId, u32>,
+    ) {
+        if alive {
+            self.recover_heartbeat_peer(peer_id, fail_counts).await;
+        } else {
+            self.record_heartbeat_failure(peer_id, fail_counts).await;
+        }
+    }
+
+    pub(crate) async fn recover_heartbeat_peer(
+        &self,
+        peer_id: EndpointId,
+        fail_counts: &mut std::collections::HashMap<EndpointId, u32>,
+    ) {
+        if let Some(previous_failures) = fail_counts.remove(&peer_id) {
+            // Show the actual threshold this peer was being judged
+            // against, not a hardcoded "/2". Relay-only peers get a
+            // higher threshold (see heartbeat_failure_policy),
+            // so "(was 3/5)" reads correctly instead of misleading "3/2".
+            let (_, failure_policy) = self.heartbeat_failure_context(peer_id).await;
+            super::emit_mesh_info(format!(
+                "💚 Heartbeat: {} recovered (was {}/{})",
+                peer_id.fmt_short(),
+                previous_failures,
+                failure_policy.failure_threshold,
+            ));
+            {
+                let mut state = self.state.lock().await;
+                state.dead_peers.remove(&peer_id);
+                state.departed_peers.remove(&peer_id);
+            }
+        }
+    }
+
+    pub(crate) async fn record_heartbeat_failure(
+        &self,
+        peer_id: EndpointId,
+        fail_counts: &mut std::collections::HashMap<EndpointId, u32>,
+    ) {
+        let (recently_seen, failure_policy) = self.heartbeat_failure_context(peer_id).await;
+        if recently_seen && failure_policy.allow_recent_inbound_grace {
+            self.clear_inbound_alive_failure(peer_id, fail_counts);
+            return;
+        }
+
+        let count = fail_counts.entry(peer_id).or_default();
+        *count += 1;
+        let current_count = *count;
+        if current_count >= failure_policy.failure_threshold {
+            self.confirm_heartbeat_peer_down(peer_id, current_count, fail_counts)
+                .await;
+        } else {
+            warn_heartbeat_retry(peer_id, current_count, failure_policy.failure_threshold);
+        }
+    }
+
+    pub(crate) async fn heartbeat_failure_context(
+        &self,
+        peer_id: EndpointId,
+    ) -> (bool, HeartbeatFailurePolicy) {
+        let (peer, conn) = {
+            let state = self.state.lock().await;
+            (
+                state.peers.get(&peer_id).cloned(),
+                state.connections.get(&peer_id).cloned(),
+            )
+        };
+        // Use is_relay_only_connection (looks at all advertised paths)
+        // rather than selected_path_snapshot, because at failure time the
+        // selected path is often Unknown — and the original check
+        // (`selected == Relay`) returned false in that case, defeating the
+        // relay-only grace threshold. See is_relay_only_connection doc.
+        //
+        // When we don't hold a Connection object at all (cleanly closed,
+        // QUIC idle-expired), default to STRICT via
+        // classify_relay_only_for_policy. The lenient threshold exists to
+        // absorb mid-flap path-renegotiation, which only happens while
+        // iroh still owns the Connection. Once Connection is gone, a
+        // previously-direct peer should not silently inherit the 5-min
+        // relay grace and keep stale model routes alive an extra 3 min.
+        let is_relay_only =
+            classify_relay_only_for_policy(conn.as_ref().map(is_relay_only_connection));
+        let policy = self
+            .heartbeat_failure_policy(peer.as_ref(), is_relay_only)
+            .await;
+        let recently_seen = peer
+            .as_ref()
+            .map(|peer| peer.last_seen.elapsed().as_secs() < PEER_STALE_SECS)
+            .unwrap_or(false);
+        (recently_seen, policy)
+    }
+
+    pub(crate) async fn heartbeat_failure_policy(
+        &self,
+        peer: Option<&PeerInfo>,
+        is_relay_only: bool,
+    ) -> HeartbeatFailurePolicy {
+        let Some(_) = peer else {
+            return default_heartbeat_failure_policy();
+        };
+        heartbeat_failure_policy(is_relay_only)
+    }
+
+    pub(crate) fn clear_inbound_alive_failure(
+        &self,
+        peer_id: EndpointId,
+        fail_counts: &mut std::collections::HashMap<EndpointId, u32>,
+    ) {
+        if fail_counts.remove(&peer_id).is_some() {
+            super::emit_mesh_info(format!(
+                "💚 Heartbeat: {} outbound failed but seen recently (inbound alive)",
+                peer_id.fmt_short()
+            ));
+        }
+    }
+
+    pub(crate) async fn confirm_heartbeat_peer_down(
+        &self,
+        peer_id: EndpointId,
+        count: u32,
+        fail_counts: &mut std::collections::HashMap<EndpointId, u32>,
+    ) {
+        self.state
+            .lock()
+            .await
+            .dead_peers
+            .insert(peer_id, std::time::Instant::now());
+        warn_heartbeat_peer_down(peer_id, count);
+        self.capture_peer_lifecycle_snapshot(
+            "peer_down_confirmed",
+            peer_id,
+            "heartbeat_unreachable",
+            None,
+        )
+        .await;
+        fail_counts.remove(&peer_id);
+        self.handle_peer_death(peer_id).await;
+    }
+
+    pub(crate) async fn prune_stale_heartbeat_peers(&self) {
+        for stale_id in self.stale_heartbeat_peers().await {
+            super::emit_mesh_warning(format!(
+                "🧹 Pruning stale peer {} (no direct or transitive contact in {}s)",
+                stale_id.fmt_short(),
+                PEER_STALE_SECS * 2
+            ));
+            self.capture_peer_lifecycle_snapshot(
+                "peer_pruned",
+                stale_id,
+                "stale_direct_and_transitive",
+                None,
+            )
+            .await;
+            self.remove_peer(stale_id, MeshPeerRemovalReason::StaleDirectAndTransitive)
+                .await;
+            self.state.lock().await.connections.remove(&stale_id);
+        }
+    }
+
+    pub(crate) async fn stale_heartbeat_peers(&self) -> Vec<EndpointId> {
+        let prune_cutoff =
+            std::time::Instant::now() - std::time::Duration::from_secs(PEER_STALE_SECS * 2);
+        self.state.lock().await.stale_peers(prune_cutoff)
+    }
+
+    pub(crate) async fn gc_heartbeat_state(&self) {
+        let expired_dead_peers = self.retain_live_heartbeat_state().await;
+        for expired_id in expired_dead_peers {
+            self.capture_peer_lifecycle_event(PeerLifecycleCaptureEvent {
+                event: "peer_dead_ttl_expired",
+                peer: expired_id,
+                reason: "dead_peer_ttl_expired",
+                reporter: None,
+                last_seen_age_ms: None,
+                last_mentioned_age_ms: None,
+                had_connection: None,
+                bridge_id: None,
+            });
+        }
+    }
+
+    pub(crate) async fn retain_live_heartbeat_state(&self) -> Vec<EndpointId> {
+        self.state
+            .lock()
+            .await
+            .retain_live_heartbeat_state(std::time::Duration::from_secs(
+                super::direct_path::DIRECT_PATH_REQUEST_COOLDOWN_SECS,
+            ))
+    }
+
+    /// Handle a peer death: remove from state, broadcast to all other peers.
+    pub async fn handle_peer_death(&self, dead_id: EndpointId) {
+        self.handle_peer_death_with_reason(dead_id, MeshPeerRemovalReason::HeartbeatUnreachable)
+            .await;
+    }
+
+    pub(crate) async fn handle_peer_death_with_reason(
+        &self,
+        dead_id: EndpointId,
+        reason: MeshPeerRemovalReason,
+    ) {
+        super::emit_mesh_warning(format!(
+            "⚠️  Peer {} died — removing and broadcasting",
+            dead_id.fmt_short()
+        ));
+        {
+            let mut state = self.state.lock().await;
+            // Keep the connection alive — if the peer recovers, their inbound
+            // gossip will arrive on the existing connection and trigger recovery
+            // via handle_gossip_stream → add_peer → clear dead_peers.
+            // Don't remove: state.connections.remove(&dead_id);
+            state.dead_peers.insert(dead_id, std::time::Instant::now());
+            state
+                .departed_peers
+                .insert(dead_id, std::time::Instant::now());
+        }
+        self.capture_peer_lifecycle_snapshot(
+            "peer_dead_marked",
+            dead_id,
+            reason.reason_code(),
+            None,
+        )
+        .await;
+        self.remove_peer(dead_id, reason).await;
+        self.broadcast_peer_down(dead_id).await;
+    }
+
+    /// Broadcast that a peer is down to all connected peers.
+    pub(crate) async fn broadcast_peer_down(&self, dead_id: EndpointId) {
+        let conns: Vec<(EndpointId, Connection)> = {
+            let state = self.state.lock().await;
+            state
+                .connections
+                .iter()
+                .filter(|(id, _)| **id != dead_id)
+                .map(|(id, c)| (*id, c.clone()))
+                .collect()
+        };
+        let dead_bytes = dead_id.as_bytes().to_vec();
+        for (peer_id, conn) in conns {
+            let bytes = dead_bytes.clone();
+            let protocol = connection_protocol(&conn);
+            tokio::spawn(async move {
+                let res = async {
+                    let (mut send, _recv) = conn.open_bi().await?;
+                    send.write_all(&[STREAM_PEER_DOWN]).await?;
+                    let _ = protocol;
+                    let proto_msg = crate::proto::node::PeerDown {
+                        peer_id: bytes,
+                        r#gen: NODE_PROTOCOL_GENERATION,
+                    };
+                    write_len_prefixed(&mut send, &proto_msg.encode_to_vec()).await?;
+                    send.finish()?;
+                    Ok::<_, anyhow::Error>(())
+                }
+                .await;
+                if let Err(e) = res {
+                    tracing::debug!(
+                        "Failed to broadcast peer_down to {}: {e}",
+                        peer_id.fmt_short()
+                    );
+                }
+            });
+        }
+    }
+
+    /// Announce clean shutdown to all peers.
+    pub async fn broadcast_leaving(&self) {
+        let my_id_bytes = self.endpoint.id().as_bytes().to_vec();
+        let conns: Vec<(EndpointId, Connection)> = {
+            let state = self.state.lock().await;
+            state
+                .connections
+                .iter()
+                .map(|(id, c)| (*id, c.clone()))
+                .collect()
+        };
+        for (peer_id, conn) in conns {
+            let bytes = my_id_bytes.clone();
+            let protocol = connection_protocol(&conn);
+            tokio::spawn(async move {
+                let res = async {
+                    let (mut send, _recv) = conn.open_bi().await?;
+                    send.write_all(&[STREAM_PEER_LEAVING]).await?;
+                    let _ = protocol;
+                    let proto_msg = crate::proto::node::PeerLeaving {
+                        peer_id: bytes,
+                        r#gen: NODE_PROTOCOL_GENERATION,
+                    };
+                    write_len_prefixed(&mut send, &proto_msg.encode_to_vec()).await?;
+                    send.finish()?;
+                    Ok::<_, anyhow::Error>(())
+                }
+                .await;
+                if let Err(e) = res {
+                    tracing::debug!("Failed to send leaving to {}: {e}", peer_id.fmt_short());
+                }
+            });
+        }
+        // Give broadcasts a moment to flush
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    }
+
+    async fn dial_relay_health_replacement(
+        &self,
+        peer_id: EndpointId,
+        reason: RelayReconnectReason,
+        addr: EndpointAddr,
+    ) -> Option<(Option<Endpoint>, Connection)> {
+        if direct_only_addr(addr.clone()).is_some() {
+            if let Some((endpoint, conn)) = self
+                .dial_direct_rescue_connection(peer_id, addr.clone())
+                .await
+            {
+                return Some((Some(endpoint), conn));
+            }
+            self.fall_back_from_failed_direct_rescue(peer_id, reason, addr)
+                .await
+        } else {
+            self.dial_refreshed_peer_connection(peer_id, addr)
+                .await
+                .map(|conn| (None, conn))
+        }
+    }
+
+    /// Decide what to do after a direct rescue dial produced no usable path.
+    async fn fall_back_from_failed_direct_rescue(
+        &self,
+        peer_id: EndpointId,
+        reason: RelayReconnectReason,
+        addr: EndpointAddr,
+    ) -> Option<(Option<Endpoint>, Connection)> {
+        // A failed rescue is rare and actionable, and every per-candidate
+        // detail is `debug`, so summarize at `warn` — otherwise the field case
+        // we would need to diagnose is silent at the default log level.
+        tracing::warn!(
+            peer = %peer_id.fmt_short(),
+            reason = reason.label(),
+            "Relay health direct rescue failed"
+        );
+
+        match reason {
+            // The peer is not merely on a relay, its relay is degraded.
+            // Retaining it costs the same 600s cooldown as a successful
+            // attempt, so fall back to an ordinary relay refresh rather than
+            // leaving a known-bad path in place until that cooldown expires.
+            RelayReconnectReason::RelayRttDegraded => self
+                .dial_refreshed_peer_connection(peer_id, addr)
+                .await
+                .map(|conn| (None, conn)),
+            // A working relay is strictly better than churning the connection
+            // for no path improvement.
+            RelayReconnectReason::RelayOnlyTooLong => {
+                tracing::debug!(
+                    peer = %peer_id.fmt_short(),
+                    "retaining existing relay connection"
+                );
+                None
+            }
+        }
+    }
+
+    async fn validate_and_install_relay_health_replacement(
+        &self,
+        peer_id: EndpointId,
+        existing_id: usize,
+        rescue_endpoint: Option<Endpoint>,
+        new_conn: Connection,
+    ) -> bool {
+        if !self
+            .refreshed_connection_completed_gossip(peer_id, &new_conn)
+            .await
+        {
+            new_conn.close(0u32.into(), b"relay-health-gossip-failed");
+            if let Some(endpoint) = rescue_endpoint {
+                endpoint.close().await;
+            }
+            return false;
+        }
+        self.install_refreshed_peer_connection(peer_id, existing_id, new_conn, rescue_endpoint)
+            .await
+    }
+
+    pub(crate) async fn refresh_peer_connection(
+        &self,
+        peer_id: EndpointId,
+        reason: RelayReconnectReason,
+    ) -> bool {
+        let Some((addr, existing_conn)) = self.relay_refresh_target(peer_id).await else {
+            return false;
+        };
+
+        let existing_id = existing_conn.stable_id();
+        super::emit_mesh_info(format!(
+            "🔄 Relay health: refreshing {} ({})",
+            peer_id.fmt_short(),
+            reason.label()
+        ));
+        tracing::info!(
+            "Relay health: refreshing {} ({})",
+            peer_id.fmt_short(),
+            reason.label()
+        );
+
+        let Some((rescue_endpoint, new_conn)) = self
+            .dial_relay_health_replacement(peer_id, reason, addr)
+            .await
+        else {
+            return false;
+        };
+
+        if !self
+            .validate_and_install_relay_health_replacement(
+                peer_id,
+                existing_id,
+                rescue_endpoint,
+                new_conn,
+            )
+            .await
+        {
+            return false;
+        }
+
+        existing_conn.close(0u32.into(), b"relay-health-refresh");
+        let _ =
+            tokio::time::timeout(std::time::Duration::from_secs(1), existing_conn.closed()).await;
+
+        true
+    }
+}

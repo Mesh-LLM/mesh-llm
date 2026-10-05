@@ -22,7 +22,7 @@ IMPORTS: Final = (
 )
 RECIPES_BY_FILE: Final = {
     "just/build.just": {
-        "bootstrap-build-tools", "build", "build-dev", "build-linux", "build-mac", "build-runtime",
+        "bootstrap-build-tools", "build", "build-dev",
         "qa-logging-console-e2e", "with-lld",
         "build-openai-exchange-exemplar", "package-openai-exchange-exemplar",
         "test-openai-exchange-conformance",
@@ -32,8 +32,8 @@ RECIPES_BY_FILE: Final = {
         "release-build", "release-build-aarch64", "release-build-aarch64-cuda",
         "release-build-cuda", "release-build-cuda-windows", "release-build-rocm",
         "release-build-rocm-windows", "release-build-vulkan",
-        "release-build-vulkan-windows", "release-build-windows",
-        "release-host-build", "release-host-build-windows", "release-runtime-build",
+        "release-build-vulkan-windows",
+        "release-host-build", "release-runtime-build",
     },
     "just/skippy.just": {
         "bench-corpus", "competitive-benchmark-build", "family-certify",
@@ -43,15 +43,13 @@ RECIPES_BY_FILE: Final = {
         "skippy-quantize-build",
         "skippy-quantize-release-build", "skippy-quantize-standalone-build",
         "skippy-quantize-standalone-release-build", "skippy-wan-lab-build-bins",
+        "skippy", "skippy-cli-build", "skippy-cli-release-build", "skippy-release",
         "spec-bench",
     },
-    "just/mesh.just": {"bundle", "download-model", "mesh-join", "mesh-worker"},
+    "just/mesh.just": {"bundle", "download-model", "mesh", "mesh-join", "mesh-worker"},
     "just/release-bundle.just": {
         "check-env-mutation-contract", "check-release", "release-attestation",
-        "release-bundle", "release-bundle-aarch64", "release-bundle-aarch64-cuda",
-        "release-bundle-cuda", "release-bundle-cuda-windows", "release-bundle-rocm",
-        "release-bundle-rocm-windows", "release-bundle-vulkan",
-        "release-bundle-vulkan-windows", "release-bundle-windows",
+        "release-bundle",
     },
     "just/website-ui.just": {
         "cli-inventory-check", "crate-docs", "ui-dev", "ui-dev-public", "ui-test", "website-build",
@@ -109,6 +107,23 @@ class JustfileLayoutTests(unittest.TestCase):
         self.assertNotIn("with-lld", subprocess.check_output(["just", "--summary"], cwd=ROOT, text=True).split())
         self.assertEqual(dump["modules"], {})
         self.assertEqual(dump["first"], "default")
+
+    def test_short_product_recipes_keep_mesh_independent(self) -> None:
+        skippy = (ROOT / "just/skippy.just").read_text(encoding="utf-8")
+        mesh = (ROOT / "just/mesh.just").read_text(encoding="utf-8")
+        orchestrator = (ROOT / "mesh/scripts/build-development-product.sh").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('skippy backend="" cuda_arch="" rocm_arch="":', skippy)
+        self.assertIn('skippy/scripts/build-development-product.sh --backend "{{ backend }}"', skippy)
+        self.assertIn('mesh profile="debug":', mesh)
+        self.assertIn('scripts/build-host.sh --profile "{{ profile }}"', mesh)
+        self.assertIn('-HostOnly', mesh)
+        self.assertNotIn("skippy/scripts/build-development-product.sh", mesh)
+        self.assertLess(
+            orchestrator.index('just skippy "$BACKEND" "$CUDA_ARCH" "$ROCM_ARCH"'),
+            orchestrator.index('just mesh "$PROFILE"'),
+        )
 
 
 if __name__ == "__main__":
