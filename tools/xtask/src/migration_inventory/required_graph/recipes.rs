@@ -7,7 +7,7 @@ pub(super) fn expand(
     root: &Path,
     builder: &mut GraphBuilder<'_>,
     visited: &mut BTreeSet<(String, &'static str)>,
-    recipes: &BTreeSet<String>,
+    recipes: &BTreeSet<(String, Vec<String>)>,
 ) -> DynResult<()> {
     if !root.join("Justfile").is_file() || recipes.is_empty() {
         return Ok(());
@@ -15,9 +15,9 @@ pub(super) fn expand(
     let dump = just_recipes::dump(root)?;
     let mut queue = recipes
         .iter()
-        .map(|name| just_bindings::Invocation {
+        .map(|(name, arguments)| just_bindings::Invocation {
             recipe: name.clone(),
-            arguments: Vec::new(),
+            arguments: arguments.clone(),
         })
         .collect::<std::collections::VecDeque<_>>();
     let mut seen = BTreeSet::new();

@@ -1,4 +1,5 @@
 //! Retain one fresh host and its native readiness/measurement worker.
+use super::health_log;
 use crate::process::retained::{
     Action, Context, Coordinator, ExpectedExit, Launch, MemberId, MemberState,
 };
@@ -17,13 +18,22 @@ pub(super) struct Owner {
     pub listener_ready: bool,
     pub host_readiness_timeout: Duration,
     pub host_started: Option<Duration>,
+    pub health_streams: [Option<health_log::Observation>; 2],
 }
 
 impl Coordinator for Owner {
     type Rejection = String;
+    fn captured_line(&mut self, member: MemberId, line: ObservedLine<'_>) {
+        if member == MemberId::Seed
+            && let Some(observation) = health_log::line(line.bytes)
+        {
+            let index = usize::from(line.stream == crate::process::Stream::Stderr);
+            self.health_streams[index] = Some(observation);
+        }
+    }
     fn line(&mut self, member: MemberId, line: ObservedLine<'_>) -> ProbeDecision<String> {
-        // Health is recovered from bounded completed capture files, including
-        // target output drained during stop when this callback does not run.
+        // Typed health is observed by captured_line before sanitization, including
+        // stop/cleanup drains; this readiness callback only classifies owned startup.
         if member == MemberId::Seed
             && !self.listener_ready
             && let Some((url, port)) = &self.api_readiness
@@ -97,3 +107,42 @@ impl Coordinator for Owner {
 #[cfg(test)]
 #[path = "trial_owner_tests.rs"]
 mod tests;
+
+impl Owner {
+    pub(super) fn health_capture_complete(
+        report: &crate::process::retained::Report<String>,
+    ) -> bool {
+        report.failure.is_none()
+            && report
+                .members
+                .iter()
+                .find(|member| member.member == MemberId::Seed)
+                .is_some_and(|host| {
+                    host.process.failure.is_none()
+                        && host.process.cleanup.complete
+                        && host.process.cleanup.failure.is_none()
+                        && !host.process.cleanup.graceful_signal_failed
+                        && [&host.process.stdout, &host.process.stderr]
+                            .iter()
+                            .all(|stream| stream.line_capture_complete)
+                })
+    }
+    pub(super) fn final_health(
+        &self,
+        report: &crate::process::retained::Report<String>,
+    ) -> crate::command::DynResult<health_log::Observation> {
+        if !Self::health_capture_complete(report) {
+            return Err(
+                "host typed line observation incomplete (EOF, oversized record or capture failure)"
+                    .into(),
+            );
+        }
+        match (&self.health_streams[0], &self.health_streams[1]) {
+            (Some(_), Some(_)) => {
+                Err("final health chronology is ambiguous across stdout and stderr".into())
+            }
+            (Some(value), None) | (None, Some(value)) => Ok(value.clone()),
+            (None, None) => Ok(health_log::Observation::default()),
+        }
+    }
+}

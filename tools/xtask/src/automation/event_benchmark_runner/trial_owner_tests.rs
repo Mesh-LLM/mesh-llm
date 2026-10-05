@@ -29,6 +29,7 @@ fn owner() -> Owner {
         listener_ready: true,
         host_readiness_timeout: Duration::from_secs(5),
         host_started: None,
+        health_streams: [None, None],
     }
 }
 fn context(members: &[Snapshot], millis: u64) -> Context<'_> {

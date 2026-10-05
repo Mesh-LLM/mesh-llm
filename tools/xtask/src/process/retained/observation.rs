@@ -1,5 +1,5 @@
 use super::{Coordinator, Disposition, member::Member, owner::expired};
-use crate::process::{Cancellation, Failure, Limits, Outcome, ProbeDecision, probe::ProbeLines};
+use crate::process::{Cancellation, Failure, Limits, Outcome, ProbeDecision};
 use std::time::Instant;
 
 pub(super) fn observe<Observer: Coordinator>(
@@ -24,8 +24,17 @@ pub(super) fn observe<Observer: Coordinator>(
             .as_mut()
             .ok_or(Failure::InvalidSpec("missing retained output"))?;
         let mut candidate = false;
-        output.poll_probe(&mut |line| {
-            if rejection.is_none()
+        output.poll_captured(&mut |line, readiness_allowed| {
+            observer.captured_line(
+                member.id,
+                crate::process::ObservedLine {
+                    stream: line.stream,
+                    bytes: line.bytes,
+                    ending: line.ending,
+                },
+            );
+            if readiness_allowed
+                && rejection.is_none()
                 && (!candidate || member.admitted.is_some() || member.expected.is_some())
                 && member_deadline_for_line(
                     member.admitted,
@@ -106,7 +115,7 @@ fn complete_expected<Observer: Coordinator>(
         .ok_or(Failure::InvalidSpec("expected exit target missing"))?;
     let elapsed = target.started.elapsed();
     let mut terminal = Ok(None);
-    target.finish(context.1, Disposition::ExpectedExit, || {
+    target.finish(context.1, Disposition::ExpectedExit, observer, |observer| {
         for survivors in [&mut *before, &mut *after] {
             if matches!(terminal, Ok(None)) {
                 terminal = observe(survivors, observer, context, rejection);

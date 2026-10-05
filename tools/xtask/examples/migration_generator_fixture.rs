@@ -4,6 +4,9 @@ use std::path::Path;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let arguments: Vec<String> = std::env::args().skip(1).collect();
+    if let Some(path) = std::env::var_os("MESH_WINDOWS_INSTALL_FIXTURE_CALLS") {
+        return installer_host(&arguments, Path::new(&path));
+    }
     let mut trace = OpenOptions::new()
         .create(true)
         .append(true)
@@ -56,5 +59,20 @@ fn rewrite(arguments: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         .ok_or("report flag missing")?;
     let report = arguments.get(index + 1).ok_or("report value missing")?;
     fs::copy(format!("{pass}.json"), report)?;
+    Ok(())
+}
+
+fn installer_host(arguments: &[String], calls: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    let [argument] = arguments else {
+        return Err("installer fixture needs exactly one argument".into());
+    };
+    if !matches!(argument.as_str(), "--version" | "setup") {
+        return Err("unexpected installer fixture argument".into());
+    }
+    let mut file = OpenOptions::new().create(true).append(true).open(calls)?;
+    writeln!(file, "{argument}")?;
+    if argument == "--version" {
+        io::stdout().write_all(b"mesh-llm 0.73.1\n")?;
+    }
     Ok(())
 }

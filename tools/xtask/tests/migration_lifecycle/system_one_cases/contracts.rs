@@ -362,3 +362,88 @@ run_full_build
         )
     );
 }
+
+// Append to existing migration_lifecycle/system_one_cases/contracts.rs.
+// Uses its actual source() and bounded native resolve() helpers; no model download.
+#[test]
+fn actual_registry_and_resolved_smoke_suite_preserve_both_published_model_identities() {
+    let registry: Json = serde_json::from_str(&source("ci/model-artifacts/registry.json")).unwrap();
+    assert!(
+        registry["suites"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|suite| suite == "skippy-system-one-smoke")
+    );
+    let row = |id: &str| {
+        let matches: Vec<_> = registry["artifacts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|row| row["id"] == id)
+            .collect();
+        assert_eq!(matches.len(), 1, "unique published registry identity {id}");
+        matches[0]
+    };
+    let qwen = row("family-qwen3-dense");
+    assert!(
+        qwen["suites"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|suite| suite == "skippy-system-one-smoke")
+    );
+    let diffusion = row("family-diffusion-gemma");
+    let artifact = &diffusion["artifact"];
+    assert_eq!(artifact["repo"], "unsloth/diffusiongemma-26B-A4B-it-GGUF");
+    assert_eq!(
+        artifact["revision"],
+        "f4183a2c7a354128d02545752303c4354d165bf0"
+    );
+    let files = artifact["files"].as_array().unwrap();
+    assert_eq!(
+        files.len(),
+        1,
+        "single published diffusion model consumed by smoke"
+    );
+    assert_eq!(files[0]["path"], "diffusiongemma-26B-A4B-it-Q4_K_M.gguf");
+    assert_eq!(files[0]["size_bytes"], 16806810208_u64);
+    assert_eq!(
+        files[0]["sha256"],
+        "24523b6c833c9ce9f5f34f9b333ab1517d73d6f1e76a103645353114c8028bc5"
+    );
+    for cadence in ["llama-bump", "manual-full", "nightly", "manual"] {
+        assert!(
+            diffusion["cadences"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|item| item == cadence)
+        );
+    }
+    let laya = row("family-laya-multilingual");
+    assert_eq!(
+        laya["artifact"]["repo"],
+        "meshllm/laya-multilingual-F16-GGUF"
+    );
+    assert_eq!(
+        laya["artifact"]["revision"],
+        "bcc99560232b5a5c91cb14d46b9496acbeae2c43"
+    );
+    for suite in ["product-smoke", "skippy-system-one-smoke"] {
+        assert!(
+            laya["suites"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|item| item == suite)
+        );
+    }
+    let scratch = tempfile::tempdir().unwrap();
+    let resolved = resolve("family-laya-multilingual", "manual", scratch.path());
+    assert_eq!(resolved["repo"], laya["artifact"]["repo"]);
+    assert_eq!(resolved["revision"], laya["artifact"]["revision"]);
+    scratch
+        .close()
+        .expect("owned published identity fixture cleanup");
+}

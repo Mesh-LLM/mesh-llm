@@ -288,3 +288,67 @@ jobs:
             cargo test --locked -p $crate --lib --features mesh-llm-system/dynamic-native-runtime
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
+
+      - name: Prepare Windows automation contract tools
+        if: ${{ matrix.check.kind == 'unit' && matrix.check.platform == 'windows' }}
+        id: windows_automation
+        uses: ./.github/actions/prepare-automation
+        with:
+          allow_depot_remote_cache: ${{ needs.runner_policy.outputs.allow_depot_remote_cache }}
+          allow_native_github_cache: ${{ needs.runner_policy.outputs.allow_native_github_cache }}
+      - name: Run native Windows automation contracts
+        if: ${{ matrix.check.kind == 'unit' && matrix.check.platform == 'windows' }}
+        timeout-minutes: 20
+        shell: pwsh
+        env:
+          CARGO_TARGET_DIR: ${{ steps.windows_automation.outputs.target_directory }}
+          RUST_MIN_STACK: "8388608"
+        run: |
+          $ErrorActionPreference = "Stop"
+          if ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture -ne [System.Runtime.InteropServices.Architecture]::X64) { throw "native Windows x64 contracts require x64" }
+          Get-Command just -ErrorAction Stop | Out-Null
+          $justVersion = @(just --version)
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $justVersion | Write-Host
+          if ($justVersion.Count -ne 1 -or $justVersion[0] -notmatch '^just ([0-9]+\.[0-9]+\.[0-9]+)$') { throw "cannot determine installed Just version" }
+          if ([version]$Matches[1] -lt [version]'1.32.0') { throw "recipe-local script requires Just >=1.32" }
+          Get-Command sccache -ErrorAction Stop | Out-Null
+          just with-lld cargo build --locked -p xtask --bin xtask --example migration_generator_fixture
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $expected = @(
+            "ci_validation::windows_runtime::tests::native::native_windows_build_directory_tracks_prepared_pin_and_explicit_override",
+            "ci_validation::windows_runtime::tests::native::native_windows_bash_paths_preserve_repo_case_and_distinguish_git_bash_from_wsl",
+            "ci_validation::windows_runtime::tests::native::native_windows_relative_llama_override_is_bound_to_repo_not_process_directory",
+            "ci_validation::windows_runtime::tests::installer::native::native_windows_installer_interactive_runs_setup_and_warns_for_legacy_flavor",
+            "ci_validation::windows_runtime::tests::installer::native::native_windows_installer_noninteractive_prints_setup_and_installs_runtime",
+            "ci_validation::windows_runtime::tests::installer::native::native_windows_installer_no_setup_prints_command_without_executing_setup",
+            "ci_validation::windows_runtime::tests::installer::native::native_windows_installer_tampered_host_digest_preserves_existing_install",
+            "ci_validation::windows_runtime::tests::installer::native::native_windows_installer_removes_stale_host_imports_when_bundle_omits_it",
+            "ci_validation::windows_runtime::tests::installer::native::native_windows_installer_failed_runtime_replacement_restores_previous_product",
+            "ci_validation::windows_runtime::tests::installer::native::native_windows_installer_stale_cleanup_failure_keeps_committed_new_product",
+            "ci_validation::windows_runtime::tests::installer::consumer::native_windows_consumer_interactive_runs_setup_and_warns_for_legacy_flavor",
+            "ci_validation::windows_runtime::tests::installer::consumer::native_windows_consumer_noninteractive_prints_setup_and_installs_runtime",
+            "ci_validation::windows_runtime::tests::installer::consumer::native_windows_consumer_no_setup_prints_command_without_executing_setup",
+            "ci_validation::windows_runtime::tests::installer::consumer::native_windows_consumer_tampered_host_digest_preserves_existing_install",
+            "ci_validation::windows_runtime::tests::installer::consumer::native_windows_consumer_removes_stale_host_imports_when_bundle_omits_it",
+            "ci_validation::windows_runtime::tests::installer::consumer::native_windows_consumer_failed_runtime_replacement_restores_previous_product",
+            "ci_validation::windows_runtime::tests::installer::consumer::native_windows_consumer_stale_cleanup_failure_keeps_committed_new_product",
+            "ci_validation::windows_runtime::tests::installer::consumer::native_windows_consumer_help_and_missing_cli_value_avoid_download_and_mutation"
+          )
+          $listing = @(just with-lld cargo test --locked -p xtask --bin xtask native_windows_ -- --list)
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $actual = @($listing | Where-Object { $_ -match '^(.+): test$' } | ForEach-Object { $_ -replace ': test$', '' })
+          if ($actual.Count -ne $expected.Count -or @(Compare-Object $expected $actual).Count -ne 0) { throw "native Windows contract selection differs from the 18 required methods" }
+          $listing | Write-Host
+          $result = @(just with-lld cargo test --locked -p xtask --bin xtask native_windows_ -- --test-threads=1)
+          if ($LASTEXITCODE -ne 0) { $result | Write-Host; exit $LASTEXITCODE }
+          $result | Write-Host
+          if (@($result | Where-Object { $_ -match '^test result: ok\. 18 passed; 0 failed; 0 ignored;' }).Count -ne 1) { throw "all eighteen native Windows methods must pass without ignored tests" }
+          $wrapper = "ci_validation::windows_runtime::tests::with_lld::windows_with_lld_propagates_native_failure_and_success"
+          $wrapperListing = @(just with-lld cargo test --locked -p xtask --bin xtask $wrapper -- --exact --list)
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (@($wrapperListing | Where-Object { $_ -eq "$($wrapper): test" }).Count -ne 1) { throw "Windows wrapper regression method was not selected" }
+          $wrapperResult = @(just with-lld cargo test --locked -p xtask --bin xtask $wrapper -- --exact --test-threads=1)
+          if ($LASTEXITCODE -ne 0) { $wrapperResult | Write-Host; exit $LASTEXITCODE }
+          $wrapperResult | Write-Host
+          if (@($wrapperResult | Where-Object { $_ -match '^test result: ok\. 1 passed; 0 failed; 0 ignored;' }).Count -ne 1) { throw "native Windows wrapper regression must pass without an ignored test" }

@@ -41,11 +41,13 @@ pub(super) struct Trial {
     pub cleanup_complete: bool,
     pub cleanup_forced: bool,
     pub capture_complete: bool,
+    pub health_capture_complete: bool,
     pub health_observation_error: Option<String>,
     pub inheritance: trial_profile::Inheritance,
 }
 
 impl Trial {
+    #[cfg(test)]
     pub(super) fn observe_final_health(&mut self, directory: &Path) {
         collect_health(self, directory);
     }
@@ -176,6 +178,7 @@ fn launches(
             listener_ready: false,
             host_readiness_timeout: input.readiness,
             host_started: None,
+            health_streams: [None, None],
         },
         snapshot,
         inheritance,
@@ -210,9 +213,10 @@ fn observe(trial: &mut Trial, owner: &Owner, report: &Report<String>) {
                 .iter()
                 .all(|stream| !stream.truncated && stream.suppressed_lines == 0)
         });
-    if !trial.capture_complete {
-        trial.health_observation_error =
-            Some("host capture incomplete or suppressed; final health cannot be qualified".into());
+    trial.health_capture_complete = Owner::health_capture_complete(report);
+    match owner.final_health(report) {
+        Ok(health) => trial.outcome.health = health,
+        Err(error) => trial.health_observation_error = Some(error.to_string()),
     }
     if !report.recovery_success() || report.members.len() != 2 {
         failed(
@@ -238,9 +242,9 @@ fn collect(trial: &mut Trial, input: &Input<'_>, request_sha256: &str) {
         }
         Err(error) => failed(trial, error),
     }
-    trial.observe_final_health(input.directory);
 }
 
+#[cfg(test)]
 fn collect_health(trial: &mut Trial, directory: &Path) {
     if trial.capture_complete {
         match trial_receipt::final_health(directory) {
@@ -330,6 +334,7 @@ pub(super) fn execute(input: &Input<'_>, cancellation: &Cancellation) -> DynResu
         cleanup_complete: false,
         cleanup_forced: false,
         capture_complete: false,
+        health_capture_complete: false,
         health_observation_error: None,
         inheritance,
     };

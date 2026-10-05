@@ -58,6 +58,10 @@ pub enum Action<Rejection> {
 pub trait Coordinator {
     type Rejection;
     fn line(&mut self, member: MemberId, line: ObservedLine<'_>) -> ProbeDecision<Self::Rejection>;
+    /// Trusted bounded observation before sanitization, including every cleanup/drain phase.
+    /// Store only typed allowlisted projections; no I/O, logging, blocking, or raw copies.
+    /// This callback cannot admit/reject/start members or alter process ownership.
+    fn captured_line(&mut self, _member: MemberId, _line: ObservedLine<'_>) {}
     fn tick(&mut self, context: Context<'_>) -> Action<Self::Rejection>;
 }
 #[derive(Debug, Clone, Copy)]
@@ -127,3 +131,7 @@ impl<Rejection> Report<Rejection> {
             })
     }
 }
+
+#[cfg(all(test, unix))]
+#[path = "capture_observation_tests.rs"]
+mod capture_observation_tests;

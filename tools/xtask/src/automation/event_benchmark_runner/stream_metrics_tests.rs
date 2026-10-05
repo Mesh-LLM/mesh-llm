@@ -114,3 +114,18 @@ fn model_resolution_and_request_body_use_the_real_advertised_id() {
         assert_eq!(first_model(&value), None);
     }
 }
+
+#[test]
+fn malformed_sse_record_does_not_prevent_later_valid_content_usage_and_ttft() {
+    let mut stream = Stream::default();
+    stream
+        .consume(b"data: {not valid json\n", Duration::from_millis(10))
+        .unwrap();
+    stream.consume(b"data: {\"choices\":[{\"delta\":{\"content\":\"x\"}}],\"usage\":{\"completion_tokens\":1}}\ndata: [DONE]\n",Duration::from_millis(50)).unwrap();
+    let result = stream.finish(Duration::from_millis(100));
+    assert!(!result.malformed);
+    assert_eq!(result.completion_tokens, Some(1));
+    assert_eq!(result.ttft_ms, Some(50.0));
+    assert_eq!(result.decode_tok_s, Some(10.0));
+    assert_eq!(result.decode_only_tok_s, Some(20.0));
+}

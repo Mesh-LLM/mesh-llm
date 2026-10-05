@@ -1,17 +1,23 @@
 //! Bounded receipts after retained cleanup; never infer an end-of-trial health snapshot.
-use super::{health_log, measurement_worker, stream_metrics, worker_frontends};
+#[cfg(test)]
+use super::health_log;
+use super::{measurement_worker, stream_metrics, worker_frontends};
 use crate::command::DynResult;
+use std::path::Path;
+#[cfg(test)]
 use std::{
     fs::File,
     io::{BufRead, BufReader},
-    path::Path,
 };
 
+#[cfg(test)]
 const MAX_LOG: u64 = 64 * 1024 * 1024;
+#[cfg(test)]
 const MAX_HEALTH_LINE: usize = 16 * 1024;
 #[cfg(test)]
 const MAX_RECEIPT: u64 = 64 * 1024;
 
+#[cfg(test)]
 fn regular(path: &Path) -> DynResult<File> {
     if !std::fs::symlink_metadata(path)?.file_type().is_file() {
         return Err("trial evidence must be a regular file".into());
@@ -19,6 +25,7 @@ fn regular(path: &Path) -> DynResult<File> {
     Ok(File::open(path)?)
 }
 
+#[cfg(test)]
 fn final_stream(path: &Path) -> DynResult<Option<health_log::Observation>> {
     let mut reader = BufReader::new(regular(path)?);
     let mut total = 0_u64;
@@ -60,6 +67,7 @@ fn final_stream(path: &Path) -> DynResult<Option<health_log::Observation>> {
     }
 }
 
+#[cfg(test)]
 pub(super) fn final_health(directory: &Path) -> DynResult<health_log::Observation> {
     let stdout = final_stream(&directory.join("server.stdout.log"))?;
     let stderr = final_stream(&directory.join("server.stderr.log"))?;

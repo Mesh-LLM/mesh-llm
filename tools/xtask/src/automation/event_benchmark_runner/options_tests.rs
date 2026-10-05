@@ -145,3 +145,20 @@ fn cli_budget_matches_retained_trial_and_refuses_shutdown_before_preflight() {
     set(&mut args, "--execution-timeout-secs", "86400");
     assert!(Command::parse(&args).is_err());
 }
+
+#[test]
+fn repeatable_cli_scenarios_preserve_order_through_the_actual_admitted_plan() {
+    let mut args = flags();
+    args.extend(["--scenario".into(), "second".into()]);
+    let command = Command::parse(&args).unwrap();
+    assert_eq!(command.spec.scenarios, ["fixture", "second"]);
+    let entries = super::super::plan::build(&command.spec, &command.sides).unwrap();
+    assert_eq!(entries.len(), 40);
+    assert!(
+        entries[..20]
+            .iter()
+            .all(|row| row.scenario == super::super::plan::PRIMARY)
+    );
+    assert!(entries[20..30].iter().all(|row| row.scenario == "fixture"));
+    assert!(entries[30..].iter().all(|row| row.scenario == "second"));
+}

@@ -18,6 +18,7 @@ fn trial() -> Trial {
         cleanup_complete: false,
         cleanup_forced: false,
         capture_complete: false,
+        health_capture_complete: false,
         health_observation_error: None,
         inheritance: Default::default(),
     }
@@ -65,6 +66,7 @@ fn fixture(script: &str, retention: usize) -> (tempfile::TempDir, Trial, Report<
         listener_ready: true,
         host_readiness_timeout: Duration::from_secs(5),
         host_started: None,
+        health_streams: [None, None],
     };
     let mut limits = limits(Duration::from_secs(5), Duration::from_millis(500));
     limits.retained_bytes_per_stream = retention;
@@ -125,8 +127,8 @@ fn truncated_actual_capture_cannot_qualify_prefix_health_and_preserves_throughpu
 
 #[cfg(unix)]
 #[test]
-fn suppressed_actual_capture_cannot_qualify_final_health_and_preserves_throughput() {
-    let (_directory, trial, report) = fixture(
+fn suppressed_unrelated_capture_preserves_privacy_and_complete_typed_final_health() {
+    let (directory, trial, report) = fixture(
         &shutdown_script("printf '%s\\n' 'Authorization: Bearer private-value'"),
         4096,
     );
@@ -138,10 +140,16 @@ fn suppressed_actual_capture_cannot_qualify_final_health_and_preserves_throughpu
             .any(|m| m.process.stdout.suppressed_lines > 0)
     );
     assert!(!trial.capture_complete);
-    assert!(trial.outcome.health.health.is_none());
-    assert!(trial.health_observation_error.is_some());
+    assert_eq!(
+        trial.outcome.health.health.as_ref().unwrap()["dropped_progress"],
+        serde_json::json!(9)
+    );
+    assert!(trial.health_observation_error.is_none());
     assert!(trial.outcome.measurement.is_some());
     assert!(trial.outcome.error.is_none());
+    let persisted = std::fs::read_to_string(directory.path().join("server.stdout.log")).unwrap();
+    assert!(!persisted.contains("private-value"));
+    directory.close().unwrap();
 }
 
 #[cfg(unix)]
@@ -183,4 +191,108 @@ fn cleanup_failure_after_preparation_retains_deletion_receipt_and_prior_error() 
     let receipt = preparation_failure(state, "launch construction failed".into()).to_string();
     assert!(receipt.contains("Deletion"));
     assert!(receipt.contains("launch construction failed"));
+}
+
+#[cfg(unix)]
+#[test]
+fn actual_product_completion_fixture_stays_suppressed_and_shutdown_health_stays_typed() {
+    // The events crate's existing unit target proves these exact bytes are actual serde output.
+    let completion = include_str!(
+        "../../../../../crates/mesh-llm-events/tests/fixtures/event-benchmark-completed.json"
+    )
+    .trim();
+    let (directory, trial, report) = fixture(
+        &shutdown_script(&format!("printf '%s\\n' '{completion}'")),
+        4096,
+    );
+    let host = report
+        .members
+        .iter()
+        .find(|m| m.member == MemberId::Seed)
+        .unwrap();
+    assert_eq!(host.process.stdout.suppressed_lines, 1);
+    assert!(host.process.stdout.line_capture_complete && host.process.stderr.line_capture_complete);
+    assert!(!trial.capture_complete && trial.health_observation_error.is_none());
+    assert_eq!(
+        trial.outcome.health.health.as_ref().unwrap()["dropped_progress"],
+        serde_json::json!(9)
+    );
+    let persisted = std::fs::read_to_string(directory.path().join("server.stdout.log")).unwrap();
+    assert!(
+        persisted.contains("[output line suppressed]")
+            && !persisted.contains("prompt_tokens")
+            && !persisted.contains("completion_tokens")
+    );
+    directory.close().unwrap();
+}
+#[cfg(unix)]
+#[test]
+fn oversized_unknown_record_prevents_claim_of_complete_typed_health() {
+    let (directory, trial, report) = fixture(&shutdown_script("printf '%09000d\\n' 0"), 4096);
+    let host = report
+        .members
+        .iter()
+        .find(|m| m.member == MemberId::Seed)
+        .unwrap();
+    assert_eq!(host.process.stdout.oversized_lines, 1);
+    assert!(!host.process.stdout.line_capture_complete);
+    assert!(
+        trial
+            .health_observation_error
+            .as_deref()
+            .unwrap()
+            .contains("incomplete")
+    );
+    assert!(trial.outcome.health.health.is_none());
+    directory.close().unwrap();
+}
+#[cfg(unix)]
+#[test]
+fn suppressed_health_record_stores_only_typed_allowlisted_fields() {
+    let private = r#"{"context":"event_system_health","message":"version=1 dropped_progress=9 token=private-user-content ingress_p99_us=4"}"#;
+    let script = format!(
+        "health='{private}'; trap 'printf \"%s\\n\" \"$health\" >&2; exit 0' TERM; : > ready; while :; do sleep 1; done"
+    );
+    let (directory, trial, report) = fixture(&script, 4096);
+    let host = report
+        .members
+        .iter()
+        .find(|m| m.member == MemberId::Seed)
+        .unwrap();
+    assert_eq!(host.process.stderr.suppressed_lines, 1);
+    assert!(host.process.stderr.line_capture_complete);
+    let health = trial.outcome.health.health.unwrap();
+    assert_eq!(health["dropped_progress"], serde_json::json!(9));
+    assert!(!health.contains_key("token"));
+    assert!(
+        !serde_json::to_string(&health)
+            .unwrap()
+            .contains("private-user-content")
+    );
+    assert!(
+        !std::fs::read_to_string(directory.path().join("server.stderr.log"))
+            .unwrap()
+            .contains("private-user-content")
+    );
+    directory.close().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn typed_health_refuses_cleanup_failure_and_failed_graceful_signal_even_after_eof() {
+    let (directory, _, mut report) = fixture(&shutdown_script(":"), 4096);
+    assert!(Owner::health_capture_complete(&report));
+    let index = report
+        .members
+        .iter()
+        .position(|m| m.member == MemberId::Seed)
+        .unwrap();
+    report.members[index].process.cleanup.failure = Some(crate::process::Failure::InvalidSpec(
+        "fixture cleanup failure",
+    ));
+    assert!(!Owner::health_capture_complete(&report));
+    report.members[index].process.cleanup.failure = None;
+    report.members[index].process.cleanup.graceful_signal_failed = true;
+    assert!(!Owner::health_capture_complete(&report));
+    directory.close().unwrap();
 }

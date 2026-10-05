@@ -62,6 +62,11 @@ pub(super) fn requires(value: &str, clause: &str) -> bool {
     if matches!(value, "false" | "''") {
         return true;
     }
+    // A complete OR expression can itself be a required conjunct. Recognize
+    // that exact clause before decomposing its alternatives into weaker atoms.
+    if normalized(value) == normalized(unwrap(clause)) {
+        return true;
+    }
     let alternatives = split(value, b"||");
     if !alternatives.is_empty() {
         return alternatives.iter().all(|v| requires(v, clause));
@@ -70,5 +75,30 @@ pub(super) fn requires(value: &str, clause: &str) -> bool {
     if !conjuncts.is_empty() {
         return conjuncts.iter().any(|v| requires(v, clause));
     }
-    normalized(value) == normalized(clause)
+    false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::requires;
+
+    #[test]
+    fn composite_conjuncts_require_every_reachable_authorization_branch() {
+        let scope = "scheduled == 'true' || workload == 'cpu'";
+        assert!(requires(&format!("({scope}) && trusted"), scope));
+        assert!(requires(
+            &format!("({scope}) && trusted"),
+            &format!("({scope})")
+        ));
+        assert!(requires(scope, &format!("${{{{ ({scope}) }}}}")));
+        assert!(!requires(&format!("({scope}) || true"), scope));
+        assert!(!requires(&format!("true || ({scope})"), scope));
+        assert!(!requires(
+            &format!("(({scope}) && trusted) || bypass"),
+            scope
+        ));
+        assert!(!requires(scope, "scheduled == 'true'"));
+        assert!(requires(&format!("({scope}) || false"), scope));
+        assert!(requires("false", scope));
+    }
 }

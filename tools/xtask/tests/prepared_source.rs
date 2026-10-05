@@ -458,3 +458,6 @@ fn prepared_source_verifier_accepts_the_actual_producer_schema_marker_and_reject
         assert_eq!(fs::read(&marker).unwrap(), bytes.as_bytes());
     }
 }
+
+#[path = "prepared_source/prepare_producer.rs"]
+mod prepare_producer;

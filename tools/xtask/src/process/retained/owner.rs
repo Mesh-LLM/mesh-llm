@@ -97,24 +97,26 @@ pub fn run<Observer: Coordinator>(
                     member.expected = Some(policy);
                 }
             }
-            Action::Stop(id) => match shutdown::stop(&mut members, id, limits, |survivors| {
-                match expired(started, limits, cancellation) {
-                    Some(outcome) => Ok(Some(outcome)),
-                    None => observe(
-                        survivors,
-                        observer,
-                        (started, limits, cancellation),
-                        &mut rejection,
-                    ),
+            Action::Stop(id) => {
+                match shutdown::stop(&mut members, id, limits, observer, |survivors, observer| {
+                    match expired(started, limits, cancellation) {
+                        Some(outcome) => Ok(Some(outcome)),
+                        None => observe(
+                            survivors,
+                            observer,
+                            (started, limits, cancellation),
+                            &mut rejection,
+                        ),
+                    }
+                }) {
+                    Ok(Some(outcome)) => break outcome,
+                    Ok(None) => (),
+                    Err(error) => {
+                        failure = Some(error);
+                        break Outcome::IoFailure;
+                    }
                 }
-            }) {
-                Ok(Some(outcome)) => break outcome,
-                Ok(None) => (),
-                Err(error) => {
-                    failure = Some(error);
-                    break Outcome::IoFailure;
-                }
-            },
+            }
             Action::Complete => {
                 if members.is_empty()
                     || members.iter().any(|member| match &member.expected {
@@ -139,6 +141,7 @@ pub fn run<Observer: Coordinator>(
         &mut members,
         (started, limits, cancellation),
         (&mut outcome, &mut failure),
+        observer,
     );
     Ok(Report {
         outcome,

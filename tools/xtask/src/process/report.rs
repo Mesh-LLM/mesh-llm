@@ -26,6 +26,10 @@ pub struct StreamReport {
     pub bytes_retained: Vec<u8>,
     pub truncated: bool,
     pub suppressed_lines: u64,
+    /// All pipe bytes reached bounded line classification and EOF, with no oversized lines.
+    /// Independent of persisted diagnostic redaction/truncation.
+    pub line_capture_complete: bool,
+    pub oversized_lines: u64,
 }
 
 #[derive(Debug, Default)]

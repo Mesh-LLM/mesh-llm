@@ -102,10 +102,10 @@ pub(super) fn report(
     };
     let mut recipes = BTreeSet::new();
     if roots.contains(&"Justfile") {
-        recipes.insert("default".to_owned());
+        recipes.insert(("default".to_owned(), Vec::new()));
     }
     if roots.contains(&"just/ci.just") {
-        recipes.extend(["ci-validate".to_owned(), "test-all".to_owned()]);
+        recipes.extend(["ci-validate", "test-all"].map(|name| (name.to_owned(), Vec::new())));
     }
     while let Some((path, trust)) = builder.queue.pop_front() {
         if !builder.known.contains(path.as_str()) || !root.join(&path).is_file() {
@@ -137,13 +137,25 @@ pub(super) fn report(
                 }
                 continue;
             }
-            if (path.ends_with(".yml") || path.ends_with(".yaml"))
-                && let Some(recipe) = block
-                    .trim_start_matches("run: ")
-                    .strip_prefix("just ")
-                    .and_then(|tail| tail.split_whitespace().next())
-            {
-                recipes.insert(recipe.to_owned());
+            if path.ends_with(".yml") || path.ends_with(".yaml") {
+                match just_bindings::call(&block) {
+                    Ok(Some(invocation)) => {
+                        recipes.insert((invocation.recipe, invocation.arguments));
+                    }
+                    Err(reason) => builder.edges.push(Edge {
+                        parent: path.clone(),
+                        line,
+                        source_block: block.clone(),
+                        trust_revision: trust,
+                        status: "unknown_selection",
+                        child: None,
+                        unresolved_reason: Some(reason),
+                        argv: None,
+                        status_streams_effects: None,
+                        contract_source: None,
+                    }),
+                    Ok(None) => {}
+                }
             }
             if workflow_sources::record(&mut builder, &path, line, &block, trust)? {
                 continue;

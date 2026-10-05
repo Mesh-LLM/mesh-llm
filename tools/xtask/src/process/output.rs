@@ -27,6 +27,19 @@ pub(super) struct Output {
 }
 
 impl Output {
+    /// Trusted retained projection runs independently on both streams; the bool
+    /// preserves existing stderr readiness refusal after a stdout failure.
+    pub(super) fn poll_captured(
+        &mut self,
+        callback: &mut dyn FnMut(super::ObservedLine<'_>, bool),
+    ) -> Result<(), Failure> {
+        let stdout = self.stdout.poll_probe(&mut |line| callback(line, true));
+        let stderr = self
+            .stderr
+            .poll_probe(&mut |line| callback(line, stdout.is_ok()));
+        stdout.and(stderr)
+    }
+
     pub(super) fn poll(&mut self, readiness: &Readiness) -> bool {
         self.poll_candidate(readiness).is_some()
     }
@@ -95,3 +108,7 @@ impl super::probe::ProbeLines for Output {
         stdout.and(stderr)
     }
 }
+
+#[cfg(all(test, unix))]
+#[path = "output_capture_tests.rs"]
+mod capture_tests;

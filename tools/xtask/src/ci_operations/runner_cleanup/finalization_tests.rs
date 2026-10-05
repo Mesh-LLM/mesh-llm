@@ -15,6 +15,8 @@ fn cancelled() -> process::ProcessReport {
             bytes_retained: b"private-git-payload".to_vec(),
             truncated: true,
             suppressed_lines: 2,
+            line_capture_complete: false,
+            oversized_lines: 1,
         },
         stderr: process::StreamReport::default(),
         cleanup: process::Cleanup {
@@ -46,6 +48,8 @@ fn git_cancellation_when_finish_interrupts_retains_complete_report() {
     assert_eq!(report.stdout.bytes_seen, 19);
     assert!(report.stdout.truncated);
     assert_eq!(report.stdout.suppressed_lines, 2);
+    assert!(!report.stdout.line_capture_complete);
+    assert_eq!(report.stdout.oversized_lines, 1);
     assert!(report.cleanup.complete && report.cleanup.forced);
     assert!(matches!(
         report.failure,
