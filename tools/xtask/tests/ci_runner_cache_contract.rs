@@ -63,3 +63,6 @@ mod swift_workflow;
 
 #[path = "ci_runner_cache_contract/verified_pr_authority.rs"]
 mod verified_pr_authority;
+
+#[path = "ci_runner_cache_contract/protected_native_producer.rs"]
+mod protected_native_producer;
