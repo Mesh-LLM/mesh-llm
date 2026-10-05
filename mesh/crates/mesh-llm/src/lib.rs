@@ -535,6 +535,7 @@ fn runtime_options_from_cli(cli: mesh_llm_cli::Cli) -> mesh_llm_host_runtime::Ru
         draft_max: cli.draft_max,
         no_draft: cli.no_draft,
         speculative_overrides,
+        strategy: cli.strategy.map(map_serving_strategy),
         split: cli.split,
         allow_uncertified_split: cli.allow_uncertified_split,
         split_topology_lock: cli.split_topology_lock,
@@ -671,6 +672,17 @@ fn map_binary_flavor(flavor: mesh_llm_cli::BinaryFlavor) -> mesh_llm_system::bac
         mesh_llm_cli::BinaryFlavor::Rocm => mesh_llm_system::backend::BinaryFlavor::Rocm,
         mesh_llm_cli::BinaryFlavor::Vulkan => mesh_llm_system::backend::BinaryFlavor::Vulkan,
         mesh_llm_cli::BinaryFlavor::Metal => mesh_llm_system::backend::BinaryFlavor::Metal,
+    }
+}
+
+fn map_serving_strategy(
+    strategy: mesh_llm_cli::ServingStrategyCli,
+) -> mesh_llm_host_runtime::ServingStrategy {
+    use mesh_llm_host_runtime::ServingStrategy;
+    match strategy {
+        mesh_llm_cli::ServingStrategyCli::Balanced => ServingStrategy::Balanced,
+        mesh_llm_cli::ServingStrategyCli::Interactive => ServingStrategy::Interactive,
+        mesh_llm_cli::ServingStrategyCli::Throughput => ServingStrategy::Throughput,
     }
 }
 

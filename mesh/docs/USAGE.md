@@ -989,6 +989,41 @@ Config precedence:
   process launch until direct plugin use. This is useful for very slow legacy
   hosts or emulator-assisted startup paths.
 
+## Choosing a serving strategy
+
+`--strategy` names what the deployment is optimising for, and composes the
+settings that intent needs. It exists because the performance work for splits
+shipped as a dozen separate flags, and reaching a measured operating point meant
+knowing which ones to set together.
+
+```bash
+mesh-llm serve --model meshllm/Qwen3-8B-Q4_K_M-layers --split --strategy throughput
+```
+
+| Strategy | For | Composes |
+| --- | --- | --- |
+| `balanced` | the default; unchanged behaviour | nothing |
+| `interactive` | single-stream and agentic coding | `ngram-suffix` speculation, a run-ahead admission budget, final-stage batching off |
+| `throughput` | fleet tokens per second | final-stage decode batching, decode-wave grouping, speculation off, and closed-loop rebalancing when `--split` is set |
+
+**It only fills in values nobody has stated.** An explicit `[defaults.*]` or
+`[models.*]` value survives, and an explicit flag such as
+`--speculative-strategy` or `--parallel` overrides whatever the strategy chose.
+Adopting a strategy therefore cannot change an existing deployment. Startup logs
+every axis it set and every one it deferred on, so a hand-set value is visibly
+kept rather than silently replaced.
+
+`throughput` and `interactive` are opposed on purpose. A batched final stage
+produces no native multi-token-prediction drafts, so last-stage batching and
+speculation cannot both be active — that is enforced in the engine, not a
+preference. `throughput` takes the batching; `interactive` takes the drafts.
+
+Two honest limits. `throughput` buys fleet throughput and spends per-request
+latency: on the two-node lab it reached 0.84x the unsplit pair's aggregate while
+a request took about 25% longer. And `interactive` picks the N-gram proposers
+because they suit input-grounded output; on freeform prose they can be a net
+loss, so measure the real workload rather than assuming an uplift.
+
 ## Speculative decode configuration
 
 Configure speculative decoding under `[defaults.speculative]` for all staged

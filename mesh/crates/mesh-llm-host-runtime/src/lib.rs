@@ -131,7 +131,8 @@ pub fn configure_hf_tls_provider() {
 }
 
 pub use runtime::{
-    MeshGuardrailMode, RuntimeOptions, RuntimeSurface, console_session_mode_for_runtime_surface,
+    MeshGuardrailMode, RuntimeOptions, RuntimeSurface, ServingStrategy,
+    console_session_mode_for_runtime_surface,
 };
 
 /// Configure the ggml Metal pipeline cache directory.
