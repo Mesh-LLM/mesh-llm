@@ -63,6 +63,45 @@ fn migration_repository_census_matches_repository_baseline() -> TestResult {
 }
 
 #[test]
+fn migration_repository_census_excludes_root_evidence_but_audits_nested_source() -> TestResult {
+    let scratch = Scratch::new("census-evidence")?;
+    scratch.write(
+        "crates/mesh-llm/src/main.rs",
+        "fn main() {\n    configure_metal_pipeline_cache();\n    run_on_application_thread(|| {\n        tokio::runtime::Builder::new_multi_thread()\n    });\n}\n",
+    )?;
+    write_source(
+        &scratch,
+        ".omo/evidence/copied.rs",
+        "unsafe { {SET}(\"COPY\", \"1\") };\n",
+    )?;
+    let output = census(scratch.path(), &[])?;
+    assert_output(
+        &output,
+        0,
+        "environment mutation contract: discovered 0 Rust files and 0 mutation sites; 0 contract-audited files; unresolved runtime sites remain explicit\n",
+        "",
+    );
+    write_source(
+        &scratch,
+        "crates/new-crate/.omo/source.rs",
+        "unsafe { {SET}(\"REAL\", \"1\") };\n",
+    )?;
+    let output = census(scratch.path(), &[])?;
+    assert_output(
+        &output,
+        1,
+        "",
+        &violations(&[
+            "crates/new-crate/.omo/source.rs: unregistered process-environment mutation file (1 sites)",
+        ]),
+    );
+    let explicit = census(scratch.path(), &[".omo/evidence/copied.rs"])?;
+    assert!(!explicit.status.success());
+    assert!(String::from_utf8_lossy(&explicit.stderr).contains("recognized test module"));
+    Ok(())
+}
+
+#[test]
 fn migration_repository_census_rejects_stale_census() -> TestResult {
     // Given: an unregistered file, a changed frozen count, a bare build
     // script, ignored target/.git copies and no bootstrap caller.

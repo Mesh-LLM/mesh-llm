@@ -251,3 +251,7 @@ mod workload_lane_contract;
 
 #[path = "migration_lifecycle/installer_unix/mod.rs"]
 mod installer_unix;
+
+#[cfg(unix)]
+#[path = "migration_lifecycle/event_benchmark_worker.rs"]
+mod event_benchmark_worker;
