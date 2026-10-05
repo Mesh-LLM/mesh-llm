@@ -145,7 +145,12 @@ def compose(cli_input: Path, runtime_input: Path, output: Path, *, source_sha: s
         "source_sha": source_sha,
         "target": target,
         "backend": backend,
-        "cli": {"path": binary_name, "sha256": sha256(binary), "build_contract_sha256": sha256(output / "build-contract.json")},
+        "cli": {
+            "path": binary_name,
+            "sha256": sha256(binary),
+            "build_contract_sha256": sha256(output / "build-contract.json"),
+            "host_imports_sha256": sha256(output / "host-imports.json"),
+        },
         "runtime": {"id": runtime["id"], "path": runtime_dir.relative_to(output).as_posix(), "sha256": tree_sha256(runtime_dir), "manifest_sha256": sha256(manifest_path)},
     }
     (output / "product-manifest.json").write_text(json.dumps(product, indent=2, sort_keys=True) + "\n", encoding="utf-8")
