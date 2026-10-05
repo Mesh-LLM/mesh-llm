@@ -1,6 +1,7 @@
 pub mod blocking;
 mod cache_paths;
 mod checkpoint;
+pub mod inventory;
 pub mod local_cache;
 pub mod remote_catalog;
 pub mod search;
