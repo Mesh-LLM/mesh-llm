@@ -1,0 +1,19 @@
+[package]
+name = "skippy-model-artifact"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+description = "Model artifact selection, identity, capability inference, and GGUF metadata for Skippy and MeshLLM"
+repository = "https://github.com/Mesh-LLM/mesh-llm"
+homepage = "https://github.com/Mesh-LLM/mesh-llm"
+readme = "README.md"
+
+[dependencies]
+anyhow.workspace = true
+async-trait = "0.1"
+skippy-model-ref = { path = "../skippy-model-ref", version = "0.78.0" }
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt"] }

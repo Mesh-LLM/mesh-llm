@@ -72,9 +72,15 @@ class SdkJsonConsumerTests(unittest.TestCase):
             "safe-extract-tar.py",
         ):
             shutil.copy2(ROOT / "scripts" / name, scripts / name)
-        abi = workspace / "crates/skippy-ffi/src/lib.rs"
+            for product in ("mesh", "skippy"):
+                implementation = ROOT / product / "scripts" / name
+                if implementation.is_file():
+                    destination = workspace / product / "scripts" / name
+                    destination.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(implementation, destination)
+        abi = workspace / "skippy/crates/skippy-ffi/src/lib.rs"
         abi.parent.mkdir(parents=True)
-        shutil.copy2(ROOT / "crates/skippy-ffi/src/lib.rs", abi)
+        shutil.copy2(ROOT / "skippy/crates/skippy-ffi/src/lib.rs", abi)
         # Only readiness/network startup is stubbed; execute the real composer,
         # SDK reader and package verification against checksum-bound fixture bytes.
         (scripts / "ci-client-readiness-smoke.sh").write_text(
@@ -114,6 +120,8 @@ class SdkJsonConsumerTests(unittest.TestCase):
             '  [[ -z "${MESH_LLM_CONFIG:-}" && -z "${MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR:-}" ]]\n'
             '  touch "$GITHUB_WORKSPACE/sdk-reader-ran"\n'
             f"  printf '%s\\n' '{json.dumps(reports[report_kind])}'\n"
+            'elif [[ "$*" == *"--print-build-contract"* ]]; then\n'
+            f"printf '%s\\n' '{json.dumps({'schema_version': 1, 'product_version': '1.2.3', 'runtime_release': '1.2.3', 'skippy_abi': runtime_tests.current_skippy_abi()})}'\n"
             'else\n  printf "mesh-llm 1.2.3\\n"\nfi\n'
         )
         digest = hashlib.sha256(host.read_bytes()).hexdigest()

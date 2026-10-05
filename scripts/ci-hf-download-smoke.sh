@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ci-hf-download-smoke.sh — exercise the Rust HuggingFace download pipeline.
 #
-# Runs the model-hf integration tests that hit real HuggingFace API and
+# Runs the skippy-model-hf integration tests that hit real HuggingFace API and
 # download endpoints. These tests verify the code path a user exercises
 # when running `mesh-llm serve --model org/repo:Q4_K_M`.
 #
@@ -63,9 +63,9 @@ run_hf_test_group() {
   return 1
 }
 
-echo "Running model-hf integration tests (API-only: resolve, list, artifact resolution)..."
+echo "Running skippy-model-hf integration tests (API-only: resolve, list, artifact resolution)..."
 run_hf_test_group "API-only model resolution" \
-  cargo test -p model-hf --test hf_download -- \
+  cargo test -p skippy-model-hf --test hf_download -- \
     --ignored \
     --test-threads=1 \
     resolve_revision_returns_commit_sha \
@@ -76,9 +76,9 @@ run_hf_test_group "API-only model resolution" \
     resolve_nonexistent_repo_returns_error
 
 echo ""
-echo "Running model-hf download tests (downloads ~100 MB GGUF via Rust HF client)..."
+echo "Running skippy-model-hf download tests (downloads ~100 MB GGUF via Rust HF client)..."
 run_hf_test_group "model download" \
-  cargo test -p model-hf --test hf_download -- \
+  cargo test -p skippy-model-hf --test hf_download -- \
     --ignored \
     --test-threads=1 \
     download_single_gguf_file \

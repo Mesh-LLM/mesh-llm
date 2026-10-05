@@ -75,7 +75,7 @@ def write_runtime_manifest(
     runtime_bundle: Path,
     runtime_id: str = "runtime-id",
     *,
-    tool_rel: str = "tools/skippy-model-package",
+    tool_rel: str = "tools/skippy-package-builder",
     tool_contents: bytes = b"#!/usr/bin/env bash\nexit 0\n",
     executable: bool = True,
     manifest_tool_rel: str | None = None,
@@ -200,7 +200,7 @@ class TwoNodeSplitSmokeTests(unittest.TestCase):
             source = root / "Fixture-Q4_K_M.gguf"
             source.write_bytes(b"immutable-gguf-fixture")
             calls = root / "calls.log"
-            package_tool = root / "skippy-model-package"
+            package_tool = root / "skippy-package-builder"
             package_tool.write_text(
                 """#!/usr/bin/env bash
 set -euo pipefail
@@ -370,8 +370,8 @@ fi
             runtime_bundle = Path(directory) / "runtime"
             write_runtime_manifest(
                 runtime_bundle,
-                tool_rel="other/skippy-model-package",
-                manifest_tool_rel="other/skippy-model-package",
+                tool_rel="other/skippy-package-builder",
+                manifest_tool_rel="other/skippy-package-builder",
             )
             harness = (
                 "set -euo pipefail\n"
@@ -388,7 +388,7 @@ fi
                 check=False,
             )
             self.assertNotEqual(result.returncode, 0)
-            self.assertIn("does not declare tools/skippy-model-package", result.stderr)
+            self.assertIn("does not declare tools/skippy-package-builder", result.stderr)
 
     def test_package_tool_checksum_is_verified_before_use(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -23,7 +23,7 @@ def _recipe_dependencies(header_line: str) -> list[str]:
     Splits on the *last* colon, since a parameterized header's default value
     (e.g. 'bundle output="/tmp/x:y": release-build') can itself contain one;
     the header's own closing colon is always the final one. Parameterized
-    headers with no dependencies, like 'build-runtime backend="" cuda_arch="":',
+    headers with no dependencies, like 'release-runtime-build backend="" target="":',
     correctly yield an empty list either way.
     """
     _, _, deps_part = header_line.rpartition(":")
@@ -72,7 +72,10 @@ def _run_release_recipe(
         detect_stub.chmod(0o755)
 
         justfile = workdir / "Justfile"
-        stub_recipes = "".join(f"{dep}:\n    @true\n\n" for dep in deps)
+        stub_recipes = "".join(
+            f"{dep}:\n    @true\n\n"
+            for dep in dict.fromkeys([*deps, "skippy-cli-release-build", "release-host-build"])
+        )
         justfile.write_text(stub_recipes + recipe_text + "\n", encoding="utf-8")
 
         run_env = {"PATH": os.environ["PATH"]}
@@ -98,6 +101,39 @@ def _run_release_recipe(
 
 
 class JustfileReleaseRuntimeTests(unittest.TestCase):
+    def test_release_recipes_build_complete_skippy_before_mesh(self) -> None:
+        for recipe_name in (
+            "release-build",
+            "release-build-aarch64",
+            "release-build-aarch64-cuda",
+            "release-build-cuda",
+            "release-build-rocm",
+            "release-build-vulkan",
+        ):
+            with self.subTest(recipe=recipe_name):
+                result = subprocess.run(
+                    ["just", "--dry-run", recipe_name],
+                    cwd=ROOT,
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
+                # Just prints dry-run commands to stderr.
+                commands = result.stderr
+                runtime = commands.index("scripts/package-native-runtime.sh")
+                skippy = (
+                    commands.index("cargo build --release --locked -p skippy-cli")
+                    if recipe_name == "release-build"
+                    else commands.index("just skippy-cli-release-build")
+                )
+                mesh = (
+                    commands.index("scripts/build-release.sh")
+                    if recipe_name == "release-build"
+                    else commands.index("just release-host-build")
+                )
+                self.assertLess(runtime, skippy)
+                self.assertLess(skippy, mesh)
+
     def test_release_runtime_build_does_not_expand_empty_array_under_nounset(self) -> None:
         recipe = self.release_runtime_recipe()
 
@@ -238,21 +274,16 @@ class JustfileReleaseRuntimeTests(unittest.TestCase):
             "--build --backend cuda --target aarch64-unknown-linux-gnu",
         )
 
-    def test_build_runtime_defaults_the_backend_and_forwards_the_one_it_was_given(
+    def test_release_runtime_build_defaults_the_backend_and_forwards_the_one_it_was_given(
         self,
     ) -> None:
-        """`$$backend` read the shell PID, not the recipe argument.
+        recipe = self.recipe("release-runtime-build")
 
-        Under just, `$$` is two literal dollars, so `"$$backend"` expanded to
-        "<pid>backend" -- the default-to-cpu test never inspected the variable
-        it appeared to, and the packager was handed a nonsense backend name.
-        """
-        recipe = self.recipe("build-runtime")
+        defaulted = _run_release_recipe("release-runtime-build", recipe)
+        expected_backend = "metal" if os.uname().sysname == "Darwin" else "cpu"
+        self.assertEqual(defaulted["args"], f"--build --backend {expected_backend}")
 
-        defaulted = _run_release_recipe("build-runtime", recipe)
-        self.assertEqual(defaulted["args"], "--build --backend cpu")
-
-        explicit = _run_release_recipe("build-runtime", recipe, "cuda")
+        explicit = _run_release_recipe("release-runtime-build", recipe, "cuda")
         self.assertEqual(explicit["args"], "--build --backend cuda")
 
     def test_bundle_uses_the_product_packager_and_copies_its_checksum(self) -> None:
@@ -264,10 +295,21 @@ class JustfileReleaseRuntimeTests(unittest.TestCase):
         self.assertIn('cp "$stable_archive.sha256" "{{ output }}.sha256"', recipe)
         self.assertNotIn('cp "{{ mesh_bin }}"', recipe)
 
+    def test_release_bundle_forwards_flavor_and_arch_without_wrapper_recipes(self) -> None:
+        result = subprocess.run(
+            ["just", "--dry-run", "release-bundle", "v1.2.3", "dist", "cuda", "aarch64"],
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        self.assertIn('MESH_RELEASE_FLAVOR="cuda" MESH_RELEASE_ARCH="aarch64"', result.stderr)
+        self.assertIn('scripts/package-release.sh "v1.2.3" "dist"', result.stderr)
+
     def release_runtime_recipe(self) -> str:
         contents = read_justfile_source(JUSTFILE)
         start = contents.index('release-runtime-build backend="" target="":')
-        end = contents.index("# Build the backend-neutral host and the default runtime", start)
+        end = contents.index("# Build the complete Skippy product", start)
         return contents[start:end]
 
     def recipe(self, name: str) -> str:

@@ -377,7 +377,7 @@ fn hand_maintained_case_branch(function: &str) -> Option<String> {
 fn check_publish_catalog_sync(repo_root: &Path) -> DynResult<()> {
     let client_catalog = fs::read_to_string(
         repo_root
-            .join("crates")
+            .join("mesh/crates")
             .join("mesh-client")
             .join("src")
             .join("models")
@@ -385,7 +385,7 @@ fn check_publish_catalog_sync(repo_root: &Path) -> DynResult<()> {
     )?;
     let node_catalog = fs::read_to_string(
         repo_root
-            .join("crates")
+            .join("mesh/crates")
             .join("mesh-llm-node")
             .join("src")
             .join("catalog.json"),

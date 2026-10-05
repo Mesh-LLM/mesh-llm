@@ -77,18 +77,18 @@ test port="9337":
 
 # Show the local llama.cpp ABI patch queue
 diff:
-    @find third_party/llama.cpp/patches -maxdepth 1 -type f -name '*.patch' -print | sort
-    @sed 's#^#third_party/llama.cpp/patches/model_support/#' third_party/llama.cpp/patches/model_support/series
-    @sed 's#^#third_party/llama.cpp/patches/generated/#' third_party/llama.cpp/patches/generated/series
+    @find skippy/llama_cpp/patches -maxdepth 1 -type f -name '*.patch' -print | sort
+    @sed 's#^#skippy/llama_cpp/patches/model_support/#' skippy/llama_cpp/patches/model_support/series
+    @sed 's#^#skippy/llama_cpp/patches/generated/#' skippy/llama_cpp/patches/generated/series
 
 # Build the client-only Docker image
 [unix]
 docker-build-client tag="mesh-llm:client":
-    DOCKER_BUILDKIT=1 docker build -f docker/Dockerfile.client -t {{ tag }} .
+    DOCKER_BUILDKIT=1 docker build -f mesh/deploy/docker/Dockerfile.client -t {{ tag }} .
 
 [windows]
 docker-build-client tag="mesh-llm:client":
-    @powershell -NoProfile -ExecutionPolicy Bypass -Command "$env:DOCKER_BUILDKIT='1'; docker build -f docker/Dockerfile.client -t '{{ tag }}' ."
+    @powershell -NoProfile -ExecutionPolicy Bypass -Command "$env:DOCKER_BUILDKIT='1'; docker build -f mesh/deploy/docker/Dockerfile.client -t '{{ tag }}' ."
 
 # Run the client console image locally
 docker-run-client tag="mesh-llm:client":

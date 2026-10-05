@@ -1,0 +1,23 @@
+[package]
+name = "mesh-native-serving-plugin-host"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Deadline-safe native serving-plugin loader for Mesh Skippy"
+repository = "https://github.com/Mesh-LLM/mesh-llm"
+homepage = "https://github.com/Mesh-LLM/mesh-llm"
+readme = "README.md"
+
+[dependencies]
+anyhow.workspace = true
+libloading = "0.9"
+mesh-native-serving-plugin-api = { path = "../mesh-native-serving-plugin-api", version = "0.78.0" }
+skippy-serving = { path = "../../../skippy/crates/skippy-serving", version = "0.78.0" }
+skippy-tokenizer = { path = "../../../skippy/crates/skippy-tokenizer", version = "0.78.0" }
+tracing = "0.1"
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+skippy-serving = { path = "../../../skippy/crates/skippy-serving", version = "0.78.0", features = ["test-support"] }

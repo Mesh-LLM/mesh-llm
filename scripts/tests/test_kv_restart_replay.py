@@ -12,7 +12,7 @@ from unittest import mock
 
 
 REPO = Path(__file__).resolve().parents[2]
-SCRIPT = REPO / "evals/kv-restart-replay.py"
+SCRIPT = REPO / "mesh/evals/kv-restart-replay.py"
 
 
 def load_module():

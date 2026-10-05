@@ -1,8 +1,0 @@
-Explore the mesh-llm source code in this repo (crates/mesh-llm/src/). Give me a summary of:
-
-1. How many Rust source files are there and what does each one do? (one line per file)
-2. What is the approximate total lines of code?
-3. What external crates does it depend on? (check Cargo.toml)
-4. What's the most complex file and why?
-
-Don't read every file line by line — use bash tools (wc, grep, head) to be efficient.

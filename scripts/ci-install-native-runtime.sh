@@ -37,14 +37,17 @@ manifest_path = source / "manifest.json"
 with manifest_path.open("r", encoding="utf-8") as fh:
     manifest = json.load(fh)
 
+if type(manifest.get("schema_version")) is not int or manifest["schema_version"] != 2:
+    raise SystemExit("native runtime manifest requires schema_version 2; import legacy caches explicitly")
+
 runtime = manifest["runtime"]
 runtime_id = runtime["id"]
-mesh_version = runtime.get("mesh_version") or "unknown"
+release_version = runtime.get("release_version") or "unknown"
 libraries = runtime.get("libraries") or []
 if not runtime_id.strip():
     raise SystemExit(f"native runtime id is empty in {manifest_path}")
-if not mesh_version.strip():
-    raise SystemExit(f"native runtime mesh_version is empty in {manifest_path}")
+if not release_version.strip():
+    raise SystemExit(f"native runtime release_version is empty in {manifest_path}")
 if not libraries:
     raise SystemExit(f"native runtime libraries are empty in {manifest_path}")
 
@@ -53,7 +56,7 @@ for library in libraries:
     if not library_path.is_file():
         raise SystemExit(f"native runtime library is missing: {library_path}")
 
-target = cache / mesh_version / runtime_id
+target = cache / release_version / runtime_id
 if target.exists():
     shutil.rmtree(target)
 target.parent.mkdir(parents=True, exist_ok=True)

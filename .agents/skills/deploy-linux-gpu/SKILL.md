@@ -21,9 +21,9 @@ Examples here are for solo serving — don't read this in isolation:
 - `deploy-macos` / `deploy-windows` — other platforms
 - `mesh-join` — creating/joining private and public meshes (tokens, NAT, multi-node)
 - `connect-agents` — pointing Goose/Claude Code/OpenCode/Pi at a running mesh
-- `docs/USAGE.md` — install details, service mode, model storage
-- `docs/CLI.md` — full command and model-ref reference
-- `docs/SKIPPY_SPLITS.md` — splitting big models across nodes
+- `mesh/docs/USAGE.md` — install details, service mode, model storage
+- `mesh/docs/CLI.md` — full command and model-ref reference
+- `skippy/docs/SKIPPY_SPLITS.md` — splitting big models across nodes
 
 ## The one rule that matters most
 

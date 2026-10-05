@@ -303,9 +303,9 @@ class PlanCiTests(unittest.TestCase):
 
     def test_cli_surface_change_selects_inventory_validation(self) -> None:
         payload = fixture("runtime.json")
-        payload["changed_files"] = ["crates/mesh-llm-cli/src/parser/commands.rs"]
+        payload["changed_files"] = ["mesh/crates/mesh-llm-cli/src/parser/commands.rs"]
         payload["workspace_packages"] = [
-            {"name": "mesh-llm-cli", "path": "crates/mesh-llm-cli"}
+            {"name": "mesh-llm-cli", "path": "mesh/crates/mesh-llm-cli"}
         ]
         payload["affected_crates"] = ["mesh-llm-cli"]
 
@@ -319,7 +319,7 @@ class PlanCiTests(unittest.TestCase):
 
     def test_plugin_exemplar_change_sets_its_signal(self) -> None:
         payload = fixture("docs-only.json")
-        payload["changed_files"] = ["docs/plugins/exemplars/web-ui/Cargo.toml"]
+        payload["changed_files"] = ["mesh/docs/plugins/exemplars/web-ui/Cargo.toml"]
 
         plan = PLANNER.build_plan(payload, root=ROOT)
 
@@ -374,9 +374,9 @@ class PlanCiTests(unittest.TestCase):
 
     def test_log_store_selects_only_the_windows_storage_privacy_row(self) -> None:
         payload = fixture("runtime.json")
-        payload["changed_files"] = ["crates/mesh-llm-log-store/src/lib.rs"]
+        payload["changed_files"] = ["mesh/crates/mesh-llm-log-store/src/lib.rs"]
         payload["workspace_packages"] = [
-            {"name": "mesh-llm-log-store", "path": "crates/mesh-llm-log-store"}
+            {"name": "mesh-llm-log-store", "path": "mesh/crates/mesh-llm-log-store"}
         ]
         payload["affected_crates"] = ["mesh-llm-log-store"]
 

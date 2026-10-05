@@ -225,12 +225,12 @@ def main() -> int:
     parser.add_argument("--check", action="store_true")
     args = parser.parse_args()
     inventory = load_inventory(
-        root / "crates/mesh-llm-runtime-event-contracts/inventory/runtime_events.toml"
+        root / "mesh/crates/mesh-llm-runtime-event-contracts/inventory/runtime_events.toml"
     )
     outputs = {
-        root / "docs/design/RUNTIME_EVENT_INVENTORY.md": render_markdown(inventory),
+        root / "mesh/docs/design/RUNTIME_EVENT_INVENTORY.md": render_markdown(inventory),
         root
-        / "crates/mesh-llm-runtime-event-contracts/fixtures/runtime_event_inventory.ts": render_typescript(
+        / "mesh/crates/mesh-llm-runtime-event-contracts/fixtures/runtime_event_inventory.ts": render_typescript(
             inventory
         ),
     }

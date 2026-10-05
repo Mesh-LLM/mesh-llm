@@ -233,25 +233,12 @@ fi
 runtime_dir="${composed_runtime_dirs[0]}"
 scripts/verify-native-runtime-package.sh "$runtime_dir"
 
-version="${INPUT_VERSION:-}"
-if [[ -z "$version" ]]; then
-    version="$(
-        "$python_bin" - "$runtime_dir/manifest.json" <<'PY'
-import json
-import sys
-
-with open(sys.argv[1], encoding="utf-8") as handle:
-    print(json.load(handle)["runtime"]["mesh_version"])
-PY
-    )"
-fi
-version="${version#v}"
 host_version_output="$("$output_dir/$INPUT_BINARY_NAME" --version)"
 host_version="$(awk '{print $NF}' <<<"$host_version_output")"
-# Non-release hosts carry semver build metadata (`+g<sha>[.dirty]`) so a dev
-# binary cannot be mistaken for a release one. Build metadata is not part of
-# version identity, so compare the release version and ignore any suffix.
+# Product identity belongs to the host; the runtime has an independent release.
 host_release_version="${host_version%%+*}"
+version="${INPUT_VERSION:-$host_release_version}"
+version="${version#v}"
 if [[ "$host_release_version" != "$version" ]]; then
     echo "composed host version mismatch: expected $version, got ${host_version:-<empty>}" >&2
     echo "Output: $host_version_output" >&2

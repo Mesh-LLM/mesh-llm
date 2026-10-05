@@ -44,7 +44,8 @@
       "additionalProperties": false,
       "required": [
         "path",
-        "sha256"
+        "sha256",
+        "required_skippy_abi"
       ],
       "properties": {
         "path": {
@@ -54,6 +55,10 @@
         },
         "sha256": {
           "$ref": "#/$defs/sha256"
+        },
+        "required_skippy_abi": {
+          "type": "string",
+          "minLength": 1
         }
       }
     },
@@ -64,7 +69,9 @@
         "id",
         "path",
         "sha256",
-        "manifest_sha256"
+        "manifest_sha256",
+        "release_version",
+        "skippy_abi"
       ],
       "properties": {
         "id": {
@@ -82,6 +89,14 @@
         },
         "manifest_sha256": {
           "$ref": "#/$defs/sha256"
+        },
+        "release_version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "skippy_abi": {
+          "type": "string",
+          "minLength": 1
         }
       }
     }
