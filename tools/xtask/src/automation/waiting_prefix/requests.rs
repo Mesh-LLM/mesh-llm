@@ -8,22 +8,22 @@ use std::{
     time::{Duration, Instant},
 };
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Input {
-    schema_version: u64,
-    round: u64,
-    version: Version,
-    base_url: String,
-    model: String,
-    output_tokens: u64,
-    request_timeout_secs: f64,
-    stagger_ms: f64,
-    prompts: Vec<Prompt>,
+pub(super) struct Input {
+    pub(super) schema_version: u64,
+    pub(super) round: u64,
+    pub(super) version: Version,
+    pub(super) base_url: String,
+    pub(super) model: String,
+    pub(super) output_tokens: u64,
+    pub(super) request_timeout_secs: f64,
+    pub(super) stagger_ms: f64,
+    pub(super) prompts: Vec<Prompt>,
 }
 
 impl Input {
-    fn validate(&self) -> DynResult<()> {
+    pub(super) fn validate(&self) -> DynResult<()> {
         let endpoint: hyper::Uri = self.base_url.parse()?;
         if endpoint.scheme_str() != Some("http")
             || endpoint.host() != Some("127.0.0.1")
@@ -86,12 +86,24 @@ struct Row {
 }
 
 #[derive(Serialize)]
-struct Phase {
+pub(super) struct Phase {
     schema_version: u64,
     round: u64,
     version: Version,
     requests: Vec<Row>,
     makespan_ms: f64,
+}
+
+impl Phase {
+    pub(super) fn successful(&self) -> usize {
+        self.requests
+            .iter()
+            .filter(|row| matches!(row.outcome, Outcome::Completed { .. }))
+            .count()
+    }
+    pub(super) fn passed(&self) -> bool {
+        self.successful() == self.requests.len()
+    }
 }
 
 async fn cancelled(cancellation: &Cancellation) {
@@ -152,7 +164,7 @@ async fn request(endpoint: &Endpoint, request_id: usize, prompt: Prompt) -> Row 
     }
 }
 
-async fn execute(input: Input, cancellation: Cancellation) -> DynResult<Phase> {
+pub(super) async fn execute(input: Input, cancellation: Cancellation) -> DynResult<Phase> {
     let epoch = Instant::now();
     let endpoint = std::sync::Arc::new(Endpoint {
         base: input.base_url,

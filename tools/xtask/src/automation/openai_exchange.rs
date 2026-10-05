@@ -1,4 +1,5 @@
 //! Shared bounded OpenAI streaming transport for repository automation.
+use crate::command::DynResult;
 pub(super) mod stream;
 use http_body_util::{BodyExt, Full};
 use hyper::body::Bytes;
@@ -48,4 +49,50 @@ pub(super) async fn request(
     };
     tokio::pin!(response);
     tokio::select! { result = &mut response => result, result = connection => { result?; response.await } }
+}
+
+pub(super) async fn get(url: &str) -> DynResult<Vec<u8>> {
+    let uri: hyper::Uri = url.parse()?;
+    if uri.scheme_str() != Some("http") {
+        return Err("replay readiness requires HTTP".into());
+    }
+    let stream = tokio::net::TcpStream::connect((
+        uri.host().ok_or("missing readiness host")?,
+        uri.port_u16().unwrap_or(80),
+    ))
+    .await?;
+    let (mut sender, connection) =
+        hyper::client::conn::http1::handshake(TokioIo::new(stream)).await?;
+    let request = hyper::Request::builder()
+        .uri(
+            uri.path_and_query()
+                .ok_or("missing readiness path")?
+                .as_str(),
+        )
+        .header(
+            "host",
+            uri.authority()
+                .ok_or("missing readiness authority")?
+                .as_str(),
+        )
+        .header("connection", "close")
+        .body(Full::new(Bytes::new()))?;
+    let response = async {
+        let mut response = sender.send_request(request).await?;
+        if !response.status().is_success() {
+            return Err("readiness HTTP error".into());
+        }
+        let mut bytes = Vec::new();
+        while let Some(frame) = response.body_mut().frame().await {
+            if let Some(data) = frame?.data_ref() {
+                if data.len() > (1024 * 1024_usize).saturating_sub(bytes.len()) {
+                    return Err("readiness response exceeds 1 MiB".into());
+                }
+                bytes.extend_from_slice(data);
+            }
+        }
+        Ok(bytes)
+    };
+    tokio::pin!(response);
+    tokio::select! {result = &mut response => result, result = connection => { result?; response.await }}
 }
