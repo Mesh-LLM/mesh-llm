@@ -44,3 +44,11 @@ fn assert_mutation_rejected(file: &str, from: &str, to: &str, check: impl Fn(&No
     let changed = format!("{}\n# {from}\n", original.replace(from, to));
     assert!(!check(&workflow_yaml::parse(&changed).unwrap()));
 }
+
+mod cache_flow_intent;
+mod declared_graph;
+mod lane_policy_intent;
+mod release_flow_intent;
+mod release_ui_step;
+mod release_windows_intent;
+mod reporter_intent;

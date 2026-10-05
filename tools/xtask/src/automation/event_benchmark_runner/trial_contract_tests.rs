@@ -4,7 +4,7 @@ use super::*;
 fn decode_only_epsilon_matches_the_component_owned_constant() {
     let syntax = syn::parse_file(include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../crates/mesh-llm-commands/src/gpus/tune/benchmark/streaming.rs"
+        "/../../mesh/crates/mesh-llm-commands/src/gpus/tune/benchmark/streaming.rs"
     )))
     .unwrap();
     let constants = syntax
@@ -31,7 +31,7 @@ fn decode_only_epsilon_matches_the_component_owned_constant() {
 fn wording() -> std::collections::BTreeMap<String, String> {
     let syntax = syn::parse_file(include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../crates/mesh-llm-commands/src/gpus/tune/output_types.rs"
+        "/../../mesh/crates/mesh-llm-commands/src/gpus/tune/output_types.rs"
     )))
     .unwrap();
     let functions = syntax

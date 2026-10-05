@@ -350,8 +350,6 @@
           "scripts/tests/test_skippy_waiting_prefix_ab.py",
           "scripts/tests/test_skippy_radix_cache_ab.py",
           "scripts/tests/test_performance_history.py",
-          "scripts/tests/test_compare_event_benchmark_matrix.py",
-          "scripts/tests/test_run_event_benchmark_matrix.py",
           "scripts/tests/test_summarize_depot_registry_pulls.py"
         ],
         "removal_condition": "Generic policy parity is tested in Rust and model/canary runtime evidence is preserved; optional cadence alone is not a reason to keep generic Python",
@@ -1086,76 +1084,6 @@
         "test_reruns_exclude_workflow_and_start_delay_timing",
         "test_runner_dimensions_cover_depot_platforms_and_hosted_intel_macos",
         "test_timing_decomposition_keeps_dependency_wait_explicit"
-      ]
-    },
-    {
-      "case_ownership": "Per-case replacement must test behavior, including positive, negative, edge and identity-preserving cases; source-text-only assertions do not qualify.",
-      "deletion_condition": "Delete only after deterministic cases and named live workflow coverage are retained.",
-      "gate": "Legacy just ci-validate; live behavior in its named optional/scheduled workflow",
-      "module": "scripts/tests/test_compare_event_benchmark_matrix.py",
-      "owner": "Owning QA/benchmark component; generic orchestration in tools/xtask/src/process or automation",
-      "rust_or_ctest_gate": "Not yet ported; listed owner target is future migration ownership, not claimed execution.",
-      "sha256": "9d1835d4ac6afb96ee522304fb5c8518b0a575c3fd167071ca7380e119406a24",
-      "test_method_count": 58,
-      "test_methods": [
-        "test_accepts_a_valid_manifest",
-        "test_agreeing_and_varied_order_has_no_violations",
-        "test_bootstrap_status_and_values_are_stable_across_hash_seeds",
-        "test_cancelled_reservation_rejections_are_accepted_as_nonnegative_counts",
-        "test_clear_degradation_fails_the_screen",
-        "test_comparison_b_screens_current_binary_against_baseline_binary",
-        "test_constant_executed_order_blocks_with_a_clearly_named_reason",
-        "test_constant_order_across_all_pairs_is_a_violation",
-        "test_disagreement_between_manifests_is_a_violation",
-        "test_dropped_progress_must_exactly_match_expected_count",
-        "test_evaluate_health_expectations_returns_no_fabricated_violations_when_unavailable",
-        "test_exact_match_has_no_violations",
-        "test_fewer_than_required_pairs_is_invalid_input_never_a_downgraded_pass",
-        "test_first_adverse_result_permits_one_retry",
-        "test_forbidden_phrases_never_appear_for_any_status",
-        "test_full_report_pass_case_has_correct_wording_and_no_forbidden_phrases",
-        "test_health_is_available_false_when_health_is_null",
-        "test_health_is_available_true_when_health_dict_present",
-        "test_help_exits_zero_via_subprocess",
-        "test_help_lists_every_frozen_flag",
-        "test_high_variance_small_effect_marks_underpowered_not_pass",
-        "test_holm_adjustment_is_monotone_non_decreasing_by_rank",
-        "test_holm_never_relaxes_a_fail_status",
-        "test_identical_environments_have_no_violations",
-        "test_mismatched_manifest_seed_is_an_input_violation",
-        "test_missing_executed_order_blocks_with_a_clearly_named_reason",
-        "test_missing_health_blocks_with_the_accurately_named_reason",
-        "test_missing_on_both_reports_both_reasons",
-        "test_missing_on_event_disabled_manifest_is_a_violation",
-        "test_missing_on_one_side_is_excluded_not_silently_dropped_to_reach_minimum",
-        "test_missing_on_production_manifest_is_a_violation",
-        "test_negative_cancelled_reservation_count_is_invalid",
-        "test_no_degradation_passes",
-        "test_non_certification_host_is_informational_even_when_unmeasurable",
-        "test_non_finite_metric_is_excluded_and_reported",
-        "test_non_positive_baseline_is_excluded_before_relative_degradation",
-        "test_non_succeeded_trial_is_excluded",
-        "test_null_metric_is_excluded_pairwise_not_the_whole_trial",
-        "test_oversized_integer_metric_is_excluded_without_overflow",
-        "test_p99_over_budget_blocks",
-        "test_p99_within_budget_is_ok",
-        "test_pass_is_accepted_regardless_of_attempt",
-        "test_pass_wording_uses_the_correct_phrase",
-        "test_planned_selector_difference_is_excluded",
-        "test_present_on_one_side_only_is_a_violation",
-        "test_redacted_presence_mismatch_is_a_violation",
-        "test_rejects_missing_metrics_schema_field",
-        "test_rejects_non_streaming_schema",
-        "test_rejects_unsupported_schema_version",
-        "test_second_adverse_result_blocks_release",
-        "test_state_lane_evictions_nonzero_is_a_violation",
-        "test_state_rejection_and_degradation_block_certification",
-        "test_terminal_delivery_failed_nonzero_is_a_violation",
-        "test_the_comparator_budget_matches_the_rust_constant",
-        "test_the_rust_constant_is_still_where_this_test_looks_for_it",
-        "test_thermal_state_is_recorded_per_side_in_the_final_report",
-        "test_unmeasurable_p99_on_certification_host_blocks",
-        "test_unplanned_value_mismatch_is_a_violation"
       ]
     },
     {
@@ -2689,108 +2617,6 @@
         "test_cancellation_during_wait_defers_cleanup_until_wait_unwinds",
         "test_completed_agent_cannot_leave_a_writer_in_its_process_group",
         "test_deadline_observes_child_exit_before_declaring_timeout"
-      ]
-    },
-    {
-      "case_ownership": "Per-case replacement must test behavior, including positive, negative, edge and identity-preserving cases; source-text-only assertions do not qualify.",
-      "deletion_condition": "Delete only after deterministic cases and named live workflow coverage are retained.",
-      "gate": "Legacy just ci-validate; live behavior in its named optional/scheduled workflow",
-      "module": "scripts/tests/test_run_event_benchmark_matrix.py",
-      "owner": "Owning QA/benchmark component; generic orchestration in tools/xtask/src/process or automation",
-      "rust_or_ctest_gate": "Not yet ported; listed owner target is future migration ownership, not claimed execution.",
-      "sha256": "903bc9024da3bf5b1ec9fd0c2c3aac4dfc110606ca41e12c3cb9afc0cdb96c6b",
-      "test_method_count": 90,
-      "test_methods": [
-        "test_accepts_zero_and_u64_max",
-        "test_allowlisted_names_persist_normalized_raw_values",
-        "test_argv_always_disables_native_mtp_speculative_decoding",
-        "test_argv_never_passes_console_or_headless",
-        "test_attempt_accepts_explicit_retry_value",
-        "test_attempt_defaults_to_one",
-        "test_baseline_binary_accepted_alongside_a_single_mode",
-        "test_build_chat_request_body_uses_the_passed_model_not_auto",
-        "test_build_side_manifest_passes_attempt_from_args_to_build_manifest",
-        "test_certification_host_classification_for_macos_arm64",
-        "test_comparison_a_accepts_any_two_distinct_modes",
-        "test_comparison_a_rejects_a_repeated_mode",
-        "test_comparison_a_rejects_a_single_mode",
-        "test_comparison_a_requires_exactly_two_modes_no_baseline_binary",
-        "test_comparison_a_still_rejects_a_repeated_mode",
-        "test_comparison_b_rejects_two_modes",
-        "test_comparison_b_requires_exactly_one_mode_with_baseline_binary",
-        "test_computed_value_uses_the_epsilon_guarded_interval",
-        "test_derive_health_and_p99_absent_line_is_honest_none_none",
-        "test_derive_health_and_p99_null_p99_token_stays_none_but_health_populates",
-        "test_derive_health_and_p99_populates_both_when_present",
-        "test_different_seeds_produce_different_prompt_seeds",
-        "test_each_pairs_two_trials_run_back_to_back_in_plan_order",
-        "test_event_disabled_expects_the_fixed_per_trial_counts_not_the_run_total",
-        "test_event_disabled_with_zero_trials_expects_zero_drops",
-        "test_execute_trial_always_sets_gate_and_selector_together",
-        "test_execute_trial_threads_side_order_first_into_every_trial_result",
-        "test_executed_order_records_the_real_first_and_second_side_ids",
-        "test_existing_file_hashes_deterministically",
-        "test_first_models_list_id_extracts_the_first_entry",
-        "test_first_models_list_id_is_none_on_empty_data",
-        "test_first_models_list_id_is_none_on_malformed_payload",
-        "test_happy_path_extracts_ttft_and_completion_tokens",
-        "test_health_and_p99_are_derived_from_each_sides_own_last_trial_log",
-        "test_health_unavailable_when_no_trial_ran_for_a_side",
-        "test_help_exits_zero_via_subprocess",
-        "test_help_lists_every_frozen_flag",
-        "test_historical_definition_preserved",
-        "test_main_calls_build_side_manifest_for_both_sides",
-        "test_malformed_json_line_is_skipped_not_fatal",
-        "test_manifest_carries_schema_and_trial_unit_and_expectations",
-        "test_manifest_executed_order_is_null_when_not_supplied",
-        "test_manifest_executed_order_is_populated_and_json_serializable",
-        "test_manifest_expectations_stay_fixed_at_full_run_scale_not_scaled_by_trial_count",
-        "test_manifest_health_is_null_when_not_collected",
-        "test_manifest_preserves_an_explicitly_supplied_health_dict",
-        "test_manifest_records_a_non_default_attempt_number",
-        "test_missing_binary_reports_none_sha256_and_none_version",
-        "test_mode_is_repeatable_for_comparison_a",
-        "test_model_resolution_and_requests_use_request_timeout",
-        "test_names_matching_sensitive_pattern_are_always_redacted",
-        "test_never_calls_the_real_executor_by_default_in_tests",
-        "test_never_returns_zero_on_failure_paths",
-        "test_no_health_line_at_all_returns_none",
-        "test_no_scenarios_is_rejected",
-        "test_non_allowlisted_mesh_llm_names_are_redacted_to_presence_only",
-        "test_non_data_lines_are_ignored",
-        "test_non_mesh_llm_names_are_ignored_entirely",
-        "test_null_on_non_positive_elapsed",
-        "test_null_when_decode_interval_is_negative",
-        "test_null_when_decode_interval_is_zero",
-        "test_null_when_ttft_is_null",
-        "test_off_forwards_the_off_selector",
-        "test_plan_shape_covers_primary_then_each_scenario_in_order",
-        "test_production_and_event_disabled_map_to_identical_wire_values",
-        "test_production_expects_zero_drops",
-        "test_real_f4_captured_event_disabled_manifest_has_no_expectation_violations",
-        "test_reconciled_expectation_still_catches_genuine_diagnostic_divergence",
-        "test_reconciled_expectation_still_catches_genuine_progress_divergence",
-        "test_rejects_above_u64_max",
-        "test_rejects_negative",
-        "test_repeated_health_lines_take_the_final_one",
-        "test_same_seed_produces_identical_plans_across_invocations",
-        "test_scenario_is_repeatable",
-        "test_side_a_and_side_b_results_are_bucketed_correctly_regardless_of_launch_order",
-        "test_side_order_first_is_a_valid_mode_for_every_entry",
-        "test_side_order_first_uses_both_modes_across_many_seeds",
-        "test_sides_kwarg_overrides_the_default_mode_domain",
-        "test_single_health_line_is_parsed",
-        "test_split_chunks_and_empty_deltas_do_not_set_ttft",
-        "test_state_pressure_health_survives_log_to_manifest_conversion",
-        "test_stream_without_terminal_usage_is_malformed_with_null_tokens",
-        "test_the_default_side_pair_is_two_modes_not_every_mode",
-        "test_thermal_state_capture_never_raises_and_has_available_flag",
-        "test_trial_and_pair_wording_matches_rust_verbatim",
-        "test_unknown_host_is_informational_only",
-        "test_unknown_mode_is_a_hard_error",
-        "test_valid_modes_matches_the_alias_map_keys",
-        "test_zero_pairs_primary_is_rejected",
-        "test_zero_pairs_scenario_is_rejected"
       ]
     },
     {
@@ -4352,7 +4178,9 @@
         "test_method_count": 1
       }
     ],
-    "skill_local_generic_tests": [],
+    "skill_local_generic_tests": [
+
+    ],
     "skill_local_test_note": "No test_*.py modules were found under .agents/skills. Skill-local scripts and their caller classifications are tracked separately by the task-3 instructions/exception ledger.",
     "tracked_python_test_modules": 147
   },
@@ -13537,6 +13365,115 @@
       "sha256": "8aace3684b9fe9774542d1d827d5300031d68c08680b32b072eb9a7ae8258929",
       "roster_line": 32,
       "count": 30
+    }
+  },
+  "event_benchmark_last_caller_retirement": {
+    "status": "PREPARED_NOT_APPLIED_OR_QUALIFIED",
+    "python_paths_after": 85,
+    "core_modules_after": 28,
+    "removed_paths": [
+      "scripts/run-event-benchmark-matrix.py",
+      "scripts/compare-event-benchmark-matrix.py",
+      "scripts/tests/test_run_event_benchmark_matrix.py",
+      "scripts/tests/test_compare_event_benchmark_matrix.py"
+    ],
+    "original_methods": 149,
+    "durable_coverage": {
+      "path": "ci/automation-migration/event-benchmark-retirement-coverage.json",
+      "sha256": "28977e51809b81492a1b470753b23eface498e24fc30d2e6fbe6b81c7078e59f"
+    },
+    "current_just": {
+      "path": "just/ci.just",
+      "sha256": "419e4e4ae461a94dda332e85a5aafa371cccd5918d2e39fbb0260f3ce1a5a452",
+      "roster_line": 32,
+      "count": 28
+    },
+    "admission_prerequisites": ".omo/evidence/resume-20261002/event-benchmark-last-caller-retirement-rebind-v3/prerequisites.json",
+    "qualification": null,
+    "native_source_freeze": {
+      "path": ".omo/evidence/resume-20261002/migration-current-batch-normal-freeze-v1.json",
+      "sha256": "fa4342e63b8d4f93e425e88f106d9585ba5ef3e06a057cff3c83ad2ed92c9d5c",
+      "head": "3fbd1fcbcd390c86083a8265de3a4ce4734e3a58",
+      "status": "FROZEN_SOURCES_NOT_TERMINAL_EXECUTION",
+      "drift": [
+
+      ],
+      "additional_native_sources": [
+        {
+          "path": "tools/xtask/src/automation/event_benchmark_comparison/manifest_tests.rs",
+          "sha256": "8ec09288b54096ddffa8f0b2d225edc7dceb9781b3c94bfa2404e9e2f48a49fe",
+          "qualification": null
+        },
+        {
+          "path": "tools/xtask/src/automation/event_benchmark_comparison/environment_identity_tests.rs",
+          "sha256": "36427c1426f2ff93fe0b8205424e079c6dbcb461fd3183621180b3dae421ed79",
+          "qualification": null
+        },
+        {
+          "path": "tools/xtask/src/automation/event_benchmark_comparison/pairing_tests.rs",
+          "sha256": "3e49cd0840be9a1ca8dc1557142bbe1a87225ab221205fab66ac109b0f2eaf0d",
+          "qualification": null
+        },
+        {
+          "path": "tools/xtask/src/automation/event_benchmark_comparison/statistics_tests.rs",
+          "sha256": "bfc7671031f4f3ac81b2b36c6521264d47d42792dbdb6b403201d38f307d259e",
+          "qualification": null
+        },
+        {
+          "path": "tools/xtask/tests/migration_cli/event_benchmark_comparison.rs",
+          "sha256": "c4a80a500fccf7578779ce24a3b07bcf45ac792494bc3455f11a359875e8c5d4",
+          "qualification": null
+        },
+        {
+          "path": "tools/xtask/src/automation/event_benchmark_comparison/screening_tests.rs",
+          "sha256": "a4137d22bac57e6985a9d8d447502c46a9ba89a5e8b095342bb30207d3d919cb",
+          "qualification": null
+        },
+        {
+          "path": "tools/xtask/src/automation/event_benchmark_comparison/resampling_tests.rs",
+          "sha256": "1eeda9f12510daa19de4f23d7838f74b666329f70dab1a0d384bbd7f9494d3ed",
+          "qualification": null
+        },
+        {
+          "path": "tools/xtask/src/automation/event_benchmark_comparison/retry.rs",
+          "sha256": "6fa6e4623c111f79ee847b0bb24f006b9c85c78c79a81d8aaf1cc659779728d5",
+          "qualification": null
+        },
+        {
+          "path": "tools/xtask/src/automation/event_benchmark_comparison/callback_latency_tests.rs",
+          "sha256": "5c6542ddc2acc2bfd07532223658058023b67c2ec55f0d9c2bd3fb8e8ba8f440",
+          "qualification": null
+        },
+        {
+          "path": "tools/xtask/src/automation/event_benchmark_comparison/health_tests.rs",
+          "sha256": "3b8f810fb522d7e852a17bd4416026116bbe6e66f1cdb83d7504743accd4abe2",
+          "qualification": null
+        },
+        {
+          "path": "tools/xtask/src/automation/event_benchmark_comparison/order_identity_tests.rs",
+          "sha256": "16f17f447b6f1960de04ed0a36be6ff97707ae674b3ab751b754da18a6cee468",
+          "qualification": null
+        },
+        {
+          "path": "tools/xtask/src/automation/event_benchmark_comparison/report_tests.rs",
+          "sha256": "70182a488f5e5b4c7c2bc759f4d35129acfa0334b1589d14c08a47b9436baa81",
+          "qualification": null
+        },
+        {
+          "path": "tools/xtask/src/automation/event_benchmark_comparison/command_tests.rs",
+          "sha256": "421dc4f3a83fdc467887e6bba66a52e9622ef78ecc35543f741f44b104d46cac",
+          "qualification": null
+        }
+      ],
+      "supplemental_baseline": {
+        "path": ".omo/evidence/resume-20261002/event-benchmark-last-caller-retirement-rebind-v2/supplemental-comparator-baseline.json",
+        "sha256": "fb9f3f75c56e046ecc58253ce1947008522442b3d8749c38e8b61626b6e2fb59",
+        "qualification": null
+      }
+    },
+    "current_method_map": {
+      "path": ".omo/evidence/resume-20261002/event-benchmark-last-caller-retirement-rebind-v2/current-method-map149.json",
+      "sha256": "568fce59980878bc9d619ea6301b81da250ebb99885d5532bdf6f07dd289995c"
     }
   }
 }

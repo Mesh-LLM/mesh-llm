@@ -56,7 +56,7 @@ fn metadata_cannot_waive_a_frozen_certification_host_gate() {
 fn declared_runtime_budget() -> u64 {
     let syntax = syn::parse_file(include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../crates/mesh-llm-host-runtime/src/runtime_events/config.rs"
+        "/../../mesh/crates/mesh-llm-host-runtime/src/runtime_events/config.rs"
     )))
     .unwrap();
     let budgets = syntax

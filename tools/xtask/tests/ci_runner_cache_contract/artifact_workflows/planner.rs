@@ -120,3 +120,8 @@ fn artifact_plan_action_emits_exact_platform_matrices_and_omits_empty_affected_c
         }
     }
 }
+
+#[path = "pr_manifest_intent.rs"]
+mod pr_manifest_intent;
+#[path = "projection_intent.rs"]
+mod projection_intent;
