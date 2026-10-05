@@ -158,6 +158,18 @@ jobs:
         uses: ./.github/actions/resolve-native-toolchain-epoch
         with:
           include_tool_versions: "true"
+      - name: Prepare patched llama.cpp ABI checkout
+        if: ${{ matrix.check.kind == 'unit' && matrix.check.platform == 'macos' }}
+        run: scripts/prepare-llama.sh pinned
+      - name: Identify patched llama.cpp for cache reuse
+        if: ${{ matrix.check.kind == 'unit' && matrix.check.platform == 'macos' }}
+        id: patched_llama
+        shell: bash
+        run: |
+          set -euo pipefail
+          patched_sha="$(tr -d '[:space:]' < .deps/llama.cpp/.mesh-llm-patched-sha)"
+          [[ "$patched_sha" =~ ^[0-9a-f]{40}$ ]]
+          echo "sha=$patched_sha" >> "$GITHUB_OUTPUT"
       - name: Ensure static Metal ABI cache directory
         if: ${{ matrix.check.kind == 'unit' && matrix.check.platform == 'macos' }}
         run: mkdir -p "$LLAMA_STAGE_BUILD_DIR"
@@ -167,10 +179,7 @@ jobs:
         uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
           path: ${{ env.LLAMA_STAGE_BUILD_DIR }}
-          key: ${{ env.CACHE_NAMESPACE }}-${{ runner.os }}-${{ runner.arch }}-skippy-abi-static-metal-${{ steps.native_toolchain.outputs.epoch }}-${{ hashFiles('scripts/build-mac.sh', 'scripts/build-llama.sh', 'skippy/scripts/build-llama.sh', 'scripts/prepare-llama.sh', 'skippy/scripts/prepare-llama.sh', 'third_party/llama.cpp/upstream.txt', 'skippy/third_party/llama.cpp/upstream.txt', 'third_party/llama.cpp/patches/**', 'skippy/third_party/llama.cpp/patches/**', 'Justfile', 'just/**', '.github/cache-version.txt') }}
-      - name: Prepare patched llama.cpp ABI checkout
-        if: ${{ matrix.check.kind == 'unit' && matrix.check.platform == 'macos' }}
-        run: scripts/prepare-llama.sh pinned
+          key: ${{ env.CACHE_NAMESPACE }}-${{ runner.os }}-${{ runner.arch }}-skippy-abi-static-metal-${{ steps.native_toolchain.outputs.epoch }}-${{ steps.patched_llama.outputs.sha }}-${{ hashFiles('scripts/build-mac.sh', 'mesh/scripts/build-mac.sh', 'scripts/build-llama.sh', 'skippy/scripts/build-llama.sh', 'scripts/prepare-llama.sh', 'skippy/scripts/prepare-llama.sh', 'third_party/llama.cpp/upstream.txt', 'skippy/third_party/llama.cpp/upstream.txt', 'skippy/llama_cpp/upstream.txt', 'third_party/llama.cpp/patches/**', 'skippy/third_party/llama.cpp/patches/**', 'skippy/llama_cpp/patches/**', 'Justfile', 'just/**', '.github/cache-version.txt') }}
       - name: Verify cached patched llama.cpp ABI libraries
         if: ${{ matrix.check.kind == 'unit' && matrix.check.platform == 'macos' && steps.llama_cache.outputs.cache-hit == 'true' }}
         run: scripts/build-llama.sh --require-existing
@@ -195,7 +204,7 @@ jobs:
         id: windows_packages
         uses: Mesh-LLM/mesh-llm/.github/actions/resolve-cargo-packages@5c8fb4d472bc57058c8153761c561daa77dd5b94 # product-layout compatibility helpers
         with:
-          generation: legacy
+          generation: current
           # The `platform-windows-cfg` catalog routes these crates to the
           # Windows unit row because they carry their own cfg(windows)/cfg(unix)
           # code, so they run here without widening the shared macOS owners.
@@ -229,12 +238,6 @@ jobs:
         if: ${{ matrix.check.kind == 'unit' && matrix.check.platform == 'windows' }}
         shell: pwsh
         env:
-          # One host-runtime test peaks between 2.0 and 2.25 MiB of stack on
-          # MSVC debug frames since #1887, and a 2 MiB test thread dies of
-          # STATUS_STACK_OVERFLOW, taking the whole harness with it. Reserve
-          # more until the frame is found; the measurements are in the stack
-          # overflow issue linked from #1554.
-          RUST_MIN_STACK: "8388608"
           TEST_CRATES: ${{ steps.packages.outputs.crates }}
           WINDOWS_TEST_CRATES: ${{ steps.windows_packages.outputs.crates }}
           WINDOWS_DYNAMIC_TEST_CRATES: ${{ steps.windows_dynamic_packages.outputs.crates }}

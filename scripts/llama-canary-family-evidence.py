@@ -22,7 +22,7 @@ _MEMORY_SPEC = importlib.util.spec_from_file_location(
 MEMORY = importlib.util.module_from_spec(_MEMORY_SPEC)
 _MEMORY_SPEC.loader.exec_module(MEMORY)
 
-BINS = ("skippy-correctness", "skippy-server", "skippy-model-package", "skippy-topology-plan")
+BINS = ("skippy-correctness", "skippy", "skippy-package-builder", "skippy-topology-plan")
 CORE = {"single-step", "chain", "state-handoff"}
 # The workload oracle closure ships in the handoff so family workers consume
 # the CPU candidate and native oracle executables without compiling. Paths are
@@ -38,7 +38,7 @@ WORKLOAD_ORACLE_CANONICAL = (
     "native/bin/llama-server",
     "native/bin/llama-completion",
     "native/bin/llama-tts",
-    "cargo/debug/skippy-server",
+    "cargo/debug/skippy",
 )
 
 
@@ -198,10 +198,22 @@ def build(args) -> None:
         identity, _ = verify_package(package, env["CANARY_PREVIOUS_IDENTITY"])
         if identity["candidate"] != env["CANARY_CANDIDATE_SHA"] or identity["base"] != git(root, "rev-parse", "HEAD"):
             raise ValueError("previous candidate/base does not match dependency outputs")
+        current_attempt = int(pass_id.rsplit("-", 1)[1])
+        previous_attempt = int(identity["pass_id"].rsplit("-", 1)[1])
+        if mode == "repair-build" and (current_attempt <= 1 or previous_attempt != current_attempt - 1):
+            raise ValueError("repair continuation must consume the immediately preceding distributed attempt")
         env["CANARY_INPUT_BUNDLE"] = str(package / "candidate.bundle")
         env["CANARY_CANDIDATE_BRANCH"] = identity["branch"]
+        feedback = env.get("CANARY_PREVIOUS_FEEDBACK")
+        if mode == "repair-build":
+            if not feedback:
+                raise ValueError("repair continuation requires family failure evidence")
+            verify_feedback(Path(feedback), env["CANARY_PREVIOUS_IDENTITY"], identity,
+                            expected_state="candidate_repairable")
     elif mode == "verify-build":
         raise ValueError("independent verification requires a candidate")
+    elif mode == "repair-build" and pass_id != "repair-1":
+        raise ValueError("later repair attempts require a previous candidate")
     preflight_battery(root)
     subprocess.run([str(Path(__file__).resolve().with_name("llama-canary-agent-repair.sh"))], env=env, check=True)
 
@@ -312,7 +324,7 @@ def packaged_workload_manifest(root: Path, closure: Path, candidate: str) -> byt
         payload["source"] = {"head": candidate, "worktree_sha256": hashlib.sha256(b"").hexdigest()}
     else:
         subprocess.run([sys.executable, str(root / "scripts/check-skippy-workload-candidate.py"),
-                        "--candidate-binary", str(closure / "cargo/debug/skippy-server"),
+                        "--candidate-binary", str(closure / "cargo/debug/skippy"),
                         "--native-build-dir", str(closure / "native"),
                         "--producer-manifest", str(manifest)], cwd=root, check=True, timeout=60)
     for record in payload["files"].values():
@@ -334,9 +346,9 @@ def pack(args) -> None:
         shutil.copy2(source, payload / name)
     tests = [row["executable"] for row in map(json.loads, args.test_build.read_text().splitlines())
              if row.get("reason") == "compiler-artifact" and row.get("executable")
-             and row.get("target", {}).get("name") == "skippy_server" and row.get("profile", {}).get("test")]
+             and row.get("target", {}).get("name") == "skippy_serving" and row.get("profile", {}).get("test")]
     if len(tests) != 1:
-        raise ValueError("expected exactly one prebuilt skippy-server library test executable")
+        raise ValueError("expected exactly one prebuilt skippy-serving library test executable")
     check_binary(Path(tests[0]))
     shutil.copy2(tests[0], payload / "skippy-mm-test")
     # Metal is embedded in the static native library. Reject nonrelocatable
@@ -508,6 +520,73 @@ def receipt(args) -> None:
           "results_sha256": sha(path) if path.is_file() else None})
 
 
+def verify_feedback(directory: Path, identity_sha256: str, identity: dict,
+                    expected_state: str | None = None) -> dict:
+    payload = read(directory / "feedback.json")
+    expected = {
+        "schema": 2,
+        "identity_sha256": identity_sha256,
+        "candidate": identity["candidate"],
+        "source_pass": identity["pass_id"],
+        "run_id": identity["run_id"],
+        "failure_stage": "family-certification",
+    }
+    for key, value in expected.items():
+        if payload.get(key) != value:
+            raise ValueError(f"family feedback {key} mismatch")
+    state = payload.get("state")
+    if state not in {"candidate_repairable", "infrastructure_retryable"}:
+        raise ValueError("family feedback state is not retryable")
+    if expected_state is not None and state != expected_state:
+        raise ValueError("family feedback state mismatch")
+    candidate = payload.get("candidate_failures")
+    infrastructure = payload.get("infrastructure_failures")
+    for name, families in (("candidate", candidate), ("infrastructure", infrastructure)):
+        if not isinstance(families, list) or any(not isinstance(family, str) or not family
+                                                for family in families):
+            raise ValueError(f"family feedback {name} failures are invalid")
+        if sorted(families) != families or len(set(families)) != len(families):
+            raise ValueError(f"family feedback {name} failures must be unique and sorted")
+    if set(candidate) & set(infrastructure):
+        raise ValueError("family feedback failure classes overlap")
+    families = sorted(candidate + infrastructure)
+    if not families or payload.get("failed_families") != families:
+        raise ValueError("family feedback failed-family set mismatch")
+    expected_class = "candidate" if state == "candidate_repairable" else "infrastructure"
+    if payload.get("failure_class") != expected_class:
+        raise ValueError("family feedback failure class mismatch")
+    if payload.get("repairable") != (state == "candidate_repairable"):
+        raise ValueError("family feedback repairable flag mismatch")
+    if state == "candidate_repairable" and (not candidate or infrastructure):
+        raise ValueError("candidate repair feedback must contain only candidate failures")
+    if state == "infrastructure_retryable" and not infrastructure:
+        raise ValueError("infrastructure retry feedback has no retry families")
+    evidence_sha256 = payload.get("evidence_sha256")
+    if (not isinstance(evidence_sha256, dict) or not set(candidate) <= set(evidence_sha256)
+            or not set(evidence_sha256) <= set(families)):
+        raise ValueError("family feedback evidence manifest mismatch")
+    directories = {path.name for path in directory.iterdir() if path.is_dir()}
+    if directories != set(evidence_sha256):
+        raise ValueError("family feedback evidence directories mismatch")
+    for family in evidence_sha256:
+        evidence = directory / family
+        if evidence_hashes(evidence) != evidence_sha256[family]:
+            raise ValueError(f"family feedback evidence digest mismatch for {family}")
+    return payload
+
+
+def evidence_hashes(directory: Path) -> dict[str, str]:
+    files = {}
+    for path in sorted(directory.rglob("*")):
+        if path.is_symlink():
+            raise ValueError("family feedback evidence cannot contain symlinks")
+        if path.is_file():
+            files[path.relative_to(directory).as_posix()] = sha(path)
+    if not files:
+        raise ValueError("family feedback evidence directory is empty")
+    return files
+
+
 def read_json_documents(path: Path) -> list[dict]:
     """Read adjacent JSON objects regardless of whether jq printed them compactly."""
     content = path.read_text()
@@ -570,24 +649,106 @@ def validate_results(path: Path, family: str, model: dict) -> None:
         raise ValueError(f"{family}: multimodal evidence incomplete")
 
 
-def aggregate(args) -> None:
-    identity, plan = verify_package(args.package, args.identity)
-    models = validate_plan(plan)
-    receipts = sorted(args.evidence.glob("*/receipt.json"))
-    seen = set()
-    errors = []
-    passed = []
+def classify_family_failure(path: Path, family: str, identity: dict, identity_sha256: str) -> str:
+    try:
+        receipt = read(path)
+        expected = {
+            "family": family,
+            "candidate": identity["candidate"],
+            "pass_id": identity["pass_id"],
+            "identity_sha256": identity_sha256,
+            "run_id": identity["run_id"],
+        }
+        if any(receipt.get(key) != value for key, value in expected.items()):
+            return "contract"
+        if receipt.get("outcome") in {"cancelled", "skipped"}:
+            return "infrastructure"
+        if receipt.get("outcome") not in {"success", "failure"}:
+            return "contract"
+        results = path.parent / "results.jsonl"
+        if receipt.get("results_sha256") != sha(results):
+            return "contract"
+    except (ValueError, OSError, KeyError, TypeError):
+        return "contract"
+    memory = path.parent / "memory-admission.json"
+    if memory.is_file():
+        try:
+            if read(memory).get("status") == "failed":
+                return "infrastructure"
+        except (ValueError, OSError, TypeError):
+            return "infrastructure"
+    try:
+        rows = read_json_documents(results)
+    except (ValueError, OSError, json.JSONDecodeError):
+        return "contract"
+    for row in rows:
+        if row.get("family") != "battery":
+            continue
+        outcomes = row.get("outcomes", [])
+        environment = [item for item in outcomes if item.get("name") == "environment-preflight"]
+        if environment and any(item.get("status") != "pass" or item.get("exit_code") != 0
+                               for item in environment):
+            return "infrastructure"
+    if any(row.get("family") == family for row in rows):
+        return "candidate"
+    return "infrastructure"
+
+
+def write_feedback(directory: Path, identity_sha256: str, identity: dict,
+                   state: str, candidate: dict[str, Path], infrastructure: dict[str, Path],
+                   infrastructure_families: set[str], errors: list[str]) -> None:
+    directory.mkdir(parents=True, exist_ok=False)
+    available = {**candidate, **infrastructure}
+    for family, source in sorted(available.items()):
+        shutil.copytree(source, directory / family)
+    evidence_sha256 = {
+        family: evidence_hashes(directory / family) for family in sorted(available)
+    }
+    candidate_families = sorted(candidate)
+    infrastructure_names = sorted(infrastructure_families)
+    write(directory / "feedback.json", {
+        "schema": 2,
+        "identity_sha256": identity_sha256,
+        "candidate": identity["candidate"],
+        "source_pass": identity["pass_id"],
+        "run_id": identity["run_id"],
+        "run_attempt": os.environ["GITHUB_RUN_ATTEMPT"],
+        "state": state,
+        "repairable": state == "candidate_repairable",
+        "failure_class": "candidate" if state == "candidate_repairable" else "infrastructure",
+        "failure_stage": "family-certification",
+        "candidate_failures": candidate_families,
+        "infrastructure_failures": infrastructure_names,
+        "failed_families": sorted(candidate_families + infrastructure_names),
+        "evidence_sha256": evidence_sha256,
+        "errors": errors,
+    })
+
+
+def retry_matrix(plan: dict, families: set[str]) -> str:
+    rows = [row for row in scheduling_matrix(plan)["include"] if row["families"] in families]
+    if {row["families"] for row in rows} != families:
+        raise ValueError("retry matrix contains an unknown family")
+    return json.dumps({"include": rows}, separators=(",", ":"))
+
+
+def collect_latest_receipts(evidence: Path, identity: dict, identity_sha256: str,
+                            allowed: set[str]) -> tuple[dict[str, tuple[int, Path, dict]], list[str], bool]:
     latest = {}
     attempts = set()
-    for path in receipts:
+    errors = []
+    terminal_contract = False
+    for path in sorted(evidence.glob("*/receipt.json")):
         family = path.parent.name
         try:
             item = read(path)
             family = item["family"]
-            if family not in models:
+            if family not in allowed:
                 raise ValueError("unplanned family receipt")
-            if (item["identity_sha256"] != args.identity or item["candidate"] != identity["candidate"]
-                    or item["pass_id"] != identity["pass_id"] or item["run_id"] != identity["run_id"]):
+            if (item["identity_sha256"] != identity_sha256
+                    or item["candidate"] != identity["candidate"]
+                    or item["pass_id"] != identity["pass_id"]
+                    or item["run_id"] != identity["run_id"]):
                 raise ValueError("mismatched worker receipt")
             attempt = run_attempt(item["run_attempt"])
             if not run_attempt(identity["run_attempt"]) <= attempt <= run_attempt(os.environ["GITHUB_RUN_ATTEMPT"]):
@@ -599,10 +760,22 @@ def aggregate(args) -> None:
                 latest[family] = (attempt, path, item)
         except (ValueError, OSError, KeyError, TypeError) as error:
             errors.append(f"{family}: {error}")
+            terminal_contract = True
+    return latest, errors, terminal_contract
+
+
+def aggregate(args) -> None:
+    identity, plan = verify_package(args.package, args.identity)
+    models = validate_plan(plan)
+    latest, errors, terminal_contract = collect_latest_receipts(
+        args.evidence, identity, args.identity, set(models))
+    passed = []
+    candidate_failures = {}
+    infrastructure_evidence = {}
+    infrastructure_failures = set()
     # Select before validation: a newer failure or corrupt result must never
     # silently fall back to a successful receipt from an earlier attempt.
     for family, (_, path, item) in sorted(latest.items()):
-        seen.add(family)
         try:
             if item["outcome"] != "success":
                 raise ValueError("failed or mismatched worker receipt "
@@ -614,8 +787,23 @@ def aggregate(args) -> None:
             passed.append(family)
         except (ValueError, OSError, KeyError, TypeError) as error:
             errors.append(f"{family}: {error}")
-    if seen != set(models):
-        errors.append(f"missing family receipts: {sorted(set(models) - seen)}")
+            classification = classify_family_failure(path, family, identity, args.identity)
+            if classification == "candidate":
+                candidate_failures[family] = path.parent
+            elif classification == "infrastructure":
+                infrastructure_failures.add(family)
+                infrastructure_evidence[family] = path.parent
+            else:
+                terminal_contract = True
+    missing = set(models) - set(latest)
+    if missing:
+        errors.append(f"missing family receipts: {sorted(missing)}")
+        infrastructure_failures.update(missing)
+    family_result = getattr(args, "family_result", "success")
+    if family_result != "success":
+        errors.append(f"family job graph result: {family_result}")
+        if family_result in {"cancelled", "skipped"} and not missing:
+            terminal_contract = True
     report = (f"Canary {identity['pass_id']}: {len(passed)}/{len(models)} family receipts passed "
               f"for {identity['candidate']}\n")
     if errors:
@@ -625,9 +813,105 @@ def aggregate(args) -> None:
         with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as stream:
             stream.write(report + "\n")
     if errors:
+        if terminal_contract:
+            state, failure_class = "terminal_contract", "contract"
+        elif infrastructure_failures:
+            state, failure_class = "infrastructure_retryable", "infrastructure"
+        elif candidate_failures:
+            state, failure_class = "candidate_repairable", "candidate"
+        else:
+            state, failure_class = "terminal_contract", "contract"
+        repairable = state == "candidate_repairable"
+        matrix = (retry_matrix(plan, infrastructure_failures)
+                  if state == "infrastructure_retryable" else '{"include":[]}')
+        feedback_ready = state in {"candidate_repairable", "infrastructure_retryable"}
+        output(green="false", state=state, repairable=str(repairable).lower(),
+               failure_class=failure_class, failure_stage="family-certification",
+               retry_matrix=matrix, feedback_ready=str(feedback_ready).lower())
+        feedback = getattr(args, "feedback", None)
+        if feedback_ready and feedback is not None:
+            write_feedback(feedback, args.identity, identity, state, candidate_failures,
+                           infrastructure_evidence, infrastructure_failures, errors)
         raise ValueError("family aggregation failed:\n" + "\n".join(errors))
-    output(green="true", candidate=identity["candidate"], branch=identity["branch"])
-    print(f"All {len(seen)} families passed for {identity['candidate']} ({identity['pass_id']})")
+    output(green="true", state="green", repairable="false", retry_matrix='{"include":[]}',
+           feedback_ready="false", candidate=identity["candidate"], branch=identity["branch"])
+    print(f"All {len(latest)} families passed for {identity['candidate']} ({identity['pass_id']})")
+
+
+def reconcile(args) -> None:
+    identity, plan = verify_package(args.package, args.identity)
+    models = validate_plan(plan)
+    previous = verify_feedback(args.previous_feedback, args.identity, identity,
+                               expected_state="infrastructure_retryable")
+    retry_families = set(previous["infrastructure_failures"])
+    latest, errors, terminal_contract = collect_latest_receipts(
+        args.evidence, identity, args.identity, retry_families)
+    candidate_failures = {
+        family: args.previous_feedback / family for family in previous["candidate_failures"]
+    }
+    infrastructure_failures = set()
+    passed = []
+    for family, (_, path, item) in sorted(latest.items()):
+        try:
+            if item["outcome"] != "success":
+                raise ValueError("failed or mismatched retry receipt "
+                                 f"(runner={item.get('runner', 'unknown')}, outcome={item.get('outcome', 'unknown')})")
+            results = path.parent / "results.jsonl"
+            if sha(results) != item["results_sha256"]:
+                raise ValueError("retry results digest mismatch")
+            validate_results(results, family, models[family])
+            passed.append(family)
+        except (ValueError, OSError, KeyError, TypeError) as error:
+            errors.append(f"{family}: {error}")
+            classification = classify_family_failure(path, family, identity, args.identity)
+            if classification == "candidate":
+                candidate_failures[family] = path.parent
+            elif classification == "infrastructure":
+                infrastructure_failures.add(family)
+            else:
+                terminal_contract = True
+    missing = retry_families - set(latest)
+    if missing:
+        errors.append(f"missing retry receipts: {sorted(missing)}")
+        infrastructure_failures.update(missing)
+    family_result = getattr(args, "family_result", "success")
+    if family_result != "success":
+        errors.append(f"retry family job graph result: {family_result}")
+        if family_result in {"cancelled", "skipped"} and not missing:
+            terminal_contract = True
+        elif not terminal_contract and not infrastructure_failures and not candidate_failures:
+            # Successful receipts cannot certify a failed retry job graph.
+            infrastructure_failures.update(retry_families)
+    report = (f"Canary {identity['pass_id']} infrastructure recheck: "
+              f"{len(passed)}/{len(retry_families)} retry families passed for {identity['candidate']}\n")
+    if errors:
+        report += "\n" + "\n".join(f"- {error}" for error in errors) + "\n"
+    print(report)
+    if os.environ.get("GITHUB_STEP_SUMMARY"):
+        with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as stream:
+            stream.write(report + "\n")
+    if terminal_contract:
+        output(green="false", state="terminal_contract", repairable="false",
+               failure_class="contract", failure_stage="infrastructure-recheck",
+               feedback_ready="false")
+        raise ValueError("infrastructure recheck produced invalid evidence")
+    if infrastructure_failures:
+        output(green="false", state="infrastructure_exhausted", repairable="false",
+               failure_class="infrastructure", failure_stage="infrastructure-recheck",
+               feedback_ready="false")
+        raise ValueError("infrastructure recheck did not produce complete candidate evidence")
+    if candidate_failures:
+        feedback = getattr(args, "feedback", None)
+        output(green="false", state="candidate_repairable", repairable="true",
+               failure_class="candidate", failure_stage="family-certification",
+               feedback_ready="true")
+        if feedback is not None:
+            write_feedback(feedback, args.identity, identity, "candidate_repairable",
+                           candidate_failures, {}, set(), errors)
+        raise ValueError("candidate failures remain after infrastructure recheck")
+    output(green="true", state="green", repairable="false", feedback_ready="false",
+           candidate=identity["candidate"], branch=identity["branch"])
+    print(f"All infrastructure retries passed for {identity['candidate']} ({identity['pass_id']})")
 
 
 def main() -> None:
@@ -642,7 +926,7 @@ def main() -> None:
     p = subs.add_parser("preflight")
     p.add_argument("--root", type=Path, required=True)
     p.add_argument("--output", type=Path, required=True)
-    for command in ("restore", "receipt", "aggregate", "publication", "certify"):
+    for command in ("restore", "receipt", "aggregate", "reconcile", "publication", "certify"):
         p = subs.add_parser(command)
         p.add_argument("--package", type=Path, required=True)
         p.add_argument("--identity", required=True)
@@ -656,6 +940,12 @@ def main() -> None:
         if command == "receipt":
             p.add_argument("--family", required=True)
             p.add_argument("--outcome", required=True, choices=("success", "failure", "cancelled", "skipped"))
+        if command in {"aggregate", "reconcile"}:
+            p.add_argument("--feedback", type=Path)
+            p.add_argument("--family-result", default="success",
+                           choices=("success", "failure", "cancelled", "skipped"))
+        if command == "reconcile":
+            p.add_argument("--previous-feedback", type=Path, required=True)
     args = parser.parse_args()
     globals()[args.command](args)
 

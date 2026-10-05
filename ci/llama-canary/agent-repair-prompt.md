@@ -3,7 +3,7 @@
 You are working on a trusted `main` checkout on the `family-certify`
 self-hosted runner. Complete the llama.cpp upstream update as one developer
 task. The harness has written the exact target SHA to
-`third_party/llama.cpp/upstream.txt` and `.deps/llama-canary-target-sha`.
+`skippy/llama_cpp/upstream.txt` and `.deps/llama-canary-target-sha`.
 
 Read `.agents/skills/llama-patch-changes/SKILL.md` before changing the queue.
 When the stage ABI changes, also read
@@ -62,7 +62,7 @@ Manifest edits are deliberately narrow. In
 `ci/llama-canary/family-certified.json`, keep the roster, artifact identities,
 lanes, execution policy, and every other field unchanged; only
 `resources.estimated_model_bytes` may be corrected from the immutable GGUF
-tensor scan. In `docs/skippy/llama-parity-candidates.json`, keep every existing
+tensor scan. In `skippy/docs/llama-parity-candidates.json`, keep every existing
 row and all top-level policy unchanged. Append exactly one classification row
 for each source file missing from the manifest. New rows are limited to the
 classification fields `llama_model`, `family`, `status`, and optional `notes`
@@ -81,11 +81,16 @@ pass, the job exports an uncertified immutable candidate and releases its
 runner. Separate jobs certify every family using the exact producer binaries.
 
 A failed family pass or independent verification supplies its candidate and
-all available failure logs to a new session in the next attempt. Read those
-logs before continuing. There are at most three distributed repair attempts;
-every edit requires a new complete build and family pass. Both the first full
-family pass and the fresh independent build/family pass must be green on the
-same commit before the hosted publisher can create a branch or PR.
+confirmed candidate failure logs to a new session in the next attempt. Read
+those logs before continuing. Runner/workflow failures and missing receipts
+are first rechecked only for the affected families on the same immutable
+candidate without invoking this agent; valid candidate failures from a mixed
+pass are retained. Repeated infrastructure failure, corrupt/foreign evidence,
+and other contract failures stop without starting another session. There are
+at most three distributed repair attempts; every edit requires a new complete
+build and family pass. Both the first full family pass and the fresh independent
+build/family pass must be green on the same commit before the hosted publisher
+can create a branch or PR.
 
 ## New upstream model families
 

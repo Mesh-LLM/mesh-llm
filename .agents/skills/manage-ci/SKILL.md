@@ -466,15 +466,24 @@ checked-in expiry are the maintainer-controlled approval boundary.
 
 - Changed-pin llama canary agents use focused reproductions while repairing
   source. They return control after those checks pass instead of running an
-  additional full family battery. The trusted repair wrapper still runs every
-  candidate gate over the complete roster, feeds failures back to the same
-  agent, and requires success before snapshotting. The separate verifier still
-  repeats all gates on the exact candidate in a fresh checkout. Agent test
+  additional full family battery. The trusted wrapper feeds prepare/build/smoke
+  failures back to the same bounded session before snapshotting. Distributed
+  family certification then runs outside that session. A candidate-class
+  family or independent-verification failure resumes from the exact immutable
+  candidate bundle and digest-bound failure evidence in a new bounded repair
+  attempt. A runner/workflow failure receives one targeted recheck of only the
+  affected families on that same immutable candidate, without rebuilding or
+  invoking Goose; valid candidate failures from a mixed pass are retained.
+  Repeated infrastructure failure, or corrupt/foreign/contract evidence, stops
+  without invoking Goose. There are at most three distributed repair attempts.
+  Every edited candidate must
+  rebuild and rerun the complete candidate family pass, followed by a fresh
+  independent build and complete family pass on the same commit. Agent test
   results must never replace either trusted full pass. Coding turns are admitted
   only within a bounded repair window. Each returned candidate receives a full,
   separately bounded verification pass; earlier repairs and failed gates must
-  not shorten that pass. Outer workflow limits must cover the repair window
-  plus one final verification pass and leave time to upload evidence.
+  not shorten that pass. Outer workflow limits must cover each admitted repair
+  window and verification pass and leave time to upload evidence.
 
 - Inspection, log reads, syntax validation, and dry-run planning are read-only.
   Dispatching, rerunning, cancelling, approving, deleting, changing variables
@@ -506,18 +515,29 @@ existing pin and patches without repair or publication. Selected build scripts
 and battery code execute on persistent lab runners, so operators must choose
 trusted revisions; a main controller does not sandbox that source.
 
-Changed pins use one candidate pass followed by one independent verification
-pass. Before the candidate begins, a separate deterministic preflight verifies
-the immutable family plan and every pinned cache artifact. Environment or
-process-supervision failures stop without asking Goose to repair source. Within
-the candidate pass, prepare/build failures return to the same bounded Goose
-session. A family or independent-verification failure retains evidence and
-stops the run; it never creates another candidate or agent session. Every edit
+Changed pins use up to three distributed repair attempts. Each attempt consists
+of one candidate pass followed by one independent verification pass when the
+candidate is green. Before the first candidate begins, a separate deterministic
+preflight verifies the immutable family plan and every pinned cache artifact.
+Environment or process-supervision failures stop without asking Goose to repair
+source. Within a candidate build, prepare/build failures return to the same
+bounded Goose session. A candidate-class family or independent-verification
+failure packages the exact candidate and newest failed-family evidence for the
+next repair attempt. Runner/workflow failures and missing receipts trigger one
+targeted recheck of only the affected families against the same digest-bound
+producer package, with no Goose invocation or rebuild. Candidate failures from
+a mixed pass remain retained; when the recheck clears infrastructure, only
+confirmed candidate evidence can start the next repair attempt. A repeated
+infrastructure failure, or corrupt, foreign, duplicate, stale, or otherwise
+invalid contract evidence, stops instead of starting an agent. The next attempt
+restores the prior candidate as uncommitted changes on the frozen base and
+starts a new bounded session that must read the supplied evidence. Every edit
 invalidates all family results. A complete green candidate pass must be
 followed by a fresh independent build and complete per-family pass on the same
-commit. A hosted aggregate rejects missing, duplicate, failed, cancelled, or
-mismatched results. Only the final hosted publisher receives the repair
-credential, and a failed pass publishes no branch or PR.
+commit. A hosted aggregate
+rejects missing, duplicate, failed, cancelled, or mismatched results. Only the
+final hosted publisher receives the repair credential, and a failed or
+exhausted pass publishes no branch or PR.
 
 The family plan must require executable coverage for every integrated MTP head
 declared by immutable GGUF metadata. A single draft token cannot certify a
@@ -563,9 +583,13 @@ bounds, and never falls back from a newer failure to an older success. The
 family job-result gate remains mandatory so missing uploads cannot hide failures.
 Failed certifications upload their evidence and then fail the family job, so
 GitHub's failed-job rerun can select them instead of only retrying aggregation.
-GitHub failed-job reruns retain attempt-labelled evidence, but no failure is fed
-into an automatic outer repair cycle. Rebuilding a producer invalidates its
-prior receipts.
+GitHub failed-job reruns retain attempt-labelled evidence. The hosted aggregate
+classifies newest candidate failures separately from runner/workflow failures.
+It emits a digest-bound classification artifact for either a candidate repair
+or the one targeted infrastructure recheck. Reconciliation combines retained
+candidate evidence with the recheck receipts; only a candidate-only bundle and
+its exact producer package can enter the next bounded outer repair attempt.
+Rebuilding a producer invalidates its prior receipts.
 
 ## Validation contract
 

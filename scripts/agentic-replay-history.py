@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Normalize agentic-replay nightly artifacts and gate on cohort-matched drift.
 
-Reads the per-concurrency cell JSON files that evals/agentic-replay.py writes
+Reads the per-concurrency cell JSON files that mesh/evals/agentic-replay.py writes
 under ``<output>/<family>/data/pass-N/<label>/c-<concurrency>.json`` for the
 candidate label, emits schema-version-3 JSONL history rows (one per model x
 concurrency), and compares them against the append-only baseline in the HF

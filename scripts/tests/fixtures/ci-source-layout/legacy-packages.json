@@ -62,6 +62,5 @@
   "skippy-bench",
   "skippy-prompt",
   "mesh-mixture-of-agents",
-  "llama-quant-ffi",
   "xtask"
 ]

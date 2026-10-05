@@ -45,8 +45,8 @@ fi
 
 cd "$ROOT"
 
-OLD_SHA="$(tr -d '[:space:]' < third_party/llama.cpp/upstream.txt)"
-PIN_FILE="$ROOT/third_party/llama.cpp/upstream.txt"
+OLD_SHA="$(tr -d '[:space:]' < skippy/llama_cpp/upstream.txt)"
+PIN_FILE="$ROOT/skippy/llama_cpp/upstream.txt"
 AGENT_PROVIDER="${CANARY_AGENT_PROVIDER:-zai_coding_plan}"
 AGENT_MODEL="${CANARY_AGENT_MODEL:-glm-5.3-flash}"
 AGENT_TIMEOUT_SECONDS="${CANARY_AGENT_TIMEOUT_SECONDS:-41400}"
@@ -214,10 +214,54 @@ verify_repair_pin() {
 agent_prompt() {
   printf 'Complete the llama.cpp upstream update to %s as one developer task in this checkout.
 
-The trusted harness has already written third_party/llama.cpp/upstream.txt to the exact target and recorded it in .deps/llama-canary-target-sha. Read ci/llama-canary/agent-repair-prompt.md and every repository skill it names, then own the work end to end: reproduce the queue failure, deliberately rebase or regenerate the owned patches, fix any generated-family rewriter or Rust ABI fallout, and run the prepare, build, smoke, and focused reproductions needed to validate your repairs. Once those checks pass, return control to the trusted harness for the full supported-family battery. Do not start an additional full battery in the coding session; the wrapper and separate verifier each run all required gates.
+The trusted harness has already written skippy/llama_cpp/upstream.txt to the exact target and recorded it in .deps/llama-canary-target-sha. Read ci/llama-canary/agent-repair-prompt.md and every repository skill it names, then own the work end to end: reproduce the queue failure, deliberately rebase or regenerate the owned patches, fix any generated-family rewriter or Rust ABI fallout, and run the prepare, build, smoke, and focused reproductions needed to validate your repairs. Once those checks pass, return control to the trusted harness for the full supported-family battery. Do not start an additional full battery in the coding session; the wrapper and separate verifier each run all required gates.
 
 Do not weaken, skip, or narrow a gate. Do not edit the workflow, this wrapper, its publisher, the agent runbook, or their contract tests. Do not create or switch branches, commit, push, open a pull request, or use GitHub credentials. Leave the completed changes in this working tree. The harness will independently rerun the entire verification sequence and only a green exact tree can be published.' \
     "$UPSTREAM_SHA"
+  if [[ -n "${CANARY_PREVIOUS_FEEDBACK:-}" ]]; then
+    printf '\n\nThis is distributed repair attempt %s. The exact prior candidate has already been restored as uncommitted changes on the frozen base. Read the digest-bound family failure summary and every failed-family directory under %s before editing. Preserve the prior repairs, fix the candidate failures demonstrated there, and use focused reproductions before returning control for a new complete family pass.\n\n' \
+      "$PASS_ID" "$CANARY_PREVIOUS_FEEDBACK"
+    python3 scripts/summarize-canary-feedback.py "$CANARY_PREVIOUS_FEEDBACK"
+  fi
+}
+
+restore_previous_repair_candidate() {
+  local bundle expected branch bundle_head protected
+  if [[ -z "${CANARY_INPUT_BUNDLE:-}" ]]; then
+    return 0
+  fi
+  if [[ "$HARNESS_MODE" != "repair-build" || -z "${CANARY_PREVIOUS_FEEDBACK:-}" ]]; then
+    echo "previous repair candidate is only valid with distributed family feedback" >&2
+    return 1
+  fi
+  bundle="$CANARY_INPUT_BUNDLE"
+  expected="${CANARY_CANDIDATE_SHA:?previous candidate SHA required}"
+  branch="${CANARY_CANDIDATE_BRANCH:?previous candidate branch required}"
+  git bundle verify "$bundle" >/dev/null
+  bundle_head="$(git bundle list-heads "$bundle" "refs/heads/${branch}" | awk '{print $1}')"
+  if [[ "$bundle_head" != "$expected" ]]; then
+    echo "previous candidate bundle head does not match dependency output" >&2
+    return 1
+  fi
+  git fetch "$bundle" "refs/heads/${branch}" >/dev/null
+  if [[ "$(git rev-parse FETCH_HEAD)" != "$expected" || "$(git rev-parse "${expected}^")" != "$BASE_HEAD" ]]; then
+    echo "previous candidate is not a direct child of the frozen base" >&2
+    return 1
+  fi
+  protected="$(
+    git diff --name-only "$BASE_HEAD" "$expected" -- \
+      .github .agents scripts .gitattributes ci/ci.md ci/llama-canary/agent-repair-prompt.md \
+      | head -n 1
+  )"
+  if [[ -n "$protected" ]]; then
+    echo "previous candidate modified protected orchestration: $protected" >&2
+    return 1
+  fi
+  git diff --binary "$BASE_HEAD" "$expected" -- | git apply --index --binary
+  if [[ "$(git write-tree)" != "$(git rev-parse "${expected}^{tree}")" ]]; then
+    echo "restored previous candidate tree does not match its bundle" >&2
+    return 1
+  fi
 }
 
 agent_session_step() {
@@ -234,7 +278,7 @@ agent_session_step() {
     root="$1"
     started="$2"
     while sleep 600; do
-      newest="$(find "$root/.deps/llama.cpp" -type f -newer "$root/third_party/llama.cpp/upstream.txt" -print -quit 2>/dev/null || true)"
+      newest="$(find "$root/.deps/llama.cpp" -type f -newer "$root/skippy/llama_cpp/upstream.txt" -print -quit 2>/dev/null || true)"
       printf "heartbeat: agent task running for %dm; recent llama.cpp activity: %s\n" \
         "$(( ($(date +%s) - started) / 60 ))" "${newest:-none observed yet}"
     done
@@ -320,7 +364,7 @@ snapshot_candidate_tree() {
   # Verify the dirty-tree producer before snapshotting changes its source identity.
   local closure="${LLAMA_STAGE_BUILD_DIR:?}-workloads"
   python3 "$ROOT/scripts/check-skippy-workload-candidate.py" \
-    --candidate-binary "$closure/cargo/debug/skippy-server" \
+    --candidate-binary "$closure/cargo/debug/skippy" \
     --native-build-dir "$closure/native" --producer-manifest "$closure/producer.json"
   CANARY_VERIFIED_WORKLOAD_PRODUCER="$(shasum -a 256 "$closure/producer.json" | awk '{print $1}')"
   export CANARY_VERIFIED_WORKLOAD_PRODUCER
@@ -330,6 +374,11 @@ snapshot_candidate_tree() {
     return 1
   fi
   VERIFICATION_TREE="$(git write-tree)"
+  if [[ "$HARNESS_MODE" == "repair-build" && -n "${CANARY_INPUT_BUNDLE:-}" ]] &&
+      [[ "$VERIFICATION_TREE" == "$(git rev-parse "${CANARY_CANDIDATE_SHA}^{tree}")" ]]; then
+    echo "agent made no changes to the restored candidate" >&2
+    return 1
+  fi
   CERTIFIED_SHA="$(
     printf '%s\n\n%s\n' \
       "fix(llama): certify upstream ${UPSTREAM_SHA:0:10}" \
@@ -401,7 +450,7 @@ materialize_verification_tree() {
   git -c core.hooksPath=/dev/null -C "$TRUSTED_ROOT" \
     worktree add --detach "$VERIFY_ROOT" "$CERTIFIED_SHA"
   ROOT="$VERIFY_ROOT"
-  PIN_FILE="$ROOT/third_party/llama.cpp/upstream.txt"
+  PIN_FILE="$ROOT/skippy/llama_cpp/upstream.txt"
   FAMILY_BATTERY_RUN_ID="${RUN_KEY}-verification"
   PLAN_PATH="$ROOT/target/family-battery/$FAMILY_BATTERY_RUN_ID/policy-plan.json"
   LLAMA_STAGE_BUILD_DIR="${LLAMA_STAGE_BUILD_DIR}-verification-${RUN_KEY}"
@@ -454,7 +503,7 @@ run_full_build() {
   run_verification_logged "generated model-family patch check" "$BUILD_LOG" \
     scripts/check-skippy-generated-family-patch.sh || return 1
   run_verification_logged "stage runtime crate build" "$BUILD_LOG" \
-    cargo build -p skippy-runtime -p skippy-server -p skippy-model-package -p skippy-correctness -p skippy-topology --bins \
+    cargo build -p skippy-runtime -p skippy-cli -p skippy-package-builder -p skippy-correctness -p skippy-topology --bins \
     || return 1
   run_verification_logged "Skippy smoke tests" "$BUILD_LOG" \
     scripts/skippy-ci-smoke.sh || return 1
@@ -466,7 +515,7 @@ run_full_build() {
     # The nested shell expands its positional argument, not this shell.
     # shellcheck disable=SC2016
     run_verification_logged "build transferable multimodal test executable" "$BUILD_LOG" \
-      bash -c 'cargo test -p skippy-server --lib --no-run --message-format=json > "$1"' \
+      bash -c 'cargo test -p skippy-serving --lib --no-run --message-format=json > "$1"' \
       build-mm "$STATE_DIR/mm-build.jsonl" || return 1
   fi
   # The family-certify runner is a Metal execution lane. Both real decision
@@ -519,6 +568,34 @@ run_certification() {
     scripts/skippy-family-battery.sh --skip-build --plan "$PLAN_PATH"
 }
 
+run_early_metal_certification() {
+  local setting workload_settings mm_test_bin
+  local workload_env=()
+  # A cached executable is usable only when its recorded source tree (and
+  # therefore pin), native stamp, and every handed-off binary still match.
+  run_verification_logged "verify exact workload producer" "$CERTIFY_LOG" \
+    python3 scripts/check-skippy-workload-candidate.py \
+      --candidate-binary "${LLAMA_STAGE_BUILD_DIR:?}-workloads/cargo/debug/skippy" \
+      --native-build-dir "${LLAMA_STAGE_BUILD_DIR:?}-workloads/native" \
+      --producer-manifest "${LLAMA_STAGE_BUILD_DIR:?}-workloads/producer.json" || return 1
+  workload_settings="$(bash scripts/skippy-workload-oracles-build.sh --print-env "${LLAMA_STAGE_BUILD_DIR:?}-workloads")" || return 1
+  [[ -n "$workload_settings" ]] || return 1
+  while IFS= read -r setting; do
+    workload_env+=("$setting")
+  done <<< "$workload_settings"
+  mm_test_bin="$(jq -rs '[.[] | select(.reason == "compiler-artifact" and .profile.test == true and .target.name == "skippy_serving" and .executable != null) | .executable] | unique | if length == 1 then .[0] else error("expected one exact multimodal test executable") end' "$STATE_DIR/mm-build.jsonl")" || return 1
+  [[ -x "$mm_test_bin" ]] || return 1
+  # One exact candidate on Metal, with representatives for split parity,
+  # recurrent and MoE replay, both encode-only startup classes, T5 ordering,
+  # and an actual image response. The full roster remains the promotion gate.
+  run_verification_logged "early real-model Metal certification" "$CERTIFY_LOG" env \
+    FAMILY_BATTERY_RUN_ID="${FAMILY_BATTERY_RUN_ID}-early" \
+    FAMILY_BATTERY_MM_TEST_BIN="$mm_test_bin" \
+    "${workload_env[@]}" \
+    scripts/skippy-family-battery.sh --skip-build \
+      --families llama,mamba2,deepseek2,nomic-bert-embedding,jina-bert-v2-rerank,t5-encoder-decoder,qwen3-vl
+}
+
 run_candidate_gates() {
   local roster_mode="${1:-verify}"
   if [[ "$roster_mode" != "verify" && "$roster_mode" != "refresh" ]]; then
@@ -536,6 +613,13 @@ run_candidate_gates() {
     # Independent verification uses the default read-only mode below.
     write_split_certification_roster || return 1
   fi
+  # The prepared pin supplies the exact GGML type table. Compare tensor
+  # descriptors with the manifest now, before the native and Rust builds.
+  run_verification_logged "validate pinned GGUF tensor bytes before compilation" "$CERTIFY_LOG" \
+    python3 scripts/plan-family-battery.py --shard-count 256 \
+      --check-cache --cache-root "$HF_CACHE" \
+      --gguf-constants "$ROOT/.deps/llama.cpp/gguf-py/gguf/constants.py" \
+      --output "$PLAN_PATH" || return 1
   validate_agent_manifest_changes || return 1
   if [[ "$HARNESS_MODE" == *-build ]]; then
     run_verification_logged "validate family plan before compilation" "$CERTIFY_LOG" \
@@ -544,6 +628,7 @@ run_candidate_gates() {
   fi
   run_full_build || return 1
   if [[ "$HARNESS_MODE" == *-build ]]; then
+    run_early_metal_certification || return 1
     run_verification_logged "parity manifest validation" "$CERTIFY_LOG" \
       python3 scripts/skippy-llama-parity.py --llama-src .deps/llama.cpp validate
   else
@@ -668,6 +753,7 @@ if ! check_family_cache; then
 fi
 
 if [[ "$HARNESS_MODE" == repair* ]]; then
+  restore_previous_repair_candidate
   write_repair_pin
   verify_repair_pin
   echo "starting agent repair/build gates; distributed families follow in separate jobs"

@@ -11,7 +11,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts/generate-runtime-event-inventory.py"
 INVENTORY = (
-    ROOT / "crates/mesh-llm-runtime-event-contracts/inventory/runtime_events.toml"
+    ROOT / "mesh/crates/mesh-llm-runtime-event-contracts/inventory/runtime_events.toml"
 )
 
 

@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[2]
 ACTIONS = ROOT / ".github" / "actions"
 PLATFORM_CHECKS_WORKFLOW = ROOT / ".github" / "workflows" / "ci-platform-checks-slice.yml"
 RESOLVE_CARGO_PACKAGES = "Mesh-LLM/mesh-llm/.github/actions/resolve-cargo-packages"
-RELEASE_FOOTER_MANIFEST = ROOT / "crates" / "mesh-llm-release-footer" / "Cargo.toml"
+RELEASE_FOOTER_MANIFEST = ROOT / "mesh" / "crates" / "mesh-llm-release-footer" / "Cargo.toml"
 XTASK_MANIFEST = ROOT / "tools" / "xtask" / "Cargo.toml"
 
 
@@ -58,17 +58,20 @@ def _windows_unit_row_crates() -> set[str]:
 # change under test. A crate leaves this list, for a platform-windows* crate
 # rule and the windows-unit row, once its suite is confirmed green there.
 WINDOWS_UNVERIFIED_CRATES = {
-    # Green on Windows, but each has an extracted successor in the Mesh/Skippy
-    # layout migration, so it is routed once the catalog carries successors.
-    "mesh-llm-hardware-profile",
-    "mesh-llm-native-runtime",
-    "model-hf",
+    "mesh-llm-membership",
+    "skippy-api",
+    "skippy-cli",
+    "skippy-hf-hub",
+    "skippy-package-builder",
+    "skippy-runtime-install",
+    "skippy-hardware-profile",
+    "skippy-native-runtime",
+    "skippy-model-hf",
     "mesh-llm-routing",
     "skippy-bench",
-    "skippy-model-package",
     "skippy-quantize",
     "skippy-runtime",
-    "skippy-server",
+    "skippy-serving",
     "xtask",
 }
 
@@ -423,10 +426,10 @@ class CiWindowsCompositionTests(unittest.TestCase):
             "'.github/actions/resolve-native-toolchain-epoch/action.yml', "
             "'.github/actions/prepare-native-runtime-input/action.yml', "
             "'.github/actions/setup-windows-rocm-sdk/action.yml', "
-            "'scripts/build-llama.sh', 'scripts/prepare-llama.sh', "
-            "'scripts/package-native-runtime.sh', "
-            "'third_party/llama.cpp/upstream.txt', "
-            "'third_party/llama.cpp/patches/**', "
+            "'scripts/build-llama.sh', 'skippy/scripts/build-llama.sh', 'scripts/prepare-llama.sh', 'skippy/scripts/prepare-llama.sh', "
+            "'scripts/package-native-runtime.sh', 'skippy/scripts/package-native-runtime.sh', "
+            "'skippy/llama_cpp/upstream.txt', "
+            "'skippy/llama_cpp/patches/**', "
             "'.github/cache-version.txt') }}"
         )
         self.assertIn(expected_hash, action)

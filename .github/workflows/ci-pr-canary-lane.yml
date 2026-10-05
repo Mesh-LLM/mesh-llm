@@ -98,6 +98,12 @@ jobs:
           base_sha: ${{ inputs.base_sha }}
           head_sha: ${{ inputs.merge_sha }}
 
+      - name: Bound planner change input
+        id: change_limit
+        run: |
+          if (( $(wc -c < /tmp/changed_files.txt) > 65536 )); then
+            echo "force_all=true" >> "$GITHUB_OUTPUT"
+          fi
       - name: Build canonical planner contract
         id: plan
         uses: ./.github/actions/plan-ci
@@ -106,7 +112,7 @@ jobs:
           source_sha: ${{ inputs.merge_sha }}
           base_sha: ${{ inputs.base_sha }}
           draft: ${{ inputs.draft }}
-          changed_files: ${{ steps.changes.outputs.changed_files }}
+          changed_files: ${{ steps.change_limit.outputs.force_all == 'true' && '__force_all__' || steps.changes.outputs.changed_files }}
           affected_crates: ${{ steps.changes.outputs.affected_crates }}
 
       - name: Bind the plan to the merge source

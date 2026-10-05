@@ -41,7 +41,7 @@ target/release/skippy-quantize init-quant \
 
 target/release/skippy-quantize run-quant \
   --manifest /tmp/skippy-quantize.json \
-  --backend llama-api \
+  --backend skippy-abi \
   --max-memory 32G \
   --work-dir /tmp/skippy-quantize-work \
   --spool-dir /tmp/skippy-quantize-output \
@@ -69,7 +69,7 @@ target/release/skippy-quantize quant-job \
   --tensor-type-file /mnt/recipe/tensor-types.txt \
   --window-size 1 \
   --manifest /tmp/skippy-quantize.json \
-  --backend llama-api \
+  --backend skippy-abi \
   --max-memory 32G \
   --dry-run
 ```
@@ -92,15 +92,20 @@ mesh-llm models package <org>/<quant-repo>:<quant-selector> \
   --confirm --follow
 ```
 
-Or package locally and publish:
+Or package locally and publish. On macOS or Linux, build the CPU runtime
+package first; it includes the helper and its native libraries. Replace
+`<runtime-id>` with the generated directory under `dist/native-runtimes`:
 
 ```bash
-target/debug/skippy-model-package write-package \
+just release-runtime-build cpu
+package_builder="dist/native-runtimes/<runtime-id>/tools/skippy-package-builder"
+
+"$package_builder" write-package \
   <org>/<quant-repo>:<quant-selector> \
   --generation-defaults /path/to/generation-defaults.json \
   --out-dir /tmp/<model>-layers
 
-target/debug/skippy-model-package preflight \
+"$package_builder" preflight \
   /tmp/<model>-layers \
   --verify-sha256
 

@@ -15,7 +15,7 @@ as `chat-corpus` and `eval run` require `--metrics-http` to point at an
 already-running metrics-server and should use `--metrics-run-id` matching the
 target endpoint's Skippy run id.
 
-Benchmark-managed Skippy server runs must use a release `skippy-server` build.
+Benchmark-managed Skippy server runs must use a release `skippy-serving` build.
 Run `just release-build` before `run`, `focused-runtime`, `local-single`, or
 local split binary benchmarks, and use `target/release/skippy-server` (the
 SkippyBench default). Do not use `target/debug/skippy-server` for performance or
@@ -34,7 +34,7 @@ cargo metadata --no-deps --format-version 1 | jq -r '.packages[].name' | sort
 Useful current checks:
 
 ```bash
-cargo test -p skippy-server --lib
+cargo test -p skippy-serving --lib
 cargo test -p mesh-llm-host-runtime --lib inference::skippy
 ```
 
@@ -126,7 +126,7 @@ used for completion, while preserving caller-provided `EVAL_LLM_*` overrides
 for judge-model runs. When validating with a very small local Skippy model, run
 completion against the normal compatibility endpoint and point `EVAL_LLM_*` at
 a separate strict structured-output scorer endpoint, for example a second
-`skippy-server serve-openai --openai-guardrails enforce` process; do not patch
+`skippy-serving serve-openai --guardrails enforce` process; do not patch
 or post-process the MCP scorer. For resumed operator runs, set
 `MCP_ATLAS_COMPLETION_OUTPUT_NAME` to an existing upstream
 `completion_results/*.csv` basename so the native completion script can reuse

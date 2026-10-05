@@ -815,8 +815,11 @@
       "scripts/ci-sdk-fixture.sh",
       "scripts/ci-prepare-native-runtime.sh",
       "scripts/package-sdk-console-assets.sh",
+      "mesh/scripts/package-sdk-console-assets.sh",
       "scripts/check-sdk-contract.sh",
+      "mesh/scripts/check-sdk-contract.sh",
       "scripts/verify-sdk-console-assets.sh",
+      "mesh/scripts/verify-sdk-console-assets.sh",
       ".github/workflows/sdk-smoke.yml"
     ]
   }

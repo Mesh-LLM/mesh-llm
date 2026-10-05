@@ -81,7 +81,7 @@ done
 [[ -x "$CURRENT_BINARY" ]] || { echo "error: binary is not executable: $CURRENT_BINARY" >&2; exit 2; }
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-UI_ROOT="$REPO_ROOT/crates/mesh-llm-ui"
+UI_ROOT="$REPO_ROOT/mesh/crates/mesh-llm-ui"
 RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)-$$"
 RUN_DIR="${EVIDENCE_ROOT%/}/logging-console-e2e-${RUN_ID}"
 WORK_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/mesh-logging-console.XXXXXX")"

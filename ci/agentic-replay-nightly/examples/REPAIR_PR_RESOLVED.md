@@ -25,7 +25,7 @@ shape. c1 and c8 (queue-dominated) are unaffected, matching the cohort pattern.
 Revert to lazy promotion (on first token of the joining request) and re-acquire the cache lock
 per request rather than per batch.
 
-- Changed: `crates/skippy-cache/src/admission.rs`, `crates/mesh-llm-native-runtime/src/scheduler.rs`
+- Changed: `skippy/crates/skippy-cache/src/admission.rs`, `crates/mesh-llm-native-runtime/src/scheduler.rs`
 - Rationale: preserves the eager-promotion correctness property from `3d7c19e` while removing the
   lock scope that serialized shared-prefix decode.
 

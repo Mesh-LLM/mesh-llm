@@ -10,7 +10,7 @@ import unittest
 
 
 ROOT = Path(__file__).resolve().parents[2]
-GUARD = ROOT / "scripts" / "check-llama-upstream-pin.py"
+GUARD = ROOT / "skippy" / "scripts" / "check-llama-upstream-pin.py"
 QUALITY_LANE = ROOT / ".github" / "workflows" / "ci-quality-lane.yml"
 PR_QUALITY = ROOT / ".github" / "workflows" / "pr_quality.yml"
 PIN_PATH = Path("third_party/llama.cpp/upstream.txt")

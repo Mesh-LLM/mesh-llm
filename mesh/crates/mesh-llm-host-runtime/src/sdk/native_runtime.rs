@@ -1,0 +1,31 @@
+//! Native runtime resolution and installation APIs for embedded MeshLLM clients.
+
+pub use crate::system::native_runtime_install::{
+    CURRENT_MESH_VERSION, NATIVE_RUNTIME_MANIFEST_URL_ENV, NativeRuntimeDownloadProgress,
+    NativeRuntimeDownloadProgressCallback, NativeRuntimeInstallOptions,
+    NativeRuntimeInstallOutcome, NativeRuntimeInstallStatus, NativeRuntimeManifestOptions,
+    NativeRuntimeVerificationPolicy, current_runtime_release, current_skippy_abi_version,
+    default_manifest_url, default_native_runtime_cache, default_release_manifest_url,
+    discover_local_native_runtimes, discover_local_native_runtimes_with_filter,
+    discover_native_runtime_bundle_dirs, host_runtime_profile, install_native_runtime,
+    load_release_manifest, mesh_native_runtime_catalog, mesh_native_runtime_install_options,
+    mesh_native_runtime_manifest_options, native_runtime_cache,
+};
+pub use skippy_native_runtime::{
+    CachePrunePlan, CandidateEvaluation, CandidateRejection, HostGpuProfile, HostRuntimeProfile,
+    InstalledNativeRuntime, NATIVE_RUNTIME_MANIFEST_FILE, NativeRuntimeArtifact,
+    NativeRuntimeCache, NativeRuntimeCacheRoot, NativeRuntimeFlavor, NativeRuntimeFlavorParseError,
+    NativeRuntimeLoadPlan, NativeRuntimeManifest, NativeRuntimePruneMode,
+    NativeRuntimeReleaseManifest, NativeRuntimeResolution, NativeRuntimeResolver,
+    NativeRuntimeSource, RuntimeSelection, native_runtime_cache_root, select_native_runtime,
+};
+
+/// Returns whether runtime metadata matches this SDK's required runtime release and its linked
+/// Skippy ABI. Runtime release selection comes from Skippy metadata.
+pub fn native_runtime_versions_match_current_sdk(mesh_version: &str, skippy_abi: &str) -> bool {
+    crate::system::native_runtime_install::native_runtime_versions_match(
+        mesh_version,
+        skippy_abi,
+        current_runtime_release(),
+    )
+}

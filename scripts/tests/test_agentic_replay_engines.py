@@ -12,7 +12,7 @@ from unittest import mock
 
 
 REPO = Path(__file__).resolve().parents[2]
-EVALS = REPO / "evals"
+EVALS = REPO / "mesh" / "evals"
 if str(EVALS) not in sys.path:
     sys.path.insert(0, str(EVALS))
 

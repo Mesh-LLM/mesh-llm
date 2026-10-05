@@ -95,8 +95,11 @@ function runBelongsToTrigger(run, trigger) {
   // All five focused workflows are created by one PR event. Exclude an older
   // reopened/ready run of the same unchanged SHA from this cancellation set.
   if (Math.abs(createdAt - trigger.createdAt) > 120_000) return false;
+  // GitHub empties a run's pull_requests once the pull request is closed or
+  // merged. The exact SHA and event epoch above still tie it to the trigger.
   const pullRequests = Array.isArray(run.pull_requests) ? run.pull_requests : [];
-  return pullRequests.some((pull) => pull?.number === trigger.pullNumber);
+  return pullRequests.length === 0
+    || pullRequests.some((pull) => pull?.number === trigger.pullNumber);
 }
 
 function selectTargetRuns(runs, trigger) {
@@ -116,6 +119,19 @@ function selectTargetRuns(runs, trigger) {
     const run = selected.get(name);
     return run ? [run] : [];
   });
+}
+
+// A second PR · Quality run of the same event epoch (an `edited` event right
+// after `opened`, for example) cancels the trigger through Quality's
+// concurrency group and starts its own monitor for this revision.
+function supersedingQualityRun(runs, trigger) {
+  let newest = null;
+  for (const run of runs || []) {
+    if (run?.name !== "PR · Quality" || !runBelongsToTrigger(run, trigger)) continue;
+    if (Number(run.id) <= Number(trigger.triggerRunId)) continue;
+    if (!newest || Number(run.id) > Number(newest.id)) newest = run;
+  }
+  return newest;
 }
 
 function findEarliestFailure(runJobs) {
@@ -144,6 +160,14 @@ function findEarliestFailure(runJobs) {
 
 function allTargetsTerminal(runs) {
   return runs.length === TARGET_WORKFLOWS.length
+    && runs.every((run) => run.status === "completed");
+}
+
+// Once the late-sibling window has passed, the lanes of this event epoch are
+// all known. Only PR · Quality listens to `edited`, so an edit of an unchanged
+// revision starts fewer than five lanes and only those can complete.
+function epochTargetsTerminal(runs, trigger) {
+  return runs.some((run) => run.id === trigger.triggerRunId)
     && runs.every((run) => run.status === "completed");
 }
 
@@ -248,16 +272,22 @@ async function monitor({
   sleepFn = sleep,
 }) {
   const monitorDeadline = now() + maxMinutes * 60_000;
+  const laneSetDeadline = now() + LATE_SIBLING_WINDOW_MS;
   const requestOptions = { remainingMs: () => monitorDeadline - now() };
   let consecutiveErrors = 0;
   let failure = null;
   let failureDeadline = null;
   while (now() < monitorDeadline) {
     try {
-      const runs = selectTargetRuns(
-        await api.listRuns(trigger.headSha, requestOptions),
-        trigger,
-      );
+      const listed = await api.listRuns(trigger.headSha, requestOptions);
+      if (!failure) {
+        const successor = supersedingQualityRun(listed, trigger);
+        if (successor) {
+          log(`::notice::PR · Quality run ${successor.id} superseded trigger run ${trigger.triggerRunId}; its own monitor covers this revision.`);
+          return { failure: null, runs: [], supersededBy: successor.id };
+        }
+      }
+      const runs = selectTargetRuns(listed, trigger);
       if (!failure) {
         const runJobs = [];
         for (const run of runs) {
@@ -288,6 +318,10 @@ async function monitor({
       }
       if (!failure && allTargetsTerminal(runs)) {
         log("::notice::All five PR validation lanes completed without a definitive job failure.");
+        return { failure: null, runs };
+      }
+      if (!failure && now() >= laneSetDeadline && epochTargetsTerminal(runs, trigger)) {
+        log(`::notice::All ${runs.length} PR validation lanes of this event completed without a definitive job failure.`);
         return { failure: null, runs };
       }
       consecutiveErrors = 0;
@@ -332,11 +366,13 @@ module.exports = {
   TARGET_WORKFLOWS,
   allTargetsTerminal,
   cancellableSiblingRuns,
+  epochTargetsTerminal,
   findEarliestFailure,
   githubApi,
   monitor,
   parseTrigger,
   selectTargetRuns,
+  supersedingQualityRun,
 };
 
 if (require.main === module) {

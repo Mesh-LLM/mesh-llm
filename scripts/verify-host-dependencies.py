@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -199,12 +200,17 @@ def resolve_max_glibc(value: str | None) -> tuple[int, int] | None:
 def main(argv: list[str]) -> int:
     args = parse_args(argv)
     try:
+        digest = hashlib.sha256()
+        with args.binary.open("rb") as binary:
+            for chunk in iter(lambda: binary.read(1024 * 1024), b""):
+                digest.update(chunk)
         format_name, imports = inspect_dependencies(args.binary, args.format)
         rejected = [] if args.no_import_policy else forbidden_imports(imports)
         max_glibc = resolve_max_glibc(args.max_glibc)
         glibc_floor = inspect_glibc_floor(args.binary) if format_name == "elf" else None
         report = {
             "binary": args.binary.name,
+            "binary_sha256": digest.hexdigest(),
             "format": format_name,
             "glibc_floor": format_version(glibc_floor) if glibc_floor else None,
             "imports": imports,

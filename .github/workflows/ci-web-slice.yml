@@ -85,7 +85,7 @@ jobs:
           persist-credentials: false
       - name: Resolve product source layout
         id: layout
-        uses: Mesh-LLM/mesh-llm/.github/actions/resolve-source-layout@38d63b2f6e27998034fdf0452150c7cc081fe921 # product-layout compatibility helpers
+        uses: Mesh-LLM/mesh-llm/.github/actions/resolve-source-layout@5c8fb4d472bc57058c8153761c561daa77dd5b94 # product-layout compatibility helpers
       # The container image bakes a warm pnpm store at
       # /home/runner/.local/share/pnpm/store (mesh-llm-runner-images
       # scripts/warm-dependencies.sh). Point pnpm at it directly instead of
@@ -132,7 +132,7 @@ jobs:
           persist-credentials: false
       - name: Resolve product source layout
         id: layout
-        uses: Mesh-LLM/mesh-llm/.github/actions/resolve-source-layout@38d63b2f6e27998034fdf0452150c7cc081fe921 # product-layout compatibility helpers
+        uses: Mesh-LLM/mesh-llm/.github/actions/resolve-source-layout@5c8fb4d472bc57058c8153761c561daa77dd5b94 # product-layout compatibility helpers
       # See ui_quality's "Point pnpm at the image's baked store" step for why
       # this doesn't use the Actions cache (#1392).
       - name: Point pnpm at the image's baked store
@@ -190,7 +190,7 @@ jobs:
           persist-credentials: false
       - name: Resolve product source layout
         id: layout
-        uses: Mesh-LLM/mesh-llm/.github/actions/resolve-source-layout@38d63b2f6e27998034fdf0452150c7cc081fe921 # product-layout compatibility helpers
+        uses: Mesh-LLM/mesh-llm/.github/actions/resolve-source-layout@5c8fb4d472bc57058c8153761c561daa77dd5b94 # product-layout compatibility helpers
       - name: Install website dependencies
         working-directory: ${{ steps.layout.outputs.website_dir }}
         run: npm ci
