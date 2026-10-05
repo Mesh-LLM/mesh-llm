@@ -745,15 +745,6 @@
       "required": true
     },
     {
-      "classification": "generic native evidence test",
-      "deletion_condition": "Native evidence schema tests migrated.",
-      "exception": null,
-      "path": "scripts/tests/test_skippy_native_evidence_contract.py",
-      "phase": 2,
-      "replacement_owner": "tools/xtask automation evidence tests",
-      "required": true
-    },
-    {
       "classification": "generic benchmark test",
       "deletion_condition": "Benchmark orchestration cases migrated.",
       "exception": null,
@@ -1008,7 +999,7 @@
   "revision": "2c4c92fcef592798efb3efedb721a74e2003afa6",
   "schema_version": 1,
   "source_command": "GIT_MASTER=1 git ls-files '*.py'",
-  "tracked_file_count": 96,
+  "tracked_file_count": 95,
   "tracked_path_categories": {
     "directory_name_does_not_establish_optional_status": true,
     "note": "Path set is intended to equal source_command output. Task evidence validates this exact set, not a suffix-based approximation.",
@@ -9872,5 +9863,45 @@
       "count": 37
     },
     "supersedes": "Archived historical Python test entries are retained in coverage; current source method maps and native tests own the replacement intentions."
+  },
+  "native_runtime_evidence_test_retirement": {
+    "status": "LOCAL_POSTIMAGE_QUALIFIED",
+    "python_paths_after": 95,
+    "core_modules_after": 36,
+    "durable_coverage": {
+      "path": "ci/automation-migration/native-runtime-evidence-retirement-coverage.json",
+      "sha256": "01ecd6c9c2bcac30a3af62b0f645c88d261a015acce3dac5b8a835f226b1c655"
+    },
+    "current_test_tree": {
+      "sha256": "5304d7a82ad1b8355b696eb80feeefeed055d4575035745d31545b3b821561d4",
+      "paths": 33
+    },
+    "current_just": {
+      "path": "just/ci.just",
+      "sha256": "d84caea566450e3cbf52e15309f928cf1d38521a5f2a84eaf03a3891d6018192",
+      "roster_line": 32,
+      "count": 36
+    },
+    "maintained_normal": {
+      "exit_code": 0,
+      "freeze": ".omo/evidence/resume-20261002/native-runtime-evidence-maintained-freeze-v2.json",
+      "freeze_sha256": "f6a289110d10d90ef06825784b16f261eacca7e14af7d69daba1de84ee20e648",
+      "log": ".omo/evidence/resume-20261002/native-runtime-evidence-maintained-v2-normal.log",
+      "sha256": "1aa1282f069d8712260986d47a40843f32f8dbab9bcb16d69cedf35a75b543b1",
+      "rust": {
+        "groups": 114,
+        "passed": 4713,
+        "failed": 0,
+        "ignored": 2
+      },
+      "legacy": {
+        "run": 656,
+        "seconds": 67.762,
+        "skipped": 13,
+        "failed": 0,
+        "errors": 0
+      },
+      "limits": "Local maintained normal gate; no real native model, hosted/platform or whole-migration completion proof."
+    }
   }
 }
