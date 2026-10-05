@@ -184,6 +184,10 @@ ci-automation-contracts:
     test -n "$target_directory"
     export CARGO_TARGET_DIR="$target_directory"
     just with-lld cargo build --locked -p xtask --bins --examples
+    # The optional codec reader is built after the native-library-free bootstrap.
+    just with-lld cargo build --locked -p trajectory-reader --features parquet-input --bin trajectory-reader
+    just with-lld cargo test --locked -p trajectory-reader --features parquet-input --lib -- --test-threads=1
+    MESH_LLM_TEST_XTASK_BIN="$binary" just with-lld cargo test --locked -p trajectory-reader --features parquet-input --test prompt_command native_prompt_command_ -- --test-threads=1
     fixture_suffix=""
     case "$binary" in *.exe) fixture_suffix=".exe" ;; esac
     export SPV_ADAPTER_FIXTURE="$target_directory/debug/examples/swift_privacy_lint_fixture$fixture_suffix"
@@ -302,6 +306,7 @@ ci-automation-contracts:
         --test replay_server_cell \
         --test replay_session_evidence \
         --test replay_trajectory_execution \
+        --test waiting_prefix_acceptance \
         --test swift_api_checksum \
         --test swift_privacy_adapter \
         --test swift_producer_environment \

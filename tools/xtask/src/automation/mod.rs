@@ -2,6 +2,7 @@ pub(crate) mod agent_client_config;
 pub(crate) mod agent_fixture_evidence;
 pub(crate) mod agent_fixture_inputs;
 pub(crate) mod agent_model;
+pub(crate) mod agentic_prompt_manifest;
 pub(crate) mod binary_stage_readiness;
 pub(crate) mod cache_family_report;
 #[path = "canary_receipts/command.rs"]
@@ -41,6 +42,7 @@ pub(crate) mod startup_recovery;
 #[path = "../../tests/migration_stability/tls_fixture.rs"]
 pub(crate) mod tls_fixture;
 pub(crate) mod ui_build;
+pub(crate) mod waiting_prefix;
 pub(crate) mod workload_smoke_config;
 pub(crate) use crate::command_interrupt;
 pub(crate) mod daemon_readiness;

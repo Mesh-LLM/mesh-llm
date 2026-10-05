@@ -200,3 +200,32 @@ fn snapshot_component_library_and_actual_cli_cannot_be_omitted_or_filtered() {
         assert!(recipe(&changed, &targets).is_err());
     }
 }
+
+#[test]
+fn optional_reader_contracts_require_actual_bootstrap_binary_and_full_coverage() {
+    let (source, targets) = inputs();
+    for changed in [
+        source.replace(
+            "--features parquet-input --bin trajectory-reader",
+            "--bin trajectory-reader",
+        ),
+        source.replace(
+            "--features parquet-input --lib",
+            "--features parquet-input --lib ignored_filter",
+        ),
+        source.replace(
+            "MESH_LLM_TEST_XTASK_BIN=\"$binary\"",
+            "MESH_LLM_TEST_XTASK_BIN=guessed",
+        ),
+        source.replace(
+            "native_prompt_command_ --",
+            "native_prompt_command_preserves_consumed_bytes_ --",
+        ),
+        source.replace(
+            "    just with-lld cargo build --locked -p trajectory-reader",
+            "    echo just with-lld cargo build --locked -p trajectory-reader",
+        ),
+    ] {
+        assert!(recipe(&changed, &targets).is_err());
+    }
+}

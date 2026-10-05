@@ -105,6 +105,67 @@ frozen_case!(
     "reverse-dependency-log-store"
 );
 frozen_case!(migration_ci_plan_native_pin_escalates, "native-pin");
+
+#[test]
+fn native_pin_current_workspace_adds_reader_to_required_rust_batches() -> TestResult {
+    let stage = Stage::new("native-pin-current-workspace")?;
+    let manifests = stage.manifest_root("default")?;
+    let metadata: Value =
+        serde_json::from_slice(&fs::read(fixture_root().join("cargo-metadata.json"))?)?;
+    let packages = metadata["packages"].as_array().ok_or("fixture packages")?;
+    let mut workspace = packages
+        .iter()
+        .map(|package| {
+            let manifest = package["manifest_path"]
+                .as_str()
+                .ok_or("package manifest")?;
+            let path = manifest
+                .strip_prefix("/workspace/")
+                .and_then(|path| path.strip_suffix("/Cargo.toml"))
+                .ok_or("workspace-relative package manifest")?;
+            Ok(serde_json::json!({"name":package["name"],"path":path}))
+        })
+        .collect::<Result<Vec<_>, Box<dyn std::error::Error>>>()?;
+    workspace
+        .push(serde_json::json!({"name":"trajectory-reader","path":"tools/trajectory-reader"}));
+    let mut input: Value = serde_json::from_slice(&load_case("native-pin")?.input)?;
+    input
+        .as_object_mut()
+        .ok_or("planner input")?
+        .remove("affected_crates");
+    input["workspace_packages"] = Value::Array(workspace);
+    let bytes = serde_json::to_vec(&input)?;
+    let path = stage.search_path()?;
+    let output = Run {
+        args: &[
+            "--manifest-root",
+            manifests.to_str().ok_or("manifest path")?,
+        ],
+        stdin: &bytes,
+        path: &path,
+    }
+    .ported()?;
+    assert!(output.status.success(), "{}", text(&output.stderr));
+    let plan: Value = serde_json::from_slice(&output.stdout)?;
+    assert_eq!(plan["signals"]["backend_changed"], true);
+    assert!(
+        plan["affected_crates"]
+            .as_array()
+            .ok_or("affected crates")?
+            .iter()
+            .any(|name| name == "trajectory-reader")
+    );
+    assert!(
+        plan["matrices"]["rust_tests"]
+            .as_array()
+            .ok_or("Rust batches")?
+            .iter()
+            .any(|batch| batch["crates"]
+                .as_array()
+                .is_some_and(|crates| crates.iter().any(|name| name == "trajectory-reader")))
+    );
+    Ok(())
+}
 frozen_case!(migration_ci_plan_control_plane_fails_open, "control-ready");
 frozen_case!(
     migration_ci_plan_manual_full_force_all,

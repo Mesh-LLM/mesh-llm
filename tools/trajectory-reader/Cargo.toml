@@ -1,0 +1,37 @@
+[package]
+name = "trajectory-reader"
+version.workspace = true
+edition = "2024"
+publish = false
+autotests = false
+description = "Portable trajectory selection contracts and an optional Parquet reader"
+
+[features]
+default = []
+parquet-input = ["dep:parquet"]
+
+[dependencies]
+md5 = "=0.8.1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+parquet = { version = "=60.0.0", optional = true, default-features = false, features = ["snap", "brotli", "flate2-rust_backend", "lz4", "zstd"] }
+
+[dev-dependencies]
+thiserror = "2"
+tempfile = "3"
+
+[[bin]]
+name = "trajectory-reader"
+path = "src/main.rs"
+required-features = ["parquet-input"]
+
+[target.'cfg(unix)'.dev-dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dev-dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_Storage_FileSystem", "Win32_System_Console", "Win32_System_Diagnostics_ToolHelp", "Win32_System_JobObjects", "Win32_System_Pipes", "Win32_System_Threading"] }
+
+[[test]]
+name = "prompt_command"
+path = "tests/prompt_command.rs"
+required-features = ["parquet-input"]

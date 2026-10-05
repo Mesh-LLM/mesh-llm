@@ -1656,3 +1656,12 @@ workflow contract methods, and six product-crate Python bindings are retired
 together after original and native caller qualification. The required
 `migration_stability` target and native workflow guards retain this coverage.
 The core gate still selects 53 transitional Python modules.
+
+The normal automation contract gate bootstraps a native-library-free xtask,
+then builds the separate `trajectory-reader` utility with `parquet-input`.
+It runs compressed-Parquet library cases and frontend/reader command tests
+against the bootstrap-reported executable. `waiting_prefix_acceptance` is in
+the normal xtask integration roster and checks offline measured comparisons,
+failure evidence and publication refusal. These additions qualify local
+automation behavior; model-backed workloads and platform/hosted evidence retain
+their existing gates.

@@ -1527,3 +1527,15 @@ workflow contract methods, and six product-crate Python bindings are retired
 together after original and native caller qualification. The required
 `migration_stability` target and native workflow guards retain this coverage.
 The core gate still selects 53 transitional Python modules.
+
+## Native trajectory and offline A/B contracts
+
+The Quality automation recipe first validates the default xtask dependency
+boundary, then explicitly builds/tests the feature-gated `trajectory-reader`
+codec utility. Bootstrap permits only its portable library; native links remain
+rejected in the default graph. Reader command tests use the actual bootstrap
+executable and include large trajectory data, exact manifest bytes and refusal
+cleanup. `waiting_prefix_acceptance` is selected by the normal integration roster
+for offline request/telemetry summary, round aggregation, acceptance and reports.
+No runner placement, cache authority, permissions or external dataset/model
+operations change. Existing model-backed and platform gates remain required.
