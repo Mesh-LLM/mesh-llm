@@ -514,9 +514,11 @@ flowchart TD
     DOWNSTREAM --> RECEIPT["Verify correlated terminal<br/>packaging readiness"]
 ```
 
-The stable crates.io preflight and publisher each verify the checksummed Linux
-x86_64 release archive and restore its native runtime libraries before Cargo
-package verification. Their `LLAMA_STAGE_LIB_DIR` points at the restored `libmtmd.so`,
+The credential-free crates.io dry run now downloads the immutable Linux product
+from the same release run and completes before GitHub publication; canaries run
+it too. The stable crates.io publisher independently verifies the published,
+checksummed Linux x86_64 release archive. Both restore native runtime libraries
+before Cargo package verification. Their `LLAMA_STAGE_LIB_DIR` points at the restored `libmtmd.so`,
 `libllama-common.so`, and `libllama.so`. The same archive gate is used when
 resuming a partial crates.io publication.
 

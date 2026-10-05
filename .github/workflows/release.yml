@@ -1758,7 +1758,8 @@ jobs:
       - compose_windows_gpu
       - build_native_runtime_windows_cpu
       - build_native_runtime_windows_gpu
-    if: ${{ !cancelled() && needs.metadata.result == 'success' && needs.metadata.outputs.canary != 'true' && needs.compose_cpu_products.result == 'success' && needs.inference_smoke_tests.result == 'success' && needs.build_native_sdk_runtime.result == 'success' && needs.build_node_sdk_addon.result == 'success' && needs.build_native_runtime.result == 'success' && (needs.build_native_runtime_linux_aarch64_cuda.result == 'success' || needs.build_native_runtime_linux_aarch64_cuda.result == 'skipped') && (needs.build_native_runtime_linux_x86_64_cuda.result == 'success' || needs.build_native_runtime_linux_x86_64_cuda.result == 'skipped') && (needs.build_native_runtime_linux_x86_64_rocm.result == 'success' || needs.build_native_runtime_linux_x86_64_rocm.result == 'skipped') && (needs.build_native_runtime_linux_x86_64_vulkan.result == 'success' || needs.build_native_runtime_linux_x86_64_vulkan.result == 'skipped') && needs.build_swift_sdk_artifact.result == 'success' && needs.compose_linux_arm64_cpu.result == 'success' && needs.smoke_linux_arm64_artifact.result == 'success' && (needs.compose_linux_aarch64_cuda.result == 'success' || needs.compose_linux_aarch64_cuda.result == 'skipped') && (needs.compose_linux_cuda.result == 'success' || needs.compose_linux_cuda.result == 'skipped') && (needs.compose_linux_rocm.result == 'success' || needs.compose_linux_rocm.result == 'skipped') && (needs.compose_linux_vulkan.result == 'success' || needs.compose_linux_vulkan.result == 'skipped') && needs.compose_windows_cpu.result == 'success' && (needs.compose_windows_gpu.result == 'success' || needs.compose_windows_gpu.result == 'skipped') && needs.build_native_runtime_windows_cpu.result == 'success' && (needs.build_native_runtime_windows_gpu.result == 'success' || needs.build_native_runtime_windows_gpu.result == 'skipped') }}
+      - publish_crates_preflight
+    if: ${{ !cancelled() && needs.metadata.result == 'success' && needs.metadata.outputs.canary != 'true' && needs.publish_crates_preflight.result == 'success' && needs.compose_cpu_products.result == 'success' && needs.inference_smoke_tests.result == 'success' && needs.build_native_sdk_runtime.result == 'success' && needs.build_node_sdk_addon.result == 'success' && needs.build_native_runtime.result == 'success' && (needs.build_native_runtime_linux_aarch64_cuda.result == 'success' || needs.build_native_runtime_linux_aarch64_cuda.result == 'skipped') && (needs.build_native_runtime_linux_x86_64_cuda.result == 'success' || needs.build_native_runtime_linux_x86_64_cuda.result == 'skipped') && (needs.build_native_runtime_linux_x86_64_rocm.result == 'success' || needs.build_native_runtime_linux_x86_64_rocm.result == 'skipped') && (needs.build_native_runtime_linux_x86_64_vulkan.result == 'success' || needs.build_native_runtime_linux_x86_64_vulkan.result == 'skipped') && needs.build_swift_sdk_artifact.result == 'success' && needs.compose_linux_arm64_cpu.result == 'success' && needs.smoke_linux_arm64_artifact.result == 'success' && (needs.compose_linux_aarch64_cuda.result == 'success' || needs.compose_linux_aarch64_cuda.result == 'skipped') && (needs.compose_linux_cuda.result == 'success' || needs.compose_linux_cuda.result == 'skipped') && (needs.compose_linux_rocm.result == 'success' || needs.compose_linux_rocm.result == 'skipped') && (needs.compose_linux_vulkan.result == 'success' || needs.compose_linux_vulkan.result == 'skipped') && needs.compose_windows_cpu.result == 'success' && (needs.compose_windows_gpu.result == 'success' || needs.compose_windows_gpu.result == 'skipped') && needs.build_native_runtime_windows_cpu.result == 'success' && (needs.build_native_runtime_windows_gpu.result == 'success' || needs.build_native_runtime_windows_gpu.result == 'skipped') }}
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -2125,8 +2126,8 @@ jobs:
 
   publish_crates_preflight:
     name: Preflight crates.io packages
-    needs: [metadata, publish]
-    if: ${{ needs.metadata.outputs.prerelease != 'true' && needs.metadata.outputs.canary != 'true' }}
+    needs: [metadata, compose_cpu_products]
+    if: ${{ needs.metadata.result == 'success' && needs.compose_cpu_products.result == 'success' }}
     runs-on: ubuntu-24.04
     container:
       image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:f499b79bc52dc7492d57397fdbec9f890c6f6bb1d8c1fcde9c1c97d45c0541a7
@@ -2136,7 +2137,7 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
-          ref: ${{ needs.metadata.outputs.tag }}
+          ref: ${{ needs.metadata.outputs.source_sha }}
           persist-credentials: false
       - name: Trust checkout directory
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
@@ -2152,6 +2153,11 @@ jobs:
         run: scripts/release-version.sh "$RELEASE_TAG"
       - name: Check crates.io publish-chain consistency
         run: cargo run -p xtask -- repo-consistency publish-crates
+      - name: Download immutable Linux release product
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-linux
+          path: release-artifacts
       - name: Restore verified release runtime libraries
         id: runtime
         shell: bash
@@ -2162,12 +2168,9 @@ jobs:
           archive="mesh-llm-${RELEASE_TAG}-x86_64-unknown-linux-gnu.tar.gz"
           runtime_root="$RUNNER_TEMP/mesh-llm-release-runtime"
           mkdir -p "$runtime_root"
-          curl --fail --location --retry 3 \
-            --output "$runtime_root/$archive" \
-            "https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/${archive}"
-          curl --fail --location --retry 3 \
-            --output "$runtime_root/$archive.sha256" \
-            "https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/${archive}.sha256"
+          test -s "release-artifacts/$archive"
+          test -s "release-artifacts/$archive.sha256"
+          cp "release-artifacts/$archive" "release-artifacts/$archive.sha256" "$runtime_root/"
           (
             cd "$runtime_root"
             sha256sum --check "$archive.sha256"

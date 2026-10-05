@@ -752,6 +752,11 @@ boundary.
   `host-imports.json`; release publishes separate versioned CLI archives from the
   same producer, verifies the report matches the executable SHA-256, and includes
   it in the archive.
+- `release.yml` crates preflight: the same-run `release-linux` producer supplies
+  the checksummed CPU product before any GitHub publication. The dry run also
+  runs in release canaries; the publisher remains stable-only and checks the
+  published archive again. The dry run does not yet verify unpublished
+  same-version dependent packages, so it is not the complete staged DAG gate.
 - `prepare-native-runtime-input`: one verified native runtime archive and
   manifest. Non-Windows artifacts include the checksum-bound
   `skippy-package-builder` tool used by split-serving consumers to prepare

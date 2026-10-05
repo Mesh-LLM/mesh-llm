@@ -670,7 +670,16 @@ class ReleaseWorkflowArtifactTests(unittest.TestCase):
             workflow.index("  publish_crates:\n")
         ]
 
-        self.assertIn("needs: [metadata, publish]", preflight)
+        self.assertIn("needs: [metadata, compose_cpu_products]", preflight)
+        self.assertIn("name: release-linux", preflight)
+        self.assertNotIn("releases/download", preflight)
+        publish = workflow[
+            workflow.index("  publish:\n") :
+            workflow.index("  release_notes:\n")
+        ]
+        self.assertIn("- publish_crates_preflight", publish)
+        self.assertIn("needs.publish_crates_preflight.result == 'success'", publish)
+        self.assertNotIn("needs.metadata.outputs.canary", preflight)
         self.assertIn('sha256sum --check "$archive.sha256"', preflight)
         self.assertIn("libmtmd.so libllama-common.so libllama.so", preflight)
         self.assertIn("LLAMA_STAGE_LIB_DIR: ${{ steps.runtime.outputs.lib_dir }}", preflight)
