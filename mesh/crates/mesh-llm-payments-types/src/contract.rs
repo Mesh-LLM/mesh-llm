@@ -26,8 +26,6 @@ pub mod ops {
     pub const RECONCILE: &str = "reconcile";
     /// Validate and pay a seller's output invoice for a request.
     pub const SETTLE_OUTPUT: &str = "settle_output";
-    /// Persist payer-side receipt of nonempty transport output before settlement.
-    pub const RECORD_OUTPUT_DELIVERY: &str = "record_output_delivery";
     /// Mark a request finished.
     pub const FINISH: &str = "finish";
     /// The operator's profile payment intent (no wallet I/O).
@@ -83,7 +81,6 @@ pub fn deadline(operation: &str) -> Option<Duration> {
             | ops::PAYMENT_INTENT
             | ops::PREFETCH
             | ops::CANCEL
-            | ops::RECORD_OUTPUT_DELIVERY
             | ops::RECORD_DELIVERED
             | ops::SERVE_FINISH
     )

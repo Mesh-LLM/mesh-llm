@@ -66,10 +66,6 @@ impl PaymentService {
         Ok(ReconcileResponse { approved })
     }
 
-    pub fn record_output_delivery(&self, id: &str) -> Result<()> {
-        self.ledger.record_output_delivery(id)
-    }
-
     /// Validate a seller's output invoice against the request terms and pay it.
     pub async fn settle_output(&self, request: SettleOutputRequest) -> Result<Transaction> {
         let SettleOutputRequest {

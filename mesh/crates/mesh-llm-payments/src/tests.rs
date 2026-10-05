@@ -327,7 +327,6 @@ async fn output_payment_uses_the_original_authorization_and_actual_fees() {
         .pay_charge(&charge("one", 0, 1, 100, 200))
         .await
         .unwrap();
-    service.ledger.record_output_delivery("one").unwrap();
     service
         .pay_charge(&charge("one", 1, 2, 400, 500))
         .await
@@ -478,28 +477,5 @@ async fn one_policy_command_enables_paid_use_and_free_only_stops_new_work() -> R
     assert_eq!(status["reserved_msat"], 0);
     assert_eq!(status["remaining_daily_budget_msat"], 0);
     assert_eq!(wallet.calls.load(Ordering::SeqCst), 1);
-    Ok(())
-}
-
-#[tokio::test]
-async fn output_charge_without_delivery_never_reaches_wallet() -> Result<()> {
-    let dir = tempfile::tempdir()?;
-    let wallet = Arc::new(MockWallet::default());
-    let service = PaymentService::with_provider(dir.path(), wallet.clone())?;
-    service.ledger.set_policy(&Policy {
-        mode: ApprovalMode::Automatic,
-        daily_budget_msat: Some(1000),
-    })?;
-    service
-        .await_authorization(&terms("no-output", 1000))
-        .await?;
-    assert!(
-        service
-            .pay_charge(&charge("no-output", 1, 9, 100, 200))
-            .await
-            .is_err()
-    );
-    assert_eq!(wallet.calls.load(Ordering::SeqCst), 0);
-    assert!(service.ledger.pending_charges()?.is_empty());
     Ok(())
 }

@@ -176,21 +176,3 @@ fn single_policy_controls_eligibility_and_preserves_reservations() -> Result<()>
     );
     Ok(())
 }
-
-#[test]
-fn payer_delivery_requires_local_record_and_survives_reopen() -> Result<()> {
-    let directory = tempfile::tempdir()?;
-    let ledger = Ledger::open(directory.path())?;
-    ledger.propose(&terms("delivery", 1000))?;
-    assert!(!ledger.output_delivered("delivery")?);
-    assert!(ledger.record_output_delivery("delivery").is_err());
-    ledger.set_policy(&Policy {
-        mode: ApprovalMode::Automatic,
-        daily_budget_msat: Some(1000),
-    })?;
-    ledger.approve("delivery", 1000, crate::now_ms())?;
-    ledger.record_output_delivery("delivery")?;
-    drop(ledger);
-    assert!(Ledger::open(directory.path())?.output_delivered("delivery")?);
-    Ok(())
-}

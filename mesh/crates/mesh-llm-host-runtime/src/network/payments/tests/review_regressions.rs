@@ -29,10 +29,15 @@ impl<R: AsyncRead + Unpin> AsyncRead for ObservedReader<R> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn payments_cancellation_mid_frame_still_settles_output() -> Result<()> {
-    tokio::time::timeout(Duration::from_secs(10), fragmented_exchange()).await?
+    tokio::time::timeout(Duration::from_secs(10), fragmented_exchange(false)).await?
 }
 
-async fn fragmented_exchange() -> Result<()> {
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn payments_empty_output_does_not_settle_output_invoice() -> Result<()> {
+    tokio::time::timeout(Duration::from_secs(10), fragmented_exchange(true)).await?
+}
+
+async fn fragmented_exchange(empty_output: bool) -> Result<()> {
     let directory = tempfile::tempdir()?;
     let network = Arc::new(Network::default());
     let seller = TestWallet {
@@ -115,6 +120,12 @@ async fn fragmented_exchange() -> Result<()> {
     });
     wire::write(&mut seller_write, &input).await?;
     seller.wait_for_payment(&invoice.payment_hash).await?;
+    if empty_output {
+        reject_empty_output(&seller, &mut seller_write, &id, exchange).await?;
+        assert_eq!(network.payments.load(Ordering::SeqCst), 1);
+        node.endpoint.close().await;
+        return Ok(());
+    }
     seller_write.write_u32(output_frame.len() as u32).await?;
     seller_write.write_all(&output_frame[..2]).await?;
     partial_consumed.await?;
@@ -161,5 +172,37 @@ async fn settle_after_cancel(
     .await?;
     seller.wait_for_payment(&invoice.payment_hash).await?;
     wire::write(writer, &Frame::Complete).await?;
+    Ok(())
+}
+
+async fn reject_empty_output(
+    seller: &TestWallet,
+    writer: &mut (impl tokio::io::AsyncWrite + Unpin),
+    id: &str,
+    exchange: tokio::task::JoinHandle<Result<()>>,
+) -> Result<()> {
+    wire::write(writer, &Frame::Output { bytes: Vec::new() }).await?;
+    let output_invoice = seller.create_invoice(Some(3), 3600).await?;
+    wire::write(
+        writer,
+        &Frame::OutputInvoice {
+            request_id: id.into(),
+            tokens: 3,
+            invoice: output_invoice.clone(),
+        },
+    )
+    .await?;
+    let error = exchange
+        .await?
+        .expect_err("empty output must not be settled");
+    assert!(error.to_string().contains("output invoice before delivery"));
+    assert_eq!(
+        seller
+            .lookup(&output_invoice.payment_hash)
+            .await?
+            .unwrap()
+            .status,
+        PaymentStatus::Pending
+    );
     Ok(())
 }
