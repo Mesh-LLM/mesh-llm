@@ -1,3 +1,5 @@
+mod request;
+
 use super::config::{ExternalPluginSpec, PluginHostMode};
 use super::plugin_manifest_overview;
 use super::support::{plugin_error, serialize_params, summarize_capabilities};
@@ -781,32 +783,6 @@ impl ExternalPlugin {
             Some(std::time::Duration::from_secs(REQUEST_TIMEOUT_SECS)),
         )
         .await
-    }
-
-    async fn request_with_timeout(
-        &self,
-        payload: proto::envelope::Payload,
-        timeout: Option<std::time::Duration>,
-    ) -> Result<proto::Envelope> {
-        for attempt in 0..2 {
-            self.ensure_running().await?;
-            let (generation, outbound_tx, pending) = self.runtime_handles().await?;
-            match self
-                .request_once(generation, outbound_tx, pending, payload.clone(), timeout)
-                .await
-            {
-                Ok(response) => return Ok(response),
-                Err(err) if attempt == 0 => {
-                    tracing::debug!(
-                        plugin = %self.spec.name,
-                        error = %err,
-                        "Retrying plugin request after restart"
-                    );
-                }
-                Err(err) => return Err(err),
-            }
-        }
-        bail!("Plugin '{}' request failed after restart", self.spec.name)
     }
 
     async fn send_unsolicited(&self, payload: proto::envelope::Payload, kind: &str) -> Result<()> {
