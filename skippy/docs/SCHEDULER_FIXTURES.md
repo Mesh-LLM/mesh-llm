@@ -224,3 +224,35 @@ input preserves any previous output. The command requires complete streaming
 usage and the terminal marker. Server startup, cache seeding, telemetry capture
 and the complete old/new comparison remain owned by the Python workload runner
 until its replacement passes validation.
+
+
+For synthetic profiles, `waiting-prefix synthetic-prompts --families N
+--requests-per-family N --prefix-blocks N --output FILE` generates the
+`stable-prefix-v1` repository contexts in interleaved family order. Using one
+request per family generates the same initial tasks for cache seeding. Counts
+must be positive and fit the request phase's 10,000-request limit; a conservative
+256 MiB allocation budget rejects oversized repeated contexts before generation.
+
+`waiting-prefix stage-config --input FILE --output FILE` emits a single-stage
+`runtime-slice` config with `lookup-record` cache mode and one shared-prefix
+record. Input contains `model_id`, an absolute `model_path`,
+`source_model_sha256`, `layer_end`, `ctx_size`, `lane_count`,
+`n_gpu_layers`, `payload` and `cache_entries`. Payload is `resident-kv`,
+`kv-recurrent` or the `full-state` correctness diagnostic. The command checks
+positive layer/context/lane/cache sizes and the actual model file SHA-256 before
+publishing; a changed model preserves any previous config. This prepares
+configuration only. It does not inspect GGUF dimensions or start a runtime.
+
+
+The native `waiting-prefix telemetry-log snapshot --log FILE --output FILE`
+command records the seed boundary for generation, capacity and record events.
+`telemetry-log collect --log FILE --cursor FILE --expected-generations N --output FILE`
+retains only events after that boundary and requires exactly N generation
+summaries. The cursor binds the canonical log path, its byte prefix SHA-256,
+and recomputed event counts. Appends are accepted; rewrites, truncation,
+cross-log cursors, altered counts, and malformed recognized attributes are
+rejected before publication. Parsing is bounded to 1 MiB per line and 128 MiB
+per snapshot. This collects existing debug telemetry and emits no runtime metrics.
+
+
+The native `waiting-prefix cell-worker --input FILE --output FILE` waits for the exact local model, optionally seeds its cache, waits for seed telemetry, and measures requests using a verified telemetry-log boundary. It retains completed request evidence when measurement or telemetry fails. The parent must own the server process and stderr log. This worker does not yet replace the complete Python A/B round runner or establish model-backed acceptance.

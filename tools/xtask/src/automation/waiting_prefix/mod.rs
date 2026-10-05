@@ -1,9 +1,13 @@
 //! Offline acceptance and input admission for the waiting-prefix A/B runner.
 mod acceptance;
 mod aggregation;
+mod cell_worker;
 mod report;
 mod requests;
+mod stage_config;
+mod synthetic_prompts;
 mod telemetry;
+mod telemetry_log;
 #[cfg(test)]
 mod tests;
 mod workload_plan;
@@ -14,9 +18,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::{collections::BTreeMap, io::Write, path::Path};
 
-const USAGE: &str = "cargo xtool automation waiting-prefix evaluate --comparison FILE --output FILE [--report FILE] (--contract FILE | --catalog FILE --profile NAME)\n  cargo xtool automation waiting-prefix {summarize|aggregate} --input FILE --output FILE\n  cargo xtool automation waiting-prefix execute-requests --input FILE --output FILE\n  cargo xtool automation waiting-prefix plan --catalog FILE --profile NAME --model-id ID --model-sha256 HASH [--contract FILE] [--prompt-manifest FILE] --output FILE\n  cargo xtool automation waiting-prefix validate-prompts FILE";
+const USAGE: &str = "cargo xtool automation waiting-prefix evaluate --comparison FILE --output FILE [--report FILE] (--contract FILE | --catalog FILE --profile NAME)\n  cargo xtool automation waiting-prefix {summarize|aggregate} --input FILE --output FILE\n  cargo xtool automation waiting-prefix execute-requests --input FILE --output FILE\n  cargo xtool automation waiting-prefix plan --catalog FILE --profile NAME --model-id ID --model-sha256 HASH [--contract FILE] [--prompt-manifest FILE] --output FILE\n  cargo xtool automation waiting-prefix synthetic-prompts --families N --requests-per-family N --prefix-blocks N --output FILE\n  cargo xtool automation waiting-prefix stage-config --input FILE --output FILE\n  cargo xtool automation waiting-prefix telemetry-log {snapshot|collect} --log FILE --output FILE [--cursor FILE --expected-generations N]\n  cargo xtool automation waiting-prefix cell-worker --input FILE --output FILE\n  cargo xtool automation waiting-prefix validate-prompts FILE";
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 struct Prompt {
     family: String,
     prompt: String,
@@ -172,6 +176,10 @@ pub(crate) fn run(args: &[String]) -> DynResult<()> {
             println!("{USAGE}");
             Ok(())
         }
+        [verb, rest @ ..] if verb == "stage-config" => stage_config::run(rest),
+        [verb, rest @ ..] if verb == "synthetic-prompts" => synthetic_prompts::run(rest),
+        [verb, rest @ ..] if verb == "telemetry-log" => telemetry_log::run(rest),
+        [verb, rest @ ..] if verb == "cell-worker" => cell_worker::run(rest),
         [verb, rest @ ..] if verb == "evaluate" => evaluate(rest),
         [verb, rest @ ..] if verb == "plan" => workload_plan::run(rest),
         [verb, rest @ ..] if verb == "execute-requests" => requests::run(rest),
