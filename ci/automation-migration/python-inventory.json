@@ -475,15 +475,6 @@
       "required": true
     },
     {
-      "classification": "generic shell contract test",
-      "deletion_condition": "Build recipe contract is covered by Rust checks.",
-      "exception": null,
-      "path": "scripts/tests/test_build_accelerator_defaults.py",
-      "phase": 2,
-      "replacement_owner": "tools/xtask repository tests",
-      "required": true
-    },
-    {
       "classification": "generic build contract test",
       "deletion_condition": "Windows build wrapper behavior is covered on Windows.",
       "exception": null,
@@ -999,7 +990,7 @@
   "revision": "2c4c92fcef592798efb3efedb721a74e2003afa6",
   "schema_version": 1,
   "source_command": "GIT_MASTER=1 git ls-files '*.py'",
-  "tracked_file_count": 95,
+  "tracked_file_count": 94,
   "tracked_path_categories": {
     "directory_name_does_not_establish_optional_status": true,
     "note": "Path set is intended to equal source_command output. Task evidence validates this exact set, not a suffix-based approximation.",
@@ -9897,6 +9888,46 @@
       "legacy": {
         "run": 656,
         "seconds": 67.762,
+        "skipped": 13,
+        "failed": 0,
+        "errors": 0
+      },
+      "limits": "Local maintained normal gate; no real native model, hosted/platform or whole-migration completion proof."
+    }
+  },
+  "build_accelerator_test_retirement": {
+    "status": "LOCAL_POSTIMAGE_QUALIFIED",
+    "python_paths_after": 94,
+    "core_modules_after": 35,
+    "durable_coverage": {
+      "path": "ci/automation-migration/build-accelerator-retirement-coverage.json",
+      "sha256": "c2725cb199bf75f8e28706002d64169ad846f831fe818783b65d957e2e8eede1"
+    },
+    "current_test_tree": {
+      "sha256": "0851aa913e3ad5a10190a70da0bc786f085d6d25bd61ddb65f05915ff02dc39e",
+      "paths": 32
+    },
+    "current_just": {
+      "path": "just/ci.just",
+      "sha256": "77efd1b2217b77dc9ba30a631cfe515ebb889e988bcf8723142115e419ace7b5",
+      "roster_line": 32,
+      "count": 35
+    },
+    "maintained_normal": {
+      "exit_code": 0,
+      "freeze": ".omo/evidence/resume-20261002/accelerator-retirement-maintained-freeze-v1.json",
+      "freeze_sha256": "2f74982eb69892751ed00772c8e755264e7ec2822d514c5f28d5482919e9aae1",
+      "log": ".omo/evidence/resume-20261002/accelerator-retirement-maintained-v1-normal.log",
+      "sha256": "46a9ae8249e69483d0ff8f5db608af44d00c78533189d6f39a96ccee0e7bcd90",
+      "rust": {
+        "groups": 114,
+        "passed": 4732,
+        "failed": 0,
+        "ignored": 2
+      },
+      "legacy": {
+        "run": 648,
+        "seconds": 77.926,
         "skipped": 13,
         "failed": 0,
         "errors": 0

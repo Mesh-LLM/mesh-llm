@@ -289,11 +289,11 @@
       "members": [
         [
           32,
-          "11dce192e2f66570",
+          "38525ecacc2c9b16",
           1,
           "environment",
-          "explicit surviving36 scripts.tests modules",
-          "Native runtime-event evidence admission and actual adapter fixtures preserve eight retired intent cases; 36 transitional modules remain selected."
+          "explicit surviving35 scripts.tests modules",
+          "Rust workflow policy, portable source contracts and actual copied driver/bootstrap fixtures preserve eight retired accelerator intent cases; 35 transitional modules remain selected."
         ]
       ]
     },
@@ -11140,6 +11140,46 @@
       "legacy": {
         "run": 656,
         "seconds": 67.762,
+        "skipped": 13,
+        "failed": 0,
+        "errors": 0
+      },
+      "limits": "Local maintained normal gate; no real native model, hosted/platform or whole-migration completion proof."
+    }
+  },
+  "build_accelerator_test_retirement": {
+    "status": "LOCAL_POSTIMAGE_QUALIFIED",
+    "python_paths_after": 94,
+    "core_modules_after": 35,
+    "durable_coverage": {
+      "path": "ci/automation-migration/build-accelerator-retirement-coverage.json",
+      "sha256": "c2725cb199bf75f8e28706002d64169ad846f831fe818783b65d957e2e8eede1"
+    },
+    "current_test_tree": {
+      "sha256": "0851aa913e3ad5a10190a70da0bc786f085d6d25bd61ddb65f05915ff02dc39e",
+      "paths": 32
+    },
+    "current_just": {
+      "path": "just/ci.just",
+      "sha256": "77efd1b2217b77dc9ba30a631cfe515ebb889e988bcf8723142115e419ace7b5",
+      "roster_line": 32,
+      "count": 35
+    },
+    "maintained_normal": {
+      "exit_code": 0,
+      "freeze": ".omo/evidence/resume-20261002/accelerator-retirement-maintained-freeze-v1.json",
+      "freeze_sha256": "2f74982eb69892751ed00772c8e755264e7ec2822d514c5f28d5482919e9aae1",
+      "log": ".omo/evidence/resume-20261002/accelerator-retirement-maintained-v1-normal.log",
+      "sha256": "46a9ae8249e69483d0ff8f5db608af44d00c78533189d6f39a96ccee0e7bcd90",
+      "rust": {
+        "groups": 114,
+        "passed": 4732,
+        "failed": 0,
+        "ignored": 2
+      },
+      "legacy": {
+        "run": 648,
+        "seconds": 77.926,
         "skipped": 13,
         "failed": 0,
         "errors": 0
