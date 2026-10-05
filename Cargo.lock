@@ -4577,6 +4577,7 @@ dependencies = [
  "hex",
  "iroh",
  "json5",
+ "libc",
  "mesh-llm-analytics",
  "mesh-llm-build-info",
  "mesh-llm-cli",
@@ -4629,6 +4630,7 @@ dependencies = [
  "toml 1.1.6+spec-1.1.0",
  "toml_edit",
  "url",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

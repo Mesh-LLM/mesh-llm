@@ -5,6 +5,7 @@ mod hardware_validation;
 mod model;
 mod model_validation;
 mod plugin_validation;
+mod private_file;
 mod size;
 mod store;
 mod validate;
