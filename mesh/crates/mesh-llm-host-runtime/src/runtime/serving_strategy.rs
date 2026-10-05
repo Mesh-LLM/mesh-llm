@@ -24,6 +24,7 @@
 //!    promised them would be the same defect this flag exists to remove. The
 //!    report says which axes it actually set.
 
+use super::split_planning::SplitPlacementPolicy;
 use crate::plugin;
 use mesh_llm_config::{BoolOrAuto, SpeculativeConfig, ThroughputConfig};
 
@@ -287,15 +288,37 @@ fn speculative_defaults(config: &mut plugin::MeshConfig) -> &mut SpeculativeConf
         .get_or_insert_with(SpeculativeConfig::default)
 }
 
-/// Whether the strategy wants closed-loop rebalancing turned on.
+/// How the split should choose and maintain its layer boundaries.
 ///
-/// Kept separate from [`apply_serving_strategy`] because `auto_balance` is a
-/// launch option rather than a config key, so the caller owns it.
-pub fn strategy_requests_auto_balance(
+/// Kept separate from [`apply_serving_strategy`] because placement is a launch
+/// option rather than a config key, so the caller owns it.
+///
+/// `--auto-balance` always wins: it is an explicit request, and it means both
+/// halves — cut by speed, then keep re-cutting. A strategy only supplies a
+/// policy when the operator named no placement of their own.
+///
+/// Neither strategy turns a single-node deployment into a split one, so both
+/// fall back to capacity-only placement without `--split`.
+pub(in crate::runtime) fn strategy_placement_policy(
     strategy: Option<ServingStrategy>,
     context: StrategyContext,
-) -> bool {
-    matches!(strategy, Some(ServingStrategy::Throughput)) && context.split
+) -> SplitPlacementPolicy {
+    if context.auto_balance_requested {
+        return SplitPlacementPolicy::AUTO_BALANCE;
+    }
+    if !context.split {
+        return SplitPlacementPolicy::CAPACITY_ONLY;
+    }
+    match strategy {
+        // Aggregate tokens per second: level the stages, and keep them level
+        // as load and measurement drift.
+        Some(ServingStrategy::Throughput) => SplitPlacementPolicy::AUTO_BALANCE,
+        // One request pays the sum of its stages, so pack the fastest node —
+        // and leave it there, because a single stream's busy-time signal is
+        // too noisy to rebalance on and each trial costs a drain and cutover.
+        Some(ServingStrategy::Interactive) => SplitPlacementPolicy::LATENCY_RECUT,
+        Some(ServingStrategy::Balanced) | None => SplitPlacementPolicy::CAPACITY_ONLY,
+    }
 }
 
 /// Log what the strategy composed, so an operator can see the settings a single
@@ -494,21 +517,66 @@ mod tests {
         );
     }
 
+    /// The two halves of placement are chosen independently, which is the whole
+    /// reason the policy is not one bool.
     #[test]
-    fn throughput_requests_auto_balance_only_on_a_split() {
-        assert!(strategy_requests_auto_balance(
-            Some(ServingStrategy::Throughput),
-            context(true)
-        ));
-        assert!(!strategy_requests_auto_balance(
-            Some(ServingStrategy::Throughput),
-            context(false)
-        ));
-        assert!(!strategy_requests_auto_balance(
-            Some(ServingStrategy::Interactive),
-            context(true)
-        ));
-        assert!(!strategy_requests_auto_balance(None, context(true)));
+    fn each_strategy_picks_its_own_placement_policy() {
+        assert_eq!(
+            strategy_placement_policy(Some(ServingStrategy::Throughput), context(true)),
+            SplitPlacementPolicy::AUTO_BALANCE,
+            "throughput wants levelled stages, kept level"
+        );
+        assert_eq!(
+            strategy_placement_policy(Some(ServingStrategy::Interactive), context(true)),
+            SplitPlacementPolicy::LATENCY_RECUT,
+            "interactive wants the speed-aware cut without the closed loop"
+        );
+        assert_eq!(
+            strategy_placement_policy(Some(ServingStrategy::Balanced), context(true)),
+            SplitPlacementPolicy::CAPACITY_ONLY
+        );
+        assert_eq!(
+            strategy_placement_policy(None, context(true)),
+            SplitPlacementPolicy::CAPACITY_ONLY
+        );
+    }
+
+    /// `interactive` re-cuts but must never start the controller: that is the
+    /// distinction the old `auto_balance: bool` could not express.
+    #[test]
+    fn interactive_recuts_without_the_closed_loop() {
+        let policy = strategy_placement_policy(Some(ServingStrategy::Interactive), context(true));
+        assert!(policy.recuts());
+        assert!(!policy.closed_loop);
+    }
+
+    /// No strategy turns a single-node deployment into a split one.
+    #[test]
+    fn no_strategy_requests_placement_without_split() {
+        for strategy in [
+            ServingStrategy::Throughput,
+            ServingStrategy::Interactive,
+            ServingStrategy::Balanced,
+        ] {
+            assert_eq!(
+                strategy_placement_policy(Some(strategy), context(false)),
+                SplitPlacementPolicy::CAPACITY_ONLY,
+                "{strategy:?}"
+            );
+        }
+    }
+
+    /// An explicit `--auto-balance` outranks whatever the strategy would pick.
+    #[test]
+    fn an_explicit_auto_balance_request_wins() {
+        let asked = StrategyContext {
+            split: true,
+            auto_balance_requested: true,
+        };
+        assert_eq!(
+            strategy_placement_policy(Some(ServingStrategy::Interactive), asked),
+            SplitPlacementPolicy::AUTO_BALANCE
+        );
     }
 
     /// A single-node deployment must not be silently turned into a split one.
