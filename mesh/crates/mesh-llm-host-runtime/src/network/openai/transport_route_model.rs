@@ -253,6 +253,7 @@ async fn route_model_request_inner(args: RouteModelRequestArgs<'_>) -> RouteDisp
             &node,
             &mut tcp_stream,
             &target,
+            Some(model),
             forwarding_raw,
             retry_policy,
             RouteAttemptLoggingContext {
