@@ -57,8 +57,8 @@ class BuildAcceleratorDefaultsTests(unittest.TestCase):
                 self.assertEqual(source.count("uses: ./.github/actions/setup-windows-short-paths"), expected)
 
     def test_every_windows_native_backend_hashes_long_object_paths(self) -> None:
-        bash_build = (ROOT / "scripts/build-llama.sh").read_text(encoding="utf-8")
-        powershell_build = (ROOT / "scripts/build-windows.ps1").read_text(encoding="utf-8")
+        bash_build = (ROOT / "skippy/scripts/build-llama.sh").read_text(encoding="utf-8")
+        powershell_build = (ROOT / "mesh/scripts/build-windows.ps1").read_text(encoding="utf-8")
         self.assertIn("-DCMAKE_OBJECT_PATH_MAX=180", bash_build)
         self.assertIn('"-DCMAKE_OBJECT_PATH_MAX=180"', powershell_build)
         rocm_case = powershell_build.rsplit('\n        "rocm" {', maxsplit=1)[1]

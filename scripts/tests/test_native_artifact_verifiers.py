@@ -14,8 +14,8 @@ import unittest
 
 
 ROOT = Path(__file__).resolve().parents[2]
-RUNTIME_VERIFIER = ROOT / "scripts" / "verify-native-runtime-package.sh"
-SDK_VERIFIER = ROOT / "scripts" / "verify-native-sdk-package.sh"
+RUNTIME_VERIFIER = ROOT / "skippy" / "scripts" / "verify-native-runtime-package.sh"
+SDK_VERIFIER = ROOT / "mesh" / "scripts" / "verify-native-sdk-package.sh"
 SDK_RESTORE = ROOT / "scripts" / "restore-native-sdk-input.sh"
 
 
@@ -102,9 +102,10 @@ class NativeArtifactVerifierTests(unittest.TestCase):
         tool.write_bytes(b"runtime tool")
         tool.chmod(0o755)
         manifest = {
+            "schema_version": 2,
             "runtime": {
                 "id": artifact.name,
-                "mesh_version": "0.75.0",
+                "release_version": "0.75.0",
                 "skippy_abi": "0.1.32",
                 "platform": {
                     "os": "macos",
@@ -548,7 +549,7 @@ class NativeArtifactVerifierTests(unittest.TestCase):
 
     def test_sdk_manifest_omits_runner_local_build_directory(self) -> None:
         packager = (
-            ROOT / "scripts" / "package-native-sdk.sh"
+            ROOT / "mesh" / "scripts" / "package-native-sdk.sh"
         ).read_text(encoding="utf-8")
 
         self.assertNotIn('"llama_build_dir"', packager)
@@ -694,9 +695,10 @@ class NativeArtifactVerifierTests(unittest.TestCase):
         self.write_manifest(
             artifact,
             {
+                "schema_version": 2,
                 "runtime": {
                     "id": artifact.name,
-                    "mesh_version": "0.75.0",
+                    "release_version": "0.75.0",
                     "skippy_abi": "0.1.32",
                     "platform": {
                         "os": "linux",
@@ -775,8 +777,8 @@ class NativeArtifactVerifierTests(unittest.TestCase):
 
         The package ships executables as well as libraries:
         `package-native-runtime.sh` builds the GPU benchmark and
-        `skippy-model-package`, and the host runs the benchmark from
-        `crates/mesh-llm-system/src/benchmark.rs`. Enumerating only
+        `skippy-package-builder`, and the host runs the benchmark from
+        `mesh/crates/mesh-llm-system/src/benchmark.rs`. Enumerating only
         `runtime.libraries` let a tool needing a newer glibc than the floor
         pass here and then fail on a supported host.
         """

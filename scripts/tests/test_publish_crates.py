@@ -42,8 +42,8 @@ PUBLISH_CHAIN_CRATES = _publish_chain_crates()
 # Path dependencies the fixture models by default. These mirror a few real
 # workspace edges so the derived skip logic has something to resolve.
 DEFAULT_WORKSPACE_DEPS = {
-    "model-artifact": ["model-ref"],
-    "model-hf": ["model-artifact", "model-ref"],
+    "skippy-model-artifact": ["skippy-model-ref"],
+    "skippy-model-hf": ["skippy-model-artifact", "skippy-model-ref"],
     "mesh-llm-api-server": ["mesh-llm-api-client", "mesh-llm-node"],
 }
 
@@ -90,7 +90,7 @@ class PublishCratesScriptTests(unittest.TestCase):
         with PublishCratesFixture() as fixture:
             fixture.write_curl_statuses({})
             fixture.write_fake_cargo(
-                fail_crates={"model-artifact": 1},
+                fail_crates={"skippy-model-artifact": 1},
                 failure_output=CRATES_IO_429,
             )
             fixture.write_fake_sleep()
@@ -106,13 +106,13 @@ class PublishCratesScriptTests(unittest.TestCase):
 
             self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
             cargo_log = fixture.read_log("cargo.log")
-            self.assertEqual(cargo_log.count("-p model-artifact"), 2)
-            self.assertIn("-p model-hf", cargo_log)
+            self.assertEqual(cargo_log.count("-p skippy-model-artifact"), 2)
+            self.assertIn("-p skippy-model-hf", cargo_log)
             self.assertIn("-p mesh-llm-client", cargo_log)
             self.assertIn("-p mesh-llm-api-server", cargo_log)
             self.assertRegex(fixture.read_log("sleep.log"), r"^[1-9][0-9]*$")
             self.assertIn(
-                "crates.io rate limit hit for model-artifact@0.68.0",
+                "crates.io rate limit hit for skippy-model-artifact@0.68.0",
                 result.stderr,
             )
 
@@ -120,7 +120,7 @@ class PublishCratesScriptTests(unittest.TestCase):
         with PublishCratesFixture() as fixture:
             fixture.write_curl_statuses({})
             fixture.write_fake_cargo(
-                fail_crates={"model-artifact": 5},
+                fail_crates={"skippy-model-artifact": 5},
                 failure_output=CRATES_IO_429,
             )
             fixture.write_fake_sleep()
@@ -136,10 +136,10 @@ class PublishCratesScriptTests(unittest.TestCase):
 
             self.assertNotEqual(result.returncode, 0)
             cargo_log = fixture.read_log("cargo.log")
-            self.assertEqual(cargo_log.count("-p model-artifact"), 2)
-            self.assertNotIn("-p model-hf", cargo_log)
+            self.assertEqual(cargo_log.count("-p skippy-model-artifact"), 2)
+            self.assertNotIn("-p skippy-model-hf", cargo_log)
             self.assertIn(
-                "retry limit exceeded for model-artifact@0.68.0 after 2 attempts",
+                "retry limit exceeded for skippy-model-artifact@0.68.0 after 2 attempts",
                 result.stderr,
             )
 
@@ -175,7 +175,7 @@ class PublishCratesScriptTests(unittest.TestCase):
 
     def test_dry_run_skips_crates_with_unpublished_registry_deps_without_sleeping(self) -> None:
         with PublishCratesFixture() as fixture:
-            fixture.write_curl_statuses({"model-ref": 404})
+            fixture.write_curl_statuses({"skippy-model-ref": 404})
             fixture.write_fake_cargo()
             fixture.write_fake_sleep()
             fixture.write_fake_date()
@@ -184,11 +184,11 @@ class PublishCratesScriptTests(unittest.TestCase):
 
             self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
             self.assertIn(
-                "dry-run cannot verify model-artifact until model-ref@0.68.0 exists in crates.io",
+                "dry-run cannot verify skippy-model-artifact until skippy-model-ref@0.68.0 exists in crates.io",
                 result.stdout,
             )
             self.assertIn(
-                "publish --locked -p model-ref --dry-run --allow-dirty",
+                "publish --locked -p skippy-model-ref --dry-run --allow-dirty",
                 fixture.read_log("cargo.log"),
             )
             self.assertEqual(fixture.read_log("sleep.log"), "")
@@ -208,9 +208,9 @@ class PublishCratesScriptTests(unittest.TestCase):
 
     def test_real_publish_uses_cargo_to_detect_already_uploaded_versions(self) -> None:
         with PublishCratesFixture() as fixture:
-            fixture.write_curl_statuses({"model-ref": 500})
+            fixture.write_curl_statuses({"skippy-model-ref": 500})
             fixture.write_fake_cargo(
-                fail_crates={"model-ref": 1},
+                fail_crates={"skippy-model-ref": 1},
                 failure_output="error: crate version is already uploaded\n",
             )
             fixture.write_fake_sleep()
@@ -225,15 +225,15 @@ class PublishCratesScriptTests(unittest.TestCase):
 
             self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
             self.assertIn(
-                "model-ref@0.68.0 already published according to cargo; continuing",
+                "skippy-model-ref@0.68.0 already published according to cargo; continuing",
                 result.stdout,
             )
-            self.assertIn("-p model-ref", fixture.read_log("cargo.log"))
+            self.assertIn("-p skippy-model-ref", fixture.read_log("cargo.log"))
             self.assertEqual(fixture.read_log("curl.log"), "")
 
     def test_real_publish_does_not_probe_registry_before_cargo_publish(self) -> None:
         with PublishCratesFixture() as fixture:
-            fixture.write_curl_statuses({"model-ref": 500})
+            fixture.write_curl_statuses({"skippy-model-ref": 500})
             fixture.write_fake_cargo()
             fixture.write_fake_sleep()
             fixture.write_fake_date()
@@ -246,12 +246,12 @@ class PublishCratesScriptTests(unittest.TestCase):
             )
 
             self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
-            self.assertIn("-p model-ref", fixture.read_log("cargo.log"))
+            self.assertIn("-p skippy-model-ref", fixture.read_log("cargo.log"))
             self.assertEqual(fixture.read_log("curl.log"), "")
 
     def test_resume_skips_confirmed_versions_and_publishes_missing_versions(self) -> None:
         with PublishCratesFixture() as fixture:
-            fixture.write_curl_statuses({"model-ref": 200})
+            fixture.write_curl_statuses({"skippy-model-ref": 200})
             fixture.write_fake_cargo()
             fixture.write_fake_sleep()
             fixture.write_fake_date()
@@ -265,10 +265,10 @@ class PublishCratesScriptTests(unittest.TestCase):
             )
 
             self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
-            self.assertNotIn("-p model-ref", fixture.read_log("cargo.log"))
+            self.assertNotIn("-p skippy-model-ref", fixture.read_log("cargo.log"))
             self.assertIn("-p skippy-tokenizer", fixture.read_log("cargo.log"))
             self.assertIn(
-                "model-ref@0.68.0 already published; skipping",
+                "skippy-model-ref@0.68.0 already published; skipping",
                 result.stdout,
             )
             self.assertIn(
@@ -279,7 +279,7 @@ class PublishCratesScriptTests(unittest.TestCase):
 
     def test_resume_falls_back_to_cargo_when_registry_status_is_unknown(self) -> None:
         with PublishCratesFixture() as fixture:
-            fixture.write_curl_statuses({"model-ref": 500})
+            fixture.write_curl_statuses({"skippy-model-ref": 500})
             fixture.write_fake_cargo()
             fixture.write_fake_sleep()
             fixture.write_fake_date()
@@ -293,7 +293,7 @@ class PublishCratesScriptTests(unittest.TestCase):
             )
 
             self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
-            self.assertIn("-p model-ref", fixture.read_log("cargo.log"))
+            self.assertIn("-p skippy-model-ref", fixture.read_log("cargo.log"))
 
     def test_resume_rejects_dry_run(self) -> None:
         with PublishCratesFixture() as fixture:
@@ -310,7 +310,7 @@ class PublishCratesScriptTests(unittest.TestCase):
         with PublishCratesFixture() as fixture:
             fixture.write_curl_statuses({})
             fixture.write_fake_cargo(
-                fail_crates={"model-ref": 1},
+                fail_crates={"skippy-model-ref": 1},
                 failure_output="fatal: registry token secret-token leaked in diagnostic\n",
             )
             fixture.write_fake_sleep()
@@ -517,7 +517,7 @@ fi
         path.chmod(path.stat().st_mode | stat.S_IXUSR)
 
 
-CRATES_IO_429 = """error: failed to publish model-artifact v0.68.0
+CRATES_IO_429 = """error: failed to publish skippy-model-artifact v0.68.0
 status 429 Too Many Requests:
 "You have published too many new crates in a short period of time.
 Please try again after Fri, 22 May 2026 09:58:23 GMT

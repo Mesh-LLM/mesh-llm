@@ -72,28 +72,28 @@ class LoggingModuleBoundariesTest(unittest.TestCase):
     def test_production_logging_responsibilities_have_named_owners(self) -> None:
         test_extractions = (
             (
-                "crates/mesh-llm-host-runtime/src/logging/webhook_delivery.rs",
-                "crates/mesh-llm-host-runtime/src/logging/webhook_delivery/tests.rs",
+                "mesh/crates/mesh-llm-host-runtime/src/logging/webhook_delivery.rs",
+                "mesh/crates/mesh-llm-host-runtime/src/logging/webhook_delivery/tests.rs",
             ),
             (
-                "crates/mesh-llm-host-runtime/src/logging/cleanup.rs",
-                "crates/mesh-llm-host-runtime/src/logging/cleanup/tests.rs",
+                "mesh/crates/mesh-llm-host-runtime/src/logging/cleanup.rs",
+                "mesh/crates/mesh-llm-host-runtime/src/logging/cleanup/tests.rs",
             ),
             (
-                "crates/mesh-llm-host-runtime/src/logging/raw_mesh_lifecycle.rs",
-                "crates/mesh-llm-host-runtime/src/logging/raw_mesh_lifecycle/tests.rs",
+                "mesh/crates/mesh-llm-host-runtime/src/logging/raw_mesh_lifecycle.rs",
+                "mesh/crates/mesh-llm-host-runtime/src/logging/raw_mesh_lifecycle/tests.rs",
             ),
             (
-                "crates/mesh-llm-host-runtime/src/runtime/operational_logging.rs",
-                "crates/mesh-llm-host-runtime/src/runtime/operational_logging/tests.rs",
+                "mesh/crates/mesh-llm-host-runtime/src/runtime/operational_logging.rs",
+                "mesh/crates/mesh-llm-host-runtime/src/runtime/operational_logging/tests.rs",
             ),
             (
-                "crates/mesh-llm-host-runtime/src/api/routes/logs/mod.rs",
-                "crates/mesh-llm-host-runtime/src/api/routes/logs/tests.rs",
+                "mesh/crates/mesh-llm-host-runtime/src/api/routes/logs/mod.rs",
+                "mesh/crates/mesh-llm-host-runtime/src/api/routes/logs/tests.rs",
             ),
             (
-                "crates/mesh-llm-host-runtime/src/api/routes/logs/events/session.rs",
-                "crates/mesh-llm-host-runtime/src/api/routes/logs/events/session/tests.rs",
+                "mesh/crates/mesh-llm-host-runtime/src/api/routes/logs/events/session.rs",
+                "mesh/crates/mesh-llm-host-runtime/src/api/routes/logs/events/session/tests.rs",
             ),
         )
         for parent, child in test_extractions:
@@ -106,33 +106,33 @@ class LoggingModuleBoundariesTest(unittest.TestCase):
                 )
 
         self.assert_owner_module(
-            "crates/mesh-llm-host-runtime/src/logging/runtime_state.rs",
+            "mesh/crates/mesh-llm-host-runtime/src/logging/runtime_state.rs",
             "query_facade",
-            "crates/mesh-llm-host-runtime/src/logging/runtime_state/query_facade.rs",
+            "mesh/crates/mesh-llm-host-runtime/src/logging/runtime_state/query_facade.rs",
             forbidden_parent_text=("struct LoggingQueryFacade",),
         )
         self.assert_owner_module(
-            "crates/mesh-llm-host-runtime/src/logging/runtime_state.rs",
+            "mesh/crates/mesh-llm-host-runtime/src/logging/runtime_state.rs",
             "workers",
-            "crates/mesh-llm-host-runtime/src/logging/runtime_state/workers.rs",
+            "mesh/crates/mesh-llm-host-runtime/src/logging/runtime_state/workers.rs",
             forbidden_parent_text=("fn start_persistence_worker",),
         )
         self.assert_owner_module(
-            "crates/mesh-llm-host-runtime/src/logging/runtime_state.rs",
+            "mesh/crates/mesh-llm-host-runtime/src/logging/runtime_state.rs",
             "tests",
-            "crates/mesh-llm-host-runtime/src/logging/runtime_state/tests.rs",
+            "mesh/crates/mesh-llm-host-runtime/src/logging/runtime_state/tests.rs",
             forbidden_parent_text=("mod tests {",),
         )
         self.assert_owner_module(
-            "crates/mesh-llm-log-store/src/maintenance.rs",
+            "mesh/crates/mesh-llm-log-store/src/maintenance.rs",
             "execution",
-            "crates/mesh-llm-log-store/src/maintenance/execution.rs",
+            "mesh/crates/mesh-llm-log-store/src/maintenance/execution.rs",
             forbidden_parent_text=("impl ArtifactFileStore",),
         )
         self.assert_semantic_owner(
-            "crates/mesh-llm-host-runtime/src/logging/service/operational_audit.rs",
+            "mesh/crates/mesh-llm-host-runtime/src/logging/service/operational_audit.rs",
             "context",
-            "crates/mesh-llm-host-runtime/src/logging/service/operational_audit/context.rs",
+            "mesh/crates/mesh-llm-host-runtime/src/logging/service/operational_audit/context.rs",
             (
                 "OPERATIONAL_AUDIT_CONTEXT_VERSION",
                 "MAX_CONTEXT_VALUE_CHARS",
@@ -147,14 +147,14 @@ class LoggingModuleBoundariesTest(unittest.TestCase):
         )
 
         for parent in (
-            "crates/mesh-llm-host-runtime/src/logging/webhook_delivery.rs",
-            "crates/mesh-llm-host-runtime/src/logging/cleanup.rs",
-            "crates/mesh-llm-host-runtime/src/logging/raw_mesh_lifecycle.rs",
-            "crates/mesh-llm-host-runtime/src/runtime/operational_logging.rs",
-            "crates/mesh-llm-host-runtime/src/api/routes/logs/mod.rs",
-            "crates/mesh-llm-host-runtime/src/api/routes/logs/events/session.rs",
-            "crates/mesh-llm-host-runtime/src/logging/runtime_state.rs",
-            "crates/mesh-llm-log-store/src/maintenance.rs",
+            "mesh/crates/mesh-llm-host-runtime/src/logging/webhook_delivery.rs",
+            "mesh/crates/mesh-llm-host-runtime/src/logging/cleanup.rs",
+            "mesh/crates/mesh-llm-host-runtime/src/logging/raw_mesh_lifecycle.rs",
+            "mesh/crates/mesh-llm-host-runtime/src/runtime/operational_logging.rs",
+            "mesh/crates/mesh-llm-host-runtime/src/api/routes/logs/mod.rs",
+            "mesh/crates/mesh-llm-host-runtime/src/api/routes/logs/events/session.rs",
+            "mesh/crates/mesh-llm-host-runtime/src/logging/runtime_state.rs",
+            "mesh/crates/mesh-llm-log-store/src/maintenance.rs",
         ):
             with self.subTest(coherent_parent=parent):
                 self.assertLessEqual(
@@ -164,8 +164,8 @@ class LoggingModuleBoundariesTest(unittest.TestCase):
                 )
 
     def test_log_store_repository_responsibilities_have_named_owners(self) -> None:
-        repositories = "crates/mesh-llm-log-store/src/repositories.rs"
-        audit = "crates/mesh-llm-log-store/src/repositories/audit.rs"
+        repositories = "mesh/crates/mesh-llm-log-store/src/repositories.rs"
+        audit = "mesh/crates/mesh-llm-log-store/src/repositories/audit.rs"
         self.assert_owner_module(
             repositories,
             "audit",
@@ -183,7 +183,7 @@ class LoggingModuleBoundariesTest(unittest.TestCase):
         self.assert_owner_module(
             audit,
             "detail",
-            "crates/mesh-llm-log-store/src/repositories/audit/detail.rs",
+            "mesh/crates/mesh-llm-log-store/src/repositories/audit/detail.rs",
             forbidden_parent_text=(
                 "struct StoredAuditDetail",
                 "fn bounded_audit_value",
@@ -195,16 +195,16 @@ class LoggingModuleBoundariesTest(unittest.TestCase):
         self.assert_owner_module(
             repositories,
             "caller_metadata",
-            "crates/mesh-llm-log-store/src/repositories/caller_metadata.rs",
+            "mesh/crates/mesh-llm-log-store/src/repositories/caller_metadata.rs",
             forbidden_parent_text=("pub fn upsert_summary_metadata(",),
         )
 
     def test_mesh_connection_responsibilities_have_named_owners(self) -> None:
-        connections = "crates/mesh-llm-host-runtime/src/mesh/connections.rs"
+        connections = "mesh/crates/mesh-llm-host-runtime/src/mesh/connections.rs"
         self.assert_semantic_owner(
             connections,
             "inbound",
-            "crates/mesh-llm-host-runtime/src/mesh/connections/inbound.rs",
+            "mesh/crates/mesh-llm-host-runtime/src/mesh/connections/inbound.rs",
             (
                 "pub(crate) async fn handle_incoming(",
                 "pub(crate) async fn handle_control_incoming(",
@@ -215,7 +215,7 @@ class LoggingModuleBoundariesTest(unittest.TestCase):
         self.assert_semantic_owner(
             connections,
             "tunnel",
-            "crates/mesh-llm-host-runtime/src/mesh/connections/tunnel.rs",
+            "mesh/crates/mesh-llm-host-runtime/src/mesh/connections/tunnel.rs",
             (
                 "pub(crate) async fn dispatch_mesh_stream(",
                 "pub(crate) async fn forward_tunnel_stream(",
@@ -226,32 +226,32 @@ class LoggingModuleBoundariesTest(unittest.TestCase):
             ),
         )
         self.assert_semantic_owner(
-            "crates/mesh-llm-host-runtime/src/mesh/connections/inbound.rs",
+            "mesh/crates/mesh-llm-host-runtime/src/mesh/connections/inbound.rs",
             "stage",
-            "crates/mesh-llm-host-runtime/src/mesh/connections/inbound/stage.rs",
+            "mesh/crates/mesh-llm-host-runtime/src/mesh/connections/inbound/stage.rs",
             ("pub(crate) async fn handle_stage_alpn(",),
         )
 
     def test_oversized_characterization_suites_are_split_by_concern(self) -> None:
         suites = (
             (
-                "crates/mesh-llm-host-runtime/src/api/tests/logs_api_routes.rs",
+                "mesh/crates/mesh-llm-host-runtime/src/api/tests/logs_api_routes.rs",
                 (
                     ("access_and_mutation", "access_and_mutation.rs"),
                     ("read_and_export", "read_and_export.rs"),
                     ("event_stream", "event_stream.rs"),
                 ),
-                "crates/mesh-llm-host-runtime/src/api/tests/logs_api_routes",
+                "mesh/crates/mesh-llm-host-runtime/src/api/tests/logs_api_routes",
             ),
             (
-                "crates/mesh-llm-log-store/src/maintenance/tests.rs",
+                "mesh/crates/mesh-llm-log-store/src/maintenance/tests.rs",
                 (("cleanup", "cleanup.rs"), ("delete_one", "delete_one.rs")),
-                "crates/mesh-llm-log-store/src/maintenance/tests",
+                "mesh/crates/mesh-llm-log-store/src/maintenance/tests",
             ),
             (
-                "crates/mesh-llm-host-runtime/src/network/openai/transport_tests.rs",
+                "mesh/crates/mesh-llm-host-runtime/src/network/openai/transport_tests.rs",
                 (("lifecycle", "lifecycle.rs"), ("routing", "routing.rs")),
-                "crates/mesh-llm-host-runtime/src/network/openai/transport_tests",
+                "mesh/crates/mesh-llm-host-runtime/src/network/openai/transport_tests",
             ),
         )
         for parent, modules, child_directory in suites:
@@ -274,7 +274,7 @@ class LoggingModuleBoundariesTest(unittest.TestCase):
     def test_audit_and_gossip_suites_have_semantic_children(self) -> None:
         suites = (
             (
-                "crates/mesh-llm-log-store/src/api_acceptance_tests/summary_audit.rs",
+                "mesh/crates/mesh-llm-log-store/src/api_acceptance_tests/summary_audit.rs",
                 (
                     ("mod basic;", "summary_audit/basic.rs"),
                     ("mod sanitization;", "summary_audit/sanitization.rs"),
@@ -282,7 +282,7 @@ class LoggingModuleBoundariesTest(unittest.TestCase):
                 ),
             ),
             (
-                "crates/mesh-llm-host-runtime/src/mesh/tests/gossip.rs",
+                "mesh/crates/mesh-llm-host-runtime/src/mesh/tests/gossip.rs",
                 (
                     (
                         'include!("gossip/merge_and_refresh.rs");',

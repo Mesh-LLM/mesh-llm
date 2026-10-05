@@ -5,7 +5,7 @@ import unittest
 
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
-SCRIPT = REPO_ROOT / "sdk/swift/scripts/build-xcframework.sh"
+SCRIPT = REPO_ROOT / "mesh/sdk/swift/scripts/build-xcframework.sh"
 
 
 class SwiftXcframeworkEnvTests(unittest.TestCase):

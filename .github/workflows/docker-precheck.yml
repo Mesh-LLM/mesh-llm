@@ -64,47 +64,12 @@ jobs:
           fi
           grep -qE '^\s*COPY\s+Cargo\.toml\s+Cargo\.lock\s+\./?$' "$file"
           for path in \
-            crates/mesh-llm/ \
-            crates/mesh-llm-cli/ \
-            crates/mesh-llm-commands/ \
-            crates/mesh-llm-events/ \
-            crates/mesh-llm-hardware-profile/ \
-            crates/mesh-llm-identity/ \
-            crates/mesh-llm-native-runtime/ \
-            crates/mesh-llm-release-footer/ \
-            crates/mesh-llm-protocol/ \
-            crates/mesh-llm-routing/ \
-            crates/mesh-llm-runtime-install/ \
-            crates/mesh-llm-system/ \
-            crates/mesh-llm-guardrails/ \
-            crates/mesh-llm-types/ \
-            crates/mesh-llm-config/ \
-            crates/mesh-llm-console-server/ \
-            crates/mesh-llm-embedded-runtime/ \
-            crates/mesh-llm-tui/ \
-            crates/mesh-llm-plugin/ \
-            crates/mesh-llm-skills/ \
-            crates/mesh-llm-plugin-manager/ \
-            crates/mesh-client/ \
-            crates/mesh-llm-api-client/ \
-            crates/mesh-llm-api-server/ \
-            crates/mesh-llm-console-server/ \
-            crates/mesh-llm-node/ \
-            crates/mesh-llm-ffi/ \
-            crates/mesh-llm-test-harness/ \
-            crates/model-ref/ \
-            crates/model-artifact/ \
-            crates/model-hf/ \
-            crates/skippy-protocol/ \
-            crates/skippy-tokenizer/ \
-            crates/skippy-topology/ \
-            crates/skippy-ffi/ \
-            crates/skippy-runtime/ \
-            crates/skippy-server/ \
-            crates/skippy-model-package/ \
-            crates/skippy-correctness/ \
-            crates/skippy-bench/ \
-            tools/xtask/
+            mesh/crates/ \
+            skippy/crates/ \
+            tools/xtask/ \
+            scripts/ \
+            mesh/scripts/ \
+            skippy/scripts/
           do
             grep -q "COPY ${path} ${path}" "$file"
           done
@@ -116,7 +81,7 @@ jobs:
           file="${{ inputs.dockerfile_path }}"
           grep -q "scripts/prepare-llama.sh pinned" "$file"
           grep -q "scripts/build-llama.sh" "$file"
-          grep -q "third_party/llama.cpp/patches" "$file"
+          grep -q "skippy/llama_cpp/patches" "$file"
 
       - name: Runtime apt libraries are present
         if: ${{ inputs.validate_shared_core }}
@@ -139,10 +104,10 @@ jobs:
         if: ${{ inputs.validate_entrypoint_modes }}
         run: |
           set -euo pipefail
-          grep -qE '^[[:space:]]*console([|)])' docker/entrypoint.sh
-          grep -qE '^[[:space:]]*worker\)' docker/entrypoint.sh
-          grep -qE '^[[:space:]]*\*\)' docker/entrypoint.sh
-          if grep -qE '^[[:space:]]*api\)' docker/entrypoint.sh; then
+          grep -qE '^[[:space:]]*console([|)])' mesh/deploy/docker/entrypoint.sh
+          grep -qE '^[[:space:]]*worker\)' mesh/deploy/docker/entrypoint.sh
+          grep -qE '^[[:space:]]*\*\)' mesh/deploy/docker/entrypoint.sh
+          if grep -qE '^[[:space:]]*api\)' mesh/deploy/docker/entrypoint.sh; then
             echo "api mode should not be a separate entrypoint mode" >&2
             exit 1
           fi

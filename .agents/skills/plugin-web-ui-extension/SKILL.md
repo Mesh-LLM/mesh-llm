@@ -14,13 +14,13 @@ source-owned docs, or maintainer triage.
 
 Start by reading the source-owned contract docs and the maintained exemplar:
 
-- `docs/plugins/README.md`
-- `docs/plugins/exemplars/web-ui/README.md`
-- `docs/plugins/exemplars/web-ui/manifest.rs`
-- `docs/plugins/exemplars/web-ui/plugin.package.json`
-- `docs/plugins/exemplars/web-ui/config.toml`
-- `docs/plugins/exemplars/web-ui/bundle/register-mesh-plugin-ui.ts`
-- `docs/plugins/exemplars/web-ui/lifecycle-states.json`
+- `mesh/docs/plugins/README.md`
+- `mesh/docs/plugins/exemplars/web-ui/README.md`
+- `mesh/docs/plugins/exemplars/web-ui/manifest.rs`
+- `mesh/docs/plugins/exemplars/web-ui/plugin.package.json`
+- `mesh/docs/plugins/exemplars/web-ui/config.toml`
+- `mesh/docs/plugins/exemplars/web-ui/bundle/register-mesh-plugin-ui.ts`
+- `mesh/docs/plugins/exemplars/web-ui/lifecycle-states.json`
 
 Then confirm the current contract still matches the implementation:
 

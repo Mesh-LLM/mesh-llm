@@ -134,7 +134,8 @@ class SourceLayoutTests(unittest.TestCase):
         script += '\nprintf "%s %s %s %s" "$BACKEND_CHANGED" "$WINDOWS_CPU_BUILD_REQUIRED" "$WINDOWS_GPU_BUILD_REQUIRED" "$SDK_SMOKE_REQUIRED"\n'
         cases = {
             'third_party/llama.cpp/upstream.txt': 'true true true false',
-            'skippy/third_party/llama.cpp/patches/test.patch': 'true true true false',
+            'skippy/llama_cpp/upstream.txt': 'true true true false',
+            'skippy/llama_cpp/patches/test.patch': 'true true true false',
             'sdk/node/index.js': 'false false false true',
             'mesh/sdk/node/index.js': 'false false false true',
             'skippy/scripts/build-llama.sh': 'true false false true',
@@ -181,7 +182,7 @@ class SourceLayoutTests(unittest.TestCase):
             text=True,
         )
         self.assertEqual(fallback.returncode, 0, fallback.stderr)
-        self.assertEqual(fallback.stdout.strip(), 'website')
+        self.assertEqual(fallback.stdout.strip(), 'mesh/website')
 
 
     def test_relocated_runtime_owner_gates_sdk_smoke_and_inference_artifacts(self):
@@ -210,14 +211,12 @@ class SourceLayoutTests(unittest.TestCase):
                 result = subprocess.run(['bash', '-euc', script], env=env, capture_output=True, text=True)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(result.stdout.strip(), expected)
-
-
     def test_nightly_pin_resolution_rejects_missing_and_ambiguous_layouts(self):
         steps = workflow('llama-upstream-canary.yml')['jobs']['resolve']['steps']
         body = next(s['run'] for s in steps if s.get('id') == 'resolve')
         script = body[body.index('pins=()'):body.index('upstream="$UPSTREAM"')]
         script += '\nprintf "%s" "$old"\n'
-        for paths in ([], ['third_party/llama.cpp/upstream.txt'], ['skippy/third_party/llama.cpp/upstream.txt'], ['third_party/llama.cpp/upstream.txt', 'skippy/third_party/llama.cpp/upstream.txt']):
+        for paths in ([], ['third_party/llama.cpp/upstream.txt'], ['skippy/llama_cpp/upstream.txt'], ['third_party/llama.cpp/upstream.txt', 'skippy/llama_cpp/upstream.txt']):
             with self.subTest(paths=paths), tempfile.TemporaryDirectory() as tmp:
                 for relative in paths:
                     path = Path(tmp) / relative

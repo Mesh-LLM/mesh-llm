@@ -1,0 +1,63 @@
+//! skippy-serving library interface.
+//!
+//! Exposes the stage serving loop for in-process embedding by mesh-llm
+//! or other host runtimes.
+
+pub mod binary_transport;
+pub mod compute_meter;
+pub mod embedded;
+pub mod frontend;
+pub mod kv_integration;
+pub mod kv_proto;
+mod listener;
+pub mod readiness;
+pub mod runtime_state;
+
+#[cfg(test)]
+pub(crate) mod test_activation;
+
+#[cfg(test)]
+mod legacy_scheduler_absence_tests {
+    use std::path::Path;
+
+    #[test]
+    fn removed_serving_scheduler_modules_cannot_reappear() {
+        let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        for removed in [
+            "decode_batch_policy.rs",
+            "frontend/decode_batcher.rs",
+            "binary_transport/decode_batcher.rs",
+        ] {
+            assert!(
+                !source.join(removed).exists(),
+                "legacy serving scheduler module reappeared: {removed}"
+            );
+        }
+    }
+}
+pub mod serving_hooks;
+pub mod settings;
+pub mod telemetry;
+pub mod tokenizer;
+
+// Re-export key types for consumers
+pub use embedded::{
+    EmbeddedRuntimeOptions, EmbeddedRuntimeStatus, EmbeddedServerHandle, EmbeddedServerStatus,
+    EmbeddedState, SkippyRuntimeHandle, start_binary_stage, start_embedded_openai,
+    start_openai_backend, start_openai_backend_with_lifecycle_observer,
+    start_openai_backend_with_tokenizer,
+    start_openai_backend_with_tokenizer_and_lifecycle_observer,
+};
+pub use frontend::{
+    CONTEXT_BUDGET_MAX_TOKENS, DECODE_BATCH_HEADROOM_TOKENS, DEFAULT_EMBEDDED_MAX_TOKENS,
+    DEFAULT_GENERATION_ADMISSION_TIMEOUT_SECS, EmbeddedOpenAiArgs, EmbeddedOpenAiBackend,
+    EmbeddedOpenAiRequestDefaults, EmbeddedReasoningBudget, EmbeddedReasoningEnabled,
+    EmbeddedReasoningFormat, LayaSystemOneBackend, LinearProposal, LinearProposalDiscardReason,
+    LinearProposalDisposition, LinearProposalIngress, LinearProposalQuery, LinearProposalReceipt,
+    LinearProposalSourceOutcome, LinearProposalSourceResponse, LinearProposalSourceTelemetry,
+    NativeMtpProposalConfig, NgramExtensionConfig, NgramProposalConfig, NgramProposerKind,
+    OpaqueProposalDecisionId, OpenAiGuardrailsConfig, OpenAiGuardrailsStatus,
+    OpenAiGuardrailsTarget, SpeculativeDecodeConfig, VerifyWindowConfig, embedded_openai_backend,
+};
+pub use skippy_protocol::StageConfig;
+pub use tokenizer::{MAX_TOKENIZE_TOKENS, TokenizerCapability, TokenizerCapabilityError};

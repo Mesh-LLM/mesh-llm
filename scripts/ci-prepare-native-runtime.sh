@@ -92,7 +92,7 @@ select_compatible_runtime() {
     TEMP_ROOT="$(mktemp -d "${RUNNER_TEMP:-/tmp}/mesh-sdk-runtime-compat.XXXXXX")"
     compatibility_json="$TEMP_ROOT/available.json"
     expected_skippy_abi="$(
-        python3 - "$REPO_ROOT/crates/skippy-ffi/src/lib.rs" <<'PY'
+        python3 - "$REPO_ROOT/skippy/crates/skippy-ffi/src/lib.rs" <<'PY'
 import re
 import sys
 

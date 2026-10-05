@@ -138,7 +138,7 @@ if [[ "$remote_head" != "$CERTIFIED_SHA" ]]; then
   exit 1
 fi
 
-title="fix(llama): certify upstream $(tr -d '[:space:]' < third_party/llama.cpp/upstream.txt | cut -c1-10)"
+title="fix(llama): certify upstream $(tr -d '[:space:]' < skippy/llama_cpp/upstream.txt | cut -c1-10)"
 if ! pr_url="$(gh_repair gh pr create --repo "$REPOSITORY" --base main --head "$BRANCH" \
     --title "$title" --body-file "$PR_BODY" 2> >(redact_token >&2))"; then
   pr_url="$(find_exact_ready_pr || true)"
