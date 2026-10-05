@@ -27,8 +27,8 @@ telemetry attribute names.
 ## Required Updates
 
 - Update `TELEMETRY_ATTRIBUTE_ALLOWLIST` in
-  `crates/mesh-llm/src/runtime/survey.rs` for every new exported attribute.
-- Update `docs/plugins/telemetry.md` with the metric or attribute inventory and
+  `mesh/crates/mesh-llm/src/runtime/survey.rs` for every new exported attribute.
+- Update `mesh/docs/plugins/telemetry.md` with the metric or attribute inventory and
   privacy handling.
 - Add focused tests for private-path, raw-ID, endpoint-URL, prompt, and
   completion exclusion when the change touches those surfaces.

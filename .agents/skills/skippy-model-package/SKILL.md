@@ -30,23 +30,27 @@ stage machinery as Hugging Face packages.
 Check current package names before running commands:
 
 ```bash
-cargo metadata --no-deps --format-version 1 | jq -r '.packages[].name' | sort
+just with-lld cargo metadata --no-deps --format-version 1 | jq -r '.packages[].name' | sort
 ```
 
 Useful current checks in this repo:
 
 ```bash
-cargo test -p skippy-runtime --lib
-cargo test -p skippy-topology --lib
-cargo test -p mesh-llm-host-runtime --lib inference::skippy
+just with-lld cargo test -p skippy-runtime --lib
+just with-lld cargo test -p skippy-topology --lib
+just with-lld cargo test -p mesh-llm-host-runtime --lib inference::skippy
 ```
 
 For a published layer package, prefer package-local diagnostics before a live
-split smoke:
+split smoke. On macOS or Linux, `just release-runtime-build cpu` builds the
+`skippy-package-builder` Cargo binary and packages it with its native libraries.
+Replace `<runtime-id>` with the generated directory under `dist/native-runtimes`:
 
 ```bash
-cargo test -p skippy-model-package --bin skippy-model-package
-skippy-model-package preflight <package-dir> --stages 2
+just with-lld cargo test -p skippy-package-builder --bin skippy-package-builder
+just release-runtime-build cpu
+package_builder="dist/native-runtimes/<runtime-id>/tools/skippy-package-builder"
+"$package_builder" preflight <package-dir> --stages 2
 ```
 
 ## Cache Policy

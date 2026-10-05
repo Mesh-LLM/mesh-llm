@@ -1,0 +1,1209 @@
+use super::*;
+use crate::network::openai::routing_rank::{RankedCandidates, rank_targets_by_context};
+use crate::network::reservations::RoutingReservation;
+
+pub(crate) struct RouteModelRequestContext<'a> {
+    pub(crate) exchange_id: Option<&'a str>,
+    pub(crate) required_tokens: Option<u32>,
+    pub(crate) affinity: &'a AffinityRouter,
+    pub(crate) route_observer: OpenAiRouteObserver<'a>,
+    /// Hex-encoded `EndpointId` to echo back as `x-mesh-served-by` once the
+    /// response is delivered. Set only when the caller (an `x-mesh-target`
+    /// forced single-candidate dispatch) already knows the exact peer that
+    /// will serve the request; `None` everywhere else, including ordinary
+    /// multi-candidate remote-mesh routing.
+    pub(crate) served_by_header: Option<&'a str>,
+    /// Where to record a peer's `X-Capsule-Id` response header. Set only by
+    /// the `RemoteMesh` dispatch path (`ingress::route_missing_local_model`),
+    /// which reads it back out after this call to attach it to its own
+    /// terminal plugin event; `None` for every other caller.
+    pub(crate) peer_capsule_id: Option<&'a PeerCapsuleIdSink>,
+    /// Where to record which peer delivered a served attempt. Set by the
+    /// ingress paths that publish a terminal exchange event, which read it
+    /// back after this call to name the serving node even when the client
+    /// sent no `x-mesh-target`; `None` for every other caller.
+    pub(crate) served_by_node_id: Option<&'a ServedByNodeIdSink>,
+}
+
+/// A delivered 2xx outcome: the routing-side test for "this attempt was
+/// served", which gates the `ServedByNodeIdSink` write. Mirrors
+/// `ingress::outcome_was_served`, kept here where the per-attempt target is in
+/// scope.
+fn route_outcome_was_served(outcome: &RouteDispatchOutcome) -> bool {
+    matches!(
+        outcome,
+        RouteDispatchOutcome::Responded(200..=299)
+            | RouteDispatchOutcome::RespondedWithDigests {
+                status_code: 200..=299,
+                ..
+            }
+            | RouteDispatchOutcome::RespondedWithUsage {
+                status_code: 200..=299,
+                ..
+            }
+    )
+}
+
+/// Name the peer that delivered this attempt, so the terminal event can carry
+/// `served_by_node_id` even when the client sent no `x-mesh-target`. Only for
+/// a served outcome from a `Remote` target: never a value for a local serve or
+/// a failure.
+fn record_served_by_node_id(
+    sink: Option<&ServedByNodeIdSink>,
+    outcome: &RouteDispatchOutcome,
+    target: &election::InferenceTarget,
+) {
+    if let (Some(sink), true) = (sink, route_outcome_was_served(outcome))
+        && let election::InferenceTarget::Remote(endpoint_id) = target
+    {
+        sink.set(hex::encode(endpoint_id.as_bytes()));
+    }
+}
+
+pub async fn route_model_request(
+    node: mesh::Node,
+    tcp_stream: ClientStream,
+    targets: &election::ModelTargets,
+    model: &str,
+    request: &BufferedHttpRequest,
+    context: RouteModelRequestContext<'_>,
+) -> RouteDispatchOutcome {
+    let args = RouteModelRequestArgs {
+        node,
+        tcp_stream,
+        targets,
+        model,
+        request,
+        exchange_id: context.exchange_id,
+        required_tokens: context.required_tokens,
+        affinity: context.affinity,
+        route_observer: context.route_observer,
+        served_by_header: context.served_by_header,
+        peer_capsule_id: context.peer_capsule_id,
+        served_by_node_id: context.served_by_node_id,
+    };
+    route_model_request_inner(args).await
+}
+
+struct RouteModelRequestArgs<'a> {
+    node: mesh::Node,
+    tcp_stream: ClientStream,
+    targets: &'a election::ModelTargets,
+    model: &'a str,
+    request: &'a BufferedHttpRequest,
+    exchange_id: Option<&'a str>,
+    required_tokens: Option<u32>,
+    affinity: &'a AffinityRouter,
+    route_observer: OpenAiRouteObserver<'a>,
+    served_by_header: Option<&'a str>,
+    peer_capsule_id: Option<&'a PeerCapsuleIdSink>,
+    served_by_node_id: Option<&'a ServedByNodeIdSink>,
+}
+
+struct RouteModelState {
+    route_started: Instant,
+    attempts: usize,
+    refreshed: bool,
+}
+
+enum RouteModelDisposition {
+    Continue,
+    Return(RouteDispatchOutcome),
+}
+
+fn no_context_eligible_target_reason(model: &str, required_tokens: Option<u32>) -> String {
+    match required_tokens {
+        Some(tokens) => format!(
+            "no context-compatible target for model '{model}' can fit approximately {tokens} tokens"
+        ),
+        None => format!("no eligible target for model '{model}'"),
+    }
+}
+
+async fn cache_target_for_request(
+    node: &mesh::Node,
+    affinity: &AffinityRouter,
+    model: &str,
+    prefix_hash: Option<u64>,
+    candidates: &[election::InferenceTarget],
+) -> Option<election::InferenceTarget> {
+    let prefix_hash = prefix_hash?;
+    if let Some(target) = affinity.lookup_cache_lease(model, prefix_hash, candidates) {
+        return Some(target);
+    }
+
+    let lease_epoch = affinity.cache_lease_epoch();
+    let selected = node
+        .select_cache_target(model, prefix_hash, candidates)
+        .await;
+    if let Some(target) = selected.as_ref() {
+        affinity.remember_cache_lease_if_epoch(model, prefix_hash, target, lease_epoch);
+    }
+    selected
+}
+
+async fn route_model_request_inner(args: RouteModelRequestArgs<'_>) -> RouteDispatchOutcome {
+    let RouteModelRequestArgs {
+        node,
+        tcp_stream,
+        targets,
+        model,
+        request,
+        required_tokens,
+        exchange_id,
+        affinity,
+        route_observer,
+        served_by_header,
+        peer_capsule_id,
+        served_by_node_id,
+    } = args;
+    let route_started = Instant::now();
+    let mut tcp_stream = tcp_stream;
+    let candidates = super::super::workload_routing::ingress_candidates(
+        &node,
+        model,
+        &request.client_path,
+        targets,
+    )
+    .await;
+    let mut ranked = rank_targets_by_context(&node, model, required_tokens, &candidates).await;
+    let payment_ranking = crate::network::openai::payment_routing::rank(
+        &node,
+        model,
+        (request.body_len_bytes as u64).div_ceil(4),
+        u64::from(request.completion_tokens.unwrap_or(256)),
+        &mut ranked,
+        request.body_json.as_ref(),
+    )
+    .await;
+
+    let payment_ranked = match payment_ranking {
+        Ok(ranked) => ranked,
+        Err(reason) => {
+            return response_outcome(
+                402,
+                send_error_observed(tcp_stream, 402, reason, route_observer).await,
+            );
+        }
+    };
+    let ordered_candidates = affinity.route_eligible_candidates(model, &ranked.ordered);
+    if ordered_candidates.is_empty() {
+        record_route_model_unavailable(&node, model, 0);
+        let reason = no_context_eligible_target_reason(model, required_tokens);
+        return response_outcome(
+            503,
+            send_503_observed(tcp_stream, &reason, route_observer).await,
+        );
+    }
+    route_observer.route_selected(Some(model));
+
+    let affinity_body = super::super::workload_routing::affinity_body(request);
+    let prefix_hash = crate::network::affinity::cache_prefix_hash(affinity_body);
+    let cache_candidates = super::super::payment_routing::cache_candidates(
+        payment_ranked,
+        &ranked,
+        &ordered_candidates,
+    );
+
+    let cache_target =
+        cache_target_for_request(&node, affinity, model, prefix_hash, cache_candidates).await;
+    let cache_target =
+        super::super::payment_routing::prefer_price_tier(payment_ranked, &ranked, cache_target);
+    let Some(ReservedModelRoute {
+        selection,
+        ordered,
+        mut reservation,
+    }) = select_and_reserve_model_route(
+        targets,
+        &ranked,
+        model,
+        affinity_body,
+        affinity,
+        cache_target,
+    )
+    else {
+        return send_route_model_none_target(&node, tcp_stream, model, route_observer).await;
+    };
+    let total_targets = ordered.len();
+    let mut state = RouteModelState {
+        route_started,
+        attempts: 0,
+        refreshed: false,
+    };
+    // `request.raw` was already stabilized at ingress (finalize_forwarded_request
+    // resolves the capsule client nonce once, before target selection), so every
+    // attempt here — including a timeout retry to a different target — forwards
+    // the identical nonce instead of letting each target's frontend mint its own.
+    let forwarding_raw = request.raw.as_slice();
+    for (idx, target) in ordered.into_iter().enumerate() {
+        // A prior attempt in this same loop may have probed a response,
+        // recorded ITS peer's `X-Capsule-Id` into the sink, and then still
+        // been classified retryable (e.g. context overflow) -- drain that
+        // stale value before moving on, or a retry that never sees (or
+        // never sets) the header would silently inherit the PREVIOUS
+        // peer's capsule_id and misattribute it to this attempt.
+        if let Some(sink) = peer_capsule_id {
+            sink.take();
+        }
+        reservation.transfer_to(&target);
+        state.attempts += 1;
+        let attempt_started = Instant::now();
+        let retry_policy = ResponseRetryPolicy::next_target_available(idx + 1 < total_targets);
+        let attempt_result = route_attempt_for_target(
+            &node,
+            &mut tcp_stream,
+            &target,
+            forwarding_raw,
+            retry_policy,
+            RouteAttemptLoggingContext {
+                exchange_id,
+                request_id: request.request_id,
+                retry_policy,
+                response_adapter: request.response_adapter,
+                route_observer,
+                served_by: served_by_header,
+                peer_capsule_id,
+            },
+        )
+        .await;
+        let queue_wait = attempt_started.duration_since(route_started);
+        let attempt_time = attempt_started.elapsed();
+        record_route_model_attempt(
+            &node,
+            model,
+            &target,
+            queue_wait,
+            attempt_time,
+            &attempt_result,
+        );
+        affinity.record_target_outcome(
+            Some(model),
+            &target,
+            target_health_outcome_for_attempt(&attempt_result),
+        );
+        tracing::info!(
+            model = model,
+            target = ?target,
+            attempt = state.attempts,
+            total_targets = total_targets,
+            outcome = route_attempt_result_label(&attempt_result),
+            attempt_ms = attempt_started.elapsed().as_millis(),
+            total_route_ms = route_started.elapsed().as_millis(),
+            "openai route_model_request attempt"
+        );
+        match handle_route_model_attempt_result(
+            &node,
+            model,
+            &target,
+            &selection,
+            affinity,
+            attempt_result,
+            &mut state,
+        ) {
+            RouteModelDisposition::Continue => continue,
+            RouteModelDisposition::Return(result) => {
+                record_served_by_node_id(served_by_node_id, &result, &target);
+                return finalize_route_model_result(
+                    &node,
+                    model,
+                    request,
+                    route_started,
+                    state.attempts,
+                    result,
+                    &target,
+                );
+            }
+        }
+    }
+
+    finish_exhausted_route_model_request(
+        &node,
+        tcp_stream,
+        model,
+        total_targets,
+        &state,
+        route_observer,
+    )
+    .await
+}
+
+struct ReservedModelRoute {
+    selection: TargetSelection,
+    ordered: Vec<election::InferenceTarget>,
+    reservation: RoutingReservation,
+}
+
+fn select_and_reserve_model_route(
+    targets: &election::ModelTargets,
+    ranked: &RankedCandidates<election::InferenceTarget>,
+    model: &str,
+    parsed_body: Option<&serde_json::Value>,
+    affinity: &AffinityRouter,
+    cache_target: Option<election::InferenceTarget>,
+) -> Option<ReservedModelRoute> {
+    // Cache lookup can await while another request cools a target. Refresh
+    // health once here, then use exactly this snapshot for selection,
+    // reservation spreading, and retries. A second filter inside selection
+    // would let the reservation undo a health decision it never saw.
+    let mut ordered = affinity.route_eligible_candidates(model, &ranked.ordered);
+    let mut selection = crate::network::affinity::select_model_target_from_eligible_candidates(
+        targets,
+        &ordered,
+        parsed_body,
+        affinity,
+        cache_target,
+    );
+    if matches!(selection.target, election::InferenceTarget::None) {
+        return None;
+    }
+    // Health policy can remove or reorder candidates, so the original
+    // equivalent run can shrink or disappear. Never let its old length admit
+    // a lower-ranked fallback.
+    let spread_limit = ordered
+        .iter()
+        .take_while(|candidate| ranked.ordered[..ranked.equivalent_prefix].contains(candidate))
+        .count();
+    let (target, reservation) = affinity.reserve_route(
+        model,
+        &ordered,
+        spread_limit,
+        &selection.target,
+        selection.affinity_applied,
+    )?;
+    selection.target = target;
+    move_target_first(&mut ordered, &selection.target);
+    Some(ReservedModelRoute {
+        selection,
+        ordered,
+        reservation,
+    })
+}
+
+fn record_route_model_unavailable(node: &mesh::Node, model: &str, attempts: usize) {
+    node.record_routed_request(
+        Some(model),
+        attempts,
+        crate::network::metrics::RequestOutcome::Unavailable,
+    );
+}
+
+async fn send_route_model_none_target(
+    node: &mesh::Node,
+    tcp_stream: ClientStream,
+    model: &str,
+    route_observer: OpenAiRouteObserver<'_>,
+) -> RouteDispatchOutcome {
+    record_route_model_unavailable(node, model, 0);
+    let result = send_503_observed(
+        tcp_stream,
+        &format!("target for model '{model}' resolved to None (election in progress or host down)"),
+        route_observer,
+    )
+    .await;
+    response_outcome(503, result)
+}
+
+async fn finish_exhausted_route_model_request(
+    node: &mesh::Node,
+    tcp_stream: ClientStream,
+    model: &str,
+    total_targets: usize,
+    state: &RouteModelState,
+    route_observer: OpenAiRouteObserver<'_>,
+) -> RouteDispatchOutcome {
+    let result = send_503_observed(
+        tcp_stream,
+        &format!("all {} target(s) for model '{model}' failed", total_targets),
+        route_observer,
+    )
+    .await;
+    record_route_model_unavailable(node, model, state.attempts);
+    tracing::warn!(
+        model = model,
+        attempts = state.attempts,
+        route_ms = state.route_started.elapsed().as_millis(),
+        "openai route_model_request exhausted targets"
+    );
+    response_outcome(503, result)
+}
+
+fn handle_route_model_attempt_result(
+    node: &mesh::Node,
+    model: &str,
+    target: &election::InferenceTarget,
+    selection: &TargetSelection,
+    affinity: &AffinityRouter,
+    attempt_result: RouteAttemptResult,
+    state: &mut RouteModelState,
+) -> RouteModelDisposition {
+    match attempt_result {
+        RouteAttemptResult::Delivered {
+            status_code,
+            usage,
+            cache_cost,
+            output_digests,
+        } => handle_delivered_route_model_attempt(
+            DeliveredRouteModelContext {
+                node,
+                model,
+                target,
+                selection,
+                affinity,
+                state,
+            },
+            status_code,
+            usage,
+            cache_cost,
+            output_digests,
+        ),
+        RouteAttemptResult::RetryableContextOverflow => {
+            handle_retryable_route_model_context(target)
+        }
+        RouteAttemptResult::RetryableResponseQuality(failure) => {
+            handle_retryable_route_model_response_quality(target, failure)
+        }
+        RouteAttemptResult::RetryableTimeout => {
+            handle_retryable_route_model_timeout(node, target, state)
+        }
+        RouteAttemptResult::RetryableUnavailable => {
+            handle_retryable_route_model_unavailable(node, target, state)
+        }
+        RouteAttemptResult::CommittedStreamFailure { status_code } => {
+            RouteModelDisposition::Return(RouteDispatchOutcome::FailedWithStatus {
+                status_code,
+                reason: "upstream_stream_incomplete",
+            })
+        }
+        RouteAttemptResult::ClientDisconnected => {
+            tracing::info!(
+                model = model,
+                attempts = state.attempts,
+                route_ms = state.route_started.elapsed().as_millis(),
+                "openai route_model_request downstream disconnected"
+            );
+            RouteModelDisposition::Return(RouteDispatchOutcome::Dropped("client_disconnected"))
+        }
+    }
+}
+
+struct DeliveredRouteModelContext<'a> {
+    node: &'a mesh::Node,
+    model: &'a str,
+    target: &'a election::InferenceTarget,
+    selection: &'a TargetSelection,
+    affinity: &'a AffinityRouter,
+    state: &'a RouteModelState,
+}
+
+fn handle_delivered_route_model_attempt(
+    context: DeliveredRouteModelContext<'_>,
+    status_code: u16,
+    usage: Option<TokenUsage>,
+    cache_cost: Option<CacheCostObservation>,
+    output_digests: crate::plugin::openai_exchange::ExchangeOutputDigests,
+) -> RouteModelDisposition {
+    update_local_cache_evidence(&context, status_code, usage.as_ref(), cache_cost);
+    context.node.record_routed_request(
+        Some(context.model),
+        context.state.attempts,
+        request_outcome_for_status(status_code, request_service_for_target(context.target)),
+    );
+    tracing::info!(
+        model = context.model,
+        attempts = context.state.attempts,
+        status_code = status_code,
+        route_ms = context.state.route_started.elapsed().as_millis(),
+        "openai route_model_request delivered"
+    );
+    RouteModelDisposition::Return(delivered_outcome(status_code, usage, output_digests))
+}
+
+fn update_local_cache_evidence(
+    context: &DeliveredRouteModelContext<'_>,
+    status_code: u16,
+    usage: Option<&TokenUsage>,
+    cache_cost: Option<CacheCostObservation>,
+) {
+    if !(200..400).contains(&status_code) {
+        return;
+    }
+    let is_local = matches!(context.target, election::InferenceTarget::Local(_));
+    if is_local {
+        context.node.observe_local_prefill_cost(
+            context.model,
+            cache_cost.and_then(|cost| cost.prefill_micros_per_token),
+        );
+    }
+
+    let Some(prefix_hash) = context.selection.prefix_hash else {
+        return;
+    };
+    let Some(cached_tokens) = usage.and_then(|usage| usage.cached_prompt_tokens) else {
+        return;
+    };
+    if cached_tokens > 0 {
+        if is_local {
+            let suffix = usage
+                .and_then(|usage| usage.prompt_tokens)
+                .unwrap_or(cached_tokens)
+                .saturating_sub(cached_tokens);
+            context.node.record_local_cache_hit_with_cost(
+                context.model,
+                prefix_hash,
+                u32::try_from(cached_tokens).unwrap_or(u32::MAX),
+                u32::try_from(suffix).unwrap_or(u32::MAX),
+                crate::network::affinity::LocalCacheCost {
+                    queue_delay_micros: cache_cost.map_or(0, |cost| cost.queue_delay_micros),
+                    restore_micros: cache_cost.map_or(0, |cost| cost.restore_micros),
+                    // The model-level observation was recorded above so each
+                    // response contributes exactly once to its EWMA.
+                    prefill_micros_per_token: None,
+                },
+            );
+        }
+        return;
+    }
+
+    let inventory_invalidated = is_local
+        && context
+            .node
+            .invalidate_local_cache_evidence(context.model, prefix_hash);
+    let lease_invalidated = context
+        .affinity
+        .forget_cache_lease(context.model, prefix_hash);
+    if inventory_invalidated || lease_invalidated {
+        tracing::debug!(
+            model = context.model,
+            prefix_hash,
+            inventory_invalidated,
+            lease_invalidated,
+            "invalidated cache affinity after authoritative miss"
+        );
+    }
+}
+
+fn handle_retryable_route_model_context(
+    target: &election::InferenceTarget,
+) -> RouteModelDisposition {
+    tracing::warn!(
+        "Target {target:?} rejected request with context overflow-style 400, trying next"
+    );
+    RouteModelDisposition::Continue
+}
+
+fn handle_retryable_route_model_response_quality(
+    target: &election::InferenceTarget,
+    failure: ResponseQualityFailure,
+) -> RouteModelDisposition {
+    tracing::warn!(
+        reason = failure.label(),
+        "Target {target:?} returned low-quality success response, trying next"
+    );
+    RouteModelDisposition::Continue
+}
+
+fn handle_retryable_route_model_timeout(
+    node: &mesh::Node,
+    target: &election::InferenceTarget,
+    state: &mut RouteModelState,
+) -> RouteModelDisposition {
+    spawn_mesh_refresh_once(node, &mut state.refreshed);
+    tracing::warn!("Target {target:?} timed out, trying next");
+    RouteModelDisposition::Continue
+}
+
+fn handle_retryable_route_model_unavailable(
+    node: &mesh::Node,
+    target: &election::InferenceTarget,
+    state: &mut RouteModelState,
+) -> RouteModelDisposition {
+    spawn_mesh_refresh_once(node, &mut state.refreshed);
+    tracing::warn!("Target {target:?} unavailable, trying next");
+    RouteModelDisposition::Continue
+}
+
+pub(crate) fn finalize_route_model_result(
+    node: &mesh::Node,
+    model: &str,
+    _request: &BufferedHttpRequest,
+    _route_started: Instant,
+    _attempts: usize,
+    result: RouteDispatchOutcome,
+    target: &election::InferenceTarget,
+) -> RouteDispatchOutcome {
+    if let RouteDispatchOutcome::RespondedWithUsage {
+        status_code, usage, ..
+    } = result
+    {
+        node.record_prompt_shape(
+            Some(model),
+            usage.prompt_tokens,
+            usage.completion_tokens,
+            request_outcome_for_status(status_code, request_service_for_target(target)),
+        );
+    }
+    result
+}
+
+fn record_route_model_attempt(
+    node: &mesh::Node,
+    model: &str,
+    target: &election::InferenceTarget,
+    queue_wait: Duration,
+    attempt_time: Duration,
+    attempt_result: &RouteAttemptResult,
+) {
+    if matches!(attempt_result, RouteAttemptResult::ClientDisconnected) {
+        return;
+    }
+    node.record_inference_attempt(
+        Some(model),
+        target,
+        queue_wait,
+        attempt_time,
+        attempt_outcome_for_result(attempt_result),
+        completion_tokens_for_result(attempt_result),
+    );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::network::target_health::TargetHealthOutcome;
+    use iroh::SecretKey;
+
+    #[test]
+    fn reservation_does_not_reintroduce_target_cooled_during_cache_lookup() {
+        let affinity = AffinityRouter::with_config(true, true);
+        let first = election::InferenceTarget::Local(9001);
+        let second = election::InferenceTarget::Local(9002);
+        let ranked = RankedCandidates {
+            ordered: vec![first.clone(), second.clone()],
+            equivalent_prefix: 2,
+        };
+        let (_, pressure) = affinity
+            .reserve_route("qwen", &ranked.ordered, 2, &second, true)
+            .unwrap();
+        // This is the snapshot passed to the asynchronous cache lookup.
+        let before_lookup = affinity.route_eligible_candidates("qwen", &ranked.ordered);
+        assert_eq!(before_lookup, ranked.ordered);
+        // Another request times out while that lookup is suspended.
+        affinity.record_target_outcome(Some("qwen"), &first, TargetHealthOutcome::Timeout);
+        for cache_target in [None, Some(first.clone())] {
+            let route = select_and_reserve_model_route(
+                &election::ModelTargets::default(),
+                &ranked,
+                "qwen",
+                None,
+                &affinity,
+                cache_target,
+            )
+            .unwrap();
+            assert_eq!(route.selection.target, second);
+            assert_eq!(route.ordered, vec![second.clone()]);
+            assert!(!route.selection.affinity_applied);
+            assert_eq!(affinity.stats_snapshot().reservation_active, 2);
+        }
+        drop(pressure);
+        assert_eq!(affinity.stats_snapshot().reservation_active, 0);
+    }
+
+    #[test]
+    fn refreshed_spread_window_does_not_admit_lower_ranked_fallback() {
+        let first = election::InferenceTarget::Local(9001);
+        let second = election::InferenceTarget::Local(9002);
+        let fallback = election::InferenceTarget::Local(9003);
+        // Cover both a shortened equivalent run and one removed entirely.
+        for equivalent_prefix in [2, 1] {
+            let affinity = AffinityRouter::new();
+            let ranked = RankedCandidates {
+                ordered: vec![first.clone(), second.clone(), fallback.clone()],
+                equivalent_prefix,
+            };
+            let (_, _pressure) = affinity
+                .reserve_route("qwen", &ranked.ordered, 3, &second, true)
+                .unwrap();
+            affinity.record_target_outcome(Some("qwen"), &first, TargetHealthOutcome::Timeout);
+            let route = select_and_reserve_model_route(
+                &election::ModelTargets::default(),
+                &ranked,
+                "qwen",
+                None,
+                &affinity,
+                None,
+            )
+            .unwrap();
+            assert_eq!(route.selection.target, second);
+            assert_eq!(route.ordered, vec![second.clone(), fallback.clone()]);
+        }
+    }
+
+    #[test]
+    fn refreshed_route_preserves_healthy_cache_and_session_affinity_under_pressure() {
+        let affinity = AffinityRouter::with_config(true, true);
+        let ranked = RankedCandidates {
+            ordered: vec![
+                election::InferenceTarget::Local(9001),
+                election::InferenceTarget::Local(9002),
+            ],
+            equivalent_prefix: 2,
+        };
+        let body = serde_json::json!({"user": "same-session"});
+        for (parsed_body, cache_target) in
+            [(None, Some(ranked.ordered[0].clone())), (Some(&body), None)]
+        {
+            let select = || {
+                select_and_reserve_model_route(
+                    &election::ModelTargets::default(),
+                    &ranked,
+                    "qwen",
+                    parsed_body,
+                    &affinity,
+                    cache_target.clone(),
+                )
+                .unwrap()
+            };
+            let held = select();
+            let next = select();
+            assert!(held.selection.affinity_applied);
+            assert!(next.selection.affinity_applied);
+            assert_eq!(next.selection.target, held.selection.target);
+        }
+        assert_eq!(affinity.stats_snapshot().reservation_active, 0);
+    }
+
+    #[test]
+    fn refreshed_route_keeps_all_cooling_availability_fallback() {
+        let affinity = AffinityRouter::new();
+        let ranked = RankedCandidates {
+            ordered: vec![
+                election::InferenceTarget::Local(9001),
+                election::InferenceTarget::Local(9002),
+            ],
+            equivalent_prefix: 2,
+        };
+        for target in &ranked.ordered {
+            affinity.record_target_outcome(Some("qwen"), target, TargetHealthOutcome::Timeout);
+        }
+        let route = select_and_reserve_model_route(
+            &election::ModelTargets::default(),
+            &ranked,
+            "qwen",
+            None,
+            &affinity,
+            None,
+        )
+        .unwrap();
+        assert!(ranked.ordered.contains(&route.selection.target));
+        assert_eq!(route.ordered.len(), 2);
+    }
+
+    #[test]
+    fn empty_refreshed_route_does_not_reserve() {
+        let affinity = AffinityRouter::new();
+        assert!(
+            select_and_reserve_model_route(
+                &election::ModelTargets::default(),
+                &RankedCandidates {
+                    ordered: vec![],
+                    equivalent_prefix: 0,
+                },
+                "qwen",
+                None,
+                &affinity,
+                Some(election::InferenceTarget::Local(9001)),
+            )
+            .is_none()
+        );
+        assert_eq!(affinity.stats_snapshot().reservation_active, 0);
+    }
+
+    async fn cache_context(
+        prefix_hash: u64,
+        target: election::InferenceTarget,
+    ) -> (
+        mesh::Node,
+        AffinityRouter,
+        election::InferenceTarget,
+        TargetSelection,
+        RouteModelState,
+    ) {
+        let node = mesh::Node::new_for_tests(mesh::NodeRole::Host { http_port: 9337 })
+            .await
+            .expect("test node");
+        let affinity = AffinityRouter::with_config(true, true);
+        let selection = TargetSelection {
+            target: target.clone(),
+            prefix_hash: Some(prefix_hash),
+            cache_target: Some(target.clone()),
+            affinity_applied: true,
+        };
+        let state = RouteModelState {
+            route_started: Instant::now(),
+            attempts: 1,
+            refreshed: false,
+        };
+        (node, affinity, target, selection, state)
+    }
+
+    #[tokio::test]
+    async fn authoritative_local_miss_invalidates_inventory_and_lease() {
+        let prefix_hash = 0xfeed_beef;
+        let (node, affinity, target, selection, state) =
+            cache_context(prefix_hash, election::InferenceTarget::Local(9337)).await;
+        node.record_local_cache_hit("qwen", prefix_hash, 512, 24, 0);
+        affinity.remember_cache_lease("qwen", prefix_hash, &target);
+        let context = DeliveredRouteModelContext {
+            node: &node,
+            model: "qwen",
+            target: &target,
+            selection: &selection,
+            affinity: &affinity,
+            state: &state,
+        };
+
+        update_local_cache_evidence(
+            &context,
+            200,
+            Some(&TokenUsage {
+                prompt_tokens: Some(536),
+                cached_prompt_tokens: Some(0),
+                ..TokenUsage::default()
+            }),
+            None,
+        );
+
+        assert_eq!(
+            node.select_cache_target("qwen", prefix_hash, std::slice::from_ref(&target))
+                .await,
+            None
+        );
+        assert_eq!(
+            affinity.lookup_cache_lease("qwen", prefix_hash, std::slice::from_ref(&target)),
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn authoritative_remote_miss_invalidates_lease_but_not_local_inventory() {
+        let prefix_hash = 0xfeed_beef;
+        let mut bytes = [0u8; 32];
+        bytes[0] = 1;
+        let remote = election::InferenceTarget::Remote(SecretKey::from_bytes(&bytes).public());
+        let (node, affinity, target, selection, state) = cache_context(prefix_hash, remote).await;
+        let local = election::InferenceTarget::Local(9337);
+        node.record_local_cache_hit("qwen", prefix_hash, 512, 24, 0);
+        affinity.remember_cache_lease("qwen", prefix_hash, &target);
+        let context = DeliveredRouteModelContext {
+            node: &node,
+            model: "qwen",
+            target: &target,
+            selection: &selection,
+            affinity: &affinity,
+            state: &state,
+        };
+
+        update_local_cache_evidence(
+            &context,
+            200,
+            Some(&TokenUsage {
+                prompt_tokens: Some(536),
+                cached_prompt_tokens: Some(0),
+                ..TokenUsage::default()
+            }),
+            None,
+        );
+
+        assert_eq!(
+            affinity.lookup_cache_lease("qwen", prefix_hash, std::slice::from_ref(&target)),
+            None
+        );
+        assert_eq!(
+            node.select_cache_target("qwen", prefix_hash, std::slice::from_ref(&local))
+                .await,
+            Some(local)
+        );
+    }
+
+    #[tokio::test]
+    async fn missing_cache_usage_does_not_refute_positive_evidence() {
+        let prefix_hash = 0xfeed_beef;
+        let (node, affinity, target, selection, state) =
+            cache_context(prefix_hash, election::InferenceTarget::Local(9337)).await;
+        node.record_local_cache_hit("qwen", prefix_hash, 512, 24, 0);
+        affinity.remember_cache_lease("qwen", prefix_hash, &target);
+        let context = DeliveredRouteModelContext {
+            node: &node,
+            model: "qwen",
+            target: &target,
+            selection: &selection,
+            affinity: &affinity,
+            state: &state,
+        };
+
+        update_local_cache_evidence(
+            &context,
+            200,
+            Some(&TokenUsage {
+                prompt_tokens: Some(536),
+                cached_prompt_tokens: None,
+                ..TokenUsage::default()
+            }),
+            None,
+        );
+
+        assert_eq!(
+            node.select_cache_target("qwen", prefix_hash, std::slice::from_ref(&target))
+                .await,
+            Some(target.clone())
+        );
+        assert_eq!(
+            affinity.lookup_cache_lease("qwen", prefix_hash, std::slice::from_ref(&target)),
+            Some(target)
+        );
+    }
+
+    #[tokio::test]
+    async fn timing_without_cache_usage_still_calibrates_local_prefill_cost() {
+        let prefix_hash = 0xfeed_beef;
+        let calibration_probe = prefix_hash + 1;
+        let (node, affinity, target, selection, state) =
+            cache_context(prefix_hash, election::InferenceTarget::Local(9337)).await;
+        let context = DeliveredRouteModelContext {
+            node: &node,
+            model: "qwen",
+            target: &target,
+            selection: &selection,
+            affinity: &affinity,
+            state: &state,
+        };
+
+        update_local_cache_evidence(
+            &context,
+            200,
+            Some(&TokenUsage {
+                prompt_tokens: Some(536),
+                cached_prompt_tokens: None,
+                ..TokenUsage::default()
+            }),
+            Some(CacheCostObservation {
+                queue_delay_micros: 4_000,
+                restore_micros: 8_000,
+                prefill_micros_per_token: Some(250),
+            }),
+        );
+
+        node.record_local_cache_hit("qwen", calibration_probe, 512, 24, 0);
+        let entry = node
+            .cache_affinity_inventory
+            .lock()
+            .unwrap()
+            .probe_local("qwen", calibration_probe)
+            .expect("calibrated local evidence");
+        assert_eq!(entry.prefill_micros_per_token, 250);
+    }
+
+    #[tokio::test]
+    async fn local_hit_records_measured_queue_restore_and_prefill_costs() {
+        let prefix_hash = 0xfeed_beef;
+        let (node, affinity, target, selection, state) =
+            cache_context(prefix_hash, election::InferenceTarget::Local(9337)).await;
+        let context = DeliveredRouteModelContext {
+            node: &node,
+            model: "qwen",
+            target: &target,
+            selection: &selection,
+            affinity: &affinity,
+            state: &state,
+        };
+
+        update_local_cache_evidence(
+            &context,
+            200,
+            Some(&TokenUsage {
+                prompt_tokens: Some(536),
+                cached_prompt_tokens: Some(512),
+                ..TokenUsage::default()
+            }),
+            Some(CacheCostObservation {
+                queue_delay_micros: 4_000,
+                restore_micros: 8_000,
+                prefill_micros_per_token: Some(250),
+            }),
+        );
+
+        let entry = node
+            .cache_affinity_inventory
+            .lock()
+            .unwrap()
+            .probe_local("qwen", prefix_hash)
+            .expect("measured local evidence");
+        assert_eq!(entry.queue_delay_micros, 4_000);
+        assert_eq!(entry.restore_micros, 8_000);
+        assert_eq!(entry.prefill_micros_per_token, 250);
+    }
+
+    /// Regression for the sink-drain gap `ndizazzo` flagged on PR #1944: the
+    /// FIRST target's response carries an `X-Capsule-Id` header but is itself
+    /// retryable (a context-overflow 400), so the loop moves on to a SECOND
+    /// target that delivers successfully without ever asserting a
+    /// capsule_id. Without draining the sink before the next attempt, the
+    /// terminal event would misattribute the first (failed) peer's asserted
+    /// capsule_id to the second (actually serving) peer.
+    #[tokio::test]
+    async fn a_retry_to_a_different_target_does_not_inherit_the_previous_peers_stale_capsule_id() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        async fn drain_request_headers(stream: &mut tokio::net::TcpStream) {
+            let mut buffer = [0u8; 4096];
+            let mut accumulated = Vec::new();
+            loop {
+                let read = stream.read(&mut buffer).await.expect("backend request");
+                if read == 0 {
+                    break;
+                }
+                accumulated.extend_from_slice(&buffer[..read]);
+                if accumulated.windows(4).any(|window| window == b"\r\n\r\n") {
+                    break;
+                }
+            }
+        }
+
+        let model = "qwen";
+        let connect_order = Arc::new(AtomicUsize::new(0));
+
+        let mut backend_ports = Vec::new();
+        let mut backend_tasks = Vec::new();
+        for _ in 0..2 {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            backend_ports.push(listener.local_addr().unwrap().port());
+            let connect_order = Arc::clone(&connect_order);
+            backend_tasks.push(tokio::spawn(async move {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                drain_request_headers(&mut stream).await;
+                // Whichever backend the loop dials FIRST plays the failed,
+                // capsule_id-asserting peer; whichever it dials second plays
+                // the eventual, silent success -- this pins the scenario to
+                // connection order rather than to which port the router
+                // happens to rank first.
+                let response = if connect_order.fetch_add(1, Ordering::SeqCst) == 0 {
+                    let body = r#"{"error":"prompt exceeds the context window limit"}"#;
+                    format!(
+                        "HTTP/1.1 400 Bad Request\r\nX-Capsule-Id: cap-from-the-first-peer\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+                        body.len(),
+                        body
+                    )
+                } else {
+                    let body = r#"{"id":"c1","model":"qwen","choices":[],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}"#;
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+                        body.len(),
+                        body
+                    )
+                };
+                stream.write_all(response.as_bytes()).await.unwrap();
+                stream.shutdown().await.unwrap();
+            }));
+        }
+
+        let downstream = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let downstream_address = downstream.local_addr().unwrap();
+        let client = tokio::spawn(async move {
+            let mut stream = tokio::net::TcpStream::connect(downstream_address)
+                .await
+                .unwrap();
+            let mut response = Vec::new();
+            stream.read_to_end(&mut response).await.unwrap();
+        });
+        let (downstream_stream, _) = downstream.accept().await.unwrap();
+
+        let node = mesh::Node::new_for_tests(mesh::NodeRole::Client)
+            .await
+            .unwrap();
+        let affinity = AffinityRouter::new();
+        let sink = PeerCapsuleIdSink::new();
+        let served_by = ServedByNodeIdSink::new();
+
+        let mut targets = election::ModelTargets::default();
+        targets.targets.insert(
+            model.to_string(),
+            backend_ports
+                .iter()
+                .map(|port| election::InferenceTarget::Local(*port))
+                .collect(),
+        );
+
+        let request_body = r#"{"model":"qwen","messages":[{"role":"user","content":"hi"}]}"#;
+        let raw = format!(
+            "POST /v1/chat/completions HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+            request_body.len(),
+            request_body
+        )
+        .into_bytes();
+        let request = BufferedHttpRequest {
+            raw,
+            method: "POST".to_owned(),
+            path: "/v1/chat/completions".to_owned(),
+            client_path: "/v1/chat/completions".to_owned(),
+            request_id: RequestId::default(),
+            body_json: None,
+            body_json_attempted: false,
+            body_bytes: None,
+            body_len_bytes: request_body.len(),
+            completion_tokens: None,
+            stream: None,
+            model_name: Some(model.to_owned()),
+            request_object_request_ids: Vec::new(),
+            response_adapter: ResponseAdapter::None,
+            correlation_id: None,
+        };
+
+        let outcome = route_model_request(
+            node,
+            downstream_stream.into(),
+            &targets,
+            model,
+            &request,
+            RouteModelRequestContext {
+                exchange_id: None,
+                required_tokens: None,
+                affinity: &affinity,
+                route_observer: OpenAiRouteObserver::default(),
+                served_by_header: None,
+                peer_capsule_id: Some(&sink),
+                served_by_node_id: Some(&served_by),
+            },
+        )
+        .await;
+
+        assert!(
+            matches!(
+                outcome,
+                RouteDispatchOutcome::RespondedWithUsage {
+                    status_code: 200,
+                    ..
+                }
+            ),
+            "expected the surviving target to deliver 200, got {outcome:?}"
+        );
+
+        for task in backend_tasks {
+            task.await.unwrap();
+        }
+        client.await.unwrap();
+
+        assert_eq!(
+            sink.take(),
+            None,
+            "the sink must not carry the FIRST (retried-away-from) peer's \
+             capsule_id onto a later attempt that never asserted one itself"
+        );
+        assert_eq!(
+            served_by.take(),
+            None,
+            "a local target delivered, so no peer is named as the server"
+        );
+    }
+}

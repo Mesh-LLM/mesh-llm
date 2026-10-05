@@ -434,14 +434,14 @@ def _make_batches(crates: list[str], bins: int) -> list[dict[str, Any]]:
         "mesh-llm-embedded-runtime": 8,
         "mesh-llm-client": 6,
         "skippy-runtime": 5,
-        "skippy-server": 5,
-        "model-artifact": 4,
-        "model-hf": 4,
-        "openai-frontend": 4,
+        "skippy-serving": 5,
+        "skippy-cli": 5,
+        "skippy-model-artifact": 4,
+        "skippy-model-hf": 4,
+        "skippy-inference-api": 4,
         "skippy-correctness": 4,
         "mesh-llm-api-server": 3,
         "mesh-llm-system": 3,
-        "skippy-prompt": 3,
     }
     buckets = [{"idx": index, "weight": 0, "crates": []} for index in range(bins)]
     indexed = [
@@ -598,13 +598,13 @@ def _signal_value(
         return "website" in domains
     if name == "website_docs_changed":
         return any(
-            path.startswith("website/src/docs/pages/")
-            or path.startswith("website/src/_includes/")
+            path.startswith(("website/src/docs/pages/", "mesh/website/src/docs/pages/"))
+            or path.startswith(("website/src/_includes/", "mesh/website/src/_includes/"))
             for path in changed_files
         )
     if name == "plugin_exemplars_changed":
         return any(
-            path.startswith("docs/plugins/exemplars/") for path in changed_files
+            path.startswith(("docs/plugins/exemplars/", "mesh/docs/plugins/exemplars/")) for path in changed_files
         )
     if name == "cli_surface_changed":
         return "cli" in domains

@@ -153,7 +153,7 @@ class ModelArtifactRegistryTests(unittest.TestCase):
                     cwd=ROOT, check=True, capture_output=True, text=True,
                 )
 
-    def test_product_smoke_manifest_is_the_pinned_dense_recurrent_pair(self) -> None:
+    def test_product_smoke_manifest_is_the_pinned_dense_recurrent_laya_set(self) -> None:
         manifest = json.loads(
             (MANIFESTS / "product-smoke.json").read_text(
                 encoding="utf-8"
@@ -163,7 +163,11 @@ class ModelArtifactRegistryTests(unittest.TestCase):
 
         self.assertEqual(
             set(artifacts),
-            {"smollm2-q8-inference", "family-granite-hybrid"},
+            {
+                "smollm2-q8-inference",
+                "family-granite-hybrid",
+                "family-laya-multilingual",
+            },
         )
         self.assertEqual(
             artifacts["smollm2-q8-inference"]["model_ref"],
@@ -172,6 +176,10 @@ class ModelArtifactRegistryTests(unittest.TestCase):
         self.assertEqual(
             artifacts["family-granite-hybrid"]["model_ref"],
             "ibm-granite/granite-4.0-h-350m-GGUF:Q4_K_M",
+        )
+        self.assertEqual(
+            artifacts["family-laya-multilingual"]["model_ref"],
+            "meshllm/laya-multilingual-F16-GGUF:F16",
         )
         for artifact in artifacts.values():
             self.assertEqual(len(artifact["files"]), 1)
@@ -220,7 +228,7 @@ class ModelArtifactRegistryTests(unittest.TestCase):
             manifests[suite] = {row["id"]: row for row in data["artifacts"]}
 
         competitive = json.loads(
-            (ROOT / "evals" / "skippy-competitive-benchmark.json").read_text(
+            (ROOT / "skippy" / "evals" / "skippy-competitive-benchmark.json").read_text(
                 encoding="utf-8"
             )
         )
@@ -232,7 +240,7 @@ class ModelArtifactRegistryTests(unittest.TestCase):
             self.assertEqual(model["sha256"], artifact["sha256"])
 
         radix = json.loads(
-            (ROOT / "evals" / "skippy-radix-cache-models.json").read_text(
+            (ROOT / "skippy" / "evals" / "skippy-radix-cache-models.json").read_text(
                 encoding="utf-8"
             )
         )
@@ -246,7 +254,7 @@ class ModelArtifactRegistryTests(unittest.TestCase):
             self.assertEqual(case["source"]["filename"], artifact["file"])
 
         parity = json.loads(
-            (ROOT / "docs" / "skippy" / "llama-parity-candidates.json").read_text(
+            (ROOT / "skippy" / "docs" / "llama-parity-candidates.json").read_text(
                 encoding="utf-8"
             )
         )
@@ -272,9 +280,9 @@ class ModelArtifactRegistryTests(unittest.TestCase):
             ".github/actions/restore-test-model/action.yml",
             ".github/workflows/ci-rust-tests-slice.yml",
             "scripts/ci-hf-download-smoke.sh",
-            "scripts/materialize-competitive-inputs.sh",
-            "scripts/skippy-ci-smoke.sh",
-            "scripts/skippy-openai-smoke.sh",
+            "skippy/scripts/materialize-competitive-inputs.sh",
+            "skippy/scripts/skippy-ci-smoke.sh",
+            "skippy/scripts/skippy-openai-smoke.sh",
         )
         invocation = re.compile(r"resolve-test-model-manifest\.py")
         for relative in consumers:
@@ -285,7 +293,7 @@ class ModelArtifactRegistryTests(unittest.TestCase):
                 with self.subTest(consumer=relative, offset=match.start()):
                     self.assertIn("--cadence", content[match.start() : match.start() + 500])
 
-        parity = (ROOT / "scripts" / "download-skippy-parity-candidates.sh").read_text(
+        parity = (ROOT / "skippy" / "scripts" / "download-skippy-parity-candidates.sh").read_text(
             encoding="utf-8"
         )
         self.assertIn('"manual" not in artifact.get("cadences", [])', parity)
@@ -352,10 +360,10 @@ class ModelArtifactRegistryTests(unittest.TestCase):
         self.assertIn("pass --artifact-id", result.stderr)
 
     def test_smoke_identity_overrides_require_nonempty_values(self) -> None:
-        skippy = (ROOT / "scripts" / "skippy-ci-smoke.sh").read_text(
+        skippy = (ROOT / "skippy" / "scripts" / "skippy-ci-smoke.sh").read_text(
             encoding="utf-8"
         )
-        openai = (ROOT / "scripts" / "skippy-openai-smoke.sh").read_text(
+        openai = (ROOT / "skippy" / "scripts" / "skippy-openai-smoke.sh").read_text(
             encoding="utf-8"
         )
 
@@ -391,7 +399,7 @@ class ModelArtifactRegistryTests(unittest.TestCase):
         smoke = (ROOT / "scripts" / "ci-hf-download-smoke.sh").read_text(
             encoding="utf-8"
         )
-        fixture = (ROOT / "crates" / "model-hf" / "tests" / "hf_download.rs").read_text(
+        fixture = (ROOT / "skippy" / "crates" / "skippy-model-hf" / "tests" / "hf_download.rs").read_text(
             encoding="utf-8"
         )
 

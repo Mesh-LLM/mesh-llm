@@ -290,10 +290,10 @@ jobs:
           allow_native_github_cache: ${{ needs.runner_policy.outputs.allow_native_github_cache }}
       - name: Resolve protected Clippy package names
         id: packages
-        uses: Mesh-LLM/mesh-llm/.github/actions/resolve-cargo-packages@38d63b2f6e27998034fdf0452150c7cc081fe921 # product-layout compatibility helpers
+        uses: Mesh-LLM/mesh-llm/.github/actions/resolve-cargo-packages@5c8fb4d472bc57058c8153761c561daa77dd5b94 # product-layout compatibility helpers
         with:
           # Switch with the protected workspace package rename, not PR source.
-          generation: legacy
+          generation: current
           crates: ${{ toJson(matrix.batch.crates) }}
           batches: ${{ inputs.clippy_matrix }}
       - name: Resolve planned batch crates against the checked-out workspace
@@ -373,7 +373,7 @@ jobs:
           persist-credentials: false
       - name: Resolve product source layout
         id: layout
-        uses: Mesh-LLM/mesh-llm/.github/actions/resolve-source-layout@38d63b2f6e27998034fdf0452150c7cc081fe921 # product-layout compatibility helpers
+        uses: Mesh-LLM/mesh-llm/.github/actions/resolve-source-layout@5c8fb4d472bc57058c8153761c561daa77dd5b94 # product-layout compatibility helpers
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24.20.0

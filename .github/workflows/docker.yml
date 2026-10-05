@@ -19,4 +19,4 @@ jobs:
           persist-credentials: false
       - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
       - name: Validate client Dockerfile
-        run: docker buildx build --check --file docker/Dockerfile.client .
+        run: docker buildx build --check --file mesh/deploy/docker/Dockerfile.client .

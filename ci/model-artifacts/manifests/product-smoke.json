@@ -2,7 +2,7 @@
   "schema_version": 1,
   "manifest_kind": "test-model-artifacts",
   "suite": "product-smoke",
-  "registry_sha256": "f2262f81bac720cc3664e55bf2a385047b964c626b5de1051ea416c86c469b99",
+  "registry_sha256": "32301e8764f89d26308679918565e3bb3c9fcae56ac819083731777ae2249b45",
   "artifacts": [
     {
       "id": "family-granite-hybrid",
@@ -84,6 +84,51 @@
       "sha256": "c4a3dd037301b6ecea31d6da37f5cd793ead920dd5ddfe6d589294628d6ce66a",
       "url": "https://huggingface.co/unsloth/SmolLM2-135M-Instruct-GGUF/resolve/9e6855bc4be717fca1ef21360a1db4b29d5c559a/SmolLM2-135M-Instruct-Q8_0.gguf",
       "notes": "Shared product, scripted-binary, and SDK inference fixture."
+    },
+    {
+      "id": "family-laya-multilingual",
+      "family": "laya",
+      "capability_tags": [
+        "decision",
+        "gguf",
+        "laya",
+        "multilingual",
+        "system-one"
+      ],
+      "suites": [
+        "product-smoke",
+        "skippy-system-one-smoke"
+      ],
+      "cadences": [
+        "pull-request",
+        "main",
+        "release",
+        "llama-bump",
+        "manual-full",
+        "nightly",
+        "manual"
+      ],
+      "repo": "meshllm/laya-multilingual-F16-GGUF",
+      "revision": "bcc99560232b5a5c91cb14d46b9496acbeae2c43",
+      "selector": "F16",
+      "files": [
+        "laya-multilingual-F16.gguf"
+      ],
+      "file_integrity": {
+        "laya-multilingual-F16.gguf": {
+          "size_bytes": 658805088,
+          "blob_id": "03881e45cdc5d0cf5e3a841cafe2ebdb8280e53e113c489e6847f7f45ca9c139"
+        }
+      },
+      "model_ref": "meshllm/laya-multilingual-F16-GGUF:F16",
+      "urls": [
+        "https://huggingface.co/meshllm/laya-multilingual-F16-GGUF/resolve/bcc99560232b5a5c91cb14d46b9496acbeae2c43/laya-multilingual-F16.gguf"
+      ],
+      "file": "laya-multilingual-F16.gguf",
+      "size_bytes": 658805088,
+      "sha256": "03881e45cdc5d0cf5e3a841cafe2ebdb8280e53e113c489e6847f7f45ca9c139",
+      "url": "https://huggingface.co/meshllm/laya-multilingual-F16-GGUF/resolve/bcc99560232b5a5c91cb14d46b9496acbeae2c43/laya-multilingual-F16.gguf",
+      "notes": "Apache-2.0 Laya Multilingual converted by the pinned MeshLLM llama.cpp converter. Product lanes run the upstream golden read battery on Linux CPU/CUDA/ROCm/Vulkan, macOS Metal, and Windows CPU; the llama canary runs the same fixture through llama-laya-cli."
     }
   ],
   "default_artifact_id": "smollm2-q8-inference"

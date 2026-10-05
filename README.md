@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/mesh-llm-wordmark.png" alt="Mesh LLM" width="420">
+  <img src="mesh/docs/mesh-llm-wordmark.png" alt="Mesh LLM" width="420">
 </p>
 
 ![Mesh LLM web console](mesh.png)
@@ -8,6 +8,26 @@ Mesh LLM pools GPUs and memory across machines and exposes the result as one
 OpenAI-compatible API at `http://localhost:9337/v1`. Start one node, add more
 nodes later, and let the mesh decide whether a model runs locally, routes to a
 peer, or uses Skippy stage splits for models that are too large for one box.
+
+## Mesh and standalone Skippy
+
+[Skippy](skippy/README.md) owns model management, native inference, split
+execution and OpenAI serving. [Mesh](mesh/README.md) adds peer discovery,
+transport, routing, plugins and the console around the same Skippy serving
+implementation.
+
+The source lives in those two product trees. They share one root Cargo workspace
+and lockfile. Product crates, authored docs, scripts and evaluations live with
+their owner; Mesh also owns the website and SDKs. Root `docs/` is generated
+website output.
+
+Bare `just` (or `just build`) builds the standalone Skippy product (patched
+llama.cpp runtime and `skippy` CLI) first, then the MeshLLM host and console.
+Use `just skippy` to build Skippy alone, `just mesh` to rebuild only MeshLLM,
+or `just skippy-cli-build` for only the Skippy CLI. Skippy's separately packaged
+native runtime can be supplied with `--runtime-bundle`. See
+[Skippy configuration](skippy/docs/CONFIGURATION.md)
+and [split serving](skippy/docs/SKIPPY_SPLITS.md).
 
 ## Quick start
 
@@ -83,16 +103,17 @@ mesh-llm serve --auto --headless
 
 | Goal | Command | Full guide |
 |---|---|---|
-| Try the public mesh | `mesh-llm serve --auto` | [docs/MESHES.md](docs/MESHES.md) |
-| Start a private mesh | `mesh-llm serve --model Qwen3-8B-Q4_K_M` | [docs/MESHES.md](docs/MESHES.md) |
+| Try the public mesh | `mesh-llm serve --auto` | [docs/MESHES.md](mesh/docs/MESHES.md) |
+| Start a private mesh | `mesh-llm serve --model Qwen3-8B-Q4_K_M` | [docs/MESHES.md](mesh/docs/MESHES.md) |
 | Serve one model without mesh networking (debugging/dev) | `mesh-llm serve --local-model-only --gguf /models/model.gguf` | OpenAI API defaults to `127.0.0.1:9337` (`--port` and `--listen-all` change it) |
-| Publish your own mesh | `mesh-llm serve --model Qwen3-8B-Q4_K_M --publish` | [docs/MESHES.md](docs/MESHES.md) |
-| Join by invite token | `mesh-llm serve --join <token>` | [docs/MESHES.md](docs/MESHES.md) |
-| Run an API-only client | `mesh-llm client --auto` | [docs/MESHES.md](docs/MESHES.md) |
-| Run a big model with splits | `mesh-llm serve --model hf://meshllm/<repo>@<rev> --split` | [docs/SKIPPY_SPLITS.md](docs/SKIPPY_SPLITS.md) |
-| Attach a Flash-MoE SSD backend | `mesh-llm serve` with `[[plugin]] name = "flash-moe"` | [docs/plugins/flash-moe.md](docs/plugins/flash-moe.md) |
-| Fan out one prompt to every model in the mesh | `curl ... -d '{"model":"mesh", ...}'` | [docs/design/MOA_GATEWAY.md](docs/design/MOA_GATEWAY.md) |
-| Use Goose, OpenCode, Claude Code, or Pi | `mesh-llm goose`, `mesh-llm opencode`, `mesh-llm claude`, `mesh-llm pi` | [docs/AGENTS.md](docs/AGENTS.md) |
+| Publish your own mesh | `mesh-llm serve --model Qwen3-8B-Q4_K_M --publish` | [docs/MESHES.md](mesh/docs/MESHES.md) |
+| Join by invite token | `mesh-llm serve --join <token>` | [docs/MESHES.md](mesh/docs/MESHES.md) |
+| Run an API-only client | `mesh-llm client --auto` | [docs/MESHES.md](mesh/docs/MESHES.md) |
+| Run a big model with splits | `mesh-llm serve --model hf://meshllm/<repo>@<rev> --split` | [docs/SKIPPY_SPLITS.md](skippy/docs/SKIPPY_SPLITS.md) |
+| Run DeepSeek V4 and other ds4 models with DwarfStar | `mesh-llm plugins install Mesh-LLM/ds4-plugin` | [Setup and configuration](mesh/docs/plugins/dwarfstar.md) |
+| Attach a Flash-MoE SSD backend | `mesh-llm serve` with `[[plugin]] name = "flash-moe"` | [docs/plugins/flash-moe.md](mesh/docs/plugins/flash-moe.md) |
+| Fan out one prompt to every model in the mesh | `curl ... -d '{"model":"mesh", ...}'` | [docs/design/MOA_GATEWAY.md](mesh/docs/design/MOA_GATEWAY.md) |
+| Use Goose, OpenCode, Claude Code, or Pi | `mesh-llm goose`, `mesh-llm opencode`, `mesh-llm claude`, `mesh-llm pi` | [docs/AGENTS.md](mesh/docs/AGENTS.md) |
 | Build or contribute | `just build` | [CONTRIBUTING.md](CONTRIBUTING.md) |
 
 ## How the mesh works
@@ -116,8 +137,8 @@ mesh-llm serve --auto --headless
 - **Public discovery.** Published meshes advertise through Nostr discovery;
   private meshes stay invite-token based.
 
-For a deeper operator guide, see [docs/USAGE.md](docs/USAGE.md). For every CLI
-command and switch, see [docs/CLI.md](docs/CLI.md).
+For a deeper operator guide, see [docs/USAGE.md](mesh/docs/USAGE.md). For every CLI
+command and switch, see [docs/CLI.md](mesh/docs/CLI.md).
 
 ### Local model-only serving
 
@@ -177,7 +198,7 @@ curl http://localhost:9337/v1/chat/completions \
 ```
 
 Requires at least two distinct models in the mesh. See
-[docs/design/MOA_GATEWAY.md](docs/design/MOA_GATEWAY.md) for the
+[docs/design/MOA_GATEWAY.md](mesh/docs/design/MOA_GATEWAY.md) for the
 architecture, arbitration rules, and tuning knobs.
 
 
@@ -195,9 +216,9 @@ Qwen3-VL-MoE, HunyuanOCR/Hunyuan-VL, and DeepSeek-OCR using real GGUF plus
 projector fixtures. DeepSeek3 and EXAONE-MoE use package-backed stages because
 the full GGUFs are too large for the cheap local baseline.
 
-See [docs/skippy/FAMILY_STATUS.md](docs/skippy/FAMILY_STATUS.md) for the full
+See [docs/skippy/FAMILY_STATUS.md](skippy/docs/FAMILY_STATUS.md) for the full
 artifact, split, wire dtype, cache policy, and exception matrix. See
-[docs/skippy/LLAMA_PARITY.md](docs/skippy/LLAMA_PARITY.md) for the remaining
+[docs/skippy/LLAMA_PARITY.md](skippy/docs/LLAMA_PARITY.md) for the remaining
 llama.cpp parity queue.
 
 ## Install and build notes
@@ -238,7 +259,7 @@ MESH_LLM_NATIVE_RUNTIME_CACHE_DIR="$(mktemp -d)" \
 
 CUDA runtimes need `nvcc`, ROCm runtimes need ROCm/HIP, and Vulkan runtimes need
 Vulkan development files plus `glslc`. See
-[docs/design/NATIVE_RUNTIMES.md](docs/design/NATIVE_RUNTIMES.md) for the
+[docs/design/NATIVE_RUNTIMES.md](skippy/docs/design/NATIVE_RUNTIMES.md) for the
 manifest, discovery, and compatibility contract.
 
 The shipped `mesh-llm` executable uses embedded release attestation for
@@ -365,18 +386,19 @@ mesh-llm --llama-flavor cuda serve \
 
 | Doc | Use it for |
 |---|---|
-| [docs/MESHES.md](docs/MESHES.md) | Private meshes, public discovery, publishing, invite tokens, API-only clients |
-| [docs/SKIPPY_SPLITS.md](docs/SKIPPY_SPLITS.md) | Running big models with package-backed Skippy stage splits |
-| [docs/LAYER_PACKAGE_REPOS.md](docs/LAYER_PACKAGE_REPOS.md) | Contributing and publishing layer package repositories |
-| [docs/AGENTS.md](docs/AGENTS.md) | Goose, Claude Code, OpenCode, Pi, curl, and blackboard |
-| [docs/EXO_COMPARISON.md](docs/EXO_COMPARISON.md) | Balanced comparison with Exo |
-| [docs/CLI.md](docs/CLI.md) | Command reference and JSON automation |
-| [docs/USAGE.md](docs/USAGE.md) | Longer operational usage guide, runtime control, owner-control operator flows |
-| [docs/design/TESTING.md](docs/design/TESTING.md) | Testing playbook, mixed-version QA, remote deploy checks |
-| [docs/plugins/flash-moe.md](docs/plugins/flash-moe.md) | Optional Flash-MoE SSD expert streaming backend setup |
-| [docs/skippy/FAMILY_STATUS.md](docs/skippy/FAMILY_STATUS.md) | Certified Skippy model-family status |
-| [docs/specs/layer-package-repos.md](docs/specs/layer-package-repos.md) | Manifest and artifact format spec |
-| [docs/specs/mesh-setup-installer.md](docs/specs/mesh-setup-installer.md) | Installer/bootstrap and setup command behavior spec |
+| [docs/MESHES.md](mesh/docs/MESHES.md) | Private meshes, public discovery, publishing, invite tokens, API-only clients |
+| [docs/SKIPPY_SPLITS.md](skippy/docs/SKIPPY_SPLITS.md) | Running big models with package-backed Skippy stage splits |
+| [docs/LAYER_PACKAGE_REPOS.md](skippy/docs/LAYER_PACKAGE_REPOS.md) | Contributing and publishing layer package repositories |
+| [docs/AGENTS.md](mesh/docs/AGENTS.md) | Goose, Claude Code, OpenCode, Pi, curl, and blackboard |
+| [docs/EXO_COMPARISON.md](mesh/docs/EXO_COMPARISON.md) | Balanced comparison with Exo |
+| [docs/CLI.md](mesh/docs/CLI.md) | Command reference and JSON automation |
+| [docs/USAGE.md](mesh/docs/USAGE.md) | Longer operational usage guide, runtime control, owner-control operator flows |
+| [docs/design/TESTING.md](mesh/docs/design/TESTING.md) | Testing playbook, mixed-version QA, remote deploy checks |
+| [docs/plugins/flash-moe.md](mesh/docs/plugins/flash-moe.md) | Optional Flash-MoE SSD expert streaming backend setup |
+| [docs/plugins/dwarfstar.md](mesh/docs/plugins/dwarfstar.md) | DwarfStar (ds4) alternative engine setup on Apple Silicon |
+| [docs/skippy/FAMILY_STATUS.md](skippy/docs/FAMILY_STATUS.md) | Certified Skippy model-family status |
+| [docs/specs/layer-package-repos.md](skippy/docs/specs/layer-package-repos.md) | Manifest and artifact format spec |
+| [docs/specs/mesh-setup-installer.md](mesh/docs/specs/mesh-setup-installer.md) | Installer/bootstrap and setup command behavior spec |
 
 ## CI infrastructure
 

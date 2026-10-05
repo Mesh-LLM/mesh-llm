@@ -81,7 +81,7 @@ class NightlyWorkflowTests(unittest.TestCase):
         for failure in cases:
             with self.subTest(failure=failure), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
-                (root / "evals").mkdir()
+                (root / "skippy/evals").mkdir(parents=True)
                 (root / "scripts").mkdir()
                 shutil.copy(ROOT / "scripts/agentic-replay-params.py", root / "scripts")
                 cache = root / "shared cache"
@@ -101,7 +101,7 @@ class NightlyWorkflowTests(unittest.TestCase):
                     "repo": replay["dataset"], "revision": replay["dataset_revision"],
                     "filename": replay["dataset_file"], "sha256": replay["dataset_sha256"],
                 }
-                (root / "evals/skippy-competitive-benchmark.json").write_text(
+                (root / "skippy/evals/skippy-competitive-benchmark.json").write_text(
                     json.dumps({"thoughtworks": {"dataset": canonical}})
                 )
                 (root / "huggingface_hub.py").write_text(

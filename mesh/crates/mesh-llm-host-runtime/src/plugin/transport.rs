@@ -1,0 +1,1018 @@
+use super::runtime::PluginRuntime;
+use super::{PROTOCOL_VERSION, PluginMeshEvent, PluginRpcBridge, PluginSummary, proto};
+use anyhow::{Context, Result, anyhow, bail};
+use rand::RngExt;
+use rmcp::model::ErrorCode;
+use std::collections::HashMap;
+use std::future::Future;
+#[cfg(unix)]
+use std::path::{Path, PathBuf};
+use std::pin::Pin;
+use std::sync::Arc;
+use std::time::Duration;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::sync::{Mutex, mpsc, oneshot};
+
+// An "external relay" style plugin (one whose real inference traffic
+// bypasses this IPC channel entirely, going through its own HTTP proxy
+// instead — see `openai_http(...).managed_by_plugin(false)` plugins)
+// generates no application-level IPC traffic of its own. The supervisor's
+// periodic `HealthRequest` (see `health::HEALTH_CHECK_INTERVAL_SECS`) is the
+// *only* guaranteed traffic such a plugin's connection ever sees, so this
+// timeout must comfortably outlast that cadence — a timeout shorter than
+// the health-check interval would disconnect every idle-but-healthy relay
+// plugin as falsely idle before its next probe ever arrives. 4x the health
+// interval plus a fixed floor covers a slow/jittery tick without staying
+// pinned to an arbitrarily large value.
+const PLUGIN_ENVELOPE_PREFIX_READ_TIMEOUT: Duration =
+    Duration::from_secs((super::health::HEALTH_CHECK_INTERVAL_SECS * 4) + 30);
+const PLUGIN_ENVELOPE_BODY_READ_TIMEOUT: Duration = Duration::from_secs(30);
+#[cfg(test)]
+const PLUGIN_ENVELOPE_TEST_READ_TIMEOUT: Duration = Duration::from_secs(1);
+const PLUGIN_MESH_STREAM_RESPONSE_TIMEOUT: Duration =
+    Duration::from_secs(super::REQUEST_TIMEOUT_SECS);
+
+fn plugin_mesh_stream_error(message: impl Into<String>) -> super::proto::ErrorResponse {
+    super::proto::ErrorResponse {
+        code: ErrorCode::INTERNAL_ERROR.0,
+        message: message.into(),
+        data_json: String::new(),
+    }
+}
+
+pub(crate) enum LocalStream {
+    #[cfg(test)]
+    Tcp(tokio::net::TcpStream),
+    /// In-memory pipe to a builtin plugin running as a task in this process.
+    Memory(tokio::io::DuplexStream),
+    #[cfg(unix)]
+    Unix(tokio::net::UnixStream),
+    #[cfg(windows)]
+    PipeServer(tokio::net::windows::named_pipe::NamedPipeServer),
+    #[cfg(windows)]
+    PipeClient(tokio::net::windows::named_pipe::NamedPipeClient),
+}
+
+pub(crate) enum LocalListener {
+    #[cfg(unix)]
+    Unix(tokio::net::UnixListener, PathBuf),
+    #[cfg(windows)]
+    Pipe(String, tokio::net::windows::named_pipe::NamedPipeServer),
+}
+
+type ConnectionLoopFn = fn(
+    LocalStream,
+    mpsc::Receiver<super::proto::Envelope>,
+    Arc<Mutex<HashMap<u64, oneshot::Sender<Result<super::proto::Envelope>>>>>,
+    mpsc::Sender<PluginMeshEvent>,
+    String,
+    Arc<Mutex<PluginSummary>>,
+    Arc<Mutex<Option<Arc<dyn PluginRpcBridge>>>>,
+    Arc<Mutex<Option<PluginRuntime>>>,
+    mpsc::Sender<super::proto::Envelope>,
+    u64,
+) -> Pin<Box<dyn Future<Output = ()> + Send>>;
+
+pub(crate) const CONNECTION_LOOP: ConnectionLoopFn =
+    |mut stream,
+     mut outbound_rx,
+     pending,
+     mesh_tx,
+     plugin_name,
+     summary,
+     rpc_bridge,
+     runtime,
+     outbound_tx,
+     generation| {
+        Box::pin(async move {
+            let result: Result<()> = async {
+                loop {
+                    tokio::select! {
+                        maybe_outbound = outbound_rx.recv() => {
+                            let Some(envelope) = maybe_outbound else {
+                                break;
+                            };
+                            write_envelope(&mut stream, &envelope).await?;
+                        }
+                        inbound = read_envelope(&mut stream) => {
+                            let envelope = inbound?;
+                            let request_id = envelope.request_id;
+                            let plugin_id_from_env = envelope.plugin_id.clone();
+                            let payload = envelope.payload.clone();
+                            match payload {
+                                Some(super::proto::envelope::Payload::ChannelMessage(message)) => {
+                                    let plugin_id = if plugin_id_from_env.is_empty() {
+                                        plugin_name.clone()
+                                    } else {
+                                        plugin_id_from_env
+                                    };
+                                    let _ = mesh_tx
+                                        .send(PluginMeshEvent::Channel { plugin_id, message })
+                                        .await;
+                                }
+                                Some(super::proto::envelope::Payload::BulkTransferMessage(message)) => {
+                                    let plugin_id = if plugin_id_from_env.is_empty() {
+                                        plugin_name.clone()
+                                    } else {
+                                        plugin_id_from_env
+                                    };
+                                    let _ = mesh_tx
+                                        .send(PluginMeshEvent::BulkTransfer {
+                                            plugin_id,
+                                            message,
+                                        })
+                                        .await;
+                                }
+                                Some(super::proto::envelope::Payload::OpenMeshStreamRequest(request)) => {
+                                    let plugin_id = if plugin_id_from_env.is_empty() {
+                                        plugin_name.clone()
+                                    } else {
+                                        plugin_id_from_env
+                                    };
+                                    forward_plugin_mesh_stream_request(
+                                        plugin_id,
+                                        request_id,
+                                        request,
+                                        mesh_tx.clone(),
+                                        outbound_tx.clone(),
+                                    );
+                                }
+                                Some(super::proto::envelope::Payload::PeerBlockRequest(request)) => {
+                                    // The requester is the connection's own name,
+                                    // so one plugin cannot act as another.
+                                    forward_plugin_peer_block_request(
+                                        plugin_name.clone(),
+                                        request_id,
+                                        request,
+                                        mesh_tx.clone(),
+                                        outbound_tx.clone(),
+                                    );
+                                }
+                                Some(super::proto::envelope::Payload::RpcRequest(request)) => {
+                                    forward_plugin_request(
+                                        plugin_name.clone(),
+                                        request_id,
+                                        request,
+                                        rpc_bridge.clone(),
+                                        outbound_tx.clone(),
+                                    );
+                                }
+                                Some(super::proto::envelope::Payload::RpcNotification(notification)) => {
+                                    forward_plugin_notification(
+                                        plugin_name.clone(),
+                                        notification,
+                                        rpc_bridge.clone(),
+                                    );
+                                }
+                                _ => {
+                                    let responder = pending.lock().await.remove(&request_id);
+                                    if let Some(responder) = responder {
+                                        let _ = responder.send(Ok(envelope));
+                                    } else {
+                                        tracing::debug!(
+                                            "Plugin '{}' sent an unsolicited response id={}",
+                                            plugin_name,
+                                            request_id
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                Ok(())
+            }
+            .await;
+
+            let was_active_runtime = {
+                let mut runtime = runtime.lock().await;
+                if runtime.as_ref().map(|runtime| runtime.generation) == Some(generation) {
+                    *runtime = None;
+                    true
+                } else {
+                    false
+                }
+            };
+
+            if was_active_runtime {
+                if let Err(err) = result {
+                    tracing::warn!(
+                        plugin = %plugin_name,
+                        error = %err,
+                        "Plugin connection closed"
+                    );
+                }
+                let mut summary = summary.lock().await;
+                summary.status = "stopped".into();
+                summary.error = Some(format!("Plugin '{}' disconnected", plugin_name));
+            }
+
+            let mut pending = pending.lock().await;
+            for (_, responder) in pending.drain() {
+                let _ = responder.send(Err(anyhow!("Plugin '{}' disconnected", plugin_name)));
+            }
+        })
+    };
+
+pub(crate) use CONNECTION_LOOP as connection_loop;
+
+impl LocalListener {
+    pub(crate) async fn accept(self) -> Result<LocalStream> {
+        match self {
+            #[cfg(unix)]
+            LocalListener::Unix(listener, path) => {
+                let (stream, _) = listener.accept().await?;
+                let _ = std::fs::remove_file(path);
+                Ok(LocalStream::Unix(stream))
+            }
+            #[cfg(windows)]
+            LocalListener::Pipe(_name, server) => {
+                server.connect().await?;
+                Ok(LocalStream::PipeServer(server))
+            }
+        }
+    }
+
+    pub(crate) fn endpoint(&self) -> String {
+        match self {
+            #[cfg(unix)]
+            LocalListener::Unix(_, path) => path.display().to_string(),
+            #[cfg(windows)]
+            LocalListener::Pipe(name, _) => name.clone(),
+        }
+    }
+
+    pub(crate) fn transport_name(&self) -> &'static str {
+        #[cfg(unix)]
+        {
+            "unix"
+        }
+        #[cfg(windows)]
+        {
+            "pipe"
+        }
+    }
+
+    pub(crate) fn transport_kind(&self) -> i32 {
+        #[cfg(unix)]
+        {
+            super::proto::StreamTransportKind::StreamUnixSocket as i32
+        }
+        #[cfg(windows)]
+        {
+            super::proto::StreamTransportKind::StreamNamedPipe as i32
+        }
+    }
+}
+
+impl LocalStream {
+    pub(crate) async fn write_all(&mut self, bytes: &[u8]) -> Result<()> {
+        match self {
+            #[cfg(test)]
+            LocalStream::Tcp(stream) => stream.write_all(bytes).await?,
+            LocalStream::Memory(stream) => stream.write_all(bytes).await?,
+            #[cfg(unix)]
+            LocalStream::Unix(stream) => stream.write_all(bytes).await?,
+            #[cfg(windows)]
+            LocalStream::PipeServer(stream) => stream.write_all(bytes).await?,
+            #[cfg(windows)]
+            LocalStream::PipeClient(stream) => stream.write_all(bytes).await?,
+        }
+        Ok(())
+    }
+
+    pub(crate) async fn shutdown(&mut self) -> Result<()> {
+        match self {
+            #[cfg(test)]
+            LocalStream::Tcp(stream) => stream.shutdown().await?,
+            LocalStream::Memory(stream) => stream.shutdown().await?,
+            #[cfg(unix)]
+            LocalStream::Unix(stream) => stream.shutdown().await?,
+            #[cfg(windows)]
+            LocalStream::PipeServer(stream) => stream.shutdown().await?,
+            #[cfg(windows)]
+            LocalStream::PipeClient(stream) => stream.shutdown().await?,
+        }
+        Ok(())
+    }
+
+    pub(crate) async fn read(&mut self, bytes: &mut [u8]) -> Result<usize> {
+        let read = match self {
+            #[cfg(test)]
+            LocalStream::Tcp(stream) => stream.read(bytes).await?,
+            LocalStream::Memory(stream) => stream.read(bytes).await?,
+            #[cfg(unix)]
+            LocalStream::Unix(stream) => stream.read(bytes).await?,
+            #[cfg(windows)]
+            LocalStream::PipeServer(stream) => stream.read(bytes).await?,
+            #[cfg(windows)]
+            LocalStream::PipeClient(stream) => stream.read(bytes).await?,
+        };
+        Ok(read)
+    }
+
+    async fn read_exact(&mut self, bytes: &mut [u8]) -> Result<()> {
+        match self {
+            #[cfg(test)]
+            LocalStream::Tcp(stream) => {
+                let _ = stream.read_exact(bytes).await?;
+            }
+            LocalStream::Memory(stream) => {
+                let _ = stream.read_exact(bytes).await?;
+            }
+            #[cfg(unix)]
+            LocalStream::Unix(stream) => {
+                let _ = stream.read_exact(bytes).await?;
+            }
+            #[cfg(windows)]
+            LocalStream::PipeServer(stream) => {
+                let _ = stream.read_exact(bytes).await?;
+            }
+            #[cfg(windows)]
+            LocalStream::PipeClient(stream) => {
+                let _ = stream.read_exact(bytes).await?;
+            }
+        }
+        Ok(())
+    }
+
+    async fn read_exact_timeout(
+        &mut self,
+        bytes: &mut [u8],
+        timeout: Duration,
+        label: &str,
+    ) -> Result<()> {
+        tokio::time::timeout(timeout, self.read_exact(bytes))
+            .await
+            .map_err(|_| anyhow!("timeout reading plugin frame {label} after {timeout:?}"))??;
+        Ok(())
+    }
+}
+
+pub(crate) fn reject_remote_control(_url: &str) -> Result<()> {
+    bail!(
+        "tcp:// plugin control is unsupported because it has no authenticated capability handshake"
+    )
+}
+
+pub(crate) async fn bind_local_listener(instance_id: &str, name: &str) -> Result<LocalListener> {
+    #[cfg(unix)]
+    {
+        let path = unix_socket_path(instance_id, name)?;
+        let dir = path
+            .parent()
+            .context("Plugin socket path is missing a parent directory")?;
+        std::fs::create_dir_all(dir)
+            .with_context(|| format!("Failed to create plugin runtime dir {}", dir.display()))?;
+        if path.exists() {
+            let _ = std::fs::remove_file(&path);
+        }
+        let listener = tokio::net::UnixListener::bind(&path)
+            .with_context(|| format!("Failed to bind plugin socket {}", path.display()))?;
+        Ok(LocalListener::Unix(listener, path))
+    }
+    #[cfg(windows)]
+    {
+        let endpoint = windows_pipe_name(instance_id, name);
+        let server = tokio::net::windows::named_pipe::ServerOptions::new()
+            .create(&endpoint)
+            .with_context(|| format!("Failed to create plugin pipe {endpoint}"))?;
+        Ok(LocalListener::Pipe(endpoint, server))
+    }
+}
+
+pub(crate) async fn connect_side_stream(
+    endpoint: &str,
+    transport_kind: i32,
+) -> Result<LocalStream> {
+    match proto::StreamTransportKind::try_from(transport_kind)
+        .unwrap_or(proto::StreamTransportKind::Unspecified)
+    {
+        #[cfg(unix)]
+        proto::StreamTransportKind::StreamUnixSocket => Ok(LocalStream::Unix(
+            tokio::net::UnixStream::connect(endpoint)
+                .await
+                .with_context(|| format!("Failed to connect side stream socket {endpoint}"))?,
+        )),
+        #[cfg(windows)]
+        proto::StreamTransportKind::StreamNamedPipe => Ok(LocalStream::PipeClient(
+            tokio::net::windows::named_pipe::ClientOptions::new()
+                .open(endpoint)
+                .with_context(|| format!("Failed to connect side stream pipe {endpoint}"))?,
+        )),
+        _ => bail!(
+            "Unsupported side stream transport kind '{}'",
+            transport_kind
+        ),
+    }
+}
+
+#[cfg(unix)]
+fn runtime_dir() -> Result<PathBuf> {
+    let home = dirs::home_dir().context("Cannot determine home directory")?;
+    Ok(home.join(".mesh-llm").join("run").join("plugins"))
+}
+
+pub(crate) fn make_instance_id() -> String {
+    let pid = std::process::id();
+    let random = rand::rng().random::<u32>();
+    format!("p{pid}-{random:08x}")
+}
+
+/// `sockaddr_un::sun_path` capacity: 108 bytes on Linux, 104 on macOS and the
+/// BSDs. One byte of that is the NUL terminator, so a path may use one less.
+///
+/// `bind` does not truncate an over-long path, it refuses it -- and the error
+/// says nothing about lengths, so the failure reads as a permissions or
+/// plumbing problem rather than a path that is four bytes too long.
+#[cfg(unix)]
+const SUN_PATH_CAPACITY: usize = if cfg!(any(
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "freebsd",
+    target_os = "openbsd",
+    target_os = "netbsd",
+    target_os = "dragonfly"
+)) {
+    104
+} else {
+    108
+};
+
+#[cfg(unix)]
+const MAX_UNIX_SOCKET_PATH_BYTES: usize = SUN_PATH_CAPACITY - 1;
+
+#[cfg(unix)]
+fn unix_socket_path_fits(path: &Path) -> bool {
+    use std::os::unix::ffi::OsStrExt;
+
+    path.as_os_str().as_bytes().len() <= MAX_UNIX_SOCKET_PATH_BYTES
+}
+
+/// Pick a bindable socket path, preferring the durable runtime directory.
+///
+/// The runtime directory is rooted at `$HOME`, so a deeply nested home is
+/// enough to push the path past the limit. Fall back to a short directory the
+/// way `mesh_llm_plugin::bind_side_stream` already does for side streams --
+/// the bound path is handed to the plugin process verbatim, so relocating it
+/// costs nothing as long as it stays unique per instance.
+///
+/// Note that the fallback directory is typically world-writable, and
+/// `bind_local_listener` unlinks the path before binding. That unlink is
+/// deliberate, and safe only because the file name is unguessable ahead of
+/// time: the `p{pid}-{random:08x}` instance id (`make_instance_id`) leaves
+/// nothing for another user to pre-place and have us remove on their behalf.
+#[cfg(unix)]
+fn unix_socket_path_within(
+    preferred_dir: &Path,
+    fallback_dir: &Path,
+    instance_id: &str,
+    name: &str,
+) -> Result<PathBuf> {
+    let file_name = format!("{instance_id}-{name}.sock");
+
+    let preferred = preferred_dir.join(&file_name);
+    if unix_socket_path_fits(&preferred) {
+        return Ok(preferred);
+    }
+
+    let fallback = fallback_dir.join(&file_name);
+    if unix_socket_path_fits(&fallback) {
+        tracing::debug!(
+            preferred = %preferred.display(),
+            fallback = %fallback.display(),
+            limit = MAX_UNIX_SOCKET_PATH_BYTES,
+            "plugin socket path is too long to bind; using a short path instead"
+        );
+        return Ok(fallback);
+    }
+
+    bail!(
+        "plugin socket path for '{name}' exceeds the {MAX_UNIX_SOCKET_PATH_BYTES}-byte \
+         AF_UNIX limit in both {} ({} bytes) and {} ({} bytes)",
+        preferred_dir.display(),
+        preferred.as_os_str().len(),
+        fallback_dir.display(),
+        fallback.as_os_str().len(),
+    )
+}
+
+#[cfg(unix)]
+pub(crate) fn unix_socket_path(instance_id: &str, name: &str) -> Result<PathBuf> {
+    unix_socket_path_within(&runtime_dir()?, &std::env::temp_dir(), instance_id, name)
+}
+
+#[cfg(windows)]
+pub(crate) fn windows_pipe_name(instance_id: &str, name: &str) -> String {
+    format!(r"\\.\pipe\mesh-llm-{instance_id}-{name}")
+}
+
+pub(crate) async fn write_envelope(
+    stream: &mut LocalStream,
+    envelope: &super::proto::Envelope,
+) -> Result<()> {
+    let mut body = Vec::new();
+    prost::Message::encode(envelope, &mut body)?;
+    stream.write_all(&(body.len() as u32).to_le_bytes()).await?;
+    stream.write_all(&body).await?;
+    Ok(())
+}
+
+pub(crate) async fn read_envelope(stream: &mut LocalStream) -> Result<super::proto::Envelope> {
+    let mut len_buf = [0u8; 4];
+    stream
+        .read_exact_timeout(&mut len_buf, PLUGIN_ENVELOPE_PREFIX_READ_TIMEOUT, "prefix")
+        .await?;
+    let len = u32::from_le_bytes(len_buf) as usize;
+    if len > 16 * 1024 * 1024 {
+        bail!("Plugin frame too large");
+    }
+    let mut body = vec![0u8; len];
+    stream
+        .read_exact_timeout(&mut body, PLUGIN_ENVELOPE_BODY_READ_TIMEOUT, "body")
+        .await?;
+    Ok(prost::Message::decode(body.as_slice())?)
+}
+
+#[cfg(test)]
+pub(crate) async fn read_envelope_from_reader<R>(stream: &mut R) -> Result<super::proto::Envelope>
+where
+    R: tokio::io::AsyncRead + Unpin,
+{
+    read_envelope_from_reader_with_timeouts(
+        stream,
+        PLUGIN_ENVELOPE_TEST_READ_TIMEOUT,
+        PLUGIN_ENVELOPE_TEST_READ_TIMEOUT,
+    )
+    .await
+}
+
+#[cfg(test)]
+async fn read_envelope_from_reader_with_timeouts<R>(
+    stream: &mut R,
+    prefix_timeout: Duration,
+    body_timeout: Duration,
+) -> Result<super::proto::Envelope>
+where
+    R: tokio::io::AsyncRead + Unpin,
+{
+    let mut len_buf = [0u8; 4];
+    tokio::time::timeout(
+        prefix_timeout,
+        AsyncReadExt::read_exact(stream, &mut len_buf),
+    )
+    .await
+    .map_err(|_| anyhow!("timeout reading plugin frame prefix after {prefix_timeout:?}"))??;
+    let len = u32::from_le_bytes(len_buf) as usize;
+    if len > 16 * 1024 * 1024 {
+        bail!("Plugin frame too large");
+    }
+    let mut body = vec![0u8; len];
+    tokio::time::timeout(body_timeout, AsyncReadExt::read_exact(stream, &mut body))
+        .await
+        .map_err(|_| anyhow!("timeout reading plugin frame body after {body_timeout:?}"))??;
+    Ok(prost::Message::decode(body.as_slice())?)
+}
+
+fn forward_plugin_request(
+    plugin_name: String,
+    request_id: u64,
+    request: super::proto::RpcRequest,
+    rpc_bridge: Arc<Mutex<Option<Arc<dyn PluginRpcBridge>>>>,
+    outbound_tx: mpsc::Sender<super::proto::Envelope>,
+) {
+    tokio::spawn(async move {
+        let bridge = rpc_bridge.lock().await.clone();
+        let payload = match bridge {
+            Some(bridge) => match bridge
+                .handle_request(
+                    plugin_name.clone(),
+                    request.method.clone(),
+                    request.params_json.clone(),
+                )
+                .await
+            {
+                Ok(result) => {
+                    super::proto::envelope::Payload::RpcResponse(super::proto::RpcResponse {
+                        result_json: result.result_json,
+                    })
+                }
+                Err(err) => super::proto::envelope::Payload::ErrorResponse(err),
+            },
+            None => super::proto::envelope::Payload::ErrorResponse(super::proto::ErrorResponse {
+                code: ErrorCode::INTERNAL_ERROR.0,
+                message: "No active MCP bridge".into(),
+                data_json: String::new(),
+            }),
+        };
+
+        let _ = outbound_tx
+            .send(super::proto::Envelope {
+                protocol_version: PROTOCOL_VERSION,
+                plugin_id: plugin_name,
+                request_id,
+                payload: Some(payload),
+            })
+            .await;
+    });
+}
+
+fn forward_plugin_mesh_stream_request(
+    plugin_name: String,
+    request_id: u64,
+    request: super::proto::OpenMeshStreamRequest,
+    mesh_tx: mpsc::Sender<PluginMeshEvent>,
+    outbound_tx: mpsc::Sender<super::proto::Envelope>,
+) {
+    tokio::spawn(async move {
+        let (response_tx, response_rx) = oneshot::channel();
+        let deadline = tokio::time::Instant::now() + PLUGIN_MESH_STREAM_RESPONSE_TIMEOUT;
+        let enqueue = tokio::time::timeout_at(
+            deadline,
+            mesh_tx.send(PluginMeshEvent::OpenStream {
+                plugin_id: plugin_name.clone(),
+                request,
+                response_tx,
+            }),
+        )
+        .await;
+        let response = match enqueue {
+            Ok(Ok(())) => match tokio::time::timeout_at(deadline, response_rx).await {
+                Ok(response) => response.map_err(|_| {
+                    plugin_mesh_stream_error("Mesh stream broker dropped the response")
+                }),
+                Err(_) => Err(plugin_mesh_stream_error(format!(
+                    "Mesh stream broker timed out after {PLUGIN_MESH_STREAM_RESPONSE_TIMEOUT:?}"
+                ))),
+            },
+            Ok(Err(_)) => Err(plugin_mesh_stream_error(
+                "Mesh stream broker is unavailable",
+            )),
+            Err(_) => Err(plugin_mesh_stream_error(format!(
+                "Mesh stream broker timed out after {PLUGIN_MESH_STREAM_RESPONSE_TIMEOUT:?}"
+            ))),
+        };
+
+        let payload = match response {
+            Ok(Ok(response)) => super::proto::envelope::Payload::OpenMeshStreamResponse(response),
+            Ok(Err(error)) | Err(error) => super::proto::envelope::Payload::ErrorResponse(error),
+        };
+
+        let _ = outbound_tx
+            .send(super::proto::Envelope {
+                protocol_version: PROTOCOL_VERSION,
+                plugin_id: plugin_name,
+                request_id,
+                payload: Some(payload),
+            })
+            .await;
+    });
+}
+
+fn forward_plugin_peer_block_request(
+    plugin_name: String,
+    request_id: u64,
+    request: super::proto::PeerBlockRequest,
+    mesh_tx: mpsc::Sender<PluginMeshEvent>,
+    outbound_tx: mpsc::Sender<super::proto::Envelope>,
+) {
+    tokio::spawn(async move {
+        let (response_tx, response_rx) = oneshot::channel();
+        let deadline = tokio::time::Instant::now() + PLUGIN_MESH_STREAM_RESPONSE_TIMEOUT;
+        let response = match tokio::time::timeout_at(
+            deadline,
+            mesh_tx.send(PluginMeshEvent::PeerBlock {
+                plugin_id: plugin_name.clone(),
+                request,
+                response_tx,
+            }),
+        )
+        .await
+        {
+            Ok(Ok(())) => match tokio::time::timeout_at(deadline, response_rx).await {
+                Ok(Ok(response)) => response,
+                Ok(Err(_)) => Err(plugin_mesh_stream_error(
+                    "Peer block handler dropped the response",
+                )),
+                Err(_) => Err(plugin_mesh_stream_error("Peer block request timed out")),
+            },
+            Ok(Err(_)) => Err(plugin_mesh_stream_error(
+                "Peer block handler is unavailable",
+            )),
+            Err(_) => Err(plugin_mesh_stream_error("Peer block request timed out")),
+        };
+        let payload = match response {
+            Ok(response) => super::proto::envelope::Payload::PeerBlockResponse(response),
+            Err(error) => super::proto::envelope::Payload::ErrorResponse(error),
+        };
+        let _ = outbound_tx
+            .send(super::proto::Envelope {
+                protocol_version: PROTOCOL_VERSION,
+                plugin_id: plugin_name,
+                request_id,
+                payload: Some(payload),
+            })
+            .await;
+    });
+}
+
+fn forward_plugin_notification(
+    plugin_name: String,
+    notification: super::proto::RpcNotification,
+    rpc_bridge: Arc<Mutex<Option<Arc<dyn PluginRpcBridge>>>>,
+) {
+    tokio::spawn(async move {
+        if let Some(bridge) = rpc_bridge.lock().await.clone() {
+            bridge
+                .handle_notification(plugin_name, notification.method, notification.params_json)
+                .await;
+        }
+    });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn remote_control_rejects_loopback_ipv4_without_connecting() {
+        let error = reject_remote_control("tcp://127.0.0.1:19091")
+            .expect_err("unauthenticated loopback control must be rejected");
+        assert!(
+            error
+                .to_string()
+                .contains("authenticated capability handshake")
+        );
+    }
+
+    #[test]
+    fn remote_control_rejects_non_loopback_before_connecting() {
+        let url = "tcp://192.0.2.1:19091";
+        let error = match reject_remote_control(url) {
+            Ok(_) => panic!("plaintext non-loopback endpoint must be rejected"),
+            Err(error) => error,
+        };
+        assert!(
+            error
+                .to_string()
+                .contains("authenticated capability handshake")
+        );
+    }
+
+    #[test]
+    fn remote_control_rejects_hostnames_without_dns_resolution() {
+        let error = match reject_remote_control("tcp://localhost:19091") {
+            Ok(_) => panic!("plaintext hostname must be rejected"),
+            Err(error) => error,
+        };
+        assert!(
+            error
+                .to_string()
+                .contains("authenticated capability handshake")
+        );
+    }
+
+    #[test]
+    fn remote_control_diagnostics_do_not_echo_endpoint_secrets() {
+        let raw_url = "tcp://user:secret@127.0.0.1:19091/control?token=private";
+
+        let error = match reject_remote_control(raw_url) {
+            Ok(_) => panic!("credentialed control URL must be rejected"),
+            Err(error) => error,
+        };
+        let diagnostic = error.to_string();
+
+        assert!(!diagnostic.contains("user"));
+        assert!(!diagnostic.contains("secret"));
+        assert!(!diagnostic.contains("private"));
+        assert!(!diagnostic.contains(raw_url));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn host_can_connect_to_plugin_side_stream() {
+        let request = proto::OpenStreamRequest {
+            stream_id: "stream-test".into(),
+            purpose: proto::StreamPurpose::HttpResponseBody as i32,
+            mode: proto::StreamMode::RawBytes as i32,
+            bidirectional: true,
+            content_type: Some("application/octet-stream".into()),
+            correlation_id: None,
+            metadata_json: None,
+            expected_bytes: None,
+            idle_timeout_ms: None,
+        };
+
+        let listener = mesh_llm_plugin::bind_side_stream("demo-plugin", &request.stream_id)
+            .await
+            .unwrap();
+        let response = listener.open_stream_response(&request);
+
+        let accept_task = tokio::spawn(async move {
+            let mut plugin_stream = listener.accept().await.unwrap();
+            let mut incoming = [0u8; 5];
+            plugin_stream.read_exact_bytes(&mut incoming).await.unwrap();
+            assert_eq!(&incoming, b"hello");
+            plugin_stream.write_all_bytes(b"world").await.unwrap();
+        });
+
+        let mut host_stream = connect_side_stream(
+            response.endpoint.as_deref().unwrap(),
+            response.transport_kind,
+        )
+        .await
+        .unwrap();
+        host_stream.write_all(b"hello").await.unwrap();
+        let mut reply = [0u8; 5];
+        host_stream.read_exact(&mut reply).await.unwrap();
+        assert_eq!(&reply, b"world");
+
+        accept_task.await.unwrap();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn read_envelope_prefix_and_body_have_timeouts() {
+        let (_prefix_writer, mut prefix_reader) = tokio::io::duplex(1);
+        let prefix_error = read_envelope_from_reader(&mut prefix_reader)
+            .await
+            .expect_err("stalled prefix read must time out");
+        assert!(
+            prefix_error
+                .to_string()
+                .contains("timeout reading plugin frame prefix")
+        );
+
+        let (mut body_writer, mut body_reader) = tokio::io::duplex(8);
+        body_writer.write_all(&4u32.to_le_bytes()).await.unwrap();
+        let body_error = read_envelope_from_reader(&mut body_reader)
+            .await
+            .expect_err("stalled body read must time out");
+        assert!(
+            body_error
+                .to_string()
+                .contains("timeout reading plugin frame body")
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn forward_plugin_mesh_stream_request_times_out_when_broker_stalls() {
+        let (mesh_tx, mut mesh_rx) = mpsc::channel(1);
+        let (outbound_tx, mut outbound_rx) = mpsc::channel(1);
+        let request = super::proto::OpenMeshStreamRequest {
+            stream_id: "stream-test".into(),
+            target_peer_id: "peer-test".into(),
+            channel: "channel-test".into(),
+            plugin_id: "plugin-test".into(),
+            purpose: proto::StreamPurpose::HttpResponseBody as i32,
+            mode: proto::StreamMode::RawBytes as i32,
+            bidirectional: true,
+            content_type: Some("application/octet-stream".into()),
+            correlation_id: None,
+            metadata_json: None,
+            expected_bytes: None,
+            idle_timeout_ms: None,
+        };
+
+        forward_plugin_mesh_stream_request("demo-plugin".into(), 7, request, mesh_tx, outbound_tx);
+
+        let event = mesh_rx
+            .recv()
+            .await
+            .expect("mesh broker should receive the stream request");
+        let PluginMeshEvent::OpenStream {
+            response_tx: _response_tx,
+            ..
+        } = event
+        else {
+            panic!("expected mesh stream request event");
+        };
+
+        tokio::time::advance(PLUGIN_MESH_STREAM_RESPONSE_TIMEOUT + Duration::from_secs(1)).await;
+
+        let envelope = outbound_rx
+            .recv()
+            .await
+            .expect("timed out broker wait should still publish a response");
+
+        let Some(super::proto::envelope::Payload::ErrorResponse(error)) = envelope.payload else {
+            panic!("expected timeout to map to an error response");
+        };
+        assert_eq!(error.code, ErrorCode::INTERNAL_ERROR.0);
+        assert!(error.message.contains("Mesh stream broker timed out"));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn forward_plugin_mesh_stream_request_times_out_when_broker_queue_is_full() {
+        let (mesh_tx, _mesh_rx) = mpsc::channel(1);
+        let (blocked_response_tx, _blocked_response_rx) = oneshot::channel();
+        mesh_tx
+            .send(PluginMeshEvent::OpenStream {
+                plugin_id: "blocked-plugin".into(),
+                request: super::proto::OpenMeshStreamRequest::default(),
+                response_tx: blocked_response_tx,
+            })
+            .await
+            .expect("fixture should fill the broker queue");
+        let (outbound_tx, mut outbound_rx) = mpsc::channel(1);
+
+        forward_plugin_mesh_stream_request(
+            "demo-plugin".into(),
+            8,
+            super::proto::OpenMeshStreamRequest::default(),
+            mesh_tx,
+            outbound_tx,
+        );
+        tokio::time::advance(PLUGIN_MESH_STREAM_RESPONSE_TIMEOUT + Duration::from_secs(1)).await;
+
+        let envelope = outbound_rx
+            .recv()
+            .await
+            .expect("timed out enqueue should publish an error response");
+        let Some(super::proto::envelope::Payload::ErrorResponse(error)) = envelope.payload else {
+            panic!("expected timeout to map to an error response");
+        };
+        assert!(error.message.contains("Mesh stream broker timed out"));
+    }
+}
+
+#[cfg(all(test, unix))]
+mod unix_socket_path_tests {
+    use super::*;
+    use std::path::Path;
+
+    const INSTANCE: &str = "p1234-deadbeef";
+    const PLUGIN: &str = "blobstore";
+
+    fn short_fallback() -> PathBuf {
+        PathBuf::from("/tmp")
+    }
+
+    #[test]
+    fn a_runtime_dir_that_fits_is_used_unchanged() {
+        let runtime_dir = Path::new("/home/nick/.mesh-llm/run/plugins");
+
+        let path =
+            unix_socket_path_within(runtime_dir, &short_fallback(), INSTANCE, PLUGIN).unwrap();
+
+        assert_eq!(path, runtime_dir.join("p1234-deadbeef-blobstore.sock"));
+    }
+
+    #[test]
+    fn an_over_long_runtime_dir_falls_back_instead_of_failing_to_bind() {
+        // A deeply nested $HOME is all it takes; the rc6 validation run hit
+        // this with an isolated HOME that pushed the socket path to 112 bytes.
+        let runtime_dir = PathBuf::from(format!(
+            "/home/{}/.mesh-llm/run/plugins",
+            "nested-dir/".repeat(12)
+        ));
+        assert!(runtime_dir.as_os_str().len() > MAX_UNIX_SOCKET_PATH_BYTES);
+
+        let path =
+            unix_socket_path_within(&runtime_dir, &short_fallback(), INSTANCE, PLUGIN).unwrap();
+
+        assert_eq!(path, short_fallback().join("p1234-deadbeef-blobstore.sock"));
+    }
+
+    #[test]
+    fn the_fallback_keeps_the_instance_namespacing_that_prevents_collisions() {
+        let runtime_dir = PathBuf::from("/".to_owned() + &"x".repeat(200));
+
+        let first =
+            unix_socket_path_within(&runtime_dir, &short_fallback(), "p1-aaaa", PLUGIN).unwrap();
+        let second =
+            unix_socket_path_within(&runtime_dir, &short_fallback(), "p2-bbbb", PLUGIN).unwrap();
+
+        assert_ne!(first, second);
+        assert!(first.to_str().unwrap().contains("p1-aaaa"));
+    }
+
+    #[test]
+    fn whatever_is_selected_always_fits_the_platform_limit() {
+        for depth in 0..40 {
+            let runtime_dir = PathBuf::from(format!("/home/{}/.mesh-llm", "deeper/".repeat(depth)));
+
+            let path = unix_socket_path_within(&runtime_dir, &short_fallback(), INSTANCE, PLUGIN)
+                .expect("a fallback should always be available for a short plugin name");
+
+            assert!(
+                path.as_os_str().len() <= MAX_UNIX_SOCKET_PATH_BYTES,
+                "depth {depth} produced an unbindable {} byte path",
+                path.as_os_str().len()
+            );
+        }
+    }
+
+    #[test]
+    fn a_name_too_long_for_any_directory_is_a_clear_error_not_a_doomed_bind() {
+        let runtime_dir = PathBuf::from("/run");
+
+        let error =
+            unix_socket_path_within(&runtime_dir, &short_fallback(), INSTANCE, &"p".repeat(300))
+                .expect_err("an unbindable path must be reported, not returned");
+
+        assert!(
+            error.to_string().contains("exceeds"),
+            "unexpected message: {error}"
+        );
+    }
+}

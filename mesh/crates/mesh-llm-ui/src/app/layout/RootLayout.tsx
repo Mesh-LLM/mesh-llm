@@ -1,0 +1,270 @@
+import { HeadContent, Outlet, useRouter, useRouterState } from '@tanstack/react-router'
+import { useCallback, useMemo, useState } from 'react'
+import { LiveStatusConnector } from '@/app/layout/LiveStatusConnector'
+import { resolveHarnessTopNavData, resolveLiveTopNavData } from '@/app/layout/shell-adapter'
+import { isClientOnlyNode } from '@/features/app-shell/lib/status-helpers'
+import { ChatSessionProvider } from '@/features/chat/api/chat-session'
+import { Footer } from '@/features/shell/components/Footer'
+import { TopNav } from '@/features/shell/components/TopNav'
+import type { TopNavPluginPageItem } from '@/features/shell/components/TopNavPluginPages'
+import { PreferencesPanel } from '@/features/shell/components/PreferencesPanel'
+import { PluginContributionsProvider } from '@/features/plugins/web-ui/PluginContributionSlot'
+import {
+  getEnabledConfigurationTabIds,
+  isConfigurationTabId,
+  type ConfigurationTabId
+} from '@/features/configuration/components/configuration-tab-ids'
+import { DEFAULT_DEVELOPER_PLAYGROUND_TAB } from '@/features/developer/playground/developer-playground-tabs'
+import { useStatusQuery } from '@/features/network/api/use-status-query'
+import {
+  adaptPluginSummariesToWebUiEntries,
+  partitionPluginWebUiNavItems,
+  usePluginSummariesQuery
+} from '@/features/plugins/api/plugin-web-ui'
+import { useUIPreferences } from '@/features/shell/hooks/useUiPreferences'
+import { SHELL_HARNESS } from '@/features/app-tabs/data'
+import { env, hrefWithBasePath, stripBasePath } from '@/lib/env'
+import { useDataMode } from '@/lib/data-mode'
+import { useBooleanFeatureFlag } from '@/lib/feature-flags'
+import type { ShellHarnessData, AppTab } from '@/features/app-tabs/types'
+import type { PluginSummaryRaw } from '@/lib/api/plugin-types'
+
+const NO_PLUGINS: readonly PluginSummaryRaw[] = []
+
+function pathToTab(pathname: string): AppTab | null {
+  if (pathname.startsWith('/chat')) return 'chat'
+  if (pathname.startsWith('/reserves')) return 'reserves'
+  if (pathname.startsWith('/logs')) return 'logs'
+  if (pathname.startsWith('/configuration')) return 'configuration'
+  if (pathname.startsWith('/plugins/')) return null
+  if (env.isDevelopment && pathname.startsWith('/__playground')) return null
+  return 'network'
+}
+
+function tabToPath(tab: Exclude<AppTab, 'configuration'>): '/' | '/chat' | '/reserves' | '/logs' {
+  if (tab === 'chat') return '/chat'
+  if (tab === 'reserves') return '/reserves'
+  if (tab === 'logs') return '/logs'
+  return '/'
+}
+
+function pathToConfigurationTab(
+  pathname: string,
+  enabledTabs: readonly ConfigurationTabId[] = CONFIGURATION_TAB_IDS_FALLBACK
+): ConfigurationTabId | null {
+  const [, section, configurationTab] = pathname.split('/')
+  if (section !== 'configuration' || !isConfigurationTabId(configurationTab) || !enabledTabs.includes(configurationTab))
+    return null
+  return configurationTab
+}
+
+const CONFIGURATION_TAB_IDS_FALLBACK = getEnabledConfigurationTabIds()
+
+type RootLayoutProps = { data?: ShellHarnessData }
+
+function resolveApiTargetLiveness(statusQuery: ReturnType<typeof useStatusQuery>, liveMode: boolean) {
+  if (!liveMode) return undefined
+  if (statusQuery.isError) return 'unavailable'
+  if (statusQuery.data) return 'live'
+  return 'checking'
+}
+
+export function RootLayout({ data = SHELL_HARNESS }: RootLayoutProps = {}) {
+  const router = useRouter()
+  const routerPathname = useRouterState({ select: (state) => state.location.pathname })
+  const pathname = stripBasePath(routerPathname)
+  const { mode } = useDataMode()
+  const liveMode = mode === 'live'
+  const statusQuery = useStatusQuery({ enabled: liveMode })
+  const clientOnlyNode = isClientOnlyNode(statusQuery.data)
+  const pluginSummariesQuery = usePluginSummariesQuery({ enabled: liveMode })
+  const { theme, accent, density, panelStyle, setTheme, setAccent, setDensity, setPanelStyle } = useUIPreferences()
+  const newConfigurationPageEnabled = useBooleanFeatureFlag('global/newConfigurationPage')
+  const newReservesPageEnabled = useBooleanFeatureFlag('global/newReservesPage')
+  const logsPageEnabled = useBooleanFeatureFlag('global/logsPage')
+  const signingAttestationEnabled = useBooleanFeatureFlag('configuration/signingAttestation')
+  const integrationsEnabled = useBooleanFeatureFlag('configuration/integrations')
+  const wakePolicyConfigurationEnabled = useBooleanFeatureFlag('configuration/wakePolicyConfiguration')
+  const logsSettingsEnabled = useBooleanFeatureFlag('configuration/logsSettings')
+  const activeTab = pathToTab(pathname)
+  const [preferencesOpen, setPreferencesOpen] = useState(false)
+  const topNavData = useMemo(
+    () => (liveMode ? resolveLiveTopNavData(statusQuery.data) : resolveHarnessTopNavData(data)),
+    [liveMode, statusQuery.data, data]
+  )
+  const displayVersion = liveMode ? (statusQuery.data?.version ?? env.appVersion) : env.appVersion
+  const apiTargetLiveness = resolveApiTargetLiveness(statusQuery, liveMode)
+  const enabledConfigurationTabs = useMemo(
+    () =>
+      getEnabledConfigurationTabIds({
+        pluginsEnabled: integrationsEnabled,
+        signingAttestationEnabled,
+        wakePolicyEnabled: wakePolicyConfigurationEnabled,
+        logsSettingsEnabled
+      }),
+    [integrationsEnabled, signingAttestationEnabled, wakePolicyConfigurationEnabled, logsSettingsEnabled]
+  )
+  const tabHrefs = useMemo(
+    () => ({
+      network: hrefWithBasePath('/'),
+      reserves: hrefWithBasePath('/reserves'),
+      logs: hrefWithBasePath('/logs'),
+      chat: hrefWithBasePath('/chat'),
+      configuration: hrefWithBasePath(
+        `/configuration/${pathToConfigurationTab(pathname, enabledConfigurationTabs) ?? 'general'}`
+      )
+    }),
+    [enabledConfigurationTabs, pathname]
+  )
+  const visibleActiveTab =
+    activeTab === 'configuration' && (!newConfigurationPageEnabled || clientOnlyNode)
+      ? null
+      : activeTab === 'reserves' && !newReservesPageEnabled
+        ? null
+        : activeTab === 'logs' && (!logsPageEnabled || clientOnlyNode)
+          ? null
+          : activeTab
+  const showDevelopmentNavControls = env.isDevelopment
+
+  const onTabChange = useCallback(
+    (tab: AppTab | null) => {
+      if (tab === 'logs' && (!logsPageEnabled || clientOnlyNode)) return
+      if (tab === 'reserves' && !newReservesPageEnabled) return
+      if (tab === 'configuration' && (!newConfigurationPageEnabled || clientOnlyNode)) return
+      if (tab === 'configuration') {
+        void router.navigate({
+          to: '/configuration/$configurationTab',
+          params: { configurationTab: pathToConfigurationTab(pathname, enabledConfigurationTabs) ?? 'general' }
+        })
+        return
+      }
+      void router.navigate({ to: tabToPath(tab!) })
+    },
+    [
+      router,
+      pathname,
+      enabledConfigurationTabs,
+      newConfigurationPageEnabled,
+      newReservesPageEnabled,
+      logsPageEnabled,
+      clientOnlyNode
+    ]
+  )
+
+  const onTogglePreferences = useCallback(() => setPreferencesOpen((value) => !value), [])
+
+  const onOpenDeveloperPlayground = useCallback(() => {
+    void router.navigate({ to: '/__playground', search: { tab: DEFAULT_DEVELOPER_PLAYGROUND_TAB } })
+  }, [router])
+
+  const onOpenIdentity = useCallback(() => setPreferencesOpen(true), [])
+
+  const enabledTabs = useMemo(
+    () => ({
+      reserves: newReservesPageEnabled,
+      logs: logsPageEnabled && !clientOnlyNode,
+      configuration: newConfigurationPageEnabled && !clientOnlyNode
+    }),
+    [newConfigurationPageEnabled, newReservesPageEnabled, logsPageEnabled, clientOnlyNode]
+  )
+
+  const partitionedPluginNavItems = useMemo(() => {
+    if (!liveMode || !Array.isArray(pluginSummariesQuery.data)) {
+      return { primary: [], auxiliary: [] }
+    }
+    return partitionPluginWebUiNavItems(adaptPluginSummariesToWebUiEntries(pluginSummariesQuery.data))
+  }, [liveMode, pluginSummariesQuery.data])
+
+  const toTopNavPluginPageItem = useCallback(
+    (item: { pluginName: string; pageId: string; label: string }): TopNavPluginPageItem => ({
+      pluginName: item.pluginName,
+      pageId: item.pageId,
+      label: item.label,
+      href: hrefWithBasePath(`/plugins/${encodeURIComponent(item.pluginName)}/${encodeURIComponent(item.pageId)}`),
+      active: pathname === `/plugins/${item.pluginName}/${item.pageId}`
+    }),
+    [pathname]
+  )
+
+  const primaryPluginTabs = useMemo<readonly TopNavPluginPageItem[]>(
+    () => partitionedPluginNavItems.primary.map(toTopNavPluginPageItem),
+    [partitionedPluginNavItems.primary, toTopNavPluginPageItem]
+  )
+
+  const pluginNavItems = useMemo<readonly TopNavPluginPageItem[]>(
+    () => partitionedPluginNavItems.auxiliary.map(toTopNavPluginPageItem),
+    [partitionedPluginNavItems.auxiliary, toTopNavPluginPageItem]
+  )
+
+  const pluginSummaries = liveMode && Array.isArray(pluginSummariesQuery.data) ? pluginSummariesQuery.data : NO_PLUGINS
+
+  const onPluginPageChange = useCallback(
+    (item: TopNavPluginPageItem) => {
+      void router.navigate({
+        to: '/plugins/$pluginName/$pageId',
+        params: { pluginName: item.pluginName, pageId: item.pageId }
+      })
+    },
+    [router]
+  )
+
+  return (
+    <>
+      <HeadContent />
+      <LiveStatusConnector />
+      <div className="flex h-dvh flex-col overflow-hidden">
+        <TopNav
+          enabledTabs={enabledTabs}
+          tab={visibleActiveTab}
+          tabHrefs={tabHrefs}
+          onTabChange={onTabChange}
+          apiUrl={topNavData.apiUrl}
+          apiTargetLiveness={apiTargetLiveness}
+          version={displayVersion}
+          theme={theme}
+          onThemeChange={setTheme}
+          onTogglePreferences={onTogglePreferences}
+          brand={data.brand}
+          apiAccessLinks={topNavData.topNavApiAccessLinks}
+          joinCommands={topNavData.topNavJoinCommands}
+          joinLinks={topNavData.topNavJoinLinks}
+          pluginNavItems={pluginNavItems}
+          primaryPluginTabs={primaryPluginTabs}
+          onPluginPageChange={onPluginPageChange}
+          showDeveloperPlayground={showDevelopmentNavControls}
+          onOpenDeveloperPlayground={showDevelopmentNavControls ? onOpenDeveloperPlayground : undefined}
+          onOpenIdentity={onOpenIdentity}
+        />
+        {showDevelopmentNavControls ? (
+          <PreferencesPanel
+            open={preferencesOpen}
+            theme={theme}
+            accent={accent}
+            density={density}
+            panelStyle={panelStyle}
+            onThemeChange={setTheme}
+            onAccentChange={setAccent}
+            onDensityChange={setDensity}
+            onPanelStyleChange={setPanelStyle}
+            onClose={() => setPreferencesOpen(false)}
+          />
+        ) : null}
+        <ChatSessionProvider>
+          <PluginContributionsProvider summaries={pluginSummaries}>
+            <main className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]">
+              <div className="density-shell mx-auto flex min-h-full flex-col px-[var(--shell-pad-x)] pb-[var(--shell-pad-bottom)] pt-[var(--shell-pad-top)]">
+                <Outlet />
+              </div>
+            </main>
+          </PluginContributionsProvider>
+        </ChatSessionProvider>
+        <Footer
+          version={displayVersion}
+          productName={data.productName}
+          links={data.footerLinks}
+          trailingLink={data.footerTrailingLink}
+        />
+      </div>
+    </>
+  )
+}

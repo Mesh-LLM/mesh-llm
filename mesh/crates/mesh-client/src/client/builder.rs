@@ -1,0 +1,1111 @@
+use crate::crypto::keys::OwnerKeypair;
+use crate::protocol::{ALPN_V1, STREAM_TUNNEL_HTTP};
+use crate::runtime::CoreRuntime;
+use base64::Engine;
+use iroh::{Endpoint, EndpointAddr};
+use serde::Deserialize;
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+use thiserror::Error;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpStream;
+use tokio::sync::Notify;
+
+mod openai_stream;
+
+type CancelFlagMap =
+    Arc<Mutex<HashMap<String, (Arc<AtomicBool>, Arc<dyn crate::events::EventListener>)>>>;
+type OpenAiStreamMap = Arc<Mutex<HashMap<String, ActiveOpenAiStream>>>;
+
+struct ActiveOpenAiStream {
+    cancelled: Arc<AtomicBool>,
+    cancel_notify: Arc<Notify>,
+}
+
+pub const MAX_RECONNECT_ATTEMPTS: u32 = 10;
+const MAX_MESH_RESPONSE_BYTES: usize = 64 * 1024 * 1024;
+
+#[derive(Debug, Error)]
+pub enum ClientError {
+    #[error("runtime error: {0}")]
+    Runtime(#[from] crate::runtime::RuntimeError),
+    #[error("endpoint error: {0}")]
+    Endpoint(String),
+    #[error("join error: {0}")]
+    Join(String),
+}
+
+#[derive(Clone, Debug)]
+pub struct InviteToken(pub String);
+
+impl InviteToken {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::str::FromStr for InviteToken {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if s.is_empty() {
+            return Err("empty invite token".to_string());
+        }
+        Ok(Self(s.to_string()))
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct ClientConfig {
+    pub owner_keypair: OwnerKeypair,
+    pub invite_token: InviteToken,
+    pub user_agent: String,
+    pub connect_timeout: Duration,
+    pub transport: ClientTransport,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ClientTransport {
+    DirectMesh,
+    OpenAiHttp { api_base_url: String },
+}
+
+pub struct ClientBuilder {
+    config: ClientConfig,
+}
+
+impl ClientBuilder {
+    pub fn new(owner_keypair: OwnerKeypair, invite_token: InviteToken) -> Self {
+        Self {
+            config: ClientConfig {
+                owner_keypair,
+                invite_token,
+                user_agent: format!("mesh-client/{}", env!("CARGO_PKG_VERSION")),
+                connect_timeout: Duration::from_secs(30),
+                transport: default_client_transport(),
+            },
+        }
+    }
+
+    pub fn with_user_agent(mut self, ua: String) -> Self {
+        self.config.user_agent = ua;
+        self
+    }
+
+    pub fn with_connect_timeout(mut self, d: Duration) -> Self {
+        self.config.connect_timeout = d;
+        self
+    }
+
+    pub fn with_transport(mut self, transport: ClientTransport) -> Self {
+        self.config.transport = transport;
+        self
+    }
+
+    pub fn with_direct_mesh_transport(self) -> Self {
+        self.with_transport(ClientTransport::DirectMesh)
+    }
+
+    pub fn with_openai_http_transport(mut self, api_base_url: impl Into<String>) -> Self {
+        self.config.transport = ClientTransport::OpenAiHttp {
+            api_base_url: api_base_url.into(),
+        };
+        self
+    }
+
+    pub fn build(self) -> Result<MeshClient, ClientError> {
+        let runtime = CoreRuntime::new()?;
+        Ok(MeshClient {
+            runtime,
+            config: self.config,
+            connected: false,
+            cancel_flags: Arc::new(Mutex::new(HashMap::new())),
+            openai_streams: Arc::new(Mutex::new(HashMap::new())),
+            listeners: Arc::new(Mutex::new(HashMap::new())),
+            reconnect_attempts: 0,
+            user_disconnected: false,
+        })
+    }
+}
+
+pub struct MeshClient {
+    runtime: CoreRuntime,
+    pub(crate) config: ClientConfig,
+    pub(crate) connected: bool,
+    pub(crate) cancel_flags: CancelFlagMap,
+    openai_streams: OpenAiStreamMap,
+    pub listeners: Arc<Mutex<HashMap<String, Arc<dyn crate::events::EventListener>>>>,
+    pub reconnect_attempts: u32,
+    pub user_disconnected: bool,
+}
+
+impl MeshClient {
+    /// Join the mesh using the invite token.
+    pub async fn join(&mut self) -> Result<(), ClientError> {
+        self.connected = true;
+        self.emit_event(crate::events::Event::Connecting);
+        self.emit_event(crate::events::Event::Joined {
+            node_id: self.config.invite_token.0.clone(),
+        });
+        Ok(())
+    }
+
+    /// List available models on the mesh.
+    pub async fn list_models(&self) -> Result<Vec<Model>, ClientError> {
+        let response = get_json::<ModelsResponse>(&self.config, "/v1/models")
+            .await
+            .map_err(ClientError::Endpoint)?;
+
+        Ok(response
+            .data
+            .into_iter()
+            .map(|model| Model {
+                id: model.id.clone(),
+                name: model.id,
+                context_length: model.metadata.context_length,
+            })
+            .collect())
+    }
+
+    /// Send an OpenAI-compatible JSON request without projecting it into a
+    /// language-specific SDK type.
+    ///
+    /// This is the forward-compatible path for agent payloads. Tool schemas,
+    /// tool calls, multimodal content, structured-output settings, usage, and
+    /// future OpenAI fields are preserved in the JSON body and response.
+    pub async fn openai_request(
+        &self,
+        path: &str,
+        body_json: String,
+    ) -> Result<OpenAiResponse, ClientError> {
+        let body_json =
+            prepare_openai_request(path, &body_json, false).map_err(ClientError::Endpoint)?;
+
+        let response = request_post_bytes(&self.config, path, body_json)
+            .await
+            .map_err(ClientError::Endpoint)?;
+        parse_openai_response(&response).map_err(ClientError::Endpoint)
+    }
+
+    /// Start a protocol-preserving OpenAI-compatible SSE request.
+    ///
+    /// Complete SSE events are delivered without projecting their JSON shape,
+    /// so text, reasoning, tool-call argument deltas, usage, and future event
+    /// types remain available to language bindings.
+    pub fn openai_stream(
+        &self,
+        path: &str,
+        body_json: String,
+        listener: Arc<dyn crate::events::OpenAiStreamListener>,
+    ) -> Result<RequestId, ClientError> {
+        let body_json =
+            prepare_openai_request(path, &body_json, true).map_err(ClientError::Endpoint)?;
+        let request_id = RequestId::new();
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let cancel_notify = Arc::new(Notify::new());
+        self.openai_streams.lock().unwrap().insert(
+            request_id.0.clone(),
+            ActiveOpenAiStream {
+                cancelled: cancelled.clone(),
+                cancel_notify: cancel_notify.clone(),
+            },
+        );
+
+        let config = self.config.clone();
+        let path = path.to_string();
+        let id = request_id.0.clone();
+        let streams = self.openai_streams.clone();
+        self.runtime.handle().spawn(async move {
+            let result = openai_stream::run(
+                &config,
+                &path,
+                body_json,
+                &id,
+                cancelled.clone(),
+                cancel_notify,
+                listener.clone(),
+            )
+            .await;
+            streams.lock().unwrap().remove(&id);
+            let was_cancelled = cancelled.load(Ordering::Acquire)
+                || result.as_ref().is_err_and(|error| error.cancelled);
+            if was_cancelled {
+                listener.on_event(crate::events::OpenAiStreamEvent::Failed {
+                    request_id: id,
+                    status_code: None,
+                    error: "cancelled".to_string(),
+                    body: None,
+                });
+            } else {
+                match result {
+                    Ok(()) => {
+                        listener.on_event(crate::events::OpenAiStreamEvent::Completed {
+                            request_id: id,
+                        });
+                    }
+                    Err(error) => {
+                        listener.on_event(crate::events::OpenAiStreamEvent::Failed {
+                            request_id: id,
+                            status_code: error.status_code,
+                            error: error.message,
+                            body: error.body,
+                        });
+                    }
+                }
+            }
+        });
+        Ok(request_id)
+    }
+
+    /// Start a chat completion request. Sync — returns a `RequestId` immediately.
+    /// Streaming tokens are delivered via `listener.on_event()` on the runtime thread.
+    pub fn chat(
+        &self,
+        request: ChatRequest,
+        listener: Arc<dyn crate::events::EventListener>,
+    ) -> RequestId {
+        let id = RequestId::new();
+        let cancel_flag = Arc::new(AtomicBool::new(false));
+        self.cancel_flags
+            .lock()
+            .unwrap()
+            .insert(id.0.clone(), (cancel_flag.clone(), listener.clone()));
+        let id_clone = id.0.clone();
+        let config = self.config.clone();
+        self.runtime.handle().spawn(async move {
+            let body = serde_json::json!({
+                "model": request.model,
+                "messages": request.messages.iter().map(|m| serde_json::json!({
+                    "role": m.role,
+                    "content": m.content,
+                })).collect::<Vec<_>>(),
+                "max_tokens": 64,
+                "temperature": 0,
+                "stream": false,
+            });
+            match post_json::<ChatCompletionResponse>(
+                &config,
+                "/v1/chat/completions",
+                body.to_string(),
+            )
+            .await
+            {
+                Ok(response) => {
+                    if !cancel_flag.load(Ordering::Relaxed) {
+                        if let Some(content) = response
+                            .choices
+                            .first()
+                            .map(|choice| choice.message.content.clone())
+                        {
+                            listener.on_event(crate::events::Event::TokenDelta {
+                                request_id: id_clone.clone(),
+                                delta: content,
+                            });
+                        }
+                        listener.on_event(crate::events::Event::Completed {
+                            request_id: id_clone.clone(),
+                        });
+                    }
+                }
+                Err(error) => {
+                    listener.on_event(crate::events::Event::Failed {
+                        request_id: id_clone,
+                        error,
+                    });
+                }
+            }
+        });
+        id
+    }
+
+    /// Start a responses request. Sync — returns a `RequestId` immediately.
+    pub fn responses(
+        &self,
+        request: ResponsesRequest,
+        listener: Arc<dyn crate::events::EventListener>,
+    ) -> RequestId {
+        let id = RequestId::new();
+        let cancel_flag = Arc::new(AtomicBool::new(false));
+        self.cancel_flags
+            .lock()
+            .unwrap()
+            .insert(id.0.clone(), (cancel_flag.clone(), listener.clone()));
+        let id_clone = id.0.clone();
+        let config = self.config.clone();
+        self.runtime.handle().spawn(async move {
+            let body = serde_json::json!({
+                "model": request.model,
+                "messages": [{
+                    "role": "user",
+                    "content": request.input,
+                }],
+                "max_tokens": 64,
+                "temperature": 0,
+                "stream": false,
+            });
+            match post_json::<ChatCompletionResponse>(
+                &config,
+                "/v1/chat/completions",
+                body.to_string(),
+            )
+            .await
+            {
+                Ok(response) => {
+                    if !cancel_flag.load(Ordering::Relaxed) {
+                        if let Some(content) = response
+                            .choices
+                            .first()
+                            .map(|choice| choice.message.content.clone())
+                        {
+                            listener.on_event(crate::events::Event::TokenDelta {
+                                request_id: id_clone.clone(),
+                                delta: content,
+                            });
+                        }
+                        listener.on_event(crate::events::Event::Completed {
+                            request_id: id_clone.clone(),
+                        });
+                    }
+                }
+                Err(error) => {
+                    listener.on_event(crate::events::Event::Failed {
+                        request_id: id_clone,
+                        error,
+                    });
+                }
+            }
+        });
+        id
+    }
+
+    /// Cancel an in-flight request. No-op if the `request_id` is unknown.
+    /// Emits `Event::Failed { error: "cancelled" }` to a legacy request listener when found.
+    /// OpenAI stream cancellation is emitted by the stream task after it stops producing events.
+    pub fn cancel(&self, request_id: RequestId) {
+        let entry = self.cancel_flags.lock().unwrap().remove(&request_id.0);
+        if let Some((flag, listener)) = entry {
+            flag.store(true, Ordering::Relaxed);
+            listener.on_event(crate::events::Event::Failed {
+                request_id: request_id.0.clone(),
+                error: "cancelled".to_string(),
+            });
+            return;
+        }
+
+        let entry = self.openai_streams.lock().unwrap().remove(&request_id.0);
+        if let Some(active) = entry {
+            active.cancelled.store(true, Ordering::Release);
+            active.cancel_notify.notify_one();
+        }
+    }
+
+    /// Return the current mesh connection status.
+    pub async fn status(&self) -> Status {
+        Status {
+            connected: self.connected,
+            peer_count: usize::from(self.connected),
+        }
+    }
+
+    pub async fn disconnect(&mut self) {
+        self.cancel_openai_streams();
+        self.user_disconnected = true;
+        self.connected = false;
+        self.emit_event(crate::events::Event::Disconnected {
+            reason: "disconnect_requested".to_string(),
+        });
+    }
+
+    pub async fn reconnect(&mut self) -> Result<(), ClientError> {
+        self.user_disconnected = false;
+        self.reconnect_attempts = 0;
+        self.connected = false;
+        self.emit_event(crate::events::Event::Disconnected {
+            reason: "reconnect_requested".to_string(),
+        });
+        self.join().await
+    }
+
+    pub fn add_event_listener(&self, listener: Arc<dyn crate::events::EventListener>) -> String {
+        let listener_id = uuid::Uuid::new_v4().to_string();
+        self.listeners
+            .lock()
+            .unwrap()
+            .insert(listener_id.clone(), listener);
+        listener_id
+    }
+
+    fn cancel_openai_streams(&self) {
+        let streams = std::mem::take(&mut *self.openai_streams.lock().unwrap());
+        for active in streams.into_values() {
+            active.cancelled.store(true, Ordering::Release);
+            active.cancel_notify.notify_one();
+        }
+    }
+
+    pub fn remove_event_listener(&self, listener_id: &str) {
+        self.listeners.lock().unwrap().remove(listener_id);
+    }
+
+    fn emit_event(&self, event: crate::events::Event) {
+        let listeners = self
+            .listeners
+            .lock()
+            .unwrap()
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
+        for listener in listeners {
+            listener.on_event(event.clone());
+        }
+    }
+}
+
+pub struct ChatRequest {
+    pub model: String,
+    pub messages: Vec<ChatMessage>,
+}
+
+pub struct ChatMessage {
+    pub role: String,
+    pub content: String,
+}
+
+pub struct ResponsesRequest {
+    pub model: String,
+    pub input: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OpenAiResponse {
+    pub status_code: u16,
+    pub content_type: Option<String>,
+    pub body: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct Model {
+    pub id: String,
+    pub name: String,
+    pub context_length: Option<u32>,
+}
+
+pub struct Status {
+    pub connected: bool,
+    pub peer_count: usize,
+}
+
+pub struct RequestId(pub String);
+
+impl RequestId {
+    pub fn new() -> Self {
+        Self(uuid::Uuid::new_v4().to_string())
+    }
+}
+
+impl Default for RequestId {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+fn default_client_transport() -> ClientTransport {
+    std::env::var("MESH_CLIENT_API_BASE")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .map(|api_base_url| ClientTransport::OpenAiHttp { api_base_url })
+        .unwrap_or(ClientTransport::DirectMesh)
+}
+
+#[derive(Deserialize)]
+struct ModelsResponse {
+    data: Vec<ModelEntry>,
+}
+
+#[derive(Deserialize)]
+struct ModelEntry {
+    id: String,
+    #[serde(default)]
+    metadata: ModelMetadata,
+}
+
+#[derive(Default, Deserialize)]
+struct ModelMetadata {
+    context_length: Option<u32>,
+}
+
+#[derive(Deserialize)]
+struct ChatCompletionResponse {
+    choices: Vec<ChatChoice>,
+}
+
+#[derive(Deserialize)]
+struct ChatChoice {
+    message: ChatMessageResponse,
+}
+
+#[derive(Deserialize)]
+struct ChatMessageResponse {
+    content: String,
+}
+
+async fn get_json<T: for<'de> Deserialize<'de>>(
+    config: &ClientConfig,
+    path: &str,
+) -> Result<T, String> {
+    let response = request_get_bytes(config, path).await?;
+    parse_json_response(&response)
+}
+
+async fn post_json<T: for<'de> Deserialize<'de>>(
+    config: &ClientConfig,
+    path: &str,
+    body: String,
+) -> Result<T, String> {
+    let response = request_post_bytes(config, path, body).await?;
+    parse_json_response(&response)
+}
+
+async fn request_get_bytes(config: &ClientConfig, path: &str) -> Result<Vec<u8>, String> {
+    match &config.transport {
+        ClientTransport::DirectMesh => {
+            let request = http_get_request(path, "mesh.local", &config.user_agent);
+            direct_mesh_request(&config.invite_token, config.connect_timeout, request).await
+        }
+        ClientTransport::OpenAiHttp { api_base_url } => {
+            let request = http_get_request(path, &host_header(api_base_url)?, &config.user_agent);
+            http_request(api_base_url, request).await
+        }
+    }
+}
+
+async fn request_post_bytes(
+    config: &ClientConfig,
+    path: &str,
+    body: String,
+) -> Result<Vec<u8>, String> {
+    match &config.transport {
+        ClientTransport::DirectMesh => {
+            let request = http_post_request(path, "mesh.local", &config.user_agent, body);
+            direct_mesh_request(&config.invite_token, config.connect_timeout, request).await
+        }
+        ClientTransport::OpenAiHttp { api_base_url } => {
+            let request =
+                http_post_request(path, &host_header(api_base_url)?, &config.user_agent, body);
+            http_request(api_base_url, request).await
+        }
+    }
+}
+
+fn http_get_request(path: &str, host: &str, user_agent: &str) -> String {
+    format!(
+        "GET {path} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: {user_agent}\r\nConnection: close\r\n\r\n",
+    )
+}
+
+fn http_post_request(path: &str, host: &str, user_agent: &str, body: String) -> String {
+    format!(
+        "POST {path} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: {user_agent}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        body.len(),
+        body
+    )
+}
+
+async fn direct_mesh_request(
+    invite_token: &InviteToken,
+    connect_timeout: Duration,
+    request: String,
+) -> Result<Vec<u8>, String> {
+    let addr = decode_invite_endpoint_addr(invite_token.as_str())?;
+    let mut builder = Endpoint::builder(iroh::endpoint::presets::Minimal)
+        .secret_key(iroh::SecretKey::generate())
+        .alpns(vec![ALPN_V1.to_vec()])
+        .bind_addr(std::net::SocketAddr::from(([0, 0, 0, 0], 0)))
+        .map_err(|err| format!("build mesh endpoint: {err}"))?;
+    builder = builder.relay_mode(relay_mode_from_endpoint_addr(&addr));
+    let endpoint = builder
+        .bind()
+        .await
+        .map_err(|err| format!("bind mesh endpoint: {err}"))?;
+    let result = direct_mesh_request_with_endpoint(&endpoint, addr, connect_timeout, request).await;
+    endpoint.close().await;
+    result
+}
+
+async fn direct_mesh_request_with_endpoint(
+    endpoint: &Endpoint,
+    addr: EndpointAddr,
+    connect_timeout: Duration,
+    request: String,
+) -> Result<Vec<u8>, String> {
+    if addr.relay_urls().next().is_some() {
+        let _ = tokio::time::timeout(connect_timeout, endpoint.online()).await;
+    }
+    let connection = tokio::time::timeout(connect_timeout, endpoint.connect(addr, ALPN_V1))
+        .await
+        .map_err(|_| "connect mesh endpoint: timed out".to_string())?
+        .map_err(|err| format!("connect mesh endpoint: {err}"))?;
+    let (mut send, mut recv) = connection
+        .open_bi()
+        .await
+        .map_err(|err| format!("open mesh request stream: {err}"))?;
+    send.write_all(&[STREAM_TUNNEL_HTTP])
+        .await
+        .map_err(|err| format!("write mesh request stream type: {err}"))?;
+    send.write_all(request.as_bytes())
+        .await
+        .map_err(|err| format!("write mesh request: {err}"))?;
+    send.finish()
+        .map_err(|err| format!("finish mesh request: {err}"))?;
+
+    let response = recv
+        .read_to_end(MAX_MESH_RESPONSE_BYTES)
+        .await
+        .map_err(|err| format!("read mesh response: {err}"))?;
+    connection.close(0u32.into(), b"mesh-client-request-complete");
+    Ok(response)
+}
+
+#[derive(Deserialize)]
+struct SignedBootstrapTokenAddrs {
+    serialized_addrs: Vec<Vec<u8>>,
+}
+
+fn decode_invite_endpoint_addr(invite_token: &str) -> Result<EndpointAddr, String> {
+    let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(invite_token)
+        .map_err(|err| format!("invalid invite token encoding: {err}"))?;
+    if let Ok(addr) = serde_json::from_slice::<EndpointAddr>(&payload) {
+        return Ok(addr);
+    }
+    let signed = serde_json::from_slice::<SignedBootstrapTokenAddrs>(&payload)
+        .map_err(|err| format!("invalid invite token payload: {err}"))?;
+    let addr = signed
+        .serialized_addrs
+        .first()
+        .ok_or_else(|| "signed invite token has no endpoint addresses".to_string())?;
+    serde_json::from_slice(addr).map_err(|err| format!("invalid signed invite endpoint: {err}"))
+}
+
+fn relay_mode_from_endpoint_addr(addr: &EndpointAddr) -> iroh::endpoint::RelayMode {
+    match relay_map_from_endpoint_addr(addr) {
+        Some(relay_map) => iroh::endpoint::RelayMode::Custom(relay_map),
+        None => iroh::endpoint::RelayMode::Disabled,
+    }
+}
+
+fn relay_map_from_endpoint_addr(addr: &EndpointAddr) -> Option<iroh::RelayMap> {
+    let configs: Vec<_> = addr
+        .relay_urls()
+        .cloned()
+        // Preserve iroh's default QUIC Address Discovery (QAD). `new(url, None)`
+        // disables it, preventing reflexive candidate discovery and direct-path
+        // upgrades across NAT (see issue #1065). `RelayUrl::into()` keeps QAD on.
+        .map(|url| -> iroh::RelayConfig { url.into() })
+        .collect();
+    if configs.is_empty() {
+        None
+    } else {
+        Some(iroh::RelayMap::from_iter(configs))
+    }
+}
+
+async fn http_request(base_url: &str, request: String) -> Result<Vec<u8>, String> {
+    let address = socket_addr(base_url)?;
+    let mut stream = TcpStream::connect(&address)
+        .await
+        .map_err(|err| format!("connect {address}: {err}"))?;
+    stream
+        .write_all(request.as_bytes())
+        .await
+        .map_err(|err| format!("write request: {err}"))?;
+    stream
+        .shutdown()
+        .await
+        .map_err(|err| format!("shutdown request: {err}"))?;
+
+    let mut response = Vec::new();
+    stream
+        .read_to_end(&mut response)
+        .await
+        .map_err(|err| format!("read response: {err}"))?;
+    Ok(response)
+}
+
+fn parse_json_response<T: for<'de> Deserialize<'de>>(response: &[u8]) -> Result<T, String> {
+    let response = parse_openai_response(response)?;
+    if !(200..300).contains(&response.status_code) {
+        return Err(format!(
+            "HTTP request failed with status {}: {}",
+            response.status_code, response.body
+        ));
+    }
+    serde_json::from_str(&response.body).map_err(|err| format!("decode JSON: {err}"))
+}
+
+fn validate_openai_path(path: &str) -> Result<(), String> {
+    if !path.starts_with("/v1/") {
+        return Err("OpenAI request path must start with /v1/".to_string());
+    }
+    if path.contains("..")
+        || path
+            .bytes()
+            .any(|byte| byte.is_ascii_control() || byte == b' ')
+    {
+        return Err("OpenAI request path contains invalid characters".to_string());
+    }
+    Ok(())
+}
+
+fn prepare_openai_request(path: &str, body_json: &str, stream: bool) -> Result<String, String> {
+    validate_openai_path(path)?;
+    let mut body = serde_json::from_str::<serde_json::Value>(body_json)
+        .map_err(|error| format!("invalid JSON request body: {error}"))?;
+    let object = body
+        .as_object_mut()
+        .ok_or_else(|| "OpenAI request body must be a JSON object".to_string())?;
+    object.insert("stream".to_string(), serde_json::Value::Bool(stream));
+    serde_json::to_string(&body).map_err(|error| format!("serialize JSON request body: {error}"))
+}
+
+fn parse_openai_response(response: &[u8]) -> Result<OpenAiResponse, String> {
+    let header_end = response
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .ok_or_else(|| "malformed HTTP response".to_string())?;
+    let mut headers = [httparse::EMPTY_HEADER; 64];
+    let mut parsed = httparse::Response::new(&mut headers);
+    let status = parsed
+        .parse(&response[..header_end + 4])
+        .map_err(|error| format!("parse HTTP response: {error}"))?;
+    if !status.is_complete() {
+        return Err("incomplete HTTP response headers".to_string());
+    }
+    let status_code = parsed
+        .code
+        .ok_or_else(|| "HTTP response is missing a status code".to_string())?;
+    let content_type = parsed
+        .headers
+        .iter()
+        .find(|header| header.name.eq_ignore_ascii_case("content-type"))
+        .map(|header| String::from_utf8_lossy(header.value).trim().to_string());
+    let is_chunked = parsed.headers.iter().any(|header| {
+        header.name.eq_ignore_ascii_case("transfer-encoding")
+            && String::from_utf8_lossy(header.value)
+                .split(',')
+                .any(|value| value.trim().eq_ignore_ascii_case("chunked"))
+    });
+    let body_bytes = &response[header_end + 4..];
+    let body_bytes = if is_chunked {
+        decode_chunked_body(body_bytes)?
+    } else {
+        body_bytes.to_vec()
+    };
+    let body = String::from_utf8(body_bytes)
+        .map_err(|error| format!("OpenAI response body is not UTF-8: {error}"))?;
+    Ok(OpenAiResponse {
+        status_code,
+        content_type,
+        body,
+    })
+}
+
+fn decode_chunked_body(mut input: &[u8]) -> Result<Vec<u8>, String> {
+    let mut output = Vec::new();
+    loop {
+        let line_end = input
+            .windows(2)
+            .position(|window| window == b"\r\n")
+            .ok_or_else(|| "malformed chunked response: missing size terminator".to_string())?;
+        let size_text = std::str::from_utf8(&input[..line_end])
+            .map_err(|error| format!("invalid chunk size: {error}"))?;
+        let size_text = size_text.split(';').next().unwrap_or(size_text).trim();
+        let size = usize::from_str_radix(size_text, 16)
+            .map_err(|error| format!("invalid chunk size '{size_text}': {error}"))?;
+        input = &input[line_end + 2..];
+        if size == 0 {
+            break;
+        }
+        let chunk_end = size
+            .checked_add(2)
+            .ok_or_else(|| "malformed chunked response: chunk size overflows usize".to_string())?;
+        if input.len() < chunk_end || &input[size..chunk_end] != b"\r\n" {
+            return Err("malformed chunked response: incomplete chunk".to_string());
+        }
+        output.extend_from_slice(&input[..size]);
+        input = &input[chunk_end..];
+    }
+    Ok(output)
+}
+
+fn host_header(base_url: &str) -> Result<String, String> {
+    socket_addr(base_url)
+}
+
+/// Extracts the `host:port` authority from an OpenAI-compatible base URL.
+///
+/// The `OpenAiHttp` transport speaks plaintext HTTP/1.1 over a raw `TcpStream`,
+/// so HTTPS base URLs are rejected rather than silently downgraded to
+/// cleartext. Scheme matching is case-insensitive; a bare `host:port` (no
+/// scheme) is accepted and treated as plaintext.
+fn socket_addr(base_url: &str) -> Result<String, String> {
+    let scheme_end = base_url.find("://").map(|index| index + 3);
+    let (scheme, authority) = match scheme_end {
+        Some(end) => (base_url[..end - 3].to_ascii_lowercase(), &base_url[end..]),
+        None => (String::new(), base_url),
+    };
+
+    match scheme.as_str() {
+        "https" => {
+            return Err("HTTPS is not supported by the raw-TCP OpenAiHttp transport".to_string());
+        }
+        "" | "http" => {}
+        other => {
+            return Err(format!(
+                "unsupported API base URL scheme '{other}': the OpenAiHttp transport only supports plaintext HTTP"
+            ));
+        }
+    }
+
+    authority
+        .trim_end_matches('/')
+        .split('/')
+        .next()
+        .filter(|value| !value.is_empty())
+        .map(|value| value.to_string())
+        .ok_or_else(|| format!("invalid API base URL: {base_url}"))
+}
+
+#[cfg(test)]
+mod socket_addr_tests {
+    use super::socket_addr;
+
+    const HTTPS_REJECTED: &str = "HTTPS is not supported by the raw-TCP OpenAiHttp transport";
+
+    #[test]
+    fn rejects_https() {
+        let error = socket_addr("https://example.com:9337/v1")
+            .expect_err("raw TCP transport must reject HTTPS URLs");
+
+        assert_eq!(error, HTTPS_REJECTED);
+    }
+
+    #[test]
+    fn rejects_mixed_case_https() {
+        for base_url in [
+            "HTTPS://example.com:9337/v1",
+            "Https://example.com:9337/v1",
+            "hTTpS://example.com:9337/v1",
+        ] {
+            let error = socket_addr(base_url)
+                .expect_err("mixed-case HTTPS must be rejected with the HTTPS error");
+
+            assert_eq!(error, HTTPS_REJECTED, "unexpected error for {base_url}");
+        }
+    }
+
+    #[test]
+    fn accepts_mixed_case_http() {
+        assert_eq!(
+            socket_addr("HTTP://example.com:9337/v1"),
+            Ok("example.com:9337".to_string())
+        );
+        assert_eq!(
+            socket_addr("Http://example.com:9337/v1/"),
+            Ok("example.com:9337".to_string())
+        );
+    }
+
+    #[test]
+    fn rejects_unsupported_scheme() {
+        let error = socket_addr("ftp://example.com:9337/v1")
+            .expect_err("non-HTTP schemes must be rejected");
+
+        assert!(
+            error.contains("unsupported API base URL scheme 'ftp'"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn preserves_plaintext_url_behavior() {
+        assert_eq!(
+            socket_addr("http://example.com:9337/v1/"),
+            Ok("example.com:9337".to_string())
+        );
+        assert_eq!(
+            socket_addr("example.com:9337/v1/"),
+            Ok("example.com:9337".to_string())
+        );
+    }
+
+    #[test]
+    fn rejects_empty_authority() {
+        assert!(socket_addr("http://").is_err());
+        assert!(socket_addr("").is_err());
+    }
+}
+
+#[cfg(test)]
+mod openai_response_tests {
+    use super::{
+        decode_chunked_body, parse_openai_response, prepare_openai_request, validate_openai_path,
+    };
+
+    #[test]
+    fn parses_json_response_without_projecting_agent_fields() {
+        let body = r#"{"choices":[{"message":{"tool_calls":[{"id":"call_1","function":{"name":"search","arguments":"{}"}}]},"finish_reason":"tool_calls"}],"usage":{"total_tokens":12}}"#;
+        let wire = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+            body.len(),
+            body
+        );
+
+        let response = parse_openai_response(wire.as_bytes()).expect("response parses");
+
+        assert_eq!(response.status_code, 200);
+        assert_eq!(response.content_type.as_deref(), Some("application/json"));
+        assert_eq!(response.body, body);
+    }
+
+    #[test]
+    fn decodes_chunked_sse_without_losing_tool_call_deltas() {
+        let chunk = b"data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"id\":\"call_1\"}]}}]}\n\n";
+        let mut encoded = format!("{:X}\r\n", chunk.len()).into_bytes();
+        encoded.extend_from_slice(chunk);
+        encoded.extend_from_slice(b"\r\n0\r\n\r\n");
+
+        assert_eq!(decode_chunked_body(&encoded).expect("chunks decode"), chunk);
+    }
+
+    #[test]
+    fn rejects_chunk_size_that_overflows_platform_usize() {
+        let encoded = format!("{:X}\r\n", usize::MAX);
+
+        let error = decode_chunked_body(encoded.as_bytes()).expect_err("oversized chunk fails");
+
+        assert!(error.contains("overflows usize"));
+    }
+
+    #[test]
+    fn rejects_paths_that_can_escape_or_inject_headers() {
+        assert!(validate_openai_path("/v1/chat/completions").is_ok());
+        assert!(validate_openai_path("/v1/responses").is_ok());
+        assert!(validate_openai_path("/admin").is_err());
+        assert!(validate_openai_path("/v1/../admin").is_err());
+        assert!(validate_openai_path("/v1/models\r\nX-Evil: yes").is_err());
+    }
+
+    #[test]
+    fn streaming_requests_force_the_protocol_stream_flag() {
+        let body = prepare_openai_request(
+            "/v1/chat/completions",
+            r#"{"model":"test","stream":false,"tools":[{"type":"function"}]}"#,
+            true,
+        )
+        .expect("streaming body is valid");
+        let value: serde_json::Value = serde_json::from_str(&body).expect("body remains JSON");
+
+        assert_eq!(value["stream"], true);
+        assert_eq!(value["tools"][0]["type"], "function");
+    }
+
+    #[test]
+    fn buffered_requests_disable_the_protocol_stream_flag() {
+        let body = prepare_openai_request(
+            "/v1/responses",
+            r#"{"model":"test","stream":true,"input":"hello"}"#,
+            false,
+        )
+        .expect("buffered body is valid");
+        let value: serde_json::Value = serde_json::from_str(&body).expect("body remains JSON");
+
+        assert_eq!(value["stream"], false);
+        assert_eq!(value["input"], "hello");
+    }
+}
+
+#[cfg(test)]
+mod model_list_tests {
+    use super::ModelsResponse;
+
+    #[test]
+    fn parses_served_context_length_and_preserves_legacy_models() {
+        let response: ModelsResponse = serde_json::from_str(
+            r#"{"data":[{"id":"ready","metadata":{"context_length":131072}},{"id":"legacy"}]}"#,
+        )
+        .expect("models response parses");
+
+        assert_eq!(response.data[0].metadata.context_length, Some(131_072));
+        assert_eq!(response.data[1].metadata.context_length, None);
+    }
+}
+
+#[cfg(test)]
+mod openai_stream_lifecycle_tests {
+    use super::{ActiveOpenAiStream, ClientBuilder, InviteToken};
+    use crate::crypto::keys::OwnerKeypair;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use tokio::sync::Notify;
+
+    #[tokio::test]
+    async fn disconnect_cancels_and_drains_openai_streams() {
+        let mut client = ClientBuilder::new(
+            OwnerKeypair::generate(),
+            InviteToken("test-invite".to_string()),
+        )
+        .build()
+        .expect("client builds");
+        let first_cancelled = Arc::new(AtomicBool::new(false));
+        let second_cancelled = Arc::new(AtomicBool::new(false));
+        for (request_id, cancelled) in [
+            ("stream-1", first_cancelled.clone()),
+            ("stream-2", second_cancelled.clone()),
+        ] {
+            client.openai_streams.lock().unwrap().insert(
+                request_id.to_string(),
+                ActiveOpenAiStream {
+                    cancelled,
+                    cancel_notify: Arc::new(Notify::new()),
+                },
+            );
+        }
+
+        client.disconnect().await;
+
+        assert!(first_cancelled.load(Ordering::Acquire));
+        assert!(second_cancelled.load(Ordering::Acquire));
+        assert!(client.openai_streams.lock().unwrap().is_empty());
+    }
+}
+
+#[cfg(test)]
+mod relay_map_tests {
+    use super::relay_map_from_endpoint_addr;
+    use iroh::{EndpointAddr, RelayUrl, SecretKey};
+    use std::str::FromStr;
+
+    #[test]
+    fn endpoint_addr_relays_preserve_default_qad() {
+        let addr = EndpointAddr::new(SecretKey::generate().public())
+            .with_relay_url(
+                RelayUrl::from_str("https://relay-a.example.com").expect("relay URL parses"),
+            )
+            .with_relay_url(
+                RelayUrl::from_str("https://relay-b.example.com").expect("relay URL parses"),
+            );
+
+        let map = relay_map_from_endpoint_addr(&addr).expect("relay map should be enabled");
+        let configs = map.relays::<Vec<_>>();
+
+        assert_eq!(configs.len(), 2);
+        assert!(
+            configs
+                .iter()
+                .all(|config| { config.quic.as_ref().is_some_and(|quic| quic.port == 7842) })
+        );
+    }
+}

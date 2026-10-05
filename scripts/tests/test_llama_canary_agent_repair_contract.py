@@ -151,6 +151,7 @@ turns=0
 date() { echo "$now"; }
 agent_prompt() { echo initial; }
 agent_feedback_prompt() { echo feedback; }
+record_failure_class() { :; }
 assert_agent_control_unchanged() { :; }
 validate_agent_manifest_changes() { :; }
 agent_session_step() {
@@ -198,22 +199,56 @@ run_candidate_gates() {
         self.assertIn("scripts/check-skippy-generated-family-patch.sh", build)
         for package in (
             "skippy-runtime",
-            "skippy-server",
-            "skippy-model-package",
+            "skippy-cli",
+            "skippy-package-builder",
             "skippy-correctness",
         ):
             self.assertIn(f"-p {package}", build)
         self.assertIn("scripts/skippy-ci-smoke.sh", build)
 
+    def test_model_cache_is_an_infrastructure_gate_outside_agent_repair(self) -> None:
+        cache = self.wrapper[
+            self.wrapper.index("check_family_cache() {") :
+            self.wrapper.index("remaining_verification_seconds() {")
+        ]
+        gates = self.wrapper[
+            self.wrapper.index("run_candidate_gates() {") :
+            self.wrapper.index("write_split_certification_roster() {")
+        ]
+        main = self.wrapper[self.wrapper.index('if ! check_family_cache; then') :]
+        self.assertIn("--check-cache", cache)
+        self.assertIn("--gguf-constants", gates)
+        self.assertLess(gates.index("run_prepare"), gates.index("--gguf-constants"))
+        self.assertLess(gates.index("--gguf-constants"), gates.index("run_full_build"))
+        self.assertLess(main.index("check_family_cache"), main.index("repair_candidate_until_green"))
+        self.assertIn("record_failure_class infrastructure model-cache", main)
+
     def test_certification_is_full_and_uses_prebuilt_candidate(self) -> None:
         certify = self.wrapper[
-            self.wrapper.index("run_certification() {") : self.wrapper.index("write_upstream_summary() {")
+            self.wrapper.index("run_certification() {") : self.wrapper.index("run_early_metal_certification() {")
         ]
         self.assertIn("skippy-llama-parity.py --llama-src .deps/llama.cpp validate", certify)
         self.assertNotIn("--cadence", certify)
         self.assertNotIn("--families", certify)
         self.assertNotIn("skippy-canary-live-matrix", certify)
         self.assertIn("scripts/skippy-family-battery.sh --skip-build --plan", certify)
+
+    def test_early_metal_gate_uses_exact_prebuilt_candidate_before_family_fanout(self) -> None:
+        gate = self.wrapper[
+            self.wrapper.index("run_early_metal_certification() {") :
+            self.wrapper.index("run_candidate_gates() {")
+        ]
+        self.assertIn("--skip-build", gate)
+        self.assertIn("-workloads/cargo/debug/skippy\"", gate)
+        self.assertIn('.target.name == "skippy_serving"', gate)
+        for family in ("llama", "mamba2", "deepseek2", "nomic-bert-embedding",
+                       "jina-bert-v2-rerank", "t5-encoder-decoder", "qwen3-vl"):
+            self.assertIn(family, gate)
+        candidate = self.wrapper[
+            self.wrapper.index("run_candidate_gates() {") :
+            self.wrapper.index("write_split_certification_roster() {")
+        ]
+        self.assertLess(candidate.index("run_full_build"), candidate.index("run_early_metal_certification"))
 
     def test_agent_has_no_github_credentials_or_publication_authority(self) -> None:
         agent = self.wrapper[
@@ -241,6 +276,87 @@ run_candidate_gates() {
         self.assertIn("agent developer task exited with status %s", agent)
         self.assertIn('tee -a "$AGENT_LOG"', agent)
 
+    def test_distributed_repair_restores_exact_candidate_and_reads_feedback(self) -> None:
+        restore = self.wrapper[
+            self.wrapper.index("restore_previous_repair_candidate() {") :
+            self.wrapper.index("agent_session_step() {")
+        ]
+        self.assertIn('git bundle verify "$bundle"', restore)
+        self.assertIn('git diff --binary "$BASE_HEAD" "$expected" -- | git apply --index --binary', restore)
+        self.assertIn('git write-tree', restore)
+        self.assertIn('CANARY_PREVIOUS_FEEDBACK', restore)
+        prompt = self.wrapper[
+            self.wrapper.index("agent_prompt() {") :
+            self.wrapper.index("restore_previous_repair_candidate() {")
+        ]
+        self.assertIn('Read the digest-bound family failure summary', prompt)
+
+    def test_snapshot_requires_edits_to_a_restored_repair_build_candidate(self) -> None:
+        snapshot = self.wrapper[
+            self.wrapper.index("snapshot_candidate_tree() {") :
+            self.wrapper.index("write_candidate_bundle() {")
+        ]
+        for mode, bundle, edited, expected_status in (
+            ("repair-build", "prior.bundle", False, 1),
+            ("repair-build", "prior.bundle", True, 0),
+            ("repair-build", "", False, 0),
+            ("repair", "", False, 0),
+        ):
+            with self.subTest(mode=mode, bundle=bundle, edited=edited):
+                with tempfile.TemporaryDirectory() as directory:
+                    repo = Path(directory) / "repo"
+                    repo.mkdir()
+                    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+                    subprocess.run(["git", "config", "user.name", "Canary Test"], cwd=repo, check=True)
+                    subprocess.run(["git", "config", "user.email", "canary@example.test"], cwd=repo, check=True)
+                    source = repo / "candidate.txt"
+                    source.write_text("base\n")
+                    subprocess.run(["git", "add", "candidate.txt"], cwd=repo, check=True)
+                    subprocess.run(["git", "commit", "-qm", "base"], cwd=repo, check=True)
+                    source.write_text("restored\n")
+                    subprocess.run(["git", "commit", "-qam", "prior candidate"], cwd=repo, check=True)
+                    candidate = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
+                    base = subprocess.check_output(["git", "rev-parse", "HEAD^"], cwd=repo, text=True).strip()
+                    delta = subprocess.check_output(["git", "diff", "--binary", base, candidate], cwd=repo)
+                    subprocess.run(["git", "reset", "--hard", "-q", base], cwd=repo, check=True)
+                    subprocess.run(["git", "apply", "--index", "--binary"], cwd=repo, input=delta, check=True)
+                    if edited:
+                        source.write_text("repaired\n")
+                    build = Path(directory) / "build"
+                    closure = Path(f"{build}-workloads")
+                    closure.mkdir()
+                    (closure / "producer.json").write_text("{}\n")
+                    fixture = "\n".join((
+                        "set -euo pipefail",
+                        'ROOT="$1" LLAMA_STAGE_BUILD_DIR="$2" HARNESS_MODE="$3"',
+                        'CANARY_INPUT_BUNDLE="$4" CANARY_CANDIDATE_SHA="$5" BASE_HEAD="$6"',
+                        'UPSTREAM_SHA=0123456789abcdef',
+                        'assert_agent_control_unchanged() { :; }',
+                        'verify_repair_pin() { :; }',
+                        'validate_agent_manifest_changes() { :; }',
+                        'python3() { :; }',
+                        'shasum() { printf "%064d  %s\\n" 0 "$3"; }',
+                        snapshot,
+                        'snapshot_candidate_tree',
+                    ))
+                    result = subprocess.run(
+                        ["bash", "-c", fixture, "bash", str(repo), str(build), mode, bundle, candidate, base],
+                        cwd=repo, text=True, capture_output=True, check=False,
+                    )
+                    self.assertEqual(expected_status, result.returncode, result.stderr)
+                    if expected_status:
+                        self.assertIn("agent made no changes to the restored candidate", result.stderr)
+
+    def test_failed_repair_keeps_unverified_source_in_uploaded_evidence(self) -> None:
+        failure = self.wrapper[self.wrapper.index('if repair_candidate_until_green; then'):
+                               self.wrapper.index('snapshot_candidate_tree', self.wrapper.index('if repair_candidate_until_green; then'))]
+        self.assertIn('git show "$BASE_HEAD:scripts/llama-canary-recover-source.py"', failure)
+        self.assertIn('"$STATE_DIR/recovery"', failure)
+        self.assertIn('exit "$status"', failure)
+        workflow = (ROOT / '.github/workflows/llama-canary-family-pass.yml').read_text()
+        self.assertIn('name: Upload build and repair evidence', workflow)
+        self.assertIn('if: ${{ success() || failure() || cancelled() }}', workflow)
+
     def test_agent_cannot_change_harness_or_commit(self) -> None:
         guard = self.wrapper[
             self.wrapper.index("assert_agent_control_unchanged() {") : self.wrapper.index("run_prepare() {")
@@ -259,7 +375,7 @@ run_candidate_gates() {
         ):
             self.assertIn(path, guard)
         self.assertNotIn("ci/llama-canary/family-certified.json", guard)
-        self.assertNotIn("docs/skippy/llama-parity-candidates.json", guard)
+        self.assertNotIn("skippy/docs/llama-parity-candidates.json", guard)
         policy = MANIFEST_POLICY.read_text(encoding="utf-8")
         self.assertIn("resources.estimated_model_bytes", policy)
         self.assertIn("existing parity candidate rows changed or were reordered", policy)
@@ -413,7 +529,7 @@ run_candidate_gates() {
         self.assertIn("rm -rf /tmp/llama-old-pin /tmp/llama-repair /tmp/llama-repair-*", self.wrapper)
 
     def test_runnable_row_carrying_unsupported_reason_is_rejected(self) -> None:
-        parity = ROOT / "scripts" / "skippy-llama-parity.py"
+        parity = ROOT / "skippy" / "scripts" / "skippy-llama-parity.py"
         sys.path.insert(0, str(parity.parent))
         try:
             spec = importlib.util.spec_from_file_location("skippy_llama_parity_validate", parity)

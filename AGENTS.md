@@ -1,340 +1,31 @@
 # Agent Notes
 
-## Repo Overview
+## Repository and instruction scope
 
-This repo (`mesh-llm`) contains mesh-llm — a Rust binary that pools GPUs over QUIC for distributed LLM inference using llama.cpp.
+This is one Cargo workspace with two products: standalone Skippy in `skippy/` and MeshLLM in `mesh/`. Mesh depends on Skippy; Skippy must not depend on Mesh crates or plugin hosts. Product-specific guidance is in `skippy/AGENTS.md` and `mesh/AGENTS.md`. Read both when changing their integration.
 
-The workspace is split across many crates under `crates/`. The shipped binary `mesh-llm` (`crates/mesh-llm/`) is a thin entry point: it builds the Tokio runtime, parses the CLI via `mesh-llm-cli`, dispatches one-shot commands (via its `commands/` module and `mesh-llm-commands`), and hands the runtime surfaces (`serve` / `client`) to `mesh-llm-host-runtime`, where the bulk of host-side logic lives. A lighter parallel crate `mesh-client` (`mesh-llm-client`) carries the same domain shape for client-only usage. Embedded llama.cpp staged-runtime support lives in the `skippy-*` crates.
+Root `Cargo.toml`, `Cargo.lock`, `.cargo/`, `just/`, CI, and cross-workspace tooling are shared infrastructure. There is no `shared/` product tree. Product scripts and their tests live under the owning product; root script forwarders preserve CI entrypoints. Build outputs and native working caches remain at root `target/` and `.deps/`. The generated website output is root `docs/`; do not hand-edit it.
 
-## Key Docs
+## Shared docs
 
 | Doc | What it covers |
 |---|---|
 | `README.md` | Quickstart and documentation hub |
-| `docs/MESHES.md` | Public/private meshes, publishing, discovery, join flows |
-| `docs/SKIPPY_SPLITS.md` | Running big models with Skippy split serving |
-| `docs/LAYER_PACKAGE_REPOS.md` | Contributing and publishing layer package repos |
-| `docs/EXO_COMPARISON.md` | mesh-llm vs Exo comparison |
-| `CONTRIBUTING.md` | Build from source, dev workflow, UI dev |
-| `RELEASE.md` | Release process (build, bundle, tag, GitHub release) |
+| `CONTRIBUTING.md` | Build from source and development workflow |
+| `RELEASE.md` | Shared release process |
 | `ROADMAP.md` | Future directions |
-| `website/src/docs/pages/analytics.md` | What anonymous usage analytics collects, and how to opt out |
-| `crates/mesh-llm-analytics/README.md` | The only vendor-reporting crate; read before adding any event |
-| `crates/mesh-llm/TODO.md` | Current work items and backlog |
-| `crates/mesh-llm/README.md` | Rust crate overview and file map |
-| `docs/README.md` | Documentation map and topic directory guide |
-| `docs/design/DESIGN.md` | Architecture, protocols, features |
-| `docs/design/TESTING.md` | Test playbook, scenarios, remote deploy |
-| `docs/design/MULTI_MODAL.md` | Multimodal design: capability model, blob plugin, console, routing |
-| `docs/design/VIRTUAL_LLM.md` | Virtual LLM engine (inter-model collaboration) |
-| `docs/design/LLAMA_STAGE_INTEGRATION_PLAN.md` | llama.cpp staged-runtime integration and patch-queue background |
-| `docs/SKIPPY.md` | Skippy integration readiness and parity notes |
-| `docs/plugins/README.md` | Plugin architecture and plugin development |
-| `fly/README.md` | Fly.io deployment (console + API apps) |
-| `tools/relay-fly-legacy/README.md` | Archived self-hosted iroh relay reference; production uses services.iroh.computer |
+| `skippy/AGENTS.md` | Skippy build, native ABI, serving, and crate guidance |
+| `mesh/AGENTS.md` | MeshLLM host, protocol, UI, deployment, and crate guidance |
 
-## Public Website
-
-The public static website lives in `website/` and is built with Eleventy.
-Treat `website/` as the only maintained source for the public marketing/docs
-site. The build writes static-hosting output into `docs/`, alongside the repo's
-existing Markdown documentation. The root `docs/` tree is therefore mixed
-ownership by path: generated website artifacts live at `docs/index.html`,
-`docs/CNAME`, `docs/install.sh`, `docs/install.ps1`, `docs/setup-mesh`,
-`docs/mesh-llm-logo.svg`, `docs/funding.json`, `docs/.well-known/`,
-`docs/catalog/`, `docs/assets/`, `docs/pagefind/`, `docs/docs/`, and
-`docs/crates/`; project
-documentation Markdown such as `docs/MESHES.md`, `docs/design/**`,
-`docs/plugins/**`, and `docs/specs/**` remains source. Do not hand-edit the
-generated website artifact paths; update files under `website/src/` and rebuild
-instead.
-
-```bash
-just website-build # build website and crate API docs into docs/
-just website-dev   # Eleventy dev server on port 8765
-just website-clean # remove generated website output while preserving docs/ source
-just crate-docs    # regenerate only the published crate API docs
-```
-
-The website build runs Tailwind first, then Eleventy, then Pagefind. Eleventy
-copies `website/src/CNAME`, `website/src/assets/`, `website/src/mesh-llm-logo.svg`,
-and the repo-root `install.sh` / `install.ps1` (plus `install.md` published as
-`docs/setup-mesh`) into `docs/` for deployment.
-`website/src/assets/site.generated.css` is generated by Tailwind and should not
-be edited by hand. Use `just website-clean` before rebuilding when you need to
-purge generated website output without deleting authored Markdown docs.
+The canonical repo-local skills live under `.agents/skills/`; the selectable release-validation specialist is defined in `.agents/agents/release-validation.md`.
 
 ## Building
 
-Always use `just`. Never build manually.
+Always use `just`. Never build manually. Bare `just` (or `just build`) builds Skippy first, then MeshLLM. Use `just skippy` or `just mesh` for one product; `just release-build` builds both release products in the same order. The products share a workspace version and release tag but have distinct deliverables.
 
-```bash
-just build         # DEBUG build → ./target/debug/mesh-llm (fast, for iteration)
-just release-build # RELEASE build → ./target/release/mesh-llm (slow, for serious testing / deploy)
-just bundle        # portable tarball (uses the release binary)
-just stop          # stop tracked mesh-llm runtime processes
-just test          # quick inference test against :9337
-just auto          # build + stop + start with --auto
-just ui-dev        # vite dev server with HMR
-just website-build # build website/ into docs/ for static hosting
-just website-dev   # Eleventy dev server on :8765
-just ui-clean      # nuke node_modules + dist (fixes stale npm state)
-```
+`cargo check` and `cargo build` do not count as complete product builds: they skip native ABI preparation and the console, and `cargo check` produces no binary. Choose the owning product's `AGENTS.md` for product-specific build and packaging commands. See `CONTRIBUTING.md` for the full workflow.
 
-**Which build to use:**
-
-- `just build` → produces `./target/debug/mesh-llm` plus its adjacent
-  `target/debug/native-runtimes/` directory. It is the normal fast local
-  product: a backend-neutral dynamic host and one locally packaged runtime.
-  Use it for iteration and startup checks; use a release product for serious
-  behavior/performance testing or deployment.
-- `just release-build` → produces `./target/release/mesh-llm`. Use this for any
-  serious testing, deploying to test machines, bundling, or releases. Release
-  builds always produce one backend-neutral host plus a packageable native
-  runtime. When validating branch-local Skippy ABI, llama.cpp patches, MAS
-  hidden-state, or native tensor changes, use `just release-host-build` and
-  `just release-runtime-build <backend>`, then point the host at
-  `dist/native-runtimes` with `MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR`. Static
-  backend linkage is not a release or packaging lane.
-- `./target/release/mesh-llm` may exist from a *previous* `just release-build`
-  or `just build-dev` invocation even after you run only `just build` — its
-  presence is **not** evidence that your latest code is in it. When in doubt,
-  check `stat ./target/release/mesh-llm` against the time you last ran
-  `just release-build`, or just re-run `just release-build`.
-- `cargo check` / `cargo build` do **not** count as a build for this repo —
-  they skip llama.cpp ABI prep and the UI, and `cargo check` produces no
-  binary at all.
-
-When in doubt for testing or shipping changes: use the composed output from
-`just release-bundle vX.Y.Z <output>`, which packages the backend-neutral host
-with one selected runtime under `native-runtimes/`. For native ABI development,
-first decide whether you need the default dynamic release packaging path or an
-embedded branch-local native ABI; do not test new ABI symbols against downloaded
-release native runtimes.
-
-Release artifacts follow one three-layer graph:
-
-| Layer | Command | Output |
-|---|---|---|
-| Neutral host | `just release-host-build` | `target/release/mesh-llm` plus an import-policy report during packaging |
-| Native runtime | `just release-runtime-build <backend>` | `dist/native-runtimes/<runtime-id>/` plus archive/checksum |
-| Product | `just release-bundle vX.Y.Z <output>` | `mesh-bundle/` containing the host, one runtime, and product/host-import manifests |
-
-The host dependency policy is enforced by
-`scripts/verify-host-dependencies.py`. Release, installer, SDK, native-package,
-and image lanes must not bypass it or copy backend libraries beside the host.
-For an isolated local runtime test, set
-`MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR="$PWD/dist/native-runtimes"` and a fresh
-`MESH_LLM_NATIVE_RUNTIME_CACHE_DIR`. Discovery never searches the current
-working directory. Do not reintroduce an external `llama-server` or
-`rpc-server` lane.
-
-### npm "Exit handler never called" error
-
-If `just build` fails on the UI step with `npm error Exit handler never called!`, run:
-
-```bash
-just ui-clean
-just build
-```
-
-This is an npm bug that surfaces when `node_modules` gets into a bad state (e.g. after branch switches that change `package-lock.json`). Nuking `node_modules` and letting `npm ci` reinstall from scratch fixes it.
-
-### llama.cpp "generator does not match" error
-
-If a native build fails with `CMake Error: ... generator : Ninja / Does not match the generator used previously: Unix Makefiles`, the build directory still holds a CMake cache from a build configured with a different generator. That happens when `ninja` appears on or leaves `PATH` between builds, because `scripts/build-llama.sh` picks the generator from `PATH` at configure time. The script detects the mismatch and clears the stale `.deps/llama-build/...` directory by itself before reconfiguring. On a checkout that predates the guard, remove the build directory named in the error and rebuild.
-
-See `CONTRIBUTING.md` for full dev workflow.
-
-## llama.cpp ABI Patch Queue
-
-mesh-llm embeds the stage runtime and links patched llama.cpp static ABI
-libraries. The only durable llama.cpp patch queue is
-`third_party/llama.cpp/patches`, pinned by `third_party/llama.cpp/upstream.txt`.
-
-- `just build` builds the UI and a dynamic host, then packages the selected
-  local runtime next to it. The host never links a backend library.
-- Static llama.cpp compilation is the explicitly named native-runtime primitive
-  (`just build-runtime` / `scripts/package-native-runtime.sh --build`), used
-  when changing the Skippy ABI or patch queue. It is not a host build path.
-- Do not reintroduce an external `llama-server` / `rpc-server` runtime lane.
-- If you need to update upstream llama.cpp, use `scripts/prepare-llama.sh`,
-  `scripts/build-llama.sh`, `scripts/update-llama-pin.sh`, and
-  `scripts/summarize-llama-upstream.sh`.
-- Keep the queue ordered by functional ownership, with unique contiguous patch
-  numbers. A source-layout change must be folded into the patches that own the
-  affected capabilities; do not append a terminal "split", "move", or
-  "cleanup" patch that reorganizes code introduced by earlier patches.
-- Apply the queue in three lanes: numbered core patches directly under
-  `patches/`, numbered family-enablement patches listed by
-  `patches/model_support/series`, then generated graph-semantics shards listed
-  by `patches/generated/series`. Numbering is contiguous within each lane.
-- New model-family implementations and their family-specific conversion,
-  template, multimodal, runtime, and tests belong in one focused
-  `model_support/` patch. Keep reusable Skippy machinery in the core lane and
-  mechanically generated graph annotations in the generated lane.
-- Ordinary capability changes may append one focused patch. When deliberately
-  changing queue boundaries, recreate the affected series from the pinned
-  upstream and prove that the rebuilt series produces the intended final tree.
-  Once a capability has an owning module, every patch in the recreated series
-  must edit that module directly rather than introducing code in an obsolete
-  monolith and moving it later.
-- Treat the public Skippy ABI surface and model lifecycle/loading as distinct
-  patch boundaries. Public declarations may precede their implementation, but
-  a patch should not combine ABI definition with independently reviewable model
-  loading or package behavior.
-
-### Skippy Native Source Layout
-
-Treat the patched Skippy C ABI as a set of capability-owned modules, not as one
-implementation file.
-
-- Keep `include/skippy.h` as an umbrella header only. Public declarations
-  belong in standalone C-compatible headers under `include/skippy/`, named for
-  their capability: for example `sampling.h`, `speculative_decoding.h`,
-  `state.h`, and `model_package.h`.
-- Keep capability implementations in `src/skippy/<capability>.cpp`. Private
-  C++ declarations belong beside them in narrowly named headers under
-  `src/skippy/`; they are not part of the installed ABI.
-- Put new behavior in its owning module. `src/skippy.cpp` is retired; do not
-  recreate it. Runtime lifecycle, sessions, activation framing, execution,
-  verification, sampling, state, tokenization, and model packaging each belong
-  to their existing capability-owned source files.
-- Use `snake_case` filenames and preserve the `skippy_` prefix for exported C
-  symbols. Avoid generic `helpers`, `utils`, or expanded `common` buckets.
-- Keep new implementation files below 1,000 lines. If a capability approaches
-  that size, split it by a narrower responsibility before adding more code.
-- Public headers must compile independently as C11 and C++17 headers. Declare
-  each implementation source explicitly in CMake and install the complete
-  `include/skippy/` header tree.
-- Source include compatibility is not assumed. Do not add forwarding headers
-  for retired paths unless a task explicitly requires them. Binary ABI changes
-  still require the normal Skippy ABI version bump and synchronized Rust FFI
-  constants.
-### Skippy native API documentation
-
-- Treat Doxygen-style comments in `include/skippy.h` and
-  `include/skippy/*.h` as the source of truth for the public native API
-  reference. Document every public header and exported `skippy_*` function
-  beside its declaration with an `@brief` describing the capability it owns.
-- After changing a public Skippy header or exported function, prepare the
-  patched native checkout and regenerate the website page:
-
-  ```bash
-  scripts/prepare-llama.sh pinned
-  python3 scripts/generate-skippy-api-doc.py
-  python3 scripts/generate-skippy-api-doc.py --check
-  ```
-
-- Commit the regenerated `website/src/docs/pages/skippy-api.md` with the
-  native queue change. Do not hand-edit the generated page or let a native API
-  PR merge without updating the website reference.
-## Workspace Crates
-
-The workspace lives under `crates/`. The most important crates:
-
-Shipped binary and CLI surface:
-
-- `mesh-llm/` — shipped binary; `main.rs` builds the Tokio runtime, `lib.rs` owns `run_main` (CLI parse → one-shot command dispatch via its `commands/` module → runtime handoff). No domain logic here.
-- `mesh-llm-cli/` — Clap types, argument parsing, serve/client surface normalization. No handlers.
-- `mesh-llm-commands/` — user-facing command handlers (auth, gpus, update, skills, agent launchers like goose/pi/opencode/claude, plugin, benchmark, model packaging).
-- `mesh-llm-tui/` — terminal UI and progress output surface.
-- `mesh-llm-events/` — shared runtime event and output contracts (`OutputEvent`, log formats).
-
-Host and client runtimes:
-
-- `mesh-llm-host-runtime/` — the host-side monolith. Owns runtime orchestration, mesh, inference, networking, management API, plugins, models, system integration. This is where most changes land.
-- `mesh-client/` (`mesh-llm-client`) — lighter parallel client surface with its own `inference/`, `network/`, `models/`, `mesh/` modules. Used as a dev/test surface and for client-only deployments.
-- `mesh-llm-node/`, `mesh-llm-embedded-runtime/` — embeddable node primitives and in-process full-node embedding API.
-- `mesh-llm-config/` — configuration parsing and validation (`~/.mesh-llm/config.toml`).
-- `mesh-llm-ui/` — React web console and embedded asset crate (shadcn/ui patterns, see https://ui.shadcn.com/llms.txt).
-- `mesh-llm-console-server/` — static file server for embedded console assets.
-
-Shared foundations:
-
-- `mesh-llm-types/` — shared model/capability types used across crates.
-- `mesh-llm-protocol/` — wire protocol types and protobuf bindings.
-- `mesh-llm-routing/` — routing primitives shared across host and client.
-- `mesh-llm-system/` — machine-local hardware, benchmark, autoupdate, process helpers.
-- `mesh-llm-identity/` — owner identity and envelope crypto primitives.
-- `mesh-llm-guardrails/` — guardrail and compaction primitives for OpenAI-compatible paths.
-- `mesh-llm-hardware-profile/`, `mesh-llm-native-runtime/`, `mesh-llm-runtime-install/` — hardware profile detection, native runtime manifest/selection, runtime download/install/cache.
-- `mesh-llm-plugin/` — plugin runtime/DSL primitives.
-- `mesh-llm-plugin-manager/` — plugin package management (catalog, install, store).
-- `mesh-llm-skills/` — agent skill data model and installer primitives.
-
-SDK and API surface:
-
-- `mesh-llm-sdk/` — Rust SDK facade for clients and embedded serving.
-- `mesh-llm-api-server/`, `mesh-llm-api-client/` — public Rust SDK APIs for embedding nodes / client-only use.
-- `mesh-llm-ffi/`, `mesh-llm-nodejs/` — FFI bindings and Node.js native addon.
-- `openai-frontend/` — OpenAI-compatible HTTP frontend (chat, completions, responses, models).
-- `mesh-mixture-of-agents/` — Mixture-of-Agents fan-out/arbitration engine.
-
-Models:
-
-- `model-artifact/`, `model-hf/`, `model-package/`, `model-ref/`, `model-resolver/` — model catalog, HuggingFace download, packaging, reference resolution.
-
-Embedded staged runtime (skippy):
-
-- `skippy-ffi/` — Rust ABI bindings to the patched llama.cpp staged runtime.
-- `skippy-runtime/` — Rust-side staged runtime, package materialization, model info.
-- `skippy-server/` — embedded staged-runtime serving (frontend, binary transport, runtime state, embedded HTTP).
-- `skippy-protocol/`, `skippy-topology/`, `skippy-coordinator/`, `skippy-cache/`, `skippy-prompt/`, `skippy-metrics/`, `skippy-bench/`, `skippy-correctness/`, `skippy-model-package/` — supporting skippy infrastructure.
-
-Tools and benchmarks:
-
-- `metrics-server/` — standalone metrics collector binary.
-- `mesh-llm-gpu-bench/`, `llama-spec-bench/`, `mesh-llm-test-harness/` — benchmarking and test harness binaries.
-
-This list covers the crates you are most likely to touch; check `crates/` and each crate's `Cargo.toml` description for anything not listed.
-
-Other top-level directories:
-
-- `docs/` — Project docs, grouped by topic (see `docs/README.md` for the map).
-- `website/` — Eleventy source for the public website; builds into `docs/`.
-- `docs/design/` — Architecture, protocol, and testing docs.
-- `docs/skippy/` — Skippy family certification, configuration, benchmarks, parity.
-- `docs/plugins/` — Plugin architecture docs and plans.
-- `docs/specs/` — Focused behavior specs for individual features.
-- `.agents/agents/release-validation.md` — Canonical Markdown definition for the selectable release-validation specialist; it uses the canonical release-validation skill in `.agents/skills/`.
-- `.agents/skills/` — Canonical repo-local agent skills, including per-platform deploy, mesh operations, release validation, release notes, Skippy internals, patch queues, and benchmarks.
-- `sdk/` — SDK packaging for Node, Swift, Kotlin.
-- `fly/` — Fly.io deployment (console + API client apps).
-- `tools/relay-fly-legacy/` — Archived self-hosted iroh relay reference; production uses services.iroh.computer.
-- `evals/` — Benchmarking and evaluation scripts.
-- `third_party/llama.cpp/patches/` — durable llama.cpp patch queue, pinned by `upstream.txt`.
-
-## Module Structure Rules
-
-These rules apply primarily inside `crates/mesh-llm-host-runtime/src/` (the main host monolith), and by analogy inside `crates/mesh-client/src/`. New peer crates should still follow the semantic-ownership principles below.
-
-The host-runtime crate root should stay minimal.
-
-- Keep `crates/mesh-llm-host-runtime/src/lib.rs` slim — it is a small entry point, not a junk drawer.
-- New code should go into an existing domain directory when possible.
-
-Use semantic ownership for module placement. Inside `crates/mesh-llm-host-runtime/src/`:
-
-- `runtime/` — top-level process orchestration, startup/runtime coordination, runtime instance, capacity, split planning, proxy lifecycle.
-- `network/` — request routing, proxying, tunneling, relay/discovery networking, request-affinity logic, endpoint rewrite, target health, OpenAI transport glue.
-- `inference/` — model-serving logic, election, launch, pipeline, MoE behavior, embedded skippy integration.
-- `system/` — machine-local environment and platform concerns (hardware detection, benchmarking, self-update, local system integration).
-- `models/` — model catalog, resolution, downloads, local model storage, model metadata.
-- `mesh/` — peer membership, gossip, heartbeats, identity, peer state, mesh node behavior.
-- `plugin/` — plugin host, plugin runtime, transport, config, MCP bridge support.
-- `plugins/` — concrete in-tree plugins (currently `blobstore/`; most plugins like blackboard, openai-endpoint, and flash-moe/ln are external packages installed via `mesh-llm plugins install`).
-- `api/` — management API surface and route handling.
-- `protocol/` — wire protocol types, encoding/decoding, conversions.
-- `runtime_data/` — runtime data collection, API views, status snapshots.
-- `crypto/` — host-side crypto helpers.
-
-CLI ownership rule.
-
-- Clap types, argument parsing, and surface normalization belong in `crates/mesh-llm-cli/`.
-- User-facing command handlers belong in `crates/mesh-llm-commands/` (or the shipped binary's `crates/mesh-llm/src/commands/` dispatch layer for wiring).
-- Domain modules in `mesh-llm-host-runtime` should not own Clap parsing or top-level command dispatch.
-- Domain modules may expose reusable functions that command handlers call.
+## Shared module design
 
 Do not introduce generic buckets.
 
@@ -344,7 +35,7 @@ Do not introduce generic buckets.
 Keep shared code honest.
 
 - If code is only used by one subsystem, keep it inside that subsystem.
-- Only move code to a shared module (or a shared workspace crate like `mesh-llm-types` / `mesh-llm-routing`) when it is truly cross-domain.
+- Only move code to a shared module or workspace crate when it is truly cross-domain.
 - Do not create shared helpers prematurely.
 
 Prefer semantic grouping over symmetry.
@@ -380,15 +71,14 @@ Naming rule.
 When to add a new workspace crate.
 
 - Prefer adding modules inside an existing crate first.
-- Add a new `crates/<name>/` only when the responsibility is genuinely cross-cutting (used by host and client, or host and a separate binary) or when isolating compile time / dependencies for a specific binary or FFI surface.
-- New crates should be named after the responsibility they own, not the consumer (e.g., `model-resolver` not `mesh-llm-model-helpers`).
+- Add a new crate under its owning product only when the responsibility is genuinely cross-cutting (used by host and client, or host and a separate binary) or when isolating compile time / dependencies for a specific binary or FFI surface.
+- New crates should be named after the responsibility they own, not the consumer.
 
-Current structure notes.
+Product crate documentation.
 
-- Request-affinity code belongs with networking/routing behavior (`network/affinity.rs`), not `system/`.
-- Plugin MCP support belongs inside `mesh-llm-host-runtime/src/plugin/`, not as a separate root module.
-- Model command handlers belong in `mesh-llm-commands/` (or `crates/mesh-llm/src/commands/` for dispatch wiring); host-runtime `models/` should stay domain-focused.
-- The shipped binary crate (`crates/mesh-llm/`) carries CLI dispatch wiring only; do not move domain logic into it.
+- Every crate under `mesh/crates/` or `skippy/crates/` needs a non-empty `description` in its `Cargo.toml` and a `README.md` at the crate root.
+- The README should identify the crate's purpose, what it owns and does not own, and its primary consumers. Add build or usage instructions when the crate exposes a binary or a workflow that contributors run directly. Keep small crates' READMEs concise; do not add boilerplate sections merely for symmetry.
+- Use working relative links for local files and neighboring crates. The Quality contract test checks README presence, manifest descriptions, and local Markdown link destinations; it does not substitute for reviewing whether the explanation is accurate.
 
 ## Code Quality Rules for New Code
 
@@ -405,170 +95,13 @@ Current structure notes.
   the fact. CI runs Clippy with warnings denied, so configured Clippy warnings
   must be resolved before a PR can pass.
 
-## Key Source Files
-
-Host runtime (main monolith — `crates/mesh-llm-host-runtime/src/`):
-
-- `lib.rs` — crate entry; exposes the runtime entrypoints (`run_runtime_initialized`, `initialize_host_runtime`) called from `crates/mesh-llm/src/lib.rs`.
-- `runtime/mod.rs` — top-level startup flows, runtime orchestration, command dispatch.
-- `runtime/instance.rs` — per-instance runtime directory management: `InstanceRuntime`, pidfiles, flock liveness, scoped orphan reaping, local instance scanning.
-- `runtime/local.rs` — local model startup loop.
-- `runtime/discovery.rs` — discovery loops and auto-mode coordination.
-- `runtime/proxy.rs`, `runtime/proxy/` — HTTP proxy lifecycle from the runtime side.
-- `runtime/capacity.rs`, `runtime/split_planning.rs`, `runtime/context_planning.rs` — placement/sizing decisions.
-- `mesh/mod.rs` — `Node` struct, mesh_id, peer management.
-- `mesh/gossip.rs` — gossip wire format and peer state updates.
-- `mesh/heartbeat.rs` — heartbeat publishing and freshness.
-- `inference/election.rs` — host election, tensor split calculation.
-- `inference/skippy/` — embedded staged runtime integration.
-- `inference/pipeline.rs` — inference pipeline coordination.
-- `inference/virtual_llm.rs` — virtual LLM (inter-model collaboration).
-- `network/proxy.rs` — HTTP proxy: request parsing, model routing, response helpers.
-- `network/router.rs` — request classification, model scoring, multimodal routing.
-- `network/nostr.rs` — Nostr discovery, `score_mesh()`, `smart_auto()`.
-- `network/tunnel.rs` — TCP ↔ QUIC relay (RPC + HTTP).
-- `network/affinity.rs` — request-affinity tracking.
-- `network/target_health.rs` — target health tracking.
-- `network/openai/` — OpenAI transport glue.
-- `api/mod.rs`, `api/routes/` — management API (:3131): `/api/status`, `/api/events`, `/api/discover`.
-- `models/catalog.rs` — model catalog, HuggingFace downloads.
-- `models/capabilities.rs` — multimodal/vision/audio/reasoning capability inference.
-- `models/resolve/` — model reference resolution.
-- `plugins/blobstore/mod.rs` — request-scoped media object storage for multimodal.
-- `plugin/` — plugin host, runtime, transport, config, MCP bridge (external plugins install via `mesh-llm plugins install`).
-
-Shipped binary and CLI (`crates/mesh-llm/src/`, `crates/mesh-llm-cli/src/`, `crates/mesh-llm-commands/src/`):
-
-- `mesh-llm/src/main.rs` — builds the Tokio runtime (custom stack size via `MESH_TOKIO_STACK_SIZE`) and calls `mesh_llm::run_main()`.
-- `mesh-llm/src/lib.rs` — `run_main`: CLI parse, one-shot command dispatch, runtime handoff.
-- `mesh-llm/src/commands/` — dispatch wiring from parsed `Command` values to handlers.
-- `mesh-llm-cli/src/parser.rs` — Clap surface, serve/client arg normalization, advanced help.
-- `mesh-llm-commands/src/` — user-facing handlers (auth, gpus, update, skills, agent launchers, plugin, benchmark).
-
-Embedded staged runtime (`crates/skippy-*`):
-
-- `skippy-ffi/src/lib.rs` — Rust ABI mirror of the patched llama.cpp staged runtime; `ABI_VERSION_*` constants must stay in sync with `skippy/common.h` in the patch queue.
-- `skippy-runtime/src/package.rs` — layer-package materialization, identity-bound cache.
-- `skippy-runtime/src/devices.rs` — backend device enumeration.
-- `skippy-server/src/frontend.rs`, `skippy-server/src/frontend/` — embedded chat/generation frontend.
-- `skippy-server/src/runtime_state.rs` — KV-slot, lane, session state machine.
-- `skippy-server/src/binary_transport.rs`, `binary_transport/` — binary transport to embedded server.
-
-OpenAI-compatible HTTP frontend (`crates/openai-frontend/src/`):
-
-- `router.rs`, `chat.rs`, `completions.rs`, `responses.rs`, `models.rs`, `sse.rs`, `backend.rs` — OpenAI surface.
-
-## Mesh Protocol Compatibility
-
-Mesh compatibility across versions is critical. Nodes in the wild run different versions and must interoperate.
-
-- The mesh supports mixed-version operation: QUIC ALPN `mesh-llm/1` (protobuf) and `mesh-llm/0` (legacy JSON) nodes coexist. Do not break this.
-- Gossip fields, stream types, and protobuf schemas must be additive. New fields should be optional and ignored by older nodes. Do not repurpose or remove existing fields.
-- When adding new gossip fields, stream types, or changing wire format, explicitly consider what happens when an older node receives the new data and when a newer node talks to an older peer.
-- Capability advertisement (vision, audio, multimodal, reasoning, tool_use, moe) is gossiped to all peers and consumed by routing, the API, and the UI. Changes to capability semantics affect the whole mesh, not just the local node.
-- If a change would break mixed-version meshes, explicitly flag it as a breaking protocol change and ask the developer before proceeding.
-- Test compatibility by running the current branch against a released binary on a second node. Verify gossip, routing, and inference work across the version boundary.
-
-## Plugin Protocol Compatibility
-
-When iterating on the plugin protocol, always consider protocol compatibility.
-
-- If a protocol change may be breaking, explicitly ask the developer whether the change is intended to be breaking.
-- If the change is not intended to be breaking, the previous version of the plugin protocol must continue to be supported.
-- Do not silently ship plugin protocol changes that strand older plugins or hosts without confirming that outcome is acceptable.
-
-## Skippy ABI Compatibility
-
-The patched llama.cpp staged runtime has its own ABI version, tracked in `skippy/common.h` (inside the patch queue) and mirrored by `SKIPPY_ABI_VERSION_*` constants in `crates/skippy-ffi/src/lib.rs`.
-
-- When changing the staged-runtime ABI in the patch queue, bump `SKIPPY_ABI_VERSION_PATCH` (or MINOR/MAJOR) in `skippy/common.h` AND keep the Rust constants in `skippy-ffi/src/lib.rs` in sync in the same change.
-- `skippy-runtime` consumes the ABI version for package loading and feature probing; an out-of-sync mirror will silently advertise the wrong version.
-- Treat the staged-runtime ABI the same as the mesh wire protocol: additive changes preferred, breaking changes need explicit acknowledgement.
-
-## UI Notes
-
-For changes in `crates/mesh-llm-ui/`, use components and compose interfaces consistently with shadcn/ui patterns. Prefer extending existing primitives in `src/components/ui/` over ad-hoc markup.
-
-### Terminal dashboard integrity
-
-The dashboard renders to the **controlling terminal** (`/dev/tty`, `CONOUT$`),
-never to fd 1 or fd 2, and while it owns the screen those two descriptors are
-redirected into it (`crates/mesh-llm-tui/src/output/console_capture.rs`). Stray
-`println!`/`eprintln!`, inherited child stderr, and native llama.cpp output
-therefore arrive as dashboard events instead of painting over the frame.
-
-Consequences worth knowing before changing this area:
-
-- Do not point the TUI backend, or the enter/exit escape writers, at
-  `io::stderr()`. Capture would then redirect the dashboard into its own pipe.
-- Anything restoring the terminal (panic hooks, emergency writers) must release
-  the capture *before* writing, or the message goes into the pipe.
-- Capture cannot intercept a write to the tty by a process that did not inherit
-  our descriptors. `R` is the repair for that case: a physical clear plus a
-  ratatui diff invalidation. A logical `Clear` widget does not fix backend
-  desynchronization.
-- Do not perform that clear on every draw. It repaints from blank and reads as
-  a black blink; measured on an idle dashboard it was ~2.6 full repaints/s.
-
-Prefer `OutputEvent` or `tracing` in runtime code regardless — captured lines
-have no level and are shown with a `stdout` context. When adding a `tracing`
-target that must reach the dashboard, add a directive for it in
-`runtime_tracing_subscriber`: `EnvFilter::from_default_env()` defaults to ERROR,
-so an unlisted target's `warn!` is dropped before the writer sees it.
-
 ## Testing
 
-Read `docs/design/TESTING.md` before running tests. It has all test scenarios, remote deploy instructions, and cleanup commands.
+Run Cargo commands serially. Do not run multiple Cargo commands in parallel: this workspace frequently hits package-cache and artifact-directory lock conflicts.
 
-Testing matters more than usual in this project because:
-
-- Nodes run on different machines with different hardware and OS versions. Bugs that don't reproduce locally can appear in real deployments.
-- The mesh protocol is a distributed system — gossip, election, and routing interact across nodes. Single-node unit tests don't catch protocol-level regressions.
-- The public mesh at meshllm.cloud runs continuously. Breaking changes that pass local tests can take down live inference for real users.
-- Multimodal, MoE splitting, and multi-model routing all have complex interaction paths that are hard to reason about statically.
-
-When making changes that touch gossip, routing, proxy, election, or capability advertisement, test against at least two nodes before merging. The deploy checklist below is not optional.
-
-### Confidence Testing (multi-node, when warranted)
-
-For changes that affect routing, MoA, gossip, the OpenAI surface, agent harnesses, or anything multi-node, validate with these three shapes before declaring a branch ready:
-
-1. **2-node private mesh** — start one node with `mesh-llm serve --model <big> --port 9337 --console 3131`, grab its invite token from the JSON log, and start the second node with `mesh-llm serve --gguf <small.gguf> --port 9447 --console 3145 --join <token>`. Confirm peers=1 on both consoles and `/v1/models` returns the union. Exercises QUIC tunnelling and cross-node routing.
-2. **Public mesh as a client** — `mesh-llm client --auto` from a workstation. Confirm `discovery_joined` plus a structured client-ready event (`passive_mode`, `status=ready`, `role=client`) in the log and an inference call against a mesh-advertised model returns. Exercises the read-only routing path agent users hit.
-3. **Agent harness** — run ≥ 1 of the harnesses (“mini-agent” Python loops at `/tmp/mini-agent*.py`, Goose, OpenCode) against the local proxy with both `model=auto` and `model=mesh` to catch tool-call and reducer regressions that simple curl checks miss.
-
-### Cargo Concurrency
-
-Run `cargo` commands serially. Do not run multiple `cargo` commands in parallel (including parallel test runs), because this repo frequently hits Cargo lock conflicts (`package cache` / `artifact directory`) under concurrent invocation.
-
-### Which crate to `-p`
-
-- Touched `mesh-llm-host-runtime` or the shipped `mesh-llm` binary — use `-p mesh-llm` for build/check (it pulls the host runtime through its single dep) and `-p mesh-llm-host-runtime` for focused tests.
-- Touched a specific workspace crate (e.g., `skippy-runtime`, `openai-frontend`, `mesh-client`) — run `cargo check -p <crate>` and `cargo test -p <crate> --lib` for fast iteration.
-- For broad refactors, fall back to `cargo check --workspace` (serially!).
-
-## Running mesh-llm locally
-
-Default the launch to a normal foreground run (TUI visible) unless you have a
-specific reason to suppress UI surfaces. Most observation/debug tasks do not
-need the TUI suppressed.
-
-- `mesh-llm client --auto` — normal foreground run with the TUI. Use this by
-  default.
-- `--log-format json` — emits machine-parseable JSON log lines. Use this when
-  you want to programmatically read events.
-- `--headless` — disables the **embedded web UI**, not the TUI. The TUI still
-  draws. Only use `--headless` when you are intentionally avoiding the
-  management web console — it is **not** the way to get a quiet background run.
-- `--no-console` — fully disables the management console (HTTP API on the
-  console port).
-- `nohup … &` with a foreground binary that draws a TUI will appear to run but
-  often exits or behaves oddly when the TUI cannot attach to a terminal. Prefer
-  letting the developer launch the binary in their own terminal and observing
-  via `/api/status`, `--log-format json`, or by reading stderr.
-
-Do not reach for `--headless` to "go quiet" — that is a recurring mistake. If
-you want quiet output, use `--log-format json` and parse what you need.
+- For a touched workspace crate, run focused `cargo check -p <crate>` and `cargo test -p <crate> --lib` during iteration.
+- For broad refactors, fall back to `cargo check --workspace` (serially).
+- Follow the owning product's additional test and compatibility guidance.
 
 ## Pre-Commit Checklist
 
@@ -580,9 +113,9 @@ Run `just hooks-install` once per clone before your first commit; git cannot act
 
 Choose validation from the changed surface, not merely from the directory that contains the changed file. A non-Rust file under a Rust crate does not require Cargo validation only when it cannot affect Cargo metadata, build scripts, generated Rust, or the shipped binary. Treat Cargo and build configuration changes as Rust-impacting.
 
-- Rust change — format the changed Rust files and run `cargo check -p <touched-crate>` plus `cargo clippy -p <touched-crate> --all-targets -- -D warnings` (and both commands with `-p mesh-llm` if you touched anything reachable from the shipped binary).
+- Rust change — format changed Rust files and run `cargo check -p <touched-crate>` plus `cargo clippy -p <touched-crate> --all-targets -- -D warnings`. Follow the owning product's additional validation rules.
 - Python-only change — pass every changed module explicitly to `python3 -m py_compile <changed-module.py>...` and run `python3 -m unittest <nearest-test-module>...` for the nearest relevant tests. Run the full `scripts/tests` suite only for shared script infrastructure, CI planning, or broad cross-script changes.
-- UI-only change — run `just build`.
+- UI-only change — follow `mesh/AGENTS.md` and run `just build`.
 - CI workflow, planner fixture, or CI script change — run `just ci-validate` plus any additional checks required by the CI section below.
 - Documentation, non-build configuration, or non-CI shell-only change — run the targeted formatter, generator check, contract test, or syntax check for the changed surface.
 - Mixed change — run the union of the checks required for each changed surface.
@@ -591,23 +124,15 @@ Do not rerun otherwise unchanged validation solely because a commit is about to 
 
 ### Rust changes
 
+- After Rust changes, run `just no-console-print`. It forbids direct printing and terminal handles in product code, with no allowlist; use the owning product's output facilities.
 - The preferred Rust edition for this workspace is Rust 2024. Determine the edition from the owning crate's `Cargo.toml`; if it uses `edition.workspace = true`, read `workspace.package.edition` from the root `Cargo.toml`. Most crates inherit `edition = "2024"` from the root; any crate that opts out declares its own edition in its `Cargo.toml`.
 - Format Rust files in a way that preserves the owning crate's edition metadata. Prefer `cargo fmt -p <crate> -- path/to/file.rs` for a narrow edit, or `cargo fmt --all` when changes span packages. Do not use `cargo fmt --all -- path/to/file.rs`: workspace-level file arguments can be parsed without the owning crate's Rust 2024 edition metadata and fail on let-chains.
 - If you must invoke `rustfmt` directly on a standalone file, pass the edition resolved from that manifest lookup, for example `--edition 2024` for the current workspace default; otherwise use `cargo fmt` through the owning package.
 - Before committing Rust changes, ensure the formatting check passes with `cargo fmt --all --check`.
-- After Rust changes, run `just no-console-print`. It forbids `println!` /
-  `eprintln!` / `print!` / `eprint!` and direct `io::stdout()` / `io::stderr()`
-  handles in product code. There is no allowlist and no way to approve an
-  individual call site: route operational output through
-  `mesh_llm_events::emit_event` or `tracing`, human-facing CLI prose through
-  `mesh_llm_events::console_out` / `console_err`, and a `--json` command's
-  payload through `mesh_llm_events::machine_out`. Only the console output
-  facility itself may hold a terminal handle; that roster is
-  `CONSOLE_OUTPUT_OWNERS` in `tools/xtask/src/no_console_print/scope.rs`.
-- After Rust changes, run `cargo check` and `cargo clippy --all-targets -- -D warnings` for each touched crate (`-p <crate>`), and at least `cargo check -p mesh-llm` plus `cargo clippy -p mesh-llm --all-targets -- -D warnings` if the change is reachable from the shipped binary.
+- After Rust changes, run `cargo check` and `cargo clippy --all-targets -- -D warnings` for each touched crate (`-p <crate>`). Follow the owning product's additional validation rules.
+- If a change is reachable from the shipped MeshLLM binary, also run `cargo check -p mesh-llm` and `cargo clippy -p mesh-llm --all-targets -- -D warnings`, including when the changed code is owned by Skippy.
 - Treat Clippy as a required local gate, not a CI-only cleanup step. `cargo check`, `just build`, and formatter success do not catch lints such as `clippy::collapsible-if`; run the warning-denying Clippy command before opening or updating a PR.
 - If you touched tests, public APIs, routing, inference, gossip, plugin protocol, skippy ABI, or CLI behavior, run the relevant tests before committing.
-- If you touched `proto/`, any `protocol/` module, `mesh-llm-host-runtime/src/mesh/gossip.rs`, `mesh-llm-host-runtime/src/mesh/mod.rs`, routing, election, API serialization, or `skippy-ffi` ABI constants, do not stop at build-only validation: run at least `cargo test -p mesh-llm-host-runtime --lib` (plus `cargo test -p skippy-ffi --lib` / `-p skippy-runtime --lib` when ABI is touched) and wait for it to exit successfully before committing.
 - Do not report a build or test step as complete until the command has actually exited with code `0`.
 - Run Rust validation serially. Do not run multiple `cargo` commands at the same time.
 
@@ -624,11 +149,6 @@ Keep `.agents/skills/manage-ci/references/current-inventory.md` synchronized
 with the checked-in CI contract and `ci/ci.md` synchronized with topology. When
 a CI rule changes, update the skill first rather than adding duplicate guidance
 to this file or `.github/AGENTS.md`.
-
-### UI changes
-
-- Use the repo's supported workflow and run `just build`.
-- If `just build` fails on the UI step with `npm error Exit handler never called!`, run `just ui-clean` and then rerun `just build`.
 
 ### Commit standard
 
@@ -657,135 +177,6 @@ Pull request titles and descriptions should be user-focused by default.
 - If the PR changes the UI, include at least one screenshot in the PR description.
 - Validation and screenshots should stay separate from the user-facing summary.
 
-### Deploy to Remote
-
-```bash
-just bundle    # /tmp/mesh-llm-bundle.tar.gz — single mesh-llm binary
-# scp bundle to remote, tar xzf, then on macOS: codesign -s - mesh-llm && xattr -cr <dir>
-```
-
-For the full per-platform deploy flows, see the repo skills
-`.agents/skills/deploy-macos/`, `.agents/skills/deploy-linux-gpu/`, and
-`.agents/skills/deploy-windows/`.
-
-### Cleanup
-
-Clean shutdown removes the instance's runtime directory automatically. Prefer the scoped runtime-aware commands first:
-
-```bash
-mesh-llm stop
-just stop
-```
-
-Those paths use the runtime metadata under `~/.mesh-llm/runtime/` to stop the tracked mesh-llm instance and its child servers cleanly.
-
-If an instance is wedged badly enough that the scoped stop path cannot reach it, fall back to an emergency kill:
-
-```bash
-pkill -f mesh-llm
-```
-
-## Running mesh-llm in the Background (for Testing)
-
-When running `mesh-llm serve` from an agent for testing, the process is non-interactive — it just runs. There is no interactive prompt or TUI to worry about. Use standard backgrounding:
-
-```bash
-bash -c './target/debug/mesh-llm serve --model "..." --auto > /tmp/mesh.log 2>&1 & disown; echo "PID=$!"'
-```
-
-- **Do not use `--headless`** — it disables the web UI but does not change process behavior. The name is misleading and does not help with backgrounding.
-- The mesh process writes TUI-formatted output to stderr which looks like errors but is normal.
-- Wait for models to appear via polling `curl -s http://localhost:9337/v1/models` before sending requests.
-- Kill with `pkill -f "target/debug/mesh-llm"` or `pkill -f mesh-llm`.
-
-## Deploy Checklist — MANDATORY
-
-**Every deploy to test machines MUST follow this checklist.**
-
-### Before starting nodes
-1. **Bump VERSION** in the root `Cargo.toml` (`[workspace.package] version`; crates inherit it via `version.workspace = true`) so you can verify the running binary is new code.
-2. `just build && just bundle`
-3. Kill ALL processes on ALL nodes — `pkill -9 -f mesh-llm`
-4. Verify clean — `ps -eo pid,args | grep -E 'mesh-llm' | grep -v grep` must be empty.
-5. Deploy bundle — scp + tar + codesign on remote nodes.
-6. On every macOS node, complete the `deploy-macos` skill's Local Network
-   privacy preflight for the exact signed identity and launch context. Clear any
-   blocking desktop alert before remote diagnosis.
-7. Verify version — `mesh-llm --version` on every node.
-
-### After starting nodes
-8. Verify exactly 1 mesh-llm process per node.
-9. Verify no external llama serving child processes are required.
-10. `curl -s http://localhost:3131/api/status` returns valid JSON on every node.
-11. Check `/api/status` peers for new version string.
-12. Verify expected peer count.
-13. For same-LAN tests, require a direct iroh path to the intended LAN address
-    from both nodes before attributing failures to candidate selection or
-    collecting performance data.
-14. Test inference through every model in `/v1/models`.
-15. Test `/v1/` passthrough on port 3131.
-
-### Debugging Embedded Runtime Startup
-
-If the embedded runtime fails to load, check mesh-llm stderr/log output and
-`~/.mesh-llm/runtime/` for the active instance metadata. Embedded
-skippy/llama.cpp native logs are redirected away from the TUI into the active
-instance runtime directory:
-
-```text
-<runtime-root>/<pid>/logs/skippy-native.log
-```
-
-To override the runtime root (e.g., for tests or systemd):
-- `MESH_LLM_RUNTIME_ROOT=/path/to/custom/root` — highest priority
-- `XDG_RUNTIME_DIR` — if set (typical on systemd: `/run/user/{uid}/mesh-llm/runtime`)
-- `$HOME/.mesh-llm/runtime` — default fallback
-
-For stale instances (crashed mesh-llm leaving behind a runtime dir):
-- Other running mesh-llm instances GC dead-owner dirs older than 1 hour on startup
-- Manual cleanup: `rm -rf ~/.mesh-llm/runtime/<stale_pid>/`
-
-### Common failures
-- **nohup over SSH doesn't stick** — use `bash -c "nohup ... & disown"`, verify process survives disconnect.
-- **Duplicate processes** — always kill-verify-start.
-- **codesign changes the hash** — don't compare local vs codesigned remote.
-
-## Releasing
-
-See `RELEASE.md` for the full process.
-
-Current release flow: kick off the **Release** workflow (`.github/workflows/release.yml`) from the GitHub Actions UI via `workflow_dispatch` with the version input (e.g. `v0.X.Y`), or run `just release v0.X.Y` to preflight and dispatch that same workflow.
-
-The dispatched workflow handles everything: it bumps versions via `scripts/release-version.sh`, commits the tracked version surface to `main` before building, generates and patches the SwiftPM manifest, packages SDK console assets, creates and pushes the release tag at a release-prep commit, builds the full artifact matrix (macOS, Linux CPU/ARM64/CUDA/CUDA-Blackwell/ROCm/Vulkan, Windows CPU/CUDA/ROCm/Vulkan), and publishes the GitHub release with generated notes. Dispatch inputs include `skip_gpu_bundles` and `canary` (dry-run: build + smoke without mutating `main` or publishing).
-
-Pushing a `v*` tag manually also triggers the workflow, but the tag must point to `main` history with the matching `scripts/release-version.sh` update already committed; it also requires preparing `Package.swift` and SDK console assets in the tag commit yourself. The workflow rejects a drifted tag. See `RELEASE.md` and prefer the dispatch path.
-
-### Installer checksum sidecars
-
-Release/package scripts should keep generating `.sha256` sidecars for new
-release archives. Do not rely on backfilling old release assets, because pinned
-versions and alternate repos may not have sidecars.
-
-`install.sh` and `install.ps1` must treat release-archive checksums as
-backward-compatible rollout metadata:
-
-- If `<archive>.sha256` exists, verify it and fail the install on malformed
-  checksum data or checksum mismatch.
-- If the sidecar is missing for a legacy/current release, warn and continue by
-  default.
-- If `MESH_LLM_REQUIRE_CHECKSUM=1` is set, a missing sidecar is fatal.
-
-Do not change installer behavior to hard-require sidecars by default unless the
-release policy also guarantees every supported/pinned release and alternate
-install repo has matching checksum assets.
-
 ## Credentials
 
 Test machine IPs, SSH details, and passwords are in `~/Documents/private-note.txt` (outside the repo). **Never commit credentials to any tracked file.**
-
-## What NOT to add
-
-- **No `api_key_token` feature** — explicitly rejected, removed in v0.26.0.
-- **No credentials in tracked files** — IPs, passwords, SSH commands belong in `~/Documents/private-note.txt` only.
-- **No domain logic in `crates/mesh-llm/src/`** — that crate is CLI dispatch wiring over `mesh-llm-cli` / `mesh-llm-commands` / `mesh-llm-host-runtime`; put new domain code in the host-runtime crate (or a more specific peer crate).
-- **No external `llama-server` / `rpc-server` runtime lane** — the embedded staged runtime via patched llama.cpp is the only supported path.

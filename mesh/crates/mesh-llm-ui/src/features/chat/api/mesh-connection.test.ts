@@ -1,0 +1,835 @@
+import { EventType, type StreamChunk } from '@tanstack/ai'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { createMeshConnectionAdapter } from '@/features/chat/api/mesh-connection'
+import type { ChatResponseMetadata } from '@/features/chat/api/response-metadata'
+
+function createMessages() {
+  return [
+    {
+      id: 'user-1',
+      role: 'user' as const,
+      parts: [{ type: 'text' as const, content: 'Hello mesh' }],
+      createdAt: new Date('2026-05-06T00:00:00.000Z')
+    }
+  ]
+}
+
+function createAudioUploadMessage() {
+  return [
+    {
+      id: 'user-1',
+      role: 'user' as const,
+      parts: [
+        { type: 'text' as const, content: 'Listen to this clip' },
+        {
+          type: 'audio' as const,
+          source: { type: 'data' as const, value: 'YXVkaW8=', mimeType: 'audio/mpeg' },
+          metadata: { fileName: 'task7-clip.mp3' }
+        }
+      ],
+      createdAt: new Date('2026-05-06T00:00:00.000Z')
+    }
+  ]
+}
+
+function createSSEStream(lines: string[], options?: { error?: Error }) {
+  const encoder = new TextEncoder()
+
+  return new ReadableStream<Uint8Array>({
+    start(controller) {
+      for (const line of lines) {
+        controller.enqueue(encoder.encode(line))
+      }
+
+      if (options?.error) {
+        queueMicrotask(() => controller.error(options.error as Error))
+        return
+      }
+
+      controller.close()
+    }
+  })
+}
+
+function createExplodingReaderStream(line: string, message: string) {
+  const encoded = new TextEncoder().encode(line)
+  const reader = {
+    read: vi
+      .fn<() => Promise<{ done: boolean; value?: Uint8Array }>>()
+      .mockResolvedValueOnce({ done: false, value: encoded })
+      .mockRejectedValueOnce(new Error(message)),
+    releaseLock: vi.fn()
+  }
+
+  return {
+    getReader: () => reader
+  }
+}
+
+function createAbortError() {
+  const error = new Error('aborted')
+  error.name = 'AbortError'
+  return error
+}
+
+function createModelNotFoundResponse() {
+  return new Response(JSON.stringify({ error: { message: "model 'apple/system' not found" } }), {
+    status: 404,
+    headers: { 'Content-Type': 'application/json' }
+  })
+}
+
+function spyAbortSignalListeners(signal: AbortSignal) {
+  const addEventListener = vi.spyOn(signal, 'addEventListener')
+  const removeEventListener = vi.spyOn(signal, 'removeEventListener')
+  return { addEventListener, removeEventListener }
+}
+
+function createPendingAbortReaderStream(abortSignal: AbortSignal) {
+  const reader = {
+    read: vi.fn<() => Promise<ReadableStreamReadResult<Uint8Array>>>(() => {
+      return new Promise<ReadableStreamReadResult<Uint8Array>>((_, reject) => {
+        if (abortSignal.aborted) {
+          reject(createAbortError())
+          return
+        }
+
+        abortSignal.addEventListener('abort', () => reject(createAbortError()), { once: true })
+      })
+    }),
+    cancel: vi.fn<() => Promise<void>>().mockResolvedValue(undefined),
+    releaseLock: vi.fn()
+  }
+
+  return {
+    reader,
+    stream: {
+      getReader: () => reader
+    }
+  }
+}
+
+function createPendingReaderErrorStream(abortSignal: AbortSignal, error: Error) {
+  const reader = {
+    read: vi.fn<() => Promise<ReadableStreamReadResult<Uint8Array>>>(() => {
+      return new Promise<ReadableStreamReadResult<Uint8Array>>((_, reject) => {
+        abortSignal.addEventListener('abort', () => reject(error), { once: true })
+      })
+    }),
+    cancel: vi.fn<() => Promise<void>>().mockResolvedValue(undefined),
+    releaseLock: vi.fn()
+  }
+
+  return {
+    reader,
+    stream: {
+      getReader: () => reader
+    }
+  }
+}
+
+describe('createMeshConnectionAdapter', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('uses the latest model getter value and emits streamed text chunks', async () => {
+    let currentModel = 'model-a'
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        new Response(
+          createSSEStream([
+            'data: {"type":"response.output_text.delta","delta":"Hello"}\n',
+            'data: {"type":"response.output_text.delta","delta":" world"}\n',
+            'data: [DONE]\n'
+          ]),
+          { status: 200 }
+        )
+      )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const adapter = createMeshConnectionAdapter(() => currentModel)
+    currentModel = 'model-b'
+
+    const chunks: StreamChunk[] = []
+    for await (const chunk of adapter.connect(createMessages(), undefined, undefined)) {
+      chunks.push(chunk)
+    }
+
+    const request = fetchMock.mock.calls[0]?.[1]
+    const body = JSON.parse(String(request?.body)) as { model: string }
+
+    expect(body.model).toBe('model-b')
+    expect(chunks.map((chunk) => chunk.type)).toEqual([
+      EventType.RUN_STARTED,
+      EventType.TEXT_MESSAGE_START,
+      EventType.TEXT_MESSAGE_CONTENT,
+      EventType.TEXT_MESSAGE_CONTENT,
+      EventType.TEXT_MESSAGE_END,
+      EventType.RUN_FINISHED
+    ])
+  })
+
+  it('sends x-mesh-target only while a target is set, reading its latest value', async () => {
+    const node = 'a70d3967bea3b22fa48a28f77c5d2b3764fc8bd5204a82c09ff8430f3f2a0a00'
+    const fetchMock = vi
+      .fn()
+      .mockImplementation(async () => new Response(createSSEStream(['data: [DONE]\n']), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+    const target = { value: node }
+    const adapter = createMeshConnectionAdapter('model-a', undefined, undefined, target)
+
+    for await (const _chunk of adapter.connect(createMessages(), undefined, undefined)) void _chunk
+    target.value = ''
+    for await (const _chunk of adapter.connect(createMessages(), undefined, undefined)) void _chunk
+
+    const headersOf = (call: number) => fetchMock.mock.calls[call]?.[1]?.headers as Record<string, string>
+    expect(headersOf(0)['x-mesh-target']).toBe(node)
+    expect(headersOf(1)).not.toHaveProperty('x-mesh-target')
+  })
+
+  it('sends the target a request was submitted with, not the current one', async () => {
+    const node = 'a70d3967bea3b22fa48a28f77c5d2b3764fc8bd5204a82c09ff8430f3f2a0a00'
+    const other = 'c'.repeat(64)
+    const fetchMock = vi
+      .fn()
+      .mockImplementation(async () => new Response(createSSEStream(['data: [DONE]\n']), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+    const target = { value: other }
+    const adapter = createMeshConnectionAdapter('model-a', undefined, undefined, target)
+
+    for await (const _chunk of adapter.connect(createMessages(), { target: node }, undefined)) void _chunk
+    for await (const _chunk of adapter.connect(createMessages(), { target: '' }, undefined)) void _chunk
+
+    const headersOf = (call: number) => fetchMock.mock.calls[call]?.[1]?.headers as Record<string, string>
+    expect(headersOf(0)['x-mesh-target']).toBe(node)
+    expect(headersOf(1)).not.toHaveProperty('x-mesh-target')
+  })
+
+  it('emits first-class reasoning deltas before visible text', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        new Response(
+          createSSEStream([
+            'data: {"type":"response.reasoning_text.delta","delta":"Checked facts."}\n',
+            'data: {"type":"response.output_text.delta","delta":" Final answer."}\n',
+            'data: [DONE]\n'
+          ]),
+          { status: 200 }
+        )
+      )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const adapter = createMeshConnectionAdapter('model-a')
+
+    const chunks: StreamChunk[] = []
+    for await (const chunk of adapter.connect(createMessages(), undefined, undefined)) {
+      chunks.push(chunk)
+    }
+
+    const reasoningDelta = chunks.find((chunk) => chunk.type === EventType.REASONING_MESSAGE_CONTENT)
+    const contentDeltas = chunks
+      .filter((chunk) => chunk.type === EventType.TEXT_MESSAGE_CONTENT)
+      .map((chunk) => (chunk.type === EventType.TEXT_MESSAGE_CONTENT ? chunk.delta : ''))
+
+    expect(chunks.map((chunk) => chunk.type)).toContain(EventType.REASONING_START)
+    expect(chunks.map((chunk) => chunk.type)).toContain(EventType.REASONING_MESSAGE_START)
+    expect(reasoningDelta).toMatchObject({ type: EventType.REASONING_MESSAGE_CONTENT, delta: 'Checked facts.' })
+    expect(chunks.map((chunk) => chunk.type)).toContain(EventType.REASONING_MESSAGE_END)
+    expect(chunks.map((chunk) => chunk.type)).toContain(EventType.REASONING_END)
+    expect(contentDeltas).toEqual([' Final answer.'])
+  })
+
+  it('keeps each distinct mesh progress phase once for expandable details', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        new Response(
+          createSSEStream([
+            'data: {"type":"response.reasoning_text.delta","delta":"Routing through mesh…\\n"}\n',
+            'data: {"type":"response.reasoning_text.delta","delta":"Routing through mesh…\\n"}\n',
+            'data: {"type":"response.reasoning_text.delta","delta":"Querying peer models…\\n"}\n',
+            'data: {"type":"response.reasoning_text.delta","delta":"Verifier found conflicting dates.\\n"}\n',
+            'data: {"type":"response.reasoning_text.delta","delta":"Waiting on a slow peer…\\n"}\n',
+            'data: {"type":"response.reasoning_text.delta","delta":"Waiting on a slow peer…\\n"}\n',
+            'data: {"type":"response.reasoning_text.delta","delta":"Still gathering responses…\\n"}\n',
+            'data: {"type":"response.reasoning_text.delta","delta":"Hold on, this is taking a moment…\\n"}\n',
+            'data: {"type":"response.output_text.delta","delta":"Corroborated answer."}\n',
+            'data: [DONE]\n'
+          ]),
+          { status: 200 }
+        )
+      )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const adapter = createMeshConnectionAdapter('mesh')
+    const chunks: StreamChunk[] = []
+    for await (const chunk of adapter.connect(createMessages(), undefined, undefined)) {
+      chunks.push(chunk)
+    }
+
+    const progressDeltas = chunks
+      .filter((chunk) => chunk.type === EventType.REASONING_MESSAGE_CONTENT)
+      .map((chunk) => (chunk.type === EventType.REASONING_MESSAGE_CONTENT ? chunk.delta : ''))
+    const answerDeltas = chunks
+      .filter((chunk) => chunk.type === EventType.TEXT_MESSAGE_CONTENT)
+      .map((chunk) => (chunk.type === EventType.TEXT_MESSAGE_CONTENT ? chunk.delta : ''))
+
+    expect(progressDeltas).toEqual([
+      'Routing through mesh…\n',
+      'Querying peer models…\n',
+      'Verifier found conflicting dates.\n',
+      'Waiting on a slow peer…\n',
+      'Still gathering responses…\n',
+      'Hold on, this is taking a moment…\n'
+    ])
+    expect(answerDeltas).toEqual(['Corroborated answer.'])
+  })
+
+  it('includes the latest system prompt in responses requests', async () => {
+    let currentSystemPrompt = 'Be concise about mesh routing.'
+    const fetchMock = vi.fn().mockResolvedValue(new Response(createSSEStream(['data: [DONE]\n']), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const adapter = createMeshConnectionAdapter('model-a', undefined, () => currentSystemPrompt)
+    currentSystemPrompt = 'Prefer operational checklists.'
+
+    const chunks: StreamChunk[] = []
+    for await (const chunk of adapter.connect(createMessages(), undefined, undefined)) {
+      chunks.push(chunk)
+    }
+
+    const request = fetchMock.mock.calls[0]?.[1]
+    const body = JSON.parse(String(request?.body)) as { input: Array<{ role: string; content: string }> }
+
+    expect(body.input[0]).toEqual({ role: 'system', content: 'Prefer operational checklists.' })
+    expect(body.input[1]).toEqual({ role: 'user', content: 'Hello mesh' })
+    expect(chunks.map((chunk) => chunk.type)).toEqual([EventType.RUN_STARTED, EventType.RUN_FINISHED])
+  })
+
+  it('passes completed response metadata for the generated assistant message', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        new Response(
+          createSSEStream([
+            'data: {"type":"response.output_text.delta","delta":"Hello"}\n',
+            'data: {"type":"response.completed","response":{"id":"resp-1","model":"backend-model","usage":{"input_tokens":8,"output_tokens":27,"total_tokens":35},"timings":{"decode_time_ms":1765,"ttft_ms":1116,"total_time_ms":2881},"served_by":"lemony-28"}}\n',
+            'data: [DONE]\n'
+          ]),
+          { status: 200 }
+        )
+      )
+    vi.stubGlobal('fetch', fetchMock)
+    const metadata: ChatResponseMetadata[] = []
+    const adapter = createMeshConnectionAdapter('model-a', (nextMetadata) => metadata.push(nextMetadata))
+
+    const chunks: StreamChunk[] = []
+    for await (const chunk of adapter.connect(createMessages(), undefined, undefined)) {
+      chunks.push(chunk)
+    }
+
+    const startChunk = chunks.find((chunk) => chunk.type === EventType.TEXT_MESSAGE_START)
+    if (!startChunk || startChunk.type !== EventType.TEXT_MESSAGE_START) {
+      throw new Error('missing assistant message start')
+    }
+
+    expect(metadata).toEqual([
+      {
+        messageId: startChunk.messageId,
+        model: 'backend-model',
+        usage: { input_tokens: 8, output_tokens: 27, total_tokens: 35 },
+        timings: { decode_time_ms: 1765, ttft_ms: 1116, total_time_ms: 2881 },
+        servedBy: 'lemony-28'
+      }
+    ])
+  })
+
+  it('carries the client nonce the frontend echoed', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        createSSEStream([
+          'data: {"type":"response.output_text.delta","delta":"Hello"}\n',
+          'data: {"type":"response.completed","response":{"id":"resp-1","model":"backend-model","usage":{"input_tokens":1,"output_tokens":1}}}\n',
+          'data: [DONE]\n'
+        ]),
+        {
+          status: 200,
+          headers: {
+            'x-capsule-client-nonce': '14af686f-86e5-4baa-bb6b-d3dd3c81cfec'
+          }
+        }
+      )
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const metadata: ChatResponseMetadata[] = []
+    const adapter = createMeshConnectionAdapter('model-a', (nextMetadata) => metadata.push(nextMetadata))
+
+    for await (const chunk of adapter.connect(createMessages(), undefined, undefined)) void chunk
+
+    expect(metadata).toHaveLength(1)
+    expect(metadata[0]).toMatchObject({
+      clientNonce: '14af686f-86e5-4baa-bb6b-d3dd3c81cfec'
+    })
+  })
+
+  it('backfills missing completion timings from the local response stream clock', async () => {
+    vi.spyOn(performance, 'now').mockReturnValueOnce(1000).mockReturnValueOnce(1749).mockReturnValueOnce(3277)
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        new Response(
+          createSSEStream([
+            'data: {"type":"response.output_text.delta","delta":"Measured"}\n',
+            'data: {"type":"response.completed","response":{"id":"resp-1","model":"backend-model","usage":{"input_tokens":11,"output_tokens":59,"total_tokens":70},"served_by":"lemony-28"}}\n',
+            'data: [DONE]\n'
+          ]),
+          { status: 200 }
+        )
+      )
+    vi.stubGlobal('fetch', fetchMock)
+    const metadata: ChatResponseMetadata[] = []
+    const adapter = createMeshConnectionAdapter('model-a', (nextMetadata) => metadata.push(nextMetadata))
+
+    const chunks: StreamChunk[] = []
+    for await (const chunk of adapter.connect(createMessages(), undefined, undefined)) {
+      chunks.push(chunk)
+    }
+
+    expect(chunks.map((chunk) => chunk.type)).toContain(EventType.TEXT_MESSAGE_END)
+    expect(metadata).toHaveLength(1)
+    expect(metadata[0]?.timings).toEqual({ decode_time_ms: 1528, ttft_ms: 749, total_time_ms: 2277 })
+  })
+
+  it('surfaces partial streamed text before a stream failure', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: new Headers(),
+      body: createExplodingReaderStream(
+        'data: {"type":"response.output_text.delta","delta":"Partial"}\n',
+        'stream exploded'
+      )
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const adapter = createMeshConnectionAdapter('model-a')
+    const iterator = adapter.connect(createMessages(), undefined, undefined)[Symbol.asyncIterator]()
+
+    expect((await iterator.next()).value).toMatchObject({ type: EventType.RUN_STARTED })
+    expect((await iterator.next()).value).toMatchObject({ type: EventType.TEXT_MESSAGE_START, role: 'assistant' })
+    expect((await iterator.next()).value).toMatchObject({ type: EventType.TEXT_MESSAGE_CONTENT, delta: 'Partial' })
+    await expect(iterator.next()).rejects.toThrow('stream exploded')
+  })
+
+  it('throws ApiError for backend SSE error events before DONE', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        new Response(
+          createSSEStream([
+            'event: error\n',
+            'data: {"error":{"message":"Router failed while streaming"}}\n',
+            'data: [DONE]\n'
+          ]),
+          { status: 200 }
+        )
+      )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const adapter = createMeshConnectionAdapter('model-a')
+    const iterator = adapter.connect(createMessages(), undefined, undefined)[Symbol.asyncIterator]()
+
+    expect((await iterator.next()).value).toMatchObject({ type: EventType.RUN_STARTED })
+    await expect(iterator.next()).rejects.toMatchObject({
+      name: 'ApiError',
+      status: 500,
+      body: 'Router failed while streaming',
+      message: 'Chat stream failed: Router failed while streaming'
+    })
+  })
+
+  it('cancels the response reader and stops cleanly when aborted during a pending stream read', async () => {
+    const abortController = new AbortController()
+    const { reader, stream } = createPendingAbortReaderStream(abortController.signal)
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: new Headers(),
+      body: stream
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const adapter = createMeshConnectionAdapter('model-a')
+    const iterator = adapter.connect(createMessages(), undefined, abortController.signal)[Symbol.asyncIterator]()
+
+    expect((await iterator.next()).value).toMatchObject({ type: EventType.RUN_STARTED })
+
+    const pendingRead = iterator.next()
+    await vi.waitFor(() => expect(reader.read).toHaveBeenCalledTimes(1))
+
+    abortController.abort()
+
+    await expect(pendingRead).resolves.toEqual({ done: true, value: undefined })
+    expect(reader.cancel).toHaveBeenCalledTimes(1)
+    expect(reader.releaseLock).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not swallow non-abort read errors that race with an abort signal', async () => {
+    const abortController = new AbortController()
+    const readError = new Error('stream exploded during abort')
+    const { reader, stream } = createPendingReaderErrorStream(abortController.signal, readError)
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: new Headers(),
+      body: stream
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const adapter = createMeshConnectionAdapter('model-a')
+    const iterator = adapter.connect(createMessages(), undefined, abortController.signal)[Symbol.asyncIterator]()
+
+    expect((await iterator.next()).value).toMatchObject({ type: EventType.RUN_STARTED })
+
+    const pendingRead = iterator.next()
+    await vi.waitFor(() => expect(reader.read).toHaveBeenCalledTimes(1))
+
+    abortController.abort()
+
+    await expect(pendingRead).rejects.toThrow('stream exploded during abort')
+    expect(reader.cancel).toHaveBeenCalledTimes(1)
+    expect(reader.releaseLock).toHaveBeenCalledTimes(1)
+  })
+
+  it('throws ApiError with parsed backend message on non-ok responses', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ error: { message: 'Backend exploded' } }), {
+        status: 503,
+        statusText: 'Service Unavailable',
+        headers: { 'Content-Type': 'application/json' }
+      })
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const adapter = createMeshConnectionAdapter('model-a')
+    const iterator = adapter.connect(createMessages(), undefined, undefined)[Symbol.asyncIterator]()
+
+    expect((await iterator.next()).value).toMatchObject({ type: EventType.RUN_STARTED })
+
+    await expect(iterator.next()).rejects.toMatchObject({
+      name: 'ApiError',
+      status: 503,
+      body: 'Backend exploded',
+      message: 'Chat request failed: 503'
+    })
+  })
+
+  it('retries a transient model-not-found response while public routing converges', async () => {
+    vi.useFakeTimers()
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ error: { message: "model 'apple/system' not found" } }), {
+          status: 404,
+          headers: { 'Content-Type': 'application/json' }
+        })
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          createSSEStream(['data: {"type":"response.output_text.delta","delta":"Recovered"}\n', 'data: [DONE]\n']),
+          { status: 200 }
+        )
+      )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const adapter = createMeshConnectionAdapter('apple/system')
+    const iterator = adapter.connect(createMessages(), undefined, undefined)[Symbol.asyncIterator]()
+    const chunks: StreamChunk[] = []
+    try {
+      const first = await iterator.next()
+      if (!first.done) chunks.push(first.value)
+
+      const pendingNext = iterator.next()
+      await vi.advanceTimersByTimeAsync(0)
+      expect(vi.getTimerCount()).toBe(1)
+      await vi.advanceTimersByTimeAsync(500)
+
+      while (true) {
+        const next = await pendingNext
+        if (!next.done) chunks.push(next.value)
+        break
+      }
+      while (true) {
+        const next = await iterator.next()
+        if (next.done) break
+        chunks.push(next.value)
+      }
+    } finally {
+      vi.useRealTimers()
+    }
+
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(
+      chunks
+        .filter((chunk) => chunk.type === EventType.TEXT_MESSAGE_CONTENT)
+        .map((chunk) => (chunk.type === EventType.TEXT_MESSAGE_CONTENT ? chunk.delta : ''))
+        .join('')
+    ).toContain('Recovered')
+  })
+
+  it('does not schedule a route retry for an already-aborted request', async () => {
+    vi.useFakeTimers()
+    const abortController = new AbortController()
+    const listeners = spyAbortSignalListeners(abortController.signal)
+    const setTimeoutSpy = vi.spyOn(globalThis, 'setTimeout')
+    abortController.abort()
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(createModelNotFoundResponse()))
+
+    const adapter = createMeshConnectionAdapter('apple/system')
+    const iterator = adapter.connect(createMessages(), undefined, abortController.signal)[Symbol.asyncIterator]()
+    try {
+      expect((await iterator.next()).value).toMatchObject({ type: EventType.RUN_STARTED })
+      await expect(iterator.next()).resolves.toEqual({ done: true, value: undefined })
+      expect(setTimeoutSpy.mock.calls.filter(([, delay]) => delay === 500)).toHaveLength(0)
+      expect(listeners.addEventListener).not.toHaveBeenCalled()
+      expect(listeners.removeEventListener).not.toHaveBeenCalled()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('cleans up the route retry timer and abort listener when the request is aborted', async () => {
+    vi.useFakeTimers()
+    const abortController = new AbortController()
+    const listeners = spyAbortSignalListeners(abortController.signal)
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(createModelNotFoundResponse()))
+
+    const adapter = createMeshConnectionAdapter('apple/system')
+    const iterator = adapter.connect(createMessages(), undefined, abortController.signal)[Symbol.asyncIterator]()
+    try {
+      expect((await iterator.next()).value).toMatchObject({ type: EventType.RUN_STARTED })
+      const pendingNext = iterator.next()
+      await vi.advanceTimersByTimeAsync(0)
+      expect(vi.getTimerCount()).toBe(1)
+
+      abortController.abort()
+
+      await expect(pendingNext).resolves.toEqual({ done: true, value: undefined })
+      expect(vi.getTimerCount()).toBe(0)
+      expect(listeners.addEventListener).toHaveBeenCalledTimes(1)
+      expect(listeners.removeEventListener).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('cleans up the route retry timer and abort listener after a retry timeout', async () => {
+    vi.useFakeTimers()
+    const abortController = new AbortController()
+    const listeners = spyAbortSignalListeners(abortController.signal)
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(createModelNotFoundResponse())
+      .mockResolvedValueOnce(
+        new Response(createSSEStream(['data: [DONE]\n']), {
+          status: 200
+        })
+      )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const adapter = createMeshConnectionAdapter('apple/system')
+    const iterator = adapter.connect(createMessages(), undefined, abortController.signal)[Symbol.asyncIterator]()
+    try {
+      expect((await iterator.next()).value).toMatchObject({ type: EventType.RUN_STARTED })
+      const pendingNext = iterator.next()
+      await vi.advanceTimersByTimeAsync(0)
+      expect(vi.getTimerCount()).toBe(1)
+
+      await vi.advanceTimersByTimeAsync(500)
+
+      await expect(pendingNext).resolves.toMatchObject({ done: false, value: { type: EventType.RUN_FINISHED } })
+      expect(fetchMock).toHaveBeenCalledTimes(2)
+      expect(vi.getTimerCount()).toBe(0)
+      expect(listeners.addEventListener).toHaveBeenCalledTimes(1)
+      expect(listeners.removeEventListener).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('compacts an oversized conversation after a context-route rejection', async () => {
+    const longMessages = Array.from({ length: 8 }, (_, index) => ({
+      id: `message-${index}`,
+      role: index % 2 === 0 ? ('user' as const) : ('assistant' as const),
+      parts: [{ type: 'text' as const, content: `turn-${index} ${'x'.repeat(3_000)}` }],
+      createdAt: new Date(`2026-05-06T00:0${index}:00.000Z`)
+    }))
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ error: { message: "no context-compatible target for model 'apple/system'" } }), {
+          status: 503,
+          headers: { 'Content-Type': 'application/json' }
+        })
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          createSSEStream(['data: {"type":"response.output_text.delta","delta":"Compacted"}\n', 'data: [DONE]\n']),
+          { status: 200 }
+        )
+      )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const adapter = createMeshConnectionAdapter('apple/system')
+    const chunks: StreamChunk[] = []
+    for await (const chunk of adapter.connect(longMessages, undefined, undefined)) {
+      chunks.push(chunk)
+    }
+
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    const firstBody = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)) as { input: unknown[] }
+    const compactedBody = JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body)) as { input: unknown[] }
+    expect(compactedBody.input.length).toBeLessThan(firstBody.input.length)
+    expect(JSON.stringify(compactedBody)).toContain('turn-7')
+    expect(JSON.stringify(compactedBody)).not.toContain('turn-0')
+    expect((compactedBody.input[0] as { role: string }).role).toBe('user')
+    expect(
+      chunks
+        .filter((chunk) => chunk.type === EventType.TEXT_MESSAGE_CONTENT)
+        .map((chunk) => (chunk.type === EventType.TEXT_MESSAGE_CONTENT ? chunk.delta : ''))
+        .join('')
+    ).toContain('Compacted')
+  })
+
+  it('measures UTF-8 byte length correctly when compacting multibyte text', async () => {
+    // Keep one retained turn below the retry budget while the full history
+    // remains large enough to exercise UTF-8 byte-based compaction.
+    const multibyteContent = '🌟🚀💡'.repeat(300) + '你好世界'.repeat(200)
+    const longMessages = Array.from({ length: 8 }, (_, index) => ({
+      id: `message-${index}`,
+      role: index % 2 === 0 ? ('user' as const) : ('assistant' as const),
+      parts: [{ type: 'text' as const, content: `turn-${index} ${multibyteContent}` }],
+      createdAt: new Date(`2026-05-06T00:0${index}:00.000Z`)
+    }))
+
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ error: { message: "no context-compatible target for model 'apple/system'" } }), {
+          status: 503,
+          headers: { 'Content-Type': 'application/json' }
+        })
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          createSSEStream(['data: {"type":"response.output_text.delta","delta":"OK"}\n', 'data: [DONE]\n']),
+          { status: 200 }
+        )
+      )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const adapter = createMeshConnectionAdapter('apple/system')
+    const chunks: StreamChunk[] = []
+    for await (const chunk of adapter.connect(longMessages, undefined, undefined)) {
+      chunks.push(chunk)
+    }
+
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    const compactedBodyString = String(fetchMock.mock.calls[1]?.[1]?.body)
+    const compactedBody = JSON.parse(compactedBodyString) as { input: unknown[] }
+    const firstBody = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)) as { input: unknown[] }
+    expect(compactedBody.input.length).toBeLessThan(firstBody.input.length)
+    expect(new TextEncoder().encode(compactedBodyString).length).toBeLessThanOrEqual(14_000)
+    expect(compactedBodyString.length).toBeLessThan(new TextEncoder().encode(compactedBodyString).length)
+    expect(
+      chunks
+        .filter((chunk) => chunk.type === EventType.TEXT_MESSAGE_CONTENT)
+        .map((chunk) => (chunk.type === EventType.TEXT_MESSAGE_CONTENT ? chunk.delta : ''))
+        .join('')
+    ).toContain('OK')
+  })
+
+  it('reuses uploaded attachments while compacting a context-rejected conversation', async () => {
+    const messages = [
+      {
+        id: 'message-0',
+        role: 'user' as const,
+        parts: [{ type: 'text' as const, content: 'Earlier question' }],
+        createdAt: new Date('2026-05-06T00:00:00.000Z')
+      },
+      {
+        id: 'message-1',
+        role: 'assistant' as const,
+        parts: [{ type: 'text' as const, content: 'Earlier answer' }],
+        createdAt: new Date('2026-05-06T00:01:00.000Z')
+      },
+      {
+        id: 'message-2',
+        role: 'user' as const,
+        parts: [
+          { type: 'text' as const, content: 'Please inspect this' },
+          {
+            type: 'audio' as const,
+            source: { type: 'data' as const, value: 'YXVkaW8=', mimeType: 'audio/mpeg' },
+            metadata: { fileName: 'clip.mp3' }
+          }
+        ],
+        createdAt: new Date('2026-05-06T00:02:00.000Z')
+      },
+      {
+        id: 'message-3',
+        role: 'assistant' as const,
+        parts: [{ type: 'text' as const, content: 'Latest answer' }],
+        createdAt: new Date('2026-05-06T00:03:00.000Z')
+      }
+    ]
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ token: 'cached-token' }), { status: 200 }))
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ error: { message: 'no context-compatible target' } }), { status: 503 })
+      )
+      .mockResolvedValueOnce(new Response(createSSEStream(['data: [DONE]\n']), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const adapter = createMeshConnectionAdapter('apple/system')
+    for await (const _chunk of adapter.connect(messages, undefined, undefined)) {
+      // Consume the stream.
+    }
+
+    expect(fetchMock).toHaveBeenCalledTimes(3)
+    expect(fetchMock.mock.calls[0]?.[0]).toBe('/api/objects')
+    expect(fetchMock.mock.calls.filter(([url]) => url === '/api/objects')).toHaveLength(1)
+    const firstBody = JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body)) as { input: unknown[] }
+    const compactedBody = JSON.parse(String(fetchMock.mock.calls[2]?.[1]?.body)) as { input: unknown[] }
+    expect(JSON.stringify(firstBody)).toContain('cached-token')
+    expect(JSON.stringify(compactedBody)).toContain('cached-token')
+  })
+
+  it('stops before /api/responses when attachment upload fails', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ error: { message: 'Upload failed: 503' } }), {
+        status: 503,
+        statusText: 'Service Unavailable',
+        headers: { 'Content-Type': 'application/json' }
+      })
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const adapter = createMeshConnectionAdapter('model-a')
+    const iterator = adapter.connect(createAudioUploadMessage(), undefined, undefined)[Symbol.asyncIterator]()
+
+    expect((await iterator.next()).value).toMatchObject({ type: EventType.RUN_STARTED })
+    await expect(iterator.next()).rejects.toMatchObject({
+      name: 'ApiError',
+      status: 503,
+      body: 'Upload failed: 503',
+      message: 'Upload failed: 503'
+    })
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(fetchMock.mock.calls[0]?.[0]).toBe('/api/objects')
+  })
+})

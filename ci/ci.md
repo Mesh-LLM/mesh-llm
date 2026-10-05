@@ -6,10 +6,12 @@ This is the checked-in implementation. Normative rules live in
 and acceptance criteria are in `.omo/specs/pr-ci-optimization.md`.
 
 The affected-crate fallback roster in `scripts/affected-crates.sh` includes
-`mesh-llm-wallet` and `mesh-wallet-lexe` alongside `mesh-llm-payments`;
-`just ci-crate-lists` checks it against workspace membership. The publish
-chain orders `mesh-llm-plugin` before `mesh-llm-wallet`, then
-`mesh-wallet-lexe` and `mesh-llm-payments`, including optional dependencies.
+`mesh-llm-moa-plugin` and `mesh-llm-wallet` alongside their related workspace
+crates; `just ci-crate-lists` checks it against workspace membership. The
+publish chain orders `mesh-llm-plugin` before `mesh-llm-wallet` and
+`mesh-llm-payments`, including optional dependencies. It also publishes
+`mesh-mixture-of-agents` before `mesh-llm-moa-plugin`, and both before
+`mesh-llm-host-runtime`.
 
 ## Entry points
 
@@ -33,7 +35,17 @@ chain orders `mesh-llm-plugin` before `mesh-llm-wallet`, then
 | `nightly-stability.yml` / `nightly-stability-run.yml` | daily schedule, dispatch / reusable | GitHub-hosted live-endpoint evidence. The general stability and KV tool-loop/prefix-reuse harnesses run independently, upload both evidence sets, and preserve either failure. The reusable workflow accepts no runner label. |
 | `nightly-kv-coverage.yml` | daily schedule, dispatch | Trusted-`main`, read-only, GitHub-hosted expansion of deterministic radix lease/eviction and blob-ownership state machines. Seed/step budgets and the exact source SHA are uploaded; no secrets or privileged runner are used. |
 | `agentic-replay-nightly.yml` | trusted-main dispatch; schedule paused for qualification | Coding-agent replay benchmark on the persistent macOS `micstudio` runner. The fixed `[self-hosted, X64, macOS, family-certify, agentic-replay]` selector is backed by a fail-closed `RUNNER_NAME=micstudio` check; scheduled and manual execution is restricted to trusted `main`. It resolves exact model and trajectory revisions from the pre-warmed Hugging Face cache, verifies their SHA-256 digests, cross-checks the trajectory pin against the canonical harness before download, derives replay shape from `ci/agentic-replay-nightly/matrix.json`, fails closed on history lookup errors, writes the summary even when the regression gate fails, confines the write-capable HF token to the publish step, uploads immutable evidence, and keeps persistent-runner repair credential-free: the repair loop emits a patch, body and status artifact for its run/attempt, while a separate canonical-main, failed-run GitHub-hosted job validates the artifact, applies the patch with hooks disabled, and uses `CANARY_REPAIR_TOKEN` only to publish a deterministic run/attempt branch and PR. |
-| `llama-upstream-canary.yml` | daily schedule, dispatch | Trusted default-branch llama.cpp bump certification on the self-hosted `family-certify` runner. Its toolchain preflight prepends `/Users/lab/.local/bin` and executes `goose --version` before any changed-pin agent work. It never runs as ordinary push or PR CI. Canary runs share a non-cancelling concurrency group, so a scheduled run queues behind active manual or scheduled work instead of discarding the candidate workspace. `scripts/plan-family-battery.py` validates the generated `ci/llama-canary/family-certified.json` policy (sourced from `ci/model-artifacts/registry.json`) and every file's exact immutable cache blob identity and byte size before native compilation. Each target/draft artifact must have at least one metadata-bearing GGUF shard; every shard that carries architecture dimensions must match the declared runtime range and activation width, including Qwen4's `hyper_connection.count * embedding_length` boundary. Optional `mmproj_artifact` rows pin a projector GGUF sidecar (exact blob identity, exempt from trunk-dimension checks), and each causal family that pins one runs an additional multimodal smoke lane after its core lanes: the real-projector + deterministic-image harness in `crates/skippy-server/src/frontend/tests/multimodal.rs` (local monolithic and split stages) via `SKIPPY_MM_*`, reconciled against the plan like every other lane. It emits deterministic bounded matrix shards and records the plan with evidence. The current single-runner workflow consumes one selected-family shard and builds the certification binaries once. Scheduled, changed-pin, and forced runs all consume the same complete supported-family roster. Before any lane starts, the battery verifies shard/tensor scans, declared runtime/MTP layer counts, model bytes, and disk headroom; each lane selects OS-assigned loopback ports immediately before launch. Native MTP/NextN heads remain part of the single target model; the battery does not reopen the model as a separate draft. Those rows require native draft sidebands in staged single-step and chain correctness, where each proposed token is verified against the target. They also require a `native-mtp-heads` lane that requests the full immutable GGUF head count, compares every proposal position against target decoding, and checks target state against an independent MTP-disabled baseline. Rejected proposals are valid; missing heads or target-state divergence fail certification. Cache preflight rejects disagreement between declared and GGUF `nextn_predict_layers` counts before compilation. The current pinned roster has one head each for GLM-4.5-Air and Nemotron, and three for MiMo2. Native-head family budgets add two startup allowances for the integrated model and baseline loads while retaining the existing absolute cap. Every certified causal profile must retain strict `single-step`, `chain`, and `state-handoff` parity; non-chat profiles require their separate smoke and oracle lanes. Filtered correctness stages derive their exact resident tensor names from the native stage graph planner, including GGUFs with non-finite metadata values. Single-step and chain exercise the sole shipping raw-f32 activation wire and any mismatch is a hard failure. Planned families, product-planner-selected cuts, and multimodal smokes are reconciled exactly against executed lanes and recorded results. Declared per-model or model-size-derived startup deadlines, complete-certification wall-clock limits and typed lane outcomes are recorded, and immutable plans/model manifests/preflight evidence/certification logs upload even on failure or cancellation. Manual dispatch can force this certification when the upstream SHA is unchanged. Persistent-runner execution uses trusted `main` or an explicitly trusted `mesh_ref` selected by manual dispatch. Changed pins use Goose provider `zai_coding_plan` and model `glm-5.3-flash` by default, with `LLAMA_CANARY_GOOSE_PROVIDER` / `LLAMA_CANARY_GOOSE_MODEL` repository overrides. The runner must configure that provider; `goose info --check` verifies authentication and connectivity before repair starts. Changed pins give one agent session the complete developer task: repair or regenerate the queue, address ABI fallout, and validate repairs with focused checks before handing control to the trusted full candidate gates. The agent does not run an additional full battery; both trusted complete-roster passes remain mandatory. Both the repair and independent-verifier checkouts configure the same repository-local `mesh-llama-canary-bot` identity before invoking the harness, so candidate commit creation does not depend on persistent-runner global Git configuration. The repair loop admits coding turns within an 11.5-hour window, and every returned candidate receives a fresh 12-hour verification budget. Earlier gate time counts against further coding admission, not against the next complete verification pass. The repair step/job limits are 1,420/1,430 minutes, leaving evidence-upload headroom beyond the 23.5-hour maximum. The agent has no GitHub credentials. Goose uses its native text renderer for readable assistant, thinking, tool, and error output in the live Actions log and retained `agent.log`. A zero exit from the coding process only yields control to the trusted wrapper; the wrapper runs the full candidate gates and returns current failure logs to the same session while coding admission remains open; an already-admitted verification pass may finish after that window closes. Existing certification and parity rows remain immutable. The agent may only correct `resources.estimated_model_bytes`, which the immutable GGUF scan rechecks, and append classification-only parity rows for source files missing from the manifest; those rows cannot add artifact or certification authority. Only a green repair pass is snapshotted as an unreachable local commit and uploaded as a thin candidate bundle. A separate self-hosted verification job and checkout download that bundle, materialize its commit in a fresh detached worktree, and independently run one ordered `prepare -> manifest-policy -> build -> certify` pass with a 12-hour budget and new native-build and family-evidence directories. Only the exact passing commit is exported as the certified bundle. Before each changed-pin candidate gate, the trusted wrapper regenerates the architecture split certification roster for the candidate recipe; only a complete battery pass is snapshotted, and the independent verifier checks the roster against the llama pin, Skippy ABI, and ordered patch queue before publication. Unchanged-pin certification checks the roster without mutating it. A separate success-gated job on a fresh GitHub-hosted runner receives the repair token, validates the one-day bundle artifact, pushes a run-specific branch, and opens a normal exact-head PR as its final external mutation. Agent or verification failures retain logs and create no branch or PR. Successful publication leaves the canary green; changed pins are never pushed directly to `main`. Unchanged scheduled and forced certifications remain read-only and do not invoke the agent. Every certification additionally runs the System One (OpenJEV) smoke (`scripts/skippy-system-one-smoke.sh`), which drives `POST /systemone` in two independent parts. The contract part is backend independent and runs through the `family-qwen3-dense` fixture: it asserts the typed error envelopes for an unloaded model, empty questions, and out-of-range choice (1/27) and score (1/11) criteria; the unsupported-feature rejections for `images`, multiple `steps`/`samples`, `think`, and `sequential` reads; the method-not-allowed fallback; and the non-DiffusionGemma architecture refusal, which the native runtime reports rather than answering. The full-model read part loads the pinned `unsloth/diffusiongemma-26B-A4B-it-GGUF` Q4_K_M artifact on exactly one runtime lane and asserts `noul`, `choice`, `score`, and mixed-question answers with finite, normalized label distributions, valid answer ranges, positive input tokens with no generated output tokens, and repeat/interleaved determinism that a leaked diffusion state would break. Both artifacts are resolved through the shared test-model manifest contract (`ci/model-artifacts/manifests/skippy-system-one-smoke.json`), which enforces the authorized cadence and verifies the pinned revision, byte size, and SHA-256 before load; a mismatch is a hard failure, never a skip. The read part is admitted only by a declared qualified execution backend (default `cuda`, with `LLAMA_CANARY_SYSTEMONE_BACKEND` and `LLAMA_CANARY_SYSTEMONE_CERTIFIED_BACKENDS` repository overrides), so on the Metal `family-certify` runner it reports NOT CERTIFIED through a job annotation, a report row, and the job summary instead of passing quietly; `LLAMA_CANARY_SYSTEMONE_REQUIRE_QUALIFIED` makes that fatal once a qualified backend joins the pool. A red contract part, or a red read on a declared-qualified backend, fails the unchanged-pin run, the changed-pin repair gates, and the independent verification pass, and therefore blocks publication. The smoke adds no `family-certified.json` roster row and claims no split or profile support. Runner requires `HF_CACHE=/Users/lab/models/huggingface`, verifies its `hub` directory, exports `HF_HOME` and `HF_HUB_CACHE` from that root, and stays offline on the NFS-backed cache (`HF_HUB_OFFLINE=1`; no `flock`, so the runner never downloads). |
+| `llama-upstream-canary.yml` | daily schedule, dispatch | Trusted default-branch llama.cpp bump certification on the self-hosted `family-certify` runner. Its toolchain preflight prepends `/Users/lab/.local/bin` and executes `goose --version` before any changed-pin agent work. It never runs as ordinary push or PR CI. Canary runs share a non-cancelling concurrency group, so a scheduled run queues behind active manual or scheduled work instead of discarding the candidate workspace. `scripts/plan-family-battery.py` validates the generated `ci/llama-canary/family-certified.json` policy (sourced from `ci/model-artifacts/registry.json`) and every file's exact immutable cache blob identity and byte size before native compilation. Each target/draft artifact must have at least one metadata-bearing GGUF shard; every shard that carries architecture dimensions must match the declared runtime range and activation width, including Qwen4's `hyper_connection.count * embedding_length` boundary. Optional `mmproj_artifact` rows pin a projector GGUF sidecar (exact blob identity, exempt from trunk-dimension checks), and each causal family that pins one runs an additional multimodal smoke lane after its core lanes: the real-projector + deterministic-image harness in `crates/skippy-server/src/frontend/tests/multimodal.rs` (local monolithic and split stages) via `SKIPPY_MM_*`, reconciled against the plan like every other lane. It emits deterministic bounded matrix shards and records the plan with evidence. The current single-runner workflow consumes one selected-family shard and builds the certification binaries once. Scheduled, changed-pin, and forced runs all consume the same complete supported-family roster. Before any lane starts, the battery verifies shard/tensor scans, declared runtime/MTP layer counts, model bytes, and disk headroom; each lane selects OS-assigned loopback ports immediately before launch. Native MTP/NextN heads remain part of the single target model; the battery does not reopen the model as a separate draft. Those rows require native draft sidebands in staged single-step and chain correctness, where each proposed token is verified against the target. They also require a `native-mtp-heads` lane that requests the full immutable GGUF head count, compares every proposal position against target decoding, and checks target state against an independent MTP-disabled baseline. Rejected proposals are valid; missing heads or target-state divergence fail certification. Cache preflight rejects disagreement between declared and GGUF `nextn_predict_layers` counts before compilation. The current pinned roster has one head each for GLM-4.5-Air and Nemotron, and three for MiMo2. Native-head family budgets add two startup allowances for the integrated model and baseline loads while retaining the existing absolute cap. Every certified causal profile must retain strict `single-step`, `chain`, and `state-handoff` parity; non-chat profiles require their separate smoke and oracle lanes. Filtered correctness stages derive their exact resident tensor names from the native stage graph planner, including GGUFs with non-finite metadata values. Single-step and chain exercise the sole shipping raw-f32 activation wire and any mismatch is a hard failure. Planned families, product-planner-selected cuts, and multimodal smokes are reconciled exactly against executed lanes and recorded results. Declared per-model or model-size-derived startup deadlines, complete-certification wall-clock limits and typed lane outcomes are recorded, and immutable plans/model manifests/preflight evidence/certification logs upload even on failure or cancellation. Manual dispatch can force this certification when the upstream SHA is unchanged. Persistent-runner execution uses trusted `main` or an explicitly trusted `mesh_ref` selected by manual dispatch. Changed pins use Goose provider `zai_coding_plan` and model `glm-5.3-flash` by default, with `LLAMA_CANARY_GOOSE_PROVIDER` / `LLAMA_CANARY_GOOSE_MODEL` repository overrides. The runner must configure that provider; `goose info --check` verifies authentication and connectivity before repair starts. Changed pins give one agent session the complete developer task: repair or regenerate the queue, address ABI fallout, and validate repairs with focused checks before handing control to the trusted full candidate gates. The agent does not run an additional full battery; both trusted complete-roster passes remain mandatory. Both the repair and independent-verifier checkouts configure the same repository-local `mesh-llama-canary-bot` identity before invoking the harness, so candidate commit creation does not depend on persistent-runner global Git configuration. The repair loop admits coding turns within an 11.5-hour window, and every returned candidate receives a fresh 12-hour verification budget. Earlier gate time counts against further coding admission, not against the next complete verification pass. The repair step/job limits are 1,420/1,430 minutes, leaving evidence-upload headroom beyond the 23.5-hour maximum. The agent has no GitHub credentials. Goose uses its native text renderer for readable assistant, thinking, tool, and error output in the live Actions log and retained `agent.log`. A zero exit from the coding process only yields control to the trusted wrapper; the wrapper runs the full candidate gates and returns current failure logs to the same session while coding admission remains open; an already-admitted verification pass may finish after that window closes. Existing certification and parity rows remain immutable. The agent may only correct `resources.estimated_model_bytes`, which the immutable GGUF scan rechecks, and append classification-only parity rows for source files missing from the manifest; those rows cannot add artifact or certification authority. Only a green repair pass is snapshotted as an unreachable local commit and uploaded as a thin candidate bundle. A separate self-hosted verification job and checkout download that bundle, materialize its commit in a fresh detached worktree, and independently run one ordered `prepare -> manifest-policy -> build -> certify` pass with a 12-hour budget and new native-build and family-evidence directories. Only the exact passing commit is exported as the certified bundle. Before each changed-pin candidate gate, the trusted wrapper regenerates the architecture split certification roster for the candidate recipe; only a complete battery pass is snapshotted, and the independent verifier checks the roster against the llama pin, Skippy ABI, and ordered patch queue before publication. Unchanged-pin certification checks the roster without mutating it. A separate success-gated job on a fresh GitHub-hosted runner receives the repair token, validates the one-day bundle artifact, pushes a run-specific branch, and opens a normal exact-head PR as its final external mutation. Agent or verification failures retain logs and create no branch or PR. Successful publication leaves the canary green; changed pins are never pushed directly to `main`. Unchanged scheduled and forced certifications remain read-only and do not invoke the agent. Every certification additionally runs the System One (OpenJEV) smoke (`scripts/skippy-system-one-smoke.sh`), which drives `POST /systemone` in two independent parts. The contract part is backend independent and runs through the `family-qwen3-dense` fixture: it asserts the typed error envelopes for an unloaded model, empty questions, and out-of-range choice (1/27) and score (1/11) criteria; the unsupported-feature rejections for `images`, multiple `steps`/`samples`, `think`, and `sequential` reads; the method-not-allowed fallback; and the non-DiffusionGemma architecture refusal, which the native runtime reports rather than answering. The full-model read part loads the pinned `unsloth/diffusiongemma-26B-A4B-it-GGUF` Q4_K_M artifact on exactly one runtime lane and asserts `noul`, `choice`, `score`, and mixed-question answers with finite, normalized label distributions, valid answer ranges, positive input tokens with no generated output tokens, and repeat/interleaved determinism that a leaked diffusion state would break. Both artifacts are resolved through the shared test-model manifest contract (`ci/model-artifacts/manifests/skippy-system-one-smoke.json`), which enforces the authorized cadence and verifies the pinned revision, byte size, and SHA-256 before load; a mismatch is a hard failure, never a skip. The read part is admitted only by a declared qualified execution backend. The `family-certify` runner now requires Metal explicitly (`SYSTEMONE_SMOKE_BUILD_BACKEND=metal`, `SYSTEMONE_SMOKE_CERTIFIED_BACKENDS=metal`, and `SYSTEMONE_SMOKE_REQUIRE_QUALIFIED=1`), so Jev must complete its full read battery and can no longer finish as `NOT CERTIFIED`. A red contract part, or a red read on a declared-qualified backend, fails the unchanged-pin run, the changed-pin repair gates, and the independent verification pass, and therefore blocks publication. The smoke adds no `family-certified.json` roster row and claims no split or profile support. Runner requires `HF_CACHE=/Users/lab/models/huggingface`, verifies its `hub` directory, exports `HF_HOME` and `HF_HUB_CACHE` from that root, and stays offline on the NFS-backed cache (`HF_HUB_OFFLINE=1`; no `flock`, so the runner never downloads). |
+
+The llama canary's decision-model gate is mandatory on its Metal runner. It
+sets Metal as the required DiffusionGemma backend, so the complete Jev read can
+no longer finish as `NOT CERTIFIED`, and then runs
+`scripts/skippy-laya-smoke.sh` against the registry-pinned Laya Multilingual
+F16 GGUF through the static `llama-laya-cli` on its explicit `CPU` device;
+the platform smokes separately prove packaged Metal execution. Both real-model
+reports are retained in the
+`llama-canary-system-one-*` evidence artifact; a missing offline-cache entry or
+failed read blocks unchanged-pin certification, repair, and verification.
 
 The canary's environment preflight now owns disk headroom only. Certification
 lanes select distinct OS-assigned loopback ports immediately before launch; no
@@ -73,9 +85,18 @@ job, as used by the llama canary, remains a follow-up for this older repair path
 
 `llama-upstream-canary.yml` runs daily or on trusted-main dispatch. It freezes
 one main source SHA and the upstream target before any hardware work. Unchanged
-scheduled/forced runs build once and certify the complete roster. Changed pins
-use up to three repair attempts, each followed (only when all families pass) by
-an independent build and complete verification pass on the exact same commit.
+scheduled/forced runs build once and certify the complete roster. Every
+certification first runs a deterministic immutable-plan and pinned-cache
+preflight. Changed pins use up to three distributed repair attempts. Each
+attempt runs one complete candidate family pass followed (only when all
+families pass) by one independent build and complete verification pass on the
+exact same commit. A candidate-class family failure emits digest-bound evidence
+and resumes from that exact candidate in the next bounded agent session.
+Runner/workflow failures or missing receipts receive one targeted retry of only
+the affected families on the same immutable package without Goose or a rebuild;
+candidate failures from a mixed pass remain retained. Repeated infrastructure
+failure, corrupt/foreign/invalid evidence, or exhaustion after attempt three
+stops without invoking Goose and denies publication.
 
 
 Manual `mesh_ref` dispatches accept an explicitly trusted same-repository branch
@@ -105,7 +126,13 @@ a branch moving later cannot change the selected source for that run.
 `llama-canary-family-pass.yml` owns the reusable build → family matrix → hosted
 aggregate. The producer performs prepare, manifest-policy, full native and Rust
 builds, generated-family validation, smoke, and split-roster checks. It validates
-the immutable HF cache before compilation and exports a candidate Git bundle,
+the immutable HF cache before compilation. After preparing the exact llama.cpp
+pin, it reads GGUF tensor descriptors with that pin's GGML type table and
+compares each target's tensor byte sum with the manifest before any build.
+After the build, seven pinned Metal models exercise dense parity, recurrent and
+MoE replay, embedding and rerank startup, encoder-decoder ordering, and image
+response content before the 95-family matrix is submitted. The full matrix
+and independent verification retain publication authority. The producer exports a candidate Git bundle,
 one-family-per-shard plan, four arm64 certification binaries, a prebuilt
 multimodal library-test executable, and the run-scoped CPU workload oracle
 closure. Static Metal resources are embedded; an unpackaged non-system dylib
@@ -121,6 +148,11 @@ and verify that source against the selected pin and patch queue before lanes
 start; they cannot accidentally depend on a previous runner checkout.
 The agent supervisor terminates remaining process-group members after normal
 completion and waits for live members to stop before handing the workspace back.
+If the repair agent or trusted gates fail, the build evidence retains an
+unverified `recovery/` source snapshot (`tracked.patch`, `untracked.tar.gz`,
+and `manifest.json`), including the prepared `.deps/llama.cpp` checkout when
+present. A reviewer can reapply it at the recorded base commits;
+it is never accepted as a certified candidate or sent to family workers.
 Repair snapshots first verify the workload producer against the dirty source,
 then bind its unchanged files to the identical committed candidate tree.
 Pinned and independent verification builds keep their original source identity.
@@ -140,8 +172,14 @@ job-result gate also rejects failed/cancelled jobs whose receipts never upload.
 Rebuilt producers have distinct identities and cannot reuse old receipts.
 Failed certifications upload their evidence and then fail the family job, so
 GitHub's failed-job rerun can select them instead of only retrying aggregation.
-Repair feedback includes attempt-labelled family/build history across reruns;
-these diagnostics never substitute for either complete certification pass.
+Reruns retain attempt-labelled family/build history. These diagnostics never
+substitute for either complete certification pass. The hosted aggregate emits
+a digest-bound classification artifact for candidate repair or a single
+targeted infrastructure recheck. That recheck runs only runner/workflow-failed
+or missing families against the exact producer package, without Goose or
+compilation. Reconciliation retains valid candidate failures from a mixed pass
+and emits automatic-repair input only when every remaining failure is proved
+candidate-class.
 
 Each named family job runs `--skip-build --shard-index` on the matching
 `family-certify` pool, with max-parallel 8 and fail-fast disabled. Workers
@@ -178,16 +216,21 @@ itself reconciles the production
 planner's selected cuts, immutable revisions, tensor bytes, and native MTP
 requirements. Missing, cancelled, duplicate, or stale evidence cannot certify.
 Aggregation reports every failed receipt, including its runner and outcome, in
-the job log and Actions summary before rejecting the pass. Worker/aggregate
-failures remain recoverable by later bounded repair passes; only complete
-independent success permits publication.
+the job log and Actions summary before rejecting the pass. Candidate-class
+worker failures remain recoverable by later bounded repair passes;
+runner/workflow failures receive one targeted same-candidate recheck. A clean
+recheck plus retained initial successes completes that immutable full pass;
+repeated infrastructure failure or invalid aggregate evidence stops. Only
+complete independent success permits publication.
 Full worker/build logs remain for 14 days; executable handoffs remain for seven
 days so a single-machine queue can complete later passes.
 
-Within a build job, Goose resumes the same session for prepare/build failures
-under the existing 11.5-hour coding-admission and 12-hour per-gate budgets. A
-failed distributed pass supplies its candidate plus family/build logs to a new
-session in the next bounded attempt. Candidates are local, uncertified commits
+Within each candidate build job, Goose resumes the same session for
+prepare/build failures under the existing 11.5-hour coding-admission and
+12-hour per-gate budgets. A repairable distributed or independent-verification
+failure starts a new bounded session on the next attempt after restoring the
+exact prior candidate as uncommitted changes on the frozen base. Every edit
+invalidates all prior family results. Candidates are local, uncertified commits
 until both full family passes are green. The separate GitHub-hosted publisher
 alone receives `CANARY_REPAIR_TOKEN`; it publishes no failed/incomplete state.
 No Actions-write credential or dispatch controller is needed. Feature-ref
@@ -335,7 +378,8 @@ main.
 If crates.io accepts only a prefix of the stable package chain,
 `resume-crates-release.yml` resumes publication from the existing immutable
 release tag. The operator supplies both the stable tag and its exact peeled
-commit SHA. The workflow runs only from the default branch, verifies those two
+commit SHA. The workflow has `packages: read` to pull its pinned GHCR runner
+image. It runs only from the default branch, verifies those two
 identities against the remote tag and checkout, and uses the trusted
 default-branch `publish-crates.sh` controller against the tagged source. Resume
 mode skips versions that crates.io confirms are already published and falls
@@ -368,11 +412,15 @@ Release efficiency TODOs:
   and per-phase timings on Linux amd64/arm64, macOS, and Windows.
 
 `scripts/release-version.sh` is the single owner of the tracked release-version
-surface. On a non-canary `release.yml` dispatch, the metadata job applies that
-script, creates a linear release-source commit when needed, and fast-forwards
-`main` before the build graph begins. `just release` only performs local
-preflight, dispatches that workflow, and waits for its result. Canary dispatches
-do not mutate `main` or publish. Release tags and releases are immutable on
+surface. It runs cargo, and `.cargo/config.toml` wraps `rustc` with sccache, so
+every release job that can reach cargo — including the canary-skipped
+`metadata` and `publish` jobs — initializes sccache before its first cargo
+call. The artifact-only composition jobs never call cargo, and `tools/xtask`
+enforces both halves. On a non-canary `release.yml` dispatch, the metadata job
+applies that script, creates a linear release-source commit when needed, and
+fast-forwards `main` before the build graph begins. `just release` only
+performs local preflight, dispatches that workflow, and waits for its result.
+Canary dispatches do not mutate `main` or publish. Release tags and releases are immutable on
 the manual release path: a non-canary dispatch refuses an already-existing tag
 and fails closed if it cannot verify the remote tag state. The release
 workflow is dispatch-only, so re-pushing a tag does not start a second release
@@ -450,6 +498,12 @@ flowchart TD
     KIND -- "yes" --> RC_DONE["Stop after GitHub prerelease"]
     KIND -- "no" --> DOWNSTREAM["Publish crates and dispatch<br/>packages, images, and npm"]
 ```
+
+The stable crates.io preflight and publisher each verify the checksummed Linux
+x86_64 release archive and restore its native runtime libraries before Cargo
+package verification. Their `LLAMA_STAGE_LIB_DIR` points at the restored `libmtmd.so`,
+`libllama-common.so`, and `libllama.so`. The same archive gate is used when
+resuming a partial crates.io publication.
 
 ## Graph shape
 
@@ -548,7 +602,8 @@ The five lane workflows organize the catalog without changing selected rows:
 runtime, composition and smoke dependency chain inside one run, so native
 runtime producers are not duplicated.
 
-- `ci-quality-slice.yml` — action/packaging/consistency contracts, format,
+- `ci-quality-slice.yml` — action/packaging/consistency contracts (including
+  product-crate README presence, manifest descriptions, and local Markdown links), format,
   unused-dependency check (cargo-machete), bounded Clippy batches and
   generated CLI inventory freshness.
 - `ci-web-slice.yml` — console lint/type/test, console Playwright E2E, public
@@ -557,13 +612,16 @@ runtime producers are not duplicated.
 - `static-abi-artifact.yml` — one verified portable static llama ABI producer
   that exports the exact toolchain epoch recorded in its artifact.
 - `ci-rust-tests-slice.yml` — deterministic affected or all-workspace Cargo
-  test batches consuming the static ABI artifact and its producer-owned
-  toolchain epoch. Batches that exercise Skippy correctness tests restore an
+  test batches that prepare patched llama before consuming the static ABI
+  artifact and verifying its patched revision and producer-owned toolchain
+  epoch. Batches that exercise Skippy correctness tests restore an
   exact revision- and SHA-256-pinned model cache, verify the file before use,
   and leave publication to one trusted-main batch. Related Skippy crate changes
-  on pull requests also compile one fully qualified runtime test, fail if that
+  on pull requests also compile the adapter-owned
+  `config::hardware_translation_tests::safetensors_checkpoint_reaches_mesh_host_runtime`
+  library test in `mesh-llm-skippy-adapter`, fail if that
   test is absent, then run its binary against an immutable SmolLM2 revision
-  through the complete Mesh config/resolver/server/native SafeTensors path
+  through the Mesh config/adapter/Skippy serving/native SafeTensors path
   through tokenizer, sampled prefill, and decode with every supported load-time
   quantization. Its compiler-cache evidence is observational: a restored seed
   is marked warm with a zero hit-rate floor, and a no-request result warns
@@ -573,8 +631,8 @@ runtime producers are not duplicated.
 - `ci-{linux,macos,windows}-runtime-slice.yml` — platform-pure native runtime
   producers selected by backend rows. The Linux CPU row additionally runs the
   native runtime-event gate
-  (`scripts/ci-runtime-events-native-gate.sh`) against the runtime it just
-  built and the `family-qwen3-dense` fixture from `skippy-ci-smoke.json`,
+  (`scripts/ci-runtime-events-native-gate.sh`) against its verified runtime
+  and the `family-qwen3-dense` fixture from `skippy-ci-smoke.json`,
   authorized for pull-request, main, and manual cadences, and uploads its
   evidence file. It resolves that evidence file to an absolute path before
   Cargo starts, so the crate-local test writer and the lane check read the same
@@ -582,17 +640,41 @@ runtime producers are not duplicated.
   so PRs using the protected main workflow consume the same fix. The separate
   family-certification cadence remains unchanged. That gate is
   env-gated so an ordinary `cargo test` never touches a native symbol, which
-  is why it needs a lane of its own; this is the only lane that already has a
-  freshly built native runtime. CPU only — the reporter is
+  is why it needs a lane of its own; this lane owns the native runtime. CPU
+  only — the reporter is
   backend-independent, so another backend would buy a duplicate of the same
   evidence.
 - `ci-{linux,macos,windows}-product-slice.yml` — composition-only consumers
   that join only their matching immutable host and runtime artifacts.
 - `ci-platform-checks-slice.yml` — macOS portable/unit, Windows portable/unit,
   and focused Windows log-store privacy ACL checks.
-- `ci-linux-product-smoke-slice.yml` and
-  `ci-macos-product-smoke-slice.yml` — platform-local callers of the core,
-  scripted, and model-download smokes. The core smoke restores the
+- `ci-linux-product-smoke-slice.yml`, `ci-macos-product-smoke-slice.yml`, and
+  `ci-windows-product-smoke-slice.yml` — platform-local callers of the core,
+  scripted, model-download, and Laya smokes. The registry-pinned Laya
+  Multilingual F16 GGUF runs startup plus every upstream golden `/systemone`
+  read on Linux CPU/CUDA, conditional `gpu-nvidia` Vulkan and `gpu-amd` ROCm,
+  macOS Metal, and
+  Windows CPU. Each row consumes its composed backend product and selects the
+  exact native device name, so an unavailable backend fails at model load.
+  The Vulkan Laya row requires `MESH_VULKAN_INFERENCE_RUNNER_ENABLED` to be
+  exactly `true` (lowercase) after `verify-vulkan-device` passes in a live
+  runner pod; the ROCm row requires the same exact
+  `MESH_ROCM_INFERENCE_RUNNER_ENABLED` gate before it uses the
+  repository-scoped `gpu-amd` role. A GitHub Actions expression cannot compare
+  strings case-sensitively, so the slice validates both raw values in a shell
+  step and both rows depend on the normalized result instead of comparing the
+  variable directly. The Vulkan row enables the explicit Vulkan profile when
+  its runner lacks `vulkaninfo`; model startup and golden reads still exercise
+  the device. The source-checked Laya action repeats the gate from that same
+  normalized input so an older protected workflow cannot run the smoke on an
+  uncertified PR runner before the workflow gate reaches main.
+  Windows product restore passes LF-terminated manifest fields to Git Bash so
+  its runtime path does not retain Python's Windows carriage return. The Laya
+  parity driver decodes golden fixtures as UTF-8 on Windows, and the smoke
+  harness preserves its result if a child briefly holds its log open during
+  temporary-directory cleanup.
+  Windows CUDA/ROCm/Vulkan remain build-only because CI has no matching Windows
+  accelerator runners. The core smoke restores the
   registry-derived dense SmolLM2-135M Q8 and recurrent IBM Granite 4.0 H 350M
   Q4 pair once, then runs both through standalone inference, OpenAI client
   compatibility, and constrained-Tokio restart. The two-node split smoke uses
@@ -651,10 +733,13 @@ runtime producers are not duplicated.
 Lower-level producers (`native-sdk-artifact.yml`, `swift-sdk-artifact.yml`) and
 consumers (`smoke.yml`, `scripted-binary-smoke.yml`, `sdk-smoke.yml`,
 `hf-download-smoke.yml`) remain reusable building blocks.
-The full Swift producer fans the seven Apple Rust targets into separately
+`.github/actions/run-laya-product-smoke` centralizes composed-product restore,
+immutable fixture verification, and the cross-platform Laya harness behind
+bounded backend/device/cadence inputs.
+The full Swift producer fans the four arm64 Apple Rust targets into separately
 cached jobs, bounded by the lane's macOS `max-parallel` budget, then assembles
 their immutable static libraries into one verified XCFramework. Host-only PR
-production remains a single job.
+production remains a single Apple Silicon job.
 The Swift SDK smoke consumes the lane's immutable UI distribution with
 `--skip-build`; it does not install Node or pnpm and owns no package-manager
 cache.
@@ -750,7 +835,7 @@ The protected workflow checks out candidate source before invoking the existing
 composition action; no catalog or workflow-definition change is needed.
 
 Non-Windows native runtime artifacts include the checksum-bound
-`skippy-model-package` tool under `tools/`. Split-serving smoke consumers use
+`skippy-package-builder` tool under `tools/`. Split-serving smoke consumers use
 that producer-owned tool to convert registry-pinned GGUF fixtures into verified
 package-v2 directories before starting either node; the smoke job never
 compiles a missing converter. Windows runtime producers omit this tool because
@@ -790,7 +875,8 @@ release row no longer disables sccache.
 Fork pull requests use GitHub-hosted runners. Eligible same-repository PRs may
 use Depot while the repository-wide gate and time-bounded cache-risk exception
 in `ci/DEPOT_PR_RISK_EXCEPTION.md` are active. The
-other current exception is uncredentialed CUDA or Vulkan smoke on the approved
+other current exception is uncredentialed CUDA smoke, plus Vulkan smoke when
+`MESH_VULKAN_INFERENCE_RUNNER_ENABLED` is exactly `true`, on the approved
 ephemeral `gpu-nvidia` scale set described above. A future ROCm row uses the
 repository-scoped `gpu-amd` role only when
 `MESH_ROCM_INFERENCE_RUNNER_ENABLED` is exactly `true`. PRs use the same protected reusable
@@ -809,7 +895,8 @@ architecture and policy make eligible for Depot; the numerator is the subset
 that actually receives a `depot-*` label. Control-plane planning,
 runner/selector diagnostics and lane summaries are outside the denominator;
 credential-bearing smokes, `gpu-nvidia` hardware, and unsupported or Intel
-macOS rows without a Depot-equivalent remain documented provider exceptions
+macOS rows without a Depot-equivalent, plus the hosted Linux CPU runtime cache
+producer, remain documented provider exceptions
 and are reported separately. Therefore “100% Depot” means 100% of eligible
 ordinary executor rows, not that every check or job is hosted by Depot.
 
@@ -822,6 +909,30 @@ Depot build-tool remote cache remains disabled. This is a conscious iteration-
 speed tradeoff and the shared cache is treated as attacker-controlled input,
 not a correctness or authority boundary. Hosted release and cache-warmer
 workflows retain their existing GitHub cache behavior.
+
+The Linux CPU runtime producer uses the central selector's forced-hosted
+placement on PR and main, while accelerator runtime rows retain ordinary
+provider selection. It restores an exact packaged-runtime cache on those
+GitHub-hosted jobs. Its key includes the target, pinned toolchain/image
+epoch, Skippy tree and native build/package inputs; Mesh-only source changes
+do not invalidate it. A hit must pass the runtime manifest, archive checksum,
+library/dependency, backend and target checks before the runtime-event gate
+and run-scoped artifact upload. A miss builds through the same native runtime
+action. Only a successful trusted-main push on a GitHub-hosted runner saves
+the package; PRs are restore-only and Depot jobs neither restore nor publish
+this cache. The release producers remain independent of this CI cache.
+
+Skippy and MeshLLM are separate products in the shared source tree. Each
+platform host slice first builds one backend-neutral standalone Skippy CLI and
+uploads `ci-skippy-cli-<platform>-<architecture>` with a checksum and
+`host-imports.json` after verifying host imports, then builds the MeshLLM host.
+Native-runtime slices build or restore one Skippy llama.cpp
+runtime per selected backend; product composition and downstream tests consume
+the platform host/runtime graph, not per-test rebuilds. Release host jobs use
+the same Skippy CLI producer and publish separate versioned CLI archives while
+MeshLLM continues to package its own host, console and selected runtime. The
+standalone CLI archiver checks the report against the executable SHA-256 and
+includes it in the archive.
 
 The admin-verified organization switches have a narrower meaning than that
 consumer policy: disabling automatic Depot Cache and Registry Actions
@@ -916,10 +1027,10 @@ The implemented policy uses that isolation selectively:
 | Linux sccache compiler objects | Exact trusted 2 GiB seed plus job-local writes on GitHub-hosted jobs | Main Quality completion owns publication; PRs mutate only their ephemeral copy |
 | Linux Cargo `target` directories | Disabled for Clippy, Rust tests, host, and runtime | Avoids sharded multi-GiB generations and their restore/upload latency |
 | Skippy correctness model | Restore-only for PRs; one exhaustive trusted-main Rust-test batch publishes an exact file-SHA/cache-version key | Every consuming batch verifies the pinned Qwen file SHA-256; denied-cache runners download the immutable revision without publishing |
-| Static Linux ABI and Swift native ABI | Exact PR-scoped cache on miss | Same-PR reruns reuse the verified native input when its full recipe/toolchain key is unchanged |
-| macOS Metal unit ABI and Windows native ABI | Exact PR-scoped cache on miss | Same-PR reruns avoid the native rebuild; no restore prefixes cross an ABI boundary |
+| Static Linux ABI and Swift native ABI | Exact PR-scoped cache on miss | Same-PR reruns reuse the verified native input when its full recipe/toolchain key is unchanged; the Linux static ABI key includes the prepared patched llama.cpp SHA, which the restore step checks against the archive stamp |
+| macOS Metal unit ABI and Windows native ABI | Exact PR-scoped cache on miss | Same-PR reruns avoid the native rebuild; macOS keys include the prepared patched llama SHA and validate hits before use; no restore prefixes cross an ABI boundary |
 | Console pnpm store | None -- `ui_quality`, `ui_e2e`, and `ui_artifact` all point `store-dir` at the runner image's baked pnpm store instead of an Actions cache | Every run installs warm from the image; no cache to publish, restore, or race |
-| Website npm store | None -- the `website` job runs in the prebuilt `public web` image (baked npm/node) with no bare-metal row, so its `setup-node` cache was deleted outright rather than kept | Every run does a fresh `npm ci`; no cache to invalidate or race |
+| Website npm store | None -- the `mesh/website` job runs in the prebuilt `public web` image (baked npm/node) with no bare-metal row, so its `setup-node` cache was deleted outright rather than kept | Every run does a fresh `npm ci`; no cache to invalidate or race |
 | SDK Rust Cargo registry/target | `Swatinem/rust-cache` restores the exact `mesh-llm-sdk-rust-cargo-v1` identity (OS/arch, target, pinned image and toolchain epochs, debug/LLD recipe, Cargo/manifest/script inputs, and cache-version) and only saves on `main` | PRs restore the trusted main seed without publishing; a miss still rebuilds the SDK test graph |
 | GitHub artifacts | Never used as cross-run caches | Immutable producers/consumers remain correct within one run; reruns recreate run-scoped artifacts |
 
@@ -1155,7 +1266,7 @@ The handle rule exempts only the files that implement the console output
 facility, listed as `CONSOLE_OUTPUT_OWNERS` in the same module: the sink-aware
 writer and its pre-sink CLI fallback, the inline progress renderers, the TUI
 output manager / fd capture / terminal backend, the runtime tracing writer,
-skippy-server's stderr telemetry sink, and the CLI presentation surfaces.
+skippy-serving's stderr telemetry sink, and the CLI presentation surfaces.
 A capability probe such as `io::stdout().is_terminal()` reads nothing and is
 not a handle.
 
@@ -1209,15 +1320,22 @@ branch before the dependent relocation; the latter must use identical catalogs.
 Path consumers and Cargo discovery still require updates with the physical move.
 
 Renamed frontend, serving, model and GPU benchmark crates retain their direct
-semantic aliases. The current `skippy-model-package` name is reused by model
+semantic aliases. The current `skippy-package-builder` name is reused by model
 acquisition after extraction: retain its existing split-serving rule on main,
 with model-download ownership on the relocated path. That conservatively runs
 both domains until the later catalog cleanup; existing main routing is unchanged.
 
+The frontend's current Cargo package and direct CI owner are
+`skippy-inference-api`. The package translator still recognizes the historical
+`openai-frontend` predecessor for protected pre-extraction plans.
+
 ### Protected executor compatibility for the product extraction
 
-The protected executor workflows pin both resolver actions to commit
-`38d63b2f6e27998034fdf0452150c7cc081fe921`, so older PR source checkouts do not need
+The protected executor workflows pin `resolve-source-layout` to commit
+`38d63b2f6e27998034fdf0452150c7cc081fe921` and `resolve-cargo-packages` to
+`5c8fb4d472bc57058c8153761c561daa77dd5b94` (which passes planned packages
+absent from the candidate through to the checked-out-workspace filter, so a PR
+that deletes a crate is not rejected), so older PR source checkouts do not need
 the new helper files. The package resolver loads its Python implementation
 from that same pinned action checkout and inspects the candidate only through
 Cargo metadata in the existing executor trust context.
@@ -1255,6 +1373,9 @@ landed on main.
 Node addon release producers also resolve `sdk` or `mesh/sdk` before version
 checks, native builds, npm pack and immutable artifact staging on Linux, macOS
 and Windows. Executable fixtures cover all three producers in both layouts.
+The release publisher verifies the four supported addon archives and their
+checksum sidecars before publishing assets or dispatching downstream npm
+assembly. Intel macOS is excluded from the Node SDK release matrix.
 
 Legacy change-detection entrypoints and Windows cache triggers recognize both
 product layouts. Nightly and explicit-revision canary pin readers accept exactly

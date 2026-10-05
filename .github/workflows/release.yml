@@ -150,6 +150,16 @@ jobs:
         with:
           node-version: 24.20.0
       - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable 2026-08-20
+      # `release-version.sh` and `cargo fmt` compile through the repository
+      # rustc wrapper, so the first job of the release must start a working
+      # sccache server before its first cargo call. No compilation happens
+      # here, so the job-local disk tier is enough and this job exports no
+      # remote cache authority.
+      - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+      - uses: ./.github/actions/configure-sccache-gha
+        with:
+          allow_depot_remote_cache: "false"
+          allow_native_github_cache: "false"
       - name: Prepare canonical release source
         id: source
         shell: bash
@@ -303,6 +313,22 @@ jobs:
         run: |
           printf '%s' "$RELEASE_ATTESTATION_SIGNING_KEY" > "$MESH_RELEASE_ATTESTATION_SIGNING_KEY_FILE"
           printf '%s' "$RELEASE_ATTESTATION_PUBLIC_KEY" > "$MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE"
+
+      - name: Prepare standalone Skippy CLI
+        uses: ./.github/actions/prepare-skippy-cli-input
+        with:
+          profile: release
+      - name: Package standalone Skippy CLI
+        env:
+          RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
+          SKIPPY_TARGET: ${{ matrix.target }}
+        run: skippy/scripts/package-cli-release.sh "$RELEASE_TAG" "$SKIPPY_TARGET" skippy-cli-input skippy-release
+      - name: Upload immutable Skippy CLI input
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: release-skippy-cli-${{ matrix.target }}
+          path: skippy-release/*
+          if-no-files-found: error
 
       - name: Build and attest release host
         uses: ./.github/actions/prepare-host-input
@@ -472,8 +498,6 @@ jobs:
         include:
           - name: macOS ARM64
             target: darwin-arm64
-          - name: macOS x64
-            target: darwin-x64
           - name: Linux ARM64
             target: linux-arm64
           - name: Linux x64
@@ -687,7 +711,7 @@ jobs:
         uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
           path: ${{ env.LLAMA_STAGE_BUILD_DIR }}
-          key: ${{ env.CACHE_NAMESPACE }}-release-llama-linux-x86_64-cuda${{ matrix.cuda_major }}-${{ matrix.cuda_version }}-dynamic-${{ matrix.cuda_architectures_cache }}-${{ steps.native_toolchain.outputs.epoch }}-${{ hashFiles('scripts/build-llama.sh', 'scripts/prepare-llama.sh', 'scripts/package-native-runtime.sh', '.github/actions/prepare-native-runtime-input/action.yml', 'third_party/llama.cpp/upstream.txt', 'third_party/llama.cpp/patches/**', '.github/cache-version.txt') }}
+          key: ${{ env.CACHE_NAMESPACE }}-release-llama-linux-x86_64-cuda${{ matrix.cuda_major }}-${{ matrix.cuda_version }}-dynamic-${{ matrix.cuda_architectures_cache }}-${{ steps.native_toolchain.outputs.epoch }}-${{ hashFiles('scripts/build-llama.sh', 'skippy/scripts/build-llama.sh', 'scripts/prepare-llama.sh', 'skippy/scripts/prepare-llama.sh', 'scripts/package-native-runtime.sh', 'skippy/scripts/package-native-runtime.sh', '.github/actions/prepare-native-runtime-input/action.yml', 'skippy/llama_cpp/upstream.txt', 'skippy/llama_cpp/patches/**', '.github/cache-version.txt') }}
       - name: Prepare dispatched release version
         if: github.event_name == 'workflow_dispatch'
         env:
@@ -760,7 +784,7 @@ jobs:
         uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
           path: ${{ env.LLAMA_STAGE_BUILD_DIR }}
-          key: ${{ env.CACHE_NAMESPACE }}-release-llama-linux-x86_64-rocm7.0-dynamic-gfx90a_gfx942_gfx1100_gfx1101_gfx1102_gfx1103_gfx1151_gfx1200_gfx1201-${{ steps.native_toolchain.outputs.epoch }}-${{ hashFiles('scripts/build-llama.sh', 'scripts/prepare-llama.sh', 'scripts/package-native-runtime.sh', '.github/actions/prepare-native-runtime-input/action.yml', 'third_party/llama.cpp/upstream.txt', 'third_party/llama.cpp/patches/**', '.github/cache-version.txt') }}
+          key: ${{ env.CACHE_NAMESPACE }}-release-llama-linux-x86_64-rocm7.0-dynamic-gfx90a_gfx942_gfx1100_gfx1101_gfx1102_gfx1103_gfx1151_gfx1200_gfx1201-${{ steps.native_toolchain.outputs.epoch }}-${{ hashFiles('scripts/build-llama.sh', 'skippy/scripts/build-llama.sh', 'scripts/prepare-llama.sh', 'skippy/scripts/prepare-llama.sh', 'scripts/package-native-runtime.sh', 'skippy/scripts/package-native-runtime.sh', '.github/actions/prepare-native-runtime-input/action.yml', 'skippy/llama_cpp/upstream.txt', 'skippy/llama_cpp/patches/**', '.github/cache-version.txt') }}
       - name: Prepare dispatched release version
         if: github.event_name == 'workflow_dispatch'
         env:
@@ -818,7 +842,7 @@ jobs:
         uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
           path: ${{ env.LLAMA_STAGE_BUILD_DIR }}
-          key: ${{ env.CACHE_NAMESPACE }}-release-llama-linux-x86_64-vulkan-dynamic-${{ steps.native_toolchain.outputs.epoch }}-${{ hashFiles('scripts/build-llama.sh', 'scripts/prepare-llama.sh', 'scripts/package-native-runtime.sh', '.github/actions/prepare-native-runtime-input/action.yml', 'third_party/llama.cpp/upstream.txt', 'third_party/llama.cpp/patches/**', '.github/cache-version.txt') }}
+          key: ${{ env.CACHE_NAMESPACE }}-release-llama-linux-x86_64-vulkan-dynamic-${{ steps.native_toolchain.outputs.epoch }}-${{ hashFiles('scripts/build-llama.sh', 'skippy/scripts/build-llama.sh', 'scripts/prepare-llama.sh', 'skippy/scripts/prepare-llama.sh', 'scripts/package-native-runtime.sh', 'skippy/scripts/package-native-runtime.sh', '.github/actions/prepare-native-runtime-input/action.yml', 'skippy/llama_cpp/upstream.txt', 'skippy/llama_cpp/patches/**', '.github/cache-version.txt') }}
       - name: Prepare dispatched release version
         if: github.event_name == 'workflow_dispatch'
         env:
@@ -905,6 +929,21 @@ jobs:
         run: |
           printf '%s' "$RELEASE_ATTESTATION_SIGNING_KEY" > "$MESH_RELEASE_ATTESTATION_SIGNING_KEY_FILE"
           printf '%s' "$RELEASE_ATTESTATION_PUBLIC_KEY" > "$MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE"
+
+      - name: Prepare standalone Skippy CLI
+        uses: ./.github/actions/prepare-skippy-cli-input
+        with:
+          profile: release
+      - name: Package standalone ARM64 Skippy CLI
+        env:
+          RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
+        run: skippy/scripts/package-cli-release.sh "$RELEASE_TAG" linux-aarch64 skippy-cli-input skippy-release
+      - name: Upload immutable ARM64 Skippy CLI input
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: release-skippy-cli-linux-aarch64
+          path: skippy-release/*
+          if-no-files-found: error
 
       - name: Build and attest ARM64 release host
         uses: ./.github/actions/prepare-host-input
@@ -1053,12 +1092,6 @@ jobs:
         with:
           name: release-native-runtime-linux-aarch64-cuda-${{ matrix.cuda_version == '12.9.2' && '12' || '13' }}
           path: runtime-input
-      - name: Prepare dispatched release version
-        if: github.event_name == 'workflow_dispatch'
-        env:
-          RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
-        run: scripts/release-version.sh "$RELEASE_TAG"
-
       - name: Prepare release verification key
         env:
           MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE: ${{ runner.temp }}/mesh-release-attestation-public-key.json
@@ -1135,11 +1168,6 @@ jobs:
         with:
           name: release-native-runtime-linux-x86_64-cuda-${{ matrix.cuda_major }}
           path: runtime-input
-      - name: Prepare dispatched release version
-        if: github.event_name == 'workflow_dispatch'
-        env:
-          RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
-        run: scripts/release-version.sh "$RELEASE_TAG"
       - name: Prepare release verification key
         env:
           MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE: ${{ runner.temp }}/mesh-release-attestation-public-key.json
@@ -1208,11 +1236,6 @@ jobs:
         with:
           name: release-native-runtime-linux-x86_64-rocm
           path: runtime-input
-      - name: Prepare dispatched release version
-        if: github.event_name == 'workflow_dispatch'
-        env:
-          RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
-        run: scripts/release-version.sh "$RELEASE_TAG"
       - name: Prepare release verification key
         env:
           MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE: ${{ runner.temp }}/mesh-release-attestation-public-key.json
@@ -1279,11 +1302,6 @@ jobs:
         with:
           name: release-native-runtime-linux-x86_64-vulkan
           path: runtime-input
-      - name: Prepare dispatched release version
-        if: github.event_name == 'workflow_dispatch'
-        env:
-          RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
-        run: scripts/release-version.sh "$RELEASE_TAG"
       - name: Prepare release verification key
         env:
           MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE: ${{ runner.temp }}/mesh-release-attestation-public-key.json
@@ -1343,7 +1361,11 @@ jobs:
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: '3.x'
+      - uses: taiki-e/install-action@3d23c1bbdafe696dfccad2664945a04f47d03dc3 # just
       - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+      - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
+        with:
+          arch: x64
       - name: Prepare dispatched release version
         if: github.event_name == 'workflow_dispatch'
         shell: bash
@@ -1367,6 +1389,21 @@ jobs:
         run: |
           Set-Content -Path $env:MESH_RELEASE_ATTESTATION_SIGNING_KEY_FILE -Value $env:RELEASE_ATTESTATION_SIGNING_KEY -NoNewline
           Set-Content -Path $env:MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE -Value $env:RELEASE_ATTESTATION_PUBLIC_KEY -NoNewline
+      - name: Prepare standalone Skippy CLI
+        uses: ./.github/actions/prepare-skippy-cli-input
+        with:
+          profile: release
+      - name: Package standalone Windows Skippy CLI
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
+        run: skippy/scripts/package-cli-release.sh "$RELEASE_TAG" windows-x86_64 skippy-cli-input skippy-release
+      - name: Upload immutable Windows Skippy CLI input
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: release-skippy-cli-windows-x86_64
+          path: skippy-release/*
+          if-no-files-found: error
       - name: Build and attest Windows release host
         uses: ./.github/actions/prepare-windows-host-input
         with:
@@ -1743,6 +1780,20 @@ jobs:
       - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable 2026-08-20
         if: github.event_name == 'workflow_dispatch'
 
+      # The dispatched tag path is the only path here that calls cargo
+      # (`release-version.sh` in `Prepare dispatched release tag`), and it is
+      # skipped by canaries. Initialize the wrapper on that same condition so
+      # the last job of the release cannot fail on an unconfigured sccache.
+      - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+        if: github.event_name == 'workflow_dispatch'
+      - uses: ./.github/actions/configure-sccache-gha
+        if: github.event_name == 'workflow_dispatch'
+        with:
+          # This job only rewrites release metadata. Keep the credential-bearing
+          # publisher on its job-local cache, matching `metadata`.
+          allow_depot_remote_cache: "false"
+          allow_native_github_cache: "false"
+
       - name: Restore shared release UI
         uses: ./.github/actions/restore-release-ui
         with:
@@ -1759,6 +1810,43 @@ jobs:
 
       - name: Remove smoke-only binary
         run: rm -f release-artifacts/mesh-llm
+
+      - name: Verify standalone Skippy CLI release assets
+        env:
+          RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
+        run: |
+          set -euo pipefail
+          for target in darwin-aarch64 linux-x86_64 linux-aarch64 windows-x86_64; do
+            archive="skippy-${RELEASE_TAG}-${target}-cli.tar.gz"
+            test -s "release-artifacts/$archive"
+            test -s "release-artifacts/$archive.sha256"
+            (cd release-artifacts && shasum -a 256 --check "$archive.sha256")
+          done
+
+      - name: Verify complete Node SDK addon release matrix
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
+        run: |
+          set -euo pipefail
+          version="${RELEASE_TAG#v}"
+          for target in darwin-arm64 linux-arm64 linux-x64 win32-x64; do
+            archive="mesh-llm-node-sdk-addon-$version-$target.tar.gz"
+            sidecar="$archive.sha256"
+            test -s "release-artifacts/$archive" || {
+              echo "Missing Node SDK addon release asset: $archive" >&2
+              exit 1
+            }
+            test -s "release-artifacts/$sidecar" || {
+              echo "Missing Node SDK addon checksum: $sidecar" >&2
+              exit 1
+            }
+            grep -Eq "^[0-9a-f]{64}  $archive$" "release-artifacts/$sidecar" || {
+              echo "Invalid Node SDK addon checksum: $sidecar" >&2
+              exit 1
+            }
+            (cd release-artifacts && shasum -a 256 -c "$sidecar")
+          done
 
       - name: Generate native runtime release manifest
         env:
@@ -1829,7 +1917,7 @@ jobs:
           scripts/release-version.sh "$RELEASE_TAG"
           cp generated-swift-manifest/Package.swift Package.swift
           generated_binding="generated-swift-binding/mesh_ffi.swift"
-          tracked_binding="sdk/swift/Sources/MeshLLM/Generated/mesh_ffi.swift"
+          tracked_binding="mesh/sdk/swift/Sources/MeshLLM/Generated/mesh_ffi.swift"
           if [[ ! -f "$generated_binding" || -L "$generated_binding" ]]; then
             echo "generated Swift binding artifact is missing or unsafe: $generated_binding" >&2
             exit 1
@@ -1844,7 +1932,7 @@ jobs:
           # all tracked release-preparation changes so this list cannot drift
           # when another version-bearing file is added to the script.
           git add --update
-          git add -f sdk/node/console sdk/swift/Sources/MeshLLM/Resources/Console sdk/kotlin/src/main/resources/mesh-llm/console
+          git add -f mesh/sdk/node/console mesh/sdk/swift/Sources/MeshLLM/Resources/Console mesh/sdk/kotlin/src/main/resources/mesh-llm/console
           if ! git diff --quiet; then
             echo "Release preparation left unstaged tracked changes:" >&2
             git status --short >&2
@@ -2001,7 +2089,49 @@ jobs:
         run: scripts/release-version.sh "$RELEASE_TAG"
       - name: Check crates.io publish-chain consistency
         run: cargo run -p xtask -- repo-consistency publish-crates
+      - name: Restore verified release runtime libraries
+        id: runtime
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
+        run: |
+          set -euo pipefail
+          archive="mesh-llm-${RELEASE_TAG}-x86_64-unknown-linux-gnu.tar.gz"
+          runtime_root="$RUNNER_TEMP/mesh-llm-release-runtime"
+          mkdir -p "$runtime_root"
+          curl --fail --location --retry 3 \
+            --output "$runtime_root/$archive" \
+            "https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/${archive}"
+          curl --fail --location --retry 3 \
+            --output "$runtime_root/$archive.sha256" \
+            "https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/${archive}.sha256"
+          (
+            cd "$runtime_root"
+            sha256sum --check "$archive.sha256"
+            tar --extract --gzip --file "$archive"
+          )
+          lib_dir="$(
+            find "$runtime_root" \
+              -type d \
+              -path '*/native-runtimes/*/lib' \
+              -print \
+              -quit
+          )"
+          if [[ -z "$lib_dir" ]]; then
+            echo "release archive does not contain a native runtime library directory" >&2
+            exit 1
+          fi
+          for library in libmtmd.so libllama-common.so libllama.so; do
+            if [[ ! -f "$lib_dir/$library" ]]; then
+              echo "release runtime is missing $library" >&2
+              exit 1
+            fi
+          done
+          printf 'lib_dir=%s\n' "$lib_dir" >> "$GITHUB_OUTPUT"
       - name: Dry-run crates.io package chain
+        env:
+          LLAMA_STAGE_BUILD_DIR: ${{ runner.temp }}/mesh-llm-preflight-crates-native-verify
+          LLAMA_STAGE_LIB_DIR: ${{ steps.runtime.outputs.lib_dir }}
         run: scripts/publish-crates.sh --dry-run --allow-dirty --sleep-seconds 0
 
   publish_crates:
@@ -2031,7 +2161,48 @@ jobs:
         env:
           RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
         run: scripts/release-version.sh "$RELEASE_TAG"
+      - name: Restore verified release runtime libraries
+        id: runtime
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
+        run: |
+          set -euo pipefail
+          archive="mesh-llm-${RELEASE_TAG}-x86_64-unknown-linux-gnu.tar.gz"
+          runtime_root="$RUNNER_TEMP/mesh-llm-release-runtime"
+          mkdir -p "$runtime_root"
+          curl --fail --location --retry 3 \
+            --output "$runtime_root/$archive" \
+            "https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/${archive}"
+          curl --fail --location --retry 3 \
+            --output "$runtime_root/$archive.sha256" \
+            "https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/${archive}.sha256"
+          (
+            cd "$runtime_root"
+            sha256sum --check "$archive.sha256"
+            tar --extract --gzip --file "$archive"
+          )
+          lib_dir="$(
+            find "$runtime_root" \
+              -type d \
+              -path '*/native-runtimes/*/lib' \
+              -print \
+              -quit
+          )"
+          if [[ -z "$lib_dir" ]]; then
+            echo "release archive does not contain a native runtime library directory" >&2
+            exit 1
+          fi
+          for library in libmtmd.so libllama-common.so libllama.so; do
+            if [[ ! -f "$lib_dir/$library" ]]; then
+              echo "release runtime is missing $library" >&2
+              exit 1
+            fi
+          done
+          printf 'lib_dir=%s\n' "$lib_dir" >> "$GITHUB_OUTPUT"
       - name: Publish crates.io package chain
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          LLAMA_STAGE_BUILD_DIR: ${{ runner.temp }}/mesh-llm-publish-crates-native-verify
+          LLAMA_STAGE_LIB_DIR: ${{ steps.runtime.outputs.lib_dir }}
         run: scripts/publish-crates.sh

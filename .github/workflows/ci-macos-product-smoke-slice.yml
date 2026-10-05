@@ -7,6 +7,15 @@ on:
         description: Immutable product source revision.
         required: true
         type: string
+      original_event_name:
+        description: Original event used for model-cache publication policy.
+        required: false
+        default: ''
+        type: string
+      runtime_matrix:
+        description: JSON macOS runtime/product rows from the versioned CI plan.
+        required: true
+        type: string
       architecture:
         description: Selected macOS product architecture.
         required: true
@@ -47,3 +56,28 @@ jobs:
       timeout_minutes: ${{ inputs.timeout_minutes }}
     secrets:
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
+
+  laya_metal:
+    name: Laya smoke (macOS Metal)
+    if: ${{ contains(fromJson(inputs.runtime_matrix).*.id, 'macos-metal') && contains(fromJson(inputs.smoke_matrix).*.id, 'metal-model-load') }}
+    runs-on: macos-15
+    timeout-minutes: ${{ inputs.timeout_minutes }}
+    env:
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ inputs.source_sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: '3.12'
+      - uses: ./.github/actions/run-laya-product-smoke
+        with:
+          artifact_name: ci-product-macos-${{ inputs.architecture }}-metal
+          artifact_path: ci-artifacts/laya-macos-metal
+          staged_binary_path: target/release/mesh-llm
+          expected_backend: metal
+          device: MTL0
+          model_cadence: ${{ inputs.original_event_name == 'push' && 'main' || inputs.original_event_name == 'pull_request' && 'pull-request' || 'manual' }}
+          save_model_cache: ${{ inputs.original_event_name == 'push' }}

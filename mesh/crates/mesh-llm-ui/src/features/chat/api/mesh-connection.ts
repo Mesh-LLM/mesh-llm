@@ -1,0 +1,421 @@
+import type { ConnectConnectionAdapter } from '@tanstack/ai-client'
+import type { UIMessage, ModelMessage, StreamChunk } from '@tanstack/ai'
+import { EventType } from '@tanstack/ai'
+
+import { env } from '@/lib/env'
+import { ApiError, parseApiErrorBody } from '@/lib/api/errors'
+import { getClientId } from '@/lib/api/client-id'
+import { generateRequestId } from '@/lib/api/request-id'
+import type { ChatSSEEvent } from '@/lib/api/types'
+import { buildResponsesInput, type AttachmentUploadCache } from '@/features/chat/api/build-input'
+import { clientNonceFromHeaders, type ChatResponseMetadata } from '@/features/chat/api/response-metadata'
+import { isMeshVirtualModel, syntheticMoaProgressKey } from '@/features/chat/lib/moa-progress'
+
+function nowMs() {
+  return performance.now()
+}
+
+type StringSource = string | (() => string) | { readonly value: string }
+
+function resolveModel(model: StringSource): string {
+  if (typeof model === 'function') return model()
+  if (typeof model === 'string') return model
+  return model.value
+}
+
+function resolveOptionalString(value: StringSource | undefined): string {
+  if (!value) return ''
+  if (typeof value === 'function') return value()
+  if (typeof value === 'string') return value
+  return value.value
+}
+
+function parseChatSSEEvent(data: string) {
+  try {
+    return JSON.parse(data) as ChatSSEEvent
+  } catch {
+    return undefined
+  }
+}
+
+function messageFromStreamError(data: string): string {
+  try {
+    const json = JSON.parse(data) as unknown
+    if (json && typeof json === 'object') {
+      const obj = json as Record<string, unknown>
+      if (obj['error'] && typeof obj['error'] === 'object') {
+        const error = obj['error'] as Record<string, unknown>
+        if (typeof error['message'] === 'string') return error['message']
+      }
+      if (typeof obj['error'] === 'string') return obj['error']
+      if (typeof obj['message'] === 'string') return obj['message']
+    }
+  } catch {
+    // Not JSON; surface the raw stream payload below.
+  }
+
+  return data || 'Chat stream failed'
+}
+
+function statusFromStreamError(data: string): number {
+  try {
+    const json = JSON.parse(data) as unknown
+    if (json && typeof json === 'object') {
+      const obj = json as Record<string, unknown>
+      if (typeof obj['status'] === 'number') return obj['status']
+      if (typeof obj['status_code'] === 'number') return obj['status_code']
+      if (obj['error'] && typeof obj['error'] === 'object') {
+        const error = obj['error'] as Record<string, unknown>
+        if (typeof error['status'] === 'number') return error['status']
+        if (typeof error['status_code'] === 'number') return error['status_code']
+      }
+    }
+  } catch {
+    // Not JSON; stream errors do not always carry HTTP status metadata.
+  }
+
+  return 500
+}
+
+function isAbortError(error: unknown) {
+  return error instanceof Error && error.name === 'AbortError'
+}
+
+const MODEL_ROUTE_RETRY_DELAY_MS = 500
+// The router estimates request tokens from serialized bytes (~4 bytes/token)
+// and adds a safety margin. Keep the compacted retry below 3.5K prompt tokens
+// so it can fit Apple's 4K context window with that margin.
+const CONTEXT_COMPACTION_RETRY_BODY_BYTES = 14_000
+
+function isModelRouteNotFound(status: number, body: string): boolean {
+  if (status !== 404) return false
+  const normalized = body.toLowerCase()
+  return normalized.includes('model') && (normalized.includes('not found') || normalized.includes('missing'))
+}
+
+function isContextRouteUnavailable(status: number, body: string): boolean {
+  return status === 503 && body.toLowerCase().includes('no context-compatible target')
+}
+
+async function compactResponsesInput(
+  messages: Array<UIMessage> | Array<ModelMessage>,
+  model: string,
+  clientId: string,
+  requestId: string,
+  systemPrompt: string,
+  uploadCache: AttachmentUploadCache
+) {
+  if (messages.length < 2) return undefined
+
+  const firstMessage = Math.max(1, messages.length - 8)
+  for (let start = firstMessage; start < messages.length; start += 1) {
+    // A compacted request must begin at a user turn. Starting at an assistant
+    // message would detach it from the user turn that produced it.
+    if (messages[start]?.role !== 'user') continue
+    const candidate = await buildResponsesInput(
+      messages.slice(start),
+      model,
+      clientId,
+      requestId,
+      systemPrompt,
+      uploadCache
+    )
+    const serialized = JSON.stringify(candidate)
+    const byteLength = new TextEncoder().encode(serialized).length
+    if (byteLength <= CONTEXT_COMPACTION_RETRY_BODY_BYTES) return candidate
+  }
+
+  return undefined
+}
+
+async function waitForModelRouteRetry(abortSignal?: AbortSignal): Promise<boolean> {
+  if (abortSignal?.aborted) return false
+
+  return new Promise((resolve) => {
+    const abortHandler = () => finish(false)
+    const timerId = setTimeout(() => finish(true), MODEL_ROUTE_RETRY_DELAY_MS)
+
+    function finish(shouldRetry: boolean) {
+      clearTimeout(timerId)
+      abortSignal?.removeEventListener('abort', abortHandler)
+      resolve(shouldRetry)
+    }
+
+    abortSignal?.addEventListener('abort', abortHandler, { once: true })
+  })
+}
+
+async function* parseSSEStream(
+  body: ReadableStream<Uint8Array>,
+  abortSignal?: AbortSignal
+): AsyncGenerator<ChatSSEEvent> {
+  const reader = body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  let streamFinished = false
+  let eventName = 'message'
+
+  function parseLine(line: string): ChatSSEEvent | undefined {
+    const trimmed = line.trim()
+    if (trimmed === '') {
+      eventName = 'message'
+      return undefined
+    }
+    if (trimmed.startsWith('event:')) {
+      eventName = trimmed.slice(6).trim() || 'message'
+      return undefined
+    }
+    if (!trimmed.startsWith('data:')) return undefined
+
+    const data = trimmed.slice(5).trimStart()
+    if (data === '[DONE]') {
+      streamFinished = true
+      return undefined
+    }
+    if (eventName === 'error') {
+      const message = messageFromStreamError(data)
+      throw new ApiError(statusFromStreamError(data), message, `Chat stream failed: ${message}`)
+    }
+
+    return parseChatSSEEvent(data)
+  }
+
+  try {
+    while (true) {
+      if (abortSignal?.aborted) return
+
+      let readResult: ReadableStreamReadResult<Uint8Array>
+      try {
+        readResult = await reader.read()
+      } catch (error) {
+        if (isAbortError(error)) return
+        throw error
+      }
+
+      if (abortSignal?.aborted) return
+
+      const { done, value } = readResult
+      if (done) {
+        streamFinished = true
+        break
+      }
+
+      buffer += decoder.decode(value, { stream: true })
+      const lines = buffer.split('\n')
+      buffer = lines.pop() ?? ''
+
+      for (const line of lines) {
+        const event = parseLine(line)
+        if (streamFinished) {
+          return
+        }
+        if (event) yield event
+      }
+    }
+
+    if (buffer.trim()) {
+      const event = parseLine(buffer)
+      if (event) yield event
+    }
+  } finally {
+    if (!streamFinished) {
+      try {
+        await reader.cancel()
+      } catch (_) {
+        void _
+      }
+    }
+    reader.releaseLock()
+  }
+}
+
+/** Request headers for one chat request. A target sends it to that node only
+ *  (`x-mesh-target`); a node that doesn't serve the model refuses it. */
+export function chatRequestHeaders(target: string): Record<string, string> {
+  return target
+    ? { 'Content-Type': 'application/json', 'x-mesh-target': target }
+    : { 'Content-Type': 'application/json' }
+}
+
+async function* runConnect(
+  model: string,
+  messages: Array<UIMessage> | Array<ModelMessage>,
+  abortSignal?: AbortSignal,
+  onResponseMetadata?: (metadata: ChatResponseMetadata) => void,
+  systemPrompt = '',
+  target = ''
+): AsyncGenerator<StreamChunk> {
+  const clientId = getClientId()
+  const requestId = generateRequestId()
+  const messageId = generateRequestId()
+  const requestStartedAt = nowMs()
+  const meshVirtualModel = isMeshVirtualModel(model)
+
+  yield { type: EventType.RUN_STARTED, threadId: requestId, runId: requestId }
+
+  let response: Response
+  try {
+    const attachmentUploadCache: AttachmentUploadCache = new Map()
+    let requestBody = await buildResponsesInput(
+      messages,
+      model,
+      clientId,
+      requestId,
+      systemPrompt,
+      attachmentUploadCache
+    )
+    for (let attempt = 0; ; attempt += 1) {
+      response = await fetch(`${env.managementApiUrl}/api/responses`, {
+        method: 'POST',
+        headers: chatRequestHeaders(target),
+        body: JSON.stringify(requestBody),
+        signal: abortSignal
+      })
+
+      if (response.ok) break
+
+      const errorBody = await parseApiErrorBody(response)
+      const shouldRetryModelRoute = attempt === 0 && isModelRouteNotFound(response.status, errorBody)
+      if (shouldRetryModelRoute) {
+        const retryAllowed = await waitForModelRouteRetry(abortSignal)
+        if (abortSignal?.aborted) return
+        if (!retryAllowed) {
+          throw new ApiError(response.status, errorBody, `Chat request failed: ${response.status}`)
+        }
+        continue
+      }
+
+      const shouldCompactContext = attempt === 0 && isContextRouteUnavailable(response.status, errorBody)
+      if (shouldCompactContext) {
+        const compactedBody = await compactResponsesInput(
+          messages,
+          model,
+          clientId,
+          requestId,
+          systemPrompt,
+          attachmentUploadCache
+        )
+        if (compactedBody) {
+          requestBody = compactedBody
+          continue
+        }
+      }
+
+      throw new ApiError(response.status, errorBody, `Chat request failed: ${response.status}`)
+    }
+  } catch (err) {
+    if (err instanceof Error && err.name === 'AbortError') return
+    throw err
+  }
+
+  if (!response.body) {
+    throw new Error('Response body is null')
+  }
+
+  // Kept on the message so a consumer can join this turn to its exchange events.
+  const clientNonce = clientNonceFromHeaders(response.headers)
+
+  let messageStarted = false
+  let reasoningOpen = false
+  const seenMeshProgress = new Set<string>()
+  let firstDeltaAt: number | undefined
+
+  for await (const event of parseSSEStream(response.body, abortSignal)) {
+    if (abortSignal?.aborted) break
+
+    if (event.type === 'response.reasoning_text.delta') {
+      const progressKey = meshVirtualModel ? syntheticMoaProgressKey(event.delta) : undefined
+      if (progressKey && seenMeshProgress.has(progressKey)) continue
+
+      if (progressKey) seenMeshProgress.add(progressKey)
+      firstDeltaAt ??= nowMs()
+      if (!messageStarted) {
+        messageStarted = true
+        yield { type: EventType.TEXT_MESSAGE_START, messageId, role: 'assistant' }
+      }
+      if (!reasoningOpen) {
+        reasoningOpen = true
+        yield { type: EventType.REASONING_START, messageId }
+        yield { type: EventType.REASONING_MESSAGE_START, messageId, role: 'reasoning' }
+      }
+      yield { type: EventType.REASONING_MESSAGE_CONTENT, messageId, delta: event.delta }
+      continue
+    }
+
+    if (event.type === 'response.output_text.delta') {
+      firstDeltaAt ??= nowMs()
+      if (!messageStarted) {
+        messageStarted = true
+        yield { type: EventType.TEXT_MESSAGE_START, messageId, role: 'assistant' }
+      }
+      if (reasoningOpen) {
+        reasoningOpen = false
+        yield { type: EventType.REASONING_MESSAGE_END, messageId }
+        yield { type: EventType.REASONING_END, messageId }
+      }
+      yield { type: EventType.TEXT_MESSAGE_CONTENT, messageId, delta: event.delta }
+      continue
+    }
+
+    if (event.type === 'response.completed') {
+      const completedAt = nowMs()
+      const fallbackTimings = {
+        decode_time_ms: firstDeltaAt == null ? undefined : Math.max(0, completedAt - firstDeltaAt),
+        ttft_ms: firstDeltaAt == null ? undefined : Math.max(0, firstDeltaAt - requestStartedAt),
+        total_time_ms: Math.max(0, completedAt - requestStartedAt)
+      }
+
+      onResponseMetadata?.({
+        messageId,
+        model: event.response.model,
+        usage: event.response.usage,
+        timings: {
+          decode_time_ms: event.response.timings?.decode_time_ms ?? fallbackTimings.decode_time_ms,
+          ttft_ms: event.response.timings?.ttft_ms ?? fallbackTimings.ttft_ms,
+          total_time_ms: event.response.timings?.total_time_ms ?? fallbackTimings.total_time_ms
+        },
+        servedBy: event.response.served_by,
+        ...clientNonce
+      })
+    }
+  }
+
+  if (abortSignal?.aborted) return
+
+  if (messageStarted) {
+    if (reasoningOpen) {
+      yield { type: EventType.REASONING_MESSAGE_END, messageId }
+      yield { type: EventType.REASONING_END, messageId }
+    }
+    yield { type: EventType.TEXT_MESSAGE_END, messageId }
+  }
+
+  yield { type: EventType.RUN_FINISHED, threadId: requestId, runId: requestId }
+}
+
+/** The target a submission carried (`sendMessage(content, { body: { target } })`), if any. It was
+ *  taken when the prompt was submitted, so it wins over the current target: changing or
+ *  clearing the target later never reroutes a prompt that was already submitted. */
+function submittedTarget(data: Record<string, unknown> | undefined): string | undefined {
+  const target = data?.target
+  return typeof target === 'string' ? target : undefined
+}
+
+export function createMeshConnectionAdapter(
+  model: StringSource,
+  onResponseMetadata?: (metadata: ChatResponseMetadata) => void,
+  systemPrompt?: StringSource,
+  target?: StringSource
+): ConnectConnectionAdapter {
+  return {
+    connect: (_messages, _data, abortSignal) =>
+      runConnect(
+        resolveModel(model),
+        _messages,
+        abortSignal,
+        onResponseMetadata,
+        resolveOptionalString(systemPrompt),
+        submittedTarget(_data) ?? resolveOptionalString(target)
+      )
+  }
+}

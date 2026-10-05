@@ -1,0 +1,10 @@
+[package]
+name = "mesh-llm-test-harness"
+description = "Process fixture for MeshLLM integration tests"
+version.workspace = true
+edition = "2024"
+
+[dependencies]
+thiserror = "2"
+reqwest = { version = "0.13", features = ["blocking", "json"] }
+serde_json = "1"

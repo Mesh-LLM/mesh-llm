@@ -17,7 +17,7 @@ inputs:
     required: false
     default: "false"
   changed_files:
-    description: Newline-delimited changed repository paths
+    description: Bounded compatibility input; the planner reads the generated file
     required: false
     default: ""
   affected_crates:
@@ -160,7 +160,6 @@ runs:
         SOURCE_SHA: ${{ inputs.source_sha }}
         BASE_SHA: ${{ inputs.base_sha }}
         DRAFT: ${{ inputs.draft }}
-        CHANGED_FILES: ${{ inputs.changed_files }}
         AFFECTED_CRATES: ${{ inputs.affected_crates }}
         UPLOAD_ARTIFACT: ${{ inputs.upload_artifact }}
         ARTIFACT_NAME: ${{ inputs.artifact_name }}
@@ -169,7 +168,11 @@ runs:
 
         profile=manual-full
         manifest_root="$GITHUB_WORKSPACE"
-        changed_files_json=$(printf '%s\n' "$CHANGED_FILES" | jq -Rsc 'split("\n") | map(select(length > 0))')
+        # compute-changes writes this file in the same job. Passing thousands
+        # of paths through an action input can exceed the OS environment limit.
+        [[ -f /tmp/changed_files.txt ]] || { echo "changed file list is missing" >&2; exit 1; }
+        changed_files_json_file=$(mktemp "$RUNNER_TEMP/mesh-ci-changed-files.XXXXXX")
+        jq -Rsc 'split("\n") | map(select(length > 0))' /tmp/changed_files.txt > "$changed_files_json_file"
         if [[ "$EVENT_NAME" == "pull_request" ]]; then
           [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "pull request source SHA is malformed" >&2; exit 1; }
           git cat-file -e "$SOURCE_SHA^{commit}"
@@ -202,7 +205,7 @@ runs:
         elif [[ "$EVENT_NAME" == "push" ]]; then
           profile=main
         else
-          changed_files_json='["__force_all__"]'
+          printf '%s\n' '["__force_all__"]' > "$changed_files_json_file"
         fi
 
         affected_crates_json="${AFFECTED_CRATES:-[]}"
@@ -212,9 +215,9 @@ runs:
           --arg event_name "$EVENT_NAME" \
           --arg source_sha "$SOURCE_SHA" \
           --arg base_sha "$BASE_SHA" \
-          --argjson changed_files "$changed_files_json" \
+          --slurpfile changed_files "$changed_files_json_file" \
           --argjson affected_crates "$affected_crates_json" \
-          '{profile: $profile, event_name: $event_name, source_sha: $source_sha, base_sha: $base_sha, changed_files: $changed_files}
+          '{profile: $profile, event_name: $event_name, source_sha: $source_sha, base_sha: $base_sha, changed_files: $changed_files[0]}
            + if ($affected_crates | length) > 0 then {affected_crates: $affected_crates} else {} end' \
           | python3 scripts/plan-ci.py --manifest-root "$manifest_root" > ci-plan.json
 
@@ -318,6 +321,11 @@ runs:
             }
             | .required = ([.matrices[] | length] | add) > 0
           ' ci-plan.json)"
+          # The Windows product smoke is gated on `runtime_product` succeeding,
+          # and that job only runs behind a planned Windows runtime row. The
+          # `core` smoke row is the Linux product-smoke row, so claiming it
+          # without a Windows product would mark the lane required for a job
+          # that can only ever be skipped, and fail the lane's own validator.
           echo "windows_lane_plan=$(jq -c '
             {
               lane: "windows",
@@ -329,7 +337,10 @@ runs:
               matrices: {
                 hosts: [.matrices.hosts[] | select(.platform == "windows")],
                 runtime_products: [.matrices.runtime_products[] | select(.platform == "windows")],
-                platform_checks: [.matrices.platform_checks[] | select(.platform == "windows")]
+                platform_checks: [.matrices.platform_checks[] | select(.platform == "windows")],
+                smoke: (if ([.matrices.runtime_products[] | select(.platform == "windows")] | length) > 0
+                        then [.matrices.smoke[] | select(.id == "core")]
+                        else [] end)
               }
             }
             | .required = ([.matrices[] | length] | add) > 0

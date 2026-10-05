@@ -11,6 +11,10 @@ import sys
 import time
 
 
+class CleanupError(RuntimeError):
+    """The supervised command finished, but live descendants could not be stopped."""
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--seconds", type=int, required=True)
@@ -42,28 +46,90 @@ def terminate_group(process: subprocess.Popen[bytes]) -> None:
         process.wait()
 
 
+def live_group_members(pgid: int) -> int:
+    """Count non-zombie members that can still mutate the handed-off workspace."""
+    try:
+        rows = subprocess.check_output(["ps", "-axo", "pgid=,stat="], text=True)
+    except (OSError, subprocess.CalledProcessError) as error:
+        raise CleanupError(f"could not inspect process group {pgid}: {error}") from error
+    members = 0
+    for row in rows.splitlines():
+        fields = row.split()
+        if len(fields) == 2 and int(fields[0]) == pgid and not fields[1].startswith("Z"):
+            members += 1
+    return members
+
+
+def describe_live_group_members(pgid: int) -> str:
+    """Identify surviving members without logging command arguments or environment."""
+    try:
+        rows = subprocess.check_output(
+            ["ps", "-axo", "pid=,ppid=,pgid=,uid=,stat=,comm="], text=True,
+        )
+    except (OSError, subprocess.CalledProcessError) as error:
+        return f"process details unavailable: {error}"
+    members = []
+    for row in rows.splitlines():
+        fields = row.split(maxsplit=5)
+        if len(fields) == 6 and fields[2] == str(pgid) and not fields[4].startswith("Z"):
+            members.append(
+                f"pid={fields[0]} ppid={fields[1]} uid={fields[3]} "
+                f"stat={fields[4]} executable={fields[5]}"
+            )
+    return "; ".join(members) if members else "no live members visible"
+
+
 def cleanup_completed_group(process: subprocess.Popen[bytes]) -> None:
     """Stop descendants before returning a completed agent's workspace to its caller."""
+    term_error: PermissionError | None = None
     try:
         os.killpg(process.pid, signal.SIGTERM)
     except ProcessLookupError:
         return
+    except PermissionError as error:
+        term_error = error
     # The group leader has already exited; waiting on it cannot wait for its
     # descendants. Give those children a short grace, then kill survivors.
     time.sleep(0.1)
+    inspection_error: CleanupError | None = None
+    try:
+        members = live_group_members(process.pid)
+    except CleanupError as error:
+        # Some sandboxes deny process-table inspection. A successful SIGKILL
+        # still gives a bounded handoff; an EPERM below remains fail-closed.
+        inspection_error = error
+        members = -1
+    if not members:
+        return
     try:
         os.killpg(process.pid, signal.SIGKILL)
     except ProcessLookupError:
-        pass
+        return
+    except PermissionError as error:
+        try:
+            members = live_group_members(process.pid)
+        except CleanupError as inspect_error:
+            raise CleanupError(
+                f"permission denied stopping the process group and inspection failed: {inspect_error}"
+            ) from error
+        if not members:
+            return
+        prior = f" after SIGTERM was denied ({term_error})" if term_error else ""
+        raise CleanupError(
+            f"permission denied stopping {members} live process-group member(s){prior}; "
+            f"{describe_live_group_members(process.pid)}"
+        ) from error
+    if inspection_error is not None:
+        # SIGKILL was accepted for the complete process group. Without process
+        # table access there is nothing more the supervisor can observe.
+        time.sleep(0.1)
+        return
     deadline = time.monotonic() + 10
     while True:
-        # Orphaned zombies cannot mutate files and may await init's reaper.
-        rows = subprocess.check_output(["ps", "-axo", "pgid=,stat="], text=True)
-        if not any(int(fields[0]) == process.pid and not fields[1].startswith("Z")
-                   for row in rows.splitlines() if len(fields := row.split()) == 2):
+        if not live_group_members(process.pid):
             return
         if time.monotonic() >= deadline:
-            raise RuntimeError("command process group did not stop before workspace handoff")
+            raise CleanupError("command process group did not stop before workspace handoff")
         time.sleep(0.05)
 
 
@@ -122,6 +188,9 @@ def main() -> int:
         )
         terminate_group(process)
         return 128 + received_signal
+    except CleanupError as error:
+        print(f"{args.label} infrastructure cleanup failed: {error}", file=sys.stderr)
+        return 125
     finally:
         for signum, handler in previous_handlers.items():
             signal.signal(signum, handler)

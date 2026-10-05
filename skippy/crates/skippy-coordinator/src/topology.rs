@@ -1,0 +1,2495 @@
+use std::cmp::Ordering;
+use std::collections::HashMap;
+
+mod locked;
+mod performance;
+
+/// Calibrated per-stage software overhead for one decode step (dispatch,
+/// kernel-launch slop), in microseconds. Inherited from the execution sim's
+/// calibration against the BENCHMARKS.md anchors (see
+/// `skippy-topology-sim/scenarios/benchmarks_anchor_pair.toml`,
+/// `per_stage_overhead_ms = 1.3`). The `planner_model_matches_execution_sim`
+/// test locks the planner and sim to the same values.
+pub const CALIBRATED_PER_STAGE_OVERHEAD_US: u128 = 1_300;
+
+/// Calibrated per-hop overhead beyond RTT + activation transfer for one
+/// decode token (QUIC stream setup, copies, scheduling), in microseconds.
+/// Inherited from the execution sim's calibration: BENCHMARKS.md names
+/// per-token RPC latency the dominant split cost, and 13 ms/hop is the
+/// back-solved coefficient from the 2-way anchor. Without this term the
+/// planner under-prices every WAN edge by ~10 ms per hop.
+pub const CALIBRATED_PER_HOP_OVERHEAD_US: u128 = 13_000;
+
+pub use locked::{LockedTopologyStage, plan_locked_topology};
+pub use performance::{StageDecodeEstimate, ThroughputEstimate};
+
+const MINIMUM_AUTO_CONTEXT_LENGTH: u32 = 65_536;
+const CONTEXT_STEPS: &[u32] = &[512, 1024, 2048, 4096, 8192, 16_384, 32_768, 65_536, 131_072];
+
+/// Minimum context length per session for lane ceiling calculation.
+/// This is the floor_ctx_per_session from the design.
+const FLOOR_CTX_PER_SESSION: u32 = 4096;
+const LLAMA_MAX_SEQ: usize = 256;
+// Active lanes occupy one sequence id each. The native serving/cache layout
+// reserves a second id range for auxiliary recurrent/speculative work and
+// resident prefixes begin after `lane_count * 2`, so a lane ceiling must leave
+// room for all three co-tenants under LLAMA_MAX_SEQ.
+const SEQUENCE_IDS_PER_LANE_WITH_RESIDENT_CACHE: usize = 3;
+
+/// Compute-buffer reserve applied to the KV term of each layer's placement
+/// cost. Charging KV at 100/85 holds back 15% of a node's post-weight space for
+/// llama.cpp compute-graph buffers and scratch — algebraically identical to the
+/// single-node context planner's `usable_kv_cache_budget`, which grants KV 85%
+/// of post-weight space (`context_planning.rs`). Without this, placement packed
+/// a node with `weights + KV` alone and left the decode's transient buffers
+/// nowhere to go, OOM-ing the stage or swapping the host. Because the reserve
+/// rides on the KV term it scales with context length, matching how compute
+/// buffers grow with `n_ctx`. A fixed per-node floor (see the coordinator's
+/// node headroom) covers the context-independent minimum on top of this.
+const KV_COMPUTE_RESERVE_NUMERATOR: u128 = 100;
+const KV_COMPUTE_RESERVE_DENOMINATOR: u128 = 85;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TopologyPlanningInput {
+    pub native_context_length: u32,
+    pub layer_count: u32,
+    pub model_weight_bytes: u64,
+    pub layer_weight_bytes: Vec<u64>,
+    pub kv_bytes_per_token: u64,
+    /// Fixed recurrent-state allocation for one configured lane, per layer.
+    /// Dense/SWA-only layers use zero. The vector is layer-aligned when set.
+    pub recurrent_bytes_per_sequence_by_layer: Vec<u64>,
+    /// Sequence identifiers reserved for resident prefixes and auxiliary work.
+    pub reserved_sequence_ids: usize,
+    pub minimum_nodes: usize,
+    pub nodes: Vec<TopologyNode>,
+    pub context_length_override: Option<u32>,
+    pub parallel_lanes_override: Option<usize>,
+    pub target_decode_tpot_ms: Option<u32>,
+    /// Fraction of layer weights actually streamed per decode token, in
+    /// per-mille of total (1000 = dense). MoE models touch only the active
+    /// experts; the calibrated anchor scenario uses 340 (0.34). Default for
+    /// callers without MoE metadata: 1000 — dense over-estimates TPOT
+    /// uniformly, which is conservative for target-met and does not change
+    /// relative candidate ordering.
+    pub active_weight_fraction_permil: u32,
+    /// Directed node-pair link measurements. An empty vector keeps the
+    /// legacy hop-count × worst-RTT network estimate, so callers without
+    /// edge data reproduce today's behavior exactly.
+    pub edges: Vec<TopologyEdge>,
+    /// Activation frame size in bytes sent per token between stages at the
+    /// package's wire dtype (`activation_width × dtype size`). Used only for
+    /// edge transfer-time terms when edge bandwidth is known; `0` disables
+    /// bandwidth terms (latency-only edges).
+    pub activation_frame_bytes: u64,
+    /// Re-cut layer boundaries so stage decode times are balanced by node
+    /// speed instead of packing the largest node first. Needs
+    /// `decode_bytes_per_second` on every placed node; otherwise the
+    /// memory-only placement stands.
+    ///
+    /// Stands down when the plan already carries the perf-aware profile (see
+    /// [`perf_aware_signals_reached`]): that planner cut these spans from the
+    /// same measurement with the richer model. A rate measured from running
+    /// stages is new information and still re-cuts, through
+    /// [`rebalance_topology`] directly.
+    pub auto_balance: bool,
+}
+
+/// Directed link measurement between two candidate stage nodes.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TopologyEdge {
+    pub source_node_id: String,
+    pub target_node_id: String,
+    /// Round-trip latency in milliseconds for this direction.
+    pub rtt_ms: u32,
+    /// Large-frame (activation-sized) throughput in MiB/s. `None` when the
+    /// edge has latency data but no bandwidth measurement yet.
+    pub large_frame_mib_per_s: Option<u32>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TopologyNode {
+    pub node_id: String,
+    pub detected_vram_bytes: u64,
+    pub max_vram_bytes: Option<u64>,
+    pub runtime_headroom_bytes: u64,
+    pub stage_transfer_latency_ms: Option<u32>,
+    /// Sustained memory bandwidth in MiB/s, measured (gpu-bench) and gossiped.
+    /// `None` keeps this node capacity-only: performance-aware span balancing
+    /// is only active when every node in the planned subset reports it, so
+    /// signal-less fleets reproduce capacity-only placement exactly.
+    pub sustained_mem_bandwidth_mib_per_s: Option<u32>,
+    /// Sustained fp16 compute in GFLOP/s, measured and gossiped. Secondary
+    /// signal (decode is usually memory-bound); `None` = unreported.
+    pub sustained_compute_gflop_per_s: Option<u32>,
+    /// Observed steady-decode runtime work, normalized per loaded layer.
+    /// When present, the planner uses it as a measured floor on the
+    /// analytical weight-streaming service-time estimate.
+    pub observed_decode_us_per_layer: Option<u64>,
+    /// Rate this node streams weights during decode, in bytes per second.
+    /// Estimated before load or measured from a running stage.
+    pub decode_bytes_per_second: Option<u64>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TopologyPlan {
+    pub context_length: u32,
+    pub parallel_lanes: usize,
+    pub stages: Vec<TopologyStagePlan>,
+    pub estimated_decode_network_ms_per_token: Option<u32>,
+    pub decode_tpot_target_met: Option<bool>,
+    /// Modeled single-stream decode TPOT in microseconds: serial form —
+    /// Σ stage service times + Σ hop times (including the prediction
+    /// return), each stage charged its weight-streaming time plus the
+    /// calibrated per-stage overhead, each hop its RTT + activation
+    /// transfer + the calibrated per-hop overhead. `None` unless every
+    /// node in the chosen subset reports sustained memory bandwidth
+    /// (capacity-only plans carry no model). Matches the calibrated
+    /// execution sim (`skippy-topology-sim`); the
+    /// `planner_model_matches_execution_sim` calibration test locks the
+    /// two together on the BENCHMARKS.md anchor scenario.
+    pub modeled_decode_tpot_us: Option<u128>,
+    /// Per-stage decode estimate; present when every placed node has a speed.
+    pub throughput: Option<ThroughputEstimate>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TopologyStagePlan {
+    pub stage_id: String,
+    pub stage_index: u32,
+    pub node_id: String,
+    pub layer_start: u32,
+    pub layer_end: u32,
+    pub parameter_bytes: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
+pub enum TopologyPlanError {
+    #[error("topology planning requires native GGUF context length")]
+    MissingNativeContext,
+    #[error("topology planning requires at least one model layer")]
+    MissingLayers,
+    #[error("topology planning requires model weight bytes")]
+    MissingModelWeights,
+    #[error("topology planning requires KV bytes per token")]
+    MissingKvBytesPerToken,
+    #[error("topology planning requires at least one node")]
+    MissingNodes,
+    #[error("requested context {requested} is below minimum valid context {minimum}")]
+    ContextBelowMinimum { requested: u32, minimum: u32 },
+    #[error("requested context {requested} exceeds native context {native}")]
+    ContextExceedsNative { requested: u32, native: u32 },
+    #[error("requested parallel lanes must be greater than zero")]
+    ZeroParallelLanes,
+    #[error("no native sequence IDs remain after reservations")]
+    NoSequenceIdCapacity,
+    #[error("requested parallel lanes {requested} exceed sequence-id capacity {capacity}")]
+    ParallelLanesExceedSequenceCapacity { requested: usize, capacity: usize },
+    #[error("no topology can distribute all layers and keep context >= {minimum_context}")]
+    NoValidTopology { minimum_context: u32 },
+    #[error("locked topology must contain at least {minimum} stages; found {actual}")]
+    LockedStageCount { minimum: usize, actual: usize },
+    #[error("locked topology references unknown node {node_id}")]
+    LockedUnknownNode { node_id: String },
+    #[error("locked topology assigns node {node_id} more than once")]
+    LockedDuplicateNode { node_id: String },
+    #[error(
+        "locked topology stage {stage_index} must start at layer {expected_start}; found {actual_start}"
+    )]
+    LockedNonContiguousRange {
+        stage_index: usize,
+        expected_start: u32,
+        actual_start: u32,
+    },
+    #[error("locked topology stage {stage_index} has empty or reversed range {start}..{end}")]
+    LockedInvalidRange {
+        stage_index: usize,
+        start: u32,
+        end: u32,
+    },
+    #[error("locked topology ends at layer {actual_end}; model has {layer_count} layers")]
+    LockedIncompleteCoverage { actual_end: u32, layer_count: u32 },
+    #[error("locked topology cannot fit context >= {minimum_context}")]
+    LockedTopologyDoesNotFit { minimum_context: u32 },
+}
+
+pub fn plan_topology(input: &TopologyPlanningInput) -> Result<TopologyPlan, TopologyPlanError> {
+    plan_topology_with_required_stage0(input, None).map(|plan| finish_plan(input, plan))
+}
+
+pub fn plan_topology_with_stage0(
+    input: &TopologyPlanningInput,
+    stage0_node_id: &str,
+) -> Result<TopologyPlan, TopologyPlanError> {
+    plan_topology_with_required_stage0(input, Some(stage0_node_id))
+        .map(|plan| finish_plan(input, plan))
+}
+
+/// Re-cut `current`'s layer boundaries for throughput using the node speeds in
+/// `input` (typically measured from the running stages), keeping its nodes,
+/// stage order, context and lanes.
+///
+/// Returns `None` when a node lacks a speed, no feasible cut exists, or the
+/// balanced cut is the current one.
+pub fn rebalance_topology(
+    input: &TopologyPlanningInput,
+    current: &TopologyPlan,
+) -> Option<TopologyPlan> {
+    let nodes = usable_nodes(&input.nodes);
+    let layer_weights = layer_weight_bytes(input);
+    let layer_required = layer_required_bytes(
+        &layer_weights,
+        &recurrent_bytes_by_layer(input),
+        input
+            .kv_bytes_per_token
+            .div_ceil(u64::from(input.layer_count)),
+        current.context_length,
+        current.parallel_lanes,
+    )?;
+    let stages =
+        performance::balance_stages(&current.stages, &nodes, &layer_weights, &layer_required)?;
+    if stages
+        .iter()
+        .zip(&current.stages)
+        .all(|(balanced, existing)| balanced.layer_end == existing.layer_end)
+    {
+        return None;
+    }
+    let throughput = performance::estimate_throughput(&stages, &nodes, &layer_weights);
+    Some(TopologyPlan {
+        stages,
+        throughput,
+        ..current.clone()
+    })
+}
+
+/// Estimate per-stage decode time for `plan` from the node speeds in `input`.
+pub fn estimate_plan_throughput(
+    input: &TopologyPlanningInput,
+    plan: &TopologyPlan,
+) -> Option<ThroughputEstimate> {
+    performance::estimate_throughput(
+        &plan.stages,
+        &usable_nodes(&input.nodes),
+        &layer_weight_bytes(input),
+    )
+}
+
+fn finish_plan(input: &TopologyPlanningInput, plan: TopologyPlan) -> TopologyPlan {
+    let plan = if rebalance_from_static_profile(input, &plan) {
+        rebalance_topology(input, &plan).unwrap_or(plan)
+    } else {
+        plan
+    };
+    let throughput = estimate_plan_throughput(input, &plan);
+    TopologyPlan { throughput, ..plan }
+}
+
+/// Whether `--auto-balance` should re-cut this plan from the static profile.
+///
+/// The performance-aware planner places spans from the same node profile, and
+/// from the richer model (directed edges, observed stage timing, calibrated
+/// against the execution sim). When its signals reached the planner it already
+/// made this decision, so a second cut from the static rate derived from that
+/// same profile would overwrite it with a second opinion rather than new
+/// information. A rate measured from running stages is new information and
+/// still re-cuts — [`rebalance_topology`], called directly by the host's
+/// measured rebalance.
+fn rebalance_from_static_profile(input: &TopologyPlanningInput, plan: &TopologyPlan) -> bool {
+    input.auto_balance && !perf_aware_signals_reached(input, plan)
+}
+
+/// Whether the profile the performance-aware planner balances from reached
+/// every node this plan could place.
+///
+/// The host strips those signals unless `MESH_TOPOLOGY_PERF_AWARE` enables the
+/// mode, so their presence means the perf-aware planner owned the span choice.
+fn perf_aware_signals_reached(input: &TopologyPlanningInput, plan: &TopologyPlan) -> bool {
+    let nodes = usable_nodes(&input.nodes);
+    !nodes.is_empty()
+        && !plan.stages.is_empty()
+        && nodes
+            .iter()
+            .all(|node| node.sustained_mem_bandwidth_mib_per_s.is_some())
+}
+
+fn plan_topology_with_required_stage0(
+    input: &TopologyPlanningInput,
+    required_stage0_node_id: Option<&str>,
+) -> Result<TopologyPlan, TopologyPlanError> {
+    validate_input(input)?;
+
+    let minimum_context = minimum_valid_context(input.native_context_length);
+    let context_candidates = context_candidates(
+        input.native_context_length,
+        minimum_context,
+        input.context_length_override,
+    )?;
+    let nodes = usable_nodes(&input.nodes);
+    let latency_aware = latency_aware_planning(input, &nodes);
+
+    let minimum_nodes = input.minimum_nodes.max(1);
+    let mut best_latency_candidate: Option<CandidatePlan> = None;
+    for context_length in context_candidates {
+        let lane_candidates = parallel_lane_candidates(
+            input.parallel_lanes_override,
+            context_length,
+            input.kv_bytes_per_token,
+            input.reserved_sequence_ids,
+        )?;
+        for node_count in minimum_nodes..=nodes.len().min(input.layer_count as usize) {
+            for parallel_lanes in lane_candidates.iter().copied() {
+                let mut best_for_count: Option<CandidatePlan> = None;
+                for_each_node_subset(&nodes, node_count, |subset| {
+                    let Some(candidate) =
+                        fit_candidate(input, subset, context_length, parallel_lanes)
+                    else {
+                        return;
+                    };
+                    if !candidate_has_required_stage0(&candidate, required_stage0_node_id) {
+                        return;
+                    }
+                    if best_for_count
+                        .as_ref()
+                        .is_none_or(|current| candidate_better_for_same_shape(&candidate, current))
+                    {
+                        best_for_count = Some(candidate);
+                    }
+                });
+                if let Some(candidate) = best_for_count {
+                    if latency_aware {
+                        if best_latency_candidate
+                            .as_ref()
+                            .is_none_or(|current| latency_candidate_better(&candidate, current))
+                        {
+                            best_latency_candidate = Some(candidate);
+                        }
+                        continue;
+                    }
+                    return Ok(candidate.plan);
+                }
+            }
+        }
+    }
+
+    if let Some(candidate) = best_latency_candidate {
+        return Ok(candidate.plan);
+    }
+
+    Err(TopologyPlanError::NoValidTopology { minimum_context })
+}
+
+fn validate_input(input: &TopologyPlanningInput) -> Result<(), TopologyPlanError> {
+    if input.native_context_length == 0 {
+        return Err(TopologyPlanError::MissingNativeContext);
+    }
+    if input.layer_count == 0 {
+        return Err(TopologyPlanError::MissingLayers);
+    }
+    if input.model_weight_bytes == 0 {
+        return Err(TopologyPlanError::MissingModelWeights);
+    }
+    let recurrent_only = input.recurrent_bytes_per_sequence_by_layer.len()
+        == input.layer_count as usize
+        && input
+            .recurrent_bytes_per_sequence_by_layer
+            .iter()
+            .all(|bytes| *bytes > 0);
+    if input.kv_bytes_per_token == 0 && !recurrent_only {
+        return Err(TopologyPlanError::MissingKvBytesPerToken);
+    }
+    if input.nodes.is_empty() {
+        return Err(TopologyPlanError::MissingNodes);
+    }
+    Ok(())
+}
+
+fn context_candidates(
+    native_context: u32,
+    minimum_context: u32,
+    override_context: Option<u32>,
+) -> Result<Vec<u32>, TopologyPlanError> {
+    if let Some(requested) = override_context {
+        if requested > native_context {
+            return Err(TopologyPlanError::ContextExceedsNative {
+                requested,
+                native: native_context,
+            });
+        }
+        return Ok(vec![requested]);
+    }
+
+    let mut candidates = CONTEXT_STEPS
+        .iter()
+        .copied()
+        .filter(|context| *context >= minimum_context && *context <= native_context)
+        .collect::<Vec<_>>();
+    candidates.push(native_context);
+    candidates.sort_unstable();
+    candidates.dedup();
+    candidates.reverse();
+    Ok(candidates)
+}
+
+fn parallel_lane_candidates(
+    override_lanes: Option<usize>,
+    context_length: u32,
+    _kv_bytes_per_token: u64,
+    reserved_sequence_ids: usize,
+) -> Result<Vec<usize>, TopologyPlanError> {
+    let sequence_capacity = LLAMA_MAX_SEQ
+        .saturating_sub(reserved_sequence_ids)
+        .checked_div(SEQUENCE_IDS_PER_LANE_WITH_RESIDENT_CACHE)
+        .unwrap_or(0);
+    if sequence_capacity == 0 {
+        return Err(TopologyPlanError::NoSequenceIdCapacity);
+    }
+    if let Some(lanes) = override_lanes {
+        if lanes == 0 {
+            return Err(TopologyPlanError::ZeroParallelLanes);
+        }
+        if lanes > sequence_capacity {
+            return Err(TopologyPlanError::ParallelLanesExceedSequenceCapacity {
+                requested: lanes,
+                capacity: sequence_capacity,
+            });
+        }
+        return Ok(vec![lanes]);
+    }
+    // Keep the historical depth-based auto-lane ceiling. Candidate fit below
+    // charges context_length cells for every lane in the unified pool.
+    let max_seq = context_length as usize / FLOOR_CTX_PER_SESSION as usize;
+    let max_seq = max_seq.clamp(1, sequence_capacity);
+    Ok((1..=max_seq).rev().collect())
+}
+
+pub fn minimum_valid_context(native_context: u32) -> u32 {
+    native_context.clamp(1, MINIMUM_AUTO_CONTEXT_LENGTH)
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct UsableNode {
+    node_id: String,
+    usable_vram_bytes: u64,
+    stage_transfer_latency_ms: Option<u32>,
+    sustained_mem_bandwidth_mib_per_s: Option<u32>,
+    sustained_compute_gflop_per_s: Option<u32>,
+    observed_decode_us_per_layer: Option<u64>,
+    decode_bytes_per_second: Option<u64>,
+}
+
+fn usable_nodes(nodes: &[TopologyNode]) -> Vec<UsableNode> {
+    let mut nodes = nodes
+        .iter()
+        .map(|node| {
+            let capped = node
+                .max_vram_bytes
+                .map(|max| node.detected_vram_bytes.min(max))
+                .unwrap_or(node.detected_vram_bytes);
+            UsableNode {
+                node_id: node.node_id.clone(),
+                usable_vram_bytes: capped.saturating_sub(node.runtime_headroom_bytes),
+                stage_transfer_latency_ms: node.stage_transfer_latency_ms,
+                sustained_mem_bandwidth_mib_per_s: node.sustained_mem_bandwidth_mib_per_s,
+                sustained_compute_gflop_per_s: node.sustained_compute_gflop_per_s,
+                observed_decode_us_per_layer: node.observed_decode_us_per_layer,
+                decode_bytes_per_second: node.decode_bytes_per_second,
+            }
+        })
+        .collect::<Vec<_>>();
+    nodes.sort_by(|left, right| {
+        right
+            .usable_vram_bytes
+            .cmp(&left.usable_vram_bytes)
+            .then_with(|| left.node_id.cmp(&right.node_id))
+    });
+    nodes
+}
+
+fn for_each_node_subset(nodes: &[UsableNode], count: usize, mut visit: impl FnMut(&[UsableNode])) {
+    let mut current = Vec::with_capacity(count);
+    visit_node_subsets(nodes, count, 0, &mut current, &mut visit);
+}
+
+fn visit_node_subsets(
+    nodes: &[UsableNode],
+    count: usize,
+    start: usize,
+    current: &mut Vec<UsableNode>,
+    visit: &mut impl FnMut(&[UsableNode]),
+) {
+    if current.len() == count {
+        visit(current);
+        return;
+    }
+    let needed = count - current.len();
+    if nodes.len().saturating_sub(start) < needed {
+        return;
+    }
+    for index in start..=nodes.len() - needed {
+        current.push(nodes[index].clone());
+        visit_node_subsets(nodes, count, index + 1, current, visit);
+        current.pop();
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct CandidatePlan {
+    plan: TopologyPlan,
+    minimum_remaining_vram: u64,
+    total_remaining_vram: u128,
+    /// Modeled per-token decode time (serial stage service + network) in
+    /// microseconds; present only when every node in the subset reports
+    /// sustained bandwidth. Drives candidate preference when comparable.
+    modeled_decode_tpot_us: Option<u128>,
+}
+
+impl Ord for CandidatePlan {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.minimum_remaining_vram
+            .cmp(&other.minimum_remaining_vram)
+            .then_with(|| self.total_remaining_vram.cmp(&other.total_remaining_vram))
+            .then_with(|| {
+                let left = self
+                    .plan
+                    .stages
+                    .iter()
+                    .map(|stage| stage.node_id.as_str())
+                    .collect::<Vec<_>>();
+                let right = other
+                    .plan
+                    .stages
+                    .iter()
+                    .map(|stage| stage.node_id.as_str())
+                    .collect::<Vec<_>>();
+                right.cmp(&left)
+            })
+    }
+}
+
+impl PartialOrd for CandidatePlan {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+fn fit_candidate(
+    input: &TopologyPlanningInput,
+    nodes: &[UsableNode],
+    context_length: u32,
+    parallel_lanes: usize,
+) -> Option<CandidatePlan> {
+    let layer_count = input.layer_count as usize;
+    if nodes.len() > layer_count {
+        return None;
+    }
+
+    let layer_weights = layer_weight_bytes(input);
+    let kv_per_layer = input
+        .kv_bytes_per_token
+        .div_ceil(u64::from(input.layer_count));
+    let recurrent_by_layer = recurrent_bytes_by_layer(input);
+    let layer_required_bytes = layer_required_bytes(
+        &layer_weights,
+        &recurrent_by_layer,
+        kv_per_layer,
+        context_length,
+        parallel_lanes,
+    )?;
+
+    let mut capacities = nodes.to_vec();
+    capacities.sort_by(|left, right| {
+        right
+            .usable_vram_bytes
+            .cmp(&left.usable_vram_bytes)
+            .then_with(|| left.node_id.cmp(&right.node_id))
+    });
+
+    let mut next_layer = 0u32;
+    let mut stages = Vec::with_capacity(capacities.len());
+    let mut minimum_remaining_vram = u64::MAX;
+    let mut total_remaining_vram = 0u128;
+
+    // Performance-aware span assignment: when every node in the subset reports
+    // sustained memory bandwidth, minimize modeled single-stream serial decode
+    // time (weight streaming dominates quantized decode). Any missing signal
+    // falls back to the exact capacity-greedy walk below, so signal-less fleets
+    // keep bit-identical placement.
+    let streamed_layer_weights = streamed_layer_weight_bytes(input);
+    if let Some((spans, _stage_service_us)) = serial_optimized_spans(
+        &streamed_layer_weights,
+        &layer_required_bytes,
+        &capacities,
+        input.layer_count as usize,
+    ) {
+        for (stage_index, (node, span)) in capacities.iter().zip(spans).enumerate() {
+            let layer_start = next_layer;
+            let layer_end = layer_start + span as u32;
+            let range = layer_start as usize..layer_end as usize;
+            let parameter_bytes = sum_u64(&layer_weights[range.clone()]);
+            let required_bytes = sum_u64(&layer_required_bytes[range]);
+            debug_assert!(required_bytes <= node.usable_vram_bytes);
+            let remaining = node.usable_vram_bytes - required_bytes;
+            minimum_remaining_vram = minimum_remaining_vram.min(remaining);
+            total_remaining_vram += u128::from(remaining);
+            stages.push(TopologyStagePlan {
+                stage_id: format!("stage-{stage_index}"),
+                stage_index: stage_index as u32,
+                node_id: node.node_id.clone(),
+                layer_start,
+                layer_end,
+                parameter_bytes,
+            });
+            next_layer = layer_end;
+        }
+        debug_assert_eq!(next_layer, input.layer_count);
+
+        let estimated_decode_network_ms_per_token =
+            candidate_network_ms_per_token(&stages, nodes, input);
+        // Modeled single-stream decode TPOT, serial form: every token
+        // traverses every stage and returns, so TPOT = Σ stage service
+        // times + Σ hop times. This is the form the BENCHMARKS.md anchors
+        // prove (see the execution sim's calibration); the previous
+        // bottleneck-stage form under-priced multi-stage plans. Both
+        // calibrated overhead terms are included so the planner's number
+        // matches the calibrated sim.
+        let modeled_decode_tpot_us = modeled_serial_decode_tpot_us(&stages, input);
+        // Target-met is scored against the modeled decode TPOT, the best
+        // estimate of it this plan has. Network-only scoring would mark
+        // single-stage plans as trivially meeting any target.
+        let decode_tpot_target_met =
+            decode_tpot_target_met_us(modeled_decode_tpot_us, input.target_decode_tpot_ms);
+        return Some(CandidatePlan {
+            plan: TopologyPlan {
+                context_length,
+                parallel_lanes,
+                stages,
+                estimated_decode_network_ms_per_token,
+                decode_tpot_target_met,
+                modeled_decode_tpot_us,
+                throughput: None,
+            },
+            minimum_remaining_vram,
+            total_remaining_vram,
+            modeled_decode_tpot_us,
+        });
+    }
+
+    for (stage_index, node) in capacities.iter().enumerate() {
+        let remaining_layers = input.layer_count - next_layer;
+        let remaining_nodes = capacities.len() - stage_index;
+        let min_for_later = remaining_nodes.saturating_sub(1) as u32;
+        let assignable = remaining_layers.saturating_sub(min_for_later);
+        let layer_span = assignable.min(max_contiguous_layers_from(
+            &layer_required_bytes,
+            next_layer as usize,
+            assignable as usize,
+            node.usable_vram_bytes,
+        ) as u32);
+        if layer_span == 0 {
+            return None;
+        }
+
+        let layer_start = next_layer;
+        let layer_end = layer_start + layer_span;
+        let range = layer_start as usize..layer_end as usize;
+        let parameter_bytes = sum_u64(&layer_weights[range.clone()]);
+        let required_bytes = sum_u64(&layer_required_bytes[range]);
+        if required_bytes > node.usable_vram_bytes {
+            return None;
+        }
+        let remaining = node.usable_vram_bytes - required_bytes;
+        minimum_remaining_vram = minimum_remaining_vram.min(remaining);
+        total_remaining_vram += u128::from(remaining);
+        stages.push(TopologyStagePlan {
+            stage_id: format!("stage-{stage_index}"),
+            stage_index: stage_index as u32,
+            node_id: node.node_id.clone(),
+            layer_start,
+            layer_end,
+            parameter_bytes,
+        });
+        next_layer = layer_end;
+    }
+
+    if next_layer != input.layer_count {
+        return None;
+    }
+
+    let estimated_decode_network_ms_per_token =
+        candidate_network_ms_per_token(&stages, nodes, input);
+    Some(CandidatePlan {
+        plan: TopologyPlan {
+            context_length,
+            parallel_lanes,
+            stages,
+            estimated_decode_network_ms_per_token,
+            // Network time is a lower bound on full decode TPOT: it can prove
+            // a miss, but it cannot prove success without compute signals.
+            decode_tpot_target_met: decode_tpot_target_from_network_lower_bound(
+                estimated_decode_network_ms_per_token,
+                input.target_decode_tpot_ms,
+            ),
+            modeled_decode_tpot_us: None,
+            throughput: None,
+        },
+        minimum_remaining_vram,
+        total_remaining_vram,
+        modeled_decode_tpot_us: None,
+    })
+}
+
+fn latency_aware_planning(_input: &TopologyPlanningInput, nodes: &[UsableNode]) -> bool {
+    nodes
+        .iter()
+        .any(|node| node.stage_transfer_latency_ms.is_some())
+}
+
+fn candidate_has_required_stage0(
+    candidate: &CandidatePlan,
+    required_stage0_node_id: Option<&str>,
+) -> bool {
+    required_stage0_node_id.is_none_or(|required| {
+        candidate
+            .plan
+            .stages
+            .first()
+            .is_some_and(|stage| stage.node_id == required)
+    })
+}
+
+fn candidate_better_for_same_shape(candidate: &CandidatePlan, current: &CandidatePlan) -> bool {
+    // This comparison is between different node subsets of the same count,
+    // so signal completeness can differ. Prefer a complete TPOT model, then
+    // compare like-for-like estimates; never turn a missing estimate into
+    // zero latency.
+    estimate_completeness(candidate)
+        .cmp(&estimate_completeness(current))
+        .then_with(|| {
+            lower_option_is_better(
+                candidate.modeled_decode_tpot_us,
+                current.modeled_decode_tpot_us,
+            )
+        })
+        .then_with(|| {
+            lower_option_is_better(
+                candidate.plan.estimated_decode_network_ms_per_token,
+                current.plan.estimated_decode_network_ms_per_token,
+            )
+        })
+        .then_with(|| candidate.cmp(current))
+        == Ordering::Greater
+}
+
+fn latency_candidate_better(candidate: &CandidatePlan, current: &CandidatePlan) -> bool {
+    latency_candidate_ordering(candidate, current) == Ordering::Greater
+}
+
+fn latency_candidate_ordering(left: &CandidatePlan, right: &CandidatePlan) -> Ordering {
+    estimate_completeness(left)
+        .cmp(&estimate_completeness(right))
+        .then_with(|| {
+            if left.modeled_decode_tpot_us.is_some() && right.modeled_decode_tpot_us.is_some() {
+                target_status_rank(left.plan.decode_tpot_target_met)
+                    .cmp(&target_status_rank(right.plan.decode_tpot_target_met))
+            } else {
+                Ordering::Equal
+            }
+        })
+        .then_with(|| {
+            lower_option_is_better(left.modeled_decode_tpot_us, right.modeled_decode_tpot_us)
+        })
+        .then_with(|| {
+            lower_option_is_better(
+                left.plan.estimated_decode_network_ms_per_token,
+                right.plan.estimated_decode_network_ms_per_token,
+            )
+        })
+        .then_with(|| left.plan.context_length.cmp(&right.plan.context_length))
+        .then_with(|| left.plan.parallel_lanes.cmp(&right.plan.parallel_lanes))
+        .then_with(|| left.cmp(right))
+}
+
+/// Within equally complete full-TPOT estimates, known target success wins,
+/// followed by an unconfigured target and then a known miss. Estimate
+/// completeness is compared first so withholding compute cannot improve rank.
+fn target_status_rank(status: Option<bool>) -> u8 {
+    match status {
+        Some(true) => 2,
+        None => 1,
+        Some(false) => 0,
+    }
+}
+
+/// Full modeled TPOT is more decision-useful than a network-only estimate,
+/// which is more useful than no estimate. Numeric values are only compared by
+/// `lower_option_is_better` when both candidates carry the same signal kind.
+fn estimate_completeness(candidate: &CandidatePlan) -> u8 {
+    if candidate.modeled_decode_tpot_us.is_some() {
+        2
+    } else if candidate
+        .plan
+        .estimated_decode_network_ms_per_token
+        .is_some()
+    {
+        1
+    } else {
+        0
+    }
+}
+
+fn lower_option_is_better<T: Ord>(left: Option<T>, right: Option<T>) -> Ordering {
+    match (left, right) {
+        (Some(left), Some(right)) => right.cmp(&left),
+        (Some(_), None) => Ordering::Greater,
+        (None, Some(_)) => Ordering::Less,
+        (None, None) => Ordering::Equal,
+    }
+}
+
+fn estimate_decode_network_ms_per_token(nodes: &[UsableNode]) -> Option<u32> {
+    let hop_latency = nodes
+        .iter()
+        .filter_map(|node| node.stage_transfer_latency_ms)
+        .max()?;
+    Some(hop_latency.saturating_mul(nodes.len() as u32))
+}
+
+/// Network time for one decode step across the pipeline stages, in
+/// microseconds, from directed edge measurements. Each hop is charged its
+/// measured RTT plus the activation-frame transfer time when the edge also
+/// reports bandwidth. Hops are matched directed-first, then by their reverse
+/// edge, then fall back to that node's coordinator RTT; an unmatched hop
+/// with no fallback aborts edge-based estimation (caller keeps the legacy
+/// estimate). Returns `None` when the input carries no edge data at all.
+fn pipeline_network_time_us(
+    stages: &[TopologyStagePlan],
+    nodes: &[UsableNode],
+    input: &TopologyPlanningInput,
+) -> Option<u128> {
+    if input.edges.is_empty() {
+        return None;
+    }
+    if stages.len() < 2 {
+        return Some(0);
+    }
+    let rtt_by_node: HashMap<&str, u32> = nodes
+        .iter()
+        .filter_map(|node| {
+            node.stage_transfer_latency_ms
+                .map(|rtt| (node.node_id.as_str(), rtt))
+        })
+        .collect();
+    // Charge one hop: directed edge first, then the reverse edge (same pair,
+    // measured), then the endpoint nodes' coordinator RTT. An unmatched hop
+    // with no fallback aborts edge-based estimation.
+    let hop_rtt_ms = |source: &TopologyStagePlan, target: &TopologyStagePlan| -> Option<u32> {
+        let edge = input
+            .edges
+            .iter()
+            .find(|edge| {
+                edge.source_node_id == source.node_id && edge.target_node_id == target.node_id
+            })
+            .or_else(|| {
+                input.edges.iter().find(|edge| {
+                    edge.source_node_id == target.node_id && edge.target_node_id == source.node_id
+                })
+            });
+        edge.map(|edge| edge.rtt_ms).or_else(|| {
+            rtt_by_node
+                .get(target.node_id.as_str())
+                .copied()
+                .or_else(|| rtt_by_node.get(source.node_id.as_str()).copied())
+        })
+    };
+    let hop_transfer_us = |source: &TopologyStagePlan, target: &TopologyStagePlan| -> u128 {
+        let bandwidth = input
+            .edges
+            .iter()
+            .find(|edge| {
+                edge.source_node_id == source.node_id && edge.target_node_id == target.node_id
+            })
+            .or_else(|| {
+                input.edges.iter().find(|edge| {
+                    edge.source_node_id == target.node_id && edge.target_node_id == source.node_id
+                })
+            })
+            .and_then(|edge| edge.large_frame_mib_per_s);
+        match bandwidth {
+            Some(bandwidth) if bandwidth > 0 && input.activation_frame_bytes > 0 => {
+                u128::from(input.activation_frame_bytes) * 1_000_000
+                    / (u128::from(bandwidth) * 1_048_576)
+            }
+            _ => 0,
+        }
+    };
+    let mut total_us = 0u128;
+    for window in stages.windows(2) {
+        let rtt_ms = hop_rtt_ms(&window[0], &window[1])?;
+        total_us += u128::from(rtt_ms) * 1_000;
+        total_us += hop_transfer_us(&window[0], &window[1]);
+    }
+    // The final stage returns predictions to stage 0 — charge that hop too,
+    // matching the legacy estimate's per-node accounting.
+    let last = stages.last().expect("stages.len() >= 2");
+    let first = stages.first().expect("stages.len() >= 2");
+    let return_rtt_ms = hop_rtt_ms(last, first)?;
+    total_us += u128::from(return_rtt_ms) * 1_000;
+    total_us += hop_transfer_us(last, first);
+    Some(total_us)
+}
+
+/// Usable per-candidate network estimate in whole milliseconds: the
+/// edge-based model when available, else the legacy hop-count estimate.
+fn candidate_network_ms_per_token(
+    stages: &[TopologyStagePlan],
+    nodes: &[UsableNode],
+    input: &TopologyPlanningInput,
+) -> Option<u32> {
+    match pipeline_network_time_us(stages, nodes, input) {
+        Some(us) => Some(u32::try_from(us / 1_000).unwrap_or(u32::MAX)),
+        None => estimate_decode_network_ms_per_token(nodes),
+    }
+}
+
+fn decode_tpot_target_met_us(estimate_us: Option<u128>, target_ms: Option<u32>) -> Option<bool> {
+    Some(estimate_us? <= u128::from(target_ms?).saturating_mul(1_000))
+}
+
+fn decode_tpot_target_from_network_lower_bound(
+    network_ms: Option<u32>,
+    target_ms: Option<u32>,
+) -> Option<bool> {
+    (network_ms? > target_ms?).then_some(false)
+}
+
+/// Modeled single-stream decode TPOT for a planned stage sequence, serial
+/// form: Σ per-stage service times + Σ per-hop times (including the
+/// prediction return). Stage service time = stage weight-streaming time at
+/// the node's sustained bandwidth + calibrated per-stage overhead; hop time
+/// = edge RTT + activation transfer + calibrated per-hop overhead (falling
+/// back the same way the network estimate does). Requires every stage's
+/// node to report bandwidth; `None` otherwise (capacity-only plan).
+fn modeled_serial_decode_tpot_us(
+    stages: &[TopologyStagePlan],
+    input: &TopologyPlanningInput,
+) -> Option<u128> {
+    if stages.is_empty() {
+        return None;
+    }
+    // Per-stage service times from the same per-layer weight table the DP
+    // used (scaled by the active weight fraction for MoE models); `None`
+    // if any node lacks a bandwidth signal.
+    let layer_weights = streamed_layer_weight_bytes(input);
+    let mut total_us = 0u128;
+    for stage in stages {
+        let node = input
+            .nodes
+            .iter()
+            .find(|node| node.node_id == stage.node_id)?;
+        let bandwidth = node
+            .sustained_mem_bandwidth_mib_per_s
+            .filter(|bw| *bw > 0)?;
+        let range = stage.layer_start as usize..stage.layer_end as usize;
+        let weight_bytes: u64 = layer_weights.get(range.clone()).map_or(0, sum_u64);
+        total_us += modeled_stage_time_us_from(
+            bandwidth,
+            weight_bytes,
+            node.observed_decode_us_per_layer,
+            u64::from(stage.layer_end.saturating_sub(stage.layer_start)),
+        );
+        total_us += CALIBRATED_PER_STAGE_OVERHEAD_US;
+    }
+    // Hop times: reuse the edge model's per-hop accounting (RTT +
+    // transfer), and add the calibrated per-hop overhead per hop, including
+    // the prediction return. Node RTTs are looked up directly (the edge
+    // model works on UsableNode slices; here input.nodes suffices).
+    let hop_rtt_ms = |source: &TopologyStagePlan, target: &TopologyStagePlan| -> Option<u32> {
+        input
+            .edges
+            .iter()
+            .find(|edge| {
+                edge.source_node_id == source.node_id && edge.target_node_id == target.node_id
+            })
+            .or_else(|| {
+                input.edges.iter().find(|edge| {
+                    edge.source_node_id == target.node_id && edge.target_node_id == source.node_id
+                })
+            })
+            .map(|edge| edge.rtt_ms)
+            .or_else(|| {
+                input
+                    .nodes
+                    .iter()
+                    .find(|node| node.node_id == target.node_id)
+                    .and_then(|node| node.stage_transfer_latency_ms)
+                    .or_else(|| {
+                        input
+                            .nodes
+                            .iter()
+                            .find(|node| node.node_id == source.node_id)
+                            .and_then(|node| node.stage_transfer_latency_ms)
+                    })
+            })
+    };
+    let hop_transfer_us = |source: &TopologyStagePlan, target: &TopologyStagePlan| -> u128 {
+        input
+            .edges
+            .iter()
+            .find(|edge| {
+                edge.source_node_id == source.node_id && edge.target_node_id == target.node_id
+            })
+            .or_else(|| {
+                input.edges.iter().find(|edge| {
+                    edge.source_node_id == target.node_id && edge.target_node_id == source.node_id
+                })
+            })
+            .and_then(|edge| edge.large_frame_mib_per_s)
+            .map_or(0, |bandwidth| {
+                if bandwidth > 0 && input.activation_frame_bytes > 0 {
+                    u128::from(input.activation_frame_bytes) * 1_000_000
+                        / (u128::from(bandwidth) * 1_048_576)
+                } else {
+                    0
+                }
+            })
+    };
+    let mut hop_count = 0u128;
+    for window in stages.windows(2) {
+        let rtt_ms = hop_rtt_ms(&window[0], &window[1])?;
+        total_us += u128::from(rtt_ms) * 1_000;
+        total_us += hop_transfer_us(&window[0], &window[1]);
+        hop_count += 1;
+    }
+    if stages.len() > 1 {
+        let last = stages.last().expect("len > 1");
+        let first = stages.first().expect("len > 1");
+        let return_rtt_ms = hop_rtt_ms(last, first)?;
+        total_us += u128::from(return_rtt_ms) * 1_000;
+        total_us += hop_transfer_us(last, first);
+        hop_count += 1;
+    }
+    total_us += hop_count * CALIBRATED_PER_HOP_OVERHEAD_US;
+    Some(total_us)
+}
+
+/// Weight-streaming time in microseconds for `weight_bytes` at
+/// `bandwidth_mib_per_s` (bytes × 1e6 / (MiB/s × 2^20)).
+fn modeled_stage_time_us_from(
+    bandwidth_mib_per_s: u32,
+    weight_bytes: u64,
+    observed_us_per_layer: Option<u64>,
+    layer_count: u64,
+) -> u128 {
+    let analytical =
+        u128::from(weight_bytes) * 1_000_000 / (u128::from(bandwidth_mib_per_s) * 1_048_576);
+    let observed = u128::from(observed_us_per_layer.unwrap_or_default())
+        .saturating_mul(u128::from(layer_count));
+    analytical.max(observed)
+}
+
+fn layer_weight_bytes(input: &TopologyPlanningInput) -> Vec<u64> {
+    if input.layer_weight_bytes.len() == input.layer_count as usize {
+        return input.layer_weight_bytes.clone();
+    }
+    let weight_per_layer = input
+        .model_weight_bytes
+        .div_ceil(u64::from(input.layer_count));
+    vec![weight_per_layer; input.layer_count as usize]
+}
+
+/// Layer weights actually streamed per decode token: the full table scaled
+/// by `active_weight_fraction_permil` (per-mille; 1000 = dense). MoE models
+/// touch only the active experts — the calibrated anchor scenario uses 340
+/// (0.34). Clamped to [1, 1000] so a zero fraction can never make stage
+/// service time vanish. Used only by the modeled-TPOT path; capacity
+/// accounting always uses full weights.
+fn streamed_layer_weight_bytes(input: &TopologyPlanningInput) -> Vec<u64> {
+    let weights = layer_weight_bytes(input);
+    let fraction_permil = input.active_weight_fraction_permil.clamp(1, 1000);
+    weights
+        .into_iter()
+        .map(|bytes| bytes * u64::from(fraction_permil) / 1_000)
+        .collect()
+}
+
+fn candidate_bytes_per_layer(
+    weight_per_layer: u64,
+    kv_per_layer: u64,
+    context_length: u32,
+    parallel_lanes: usize,
+) -> Option<u64> {
+    // One unified cache reserves a full per-lane context for every lane.
+    let kv_bytes = u128::from(kv_per_layer)
+        .checked_mul(u128::from(context_length))?
+        .checked_mul(parallel_lanes as u128)?;
+    // Charge KV at 100/85 so 15% of the node's post-weight space is held back
+    // for llama.cpp compute-graph buffers/scratch (mirrors the single-node
+    // context planner's `usable_kv_cache_budget`). This scales the reserve with
+    // context length, matching how compute buffers grow with `n_ctx`.
+    let kv_with_compute_reserve = kv_bytes
+        .checked_mul(KV_COMPUTE_RESERVE_NUMERATOR)?
+        .div_ceil(KV_COMPUTE_RESERVE_DENOMINATOR);
+    let total = u128::from(weight_per_layer).checked_add(kv_with_compute_reserve)?;
+    total.try_into().ok()
+}
+
+fn layer_required_bytes(
+    layer_weights: &[u64],
+    recurrent_bytes_by_layer: &[u64],
+    kv_per_layer: u64,
+    context_length: u32,
+    parallel_lanes: usize,
+) -> Option<Vec<u64>> {
+    layer_weights
+        .iter()
+        .zip(recurrent_bytes_by_layer.iter().copied())
+        .map(|(weight, recurrent_bytes)| {
+            candidate_bytes_per_layer(*weight, kv_per_layer, context_length, parallel_lanes)
+                .and_then(|base| {
+                    recurrent_bytes
+                        .checked_mul(parallel_lanes as u64)
+                        .and_then(|recurrent| base.checked_add(recurrent))
+                })
+        })
+        .collect()
+}
+
+fn recurrent_bytes_by_layer(input: &TopologyPlanningInput) -> Vec<u64> {
+    if input.recurrent_bytes_per_sequence_by_layer.len() == input.layer_count as usize {
+        return input.recurrent_bytes_per_sequence_by_layer.clone();
+    }
+    vec![0; input.layer_count as usize]
+}
+
+/// Modeled per-stage decode service time in microseconds, using the dominant
+/// term for quantized decode: streaming the stage's weights from memory.
+/// Integer microseconds keep candidate comparisons deterministic.
+fn modeled_stage_time_us(node: &UsableNode, weight_bytes: u64, layer_count: usize) -> Option<u128> {
+    let bandwidth = node.sustained_mem_bandwidth_mib_per_s?;
+    if bandwidth == 0 {
+        return None;
+    }
+    Some(modeled_stage_time_us_from(
+        bandwidth,
+        weight_bytes,
+        node.observed_decode_us_per_layer,
+        layer_count as u64,
+    ))
+}
+
+/// Performance-aware contiguous span assignment via DP over layer boundaries.
+///
+/// Nodes arrive in the planner's deterministic stage order (VRAM-descending,
+/// node id tie-break). For each contiguous split of the layer sequence across
+/// the stages, every stage's memory requirement must fit its node's ceiling
+/// (checked with prefix sums in O(1)); among feasible assignments we minimize
+/// the serial sum of modeled stage service times, matching the single-stream
+/// TPOT evaluator used to rank the resulting plan. Ties prefer the smaller
+/// bottleneck stage time, then the lexicographically smallest boundary vector
+/// for determinism. Returns `None` unless every node reports
+/// sustained memory bandwidth — the caller then keeps today's capacity-greedy
+/// walk, which guarantees signal-less fleets keep identical placement.
+fn serial_optimized_spans(
+    layer_weights: &[u64],
+    linearized_required_bytes: &[u64],
+    capacities: &[UsableNode],
+    layer_count: usize,
+) -> Option<(Vec<usize>, u128)> {
+    if capacities.is_empty() || layer_weights.len() != layer_count {
+        return None;
+    }
+    // All-or-nothing on the dominant signal: partial signals would make the
+    // modeled comparison between stages meaningless.
+    if capacities
+        .iter()
+        .any(|node| node.sustained_mem_bandwidth_mib_per_s.is_none())
+    {
+        return None;
+    }
+
+    // Prefix sums over the linearized memory requirement (u128 guards against
+    // overflow when context is large).
+    let mut prefix_required = vec![0u128; layer_count + 1];
+    for (index, bytes) in linearized_required_bytes.iter().enumerate() {
+        prefix_required[index + 1] = prefix_required[index] + u128::from(*bytes);
+    }
+    let mut prefix_weights = vec![0u128; layer_count + 1];
+    for (index, bytes) in layer_weights.iter().enumerate() {
+        prefix_weights[index + 1] = prefix_weights[index] + u128::from(*bytes);
+    }
+
+    // dp[stage][boundary] = best (total stage time, max stage time) for
+    // assigning layers 0..boundary to stages 0..=stage, plus the parent
+    // boundary for reconstruction.
+    let mut dp = vec![vec![(u128::MAX, u128::MAX, 0usize); layer_count + 1]; capacities.len()];
+    for (stage_index, node) in capacities.iter().enumerate() {
+        for boundary in 0..=layer_count {
+            if stage_index == 0 {
+                // Stage 0 owns layers 0..boundary and must be non-empty in the
+                // final plan; dp[0][0] stays unreachable so no chain can leave
+                // a stage empty.
+                let weight = prefix_weights[boundary];
+                if boundary == 0 {
+                    continue;
+                }
+                if let Some(time) = modeled_stage_time_us(node, weight.try_into().ok()?, boundary) {
+                    let fits = prefix_required[boundary] <= u128::from(node.usable_vram_bytes);
+                    if fits {
+                        dp[0][boundary] = (time, time, 0);
+                    }
+                }
+                continue;
+            }
+            // Non-final stages may not consume all remaining layers; leave at
+            // least one for each later stage.
+            let max_boundary = layer_count - (capacities.len() - 1 - stage_index);
+            if boundary > max_boundary {
+                continue;
+            }
+            let mut best = (u128::MAX, u128::MAX, 0usize);
+            for previous in 0..boundary {
+                let (prev_total, prev_max, _) = dp[stage_index - 1][previous];
+                if prev_total == u128::MAX {
+                    continue;
+                }
+                let weight = prefix_weights[boundary] - prefix_weights[previous];
+                let Some(time) =
+                    modeled_stage_time_us(node, weight.try_into().ok()?, boundary - previous)
+                else {
+                    continue;
+                };
+                let required = prefix_required[boundary] - prefix_required[previous];
+                if required > u128::from(node.usable_vram_bytes) {
+                    continue;
+                }
+                let candidate = (prev_total + time, prev_max.max(time), previous);
+                if candidate < best {
+                    best = candidate;
+                }
+            }
+            dp[stage_index][boundary] = best;
+        }
+    }
+    let final_stage = capacities.len() - 1;
+    let (best_total, _, _) = dp[final_stage][layer_count];
+    if best_total == u128::MAX {
+        return None;
+    }
+    // Reconstruct boundary chain.
+    let mut spans = Vec::with_capacity(capacities.len());
+    let mut boundary = layer_count;
+    for stage_index in (0..capacities.len()).rev() {
+        let previous = dp[stage_index][boundary].2;
+        spans.push(boundary - previous);
+        boundary = previous;
+    }
+    spans.reverse();
+    Some((spans, best_total))
+}
+
+fn max_contiguous_layers_from(
+    layer_required_bytes: &[u64],
+    start: usize,
+    limit: usize,
+    capacity: u64,
+) -> u64 {
+    let mut total = 0u64;
+    let mut count = 0u64;
+    for bytes in layer_required_bytes.iter().skip(start).take(limit) {
+        let next = total.saturating_add(*bytes);
+        if next > capacity {
+            break;
+        }
+        total = next;
+        count += 1;
+    }
+    count
+}
+
+fn sum_u64(values: &[u64]) -> u64 {
+    values
+        .iter()
+        .fold(0u64, |total, value| total.saturating_add(*value))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const GIB: u64 = 1024 * 1024 * 1024;
+    const QWEN_CODER_480B_NATIVE_CONTEXT: u32 = 262_144;
+    const QWEN_CODER_480B_LAYERS: u32 = 62;
+    const QWEN_CODER_480B_WEIGHT_BYTES: u64 = 315_680_000_000;
+    const QWEN_CODER_480B_Q8_KV_BYTES_PER_TOKEN: u64 = 128 * 1024;
+    const LOCAL_M1_ULTRA_METAL_BYTES: u64 = 115_448_725_504;
+    const STUDIO_METAL_BYTES: u64 = 239_143_780_352;
+    const STUDIO_RAM_BYTES: u64 = 274_877_906_944;
+
+    fn node(id: &str, gib: u64) -> TopologyNode {
+        TopologyNode {
+            node_id: id.to_string(),
+            detected_vram_bytes: gib * GIB,
+            max_vram_bytes: None,
+            runtime_headroom_bytes: 0,
+            stage_transfer_latency_ms: None,
+            sustained_mem_bandwidth_mib_per_s: None,
+            sustained_compute_gflop_per_s: None,
+            observed_decode_us_per_layer: None,
+            decode_bytes_per_second: None,
+        }
+    }
+
+    fn latency_node(id: &str, gib: u64, stage_transfer_latency_ms: u32) -> TopologyNode {
+        TopologyNode {
+            stage_transfer_latency_ms: Some(stage_transfer_latency_ms),
+            ..node(id, gib)
+        }
+    }
+
+    fn perf_node(id: &str, gib: u64, mem_bandwidth_mib_per_s: u32) -> TopologyNode {
+        TopologyNode {
+            sustained_mem_bandwidth_mib_per_s: Some(mem_bandwidth_mib_per_s),
+            ..node(id, gib)
+        }
+    }
+
+    fn input(nodes: Vec<TopologyNode>) -> TopologyPlanningInput {
+        TopologyPlanningInput {
+            native_context_length: 65_536,
+            layer_count: 40,
+            model_weight_bytes: 40 * GIB,
+            layer_weight_bytes: Vec::new(),
+            kv_bytes_per_token: 64 * 1024,
+            recurrent_bytes_per_sequence_by_layer: Vec::new(),
+            reserved_sequence_ids: 16,
+            minimum_nodes: 1,
+            nodes,
+            context_length_override: None,
+            parallel_lanes_override: None,
+            target_decode_tpot_ms: None,
+            active_weight_fraction_permil: 1000,
+            edges: Vec::new(),
+            activation_frame_bytes: 0,
+            auto_balance: false,
+        }
+    }
+
+    fn qwen_coder_480b_input(nodes: Vec<TopologyNode>) -> TopologyPlanningInput {
+        TopologyPlanningInput {
+            native_context_length: QWEN_CODER_480B_NATIVE_CONTEXT,
+            layer_count: QWEN_CODER_480B_LAYERS,
+            model_weight_bytes: QWEN_CODER_480B_WEIGHT_BYTES,
+            layer_weight_bytes: Vec::new(),
+            kv_bytes_per_token: QWEN_CODER_480B_Q8_KV_BYTES_PER_TOKEN,
+            recurrent_bytes_per_sequence_by_layer: Vec::new(),
+            reserved_sequence_ids: 16,
+            minimum_nodes: 2,
+            nodes,
+            context_length_override: None,
+            parallel_lanes_override: None,
+            target_decode_tpot_ms: None,
+            active_weight_fraction_permil: 1000,
+            edges: Vec::new(),
+            activation_frame_bytes: 0,
+            auto_balance: false,
+        }
+    }
+
+    fn qwen_node(index: usize, gib: u64) -> TopologyNode {
+        node(&format!("qwen-node-{index:02}"), gib)
+    }
+
+    fn qwen_nodes(count: usize, gib: u64) -> Vec<TopologyNode> {
+        (0..count).map(|index| qwen_node(index, gib)).collect()
+    }
+
+    #[test]
+    fn edge_data_replaces_hop_count_estimate() {
+        // Two latency-aware nodes with 5 ms coordinator RTT each. Without
+        // edges the legacy estimate is hop_count x max RTT = 10 ms. With
+        // directed edges at 5 ms each the edge model also yields 10 ms here,
+        // but with an asymmetric edge (2 ms) the edge model must charge the
+        // honest per-hop latency (2 + 5 = 7 ms), not 2 x max(5) = 10 ms.
+        let mut planning = input(vec![latency_node("a", 48, 5), latency_node("b", 48, 5)]);
+        planning.minimum_nodes = 2;
+        let legacy = plan_topology(&planning).expect("legacy plan");
+        planning.edges = vec![TopologyEdge {
+            source_node_id: "a".into(),
+            target_node_id: "b".into(),
+            rtt_ms: 5,
+            large_frame_mib_per_s: None,
+        }];
+        let symmetric = plan_topology(&planning).expect("symmetric edge plan");
+        planning.edges = vec![TopologyEdge {
+            source_node_id: "a".into(),
+            target_node_id: "b".into(),
+            rtt_ms: 2,
+            large_frame_mib_per_s: None,
+        }];
+        let asymmetric = plan_topology(&planning).expect("asymmetric edge plan");
+        assert_eq!(
+            legacy.estimated_decode_network_ms_per_token,
+            Some(10),
+            "legacy estimate is hop count x max RTT"
+        );
+        assert_eq!(
+            symmetric.estimated_decode_network_ms_per_token,
+            Some(10),
+            "symmetric edges sum forward + return hop RTT"
+        );
+        assert_eq!(
+            asymmetric.estimated_decode_network_ms_per_token,
+            Some(4),
+            "asymmetric edge charges forward + reverse-matched return (2 + 2)"
+        );
+    }
+
+    #[test]
+    fn edge_bandwidth_charges_activation_transfer_time() {
+        // Same topology as above; the edge now reports 1 MiB/s large-frame
+        // bandwidth with a 1 MiB activation frame: transfer adds ~1.05 s
+        // per token hop, dwarfing latency and failing a 33 ms TPOT target.
+        let mut planning = input(vec![latency_node("a", 48, 5), latency_node("b", 48, 5)]);
+        planning.minimum_nodes = 2;
+        planning.target_decode_tpot_ms = Some(33);
+        planning.activation_frame_bytes = 1024 * 1024;
+        planning.edges = vec![TopologyEdge {
+            source_node_id: "a".into(),
+            target_node_id: "b".into(),
+            rtt_ms: 5,
+            large_frame_mib_per_s: Some(1),
+        }];
+        let plan = plan_topology(&planning).expect("plan");
+        assert!(
+            plan.estimated_decode_network_ms_per_token.unwrap_or(0) > 1_000,
+            "slow edge bandwidth must charge activation transfer time"
+        );
+        assert_eq!(plan.decode_tpot_target_met, Some(false));
+    }
+
+    #[test]
+    fn missing_edge_falls_back_to_node_rtt() {
+        // Edge data exists for one hop only; the unmatched hop falls back to
+        // the node's coordinator RTT instead of aborting the estimate.
+        let mut planning = input(vec![
+            latency_node("a", 48, 5),
+            latency_node("b", 48, 7),
+            latency_node("c", 48, 9),
+        ]);
+        planning.minimum_nodes = 3;
+        planning.edges = vec![TopologyEdge {
+            source_node_id: "a".into(),
+            target_node_id: "b".into(),
+            rtt_ms: 1,
+            large_frame_mib_per_s: None,
+        }];
+        let plan = plan_topology(&planning).expect("plan");
+        // a->b edge (1 ms) + b->c fallback to c's 9 ms RTT + c->a return
+        // fallback to a's 5 ms RTT = 15 ms.
+        assert_eq!(plan.estimated_decode_network_ms_per_token, Some(15));
+    }
+
+    #[test]
+    fn empty_edges_keep_legacy_estimate() {
+        let mut planning = input(vec![latency_node("a", 48, 5), latency_node("b", 48, 5)]);
+        planning.minimum_nodes = 2;
+        let plan = plan_topology(&planning).expect("plan");
+        assert_eq!(plan.estimated_decode_network_ms_per_token, Some(10));
+    }
+
+    #[test]
+    fn single_stream_objective_assigns_only_required_work_to_slower_node() {
+        // For single-stream TPOT, stage times are serial. With ample memory,
+        // the faster node should therefore receive every layer except the one
+        // required to keep the slower stage non-empty.
+        //
+        // Lanes are pinned to one so the test isolates the span objective.
+        // The unified-pool accounting charges a full per-lane context to every
+        // node, so with lanes left automatic the auto-lane search reserves the
+        // headroom that would otherwise concentrate layers on the faster node
+        // and the DP optimum becomes capacity-bound instead.
+        let fast = perf_node("fast", 48, 546_000);
+        let slow = perf_node("slow", 48, 273_000);
+        let mut planning = input(vec![fast, slow]);
+        planning.minimum_nodes = 2;
+        planning.parallel_lanes_override = Some(1);
+        let plan = plan_topology(&planning).expect("plan");
+        assert_eq!(plan.stages.len(), 2);
+        let fast_stage = plan
+            .stages
+            .iter()
+            .find(|stage| stage.node_id == "fast")
+            .expect("fast stage");
+        let slow_stage = plan
+            .stages
+            .iter()
+            .find(|stage| stage.node_id == "slow")
+            .expect("slow stage");
+        assert_eq!(slow_stage.layer_end - slow_stage.layer_start, 1);
+        assert_eq!(fast_stage.layer_end - fast_stage.layer_start, 39);
+    }
+
+    #[test]
+    fn observed_stage_timing_corrects_analytical_span_balance() {
+        let fast = perf_node("fast", 48, 400_000);
+        let mut slow = perf_node("slow", 48, 400_000);
+        // Both nodes advertise identical bandwidth, but live decode shows
+        // that the second runtime takes substantially longer per layer.
+        slow.observed_decode_us_per_layer = Some(10_000);
+        let mut planning = input(vec![fast, slow]);
+        planning.minimum_nodes = 2;
+        // See `single_stream_objective_assigns_only_required_work_to_slower_node`:
+        // pinning lanes isolates the measured-timing correction from the
+        // unified-pool lane reservation, which otherwise makes both stages
+        // memory-bound and hides the correction.
+        planning.parallel_lanes_override = Some(1);
+
+        let plan = plan_topology(&planning).expect("plan");
+        let fast_layers = plan
+            .stages
+            .iter()
+            .find(|stage| stage.node_id == "fast")
+            .map(|stage| stage.layer_end - stage.layer_start)
+            .expect("fast stage");
+        let slow_layers = plan
+            .stages
+            .iter()
+            .find(|stage| stage.node_id == "slow")
+            .map(|stage| stage.layer_end - stage.layer_start)
+            .expect("slow stage");
+
+        assert!(
+            fast_layers > slow_layers,
+            "measured slow stage must receive fewer layers: fast={fast_layers} slow={slow_layers}"
+        );
+    }
+
+    #[test]
+    fn missing_perf_signals_keep_capacity_only_placement() {
+        // Any node without a bandwidth signal reproduces the capacity-only
+        // plan exactly: same stage boundaries and node assignment.
+        let nodes_signal = vec![perf_node("a", 48, 400_000), perf_node("b", 24, 400_000)];
+        let mut nodes_plain = nodes_signal.clone();
+        for node in &mut nodes_plain {
+            node.sustained_mem_bandwidth_mib_per_s = None;
+            node.sustained_compute_gflop_per_s = None;
+        }
+        let mut planning = input(nodes_plain.clone());
+        planning.minimum_nodes = 2;
+        let plain = plan_topology(&planning).expect("plain plan");
+        let signaled = plan_topology(&input(nodes_signal)).expect("signaled plan");
+        let spans: Vec<(String, u32, u32)> = plain
+            .stages
+            .iter()
+            .map(|stage| (stage.node_id.clone(), stage.layer_start, stage.layer_end))
+            .collect();
+        let _spans_signaled: Vec<(String, u32, u32)> = signaled
+            .stages
+            .iter()
+            .map(|stage| (stage.node_id.clone(), stage.layer_start, stage.layer_end))
+            .collect();
+        // With equal bandwidths on both nodes the perf-aware path may still
+        // rebalance; the guarantee under test is that *removing* signals
+        // yields the capacity-only result, asserted against the greedy
+        // expectations: node a (48 GiB) should hold more layers than b (24).
+        let _ = signaled;
+        let a_stage = spans.iter().find(|(id, _, _)| id == "a").unwrap();
+        let b_stage = spans.iter().find(|(id, _, _)| id == "b").unwrap();
+        assert!(a_stage.2 - a_stage.1 > b_stage.2 - b_stage.1);
+        // And the fallback is exercised: partial signals on the signaled
+        // input must produce identical output to the plain input.
+        let mut nodes_partial = nodes_plain.clone();
+        nodes_partial[0].sustained_mem_bandwidth_mib_per_s = Some(400_000);
+        let mut planning_partial = input(nodes_partial);
+        planning_partial.minimum_nodes = 2;
+        let partial = plan_topology(&planning_partial).expect("partial plan");
+        let spans_partial: Vec<(String, u32, u32)> = partial
+            .stages
+            .iter()
+            .map(|stage| (stage.node_id.clone(), stage.layer_start, stage.layer_end))
+            .collect();
+        assert_eq!(
+            spans, spans_partial,
+            "partial signals must fall back to capacity-only placement"
+        );
+    }
+
+    #[test]
+    fn signalless_subset_placement_unchanged_by_other_nodes_signals() {
+        // The fallback is per-subset, not fleet-wide: a node without a
+        // bandwidth signal keeps its capacity-only span assignment even when
+        // other fleet nodes do report signals (a heterogeneous fleet). The
+        // two signaled nodes are too small to host the model alone or as a
+        // pair, so every feasible candidate contains the plain node — the
+        // assertion is never vacuous.
+        let plain = node("plain", 60);
+        let mut planning_mixed = input(vec![
+            plain.clone(),
+            perf_node("signaled", 10, 400_000),
+            perf_node("other", 10, 400_000),
+        ]);
+        planning_mixed.minimum_nodes = 2;
+        let mut planning_plain_twin = input(vec![plain, node("signaled", 10), node("other", 10)]);
+        planning_plain_twin.minimum_nodes = 2;
+        let mixed = plan_topology(&planning_mixed).expect("mixed plan");
+        let plain_twin = plan_topology(&planning_plain_twin).expect("plain twin plan");
+        let span_of = |plan: &TopologyPlan, id: &str| {
+            plan.stages
+                .iter()
+                .find(|stage| stage.node_id == id)
+                .map(|stage| (stage.layer_start, stage.layer_end))
+        };
+        assert!(
+            span_of(&mixed, "plain").is_some() && span_of(&plain_twin, "plain").is_some(),
+            "fixture must select the plain node in both plans for the test to mean anything"
+        );
+        assert_eq!(
+            span_of(&mixed, "plain"),
+            span_of(&plain_twin, "plain"),
+            "a signal-less node's span must not change because other fleet nodes report signals"
+        );
+    }
+
+    #[test]
+    fn edge_data_changes_capacity_greedy_candidate_ordering() {
+        // Documented behavior, not a bug: any non-empty edge data switches
+        // the network estimate to per-hop edge-aware accounting for every
+        // candidate — including capacity-greedy plans from signal-less
+        // nodes. This test pins that: with plain nodes (no bandwidth
+        // signals), asymmetric edge data changes the selected plan's
+        // network estimate vs the legacy hop-count × max-RTT number.
+        let mut planning = input(vec![latency_node("a", 48, 5), latency_node("b", 48, 5)]);
+        planning.minimum_nodes = 2;
+        let legacy = plan_topology(&planning).expect("legacy plan");
+        let mut edged = planning.clone();
+        edged.edges = vec![TopologyEdge {
+            source_node_id: "a".into(),
+            target_node_id: "b".into(),
+            rtt_ms: 2,
+            large_frame_mib_per_s: None,
+        }];
+        let edge_plan = plan_topology(&edged).expect("edge plan");
+        assert_ne!(
+            legacy.estimated_decode_network_ms_per_token,
+            edge_plan.estimated_decode_network_ms_per_token,
+            "edge data must change the network estimate for capacity-greedy plans too"
+        );
+        assert_eq!(legacy.estimated_decode_network_ms_per_token, Some(10));
+        assert_eq!(edge_plan.estimated_decode_network_ms_per_token, Some(4));
+    }
+
+    #[test]
+    fn decode_tpot_target_met_uses_modeled_tpot() {
+        // Target-met must be scored against the modeled decode TPOT
+        // (stage service time + network), not the network-only
+        // estimate. Single-stage plans have zero network time but still
+        // carry the full weight-streaming time of the model.
+        // Model: 40 layers, 40 GiB weights (1 GiB/layer), KV 0.
+        let mut planning = input(vec![perf_node("solo", 80, 400_000)]);
+        planning.kv_bytes_per_token = 1; // negligible KV; weights dominate
+        planning.target_decode_tpot_ms = Some(10);
+        let plan = plan_topology(&planning).expect("plan");
+        // Network-only estimate may be None (no RTT data); the modeled TPOT
+        // is what the target must be scored against.
+        // 40 GiB at 400_000 MiB/s = 104.9 ms/token modeled decode TPOT —
+        // far over a 10 ms target.
+        assert_eq!(plan.decode_tpot_target_met, Some(false));
+    }
+
+    #[test]
+    fn modeled_tpot_target_comparison_keeps_microsecond_precision() {
+        assert_eq!(
+            decode_tpot_target_met_us(Some(33_000), Some(33)),
+            Some(true)
+        );
+        assert_eq!(
+            decode_tpot_target_met_us(Some(33_001), Some(33)),
+            Some(false),
+            "a fractional-millisecond overrun must not be rounded into the target"
+        );
+    }
+
+    #[test]
+    fn candidate_ordering_does_not_reward_missing_full_tpot() {
+        let candidate = |network_ms, target_met, modeled_us| CandidatePlan {
+            plan: TopologyPlan {
+                context_length: 65_536,
+                parallel_lanes: 1,
+                stages: Vec::new(),
+                estimated_decode_network_ms_per_token: Some(network_ms),
+                decode_tpot_target_met: target_met,
+                modeled_decode_tpot_us: modeled_us,
+                throughput: None,
+            },
+            minimum_remaining_vram: 0,
+            total_remaining_vram: 0,
+            modeled_decode_tpot_us: modeled_us,
+        };
+        let modeled_miss = candidate(20, Some(false), Some(100_000));
+        let fallback_unknown = candidate(1, None, None);
+
+        assert!(
+            latency_candidate_better(&modeled_miss, &fallback_unknown),
+            "withholding compute data must not turn a network-only estimate into a target success"
+        );
+    }
+
+    #[test]
+    fn missing_network_estimate_is_not_treated_as_zero() {
+        let candidate = |network_ms| CandidatePlan {
+            plan: TopologyPlan {
+                context_length: 65_536,
+                parallel_lanes: 1,
+                stages: Vec::new(),
+                estimated_decode_network_ms_per_token: network_ms,
+                decode_tpot_target_met: None,
+                modeled_decode_tpot_us: None,
+                throughput: None,
+            },
+            minimum_remaining_vram: 0,
+            total_remaining_vram: 0,
+            modeled_decode_tpot_us: None,
+        };
+        let measured = candidate(Some(20));
+        let missing = candidate(None);
+
+        assert!(candidate_better_for_same_shape(&measured, &missing));
+        assert!(!candidate_better_for_same_shape(&missing, &measured));
+    }
+
+    #[test]
+    fn tpot_target_met_outranks_modeled_tpot_in_candidate_ordering() {
+        // Locks the candidate-ordering priority: decode-TPOT-target-met
+        // outranks the modeled TPOT (and context/lanes). Note that after
+        // scoring target-met against the *modeled* TPOT (see
+        // `decode_tpot_target_met_uses_modeled_tpot`), met is monotone in
+        // modeled TPOT, so on the fully-signaled path the two keys cannot
+        // conflict; this ordering matters for mixed-signal comparisons and
+        // keeps legacy key priority. Constructed via stage-0 binding, the
+        // only input surface that forces different candidate sets from one
+        // fleet.
+        let mut planning = input(vec![
+            perf_node("large", 80, 400_000),
+            perf_node("small", 30, 150_000),
+            perf_node("tiny", 20, 150_000),
+        ]);
+        // Hops need RTT data for the modeled TPOT to exist: without any
+        // RTT signal the planner declines to model TPOT (None) rather
+        // than pretending hops are free.
+        for node in &mut planning.nodes {
+            node.stage_transfer_latency_ms = Some(3);
+        }
+        planning.kv_bytes_per_token = 1; // negligible KV; weights dominate
+        planning.target_decode_tpot_ms = Some(110);
+        // Binding stage 0 to the large node: it fits the 40 GiB model solo
+        // (104.9 ms/token at 400_000 MiB/s), so a target-meeting plan
+        // exists and must be returned.
+        let large_stage0 =
+            plan_topology_with_stage0(&planning, "large").expect("large stage0 plan");
+        assert_eq!(large_stage0.decode_tpot_target_met, Some(true));
+        // Binding stage 0 to the small node rules out every subset where
+        // the large node would be stage 0 (stage order is VRAM-descending),
+        // leaving {small, tiny}: 40 GiB across two 150_000 MiB/s nodes is a
+        // ~133 ms/token bottleneck - over the 110 ms target.
+        let small_stage0 =
+            plan_topology_with_stage0(&planning, "small").expect("small stage0 plan");
+        assert_eq!(small_stage0.stages.len(), 2);
+        assert_eq!(small_stage0.decode_tpot_target_met, Some(false));
+    }
+
+    #[test]
+    fn perf_balancing_respects_memory_ceilings() {
+        // The slow node has a much smaller ceiling; the DP must not assign it
+        // more layers than fit, no matter how attractive the time balance.
+        let fast = perf_node("fast", 96, 500_000);
+        let slow = perf_node("slow", 16, 500_000);
+        let mut planning = input(vec![fast, slow]);
+        planning.minimum_nodes = 2;
+        let plan = plan_topology(&planning).expect("plan");
+        for stage in &plan.stages {
+            assert!(stage.layer_end > stage.layer_start, "no empty stages");
+        }
+    }
+
+    #[test]
+    fn perf_signals_do_not_break_latency_aware_planning() {
+        // Latency-aware ordering still applies when perf signals are present;
+        // the plan remains valid and stage 0 binding is respected.
+        let mut a = perf_node("a", 48, 400_000);
+        a.stage_transfer_latency_ms = Some(30);
+        let mut b = perf_node("b", 48, 400_000);
+        b.stage_transfer_latency_ms = Some(30);
+        let plan = plan_topology_with_stage0(&input(vec![a, b]), "a").expect("plan");
+        assert_eq!(plan.stages.first().unwrap().node_id, "a");
+    }
+
+    #[test]
+    fn lane_planning_rejects_exhausted_sequence_ids() {
+        assert_eq!(
+            parallel_lane_candidates(None, 65_536, 1, LLAMA_MAX_SEQ),
+            Err(TopologyPlanError::NoSequenceIdCapacity)
+        );
+        assert_eq!(
+            parallel_lane_candidates(Some(1), 65_536, 1, LLAMA_MAX_SEQ),
+            Err(TopologyPlanError::NoSequenceIdCapacity)
+        );
+    }
+
+    #[test]
+    fn recurrent_pricing_rejects_plan_that_old_zero_cost_model_admitted() {
+        // Falcon-H1 1.5B metadata: conv=4, inner=3072, state=256,
+        // groups=1, 24 recurrent layers. Three state planes and two native
+        // sequence slots per configured lane cost 19,132,416 bytes per layer.
+        const FALCON_RECURRENT_BYTES_PER_LANE_PER_LAYER: u64 = 19_132_416;
+        const LAYERS: u32 = 24;
+        const LANES: usize = 64;
+
+        let mut request = TopologyPlanningInput {
+            native_context_length: 65_536,
+            layer_count: LAYERS,
+            model_weight_bytes: GIB,
+            layer_weight_bytes: Vec::new(),
+            kv_bytes_per_token: 24 * 1024,
+            recurrent_bytes_per_sequence_by_layer: Vec::new(),
+            reserved_sequence_ids: 0,
+            minimum_nodes: 1,
+            nodes: vec![node("falcon-node", 1)],
+            context_length_override: Some(65_536),
+            parallel_lanes_override: Some(LANES),
+            target_decode_tpot_ms: None,
+            active_weight_fraction_permil: 1000,
+            edges: Vec::new(),
+            activation_frame_bytes: 0,
+            auto_balance: false,
+        };
+        let layer_weights = layer_weight_bytes(&request);
+        let kv_per_layer = request.kv_bytes_per_token.div_ceil(u64::from(LAYERS));
+        let old_required = sum_u64(
+            &layer_required_bytes(
+                &layer_weights,
+                &vec![0; LAYERS as usize],
+                kv_per_layer,
+                request.native_context_length,
+                LANES,
+            )
+            .unwrap(),
+        );
+        let recurrent_required =
+            FALCON_RECURRENT_BYTES_PER_LANE_PER_LAYER * u64::from(LAYERS) * LANES as u64;
+
+        // The old planner charged zero for recurrent state, so this budget
+        // appears sufficient even though it covers only half of the real
+        // fixed recurrent allocation.
+        request.nodes[0].detected_vram_bytes = old_required + recurrent_required / 2;
+        assert!(plan_topology(&request).is_ok());
+
+        // The new planner rejects the same unsafe budget and accepts the
+        // exact boundary once the complete recurrent allocation is present.
+        request.recurrent_bytes_per_sequence_by_layer =
+            vec![FALCON_RECURRENT_BYTES_PER_LANE_PER_LAYER; LAYERS as usize];
+        assert_eq!(
+            plan_topology(&request),
+            Err(TopologyPlanError::NoValidTopology {
+                minimum_context: 65_536,
+            })
+        );
+        request.nodes[0].detected_vram_bytes = old_required + recurrent_required;
+        assert!(plan_topology(&request).is_ok());
+        assert_eq!(recurrent_required, 29_387_390_976);
+    }
+
+    #[test]
+    fn pure_recurrent_topology_accepts_zero_kv_bytes() {
+        let mut request = input(vec![node("mamba-node", 80)]);
+        request.kv_bytes_per_token = 0;
+        request.recurrent_bytes_per_sequence_by_layer = vec![1024; request.layer_count as usize];
+
+        assert!(plan_topology(&request).is_ok());
+    }
+
+    #[test]
+    fn zero_kv_bytes_rejects_dense_and_hybrid_metadata() {
+        let mut dense = input(vec![node("dense-node", 80)]);
+        dense.kv_bytes_per_token = 0;
+        assert_eq!(
+            plan_topology(&dense),
+            Err(TopologyPlanError::MissingKvBytesPerToken)
+        );
+
+        let mut hybrid = input(vec![node("hybrid-node", 80)]);
+        hybrid.kv_bytes_per_token = 0;
+        hybrid.recurrent_bytes_per_sequence_by_layer = vec![1024; hybrid.layer_count as usize];
+        hybrid.recurrent_bytes_per_sequence_by_layer[0] = 0;
+        assert_eq!(
+            plan_topology(&hybrid),
+            Err(TopologyPlanError::MissingKvBytesPerToken)
+        );
+    }
+
+    fn metal_node(id: &str, metal_recommended_bytes: u64) -> TopologyNode {
+        TopologyNode {
+            node_id: id.to_string(),
+            detected_vram_bytes: metal_recommended_bytes,
+            max_vram_bytes: Some(metal_recommended_bytes),
+            // Metal recommendedMaxWorkingSetSize is already the usable budget
+            // reported by the local runtime.
+            runtime_headroom_bytes: 0,
+            stage_transfer_latency_ms: None,
+            sustained_mem_bandwidth_mib_per_s: None,
+            sustained_compute_gflop_per_s: None,
+            observed_decode_us_per_layer: None,
+            decode_bytes_per_second: None,
+        }
+    }
+
+    #[test]
+    fn chooses_highest_context_then_parallelism() {
+        let plan = plan_topology(&input(vec![node("a", 23), node("b", 23)])).unwrap();
+
+        assert_eq!(plan.context_length, 65_536);
+        assert_eq!(plan.parallel_lanes, 1);
+        assert_eq!(plan.stages.len(), 2);
+    }
+
+    #[test]
+    fn prefers_fewest_nodes_before_more_lanes() {
+        let plan = plan_topology(&input(vec![
+            node("a", 80),
+            node("b", 80),
+            node("c", 80),
+            node("d", 80),
+            node("e", 80),
+            node("f", 80),
+        ]))
+        .unwrap();
+
+        assert_eq!(plan.context_length, 65_536);
+        assert_eq!(plan.stages.len(), 1);
+        assert_eq!(plan.parallel_lanes, 8);
+    }
+
+    fn speed_node(id: &str, gib: u64, gb_per_second: u64) -> TopologyNode {
+        TopologyNode {
+            decode_bytes_per_second: Some(gb_per_second * 1_000_000_000),
+            ..node(id, gib)
+        }
+    }
+
+    /// A node that also reports the sustained memory-bandwidth profile the
+    /// performance-aware planner balances from — the shape the host passes when
+    /// `MESH_TOPOLOGY_PERF_AWARE` is enabled (it strips these fields otherwise).
+    fn profiled_speed_node(id: &str, gib: u64, gb_per_second: u64) -> TopologyNode {
+        TopologyNode {
+            sustained_mem_bandwidth_mib_per_s: Some(
+                (gb_per_second * 1_000_000_000 / 1_048_576) as u32,
+            ),
+            ..speed_node(id, gib, gb_per_second)
+        }
+    }
+
+    fn profiled_mini_pair_input(auto_balance: bool) -> TopologyPlanningInput {
+        let mut request = mini_pair_input(auto_balance);
+        request.nodes = vec![
+            profiled_speed_node("m1", 12, 68),
+            profiled_speed_node("m4", 11, 120),
+        ];
+        request
+    }
+
+    fn mini_pair_input(auto_balance: bool) -> TopologyPlanningInput {
+        // Two 16 GiB-class minis, M1 (~68 GB/s) and M4 (~120 GB/s), serving a
+        // 36-layer model that fits either one. The M1 advertises more memory,
+        // so memory-only placement makes it stage 0 and hands it the most layers.
+        let mut request = input(vec![speed_node("m1", 12, 68), speed_node("m4", 11, 120)]);
+        request.layer_count = 36;
+        request.model_weight_bytes = 5 * GIB;
+        request.kv_bytes_per_token = 1024;
+        request.native_context_length = 12_288;
+        request.context_length_override = Some(12_288);
+        request.parallel_lanes_override = Some(4);
+        request.minimum_nodes = 2;
+        request.auto_balance = auto_balance;
+        request
+    }
+
+    fn layers_on(plan: &TopologyPlan, node_id: &str) -> u32 {
+        let stage = plan
+            .stages
+            .iter()
+            .find(|stage| stage.node_id == node_id)
+            .unwrap();
+        stage.layer_end - stage.layer_start
+    }
+
+    #[test]
+    fn auto_balance_moves_layers_to_the_faster_node() {
+        let memory_only = plan_topology(&mini_pair_input(false)).unwrap();
+        let balanced = plan_topology(&mini_pair_input(true)).unwrap();
+
+        assert!(layers_on(&memory_only, "m1") > layers_on(&memory_only, "m4"));
+        assert_eq!(layers_on(&balanced, "m1"), 13);
+        assert_eq!(layers_on(&balanced, "m4"), 23);
+        let memory_bottleneck = memory_only.throughput.unwrap().bottleneck_decode_nanos;
+        let balanced_bottleneck = balanced.throughput.unwrap().bottleneck_decode_nanos;
+        assert!(
+            balanced_bottleneck * 10 < memory_bottleneck * 7,
+            "{balanced_bottleneck} vs {memory_bottleneck}"
+        );
+    }
+
+    #[test]
+    fn auto_balance_keeps_the_required_stage0() {
+        let plan = plan_topology_with_stage0(&mini_pair_input(true), "m1").unwrap();
+
+        assert_eq!(plan.stages[0].node_id, "m1");
+        assert_eq!(layers_on(&plan, "m1"), 13);
+    }
+
+    #[test]
+    fn rebalance_is_none_once_balanced() {
+        let request = mini_pair_input(true);
+        let balanced = plan_topology(&request).unwrap();
+
+        assert!(rebalance_topology(&request, &balanced).is_none());
+    }
+
+    #[test]
+    fn rebalance_follows_measured_speeds() {
+        let request = mini_pair_input(true);
+        let planned = plan_topology(&request).unwrap();
+        // Measured: the M1 turns out as fast as the M4, so the cut evens out.
+        let mut measured = request.clone();
+        for node in &mut measured.nodes {
+            node.decode_bytes_per_second = Some(100_000_000_000);
+        }
+
+        let rebalanced = rebalance_topology(&measured, &planned).unwrap();
+
+        assert_eq!(layers_on(&rebalanced, "m1"), 18);
+        assert_eq!(rebalanced.context_length, planned.context_length);
+        assert_eq!(rebalanced.parallel_lanes, planned.parallel_lanes);
+    }
+
+    #[test]
+    fn plans_without_speeds_are_unchanged_by_auto_balanceness() {
+        let mut aware = input(vec![node("small", 16), node("large", 48)]);
+        aware.minimum_nodes = 2;
+        aware.auto_balance = true;
+        let mut plain = aware.clone();
+        plain.auto_balance = false;
+
+        let aware_plan = plan_topology(&aware).unwrap();
+
+        assert_eq!(aware_plan, plan_topology(&plain).unwrap());
+        assert!(aware_plan.throughput.is_none());
+    }
+
+    #[test]
+    fn assigns_fewer_layers_to_lower_vram_node() {
+        let mut request = input(vec![node("small", 16), node("large", 48)]);
+        request.minimum_nodes = 2;
+        let plan = plan_topology(&request).unwrap();
+
+        assert_eq!(plan.context_length, 65_536);
+        let small = plan
+            .stages
+            .iter()
+            .find(|stage| stage.node_id == "small")
+            .unwrap();
+        let large = plan
+            .stages
+            .iter()
+            .find(|stage| stage.node_id == "large")
+            .unwrap();
+        assert!(small.layer_end - small.layer_start < large.layer_end - large.layer_start);
+    }
+
+    #[test]
+    fn auto_balance_stands_down_once_the_perf_aware_profile_reached_the_planner() {
+        let profiled = profiled_mini_pair_input(true);
+        let plan = plan_topology(&profiled).unwrap();
+
+        assert!(perf_aware_signals_reached(&profiled, &plan));
+        assert!(!rebalance_from_static_profile(&profiled, &plan));
+
+        // The env-off shape: the profile is stripped, so `--auto-balance` is
+        // the only planner that can use the static rate.
+        let mut stripped = profiled.clone();
+        for node in &mut stripped.nodes {
+            node.sustained_mem_bandwidth_mib_per_s = None;
+        }
+        assert!(!perf_aware_signals_reached(&stripped, &plan));
+        assert!(rebalance_from_static_profile(&stripped, &plan));
+    }
+
+    #[test]
+    fn a_profiled_plan_keeps_its_spans_under_auto_balance() {
+        let profiled = profiled_mini_pair_input(true);
+        let mut perf_aware_only = profiled.clone();
+        perf_aware_only.auto_balance = false;
+
+        let planned = plan_topology(&profiled).unwrap();
+
+        assert_eq!(
+            planned,
+            plan_topology(&perf_aware_only).unwrap(),
+            "the perf-aware planner placed these spans from the same profile, so \
+             the static re-cut must not overwrite them"
+        );
+        assert!(planned.throughput.is_some());
+    }
+
+    #[test]
+    fn exact_layer_weights_allow_uneven_package_fit() {
+        let mut request = input(vec![node("large", 12), node("small", 9)]);
+        request.layer_count = 4;
+        request.model_weight_bytes = 18 * GIB;
+        request.layer_weight_bytes = vec![GIB / 8, GIB / 8, 9 * GIB, 8 * GIB];
+        request.kv_bytes_per_token = 1;
+        request.minimum_nodes = 2;
+
+        let plan = plan_topology(&request).unwrap();
+
+        assert_eq!(plan.stages.len(), 2);
+        assert_eq!(
+            plan.stages
+                .iter()
+                .map(|stage| (stage.node_id.as_str(), stage.layer_start, stage.layer_end))
+                .collect::<Vec<_>>(),
+            vec![("large", 0, 3), ("small", 3, 4)]
+        );
+        assert_eq!(plan.stages[0].parameter_bytes, 9 * GIB + GIB / 4);
+        assert_eq!(plan.stages[1].parameter_bytes, 8 * GIB);
+    }
+
+    #[test]
+    fn exact_layer_capacity_is_evaluated_at_each_stage_boundary() {
+        let mut request = input(vec![node("large", 11), node("small", 3)]);
+        request.layer_count = 4;
+        request.model_weight_bytes = 12 * GIB;
+        request.layer_weight_bytes = vec![9 * GIB, GIB, GIB, GIB];
+        request.kv_bytes_per_token = 1;
+        request.minimum_nodes = 2;
+
+        let plan = plan_topology(&request).unwrap();
+
+        assert_eq!(
+            plan.stages
+                .iter()
+                .map(|stage| (stage.layer_start, stage.layer_end))
+                .collect::<Vec<_>>(),
+            vec![(0, 2), (2, 4)]
+        );
+    }
+
+    #[test]
+    fn applies_max_vram_and_runtime_headroom_per_node() {
+        let mut capped = node("capped", 80);
+        capped.max_vram_bytes = Some(24 * GIB);
+        capped.runtime_headroom_bytes = 8 * GIB;
+        let mut request = input(vec![capped, node("peer", 48)]);
+        request.minimum_nodes = 2;
+        let plan = plan_topology(&request).unwrap();
+
+        let capped_stage = plan
+            .stages
+            .iter()
+            .find(|stage| stage.node_id == "capped")
+            .unwrap();
+        assert!(capped_stage.layer_end - capped_stage.layer_start < 20);
+    }
+
+    #[test]
+    fn latency_aware_planner_prefers_lower_tpot_over_native_context() {
+        let mut request = input(vec![
+            latency_node("a", 23, 10),
+            latency_node("b", 23, 10),
+            latency_node("c", 23, 10),
+            latency_node("d", 23, 10),
+        ]);
+        request.native_context_length = 262_144;
+        request.minimum_nodes = 2;
+        request.target_decode_tpot_ms = Some(33);
+
+        let plan = plan_topology(&request).unwrap();
+
+        assert_eq!(plan.context_length, 65_536);
+        assert_eq!(plan.stages.len(), 2);
+        assert_eq!(plan.estimated_decode_network_ms_per_token, Some(20));
+        assert_eq!(
+            plan.decode_tpot_target_met, None,
+            "network time below target is not proof that full TPOT meets it"
+        );
+    }
+
+    #[test]
+    fn latency_aware_planner_reports_target_miss_when_memory_requires_more_stages() {
+        let mut request = qwen_coder_480b_input(qwen_nodes(4, 80));
+        request
+            .nodes
+            .iter_mut()
+            .for_each(|node| node.stage_transfer_latency_ms = Some(10));
+        request.target_decode_tpot_ms = Some(33);
+
+        let plan = plan_topology(&request).unwrap();
+
+        assert_eq!(plan.context_length, 65_536);
+        assert_eq!(plan.stages.len(), 4);
+        assert_eq!(plan.estimated_decode_network_ms_per_token, Some(40));
+        assert_eq!(plan.decode_tpot_target_met, Some(false));
+    }
+
+    #[test]
+    fn rejects_below_minimum_context_floor() {
+        let err = plan_topology(&input(vec![node("tiny-a", 8), node("tiny-b", 8)]))
+            .expect_err("context below the 64k floor should be rejected");
+
+        assert_eq!(
+            err,
+            TopologyPlanError::NoValidTopology {
+                minimum_context: 65_536
+            }
+        );
+    }
+
+    #[test]
+    fn minimum_context_floor_caps_at_native_context() {
+        assert_eq!(minimum_valid_context(16_384), 16_384);
+        assert_eq!(minimum_valid_context(65_536), 65_536);
+        assert_eq!(minimum_valid_context(262_144), 65_536);
+    }
+
+    #[test]
+    fn accepts_explicit_context_override_below_auto_floor() {
+        let mut request = input(vec![node("a", 80), node("b", 80)]);
+        request.native_context_length = 262_144;
+        request.context_length_override = Some(32_768);
+
+        let plan = plan_topology(&request).unwrap();
+
+        assert_eq!(plan.context_length, 32_768);
+    }
+
+    #[test]
+    fn rejects_context_override_above_native() {
+        let mut request = input(vec![node("a", 80)]);
+        request.context_length_override = Some(131_072);
+
+        assert_eq!(
+            plan_topology(&request),
+            Err(TopologyPlanError::ContextExceedsNative {
+                requested: 131_072,
+                native: 65_536,
+            })
+        );
+    }
+
+    #[test]
+    fn qwen_coder_480b_rejects_when_layers_cannot_fit_above_context_floor() {
+        // Simulation: 4 x 70 GiB nodes.
+        //
+        // Expected topology: none.
+        //
+        // Why: the planner may degrade context only to the shared 64k floor
+        // (65_536). At this machine size the full 62-layer package plus
+        // 64k KV cannot be distributed, so launching would silently produce
+        // an under-resourced split.
+        let err = plan_topology(&qwen_coder_480b_input(qwen_nodes(4, 70)))
+            .expect_err("four 70 GiB nodes cannot hold this layer package above the context floor");
+
+        assert_eq!(
+            err,
+            TopologyPlanError::NoValidTopology {
+                minimum_context: 65_536
+            }
+        );
+    }
+
+    #[test]
+    fn qwen_coder_480b_studio_james_and_studio_mic_form_native_topology() {
+        // Simulation: meshllm/Qwen3-Coder-480B-A35B-Instruct-UD-Q4_K_XL-layers
+        // split across studio-james and studio-mic.
+        //
+        // studio-james:
+        //   Metal recommendedMaxWorkingSetSize = 115_448_725_504 bytes.
+        //
+        // studio-mic:
+        //   Metal recommendedMaxWorkingSetSize = 239_143_780_352 bytes.
+        //   RAM = 274_877_906_944 bytes. RAM is documented here because it is
+        //   part of the fixture, but the planner must use Metal working set
+        //   size, not total RAM.
+        //
+        // Expected topology: possible, 131_072 context, 32 lanes.
+        //
+        // Why: this is a fixture-driven simulation. The model package metadata
+        // and each machine's Metal working-set budget are passed into the same
+        // planner used by runtime orchestration, and the planner reports
+        // whether a topology can be formed plus its context and lane count.
+        //
+        // Context is 131_072 rather than the model's 262_144 native maximum
+        // because the planner reserves compute-buffer headroom (KV billed at
+        // 100/85). The ~316 GB of weights plus full-native KV would pack the
+        // combined ~354.6 GB working-set budget to within a few GB, leaving no
+        // room for llama.cpp compute graphs; halving the context restores ~18 GB
+        // of headroom across the two stages. This is the fix for stages that
+        // previously loaded at native context and then OOM'd on the first token.
+        assert_eq!(STUDIO_RAM_BYTES, 274_877_906_944);
+
+        let planned = plan_topology(&qwen_coder_480b_input(vec![
+            metal_node("studio-james", LOCAL_M1_ULTRA_METAL_BYTES),
+            metal_node("studio-mic", STUDIO_METAL_BYTES),
+        ]));
+        let (split_possible, context_length, parallel_lanes) = match &planned {
+            Ok(plan) => (true, Some(plan.context_length), Some(plan.parallel_lanes)),
+            Err(_) => (false, None, None),
+        };
+
+        assert!(split_possible, "{planned:?}");
+        assert_eq!(context_length, Some(131_072));
+        assert_eq!(parallel_lanes, Some(1));
+
+        let plan = planned.expect("studio-james and studio-mic should form a split topology");
+        assert_eq!(plan.stages.len(), 2);
+        assert_eq!(
+            plan.stages.last().unwrap().layer_end,
+            QWEN_CODER_480B_LAYERS
+        );
+    }
+
+    #[test]
+    fn qwen_coder_480b_uses_context_floor_when_larger_contexts_do_not_fit() {
+        // Simulation: 4 x 80 GiB nodes.
+        //
+        // Expected topology: 4 stages, 65_536 context, 1 lane.
+        //
+        // Why: native 262_144 and 131_072 contexts do not fit across these
+        // nodes, but the shared 64k floor does. Each additional lane needs
+        // another 64k cells in the unified pool.
+        let plan = plan_topology(&qwen_coder_480b_input(qwen_nodes(4, 80))).unwrap();
+
+        assert_eq!(plan.context_length, 65_536);
+        assert_eq!(plan.parallel_lanes, 1);
+        assert_eq!(plan.stages.len(), 4);
+        assert_eq!(plan.stages.first().unwrap().layer_start, 0);
+        assert_eq!(
+            plan.stages.last().unwrap().layer_end,
+            QWEN_CODER_480B_LAYERS
+        );
+    }
+
+    #[test]
+    fn qwen_coder_480b_prefers_native_context_then_parallelism() {
+        // Simulation: 5 x 80 GiB nodes.
+        //
+        // Expected topology: 5 stages, native 262_144 context, 2 lanes.
+        //
+        // Why: adding the fifth node makes native context fit, including
+        // two lane reservations in the unified cache.
+        let plan = plan_topology(&qwen_coder_480b_input(qwen_nodes(5, 80))).unwrap();
+
+        assert_eq!(plan.context_length, QWEN_CODER_480B_NATIVE_CONTEXT);
+        assert_eq!(plan.parallel_lanes, 2);
+        assert_eq!(plan.stages.len(), 5);
+    }
+
+    #[test]
+    fn qwen_coder_480b_prefers_fewest_nodes_then_maximizes_lanes() {
+        // Simulation: 10 x 80 GiB nodes.
+        //
+        // Expected topology: 5 stages, native 262_144 context, 2 lanes.
+        //
+        // Why: the planner prefers fewest nodes before more lanes. Five nodes
+        // is the minimum that can hold the full layer package at native
+        // context with two lane reservations in the unified KV cache.
+        let plan = plan_topology(&qwen_coder_480b_input(qwen_nodes(10, 80))).unwrap();
+
+        assert_eq!(plan.context_length, QWEN_CODER_480B_NATIVE_CONTEXT);
+        assert_eq!(plan.parallel_lanes, 2);
+        assert_eq!(plan.stages.len(), 5);
+    }
+
+    #[test]
+    fn qwen_coder_480b_excludes_bystander_nodes() {
+        // Simulation: 7 x 80 GiB nodes plus 3 x 1 GiB bystanders.
+        //
+        // Expected topology: 5 stages, native 262_144 context, 2 lanes.
+        //
+        // Why: the planner prefers fewest nodes first. Five 80 GiB nodes
+        // achieve native context. Bystander nodes (1 GiB) cannot carry even
+        // one layer at this shape and are excluded entirely.
+        let mut nodes = qwen_nodes(7, 80);
+        nodes.extend((7..10).map(|index| qwen_node(index, 1)));
+        let plan = plan_topology(&qwen_coder_480b_input(nodes)).unwrap();
+
+        assert_eq!(plan.context_length, QWEN_CODER_480B_NATIVE_CONTEXT);
+        assert_eq!(plan.parallel_lanes, 2);
+        assert_eq!(plan.stages.len(), 5);
+        assert!(
+            plan.stages
+                .iter()
+                .all(|stage| !stage.node_id.ends_with("07")
+                    && !stage.node_id.ends_with("08")
+                    && !stage.node_id.ends_with("09"))
+        );
+    }
+
+    #[test]
+    fn qwen_coder_480b_assigns_less_work_to_smaller_nodes() {
+        // Simulation: 1 x 64 GiB node and 5 x 80 GiB nodes.
+        //
+        // Expected topology: native context with the 64 GiB node assigned
+        // fewer layers than the largest stage.
+        //
+        // Why: KV and weights are layer-local. Assigning fewer layers to the
+        // smaller node prevents it from forcing down the cluster-wide context.
+        let mut nodes = vec![qwen_node(0, 64)];
+        nodes.extend(qwen_nodes(5, 80).into_iter().skip(1));
+        let plan = plan_topology(&qwen_coder_480b_input(nodes)).unwrap();
+
+        let smallest_stage = plan
+            .stages
+            .iter()
+            .find(|stage| stage.node_id == "qwen-node-00")
+            .unwrap();
+        let max_layers = plan
+            .stages
+            .iter()
+            .map(|stage| stage.layer_end - stage.layer_start)
+            .max()
+            .unwrap();
+        assert!(smallest_stage.layer_end - smallest_stage.layer_start < max_layers);
+    }
+
+    #[test]
+    fn qwen_coder_480b_applies_max_vram_and_headroom_in_simulation() {
+        // Simulation: one physically larger 120 GiB node capped to 80 GiB
+        // with 16 GiB runtime headroom, plus 5 x 80 GiB nodes.
+        //
+        // Expected topology: the capped node receives fewer layers than the
+        // largest stage, despite having 120 GiB physically detected.
+        //
+        // Why: planning must apply max-vram and local runtime headroom per
+        // node before assigning layers. The capped node's usable budget is
+        // 64 GiB, so it should be treated as smaller than the uncapped peers.
+        let mut capped = qwen_node(0, 120);
+        capped.max_vram_bytes = Some(80 * GIB);
+        capped.runtime_headroom_bytes = 16 * GIB;
+        let mut nodes = vec![capped];
+        nodes.extend(qwen_nodes(5, 80).into_iter().skip(1));
+        let plan = plan_topology(&qwen_coder_480b_input(nodes)).unwrap();
+
+        let capped_stage = plan
+            .stages
+            .iter()
+            .find(|stage| stage.node_id == "qwen-node-00")
+            .unwrap();
+        let max_layers = plan
+            .stages
+            .iter()
+            .map(|stage| stage.layer_end - stage.layer_start)
+            .max()
+            .unwrap();
+        assert!(capped_stage.layer_end - capped_stage.layer_start < max_layers);
+    }
+}

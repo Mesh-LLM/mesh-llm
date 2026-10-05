@@ -8,10 +8,10 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[2]
-PAGE = ROOT / "website" / "src" / "docs" / "pages" / "logging-api.md"
-OPERATOR_GUIDE = ROOT / "docs" / "LOGGING.md"
-DOCS_NAV = ROOT / "website" / "src" / "_data" / "docs.js"
-API_REFERENCE = ROOT / "website" / "src" / "docs" / "pages" / "api-reference.md"
+PAGE = ROOT / "mesh" / "website" / "src" / "docs" / "pages" / "logging-api.md"
+OPERATOR_GUIDE = ROOT / "mesh" / "docs" / "LOGGING.md"
+DOCS_NAV = ROOT / "mesh" / "website" / "src" / "_data" / "docs.js"
+API_REFERENCE = ROOT / "mesh" / "website" / "src" / "docs" / "pages" / "api-reference.md"
 
 
 class LoggingApiDocumentationTests(unittest.TestCase):

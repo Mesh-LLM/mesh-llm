@@ -12,6 +12,13 @@ compares every family, architecture, trunk depth, activation width, MTP count an
 test mode against `family-certified.json`. Missing, duplicate or stale rows fail.
 Adding an architecture requires an executable fixture; rejection modes are explicit.
 
+The separate `skippy_stage_program_replay` fixture installs a captured program
+and executes split replay, then deliberately corrupts admitted VIEW and RESHAPE
+recipes. The replay must reject out-of-storage views and changed element counts
+before GGML constructs a tensor. Its existing cases cover unsupported operations,
+input ownership and state binding. These focused checks exercise replay behavior;
+the roster checks below still cover structural contracts only.
+
 ## Contracts checked
 
 For each admitted graph, the suite checks every interior cut and a three-stage

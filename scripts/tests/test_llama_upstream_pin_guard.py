@@ -10,10 +10,11 @@ import unittest
 
 
 ROOT = Path(__file__).resolve().parents[2]
-GUARD = ROOT / "scripts" / "check-llama-upstream-pin.py"
+GUARD = ROOT / "skippy" / "scripts" / "check-llama-upstream-pin.py"
 QUALITY_LANE = ROOT / ".github" / "workflows" / "ci-quality-lane.yml"
 PR_QUALITY = ROOT / ".github" / "workflows" / "pr_quality.yml"
 PIN_PATH = Path("third_party/llama.cpp/upstream.txt")
+RELOCATED_PIN_PATH = Path("skippy/llama_cpp/upstream.txt")
 GUARD_SPEC = importlib.util.spec_from_file_location("check_llama_upstream_pin", GUARD)
 if GUARD_SPEC is None or GUARD_SPEC.loader is None:
     raise RuntimeError(f"cannot load {GUARD}")
@@ -144,6 +145,14 @@ class LlamaUpstreamPinGuardTests(unittest.TestCase):
             check=False,
         )
 
+    def relocate_pin(self, mesh: Path, pin: str) -> str:
+        (mesh / RELOCATED_PIN_PATH.parent).mkdir(parents=True, exist_ok=True)
+        (mesh / RELOCATED_PIN_PATH).write_text(f"{pin}\n", encoding="utf-8")
+        (mesh / PIN_PATH).unlink()
+        run_git(mesh, "add", "-A")
+        run_git(mesh, "commit", "--quiet", "-m", "relocate pin")
+        return run_git(mesh, "rev-parse", "HEAD").stdout.strip()
+
     def test_equal_pin_passes(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -152,6 +161,40 @@ class LlamaUpstreamPinGuardTests(unittest.TestCase):
             result = self.run_guard(mesh, base, head, upstream)
             self.assertEqual(0, result.returncode, result.stderr)
             self.assertIn("unchanged", result.stdout)
+
+    def test_relocated_equal_pin_passes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            upstream, base_pin, _, _ = self.create_upstream(root)
+            mesh, base, _ = self.create_mesh_history(root, base_pin, base_pin)
+            head = self.relocate_pin(mesh, base_pin)
+            result = self.run_guard(mesh, base, head, upstream)
+            self.assertEqual(0, result.returncode, result.stderr)
+            self.assertIn("unchanged", result.stdout)
+
+    def test_relocated_backward_pin_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            upstream, base_pin, _, latest_pin = self.create_upstream(root)
+            mesh, base, _ = self.create_mesh_history(root, latest_pin, latest_pin)
+            head = self.relocate_pin(mesh, base_pin)
+            result = self.run_guard(mesh, base, head, upstream)
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn("backward", result.stderr)
+
+    def test_duplicate_pin_paths_fail_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            upstream, base_pin, _, _ = self.create_upstream(root)
+            mesh, base, _ = self.create_mesh_history(root, base_pin, base_pin)
+            (mesh / RELOCATED_PIN_PATH.parent).mkdir(parents=True)
+            (mesh / RELOCATED_PIN_PATH).write_text(f"{base_pin}\n", encoding="utf-8")
+            run_git(mesh, "add", "-A")
+            run_git(mesh, "commit", "--quiet", "-m", "duplicate pin")
+            head = run_git(mesh, "rev-parse", "HEAD").stdout.strip()
+            result = self.run_guard(mesh, base, head, upstream)
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn("exactly one", result.stderr)
 
     def test_descendant_pin_passes_after_fetching_history(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

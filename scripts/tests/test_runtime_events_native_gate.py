@@ -1,6 +1,6 @@
 """Contract for the native runtime-event gate and its CI lane.
 
-`crates/skippy-runtime/tests/runtime_events_native.rs` is the only test that
+`skippy/crates/skippy-runtime/tests/runtime_events_native.rs` is the only test that
 exercises the reporter against actual native code. It is env-gated so an
 ordinary `cargo test` never touches a native symbol -- which also meant
 nothing in CI ever ran it, and the whole native reporter path was covered
@@ -292,19 +292,42 @@ class LinuxRuntimeSliceTests(unittest.TestCase):
 
     def test_the_gate_gets_the_bundle_directory_not_the_runtime_directory(self) -> None:
         """`MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR` names the directory that
-        CONTAINS runtime-id directories. `prepare-native-runtime-input`
-        outputs the runtime directory itself, so the lane has to take its
-        parent -- pointing the host at the runtime directory finds no
-        runtime at all."""
+        contains runtime-id directories, whether restored or built."""
         step = self.steps["Run native runtime-event gate"]
         self.assertIn(
-            'dirname "${{ steps.native_runtime.outputs.runtime_dir }}"', step["run"]
+            'dirname "$RUNTIME_DIR"', step["run"]
         )
+        self.assertIn("steps.cached_runtime.outputs.runtime_dir", step["env"]["RUNTIME_DIR"])
+        self.assertIn("steps.native_runtime.outputs.runtime_dir", step["env"]["RUNTIME_DIR"])
 
     def test_the_prepare_step_is_addressable(self) -> None:
         self.assertEqual(
             self.steps["Prepare immutable Linux native runtime"]["id"], "native_runtime"
         )
+
+    def test_cpu_runtime_cache_is_exact_verified_and_main_published(self) -> None:
+        restore = self.steps["Restore exact Linux CPU runtime"]
+        verify = self.steps["Verify restored Linux CPU runtime"]
+        prepare = self.steps["Prepare immutable Linux native runtime"]
+        save = self.steps["Save exact Linux CPU runtime from trusted main"]
+        self.assertIn("matrix.runtime.backend == 'cpu'", restore["if"])
+        self.assertIn("allow_native_github_cache_cpu == 'true'", restore["if"])
+        self.assertIn("!startsWith(needs.runner_policy.outputs.runner_cpu, 'depot-')", restore["if"])
+        self.assertIn("matrix.runtime.toolchain_epoch", restore["with"]["key"])
+        self.assertIn("hashFiles('skippy/**'", restore["with"]["key"])
+        self.assertIn("steps.runtime_cache.outputs.cache-hit == 'true'", verify["if"])
+        self.assertIn("scripts/verify-native-runtime-package.sh", verify["run"])
+        self.assertIn("cached runtime directory and archive manifests differ", verify["run"])
+        self.assertIn("EXPECTED_BACKEND", verify["run"])
+        self.assertIn("EXPECTED_TARGET", verify["run"])
+        self.assertIn("steps.runtime_cache.outputs.cache-hit != 'true'", prepare["if"])
+        self.assertIn("github.event_name == 'push'", save["if"])
+        self.assertIn("github.ref == 'refs/heads/main'", save["if"])
+        self.assertIn("steps.runtime_cache.outputs.cache-hit != 'true'", save["if"])
+        policy = self.workflow["jobs"]["runner_policy"]
+        cpu_policy = next(step for step in policy["steps"] if step.get("id") == "cpu_policy")
+        self.assertEqual(cpu_policy["with"]["force_hosted"], True)
+        self.assertIn("needs.runner_policy.outputs.runner_cpu", self.workflow["jobs"]["linux_runtime"]["runs-on"])
 
     def test_the_gate_selects_one_artifact_from_the_shared_manifest(self) -> None:
         step = self.steps["Restore runtime-event gate model"]

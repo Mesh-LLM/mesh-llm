@@ -23,6 +23,79 @@ SPEC.loader.exec_module(RUNNER)
 
 
 class TimeoutSignalSafetyTests(unittest.TestCase):
+    def test_completed_zombie_group_does_not_turn_eperm_into_failure(self) -> None:
+        process = mock.Mock(pid=4321)
+        with (
+            mock.patch.object(
+                RUNNER.os,
+                "killpg",
+                side_effect=[None, PermissionError(1, "Operation not permitted")],
+            ),
+            mock.patch.object(RUNNER.time, "sleep"),
+            mock.patch.object(
+                RUNNER.subprocess,
+                "check_output",
+                return_value=" 4321 Z\n",
+            ),
+        ):
+            RUNNER.cleanup_completed_group(process)
+
+    def test_live_group_permission_failure_is_an_infrastructure_error(self) -> None:
+        process = mock.Mock(pid=4321)
+        with (
+            mock.patch.object(
+                RUNNER.os,
+                "killpg",
+                side_effect=[None, PermissionError(1, "Operation not permitted")],
+            ),
+            mock.patch.object(RUNNER.time, "sleep"),
+            mock.patch.object(
+                RUNNER.subprocess,
+                "check_output",
+                side_effect=[
+                    " 4321 S\n",
+                    " 4321 S\n",
+                    " 99 1 4321 501 S /usr/bin/python3\n",
+                ],
+            ),
+        ):
+            with self.assertRaisesRegex(
+                RUNNER.CleanupError,
+                r"live process-group member.*pid=99 ppid=1 uid=501 stat=S executable=/usr/bin/python3",
+            ):
+                RUNNER.cleanup_completed_group(process)
+
+    def test_process_details_do_not_include_command_arguments(self) -> None:
+        with mock.patch.object(
+            RUNNER.subprocess,
+            "check_output",
+            return_value=" 99 1 4321 501 S /usr/bin/python3\n 100 1 5 501 S /bin/sh\n",
+        ) as inspect:
+            self.assertEqual(
+                "pid=99 ppid=1 uid=501 stat=S executable=/usr/bin/python3",
+                RUNNER.describe_live_group_members(4321),
+            )
+        inspect.assert_called_once_with(
+            ["ps", "-axo", "pid=,ppid=,pgid=,uid=,stat=,comm="], text=True,
+        )
+
+    def test_cleanup_error_returns_dedicated_infrastructure_status(self) -> None:
+        process = mock.Mock()
+        process.wait.return_value = 0
+        args = argparse.Namespace(seconds=1, label="agent", command=["fixture"], cleanup_on_exit=True)
+        with (
+            mock.patch.object(RUNNER, "parse_args", return_value=args),
+            mock.patch.object(RUNNER.signal, "signal"),
+            mock.patch.object(RUNNER.subprocess, "Popen", return_value=process),
+            mock.patch.object(RUNNER.time, "monotonic", return_value=0),
+            mock.patch.object(
+                RUNNER,
+                "cleanup_completed_group",
+                side_effect=RUNNER.CleanupError("permission denied"),
+            ),
+        ):
+            self.assertEqual(125, RUNNER.main())
+
     def test_deadline_observes_child_exit_before_declaring_timeout(self) -> None:
         """An exit between the last wait and the deadline retains its actual status."""
         for child_status in (0, 7, None):

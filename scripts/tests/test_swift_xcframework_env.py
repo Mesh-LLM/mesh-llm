@@ -5,7 +5,7 @@ import unittest
 
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
-SCRIPT = REPO_ROOT / "sdk/swift/scripts/build-xcframework.sh"
+SCRIPT = REPO_ROOT / "mesh/sdk/swift/scripts/build-xcframework.sh"
 
 
 class SwiftXcframeworkEnvTests(unittest.TestCase):
@@ -28,7 +28,7 @@ class SwiftXcframeworkEnvTests(unittest.TestCase):
         script = SCRIPT.read_text()
         self.assertNotIn("-DCMAKE_OSX_DEPLOYMENT_TARGET=13.0", script)
         self.assertEqual(script.count('macosx arm64 macOS -DCMAKE_OSX_DEPLOYMENT_TARGET="$MACOSX_DEPLOYMENT_TARGET"'), 1)
-        self.assertEqual(script.count('macosx x86_64 macOS -DCMAKE_OSX_DEPLOYMENT_TARGET="$MACOSX_DEPLOYMENT_TARGET"'), 1)
+        self.assertNotIn("x86_64-apple-darwin", script)
 
     def test_target_mode_stages_one_library_for_parallel_ci(self) -> None:
         script = SCRIPT.read_text()

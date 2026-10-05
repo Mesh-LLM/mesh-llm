@@ -70,6 +70,6 @@ scripts/ci-sdk-fixture.sh "$1" "$2" "$3" -- \
         export MESH_LLM_NATIVE_RUNTIME_CACHE_DIR="${MESH_LLM_NATIVE_RUNTIME_CACHE_DIR:?}"
         export JNA_LIBRARY_PATH="${MESHLLM_KOTLIN_JNA_LIBRARY_PATH}${JNA_LIBRARY_PATH:+:$JNA_LIBRARY_PATH}"
         export JAVA_TOOL_OPTIONS="${JAVA_TOOL_OPTIONS:-} -Djna.library.path=$MESHLLM_KOTLIN_JNA_LIBRARY_PATH"
-        cd '"$REPO_ROOT"'/sdk/kotlin/example/example-jvm
+        cd '"$REPO_ROOT"'/mesh/sdk/kotlin/example/example-jvm
         ./gradlew --no-daemon run --args="$MESH_SDK_INVITE_TOKEN"
     '

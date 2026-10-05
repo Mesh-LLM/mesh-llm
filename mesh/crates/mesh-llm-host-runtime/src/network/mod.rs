@@ -1,0 +1,17 @@
+pub(crate) mod affinity;
+pub(crate) mod discovery;
+pub(crate) mod lan_beacon;
+pub(crate) mod lan_bootstrap;
+pub(crate) mod mdns_reverse_dial;
+pub(crate) mod metrics;
+pub(crate) mod nostr;
+pub(crate) mod openai;
+pub(crate) mod peer_blocks;
+pub(crate) mod proxy;
+pub(crate) mod reservations;
+pub(crate) mod router;
+pub(crate) mod target_health;
+pub(crate) mod tunnel;
+
+#[cfg(feature = "payments")]
+pub(crate) mod payments;

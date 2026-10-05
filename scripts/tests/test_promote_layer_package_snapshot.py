@@ -9,7 +9,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[2]
-MODULE_PATH = ROOT / "scripts" / "promote_layer_package_snapshot.py"
+MODULE_PATH = ROOT / "skippy" / "scripts" / "promote_layer_package_snapshot.py"
 SPEC = importlib.util.spec_from_file_location("promote_layer_package_snapshot", MODULE_PATH)
 assert SPEC and SPEC.loader
 MODULE = importlib.util.module_from_spec(SPEC)

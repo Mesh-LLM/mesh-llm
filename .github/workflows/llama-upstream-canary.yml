@@ -54,7 +54,7 @@ jobs:
             exit 0
           fi
           pins=()
-          for pin in third_party/llama.cpp/upstream.txt skippy/third_party/llama.cpp/upstream.txt; do
+          for pin in third_party/llama.cpp/upstream.txt skippy/llama_cpp/upstream.txt; do
             if [[ -f "$pin" ]]; then pins+=("$pin"); fi
           done
           if [[ "${#pins[@]}" != 1 ]]; then
@@ -85,9 +85,53 @@ jobs:
             echo "certify=$certify"
           } >> "$GITHUB_OUTPUT"
 
-  repair-1:
+  preflight:
     needs: [resolve]
     if: ${{ needs.resolve.outputs.certify == 'true' }}
+    runs-on: [self-hosted, family-certify]
+    timeout-minutes: 30
+    env:
+      CANARY_SOURCE_ROOT: ${{ github.workspace }}${{ needs.resolve.outputs.mesh_source != '' && '/canary-source' || '' }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ needs.resolve.outputs.source }}
+          persist-credentials: false
+      - name: Check out explicitly trusted certification source
+        if: needs.resolve.outputs.mesh_source != ''
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ needs.resolve.outputs.mesh_source }}
+          path: canary-source
+          persist-credentials: false
+      - uses: ./.github/actions/use-canary-cache
+      - name: Verify immutable family plan and pinned cache
+        run: |
+          set -euo pipefail
+          python3 scripts/llama-canary-family-evidence.py preflight \
+            --root "$CANARY_SOURCE_ROOT" --output "$RUNNER_TEMP/llama-canary-preflight/plan.json"
+      - name: Upload environment preflight evidence
+        id: upload_evidence
+        if: ${{ success() || failure() || cancelled() }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: llama-canary-preflight-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/llama-canary-preflight/
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Clean environment preflight outputs
+        if: ${{ success() || failure() || cancelled() }}
+        timeout-minutes: 5
+        env:
+          EVIDENCE_UPLOADED: ${{ steps.upload_evidence.outcome == 'success' }}
+        run: |
+          set -euo pipefail
+          python3 scripts/cleanup-self-hosted.py --job canary-preflight \
+            --evidence-uploaded "$EVIDENCE_UPLOADED"
+
+  repair_1:
+    needs: [resolve, preflight]
+    if: ${{ !cancelled() && needs.preflight.result == 'success' }}
     uses: ./.github/workflows/llama-canary-family-pass.yml
     with:
       source: ${{ needs.resolve.outputs.source }}
@@ -96,77 +140,142 @@ jobs:
       pass_id: repair-1
       mode: ${{ needs.resolve.outputs.mode }}
 
-  verify-1:
-    needs: [resolve, repair-1]
-    if: ${{ !cancelled() && needs.resolve.outputs.changed == 'true' && needs.repair-1.outputs.green == 'true' }}
+  verify_1:
+    needs: [resolve, repair_1]
+    if: ${{ !cancelled() && needs.resolve.outputs.changed == 'true' && needs.repair_1.outputs.green == 'true' }}
     uses: ./.github/workflows/llama-canary-family-pass.yml
     with:
       source: ${{ needs.resolve.outputs.source }}
       upstream: ${{ needs.resolve.outputs.upstream }}
       pass_id: verify-1
       mode: verify-build
-      previous_package: ${{ needs.repair-1.outputs.package }}
-      previous_identity: ${{ needs.repair-1.outputs.identity }}
-      previous_head: ${{ needs.repair-1.outputs.head }}
+      previous_package: ${{ needs.repair_1.outputs.package }}
+      previous_identity: ${{ needs.repair_1.outputs.identity }}
+      previous_head: ${{ needs.repair_1.outputs.head }}
 
-  repair-2:
-    needs: [resolve, repair-1, verify-1]
-    if: ${{ !cancelled() && needs.resolve.outputs.changed == 'true' && needs.repair-1.outputs.head != '' && needs.verify-1.outputs.green != 'true' }}
+  attempt_1:
+    needs: [resolve, repair_1, verify_1]
+    if: ${{ !cancelled() && needs.resolve.outputs.certify == 'true' }}
+    runs-on: ubuntu-24.04
+    outputs: &attempt_outputs
+      state: ${{ steps.select.outputs.state }}
+      green: ${{ steps.select.outputs.green }}
+      repairable: ${{ steps.select.outputs.repairable }}
+      resume_package: ${{ steps.select.outputs.resume_package }}
+      resume_identity: ${{ steps.select.outputs.resume_identity }}
+      resume_head: ${{ steps.select.outputs.resume_head }}
+      resume_feedback: ${{ steps.select.outputs.resume_feedback }}
+      failure_class: ${{ steps.select.outputs.failure_class }}
+      failure_stage: ${{ steps.select.outputs.failure_stage }}
+      package: ${{ steps.select.outputs.package }}
+      identity: ${{ steps.select.outputs.identity }}
+      head: ${{ steps.select.outputs.head }}
+      branch: ${{ steps.select.outputs.branch }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ needs.resolve.outputs.source }}
+          persist-credentials: false
+      - name: Select distributed repair attempt 1
+        id: select
+        env:
+          CHANGED: ${{ needs.resolve.outputs.changed }}
+          REPAIR_JSON: ${{ toJSON(needs.repair_1) }}
+          VERIFY_JSON: ${{ toJSON(needs.verify_1) }}
+        run: python3 scripts/llama-canary-select-attempt.py attempt --changed "$CHANGED" --repair-json "$REPAIR_JSON" --verification-json "$VERIFY_JSON"
+
+  repair_2:
+    needs: [resolve, attempt_1]
+    if: ${{ !cancelled() && needs.resolve.outputs.changed == 'true' && needs.attempt_1.outputs.state == 'repairable' }}
     uses: ./.github/workflows/llama-canary-family-pass.yml
     with:
       source: ${{ needs.resolve.outputs.source }}
       upstream: ${{ needs.resolve.outputs.upstream }}
       pass_id: repair-2
-      mode: ${{ needs.resolve.outputs.mode }}
-      previous_package: ${{ needs.repair-1.outputs.package }}
-      previous_identity: ${{ needs.repair-1.outputs.identity }}
-      previous_head: ${{ needs.repair-1.outputs.head }}
-      feedback_pattern: llama-family-${{ github.run_id }}-*-*-*-1-*
-      feedback_build_pattern: llama-build-${{ github.run_id }}-*-*-1
+      mode: repair-build
+      previous_package: ${{ needs.attempt_1.outputs.resume_package }}
+      previous_identity: ${{ needs.attempt_1.outputs.resume_identity }}
+      previous_head: ${{ needs.attempt_1.outputs.resume_head }}
+      previous_feedback: ${{ needs.attempt_1.outputs.resume_feedback }}
 
-  verify-2:
-    needs: [resolve, repair-2]
-    if: ${{ !cancelled() && needs.resolve.outputs.changed == 'true' && needs.repair-2.outputs.green == 'true' }}
+  verify_2:
+    needs: [resolve, repair_2]
+    if: ${{ !cancelled() && needs.repair_2.outputs.green == 'true' }}
     uses: ./.github/workflows/llama-canary-family-pass.yml
     with:
       source: ${{ needs.resolve.outputs.source }}
       upstream: ${{ needs.resolve.outputs.upstream }}
       pass_id: verify-2
       mode: verify-build
-      previous_package: ${{ needs.repair-2.outputs.package }}
-      previous_identity: ${{ needs.repair-2.outputs.identity }}
-      previous_head: ${{ needs.repair-2.outputs.head }}
+      previous_package: ${{ needs.repair_2.outputs.package }}
+      previous_identity: ${{ needs.repair_2.outputs.identity }}
+      previous_head: ${{ needs.repair_2.outputs.head }}
 
-  repair-3:
-    needs: [resolve, repair-2, verify-2]
-    if: ${{ !cancelled() && needs.resolve.outputs.changed == 'true' && needs.repair-2.outputs.head != '' && needs.verify-2.outputs.green != 'true' }}
+  attempt_2:
+    needs: [resolve, attempt_1, repair_2, verify_2]
+    if: ${{ !cancelled() && needs.resolve.outputs.changed == 'true' && needs.attempt_1.outputs.state == 'repairable' }}
+    runs-on: ubuntu-24.04
+    outputs: *attempt_outputs
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ needs.resolve.outputs.source }}
+          persist-credentials: false
+      - name: Select distributed repair attempt 2
+        id: select
+        env:
+          CHANGED: ${{ needs.resolve.outputs.changed }}
+          REPAIR_JSON: ${{ toJSON(needs.repair_2) }}
+          VERIFY_JSON: ${{ toJSON(needs.verify_2) }}
+        run: python3 scripts/llama-canary-select-attempt.py attempt --changed "$CHANGED" --repair-json "$REPAIR_JSON" --verification-json "$VERIFY_JSON"
+
+  repair_3:
+    needs: [resolve, attempt_2]
+    if: ${{ !cancelled() && needs.resolve.outputs.changed == 'true' && needs.attempt_2.outputs.state == 'repairable' }}
     uses: ./.github/workflows/llama-canary-family-pass.yml
     with:
       source: ${{ needs.resolve.outputs.source }}
       upstream: ${{ needs.resolve.outputs.upstream }}
       pass_id: repair-3
-      mode: ${{ needs.resolve.outputs.mode }}
-      previous_package: ${{ needs.repair-2.outputs.package }}
-      previous_identity: ${{ needs.repair-2.outputs.identity }}
-      previous_head: ${{ needs.repair-2.outputs.head }}
-      feedback_pattern: llama-family-${{ github.run_id }}-*-*-*-2-*
-      feedback_build_pattern: llama-build-${{ github.run_id }}-*-*-2
+      mode: repair-build
+      previous_package: ${{ needs.attempt_2.outputs.resume_package }}
+      previous_identity: ${{ needs.attempt_2.outputs.resume_identity }}
+      previous_head: ${{ needs.attempt_2.outputs.resume_head }}
+      previous_feedback: ${{ needs.attempt_2.outputs.resume_feedback }}
 
-  verify-3:
-    needs: [resolve, repair-3]
-    if: ${{ !cancelled() && needs.resolve.outputs.changed == 'true' && needs.repair-3.outputs.green == 'true' }}
+  verify_3:
+    needs: [resolve, repair_3]
+    if: ${{ !cancelled() && needs.repair_3.outputs.green == 'true' }}
     uses: ./.github/workflows/llama-canary-family-pass.yml
     with:
       source: ${{ needs.resolve.outputs.source }}
       upstream: ${{ needs.resolve.outputs.upstream }}
       pass_id: verify-3
       mode: verify-build
-      previous_package: ${{ needs.repair-3.outputs.package }}
-      previous_identity: ${{ needs.repair-3.outputs.identity }}
-      previous_head: ${{ needs.repair-3.outputs.head }}
+      previous_package: ${{ needs.repair_3.outputs.package }}
+      previous_identity: ${{ needs.repair_3.outputs.identity }}
+      previous_head: ${{ needs.repair_3.outputs.head }}
+
+  attempt_3:
+    needs: [resolve, attempt_2, repair_3, verify_3]
+    if: ${{ !cancelled() && needs.resolve.outputs.changed == 'true' && needs.attempt_2.outputs.state == 'repairable' }}
+    runs-on: ubuntu-24.04
+    outputs: *attempt_outputs
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ needs.resolve.outputs.source }}
+          persist-credentials: false
+      - name: Select distributed repair attempt 3
+        id: select
+        env:
+          CHANGED: ${{ needs.resolve.outputs.changed }}
+          REPAIR_JSON: ${{ toJSON(needs.repair_3) }}
+          VERIFY_JSON: ${{ toJSON(needs.verify_3) }}
+        run: python3 scripts/llama-canary-select-attempt.py attempt --changed "$CHANGED" --repair-json "$REPAIR_JSON" --verification-json "$VERIFY_JSON"
 
   result:
-    needs: [resolve, repair-1, verify-1, repair-2, verify-2, repair-3, verify-3]
+    needs: [resolve, preflight, attempt_1, attempt_2, attempt_3]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-24.04
     outputs:
@@ -176,44 +285,23 @@ jobs:
       branch: ${{ steps.result.outputs.branch }}
       publish: ${{ steps.result.outputs.publish }}
     steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ needs.resolve.outputs.source }}
+          persist-credentials: false
       - name: Require complete certification and independent verification
         id: result
         env:
-          NEEDS_JSON: ${{ toJSON(needs) }}
+          CERTIFY: ${{ needs.resolve.outputs.certify }}
+          CHANGED: ${{ needs.resolve.outputs.changed }}
+          MESH_SOURCE: ${{ needs.resolve.outputs.mesh_source }}
+          PREFLIGHT: ${{ needs.preflight.result }}
+          ATTEMPTS_JSON: ${{ toJSON(needs) }}
         run: |
           set -euo pipefail
-          python3 - <<'PYCODE'
-          import json, os
-          needs = json.loads(os.environ['NEEDS_JSON'])
-          resolve = needs['resolve']
-          if resolve['result'] != 'success':
-              raise SystemExit('trusted source resolution failed')
-          if resolve['outputs']['certify'] != 'true':
-              raise SystemExit(0)
-          selected = resolve['outputs'].get('mesh_source')
-          if selected:
-              repair = needs['repair-1']['outputs']
-              if (resolve['outputs']['changed'] != 'false' or repair.get('green') != 'true'
-                      or repair.get('head') != selected):
-                  raise SystemExit('selected MeshLLM revision certification failed')
-              raise SystemExit(0)
-          changed = resolve['outputs']['changed'] == 'true'
-          if not changed:
-              if needs['repair-1']['outputs'].get('green') != 'true':
-                  raise SystemExit('unchanged-pin family certification failed')
-              raise SystemExit(0)
-          for attempt in range(1, 4):
-              repair = needs[f'repair-{attempt}']['outputs']
-              verify = needs[f'verify-{attempt}']['outputs']
-              if repair.get('green') == verify.get('green') == 'true' and repair['head'] == verify['head']:
-                  with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
-                      output.write('publish=true\n')
-                      for key in ('package', 'identity', 'head', 'branch'):
-                          output.write(f'{key}={verify[key]}\n')
-                  break
-          else:
-              raise SystemExit('repair or independent family verification exhausted three attempts; publication denied')
-          PYCODE
+          python3 scripts/llama-canary-select-attempt.py final \
+            --certify "$CERTIFY" --changed "$CHANGED" --mesh-source "$MESH_SOURCE" \
+            --preflight "$PREFLIGHT" --attempts-json "$ATTEMPTS_JSON"
 
   publish-certified-canary:
     needs: [resolve, result]

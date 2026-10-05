@@ -35,10 +35,20 @@ class FamilyEvidenceTests(unittest.TestCase):
         self.addCleanup(self.env.stop)
         self.plan = {
             'required_certification_lanes': sorted(E.CORE),
-            'selected_models': [{'family': f, 'mmproj_artifact': None, 'class': 'causal_generation',
-                                 'certification_lanes': sorted(E.CORE)} for f in ('dense', 'hybrid')],
+            'selected_models': [{
+                'family': f,
+                'artifact': {'files': ['model.gguf'],
+                             'file_integrity': {'model.gguf': {'size_bytes': 1}}},
+                'resources': {'estimated_model_bytes': 1},
+                'mmproj_artifact': None,
+                'class': 'causal_generation',
+                'certification_lanes': sorted(E.CORE),
+            } for f in ('dense', 'hybrid')],
             'shards': [{'shard_index': i, 'families': [f]} for i, f in enumerate(('dense', 'hybrid'))],
-            'github_matrix': {'include': [{'shard_index': i, 'families': f} for i, f in enumerate(('dense', 'hybrid'))]},
+            'github_matrix': {'include': [
+                {'shard_index': i, 'families': f, 'estimated_work_bytes': i + 1}
+                for i, f in enumerate(('dense', 'hybrid'))
+            ]},
         }
         E.write(self.package / 'plan.json', self.plan)
         with tarfile.open(self.package / 'binaries.tar', 'w') as archive:
@@ -95,9 +105,9 @@ class FamilyEvidenceTests(unittest.TestCase):
         directory = self.root / 'closure-src'
         directory.mkdir(exist_ok=True)
         files = {
-            'candidate': 'cargo/debug/skippy-server',
+            'candidate': 'cargo/debug/skippy',
             'test_binary': 'cargo/debug/deps/smoke-test',
-            'model_package': 'cargo/debug/skippy-model-package',
+            'model_package': 'cargo/debug/skippy-package-builder',
             'correctness': 'cargo/debug/skippy-correctness',
             'topology_plan': 'cargo/debug/skippy-topology-plan',
             'native_stamp': 'native/.mesh-llm-build-stamp',
@@ -117,11 +127,19 @@ class FamilyEvidenceTests(unittest.TestCase):
                 archive.add(directory / relative, arcname=relative)
 
     def make_receipt(self, family, outcome='success'):
-        E.receipt(SimpleNamespace(package=self.package, identity=self.digest, evidence=self.evidence / family,
+        self.make_receipt_at(self.evidence / family, family, outcome)
+
+    def make_receipt_at(self, directory, family, outcome='success'):
+        E.receipt(SimpleNamespace(package=self.package, identity=self.digest, evidence=directory,
                                   family=family, outcome=outcome))
 
-    def aggregate(self):
-        E.aggregate(SimpleNamespace(package=self.package, identity=self.digest, evidence=self.evidence))
+    def aggregate(self, **kwargs):
+        E.aggregate(SimpleNamespace(package=self.package, identity=self.digest,
+                                    evidence=self.evidence, **kwargs))
+
+    def reconcile(self, previous_feedback, evidence, **kwargs):
+        E.reconcile(SimpleNamespace(package=self.package, identity=self.digest,
+                                    previous_feedback=previous_feedback, evidence=evidence, **kwargs))
 
     def test_complete_distributed_pass(self):
         self.aggregate()
@@ -230,7 +248,175 @@ class FamilyEvidenceTests(unittest.TestCase):
             self.assertIn(f'{family}: failed or mismatched', str(caught.exception))
             self.assertIn(f'{family}: failed or mismatched', summary.read_text())
         self.assertIn('0/2 family receipts passed', summary.read_text())
-        self.assertFalse(output.exists())
+        self.assertIn('green=false', output.read_text())
+        self.assertIn('failure_class=candidate', output.read_text())
+
+    def test_candidate_failure_emits_digest_bound_feedback(self):
+        self.make_receipt('dense', 'failure')
+        feedback = self.root / 'feedback'
+        output = self.root / 'outputs'
+        with patch.dict(os.environ, GITHUB_OUTPUT=str(output)):
+            with self.assertRaisesRegex(ValueError, 'failed or mismatched'):
+                self.aggregate(feedback=feedback, family_result='failure')
+        payload = E.verify_feedback(feedback, self.digest, self.identity)
+        self.assertEqual(payload['state'], 'candidate_repairable')
+        self.assertEqual(payload['candidate_failures'], ['dense'])
+        self.assertEqual(payload['infrastructure_failures'], [])
+        self.assertEqual(payload['failed_families'], ['dense'])
+        self.assertTrue((feedback / 'dense/results.jsonl').is_file())
+        self.assertIn('repairable=true', output.read_text())
+        with (feedback / 'dense/results.jsonl').open('a') as stream:
+            stream.write('{}\n')
+        with self.assertRaisesRegex(ValueError, 'digest mismatch'):
+            E.verify_feedback(feedback, self.digest, self.identity)
+
+    def test_mixed_failure_retains_candidate_and_targets_only_missing_family(self):
+        self.make_receipt('dense', 'failure')
+        (self.evidence / 'hybrid/receipt.json').unlink()
+        feedback = self.root / 'feedback'
+        output = self.root / 'outputs'
+        with patch.dict(os.environ, GITHUB_OUTPUT=str(output)):
+            with self.assertRaises(ValueError):
+                self.aggregate(feedback=feedback, family_result='failure')
+        self.assertIn('repairable=false', output.read_text())
+        self.assertIn('failure_class=infrastructure', output.read_text())
+        self.assertIn('state=infrastructure_retryable', output.read_text())
+        matrix_line = next(line for line in output.read_text().splitlines()
+                           if line.startswith('retry_matrix='))
+        matrix = json.loads(matrix_line.removeprefix('retry_matrix='))
+        self.assertEqual([row['families'] for row in matrix['include']], ['hybrid'])
+        payload = E.verify_feedback(feedback, self.digest, self.identity,
+                                    expected_state='infrastructure_retryable')
+        self.assertEqual(payload['candidate_failures'], ['dense'])
+        self.assertEqual(payload['infrastructure_failures'], ['hybrid'])
+
+    def test_cancelled_or_skipped_graph_blocks_candidate_repair(self):
+        for family_result in ('cancelled', 'skipped'):
+            with self.subTest(family_result=family_result):
+                self.make_receipt('dense', 'failure')
+                feedback = self.root / f'feedback-{family_result}'
+                output = self.root / f'outputs-{family_result}'
+                with patch.dict(os.environ, GITHUB_OUTPUT=str(output)):
+                    with self.assertRaises(ValueError):
+                        self.aggregate(feedback=feedback, family_result=family_result)
+                self.assertIn('repairable=false', output.read_text())
+                self.assertIn('failure_class=contract', output.read_text())
+                self.assertFalse(feedback.exists())
+
+    def test_environment_preflight_failure_is_retried_without_source_repair(self):
+        path = self.evidence / 'dense/results.jsonl'
+        battery = {'family': 'battery', 'exit_code': 1,
+                   'outcomes': [{'name': 'environment-preflight', 'status': 'fail',
+                                 'exit_code': 1}]}
+        path.write_text(json.dumps(battery) + '\n')
+        self.make_receipt('dense', 'failure')
+        output = self.root / 'outputs'
+        feedback = self.root / 'feedback'
+        with patch.dict(os.environ, GITHUB_OUTPUT=str(output)):
+            with self.assertRaises(ValueError):
+                self.aggregate(feedback=feedback, family_result='failure')
+        self.assertIn('repairable=false', output.read_text())
+        self.assertIn('failure_class=infrastructure', output.read_text())
+        self.assertIn('state=infrastructure_retryable', output.read_text())
+        payload = E.verify_feedback(feedback, self.digest, self.identity,
+                                    expected_state='infrastructure_retryable')
+        self.assertEqual(payload['candidate_failures'], [])
+        self.assertEqual(payload['infrastructure_failures'], ['dense'])
+
+    def test_infrastructure_recheck_preserves_prior_candidate_failure(self):
+        self.make_receipt('dense', 'failure')
+        (self.evidence / 'hybrid/receipt.json').unlink()
+        previous = self.root / 'previous-feedback'
+        with self.assertRaises(ValueError):
+            self.aggregate(feedback=previous, family_result='failure')
+        retry = self.root / 'retry'
+        shutil.copytree(self.evidence / 'hybrid', retry / 'hybrid')
+        self.make_receipt_at(retry / 'hybrid', 'hybrid')
+        reconciled = self.root / 'reconciled-feedback'
+        output = self.root / 'reconcile-output'
+        with patch.dict(os.environ, GITHUB_OUTPUT=str(output)):
+            with self.assertRaisesRegex(ValueError, 'candidate failures remain'):
+                self.reconcile(previous, retry, feedback=reconciled, family_result='success')
+        self.assertIn('state=candidate_repairable', output.read_text())
+        payload = E.verify_feedback(reconciled, self.digest, self.identity,
+                                    expected_state='candidate_repairable')
+        self.assertEqual(payload['candidate_failures'], ['dense'])
+        self.assertEqual(payload['infrastructure_failures'], [])
+
+    def test_infrastructure_only_recheck_can_complete_the_full_pass(self):
+        (self.evidence / 'hybrid/receipt.json').unlink()
+        previous = self.root / 'previous-feedback'
+        with self.assertRaises(ValueError):
+            self.aggregate(feedback=previous, family_result='failure')
+        retry = self.root / 'retry'
+        shutil.copytree(self.evidence / 'hybrid', retry / 'hybrid')
+        self.make_receipt_at(retry / 'hybrid', 'hybrid')
+        output = self.root / 'reconcile-output'
+        with patch.dict(os.environ, GITHUB_OUTPUT=str(output)):
+            self.reconcile(previous, retry, feedback=self.root / 'unused', family_result='success')
+        self.assertIn('green=true', output.read_text())
+        self.assertIn('state=green', output.read_text())
+
+    def test_failed_retry_job_graph_cannot_certify_green_receipts(self):
+        (self.evidence / 'hybrid/receipt.json').unlink()
+        previous = self.root / 'previous-feedback'
+        with self.assertRaises(ValueError):
+            self.aggregate(feedback=previous, family_result='failure')
+        retry = self.root / 'retry'
+        shutil.copytree(self.evidence / 'hybrid', retry / 'hybrid')
+        self.make_receipt_at(retry / 'hybrid', 'hybrid')
+        output = self.root / 'reconcile-output'
+        with patch.dict(os.environ, GITHUB_OUTPUT=str(output)):
+            with self.assertRaisesRegex(ValueError, 'did not produce complete'):
+                self.reconcile(previous, retry, feedback=self.root / 'unused', family_result='failure')
+        self.assertIn('state=infrastructure_exhausted', output.read_text())
+        self.assertIn('green=false', output.read_text())
+        self.assertFalse((self.root / 'unused').exists())
+
+    def test_recheck_can_reclassify_an_infrastructure_family_as_candidate(self):
+        (self.evidence / 'hybrid/receipt.json').unlink()
+        previous = self.root / 'previous-feedback'
+        with self.assertRaises(ValueError):
+            self.aggregate(feedback=previous, family_result='failure')
+        retry = self.root / 'retry'
+        shutil.copytree(self.evidence / 'hybrid', retry / 'hybrid')
+        self.make_receipt_at(retry / 'hybrid', 'hybrid', 'failure')
+        reconciled = self.root / 'reconciled-feedback'
+        with self.assertRaisesRegex(ValueError, 'candidate failures remain'):
+            self.reconcile(previous, retry, feedback=reconciled, family_result='failure')
+        payload = E.verify_feedback(reconciled, self.digest, self.identity,
+                                    expected_state='candidate_repairable')
+        self.assertEqual(payload['candidate_failures'], ['hybrid'])
+
+    def test_repeated_infrastructure_failure_stops_without_goose_feedback(self):
+        (self.evidence / 'hybrid/receipt.json').unlink()
+        previous = self.root / 'previous-feedback'
+        with self.assertRaises(ValueError):
+            self.aggregate(feedback=previous, family_result='failure')
+        retry = self.root / 'retry'
+        shutil.copytree(self.evidence / 'hybrid', retry / 'hybrid')
+        E.write(retry / 'hybrid/memory-admission.json', {'status': 'failed'})
+        self.make_receipt_at(retry / 'hybrid', 'hybrid', 'failure')
+        output = self.root / 'reconcile-output'
+        with patch.dict(os.environ, GITHUB_OUTPUT=str(output)):
+            with self.assertRaisesRegex(ValueError, 'did not produce complete'):
+                self.reconcile(previous, retry, feedback=self.root / 'unused', family_result='failure')
+        self.assertIn('state=infrastructure_exhausted', output.read_text())
+        self.assertIn('repairable=false', output.read_text())
+        self.assertFalse((self.root / 'unused').exists())
+
+    def test_foreign_receipt_never_becomes_repair_input(self):
+        self.make_receipt('dense', 'failure')
+        receipt = E.read(self.evidence / 'dense/receipt.json')
+        receipt['identity_sha256'] = 'c' * 64
+        E.write(self.evidence / 'dense/receipt.json', receipt)
+        output = self.root / 'outputs'
+        with patch.dict(os.environ, GITHUB_OUTPUT=str(output)):
+            with self.assertRaises(ValueError):
+                self.aggregate(feedback=self.root / 'feedback', family_result='failure')
+        self.assertIn('repairable=false', output.read_text())
+        self.assertIn('failure_class=contract', output.read_text())
+        self.assertFalse((self.root / 'feedback').exists())
 
     def test_missing_worker_cannot_pass(self):
         (self.evidence / 'hybrid/receipt.json').unlink()
@@ -353,8 +539,8 @@ class FamilyEvidenceTests(unittest.TestCase):
         E.restore(SimpleNamespace(package=self.package, identity=self.digest, root=checkout))
         closure = checkout / E.WORKLOAD_CLOSURE_ROOT
         stamp = closure / 'native/.mesh-llm-build-stamp'
-        candidate = closure / 'cargo/debug/skippy-server'
-        self.assertEqual(candidate.read_bytes(), b'closure:cargo/debug/skippy-server')
+        candidate = closure / 'cargo/debug/skippy'
+        self.assertEqual(candidate.read_bytes(), b'closure:cargo/debug/skippy')
         self.assertLess(stamp.stat().st_mtime_ns, candidate.stat().st_mtime_ns,
                         'restored stamp must predate restored executables')
 
@@ -508,7 +694,7 @@ class FamilyEvidenceTests(unittest.TestCase):
 
 class WorkflowRerunContractTests(unittest.TestCase):
     def test_family_battery_writes_compact_json_lines(self):
-        battery = (ROOT / 'scripts/skippy-family-battery.sh').read_text()
+        battery = (ROOT / 'skippy/scripts/skippy-family-battery.sh').read_text()
         append = '>> "$RESULTS_JSONL"'
         writers = []
         for command in battery.split(append)[:-1]:
@@ -546,7 +732,8 @@ class WorkflowRerunContractTests(unittest.TestCase):
         self.assertFalse(fnmatch.fnmatchcase(expand(name, 2, 'b'*64), selected))
         self.assertNotIn('merge-multiple', download['with'])
         gate = next(step for step in jobs['aggregate']['steps'] if step.get('id') == 'aggregate')
-        self.assertIn('test "$FAMILY_RESULT" = success', gate['run'])
+        self.assertIn('--family-result "$FAMILY_RESULT"', gate['run'])
+        self.assertIn('--feedback "$RUNNER_TEMP/canary-family-feedback"', gate['run'])
 
     def test_failed_certification_is_retryable_after_evidence_upload(self):
         workflow = yaml.safe_load((ROOT / '.github/workflows/llama-canary-family-pass.yml').read_text())
@@ -559,75 +746,13 @@ class WorkflowRerunContractTests(unittest.TestCase):
             result = subprocess.run(['bash', '-c', steps[gate]['run']], env={**os.environ, 'OUTCOME': outcome})
             self.assertEqual(result.returncode == 0, outcome == 'success')
 
-    def test_feedback_preserves_attempt_history(self):
-        workflow = yaml.safe_load((ROOT / '.github/workflows/llama-upstream-canary.yml').read_text())
-        for name in ('repair-2', 'repair-3'):
-            inputs = workflow['jobs'][name]['with']
-            for key in ('feedback_pattern', 'feedback_build_pattern'):
-                self.assertNotIn('github.run_attempt', inputs[key])
-                self.assertIn('github.run_id', inputs[key])
-
-
-class WorkflowTerminalGateTests(unittest.TestCase):
-    def run_gate(self, *, changed=True, certify=True, repair=None, verify=None, mesh_source=""):
-        workflow = yaml.safe_load((ROOT / '.github/workflows/llama-upstream-canary.yml').read_text())
-        step = workflow['jobs']['result']['steps'][0]
-        body = step['run'].split("python3 - <<'PYCODE'\n", 1)[1].rsplit('PYCODE', 1)[0]
-        needs = {'resolve': {'result': 'success', 'outputs': {
-            'changed': str(changed).lower(), 'certify': str(certify).lower(), 'mesh_source': mesh_source}}}
-        for attempt in range(1, 4):
-            for mode, values in (('repair', repair or {}), ('verify', verify or {})):
-                outputs = values.get(attempt, {})
-                needs[f'{mode}-{attempt}'] = {'result': 'success' if outputs else 'skipped', 'outputs': outputs}
-        with tempfile.TemporaryDirectory() as directory:
-            output = Path(directory) / 'output'
-            result = subprocess.run(['python3', '-c', body], env={**os.environ,
-                                    'NEEDS_JSON': json.dumps(needs), 'GITHUB_OUTPUT': str(output)},
-                                    text=True, capture_output=True)
-            return result.returncode, output.read_text() if output.exists() else ''
-
-    def green(self, head='a'*40):
-        return {'green': 'true', 'head': head, 'package': 'candidate-package', 'identity': 'b'*64, 'branch': 'branch'}
-
-    def test_success_requires_both_passes_on_same_commit(self):
-        code, out = self.run_gate(repair={1: self.green()}, verify={1: self.green()})
-        self.assertEqual(code, 0)
-        self.assertIn('publish=true', out)
-        code, out = self.run_gate(repair={1: self.green()}, verify={1: self.green('c'*40)})
-        self.assertNotEqual(code, 0)
-        self.assertNotIn('publish=true', out)
-
-    def test_success_after_repair_uses_later_candidate(self):
-        code, out = self.run_gate(repair={1: {'head': 'a'*40}, 2: self.green('c'*40)},
-                                  verify={2: self.green('c'*40)})
-        self.assertEqual(code, 0)
-        self.assertIn('head='+'c'*40, out)
-
-    def test_missing_verification_and_exhaustion_deny_publication(self):
-        code, out = self.run_gate(repair={i: self.green() for i in range(1, 4)})
-        self.assertNotEqual(code, 0)
-        self.assertEqual(out, '')
-
-    def test_unchanged_pin_requires_families_but_never_publishes(self):
-        code, out = self.run_gate(changed=False, repair={1: self.green()})
-        self.assertEqual(code, 0)
-        self.assertEqual(out, '')
-        code, _ = self.run_gate(changed=False)
-        self.assertNotEqual(code, 0)
-
-    def test_selected_source_requires_exact_head_and_never_publishes(self):
-        code, out = self.run_gate(changed=False, mesh_source='a'*40, repair={1: self.green()})
-        self.assertEqual(code, 0)
-        self.assertEqual(out, '')
-        for changed, head in ((True, 'a'*40), (False, 'b'*40)):
-            code, out = self.run_gate(changed=changed, mesh_source='a'*40, repair={1: self.green(head)})
-            self.assertNotEqual(code, 0)
-            self.assertEqual(out, '')
-
-    def test_non_forced_unchanged_manual_is_read_only_noop(self):
-        code, out = self.run_gate(changed=False, certify=False)
-        self.assertEqual(code, 0)
-        self.assertEqual(out, '')
+    def test_family_pass_binds_cross_pass_feedback(self):
+        workflow = yaml.safe_load((ROOT / '.github/workflows/llama-canary-family-pass.yml').read_text())
+        inputs = workflow[True]['workflow_call']['inputs']
+        self.assertIn('previous_feedback', inputs)
+        text = (ROOT / '.github/workflows/llama-canary-family-pass.yml').read_text()
+        self.assertIn('CANARY_PREVIOUS_FEEDBACK', text)
+        self.assertIn('llama-family-feedback-', text)
 
 
 if __name__ == '__main__':

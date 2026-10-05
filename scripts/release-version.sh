@@ -292,34 +292,34 @@ update_gradle_project_version "$kotlin_build_file" "$version"
 versioned_files+=("$kotlin_build_file")
 
 literal_version_files=(
-    "crates/mesh-llm-native-runtime/README.md"
-    "crates/mesh-llm-sdk/README.md"
-    "crates/mesh-llm-ui/package.json"
-    "crates/mesh-llm-ui/package-lock.json"
-    "sdk/node/package.json"
-    "docs/sdk/node.md"
-    "docs/sdk/rust.md"
-    "docs/sdk/swift.md"
-    "docs/SDK.md"
-    "docs/plugins/exemplars/web-ui/Cargo.lock"
-    "sdk/swift/README.md"
-    "sdk/swift/scripts/generate-swift-bindings.sh"
-    "website/src/docs/pages/CLI.md"
-    "docs/design/NATIVE_RUNTIMES.md"
-    "sdk/kotlin/README.md"
-    "sdk/kotlin/example/example-jvm/build.gradle.kts"
-    "crates/mesh-llm-config/src/model/built_in_schema/presentation.rs"
-    "crates/mesh-llm-host-runtime/tests/fixtures/config_schema_reference.json"
-    "website/src/docs/pages/developing-plugins.md"
+    "skippy/crates/skippy-native-runtime/README.md"
+    "mesh/crates/mesh-llm-sdk/README.md"
+    "mesh/crates/mesh-llm-ui/package.json"
+    "mesh/crates/mesh-llm-ui/package-lock.json"
+    "mesh/sdk/node/package.json"
+    "mesh/sdk/python/pyproject.toml"
+    "mesh/docs/sdk/node.md"
+    "mesh/docs/sdk/rust.md"
+    "mesh/docs/sdk/swift.md"
+    "mesh/docs/SDK.md"
+    "mesh/docs/plugins/exemplars/web-ui/Cargo.lock"
+    "mesh/sdk/swift/README.md"
+    "mesh/sdk/swift/scripts/generate-swift-bindings.sh"
+    "mesh/website/src/docs/pages/CLI.md"
+    "skippy/docs/design/NATIVE_RUNTIMES.md"
+    "mesh/sdk/kotlin/README.md"
+    "mesh/sdk/kotlin/example/example-jvm/build.gradle.kts"
+    "mesh/crates/mesh-llm-config/src/model/built_in_schema/presentation.rs"
+    "mesh/crates/mesh-llm-host-runtime/tests/fixtures/config_schema_reference.json"
+    "mesh/website/src/docs/pages/developing-plugins.md"
 )
 
 for logical_file in "${literal_version_files[@]}"; do
     relative_file="$(resolve_product_path "$logical_file")"
     file="$REPO_ROOT/$relative_file"
-    # The versioned JSON sidecars are identified by their logical path, so a
-    # relocated copy keeps the dedicated JSON updater.
-    case "$logical_file" in
-        crates/mesh-llm-ui/package.json | crates/mesh-llm-ui/package-lock.json | sdk/node/package.json)
+    require_file "$file"
+    case "$relative_file" in
+        mesh/crates/mesh-llm-ui/package.json | mesh/crates/mesh-llm-ui/package-lock.json | mesh/sdk/node/package.json)
             update_json_package_version_references "$file" "$previous_version" "$version"
             ;;
         *)

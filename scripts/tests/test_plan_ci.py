@@ -267,14 +267,31 @@ class PlanCiTests(unittest.TestCase):
             plan["affected_crates"],
             ["mesh-llm-host-runtime", "mesh-llm"],
         )
-        self.assertEqual(plan["domains"], ["rust", "runtime-product"])
+        self.assertEqual(
+            plan["domains"], ["rust", "runtime-product", "platform-windows-cfg"]
+        )
         self.assertEqual(
             plan["required_slices"],
-            ["quality", "ui-artifact", "static-abi", "rust-tests", "runtime-product", "product-smoke"],
+            [
+                "quality",
+                "ui-artifact",
+                "static-abi",
+                "rust-tests",
+                "runtime-product",
+                "platform-checks",
+                "product-smoke",
+            ],
         )
         self.assertEqual(
             [row["id"] for row in plan["matrices"]["runtime_products"]],
             ["linux-cpu"],
+        )
+        # A shared host-runtime change must prove itself on Windows as well as
+        # Linux: `platform-windows-cfg` selects the `windows-unit` row, which
+        # already runs this crate as a shared owner.
+        self.assertEqual(
+            [row["id"] for row in plan["matrices"]["platform_checks"]],
+            ["windows-unit"],
         )
         self.assertEqual(
             plan["dependencies"]["runtime-product"],
@@ -286,9 +303,9 @@ class PlanCiTests(unittest.TestCase):
 
     def test_cli_surface_change_selects_inventory_validation(self) -> None:
         payload = fixture("runtime.json")
-        payload["changed_files"] = ["crates/mesh-llm-cli/src/parser/commands.rs"]
+        payload["changed_files"] = ["mesh/crates/mesh-llm-cli/src/parser/commands.rs"]
         payload["workspace_packages"] = [
-            {"name": "mesh-llm-cli", "path": "crates/mesh-llm-cli"}
+            {"name": "mesh-llm-cli", "path": "mesh/crates/mesh-llm-cli"}
         ]
         payload["affected_crates"] = ["mesh-llm-cli"]
 
@@ -302,7 +319,7 @@ class PlanCiTests(unittest.TestCase):
 
     def test_plugin_exemplar_change_sets_its_signal(self) -> None:
         payload = fixture("docs-only.json")
-        payload["changed_files"] = ["docs/plugins/exemplars/web-ui/Cargo.toml"]
+        payload["changed_files"] = ["mesh/docs/plugins/exemplars/web-ui/Cargo.toml"]
 
         plan = PLANNER.build_plan(payload, root=ROOT)
 
@@ -357,9 +374,9 @@ class PlanCiTests(unittest.TestCase):
 
     def test_log_store_selects_only_the_windows_storage_privacy_row(self) -> None:
         payload = fixture("runtime.json")
-        payload["changed_files"] = ["crates/mesh-llm-log-store/src/lib.rs"]
+        payload["changed_files"] = ["mesh/crates/mesh-llm-log-store/src/lib.rs"]
         payload["workspace_packages"] = [
-            {"name": "mesh-llm-log-store", "path": "crates/mesh-llm-log-store"}
+            {"name": "mesh-llm-log-store", "path": "mesh/crates/mesh-llm-log-store"}
         ]
         payload["affected_crates"] = ["mesh-llm-log-store"]
 

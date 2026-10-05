@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 import re
 import subprocess
+import sys
 import unittest
 
 
@@ -138,7 +139,7 @@ class CiLaneWorkflowTests(unittest.TestCase):
             "ci-website-lane.yml": 2,
             "ci-linux-lane.yml": 10,
             "ci-macos-lane.yml": 9,
-            "ci-windows-lane.yml": 6,
+            "ci-windows-lane.yml": 7,
         }
         for workflow_name, expected_calls in lane_workflows.items():
             with self.subTest(workflow=workflow_name):
@@ -163,6 +164,7 @@ class CiLaneWorkflowTests(unittest.TestCase):
             "ci-macos-product-slice.yml",
             "ci-windows-runtime-slice.yml",
             "ci-windows-product-slice.yml",
+            "ci-windows-product-smoke-slice.yml",
             "ci-platform-checks-slice.yml",
             "static-abi-artifact.yml",
             "native-sdk-artifact.yml",
@@ -178,7 +180,10 @@ class CiLaneWorkflowTests(unittest.TestCase):
                 self.assertIn("source_sha:", workflow)
                 checkout_ref = (
                     "ref: ${{ inputs.source_sha }}"
-                    if workflow_name == "ci-windows-runtime-slice.yml"
+                    if workflow_name in {
+                        "ci-windows-runtime-slice.yml",
+                        "ci-windows-product-smoke-slice.yml",
+                    }
                     else "ref: ${{ inputs.source_sha || github.sha }}"
                 )
                 self.assertIn(
@@ -218,6 +223,140 @@ class CiLaneWorkflowTests(unittest.TestCase):
             'smoke: [.matrices.smoke[] | select(.id == "metal-model-load")]',
             action,
         )
+        self.assertIn(
+            "([.matrices.runtime_products[] | select(.platform == \"windows\")] | length) > 0",
+            action,
+        )
+        self.assertIn(
+            'then [.matrices.smoke[] | select(.id == "core")]',
+            action,
+        )
+
+    def test_windows_lane_smoke_requires_a_planned_windows_runtime_product(
+        self,
+    ) -> None:
+        """A claimed Windows smoke row without a Windows product is unsatisfiable.
+
+        ``ci-windows-lane.yml`` runs ``product_smoke`` only when
+        ``runtime_product`` succeeded, and ``runtime_product`` only runs behind a
+        planned Windows runtime row. The lane projection must therefore not claim
+        the Linux ``core`` smoke row on its own: doing so marks the lane
+        ``required`` and makes ``scripts/validate-ci-lane-results.py`` expect a
+        job that can only be skipped, which fails the Windows lane and cancels
+        its sibling PR lanes.
+        """
+        action = (ROOT / ".github" / "actions" / "plan-ci" / "action.yml").read_text(
+            encoding="utf-8"
+        )
+        match = re.search(
+            r"windows_lane_plan=\$\(jq -c '(.*?)' ci-plan\.json\)", action, re.DOTALL
+        )
+        self.assertIsNotNone(match)
+        program = match.group(1)
+
+        def project(plan: dict) -> dict:
+            result = subprocess.run(
+                ["jq", "-c", program],
+                input=json.dumps(plan),
+                text=True,
+                capture_output=True,
+                check=True,
+            )
+            return json.loads(result.stdout)
+
+        def validate(lane_plan: dict, needs: dict) -> str:
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts" / "validate-ci-lane-results.py"),
+                    "--lane-plan",
+                    json.dumps(lane_plan),
+                    "--needs",
+                    json.dumps(needs),
+                ],
+                text=True,
+                capture_output=True,
+            )
+            return result.stderr
+
+        def plan(runtime_products: list, hosts: list) -> dict:
+            return {
+                "profile": "pr-ready",
+                "domains": ["rust"],
+                "required_slices": [
+                    "quality",
+                    "rust-tests",
+                    "runtime-product",
+                    "product-smoke",
+                ],
+                "signals": {"rust_changed": True},
+                "budgets": {"windows_max_parallel": 1},
+                "matrices": {
+                    "hosts": hosts,
+                    "runtime_products": runtime_products,
+                    "platform_checks": [],
+                    "smoke": [
+                        {
+                            "id": "core",
+                            "kind": "core",
+                            "platform": "linux",
+                            "runner_role": "linux-build-4",
+                        }
+                    ],
+                },
+            }
+
+        windows_cpu = {
+            "id": "windows-cpu",
+            "platform": "windows",
+            "architecture": "amd64",
+            "backend": "cpu",
+            "runner_role": "windows-build",
+        }
+        windows_host = {
+            "id": "windows-amd64-host",
+            "platform": "windows",
+            "architecture": "amd64",
+            "runner_role": "windows-build",
+        }
+        lane_jobs = (
+            "ui_artifact",
+            "hosts",
+            "native_runtimes",
+            "runtime_product",
+            "platform_checks",
+            "product_smoke",
+        )
+
+        # A Linux-only change plans the core smoke row but no Windows product, so
+        # the lane must stay a no-op instead of requiring a smoke it cannot run.
+        linux_only = project(plan([], []))
+        self.assertIs(False, linux_only["required"])
+        self.assertEqual([], linux_only["matrices"]["smoke"])
+        self.assertEqual(
+            "",
+            validate(linux_only, {name: {"result": "skipped"} for name in lane_jobs}),
+        )
+
+        # A Windows change plans the product the smoke consumes, so the lane
+        # requires the full Windows product chain and satisfies its validator.
+        windows_only = project(plan([windows_cpu], [windows_host]))
+        self.assertIs(True, windows_only["required"])
+        self.assertEqual(
+            ["core"], [row["id"] for row in windows_only["matrices"]["smoke"]]
+        )
+        self.assertEqual(
+            "",
+            validate(
+                windows_only,
+                {
+                    name: {
+                        "result": "skipped" if name == "platform_checks" else "success"
+                    }
+                    for name in lane_jobs
+                },
+            ),
+        )
 
     def test_pr_planner_uses_only_immutable_source_manifests(self) -> None:
         action = (ROOT / ".github/actions/plan-ci/action.yml").read_text(
@@ -244,6 +383,31 @@ class CiLaneWorkflowTests(unittest.TestCase):
         )
         self.assertNotIn("git checkout", action)
         self.assertNotIn('git archive --format=tar "$SOURCE_SHA" -- .', action)
+
+    def test_planner_keeps_large_change_lists_out_of_process_arguments(self) -> None:
+        action = (ROOT / ".github/actions/plan-ci/action.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("jq -Rsc", action)
+        self.assertIn("/tmp/changed_files.txt > \"$changed_files_json_file\"", action)
+        self.assertIn('--slurpfile changed_files "$changed_files_json_file"', action)
+        self.assertNotIn("CHANGED_FILES: ${{ inputs.changed_files }}", action)
+        self.assertNotIn('--argjson changed_files "$changed_files_json"', action)
+        for workflow in (ROOT / ".github/workflows").glob("*.yml"):
+            source = workflow.read_text(encoding="utf-8")
+            if "uses: ./.github/actions/plan-ci" in source:
+                self.assertIn("id: change_limit", source, workflow.name)
+                self.assertIn("wc -c < /tmp/changed_files.txt", source, workflow.name)
+                self.assertIn(
+                    "changed_files: ${{ steps.change_limit.outputs.force_all",
+                    source,
+                    workflow.name,
+                )
+                self.assertNotIn(
+                    "changed_files: ${{ steps.changes.outputs.changed_files }}",
+                    source,
+                    workflow.name,
+                )
 
     def test_topic_lane_projections_are_valid_jq(self) -> None:
         action = (ROOT / ".github/actions/plan-ci/action.yml").read_text(
@@ -320,6 +484,9 @@ class CiLaneWorkflowTests(unittest.TestCase):
             "ci-macos-product-smoke-slice.yml": (
                 "metal-model-load",
             ),
+            "ci-windows-product-smoke-slice.yml": (
+                "core",
+            ),
         }
         for workflow_name, smoke_ids in smoke_workflows.items():
             workflow = self.workflow(workflow_name)
@@ -330,6 +497,74 @@ class CiLaneWorkflowTests(unittest.TestCase):
                         workflow,
                     )
             self.assertNotIn("contains(inputs.smoke_matrix,", workflow)
+
+    def test_laya_smoke_covers_each_hardware_backed_platform_lane(self) -> None:
+        linux = self.workflow("ci-linux-product-smoke-slice.yml")
+        for runtime_id, device in (
+            ("linux-cpu", "CPU"),
+            ("linux-cuda", "CUDA0"),
+            ("linux-rocm", "ROCm0"),
+            ("linux-vulkan", "Vulkan0"),
+        ):
+            with self.subTest(runtime_id=runtime_id):
+                self.assertIn(runtime_id, linux)
+                self.assertIn(f"device: {device}", linux)
+        self.assertIn("MESH_ROCM_INFERENCE_RUNNER_ENABLED", linux)
+        # The hardware-runner gates must be case-sensitive. A plain
+        # `vars.X == 'true'` expression ignores case, so `TRUE`/`True` would
+        # schedule a GPU row on a runner that is not certified for that
+        # backend. The raw values are validated in the shell and both rows
+        # depend on the normalized result instead.
+        self.assertNotIn("vars.MESH_VULKAN_INFERENCE_RUNNER_ENABLED == 'true'", linux)
+        self.assertNotIn("vars.MESH_ROCM_INFERENCE_RUNNER_ENABLED == 'true'", linux)
+        self.assertIn("  gpu_runner_gate:", linux)
+        self.assertIn('if [[ "$value" == "true" ]]; then', linux)
+        self.assertIn("needs: [gpu_runner_gate]", linux)
+        self.assertIn("needs.gpu_runner_gate.outputs.vulkan_enabled == 'true'", linux)
+        self.assertIn("needs.gpu_runner_gate.outputs.rocm_enabled == 'true'", linux)
+        self.assertIn(
+            "enable_vulkan_inference: ${{ needs.gpu_runner_gate.outputs.vulkan_enabled }}",
+            linux,
+        )
+        gate_job = linux.split("\n  gpu_runner_gate:", 1)[1].split(
+            "\n  laya_vulkan:", 1
+        )[0]
+        self.assertIn(
+            "MESH_VULKAN_INFERENCE_RUNNER_ENABLED: ${{ vars.MESH_VULKAN_INFERENCE_RUNNER_ENABLED }}",
+            gate_job,
+        )
+        self.assertIn(
+            "MESH_ROCM_INFERENCE_RUNNER_ENABLED: ${{ vars.MESH_ROCM_INFERENCE_RUNNER_ENABLED }}",
+            gate_job,
+        )
+        self.assertIn("gpu-amd", linux)
+        self.assertIn("gpu-nvidia", linux)
+        vulkan_job = linux.split("\n  laya_vulkan:", 1)[1].split(
+            "\n  laya_rocm:", 1
+        )[0]
+        self.assertIn("MESH_LLM_VULKAN_AVAILABLE: '1'", vulkan_job)
+
+        laya_action = (ROOT / ".github/actions/run-laya-product-smoke/action.yml").read_text()
+        self.assertEqual(
+            laya_action.count(
+                "inputs.device != 'Vulkan0' || inputs.enable_vulkan_inference == 'true'"
+            ),
+            2,
+        )
+        self.assertIn("Report uncertified Vulkan smoke skip", laya_action)
+
+        macos = self.workflow("ci-macos-product-smoke-slice.yml")
+        self.assertIn("macos-metal", macos)
+        self.assertIn("device: MTL0", macos)
+
+        windows = self.workflow("ci-windows-product-smoke-slice.yml")
+        self.assertIn("windows-cpu", windows)
+        self.assertIn("device: CPU", windows)
+        self.assertIn("uses: ./.github/actions/run-laya-product-smoke", windows)
+
+        windows_lane = self.workflow("ci-windows-lane.yml")
+        self.assertIn("uses: ./.github/workflows/ci-windows-product-smoke-slice.yml", windows_lane)
+        self.assertIn("product_smoke", windows_lane)
 
     def test_every_planned_smoke_id_matches_a_product_smoke_job(self) -> None:
         """Prevent planner rows from silently skipping their smoke jobs.

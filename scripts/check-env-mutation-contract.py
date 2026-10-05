@@ -31,67 +31,69 @@ TODO = "// TODO: Audit that the environment access only happens in single-thread
 # introduced to audit. These files receive the strict serial-test/deferred-site
 # checks below.
 AUDITED_FILES = (
-    "crates/skippy-protocol/build.rs",
-    "crates/mesh-llm-plugin/build.rs",
-    "crates/mesh-llm-config/src/env_overrides.rs",
-    "crates/mesh-llm-host-runtime/src/plugin/config/tests.rs",
-    "crates/mesh-llm-host-runtime/src/capture.rs",
-    "crates/mesh-llm-host-runtime/src/mesh/identity_persistence.rs",
-    "crates/mesh-llm-host-runtime/src/mesh/public_identity_tests.rs",
-    "crates/mesh-llm-host-runtime/src/network/nostr/keys.rs",
-    "crates/mesh-llm-host-runtime/src/runtime/instance.rs",
-    "crates/mesh-llm-host-runtime/src/models/maintenance.rs",
-    "crates/mesh-llm-host-runtime/src/models/remote_catalog.rs",
-    "crates/mesh-llm-host-runtime/src/models/artifact_transfer.rs",
-    "crates/mesh-llm-host-runtime/src/models/delete_tests.rs",
-    "crates/mesh-llm-host-runtime/src/inference/skippy/materialization.rs",
-    "crates/mesh-llm-host-runtime/src/inference/skippy/metal_pipeline_cache.rs",
-    "crates/mesh-llm-host-runtime/src/inference/skippy/materialization/package_download.rs",
-    "crates/mesh-llm-host-runtime/src/inference/skippy/materialization/cache_management.rs",
-    "crates/model-hf/src/store/local.rs",
-    "crates/mesh-llm-system/src/autoupdate.rs",
-    "crates/mesh-llm-system/src/autoupdate/release_fetch.rs",
-    "crates/mesh-llm-system/src/benchmark/tests.rs",
-    "crates/skippy-runtime/src/logging.rs",
-    "crates/mesh-llm-host-runtime/src/runtime/run_auto.rs",
+    "mesh/crates/mesh-llm-host-runtime/tests/membership_test_home_isolation.rs",
+    "skippy/crates/skippy-protocol/build.rs",
+    "mesh/crates/mesh-llm-plugin/build.rs",
+    "mesh/crates/mesh-llm-config/src/env_overrides.rs",
+    "mesh/crates/mesh-llm-host-runtime/src/plugin/config/tests.rs",
+    "mesh/crates/mesh-llm-host-runtime/src/capture.rs",
+    "mesh/crates/mesh-llm-membership/src/identity_persistence.rs",
+    "mesh/crates/mesh-llm-host-runtime/src/mesh/public_identity_tests.rs",
+    "mesh/crates/mesh-llm-host-runtime/src/network/nostr/keys.rs",
+    "mesh/crates/mesh-llm-host-runtime/src/runtime/instance.rs",
+    "mesh/crates/mesh-llm-host-runtime/src/models/maintenance.rs",
+    "mesh/crates/mesh-llm-host-runtime/src/models/remote_catalog.rs",
+    "mesh/crates/mesh-llm-host-runtime/src/models/artifact_transfer.rs",
+    "mesh/crates/mesh-llm-host-runtime/src/models/delete_tests.rs",
+    "mesh/crates/mesh-llm-host-runtime/src/inference/skippy/materialization.rs",
+    "mesh/crates/mesh-llm-host-runtime/src/inference/skippy/metal_pipeline_cache.rs",
+    "mesh/crates/mesh-llm-host-runtime/src/inference/skippy/materialization/package_download.rs",
+    "mesh/crates/mesh-llm-host-runtime/src/inference/skippy/materialization/cache_management.rs",
+    "skippy/crates/skippy-model-hf/src/store/local.rs",
+    "mesh/crates/mesh-llm-system/src/autoupdate.rs",
+    "mesh/crates/mesh-llm-system/src/autoupdate/release_fetch.rs",
+    "mesh/crates/mesh-llm-system/src/benchmark/tests.rs",
+    "skippy/crates/skippy-runtime/src/logging.rs",
+    "mesh/crates/mesh-llm-host-runtime/src/runtime/run_auto.rs",
 )
 
 # Other process-environment mutations predate the 128-TODO audit. They are
 # frozen by exact file/count so this checker cannot overstate their safety, and
 # so a new call (or a new mutation-bearing file) requires explicit review.
 KNOWN_UNAUDITED_MUTATION_COUNTS = {
-    "crates/mesh-llm-host-runtime/src/api/routes/plugins.rs": 3,
-    "crates/mesh-llm-host-runtime/src/api/tests/apply_config_diagnostics.rs": 6,
-    "crates/mesh-llm-host-runtime/src/api/tests/mod.rs": 6,
-    "crates/mesh-llm-host-runtime/src/api/tests/runtime_config_validation_authority.rs": 3,
-    "crates/mesh-llm-host-runtime/src/mesh/tests/admission/requirements.rs": 6,
-    "crates/mesh-llm-host-runtime/src/mesh/tests/owner_control.rs": 5,
-    "crates/mesh-llm-host-runtime/src/models/inventory.rs": 13,
-    "crates/mesh-llm-host-runtime/src/models/resolve/tests.rs": 4,
-    "crates/mesh-llm-host-runtime/src/network/nostr/auto.rs": 6,
-    "crates/mesh-llm-host-runtime/src/runtime/config_state_tests/support.rs": 3,
-    "crates/mesh-llm-host-runtime/src/runtime/tests/auto_join.rs": 1,
-    "crates/mesh-llm-host-runtime/src/runtime/tests/mod.rs": 2,
-    "crates/mesh-llm-host-runtime/src/runtime/tests/startup_models.rs": 2,
-    "crates/mesh-llm-runtime-install/src/lib.rs": 16,
-    "crates/mesh-llm/src/commands/plugin_cli.rs": 3,
-    "crates/model-hf/src/cache_paths.rs": 2,
+    "mesh/crates/mesh-llm-host-runtime/src/api/routes/plugins.rs": 3,
+    "mesh/crates/mesh-llm-host-runtime/src/api/tests/apply_config_diagnostics.rs": 6,
+    "mesh/crates/mesh-llm-host-runtime/src/api/tests/mod.rs": 6,
+    "mesh/crates/mesh-llm-host-runtime/src/api/tests/runtime_config_validation_authority.rs": 3,
+    "mesh/crates/mesh-llm-host-runtime/src/mesh/tests/admission/requirements.rs": 6,
+    "mesh/crates/mesh-llm-host-runtime/src/mesh/tests/owner_control.rs": 5,
+    "mesh/crates/mesh-llm-host-runtime/src/models/inventory.rs": 13,
+    "mesh/crates/mesh-llm-host-runtime/src/models/resolve/tests.rs": 4,
+    "mesh/crates/mesh-llm-host-runtime/src/network/nostr/auto.rs": 6,
+    "mesh/crates/mesh-llm-host-runtime/src/runtime/config_state_tests/support.rs": 3,
+    "mesh/crates/mesh-llm-host-runtime/src/runtime/tests/auto_join.rs": 1,
+    "mesh/crates/mesh-llm-host-runtime/src/runtime/tests/mod.rs": 2,
+    "mesh/crates/mesh-llm-host-runtime/src/runtime/tests/startup_models.rs": 2,
+    "skippy/crates/skippy-runtime-install/src/lib.rs": 16,
+    "mesh/crates/mesh-llm/src/commands/plugin_cli.rs": 3,
+    "skippy/crates/skippy-model-hf/src/cache_paths.rs": 2,
+    "skippy/crates/skippy-model-hf/src/remote_catalog/tests.rs": 6,
 }
 
 # These are the only intentionally unresolved sites.  They execute on runtime
 # startup / native-runtime setup paths that may already have Tokio worker
 # threads, so replacing the TODO with a guessed SAFETY claim would be unsafe.
 DEFERRED_FILES = {
-    "crates/skippy-runtime/src/logging.rs",
-    "crates/mesh-llm-host-runtime/src/inference/skippy/materialization.rs",
-    "crates/mesh-llm-host-runtime/src/runtime/run_auto.rs",
+    "skippy/crates/skippy-runtime/src/logging.rs",
+    "mesh/crates/mesh-llm-host-runtime/src/inference/skippy/materialization.rs",
+    "mesh/crates/mesh-llm-host-runtime/src/runtime/run_auto.rs",
 }
 
 # Production mutations whose callers establish a real synchronous bootstrap
 # boundary. These are neither tests nor deferred assertions: the exact owning
 # function and the shipped binary's call order are part of the contract.
 SYNCHRONOUS_BOOTSTRAP_FILES = {
-    "crates/mesh-llm-host-runtime/src/inference/skippy/metal_pipeline_cache.rs":
+    "mesh/crates/mesh-llm-host-runtime/src/inference/skippy/metal_pipeline_cache.rs":
         "configure_metal_pipeline_cache",
 }
 
@@ -103,34 +105,35 @@ SERIAL_ATTR_RE = re.compile(r"^\s*#\[(?:serial|serial_test::serial)\]\s*$")
 # verified as serial tests. Listing the helpers prevents a production function
 # from passing merely because a nearby comment contains the text `#[serial]`.
 SERIAL_TEST_HELPERS = {
-    "crates/mesh-llm-config/src/env_overrides.rs": {
+    "mesh/crates/mesh-llm-host-runtime/tests/membership_test_home_isolation.rs": {"install", "drop"},
+    "mesh/crates/mesh-llm-config/src/env_overrides.rs": {
         "drop",
         "set",
         "with_env_override_for_test",
     },
-    "crates/mesh-llm-host-runtime/src/capture.rs": {"drop"},
-    "crates/mesh-llm-host-runtime/src/mesh/identity_persistence.rs": {"drop", "set"},
-    "crates/mesh-llm-host-runtime/src/mesh/public_identity_tests.rs": {"drop", "set_home"},
-    "crates/mesh-llm-host-runtime/src/network/nostr/keys.rs": {"drop", "set"},
-    "crates/mesh-llm-host-runtime/src/inference/skippy/materialization/cache_management.rs": {
+    "mesh/crates/mesh-llm-host-runtime/src/capture.rs": {"drop"},
+    "mesh/crates/mesh-llm-membership/src/identity_persistence.rs": {"drop", "set"},
+    "mesh/crates/mesh-llm-host-runtime/src/mesh/public_identity_tests.rs": {"drop", "set_home"},
+    "mesh/crates/mesh-llm-host-runtime/src/network/nostr/keys.rs": {"drop", "set"},
+    "mesh/crates/mesh-llm-host-runtime/src/inference/skippy/materialization/cache_management.rs": {
         "restore_env"
     },
-    "crates/mesh-llm-host-runtime/src/inference/skippy/materialization/package_download.rs": {
+    "mesh/crates/mesh-llm-host-runtime/src/inference/skippy/materialization/package_download.rs": {
         "restore_env"
     },
-    "crates/mesh-llm-host-runtime/src/models/artifact_transfer.rs": {"restore_env"},
-    "crates/mesh-llm-host-runtime/src/models/delete_tests.rs": {"restore_env"},
-    "crates/mesh-llm-host-runtime/src/models/maintenance.rs": {"restore_env"},
-    "crates/mesh-llm-host-runtime/src/runtime/instance.rs": {
+    "mesh/crates/mesh-llm-host-runtime/src/models/artifact_transfer.rs": {"restore_env"},
+    "mesh/crates/mesh-llm-host-runtime/src/models/delete_tests.rs": {"restore_env"},
+    "mesh/crates/mesh-llm-host-runtime/src/models/maintenance.rs": {"restore_env"},
+    "mesh/crates/mesh-llm-host-runtime/src/runtime/instance.rs": {
         "drop",
         "save_and_remove",
         "save_and_set",
     },
-    "crates/mesh-llm-system/src/benchmark/tests.rs": {
+    "mesh/crates/mesh-llm-system/src/benchmark/tests.rs": {
         "drop",
         "with_benchmark_child_override",
     },
-    "crates/model-hf/src/store/local.rs": {"restore_env"},
+    "skippy/crates/skippy-model-hf/src/store/local.rs": {"restore_env"},
 }
 
 
@@ -278,19 +281,19 @@ def check_file(root: Path, relative_path: str) -> list[str]:
 
 
 def check_synchronous_bootstrap_order(root: Path) -> list[str]:
-    main_path = root / "crates/mesh-llm/src/main.rs"
+    main_path = root / "mesh/crates/mesh-llm/src/main.rs"
     if not main_path.is_file():
-        return ["crates/mesh-llm/src/main.rs: bootstrap caller is missing"]
+        return ["mesh/crates/mesh-llm/src/main.rs: bootstrap caller is missing"]
     text = main_path.read_text(encoding="utf-8")
     start = text.find("fn main()")
     mutation = text.find("configure_metal_pipeline_cache();", start)
     thread_start = text.find("run_on_application_thread(", start)
     runtime_build = text.find("tokio::runtime::Builder::new_multi_thread()", start)
     if min(start, mutation, thread_start, runtime_build) < 0:
-        return ["crates/mesh-llm/src/main.rs: synchronous Metal bootstrap markers are missing"]
+        return ["mesh/crates/mesh-llm/src/main.rs: synchronous Metal bootstrap markers are missing"]
     if not (start < mutation < thread_start < runtime_build):
         return [
-            "crates/mesh-llm/src/main.rs: Metal cache environment mutation must run "
+            "mesh/crates/mesh-llm/src/main.rs: Metal cache environment mutation must run "
             "before application-thread and Tokio runtime construction"
         ]
     return []

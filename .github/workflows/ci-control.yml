@@ -86,6 +86,13 @@ jobs:
           event_name: ${{ steps.resolve.outputs.original_event_name }}
           base_sha: ${{ steps.resolve.outputs.base_sha }}
           head_sha: ${{ steps.resolve.outputs.source_sha }}
+      - name: Bound planner change input
+        if: ${{ steps.resolve.outputs.should_dispatch == 'true' }}
+        id: change_limit
+        run: |
+          if (( $(wc -c < /tmp/changed_files.txt) > 65536 )); then
+            echo "force_all=true" >> "$GITHUB_OUTPUT"
+          fi
       - name: Build one versioned provider-neutral plan
         if: ${{ steps.resolve.outputs.should_dispatch == 'true' }}
         id: plan
@@ -95,7 +102,7 @@ jobs:
           source_sha: ${{ steps.resolve.outputs.source_sha }}
           base_sha: ${{ steps.resolve.outputs.base_sha }}
           draft: ${{ steps.resolve.outputs.draft }}
-          changed_files: ${{ steps.changes.outputs.changed_files }}
+          changed_files: ${{ steps.change_limit.outputs.force_all == 'true' && '__force_all__' || steps.changes.outputs.changed_files }}
           affected_crates: ${{ steps.changes.outputs.affected_crates }}
       - name: Render selected CI workflows
         if: ${{ steps.resolve.outputs.should_dispatch == 'true' }}

@@ -8,14 +8,14 @@ metadata:
 # llama-stage-patch-changes
 
 Use this skill when changing the Skippy staged-runtime ABI carried in
-`third_party/llama.cpp/patches`.
+`skippy/llama_cpp/patches`.
 
 ## Boundaries
 
 - Keep durable llama.cpp-side changes in the ordered queue under
-  `third_party/llama.cpp/patches`: top-level core patches first,
+  `skippy/llama_cpp/patches`: top-level core patches first,
   `model_support/series` second, and `generated/series` last.
-- Keep the upstream pin in `third_party/llama.cpp/upstream.txt`.
+- Keep the upstream pin in `skippy/llama_cpp/upstream.txt`.
 - Do not edit `.deps/llama.cpp` as the final artifact; regenerate the
   patch queue from commits.
 - Keep mesh orchestration, protocol compatibility, lifecycle, model management,
@@ -79,7 +79,7 @@ Use this skill when changing the Skippy staged-runtime ABI carried in
   python3 scripts/generate-skippy-api-doc.py --check
   ```
 
-- Commit `website/src/docs/pages/skippy-api.md` alongside the native queue
+- Commit `mesh/website/src/docs/pages/skippy-api.md` alongside the native queue
   change. The generated page must not be hand-edited, and its inventory must
   include every public header and exported function in the prepared checkout.
 
@@ -114,7 +114,7 @@ the symbol name is unchanged. List removed declarations explicitly as
 “none” when no functions or fields were deleted; this prevents reviewers from
 having to infer removals from a patch diff. Keep this inventory synchronized
 with the ABI version constants in `include/skippy/common.h` and the mirrors in
-`crates/skippy-ffi/src/lib.rs`. Do not add compatibility shims solely to
+`skippy/crates/skippy-ffi/src/lib.rs`. Do not add compatibility shims solely to
 support an older native runtime; the acceptance criterion is a synchronized
 Rust/native build and a clear version mismatch if the pieces are mixed.
 
@@ -138,13 +138,13 @@ the patch after `model_support/` or generated shards:
 ```bash
 repo_root="$(pwd)"
 llama_checkout="${LLAMA_CHECKOUT:-$repo_root/.deps/llama.cpp}"
-last_patch="$(find third_party/llama.cpp/patches -maxdepth 1 -type f -name '*.patch' | sort | tail -n 1)"
+last_patch="$(find skippy/llama_cpp/patches -maxdepth 1 -type f -name '*.patch' | sort | tail -n 1)"
 last_number="${last_patch##*/}"
 last_number="${last_number%%-*}"
 next_number=$((10#$last_number + 1))
 git -C "$llama_checkout" format-patch -1 \
   --start-number "$next_number" \
-  --output-directory "$repo_root/third_party/llama.cpp/patches" HEAD
+  --output-directory "$repo_root/skippy/llama_cpp/patches" HEAD
 ```
 
 For a deliberate queue-boundary or source-layout change, rebuild the affected
@@ -163,7 +163,7 @@ git log --reverse --oneline <pinned-upstream>..<reconstructed-series-head>
 ```
 
 Move the old queue to an explicit temporary backup, generate the replacement
-into a fresh `third_party/llama.cpp/patches` directory, and retain the backup
+into a fresh `skippy/llama_cpp/patches` directory, and retain the backup
 until clean application and native compilation pass. Never keep both series or
 duplicate patch numbers in the durable directory.
 
@@ -184,7 +184,7 @@ LLAMA_WORKDIR="$tmp_root/llama.cpp" \
 
 ### Re-pinning upstream
 
-Advancing `third_party/llama.cpp/upstream.txt` can silently invalidate a patch
+Advancing `skippy/llama_cpp/upstream.txt` can silently invalidate a patch
 that depends on upstream's *ordering*, not just its symbols. The queue still
 applies, everything compiles, and the behavior is broken. This happened with
 upstream `1269cb1`, which moved `check_tensor_dims` ahead of `buft_for_tensor`
@@ -196,7 +196,7 @@ So on every re-pin, in addition to the checks above:
 - Read `git log <old-pin>..<new-pin> -- src/llama-model-loader.* src/llama-model.*`
   for changes to load order, not just to signatures the patches touch.
 - Prove the staged load path with a real artifact whose first block is not
-  block 0. `cargo test -p skippy-model-package` covers this via
+  block 0. `cargo test -p skippy-package-builder` covers this via
   `mid_stage_artifact_opens_with_the_stage_filter_applied`.
 - Confirm that test actually ran rather than skipped. It is gated on
   `SKIPPY_CORRECTNESS_MODEL`; without it the test prints
@@ -214,7 +214,7 @@ For Rust fallout, run cargo commands serially:
 cargo fmt --all --check
 cargo check -p mesh-llm
 cargo test -p skippy-runtime --lib
-cargo test -p skippy-server --lib
+cargo test -p skippy-serving --lib
 cargo test -p mesh-llm --lib
 ```
 

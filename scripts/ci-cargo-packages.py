@@ -33,7 +33,7 @@ SUCCESSORS = {
     'model-package': ['skippy-model-package'],
     'model-ref': ['skippy-model-ref'],
     'model-resolver': ['skippy-model-resolver'],
-    'openai-frontend': ['skippy-openai-frontend'],
+    'openai-frontend': ['skippy-inference-api'],
     'skippy-model-package': ['skippy-package-builder'],
     'skippy-server': [
         'skippy-serving', 'skippy-api', 'skippy-cli', 'skippy-commands',
@@ -67,7 +67,14 @@ def resolve(requested: list[str], planned: list[str], available: set[str], gener
     result = []
     for name in requested:
         if migrating and name in SUCCESSORS:
-            candidates = SUCCESSORS[name]
+            # The frontend was renamed again during the standalone split.
+            # Preserve the earlier extraction fixture while resolving the
+            # current candidate's owner when that crate is present.
+            candidates = (
+                ['skippy-inference-api']
+                if name == 'openai-frontend' and 'skippy-inference-api' in available
+                else SUCCESSORS[name]
+            )
             missing = sorted(set(candidates) - available)
             if missing:
                 raise ValueError(f'planned package {name!r} has missing source owners: {missing}')

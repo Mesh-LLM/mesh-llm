@@ -114,9 +114,9 @@ class CiRunnerSelectionAndCachePolicyTests(RunnerSelectorMixin, unittest.TestCas
                 if "pr_approved_ref:" in block:
                     approved_policy_calls += 1
                     self.assertIn("pr_approved_sha:", block)
-        self.assertEqual(selector_calls, 19)
-        # The release workflow selects a runner for a non-PR ref and does not
-        # pass the pull-request approval inputs.
+        self.assertEqual(selector_calls, 20)
+        # The release selector and hosted CPU runtime selector do not pass
+        # the deprecated pull-request approval inputs.
         self.assertEqual(approved_policy_calls, 18)
 
         cases = (
@@ -387,6 +387,17 @@ class CiRunnerSelectionAndCachePolicyTests(RunnerSelectorMixin, unittest.TestCas
             runner_contract_change["allow_native_github_cache"],
             "true",
         )
+
+        hosted_main_runtime = self.run_runner_selector(
+            event_name="push",
+            ref="refs/heads/main",
+            main_enabled="true",
+            manual_enabled="false",
+            force_hosted="true",
+        )
+        self.assertEqual(hosted_main_runtime["depot_enabled"], "false")
+        self.assertEqual(hosted_main_runtime["runner_16"], "ubuntu-24.04")
+        self.assertEqual(hosted_main_runtime["allow_native_github_cache"], "true")
 
         non_merge_ref = self.run_runner_selector(
             event_name="pull_request",
@@ -870,6 +881,16 @@ class CiRunnerSelectionAndCachePolicyTests(RunnerSelectorMixin, unittest.TestCas
             workflow = (
                 ROOT / ".github" / "workflows" / filename
             ).read_text(encoding="utf-8")
+            if filename == "ci-linux-runtime-slice.yml":
+                self.assertIn(
+                    "allow_depot_remote_cache: ${{ matrix.runtime.backend != 'cpu' && needs.runner_policy.outputs.allow_depot_remote_cache }}",
+                    workflow,
+                )
+                self.assertIn(
+                    "allow_native_github_cache: ${{ matrix.runtime.backend == 'cpu' && needs.runner_policy.outputs.allow_native_github_cache_cpu || needs.runner_policy.outputs.allow_native_github_cache }}",
+                    workflow,
+                )
+                continue
             self.assertIn(
                 "allow_depot_remote_cache: ${{ needs.runner_policy.outputs.allow_depot_remote_cache }}",
                 workflow,

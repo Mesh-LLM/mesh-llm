@@ -15,7 +15,7 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 FAMILY_MANIFEST = Path("ci/llama-canary/family-certified.json")
-PARITY_MANIFEST = Path("docs/skippy/llama-parity-candidates.json")
+PARITY_MANIFEST = Path("skippy/docs/llama-parity-candidates.json")
 RUNNABLE_NEW_STATUSES = {"candidate", "candidate_stateful", "candidate_multimodal"}
 NONRUNNABLE_NEW_STATUSES = {
     "implementation_base",

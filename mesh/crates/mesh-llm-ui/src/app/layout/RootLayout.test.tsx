@@ -1,0 +1,448 @@
+import { render, screen, waitFor } from '@testing-library/react'
+import { QueryClient } from '@tanstack/react-query'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { AppProviders } from '@/app/providers/AppProviders'
+import { RootLayout } from '@/app/layout/RootLayout'
+import type { PluginSummaryRaw, PluginWebUiStateRaw } from '@/lib/api/plugin-types'
+import { pluginKeys } from '@/lib/query/query-keys'
+
+const routerState = vi.hoisted(() => ({ pathname: '/' }))
+const navigateSpy = vi.hoisted(() => vi.fn())
+const useStatusStreamSpy = vi.hoisted(() => vi.fn())
+const useStatusQuerySpy = vi.hoisted(() => vi.fn())
+const topNavSpy = vi.hoisted(() => vi.fn())
+const footerSpy = vi.hoisted(() => vi.fn())
+const EventSourceStub = vi.hoisted(() => vi.fn())
+
+vi.mock('@tanstack/react-router', () => ({
+  HeadContent: () => null,
+  Outlet: () => <div>Route outlet</div>,
+  useRouter: () => ({ navigate: navigateSpy }),
+  useRouterState: ({ select }: { select: (state: { location: { pathname: string } }) => string }) =>
+    select({ location: { pathname: routerState.pathname } })
+}))
+
+vi.mock('@/features/network/api/use-status-stream', () => ({
+  useStatusStream: useStatusStreamSpy
+}))
+
+vi.mock('@/features/network/api/use-status-query', () => ({
+  useStatusQuery: useStatusQuerySpy
+}))
+
+vi.mock('@/features/shell/components/TopNav', () => ({
+  TopNav: (props: unknown) => {
+    topNavSpy(props)
+    return <div>Top nav</div>
+  }
+}))
+
+vi.mock('@/features/shell/components/PreferencesPanel', () => ({
+  PreferencesPanel: () => null
+}))
+
+vi.mock('@/features/shell/components/Footer', () => ({
+  Footer: (props: unknown) => {
+    footerSpy(props)
+    return <div>Footer</div>
+  }
+}))
+
+vi.mock('@/features/shell/hooks/useUiPreferences', () => ({
+  useUIPreferences: () => ({
+    theme: 'dark',
+    accent: 'blue',
+    density: 'comfortable',
+    panelStyle: 'solid',
+    setTheme: vi.fn(),
+    setAccent: vi.fn(),
+    setDensity: vi.fn(),
+    setPanelStyle: vi.fn()
+  })
+}))
+
+const featureFlagState = vi.hoisted(() => ({ logsPage: true }))
+
+vi.mock('@/lib/feature-flags', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/feature-flags')>()
+
+  return {
+    ...actual,
+    useBooleanFeatureFlag: (path: string) => (path === 'global/logsPage' ? featureFlagState.logsPage : true)
+  }
+})
+
+function renderRootLayout(initialDataMode: 'harness' | 'live', queryClient?: QueryClient) {
+  render(
+    <AppProviders initialDataMode={initialDataMode} persistDataMode={false} queryClient={queryClient}>
+      <RootLayout />
+    </AppProviders>
+  )
+}
+
+describe('RootLayout', () => {
+  beforeEach(() => {
+    routerState.pathname = '/'
+    navigateSpy.mockReset()
+    useStatusStreamSpy.mockReset()
+    useStatusQuerySpy.mockReset()
+    topNavSpy.mockReset()
+    footerSpy.mockReset()
+    useStatusQuerySpy.mockReturnValue({ data: undefined })
+    vi.stubGlobal('EventSource', EventSourceStub)
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => jsonResponse([]))
+    )
+  })
+
+  it('does not start the live status stream in harness mode', () => {
+    renderRootLayout('harness')
+
+    expect(screen.getByText('Top nav')).toBeInTheDocument()
+    expect(useStatusStreamSpy).toHaveBeenCalledWith({ enabled: false })
+  })
+
+  it('starts the shared live status stream in live mode', () => {
+    renderRootLayout('live', new QueryClient())
+
+    expect(useStatusStreamSpy).toHaveBeenCalledWith({ enabled: true })
+  })
+
+  it('keeps the app shell width stable by reserving the gutter on its scroll container', () => {
+    renderRootLayout('harness')
+
+    expect(document.querySelector('main')).toHaveClass('overflow-y-auto', '[scrollbar-gutter:stable]')
+  })
+
+  it('selects the Logs tab for the logs route', () => {
+    routerState.pathname = '/logs'
+    featureFlagState.logsPage = true
+
+    renderRootLayout('harness')
+
+    expect(topNavSpy.mock.calls.at(-1)?.[0]).toEqual(
+      expect.objectContaining({ tab: 'logs', tabHrefs: expect.objectContaining({ logs: '/logs' }) })
+    )
+  })
+
+  it('hides the Logs tab when the logs feature flag is disabled', () => {
+    routerState.pathname = '/logs'
+    featureFlagState.logsPage = false
+
+    renderRootLayout('harness')
+
+    expect(topNavSpy.mock.calls.at(-1)?.[0]).toEqual(
+      expect.objectContaining({ tab: null, enabledTabs: expect.objectContaining({ logs: false }) })
+    )
+  })
+
+  describe.each([
+    ['is_client: true', { is_client: true, node_state: 'serving' }],
+    ["node_state: 'client'", { is_client: false, node_state: 'client' }]
+  ])('on a client-only node (%s)', (_label, clientSignal) => {
+    beforeEach(() => {
+      featureFlagState.logsPage = true
+      useStatusQuerySpy.mockReturnValue({ data: liveStatus(clientSignal) })
+    })
+
+    it('disables the Logs and Configuration tabs but keeps Reserves', () => {
+      renderRootLayout('live')
+
+      expect(topNavSpy.mock.calls.at(-1)?.[0]).toEqual(
+        expect.objectContaining({
+          enabledTabs: { reserves: true, logs: false, configuration: false }
+        })
+      )
+    })
+
+    it.each(['/logs', '/configuration/general'])('shows no active tab on %s', (pathname) => {
+      routerState.pathname = pathname
+
+      renderRootLayout('live')
+
+      expect(topNavSpy.mock.calls.at(-1)?.[0]).toEqual(expect.objectContaining({ tab: null }))
+    })
+
+    it.each(['logs', 'configuration'] as const)('does not navigate when the %s tab is requested', (tab) => {
+      renderRootLayout('live')
+
+      const { onTabChange } = topNavSpy.mock.calls.at(-1)?.[0] as { onTabChange: (tab: string) => void }
+      onTabChange(tab)
+
+      expect(navigateSpy).not.toHaveBeenCalled()
+    })
+  })
+
+  it('keeps the Logs and Configuration tabs enabled on a host node', () => {
+    featureFlagState.logsPage = true
+    routerState.pathname = '/logs'
+    useStatusQuerySpy.mockReturnValue({ data: liveStatus({ is_client: false, node_state: 'serving' }) })
+
+    renderRootLayout('live')
+
+    const topNavProps = topNavSpy.mock.calls.at(-1)?.[0] as { onTabChange: (tab: string) => void }
+    expect(topNavProps).toEqual(
+      expect.objectContaining({
+        tab: 'logs',
+        enabledTabs: { reserves: true, logs: true, configuration: true }
+      })
+    )
+    topNavProps.onTabChange('logs')
+    expect(navigateSpy).toHaveBeenCalledWith({ to: '/logs' })
+  })
+
+  it('passes privacy-safe private-mesh invitation rows while keeping the configured API target', () => {
+    useStatusQuerySpy.mockReturnValue({
+      data: {
+        node_id: 'node-1',
+        node_state: 'serving',
+        model_name: 'Qwen-Test',
+        peers: [],
+        models: [],
+        my_vram_gb: 24,
+        api_port: 3131,
+        gpus: [],
+        serving_models: [],
+        hostname: 'mesh.local',
+        token: 'invite-token-123',
+        version: '0.99.0'
+      }
+    })
+
+    renderRootLayout('live')
+
+    expect(topNavSpy).toHaveBeenCalled()
+    const topNavProps = topNavSpy.mock.calls.at(-1)?.[0]
+    expect(topNavProps).toEqual(
+      expect.objectContaining({
+        apiUrl: 'http://127.0.0.1:3131/v1',
+        apiTargetLiveness: 'live',
+        version: '0.99.0',
+        joinCommands: expect.arrayContaining([
+          expect.objectContaining({
+            label: 'Invite token',
+            value: 'invite-token-123'
+          }),
+          expect.objectContaining({
+            label: 'Auto join and serve command',
+            value: 'mesh-llm --auto --join invite-token-123'
+          }),
+          expect.objectContaining({
+            label: 'Client-only join command',
+            value: 'mesh-llm client --join invite-token-123'
+          })
+        ])
+      })
+    )
+    expect(JSON.stringify(topNavProps)).toContain('invite-token-123')
+    expect(footerSpy.mock.calls.at(-1)?.[0]).toEqual(expect.objectContaining({ version: '0.99.0' }))
+  })
+
+  it('does not replace the configured API target with a public mesh node id', () => {
+    useStatusQuerySpy.mockReturnValue({
+      data: {
+        node_id: '16ce0bb4de',
+        node_state: 'client',
+        model_name: '(client)',
+        peers: [],
+        models: [],
+        my_vram_gb: 0,
+        api_port: 9337,
+        gpus: [],
+        serving_models: [],
+        my_hostname: '6834941b7eede8',
+        token: 'invite-token-123'
+      }
+    })
+
+    renderRootLayout('live')
+
+    expect(topNavSpy.mock.calls.at(-1)?.[0]).toEqual(
+      expect.objectContaining({
+        apiUrl: 'http://127.0.0.1:9337/v1',
+        apiTargetLiveness: 'live'
+      })
+    )
+  })
+
+  it('keeps private-mesh invitation status safe when live status has no token', () => {
+    useStatusQuerySpy.mockReturnValue({
+      data: {
+        node_id: 'node-1',
+        node_state: 'serving',
+        model_name: 'Qwen-Test',
+        peers: [],
+        models: [],
+        my_vram_gb: 24,
+        api_port: 3131,
+        gpus: [],
+        serving_models: [],
+        hostname: 'mesh.local'
+      }
+    })
+
+    renderRootLayout('live')
+
+    expect(topNavSpy.mock.calls.at(-1)?.[0]).toEqual(
+      expect.objectContaining({
+        apiUrl: 'http://127.0.0.1:3131/v1',
+        apiTargetLiveness: 'live',
+        joinCommands: expect.arrayContaining([
+          expect.objectContaining({
+            label: 'Invite token',
+            value: 'Invite token unavailable',
+            disabled: true
+          }),
+          expect.objectContaining({
+            label: 'Auto join and serve command',
+            value: 'Auto join command unavailable',
+            disabled: true
+          }),
+          expect.objectContaining({
+            label: 'Client-only join command',
+            value: 'Client-only join command unavailable',
+            disabled: true
+          })
+        ])
+      })
+    )
+  })
+
+  it('passes unavailable API target liveness when live status cannot be fetched', () => {
+    useStatusQuerySpy.mockReturnValue({ data: undefined, isError: true })
+
+    renderRootLayout('live')
+
+    expect(topNavSpy.mock.calls.at(-1)?.[0]).toEqual(
+      expect.objectContaining({
+        apiTargetLiveness: 'unavailable'
+      })
+    )
+  })
+
+  it('does not mark plugin routes as a primary app tab', () => {
+    routerState.pathname = '/plugins/blackboard/dashboard'
+
+    renderRootLayout('harness')
+
+    expect(topNavSpy.mock.calls.at(-1)?.[0]).toEqual(
+      expect.objectContaining({
+        tab: null
+      })
+    )
+  })
+
+  it('passes only ready plugin pages into the auxiliary nav', async () => {
+    const readyWebUi = pluginWebUi('ready')
+    const disabledWebUi = pluginWebUi('disabled')
+    const queryClient = new QueryClient()
+    queryClient.setQueryData(pluginKeys.list(), [
+      pluginSummary('blackboard', readyWebUi),
+      pluginSummary('offline', disabledWebUi)
+    ])
+    useStatusQuerySpy.mockReturnValue({
+      data: {
+        node_id: 'node-1',
+        node_state: 'serving',
+        model_name: 'Qwen-Test',
+        peers: [],
+        models: [],
+        my_vram_gb: 24,
+        api_port: 3131,
+        gpus: [],
+        serving_models: [],
+        hostname: 'mesh.local',
+        token: 'invite-token-123',
+        version: '0.99.0'
+      }
+    })
+
+    renderRootLayout('live', queryClient)
+
+    await waitFor(() =>
+      expect(topNavSpy.mock.calls.at(-1)?.[0]).toEqual(
+        expect.objectContaining({
+          pluginNavItems: [
+            {
+              pluginName: 'blackboard',
+              pageId: 'dashboard',
+              label: 'Blackboard dashboard',
+              href: '/plugins/blackboard/dashboard',
+              active: false
+            }
+          ]
+        })
+      )
+    )
+  })
+})
+
+function liveStatus(overrides: Record<string, unknown>) {
+  return {
+    node_id: 'node-1',
+    node_state: 'serving',
+    model_name: 'Qwen-Test',
+    peers: [],
+    models: [],
+    my_vram_gb: 24,
+    api_port: 3131,
+    gpus: [],
+    serving_models: [],
+    hostname: 'mesh.local',
+    ...overrides
+  }
+}
+
+function pluginWebUi(
+  state: PluginWebUiStateRaw['state'],
+  options: { placement?: 'primary' | 'auxiliary'; primaryTabEnabled?: boolean } = {}
+): PluginWebUiStateRaw {
+  if (state === 'ready') {
+    return {
+      state: 'ready',
+      declared: true,
+      enabled: true,
+      available: true,
+      pages: [
+        {
+          id: 'dashboard',
+          label: 'Blackboard dashboard',
+          route: 'dashboard',
+          bundle_id: 'main',
+          entry_script: 'dashboard.js',
+          placement: options.placement
+        }
+      ],
+      config_sections: [],
+      asset_base_url: '/api/plugins/blackboard/web-ui/assets/',
+      primary_tab_enabled: options.primaryTabEnabled ?? false
+    }
+  }
+
+  return {
+    state,
+    declared: state !== 'none',
+    enabled: state !== 'disabled',
+    available: false,
+    unavailable_reason: 'not eligible',
+    primary_tab_enabled: false
+  }
+}
+
+function pluginSummary(name: string, webUi: PluginWebUiStateRaw): PluginSummaryRaw {
+  return {
+    name,
+    kind: 'bridge',
+    enabled: true,
+    status: 'running',
+    web_ui: webUi
+  }
+}
+
+function jsonResponse(body: unknown) {
+  return new Response(JSON.stringify(body), {
+    status: 200,
+    headers: { 'Content-Type': 'application/json' }
+  })
+}

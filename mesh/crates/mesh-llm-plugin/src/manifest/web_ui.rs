@@ -1,0 +1,555 @@
+use crate::proto;
+use anyhow::{Result, anyhow, bail};
+use serde::{Deserialize, Serialize};
+use std::path::{Component, Path};
+
+const INTEGRATIONS_PARENT_TAB: &str = "integrations";
+/// The host places a contribution in one of these slots, and nowhere else.
+pub const WEB_UI_CONTRIBUTION_SLOTS: [&str; 2] = ["chat_message", "logs_request"];
+
+#[derive(Clone, Debug)]
+pub struct PluginWebUiBuilder {
+    inner: proto::PluginWebUiManifest,
+}
+
+#[derive(Clone, Debug)]
+pub struct PluginWebUiPageBuilder {
+    inner: proto::PluginWebUiPageManifest,
+}
+
+#[derive(Clone, Debug)]
+pub struct PluginWebUiConfigSectionBuilder {
+    inner: proto::PluginWebUiConfigSectionManifest,
+}
+
+#[derive(Clone, Debug)]
+pub struct PluginWebUiContributionBuilder {
+    inner: proto::PluginWebUiContributionManifest,
+}
+
+#[derive(Clone, Debug)]
+pub struct PluginWebUiBundleBuilder {
+    inner: proto::PluginWebUiBundleManifest,
+}
+
+pub fn web_ui() -> PluginWebUiBuilder {
+    PluginWebUiBuilder {
+        inner: proto::PluginWebUiManifest::default(),
+    }
+}
+
+pub fn web_ui_page(
+    id: impl Into<String>,
+    label: impl Into<String>,
+    route: impl Into<String>,
+    entry_script: impl Into<String>,
+) -> PluginWebUiPageBuilder {
+    PluginWebUiPageBuilder {
+        inner: proto::PluginWebUiPageManifest {
+            id: id.into(),
+            label: label.into(),
+            icon: None,
+            route: route.into(),
+            bundle_id: String::new(),
+            entry_script: entry_script.into(),
+            placement: proto::PluginWebUiPagePlacement::Auxiliary as i32,
+            host_header: None,
+        },
+    }
+}
+
+pub fn web_ui_config_section(
+    id: impl Into<String>,
+    title: impl Into<String>,
+    entry_script: impl Into<String>,
+) -> PluginWebUiConfigSectionBuilder {
+    PluginWebUiConfigSectionBuilder {
+        inner: proto::PluginWebUiConfigSectionManifest {
+            id: id.into(),
+            title: title.into(),
+            entry_script: entry_script.into(),
+            parent_tab: None,
+            bundle_id: String::new(),
+        },
+    }
+}
+
+pub fn web_ui_contribution(
+    id: impl Into<String>,
+    slot: impl Into<String>,
+    label: impl Into<String>,
+    entry_script: impl Into<String>,
+) -> PluginWebUiContributionBuilder {
+    PluginWebUiContributionBuilder {
+        inner: proto::PluginWebUiContributionManifest {
+            id: id.into(),
+            slot: slot.into(),
+            label: label.into(),
+            bundle_id: String::new(),
+            entry_script: entry_script.into(),
+        },
+    }
+}
+
+pub fn web_ui_bundle(
+    id: impl Into<String>,
+    root_path: impl Into<String>,
+) -> PluginWebUiBundleBuilder {
+    PluginWebUiBundleBuilder {
+        inner: proto::PluginWebUiBundleManifest {
+            id: id.into(),
+            root_path: root_path.into(),
+        },
+    }
+}
+
+impl PluginWebUiBuilder {
+    pub fn page<T: Into<proto::PluginWebUiPageManifest>>(mut self, page: T) -> Self {
+        self.inner.pages.push(page.into());
+        self
+    }
+
+    pub fn config_section<T: Into<proto::PluginWebUiConfigSectionManifest>>(
+        mut self,
+        section: T,
+    ) -> Self {
+        self.inner.config_sections.push(section.into());
+        self
+    }
+
+    pub fn contribution<T: Into<proto::PluginWebUiContributionManifest>>(
+        mut self,
+        contribution: T,
+    ) -> Self {
+        self.inner.contributions.push(contribution.into());
+        self
+    }
+
+    pub fn bundle<T: Into<proto::PluginWebUiBundleManifest>>(mut self, bundle: T) -> Self {
+        self.inner.bundles.push(bundle.into());
+        self
+    }
+}
+
+impl PluginWebUiPageBuilder {
+    /// `false`: the host draws no page header above this page.
+    pub fn host_header(mut self, host_header: bool) -> Self {
+        self.inner.host_header = Some(host_header);
+        self
+    }
+
+    pub fn icon(mut self, icon: impl Into<String>) -> Self {
+        self.inner.icon = Some(icon.into());
+        self
+    }
+
+    pub fn bundle_id(mut self, bundle_id: impl Into<String>) -> Self {
+        self.inner.bundle_id = bundle_id.into();
+        self
+    }
+
+    /// Request promotion of this page to a primary tab. The host treats
+    /// this as a request, not a guarantee: promotion also requires the
+    /// operator's `web_ui_primary_tab` preference, and the host may still
+    /// fall back to auxiliary placement (e.g. when the tab bar is full).
+    pub fn primary_placement(mut self) -> Self {
+        self.inner.placement = proto::PluginWebUiPagePlacement::Primary as i32;
+        self
+    }
+}
+
+impl PluginWebUiConfigSectionBuilder {
+    pub fn parent_tab(mut self, parent_tab: impl Into<String>) -> Self {
+        self.inner.parent_tab = Some(parent_tab.into());
+        self
+    }
+
+    pub fn bundle_id(mut self, bundle_id: impl Into<String>) -> Self {
+        self.inner.bundle_id = bundle_id.into();
+        self
+    }
+}
+
+impl PluginWebUiContributionBuilder {
+    pub fn bundle_id(mut self, bundle_id: impl Into<String>) -> Self {
+        self.inner.bundle_id = bundle_id.into();
+        self
+    }
+}
+
+impl From<PluginWebUiBuilder> for proto::PluginWebUiManifest {
+    fn from(value: PluginWebUiBuilder) -> Self {
+        value.inner
+    }
+}
+
+impl From<PluginWebUiPageBuilder> for proto::PluginWebUiPageManifest {
+    fn from(value: PluginWebUiPageBuilder) -> Self {
+        value.inner
+    }
+}
+
+impl From<PluginWebUiConfigSectionBuilder> for proto::PluginWebUiConfigSectionManifest {
+    fn from(value: PluginWebUiConfigSectionBuilder) -> Self {
+        value.inner
+    }
+}
+
+impl From<PluginWebUiContributionBuilder> for proto::PluginWebUiContributionManifest {
+    fn from(value: PluginWebUiContributionBuilder) -> Self {
+        value.inner
+    }
+}
+
+impl From<PluginWebUiBundleBuilder> for proto::PluginWebUiBundleManifest {
+    fn from(value: PluginWebUiBundleBuilder) -> Self {
+        value.inner
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub(super) struct PackagedPluginWebUi {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pages: Vec<PackagedPluginWebUiPage>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub config_sections: Vec<PackagedPluginWebUiConfigSection>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub contributions: Vec<PackagedPluginWebUiContribution>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub bundles: Vec<PackagedPluginWebUiBundle>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub(super) struct PackagedPluginWebUiPage {
+    pub id: String,
+    pub label: String,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub icon: Option<String>,
+    pub route: String,
+    pub bundle_id: String,
+    pub entry_script: String,
+    #[serde(default)]
+    pub placement: PackagedPluginWebUiPagePlacement,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub host_header: Option<bool>,
+}
+
+/// Mirrors `proto::PluginWebUiPagePlacement`, minus the wire-only
+/// `Unspecified` variant: `try_from_i32` folds `Unspecified` into
+/// `Auxiliary` so plugins built before this field existed keep their
+/// current (auxiliary) placement rather than failing validation.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum PackagedPluginWebUiPagePlacement {
+    #[default]
+    Auxiliary,
+    Primary,
+}
+
+impl PackagedPluginWebUiPagePlacement {
+    fn from_i32(value: i32) -> Result<Self> {
+        let placement = match proto::PluginWebUiPagePlacement::try_from(value)
+            .map_err(|_| anyhow!("unknown web UI page placement `{value}`"))?
+        {
+            proto::PluginWebUiPagePlacement::Unspecified => Self::Auxiliary,
+            proto::PluginWebUiPagePlacement::Auxiliary => Self::Auxiliary,
+            proto::PluginWebUiPagePlacement::Primary => Self::Primary,
+        };
+        Ok(placement)
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub(super) struct PackagedPluginWebUiConfigSection {
+    pub id: String,
+    pub title: String,
+    pub entry_script: String,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub parent_tab: Option<String>,
+    pub bundle_id: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub(super) struct PackagedPluginWebUiContribution {
+    pub id: String,
+    pub slot: String,
+    pub label: String,
+    pub bundle_id: String,
+    pub entry_script: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub(super) struct PackagedPluginWebUiBundle {
+    pub id: String,
+    pub root_path: String,
+}
+
+impl TryFrom<&proto::PluginWebUiManifest> for PackagedPluginWebUi {
+    type Error = anyhow::Error;
+
+    fn try_from(value: &proto::PluginWebUiManifest) -> Result<Self> {
+        let bundle_id = validate_v1_bundle_contract(value)?;
+        let pages = value
+            .pages
+            .iter()
+            .map(|page| {
+                PackagedPluginWebUiPage::try_from_with_bundle_id(page, bundle_id.as_deref())
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let config_sections = value
+            .config_sections
+            .iter()
+            .map(|section| {
+                PackagedPluginWebUiConfigSection::try_from_with_bundle_id(
+                    section,
+                    bundle_id.as_deref(),
+                )
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let contributions = value
+            .contributions
+            .iter()
+            .map(|contribution| {
+                PackagedPluginWebUiContribution::try_from_with_bundle_id(
+                    contribution,
+                    bundle_id.as_deref(),
+                )
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let bundles = value
+            .bundles
+            .iter()
+            .map(PackagedPluginWebUiBundle::try_from)
+            .collect::<Result<Vec<_>>>()?;
+
+        Ok(Self {
+            pages,
+            config_sections,
+            contributions,
+            bundles,
+        })
+    }
+}
+
+impl TryFrom<&proto::PluginWebUiPageManifest> for PackagedPluginWebUiPage {
+    type Error = anyhow::Error;
+
+    fn try_from(value: &proto::PluginWebUiPageManifest) -> Result<Self> {
+        Self::try_from_with_bundle_id(value, None)
+    }
+}
+
+impl PackagedPluginWebUiPage {
+    fn try_from_with_bundle_id(
+        value: &proto::PluginWebUiPageManifest,
+        expected_bundle_id: Option<&str>,
+    ) -> Result<Self> {
+        validate_non_empty("web UI page id", &value.id)?;
+        validate_non_empty("web UI page label", &value.label)?;
+        validate_route_slug("web UI page route", &value.route)?;
+        validate_bundle_reference(
+            "web UI page bundle_id",
+            &value.bundle_id,
+            expected_bundle_id,
+        )?;
+        validate_relative_path("web UI page entry_script", &value.entry_script)?;
+        if let Some(icon) = &value.icon {
+            validate_relative_path("web UI page icon", icon)?;
+        }
+        let placement = PackagedPluginWebUiPagePlacement::from_i32(value.placement)?;
+        Ok(Self {
+            id: value.id.clone(),
+            label: value.label.clone(),
+            icon: value.icon.clone(),
+            route: value.route.clone(),
+            bundle_id: value.bundle_id.clone(),
+            entry_script: value.entry_script.clone(),
+            placement,
+            host_header: value.host_header,
+        })
+    }
+}
+
+impl TryFrom<&proto::PluginWebUiConfigSectionManifest> for PackagedPluginWebUiConfigSection {
+    type Error = anyhow::Error;
+
+    fn try_from(value: &proto::PluginWebUiConfigSectionManifest) -> Result<Self> {
+        Self::try_from_with_bundle_id(value, None)
+    }
+}
+
+impl PackagedPluginWebUiConfigSection {
+    fn try_from_with_bundle_id(
+        value: &proto::PluginWebUiConfigSectionManifest,
+        expected_bundle_id: Option<&str>,
+    ) -> Result<Self> {
+        validate_non_empty("web UI config section id", &value.id)?;
+        validate_non_empty("web UI config section title", &value.title)?;
+        validate_bundle_reference(
+            "web UI config section bundle_id",
+            &value.bundle_id,
+            expected_bundle_id,
+        )?;
+        validate_relative_path("web UI config section entry_script", &value.entry_script)?;
+        if let Some(parent_tab) = &value.parent_tab {
+            validate_config_parent_tab(parent_tab)?;
+        }
+        Ok(Self {
+            id: value.id.clone(),
+            title: value.title.clone(),
+            entry_script: value.entry_script.clone(),
+            parent_tab: value.parent_tab.clone(),
+            bundle_id: value.bundle_id.clone(),
+        })
+    }
+}
+
+impl PackagedPluginWebUiContribution {
+    fn try_from_with_bundle_id(
+        value: &proto::PluginWebUiContributionManifest,
+        expected_bundle_id: Option<&str>,
+    ) -> Result<Self> {
+        validate_non_empty("web UI contribution id", &value.id)?;
+        validate_contribution_slot(&value.slot)?;
+        validate_non_empty("web UI contribution label", &value.label)?;
+        validate_bundle_reference(
+            "web UI contribution bundle_id",
+            &value.bundle_id,
+            expected_bundle_id,
+        )?;
+        validate_relative_path("web UI contribution entry_script", &value.entry_script)?;
+        Ok(Self {
+            id: value.id.clone(),
+            slot: value.slot.clone(),
+            label: value.label.clone(),
+            bundle_id: value.bundle_id.clone(),
+            entry_script: value.entry_script.clone(),
+        })
+    }
+}
+
+impl TryFrom<&proto::PluginWebUiBundleManifest> for PackagedPluginWebUiBundle {
+    type Error = anyhow::Error;
+
+    fn try_from(value: &proto::PluginWebUiBundleManifest) -> Result<Self> {
+        validate_non_empty("web UI bundle id", &value.id)?;
+        validate_relative_path("web UI bundle root_path", &value.root_path)?;
+        Ok(Self {
+            id: value.id.clone(),
+            root_path: value.root_path.clone(),
+        })
+    }
+}
+
+fn validate_v1_bundle_contract(value: &proto::PluginWebUiManifest) -> Result<Option<String>> {
+    if value.pages.is_empty()
+        && value.config_sections.is_empty()
+        && value.contributions.is_empty()
+        && value.bundles.is_empty()
+    {
+        return Ok(None);
+    }
+    let [bundle] = value.bundles.as_slice() else {
+        bail!(
+            "web UI v1 declarations with pages, config sections or contributions must declare exactly one bundle root"
+        );
+    };
+    validate_non_empty("web UI bundle id", &bundle.id)?;
+    Ok(Some(bundle.id.clone()))
+}
+
+fn validate_bundle_reference(
+    field_name: &str,
+    value: &str,
+    expected_bundle_id: Option<&str>,
+) -> Result<()> {
+    validate_non_empty(field_name, value)?;
+    if let Some(expected) = expected_bundle_id
+        && value != expected
+    {
+        bail!("{field_name} must reference declared web UI bundle `{expected}`, got `{value}`");
+    }
+    Ok(())
+}
+
+fn validate_non_empty(field_name: &str, value: &str) -> Result<()> {
+    if value.trim().is_empty() {
+        bail!("{field_name} must be non-empty");
+    }
+    Ok(())
+}
+
+fn validate_config_parent_tab(parent_tab: &str) -> Result<()> {
+    if parent_tab != INTEGRATIONS_PARENT_TAB {
+        bail!("web UI config section parent_tab must be `integrations`");
+    }
+    Ok(())
+}
+
+fn validate_contribution_slot(slot: &str) -> Result<()> {
+    if !WEB_UI_CONTRIBUTION_SLOTS.contains(&slot) {
+        bail!(
+            "web UI contribution slot must be one of {}, got `{slot}`",
+            WEB_UI_CONTRIBUTION_SLOTS.join(", ")
+        );
+    }
+    Ok(())
+}
+
+fn validate_route_slug(field_name: &str, value: &str) -> Result<()> {
+    validate_non_empty(field_name, value)?;
+    if has_remote_url_scheme(value) || value.contains("://") {
+        bail!("{field_name} must be a slug, got URL-like value `{value}`");
+    }
+    if value.contains('/') || value.contains('\\') {
+        bail!("{field_name} must be a slug without path separators `{value}`");
+    }
+    if value == "." || value == ".." || value.starts_with('.') {
+        bail!("{field_name} must be a slug without traversal or hidden path syntax `{value}`");
+    }
+    Ok(())
+}
+
+fn validate_relative_path(field_name: &str, value: &str) -> Result<()> {
+    validate_non_empty(field_name, value)?;
+    if has_remote_url_scheme(value) {
+        bail!("{field_name} must be a relative path, got remote URL `{value}`");
+    }
+    let path = Path::new(value);
+    // `is_absolute` alone is not enough on Windows: `/var/lib/x` has no drive
+    // prefix there, so it is not absolute, yet it is still rooted and `join`
+    // would drop the package root. Reject anything that starts at a root or a
+    // drive prefix, which also keeps the verdict the same on every platform.
+    if matches!(
+        path.components().next(),
+        Some(Component::Prefix(_) | Component::RootDir)
+    ) {
+        bail!("{field_name} must be a relative path, got absolute path `{value}`");
+    }
+    if path
+        .components()
+        .all(|component| matches!(component, Component::CurDir))
+    {
+        bail!("{field_name} must name a file or directory below the package root");
+    }
+    if path
+        .components()
+        .any(|component| matches!(component, Component::ParentDir))
+    {
+        bail!("{field_name} must not contain traversal segments `{value}`");
+    }
+    if path.components().any(|component| match component {
+        Component::Normal(name) => name.to_string_lossy().starts_with('.'),
+        _ => false,
+    }) {
+        bail!("{field_name} must not contain hidden path segments `{value}`");
+    }
+    Ok(())
+}
+
+fn has_remote_url_scheme(value: &str) -> bool {
+    value.starts_with("http://") || value.starts_with("https://") || value.starts_with("//")
+}
+
+#[cfg(test)]
+mod tests;

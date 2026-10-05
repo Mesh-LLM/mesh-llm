@@ -224,7 +224,7 @@ for declared_path in tools:
 
 # This is deliberately an exact manifest key. Looking up by basename could
 # select an unrelated executable from a different declared path.
-tool_rel = "tools/skippy-model-package"
+tool_rel = "tools/skippy-package-builder"
 if tool_rel not in tools:
     raise SystemExit(
         f"native runtime manifest does not declare {tool_rel} in runtime.tools: {manifest_path}"
