@@ -1013,6 +1013,12 @@ Adopting a strategy therefore cannot change an existing deployment. Startup logs
 every axis it set and every one it deferred on, so a hand-set value is visibly
 kept rather than silently replaced.
 
+Everything a strategy sets lands in `[defaults]`, never on an individual model,
+so a `[models.*]` block still wins. The log names the full path it wrote —
+`defaults.speculative.strategy`, not `speculative.strategy` — because a model
+that overrides the same key keeps its own value while the global default is
+still written for the models that do not.
+
 `throughput` and `interactive` are opposed on purpose. A batched final stage
 produces no native multi-token-prediction drafts, so last-stage batching and
 speculation cannot both be active — that is enforced in the engine, not a

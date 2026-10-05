@@ -11,6 +11,13 @@
 //!    `None` first, so an explicit config-file value survives, and the CLI
 //!    mechanism overrides that run after this (`apply_runtime_cli_*`) win
 //!    outright. Adopting a strategy cannot change an existing deployment.
+//!
+//!    Everything it writes lands in `[defaults]`, never on a model, so a
+//!    `[models.*]` block still wins at resolution. The report names the full
+//!    `defaults.*` path for that reason: an unscoped axis name would read as
+//!    though the effective per-model value had changed. The global default is
+//!    still written when some model overrides it, because the models that do
+//!    not override it need it.
 //! 2. **It composes only axes that exist.** The remaining ones in #2112 —
 //!    min-sum placement, the RTT-derived run-ahead budget, the speculation
 //!    break-even gate — are not wired yet, and a strategy that silently
@@ -146,23 +153,26 @@ fn compose_interactive(config: &mut plugin::MeshConfig, plan: &mut StrategyPlan)
     if speculative.strategy.is_none() {
         speculative.strategy = Some("ngram-suffix".to_string());
         plan.note_applied(
-            "speculative.strategy",
+            "defaults.speculative.strategy",
             "ngram-suffix",
             "input-grounded output is mostly a copy of the context, which the suffix matcher drafts in long spans",
         );
     } else {
-        plan.note_declined("speculative.strategy", "already set");
+        plan.note_declined("defaults.speculative.strategy", "you set it explicitly");
     }
 
     if speculative.verify_window_runahead_tokens.is_none() {
         speculative.verify_window_runahead_tokens = Some(RUNAHEAD_TOKENS);
         plan.note_applied(
-            "speculative.verify_window_runahead_tokens",
+            "defaults.speculative.verify_window_runahead_tokens",
             RUNAHEAD_TOKENS.to_string(),
             "run-ahead admission beat every fixed depth in #1409, clean and jittered",
         );
     } else {
-        plan.note_declined("speculative.verify_window_runahead_tokens", "already set");
+        plan.note_declined(
+            "defaults.speculative.verify_window_runahead_tokens",
+            "you set it explicitly",
+        );
     }
 
     // Batching the final stage would suppress the drafts this strategy depends
@@ -171,12 +181,15 @@ fn compose_interactive(config: &mut plugin::MeshConfig, plan: &mut StrategyPlan)
     if throughput.last_stage_decode_batch.is_none() {
         throughput.last_stage_decode_batch = Some(BoolOrAuto::Bool(false));
         plan.note_applied(
-            "throughput.last_stage_decode_batch",
+            "defaults.throughput.last_stage_decode_batch",
             "false",
             "the batched final stage produces no native MTP drafts, so it cannot coexist with speculation",
         );
     } else {
-        plan.note_declined("throughput.last_stage_decode_batch", "already set");
+        plan.note_declined(
+            "defaults.throughput.last_stage_decode_batch",
+            "you set it explicitly",
+        );
     }
 }
 
@@ -197,23 +210,29 @@ fn compose_throughput(
     if throughput.last_stage_decode_batch.is_none() {
         throughput.last_stage_decode_batch = Some(BoolOrAuto::Bool(true));
         plan.note_applied(
-            "throughput.last_stage_decode_batch",
+            "defaults.throughput.last_stage_decode_batch",
             "true",
             "moving layers onto the last stage only helps once it batches decode across lanes (#1935)",
         );
     } else {
-        plan.note_declined("throughput.last_stage_decode_batch", "already set");
+        plan.note_declined(
+            "defaults.throughput.last_stage_decode_batch",
+            "you set it explicitly",
+        );
     }
 
     if throughput.pipeline_decode_groups.is_none() {
         throughput.pipeline_decode_groups = Some(DECODE_GROUPS);
         plan.note_applied(
-            "throughput.pipeline_decode_groups",
+            "defaults.throughput.pipeline_decode_groups",
             DECODE_GROUPS.to_string(),
             "keeps more than one batch in flight across the pipeline; 4 lanes / 2 groups is the measured arm",
         );
     } else {
-        plan.note_declined("throughput.pipeline_decode_groups", "already set");
+        plan.note_declined(
+            "defaults.throughput.pipeline_decode_groups",
+            "you set it explicitly",
+        );
     }
 
     // Speculation and last-stage batching are mutually exclusive by
@@ -224,12 +243,12 @@ fn compose_throughput(
     if speculative.strategy.is_none() {
         speculative.strategy = Some("disabled".to_string());
         plan.note_applied(
-            "speculative.strategy",
+            "defaults.speculative.strategy",
             "disabled",
             "cannot coexist with the batched final stage this strategy needs",
         );
     } else {
-        plan.note_declined("speculative.strategy", "already set");
+        plan.note_declined("defaults.speculative.strategy", "you set it explicitly");
     }
 
     if context.auto_balance_requested {
@@ -292,7 +311,7 @@ pub(in crate::runtime) fn log_strategy_plan(plan: &StrategyPlan) {
             axis = decision.axis,
             value = %decision.value,
             because = decision.because,
-            "strategy set"
+            "strategy set a global default"
         );
     }
     for decision in &plan.declined {
@@ -300,7 +319,7 @@ pub(in crate::runtime) fn log_strategy_plan(plan: &StrategyPlan) {
             strategy,
             axis = decision.axis,
             because = decision.because,
-            "strategy deferred to an existing setting"
+            "strategy deferred to your setting"
         );
     }
 }
@@ -416,14 +435,62 @@ mod tests {
         assert!(
             plan.declined
                 .iter()
-                .any(|decision| decision.axis == "throughput.pipeline_decode_groups"),
+                .any(|decision| decision.axis == "defaults.throughput.pipeline_decode_groups"),
             "a kept value must be reported, not silently overridden: {plan:?}"
         );
         assert!(
             !plan
                 .applied
                 .iter()
-                .any(|decision| decision.axis == "throughput.pipeline_decode_groups")
+                .any(|decision| decision.axis == "defaults.throughput.pipeline_decode_groups")
+        );
+    }
+
+    /// Everything is written to `[defaults]`, so a model block still wins. The
+    /// global default is written anyway — the models that do not override it
+    /// need it — and the report says `defaults.*` so the log cannot be read as
+    /// a claim about a model's effective value.
+    #[test]
+    fn a_model_override_is_untouched_and_the_report_names_the_defaults_scope() {
+        let mut config = plugin::MeshConfig::default();
+        config.models.push(plugin::ModelConfigEntry {
+            model: "Qwen/Qwen3-0.6B:Q4_K_M".to_string(),
+            speculative: Some({
+                // `SpeculativeConfig` has a private field, so build it by
+                // mutation rather than a struct literal with a spread.
+                let mut speculative = SpeculativeConfig::default();
+                speculative.strategy = Some("mtp".to_string());
+                speculative
+            }),
+            ..plugin::ModelConfigEntry::default()
+        });
+
+        let plan = apply_serving_strategy(
+            &mut config,
+            Some(ServingStrategy::Interactive),
+            context(true),
+        );
+
+        // The model keeps its own choice.
+        assert_eq!(
+            config.models[0]
+                .speculative
+                .as_ref()
+                .and_then(|speculative| speculative.strategy.as_deref()),
+            Some("mtp")
+        );
+        // And the global default is still written, for models without one.
+        let (_, speculative) = defaults(&config);
+        assert_eq!(speculative.strategy.as_deref(), Some("ngram-suffix"));
+
+        let decision = plan
+            .applied
+            .iter()
+            .find(|decision| decision.axis.ends_with("speculative.strategy"))
+            .expect("the speculative strategy must be reported");
+        assert_eq!(
+            decision.axis, "defaults.speculative.strategy",
+            "an unscoped axis would read as a per-model claim"
         );
     }
 
