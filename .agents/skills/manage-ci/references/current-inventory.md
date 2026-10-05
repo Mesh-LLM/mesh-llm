@@ -309,7 +309,7 @@ for generated Swift/SDK resources and enables GitHub-generated release notes.
 The comparison base is the highest stable `vMAJOR.MINOR.PATCH` tag below the
 target; prerelease tags are excluded so RC and final notes use the same stable
 baseline.
-The stable crates.io publisher downloads the versioned Linux x86_64 release
+The stable crates.io preflight and publisher each download the versioned Linux x86_64 release
 archive and checksum sidecar after GitHub release publication, verifies the
 checksum and required native libraries (`libmtmd.so`, `libllama-common.so`,
 `libllama.so`), then supplies that library directory to Cargo's package
