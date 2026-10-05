@@ -91,6 +91,7 @@ pub(super) fn handle_binary_connection(
     downstream_wire_condition: WireCondition,
     downstream_connect_timeout_secs: u64,
     native_mtp_enabled: bool,
+    last_stage_decode_batch: Option<bool>,
     prediction_return_sinks: &PredictionReturnSinks,
     session_ownership: Arc<ConnectionSessionOwnership>,
     worker_control: Arc<ConnectionWorkerControl>,
@@ -114,6 +115,7 @@ pub(super) fn handle_binary_connection(
         downstream_wire_condition,
         downstream_connect_timeout_secs,
         native_mtp_enabled,
+        last_stage_decode_batch,
         prediction_return_sinks,
         worker_control,
         first_message,
@@ -146,12 +148,13 @@ fn handle_binary_connection_messages(
     downstream_wire_condition: WireCondition,
     downstream_connect_timeout_secs: u64,
     native_mtp_enabled: bool,
+    last_stage_decode_batch: Option<bool>,
     prediction_return_sinks: &PredictionReturnSinks,
     worker_control: Arc<ConnectionWorkerControl>,
     first_message: StageWireMessage,
     session_tracker: &mut ConnectionSessionTracker,
 ) -> Result<()> {
-    let last_stage_batching = last_stage_decode_batch_enabled();
+    let last_stage_batching = last_stage_decode_batch_enabled(last_stage_decode_batch);
     let connection_session_id = session_tracker.connection_id;
     let max_deferred_prefill_replies =
         reply_credit_limit.unwrap_or_else(|| max_inflight.saturating_sub(1));

@@ -589,6 +589,10 @@ fn throughput_settings(
             &format!("{prefix}.pipeline_decode_groups"),
             ConfigValueSchema::Integer,
         ),
+        basic_setting(
+            &format!("{prefix}.last_stage_decode_batch"),
+            bool_or_auto_schema(),
+        ),
         basic_setting(&format!("{prefix}.threads"), ConfigValueSchema::Integer),
         basic_setting(
             &format!("{prefix}.threads_batch"),

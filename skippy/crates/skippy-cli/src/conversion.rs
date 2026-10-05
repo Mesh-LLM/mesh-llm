@@ -142,6 +142,7 @@ pub fn binary_stage_options(args: ServeBinaryArgs) -> Result<BinaryStageOptions>
         downstream_wire_condition,
         downstream_connect_timeout_secs: args.downstream_connect_timeout_secs,
         native_mtp_enabled,
+        last_stage_decode_batch: None,
         continuous_batching: tuning
             .continuous_batching
             .unwrap_or(skippy_config::local_serving::CONTINUOUS_BATCHING),

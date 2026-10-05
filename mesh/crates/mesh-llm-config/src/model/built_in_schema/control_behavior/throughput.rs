@@ -10,7 +10,7 @@ pub(super) fn apply_throughput_behavior(
 ) {
     match suffix {
         "parallel" => set_numeric(setting, Some(1.0), None, Some(1.0), Some("slots")),
-        "continuous_batching" | "poll" => set_static_options(setting),
+        "continuous_batching" | "last_stage_decode_batch" | "poll" => set_static_options(setting),
         "pipeline_decode_groups" => {
             set_numeric(setting, Some(1.0), None, Some(1.0), Some("groups"));
         }
