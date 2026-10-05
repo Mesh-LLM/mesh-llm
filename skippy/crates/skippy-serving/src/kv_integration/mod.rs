@@ -159,6 +159,8 @@ pub struct KvStageIntegration {
     /// KV here even when a durable tier is configured, so enabling disk does
     /// not replace the fast warm path with serialized state import.
     pub(crate) payload: StagePrefixCachePayload,
+    pub(crate) payload_selection_reason: &'static str,
+    pub(crate) payload_fallbacks: u64,
     /// Exportable representation written to and restored from L3. This is
     /// separate from `payload` because resident KV is native and borrow-only.
     pub(crate) durable_payload: Option<StagePrefixCachePayload>,
@@ -1063,6 +1065,11 @@ impl KvStageIntegration {
         vec![
             ("skippy.kv.mode", json!(format!("{:?}", self.mode))),
             ("skippy.kv.payload", json!(format!("{:?}", self.payload))),
+            (
+                "skippy.kv.payload_selection_reason",
+                json!(self.payload_selection_reason),
+            ),
+            ("skippy.kv.payload_fallbacks", json!(self.payload_fallbacks)),
             (
                 "skippy.kv.page_size_tokens",
                 json!(self.checkpoint_policy.page_size_tokens),

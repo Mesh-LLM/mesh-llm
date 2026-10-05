@@ -125,15 +125,24 @@ impl KvStageIntegration {
         }
         let payload =
             effective_cache_payload(cache_config.payload, &model_capability, memory_cache);
-        if payload == StagePrefixCachePayload::FullState
-            && cache_config.payload != StageKvCachePayload::FullState
-        {
+        let payload_fallback = payload == StagePrefixCachePayload::FullState
+            && cache_config.payload != StageKvCachePayload::FullState;
+        let payload_selection_reason = if payload_fallback {
+            "loaded_exporter_unsupported"
+        } else if cache_config.payload == StageKvCachePayload::FullState {
+            "explicit_full_state"
+        } else if cache_config.payload == StageKvCachePayload::Auto {
+            "loaded_memory_capability"
+        } else {
+            "explicit_partial_supported"
+        };
+        if payload_fallback {
             let _ = skippy_events::diagnostics::emit(
                 skippy_events::diagnostics::ServingDiagnostic::Warning {
                     message: "Skippy prefix cache selected full-state snapshots".into(),
                     context: Some(format!(
-                        "requested={:?} reason=loaded memory does not advertise complete support for the requested partial representation",
-                        cache_config.payload
+                        "stage_id={} requested={:?} reason=loaded_exporter_unsupported counter=skippy.kv.payload_fallbacks",
+                        config.stage_id, cache_config.payload
                     )),
                 },
             );
@@ -368,6 +377,8 @@ impl KvStageIntegration {
         Ok(Some(Self {
             mode,
             payload,
+            payload_selection_reason,
+            payload_fallbacks: u64::from(payload_fallback),
             durable_payload,
             correctness_mode: false,
             trust_local_writes: true,
@@ -1651,6 +1662,14 @@ mod tests {
         .unwrap()
         .unwrap();
         assert_eq!(kv.payload, StagePrefixCachePayload::FullState);
+        assert_eq!(kv.payload_fallbacks, 1);
+        assert_eq!(kv.payload_selection_reason, "loaded_exporter_unsupported");
+        let attrs = kv.attrs();
+        assert!(attrs.contains(&("skippy.kv.payload_fallbacks", serde_json::json!(1))));
+        assert!(attrs.contains(&(
+            "skippy.kv.payload_selection_reason",
+            serde_json::json!("loaded_exporter_unsupported")
+        )));
     }
 
     #[test]
