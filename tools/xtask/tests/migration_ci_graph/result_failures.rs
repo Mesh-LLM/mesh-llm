@@ -78,7 +78,7 @@ fn migration_ci_graph_unknown_and_absent_results_are_rejected() -> TestResult {
     rejects(QUALITY, "{}", "planned job 'quality' finished with None")?;
     rejects(
         QUALITY,
-        r#"{"quality":{"result":"success"},"x\n":{"result":1.5}}"#,
+        r#"{"quality":{"result":"success"},"authority_source":{"result":"success"},"authority_linux_x64":{"result":"success"},"x\n":{"result":1.5}}"#,
         "lane job 'x\\n' finished with 1.5",
     )
 }
@@ -88,7 +88,7 @@ fn migration_ci_graph_unplanned_job_must_skip() -> TestResult {
     // Given/When/Then: an unplanned job that ran anyway.
     rejects(
         QUALITY,
-        r#"{"quality":{"result":"success"},"runner_contract":{"result":"success"}}"#,
+        r#"{"quality":{"result":"success"},"authority_source":{"result":"success"},"authority_linux_x64":{"result":"success"},"runner_contract":{"result":"success"}}"#,
         "lane job 'runner_contract' finished with 'success'",
     )
 }
@@ -207,5 +207,42 @@ fn lane_inline_and_reordered_exact_options_reach_domain_validation() -> TestResu
     let output = Call::raw(&["--needs={}", &format!("--lane-plan={no_op}")]).run()?;
     assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr));
     assert!(output.stdout.is_empty() && output.stderr.is_empty());
+    Ok(())
+}
+
+#[test]
+fn selected_native_authority_cannot_fail_cancel_skip_or_disappear() -> TestResult {
+    for job in ["authority_source", "authority_linux_x64"] {
+        for result in [Some("failure"), Some("cancelled"), Some("skipped"), None] {
+            let mut states = serde_json::json!({
+                "quality": {"result": "success"},
+                "authority_source": {"result": "success"},
+                "authority_linux_x64": {"result": "success"}
+            });
+            let expected = if let Some(result) = result {
+                states[job]["result"] = result.into();
+                format!("planned job '{job}' finished with '{result}'")
+            } else {
+                states.as_object_mut().expect("object").remove(job);
+                format!("planned job '{job}' finished with None")
+            };
+            rejects(QUALITY, &states.to_string(), &expected)?;
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn macos_checks_require_macos_authority_without_a_linux_ui_producer() -> TestResult {
+    let plan = r#"{"lane":"macos","required":true,"required_slices":["platform-checks"],"matrices":{"platform_checks":[{"id":"macos-arm64"}]}}"#;
+    let states = serde_json::json!({
+        "platform_checks": {"result": "success"},
+        "validate_plan": {"result": "success"},
+        "authority_source": {"result": "success"},
+        "authority_macos_arm64": {"result": "success"},
+        "authority_linux_x64": {"result": "skipped"}
+    });
+    let output = Call::lane(plan, &states.to_string()).run()?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr));
     Ok(())
 }

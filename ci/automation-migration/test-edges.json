@@ -705,7 +705,7 @@
           "Existing lane projection/report behavior; Rust validator replaces the retired interpreter; inherited status and captured diagnostics remain asserted"
         ],
         [
-          420,
+          423,
           "0bb8fafe2022eacf",
           3,
           "subprocess-or-interpreter",
@@ -739,7 +739,7 @@
     "target_or_boundary",
     "source_specific_reason"
   ],
-  "observed_source_sha256": "9a00c5a550549cab0a49cb4fad6a76e174db97bda7637a0bc4677f31ec622e86",
+  "observed_source_sha256": "9730c070252da56f69d9011eb5f6fb7727c9bc8f5fcd9ba79bbfbc16ab25b276",
   "schema_version": 1,
   "scope": "tracked scripts/tests/**/*.py; source candidate shard, not global acceptance",
   "status": "All observed test-source scanner candidates are bound; transitive child closure and global task 1 remain incomplete. No optional subprocess test is asserted to be a production dependency.",
@@ -9848,5 +9848,19 @@
       },
       "limits": "Local maintained normal gate; no real native model, hosted/platform or whole-migration completion proof."
     }
+  },
+  "protected_authority_caller_expectation_refresh": {
+    "previous_observed_source_sha256": "9a00c5a550549cab0a49cb4fad6a76e174db97bda7637a0bc4677f31ec622e86",
+    "current_observed_source_sha256": "9730c070252da56f69d9011eb5f6fb7727c9bc8f5fcd9ba79bbfbc16ab25b276",
+    "change": "Retained checks admit the platform-matching protected authority dependency and require its lane results. Existing five PR entrypoints, product platform isolation, SDK parallelism, source-owned subprocess contracts, 643 methods and 13 macOS skips remain unchanged. No new Python tooling, method or interpreter edge.",
+    "source_rebindings": [
+      {
+        "file": "scripts/tests/test_ci_lane_workflows.py",
+        "old_line": 420,
+        "new_line": 423,
+        "hash": "0bb8fafe2022eacf",
+        "occurrence": 3
+      }
+    ]
   }
 }

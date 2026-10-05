@@ -608,7 +608,7 @@ class DepotAuthoritySentinelTests(unittest.TestCase):
         )
         self.assertEqual(
             self._job_names(quality_lane),
-            {"quality", "runner_contract", "summary"},
+            {"quality", "runner_contract", "summary", "authority_source", "authority_linux_x64"},
         )
         self.assertIn(
             "uses: ./.github/workflows/ci-quality-slice.yml",
@@ -619,7 +619,7 @@ class DepotAuthoritySentinelTests(unittest.TestCase):
             self._job_block(quality_lane, "runner_contract"),
         )
         summary = self._job_block(quality_lane, "summary")
-        self.assertIn("needs: [quality, runner_contract]", summary)
+        self.assertIn("needs: [quality, runner_contract, authority_source, authority_linux_x64]", summary)
         self.assertIn("runs-on: ubuntu-24.04", summary)
 
         for filename, (plan_name, lane_name, lane_id) in expected.items():

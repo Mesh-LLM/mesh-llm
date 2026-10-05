@@ -1,6 +1,6 @@
 //! Every frozen planner case and lane: the digest-bound lane plan, the real
 //! lane workflow graph and a `needs` document where exactly the planned jobs
-//! succeeded validate cleanly; the same plan and needs pass the legacy script.
+//! succeeded validate cleanly, including the required protected native producers.
 
 use crate::support::{
     Call, Golden, LANES, TestResult, expected_jobs, lane_workflow, needs, repository_root, text,
@@ -73,7 +73,7 @@ fn migration_ci_graph_unplanned_skip_passes_and_missing_rows_default_to_empty() 
     // When: each is validated.
     let skipped = Call::lane(
         quality,
-        r#"{"quality":{"result":"success"},"runner_contract":{"result":"skipped"}}"#,
+        r#"{"quality":{"result":"success"},"runner_contract":{"result":"skipped"},"authority_source":{"result":"success"},"authority_linux_x64":{"result":"success"}}"#,
     )
     .run()?;
     let empty = Call::lane(windows, "{}").run()?;

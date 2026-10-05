@@ -325,6 +325,9 @@ class CiLaneWorkflowTests(unittest.TestCase):
             "runtime_product",
             "platform_checks",
             "product_smoke",
+            "authority_source",
+            "authority_linux_x64",
+            "authority_windows_x64",
         )
 
         # A Linux-only change plans the core smoke row but no Windows product, so

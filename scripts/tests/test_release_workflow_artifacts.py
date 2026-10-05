@@ -177,7 +177,7 @@ class ReleaseWorkflowArtifactTests(unittest.TestCase):
                 self.assertNotIn("pnpm/action-setup", host)
                 self.assertLess(host.index("restore-release-ui"), host.index("Build and attest"))
         swift = job_block(workflow, "build_swift_sdk_artifact", "build_linux_arm64")
-        self.assertIn("needs: [metadata, release_ui]", swift)
+        self.assertIn("needs: [metadata, release_ui, authority_macos_arm64]", swift)
         self.assertIn(f"ui_artifact_name: {artifact}", swift)
         swift_workflow = (ROOT / ".github/workflows/swift-sdk-artifact.yml").read_text()
         self.assertIn("if: ${{ inputs.ui_artifact_name == '' }}", swift_workflow)

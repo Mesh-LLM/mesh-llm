@@ -66,3 +66,6 @@ mod verified_pr_authority;
 
 #[path = "ci_runner_cache_contract/protected_native_producer.rs"]
 mod protected_native_producer;
+
+#[path = "ci_runner_cache_contract/authority_callers.rs"]
+mod authority_callers;

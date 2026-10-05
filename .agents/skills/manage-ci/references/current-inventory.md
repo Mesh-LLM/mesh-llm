@@ -1561,6 +1561,12 @@ Topic-scoped immutable artifacts retain for one day; unscoped release artifacts
 retain their existing name and 90-day policy. The upload action initializes the
 macOS automation environment for protected-clean producers. Native artifact IDs,
 source SHA, executable digest, and OS/architecture are independent outputs.
-Caller provisioning remains incomplete until each selected lane declares one
-producer per native executor variant and forwards its exact dependency outputs.
+Caller metadata and native producer dependencies are prepared across the five
+lanes, the optional Linux CI canary, release SDK builds, and nested SDK forwarding.
+Seven root workflows freeze one protected source commit per run, then provision
+11 topic/native producer instances across those workflows. All 28 reusable calls
+into the 17 audit workflows forward dependency-provided identities; lane summaries
+require the selected producer jobs to succeed. These metadata inputs are not yet
+consumed by the 27 existing audit steps, which retain their published immutable
+pin. Switching those steps requires a reviewed published replacement action.
 No hosted execution or cross-platform native qualification is recorded here.

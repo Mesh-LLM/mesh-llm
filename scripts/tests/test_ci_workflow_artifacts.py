@@ -69,7 +69,8 @@ class CiWorkflowArtifactTests(unittest.TestCase):
         for platform in ("linux", "macos", "windows"):
             with self.subTest(platform=platform):
                 workflow = (WORKFLOWS / f"ci-{platform}-lane.yml").read_text()
-                self.assertIn("needs: [hosts, native_runtimes]", workflow)
+                authority = {"linux": "linux_x64", "macos": "macos_arm64", "windows": "windows_x64"}[platform]
+                self.assertIn(f"needs: [hosts, native_runtimes, authority_{authority}]", workflow)
                 for other in ({"linux", "macos", "windows"} - {platform}):
                     self.assertNotIn(f"hosts_{other}", workflow)
                     self.assertNotIn(f"native_runtimes_{other}", workflow)
@@ -80,9 +81,9 @@ class CiWorkflowArtifactTests(unittest.TestCase):
         kotlin = linux[linux.index("  kotlin_sdk_input:"):linux.index("  sdk:")]
         swift = macos[macos.index("  swift_sdk_input:"):macos.index("  sdk:")]
 
-        self.assertIn("needs: [static_abi]", kotlin)
+        self.assertIn("needs: [static_abi, authority_linux_x64]", kotlin)
         self.assertNotIn("runtime_product", kotlin)
-        self.assertNotIn("needs:", swift)
+        self.assertIn("needs: [authority_macos_arm64]", swift)
         self.assertNotIn("runtime_product", swift)
         self.assertIn(
             "max_parallel: ${{ fromJson(inputs.lane_plan_json).budgets.macos_max_parallel }}",

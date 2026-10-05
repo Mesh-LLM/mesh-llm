@@ -50,6 +50,56 @@ concurrency:
   cancel-in-progress: ${{ inputs.original_event_name == 'pull_request' }}
 
 jobs:
+  authority_source:
+    name: Freeze protected automation source
+    if: ${{ (fromJson(inputs.lane_plan_json).matrices.hosts[0] != null) || (fromJson(inputs.lane_plan_json).matrices.hosts[0] != null || fromJson(inputs.lane_plan_json).matrices.runtime_products[0] != null || fromJson(inputs.lane_plan_json).matrices.platform_checks[0] != null || contains(fromJson(inputs.lane_plan_json).matrices.sdk.*.id, 'swift')) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    env:
+      GIT_MASTER: '1'
+      MESH_LLM_POSTHOG_KEY: ''
+    outputs:
+      source_sha: ${{ steps.freeze.outputs.source_sha }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - name: Freeze the protected commit
+        id: freeze
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_sha="$(git rev-parse HEAD)"
+          [[ "$source_sha" =~ ^[0-9a-f]{40}$ ]] || exit 1
+          printf 'source_sha=%s\n' "$source_sha" >> "$GITHUB_OUTPUT"
+
+  authority_linux_x64:
+    name: Protected linux x64 automation
+    needs: authority_source
+    if: ${{ needs.authority_source.result == 'success' && (fromJson(inputs.lane_plan_json).matrices.hosts[0] != null) }}
+    permissions:
+      contents: read
+    uses: ./.github/workflows/protected-automation-artifact.yml
+    with:
+      platform: linux-x64
+      lane: macos
+      protected_source_sha: ${{ needs.authority_source.outputs.source_sha }}
+
+  authority_macos_arm64:
+    name: Protected macos arm64 automation
+    needs: authority_source
+    if: ${{ needs.authority_source.result == 'success' && (fromJson(inputs.lane_plan_json).matrices.hosts[0] != null || fromJson(inputs.lane_plan_json).matrices.runtime_products[0] != null || fromJson(inputs.lane_plan_json).matrices.platform_checks[0] != null || contains(fromJson(inputs.lane_plan_json).matrices.sdk.*.id, 'swift')) }}
+    permissions:
+      contents: read
+    uses: ./.github/workflows/protected-automation-artifact.yml
+    with:
+      platform: macos-arm64
+      lane: macos
+      protected_source_sha: ${{ needs.authority_source.outputs.source_sha }}
+
   validate_plan:
     name: Validate macOS lane plan
     runs-on: ubuntu-24.04
@@ -67,10 +117,12 @@ jobs:
           ' <<<"$LANE_PLAN" >/dev/null
 
   ui_artifact:
+    needs: [authority_linux_x64]
     name: Console artifact
-    if: ${{ fromJson(inputs.lane_plan_json).matrices.hosts[0] != null }}
+    if: ${{ (fromJson(inputs.lane_plan_json).matrices.hosts[0] != null) && needs.authority_linux_x64.result == 'success' }}
     uses: ./.github/workflows/ci-ui-artifact-slice.yml
     with:
+      authority_linux_x64: ${{ needs.authority_linux_x64.outputs.identity_json }}
       source_sha: ${{ inputs.source_sha }}
       original_event_name: ${{ inputs.original_event_name }}
       force_hosted: ${{ fromJson(inputs.lane_plan_json).signals.runner_contract_required }}
@@ -79,10 +131,11 @@ jobs:
 
   hosts:
     name: Neutral macOS host
-    needs: [ui_artifact]
-    if: ${{ !cancelled() && needs.ui_artifact.result == 'success' && fromJson(inputs.lane_plan_json).matrices.hosts[0] != null }}
+    needs: [ui_artifact, authority_macos_arm64]
+    if: ${{ (!cancelled() && needs.ui_artifact.result == 'success' && fromJson(inputs.lane_plan_json).matrices.hosts[0] != null) && needs.authority_macos_arm64.result == 'success' }}
     uses: ./.github/workflows/ci-macos-host-slice.yml
     with:
+      authority_macos_arm64: ${{ needs.authority_macos_arm64.outputs.identity_json }}
       source_sha: ${{ inputs.source_sha }}
       original_event_name: ${{ inputs.original_event_name }}
       force_hosted: ${{ fromJson(inputs.lane_plan_json).signals.runner_contract_required }}
@@ -93,10 +146,12 @@ jobs:
       fail_fast: ${{ inputs.original_event_name == 'pull_request' }}
 
   native_runtimes:
+    needs: [authority_macos_arm64]
     name: Native macOS runtimes
-    if: ${{ fromJson(inputs.lane_plan_json).matrices.runtime_products[0] != null }}
+    if: ${{ (fromJson(inputs.lane_plan_json).matrices.runtime_products[0] != null) && needs.authority_macos_arm64.result == 'success' }}
     uses: ./.github/workflows/ci-macos-runtime-slice.yml
     with:
+      authority_macos_arm64: ${{ needs.authority_macos_arm64.outputs.identity_json }}
       source_sha: ${{ inputs.source_sha }}
       original_event_name: ${{ inputs.original_event_name }}
       force_hosted: ${{ fromJson(inputs.lane_plan_json).signals.runner_contract_required }}
@@ -106,10 +161,11 @@ jobs:
 
   runtime_product:
     name: macOS products
-    needs: [hosts, native_runtimes]
-    if: ${{ !cancelled() && needs.hosts.result == 'success' && needs.native_runtimes.result == 'success' }}
+    needs: [hosts, native_runtimes, authority_macos_arm64]
+    if: ${{ (!cancelled() && needs.hosts.result == 'success' && needs.native_runtimes.result == 'success') && needs.authority_macos_arm64.result == 'success' }}
     uses: ./.github/workflows/ci-macos-product-slice.yml
     with:
+      authority_macos_arm64: ${{ needs.authority_macos_arm64.outputs.identity_json }}
       source_sha: ${{ inputs.source_sha }}
       original_event_name: ${{ inputs.original_event_name }}
       force_hosted: ${{ fromJson(inputs.lane_plan_json).signals.runner_contract_required }}
@@ -118,10 +174,12 @@ jobs:
       fail_fast: ${{ inputs.original_event_name == 'pull_request' }}
 
   platform_checks:
+    needs: [authority_macos_arm64]
     name: macOS checks
-    if: ${{ fromJson(inputs.lane_plan_json).matrices.platform_checks[0] != null }}
+    if: ${{ (fromJson(inputs.lane_plan_json).matrices.platform_checks[0] != null) && needs.authority_macos_arm64.result == 'success' }}
     uses: ./.github/workflows/ci-platform-checks-slice.yml
     with:
+      authority_macos_arm64: ${{ needs.authority_macos_arm64.outputs.identity_json }}
       source_sha: ${{ inputs.source_sha }}
       original_event_name: ${{ inputs.original_event_name }}
       force_hosted: ${{ fromJson(inputs.lane_plan_json).signals.runner_contract_required }}
@@ -131,10 +189,12 @@ jobs:
       fail_fast: ${{ inputs.original_event_name == 'pull_request' }}
 
   swift_sdk_input:
+    needs: [authority_macos_arm64]
     name: Swift SDK input
-    if: ${{ contains(fromJson(inputs.lane_plan_json).matrices.sdk.*.id, 'swift') }}
+    if: ${{ (contains(fromJson(inputs.lane_plan_json).matrices.sdk.*.id, 'swift')) && needs.authority_macos_arm64.result == 'success' }}
     uses: ./.github/workflows/swift-sdk-artifact.yml
     with:
+      authority_macos_arm64: ${{ needs.authority_macos_arm64.outputs.identity_json }}
       source_sha: ${{ inputs.source_sha }}
       original_event_name: ${{ inputs.original_event_name }}
       force_hosted: ${{ fromJson(inputs.lane_plan_json).signals.runner_contract_required }}
@@ -178,16 +238,7 @@ jobs:
 
   summary:
     name: CI / macOS
-    needs:
-      - validate_plan
-      - ui_artifact
-      - hosts
-      - native_runtimes
-      - runtime_product
-      - platform_checks
-      - swift_sdk_input
-      - sdk
-      - product_smoke
+    needs: [validate_plan, ui_artifact, hosts, native_runtimes, runtime_product, platform_checks, swift_sdk_input, sdk, product_smoke, authority_source, authority_linux_x64, authority_macos_arm64]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-24.04
     permissions:

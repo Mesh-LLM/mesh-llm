@@ -3,19 +3,23 @@ use super::*;
 use std::path::Path;
 fn actual() -> BTreeMap<String, Node> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    ["pr_ci_canary.yml", "ci-pr-canary-lane.yml"]
-        .into_iter()
-        .chain(SLICES.iter().map(|(_, name)| *name))
-        .map(|name| {
-            (
-                name.into(),
-                workflow_yaml::parse(
-                    &std::fs::read_to_string(root.join(".github/workflows").join(name)).unwrap(),
-                )
-                .unwrap(),
+    [
+        "pr_ci_canary.yml",
+        "ci-pr-canary-lane.yml",
+        "protected-automation-artifact.yml",
+    ]
+    .into_iter()
+    .chain(SLICES.iter().map(|(_, name)| *name))
+    .map(|name| {
+        (
+            name.into(),
+            workflow_yaml::parse(
+                &std::fs::read_to_string(root.join(".github/workflows").join(name)).unwrap(),
             )
-        })
-        .collect()
+            .unwrap(),
+        )
+    })
+    .collect()
 }
 fn entry(node: &mut Node, key: &str, value: Node) {
     let Node::Map(entries) = node else {
@@ -31,7 +35,7 @@ fn scalar(value: &str) -> Node {
     Node::Scalar(value.into())
 }
 #[test]
-fn actual_pr_canary_retains_credential_free_six_workflow_closure() {
+fn actual_pr_canary_retains_credential_free_seven_workflow_closure() {
     check(&actual()).unwrap();
 }
 #[test]
@@ -181,7 +185,7 @@ fn immutable_merge_identity_and_bounded_summary_cannot_be_dropped() {
     for (from, to) in [
         ("name: Canary / CI", "name: Unbound result"),
         (
-            "[plan, ui_artifact, hosts, native_runtime, product]",
+            "[plan, ui_artifact, hosts, native_runtime, product, authority_source, authority_linux_x64]",
             "[plan, hosts]",
         ),
         ("[[ \"$PRODUCT_RESULT\" == success ]]", "true"),
@@ -201,6 +205,35 @@ fn immutable_merge_identity_and_bounded_summary_cannot_be_dropped() {
         ("PR_NUMBER: ${{ inputs.pr_number }}", "PR_NUMBER: 1"),
     ] {
         assert!(source.contains(from));
+        let mut workflows = actual();
+        workflows.insert(
+            "ci-pr-canary-lane.yml".into(),
+            workflow_yaml::parse(&source.replace(from, to)).unwrap(),
+        );
+        assert!(check(&workflows).is_err(), "{from}");
+    }
+}
+
+#[test]
+fn protected_native_automation_cannot_switch_source_platform_or_skip_summary() {
+    for (from, to) in [
+        ("platform: linux-x64", "platform: windows-x64"),
+        (
+            "protected_source_sha: ${{ needs.authority_source.outputs.source_sha }}",
+            "protected_source_sha: ${{ inputs.merge_sha }}",
+        ),
+        (
+            "authority_linux_x64: ${{ needs.authority_linux_x64.outputs.identity_json }}",
+            "authority_linux_x64: ${{ inputs.merge_sha }}",
+        ),
+        ("[[ \"$AUTHORITY_NATIVE_RESULT\" == success ]]", "true"),
+        (
+            "source_sha=\"$(git rev-parse HEAD)\"",
+            "source_sha=\"unbound\"",
+        ),
+    ] {
+        let source = include_str!("../../../../../.github/workflows/ci-pr-canary-lane.yml");
+        assert!(source.contains(from), "mutation anchor {from}");
         let mut workflows = actual();
         workflows.insert(
             "ci-pr-canary-lane.yml".into(),

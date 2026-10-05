@@ -163,7 +163,8 @@ class PrWorkflowArtifactTests(unittest.TestCase):
         for platform in ("linux", "macos", "windows"):
             with self.subTest(platform=platform):
                 lane = self.workflow(f"ci-{platform}-lane.yml")
-                self.assertIn("needs: [hosts, native_runtimes]", lane)
+                authority = {"linux": "linux_x64", "macos": "macos_arm64", "windows": "windows_x64"}[platform]
+                self.assertIn(f"needs: [hosts, native_runtimes, authority_{authority}]", lane)
                 self.assertIn("needs.hosts.result == 'success'", lane)
                 self.assertIn("needs.native_runtimes.result == 'success'", lane)
                 native_start = lane.index("  native_runtimes:")

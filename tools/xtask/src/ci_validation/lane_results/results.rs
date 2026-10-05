@@ -213,6 +213,7 @@ fn required_jobs(plan: &Json) -> Checked<Outcome> {
         Lane::Macos => planner.macos()?,
         Lane::Windows => planner.windows()?,
     }
+    super::authority_results::extend(lane, &mut planner.jobs);
     Ok(Outcome {
         lane,
         planned: planner.jobs,

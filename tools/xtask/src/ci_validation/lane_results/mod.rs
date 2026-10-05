@@ -3,6 +3,7 @@
 //! evidence. Usage and domain failures retain status2; domain reports retain
 //! the consumed ERROR prefix.
 
+mod authority_results;
 mod digest;
 mod entrypoint_graph;
 mod lane_graph;
