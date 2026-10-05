@@ -229,31 +229,31 @@ impl HttpExchangePolicy for NodeExchangePolicy {
                 hook_unavailable("required OpenAI plugin admission unavailable")
             }
         });
-        let terminal_override = result.error_status().map(|status| {
-            if status == 403 {
-                "policy_denied"
-            } else {
-                "internal_hook_failure"
-            }
-        });
         HttpExchangeAdmission {
             observation_id: Some(session.observation_id().to_owned()),
-            observer: Some(Arc::new(TypedEmission {
-                inner: session.observer(),
-                session: Mutex::new(Some(session)),
-                terminal_override,
-            })),
+            observer: Some(TypedEmission::new(session)),
             denial,
             response_headers: result.headers,
         }
     }
 }
-struct TypedEmission {
+pub(super) struct TypedEmission {
     inner: Arc<dyn WireBytesObserver>,
     session: Mutex<Option<ExchangeSession>>,
-    terminal_override: Option<&'static str>,
+}
+impl TypedEmission {
+    pub(super) fn new(session: ExchangeSession) -> Arc<Self> {
+        Arc::new(Self {
+            inner: session.observer(),
+            session: Mutex::new(Some(session)),
+        })
+    }
 }
 impl WireBytesObserver for TypedEmission {
+    fn execution_outcome(&self, outcome: &str) {
+        self.inner.execution_outcome(outcome);
+    }
+
     fn response_headers(&self) -> Vec<(String, String)> {
         self.inner.response_headers()
     }
@@ -264,23 +264,9 @@ impl WireBytesObserver for TypedEmission {
         self.inner.try_chunk(offset, bytes)
     }
     fn finish(&self, commitment: WireBytesCommitment) {
-        self.inner.finish(commitment.clone());
+        self.inner.finish(commitment);
         if let Some(mut session) = self.session.lock().unwrap().take() {
-            let outcome = self
-                .terminal_override
-                .unwrap_or(match commitment.incomplete {
-                    Some(skippy_inference_api::wire_bytes::WireBytesIncomplete::Cancelled) => {
-                        "client_cancelled"
-                    }
-                    Some(skippy_inference_api::wire_bytes::WireBytesIncomplete::Timeout) => {
-                        "timed_out"
-                    }
-                    Some(
-                        skippy_inference_api::wire_bytes::WireBytesIncomplete::TransportError
-                        | skippy_inference_api::wire_bytes::WireBytesIncomplete::InvalidFraming,
-                    ) => "transport_error",
-                    _ => session.outcome_from_status(),
-                });
+            let outcome = session.outcome_from_status();
             if let Ok(runtime) = tokio::runtime::Handle::try_current() {
                 runtime.spawn(async move {
                     session.finish(outcome).await;

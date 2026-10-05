@@ -1,4 +1,4 @@
-//! Installable lifecycle exemplar with a setup identity diagnostic operation.
+//! Installable lifecycle exemplar with an opt-in MCP identity diagnostic operation.
 mod openai_exchange_compat;
 mod openai_exchange_identity;
 mod openai_exchange_stream;
@@ -13,6 +13,8 @@ use mesh_llm_plugin::{
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().collect();
+    validate_identity_flags(&args)?;
+    let identity_probe = args.iter().any(|arg| arg == "--identity-probe");
     let plugin_id = args
         .windows(2)
         .find(|pair| pair[0] == "--plugin-id")
@@ -34,10 +36,7 @@ async fn main() -> anyhow::Result<()> {
     hook.response_body = bodies;
     let virtual_echo = args.iter().any(|arg| arg == "--virtual-echo");
     let legacy_conformance = args.iter().any(|arg| arg == "--legacy-conformance");
-    let mut builder = plugin_manifest().item(mesh_llm_plugin::operation::<serde_json::Value>(
-        "identity_probe",
-        "Permissioned identity setup diagnostics",
-    ));
+    let mut builder = with_identity_probe(plugin_manifest(), identity_probe);
     if legacy_conformance {
         builder = builder.item(mesh_llm_plugin::operation::<serde_json::Value>(
             "legacy_echo",
@@ -73,7 +72,10 @@ async fn main() -> anyhow::Result<()> {
     let receiver = streams.clone();
     let plugin = SimplePlugin::new(metadata)
         .with_virtual_model_router(openai_exchange_virtual::router())
-        .with_operation_router(openai_exchange_compat::router(legacy_conformance))
+        .with_operation_router(openai_exchange_compat::router(
+            legacy_conformance,
+            identity_probe,
+        ))
         .on_open_stream(move |request, _context| {
             let receiver = receiver.clone();
             Box::pin(async move {
@@ -113,8 +115,8 @@ async fn main() -> anyhow::Result<()> {
                 if event["phase"] == "exchange_finished"
                     && event.get("response_wire_commitment").is_some()
                 {
-                    let verified = streams.verify_terminal(&event).await;
-                    eprintln!("response byte commitment independently verified: {verified}");
+                    let verification = streams.response_verification(&event, bodies).await;
+                    eprintln!("response byte commitment: {verification}");
                 }
                 // Admission is deterministic and needs no body permission. The operator
                 // selects the rejected model; no user-controlled claims grant authority.
@@ -174,4 +176,52 @@ async fn main() -> anyhow::Result<()> {
             })
         });
     PluginRuntime::run(plugin).await
+}
+
+fn validate_identity_flags(args: &[String]) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        !args.iter().any(|arg| arg == "--delegate") || args.iter().any(|arg| arg == "--identity"),
+        "--delegate requires --identity; add both flags to request scoped delegation"
+    );
+    Ok(())
+}
+
+fn with_identity_probe(
+    builder: mesh_llm_plugin::PluginManifestBuilder,
+    enabled: bool,
+) -> mesh_llm_plugin::PluginManifestBuilder {
+    if enabled {
+        builder.item(mesh_llm_plugin::operation::<serde_json::Value>(
+            "identity_probe",
+            "Permissioned identity setup diagnostics",
+        ))
+    } else {
+        builder
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn default_manifest_has_no_diagnostic_tool() {
+        let default = super::with_identity_probe(mesh_llm_plugin::plugin_manifest(), false).build();
+        assert!(default.operations.is_empty());
+        let opted_in = super::with_identity_probe(mesh_llm_plugin::plugin_manifest(), true).build();
+        assert_eq!(opted_in.operations.len(), 1);
+        assert_eq!(opted_in.operations[0].name, "identity_probe");
+    }
+
+    #[test]
+    fn delegation_flags_explain_identity_dependency() {
+        let args = vec!["--delegate".into()];
+        assert!(
+            super::validate_identity_flags(&args)
+                .unwrap_err()
+                .to_string()
+                .contains("--delegate requires --identity")
+        );
+        assert!(
+            super::validate_identity_flags(&["--delegate".into(), "--identity".into()]).is_ok()
+        );
+    }
 }

@@ -15,6 +15,7 @@ mod audio_multipart;
 use audio_multipart::multipart_model_field;
 mod body_rewrite;
 mod chunked;
+mod effective_entity;
 pub use body_rewrite::{inject_skippy_hooks_flag, rewrite_model_field};
 use chunked::{ChunkedDecoder, try_decode_chunked_body};
 

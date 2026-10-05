@@ -2,13 +2,14 @@
 
 Issue: [#1331](https://github.com/Mesh-LLM/mesh-llm/issues/1331).
 Initial audit: `adf85a8142cc2fc27d038e6500c5b4a53d755b71`, 2026-10-04.
-Merged upstream base: `9ca2aacaa698746becc811ec304d19de788c9d1e`.
+Merged upstream base: `94457923d5fb163751a3a86856c2ad5561562335`.
 The [normative v1 contract](openai-exchange-lifecycle.md) defines behavior. This
 matrix records implementation and verification separately; pending checks are
 not acceptance proof.
 
-After merging the Mesh/Skippy split, all-target tests passed for seven affected
-crates: 250 config, 3,668 host including integration targets, 48 identity, 61
+Before this follow-up, source validation at `76954a82ce220173c358636e0ed5803d0689e44b`
+passed the following checks after merging the Mesh/Skippy split. All-target
+tests passed for seven affected crates: 250 config, 3,668 host including integration targets, 48 identity, 61
 plugin including the exemplar, 57 package-manager, 325 inference API, and 902
 serving tests. Together they passed 5,311 tests with 30 ignored. The host
 library passed 3,643 tests with 25 ignored; serving had five ignored. UI type
@@ -33,13 +34,44 @@ These are local source/package results. The linked pull request records
 subsequent composed product builds and remote CI results. The checks above
 alone do not establish those results.
 
+The follow-up audit found uncovered cases despite those passing checks:
+effective raw chunked bodies included transfer framing, failed denial delivery
+could retain the admission outcome, and the SDK omitted the host's completeness
+booleans. The fixes decode the effective entity, resolve client delivery before
+admission, and preserve completeness and observation IDs in the typed SDK view.
+The exemplar's MCP identity diagnostic now requires `--identity-probe`; default
+metadata-only mode reports response verification as not requested. Current
+follow-up validation is recorded separately below rather than inferred from
+the earlier results.
+
+Follow-up local validation after integrating the current upstream base:
+
+- Host library: 3,817 passed, 26 ignored. The new regressions cover chunk
+  segmentation/extensions/trailers, model rewrites, expanded effective bodies,
+  host-added headers at the ingress limit, failed denial writes, typed error-body
+  drops, and upstream transport failures.
+- Plugin all-target suite: 58 library tests and seven exemplar tests passed.
+  These include the typed event parser, diagnostic opt-in, delegation flag
+  dependency, and distinct response-verification states.
+- Rebuilt installed conformance: all 17 tests passed, including the independent
+  chunked backend/body-receipt comparison and parsing an actual terminal event
+  through the public SDK.
+- Cargo check and warnings-denied all-target Clippy passed for the plugin,
+  host-runtime, and shipped binary. Formatting and diff checks passed.
+- The debug neutral host/UI build (`just mesh`) and the no-console-print
+  repository check passed. This follow-up did not rerun the local composed
+  release-bundle qualification recorded for the earlier revision.
+- The packaged CLI permission declarations and invalid delegation flags passed
+  smoke checks. The upstream Windows probe script passed Bash syntax checking
+  and all ten build-script tests.
+
 | Acceptance | Implementation | Verification |
 | --- | --- | --- |
 | Installed plugin inspects and denies chat | Private service, packaged child, real loopback ingress | Passed installed denial fixtures; zero backend dispatch |
 | Stable denial OpenAI error | Raw/typed ingress admission, deny-wins result | Host unit suite and installed denial/error-shape fixtures passed |
 | Allow preserves request bytes | Read-only decisions; exact body side streams | Installed backend byte recorder and independent receipt checks passed |
 | Effective request and selected route | Raw selected admission; typed prepared admission after defaults; prepared pipeline/virtual dispatch | Prepared denial regression and installed planner/strong/virtual dispatch checks passed |
-| Terminal outcomes | Shared host observation and frontend terminal guards | Host/frontend/Skippy suites and installed success/invalid/deny/error/timeout/cancel fixtures passed; focused exhaustion and actual failed-denial-write regressions passed |
+| Terminal outcomes | Shared host observation and frontend terminal guards; admission provenance retained separately | Host/frontend/Skippy suites and installed success/invalid/deny/error/timeout/cancel fixtures passed; failed raw/pipeline denial writes, typed 403/503/504 body drops, and upstream transport precedence regressions passed |
 | Independent byte digests | Final emitter SHA-256, entity framing observer | Wire vectors, installed backend/client comparisons, and independent receiver receipt checks passed |
 | Live streaming, no reorder or rewrite | Ordered bounded copies; authenticated raw byte side streams; gated backend tail | Receiver tests and installed client-frame/observer-progress checks before tail release passed |
 | Overflow/disconnect incomplete | Observer queue and completeness flags; independent healthy recipient | Host unit suite and installed overflow/disconnect isolation fixtures passed |
@@ -56,7 +88,7 @@ alone do not establish those results.
 | Local and tunneled observations | Shared ingress seam; real QUIC connection between two fixture nodes | Installed local/QUIC fixtures passed with fake inference backends |
 | Old generation-3 plugins operate | Additive manifest field and service kind; child mode omitting lifecycle declaration | Old protobuf decode and installed legacy-operation handshake checks passed; separately released old host unqualified |
 | Unsupported host fails clearly | Required lifecycle initialization rejection when host omits capability | Negotiation and installed old-capability handshake checks passed |
-| Maintained exemplar | Generic Rust plugin, manifest/package recipes, authenticated receipt receiver | Rebuilt package, installed startup/conformance, and both receiver tests passed |
+| Maintained exemplar | Generic Rust plugin, manifest/package recipes, authenticated receipt receiver, opt-in identity diagnostic | Rebuilt package, all 17 installed conformance tests, and seven exemplar tests passed; packaged permission/flag smoke checks passed |
 | Author/security documentation | Normative contract, grant reference, exemplar and wire vectors | Source audit completed and final local results recorded here |
 | Owner grant revocation applies live | Persisted owner apply refreshes grant registry and cancels copies even when the command waiter is cancelled; startup installs current grants under apply serialization | Host grant suite, concurrent/cancelled-command/startup persisted-revocation regressions, and installed manager-reduction fixtures passed; full owner API apply integration remains outside these fixtures |
 
@@ -73,6 +105,9 @@ fixtures live under
 - `live_streaming_tests.rs`: a gated backend tail proves that both the client
   receives an SSE frame and the installed observer receives bytes before
   backend completion.
+- `chunked_request_live_tests.rs`: an independently decoded backend entity and
+  installed observer receipts check three chunk layouts with extensions and
+  trailers; the terminal event is also parsed through the public SDK.
 - `typed_frontend_live_tests.rs`: real Axum TCP router with the production
   composite policy and hook wrapper; three-endpoint denial, streamed
   chat/Responses commitments, and completion error outcomes. The completion

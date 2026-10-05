@@ -84,6 +84,19 @@ a response byte commitment. A local observation ID distinguishes observations
 of the same exchange. IDs asserted by a peer provide correlation; they are not
 proof of a global execution claim.
 
+Rust authors can call `OpenAiExchangeEvent::parse(&event)` inside the existing
+raw JSON callback. The typed view preserves `observation_id` and the optional
+boolean fields `evidence_complete` and `observer_evidence_complete`. An absent
+field means unknown, rather than false. The old `evidence_completeness` string
+field is retained for SDK source compatibility but is not emitted by v1 hosts.
+The raw payload remains available for additive fields outside the typed view.
+
+Final client cancellation, timeout, or transport failure takes precedence over
+the admission outcome. The optional `admission_denied` and
+`required_admission_failure` booleans retain the admission result separately,
+including when delivery of a 403 or 503 response fails. Observer-copy loss
+changes evidence completeness without changing the execution outcome.
+
 Terminal events preserve a bounded history of up to 16 prepared dispatches,
 their commitments, reported usage when available, and elapsed lifecycle time.
 Truncating the history marks evidence incomplete. Usage is reported data, never
@@ -238,6 +251,8 @@ The [Rust exemplar](../../crates/mesh-llm-plugin/examples/README.md) uses the re
 plugin server, authenticated side streams, and host-private lifecycle service.
 `just package-openai-exchange-exemplar` creates an installable archive. Observe
 mode requests metadata only; admission and body modes are explicit options.
+The exemplar's `--identity-probe` flag separately exposes an MCP setup diagnostic;
+the lifecycle callbacks themselves remain private and are never MCP tools.
 Run `just test-openai-exchange-conformance` to package the exemplar and execute
 the installed HTTP, QUIC, prepared-dispatch, typed-router, and identity tests.
 These tests use `--ignored` in ordinary unit runs and fail if their package is

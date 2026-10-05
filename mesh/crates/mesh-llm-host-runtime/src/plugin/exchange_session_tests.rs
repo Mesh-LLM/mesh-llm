@@ -178,3 +178,170 @@ async fn slow_denial_never_copies_backend_response_bytes() {
     assert!(receiver.recv().await.unwrap().is_empty());
     manager.shutdown().await;
 }
+
+async fn selected_policy_manager(
+    fail_selected: bool,
+) -> (PluginManager, tokio::sync::mpsc::Receiver<Value>) {
+    let (terminals, receiver) = tokio::sync::mpsc::channel(4);
+    let runner: InProcessPluginRunner = Arc::new(move |stream| {
+        let mut hook = mesh_llm_plugin::openai_exchange::openai_exchange_hook("observe");
+        hook.required = true;
+        hook.admission = true;
+        let metadata = PluginMetadata::new(
+            "selected-policy",
+            "1.0.0",
+            mesh_llm_plugin::plugin_server_info(
+                "selected-policy",
+                "1.0.0",
+                "Policy",
+                "Test policy",
+                None::<String>,
+            ),
+        )
+        .with_manifest(mesh_llm_plugin::plugin_manifest![hook]);
+        let terminals = terminals.clone();
+        let plugin =
+            SimplePlugin::new(metadata).with_openai_exchange_handler(move |_, event, _| {
+                let terminals = terminals.clone();
+                Box::pin(async move {
+                    let decision = match event["phase"].as_str().unwrap() {
+                        "request_received" => OpenAiAdmissionDecision::Allow,
+                        "backend_selected" if fail_selected => {
+                            return Err(mesh_llm_plugin::PluginError::invalid_request(
+                                "selected policy failed",
+                            ));
+                        }
+                        "backend_selected" => OpenAiAdmissionDecision::Deny,
+                        "exchange_finished" => {
+                            terminals.send(event).await.unwrap();
+                            OpenAiAdmissionDecision::Abstain
+                        }
+                        _ => unreachable!(),
+                    };
+                    Ok(OpenAiExchangeDecision {
+                        decision,
+                        reason: None,
+                        annotations: Vec::new(),
+                        response_headers: Vec::new(),
+                    })
+                })
+            });
+        Box::pin(PluginRuntime::run_with_stream(plugin, stream))
+    });
+    let mut spec = config::in_process_builtin_spec("selected-policy");
+    spec.startup.optional = false;
+    spec.openai_exchange_grant = Some(Box::new(OpenAiExchangeGrant {
+        endpoints: vec![
+            "chat_completions".into(),
+            "completions".into(),
+            "responses".into(),
+        ],
+        phases: vec![
+            "request_received".into(),
+            "backend_selected".into(),
+            "exchange_finished".into(),
+        ],
+        admission: true,
+        metadata: true,
+        failure_policy: OpenAiExchangeFailurePolicy::Required,
+        deadline_ms: 1_000,
+        max_body_bytes: 1_048_576,
+        max_queue_bytes: 4_194_304,
+        max_in_flight: 32,
+        ..Default::default()
+    }));
+    let (tx, _rx) = tokio::sync::mpsc::channel(4);
+    let manager = PluginManager::start_with_in_process(
+        &config::ResolvedPlugins {
+            externals: vec![spec],
+            inactive: Vec::new(),
+        },
+        config::PluginHostMode {
+            mesh_visibility: mesh_llm_plugin::MeshVisibility::Private,
+        },
+        tx,
+        InProcessPlugins::default().with("selected-policy", runner),
+    )
+    .await
+    .unwrap();
+    (manager, receiver)
+}
+
+#[tokio::test]
+async fn request_allow_then_selected_rejection_retains_admission_but_reports_typed_drop_once() {
+    use axum::body::Body;
+    use bytes::Bytes;
+    use futures_util::StreamExt;
+    use http_body_util::BodyExt;
+    for fail_selected in [false, true] {
+        let (manager, mut terminals) = selected_policy_manager(fail_selected).await;
+        let (session, admission) = ExchangeSession::begin(
+            &manager,
+            request_event(
+                "selected-drop".into(),
+                "chat_completions",
+                "POST",
+                "/v1/chat/completions",
+                b"{}",
+                Default::default(),
+                false,
+            ),
+        )
+        .await;
+        assert!(admission.error_status().is_none());
+        let mut selected = request_event(
+            "selected-drop".into(),
+            "chat_completions",
+            "POST",
+            "/v1/chat/completions",
+            b"{}",
+            Default::default(),
+            false,
+        );
+        selected["phase"] = json!("backend_selected");
+        let result = manager
+            .selected_exchange_phase(session.observation_id(), selected)
+            .await;
+        assert_eq!(
+            result.error_status(),
+            Some(if fail_selected { 503 } else { 403 })
+        );
+        let observer = super::super::exchange_policy::TypedEmission::new(session);
+        observer.response_status(result.error_status().unwrap());
+        let first = futures_util::stream::once(async {
+            Ok::<_, std::io::Error>(Bytes::from_static(b"partial denial"))
+        });
+        let mut body = skippy_inference_api::wire_bytes::observe_response_body(
+            Body::from_stream(first.chain(futures_util::stream::pending())),
+            observer,
+        );
+        assert_eq!(
+            body.frame().await.unwrap().unwrap().into_data().unwrap(),
+            Bytes::from_static(b"partial denial")
+        );
+        drop(body);
+        let terminal = tokio::time::timeout(Duration::from_secs(2), terminals.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(terminal["execution_outcome"], "client_cancelled");
+        assert_eq!(terminal["admission_denied"], !fail_selected);
+        assert_eq!(terminal["required_admission_failure"], fail_selected);
+        assert_eq!(terminal["response_wire_commitment"]["byte_count"], 14);
+        assert_eq!(
+            terminal["response_wire_commitment"]["sha256"],
+            commit_wire_bytes(b"partial denial").sha256
+        );
+        assert_eq!(
+            terminal["response_wire_commitment"]["incomplete"],
+            "cancelled"
+        );
+        assert_eq!(terminal["evidence_complete"], false);
+        tokio::task::yield_now().await;
+        assert!(matches!(
+            terminals.try_recv(),
+            Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+        ));
+        manager.shutdown().await;
+    }
+}

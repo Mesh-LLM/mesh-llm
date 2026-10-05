@@ -656,7 +656,9 @@ fn fixture_spec(
         failure_policy: OpenAiExchangeFailurePolicy::Required,
         ..Default::default()
     };
-    let mut args = Vec::new();
+    // Installed fixtures explicitly expose setup diagnostics; the packaged
+    // exemplar's ordinary manifest has no public operation.
+    let mut args = vec!["--identity-probe".into()];
     if admission {
         args.push("--admission".into());
     }
@@ -909,3 +911,6 @@ mod streaming;
 
 #[path = "live_observer_failure_tests.rs"]
 mod observer_failures;
+
+#[path = "chunked_request_live_tests.rs"]
+mod chunked_requests;

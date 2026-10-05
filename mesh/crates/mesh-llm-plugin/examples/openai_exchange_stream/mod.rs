@@ -164,6 +164,38 @@ impl StreamEvidence {
         body.and_then(|(value, _)| value)
     }
 
+    pub async fn response_verification(
+        &self,
+        event: &serde_json::Value,
+        requested: bool,
+    ) -> ResponseVerification {
+        let id = event["exchange_id"].as_str().unwrap_or_default();
+        let receipt_present = self
+            .0
+            .lock()
+            .await
+            .contains_key(&(id.into(), "openai_exchange_response".into()));
+        let commitment = &event["response_wire_commitment"];
+        let comparable = commitment["incomplete"].is_null()
+            && commitment["side_stream_complete"] == true
+            && commitment["sha256"].is_string()
+            && commitment["byte_count"].is_u64();
+        let verified = self.verify_terminal(event).await;
+        self.0
+            .lock()
+            .await
+            .retain(|(exchange, _), _| exchange != id);
+        if !requested {
+            ResponseVerification::NotRequested
+        } else if !receipt_present || !comparable {
+            ResponseVerification::Unavailable
+        } else if verified {
+            ResponseVerification::Verified
+        } else {
+            ResponseVerification::Mismatch
+        }
+    }
+
     pub async fn verify_terminal(&self, event: &serde_json::Value) -> bool {
         let Some(id) = event["exchange_id"].as_str() else {
             return false;
@@ -192,6 +224,25 @@ impl StreamEvidence {
             .is_some_and(|value| value == &(digest.into(), count));
         receipts.retain(|(exchange, _), _| exchange != id);
         verified
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum ResponseVerification {
+    Verified,
+    NotRequested,
+    Unavailable,
+    Mismatch,
+}
+
+impl std::fmt::Display for ResponseVerification {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::Verified => "independently verified",
+            Self::NotRequested => "not requested (response body access disabled)",
+            Self::Unavailable => "unavailable (receipt missing or incomplete)",
+            Self::Mismatch => "mismatch (independent receipt differs)",
+        })
     }
 }
 
@@ -243,6 +294,49 @@ async fn log_receipt(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn verification_distinguishes_missing_receipts_from_mismatches() {
+        let evidence = StreamEvidence::default();
+        let event = serde_json::json!({"exchange_id":"test", "response_wire_commitment":{
+            "sha256":"expected","byte_count":3,"incomplete":null,"side_stream_complete":true}});
+        assert_eq!(
+            evidence.response_verification(&event, false).await,
+            ResponseVerification::NotRequested
+        );
+        assert_eq!(
+            evidence.response_verification(&event, true).await,
+            ResponseVerification::Unavailable
+        );
+        evidence.0.lock().await.insert(
+            ("test".into(), "openai_exchange_response".into()),
+            ("wrong".into(), 3),
+        );
+        assert_eq!(
+            evidence.response_verification(&event, true).await,
+            ResponseVerification::Mismatch
+        );
+        evidence.0.lock().await.insert(
+            ("test".into(), "openai_exchange_response".into()),
+            ("expected".into(), 3),
+        );
+        assert_eq!(
+            evidence.response_verification(&event, true).await,
+            ResponseVerification::Verified
+        );
+        evidence.0.lock().await.insert(
+            ("test".into(), "openai_exchange_response".into()),
+            ("expected".into(), 3),
+        );
+        let mut incomplete = event;
+        incomplete["response_wire_commitment"]["incomplete"] =
+            serde_json::json!("observer_overflow");
+        assert_eq!(
+            evidence.response_verification(&incomplete, true).await,
+            ResponseVerification::Unavailable
+        );
+        assert!(evidence.0.lock().await.is_empty());
+    }
+
     #[test]
     fn abandoned_body_retention_cannot_block_later_exchanges() {
         let mut bodies = RetainedRequests::new();

@@ -22,7 +22,23 @@ pub(super) async fn admit_selected_route(
     if !manager.has_exchange_hooks().await {
         return None;
     }
-    let event = selected_route_event(request, model, provider, target, attempt)?;
+    let event = match selected_route_event(request, model, provider, target, attempt) {
+        Ok(event) => event?,
+        Err(error) => {
+            tracing::warn!(%error, "cannot observe effective OpenAI request entity");
+            stream.record_exchange_outcome("internal_hook_failure");
+            return Some(send_selected_route_denial(stream, 503).await);
+        }
+    };
+    apply_selected_route_policy(&manager, request, stream, event).await
+}
+
+async fn apply_selected_route_policy(
+    manager: &crate::plugin::PluginManager,
+    request: &transport::BufferedHttpRequest,
+    stream: &mut ClientStream,
+    event: serde_json::Value,
+) -> Option<transport::RouteDispatchOutcome> {
     let result = match &request.exchange_observation_id {
         Some(id) => manager.selected_exchange_phase(id, event).await,
         None => manager.exchange_phase(event).await,
@@ -40,20 +56,17 @@ fn selected_route_event(
     provider: &str,
     target: SelectedRouteTarget<'_>,
     attempt: usize,
-) -> Option<serde_json::Value> {
-    let endpoint = exchange_endpoint(&request.client_path)?;
-    let body = request
-        .raw
-        .windows(4)
-        .position(|w| w == b"\r\n\r\n")
-        .map(|end| &request.raw[end + 4..])
-        .unwrap_or_default();
+) -> anyhow::Result<Option<serde_json::Value>> {
+    let Some(endpoint) = exchange_endpoint(&request.client_path) else {
+        return Ok(None);
+    };
+    let body = request.effective_http_entity()?;
     let mut event = crate::plugin::request_event(
         request.request_id.as_uuid().to_string(),
         endpoint,
         &request.method,
         &request.client_path,
-        body,
+        &body,
         Default::default(),
         false,
     );
@@ -65,7 +78,7 @@ fn selected_route_event(
     event["attempt"] = json!(attempt);
     event["effective_request_wire_digest"] = event["request_wire_digest"].take();
     event.as_object_mut().unwrap().remove("request_wire_digest");
-    Some(event)
+    Ok(Some(event))
 }
 
 async fn send_selected_route_denial(
@@ -146,6 +159,7 @@ mod tests {
                 SelectedRouteTarget::Url(url),
                 1,
             )
+            .unwrap()
             .unwrap();
             assert_eq!(event["phase"], "backend_selected");
             assert_eq!(event["target"], "<invalid-url>");
@@ -167,8 +181,13 @@ mod tests {
                 SelectedRouteTarget::MeshLabel(label),
                 2,
             )
+            .unwrap()
             .unwrap();
             assert_eq!(event["target"], label);
         }
     }
 }
+
+#[cfg(test)]
+#[path = "exchange_entity_tests.rs"]
+mod entity_tests;

@@ -259,6 +259,8 @@ pub type OpenAiExchangeHandler = std::sync::Arc<
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct OpenAiExchangeEvent {
     pub exchange_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observation_id: Option<String>,
     pub phase: String,
     pub endpoint: String,
     pub observation_point: String,
@@ -270,7 +272,7 @@ pub struct OpenAiExchangeEvent {
     pub headers: std::collections::BTreeMap<String, String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub body: Option<serde_json::Value>,
-    /// Bounded exact entity bytes. Larger bodies use correlated side streams.
+    /// Legacy control-envelope bytes. Current hosts send exact bytes only on side streams.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub body_hex: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -281,6 +283,66 @@ pub struct OpenAiExchangeEvent {
     pub response_wire_commitment: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub execution_outcome: Option<String>,
+    /// Admission provenance remains available when client delivery fails.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub admission_denied: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub required_admission_failure: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evidence_complete: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observer_evidence_complete: Option<bool>,
+    /// Legacy field retained for source compatibility; v1 hosts use the booleans above.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub evidence_completeness: Option<String>,
+}
+
+impl OpenAiExchangeEvent {
+    /// Parse the host payload while leaving raw JSON callbacks available to authors.
+    /// Unknown additive fields are ignored; missing optional evidence stays unknown.
+    pub fn parse(value: &serde_json::Value) -> serde_json::Result<Self> {
+        serde_json::from_value(value.clone())
+    }
+}
+
+#[cfg(test)]
+mod event_tests {
+    use super::OpenAiExchangeEvent;
+    use serde_json::json;
+
+    #[test]
+    fn parses_host_phases_and_terminal_evidence_without_losing_false() {
+        for phase in ["request_received", "backend_selected", "exchange_finished"] {
+            let mut payload = json!({"exchange_id":"exchange", "observation_id":"local-observation",
+                "phase":phase, "endpoint":"chat_completions", "observation_point":"gateway_ingress",
+                "method":"POST", "path":"/v1/chat/completions", "headers":{},
+                "request_wire_digest":{"sha256":"original","byte_count":10}});
+            if phase == "backend_selected" {
+                payload["effective_request_wire_digest"] =
+                    json!({"sha256":"prepared","byte_count":12});
+            }
+            if phase == "exchange_finished" {
+                payload["evidence_complete"] = json!(false);
+                payload["observer_evidence_complete"] = json!(true);
+                payload["execution_outcome"] = json!("completed");
+                payload["response_wire_commitment"] = json!({"sha256":"response","byte_count":20,
+                    "incomplete":null,"side_stream_complete":true});
+            }
+            let event = OpenAiExchangeEvent::parse(&payload).unwrap();
+            assert_eq!(event.observation_id.as_deref(), Some("local-observation"));
+            assert_eq!(
+                event.evidence_complete,
+                (phase == "exchange_finished").then_some(false)
+            );
+            assert_eq!(
+                event.observer_evidence_complete,
+                (phase == "exchange_finished").then_some(true)
+            );
+            assert!(event.evidence_completeness.is_none());
+            assert_eq!(
+                event.effective_request_wire_digest.is_some(),
+                phase == "backend_selected"
+            );
+        }
+    }
 }
