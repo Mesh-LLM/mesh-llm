@@ -1,0 +1,70 @@
+From d07cff19726c15adeb060c129d12a1d2755bca5f Mon Sep 17 00:00:00 2001
+From: Virgile-pct <222121099+Virgile-pct@users.noreply.github.com>
+Date: Mon, 5 Oct 2026 08:36:44 +0200
+Subject: [PATCH] test(skippy): keep graph contract fixtures sparse on Windows
+
+save_graph_contract_fixture() writes the GGUF metadata, then extends the
+file to its logical size with std::filesystem::resize_file. That leaves a
+hole on Linux, but NTFS allocates the whole extended range unless the file
+is marked sparse, so each fixture took its full logical size on disk (up to
+25.5 GiB, about 311 GiB for the whole matrix) and the suite filled the disk.
+On Windows, mark the file sparse with FSCTL_SET_SPARSE before extending it.
+If the file system cannot do that, warn and keep the previous behaviour.
+---
+ tests/test-graph-contract-fixture.h | 31 +++++++++++++++++++++++++++++
+ 1 file changed, 31 insertions(+)
+
+diff --git a/tests/test-graph-contract-fixture.h b/tests/test-graph-contract-fixture.h
+index 4afe275a1..994f462df 100644
+--- a/tests/test-graph-contract-fixture.h
++++ b/tests/test-graph-contract-fixture.h
+@@ -1,8 +1,38 @@
+ #pragma once
++#include <cstdio>
+ #include <filesystem>
+ #include <set>
+ #include "../src/llama-model.h"
+ 
++#ifdef _WIN32
++#ifndef NOMINMAX
++#define NOMINMAX
++#endif
++#ifndef WIN32_LEAN_AND_MEAN
++#define WIN32_LEAN_AND_MEAN
++#endif
++#include <windows.h>
++#include <winioctl.h>
++#endif
++
++// Extending a file leaves a hole on Linux, but NTFS allocates the whole range
++// unless the file is marked sparse first, so each fixture would take its full
++// logical size on disk (tens of GiB for the larger ones).
++static void mark_graph_contract_fixture_sparse(const std::filesystem::path & path) {
++#ifdef _WIN32
++    HANDLE file = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
++    DWORD returned = 0;
++    const bool sparse = file != INVALID_HANDLE_VALUE &&
++            DeviceIoControl(file, FSCTL_SET_SPARSE, nullptr, 0, nullptr, 0, &returned, nullptr);
++    if (file != INVALID_HANDLE_VALUE) { CloseHandle(file); }
++    if (!sparse) {
++        fprintf(stderr, "warning: cannot mark %s sparse, it will take its full size on disk\n", path.string().c_str());
++    }
++#else
++    (void) path;
++#endif
++}
++
+ // Sparse GGUFs carry synthetic tensor shapes only; they must never run inference.
+ static int save_graph_contract_fixture(llm_arch arch, const std::string & out, uint32_t layers, uint32_t width, uint32_t mtp_layers) {
+     if (out.empty() || arch == LLM_ARCH_UNKNOWN || layers < 2 || width == 0) {
+@@ -119,6 +149,7 @@ static int save_graph_contract_fixture(llm_arch arch, const std::string & out, u
+         size = std::max(size, uint64_t(gguf_get_meta_size(output.get()) +
+                 gguf_get_tensor_offset(output.get(), i) + gguf_get_tensor_size(output.get(), i)));
+     }
++    mark_graph_contract_fixture_sparse(path);
+     std::filesystem::resize_file(path, size);
+     return 0;
+ }
+-- 
+2.45.1.windows.1
+
