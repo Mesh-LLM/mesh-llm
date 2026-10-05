@@ -11098,5 +11098,24 @@
       "roster_line": 32,
       "count": 33
     }
+  },
+  "ci_workflow_artifact_test_retirement": {
+    "status": "OWNERSHIP_TRANSFERRED_POSTIMAGE_NORMAL_VALIDATION_PENDING",
+    "python_paths_after": 91,
+    "core_modules_after": 32,
+    "durable_coverage": {
+      "path": "ci/automation-migration/ci-workflow-artifact-retirement-coverage.json",
+      "sha256": "2498470b2988b96ae353dad7f600b71f9ec2189b6259325c1053d67f8068b1a5"
+    },
+    "current_test_tree": {
+      "sha256": "068e1fc68453d292cdf5ac5746334cf65363f7ae59541203c63f12bcd22ee742",
+      "paths": 30
+    },
+    "current_just": {
+      "path": "just/ci.just",
+      "sha256": "4d9c2fba2b4606756c4b7351832c757da7c82fb092b4af79b52960ffdd1522b4",
+      "roster_line": 32,
+      "count": 32
+    }
   }
 }

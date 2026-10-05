@@ -75,3 +75,6 @@ mod safetensors_smoke;
 
 #[path = "ci_runner_cache_contract/artifact_workflows/mod.rs"]
 mod artifact_workflows;
+
+#[path = "ci_runner_cache_contract/artifact_gaps/mod.rs"]
+mod artifact_gaps;
