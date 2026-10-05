@@ -36,6 +36,10 @@ pub(crate) mod runtime_install;
 pub(crate) mod sdk_fixture;
 pub(crate) mod stability;
 pub(crate) mod startup_recovery;
+#[cfg(test)]
+#[allow(dead_code)]
+#[path = "../../tests/migration_stability/tls_fixture.rs"]
+pub(crate) mod tls_fixture;
 pub(crate) mod ui_build;
 pub(crate) mod workload_smoke_config;
 pub(crate) use crate::command_interrupt;
@@ -127,3 +131,5 @@ pub(crate) fn run_replay_matrix(args: &[String], root: Option<&std::path::Path>)
 pub(crate) mod system_one_cases;
 
 pub(crate) mod system_one_smoke;
+
+pub(crate) mod agent_recording_proxy;

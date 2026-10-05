@@ -46,7 +46,7 @@ pub(super) fn setup(root: &Path) -> DynResult<()> {
     for (relative, contents) in [
         (
             "README.md",
-            "# OpenCode Smoke Fixture\n\nAnswer from files on disk. Implement the two public functions in src/smoke_calc.rs using only the Rust standard library. Run `just test`.\n",
+            "# Agent Smoke Fixture\n\nAnswer from files on disk. Implement the two public functions in src/smoke_calc.rs using only the Rust standard library. Run `just test`.\n",
         ),
         ("facts/signal.md", SIGNAL),
         ("src/matrix.txt", MATRIX),
@@ -81,13 +81,13 @@ fn source(root: &Path, initial: &str) -> DynResult<std::path::PathBuf> {
     }
     let digest = file_sha256(&path).map_err(|failure| failure.error)?;
     if digest.eq_ignore_ascii_case(initial) {
-        return Err("OpenCode left src/smoke_calc.rs unchanged".into());
+        return Err("Agent left src/smoke_calc.rs unchanged".into());
     }
     let contents = fs::read_to_string(&path)?;
     for marker in ["todo!", "unimplemented!", "ci smoke fixture"] {
         if contents.contains(marker) {
             return Err(
-                format!("OpenCode left placeholder marker in src/smoke_calc.rs: {marker}").into(),
+                format!("Agent left placeholder marker in src/smoke_calc.rs: {marker}").into(),
             );
         }
     }

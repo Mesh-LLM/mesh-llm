@@ -239,3 +239,9 @@ mod opencode_model_selection;
 mod agent_surface_capture_bound;
 #[path = "migration_lifecycle/opencode_coding_fixture.rs"]
 mod opencode_coding_fixture;
+
+#[path = "migration_lifecycle/opencode_recording_proxy.rs"]
+mod opencode_recording_proxy;
+
+#[path = "migration_lifecycle/agent_live_coding_fixture.rs"]
+mod agent_live_coding_fixture;
