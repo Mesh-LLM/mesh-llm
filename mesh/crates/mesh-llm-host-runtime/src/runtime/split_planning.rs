@@ -1,5 +1,6 @@
 use crate::inference::skippy;
 use anyhow::{Context, Result};
+pub(super) use skippy_coordinator::topology::PlacementObjective;
 use skippy_coordinator::topology::{
     LockedTopologyStage, ThroughputEstimate, TopologyNode, TopologyPlan, TopologyPlanningInput,
     TopologyStagePlan, estimate_plan_throughput, minimum_valid_context, plan_locked_topology,
@@ -74,6 +75,8 @@ pub(super) struct SplitTopologyPlanInput {
     pub(super) minimum_nodes: usize,
     pub(super) nodes: Vec<SplitTopologyPlanNode>,
     pub(super) auto_balance: bool,
+    /// What the re-cut optimises for. Only read when `auto_balance` is set.
+    pub(super) placement_objective: PlacementObjective,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -115,6 +118,10 @@ pub(super) struct SplitTopologyResourceInputs {
     pub(super) parallel_override: Option<usize>,
     /// Balance layer boundaries by node decode speed (`--auto-balance`).
     pub(super) auto_balance: bool,
+    /// Whether that re-cut minimises the slowest stage (aggregate throughput)
+    /// or the total serial decode time of one request (`--strategy
+    /// interactive`). Only read when `auto_balance` is set.
+    pub(super) placement_objective: PlacementObjective,
 }
 
 /// Per-stage capacity-model inputs resolved for a finished plan: the context
@@ -232,6 +239,7 @@ fn topology_planning_input(input: SplitTopologyPlanInput) -> TopologyPlanningInp
         parallel_lanes_override: input.parallel_lanes_override,
         target_decode_tpot_ms: input.target_decode_tpot_ms,
         auto_balance: input.auto_balance,
+        placement_objective: input.placement_objective,
     }
 }
 
@@ -644,6 +652,7 @@ fn runtime_slice_plan_input(
             })
             .collect(),
         auto_balance: resources.auto_balance,
+        placement_objective: resources.placement_objective,
     }
 }
 
@@ -1520,6 +1529,7 @@ mod tests {
                 ctx_size_override: None,
                 parallel_override: None,
                 auto_balance: false,
+                placement_objective: Default::default(),
             },
         )
         .expect("resource-aware topology");
@@ -1551,6 +1561,7 @@ mod tests {
                 ctx_size_override: Some(1),
                 parallel_override: Some(1),
                 auto_balance: false,
+                placement_objective: Default::default(),
             },
         )
         .expect("resource-aware topology with exact layer weights");
@@ -1587,6 +1598,7 @@ mod tests {
                 ctx_size_override: Some(1),
                 parallel_override: Some(1),
                 auto_balance: false,
+                placement_objective: Default::default(),
             },
         )
         .expect("MI300X and smaller accelerator should form a valid topology");
@@ -1631,6 +1643,7 @@ mod tests {
                 ctx_size_override: None,
                 parallel_override: None,
                 auto_balance: false,
+                placement_objective: Default::default(),
             },
         )
         .expect("latency-aware runtime topology");
@@ -1685,6 +1698,7 @@ mod tests {
                 ctx_size_override: None,
                 parallel_override: None,
                 auto_balance: false,
+                placement_objective: Default::default(),
             },
         );
 

@@ -214,6 +214,7 @@ mod tests {
             parallel_lanes_override: None,
             target_decode_tpot_ms: None,
             auto_balance: false,
+            placement_objective: Default::default(),
         }
     }
 
