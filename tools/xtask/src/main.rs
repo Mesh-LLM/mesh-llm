@@ -49,6 +49,7 @@ fn run() -> DynResult<()> {
         .map(|path| repository::RepositoryRoot::resolve(Some(path)))
         .transpose()?;
     match parsed.command {
+        cli::CliCommand::EventBenchmarkRun(rest) => automation::event_benchmark_runner::run(rest),
         cli::CliCommand::AgentClientConfig(rest) => automation::agent_client_config::run(rest),
         cli::CliCommand::CacheFamilyReport(rest) => automation::cache_family_report::run(rest),
         cli::CliCommand::AgentFixtureEvidence(rest) => {

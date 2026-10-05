@@ -135,6 +135,7 @@ fn count_mutations(path: &Path) -> DynResult<usize> {
 
 /// Every `*.rs` file with at least one mutation, keyed by `/`-separated
 /// relative path; `.git` and `target` components are skipped at any depth.
+/// The root `.omo` directory holds ignored local evidence, not repository source.
 fn discover(root: &Path) -> DynResult<BTreeMap<String, usize>> {
     let mut discovered = BTreeMap::new();
     let mut pending = vec![root.to_path_buf()];
@@ -147,7 +148,7 @@ fn discover(root: &Path) -> DynResult<BTreeMap<String, usize>> {
         for entry in entries {
             let entry = entry?;
             let name = entry.file_name();
-            if name == ".git" || name == "target" {
+            if name == ".git" || name == "target" || (dir == root && name == ".omo") {
                 continue;
             }
             let path = entry.path();
