@@ -20,6 +20,10 @@ const MAX_MANIFEST_BYTES: usize = 16 * 1024 * 1024;
 pub(super) struct Manifest {
     pub schema_version: u32,
     pub metrics_schema: String,
+    #[serde(default)]
+    pub trial_plan_algorithm: Option<String>,
+    #[serde(default)]
+    pub model: Option<String>,
     pub mode: String,
     pub seed: u64,
     #[serde(default = "first_attempt")]
