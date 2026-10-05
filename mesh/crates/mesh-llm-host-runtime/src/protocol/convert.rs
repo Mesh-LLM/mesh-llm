@@ -1360,6 +1360,7 @@ fn legacy_proto_config_to_mesh(
             web_ui_enabled: None,
             web_ui_primary_tab: None,
             allow_peer_blocks: None,
+            openai_exchange_grant: None,
             command: p.command.clone(),
             args: p.args.clone(),
             url: None,

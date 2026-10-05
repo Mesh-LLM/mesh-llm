@@ -8,6 +8,7 @@ use mesh_llm_plugin::{HostInferenceRequest, HostInferenceResponse};
 use mesh_llm_plugin::{VirtualModelCandidate, VirtualModelInvocation};
 use std::sync::Arc;
 
+mod exchange_admission;
 mod progress;
 mod stream_adapters;
 
@@ -247,12 +248,15 @@ pub(crate) async fn route_virtual_model_or_passthrough(
         node,
         tcp_stream,
         &request.path,
+        &request.client_path,
         &model_id,
         body,
         candidates,
         proxy::request_context_budget(request),
         request.response_adapter,
         route_observer,
+        request.exchange_observation_id.as_deref(),
+        request.request_id.as_uuid().to_string(),
     )
     .await
     {
@@ -311,12 +315,15 @@ pub(crate) async fn try_handle_virtual_model(
     node: &mesh::Node,
     tcp_stream: ClientStream,
     forwarded_path: &str,
+    client_path: &str,
     model_id: &str,
     request_body: serde_json::Value,
     candidate_models: Vec<String>,
     required_tokens: Option<u32>,
     response_adapter: proxy::ResponseAdapter,
     route_observer: OpenAiRouteObserver<'_>,
+    observation_id: Option<&str>,
+    exchange_id: String,
 ) -> VirtualModelDispatchResult {
     let route = match plugins.virtual_model_for_model(model_id).await {
         Ok(Some(route)) => route,
@@ -349,29 +356,37 @@ pub(crate) async fn try_handle_virtual_model(
         .into_iter()
         .map(|route| route.model_id)
         .collect::<std::collections::BTreeSet<_>>();
-    let requests_stream = request_body
-        .get("stream")
-        .and_then(serde_json::Value::as_bool)
-        .unwrap_or(false);
     let candidates =
         virtual_model_candidates(node, candidate_models, &virtual_ids, required_tokens).await;
-    let invocation = VirtualModelInvocation {
-        request: request_body,
-        candidates,
-        response_adapter: format!("{response_adapter:?}"),
-    };
-    let input_json = match serde_json::to_string(&invocation) {
-        Ok(value) => value,
-        Err(error) => {
-            let result = proxy::send_error_observed(
-                tcp_stream,
-                500,
-                &format!("failed to encode virtual model request: {error}"),
-                route_observer,
-            )
-            .await;
-            return VirtualModelDispatchResult::Responded(response_outcome(500, result));
-        }
+    let (input_json, requests_stream) =
+        match exchange_admission::prepare_invocation(request_body, candidates, response_adapter) {
+            Ok(value) => value,
+            Err(error) => {
+                let result =
+                    proxy::send_error_observed(tcp_stream, 500, &error, route_observer).await;
+                return VirtualModelDispatchResult::Responded(response_outcome(500, result));
+            }
+        };
+    let tcp_stream = match exchange_admission::admit_invocation(
+        node,
+        tcp_stream,
+        super::response::prepared_dispatch::PreparedSubdispatch {
+            observation_id,
+            exchange_id,
+            bytes: input_json.as_bytes(),
+            client_path,
+            encoding: "plugin_invocation_json",
+            model: model_id,
+            provider: "virtual_model",
+            target: &route.plugin_name,
+            attempt: 1,
+        },
+        route_observer,
+    )
+    .await
+    {
+        Ok(stream) => stream,
+        Err(outcome) => return VirtualModelDispatchResult::Responded(*outcome),
     };
     let invocation = plugins.invoke_virtual_model(
         &route,

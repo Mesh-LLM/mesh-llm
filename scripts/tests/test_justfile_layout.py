@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import re
 import subprocess
+import tarfile
+import tempfile
 from typing import Final
 import unittest
 
@@ -24,6 +27,8 @@ RECIPES_BY_FILE: Final = {
     "just/build.just": {
         "bootstrap-build-tools", "build", "build-dev",
         "qa-logging-console-e2e", "with-lld",
+        "build-openai-exchange-exemplar", "package-openai-exchange-exemplar",
+        "test-openai-exchange-conformance",
     },
     "just/release-build.just": {
         "llama-build", "llama-prepare", "llama-prepare-latest", "release",
@@ -69,6 +74,70 @@ RECIPE_HEADER: Final = re.compile(r"^([A-Za-z_][\w-]*)(?:\s+[^:]*)?:(?!=)")
 
 
 class JustfileLayoutTests(unittest.TestCase):
+    def test_exemplar_package_uses_current_cargo_artifact_instead_of_default_target(self) -> None:
+        source = (ROOT / "just/build.just").read_text(encoding="utf-8")
+        recipe = source.split("package-openai-exchange-exemplar:\n", 1)[1].split(
+            "\n# Run installed-process", 1
+        )[0]
+        for target in ("configured-target", "env-target/debug", "env-build-target/aarch64-apple-darwin/debug"):
+            with self.subTest(target=target), tempfile.TemporaryDirectory() as temporary:
+                directory = Path(temporary)
+                artifact = directory / target / "examples/openai-exchange-observer"
+                artifact.parent.mkdir(parents=True)
+                artifact.write_text('#!/bin/sh\nprintf \'{"fresh":true}\\n\'\n', encoding="utf-8")
+                artifact.chmod(0o755)
+                stale = directory / "target/debug/examples/openai-exchange-observer"
+                stale.parent.mkdir(parents=True)
+                stale.write_text("stale executable", encoding="utf-8")
+                shim = directory / "bin/just"
+                shim.parent.mkdir()
+                shim.write_text(
+                    '#!/bin/sh\n[ "$*" = "build-openai-exchange-exemplar json" ] || exit 2\n'
+                    'printf \'%s\\n\' "$CARGO_ARTIFACT_JSON"\n', encoding="utf-8"
+                )
+                shim.chmod(0o755)
+                justfile = directory / "fixture.just"
+                justfile.write_text("package-openai-exchange-exemplar:\n" + recipe, encoding="utf-8")
+                environment = dict(os.environ, PATH=str(shim.parent) + os.pathsep + os.environ["PATH"])
+                environment["CARGO_ARTIFACT_JSON"] = json.dumps({
+                    "reason": "compiler-artifact", "target": {"name": "openai-exchange-observer"},
+                    "executable": str(artifact),
+                }) + '\n' + json.dumps({"reason": "build-finished", "success": True})
+                driver = subprocess.check_output(["which", "just"], text=True).strip()
+                subprocess.run([driver, "--justfile", str(justfile), "package-openai-exchange-exemplar"],
+                               cwd=directory, env=environment, check=True, capture_output=True)
+                with tarfile.open(directory / "dist/openai-exchange-observer.tar.gz") as archive:
+                    executable = archive.extractfile("openai-exchange-observer/openai-exchange-observer")
+                    manifest = archive.extractfile("openai-exchange-observer/plugin-manifest.json")
+                    self.assertEqual(executable.read(), artifact.read_bytes())
+                    self.assertEqual(json.load(manifest), {"fresh": True})
+                environment["CARGO_ARTIFACT_JSON"] = '{"reason":"build-finished","success":true}'
+                (directory / "dist/openai-exchange-observer.tar.gz").unlink()
+                missing = subprocess.run([driver, "--justfile", str(justfile), "package-openai-exchange-exemplar"],
+                                         cwd=directory, env=environment, capture_output=True)
+                self.assertNotEqual(missing.returncode, 0)
+                self.assertFalse((directory / "dist/openai-exchange-observer.tar.gz").exists())
+
+    def test_windows_skips_only_unix_exemplar_conformance(self) -> None:
+        source = (ROOT / "just/ci.just").read_text(encoding="utf-8")
+        exemplar_stage = source.split('echo "=== 6/11 Plugin author exemplar ==="', 1)[1]
+        guard = exemplar_stage.split('    case "$(uname -s)" in\n', 1)[1].split("    esac\n", 1)[0]
+        script = 'case "$(uname -s)" in\n' + guard + "esac\njust portable-author-check\n"
+        for platform in ("MINGW64_NT-10.0", "MSYS_NT-10.0", "CYGWIN_NT-10.0", "Linux", "Darwin"):
+            with self.subTest(platform=platform), tempfile.TemporaryDirectory() as temporary:
+                directory = Path(temporary)
+                for name, body in {"uname": '#!/bin/sh\nprintf \'%s\\n\' "$TEST_PLATFORM"\n',
+                                   "just": '#!/bin/sh\nprintf \'called:%s\\n\' "$*"\n'}.items():
+                    shim = directory / name
+                    shim.write_text(body, encoding="utf-8")
+                    shim.chmod(0o755)
+                environment = dict(os.environ, PATH=str(directory) + os.pathsep + os.environ["PATH"],
+                                   TEST_PLATFORM=platform)
+                output = subprocess.check_output(["bash", "-e", "-c", script], env=environment, text=True)
+                self.assertIn("called:portable-author-check", output)
+                self.assertEqual("called:test-openai-exchange-conformance" in output,
+                                 platform in ("Linux", "Darwin"))
+
     def test_root_keeps_prelude_default_and_ordered_flat_imports(self) -> None:
         source = (ROOT / "Justfile").read_text(encoding="utf-8")
         imports = re.findall(r"(?m)^import '([^']+)'$", source)

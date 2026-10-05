@@ -430,10 +430,25 @@ pub trait Plugin: Send {
                     None => Ok(None),
                 }
             }
+            proto::ServiceKind::OpenaiExchange => {
+                let input = parse_service_input::<serde_json::Value>(&request.input_json)?;
+                self.observe_openai_exchange(&request.service_name, input, context)
+                    .await
+            }
             proto::ServiceKind::Unspecified => Err(PluginError::invalid_request(
                 "Service invocation kind is required",
             )),
         }
+    }
+
+    /// Host-private observer invocation. It is not included in MCP tools.
+    async fn observe_openai_exchange(
+        &mut self,
+        _handler: &str,
+        _input: serde_json::Value,
+        _context: &mut PluginContext<'_>,
+    ) -> PluginResult<Option<proto::InvokeServiceResponse>> {
+        Ok(None)
     }
 
     async fn invoke_virtual_model(
@@ -982,6 +997,25 @@ impl PluginRuntime {
             Arc::from(request.host_capabilities.clone());
         let mut plugin = state.plugin.write().await;
         let mut context = Self::context(&state);
+        if plugin
+            .manifest()
+            .and_then(|m| m.openai_exchange_hook)
+            .is_some_and(|h| h.required)
+            && !context.host_supports(crate::host_capabilities::OPENAI_EXCHANGE)
+        {
+            Self::write_payload(
+                &state,
+                request_id,
+                proto::envelope::Payload::ErrorResponse(
+                    PluginError::invalid_request(
+                        "host does not support required openai_exchange.v1 contract",
+                    )
+                    .into_error_response(),
+                ),
+            )
+            .await?;
+            return Ok(false);
+        }
         let init_result = plugin
             .initialize(PluginInitializeRequest::from(request), &mut context)
             .await;

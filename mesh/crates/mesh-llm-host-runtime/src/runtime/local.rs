@@ -825,8 +825,9 @@ pub(super) async fn start_runtime_local_model(
         .or_else(|| spec.pinned_gpu.map(|gpu| gpu.allocatable_vram_bytes()))
         .unwrap_or_else(|| spec.node.vram_bytes());
     let http_bind_addr = ([127, 0, 0, 1], alloc_local_port().await?).into();
-    let hook_policy =
-        Some(skippy::MeshAutoHookPolicy::new(spec.node.clone()) as Arc<dyn OpenAiHookPolicy>);
+    let hook_policy = Some(crate::plugin::exchange_policy::compose_node_hooks(
+        spec.node.clone(),
+    ));
     let start_result = start_local_openai_model(
         LocalOpenAiModelStartSpec {
             mesh_config: spec.mesh_config,

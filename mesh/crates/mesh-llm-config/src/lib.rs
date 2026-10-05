@@ -4,6 +4,7 @@ mod env_overrides;
 mod hardware_validation;
 mod model;
 mod model_validation;
+mod openai_exchange;
 mod plugin_validation;
 mod private_file;
 mod size;
@@ -32,6 +33,10 @@ pub use env_overrides::{
     resolve_lifecycle_log_parser_override, with_env_override_for_test,
 };
 pub use model::*;
+pub use openai_exchange::{
+    OPENAI_EXCHANGE_ENDPOINTS, OPENAI_EXCHANGE_PHASES, OpenAiExchangeFailurePolicy,
+    OpenAiExchangeGrant, safe_exchange_header,
+};
 pub use plugin_validation::control_behavior::{
     PluginConditionOperator, PluginConditionValue, PluginConditionalDisable, PluginConflictRule,
     PluginControlAvailability, PluginControlAvailabilitySource, PluginControlBehavior,
@@ -936,6 +941,10 @@ gpu_id = "pci:0000:65:00.0"
                 "PluginConfigEditor::args",
                 vec!["plugin.<plugin-name>.args"],
             ),
+            (
+                "PluginConfigEditor::openai_exchange_grant",
+                vec!["plugin.<plugin-name>.openai_exchange_grant.metadata"],
+            ),
             ("PluginConfigEditor::url", vec!["plugin.<plugin-name>.url"]),
             (
                 "PluginConfigEditor::connect_timeout_secs",
@@ -1003,7 +1012,12 @@ gpu_id = "pci:0000:65:00.0"
         let source_model = include_str!("model.rs");
         let source_multimodal = include_str!("model/multimodal.rs");
         let source_runtime = include_str!("model/runtime.rs");
-        let sources = [source_model, source_multimodal, source_runtime];
+        let sources = [
+            source_model,
+            source_multimodal,
+            source_runtime,
+            include_str!("openai_exchange.rs"),
+        ];
         let occurrences = [
             ("MeshConfig", 1usize),
             ("OwnerControlConfig", 1),
@@ -1030,6 +1044,7 @@ gpu_id = "pci:0000:65:00.0"
             ("AuditConfig", 1),
             ("PluginConfigEntry", 1),
             ("PluginStartupConfig", 1),
+            ("OpenAiExchangeGrant", 1),
             ("RuntimeActivityConfig", 1),
             ("LoggingConfig", 1),
             ("LoggingArtifactConfig", 1),
@@ -1062,6 +1077,7 @@ gpu_id = "pci:0000:65:00.0"
             "AdvancedServerConfig",
             "PluginConfigEntry",
             "PluginStartupConfig",
+            "OpenAiExchangeGrant",
             "RuntimeActivityConfig",
             "LoggingConfig",
             "LoggingArtifactConfig",

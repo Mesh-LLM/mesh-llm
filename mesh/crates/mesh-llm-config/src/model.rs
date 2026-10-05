@@ -1734,6 +1734,9 @@ pub struct PluginConfigEntry {
     /// peer. Host-owned; off unless the operator turns it on.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub allow_peer_blocks: Option<bool>,
+    /// Explicit operator lifecycle permissions. An absent grant gives no access.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub openai_exchange_grant: Option<crate::OpenAiExchangeGrant>,
     #[serde(default)]
     pub command: Option<String>,
     #[serde(default)]

@@ -290,7 +290,9 @@ pub(super) async fn load_split_runtime_generation_inner(
         skippy::SkippyModelHandle::load_stage0_runtime_options_with_openai_args_and_open_events(
             runtime_options,
             settings.embedded_openai.clone(),
-            Some(skippy::MeshAutoHookPolicy::new(node_for_hook)),
+            Some(crate::plugin::exchange_policy::compose_node_hooks(
+                node_for_hook,
+            )),
             skippy_telemetry,
             // Split downstream loads have no `LoadOperation` reservation of
             // their own (event-system-fixes deferral D2 scopes

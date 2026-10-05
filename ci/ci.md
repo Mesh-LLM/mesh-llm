@@ -1144,6 +1144,13 @@ complete
 [manage-ci validation contract](../.agents/skills/manage-ci/SKILL.md#validation-contract)
 for scope-specific checks, and run the canonical `just test-all` target when
 full repository validation is required.
+Its plugin-author gate rebuilds the OpenAI exchange observer package and runs
+the installed lifecycle conformance tests with controlled inference backends.
+`just test-openai-exchange-conformance` runs that gate independently.
+The exemplar lives under
+`mesh/crates/mesh-llm-plugin/examples/openai-exchange-observer.rs` and remains
+a Cargo example of the plugin SDK. The package archive is written to the
+workspace-root `dist/openai-exchange-observer.tar.gz`.
 
 ### Offline runner identity qualification
 

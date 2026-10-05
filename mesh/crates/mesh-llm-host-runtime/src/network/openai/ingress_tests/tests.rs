@@ -41,6 +41,7 @@ fn large_tokenize_request(model: &str) -> proxy::BufferedHttpRequest {
         request_object_request_ids: Vec::new(),
         response_adapter: proxy::ResponseAdapter::None,
         correlation_id: None,
+        exchange_observation_id: None,
     }
 }
 
@@ -216,6 +217,7 @@ fn dispatch_kind_request(
         request_object_request_ids: Vec::new(),
         response_adapter,
         correlation_id: None,
+        exchange_observation_id: None,
     }
 }
 
@@ -346,6 +348,7 @@ async fn enforce_mesh_routing_headers_before_dispatch_rejects_malformed_header_w
         request_object_request_ids: Vec::new(),
         response_adapter: proxy::ResponseAdapter::None,
         correlation_id: None,
+        exchange_observation_id: None,
     };
     let decision = AutoRouteDecision {
         effective_model: None,
@@ -1268,6 +1271,7 @@ async fn route_missing_local_model_enters_remote_mesh_branch_when_peer_serves_mo
         request_object_request_ids: Vec::new(),
         response_adapter: proxy::ResponseAdapter::OpenAiChatCompletionsJson,
         correlation_id: None,
+        exchange_observation_id: None,
     };
 
     // Confirm the nonce header round-trips through the raw bytes before the
@@ -1436,6 +1440,7 @@ async fn route_missing_local_model_sidecar_generated_nonce_origin_sets_sidecar_f
         request_object_request_ids: Vec::new(),
         response_adapter: proxy::ResponseAdapter::OpenAiChatCompletionsJson,
         correlation_id: None,
+        exchange_observation_id: None,
     };
 
     // Confirm both headers are readable before the routing function runs.
@@ -1626,6 +1631,7 @@ fn twin_bracket_header_values_keep_non_http_whitespace_for_the_parser() {
         request_object_request_ids: Vec::new(),
         response_adapter: proxy::ResponseAdapter::OpenAiChatCompletionsJson,
         correlation_id: None,
+        exchange_observation_id: None,
     };
 
     let values = request.twin_bracket_header_values().unwrap();
@@ -1951,6 +1957,7 @@ fn plugin_only_request(model: &str) -> proxy::BufferedHttpRequest {
         request_object_request_ids: Vec::new(),
         response_adapter: proxy::ResponseAdapter::None,
         correlation_id: None,
+        exchange_observation_id: None,
     }
 }
 
@@ -2361,6 +2368,7 @@ async fn route_missing_local_model_remote_mesh_terminal_carries_the_real_request
         request_object_request_ids: Vec::new(),
         response_adapter: proxy::ResponseAdapter::OpenAiChatCompletionsJson,
         correlation_id: None,
+        exchange_observation_id: None,
     };
 
     let ctx = IngressRouteContext {
@@ -2636,6 +2644,7 @@ async fn local_route_terminal_from_a_peer_keeps_the_twin_bracket_id() {
         request_object_request_ids: Vec::new(),
         response_adapter: proxy::ResponseAdapter::OpenAiChatCompletionsJson,
         correlation_id: None,
+        exchange_observation_id: None,
     };
     let peer_hex = "ab".repeat(32);
     let outcome = proxy::RouteDispatchOutcome::Responded(200);
