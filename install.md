@@ -93,7 +93,7 @@ section 1, follow only the sections it needs instead of walking all eleven:
 | Local chat or coding agent on one machine you already have | 2 (install check), 3 (survey — filtered), 9 (harness), 11 (report). Skip 4–7. |
 | Prove a two-node mesh works | 2, 3, 4, 5, 6, 11 |
 | Several independent models across machines | 2, 3, 4, 5, 6, 7, 11 |
-| One large model split across machines (advanced) | 2, 3, 4, 5, 6, 7 (split shape) + `docs/SKIPPY_SPLITS.md`, 11 |
+| One large model split across machines (advanced) | 2, 3, 4, 5, 6, 7 (split shape) + `skippy/docs/SKIPPY_SPLITS.md`, 11 |
 | Persistent service after a foreground test proves out | Prove the goal first, then revisit service setup in 2 |
 
 Diagnostics (section 8) and the journal (section 10) apply throughout. When a
@@ -273,7 +273,7 @@ anything to the user:
 - Exclude split fragments and package internals: refs ending in `-layers` (or
   containing `/layers/` or `/shared/`), and any `layer-*.gguf`, `shared/*.gguf`,
   `metadata.gguf`, or `skippy-shard-*` path. These are only relevant when the
-  goal is a split (section 7 and `docs/SKIPPY_SPLITS.md`).
+  goal is a split (section 7 and `skippy/docs/SKIPPY_SPLITS.md`).
 - Keep complete, independently loadable GGUFs.
 - For a coding-agent goal, rank the survivors by advertised `tool_use` support,
   then by fit, and confirm capability with `models show`.

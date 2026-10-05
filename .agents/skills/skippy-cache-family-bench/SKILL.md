@@ -1,6 +1,6 @@
 ---
 name: skippy-cache-family-bench
-description: Use this skill when benchmarking Skippy exact-prefix cache across model families, comparing Skippy against llama-server, producing README benchmark tables, updating crates/skippy-cache/README.md evidence, or diagnosing cache benchmark gaps by family or Hugging Face use case.
+description: Use this skill when benchmarking Skippy exact-prefix cache across model families, comparing Skippy against llama-server, producing README benchmark tables, updating skippy/crates/skippy-cache/README.md evidence, or diagnosing cache benchmark gaps by family or Hugging Face use case.
 metadata:
   short-description: Benchmark Skippy cache by family
 ---
@@ -18,13 +18,13 @@ production cache mode.
    baselines, Hugging Face use-case prompts, and the README report renderer:
 
    ```bash
-   evals/skippy-cache-family-bench.sh /tmp/skippy-cache-family-bench
+   skippy/evals/skippy-cache-family-bench.sh /tmp/skippy-cache-family-bench
    ```
 
 2. For fast iteration after a build, skip the build step:
 
    ```bash
-   SKIPPY_CACHE_SKIP_BUILD=1 evals/skippy-cache-family-bench.sh /tmp/skippy-cache-family-bench
+   SKIPPY_CACHE_SKIP_BUILD=1 skippy/evals/skippy-cache-family-bench.sh /tmp/skippy-cache-family-bench
    ```
 
 3. If running the pieces manually, keep these matched settings for full-GGUF
@@ -32,7 +32,7 @@ production cache mode.
 
    ```bash
    LLAMA_STAGE_BUILD_DIR=.deps/llama-build/build-stage-abi-cpu \
-     python3 evals/skippy-cache-production-bench.py \
+     python3 skippy/evals/skippy-cache-production-bench.py \
        --output-dir /tmp/skippy-cache-family-bench/full-gguf \
        --runtime-lane-count 1 \
        --llama-parallel 1 \
@@ -43,7 +43,7 @@ production cache mode.
 
    ```bash
    LLAMA_STAGE_BUILD_DIR=.deps/llama-build/build-stage-abi-cpu \
-     python3 evals/skippy-cache-production-bench.py \
+     python3 skippy/evals/skippy-cache-production-bench.py \
        --output-dir /tmp/skippy-cache-family-bench/use-cases \
        --runtime-lane-count 1 \
        --llama-parallel 1 \
@@ -54,7 +54,7 @@ production cache mode.
 5. Render README-ready tables from the combined JSON outputs:
 
    ```bash
-   python3 evals/skippy-cache-family-report.py \
+   python3 skippy/evals/skippy-cache-family-report.py \
      --input /tmp/skippy-cache-family-bench/full-gguf/production-cache-bench.json \
      --input /tmp/skippy-cache-family-bench/use-cases/production-cache-bench.json \
      --output /tmp/skippy-cache-family-bench/readme-tables.md
@@ -70,6 +70,6 @@ production cache mode.
   full-GGUF llama-server baseline.
 - Use one generated token and matched prefix tokens for apples-to-apples rows.
 - If a family fails correctness, leave the benchmark row out of promoted README
-  evidence and explain the failure in `crates/skippy-cache/TODO.md`.
+  evidence and explain the failure in `skippy/crates/skippy-cache/TODO.md`.
 - Preserve raw outputs under `/tmp/...` or another explicit run directory; do
   not paste ad hoc numbers without the backing `production-cache-bench.json`.

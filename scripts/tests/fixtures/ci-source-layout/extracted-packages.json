@@ -52,7 +52,7 @@
   "skippy-topology",
   "skippy-cache",
   "skippy-metrics",
-  "skippy-openai-frontend",
+  "skippy-inference-api",
   "skippy-ffi",
   "skippy-runtime",
   "skippy-scheduler",
@@ -72,6 +72,5 @@
   "skippy-bench",
   "skippy-prompt",
   "mesh-mixture-of-agents",
-  "llama-quant-ffi",
   "xtask"
 ]

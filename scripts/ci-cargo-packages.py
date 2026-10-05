@@ -33,7 +33,7 @@ SUCCESSORS = {
     'model-package': ['skippy-model-package'],
     'model-ref': ['skippy-model-ref'],
     'model-resolver': ['skippy-model-resolver'],
-    'openai-frontend': ['skippy-openai-frontend'],
+    'openai-frontend': ['skippy-inference-api'],
     'skippy-model-package': ['skippy-package-builder'],
     'skippy-server': [
         'skippy-serving', 'skippy-api', 'skippy-cli', 'skippy-commands',

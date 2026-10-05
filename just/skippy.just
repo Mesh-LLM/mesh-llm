@@ -1,3 +1,40 @@
+# Build the complete standalone Skippy product for local iteration.
+[unix]
+skippy backend="" cuda_arch="" rocm_arch="":
+    @skippy/scripts/build-development-product.sh --backend "{{ backend }}" --cuda-arch "{{ cuda_arch }}" --rocm-arch "{{ rocm_arch }}"
+
+[windows]
+skippy backend="" cuda_arch="" rocm_arch="":
+    @powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-windows.ps1 -Backend "{{ backend }}" -CudaArch "{{ cuda_arch }}" -RocmArch "{{ rocm_arch }}" -SkippyOnly
+
+# Build only the standalone server host; supply a separately packaged native
+# runtime through --runtime-bundle when running a serving command.
+[unix]
+skippy-cli-build:
+    cargo build --locked -p skippy-cli --features dynamic-native-runtime
+
+[windows]
+skippy-cli-build:
+    @cargo build --locked -p skippy-cli --bin skippy --features dynamic-native-runtime
+
+[unix]
+skippy-cli-release-build:
+    cargo build --release --locked -p skippy-cli --features dynamic-native-runtime
+
+[windows]
+skippy-cli-release-build:
+    @cargo build --release --locked -p skippy-cli --bin skippy --features dynamic-native-runtime
+
+# Build the complete Skippy release product for the current platform.
+[unix]
+skippy-release backend="" target="":
+    @just release-runtime-build "{{ backend }}" "{{ target }}"
+    @just skippy-cli-release-build
+
+[windows]
+skippy-release backend="":
+    @powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-windows.ps1 -Backend "{{ backend }}" -BuildProfile release -SkippyOnly
+
 # Build the skippy benchmark/debug telemetry collector.
 [unix]
 metrics-server-build:
@@ -10,7 +47,10 @@ metrics-server-build:
 # Build the binaries copied into the Skippy WAN Docker lab image.
 [linux]
 skippy-wan-lab-build-bins:
-    cargo build --release --locked -p skippy-server -p skippy-prompt -p metrics-server -p skippy-model-package
+    just release-runtime-build cpu
+    just skippy-cli-release-build
+    python3 scripts/verify-host-dependencies.py target/release/skippy --report dist/skippy-host-imports.json
+    just with-lld cargo build --release --locked -p metrics-server
 
 # Build the resumable GGUF conversion/quantization replacement CLI.
 [unix]
@@ -31,7 +71,7 @@ skippy-quantize-release-build:
     @just with-lld cargo build --release --locked -p skippy-quantize
 
 # Build skippy-quantize as a standalone quantization binary with the pinned
-# llama.cpp quantization ABI linked into the executable.
+# Skippy native ABI linked into the executable.
 [unix]
 skippy-quantize-standalone-build backend="cpu":
     scripts/prepare-llama.sh pinned
@@ -81,7 +121,7 @@ skippy-openai-smoke *ARGS:
 # Build the OpenAI benchmark server against an explicitly selected native ABI.
 # Nightly runners provide LLAMA_STAGE_BUILD_DIR from their pre-baked image.
 competitive-benchmark-build:
-    just with-lld cargo build --release --locked -p skippy-server
+    just with-lld cargo build --release --locked -p skippy-cli
 
 # Run the skippy benchmark/debug telemetry collector.
 metrics-server db="/tmp/mesh-metrics.duckdb" http_addr="127.0.0.1:18080" otlp_addr="127.0.0.1:14317" *ARGS="": metrics-server-build

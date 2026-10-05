@@ -45,8 +45,8 @@ fi
 
 cd "$ROOT"
 
-OLD_SHA="$(tr -d '[:space:]' < third_party/llama.cpp/upstream.txt)"
-PIN_FILE="$ROOT/third_party/llama.cpp/upstream.txt"
+OLD_SHA="$(tr -d '[:space:]' < skippy/llama_cpp/upstream.txt)"
+PIN_FILE="$ROOT/skippy/llama_cpp/upstream.txt"
 AGENT_PROVIDER="${CANARY_AGENT_PROVIDER:-zai_coding_plan}"
 AGENT_MODEL="${CANARY_AGENT_MODEL:-glm-5.3-flash}"
 AGENT_TIMEOUT_SECONDS="${CANARY_AGENT_TIMEOUT_SECONDS:-41400}"
@@ -214,7 +214,7 @@ verify_repair_pin() {
 agent_prompt() {
   printf 'Complete the llama.cpp upstream update to %s as one developer task in this checkout.
 
-The trusted harness has already written third_party/llama.cpp/upstream.txt to the exact target and recorded it in .deps/llama-canary-target-sha. Read ci/llama-canary/agent-repair-prompt.md and every repository skill it names, then own the work end to end: reproduce the queue failure, deliberately rebase or regenerate the owned patches, fix any generated-family rewriter or Rust ABI fallout, and run the prepare, build, smoke, and focused reproductions needed to validate your repairs. Once those checks pass, return control to the trusted harness for the full supported-family battery. Do not start an additional full battery in the coding session; the wrapper and separate verifier each run all required gates.
+The trusted harness has already written skippy/llama_cpp/upstream.txt to the exact target and recorded it in .deps/llama-canary-target-sha. Read ci/llama-canary/agent-repair-prompt.md and every repository skill it names, then own the work end to end: reproduce the queue failure, deliberately rebase or regenerate the owned patches, fix any generated-family rewriter or Rust ABI fallout, and run the prepare, build, smoke, and focused reproductions needed to validate your repairs. Once those checks pass, return control to the trusted harness for the full supported-family battery. Do not start an additional full battery in the coding session; the wrapper and separate verifier each run all required gates.
 
 Do not weaken, skip, or narrow a gate. Do not edit the workflow, this wrapper, its publisher, the agent runbook, or their contract tests. Do not create or switch branches, commit, push, open a pull request, or use GitHub credentials. Leave the completed changes in this working tree. The harness will independently rerun the entire verification sequence and only a green exact tree can be published.' \
     "$UPSTREAM_SHA"
@@ -278,7 +278,7 @@ agent_session_step() {
     root="$1"
     started="$2"
     while sleep 600; do
-      newest="$(find "$root/.deps/llama.cpp" -type f -newer "$root/third_party/llama.cpp/upstream.txt" -print -quit 2>/dev/null || true)"
+      newest="$(find "$root/.deps/llama.cpp" -type f -newer "$root/skippy/llama_cpp/upstream.txt" -print -quit 2>/dev/null || true)"
       printf "heartbeat: agent task running for %dm; recent llama.cpp activity: %s\n" \
         "$(( ($(date +%s) - started) / 60 ))" "${newest:-none observed yet}"
     done
@@ -364,7 +364,7 @@ snapshot_candidate_tree() {
   # Verify the dirty-tree producer before snapshotting changes its source identity.
   local closure="${LLAMA_STAGE_BUILD_DIR:?}-workloads"
   python3 "$ROOT/scripts/check-skippy-workload-candidate.py" \
-    --candidate-binary "$closure/cargo/debug/skippy-server" \
+    --candidate-binary "$closure/cargo/debug/skippy" \
     --native-build-dir "$closure/native" --producer-manifest "$closure/producer.json"
   CANARY_VERIFIED_WORKLOAD_PRODUCER="$(shasum -a 256 "$closure/producer.json" | awk '{print $1}')"
   export CANARY_VERIFIED_WORKLOAD_PRODUCER
@@ -450,7 +450,7 @@ materialize_verification_tree() {
   git -c core.hooksPath=/dev/null -C "$TRUSTED_ROOT" \
     worktree add --detach "$VERIFY_ROOT" "$CERTIFIED_SHA"
   ROOT="$VERIFY_ROOT"
-  PIN_FILE="$ROOT/third_party/llama.cpp/upstream.txt"
+  PIN_FILE="$ROOT/skippy/llama_cpp/upstream.txt"
   FAMILY_BATTERY_RUN_ID="${RUN_KEY}-verification"
   PLAN_PATH="$ROOT/target/family-battery/$FAMILY_BATTERY_RUN_ID/policy-plan.json"
   LLAMA_STAGE_BUILD_DIR="${LLAMA_STAGE_BUILD_DIR}-verification-${RUN_KEY}"
@@ -503,7 +503,7 @@ run_full_build() {
   run_verification_logged "generated model-family patch check" "$BUILD_LOG" \
     scripts/check-skippy-generated-family-patch.sh || return 1
   run_verification_logged "stage runtime crate build" "$BUILD_LOG" \
-    cargo build -p skippy-runtime -p skippy-server -p skippy-model-package -p skippy-correctness -p skippy-topology --bins \
+    cargo build -p skippy-runtime -p skippy-cli -p skippy-package-builder -p skippy-correctness -p skippy-topology --bins \
     || return 1
   run_verification_logged "Skippy smoke tests" "$BUILD_LOG" \
     scripts/skippy-ci-smoke.sh || return 1
@@ -515,7 +515,7 @@ run_full_build() {
     # The nested shell expands its positional argument, not this shell.
     # shellcheck disable=SC2016
     run_verification_logged "build transferable multimodal test executable" "$BUILD_LOG" \
-      bash -c 'cargo test -p skippy-server --lib --no-run --message-format=json > "$1"' \
+      bash -c 'cargo test -p skippy-serving --lib --no-run --message-format=json > "$1"' \
       build-mm "$STATE_DIR/mm-build.jsonl" || return 1
   fi
   # The family-certify runner is a Metal execution lane. Both real decision
@@ -575,7 +575,7 @@ run_early_metal_certification() {
   # therefore pin), native stamp, and every handed-off binary still match.
   run_verification_logged "verify exact workload producer" "$CERTIFY_LOG" \
     python3 scripts/check-skippy-workload-candidate.py \
-      --candidate-binary "${LLAMA_STAGE_BUILD_DIR:?}-workloads/cargo/debug/skippy-server" \
+      --candidate-binary "${LLAMA_STAGE_BUILD_DIR:?}-workloads/cargo/debug/skippy" \
       --native-build-dir "${LLAMA_STAGE_BUILD_DIR:?}-workloads/native" \
       --producer-manifest "${LLAMA_STAGE_BUILD_DIR:?}-workloads/producer.json" || return 1
   workload_settings="$(bash scripts/skippy-workload-oracles-build.sh --print-env "${LLAMA_STAGE_BUILD_DIR:?}-workloads")" || return 1
@@ -583,7 +583,7 @@ run_early_metal_certification() {
   while IFS= read -r setting; do
     workload_env+=("$setting")
   done <<< "$workload_settings"
-  mm_test_bin="$(jq -rs '[.[] | select(.reason == "compiler-artifact" and .profile.test == true and .target.name == "skippy_server" and .executable != null) | .executable] | unique | if length == 1 then .[0] else error("expected one exact multimodal test executable") end' "$STATE_DIR/mm-build.jsonl")" || return 1
+  mm_test_bin="$(jq -rs '[.[] | select(.reason == "compiler-artifact" and .profile.test == true and .target.name == "skippy_serving" and .executable != null) | .executable] | unique | if length == 1 then .[0] else error("expected one exact multimodal test executable") end' "$STATE_DIR/mm-build.jsonl")" || return 1
   [[ -x "$mm_test_bin" ]] || return 1
   # One exact candidate on Metal, with representatives for split parity,
   # recurrent and MoE replay, both encode-only startup classes, T5 ordering,

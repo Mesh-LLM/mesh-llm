@@ -1,8 +1,14 @@
 from __future__ import annotations
 
 import importlib.util
+import hashlib
+import io
+import json
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
+import tempfile
 import unittest
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -15,6 +21,45 @@ SPEC.loader.exec_module(MODULE)
 
 
 class VerifyHostDependenciesTests(unittest.TestCase):
+    def test_report_binds_executable_digest_without_changing_import_policy(self) -> None:
+        payload = b"host-executable-fixture"
+        for runtime_library in (False, True):
+            with (
+                self.subTest(runtime_library=runtime_library),
+                tempfile.TemporaryDirectory() as temporary,
+            ):
+                root = Path(temporary)
+                binary = root / "mesh-llm"
+                binary.write_bytes(payload)
+                report_path = root / "host-imports.json"
+                args = [str(binary), "--report", str(report_path)]
+                if runtime_library:
+                    args.append("--no-import-policy")
+                with (
+                    mock.patch.object(
+                        MODULE,
+                        "inspect_dependencies",
+                        return_value=("macho", ["libllama.dylib"]),
+                    ),
+                    redirect_stdout(io.StringIO()),
+                    redirect_stderr(io.StringIO()),
+                ):
+                    result = MODULE.main(args)
+                report = json.loads(report_path.read_text(encoding="utf-8"))
+                self.assertEqual(
+                    report["binary_sha256"], hashlib.sha256(payload).hexdigest()
+                )
+                self.assertEqual(report["binary"], "mesh-llm")
+                self.assertEqual(result, 0 if runtime_library else 1)
+                self.assertEqual(
+                    report["policy"],
+                    "none" if runtime_library else "mesh-llm-dynamic-host-v2",
+                )
+                self.assertEqual(
+                    report["rejected_imports"],
+                    [] if runtime_library else ["libllama.dylib"],
+                )
+
     def test_shared_host_actions_invoke_non_executable_verifier_with_python(
         self,
     ) -> None:
@@ -93,7 +138,7 @@ Version needs section '.gnu.version_r' contains 1 entry:
             ROOT / ".github" / "actions" / "prepare-host-input" / "action.yml"
         ).read_text(encoding="utf-8")
         runtime_verifier = (
-            ROOT / "scripts" / "verify-native-runtime-package.sh"
+            ROOT / "skippy" / "scripts" / "verify-native-runtime-package.sh"
         ).read_text(encoding="utf-8")
 
         self.assertIn("--max-glibc declared", unix_action)

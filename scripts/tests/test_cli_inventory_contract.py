@@ -7,7 +7,7 @@ import unittest
 
 
 ROOT = Path(__file__).resolve().parents[2]
-WEBSITE = ROOT / "website"
+WEBSITE = ROOT / "mesh" / "website"
 
 
 class CliInventoryContractTests(unittest.TestCase):
@@ -41,7 +41,7 @@ class CliInventoryContractTests(unittest.TestCase):
         self.assertIn("src/_data/cliInventory.json", gitignore)
 
         cleaner = (WEBSITE / "scripts/clean-generated-site.mjs").read_text(encoding="utf-8")
-        self.assertIn('"website/src/_data/cliInventory.json"', cleaner)
+        self.assertIn('"mesh/website/src/_data/cliInventory.json"', cleaner)
 
     def test_generator_invokes_locked_rust_exporter_and_validates_schema(self) -> None:
         generator = (WEBSITE / "scripts/generate-cli-inventory.mjs").read_text(encoding="utf-8")
@@ -76,7 +76,7 @@ class CliInventoryContractTests(unittest.TestCase):
         self.assertIn("^(mesh/|skippy/)?crates/mesh-llm-cli/", derive_outputs)
 
         affected = subprocess.run(
-            ["bash", str(ROOT / "scripts/affected-crates.sh"), "crates/mesh-llm-cli/src/parser/commands.rs"],
+            ["bash", str(ROOT / "scripts/affected-crates.sh"), "mesh/crates/mesh-llm-cli/src/parser/commands.rs"],
             cwd=ROOT,
             check=True,
             capture_output=True,

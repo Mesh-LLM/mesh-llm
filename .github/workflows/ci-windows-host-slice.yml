@@ -107,9 +107,10 @@ jobs:
         with:
           ref: ${{ inputs.source_sha || github.sha }}
           persist-credentials: false
+      - uses: taiki-e/install-action@3d23c1bbdafe696dfccad2664945a04f47d03dc3 # just
       - name: Resolve product source layout
         id: layout
-        uses: Mesh-LLM/mesh-llm/.github/actions/resolve-source-layout@38d63b2f6e27998034fdf0452150c7cc081fe921 # product-layout compatibility helpers
+        uses: Mesh-LLM/mesh-llm/.github/actions/resolve-source-layout@5c8fb4d472bc57058c8153761c561daa77dd5b94 # product-layout compatibility helpers
       - uses: ./.github/actions/setup-windows-short-paths
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
@@ -146,6 +147,17 @@ jobs:
           if ((-not (Test-Path -LiteralPath $uiPath)) -or ((Get-Item -LiteralPath $uiPath).Length -eq 0)) {
             throw "UI distribution is missing or empty"
           }
+      - name: Prepare standalone Skippy CLI
+        uses: ./.github/actions/prepare-skippy-cli-input
+        with:
+          profile: ${{ inputs.profile }}
+      - name: Upload immutable Windows Skippy CLI input
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: ci-skippy-cli-windows-${{ matrix.host.architecture }}
+          path: skippy-cli-input/
+          if-no-files-found: error
+          retention-days: 1
       - name: Prepare immutable Windows host
         uses: ./.github/actions/prepare-windows-host-input
         with:

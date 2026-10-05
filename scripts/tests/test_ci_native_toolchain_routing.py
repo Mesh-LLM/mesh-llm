@@ -264,7 +264,7 @@ class CiNativeToolchainRoutingTests(unittest.TestCase):
         for recipe in (
             "release-host-build",
             "release-runtime-build",
-            "release-host-build-windows",
+            "skippy-cli-release-build",
         ):
             with self.subTest(recipe=recipe):
                 self.assertIn(recipe, recipe_names)

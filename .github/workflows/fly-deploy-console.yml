@@ -43,6 +43,6 @@ jobs:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
         run: |
           flyctl deploy \
-            --config fly/console/fly.toml \
-            --dockerfile fly/Dockerfile \
+            --config mesh/deploy/fly/console/fly.toml \
+            --dockerfile mesh/deploy/fly/Dockerfile \
             --remote-only

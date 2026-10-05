@@ -24,14 +24,14 @@ def setup_step(name):
     return next(step["run"] for step in action["runs"]["steps"] if step.get("name") == name)
 
 
-PARITY = ROOT / "scripts" / "skippy-llama-parity.py"
-UPDATE_PIN = ROOT / "scripts" / "update-llama-pin.sh"
-BATTERY = ROOT / "scripts" / "skippy-family-battery.sh"
-BATTERY_PLANNER = ROOT / "scripts" / "plan-family-battery.py"
-FAMILY_CERTIFY = ROOT / "scripts" / "family-certify.sh"
+PARITY = ROOT / "skippy" / "scripts" / "skippy-llama-parity.py"
+UPDATE_PIN = ROOT / "skippy" / "scripts" / "update-llama-pin.sh"
+BATTERY = ROOT / "skippy" / "scripts" / "skippy-family-battery.sh"
+BATTERY_PLANNER = ROOT / "skippy" / "scripts" / "plan-family-battery.py"
+FAMILY_CERTIFY = ROOT / "skippy" / "scripts" / "family-certify.sh"
 FAMILY_OUTCOME = ROOT / "scripts" / "lib" / "family-outcome.sh"
 TIMEOUT_RUNNER = ROOT / "scripts" / "run-command-with-timeout.py"
-REWRITER_CHECK = ROOT / "scripts" / "check-skippy-generated-family-patch.sh"
+REWRITER_CHECK = ROOT / "skippy" / "scripts" / "check-skippy-generated-family-patch.sh"
 
 
 def _step_block(workflow: str, name: str) -> str:
@@ -138,7 +138,7 @@ class LlamaUpstreamCanaryWorkflowTests(unittest.TestCase):
         self.assertNotIn('cargo ', commands)
         wrapper = (ROOT / 'scripts/llama-canary-agent-repair.sh').read_text()
         self.assertIn('arch -arm64 bash scripts/build-llama.sh -DCMAKE_OSX_ARCHITECTURES=arm64', wrapper)
-        self.assertIn('cargo build -p skippy-runtime -p skippy-server', wrapper)
+        self.assertIn('cargo build -p skippy-runtime -p skippy-cli', wrapper)
         self.assertIn('lipo -archs', wrapper)
         self.assertEqual(build['env']['LLAMA_STAGE_BACKEND'], 'metal')
         self.assertIn('inputs.pass_id', build['env']['LLAMA_STAGE_BUILD_DIR'])
@@ -149,7 +149,7 @@ class LlamaUpstreamCanaryWorkflowTests(unittest.TestCase):
     def test_family_certification_uses_os_assigned_ports(self) -> None:
         battery = BATTERY.read_text(encoding="utf-8")
         family = FAMILY_CERTIFY.read_text(encoding="utf-8")
-        workload = (ROOT / "scripts/skippy-workload-certify.sh").read_text(
+        workload = (ROOT / "skippy/scripts/skippy-workload-certify.sh").read_text(
             encoding="utf-8"
         )
         self.assertNotIn("--port-base", battery + family)
@@ -672,7 +672,7 @@ class SkippyFamilyBatteryTests(unittest.TestCase):
         commands = [
             line
             for line in result.stdout.splitlines()
-            if line.startswith(str(FAMILY_CERTIFY) + " ")
+            if line.startswith(str(ROOT / "scripts/family-certify.sh") + " ")
         ]
         self.assertEqual(1, len(commands))
         self.assertIn("--split-layer", commands[0])
@@ -698,7 +698,7 @@ class SkippyFamilyBatteryTests(unittest.TestCase):
         self.assertIn("--startup-timeout-secs 600", result.stdout)
         self.assertIn("--require-oracle", result.stdout)
         self.assertNotIn("skippy-topology-plan", result.stdout)
-        self.assertNotIn(str(FAMILY_CERTIFY) + " ", result.stdout)
+        self.assertNotIn(str(ROOT / "scripts/family-certify.sh") + " ", result.stdout)
 
     def test_mixed_roster_keeps_workload_and_split_certification_separate(self) -> None:
         """Execute one distinct lane family per row without staging a non-chat workload."""
@@ -712,7 +712,7 @@ class SkippyFamilyBatteryTests(unittest.TestCase):
         result = self._dry_run("--skip-build", models=[causal, workload])
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertEqual(1, result.stdout.count("/skippy-topology-plan "))
-        self.assertEqual(1, result.stdout.count(str(FAMILY_CERTIFY) + " "))
+        self.assertEqual(1, result.stdout.count(str(ROOT / "scripts/family-certify.sh") + " "))
         self.assertEqual(1, result.stdout.count("/skippy-workload-certify.sh "))
         self.assertIn("2 certifications planned; no lanes executed", result.stdout)
 
@@ -755,7 +755,7 @@ class SkippyFamilyBatteryTests(unittest.TestCase):
         commands = [
             line
             for line in result.stdout.splitlines()
-            if line.startswith(str(FAMILY_CERTIFY) + " ")
+            if line.startswith(str(ROOT / "scripts/family-certify.sh") + " ")
         ]
         self.assertEqual(2, len(commands))
         self.assertIn("--family test-family", commands[0])
@@ -773,7 +773,7 @@ class SkippyFamilyBatteryTests(unittest.TestCase):
             policy["models"] = [first, second]
             manifest.write_text(json.dumps(policy) + "\n", encoding="utf-8")
             generated = subprocess.run(
-                [str(ROOT / "scripts" / "plan-family-battery.py"), "--manifest", str(manifest)],
+                [str(ROOT / "skippy" / "scripts" / "plan-family-battery.py"), "--manifest", str(manifest)],
                 cwd=ROOT, text=True, capture_output=True, check=False,
             )
             self.assertEqual(0, generated.returncode, generated.stderr)
@@ -900,7 +900,7 @@ class SkippyFamilyBatteryTests(unittest.TestCase):
             bin_dir.mkdir()
             hf = bin_dir / "hf"
             hf.write_text('#!/bin/sh\nprintf "path=%s\\n" "$FAKE_MODEL_PATH"\n', encoding="utf-8")
-            inspect = bin_dir / "skippy-model-package"
+            inspect = bin_dir / "skippy-package-builder"
             complete_tensors = [
                 {
                     "name": f"blk.{layer}.weight",
@@ -941,7 +941,7 @@ class SkippyFamilyBatteryTests(unittest.TestCase):
                 f"#!/bin/sh\nprintf '%s\\n' '{complete_scan}'\n",
                 encoding="utf-8",
             )
-            for name in ("hf", "skippy-model-package"):
+            for name in ("hf", "skippy-package-builder"):
                 path = bin_dir / name
                 path.chmod(path.stat().st_mode | stat.S_IXUSR)
             topology = bin_dir / "skippy-topology-plan"
@@ -952,7 +952,7 @@ class SkippyFamilyBatteryTests(unittest.TestCase):
                 "JSON\n",
                 encoding="utf-8",
             )
-            for name in ("skippy-correctness", "skippy-server", "skippy-topology-plan"):
+            for name in ("skippy-correctness", "skippy", "skippy-topology-plan"):
                 path = bin_dir / name
                 if not path.exists():
                     path.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")

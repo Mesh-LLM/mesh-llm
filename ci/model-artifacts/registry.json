@@ -77,11 +77,11 @@
       "reason": "metadata.gguf has no immutable revision and file digest/size in the checked-in source; leave outside the registry until verified"
     },
     {
-      "path": "evals/skippy-radix-cache-models.json#qwen35-hybrid",
+      "path": "skippy/evals/skippy-radix-cache-models.json#qwen35-hybrid",
       "reason": "the source has an immutable revision but no verified size or SHA-256 yet"
     },
     {
-      "path": "evals/skippy-radix-cache-models.json#qwen3next-linear",
+      "path": "skippy/evals/skippy-radix-cache-models.json#qwen3next-linear",
       "reason": "the source has an immutable revision but no verified size or SHA-256 yet"
     }
   ],
@@ -4165,7 +4165,7 @@
           }
         ]
       },
-      "notes": "Pinned Skippy runtime/model-package correctness fixture."
+      "notes": "Pinned Skippy runtime/skippy-model-package correctness fixture."
     },
     {
       "id": "smollm2-safetensors",

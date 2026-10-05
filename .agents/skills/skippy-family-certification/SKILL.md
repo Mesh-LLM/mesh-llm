@@ -14,13 +14,15 @@ selected-device behavior, and package materialization.
 
 ## Workflow
 
-1. Inspect the model with `skippy-runtime::ModelInfo` or the model-package
+1. Inspect the model with `skippy-runtime::ModelInfo` or the skippy-model-package
    helpers before choosing split points. Keep topology policy in
-   `crates/skippy-topology`.
+   `skippy/crates/skippy-topology`.
 
-2. Prefer reviewed capability data in
-   `crates/skippy-topology/capabilities/reviewed-family-capabilities.json`.
-   Do not enable default staged splits for a family without reviewed evidence.
+2. Use the GGUF/native model metadata for layer and state shape, and review
+   topology constraints in `skippy/crates/skippy-topology`. Do not enable
+   default staged splits without evidence in `skippy/docs/FAMILY_STATUS.md`
+   and the release-bound certification roster generated from
+   `ci/llama-canary/family-certified.json`.
 
 3. For dense models, validate at least one representative two-stage boundary
    and one multi-stage boundary. For recurrent or hybrid families, validate

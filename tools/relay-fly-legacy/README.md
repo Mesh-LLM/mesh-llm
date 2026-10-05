@@ -13,7 +13,7 @@ requiring mesh-llm to deploy and operate its own relay servers:
 | USE1-1 | US East | `https://use1-1.relay.michaelneale.mesh-llm.iroh.link./` |
 
 These are configured as defaults in
-`crates/mesh-llm-host-runtime/src/mesh/connections.rs`.
+`mesh/crates/mesh-llm-host-runtime/src/mesh/connections.rs`.
 
 `mesh-llm-relay.fly.dev` is retained here as a Fly.io deployment reference.
 

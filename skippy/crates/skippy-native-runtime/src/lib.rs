@@ -1,0 +1,40 @@
+//! Shared native runtime manifest, resolution, and cache policy.
+
+mod cache;
+mod flavor;
+pub mod host;
+mod load_plan;
+mod manifest;
+mod resolver;
+
+pub use cache::{
+    CachePrunePlan, GPU_BENCHMARK_TOOL_PATH, InstalledNativeRuntime, LenientInstalledScan,
+    NativeRuntimeCache, NativeRuntimeCacheRoot, NativeRuntimePruneMode, SkippedNativeRuntime,
+    native_runtime_cache_root,
+};
+pub use flavor::{
+    CudaRuntimeRequirements, NativeRuntimeBackend, NativeRuntimeBackendKind, NativeRuntimeFlavor,
+    NativeRuntimeFlavorParseError, RocmRuntimeRequirements, VulkanRuntimeRequirements,
+};
+pub use host::{
+    HostCudaProfile, HostGpuProfile, HostRocmProfile, HostRuntimeProfile, HostVulkanProfile,
+};
+pub use load_plan::NativeRuntimeLoadPlan;
+pub use manifest::{
+    NATIVE_RUNTIME_MANIFEST_FILE, NativeRuntimeArtifact, NativeRuntimeManifest,
+    NativeRuntimePlatform, NativeRuntimeReleaseManifest,
+};
+pub use resolver::{
+    CandidateEvaluation, CandidateRejection, NativeRuntimeResolution, NativeRuntimeResolver,
+    NativeRuntimeSource, RuntimeSelection, evaluate_native_runtime_artifact,
+    has_startup_compatibility_metadata, select_native_runtime,
+    select_native_runtime_for_skippy_abi, select_native_runtime_from_artifacts,
+};
+
+/// Native runtime artifact release, independent of the Mesh workspace package version.
+///
+/// The packaging producer reads the same Skippy-owned version file. This is a
+/// release identity; native binary compatibility is checked separately by ABI.
+pub fn runtime_release_version() -> &'static str {
+    include_str!("../RUNTIME_VERSION").trim()
+}
