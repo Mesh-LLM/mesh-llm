@@ -248,3 +248,6 @@ mod agent_live_coding_fixture;
 
 #[path = "migration_lifecycle/workload_lane_contract.rs"]
 mod workload_lane_contract;
+
+#[path = "migration_lifecycle/installer_unix/mod.rs"]
+mod installer_unix;
