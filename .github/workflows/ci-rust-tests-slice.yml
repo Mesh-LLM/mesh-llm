@@ -429,6 +429,13 @@ jobs:
         run: |
           set -euo pipefail
           fixture_dir="$RUNNER_TEMP/safetensors-smollm2"
+          quantizations="$(jq -er '
+            if type == "array" and length > 0 and
+               all(.[]; type == "string" and test("^[A-Za-z0-9_]+$"))
+            then .[]
+            else error("Expected a nonempty quantization list")
+            end
+          ' <<<"$SAFETENSORS_QUANTIZATIONS_JSON")"
           while IFS= read -r quantization; do
             echo "::group::$quantization"
             SKIPPY_SAFETENSORS_SMOKE_DIR="$fixture_dir" \
@@ -437,4 +444,4 @@ jobs:
               "$SAFETENSORS_SMOKE_TEST_BINARY" \
                 "$SAFETENSORS_SMOKE_TEST_NAME" --exact --ignored --nocapture
             echo "::endgroup::"
-          done < <(jq -r '.[]' <<<"$SAFETENSORS_QUANTIZATIONS_JSON")
+          done <<<"$quantizations"
