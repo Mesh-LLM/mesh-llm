@@ -32,6 +32,7 @@ pub(crate) mod laya;
 pub(crate) mod local_ports;
 pub(crate) mod logging_console;
 pub(crate) mod logging_recovery;
+mod openai_exchange;
 pub(crate) mod openai_smoke_config;
 pub(crate) mod runtime_install;
 pub(crate) mod sdk_fixture;

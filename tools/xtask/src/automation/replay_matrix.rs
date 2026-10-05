@@ -59,7 +59,7 @@ pub(super) mod server_cell_worker;
 pub(super) mod session_evidence;
 mod session_evidence_command;
 mod session_summary;
-mod stream_evidence;
+use super::openai_exchange::stream as stream_evidence;
 pub(super) mod trajectory_execution;
 pub(super) mod trajectory_reader;
 mod value;

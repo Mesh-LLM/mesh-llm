@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 
 #[derive(Default)]
-pub(super) struct Stream {
+pub(in crate::automation) struct Stream {
     pending: Vec<u8>,
     done: bool,
     error: Option<String>,
@@ -84,7 +84,7 @@ struct Function {
 }
 
 #[derive(Debug, Serialize)]
-pub(super) struct Evidence {
+pub(in crate::automation) struct Evidence {
     pub ttft_seconds: f64,
     pub elapsed_seconds: f64,
     pub generation_seconds: f64,
@@ -99,11 +99,15 @@ pub(super) struct Evidence {
 }
 
 impl Stream {
-    pub(super) fn terminal(&self) -> bool {
+    pub(in crate::automation) fn terminal(&self) -> bool {
         self.done || self.error.is_some()
     }
 
-    pub(super) fn consume(&mut self, bytes: &[u8], elapsed: Duration) -> Result<(), String> {
+    pub(in crate::automation) fn consume(
+        &mut self,
+        bytes: &[u8],
+        elapsed: Duration,
+    ) -> Result<(), String> {
         if self.done {
             return Ok(());
         }
@@ -209,7 +213,11 @@ impl Stream {
         }
     }
 
-    pub(super) fn finish(mut self, elapsed: Duration, probe: bool) -> Result<Evidence, String> {
+    pub(in crate::automation) fn finish(
+        mut self,
+        elapsed: Duration,
+        probe: bool,
+    ) -> Result<Evidence, String> {
         if !self.pending.is_empty() && !self.done {
             let pending = std::mem::take(&mut self.pending);
             self.line(&pending, elapsed)?;
@@ -258,12 +266,12 @@ impl Stream {
     }
 }
 
-pub(super) fn number(value: u64) -> f64 {
+pub(in crate::automation) fn number(value: u64) -> f64 {
     let upper = u32::try_from(value >> 32).unwrap_or(u32::MAX);
     let lower = u32::try_from(value & u64::from(u32::MAX)).unwrap_or(u32::MAX);
     f64::from(upper) * 4294967296.0 + f64::from(lower)
 }
 
 #[cfg(test)]
-#[path = "stream_evidence_tests.rs"]
+#[path = "stream_tests.rs"]
 mod tests;
