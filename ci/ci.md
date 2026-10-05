@@ -10,6 +10,14 @@ Skippy-first testing and release process, platform coverage, workflow
 before/after inventory and cache/workflow cleanup plan. It is an implementation
 proposal; this topology and the manage-ci contract describe current behavior.
 
+For a selected Linux, macOS, or Windows runtime row, the lane now builds the
+backend-neutral Skippy CLI independently of the console UI, composes it with
+the exact native runtime archive, and verifies source, target, backend,
+release, ABI, import policy, checksums, and no-driver runtime discovery before the Mesh host starts. The
+standalone product is an immutable run artifact. This phase is an artifact
+integrity gate; model and hardware qualification are still pending in the
+audit's acceptance checklist.
+
 The affected-crate fallback roster in `scripts/affected-crates.sh` includes
 `mesh-llm-moa-plugin` and `mesh-llm-wallet` alongside their related workspace
 crates; `just ci-crate-lists` checks it against workspace membership. The
@@ -947,11 +955,14 @@ the package; PRs are restore-only and Depot jobs neither restore nor publish
 this cache. The release producers remain independent of this CI cache.
 
 Skippy and MeshLLM are separate products in the shared source tree. Each
-platform host slice first builds one backend-neutral standalone Skippy CLI and
-uploads `ci-skippy-cli-<platform>-<architecture>` with a checksum and
-`host-imports.json` after verifying host imports, then builds the MeshLLM host.
+platform lane builds one backend-neutral standalone Skippy CLI independently
+of its UI-dependent Mesh host and uploads
+`ci-skippy-cli-<platform>-<architecture>` with a checksum, embedded build
+contract, and `host-imports.json` after verifying host imports.
 Native-runtime slices build or restore one Skippy llama.cpp
-runtime per selected backend; product composition and downstream tests consume
+runtime per selected backend and upload a source-bound `ci-source.json` beside
+the archive. The Linux CPU package cache uses the exact source revision in its
+key. Product composition and downstream tests consume
 the platform host/runtime graph, not per-test rebuilds. Release host jobs use
 the same Skippy CLI producer and publish separate versioned CLI archives while
 MeshLLM continues to package its own host, console and selected runtime. The

@@ -396,15 +396,17 @@ runner-contract update is active.
 | --- | --- |
 | `ci-quality-lane.yml` | Quality and runner/cache contract graph; reusable from PRs and dispatchable for main/manual |
 | `ci-website-lane.yml` | Console and website graph; reusable from PRs and dispatchable for main/manual |
-| `ci-linux-lane.yml` | Linux host/runtime/product/Rust/SDK/smoke graph with one platform-local UI producer |
-| `ci-macos-lane.yml` | macOS host/runtime/product/platform/Swift/Metal graph with one platform-local UI producer |
-| `ci-windows-lane.yml` | Windows host/runtime/product/platform/smoke graph with one platform-local UI producer |
+| `ci-linux-lane.yml` | Linux standalone CLI/runtime composition before the Mesh host, then product/Rust/SDK/smoke graph with one platform-local UI producer |
+| `ci-macos-lane.yml` | macOS standalone CLI/runtime composition before the Mesh host, then product/platform/Swift/Metal graph with one platform-local UI producer |
+| `ci-windows-lane.yml` | Windows standalone CLI/runtime composition before the Mesh host, then product/platform/smoke graph with one platform-local UI producer |
 | `ci-pr-canary-lane.yml` | Optional protected merge-source diagnostic lane for one Linux amd64 CPU UI/host/runtime/product chain; runner policy stays on the default branch, and the summary is step-summary-only and non-required |
 | `ci-quality-slice.yml` | Contracts (including product-crate README, description, and local-link checks), format, unused-dependency check, Clippy and generated CLI inventory freshness; additive protected authority sentinel |
 | `ci-web-slice.yml` | Console quality, console Playwright E2E, public website build, and CLI explorer browser validation |
 | `ci-ui-artifact-slice.yml` | Immutable console distribution producer; release callers prepare one source/version-bound UI with complete file checksums, shared by all hosts and SDK resources |
 | `static-abi-artifact.yml` | Typed static llama ABI producer with internal runner policy and an exact toolchain-epoch output |
 | `ci-rust-tests-slice.yml` | Typed deterministic Cargo test batches that prepare the patched llama checkout before verifying the producer-owned static ABI revision and toolchain epoch, plus a pinned, digest-verified Skippy correctness fixture; planned `skippy-ffi` tests execute; selected PR, main, and manual-full Skippy changes additionally compile the asserted `mesh-llm-skippy-adapter` library test `config::hardware_translation_tests::safetensors_checkpoint_reaches_mesh_host_runtime` and smoke an immutable SmolLM2 SafeTensors checkpoint through the Mesh config/adapter/Skippy serving/native path to sampled prefill and decode with every supported load-time quantization |
+| `ci-skippy-cli-slice.yml` | Hosted, backend-neutral standalone Skippy CLI producer on the selected Linux, macOS, or Windows target; emits a checksum, import report, and binary-verified source/version/ABI build contract |
+| `ci-skippy-product-slice.yml` | Platform-local composition of each selected runtime with that exact Skippy CLI; rejects mismatched source, target, backend, release, ABI, or checksum and checks no-driver discovery before the Mesh host starts. This is an artifact gate; executable model qualification remains to be added. |
 
 | `ci-{linux,macos,windows}-host-slice.yml` | Platform-pure neutral host producers; no empty cross-platform jobs |
 | `ci-{linux,macos,windows}-runtime-slice.yml` | Platform-pure native runtime producers. The Linux CPU row also runs the native runtime-event gate against its verified built-or-restored runtime and uploads its evidence. |
@@ -753,10 +755,10 @@ boundary.
 - `prepare-host-input` / `prepare-windows-host-input`: neutral host bytes,
   import report and checksum.
 - `prepare-skippy-cli-input`: one backend-neutral standalone Skippy CLI and
-  checksum per platform host slice, built before the MeshLLM host. PR/main CI
+  checksum per independent platform CLI slice, built before the MeshLLM host. PR/main CI
   publishes `ci-skippy-cli-<platform>-<architecture>` once per platform;
-  Unix and Windows producers verify host imports before checksumming and retain
-  `host-imports.json`; release publishes separate versioned CLI archives from the
+  Unix and Windows producers verify host imports before checksumming, record
+  the binary's build contract, and retain `host-imports.json`; release publishes separate versioned CLI archives from the
   same producer, verifies the report matches the executable SHA-256, and includes
   it in the archive.
 - `release.yml` crates preflight: the same-run `release-linux` producer supplies
@@ -771,10 +773,12 @@ boundary.
   a reliable import-library path for the tool. The Linux CPU row uses a
   forced-hosted selection from the central runner policy, leaving accelerator
   rows on their normal provider, and can restore an exact cache of this
-  packaged runtime, keyed by target,
+  packaged runtime, keyed by target, immutable source revision,
   toolchain/image epoch, Skippy and native recipe inputs. Restored bytes are
   verified against the planned backend and target as well as the full package
-  contract before the runtime-event gate and run-scoped upload. Only trusted
+  contract before the runtime-event gate and run-scoped upload. Each CI runtime
+  upload includes `ci-source.json` from the verified checkout, and standalone
+  composition rejects a foreign source. Only trusted
   main pushes publish; PRs restore only and Depot rows bypass this cache.
 - `prepare-static-abi-input`: portable static ABI archive.
 - `compose-product-input`: exact host/runtime verification and composition.

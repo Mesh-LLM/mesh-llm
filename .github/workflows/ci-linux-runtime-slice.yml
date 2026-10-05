@@ -166,7 +166,7 @@ jobs:
         uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
           path: runtime-input
-          key: skippy-runtime-linux-${{ matrix.runtime.target }}-${{ matrix.runtime.toolchain_epoch }}-${{ hashFiles('skippy/**', 'Cargo.toml', 'Cargo.lock', '.cargo/**', 'Justfile', 'just/**', 'scripts/**', 'ci/slices.yml', '.github/actions/prepare-native-runtime-input/**', '.github/cache-version.txt') }}
+          key: skippy-runtime-linux-${{ matrix.runtime.target }}-${{ matrix.runtime.toolchain_epoch }}-${{ inputs.source_sha }}-${{ hashFiles('skippy/**', 'Cargo.toml', 'Cargo.lock', '.cargo/**', 'Justfile', 'just/**', 'scripts/**', 'ci/slices.yml', '.github/actions/prepare-native-runtime-input/**', '.github/cache-version.txt') }}
       - name: Verify restored Linux CPU runtime
         id: cached_runtime
         if: ${{ steps.runtime_cache.outputs.cache-hit == 'true' }}
@@ -242,6 +242,13 @@ jobs:
           path: runtime-events-native-evidence.txt
           if-no-files-found: error
           retention-days: 7
+      - name: Bind native runtime producer to source revision
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          printf '{"source_sha":"%s"}\n' "$SOURCE_SHA" > runtime-input/ci-source.json
       - name: Upload immutable Linux runtime input
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
@@ -249,6 +256,7 @@ jobs:
           path: |
             runtime-input/*.tar.gz
             runtime-input/*.sha256
+            runtime-input/ci-source.json
           if-no-files-found: error
           retention-days: 1
       - name: Save exact Linux CPU runtime from trusted main

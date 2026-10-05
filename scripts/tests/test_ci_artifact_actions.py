@@ -41,13 +41,15 @@ class CiArtifactActionTests(unittest.TestCase):
         self.assertIn("& just $recipe", action)
         self.assertIn("skippy.sha256", action)
         self.assertIn("skippy.exe.sha256", action)
+        self.assertIn("build-contract.json", action)
+        cli_workflow = (ROOT / ".github/workflows/ci-skippy-cli-slice.yml").read_text(encoding="utf-8")
         for platform in ("linux", "macos", "windows"):
-            workflow = (ROOT / ".github" / "workflows" / f"ci-{platform}-host-slice.yml").read_text(encoding="utf-8")
-            self.assertLess(
-                workflow.index("Prepare standalone Skippy CLI"),
-                workflow.index("Prepare immutable"),
-            )
-            self.assertIn(f"ci-skippy-cli-{platform}-", workflow)
+            host = (ROOT / ".github" / "workflows" / f"ci-{platform}-host-slice.yml").read_text(encoding="utf-8")
+            lane = (ROOT / ".github" / "workflows" / f"ci-{platform}-lane.yml").read_text(encoding="utf-8")
+            self.assertNotIn("prepare-skippy-cli-input", host)
+            self.assertIn(f"ci-skippy-cli-{platform}-", cli_workflow)
+            self.assertIn("needs: [skippy_cli, native_runtimes]", lane)
+            self.assertIn("needs: [ui_artifact, skippy_product]", lane)
 
     def test_skippy_release_cli_archive_is_separate_and_checksum_bound(self) -> None:
         script = ROOT / "skippy" / "scripts" / "package-cli-release.sh"
@@ -2598,7 +2600,7 @@ class CiArtifactActionTests(unittest.TestCase):
                 if "pr_approved_ref:" in block:
                     approved_policy_calls += 1
                     self.assertIn("pr_approved_sha:", block)
-        self.assertEqual(selector_calls, 20)
+        self.assertEqual(selector_calls, 22)
         self.assertEqual(approved_policy_calls, 18)
 
         cases = (

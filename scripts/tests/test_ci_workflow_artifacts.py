@@ -43,6 +43,8 @@ class CiWorkflowArtifactTests(unittest.TestCase):
             "ci-web-slice.yml",
             "ci-ui-artifact-slice.yml",
             "ci-rust-tests-slice.yml",
+            "ci-skippy-cli-slice.yml",
+            "ci-skippy-product-slice.yml",
             "ci-linux-host-slice.yml",
             "ci-macos-host-slice.yml",
             "ci-windows-host-slice.yml",

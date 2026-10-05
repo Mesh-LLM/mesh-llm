@@ -1,5 +1,26 @@
 //! Exercise the standalone command's output streams without loading a model.
 #[test]
+fn build_contract_reports_abi_and_runtime_without_loading_native_code() {
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_skippy"))
+        .arg("build-contract")
+        .output()
+        .expect("start standalone command");
+    assert!(output.status.success(), "{:?}", output);
+    let contract: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(contract["schema_version"], 1);
+    assert_eq!(contract["product"], "skippy");
+    assert_eq!(contract["product_version"], env!("CARGO_PKG_VERSION"));
+    assert_eq!(
+        contract["runtime_release"],
+        skippy_runtime_install::runtime_release_version()
+    );
+    assert_eq!(
+        contract["skippy_abi"],
+        skippy_runtime_install::current_skippy_abi_version()
+    );
+}
+
+#[test]
 fn invalid_serving_settings_preserve_the_explanation() {
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_skippy"))
         .args(["serve", "--model", "missing.gguf", "--threads", "many"])

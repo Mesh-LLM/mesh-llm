@@ -137,9 +137,9 @@ class CiLaneWorkflowTests(unittest.TestCase):
         lane_workflows = {
             "ci-quality-lane.yml": 3,
             "ci-website-lane.yml": 2,
-            "ci-linux-lane.yml": 10,
-            "ci-macos-lane.yml": 9,
-            "ci-windows-lane.yml": 7,
+            "ci-linux-lane.yml": 12,
+            "ci-macos-lane.yml": 11,
+            "ci-windows-lane.yml": 9,
         }
         for workflow_name, expected_calls in lane_workflows.items():
             with self.subTest(workflow=workflow_name):
@@ -320,6 +320,8 @@ class CiLaneWorkflowTests(unittest.TestCase):
             "runner_role": "windows-build",
         }
         lane_jobs = (
+            "skippy_cli",
+            "skippy_product",
             "ui_artifact",
             "hosts",
             "native_runtimes",

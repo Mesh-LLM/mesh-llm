@@ -57,15 +57,17 @@ def _required_jobs(lane_plan: dict[str, Any]) -> set[str]:
     elif lane == "linux":
         hosts = _ids(lane_plan, "hosts")
         runtimes = _ids(lane_plan, "runtime_products")
+        if runtimes and not hosts:
+            raise LaneResultError("Linux runtimes require a standalone CLI host row")
         sdk = _ids(lane_plan, "sdk")
         if hosts:
-            jobs.update({"ui_artifact", "hosts"})
+            jobs.update({"skippy_cli", "ui_artifact", "hosts"})
         if "static-abi" in selected:
             jobs.add("static_abi")
         if _ids(lane_plan, "rust_tests"):
             jobs.add("rust_tests")
         if runtimes:
-            jobs.update({"native_runtimes", "runtime_product"})
+            jobs.update({"native_runtimes", "skippy_product", "runtime_product"})
         if "kotlin" in sdk:
             jobs.add("kotlin_sdk_input")
         if sdk:
@@ -75,11 +77,13 @@ def _required_jobs(lane_plan: dict[str, Any]) -> set[str]:
     elif lane == "macos":
         hosts = _ids(lane_plan, "hosts")
         runtimes = _ids(lane_plan, "runtime_products")
+        if runtimes and not hosts:
+            raise LaneResultError("macOS runtimes require a standalone CLI host row")
         sdk = _ids(lane_plan, "sdk")
         if hosts:
-            jobs.update({"ui_artifact", "hosts"})
+            jobs.update({"skippy_cli", "ui_artifact", "hosts"})
         if runtimes:
-            jobs.update({"native_runtimes", "runtime_product"})
+            jobs.update({"native_runtimes", "skippy_product", "runtime_product"})
         if _ids(lane_plan, "platform_checks"):
             jobs.add("platform_checks")
         if "swift" in sdk:
@@ -93,10 +97,12 @@ def _required_jobs(lane_plan: dict[str, Any]) -> set[str]:
     elif lane == "windows":
         hosts = _ids(lane_plan, "hosts")
         runtimes = _ids(lane_plan, "runtime_products")
+        if runtimes and not hosts:
+            raise LaneResultError("Windows runtimes require a standalone CLI host row")
         if hosts:
-            jobs.update({"ui_artifact", "hosts"})
+            jobs.update({"skippy_cli", "ui_artifact", "hosts"})
         if runtimes:
-            jobs.update({"native_runtimes", "runtime_product"})
+            jobs.update({"native_runtimes", "skippy_product", "runtime_product"})
         if _ids(lane_plan, "platform_checks"):
             jobs.add("platform_checks")
         if _ids(lane_plan, "smoke"):

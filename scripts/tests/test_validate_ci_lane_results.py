@@ -39,6 +39,8 @@ class ValidateCiLaneResultsTests(unittest.TestCase):
         needs = {
             job: state("success")
             for job in {
+                "skippy_cli",
+                "skippy_product",
                 "ui_artifact",
                 "static_abi",
                 "rust_tests",
@@ -69,6 +71,8 @@ class ValidateCiLaneResultsTests(unittest.TestCase):
         }
         expected = {
             "validate_plan",
+            "skippy_cli",
+            "skippy_product",
             "ui_artifact",
             "hosts",
             "native_runtimes",
@@ -81,7 +85,7 @@ class ValidateCiLaneResultsTests(unittest.TestCase):
         self.assertEqual(VALIDATOR._required_jobs(plan), expected)
         VALIDATOR.validate(plan, {job: state("success") for job in expected})
 
-    def test_windows_runtime_products_do_not_require_host_rows(self) -> None:
+    def test_windows_runtime_products_require_the_standalone_cli_producer(self) -> None:
         plan = {
             "lane": "windows",
             "required": True,
@@ -92,10 +96,8 @@ class ValidateCiLaneResultsTests(unittest.TestCase):
                 "platform_checks": [],
             },
         }
-        expected = {"native_runtimes", "runtime_product"}
-
-        self.assertEqual(VALIDATOR._required_jobs(plan), expected)
-        VALIDATOR.validate(plan, {job: state("success") for job in expected})
+        with self.assertRaisesRegex(VALIDATOR.LaneResultError, "standalone CLI"):
+            VALIDATOR._required_jobs(plan)
 
     def test_malformed_planned_need_uses_lane_error_exit(self) -> None:
         plan = {

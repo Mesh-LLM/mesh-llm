@@ -147,17 +147,6 @@ jobs:
           if ((-not (Test-Path -LiteralPath $uiPath)) -or ((Get-Item -LiteralPath $uiPath).Length -eq 0)) {
             throw "UI distribution is missing or empty"
           }
-      - name: Prepare standalone Skippy CLI
-        uses: ./.github/actions/prepare-skippy-cli-input
-        with:
-          profile: ${{ inputs.profile }}
-      - name: Upload immutable Windows Skippy CLI input
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
-        with:
-          name: ci-skippy-cli-windows-${{ matrix.host.architecture }}
-          path: skippy-cli-input/
-          if-no-files-found: error
-          retention-days: 1
       - name: Prepare immutable Windows host
         uses: ./.github/actions/prepare-windows-host-input
         with:

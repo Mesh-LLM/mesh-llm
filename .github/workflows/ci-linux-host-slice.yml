@@ -148,17 +148,6 @@ jobs:
         env:
           UI_DIR: ${{ steps.layout.outputs.ui_dir }}
         run: test -s "$UI_DIR/dist/index.html"
-      - name: Prepare standalone Skippy CLI
-        uses: ./.github/actions/prepare-skippy-cli-input
-        with:
-          profile: ${{ inputs.profile }}
-      - name: Upload immutable Linux Skippy CLI input
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
-        with:
-          name: ci-skippy-cli-linux-${{ matrix.host.architecture }}
-          path: skippy-cli-input/
-          if-no-files-found: error
-          retention-days: 1
       - name: Prepare immutable Linux host
         uses: ./.github/actions/prepare-host-input
         with:

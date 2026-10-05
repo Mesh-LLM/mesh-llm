@@ -1,0 +1,218 @@
+name: CI standalone Skippy product
+
+on:
+  workflow_call:
+    inputs:
+      source_sha:
+        description: Immutable product source revision.
+        required: true
+        type: string
+      original_event_name:
+        description: Original event for protected runner policy.
+        required: true
+        type: string
+      platform:
+        description: Closed platform selector (linux, macos, windows).
+        required: true
+        type: string
+      runtime_matrix:
+        description: Bounded selected runtime rows from the checked CI plan.
+        required: true
+        type: string
+      max_parallel:
+        description: Bounded product composition worker budget.
+        required: true
+        type: number
+      fail_fast:
+        description: Cancel sibling PR rows on a required failure.
+        required: true
+        type: boolean
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  runner_policy:
+    name: Select standalone product runner
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      linux: ${{ steps.policy.outputs.runner }}
+      macos: ${{ steps.policy.outputs.runner_macos }}
+      windows: ${{ steps.policy.outputs.runner_windows }}
+    steps:
+      - name: Validate bounded product rows
+        shell: bash
+        env:
+          PLATFORM: ${{ inputs.platform }}
+          RUNTIME_ROWS: ${{ inputs.runtime_matrix }}
+          MAX_PARALLEL: ${{ inputs.max_parallel }}
+        run: |
+          set -euo pipefail
+          case "$PLATFORM" in linux|macos|windows) ;; *) exit 1 ;; esac
+          [[ "$MAX_PARALLEL" =~ ^[0-9]+$ ]] && (( MAX_PARALLEL >= 1 && MAX_PARALLEL <= 12 ))
+          jq -e --arg platform "$PLATFORM" '
+            type == "array" and length > 0 and length <= 4 and
+            all(.[]; .platform == $platform and (.id | type == "string") and
+              (.architecture | type == "string") and (.backend | type == "string") and
+              (.target | type == "string")) and
+            ([.[].id] | unique | length) == length
+          ' <<<"$RUNTIME_ROWS" >/dev/null
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - name: Select protected hosted composition role
+        id: policy
+        uses: ./.github/actions/select-ci-runners
+        with:
+          event_name: ${{ github.event_name }}
+          original_event_name: ${{ inputs.original_event_name }}
+          repository: ${{ github.repository }}
+          head_repository: ${{ github.event.pull_request.head.repo.full_name }}
+          head_sha: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ github.ref }}
+          depot_main_enabled: 'false'
+          depot_pr_enabled: 'false'
+          pr_canary_ref: ${{ vars.DEPOT_PR_CANARY_REF }}
+          force_hosted: true
+
+  linux_product:
+    name: Standalone Linux Skippy (${{ matrix.runtime.backend }})
+    needs: runner_policy
+    if: ${{ needs.runner_policy.result == 'success' && inputs.platform == 'linux' }}
+    runs-on: ${{ needs.runner_policy.outputs.linux }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: ${{ inputs.fail_fast }}
+      max-parallel: ${{ inputs.max_parallel }}
+      matrix:
+        runtime: ${{ fromJson(inputs.runtime_matrix) }}
+    container:
+      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:f499b79bc52dc7492d57397fdbec9f890c6f6bb1d8c1fcde9c1c97d45c0541a7
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ inputs.source_sha }}
+          persist-credentials: false
+      - name: Verify composition environment
+        run: verify-runner-image public cpu
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ci-skippy-cli-linux-${{ matrix.runtime.architecture }}
+          path: skippy-cli-input
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ci-runtime-linux-${{ matrix.runtime.architecture }}-${{ matrix.runtime.backend }}
+          path: runtime-input
+      - name: Compose exact standalone product
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          TARGET: ${{ matrix.runtime.target }}
+          BACKEND: ${{ matrix.runtime.backend }}
+        run: |
+          set -euo pipefail
+          python3 skippy/scripts/compose-ci-product.py --cli-input skippy-cli-input \
+            --runtime-input runtime-input --output skippy-product-input \
+            --source-sha "$SOURCE_SHA" --target "$TARGET" --backend "$BACKEND"
+      - name: Upload immutable standalone product
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: ci-skippy-product-linux-${{ matrix.runtime.architecture }}-${{ matrix.runtime.backend }}
+          path: skippy-product-input.tar.gz
+          if-no-files-found: error
+          retention-days: 1
+
+  macos_product:
+    name: Standalone macOS Skippy (${{ matrix.runtime.backend }})
+    needs: runner_policy
+    if: ${{ needs.runner_policy.result == 'success' && inputs.platform == 'macos' }}
+    runs-on: ${{ needs.runner_policy.outputs.macos }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: ${{ inputs.fail_fast }}
+      max-parallel: ${{ inputs.max_parallel }}
+      matrix:
+        runtime: ${{ fromJson(inputs.runtime_matrix) }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ inputs.source_sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ci-skippy-cli-macos-${{ matrix.runtime.architecture }}
+          path: skippy-cli-input
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ci-runtime-macos-${{ matrix.runtime.architecture }}-${{ matrix.runtime.backend }}
+          path: runtime-input
+      - name: Compose exact standalone product
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          TARGET: ${{ matrix.runtime.target }}
+          BACKEND: ${{ matrix.runtime.backend }}
+        run: |
+          set -euo pipefail
+          python3 skippy/scripts/compose-ci-product.py --cli-input skippy-cli-input \
+            --runtime-input runtime-input --output skippy-product-input \
+            --source-sha "$SOURCE_SHA" --target "$TARGET" --backend "$BACKEND"
+      - name: Upload immutable standalone product
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: ci-skippy-product-macos-${{ matrix.runtime.architecture }}-${{ matrix.runtime.backend }}
+          path: skippy-product-input.tar.gz
+          if-no-files-found: error
+          retention-days: 1
+
+  windows_product:
+    name: Standalone Windows Skippy (${{ matrix.runtime.backend }})
+    needs: runner_policy
+    if: ${{ needs.runner_policy.result == 'success' && inputs.platform == 'windows' }}
+    runs-on: ${{ needs.runner_policy.outputs.windows }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: ${{ inputs.fail_fast }}
+      max-parallel: ${{ inputs.max_parallel }}
+      matrix:
+        runtime: ${{ fromJson(inputs.runtime_matrix) }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ inputs.source_sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.x"
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ci-skippy-cli-windows-${{ matrix.runtime.architecture }}
+          path: skippy-cli-input
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ci-runtime-windows-${{ matrix.runtime.architecture }}-${{ matrix.runtime.backend }}
+          path: runtime-input
+      - name: Compose exact standalone product
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          TARGET: ${{ matrix.runtime.target }}
+          BACKEND: ${{ matrix.runtime.backend }}
+        run: |
+          set -euo pipefail
+          python skippy/scripts/compose-ci-product.py --cli-input skippy-cli-input \
+            --runtime-input runtime-input --output skippy-product-input \
+            --source-sha "$SOURCE_SHA" --target "$TARGET" --backend "$BACKEND"
+      - name: Upload immutable standalone product
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: ci-skippy-product-windows-${{ matrix.runtime.architecture }}-${{ matrix.runtime.backend }}
+          path: skippy-product-input.tar.gz
+          if-no-files-found: error
+          retention-days: 1
