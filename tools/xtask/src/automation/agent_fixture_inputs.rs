@@ -3,6 +3,8 @@ use crate::{command::DynResult, product::digest::file_sha256};
 use serde::Serialize;
 use std::{fs, path::Path};
 
+mod coding;
+
 const MAX_DOCUMENT_CHARS: usize = 8 * 1024 * 1024;
 const HEADER: &str = "This is a long-context CI soak document. Extract the three sentinel values. Return exactly LONG_SOAK=ALPHA-719|MID-482|OMEGA-503 and no extra text.\n\n";
 const FILLER: &str = "FILLER: mesh long prompt soak line with predictable neutral text. Do not use this filler as the answer.\n";
@@ -92,6 +94,8 @@ fn write_surface(model: &str, path: &Path) -> DynResult<()> {
 
 pub(crate) fn run(args: &[String]) -> DynResult<()> {
     match args {
+        [verb, root] if verb == "coding-setup" => coding::setup(Path::new(root)),
+        [verb, root, initial, just, rustc] if verb == "coding-verify" => coding::verify(Path::new(root), initial, Path::new(just), Path::new(rustc)),
         [verb, model, path] if verb == "surface" => write_surface(model, Path::new(path)),
         [verb, path] if verb == "sha256" => {
             let path = Path::new(path);
@@ -104,7 +108,7 @@ pub(crate) fn run(args: &[String]) -> DynResult<()> {
         }
         [verb, model, target, path] if verb == "soak" => write_soak(model, target, Path::new(path)),
         _ => Err(
-            "usage: automation agent-fixture-inputs {sha256 FILE | soak MODEL TARGET_CHARS OUTPUT | surface MODEL OUTPUT}"
+            "usage: automation agent-fixture-inputs {sha256 FILE | soak MODEL TARGET_CHARS OUTPUT | surface MODEL OUTPUT | coding-setup ROOT | coding-verify ROOT INITIAL_SHA256 ABSOLUTE_JUST ABSOLUTE_RUSTC}"
                 .into(),
         ),
     }

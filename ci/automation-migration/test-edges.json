@@ -16,72 +16,6 @@
       ]
     ],
     [
-      "scripts/tests/test_ci_source_layout.py",
-      [
-        [
-          "fixture",
-          "resolve-source-layout action run block",
-          "Bash resolves synthetic root or relocated mesh layout and rejects a missing directory",
-          [
-            28,
-            62
-          ]
-        ],
-        [
-          "fixture",
-          "CI UI producer verification run block",
-          "Runs extracted Verify console distribution step on temporary UI assets, not a production build",
-          [
-            80
-          ]
-        ],
-        [
-          "fixture",
-          "CI host or SDK Verify UI distribution input run block",
-          "Executes selected workflow verifier on intact and tampered temporary UI assets; checks acceptance and rejection",
-          [
-            87,
-            89
-          ]
-        ],
-        [
-          "fixture",
-          "node-sdk-addon-artifact.yml build prefix with stub npm",
-          "Runs selected release SDK step prefix against temporary package.json and fake npm; asserts version match and mismatch",
-          [
-            123,
-            126
-          ]
-        ],
-        [
-          "fixture",
-          "compute-changes derive-outputs.sh selected backend classifier",
-          "Bash evaluates the extracted classifier on fixture changed paths and affected crates, no workflow dispatch",
-          [
-            146,
-            210
-          ]
-        ],
-        [
-          "fixture",
-          "just --evaluate website_dir",
-          "Read-only Just evaluation with explicit relocated UI path then unset override; checks fallback path",
-          [
-            167,
-            176
-          ]
-        ],
-        [
-          "fixture",
-          "llama-upstream-canary.yml pin resolver run block",
-          "Runs extracted Bash pin selection against temporary source layouts; rejects missing or ambiguous pins",
-          [
-            226
-          ]
-        ]
-      ]
-    ],
-    [
       "scripts/tests/test_skippy_system_one_smoke.py",
       [
         [
@@ -268,48 +202,6 @@
       ]
     ],
     [
-      "scripts/tests/test_release_version_script.py",
-      [
-        [
-          "fixture",
-          "git in temporary version-source repository",
-          "Initializes and stages only the temporary source used by release-version fixtures",
-          [
-            53,
-            60,
-            217,
-            218
-          ]
-        ],
-        [
-          "fixture",
-          "update_versioned_path_dependency_versions extracted from scripts/release-version.sh",
-          "Bash evaluates selected function against temporary Cargo manifests and updates only path dependencies",
-          [
-            62
-          ]
-        ],
-        [
-          "fixture",
-          "update_known_mesh_versions extracted from scripts/release-version.sh",
-          "Bash evaluates selected function against temporary known-version files; valid version rewrites fixture and malformed source rejects",
-          [
-            87,
-            107,
-            225
-          ]
-        ],
-        [
-          "fixture",
-          "resolve_product_path extracted from scripts/release-version.sh",
-          "Bash resolves fixture layout paths without publishing a release",
-          [
-            132
-          ]
-        ]
-      ]
-    ],
-    [
       "scripts/tests/test_release_workflow_artifacts.py",
       [
         [
@@ -400,20 +292,6 @@
       ]
     ],
     [
-      "scripts/tests/test_cuda_toolkit.py",
-      [
-        [
-          "fixture",
-          "/bin/bash -c test-selected CUDA toolkit snippet",
-          "run_bash executes caller-supplied shell snippets with temporary fake toolkit and selected PATH, not an implicit CUDA install",
-          [
-            32,
-            99
-          ]
-        ]
-      ]
-    ],
-    [
       "scripts/tests/test_install_ps1.py",
       [
         [
@@ -435,19 +313,6 @@
           "runs caller-generated shell body with temporary install root and environment, not a network release install",
           [
             754
-          ]
-        ]
-      ]
-    ],
-    [
-      "scripts/tests/test_justfile_release_runtime.py",
-      [
-        [
-          "fixture",
-          "just -f temporary Justfile selected recipe",
-          "test passes name and args to fixture Justfile in temporary workspace and asserts recipe output",
-          [
-            80
           ]
         ]
       ]
@@ -494,50 +359,6 @@
           ]
         ]
       ]
-    ],
-    [
-      "scripts/tests/test_skippy_dynamic_link.py",
-      [
-        [
-          "fixture",
-          "rustc crates/skippy-ffi/build.rs",
-          "compiles temporary build-script executable; not a Cargo/native runtime production build",
-          [
-            25,
-            62
-          ]
-        ],
-        [
-          "fixture",
-          "test-selected cc/rustc commands",
-          "run(*args) receives fixed C compiler and rustc link probe vectors from test; broken variant omits driver linker args and must fail",
-          [
-            115,
-            144
-          ]
-        ]
-      ]
-    ],
-    [
-      "scripts/tests/test_skippy_static_link.py",
-      [
-        [
-          "fixture",
-          "rustc crates/skippy-ffi/build.rs",
-          "compiles fixture build script into temporary executable",
-          [
-            36
-          ]
-        ],
-        [
-          "fixture",
-          "compiled skippy-ffi build-script fixture",
-          "runs build script with static ABI environment and test-created libraries",
-          [
-            87
-          ]
-        ]
-      ]
     ]
   ],
   "discovery_roots": [
@@ -563,20 +384,6 @@
           "import",
           "evals/agentic-trajectory-manifest.py",
           "SCRIPT names the fixture manifest implementation"
-        ]
-      ]
-    },
-    {
-      "file": "scripts/tests/test_ci_openai_embeddings_smoke.py",
-      "members": [
-        [
-          19,
-          "ffba3595c7fa0777",
-          1,
-          "dynamic-import",
-          "import",
-          "scripts/ci-openai-embeddings-smoke.py",
-          "run_path executes retained SDK smoke module in-process; generic HTTP cases moved to Rust workload_smoke::embedding tests"
         ]
       ]
     },
@@ -808,20 +615,6 @@
       ]
     },
     {
-      "file": "scripts/tests/test_cuda_toolkit.py",
-      "members": [
-        [
-          237,
-          "42eccc72cc5b1ea3",
-          1,
-          "subprocess-or-interpreter",
-          "assembly",
-          "sys.executable symlink target",
-          "symlink_to constructs a fixture python command; no interpreter launch on this line"
-        ]
-      ]
-    },
-    {
       "file": "scripts/tests/ci_test_helpers.py",
       "members": [
         [
@@ -1000,7 +793,7 @@
     "target_or_boundary",
     "source_specific_reason"
   ],
-  "observed_source_sha256": "8964f5e5fc5ba138598bd7afd540c24b5ee4bade2620717933ec1ed0ab4f4f45",
+  "observed_source_sha256": "5304d7a82ad1b8355b696eb80feeefeed055d4575035745d31545b3b821561d4",
   "schema_version": 1,
   "scope": "tracked scripts/tests/**/*.py; source candidate shard, not global acceptance",
   "status": "All observed test-source scanner candidates are bound; transitive child closure and global task 1 remain incomplete. No optional subprocess test is asserted to be a production dependency.",
@@ -9969,5 +9762,25 @@
       "roster_line": 24,
       "count": 44
     }
+  },
+  "native_platform_fixture_retirement": {
+    "status": "LOCAL_POSTIMAGE_QUALIFIED",
+    "python_paths_after": 96,
+    "core_modules_after": 37,
+    "durable_coverage": {
+      "path": "ci/automation-migration/native-platform-fixture-retirement-coverage.json",
+      "sha256": "f7de23ddbc717255e1aeacd5b47c35b2ebe62b614ae35d429e230cbc4ceca07d"
+    },
+    "current_test_tree": {
+      "sha256": "5304d7a82ad1b8355b696eb80feeefeed055d4575035745d31545b3b821561d4",
+      "paths": 33
+    },
+    "current_just": {
+      "path": "just/ci.just",
+      "sha256": "14dd3796f4605073cef461905709d35866cbbdc9919a1233eb4bbd8bb5efcc96",
+      "roster_line": 32,
+      "count": 37
+    },
+    "supersedes": "Archived historical Python test entries are retained in coverage; current source method maps and native tests own the replacement intentions."
   }
 }

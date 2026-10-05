@@ -222,3 +222,20 @@ mod canary_agent_control;
 
 #[path = "migration_lifecycle/hf_xet_adapter.rs"]
 mod hf_xet_adapter;
+
+#[path = "migration_lifecycle/source_layout_action.rs"]
+mod source_layout_action;
+
+#[path = "migration_lifecycle/release_version_script.rs"]
+mod release_version_script;
+
+#[path = "migration_lifecycle/cuda_toolkit.rs"]
+mod cuda_toolkit;
+
+#[path = "migration_lifecycle/opencode_model_selection.rs"]
+mod opencode_model_selection;
+
+#[path = "migration_lifecycle/agent_surface_capture_bound.rs"]
+mod agent_surface_capture_bound;
+#[path = "migration_lifecycle/opencode_coding_fixture.rs"]
+mod opencode_coding_fixture;

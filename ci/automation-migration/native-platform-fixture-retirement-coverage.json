@@ -1,0 +1,1173 @@
+{
+  "status": "LOCAL_POSTIMAGE_QUALIFIED",
+  "source_head": "fd04a9ee929f2e6be19f652c74075344b71d3dd7",
+  "original_current_intents": 58,
+  "method_maps": [
+    {
+      "source": "scripts/tests/test_ci_source_layout.py",
+      "method": "test_legacy_and_relocated_source_resolve_without_creating_aliases",
+      "owners": [
+        {
+          "path": "tools/xtask/tests/migration_lifecycle/source_layout_action.rs",
+          "symbol": "legacy_and_relocated_action_outputs_preserve_component_paths_without_aliases",
+          "sha256": "f11586fcc4b158b795d133b6404ece973fabd8b30f6fb5eeb67240254666b144"
+        }
+      ]
+    },
+    {
+      "source": "scripts/tests/test_ci_source_layout.py",
+      "method": "test_ambiguous_component_fails",
+      "owners": [
+        {
+          "path": "tools/xtask/tests/migration_lifecycle/source_layout_action.rs",
+          "symbol": "each_ambiguous_component_is_rejected_before_its_output_is_admitted",
+          "sha256": "f11586fcc4b158b795d133b6404ece973fabd8b30f6fb5eeb67240254666b144"
+        }
+      ]
+    },
+    {
+      "source": "scripts/tests/test_ci_source_layout.py",
+      "method": "test_missing_component_fails",
+      "owners": [
+        {
+          "path": "tools/xtask/tests/migration_lifecycle/source_layout_action.rs",
+          "symbol": "each_missing_component_is_rejected_without_creating_a_replacement_directory",
+          "sha256": "f11586fcc4b158b795d133b6404ece973fabd8b30f6fb5eeb67240254666b144"
+        }
+      ]
+    },
+    {
+      "source": "scripts/tests/test_ci_source_layout.py",
+      "method": "test_real_ui_producer_and_host_verification_steps_use_same_tree",
+      "owners": [
+        {
+          "path": "tools/xtask/tests/migration_lifecycle/source_layout_action/workflows.rs",
+          "symbol": "actual_ui_producer_and_all_host_consumers_bind_and_verify_the_resolved_tree",
+          "sha256": "eda599edb0bb2c6245876d3f98e8b1459e3605289c7621380cd5cea218616953"
+        }
+      ]
+    },
+    {
+      "source": "scripts/tests/test_ci_source_layout.py",
+      "method": "test_node_addon_staging_uses_resolved_sdk_on_every_platform",
+      "owners": [
+        {
+          "path": "tools/xtask/tests/migration_lifecycle/source_layout_action/node_addon.rs",
+          "symbol": "all_three_addon_producers_bind_sdk_layout_before_version_checks_and_native_staging",
+          "sha256": "14f99d3798c0b5fe4393207f60c1412654edec8ca29617a44946d80e09ef5ec6"
+        }
+      ]
+    },
+    {
+      "source": "scripts/tests/test_ci_source_layout.py",
+      "method": "test_backend_and_sdk_classification_accepts_both_layouts",
+      "owners": [
+        {
+          "path": "tools/xtask/tests/migration_lifecycle/source_layout_action/classification.rs",
+          "symbol": "backend_windows_and_sdk_classification_accepts_both_layouts",
+          "sha256": "d21c9803fc48d8b7caee6341f89f6bf9ea4243b4ab9bf36d3c10ddde3ca1a50b"
+        }
+      ]
+    },
+    {
+      "source": "scripts/tests/test_ci_source_layout.py",
+      "method": "test_website_recipes_consume_the_resolved_layout",
+      "owners": [
+        {
+          "path": "tools/xtask/tests/migration_lifecycle/source_layout_action/workflows.rs",
+          "symbol": "website_just_evaluation_and_workflow_environments_use_the_resolved_directory",
+          "sha256": "eda599edb0bb2c6245876d3f98e8b1459e3605289c7621380cd5cea218616953"
+        }
+      ]
+    },
+    {
+      "source": "scripts/tests/test_ci_source_layout.py",
+      "method": "test_relocated_runtime_owner_gates_sdk_smoke_and_inference_artifacts",
+      "owners": [
+        {
+          "path": "tools/xtask/tests/migration_lifecycle/source_layout_action/classification.rs",
+          "symbol": "relocated_runtime_owners_gate_sdk_and_inference_consumers",
+          "sha256": "d21c9803fc48d8b7caee6341f89f6bf9ea4243b4ab9bf36d3c10ddde3ca1a50b"
+        }
+      ]
+    },
+    {
+      "source": "scripts/tests/test_ci_source_layout.py",
+      "method": "test_nightly_pin_resolution_rejects_missing_and_ambiguous_layouts",
+      "owners": [
+        {
+          "path": "tools/xtask/tests/migration_lifecycle/source_layout_action/workflows.rs",
+          "symbol": "current_nightly_pin_fragment_rejects_missing_and_ambiguous_layouts",
+          "sha256": "eda599edb0bb2c6245876d3f98e8b1459e3605289c7621380cd5cea218616953"
+        }
+      ]
+    },
+    {
+      "source": "scripts/tests/test_ci_source_layout.py",
+      "method": "test_ui_steps_resolve_after_checkout_and_do_not_use_job_defaults",
+      "owners": [
+        {
+          "path": "tools/xtask/tests/migration_lifecycle/source_layout_action/workflows.rs",
+          "symbol": "ui_jobs_resolve_after_checkout_and_bind_each_pnpm_step_without_job_directory_defaults",
+          "sha256": "eda599edb0bb2c6245876d3f98e8b1459e3605289c7621380cd5cea218616953"
+        }
+      ]
+    },
+    {
+      "source": "scripts/tests/test_release_version_script.py",
+      "method": "test_discovered_manifests_bump_path_dependencies_in_both_layouts",
+      "owners": [
+        {
+          "path": "tools/xtask/tests/migration_lifecycle/release_version_script.rs",
+          "symbol": "discovered_tracked_manifests_update_only_versioned_path_dependencies_in_both_layouts",
+          "sha256": "be0e860289583f8a9e091069b764cc63709f900343e1b01e18d783c695ddae8d"
+        }
+      ]
+    },
+    {
+      "source": "scripts/tests/test_release_version_script.py",
+      "method": "test_known_versions_file_defines_the_function_the_script_edits",
+      "owners": [
+        {
+          "path": "tools/xtask/tests/migration_lifecycle/release_version_script.rs",
+          "symbol": "maintained_known_version_owner_defines_the_function_the_updater_edits",
+          "sha256": "be0e860289583f8a9e091069b764cc63709f900343e1b01e18d783c695ddae8d"
+        }
+      ]
+    },
+    {
+      "source": "scripts/tests/test_release_version_script.py",
+      "method": "test_update_known_mesh_versions_prepends_the_new_version",
+      "owners": [
+        {
+          "path": "tools/xtask/tests/migration_lifecycle/release_version_script.rs",
+          "symbol": "new_known_version_is_prepended_once_and_a_second_update_is_byte_preserving",
+          "sha256": "be0e860289583f8a9e091069b764cc63709f900343e1b01e18d783c695ddae8d"
+        }
+      ]
+    },
+    {
+      "source": "scripts/tests/test_release_version_script.py",
+      "method": "test_update_known_mesh_versions_fails_loudly_on_a_wrong_file",
+      "owners": [
+        {
+          "path": "tools/xtask/tests/migration_lifecycle/release_version_script.rs",
+          "symbol": "wrong_known_version_file_is_rejected_without_writing",
+          "sha256": "be0e860289583f8a9e091069b764cc63709f900343e1b01e18d783c695ddae8d"
+        }
+      ]
+    },
+    {
+      "source": "scripts/tests/test_release_version_script.py",
+      "method": "test_relocated_release_sidecars_resolve_from_the_same_source_layout",
+      "owners": [
+        {
+          "path": "tools/xtask/tests/migration_lifecycle/release_version_script.rs",
+          "symbol": "release_sidecars_resolve_each_supported_layout",
+          "sha256": "be0e860289583f8a9e091069b764cc63709f900343e1b01e18d783c695ddae8d"
+        }
+      ]
+    },
+    {
+      "source": "scripts/tests/test_release_version_script.py",
+      "method": "test_ambiguous_or_missing_release_sidecar_fails_before_writing",
+      "owners": [
+        {
+          "path": "tools/xtask/tests/migration_lifecycle/release_version_script.rs",
+          "symbol": "ambiguous_and_missing_release_sidecars_fail_before_writing",
+          "sha256": "be0e860289583f8a9e091069b764cc63709f900343e1b01e18d783c695ddae8d"
+        }
+      ]
+    },
+    {
+      "source": "scripts/tests/test_release_version_script.py",
+      "method": "test_relocated_only_release_fixture_bumps_every_versioned_sidecar",
+      "owners": [
+        {
+          "path": "tools/xtask/tests/migration_lifecycle/release_version_script/relocated.rs",
+          "symbol": "relocated_only_release_bumps_every_declared_sidecar_without_legacy_aliases",
+          "sha256": "770d06f82986950bc50c08b4b6cc28ec3a532aed3adda8203dd467dc768b9c57"
+        }
+      ]
+    },
+    {
+      "source": "scripts/tests/test_justfile_release_runtime.py",
+      "method": "test_release_runtime_build_does_not_expand_empty_array_under_nounset",
+      "owners": [
+        {
+          "path": "tools/xtask/tests/migration_lifecycle/native_release_recipes.rs",
+          "symbol": "native_release_recipes_runtime_arguments_survive_empty_defaults_under_nounset",
+          "sha256": "4a4e81cb0cbf89419c16b5b2880c78179588b0ac2ed3018cdc312e249972dc78"
+        }
+      ]
+    },
+    {
+      "source": "scripts/tests/test_justfile_release_runtime.py",
+      "method": "test_cuda_release_recipes_propagate_the_selected_toolkit_major",
+      "owners": [
+        {
+          "path": "tools/xtask/tests/migration_lifecycle/native_release_recipes.rs",
+          "symbol": "native_release_recipes_x86_cuda_boundary_detection_and_override_reach_packager",
+          "sha256": "4a4e81cb0cbf89419c16b5b2880c78179588b0ac2ed3018cdc312e249972dc78"
+        }
+      ]
+    },
+    {
+      "source": "scripts/tests/test_justfile_release_runtime.py",
+      "method": "test_cuda12_release_recipes_include_pascal_sm61",
+      "owners": [
+        {
+          "path": "tools/xtask/tests/migration_lifecycle/native_release_recipes.rs",
+          "symbol": "native_release_recipes_windows_select_dynamic_hosts_and_cuda12_pascal_default",
+          "sha256": "4a4e81cb0cbf89419c16b5b2880c78179588b0ac2ed3018cdc312e249972dc78"
+        }
+      ]
+    },
+    {
+      "source": "scripts/tests/test_justfile_release_runtime.py",
+      "method": "test_cuda_release_build_selects_arches_at_the_12_8_boundary",
+      "owners": [
+        {
+          "path": "tools/xtask/tests/migration_lifecycle/native_release_recipes.rs",
+          "symbol": "native_release_recipes_x86_cuda_boundary_detection_and_override_reach_packager",
+          "sha256": "4a4e81cb0cbf89419c16b5b2880c78179588b0ac2ed3018cdc312e249972dc78"
+        }
+      ]
+    },
+    {
+      "source": "scripts/tests/test_justfile_release_runtime.py",
+      "method": "test_aarch64_cuda_release_build_selects_arches_at_the_13_boundary",
+      "owners": [
+        {
+          "path": "tools/xtask/tests/migration_lifecycle/native_release_recipes.rs",
+          "symbol": "native_release_recipes_aarch_cuda_boundary_detection_and_target_are_preserved",
+          "sha256": "4a4e81cb0cbf89419c16b5b2880c78179588b0ac2ed3018cdc312e249972dc78"
+        }
+      ]
+    },
+    {
+      "source": "scripts/tests/test_justfile_release_runtime.py",
+      "method": "test_aarch64_cuda_release_build_propagates_major_and_target_to_the_packager",
+      "owners": [
+        {
+          "path": "tools/xtask/tests/migration_lifecycle/native_release_recipes.rs",
+          "symbol": "native_release_recipes_aarch_cuda_boundary_detection_and_target_are_preserved",
+          "sha256": "4a4e81cb0cbf89419c16b5b2880c78179588b0ac2ed3018cdc312e249972dc78"
+        }
+      ]
+    },
+    {
+      "source": "scripts/tests/test_justfile_release_runtime.py",
+      "method": "test_build_runtime_defaults_the_backend_and_forwards_the_one_it_was_given",
+      "owners": [
+        {
+          "path": "tools/xtask/tests/migration_lifecycle/native_release_recipes.rs",
+          "symbol": "native_release_recipes_runtime_arguments_survive_empty_defaults_under_nounset",
+          "sha256": "4a4e81cb0cbf89419c16b5b2880c78179588b0ac2ed3018cdc312e249972dc78"
+        }
+      ]
+    },
+    {
+      "source": "scripts/tests/test_justfile_release_runtime.py",
+      "method": "test_bundle_uses_the_product_packager_and_copies_its_checksum",
+      "owners": [
+        {
+          "path": "tools/xtask/tests/migration_lifecycle/native_release_recipes.rs",
+          "symbol": "native_release_recipes_bundle_copies_product_and_checksum_not_host_binary",
+          "sha256": "4a4e81cb0cbf89419c16b5b2880c78179588b0ac2ed3018cdc312e249972dc78"
+        }
+      ]
+    },
+    {
+      "source": "scripts/tests/test_skippy_static_link.py",
+      "method": "test_cpu_ignores_stale_gpu_and_blas_archives",
+      "owners": [
+        {
+          "path": "tools/xtask/tests/migration_lifecycle/static_abi_ffi_boundary/static_backend_selection.rs",
+          "symbol": "cpu_never_links_stale_disabled_accelerator_archives_or_metal_frameworks",
+          "sha256": "d9915a68293e1fcc7b1ee071e7feeaf61e045dda6aea4949ce65b6ae7bed309c"
+        }
+      ]
+    },
+    {
+      "source": "scripts/tests/test_skippy_static_link.py",
+      "method": "test_unreadable_cache_never_means_disabled_backends",
+      "owners": [
+        {
+          "path": "tools/xtask/tests/migration_lifecycle/static_abi_ffi_boundary/static_backend_selection.rs",
+          "symbol": "missing_directory_and_invalid_utf8_cache_never_imply_disabled_backends",
+          "sha256": "d9915a68293e1fcc7b1ee071e7feeaf61e045dda6aea4949ce65b6ae7bed309c"
+        }
+      ]
+    },
+    {
+      "source": "scripts/tests/test_skippy_static_link.py",
+      "method": "test_active_metal_backend_links_only_cache_enabled_archive",
+      "owners": [
+        {
+          "path": "tools/xtask/tests/migration_lifecycle/static_abi_ffi_boundary/static_backend_selection.rs",
+          "symbol": "metal_and_blas_only_link_when_enabled_with_portable_cache_booleans",
+          "sha256": "d9915a68293e1fcc7b1ee071e7feeaf61e045dda6aea4949ce65b6ae7bed309c"
+        }
+      ]
+    },
+    {
+      "source": "scripts/tests/test_skippy_static_link.py",
+      "method": "test_backend_cache_mismatch_fails_closed_despite_stale_archive",
+      "owners": [
+        {
+          "path": "tools/xtask/tests/migration_lifecycle/static_abi_ffi_boundary/static_backend_selection.rs",
+          "symbol": "disabled_selected_backend_is_rejected_despite_present_archive",
+          "sha256": "d9915a68293e1fcc7b1ee071e7feeaf61e045dda6aea4949ce65b6ae7bed309c"
+        }
+      ]
+    },
+    {
+      "source": "scripts/tests/test_skippy_static_link.py",
+      "method": "test_unselected_backend_cache_mismatch_fails_closed",
+      "owners": [
+        {
+          "path": "tools/xtask/tests/migration_lifecycle/static_abi_ffi_boundary/static_backend_selection.rs",
+          "symbol": "every_unselected_enabled_accelerator_is_rejected_before_link_admission",
+          "sha256": "d9915a68293e1fcc7b1ee071e7feeaf61e045dda6aea4949ce65b6ae7bed309c"
+        }
+      ]
+    },
+    {
+      "source": "scripts/tests/test_skippy_static_link.py",
+      "method": "test_crlf_cache_values_are_recognized",
+      "owners": [
+        {
+          "path": "tools/xtask/tests/migration_lifecycle/static_abi_ffi_boundary/static_backend_selection.rs",
+          "symbol": "metal_and_blas_only_link_when_enabled_with_portable_cache_booleans",
+          "sha256": "d9915a68293e1fcc7b1ee071e7feeaf61e045dda6aea4949ce65b6ae7bed309c"
+        }
+      ]
+    },
+    {
+      "source": "scripts/tests/test_skippy_static_link.py",
+      "method": "test_enabled_staged_accelerator_requires_matching_selected_backend",
+      "owners": [
+        {
+          "path": "tools/xtask/tests/migration_lifecycle/static_abi_ffi_boundary/static_backend_selection.rs",
+          "symbol": "every_unselected_enabled_accelerator_is_rejected_before_link_admission",
+          "sha256": "d9915a68293e1fcc7b1ee071e7feeaf61e045dda6aea4949ce65b6ae7bed309c"
+        }
+      ]
+    },
+    {
+      "source": "scripts/tests/test_skippy_static_link.py",
+      "method": "test_cache_boolean_accepts_crlf_and_surrounding_whitespace",
+      "owners": [
+        {
+          "path": "tools/xtask/tests/migration_lifecycle/static_abi_ffi_boundary/static_backend_selection.rs",
+          "symbol": "metal_and_blas_only_link_when_enabled_with_portable_cache_booleans",
+          "sha256": "d9915a68293e1fcc7b1ee071e7feeaf61e045dda6aea4949ce65b6ae7bed309c"
+        }
+      ]
+    },
+    {
+      "source": "scripts/tests/test_cuda_toolkit.py",
+      "method": "test_resolves_toolkit_root_through_nvcc_symlink",
+      "owners": [
+        {
+          "path": "tools/xtask/tests/migration_lifecycle/cuda_toolkit.rs",
+          "symbol": "symlinked_compiler_resolves_toolkit_headers_and_all_library_variables",
+          "sha256": "acce14c7625285e8aec2c24dacb209858d7b257bb3565ad232c60de27d29ddf6"
+        }
+      ]
+    },
+    {
+      "source": "scripts/tests/test_cuda_toolkit.py",
+      "method": "test_detector_uses_cudacxx_before_nvcc_and_path",
+      "owners": [
+        {
+          "path": "tools/xtask/tests/migration_lifecycle/cuda_toolkit.rs",
+          "symbol": "compiler_selection_obeys_cudacxx_cmake_nvcc_and_path_priority",
+          "sha256": "acce14c7625285e8aec2c24dacb209858d7b257bb3565ad232c60de27d29ddf6"
+        }
+      ]
+    },
+    {
+      "source": "scripts/tests/test_cuda_toolkit.py",
+      "method": "test_detector_uses_nvcc_when_cudacxx_is_unset",
+      "owners": [
+        {
+          "path": "tools/xtask/tests/migration_lifecycle/cuda_toolkit.rs",
+          "symbol": "compiler_selection_obeys_cudacxx_cmake_nvcc_and_path_priority",
+          "sha256": "acce14c7625285e8aec2c24dacb209858d7b257bb3565ad232c60de27d29ddf6"
+        }
+      ]
+    },
+    {
+      "source": "scripts/tests/test_cuda_toolkit.py",
+      "method": "test_detector_uses_path_nvcc_when_overrides_are_unset",
+      "owners": [
+        {
+          "path": "tools/xtask/tests/migration_lifecycle/cuda_toolkit.rs",
+          "symbol": "compiler_selection_obeys_cudacxx_cmake_nvcc_and_path_priority",
+          "sha256": "acce14c7625285e8aec2c24dacb209858d7b257bb3565ad232c60de27d29ddf6"
+        }
+      ]
+    },
+    {
+      "source": "scripts/tests/test_cuda_toolkit.py",
+      "method": "test_detector_accepts_major_only_cuda_version_declaration",
+      "owners": [
+        {
+          "path": "tools/xtask/tests/migration_lifecycle/cuda_toolkit.rs",
+          "symbol": "major_only_declaration_is_accepted_and_minor_mismatch_rejected",
+          "sha256": "acce14c7625285e8aec2c24dacb209858d7b257bb3565ad232c60de27d29ddf6"
+        }
+      ]
+    },
+    {
+      "source": "scripts/tests/test_cuda_toolkit.py",
+      "method": "test_detector_rejects_cuda_version_minor_mismatch",
+      "owners": [
+        {
+          "path": "tools/xtask/tests/migration_lifecycle/cuda_toolkit.rs",
+          "symbol": "major_only_declaration_is_accepted_and_minor_mismatch_rejected",
+          "sha256": "acce14c7625285e8aec2c24dacb209858d7b257bb3565ad232c60de27d29ddf6"
+        }
+      ]
+    },
+    {
+      "source": "scripts/tests/test_cuda_toolkit.py",
+      "method": "test_detector_uses_toolkit_owned_metadata_without_compiler",
+      "owners": [
+        {
+          "path": "tools/xtask/tests/migration_lifecycle/cuda_toolkit.rs",
+          "symbol": "toolkit_owned_metadata_is_accepted_without_a_compiler",
+          "sha256": "acce14c7625285e8aec2c24dacb209858d7b257bb3565ad232c60de27d29ddf6"
+        }
+      ]
+    },
+    {
+      "source": "scripts/tests/test_cuda_toolkit.py",
+      "method": "test_detector_fails_without_compiler_or_toolkit_metadata",
+      "owners": [
+        {
+          "path": "tools/xtask/tests/migration_lifecycle/cuda_toolkit.rs",
+          "symbol": "missing_compiler_and_unavailable_metadata_fail_without_driver_evidence",
+          "sha256": "acce14c7625285e8aec2c24dacb209858d7b257bb3565ad232c60de27d29ddf6"
+        }
+      ]
+    },
+    {
+      "source": "scripts/tests/test_cuda_toolkit.py",
+      "method": "test_canonical_path_falls_back_to_python",
+      "owners": [
+        {
+          "path": "tools/xtask/tests/migration_lifecycle/cuda_toolkit.rs",
+          "symbol": "canonical_path_fallback_uses_the_real_rust_controller_without_python_or_cargo",
+          "sha256": "acce14c7625285e8aec2c24dacb209858d7b257bb3565ad232c60de27d29ddf6"
+        }
+      ]
+    },
+    {
+      "source": "scripts/tests/test_cuda_toolkit.py",
+      "method": "test_windows_cmake_compiler_path_restores_missing_exe_suffix",
+      "owners": [
+        {
+          "path": "tools/xtask/tests/migration_lifecycle/cuda_toolkit.rs",
+          "symbol": "windows_compiler_path_restores_exe_suffix_and_explicit_environment_remains_authoritative",
+          "sha256": "acce14c7625285e8aec2c24dacb209858d7b257bb3565ad232c60de27d29ddf6"
+        }
+      ]
+    },
+    {
+      "source": "scripts/tests/test_cuda_toolkit.py",
+      "method": "test_propagates_helper_failure_when_nvcc_is_missing",
+      "owners": [
+        {
+          "path": "tools/xtask/tests/migration_lifecycle/cuda_toolkit.rs",
+          "symbol": "configuration_propagates_missing_compiler_failure",
+          "sha256": "acce14c7625285e8aec2c24dacb209858d7b257bb3565ad232c60de27d29ddf6"
+        }
+      ]
+    },
+    {
+      "source": "scripts/tests/test_cuda_toolkit.py",
+      "method": "test_preserves_explicit_cuda_environment",
+      "owners": [
+        {
+          "path": "tools/xtask/tests/migration_lifecycle/cuda_toolkit.rs",
+          "symbol": "windows_compiler_path_restores_exe_suffix_and_explicit_environment_remains_authoritative",
+          "sha256": "acce14c7625285e8aec2c24dacb209858d7b257bb3565ad232c60de27d29ddf6"
+        }
+      ]
+    },
+    {
+      "source": "scripts/tests/test_ci_openai_embeddings_smoke.py",
+      "method": "test_valid_single_item_response_passes",
+      "owners": [
+        {
+          "path": "tools/xtask/src/automation/workload_smoke/embedding.rs",
+          "symbol": "valid_float_and_base64_when_metadata_matches",
+          "sha256": "49b278e62f5c8d5cb8e45dea55973d2a4b898d4b025c12e79f5751d31de07cea"
+        }
+      ]
+    },
+    {
+      "source": "scripts/tests/test_ci_openai_embeddings_smoke.py",
+      "method": "test_numeric_batch_rejects_invalid_indexes_and_boolean_components",
+      "owners": [
+        {
+          "path": "tools/xtask/src/automation/workload_smoke/embedding.rs",
+          "symbol": "rejects_noninteger_indexes_and_boolean_components",
+          "sha256": "49b278e62f5c8d5cb8e45dea55973d2a4b898d4b025c12e79f5751d31de07cea"
+        }
+      ]
+    },
+    {
+      "source": "scripts/tests/test_ci_openai_embeddings_smoke.py",
+      "method": "test_empty_and_surplus_batches_fail",
+      "owners": [
+        {
+          "path": "tools/xtask/src/automation/workload_smoke/embedding.rs",
+          "symbol": "rejects_invalid_envelopes_and_cardinality",
+          "sha256": "49b278e62f5c8d5cb8e45dea55973d2a4b898d4b025c12e79f5751d31de07cea"
+        }
+      ]
+    },
+    {
+      "source": "scripts/tests/test_ci_openai_embeddings_smoke.py",
+      "method": "test_response_metadata_must_match_request",
+      "owners": [
+        {
+          "path": "tools/xtask/src/automation/workload_smoke/embedding.rs",
+          "symbol": "rejects_invalid_envelopes_and_cardinality",
+          "sha256": "49b278e62f5c8d5cb8e45dea55973d2a4b898d4b025c12e79f5751d31de07cea"
+        }
+      ]
+    },
+    {
+      "source": "scripts/tests/test_ci_openai_embeddings_smoke.py",
+      "method": "test_item_metadata_must_match_single_input",
+      "owners": [
+        {
+          "path": "tools/xtask/src/automation/workload_smoke/embedding.rs",
+          "symbol": "rejects_noninteger_indexes_and_boolean_components",
+          "sha256": "49b278e62f5c8d5cb8e45dea55973d2a4b898d4b025c12e79f5751d31de07cea"
+        },
+        {
+          "path": "tools/xtask/src/automation/workload_smoke/embedding.rs",
+          "symbol": "rejects_invalid_item_objects_and_nonstring_encoded_payloads",
+          "sha256": "49b278e62f5c8d5cb8e45dea55973d2a4b898d4b025c12e79f5751d31de07cea"
+        }
+      ]
+    },
+    {
+      "source": "scripts/tests/test_ci_openai_embeddings_smoke.py",
+      "method": "test_invalid_payloads_still_fail",
+      "owners": [
+        {
+          "path": "tools/xtask/src/automation/workload_smoke/embedding.rs",
+          "symbol": "rejects_invalid_item_objects_and_nonstring_encoded_payloads",
+          "sha256": "49b278e62f5c8d5cb8e45dea55973d2a4b898d4b025c12e79f5751d31de07cea"
+        },
+        {
+          "path": "tools/xtask/src/automation/workload_smoke/embedding.rs",
+          "symbol": "rejects_wrong_base64_values_lengths_and_nonfinite_values",
+          "sha256": "49b278e62f5c8d5cb8e45dea55973d2a4b898d4b025c12e79f5751d31de07cea"
+        }
+      ]
+    },
+    {
+      "source": "scripts/tests/test_ci_openai_embeddings_smoke.py",
+      "method": "test_base64_values_must_match_float_response",
+      "owners": [
+        {
+          "path": "tools/xtask/src/automation/workload_smoke/embedding.rs",
+          "symbol": "rejects_wrong_base64_values_lengths_and_nonfinite_values",
+          "sha256": "49b278e62f5c8d5cb8e45dea55973d2a4b898d4b025c12e79f5751d31de07cea"
+        }
+      ]
+    },
+    {
+      "source": "scripts/tests/test_ci_openai_embeddings_smoke.py",
+      "method": "test_base64_parity_allows_float32_rounding",
+      "owners": [
+        {
+          "path": "tools/xtask/src/automation/workload_smoke/embedding.rs",
+          "symbol": "allows_float32_rounding",
+          "sha256": "49b278e62f5c8d5cb8e45dea55973d2a4b898d4b025c12e79f5751d31de07cea"
+        }
+      ]
+    },
+    {
+      "source": "scripts/tests/test_skippy_dynamic_link.py",
+      "method": "test_linux_cuda_links_selected_driver_without_runtime_search_path",
+      "owners": [
+        {
+          "path": "tools/xtask/tests/migration_lifecycle/static_abi_ffi_boundary/dynamic_link.rs",
+          "symbol": "linux_cuda_dynamic_link_selects_cached_driver_without_runtime_search_paths",
+          "sha256": "8b3d66b4a0e2db2e30eea8edca26116d74d0b2babce985e8461484c46b9e0e5e"
+        }
+      ]
+    },
+    {
+      "source": "scripts/tests/test_skippy_dynamic_link.py",
+      "method": "test_legacy_cuda_selectors_resolve_the_same_driver",
+      "owners": [
+        {
+          "path": "tools/xtask/tests/migration_lifecycle/static_abi_ffi_boundary/dynamic_link.rs",
+          "symbol": "legacy_dynamic_selectors_preserve_selected_cuda_driver",
+          "sha256": "8b3d66b4a0e2db2e30eea8edca26116d74d0b2babce985e8461484c46b9e0e5e"
+        }
+      ]
+    },
+    {
+      "source": "scripts/tests/test_skippy_dynamic_link.py",
+      "method": "test_other_dynamic_targets_do_not_acquire_cuda_dependency",
+      "owners": [
+        {
+          "path": "tools/xtask/tests/migration_lifecycle/static_abi_ffi_boundary/dynamic_link.rs",
+          "symbol": "other_dynamic_targets_do_not_acquire_cuda_driver_dependency",
+          "sha256": "8b3d66b4a0e2db2e30eea8edca26116d74d0b2babce985e8461484c46b9e0e5e"
+        }
+      ]
+    },
+    {
+      "source": "scripts/tests/test_skippy_dynamic_link.py",
+      "method": "test_runtime_loader_remains_free_of_native_link_dependencies",
+      "owners": [
+        {
+          "path": "tools/xtask/tests/migration_lifecycle/static_abi_ffi_boundary/dynamic_link.rs",
+          "symbol": "dynamic_runtime_loader_remains_free_of_native_link_directives",
+          "sha256": "8b3d66b4a0e2db2e30eea8edca26116d74d0b2babce985e8461484c46b9e0e5e"
+        }
+      ]
+    },
+    {
+      "source": "scripts/tests/test_skippy_dynamic_link.py",
+      "method": "test_driverless_elf_link_resolves_indirect_driver_without_bundling_stub",
+      "owners": [
+        {
+          "path": "tools/xtask/tests/migration_lifecycle/static_abi_ffi_boundary/dynamic_link/linux_elf.rs",
+          "symbol": "driverless_gnu_elf_link_requires_explicit_driver_without_bundling_or_rpath",
+          "sha256": "f84ac94e2d620b1607978e5a97993361a1196dad33b32bc31c9199a9d5b00501"
+        }
+      ]
+    }
+  ],
+  "retired_sources": [
+    {
+      "path": "scripts/tests/test_ci_source_layout.py",
+      "sha256": "d1ce15dee853e5b8f08729b6caa96deec55aa5098b4392695f4bd511f008fdea",
+      "methods": 10,
+      "current_intents": 10
+    },
+    {
+      "path": "scripts/tests/test_release_version_script.py",
+      "sha256": "66046fb06eac6d107178d5f830fceb394ba0d224050c490fba117399a4e6ca05",
+      "methods": 7,
+      "current_intents": 7
+    },
+    {
+      "path": "scripts/tests/test_justfile_release_runtime.py",
+      "sha256": "c3dd85d0719627241015ba72b57ef8175de9e17124db454f5a0b007fdfe9fc3f",
+      "methods": 8,
+      "current_intents": 8
+    },
+    {
+      "path": "scripts/tests/test_skippy_static_link.py",
+      "sha256": "2e935c5f2e35fad950cbe0f6681f92261b298449c9e6b0cde948e5deaa2be382",
+      "methods": 8,
+      "current_intents": 8
+    },
+    {
+      "path": "scripts/tests/test_cuda_toolkit.py",
+      "sha256": "edc6cb36edb2619434e8c5a50f854dbd134392e6be875fd656ea88dce4463cba",
+      "functions": 12,
+      "normal_loader": "python3 -m unittest",
+      "observed_collection": {
+        "tests": 0,
+        "exit_code": 5,
+        "python": "3.14.8",
+        "log": ".omo/evidence/resume-20261002/cuda-toolkit-unittest-census-v2.log",
+        "sha256": "2cb7f53f0ad7acc9a41b3ad1ae166e035d1b3ef2fe85ae8fafbe855325f13d37",
+        "exit_receipt": ".omo/evidence/resume-20261002/cuda-toolkit-unittest-census-v2-exit.json"
+      },
+      "current_intents": 12
+    },
+    {
+      "path": "scripts/tests/test_ci_openai_embeddings_smoke.py",
+      "sha256": "5c3491973b1c23f932170b2f97f8b523e4965f48eb0542732cb806ff6c95c063",
+      "methods": 8,
+      "current_intents": 8
+    },
+    {
+      "path": "scripts/tests/test_skippy_dynamic_link.py",
+      "sha256": "328c0008eb0f41c48f4bc0a5aad06f34ebd120e8759028a16d82a882aae351b9",
+      "current_intents": 5
+    }
+  ],
+  "retired_records": {
+    "inventory": [
+      {
+        "classification": "generic test for SDK smoke",
+        "deletion_condition": "Workflow isolation and coverage are explicitly tested; actual SDK smoke remains advisory only by approved policy.",
+        "exception": null,
+        "path": "scripts/tests/test_ci_openai_embeddings_smoke.py",
+        "phase": 2,
+        "replacement_owner": "tools/xtask ci_validation plus advisory SDK tests",
+        "required": true
+      },
+      {
+        "classification": "generic CI source-layout test",
+        "deletion_condition": "Rust tests cover source-layout action and relocated producer/consumer shell boundaries.",
+        "exception": null,
+        "path": "scripts/tests/test_ci_source_layout.py",
+        "phase": 2,
+        "replacement_owner": "tools/xtask ci_validation",
+        "required": true
+      },
+      {
+        "classification": "generic shell/toolchain test",
+        "deletion_condition": "Tool resolution and fallback contract covered in Rust/native tests.",
+        "exception": null,
+        "path": "scripts/tests/test_cuda_toolkit.py",
+        "phase": 2,
+        "replacement_owner": "tools/xtask native policy tests",
+        "required": true
+      },
+      {
+        "classification": "generic Just source test",
+        "deletion_condition": "Release recipe contract tested in Rust.",
+        "exception": null,
+        "path": "scripts/tests/test_justfile_release_runtime.py",
+        "phase": 2,
+        "replacement_owner": "tools/xtask release tests",
+        "required": true
+      },
+      {
+        "classification": "generic release version test",
+        "deletion_condition": "Version contract test migrated with no implicit version mutation.",
+        "exception": null,
+        "path": "scripts/tests/test_release_version_script.py",
+        "phase": 2,
+        "replacement_owner": "tools/xtask release tests",
+        "required": true
+      },
+      {
+        "classification": "generic native artifact test",
+        "deletion_condition": "Dynamic link closure tests remain on relevant platform owners.",
+        "exception": null,
+        "path": "scripts/tests/test_skippy_dynamic_link.py",
+        "phase": 2,
+        "replacement_owner": "tools/xtask artifact/native policy tests",
+        "required": true
+      },
+      {
+        "classification": "generic native artifact test",
+        "deletion_condition": "Static link closure tested on actual platform owners.",
+        "exception": null,
+        "path": "scripts/tests/test_skippy_static_link.py",
+        "phase": 2,
+        "replacement_owner": "tools/xtask artifact/native policy tests",
+        "required": true
+      }
+    ],
+    "historical_test_ownership": [
+      {
+        "case_ownership": "Per-case replacement must test behavior, including positive, negative, edge and identity-preserving cases; source-text-only assertions do not qualify.",
+        "deletion_condition": "Delete only after each behavior case has an owning replacement and required platform evidence.",
+        "gate": "Legacy just ci-validate and relevant workflow/platform lane",
+        "module": "scripts/tests/test_ci_openai_embeddings_smoke.py",
+        "owner": "tools/xtask/src/ci_validation or owning action/workflow component",
+        "rust_or_ctest_gate": "Not yet ported; listed owner target is future migration ownership, not claimed execution.",
+        "sha256": "f330913f3a087a7f72b2b1ad5bc6d9dc3636de18fcf266bf471a2649a4cbdae1",
+        "test_method_count": 9,
+        "test_methods": [
+          "test_base64_cardinality_and_metadata_are_required",
+          "test_base64_parity_allows_float32_rounding",
+          "test_base64_values_must_match_float_response",
+          "test_empty_and_surplus_batches_fail",
+          "test_invalid_payloads_still_fail",
+          "test_item_metadata_must_match_single_input",
+          "test_numeric_batch_rejects_invalid_indexes_and_boolean_components",
+          "test_response_metadata_must_match_request",
+          "test_valid_single_item_response_passes"
+        ]
+      },
+      {
+        "case_ownership": "Per-case replacement must test behavior, including positive, negative, edge and identity-preserving cases; source-text-only assertions do not qualify.",
+        "deletion_condition": "Delete only after behavioral success/failure cases run in the typed owner and relevant platform gate.",
+        "gate": "Legacy just ci-validate plus owning build/install/platform gate",
+        "module": "scripts/tests/test_cuda_toolkit.py",
+        "owner": "tools/xtask semantic owner or existing platform/tool component",
+        "rust_or_ctest_gate": "Not yet ported; listed owner target is future migration ownership, not claimed execution.",
+        "sha256": "edc6cb36edb2619434e8c5a50f854dbd134392e6be875fd656ea88dce4463cba",
+        "test_method_count": 12,
+        "test_methods": [
+          "test_canonical_path_falls_back_to_python",
+          "test_detector_accepts_major_only_cuda_version_declaration",
+          "test_detector_fails_without_compiler_or_toolkit_metadata",
+          "test_detector_rejects_cuda_version_minor_mismatch",
+          "test_detector_uses_cudacxx_before_nvcc_and_path",
+          "test_detector_uses_nvcc_when_cudacxx_is_unset",
+          "test_detector_uses_path_nvcc_when_overrides_are_unset",
+          "test_detector_uses_toolkit_owned_metadata_without_compiler",
+          "test_preserves_explicit_cuda_environment",
+          "test_propagates_helper_failure_when_nvcc_is_missing",
+          "test_resolves_toolkit_root_through_nvcc_symlink",
+          "test_windows_cmake_compiler_path_restores_missing_exe_suffix"
+        ]
+      },
+      {
+        "case_ownership": "Per-case replacement must test behavior, including positive, negative, edge and identity-preserving cases; source-text-only assertions do not qualify.",
+        "deletion_condition": "Delete only after behavioral success/failure cases run in the typed owner and relevant platform gate.",
+        "gate": "Legacy just ci-validate plus owning build/install/platform gate",
+        "module": "scripts/tests/test_justfile_release_runtime.py",
+        "owner": "tools/xtask semantic owner or existing platform/tool component",
+        "rust_or_ctest_gate": "Not yet ported; listed owner target is future migration ownership, not claimed execution.",
+        "sha256": "c3dd85d0719627241015ba72b57ef8175de9e17124db454f5a0b007fdfe9fc3f",
+        "test_method_count": 8,
+        "test_methods": [
+          "test_aarch64_cuda_release_build_propagates_major_and_target_to_the_packager",
+          "test_aarch64_cuda_release_build_selects_arches_at_the_13_boundary",
+          "test_build_runtime_defaults_the_backend_and_forwards_the_one_it_was_given",
+          "test_bundle_uses_the_product_packager_and_copies_its_checksum",
+          "test_cuda12_release_recipes_include_pascal_sm61",
+          "test_cuda_release_build_selects_arches_at_the_12_8_boundary",
+          "test_cuda_release_recipes_propagate_the_selected_toolkit_major",
+          "test_release_runtime_build_does_not_expand_empty_array_under_nounset"
+        ]
+      },
+      {
+        "case_ownership": "Per-case replacement must test behavior, including positive, negative, edge and identity-preserving cases; source-text-only assertions do not qualify.",
+        "deletion_condition": "Delete only after exact deterministic notes/version/preflight parity; fixtures cannot publish.",
+        "gate": "Legacy just ci-validate plus just check-release/just publish-crates",
+        "module": "scripts/tests/test_release_version_script.py",
+        "owner": "tools/xtask/src/release or release workflow owner",
+        "rust_or_ctest_gate": "Not yet ported; listed owner target is future migration ownership, not claimed execution.",
+        "sha256": "ff5db3fed2038da48297e30c2772f4ac9682d367ff2acc94fcf64145cf0f1751",
+        "test_method_count": 3,
+        "test_methods": [
+          "test_known_versions_file_defines_the_function_the_script_edits",
+          "test_update_known_mesh_versions_fails_loudly_on_a_wrong_file",
+          "test_update_known_mesh_versions_prepends_the_new_version"
+        ]
+      },
+      {
+        "case_ownership": "Per-case replacement must test behavior, including positive, negative, edge and identity-preserving cases; source-text-only assertions do not qualify.",
+        "deletion_condition": "Delete only after every behavioral case has a Rust/CTest/component owner with identity, tolerance, and failure parity.",
+        "gate": "Legacy just ci-validate plus owning CTest/Rust/model gate",
+        "module": "scripts/tests/test_skippy_dynamic_link.py",
+        "owner": "Owning Skippy/native/model component; generic orchestration in tools/xtask/src/automation",
+        "rust_or_ctest_gate": "Not yet ported; listed owner target is future migration ownership, not claimed execution.",
+        "sha256": "328c0008eb0f41c48f4bc0a5aad06f34ebd120e8759028a16d82a882aae351b9",
+        "test_method_count": 5,
+        "test_methods": [
+          "test_driverless_elf_link_resolves_indirect_driver_without_bundling_stub",
+          "test_legacy_cuda_selectors_resolve_the_same_driver",
+          "test_linux_cuda_links_selected_driver_without_runtime_search_path",
+          "test_other_dynamic_targets_do_not_acquire_cuda_dependency",
+          "test_runtime_loader_remains_free_of_native_link_dependencies"
+        ]
+      },
+      {
+        "case_ownership": "Per-case replacement must test behavior, including positive, negative, edge and identity-preserving cases; source-text-only assertions do not qualify.",
+        "deletion_condition": "Delete only after every behavioral case has a Rust/CTest/component owner with identity, tolerance, and failure parity.",
+        "gate": "Legacy just ci-validate plus owning CTest/Rust/model gate",
+        "module": "scripts/tests/test_skippy_static_link.py",
+        "owner": "Owning Skippy/native/model component; generic orchestration in tools/xtask/src/automation",
+        "rust_or_ctest_gate": "Not yet ported; listed owner target is future migration ownership, not claimed execution.",
+        "sha256": "2e935c5f2e35fad950cbe0f6681f92261b298449c9e6b0cde948e5deaa2be382",
+        "test_method_count": 8,
+        "test_methods": [
+          "test_active_metal_backend_links_only_cache_enabled_archive",
+          "test_backend_cache_mismatch_fails_closed_despite_stale_archive",
+          "test_cache_boolean_accepts_crlf_and_surrounding_whitespace",
+          "test_cpu_ignores_stale_gpu_and_blas_archives",
+          "test_crlf_cache_values_are_recognized",
+          "test_enabled_staged_accelerator_requires_matching_selected_backend",
+          "test_unreadable_cache_never_means_disabled_backends",
+          "test_unselected_backend_cache_mismatch_fails_closed"
+        ]
+      }
+    ],
+    "test_groups": [
+      {
+        "file": "scripts/tests/test_ci_openai_embeddings_smoke.py",
+        "members": [
+          [
+            19,
+            "ffba3595c7fa0777",
+            1,
+            "dynamic-import",
+            "import",
+            "scripts/ci-openai-embeddings-smoke.py",
+            "run_path executes retained SDK smoke module in-process; generic HTTP cases moved to Rust workload_smoke::embedding tests"
+          ]
+        ]
+      },
+      {
+        "file": "scripts/tests/test_cuda_toolkit.py",
+        "members": [
+          [
+            237,
+            "42eccc72cc5b1ea3",
+            1,
+            "subprocess-or-interpreter",
+            "assembly",
+            "sys.executable symlink target",
+            "symlink_to constructs a fixture python command; no interpreter launch on this line"
+          ]
+        ]
+      }
+    ],
+    "additional_test_groups": [
+      [
+        "scripts/tests/test_ci_source_layout.py",
+        [
+          [
+            "fixture",
+            "resolve-source-layout action run block",
+            "Bash resolves synthetic root or relocated mesh layout and rejects a missing directory",
+            [
+              28,
+              62
+            ]
+          ],
+          [
+            "fixture",
+            "CI UI producer verification run block",
+            "Runs extracted Verify console distribution step on temporary UI assets, not a production build",
+            [
+              80
+            ]
+          ],
+          [
+            "fixture",
+            "CI host or SDK Verify UI distribution input run block",
+            "Executes selected workflow verifier on intact and tampered temporary UI assets; checks acceptance and rejection",
+            [
+              87,
+              89
+            ]
+          ],
+          [
+            "fixture",
+            "node-sdk-addon-artifact.yml build prefix with stub npm",
+            "Runs selected release SDK step prefix against temporary package.json and fake npm; asserts version match and mismatch",
+            [
+              123,
+              126
+            ]
+          ],
+          [
+            "fixture",
+            "compute-changes derive-outputs.sh selected backend classifier",
+            "Bash evaluates the extracted classifier on fixture changed paths and affected crates, no workflow dispatch",
+            [
+              146,
+              210
+            ]
+          ],
+          [
+            "fixture",
+            "just --evaluate website_dir",
+            "Read-only Just evaluation with explicit relocated UI path then unset override; checks fallback path",
+            [
+              167,
+              176
+            ]
+          ],
+          [
+            "fixture",
+            "llama-upstream-canary.yml pin resolver run block",
+            "Runs extracted Bash pin selection against temporary source layouts; rejects missing or ambiguous pins",
+            [
+              226
+            ]
+          ]
+        ]
+      ],
+      [
+        "scripts/tests/test_release_version_script.py",
+        [
+          [
+            "fixture",
+            "git in temporary version-source repository",
+            "Initializes and stages only the temporary source used by release-version fixtures",
+            [
+              53,
+              60,
+              217,
+              218
+            ]
+          ],
+          [
+            "fixture",
+            "update_versioned_path_dependency_versions extracted from scripts/release-version.sh",
+            "Bash evaluates selected function against temporary Cargo manifests and updates only path dependencies",
+            [
+              62
+            ]
+          ],
+          [
+            "fixture",
+            "update_known_mesh_versions extracted from scripts/release-version.sh",
+            "Bash evaluates selected function against temporary known-version files; valid version rewrites fixture and malformed source rejects",
+            [
+              87,
+              107,
+              225
+            ]
+          ],
+          [
+            "fixture",
+            "resolve_product_path extracted from scripts/release-version.sh",
+            "Bash resolves fixture layout paths without publishing a release",
+            [
+              132
+            ]
+          ]
+        ]
+      ],
+      [
+        "scripts/tests/test_cuda_toolkit.py",
+        [
+          [
+            "fixture",
+            "/bin/bash -c test-selected CUDA toolkit snippet",
+            "run_bash executes caller-supplied shell snippets with temporary fake toolkit and selected PATH, not an implicit CUDA install",
+            [
+              32,
+              99
+            ]
+          ]
+        ]
+      ],
+      [
+        "scripts/tests/test_justfile_release_runtime.py",
+        [
+          [
+            "fixture",
+            "just -f temporary Justfile selected recipe",
+            "test passes name and args to fixture Justfile in temporary workspace and asserts recipe output",
+            [
+              80
+            ]
+          ]
+        ]
+      ],
+      [
+        "scripts/tests/test_skippy_dynamic_link.py",
+        [
+          [
+            "fixture",
+            "rustc crates/skippy-ffi/build.rs",
+            "compiles temporary build-script executable; not a Cargo/native runtime production build",
+            [
+              25,
+              62
+            ]
+          ],
+          [
+            "fixture",
+            "test-selected cc/rustc commands",
+            "run(*args) receives fixed C compiler and rustc link probe vectors from test; broken variant omits driver linker args and must fail",
+            [
+              115,
+              144
+            ]
+          ]
+        ]
+      ],
+      [
+        "scripts/tests/test_skippy_static_link.py",
+        [
+          [
+            "fixture",
+            "rustc crates/skippy-ffi/build.rs",
+            "compiles fixture build script into temporary executable",
+            [
+              36
+            ]
+          ],
+          [
+            "fixture",
+            "compiled skippy-ffi build-script fixture",
+            "runs build script with static ABI environment and test-created libraries",
+            [
+              87
+            ]
+          ]
+        ]
+      ]
+    ],
+    "python_groups": [],
+    "python_sources": [],
+    "python_edges": []
+  },
+  "focused_native": {
+    "platform": "linux-arm64",
+    "freeze": ".omo/evidence/resume-20261002/linux-native-draft-freeze-v4.json",
+    "freeze_sha256": "ab83b2d52a805f0d650ab74d1c4088a04001e6991977541179393ed7d7d2dd59",
+    "unit_passed": 16,
+    "integration_passed": 58,
+    "failed": 0,
+    "ignored": 0,
+    "receipts": [
+      {
+        "kind": "tests",
+        "log": ".omo/evidence/resume-20261002/linux-native-focused-v3-tests.log",
+        "sha256": "e24dff30bbfc87f14a1b88e271b96f2ce955048e3980467a1f540ad2ebac5c15",
+        "exit_code": 0
+      },
+      {
+        "kind": "clippy",
+        "log": ".omo/evidence/resume-20261002/linux-native-focused-v3-clippy.log",
+        "sha256": "49420d7a9f277aac0ae81029f9bb41cc042c8c386f8243d75c6ca815998c9bba",
+        "exit_code": 0
+      },
+      {
+        "kind": "fixture-build",
+        "log": ".omo/evidence/resume-20261002/linux-native-focused-v3-fixture-build.log",
+        "sha256": "9bf147946f210c1f1729ce46928aeea17d25d491d5d87387c2362fbbc1a4e870",
+        "exit_code": 0
+      }
+    ]
+  },
+  "required_owner": {
+    "targets": [
+      "xtask unit tests",
+      "migration_lifecycle"
+    ],
+    "normal_recipe": "ci-automation-contracts"
+  },
+  "limits": [
+    "Private compiler, CUDA metadata, shell, CMake, package and SDK-shaped boundaries; not actual Windows, GPU, product, SDK or hosted qualification.",
+    "CUDA legacy functions were not collected by normal unittest; these are twelve preserved source intents, not twelve historical passing tests.",
+    "Historical Python ownership entries were stale: current source/maps, not old counts, define the 58 retired intents.",
+    "Official SDK clients and their required compatibility gates remain; mocked response retirement does not establish task-22 isolation.",
+    "Corrected full maintained normal gate passed; no whole migration or live platform/SDK claim."
+  ],
+  "postimage_qualification": {
+    "exit_code": 0,
+    "session_id": 52210,
+    "freeze": ".omo/evidence/resume-20261002/agent-fixture-maintained-freeze-v1.json",
+    "freeze_sha256": "54ee568cb7dca0efedf2cc8ebadb7ac21870fbd1bcd26e5bd2ef0b77f4d7ffae",
+    "log": ".omo/evidence/resume-20261002/agent-fixture-maintained-v1-normal.log",
+    "sha256": "9a42499a1b273ef34c4fb449b7a5bdc8538b9ae3903fb2e3b1ec49ecc45e3c27",
+    "rust": {
+      "groups": 114,
+      "passed": 4691,
+      "failed": 0,
+      "ignored": 2
+    },
+    "legacy": {
+      "run": 664,
+      "skipped": 13,
+      "seconds": 127.743,
+      "failed": 0,
+      "errors": 0
+    },
+    "limits": "Local maintained normal gate. No live model, SDK, hosted, Windows or whole migration completion proof."
+  },
+  "qualification_scope": "Full normal corrected maintained union passed. Subsequent qualification-only coverage/ledger metadata requires owning checks before checkpoint."
+}

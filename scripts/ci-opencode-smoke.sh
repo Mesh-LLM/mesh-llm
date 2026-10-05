@@ -51,16 +51,7 @@ if [[ -z "$MODEL" ]]; then
 
     if [[ -z "$MESH_MODEL" ]]; then
         MESH_MODEL="$(
-            printf '%s' "$MODELS_JSON" | python3 -c 'import json,sys
-data=json.load(sys.stdin).get("data", [])
-preferred=("minimax", "glm", "qwen", "coder", "hermes")
-ids=[item.get("id","") for item in data if item.get("id")]
-for needle in preferred:
-    for model_id in ids:
-        if needle in model_id.lower():
-            print(model_id)
-            raise SystemExit
-print(ids[0] if ids else "")' 2>/dev/null || echo ""
+            printf '%s' "$MODELS_JSON" | "${opencode_automation[@]}" automation agent-pick-model 2>/dev/null || echo ""
         )"
     fi
 
@@ -228,82 +219,11 @@ export OPENCODE_DISABLE_AUTOUPDATE="${OPENCODE_DISABLE_AUTOUPDATE:-true}"
 export OPENCODE_DISABLE_PRUNE="${OPENCODE_DISABLE_PRUNE:-true}"
 export OPENCODE_DISABLE_LSP_DOWNLOAD="${OPENCODE_DISABLE_LSP_DOWNLOAD:-true}"
 
-mkdir -p "${WORK_DIR}/facts" "${WORK_DIR}/src" "${WORK_DIR}/notes" "${WORK_DIR}/tests"
+INITIAL_IMPL_SHA="$("${opencode_automation[@]}" automation agent-fixture-inputs coding-setup "$WORK_DIR")"
 
-cat >"${WORK_DIR}/README.md" <<'EOF'
-# OpenCode Smoke Fixture
+TURN1_PROMPT='You are running turn 1 of a CI smoke test in a throwaway project. Use filesystem tools, inspect the repository, read the tests, and implement src/smoke_calc.rs so the tests are intended to pass. This is a real coding task: edit the file, do not just describe the edit. Keep the implementation small and dependency-free. End your response with TURN1_DONE.'
 
-This repository is intentionally tiny. The smoke test should answer only from
-files on disk, not from the prompt text.
-EOF
-
-cat >"${WORK_DIR}/facts/signal.md" <<'EOF'
-# Runtime Signal
-
-CODEWORD=signal-7429
-
-Question seed:
-Which file names contain the word signal?
-EOF
-
-cat >"${WORK_DIR}/src/matrix.txt" <<'EOF'
-checksum: FS-319-DELTA
-numbers: 2 3 4 5
-hint: the prime sum is computed from the numbers line
-EOF
-
-cat >"${WORK_DIR}/src/smoke_calc.py" <<'EOF'
-from __future__ import annotations
-
-
-def parse_codeword(path: str) -> str:
-    """Return the CODEWORD value from a small key/value markdown file."""
-    raise NotImplementedError("ci smoke fixture")
-
-
-def prime_sum_from_matrix(path: str) -> int:
-    """Return the sum of prime numbers from the numbers line in matrix.txt."""
-    raise NotImplementedError("ci smoke fixture")
-EOF
-INITIAL_IMPL_SHA="$("${opencode_automation[@]}" automation agent-fixture-inputs sha256 "${WORK_DIR}/src/smoke_calc.py")"
-
-cat >"${WORK_DIR}/tests/test_smoke_calc.py" <<'EOF'
-from pathlib import Path
-import sys
-import unittest
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
-
-from smoke_calc import parse_codeword, prime_sum_from_matrix
-
-
-ROOT = Path(__file__).resolve().parents[1]
-
-
-class SmokeCalcTests(unittest.TestCase):
-    def test_parse_codeword(self):
-        self.assertEqual(parse_codeword(str(ROOT / "facts" / "signal.md")), "signal-7429")
-
-    def test_prime_sum_from_matrix(self):
-        self.assertEqual(prime_sum_from_matrix(str(ROOT / "src" / "matrix.txt")), 10)
-
-
-if __name__ == "__main__":
-    unittest.main()
-EOF
-
-cat >"${WORK_DIR}/notes/manifest.txt" <<'EOF'
-tracked files:
-- facts/signal.md
-- src/matrix.txt
-- src/smoke_calc.py
-- tests/test_smoke_calc.py
-- README.md
-EOF
-
-TURN1_PROMPT='You are running turn 1 of a CI smoke test in a throwaway project. Use filesystem tools, inspect the repository, read the tests, and implement src/smoke_calc.py so the tests are intended to pass. This is a real coding task: edit the file, do not just describe the edit. Keep the implementation small and dependency-free. End your response with TURN1_DONE.'
-
-TURN2_PROMPT='This is turn 2 of the same CI smoke test. Continue from the prior work. Run the Python tests, fix src/smoke_calc.py if anything fails, then answer exactly these four lines with no Markdown and no extra text:
+TURN2_PROMPT='This is turn 2 of the same CI smoke test. Continue from the prior work. Run just test, fix src/smoke_calc.rs if anything fails, then answer exactly these four lines with no Markdown and no extra text:
 CODEWORD=<the CODEWORD value from facts/signal.md>
 CHECKSUM=<the checksum value from src/matrix.txt>
 PRIME_SUM=<the sum of prime numbers from the numbers line in src/matrix.txt>
@@ -383,60 +303,11 @@ fi
 
 cat "${TURN1_JSONL}" "${TURN2_JSONL}" >"${OUTPUT_JSONL}"
 
-if ! python3 -m unittest discover -s "${WORK_DIR}/tests" -p 'test_*.py'; then
-    echo "OpenCode smoke fixture tests failed after the coding session" >&2
-    echo "--- src/smoke_calc.py ---" >&2
-    sed -n '1,220p' "${WORK_DIR}/src/smoke_calc.py" >&2 || true
+if ! "${opencode_automation[@]}" automation agent-fixture-inputs coding-verify "$WORK_DIR" "$INITIAL_IMPL_SHA" "$(command -v just)" "$(command -v rustc)"; then
+    echo "OpenCode smoke fixture implementation verification failed" >&2
+    sed -n '1,220p' "${WORK_DIR}/src/smoke_calc.rs" >&2 || true
     exit 1
 fi
-
-python3 - "${WORK_DIR}" "${INITIAL_IMPL_SHA}" <<'PY'
-import hashlib
-import importlib.util
-import sys
-import tempfile
-from pathlib import Path
-
-root = Path(sys.argv[1])
-initial_sha = sys.argv[2]
-source_path = root / "src" / "smoke_calc.py"
-source = source_path.read_text(encoding="utf-8")
-current_sha = hashlib.sha256(source.encode("utf-8")).hexdigest()
-
-if current_sha == initial_sha:
-    print("OpenCode left src/smoke_calc.py unchanged.", file=sys.stderr)
-    sys.exit(1)
-
-for forbidden in ("NotImplementedError", "ci smoke fixture"):
-    if forbidden in source:
-        print(f"OpenCode left placeholder marker in src/smoke_calc.py: {forbidden}", file=sys.stderr)
-        sys.exit(1)
-
-spec = importlib.util.spec_from_file_location("smoke_calc", source_path)
-module = importlib.util.module_from_spec(spec)
-assert spec and spec.loader
-spec.loader.exec_module(module)
-
-with tempfile.TemporaryDirectory(prefix="mesh-opencode-hidden-") as tmp:
-    tmp_path = Path(tmp)
-    signal_path = tmp_path / "other_signal.md"
-    matrix_path = tmp_path / "other_matrix.txt"
-    signal_path.write_text("# Hidden\n\nCODEWORD=hidden-8842\n", encoding="utf-8")
-    matrix_path.write_text("checksum: hidden\nnumbers: 6 7 8 9 10 11 12 13\n", encoding="utf-8")
-
-    codeword = module.parse_codeword(str(signal_path))
-    prime_sum = module.prime_sum_from_matrix(str(matrix_path))
-
-if codeword != "hidden-8842":
-    print(f"Hidden codeword validation failed: {codeword!r}", file=sys.stderr)
-    sys.exit(1)
-
-if prime_sum != 31:
-    print(f"Hidden prime-sum validation failed: {prime_sum!r}", file=sys.stderr)
-    sys.exit(1)
-
-print("Hidden implementation validation passed")
-PY
 
 if ! "${opencode_automation[@]}" automation agent-fixture-evidence opencode-result "${OUTPUT_JSONL}"; then
     echo "--- output tail ---" >&2
@@ -445,81 +316,5 @@ if ! "${opencode_automation[@]}" automation agent-fixture-evidence opencode-resu
 fi
 
 if [[ "$SURFACE_CAPTURE" == "true" && "$MODEL" == mesh/* ]]; then
-    python3 - "$SURFACE_LOG" <<'PY'
-import json
-import os
-import sys
-from pathlib import Path
-
-path = Path(sys.argv[1])
-long_prompt_chars = int(os.environ.get("OPENCODE_SMOKE_LONG_PROMPT_CHARS", "65536") or "0")
-events = []
-for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
-    try:
-        events.append(json.loads(line))
-    except json.JSONDecodeError:
-        pass
-
-models_gets = [event for event in events if event.get("method") == "GET" and event.get("path", "").rstrip("/") == "/v1/models"]
-chat_posts = [
-    event for event in events
-    if event.get("method") == "POST" and event.get("path", "").split("?", 1)[0].rstrip("/") == "/v1/chat/completions"
-]
-bodies = [event.get("body") or {} for event in chat_posts]
-
-def message_roles(body):
-    return [message.get("role") for message in body.get("messages", []) if isinstance(message, dict)]
-
-def has_assistant_tool_calls(body):
-    for message in body.get("messages", []):
-        if isinstance(message, dict) and message.get("role") == "assistant" and message.get("tool_calls"):
-            return True
-    return False
-
-def has_tool_result(body):
-    return any(isinstance(message, dict) and message.get("role") == "tool" for message in body.get("messages", []))
-
-required = {
-    "GET /v1/models": bool(models_gets),
-    "POST /v1/chat/completions": bool(chat_posts),
-    "streaming chat request": any(body.get("stream") is True for body in bodies),
-    "non-stream chat request": any(body.get("stream") is False for body in bodies),
-    "tools schema": any(isinstance(body.get("tools"), list) and body["tools"] for body in bodies),
-    "tool_choice field": any("tool_choice" in body for body in bodies),
-    "parallel_tool_calls field": any("parallel_tool_calls" in body for body in bodies),
-    "system/developer instructions": any(any(role in {"system", "developer"} for role in message_roles(body)) for body in bodies),
-    "user message": any("user" in message_roles(body) for body in bodies),
-    "assistant tool-call history": any(has_assistant_tool_calls(body) for body in bodies),
-    "tool-result message": any(has_tool_result(body) for body in bodies),
-    "multi-message history": any(len(body.get("messages", [])) >= 4 for body in bodies),
-}
-if long_prompt_chars > 0:
-    required["long prompt request"] = any(
-        len(json.dumps(body, separators=(",", ":"))) >= long_prompt_chars
-        for body in bodies
-    )
-
-missing = [name for name, ok in required.items() if not ok]
-if missing:
-    print("OpenAI agent surface validation failed.", file=sys.stderr)
-    for name in missing:
-        print(f"  missing {name}", file=sys.stderr)
-    print(f"  captured events: {len(events)}", file=sys.stderr)
-    for body in bodies:
-        print(json.dumps({
-            "model": body.get("model"),
-            "stream": body.get("stream"),
-            "tool_count": len(body.get("tools", []) or []),
-            "has_tool_choice": "tool_choice" in body,
-            "has_parallel_tool_calls": "parallel_tool_calls" in body,
-            "roles": message_roles(body),
-            "messages": len(body.get("messages", [])),
-            "assistant_tool_calls": has_assistant_tool_calls(body),
-            "tool_result": has_tool_result(body),
-        }), file=sys.stderr)
-    sys.exit(1)
-
-print("OpenAI agent surface validation passed")
-print(f"  captured requests: models={len(models_gets)} chat={len(chat_posts)}")
-PY
+    "${opencode_automation[@]}" automation agent-fixture-evidence surface "$SURFACE_LOG" "$LONG_PROMPT_CHARS"
 fi
