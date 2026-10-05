@@ -5,6 +5,7 @@ const HF_CONVERTED_ARTIFACT_USAGE: &str =
     "usage: cargo xtool hf-converted-artifact preflight --artifact-dir <directory>";
 
 pub(crate) fn print_usage() {
+    println!("  cargo xtool ci-ops pr-authority-audit --help");
     println!(
         "  cargo xtool automation agent-recording-proxy UPSTREAM_API_BASE CAPTURE_JSONL READY_FILE LIFETIME_SECONDS"
     );

@@ -47,3 +47,6 @@ mod sccache_summary;
 
 #[path = "migration_ci_operations/performance_history.rs"]
 mod performance_history;
+
+#[path = "migration_ci_operations/pr_authority.rs"]
+mod pr_authority;

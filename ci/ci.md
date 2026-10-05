@@ -1665,3 +1665,14 @@ the normal xtask integration roster and checks offline measured comparisons,
 failure evidence and publication refusal. These additions qualify local
 automation behavior; model-backed workloads and platform/hosted evidence retain
 their existing gates.
+
+
+The Rust `cargo xtool ci-ops pr-authority-audit` command validates the existing
+PR provider/cache flags, original event, forbidden credential variables,
+Actions endpoints, and Docker configuration sources. Successful admission is
+silent, and diagnostics name fields and reasons without retaining their values.
+Its local fixtures do not establish provider isolation. The production
+`audit-depot-pr-isolation` action remains transitional and still parses Docker
+JSON with Python. Because it runs before checkout, caller cutover requires a
+protected executable artifact and verified source/digest delivery before
+execution; a command compiled from PR source cannot replace that admission.
