@@ -462,7 +462,7 @@ cache_type_k     = "auto"        # KV key dtype: auto f16 f32 bf16 q8_0 q4_0 …
 cache_type_v     = "auto"        # KV value dtype (same enum)
 flash_attention  = "auto"        # auto enabled disabled
 kv_offload       = "auto"        # bool or "auto" — KV residency / offload policy
-kv_unified       = "auto"        # legacy compatibility; unified KV is always used, false is rejected
+kv_unified       = "auto"        # bool or "auto"; auto derives from lane count; false selects per-sequence KV
 cache_ram_mib    = 0             # host-RAM L2 budget in MiB; 0 = disabled; requires L3
 cache_idle_slots = 0             # idle slot retention count (schema-reserved)
 prompt_cache     = "auto"        # bool or "auto" — reuse previous prompt KV
