@@ -226,6 +226,9 @@ repeated infrastructure failure or invalid aggregate evidence stops. Only
 complete independent success permits publication.
 Full worker/build logs remain for 14 days; executable handoffs remain for seven
 days so a single-machine queue can complete later passes.
+Agent-run build and test commands stream to the live job and save individual
+logs and exit statuses under `agent-commands/` in the build evidence artifact.
+The command wrapper also snapshots available CTest result files after each run.
 
 Within each candidate build job, Goose resumes the same session for
 prepare/build failures under the existing 11.5-hour coding-admission and
