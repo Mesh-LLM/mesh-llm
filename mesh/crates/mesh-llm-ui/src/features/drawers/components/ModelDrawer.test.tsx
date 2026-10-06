@@ -115,7 +115,14 @@ describe('ModelDrawer', () => {
   })
 
   it('shows each peer’s own VRAM in the active peers table', () => {
-    render(<ModelDrawer open model={MODEL} peers={[peerHosting('peer-1', 24), peerHosting('peer-2', 48)]} onClose={() => {}} />)
+    render(
+      <ModelDrawer
+        open
+        model={MODEL}
+        peers={[peerHosting('peer-1', 24), peerHosting('peer-2', 48)]}
+        onClose={() => {}}
+      />
+    )
 
     expect(screen.getByText('24 GB')).toBeInTheDocument()
     expect(screen.getByText('48 GB')).toBeInTheDocument()

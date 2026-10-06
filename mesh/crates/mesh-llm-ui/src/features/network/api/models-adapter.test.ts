@@ -79,7 +79,13 @@ describe('adaptModelsToSummary', () => {
 
   it('maps fit_label through to fitLabel', () => {
     const models: MeshModelRaw[] = [
-      { name: 'Bonsai-27B-GGUF:Q1_0', status: 'warm', size_gb: 14.2, node_count: 1, fit_label: 'Possible with tradeoffs' }
+      {
+        name: 'Bonsai-27B-GGUF:Q1_0',
+        status: 'warm',
+        size_gb: 14.2,
+        node_count: 1,
+        fit_label: 'Possible with tradeoffs'
+      }
     ]
 
     expect(adaptModelsToSummary(models)[0]).toEqual(expect.objectContaining({ fitLabel: 'Possible with tradeoffs' }))
