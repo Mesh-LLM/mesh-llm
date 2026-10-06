@@ -8,7 +8,8 @@
       "callers": [
         "tools/xtask/src/automation/replay_matrix/run_input.rs::prepare via bounded trajectory_reader for execute-run/run-family",
         "tools/xtask/src/automation/replay_matrix/trajectory_reader.rs::run direct typed trajectory-reader CLI",
-        "evals/README.md explicit locked-interpreter manifest example"
+        "evals/README.md explicit locked-interpreter manifest example",
+        "just/ci.just::agentic-trajectory-reader-contracts isolated five retained-helper fixtures (optional manual/trusted-main only)"
       ],
       "local_dependency_files": [
         "ci/agentic-replay-nightly/pyproject.toml",
@@ -16,7 +17,7 @@
       ],
       "cadence": "Trusted-main optional agentic replay and explicit manual replay only",
       "purpose": "Read the pinned Parquet trajectory dataset through DuckDB and emit the existing deterministic trajectory manifest. This exception does not retain replay execution or evidence processing in Python.",
-      "isolation_test": "Maintainer retention decision on 2026-10-01. Rust trajectory-reader bounds the fixed reader path and explicit executable. migration_run_family and manual replay fixtures exercise Rust owners with bounded reader fixtures, including failure, timeout and process-tree cleanup. The seven obsolete manual replay implementations/tests are retired with the durable replay-retirement coverage map; real DuckDB dataset and live model qualification are separate.",
+      "isolation_test": "Maintainer retention decision on 2026-10-01. Rust trajectory-reader bounds the fixed reader path and explicit executable. migration_run_family and manual replay fixtures exercise Rust owners with bounded reader fixtures, including failure, timeout and process-tree cleanup. The seven obsolete manual replay implementations/tests are retired with the durable replay-retirement coverage map; real DuckDB dataset and live model qualification are separate. The five original constructor fixtures remain in scripts/tests/test_agentic_trajectory_manifest.py and move to the optional locked offline/no-sync/no-python-downloads -I reader lane; they are not a required generic core Python dependency. Source proposal; actual isolated execution receipt required before admission. The optional recipe requires the existing project interpreter; constructor-only fixtures do not exercise the lazy DuckDB import, installed DuckDB or real Parquet.",
       "status": "maintainer_retained"
     },
     {

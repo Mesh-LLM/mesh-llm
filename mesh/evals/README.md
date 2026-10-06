@@ -126,7 +126,7 @@ The Python exception is the DuckDB/Parquet reader, not replay orchestration.
 For example, materialize a captured manifest with the locked interpreter:
 
 ```bash
-ci/agentic-replay-nightly/.venv/bin/python3 mesh/evals/agentic-trajectory-manifest.py \
+ci/agentic-replay-nightly/.venv/bin/python3 -I mesh/evals/agentic-trajectory-manifest.py \
   --dataset-file /path/to/sessions.parquet \
   --dataset-revision '<immutable-dataset-revision>' \
   --output /path/to/captured-trajectories.json \
@@ -137,6 +137,24 @@ ci/agentic-replay-nightly/.venv/bin/python3 mesh/evals/agentic-trajectory-manife
   --source-dataset nebius-swe-rebench-openhands \
   --sessions-per-cohort 12
 ```
+
+The retained reader includes the deterministic whole-session cohort constructor.
+Its five portable constructor tests use the same isolated locked environment:
+
+```bash
+# Explicit environment preparation; no dataset/model acquisition.
+uv sync --locked --no-python-downloads --project ci/agentic-replay-nightly
+just agentic-trajectory-reader-contracts
+```
+
+The test recipe runs offline without synchronizing or downloading Python, uses
+`python -I`, and explicitly requires the prepared project interpreter before
+invoking uv. It reads only in-memory fixture rows; DuckDB is imported lazily
+when reading a dataset, so these constructor fixtures do not qualify installed
+DuckDB or the real Parquet corpus. This optional
+manual/trusted-main research-reader lane is separate from required generic
+quality checks and does not alter required SDK validation cadence. The generic
+prompt serializer contracts remain in the native automation quality lane.
 
 The default per-turn output cap is 2,048 tokens. Reports lead with token-weighted
 decode throughput measured after first generated content and show end-to-end

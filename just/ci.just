@@ -29,7 +29,15 @@ ci-legacy-contracts:
     binary="$(printf '%s\n' "$bootstrap" | awk -F= '$1 == "binary_path" { count++; print substr($0, index($0, "=") + 1) } END { if (count != 1) exit 1 }')"
     test -n "$binary"
     export MESH_LLM_AUTOMATION_BIN="$binary"
-    python3 -m unittest scripts.tests.test_skippy_llama_parity scripts.tests.test_ci_windows_composition scripts.tests.test_reusable_workflow_runner_trust scripts.tests.test_build_windows scripts.tests.test_skippy_radix_cache_ab scripts.tests.test_ci_native_toolchain_routing scripts.tests.test_skippy_competitive_benchmark scripts.tests.test_hf_skippy_mtp_certify_job scripts.tests.test_install_ps1 scripts.tests.test_kv_restart_replay scripts.tests.test_llama_canary_agent_repair_contract scripts.tests.test_agentic_trajectory_manifest scripts.tests.test_llama_upstream_canary_contract scripts.tests.test_llama_review_regressions scripts.tests.test_skippy_adaptive_prefill_ab scripts.tests.test_skippy_agentic_prompt_manifest scripts.tests.test_skippy_mixed_prefill_decode_ab scripts.tests.test_ci_sdk_producers scripts.tests.test_llama_native_full_replay scripts.tests.test_ci_artifact_actions scripts.tests.test_skippy_system_one_smoke
+    python3 -m unittest scripts.tests.test_skippy_llama_parity scripts.tests.test_ci_windows_composition  scripts.tests.test_build_windows scripts.tests.test_skippy_radix_cache_ab  scripts.tests.test_skippy_competitive_benchmark scripts.tests.test_hf_skippy_mtp_certify_job scripts.tests.test_install_ps1 scripts.tests.test_kv_restart_replay scripts.tests.test_llama_canary_agent_repair_contract  scripts.tests.test_llama_upstream_canary_contract scripts.tests.test_llama_review_regressions scripts.tests.test_skippy_adaptive_prefill_ab  scripts.tests.test_skippy_mixed_prefill_decode_ab  scripts.tests.test_llama_native_full_replay  scripts.tests.test_skippy_system_one_smoke
+
+# Approved research-reader fixtures are optional and use only the existing lock.
+# Prepare deliberately: uv sync --locked --no-python-downloads --project ci/agentic-replay-nightly
+# Runtime is offline: require the prepared interpreter; constructor fixtures do not qualify DuckDB.
+[unix]
+agentic-trajectory-reader-contracts:
+    test -x "{{justfile_directory()}}/ci/agentic-replay-nightly/.venv/bin/python" || { echo "Prepare the locked trajectory-reader environment explicitly before this optional fixture lane." >&2; exit 1; }
+    uv run --offline --locked --no-sync --no-python-downloads --project "{{justfile_directory()}}/ci/agentic-replay-nightly" python -I "{{justfile_directory()}}/scripts/tests/test_agentic_trajectory_manifest.py"
 
 # Run CI/workspace crate-list consistency checks.
 ci-crate-lists:

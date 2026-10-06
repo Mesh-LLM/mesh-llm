@@ -9,7 +9,7 @@
       "disposition": "bounded_selector",
       "evidence": [
         {
-          "line": 53,
+          "line": 61,
           "path": "just/ci.just",
           "text": "exec \"$binary\" \"$@\""
         }
@@ -32,7 +32,7 @@
       "disposition": "platform_conditional",
       "evidence": [
         {
-          "line": 41,
+          "line": 49,
           "path": "just/ci.just",
           "text": "just with-lld cargo build --locked -p xtask --bin xtask"
         }
@@ -55,7 +55,7 @@
       "disposition": "platform_conditional",
       "evidence": [
         {
-          "line": 42,
+          "line": 50,
           "path": "just/ci.just",
           "text": "just with-lld cargo run --locked -p xtask --bin xtask -- automation bootstrap"
         }
@@ -1407,7 +1407,7 @@
       "evidence": [
         {
           "path": "just/ci.just",
-          "line": 179,
+          "line": 187,
           "text": "just with-lld cargo build --locked -p xtask --bins --examples"
         },
         {
@@ -1570,562 +1570,562 @@
         },
         {
           "path": "just/ci.just",
-          "line": 199,
+          "line": 207,
           "text": "just with-lld cargo test --locked -p xtask --bin xtask \\"
         },
         {
           "path": "just/ci.just",
-          "line": 200,
+          "line": 208,
           "text": "--test automation_selector \\"
         },
         {
           "path": "just/ci.just",
-          "line": 201,
+          "line": 209,
           "text": "--test canary_cache_configuration \\"
         },
         {
           "path": "just/ci.just",
-          "line": 202,
+          "line": 210,
           "text": "--test canary_controller_plan \\"
         },
         {
           "path": "just/ci.just",
-          "line": 203,
+          "line": 211,
           "text": "--test canary_result_gate \\"
         },
         {
           "path": "just/ci.just",
-          "line": 204,
+          "line": 212,
           "text": "--test ci_runner_cache_contract \\"
         },
         {
           "path": "just/ci.just",
-          "line": 205,
+          "line": 213,
           "text": "--test family_battery_environment \\"
         },
         {
           "path": "just/ci.just",
-          "line": 206,
+          "line": 214,
           "text": "--test family_battery_prepared_source \\"
         },
         {
           "path": "just/ci.just",
-          "line": 207,
+          "line": 215,
           "text": "--test l4_producers \\"
         },
         {
           "path": "just/ci.just",
-          "line": 208,
+          "line": 216,
           "text": "--test lane_l11_optional_tooling \\"
         },
         {
           "path": "just/ci.just",
-          "line": 209,
+          "line": 217,
           "text": "--test lane_l12_build_llama \\"
         },
         {
           "path": "just/ci.just",
-          "line": 210,
+          "line": 218,
           "text": "--test lane_l1_ui_delivery \\"
         },
         {
           "path": "just/ci.just",
-          "line": 211,
+          "line": 219,
           "text": "--test lane_l2_authority \\"
         },
         {
           "path": "just/ci.just",
-          "line": 212,
+          "line": 220,
           "text": "--test lane_l2_hosted_bootstrap \\"
         },
         {
           "path": "just/ci.just",
-          "line": 213,
+          "line": 221,
           "text": "--test lane_l2_quality_contracts \\"
         },
         {
           "path": "just/ci.just",
-          "line": 214,
+          "line": 222,
           "text": "--test lane_l2_registry_pulls \\"
         },
         {
           "path": "just/ci.just",
-          "line": 215,
+          "line": 223,
           "text": "--test lane_l2_runtime_lifecycle \\"
         },
         {
           "path": "just/ci.just",
-          "line": 216,
+          "line": 224,
           "text": "--test lane_l2_runtime_seed \\"
         },
         {
           "path": "just/ci.just",
-          "line": 217,
+          "line": 225,
           "text": "--test lane_l3_abi_restore \\"
         },
         {
           "path": "just/ci.just",
-          "line": 218,
+          "line": 226,
           "text": "--test lane_l3_cache_metadata \\"
         },
         {
           "path": "just/ci.just",
-          "line": 219,
+          "line": 227,
           "text": "--test lane_l3_display_projection \\"
         },
         {
           "path": "just/ci.just",
-          "line": 220,
+          "line": 228,
           "text": "--test lane_l3_l2_dispatch \\"
         },
         {
           "path": "just/ci.just",
-          "line": 221,
+          "line": 229,
           "text": "--test lane_l5_adapter_contracts \\"
         },
         {
           "path": "just/ci.just",
-          "line": 222,
+          "line": 230,
           "text": "--test lane_l5_release_product \\"
         },
         {
           "path": "just/ci.just",
-          "line": 223,
+          "line": 231,
           "text": "--test lane_l6_sdk_swift \\"
         },
         {
           "path": "just/ci.just",
-          "line": 224,
+          "line": 232,
           "text": "--test lane_l7_control_plane \\"
         },
         {
           "path": "just/ci.just",
-          "line": 225,
+          "line": 233,
           "text": "--test lane_l7_daemon_lifecycle \\"
         },
         {
           "path": "just/ci.just",
-          "line": 226,
+          "line": 234,
           "text": "--test lane_l7_logging_console \\"
         },
         {
           "path": "just/ci.just",
-          "line": 227,
+          "line": 235,
           "text": "--test lane_l7_logging_recovery \\"
         },
         {
           "path": "just/ci.just",
-          "line": 228,
+          "line": 236,
           "text": "--test lane_l7_plans \\"
         },
         {
           "path": "just/ci.just",
-          "line": 229,
+          "line": 237,
           "text": "--test lane_l7_sdk_fixture \\"
         },
         {
           "path": "just/ci.just",
-          "line": 230,
+          "line": 238,
           "text": "--test lane_l7_split_recovery \\"
         },
         {
           "path": "just/ci.just",
-          "line": 231,
+          "line": 239,
           "text": "--test lane_l7_standalone \\"
         },
         {
           "path": "just/ci.just",
-          "line": 232,
+          "line": 240,
           "text": "--test lane_l8_smoke \\"
         },
         {
           "path": "just/ci.just",
-          "line": 233,
+          "line": 241,
           "text": "--test laya_cli_fixture \\"
         },
         {
           "path": "just/ci.just",
-          "line": 234,
+          "line": 242,
           "text": "--test local_ports \\"
         },
         {
           "path": "just/ci.just",
-          "line": 235,
+          "line": 243,
           "text": "--test migration_archives \\"
         },
         {
           "path": "just/ci.just",
-          "line": 236,
+          "line": 244,
           "text": "--test migration_bootstrap \\"
         },
         {
           "path": "just/ci.just",
-          "line": 237,
+          "line": 245,
           "text": "--test migration_canary_aggregate_cli \\"
         },
         {
           "path": "just/ci.just",
-          "line": 238,
+          "line": 246,
           "text": "--test migration_canary_receipts \\"
         },
         {
           "path": "just/ci.just",
-          "line": 239,
+          "line": 247,
           "text": "--test migration_canary_receipts_parity \\"
         },
         {
           "path": "just/ci.just",
-          "line": 240,
+          "line": 248,
           "text": "--test migration_cargo_metadata \\"
         },
         {
           "path": "just/ci.just",
-          "line": 241,
+          "line": 249,
           "text": "--test migration_cargo_packages_cli \\"
         },
         {
           "path": "just/ci.just",
-          "line": 242,
+          "line": 250,
           "text": "--test migration_ci_graph \\"
         },
         {
           "path": "just/ci.just",
-          "line": 243,
+          "line": 251,
           "text": "--test migration_ci_operations \\"
         },
         {
           "path": "just/ci.just",
-          "line": 244,
+          "line": 252,
           "text": "--test migration_ci_plan \\"
         },
         {
           "path": "just/ci.just",
-          "line": 245,
+          "line": 253,
           "text": "--test migration_cli \\"
         },
         {
           "path": "just/ci.just",
-          "line": 246,
+          "line": 254,
           "text": "--test migration_family_plan \\"
         },
         {
           "path": "just/ci.just",
-          "line": 247,
+          "line": 255,
           "text": "--test migration_hf_artifact_cli \\"
         },
         {
           "path": "just/ci.just",
-          "line": 248,
+          "line": 256,
           "text": "--test migration_hf_artifact_controls \\"
         },
         {
           "path": "just/ci.just",
-          "line": 249,
+          "line": 257,
           "text": "--test migration_hf_converted_artifact \\"
         },
         {
           "path": "just/ci.just",
-          "line": 250,
+          "line": 258,
           "text": "--test migration_lifecycle \\"
         },
         {
           "path": "just/ci.just",
-          "line": 251,
+          "line": 259,
           "text": "--test migration_stability \\"
         },
         {
           "path": "just/ci.just",
-          "line": 252,
+          "line": 260,
           "text": "--test migration_models \\"
         },
         {
           "path": "just/ci.just",
-          "line": 253,
+          "line": 261,
           "text": "--test migration_native_fixtures \\"
         },
         {
           "path": "just/ci.just",
-          "line": 254,
+          "line": 262,
           "text": "--test migration_native_generator \\"
         },
         {
           "path": "just/ci.just",
-          "line": 255,
+          "line": 263,
           "text": "--test migration_native_policy \\"
         },
         {
           "path": "just/ci.just",
-          "line": 256,
+          "line": 264,
           "text": "--test migration_optional_isolation \\"
         },
         {
           "path": "just/ci.just",
-          "line": 257,
+          "line": 265,
           "text": "--test migration_package_source_version \\"
         },
         {
           "path": "just/ci.just",
-          "line": 258,
+          "line": 266,
           "text": "--test migration_patch_bytes \\"
         },
         {
           "path": "just/ci.just",
-          "line": 259,
+          "line": 267,
           "text": "--test migration_patch_shards \\"
         },
         {
           "path": "just/ci.just",
-          "line": 260,
+          "line": 268,
           "text": "--test migration_prepared_inputs \\"
         },
         {
           "path": "just/ci.just",
-          "line": 261,
+          "line": 269,
           "text": "--test migration_process \\"
         },
         {
           "path": "just/ci.just",
-          "line": 262,
+          "line": 270,
           "text": "--test migration_product \\"
         },
         {
           "path": "just/ci.just",
-          "line": 263,
+          "line": 271,
           "text": "--test migration_qualification_cli \\"
         },
         {
           "path": "just/ci.just",
-          "line": 264,
+          "line": 272,
           "text": "--test migration_release \\"
         },
         {
           "path": "just/ci.just",
-          "line": 265,
+          "line": 273,
           "text": "--test migration_report_contract \\"
         },
         {
           "path": "just/ci.just",
-          "line": 266,
+          "line": 274,
           "text": "--test migration_report_safety \\"
         },
         {
           "path": "just/ci.just",
-          "line": 267,
+          "line": 275,
           "text": "--test migration_repository \\"
         },
         {
           "path": "just/ci.just",
-          "line": 268,
+          "line": 276,
           "text": "--test migration_run_family \\"
         },
         {
           "path": "just/ci.just",
-          "line": 269,
+          "line": 277,
           "text": "--test migration_workload_oracle_cli \\"
         },
         {
           "path": "just/ci.just",
-          "line": 270,
+          "line": 278,
           "text": "--test migration_xcframework_cli \\"
         },
         {
           "path": "just/ci.just",
-          "line": 271,
+          "line": 279,
           "text": "--test openai_smoke_config \\"
         },
         {
           "path": "just/ci.just",
-          "line": 272,
+          "line": 280,
           "text": "--test opencode_config_adapter \\"
         },
         {
           "path": "just/ci.just",
-          "line": 273,
+          "line": 281,
           "text": "--test opencode_fixture_evidence \\"
         },
         {
           "path": "just/ci.just",
-          "line": 274,
+          "line": 282,
           "text": "--test prepared_source \\"
         },
         {
           "path": "just/ci.just",
-          "line": 275,
+          "line": 283,
           "text": "--test release_inventory_evidence \\"
         },
         {
           "path": "just/ci.just",
-          "line": 276,
+          "line": 284,
           "text": "--test release_inventory_provenance \\"
         },
         {
           "path": "just/ci.just",
-          "line": 277,
+          "line": 285,
           "text": "--test release_inventory_publication \\"
         },
         {
           "path": "just/ci.just",
-          "line": 278,
+          "line": 286,
           "text": "--test replay_acceptance_gates \\"
         },
         {
           "path": "just/ci.just",
-          "line": 279,
+          "line": 287,
           "text": "--test replay_arm_pass \\"
         },
         {
           "path": "just/ci.just",
-          "line": 280,
+          "line": 288,
           "text": "--test replay_build_arm \\"
         },
         {
           "path": "just/ci.just",
-          "line": 281,
+          "line": 289,
           "text": "--test replay_context_preflight \\"
         },
         {
           "path": "just/ci.just",
-          "line": 282,
+          "line": 290,
           "text": "--test replay_external_engines \\"
         },
         {
           "path": "just/ci.just",
-          "line": 283,
+          "line": 291,
           "text": "--test replay_external_run \\"
         },
         {
           "path": "just/ci.just",
-          "line": 284,
+          "line": 292,
           "text": "--test replay_history \\"
         },
         {
           "path": "just/ci.just",
-          "line": 285,
+          "line": 293,
           "text": "--test replay_history_hub \\"
         },
         {
           "path": "just/ci.just",
-          "line": 286,
+          "line": 294,
           "text": "--test replay_interruption \\"
         },
         {
           "path": "just/ci.just",
-          "line": 287,
+          "line": 295,
           "text": "--test replay_l3 \\"
         },
         {
           "path": "just/ci.just",
-          "line": 288,
+          "line": 296,
           "text": "--test replay_manifest_preflight \\"
         },
         {
           "path": "just/ci.just",
-          "line": 289,
+          "line": 297,
           "text": "--test replay_manual_profile \\"
         },
         {
           "path": "just/ci.just",
-          "line": 290,
+          "line": 298,
           "text": "--test replay_manual_resume_refs \\"
         },
         {
           "path": "just/ci.just",
-          "line": 291,
+          "line": 299,
           "text": "--test replay_model_preflight \\"
         },
         {
           "path": "just/ci.just",
-          "line": 292,
+          "line": 300,
           "text": "--test replay_pass_schedule \\"
         },
         {
           "path": "just/ci.just",
-          "line": 293,
+          "line": 301,
           "text": "--test replay_pooled_rows \\"
         },
         {
           "path": "just/ci.just",
-          "line": 294,
+          "line": 302,
           "text": "--test replay_progress \\"
         },
         {
           "path": "just/ci.just",
-          "line": 295,
+          "line": 303,
           "text": "--test replay_publication_prepare \\"
         },
         {
           "path": "just/ci.just",
-          "line": 296,
+          "line": 304,
           "text": "--test replay_report \\"
         },
         {
           "path": "just/ci.just",
-          "line": 297,
+          "line": 305,
           "text": "--test replay_retirement \\"
         },
         {
           "path": "just/ci.just",
-          "line": 298,
+          "line": 306,
           "text": "--test replay_run_execution \\"
         },
         {
           "path": "just/ci.just",
-          "line": 299,
+          "line": 307,
           "text": "--test replay_server_cell \\"
         },
         {
           "path": "just/ci.just",
-          "line": 300,
+          "line": 308,
           "text": "--test replay_session_evidence \\"
         },
         {
           "path": "just/ci.just",
-          "line": 301,
+          "line": 309,
           "text": "--test replay_trajectory_execution \\"
         },
         {
           "path": "just/ci.just",
-          "line": 302,
+          "line": 310,
           "text": "--test waiting_prefix_acceptance \\"
         },
         {
           "path": "just/ci.just",
-          "line": 303,
+          "line": 311,
           "text": "--test swift_api_checksum \\"
         },
         {
           "path": "just/ci.just",
-          "line": 304,
+          "line": 312,
           "text": "--test swift_privacy_adapter \\"
         },
         {
           "path": "just/ci.just",
-          "line": 305,
+          "line": 313,
           "text": "--test swift_producer_environment \\"
         },
         {
           "path": "just/ci.just",
-          "line": 306,
+          "line": 314,
           "text": "--test workload_certify_contract \\"
         },
         {
           "path": "just/ci.just",
-          "line": 307,
+          "line": 315,
           "text": "--test workload_oracle_producer_contract \\"
         },
         {
           "path": "just/ci.just",
-          "line": 308,
+          "line": 316,
           "text": "--test workload_smoke_config \\"
         },
         {
           "path": "just/ci.just",
-          "line": 309,
+          "line": 317,
           "text": "--test workload_start_retry \\"
         },
         {
           "path": "just/ci.just",
-          "line": 310,
+          "line": 318,
           "text": "-- --test-threads=1"
         }
       ]
@@ -2148,7 +2148,7 @@
       "evidence": [
         {
           "path": "just/ci.just",
-          "line": 314,
+          "line": 322,
           "text": "just with-lld cargo test --locked -p model-package --lib --test snapshot_promotion_cli -- --test-threads=1"
         },
         {
@@ -2311,7 +2311,7 @@
         },
         {
           "path": "just/ci.just",
-          "line": 181,
+          "line": 189,
           "text": "just with-lld cargo build --locked -p trajectory-reader --features parquet-input --bin trajectory-reader"
         }
       ]
@@ -2404,7 +2404,7 @@
         },
         {
           "path": "just/ci.just",
-          "line": 182,
+          "line": 190,
           "text": "just with-lld cargo test --locked -p trajectory-reader --features parquet-input --lib -- --test-threads=1"
         }
       ]
@@ -2497,7 +2497,7 @@
         },
         {
           "path": "just/ci.just",
-          "line": 183,
+          "line": 191,
           "text": "MESH_LLM_TEST_XTASK_BIN=\"$binary\" just with-lld cargo test --locked -p trajectory-reader --features parquet-input --test prompt_command native_prompt_command_ -- --test-threads=1"
         }
       ]

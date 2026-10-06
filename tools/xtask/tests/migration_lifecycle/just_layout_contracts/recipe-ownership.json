@@ -92,6 +92,7 @@
       "website-dev"
     ],
     "just/ci.just": [
+      "agentic-trajectory-reader-contracts",
       "automation-bootstrap",
       "automation-run",
       "ci-automation-contracts",

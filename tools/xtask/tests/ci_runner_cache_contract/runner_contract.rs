@@ -190,3 +190,160 @@ fn authority_actual_runner_scan_fails_closed_on_grep_io_error() {
     assert!(String::from_utf8_lossy(&output.stderr).contains("scan-io-error"));
     fixture.0.close().unwrap();
 }
+
+#[test]
+fn authority_actual_runner_scan_excludes_pr_maintenance_but_scans_every_validation_entry() {
+    use std::collections::BTreeSet;
+    let fixture = support::Fixture::new();
+    scan_tree(&fixture);
+    for name in [
+        "pr_auto_assign.yml",
+        "pr_cleanup.yml",
+        "pr_unreviewed_fixture.yml",
+    ] {
+        fs::write(
+            fixture.path().join(".github/workflows").join(name),
+            "on:\n  pull_request_target:\n",
+        )
+        .unwrap();
+    }
+    let grep = grep_binary();
+    let quoted = format!("'{}'", grep.to_str().unwrap().replace('\'', "'\\''"));
+    fixture.executable(
+        "grep",
+        &format!(
+            "if [[ $1 == -nE ]]; then printf '%s\\n' \"${{@:3}}\" > \"$SCAN_FIXTURE_ARGUMENTS\"; fi\nexec {quoted} \"$@\""
+        ),
+    );
+    let mut child = command(
+        &fixture,
+        &body("Verify PR runner policy remains fail-closed"),
+    );
+    child.env(
+        "SCAN_FIXTURE_ARGUMENTS",
+        fixture.path().join("scan-arguments"),
+    );
+    let output = fixture.run(child);
+    assert!(output.status.success(), "{output:?}");
+    let arguments = fs::read_to_string(fixture.path().join("scan-arguments")).unwrap();
+    let actual_pr = arguments
+        .lines()
+        .filter(|path| path.starts_with(".github/workflows/pr_"))
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        actual_pr,
+        BTreeSet::from([
+            ".github/workflows/pr_quality.yml",
+            ".github/workflows/pr_website.yml",
+            ".github/workflows/pr_linux.yml",
+            ".github/workflows/pr_macos.yml",
+            ".github/workflows/pr_windows.yml",
+        ])
+    );
+    assert!(
+        arguments
+            .lines()
+            .any(|path| path == ".github/workflows/ci-control.yml")
+    );
+    assert!(
+        !arguments
+            .lines()
+            .any(|path| path == ".github/workflows/ci-runner-contract-slice.yml")
+    );
+    fixture.0.close().expect("owned scanner fixture cleanup");
+}
+
+#[test]
+fn authority_legacy_main_filename_is_reusable_only_without_event_authority() {
+    let source = fs::read_to_string(support::root().join(".github/workflows/ci.yml")).unwrap();
+    let document = workflow_yaml::parse(&source).unwrap();
+    let triggers = document.get("on").unwrap().entries();
+    assert_eq!(
+        triggers
+            .iter()
+            .map(|(key, _)| key.as_str())
+            .collect::<Vec<_>>(),
+        ["workflow_call"]
+    );
+    assert!(document.get("permissions").unwrap().entries().is_empty());
+    let jobs = document.get("jobs").unwrap().entries();
+    assert_eq!(
+        jobs.iter().map(|(key, _)| key.as_str()).collect::<Vec<_>>(),
+        ["compatibility"]
+    );
+    let job = &jobs[0].1;
+    assert!(job.get("uses").is_none() && job.get("secrets").is_none());
+    assert!(job.get("permissions").unwrap().entries().is_empty());
+}
+
+#[test]
+fn authority_swift_main_remains_hosted_while_pr_placement_uses_bounded_selector() {
+    let source =
+        fs::read_to_string(support::root().join(".github/workflows/swift-sdk-artifact.yml"))
+            .unwrap();
+    let document = workflow_yaml::parse(&source).unwrap();
+    let policy = document.get("jobs").unwrap().get("runner_policy").unwrap();
+    let Node::Seq(steps) = policy.get("steps").unwrap() else {
+        panic!("policy steps")
+    };
+    let calls = steps
+        .iter()
+        .filter(|step| {
+            step.get("uses").and_then(Node::text) == Some("./.github/actions/select-ci-runners")
+        })
+        .collect::<Vec<_>>();
+    let [call] = calls.as_slice() else {
+        panic!("one central policy")
+    };
+    let inputs = call.get("with").unwrap();
+    assert_eq!(
+        inputs.get("depot_main_enabled").and_then(Node::text),
+        Some("false")
+    );
+    assert_eq!(
+        inputs.get("depot_pr_enabled").and_then(Node::text),
+        Some("${{ vars.DEPOT_PR_RUNNERS_ENABLED == 'true' }}")
+    );
+}
+
+#[test]
+fn authority_platform_slice_policy_outputs_and_runner_jobs_bind_the_same_central_choice() {
+    for platform in ["macos", "windows"] {
+        let output = format!("runner_{platform}");
+        for component in ["host", "runtime", "product"] {
+            let name = format!("ci-{platform}-{component}-slice.yml");
+            let source =
+                fs::read_to_string(support::root().join(".github/workflows").join(&name)).unwrap();
+            let document = workflow_yaml::parse(&source).unwrap();
+            let jobs = document.get("jobs").unwrap();
+            let policy = jobs.get("runner_policy").unwrap();
+            assert_eq!(
+                policy
+                    .get("outputs")
+                    .unwrap()
+                    .get(&output)
+                    .and_then(Node::text),
+                Some(format!("${{{{ steps.policy.outputs.{output} }}}}").as_str()),
+                "{name}"
+            );
+            let expected = format!("${{{{ needs.runner_policy.outputs.{output} }}}}");
+            let mut owned_runner = false;
+            for (job_name, job) in jobs.entries() {
+                if job_name == "runner_policy" || job.get("runs-on").is_none() {
+                    continue;
+                }
+                assert_eq!(
+                    job.get("runs-on").and_then(Node::text),
+                    Some(expected.as_str()),
+                    "{name}/{job_name}"
+                );
+                assert!(
+                    job.get("needs").unwrap().list().contains(&"runner_policy"),
+                    "{name}/{job_name}"
+                );
+                owned_runner = true;
+            }
+            assert!(owned_runner, "{name}: no platform execution owner");
+        }
+    }
+}
