@@ -266,26 +266,24 @@ async fn dispatch_management_request(
         return Ok(());
     }
 
-    if requires_trusted_local_access(method, path_only) {
-        let trusted_local_request = match (request_origin(raw_request), request_host(raw_request)) {
-            (Ok(origin), Ok(host)) => is_trusted_local_request(source_addr, origin, host),
-            _ => false,
-        };
-        if !trusted_local_request {
-            if path_only == "/api/logs/events" {
-                super::routes::logs::LogsError::Forbidden
-                    .write(stream)
-                    .await?;
-                return Ok(());
-            }
-            respond_error(
-                stream,
-                403,
-                "This management route requires a trusted local caller",
-            )
-            .await?;
+    let trusted_local_request = match (request_origin(raw_request), request_host(raw_request)) {
+        (Ok(origin), Ok(host)) => is_trusted_local_request(source_addr, origin, host),
+        _ => false,
+    };
+    if requires_trusted_local_access(method, path_only) && !trusted_local_request {
+        if path_only == "/api/logs/events" {
+            super::routes::logs::LogsError::Forbidden
+                .write(stream)
+                .await?;
             return Ok(());
         }
+        respond_error(
+            stream,
+            403,
+            "This management route requires a trusted local caller",
+        )
+        .await?;
+        return Ok(());
     }
 
     match (method, path_only) {
@@ -312,6 +310,7 @@ async fn dispatch_management_request(
                 body,
                 req,
                 raw_request,
+                super::routes::chat::CallerTrust::from_trusted_local(trusted_local_request),
             )
             .await?
             {
