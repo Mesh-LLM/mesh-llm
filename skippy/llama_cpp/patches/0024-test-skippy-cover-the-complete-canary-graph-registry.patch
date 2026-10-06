@@ -589,10 +589,10 @@ index 2b26c9694..cf6c8dc22 100644
      if (!gguf_write_to_file(output.get(), path.c_str(), true)) {
          throw std::runtime_error("cannot write graph contract fixture");
 diff --git a/tests/test-llama-archs.cpp b/tests/test-llama-archs.cpp
-index 90cf83e08..32d8c6af3 100644
+index f47bf8f02..b296b2d72 100644
 --- a/tests/test-llama-archs.cpp
 +++ b/tests/test-llama-archs.cpp
-@@ -130,7 +130,8 @@ static gguf_context_ptr get_gguf_ctx(
+@@ -146,7 +146,8 @@ static gguf_context_ptr get_gguf_ctx(
          const glm_dsa_indexshare_fixture glm_dsa_indexshare = glm_dsa_indexshare_fixture::DEFAULT,
          const uint32_t context_length = 256,
          const uint32_t glm_dsa_indexer_top_k = 8,
@@ -602,7 +602,7 @@ index 90cf83e08..32d8c6af3 100644
      (void) glm_dsa_indexshare;
      gguf_context_ptr ret(gguf_init_empty());
      llama_model_saver ms(arch, ret.get());
-@@ -186,6 +187,8 @@ static gguf_context_ptr get_gguf_ctx(
+@@ -202,6 +203,8 @@ static gguf_context_ptr get_gguf_ctx(
          n_layer = 8; // 1 layer per stack x 2 h-cycles x (3 l-cycles + 1) cache slots
      }
  
@@ -611,7 +611,7 @@ index 90cf83e08..32d8c6af3 100644
      uint32_t n_head_kv = n_head;
      if (arch == LLM_ARCH_QWEN3) {
          n_head_kv = 1; // MQA coverage
-@@ -1043,6 +1046,7 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
+@@ -1061,6 +1064,7 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
  }
  
  #include "test-deepseek4-mtp.h"
@@ -619,7 +619,7 @@ index 90cf83e08..32d8c6af3 100644
  
  int main(int argc, char ** argv) {
      // init the logger at max verbosity. filter with a custom callback respecting the user-configure verbosity
-@@ -1059,20 +1063,22 @@ int main(int argc, char ** argv) {
+@@ -1077,20 +1081,22 @@ int main(int argc, char ** argv) {
      bool deepseek4_mtp = false;
      bool text_only = false;
      std::string mtp_model;
@@ -650,7 +650,7 @@ index 90cf83e08..32d8c6af3 100644
              usage(argv);
              return 0;
          } else if (strcmp(argv[i], "-a") == 0 || strcmp(argv[i], "--arch") == 0) {
-@@ -1148,6 +1154,10 @@ int main(int argc, char ** argv) {
+@@ -1166,6 +1172,10 @@ int main(int argc, char ** argv) {
      LOG_INF("%s: using seed %zu, stdev %f\n", __func__, seed, stdev);
  
      try {
