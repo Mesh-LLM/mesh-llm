@@ -14,6 +14,9 @@ use crate::plugin::openai_exchange::ExchangeOutputDigests;
 use anyhow::{Context, Result, anyhow};
 use mesh_llm_events::logging::events::TokenUsage;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
+#[path = "normalized_stream_completion.rs"]
+mod normalized_stream_completion;
+use normalized_stream_completion::finish_normalized_chat_stream;
 
 /// One tool call's deltas folded across `chat.completion.chunk` frames,
 /// keyed by the `index` OpenAI streaming clients use to tell concurrent tool
@@ -337,38 +340,20 @@ pub(in crate::network::openai::response) async fn relay_normalized_chat_completi
         }
     }
 
-    let _ = tcp_stream.write_all(b"0\r\n\r\n").await;
-    let _ = tcp_stream.shutdown().await;
-    if upstream_error_seen {
-        // An embedded upstream error frame is terminal even when the upstream
-        // never sent [DONE]: report the failure reason it carried rather than
-        // a generic incomplete-stream truncation.
-        route_observer.stream_error("upstream_stream_error");
-        return Ok(RouteAttemptResult::Delivered {
-            status_code: 200,
-            usage: None,
-            cache_cost: None,
-            // The stream ended in a mid-stream error frame rather than a
-            // clean [DONE] — whatever was assembled up to that point is a
-            // truncated partial, not the response the host actually
-            // returned, so no output digest is reported for it.
-            output_digests: Default::default(),
-        });
-    }
-    if !done_seen {
-        route_observer.stream_error("upstream_stream_incomplete");
-        return Err(anyhow!("upstream chat stream ended before [DONE]"));
-    }
-    route_observer.complete_stream_response_capture(response_capture);
-    route_observer.stream_completed(observed_usage);
-    Ok(RouteAttemptResult::Delivered {
-        status_code: 200,
-        usage: observed_usage,
-        cache_cost: observed_cache_cost,
-        // The stream completed cleanly ([DONE] seen): digest the response
-        // assembled from every chunk actually sent to the client.
-        output_digests: assembly.output_digests(),
-    })
+    finish_normalized_chat_stream(
+        tcp_stream,
+        route_observer,
+        (done_seen, upstream_error_seen),
+        response_capture,
+        &assembly,
+        observed_usage,
+        observed_cache_cost,
+    )
+    .await
+}
+
+fn normalized_stream_is_truncated(done_seen: bool, upstream_error_seen: bool) -> bool {
+    !done_seen && !upstream_error_seen
 }
 
 /// Relay a streaming chat-completions upstream response translated into Responses-API SSE.
@@ -519,6 +504,7 @@ pub(in crate::network::openai::response) async fn relay_translated_responses_str
     }
 
     if progress.upstream_error_seen {
+        tcp_stream.record_exchange_outcome("backend_error");
         write_captured_sse_event(tcp_stream, &mut response_capture, Some("done"), "[DONE]").await?;
         let _ = tcp_stream.write_all(b"0\r\n\r\n").await;
         let _ = tcp_stream.shutdown().await;
@@ -531,6 +517,9 @@ pub(in crate::network::openai::response) async fn relay_translated_responses_str
         });
     }
     if !progress.done_seen {
+        tcp_stream.finish_wire_bytes(
+            skippy_inference_api::wire_bytes::WireBytesIncomplete::TransportError,
+        );
         route_observer.stream_error("upstream_stream_incomplete");
         return Err(anyhow!("upstream Responses stream ended before [DONE]"));
     }

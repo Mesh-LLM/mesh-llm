@@ -264,7 +264,7 @@ pub(super) struct LocalRuntimeModelStartSpec<'a> {
     pub(super) local_source_required: bool,
     pub(super) allow_uncertified_split: bool,
     pub(super) split_topology_lock: Option<&'a Path>,
-    pub(super) auto_balance: bool,
+    pub(super) placement: super::split_planning::SplitPlacementPolicy,
     pub(super) planning_profile: RuntimeResourcePlanningProfile,
     pub(super) openai_guardrail_policy: OpenAiGuardrailPolicyHandle,
     pub(super) skippy_telemetry: skippy::SkippyTelemetryOptions,
@@ -825,8 +825,9 @@ pub(super) async fn start_runtime_local_model(
         .or_else(|| spec.pinned_gpu.map(|gpu| gpu.allocatable_vram_bytes()))
         .unwrap_or_else(|| spec.node.vram_bytes());
     let http_bind_addr = ([127, 0, 0, 1], alloc_local_port().await?).into();
-    let hook_policy =
-        Some(skippy::MeshAutoHookPolicy::new(spec.node.clone()) as Arc<dyn OpenAiHookPolicy>);
+    let hook_policy = Some(crate::plugin::exchange_policy::compose_node_hooks(
+        spec.node.clone(),
+    ));
     let start_result = start_local_openai_model(
         LocalOpenAiModelStartSpec {
             mesh_config: spec.mesh_config,
@@ -941,6 +942,7 @@ pub(super) async fn start_local_openai_model(
     LocalRuntimeModelHandle,
     tokio::sync::oneshot::Receiver<()>,
 )> {
+    crate::system::native_runtime_requirement::ensure_native_runtime_available()?;
     let model_name = runtime_model_name.to_string();
     let package_ref = spec.model_path.to_string_lossy().to_string();
     let package = if skippy::is_layer_package_ref(&package_ref) {
@@ -1799,7 +1801,7 @@ mod tests {
             local_source_required: false,
             allow_uncertified_split: false,
             split_topology_lock: None,
-            auto_balance: false,
+            placement: Default::default(),
             planning_profile: RuntimeResourcePlanningProfile::DedicatedLocal,
             openai_guardrail_policy: openai_guardrail_policy_handle(
                 skippy_inference_api::GuardrailMode::Disabled,

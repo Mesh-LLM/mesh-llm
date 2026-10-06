@@ -147,6 +147,7 @@ mod tests {
             is_host: false,
             is_client: false,
             llama_ready: false,
+            external_inference_ready: false,
             model_name: "Qwen-Test".into(),
             models: vec!["Qwen-Test".into()],
             available_models: vec!["Qwen-Test".into()],

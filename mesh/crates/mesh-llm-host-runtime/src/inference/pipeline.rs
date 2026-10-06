@@ -33,6 +33,14 @@ pub async fn pre_plan(
     planner_model: &str,
     user_messages: &[Value],
 ) -> Result<PlanResult, String> {
+    let plan_request = prepare_plan_request(planner_model, user_messages)?;
+    pre_plan_prepared(client, planner_url, planner_model, &plan_request).await
+}
+
+pub(crate) fn prepare_plan_request(
+    planner_model: &str,
+    user_messages: &[Value],
+) -> Result<Value, String> {
     // Extract the last user message as the task
     let last_user = user_messages
         .iter()
@@ -87,10 +95,19 @@ pub async fn pre_plan(
         "stream": false
     });
 
+    Ok(plan_request)
+}
+
+pub(crate) async fn pre_plan_prepared(
+    client: &Client,
+    planner_url: &str,
+    planner_model: &str,
+    plan_request: &Value,
+) -> Result<PlanResult, String> {
     let start = Instant::now();
     let resp = client
         .post(format!("{planner_url}/v1/chat/completions"))
-        .json(&plan_request)
+        .json(plan_request)
         .send()
         .await
         .map_err(|e| format!("planner request failed: {e}"))?;

@@ -1,6 +1,17 @@
 mod channel_broadcast;
 mod config;
+mod exchange_grants;
+mod exchange_lifecycle;
+mod exchange_permissions;
+pub(crate) mod exchange_policy;
+mod exchange_status;
+mod exchange_streams;
 mod health;
+mod identity_registration;
+mod identity_registry;
+mod identity_transport;
+pub(crate) use exchange_lifecycle::{ExchangeSession, PhaseResult, request_event};
+pub(crate) mod identity_services;
 mod in_process;
 mod installed;
 pub(crate) mod mcp;
@@ -119,6 +130,11 @@ pub struct PluginManager {
 }
 
 pub(in crate::plugin) struct PluginManagerInner {
+    pub(in crate::plugin) identity_registry: Arc<Mutex<identity_registry::PluginIdentityRegistry>>,
+    pub(in crate::plugin) exchange_grants: exchange_grants::ExchangeGrantRegistry,
+    pub(in crate::plugin) exchange_observations: Arc<exchange_lifecycle::ObservationRegistry>,
+    pub(in crate::plugin) exchange_health:
+        Arc<std::sync::Mutex<BTreeMap<String, exchange_lifecycle::ExchangeHealth>>>,
     pub(in crate::plugin) plugins: BTreeMap<String, ExternalPlugin>,
     pub(in crate::plugin) inactive: BTreeMap<String, PluginSummary>,
     pub(in crate::plugin) endpoint_health: Arc<Mutex<BTreeMap<String, EndpointHealthState>>>,
@@ -197,6 +213,7 @@ impl PluginManager {
         let rpc_bridge = Arc::new(Mutex::new(None));
         let runtime_data = RuntimeDataCollector::new();
         let instance_id = make_instance_id();
+        let exchange_grants = exchange_grants::ExchangeGrantRegistry::from_specs(&specs.externals);
         let (plugins, failed_plugins) = Self::load_external_plugins(
             specs,
             host_mode,
@@ -209,6 +226,10 @@ impl PluginManager {
         .await?;
         let manager = Self {
             inner: Arc::new(PluginManagerInner {
+                identity_registry: Arc::default(),
+                exchange_grants,
+                exchange_observations: Arc::default(),
+                exchange_health: Arc::default(),
                 plugins,
                 inactive: Self::inactive_plugins(specs, failed_plugins),
                 endpoint_health: Arc::new(Mutex::new(BTreeMap::new())),
@@ -431,6 +452,10 @@ impl PluginManager {
     pub fn for_test_bridge(plugin_names: &[&str], bridge: Arc<dyn PluginRpcBridge>) -> Self {
         Self {
             inner: Arc::new(PluginManagerInner {
+                identity_registry: Arc::default(),
+                exchange_grants: Default::default(),
+                exchange_observations: Arc::default(),
+                exchange_health: Arc::default(),
                 plugins: BTreeMap::new(),
                 inactive: BTreeMap::new(),
                 endpoint_health: Arc::new(Mutex::new(BTreeMap::new())),
@@ -453,6 +478,10 @@ impl PluginManager {
     pub(crate) fn for_test_summaries(summaries: Vec<PluginSummary>) -> Self {
         Self {
             inner: Arc::new(PluginManagerInner {
+                identity_registry: Arc::default(),
+                exchange_grants: Default::default(),
+                exchange_observations: Arc::default(),
+                exchange_health: Arc::default(),
                 plugins: BTreeMap::new(),
                 inactive: summaries
                     .into_iter()
@@ -563,6 +592,7 @@ impl PluginManager {
         }
         let mut summaries = self.inner.runtime_data.plugins_snapshot().plugins;
         if !summaries.is_empty() {
+            self.project_exchange_status(&mut summaries).await;
             summaries.sort_by(|a, b| a.name.cmp(&b.name));
             return summaries;
         }
@@ -572,6 +602,7 @@ impl PluginManager {
             summaries.push(plugin.summary().await);
         }
         summaries.extend(self.inner.inactive.values().cloned());
+        self.project_exchange_status(&mut summaries).await;
         summaries.sort_by(|a, b| a.name.cmp(&b.name));
         summaries
     }
@@ -1227,6 +1258,9 @@ impl PluginManager {
                 proto::ServiceKind::Resource => "resources/read",
                 proto::ServiceKind::Completion => "completion/complete",
                 proto::ServiceKind::VirtualModel => "virtual_model/invoke",
+                proto::ServiceKind::OpenaiExchange => {
+                    bail!("OpenAI lifecycle services have no MCP projection")
+                }
                 proto::ServiceKind::Unspecified => {
                     bail!("Service kind is required for test plugin '{plugin_name}'")
                 }
@@ -1550,6 +1584,11 @@ pub(crate) async fn connect_test_side_stream(
 pub(crate) fn plugin_manifest_overview(manifest: &proto::PluginManifest) -> PluginManifestOverview {
     let web_ui = plugin_web_ui_manifest_overview_from_proto(manifest.web_ui.as_ref());
     PluginManifestOverview {
+        openai_exchange_status: None,
+        openai_exchange_body_access_requested: manifest
+            .openai_exchange_hook
+            .as_ref()
+            .map(|hook| hook.request_body || hook.effective_request_body || hook.response_body),
         operations: manifest.operations.len(),
         resources: manifest.resources.len(),
         resource_templates: manifest.resource_templates.len(),

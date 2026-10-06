@@ -294,7 +294,7 @@ fn topology_settings(prefix: &str) -> Vec<ConfigSettingSchema> {
 
 fn plugin_entry_settings() -> Vec<ConfigSettingSchema> {
     let plugin_prefix = format!("plugin.{CANONICAL_PLUGIN_NAME_SEGMENT}");
-    vec![
+    let mut settings = vec![
         plugin_setting(&format!("{plugin_prefix}.name"), ConfigValueSchema::String),
         plugin_setting(
             &format!("{plugin_prefix}.enabled"),
@@ -346,7 +346,9 @@ fn plugin_entry_settings() -> Vec<ConfigSettingSchema> {
             &format!("{plugin_prefix}.startup.lazy_start"),
             ConfigValueSchema::Boolean,
         ),
-    ]
+    ];
+    settings.extend(exchange_grants::exchange_grant_settings(&plugin_prefix));
+    settings
 }
 
 fn model_fit_settings(
@@ -588,6 +590,10 @@ fn throughput_settings(
         basic_setting(
             &format!("{prefix}.pipeline_decode_groups"),
             ConfigValueSchema::Integer,
+        ),
+        basic_setting(
+            &format!("{prefix}.last_stage_decode_batch"),
+            bool_or_auto_schema(),
         ),
         basic_setting(&format!("{prefix}.threads"), ConfigValueSchema::Integer),
         basic_setting(

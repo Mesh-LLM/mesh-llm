@@ -443,6 +443,7 @@ pub(crate) async fn run_auto_load_runtime_model(
     config_model_id: Option<String>,
     profile: String,
 ) -> Result<api::RuntimeLoadResponse> {
+    crate::system::native_runtime_requirement::ensure_native_runtime_available()?;
     let (spec, profile) = normalize_runtime_model_request_for_config(
         ctx.config,
         config_model_id.as_deref(),
@@ -545,7 +546,7 @@ pub(crate) async fn run_auto_load_runtime_model(
             local_source_required,
             allow_uncertified_split: false,
             split_topology_lock: None,
-            auto_balance: false,
+            placement: Default::default(),
             planning_profile: runtime_resource_planning_profile(ctx.options),
             openai_guardrail_policy: ctx.openai_guardrail_policy.clone(),
             skippy_telemetry: skippy_telemetry_options(ctx.options),

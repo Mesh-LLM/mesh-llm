@@ -17,7 +17,12 @@ fn skippy_stage_subprotocols(
     status_list_supported: bool,
     local_gguf_content_id_supported: bool,
 ) -> Vec<crate::proto::node::MeshSubprotocol> {
-    let mut features = vec![skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_CONTROL.to_string()];
+    let mut features = vec![
+        skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_CONTROL.to_string(),
+        // No build-time variability to gate on, unlike artifact transfer: any
+        // node running this code honours `StageLoad.last_stage_decode_batch`.
+        skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_DECODE_BATCH_POLICY_V1.to_string(),
+    ];
     if local_gguf_content_id_supported {
         features
             .push(skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_LOCAL_GGUF_CONTENT_ID_V1.to_string());
@@ -1355,6 +1360,7 @@ fn legacy_proto_config_to_mesh(
             web_ui_enabled: None,
             web_ui_primary_tab: None,
             allow_peer_blocks: None,
+            openai_exchange_grant: None,
             command: p.command.clone(),
             args: p.args.clone(),
             url: None,

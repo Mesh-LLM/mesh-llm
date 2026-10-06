@@ -15,6 +15,7 @@ mod audio_multipart;
 use audio_multipart::multipart_model_field;
 mod body_rewrite;
 mod chunked;
+mod effective_entity;
 pub use body_rewrite::{inject_skippy_hooks_flag, rewrite_model_field};
 use chunked::{ChunkedDecoder, try_decode_chunked_body};
 
@@ -148,6 +149,8 @@ pub struct BufferedHttpRequest {
     pub request_object_request_ids: Vec<String>,
     pub response_adapter: ResponseAdapter,
     pub correlation_id: Option<String>,
+    /// Host-only observation join key; never accepted from an HTTP header.
+    pub exchange_observation_id: Option<String>,
 }
 
 impl BufferedHttpRequest {
@@ -474,6 +477,7 @@ where
         response_adapter,
         request_id: parsed.request_id,
         correlation_id: parsed.correlation_id,
+        exchange_observation_id: None,
     })
 }
 

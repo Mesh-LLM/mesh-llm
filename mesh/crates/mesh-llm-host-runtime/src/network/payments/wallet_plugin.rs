@@ -11,7 +11,10 @@
 //!    host writes `payments/wallet-provider.json`. Later opens must return the
 //!    same identity or fail; outstanding ledger state is only meaningful
 //!    against the wallet that created it. Which plugin is opened is decided
-//!    in [`selection`].
+//!    in [`selection`]. A rejected identity poisons the provider: every later
+//!    operation re-runs the open-and-pin check and fails until the plugin
+//!    opens the pinned wallet again, because the plugin keeps the rejected
+//!    wallet open and would otherwise answer ordinary calls with it.
 //! 3. **Settlement waits carry no IPC deadline.** `wait_for_*` block on the
 //!    plugin for as long as the caller is willing to wait; the caller owns
 //!    cancellation by dropping the future.
@@ -23,6 +26,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::{Context, Result, anyhow, bail};
 use async_trait::async_trait;
@@ -136,6 +140,7 @@ impl WalletFactory for PluginWalletFactory {
             payment_directory: payment_directory.to_path_buf(),
             features: std::sync::Mutex::new(WalletFeatures::default()),
             open_lock: Mutex::new(()),
+            identity_verified: AtomicBool::new(false),
         };
         wallet.open_and_pin().await?;
         Ok(Arc::new(wallet))
@@ -154,12 +159,19 @@ pub struct PluginWalletProvider {
     /// observes `not_open` at once; only one of them should drive the open
     /// and the pin check.
     open_lock: Mutex<()>,
+    /// Whether the most recent open returned the pinned identity. Cleared
+    /// before every open and set only after the pin check passes, so a
+    /// rejected identity cannot be used by later calls: `wallet_open` has
+    /// already installed the rejected wallet in the plugin, which would
+    /// otherwise answer them without ever reporting `not_open` again.
+    identity_verified: AtomicBool,
 }
 
 impl PluginWalletProvider {
     /// Ask the plugin to open the wallet, then verify or write the host pin.
     async fn open_and_pin(&self) -> Result<()> {
         let _guard = self.open_lock.lock().await;
+        self.identity_verified.store(false, Ordering::SeqCst);
         // Read the pin before contacting the plugin so a corrupt pin is
         // reported without provisioning anything.
         let pin = WalletPin::load(&self.payment_directory)?;
@@ -211,7 +223,20 @@ impl PluginWalletProvider {
             .features
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = response.features;
+        self.identity_verified.store(true, Ordering::SeqCst);
         Ok(())
+    }
+
+    /// Re-run the open-and-pin check if the last one did not pass.
+    ///
+    /// Called before every operation on the plugin. Normally a no-op; after a
+    /// rejected identity it either recovers (the plugin opens the pinned
+    /// wallet again) or fails closed without touching the plugin's wallet.
+    async fn ensure_identity_verified(&self) -> Result<()> {
+        if self.identity_verified.load(Ordering::SeqCst) {
+            return Ok(());
+        }
+        self.open_and_pin().await
     }
 
     fn features(&self) -> WalletFeatures {
@@ -272,6 +297,7 @@ impl PluginWalletProvider {
         request: &Req,
         timeout: Option<std::time::Duration>,
     ) -> Result<Res> {
+        self.ensure_identity_verified().await?;
         match self.call(operation, request, timeout).await {
             Err(error) if error.kind == WalletErrorKind::NotOpen => {
                 self.open_and_pin().await?;
@@ -335,6 +361,11 @@ impl WalletProvider for PluginWalletProvider {
             amount_msat,
             max_total_msat,
         };
+        // A rejected identity must not reach `pay`: nothing has been
+        // submitted yet, so the failure is cleanly not-submitted.
+        self.ensure_identity_verified()
+            .await
+            .map_err(PayError::NotSubmitted)?;
         // No IPC deadline: a slow route-find is not a failure, and a timeout
         // here could not be classified as not-submitted anyway.
         match self.call::<_, Transaction>(ops::PAY, &request, None).await {

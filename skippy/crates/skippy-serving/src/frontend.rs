@@ -24,6 +24,7 @@ mod prefix_cache;
 mod prompting;
 mod request;
 mod sampling_cache_key;
+mod speculation_gate;
 mod speculative;
 mod system_one;
 mod token_counting;
