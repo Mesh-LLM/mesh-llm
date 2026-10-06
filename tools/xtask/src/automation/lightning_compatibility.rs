@@ -3,6 +3,7 @@ mod http_checks;
 mod identity;
 mod owner;
 mod setup;
+mod terminal;
 use crate::{
     command::DynResult,
     process::{self, Cancellation, Completion, Limits, ProcessSpec, Readiness, Value},
@@ -295,6 +296,7 @@ pub(crate) fn run(args: &[String]) -> DynResult<()> {
     let result = execute(&options, &cancel, deadline);
     let restored = interrupt.finish();
     let report=result.unwrap_or_else(|_|json!({"schema_version":1,"passed":false,"cases":[],"error":"compatibility_preflight_or_orchestration_failed","evidence_scope":"inspect_owned_preflight_and_node_logs"}));
+    let report = terminal::admit(report, restored.is_ok(), cancel.is_cancelled(), deadline);
     identity::fresh(
         &options.output.join("results.json"),
         &serde_json::to_vec_pretty(&report)?,

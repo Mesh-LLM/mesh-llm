@@ -282,7 +282,7 @@ fn release_recipe_declarations_include_all_three_product_primitives() {
     for name in [
         "release-host-build",
         "release-runtime-build",
-        "release-host-build-windows",
+        "skippy-cli-release-build",
     ] {
         assert!(allowed.contains(&name), "{name}");
     }
