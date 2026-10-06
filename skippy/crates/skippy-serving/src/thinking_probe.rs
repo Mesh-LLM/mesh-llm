@@ -48,11 +48,15 @@ const PROBE_MESSAGES_JSON: &str = r#"[{"role":"user","content":"Answer 2 + 2."}]
 /// Effort values the probe exercises, in the order they are reported.
 ///
 /// Bounded on purpose: an untested value stays unreported rather than being
-/// inferred from a neighbour.
-const PROBE_EFFORTS: [ReasoningEffort; 3] = [
+/// inferred from a neighbour. `xhigh` is included because it is the canonical
+/// value on the Qwen3.8 model card; a template whose default already selects it
+/// will still omit it from `efforts`, since it then matches a plain thinking-on
+/// render.
+const PROBE_EFFORTS: [ReasoningEffort; 4] = [
     ReasoningEffort::Low,
     ReasoningEffort::Medium,
     ReasoningEffort::High,
+    ReasoningEffort::Xhigh,
 ];
 
 /// Renders a chat template. Implemented by the native runtime in production and
@@ -473,7 +477,12 @@ mod tests {
             *report.controls(),
             ThinkingControls {
                 enabled: true,
-                efforts: vec!["low".to_string(), "medium".to_string(), "high".to_string()],
+                efforts: vec![
+                    "low".to_string(),
+                    "medium".to_string(),
+                    "high".to_string(),
+                    "xhigh".to_string(),
+                ],
             }
         );
     }
@@ -485,7 +494,12 @@ mod tests {
         assert!(!report.controls().enabled);
         assert_eq!(
             report.controls().efforts,
-            vec!["low".to_string(), "medium".to_string(), "high".to_string()]
+            vec![
+                "low".to_string(),
+                "medium".to_string(),
+                "high".to_string(),
+                "xhigh".to_string()
+            ]
         );
     }
 
@@ -493,7 +507,7 @@ mod tests {
     fn an_effort_that_renders_like_a_plain_thinking_on_request_is_not_offered() {
         let defaults = defaults();
         let report = run_thinking_probe(&PartialEffortTemplate, &inputs(&defaults));
-        assert_eq!(report.controls().efforts, vec!["low", "high"]);
+        assert_eq!(report.controls().efforts, vec!["low", "high", "xhigh"]);
     }
 
     #[test]

@@ -29,7 +29,8 @@ pub struct ThinkingControls {
     /// plain thinking-on render, in probe order.
     ///
     /// Empty when the template does not distinguish effort. Only `low`,
-    /// `medium`, and `high` are probed; other accepted values stay unreported.
+    /// `medium`, `high`, and `xhigh` are probed; other accepted values stay
+    /// unreported.
     pub efforts: Vec<String>,
 }
 
