@@ -137,7 +137,7 @@ impl LocalQueue {
             .join("../..")
             .canonicalize()
             .unwrap();
-        let script = root.join("scripts/prepare-llama.sh");
+        let script = root.join("skippy/scripts/prepare-llama.sh");
         let mut settings = vec![
             (
                 "LLAMA_UPSTREAM_URL",

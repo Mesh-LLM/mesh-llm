@@ -49,6 +49,7 @@ mod cache_flow_intent;
 mod declared_graph;
 mod lane_policy_intent;
 mod release_flow_intent;
+mod release_notes_step;
 mod release_ui_step;
 mod release_windows_intent;
 mod reporter_intent;
