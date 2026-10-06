@@ -2,7 +2,6 @@ import { fireEvent, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import type { MultimodalContent } from '@tanstack/ai-client'
 import { describe, expect, it } from 'vitest'
-import { IMAGE_MAX_BYTES } from '@/lib/attachments'
 import { chatMock, renderChatPage } from './ChatPage.test-support'
 
 function pasteIntoComposer(files: File[]) {
@@ -71,26 +70,17 @@ describe('ChatPage composer paste', () => {
     expect(screen.queryByTestId('composer-attachments')).not.toBeInTheDocument()
   })
 
-  it('skips oversized pasted images but keeps valid ones from the same paste', () => {
+  it('attaches every image from a multi-file paste', () => {
     renderChatPage({ mode: 'live' })
 
-    const oversized = new File([new Uint8Array(IMAGE_MAX_BYTES + 1)], 'huge.png', { type: 'image/png' })
-    const valid = new File(['image-bytes'], 'small.png', { type: 'image/png' })
-    const consumed = pasteIntoComposer([oversized, valid])
+    const consumed = pasteIntoComposer([
+      new File(['image-bytes'], 'first.png', { type: 'image/png' }),
+      new File(['more-image-bytes'], 'second.jpg', { type: 'image/jpeg' })
+    ])
 
     expect(consumed).toBe(false)
     const pendingAttachments = screen.getByTestId('composer-attachments')
-    expect(pendingAttachments).toHaveTextContent('small.png')
-    expect(pendingAttachments).not.toHaveTextContent('huge.png')
-  })
-
-  it('ignores a paste containing only an oversized image', () => {
-    renderChatPage({ mode: 'live' })
-
-    const oversized = new File([new Uint8Array(IMAGE_MAX_BYTES + 1)], 'huge.png', { type: 'image/png' })
-    const notConsumed = pasteIntoComposer([oversized])
-
-    expect(notConsumed).toBe(true)
-    expect(screen.queryByTestId('composer-attachments')).not.toBeInTheDocument()
+    expect(pendingAttachments).toHaveTextContent('first.png')
+    expect(pendingAttachments).toHaveTextContent('second.jpg')
   })
 })
