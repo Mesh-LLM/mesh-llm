@@ -27,7 +27,7 @@ function modelSubtitle(model: DrawerModel) {
 
 function isQuantTag(tag: string): boolean {
   const upper = tag.toUpperCase()
-  if (upper.startsWith('IQ') || upper.startsWith('BF')) return true
+  if (upper.startsWith('IQ') || upper.startsWith('BF') || upper.startsWith('UD-')) return true
   if (!upper.startsWith('Q') && !upper.startsWith('F')) return false
   return upper.length >= 2 && upper[1] >= '0' && upper[1] <= '9'
 }

@@ -46,6 +46,15 @@ describe('ModelDrawer', () => {
     expect(screen.getByText('Q1_0')).toBeInTheDocument()
   })
 
+  it('derives Unsloth Dynamic quants from UD- colon tags', () => {
+    const name = 'bartowski/GLM-5-UD-IQ2_XXS-GGUF:UD-IQ2_XXS'
+    const model: ModelSummary = { ...MODEL, name, fullId: name }
+    render(<ModelDrawer open model={model} peers={[]} onClose={() => {}} />)
+
+    expect(screen.getAllByText('UD-IQ2_XXS').length).toBeGreaterThan(0)
+    expect(screen.queryByText('Unknown')).not.toBeInTheDocument()
+  })
+
   it('shows Unknown quant when the name has no colon tag and quant metadata is missing', () => {
     const model: ModelSummary = { ...MODEL, name: 'Hermes-2-Pro-Mistral-7B', fullId: 'Hermes-2-Pro-Mistral-7B' }
     render(<ModelDrawer open model={model} peers={[]} onClose={() => {}} />)
