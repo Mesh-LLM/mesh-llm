@@ -7,6 +7,7 @@ fn fixture() -> Input {
         worker_input: v,
         mounts,
         cpu_plan: plan,
+        mounted_request: None,
     }
 }
 #[test]
@@ -119,4 +120,57 @@ fn generic_facade_terminal_gate_preserves_ack_rows_and_refuses_late_cancel_deadl
         assert!(root.join("observations.json").is_file());
         temp.close().unwrap();
     }
+}
+#[test]
+fn generic_facade_prepares_full_mounted_roster_and_correlates_locator_before_output() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().canonicalize().unwrap();
+    let mut input = fixture();
+    input.worker_input["operator"]["conversion"]["source_files"] = json!(
+        (0..1024)
+            .map(|i| json!({"path":format!("/models/target/part-{i:04}"),"sha256":"1".repeat(64)}))
+            .collect::<Vec<_>>()
+    );
+    input.mounts.push(ModelMount {
+        repo: "fixture/request".into(),
+        revision: "a".repeat(40),
+        mount_path: "/models/request".into(),
+    });
+    let bytes = serde_json::to_vec(&input.worker_input).unwrap();
+    assert!(bytes.len() > 65536);
+    input.mounted_request = Some(super::super::request_transport::MountedRequest {
+        schema_version: 1,
+        path: "/models/request/input.json".into(),
+        sha256: super::super::admission::digest(&bytes),
+        byte_size: bytes.len() as u64,
+        repo: "fixture/request".into(),
+        revision: "a".repeat(40),
+    });
+    let source = root.join("input.json");
+    let out = root.join("prepared");
+    std::fs::write(&source, serde_json::to_vec(&input).unwrap()).unwrap();
+    let arguments = |output: &Path| {
+        [
+            "model-package-generic-jobs",
+            "prepare",
+            "--input",
+            source.to_str().unwrap(),
+            "--output-directory",
+            output.to_str().unwrap(),
+        ]
+        .map(String::from)
+    };
+    assert!(run_args(arguments(&out).map(Into::into)).unwrap());
+    let declaration: Value =
+        serde_json::from_slice(&std::fs::read(out.join("declaration.json")).unwrap()).unwrap();
+    assert_eq!(
+        declaration["transport_input_sha256"],
+        input.mounted_request.as_ref().unwrap().sha256
+    );
+    input.mounted_request.as_mut().unwrap().sha256 = "2".repeat(64);
+    std::fs::write(&source, serde_json::to_vec(&input).unwrap()).unwrap();
+    let refused = root.join("refused");
+    assert!(run_args(arguments(&refused).map(Into::into)).is_err());
+    assert!(!refused.exists());
+    temp.close().unwrap();
 }

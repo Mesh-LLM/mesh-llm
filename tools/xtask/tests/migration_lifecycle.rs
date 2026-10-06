@@ -403,3 +403,7 @@ mod hf_generic_jobs;
 #[cfg(target_os = "linux")]
 #[path = "lifecycle/hf_artifact_workspace.rs"]
 mod hf_artifact_workspace;
+
+#[cfg(target_os = "linux")]
+#[path = "migration_lifecycle/hf_mtp_composition_jobs.rs"]
+mod hf_mtp_composition_jobs;

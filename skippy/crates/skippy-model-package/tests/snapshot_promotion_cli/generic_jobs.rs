@@ -119,3 +119,39 @@ fn actual_generic_jobs_facade_refuses_unconfirmed_submit_and_foreign_collection_
         temp.close().unwrap();
     }
 }
+
+#[test]
+fn actual_composition_jobs_facade_prepares_distinct_complete_workflow_without_network() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().canonicalize().unwrap();
+    let mut input = fixture();
+    let b = input["worker_input"]["operator"]["bootstrap"].clone();
+    let pin = |p: &str| json!({"path":p,"sha256":"1".repeat(64)});
+    let tool = |p: &str| json!({"name":"helper","path":p,"sha256":"1".repeat(64)});
+    input["worker_input"]["workflow"] = json!("default-mtp-composition");
+    input["worker_input"]["operator"] = json!({"schema_version":1,"bootstrap":b,"staging_helper":tool("/opt/stitch"),"checkpoint":{"repo":"fixture/checkpoint","revision":"a".repeat(40),"files":{"config.json":"1".repeat(64),"model.safetensors":"2".repeat(64)}},"tokenizer_source":{"repo":"fixture/tokenizer","revision":"b".repeat(40),"files":{"tokenizer.json":"3".repeat(64)}},"tokenizer_profile":pin("/opt/profile.json"),"credential_file":null,"maximum_bytes":1048576,"target_parts":[pin("/models/source/part1.gguf"),pin("/models/source/part2.gguf")],"sidecars":[],"repository_helper":tool("/opt/repository"),"repository_helper_source":pin("/opt/repository-source"),"publisher_helper":pin("/opt/publisher"),"publisher_source":pin("/opt/publisher-source"),"overall_seconds":259200,"publication_reserve_seconds":60,"dry_run":false,"confirm_publication":true});
+    let path = root.join("input.json");
+    std::fs::write(&path, serde_json::to_vec(&input).unwrap()).unwrap();
+    let out = root.join("prepared");
+    let result = invoke(
+        &root,
+        &[
+            "prepare",
+            "--input",
+            path.to_str().unwrap(),
+            "--output-directory",
+            out.to_str().unwrap(),
+        ],
+    );
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let declaration: Value =
+        serde_json::from_slice(&std::fs::read(out.join("declaration.json")).unwrap()).unwrap();
+    assert_eq!(declaration["timeout_seconds"], 259200);
+    assert_eq!(declaration["native_certification_completed"], false);
+    assert!(!root.join("submitted.json").exists());
+    temp.close().unwrap();
+}

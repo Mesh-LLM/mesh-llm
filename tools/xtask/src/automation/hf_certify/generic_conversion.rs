@@ -57,7 +57,7 @@ pub(super) fn run(args: &[String]) -> DynResult<()> {
         return Err("generic conversion closed flags".into());
     }
     let input: contract::Input =
-        serde_json::from_slice(&admission::read(Path::new(path), 1048576)?)?;
+        serde_json::from_slice(&admission::read(Path::new(path), 8 * 1048576)?)?;
     input.validate()?;
     let root = std::path::absolute(output)?;
     let root = root

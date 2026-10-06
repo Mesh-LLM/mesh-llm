@@ -163,6 +163,7 @@ fn credential(root: &Path) -> DynResult<tempfile::NamedTempFile> {
 fn bytes(flag: &str, value: &str) -> DynResult<Vec<u8>> {
     match flag {
         "--input" => admission::read(Path::new(value), 65536),
+        "--mounted-input-environment" => super::super::job_request_transport::environment(value),
         "--input-environment" if value == "MESH_HF_JOB_INPUT" => {
             let value = std::env::var_os(value).ok_or("generic Jobs input secret absent")?;
             let value = value.to_str().ok_or("generic Jobs input Unicode refused")?;
@@ -176,7 +177,7 @@ fn bytes(flag: &str, value: &str) -> DynResult<Vec<u8>> {
 }
 pub(super) fn run(args: &[String]) -> DynResult<()> {
     let [flag, input, out_flag, output] = args else {
-        return Err("generic-job-worker --input FILE|--input-environment MESH_HF_JOB_INPUT --output-directory FRESH".into());
+        return Err("generic-job-worker --input FILE|--input-environment MESH_HF_JOB_INPUT|--mounted-input-environment MESH_HF_JOB_REQUEST --output-directory FRESH".into());
     };
     if out_flag != "--output-directory" {
         return Err("generic Jobs closed flags".into());

@@ -64,7 +64,8 @@ pub(super) fn worker(args: &[String]) -> DynResult<()> {
     if a != "--input" || b != "--output" {
         return Err("generic identity closed flags".into());
     }
-    let request: Request = serde_json::from_slice(&admission::read(Path::new(input), 1048576)?)?;
+    let request: Request =
+        serde_json::from_slice(&admission::read(Path::new(input), 8 * 1048576)?)?;
     request.input.validate()?;
     let mut files = BTreeMap::new();
     let mut sizes = BTreeMap::new();
@@ -182,7 +183,7 @@ pub(super) fn observe(
     if !execution::clean(&process) {
         return Err("generic identity child incomplete".into());
     }
-    let result: Receipt = serde_json::from_slice(&admission::read(&output, 1048576)?)?;
+    let result: Receipt = serde_json::from_slice(&admission::read(&output, 8 * 1048576)?)?;
     if result.request_sha256 != admission::digest(&serde_json::to_vec(&request)?) {
         return Err("generic identity correlation mismatch".into());
     }

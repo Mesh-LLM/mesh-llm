@@ -12,7 +12,7 @@ pub(super) fn hash(b: &[u8]) -> String {
 pub(super) fn pin(p: &Path) -> Json {
     json!({"path":p,"sha256":hash(&std::fs::read(p).unwrap())})
 }
-fn fixture(
+pub(super) fn fixture(
     native_mode: &str,
     publisher_mode: &str,
 ) -> (tempfile::TempDir, PathBuf, PathBuf, Vec<PathBuf>) {
