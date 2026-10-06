@@ -58,10 +58,38 @@ pub(crate) struct SpeculationGateConfig {
     pub(crate) min_window: Duration,
     /// Matching requests a window needs before it can be judged. One request's
     /// rate is noise; a verdict on it would be a coin flip.
+    ///
+    /// Eight rather than three, because the margin below is small enough that
+    /// the mean has to be tight: the standard error of a mean falls as
+    /// `1/sqrt(n)`, so this is what licenses resolving a ten-percent effect
+    /// instead of only a fifty-percent one.
     pub(crate) min_requests: u64,
-    /// Fractional change in mean decode rate needed to call a trial decisive.
-    /// Must sit above run-to-run noise, which sustained split runs showed at
-    /// roughly ±8% window to window.
+    /// Fractional improvement in mean decode rate needed to call a trial
+    /// decisive.
+    ///
+    /// This was 0.15, justified as "comfortably above the ~8% noise floor".
+    /// That floor was measured on **window-to-window wall-clock rates**, and
+    /// this gate does not use them: #2260 moved it to a mean of per-request
+    /// `predicted_per_second`, precisely because a wall-clock window rate
+    /// below saturation measures offered load rather than capacity. The
+    /// justification outlived the quantity it was about.
+    ///
+    /// Against the metric actually in use the noise is far smaller — two-box
+    /// runs on #2112 moved 1.6% formation-to-formation and 0.6% request to
+    /// request. And 0.15 could not catch the regression this gate exists for:
+    ///
+    /// | case | gain from standing down | decisive at 0.15? |
+    /// |---|---|---|
+    /// | #1581, the motivating run (12.3 against 13.8 tok/s) | 12.2% | **no** |
+    /// | #2112's freeform arm (9.89 against 10.15 tok/s) | 2.6% | **no** |
+    ///
+    /// A gate that calls its own motivating case indecisive and reverts to
+    /// speculating is the "adaptive policy that never adapted" failure in the
+    /// module docs above, arriving through the margin instead of the window.
+    ///
+    /// 0.05 is ~3x the measured noise and catches #1581 with room. The 2.6%
+    /// case is deliberately *not* reachable: at under twice the noise floor,
+    /// any margin that caught it would latch on coin flips.
     pub(crate) decisive_margin: f64,
     /// Quiet period after a verdict, so the gate cannot oscillate.
     pub(crate) cooldown: Duration,
@@ -98,11 +126,11 @@ fn default_gate_min_window_s() -> u64 {
 }
 
 fn default_gate_min_requests() -> u64 {
-    3
+    8
 }
 
 fn default_gate_decisive_margin() -> f64 {
-    0.15
+    0.05
 }
 
 fn default_gate_cooldown_s() -> u64 {
@@ -148,10 +176,8 @@ impl Default for SpeculationGateConfig {
     fn default() -> Self {
         Self {
             min_window: Duration::from_secs(60),
-            min_requests: 3,
-            // Comfortably above the ~8% noise floor, so a verdict is a signal
-            // and not a coin flip.
-            decisive_margin: 0.15,
+            min_requests: 8,
+            decisive_margin: 0.05,
             // Half an hour between trials, against a 60s window: one window in
             // thirty is spent measuring the setting not in use. Short enough to
             // follow a workload that changes through the day, long enough that
@@ -392,10 +418,11 @@ impl SpeculationGate {
 /// Environment switch that enables the gate. Default off.
 ///
 /// Off by default because the gate changes what a speculating deployment does
-/// over time, and the evidence for its thresholds — the ±8% noise floor and
-/// the 15% decisive margin — comes from a different measurement (#1935's
-/// rebalance windows) than the one it governs. It wants its own two-box run
-/// before it becomes anyone's default.
+/// over time. Its thresholds now come from the measurement it governs — #2112's
+/// two-box freeform arm and #1581's documented regression — rather than from
+/// #1935's rebalance windows, which measured a different quantity on a
+/// wall-clock rate this gate no longer uses. Flipping the default on is
+/// #2112 workstream 5's last step and wants its own run.
 ///
 /// The intended destination is `--strategy balanced`, whose composition in
 /// #2112 is "package-declared speculation, gated on live break-even".
@@ -691,21 +718,68 @@ mod tests {
         );
     }
 
-    /// An improvement inside the noise floor is not a verdict. #1935 measured
-    /// roughly ±8% window to window; the margin is 15%.
+    /// An improvement inside the noise floor is not a verdict. Two-box runs on
+    /// #2112 moved 1.6% formation-to-formation and 0.6% request to request on
+    /// the per-request metric this gate uses; the margin is 5%.
     #[test]
     fn an_improvement_inside_the_noise_margin_is_not_decisive() {
         let mut gate = SpeculationGate::new(config());
         let mut at = Instant::now();
         window(&mut gate, &mut at, true, 20.0, 2000, 200);
         window(&mut gate, &mut at, true, 20.0, 2000, 200);
-        assert_eq!(
-            window(&mut gate, &mut at, false, 22.0, 0, 0),
-            GateDecision::Revert {
-                enable: true,
-                baseline: 20.0,
-                observed: 22.0
-            }
+        // 2% — the size of #2112's freeform arm, and under twice the measured
+        // noise. Deliberately out of reach: a margin that caught this would
+        // latch on coin flips.
+        let decision = window(&mut gate, &mut at, false, 20.4, 0, 0);
+        assert!(
+            matches!(decision, GateDecision::Revert { enable: true, .. }),
+            "an improvement inside the noise is not a verdict, got {decision:?}"
+        );
+    }
+
+    /// THE CASE THIS GATE EXISTS FOR. #1581 measured 12.2-12.4 tok/s
+    /// speculating against 13.8 for plain decode on a freeform two-node split.
+    ///
+    /// At the original 0.15 margin that is a 12.2% improvement from standing
+    /// down and therefore *indecisive* — the gate reverted to speculating and
+    /// kept the regression. A gate that cannot catch its own motivating run is
+    /// the "adaptive policy that never adapted" failure in this module's docs,
+    /// reached through the margin rather than the window.
+    #[test]
+    fn the_documented_freeform_regression_is_caught() {
+        let mut gate = SpeculationGate::new(config());
+        let mut at = Instant::now();
+        window(&mut gate, &mut at, true, 12.3, 2214, 660);
+        window(&mut gate, &mut at, true, 12.3, 2214, 660);
+        // Matched on shape, not float equality: the baseline is a mean of
+        // per-request rates, so it carries accumulation error (12.3 sums to
+        // 12.300000000000002) and the verdict is what this pins.
+        let decision = window(&mut gate, &mut at, false, 13.8, 0, 0);
+        assert!(
+            matches!(
+                decision,
+                GateDecision::Keep {
+                    speculating: false,
+                    ..
+                }
+            ),
+            "the documented regression must stand speculation down, got {decision:?}"
+        );
+    }
+
+    #[test]
+    fn a_winning_configuration_is_never_stood_down() {
+        // The other direction, which the smaller margin must not break: on an
+        // input-grounded workload speculation wins several-fold, so the trial
+        // measures far worse and the incumbent has to come straight back.
+        let mut gate = SpeculationGate::new(config());
+        let mut at = Instant::now();
+        window(&mut gate, &mut at, true, 49.6, 2286, 1998);
+        window(&mut gate, &mut at, true, 49.6, 2286, 1998);
+        let decision = window(&mut gate, &mut at, false, 10.1, 0, 0);
+        assert!(
+            matches!(decision, GateDecision::Revert { enable: true, .. }),
+            "a winning configuration must come straight back, got {decision:?}"
         );
     }
 
