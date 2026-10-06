@@ -2,14 +2,14 @@ use crate::command::DynResult;
 use serde::{Deserialize, Serialize};
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
-pub(super) enum Cohort {
+pub(in crate::automation) enum Cohort {
     NativeSerial,
     NativeConcurrent,
     OpenaiConcurrent,
 }
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct Input {
+pub(in crate::automation) struct Input {
     pub schema_version: u64,
     pub cohort: Cohort,
     pub base_url: String,
@@ -22,7 +22,7 @@ pub(super) struct Input {
     pub execution_timeout_ms: u64,
 }
 impl Input {
-    pub(super) fn validate(&self) -> DynResult<()> {
+    pub(in crate::automation) fn validate(&self) -> DynResult<()> {
         let uri: hyper::Uri = self.base_url.parse()?;
         let path = if self.cohort == Cohort::OpenaiConcurrent {
             "/v1"

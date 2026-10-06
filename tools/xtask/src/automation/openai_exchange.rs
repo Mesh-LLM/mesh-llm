@@ -1,5 +1,6 @@
 //! Shared bounded HTTP completion transport for repository automation.
 use crate::command::DynResult;
+pub(super) mod json_completion;
 pub(super) mod native_completion;
 pub(super) mod stream;
 use http_body_util::{BodyExt, Full};

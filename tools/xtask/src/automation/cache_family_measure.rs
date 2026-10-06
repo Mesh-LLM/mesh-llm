@@ -1,7 +1,7 @@
 //! Correlated bounded HTTP worker. Host identity/readiness custody belongs to its
 //! retained parent; this command makes no claim that an endpoint is the pinned host.
 #[path = "cache_family_measure/contract.rs"]
-mod contract;
+pub(super) mod contract;
 #[path = "cache_family_measure/measurement.rs"]
 mod measurement;
 #[cfg(test)]

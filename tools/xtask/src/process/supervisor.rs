@@ -74,6 +74,30 @@ pub fn supervise_raw(
     )
 }
 
+/// Runs the same owned supervisor with bounded raw in-memory evidence and
+/// independently capped, sanitized diagnostic files. RawBytes never supplies
+/// file contents and must not be persisted or printed by callers. Each raw
+/// stream is admitted only after EOF within its explicit byte bound.
+pub fn supervise_raw_with_files(
+    spec: &ProcessSpec,
+    limits: &Limits,
+    cancellation: &Cancellation,
+    files: OutputFiles,
+    options: super::RawCaptureOptions,
+) -> Result<super::RawProcessReport, Failure> {
+    supervise_configured(
+        spec,
+        limits,
+        cancellation,
+        (files, options),
+        |child, output, started| {
+            let (outcome, ready, observation) =
+                monitor_readiness(child, output, (limits, cancellation, started));
+            (outcome, ready, observation.map(StopObservation::Line))
+        },
+    )
+}
+
 fn supervise_configured(
     spec: &ProcessSpec,
     limits: &Limits,
@@ -324,3 +348,7 @@ fn admit(
 #[cfg(test)]
 #[path = "readiness_tests.rs"]
 mod tests;
+
+#[cfg(all(test, unix))]
+#[path = "raw_file_tests.rs"]
+mod raw_file_tests;

@@ -4,10 +4,12 @@ pub(crate) mod agent_fixture_inputs;
 pub(crate) mod agent_model;
 pub(crate) mod agentic_prompt_manifest;
 pub(crate) mod binary_stage_readiness;
+pub(crate) mod cache_family_cell;
 pub(crate) mod cache_family_correctness;
 pub(crate) mod cache_family_measure;
 pub(crate) mod cache_family_plan;
 pub(crate) mod cache_family_report;
+pub(crate) mod cache_matrix;
 #[path = "canary_receipts/command.rs"]
 pub(crate) mod canary_aggregate_command;
 #[path = "canary_receipts/build.rs"]
@@ -33,6 +35,7 @@ pub(crate) mod event_benchmark_comparison;
 pub(crate) mod event_benchmark_runner;
 pub(crate) mod family_battery_policy;
 pub(crate) mod family_model_identity;
+pub(crate) mod guardrail_corpus;
 pub(crate) mod laya;
 pub(crate) mod local_ports;
 pub(crate) mod logging_console;
@@ -44,6 +47,7 @@ pub(crate) mod runtime_install;
 pub(crate) mod sdk_fixture;
 pub(crate) mod stability;
 pub(crate) mod startup_recovery;
+pub(crate) mod suffix_proposer;
 #[cfg(test)]
 #[allow(dead_code)]
 #[path = "../../tests/migration_stability/tls_fixture.rs"]
@@ -153,3 +157,6 @@ pub(crate) mod agent_recording_proxy;
 pub(crate) mod native_runtime_evidence;
 
 pub(crate) mod lightning_compatibility;
+
+pub(crate) mod hf_certify;
+pub(crate) mod hf_mtp_compose;

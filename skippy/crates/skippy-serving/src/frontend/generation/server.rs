@@ -69,9 +69,10 @@ pub async fn serve_openai_backend_with_shutdown(
     shutdown: impl Future<Output = ()> + Send + 'static,
 ) -> Result<()> {
     let app = instrumented_openai_router(backend, tokenizer, telemetry);
-    let listener = bind_serve_listener(bind_addr)?;
-    skippy_events::diagnostics::emit(skippy_events::diagnostics::ServingDiagnostic::Status {
-        message: format!("skippy-serving listening: openai={bind_addr}"),
+    let listener = bind_with_readiness(bind_addr, || {
+        skippy_events::diagnostics::emit(skippy_events::diagnostics::ServingDiagnostic::Status {
+            message: format!("skippy-serving listening: openai={bind_addr}"),
+        })
     })?;
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown)
@@ -156,18 +157,19 @@ async fn serve_embedded_openai_with_shutdown_and_scheduler(
     let bind_addr = args.bind_addr;
     let binding = embedded_openai_router_with_scheduler(args, iteration_scheduler)?;
 
-    skippy_events::diagnostics::emit(skippy_events::diagnostics::ServingDiagnostic::Status {
-        message: format!(
-            "skippy-serving listening: openai={} model_id={} backend=embedded-stage0 generation_concurrency={} generation_queue_capacity={} generation_admission_timeout_secs={}",
-            bind_addr,
-            binding.model_id,
-            binding.generation_concurrency,
-            binding.generation_queue_capacity,
-            binding.generation_admission_timeout_secs,
-        ),
+    let listener = bind_with_readiness(bind_addr, || {
+        skippy_events::diagnostics::emit(skippy_events::diagnostics::ServingDiagnostic::Status {
+            message: format!(
+                "skippy-serving listening: openai={} model_id={} backend=embedded-stage0 generation_concurrency={} generation_queue_capacity={} generation_admission_timeout_secs={}",
+                bind_addr,
+                binding.model_id,
+                binding.generation_concurrency,
+                binding.generation_queue_capacity,
+                binding.generation_admission_timeout_secs,
+            ),
+        })
     })?;
 
-    let listener = bind_serve_listener(bind_addr)?;
     axum::serve(listener, binding.router)
         .with_graceful_shutdown(shutdown)
         .await?;
@@ -560,6 +562,17 @@ pub(in crate::frontend) async fn openai_http_telemetry(
     response
 }
 
+/// Readiness cannot be printed for a socket whose bind failed. A writer error
+/// drops the already-owned listener before returning to the command caller.
+fn bind_with_readiness(
+    address: std::net::SocketAddr,
+    emit_readiness: impl FnOnce() -> std::io::Result<()>,
+) -> Result<tokio::net::TcpListener> {
+    let listener = bind_serve_listener(address)?;
+    emit_readiness()?;
+    Ok(listener)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -569,6 +582,7 @@ mod tests {
     use crate::frontend::GenerationLifecycleConfig;
     use crate::frontend::GenerationReceiptConfig;
     use crate::serving_hooks::ModelServingHooks;
+    use std::io::Write;
     use std::sync::Arc;
 
     #[test]
@@ -632,5 +646,71 @@ mod tests {
         assert!(
             resolve_adaptive_generation_min_concurrency(true, Some(9), 8, "--minimum").is_err()
         );
+    }
+    #[tokio::test]
+    async fn failed_openai_listener_bind_cannot_emit_readiness() {
+        let occupied = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = occupied.local_addr().unwrap();
+        let mut out = Vec::new();
+        assert!(
+            super::bind_with_readiness(address, || writeln!(
+                out,
+                "skippy-serving listening: openai={address}"
+            ))
+            .is_err()
+        );
+        assert!(out.is_empty());
+        drop(occupied);
+    }
+
+    #[tokio::test]
+    async fn openai_listener_is_owned_before_unchanged_readiness_write() {
+        struct Observer {
+            address: std::net::SocketAddr,
+            bytes: Vec<u8>,
+            bound: bool,
+        }
+        impl std::io::Write for Observer {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.bound |= std::net::TcpListener::bind(self.address).is_err();
+                self.bytes.extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let reservation = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = reservation.local_addr().unwrap();
+        drop(reservation);
+        let mut out = Observer {
+            address,
+            bytes: Vec::new(),
+            bound: false,
+        };
+        let listener = super::bind_with_readiness(address, || writeln!(out, "skippy-serving listening: openai={address} model_id=fixture backend=fixture generation_concurrency=1")).unwrap();
+        assert!(out.bound);
+        assert_eq!(listener.local_addr().unwrap(), address);
+        assert_eq!(out.bytes, format!("skippy-serving listening: openai={address} model_id=fixture backend=fixture generation_concurrency=1\n").as_bytes());
+        drop(listener);
+    }
+
+    #[tokio::test]
+    async fn openai_readiness_write_failure_releases_owned_listener() {
+        struct Refuse;
+        impl std::io::Write for Refuse {
+            fn write(&mut self, _bytes: &[u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::other("fixture refusal"))
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let reservation = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = reservation.local_addr().unwrap();
+        drop(reservation);
+        assert!(super::bind_with_readiness(address, || writeln!(Refuse, "ready")).is_err());
+        let rebound = std::net::TcpListener::bind(address).unwrap();
+        drop(rebound);
     }
 }

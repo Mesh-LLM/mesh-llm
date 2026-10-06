@@ -1,5 +1,7 @@
 #[path = "l7_daemon_fixture/competitive_fixture.rs"]
 mod competitive_fixture;
+#[path = "l7_daemon_fixture/hf_mtp_compose_fixture.rs"]
+mod hf_mtp_compose_fixture;
 #[path = "l7_daemon_fixture/lightning_peer_fixture.rs"]
 mod lightning_peer_fixture;
 #[path = "l7_daemon_fixture/manual_smoke_fixture.rs"]
@@ -14,8 +16,22 @@ use std::{
     time::Duration,
 };
 
+#[path = "l7_daemon_fixture/hf_certification_fixture.rs"]
+mod hf_certification_fixture;
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let arguments: Vec<_> = std::env::args().skip(1).collect();
+    if arguments.first().is_some_and(|v| {
+        v == "compose-mtp"
+            || (v == "validate-mtp-attach" && !arguments.iter().any(|a| a == "--projector"))
+    }) {
+        return hf_mtp_compose_fixture::run(&arguments);
+    }
+    if arguments.first().is_some_and(|value| {
+        ["validate-projector", "validate-mtp-attach"].contains(&value.as_str())
+    }) {
+        return hf_certification_fixture::run(&arguments);
+    }
     if let [verb, rest @ ..] = arguments.as_slice()
         && verb == "lightning-peer"
     {

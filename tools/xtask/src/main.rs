@@ -49,12 +49,15 @@ fn run() -> DynResult<()> {
         .map(|path| repository::RepositoryRoot::resolve(Some(path)))
         .transpose()?;
     match parsed.command {
+        cli::CliCommand::GuardrailCorpus(rest) => automation::guardrail_corpus::run(rest),
+        cli::CliCommand::SuffixProposer(rest) => automation::suffix_proposer::run(rest),
         cli::CliCommand::EventBenchmarkRun(rest) => automation::event_benchmark_runner::run(rest),
         cli::CliCommand::AgentClientConfig(rest) => automation::agent_client_config::run(rest),
         cli::CliCommand::CacheFamilyReport(rest) => automation::cache_family_report::run(rest),
         cli::CliCommand::CacheFamilyCorrectness(rest) => {
             automation::cache_family_correctness::run(rest)
         }
+        cli::CliCommand::CacheFamilyCell(rest) => automation::cache_family_cell::run(rest),
         cli::CliCommand::CacheFamilyMeasure(rest) => automation::cache_family_measure::run(rest),
         cli::CliCommand::CacheFamilyPlan(rest) => automation::cache_family_plan::run(rest),
         cli::CliCommand::AgentFixtureEvidence(rest) => {
@@ -76,6 +79,7 @@ fn run() -> DynResult<()> {
         cli::CliCommand::FamilyModelIdentity(rest) => automation::family_model_identity::run(rest),
         cli::CliCommand::LocalPorts(rest) => automation::local_ports::run(rest),
         cli::CliCommand::ManualSmoke(rest) => automation::manual_smoke::run(rest),
+        cli::CliCommand::OpenaiCacheMatrix(rest) => automation::cache_matrix::run(rest),
         cli::CliCommand::OpenaiSmokeConfig(rest) => automation::openai_smoke_config::run(rest),
         cli::CliCommand::WorkloadSmokeConfig(rest) => automation::workload_smoke_config::run(rest),
         cli::CliCommand::SplitProbe(rest) => automation::split_probe::run(rest),
@@ -134,6 +138,8 @@ fn run() -> DynResult<()> {
         }
         cli::CliCommand::RuntimeCacheInstall(rest) => automation::runtime_install::run(rest),
         cli::CliCommand::AgentPickModel(rest) => automation::agent_model::run(rest),
+        cli::CliCommand::HfCertification(rest) => automation::hf_certify::run(rest),
+        cli::CliCommand::HfMtpCompose(rest) => automation::hf_mtp_compose::run(rest),
         cli::CliCommand::HfConvertedArtifact(rest) => automation::hf_converted_artifact::run(rest),
         cli::CliCommand::Rollout(rest) => automation::rollout::run(rest),
         cli::CliCommand::GenerateKeypair(rest) => {
