@@ -927,17 +927,6 @@ impl PluginManager {
             .await
     }
 
-    pub async fn invoke_operation_with_timeout(
-        &self,
-        plugin_name: &str,
-        operation_name: &str,
-        input_json: &str,
-        timeout: Option<std::time::Duration>,
-    ) -> Result<ToolCallResult> {
-        self.call_tool_with_timeout(plugin_name, operation_name, input_json, timeout)
-            .await
-    }
-
     pub async fn invoke_virtual_model(
         &self,
         route: &VirtualModelRoute,
