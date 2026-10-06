@@ -39,15 +39,27 @@ pub enum ModelStateKind {
     Diffusion,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct MemoryCacheCapabilities {
+    pub resident: bool,
+    pub kv_recurrent: bool,
+}
+
+impl MemoryCacheCapabilities {
+    pub(crate) fn from_native_bits(bits: u32) -> Self {
+        Self {
+            resident: bits & 1 != 0,
+            kv_recurrent: bits & 2 != 0,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LoadedModelCapability {
     pub state_kind: ModelStateKind,
-    /// Upstream gates a separate indexer memory tier behind an architecture
-    /// allowlist (`needs_mem_idx`, llama-model.cpp). Indexer state is only
-    /// serialized by full-state snapshots, never by KV-page or recurrent
-    /// snapshots, so cache payload selection must treat these models as
-    /// exact-state-only. See skippy-server `effective_cache_payload`.
-    pub has_indexer_memory: bool,
+    /// Complete representations supported by the loaded native memory adapters.
+    /// Unknown memory advertises neither; callers must use full-state snapshots.
+    pub cache_capabilities: MemoryCacheCapabilities,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]

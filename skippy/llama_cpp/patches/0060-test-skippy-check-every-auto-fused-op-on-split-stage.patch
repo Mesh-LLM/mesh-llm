@@ -14,16 +14,19 @@ fused op of the whole model it must keep the nodes of exactly its own
 layers. A --stage-fused-ops mode runs only this check, and a new ctest,
 skippy_stage_fused_ops_auto_deepseek4, runs it on the deepseek4-moe
 fixture, whose layers carry the HC fusions.
+
+Also exercise the public package-stage open and numerical replay harness at
+all three interior cuts of the four-layer DSV4 fixture.
 ---
- src/CMakeLists.txt                      |   8 ++
+ src/CMakeLists.txt                      |  17 ++++
  src/skippy/tests/graph_build_inputs.cpp | 141 ++++++++++++++++++++++++++------
- 2 files changed, 124 insertions(+), 25 deletions(-)
+ 2 files changed, 133 insertions(+), 25 deletions(-)
 
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
 index b4ee9bd87..6b0fb5098 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
-@@ -562,6 +562,14 @@ if (LLAMA_STAGE_BUILD_TESTS)
+@@ -562,6 +562,23 @@ if (LLAMA_STAGE_BUILD_TESTS)
      set_tests_properties(skippy_noalloc_graph_planning_deepseek4_hyperconnection PROPERTIES
          FIXTURES_REQUIRED skippy-noalloc-deepseek4-fixture)
  
@@ -34,6 +37,15 @@ index b4ee9bd87..6b0fb5098 100644
 +            "${SKIPPY_MODEL_FIXTURE_DIR}/deepseek4-moe.gguf")
 +    set_tests_properties(skippy_stage_fused_ops_auto_deepseek4 PROPERTIES
 +        FIXTURES_REQUIRED skippy-noalloc-deepseek4-fixture)
++
++    foreach(cut 1 2 3)
++        add_test(NAME skippy_deepseek4_package_stage_replay_${cut}
++            COMMAND skippy-renamed-multishard-planning
++                "${SKIPPY_MODEL_FIXTURE_DIR}/deepseek4-moe.gguf"
++                "${SKIPPY_MODEL_FIXTURE_DIR}/deepseek4-package-replay-${cut}" 0 ${cut})
++        set_tests_properties(skippy_deepseek4_package_stage_replay_${cut} PROPERTIES
++            FIXTURES_REQUIRED skippy-noalloc-deepseek4-fixture TIMEOUT 900)
++    endforeach()
 +
      add_test(
          NAME skippy_noalloc_graph_planning_granite_hybrid

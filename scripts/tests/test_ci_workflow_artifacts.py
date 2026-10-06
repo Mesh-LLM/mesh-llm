@@ -271,9 +271,9 @@ class CiWorkflowArtifactTests(unittest.TestCase):
         )
         self.assertIn("run_durable_restart_probe", smoke_script)
         self.assertIn("kv-cache status", smoke_script)
-        self.assertIn(
-            "if not checkpointed_restore and (", smoke_script
-        )
+        self.assertIn("assert_expected_stage_payload", smoke_script)
+        self.assertIn("assert-split-stage-payloads.py", smoke_script)
+        self.assertIn("warm request {repeat} diverged from uncached request", smoke_script)
 
     def test_split_smoke_uploads_reconciled_evidence_on_every_outcome(self):
         workflow = (WORKFLOWS / "scripted-binary-smoke.yml").read_text()

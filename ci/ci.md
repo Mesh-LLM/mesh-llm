@@ -691,7 +691,10 @@ runtime producers are not duplicated.
   topology/run/model/package/manifest identity, the same exact two-stage
   contiguous cut on distinct nodes and bind addresses, two matching `ready`
   statuses, and the same sole served model. It atomically records
-  `split-evidence.json`. The Linux CPU row also enables the durable-L3 restart
+  `split-evidence.json`. The split smoke pins Auto payload expectations to the model manifest,
+  checks loaded state and exporter capability on both current run stages, and
+  persists a per-stage selection result; a wrong second stage fails even when
+  the first stage selects correctly. The Linux CPU row also enables the durable-L3 restart
   probe: it preserves each node's cache root and identity across a full process
   restart, requires a post-restart L3 fill with cached tokens and exact output,
   exercises `kv-cache status` and `clear`, and writes digest-bound evidence.
