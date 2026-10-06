@@ -105,6 +105,7 @@ schema row or stale manifest row from passing review:
 `speculative.draft_cache_type_k`, `speculative.draft_cache_type_v`,
 `speculative.ngram_min`, `speculative.ngram_max`, `speculative.ngram_proposer`,
 `speculative.ngram_max_proposal_tokens`, `speculative.ngram_fallback`,
+`speculative.gate`, `speculative.gate_min_window_s`, `speculative.gate_min_requests`, `speculative.gate_decisive_margin`, `speculative.gate_cooldown_s`,
 `speculative.extension_max_tokens`,
 `speculative.native_mtp_reject_cooldown_tokens`,
 `speculative.native_mtp_suppress_cooldown_drafts`,

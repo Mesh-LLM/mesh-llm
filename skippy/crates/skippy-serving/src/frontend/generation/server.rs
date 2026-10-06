@@ -367,11 +367,14 @@ fn embedded_openai_backend_with_scheduler(
         // off there is nothing to stand down, and trialling it on would turn a
         // deliberate `strategy = "disabled"` into something that flips back on
         // by itself.
-        speculation_governor: (crate::frontend::speculation_gate::speculation_gate_enabled()
-            && crate::frontend::speculation_gate::speculation_plan_is_active(&args.speculative))
+        speculation_governor: (crate::frontend::speculation_gate::speculation_gate_enabled(
+            args.speculative.gate,
+        ) && crate::frontend::speculation_gate::speculation_plan_is_active(
+            &args.speculative,
+        ))
         .then(|| {
             std::sync::Arc::new(crate::frontend::speculation_gate::SpeculationGovernor::new(
-                crate::frontend::speculation_gate::SpeculationGateConfig::default(),
+                args.speculative.gate.into(),
                 true,
             ))
         }),
