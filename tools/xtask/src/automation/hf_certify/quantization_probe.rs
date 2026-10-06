@@ -321,3 +321,14 @@ pub(super) fn run(args: &[String]) -> DynResult<()> {
         &mut || Ok(()),
     )
 }
+
+/// Shared quant observation boundary; neither probe nor window receipts qualify a complete Job.
+pub(super) fn finish_observations(
+    evidence: &mut Value,
+    path: &Path,
+    until: Instant,
+    interrupt: Interrupt,
+    phase: DynResult<()>,
+) -> DynResult<()> {
+    final_publication::finish(evidence, path, until, interrupt, phase, &mut || Ok(()))
+}

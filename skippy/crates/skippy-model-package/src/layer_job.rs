@@ -14,11 +14,15 @@ mod projector;
 mod source;
 pub use projector::ProjectorIdentity;
 #[cfg(unix)]
+mod commit_frontdoor;
+#[cfg(unix)]
 mod projector_frontdoor;
 #[cfg(test)]
 mod tests;
 #[cfg(unix)]
 mod upload_frontdoor;
+#[cfg(unix)]
+mod verification_frontdoor;
 #[cfg(unix)]
 pub use cli::run;
 #[cfg(not(unix))]

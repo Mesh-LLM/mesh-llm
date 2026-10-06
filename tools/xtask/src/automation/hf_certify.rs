@@ -15,13 +15,29 @@ mod mtp_default;
 mod publication;
 #[path = "hf_certify/quantization_probe.rs"]
 mod quantization_probe;
+#[path = "hf_certify/quantization_window.rs"]
+mod quantization_window;
 use crate::{automation::command_interrupt::Interrupt, command::DynResult};
 use serde_json::json;
 use std::{
     path::Path,
     time::{Duration, Instant},
 };
+#[path = "hf_certify/quant_job.rs"]
+mod quant_job;
+#[path = "hf_certify/quant_job_delivery.rs"]
+mod quant_job_delivery;
 pub(crate) fn run(args: &[String]) -> DynResult<()> {
+    if let [verb, rest @ ..] = args
+        && verb == "quant-job-worker"
+    {
+        return quant_job_delivery::run(rest);
+    }
+    if let [verb, rest @ ..] = args
+        && verb == "quantization-window"
+    {
+        return quantization_window::run(rest);
+    }
     if let [verb, rest @ ..] = args
         && verb == "quantizer-window-probe"
     {

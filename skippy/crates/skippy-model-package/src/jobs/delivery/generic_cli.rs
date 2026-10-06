@@ -89,6 +89,19 @@ fn prepare(input: &Input) -> Result<PreparedConversionDelivery> {
             }
             None => super::composition::prepare(&bytes, &input.mounts, &input.cpu_plan),
         }
+    } else if matches!(
+        input.worker_input["workflow"].as_str(),
+        Some("quantization" | "quantization-and-package")
+    ) {
+        match &input.mounted_request {
+            Some(locator) => super::quantization::prepare_mounted(
+                &bytes,
+                &input.mounts,
+                &input.cpu_plan,
+                locator,
+            ),
+            None => super::quantization::prepare(&bytes, &input.mounts, &input.cpu_plan),
+        }
     } else {
         match &input.mounted_request {
             Some(locator) => PreparedConversionDelivery::prepare_mounted(
@@ -184,6 +197,8 @@ fn final_result(
     if !admitted {
         value["conversion_admitted"] = json!(false);
         value["composition_admitted"] = json!(false);
+        value["quantization_admitted"] = json!(false);
+        value["package_admitted"] = json!(false);
     }
     write(root, "result.json", &value)?;
     let complete = admitted && Instant::now() < until && !cancelled();
@@ -192,6 +207,8 @@ fn final_result(
         value["operation_completed"] = json!(false);
         value["conversion_admitted"] = json!(false);
         value["composition_admitted"] = json!(false);
+        value["quantization_admitted"] = json!(false);
+        value["package_admitted"] = json!(false);
         value["terminal_refused"] = json!(true);
         let bytes = serde_json::to_vec_pretty(&value)?;
         let mut file = tempfile::NamedTempFile::new_in(root)?;
@@ -267,7 +284,27 @@ async fn collect(
     )?;
     let publisher = Publisher::new(Secret::new(token)?)?;
     let composition = input.worker_input["workflow"] == "default-mtp-composition";
-    let result = if composition {
+    let quantization = matches!(
+        input.worker_input["workflow"].as_str(),
+        Some("quantization" | "quantization-and-package")
+    );
+    let result = if quantization {
+        client
+            .collect_quantization_until(
+                &input.namespace,
+                &ack.submitted,
+                &publisher,
+                until,
+                cancellation(latch),
+            )
+            .await
+            .map(|mut observed| {
+                let candidate = observed.quantization_admitted;
+                observed.quantization_admitted = false;
+                observed.package_admitted = false;
+                (serde_json::to_value(observed), candidate)
+            })
+    } else if composition {
         client
             .collect_composition_until(
                 &input.namespace,
@@ -303,14 +340,20 @@ async fn collect(
             write(
                 root,
                 "collected.json",
-                &json!({"schema_version":1,"workflow":input.worker_input["workflow"],"candidate_conversion_admitted":candidate && !composition,"candidate_composition_admitted":candidate && composition,"final_admission":false,"observation":observed?}),
+                &json!({"schema_version":1,"workflow":input.worker_input["workflow"],"candidate_conversion_admitted":candidate && !composition && !quantization,"candidate_composition_admitted":candidate && composition,"candidate_quantization_admitted":candidate && quantization,"candidate_package_admitted":candidate && input.worker_input["workflow"]=="quantization-and-package","final_admission":false,"observation":observed?}),
             )?;
             final_result(
                 root,
-                json!({"schema_version":1,"input_sha256":hash(input)?,"job_id":ack.submitted.native.job_id,"conversion_admitted":candidate && !composition,"composition_admitted":candidate && composition,"native_certified":false,"remote_cancel_requested":false}),
+                json!({"schema_version":1,"input_sha256":hash(input)?,"job_id":ack.submitted.native.job_id,"conversion_admitted":candidate && !composition && !quantization,"composition_admitted":candidate && composition,"quantization_admitted":candidate && quantization,"package_admitted":candidate && input.worker_input["workflow"]=="quantization-and-package","native_certified":false,"remote_cancel_requested":false}),
                 (
                     candidate,
-                    if composition {
+                    if quantization {
+                        if input.worker_input["workflow"] == "quantization-and-package" {
+                            "QUANTIZATION_AND_PACKAGE_ADMITTED"
+                        } else {
+                            "QUANTIZATION_ADMITTED"
+                        }
+                    } else if composition {
                         "COMPOSITION_ADMITTED"
                     } else {
                         "CONVERSION_ADMITTED"
@@ -346,7 +389,7 @@ fn run_args(args: impl IntoIterator<Item = std::ffi::OsString>) -> Result<bool> 
         }
         Err(_) => bail!("generic Jobs closed CLI refused"),
     };
-    if !(5..=259200).contains(&cli.timeout_seconds) {
+    if !(5..=345600).contains(&cli.timeout_seconds) {
         bail!("generic Jobs local transport/monitor budget refused");
     }
     let until = Instant::now() + Duration::from_secs(cli.timeout_seconds);
@@ -366,6 +409,10 @@ fn run_args(args: impl IntoIterator<Item = std::ffi::OsString>) -> Result<bool> 
         .ok_or_else(|| anyhow::anyhow!("required generic Jobs output absent"))?;
     let input: Input = serde_json::from_slice(&read(input_path, 16 * 1024 * 1024)?)
         .map_err(|_| anyhow::anyhow!("generic Jobs typed facade input refused"))?;
+    if cli.timeout_seconds > 259200 && input.worker_input["workflow"] != "quantization-and-package"
+    {
+        bail!("96h monitor allowance requires the combined quantization workflow");
+    }
     let prepared = prepare(&input)?;
     match cli.operation {
         Operation::Plan | Operation::ExportRequest => {
@@ -436,3 +483,7 @@ mod tests;
 mod planning;
 #[path = "generic_cli/request_export.rs"]
 mod request_export;
+
+#[cfg(test)]
+#[path = "generic_cli/quantization_tests.rs"]
+mod quantization_tests;

@@ -9,8 +9,10 @@ New repository-side job planning and orchestration follows
 `../manage-ci/SKILL.md`: no new Python tooling; use typed `tools/xtask`
 commands behind thin Just recipes. From the repository root,
 `cargo xtool repo-consistency ci-crate-lists` is a working alias example, not
-a job planner. Native quant Jobs delivery is not yet a callable repository
-workflow; do not create a Python job helper to fill that gap.
+a job planner. Native quant Jobs use the existing
+`model-package-generic-jobs` facade and
+`automation hf-certify quant-job-worker`. See
+[the operator contract](../../../docs/skippy/HF_QUANTIZATION_JOBS.md).
 
 Use this skill to turn an existing split BF16/FP16 GGUF model repo into a
 quantized GGUF model repo without requiring the host to hold the full model in
@@ -24,7 +26,7 @@ output shards to the target model repo, verify immutable remote bytes before
 deleting staged files, and
 resume from the first missing target shard after cancellation or failure.
 
-## Current capability and pending Jobs flow
+## Current capability and Jobs flow
 
 The current source-built `skippy-quantize` llama-api/skippy-abi quant backend
 rejects `--max-memory` and partial split windows. It requires the complete
@@ -33,9 +35,9 @@ Manifest creation, status and next-window planning do not establish that the
 requested quantization window can execute. Do not remove the memory bound or
 quantize the whole model as a substitute for the intended low-residency flow.
 
-Resumable, memory-bounded HF quant Jobs orchestration remains pending. It can
-supervise a supplied `skippy-quantize` whose executable, source revision and
-native runtime are pinned and whose actual preflight and finite window run
+The native Jobs coordinator supervises a supplied `skippy-quantize` whose
+executable, source revision and native runtime are pinned and whose actual
+preflight and finite window run
 prove the required recipe, memory and split behavior. An unspecified image or
 external job helper is not that proof. No new quantizer feature or native ABI
 change is implied by this skill.
@@ -49,8 +51,10 @@ change is implied by this skill.
 - Use a tensor-type file for any custom recipe. Treat MTP tensors, output
   tensors, precision-sensitive tensors, and latency-sensitive layer ranges as
   explicit recipe inputs.
-- Run jobs under the intended HF org and pass `HF_TOKEN` as a secret, not a
-  printed environment variable.
+- Run jobs under the intended HF org. Native delivery reads an explicit
+  private credential file at the facade and supplies
+  `MESH_HF_PUBLICATION_TOKEN` as a Job secret. Separately authorized HF CLI
+  operations may use `HF_TOKEN`; never print either token.
 - Prefer mounted Hub repos over full `hf download` when the job only needs to
   stream or stage one shard/window at a time.
 - Use `just skippy-quantize-standalone-release-build` for a current-source
@@ -66,13 +70,15 @@ change is implied by this skill.
    `validate-splits` checks local shard presence; `status` and `next-window`
    describe an existing manifest. Separately prove that the selected supplied
    quantizer accepts and executes the required window and memory policy.
-3. Write or upload a `quant-plan.json` with source repo/revision, target repo,
-   quant type, shard count, output prefix, tensor policy, and resume
-   settings.
+3. Prepare the closed operator request with source repo/revision, target repo,
+   quant type, shard count, output prefix, tensor policy and resume settings.
+   The coordinator publishes `quantization-roster.json`,
+   `quantization-manifest.json` and `tensor-policy.recipe`. An experiment may
+   retain an optional `quant-plan.json` operator record separately.
 4. Keep window size 1 as the intended first-run profile, with a 32G memory
-   budget and a three-day Job allowance. Launch only through an implemented
-   native delivery owner with a proven supported supplied quantizer; that
-   route is pending. Larger windows require finite hardware evidence.
+   budget and a three-day Job allowance. Use the native delivery owner only
+   with an independently qualified supplied quantizer. Larger windows require
+   finite hardware evidence.
 5. For each admitted window, stage the required input, execute the pinned
    quantizer, publish finished shards with an observed immutable commit and
    exact-byte verification, then delete local staged input and output files.
@@ -80,13 +86,14 @@ change is implied by this skill.
    copies, `quant_window`, publish completion, cleanup, and increasing split
    progress.
 7. Validate the target repo after completion by counting GGUF shards, checking
-   the first and last shard names, and confirming `quant-plan.json` plus the
-   tensor-type file are present.
+   the first and last shard names, and confirming `quantization-roster.json`,
+   `quantization-manifest.json` and `tensor-policy.recipe` at the verified
+   immutable commit.
 8. Record the artifact in the experiment card and create an iteration card for
    the run, including job id, command, environment, repo SHA, shard count, and
    follow-up decisions.
 
-## Preparation and launch status
+## Preparation and launch
 
 Local source and recipe checks remain available with an appropriately built
 native binary:
@@ -99,13 +106,18 @@ target/release/skippy-quantize validate-tensor-types /mnt/recipe/tensor-types.tx
 ```
 
 These checks do not submit a Job or prove a bounded quant window. The native
-launch owner still needs a closed request containing immutable source and
+launch owner consumes a closed request containing immutable source and
 recipe pins, target repo/prefix/basename, supported supplied tool identity,
 window/memory profile, namespace, image and CPU cost plan, three-day allowance,
 explicit publication authorization and durable receipt export. Source mounts
 must be read-only. A target directory or model mount is not proof of Hub
 publication; use verified upload receipts before cleanup or remote resume.
-There is no runnable native quant Jobs launch command documented here yet.
+Use the prepare/submit/collect grammar in
+[HF quantization Jobs](../../../docs/skippy/HF_QUANTIZATION_JOBS.md).
+Preparation makes no remote request; submission requires explicit authorization
+and `--confirm-submission`. These receipts always leave
+`tool_profile_qualified:false` and `workflow_qualified:false`. Separate real
+model, memory and hosted qualification evidence does not change those flags.
 
 ## Monitoring
 
@@ -151,8 +163,8 @@ check. Record at least:
 - total file count;
 - GGUF shard count;
 - first and last shard names;
-- manifest/plan presence;
-- tensor-type file presence.
+- `quantization-roster.json` and `quantization-manifest.json` presence;
+- `tensor-policy.recipe` presence.
 
 For local smoke tests, use a small split GGUF source first and verify:
 

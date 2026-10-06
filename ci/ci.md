@@ -1649,8 +1649,8 @@ SSE completion, joined worker ownership, process cancellation, and private-file
 cleanup. TLS fixture dependencies are test-only and do not enter the automation
 bootstrap dependency closure. Plan mode performs no HTTP, TLS capability probe,
 or evidence writes. The nightly workflow prepares the native automation tool and calls its nightly
-and KV tool-loop commands. The optional OpenCode adapter's Python closure
-remains transitional. The native KV owner retains growing tool histories, concurrent cohorts,
+and KV tool-loop commands. The optional OpenCode adapter uses the native agent
+configuration, fixture and recording-proxy owners. The native KV owner retains growing tool histories, concurrent cohorts,
 measured prefix reuse, bounded native-log checkpoints and fresh transcript runs.
 Its Python helper and 18 original test methods are retired after caller
 qualification; the required native target retains their behavioral coverage.
@@ -1660,7 +1660,10 @@ The two general stability Python harnesses, their 22 test methods, the two KV
 workflow contract methods, and six product-crate Python bindings are retired
 together after original and native caller qualification. The required
 `migration_stability` target and native workflow guards retain this coverage.
-The core gate still selects 53 transitional Python modules.
+The current core gate selects native Rust contract targets and no Python unittest
+modules. Retained SDK clients and optional reader/research environments keep their
+separate ownership. Protected pinned Python actions still require published caller
+cutover.
 
 The normal automation contract gate bootstraps a native-library-free xtask,
 then builds the separate `trajectory-reader` utility with `parquet-input`.

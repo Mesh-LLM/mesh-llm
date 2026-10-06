@@ -621,3 +621,168 @@ fn layer_catalog_actual_held_initial_head_obeys_inherited_deadline() {
             .starts_with("GET /api/datasets/meshllm/catalog/revision/main ")
     );
 }
+
+#[test]
+fn package_upload_immutable_resume_consumes_exact_remote_bytes_without_mutation_or_unlink() {
+    let root = tempfile::tempdir().unwrap();
+    let a = artifact(root.path(), false);
+    let mut p = plan(RepositoryKind::Model, false);
+    p.revision = "c".repeat(40);
+    let server = Server::start(vec![Reply {
+        status: 200,
+        body: b"{}".to_vec(),
+        hold: false,
+        headers: Vec::new(),
+    }]);
+    let observed = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(publisher(&server).verify_artifact_until(
+            &p,
+            a,
+            Instant::now() + Duration::from_secs(5),
+            futures::future::pending(),
+        ));
+    assert!(observed.completed && observed.local_custody_verified && observed.error.is_none());
+    assert_eq!(observed.commit, "c".repeat(40));
+    assert_eq!(fs::read(root.path().join("item.json")).unwrap(), b"{}");
+    let requests = server.finish();
+    assert_eq!(requests.len(), 1);
+    assert!(requests[0].starts_with(b"GET /fixture/repo/resolve/"));
+}
+#[test]
+fn package_upload_immutable_resume_refuses_changed_remote_bytes_mutable_revision_and_unlink() {
+    for mode in ["changed", "mutable", "unlink"] {
+        let root = tempfile::tempdir().unwrap();
+        let a = artifact(root.path(), mode == "unlink");
+        let mut p = plan(RepositoryKind::Model, false);
+        p.revision = if mode == "mutable" {
+            "main".into()
+        } else {
+            "c".repeat(40)
+        };
+        let server = Server::start(if mode == "changed" {
+            vec![Reply {
+                status: 200,
+                body: b"[]".to_vec(),
+                hold: false,
+                headers: Vec::new(),
+            }]
+        } else {
+            Vec::new()
+        });
+        let observed = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(publisher(&server).verify_artifact_until(
+                &p,
+                a,
+                Instant::now() + Duration::from_secs(5),
+                futures::future::pending(),
+            ));
+        assert!(!observed.completed && observed.error.is_some());
+        assert!(root.path().join("item.json").exists());
+        assert_eq!(server.finish().len(), usize::from(mode == "changed"));
+    }
+}
+
+#[test]
+fn package_upload_final_quant_commit_acquires_full_same_commit_and_refuses_foreign_roster() {
+    use sha2::{Digest as _, Sha256};
+    for mode in ["success", "large", "foreign", "changed"] {
+        let count: u32 = if mode == "large" { 129 } else { 2 };
+        let success = matches!(mode, "success" | "large");
+        let root = tempfile::tempdir().unwrap();
+        let destination = root.path().canonicalize().unwrap().join("acquired");
+        let identity: String = Sha256::digest(b"{}")
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        let input = CommitRequest {
+            schema_version: 1,
+            repo: "fixture/repo".into(),
+            commit: "c".repeat(40),
+            gguf_prefix: "Q4".into(),
+            basename: "model".into(),
+            expected_splits: count,
+            artifacts: (1..=count)
+                .map(|i| CommitArtifact {
+                    path: format!("Q4/model-{i:05}-of-{count:05}.gguf"),
+                    sha256: identity.clone(),
+                    byte_size: 2,
+                })
+                .collect(),
+        };
+        let mut siblings = input
+            .artifacts
+            .iter()
+            .map(|a| json!({"rfilename":a.path}))
+            .collect::<Vec<_>>();
+        if mode == "foreign" {
+            siblings.push(json!({"rfilename":"Q4/foreign.gguf"}));
+        }
+        let mut replies = vec![reply(json!({"sha":"c".repeat(40),"siblings":siblings}))];
+        if mode != "foreign" {
+            for i in 1..=count {
+                replies.push(Reply {
+                    status: 200,
+                    body: if mode == "changed" && i == 2 {
+                        b"[]".to_vec()
+                    } else {
+                        b"{}".to_vec()
+                    },
+                    hold: false,
+                    headers: Vec::new(),
+                });
+            }
+        }
+        let server = Server::start(replies);
+        let receipt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(publisher(&server).acquire_quant_commit_until(
+                &input,
+                &destination,
+                Instant::now() + Duration::from_secs(20),
+                futures::future::pending(),
+            ));
+        assert_eq!(receipt.completed, success);
+        assert_eq!(receipt.error.is_none(), success);
+        assert_eq!(
+            receipt.verified.len(),
+            if success {
+                count as usize
+            } else if mode == "changed" {
+                1
+            } else {
+                0
+            }
+        );
+        let requests = server.finish();
+        assert_eq!(
+            requests.len(),
+            if mode == "foreign" {
+                1
+            } else {
+                count as usize + 1
+            }
+        );
+        for request in requests.iter().skip(1) {
+            assert!(
+                String::from_utf8_lossy(request)
+                    .starts_with(&format!("GET /fixture/repo/resolve/{}/", input.commit))
+            );
+        }
+        if mode == "foreign" {
+            assert!(!destination.exists());
+        } else {
+            assert_eq!(
+                fs::read(destination.join(&input.artifacts[0].path)).unwrap(),
+                b"{}"
+            );
+        }
+    }
+}
