@@ -45,10 +45,6 @@ function fitBadgeTone(label?: string): StatusBadgeTone {
   return tone === 'good' || tone === 'warn' || tone === 'bad' ? tone : 'muted'
 }
 
-function modelSummarySize(model: ModelSummary) {
-  return model.size
-}
-
 function modelSummaryContext(model: ModelSummary) {
   return model.ctxMaxK === undefined ? model.context : `${model.ctxMaxK}k`
 }
@@ -159,9 +155,6 @@ function ModelDrawerContent({
           </KV>
           <KV icon={drawerIcon(HardDrive)} label="Mesh VRAM">
             {formatModelSizeGB(model.meshVramGB)}
-          </KV>
-          <KV icon={drawerIcon(HardDrive)} label="File size">
-            {modelSummarySize(model)}
           </KV>
           <KV icon={drawerIcon(Cpu)} label="Context">
             {modelSummaryContext(model)}
