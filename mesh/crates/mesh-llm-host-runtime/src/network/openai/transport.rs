@@ -61,6 +61,8 @@ pub use route_model::route_model_request;
 /// transport failure from a client disconnect.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum RouteDispatchOutcome {
+    PolicyDenied,
+    RequiredHookFailed,
     Responded(u16),
     RespondedWithUsage {
         status_code: u16,
@@ -139,7 +141,9 @@ pub(super) fn record_virtual_model_stream_lifecycle(
             status_code: 200..=299,
             ..
         } => observer.stream_completed(None),
-        RouteDispatchOutcome::Failed(_)
+        RouteDispatchOutcome::PolicyDenied
+        | RouteDispatchOutcome::RequiredHookFailed
+        | RouteDispatchOutcome::Failed(_)
         | RouteDispatchOutcome::FailedWithStatus { .. }
         | RouteDispatchOutcome::Responded(_)
         | RouteDispatchOutcome::RespondedWithDigests { .. }
@@ -153,6 +157,8 @@ impl RouteDispatchOutcome {
         matches!(
             self,
             Self::Responded(_)
+                | Self::PolicyDenied
+                | Self::RequiredHookFailed
                 | Self::RespondedWithUsage { .. }
                 | Self::RespondedWithDigests { .. }
         )
@@ -160,6 +166,14 @@ impl RouteDispatchOutcome {
 
     pub(crate) fn terminal_outcome(self) -> crate::logging::TerminalOutcome {
         match self {
+            Self::PolicyDenied => crate::logging::TerminalOutcome::RejectedWithStatus {
+                reason: Some("plugin_policy_denied".into()),
+                status_code: 403,
+            },
+            Self::RequiredHookFailed => crate::logging::TerminalOutcome::FailedWithStatus {
+                error: "plugin_hook_unavailable".into(),
+                status_code: 503,
+            },
             Self::Responded(status @ 200..=299) => {
                 crate::logging::TerminalOutcome::CompletedWithStatus(status)
             }
@@ -1414,6 +1428,7 @@ async fn route_attempt_for_target(
     node: &mesh::Node,
     tcp_stream: &mut ClientStream,
     target: &election::InferenceTarget,
+    model: Option<&str>,
     prefetched: &[u8],
     retry_policy: ResponseRetryPolicy,
     logging: RouteAttemptLoggingContext<'_>,
@@ -1429,6 +1444,7 @@ async fn route_attempt_for_target(
                 node,
                 tcp_stream,
                 *port,
+                model,
                 prefetched,
                 retry_policy,
                 logging,
@@ -1465,6 +1481,7 @@ async fn route_local_transport_attempt(
     node: &mesh::Node,
     tcp_stream: &mut ClientStream,
     port: u16,
+    model: Option<&str>,
     prefetched: &[u8],
     retry_policy: ResponseRetryPolicy,
     logging: RouteAttemptLoggingContext<'_>,
@@ -1475,7 +1492,7 @@ async fn route_local_transport_attempt(
     };
     let route_observer = logging.route_observer;
     let lifecycle_attempt = route_observer.start_proxy_attempt();
-    let result = route_local_attempt(node, tcp_stream, port, prefetched, logging).await;
+    let result = route_local_attempt(node, tcp_stream, port, model, prefetched, logging).await;
     finish_route_attempt(
         route_observer,
         lifecycle_attempt,
@@ -1621,6 +1638,7 @@ pub async fn route_to_target(
         &node,
         &mut tcp_stream,
         &target,
+        model,
         prefetched,
         retry_policy,
         RouteAttemptLoggingContext {
@@ -1706,6 +1724,19 @@ pub async fn route_http_endpoint_request(
     request: &BufferedHttpRequest,
     route_observer: OpenAiRouteObserver<'_>,
 ) -> RouteDispatchOutcome {
+    if let Some(outcome) = super::exchange_admission::admit_selected_route(
+        node,
+        tcp_stream,
+        request,
+        model,
+        route_metadata.provider.unwrap_or("external"),
+        super::exchange_admission::SelectedRouteTarget::Url(base_url),
+        1,
+    )
+    .await
+    {
+        return outcome;
+    }
     let started = Instant::now();
     route_observer.route_selected_with_metadata(
         model,
@@ -1811,6 +1842,7 @@ pub(crate) async fn test_paid_target_attempt(
         node,
         client,
         &election::InferenceTarget::Remote(peer),
+        None,
         raw,
         ResponseRetryPolicy::next_target_available(true),
         RouteAttemptLoggingContext {
@@ -1856,6 +1888,7 @@ pub(crate) async fn test_paid_multi_target(
         request_object_request_ids: vec![],
         response_adapter: ResponseAdapter::None,
         correlation_id: None,
+        exchange_observation_id: None,
     };
     let mut targets = election::ModelTargets::default();
     targets.targets.insert(

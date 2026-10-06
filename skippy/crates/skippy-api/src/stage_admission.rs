@@ -423,6 +423,7 @@ pub fn realize_native_stage_chain(
     backend_id: &str,
     sidecars_by_stage: &[Vec<Sidecar>],
 ) -> anyhow::Result<(PackageManifest, Vec<RealizedStagePlan>)> {
+    crate::native_runtime::ensure_native_runtime_available()?;
     anyhow::ensure!(!ranges.is_empty(), "stage plan chain is empty");
     anyhow::ensure!(
         ranges.len() == sidecars_by_stage.len(),
@@ -465,6 +466,7 @@ pub fn realize_stage_admissions(
     graph_configuration_id: &str,
     backend_id: &str,
 ) -> anyhow::Result<Vec<skippy_protocol::StageAdmissionDescriptor>> {
+    crate::native_runtime::ensure_native_runtime_available()?;
     let manifest_bytes = std::fs::read(package_dir.join("model-package.json"))
         .context("read package-v2 manifest for sidecar assignment")?;
     let manifest: PackageManifest =
@@ -539,6 +541,7 @@ pub fn realize_direct_gguf_stage_admissions(
     graph_configuration_id: &str,
     backend_id: &str,
 ) -> anyhow::Result<Vec<skippy_protocol::StageAdmissionDescriptor>> {
+    crate::native_runtime::ensure_native_runtime_available()?;
     let (manifest, shard_paths) =
         crate::source::planning::direct_gguf_planning_manifest_from_identity(model_id, identity)?;
     let sidecars_by_stage = vec![Vec::new(); ranges.len()];

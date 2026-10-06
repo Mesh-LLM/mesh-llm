@@ -4,12 +4,12 @@ Date: Fri, 25 Sep 2026 16:50:20 +1000
 Subject: [PATCH] test(skippy): certify synthetic GLM-DSA stages
 
 ---
- src/CMakeLists.txt                          |  18 +++
- src/models/glm-dsa.cpp                      |  12 +-
- src/skippy/stage_program_extraction.cpp     |  22 +++-
- src/skippy/tests/graph_contract_cases.cmake |  13 ++
- tests/test-graph-contract-fixture.h         |   8 ++
- tests/test-llama-archs.cpp                  | 128 +++++++++++++++++---
+ src/CMakeLists.txt                          | 18 ++++++
+ src/models/glm-dsa.cpp                      | 12 +++-
+ src/skippy/stage_program_extraction.cpp     | 22 +++++--
+ src/skippy/tests/graph_contract_cases.cmake | 13 ++++
+ tests/test-graph-contract-fixture.h         |  8 +++
+ tests/test-llama-archs.cpp                  | 69 ++++++++++++++++++---
  6 files changed, 128 insertions(+), 14 deletions(-)
 
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
@@ -136,10 +136,10 @@ index d2eda9f7b..4ee862411 100644
 +set_tests_properties(skippy_graph_contract_glm53_synthetic PROPERTIES
 +    FIXTURES_REQUIRED contract-glm53-synthetic TIMEOUT 900)
 diff --git a/tests/test-graph-contract-fixture.h b/tests/test-graph-contract-fixture.h
-index 32ceaf95b..a59d9f212 100644
+index cf6c8dc22..0ebe0b7e9 100644
 --- a/tests/test-graph-contract-fixture.h
 +++ b/tests/test-graph-contract-fixture.h
-@@ -53,6 +53,14 @@ static int save_graph_contract_fixture(llm_arch arch, const std::string & out, u
+@@ -83,6 +83,14 @@ static int save_graph_contract_fixture(llm_arch arch, const std::string & out, u
          ggml_format_name(&probe, "blk.%u.nextn.eh_proj.weight", layers);
          gguf_add_tensor(metadata.get(), &probe);
      }

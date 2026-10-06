@@ -6,8 +6,8 @@ Subject: [PATCH] test(skippy): validate synthetic canary graph contracts
 ---
  src/CMakeLists.txt                         |  41 +++++++
  src/skippy/tests/graph_contract_models.cpp | 125 +++++++++++++++++++++
- tests/test-graph-contract-fixture.h        |  46 ++++++++
- 3 files changed, 212 insertions(+)
+ tests/test-graph-contract-fixture.h        |  77 +++++++++++++
+ 3 files changed, 243 insertions(+)
  create mode 100644 src/skippy/tests/graph_contract_models.cpp
  create mode 100644 tests/test-graph-contract-fixture.h
 
@@ -196,13 +196,43 @@ index 000000000..eb3fdefd1
 +}
 diff --git a/tests/test-graph-contract-fixture.h b/tests/test-graph-contract-fixture.h
 new file mode 100644
-index 000000000..61f936bbe
+index 000000000..2b26c9694
 --- /dev/null
 +++ b/tests/test-graph-contract-fixture.h
-@@ -0,0 +1,46 @@
+@@ -0,0 +1,77 @@
 +#pragma once
++#include <cstdio>
 +#include <filesystem>
 +#include "../src/llama-model.h"
++
++#ifdef _WIN32
++#ifndef NOMINMAX
++#define NOMINMAX
++#endif
++#ifndef WIN32_LEAN_AND_MEAN
++#define WIN32_LEAN_AND_MEAN
++#endif
++#include <windows.h>
++#include <winioctl.h>
++#endif
++
++// Extending a file leaves a hole on Linux, but NTFS allocates the whole range
++// unless the file is marked sparse first, so each fixture would take its full
++// logical size on disk (tens of GiB for the larger ones).
++static void mark_graph_contract_fixture_sparse(const std::filesystem::path & path) {
++#ifdef _WIN32
++    HANDLE file = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
++    DWORD returned = 0;
++    const bool sparse = file != INVALID_HANDLE_VALUE &&
++            DeviceIoControl(file, FSCTL_SET_SPARSE, nullptr, 0, nullptr, 0, &returned, nullptr);
++    if (file != INVALID_HANDLE_VALUE) { CloseHandle(file); }
++    if (!sparse) {
++        fprintf(stderr, "warning: cannot mark %s sparse, it will take its full size on disk\n", path.string().c_str());
++    }
++#else
++    (void) path;
++#endif
++}
 +
 +// Sparse GGUFs carry synthetic tensor shapes only; they must never run inference.
 +static int save_graph_contract_fixture(llm_arch arch, const std::string & out, uint32_t layers, uint32_t width) {
@@ -243,6 +273,7 @@ index 000000000..61f936bbe
 +        size = std::max(size, uint64_t(gguf_get_meta_size(output.get()) +
 +                gguf_get_tensor_offset(output.get(), i) + gguf_get_tensor_size(output.get(), i)));
 +    }
++    mark_graph_contract_fixture_sparse(path);
 +    std::filesystem::resize_file(path, size);
 +    return 0;
 +}

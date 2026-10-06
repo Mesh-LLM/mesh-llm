@@ -14,6 +14,7 @@ use std::future::Future;
 use std::sync::Arc;
 
 mod commands;
+mod exchange_grants;
 
 use commands::{OwnedNodeCommand, OwnedNodeCommandDeadline, OwnedNodeCommandExecutionShape};
 
@@ -799,14 +800,18 @@ impl Node {
                 }
             };
         let config_state = Arc::clone(&self.config_state);
+        let node = self.clone();
+        let runtime = tokio::runtime::Handle::current();
         let expected_revision = apply.expected_revision;
         let apply_result = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
             preflight_pushed_config_for_current_node(&mesh_config)?;
-            Ok(apply_owner_control_config_with_persistence(
+            Ok(exchange_grants::apply_with_exchange_grants(
                 config_state,
                 mesh_config,
                 expected_revision,
                 crate::runtime::config_state::PendingConfigApply::persist,
+                || runtime.block_on(node.plugin_manager()),
+                runtime.clone(),
             ))
         })
         .await

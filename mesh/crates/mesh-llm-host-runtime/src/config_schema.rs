@@ -1009,6 +1009,7 @@ mod tests {
                 install_path: PathBuf::from("/tmp/blackboard"),
                 enabled: true,
                 manifest: Some(InstalledPluginManifestMetadata {
+                    openai_exchange_hook: None,
                     config_schema: None,
                     web_ui: None,
                 }),
@@ -1263,6 +1264,7 @@ mod tests {
                 install_path: PathBuf::from("/tmp/blackboard"),
                 enabled: true,
                 manifest: Some(InstalledPluginManifestMetadata {
+                    openai_exchange_hook: None,
                     config_schema: Some(InstalledPluginConfigSchema {
                         plugin_name: "blackboard".into(),
                         schema_version: mesh_llm_plugin_manager::SUPPORTED_PLUGIN_SCHEMA_VERSION,
@@ -1336,6 +1338,7 @@ mod tests {
             install_path: PathBuf::from(format!("/tmp/{plugin_name}")),
             enabled: true,
             manifest: Some(InstalledPluginManifestMetadata {
+                openai_exchange_hook: None,
                 config_schema: Some(InstalledPluginConfigSchema {
                     plugin_name: plugin_name.into(),
                     schema_version: mesh_llm_plugin_manager::SUPPORTED_PLUGIN_SCHEMA_VERSION,

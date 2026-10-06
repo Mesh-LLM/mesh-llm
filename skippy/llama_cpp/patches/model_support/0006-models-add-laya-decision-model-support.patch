@@ -46,6 +46,7 @@ Co-authored-by: ZhangYu <zhangyub@uniontech.com>
  src/CMakeLists.txt             |    4 +-
  src/llama-arch.cpp             |   32 +
  src/llama-arch.h               |   20 +
+ src/llama-model-saver.cpp      |    1 +
  src/llama-model.cpp            |    7 +
  src/skippy/abi.cpp             |    3 +-
  src/skippy/laya.cpp            |  372 +++++++++++
@@ -54,7 +55,7 @@ Co-authored-by: ZhangYu <zhangyub@uniontech.com>
  tools/laya/laya-cli.cpp        |  670 +++++++++++++++++++
  tools/laya/laya.cpp            | 1132 ++++++++++++++++++++++++++++++++
  tools/laya/laya.h              |  119 ++++
- 19 files changed, 2803 insertions(+), 3 deletions(-)
+ 20 files changed, 2804 insertions(+), 3 deletions(-)
  create mode 100644 conversion/laya.py
  create mode 100644 include/skippy/laya.h
  create mode 100644 src/skippy/laya.cpp
@@ -425,7 +426,7 @@ index 571841a60..ac091dd24 100644
  
  #endif // SKIPPY_H
 diff --git a/include/skippy/common.h b/include/skippy/common.h
-index 8a2781dcb..cfad26ad3 100644
+index 9adaa27d4..ef74b8650 100644
 --- a/include/skippy/common.h
 +++ b/include/skippy/common.h
 @@ -46,7 +46,7 @@ extern "C" {
@@ -620,7 +621,7 @@ index 000000000..002fac598
 +
 +#endif // SKIPPY_LAYA_H
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index f393339ed..5a8961392 100644
+index 0d7bb7872..9c00568ca 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
 @@ -88,6 +88,8 @@ add_library(llama
@@ -750,6 +751,18 @@ index 4c271709f..9691bae52 100644
      LLM_TENSOR_CONV1D,
      LLM_TENSOR_CONVNEXT_DW,
      LLM_TENSOR_CONVNEXT_NORM,
+diff --git a/src/llama-model-saver.cpp b/src/llama-model-saver.cpp
+index c4cda0421..7618d8148 100644
+--- a/src/llama-model-saver.cpp
++++ b/src/llama-model-saver.cpp
+@@ -21,6 +21,7 @@ bool llama_model_saver_supports_arch(llm_arch arch) {
+         case LLM_ARCH_APERTUS:
+         case LLM_ARCH_STEP35:
+         case LLM_ARCH_INKLING:
++        case LLM_ARCH_LAYA: // decision head tensors are not in the reused ModernBERT saver
+         case LLM_ARCH_DIFFUSION_GEMMA: // same: a per-layer SWA pattern add_kv_from_model cannot write back
+             return false;
+         default:
 diff --git a/src/llama-model.cpp b/src/llama-model.cpp
 index 650cbd25f..680e1a0f8 100644
 --- a/src/llama-model.cpp

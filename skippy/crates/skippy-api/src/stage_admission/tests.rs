@@ -7,6 +7,28 @@ use std::collections::BTreeMap;
 
 const DIGEST: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
+#[cfg(feature = "dynamic-native-runtime")]
+#[test]
+fn unavailable_native_runtime_rejects_stage_planning_before_reading_package() {
+    if skippy_runtime::native_runtime_loaded() {
+        return;
+    }
+    let missing = Path::new("/missing/issue1204-package");
+    let error = realize_stage_admissions(missing, &[(0, 1)], &[], "graph", "cpu").unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("require a MeshLLM native runtime")
+    );
+    let error = realize_native_stage_chain(missing, &[(0, 1)], &[], "graph", "cpu", &[Vec::new()])
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("require a MeshLLM native runtime")
+    );
+}
+
 /// A minimal, self-consistent v2 manifest whose tensor catalog contains
 /// exactly `package.tensor.a` and `package.tensor.b`.
 fn manifest() -> PackageManifest {

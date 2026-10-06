@@ -1,5 +1,6 @@
 use super::daemon_startup::{check_mode_conflicts, resolve_effective_mode};
 use super::default_plugins::resolve_after_defaults;
+use super::failed_node_start::cleanup_failed_node_start;
 use super::join_sources;
 use super::plugin_host_role;
 use super::startup_identity::{emit_private_mesh_name_warning, handle_public_identity_transition};
@@ -45,7 +46,7 @@ use crate::runtime::{
 };
 use crate::system::{autoupdate, benchmark, hardware};
 use anyhow::{Context, Result};
-use mesh_llm_events::{LogFormat, OutputEvent, RuntimeStatus, emit_event, output_sink};
+use mesh_llm_events::{LogFormat, OutputEvent, emit_event, output_sink};
 use skippy_protocol::FlashAttentionType;
 use std::collections::{BTreeSet, HashMap};
 use std::future::Future;
@@ -397,9 +398,13 @@ pub(super) async fn run_runtime_cli(
     handle_public_identity_transition(&options)?;
 
     let mut auto_join_candidates: Vec<(String, Option<String>)> = Vec::new();
+    let native_available = skippy_runtime::native_runtime_loaded();
+    if !native_available {
+        options.max_vram = Some(0.0);
+    }
     let auto_local_fit_gb = maybe_discover_join_candidates(
         &mut options,
-        has_startup_models,
+        has_startup_models || !native_available,
         &mut auto_join_candidates,
         config.gpu.host_ram_offload.unwrap_or(false),
     )
@@ -407,7 +412,7 @@ pub(super) async fn run_runtime_cli(
     maybe_select_small_auto_contribution(
         &mut options,
         effective_mode,
-        has_startup_models,
+        has_startup_models || !native_available,
         &auto_join_candidates,
         auto_local_fit_gb,
     );
@@ -909,7 +914,7 @@ pub(super) async fn start_run_auto_node_and_plugins(
     if !options.headless && owner_config.keypair.is_none() {
         emit_configuration_ui_read_only_hint();
     }
-    let max_vram = if options.client {
+    let max_vram = if options.client || !skippy_runtime::native_runtime_loaded() {
         Some(0.0)
     } else {
         options.max_vram
@@ -951,10 +956,14 @@ pub(super) async fn start_run_auto_node_and_plugins(
         .iter()
         .any(|spec| spec.name == plugin::MOA_PLUGIN_ID)
     {
-        anyhow::bail!(
-            "Plugin name '{}' is reserved for the built-in MoA virtual model",
-            plugin::MOA_PLUGIN_ID
-        );
+        return Err(cleanup_failed_node_start(
+            &node,
+            anyhow::anyhow!(
+                "Plugin name '{}' is reserved for the built-in MoA virtual model",
+                plugin::MOA_PLUGIN_ID
+            ),
+        )
+        .await);
     }
     let mut moa_spec = plugin::in_process_builtin_spec(plugin::MOA_PLUGIN_ID);
     moa_spec.startup.optional = false;
@@ -966,16 +975,27 @@ pub(super) async fn start_run_auto_node_and_plugins(
     let moa_runner: plugin::InProcessPluginRunner =
         std::sync::Arc::new(|stream| Box::pin(mesh_llm_moa_plugin::run(stream)));
     let in_process = in_process.with(plugin::MOA_PLUGIN_ID, moa_runner);
-    let plugin_manager = plugin::PluginManager::start_with_in_process(
+    let plugin_manager = match plugin::PluginManager::start_with_in_process(
         &resolved_plugins,
         plugin_host_mode(options),
         plugin_mesh_tx,
         in_process,
     )
-    .await?;
+    .await
+    {
+        Ok(manager) => manager,
+        Err(error) => return Err(cleanup_failed_node_start(&node, error).await),
+    };
+    if let Err(error) =
+        crate::system::native_runtime_requirement::confirm_external_provider(&plugin_manager).await
+    {
+        plugin_manager.shutdown().await;
+        return Err(cleanup_failed_node_start(&node, error).await);
+    }
     crate::network::openai::virtual_model::install_inference_bridge(&plugin_manager, options.port)
         .await;
-    node.set_plugin_manager(plugin_manager.clone()).await;
+    node.install_plugin_manager_with_exchange_grants(plugin_manager.clone())
+        .await?;
     #[cfg(feature = "payments")]
     crate::network::payments::spawn_payment_recovery(&node).await;
     node.start_plugin_channel_forwarder(plugin_mesh_rx);
@@ -1107,7 +1127,7 @@ pub(super) fn start_relay_health_monitor_for_discovery_mode(
 }
 
 pub(super) fn run_auto_survey_hardware(is_client: bool) -> hardware::HardwareSurvey {
-    if is_client {
+    if is_client || !skippy_runtime::native_runtime_loaded() {
         hardware::HardwareSurvey::default()
     } else {
         hardware::query(&[
@@ -1136,7 +1156,7 @@ pub(super) async fn build_run_auto_node_setup(
     let console_port = Some(options.console);
     let is_client = options.client;
     let skippy_telemetry = skippy_telemetry_options(options);
-    let local_models = if is_client {
+    let local_models = if is_client || !skippy_runtime::native_runtime_loaded() {
         vec![]
     } else {
         models::scan_local_models()
@@ -1173,7 +1193,7 @@ pub(super) async fn build_run_auto_node_setup(
     start_relay_health_monitor_for_discovery_mode(&node, options.mesh_discovery_mode);
     let lan_bootstrap_tasks = spawn_mdns_reverse_dial(options, &node);
 
-    if !is_client {
+    if !is_client && skippy_runtime::native_runtime_loaded() {
         spawn_node_benchmark_task(&node, bin_dir);
         raise_open_file_limit();
     } else {
@@ -1900,18 +1920,7 @@ async fn run_auto_inner(
         config.runtime.startup_failure_policy,
     );
     if startup_specs.is_empty() {
-        let _ = emit_event(OutputEvent::PassiveMode {
-            role: if is_client { "client" } else { "standby" }.to_string(),
-            status: RuntimeStatus::Ready,
-            capacity_gb: (!is_client).then(|| node.vram_bytes() as f64 / 1e9),
-            models_on_disk: (!is_client).then_some(local_models),
-            detail: Some(if is_client {
-                "Client daemon ready; local model loading is disabled".to_string()
-            } else {
-                "Runtime daemon ready; no local models are loaded".to_string()
-            }),
-        });
-        record_runtime_operational_event(RuntimeOperationalEvent::Ready);
+        super::passive_readiness::emit_passive_ready(is_client, &node, local_models);
     }
 
     // Discovery publish loop (if --publish) or Nostr watchdog (if --auto, to take over if publisher dies).
@@ -2102,6 +2111,7 @@ mod tests {
                 web_ui_enabled: None,
                 web_ui_primary_tab: None,
                 allow_peer_blocks: None,
+                openai_exchange_grant: None,
                 command: Some("invalid-blobstore-command".to_owned()),
                 args: Vec::new(),
                 url: None,
