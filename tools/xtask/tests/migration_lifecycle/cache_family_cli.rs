@@ -228,3 +228,178 @@ fn cache_producer_actual_cli_fifo_input_refuses_without_writer_or_publication() 
     assert!(!f.invoke(&output).success());
     assert!(!output.exists());
 }
+
+#[test]
+fn cache_correctness_batch_actual_cli_pass_failure_missing_table_and_freshness() {
+    for mode in ["pass", "split", "fail", "missing", "stale"] {
+        let f = Fixture::new();
+        let catalog: Json = serde_json::from_slice(include_bytes!(
+            "../../src/automation/cache_family_plan/catalog.json"
+        ))
+        .unwrap();
+        let case = catalog
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|v| v["key"] == "llama")
+            .unwrap();
+        let cache = f.root.join("cache");
+        fs::create_dir(&cache).unwrap();
+        let model = cache.join(case["snapshot_relative"].as_str().unwrap());
+        let mut profile: Json = serde_json::from_slice(&fs::read(&f.input).unwrap()).unwrap();
+        if mode != "missing" {
+            fs::create_dir_all(model.parent().unwrap()).unwrap();
+            fs::copy(f.root.join("model.gguf"), &model).unwrap();
+            profile["model"] = json!(model);
+            profile["model_id"] = case["model_id"].clone();
+            let mut product = fs::read_to_string(f.root.join("correctness")).unwrap();
+            product = product.replace("[ \"$2\" = fixture ] || exit 65", ":");
+            product = product.replace(
+                "--n-gpu-layers=-1)",
+                "--borrow-resident-hits) borrowed=yes; shift; continue;; --n-gpu-layers=-1)",
+            );
+            product = product.replace(
+                "[ \"$prompt\" = fail ]",
+                "[ \"$borrowed\" = yes ] || exit 68\n[ \"$prompt\" = fail ]",
+            );
+            product = product.replace("|--runtime-lane-count", "");
+            product = product.replace(
+                "--model) model=",
+                "--runtime-lane-count) [ \"$2\" = 4 ] || exit 69;; --model) model=",
+            );
+            product = product.replace("--state-layer-start) [ \"$2\" = 0 ] || exit 65;; --state-layer-end|--layer-end) [ \"$2\" = 6 ] || exit 65;;", "--state-layer-start) start=\"$2\";; --state-layer-end) end=\"$2\";; --layer-end) [ \"$2\" = 6 ] || exit 65;;");
+            product = product.replace("|--state-stage-index", "");
+            product = product.replace(
+                "--model) model=",
+                "--state-stage-index) stage=\"$2\";; --model) model=",
+            );
+            product = product.replace("/bin/cat \"${model%/*}/report.json\" > \"$output\"", "/usr/bin/sed -e \"s/\\\"stage_index\\\":0/\\\"stage_index\\\":$stage/\" -e \"s/\\\"layer_start\\\":0/\\\"layer_start\\\":$start/\" -e \"s/\\\"layer_end\\\":6/\\\"layer_end\\\":$end/\" \"${model%/*}/report.json\" > \"$output\"");
+            fs::write(f.root.join("correctness"), &product).unwrap();
+            profile["correctness_sha256"] = json!(hash(product.as_bytes()));
+            profile["stage_server_sha256"] = profile["correctness_sha256"].clone();
+            let mut report: Json =
+                serde_json::from_slice(&fs::read(f.root.join("report.json")).unwrap()).unwrap();
+            report["model_identity"]["model_id"] = case["model_id"].clone();
+            report["prompt_token_count"] = json!(8);
+            report["state_bytes"] = json!(16);
+            fs::write(
+                model.parent().unwrap().join("report.json"),
+                serde_json::to_vec(&report).unwrap(),
+            )
+            .unwrap();
+            if mode == "fail" {
+                profile["prompt"] = json!("fail");
+            }
+            if mode == "stale" {
+                profile["model_sha256"] = json!("b".repeat(64));
+            }
+        }
+        let prepared = f.root.join("prepared.json");
+        let plan = json!({"schema_version":1,"cache_root":cache,"cases":["llama"],"use_cases":[],"corpus":null,"prefix_sweep":[],"prefix_tokens":null,"n_gpu_layers":null,"cache_hit_repeats":null,"runtime_lane_count":1,"serving_ctx_size":512,"concurrency":[1],"concurrent_requests":1,"concurrent_output_tokens":1,"llama_parallel":1,"llama_repeats":1,"ttft_slo_ms":1000,"tpot_slo_ms":1000,"skip_llama_server":true,"old_server":null,"new_server":null,"model_sha256":{}});
+        fs::write(&prepared,serde_json::to_vec(&json!({"schema_version":1,"plan":plan,"profiles":if mode=="missing"{json!({})}else{json!({"llama":{"correctness":profile,"native":null,"old":null,"new":null}})},"execution_seconds":30,"cell_seconds":15,"request_timeout_ms":1000})).unwrap()).unwrap();
+        fs::write(&f.input,serde_json::to_vec(&json!({"schema_version":1,"prepared_input":prepared,"cases":["llama"],"topologies":if mode=="split"{json!(["one-stage","split-middle","split-final"])}else{json!(["one-stage"])},"prefix_tokens":8,"cache_hit_repeats":2,"runtime_lane_count":4,"n_gpu_layers":null,"execution_seconds":30})).unwrap()).unwrap();
+        let output = f.root.join("batch");
+        let invoke = || {
+            process::supervise(
+                &ProcessSpec {
+                    executable: env!("CARGO_BIN_EXE_xtask").into(),
+                    arguments: [
+                        "automation".into(),
+                        "cache-family-correctness".into(),
+                        "batch".into(),
+                        "--input".into(),
+                        f.input.clone().into_os_string(),
+                        "--output".into(),
+                        output.clone().into_os_string(),
+                    ]
+                    .into_iter()
+                    .map(Value::Public)
+                    .collect(),
+                    cwd: f.root.clone(),
+                    environment: BTreeMap::new(),
+                },
+                &Limits {
+                    execution: Duration::from_secs(40),
+                    graceful_shutdown: Duration::from_secs(1),
+                    forced_shutdown: Duration::from_secs(1),
+                    retained_bytes_per_stream: 1024 * 1024,
+                    readiness: Readiness::None,
+                    completion: Completion::Exit,
+                },
+                &Cancellation::default(),
+                OutputFiles::default(),
+            )
+            .unwrap()
+        };
+        let observed = invoke();
+        assert!(
+            observed.cleanup.complete
+                && !observed.cleanup.forced
+                && observed.cleanup.failure.is_none()
+                && !observed.cleanup.graceful_signal_failed
+        );
+        assert!(observed.failure.is_none());
+        assert_eq!(observed.outcome, process::Outcome::Exited);
+        assert!(
+            [&observed.stdout, &observed.stderr]
+                .iter()
+                .all(|s| s.line_capture_complete && !s.truncated && s.oversized_lines == 0)
+        );
+        assert_eq!(
+            observed.success(),
+            mode == "pass" || mode == "split" || mode == "missing"
+        );
+        let rows: Json =
+            serde_json::from_slice(&fs::read(output.join("cache-correctness-table.json")).unwrap())
+                .unwrap();
+        assert_eq!(
+            rows.as_array().unwrap().len(),
+            if mode == "split" { 3 } else { 1 }
+        );
+        assert_eq!(
+            rows[0]["status"],
+            match mode {
+                "pass" | "split" => "pass",
+                "missing" => "missing-model",
+                "fail" => "failed-process",
+                _ => "refused",
+            }
+        );
+        let raw: Json =
+            serde_json::from_slice(&fs::read(output.join("cache-correctness-gate.json")).unwrap())
+                .unwrap();
+        assert_eq!(
+            raw.as_array().unwrap().len(),
+            if mode == "split" {
+                3
+            } else {
+                usize::from(mode != "missing")
+            }
+        );
+        assert!(
+            fs::read_to_string(output.join("cache-correctness-table.md"))
+                .unwrap()
+                .contains("Promotion")
+        );
+        if mode == "pass" || mode == "split" {
+            assert_eq!(rows[0]["state_bytes"], 16);
+            assert_eq!(rows[0]["suffix_tokens"], 1);
+            assert_eq!(raw[0]["evidence"]["admitted"]["borrow_resident_hits"], true);
+            assert_eq!(raw[0]["evidence"]["admitted"]["runtime_lane_count"], 4);
+        }
+        if mode == "split" {
+            assert!(
+                rows.as_array()
+                    .unwrap()
+                    .iter()
+                    .all(|r| r["status"] == "pass")
+            );
+            assert_eq!(raw[1]["report"]["layer_start"], 2);
+            assert_eq!(raw[1]["report"]["layer_end"], 4);
+            assert_eq!(raw[2]["report"]["stage_index"], 2);
+        }
+        let before = fs::read(output.join("batch-summary.json")).unwrap();
+        assert!(!invoke().success());
+        assert_eq!(before, fs::read(output.join("batch-summary.json")).unwrap());
+    }
+}

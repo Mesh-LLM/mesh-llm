@@ -42,3 +42,8 @@ pub(crate) fn run(args: &[String]) -> DynResult<()> {
     crate::automation::waiting_prefix::adaptive_identity::fresh(Path::new(output), &bytes)?;
     Ok(())
 }
+
+/// Reuse the catalog/profile planner with an already bounded local request.
+pub(in crate::automation) fn plan_value(value: serde_json::Value) -> DynResult<serde_json::Value> {
+    planning::plan(&serde_json::from_value::<contract::Input>(value)?)
+}

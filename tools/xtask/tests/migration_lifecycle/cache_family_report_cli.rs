@@ -174,56 +174,60 @@ fn malformed_negative_overflow_and_failed_correctness_cannot_publish_performance
 
 #[test]
 fn actual_report_caller_preserves_two_inputs_and_configured_invalid_owner_fails_closed() {
+    use std::os::unix::fs::PermissionsExt as _;
     let directory = tempfile::tempdir().unwrap();
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let caller = fs::read_to_string(root.join("evals/skippy-cache-family-bench.sh")).unwrap();
-    let selector = caller
-        .split_once("report_automation=")
-        .map(|(_, rest)| rest)
-        .unwrap()
-        .split("RUN_ID=")
-        .next()
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .canonicalize()
         .unwrap();
-    let command = caller
-        .split("(cd \"$ROOT\" && \"${report_automation[@]}\" automation cache-family-report")
-        .nth(1)
-        .unwrap()
-        .split("\n\nprintf 'Wrote raw")
-        .next()
+    let automation = directory.path().join("supplied automation");
+    fs::write(&automation, "#!/bin/bash\nif [[ $1 == automation && $2 == cache-family-report ]]; then exec \"$XTASK_REPORT_BIN\" \"$@\"; fi\nexit 0\n").unwrap();
+    fs::set_permissions(&automation, fs::Permissions::from_mode(0o700)).unwrap();
+    let operator = directory.path().join("operator.json");
+    fs::write(&operator, "{}").unwrap();
+    let corpus = directory.path().join("corpus.json");
+    fs::write(&corpus, r#"{"use_cases":[]}"#).unwrap();
+    for (index, valid) in [true, false, false].into_iter().enumerate() {
+        let output = directory.path().join(format!("results {index}"));
+        let full = output.join("full-gguf");
+        let cases = output.join("use-cases");
+        fs::create_dir_all(&full).unwrap();
+        fs::create_dir(&cases).unwrap();
+        fs::write(
+            full.join("production-cache-bench.json"),
+            serde_json::to_vec(&json!([row("Llama")])).unwrap(),
+        )
         .unwrap();
-    let shell = format!(
-        "set -euo pipefail\nreport_automation={selector}\n(cd \"$ROOT\" && \"${{report_automation[@]}}\" automation cache-family-report{command}\n"
-    );
-    let full = directory.path().join("full results");
-    let cases = directory.path().join("use cases");
-    fs::create_dir(&full).unwrap();
-    fs::create_dir(&cases).unwrap();
-    fs::write(
-        full.join("production-cache-bench.json"),
-        serde_json::to_vec(&json!([row("Llama")])).unwrap(),
-    )
-    .unwrap();
-    fs::write(cases.join("production-cache-bench.json"), "[]").unwrap();
-    for owner in [env!("CARGO_BIN_EXE_xtask"), "", "relative-owner"] {
-        let destination = directory.path().join(format!("result {}.md", owner.len()));
+        fs::write(cases.join("production-cache-bench.json"), "[]").unwrap();
+        let owner = if valid {
+            automation.as_os_str().to_owned()
+        } else if index == 1 {
+            "".into()
+        } else {
+            "relative-owner".into()
+        };
         let environment = BTreeMap::from([
+            ("PATH".into(), Value::Public("/usr/bin:/bin".into())),
             (
-                "ROOT".into(),
-                Value::Public(root.canonicalize().unwrap().into()),
+                "XTASK_REPORT_BIN".into(),
+                Value::Public(env!("CARGO_BIN_EXE_xtask").into()),
             ),
-            ("FULL_DIR".into(), Value::Public(full.clone().into())),
-            ("USECASE_DIR".into(), Value::Public(cases.clone().into())),
-            ("REPORT".into(), Value::Public(destination.clone().into())),
             (
-                "MESH_LLM_AUTOMATION_BIN".into(),
-                Value::Public(owner.into()),
+                "SKIPPY_CACHE_OPERATOR_INPUT".into(),
+                Value::Public(operator.clone().into()),
             ),
+            ("SKIPPY_CACHE_SKIP_BUILD".into(), Value::Public("1".into())),
+            (
+                "SKIPPY_CACHE_USECASE_CORPUS".into(),
+                Value::Public(corpus.clone().into()),
+            ),
+            ("MESH_LLM_AUTOMATION_BIN".into(), Value::Public(owner)),
         ]);
         let spec = ProcessSpec {
             executable: "/bin/bash".into(),
             arguments: vec![
-                Value::Public("-c".into()),
-                Value::Public(shell.clone().into()),
+                Value::Public(root.join("evals/skippy-cache-family-bench.sh").into()),
+                Value::Public(output.clone().into()),
             ],
             cwd: directory.path().into(),
             environment,
@@ -244,13 +248,10 @@ fn actual_report_caller_preserves_two_inputs_and_configured_invalid_owner_fails_
         )
         .unwrap();
         assert!(given.cleanup.complete, "{given:?}");
-        assert_eq!(
-            given.success(),
-            !owner.is_empty() && owner.starts_with('/'),
-            "{given:?}"
-        );
-        assert_eq!(destination.exists(), given.success());
-        if given.success() {
+        assert_eq!(given.success(), valid, "{given:?}");
+        let destination = output.join("readme-tables.md");
+        assert_eq!(destination.exists(), valid);
+        if valid {
             assert!(
                 fs::read_to_string(destination)
                     .unwrap()

@@ -2,11 +2,13 @@
 #[path = "cache_family_run/child.rs"]
 mod child;
 #[path = "cache_family_run/contract.rs"]
-mod contract;
+pub(in crate::automation) mod contract;
 #[path = "cache_family_run/metrics.rs"]
 mod metrics;
 #[path = "cache_family_run/pipeline.rs"]
 mod pipeline;
+#[path = "cache_family_run/preparation.rs"]
+mod preparation;
 #[path = "cache_family_run/reporting.rs"]
 mod reporting;
 #[path = "cache_family_run/sweeps.rs"]
@@ -29,10 +31,30 @@ fn publish(path: &Path, value: &Value) -> DynResult<()> {
     crate::automation::waiting_prefix::adaptive_identity::fresh(path, &bytes)
 }
 pub(crate) fn run(args: &[String]) -> DynResult<()> {
+    if let [verb, rest @ ..] = args {
+        match verb.as_str() {
+            "prepare-full" => return preparation::run(rest, false),
+            "prepare-use-cases" => return preparation::run(rest, true),
+            "prepare-worker" => {
+                let [a, input, b, output] = rest else {
+                    return Err("cache preparation worker ordered paths".into());
+                };
+                if a != "--input"
+                    || b != "--output"
+                    || !Path::new(input).is_absolute()
+                    || !Path::new(output).is_absolute()
+                {
+                    return Err("cache preparation worker absolute paths required".into());
+                }
+                return preparation::worker(Path::new(input), Path::new(output));
+            }
+            _ => {}
+        }
+    }
     if args == ["--help"] {
         writeln!(
             std::io::stdout().lock(),
-            "cargo xtool automation cache-family-run --input ABS_JSON --output ABS_FRESH_DIRECTORY"
+            "cargo xtool automation cache-family-run [prepare-full|prepare-use-cases] --input ABS_JSON --output ABS_FRESH_DIRECTORY"
         )?;
         return Ok(());
     }
