@@ -162,3 +162,164 @@ fn adaptive_optional_calibration_projects_only_finite_numeric_allowlist_and_keep
     observation.observe(serde_json::to_vec(&json!({"event":"stage.openai_prefill_calibration","attributes":{"llama_stage.prefill_bottleneck_compute_ms":-1.0}})).unwrap().as_slice());
     assert!(observation.error.is_some());
 }
+
+fn completed_observations() -> Value {
+    let root = tempfile::tempdir().unwrap();
+    let given = input(root.path());
+    let output = execute_with(
+        &given,
+        root.path(),
+        Instant::now() + Duration::from_secs(300),
+        &Cancellation::default(),
+        |_, _, _, _| Ok(cell(1.0)),
+    );
+    assert!(output["error"].is_null());
+    assert_eq!(output["cells"].as_array().unwrap().len(), 8);
+    assert!(output["comparison"].is_object());
+    root.close().unwrap();
+    output
+}
+fn assert_terminal_refusal(output: &Value, observed: &Value, reason: &str) {
+    assert_eq!(output["status"], "adaptive_matrix_failed");
+    assert_eq!(output["comparison_admitted"], false);
+    assert_eq!(output["terminal_error"], reason);
+    assert_eq!(output["cells"], observed["cells"]);
+    assert_eq!(output["comparison"], observed["comparison"]);
+    let markdown = rendered(output);
+    assert!(markdown.starts_with("Adaptive comparison NOT admitted:"));
+    assert!(markdown.contains("Retained values are observations"));
+}
+#[test]
+fn adaptive_terminal_success_admits_completed_owned_comparison() {
+    let mut output = completed_observations();
+    let observed = output.clone();
+    finalize(
+        &mut output,
+        Ok(()),
+        &Cancellation::default(),
+        Instant::now() + Duration::from_secs(60),
+    )
+    .unwrap();
+    assert_eq!(output["status"], "adaptive_matrix_admitted");
+    assert_eq!(output["comparison_admitted"], true);
+    assert!(output["terminal_error"].is_null());
+    assert!(output["error"].is_null());
+    assert_eq!(output["cells"], observed["cells"]);
+    assert_eq!(output["comparison"], observed["comparison"]);
+    assert!(rendered(&output).starts_with("Adaptive comparison admitted."));
+}
+#[test]
+fn adaptive_terminal_late_cancel_retains_completed_comparison_without_admission() {
+    let mut output = completed_observations();
+    let observed = output.clone();
+    let cancellation = Cancellation::default();
+    cancellation.cancel();
+    assert!(
+        finalize(
+            &mut output,
+            Ok(()),
+            &cancellation,
+            Instant::now() + Duration::from_secs(60)
+        )
+        .is_err()
+    );
+    assert_terminal_refusal(&output, &observed, "adaptive terminal cancellation");
+    assert_eq!(output["error"], output["terminal_error"]);
+}
+#[test]
+fn adaptive_terminal_deadline_retains_completed_comparison_without_admission() {
+    let mut output = completed_observations();
+    let observed = output.clone();
+    assert!(
+        finalize(
+            &mut output,
+            Ok(()),
+            &Cancellation::default(),
+            Instant::now()
+        )
+        .is_err()
+    );
+    assert_terminal_refusal(&output, &observed, "adaptive terminal deadline exhausted");
+    assert_eq!(output["error"], output["terminal_error"]);
+}
+#[test]
+fn adaptive_terminal_finish_failure_preserves_prior_diagnostic_and_observations() {
+    for previous in [None, Some("earlier owned cell diagnostic")] {
+        let mut output = completed_observations();
+        if let Some(reason) = previous {
+            output["error"] = json!(reason);
+        }
+        let observed = output.clone();
+        assert!(
+            finalize(
+                &mut output,
+                Err("private finish detail must not replace prior evidence".into()),
+                &Cancellation::default(),
+                Instant::now() + Duration::from_secs(60)
+            )
+            .is_err()
+        );
+        assert_terminal_refusal(&output, &observed, "adaptive interrupt finalization failed");
+        assert_eq!(
+            output["error"],
+            json!(previous.unwrap_or("adaptive interrupt finalization failed"))
+        );
+        assert!(
+            !serde_json::to_string(&output)
+                .unwrap()
+                .contains("private finish detail")
+        );
+    }
+}
+
+#[test]
+fn adaptive_preparation_binds_typed_manifest_provenance_and_refuses_stale_pin() {
+    let root = tempfile::tempdir().unwrap();
+    let mut given = input(root.path());
+    given.worker = json!({"schema_version":1,"output_tokens":8,"request_timeout_secs":5.0,"timeout_secs":10,"manifest":{"metadata":{"source":"declared-fixture"},"prompts":[{"family":"trace","prompt":"observed prompt","source_id":"row-1"}]},"provenance":{"operator":"declared"}});
+    prepare_input(&mut given).unwrap();
+    assert_eq!(
+        given.worker["manifest"]["metadata"]["source"],
+        "declared-fixture"
+    );
+    assert_eq!(given.worker["manifest"]["prompts"][0]["source_id"], "row-1");
+    assert_eq!(given.worker["provenance"]["operator"], "declared");
+    let typed: super::super::sequential_cell::Input =
+        serde_json::from_value(given.worker.clone()).unwrap();
+    typed.validate().unwrap();
+    let synthetic = super::super::synthetic_prompts::interleaved(1, 6, 384).unwrap();
+    let mut large = input(root.path());
+    large.worker = json!({"schema_version":1,"output_tokens":8,"request_timeout_secs":5.0,"timeout_secs":10,"manifest":{"metadata":{},"prompts":synthetic.iter().map(|prompt|json!({"family":prompt.family,"prompt":prompt.prompt})).collect::<Vec<_>>()},"provenance":{}});
+    assert!(synthetic[0].prompt.len() > 16 * 1024);
+    prepare_input(&mut large).unwrap();
+    for prompts in [
+        vec![json!({"family":"oversize","prompt":"x".repeat(256*1024+1)})],
+        (0..33)
+            .map(|i| json!({"family":format!("aggregate-{i}"),"prompt":"x".repeat(256*1024)}))
+            .collect(),
+    ] {
+        large.worker["manifest"]["prompts"] = json!(prompts);
+        large
+            .worker
+            .as_object_mut()
+            .unwrap()
+            .remove("prompt_manifest_sha256");
+        assert!(prepare_input(&mut large).is_err());
+    }
+    let pin = given.worker["prompt_manifest_sha256"].clone();
+    prepare_input(&mut given).unwrap();
+    assert_eq!(given.worker["prompt_manifest_sha256"], pin);
+    given.worker["manifest"]["prompts"][0]["source_id"] = json!("changed");
+    assert!(prepare_input(&mut given).is_err());
+    given
+        .worker
+        .as_object_mut()
+        .unwrap()
+        .remove("prompt_manifest_sha256");
+    given.worker["manifest"]["prompts"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("family");
+    assert!(prepare_input(&mut given).is_err());
+    root.close().unwrap();
+}

@@ -117,3 +117,67 @@ fn explicit_invalid_ports_are_rejected_before_fallback_or_report_publication() {
         assert_eq!(transport::socket_port(&uri).unwrap(), port);
     }
 }
+
+#[test]
+fn custom_driver_request_timeout_and_overall_budget_are_independent_closed_options() {
+    let mut a = args();
+    a.extend([
+        "--timeout".into(),
+        "900".into(),
+        "--driver-executable".into(),
+        "/inert/driver".into(),
+        "--driver-timeout".into(),
+        "0.2".into(),
+    ]);
+    let o = Options::parse(&a).unwrap();
+    assert_eq!(o.timeout, Duration::from_secs(900));
+    assert_eq!(o.driver_timeout, Duration::from_millis(200));
+    for value in ["0", "NaN", "inf", "86401"] {
+        *a.last_mut().unwrap() = value.into();
+        assert!(Options::parse(&a).is_err());
+    }
+    let mut a = args();
+    a.extend(["--driver-timeout".into(), "10".into()]);
+    assert!(Options::parse(&a).is_err());
+}
+
+#[test]
+fn custom_driver_forwarding_never_interprets_literal_values_as_owner_flags() {
+    let a = [
+        "--driver-executable=/inert/driver",
+        "--base-url=http://127.0.0.1:9337/",
+        "--model=--driver-timeout",
+        "--alias=literal ; $() alias",
+        "--mode=contract",
+        "--timeout=0900.0",
+        "--driver-timeout=20",
+        "--json-out=report with spaces",
+    ]
+    .map(str::to_owned);
+    let options = Options::parse(&a).unwrap();
+    let forwarded = driver::forwarded(&options);
+    let values: Vec<_> = forwarded
+        .iter()
+        .map(|value| match value {
+            crate::process::Value::Public(value) => value.to_str().unwrap(),
+            crate::process::Value::Secret(_) => panic!("fixture contains no secret"),
+        })
+        .collect();
+    assert_eq!(
+        values,
+        [
+            "--base-url",
+            "http://127.0.0.1:9337/",
+            "--model",
+            "--driver-timeout",
+            "--alias",
+            "literal ; $() alias",
+            "--mode",
+            "contract",
+            "--timeout",
+            "0900.0",
+            "--json-out",
+            "report with spaces"
+        ]
+    );
+}

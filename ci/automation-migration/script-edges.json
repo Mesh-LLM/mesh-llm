@@ -56,65 +56,15 @@
       ]
     },
     {
-      "file": "scripts/skippy-wan-calibrate.sh",
-      "members": [
-        [
-          26,
-          "38f3c337d203d20b",
-          1,
-          "inline",
-          "RTT halving",
-          "python3 - argv avg_rtt; prints half RTT to three decimals into one_way; failure aborts calibration; no file write at invocation"
-        ],
-        [
-          36,
-          "2714fc4b37a1859c",
-          1,
-          "inline",
-          "iperf bitrate estimate",
-          "IPERF_JSON env passed to python3 -; prints rounded minimum-one Mbit/s if sender bitrate exists, empty otherwise; captured by shell, failure aborts; later shell writes calibration env file"
-        ]
-      ]
-    },
-    {
-      "file": "scripts/remote-handoff-sweep.sh",
-      "members": [
-        [
-          38,
-          "87d54e00cdd8e2d6",
-          1,
-          "inline",
-          "remote-handoff benchmark report",
-          "Optional sender sweep reads OUT_DIR/send-*.json results and prints prefix, transfer, TTFT and match table; malformed result fails report, no write"
-        ]
-      ]
-    },
-    {
       "file": "scripts/skippy-system-one-smoke.sh",
       "members": [
         [
-          61,
-          "a00f365fe9125d7b",
+          392,
+          "ef0bb1f6575bcdb1",
           1,
-          "selection",
-          "scripts/skippy-system-one-cases.py or SYSTEMONE_SMOKE_DRIVER",
-          "Dormant default Python path metadata; only explicit SYSTEMONE_SMOKE_DRIVER selects the Python array at line 277, launched through mixed case_command at line 279. Default driver is typed; override unclassified and owning wrapper qualification pending."
-        ],
-        [
-          277,
-          "947fe40b5572b45c",
-          1,
-          "indirect",
-          "explicit SYSTEMONE_SMOKE_DRIVER Python command array",
-          "Only configured override selects Python; mixed default/override execution remains separately source-bound. No Python exception or qualification claimed."
-        ],
-        [
-          385,
-          "9eb9d13a25607acc",
-          1,
-          "selection",
-          "python3 availability",
-          "Python availability is checked only inside explicit SYSTEMONE_SMOKE_DRIVER admission; typed default and prewarm require no Python. Override remains unclassified."
+          "data",
+          "Python-script suffix refusal",
+          "Explicit custom driver refuses .py before launch; default and allowed absolute regular executable use native/executable-only typed System One case arguments. No interpreter is launched by this condition."
         ]
       ]
     },
@@ -209,15 +159,7 @@
       "file": "scripts/run-llama-benchy-openai.sh",
       "members": [
         [
-          25,
-          "3c8402cdd14b1a8b",
-          1,
-          "inline",
-          "OpenAI model discovery",
-          "python3 - argv BASE_URL API_KEY; authenticated GET BASE_URL/models with 10s timeout, prints first model ID into MODEL; missing model/nonzero aborts benchmark"
-        ],
-        [
-          59,
+          50,
           "664ebfd043b0ab5f",
           1,
           "environment",
@@ -19217,5 +19159,105 @@
         "limits": "Complete local current retirement normal only; no HF/native/model/Windows/hosted qualification."
       }
     }
+  },
+  "current_native_adapter_reconciliation": {
+    "retired_active_members": [
+      {
+        "file": "scripts/skippy-wan-calibrate.sh",
+        "members": [
+          [
+            26,
+            "38f3c337d203d20b",
+            1,
+            "inline",
+            "RTT halving",
+            "python3 - argv avg_rtt; prints half RTT to three decimals into one_way; failure aborts calibration; no file write at invocation"
+          ],
+          [
+            36,
+            "2714fc4b37a1859c",
+            1,
+            "inline",
+            "iperf bitrate estimate",
+            "IPERF_JSON env passed to python3 -; prints rounded minimum-one Mbit/s if sender bitrate exists, empty otherwise; captured by shell, failure aborts; later shell writes calibration env file"
+          ]
+        ]
+      },
+      {
+        "file": "scripts/remote-handoff-sweep.sh",
+        "members": [
+          [
+            38,
+            "87d54e00cdd8e2d6",
+            1,
+            "inline",
+            "remote-handoff benchmark report",
+            "Optional sender sweep reads OUT_DIR/send-*.json results and prints prefix, transfer, TTFT and match table; malformed result fails report, no write"
+          ]
+        ]
+      },
+      {
+        "file": "scripts/run-llama-benchy-openai.sh",
+        "members": [
+          [
+            25,
+            "3c8402cdd14b1a8b",
+            1,
+            "inline",
+            "OpenAI model discovery",
+            "python3 - argv BASE_URL API_KEY; authenticated GET BASE_URL/models with 10s timeout, prints first model ID into MODEL; missing model/nonzero aborts benchmark"
+          ]
+        ]
+      },
+      {
+        "file": "scripts/skippy-system-one-smoke.sh",
+        "members": [
+          [
+            61,
+            "a00f365fe9125d7b",
+            1,
+            "selection",
+            "scripts/skippy-system-one-cases.py or SYSTEMONE_SMOKE_DRIVER",
+            "Dormant default Python path metadata; only explicit SYSTEMONE_SMOKE_DRIVER selects the Python array at line 277, launched through mixed case_command at line 279. Default driver is typed; override unclassified and owning wrapper qualification pending."
+          ],
+          [
+            277,
+            "947fe40b5572b45c",
+            1,
+            "indirect",
+            "explicit SYSTEMONE_SMOKE_DRIVER Python command array",
+            "Only configured override selects Python; mixed default/override execution remains separately source-bound. No Python exception or qualification claimed."
+          ],
+          [
+            385,
+            "9eb9d13a25607acc",
+            1,
+            "selection",
+            "python3 availability",
+            "Python availability is checked only inside explicit SYSTEMONE_SMOKE_DRIVER admission; typed default and prewarm require no Python. Override remains unclassified."
+          ]
+        ]
+      }
+    ],
+    "source_files": [
+      {
+        "path": "scripts/skippy-wan-calibrate.sh",
+        "sha256": "d063ff2ff9990a111f1d7c364ef626e23e50802ed2890e91ca6f92aeabb5400d"
+      },
+      {
+        "path": "scripts/remote-handoff-sweep.sh",
+        "sha256": "0a5f6af4e1d0f62f00ca4fe5eef123c9281325abffafd0c8adaeebbd201e4d91"
+      },
+      {
+        "path": "scripts/run-llama-benchy-openai.sh",
+        "sha256": "a0fad02cd228de163861ee4e739d29fb19cdda4d28c52e3c8bd6af47ea3f4696"
+      },
+      {
+        "path": "scripts/skippy-system-one-smoke.sh",
+        "sha256": "3e601df935d1b4feab1c1d9552ff294db5fa60492d104c655cacbb4e09a3ecd1"
+      }
+    ],
+    "reason": "Actual maintained WAN and handoff reducers, OpenAI discovery, and SystemOne custom-driver boundary now invoke reviewed native owners. Optional llama-benchy uvx ecosystem launcher is retained; Python implementation/test retirements are separate and not claimed.",
+    "qualification": null
   }
 }

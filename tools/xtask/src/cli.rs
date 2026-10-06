@@ -12,6 +12,8 @@ pub(crate) fn print_usage() {
     println!(
         "  cargo xtool automation local-ports COUNT\n  cargo xtool automation native-runtime-evidence FILE"
     );
+    println!("  cargo xtool automation endpoint-model-discovery --help");
+    println!("  cargo xtool automation wan-observation --help");
     println!("  cargo xtool automation system-one-cases --help");
     println!("  cargo xtool automation system-one-smoke --help");
     println!("  cargo xtool automation binary-stage-readiness --help");
@@ -118,6 +120,7 @@ pub(crate) enum CliCommand<'a> {
     WaitingPrefix(&'a [String]),
     EventBenchmarkComparison(&'a [String]),
     EventBenchmarkRun(&'a [String]),
+    EndpointModelDiscovery(&'a [String]),
     GuardrailCorpus(&'a [String]),
     NativeRuntimeEvidence(&'a [String]),
     FamilyBatteryPolicy(&'a [String]),
@@ -130,6 +133,7 @@ pub(crate) enum CliCommand<'a> {
     SmokeInputs(&'a [String]),
     WorkloadSmoke(&'a [String]),
     Stability(&'a [String]),
+    WanObservation(&'a [String]),
     SystemOneCases(&'a [String]),
     SystemOneSmoke(&'a [String]),
     BinaryStageReadiness(&'a [String]),
@@ -147,6 +151,7 @@ pub(crate) enum CliCommand<'a> {
     DaemonLifecycle(&'a [String]),
     LoggingRecovery(&'a [String]),
     ControlPlaneQa(&'a [String]),
+    RemoteHandoffSummary(&'a [String]),
     LightningCompatibility(&'a [String]),
     HfCertification(&'a [String]),
     HfMtpCompose(&'a [String]),
@@ -233,6 +238,11 @@ impl<'a> Cli<'a> {
             }
             [domain, scope, rest @ ..] if domain == "automation" && scope == "hf-mtp-compose" => {
                 CliCommand::HfMtpCompose(rest)
+            }
+            [domain, scope, rest @ ..]
+                if domain == "automation" && scope == "endpoint-model-discovery" =>
+            {
+                CliCommand::EndpointModelDiscovery(rest)
             }
             [domain, scope, rest @ ..] if domain == "automation" && scope == "guardrail-corpus" => {
                 CliCommand::GuardrailCorpus(rest)
@@ -354,6 +364,9 @@ impl<'a> Cli<'a> {
             [domain, scope, rest @ ..] if domain == "automation" && scope == "system-one-smoke" => {
                 CliCommand::SystemOneSmoke(rest)
             }
+            [domain, scope, rest @ ..] if domain == "automation" && scope == "wan-observation" => {
+                CliCommand::WanObservation(rest)
+            }
             [domain, scope, rest @ ..] if domain == "automation" && scope == "system-one-cases" => {
                 CliCommand::SystemOneCases(rest)
             }
@@ -382,6 +395,11 @@ impl<'a> Cli<'a> {
             }
             [domain, scope, rest @ ..] if domain == "automation" && scope == "smoke-inputs" => {
                 CliCommand::SmokeInputs(rest)
+            }
+            [domain, scope, rest @ ..]
+                if domain == "automation" && scope == "remote-handoff-summary" =>
+            {
+                CliCommand::RemoteHandoffSummary(rest)
             }
             [domain, scope, rest @ ..]
                 if domain == "automation" && scope == "lightning-compatibility" =>

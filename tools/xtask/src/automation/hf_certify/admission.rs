@@ -132,13 +132,8 @@ impl Input {
                 );
             }
         }
-        if self
-            .target_parts
-            .windows(2)
-            .any(|pair| pair[0].path >= pair[1].path)
-        {
-            return Err("target roster must retain sorted original source order".into());
-        }
+        // Preserve declared logical roster order; native report correlation checks it exactly.
+        // Canonical aliases can reverse lexical names; uniqueness above remains mandatory.
         Ok(())
     }
 }

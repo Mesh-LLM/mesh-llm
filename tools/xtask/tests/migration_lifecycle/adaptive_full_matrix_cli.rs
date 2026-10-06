@@ -368,3 +368,96 @@ fn owned_static_arm() {
         }
     });
 }
+
+#[test]
+fn adaptive_prepare_cli_binds_manifest_without_launch_and_refuses_provenance_drift() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let mut input = document(root, "success");
+    input["worker"]
+        .as_object_mut()
+        .unwrap()
+        .remove("prompt_manifest_sha256");
+    input["worker"]["manifest"]["prompts"][0]["prompt"] = json!("long context row\n".repeat(3840));
+    assert!(
+        input["worker"]["manifest"]["prompts"][0]["prompt"]
+            .as_str()
+            .unwrap()
+            .len()
+            > 16 * 1024
+    );
+    for (name, expected) in [("prepared", 0), ("stale", 1)] {
+        if name == "stale" {
+            input["worker"]["prompt_manifest_sha256"] = json!("0".repeat(64));
+        }
+        std::fs::write(
+            root.join("prepare-input.json"),
+            serde_json::to_vec(&input).unwrap(),
+        )
+        .unwrap();
+        let output = root.join(format!("{name}.json"));
+        let raw = process::supervise_raw(
+            &process::ProcessSpec {
+                executable: PathBuf::from(env!("CARGO_BIN_EXE_xtask")),
+                cwd: root.into(),
+                arguments: [
+                    "automation".into(),
+                    "waiting-prefix".into(),
+                    "adaptive-prepare".into(),
+                    "--input".into(),
+                    root.join("prepare-input.json").into_os_string(),
+                    "--output".into(),
+                    output.as_os_str().to_owned(),
+                ]
+                .into_iter()
+                .map(process::Value::Public)
+                .collect(),
+                environment: BTreeMap::new(),
+            },
+            &process::Limits {
+                execution: Duration::from_secs(5),
+                graceful_shutdown: Duration::from_secs(1),
+                forced_shutdown: Duration::from_secs(1),
+                retained_bytes_per_stream: 65536,
+                readiness: process::Readiness::None,
+                completion: process::Completion::Exit,
+            },
+            &process::Cancellation::default(),
+            process::RawCaptureOptions {
+                stdout: NonZeroUsize::new(65536),
+                stderr: NonZeroUsize::new(65536),
+            },
+        )
+        .unwrap();
+        cleanup(&raw);
+        assert_eq!(raw.process.outcome, process::Outcome::Exited);
+        assert_eq!(raw.process.status.as_ref().unwrap().code(), Some(expected));
+        if expected == 0 {
+            let prepared: Value = serde_json::from_slice(&std::fs::read(&output).unwrap()).unwrap();
+            assert_eq!(prepared["worker"]["manifest"], input["worker"]["manifest"]);
+            assert_eq!(
+                prepared["worker"]["provenance"],
+                input["worker"]["provenance"]
+            );
+            assert_eq!(
+                prepared["worker"]["prompt_manifest_sha256"],
+                hash(&serde_json::to_vec(&prepared["worker"]["manifest"]).unwrap())
+            );
+            assert_eq!(prepared["old"], input["old"]);
+            assert_eq!(prepared["new"], input["new"]);
+            assert_eq!(prepared["rounds"], input["rounds"]);
+        } else {
+            assert!(!output.exists());
+            assert!(
+                std::str::from_utf8(raw.stderr.as_ref().unwrap().as_bytes())
+                    .unwrap()
+                    .contains("mismatched typed manifest pin")
+            );
+        }
+        assert!(
+            !root.join("matrix").exists(),
+            "preparation must not launch an arm"
+        );
+    }
+    directory.close().unwrap();
+}

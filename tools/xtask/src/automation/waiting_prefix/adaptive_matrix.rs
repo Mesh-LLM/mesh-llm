@@ -241,6 +241,92 @@ where
     };
     output
 }
+/// Complete the signal/deadline boundary before publishing admission. Observed
+/// cells/comparison remain available on failure and are explicitly unadmitted.
+fn finalize(
+    output: &mut Value,
+    finished: DynResult<()>,
+    cancellation: &Cancellation,
+    deadline: Instant,
+) -> DynResult<()> {
+    let terminal = if cancellation.is_cancelled() {
+        Some("adaptive terminal cancellation")
+    } else if finished.is_err() {
+        Some("adaptive interrupt finalization failed")
+    } else if Instant::now() >= deadline {
+        Some("adaptive terminal deadline exhausted")
+    } else {
+        None
+    };
+    output["terminal_error"] = terminal.map_or(Value::Null, |reason| json!(reason));
+    if output["error"].is_null()
+        && let Some(reason) = terminal
+    {
+        output["error"] = json!(reason);
+    }
+    let admitted = output["error"].is_null() && output["comparison"].is_object();
+    output["comparison_admitted"] = json!(admitted);
+    output["status"] = json!(if admitted {
+        "adaptive_matrix_admitted"
+    } else {
+        "adaptive_matrix_failed"
+    });
+    if admitted {
+        Ok(())
+    } else {
+        Err("adaptive matrix failed; partial observations retained without admission".into())
+    }
+}
+fn rendered(output: &Value) -> String {
+    let heading = if output["comparison_admitted"] == true {
+        "Adaptive comparison admitted.\n\n".to_owned()
+    } else {
+        format!(
+            "Adaptive comparison NOT admitted: {}. Retained values are observations.\n\n",
+            output["error"]
+        )
+    };
+    if output["comparison"].is_object() {
+        heading + &summary::render(&output["comparison"])
+    } else {
+        heading + "Adaptive comparison unavailable.\n"
+    }
+}
+fn prepare_input(input: &mut Input) -> DynResult<()> {
+    input.validate()?;
+    let worker = input
+        .worker
+        .as_object_mut()
+        .ok_or("adaptive worker must be an object")?;
+    worker.insert("round".into(), json!(1));
+    worker.insert("version".into(), json!("old"));
+    worker.insert("model".into(), json!(input.old.model_id));
+    worker.insert(
+        "base_url".into(),
+        json!(format!("http://127.0.0.1:{}/v1", input.old.openai_port)),
+    );
+    worker.insert(
+        "readiness_timeout_secs".into(),
+        json!(input.startup_timeout_secs),
+    );
+    super::sequential_cell::bind_manifest(&mut input.worker)?;
+    let typed: super::sequential_cell::Input = serde_json::from_value(input.worker.clone())?;
+    typed.validate()
+}
+pub(super) fn prepare(args: &[String]) -> DynResult<()> {
+    let opts = options(args, &["--input", "--output"], &["--input", "--output"])?;
+    let mut input: Input = serde_json::from_slice(&identity::bounded(
+        Path::new(opts["--input"]),
+        16 * 1024 * 1024,
+    )?)?;
+    prepare_input(&mut input)?;
+    // Preserve the closed original fields; only the existing worker projection changes.
+    let output = json!({"schema_version":input.schema_version,"old":input.old,"new":input.new,"worker":input.worker,"rounds":input.rounds,"timeout_secs":input.timeout_secs,"cell_timeout_secs":input.cell_timeout_secs,"startup_timeout_secs":input.startup_timeout_secs});
+    identity::fresh(
+        Path::new(opts["--output"]),
+        &serde_json::to_vec_pretty(&output)?,
+    )
+}
 pub(super) fn run(args: &[String]) -> DynResult<()> {
     let opts = options(
         args,
@@ -256,32 +342,21 @@ pub(super) fn run(args: &[String]) -> DynResult<()> {
     std::fs::create_dir(&directory)?;
     let directory: PathBuf = directory.canonicalize()?;
     let interrupt = crate::automation::command_interrupt::Interrupt::install()?;
-    let output = execute_with(
-        &input,
-        &directory,
-        Instant::now() + Duration::from_secs(input.timeout_secs),
-        &interrupt.cancellation(),
-        invoke,
-    );
+    let cancellation = interrupt.cancellation();
+    let deadline = Instant::now() + Duration::from_secs(input.timeout_secs);
+    let mut output = execute_with(&input, &directory, deadline, &cancellation, invoke);
+    let finished = interrupt.finish().map_err(Into::into);
+    let terminal = finalize(&mut output, finished, &cancellation, deadline);
     let publication = (|| -> DynResult<()> {
         publish(
             &directory.join("comparison.json"),
             &serde_json::to_vec_pretty(&output)?,
         )?;
-        let report = if output["comparison"].is_object() {
-            summary::render(&output["comparison"])
-        } else {
-            format!("Adaptive comparison unavailable: {}\n", output["error"])
-        };
+        let report = rendered(&output);
         publish(&directory.join("report.md"), report.as_bytes())
     })();
-    let finished = interrupt.finish();
     publication?;
-    finished?;
-    if !output["error"].is_null() {
-        return Err("adaptive matrix failed; partial comparison retained".into());
-    }
-    Ok(())
+    terminal
 }
 #[cfg(test)]
 #[path = "adaptive_matrix_tests.rs"]

@@ -31,6 +31,7 @@ mod codepoint_json;
 pub(crate) mod cohort_identity;
 pub(crate) mod control_plane_qa;
 pub(crate) mod daemon_lifecycle;
+pub(crate) mod endpoint_model_discovery;
 pub(crate) mod event_benchmark_comparison;
 pub(crate) mod event_benchmark_runner;
 pub(crate) mod family_battery_policy;
@@ -54,6 +55,7 @@ pub(crate) mod suffix_proposer;
 pub(crate) mod tls_fixture;
 pub(crate) mod ui_build;
 pub(crate) mod waiting_prefix;
+pub(crate) mod wan_observation;
 pub(crate) mod workload_smoke_config;
 pub(crate) use crate::command_interrupt;
 pub(crate) mod daemon_readiness;
@@ -97,6 +99,7 @@ pub(crate) fn run_workload_oracle_evidence(args: &[String]) -> DynResult<()> {
 
 pub(crate) fn run_replay_matrix(args: &[String], root: Option<&std::path::Path>) -> DynResult<()> {
     match args {
+        [verb, rest @ ..] if verb == "competitive-inputs-local" => replay_matrix::competitive_inputs::run(rest),
         [verb, rest @ ..] if verb == "competitive-prepare" => replay_matrix::competitive_prepare::run(rest),
         [verb, rest @ ..] if verb == "competitive-run" => replay_matrix::competitive_matrix::run(rest),
         [verb, rest @ ..] if verb == "competitive-report" => replay_matrix::competitive_report::run(rest),
@@ -104,6 +107,9 @@ pub(crate) fn run_replay_matrix(args: &[String], root: Option<&std::path::Path>)
         [verb, rest @ ..] if verb == "competitive-synthetic-cell" => replay_matrix::competitive_synthetic::run(rest),
         [verb, rest @ ..] if verb == "competitive-cell" => replay_matrix::competitive_cell::run(rest),
         [verb, rest @ ..] if verb == "competitive-plan" => replay_matrix::competitive_plan::run(rest),
+        [verb, rest @ ..] if verb == "parity-local-plan" => replay_matrix::parity_local_plan::run(rest),
+        [verb, rest @ ..] if verb == "parity-local" => replay_matrix::parity_local::run(rest),
+        [verb, rest @ ..] if verb == "parity-local-run" => replay_matrix::parity_local_run::run(rest),
         [verb, rest @ ..] if verb == "plan" => replay_matrix::manual_replay::run(root, rest, false),
         [verb, rest @ ..] if verb == "run" => replay_matrix::manual_replay::run(root, rest, true),
         [verb, rest @ ..] if verb == "hardware" => replay_matrix::hardware::run(rest),
@@ -157,6 +163,7 @@ pub(crate) mod agent_recording_proxy;
 pub(crate) mod native_runtime_evidence;
 
 pub(crate) mod lightning_compatibility;
+pub(crate) mod remote_handoff_summary;
 
 pub(crate) mod hf_certify;
 pub(crate) mod hf_mtp_compose;

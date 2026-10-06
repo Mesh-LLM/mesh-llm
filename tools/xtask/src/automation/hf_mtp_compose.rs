@@ -1,7 +1,9 @@
-//! Already-converted local MTP composition; no acquisition, conversion or publication.
+//! Pinned local MTP conversion/composition; no acquisition or remote publication.
 mod contract;
 mod execution;
 mod identity;
+pub(in crate::automation) mod job_phase;
+pub(in crate::automation) mod raw_conversion;
 mod reports;
 use crate::{
     automation::{command_interrupt::Interrupt, hf_certify::admission},
@@ -18,9 +20,17 @@ pub(crate) fn run(args: &[String]) -> DynResult<()> {
     {
         return identity::worker(rest);
     }
+    if let [verb, rest @ ..] = args {
+        if verb == "raw-identity-worker" {
+            return raw_conversion::identity_worker(rest);
+        }
+        if verb == "raw-checkpoint" {
+            return raw_conversion::run(rest);
+        }
+    }
     if args == ["--help"] {
         println!(
-            "automation hf-mtp-compose --input FILE --output-directory FRESH_DIRECTORY; already-converted pinned local GGUFs, no conversion/upload"
+            "automation hf-mtp-compose --input FILE --output-directory FRESH_DIRECTORY; already-converted pinned local GGUFs. Local native conversion: automation hf-mtp-compose raw-checkpoint --input FILE --output-directory FRESH_DIRECTORY; pinned checkpoint and explicit byte-bound tokenizer profile, no acquisition/upload"
         );
         return Ok(());
     }

@@ -274,3 +274,139 @@ fn alternate_container_refuses_missing_source_pin_and_actual_tree_byte_drift() {
     assert!(comparison_source(&selected, "sglang", &mut json!({})).is_err());
     root.close().unwrap();
 }
+
+#[test]
+fn vllm_default_gguf_requires_pinned_config_and_exact_cache_enable_disable_flags() {
+    let root = tempfile::tempdir().unwrap();
+    let (mut model, mut backend, artifact) = optional_fixture(root.path());
+    let path = root.path().join("config.json");
+    std::fs::write(&path, b"{}").unwrap();
+    let pin = crate::product::digest::file_sha256(&path).unwrap_or_else(|f| panic!("{}", f.error));
+    backend.hf_config = Some(Artifact {
+        path: path.clone(),
+        sha256: pin.clone(),
+    });
+    model["vllm_hf_config"] = json!({"sha256":pin});
+    let cell = json!({"arm":"vllm"});
+    for cache in [true, false] {
+        let selected = Selection {
+            model: &model,
+            cell: &cell,
+            backend: &backend,
+            artifact: &artifact,
+            port: 1234,
+            directory: root.path(),
+            capacity: Capacity {
+                context: 16384,
+                lanes: 4,
+            },
+            cache,
+        };
+        let args = external(&selected, "vllm", "fixture-model", &mut json!({})).unwrap();
+        for (flag, value) in [
+            ("--hf-config-path", root.path().to_str().unwrap()),
+            (
+                "--tokenizer",
+                backend.tokenizer.as_ref().unwrap().path.to_str().unwrap(),
+            ),
+            ("--load-format", "gguf"),
+            ("--quantization", "gguf"),
+        ] {
+            assert!(args.windows(2).any(|p| p == [flag, value]), "{args:?}");
+        }
+        assert_eq!(args.iter().any(|v| v == "--enable-prefix-caching"), cache);
+        assert_eq!(
+            args.iter().any(|v| v == "--no-enable-prefix-caching"),
+            !cache
+        );
+    }
+    std::fs::write(&path, b"drift").unwrap();
+    let selected = Selection {
+        model: &model,
+        cell: &cell,
+        backend: &backend,
+        artifact: &artifact,
+        port: 1234,
+        directory: root.path(),
+        capacity: Capacity {
+            context: 16384,
+            lanes: 4,
+        },
+        cache: true,
+    };
+    assert!(external(&selected, "vllm", "fixture-model", &mut json!({})).is_err());
+    root.close().unwrap();
+}
+#[test]
+fn competitive_mesh_raw_and_adaptive_commands_share_exact_fixed_lane_ceiling() {
+    let root = tempfile::tempdir().unwrap();
+    let (mut model, mut backend, artifact) = optional_fixture(root.path());
+    model["key"] = json!("fixture");
+    model["model_id"] = json!("fixture-model");
+    model["layer_end"] = json!(40);
+    model["cache_payload"] = json!("kv-recurrent");
+    let runtime = root.path().join("runtime");
+    std::fs::create_dir(&runtime).unwrap();
+    std::fs::write(runtime.join("fixture"), b"inert").unwrap();
+    backend.runtime = Some(Artifact {
+        path: runtime.clone(),
+        sha256: crate::product::digest::tree_sha256(&runtime)
+            .unwrap_or_else(|f| panic!("{}", f.error)),
+    });
+    let mut commands = std::collections::BTreeMap::new();
+    for arm in ["mesh", "mesh-adaptive", "llama"] {
+        let cell = json!({"arm":arm,"output_tokens":8});
+        let selection = Selection {
+            model: &model,
+            cell: &cell,
+            backend: &backend,
+            artifact: &artifact,
+            port: 1234,
+            directory: root.path(),
+            capacity: Capacity {
+                context: 16384,
+                lanes: 4,
+            },
+            cache: true,
+        };
+        let command = if arm == "llama" {
+            external(&selection, arm, "fixture-model", &mut json!({})).unwrap()
+        } else {
+            mesh(&selection, &mut json!({})).unwrap()
+        };
+        commands.insert(arm, command);
+    }
+    for arm in ["mesh", "mesh-adaptive"] {
+        let args = &commands[arm];
+        for (flag, value) in [
+            ("--generation-concurrency", "4"),
+            ("--generation-queue-capacity", "256"),
+            ("--generation-admission-timeout-secs", "600"),
+        ] {
+            assert!(args.windows(2).any(|p| p == [flag, value]));
+        }
+    }
+    assert!(
+        commands["llama"]
+            .windows(2)
+            .any(|p| p == ["--parallel", "4"])
+    );
+    assert!(commands["llama"].iter().any(|v| v == "--kv-unified"));
+    assert!(!commands["llama"].iter().any(|v| v == "--no-cache-prompt"));
+    assert!(
+        commands["mesh-adaptive"]
+            .iter()
+            .any(|v| v == "--adaptive-generation-concurrency")
+    );
+    assert!(
+        commands["mesh-adaptive"]
+            .windows(2)
+            .any(|p| p == ["--adaptive-generation-min-concurrency", "1"])
+    );
+    assert!(
+        !commands["mesh"]
+            .iter()
+            .any(|v| v == "--adaptive-generation-concurrency")
+    );
+    root.close().unwrap();
+}

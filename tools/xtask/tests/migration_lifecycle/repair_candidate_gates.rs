@@ -296,3 +296,187 @@ fn pinned_build_checks_actual_pin_without_invoking_updater_or_rewriting_bytes() 
         fixture.finish();
     }
 }
+
+#[test]
+fn actual_pin_updater_writes_only_admitted_explicit_or_prepared_sha_and_preserves_invalid_bytes() {
+    let fixture = Fixture::new();
+    let scripts = fixture.0.path().join("scripts");
+    fs::create_dir(&scripts).unwrap();
+    fs::copy(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../scripts/update-llama-pin.sh"),
+        scripts.join("update-llama-pin.sh"),
+    )
+    .unwrap();
+    fs::create_dir(fixture.0.path().join("prepared")).unwrap();
+    let setup = "export LLAMA_PIN_FILE=\"$PWD/pin\" LLAMA_WORKDIR=\"$PWD/prepared\"";
+    let target = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    let accepted = fixture.run(
+        "",
+        setup,
+        &format!("/bin/bash ./scripts/update-llama-pin.sh {target}"),
+    );
+    assert_eq!(accepted.status, 0, "{}", accepted.stderr);
+    assert_eq!(
+        fs::read(fixture.0.path().join("pin")).unwrap(),
+        format!("{target}\n").as_bytes()
+    );
+    let rejected = fixture.run(
+        "",
+        setup,
+        "/bin/bash ./scripts/update-llama-pin.sh not-a-sha",
+    );
+    assert_eq!(rejected.status, 1);
+    assert!(rejected.stderr.contains("refusing to write a non-40-hex"));
+    assert_eq!(
+        fs::read(fixture.0.path().join("pin")).unwrap(),
+        format!("{target}\n").as_bytes()
+    );
+    let prepared = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    fs::write(
+        fixture.0.path().join("prepared/.mesh-llm-upstream-sha"),
+        format!(" \n{prepared}\n "),
+    )
+    .unwrap();
+    let marker = fixture.run("", setup, "/bin/bash ./scripts/update-llama-pin.sh");
+    assert_eq!(marker.status, 0, "{}", marker.stderr);
+    assert_eq!(
+        fs::read(fixture.0.path().join("pin")).unwrap(),
+        format!("{prepared}\n").as_bytes()
+    );
+    fixture.finish();
+}
+#[test]
+fn actual_family_core_and_state_callers_allocate_os_ports_and_retry_only_address_conflicts() {
+    let fixture = Fixture::new();
+    std::os::unix::fs::symlink(
+        env!("CARGO_BIN_EXE_xtask"),
+        fixture.0.path().join("controller"),
+    )
+    .unwrap();
+    let source = fs::read_to_string(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../scripts/family-certify.sh"),
+    )
+    .unwrap();
+    assert!(source.lines().any(|line| line == "PORT_START_ATTEMPTS=3"));
+    let declarations = [
+        "run_logged_core_parity",
+        "address_in_use_log",
+        "run_logged_state_handoff",
+    ]
+    .iter()
+    .map(|n| declaration(&source, n))
+    .collect::<String>();
+    let setup = r#"
+PORT_START_ATTEMPTS=3
+LOG_DIR="$PWD/logs"
+mkdir -p "$LOG_DIR"
+family_automation=(port_allocator)
+port_allocator() { printf '%s\n' "$*" >> "$PWD/allocator.argv"; "$PWD/controller" "$@"; }
+quote_cmd() { printf '%q ' "$@"; }
+record_event() { printf '%s|%s|%s\n' "$1" "$2" "$3" >> "$PWD/events"; }
+core_attempt=0
+core_probe() {
+ core_attempt=$((core_attempt+1)); printf '%s\0' "$@" > "$PWD/core-$core_attempt.argv"
+ if (( core_attempt == 1 )); then printf 'Address already in use\n'; return 23; fi
+ : > "$PWD/single.json"; : > "$PWD/chain.json"
+}
+state_probe() { printf '%s\0' "$@" > "$PWD/state.argv"; : > "$PWD/state.json"; }
+"#;
+    let result = fixture.run(
+        &declarations,
+        setup,
+        r#"
+run_logged_core_parity "$PWD/single.json" "$PWD/chain.json" core_probe
+run_logged_state_handoff "$PWD/state.json" state_probe
+"#,
+    );
+    assert_eq!(result.status, 0, "{}", result.stderr);
+    assert_eq!(
+        fs::read_to_string(fixture.0.path().join("allocator.argv"))
+            .unwrap()
+            .lines()
+            .collect::<Vec<_>>(),
+        [
+            "automation local-ports 3",
+            "automation local-ports 3",
+            "automation local-ports 2"
+        ]
+    );
+    for (file, flags) in [
+        (
+            "core-2.argv",
+            vec![
+                "--single-stage1-bind-addr",
+                "--chain-stage1-bind-addr",
+                "--chain-stage2-bind-addr",
+            ],
+        ),
+        (
+            "state.argv",
+            vec!["--source-bind-addr", "--restore-bind-addr"],
+        ),
+    ] {
+        let bytes = fs::read(fixture.0.path().join(file)).unwrap();
+        let parts = bytes
+            .split(|b| *b == 0)
+            .filter(|b| !b.is_empty())
+            .map(|b| std::str::from_utf8(b).unwrap())
+            .collect::<Vec<_>>();
+        let mut ports = std::collections::BTreeSet::new();
+        for flag in flags {
+            let index = parts.iter().position(|p| *p == flag).unwrap();
+            let address: std::net::SocketAddr = parts[index + 1].parse().unwrap();
+            assert!(address.ip().is_loopback() && address.port() != 0);
+            assert!(ports.insert(address.port()));
+        }
+    }
+    let events = fs::read_to_string(fixture.0.path().join("events")).unwrap();
+    assert!(
+        events.contains("single-step|pass|0")
+            && events.contains("chain|pass|0")
+            && events.contains("state-handoff|pass|0")
+    );
+    let other = fixture.run(
+        &declarations,
+        &format!("{setup}\ncore_probe() {{ printf 'other startup failure\\n'; return 41; }}"),
+        r#"
+: > "$PWD/allocator.argv"
+run_logged_core_parity "$PWD/single.json" "$PWD/chain.json" core_probe
+"#,
+    );
+    assert_eq!(other.status, 0, "{}", other.stderr);
+    assert_eq!(
+        fs::read_to_string(fixture.0.path().join("allocator.argv"))
+            .unwrap()
+            .lines()
+            .count(),
+        1
+    );
+    assert!(
+        fs::read_to_string(fixture.0.path().join("events"))
+            .unwrap()
+            .contains("single-step|fail|41")
+    );
+    let exhausted = fixture.run(
+        &declarations,
+        &format!("{setup}\ncore_probe() {{ printf 'EADDRINUSE\\n'; return 23; }}"),
+        r#"
+: > "$PWD/allocator.argv"
+run_logged_core_parity "$PWD/single.json" "$PWD/chain.json" core_probe
+"#,
+    );
+    assert_eq!(exhausted.status, 0, "{}", exhausted.stderr);
+    assert_eq!(
+        fs::read_to_string(fixture.0.path().join("allocator.argv"))
+            .unwrap()
+            .lines()
+            .count(),
+        3
+    );
+    assert!(
+        fs::read_to_string(fixture.0.path().join("events"))
+            .unwrap()
+            .contains("single-step|fail|23")
+    );
+    fixture.finish();
+}

@@ -310,15 +310,19 @@ pub(super) fn run(args: &[String]) -> DynResult<()> {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?;
-    let receipt = runtime.block_on(execute(&input, interrupt.cancellation()));
-    let publication = identity::fresh(output, &serde_json::to_vec_pretty(&receipt)?);
-    let finished = interrupt.finish();
-    publication?;
-    finished?;
-    if !receipt["error"].is_null() {
-        return Err("mixed worker failed; partial evidence retained".into());
-    }
-    Ok(())
+    let cancellation = interrupt.cancellation();
+    let deadline = Instant::now() + Duration::from_secs(input.timeout_secs);
+    let mut receipt = runtime.block_on(execute(&input, cancellation.clone()));
+    let finished: DynResult<()> = interrupt.finish().map_err(|error| error.to_string().into());
+    let admission = super::mixed_terminal::finalize(
+        &mut receipt,
+        finished,
+        &cancellation,
+        deadline,
+        super::mixed_terminal::Kind::Worker,
+    );
+    identity::fresh(output, &serde_json::to_vec_pretty(&receipt)?)?;
+    admission
 }
 
 #[cfg(test)]

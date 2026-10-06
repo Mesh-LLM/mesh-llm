@@ -150,7 +150,7 @@ fn hf_certification_cli_executes_exact_projector_and_ordered_mtp_modes() {
 }
 #[test]
 fn hf_certification_cli_refuses_wrong_digest_magic_roster_and_prior_output_before_product() {
-    for attack in ["digest", "magic", "roster", "order", "prior"] {
+    for attack in ["digest", "magic", "roster", "duplicate", "prior"] {
         let root = tempfile::tempdir().unwrap();
         let mut input = fixture(root.path(), "success", true);
         match attack {
@@ -160,7 +160,7 @@ fn hf_certification_cli_refuses_wrong_digest_magic_roster_and_prior_output_befor
                 input["projector"] = artifact(&root.path().join("projector.gguf"));
             }
             "roster" => input["expected_parts"] = json!(3),
-            "order" => input["target_parts"].as_array_mut().unwrap().reverse(),
+            "duplicate" => input["target_parts"][1] = input["target_parts"][0].clone(),
             "prior" => {
                 std::fs::create_dir(root.path().join("evidence")).unwrap();
                 std::fs::write(root.path().join("evidence/prior"), b"preserve").unwrap();

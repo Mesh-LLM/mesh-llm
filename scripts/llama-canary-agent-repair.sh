@@ -181,7 +181,7 @@ run_for() {
     timeout_parent="${RUNNER_TEMP:?}"
   fi
   executable="$(command -v "$1")" || return 125
-  if [[ ( "$HARNESS_MODE" == repair || "$HARNESS_MODE" == verify ) && "$executable" != /* && "$executable" == */* ]]; then
+  if [[ "$executable" != /* && "$executable" == */* ]]; then
     executable="$PWD/$executable"
   fi
   if [[ "$executable" != /* ]]; then

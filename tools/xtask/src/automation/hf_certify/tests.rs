@@ -36,14 +36,23 @@ fn input(mode: Mode) -> (Input, tempfile::TempDir) {
     (input, root)
 }
 #[test]
-fn certification_shapes_refuse_missing_short_duplicate_and_unsorted_rosters() {
+fn certification_shapes_refuse_missing_short_duplicate_rosters_and_preserve_declared_order() {
     let (mut i, root) = input(Mode::MtpAttach);
     i.validate().unwrap();
     i.expected_parts = 3;
     assert!(i.validate().is_err());
     i.expected_parts = 2;
     i.target_parts.reverse();
+    i.validate().unwrap();
+    let report = json!({"projector":i.projector.path,"model_parts":i.target_parts.iter().map(|p|&p.path).collect::<Vec<_>>(),"mtp_draft":i.mtp_draft.as_ref().unwrap().path,"layer_count":2,"mtp_layer_count":1,"ctx_size":64,"session_created":true,"native_mtp_multimodal_feature":true});
+    execution::correlate(&i, &report).unwrap();
+    let mut wrong_order = report;
+    wrong_order["model_parts"].as_array_mut().unwrap().reverse();
+    assert!(execution::correlate(&i, &wrong_order).is_err());
+    let original = i.target_parts[1].clone();
+    i.target_parts[1] = i.target_parts[0].clone();
     assert!(i.validate().is_err());
+    i.target_parts[1] = original;
     i.target_parts.reverse();
     i.mtp_draft = None;
     assert!(i.validate().is_err());

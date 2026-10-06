@@ -192,11 +192,13 @@ fn run(case: Case, prepare_existing: impl FnOnce(&Path)) -> Installed {
         "{report:?}"
     );
     assert!(
-        report.cleanup.complete && !report.cleanup.forced,
+        report.cleanup.complete && !report.cleanup.forced && !report.cleanup.graceful_signal_failed,
         "owned PowerShell/fixture tree must finish cleanly: {report:?}"
     );
     assert!(
-        !report.stdout.truncated
+        report.stdout.line_capture_complete
+            && report.stderr.line_capture_complete
+            && !report.stdout.truncated
             && !report.stderr.truncated
             && report.stdout.suppressed_lines == 0
             && report.stderr.suppressed_lines == 0,

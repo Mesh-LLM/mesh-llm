@@ -51,13 +51,7 @@ pub fn write_payload(
                 if *byte_size != expected.byte_size || *sha256 != expected.sha256 {
                     bail!("staged file identity differs from local package catalog");
                 }
-                serde_json::to_writer(
-                    &mut *output,
-                    &json!({"key":"lfsFile","value":{
-                        "path":path,"algo":"sha256","oid":sha256,"size":byte_size,
-                    }}),
-                )?;
-                output.write_all(b"\n")?;
+                write_lfs_row(path, expected, output)?;
             }
             CopyContent::File(file) => {
                 write_regular_row(path, expected, File::open(file)?, output)?
@@ -72,7 +66,20 @@ pub fn write_payload(
     Ok(())
 }
 
-fn write_regular_row(
+pub(super) fn write_lfs_row(
+    path: &str,
+    identity: &ArtifactIdentity,
+    output: &mut impl Write,
+) -> Result<()> {
+    serde_json::to_writer(
+        &mut *output,
+        &json!({"key":"lfsFile","value":{"path":path,"algo":"sha256","oid":identity.sha256,"size":identity.byte_size}}),
+    )?;
+    output.write_all(b"\n")?;
+    Ok(())
+}
+
+pub(super) fn write_regular_row(
     path: &str,
     expected: &ArtifactIdentity,
     mut input: impl Read,

@@ -380,7 +380,8 @@ fn execute(
     cancel: &Cancellation,
     port: TcpListener,
 ) -> Value {
-    let mut run = json!({"schema_version":1,"kind":"kv-restart-replay/run","requests":[],"sessions":[],"error":null,"binary":{"source_sha":"unknown","git_describe":"unknown"},"model":null,"hardware":null,"manifest":null,"manifest_sha256":null,"config":{"base_url":kv_worker::BASE,"turns":input.turns,"turn_target_tokens":input.turn_target_tokens,"system_tokens":input.system_tokens,"restore_repeats":input.restore_repeats,"max_output_tokens":input.max_output_tokens,"request_timeout_secs":input.request_timeout_secs,"ready_timeout_secs":input.ready_timeout_secs,"serve_extra_args":input.serve_extra_args,"endpoint_profile":"default-startup-no-endpoint-or-tuning-overrides"}});
+    let started_at = super::kv_terminal::wall_seconds();
+    let mut run = json!({"started_at_unix_seconds":started_at,"completed_at_unix_seconds":null,"schema_version":1,"kind":"kv-restart-replay/run","requests":[],"sessions":[],"error":null,"binary":{"source_sha":"unknown","git_describe":"unknown"},"model":null,"hardware":null,"manifest":null,"manifest_sha256":null,"config":{"base_url":kv_worker::BASE,"turns":input.turns,"turn_target_tokens":input.turn_target_tokens,"system_tokens":input.system_tokens,"restore_repeats":input.restore_repeats,"max_output_tokens":input.max_output_tokens,"request_timeout_secs":input.request_timeout_secs,"ready_timeout_secs":input.ready_timeout_secs,"serve_extra_args":input.serve_extra_args,"endpoint_profile":"default-startup-no-endpoint-or-tuning-overrides"}});
     let result = (|| -> DynResult<()> {
         let first = identity(input, &directory.join("identity-before"), until, cancel)?;
         let mut admitted = input.clone();
@@ -528,13 +529,12 @@ pub(super) fn run(args: &[String]) -> DynResult<()> {
     std::fs::create_dir_all(&directory)?;
     let directory = directory.canonicalize()?;
     let interrupt = crate::automation::command_interrupt::Interrupt::install()?;
-    let value = execute(
-        &input,
-        &directory,
-        Instant::now() + Duration::from_secs(input.timeout_secs),
-        &interrupt.cancellation(),
-        port,
-    );
+    let cancellation = interrupt.cancellation();
+    let deadline = Instant::now() + Duration::from_secs(input.timeout_secs);
+    let mut value = execute(&input, &directory, deadline, &cancellation, port);
+    let finished: DynResult<()> = interrupt.finish().map_err(|e| e.to_string().into());
+    value["completed_at_unix_seconds"] = json!(super::kv_terminal::wall_seconds());
+    let terminal = super::kv_terminal::finalize(&mut value, finished, &cancellation, deadline);
     let publication = (|| -> DynResult<()> {
         let rows = value["requests"]
             .as_array()
@@ -557,11 +557,6 @@ pub(super) fn run(args: &[String]) -> DynResult<()> {
         )?;
         Ok(())
     })();
-    let finished = interrupt.finish();
     publication?;
-    finished?;
-    if !value["error"].is_null() {
-        return Err("restart run failed; partial evidence retained".into());
-    }
-    Ok(())
+    terminal
 }

@@ -90,3 +90,77 @@ pub(super) fn run(args: &[String]) -> CheckReport {
         },
     }
 }
+/// A manual generated-registry declaration pin; local cache bytes verify separately.
+pub(crate) fn source_pin(
+    registry: &serde_json::Value,
+    id: &str,
+) -> crate::command::DynResult<serde_json::Value> {
+    use crate::ci_plan::document::Json;
+    let bytes = serde_json::to_vec(registry)?;
+    let document = Json::parse(&bytes)?;
+    let artifact = super::manifest::resolve(
+        &document,
+        &super::manifest::Selection {
+            artifact_id: Some(id),
+            cadence: "manual",
+        },
+    )
+    .map_err(|error| error.to_string())?;
+    let revision = artifact
+        .row
+        .iter()
+        .find(|(name, _)| name == "revision")
+        .and_then(|(_, v)| v.as_str())
+        .ok_or("registry revision")?;
+    let repo = artifact
+        .row
+        .iter()
+        .find(|(name, _)| name == "repo")
+        .and_then(|(_, v)| v.as_str())
+        .ok_or("registry repo")?;
+    if revision.len() != 40
+        || !revision
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    {
+        return Err("manual source pin requires immutable revision".into());
+    }
+    let file = artifact
+        .files
+        .iter()
+        .filter_map(|file| super::serving_entry::rank(&file.name).map(|rank| (rank, file)))
+        .min_by_key(|(rank, _)| *rank)
+        .map(|(_, file)| file)
+        .ok_or("manual registry has no serving GGUF entry")?;
+    Ok(
+        serde_json::json!({"repo":repo,"revision":revision,"file":file.name,"blob_sha256":file.sha256,"size_bytes":file.size_bytes}),
+    )
+}
+
+#[cfg(test)]
+mod source_pin_tests {
+    #[test]
+    fn manual_registry_pin_uses_serving_entry_and_refuses_cadence_revision_drift() {
+        use serde_json::json;
+        let mut registry = json!({"manifest_kind":"test-model-artifacts","artifacts":[{"id":"fixture","repo":"fixture/model","revision":"a".repeat(40),"selector":"fixture","model_ref":"fixture/model","cadences":["manual"],"files":["model-00002-of-00002.gguf","model-00001-of-00002.gguf"],"urls":["https://example.invalid/later","https://example.invalid/first"],"file_integrity":{"model-00002-of-00002.gguf":{"blob_id":"2".repeat(64),"size_bytes":2},"model-00001-of-00002.gguf":{"blob_id":"1".repeat(64),"size_bytes":1}}}]});
+        let pin = super::source_pin(&registry, "fixture").unwrap();
+        assert_eq!(pin["file"], "model-00001-of-00002.gguf");
+        assert_eq!(pin["blob_sha256"], "1".repeat(64));
+        assert_eq!(pin["size_bytes"], 1);
+        registry["artifacts"][0]["revision"] = "main".into();
+        assert!(
+            super::source_pin(&registry, "fixture")
+                .unwrap_err()
+                .to_string()
+                .contains("immutable revision")
+        );
+        registry["artifacts"][0]["revision"] = "a".repeat(40).into();
+        registry["artifacts"][0]["cadences"] = json!(["pull_request"]);
+        assert!(
+            super::source_pin(&registry, "fixture")
+                .unwrap_err()
+                .to_string()
+                .contains("not allowed at cadence")
+        );
+    }
+}

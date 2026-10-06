@@ -50,6 +50,12 @@ pub(crate) fn build_native_convert_command(
     if runner.mtp {
         command.push("--mtp".to_string());
     }
+    if let Some(profile) = &runner.nemotron_mtp_tokenizer_profile {
+        command.extend([
+            "--nemotron-mtp-tokenizer-profile".into(),
+            profile.display().to_string(),
+        ]);
+    }
     command
 }
 
@@ -74,19 +80,15 @@ pub(crate) fn apply_native_convert_split_max_size(
         runner.max_memory.map(|memory| memory.bytes()),
         0.60,
     )?;
-    let mtp_layer_start = mtp_layer_start_from_hf_config(&manifest.source)?;
+
+    let (metadata, tensor_name_map, mtp_layer_start) =
+        conversion_inputs(runner, &manifest.source, plan.tensor_count)?;
     let recommended = recommended_raw_safetensors_gguf_split_count(
         &manifest.source,
         RawGgufWriteOptions {
             buffer_size: runner.stream_buffer_bytes,
-            metadata: Some(metadata_from_hf_config_with_options(
-                &manifest.source,
-                plan.tensor_count,
-                MetadataOptions {
-                    include_mtp: !runner.no_mtp,
-                },
-            )?),
-            tensor_name_map: native_tensor_name_map(mtp_layer_start),
+            metadata: Some(metadata),
+            tensor_name_map,
             split: None,
             output_type,
             tensor_selection: native_tensor_selection(runner, mtp_layer_start)?,
@@ -143,9 +145,10 @@ pub(crate) fn run_native_convert(
         0.60,
     )?;
     ensure_native_tokenizer_metadata_supported(&manifest.source)?;
-    let mtp_layer_start = mtp_layer_start_from_hf_config(&manifest.source)?;
+    let (metadata, tensor_name_map, mtp_layer_start) =
+        conversion_inputs(runner, &manifest.source, plan.tensor_count)?;
     let tensor_selection = native_tensor_selection(runner, mtp_layer_start)?;
-    let tensor_name_map = native_tensor_name_map(mtp_layer_start);
+
     for split_index in window.first_split..=window.last_split {
         let output = output_shard_path(output_prefix, split_index, manifest.expected_splits)?;
         print_info(format!(
@@ -156,19 +159,12 @@ pub(crate) fn run_native_convert(
             format_bytes(buffer_size as u64),
             format_bytes(estimated_stream_working_set_bytes)
         ));
-        let metadata = metadata_from_hf_config_with_options(
-            &manifest.source,
-            plan.tensor_count,
-            MetadataOptions {
-                include_mtp: !runner.no_mtp,
-            },
-        )?;
         write_raw_safetensors_gguf(
             &manifest.source,
             &output,
             RawGgufWriteOptions {
                 buffer_size,
-                metadata: Some(metadata),
+                metadata: Some(metadata.clone()),
                 tensor_name_map,
                 split: split_for(split_index, manifest.expected_splits),
                 output_type,
@@ -194,6 +190,40 @@ fn native_tensor_selection(
         return Ok(TensorSelection::MtpOnly { layer_start });
     }
     Ok(TensorSelection::All)
+}
+
+fn conversion_inputs(
+    runner: &ConvertRunnerArgs,
+    source: &Path,
+    count: usize,
+) -> Result<(
+    Vec<skippy_model::gguf_metadata::GgufKv>,
+    TensorNameMap,
+    Option<u32>,
+)> {
+    if let Some(profile) = &runner.nemotron_mtp_tokenizer_profile {
+        ensure!(
+            runner.backend == crate::backend::BackendKind::NativeRust
+                && runner.mtp
+                && !runner.no_mtp,
+            "Nemotron profile requires native-rust MTP-only conversion"
+        );
+        let (metadata, map) =
+            skippy_model::gguf_template::nemotron_mtp::prepare(source, profile, count)?;
+        let TensorNameMap::NemotronHMoeMtp { layer_start } = map else {
+            anyhow::bail!("Nemotron native map/profile mismatch");
+        };
+        return Ok((metadata, map, Some(layer_start)));
+    }
+    let start = mtp_layer_start_from_hf_config(source)?;
+    let metadata = metadata_from_hf_config_with_options(
+        source,
+        count,
+        MetadataOptions {
+            include_mtp: !runner.no_mtp,
+        },
+    )?;
+    Ok((metadata, native_tensor_name_map(start), start))
 }
 
 fn native_tensor_name_map(mtp_layer_start: Option<u32>) -> TensorNameMap {
@@ -250,3 +280,44 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod nemotron_profile_cli_tests {
+    use clap::Parser as _;
+    fn runner(extra: &[&str]) -> crate::ConvertRunnerArgs {
+        let mut args = vec![
+            "skippy-quantize",
+            "run-convert-window",
+            "--manifest",
+            "unused.json",
+            "--backend",
+            "native-rust",
+            "--nemotron-mtp-tokenizer-profile",
+            "profile.json",
+        ];
+        args.extend_from_slice(extra);
+        let parsed = crate::Args::try_parse_from(args).unwrap();
+        let crate::Command::RunConvertWindow(args) = parsed.command else {
+            panic!("wrong command");
+        };
+        args.runner
+    }
+    #[test]
+    fn nemotron_cli_profile_requires_native_mtp_and_preserves_explicit_path() {
+        assert!(crate::prepare_convert_runner(runner(&[])).is_err());
+        assert!(crate::prepare_convert_runner(runner(&["--no-mtp"])).is_err());
+        assert!(crate::prepare_convert_runner(runner(&["--mtp", "--no-mtp"])).is_err());
+        let admitted = crate::prepare_convert_runner(runner(&["--mtp"])).unwrap();
+        assert_eq!(
+            admitted.nemotron_mtp_tokenizer_profile.as_deref(),
+            Some(std::path::Path::new("profile.json"))
+        );
+        let mut incompatible = runner(&["--mtp"]);
+        incompatible.backend = crate::backend::BackendKind::LlamaApi;
+        assert!(crate::prepare_convert_runner(incompatible).is_err());
+    }
+}
+
+#[cfg(test)]
+#[path = "native_convert/nemotron_run_tests.rs"]
+mod nemotron_run_tests;

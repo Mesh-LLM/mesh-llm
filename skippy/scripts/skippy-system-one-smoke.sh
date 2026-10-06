@@ -58,7 +58,8 @@ CERTIFIED_BACKENDS="${SYSTEMONE_SMOKE_CERTIFIED_BACKENDS:-cuda}"
 REQUIRE_QUALIFIED="${SYSTEMONE_SMOKE_REQUIRE_QUALIFIED:-0}"
 SKIP_CONTRACT="${SYSTEMONE_SMOKE_SKIP_CONTRACT:-0}"
 ALIAS="${SYSTEMONE_SMOKE_ALIAS:-openjev-latest}"
-CASES_DRIVER="${SYSTEMONE_SMOKE_DRIVER:-$ROOT/scripts/skippy-system-one-cases.py}"
+CASES_DRIVER="${SYSTEMONE_SMOKE_DRIVER:-}"
+DRIVER_TIMEOUT_SECS="${SYSTEMONE_SMOKE_DRIVER_TIMEOUT_SECS:-14400}"
 STAGE_SERVER_BIN="${STAGE_SERVER_BIN:-$ROOT/target/debug/skippy}"
 MODEL_PACKAGE_BIN="${MODEL_PACKAGE_BIN:-$ROOT/target/debug/skippy-package-builder}"
 CTX_SIZE="${SYSTEMONE_SMOKE_CTX_SIZE:-8192}"
@@ -274,7 +275,7 @@ run_cases_against_stage() {
   rc=0
   local case_command=("${automation[@]}" automation system-one-cases)
   if [[ "${SYSTEMONE_SMOKE_DRIVER+set}" == set ]]; then
-    case_command=(python3 "$CASES_DRIVER")
+    case_command=("${automation[@]}" automation system-one-cases --driver-executable "$CASES_DRIVER" --driver-timeout "$DRIVER_TIMEOUT_SECS")
   fi
   "${case_command[@]}" \
     --base-url "http://127.0.0.1:${port}" \
@@ -381,18 +382,21 @@ main() {
   fi
 
   require_cmd jq || exit 2
-  if [[ "${SYSTEMONE_SMOKE_DRIVER+set}" == set ]]; then
-    require_cmd python3 || exit 2
-  fi
   require_cmd curl || exit 2
   if [[ ! -f "$SMOKE_MANIFEST" ]]; then
     echo "System One smoke manifest not found: $SMOKE_MANIFEST" >&2
     echo "regenerate it with cargo xtool models generate" >&2
     exit 2
   fi
-  if [[ "${SYSTEMONE_SMOKE_DRIVER+set}" == set && ! -f "$CASES_DRIVER" ]]; then
-    echo "System One case driver not found: $CASES_DRIVER" >&2
-    exit 2
+  if [[ "${SYSTEMONE_SMOKE_DRIVER+set}" == set ]]; then
+    if [[ "$CASES_DRIVER" == *.py ]]; then
+      echo "SYSTEMONE_SMOKE_DRIVER no longer accepts Python scripts; use an absolute native executable with the System One case arguments" >&2
+      exit 2
+    fi
+    if [[ "$CASES_DRIVER" != /* || ! -f "$CASES_DRIVER" || ! -x "$CASES_DRIVER" || -L "$CASES_DRIVER" ]]; then
+      echo "SYSTEMONE_SMOKE_DRIVER must be an absolute regular executable (not a symlink)" >&2
+      exit 2
+    fi
   fi
   mkdir -p "$REPORT_DIR"
 

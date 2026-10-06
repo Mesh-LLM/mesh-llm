@@ -287,7 +287,7 @@ fn system_one_actual_mixed_launch_requires_both_default_and_explicit_override_bi
     let source = concat!(
         "local case_command=(\"${automation[@]}\" automation system-one-cases)\n",
         "if [[ \"${SYSTEMONE_SMOKE_DRIVER+set}\" == set ]]; then\n",
-        "case_command=(python3 \"$CASES_DRIVER\")\n",
+        "case_command=(\"${automation[@]}\" automation system-one-cases --driver-executable \"$CASES_DRIVER\" --driver-timeout \"$DRIVER_TIMEOUT_SECS\")\n",
         "fi\n",
         "\"${case_command[@]}\" \\\n",
         "--mode \"$mode\" --json-out \"$REPORT\" || rc=$?\n"
@@ -297,11 +297,11 @@ fn system_one_actual_mixed_launch_requires_both_default_and_explicit_override_bi
         caller: caller.to_owned(),
         line: 5,
         source_block: source.lines().nth(4).unwrap().trim().to_owned(),
-        child: "tools/xtask default; explicit Python $CASES_DRIVER override".to_owned(),
+        child: "tools/xtask default; bounded explicit native $CASES_DRIVER override".to_owned(),
         child_source_known: false,
         argv: source.trim_end().to_owned(),
-        replacement_owner: "tools/xtask/src/automation/system_one_cases/mod.rs; retained explicit SYSTEMONE_SMOKE_DRIVER Python override".to_owned(),
-        status_streams_effects: "Typed default and explicitly retained Python override; same report/status consumer".to_owned(),
+        replacement_owner: "tools/xtask/src/automation/system_one_cases/mod.rs; bounded explicit native executable driver".to_owned(),
+        status_streams_effects: "Typed default and bounded native executable override; same report/status consumer".to_owned(),
     };
     check_selected_processes(&root, std::slice::from_ref(&record))?;
     assert!(

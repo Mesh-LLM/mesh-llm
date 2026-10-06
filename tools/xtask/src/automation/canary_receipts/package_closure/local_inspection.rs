@@ -117,3 +117,52 @@ pub(super) fn execute(bytes: &[u8], verb: &str) -> DynResult<Value> {
 #[cfg(test)]
 #[path = "local_inspection/tests.rs"]
 mod tests;
+// Append to the existing local_inspection owner, retaining its actual authority.
+pub(super) fn with_parity<T>(
+    bytes: &[u8],
+    body: impl FnOnce(&Path, &Value, &Value, &Value, &crate::process::Cancellation) -> DynResult<T>,
+) -> DynResult<T> {
+    process::operation(|| {
+        let input: Inspection = serde_json::from_slice(bytes)?;
+        let root = input.authority.validate()?;
+        let prepared = source::prepared(&root)?;
+        let admitted = parity_inventory::admit(&root, &input.authority.base)?;
+        let manifest =
+            super::policy_document::json(&root, "docs/skippy/llama-parity-candidates.json")?;
+        let registry = if admitted["classifications"].as_array().is_some_and(|rows| {
+            rows.iter()
+                .any(|row| row["artifact_id"].is_string() && !row["model_pin"].is_object())
+        }) {
+            super::policy_document::json(&root, "ci/model-artifacts/manifests/skippy-parity.json")?
+        } else {
+            Value::Null
+        };
+        let output = body(
+            &root,
+            &admitted,
+            &manifest,
+            &registry,
+            &process::cancellation(),
+        );
+        if super::policy_document::json(&root, "docs/skippy/llama-parity-candidates.json")?
+            != manifest
+        {
+            return Err("parity manifest changed during manual operation".into());
+        }
+        if !registry.is_null()
+            && super::policy_document::json(
+                &root,
+                "ci/model-artifacts/manifests/skippy-parity.json",
+            )? != registry
+        {
+            return Err("manual registry changed during operation".into());
+        }
+        let after = source::prepared(&root)?;
+        if prepared.head != after.head || prepared.markers != after.markers {
+            return Err("prepared native identity changed during manual parity operation".into());
+        }
+        input.authority.validate()?;
+        process::check()?;
+        output
+    })
+}

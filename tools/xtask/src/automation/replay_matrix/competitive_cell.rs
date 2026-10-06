@@ -66,11 +66,12 @@ pub(in crate::automation) fn run(args: &[String]) -> DynResult<()> {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?;
+    let cancellation = interrupt.cancellation();
     let measured = runtime.block_on(measure(
         &input,
         &admitted,
         deadline,
-        interrupt.cancellation(),
+        cancellation.clone(),
         &mut records,
     ));
     let finish = interrupt.finish();
@@ -85,14 +86,20 @@ pub(in crate::automation) fn run(args: &[String]) -> DynResult<()> {
         crate::product::digest::file_sha256(&input.output.join("requests.jsonl"))
             .map_err(|error| error.error)?
             .into();
+    let terminal = super::competitive_terminal::finalize(
+        &mut summary,
+        finish.is_ok(),
+        &cancellation,
+        deadline,
+    );
     let mut file = OpenOptions::new()
         .write(true)
         .create_new(true)
         .open(input.output.join("worker-summary.json"))?;
     file.write_all(&serde_json::to_vec_pretty(&summary)?)?;
     file.write_all(b"\n")?;
-    finish?;
     let summary = measured?;
+    terminal?;
     if summary["passed"] != true {
         return Err("competitive requests failed; worker evidence retained".into());
     }

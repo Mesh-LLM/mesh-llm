@@ -61,7 +61,9 @@ fn execute(
         "{report:?}"
     );
     assert!(
-        !report.stdout.truncated
+        report.stdout.line_capture_complete
+            && report.stderr.line_capture_complete
+            && !report.stdout.truncated
             && !report.stderr.truncated
             && report.stdout.suppressed_lines == 0
             && report.stderr.suppressed_lines == 0,

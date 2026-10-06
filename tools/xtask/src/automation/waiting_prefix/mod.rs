@@ -16,6 +16,7 @@ mod kv_manifest;
 mod kv_metadata;
 mod kv_owner;
 mod kv_report;
+mod kv_terminal;
 #[cfg(test)]
 mod kv_tests;
 mod kv_worker;
@@ -29,11 +30,24 @@ mod mixed_matrix;
 mod mixed_owner;
 mod mixed_phase;
 mod mixed_summary;
+mod mixed_terminal;
 #[cfg(test)]
 mod mixed_tests;
 mod mixed_worker;
 mod mixed_workload;
 pub(in crate::automation) mod native_identity;
+mod radix_cell;
+mod radix_command;
+mod radix_gate;
+mod radix_identity;
+mod radix_owner;
+mod radix_projection;
+mod radix_summary;
+mod radix_terminal;
+#[cfg(test)]
+mod radix_tests;
+mod radix_worker;
+mod radix_workload;
 mod report;
 mod requests;
 mod round_runner;
@@ -56,7 +70,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::{collections::BTreeMap, io::Write, path::Path};
 
-const USAGE: &str = "cargo xtool automation waiting-prefix evaluate --comparison FILE --output FILE [--report FILE] (--contract FILE | --catalog FILE --profile NAME)\n  cargo xtool automation waiting-prefix {summarize|aggregate} --input FILE --output FILE\n  cargo xtool automation waiting-prefix execute-requests --input FILE --output FILE\n  cargo xtool automation waiting-prefix sequential-cell --input FILE --output FILE\n  cargo xtool automation waiting-prefix {mixed-run|mixed-cell} --input FILE --output-directory DIR\n  cargo xtool automation waiting-prefix {mixed-plan|mixed-worker|mixed-report} --input FILE --output FILE\n  cargo xtool automation waiting-prefix adaptive-run --input FILE --output-directory DIRECTORY\n\
+const USAGE: &str = "cargo xtool automation waiting-prefix evaluate --comparison FILE --output FILE [--report FILE] (--contract FILE | --catalog FILE --profile NAME)\n  cargo xtool automation waiting-prefix {summarize|aggregate} --input FILE --output FILE\n  cargo xtool automation waiting-prefix execute-requests --input FILE --output FILE\n  cargo xtool automation waiting-prefix sequential-cell --input FILE --output FILE\n  cargo xtool automation waiting-prefix {mixed-run|mixed-cell} --input FILE --output-directory DIR\n  cargo xtool automation waiting-prefix {mixed-plan|mixed-worker|mixed-report} --input FILE --output FILE\n  cargo xtool automation waiting-prefix radix-run --input FILE --output-directory DIR\n  cargo xtool automation waiting-prefix adaptive-prepare --input FILE --output FILE\n  cargo xtool automation waiting-prefix adaptive-run --input FILE --output-directory DIRECTORY\n\
        adaptive-cell --input FILE --output-directory DIR\n  cargo xtool automation waiting-prefix plan --catalog FILE --profile NAME --model-id ID --model-sha256 HASH [--contract FILE] [--prompt-manifest FILE] --output FILE\n  cargo xtool automation waiting-prefix synthetic-prompts --families N --requests-per-family N --prefix-blocks N --output FILE\n  cargo xtool automation waiting-prefix stage-config --input FILE --output FILE\n  cargo xtool automation waiting-prefix telemetry-log {snapshot|collect} --log FILE --output FILE [--cursor FILE --expected-generations N]\n  cargo xtool automation waiting-prefix cell-worker --input FILE --output FILE\n  cargo xtool automation waiting-prefix server-cell --input FILE --output-directory DIR\n  cargo xtool automation waiting-prefix prepare-run --input FILE --output FILE\n  cargo xtool automation waiting-prefix run --input FILE --output-directory DIR\n  cargo xtool automation waiting-prefix validate-prompts FILE";
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -224,6 +238,10 @@ pub(crate) fn run(args: &[String]) -> DynResult<()> {
         [verb, rest @ ..] if verb == "mixed-worker" => mixed_worker::run(rest),
         [verb, rest @ ..] if verb == "mixed-report" => mixed_commands::report(rest),
         [verb, rest @ ..] if verb == "stage-config" => stage_config::run(rest),
+        [verb, rest @ ..] if verb == "radix-run" => radix_command::run(rest),
+        [verb, rest @ ..] if verb == "radix-worker" => radix_worker::run(rest),
+        [verb, rest @ ..] if verb == "radix-identity-worker" => radix_identity::run(rest),
+        [verb, rest @ ..] if verb == "adaptive-prepare" => adaptive_matrix::prepare(rest),
         [verb, rest @ ..] if verb == "adaptive-run" => adaptive_matrix::run(rest),
         [verb, rest @ ..] if verb == "adaptive-cell" => adaptive_cell::run(rest),
         [verb, rest @ ..] if verb == "adaptive-identity-worker" => adaptive_identity::run(rest),

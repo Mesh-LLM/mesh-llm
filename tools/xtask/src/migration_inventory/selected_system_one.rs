@@ -22,7 +22,7 @@ pub(super) fn check_shape(path: &str, lines: &[&str]) -> DynResult<()> {
         "write_stage_config() {\n\"${automation[@]}\" automation system-one-smoke stage \"$@\"\n}",
         "port=\"$(pick_port)\" || return 2",
         "write_stage_config \"$config\" \"$model_id\" \"$model_path\" \"$(jq -r '.sha256' <<<\"$summary\")\" \\\n\"$layer_end\" \"127.0.0.1:${port}\" 1 \"$CTX_SIZE\" \"$n_batch\" \"$gpu_layers\" || return 2",
-        "if [[ \"${SYSTEMONE_SMOKE_DRIVER+set}\" == set ]]; then\nrequire_cmd python3 || exit 2\nfi",
+        "if [[ \"$CASES_DRIVER\" != /* || ! -f \"$CASES_DRIVER\" || ! -x \"$CASES_DRIVER\" || -L \"$CASES_DRIVER\" ]]; then",
         "\"${automation[@]}\" automation system-one-smoke report \\\n\"$REPORT_PATH\" \"$status\" \"$contract_status\" \"$read_status\" \\\n\"$READ_ARTIFACT_ID\" \"$BUILD_BACKEND\" \"$READ_RESOLVED_ARTIFACT_PATH\" \\\n\"$READ_ARTIFACT_CACHE_CHECKED\" \"$CERTIFIED_BACKENDS\" \\\n\"$REQUIRE_QUALIFIED\" \"$SKIP_CONTRACT\" \"$REPORT_REASONS\"",
     ] {
         if source.matches(required).count() != 1 {
@@ -43,11 +43,9 @@ pub(super) fn check_shape(path: &str, lines: &[&str]) -> DynResult<()> {
     }
     if lines
         .iter()
-        .filter(|line| line.trim() == "require_cmd python3 || exit 2")
-        .count()
-        != 1
+        .any(|line| line.trim() == "require_cmd python3 || exit 2")
     {
-        return Err("selected process: changed System One explicit Python admission".into());
+        return Err("selected process: obsolete System One interpreter admission".into());
     }
     Ok(())
 }

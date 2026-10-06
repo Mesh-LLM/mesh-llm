@@ -3943,63 +3943,63 @@
     },
     {
       "caller": "scripts/skippy-system-one-smoke.sh",
-      "line": 104,
+      "line": 105,
       "source_block": "\"${automation[@]}\" automation local-ports 1",
       "child": "tools/xtask configured absolute regular executable or trusted Just automation facade",
       "child_source_known": false,
       "argv": "\"${automation[@]}\" automation local-ports 1",
       "replacement_owner": "tools/xtask/src/automation/local_ports.rs",
-      "status_streams_effects": "Authored source binding; root owning whole-wrapper qualification pending. Typed local ports/stage/outcome preserve stdout/status and shell consumers. Both pinned model resolver calls retained. Explicit SYSTEMONE_SMOKE_DRIVER remains conditional Python and unclassified; native/model/qualified backend gates retained."
+      "status_streams_effects": "Current native wrapper binding; actual component/wrapper tests and normal CI determine qualification. Ports/stage/report/model resolver status and output consumers retained; explicit custom driver is an admitted absolute regular executable with bounded native supervision, never a Python command array. Native/model/backend qualification remains separate."
     },
     {
       "caller": "scripts/skippy-system-one-smoke.sh",
-      "line": 138,
+      "line": 139,
       "source_block": "\"${automation[@]}\" models resolve \"$SMOKE_MANIFEST\" \\",
       "child": "tools/xtask configured absolute regular executable or trusted Just automation facade",
       "child_source_known": false,
       "argv": "\"${automation[@]}\" models resolve \"$SMOKE_MANIFEST\" \\\n--artifact-id \"$1\" \\\n--cadence \"$SMOKE_CADENCE\" \\\n--require-single-file",
       "replacement_owner": "tools/xtask/src/model_registry/mod.rs",
-      "status_streams_effects": "Authored source binding; root owning whole-wrapper qualification pending. Typed local ports/stage/outcome preserve stdout/status and shell consumers. Both pinned model resolver calls retained. Explicit SYSTEMONE_SMOKE_DRIVER remains conditional Python and unclassified; native/model/qualified backend gates retained."
+      "status_streams_effects": "Current native wrapper binding; actual component/wrapper tests and normal CI determine qualification. Ports/stage/report/model resolver status and output consumers retained; explicit custom driver is an admitted absolute regular executable with bounded native supervision, never a Python command array. Native/model/backend qualification remains separate."
     },
     {
       "caller": "scripts/skippy-system-one-smoke.sh",
-      "line": 163,
+      "line": 164,
       "source_block": "\"${automation[@]}\" models resolve \"$SMOKE_MANIFEST\" \\",
       "child": "tools/xtask configured absolute regular executable or trusted Just automation facade",
       "child_source_known": false,
       "argv": "\"${automation[@]}\" models resolve \"$SMOKE_MANIFEST\" \\\n--artifact-id \"$1\" \\\n--cadence \"$SMOKE_CADENCE\" \\\n--require-single-file \\\n--verify-root \"$2\" >&2",
       "replacement_owner": "tools/xtask/src/model_registry/mod.rs",
-      "status_streams_effects": "Authored source binding; root owning whole-wrapper qualification pending. Typed local ports/stage/outcome preserve stdout/status and shell consumers. Both pinned model resolver calls retained. Explicit SYSTEMONE_SMOKE_DRIVER remains conditional Python and unclassified; native/model/qualified backend gates retained."
+      "status_streams_effects": "Current native wrapper binding; actual component/wrapper tests and normal CI determine qualification. Ports/stage/report/model resolver status and output consumers retained; explicit custom driver is an admitted absolute regular executable with bounded native supervision, never a Python command array. Native/model/backend qualification remains separate."
     },
     {
       "caller": "scripts/skippy-system-one-smoke.sh",
-      "line": 171,
+      "line": 172,
       "source_block": "\"${automation[@]}\" automation system-one-smoke stage \"$@\"",
       "child": "tools/xtask configured absolute regular executable or trusted Just automation facade",
       "child_source_known": false,
       "argv": "\"${automation[@]}\" automation system-one-smoke stage \"$@\"",
       "replacement_owner": "tools/xtask/src/automation/system_one_smoke.rs",
-      "status_streams_effects": "Authored source binding; root owning whole-wrapper qualification pending. Typed local ports/stage/outcome preserve stdout/status and shell consumers. Both pinned model resolver calls retained. Explicit SYSTEMONE_SMOKE_DRIVER remains conditional Python and unclassified; native/model/qualified backend gates retained."
+      "status_streams_effects": "Current native wrapper binding; actual component/wrapper tests and normal CI determine qualification. Ports/stage/report/model resolver status and output consumers retained; explicit custom driver is an admitted absolute regular executable with bounded native supervision, never a Python command array. Native/model/backend qualification remains separate."
     },
     {
       "caller": "scripts/skippy-system-one-smoke.sh",
-      "line": 279,
+      "line": 280,
       "source_block": "\"${case_command[@]}\" \\",
-      "child": "tools/xtask default; explicit Python $CASES_DRIVER override",
+      "child": "tools/xtask default; bounded explicit native $CASES_DRIVER override",
       "child_source_known": false,
-      "argv": "local case_command=(\"${automation[@]}\" automation system-one-cases)\nif [[ \"${SYSTEMONE_SMOKE_DRIVER+set}\" == set ]]; then\ncase_command=(python3 \"$CASES_DRIVER\")\nfi\n\"${case_command[@]}\" \\\n--base-url \"http://127.0.0.1:${port}\" \\\n--model \"$model_id\" \\\n--alias \"$ALIAS\" \\\n--mode \"$mode\" \\\n--timeout \"$request_timeout\" \\\n--json-out \"$REPORT_DIR/system-one-${mode}.json\" || rc=$?",
-      "replacement_owner": "tools/xtask/src/automation/system_one_cases/mod.rs; retained explicit SYSTEMONE_SMOKE_DRIVER Python override",
-      "status_streams_effects": "Authored source binding; root owning whole-wrapper qualification pending. Typed local ports/stage/outcome preserve stdout/status and shell consumers. Both pinned model resolver calls retained. Explicit SYSTEMONE_SMOKE_DRIVER remains conditional Python and unclassified; native/model/qualified backend gates retained."
+      "argv": "local case_command=(\"${automation[@]}\" automation system-one-cases)\nif [[ \"${SYSTEMONE_SMOKE_DRIVER+set}\" == set ]]; then\ncase_command=(\"${automation[@]}\" automation system-one-cases --driver-executable \"$CASES_DRIVER\" --driver-timeout \"$DRIVER_TIMEOUT_SECS\")\nfi\n\"${case_command[@]}\" \\\n--base-url \"http://127.0.0.1:${port}\" \\\n--model \"$model_id\" \\\n--alias \"$ALIAS\" \\\n--mode \"$mode\" \\\n--timeout \"$request_timeout\" \\\n--json-out \"$REPORT_DIR/system-one-${mode}.json\" || rc=$?",
+      "replacement_owner": "tools/xtask/src/automation/system_one_cases/mod.rs; bounded explicit native executable driver",
+      "status_streams_effects": "Current native wrapper binding; actual component/wrapper tests and normal CI determine qualification. Ports/stage/report/model resolver status and output consumers retained; explicit custom driver is an admitted absolute regular executable with bounded native supervision, never a Python command array. Native/model/backend qualification remains separate."
     },
     {
       "caller": "scripts/skippy-system-one-smoke.sh",
-      "line": 452,
+      "line": 456,
       "source_block": "\"${automation[@]}\" automation system-one-smoke report \\",
       "child": "tools/xtask configured absolute regular executable or trusted Just automation facade",
       "child_source_known": false,
       "argv": "\"${automation[@]}\" automation system-one-smoke report \\\n\"$REPORT_PATH\" \"$status\" \"$contract_status\" \"$read_status\" \\\n\"$READ_ARTIFACT_ID\" \"$BUILD_BACKEND\" \"$READ_RESOLVED_ARTIFACT_PATH\" \\\n\"$READ_ARTIFACT_CACHE_CHECKED\" \"$CERTIFIED_BACKENDS\" \\\n\"$REQUIRE_QUALIFIED\" \"$SKIP_CONTRACT\" \"$REPORT_REASONS\"",
       "replacement_owner": "tools/xtask/src/automation/system_one_smoke.rs",
-      "status_streams_effects": "Authored source binding; root owning whole-wrapper qualification pending. Typed local ports/stage/outcome preserve stdout/status and shell consumers. Both pinned model resolver calls retained. Explicit SYSTEMONE_SMOKE_DRIVER remains conditional Python and unclassified; native/model/qualified backend gates retained."
+      "status_streams_effects": "Current native wrapper binding; actual component/wrapper tests and normal CI determine qualification. Ports/stage/report/model resolver status and output consumers retained; explicit custom driver is an admitted absolute regular executable with bounded native supervision, never a Python command array. Native/model/backend qualification remains separate."
     },
     {
       "caller": "scripts/llama-canary-agent-repair.sh",

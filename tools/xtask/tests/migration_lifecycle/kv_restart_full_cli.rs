@@ -155,6 +155,11 @@ fn kv_restart_full_cli_restores_same_state_and_exact_full_transcript() {
     assert!(raw.process.success(), "{raw:?}");
     let run = report(root.path());
     assert!(run["error"].is_null(), "{run}");
+    assert_eq!(run["terminal_complete"], true);
+    assert!(run["terminal_error"].is_null());
+    let start = run["started_at_unix_seconds"].as_u64().unwrap();
+    let end = run["completed_at_unix_seconds"].as_u64().unwrap();
+    assert!(start > 0 && end > 0);
     let rows = run["requests"].as_array().unwrap();
     assert_eq!(
         rows.iter()
@@ -246,6 +251,7 @@ fn kv_restart_full_cli_baseline_and_final_shutdown_refusals_retain_partial_rows(
         assert_eq!(raw.process.status.unwrap().code(), Some(1));
         let run = report(root.path());
         assert!(!run["error"].is_null());
+        assert_eq!(run["terminal_complete"], false);
         let rows = run["requests"].as_array().unwrap();
         assert!(rows.len() >= 3);
         if mode == "mismatch" {
@@ -315,6 +321,7 @@ fn kv_restart_full_cli_replay_inflight_cancel_retains_fill_and_owned_cleanup() {
     assert!(cancellation.is_cancelled());
     let run = report(root.path());
     assert!(!run["error"].is_null());
+    assert_eq!(run["terminal_complete"], false);
     assert!(run["requests"].as_array().unwrap().len() >= 2);
     assert!(run["requests"][0]["error"].is_null() && run["requests"][1]["error"].is_null());
     endpoint_free();

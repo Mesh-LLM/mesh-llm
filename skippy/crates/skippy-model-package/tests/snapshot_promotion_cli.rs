@@ -313,10 +313,12 @@ fn embedded_native_helper_survives_build_workspace_cleanup() {
         target.join("release/promote-layer-package-snapshot"),
     )
     .unwrap();
+    let layer_helper = env!("CARGO_BIN_EXE_model-package-layer-job");
+    fs::copy(layer_helper, target.join("release/model-package-layer-job")).unwrap();
     let just = fixtures.join("just");
     fs::write(
         &just,
-        "#!/bin/sh\n[ \"$#\" -eq 1 ] && [ \"$1\" = snapshot-promoter-release-build ] || exit 9\n",
+        "#!/bin/sh\n[ \"$#\" -eq 1 ] || exit 9\ncase \"$1\" in snapshot-promoter-release-build|layer-job-helper-release-build) ;; *) exit 9 ;; esac\n",
     )
     .unwrap();
     fs::set_permissions(&just, fs::Permissions::from_mode(0o755)).unwrap();
@@ -327,7 +329,7 @@ fn embedded_native_helper_survives_build_workspace_cleanup() {
         })
         .unwrap();
     let script = format!(
-        "set -euo pipefail\n{}\n{}\n\"$SNAPSHOT_PROMOTER\" --help\n",
+        "set -euo pipefail\n{}\n{}\n\"$SNAPSHOT_PROMOTER\" --help\n\"$LAYER_JOB\" --help\n",
         &source[start..end],
         cleanup
     );
@@ -335,6 +337,7 @@ fn embedded_native_helper_survives_build_workspace_cleanup() {
         .env_clear()
         .env("PATH", format!("{}:/usr/bin:/bin", fixtures.display()))
         .env("CARGO_TARGET_DIR", &target)
+        .env("TOOL_DIR", &tool_dir)
         .env(
             "SNAPSHOT_PROMOTER",
             tool_dir.join("promote-layer-package-snapshot"),
@@ -355,5 +358,16 @@ fn embedded_native_helper_survives_build_workspace_cleanup() {
         fs::read(original).unwrap(),
         fs::read(tool_dir.join("promote-layer-package-snapshot")).unwrap()
     );
+    assert_eq!(
+        fs::read(layer_helper).unwrap(),
+        fs::read(tool_dir.join("model-package-layer-job")).unwrap()
+    );
     assert!(String::from_utf8_lossy(&output.stdout).contains("atomically publish"));
 }
+
+#[cfg(unix)]
+#[path = "snapshot_promotion_cli/publisher_helper.rs"]
+mod publisher_helper;
+
+#[path = "snapshot_promotion_cli/layer_job.rs"]
+mod layer_job;

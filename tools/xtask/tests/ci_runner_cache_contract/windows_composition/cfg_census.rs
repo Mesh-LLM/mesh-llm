@@ -15,10 +15,13 @@ const UNVERIFIED: &[&str] = &[
     "mesh-llm-hardware-profile",
     "mesh-llm-native-runtime",
     "model-hf",
+    // Native HF publication input custody and model FIFO fixtures need Windows qualification.
+    "model-package",
     "mesh-llm-routing",
     "mesh-llm-system",
     "skippy-bench",
     "skippy-cache",
+    "skippy-model",
     "skippy-model-package",
     "skippy-quantize",
     "skippy-runtime",

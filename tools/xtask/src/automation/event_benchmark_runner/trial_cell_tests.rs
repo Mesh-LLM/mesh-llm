@@ -87,7 +87,9 @@ fn shutdown_script(prefix: &str) -> String {
         format!("health='{HEALTH}'; trap 'printf \"%s\\n\" \"$health\" >&2; exit 0' TERM"),
         prefix.into(),
         ": > ready".into(),
-        "while :; do sleep 1; done".into(),
+        // A shell may defer its TERM trap until the foreground sleep exits.
+        // Keep that wait below the fixture's 500 ms graceful-shutdown budget.
+        "while :; do sleep 0.02; done".into(),
     ]
     .join("; ")
 }
@@ -251,7 +253,7 @@ fn oversized_unknown_record_prevents_claim_of_complete_typed_health() {
 fn suppressed_health_record_stores_only_typed_allowlisted_fields() {
     let private = r#"{"context":"event_system_health","message":"version=1 dropped_progress=9 token=private-user-content ingress_p99_us=4"}"#;
     let script = format!(
-        "health='{private}'; trap 'printf \"%s\\n\" \"$health\" >&2; exit 0' TERM; : > ready; while :; do sleep 1; done"
+        "health='{private}'; trap 'printf \"%s\\n\" \"$health\" >&2; exit 0' TERM; : > ready; while :; do sleep 0.02; done"
     );
     let (directory, trial, report) = fixture(&script, 4096);
     let host = report

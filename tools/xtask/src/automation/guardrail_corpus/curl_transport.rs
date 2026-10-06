@@ -59,6 +59,25 @@ pub(super) fn exchange(
     cancellation: &Cancellation,
     authorization: Option<&str>,
 ) -> DynResult<Response> {
+    exchange_mode(endpoint, body, deadline, cancellation, authorization, false)
+}
+pub(super) fn exchange_private(
+    endpoint: &str,
+    body: Option<&Value>,
+    deadline: Instant,
+    cancellation: &Cancellation,
+    authorization: Option<&str>,
+) -> DynResult<Response> {
+    exchange_mode(endpoint, body, deadline, cancellation, authorization, true)
+}
+fn exchange_mode(
+    endpoint: &str,
+    body: Option<&Value>,
+    deadline: Instant,
+    cancellation: &Cancellation,
+    authorization: Option<&str>,
+    private: bool,
+) -> DynResult<Response> {
     let curl = Curl::discover_for(remaining(deadline, cancellation)?, cancellation)?;
     let directory = tempfile::Builder::new()
         .prefix("guardrail-curl-")
@@ -80,7 +99,13 @@ pub(super) fn exchange(
         file.flush()?;
     }
     let execution = process::curl_https::execution_budget(remaining(deadline, cancellation)?)?;
-    let spec = curl.json_specification(
+    let method = if private {
+        Curl::json_private_specification
+    } else {
+        Curl::json_specification
+    };
+    let spec = method(
+        &curl,
         &Request {
             endpoint: endpoint.into(),
             method: if body.is_some() {

@@ -173,3 +173,22 @@ fn admitted_inventory_emits_every_status_and_duplicate_classification_without_ca
         "p2"
     );
 }
+
+#[test]
+fn runnable_statuses_refuse_unsupported_reasons_while_auxiliary_reason_is_admitted() {
+    let family = json!({"models":[]});
+    for status in ["certified", "candidate", "candidate_stateful"] {
+        let mut parity = json!({"candidates":[{"llama_model":"somearch","status":status}]});
+        assert!(validate(&parity, &family, &set(&["somearch"]), &set(&["somearch"])).is_ok());
+        parity["candidates"][0]["unsupported_reason"] = json!("leftover");
+        assert!(validate(&parity, &family, &set(&["somearch"]), &set(&["somearch"])).is_err());
+    }
+    let auxiliary = json!({"candidates":[{"llama_model":"encoder","status":"non_causal_aux","unsupported_reason":"non-causal encoder"}]});
+    // Keep the legacy no-source shape, and independently exercise the row
+    // policy with an actual inventoried source and no paired boundary.
+    assert!(validate(&auxiliary, &family, &set(&[]), &set(&[])).is_ok());
+    assert!(validate(&auxiliary, &family, &set(&["encoder"]), &set(&[])).is_ok());
+    let mut malformed = auxiliary;
+    malformed["candidates"][0]["unsupported_reason"] = json!({"not":"a string"});
+    assert!(validate(&malformed, &family, &set(&["encoder"]), &set(&[])).is_err());
+}

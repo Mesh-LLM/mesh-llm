@@ -237,6 +237,44 @@ impl Curl {
         Ok(spec)
     }
 
+    /// Move JSON bearer bytes into an owned private header file rather than child argv.
+    pub(crate) fn json_private_specification(
+        &self,
+        request: &Request<'_>,
+        files: Files<'_>,
+        budget: Duration,
+        maximum: u64,
+    ) -> Result<ProcessSpec, String> {
+        let root = files.directory;
+        let mut spec = self.json_specification(request, files, budget, maximum)?;
+        if request.token.is_empty() {
+            return Ok(spec);
+        }
+        let index = spec.arguments.iter().position(|v|
+            matches!(v, Value::Secret(s) if s.to_str().is_some_and(|s| s.starts_with("authorization: Bearer "))))
+            .ok_or("private JSON header absent")?;
+        let path = root.join("authorization-header");
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = options
+            .open(&path)
+            .map_err(|_| "private JSON header creation refused")?;
+        use std::io::Write;
+        writeln!(file, "authorization: Bearer {}", request.token)
+            .map_err(|_| "private JSON header write refused")?;
+        file.flush()
+            .map_err(|_| "private JSON header flush refused")?;
+        let mut argument = OsString::from("@");
+        argument.push(path.as_os_str());
+        spec.arguments[index] = Value::Public(argument);
+        Ok(spec)
+    }
+
     /// Explicit per-hop pins; this mode never inherits proxy, credential or CA settings.
     pub(crate) fn pinned_get(
         &self,
@@ -865,5 +903,82 @@ mod borrowed_authorization_tests {
             );
         }
         root.close().unwrap();
+    }
+}
+
+#[cfg(test)]
+mod private_header_tests {
+    use super::*;
+    #[test]
+    fn private_json_header_is_owned_mode_restricted_and_never_token_argv() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().canonicalize().unwrap();
+        let curl = Curl {
+            executable: root.join("inert-curl"),
+            environment: vec![],
+            certificate_bundle: None,
+            pinned_fixture_ca: None,
+        };
+        let body = root.join("body");
+        let headers = root.join("headers");
+        let spec = curl
+            .json_private_specification(
+                &Request {
+                    endpoint: "http://127.0.0.1:1/v1/models".into(),
+                    method: hyper::Method::GET,
+                    token: "private-fixture-key",
+                },
+                Files {
+                    directory: &root,
+                    body: &body,
+                    headers: &headers,
+                    payload: None,
+                },
+                Duration::from_secs(5),
+                1024,
+            )
+            .unwrap();
+        assert_eq!(
+            std::fs::read(root.join("authorization-header")).unwrap(),
+            b"authorization: Bearer private-fixture-key\n"
+        );
+        for value in &spec.arguments {
+            let bytes = match value {
+                Value::Public(v) | Value::Secret(v) => v.to_string_lossy(),
+            };
+            assert!(!bytes.contains("private-fixture-key"));
+        }
+        assert!(spec.arguments.windows(2).any(|v|matches!((&v[0],&v[1]),(Value::Public(a),Value::Public(b)) if a=="--header" && b.to_string_lossy().starts_with('@'))));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                std::fs::metadata(root.join("authorization-header"))
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o600
+            );
+        }
+        assert!(
+            curl.json_private_specification(
+                &Request {
+                    endpoint: "http://127.0.0.1:1/v1/models".into(),
+                    method: hyper::Method::GET,
+                    token: "other"
+                },
+                Files {
+                    directory: &root,
+                    body: &body,
+                    headers: &headers,
+                    payload: None
+                },
+                Duration::from_secs(5),
+                1024
+            )
+            .is_err()
+        );
+        directory.close().unwrap();
     }
 }

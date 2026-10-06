@@ -332,15 +332,16 @@ pub(super) fn run(args: &[String]) -> DynResult<()> {
     input.arm.stage_ports = [ports[0].local_addr()?.port(), ports[1].local_addr()?.port()];
     input.arm.openai_port = ports[2].local_addr()?.port();
     let interrupt = crate::automation::command_interrupt::Interrupt::install()?;
+    let cancellation = interrupt.cancellation();
     let result = run_owned(
         &input,
         &directory,
         &std::env::current_exe()?,
         until,
-        &interrupt.cancellation(),
+        &cancellation,
         ports,
     );
-    let finished = interrupt.finish();
+    let finished: DynResult<()> = interrupt.finish().map_err(|error| error.to_string().into());
     let mut output = match &result {
         Ok(value) => value.clone(),
         Err(error) => {
@@ -348,10 +349,17 @@ pub(super) fn run(args: &[String]) -> DynResult<()> {
         }
     };
     output["request_sha256"] = json!(expected);
+    let admission = super::mixed_terminal::finalize(
+        &mut output,
+        finished,
+        &cancellation,
+        until,
+        super::mixed_terminal::Kind::Cell,
+    );
     publish(
         &directory.join("cell.json"),
         &serde_json::to_vec_pretty(&output)?,
     )?;
-    finished?;
+    admission?;
     result.map(|_| ())
 }

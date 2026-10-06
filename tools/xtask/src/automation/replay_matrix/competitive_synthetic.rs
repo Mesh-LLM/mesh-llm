@@ -66,16 +66,27 @@ pub(in crate::automation) fn run(args: &[String]) -> DynResult<()> {
     std::fs::create_dir(&input.output)?;
     let deadline = started + Duration::from_secs(input.timeout_seconds);
     let result = execute(&input, &document, deadline);
-    let summary = match &result {
-        Ok(summary) => summary.clone(),
+    let mut summary = match &result {
+        Ok((summary, _)) => summary.clone(),
         Err(error) => {
             json!({"schema_version":1,"scope":"competitive_synthetic_worker","completed":false,"passed":false,"error":error.to_string(),"cell":input.cell,"config_sha256":input.config_sha256,"launch_provenance":input.launch_provenance})
         }
     };
+    let fallback = crate::process::Cancellation::default();
+    let cancellation = result
+        .as_ref()
+        .map_or(&fallback, |(_, cancellation)| cancellation);
+    let terminal =
+        super::competitive_terminal::finalize(&mut summary, true, cancellation, deadline);
     write_new(&input.output.join("worker-summary.json"), &summary)?;
-    result.map(|_| ())
+    result?;
+    terminal
 }
-fn execute(input: &Input, document: &Value, deadline: Instant) -> DynResult<Value> {
+fn execute(
+    input: &Input,
+    document: &Value,
+    deadline: Instant,
+) -> DynResult<(Value, process::Cancellation)> {
     readiness(input, deadline)?;
     let version = invoke(input, vec!["--version".into()], deadline, "version")?;
     if std::str::from_utf8(&version)?.trim()
@@ -127,23 +138,27 @@ fn execute(input: &Input, document: &Value, deadline: Instant) -> DynResult<Valu
         .enable_all()
         .build()?;
     let interrupt = crate::automation::command_interrupt::Interrupt::install()?;
+    let cancellation = interrupt.cancellation();
     let probed = runtime.block_on(super::competitive_parity::probe(
         &input.base_url,
         &input.served_model,
         usize::try_from(concurrency)?,
         deadline,
-        interrupt.cancellation(),
+        cancellation.clone(),
     ));
     let finish = interrupt.finish();
-    let parity = probed?;
-    finish?;
+    let mut parity = probed?;
+    let terminal =
+        super::competitive_terminal::finalize(&mut parity, finish.is_ok(), &cancellation, deadline);
     write_new(&input.output.join("parity.json"), &parity)?;
+    terminal?;
     if parity["passed"] != true {
         return Err("synthetic scheduler parity probe failed; partial evidence retained".into());
     }
-    Ok(
+    Ok((
         json!({"schema_version":1,"scope":"competitive_synthetic_worker","completed":true,"passed":true,"cell":input.cell,"config_sha256":input.config_sha256,"launch_provenance":input.launch_provenance,"benchy_sha256":input.benchy.sha256,"result_sha256":hex::encode(Sha256::digest(result)),"progress_sha256":hex::encode(Sha256::digest(progress)),"completed_requests":requests,"parity_sha256":crate::product::digest::file_sha256(&input.output.join("parity.json")).map_err(|error|error.error)?}),
-    )
+        cancellation,
+    ))
 }
 fn readiness(input: &Input, deadline: Instant) -> DynResult<()> {
     let runtime = tokio::runtime::Builder::new_current_thread()
@@ -325,4 +340,45 @@ pub(super) fn write_new(path: &Path, value: &Value) -> DynResult<()> {
     file.write_all(b"\n")?;
     file.flush()?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn competitive_synthetic_consumed_results_refuse_hidden_errors_null_rates_and_short_rosters() {
+        let good = b"{\"type\":\"request_end\",\"error\":null,\"total_tokens\":64}\n";
+        let valid = json!({"benchmarks":[{"response_size":64,"tg_throughput":{"mean":123.5}}]});
+        assert!(validate(good, &serde_json::to_vec(&valid).unwrap(), 1, 64).is_ok());
+        assert!(validate(good, &serde_json::to_vec(&valid).unwrap(), 2, 64).is_err());
+        let hidden = b"{\"type\":\"request_end\",\"error\":\"HTTP 400\",\"total_tokens\":64}\n";
+        assert!(validate(hidden, &serde_json::to_vec(&valid).unwrap(), 1, 64).is_err());
+        for value in [Value::Null, json!(0), json!(-1), json!("123.5")] {
+            let mut invalid = valid.clone();
+            invalid["benchmarks"][0]["tg_throughput"]["mean"] = value;
+            assert!(validate(good, &serde_json::to_vec(&invalid).unwrap(), 1, 64).is_err());
+        }
+        assert!(validate(good, &serde_json::to_vec(&valid).unwrap(), 1, 65).is_err());
+    }
+    #[test]
+    fn competitive_synthetic_command_preserves_fail_closed_and_optional_token_id_policy() {
+        let root = tempfile::tempdir().unwrap();
+        let mut input:Input=serde_json::from_value(json!({"config":root.path().join("config"),"config_sha256":"a".repeat(64),"cell":{"arm":"llama","prompt_tokens":512},"base_url":"http://127.0.0.1:1234/v1","served_model":"fixture","launch_provenance":{},"output":root.path().join("output"),"timeout_seconds":30,"request_timeout_seconds":1,"benchy":{"path":root.path().join("benchy"),"sha256":"b".repeat(64)},"tokenizer":root.path().join("tokenizer")})).unwrap();
+        let config = json!({"synthetic":{"temperature":0,"seed":42,"runs":1}});
+        for arm in ["llama", "mesh", "vllm", "sglang"] {
+            input.cell["arm"] = json!(arm);
+            let argv = common(&input, &config).unwrap();
+            assert!(argv.iter().any(|a| a == "--exit-on-first-fail"));
+            assert!(argv.iter().any(|a| a == "--no-results-on-fail"));
+            let extra = argv
+                .windows(2)
+                .find(|pair| pair[0] == "--extra-body")
+                .unwrap();
+            assert_eq!(
+                extra[1].contains("return_token_ids=false"),
+                ["vllm", "sglang"].contains(&arm)
+            );
+        }
+        root.close().unwrap();
+    }
 }

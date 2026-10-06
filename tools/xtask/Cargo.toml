@@ -12,6 +12,7 @@ unicode-normalization = "=0.1.25"
 ed25519-dalek = { version = "=3.0.0", features = ["rand_core"] }
 flate2 = "1"
 getrandom = "0.3"
+glob = "=0.3.4"
 hex = "0.4"
 http-body-util = "=0.1.5"
 hyper = { version = "=1.11.1", features = ["client", "server", "http1"] }
@@ -40,7 +41,6 @@ windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Securit
 [dev-dependencies]
 rcgen = "=0.14.10"
 rustls = { version = "=0.23.43", default-features = false, features = ["ring", "std", "tls12"] }
-glob = "=0.3.4"
 regex = "=1.13.1"
 semver = "=1.0.28"
 tar = "0.4"

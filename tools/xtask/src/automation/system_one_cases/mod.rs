@@ -1,5 +1,6 @@
 //! Request qualification for an already running System One frontend, not readiness.
 mod contract;
+mod driver;
 mod full_read;
 mod requests;
 mod transport;
@@ -18,11 +19,14 @@ struct Options {
     mode: String,
     timeout: Duration,
     output: Option<PathBuf>,
+    driver: Option<PathBuf>,
+    driver_timeout: Duration,
+    driver_arguments: Vec<String>,
 }
 impl Options {
     fn parse(args: &[String]) -> DynResult<Self> {
         const G: Grammar = Grammar {
-            usage: "automation system-one-cases --base-url URL --model ID --mode contract|full-read [--alias ID --timeout SECONDS --json-out PATH]",
+            usage: "automation system-one-cases --base-url URL --model ID --mode contract|full-read [--alias ID --timeout SECONDS --json-out PATH --driver-executable ABS --driver-timeout SECONDS]",
             values: &[
                 "--base-url",
                 "--model",
@@ -30,6 +34,8 @@ impl Options {
                 "--alias",
                 "--timeout",
                 "--json-out",
+                "--driver-executable",
+                "--driver-timeout",
             ],
             flags: &[],
         };
@@ -74,6 +80,31 @@ impl Options {
         {
             return Err("System One report must be regular".into());
         }
+        let driver_seconds: f64 = parsed.last("--driver-timeout").unwrap_or("14400").parse()?;
+        if !driver_seconds.is_finite()
+            || driver_seconds <= 0.0
+            || driver_seconds > 86400.0
+            || (parsed.last("--driver-timeout").is_some()
+                && parsed.last("--driver-executable").is_none())
+        {
+            return Err(
+                "driver timeout needs an explicit driver and a finite (0,86400] seconds budget"
+                    .into(),
+            );
+        }
+        let mut driver_arguments = Vec::new();
+        for (flag, value) in [
+            ("--base-url", required("--base-url")?),
+            ("--model", model.as_str()),
+            ("--alias", alias.as_str()),
+            ("--mode", mode.as_str()),
+            ("--timeout", parsed.last("--timeout").unwrap_or("600")),
+        ] {
+            driver_arguments.extend([flag.to_owned(), value.to_owned()]);
+        }
+        if let Some(path) = parsed.last("--json-out") {
+            driver_arguments.extend(["--json-out".to_owned(), path.to_owned()]);
+        }
         Ok(Self {
             endpoint,
             model,
@@ -81,6 +112,9 @@ impl Options {
             mode,
             timeout: Duration::from_secs_f64(seconds),
             output,
+            driver: parsed.last("--driver-executable").map(PathBuf::from),
+            driver_timeout: Duration::from_secs_f64(driver_seconds),
+            driver_arguments,
         })
     }
 }
@@ -102,6 +136,9 @@ pub(crate) fn run(args: &[String]) -> DynResult<()> {
             .emit();
         }
     };
+    if options.driver.is_some() {
+        return driver::run(&options);
+    }
     let interrupt = match Interrupt::install() {
         Ok(value) => value,
         Err(_) => return environment_error("System One signal scope unavailable"),

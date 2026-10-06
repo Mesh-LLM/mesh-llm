@@ -17,7 +17,7 @@ fn records(source: &str) -> DynResult<Vec<super::SelectedProcessCall>> {
         }
         Ok(super::SelectedProcessCall {
             caller: CALLER.to_owned(), line: index + 1, source_block: line.trim().to_owned(),
-            child: if mixed { "tools/xtask default; explicit Python $CASES_DRIVER override" } else { "tools/xtask configured absolute regular executable or trusted Just automation facade" }.to_owned(),
+            child: if mixed { "tools/xtask default; bounded explicit native $CASES_DRIVER override" } else { "tools/xtask configured absolute regular executable or trusted Just automation facade" }.to_owned(),
             child_source_known: false,
             replacement_owner: if mixed { SYSTEM_ONE_OWNER } else { typed_owner(&argv).ok_or("missing typed owner")? }.to_owned(),
             argv, status_streams_effects: "Source fixture only; no native or model qualification".to_owned(),
@@ -49,7 +49,8 @@ fn system_one_serializers_require_each_actual_typed_launch_and_owner() -> DynRes
 }
 
 #[test]
-fn system_one_serializers_reject_rebound_helpers_and_conditional_python_drift() -> DynResult<()> {
+fn system_one_serializers_reject_rebound_helpers_and_conditional_native_driver_drift()
+-> DynResult<()> {
     let root = crate::command::unique_temp_dir("system-one-serializer-shape");
     fs::create_dir_all(root.join("scripts"))?;
     let bindings = records(SOURCE)?;
@@ -65,10 +66,7 @@ fn system_one_serializers_reject_rebound_helpers_and_conditional_python_drift() 
             "\"$REPORT_PATH\" \"$status\"",
             "\"$OTHER_REPORT\" \"$status\"",
         ),
-        (
-            "require_cmd python3 || exit 2",
-            "require_cmd python || exit 2",
-        ),
+        ("! -x \"$CASES_DRIVER\"", "! -f \"$CASES_DRIVER\""),
     ] {
         assert!(SOURCE.contains(old), "missing mutation anchor: {old}");
         fs::write(root.join(CALLER), SOURCE.replace(old, new))?;

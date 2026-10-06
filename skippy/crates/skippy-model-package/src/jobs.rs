@@ -1,4 +1,20 @@
-use std::collections::HashMap;
+#[path = "jobs/delivery.rs"]
+pub mod delivery;
+use std::{collections::HashMap, time::Instant};
+
+mod cancellation;
+pub use cancellation::CancellationReceipt;
+mod logs;
+mod monitor;
+pub use monitor::{MonitorEnd, MonitorLimits, MonitorReceipt};
+#[cfg(test)]
+#[path = "jobs/monitor_tests.rs"]
+mod monitor_tests;
+pub(crate) mod transport;
+pub use transport::TransportLimits;
+#[cfg(test)]
+#[path = "jobs/transport_tests.rs"]
+mod transport_tests;
 
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
@@ -11,9 +27,10 @@ pub struct HfJobsClient {
     http: reqwest::Client,
     endpoint: String,
     token: String,
+    limits: TransportLimits,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Clone, Serialize)]
 pub struct JobSpec {
     #[serde(rename = "dockerImage")]
     pub docker_image: String,
@@ -176,164 +193,145 @@ pub struct LogEntry {
 }
 
 impl HfJobsClient {
-    /// Build a client from environment.
-    ///
-    /// Requires `HF_TOKEN` or `HUGGING_FACE_HUB_TOKEN` to be set.
+    /// Build from environment, refusing alternate credential destinations.
     pub fn from_env() -> Result<Self> {
         let token = skippy_model_hf::hf_token_override()
             .context("HF_TOKEN not set. Export a Hugging Face token with write access.")?;
-
-        let endpoint =
-            std::env::var("HF_ENDPOINT").unwrap_or_else(|_| "https://huggingface.co".to_string());
-
+        Self::new_admitted(&hf_endpoint(), token, TransportLimits::default())
+    }
+    /// Admit the canonical HF HTTPS origin and finite transport budgets.
+    /// Workload log payloads and explicitly serialized JobSpec remain caller-owned output.
+    pub fn new_admitted(endpoint: &str, token: String, limits: TransportLimits) -> Result<Self> {
+        let endpoint = transport::origin(endpoint)?;
+        transport::token(&token)?;
         Ok(Self {
-            http: reqwest::Client::new(),
+            http: transport::client()?,
             endpoint,
             token,
+            limits: limits.validate()?,
         })
     }
-
-    /// Submit a new job.
+    fn request(&self, method: reqwest::Method, parts: &[&str]) -> Result<reqwest::RequestBuilder> {
+        Ok(self
+            .http
+            .request(method, transport::url(&self.endpoint, parts)?)
+            .bearer_auth(&self.token))
+    }
+    /// Submit with a default finite request budget.
     pub async fn submit(&self, namespace: &str, spec: &JobSpec) -> Result<JobInfo> {
-        let url = format!("{}/api/jobs/{}", self.endpoint, namespace);
-        let resp = self
-            .http
-            .post(&url)
-            .bearer_auth(&self.token)
-            .json(spec)
-            .send()
-            .await
-            .context("submit HF job")?;
-
-        let status = resp.status();
-        if !status.is_success() {
-            let body = resp.text().await.unwrap_or_default();
-            anyhow::bail!("HF Jobs API returned {status}: {body}");
-        }
-        resp.json().await.context("parse job submit response")
+        self.submit_until(
+            namespace,
+            spec,
+            Instant::now() + self.limits.request_timeout,
+        )
+        .await
     }
-
-    /// Inspect a job's current status.
+    /// The caller's absolute deadline covers sending and reading the complete JSON response.
+    pub async fn submit_until(
+        &self,
+        namespace: &str,
+        spec: &JobSpec,
+        absolute: Instant,
+    ) -> Result<JobInfo> {
+        let until = transport::deadline(absolute, self.limits.request_timeout)?;
+        let body = transport::encode(spec, self.limits.json_bytes)?;
+        let request = self
+            .request(reqwest::Method::POST, &[namespace])?
+            .header(reqwest::header::CONTENT_TYPE, "application/json")
+            .body(body);
+        transport::json(
+            transport::send(request, until).await?,
+            until,
+            self.limits.json_bytes,
+        )
+        .await
+    }
     pub async fn inspect(&self, namespace: &str, job_id: &str) -> Result<JobInfo> {
-        let url = format!("{}/api/jobs/{}/{}", self.endpoint, namespace, job_id);
-        let resp = self
-            .http
-            .get(&url)
-            .bearer_auth(&self.token)
-            .send()
-            .await
-            .context("inspect HF job")?;
-
-        let status = resp.status();
-        if !status.is_success() {
-            let body = resp.text().await.unwrap_or_default();
-            anyhow::bail!("HF Jobs API returned {status}: {body}");
-        }
-        resp.json().await.context("parse job inspect response")
+        self.inspect_until(
+            namespace,
+            job_id,
+            Instant::now() + self.limits.request_timeout,
+        )
+        .await
     }
-
-    /// Stream job logs via SSE. Returns lines as they arrive.
-    ///
-    /// Each SSE `data:` line is a JSON object with `data` and `timestamp` fields.
+    pub async fn inspect_until(
+        &self,
+        namespace: &str,
+        job_id: &str,
+        absolute: Instant,
+    ) -> Result<JobInfo> {
+        let until = transport::deadline(absolute, self.limits.request_timeout)?;
+        let request = self.request(reqwest::Method::GET, &[namespace, job_id])?;
+        transport::json(
+            transport::send(request, until).await?,
+            until,
+            self.limits.json_bytes,
+        )
+        .await
+    }
+    /// Finite log stream; callers may reconnect while retaining their own overall deadline.
+    /// Dropping this stream or its creating future drops the owned HTTP operation.
     pub async fn stream_logs(
         &self,
         namespace: &str,
         job_id: &str,
     ) -> Result<impl futures::Stream<Item = Result<String>> + use<>> {
-        let url = format!("{}/api/jobs/{}/{}/logs", self.endpoint, namespace, job_id);
-        let resp = self
-            .http
-            .get(&url)
-            .bearer_auth(&self.token)
-            .send()
+        self.stream_logs_until(namespace, job_id, Instant::now() + self.limits.log_timeout)
             .await
-            .context("fetch HF job logs")?;
-
-        let status = resp.status();
-        if !status.is_success() {
-            let body = resp.text().await.unwrap_or_default();
-            anyhow::bail!("HF Jobs API returned {status}: {body}");
-        }
-
-        // Buffer partial lines across chunk boundaries so SSE `data:` lines
-        // that span two HTTP chunks are reconstructed before parsing.
-        use futures::StreamExt;
-        let stream = resp.bytes_stream();
-        let mut partial = String::new();
-        let lines = stream.flat_map(
-            move |chunk: std::result::Result<bytes::Bytes, reqwest::Error>| {
-                let lines: Vec<Result<String>> = match chunk {
-                    Ok(bytes) => {
-                        partial.push_str(&String::from_utf8_lossy(&bytes));
-                        let mut results = Vec::new();
-
-                        // Process all complete lines; keep the last fragment.
-                        while let Some(newline_pos) = partial.find('\n') {
-                            let line = partial[..newline_pos].trim().to_string();
-                            partial = partial[newline_pos + 1..].to_string();
-
-                            if let Some(json_str) = line.strip_prefix("data: ") {
-                                match serde_json::from_str::<LogEntry>(json_str) {
-                                    Ok(entry) => results.push(Ok(entry.data)),
-                                    Err(_) => results.push(Ok(json_str.to_string())),
-                                }
-                            }
-                        }
-                        results
-                    }
-                    Err(e) => vec![Err(anyhow::anyhow!("log stream error: {e}"))],
-                };
-                futures::stream::iter(lines)
-            },
-        );
-
-        Ok(lines)
     }
-
-    /// Cancel a running job.
+    pub async fn stream_logs_until(
+        &self,
+        namespace: &str,
+        job_id: &str,
+        absolute: Instant,
+    ) -> Result<impl futures::Stream<Item = Result<String>> + use<>> {
+        let until = transport::deadline(absolute, self.limits.log_timeout)?;
+        let headers_until = transport::deadline(until, self.limits.request_timeout)?;
+        let response = transport::send(
+            self.request(reqwest::Method::GET, &[namespace, job_id, "logs"])?,
+            headers_until,
+        )
+        .await?;
+        Ok(logs::stream(response, until, self.limits))
+    }
     pub async fn cancel(&self, namespace: &str, job_id: &str) -> Result<()> {
-        let url = format!("{}/api/jobs/{}/{}/cancel", self.endpoint, namespace, job_id);
-        let resp = self
-            .http
-            .post(&url)
-            .bearer_auth(&self.token)
-            .send()
-            .await
-            .context("cancel HF job")?;
-
-        let status = resp.status();
-        if !status.is_success() {
-            let body = resp.text().await.unwrap_or_default();
-            anyhow::bail!("HF Jobs API returned {status}: {body}");
-        }
+        self.cancel_until(
+            namespace,
+            job_id,
+            Instant::now() + self.limits.request_timeout,
+        )
+        .await
+    }
+    pub async fn cancel_until(
+        &self,
+        namespace: &str,
+        job_id: &str,
+        absolute: Instant,
+    ) -> Result<()> {
+        let until = transport::deadline(absolute, self.limits.request_timeout)?;
+        transport::send(
+            self.request(reqwest::Method::POST, &[namespace, job_id, "cancel"])?,
+            until,
+        )
+        .await?;
         Ok(())
     }
-
-    /// List recent jobs in a namespace.
     pub async fn list(&self, namespace: &str) -> Result<Vec<JobInfo>> {
-        let url = format!("{}/api/jobs/{}", self.endpoint, namespace);
-        let resp = self
-            .http
-            .get(&url)
-            .bearer_auth(&self.token)
-            .send()
+        self.list_until(namespace, Instant::now() + self.limits.request_timeout)
             .await
-            .context("list HF jobs")?;
-
-        let status = resp.status();
-        if !status.is_success() {
-            let body = resp.text().await.unwrap_or_default();
-            anyhow::bail!("HF Jobs API returned {status}: {body}");
-        }
-        resp.json().await.context("parse job list response")
     }
-
-    /// The token this client was constructed with.
+    pub async fn list_until(&self, namespace: &str, absolute: Instant) -> Result<Vec<JobInfo>> {
+        let until = transport::deadline(absolute, self.limits.request_timeout)?;
+        transport::json(
+            transport::send(self.request(reqwest::Method::GET, &[namespace])?, until).await?,
+            until,
+            self.limits.json_bytes,
+        )
+        .await
+    }
     pub fn token(&self) -> &str {
         &self.token
     }
-
-    /// The HF endpoint this client targets.
     pub fn endpoint(&self) -> &str {
         &self.endpoint
     }
@@ -347,20 +345,27 @@ pub fn hf_endpoint() -> String {
 }
 
 pub async fn fetch_hardware(endpoint: &str) -> Result<Vec<HardwareFlavor>> {
-    let url = format!("{}/api/jobs/hardware", endpoint.trim_end_matches('/'));
-    let resp = reqwest::Client::new()
-        .get(&url)
-        .send()
-        .await
-        .with_context(|| format!("GET {url}"))?;
-    let status = resp.status();
-    if !status.is_success() {
-        let body = resp.text().await.unwrap_or_default();
-        bail!("Failed to resolve Hugging Face Jobs pricing: {status}: {body}");
-    }
-    resp.json()
-        .await
-        .context("decode Hugging Face Jobs hardware pricing response")
+    fetch_hardware_until(
+        endpoint,
+        Instant::now() + TransportLimits::default().request_timeout,
+    )
+    .await
+}
+/// Hardware discovery shares the same trusted origin, body and absolute request budget.
+pub async fn fetch_hardware_until(
+    endpoint: &str,
+    absolute: Instant,
+) -> Result<Vec<HardwareFlavor>> {
+    let endpoint = transport::origin(endpoint)?;
+    let limits = TransportLimits::default();
+    let until = transport::deadline(absolute, limits.request_timeout)?;
+    let request = transport::client()?.get(transport::url(&endpoint, &["hardware"])?);
+    transport::json(
+        transport::send(request, until).await?,
+        until,
+        limits.json_bytes,
+    )
+    .await
 }
 
 pub async fn plan_cpu_job(
@@ -529,6 +534,20 @@ fn parse_size_bytes(input: &str) -> Option<u64> {
 
 fn parse_cpu_count(input: Option<&str>) -> Option<u64> {
     input?.split_whitespace().next()?.parse::<u64>().ok()
+}
+
+impl std::fmt::Debug for JobSpec {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Explicit serialization is the only route that emits specification values.
+        f.debug_struct("JobSpec")
+            .field("command_count", &self.command.len())
+            .field("argument_count", &self.arguments.len())
+            .field("environment_count", &self.environment.len())
+            .field("secret_count", &self.secrets.len())
+            .field("volume_count", &self.volumes.len())
+            .field("timeout_seconds", &self.timeout_seconds)
+            .finish_non_exhaustive()
+    }
 }
 
 #[cfg(test)]

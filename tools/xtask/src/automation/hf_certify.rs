@@ -1,6 +1,12 @@
-//! Local native certification caller. No download, build or publication adapter.
+//! Local certification, pinned acquisition/bootstrap and isolated publisher children. Job-worker can export correlated JSON evidence; local composition accepts supplied GGUF or explicitly pinned Nemotron checkpoint inputs.
+mod acquisition;
 pub(in crate::automation) mod admission;
+mod bootstrap;
 pub(in crate::automation) mod execution;
+#[path = "hf_certify/job_worker.rs"]
+mod job_worker;
+#[path = "hf_certify/publication.rs"]
+mod publication;
 use crate::{automation::command_interrupt::Interrupt, command::DynResult};
 use serde_json::json;
 use std::{
@@ -9,13 +15,33 @@ use std::{
 };
 pub(crate) fn run(args: &[String]) -> DynResult<()> {
     if let [verb, rest @ ..] = args
+        && verb == "publication-child"
+    {
+        return publication::run(rest);
+    }
+    if let [verb, rest @ ..] = args
+        && verb == "job-worker"
+    {
+        return job_worker::run(rest);
+    }
+    if let [verb, rest @ ..] = args
+        && verb == "bootstrap"
+    {
+        return bootstrap::run(rest);
+    }
+    if let [verb, rest @ ..] = args
+        && verb == "acquire"
+    {
+        return acquisition::run(rest);
+    }
+    if let [verb, rest @ ..] = args
         && verb == "identity-worker"
     {
         return admission::worker(rest);
     }
     if args == ["--help"] {
         println!(
-            "automation hf-certify --input FILE --output-directory FRESH_DIRECTORY; local standalone CPU product validation only"
+            "automation hf-certify --input FILE --output-directory FRESH_DIRECTORY; local standalone CPU product validation; job-worker operator selects mounted model-root/model-pattern/expected-parts and chains existing certification; job-worker chains bootstrap/acquisition/certification or distinct supplied-converted/native-nemotron composition with optional pinned receipt export; publication-child --input FILE --output-directory FRESH_DIRECTORY supervises a supplied GGUF publisher; no hosted conversion qualification"
         );
         return Ok(());
     }

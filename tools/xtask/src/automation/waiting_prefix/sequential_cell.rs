@@ -70,7 +70,15 @@ impl Input {
                 .manifest
                 .prompts
                 .iter()
-                .any(|p| p.prompt.len() > 16 * 1024)
+                .any(|p| p.prompt.len() > 256 * 1024)
+            || self
+                .manifest
+                .prompts
+                .iter()
+                .try_fold(0_usize, |total, prompt| {
+                    total.checked_add(prompt.prompt.len())
+                })
+                .is_none_or(|bytes| bytes > 8 * 1024 * 1024)
             || self.prompt_manifest_sha256
                 != hex::encode(Sha256::digest(serde_json::to_vec(&self.manifest)?))
         {
@@ -81,6 +89,20 @@ impl Input {
         }
         Ok(())
     }
+}
+
+/// Bind the existing typed manifest serializer, preserving flattened provenance.
+/// A supplied digest must already match; preparation never rewrites a stale pin.
+pub(super) fn bind_manifest(input: &mut Value) -> DynResult<()> {
+    let manifest: Manifest = serde_json::from_value(input["manifest"].clone())?;
+    let digest = hex::encode(Sha256::digest(serde_json::to_vec(&manifest)?));
+    if let Some(supplied) = input.get("prompt_manifest_sha256")
+        && supplied != &Value::String(digest.clone())
+    {
+        return Err("adaptive preparation refuses a mismatched typed manifest pin".into());
+    }
+    input["prompt_manifest_sha256"] = json!(digest);
+    Ok(())
 }
 
 #[derive(Serialize)]

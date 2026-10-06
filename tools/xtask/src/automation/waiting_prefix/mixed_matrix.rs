@@ -302,6 +302,57 @@ where
     };
     output
 }
+/// Finalize orchestration before publishing; scheduler qualification stays owned
+/// by the retained comparison and is never inferred from terminal success.
+fn finalize(
+    output: &mut Value,
+    finished: DynResult<()>,
+    cancellation: &Cancellation,
+    deadline: Instant,
+) -> DynResult<()> {
+    let terminal = if cancellation.is_cancelled() {
+        Some("mixed terminal cancellation")
+    } else if finished.is_err() {
+        Some("mixed interrupt finalization failed")
+    } else if Instant::now() >= deadline {
+        Some("mixed terminal deadline exhausted")
+    } else {
+        None
+    };
+    output["terminal_error"] = terminal.map_or(Value::Null, |reason| json!(reason));
+    if output["error"].is_null()
+        && let Some(reason) = terminal
+    {
+        output["error"] = json!(reason);
+    }
+    let complete = output["error"].is_null() && output["comparison"].is_object();
+    output["orchestration_completed"] = json!(complete);
+    output["status"] = json!(if complete {
+        "mixed_matrix_completed"
+    } else {
+        "mixed_matrix_failed"
+    });
+    if complete {
+        Ok(())
+    } else {
+        Err("mixed matrix failed; partial observations retained without admission".into())
+    }
+}
+fn rendered(output: &Value) -> String {
+    let heading = if output["orchestration_completed"] == true {
+        "Mixed orchestration completed. Scheduler/model qualification remains the comparison's explicit qualified value.\n\n".to_owned()
+    } else {
+        format!(
+            "Mixed orchestration FAILED: {}. Retained values are observations.\n\n",
+            output["error"]
+        )
+    };
+    if output["comparison"].is_object() {
+        heading + &summary::render(&output["comparison"])
+    } else {
+        heading + "Mixed comparison unavailable.\n"
+    }
+}
 pub(super) fn run(args: &[String]) -> DynResult<()> {
     let opts = options(
         args,
@@ -317,32 +368,21 @@ pub(super) fn run(args: &[String]) -> DynResult<()> {
     std::fs::create_dir(&directory)?;
     let directory: PathBuf = directory.canonicalize()?;
     let interrupt = crate::automation::command_interrupt::Interrupt::install()?;
-    let output = execute_with(
-        &input,
-        &directory,
-        Instant::now() + Duration::from_secs(input.timeout_secs),
-        &interrupt.cancellation(),
-        invoke,
-    );
+    let cancellation = interrupt.cancellation();
+    let deadline = Instant::now() + Duration::from_secs(input.timeout_secs);
+    let mut output = execute_with(&input, &directory, deadline, &cancellation, invoke);
+    let finished = interrupt.finish().map_err(Into::into);
+    let admission = finalize(&mut output, finished, &cancellation, deadline);
     let publication = (|| -> DynResult<()> {
         publish(
             &directory.join("comparison.json"),
             &serde_json::to_vec_pretty(&output)?,
         )?;
-        let report = if output["comparison"].is_object() {
-            summary::render(&output["comparison"])
-        } else {
-            format!("Mixed comparison unavailable: {}\n", output["error"])
-        };
+        let report = rendered(&output);
         publish(&directory.join("report.md"), report.as_bytes())
     })();
-    let finished = interrupt.finish();
     publication?;
-    finished?;
-    if !output["error"].is_null() {
-        return Err("mixed matrix failed; partial comparison retained".into());
-    }
-    Ok(())
+    admission
 }
 #[cfg(test)]
 #[path = "mixed_matrix_tests.rs"]

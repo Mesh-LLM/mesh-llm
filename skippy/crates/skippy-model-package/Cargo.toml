@@ -26,6 +26,10 @@ reqwest = { version = "0.13", features = ["json", "stream"] }
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
-tokio = { version = "1", features = ["rt", "time"] }
+tokio = { version = "1", features = ["rt", "time", "signal"] }
 futures = "0.3"
 tempfile = "3"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+signal-hook-registry = "1.4.8"
