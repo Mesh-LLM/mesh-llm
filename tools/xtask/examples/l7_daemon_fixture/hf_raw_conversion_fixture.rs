@@ -29,7 +29,7 @@ pub(super) fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         let profile = value("--nemotron-mtp-tokenizer-profile")?;
         let _: serde_json::Value = serde_json::from_slice(&std::fs::read(profile)?)?;
         let source = Path::new(args.last().ok_or("raw source")?);
-        let mode = std::fs::read_to_string(source.join("fixture-mode"))?;
+        let mode = mode(source)?;
         if mode == "held" {
             crate::signals::install()?;
             std::fs::write("conversion-held-marker", "ready")?;
@@ -60,11 +60,24 @@ pub(super) fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         if !root.join("mtp.gguf").is_file() {
             return Err("missing converted fixture".into());
         }
-        let mode = std::fs::read_to_string(
-            Path::new(manifest["source"].as_str().ok_or("source")?).join("fixture-mode"),
-        )?;
+        let mode = mode(Path::new(manifest["source"].as_str().ok_or("source")?))?;
         let report = serde_json::json!({"root":root,"prefix":"","basename":if mode=="bad-verify"{"wrong"}else{"mtp"},"expected_splits":1,"completed_count":1,"first_missing":null,"last_present":1,"first_shard":"mtp-00001-of-00001.gguf","last_shard":"mtp-00001-of-00001.gguf","complete":true});
         println!("{}", serde_json::to_string_pretty(&report)?);
     }
     Ok(())
+}
+
+fn mode(source: &Path) -> Result<String, Box<dyn std::error::Error>> {
+    match std::fs::read_to_string(source.join("fixture-mode")) {
+        Ok(mode) => Ok(mode),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            let value: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(source.join("config.json"))?)?;
+            Ok(value["fixture_mode"]
+                .as_str()
+                .ok_or("inert config mode missing")?
+                .into())
+        }
+        Err(e) => Err(e.into()),
+    }
 }

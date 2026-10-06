@@ -371,3 +371,13 @@ mod publisher_helper;
 
 #[path = "snapshot_promotion_cli/layer_job.rs"]
 mod layer_job;
+
+#[path = "snapshot_promotion_cli/competitive_inputs.rs"]
+mod competitive_inputs;
+
+#[path = "snapshot_promotion_cli/checkpoint_stitch.rs"]
+mod checkpoint_stitch;
+
+#[cfg(unix)]
+#[path = "snapshot_promotion_cli/generic_jobs.rs"]
+mod generic_jobs;

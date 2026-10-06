@@ -132,3 +132,126 @@ fn sdk_policy_preserves_closed_reader_approval_and_metadata_refusals() -> DynRes
         Ok(())
     })
 }
+
+#[test]
+fn granite_reference_policy_is_exact_optional_status_and_recorded_source() -> DynResult<()> {
+    with_ledgers(|mut paths, mut ledgers| {
+        let path = "evals/skippy-granite-tensor-equivalence.py";
+        let mut candidate = entry(path, "isolated_model_reference");
+        candidate.local_dependency_files = Some(vec![
+            "evals/granite-reference/pyproject.toml".into(),
+            "evals/granite-reference/uv.lock".into(),
+        ]);
+        ledgers.exceptions.exceptions = vec![candidate];
+        assert!(check_exceptions(&paths, &ledgers).is_err());
+        recorded(path, &mut paths, &mut ledgers);
+        check_exceptions(&paths, &ledgers)?;
+        for status in [
+            "maintainer_retained",
+            "conditional_unqualified",
+            "qualified",
+        ] {
+            ledgers.exceptions.exceptions[0].status = status.into();
+            assert!(check_exceptions(&paths, &ledgers).is_err());
+        }
+        ledgers.exceptions.exceptions[0].status = "isolated_model_reference".into();
+        ledgers.exceptions.exceptions[0].local_dependency_files =
+            Some(vec!["ci/requirements-ci-python.txt".into()]);
+        assert!(check_exceptions(&paths, &ledgers).is_err());
+        ledgers.exceptions.exceptions[0].path = "evals/other-model-reference.py".into();
+        assert!(check_exceptions(&paths, &ledgers).is_err());
+        Ok(())
+    })
+}
+
+#[test]
+fn granite_reference_project_has_separate_finite_python_and_complete_hashed_lock() -> DynResult<()>
+{
+    let root = crate::repo_consistency::repo_root()?;
+    let project: toml::Value = toml::from_str(&fs::read_to_string(
+        root.join("evals/granite-reference/pyproject.toml"),
+    )?)?;
+    assert_eq!(
+        project["project"]["requires-python"].as_str(),
+        Some(">=3.12,<3.13")
+    );
+    let expected = BTreeSet::from(["gguf", "numpy", "safetensors", "torch"]);
+    let declared = project["project"]["dependencies"]
+        .as_array()
+        .ok_or("missing reference dependencies")?
+        .iter()
+        .map(|value| value.as_str().ok_or("invalid dependency"))
+        .collect::<Result<BTreeSet<_>, _>>()?;
+    assert_eq!(declared, expected);
+    let lock: toml::Value = toml::from_str(&fs::read_to_string(
+        root.join("evals/granite-reference/uv.lock"),
+    )?)?;
+    assert_eq!(lock["requires-python"].as_str(), Some("==3.12.*"));
+    let packages = lock["package"].as_array().ok_or("missing package lock")?;
+    for name in expected {
+        let package = packages
+            .iter()
+            .find(|p| p["name"].as_str() == Some(name))
+            .ok_or("reference import not locked")?;
+        assert!(
+            !package["version"]
+                .as_str()
+                .ok_or("missing version")?
+                .is_empty()
+        );
+        assert_eq!(
+            package["source"]["registry"].as_str(),
+            Some("https://pypi.org/simple")
+        );
+        let wheels = package["wheels"]
+            .as_array()
+            .ok_or("missing reference wheels")?;
+        assert!(
+            !wheels.is_empty(),
+            "direct dependency {name} has no locked artifact"
+        );
+        assert!(
+            wheels
+                .iter()
+                .all(|wheel| wheel["hash"].as_str().is_some_and(|hash| hash
+                    .strip_prefix("sha256:")
+                    .is_some_and(
+                        |hex| hex.len() == 64 && hex.bytes().all(|b| b.is_ascii_hexdigit())
+                    )))
+        );
+    }
+    let docs = fs::read_to_string(root.join("docs/skippy/COMPETITIVE_BENCHMARK.md"))?;
+    assert!(docs.contains(
+        "evals/granite-reference/.venv/bin/python -I evals/skippy-granite-tensor-equivalence.py"
+    ));
+    assert!(docs.contains("uv sync --locked --no-python-downloads --project evals/granite-reference --python python3.12"));
+    Ok(())
+}
+
+#[test]
+fn granite_reference_is_absent_from_actual_required_and_default_execution_graph() -> DynResult<()> {
+    let root = crate::repo_consistency::repo_root()?;
+    let paths = super::super::ledger::tracked_paths(&root)?;
+    let observed = super::super::scan::scan_paths(&root, &paths)?;
+    let owned = super::super::shards::check_shards(&root, &observed)?;
+    let roots = super::super::required_closure::required_roots(&root, &paths)?;
+    let roots = roots.iter().map(String::as_str).collect::<Vec<_>>();
+    let graph = super::super::required_graph::report(&root, &paths, &observed, &owned, &roots)?;
+    for edge in &graph.edges {
+        assert_ne!(
+            edge.child.as_deref(),
+            Some("evals/skippy-granite-tensor-equivalence.py")
+        );
+        assert!(
+            !edge.source_block.contains("evals/granite-reference"),
+            "{edge:?}"
+        );
+        assert!(
+            !edge
+                .source_block
+                .contains("skippy-granite-tensor-equivalence"),
+            "{edge:?}"
+        );
+    }
+    Ok(())
+}

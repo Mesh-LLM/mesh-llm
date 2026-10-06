@@ -9,7 +9,7 @@ use std::{
 };
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct Config {
+pub(in crate::automation::hf_certify) struct Config {
     pub helper: admission::Artifact,
     pub helper_source: admission::Artifact,
     pub repo: String,
@@ -27,7 +27,7 @@ fn default_export_budget() -> u64 {
 }
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct Locator {
+pub(in crate::automation::hf_certify) struct Locator {
     pub schema_version: u32,
     pub transport_input_sha256: String,
     pub receipt_request_sha256: String,
@@ -57,7 +57,7 @@ struct Input {
     execution_timeout_ms: u64,
 }
 impl Config {
-    pub(super) fn validate(&self) -> DynResult<()> {
+    pub(in crate::automation::hf_certify) fn validate(&self) -> DynResult<()> {
         let pieces = self.repo.split('/').collect::<Vec<_>>();
         let hex = bootstrap::contract::hex;
         if !(10..=3600).contains(&self.export_budget_secs)
@@ -197,7 +197,7 @@ fn observe(path: &Path, input: &Input, hash: &str, progress: bool) -> DynResult<
     }
     Ok(Some(project(&value, input)))
 }
-pub(super) fn execute(
+pub(in crate::automation::hf_certify) fn execute(
     config: &Config,
     receipt_path: &Path,
     root: &Path,

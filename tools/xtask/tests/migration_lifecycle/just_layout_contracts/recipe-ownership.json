@@ -43,6 +43,9 @@
     "just/skippy.just": [
       "bench-corpus",
       "competitive-benchmark-build",
+      "competitive-inputs-helper-build",
+      "competitive-inputs-prefetch",
+      "competitive-inputs-prefetch-fixture",
       "family-certify",
       "layer-job-helper-release-build",
       "metrics-server",
@@ -59,7 +62,10 @@
       "skippy-wan-lab-build-bins",
       "skippy-workload-oracles-build",
       "snapshot-promoter-release-build",
-      "spec-bench"
+      "spec-bench",
+      "mtp-checkpoint-helper-build",
+      "hf-skippy-mtp-compose-default",
+      "generic-conversion-jobs-release-build"
     ],
     "just/mesh.just": [
       "bundle",

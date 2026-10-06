@@ -378,3 +378,28 @@ mod parity_local_plan_cli;
 
 #[path = "migration_lifecycle/competitive_inputs_local_cli.rs"]
 mod competitive_inputs_local_cli;
+
+#[path = "migration_lifecycle/competitive_prefetch.rs"]
+mod competitive_prefetch;
+
+#[path = "migration_lifecycle/hf_generic_conversion.rs"]
+mod hf_generic_conversion;
+
+#[cfg(target_os = "linux")]
+#[path = "migration_lifecycle/hf_mtp_default_cli.rs"]
+mod hf_mtp_default_cli;
+#[cfg(target_os = "linux")]
+#[path = "migration_lifecycle/hf_mtp_default_fixture.rs"]
+mod hf_mtp_default_fixture;
+
+#[cfg(target_os = "linux")]
+#[path = "migration_lifecycle/hf_generic_operator.rs"]
+mod hf_generic_operator;
+
+#[cfg(target_os = "linux")]
+#[path = "migration_lifecycle/hf_generic_jobs.rs"]
+mod hf_generic_jobs;
+
+#[cfg(target_os = "linux")]
+#[path = "lifecycle/hf_artifact_workspace.rs"]
+mod hf_artifact_workspace;

@@ -165,3 +165,26 @@ model-publisher-release-build:
 # Read-only HF source metadata/package-root helper for the isolated job.
 layer-job-helper-release-build:
     just with-lld cargo build --release --locked -p skippy-model-package --bin model-package-layer-job
+
+# Native immutable acquisition/export; supplied semantic references and derived pins required.
+competitive-inputs-helper-build:
+    just with-lld cargo build --locked -p skippy-model-package --bin model-package-competitive-inputs
+
+competitive-inputs-prefetch request helper helper_sha256 reader reader_sha256 evidence timeout="3600":
+    cargo xtool automation replay-matrix competitive-inputs-prefetch --request "{{ request }}" --helper "{{ helper }}" --helper-sha256 "{{ helper_sha256 }}" --evidence-directory "{{ evidence }}" --timeout-seconds "{{ timeout }}" --reader "{{ reader }}" --reader-sha256 "{{ reader_sha256 }}"
+
+# Private finite full-chain positive; xtask must be freshly built from this same source.
+competitive-inputs-prefetch-fixture xtask:
+    COMPETITIVE_FIXTURE_XTASK_BIN="{{ xtask }}" just with-lld cargo test --locked -p skippy-model-package --lib competitive_acquisition::full_frontend::actual_full_native_prefetch_acquires_four_families_exports_and_generates_manifest_and_readerless_skips -- --exact --ignored --nocapture
+
+# Native pinned checkpoint staging helper; no model/native build is included.
+mtp-checkpoint-helper-build:
+    just with-lld cargo build --locked -p skippy-model-package --bin model-package-mtp-checkpoint
+
+# Typed immutable checkpoint/bootstrap/native composition/publication owner.
+hf-skippy-mtp-compose-default input output:
+    cargo xtool automation hf-certify compose-default --input {{input}} --output-directory {{output}}
+
+# Isolated native generic conversion Jobs facade; explicit submit authority remains required.
+generic-conversion-jobs-release-build:
+    just with-lld cargo build --release --locked -p skippy-model-package --bin model-package-generic-jobs

@@ -2,6 +2,8 @@ use super::ledger::MigrationLedgers;
 use crate::command::DynResult;
 use std::collections::BTreeSet;
 
+const MODEL_REFERENCE: &str = "evals/skippy-granite-tensor-equivalence.py";
+
 const SDK_CANDIDATES: [&str; 4] = [
     "scripts/ci-openai-python-smoke.py",
     "scripts/ci-langchain-openai-smoke.py",
@@ -18,7 +20,9 @@ pub(super) fn check_exceptions(paths: &[String], ledgers: &MigrationLedgers) -> 
         ]
         .contains(&entry.path.as_str());
         if !exception_paths.insert(&entry.path)
-            || !(SDK_CANDIDATES.contains(&entry.path.as_str()) || retained_reader)
+            || !(SDK_CANDIDATES.contains(&entry.path.as_str())
+                || retained_reader
+                || entry.path == MODEL_REFERENCE)
         {
             return Err(format!(
                 "automation policy: fabricated or duplicate Python exception {}",
@@ -58,6 +62,18 @@ pub(super) fn check_exceptions(paths: &[String], ledgers: &MigrationLedgers) -> 
                 .any(|file| file.path == entry.path);
         match entry.status.as_str() {
             "maintainer_retained" if retained_reader && source_recorded => {}
+            // Isolated existing model evaluation; this status does not attest installed packages
+            // or actual model values. Required-path exclusion remains an owning source contract.
+            "isolated_model_reference"
+                if entry.path == MODEL_REFERENCE
+                    && source_recorded
+                    && entry.local_dependency_files.as_ref().is_some_and(|items| {
+                        items.iter().map(String::as_str).eq([
+                            "evals/granite-reference/pyproject.toml",
+                            "evals/granite-reference/uv.lock",
+                        ])
+                    }) => {}
+
             // L8 retains required SDK cadence. A workflow filename is not qualification.
             // Qualification requires a separately reviewed execution-evidence contract.
             "conditional_unqualified" if SDK_CANDIDATES.contains(&entry.path.as_str()) => {}

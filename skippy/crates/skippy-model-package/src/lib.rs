@@ -31,3 +31,8 @@ pub fn build_hf_client() -> Result<hf_hub::HFClient> {
 pub mod snapshot_promotion;
 
 pub mod layer_job;
+
+/// Immutable native competitive inputs and semantic tokenizer exports.
+pub mod competitive_acquisition;
+
+pub mod hf_checkpoint_stitch;

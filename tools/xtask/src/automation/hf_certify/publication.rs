@@ -8,7 +8,8 @@ use crate::{
     command::DynResult,
     process::{self, Cancellation},
 };
-pub(super) use contract::Request;
+pub(super) use contract::validate_artifacts;
+pub(super) use contract::{Artifact as PublisherArtifact, PublisherInput, Request};
 use serde_json::{Value, json};
 use std::{
     path::Path,

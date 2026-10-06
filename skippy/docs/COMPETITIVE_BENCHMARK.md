@@ -22,7 +22,7 @@ The checked-in contract covers:
 The Thoughtworks subset is pinned to the MIT-licensed
 `swe-smith-claude-3-7-sonnet` source. The eight selected trajectory identities,
 dataset commit, dataset checksum, and generated manifest checksum live in
-`skippy/skippy/evals/skippy-competitive-benchmark.json`. The exact llama-benchy tokenizer
+`skippy/evals/skippy-competitive-benchmark.json`. The exact llama-benchy tokenizer
 directory digest for every model is pinned there as well. Corpus, tokenizer,
 and model bytes are never checked into the repository.
 
@@ -91,12 +91,14 @@ transformers v5 re-exports of the pinned `vllm_hf_config` revisions — verified
 byte-identical to the checked-in digests — and granite's directory is the
 pinned snapshot minus `README.md`; the script header documents each provenance.
 
-Granite's alternate container digest is derived only after the model-specific
-value check succeeds. In a Python environment with `gguf`, `numpy`,
-`safetensors`, and `torch`:
+Granite's alternate container digest is derived only after this optional,
+model-specific reference evaluation succeeds. It is not a build, quality or
+benchmark-run dependency. Prepare its separate locked Python3.12 environment
+explicitly; dependency resolution alone does not qualify model values.
 
 ```bash
-python3 skippy/evals/skippy-granite-tensor-equivalence.py \
+uv sync --locked --no-python-downloads --project skippy/evals/granite-reference --python python3.12
+skippy/evals/granite-reference/.venv/bin/python -I skippy/evals/skippy-granite-tensor-equivalence.py \
   --gguf /path/to/granite-4.0-h-1b-bf16.gguf \
   --safetensors /path/to/model.safetensors
 ```

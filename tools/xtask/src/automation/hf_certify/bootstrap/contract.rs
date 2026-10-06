@@ -35,7 +35,7 @@ impl Input {
     pub(in crate::automation::hf_certify) fn validate(&self) -> DynResult<()> {
         if self.schema_version != 1
             || self.native_profile != "standalone-static-skippy-quantize-cpu"
-            || !(30..=86400).contains(&self.timeout_seconds)
+            || !(30..=259200).contains(&self.timeout_seconds)
             || !hex(&self.mesh_commit, 40)
             || !hex(&self.git_tree, 40)
             || !hex(&self.llama_commit, 40)
@@ -89,5 +89,39 @@ impl Input {
             .iter()
             .find(|t| t.name == name)
             .ok_or_else(|| "bootstrap tool absent".into())
+    }
+}
+#[cfg(test)]
+mod budget_tests {
+    use super::*;
+    #[test]
+    fn generic_bootstrap_declaration_can_preserve_original_72h_bound() {
+        let root = std::env::current_dir().unwrap();
+        let mut input = Input {
+            schema_version: 1,
+            mesh_commit: "a".repeat(40),
+            git_tree: "b".repeat(40),
+            llama_commit: "c".repeat(40),
+            upstream_file_sha256: "d".repeat(64),
+            image: format!("prepared/image@sha256:{}", "e".repeat(64)),
+            native_profile: "standalone-static-skippy-quantize-cpu".into(),
+            tools: [
+                "git", "just", "cargo", "rustc", "cmake", "c++", "ld.lld", "curl",
+            ]
+            .map(|name| Tool {
+                name: name.into(),
+                path: root.join(name),
+                sha256: "f".repeat(64),
+            })
+            .into(),
+            path_directories: vec![root],
+            timeout_seconds: 259200,
+            cpu_plan_receipt_sha256: "1".repeat(64),
+            declared_estimate_usd: 1.0,
+            max_cost_usd: 2.0,
+        };
+        input.validate().unwrap();
+        input.timeout_seconds = 259201;
+        assert!(input.validate().is_err());
     }
 }

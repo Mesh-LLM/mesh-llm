@@ -63,43 +63,52 @@ impl Request {
         if pieces.len() != 2 || pieces.iter().any(|p| !component(p) || p.len() > 96) {
             return Err("publication repo refused".into());
         }
-        let mut seen = std::collections::BTreeSet::new();
-        let mut sidecar_bytes = 0u64;
-        for (shard, artifact) in input
-            .shards
-            .iter()
-            .map(|a| (true, a))
-            .chain(input.sidecars.iter().map(|a| (false, a)))
-        {
-            if !artifact.path.is_absolute()
-                || !hex(&artifact.sha256, 64)
-                || artifact.path_in_repo.len() > 256
-                || artifact.path_in_repo.split('/').any(|p| !component(p))
-                || !seen.insert(&artifact.path_in_repo)
-                || (shard
-                    && (artifact.byte_size == 0
-                        || artifact.byte_size > 1024u64.pow(4)
-                        || !artifact.path_in_repo.ends_with(".gguf")))
-                || (!shard
-                    && (artifact.byte_size > 1048576
-                        || ![".json", ".md", ".txt"]
-                            .iter()
-                            .any(|suffix| artifact.path_in_repo.ends_with(suffix))))
-            {
-                return Err("publication declared artifact refused".into());
-            }
-            if !shard {
-                sidecar_bytes = sidecar_bytes
-                    .checked_add(artifact.byte_size)
-                    .ok_or("sidecar byte overflow")?;
-            }
-        }
-        if sidecar_bytes > 8 * 1048576 {
-            return Err("publication sidecar total refused".into());
-        }
-        Ok(())
+        validate_artifacts(&input.shards, &input.sidecars)
     }
 }
+pub(in crate::automation::hf_certify) fn validate_artifacts(
+    shards: &[Artifact],
+    sidecars: &[Artifact],
+) -> DynResult<()> {
+    if shards.is_empty() || shards.len() > 128 || sidecars.len() > 32 {
+        return Err("publication artifact roster refused".into());
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    let mut sidecar_bytes = 0u64;
+    for (shard, artifact) in shards
+        .iter()
+        .map(|a| (true, a))
+        .chain(sidecars.iter().map(|a| (false, a)))
+    {
+        if !artifact.path.is_absolute()
+            || !hex(&artifact.sha256, 64)
+            || artifact.path_in_repo.len() > 256
+            || artifact.path_in_repo.split('/').any(|p| !component(p))
+            || !seen.insert(&artifact.path_in_repo)
+            || (shard
+                && (artifact.byte_size == 0
+                    || artifact.byte_size > 1024u64.pow(4)
+                    || !artifact.path_in_repo.ends_with(".gguf")))
+            || (!shard
+                && (artifact.byte_size > 1048576
+                    || ![".json", ".md", ".txt"]
+                        .iter()
+                        .any(|suffix| artifact.path_in_repo.ends_with(suffix))))
+        {
+            return Err("publication declared artifact refused".into());
+        }
+        if !shard {
+            sidecar_bytes = sidecar_bytes
+                .checked_add(artifact.byte_size)
+                .ok_or("sidecar byte overflow")?;
+        }
+    }
+    if sidecar_bytes > 8 * 1048576 {
+        return Err("publication sidecar total refused".into());
+    }
+    Ok(())
+}
+
 fn component(value: &str) -> bool {
     !value.is_empty()
         && !matches!(value, "." | "..")

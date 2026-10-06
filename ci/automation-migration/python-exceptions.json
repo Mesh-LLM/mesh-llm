@@ -92,6 +92,20 @@
       "purpose": "Exercise third-party OpenAI Python SDK embeddings behavior against the mesh endpoint.",
       "isolation_test": "SDK-only declared environment is now wired: existing canary OpenAI-only uv lock, explicit SKIPPY_WORKLOAD_SDK_PYTHON, isolated -I embedding invocation. Dependency installation receipts and finite admission fixtures do not establish actual endpoint/model/platform qualification. Required gate/cadence and current unqualified status are preserved.",
       "status": "conditional_unqualified"
+    },
+    {
+      "path": "evals/skippy-granite-tensor-equivalence.py",
+      "callers": [
+        "docs/skippy/COMPETITIVE_BENCHMARK.md explicit supplied-artifact reference evaluation"
+      ],
+      "local_dependency_files": [
+        "evals/granite-reference/pyproject.toml",
+        "evals/granite-reference/uv.lock"
+      ],
+      "cadence": "Explicit optional manual model reference evaluation, outside timed benchmark windows",
+      "purpose": "Compare all Granite Hybrid GGUF values against supplied BF16 SafeTensors and compute canonical source tensor equivalence identity; no acquisition or generic orchestration",
+      "isolation_test": "Owning native policy cases enforce exact recorded reference path/status/local lock and exclude the evaluator/project from actual required/default execution graph. Dependency lock resolution and offline check passed; installed imports and real artifact values are separately unqualified. Local fixture selections pending root execution.",
+      "status": "isolated_model_reference"
     }
   ],
   "explicit_non_exceptions": [
