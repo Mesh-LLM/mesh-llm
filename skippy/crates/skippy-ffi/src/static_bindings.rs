@@ -606,6 +606,8 @@ unsafe extern "C" {
         out_error: *mut *mut Error,
     ) -> Status;
 
+    pub fn skippy_model_memory_cache_capabilities(model: *const Model) -> u32;
+
     pub fn skippy_export_recurrent_state(
         session: *mut Session,
         output: *mut c_void,

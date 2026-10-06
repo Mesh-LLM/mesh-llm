@@ -9,8 +9,8 @@
 # model leg it sends every prompt length twice in a row (X, X, X+more, X+more,
 # ...): the first sight of each length proves reuse keeps growing, and the
 # identical re-send must restore more of the prompt from cache. Dense KV cache
-# repeats must be near-full restores; recurrent KV cache repeats may restore
-# from the latest checkpoint. With MESH_TWO_NODE_SPLIT_RECURRENT_MODEL set, the
+# repeats may restore from an earlier retained checkpoint under capacity
+# pressure. With MESH_TWO_NODE_SPLIT_RECURRENT_MODEL set, the
 # dense leg runs first and the recurrent leg repeats the whole flow against a
 # second model in the same job.
 
@@ -152,6 +152,18 @@ sha256_file() {
     else
         shasum -a 256 "$path" | awk '{print $1}'
     fi
+}
+
+auto_payload_artifact_for_sha256() {
+    python3 - "$1" <<'PY'
+import json
+import sys
+
+with open("ci/model-artifacts/kv-auto-smoke-expectations.json", encoding="utf-8") as handle:
+    models = json.load(handle)["models"]
+matches = [artifact_id for artifact_id, row in models.items() if row["sha256"] == sys.argv[1]]
+print(matches[0] if len(matches) == 1 else "unspecified")
+PY
 }
 
 quant_selector_from_gguf_file() {
@@ -304,6 +316,25 @@ prepare_split_package() {
 
 prepare_split_inputs() {
     local package_tool
+    if [[ -f "$MODEL" ]]; then
+        DENSE_MODEL_SHA256="$(sha256_file "$MODEL")"
+    fi
+    if [[ -n "$RECURRENT_MODEL" && -f "$RECURRENT_MODEL" ]]; then
+        RECURRENT_MODEL_SHA256="$(sha256_file "$RECURRENT_MODEL")"
+    fi
+    if [[ "$DENSE_ARTIFACT_ID" == unspecified && "$DENSE_MODEL_SHA256" != unspecified ]]; then
+        DENSE_ARTIFACT_ID="$(auto_payload_artifact_for_sha256 "$DENSE_MODEL_SHA256")"
+    fi
+    if [[ -n "$RECURRENT_MODEL" && "$RECURRENT_ARTIFACT_ID" == unspecified && "$RECURRENT_MODEL_SHA256" != unspecified ]]; then
+        RECURRENT_ARTIFACT_ID="$(auto_payload_artifact_for_sha256 "$RECURRENT_MODEL_SHA256")"
+    fi
+    if [[ -n "${MESH_TWO_NODE_SPLIT_WORK_DIR:-}" ]] && {
+        [[ "$DENSE_ARTIFACT_ID" == unspecified ]] ||
+        [[ -n "$RECURRENT_MODEL" && "$RECURRENT_ARTIFACT_ID" == unspecified ]];
+    }; then
+        echo "split Auto certification requires pinned expectations for every model leg" >&2
+        return 1
+    fi
     if [[ -d "$MODEL" && -s "$MODEL/model-package.json" ]] &&
         { [[ -z "$RECURRENT_MODEL" ]] || [[ -d "$RECURRENT_MODEL" && -s "$RECURRENT_MODEL/model-package.json" ]]; }; then
         return 0
@@ -905,11 +936,6 @@ from pathlib import Path
 import sys
 
 TRANSIENT_STATUS = 75
-# A repeated prompt is allowed to re-feed the final token for logits, so the
-# restore can legitimately report prompt_tokens - 1 rather than the full
-# prompt. Two tokens of slack keeps that off the failure path.
-REPEAT_TOKEN_SLACK = 2
-
 response_dir = Path(sys.argv[1])
 request_count = int(sys.argv[2])
 exact_payload_kind = sys.argv[3]
@@ -917,6 +943,7 @@ checkpointed_restore = exact_payload_kind == "kv-recurrent"
 growth_indexes = list(range(1, request_count + 1, 2))
 repeat_pairs = [(index, index + 1) for index in range(1, request_count + 1, 2)]
 metrics = []
+outputs = []
 for index in range(1, request_count + 1):
     with (response_dir / f"response-{index}.json").open(encoding="utf-8") as fh:
         body = json.load(fh)
@@ -926,6 +953,11 @@ for index in range(1, request_count + 1):
         )
     if not body.get("choices"):
         raise SystemExit(f"prefix request {index} returned no choices")
+    message = body["choices"][0].get("message") or {}
+    content = message.get("content")
+    if not isinstance(content, str) or not content:
+        raise SystemExit(f"prefix request {index} returned no assistant continuation")
+    outputs.append(content)
     usage = body.get("usage") or {}
     prompt_tokens = usage.get("prompt_tokens")
     details = usage.get("prompt_tokens_details") or {}
@@ -947,6 +979,12 @@ if not growth_prompts[0] < growth_prompts[1] < growth_prompts[2]:
     raise SystemExit(f"prompt token counts did not increase: {prompt_counts}")
 if cached_counts[0] != 0:
     raise SystemExit(f"cold prefix request unexpectedly restored tokens: {cached_counts}")
+for first, repeat in repeat_pairs:
+    if outputs[first - 1] != outputs[repeat - 1]:
+        raise SystemExit(
+            f"warm request {repeat} diverged from uncached request {first}: "
+            f"{outputs[first - 1]!r} != {outputs[repeat - 1]!r}"
+        )
 # A completely cold attempt can arise while a stage lane is still releasing.
 # A partial follow-up miss is the regression under test and must fail directly,
 # not be hidden by a retry that starts from another cold prefix.
@@ -972,19 +1010,10 @@ for index in growth_indexes:
             f"growing prompts must retain an uncached suffix: {metrics}"
         )
 # Each identical re-send must extend beyond the first-sight cached region.
-# Dense KV cache can additionally restore nearly the entire prompt. Recurrent
-# KV cache restores at checkpoint boundaries, so a valid repeat may leave a
-# larger suffix uncached even when exact-state cache reuse is working.
+# Resident capacity pressure can evict the deepest checkpoint, so a valid
+# repeat may leave a suffix uncached. Output equality above proves the restored
+# prefix still leads to the same continuation as the uncached request.
 for first, repeat in repeat_pairs:
-    if not checkpointed_restore and (
-        cached_counts[repeat - 1]
-        < prompt_counts[repeat - 1] - REPEAT_TOKEN_SLACK
-    ):
-        raise SystemExit(
-            "identical re-send was not served from cache: "
-            f"request {repeat} restored {cached_counts[repeat - 1]} of "
-            f"{prompt_counts[repeat - 1]} prompt tokens"
-        )
     if cached_counts[repeat - 1] <= cached_counts[first - 1]:
         raise SystemExit(
             f"re-send {repeat} must extend beyond the first-sight cache of "
@@ -1002,32 +1031,30 @@ PY
 }
 
 assert_expected_stage_payload() {
-    [[ -n "$EXPECTED_EXACT_PAYLOAD_KIND" ]] || return 0
-    python3 - "$EXPECTED_EXACT_PAYLOAD_KIND" "$SEED_LOG" "$WORKER_LOG" <<'PY'
-import json
-import sys
-
-expected, *logs = sys.argv[1:]
-for log_path in logs:
-    with open(log_path, encoding="utf-8", errors="replace") as log:
-        for line in log:
-            try:
-                event = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            attributes = event.get("attributes") or {}
-            exact_kind = attributes.get("skippy.exact_cache.payload_kind")
-            dense_resident = (
-                expected == "kv-dense"
-                and attributes.get("skippy.kv.payload") == "ResidentKv"
-            )
-            if exact_kind == expected or dense_resident:
-                print(f"observed stage-state payload kind: {expected}")
-                raise SystemExit(0)
-raise SystemExit(
-    f"did not observe stage-state payload kind {expected!r} in split-stage telemetry"
-)
-PY
+    local artifact_id model_sha256
+    case "$MODEL_LABEL" in
+        recurrent)
+            artifact_id="$RECURRENT_ARTIFACT_ID"
+            model_sha256="$RECURRENT_MODEL_SHA256"
+            ;;
+        *)
+            artifact_id="$DENSE_ARTIFACT_ID"
+            model_sha256="$DENSE_MODEL_SHA256"
+            ;;
+    esac
+    # Manual package-v2 probes may not carry a pinned model artifact. CI does.
+    [[ "$artifact_id" != unspecified ]] || return 0
+    python3 scripts/assert-split-stage-payloads.py \
+        --evidence "$SPLIT_EVIDENCE_PATH" \
+        --expectations ci/model-artifacts/kv-auto-smoke-expectations.json \
+        --model-manifest ci/model-artifacts/manifests/scripted-binary-smoke.json \
+        --roster skippy/crates/skippy-api/src/split-certified.json \
+        --runtime-bundle "$RUNTIME_BUNDLE" \
+        --tested-commit "$(git rev-parse HEAD)" \
+        --artifact-id "$artifact_id" --model-sha256 "$model_sha256" \
+        --seed-log "$SEED_LOG" --worker-log "$WORKER_LOG" \
+        --responses-dir "$response_dir" \
+        --output "${WORK_DIR}/${MODEL_LABEL}-auto-payload-certification.json"
 }
 
 capture_kv_cache_statuses() {
