@@ -1175,7 +1175,12 @@ scripts/qa-control-plane-mixed-version.sh \
   --released-binary ./target/qa/released/mesh-llm \
   --current-binary ./target/debug/mesh-llm \
   --local-only \
-  --print-plan | python3 -c "import json,sys; d=json.load(sys.stdin); [print(c) for c in d['checks'] if 'lifecycle' in c]"
+--print-plan | jq -sr '
+  if length != 1 then error("expected exactly one plan") else .[0] end
+  | if type == "object" and (.checks | type) == "array"
+     and all(.checks[]; type == "string")
+  then .checks[] | select(contains("lifecycle"))
+  else error("plan requires checks array of strings") end'
 ```
 
 ### New lifecycle probes (local mode only)
@@ -1206,22 +1211,50 @@ four current-host lifecycle command probes still run and only
 
 The local-only run produces PASS for owner-control/scan compatibility and typed unsupported for new lifecycle commands on released hosts. The `--require-public` run produces PASS for existing public mesh probes. Both mixed-version `summary.json` files must contain zero FAIL records when prerequisites are satisfied (PREREQ is acceptable for optional checks).
 
-### Failure mode: prerequisite verification
+### Failure mode: missing required binary
 
-Run each harness with a nonexistent required binary or documented missing prerequisite:
+A nonexistent required binary fails native path canonicalization before the
+harness prepares its evidence directory or starts a child. It exits nonzero
+with a filesystem error; this invocation produces no `summary.json` and does
+not report `PREREQ` rows. Use a fresh temporary evidence root to avoid confusing
+an earlier run's summary with this failure:
 
 ```bash
-# Missing released binary — exits nonzero with PREREQ in summary.json
-scripts/qa-control-plane-mixed-version.sh \
+evidence_dir="$(mktemp -d "${TMPDIR:-/tmp}/mesh-missing-binary.XXXXXX")"
+if scripts/qa-control-plane-mixed-version.sh \
   --released-binary /nonexistent/mesh-llm \
   --current-binary ./target/debug/mesh-llm \
   --local-only \
-  --evidence-dir .sisyphus/evidence/prereq-test
+  --evidence-dir "$evidence_dir"; then
+  echo "Expected the nonexistent binary to fail" >&2
+  exit 1
+fi
+# An empty directory can be removed: no evidence or summary was published.
+rmdir "$evidence_dir"
+```
 
-# Verify summary shows prereq status, not pass
-cat .sisyphus/evidence/control-plane-mixed-version-*/*/summary.json | python3 -c "import json,sys; d=json.load(sys.stdin); print(f'overall={d[\"overall\"]}, counts={d[\"counts\"]}')"
+For a run that reaches execution and writes a summary, inspect the actual
+`PASS`, `FAIL`, and `PREREQ` result counts separately. This example selects the
+local evidence root from the earlier invocation and rejects multiple matched
+runs; select one run's `summary.json` path if that root contains older evidence.
 
-# No leaked processes after failure
+```bash
+jq -sr '
+  if length != 1 then error("expected exactly one summary") else .[0] end
+  | if type == "object" and (.overall | type) == "string"
+       and (.overall == "pass" or .overall == "fail")
+       and (.results | type) == "array"
+       and all(.results[]; type == "object" and
+         (.status == "PASS" or .status == "FAIL" or .status == "PREREQ"))
+    then . as $summary
+      | reduce .results[] as $row
+          ({PASS: 0, FAIL: 0, PREREQ: 0}; .[$row.status] += 1)
+      | "overall=\($summary.overall), counts=\(tojson)"
+    else error("summary requires overall and typed PASS/FAIL/PREREQ results") end
+' .sisyphus/evidence/task-15-mixed-local/control-plane-mixed-version-*/summary.json
+
+
+# No leaked processes after an executed run
 pgrep -f 'mesh-control-plane-mixed-version|task-15-' || echo "no leaks"
 ```
 

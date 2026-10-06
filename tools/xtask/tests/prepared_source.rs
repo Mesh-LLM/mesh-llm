@@ -340,7 +340,7 @@ fn prepared_source_cli_bounds_revision_metadata_and_rejects_invalid_utf8() {
 
 fn preparation_schema_operations() -> (u64, String) {
     let source = fs::read_to_string(
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scripts/prepare-llama.sh"),
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../skippy/scripts/prepare-llama.sh"),
     )
     .unwrap();
     let declarations: Vec<_> = source
