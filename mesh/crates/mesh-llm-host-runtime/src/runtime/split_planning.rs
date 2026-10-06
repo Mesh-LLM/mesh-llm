@@ -824,7 +824,7 @@ fn planner_recurrent_bytes_by_layer(recurrent: &[u64], layer_count: u32) -> Vec<
 /// reserve, and lane-scaled recurrent state. Mirrors
 /// `layer_required_bytes` in `skippy_coordinator::topology`, including the
 /// 100/85 KV compute-reserve charge from `split_candidate_bytes_per_layer`;
-/// KV is a single shared allocation, so the lane count never multiplies it.
+/// Native reserves a full per-lane context in the shared KV allocation.
 fn stage_required_bytes(
     stage: &RuntimeSliceStagePlan,
     layer_weights: &[u64],
@@ -841,6 +841,7 @@ fn stage_required_bytes(
         .fold(0u128, |total, (weight, recurrent)| {
             let kv_with_compute_reserve = u128::from(kv_per_layer)
                 .saturating_mul(u128::from(context_length))
+                .saturating_mul(parallel_lanes as u128)
                 .saturating_mul(KV_COMPUTE_RESERVE_NUMERATOR)
                 .div_ceil(KV_COMPUTE_RESERVE_DENOMINATOR);
             let recurrent = u128::from(*recurrent).saturating_mul(parallel_lanes as u128);
@@ -970,15 +971,16 @@ fn split_candidate_bytes_per_layer(
     weight_per_layer: u64,
     kv_per_layer: u64,
     context_length: u32,
-    _parallel_lanes: usize,
+    parallel_lanes: usize,
 ) -> u64 {
     // Mirror of `skippy_coordinator::topology::candidate_bytes_per_layer` so the
     // `split_capacity_shortfall` diagnostic reports the same per-layer cost the
-    // real planner uses. KV cache is a single unified allocation shared across
-    // all parallel lanes with eviction — lane count does not multiply KV cost.
+    // real planner uses. The unified cache reserves a full context per lane.
     // KV is charged at KV_COMPUTE_RESERVE_NUMERATOR/DENOMINATOR (100/85) to hold
     // back 15% of post-weight space for compute-graph buffers/scratch.
-    let kv_bytes = u128::from(kv_per_layer).saturating_mul(u128::from(context_length));
+    let kv_bytes = u128::from(kv_per_layer)
+        .saturating_mul(u128::from(context_length))
+        .saturating_mul(parallel_lanes as u128);
     let kv_with_compute_reserve = kv_bytes
         .saturating_mul(KV_COMPUTE_RESERVE_NUMERATOR)
         .div_ceil(KV_COMPUTE_RESERVE_DENOMINATOR);
@@ -1357,6 +1359,31 @@ mod tests {
             error.to_string().contains("context-scaled KV"),
             "error should name the KV terms: {error}"
         );
+    }
+
+    #[test]
+    fn an_override_that_exceeds_the_lane_scaled_kv_budget_is_rejected() {
+        let (pkg, participants, stages) = overridden_stages();
+        let kv_bytes_per_token = 24 * 4096;
+        validate_split_capacity(
+            "model-a",
+            &pkg,
+            &participants,
+            &stages,
+            &[],
+            &capacity_model(kv_bytes_per_token, Vec::new(), 65_536, 1),
+        )
+        .expect("one lane of KV fits beside the weights");
+        let error = validate_split_capacity(
+            "model-a",
+            &pkg,
+            &participants,
+            &stages,
+            &[],
+            &capacity_model(kv_bytes_per_token, Vec::new(), 65_536, 4),
+        )
+        .expect_err("four lanes of KV must exceed the same node budget");
+        assert!(error.to_string().contains("context-scaled KV"));
     }
 
     #[test]
@@ -1790,5 +1817,11 @@ mod tests {
         assert!(reason.contains("participants ["));
         assert!(reason.contains("max_layers=0"));
         assert!(reason.contains("missing_model_source"));
+    }
+
+    #[test]
+    fn topology_failure_diagnostic_prices_every_kv_lane() {
+        assert_eq!(split_candidate_bytes_per_layer(100, 85, 1, 1), 200);
+        assert_eq!(split_candidate_bytes_per_layer(100, 85, 1, 4), 500);
     }
 }
