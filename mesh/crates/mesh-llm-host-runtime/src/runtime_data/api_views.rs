@@ -47,6 +47,8 @@ pub(crate) fn status_payload(snapshot: StatusViewSnapshot) -> StatusPayload {
             lifecycle_instances: vec![],
             intent_summary: None,
             runtime_events: None,
+            // Filled by the status route, which reads the resolved plan.
+            serving_strategy: None,
         },
         model_name: snapshot.model_name,
         models: snapshot.models,
@@ -201,6 +203,7 @@ mod tests {
                 lifecycle_instances: vec![],
                 intent_summary: None,
                 runtime_events: None,
+                serving_strategy: None,
             },
             model_name: "Qwen-Test".into(),
             models: vec!["Qwen-Test".into()],
