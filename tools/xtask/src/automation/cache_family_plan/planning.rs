@@ -66,7 +66,7 @@ fn model(root: &Path, case: &Case, pin: Option<&String>) -> DynResult<Value> {
         return Err("catalog model has unsupported file kind".into());
     }
     Ok(
-        json!({"status":"present-unqualified","requested":requested,"canonical":canonical,"declared_revision":case.revision,"declared_byte_sha256":pin,"kind":if expected_directory{"layer-package-tree"}else if case.key=="minimax_m27"{"split-gguf-first-shard"}else{"single-gguf"},"custody":"path_metadata_only_not_byte_or_model_admission"}),
+        json!({"status":"present-unqualified","requested":requested,"canonical":canonical,"runtime_entrypoint":if case.key=="minimax_m27"{requested.parent().ok_or("primary parent")?.canonicalize()?.join(requested.file_name().ok_or("primary filename")?)}else{canonical.clone()},"declared_revision":case.revision,"declared_byte_sha256":pin,"kind":if expected_directory{"layer-package-tree"}else if case.key=="minimax_m27"{"split-gguf-first-shard"}else{"single-gguf"},"custody":"path_metadata_only_not_byte_or_model_admission"}),
     )
 }
 fn effective(

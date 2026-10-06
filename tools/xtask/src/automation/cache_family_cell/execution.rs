@@ -89,9 +89,12 @@ fn admit(
     let request = directory.join(format!("{name}-input.json"));
     let output = directory.join(format!("{name}-receipt.json"));
     crate::automation::waiting_prefix::adaptive_identity::fresh(&request, &bytes)?;
+    let grace = if input.artifact.is_some() { 6 } else { 1 };
+    let mut admission_limits = limits(remaining(deadline, Duration::from_secs(grace + 2))?);
+    admission_limits.graceful_shutdown = Duration::from_secs(grace);
     let report = process::supervise(
         &worker(tool, directory, "admit-worker", request, output.clone()),
-        &limits(remaining(deadline, Duration::from_secs(3))?),
+        &admission_limits,
         cancel,
         OutputFiles {
             stdout: Some(directory.join(format!("{name}.stdout.log"))),
@@ -110,8 +113,21 @@ fn admit(
     receipt.admitted.validate()?;
     let mut expected = input.clone();
     expected.binary = expected.binary.canonicalize()?;
-    expected.model = expected.model.canonicalize()?;
+    expected.model = if let Some(artifact) = &mut expected.artifact {
+        artifact.tool = artifact.tool.canonicalize()?;
+        expected
+            .model
+            .parent()
+            .ok_or("shard parent")?
+            .canonicalize()?
+            .join(expected.model.file_name().ok_or("primary name")?)
+    } else {
+        expected.model.canonicalize()?
+    };
     expected.native_build = expected.native_build.canonicalize()?;
+    for toolkit in expected.toolkit_directories.values_mut() {
+        toolkit.path = toolkit.path.canonicalize()?;
+    }
     if serde_json::to_value(&receipt.admitted)? != serde_json::to_value(&expected)? {
         return Err("cache cell identity changes declared profile".into());
     }
@@ -211,6 +227,12 @@ pub(super) fn execute(input: &Input, directory: &Path, cancel: &Cancellation) ->
         for (k, v) in &input.environment {
             environment.insert(k.into(), Arg::Public(v.into()));
         }
+        for (name, toolkit) in &input.toolkit_directories {
+            environment.insert(
+                name.into(),
+                Arg::Public(toolkit.path.clone().into_os_string()),
+            );
+        }
         environment.insert(
             "LLAMA_STAGE_BUILD_DIR".into(),
             Arg::Public(input.native_build.clone().into()),
@@ -233,11 +255,7 @@ pub(super) fn execute(input: &Input, directory: &Path, cancel: &Cancellation) ->
             })
             .collect::<BTreeMap<_, _>>();
         let execution = remaining(until, Duration::from_secs(9))?;
-        let mut admitted = input.clone();
-        admitted.worker.execution_timeout_ms = admitted
-            .worker
-            .execution_timeout_ms
-            .min(u64::try_from(execution.as_millis())?);
+        let admitted = bound_measurement(&input, execution)?;
         let readiness_request = directory.join("readiness-input.json");
         let readiness_bytes = serde_json::to_vec(&admitted)?;
         crate::automation::waiting_prefix::adaptive_identity::fresh(
@@ -245,7 +263,13 @@ pub(super) fn execute(input: &Input, directory: &Path, cancel: &Cancellation) ->
             &readiness_bytes,
         )?;
         let measurement_request = directory.join("measurement-input.json");
-        let measurement_bytes = serde_json::to_vec(&admitted.worker)?;
+        let measurement_bytes = if admitted.worker_sweep.is_empty() {
+            serde_json::to_vec(&admitted.worker)?
+        } else {
+            serde_json::to_vec(
+                &json!({"schema_version":1,"stages":admitted.worker_sweep,"execution_timeout_ms":admitted.worker.execution_timeout_ms}),
+            )?
+        };
         crate::automation::waiting_prefix::adaptive_identity::fresh(
             &measurement_request,
             &measurement_bytes,
@@ -355,4 +379,18 @@ pub(super) fn execute(input: &Input, directory: &Path, cancel: &Cancellation) ->
     state.finish(result).map_err(|error| {
         format!("cache cell private-state cleanup/preceding failure: {error:?}").into()
     })
+}
+
+/// Keep readiness primary correlation while bounding every stage by this cell's
+/// remaining absolute allowance; the sweep owner enforces the same total budget.
+pub(super) fn bound_measurement(input: &Input, execution: Duration) -> DynResult<Input> {
+    input.validate()?;
+    let limit = u64::try_from(execution.as_millis())?;
+    let mut admitted = input.clone();
+    admitted.worker.execution_timeout_ms = admitted.worker.execution_timeout_ms.min(limit);
+    for stage in &mut admitted.worker_sweep {
+        stage.execution_timeout_ms = stage.execution_timeout_ms.min(limit);
+    }
+    admitted.validate()?;
+    Ok(admitted)
 }

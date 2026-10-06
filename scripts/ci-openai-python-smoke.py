@@ -37,7 +37,7 @@ def main() -> None:
         from openai import OpenAI
     except ModuleNotFoundError as exc:
         raise SystemExit(
-            "openai package not installed; run `python -m pip install openai` first"
+            "openai package not installed; use the existing locked ci/required-sdk-python environment and MESH_REQUIRED_SDK_PYTHON; do not install ambient packages"
         ) from exc
 
     client = OpenAI(

@@ -36,6 +36,23 @@ pub(in crate::automation::hf_certify) fn observe(
     deadline: Instant,
     cancel: &Cancellation,
 ) -> DynResult<String> {
+    observe_bounded(path, deadline, cancel, 256 * 1024 * 1024)
+}
+/// The owned coordinator includes all automation owners in debug builds. Keep
+/// its separate bounded identity admission without expanding bootstrap tool bounds.
+pub(in crate::automation::hf_certify) fn observe_runner(
+    path: &Path,
+    deadline: Instant,
+    cancel: &Cancellation,
+) -> DynResult<String> {
+    observe_bounded(path, deadline, cancel, 1024 * 1024 * 1024)
+}
+fn observe_bounded(
+    path: &Path,
+    deadline: Instant,
+    cancel: &Cancellation,
+    byte_limit: u64,
+) -> DynResult<String> {
     check(deadline, cancel)?;
     if !std::fs::symlink_metadata(path)?.is_file() {
         return Err("bootstrap tool must be a regular file".into());
@@ -49,7 +66,7 @@ pub(in crate::automation::hf_certify) fn observe(
     }
     let mut file = options.open(path)?;
     let metadata = file.metadata()?;
-    if !metadata.is_file() || metadata.len() > 256 * 1024 * 1024 {
+    if !metadata.is_file() || metadata.len() > byte_limit {
         return Err("bootstrap tool file/type bound refused".into());
     }
     let mut hash = Sha256::new();
@@ -62,7 +79,7 @@ pub(in crate::automation::hf_certify) fn observe(
             break;
         }
         seen += count as u64;
-        if seen > 256 * 1024 * 1024 {
+        if seen > byte_limit {
             return Err("bootstrap file grew past byte bound".into());
         }
         hash.update(&bytes[..count]);
@@ -333,4 +350,36 @@ pub(in crate::automation::hf_certify) fn execute(
         mesh_commit: input.mesh_commit.clone(),
         prepared_llama_commit: prepared,
     })
+}
+
+#[cfg(test)]
+mod runner_identity_tests {
+    use super::*;
+    #[test]
+    fn coordinator_identity_retains_hash_type_byte_and_terminal_bounds() {
+        let root = tempfile::tempdir().unwrap();
+        let file = root.path().join("coordinator");
+        std::fs::write(&file, b"owned coordinator bytes").unwrap();
+        let cancel = Cancellation::default();
+        let until = Instant::now() + Duration::from_secs(5);
+        assert_eq!(
+            observe_runner(&file, until, &cancel).unwrap(),
+            admission::digest(b"owned coordinator bytes")
+        );
+        assert!(observe_bounded(&file, until, &cancel, 4).is_err());
+        assert!(observe_runner(root.path(), until, &cancel).is_err());
+        assert!(observe_runner(&file, Instant::now(), &cancel).is_err());
+        cancel.cancel();
+        assert!(observe_runner(&file, until, &cancel).is_err());
+        let sparse = std::fs::File::create(root.path().join("oversize")).unwrap();
+        sparse.set_len(1024 * 1024 * 1024 + 1).unwrap();
+        assert!(
+            observe_runner(
+                &root.path().join("oversize"),
+                until,
+                &Cancellation::default()
+            )
+            .is_err()
+        );
+    }
 }

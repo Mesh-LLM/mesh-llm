@@ -60,3 +60,37 @@ async fn cache_measurement_precancel_has_full_nonlaunched_roster_and_no_invented
     }
     assert_eq!(receipt["rows"][0]["excluded_warmup"], true);
 }
+
+#[test]
+fn cache_measurement_terminal_admission_retains_sweep_rows_and_prior_errors() {
+    for (cancelled, expired, finish_ok) in [
+        (false, false, true),
+        (true, false, true),
+        (false, true, true),
+        (false, false, false),
+    ] {
+        let mut receipt = json!({"status":"completed","sweep":[{"measurement":{"status":"completed","rows":[{"elapsed_ms":2.0}]}}],"error":"prior classified refusal"});
+        super::finalize(&mut receipt, cancelled, expired, finish_ok);
+        assert_eq!(
+            receipt["status"],
+            if cancelled || expired || !finish_ok {
+                "incomplete"
+            } else {
+                "completed"
+            }
+        );
+        assert_eq!(
+            receipt["sweep"][0]["measurement"]["rows"][0]["elapsed_ms"],
+            2.0
+        );
+        assert_eq!(receipt["error"], "prior classified refusal");
+        if cancelled || expired || !finish_ok {
+            assert_eq!(receipt["terminal_refusal"]["cancelled"], cancelled);
+            assert_eq!(receipt["terminal_refusal"]["deadline_expired"], expired);
+            assert_eq!(
+                receipt["terminal_refusal"]["interrupt_finish_failed"],
+                !finish_ok
+            );
+        }
+    }
+}

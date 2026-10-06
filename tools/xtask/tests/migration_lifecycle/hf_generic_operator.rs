@@ -218,7 +218,7 @@ fn actual_generic_job_shell_caller_forwards_literal_original_options_to_native_o
     ] {
         assert!(stream.line_capture_complete && !stream.truncated && stream.oversized_lines == 0);
         assert_eq!(
-            raw.as_ref().map_or(0, |bytes| bytes.len()) as u64,
+            raw.as_ref().map_or(0, |bytes| bytes.as_bytes().len()) as u64,
             stream.bytes_seen
         );
     }

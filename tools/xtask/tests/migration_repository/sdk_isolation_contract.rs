@@ -49,20 +49,23 @@ fn sdk_four_clients_keep_only_ecosystem_imports_and_isolated_actual_invocations(
         assert_eq!(imports, expected.iter().copied().collect(), "{file}");
     }
     let compat = read("scripts/ci-compat-smoke.sh");
-    for line in [
-        "\"$SDK_PYTHON\" -I scripts/ci-openai-python-smoke.py --base-url \"$BASE_URL\"",
-        "\"$SDK_PYTHON\" -I scripts/ci-litellm-smoke.py --base-url \"$BASE_URL\" --model \"$MODEL_ID\"",
-        "\"$SDK_PYTHON\" -I scripts/ci-langchain-openai-smoke.py --base-url \"$BASE_URL\" --model \"$MODEL_ID\"",
-    ] {
-        assert_eq!(compat.lines().filter(|actual| *actual == line).count(), 1);
+    for client in ["openai", "litellm", "langchain"] {
+        let invocation =
+            format!("automation smoke-observation sdk-client --client {client} --python");
+        assert_eq!(compat.matches(&invocation).count(), 1);
     }
+    assert!(compat.contains("automation smoke-observation sdk-ready --base-url"));
+    assert!(compat.contains("--timeout-secs \"$MAX_WAIT\""));
+    assert!(!compat.contains("MODELS_JSON="));
+    assert!(compat.contains("--max-time 5 --connect-timeout 5"));
     let embeddings = read("scripts/skippy-workload-certify.sh");
     assert_eq!(
         embeddings
-            .matches("\"$SDK_PYTHON\" -I \"$ROOT/scripts/ci-openai-embeddings-smoke.py\"")
+            .matches("--client embeddings --python \"$SDK_PYTHON\"")
             .count(),
         1
     );
+    assert!(embeddings.contains("--receipt \"$WORK_DIR/embedding-sdk.json\""));
     assert!(embeddings.contains("if [[ \"$MODEL_CLASS\" == embedding ]]; then"));
     assert!(embeddings.contains("SDK_PYTHON=\"${SKIPPY_WORKLOAD_SDK_PYTHON:-}\""));
     assert!(compat.contains("SDK_PYTHON=\"${MESH_REQUIRED_SDK_PYTHON:-}\""));

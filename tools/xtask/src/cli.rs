@@ -109,6 +109,7 @@ pub(crate) enum CliCommand<'a> {
     SuffixProposer(&'a [String]),
     AgentClientConfig(&'a [String]),
     CacheFamilyReport(&'a [String]),
+    CacheFamilyRun(&'a [String]),
     CacheFamilyCorrectness(&'a [String]),
     CacheFamilyPlan(&'a [String]),
     CacheFamilyMeasure(&'a [String]),
@@ -292,6 +293,9 @@ impl<'a> Cli<'a> {
                 if domain == "automation" && scope == "agent-client-config" =>
             {
                 CliCommand::AgentClientConfig(rest)
+            }
+            [domain, scope, rest @ ..] if domain == "automation" && scope == "cache-family-run" => {
+                CliCommand::CacheFamilyRun(rest)
             }
             [domain, scope, rest @ ..]
                 if domain == "automation" && scope == "cache-family-cell" =>

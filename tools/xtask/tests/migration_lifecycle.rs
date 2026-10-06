@@ -407,3 +407,16 @@ mod hf_artifact_workspace;
 #[cfg(target_os = "linux")]
 #[path = "migration_lifecycle/hf_mtp_composition_jobs.rs"]
 mod hf_mtp_composition_jobs;
+
+#[path = "migration_lifecycle/cache_family_matrix_cli.rs"]
+mod cache_family_matrix_cli;
+
+#[path = "migration_lifecycle/cache_family_full_matrix_cli.rs"]
+mod cache_family_full_matrix_cli;
+
+#[path = "migration_lifecycle/cache_family_artifact_cli.rs"]
+mod cache_family_artifact_cli;
+
+#[cfg(unix)]
+#[path = "migration_lifecycle/cache_family_artifact_matrix_cli.rs"]
+mod cache_family_artifact_matrix_cli;

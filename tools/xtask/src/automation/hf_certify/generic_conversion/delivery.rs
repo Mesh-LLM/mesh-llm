@@ -75,7 +75,7 @@ fn runner(input: &Input, until: Instant, cancel: &Cancellation) -> DynResult<()>
     guard(until, cancel)?;
     let actual = std::env::current_exe()?.canonicalize()?;
     if input.runner.path.canonicalize()? != actual
-        || bootstrap::execution::observe(&actual, until, cancel)? != input.runner.sha256
+        || bootstrap::execution::observe_runner(&actual, until, cancel)? != input.runner.sha256
     {
         return Err("generic Jobs runner custody refused".into());
     }

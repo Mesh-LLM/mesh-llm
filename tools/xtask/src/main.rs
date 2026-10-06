@@ -56,6 +56,7 @@ fn run() -> DynResult<()> {
         cli::CliCommand::SuffixProposer(rest) => automation::suffix_proposer::run(rest),
         cli::CliCommand::EventBenchmarkRun(rest) => automation::event_benchmark_runner::run(rest),
         cli::CliCommand::AgentClientConfig(rest) => automation::agent_client_config::run(rest),
+        cli::CliCommand::CacheFamilyRun(rest) => automation::cache_family_run::run(rest),
         cli::CliCommand::CacheFamilyReport(rest) => automation::cache_family_report::run(rest),
         cli::CliCommand::CacheFamilyCorrectness(rest) => {
             automation::cache_family_correctness::run(rest)

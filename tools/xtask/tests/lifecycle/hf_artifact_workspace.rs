@@ -4,6 +4,7 @@ use crate::process::{
     self, Cancellation, Completion, Limits, ProcessSpec, RawCaptureOptions, Readiness, Value as Arg,
 };
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use std::{path::Path, time::Duration};
 fn fixture() -> (tempfile::TempDir, Value) {
     let temp = tempfile::tempdir().unwrap();
@@ -24,7 +25,7 @@ fn fixture() -> (tempfile::TempDir, Value) {
         ("model-00002-of-00002.gguf", b"GGUFtwo".to_vec()),
     ] {
         std::fs::write(source.join(name), &bytes).unwrap();
-        files.push(json!({"name":name,"sha256":crate::automation::hf_certify::admission::digest(&bytes),"byte_size":bytes.len()}));
+        files.push(json!({"name":name,"sha256":hex::encode(Sha256::digest(&bytes)),"byte_size":bytes.len()}));
     }
     let request = json!({"schema_version":1,"repo":"fixture/converted","revision":"a".repeat(40),"source_directory":source,"work_directory":root.join("work"),"target_prefix":"BF16","output_basename":"model","requested_splits":1,"files":files,"timeout_seconds":10});
     (temp, request)
@@ -57,7 +58,7 @@ fn invoke_to(root: &Path, input: &Value, output: &Path) -> (process::RawProcessR
             readiness: Readiness::None,
             completion: Completion::Exit,
         },
-        &Cancellation::new(),
+        &Cancellation::default(),
         RawCaptureOptions {
             stdout: std::num::NonZeroUsize::new(1048576),
             stderr: std::num::NonZeroUsize::new(1048576),

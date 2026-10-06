@@ -127,7 +127,15 @@ fn observe(verb: &str, bytes: &[u8], expected: Option<&str>) -> DynResult<String
     }
 }
 
+#[path = "smoke_observation/sdk_supervision.rs"]
+mod sdk_supervision;
+
 pub(crate) fn run(args: &[String]) -> DynResult<()> {
+    if let [verb, rest @ ..] = args
+        && matches!(verb.as_str(), "sdk-client" | "sdk-ready")
+    {
+        return sdk_supervision::run(verb, rest);
+    }
     if let [verb, model, path] = args
         && matches!(verb.as_str(), "chat-payload" | "stream-payload")
     {

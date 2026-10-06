@@ -31,6 +31,8 @@ mod recipe_binding_tests;
 mod recipe_sources;
 mod recipes;
 mod rooted_scripts;
+#[path = "required_graph/sdk_clients.rs"]
+mod sdk_clients;
 mod sources;
 mod workflow_sources;
 use contracts::Contracts;
@@ -158,6 +160,9 @@ pub(super) fn report(
                 }
             }
             if workflow_sources::record(&mut builder, &path, line, &block, trust)? {
+                continue;
+            }
+            if sdk_clients::record(root, &mut builder, &path, &text, line, &block, trust)? {
                 continue;
             }
             if inline_context::record(&mut builder, &path, line, &block, trust) {

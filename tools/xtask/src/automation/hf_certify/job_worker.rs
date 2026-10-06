@@ -34,7 +34,7 @@ fn runner(
     check(deadline, cancel)?;
     let actual = std::env::current_exe()?.canonicalize()?;
     if actual != identity.path.canonicalize()?
-        || bootstrap::execution::observe(&actual, deadline, cancel)? != identity.sha256
+        || bootstrap::execution::observe_runner(&actual, deadline, cancel)? != identity.sha256
     {
         return Err("native job runner identity mismatch".into());
     }

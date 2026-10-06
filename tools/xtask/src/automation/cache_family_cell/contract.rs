@@ -15,6 +15,8 @@ pub(super) enum Host {
 #[serde(deny_unknown_fields)]
 pub(super) struct Input {
     pub schema_version: u64,
+    #[serde(default)]
+    pub artifact: Option<crate::automation::cache_family_correctness::artifact::Artifact>,
     pub host: Host,
     pub binary: PathBuf,
     pub binary_sha256: String,
@@ -31,7 +33,11 @@ pub(super) struct Input {
     pub n_gpu_layers: i32,
     pub port: u16,
     pub environment: BTreeMap<String, String>,
+    #[serde(default)]
+    pub toolkit_directories: BTreeMap<String, crate::automation::cache_family_profile::Toolkit>,
     pub worker: Measurement,
+    #[serde(default)]
+    pub worker_sweep: Vec<Measurement>,
     pub startup_timeout_secs: u64,
     pub execution_timeout_secs: u64,
 }
@@ -42,32 +48,41 @@ pub(super) fn digest(value: &str) -> bool {
             .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
 }
 pub(super) fn profile(name: &str, value: &str) -> bool {
-    let explicit = [
-        "CUDA_VISIBLE_DEVICES",
-        "HIP_VISIBLE_DEVICES",
-        "ROCR_VISIBLE_DEVICES",
-        "OMP_NUM_THREADS",
-    ];
-    let denied = [
-        "AUTH",
-        "TOKEN",
-        "SECRET",
-        "PASSWORD",
-        "CREDENTIAL",
-        "PATH",
-        "DIR",
-        "ROOT",
-        "KEY",
-    ];
-    (explicit.contains(&name) || name.starts_with("GGML_"))
-        && !denied.iter().any(|part| name.contains(part))
-        && !value.is_empty()
-        && value.len() <= 256
-        && !value.chars().any(char::is_control)
+    crate::automation::cache_family_profile::scalar(name, value)
 }
 impl Input {
     pub(super) fn validate(&self) -> DynResult<()> {
         self.worker.validate()?;
+        if self.worker_sweep.len() > 32 {
+            return Err("cache sweep exceeds32stages".into());
+        }
+        if let Some(first) = self.worker_sweep.first()
+            && serde_json::to_value(first)? != serde_json::to_value(&self.worker)?
+        {
+            return Err("cache sweep first stage must bind the primary worker".into());
+        }
+        let mut previous = 0;
+        for stage in &self.worker_sweep {
+            stage.validate()?;
+            if stage.base_url != self.worker.base_url
+                || stage.cohort != self.worker.cohort
+                || stage.prompt != self.worker.prompt
+                || stage.model_id != self.worker.model_id
+                || stage.output_tokens != self.worker.output_tokens
+                || stage.concurrency <= previous
+                || stage.cohort == Cohort::NativeSerial
+            {
+                return Err("cache sweep host/prompt/protocol/order differs".into());
+            }
+            previous = stage.concurrency;
+        }
+        if let Some(artifact) = &self.artifact {
+            artifact.validate_serving(&self.model, &self.model_sha256, self.layer_end)?;
+        }
+        crate::automation::cache_family_profile::validate(
+            &self.environment,
+            &self.toolkit_directories,
+        )?;
         let expected_url = format!(
             "http://127.0.0.1:{}{}",
             self.port,

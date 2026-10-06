@@ -6,6 +6,7 @@ license.workspace = true
 version.workspace = true
 
 [dependencies]
+mesh-llm-events = { path = "../../../mesh/crates/mesh-llm-events", version = "0.78.0" }
 anyhow.workspace = true
 same-file = "1.0.6"
 clap.workspace = true

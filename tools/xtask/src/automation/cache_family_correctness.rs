@@ -1,6 +1,8 @@
 //! Actual cache correctness producer stage; serving/baseline producers remain separate.
 #[path = "cache_family_correctness/admission.rs"]
 mod admission;
+#[path = "cache_family_correctness/artifact.rs"]
+pub(in crate::automation) mod artifact;
 #[path = "cache_family_correctness/catalog.rs"]
 mod catalog;
 #[path = "cache_family_correctness/report.rs"]
@@ -19,6 +21,7 @@ use catalog::{Input, Topology};
 use serde_json::{Value, json};
 use std::{
     collections::BTreeMap,
+    io::Write as _,
     path::{Path, PathBuf},
     time::{Duration, Instant},
 };
@@ -64,13 +67,29 @@ pub(crate) fn run(args: &[String]) -> DynResult<()> {
         return Err("cache output parent must be regular".into());
     }
     std::fs::create_dir(&output)?; // Refuses existing files, directories and dangling links.
+    let terminal_deadline = Instant::now() + Duration::from_secs(input.execution_seconds);
     let interrupt = crate::automation::command_interrupt::Interrupt::install()?;
     let cancellation = interrupt.cancellation();
     let result = execute(&input, &output, &cancellation);
     let finish = interrupt.finish();
-    let value = result?;
+    let mut value = result?;
+    finalize(
+        &mut value,
+        cancellation.is_cancelled(),
+        Instant::now() >= terminal_deadline,
+        finish.is_ok(),
+    );
+    publish(&output.join("cache-correctness-stage.json"), &value)?;
     finish?;
-    println!("{}", serde_json::to_string(&value)?);
+    writeln!(
+        std::io::stdout().lock(),
+        "{}",
+        serde_json::to_string(&json!({
+            "schema_version": 1,
+            "status": value["status"],
+            "report": "cache-correctness-stage.json"
+        }))?
+    )?;
     if value["status"] != "completed" {
         return Err("cache correctness stage incomplete/failed; partial evidence retained".into());
     }
@@ -102,11 +121,12 @@ fn child(
     path: &Path,
     execution: &Execution<'_>,
     cap: u64,
+    grace: u64,
 ) -> DynResult<process::ProcessReport> {
     let budget = execution
         .deadline
         .saturating_duration_since(Instant::now())
-        .checked_sub(Duration::from_secs(3))
+        .checked_sub(Duration::from_secs(grace + 2))
         .filter(|d| !d.is_zero())
         .ok_or("cache stage budget exhausted before child")?
         .min(Duration::from_secs(cap));
@@ -114,7 +134,7 @@ fn child(
         spec,
         &Limits {
             execution: budget,
-            graceful_shutdown: Duration::from_secs(1),
+            graceful_shutdown: Duration::from_secs(grace),
             forced_shutdown: Duration::from_secs(1),
             retained_bytes_per_stream: 1024 * 1024,
             readiness: Readiness::None,
@@ -156,6 +176,7 @@ fn admit(
         &directory.join(name),
         execution,
         input.cell_seconds,
+        if input.artifact.is_some() { 6 } else { 1 },
     )?;
     publish(
         &directory.join(format!("{name}-process.json")),
@@ -178,7 +199,7 @@ fn arguments(
     path: &Path,
 ) -> DynResult<Vec<Argument>> {
     let input = &receipt.admitted;
-    let (start, end, index) = topology.range(receipt.layers)?;
+    let (start, end, index) = input.range(topology, receipt.layers)?;
     let mut args = vec![
         "state-handoff".into(),
         "--model".into(),
@@ -195,7 +216,12 @@ fn arguments(
         "--activation-width".into(),
         receipt.activation_width.to_string().into(),
         "--stage-load-mode".into(),
-        "runtime-slice".into(),
+        if input.case_key == "deepseek3" {
+            "layer-package"
+        } else {
+            "runtime-slice"
+        }
+        .into(),
         "--state-layer-start".into(),
         start.to_string().into(),
         "--state-layer-end".into(),
@@ -245,6 +271,12 @@ fn one(
         .iter()
         .map(|(k, v)| (k.clone().into(), Argument::Public(v.clone().into())))
         .collect();
+    for (name, toolkit) in &receipt.admitted.toolkit_directories {
+        environment.insert(
+            name.clone().into(),
+            Argument::Public(toolkit.path.clone().into_os_string()),
+        );
+    }
     environment.insert(
         "LLAMA_STAGE_BUILD_DIR".into(),
         Argument::Public(receipt.admitted.native_build.clone().into_os_string()),
@@ -260,6 +292,7 @@ fn one(
         &directory.join("correctness"),
         execution,
         input.cell_seconds,
+        1,
     )?;
     let observed = json!({"outcome":format!("{:?}",process.outcome),"exit_code":process.status.and_then(|s|s.code()),"cleanup_complete":process.cleanup.complete,"cleanup_forced":process.cleanup.forced,"failure_present":process.failure.is_some(),"cleanup_failure_present":process.cleanup.failure.is_some(),"graceful_signal_failed":process.cleanup.graceful_signal_failed,"stdout_suppressed_lines":process.stdout.suppressed_lines,"stderr_suppressed_lines":process.stderr.suppressed_lines,"stdout_bytes_seen":process.stdout.bytes_seen,"stderr_bytes_seen":process.stderr.bytes_seen,"runner_elapsed_ms":started.elapsed().as_secs_f64()*1000.0});
     publish(&directory.join("correctness-process.json"), &observed)?;
@@ -274,6 +307,7 @@ fn one(
     if serde_json::to_value(&after.admitted)? != serde_json::to_value(&receipt.admitted)?
         || after.layers != receipt.layers
         || after.activation_width != receipt.activation_width
+        || after.model_identity != receipt.model_identity
     {
         return Err("cache artifact/config changed during trial".into());
     }
@@ -306,7 +340,14 @@ fn execute(input: &Input, output: &Path, cancellation: &Cancellation) -> DynResu
             rows.last().ok_or("trial row")?,
         )?;
     }
-    let value = json!({"schema_version":1,"scope":"cache_correctness_producer_stage_not_complete_family_benchmark","status":if failed||cancellation.is_cancelled()||Instant::now()>=execution.deadline{"failed-or-incomplete"}else{"completed"},"planned_topologies":input.topologies.len(),"completed_topologies":rows.len(),"effective_settings":input.settings,"native_build":input.native_build,"rows":rows});
-    publish(&output.join("cache-correctness-stage.json"), &value)?;
+    let value = json!({"schema_version":1,"baseline":if input.case_key=="deepseek3" {"n/a-package-only"}else{"not-measured-correctness-stage"},"scope":"cache_correctness_producer_stage_not_complete_family_benchmark","status":if failed||cancellation.is_cancelled()||Instant::now()>=execution.deadline{"failed-or-incomplete"}else{"completed"},"planned_topologies":input.topologies.len(),"completed_topologies":rows.len(),"effective_settings":input.settings,"native_build":input.native_build,"rows":rows});
+
     Ok(value)
+}
+
+fn finalize(receipt: &mut Value, cancelled: bool, expired: bool, finish_ok: bool) {
+    if cancelled || expired || !finish_ok {
+        receipt["status"] = json!("failed-or-incomplete");
+        receipt["terminal_refusal"] = json!({"cancelled":cancelled,"deadline_expired":expired,"interrupt_finish_failed":!finish_ok});
+    }
 }

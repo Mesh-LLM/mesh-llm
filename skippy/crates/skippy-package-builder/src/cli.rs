@@ -12,6 +12,28 @@ pub(crate) struct Args {
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum Command {
+    /// Admit complete local GGUF shard custody against caller-supplied byte pins.
+    AdmitSource {
+        model: PathBuf,
+        #[arg(long = "pin", required = true)]
+        pins: Vec<String>,
+        #[arg(long)]
+        minimum_context: u64,
+    },
+    /// Verify local selected package/tokenizer parts without an independent full source.
+    AdmitPackage {
+        package: PathBuf,
+        #[arg(long)]
+        manifest_sha256: String,
+        #[arg(long)]
+        model_id: String,
+        #[arg(long)]
+        layer_start: u32,
+        #[arg(long)]
+        layer_end: u32,
+        #[arg(long)]
+        minimum_context: u64,
+    },
     Inspect {
         model: PathBuf,
     },
@@ -71,4 +93,16 @@ pub(crate) enum Command {
         #[arg(long)]
         in_place: bool,
     },
+}
+
+impl Command {
+    pub(crate) fn requires_download_preparation(&self) -> bool {
+        !matches!(
+            self,
+            Self::Inspect { .. }
+                | Self::VerifyPackageV2 { .. }
+                | Self::AdmitSource { .. }
+                | Self::AdmitPackage { .. }
+        )
+    }
 }
