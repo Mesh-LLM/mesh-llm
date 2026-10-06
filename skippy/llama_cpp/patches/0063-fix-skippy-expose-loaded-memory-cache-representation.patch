@@ -1,4 +1,4 @@
-From a3c4cdeaea942bbc5acbcfb93449d10f3d3b9999 Mon Sep 17 00:00:00 2001
+From cbb9be2f469491d88374ed1ab864bba754410026 Mon Sep 17 00:00:00 2001
 From: Michael Neale <14976+michaelneale@users.noreply.github.com>
 Date: Mon, 5 Oct 2026 17:56:58 +1100
 Subject: [PATCH] fix(skippy): expose loaded memory cache representation
@@ -6,13 +6,13 @@ Subject: [PATCH] fix(skippy): expose loaded memory cache representation
 
 ---
  include/skippy/common.h              |  2 +-
- include/skippy/state.h               | 11 ++++
+ include/skippy/state.h               | 11 +++++
  src/CMakeLists.txt                   |  1 +
- src/skippy/state.cpp                 | 32 ++---------
- src/skippy/state_memory.cpp          | 81 ++++++++++++++++++++++++++++
- src/skippy/state_memory.h            | 14 +++++
+ src/skippy/state.cpp                 | 32 ++----------
+ src/skippy/state_memory.cpp          | 74 ++++++++++++++++++++++++++++
+ src/skippy/state_memory.h            | 14 ++++++
  tests/test-skippy-kv-page-export.cpp | 19 +++++++
- 7 files changed, 131 insertions(+), 29 deletions(-)
+ 7 files changed, 124 insertions(+), 29 deletions(-)
  create mode 100644 src/skippy/state_memory.cpp
  create mode 100644 src/skippy/state_memory.h
 
@@ -127,18 +127,16 @@ index b935a9e65..aa197340b 100644
  static skippy_kv_page_component_desc skippy_component_from_page(
 diff --git a/src/skippy/state_memory.cpp b/src/skippy/state_memory.cpp
 new file mode 100644
-index 000000000..3428595a9
+index 000000000..ad59dced1
 --- /dev/null
 +++ b/src/skippy/state_memory.cpp
-@@ -0,0 +1,81 @@
+@@ -0,0 +1,74 @@
 +#include "skippy/state_memory.h"
 +#include "skippy/state.h"
 +#include "skippy/runtime_types.h"
 +#include "llama-kv-cache.h"
 +#include "llama-kv-cache-iswa.h"
 +#include "llama-kv-cache-dsa.h"
-+#include "llama-kv-cache-dsa-iswa.h"
-+#include "llama-kv-cache-msa.h"
 +#include "llama-memory-hybrid.h"
 +#include "llama-memory-hybrid-iswa.h"
 +#include "llama-memory-recurrent.h"
@@ -199,13 +197,8 @@ index 000000000..3428595a9
 +                (skippy_memory_kv_adapter(memory) || skippy_memory_iswa_adapter(memory))
 +                ? SKIPPY_MEMORY_CACHE_KV_RECURRENT : 0;
 +    }
-+    // These native sequence operations copy all tiers in process, but the page
-+    // export adapters do not serialize every tier. Do not advertise partial
-+    // snapshots for durable/L2 capture just because resident copying works.
-+    if (type == typeid(llama_kv_cache_dsa) || type == typeid(llama_kv_cache_dsa_iswa) ||
-+            type == typeid(llama_kv_cache_msa)) {
-+        return SKIPPY_MEMORY_CACHE_RESIDENT;
-+    }
++    // DSA/MSA memories include an indexer tier. Until a real-model resident
++    // save/restore proves that tier survives, use complete state snapshots.
 +    return 0;
 +}
 +

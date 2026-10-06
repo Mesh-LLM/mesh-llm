@@ -123,8 +123,18 @@ impl KvStageIntegration {
             return Ok(None);
         }
         let model_capability = graph_model_kv_capability(&config.kv_graph_state);
-        let payload =
-            effective_cache_payload(cache_config.payload, &model_capability, memory_cache);
+        let graph_loaded_state_mismatch = match (&model_capability, model_state_kind) {
+            (ModelKvCapability::KnownDense, Some(kind)) => kind != ModelStateKind::Dense,
+            (ModelKvCapability::KnownRecurrent, Some(kind)) => {
+                !matches!(kind, ModelStateKind::Recurrent | ModelStateKind::Hybrid)
+            }
+            _ => false,
+        };
+        let payload = if graph_loaded_state_mismatch {
+            StagePrefixCachePayload::FullState
+        } else {
+            effective_cache_payload(cache_config.payload, &model_capability, memory_cache)
+        };
         let payload_fallback = payload == StagePrefixCachePayload::FullState
             && cache_config.payload != StageKvCachePayload::FullState;
         let graph_payload_mismatch = matches!(
@@ -137,7 +147,9 @@ impl KvStageIntegration {
                 ModelKvCapability::KnownDense
             )
         );
-        let payload_selection_reason = if cache_config.payload == StageKvCachePayload::FullState {
+        let payload_selection_reason = if graph_loaded_state_mismatch {
+            "graph_loaded_state_mismatch"
+        } else if cache_config.payload == StageKvCachePayload::FullState {
             "explicit_full_state"
         } else if matches!(model_capability, ModelKvCapability::Unknown(_)) {
             "graph_requires_full_state"
@@ -393,6 +405,7 @@ impl KvStageIntegration {
             payload,
             payload_selection_reason,
             payload_fallbacks: u64::from(payload_fallback),
+            graph_loaded_state_mismatches: u64::from(graph_loaded_state_mismatch),
             durable_payload,
             correctness_mode: false,
             trust_local_writes: true,
@@ -1712,6 +1725,38 @@ mod tests {
         .expect("hybrid loaded model should enable the recurrent cache");
 
         assert_eq!(kv.payload, StagePrefixCachePayload::KvRecurrent);
+        assert_eq!(kv.graph_loaded_state_mismatches, 0);
+    }
+
+    #[test]
+    fn admitted_graph_disagreement_forces_full_state_and_reports_mismatch() {
+        for (graph_state, loaded) in [
+            ("dense", ModelStateKind::Hybrid),
+            ("dense", ModelStateKind::Recurrent),
+            ("recurrent", ModelStateKind::Dense),
+        ] {
+            let mut config = enabled_auto_config("future/model");
+            config.kv_graph_state = graph_state.into();
+            let kv = KvStageIntegration::from_loaded_model(
+                &config,
+                Some(loaded),
+                Some(skippy_runtime::MemoryCacheCapabilities {
+                    resident: true,
+                    kv_recurrent: true,
+                }),
+                None,
+            )
+            .unwrap()
+            .unwrap();
+            assert_eq!(kv.payload, StagePrefixCachePayload::FullState);
+            assert_eq!(kv.payload_fallbacks, 1);
+            assert_eq!(kv.graph_loaded_state_mismatches, 1);
+            assert_eq!(kv.payload_selection_reason, "graph_loaded_state_mismatch");
+            assert!(kv.attrs().contains(&(
+                "skippy.kv.graph_loaded_state_mismatches",
+                serde_json::json!(1)
+            )));
+        }
     }
 
     #[test]

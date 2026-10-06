@@ -684,9 +684,13 @@ impl StageModel {
     ///
     /// The batched path slices exports by request offset out of the last
     /// native microbatch, so it is only sound while the whole iteration is one
-    /// microbatch. Attention memory with a unified KV cache satisfies that. A
-    /// recurrent or hybrid model splits an all-output batch by sequence
-    /// (`split_seq`), so those models run one request at a time instead.
+    /// microbatch. This branch rejects `kv_unified = false` in
+    /// `RuntimeConfig::validate`, and native model loading always enables the
+    /// shared KV pool. #2238 permits non-unified KV only when a multi-lane
+    /// activation-exporting stage is rejected at model open; a single lane
+    /// cannot batch requests. Recurrent and hybrid memory, including the
+    /// qwen4exp indexer, splits an all-output batch by sequence (`split_seq`),
+    /// so those models run one request at a time instead.
     /// Snapshot export support is a separate contract and is not consulted.
     fn supports_batched_activation_exports(&self) -> bool {
         self.capability()
