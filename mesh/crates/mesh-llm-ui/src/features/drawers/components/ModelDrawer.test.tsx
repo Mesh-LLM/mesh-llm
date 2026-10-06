@@ -55,12 +55,31 @@ describe('ModelDrawer', () => {
     expect(screen.queryByText('Unknown')).not.toBeInTheDocument()
   })
 
-  it('shows Unknown quant when the name has no colon tag and quant metadata is missing', () => {
+  it('shows Unknown quant when the name has no quant marker and quant metadata is missing', () => {
     const model: ModelSummary = { ...MODEL, name: 'Hermes-2-Pro-Mistral-7B', fullId: 'Hermes-2-Pro-Mistral-7B' }
     render(<ModelDrawer open model={model} peers={[]} onClose={() => {}} />)
 
     expect(screen.getByText('Quant')).toBeInTheDocument()
     expect(screen.getByText('Unknown')).toBeInTheDocument()
+  })
+
+  it('derives quant from a hyphenated name part when there is no colon tag', () => {
+    const name = 'bartowski/GLM-5-UD-IQ2_XXS-GGUF'
+    const model: ModelSummary = { ...MODEL, name, fullId: name }
+    render(<ModelDrawer open model={model} peers={[]} onClose={() => {}} />)
+
+    expect(screen.getByText('Quant')).toBeInTheDocument()
+    expect(screen.getByText('IQ2_XXS')).toBeInTheDocument()
+    expect(screen.queryByText('Unknown')).not.toBeInTheDocument()
+  })
+
+  it('derives quant from a hyphenated name ending in .gguf', () => {
+    const name = 'org/model-Q4_K_M.gguf'
+    const model: ModelSummary = { ...MODEL, name, fullId: name }
+    render(<ModelDrawer open model={model} peers={[]} onClose={() => {}} />)
+
+    expect(screen.getByText('Quant')).toBeInTheDocument()
+    expect(screen.getByText('Q4_K_M')).toBeInTheDocument()
   })
 
   it('shows Unknown quant when the colon suffix is not a quant tag', () => {

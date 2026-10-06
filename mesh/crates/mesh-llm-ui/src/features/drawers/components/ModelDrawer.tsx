@@ -35,9 +35,18 @@ function isQuantTag(tag: string): boolean {
 function modelQuant(model: ModelSummary) {
   if (model.quant) return model.quant
   const separator = model.name.lastIndexOf(':')
-  if (separator < 0) return 'Unknown'
-  const tag = model.name.slice(separator + 1)
-  return isQuantTag(tag) ? tag : 'Unknown'
+  if (separator >= 0) {
+    const tag = model.name.slice(separator + 1)
+    return isQuantTag(tag) ? tag : 'Unknown'
+  }
+  // No `:selector` tag: mirror the backend's derive_quantization_type
+  // (mesh-llm-host-runtime src/models/inventory.rs), which scans
+  // hyphen-separated name parts right-to-left for a quant marker.
+  const parts = model.name.replace(/\.gguf$/i, '').split('-')
+  for (let i = parts.length - 1; i >= 0; i--) {
+    if (isQuantTag(parts[i])) return parts[i]
+  }
+  return 'Unknown'
 }
 
 function fitBadgeTone(label?: string): StatusBadgeTone {
