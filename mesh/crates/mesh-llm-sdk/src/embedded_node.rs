@@ -376,11 +376,8 @@ impl OpenAiClient {
         body_json: String,
     ) -> anyhow::Result<RawOpenAiResponse> {
         let response = self
-            .http
-            .post(self.url(path))
-            .bearer_auth(&self.api_key)
-            .header(reqwest::header::CONTENT_TYPE, "application/json")
-            .body(body_json)
+            .post_request(path, body_json)
+            .timeout(Duration::from_secs(120))
             .send()
             .await?;
         let status_code = response.status().as_u16();
@@ -398,16 +395,20 @@ impl OpenAiClient {
     }
 
     pub async fn stream(&self, path: &str, body_json: String) -> anyhow::Result<reqwest::Response> {
+        // Bound the header wait without limiting the lifetime of the response body.
         Ok(tokio::time::timeout(
             Duration::from_secs(120),
-            self.http
-                .post(self.url(path))
-                .bearer_auth(&self.api_key)
-                .header(reqwest::header::CONTENT_TYPE, "application/json")
-                .body(body_json)
-                .send(),
+            self.post_request(path, body_json).send(),
         )
         .await??)
+    }
+
+    fn post_request(&self, path: &str, body_json: String) -> reqwest::RequestBuilder {
+        self.http
+            .post(self.url(path))
+            .bearer_auth(&self.api_key)
+            .header(reqwest::header::CONTENT_TYPE, "application/json")
+            .body(body_json)
     }
 
     pub async fn models(&self) -> anyhow::Result<serde_json::Value> {
@@ -477,6 +478,7 @@ pub struct SseFrame {
 #[derive(Default)]
 pub struct SseDecoder {
     buffer: Vec<u8>,
+    scan_offset: usize,
 }
 
 impl SseDecoder {
@@ -484,13 +486,16 @@ impl SseDecoder {
         const MAX_FRAME_BYTES: usize = 8 * 1024 * 1024;
         self.buffer.extend_from_slice(chunk);
         let mut frames = Vec::new();
-        while let Some(end) = sse_frame_end(&self.buffer) {
+        // A CRLF terminator may begin three bytes before the previous chunk ended.
+        while let Some(end) = sse_frame_end(&self.buffer, self.scan_offset.saturating_sub(3)) {
             anyhow::ensure!(end <= MAX_FRAME_BYTES, "SSE frame exceeds 8 MiB");
             let raw = self.buffer.drain(..end).collect::<Vec<_>>();
+            self.scan_offset = 0;
             if let Some(frame) = parse_sse_frame(raw)? {
                 frames.push(frame);
             }
         }
+        self.scan_offset = self.buffer.len();
         anyhow::ensure!(
             self.buffer.len() <= MAX_FRAME_BYTES,
             "SSE frame exceeds 8 MiB"
@@ -502,19 +507,21 @@ impl SseDecoder {
         if self.buffer.is_empty() {
             return Ok(None);
         }
+        self.scan_offset = 0;
         parse_sse_frame(std::mem::take(&mut self.buffer))
     }
 }
 
-fn sse_frame_end(buffer: &[u8]) -> Option<usize> {
-    let lf = buffer
+fn sse_frame_end(buffer: &[u8], start: usize) -> Option<usize> {
+    let unscanned = &buffer[start..];
+    let lf = unscanned
         .windows(2)
         .position(|window| window == b"\n\n")
-        .map(|index| index + 2);
-    let crlf = buffer
+        .map(|index| start + index + 2);
+    let crlf = unscanned
         .windows(4)
         .position(|window| window == b"\r\n\r\n")
-        .map(|index| index + 4);
+        .map(|index| start + index + 4);
     match (lf, crlf) {
         (Some(left), Some(right)) => Some(left.min(right)),
         (Some(end), None) | (None, Some(end)) => Some(end),
@@ -526,6 +533,7 @@ fn parse_sse_frame(raw: Vec<u8>) -> anyhow::Result<Option<SseFrame>> {
     let raw = String::from_utf8(raw)?;
     let mut data = Vec::new();
     let mut event_type = None;
+    // Resume metadata (`id:` and `retry:`) is ignored; frames without `data:` are dropped.
     for line in raw.lines().map(|line| line.trim_end_matches('\r')) {
         if let Some(value) = line.strip_prefix("data:") {
             data.push(value.strip_prefix(' ').unwrap_or(value).to_string());
@@ -625,5 +633,21 @@ mod tests {
     fn sse_decoder_rejects_oversized_frame() {
         let mut decoder = SseDecoder::default();
         assert!(decoder.push(&vec![b'x'; 8 * 1024 * 1024 + 1]).is_err());
+    }
+
+    #[test]
+    fn sse_decoder_finds_split_terminators_after_long_frames() {
+        for terminator in [b"\n\n".as_slice(), b"\r\n\r\n".as_slice()] {
+            for split in 1..terminator.len() {
+                let mut decoder = SseDecoder::default();
+                let mut prefix = b"data: ".to_vec();
+                prefix.extend(vec![b'x'; 64 * 1024]);
+                prefix.extend_from_slice(&terminator[..split]);
+                assert!(decoder.push(&prefix).unwrap().is_empty());
+                let frames = decoder.push(&terminator[split..]).unwrap();
+                assert_eq!(frames.len(), 1);
+                assert_eq!(frames[0].data.len(), 64 * 1024);
+            }
+        }
     }
 }
