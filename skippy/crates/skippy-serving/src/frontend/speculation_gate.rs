@@ -761,6 +761,69 @@ mod tests {
     /// kept the regression. A gate that cannot catch its own motivating run is
     /// the "adaptive policy that never adapted" failure in this module's docs,
     /// reached through the margin rather than the window.
+    /// The full trial cycle, replayed at the measured cadence of #2112's
+    /// stand-down run: cooldown 300s, min_window 20s, min_requests 3, one
+    /// request every 32s, 9.8 tok/s speculating against 10.5 standing down.
+    ///
+    /// That is a 7.4% improvement — INDECISIVE at a 0.15 margin — so the gate
+    /// must trial the flip and then put it back. It does, four requests later.
+    ///
+    /// This exists because the benchmark run it replays showed speculation
+    /// switching off and *staying* off for fourteen requests, which this
+    /// controller does not do. Whatever suppressed proposals there, it was not
+    /// this; see `runahead_search`'s note on reading proposal counts.
+    #[test]
+    fn an_indecisive_trial_is_put_back_within_a_few_requests() {
+        let mut gate = SpeculationGate::new(SpeculationGateConfig {
+            min_window: Duration::from_secs(20),
+            min_requests: 3,
+            decisive_margin: 0.15,
+            cooldown: Duration::from_secs(300),
+        });
+        let mut at = Instant::now();
+        let mut speculating = true;
+        let mut flipped_off_at = None;
+        let mut restored_at = None;
+        for request in 0..24u32 {
+            let rate = if speculating { 9.8 } else { 10.5 };
+            let decision = gate.observe(
+                at,
+                speculating,
+                RequestOutcome {
+                    decode_tokens_per_second: rate,
+                    proposed_tokens: if speculating { 78 } else { 0 },
+                    accepted_tokens: if speculating { 6 } else { 0 },
+                    speculated: speculating,
+                },
+            );
+            match decision {
+                GateDecision::Trial { enable, .. } | GateDecision::Revert { enable, .. } => {
+                    if !enable && flipped_off_at.is_none() {
+                        flipped_off_at = Some(request);
+                    } else if enable && flipped_off_at.is_some() && restored_at.is_none() {
+                        restored_at = Some(request);
+                    }
+                    speculating = enable;
+                }
+                GateDecision::Keep {
+                    speculating: kept, ..
+                } => speculating = kept,
+                GateDecision::Hold { .. } => {}
+            }
+            at += Duration::from_secs(32);
+        }
+        let off = flipped_off_at.expect("the gate should trial a flip once the cooldown expires");
+        let back = restored_at.expect("an indecisive trial must be put back, not kept");
+        assert!(
+            back - off <= 6,
+            "the flip should be reverted within a few requests, not held: off at {off}, back at {back}"
+        );
+        assert!(
+            speculating,
+            "the incumbent setting must be in force at the end"
+        );
+    }
+
     #[test]
     fn the_documented_freeform_regression_is_caught() {
         let mut gate = SpeculationGate::new(config());
