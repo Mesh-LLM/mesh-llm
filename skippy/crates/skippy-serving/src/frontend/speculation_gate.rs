@@ -60,9 +60,10 @@ pub(crate) struct SpeculationGateConfig {
     /// rate is noise; a verdict on it would be a coin flip.
     ///
     /// Eight rather than three, because the margin below is small enough that
-    /// the mean has to be tight: the standard error of a mean falls as
-    /// `1/sqrt(n)`, so this is what licenses resolving a ten-percent effect
-    /// instead of only a fifty-percent one.
+    /// the mean has to be tight. The standard error of a mean falls as
+    /// `1/sqrt(n)`: on the measured 0.49% per-request CV, three requests give
+    /// 0.28% and eight give 0.17%. Eight is what licenses a 5% margin with two
+    /// orders of magnitude to spare rather than one.
     pub(crate) min_requests: u64,
     /// Fractional improvement in mean decode rate needed to call a trial
     /// decisive.
@@ -74,9 +75,22 @@ pub(crate) struct SpeculationGateConfig {
     /// below saturation measures offered load rather than capacity. The
     /// justification outlived the quantity it was about.
     ///
-    /// Against the metric actually in use the noise is far smaller — two-box
-    /// runs on #2112 moved 1.6% formation-to-formation and 0.6% request to
-    /// request. And 0.15 could not catch the regression this gate exists for:
+    /// The noise that matters is the noise in the quantity this gate compares:
+    /// a window mean of per-request rates, **within one process**. It never
+    /// compares across processes, so cross-run spread does not enter.
+    ///
+    /// Measured on this gate's own freeform workload, 24 requests in one
+    /// process: per-request CV **0.49%**, so the mean of a `min_requests`
+    /// window of 8 has a standard error of 0.17%, or 0.34% at two sigma. A 5%
+    /// margin is roughly 15x that.
+    ///
+    /// Cross-formation spread on the same workload is far larger — the same
+    /// `plain` arm returned 10.10, 10.15 and 10.97 tok/s in three separate
+    /// formations, an 8.7% range, which is where the original "~8% noise
+    /// floor" came from. That number is real but belongs to comparing *runs*,
+    /// which is a benchmark-harness problem and not this controller's.
+    ///
+    /// And 0.15 could not catch the regression this gate exists for:
     ///
     /// | case | gain from standing down | decisive at 0.15? |
     /// |---|---|---|
@@ -87,9 +101,11 @@ pub(crate) struct SpeculationGateConfig {
     /// speculating is the "adaptive policy that never adapted" failure in the
     /// module docs above, arriving through the margin instead of the window.
     ///
-    /// 0.05 is ~3x the measured noise and catches #1581 with room. The 2.6%
-    /// case is deliberately *not* reachable: at under twice the noise floor,
-    /// any margin that caught it would latch on coin flips.
+    /// 0.05 catches #1581 with room and sits well above a window mean's own
+    /// noise. The 2.6% case is deliberately still reachable in principle but
+    /// not worth chasing: an effect that small is below what a single pair of
+    /// windows should be trusted to rank, and the cooldown means a wrong
+    /// verdict persists for half an hour.
     pub(crate) decisive_margin: f64,
     /// Quiet period after a verdict, so the gate cannot oscillate.
     pub(crate) cooldown: Duration,
@@ -718,9 +734,9 @@ mod tests {
         );
     }
 
-    /// An improvement inside the noise floor is not a verdict. Two-box runs on
-    /// #2112 moved 1.6% formation-to-formation and 0.6% request to request on
-    /// the per-request metric this gate uses; the margin is 5%.
+    /// An improvement inside the noise floor is not a verdict. A window mean of
+    /// eight requests carries 0.34% at two sigma on the measured workload; the
+    /// margin is 5%, so 2% is comfortably inside it.
     #[test]
     fn an_improvement_inside_the_noise_margin_is_not_decisive() {
         let mut gate = SpeculationGate::new(config());
