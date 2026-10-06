@@ -693,6 +693,18 @@ class FamilyEvidenceTests(unittest.TestCase):
 
 
 class WorkflowRerunContractTests(unittest.TestCase):
+    def test_early_workload_gate_has_sdk_and_verifies_produced_candidate(self):
+        workflow = yaml.safe_load((ROOT / '.github/workflows/llama-canary-family-pass.yml').read_text())
+        build_steps = workflow['jobs']['build']['steps']
+        sdk_index = next(i for i, step in enumerate(build_steps)
+                         if step.get('uses') == './.github/actions/setup-canary-python')
+        gate_index = next(i for i, step in enumerate(build_steps)
+                          if step.get('name') == 'Build exact candidate for distributed certification')
+        self.assertLess(sdk_index, gate_index)
+        battery = (ROOT / 'skippy/scripts/skippy-family-battery.sh').read_text()
+        self.assertIn('--candidate-executable "${SKIPPY_WORKLOAD_CANDIDATE_BIN_DIR:-$ROOT/target/debug}/skippy"', battery)
+        self.assertNotIn('--candidate-executable "${SKIPPY_WORKLOAD_CANDIDATE_BIN_DIR:-$ROOT/target/debug}/skippy-serving"', battery)
+
     def test_family_battery_writes_compact_json_lines(self):
         battery = (ROOT / 'skippy/scripts/skippy-family-battery.sh').read_text()
         append = '>> "$RESULTS_JSONL"'

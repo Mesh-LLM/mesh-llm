@@ -5,7 +5,7 @@ import re
 import unittest
 
 ROOT = Path(__file__).resolve().parents[3]
-PATCH = ROOT / "skippy/llama_cpp/patches/0024-test-skippy-cover-the-complete-canary-graph-registry.patch"
+PATCH = ROOT / "skippy/llama_cpp/patches/0023-test-skippy-cover-the-complete-canary-graph-registry.patch"
 CASE = re.compile(r"^\+skippy_contract_case\(([^)]+)\)$", re.MULTILINE)
 
 

@@ -910,7 +910,7 @@ run_workload_certify() {
       --evidence "$cert_run_dir/workload-oracle-evidence.json" \
       --class "$model_class" --smoke-lane "$smoke_lane" --oracle-lane "$oracle_lane" \
       --model-id "$model_id" --model-path "$target" \
-      --candidate-executable "${SKIPPY_WORKLOAD_CANDIDATE_BIN_DIR:-$ROOT/target/debug}/skippy-serving" \
+      --candidate-executable "${SKIPPY_WORKLOAD_CANDIDATE_BIN_DIR:-$ROOT/target/debug}/skippy" \
       --oracle-executable "$oracle_executable" \
       --pinned-patch-sha "$(python3 "$ROOT/scripts/llama-oracle-source.py")")
     if [[ -n "$mmproj" ]]; then
