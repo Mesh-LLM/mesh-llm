@@ -342,7 +342,7 @@ fn migration_inventory_rejects_unproven_qualified_sdk() -> DynResult<()> {
 }
 
 #[test]
-fn migration_inventory_rejects_conditional_sdk_after_cutover() -> DynResult<()> {
+fn migration_inventory_keeps_sdk_conditional_with_advisory_filename() -> DynResult<()> {
     let root = crate::command::unique_temp_dir("migration-sdk-cutover");
     let (mut paths, mut ledgers) = fixture(&root)?;
     owned(&root, &paths, &mut ledgers)?;
@@ -358,15 +358,11 @@ fn migration_inventory_rejects_conditional_sdk_after_cutover() -> DynResult<()> 
             "local_dependency_files": ["ci/python-sdk-compatibility/uv.lock"],
             "cadence": "advisory", "purpose": "SDK compatibility", "isolation_test": "task 22"}),
     )?);
-    // Given the task-22 advisory workflow has landed.
-    // When checking a still-conditional SDK exception.
-    let error = check_policy(&root, &paths, &ledgers).unwrap_err();
-    // Then qualification cannot be silently deferred past cutover.
-    assert!(
-        error.to_string().contains("ci-openai-python-smoke.py"),
-        "{error}"
-    );
-    cleanup(root)
+    // Given an unrelated advisory filename and a still-conditional SDK candidate.
+    // When checking policy, the filename neither qualifies nor removes required cadence.
+    let result = check_policy(&root, &paths, &ledgers);
+    cleanup(root)?;
+    result
 }
 
 #[test]
@@ -684,3 +680,6 @@ fn migration_inventory_rejects_new_interpreter_on_actual_source() -> DynResult<(
     assert!(error.to_string().contains("scripts/run.sh"), "{error}");
     Ok(())
 }
+
+#[path = "tests/sdk_exception_policy.rs"]
+mod sdk_exception_policy;

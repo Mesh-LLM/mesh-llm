@@ -14,6 +14,28 @@ use std::{
     time::Duration,
 };
 
+const OWNER_EXECUTION_OVERHEAD_SECS: u64 = 80;
+const OWNER_GRACEFUL_SECS: u64 = 100;
+const OWNER_FORCED_SECS: u64 = 20;
+
+fn comparison_budget(cell_seconds: u64, cells: usize) -> DynResult<u64> {
+    // Supervisor cleanup includes grace, force, and a separate forced EOF drain.
+    cell_seconds
+        .checked_add(OWNER_EXECUTION_OVERHEAD_SECS)
+        .and_then(|s| s.checked_add(OWNER_GRACEFUL_SECS))
+        .and_then(|s| s.checked_add(2 * OWNER_FORCED_SECS))
+        .and_then(|s| s.checked_mul(cells as u64))
+        .ok_or_else(|| "A/B deadline budget overflow".into())
+}
+
+fn regular_binary(path: &Path) -> DynResult<PathBuf> {
+    let canonical = path.canonicalize()?;
+    if !std::fs::symlink_metadata(&canonical)?.file_type().is_file() {
+        return Err("A/B binary must resolve to a regular file before hashing".into());
+    }
+    Ok(canonical)
+}
+
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct Binary {
@@ -32,7 +54,7 @@ impl Binary {
         {
             return Err("A/B binary requires an absolute path and full supplied commit".into());
         }
-        self.path = self.path.canonicalize()?;
+        self.path = regular_binary(&self.path)?;
         let actual =
             crate::product::digest::file_sha256(&self.path).map_err(|error| error.error)?;
         if actual != self.sha256 {
@@ -42,17 +64,19 @@ impl Binary {
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct Input {
     schema_version: u64,
+    prepared_plan_sha256: Option<String>,
     old: Binary,
     new: Binary,
     model_id: String,
     model_path: PathBuf,
     model_sha256: String,
-    catalog: PathBuf,
-    profile: String,
+    catalog: Option<PathBuf>,
+    profile: Option<String>,
+    manual_workload: Option<workload_plan::Workload>,
     contract: Option<PathBuf>,
     prompt_manifest: Option<PathBuf>,
     native_runtime_root: PathBuf,
@@ -90,21 +114,28 @@ fn prepare(mut input: Input) -> DynResult<Prepared> {
         return Err("A/B native-runtime root must be a directory".into());
     }
     native_identity::verify(&input.native_runtime_root, &input.native_runtime_sha256)?;
-    let catalog = std::fs::read(&input.catalog)?;
-    let contract = input.contract.as_ref().map(std::fs::read).transpose()?;
     let manifest = input
         .prompt_manifest
         .as_ref()
         .map(std::fs::read)
         .transpose()?;
-    let plan = workload_plan::resolve(
-        &catalog,
-        &input.profile,
-        &input.model_id,
-        &input.model_sha256,
-        contract.as_deref(),
-        manifest.as_deref(),
-    )?;
+    let plan = match (&input.catalog, &input.profile, input.manual_workload.clone()) {
+        (Some(catalog), Some(profile), None) => {
+            let catalog = std::fs::read(catalog)?;
+            let contract = input.contract.as_ref().map(std::fs::read).transpose()?;
+            workload_plan::resolve(&catalog, profile, &input.model_id, &input.model_sha256, contract.as_deref(), manifest.as_deref())?
+        }
+        (None, None, Some(workload)) if input.contract.is_none() =>
+            super::workload_manual::resolve(workload, &input.model_id, &input.model_sha256, manifest.as_deref())?,
+        _ => return Err("A/B requires either catalog/profile or manual_workload; acceptance contract requires a profile".into()),
+    };
+    if input
+        .prepared_plan_sha256
+        .as_ref()
+        .is_some_and(|expected| plan_hash(&plan).as_ref().ok() != Some(expected))
+    {
+        return Err("A/B prepared workload provenance changed before launch".into());
+    }
     let prompts = if let Some(bytes) = manifest {
         super::prompt_manifest(&bytes)?.prompts
     } else {
@@ -129,12 +160,7 @@ fn prepare(mut input: Input) -> DynResult<Prepared> {
         layer_end: dimensions.block_count,
     };
     let cells = rounds::schedule(prepared.plan.workload.rounds)?;
-    let maximum = prepared
-        .input
-        .cell_timeout_secs
-        .checked_add(200)
-        .and_then(|seconds| seconds.checked_mul(cells.len() as u64))
-        .ok_or("A/B deadline budget overflow")?;
+    let maximum = comparison_budget(prepared.input.cell_timeout_secs, cells.len())?;
     if maximum > 86400 {
         return Err("complete A/B comparison exceeds one-day process budget".into());
     }
@@ -225,6 +251,9 @@ struct Comparison<'a> {
 fn read_cell(path: &Path, budget: u64) -> DynResult<(serde_json::Value, u64)> {
     use std::io::Read;
     let limit = budget.min(64 * 1024 * 1024);
+    if !std::fs::symlink_metadata(path)?.file_type().is_file() {
+        return Err("cell evidence must be a regular owned file before opening".into());
+    }
     let mut reader = std::fs::File::open(path)?;
     if !reader.metadata()?.is_file() {
         return Err("cell evidence must be a regular file".into());
@@ -297,9 +326,11 @@ fn execute(
         publish(&input, &serde_json::to_vec_pretty(&cell)?)?;
         let spec = owner_spec(&input, directory)?;
         let limits = Limits {
-            execution: Duration::from_secs(prepared.input.cell_timeout_secs + 80),
-            graceful_shutdown: Duration::from_secs(100),
-            forced_shutdown: Duration::from_secs(20),
+            execution: Duration::from_secs(
+                prepared.input.cell_timeout_secs + OWNER_EXECUTION_OVERHEAD_SECS,
+            ),
+            graceful_shutdown: Duration::from_secs(OWNER_GRACEFUL_SECS),
+            forced_shutdown: Duration::from_secs(OWNER_FORCED_SECS),
             retained_bytes_per_stream: 65536,
             readiness: Readiness::None,
             completion: Completion::Exit,
@@ -394,20 +425,92 @@ fn finish(comparison: &mut Comparison<'_>, prepared: &Prepared, directory: &Path
         prepared.plan.requests_per_round,
     )?;
     comparison.aggregate = aggregation::aggregate(aggregation::Input { cells })?;
-    let contract = serde_json::from_value(prepared.plan.hardware_acceptance.clone())?;
-    let acceptance = acceptance::evaluate(&comparison.aggregate, &contract)?;
+    let acceptance = if prepared.plan.hardware_acceptance.is_null() {
+        None
+    } else {
+        let contract = serde_json::from_value(prepared.plan.hardware_acceptance.clone())?;
+        Some(acceptance::evaluate(&comparison.aggregate, &contract)?)
+    };
     comparison.collector_summary = vec![
         metrics_summary::summarize(acceptance::Version::Old, &old_timings)?,
         metrics_summary::summarize(acceptance::Version::New, &new_timings)?,
     ];
-    let mut markdown = report::render(&comparison.aggregate, &acceptance)?;
+    let mut markdown = report::render_optional(&comparison.aggregate, acceptance.as_ref())?;
     markdown.push_str(&metrics_summary::render(&comparison.collector_summary)?);
-    let passed = acceptance.passed;
-    comparison.acceptance = Some(acceptance);
+    let passed = acceptance.as_ref().is_none_or(|value| value.passed);
+    comparison.acceptance = acceptance;
     publish(&directory.join("report.md"), markdown.as_bytes())?;
     if !passed {
         return Err("waiting-prefix comparison failed hardware acceptance".into());
     }
+    Ok(())
+}
+
+fn plan_hash(plan: &workload_plan::Plan) -> DynResult<String> {
+    use sha2::Digest as _;
+    Ok(hex::encode(sha2::Sha256::digest(serde_json::to_vec(plan)?)))
+}
+
+fn prepare_observations(mut input: serde_json::Value) -> DynResult<serde_json::Value> {
+    for name in ["old", "new"] {
+        if input[name]
+            .get("sha256")
+            .is_none_or(serde_json::Value::is_null)
+        {
+            let path = input[name]["path"]
+                .as_str()
+                .ok_or("preparation requires binary path")?;
+            let path = regular_binary(Path::new(path))?;
+            let digest = crate::product::digest::file_sha256(&path).map_err(|error| error.error)?;
+            input[name]["sha256"] = digest.into();
+        }
+    }
+    if input
+        .get("model_sha256")
+        .is_none_or(serde_json::Value::is_null)
+    {
+        let path = input["model_path"]
+            .as_str()
+            .ok_or("preparation requires model path")?;
+        let path = regular_binary(Path::new(path))?;
+        input["model_sha256"] = crate::product::digest::file_sha256(&path)
+            .map_err(|error| error.error)?
+            .into();
+    }
+    if input
+        .get("native_runtime_sha256")
+        .is_none_or(serde_json::Value::is_null)
+    {
+        let path = input["native_runtime_root"]
+            .as_str()
+            .ok_or("preparation requires native-runtime root")?;
+        input["native_runtime_sha256"] = native_identity::observe(Path::new(path))?.into();
+    }
+    Ok(input)
+}
+
+pub(super) fn prepare_run(args: &[String]) -> DynResult<()> {
+    let opts = options(args, &["--input", "--output"], &["--input", "--output"])?;
+    let raw = serde_json::from_slice(&super::adaptive_identity::bounded(
+        Path::new(opts["--input"]),
+        1024 * 1024,
+    )?)?;
+    let mut prepared = prepare(serde_json::from_value(prepare_observations(raw)?)?)?;
+    prepared.input.prepared_plan_sha256 = Some(plan_hash(&prepared.plan)?);
+    for path in [
+        &mut prepared.input.catalog,
+        &mut prepared.input.contract,
+        &mut prepared.input.prompt_manifest,
+    ]
+    .into_iter()
+    .flatten()
+    {
+        *path = path.canonicalize()?;
+    }
+    let mut bytes = serde_json::to_vec_pretty(&prepared.input)?;
+    bytes.push(b'\n');
+    publish(Path::new(opts["--output"]), &bytes)?;
+    println!("{}", opts["--output"]);
     Ok(())
 }
 
@@ -417,7 +520,10 @@ pub(super) fn run(args: &[String]) -> DynResult<()> {
         &["--input", "--output-directory"],
         &["--input", "--output-directory"],
     )?;
-    let prepared = prepare(serde_json::from_slice(&std::fs::read(opts["--input"])?)?)?;
+    let prepared = prepare(serde_json::from_slice(&super::adaptive_identity::bounded(
+        Path::new(opts["--input"]),
+        1024 * 1024,
+    )?)?)?;
     let requested = std::path::absolute(opts["--output-directory"])?;
     let directory = requested
         .parent()

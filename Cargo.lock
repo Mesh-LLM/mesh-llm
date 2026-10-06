@@ -10101,6 +10101,7 @@ dependencies = [
 name = "trajectory-reader"
 version = "0.77.0"
 dependencies = [
+ "hyper",
  "libc",
  "md5",
  "parquet",

@@ -87,7 +87,16 @@ jobs:
               workflow_scan_targets+=("$workflow")
             fi
           done
-          ! grep -nE '^[[:space:]]+pull_request_target:' "${workflow_scan_targets[@]}"
+          if grep -nE '^[[:space:]]+pull_request_target:' "${workflow_scan_targets[@]}"; then
+            echo "Forbidden PR authority trigger" >&2
+            exit 1
+          else
+            scan_status=$?
+            if [[ "$scan_status" != 1 ]]; then
+              echo "Unable to read required CI workflow sources" >&2
+              exit "$scan_status"
+            fi
+          fi
 
   trusted_runner_image:
     name: Trusted runner image (${{ matrix.architecture }})

@@ -52,6 +52,11 @@ fn run() -> DynResult<()> {
         cli::CliCommand::EventBenchmarkRun(rest) => automation::event_benchmark_runner::run(rest),
         cli::CliCommand::AgentClientConfig(rest) => automation::agent_client_config::run(rest),
         cli::CliCommand::CacheFamilyReport(rest) => automation::cache_family_report::run(rest),
+        cli::CliCommand::CacheFamilyCorrectness(rest) => {
+            automation::cache_family_correctness::run(rest)
+        }
+        cli::CliCommand::CacheFamilyMeasure(rest) => automation::cache_family_measure::run(rest),
+        cli::CliCommand::CacheFamilyPlan(rest) => automation::cache_family_plan::run(rest),
         cli::CliCommand::AgentFixtureEvidence(rest) => {
             automation::agent_fixture_evidence::run(rest)
         }
@@ -70,6 +75,7 @@ fn run() -> DynResult<()> {
         cli::CliCommand::FamilyBatteryPolicy(rest) => automation::family_battery_policy::run(rest),
         cli::CliCommand::FamilyModelIdentity(rest) => automation::family_model_identity::run(rest),
         cli::CliCommand::LocalPorts(rest) => automation::local_ports::run(rest),
+        cli::CliCommand::ManualSmoke(rest) => automation::manual_smoke::run(rest),
         cli::CliCommand::OpenaiSmokeConfig(rest) => automation::openai_smoke_config::run(rest),
         cli::CliCommand::WorkloadSmokeConfig(rest) => automation::workload_smoke_config::run(rest),
         cli::CliCommand::SplitProbe(rest) => automation::split_probe::run(rest),
@@ -98,6 +104,9 @@ fn run() -> DynResult<()> {
         }
 
         cli::CliCommand::SmokeInputs(rest) => automation::smoke_inputs::run(rest),
+        cli::CliCommand::LightningCompatibility(rest) => {
+            automation::lightning_compatibility::run(rest)
+        }
         cli::CliCommand::ControlPlaneQa(rest) => {
             let root = repository::RepositoryRoot::resolve(None)?;
             automation::control_plane_qa::run(root.as_path(), rest)

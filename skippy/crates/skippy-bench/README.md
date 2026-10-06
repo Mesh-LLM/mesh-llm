@@ -274,8 +274,24 @@ just bench-corpus long-context
 
 The generator uses the Hugging Face CLI to resolve dataset revisions and
 download parquet artifacts, then samples the cached parquet files locally with
-DuckDB. If DuckDB is not installed in the active Python, the script falls back
-to `uv run --with duckdb`.
+DuckDB. This is one of the two explicitly retained DuckDB/Parquet helpers and
+is optional; it is not a required build or quality dependency. Prepare the
+existing reader-only project separately with an existing interpreter:
+
+```sh
+UV_PYTHON_DOWNLOADS=never uv sync --locked --project ci/agentic-replay-nightly --python /absolute/existing/python
+```
+
+This preparation may install the pinned DuckDB1.4.5 dependency from its existing
+lock and requires separately authorized dependency/network setup. `just
+bench-corpus` runs the reader through that project with `--offline --locked
+--no-sync --no-python-downloads` and isolated Python `-I`; both DuckDB child
+invocations also use `-I`. A missing prepared environment fails before corpus
+acquisition; there is no unpinned runtime dependency fallback. The separate
+Hugging Face CLI must already be available. The corpus command itself resolves
+and downloads dataset artifacts, so run it only within an authorized data scope.
+An operator-selected UV environment must have been prepared from this lock;
+source declarations do not qualify its installed packages or real corpus data.
 
 Generated layout:
 

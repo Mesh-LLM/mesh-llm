@@ -113,6 +113,12 @@ only the `swe-smith-claude-3-7-sonnet` rows, whose upstream is
 `SWE-bench/SWE-smith-trajectories` (MIT). The checked-in catalog retains row
 provenance without redistributing the text.
 
+The native fixture commands own catalog validation, profile resolution, pinned HF
+fetch/verification, and prompt-manifest publication. The transitional A/B harness
+below still imports `evals/skippy-scheduler-fixtures.py` for its profile lookup;
+retire that helper only with the A/B caller migration. Native fixture tests do not
+qualify hardware replay, corpus acquisition, or its acceptance metrics.
+
 ## Periodic hardware replay
 
 Use exact OLD and NEW release binaries built against the same native ABI, then

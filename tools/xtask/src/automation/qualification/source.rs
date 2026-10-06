@@ -6,6 +6,9 @@ use std::path::Path;
 use std::time::Duration;
 
 pub(super) fn head(root: &Path) -> DynResult<String> {
+    head_with_budget(root, Duration::from_secs(5))
+}
+pub(in crate::automation) fn head_with_budget(root: &Path, budget: Duration) -> DynResult<String> {
     let path = std::env::var_os("PATH").ok_or(Error::Invalid("Git PATH unavailable"))?;
     let name = if cfg!(windows) { "git.exe" } else { "git" };
     let executable = std::env::split_paths(&path)
@@ -18,6 +21,7 @@ pub(super) fn head(root: &Path) -> DynResult<String> {
         .filter_map(|name| std::env::var_os(name).map(|value| (name.into(), Value::Public(value))))
         .collect();
     for (name, value) in [
+        ("GIT_MASTER", "1"),
         ("GIT_OPTIONAL_LOCKS", "0"),
         ("GIT_NO_LAZY_FETCH", "1"),
         ("GIT_NO_REPLACE_OBJECTS", "1"),
@@ -41,7 +45,7 @@ pub(super) fn head(root: &Path) -> DynResult<String> {
         environment,
     };
     let limits = Limits {
-        execution: Duration::from_secs(5),
+        execution: budget,
         graceful_shutdown: Duration::from_secs(1),
         forced_shutdown: Duration::from_secs(1),
         retained_bytes_per_stream: 4096,

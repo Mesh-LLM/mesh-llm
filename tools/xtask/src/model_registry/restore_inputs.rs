@@ -75,6 +75,7 @@ fn restore(inputs: &Inputs<'_>, output: &str) -> CheckReport {
             cadence: inputs.cadence,
         },
         require_single_file: true,
+        print_serving_file: false,
         github_output: Some(output),
         output_prefix: "",
         verify_root: None,

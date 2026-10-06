@@ -282,7 +282,65 @@ jobs:
             echo "| GitHub cache transparently redirected to Depot | no |"
           } >> "$GITHUB_STEP_SUMMARY"
 
+  # Same-commit manual-main tooling producer; marker runners remain no-checkout.
+  authority_automation:
+    name: Publish same-commit manual authority automation
+    if: >-
+      github.repository == 'Mesh-LLM/mesh-llm' &&
+      github.event_name == 'workflow_dispatch' &&
+      github.ref == 'refs/heads/main' &&
+      (github.event.inputs.mode == 'seed' || github.event.inputs.mode == 'verify-pr-write')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    outputs:
+      authority_automation_results_origin: ${{ steps.authority_origin.outputs.origin }}
+      authority_automation_source_sha: ${{ steps.authority_source.outputs.sha }}
+      authority_automation_artifact_id: ${{ steps.authority_upload.outputs.artifact_id }}
+      authority_automation_binary_sha256: ${{ steps.authority_upload.outputs.binary_sha256 }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Freeze same-commit authority automation source
+        id: authority_source
+        shell: bash
+        env:
+          GIT_MASTER: '1'
+          GIT_OPTIONAL_LOCKS: '0'
+        run: |
+          set -euo pipefail
+          sha="$(git rev-parse HEAD)"
+          [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || exit 1
+          test "$sha" = "$GITHUB_SHA" || exit 1
+          printf 'sha=%s\n' "$sha" >> "$GITHUB_OUTPUT"
+      - name: Admit trusted hosted artifact service origin
+        id: authority_origin
+        shell: bash
+        env:
+          EXPECTED_SOURCE_SHA: ${{ github.sha }}
+          AUTOMATION_SOURCE_SHA: ${{ steps.authority_source.outputs.sha }}
+        run: |
+          set -euo pipefail
+          [[ "$AUTOMATION_SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || exit 1
+          test "$AUTOMATION_SOURCE_SHA" = "$EXPECTED_SOURCE_SHA" || exit 1
+          case "${ACTIONS_RESULTS_URL:-}" in
+            https://results-receiver.actions.githubusercontent.com|https://results-receiver.actions.githubusercontent.com/) ;;
+            *) echo "Unexpected trusted artifact service origin" >&2; exit 1 ;;
+          esac
+          printf 'origin=https://results-receiver.actions.githubusercontent.com\n' >> "$GITHUB_OUTPUT"
+      - name: Publish same-commit authority automation
+        id: authority_upload
+        uses: ./.github/actions/upload-automation
+        with:
+          source_sha: ${{ steps.authority_source.outputs.sha }}
+          runner-profile: hosted-bare
+          source-profile: protected-clean
+
   seed_authority_marker:
+    needs: authority_automation
     name: Seed trusted authority marker
     if: >-
       github.repository == 'Mesh-LLM/mesh-llm' &&
@@ -332,103 +390,96 @@ jobs:
             printf 'poison_key=%s\n' "$poison_key"
           } >> "$GITHUB_OUTPUT"
 
+      - name: Admit protected automation producer identity
+        shell: bash
+        env:
+          EXPECTED_SOURCE_SHA: ${{ github.sha }}
+          AUTOMATION_RESULTS_ORIGIN: ${{ needs.authority_automation.outputs.authority_automation_results_origin }}
+          AUTOMATION_SOURCE_SHA: ${{ needs.authority_automation.outputs.authority_automation_source_sha }}
+          AUTOMATION_ARTIFACT_ID: ${{ needs.authority_automation.outputs.authority_automation_artifact_id }}
+          AUTOMATION_BINARY_SHA256: ${{ needs.authority_automation.outputs.authority_automation_binary_sha256 }}
+        run: |
+          set -euo pipefail
+          test "$AUTOMATION_SOURCE_SHA" = "$EXPECTED_SOURCE_SHA" || exit 1
+          test "$RUNNER_OS" = Linux || exit 1
+          test "$RUNNER_ARCH" = X64 || exit 1
+          [[ "$AUTOMATION_SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || exit 1
+          [[ "$AUTOMATION_ARTIFACT_ID" =~ ^[1-9][0-9]{0,19}$ ]] || exit 1
+          [[ "$AUTOMATION_BINARY_SHA256" =~ ^[0-9a-f]{64}$ ]] || exit 1
+          test "$AUTOMATION_RESULTS_ORIGIN" = 'https://results-receiver.actions.githubusercontent.com' || exit 1
+          mkdir "$RUNNER_TEMP/immutable-automation-restored"
+      - name: Download protected authority automation
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        env:
+          ACTIONS_RESULTS_URL: ${{ needs.authority_automation.outputs.authority_automation_results_origin }}
+        with:
+          artifact-ids: ${{ needs.authority_automation.outputs.authority_automation_artifact_id }}
+          path: ${{ runner.temp }}/immutable-automation-restored
+          merge-multiple: true
+      - name: Verify protected authority automation without executing it
+        shell: bash
+        env:
+          AUTOMATION_SOURCE_SHA: ${{ needs.authority_automation.outputs.authority_automation_source_sha }}
+          AUTOMATION_ARTIFACT_ID: ${{ needs.authority_automation.outputs.authority_automation_artifact_id }}
+          AUTOMATION_BINARY_SHA256: ${{ needs.authority_automation.outputs.authority_automation_binary_sha256 }}
+        run: |
+          set -euo pipefail
+          [[ "$AUTOMATION_SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || exit 1
+          if [[ -n "${AUTOMATION_ARTIFACT_ID:-}" || -n "${AUTOMATION_BINARY_SHA256:-}" ]]; then
+            [[ "$AUTOMATION_ARTIFACT_ID" =~ ^[1-9][0-9]{0,19}$ ]] || exit 1
+            [[ "$AUTOMATION_BINARY_SHA256" =~ ^[0-9a-f]{64}$ ]] || exit 1
+          fi
+          cd "$RUNNER_TEMP/immutable-automation-restored"
+          binary=xtask
+          if [[ "$RUNNER_OS" == Windows ]]; then binary=xtask.exe; fi
+          shopt -s nullglob dotglob
+          members=(*)
+          [[ ${#members[@]} == 3 ]] || exit 1
+          for member in "$binary" source.txt SHA256SUMS; do
+            [[ -f "$member" && ! -L "$member" ]] || exit 1
+          done
+          [[ "$(wc -c < source.txt | tr -d '[:space:]')" == 41 ]] || exit 1
+          IFS= read -r source_line < source.txt || exit 1
+          [[ "$source_line" == "$AUTOMATION_SOURCE_SHA" ]] || exit 1
+          checksum_pattern='^([0-9a-f]{64}) ([ *])([a-zA-Z0-9.]+)$'
+          [[ "$(wc -c < SHA256SUMS | tr -d '[:space:]')" -le 256 ]] || exit 1
+          seen_binary=0
+          seen_source=0
+          while IFS= read -r line || [[ -n "$line" ]]; do
+            [[ "$line" =~ $checksum_pattern ]] || exit 1
+            digest="${BASH_REMATCH[1]}"
+            name="${BASH_REMATCH[3]}"
+            case "$name" in
+              "$binary")
+                [[ "$seen_binary" == 0 ]] || exit 1
+                seen_binary=1
+                if [[ -n "${AUTOMATION_BINARY_SHA256:-}" ]]; then
+                  [[ "$digest" == "$AUTOMATION_BINARY_SHA256" ]] || exit 1
+                fi
+                ;;
+              source.txt) [[ "$seen_source" == 0 ]] || exit 1; seen_source=1 ;;
+              *) exit 1 ;;
+            esac
+          done < SHA256SUMS
+          [[ "$seen_binary" == 1 && "$seen_source" == 1 ]] || exit 1
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum --strict -c SHA256SUMS
+          else
+            shasum -a 256 -c SHA256SUMS
+          fi
+          test -s "$binary" || exit 1
+          chmod +x "$binary"
+          binary_path="$PWD/$binary"
+          if command -v cygpath >/dev/null 2>&1; then
+            binary_path="$(cygpath -m "$binary_path")"
+          fi
+          printf 'MESH_LLM_AUTOMATION_BIN=%s\n' "$binary_path" >> "$GITHUB_ENV"
       - name: Attest provider-injected cache backend
         shell: bash
         run: |
           set -euo pipefail
-          # Keep this parser identical in every no-checkout authority phase.
-          # A local composite action would require checkout here, weakening
-          # the pinned-cache/no-checkout boundary.
-          is_loopback_authority() {
-            local authority="$1"
-            [[ "$authority" =~ ^localhost(:[0-9]{1,5})?$ ]] && return 0
-            [[ "$authority" =~ ^127\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}(:[0-9]{1,5})?$ ]] && return 0
-            if [[ "$authority" != \[*\]* ]]; then
-              return 1
-            fi
-            if ! command -v python3 >/dev/null 2>&1; then
-              return 2
-            fi
-            local host="${authority#\[}"
-            host="${host%%\]*}"
-            local python_status
-            if printf '%s\n' "$host" | python3 -c '
-          import ipaddress
-          import sys
-
-          value = sys.stdin.read().strip()
-          if sys.version_info < (3, 8):
-              raise SystemExit(2)
-          try:
-              address = ipaddress.ip_address(value)
-          except ValueError:
-              raise SystemExit(2)
-          mapped = getattr(address, "ipv4_mapped", None)
-          raise SystemExit(0 if address.is_loopback or (mapped is not None and mapped.is_loopback) else 3)
-          ' >/dev/null 2>&1; then
-              return 0
-            else
-              python_status=$?
-            fi
-            if (( python_status == 3 )); then
-              return 1
-            fi
-            return 2
-          }
-
-          attest_cache_endpoint() {
-            local endpoint_name="$1"
-            local endpoint="${!endpoint_name:-}"
-            local endpoint_lower
-            endpoint_lower="$(printf '%s' "$endpoint" | tr '[:upper:]' '[:lower:]')"
-            local reason=""
-            if [[ -z "$endpoint" ]]; then
-              reason=missing
-            elif [[ "$endpoint" =~ [[:space:]] ]]; then
-              reason=whitespace
-            elif [[ "$endpoint_lower" != http://* ]]; then
-              reason=scheme
-            else
-              local remainder="${endpoint_lower#http://}"
-              local authority="${remainder%%[/?#]*}"
-              local suffix="${remainder#"$authority"}"
-              local port=""
-              if [[ -z "$authority" ]]; then
-                reason=authority
-              elif [[ "$authority" == *"@"* ]]; then
-                reason=userinfo
-              elif [[ "$authority" =~ ^([a-z0-9-]+\.)*actions\.githubusercontent\.com(:[0-9]{1,5})?$ ]]; then
-                reason=github
-              elif is_loopback_authority "$authority"; then
-                reason=loopback
-              elif [[ "$?" -eq 2 ]]; then
-                reason=parser
-              elif [[ "$suffix" != /* ]]; then
-                reason=path
-              elif [[ "$authority" =~ ^\[[^]]+\]:([0-9]+)$ ]]; then
-                port="${BASH_REMATCH[1]}"
-              elif [[ "$authority" =~ ^[^:]+:([0-9]+)$ ]]; then
-                port="${BASH_REMATCH[1]}"
-              else
-                reason=port
-              fi
-              if [[ -z "$reason" ]] &&
-                 ! [[ "$port" =~ ^[0-9]{1,5}$ ]] ; then
-                reason=port
-              fi
-              if [[ -z "$reason" ]] &&
-                 ! (( 10#$port >= 1 && 10#$port <= 65535 )); then
-                reason=port
-              fi
-            fi
-            if [[ -n "$reason" ]]; then
-              printf 'cache backend attestation failed (variable=%s reason=%s)\n' \
-                "$endpoint_name" "$reason" >&2
-              return 1
-            fi
-          }
-          attest_cache_endpoint ACTIONS_CACHE_URL
-          attest_cache_endpoint ACTIONS_RESULTS_URL
+          "$MESH_LLM_AUTOMATION_BIN" ci-ops authority-audit endpoint ACTIONS_CACHE_URL
+          "$MESH_LLM_AUTOMATION_BIN" ci-ops authority-audit endpoint ACTIONS_RESULTS_URL
 
       - name: Prepare deterministic non-secret marker
         shell: bash
@@ -484,6 +535,7 @@ jobs:
           fi
 
   verify_pr_write:
+    needs: authority_automation
     name: Verify PR poison marker is isolated
     if: >-
       github.repository == 'Mesh-LLM/mesh-llm' &&
@@ -532,103 +584,96 @@ jobs:
             printf 'poison_key=%s\n' "$poison_key"
           } >> "$GITHUB_OUTPUT"
 
+      - name: Admit protected automation producer identity
+        shell: bash
+        env:
+          EXPECTED_SOURCE_SHA: ${{ github.sha }}
+          AUTOMATION_RESULTS_ORIGIN: ${{ needs.authority_automation.outputs.authority_automation_results_origin }}
+          AUTOMATION_SOURCE_SHA: ${{ needs.authority_automation.outputs.authority_automation_source_sha }}
+          AUTOMATION_ARTIFACT_ID: ${{ needs.authority_automation.outputs.authority_automation_artifact_id }}
+          AUTOMATION_BINARY_SHA256: ${{ needs.authority_automation.outputs.authority_automation_binary_sha256 }}
+        run: |
+          set -euo pipefail
+          test "$AUTOMATION_SOURCE_SHA" = "$EXPECTED_SOURCE_SHA" || exit 1
+          test "$RUNNER_OS" = Linux || exit 1
+          test "$RUNNER_ARCH" = X64 || exit 1
+          [[ "$AUTOMATION_SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || exit 1
+          [[ "$AUTOMATION_ARTIFACT_ID" =~ ^[1-9][0-9]{0,19}$ ]] || exit 1
+          [[ "$AUTOMATION_BINARY_SHA256" =~ ^[0-9a-f]{64}$ ]] || exit 1
+          test "$AUTOMATION_RESULTS_ORIGIN" = 'https://results-receiver.actions.githubusercontent.com' || exit 1
+          mkdir "$RUNNER_TEMP/immutable-automation-restored"
+      - name: Download protected authority automation
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        env:
+          ACTIONS_RESULTS_URL: ${{ needs.authority_automation.outputs.authority_automation_results_origin }}
+        with:
+          artifact-ids: ${{ needs.authority_automation.outputs.authority_automation_artifact_id }}
+          path: ${{ runner.temp }}/immutable-automation-restored
+          merge-multiple: true
+      - name: Verify protected authority automation without executing it
+        shell: bash
+        env:
+          AUTOMATION_SOURCE_SHA: ${{ needs.authority_automation.outputs.authority_automation_source_sha }}
+          AUTOMATION_ARTIFACT_ID: ${{ needs.authority_automation.outputs.authority_automation_artifact_id }}
+          AUTOMATION_BINARY_SHA256: ${{ needs.authority_automation.outputs.authority_automation_binary_sha256 }}
+        run: |
+          set -euo pipefail
+          [[ "$AUTOMATION_SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || exit 1
+          if [[ -n "${AUTOMATION_ARTIFACT_ID:-}" || -n "${AUTOMATION_BINARY_SHA256:-}" ]]; then
+            [[ "$AUTOMATION_ARTIFACT_ID" =~ ^[1-9][0-9]{0,19}$ ]] || exit 1
+            [[ "$AUTOMATION_BINARY_SHA256" =~ ^[0-9a-f]{64}$ ]] || exit 1
+          fi
+          cd "$RUNNER_TEMP/immutable-automation-restored"
+          binary=xtask
+          if [[ "$RUNNER_OS" == Windows ]]; then binary=xtask.exe; fi
+          shopt -s nullglob dotglob
+          members=(*)
+          [[ ${#members[@]} == 3 ]] || exit 1
+          for member in "$binary" source.txt SHA256SUMS; do
+            [[ -f "$member" && ! -L "$member" ]] || exit 1
+          done
+          [[ "$(wc -c < source.txt | tr -d '[:space:]')" == 41 ]] || exit 1
+          IFS= read -r source_line < source.txt || exit 1
+          [[ "$source_line" == "$AUTOMATION_SOURCE_SHA" ]] || exit 1
+          checksum_pattern='^([0-9a-f]{64}) ([ *])([a-zA-Z0-9.]+)$'
+          [[ "$(wc -c < SHA256SUMS | tr -d '[:space:]')" -le 256 ]] || exit 1
+          seen_binary=0
+          seen_source=0
+          while IFS= read -r line || [[ -n "$line" ]]; do
+            [[ "$line" =~ $checksum_pattern ]] || exit 1
+            digest="${BASH_REMATCH[1]}"
+            name="${BASH_REMATCH[3]}"
+            case "$name" in
+              "$binary")
+                [[ "$seen_binary" == 0 ]] || exit 1
+                seen_binary=1
+                if [[ -n "${AUTOMATION_BINARY_SHA256:-}" ]]; then
+                  [[ "$digest" == "$AUTOMATION_BINARY_SHA256" ]] || exit 1
+                fi
+                ;;
+              source.txt) [[ "$seen_source" == 0 ]] || exit 1; seen_source=1 ;;
+              *) exit 1 ;;
+            esac
+          done < SHA256SUMS
+          [[ "$seen_binary" == 1 && "$seen_source" == 1 ]] || exit 1
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum --strict -c SHA256SUMS
+          else
+            shasum -a 256 -c SHA256SUMS
+          fi
+          test -s "$binary" || exit 1
+          chmod +x "$binary"
+          binary_path="$PWD/$binary"
+          if command -v cygpath >/dev/null 2>&1; then
+            binary_path="$(cygpath -m "$binary_path")"
+          fi
+          printf 'MESH_LLM_AUTOMATION_BIN=%s\n' "$binary_path" >> "$GITHUB_ENV"
       - name: Attest provider-injected cache backend
         shell: bash
         run: |
           set -euo pipefail
-          # Keep this parser identical in every no-checkout authority phase.
-          # A local composite action would require checkout here, weakening
-          # the pinned-cache/no-checkout boundary.
-          is_loopback_authority() {
-            local authority="$1"
-            [[ "$authority" =~ ^localhost(:[0-9]{1,5})?$ ]] && return 0
-            [[ "$authority" =~ ^127\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}(:[0-9]{1,5})?$ ]] && return 0
-            if [[ "$authority" != \[*\]* ]]; then
-              return 1
-            fi
-            if ! command -v python3 >/dev/null 2>&1; then
-              return 2
-            fi
-            local host="${authority#\[}"
-            host="${host%%\]*}"
-            local python_status
-            if printf '%s\n' "$host" | python3 -c '
-          import ipaddress
-          import sys
-
-          value = sys.stdin.read().strip()
-          if sys.version_info < (3, 8):
-              raise SystemExit(2)
-          try:
-              address = ipaddress.ip_address(value)
-          except ValueError:
-              raise SystemExit(2)
-          mapped = getattr(address, "ipv4_mapped", None)
-          raise SystemExit(0 if address.is_loopback or (mapped is not None and mapped.is_loopback) else 3)
-          ' >/dev/null 2>&1; then
-              return 0
-            else
-              python_status=$?
-            fi
-            if (( python_status == 3 )); then
-              return 1
-            fi
-            return 2
-          }
-
-          attest_cache_endpoint() {
-            local endpoint_name="$1"
-            local endpoint="${!endpoint_name:-}"
-            local endpoint_lower
-            endpoint_lower="$(printf '%s' "$endpoint" | tr '[:upper:]' '[:lower:]')"
-            local reason=""
-            if [[ -z "$endpoint" ]]; then
-              reason=missing
-            elif [[ "$endpoint" =~ [[:space:]] ]]; then
-              reason=whitespace
-            elif [[ "$endpoint_lower" != http://* ]]; then
-              reason=scheme
-            else
-              local remainder="${endpoint_lower#http://}"
-              local authority="${remainder%%[/?#]*}"
-              local suffix="${remainder#"$authority"}"
-              local port=""
-              if [[ -z "$authority" ]]; then
-                reason=authority
-              elif [[ "$authority" == *"@"* ]]; then
-                reason=userinfo
-              elif [[ "$authority" =~ ^([a-z0-9-]+\.)*actions\.githubusercontent\.com(:[0-9]{1,5})?$ ]]; then
-                reason=github
-              elif is_loopback_authority "$authority"; then
-                reason=loopback
-              elif [[ "$?" -eq 2 ]]; then
-                reason=parser
-              elif [[ "$suffix" != /* ]]; then
-                reason=path
-              elif [[ "$authority" =~ ^\[[^]]+\]:([0-9]+)$ ]]; then
-                port="${BASH_REMATCH[1]}"
-              elif [[ "$authority" =~ ^[^:]+:([0-9]+)$ ]]; then
-                port="${BASH_REMATCH[1]}"
-              else
-                reason=port
-              fi
-              if [[ -z "$reason" ]] &&
-                 ! [[ "$port" =~ ^[0-9]{1,5}$ ]] ; then
-                reason=port
-              fi
-              if [[ -z "$reason" ]] &&
-                 ! (( 10#$port >= 1 && 10#$port <= 65535 )); then
-                reason=port
-              fi
-            fi
-            if [[ -n "$reason" ]]; then
-              printf 'cache backend attestation failed (variable=%s reason=%s)\n' \
-                "$endpoint_name" "$reason" >&2
-              return 1
-            fi
-          }
-          attest_cache_endpoint ACTIONS_CACHE_URL
-          attest_cache_endpoint ACTIONS_RESULTS_URL
+          "$MESH_LLM_AUTOMATION_BIN" ci-ops authority-audit endpoint ACTIONS_CACHE_URL
+          "$MESH_LLM_AUTOMATION_BIN" ci-ops authority-audit endpoint ACTIONS_RESULTS_URL
 
       - name: Clear local poison marker before trusted restore
         shell: bash

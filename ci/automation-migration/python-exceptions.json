@@ -20,6 +20,20 @@
       "status": "maintainer_retained"
     },
     {
+      "path": "scripts/generate-bench-corpus.py",
+      "callers": [
+        "just/skippy.just::bench-corpus via existing locked ci/agentic-replay-nightly project, offline/no-sync/no-python-downloads runtime and isolated -I helper"
+      ],
+      "local_dependency_files": [
+        "ci/agentic-replay-nightly/pyproject.toml",
+        "ci/agentic-replay-nightly/uv.lock"
+      ],
+      "cadence": "Explicit optional manual bench-corpus only; never a required PR/main quality dependency",
+      "purpose": "Maintainer-retained DuckDB/Parquet corpus extraction helper; preserve source sampling/query/output semantics. Retention is not a blanket exception for other generic benchmark or replay execution tooling.",
+      "isolation_test": "Explicit retention is recorded in resume-handoff-20261002.md:11. Source-owned guards cover the exact existing DuckDB1.4.5 project/lock, offline/no-sync isolated caller, both isolated DuckDB child invocations, missing-environment refusal before data acquisition, and removal of the unpinned uv fallback. These are source and native policy fixtures only: interpreter/dependency installation, installed-environment isolation, corpus acquisition and real-data execution remain unqualified.",
+      "status": "maintainer_retained"
+    },
+    {
       "path": "scripts/ci-openai-python-smoke.py",
       "callers": [
         "scripts/ci-compat-smoke.sh:159; unchanged actual SDK client and required workflow/runtime gates"
@@ -251,21 +265,25 @@
     },
     {
       "path": ".agents/skills/release-validation/references/evidence-and-gates.md",
-      "examples": [],
+      "examples": [
+
+      ],
       "owner": "retain human evidence matrix and decision criteria; machine evidence commands belong to tools/xtask",
       "cutover_task": 5,
       "status": "reviewed_no_interpreter_automation"
     },
     {
       "path": ".agents/skills/release-validation/assets/release-validation-report-template.md",
-      "examples": [],
+      "examples": [
+
+      ],
       "owner": "retain human-authored report template populated using tools/xtask outputs",
       "cutover_task": 5,
       "status": "reviewed_no_executable_examples"
     }
   ],
   "unresolved_qualification_count": 4,
-  "unresolved_note": "The newer L8 maintainer decision retains required real OpenAI, LangChain and LiteLLM client coverage and actual embeddings SDK validation; it supersedes the plan's advisory-only proposal. Four clients remain conditional_unqualified for dependency isolation and execution evidence, not for permission to keep their actual SDK behavior. Recorded dependency files now exist: the current requirements are shared and unpinned. No SDK-only lock covers all retained clients. Do not invent a lock, remove required gates or create an advisory substitute. Embeddings owns its unchanged inputs locally; generic workload automation remains separate migration debt. Full parser-backed interpreter reachability remains incomplete.",
+  "unresolved_note": "The two exact DuckDB/Parquet helpers are explicitly retained; corpus locked caller and child isolation are source-implemented, installed environment and real data qualification pending. Four exact SDK clients remain conditional_unqualified under retained L8 cadence; declaration and filename are not execution qualification. Other potential research/reference adapters require their own caller/dependency/isolation evidence.",
   "current_wave_source_bindings": [
     {
       "path": "scripts/skippy-family-battery.sh",
@@ -339,7 +357,9 @@
     "source_snapshot": "Frozen source after provenance/package local qualification; pending full latest validation union",
     "python_paths": 196,
     "just_roster": 109,
-    "removed_edges": [],
+    "removed_edges": [
+
+    ],
     "limits": "Surviving generic quality roster, native smoke/oracle/manual protected and real required SDK/model/platform qualifications remain open; no exception or gate demotion."
   },
   "next_wave_source_reconciliation": {
@@ -505,8 +525,12 @@
       }
     ],
     "limits": "Source-bound caller reconciliation only. Generic Python implementations and unqualified test methods retained; required SDK, native, model, platform and protected gates unchanged. Literal typed command selection and continued argv are reviewed, but runtime dynamic expansion is not parser-complete reachability proof.",
-    "removed_edges": [],
-    "rebound_rows": []
+    "removed_edges": [
+
+    ],
+    "rebound_rows": [
+
+    ]
   },
   "next_wave_comparator_and_test_retirement": {
     "coverage": "ci/automation-migration/next-wave-test-tts-retirement-coverage.json",
@@ -615,7 +639,9 @@
     },
     "qualification": "Authored, unrun; parent must qualify the transaction before any legacy retirement",
     "retained": "All Python helpers and legacy tests remain. Normal verify timeout helper remains reachable; no inventory/roster reductions.",
-    "rebound_rows": []
+    "rebound_rows": [
+
+    ]
   },
   "projected_final_repair_caller_binding": {
     "source": "scripts/llama-canary-agent-repair.sh",

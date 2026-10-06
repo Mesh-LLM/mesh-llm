@@ -12,7 +12,7 @@ mod order_identity;
 mod pairing;
 mod prompt_identity;
 mod report;
-mod resampling;
+pub(in crate::automation) mod resampling;
 mod retry;
 mod screening;
 mod statistics;

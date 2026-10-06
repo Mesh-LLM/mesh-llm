@@ -358,12 +358,12 @@
       "required": true
     },
     {
-      "classification": "benchmark corpus tooling",
-      "deletion_condition": "Port generic artifact/process logic; preserve explicit benchmark-only caller.",
-      "exception": null,
+      "classification": "maintainer-retained DuckDB/Parquet benchmark corpus helper",
+      "deletion_condition": "Retained by explicit maintainer decision recorded in resume-handoff-20261002.md:11; keep only explicit optional bench-corpus caller. Locked caller/isolated children are source-implemented; actual installed-environment, required graph and real data qualification remain pending.",
+      "exception": "Maintainer-retained corpus extraction helper; no blanket generic benchmark exception and no installed environment or data qualification inferred.",
       "path": "scripts/generate-bench-corpus.py",
       "phase": 5,
-      "replacement_owner": "tools/xtask benchmark or isolated eval",
+      "replacement_owner": "Retained DuckDB/Parquet helper with existing reader project lock; generic benchmark orchestration remains with typed Rust owners",
       "required": false
     },
     {
@@ -508,24 +508,6 @@
       "path": "scripts/tests/test_ci_windows_composition.py",
       "phase": 2,
       "replacement_owner": "tools/xtask artifact tests on Windows",
-      "required": true
-    },
-    {
-      "classification": "generic CI workflow contract test",
-      "deletion_condition": "Sentinel structure and trust properties remain tested; do not execute external mutation.",
-      "exception": null,
-      "path": "scripts/tests/test_depot_authority_sentinel.py",
-      "phase": 2,
-      "replacement_owner": "tools/xtask ci_validation",
-      "required": true
-    },
-    {
-      "classification": "generic workflow test",
-      "deletion_condition": "Workflow condition and authority contracts covered by Rust.",
-      "exception": null,
-      "path": "scripts/tests/test_depot_canary_workflow.py",
-      "phase": 2,
-      "replacement_owner": "tools/xtask ci_validation",
       "required": true
     },
     {
@@ -909,7 +891,7 @@
   "revision": "2c4c92fcef592798efb3efedb721a74e2003afa6",
   "schema_version": 1,
   "source_command": "GIT_MASTER=1 git ls-files '*.py'",
-  "tracked_file_count": 85,
+  "tracked_file_count": 83,
   "tracked_path_categories": {
     "directory_name_does_not_establish_optional_status": true,
     "note": "Path set is intended to equal source_command output. Task evidence validates this exact set, not a suffix-based approximation.",
@@ -984,9 +966,7 @@
     "source_snapshot": "Frozen source after provenance/package local qualification; pending full latest validation union",
     "python_paths": 196,
     "just_roster": 109,
-    "removed_edges": [
-
-    ],
+    "removed_edges": [],
     "limits": "Surviving generic quality roster, native smoke/oracle/manual protected and real required SDK/model/platform qualifications remain open; no exception or gate demotion."
   },
   "zip_extraction_test_retirement": {
@@ -9981,9 +9961,7 @@
       "sha256": "fa4342e63b8d4f93e425e88f106d9585ba5ef3e06a057cff3c83ad2ed92c9d5c",
       "head": "3fbd1fcbcd390c86083a8265de3a4ce4734e3a58",
       "status": "FROZEN_SOURCES_NOT_TERMINAL_EXECUTION",
-      "drift": [
-
-      ],
+      "drift": [],
       "additional_native_sources": [
         {
           "path": "tools/xtask/src/automation/event_benchmark_comparison/manifest_tests.rs",
@@ -10060,6 +10038,76 @@
     "current_method_map": {
       "path": ".omo/evidence/resume-20261002/event-benchmark-last-caller-retirement-rebind-v2/current-method-map149.json",
       "sha256": "568fce59980878bc9d619ea6301b81da250ebb99885d5532bdf6f07dd289995c"
+    }
+  },
+  "authority_canary_eighteen_test_retirement": {
+    "status": "LOCAL_POSTIMAGE_QUALIFIED",
+    "original_methods": 18,
+    "removed_paths": [
+      "scripts/tests/test_depot_authority_sentinel.py",
+      "scripts/tests/test_depot_canary_workflow.py"
+    ],
+    "durable_coverage": {
+      "path": "ci/automation-migration/authority-canary-test-retirement-coverage.json",
+      "sha256": "8cc15ce9d4f1c3b33989c075eddc23dce925bf4d03c3ed46b487d748a2842ef6"
+    },
+    "current_just": {
+      "path": "just/ci.just",
+      "sha256": "0463c251ee715f83ec80b526a92c60f52d5d7804663d2ddbbdc98afedb978f2b",
+      "roster_line": 32,
+      "count": 26,
+      "modules": [
+        "scripts.tests.test_prepare_llama",
+        "scripts.tests.test_package_native_runtime",
+        "scripts.tests.test_skippy_llama_parity",
+        "scripts.tests.test_ci_windows_composition",
+        "scripts.tests.test_reusable_workflow_runner_trust",
+        "scripts.tests.test_build_windows",
+        "scripts.tests.test_skippy_radix_cache_ab",
+        "scripts.tests.test_ci_lane_workflows",
+        "scripts.tests.test_ci_native_toolchain_routing",
+        "scripts.tests.test_skippy_competitive_benchmark",
+        "scripts.tests.test_pr_workflow_artifacts",
+        "scripts.tests.test_hf_skippy_mtp_certify_job",
+        "scripts.tests.test_install_ps1",
+        "scripts.tests.test_kv_restart_replay",
+        "scripts.tests.test_llama_canary_agent_repair_contract",
+        "scripts.tests.test_agentic_trajectory_manifest",
+        "scripts.tests.test_llama_upstream_canary_contract",
+        "scripts.tests.test_llama_review_regressions",
+        "scripts.tests.test_skippy_adaptive_prefill_ab",
+        "scripts.tests.test_skippy_agentic_prompt_manifest",
+        "scripts.tests.test_skippy_mixed_prefill_decode_ab",
+        "scripts.tests.test_ci_sdk_producers",
+        "scripts.tests.test_llama_native_full_replay",
+        "scripts.tests.test_ci_artifact_actions",
+        "scripts.tests.test_skippy_system_one_smoke",
+        "scripts.tests.test_release_workflow_artifacts"
+      ]
+    },
+    "admission_prerequisites": ".omo/evidence/resume-20261002/authority18-retirement-proposal-v1/prerequisites.json",
+    "qualification": {
+      "native_proof_bindings": 59,
+      "gap_receipt": ".omo/evidence/resume-20261002/authority18-gaps-maintained-v1-exit.json",
+      "gap_receipt_sha256": "c8f5bea1ba1a505462141250738eba26747194dd1e2e94cabebdda1ab7d5782e",
+      "full_ci_required_after_transaction": true,
+      "full_ci": {
+        "path": ".omo/evidence/resume-20261002/authority18-postretirement-maintained-v2-exit.json",
+        "sha256": "22b647494b69839bac14d6515a183f43c59093fefa7e66a588c47f798d49d712",
+        "validated_freeze": {
+          "path": ".omo/evidence/resume-20261002/authority18-postretirement-maintained-v2-freeze-v1.json",
+          "sha256": "6bf75540b9e6c34885ea9a5721d0c68c52f35175008644eb75bd2021b6308ce0"
+        },
+        "normal": {
+          "log": ".omo/evidence/resume-20261002/authority18-postretirement-maintained-v2-normal.log",
+          "sha256": "7db1c2ff6e7f602c24deb87a874e565e3e2be072dd216a8656953756f7704e49",
+          "rust_groups": 117,
+          "rust_passed": 5626,
+          "python_tests": 413,
+          "python_skipped": 13
+        },
+        "scope": "Current complete local ci-validate on retirement transaction sources before this metadata-only receipt reconciliation; no hosted, model or platform acceptance."
+      }
     }
   }
 }

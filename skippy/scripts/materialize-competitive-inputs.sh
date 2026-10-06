@@ -39,6 +39,9 @@
 #
 # Environment:
 #   HF_TOKEN / HUGGING_FACE_HUB_TOKEN — optional; required only for gated repos
+#   MESH_LLM_TRAJECTORY_READER_BIN — absolute optional native reader override
+#     Otherwise build beside xtask: just with-lld cargo build --locked
+#       -p trajectory-reader --features parquet-input --bin trajectory-reader
 #   TRANSFORMERS_VERBOSITY=error      — silences the "PyTorch not found" banner
 #
 # Exit codes: 0 success; 1 usage/preflight/digest mismatch.
@@ -51,7 +54,6 @@ if [[ -n "${MESH_LLM_AUTOMATION_BIN:-}" ]]; then
 fi
 CONFIG="${MESH_COMPETITIVE_CONFIG:-$ROOT_SCRIPT_DIR/../skippy/evals/skippy-competitive-benchmark.json}"
 MODEL_MANIFEST="${MESH_COMPETITIVE_MODEL_MANIFEST:-$ROOT_SCRIPT_DIR/../ci/model-artifacts/manifests/competitive-benchmark.json}"
-PROMPT_GENERATOR="$ROOT_SCRIPT_DIR/../skippy/evals/skippy-agentic-prompt-manifest.py"
 
 ROOT="${MESH_COMPETITIVE_INPUT_ROOT:-$PWD/bench-inputs}"
 MODELS="${MESH_COMPETITIVE_MODELS:-}"
@@ -72,13 +74,19 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-command -v "$PYTHON_BIN" >/dev/null 2>&1 || { echo "error: $PYTHON_BIN not found" >&2; exit 1; }
+if [[ "$SKIP_TOKENIZERS" -eq 0 ]]; then
+  command -v "$PYTHON_BIN" >/dev/null 2>&1 || { echo "error: $PYTHON_BIN not found" >&2; exit 1; }
+fi
 command -v jq >/dev/null 2>&1 || { echo "error: jq not found" >&2; exit 1; }
 command -v hf >/dev/null 2>&1 || { echo "error: hf CLI not found (pip install \"huggingface_hub[cli]\")" >&2; exit 1; }
 
 [[ -f "$CONFIG" ]] || { echo "error: config not found: $CONFIG" >&2; exit 1; }
 [[ -f "$MODEL_MANIFEST" ]] || { echo "error: model manifest not found: $MODEL_MANIFEST" >&2; exit 1; }
-[[ -f "$PROMPT_GENERATOR" ]] || { echo "error: prompt generator not found: $PROMPT_GENERATOR" >&2; exit 1; }
+
+# Reject missing or unusable native reader before any download work.
+if [[ "$SKIP_DATASET" -eq 0 ]]; then
+  "${automation[@]}" automation agentic-prompt-manifest check-reader
+fi
 
 # Pin the model list from the config (single source of truth) unless overridden.
 if [[ -z "$MODELS" ]]; then
@@ -97,11 +105,8 @@ file_sha256() { # portable sha256 of a file (Linux sha256sum / macOS shasum)
   fi
 }
 
-resolve_path() { # portable `readlink -f` (BSD/macOS readlink has no -f)
-  "$PYTHON_BIN" - "$1" <<'PY'
-import pathlib, sys
-print(pathlib.Path(sys.argv[1]).resolve())
-PY
+resolve_path() { # portable canonical path through the native owner
+  "${automation[@]}" artifact file-projection canonical-path "$1"
 }
 
 fail_count=0
@@ -280,7 +285,7 @@ if [[ "$SKIP_DATASET" -eq 0 ]]; then
     while IFS= read -r source; do
       sources+=(--source-dataset "$source")
     done < <(jq -r '.thoughtworks.selection.sources[]' "$CONFIG")
-    "$PYTHON_BIN" "$PROMPT_GENERATOR" \
+    "${automation[@]}" automation agentic-prompt-manifest \
       --dataset-file "$ROOT/thoughtworks/$ds_file" \
       --dataset-revision "$ds_rev" \
       --output "$ROOT/thoughtworks/manifest.json" \

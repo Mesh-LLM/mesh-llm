@@ -305,3 +305,49 @@ fn invalid_flags_and_failed_local_start_or_stats_fail_the_action() {
     assert_eq!(v["exports"]["SCCACHE_MULTILEVEL_WRITE_ERROR_POLICY"], "all");
     assert_eq!(v["failures"], json!([]));
 }
+
+// Append to existing ci_runner_cache_contract/runtime.rs.
+#[test]
+fn exact_sentinel_ref_does_not_authorize_other_prs_forks_dispatch_or_forced_hosted() {
+    for (extra, accepted) in [
+        (vec![], true),
+        (vec![("INPUT_PR_CANARY_REF", "")], false),
+        (vec![("INPUT_PR_CANARY_REF", "refs/pull/13/merge")], false),
+        (vec![("INPUT_HEAD_REPOSITORY", "attacker/mesh-llm")], false),
+        (vec![("INPUT_FORCE_HOSTED", "true")], false),
+        (vec![("INPUT_EVENT_NAME", "pull_request_target")], false),
+        (
+            vec![
+                ("INPUT_EVENT_NAME", "workflow_dispatch"),
+                ("INPUT_REF", "refs/heads/main"),
+            ],
+            false,
+        ),
+        (vec![("INPUT_REF", "refs/pull/12/head")], false),
+    ] {
+        let fixture = Fixture::new();
+        let mut fields = vec![
+            ("INPUT_PR_CANARY_REF", "refs/pull/12/merge"),
+            ("INPUT_DEPOT_PR_ENABLED", "false"),
+            ("FIXTURE_DATE", "2026-10-02"),
+        ];
+        fields.extend(extra);
+        let output = fixture.selector(&fields);
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let values = fixture.outputs();
+        assert_eq!(values["depot_enabled"], accepted.to_string());
+        assert_eq!(
+            values["runner"],
+            if accepted {
+                "depot-ubuntu-24.04"
+            } else {
+                "ubuntu-24.04"
+            }
+        );
+        fixture.0.close().unwrap();
+    }
+}

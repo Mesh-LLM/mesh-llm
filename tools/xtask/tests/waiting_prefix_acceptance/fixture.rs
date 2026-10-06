@@ -124,10 +124,14 @@ fn main() -> Result<()> {
         let mut stream = incoming?;
         let (line, body) = request(&mut stream)?;
         if line.starts_with("GET /v1/models ") {
-            let late = stage["model_id"] == "late-failure"
+            let late = (stage["model_id"] == "late-failure"
                 && directory
                     .file_name()
-                    .is_some_and(|name| name == "round-2-new");
+                    .is_some_and(|name| name == "round-2-new"))
+                || (stage["model_id"] == "manual-late-failure"
+                    && directory
+                        .file_name()
+                        .is_some_and(|name| name == "round-2-old"));
             let model = if stage["model_id"] == "wrong-model" || late {
                 json!("other-model")
             } else {

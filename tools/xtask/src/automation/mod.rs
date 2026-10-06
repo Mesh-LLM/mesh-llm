@@ -4,6 +4,9 @@ pub(crate) mod agent_fixture_inputs;
 pub(crate) mod agent_model;
 pub(crate) mod agentic_prompt_manifest;
 pub(crate) mod binary_stage_readiness;
+pub(crate) mod cache_family_correctness;
+pub(crate) mod cache_family_measure;
+pub(crate) mod cache_family_plan;
 pub(crate) mod cache_family_report;
 #[path = "canary_receipts/command.rs"]
 pub(crate) mod canary_aggregate_command;
@@ -34,6 +37,7 @@ pub(crate) mod laya;
 pub(crate) mod local_ports;
 pub(crate) mod logging_console;
 pub(crate) mod logging_recovery;
+pub(crate) mod manual_smoke;
 mod openai_exchange;
 pub(crate) mod openai_smoke_config;
 pub(crate) mod runtime_install;
@@ -89,6 +93,13 @@ pub(crate) fn run_workload_oracle_evidence(args: &[String]) -> DynResult<()> {
 
 pub(crate) fn run_replay_matrix(args: &[String], root: Option<&std::path::Path>) -> DynResult<()> {
     match args {
+        [verb, rest @ ..] if verb == "competitive-prepare" => replay_matrix::competitive_prepare::run(rest),
+        [verb, rest @ ..] if verb == "competitive-run" => replay_matrix::competitive_matrix::run(rest),
+        [verb, rest @ ..] if verb == "competitive-report" => replay_matrix::competitive_report::run(rest),
+        [verb, rest @ ..] if verb == "competitive-run-cell" => replay_matrix::competitive_run_cell::run(rest),
+        [verb, rest @ ..] if verb == "competitive-synthetic-cell" => replay_matrix::competitive_synthetic::run(rest),
+        [verb, rest @ ..] if verb == "competitive-cell" => replay_matrix::competitive_cell::run(rest),
+        [verb, rest @ ..] if verb == "competitive-plan" => replay_matrix::competitive_plan::run(rest),
         [verb, rest @ ..] if verb == "plan" => replay_matrix::manual_replay::run(root, rest, false),
         [verb, rest @ ..] if verb == "run" => replay_matrix::manual_replay::run(root, rest, true),
         [verb, rest @ ..] if verb == "hardware" => replay_matrix::hardware::run(rest),
@@ -140,3 +151,5 @@ pub(crate) mod system_one_smoke;
 pub(crate) mod agent_recording_proxy;
 
 pub(crate) mod native_runtime_evidence;
+
+pub(crate) mod lightning_compatibility;

@@ -79,6 +79,43 @@ pub(in crate::automation) fn verify(
     })
 }
 
+/// Single-file stage admission; split-shard closure requires a separate producer.
+pub(in crate::automation) fn require_single_file(path: &Path) -> DynResult<()> {
+    let mut reader = Reader {
+        file: File::open(path)?,
+    };
+    if reader.bytes::<4>()? != *b"GGUF" || !matches!(reader.u32()?, 2 | 3) {
+        return Err("requires GGUF2/3".into());
+    }
+    reader.u64()?;
+    let count = reader.u64()?;
+    if count > 1_000_000 {
+        return Err("GGUF metadata count exceeds bound".into());
+    }
+    let mut split_count = None;
+    let mut split_no = None;
+    for _ in 0..count {
+        let key = reader.string()?;
+        let kind = reader.u32()?;
+        if key == "split.count" || key == "split.no" {
+            let target = if key == "split.count" {
+                &mut split_count
+            } else {
+                &mut split_no
+            };
+            if target.replace(reader.integer(kind)?).is_some() {
+                return Err("duplicate GGUF shard field".into());
+            }
+        } else {
+            reader.skip(kind, 0)?;
+        }
+    }
+    if split_count.is_some_and(|n| n != 1) || split_no.is_some_and(|n| n != 0) {
+        return Err("split GGUF requires complete shard custody".into());
+    }
+    Ok(())
+}
+
 fn inspect(path: &Path) -> DynResult<(String, u64)> {
     let mut reader = Reader {
         file: File::open(path)?,

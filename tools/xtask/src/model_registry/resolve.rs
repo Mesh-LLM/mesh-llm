@@ -30,7 +30,7 @@ const GRAMMAR: Grammar = Grammar {
         "--github-output-prefix",
         "--verify-root",
     ],
-    flags: &["--require-single-file"],
+    flags: &["--require-single-file", "--print-serving-file"],
 };
 
 /// One resolution, as the legacy argv or the restore step describes it.
@@ -38,12 +38,22 @@ pub(super) struct Request<'a> {
     pub(super) manifest: &'a str,
     pub(super) selection: Selection<'a>,
     pub(super) require_single_file: bool,
+    pub(super) print_serving_file: bool,
     pub(super) github_output: Option<&'a str>,
     pub(super) output_prefix: &'a str,
     pub(super) verify_root: Option<&'a str>,
 }
 
 pub(super) fn run(args: &[String]) -> CheckReport {
+    if args.len() == 1 && matches!(args[0].as_str(), "-h" | "--help") {
+        let usage = GRAMMAR.usage.replace(
+            "[--require-single-file]",
+            "[--require-single-file] [--print-serving-file]",
+        );
+        return CheckReport::success(format!(
+            "usage: {usage}\n\n--print-serving-file selects a cadence-admitted GGUF serving filename.\nIt does not inspect model bytes or local caches and cannot combine with --github-output or --verify-root.\n"
+        ));
+    }
     let parsed = match super::argv::parse(&GRAMMAR, PROGRAM, args) {
         Ok(parsed) => parsed,
         Err(report) => return report,
@@ -76,6 +86,7 @@ pub(super) fn run(args: &[String]) -> CheckReport {
             cadence: parsed.last("--cadence").unwrap_or_default(),
         },
         require_single_file: parsed.flag("--require-single-file"),
+        print_serving_file: parsed.flag("--print-serving-file"),
         github_output: parsed.last("--github-output"),
         output_prefix: parsed.last("--github-output-prefix").unwrap_or_default(),
         verify_root: parsed.last("--verify-root"),
@@ -95,7 +106,30 @@ pub(super) fn execute(request: &Request<'_>) -> CheckReport {
     }
 }
 
+// Insert before resolve_into in existing model_registry/resolve.rs.
+/// Select a name from a cadence-admitted manifest with reviewed integrity fields.
+/// This does not verify immutable revisions, local blobs or cache discovery.
+fn serving_file(files: &[PinnedFile]) -> ModelResult<&PinnedFile> {
+    files
+        .iter()
+        .filter_map(|file| {
+            crate::model_registry::serving_entry::rank(&file.name).map(|rank| (rank, file))
+        })
+        .min_by(|(ar, a), (br, b)| {
+            ar.cmp(br)
+                .then(a.size_bytes.cmp(&b.size_bytes))
+                .then(a.name.cmp(&b.name))
+        })
+        .map(|(_, file)| file)
+        .ok_or_else(|| ModelError("artifact has no serving GGUF or first shard".into()))
+}
+
 fn resolve_into(request: &Request<'_>, stdout: &mut String) -> ModelResult<()> {
+    if request.print_serving_file
+        && (request.github_output.is_some() || request.verify_root.is_some())
+    {
+        return fail("--print-serving-file cannot combine with --github-output or --verify-root");
+    }
     let bytes =
         std::fs::read(request.manifest).map_err(|error| io_error(&error, request.manifest))?;
     let manifest = Json::parse(&bytes).map_err(|error| ModelError(error.to_string()))?;
@@ -105,6 +139,11 @@ fn resolve_into(request: &Request<'_>, stdout: &mut String) -> ModelResult<()> {
             "artifact {} must contain exactly one file",
             artifact.id
         ));
+    }
+    if request.print_serving_file {
+        stdout.push_str(&serving_file(&artifact.files)?.name);
+        stdout.push('\n');
+        return Ok(());
     }
     if let Some(root) = request.verify_root {
         for file in &artifact.files {
@@ -373,5 +412,87 @@ mod tests {
         assert_eq!(joined("./", "fixture.bin"), "fixture.bin");
         assert_eq!(joined("/", "sub"), "/sub");
         assert_eq!(joined("/tmp/x/", "./a.bin"), "/tmp/x/a.bin");
+    }
+    // Insert inside existing model_registry::resolve::tests module.
+    #[test]
+    fn serving_entry_selects_first_shard_before_smaller_later_shard_or_projector() {
+        let file = |name: &str, size_bytes| PinnedFile {
+            name: name.into(),
+            url: String::new(),
+            size_bytes,
+            sha256: "a".repeat(64),
+        };
+        let mut files = vec![
+            file("nested/Model-Q4_K_M-00002-of-00002.gguf", 1),
+            file("nested/mmproj.gguf", 0),
+            file("nested/Model-Q4_K_M-00001-of-00002.gguf", 100),
+            file("single.gguf", 2),
+        ];
+        assert_eq!(
+            serving_file(&files).unwrap().name,
+            "nested/Model-Q4_K_M-00001-of-00002.gguf"
+        );
+        files.reverse();
+        assert_eq!(
+            serving_file(&files).unwrap().name,
+            "nested/Model-Q4_K_M-00001-of-00002.gguf"
+        );
+        assert!(
+            serving_file(&[file("model-00002-of-00002.gguf", 1), file("mmproj.gguf", 2)]).is_err()
+        );
+        assert_eq!(
+            serving_file(&[file("single.gguf", 2)]).unwrap().name,
+            "single.gguf"
+        );
+    }
+
+    #[test]
+    fn serving_cli_requires_cadence_authority_and_refuses_conflicting_output_before_selection() {
+        for flag in ["-h", "--help"] {
+            let help = run(&[flag.into()]);
+            assert_eq!(help.code, 0);
+            assert!(help.stderr.is_empty());
+            assert!(help.stdout.contains("[--print-serving-file]"));
+            assert!(
+                help.stdout
+                    .contains("does not inspect model bytes or local caches")
+            );
+        }
+        let missing = run(&[]);
+        assert_eq!(missing.code, 2);
+        assert!(missing.stdout.is_empty());
+        assert!(!missing.stderr.contains("--print-serving-file"));
+        assert!(
+            missing
+                .stderr
+                .ends_with("the following arguments are required: manifest, --cadence\n")
+        );
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("manifest.json");
+        let revision = "a".repeat(40);
+        let artifact = serde_json::json!({"manifest_kind":"test-model-artifacts","artifacts":[{"id":"fixture","repo":"org/model","revision":revision,"selector":"Q4","model_ref":"org/model:Q4","cadences":["manual"],"files":["later-00002-of-00002.gguf","model-00001-of-00002.gguf"],"urls":[format!("https://huggingface.co/org/model/resolve/{revision}/later-00002-of-00002.gguf"),format!("https://huggingface.co/org/model/resolve/{revision}/model-00001-of-00002.gguf")],"file_integrity":{"later-00002-of-00002.gguf":{"size_bytes":1,"blob_id":"b".repeat(64)},"model-00001-of-00002.gguf":{"size_bytes":100,"blob_id":"c".repeat(64)}}}]});
+        std::fs::write(&path, serde_json::to_vec(&artifact).unwrap()).unwrap();
+        let args = |cadence: &str| {
+            vec![
+                "--cadence".into(),
+                cadence.into(),
+                "--print-serving-file".into(),
+                path.to_str().unwrap().into(),
+            ]
+        };
+        let accepted = run(&args("manual"));
+        assert_eq!(accepted.code, 0, "{}", accepted.stderr);
+        assert_eq!(accepted.stdout, "model-00001-of-00002.gguf\n");
+        let refused = run(&args("pull-request"));
+        assert_eq!(refused.code, 2);
+        assert!(refused.stdout.is_empty());
+        let mut conflict = args("manual");
+        conflict.extend([
+            "--github-output".into(),
+            directory.path().join("outputs").to_str().unwrap().into(),
+        ]);
+        assert_eq!(run(&conflict).code, 2);
+        assert!(!directory.path().join("outputs").exists());
+        directory.close().unwrap();
     }
 }

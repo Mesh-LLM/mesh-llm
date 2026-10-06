@@ -1090,6 +1090,10 @@ other historical receipts and CPU seed workload coverage remain unknown.
 See [CI topology](../../../../ci/ci.md#qualified-lean-ui-consumers) for admission
 scope and the required candidate-branch lane execution before merge.
 
+### Manual authority marker native tooling
+
+Manual-main `seed` and `verify-pr-write` modes share one GitHub-hosted same-commit automation producer using the existing `upload-automation` protected-clean/hosted-bare profile. Their Depot marker jobs retain empty permissions and no checkout. Pinned same-run artifact download and source/artifact/binary checks run before the existing native `authority-audit endpoint` commands and all marker cache phases. Same-run download with empty marker-job permissions still requires hosted qualification; local supplied-artifact fixtures do not prove GitHub delivery, provider cache isolation, or authenticated source authority. The immutable protected PR audit callers and runtime-seed qualification remain separate boundaries.
+
 ### CPU runtime seed canary
 
 `depot-canary.yml` has an isolated default-branch-only manual `runtime-seed` mode

@@ -84,3 +84,21 @@ mod artifact_action_sources;
 
 #[path = "ci_runner_cache_contract/windows_composition/mod.rs"]
 mod windows_composition;
+
+#[path = "../src/ci_validation/workflow_guards/authority_delivery_body.rs"]
+mod authority_delivery_body;
+#[path = "ci_runner_cache_contract/authority_local.rs"]
+mod authority_local;
+#[path = "../src/ci_validation/workflow_guards/authority_sources.rs"]
+mod authority_sources;
+#[path = "../src/ci_validation/workflow_guards/cache_marker.rs"]
+mod cache_marker;
+
+#[path = "ci_runner_cache_contract/authority_remaining/mod.rs"]
+mod authority_remaining;
+
+#[path = "ci_runner_cache_contract/runner_contract.rs"]
+mod runner_contract;
+
+#[path = "ci_runner_cache_contract/sentinel_source_boundary.rs"]
+mod sentinel_source_boundary;

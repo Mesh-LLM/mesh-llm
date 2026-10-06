@@ -1,4 +1,6 @@
 mod action_pins;
+mod authority_delivery_body;
+mod authority_sources;
 mod build_acceleration;
 mod cache_authority;
 mod cache_boundaries;
@@ -6,6 +8,7 @@ mod cache_callers;
 mod cache_consumers;
 mod cache_evidence;
 mod cache_identity;
+mod cache_marker;
 mod cache_predicate;
 mod canary_build;
 mod canary_execution;
@@ -90,6 +93,11 @@ pub(super) fn check(root: &Path) -> DynResult<()> {
             .get("authority_sentinel")
             .ok_or("required cache authority sentinel missing")?,
     )?;
+    cache_marker::check(&workflows)?;
+    authority_sources::check(&workflows)?;
+    authority_sources::documentation(&std::fs::read_to_string(
+        root.join("ci/DEPOT_MIGRATION.md"),
+    )?)?;
     cache_consumers::check(&workflows)?;
     cache_callers::check(&workflows)?;
     cache_boundaries::check(&workflows)?;

@@ -239,3 +239,146 @@ fn authority_producer_requires_protected_checkout_output_projection_and_clean_ho
         assert!(cache_authority::producer(&job).is_err(), "{change}");
     }
 }
+
+// Append to existing ci_runner_cache_contract/authority.rs (already registered integration target).
+fn identity_script(workflow: &str, job: &str) -> String {
+    let node = workflow_yaml::parse(
+        &fs::read_to_string(root().join(".github/workflows").join(workflow)).unwrap(),
+    )
+    .unwrap();
+    let Node::Seq(steps) = node
+        .get("jobs")
+        .unwrap()
+        .get(job)
+        .unwrap()
+        .get("steps")
+        .unwrap()
+    else {
+        panic!("steps")
+    };
+    let step = steps
+        .iter()
+        .find(|step| step.get("id").and_then(Node::text) == Some("validate"))
+        .unwrap();
+    assert_eq!(step.get("shell").and_then(Node::text), Some("bash"));
+    step.get("run").and_then(Node::text).unwrap().to_owned()
+}
+
+fn execute_identity(script: &str, fields: &[(&str, &str)]) -> (bool, String) {
+    use crate::process::{
+        self, Cancellation, Completion, Limits, ProcessSpec, RawCaptureOptions, Readiness, Value,
+    };
+    let directory = tempfile::tempdir().unwrap();
+    let output = directory.path().join("outputs");
+    let mut environment = std::collections::BTreeMap::from([
+        ("PATH".into(), Value::Public("/usr/bin:/bin".into())),
+        ("GITHUB_OUTPUT".into(), Value::Public(output.clone().into())),
+    ]);
+    for (key, value) in fields {
+        environment.insert((*key).into(), Value::Public((*value).into()));
+    }
+    let captured = process::supervise_raw(
+        &ProcessSpec {
+            executable: "/bin/bash".into(),
+            cwd: directory.path().to_owned(),
+            arguments: vec![Value::Public("-c".into()), Value::Public(script.into())],
+            environment,
+        },
+        &Limits {
+            execution: std::time::Duration::from_secs(3),
+            graceful_shutdown: std::time::Duration::from_millis(100),
+            forced_shutdown: std::time::Duration::from_millis(100),
+            retained_bytes_per_stream: 16384,
+            readiness: Readiness::None,
+            completion: Completion::Exit,
+        },
+        &Cancellation::default(),
+        RawCaptureOptions {
+            stdout: std::num::NonZeroUsize::new(16384),
+            stderr: std::num::NonZeroUsize::new(16384),
+        },
+    )
+    .unwrap();
+    let report = captured.process;
+    let raw_stdout = captured.stdout.unwrap();
+    let raw_stderr = captured.stderr.unwrap();
+    assert_eq!(raw_stdout.as_bytes().len() as u64, report.stdout.bytes_seen);
+    assert_eq!(raw_stderr.as_bytes().len() as u64, report.stderr.bytes_seen);
+    assert!(report.cleanup.failure.is_none());
+    assert!(!report.cleanup.graceful_signal_failed);
+    assert_eq!(report.outcome, process::Outcome::Exited);
+    assert!(report.cleanup.complete && !report.cleanup.forced && report.failure.is_none());
+    assert!(!report.stdout.truncated && !report.stderr.truncated);
+    assert_eq!(report.stdout.suppressed_lines, 0);
+    assert_eq!(report.stderr.suppressed_lines, 0);
+    assert!(report.stdout.bytes_retained.is_empty());
+    let values = fs::read_to_string(&output).unwrap_or_default();
+    let accepted = report.status.unwrap().success();
+    directory.close().unwrap();
+    (accepted, values)
+}
+
+#[test]
+fn actual_three_sentinel_identity_bodies_enforce_canonical_inputs_and_derive_fixed_keys() {
+    let id = "0123456789abcdef0123456789abcdef";
+    for (workflow, job, expected) in [
+        (
+            "ci-quality-slice.yml",
+            "authority_sentinel",
+            format!(
+                "sentinel_id={id}\npr_number=42\nseed_key=mesh-llm-depot-authority-seed-v1-{id}\npoison_key=mesh-llm-depot-authority-pr-v1-{id}-pr-42\n"
+            ),
+        ),
+        (
+            "depot-canary.yml",
+            "seed_authority_marker",
+            format!(
+                "sentinel_id={id}\nseed_key=mesh-llm-depot-authority-seed-v1-{id}\npoison_key=mesh-llm-depot-authority-pr-v1-{id}-pr-42\n"
+            ),
+        ),
+        (
+            "depot-canary.yml",
+            "verify_pr_write",
+            format!(
+                "sentinel_id={id}\npr_number=42\npoison_key=mesh-llm-depot-authority-pr-v1-{id}-pr-42\n"
+            ),
+        ),
+    ] {
+        let script = identity_script(workflow, job);
+        let fields = [
+            ("SENTINEL_ID", id),
+            ("PR_NUMBER", "42"),
+            ("CONFIGURED_SENTINEL_ID", id),
+            ("CONFIGURED_SENTINEL_REF", "refs/pull/42/merge"),
+        ];
+        assert_eq!(execute_identity(&script, &fields), (true, expected));
+        for (key, value) in [
+            ("SENTINEL_ID", ""),
+            ("SENTINEL_ID", "ABCDEF0123456789abcdef0123456789"),
+            ("SENTINEL_ID", "0000000000000000000000000000000"),
+            ("SENTINEL_ID", "000000000000000000000000000000000"),
+            ("PR_NUMBER", ""),
+            ("PR_NUMBER", "0"),
+            ("PR_NUMBER", "01"),
+            ("PR_NUMBER", "+1"),
+            ("PR_NUMBER", " 1"),
+            ("PR_NUMBER", "1 "),
+            ("PR_NUMBER", "1111111111"),
+            ("PR_NUMBER", "43"),
+            ("CONFIGURED_SENTINEL_REF", "refs/pull/43/merge"),
+        ] {
+            let mut changed = fields;
+            changed.iter_mut().find(|(name, _)| *name == key).unwrap().1 = value;
+            assert_eq!(
+                execute_identity(&script, &changed),
+                (false, String::new()),
+                "{job}:{key}"
+            );
+        }
+        if job != "authority_sentinel" {
+            let mut changed = fields;
+            changed[2].1 = "fedcba9876543210fedcba9876543210";
+            assert_eq!(execute_identity(&script, &changed), (false, String::new()));
+        }
+    }
+}

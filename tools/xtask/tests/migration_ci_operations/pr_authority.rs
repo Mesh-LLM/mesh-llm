@@ -120,3 +120,168 @@ fn pr_authority_cli_does_not_treat_nonunicode_authority_as_missing() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("DEPOT_TOKEN: invalid text"));
 }
+
+// Native CLI refusal proof; no execution of the protected external audit action.
+fn bounded_authority(command: Command) -> crate::process::RawProcessReport {
+    use crate::process::{self, Value};
+    let environment = command
+        .get_envs()
+        .filter_map(|(key, value)| {
+            value.map(|value| (key.to_owned(), Value::Public(value.to_owned())))
+        })
+        .collect();
+    let raw = process::supervise_raw(
+        &process::ProcessSpec {
+            executable: env!("CARGO_BIN_EXE_xtask").into(),
+            cwd: command.get_current_dir().unwrap().to_owned(),
+            arguments: command
+                .get_args()
+                .map(|value| Value::Public(value.to_owned()))
+                .collect(),
+            environment,
+        },
+        &process::Limits {
+            execution: std::time::Duration::from_secs(3),
+            graceful_shutdown: std::time::Duration::from_millis(100),
+            forced_shutdown: std::time::Duration::from_millis(100),
+            retained_bytes_per_stream: 16384,
+            readiness: process::Readiness::None,
+            completion: process::Completion::Exit,
+        },
+        &process::Cancellation::default(),
+        process::RawCaptureOptions {
+            stdout: std::num::NonZeroUsize::new(16384),
+            stderr: std::num::NonZeroUsize::new(16384),
+        },
+    )
+    .unwrap();
+    let p = &raw.process;
+    assert_eq!(p.outcome, process::Outcome::Exited);
+    assert!(
+        p.failure.is_none()
+            && p.cleanup.complete
+            && !p.cleanup.forced
+            && !p.cleanup.graceful_signal_failed
+            && p.cleanup.failure.is_none()
+    );
+    assert!(p.stdout.line_capture_complete && p.stderr.line_capture_complete);
+    assert_eq!(
+        raw.stdout.as_ref().unwrap().as_bytes().len() as u64,
+        p.stdout.bytes_seen
+    );
+    assert_eq!(
+        raw.stderr.as_ref().unwrap().as_bytes().len() as u64,
+        p.stderr.bytes_seen
+    );
+    assert!(raw.stdout.as_ref().unwrap().as_bytes().is_empty());
+    raw
+}
+#[test]
+fn authority_native_cli_escaped_registry_keys_keep_env_file_hosted_and_depot_policy() {
+    let directory = tempfile::tempdir().unwrap();
+    let config = directory.path().join("config.json");
+    for payload in [
+        r#"{"auths":{"registry\u002eDEPOT\u002eDEV":{"auth":"private-fixture-token"}}}"#,
+        r#"{"credHelpers":{"REGISTRY\u002eDEPOT\u002eDEV":"private-fixture-token"}}"#,
+        r#"{"auths":{"ghcr.io":{"auth":"private-fixture-token"}}}"#,
+    ] {
+        let depot_key = payload.contains("u002e");
+        for depot in [false, true] {
+            for file in [false, true] {
+                let mut cmd = command(directory.path());
+                cmd.env("INPUT_DEPOT_SELECTED", depot.to_string());
+                if file {
+                    std::fs::write(&config, payload).unwrap();
+                } else {
+                    cmd.env("DOCKER_AUTH_CONFIG", payload);
+                }
+                let raw = bounded_authority(cmd);
+                let accepted = !(depot || depot_key);
+                assert_eq!(raw.process.status.unwrap().success(), accepted);
+                let stderr = String::from_utf8_lossy(raw.stderr.as_ref().unwrap().as_bytes());
+                assert!(
+                    !stderr.contains("private-fixture-token")
+                        && !stderr.contains("ghcr.io")
+                        && !stderr.contains("REGISTRY")
+                        && !stderr.contains("u002e")
+                );
+                if accepted {
+                    assert!(stderr.is_empty());
+                } else {
+                    assert!(stderr.contains("DOCKER_AUTH_CONFIG/config.json"));
+                    assert!(stderr.contains(if depot {
+                        "authentication"
+                    } else {
+                        "depot-authentication"
+                    }));
+                }
+                if file {
+                    std::fs::remove_file(&config).unwrap();
+                }
+            }
+        }
+    }
+    directory.close().unwrap();
+}
+#[test]
+fn authority_native_cli_all_endpoint_variables_refuse_private_classified_candidates() {
+    let directory = tempfile::tempdir().unwrap();
+    for name in [
+        "ACTIONS_CACHE_URL",
+        "ACTIONS_RESULTS_URL",
+        "ACTIONS_RUNTIME_URL",
+    ] {
+        for (endpoint, reason) in [
+            (
+                "https://cache.example.invalid/cache",
+                "endpoint must be GitHub-owned HTTPS or an explicit loopback proxy",
+            ),
+            ("https://cache.depot.dev/cache", "unapproved Depot endpoint"),
+            ("https://user@attacker.example/cache", "userinfo"),
+            (
+                "https://actions.githubusercontent.com:443@attacker.example/",
+                "userinfo",
+            ),
+            (
+                "https://cache.example.invalid:8443/cache",
+                "endpoint must be GitHub-owned HTTPS or an explicit loopback proxy",
+            ),
+            (
+                "http://actions.githubusercontent.com/cache",
+                "endpoint must be GitHub-owned HTTPS or an explicit loopback proxy",
+            ),
+            ("ftp://cache.example.invalid/cache", "malformed"),
+            (
+                "http://localhost/cache",
+                "endpoint must be GitHub-owned HTTPS or an explicit loopback proxy",
+            ),
+            (
+                "http://127.0.0.1:12345",
+                "endpoint must be GitHub-owned HTTPS or an explicit loopback proxy",
+            ),
+            ("http://[::1]:65536/cache", "malformed"),
+        ] {
+            let mut cmd = command(directory.path());
+            cmd.env(name, endpoint);
+            let raw = bounded_authority(cmd);
+            assert_eq!(raw.process.status.unwrap().code(), Some(1));
+            let stderr = String::from_utf8_lossy(raw.stderr.as_ref().unwrap().as_bytes());
+            assert!(stderr.contains(&format!("{name}: {reason}")), "{stderr}");
+            for secret in [
+                endpoint,
+                "cache.example.invalid",
+                "cache.depot.dev",
+                "attacker.example",
+                "actions.githubusercontent.com",
+                "/cache",
+                "8443",
+                "65536",
+                "443",
+                "12345",
+            ] {
+                assert!(!stderr.contains(secret), "{stderr}");
+            }
+        }
+    }
+    directory.close().unwrap();
+}
