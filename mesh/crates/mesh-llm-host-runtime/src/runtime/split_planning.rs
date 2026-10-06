@@ -1,5 +1,6 @@
 use crate::inference::skippy;
 use anyhow::{Context, Result};
+pub(crate) use skippy_coordinator::topology::PlacementObjective;
 use skippy_coordinator::topology::{
     LockedTopologyStage, ThroughputEstimate, TopologyNode, TopologyPlan, TopologyPlanningInput,
     TopologyStagePlan, estimate_plan_throughput, minimum_valid_context, plan_locked_topology,
@@ -76,6 +77,8 @@ pub(super) struct SplitTopologyPlanInput {
     pub(super) edges: Vec<SplitTopologyPlanEdge>,
     pub(super) activation_frame_bytes: u64,
     pub(super) auto_balance: bool,
+    /// What the re-cut optimises for. Only read when `auto_balance` is set.
+    pub(super) placement_objective: PlacementObjective,
 }
 
 /// Directed link measurement carried into the coordinator planner.
@@ -124,6 +127,55 @@ pub(super) struct RuntimeSliceStagePlan {
     pub(super) parameter_bytes: u64,
 }
 
+/// How a split chooses its layer boundaries, and whether they keep moving.
+///
+/// These were one `auto_balance: bool`, which conflated two decisions that do
+/// not always travel together. `--auto-balance` wants both: cut by measured
+/// node speed, then keep re-cutting from observed stage busy time. A
+/// latency-shaped deployment wants the speed-aware cut and *not* the closed
+/// loop — one in-flight request produces too noisy a busy-time signal to
+/// rebalance on, and the controller's propose/measure/rollback cycle costs a
+/// drain and a cutover each time it tries.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct SplitPlacementPolicy {
+    /// Re-cut by measured node speed instead of packing the largest node
+    /// first, optimising for this objective. `None` keeps capacity-only
+    /// placement, which is what a split does without `--auto-balance`.
+    pub(crate) speed_aware: Option<PlacementObjective>,
+    /// Keep re-cutting from observed stage busy time while serving.
+    pub(crate) closed_loop: bool,
+}
+
+impl SplitPlacementPolicy {
+    /// Capacity-only placement: the historical default.
+    pub(crate) const CAPACITY_ONLY: Self = Self {
+        speed_aware: None,
+        closed_loop: false,
+    };
+
+    /// What `--auto-balance` has always meant.
+    pub(crate) const AUTO_BALANCE: Self = Self {
+        speed_aware: Some(PlacementObjective::Throughput),
+        closed_loop: true,
+    };
+
+    /// Cut for one request's total serial decode time, and leave it there.
+    pub(crate) const LATENCY_RECUT: Self = Self {
+        speed_aware: Some(PlacementObjective::Latency),
+        closed_loop: false,
+    };
+
+    /// Whether the planner should re-cut at all.
+    pub(crate) const fn recuts(self) -> bool {
+        self.speed_aware.is_some()
+    }
+
+    /// The objective to re-cut for. Meaningless unless [`Self::recuts`].
+    pub(crate) fn objective(self) -> PlacementObjective {
+        self.speed_aware.unwrap_or_default()
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct SplitTopologyResourceInputs {
     pub(super) native_context_length: u32,
@@ -131,8 +183,8 @@ pub(super) struct SplitTopologyResourceInputs {
     pub(super) recurrent_bytes_per_sequence_by_layer: Vec<u64>,
     pub(super) ctx_size_override: Option<u32>,
     pub(super) parallel_override: Option<usize>,
-    /// Balance layer boundaries by node decode speed (`--auto-balance`).
-    pub(super) auto_balance: bool,
+    /// How boundaries are chosen, and whether they keep moving.
+    pub(super) placement: SplitPlacementPolicy,
 }
 
 /// Per-stage capacity-model inputs resolved for a finished plan: the context
@@ -282,6 +334,7 @@ fn topology_planning_input(input: SplitTopologyPlanInput) -> TopologyPlanningInp
             .collect(),
         activation_frame_bytes: input.activation_frame_bytes,
         auto_balance: input.auto_balance,
+        placement_objective: input.placement_objective,
     }
 }
 
@@ -349,7 +402,14 @@ pub(super) fn plan_runtime_slice_topology_with_resources_and_stage0(
     );
 
     let participant_by_id = participant_index_by_id(participants);
-    let plan_auto_balance = resources.auto_balance;
+    let plan_auto_balance = resources.placement.recuts();
+    // The initial-cut override is an acceptance-test knob for the *controller*,
+    // so it is gated on the closed loop and not on "did we re-cut". A
+    // latency-shaped plan re-cuts and runs no controller, so letting the
+    // variable move its boundaries would replace a deliberate min-sum cut with
+    // an arbitrary one that nothing then corrects — the exact case
+    // `apply_initial_cut_override` documents as "nothing watching it".
+    let closed_loop_placement = resources.placement.closed_loop;
     let capacity_resources = resources.clone();
     let plan_input = runtime_slice_plan_input(package, participants, resources.clone());
     let plan = plan_runtime_slice_topology_result(
@@ -376,7 +436,7 @@ pub(super) fn plan_runtime_slice_topology_with_resources_and_stage0(
     };
     let mut stages = map_runtime_slice_stages(plan.stages, &participant_by_id)?;
     stages.sort_by_key(|stage| stage.stage_index);
-    apply_initial_cut_override(&mut stages, package, plan_auto_balance);
+    apply_initial_cut_override(&mut stages, package, closed_loop_placement);
     let capacity = SplitCapacityModel::new(
         &capacity_resources,
         plan.context_length,
@@ -416,8 +476,13 @@ struct PlannedSliceTopologyLabels {
     stage_idle_pct: Option<Vec<String>>,
 }
 
-/// Log the planned placement, calling out an auto-balance request that fell
-/// back to the memory-only cut because a placed peer has no measured speed.
+/// Log the planned placement, calling out a speed-aware request that fell back
+/// to the memory-only cut because a placed peer has no measured speed.
+///
+/// `speed_aware_placement_requested` rather than `auto_balance_requested`: a
+/// latency-shaped plan re-cuts by speed without running the controller, so
+/// naming the field after `--auto-balance` would report a controller that is
+/// not there.
 fn log_planned_slice_topology(
     topology_id: &str,
     model_ref: &str,
@@ -437,7 +502,7 @@ fn log_planned_slice_topology(
     if plan_auto_balance && !auto_balance_applied {
         tracing::warn!(
             model_ref,
-            "auto-balance requested but at least one placed peer has no measured decode speed; keeping the memory-only placement"
+            "speed-aware placement requested but at least one placed peer has no measured decode speed; keeping the memory-only placement"
         );
     }
     tracing::info!(
@@ -448,7 +513,7 @@ fn log_planned_slice_topology(
         estimated_decode_network_ms_per_token,
         decode_tpot_target_met,
         stages = ?split_stage_plan_labels(stages),
-        auto_balance_requested = plan_auto_balance,
+        speed_aware_placement_requested = plan_auto_balance,
         auto_balance_applied,
         stage_decode_ms = ?stage_decode_ms,
         stage_idle_pct = ?stage_idle_pct,
@@ -719,7 +784,8 @@ fn runtime_slice_plan_input_unfiltered(
         activation_frame_bytes: skippy_topology::wire_payload_bytes_per_token(
             package.activation_width,
         ),
-        auto_balance: resources.auto_balance,
+        auto_balance: resources.placement.recuts(),
+        placement_objective: resources.placement.objective(),
     }
 }
 
@@ -1514,6 +1580,34 @@ mod tests {
         );
     }
 
+    /// A latency-shaped plan re-cuts but runs no controller, so the override
+    /// must not touch it: there would be nothing to converge the arbitrary cut
+    /// back, and the deliberate min-sum placement would be lost for the run.
+    /// `--auto-balance` keeps the knob, since exercising the controller is what
+    /// it is for.
+    #[test]
+    fn only_closed_loop_placement_accepts_the_controller_knob() {
+        let latency = SplitPlacementPolicy::LATENCY_RECUT;
+        assert!(latency.recuts(), "it does re-cut by speed");
+
+        let pkg = package(36, 3_600);
+        let original = vec![stage(0, 1, 0, 18), stage(1, 2, 18, 36)];
+        let mut stages = original.clone();
+        apply_initial_cut_override(&mut stages, &pkg, latency.closed_loop);
+        assert_eq!(
+            stages, original,
+            "a plan with no controller must keep its own cut"
+        );
+
+        // Keyed on the closed loop, not on `recuts()`: the two policies differ
+        // on exactly this field, which is what the override must read.
+        assert_ne!(
+            latency.closed_loop,
+            SplitPlacementPolicy::AUTO_BALANCE.closed_loop,
+            "the override's gate has to distinguish these two policies"
+        );
+    }
+
     #[test]
     fn a_fixed_split_ignores_the_override_entirely() {
         // The knob exists to exercise the controller. On a fixed split there
@@ -1619,7 +1713,7 @@ mod tests {
                 recurrent_bytes_per_sequence_by_layer: Vec::new(),
                 ctx_size_override: None,
                 parallel_override: None,
-                auto_balance: true,
+                placement: SplitPlacementPolicy::AUTO_BALANCE,
             },
         ))
     }
@@ -1724,7 +1818,7 @@ mod tests {
                 recurrent_bytes_per_sequence_by_layer: Vec::new(),
                 ctx_size_override: None,
                 parallel_override: None,
-                auto_balance: false,
+                placement: Default::default(),
             },
         )
         .expect("resource-aware topology");
@@ -1755,7 +1849,7 @@ mod tests {
                 recurrent_bytes_per_sequence_by_layer: Vec::new(),
                 ctx_size_override: Some(1),
                 parallel_override: Some(1),
-                auto_balance: false,
+                placement: Default::default(),
             },
         )
         .expect("resource-aware topology with exact layer weights");
@@ -1791,7 +1885,7 @@ mod tests {
                 recurrent_bytes_per_sequence_by_layer: Vec::new(),
                 ctx_size_override: Some(1),
                 parallel_override: Some(1),
-                auto_balance: false,
+                placement: Default::default(),
             },
         )
         .expect("MI300X and smaller accelerator should form a valid topology");
@@ -1835,7 +1929,7 @@ mod tests {
                 recurrent_bytes_per_sequence_by_layer: Vec::new(),
                 ctx_size_override: None,
                 parallel_override: None,
-                auto_balance: false,
+                placement: Default::default(),
             },
         )
         .expect("latency-aware runtime topology");
@@ -1889,7 +1983,7 @@ mod tests {
                 recurrent_bytes_per_sequence_by_layer: Vec::new(),
                 ctx_size_override: None,
                 parallel_override: None,
-                auto_balance: false,
+                placement: Default::default(),
             },
         );
 
@@ -1938,7 +2032,7 @@ mod tests {
                 recurrent_bytes_per_sequence_by_layer: Vec::new(),
                 ctx_size_override: None,
                 parallel_override: None,
-                auto_balance: false,
+                placement: SplitPlacementPolicy::CAPACITY_ONLY,
             },
         );
         assert!(

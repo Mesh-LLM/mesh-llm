@@ -500,6 +500,15 @@ fn runtime_defaults_presentation(rendered: &str) -> Option<SettingPresentation> 
         )
         .unit("groups")
         .hint("range")),
+        "defaults.throughput.last_stage_decode_batch" => Some(sp(
+            "Batch decode on the final split stage",
+            "Let the last stage of a split decode every lane in one batch. Raises split \
+             throughput under concurrency, and cannot be combined with native multi-token \
+             prediction.",
+            RUNTIME_CATEGORY,
+            33,
+        )
+        .hint("segmented")),
         "defaults.hardware.gpu_layers" => Some(sp(
             "GPU layers",
             "Set the GPU layer count, or use auto. The backend also accepts -1 to mean all layers.",

@@ -1,0 +1,31 @@
+From 7f9f8542dde133b44051a6a5b35adf2c6b90e422 Mon Sep 17 00:00:00 2001
+From: Virgile-pct <222121099+Virgile-pct@users.noreply.github.com>
+Date: Sun, 4 Oct 2026 15:00:13 +0200
+Subject: [PATCH] test(skippy): build the runtime events probe with MSVC
+
+test_concurrent_dispatch() reads the constexpr local per_thread inside a
+lambda that captures nothing. That is valid C++, since the constant is not
+odr-used, but MSVC rejects it (C3493: 'per_thread' cannot be implicitly
+captured because no default capture mode has been specified), so
+skippy-runtime-events-test does not compile on Windows. Make it static
+constexpr, which no compiler needs to capture.
+---
+ src/skippy/tests/runtime_events.cpp | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/src/skippy/tests/runtime_events.cpp b/src/skippy/tests/runtime_events.cpp
+index 75b65fc55..8c9e3288b 100644
+--- a/src/skippy/tests/runtime_events.cpp
++++ b/src/skippy/tests/runtime_events.cpp
+@@ -297,7 +297,7 @@ int test_concurrent_dispatch() {
+     install(c);
+ 
+     constexpr int n_threads = 8;
+-    constexpr int per_thread = 200;
++    static constexpr int per_thread = 200;
+     std::vector<std::thread> threads;
+     for (int t = 0; t < n_threads; ++t) {
+         threads.emplace_back([] {
+-- 
+2.45.1.windows.1
+

@@ -561,6 +561,17 @@ pub struct ThroughputConfig {
     /// one stage while group B computes on the next. `1` disables grouping.
     #[serde(default)]
     pub pipeline_decode_groups: Option<u32>,
+    /// Let the final stage of a split batch single-token decode across lanes.
+    ///
+    /// Planned once by the coordinator and delivered on every stage load,
+    /// because the stage that owns the output layers is a different process -
+    /// on a mesh split a different machine - from the one the operator
+    /// configured, and `--auto-balance` can move which stage that is.
+    ///
+    /// Mutually exclusive with native MTP, whose drafts the batched path cannot
+    /// produce.
+    #[serde(default)]
+    pub last_stage_decode_batch: Option<BoolOrAuto>,
     #[serde(default)]
     pub threads: Option<usize>,
     #[serde(default)]

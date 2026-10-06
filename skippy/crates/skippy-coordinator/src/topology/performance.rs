@@ -12,10 +12,70 @@
 //! is either estimated before load or measured from a running stage (weight
 //! bytes resident on the stage divided by its observed per-token compute
 //! time), so the same solver serves initial placement and runtime rebalancing.
+//!
+//! # Two objectives, because throughput and latency do not want the same cut
+//!
+//! Minimising the *maximum* stage time is right for aggregate throughput: at
+//! saturation the pipeline emits a token per lane every bottleneck period, so
+//! levelling the stages is what raises the fleet rate.
+//!
+//! A single in-flight request is not paced by the bottleneck. Its stages run
+//! serialised per token, so its decode time is the *sum* over stages of
+//! `bytes_i / rate_i` — the hop term is `(S-1)·2·RTT`, which is the same for
+//! every cut over a fixed node set and therefore does not affect the choice.
+//! Minimising a sum, not a maximum, means packing the fastest node to its
+//! memory limit and spilling only what will not fit. That is a different cut:
+//! on the two-mini pair in #1935 the min-max objective chose 12/24, while
+//! min-sum pushes layers onto the faster node.
+//!
+//! This is also why memory-first placement is not already the latency answer.
+//! It fills nodes in *node order*, which is the order the mesh happened to
+//! supply; min-sum fills in *speed order*.
 
 use super::{TopologyStagePlan, UsableNode, sum_u64};
 
 const NANOS_PER_SECOND: u128 = 1_000_000_000;
+
+/// What a placement is being optimised for.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum PlacementObjective {
+    /// Minimise the slowest stage, so the saturated pipeline cycles faster.
+    #[default]
+    Throughput,
+    /// Minimise total serial decode time for one in-flight request.
+    Latency,
+}
+
+/// Running cost of a partial placement, ordered lexicographically.
+///
+/// A pair rather than one number because `Latency` needs a tie-break with
+/// meaning. Its objective — total serial decode time — is *placement-invariant*
+/// when every node streams weights at the same rate: `Σ bytes_i / rate` is just
+/// `total_bytes / rate`, so every cut ties. Left to the raw tie-break that
+/// would pick 9/1 on an equal pair, which is latency-neutral but wastes the
+/// second node's headroom and collapses the moment concurrency arrives.
+///
+/// So among equally fast cuts, prefer the one that is also better balanced.
+type Cost = (u128, u128);
+
+const UNREACHABLE: Cost = (u128::MAX, u128::MAX);
+
+impl PlacementObjective {
+    /// Fold a stage's cost into the running cost of the stages before it.
+    fn accumulate(self, before: Cost, stage: u128) -> Cost {
+        // Saturating throughout because `UNREACHABLE` is `u128::MAX`; a sum
+        // that overflowed would otherwise wrap into a cheap-looking cut.
+        match self {
+            // Primary: the bottleneck. The secondary stays zero so ordering is
+            // decided entirely by the primary and the existing later-start tie
+            // break, keeping shipped `--auto-balance` placements identical.
+            Self::Throughput => (before.0.max(stage), 0),
+            // Primary: total serial time. Secondary: the bottleneck, so the
+            // flattest of the latency-optimal cuts wins.
+            Self::Latency => (before.0.saturating_add(stage), before.1.max(stage)),
+        }
+    }
+}
 
 /// Per-stage decode estimate for a placement.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -85,13 +145,15 @@ pub(super) fn estimate_throughput(
     })
 }
 
-/// Re-cut the layer boundaries of `stages` so the slowest stage is as fast as
-/// possible, keeping the node order (and so stage 0) and each node's memory
-/// limit.
+/// Re-cut the layer boundaries of `stages` for `objective`, keeping the node
+/// order (and so stage 0) and each node's memory limit.
 ///
-/// Returns `None` when a node lacks a speed estimate or no feasible cut exists;
-/// callers keep the memory-only placement in that case. The result is exact:
-/// a dynamic program over contiguous partitions, `O(stages · layers²)`.
+/// `Throughput` makes the slowest stage as fast as possible; `Latency`
+/// minimises the total serial decode time of one request. Returns `None` when a
+/// node lacks a speed estimate or no feasible cut exists; callers keep the
+/// memory-only placement in that case. The result is exact for either
+/// objective: a dynamic program over contiguous partitions,
+/// `O(stages · layers²)`.
 #[allow(
     clippy::needless_range_loop,
     reason = "the dynamic program indexes the cost, cut and prefix tables by the same layer boundary"
@@ -101,6 +163,7 @@ pub(super) fn balance_stages(
     nodes: &[UsableNode],
     layer_weights: &[u64],
     layer_required_bytes: &[u64],
+    objective: PlacementObjective,
 ) -> Option<Vec<TopologyStagePlan>> {
     let layer_count = layer_weights.len();
     let stage_count = stages.len();
@@ -120,14 +183,16 @@ pub(super) fn balance_stages(
     let range_weight = |start: usize, end: usize| weight_prefix[end] - weight_prefix[start];
     let range_required = |start: usize, end: usize| required_prefix[end] - required_prefix[start];
 
-    // best[s][end]: minimal bottleneck placing layers 0..end on stages 0..=s,
-    // with stage s ending at `end`. `cut[s][end]` records where stage s starts.
-    let unreachable = u128::MAX;
-    let mut best = vec![vec![unreachable; layer_count + 1]; stage_count];
+    // best[s][end]: minimal objective cost placing layers 0..end on stages
+    // 0..=s, with stage s ending at `end` — the bottleneck under `Throughput`,
+    // the running total under `Latency`. `cut[s][end]` records where stage s
+    // starts.
+    let mut best = vec![vec![UNREACHABLE; layer_count + 1]; stage_count];
     let mut cut = vec![vec![0usize; layer_count + 1]; stage_count];
     for end in 1..=layer_count - (stage_count - 1) {
         if range_required(0, end) <= u128::from(capacities[0]) {
-            best[0][end] = stage_nanos(range_weight(0, end), speeds[0]);
+            best[0][end] =
+                objective.accumulate((0, 0), stage_nanos(range_weight(0, end), speeds[0]));
         }
     }
     for stage in 1..stage_count {
@@ -135,23 +200,26 @@ pub(super) fn balance_stages(
         for end in stage + 1..=layer_count - later_stages {
             for start in stage..end {
                 let previous = best[stage - 1][start];
-                if previous == unreachable {
+                if previous == UNREACHABLE {
                     continue;
                 }
                 if range_required(start, end) > u128::from(capacities[stage]) {
                     continue;
                 }
-                let bottleneck = previous.max(stage_nanos(range_weight(start, end), speeds[stage]));
+                let cost = objective.accumulate(
+                    previous,
+                    stage_nanos(range_weight(start, end), speeds[stage]),
+                );
                 // Ties go to the later start, which gives earlier stages more
                 // layers; deterministic, and stable when stages are balanced.
-                if bottleneck <= best[stage][end] {
-                    best[stage][end] = bottleneck;
+                if cost <= best[stage][end] {
+                    best[stage][end] = cost;
                     cut[stage][end] = start;
                 }
             }
         }
     }
-    if best[stage_count - 1][layer_count] == unreachable {
+    if best[stage_count - 1][layer_count] == UNREACHABLE {
         return None;
     }
 
@@ -245,7 +313,14 @@ mod tests {
         ];
         let stages = [stage(0, "m1", 0, 18), stage(1, "m4", 18, 36)];
 
-        let balanced = balance_stages(&stages, &nodes, &weights, &required).unwrap();
+        let balanced = balance_stages(
+            &stages,
+            &nodes,
+            &weights,
+            &required,
+            PlacementObjective::Throughput,
+        )
+        .unwrap();
 
         assert_eq!((balanced[0].layer_start, balanced[0].layer_end), (0, 13));
         assert_eq!((balanced[1].layer_start, balanced[1].layer_end), (13, 36));
@@ -264,9 +339,140 @@ mod tests {
         ];
         let stages = [stage(0, "a", 0, 9), stage(1, "b", 9, 10)];
 
-        let balanced = balance_stages(&stages, &nodes, &weights, &weights).unwrap();
+        let balanced = balance_stages(
+            &stages,
+            &nodes,
+            &weights,
+            &weights,
+            PlacementObjective::Throughput,
+        )
+        .unwrap();
 
         assert_eq!(balanced[0].layer_end, 5);
+    }
+
+    /// The finding behind two objectives: on #1935's own pair they disagree.
+    ///
+    /// Min-max levels the stages so the saturated pipeline cycles faster.
+    /// Min-sum pushes layers onto the faster node, because a single request
+    /// pays the sum of its stages rather than their maximum.
+    #[test]
+    fn the_two_objectives_choose_different_cuts_on_an_unequal_pair() {
+        let weights = vec![130_000_000u64; 36];
+        let required = weights.clone();
+        let nodes = [
+            node("m1", 12 * GB, Some(68 * GB)),
+            node("m4", 12 * GB, Some(120 * GB)),
+        ];
+        let stages = [stage(0, "m1", 0, 18), stage(1, "m4", 18, 36)];
+
+        let throughput = balance_stages(
+            &stages,
+            &nodes,
+            &weights,
+            &required,
+            PlacementObjective::Throughput,
+        )
+        .unwrap();
+        let latency = balance_stages(
+            &stages,
+            &nodes,
+            &weights,
+            &required,
+            PlacementObjective::Latency,
+        )
+        .unwrap();
+
+        assert_ne!(
+            throughput[0].layer_end, latency[0].layer_end,
+            "if these agreed there would be no reason for two objectives"
+        );
+        // The slow node keeps fewer layers under min-sum.
+        assert!(
+            latency[0].layer_end < throughput[0].layer_end,
+            "min-sum should move layers to the faster node: {} vs {}",
+            latency[0].layer_end,
+            throughput[0].layer_end
+        );
+    }
+
+    /// Min-sum is exactly "pack the fastest node, spill the rest", which is why
+    /// it is the right objective for one in-flight request.
+    #[test]
+    fn min_sum_packs_the_faster_node_to_its_memory_limit() {
+        let weights = vec![100u64; 10];
+        // The fast node fits 6 layers; the slow one has room to spare.
+        let nodes = [
+            node("slow", 10_000, Some(250)),
+            node("fast", 600, Some(1_000)),
+        ];
+        let stages = [stage(0, "slow", 0, 5), stage(1, "fast", 5, 10)];
+
+        let latency = balance_stages(
+            &stages,
+            &nodes,
+            &weights,
+            &weights,
+            PlacementObjective::Latency,
+        )
+        .unwrap();
+
+        assert_eq!(
+            (latency[1].layer_start, latency[1].layer_end),
+            (4, 10),
+            "the fast node should hold every layer its memory allows"
+        );
+    }
+
+    /// Min-sum is placement-invariant on equal nodes, so every cut ties on the
+    /// primary objective. This pins the secondary: the flattest of the tied
+    /// cuts wins, rather than whatever the raw tie-break happened to reach
+    /// (which was 9/1 — latency-neutral, but it wastes the second node's
+    /// headroom and collapses as soon as concurrency arrives).
+    #[test]
+    fn equal_nodes_agree_under_both_objectives() {
+        let weights = vec![100u64; 10];
+        let nodes = [
+            node("a", 10_000, Some(1_000)),
+            node("b", 10_000, Some(1_000)),
+        ];
+        let stages = [stage(0, "a", 0, 9), stage(1, "b", 9, 10)];
+
+        for objective in [PlacementObjective::Throughput, PlacementObjective::Latency] {
+            let balanced = balance_stages(&stages, &nodes, &weights, &weights, objective).unwrap();
+            assert_eq!(balanced[0].layer_end, 5, "{objective:?}");
+        }
+    }
+
+    /// Min-sum still has to respect memory, and still has to give every stage
+    /// at least one layer — an infeasible plan is `None` under either.
+    #[test]
+    fn min_sum_refuses_an_infeasible_plan_like_min_max() {
+        let weights = vec![1_000u64; 4];
+        // Neither node can hold even two layers' required bytes.
+        let nodes = [node("a", 1_000, Some(500)), node("b", 1_000, Some(500))];
+        let stages = [stage(0, "a", 0, 2), stage(1, "b", 2, 4)];
+
+        assert!(
+            balance_stages(
+                &stages,
+                &nodes,
+                &weights,
+                &weights,
+                PlacementObjective::Latency
+            )
+            .is_none()
+        );
+        assert!(
+            balance_stages(
+                &stages,
+                &nodes,
+                &weights,
+                &weights,
+                PlacementObjective::Throughput
+            )
+            .is_none()
+        );
     }
 
     #[test]
@@ -279,7 +485,14 @@ mod tests {
         ];
         let stages = [stage(0, "slow", 0, 5), stage(1, "fast", 5, 10)];
 
-        let balanced = balance_stages(&stages, &nodes, &weights, &weights).unwrap();
+        let balanced = balance_stages(
+            &stages,
+            &nodes,
+            &weights,
+            &weights,
+            PlacementObjective::Throughput,
+        )
+        .unwrap();
 
         assert_eq!((balanced[1].layer_start, balanced[1].layer_end), (4, 10));
     }
@@ -295,7 +508,14 @@ mod tests {
         ];
         let stages = [stage(0, "a", 0, 4), stage(1, "b", 4, 8)];
 
-        let balanced = balance_stages(&stages, &nodes, &weights, &weights).unwrap();
+        let balanced = balance_stages(
+            &stages,
+            &nodes,
+            &weights,
+            &weights,
+            PlacementObjective::Throughput,
+        )
+        .unwrap();
 
         assert_eq!(
             balanced[0].layer_end, 7,
@@ -309,7 +529,16 @@ mod tests {
         let nodes = [node("a", 10_000, Some(1_000)), node("b", 10_000, None)];
         let stages = [stage(0, "a", 0, 2), stage(1, "b", 2, 4)];
 
-        assert!(balance_stages(&stages, &nodes, &weights, &weights).is_none());
+        assert!(
+            balance_stages(
+                &stages,
+                &nodes,
+                &weights,
+                &weights,
+                PlacementObjective::Throughput
+            )
+            .is_none()
+        );
         assert!(estimate_throughput(&stages, &nodes, &weights).is_none());
     }
 
@@ -319,7 +548,16 @@ mod tests {
         let nodes = [node("a", 150, Some(1_000)), node("b", 150, Some(1_000))];
         let stages = [stage(0, "a", 0, 2), stage(1, "b", 2, 4)];
 
-        assert!(balance_stages(&stages, &nodes, &weights, &weights).is_none());
+        assert!(
+            balance_stages(
+                &stages,
+                &nodes,
+                &weights,
+                &weights,
+                PlacementObjective::Throughput
+            )
+            .is_none()
+        );
     }
 
     #[test]
@@ -336,7 +574,14 @@ mod tests {
             stage(2, "c", 4, 5),
         ];
 
-        let balanced = balance_stages(&stages, &nodes, &weights, &weights).unwrap();
+        let balanced = balance_stages(
+            &stages,
+            &nodes,
+            &weights,
+            &weights,
+            PlacementObjective::Throughput,
+        )
+        .unwrap();
 
         assert_eq!(balanced[1].layer_end - balanced[1].layer_start, 1);
         assert!(

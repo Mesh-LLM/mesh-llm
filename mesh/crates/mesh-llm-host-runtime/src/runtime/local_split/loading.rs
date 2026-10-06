@@ -102,6 +102,9 @@ pub(super) struct SplitGenerationLoadSettings<'a> {
     pub(super) stage0: &'a RuntimeSliceStagePlan,
     pub(super) runtime_options: skippy_serving::EmbeddedRuntimeOptions,
     pub(super) embedded_openai: skippy::ResolvedEmbeddedOpenAiArgs,
+    /// Planned final-stage decode batching. A stage policy rather than a
+    /// frontend one, so it rides here instead of on the OpenAI args.
+    pub(super) last_stage_decode_batch: Option<bool>,
     pub(super) load_mode: LoadMode,
     pub(super) startup_timeout: Duration,
 }
@@ -781,6 +784,7 @@ pub(super) fn split_runtime_stage_load_request(
         ctx_size: spec.ctx_size,
         lane_count: spec.slots as u32,
         continuous_batching: settings.embedded_openai.continuous_batching,
+        last_stage_decode_batch: settings.last_stage_decode_batch,
         n_batch: resolved_config.n_batch,
         n_ubatch: resolved_config.n_ubatch,
         n_gpu_layers: resolved_config.n_gpu_layers,
@@ -899,6 +903,7 @@ pub(super) async fn split_generation_load_settings<'a>(
         stage0,
         runtime_options,
         embedded_openai,
+        last_stage_decode_batch: resolved.throughput.last_stage_decode_batch,
         load_mode,
         startup_timeout: lifecycle.startup_timeout,
     })

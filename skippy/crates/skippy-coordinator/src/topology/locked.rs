@@ -223,6 +223,7 @@ mod tests {
             edges: Vec::new(),
             activation_frame_bytes: 0,
             auto_balance: false,
+            placement_objective: Default::default(),
         }
     }
 

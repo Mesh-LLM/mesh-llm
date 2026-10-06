@@ -21,7 +21,7 @@ pub const CALIBRATED_PER_STAGE_OVERHEAD_US: u128 = 1_300;
 pub const CALIBRATED_PER_HOP_OVERHEAD_US: u128 = 13_000;
 
 pub use locked::{LockedTopologyStage, plan_locked_topology};
-pub use performance::{StageDecodeEstimate, ThroughputEstimate};
+pub use performance::{PlacementObjective, StageDecodeEstimate, ThroughputEstimate};
 
 const MINIMUM_AUTO_CONTEXT_LENGTH: u32 = 65_536;
 const CONTEXT_STEPS: &[u32] = &[512, 1024, 2048, 4096, 8192, 16_384, 32_768, 65_536, 131_072];
@@ -93,6 +93,10 @@ pub struct TopologyPlanningInput {
     /// stages is new information and still re-cuts, through
     /// [`rebalance_topology`] directly.
     pub auto_balance: bool,
+    /// What the re-cut optimises for. Only consulted when `auto_balance` is
+    /// set; defaults to `Throughput`, which is the behaviour `--auto-balance`
+    /// has always had.
+    pub placement_objective: PlacementObjective,
 }
 
 /// Directed link measurement between two candidate stage nodes.
@@ -246,8 +250,13 @@ pub fn rebalance_topology(
         current.context_length,
         current.parallel_lanes,
     )?;
-    let stages =
-        performance::balance_stages(&current.stages, &nodes, &layer_weights, &layer_required)?;
+    let stages = performance::balance_stages(
+        &current.stages,
+        &nodes,
+        &layer_weights,
+        &layer_required,
+        input.placement_objective,
+    )?;
     if stages
         .iter()
         .zip(&current.stages)
@@ -611,16 +620,20 @@ fn fit_candidate(
     let mut total_remaining_vram = 0u128;
 
     // Performance-aware span assignment: when every node in the subset reports
-    // sustained memory bandwidth, minimize modeled single-stream serial decode
-    // time (weight streaming dominates quantized decode). Any missing signal
-    // falls back to the exact capacity-greedy walk below, so signal-less fleets
-    // keep bit-identical placement.
+    // sustained memory bandwidth, place layers for `input.placement_objective`
+    // (weight streaming dominates quantized decode). `Latency` minimizes
+    // modeled single-stream serial decode time; `Throughput` minimizes the
+    // bottleneck stage, since a saturated pipeline is paced by its slowest
+    // stage rather than by the sum. Any missing signal falls back to the exact
+    // capacity-greedy walk below, so signal-less fleets keep bit-identical
+    // placement.
     let streamed_layer_weights = streamed_layer_weight_bytes(input);
-    if let Some((spans, _stage_service_us)) = serial_optimized_spans(
+    if let Some((spans, _stage_service_us)) = optimized_spans(
         &streamed_layer_weights,
         &layer_required_bytes,
         &capacities,
         input.layer_count as usize,
+        input.placement_objective,
     ) {
         for (stage_index, (node, span)) in capacities.iter().zip(spans).enumerate() {
             let layer_start = next_layer;
@@ -1184,17 +1197,37 @@ fn modeled_stage_time_us(node: &UsableNode, weight_bytes: u64, layer_count: usiz
 /// node id tie-break). For each contiguous split of the layer sequence across
 /// the stages, every stage's memory requirement must fit its node's ceiling
 /// (checked with prefix sums in O(1)); among feasible assignments we minimize
-/// the serial sum of modeled stage service times, matching the single-stream
-/// TPOT evaluator used to rank the resulting plan. Ties prefer the smaller
-/// bottleneck stage time, then the lexicographically smallest boundary vector
-/// for determinism. Returns `None` unless every node reports
+/// what `objective` asks for — the serial sum of modeled stage service times
+/// for `Latency`, matching the single-stream TPOT evaluator used to rank the
+/// resulting plan, or the bottleneck stage for `Throughput`, which is what a
+/// saturated pipeline is paced by. Ties prefer the other of the two, then the
+/// lexicographically smallest boundary vector for determinism. Returns `None` unless every node reports
 /// sustained memory bandwidth — the caller then keeps today's capacity-greedy
 /// walk, which guarantees signal-less fleets keep identical placement.
-fn serial_optimized_spans(
+/// Order two candidate placements for `objective`.
+///
+/// The stored tuple stays `(serial total, bottleneck)` whichever objective is
+/// in force; only the comparison changes. That keeps the DP, the reconstruction
+/// and the returned service time identical between the two.
+fn span_key(objective: PlacementObjective, total: u128, max: u128) -> (u128, u128) {
+    match objective {
+        // One in-flight request pays the sum of its stages, so minimise that;
+        // ties prefer the flatter cut, which is what this DP already did.
+        PlacementObjective::Latency => (total, max),
+        // A saturated pipeline emits a token per lane every bottleneck period,
+        // so throughput minimises the slowest stage; ties prefer the cheaper
+        // total. Without this, a throughput deployment with bandwidth signals
+        // would be given the latency cut.
+        PlacementObjective::Throughput => (max, total),
+    }
+}
+
+fn optimized_spans(
     layer_weights: &[u64],
     linearized_required_bytes: &[u64],
     capacities: &[UsableNode],
     layer_count: usize,
+    objective: PlacementObjective,
 ) -> Option<(Vec<usize>, u128)> {
     if capacities.is_empty() || layer_weights.len() != layer_count {
         return None;
@@ -1264,7 +1297,9 @@ fn serial_optimized_spans(
                     continue;
                 }
                 let candidate = (prev_total + time, prev_max.max(time), previous);
-                if candidate < best {
+                if span_key(objective, candidate.0, candidate.1)
+                    < span_key(objective, best.0, best.1)
+                {
                     best = candidate;
                 }
             }
@@ -1372,6 +1407,7 @@ mod tests {
             edges: Vec::new(),
             activation_frame_bytes: 0,
             auto_balance: false,
+            placement_objective: Default::default(),
         }
     }
 
@@ -1393,6 +1429,7 @@ mod tests {
             edges: Vec::new(),
             activation_frame_bytes: 0,
             auto_balance: false,
+            placement_objective: Default::default(),
         }
     }
 
@@ -1514,6 +1551,7 @@ mod tests {
         let mut planning = input(vec![fast, slow]);
         planning.minimum_nodes = 2;
         planning.parallel_lanes_override = Some(1);
+        planning.placement_objective = PlacementObjective::Latency;
         let plan = plan_topology(&planning).expect("plan");
         assert_eq!(plan.stages.len(), 2);
         let fast_stage = plan
@@ -1528,6 +1566,37 @@ mod tests {
             .expect("slow stage");
         assert_eq!(slow_stage.layer_end - slow_stage.layer_start, 1);
         assert_eq!(fast_stage.layer_end - fast_stage.layer_start, 39);
+    }
+
+    #[test]
+    fn throughput_objective_balances_spans_by_node_speed() {
+        // Same fleet as the single-stream case, asking for throughput instead.
+        // A saturated pipeline emits a token every bottleneck period, so the
+        // optimum flattens stage times rather than shortening the serial sum:
+        // the 2x faster node takes roughly twice the layers, and the slower
+        // node is no longer starved down to one.
+        let fast = perf_node("fast", 48, 546_000);
+        let slow = perf_node("slow", 48, 273_000);
+        let mut planning = input(vec![fast, slow]);
+        planning.minimum_nodes = 2;
+        planning.parallel_lanes_override = Some(1);
+        planning.placement_objective = PlacementObjective::Throughput;
+        let plan = plan_topology(&planning).expect("plan");
+        assert_eq!(plan.stages.len(), 2);
+        let span = |node_id: &str| {
+            plan.stages
+                .iter()
+                .find(|stage| stage.node_id == node_id)
+                .map(|stage| stage.layer_end - stage.layer_start)
+                .expect("stage")
+        };
+        let (fast_layers, slow_layers) = (span("fast"), span("slow"));
+        assert_eq!(fast_layers + slow_layers, planning.layer_count);
+        // 40 layers split 2:1 by bandwidth, within one layer of rounding.
+        assert!(
+            (26..=28).contains(&fast_layers),
+            "fast stage should take ~2/3 of the layers: fast={fast_layers} slow={slow_layers}"
+        );
     }
 
     #[test]
@@ -1862,6 +1931,7 @@ mod tests {
             edges: Vec::new(),
             activation_frame_bytes: 0,
             auto_balance: false,
+            placement_objective: Default::default(),
         };
         let layer_weights = layer_weight_bytes(&request);
         let kv_per_layer = request.kv_bytes_per_token.div_ceil(u64::from(LAYERS));
