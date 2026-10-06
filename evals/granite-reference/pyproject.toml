@@ -1,0 +1,8 @@
+[project]
+name = "mesh-granite-reference-evaluation"
+version = "0.0.0"
+requires-python = ">=3.12,<3.13"
+dependencies = ["gguf", "numpy", "safetensors", "torch"]
+
+[tool.uv]
+package = false

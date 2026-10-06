@@ -59,6 +59,21 @@ pub(crate) fn converted_artifact_dir(
 }
 
 pub(crate) fn validate_converted_artifact(artifact_dir: &Path) -> Result<(), ArtifactError> {
+    required_files(artifact_dir)?;
+    let manifest_path = artifact_dir.join(MANIFEST);
+    let bytes = fs::read(&manifest_path).map_err(|source| ArtifactError::ReadManifest {
+        path: manifest_path.clone(),
+        source,
+    })?;
+    let manifest: Value =
+        serde_json::from_slice(&bytes).map_err(|source| ArtifactError::ParseManifest {
+            path: manifest_path.clone(),
+            source,
+        })?;
+    validate_converted_artifact_manifest(artifact_dir, &manifest)
+}
+
+fn required_files(artifact_dir: &Path) -> Result<(), ArtifactError> {
     let missing = ["README.md", MANIFEST]
         .into_iter()
         .filter(|name| !artifact_dir.join(name).is_file())
@@ -75,16 +90,17 @@ pub(crate) fn validate_converted_artifact(artifact_dir: &Path) -> Result<(), Art
         });
     }
 
+    Ok(())
+}
+
+/// Reuse preflight policy with the caller's already bounded and admitted manifest value.
+/// This function does not reread or admit manifest bytes; that remains the caller's custody.
+pub(crate) fn validate_converted_artifact_manifest(
+    artifact_dir: &Path,
+    manifest: &Value,
+) -> Result<(), ArtifactError> {
+    required_files(artifact_dir)?;
     let manifest_path = artifact_dir.join(MANIFEST);
-    let bytes = fs::read(&manifest_path).map_err(|source| ArtifactError::ReadManifest {
-        path: manifest_path.clone(),
-        source,
-    })?;
-    let manifest: Value =
-        serde_json::from_slice(&bytes).map_err(|source| ArtifactError::ParseManifest {
-            path: manifest_path.clone(),
-            source,
-        })?;
     let expected_splits = match manifest.get("expected_splits") {
         Some(Value::Number(number)) => number
             .as_u64()
@@ -134,5 +150,26 @@ mod tests {
         let selected = converted_artifact_dir(temp.path(), Path::new("custom"), false).unwrap();
 
         assert_eq!(selected, temp.path().join("target/custom"));
+    }
+
+    #[test]
+    fn parsed_preflight_reuses_admitted_manifest_without_reopening_replaced_bytes() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        std::fs::write(root.join("README.md"), b"card").unwrap();
+        std::fs::write(root.join("model.gguf"), b"GGUFfixture").unwrap();
+        let admitted = serde_json::json!({"expected_splits":1,"output_basename":"model"});
+        std::fs::write(root.join(super::MANIFEST), b"malformed replacement bytes").unwrap();
+        super::validate_converted_artifact_manifest(root, &admitted).unwrap();
+        assert!(super::validate_converted_artifact(root).is_err());
+        let missing = serde_json::json!({"expected_splits":2,"output_basename":"model"});
+        assert!(super::validate_converted_artifact_manifest(root, &missing).is_err());
+        std::fs::write(
+            root.join(super::MANIFEST),
+            serde_json::to_vec(&admitted).unwrap(),
+        )
+        .unwrap();
+        super::validate_converted_artifact(root).unwrap();
+        temp.close().unwrap();
     }
 }

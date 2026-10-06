@@ -100,6 +100,7 @@ pub(crate) fn run_workload_oracle_evidence(args: &[String]) -> DynResult<()> {
 pub(crate) fn run_replay_matrix(args: &[String], root: Option<&std::path::Path>) -> DynResult<()> {
     match args {
         [verb, rest @ ..] if verb == "competitive-inputs-local" => replay_matrix::competitive_inputs::run(rest),
+        [verb, rest @ ..] if verb == "competitive-inputs-prefetch" => replay_matrix::competitive_prefetch::run(rest),
         [verb, rest @ ..] if verb == "competitive-prepare" => replay_matrix::competitive_prepare::run(rest),
         [verb, rest @ ..] if verb == "competitive-run" => replay_matrix::competitive_matrix::run(rest),
         [verb, rest @ ..] if verb == "competitive-report" => replay_matrix::competitive_report::run(rest),

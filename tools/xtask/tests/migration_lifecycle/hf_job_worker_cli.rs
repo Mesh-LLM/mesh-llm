@@ -13,7 +13,7 @@ use std::{
 fn pin(path: &Path) -> Json {
     json!({"path":path,"sha256":hex::encode(Sha256::digest(std::fs::read(path).unwrap()))})
 }
-fn fixture(mode: &str) -> (tempfile::TempDir, PathBuf, PathBuf, String) {
+pub(super) fn fixture(mode: &str) -> (tempfile::TempDir, PathBuf, PathBuf, String) {
     let (root, source, output) = super::hf_bootstrap_cli::fixture("ok");
     let native = Path::new(env!("CARGO_BIN_EXE_xtask"))
         .parent()

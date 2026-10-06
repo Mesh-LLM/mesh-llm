@@ -17,7 +17,7 @@ fn hex_pin(value: &str, length: usize) -> bool {
             .bytes()
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
-fn absolute(value: &str) -> bool {
+pub(super) fn absolute(value: &str) -> bool {
     let path = Path::new(value);
     path.is_absolute()
         && path
@@ -26,7 +26,7 @@ fn absolute(value: &str) -> bool {
         && value.len() <= 4096
         && !value.chars().any(char::is_control)
 }
-fn artifact(value: &Value, mounts: &[ModelMount], mounted: bool) -> Result<()> {
+pub(super) fn artifact(value: &Value, mounts: &[ModelMount], mounted: bool) -> Result<()> {
     let path = text(value, "path")?;
     if !absolute(path)
         || !hex_pin(text(value, "sha256")?, 64)
@@ -41,7 +41,7 @@ fn artifact(value: &Value, mounts: &[ModelMount], mounted: bool) -> Result<()> {
     }
     Ok(())
 }
-fn mounts_admitted(mounts: &[ModelMount]) -> Result<()> {
+pub(super) fn mounts_admitted(mounts: &[ModelMount]) -> Result<()> {
     if mounts.is_empty() || mounts.len() > 16 {
         bail!("native delivery mount roster refused");
     }
@@ -71,10 +71,10 @@ fn mounts_admitted(mounts: &[ModelMount]) -> Result<()> {
     }
     Ok(())
 }
-fn resource(request: &Value, plan: &CpuJobPlan) -> Result<()> {
+pub(super) fn resource(request: &Value, plan: &CpuJobPlan, maximum: u64) -> Result<()> {
     let b = &request["bootstrap"];
     let estimate = estimate_cost_usd(plan.unit_cost_usd, &plan.unit_label, plan.timeout_seconds)?;
-    if !(30..=86400).contains(&plan.timeout_seconds)
+    if !(30..=maximum).contains(&plan.timeout_seconds)
         || plan.flavor.is_empty()
         || request["timeout_secs"].as_u64() != Some(plan.timeout_seconds)
         || b["timeout_seconds"].as_u64() != Some(plan.timeout_seconds)
@@ -138,7 +138,7 @@ pub(super) fn request(bytes: &[u8], mounts: &[ModelMount], plan: &CpuJobPlan) ->
         bail!("native delivery closed certification workflow refused");
     }
     mounts_admitted(mounts)?;
-    resource(&request, plan)?;
+    resource(&request, plan, 86400)?;
     artifact(&request["runner"], mounts, false)?;
     let runner = text(&request["runner"], "path")?;
     if Path::new(runner).starts_with("/work") || Path::new(runner).starts_with("/models") {
@@ -172,7 +172,12 @@ pub(super) fn request(bytes: &[u8], mounts: &[ModelMount], plan: &CpuJobPlan) ->
             if text(projector, "expected_sha256")? == text(&cert["projector"], "sha256")? => {}
         _ => bail!("native delivery projector correlation refused"),
     }
-    let export = &request["receipt_export"];
+    export(&request["receipt_export"], mounts, plan.timeout_seconds)?;
+    // Full tool roster, native scalar and URL admission remain the existing typed worker's responsibility.
+    Ok(request)
+}
+
+pub(super) fn export(export: &Value, mounts: &[ModelMount], timeout_seconds: u64) -> Result<()> {
     let repo = text(export, "repo")?;
     let segments = repo.split('/').collect::<Vec<_>>();
     let part = |p: &str| {
@@ -188,7 +193,7 @@ pub(super) fn request(bytes: &[u8], mounts: &[ModelMount], plan: &CpuJobPlan) ->
         || path.len() > 256
         || path.split('/').any(|p| !part(p))
         || !(10..=3600).contains(&reserve)
-        || plan.timeout_seconds <= reserve + 5
+        || timeout_seconds <= reserve + 5
     {
         bail!("native delivery export destination/budget refused");
     }
@@ -207,6 +212,5 @@ pub(super) fn request(bytes: &[u8], mounts: &[ModelMount], plan: &CpuJobPlan) ->
     {
         bail!("native delivery durable receipt/explicit secret configuration refused");
     }
-    // Full tool roster, native scalar and URL admission remain the existing typed worker's responsibility.
-    Ok(request)
+    Ok(())
 }

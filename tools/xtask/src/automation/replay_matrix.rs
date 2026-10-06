@@ -185,3 +185,5 @@ pub(super) mod parity_local_plan;
 pub(super) mod parity_local_run;
 
 pub(super) mod parity_local;
+
+pub(super) mod competitive_prefetch;

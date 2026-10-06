@@ -109,7 +109,8 @@ impl HardwareFlavor {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct CpuJobPlan {
     pub flavor: String,
     pub pretty_name: String,

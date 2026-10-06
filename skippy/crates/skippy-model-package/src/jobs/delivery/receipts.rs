@@ -30,12 +30,12 @@ pub struct Locator {
     pub delivery_complete: bool,
 }
 #[derive(Default)]
-struct Observed {
-    locator: Option<Locator>,
-    ambiguous: bool,
+pub(super) struct Observed {
+    pub(super) locator: Option<Locator>,
+    pub(super) ambiguous: bool,
 }
 impl Observed {
-    fn line(&mut self, line: &str) -> Result<()> {
+    pub(super) fn line(&mut self, line: &str) -> Result<()> {
         let Some(body) = line.strip_prefix("MESH_NATIVE_DELIVERY ") else {
             return Ok(());
         };
@@ -58,7 +58,7 @@ fn hex(value: &str, length: usize) -> bool {
             .bytes()
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
-fn correlated(locator: &Locator, declaration: &DeliveryDeclaration) -> Result<()> {
+pub(super) fn correlated(locator: &Locator, declaration: &DeliveryDeclaration) -> Result<()> {
     if locator.schema_version != 1
         || locator.transport_input_sha256 != declaration.transport_input_sha256
         || locator.repo != declaration.evidence_repo
@@ -229,11 +229,11 @@ async fn wait<T, W: Future<Output = Result<T>>, C: Future<Output = ()>>(
         }
     }
 }
-struct LogAllowance {
-    lines: usize,
-    bytes: usize,
+pub(super) struct LogAllowance {
+    pub(super) lines: usize,
+    pub(super) bytes: usize,
 }
-async fn final_logs<C: Future<Output = ()>>(
+pub(super) async fn final_logs<C: Future<Output = ()>>(
     client: &HfJobsClient,
     namespace: &str,
     id: &str,

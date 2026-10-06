@@ -15,6 +15,11 @@ use std::{
 };
 #[path = "delivery/admission.rs"]
 mod admission;
+#[path = "delivery/generic.rs"]
+pub mod generic;
+#[cfg(unix)]
+#[path = "delivery/generic_cli.rs"]
+pub mod generic_cli;
 #[path = "delivery/receipts.rs"]
 pub mod receipts;
 #[cfg(test)]
@@ -29,7 +34,8 @@ pub struct ModelMount {
     pub revision: String,
     pub mount_path: String,
 }
-#[derive(Serialize)]
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct DeliveryDeclaration {
     pub schema_version: u32,
     pub transport_input_sha256: String,
@@ -124,7 +130,8 @@ impl PreparedCertificationDelivery {
         Ok(Self { spec, declaration })
     }
 }
-#[derive(Serialize)]
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct SubmittedCertificationDelivery {
     pub declaration: DeliveryDeclaration,
     pub job_id: String,

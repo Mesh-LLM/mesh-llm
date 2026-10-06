@@ -3,8 +3,12 @@ mod acquisition;
 pub(in crate::automation) mod admission;
 mod bootstrap;
 pub(in crate::automation) mod execution;
+#[path = "hf_certify/generic_conversion.rs"]
+mod generic_conversion;
 #[path = "hf_certify/job_worker.rs"]
 mod job_worker;
+#[path = "hf_certify/mtp_default.rs"]
+mod mtp_default;
 #[path = "hf_certify/publication.rs"]
 mod publication;
 use crate::{automation::command_interrupt::Interrupt, command::DynResult};
@@ -14,6 +18,36 @@ use std::{
     time::{Duration, Instant},
 };
 pub(crate) fn run(args: &[String]) -> DynResult<()> {
+    if let [verb, rest @ ..] = args
+        && verb == "artifact-workspace-worker"
+    {
+        return generic_conversion::artifact_workspace_worker(rest);
+    }
+    if let [verb, rest @ ..] = args
+        && verb == "generic-job-worker"
+    {
+        return generic_conversion::delivery(rest);
+    }
+    if let [verb, rest @ ..] = args
+        && verb == "generic-job"
+    {
+        return generic_conversion::operator(rest);
+    }
+    if let [verb, rest @ ..] = args
+        && verb == "compose-default"
+    {
+        return mtp_default::run(rest);
+    }
+    if let [verb, rest @ ..] = args
+        && verb == "generic-conversion"
+    {
+        return generic_conversion::run(rest);
+    }
+    if let [verb, rest @ ..] = args
+        && verb == "generic-identity-worker"
+    {
+        return generic_conversion::identity_worker(rest);
+    }
     if let [verb, rest @ ..] = args
         && verb == "publication-child"
     {
@@ -41,7 +75,7 @@ pub(crate) fn run(args: &[String]) -> DynResult<()> {
     }
     if args == ["--help"] {
         println!(
-            "automation hf-certify --input FILE --output-directory FRESH_DIRECTORY; local standalone CPU product validation; job-worker operator selects mounted model-root/model-pattern/expected-parts and chains existing certification; job-worker chains bootstrap/acquisition/certification or distinct supplied-converted/native-nemotron composition with optional pinned receipt export; publication-child --input FILE --output-directory FRESH_DIRECTORY supervises a supplied GGUF publisher; no hosted conversion qualification"
+            "automation hf-certify --input FILE --output-directory FRESH_DIRECTORY; local standalone CPU product validation; job-worker operator selects mounted model-root/model-pattern/expected-parts and chains existing certification; job-worker chains bootstrap/acquisition/certification or distinct supplied-converted/native-nemotron composition with optional pinned receipt export; generic-conversion --input FILE --output-directory FRESH_DIRECTORY preserves supplied native split/spool/status/card and explicit complete-folder publication; publication-child --input FILE --output-directory FRESH_DIRECTORY supervises a supplied GGUF publisher; generic-job --input prepared-manifest --output-directory fresh-evidence observes G3 build and accepts original conversion flags; no hosted conversion qualification; compose-default --input FILE --output-directory FRESH chains immutable checkpoint staging/bootstrap/native attach/confirmed ordered publication, or dry-run"
         );
         return Ok(());
     }

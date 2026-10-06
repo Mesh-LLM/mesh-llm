@@ -8,7 +8,7 @@ mod native_composition;
 #[path = "job_worker/operator.rs"]
 mod operator;
 #[path = "job_worker/receipt_export.rs"]
-mod receipt_export;
+pub(in crate::automation::hf_certify) mod receipt_export;
 use super::{acquisition, admission, bootstrap};
 use crate::{automation::command_interrupt::Interrupt, command::DynResult, process::Cancellation};
 use serde_json::{Value, json};
