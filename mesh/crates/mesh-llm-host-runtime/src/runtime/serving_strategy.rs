@@ -362,6 +362,14 @@ pub(in crate::runtime) fn log_strategy_plan(plan: &StrategyPlan) {
     let Some(strategy) = plan.strategy else {
         return;
     };
+    // The interactive dashboard reads events, not the tracing log, so the
+    // header has to be told. Counts only: the header is one line and the full
+    // per-axis report lives in `doctor split` and `/api/status`.
+    let _ = mesh_llm_events::emit_event(mesh_llm_events::OutputEvent::ServingStrategyResolved {
+        strategy: strategy.to_string(),
+        applied: plan.applied.len(),
+        declined: plan.declined.len(),
+    });
     for decision in &plan.applied {
         tracing::info!(
             strategy,
