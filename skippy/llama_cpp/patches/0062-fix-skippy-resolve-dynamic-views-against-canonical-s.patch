@@ -1,0 +1,68 @@
+From f0926e48208842c995870531d2645d100c0d7ab9 Mon Sep 17 00:00:00 2001
+From: James Dumay <jameswdumay@gmail.com>
+Date: Tue, 6 Oct 2026 21:48:20 +1100
+Subject: [PATCH] fix(skippy): resolve dynamic views against canonical storage
+
+---
+ src/skippy/stage_program_extraction.cpp | 14 ++++++++++++++
+ src/skippy/stage_program_replay.cpp     | 13 +++++++++++--
+ 2 files changed, 25 insertions(+), 2 deletions(-)
+
+diff --git a/src/skippy/stage_program_extraction.cpp b/src/skippy/stage_program_extraction.cpp
+index 08e28da9f..7313923b2 100644
+--- a/src/skippy/stage_program_extraction.cpp
++++ b/src/skippy/stage_program_extraction.cpp
+@@ -269,6 +269,20 @@ bool extraction::run() {
+                                     target_axis = axis;
+                                 }
+                             }
++                            if (target_axis < 0) {
++                                // Equal extents make the dynamic axis ambiguous. Its
++                                // source stride identifies it when the view preserves
++                                // that axis, including DeepSeek MLA value views.
++                                for (int32_t axis = 0; axis < GGML_MAX_DIMS; ++axis) {
++                                    if (tensor->ne[axis] != tensor->src[0]->ne[source_axis]) continue;
++                                    if (tensor->nb[axis] != tensor->src[0]->nb[source_axis]) continue;
++                                    if (target_axis >= 0) {
++                                        target_axis = -1;
++                                        break;
++                                    }
++                                    target_axis = axis;
++                                }
++                            }
+                             if (target_axis < 0) {
+                                 if (tensor->view_offs == 0 && source_axis < GGML_MAX_DIMS &&
+                                         tensor->ne[source_axis] < tensor->src[0]->ne[source_axis]) {
+diff --git a/src/skippy/stage_program_replay.cpp b/src/skippy/stage_program_replay.cpp
+index 1cd7b50a1..2e951d3a2 100644
+--- a/src/skippy/stage_program_replay.cpp
++++ b/src/skippy/stage_program_replay.cpp
+@@ -354,14 +354,23 @@ ggml_tensor * replay_operation(
+                 }
+                 uint64_t end = 0;
+                 valid_span = valid_span && checked_add_u64(view_offset, span, end);
++                // A view of a view is backed by the canonical storage. Its
++                // immediate source may cover less than the selected span.
++                const ggml_tensor * storage = sources[0];
++                uint64_t storage_offset = 0;
++                for (const ggml_tensor * step = sources[0]; step != nullptr; step = step->view_src) {
++                    storage = step;
++                    valid_span = valid_span && checked_add_u64(storage_offset, step->view_offs, storage_offset);
++                }
++                valid_span = valid_span && checked_add_u64(storage_offset, end, end);
+                 // ggml permits zero-element views to retain the logical offset of
+                 // their selected slice even though the source has no runtime
+                 // storage. This occurs in empty-token MoE reserve graphs.
+-                if (!valid_span || (span != 0 && end > ggml_nbytes(sources[0]))) {
++                if (!valid_span || (span != 0 && end > ggml_nbytes(storage))) {
+                     error = "stage program VIEW geometry exceeds source storage for " + operation.name +
+                             " (" + operation.value_id + " source=" + operation.sources[0] +
+                             " name=" + std::string(ggml_get_name(sources[0])) + ")" +
+-                            ": source bytes=" + std::to_string(ggml_nbytes(sources[0])) +
++                            ": source bytes=" + std::to_string(ggml_nbytes(storage)) +
+                             " offset=" + std::to_string(view_offset) +
+                             " dims=" + std::to_string(dims[0]) + "x" + std::to_string(dims[1]) + "x" +
+                                     std::to_string(dims[2]) + "x" + std::to_string(dims[3]) +
+-- 
+2.54.0 (Apple Git-157)
+
