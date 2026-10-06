@@ -922,7 +922,9 @@ impl OpenAiBackend for StageOpenAiBackend {
     }
 
     async fn models(&self) -> OpenAiResult<Vec<ModelObject>> {
-        Ok(vec![ModelObject::new(self.model_id.clone())])
+        Ok(vec![
+            ModelObject::new(self.model_id.clone()).with_thinking(self.thinking.clone()),
+        ])
     }
 
     async fn system_one(&self, request: SystemOneRequest) -> OpenAiResult<SystemOneResponse> {

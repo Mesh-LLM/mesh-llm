@@ -1231,6 +1231,7 @@ pub(super) fn hooks_test_backend(
         model_id: "hooks-test-model".to_string(),
         default_max_tokens: 16,
         request_defaults: EmbeddedOpenAiRequestDefaults::default(),
+        thinking: None,
         ctx_size: 128,
         mode: OpenAiBackendMode::LocalRuntime,
         draft: None,

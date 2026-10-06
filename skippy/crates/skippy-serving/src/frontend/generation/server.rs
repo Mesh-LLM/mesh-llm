@@ -28,6 +28,10 @@ use crate::runtime_state::{loaded_model_has_indexer_memory, loaded_model_state_k
 use crate::telemetry::Telemetry;
 use crate::telemetry::lifecycle_attrs;
 use crate::telemetry::now_unix_nanos;
+use crate::thinking_probe::ThinkingProbeInputs;
+use crate::thinking_probe::emit_probe_status;
+use crate::thinking_probe::native_renderer_identity;
+use crate::thinking_probe::probe_loaded_model;
 use crate::tokenizer::{TokenizerCapability, tokenizer_http_router};
 use anyhow::Context;
 use anyhow::Result;
@@ -45,6 +49,7 @@ use serde_json::json;
 use skippy_inference_api::ModelId;
 use skippy_inference_api::OpenAiBackend;
 use skippy_inference_api::OpenAiHookPolicy;
+use skippy_inference_api::thinking::ThinkingControls;
 use skippy_protocol::StageConfig;
 use std::collections::BTreeMap;
 use std::future::Future;
@@ -180,6 +185,7 @@ pub struct EmbeddedOpenAiRouter {
 pub struct EmbeddedOpenAiBackend {
     pub backend: Arc<dyn OpenAiBackend>,
     pub model_id: String,
+    pub thinking: Option<ThinkingControls>,
     pub generation_concurrency: usize,
     pub generation_queue_capacity: usize,
     pub generation_admission_timeout_secs: u64,
@@ -262,6 +268,10 @@ fn embedded_openai_backend_with_scheduler(
         args.speculative_window,
         &args.speculative,
     )?;
+    // Render-only probe of the selected chat template, run once at load. This is
+    // where every input is in hand: the loaded runtime, the stage config, and the
+    // selected template. `/v1/models` publishes the result as `thinking`.
+    let thinking = probe_thinking_controls(&args);
     let model_id = ModelId::new(
         args.model_id
             .unwrap_or_else(|| args.config.model_id.clone()),
@@ -346,6 +356,7 @@ fn embedded_openai_backend_with_scheduler(
         model_id: model_id.clone(),
         default_max_tokens: args.default_max_tokens,
         request_defaults: args.request_defaults,
+        thinking: thinking.clone(),
         ctx_size,
         mode,
         draft,
@@ -401,11 +412,40 @@ fn embedded_openai_backend_with_scheduler(
     Ok(EmbeddedOpenAiBackend {
         backend,
         model_id,
+        thinking,
         generation_concurrency: args.generation_concurrency,
         generation_queue_capacity: args.generation_queue_capacity,
         generation_admission_timeout_secs: args.generation_admission_timeout_secs,
         openai_guardrails,
     })
+}
+
+/// Renders the selected template to learn which reasoning controls it reacts to.
+///
+/// Never generates: see [`crate::thinking_probe`] for what the observations can
+/// and cannot claim. A poisoned runtime lock leaves the model unprobed, which is
+/// reported as absent rather than as a default.
+fn probe_thinking_controls(args: &EmbeddedOpenAiArgs) -> Option<ThinkingControls> {
+    let template_override = args.request_defaults.chat_template.clone();
+    let artifact = args
+        .config
+        .source_model_sha256
+        .clone()
+        .or_else(|| args.config.package_ref.clone());
+    let report = probe_loaded_model(
+        &args.runtime,
+        &ThinkingProbeInputs {
+            model_id: &args.config.model_id,
+            artifact: artifact.as_deref(),
+            template_override: template_override.as_deref(),
+            use_jinja: args.request_defaults.jinja.unwrap_or(true),
+            renderer: &native_renderer_identity(),
+        },
+    );
+    if let Some(report) = &report {
+        let _ = emit_probe_status(report);
+    }
+    report
 }
 
 fn validate_generation_receipt_topology(

@@ -142,6 +142,7 @@ pub(super) fn local_openai_backend(
         model_id: model_id.into(),
         default_max_tokens: 16,
         request_defaults: EmbeddedOpenAiRequestDefaults::default(),
+        thinking: None,
         ctx_size,
         mode: OpenAiBackendMode::LocalRuntime,
         draft: None,

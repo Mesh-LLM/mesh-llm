@@ -56,6 +56,8 @@ pub(in crate::frontend) struct StageOpenAiBackend {
     pub(in crate::frontend) model_id: String,
     pub(in crate::frontend) default_max_tokens: u32,
     pub(in crate::frontend) request_defaults: EmbeddedOpenAiRequestDefaults,
+    /// Render-only reasoning-control observations for this loaded model.
+    pub(in crate::frontend) thinking: Option<skippy_inference_api::thinking::ThinkingControls>,
     pub(in crate::frontend) ctx_size: usize,
     pub(in crate::frontend) mode: OpenAiBackendMode,
     pub(in crate::frontend) draft: Option<Arc<Mutex<DraftRunner>>>,

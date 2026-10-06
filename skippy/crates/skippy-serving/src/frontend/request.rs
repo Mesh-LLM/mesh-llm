@@ -37,6 +37,17 @@ use std::collections::BTreeMap;
 
 const MAX_NATIVE_PARSER_INPUT_BYTES: usize = 1024 * 1024;
 
+/// Built-in reasoning default when neither the request nor the deployment config
+/// asks for reasoning: off.
+///
+/// Without this the renderer control was left unset and the model's own chat
+/// template decided, which is "thinking on" for most reasoning model families —
+/// and a package's `request_defaults.selection.default` profile could turn it on
+/// for a request that never asked. A client that asks (any of the reasoning or
+/// thinking aliases, an effort, or a budget) still turns it on, and an explicit
+/// deployment setting still overrides this default.
+const DEFAULT_REASONING_ENABLED: bool = false;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct RequestDefaultsDiagnostics {
     pub(super) selected_package_profile: Option<String>,
@@ -59,7 +70,8 @@ pub(super) fn resolve_chat_request_defaults(
     let resolved_reasoning = explicit_budget
         .map(reasoning_budget_enables_thinking)
         .or(template_reasoning)
-        .or_else(|| operator_reasoning_mode(configured));
+        .or_else(|| operator_reasoning_mode(configured))
+        .or(Some(DEFAULT_REASONING_ENABLED));
     let selected = configured
         .package_request_defaults
         .as_ref()
@@ -1058,7 +1070,8 @@ pub(super) fn chat_template_options(
         enable_thinking: reasoning
             .enable_thinking
             .or_else(|| default_reasoning_enabled(defaults.reasoning_enabled))
-            .or_else(|| default_reasoning_budget_enabled(defaults.reasoning_budget)),
+            .or_else(|| default_reasoning_budget_enabled(defaults.reasoning_budget))
+            .or(Some(DEFAULT_REASONING_ENABLED)),
         chat_template_kwargs: merged_chat_template_kwargs(
             defaults,
             &reasoning.chat_template_kwargs,
