@@ -206,7 +206,7 @@
       "file": ".agents/skills/hf-quant-and-layer-package-jobs/SKILL.md",
       "members": [
         [
-          20,
+          22,
           "789d74bfd77cb0f2",
           1,
           "prose",
@@ -214,7 +214,7 @@
           "Deprecated tools prohibited by text; no execution"
         ],
         [
-          21,
+          23,
           "27a2d94a159902fc",
           1,
           "prose",
@@ -18445,13 +18445,13 @@
     "source_bindings": [
       {
         "path": ".agents/skills/hf-gguf-quant-jobs/SKILL.md",
-        "sha256": "dc394606bf90c028281633e4e3cd5406933cb0683ac10b464d41e9fe4c875f2d",
-        "line_count": 174
+        "sha256": "6f980a2b11fcc19eb138cc8ca277870e38cdd36338404926537190eaccfa3dbb",
+        "line_count": 186
       },
       {
         "path": ".agents/skills/hf-quant-and-layer-package-jobs/SKILL.md",
-        "sha256": "74fdf1fb481b2d37c0ffdba2b54830effc6a8a00429bd24f29e5bbb0499677f6",
-        "line_count": 157
+        "sha256": "74e0fa643a0bfdbedb947120b129847f3cf5dc41f0c5ca57cf31973b66a3a142",
+        "line_count": 164
       }
     ],
     "original_records": [

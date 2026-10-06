@@ -2,10 +2,14 @@
 pub mod catalog;
 mod catalog_remote;
 pub use catalog_remote::PreparedCatalog;
+mod commit_verification;
 mod exchange;
 mod policy;
 mod repository;
+mod verification;
+pub use commit_verification::{CommitArtifact, CommitReceipt, CommitRequest};
 pub use repository::RepositoryReceipt;
+pub use verification::VerificationReceipt;
 #[cfg(test)]
 mod tests;
 use super::{lfs_transfer, policy::ArtifactIdentity};

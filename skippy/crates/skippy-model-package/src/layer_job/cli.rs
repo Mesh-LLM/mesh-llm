@@ -33,6 +33,8 @@ enum Command {
     PrepareCard(super::card_frontdoor::Options),
     UpdateCatalog(super::catalog_frontdoor::Options),
     Upload(super::upload_frontdoor::Options),
+    VerifyUpload(super::verification_frontdoor::Options),
+    VerifyQuantCommit(super::commit_frontdoor::Options),
     EnsureRepo(super::upload_frontdoor::RepoOptions),
     Source {
         #[arg(long)]
@@ -129,6 +131,8 @@ fn run_unix(cli: Cli) -> Result<()> {
         Command::PrepareCard(options) => super::card_frontdoor::run(options, &latch)?,
         Command::UpdateCatalog(options) => super::catalog_frontdoor::run(options, &latch)?,
         Command::Upload(options) => super::upload_frontdoor::run(options, &latch)?,
+        Command::VerifyUpload(options) => super::verification_frontdoor::run(options, &latch)?,
+        Command::VerifyQuantCommit(options) => super::commit_frontdoor::run(options, &latch)?,
         Command::EnsureRepo(options) => super::upload_frontdoor::ensure_repo(options, &latch)?,
         Command::Source {
             repo,

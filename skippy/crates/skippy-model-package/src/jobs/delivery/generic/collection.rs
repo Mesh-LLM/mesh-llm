@@ -29,6 +29,22 @@ pub fn monitor_limits() -> MonitorLimits {
         ..MonitorLimits::default()
     }
 }
+/// Quant Jobs retain72h/96h allowance without changing generic conversion cadence.
+pub(in crate::jobs::delivery) fn quant_monitor_limits(
+    timeout_seconds: u64,
+) -> Result<MonitorLimits> {
+    if !(30..=345600).contains(&timeout_seconds) {
+        bail!("quant Jobs observation budget refused");
+    }
+    Ok(MonitorLimits {
+        poll_interval: std::time::Duration::from_secs(if timeout_seconds > 259200 {
+            15
+        } else {
+            10
+        }),
+        ..MonitorLimits::default()
+    })
+}
 fn observe(
     native: Value,
     locator: &Locator,
@@ -128,10 +144,39 @@ pub(in crate::jobs::delivery) async fn collect_native_until<C: Future<Output = (
     deadline: Instant,
     cancellation: C,
 ) -> Result<(MonitorReceipt, Locator, Value)> {
+    collect_native_with_policy_until(
+        client,
+        namespace,
+        job_id,
+        declaration,
+        publisher,
+        NativeCollectionPolicy {
+            deadline,
+            limits: monitor_limits(),
+        },
+        cancellation,
+    )
+    .await
+}
+
+/// Workflow-specific observation cadence, under the caller's existing absolute deadline.
+pub(in crate::jobs::delivery) struct NativeCollectionPolicy {
+    pub deadline: Instant,
+    pub limits: MonitorLimits,
+}
+pub(in crate::jobs::delivery) async fn collect_native_with_policy_until<C: Future<Output = ()>>(
+    client: &HfJobsClient,
+    namespace: &str,
+    job_id: &str,
+    declaration: &DeliveryDeclaration,
+    publisher: &Publisher,
+    policy: NativeCollectionPolicy,
+    cancellation: C,
+) -> Result<(MonitorReceipt, Locator, Value)> {
+    let NativeCollectionPolicy { deadline, limits } = policy;
     if !declaration.submitted {
         bail!("generic delivery not submitted");
     }
-    let limits = monitor_limits();
     let mut cancel = Box::pin(cancellation);
     let mut observed = Observed::default();
     let monitor = client

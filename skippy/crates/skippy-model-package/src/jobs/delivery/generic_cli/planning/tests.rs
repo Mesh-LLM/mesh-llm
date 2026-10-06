@@ -91,3 +91,33 @@ fn offline_plan_preserves_original_72h_explicit_hardware_selection() {
     assert_eq!(plan.requested_timeout_seconds, 259200);
     temp.close().unwrap();
 }
+
+#[test]
+fn offline_plan_96h_requires_combined_quantization_and_preserves_existing_72h_cap() {
+    for workflow in [
+        "quantization-and-package",
+        "quantization",
+        "generic-conversion",
+        "default-mtp-composition",
+        "unknown",
+    ] {
+        let temp = tempfile::tempdir().unwrap();
+        let mut input = request();
+        input["workflow"] = json!(workflow);
+        input["requested_timeout_seconds"] = json!(345600);
+        input["requested_flavor"] = json!("cpu-upgrade");
+        input["max_cost_usd"] = json!(100.0);
+        let result = invoke(temp.path(), &input, &[]);
+        assert_eq!(result.is_ok(), workflow == "quantization-and-package");
+        if workflow == "quantization-and-package" {
+            let p: CpuJobPlan = serde_json::from_slice(
+                &std::fs::read(temp.path().join("output/cpu-plan.json")).unwrap(),
+            )
+            .unwrap();
+            assert_eq!(p.timeout_seconds, 345600);
+            assert!(!p.timeout_bumped_to_minimum);
+        } else {
+            assert!(!temp.path().join("output").exists());
+        }
+    }
+}

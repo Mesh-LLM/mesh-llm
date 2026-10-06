@@ -11,8 +11,10 @@ New repository-side job planning and orchestration follows
 `../manage-ci/SKILL.md`: no new Python tooling; use typed `tools/xtask`
 commands behind thin Just recipes. From the repository root,
 `cargo xtool repo-consistency ci-crate-lists` is a working alias example, not
-a quantization or packaging command. The combined native quant Jobs route
-remains pending; do not create a Python job helper to fill that gap.
+a quantization or packaging command. The combined native quant Jobs route uses
+the existing `model-package-generic-jobs` facade and
+`automation hf-certify quant-job-worker`.
+See [the operator contract](../../../docs/skippy/HF_QUANTIZATION_JOBS.md).
 
 Use this skill when a workflow should produce both a quantized GGUF repo and a
 Skippy layer package from an existing BF16/FP16 GGUF repo. The quantization
@@ -20,7 +22,7 @@ phase must use `skippy-quantize`; do not use `llama-quantize`,
 `llama-quantise`, `convert_hf_to_gguf.py`, `hf_to_gguf.py`, or the misspelled
 old notes form `hf_to_gguff.py`.
 
-## Current capability and pending Jobs flow
+## Current capability and Jobs flow
 
 The current source-built `skippy-quantize` llama-api/skippy-abi quant backend
 rejects `--max-memory` and partial split windows. It requires the complete
@@ -29,9 +31,9 @@ Manifest creation, status and next-window planning do not establish that the
 requested quantization window can execute. Do not remove the memory bound or
 quantize the whole model as a substitute for the intended low-residency flow.
 
-Resumable, memory-bounded HF quant Jobs orchestration remains pending. It can
-supervise a supplied `skippy-quantize` whose executable, source revision and
-native runtime are pinned and whose actual preflight and finite window run
+The native Jobs coordinator supervises a supplied `skippy-quantize` whose
+executable, source revision and native runtime are pinned and whose actual
+preflight and finite window run
 prove the required recipe, memory and split behavior. An unspecified image or
 external job helper is not that proof. No new quantizer feature or native ABI
 change is implied by this skill.
@@ -118,8 +120,13 @@ model card.
 ## HF Jobs Workflow
 
 The intended combined Job keeps the quantized GGUF repo as a durable boundary
-and retains the four-day allowance. Native combined submission/worker/collection
-wiring is pending; no launch command is supplied for an unprovided job helper.
+and retains the four-day allowance. The native combined submission, worker and
+collection owner uses workflow
+`quantization-and-package` with a 345600-second whole budget. Follow
+[HF quantization Jobs](../../../docs/skippy/HF_QUANTIZATION_JOBS.md) for the exact
+request and prepare/submit/collect commands. Submission requires explicit
+authorization and `--confirm-submission`; preparation makes no remote request.
+Tool/window fixtures do not qualify a model, memory profile, image or cloud run.
 The owner must:
 
 1. Admit a complete read-only BF16/FP16 source at an immutable revision, recipe

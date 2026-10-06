@@ -8,6 +8,8 @@ use std::time::Instant;
 #[serde(deny_unknown_fields)]
 struct CpuHardwareRequest {
     schema_version: u32,
+    #[serde(default)]
+    workflow: Option<String>,
     hardware: Vec<HardwareFlavor>,
     requested_flavor: String,
     requested_timeout_seconds: u64,
@@ -25,10 +27,15 @@ fn text(value: &str) -> bool {
     !value.is_empty() && value.len() <= 256 && !value.chars().any(char::is_control)
 }
 fn plan(request: &CpuHardwareRequest) -> Result<CpuJobPlan> {
+    let cap = match request.workflow.as_deref() {
+        None | Some("generic-conversion" | "default-mtp-composition" | "quantization") => 259200,
+        Some("quantization-and-package") => 345600,
+        _ => bail!("offline planner workflow refused"),
+    };
     if request.schema_version != 1
         || !(1..=256).contains(&request.hardware.len())
         || !text(&request.requested_flavor)
-        || !(30..=259200).contains(&request.requested_timeout_seconds)
+        || !(30..=cap).contains(&request.requested_timeout_seconds)
         || !(1..=16 * 1024_u64.pow(4)).contains(&request.model_size_bytes)
         || !request.max_cost_usd.is_finite()
         || request.max_cost_usd <= 0.0
@@ -65,7 +72,7 @@ fn plan(request: &CpuHardwareRequest) -> Result<CpuJobPlan> {
         request.requested_timeout_seconds,
         request.model_size_bytes,
     )?;
-    if plan.timeout_seconds > 259200
+    if plan.timeout_seconds > cap
         || !plan.max_cost_usd.is_finite()
         || plan.max_cost_usd > request.max_cost_usd
     {

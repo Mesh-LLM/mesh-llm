@@ -22,6 +22,8 @@ pub mod generic;
 #[cfg(unix)]
 #[path = "delivery/generic_cli.rs"]
 pub mod generic_cli;
+#[path = "delivery/quantization.rs"]
+pub mod quantization;
 #[path = "delivery/receipts.rs"]
 pub mod receipts;
 #[path = "delivery/request_transport.rs"]

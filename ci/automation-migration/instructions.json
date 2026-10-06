@@ -50,7 +50,13 @@
       "replacement_owner": "tools/xtask for repository/process/docs/QA automation; Rust or native tests for product behavior; retained agent/model SDK work only under exact exception qualification",
       "cutover_task": 5,
       "actionability": "actionable instructions with direct commands and repository policy",
-      "unresolved": true
+      "unresolved": true,
+      "current_source_binding": {
+        "path": "AGENTS.md",
+        "sha256": "ffa6ba408f664efc520f2bf716bc1064fb5606865cdaf993a6fc90fad7e0d988",
+        "line_count": 805
+      },
+      "latest_review": "Current language clause uses component-owned retained Python tests, optional isolated SDK and locked reader lanes, and the Rust ci-validate gate. Historical command inventory and other unresolved qualification remain preserved; the generic Python unittest gate is retired."
     },
     {
       "path": ".github/AGENTS.md",
@@ -554,16 +560,16 @@
       "classification": "actionable",
       "owner": "Hugging Face job maintainers",
       "old_commands": [],
-      "replacement_owner": "Native metadata/verification and existing artifact packaging owners; supported supplied quantizer Jobs orchestration pending",
+      "replacement_owner": "Native model-package-generic-jobs facade, hf-certify quant-job-worker and conditional layer-package delivery owners; supplied supported quantizer and runtime qualification pending",
       "cutover_task": 5,
-      "actionability": "Native artifact checks and conditional existing-artifact packaging guidance; no runnable quant Jobs launch",
+      "actionability": "Native quant Jobs planning, explicit admission, finite window orchestration and conditional layer-package delivery guidance; real supported-tool and hosted qualification pending",
       "unresolved": true,
       "current_source_binding": {
         "path": ".agents/skills/hf-quant-and-layer-package-jobs/SKILL.md",
-        "sha256": "74fdf1fb481b2d37c0ffdba2b54830effc6a8a00429bd24f29e5bbb0499677f6",
-        "line_count": 157
+        "sha256": "74e0fa643a0bfdbedb947120b129847f3cf5dc41f0c5ca57cf31973b66a3a142",
+        "line_count": 164
       },
-      "latest_review": "Removed unprovided external Python Job templates and unsupported current-tool memory/window examples. Supplied supported quantizer native Jobs orchestration remains pending; no execution, new exception or capability completion."
+      "latest_review": "Native model-package-generic-jobs facade and automation hf-certify quant-job-worker route are integrated in current operator guidance. A supplied immutable supported quantizer remains required: the current source-built quant backend rejects the memory bound and partial split windows. Real-tool/model execution, peak RSS and hosted workflow qualification remain unproven; no execution, new Python exception or capability completion is recorded."
     },
     {
       "path": ".agents/skills/hf-quant-and-layer-package-jobs/agents/openai.yaml",
@@ -637,16 +643,16 @@
       "classification": "actionable",
       "owner": "Hugging Face quantization maintainers",
       "old_commands": [],
-      "replacement_owner": "Native metadata/verification and existing artifact packaging owners; supported supplied quantizer Jobs orchestration pending",
+      "replacement_owner": "Native model-package-generic-jobs facade, hf-certify quant-job-worker and conditional layer-package delivery owners; supplied supported quantizer and runtime qualification pending",
       "cutover_task": 5,
-      "actionability": "Native artifact checks and conditional existing-artifact packaging guidance; no runnable quant Jobs launch",
+      "actionability": "Native quant Jobs planning, explicit admission, finite window orchestration and conditional layer-package delivery guidance; real supported-tool and hosted qualification pending",
       "unresolved": true,
       "current_source_binding": {
         "path": ".agents/skills/hf-gguf-quant-jobs/SKILL.md",
-        "sha256": "dc394606bf90c028281633e4e3cd5406933cb0683ac10b464d41e9fe4c875f2d",
-        "line_count": 174
+        "sha256": "6f980a2b11fcc19eb138cc8ca277870e38cdd36338404926537190eaccfa3dbb",
+        "line_count": 186
       },
-      "latest_review": "Removed unprovided external Python Job templates and unsupported current-tool memory/window examples. Supplied supported quantizer native Jobs orchestration remains pending; no execution, new exception or capability completion."
+      "latest_review": "Native model-package-generic-jobs facade and automation hf-certify quant-job-worker route are integrated in current operator guidance. A supplied immutable supported quantizer remains required: the current source-built quant backend rejects the memory bound and partial split windows. Real-tool/model execution, peak RSS and hosted workflow qualification remain unproven; no execution, new Python exception or capability completion is recorded."
     },
     {
       "path": ".agents/skills/hf-gguf-quant-jobs/agents/openai.yaml",
@@ -1046,13 +1052,13 @@
     "source_bindings": [
       {
         "path": ".agents/skills/hf-gguf-quant-jobs/SKILL.md",
-        "sha256": "dc394606bf90c028281633e4e3cd5406933cb0683ac10b464d41e9fe4c875f2d",
-        "line_count": 174
+        "sha256": "6f980a2b11fcc19eb138cc8ca277870e38cdd36338404926537190eaccfa3dbb",
+        "line_count": 186
       },
       {
         "path": ".agents/skills/hf-quant-and-layer-package-jobs/SKILL.md",
-        "sha256": "74fdf1fb481b2d37c0ffdba2b54830effc6a8a00429bd24f29e5bbb0499677f6",
-        "line_count": 157
+        "sha256": "74e0fa643a0bfdbedb947120b129847f3cf5dc41f0c5ca57cf31973b66a3a142",
+        "line_count": 164
       }
     ],
     "original_records": [

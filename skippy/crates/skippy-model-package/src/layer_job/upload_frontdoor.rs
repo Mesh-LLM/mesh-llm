@@ -1,4 +1,6 @@
-//! Explicit one-artifact upload frontdoor; source pins are observed FD bytes, not model certification.
+#[path = "upload_frontdoor/terminal_publication.rs"]
+mod terminal_publication;
+// Explicit one-artifact upload frontdoor; source pins are observed FD bytes, not model certification.
 use crate::snapshot_promotion::{
     local_publisher::{SignalLatch, regular_input},
     package_upload,
@@ -41,7 +43,7 @@ pub(super) struct Options {
     #[arg(long)]
     pub confirm: bool,
 }
-fn hash(
+pub(super) fn hash(
     file: &mut std::fs::File,
     until: Instant,
     latch: &SignalLatch,
@@ -167,12 +169,12 @@ pub(super) fn run(options: Options, latch: &SignalLatch) -> Result<()> {
         receipt.error.get_or_insert(error.to_string());
     }
     let completed = receipt.completed && receipt.error.is_none();
-    super::cli::fresh(
+    terminal_publication::publish(
         &root,
         "upload.json",
-        &serde_json::to_vec(
-            &serde_json::json!({"schema_version":1,"request_sha256":request_sha256,"status":if completed{"PUBLISHED"}else{"FAILED"},"source_identity_origin":"observed_local_fd","publication":receipt}),
-        )?,
+        serde_json::json!({"schema_version":1,"request_sha256":request_sha256,"status":if completed{"PUBLISHED"}else{"FAILED"},"source_identity_origin":"observed_local_fd","publication":receipt}),
+        || super::cli::terminal(latch, until),
+        || Ok(()),
     )?;
     if !completed {
         bail!("package artifact publication incomplete; inspect correlated receipt");
