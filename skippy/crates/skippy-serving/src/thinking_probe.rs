@@ -47,16 +47,18 @@ const PROBE_MESSAGES_JSON: &str = r#"[{"role":"user","content":"Answer 2 + 2."}]
 
 /// Effort values the probe exercises, in the order they are reported.
 ///
-/// Bounded on purpose: an untested value stays unreported rather than being
-/// inferred from a neighbour. `xhigh` is included because it is the canonical
-/// value on the Qwen3.8 model card; a template whose default already selects it
-/// will still omit it from `efforts`, since it then matches a plain thinking-on
-/// render.
-const PROBE_EFFORTS: [ReasoningEffort; 4] = [
+/// Try every effort accepted by the client request path. A value whose render
+/// matches plain thinking-on is still omitted, even if a model card names it.
+/// `none` is an effort ask with thinking off; this matters for templates whose
+/// mode switch is `reasoning_effort=none` rather than `enable_thinking=false`.
+const PROBE_EFFORTS: [ReasoningEffort; 7] = [
+    ReasoningEffort::None,
+    ReasoningEffort::Minimal,
     ReasoningEffort::Low,
     ReasoningEffort::Medium,
     ReasoningEffort::High,
     ReasoningEffort::Xhigh,
+    ReasoningEffort::Max,
 ];
 
 /// Renders a chat template. Implemented by the native runtime in production and
@@ -404,6 +406,29 @@ mod tests {
         }
     }
 
+    /// A template whose documented off/on modes depend on effort, not the
+    /// generic thinking toggle (as in the Mistral Small 4 card).
+    struct NoneHighTemplate;
+
+    impl ChatTemplateProbeRenderer for NoneHighTemplate {
+        fn render(
+            &self,
+            messages_json: &str,
+            options: ChatTemplateJsonOptions,
+        ) -> Result<String, String> {
+            let kwargs = kwargs(&options);
+            let mode = match kwargs
+                .get("reasoning_effort")
+                .and_then(serde_json::Value::as_str)
+            {
+                Some("none") => "off",
+                Some("high") => "high",
+                _ => "default",
+            };
+            Ok(format!("<|mode={mode}|>{messages_json}"))
+        }
+    }
+
     /// A template that renders every effort except `medium`, which it maps to the
     /// plain thinking-on render.
     struct PartialEffortTemplate;
@@ -478,10 +503,13 @@ mod tests {
             ThinkingControls {
                 enabled: true,
                 efforts: vec![
+                    "none".to_string(),
+                    "minimal".to_string(),
                     "low".to_string(),
                     "medium".to_string(),
                     "high".to_string(),
                     "xhigh".to_string(),
+                    "max".to_string(),
                 ],
             }
         );
@@ -495,19 +523,33 @@ mod tests {
         assert_eq!(
             report.controls().efforts,
             vec![
+                "none".to_string(),
+                "minimal".to_string(),
                 "low".to_string(),
                 "medium".to_string(),
                 "high".to_string(),
-                "xhigh".to_string()
+                "xhigh".to_string(),
+                "max".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn effort_only_none_high_modes_are_offered_without_a_generic_toggle() {
+        let defaults = defaults();
+        let report = run_thinking_probe(&NoneHighTemplate, &inputs(&defaults));
+        assert!(!report.controls().enabled);
+        assert_eq!(report.controls().efforts, vec!["none", "high"]);
     }
 
     #[test]
     fn an_effort_that_renders_like_a_plain_thinking_on_request_is_not_offered() {
         let defaults = defaults();
         let report = run_thinking_probe(&PartialEffortTemplate, &inputs(&defaults));
-        assert_eq!(report.controls().efforts, vec!["low", "high", "xhigh"]);
+        assert_eq!(
+            report.controls().efforts,
+            vec!["none", "minimal", "low", "high", "xhigh", "max"]
+        );
     }
 
     #[test]
@@ -557,7 +599,7 @@ mod tests {
         run_thinking_probe(&recorder, &inputs(&defaults));
         let recorded = recorder.0.lock().expect("recording lock poisoned").clone();
 
-        let effort_case = &recorded[3];
+        let effort_case = &recorded[5];
         assert_eq!(
             effort_case.enable_thinking,
             Some(true),
@@ -568,6 +610,12 @@ mod tests {
         // Deployment defaults are part of the effective path for every case.
         assert_eq!(effort_kwargs["deployment"], "x");
         assert_eq!(effort_kwargs["thinking_budget"], 1024);
+        let none_case = &recorded[3];
+        assert_eq!(none_case.enable_thinking, Some(false));
+        assert_eq!(kwargs(none_case)["reasoning_effort"], "none");
+        let max_case = &recorded[9];
+        assert_eq!(max_case.enable_thinking, Some(true));
+        assert_eq!(kwargs(max_case)["reasoning_effort"], "max");
         // A deployment budget is part of the effective path: it turns a silent
         // request's thinking on, exactly as serving would.
         assert_eq!(recorded[0].enable_thinking, Some(true));

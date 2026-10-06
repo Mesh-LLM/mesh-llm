@@ -28,9 +28,9 @@ pub struct ThinkingControls {
     /// Effort values that visibly changed the rendered prompt relative to a
     /// plain thinking-on render, in probe order.
     ///
-    /// Empty when the template does not distinguish effort. Only `low`,
-    /// `medium`, `high`, and `xhigh` are probed; other accepted values stay
-    /// unreported.
+    /// Empty when the template does not distinguish effort. The probe tries
+    /// every accepted effort value (`none`, `minimal`, `low`, `medium`, `high`,
+    /// `xhigh`, `max`); values matching plain thinking-on stay unreported.
     pub efforts: Vec<String>,
 }
 
