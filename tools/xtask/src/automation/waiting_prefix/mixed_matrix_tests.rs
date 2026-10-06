@@ -108,3 +108,116 @@ fn mixed_matrix_injected_failure_cancel_deadline_and_profile_mismatch_are_closed
     changed.manifest.as_mut().unwrap().prompts.pop();
     assert!(changed.validate().is_err());
 }
+
+fn observed() -> Value {
+    json!({"cells":[{"round":1,"version":"old","requests":[{"completion_tokens":2}]}],"comparison":{"qualified":false,"output_parity":{"exact_matches":1,"comparable_requests":1}},"error":null})
+}
+#[test]
+fn mixed_terminal_success_preserves_unqualified_comparison_and_original_default_workload() {
+    let mut output = observed();
+    let comparison = output["comparison"].clone();
+    finalize(
+        &mut output,
+        Ok(()),
+        &Cancellation::default(),
+        Instant::now() + Duration::from_secs(30),
+    )
+    .unwrap();
+    assert_eq!(output["status"], "mixed_matrix_completed");
+    assert_eq!(output["orchestration_completed"], true);
+    assert_eq!(output["comparison"], comparison);
+    assert_eq!(output["comparison"]["qualified"], false);
+    assert!(output["terminal_error"].is_null());
+    assert!(rendered(&output).contains("qualification remains"));
+    let mut given = input();
+    given.shape = serde_json::from_value(json!({"rounds":8,"anchors":4,"prefills":8,"anchor_prompt_blocks":8,"prefill_prompt_blocks":256,"anchor_output_tokens":128,"prefill_output_tokens":8,"prefill_delay_ms":100.0,"prefill_stagger_ms":5.0,"lanes":12,"n_batch":1024,"n_ubatch":256,"prefill_adaptive_start":256,"prefill_adaptive_step":256,"prefill_adaptive_max":256,"adaptive_target_new_only":false})).unwrap();
+    given.manifest = None;
+    let projected = worker(&given, &given.old, 1).unwrap();
+    projected.validate().unwrap();
+    assert_eq!(projected.requests.len(), 12);
+    assert_eq!(
+        projected
+            .requests
+            .iter()
+            .filter(|r| r.role == Role::Anchor)
+            .count(),
+        4
+    );
+    assert_eq!(
+        projected
+            .requests
+            .iter()
+            .filter(|r| r.role == Role::Prefill)
+            .count(),
+        8
+    );
+    assert!(projected.requests[4].prompt.prompt.len() > 16 * 1024);
+    assert_eq!(projected.requests[4].delay_ms, 100.0);
+    assert_eq!(projected.requests[11].delay_ms, 135.0);
+}
+#[test]
+fn mixed_terminal_cancel_retains_cells_and_comparison_without_completion() {
+    let mut output = observed();
+    let prior = output.clone();
+    let cancel = Cancellation::default();
+    cancel.cancel();
+    assert!(
+        finalize(
+            &mut output,
+            Ok(()),
+            &cancel,
+            Instant::now() + Duration::from_secs(30)
+        )
+        .is_err()
+    );
+    assert_eq!(output["cells"], prior["cells"]);
+    assert_eq!(output["comparison"], prior["comparison"]);
+    assert_eq!(output["orchestration_completed"], false);
+    assert_eq!(output["status"], "mixed_matrix_failed");
+    assert_eq!(output["terminal_error"], "mixed terminal cancellation");
+    assert!(rendered(&output).contains("FAILED"));
+}
+#[test]
+fn mixed_terminal_deadline_retains_observations_without_completion() {
+    let mut output = observed();
+    let prior = output.clone();
+    assert!(
+        finalize(
+            &mut output,
+            Ok(()),
+            &Cancellation::default(),
+            Instant::now()
+        )
+        .is_err()
+    );
+    assert_eq!(output["cells"], prior["cells"]);
+    assert_eq!(output["comparison"], prior["comparison"]);
+    assert_eq!(output["orchestration_completed"], false);
+    assert_eq!(
+        output["terminal_error"],
+        "mixed terminal deadline exhausted"
+    );
+}
+#[test]
+fn mixed_terminal_finish_failure_preserves_prior_error_and_observations() {
+    let mut output = observed();
+    output["error"] = json!("prior parity refusal");
+    let prior = output.clone();
+    assert!(
+        finalize(
+            &mut output,
+            Err("inert signal restoration refusal".into()),
+            &Cancellation::default(),
+            Instant::now() + Duration::from_secs(30)
+        )
+        .is_err()
+    );
+    assert_eq!(output["error"], "prior parity refusal");
+    assert_eq!(output["cells"], prior["cells"]);
+    assert_eq!(output["comparison"], prior["comparison"]);
+    assert_eq!(
+        output["terminal_error"],
+        "mixed interrupt finalization failed"
+    );
+    assert_eq!(output["orchestration_completed"], false);
+}

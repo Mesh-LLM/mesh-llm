@@ -144,3 +144,19 @@ fn rejects_file_api_path_when_upload_artifact_is_absent() {
 
     assert!(matches!(when, Err(ArtifactError::MissingArtifact { .. })));
 }
+
+#[test]
+fn jobs_cancel_cli_consumes_unconfirmed_acknowledgment_receipt() {
+    let cli = include_str!("../../../crates/mesh-llm-commands/src/model_package.rs");
+    let region = cli
+        .split_once("async fn run_cancel(")
+        .unwrap()
+        .1
+        .split_once("async fn run_list(")
+        .unwrap()
+        .0;
+    assert!(region.contains("client.cancel_receipt(&namespace, &id).await?"));
+    assert!(region.contains("serde_json::to_string_pretty(&receipt)?"));
+    assert!(region.contains("terminal state is unconfirmed"));
+    assert!(!region.contains("\"canceled\": true") && !region.contains("Job {id} canceled"));
+}

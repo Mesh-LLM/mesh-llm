@@ -4,7 +4,7 @@ use skippy_package_format::{
 };
 use std::collections::BTreeMap;
 
-pub(super) fn manifest(path: &str, byte_size: u64, sha256: String) -> Vec<u8> {
+pub(crate) fn manifest(path: &str, byte_size: u64, sha256: String) -> Vec<u8> {
     let mut manifest = PackageManifest {
         schema_version: PACKAGE_SCHEMA_VERSION,
         package_id: String::new(),

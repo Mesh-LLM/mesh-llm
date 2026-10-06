@@ -340,7 +340,7 @@
       "file": "scripts/tests/test_ci_windows_composition.py",
       "members": [
         [
-          578,
+          580,
           "66ed60a896c4a06c",
           1,
           "subprocess-or-interpreter",
@@ -360,7 +360,7 @@
     "target_or_boundary",
     "source_specific_reason"
   ],
-  "observed_source_sha256": "056ce838af986d34841511bc59f199d93ee9647b3aebf9b339caa3992fd9a431",
+  "observed_source_sha256": "bf411f49ab0e0f9f12a727d63f5adda5334c8044ef72ec77beabd7d04d906a61",
   "schema_version": 1,
   "scope": "tracked scripts/tests/**/*.py; source candidate shard, not global acceptance",
   "status": "All observed test-source scanner candidates are bound; transitive child closure and global task 1 remain incomplete. No optional subprocess test is asserted to be a production dependency.",

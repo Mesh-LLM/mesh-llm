@@ -332,3 +332,49 @@ mod suffix_proposer;
 
 #[path = "migration_lifecycle/cache_matrix_cli.rs"]
 mod cache_matrix_cli;
+
+#[path = "migration_lifecycle/hf_acquisition_cli.rs"]
+mod hf_acquisition_cli;
+
+#[cfg(target_os = "linux")]
+#[path = "migration_lifecycle/hf_bootstrap_cli.rs"]
+mod hf_bootstrap_cli;
+
+#[cfg(target_os = "linux")]
+#[path = "migration_lifecycle/hf_job_worker_cli.rs"]
+mod hf_job_worker_cli;
+
+#[path = "migration_lifecycle/hf_raw_conversion.rs"]
+mod hf_raw_conversion;
+
+#[cfg(unix)]
+#[path = "migration_lifecycle/radix_full_cli.rs"]
+mod radix_full_cli;
+
+#[path = "migration_lifecycle/canary_repair_source_contracts.rs"]
+mod canary_repair_source_contracts;
+
+#[path = "migration_lifecycle/canary_preamble_inert_goose.rs"]
+mod canary_preamble_inert_goose;
+
+#[path = "migration_lifecycle/canary_full_gates/mod.rs"]
+mod canary_full_gates;
+
+#[path = "migration_lifecycle/endpoint_model_discovery.rs"]
+mod endpoint_model_discovery;
+
+#[path = "migration_lifecycle/wan_observation.rs"]
+mod wan_observation;
+
+#[path = "migration_lifecycle/canary_failure_publisher.rs"]
+mod canary_failure_publisher;
+
+#[path = "migration_lifecycle/remote_handoff_summary.rs"]
+mod remote_handoff_summary;
+
+#[cfg(unix)]
+#[path = "migration_lifecycle/parity_local_plan_cli.rs"]
+mod parity_local_plan_cli;
+
+#[path = "migration_lifecycle/competitive_inputs_local_cli.rs"]
+mod competitive_inputs_local_cli;

@@ -236,13 +236,11 @@ pub(super) fn run(args: &[String]) -> DynResult<()> {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?;
-    let value = runtime.block_on(execute(&input, interrupt.cancellation(), output.parent()));
-    let publication = io::fresh(output, &serde_json::to_vec_pretty(&value)?);
-    let finished = interrupt.finish();
-    publication?;
-    finished?;
-    if !value["error"].is_null() {
-        return Err("restart cohort failed; receipt retained".into());
-    }
-    Ok(())
+    let cancellation = interrupt.cancellation();
+    let deadline = Instant::now() + Duration::from_secs(input.timeout_secs);
+    let mut value = runtime.block_on(execute(&input, cancellation.clone(), output.parent()));
+    let finished: DynResult<()> = interrupt.finish().map_err(|e| e.to_string().into());
+    let terminal = super::kv_terminal::finalize(&mut value, finished, &cancellation, deadline);
+    io::fresh(output, &serde_json::to_vec_pretty(&value)?)?;
+    terminal
 }

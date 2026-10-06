@@ -12,7 +12,7 @@ mod fields;
 mod generate;
 pub(crate) mod json_bytes;
 mod manifest;
-mod parity_download;
+pub(crate) mod parity_download;
 mod projection;
 mod projector_download;
 mod registry;
@@ -64,4 +64,19 @@ pub(crate) fn run(
         ModelsCommand::ProjectorDownload => unreachable!("projector dispatch returned"),
     };
     report.emit()
+}
+
+pub(crate) fn acquire_pinned_projector(
+    input: &str,
+    output: &std::path::Path,
+    expected: &str,
+    maximum: u64,
+    deadline: std::time::Instant,
+    cancellation: &crate::process::Cancellation,
+) -> DynResult<String> {
+    projector_download::acquire_pinned(input, output, expected, maximum, deadline, cancellation)
+}
+
+pub(crate) fn validate_projector_origin(input: &str) -> DynResult<()> {
+    projector_download::validate_origin(input)
 }

@@ -23,25 +23,52 @@ pub(super) fn download(
     output: &Path,
     cancellation: &process::Cancellation,
 ) -> DynResult<String> {
-    let started = Instant::now();
+    download_until(
+        input,
+        output,
+        cancellation,
+        Instant::now() + Duration::from_secs(60),
+        64 * 1024 * 1024 * 1024,
+        None,
+    )
+}
+
+pub(super) fn download_until(
+    input: &str,
+    output: &Path,
+    cancellation: &process::Cancellation,
+    deadline: Instant,
+    maximum: u64,
+    expected: Option<&str>,
+) -> DynResult<String> {
+    if !(4..=64 * 1024 * 1024 * 1024).contains(&maximum) {
+        return Err("invalid projector byte cap".into());
+    }
+    if expected.is_some() {
+        match std::fs::symlink_metadata(output) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            _ => return Err("pinned projector output must be fresh".into()),
+        }
+    }
     let mut url = super::url_policy::trusted(input)?;
-    let curl = process::curl_https::Curl::discover_for(remaining(started)?, cancellation)?;
+    let curl = process::curl_https::Curl::discover_for(remaining_until(deadline)?, cancellation)?;
     let parent = output.parent().ok_or("projector output parent absent")?;
     std::fs::create_dir_all(parent)?;
     let directory = tempfile::tempdir_in(parent)?;
     let result: DynResult<String> = (|| {
         for hop in 0..=10 {
             let host = url.host_str().ok_or("projector host absent")?;
-            let addresses = super::resolver::resolve(host, remaining(started)?, cancellation)?;
+            let addresses =
+                super::resolver::resolve(host, remaining_until(deadline)?, cancellation)?;
             let pin = super::url_policy::pins(host, &addresses)?;
             match exchange(
                 &curl,
                 &url,
                 &pin,
                 directory.path(),
-                remaining(started)?,
+                remaining_until(deadline)?,
                 cancellation,
-                64 * 1024 * 1024 * 1024,
+                maximum,
             )? {
                 Reply::Redirect(location) => {
                     if hop == 10 {
@@ -50,13 +77,7 @@ pub(super) fn download(
                     url = super::url_policy::trusted(url.join(&location)?.as_str())?;
                 }
                 Reply::Complete(body) => {
-                    return publish(
-                        &body,
-                        output,
-                        64 * 1024 * 1024 * 1024,
-                        started,
-                        cancellation,
-                    );
+                    return publish_until(&body, output, maximum, deadline, cancellation, expected);
                 }
             }
         }
@@ -76,12 +97,11 @@ pub(super) fn download(
         .into()),
     }
 }
-fn remaining(started: Instant) -> DynResult<Duration> {
-    let duration = Duration::from_secs(60).saturating_sub(started.elapsed());
-    if duration.is_zero() {
-        return Err("projector total deadline exceeded".into());
-    }
-    Ok(duration)
+fn remaining_until(deadline: Instant) -> DynResult<Duration> {
+    deadline
+        .checked_duration_since(Instant::now())
+        .filter(|d| !d.is_zero())
+        .ok_or_else(|| "projector total deadline exceeded".into())
 }
 
 pub(super) enum Reply {
@@ -188,6 +208,7 @@ fn headers_final(bytes: &[u8]) -> DynResult<(u16, Option<String>, Option<u64>)> 
     }
     final_headers.ok_or("terminal response headers absent".into())
 }
+#[cfg(test)]
 fn publish(
     body: &Path,
     output: &Path,
@@ -195,7 +216,25 @@ fn publish(
     started: Instant,
     cancellation: &process::Cancellation,
 ) -> DynResult<String> {
-    remaining(started)?;
+    publish_until(
+        body,
+        output,
+        maximum,
+        started + Duration::from_secs(60),
+        cancellation,
+        None,
+    )
+}
+
+pub(super) fn publish_until(
+    body: &Path,
+    output: &Path,
+    maximum: u64,
+    deadline: Instant,
+    cancellation: &process::Cancellation,
+    expected: Option<&str>,
+) -> DynResult<String> {
+    remaining_until(deadline)?;
     if cancellation.is_cancelled() {
         return Err("projector publication cancelled".into());
     }
@@ -213,7 +252,7 @@ fn publish(
     let mut count = 4u64;
     let mut buffer = vec![0; 8 * 1024 * 1024];
     loop {
-        remaining(started)?;
+        remaining_until(deadline)?;
         if cancellation.is_cancelled() {
             return Err("projector publication cancelled".into());
         }
@@ -231,12 +270,20 @@ fn publish(
         temporary.write_all(&buffer[..size])?;
     }
     temporary.flush()?;
-    remaining(started)?;
+    remaining_until(deadline)?;
     if cancellation.is_cancelled() {
         return Err("projector publication cancelled".into());
     }
-    temporary.persist(output)?;
-    Ok(hex::encode(hash.finalize()))
+    let observed = hex::encode(hash.finalize());
+    if expected.is_some_and(|value| value != observed) {
+        return Err("projector byte pin mismatch".into());
+    }
+    if expected.is_some() {
+        temporary.persist_noclobber(output)?;
+    } else {
+        temporary.persist(output)?;
+    }
+    Ok(observed)
 }
 
 #[cfg(test)]
@@ -275,5 +322,114 @@ mod tests {
         assert_eq!(std::fs::read(&output).unwrap(), b"GGUFvalid");
         assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 2);
         directory.close().unwrap();
+    }
+}
+
+#[cfg(test)]
+mod acquisition_tests {
+    use super::*;
+    use crate::automation::tls_fixture::{Reply as TlsReply, Server};
+    #[test]
+    fn hf_acquire_local_tls_to_fresh_pinned_bytes_retains_no_auth_or_network_fallback() {
+        let bytes = b"GGUFsuccess";
+        let server = Server::with_host(vec![TlsReply::bytes(200, bytes.to_vec())], "hf.co");
+        let curl = process::curl_https::Curl::fixture(&server.ca);
+        let url = Url::parse(&server.base).unwrap();
+        let pin = format!("hf.co:{}:127.0.0.1", url.port().unwrap());
+        let root = tempfile::tempdir().unwrap();
+        let reply = exchange(
+            &curl,
+            &url,
+            &pin,
+            root.path(),
+            Duration::from_secs(8),
+            &process::Cancellation::default(),
+            64,
+        )
+        .unwrap();
+        let Reply::Complete(body) = reply else {
+            panic!("complete local TLS body required")
+        };
+        let output = root.path().join("projector.gguf");
+        let expected = hex::encode(Sha256::digest(bytes));
+        assert_eq!(
+            publish_until(
+                &body,
+                &output,
+                64,
+                Instant::now() + Duration::from_secs(5),
+                &process::Cancellation::default(),
+                Some(&expected)
+            )
+            .unwrap(),
+            expected
+        );
+        assert_eq!(std::fs::read(&output).unwrap(), bytes);
+        assert!(
+            publish_until(
+                &body,
+                &output,
+                64,
+                Instant::now() + Duration::from_secs(5),
+                &process::Cancellation::default(),
+                Some(&expected)
+            )
+            .is_err()
+        );
+        assert!(
+            !server.requests.lock().unwrap()[0]
+                .0
+                .to_ascii_lowercase()
+                .contains("authorization:")
+        );
+        drop(server);
+        root.close().unwrap();
+    }
+    #[test]
+    fn hf_acquire_pin_cap_magic_cancel_and_deadline_refuse_before_publication() {
+        let root = tempfile::tempdir().unwrap();
+        let body = root.path().join("body");
+        let output = root.path().join("fresh");
+        for mode in ["pin", "cap", "magic", "cancel", "deadline"] {
+            std::fs::write(
+                &body,
+                if mode == "magic" {
+                    b"badGsuccess"
+                } else {
+                    b"GGUFsuccess"
+                },
+            )
+            .unwrap();
+            let cancel = process::Cancellation::default();
+            if mode == "cancel" {
+                cancel.cancel();
+            }
+            let until = Instant::now()
+                + if mode == "deadline" {
+                    Duration::ZERO
+                } else {
+                    Duration::from_secs(5)
+                };
+            let pin = if mode == "pin" {
+                "a".repeat(64)
+            } else {
+                hex::encode(Sha256::digest(b"GGUFsuccess"))
+            };
+            assert!(
+                publish_until(
+                    &body,
+                    &output,
+                    if mode == "cap" { 4 } else { 64 },
+                    until,
+                    &cancel,
+                    Some(&pin)
+                )
+                .is_err(),
+                "{mode}"
+            );
+            assert!(!output.exists());
+            assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 1);
+        }
+        root.close().unwrap();
     }
 }

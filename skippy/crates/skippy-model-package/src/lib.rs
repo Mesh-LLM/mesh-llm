@@ -29,3 +29,5 @@ pub fn build_hf_client() -> Result<hf_hub::HFClient> {
 }
 
 pub mod snapshot_promotion;
+
+pub mod layer_job;

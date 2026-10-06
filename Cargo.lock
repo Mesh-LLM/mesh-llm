@@ -8765,10 +8765,12 @@ version = "0.78.0"
 dependencies = [
  "anyhow",
  "clap",
+ "libc",
  "memmap2",
  "safetensors",
  "serde",
  "serde_json",
+ "sha2 0.11.0",
  "skippy-package-format",
 ]
 
@@ -8820,11 +8822,13 @@ dependencies = [
  "chrono",
  "clap",
  "futures",
+ "libc",
  "mesh-llm-events",
  "reqwest 0.13.5",
  "serde",
  "serde_json",
  "sha2 0.11.0",
+ "signal-hook-registry",
  "skippy-hf-hub",
  "skippy-model-hf",
  "skippy-model-ref",

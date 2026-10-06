@@ -39,6 +39,7 @@ impl Server {
                     std::thread::sleep(Duration::from_millis(5));
                     continue;
                 };
+                socket.set_nonblocking(false).unwrap();
                 socket
                     .set_read_timeout(Some(Duration::from_secs(1)))
                     .unwrap();
@@ -249,6 +250,8 @@ fn competitive_owned_cli_preserves_prefix_order_prompt_hash_and_usage_without_co
     )
     .unwrap();
     assert_eq!(summary["passed"], true);
+    assert_eq!(summary["terminal_complete"], true);
+    assert!(summary["terminal_error"].is_null());
     assert_eq!(summary["requests"], 1);
     assert!(!root.path().join("output/complete.json").exists());
     root.close().unwrap();

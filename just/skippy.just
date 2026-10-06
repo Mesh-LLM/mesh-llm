@@ -157,3 +157,11 @@ metrics-server db="/tmp/mesh-metrics.duckdb" http_addr="127.0.0.1:18080" otlp_ad
 # Native publisher helper for the isolated layer-package job.
 snapshot-promoter-release-build:
     just with-lld cargo build --release --locked -p skippy-model-package --bin promote-layer-package-snapshot
+
+# Isolated supplied-artifact HF publisher; never linked into xtask.
+model-publisher-release-build:
+    just with-lld cargo build --release --locked -p skippy-model-package --bin model-package-publish
+
+# Read-only HF source metadata/package-root helper for the isolated job.
+layer-job-helper-release-build:
+    just with-lld cargo build --release --locked -p skippy-model-package --bin model-package-layer-job

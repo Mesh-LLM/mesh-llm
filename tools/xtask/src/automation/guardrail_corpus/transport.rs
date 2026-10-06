@@ -154,6 +154,45 @@ pub(in crate::automation) async fn exchange_owned_with_authorization(
     cancellation: &crate::process::Cancellation,
     authorization: Option<&str>,
 ) -> DynResult<Response> {
+    owned_exchange(
+        base,
+        suffix,
+        body,
+        deadline,
+        cancellation,
+        authorization,
+        false,
+    )
+    .await
+}
+pub(in crate::automation) async fn exchange_owned_with_private_authorization(
+    base: &str,
+    suffix: &str,
+    body: Option<&Value>,
+    deadline: std::time::Instant,
+    cancellation: &crate::process::Cancellation,
+    authorization: Option<&str>,
+) -> DynResult<Response> {
+    owned_exchange(
+        base,
+        suffix,
+        body,
+        deadline,
+        cancellation,
+        authorization,
+        true,
+    )
+    .await
+}
+async fn owned_exchange(
+    base: &str,
+    suffix: &str,
+    body: Option<&Value>,
+    deadline: std::time::Instant,
+    cancellation: &crate::process::Cancellation,
+    authorization: Option<&str>,
+    private: bool,
+) -> DynResult<Response> {
     let endpoint = format!("{}/{}", base.trim_end_matches('/'), suffix);
     let uri: hyper::Uri = endpoint.parse()?;
     if uri.scheme_str() != Some("https")
@@ -175,7 +214,12 @@ pub(in crate::automation) async fn exchange_owned_with_authorization(
     let token = cancellation.clone();
     let authorization = authorization.map(str::to_owned);
     tokio::task::spawn_blocking(move || {
-        super::curl_transport::exchange(
+        let exchange = if private {
+            super::curl_transport::exchange_private
+        } else {
+            super::curl_transport::exchange
+        };
+        exchange(
             &endpoint,
             body.as_ref(),
             deadline,

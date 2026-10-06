@@ -299,6 +299,9 @@ struct ConvertRunnerArgs {
     mtp: bool,
     #[arg(long)]
     no_mtp: bool,
+    /// Explicit source-byte-bound tokenizer profile for native Nemotron --mtp.
+    #[arg(long)]
+    nemotron_mtp_tokenizer_profile: Option<PathBuf>,
     #[arg(long)]
     mistral_format: bool,
     #[arg(long)]
@@ -532,6 +535,11 @@ fn main() -> Result<()> {
 
 pub(crate) fn prepare_convert_runner(runner: ConvertRunnerArgs) -> Result<ConvertRunnerArgs> {
     ensure_convert_backend(runner.backend)?;
+    ensure!(
+        runner.nemotron_mtp_tokenizer_profile.is_none()
+            || (runner.backend == BackendKind::NativeRust && runner.mtp && !runner.no_mtp),
+        "--nemotron-mtp-tokenizer-profile requires native-rust --mtp without --no-mtp"
+    );
     ensure!(
         !(runner.mtp && runner.no_mtp),
         "--mtp and --no-mtp are mutually exclusive"

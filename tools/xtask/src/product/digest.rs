@@ -24,10 +24,18 @@ fn failure(error: std::io::Error, path: &Path) -> IoFailure {
 }
 
 fn file_digest(path: &Path) -> Result<[u8; 32], IoFailure> {
+    file_digest_with_guard(path, &mut || Ok(()))
+}
+fn file_digest_with_guard(
+    path: &Path,
+    guard: &mut impl FnMut() -> std::io::Result<()>,
+) -> Result<[u8; 32], IoFailure> {
+    guard().map_err(|error| failure(error, path))?;
     let mut handle = fs::File::open(path).map_err(|error| failure(error, path))?;
     let mut digest = Sha256::new();
     let mut buffer = vec![0_u8; 1024 * 1024];
     loop {
+        guard().map_err(|error| failure(error, path))?;
         let read = handle
             .read(&mut buffer)
             .map_err(|error| failure(error, path))?;
@@ -36,6 +44,7 @@ fn file_digest(path: &Path) -> Result<[u8; 32], IoFailure> {
         }
         digest.update(&buffer[..read]);
     }
+    guard().map_err(|error| failure(error, path))?;
     Ok(digest.finalize().into())
 }
 
@@ -105,5 +114,75 @@ mod tests {
             digest.as_deref(),
             Ok("01df8a658501c6798530548aa7ca5a15ce02059d66b8ab87df4150811b55c7e1")
         );
+    }
+}
+
+pub(crate) fn file_sha256_with_guard(
+    path: &Path,
+    guard: &mut impl FnMut() -> std::io::Result<()>,
+) -> Result<String, IoFailure> {
+    file_digest_with_guard(path, guard).map(hex::encode)
+}
+
+#[cfg(test)]
+mod guarded_tests {
+    // Append within existing product::digest owning tests module.
+    #[test]
+    fn guarded_digest_preopen_interruption_precedes_missing_file_error() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("does-not-exist");
+        let mut calls = 0;
+        let result = super::file_sha256_with_guard(&path, &mut || {
+            calls += 1;
+            Err(std::io::Error::new(
+                std::io::ErrorKind::Interrupted,
+                "fixture cancelled",
+            ))
+        });
+        let error = result.err().unwrap();
+        assert_eq!(error.error.kind(), std::io::ErrorKind::Interrupted);
+        assert_eq!(calls, 1);
+        root.close().unwrap();
+    }
+    #[test]
+    fn guarded_digest_stops_after_first_chunk_before_remaining_bytes() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("bytes");
+        std::fs::write(&path, vec![17u8; 1024 * 1024 + 37]).unwrap();
+        let mut calls = 0;
+        let result = super::file_sha256_with_guard(&path, &mut || {
+            calls += 1;
+            if calls == 3 {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::Interrupted,
+                    "after first chunk",
+                ))
+            } else {
+                Ok(())
+            }
+        });
+        assert_eq!(
+            result.err().unwrap().error.kind(),
+            std::io::ErrorKind::Interrupted
+        );
+        assert_eq!(calls, 3);
+        root.close().unwrap();
+    }
+    #[test]
+    fn guarded_digest_matches_existing_file_bytes_without_changing_tree_semantics() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("bytes");
+        std::fs::write(&path, vec![23u8; 1024 * 1024 + 37]).unwrap();
+        let legacy = super::file_sha256(&path).map_err(|e| e.error).unwrap();
+        let guarded = super::file_sha256_with_guard(&path, &mut || Ok(()))
+            .map_err(|e| e.error)
+            .unwrap();
+        assert_eq!(guarded, legacy);
+        use sha2::Digest as _;
+        assert_eq!(
+            guarded,
+            hex::encode(sha2::Sha256::digest(vec![23u8; 1024 * 1024 + 37]))
+        );
+        root.close().unwrap();
     }
 }

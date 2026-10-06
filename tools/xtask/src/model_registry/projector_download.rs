@@ -36,3 +36,35 @@ pub(super) fn run(args: &[String]) -> DynResult<()> {
     println!("{}", serde_json::json!({"sha256":result?,"output":output}));
     Ok(())
 }
+
+pub(super) fn acquire_pinned(
+    input: &str,
+    output: &std::path::Path,
+    expected: &str,
+    maximum: u64,
+    deadline: std::time::Instant,
+    cancellation: &crate::process::Cancellation,
+) -> DynResult<String> {
+    if expected.len() != 64
+        || !expected
+            .bytes()
+            .all(|v| v.is_ascii_digit() || (b'a'..=b'f').contains(&v))
+    {
+        return Err("invalid projector expected pin".into());
+    }
+    if cancellation.is_cancelled() {
+        return Err("projector acquisition cancelled before discovery".into());
+    }
+    transfer::download_until(
+        input,
+        output,
+        cancellation,
+        deadline,
+        maximum,
+        Some(expected),
+    )
+}
+
+pub(super) fn validate_origin(input: &str) -> DynResult<()> {
+    url_policy::trusted(input).map(|_| ())
+}

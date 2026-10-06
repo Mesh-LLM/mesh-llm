@@ -124,6 +124,39 @@ fn optional_matrix_requires_linux_cuda_and_preserves_required_refusal() {
     }
     input.required_comparisons = vec!["vllm".into(), "sglang".into()];
     assert!(super::super::competitive_roster::select_on(&config, &bytes, &input, false).is_err());
+    input.models[0].backends.remove("sglang");
+    assert!(super::super::competitive_roster::select_on(&config, &bytes, &input, true).is_err());
+    input.required_comparisons = vec!["vllm".into()];
+    let optional_missing =
+        super::super::competitive_roster::select_on(&config, &bytes, &input, true).unwrap();
+    assert!(
+        !optional_missing
+            .cells
+            .iter()
+            .any(|cell| cell["arm"] == "sglang")
+    );
+    assert!(
+        optional_missing
+            .cells
+            .iter()
+            .any(|cell| cell["arm"] == "vllm")
+    );
+    assert!(
+        optional_missing
+            .cells
+            .iter()
+            .any(|cell| cell["arm"] == "mesh")
+    );
+    assert!(
+        optional_missing.availability["models"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|row| row["arm"] == "sglang"
+                && row["selected"] == false
+                && row["source_pinned_exclusion"] == false
+                && row["reason"] == "no prepared backend supplied")
+    );
     input.platform = "metal".into();
     assert!(super::super::competitive_roster::select_on(&config, &bytes, &input, true).is_err());
     root.close().unwrap();

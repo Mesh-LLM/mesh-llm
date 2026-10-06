@@ -9,6 +9,7 @@ mod cell_summary;
 mod cell_workload;
 use super::cohort_identity;
 pub(super) mod competitive_cell;
+pub(super) mod competitive_inputs;
 pub(super) mod competitive_launch;
 pub(super) mod competitive_matrix;
 pub(super) mod competitive_parity;
@@ -20,6 +21,7 @@ pub(super) mod competitive_resume;
 pub(super) mod competitive_roster;
 pub(super) mod competitive_run_cell;
 pub(super) mod competitive_synthetic;
+pub(super) mod competitive_terminal;
 mod context_eligibility;
 pub(super) mod context_preflight;
 pub(super) mod digest;
@@ -178,3 +180,8 @@ mod resume_profile;
 #[cfg(test)]
 #[path = "replay_matrix/retirement_tests.rs"]
 mod retirement_tests;
+
+pub(super) mod parity_local_plan;
+pub(super) mod parity_local_run;
+
+pub(super) mod parity_local;

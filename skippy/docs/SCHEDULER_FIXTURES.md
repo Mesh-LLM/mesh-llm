@@ -114,33 +114,51 @@ only the `swe-smith-claude-3-7-sonnet` rows, whose upstream is
 provenance without redistributing the text.
 
 The native fixture commands own catalog validation, profile resolution, pinned HF
-fetch/verification, and prompt-manifest publication. The transitional A/B harness
-below still imports `evals/skippy-scheduler-fixtures.py` for its profile lookup;
-retire that helper only with the A/B caller migration. Native fixture tests do not
-qualify hardware replay, corpus acquisition, or its acceptance metrics.
+fetch/verification, and prompt-manifest publication. The native A/B caller below
+uses the same pinned catalog/profile owner. Native fixture tests do not qualify
+hardware replay, corpus acquisition, or its acceptance metrics.
 
 ## Periodic hardware replay
 
 Use exact OLD and NEW release binaries built against the same native ABI, then
 run the A/B harness with the named profile:
 
+Prepare a JSON input matching the native round runner, then use its source-bound
+preparation receipt for the actual comparison. Preparation atomically replaces
+its output after valid admission; execution refuses an existing output directory.
+Use fresh paths. Supply actual binary/model SHA-256 pins, full commit
+labels, a native artifact tree digest and a separately running metrics collector.
+Do not copy placeholder pins into a qualification run.
+
 ```bash
-python3 skippy/evals/skippy-waiting-prefix-ab.py \
-  --fixture-profile agentic-eviction-pressure \
-  --acceptance-contract skippy/evals/skippy-capacity-acceptance.json \
-  --prompt-manifest /tmp/skippy-agentic-eviction-pressure.json \
-  --case-file /path/to/one-model-case.json \
-  --old-bin /path/to/old/skippy-serving \
-  --new-bin /path/to/new/skippy-serving \
-  --old-commit <old-commit> \
-  --new-commit <new-commit> \
-  --native-build /path/to/matched/native-build \
-  --output-dir /path/to/artifacts
+just with-lld cargo xtool automation waiting-prefix prepare-run \
+  --input /path/to/waiting-prefix-input.json \
+  --output /path/to/prepared-waiting-prefix.json
+just with-lld cargo xtool automation waiting-prefix run \
+  --input /path/to/prepared-waiting-prefix.json \
+  --output-directory /path/to/fresh-artifacts
 ```
+
+The schema version 1 input has `prepared_plan_sha256:null`; `old` and `new` each
+contain absolute `path`, `sha256` and `supplied_commit`. It supplies
+`model_id`, absolute `model_path`, `model_sha256`, absolute `catalog`
+(`evals/skippy-scheduler-fixtures.json`), `profile`
+(`agentic-eviction-pressure`), `manual_workload:null`, absolute `contract`
+(`evals/skippy-capacity-acceptance.json`), and absolute `prompt_manifest`.
+It also supplies absolute `native_runtime_root`, its `native_runtime_sha256`,
+`payload` (`resident-kv`), `n_gpu_layers` (historically 999), and positive
+`request_timeout_secs`, `startup_timeout_secs`, `telemetry_timeout_secs`,
+`cell_timeout_secs`, `metrics_timeout_secs`, plus explicit loopback
+`metrics_http` and `metrics_otlp_grpc` URLs. These bounds must cover actual
+startup/requests/telemetry and fit the admitted whole-comparison budget.
+Preparation fills the plan digest; execution re-admits all pins/shape before
+launch. `native_runtime_root` names the supplied artifact tree and does not
+prove that a runtime was loaded.
+
 
 The named profile owns rounds, lanes, admission concurrency, cache entries,
 output length, and arrival stagger; ad hoc workload flags do not override it.
-The case file must also match the profile's pinned model ID and GGUF SHA-256.
+The input must also match the profile's pinned model ID and GGUF SHA-256.
 HF profiles require their exact generated prompt manifest, while synthetic
 profiles reject external manifests. The result records the profile name and
 catalog SHA alongside binary, model, and prompt-manifest hashes.
@@ -228,8 +246,8 @@ streaming usage, timing and content hashes. HTTP failures, timeouts and
 interruption retain failed request evidence and exit unsuccessfully; invalid
 input preserves any previous output. The command requires complete streaming
 usage and the terminal marker. The native server-cell and round commands own startup, seeding, telemetry
-capture, and complete comparisons. The production Python caller remains until
-its native replacement passes the corpus and runtime qualification gates.
+capture, and complete comparisons. Real corpus/runtime acceptance remains separately qualified; local executable
+fixtures establish orchestration and refusal behavior.
 
 
 For synthetic profiles, `waiting-prefix synthetic-prompts --families N
@@ -267,7 +285,7 @@ The native `waiting-prefix cell-worker --input FILE --output FILE` waits for the
 The native `waiting-prefix server-cell --input FILE --output-directory DIR` owns a pinned Skippy server and its measurement worker under one retained process session. It checks actual binary/model hashes, GGUF context and full layer dimensions, stage/request identity and admission capacity before creating a fresh output directory. It reserves its own loopback endpoint, keeps filtered diagnostic stderr in `server.stderr.log`, and projects recognized numeric KV facts and decimal request IDs into `server.log`. Unknown fields and prompt text are excluded from that measurement log. It stops its owned server after the worker finishes and writes `lifecycle.json` after cleanup. Local executable fixtures cover process ownership; native-runtime bundle identity and full old/new round qualification still require the complete runner before caller cutover.
 
 
-The native `waiting-prefix run --input FILE --output-directory DIR` resolves pinned catalog/contract workload and prompts, checks binary/model and provided native artifact bytes, alternates every old/new round, retains attempted cells and failed evidence, and requires the exact complete cell census before aggregation and hardware acceptance. It supervises each retained server-cell under one outer cancellation scope, bounds total process/evidence budgets, and preserves an existing output directory. The supplied commit labels and provided runtime artifact pins describe their respective inputs; they do not alone prove a loaded runtime or model performance. Native executable fixtures and live model/corpus qualification remain distinct. The Python production caller remains pending qualified cutover.
+The native `waiting-prefix run --input FILE --output-directory DIR` resolves pinned catalog/contract workload and prompts, checks binary/model and provided native artifact bytes, alternates every old/new round, retains attempted cells and failed evidence, and requires the exact complete cell census before aggregation and hardware acceptance. It supervises each retained server-cell under one outer cancellation scope, bounds total process/evidence budgets, and preserves an existing output directory. The supplied commit labels and provided runtime artifact pins describe their respective inputs; they do not alone prove a loaded runtime or model performance. Native executable fixtures and live model/corpus qualification remain distinct. The native command is the maintained operator frontdoor; legacy Python deletion remains separately gated by its full source/intent and caller census.
 
 
 ## Collector-backed native comparisons
@@ -275,8 +293,8 @@ The native `waiting-prefix run --input FILE --output-directory DIR` resolves pin
 Start metrics-server before using the native complete-round command. The input
 must include explicit loopback HTTP roots `metrics_http` and
 `metrics_otlp_grpc`, plus `metrics_timeout_secs`. Use a release Skippy server
-for model-backed comparisons. The existing periodic Python command above remains
-the production entrypoint until corpus and runtime qualification is complete.
+for model-backed comparisons. The native periodic command above requires that collector. Corpus and real
+runtime qualification remain separate from local orchestration evidence.
 
 The native runner creates a fresh collector run for each old/new cell before
 server startup, passes its run ID through the stage config, and adds

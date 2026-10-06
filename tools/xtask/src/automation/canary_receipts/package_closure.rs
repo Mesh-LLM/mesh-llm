@@ -224,3 +224,16 @@ mod local_inspection;
 mod manifest_policy;
 #[path = "package_closure/model_boundaries.rs"]
 mod model_boundaries;
+/// Manual current-source parity composition shares the existing local authority.
+pub(in crate::automation) fn with_local_parity<T>(
+    authority: &[u8],
+    body: impl FnOnce(
+        &std::path::Path,
+        &serde_json::Value,
+        &serde_json::Value,
+        &serde_json::Value,
+        &crate::process::Cancellation,
+    ) -> DynResult<T>,
+) -> DynResult<T> {
+    local_inspection::with_parity(authority, body)
+}

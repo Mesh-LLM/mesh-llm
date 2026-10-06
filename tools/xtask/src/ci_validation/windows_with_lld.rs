@@ -72,7 +72,7 @@ fn invoke(code: u8, missing_sccache: bool) -> process::ProcessReport {
             && report.cleanup.failure.is_none()
     );
     for stream in [&report.stdout, &report.stderr] {
-        assert!(!stream.truncated && stream.suppressed_lines == 0);
+        assert!(stream.line_capture_complete && !stream.truncated && stream.suppressed_lines == 0);
     }
     report
 }

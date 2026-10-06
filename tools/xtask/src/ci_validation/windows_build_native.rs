@@ -59,7 +59,21 @@ fn execute(body: &str, cwd: &Path) -> process::ProcessReport {
         OutputFiles::default(),
     )
     .unwrap();
-    assert!(report.cleanup.complete, "{report:?}");
+    assert_eq!(report.outcome, process::Outcome::Exited, "{report:?}");
+    assert!(
+        report.failure.is_none() && report.cleanup.failure.is_none(),
+        "{report:?}"
+    );
+    assert!(
+        report.cleanup.complete && !report.cleanup.forced && !report.cleanup.graceful_signal_failed,
+        "owned PowerShell fixture must finish cleanly: {report:?}"
+    );
+    for stream in [&report.stdout, &report.stderr] {
+        assert!(
+            stream.line_capture_complete && !stream.truncated,
+            "{report:?}"
+        );
+    }
     report
 }
 fn accepted(body: &str, cwd: &Path) -> String {
@@ -130,6 +144,18 @@ fn native_windows_bash_paths_preserve_repo_case_and_distinguish_git_bash_from_ws
             expected
         );
     }
+    // Preserve the original Windows case-folding test with trailing repo separators.
+    assert_eq!(
+        accepted(
+            &format!(
+                "{prefix} $repoRoot={}; ConvertTo-BashRepoPath {}",
+                quote(r"D:\work\mesh-llm\"),
+                quote(r"d:\WORK\mesh-llm\.deps\other")
+            ),
+            directory.path()
+        ),
+        ".deps/other"
+    );
     let rejected = execute(
         &format!("{prefix} ConvertTo-BashRepoPath '\\\\server\\share\\llama.cpp'"),
         directory.path(),

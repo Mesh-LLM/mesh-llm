@@ -49,6 +49,9 @@ fn run() -> DynResult<()> {
         .map(|path| repository::RepositoryRoot::resolve(Some(path)))
         .transpose()?;
     match parsed.command {
+        cli::CliCommand::EndpointModelDiscovery(rest) => {
+            automation::endpoint_model_discovery::run(rest)
+        }
         cli::CliCommand::GuardrailCorpus(rest) => automation::guardrail_corpus::run(rest),
         cli::CliCommand::SuffixProposer(rest) => automation::suffix_proposer::run(rest),
         cli::CliCommand::EventBenchmarkRun(rest) => automation::event_benchmark_runner::run(rest),
@@ -92,6 +95,7 @@ fn run() -> DynResult<()> {
                 .map(repository::RepositoryRoot::as_path),
             rest,
         ),
+        cli::CliCommand::WanObservation(rest) => automation::wan_observation::run(rest),
         cli::CliCommand::SystemOneCases(rest) => automation::system_one_cases::run(rest),
         cli::CliCommand::SystemOneSmoke(rest) => automation::system_one_smoke::run(rest),
         cli::CliCommand::BinaryStageReadiness(rest) => {
@@ -108,6 +112,9 @@ fn run() -> DynResult<()> {
         }
 
         cli::CliCommand::SmokeInputs(rest) => automation::smoke_inputs::run(rest),
+        cli::CliCommand::RemoteHandoffSummary(rest) => {
+            automation::remote_handoff_summary::run(rest)
+        }
         cli::CliCommand::LightningCompatibility(rest) => {
             automation::lightning_compatibility::run(rest)
         }

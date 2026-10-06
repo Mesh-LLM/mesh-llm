@@ -2,6 +2,10 @@
 mod competitive_fixture;
 #[path = "l7_daemon_fixture/hf_mtp_compose_fixture.rs"]
 mod hf_mtp_compose_fixture;
+#[path = "l7_daemon_fixture/hf_publication_fixture.rs"]
+mod hf_publication_fixture;
+#[path = "l7_daemon_fixture/hf_raw_conversion_fixture.rs"]
+mod hf_raw_conversion_fixture;
 #[path = "l7_daemon_fixture/lightning_peer_fixture.rs"]
 mod lightning_peer_fixture;
 #[path = "l7_daemon_fixture/manual_smoke_fixture.rs"]
@@ -19,8 +23,23 @@ use std::{
 #[path = "l7_daemon_fixture/hf_certification_fixture.rs"]
 mod hf_certification_fixture;
 
+#[path = "l7_daemon_fixture/parity_fixture.rs"]
+mod parity_fixture;
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let arguments: Vec<_> = std::env::args().skip(1).collect();
+    if arguments.first().is_some_and(|arg| arg == "--family") {
+        return parity_fixture::run(&arguments);
+    }
+    if arguments
+        .first()
+        .is_some_and(|verb| verb == "convert" || verb == "verify-job")
+    {
+        return hf_raw_conversion_fixture::run(&arguments);
+    }
+    if arguments.first().is_some_and(|arg| arg == "publish") {
+        return hf_publication_fixture::run(&arguments);
+    }
     if arguments.first().is_some_and(|v| {
         v == "compose-mtp"
             || (v == "validate-mtp-attach" && !arguments.iter().any(|a| a == "--projector"))

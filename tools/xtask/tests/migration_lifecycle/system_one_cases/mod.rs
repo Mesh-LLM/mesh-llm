@@ -179,3 +179,5 @@ fn actual_ipv6_loopback_contract_dials_bare_address_with_http_bracketed_authorit
 mod serialization;
 
 mod contracts;
+
+mod custom_driver;

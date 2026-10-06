@@ -164,7 +164,8 @@ fn typed_owner(argv: &str) -> Option<&'static str> {
     .map(|(_, owner)| owner)
 }
 
-const SYSTEM_ONE_OWNER: &str = "tools/xtask/src/automation/system_one_cases/mod.rs; retained explicit SYSTEMONE_SMOKE_DRIVER Python override";
+const SYSTEM_ONE_OWNER: &str =
+    "tools/xtask/src/automation/system_one_cases/mod.rs; bounded explicit native executable driver";
 
 fn check_system_one_binding(
     record: &SelectedProcessCall,
@@ -182,7 +183,7 @@ fn check_system_one_binding(
     let expected = [
         "local case_command=(\"${automation[@]}\" automation system-one-cases)",
         "if [[ \"${SYSTEMONE_SMOKE_DRIVER+set}\" == set ]]; then",
-        "case_command=(python3 \"$CASES_DRIVER\")",
+        "case_command=(\"${automation[@]}\" automation system-one-cases --driver-executable \"$CASES_DRIVER\" --driver-timeout \"$DRIVER_TIMEOUT_SECS\")",
         "fi",
     ];
     if lines[start..index]
@@ -199,7 +200,7 @@ fn check_system_one_binding(
     );
     if record.argv != argv
         || record.replacement_owner != SYSTEM_ONE_OWNER
-        || record.child != "tools/xtask default; explicit Python $CASES_DRIVER override"
+        || record.child != "tools/xtask default; bounded explicit native $CASES_DRIVER override"
     {
         return Err("selected process: changed System One mixed launch binding".into());
     }

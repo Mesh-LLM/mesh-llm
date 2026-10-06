@@ -2,17 +2,29 @@
 
 use anyhow::{Result, anyhow, bail};
 
+#[path = "tensor_map/nemotron_mtp.rs"]
+mod nemotron_mtp;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TensorNameMap {
     Raw,
     HfToGguf,
     HfToGgufWithMtp { layer_start: u32 },
+    NemotronHMoeMtp { layer_start: u32 },
 }
 
 impl TensorNameMap {
+    /// Family-specific canonical HF spelling for the existing expert stream merger.
+    pub(crate) fn expert_source_name(self, name: &str) -> Result<String> {
+        match self {
+            Self::NemotronHMoeMtp { layer_start } => nemotron_mtp::normalize(name, layer_start),
+            _ => Ok(name.into()),
+        }
+    }
     pub fn map_tensor_name(self, name: &str) -> Result<String> {
         match self {
             Self::Raw => Ok(name.to_string()),
+            Self::NemotronHMoeMtp { layer_start } => nemotron_mtp::map(name, layer_start),
             Self::HfToGguf => map_hf_to_gguf(name, None),
             Self::HfToGgufWithMtp { layer_start } => map_hf_to_gguf(name, Some(layer_start)),
         }
@@ -88,6 +100,8 @@ pub(crate) fn is_shared_mtp_context_tensor(name: &str) -> bool {
             | "model.llm.embed_norm.weight"
             | "model.llm.norm.weight"
             | "model.llm.unembed.weight"
+            | "backbone.embeddings.weight"
+            | "backbone.norm_f.weight"
     )
 }
 

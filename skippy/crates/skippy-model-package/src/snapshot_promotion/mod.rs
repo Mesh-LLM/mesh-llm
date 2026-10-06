@@ -9,7 +9,15 @@ pub use cli::run;
 mod tests;
 
 #[cfg(test)]
-mod fixtures;
+pub(crate) mod fixtures;
 
 #[cfg(test)]
 mod hub_fixture;
+
+pub mod lfs_transfer;
+pub mod model_publication;
+pub mod regular_publication;
+
+pub mod local_publisher;
+
+pub mod package_upload;
