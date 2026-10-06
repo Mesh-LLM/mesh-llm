@@ -82,8 +82,59 @@ pub(super) fn admit(root: &Path, source_revision: &str) -> DynResult<Value> {
     }
     process::check()?;
     Ok(
-        json!({"status":"parity_inventory_admitted","model_sources":sources.len(),"paired_boundaries":boundaries.len()}),
+        json!({"status":"parity_inventory_admitted","model_sources":sources.len(),"paired_boundaries":boundaries.len(),"classifications":classifications(&parity,&sources,&boundaries)?}),
     )
+}
+
+// Append before validate in the existing parity inventory owner.
+/// Emit all admitted native-source classifications, preserving candidate fields.
+/// Cache discovery, model-byte inspection and runnable candidate execution are separate.
+fn classifications(
+    parity: &Value,
+    sources: &BTreeSet<String>,
+    boundaries: &BTreeSet<String>,
+) -> DynResult<Vec<Value>> {
+    let rows = parity["candidates"]
+        .as_array()
+        .ok_or("parity manifest lacks candidates array")?;
+    let mut output = Vec::new();
+    for name in sources {
+        process::check()?;
+        for row in rows
+            .iter()
+            .filter(|row| row["llama_model"].as_str() == Some(name))
+        {
+            let mut classified = row
+                .as_object()
+                .ok_or("parity classification must be object")?
+                .clone();
+            let family = row["family"]
+                .as_str()
+                .map(str::to_owned)
+                .unwrap_or_else(|| name.replace('-', "_"));
+            classified.insert("family".into(), json!(family));
+            classified
+                .entry("status")
+                .or_insert_with(|| json!("candidate"));
+            let priority = support_priority(parity, "families", &family)
+                .or_else(|| support_priority(parity, "llama_models", name))
+                .unwrap_or("p2");
+            classified.insert("priority".into(), json!(priority));
+            classified.insert(
+                "boundary_registered".into(),
+                json!(boundaries.contains(name)),
+            );
+            output.push(Value::Object(classified));
+        }
+    }
+    Ok(output)
+}
+fn support_priority(parity: &Value, group: &str, name: &str) -> Option<&'static str> {
+    ["p0", "p1", "p2"].into_iter().rev().find(|priority| {
+        parity["support_priority"][*priority][group]
+            .as_array()
+            .is_some_and(|names| names.iter().any(|value| value.as_str() == Some(name)))
+    })
 }
 
 fn validate(

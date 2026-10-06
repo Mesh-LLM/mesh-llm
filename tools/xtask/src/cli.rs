@@ -59,6 +59,7 @@ pub(crate) fn print_usage() {
         "  cargo xtool automation cache-family-report --input PATH... [--output PATH] [--use-case-corpus PATH]"
     );
     println!("  cargo xtool automation split-probe <verb> ...");
+    println!("  cargo xtool models projector-download --url HTTPS_URL --output FILE");
     println!(
         "{USAGE}\n  {HF_CONVERTED_ARTIFACT_USAGE}\n  {}\n  {}\n  {}\n  {}\n  {}\n  {}\n  {}\n  {}\n  {}\n  {}\n  {}\n  {}\n  cargo xtool ci family-plan ...",
         crate::automation::client_readiness::USAGE,
@@ -105,6 +106,9 @@ pub(crate) struct Cli<'a> {
 pub(crate) enum CliCommand<'a> {
     AgentClientConfig(&'a [String]),
     CacheFamilyReport(&'a [String]),
+    CacheFamilyCorrectness(&'a [String]),
+    CacheFamilyPlan(&'a [String]),
+    CacheFamilyMeasure(&'a [String]),
     AgentFixtureEvidence(&'a [String]),
     AgentFixtureInputs(&'a [String]),
     AgentRecordingProxy(&'a [String]),
@@ -116,6 +120,7 @@ pub(crate) enum CliCommand<'a> {
     FamilyBatteryPolicy(&'a [String]),
     FamilyModelIdentity(&'a [String]),
     LocalPorts(&'a [String]),
+    ManualSmoke(&'a [String]),
     OpenaiSmokeConfig(&'a [String]),
     WorkloadSmokeConfig(&'a [String]),
     SmokeInputs(&'a [String]),
@@ -138,6 +143,7 @@ pub(crate) enum CliCommand<'a> {
     DaemonLifecycle(&'a [String]),
     LoggingRecovery(&'a [String]),
     ControlPlaneQa(&'a [String]),
+    LightningCompatibility(&'a [String]),
     HfConvertedArtifact(&'a [String]),
     Rollout(&'a [String]),
     Repository(RepositoryCommand<'a>),
@@ -255,6 +261,21 @@ impl<'a> Cli<'a> {
                 CliCommand::AgentClientConfig(rest)
             }
             [domain, scope, rest @ ..]
+                if domain == "automation" && scope == "cache-family-measure" =>
+            {
+                CliCommand::CacheFamilyMeasure(rest)
+            }
+            [domain, scope, rest @ ..]
+                if domain == "automation" && scope == "cache-family-plan" =>
+            {
+                CliCommand::CacheFamilyPlan(rest)
+            }
+            [domain, scope, rest @ ..]
+                if domain == "automation" && scope == "cache-family-correctness" =>
+            {
+                CliCommand::CacheFamilyCorrectness(rest)
+            }
+            [domain, scope, rest @ ..]
                 if domain == "automation" && scope == "cache-family-report" =>
             {
                 CliCommand::CacheFamilyReport(rest)
@@ -271,6 +292,9 @@ impl<'a> Cli<'a> {
             }
             [domain, scope, rest @ ..] if domain == "automation" && scope == "local-ports" => {
                 CliCommand::LocalPorts(rest)
+            }
+            [domain, scope, rest @ ..] if domain == "automation" && scope == "manual-smoke" => {
+                CliCommand::ManualSmoke(rest)
             }
             [domain, scope, rest @ ..]
                 if domain == "automation" && scope == "openai-smoke-config" =>
@@ -330,6 +354,11 @@ impl<'a> Cli<'a> {
             }
             [domain, scope, rest @ ..] if domain == "automation" && scope == "smoke-inputs" => {
                 CliCommand::SmokeInputs(rest)
+            }
+            [domain, scope, rest @ ..]
+                if domain == "automation" && scope == "lightning-compatibility" =>
+            {
+                CliCommand::LightningCompatibility(rest)
             }
             [domain, scope, rest @ ..] if domain == "automation" && scope == "control-plane-qa" => {
                 CliCommand::ControlPlaneQa(rest)

@@ -68,7 +68,7 @@ pub(super) fn select(path: &Path, selection: &Selection) -> DynResult<Vec<Trajec
     selector.finish()
 }
 
-fn reader_binary() -> DynResult<PathBuf> {
+pub(super) fn reader_binary() -> DynResult<PathBuf> {
     if let Some(path) = std::env::var_os("MESH_LLM_TRAJECTORY_READER_BIN") {
         let path = PathBuf::from(path);
         if !path.is_absolute() {
@@ -86,7 +86,7 @@ fn reader_binary() -> DynResult<PathBuf> {
     reader.canonicalize().map_err(|error| format!("optional trajectory reader missing at {}: {error}; build it with just with-lld cargo build --locked -p trajectory-reader --features parquet-input --bin trajectory-reader, or set MESH_LLM_TRAJECTORY_READER_BIN", reader.display()).into())
 }
 
-fn reader_environment() -> BTreeMap<std::ffi::OsString, Value> {
+pub(super) fn reader_environment() -> BTreeMap<std::ffi::OsString, Value> {
     ["SYSTEMROOT", "WINDIR"]
         .into_iter()
         .filter_map(|name| std::env::var_os(name).map(|value| (name.into(), Value::Public(value))))

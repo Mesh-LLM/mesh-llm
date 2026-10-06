@@ -96,3 +96,26 @@ async fn exchange(request: Request) -> Result<Response, String> {
         .map_err(|_| "logging HTTP deadline".to_owned())?
         .map_err(|_: Box<dyn std::error::Error>| "logging HTTP transfer failed".to_owned())
 }
+
+/// Owned HTTP futures stop at cancellation or an absolute caller deadline.
+pub(in crate::automation) fn transfer_cancelled(
+    request: Request,
+    cancellation: &crate::process::Cancellation,
+    deadline: std::time::Instant,
+) -> Result<Response, String> {
+    if cancellation.is_cancelled() {
+        return Err("logging HTTP cancelled".into());
+    }
+    let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+    if remaining.is_zero() {
+        return Err("logging HTTP deadline".into());
+    }
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|_| "logging HTTP runtime")?;
+    runtime.block_on(async {
+        let cancelled=async {loop {if cancellation.is_cancelled(){break;}tokio::time::sleep(Duration::from_millis(5)).await;}};
+        tokio::select! {biased; ()=cancelled=>Err("logging HTTP cancelled".into()), result=tokio::time::timeout(remaining,exchange(request))=>result.map_err(|_|"logging HTTP deadline".to_owned())?}
+    })
+}

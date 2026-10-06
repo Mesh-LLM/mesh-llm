@@ -4,6 +4,37 @@ use std::path::Path;
 // Keep this target's narratives exclusive across that handoff window.
 static NARRATIVE: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+fn reserve_ports() -> (u16, Vec<std::net::TcpListener>, Vec<std::net::UdpSocket>) {
+    for _ in 0..128 {
+        let first = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let base = first.local_addr().unwrap().port();
+        if !(1025..=65533).contains(&base) {
+            continue;
+        }
+        let mut tcp = vec![first];
+        let mut udp = Vec::new();
+        for port in base..=base + 2 {
+            if port != base {
+                let Ok(listener) =
+                    std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, port))
+                else {
+                    break;
+                };
+                tcp.push(listener);
+            }
+            let Ok(socket) = std::net::UdpSocket::bind((std::net::Ipv4Addr::LOCALHOST, port))
+            else {
+                break;
+            };
+            udp.push(socket);
+        }
+        if tcp.len() == 3 && udp.len() == 3 {
+            return (base, tcp, udp);
+        }
+    }
+    panic!("no complete logging-console port range available");
+}
+
 fn run(browser_fail: bool) -> (tempfile::TempDir, std::process::Output) {
     let _exclusive = NARRATIVE
         .lock()
@@ -26,11 +57,7 @@ fn run(browser_fail: bool) -> (tempfile::TempDir, std::process::Output) {
     if browser_fail {
         std::fs::write(location.join("browser-fail"), b"fail").unwrap();
     }
-    let port = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port();
+    let (port, tcp, udp) = reserve_ports();
     let paths = std::iter::once(location.join("bin"))
         .chain(std::env::split_paths(
             &std::env::var_os("PATH").unwrap_or_default(),
@@ -41,7 +68,8 @@ fn run(browser_fail: bool) -> (tempfile::TempDir, std::process::Output) {
         .unwrap()
         .parent()
         .unwrap();
-    let output = std::process::Command::new("bash")
+    let mut command = std::process::Command::new("bash");
+    command
         .arg(repository.join("scripts/qa-logging-console-e2e.sh"))
         .env("MESH_LLM_AUTOMATION_BIN", env!("CARGO_BIN_EXE_xtask"))
         .arg("--current-binary")
@@ -56,9 +84,10 @@ fn run(browser_fail: bool) -> (tempfile::TempDir, std::process::Output) {
             "--keep-state",
         ])
         .env("MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR", &location)
-        .env("PATH", std::env::join_paths(paths).unwrap())
-        .output()
-        .unwrap();
+        .env("PATH", std::env::join_paths(paths).unwrap());
+    drop(tcp);
+    drop(udp);
+    let output = command.output().unwrap();
     (root, output)
 }
 

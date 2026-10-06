@@ -397,3 +397,40 @@ fn split_output_rejects_special_paths_in_local_and_workflow_check_and_write_with
     })
     .unwrap();
 }
+
+// Append to existing package_closure/local_inspection/tests.rs; uses its bounded isolated()/Fixture/commit owners.
+#[test]
+fn parity_producer_inspects_selected_prepared_runtime_instead_of_controller_runtime() {
+    if isolated("parity_producer_inspects_selected_prepared_runtime_instead_of_controller_runtime")
+    {
+        return;
+    }
+    process::operation(|| {
+        let controller = Fixture::new();
+        let selected = Fixture::new();
+        let valid = include_str!("../runtime_slice/prepared_admission.cpp");
+        let invalid = valid.replace("skippy_model * stage_model", "if (model->arch == LLM_ARCH_LLAMA) { return SKIPPY_STATUS_OK; } skippy_model * stage_model");
+        assert_ne!(valid, invalid);
+        let write_runtime = |fixture: &Fixture, source: &str| -> DynResult<()> {
+            let native = fixture.root.join(".deps/llama.cpp");
+            fs::create_dir_all(native.join("src/skippy"))?;
+            fs::write(native.join("src/skippy/model_loading.cpp"), source)?;
+            fs::write(native.join(".git/info/exclude"), ".mesh-llm-*\n")?;
+            let head = commit(&native);
+            fs::write(native.join(".mesh-llm-patched-sha"), format!("{head}\n"))?;
+            Ok(())
+        };
+        write_runtime(&controller, valid)?;
+        write_runtime(&selected, valid)?;
+        let input = serde_json::from_value::<super::super::parity_inventory::Input>(json!({"context":{"controller_root":controller.root,"controller_revision":controller.authority.base,"selected_source":selected.authority.base,"run_id":"100","run_attempt":"1"},"root":selected.root,"base":selected.authority.base,"source_revision":selected.authority.base}))?;
+        assert_eq!(super::super::parity_inventory::execute(&input)?["status"], "parity_inventory_admitted");
+        write_runtime(&selected, &invalid)?;
+        assert!(super::super::parity_inventory::execute(&input).is_err());
+        write_runtime(&selected, valid)?;
+        write_runtime(&controller, &invalid)?;
+        assert_eq!(super::super::parity_inventory::execute(&input)?["status"], "parity_inventory_admitted");
+        controller._temp.close()?;
+        selected._temp.close()?;
+        Ok(())
+    }).unwrap();
+}

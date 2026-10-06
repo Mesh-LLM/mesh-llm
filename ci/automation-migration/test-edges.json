@@ -66,50 +66,6 @@
       ]
     ],
     [
-      "scripts/tests/test_depot_authority_sentinel.py",
-      [
-        [
-          "fixture",
-          ".github/actions/select-ci-runners/action.yml run block",
-          "_run_selector runs extracted Bash with fake event/ref and temporary GITHUB_OUTPUT; checks sentinel authorization",
-          [
-            98,
-            153
-          ]
-        ],
-        [
-          "fixture",
-          "depot-canary seed_authority_marker and verify_pr_write Attest provider-injected cache backend Bash steps",
-          "_run_attestation executes each of the two retained manual parser phases independently with synthetic endpoint/token/interpreter failure cases; no live cache request. Current typed quality attestation is separately covered by Rust endpoint and semantic workflow guards.",
-          [
-            187
-          ]
-        ]
-      ]
-    ],
-    [
-      "scripts/tests/test_depot_canary_workflow.py",
-      [
-        [
-          "fixture",
-          "depot-canary attestation step Bash block",
-          "_run_attestation executes selected step with synthetic endpoint/token and temporary output; no remote canary",
-          [
-            67,
-            541
-          ]
-        ],
-        [
-          "fixture",
-          "depot-canary sentinel validation Bash block",
-          "nested run_validation tests selected seed/verify key block with synthetic ref/PR/ID",
-          [
-            206
-          ]
-        ]
-      ]
-    ],
-    [
       "scripts/tests/test_llama_canary_agent_repair_contract.py",
       [
         [
@@ -599,7 +555,7 @@
     "target_or_boundary",
     "source_specific_reason"
   ],
-  "observed_source_sha256": "298eef2e7c8c0386c3182f75fed4f5d72d6bec84705fb9e01f159c32f5c7e7f0",
+  "observed_source_sha256": "86403222c71a1ca08d60b5017f066c6e8b10fa7bbfb714fad37a323f63453be5",
   "schema_version": 1,
   "scope": "tracked scripts/tests/**/*.py; source candidate shard, not global acceptance",
   "status": "All observed test-source scanner candidates are bound; transitive child closure and global task 1 remain incomplete. No optional subprocess test is asserted to be a production dependency.",
@@ -9812,9 +9768,7 @@
       "sha256": "fa4342e63b8d4f93e425e88f106d9585ba5ef3e06a057cff3c83ad2ed92c9d5c",
       "head": "3fbd1fcbcd390c86083a8265de3a4ce4734e3a58",
       "status": "FROZEN_SOURCES_NOT_TERMINAL_EXECUTION",
-      "drift": [
-
-      ],
+      "drift": [],
       "additional_native_sources": [
         {
           "path": "tools/xtask/src/automation/event_benchmark_comparison/manifest_tests.rs",
@@ -9891,6 +9845,82 @@
     "current_method_map": {
       "path": ".omo/evidence/resume-20261002/event-benchmark-last-caller-retirement-rebind-v2/current-method-map149.json",
       "sha256": "568fce59980878bc9d619ea6301b81da250ebb99885d5532bdf6f07dd289995c"
+    }
+  },
+  "authority_canary_test_retirement": {
+    "status": "LOCAL_POSTIMAGE_QUALIFIED",
+    "removed_paths": [
+      "scripts/tests/test_depot_authority_sentinel.py",
+      "scripts/tests/test_depot_canary_workflow.py"
+    ],
+    "archived_additional_groups": [
+      [
+        "scripts/tests/test_depot_authority_sentinel.py",
+        [
+          [
+            "fixture",
+            ".github/actions/select-ci-runners/action.yml run block",
+            "_run_selector runs extracted Bash with fake event/ref and temporary GITHUB_OUTPUT; checks sentinel authorization",
+            [
+              98,
+              153
+            ]
+          ],
+          [
+            "fixture",
+            "depot-canary seed_authority_marker and verify_pr_write Attest provider-injected cache backend Bash steps",
+            "_run_attestation executes each of the two retained manual parser phases independently with synthetic endpoint/token/interpreter failure cases; no live cache request. Current typed quality attestation is separately covered by Rust endpoint and semantic workflow guards.",
+            [
+              187
+            ]
+          ]
+        ]
+      ],
+      [
+        "scripts/tests/test_depot_canary_workflow.py",
+        [
+          [
+            "fixture",
+            "depot-canary attestation step Bash block",
+            "_run_attestation executes selected step with synthetic endpoint/token and temporary output; no remote canary",
+            [
+              67,
+              541
+            ]
+          ],
+          [
+            "fixture",
+            "depot-canary sentinel validation Bash block",
+            "nested run_validation tests selected seed/verify key block with synthetic ref/PR/ID",
+            [
+              206
+            ]
+          ]
+        ]
+      ]
+    ],
+    "previous_observed_source_sha256": "298eef2e7c8c0386c3182f75fed4f5d72d6bec84705fb9e01f159c32f5c7e7f0",
+    "current_test_tree": {
+      "sha256": "86403222c71a1ca08d60b5017f066c6e8b10fa7bbfb714fad37a323f63453be5",
+      "paths": 24
+    },
+    "coverage": "ci/automation-migration/authority-canary-test-retirement-coverage.json",
+    "qualification": {
+      "path": ".omo/evidence/resume-20261002/authority18-postretirement-maintained-v2-exit.json",
+      "sha256": "22b647494b69839bac14d6515a183f43c59093fefa7e66a588c47f798d49d712",
+      "validated_freeze": {
+        "path": ".omo/evidence/resume-20261002/authority18-postretirement-maintained-v2-freeze-v1.json",
+        "sha256": "6bf75540b9e6c34885ea9a5721d0c68c52f35175008644eb75bd2021b6308ce0"
+      },
+      "normal": {
+        "log": ".omo/evidence/resume-20261002/authority18-postretirement-maintained-v2-normal.log",
+        "sha256": "7db1c2ff6e7f602c24deb87a874e565e3e2be072dd216a8656953756f7704e49",
+        "rust_groups": 117,
+        "rust_passed": 5626,
+        "python_tests": 413,
+        "python_skipped": 13
+      },
+      "scope": "Current complete local ci-validate on retirement transaction sources before this metadata-only receipt reconciliation; no hosted, model or platform acceptance."
     }
   }
 }

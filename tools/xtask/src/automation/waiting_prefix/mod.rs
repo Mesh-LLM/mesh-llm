@@ -1,15 +1,44 @@
 //! Offline acceptance and input admission for the waiting-prefix A/B runner.
 mod acceptance;
+mod adaptive_cell;
+pub(in crate::automation) mod adaptive_identity;
+mod adaptive_matrix;
+mod adaptive_owner;
+mod adaptive_summary;
+mod adaptive_telemetry;
+#[cfg(test)]
+mod adaptive_tests;
 mod aggregation;
 mod cell_worker;
+mod kv_command;
+mod kv_identity;
+mod kv_manifest;
+mod kv_metadata;
+mod kv_owner;
+mod kv_report;
+#[cfg(test)]
+mod kv_tests;
+mod kv_worker;
 mod metrics_client;
 mod metrics_correlation;
 mod metrics_summary;
-mod native_identity;
+mod mixed_cell;
+mod mixed_commands;
+mod mixed_counters;
+mod mixed_matrix;
+mod mixed_owner;
+mod mixed_phase;
+mod mixed_summary;
+#[cfg(test)]
+mod mixed_tests;
+mod mixed_worker;
+mod mixed_workload;
+pub(in crate::automation) mod native_identity;
 mod report;
 mod requests;
 mod round_runner;
 mod rounds;
+mod sequential_cell;
 mod server_cell;
 mod stage_config;
 mod synthetic_prompts;
@@ -18,6 +47,7 @@ mod telemetry_log;
 mod telemetry_sink;
 #[cfg(test)]
 mod tests;
+mod workload_manual;
 mod workload_plan;
 
 use crate::{automation::agentic_prompt_manifest::fixture_profile, command::DynResult};
@@ -26,7 +56,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::{collections::BTreeMap, io::Write, path::Path};
 
-const USAGE: &str = "cargo xtool automation waiting-prefix evaluate --comparison FILE --output FILE [--report FILE] (--contract FILE | --catalog FILE --profile NAME)\n  cargo xtool automation waiting-prefix {summarize|aggregate} --input FILE --output FILE\n  cargo xtool automation waiting-prefix execute-requests --input FILE --output FILE\n  cargo xtool automation waiting-prefix plan --catalog FILE --profile NAME --model-id ID --model-sha256 HASH [--contract FILE] [--prompt-manifest FILE] --output FILE\n  cargo xtool automation waiting-prefix synthetic-prompts --families N --requests-per-family N --prefix-blocks N --output FILE\n  cargo xtool automation waiting-prefix stage-config --input FILE --output FILE\n  cargo xtool automation waiting-prefix telemetry-log {snapshot|collect} --log FILE --output FILE [--cursor FILE --expected-generations N]\n  cargo xtool automation waiting-prefix cell-worker --input FILE --output FILE\n  cargo xtool automation waiting-prefix server-cell --input FILE --output-directory DIR\n  cargo xtool automation waiting-prefix run --input FILE --output-directory DIR\n  cargo xtool automation waiting-prefix validate-prompts FILE";
+const USAGE: &str = "cargo xtool automation waiting-prefix evaluate --comparison FILE --output FILE [--report FILE] (--contract FILE | --catalog FILE --profile NAME)\n  cargo xtool automation waiting-prefix {summarize|aggregate} --input FILE --output FILE\n  cargo xtool automation waiting-prefix execute-requests --input FILE --output FILE\n  cargo xtool automation waiting-prefix sequential-cell --input FILE --output FILE\n  cargo xtool automation waiting-prefix {mixed-run|mixed-cell} --input FILE --output-directory DIR\n  cargo xtool automation waiting-prefix {mixed-plan|mixed-worker|mixed-report} --input FILE --output FILE\n  cargo xtool automation waiting-prefix adaptive-run --input FILE --output-directory DIRECTORY\n\
+       adaptive-cell --input FILE --output-directory DIR\n  cargo xtool automation waiting-prefix plan --catalog FILE --profile NAME --model-id ID --model-sha256 HASH [--contract FILE] [--prompt-manifest FILE] --output FILE\n  cargo xtool automation waiting-prefix synthetic-prompts --families N --requests-per-family N --prefix-blocks N --output FILE\n  cargo xtool automation waiting-prefix stage-config --input FILE --output FILE\n  cargo xtool automation waiting-prefix telemetry-log {snapshot|collect} --log FILE --output FILE [--cursor FILE --expected-generations N]\n  cargo xtool automation waiting-prefix cell-worker --input FILE --output FILE\n  cargo xtool automation waiting-prefix server-cell --input FILE --output-directory DIR\n  cargo xtool automation waiting-prefix prepare-run --input FILE --output FILE\n  cargo xtool automation waiting-prefix run --input FILE --output-directory DIR\n  cargo xtool automation waiting-prefix validate-prompts FILE";
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 struct Prompt {
@@ -180,16 +211,29 @@ fn measurement_command(verb: &str, args: &[String]) -> DynResult<()> {
 
 pub(crate) fn run(args: &[String]) -> DynResult<()> {
     match args {
+        [verb, rest @ ..] if verb == "kv-restart-run" => kv_command::run(rest),
+        [verb, rest @ ..] if verb == "kv-restart-worker" => kv_worker::run(rest),
+        [verb, rest @ ..] if verb == "kv-restart-identity" => kv_identity::run(rest),
         [help] if help == "--help" => {
             println!("{USAGE}");
             Ok(())
         }
+        [verb, rest @ ..] if verb == "mixed-cell" => mixed_cell::run(rest),
+        [verb, rest @ ..] if verb == "mixed-run" => mixed_matrix::run(rest),
+        [verb, rest @ ..] if verb == "mixed-plan" => mixed_commands::plan(rest),
+        [verb, rest @ ..] if verb == "mixed-worker" => mixed_worker::run(rest),
+        [verb, rest @ ..] if verb == "mixed-report" => mixed_commands::report(rest),
         [verb, rest @ ..] if verb == "stage-config" => stage_config::run(rest),
+        [verb, rest @ ..] if verb == "adaptive-run" => adaptive_matrix::run(rest),
+        [verb, rest @ ..] if verb == "adaptive-cell" => adaptive_cell::run(rest),
+        [verb, rest @ ..] if verb == "adaptive-identity-worker" => adaptive_identity::run(rest),
+        [verb, rest @ ..] if verb == "sequential-cell" => sequential_cell::run(rest),
         [verb, rest @ ..] if verb == "synthetic-prompts" => synthetic_prompts::run(rest),
         [verb, rest @ ..] if verb == "telemetry-log" => telemetry_log::run(rest),
         [verb, rest @ ..] if verb == "cell-worker" => cell_worker::run(rest),
         [verb, rest @ ..] if verb == "server-cell" => server_cell::run(rest),
         [verb, rest @ ..] if verb == "run" => round_runner::run(rest),
+        [verb, rest @ ..] if verb == "prepare-run" => round_runner::prepare_run(rest),
         [verb, rest @ ..] if verb == "evaluate" => evaluate(rest),
         [verb, rest @ ..] if verb == "plan" => workload_plan::run(rest),
         [verb, rest @ ..] if verb == "execute-requests" => requests::run(rest),

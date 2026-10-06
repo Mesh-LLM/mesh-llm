@@ -9,6 +9,7 @@ fn normalized(value: &str) -> String {
 }
 
 pub(super) fn sentinel(job: &Node) -> Result<(), String> {
+    protected_source(job)?;
     if !job
         .get("needs")
         .is_some_and(|needs| needs.list().contains(&"runner_policy"))
@@ -38,6 +39,7 @@ pub(super) fn sentinel(job: &Node) -> Result<(), String> {
         .position(|s| text(s, "id") == Some("validate"))
         .ok_or("sentinel identity validation missing")?;
     protected_attestation(steps, attest)?;
+    super::authority_delivery_body::quality_consumer(job, steps, attest)?;
     if validate >= attest {
         return Err("sentinel identity must precede attestation".into());
     }
@@ -213,6 +215,7 @@ pub(super) fn producer(job: &Node) -> Result<(), String> {
         .iter()
         .position(|s| text(s, "id") == Some("authority_upload"))
         .ok_or("protected authority upload missing")?;
+    super::authority_delivery_body::quality_producer(job, steps, freeze, upload)?;
     if !(checkout < freeze && freeze < upload) {
         return Err("protected checkout/freeze/upload order changed".into());
     }
@@ -232,6 +235,49 @@ pub(super) fn producer(job: &Node) -> Result<(), String> {
     ] {
         if text(inputs, key) != Some(value) {
             return Err(format!("protected upload {key} binding changed"));
+        }
+    }
+    Ok(())
+}
+
+// Only the protected no-checkout diagnostic has this stricter source boundary.
+fn protected_source(node: &Node) -> Result<(), String> {
+    match node {
+        Node::Scalar(value) => {
+            for forbidden in [
+                "secrets.",
+                "inputs.source_sha",
+                "github.event.pull_request.head",
+                "audit-depot-pr-isolation@",
+            ] {
+                if value.contains(forbidden) {
+                    return Err(
+                        "sentinel cannot project credentials or PR-controlled source".into(),
+                    );
+                }
+            }
+            for line in value.lines() {
+                let mut words = line.split_whitespace();
+                let first = words.next();
+                if matches!(first, Some("cargo" | "rustc"))
+                    || (first == Some("git") && words.next() == Some("checkout"))
+                {
+                    return Err("sentinel cannot compile or checkout source".into());
+                }
+            }
+        }
+        Node::Seq(nodes) => {
+            for child in nodes {
+                protected_source(child)?;
+            }
+        }
+        Node::Map(entries) => {
+            for (key, child) in entries {
+                if key == "secrets" {
+                    return Err("sentinel cannot map credentials".into());
+                }
+                protected_source(child)?;
+            }
         }
     }
     Ok(())

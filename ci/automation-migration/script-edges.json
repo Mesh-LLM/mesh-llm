@@ -26,11 +26,11 @@
       "members": [
         [
           93,
-          "85c40808818edb13",
+          "5a1be13f22062393",
           1,
           "script",
-          "scripts/generate-bench-corpus.py (executable shebang)",
-          "skippy corpus recipe passes tier and ARGS; inherited diagnostics/status; output path depends on supplied ARGS"
+          "uv locked/offline/no-sync existing reader project python -I scripts/generate-bench-corpus.py",
+          "Explicit optional benchmark corpus only; same tier/ARGS/output/status; dependency setup separate, no runtime unpinned installer fallback"
         ]
       ]
     },
@@ -38,28 +38,20 @@
       "file": "scripts/materialize-competitive-inputs.sh",
       "members": [
         [
-          54,
-          "2bd46b8a95281e56",
-          1,
-          "selection",
-          "evals/skippy-agentic-prompt-manifest.py",
-          "PROMPT_GENERATOR assignment only; optional dataset branch executes it at line 279; no process or output here"
-        ],
-        [
-          61,
+          63,
           "cbc2cdf3d4e06f16",
           1,
           "selection",
           "MESH_COMPETITIVE_PYTHON or python3",
-          "selects overrideable interpreter; command -v preflight at 71; later resolve_path, model manifest, tokenizer export and prompt generation consume it"
+          "Optional tokenizer export only; selected ecosystem interpreter is checked only when tokenizers are requested. Canonical paths and deterministic prompt generation now use native owners."
         ],
         [
-          77,
+          81,
           "d672f7199ac6ceec",
           1,
           "data",
           "hf CLI availability error",
-          "command -v hf tests availability; the quoted pip install text is diagnostic only, stderr then exit 1"
+          "command -v hf tests availability; quoted pip install text is diagnostic only, stderr then exit1"
         ]
       ]
     },
@@ -289,11 +281,11 @@
       "members": [
         [
           32,
-          "3fe73301eda1cdb0",
+          "551adf2f1c74a932",
           1,
           "environment",
-          "explicit surviving28 scripts.tests modules",
-          "Event benchmark runner91/comparator58 have candidate native retirement coverage; root must admit qualified source-bound proof before this last-caller cutover.28 transitional modules remain selected."
+          "explicit surviving26 scripts.tests modules",
+          "Canary authority8/workflow10 candidate retirement requires root source-bound receipt admission; remaining transitional modules stay selected."
         ]
       ]
     },
@@ -369,9 +361,7 @@
     "immediate_target_or_boundary",
     "caller_contract"
   ],
-  "python_implementation_edges": [
-
-  ],
+  "python_implementation_edges": [],
   "python_implementation_groups": [
     {
       "boundary": "--current-binary, --released-binary, --model and --output are operator paths; no wallet funding or remote mutation",
@@ -440,7 +430,7 @@
       "root": "optional Hugging Face MTP certification"
     },
     {
-      "boundary": "HF datasets and revision, parquet sources and query depend on CLI/config; no fixed remote dataset or output path",
+      "boundary": "Exact approved optional corpus helper uses existing DuckDB reader lock and isolated child invocations; HF dataset/config/download semantics unchanged; installed environment/data qualification pending",
       "file": "scripts/generate-bench-corpus.py",
       "members": [
         [
@@ -454,33 +444,24 @@
         ],
         [
           165,
-          "6832846d5b92844a",
+          "a93bce22010619de",
           1,
           "subprocess-or-interpreter",
           "selection",
-          "current sys.executable",
-          "require_duckdb passes interpreter path to python_has_duckdb; conditional probe at 176, no execution on this line"
+          "selected sys.executable -I import probe",
+          "require_duckdb returns only after isolated import succeeds; otherwise actionable locked-environment refusal, no installer fallback"
         ],
         [
-          176,
+          177,
           "227b092c1f2b3e39",
           1,
           "subprocess-or-interpreter",
           "execution",
-          "selected interpreter -c import duckdb",
-          "python_has_duckdb: import probe with both streams discarded; returncode chooses installed DuckDB or uv fallback"
+          "selected interpreter -I -c import duckdb",
+          "python_has_duckdb isolates import; both streams discarded, missing import refuses locked environment before data acquisition"
         ],
         [
-          187,
-          "227b092c1f2b3e39",
-          2,
-          "subprocess-or-interpreter",
-          "execution",
-          "bash -lc command -v <name> >/dev/null",
-          "command_exists('uv'): both streams discarded; status tests uv availability, does not launch uv"
-        ],
-        [
-          216,
+          207,
           "7f4a3157dbab37e7",
           1,
           "subprocess-or-interpreter",
@@ -489,7 +470,7 @@
           "git_commit: cwd=ROOT stdout captured and stripped, stderr discarded; exception becomes None, no write"
         ],
         [
-          228,
+          219,
           "7f4a3157dbab37e7",
           2,
           "subprocess-or-interpreter",
@@ -498,7 +479,7 @@
           "hf_dataset_info: cwd=ROOT stdout JSON captured, nonzero raises, stderr inherited; remote metadata read"
         ],
         [
-          254,
+          245,
           "626c90b5e2af6ee1",
           1,
           "subprocess-or-interpreter",
@@ -507,7 +488,7 @@
           "download_source: cwd=ROOT stdout discarded, stderr inherited, nonzero raises; fetches parquet into local directory"
         ],
         [
-          263,
+          254,
           "7f4a3157dbab37e7",
           3,
           "subprocess-or-interpreter",
@@ -516,31 +497,22 @@
           "download_converted_parquet fallback captures JSON URLs, stderr inherited and failure raises; Python later downloads missing parquet URLs"
         ],
         [
-          373,
-          "a93bce22010619de",
-          1,
-          "subprocess-or-interpreter",
-          "selection",
-          "current sys.executable",
-          "run_duckdb_json probes selected interpreter via python_has_duckdb at line 176; selects inline or uv path, no launch here"
-        ],
-        [
-          374,
-          "1454c96b944e3717",
+          365,
+          "740ac3e013498066",
           1,
           "subprocess-or-interpreter",
           "indirect",
-          "selected interpreter -c inline duckdb query",
-          "run_duckdb_json constructs command when duckdb installed; fallback uv run --with duckdb python -c; execution only at 377"
+          "selected sys.executable -I -c inline DuckDB query",
+          "run_duckdb_json constructs only the isolated selected interpreter argv; read-only query executes at check_output with SQL stdin and JSON stdout"
         ],
         [
-          377,
+          366,
           "7db744a03e4dc2ca",
           1,
           "subprocess-or-interpreter",
           "execution",
-          "conditional: selected interpreter -c inline DuckDB or uv run --with duckdb python -c",
-          "run_duckdb_json passes SQL on stdin cwd=ROOT, captures JSON stdout, stderr inherited; nonzero raises; parquet query read-only"
+          "selected sys.executable -I -c inline DuckDB query",
+          "read-only query receives SQL stdin cwd=ROOT, JSON stdout captured, stderr inherited; nonzero raises; no uv or package installation"
         ]
       ],
       "root": "optional benchmark corpus generator"
@@ -635,8 +607,8 @@
   "python_implementation_sources": [
     [
       "scripts/generate-bench-corpus.py",
-      "cb9bedff8794e225726f15c7b62770cd15e387e48f2df7d794d5adfa5bc56dda",
-      747
+      "f7adf4cd5c0852b8a1f75740c61d6d845cda5c8530ea924a596786360e0907c0",
+      736
     ],
     [
       "scripts/hf-skippy-convert-job.py",
@@ -666,26 +638,7 @@
   ],
   "schema_version": 1,
   "scope": "Justfile, just/**, scripts/** command-like sources and tools/skippy-stage-rewriter/CMakeLists.txt; scanner-observed rows are reconciled by Rust, NOT full interpreter reachability",
-  "source_calls": [
-    {
-      "boundary": "optional competitive benchmark input materialization; resolve_path prints absolute path for input symlink creation; interpreter selected at line 57 and availability tested at 71; no fixed input path",
-      "context": "selected shell interpreter or script invocation",
-      "deletion_condition": "portable path resolution and pinned symlink input behavior reproduced",
-      "id": "scripts/materialize-competitive-inputs.sh:101:c1afabf659777b21",
-      "owner": "competitive benchmark input materialization",
-      "replacement": "tools/xtask optional benchmark input preparation owner",
-      "target": "MESH_COMPETITIVE_PYTHON or python3, inline pathlib.Path.resolve on $1"
-    },
-    {
-      "boundary": "optional competitive benchmark; interpreter can be overridden by MESH_COMPETITIVE_PYTHON, generator path set at line 50; continued arguments select dataset, revision, output $ROOT/thoughtworks/manifest.json, families/request/length limits and source-dataset array; generated manifest SHA checked against config",
-      "context": "selected shell interpreter or script invocation",
-      "deletion_condition": "prompt manifest generator behavior and digest parity, retaining optional ecosystem boundary",
-      "id": "scripts/materialize-competitive-inputs.sh:283:d91cdb8d25062668",
-      "owner": "competitive benchmark prompt input generation",
-      "replacement": "optional benchmark manifest generator owner",
-      "target": "evals/skippy-agentic-prompt-manifest.py via $PROMPT_GENERATOR"
-    }
-  ],
+  "source_calls": [],
   "unresolved_boundaries": [
     "This ledger binds reviewed individual candidate IDs only. The checker reports omitted scoped candidates and fails full --check; no blanket acceptance of 386 scanner rows.",
     "Scanner misses shell continuation and selected interpreter probes: package-native-runtime.sh:192 and verify-native-runtime-package.sh:38 execute $candidate -c on a subsequent line; prepare-llama.sh:246 only runs command -v, not a version probe. CMake find_package(Python3) and add_test COMMAND split the configure requirement and CTest invocation across lines.",
@@ -10228,9 +10181,7 @@
     ],
     "native_tests": ".omo/evidence/resume-20261002/linux-native-focused-v3-tests.log",
     "native_clippy": ".omo/evidence/resume-20261002/linux-native-focused-v3-clippy.log",
-    "remaining_python": [
-
-    ],
+    "remaining_python": [],
     "limits": "No live OpenCode/model/SDK or whole Python-free path claim.",
     "prior_source_sha256": "30b8293e0d23277c1be54db86f4d8a2ae9ff4d7740328309ad57b2ae9955e9e2",
     "successor_record": "agent_coding_recording_proxy_cutover",
@@ -10463,9 +10414,7 @@
         "target": "generated workspace fixture path"
       }
     ],
-    "remaining_python": [
-
-    ],
+    "remaining_python": [],
     "regression": ".omo/evidence/resume-20261002/agent-surface-maximum-input-v1.json",
     "limits": "Maintained corrected full normal gate required. Private Linux fixtures do not prove live OpenCode/model/SDK, Windows or hosted execution.",
     "prior_source_sha256": "30b8293e0d23277c1be54db86f4d8a2ae9ff4d7740328309ad57b2ae9955e9e2",
@@ -10789,9 +10738,7 @@
       "Goose/Pi answer and editing tool-event requirements remain required",
       "Captured automation HOME survives isolated Pi client HOME"
     ],
-    "remaining_python_in_these_adapters": [
-
-    ],
+    "remaining_python_in_these_adapters": [],
     "limits": "Applied source only, full maintained postimage gate required. Private Linux fixtures do not prove live OpenCode/Goose/Pi/model/SDK, hosted or Windows execution. Repository Python inventory remains 96 files and 37 transitional core modules.",
     "prior_qualified_cutovers": {
       "opencode_coding_capture_cutover": {
@@ -11281,9 +11228,7 @@
       "sha256": "fa4342e63b8d4f93e425e88f106d9585ba5ef3e06a057cff3c83ad2ed92c9d5c",
       "head": "3fbd1fcbcd390c86083a8265de3a4ce4734e3a58",
       "status": "FROZEN_SOURCES_NOT_TERMINAL_EXECUTION",
-      "drift": [
-
-      ],
+      "drift": [],
       "additional_native_sources": [
         {
           "path": "tools/xtask/src/automation/event_benchmark_comparison/manifest_tests.rs",
@@ -11360,6 +11305,136 @@
     "current_method_map": {
       "path": ".omo/evidence/resume-20261002/event-benchmark-last-caller-retirement-rebind-v2/current-method-map149.json",
       "sha256": "568fce59980878bc9d619ea6301b81da250ebb99885d5532bdf6f07dd289995c"
+    }
+  },
+  "native_materializer_caller_refresh": {
+    "scope": "Only the materializer caller cutover already source-reviewed and locally CLI-tested; no corpus, download or tokenizer execution qualification.",
+    "source": "scripts/materialize-competitive-inputs.sh",
+    "source_sha256": "c61c5c89dac490852076e001c2bf82e18ad2231be868aaf3d2a9eb40c81581c6",
+    "previous_group": {
+      "file": "scripts/materialize-competitive-inputs.sh",
+      "members": [
+        [
+          54,
+          "2bd46b8a95281e56",
+          1,
+          "selection",
+          "evals/skippy-agentic-prompt-manifest.py",
+          "PROMPT_GENERATOR assignment only; optional dataset branch executes it at line 279; no process or output here"
+        ],
+        [
+          61,
+          "cbc2cdf3d4e06f16",
+          1,
+          "selection",
+          "MESH_COMPETITIVE_PYTHON or python3",
+          "selects overrideable interpreter; command -v preflight at 71; later resolve_path, model manifest, tokenizer export and prompt generation consume it"
+        ],
+        [
+          77,
+          "d672f7199ac6ceec",
+          1,
+          "data",
+          "hf CLI availability error",
+          "command -v hf tests availability; the quoted pip install text is diagnostic only, stderr then exit 1"
+        ]
+      ]
+    },
+    "removed_independent_python_calls": [
+      {
+        "boundary": "optional competitive benchmark input materialization; resolve_path prints absolute path for input symlink creation; interpreter selected at line 57 and availability tested at 71; no fixed input path",
+        "context": "selected shell interpreter or script invocation",
+        "deletion_condition": "portable path resolution and pinned symlink input behavior reproduced",
+        "id": "scripts/materialize-competitive-inputs.sh:101:c1afabf659777b21",
+        "owner": "competitive benchmark input materialization",
+        "replacement": "tools/xtask optional benchmark input preparation owner",
+        "target": "MESH_COMPETITIVE_PYTHON or python3, inline pathlib.Path.resolve on $1"
+      },
+      {
+        "boundary": "optional competitive benchmark; interpreter can be overridden by MESH_COMPETITIVE_PYTHON, generator path set at line 50; continued arguments select dataset, revision, output $ROOT/thoughtworks/manifest.json, families/request/length limits and source-dataset array; generated manifest SHA checked against config",
+        "context": "selected shell interpreter or script invocation",
+        "deletion_condition": "prompt manifest generator behavior and digest parity, retaining optional ecosystem boundary",
+        "id": "scripts/materialize-competitive-inputs.sh:283:d91cdb8d25062668",
+        "owner": "competitive benchmark prompt input generation",
+        "replacement": "optional benchmark manifest generator owner",
+        "target": "evals/skippy-agentic-prompt-manifest.py via $PROMPT_GENERATOR"
+      }
+    ],
+    "native_owners": [
+      "artifact file-projection canonical-path",
+      "automation agentic-prompt-manifest"
+    ],
+    "local_cli_receipt": ".omo/evidence/resume-20261002/hf-parity-eval-maintained-v3-eval-cli-exit.json",
+    "status": "SOURCE_BOUND_CALLER_REFRESH_PENDING_CURRENT_INVENTORY_AND_NORMAL"
+  },
+  "authority_canary_eighteen_test_retirement": {
+    "status": "LOCAL_POSTIMAGE_QUALIFIED",
+    "original_methods": 18,
+    "removed_paths": [
+      "scripts/tests/test_depot_authority_sentinel.py",
+      "scripts/tests/test_depot_canary_workflow.py"
+    ],
+    "durable_coverage": {
+      "path": "ci/automation-migration/authority-canary-test-retirement-coverage.json",
+      "sha256": "8cc15ce9d4f1c3b33989c075eddc23dce925bf4d03c3ed46b487d748a2842ef6"
+    },
+    "current_just": {
+      "path": "just/ci.just",
+      "sha256": "0463c251ee715f83ec80b526a92c60f52d5d7804663d2ddbbdc98afedb978f2b",
+      "roster_line": 32,
+      "count": 26,
+      "modules": [
+        "scripts.tests.test_prepare_llama",
+        "scripts.tests.test_package_native_runtime",
+        "scripts.tests.test_skippy_llama_parity",
+        "scripts.tests.test_ci_windows_composition",
+        "scripts.tests.test_reusable_workflow_runner_trust",
+        "scripts.tests.test_build_windows",
+        "scripts.tests.test_skippy_radix_cache_ab",
+        "scripts.tests.test_ci_lane_workflows",
+        "scripts.tests.test_ci_native_toolchain_routing",
+        "scripts.tests.test_skippy_competitive_benchmark",
+        "scripts.tests.test_pr_workflow_artifacts",
+        "scripts.tests.test_hf_skippy_mtp_certify_job",
+        "scripts.tests.test_install_ps1",
+        "scripts.tests.test_kv_restart_replay",
+        "scripts.tests.test_llama_canary_agent_repair_contract",
+        "scripts.tests.test_agentic_trajectory_manifest",
+        "scripts.tests.test_llama_upstream_canary_contract",
+        "scripts.tests.test_llama_review_regressions",
+        "scripts.tests.test_skippy_adaptive_prefill_ab",
+        "scripts.tests.test_skippy_agentic_prompt_manifest",
+        "scripts.tests.test_skippy_mixed_prefill_decode_ab",
+        "scripts.tests.test_ci_sdk_producers",
+        "scripts.tests.test_llama_native_full_replay",
+        "scripts.tests.test_ci_artifact_actions",
+        "scripts.tests.test_skippy_system_one_smoke",
+        "scripts.tests.test_release_workflow_artifacts"
+      ]
+    },
+    "admission_prerequisites": ".omo/evidence/resume-20261002/authority18-retirement-proposal-v1/prerequisites.json",
+    "qualification": {
+      "native_proof_bindings": 59,
+      "gap_receipt": ".omo/evidence/resume-20261002/authority18-gaps-maintained-v1-exit.json",
+      "gap_receipt_sha256": "c8f5bea1ba1a505462141250738eba26747194dd1e2e94cabebdda1ab7d5782e",
+      "full_ci_required_after_transaction": true,
+      "full_ci": {
+        "path": ".omo/evidence/resume-20261002/authority18-postretirement-maintained-v2-exit.json",
+        "sha256": "22b647494b69839bac14d6515a183f43c59093fefa7e66a588c47f798d49d712",
+        "validated_freeze": {
+          "path": ".omo/evidence/resume-20261002/authority18-postretirement-maintained-v2-freeze-v1.json",
+          "sha256": "6bf75540b9e6c34885ea9a5721d0c68c52f35175008644eb75bd2021b6308ce0"
+        },
+        "normal": {
+          "log": ".omo/evidence/resume-20261002/authority18-postretirement-maintained-v2-normal.log",
+          "sha256": "7db1c2ff6e7f602c24deb87a874e565e3e2be072dd216a8656953756f7704e49",
+          "rust_groups": 117,
+          "rust_passed": 5626,
+          "python_tests": 413,
+          "python_skipped": 13
+        },
+        "scope": "Current complete local ci-validate on retirement transaction sources before this metadata-only receipt reconciliation; no hosted, model or platform acceptance."
+      }
     }
   }
 }

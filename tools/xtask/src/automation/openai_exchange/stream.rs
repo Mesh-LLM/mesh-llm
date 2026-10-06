@@ -11,6 +11,7 @@ pub(in crate::automation) struct Stream {
     error: Option<String>,
     usage: Option<Usage>,
     first: Option<Duration>,
+    first_generated_sha256: Option<String>,
     events: Vec<Duration>,
     content: String,
     reasoning: String,
@@ -45,7 +46,7 @@ struct Choice {
     delta: Option<Delta>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 struct Delta {
     content: Option<String>,
     reasoning_content: Option<String>,
@@ -53,7 +54,7 @@ struct Delta {
     tool_calls: Option<Vec<ToolDelta>>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 struct ToolDelta {
     index: Option<usize>,
     #[serde(rename = "type")]
@@ -61,7 +62,7 @@ struct ToolDelta {
     function: Option<FunctionDelta>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 struct FunctionDelta {
     name: Option<String>,
     arguments: Option<String>,
@@ -96,6 +97,8 @@ pub(in crate::automation) struct Evidence {
     pub content_events: usize,
     pub finish_reason: Option<String>,
     pub content_sha256: String,
+    /// SHA256 of the first nonempty typed delta, including null optional fields.
+    pub first_generated_sha256: Option<String>,
 }
 
 impl Stream {
@@ -164,13 +167,13 @@ impl Stream {
                 self.finish_reason = choice.finish_reason;
             }
             if let Some(delta) = choice.delta {
-                self.delta(delta, elapsed);
+                self.delta(delta, elapsed)?;
             }
         }
         Ok(())
     }
 
-    fn delta(&mut self, delta: Delta, elapsed: Duration) {
+    fn delta(&mut self, delta: Delta, elapsed: Duration) -> Result<(), String> {
         let generated = delta.content.as_ref().is_some_and(|text| !text.is_empty())
             || delta
                 .reasoning_content
@@ -180,6 +183,10 @@ impl Stream {
                 .tool_calls
                 .as_ref()
                 .is_some_and(|calls| !calls.is_empty());
+        if generated && self.first_generated_sha256.is_none() {
+            let encoded = serde_json::to_vec(&delta).map_err(|error| error.to_string())?;
+            self.first_generated_sha256 = Some(hex::encode(Sha256::digest(encoded)));
+        }
         if generated {
             self.first.get_or_insert(elapsed);
             self.events.push(elapsed);
@@ -211,6 +218,7 @@ impl Stream {
                 }
             }
         }
+        Ok(())
     }
 
     pub(in crate::automation) fn finish(
@@ -262,6 +270,7 @@ impl Stream {
             content_events: self.events.len(),
             finish_reason: self.finish_reason,
             content_sha256: hex::encode(Sha256::digest(encoded)),
+            first_generated_sha256: self.first_generated_sha256,
         })
     }
 }

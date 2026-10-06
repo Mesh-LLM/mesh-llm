@@ -188,39 +188,6 @@
       ]
     },
     {
-      "file": ".github/workflows/depot-canary.yml",
-      "members": [
-        [
-          349,
-          "5280fbba5ae3cdc6",
-          1,
-          "probe",
-          "command -v python3 in first cache authority phase"
-        ],
-        [
-          355,
-          "ed80ea8633907110",
-          1,
-          "inline",
-          "first authority phase printf host | python3 -c ipaddress classifier, exit 0/3/2; output discarded"
-        ],
-        [
-          549,
-          "5280fbba5ae3cdc6",
-          2,
-          "probe",
-          "command -v python3 in second cache authority phase"
-        ],
-        [
-          555,
-          "ed80ea8633907110",
-          2,
-          "inline",
-          "second authority phase printf host | python3 -c ipaddress classifier, exit 0/3/2; output discarded"
-        ]
-      ]
-    },
-    {
       "file": ".github/workflows/llama-canary-family-pass.yml",
       "members": [
         [
@@ -316,21 +283,21 @@
       "file": ".github/workflows/ci-quality-slice.yml",
       "members": [
         [
-          221,
+          242,
           "d7149b0913e92921",
           1,
           "provision",
           "quality_contracts Python 3.12 for required contracts and unittest"
         ],
         [
-          223,
+          244,
           "8c1dfd95e0d605d6",
           1,
           "metadata",
           "quality_contracts setup-python version 3.12"
         ],
         [
-          225,
+          246,
           "78b39ffedbd6d228",
           1,
           "installer",

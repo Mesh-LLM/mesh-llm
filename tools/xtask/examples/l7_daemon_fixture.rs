@@ -1,3 +1,9 @@
+#[path = "l7_daemon_fixture/competitive_fixture.rs"]
+mod competitive_fixture;
+#[path = "l7_daemon_fixture/lightning_peer_fixture.rs"]
+mod lightning_peer_fixture;
+#[path = "l7_daemon_fixture/manual_smoke_fixture.rs"]
+mod manual_smoke_fixture;
 #[path = "../tests/migration_lifecycle/signals.rs"]
 #[expect(dead_code, reason = "shared fixture signal ownership")]
 mod signals;
@@ -10,9 +16,32 @@ use std::{
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let arguments: Vec<_> = std::env::args().skip(1).collect();
+    if let [verb, rest @ ..] = arguments.as_slice()
+        && verb == "lightning-peer"
+    {
+        return lightning_peer_fixture::run(rest);
+    }
     if arguments.iter().any(|argument| argument == "--version") {
+        if std::path::Path::new("version-oversized").exists() {
+            std::io::stdout().write_all(&vec![b'v'; 65537])?;
+            return Ok(());
+        }
+        if std::path::Path::new("version-held").exists() {
+            crate::signals::install()?;
+            while !crate::signals::stopped() {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            return Ok(());
+        }
         println!("fixture version 1");
+
         return Ok(());
+    }
+    if manual_smoke_fixture::selected(&arguments) {
+        return manual_smoke_fixture::run(&arguments);
+    }
+    if competitive_fixture::selected(&arguments) {
+        return competitive_fixture::run(&arguments);
     }
     if arguments.iter().any(|argument| argument == "auth") {
         if let Some(root) = std::env::var_os("MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR")

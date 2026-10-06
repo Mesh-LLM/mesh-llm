@@ -18,3 +18,6 @@ mod publish_order;
 mod source_validation;
 #[path = "migration_repository/upstream_pin.rs"]
 mod upstream_pin;
+
+#[path = "migration_repository/sdk_isolation_contract.rs"]
+mod sdk_isolation_contract;

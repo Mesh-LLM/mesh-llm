@@ -130,7 +130,7 @@ skippy-native-full-replay backend="cpu":
 
 # Generate a reproducible benchmark corpus for skippy bench tooling.
 bench-corpus tier="smoke" *ARGS="":
-    scripts/generate-bench-corpus.py "{{ tier }}" {{ ARGS }}
+    uv run --offline --locked --no-sync --no-python-downloads --project "{{justfile_directory()}}/ci/agentic-replay-nightly" python -I "{{justfile_directory()}}/scripts/generate-bench-corpus.py" "{{ tier }}" {{ ARGS }}
 
 # Run skippy family certification checks.
 family-certify *ARGS:

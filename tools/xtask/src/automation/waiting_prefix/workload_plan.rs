@@ -6,7 +6,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::{collections::BTreeMap, path::Path};
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct Workload {
     pub(super) rounds: u64,
@@ -28,7 +28,7 @@ impl Workload {
             .ok_or_else(|| "workload request count overflow".into())
     }
 
-    fn validate(&self) -> DynResult<()> {
+    pub(super) fn validate(&self) -> DynResult<()> {
         if [
             self.rounds,
             self.families,
@@ -95,7 +95,7 @@ struct AcceptanceDocument {
 pub(super) struct Plan {
     pub(super) schema_version: u64,
     pub(super) workload_profile: String,
-    pub(super) fixture_catalog_sha256: String,
+    pub(super) fixture_catalog_sha256: Option<String>,
     pub(super) model: Value,
     pub(super) workload: Workload,
     pub(super) requests_per_round: u64,
@@ -105,6 +105,8 @@ pub(super) struct Plan {
     pub(super) hardware_acceptance: Value,
     pub(super) cache_seed: Option<CacheSeed>,
     pub(super) prompt_manifest_sha256: Option<String>,
+    pub(super) prompt_manifest_metadata: serde_json::Map<String, Value>,
+    pub(super) family_request_counts: BTreeMap<String, u64>,
 }
 
 fn hash(bytes: &[u8]) -> String {
@@ -192,10 +194,25 @@ pub(super) fn resolve(
         return Err("acceptance success count differs from the complete workload".into());
     }
     let manifest_sha = admit_prompts(profile, &workload, prompts)?;
+    let (prompt_manifest_metadata, family_request_counts) = if let Some(bytes) = prompts {
+        let manifest = prompt_manifest(bytes)?;
+        let mut counts = BTreeMap::new();
+        for prompt in manifest.prompts {
+            *counts.entry(prompt.family).or_insert(0_u64) += 1;
+        }
+        (manifest.metadata, counts)
+    } else {
+        (
+            serde_json::Map::new(),
+            (0..workload.families)
+                .map(|i| (format!("family-{i}"), workload.requests_per_family))
+                .collect(),
+        )
+    };
     Ok(Plan {
         schema_version: 1,
         workload_profile: profile_name.into(),
-        fixture_catalog_sha256: hash(catalog_bytes),
+        fixture_catalog_sha256: Some(hash(catalog_bytes)),
         model: profile["model"].clone(),
         workload,
         requests_per_round,
@@ -205,6 +222,8 @@ pub(super) fn resolve(
         hardware_acceptance: hardware,
         cache_seed: seed,
         prompt_manifest_sha256: manifest_sha,
+        prompt_manifest_metadata,
+        family_request_counts,
     })
 }
 

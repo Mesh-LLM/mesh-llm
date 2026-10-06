@@ -9,10 +9,53 @@ fn metric(value: Option<f64>) -> String {
         .map_or_else(|| "n/a".into(), |value| format!("{value:.1}"))
 }
 
+fn chart(
+    output: &mut String,
+    title: &str,
+    before: Option<f64>,
+    after: Option<f64>,
+) -> DynResult<()> {
+    let (Some(before), Some(after)) = (before, after) else {
+        return Ok(());
+    };
+    if !before.is_finite() || !after.is_finite() || before < 0.0 || after < 0.0 {
+        return Err("A/B chart requires finite nonnegative measured values".into());
+    }
+    let ceiling = before.max(after).max(1.0) * 1.1;
+    if !ceiling.is_finite() {
+        return Err("A/B chart scale overflow".into());
+    }
+    writeln!(
+        output,
+        "```mermaid\nxychart-beta\n    title \"{title}\"\n    x-axis [\"Before\", \"After\"]\n    y-axis \"tokens\" 0 --> {:.0}\n    bar [{before:.0}, {after:.0}]\n```\n",
+        ceiling.ceil()
+    )?;
+    Ok(())
+}
+
 pub(super) fn render(rows: &[Aggregate], acceptance: &Acceptance) -> DynResult<String> {
+    render_optional(rows, Some(acceptance))
+}
+
+pub(super) fn render_optional(
+    rows: &[Aggregate],
+    acceptance: Option<&Acceptance>,
+) -> DynResult<String> {
     let (before, after) = pair(rows)?;
-    let mut output =
-        String::from("| Metric | Before | After | Delta |\n| --- | ---: | ---: | ---: |\n");
+    let mut output = String::new();
+    chart(
+        &mut output,
+        "Waiting-prefix A/B: suffix tokens prefetched (lower is better)",
+        before.suffix_prefill_tokens_median,
+        after.suffix_prefill_tokens_median,
+    )?;
+    chart(
+        &mut output,
+        "Resident KV tokens evicted (lower is better)",
+        before.resident_evicted_tokens_median,
+        after.resident_evicted_tokens_median,
+    )?;
+    output.push_str("| Metric | Before | After | Delta |\n| --- | ---: | ---: | ---: |\n");
     for (label, old, new) in [
         (
             "Cache hits / round",
@@ -78,6 +121,10 @@ pub(super) fn render(rows: &[Aggregate], acceptance: &Acceptance) -> DynResult<S
             metric(new)
         )?;
     }
+    let Some(acceptance) = acceptance else {
+        output.push_str("\nAcceptance: not requested (manual workload).\n");
+        return Ok(output);
+    };
     writeln!(
         output,
         "\nFixture acceptance: **{}**\n",

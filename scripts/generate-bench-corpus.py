@@ -162,35 +162,26 @@ def require_hf() -> None:
 
 
 def require_duckdb() -> None:
-    if python_has_duckdb(sys.executable) or command_exists("uv"):
+    if python_has_duckdb(sys.executable):
         return
     raise RuntimeError(
-        "DuckDB is required to sample downloaded parquet files. Install the "
-        "DuckDB Python package or install `uv` so the generator can run with "
-        "`uv run --with duckdb`."
+        "The retained corpus reader requires the locked DuckDB environment. "
+        "Prepare ci/agentic-replay-nightly with `uv sync --locked --project "
+        "ci/agentic-replay-nightly --python /absolute/existing/python`, then "
+        "run `just bench-corpus`. Runtime never installs an unpinned DuckDB."
     )
 
 
 def python_has_duckdb(python: str) -> bool:
     return (
         subprocess.run(
-            [python, "-c", "import duckdb"],
+            [python, "-I", "-c", "import duckdb"],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         ).returncode
         == 0
     )
 
-
-def command_exists(name: str) -> bool:
-    return (
-        subprocess.run(
-            ["bash", "-lc", f"command -v {name} >/dev/null"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        ).returncode
-        == 0
-    )
 
 
 def read_json(path: Path) -> Any:
@@ -370,10 +361,8 @@ columns = [column[0] for column in result.description]
 rows = [dict(zip(columns, row)) for row in result.fetchall()]
 print(json.dumps(rows, ensure_ascii=False, default=str))
 """
-    if python_has_duckdb(sys.executable):
-        command = [sys.executable, "-c", code]
-    else:
-        command = ["uv", "run", "--with", "duckdb", "python", "-c", code]
+    require_duckdb()
+    command = [sys.executable, "-I", "-c", code]
     return subprocess.check_output(command, cwd=ROOT, input=query, text=True)
 
 

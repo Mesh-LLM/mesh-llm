@@ -133,6 +133,7 @@ jobs:
       allow_trusted_sccache_seed: ${{ steps.policy.outputs.allow_trusted_sccache_seed }}
       authority_sentinel_runner: ${{ steps.sentinel_policy.outputs.runner }}
       authority_sentinel_depot_enabled: ${{ steps.sentinel_policy.outputs.depot_enabled }}
+      authority_automation_results_origin: ${{ steps.authority_origin.outputs.origin }}
       authority_automation_source_sha: ${{ steps.authority_source.outputs.sha }}
       authority_automation_artifact_id: ${{ steps.authority_upload.outputs.artifact_id }}
       authority_automation_binary_sha256: ${{ steps.authority_upload.outputs.binary_sha256 }}
@@ -183,11 +184,31 @@ jobs:
         if: steps.sentinel_policy.outputs.depot_enabled == 'true'
         id: authority_source
         shell: bash
+        env:
+          GIT_MASTER: '1'
+          GIT_OPTIONAL_LOCKS: '0'
         run: |
           set -euo pipefail
           sha="$(git rev-parse HEAD)"
           [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || exit 1
           printf 'sha=%s\n' "$sha" >> "$GITHUB_OUTPUT"
+      - name: Admit protected hosted artifact service origin
+        if: steps.sentinel_policy.outputs.depot_enabled == 'true'
+        id: authority_origin
+        shell: bash
+        env:
+          AUTOMATION_SOURCE_SHA: ${{ steps.authority_source.outputs.sha }}
+          GIT_MASTER: '1'
+          GIT_OPTIONAL_LOCKS: '0'
+        run: |
+          set -euo pipefail
+          [[ "$AUTOMATION_SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || exit 1
+          test "$AUTOMATION_SOURCE_SHA" = "$(git rev-parse HEAD)" || exit 1
+          case "${ACTIONS_RESULTS_URL:-}" in
+            https://results-receiver.actions.githubusercontent.com|https://results-receiver.actions.githubusercontent.com/) ;;
+            *) echo "Unexpected trusted artifact service origin" >&2; exit 1 ;;
+          esac
+          printf 'origin=https://results-receiver.actions.githubusercontent.com\n' >> "$GITHUB_OUTPUT"
       - name: Publish protected authority automation
         if: steps.sentinel_policy.outputs.depot_enabled == 'true'
         id: authority_upload
@@ -500,6 +521,7 @@ jobs:
         shell: bash
         env:
           AUTOMATION_SOURCE_SHA: ${{ needs.runner_policy.outputs.authority_automation_source_sha }}
+          AUTOMATION_RESULTS_ORIGIN: ${{ needs.runner_policy.outputs.authority_automation_results_origin }}
           AUTOMATION_ARTIFACT_ID: ${{ needs.runner_policy.outputs.authority_automation_artifact_id }}
           AUTOMATION_BINARY_SHA256: ${{ needs.runner_policy.outputs.authority_automation_binary_sha256 }}
         run: |
@@ -509,9 +531,12 @@ jobs:
           [[ "$AUTOMATION_SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || exit 1
           [[ "$AUTOMATION_ARTIFACT_ID" =~ ^[1-9][0-9]{0,19}$ ]] || exit 1
           [[ "$AUTOMATION_BINARY_SHA256" =~ ^[0-9a-f]{64}$ ]] || exit 1
+          test "$AUTOMATION_RESULTS_ORIGIN" = 'https://results-receiver.actions.githubusercontent.com' || exit 1
           mkdir "$RUNNER_TEMP/immutable-automation-restored"
       - name: Download protected authority automation
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        env:
+          ACTIONS_RESULTS_URL: ${{ needs.runner_policy.outputs.authority_automation_results_origin }}
         with:
           artifact-ids: ${{ needs.runner_policy.outputs.authority_automation_artifact_id }}
           path: ${{ runner.temp }}/immutable-automation-restored

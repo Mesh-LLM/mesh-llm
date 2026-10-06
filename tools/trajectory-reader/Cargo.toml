@@ -17,6 +17,7 @@ serde_json = "1"
 parquet = { version = "=60.0.0", optional = true, default-features = false, features = ["snap", "brotli", "flate2-rust_backend", "lz4", "zstd"] }
 
 [dev-dependencies]
+hyper = "=1.11.1"
 thiserror = "2"
 tempfile = "3"
 

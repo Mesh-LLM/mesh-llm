@@ -42,7 +42,15 @@ fn complete_tree(root: &Path) -> DynResult<()> {
     Ok(())
 }
 
-pub(super) fn verify(root: &Path, expected: &str) -> DynResult<String> {
+pub(super) fn observe(root: &Path) -> DynResult<String> {
+    if !root.is_absolute() || !root.is_dir() {
+        return Err("native artifact observation requires an absolute directory".into());
+    }
+    complete_tree(root)?;
+    crate::product::digest::tree_sha256(root).map_err(|error| error.error.into())
+}
+
+pub(in crate::automation) fn verify(root: &Path, expected: &str) -> DynResult<String> {
     if !root.is_absolute()
         || !root.is_dir()
         || expected.len() != 64
@@ -50,8 +58,7 @@ pub(super) fn verify(root: &Path, expected: &str) -> DynResult<String> {
     {
         return Err("native artifact pin requires an absolute directory and SHA-256".into());
     }
-    complete_tree(root)?;
-    let actual = crate::product::digest::tree_sha256(root).map_err(|error| error.error)?;
+    let actual = observe(root)?;
     if actual != expected {
         return Err("provided native artifact tree SHA-256 mismatch".into());
     }

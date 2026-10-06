@@ -1,3 +1,7 @@
+#[expect(
+    dead_code,
+    reason = "shared process owner includes HTTPS APIs unused by this client lifecycle driver"
+)]
 #[path = "../../src/process/mod.rs"]
 pub mod process;
 mod protocol;

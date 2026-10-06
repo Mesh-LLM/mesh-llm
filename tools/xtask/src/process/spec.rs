@@ -11,6 +11,7 @@ use std::time::Duration;
 #[path = "observed_spec_tests.rs"]
 mod tests;
 
+#[derive(Clone)]
 pub enum Value {
     Public(OsString),
     Secret(OsString),

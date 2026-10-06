@@ -4069,20 +4069,6 @@
       "reason": "Quality line205 installs retained PyYAML requirements before canonical just ci-automation-contracts and surviving just ci-legacy-contracts at212-213; required SDK installation remains separate.",
       "replacement_task": 11,
       "target": "ci/requirements-ci-python.txt"
-    },
-    {
-      "id": ".github/workflows/depot-canary.yml#candidate:ed80ea8633907110:1",
-      "owner": "Depot canary authority preflight A",
-      "reason": "Inline ipaddress check gates first provider probe",
-      "replacement_task": 12,
-      "target": "inline ipaddress code"
-    },
-    {
-      "id": ".github/workflows/depot-canary.yml#candidate:ed80ea8633907110:2",
-      "owner": "Depot canary authority preflight B",
-      "reason": "Second inline ipaddress check gates later provider probe",
-      "replacement_task": 12,
-      "target": "inline ipaddress code"
     }
   ],
   "source_verified_scope": "Nine original source-reviewed edges and separate GitHub source records. Selected process and bounded Just recipe calls are separately bound; full transitive scope remains incomplete.",

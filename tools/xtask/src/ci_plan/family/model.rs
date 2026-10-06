@@ -143,10 +143,10 @@ impl ModelParser<'_> {
             ));
         }
         let evidence = Evidence::parse(row, &profile, &field)?;
-        let artifact = artifact::parse(row.get("artifact"), &format!("{field}.artifact"))?;
+        let artifact = artifact::parse_serving(row.get("artifact"), &format!("{field}.artifact"))?;
         let draft_artifact = row
             .get("draft_artifact")
-            .map(|value| artifact::parse(Some(value), &format!("{field}.draft_artifact")))
+            .map(|value| artifact::parse_serving(Some(value), &format!("{field}.draft_artifact")))
             .transpose()?;
         let mmproj_artifact = row
             .get("mmproj_artifact")

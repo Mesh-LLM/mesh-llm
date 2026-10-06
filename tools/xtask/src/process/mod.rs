@@ -18,6 +18,7 @@
 
 mod capture;
 mod control;
+pub(crate) mod curl_https;
 mod inherited;
 mod line;
 mod observed;

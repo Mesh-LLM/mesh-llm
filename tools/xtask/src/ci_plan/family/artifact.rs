@@ -128,3 +128,81 @@ pub(super) fn parse(value: Option<&Json>, field: &str) -> PlanResult<Artifact> {
         selector,
     })
 }
+
+/// The retained family battery consumes artifact.files[0]. Normalize only serving
+/// artifacts; sidecar/projector declarations continue through parse unchanged.
+pub(super) fn parse_serving(value: Option<&Json>, field: &str) -> PlanResult<Artifact> {
+    let mut artifact = parse(value, field)?;
+    let selected = artifact
+        .files
+        .iter()
+        .enumerate()
+        .filter_map(|(index, name)| {
+            let text = name.scalar_text()?;
+            let rank = crate::model_registry::serving_entry::rank(&text)?;
+            Some((rank, &artifact.file_integrity[name].size_bytes, name, index))
+        })
+        .min()
+        .map(|(_, _, _, index)| index)
+        .ok_or_else(|| format!("{field}.files lacks a serving GGUF or first shard"))?;
+    let first = artifact.files.remove(selected);
+    artifact.files.insert(0, first);
+    Ok(artifact)
+}
+#[cfg(test)]
+mod serving_tests {
+    use super::super::document;
+    use super::*;
+    fn fixture(files: &[&str]) -> Json {
+        let integrity: serde_json::Map<_, _> = files
+            .iter()
+            .map(|name| {
+                (
+                    (*name).into(),
+                    serde_json::json!({"size_bytes":42,"blob_id":"b".repeat(64)}),
+                )
+            })
+            .collect();
+        document::parse(&serde_json::json!({"repo":"org/model","revision":"a".repeat(40),"files":files,"file_integrity":integrity,"selector":"Q4"}).to_string()).unwrap()
+    }
+    #[test]
+    fn family_battery_first_file_is_serving_shard_and_integrity_roster_is_preserved() {
+        let files = [
+            "model-00002-of-00002.gguf",
+            "mmproj.gguf",
+            "model-00001-of-00002.gguf",
+        ];
+        let input = fixture(&files);
+        let artifact = parse_serving(Some(&input), "artifact").unwrap();
+        assert_eq!(artifact.files[0].scalar_text().unwrap(), files[2]);
+        assert_eq!(artifact.files[1].scalar_text().unwrap(), files[0]);
+        assert_eq!(artifact.files[2].scalar_text().unwrap(), files[1]);
+        let projected = artifact.to_json();
+        match &projected.get("files").unwrap().as_array().unwrap()[0] {
+            Json::String(name) => assert_eq!(name.scalar_text().unwrap(), files[2]),
+            _ => panic!("projected serving entry must remain string"),
+        }
+        assert_eq!(
+            projected
+                .get("file_integrity")
+                .unwrap()
+                .as_object()
+                .unwrap()
+                .len(),
+            files.len()
+        );
+        assert!(parse_serving(Some(&fixture(&[files[0]])), "artifact").is_err());
+        for name in ["Model-of-Thought.gguf", "Model-1-of-Thought.gguf"] {
+            assert_eq!(
+                parse_serving(Some(&fixture(&[name])), "artifact")
+                    .unwrap()
+                    .files[0]
+                    .scalar_text()
+                    .unwrap(),
+                name
+            );
+        }
+        assert!(parse(Some(&fixture(&["mmproj.gguf"])), "mmproj_artifact").is_ok());
+        assert!(parse_serving(Some(&fixture(&["mmproj.gguf"])), "artifact").is_err());
+    }
+}

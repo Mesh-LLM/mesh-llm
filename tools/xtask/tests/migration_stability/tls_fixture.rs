@@ -18,6 +18,7 @@ pub struct Reply {
     chunked: bool,
     hold: bool,
     declared: Option<usize>,
+    location: Option<String>,
 }
 impl Reply {
     pub fn json(status: u16, value: &Value) -> Self {
@@ -30,6 +31,7 @@ impl Reply {
             chunked: false,
             hold: false,
             declared: None,
+            location: None,
         }
     }
     pub fn stream(body: String, hold: bool) -> Self {
@@ -39,7 +41,13 @@ impl Reply {
             chunked: true,
             hold,
             declared: None,
+            location: None,
         }
+    }
+    pub fn redirect(location: &str) -> Self {
+        let mut reply = Self::bytes(302, Vec::new());
+        reply.location = Some(location.into());
+        reply
     }
     pub fn incomplete() -> Self {
         Self {
@@ -48,6 +56,7 @@ impl Reply {
             chunked: false,
             hold: true,
             declared: Some(99),
+            location: None,
         }
     }
 }
@@ -65,9 +74,15 @@ pub struct Server {
 
 impl Server {
     pub fn new(replies: Vec<Reply>) -> Self {
-        let rcgen::CertifiedKey { cert, signing_key } =
-            rcgen::generate_simple_self_signed(vec!["localhost".into(), "127.0.0.1".into()])
-                .unwrap();
+        Self::with_host(replies, "127.0.0.1")
+    }
+    pub fn with_host(replies: Vec<Reply>, host: &str) -> Self {
+        let rcgen::CertifiedKey { cert, signing_key } = rcgen::generate_simple_self_signed(vec![
+            "localhost".into(),
+            "127.0.0.1".into(),
+            host.into(),
+        ])
+        .unwrap();
         let directory = tempfile::tempdir().unwrap();
         let ca = directory.path().join("fixture-ca.pem");
         fs::write(&ca, cert.pem()).unwrap();
@@ -84,7 +99,10 @@ impl Server {
         .unwrap();
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         listener.set_nonblocking(true).unwrap();
-        let base = format!("https://{}/tenant/v1", listener.local_addr().unwrap());
+        let base = format!(
+            "https://{host}:{}/tenant/v1",
+            listener.local_addr().unwrap().port()
+        );
         let requests = Arc::new(Mutex::new(Vec::new()));
         let output = requests.clone();
         let stop = Arc::new(AtomicBool::new(false));
@@ -224,9 +242,13 @@ fn send(
             reply.declared.unwrap_or(reply.body.len())
         )
     };
+    let location = reply
+        .location
+        .as_ref()
+        .map_or(String::new(), |value| format!("Location: {value}\r\n"));
     write!(
         stream,
-        "HTTP/1.1 {} fixture\r\n{framing}Content-Type: application/json\r\nConnection: close\r\n\r\n",
+        "HTTP/1.1 {} fixture\r\n{framing}{location}Content-Type: application/json\r\nConnection: close\r\n\r\n",
         reply.status
     )?;
     if reply.chunked {

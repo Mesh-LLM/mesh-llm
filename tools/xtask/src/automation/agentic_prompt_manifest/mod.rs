@@ -1,3 +1,4 @@
+mod check_reader;
 mod document;
 mod fixture_catalog;
 mod fixture_fetch;
@@ -25,6 +26,7 @@ pub(crate) fn run(args: &[String]) -> DynResult<()> {
         println!(
             "cargo xtool automation agentic-prompt-manifest --dataset-file FILE --dataset-revision REV --output FILE --source-dataset SOURCE [selection options]\n\
 Selection options: --families N (8), --requests-per-family N (2), --min-isl N (8192), --max-isl N (12000, exclusive), --min-turns N (20). Repeat --source-dataset to admit multiple sources.\n\
+Local reader preflight: check-reader (no corpus validation)\n\
 Local fixture commands:\n\
   validate-fixtures CATALOG\n\
   show-fixture CATALOG PROFILE\n\
@@ -47,6 +49,9 @@ Fetch and prepare download and strictly verify the pinned revision. The shared c
         if verb == "check-fixture-inputs" {
             return fixture_profile::run(rest);
         }
+    }
+    if args == ["check-reader"] {
+        return check_reader::run();
     }
     match args {
         [verb, file] if verb == "validate-fixtures" => {

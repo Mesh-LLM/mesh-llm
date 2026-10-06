@@ -1,6 +1,6 @@
 mod command;
 pub(crate) mod schema;
-mod source;
+pub(in crate::automation) mod source;
 mod validation;
 
 pub(crate) use command::{USAGE, run};

@@ -150,3 +150,29 @@ fn exact_capability_ancestry_rejects_wrappers_and_preceding_terminals() {
 fn real_prepared_function_accepts_legitimate_workload_and_lambda_control_flow() {
     assert!(validate(include_str!("prepared_admission.cpp")).is_ok());
 }
+
+// Append to the existing runtime_slice/tests.rs module; fixture()/validate() are owned there.
+#[test]
+fn architecture_specific_implementation_after_admission_remains_allowed() {
+    let source = fixture().replace(
+        "skippy_model * stage_model = nullptr;",
+        "skippy_model * stage_model = nullptr;\nif (model->arch == LLM_ARCH_GLM_DSA) { configure_graph(); }",
+    );
+    assert!(validate(&source).is_ok());
+}
+
+#[test]
+fn detached_commented_and_missing_input_frontier_contracts_are_refused() {
+    let source = fixture();
+    let guard = "if (config->layer_end > n_layer) {";
+    for mutant in [
+        source.replace(guard, "if (config->layer_end > n_layer) {} {"),
+        source.replace(guard, "/* if (config->layer_end > n_layer) */ {"),
+        source.replace(
+            "stage graph input frontier does not match its admitted planner identities",
+            "input frontier diagnostics without an admitted identity contract",
+        ),
+    ] {
+        assert!(validate(&mutant).is_err(), "{mutant}");
+    }
+}

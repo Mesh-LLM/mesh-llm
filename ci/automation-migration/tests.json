@@ -1121,62 +1121,6 @@
     },
     {
       "case_ownership": "Per-case replacement must test behavior, including positive, negative, edge and identity-preserving cases; source-text-only assertions do not qualify.",
-      "deletion_condition": "Delete only after each behavior case has an owning replacement and required platform evidence.",
-      "gate": "Legacy just ci-validate and relevant workflow/platform lane",
-      "module": "scripts/tests/test_depot_authority_sentinel.py",
-      "owner": "tools/xtask/src/ci_validation or owning action/workflow component",
-      "rust_or_ctest_gate": "Not yet ported; listed owner target is future migration ownership, not claimed execution.",
-      "sha256": "dee0fdbca965c271e0dbef8ed4f6f82bd5cb19311c104f76ec39c75f324f536f",
-      "test_method_count": 8,
-      "test_methods": [
-        "test_authority_attestation_copies_are_identical",
-        "test_authority_backend_attestation_is_value_free_and_fail_closed",
-        "test_authority_job_is_protected_and_has_no_pr_code_or_audit",
-        "test_cache_probe_restores_then_publishes_before_gate",
-        "test_five_pr_entrypoints_and_existing_build_shape_are_unchanged",
-        "test_normal_quality_jobs_keep_the_existing_provider_output",
-        "test_selector_truth_table_is_separate_from_normal_policy",
-        "test_sentinel_identity_and_key_grammar_are_bounded"
-      ],
-      "current_source_sha256": "4fdf81ce51590b57fa18ce9aaf27c2107cd59b225b43d2a5fa19f3dbd2a267e0",
-      "current_test_method_count": 8,
-      "current_test_methods": [
-        "test_authority_attestation_copies_are_identical",
-        "test_authority_backend_attestation_is_value_free_and_fail_closed",
-        "test_authority_job_is_protected_and_has_no_pr_code_or_audit",
-        "test_cache_probe_restores_then_publishes_before_gate",
-        "test_five_pr_entrypoints_and_existing_build_shape_are_unchanged",
-        "test_normal_quality_jobs_keep_the_existing_provider_output",
-        "test_selector_truth_table_is_separate_from_normal_policy",
-        "test_sentinel_identity_and_key_grammar_are_bounded"
-      ],
-      "baseline_inventory_preserved": "Original sha256/test_methods/count preserve Task2 historical baseline; current_* fields bind retained eight-method source after typed quality transition. No methods retired.",
-      "current_transition": "Manual seed_authority_marker/verify_pr_write parser matrices and equality remain; source protection permits only protected controller source identity, forbids actual PR/selected-source bindings. Typed quality consumer/producer wiring is independently checked by registered semantic Rust guards. Parent retained all8 cases and qualified followup-authority-transitional.log:8passed/0failed2.722s; corrected full CI1329cases14skip passed. Manual protected bootstrap and live isolation remain open."
-    },
-    {
-      "case_ownership": "Per-case replacement must test behavior, including positive, negative, edge and identity-preserving cases; source-text-only assertions do not qualify.",
-      "deletion_condition": "Delete only after each behavior case has an owning replacement and required platform evidence.",
-      "gate": "Legacy just ci-validate and relevant workflow/platform lane",
-      "module": "scripts/tests/test_depot_canary_workflow.py",
-      "owner": "tools/xtask/src/ci_validation or owning action/workflow component",
-      "rust_or_ctest_gate": "Not yet ported; listed owner target is future migration ownership, not claimed execution.",
-      "sha256": "c510c15ae4a32a7e2b122087a786f431f1f8d3e208a4d56c8879b7a660063d56",
-      "test_method_count": 10,
-      "test_methods": [
-        "test_all_cache_phases_attest_non_github_remote_backend",
-        "test_canary_covers_measured_depot_sizes",
-        "test_canary_fails_closed_on_cache_and_registry_injection",
-        "test_canary_has_no_code_or_credential_access",
-        "test_canary_sentinel_modes_are_single_runner_and_cache_bounded",
-        "test_endpoint_and_docker_auth_probes_fail_closed",
-        "test_pr_audit_receives_central_runner_provider_selection",
-        "test_pr_audit_uses_portable_endpoint_and_docker_config_checks",
-        "test_runtime_canary_checkout_is_hosted_and_read_only",
-        "test_sentinel_inputs_are_strict_and_derive_fixed_keys"
-      ]
-    },
-    {
-      "case_ownership": "Per-case replacement must test behavior, including positive, negative, edge and identity-preserving cases; source-text-only assertions do not qualify.",
       "deletion_condition": "Delete only after every behavioral case has a Rust/CTest/component owner with identity, tolerance, and failure parity.",
       "gate": "Legacy just ci-validate plus owning CTest/Rust/model gate",
       "module": "scripts/tests/test_download_skippy_parity_candidates.py",
@@ -4178,9 +4122,7 @@
         "test_method_count": 1
       }
     ],
-    "skill_local_generic_tests": [
-
-    ],
+    "skill_local_generic_tests": [],
     "skill_local_test_note": "No test_*.py modules were found under .agents/skills. Skill-local scripts and their caller classifications are tracked separately by the task-3 instructions/exception ledger.",
     "tracked_python_test_modules": 147
   },
@@ -13395,9 +13337,7 @@
       "sha256": "fa4342e63b8d4f93e425e88f106d9585ba5ef3e06a057cff3c83ad2ed92c9d5c",
       "head": "3fbd1fcbcd390c86083a8265de3a4ce4734e3a58",
       "status": "FROZEN_SOURCES_NOT_TERMINAL_EXECUTION",
-      "drift": [
-
-      ],
+      "drift": [],
       "additional_native_sources": [
         {
           "path": "tools/xtask/src/automation/event_benchmark_comparison/manifest_tests.rs",
@@ -13474,6 +13414,76 @@
     "current_method_map": {
       "path": ".omo/evidence/resume-20261002/event-benchmark-last-caller-retirement-rebind-v2/current-method-map149.json",
       "sha256": "568fce59980878bc9d619ea6301b81da250ebb99885d5532bdf6f07dd289995c"
+    }
+  },
+  "authority_canary_eighteen_test_retirement": {
+    "status": "LOCAL_POSTIMAGE_QUALIFIED",
+    "original_methods": 18,
+    "removed_paths": [
+      "scripts/tests/test_depot_authority_sentinel.py",
+      "scripts/tests/test_depot_canary_workflow.py"
+    ],
+    "durable_coverage": {
+      "path": "ci/automation-migration/authority-canary-test-retirement-coverage.json",
+      "sha256": "8cc15ce9d4f1c3b33989c075eddc23dce925bf4d03c3ed46b487d748a2842ef6"
+    },
+    "current_just": {
+      "path": "just/ci.just",
+      "sha256": "0463c251ee715f83ec80b526a92c60f52d5d7804663d2ddbbdc98afedb978f2b",
+      "roster_line": 32,
+      "count": 26,
+      "modules": [
+        "scripts.tests.test_prepare_llama",
+        "scripts.tests.test_package_native_runtime",
+        "scripts.tests.test_skippy_llama_parity",
+        "scripts.tests.test_ci_windows_composition",
+        "scripts.tests.test_reusable_workflow_runner_trust",
+        "scripts.tests.test_build_windows",
+        "scripts.tests.test_skippy_radix_cache_ab",
+        "scripts.tests.test_ci_lane_workflows",
+        "scripts.tests.test_ci_native_toolchain_routing",
+        "scripts.tests.test_skippy_competitive_benchmark",
+        "scripts.tests.test_pr_workflow_artifacts",
+        "scripts.tests.test_hf_skippy_mtp_certify_job",
+        "scripts.tests.test_install_ps1",
+        "scripts.tests.test_kv_restart_replay",
+        "scripts.tests.test_llama_canary_agent_repair_contract",
+        "scripts.tests.test_agentic_trajectory_manifest",
+        "scripts.tests.test_llama_upstream_canary_contract",
+        "scripts.tests.test_llama_review_regressions",
+        "scripts.tests.test_skippy_adaptive_prefill_ab",
+        "scripts.tests.test_skippy_agentic_prompt_manifest",
+        "scripts.tests.test_skippy_mixed_prefill_decode_ab",
+        "scripts.tests.test_ci_sdk_producers",
+        "scripts.tests.test_llama_native_full_replay",
+        "scripts.tests.test_ci_artifact_actions",
+        "scripts.tests.test_skippy_system_one_smoke",
+        "scripts.tests.test_release_workflow_artifacts"
+      ]
+    },
+    "admission_prerequisites": ".omo/evidence/resume-20261002/authority18-retirement-proposal-v1/prerequisites.json",
+    "qualification": {
+      "native_proof_bindings": 59,
+      "gap_receipt": ".omo/evidence/resume-20261002/authority18-gaps-maintained-v1-exit.json",
+      "gap_receipt_sha256": "c8f5bea1ba1a505462141250738eba26747194dd1e2e94cabebdda1ab7d5782e",
+      "full_ci_required_after_transaction": true,
+      "full_ci": {
+        "path": ".omo/evidence/resume-20261002/authority18-postretirement-maintained-v2-exit.json",
+        "sha256": "22b647494b69839bac14d6515a183f43c59093fefa7e66a588c47f798d49d712",
+        "validated_freeze": {
+          "path": ".omo/evidence/resume-20261002/authority18-postretirement-maintained-v2-freeze-v1.json",
+          "sha256": "6bf75540b9e6c34885ea9a5721d0c68c52f35175008644eb75bd2021b6308ce0"
+        },
+        "normal": {
+          "log": ".omo/evidence/resume-20261002/authority18-postretirement-maintained-v2-normal.log",
+          "sha256": "7db1c2ff6e7f602c24deb87a874e565e3e2be072dd216a8656953756f7704e49",
+          "rust_groups": 117,
+          "rust_passed": 5626,
+          "python_tests": 413,
+          "python_skipped": 13
+        },
+        "scope": "Current complete local ci-validate on retirement transaction sources before this metadata-only receipt reconciliation; no hosted, model or platform acceptance."
+      }
     }
   }
 }

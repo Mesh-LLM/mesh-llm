@@ -12,7 +12,11 @@ const SDK_CANDIDATES: [&str; 4] = [
 pub(super) fn check_exceptions(paths: &[String], ledgers: &MigrationLedgers) -> DynResult<()> {
     let mut exception_paths = BTreeSet::new();
     for entry in &ledgers.exceptions.exceptions {
-        let retained_reader = entry.path == "evals/agentic-trajectory-manifest.py";
+        let retained_reader = [
+            "evals/agentic-trajectory-manifest.py",
+            "scripts/generate-bench-corpus.py",
+        ]
+        .contains(&entry.path.as_str());
         if !exception_paths.insert(&entry.path)
             || !(SDK_CANDIDATES.contains(&entry.path.as_str()) || retained_reader)
         {
@@ -52,13 +56,11 @@ pub(super) fn check_exceptions(paths: &[String], ledgers: &MigrationLedgers) -> 
                 .files
                 .iter()
                 .any(|file| file.path == entry.path);
-        let advisory_workflow = paths
-            .iter()
-            .any(|path| path == ".github/workflows/python-sdk-compatibility.yml");
         match entry.status.as_str() {
             "maintainer_retained" if retained_reader && source_recorded => {}
-            "conditional_unqualified" if !advisory_workflow => {}
-            "qualified" if source_recorded && advisory_workflow => {}
+            // L8 retains required SDK cadence. A workflow filename is not qualification.
+            // Qualification requires a separately reviewed execution-evidence contract.
+            "conditional_unqualified" if SDK_CANDIDATES.contains(&entry.path.as_str()) => {}
             _ => {
                 return Err(format!(
                     "automation policy: unqualified Python exception {} ({})",

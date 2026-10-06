@@ -280,3 +280,26 @@ fn offline_command_writes_failure_evidence_and_preserves_output_on_invalid_input
     assert!(run(&args).is_err());
     assert_eq!(std::fs::read(&output).unwrap(), b"preserve");
 }
+
+#[test]
+fn measured_waiting_prefix_report_preserves_two_charts_and_unknown_measurements() {
+    let mut rows = vec![
+        row(Version::Old, 24, [100.0, 2.0, 1.0, 2.0, 3.0, 4.0]),
+        row(Version::New, 24, [50.0, 1.0, 1.0, 2.0, 3.0, 4.0]),
+    ];
+    rows[0].resident_evicted_tokens_median = Some(20.0);
+    rows[1].resident_evicted_tokens_median = Some(10.0);
+    let acceptance = acceptance::evaluate(&rows, &fixture_contract("warm-affinity")).unwrap();
+    let output = report::render(&rows, &acceptance).unwrap();
+    assert!(output.contains("Waiting-prefix A/B: suffix tokens prefetched"));
+    assert!(output.contains("Resident KV tokens evicted"));
+    assert!(output.contains("bar [100, 50]") && output.contains("bar [20, 10]"));
+    assert!(output.contains("| Suffix prefill tokens / round | 100.0 | 50.0 | -50.0% |"));
+    rows[0].suffix_prefill_tokens_median = None;
+    let output = report::render(&rows, &acceptance).unwrap();
+    assert!(!output.contains("Waiting-prefix A/B: suffix tokens prefetched"));
+    assert!(output.contains("Resident KV tokens evicted"));
+    assert!(output.contains("| Suffix prefill tokens / round | n/a | 50.0 | n/a |"));
+    rows[0].resident_evicted_tokens_median = Some(f64::INFINITY);
+    assert!(report::render(&rows, &acceptance).is_err());
+}
