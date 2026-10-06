@@ -261,3 +261,14 @@ pub(in crate::automation) async fn request(
 #[cfg(test)]
 #[path = "native_completion_tests.rs"]
 mod tests;
+
+/// Reuse final native validation for the existing bounded hostname/HTTPS transport.
+pub(in crate::automation) fn decode_body(
+    bytes: &[u8],
+    output_tokens: u64,
+    elapsed: Duration,
+) -> Result<Evidence, String> {
+    let mut decoder = NativeDecoder::new(false, output_tokens);
+    decoder.consume(bytes, elapsed)?;
+    decoder.finish(elapsed)
+}

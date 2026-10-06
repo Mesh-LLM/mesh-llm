@@ -308,3 +308,27 @@ mod cache_family_measure_cli;
 
 #[path = "migration_lifecycle/lightning_compatibility_cli.rs"]
 mod lightning_compatibility_cli;
+
+#[path = "migration_lifecycle/cache_family_cell_cli.rs"]
+mod cache_family_cell_cli;
+
+#[path = "migration_lifecycle/hf_certification.rs"]
+mod hf_certification;
+
+#[cfg(unix)]
+#[path = "migration_lifecycle/hf_mtp_compose.rs"]
+mod hf_mtp_compose;
+
+#[path = "migration_lifecycle/guardrail_corpus_cli.rs"]
+mod guardrail_corpus_cli;
+
+#[cfg(unix)]
+#[path = "migration_lifecycle/guardrail_corpus_curl_cli.rs"]
+mod guardrail_corpus_curl_cli;
+
+#[cfg(unix)]
+#[path = "migration_lifecycle/suffix_proposer.rs"]
+mod suffix_proposer;
+
+#[path = "migration_lifecycle/cache_matrix_cli.rs"]
+mod cache_matrix_cli;

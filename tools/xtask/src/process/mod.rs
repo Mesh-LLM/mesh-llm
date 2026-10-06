@@ -54,7 +54,7 @@ pub use report::{
     Stream, StreamReport,
 };
 pub use spec::{Cancellation, Completion, Limits, OutputFiles, ProcessSpec, Readiness, Value};
-pub use supervisor::{supervise, supervise_raw};
+pub use supervisor::{supervise, supervise_raw, supervise_raw_with_files};
 
 #[cfg(unix)]
 use unix as platform;
