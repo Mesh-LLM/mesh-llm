@@ -244,7 +244,8 @@ pub(super) fn worker(args: &[String]) -> DynResult<()> {
     if a != "--input" || b != "--output" {
         return Err("artifact workspace closed flags".into());
     }
-    let request: Request = serde_json::from_slice(&admission::read(Path::new(input), 65536)?)?;
+    let request: Request =
+        serde_json::from_slice(&admission::read(Path::new(input), 8 * 1048576)?)?;
     request.validate()?;
     let output_path = std::path::absolute(output)?;
     let output_path = output_path

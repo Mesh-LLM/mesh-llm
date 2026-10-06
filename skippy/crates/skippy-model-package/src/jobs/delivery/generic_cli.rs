@@ -40,6 +40,9 @@ struct Cli {
 }
 #[derive(Clone, Copy, Subcommand)]
 enum Operation {
+    /// Offline CPU hardware planning and canonical mounted-request preparation.
+    Plan,
+    ExportRequest,
     Prepare,
     Submit,
     Collect,
@@ -52,6 +55,8 @@ struct Input {
     worker_input: Value,
     mounts: Vec<ModelMount>,
     cpu_plan: CpuJobPlan,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    mounted_request: Option<super::request_transport::MountedRequest>,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -76,11 +81,25 @@ fn prepare(input: &Input) -> Result<PreparedConversionDelivery> {
     {
         bail!("generic Jobs facade schema/namespace refused");
     }
-    PreparedConversionDelivery::prepare(
-        &serde_json::to_vec(&input.worker_input)?,
-        &input.mounts,
-        &input.cpu_plan,
-    )
+    let bytes = serde_json::to_vec(&input.worker_input)?;
+    if input.worker_input["workflow"] == "default-mtp-composition" {
+        match &input.mounted_request {
+            Some(locator) => {
+                super::composition::prepare_mounted(&bytes, &input.mounts, &input.cpu_plan, locator)
+            }
+            None => super::composition::prepare(&bytes, &input.mounts, &input.cpu_plan),
+        }
+    } else {
+        match &input.mounted_request {
+            Some(locator) => PreparedConversionDelivery::prepare_mounted(
+                &bytes,
+                &input.mounts,
+                &input.cpu_plan,
+                locator,
+            ),
+            None => PreparedConversionDelivery::prepare(&bytes, &input.mounts, &input.cpu_plan),
+        }
+    }
 }
 fn hash(input: &Input) -> Result<String> {
     Ok(super::admission::digest(&serde_json::to_vec(input)?))
@@ -164,6 +183,7 @@ fn final_result(
     value["operation_completed"] = json!(admitted);
     if !admitted {
         value["conversion_admitted"] = json!(false);
+        value["composition_admitted"] = json!(false);
     }
     write(root, "result.json", &value)?;
     let complete = admitted && Instant::now() < until && !cancelled();
@@ -171,6 +191,7 @@ fn final_result(
         value["status"] = json!(refusal);
         value["operation_completed"] = json!(false);
         value["conversion_admitted"] = json!(false);
+        value["composition_admitted"] = json!(false);
         value["terminal_refused"] = json!(true);
         let bytes = serde_json::to_vec_pretty(&value)?;
         let mut file = tempfile::NamedTempFile::new_in(root)?;
@@ -245,28 +266,57 @@ async fn collect(
         TransportLimits::default(),
     )?;
     let publisher = Publisher::new(Secret::new(token)?)?;
-    let result = client
-        .collect_conversion_until(
-            &input.namespace,
-            &ack.submitted,
-            &publisher,
-            until,
-            cancellation(latch),
-        )
-        .await;
+    let composition = input.worker_input["workflow"] == "default-mtp-composition";
+    let result = if composition {
+        client
+            .collect_composition_until(
+                &input.namespace,
+                &ack.submitted,
+                &publisher,
+                until,
+                cancellation(latch),
+            )
+            .await
+            .map(|mut observed| {
+                let candidate = observed.composition_admitted;
+                observed.composition_admitted = false;
+                (serde_json::to_value(observed), candidate)
+            })
+    } else {
+        client
+            .collect_conversion_until(
+                &input.namespace,
+                &ack.submitted,
+                &publisher,
+                until,
+                cancellation(latch),
+            )
+            .await
+            .map(|mut observed| {
+                let candidate = observed.evidence.conversion_admitted;
+                observed.evidence.conversion_admitted = false;
+                (serde_json::to_value(observed), candidate)
+            })
+    };
     match result {
-        Ok(mut observed) => {
-            let candidate = observed.evidence.conversion_admitted;
-            observed.evidence.conversion_admitted = false;
+        Ok((observed, candidate)) => {
             write(
                 root,
                 "collected.json",
-                &json!({"schema_version":1,"candidate_conversion_admitted":candidate,"final_admission":false,"observation":observed}),
+                &json!({"schema_version":1,"workflow":input.worker_input["workflow"],"candidate_conversion_admitted":candidate && !composition,"candidate_composition_admitted":candidate && composition,"final_admission":false,"observation":observed?}),
             )?;
             final_result(
                 root,
-                json!({"schema_version":1,"input_sha256":hash(input)?,"job_id":ack.submitted.native.job_id,"conversion_admitted":candidate,"native_certified":false,"remote_cancel_requested":false}),
-                (candidate, "CONVERSION_ADMITTED", "OBSERVATIONS_ONLY"),
+                json!({"schema_version":1,"input_sha256":hash(input)?,"job_id":ack.submitted.native.job_id,"conversion_admitted":candidate && !composition,"composition_admitted":candidate && composition,"native_certified":false,"remote_cancel_requested":false}),
+                (
+                    candidate,
+                    if composition {
+                        "COMPOSITION_ADMITTED"
+                    } else {
+                        "CONVERSION_ADMITTED"
+                    },
+                    "OBSERVATIONS_ONLY",
+                ),
                 until,
                 || latch.cancelled(),
             )
@@ -300,6 +350,12 @@ fn run_args(args: impl IntoIterator<Item = std::ffi::OsString>) -> Result<bool> 
         bail!("generic Jobs local transport/monitor budget refused");
     }
     let until = Instant::now() + Duration::from_secs(cli.timeout_seconds);
+    if matches!(cli.operation, Operation::Plan) {
+        return planning::run(&cli, until);
+    }
+    if matches!(cli.operation, Operation::ExportRequest) {
+        return request_export::run(&cli, until);
+    }
     let input_path = cli
         .input
         .as_ref()
@@ -308,10 +364,13 @@ fn run_args(args: impl IntoIterator<Item = std::ffi::OsString>) -> Result<bool> 
         .output_directory
         .as_ref()
         .ok_or_else(|| anyhow::anyhow!("required generic Jobs output absent"))?;
-    let input: Input = serde_json::from_slice(&read(input_path, 1048576)?)
+    let input: Input = serde_json::from_slice(&read(input_path, 16 * 1024 * 1024)?)
         .map_err(|_| anyhow::anyhow!("generic Jobs typed facade input refused"))?;
     let prepared = prepare(&input)?;
     match cli.operation {
+        Operation::Plan | Operation::ExportRequest => {
+            bail!("offline preparation dispatch invariant")
+        }
         Operation::Prepare => {
             if cli.credential_file.is_some()
                 || cli.submitted_file.is_some()
@@ -320,11 +379,13 @@ fn run_args(args: impl IntoIterator<Item = std::ffi::OsString>) -> Result<bool> 
                 bail!("prepare cannot consume credentials or submission authority");
             }
             let root = root(output_path)?;
+            let (worker_sha256, worker_byte_size) =
+                request_export::worker_file(&root, &input.worker_input)?;
             write(&root, "declaration.json", prepared.declaration())?;
             write(
                 &root,
                 "result.json",
-                &json!({"schema_version":1,"status":"PREPARED","input_sha256":hash(&input)?,"submitted":false,"conversion_admitted":false,"image_observed":false,"cost_observed":false}),
+                &json!({"schema_version":1,"status":"PREPARED","input_sha256":hash(&input)?,"worker_input_sha256":worker_sha256,"worker_input_byte_size":worker_byte_size,"submitted":false,"conversion_admitted":false,"image_observed":false,"cost_observed":false}),
             )?;
             Ok(Instant::now() < until)
         }
@@ -370,3 +431,8 @@ fn run_args(args: impl IntoIterator<Item = std::ffi::OsString>) -> Result<bool> 
 #[cfg(test)]
 #[path = "generic_cli/tests.rs"]
 mod tests;
+
+#[path = "generic_cli/planning.rs"]
+mod planning;
+#[path = "generic_cli/request_export.rs"]
+mod request_export;

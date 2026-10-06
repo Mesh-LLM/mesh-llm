@@ -68,7 +68,7 @@ impl Input {
     pub(super) fn validate(&self) -> DynResult<()> {
         self.bootstrap.validate()?;
         if self.schema_version != 1
-            || !(30..=86400).contains(&self.overall_seconds)
+            || !(30..=259200).contains(&self.overall_seconds)
             || self.publication_reserve_seconds < 10
             || self.publication_reserve_seconds >= self.overall_seconds
             || !(1..=1_u64 << 40).contains(&self.maximum_bytes)

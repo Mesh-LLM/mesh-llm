@@ -88,81 +88,18 @@ impl HfJobsClient {
         deadline: Instant,
         cancellation: C,
     ) -> Result<CollectedConversion> {
-        if !submitted.native.declaration.submitted {
-            bail!("generic delivery not submitted");
-        }
-        let limits = monitor_limits();
         let mut cancel = Box::pin(cancellation);
-        let mut observed = Observed::default();
-        let monitor = self
-            .monitor_until(
-                namespace,
-                &submitted.native.job_id,
-                deadline,
-                cancel.as_mut(),
-                limits,
-                |row| {
-                    for line in row.lines() {
-                        observed.line(line)?;
-                    }
-                    Ok(())
-                },
-            )
-            .await;
-        if !matches!(
-            monitor.end,
-            MonitorEnd::Completed | MonitorEnd::TerminalFailure
-        ) || observed.ambiguous
-        {
-            bail!("generic delivery requires unambiguous terminal monitor");
-        }
-        if observed.locator.is_none() {
-            receipts::final_logs(
-                self,
-                namespace,
-                &submitted.native.job_id,
-                deadline,
-                cancel.as_mut(),
-                LogAllowance {
-                    lines: limits.max_log_lines.saturating_sub(monitor.log_lines),
-                    bytes: limits.max_log_bytes.saturating_sub(monitor.log_bytes),
-                },
-                &mut observed,
-            )
-            .await?;
-        }
-        if observed.ambiguous {
-            bail!("generic delivery contradictory locators");
-        }
-        let locator = observed
-            .locator
-            .ok_or_else(|| anyhow::anyhow!("generic delivery locator absent"))?;
-        receipts::correlated(&locator, &submitted.native.declaration)?;
-        let plan = Plan {
-            repo: locator.repo.clone(),
-            parent_commit: locator.parent_commit.clone(),
-            paths: vec![locator.path_in_repo.clone()],
-        };
-        let identity = ArtifactIdentity {
-            sha256: locator.artifact_sha256.clone(),
-            byte_size: locator.byte_size,
-        };
-        let bytes = publisher
-            .retrieve_json_until(
-                &plan,
-                &locator.path_in_repo,
-                &locator.commit_oid,
-                &identity,
-                deadline,
-                cancel.as_mut(),
-            )
-            .await?;
-        let mut evidence = observe(
-            serde_json::from_slice(&bytes)
-                .map_err(|_| anyhow::anyhow!("generic native receipt JSON"))?,
-            &locator,
-            submitted,
-        )?;
+        let (monitor, locator, native) = collect_native_until(
+            self,
+            namespace,
+            &submitted.native.job_id,
+            &submitted.native.declaration,
+            publisher,
+            deadline,
+            cancel.as_mut(),
+        )
+        .await?;
+        let mut evidence = observe(native, &locator, submitted)?;
         evidence.conversion_admitted &= monitor.end == MonitorEnd::Completed;
         if Instant::now() >= deadline || cancel.as_mut().now_or_never().is_some() {
             bail!("generic delivery final boundary refused");
@@ -180,3 +117,91 @@ impl HfJobsClient {
 #[cfg(test)]
 #[path = "collection/tests.rs"]
 mod tests;
+
+/// Shared transport observation; workflow admission remains in each owning classifier.
+pub(in crate::jobs::delivery) async fn collect_native_until<C: Future<Output = ()>>(
+    client: &HfJobsClient,
+    namespace: &str,
+    job_id: &str,
+    declaration: &DeliveryDeclaration,
+    publisher: &Publisher,
+    deadline: Instant,
+    cancellation: C,
+) -> Result<(MonitorReceipt, Locator, Value)> {
+    if !declaration.submitted {
+        bail!("generic delivery not submitted");
+    }
+    let limits = monitor_limits();
+    let mut cancel = Box::pin(cancellation);
+    let mut observed = Observed::default();
+    let monitor = client
+        .monitor_until(
+            namespace,
+            job_id,
+            deadline,
+            cancel.as_mut(),
+            limits,
+            |row| {
+                for line in row.lines() {
+                    observed.line(line)?;
+                }
+                Ok(())
+            },
+        )
+        .await;
+    if !matches!(
+        monitor.end,
+        MonitorEnd::Completed | MonitorEnd::TerminalFailure
+    ) || observed.ambiguous
+    {
+        bail!("generic delivery requires unambiguous terminal monitor");
+    }
+    if observed.locator.is_none() {
+        receipts::final_logs(
+            client,
+            namespace,
+            job_id,
+            deadline,
+            cancel.as_mut(),
+            LogAllowance {
+                lines: limits.max_log_lines.saturating_sub(monitor.log_lines),
+                bytes: limits.max_log_bytes.saturating_sub(monitor.log_bytes),
+            },
+            &mut observed,
+        )
+        .await?;
+    }
+    if observed.ambiguous {
+        bail!("generic delivery contradictory locators");
+    }
+    let locator = observed
+        .locator
+        .ok_or_else(|| anyhow::anyhow!("generic delivery locator absent"))?;
+    receipts::correlated(&locator, declaration)?;
+    let plan = Plan {
+        repo: locator.repo.clone(),
+        parent_commit: locator.parent_commit.clone(),
+        paths: vec![locator.path_in_repo.clone()],
+    };
+    let identity = ArtifactIdentity {
+        sha256: locator.artifact_sha256.clone(),
+        byte_size: locator.byte_size,
+    };
+    let bytes = publisher
+        .retrieve_json_until(
+            &plan,
+            &locator.path_in_repo,
+            &locator.commit_oid,
+            &identity,
+            deadline,
+            cancel.as_mut(),
+        )
+        .await?;
+
+    let native: Value = serde_json::from_slice(&bytes)
+        .map_err(|_| anyhow::anyhow!("native receipt JSON refused"))?;
+    if Instant::now() >= deadline || cancel.as_mut().now_or_never().is_some() {
+        bail!("native receipt terminal boundary refused");
+    }
+    Ok((monitor, locator, native))
+}

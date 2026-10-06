@@ -1,6 +1,8 @@
 //! Immutable checkpoint staging, native composition, then one ordered public model commit.
 #[path = "mtp_default/contract.rs"]
-mod contract;
+pub(super) mod contract;
+#[path = "mtp_default/delivery.rs"]
+pub(super) mod delivery;
 #[path = "mtp_default/publication.rs"]
 mod publication;
 #[path = "mtp_default/staging.rs"]
@@ -73,6 +75,30 @@ fn execute(
     publication::execute(input, &publish, &plan, deadline, cancel, evidence)?;
     check(deadline, cancel)?;
     Ok(plan)
+}
+/// Execute the same full composition phases under the caller's inherited deadline/cancellation.
+pub(super) fn execute_inherited(
+    bytes: &[u8],
+    root: &Path,
+    deadline: Instant,
+    cancel: &Cancellation,
+) -> DynResult<(Value, DynResult<()>)> {
+    let input: contract::Input = serde_json::from_slice(bytes)?;
+    input.validate()?;
+    if !input.dry_run && !cfg!(target_os = "linux") {
+        return Err("composition Jobs execution is Linux-only".into());
+    }
+    std::fs::create_dir(root)?;
+    let mut evidence = json!({"schema_version":1,"status":"FAILED","request_sha256":admission::digest(&serde_json::to_vec(&input)?),"error":null,"staging_process":null,"staging_receipt":null,"bootstrap_phases":[],"observed_bootstrap":null,"native_composition":{},"repository_process":null,"repository_receipt":null,"ordered_publication":null,"real_family_qualified":false,"declared_image_measured":false});
+    let result = if input.dry_run {
+        check(deadline, cancel).map(|()| {
+            evidence["status"] = json!("DRY_RUN_NOT_EXECUTED");
+        })
+    } else {
+        let result = execute(&input, root, deadline, cancel, &mut evidence);
+        finalize(result, Ok(()), deadline, cancel, &mut evidence)
+    };
+    Ok((evidence, result))
 }
 pub(super) fn run(args: &[String]) -> DynResult<()> {
     let [a, path, b, out] = args else {

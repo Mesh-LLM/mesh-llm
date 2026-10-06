@@ -5,6 +5,8 @@ mod bootstrap;
 pub(in crate::automation) mod execution;
 #[path = "hf_certify/generic_conversion.rs"]
 mod generic_conversion;
+#[path = "hf_certify/job_request_transport.rs"]
+mod job_request_transport;
 #[path = "hf_certify/job_worker.rs"]
 mod job_worker;
 #[path = "hf_certify/mtp_default.rs"]
@@ -18,6 +20,11 @@ use std::{
     time::{Duration, Instant},
 };
 pub(crate) fn run(args: &[String]) -> DynResult<()> {
+    if let Some((verb, rest)) = args.split_first()
+        && verb == "composition-job-worker"
+    {
+        return mtp_default::delivery::run(rest);
+    }
     if let [verb, rest @ ..] = args
         && verb == "artifact-workspace-worker"
     {

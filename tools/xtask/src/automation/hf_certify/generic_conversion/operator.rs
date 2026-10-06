@@ -164,7 +164,8 @@ fn execute(
 }
 pub(super) fn run(args: &[String]) -> DynResult<()> {
     let parsed = options::parse(args)?;
-    let mut manifest: Manifest = serde_json::from_slice(&admission::read(&parsed.input, 1048576)?)?;
+    let mut manifest: Manifest =
+        serde_json::from_slice(&admission::read(&parsed.input, 8 * 1048576)?)?;
     parsed.apply(&mut manifest.conversion)?;
     if parsed.xet {
         eprintln!(
@@ -218,7 +219,7 @@ pub(in crate::automation::hf_certify) fn execute_inherited(
     until: Instant,
     cancel: &crate::process::Cancellation,
 ) -> DynResult<(Value, DynResult<()>)> {
-    if bytes.is_empty() || bytes.len() > 65536 {
+    if bytes.is_empty() || bytes.len() > 8 * 1048576 {
         return Err("generic delivery manifest byte bound".into());
     }
     guard(until, cancel)?;

@@ -1,14 +1,14 @@
 //! Generic conversion delivery over the existing Jobs transport; supplied images are declarations.
 use super::*;
 #[path = "generic/collection.rs"]
-mod collection;
+pub(super) mod collection;
 pub use collection::{CollectedConversion, ConversionEvidence, monitor_limits};
 #[cfg(test)]
 #[path = "generic/tests.rs"]
 mod tests;
 pub struct PreparedConversionDelivery {
-    native: PreparedCertificationDelivery,
-    expected_status: String,
+    pub(super) native: PreparedCertificationDelivery,
+    pub(super) expected_status: String,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -28,6 +28,34 @@ impl PreparedConversionDelivery {
         Ok(self)
     }
     pub fn prepare(bytes: &[u8], mounts: &[ModelMount], plan: &CpuJobPlan) -> Result<Self> {
+        if bytes.len() > 65536 {
+            bail!("inline generic request byte bound");
+        }
+        Self::prepare_inner(bytes, mounts, plan)
+    }
+    pub fn prepare_mounted(
+        bytes: &[u8],
+        mounts: &[ModelMount],
+        plan: &CpuJobPlan,
+        locator: &super::request_transport::MountedRequest,
+    ) -> Result<Self> {
+        locator.admit(bytes, mounts)?;
+        let mut prepared = Self::prepare_inner(bytes, mounts, plan)?;
+        let encoded = serde_json::to_string(locator)?;
+        if encoded.len() > 8192 {
+            bail!("mounted request locator byte bound");
+        }
+        prepared.native.declaration.transport_input_sha256 = admission::digest(bytes);
+        prepared.native.spec.arguments[3] = "--mounted-input-environment".into();
+        prepared.native.spec.arguments[4] = super::request_transport::LOCATOR_ENVIRONMENT.into();
+        prepared.native.spec.secrets.remove(INPUT_KEY);
+        prepared.native.spec.environment.insert(
+            super::request_transport::LOCATOR_ENVIRONMENT.into(),
+            encoded,
+        );
+        Ok(prepared)
+    }
+    fn prepare_inner(bytes: &[u8], mounts: &[ModelMount], plan: &CpuJobPlan) -> Result<Self> {
         let request = request(bytes, mounts, plan)?;
         let worker_input = serde_json::to_string(&request)?;
         let bootstrap = &request["operator"]["bootstrap"];
@@ -113,7 +141,7 @@ impl HfJobsClient {
     }
 }
 fn request(bytes: &[u8], mounts: &[ModelMount], plan: &CpuJobPlan) -> Result<Value> {
-    if bytes.is_empty() || bytes.len() > 65536 {
+    if bytes.is_empty() || bytes.len() > super::request_transport::MAX_REQUEST_BYTES {
         bail!("generic delivery input byte bound");
     }
     let v: Value = serde_json::from_slice(bytes)
@@ -169,7 +197,7 @@ fn request(bytes: &[u8], mounts: &[ModelMount], plan: &CpuJobPlan) -> Result<Val
         || c["mesh_revision"] != op["bootstrap"]["mesh_commit"]
         || !admission::absolute(source)
         || (c["upload_only"] != true && files.is_empty())
-        || files.len() > 8192
+        || files.len() > 1024
         || (c["upload_only"] != true
             && !mounts.iter().any(|m| {
                 Path::new(source).starts_with(&m.mount_path) && c["source_repo"] == m.repo
@@ -276,3 +304,7 @@ fn upload_workspace(v: &Value, mounts: &[ModelMount], plan: &CpuJobPlan) -> Resu
 pub(super) fn facade_fixture() -> (Value, Vec<ModelMount>, CpuJobPlan) {
     tests::fixture()
 }
+
+#[cfg(all(test, unix))]
+#[path = "generic/mounted_tests.rs"]
+mod mounted_tests;

@@ -13,7 +13,7 @@ use std::{
 fn pin(path: &Path) -> Value {
     json!({"path":path,"sha256":hex::encode(Sha256::digest(std::fs::read(path).unwrap()))})
 }
-fn fixture(mode: &str, export_mode: &str) -> (tempfile::TempDir, Value) {
+pub(super) fn fixture(mode: &str, export_mode: &str) -> (tempfile::TempDir, Value) {
     let (temp, mut operator) = super::hf_generic_operator::fixture(mode);
     let root = temp.path().canonicalize().unwrap();
     operator["conversion"]["timeout_seconds"] = json!(40);

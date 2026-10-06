@@ -15,6 +15,8 @@ use std::{
 };
 #[path = "delivery/admission.rs"]
 mod admission;
+#[path = "delivery/composition.rs"]
+pub mod composition;
 #[path = "delivery/generic.rs"]
 pub mod generic;
 #[cfg(unix)]
@@ -22,6 +24,8 @@ pub mod generic;
 pub mod generic_cli;
 #[path = "delivery/receipts.rs"]
 pub mod receipts;
+#[path = "delivery/request_transport.rs"]
+pub mod request_transport;
 #[cfg(test)]
 #[path = "delivery/tests.rs"]
 mod tests;
