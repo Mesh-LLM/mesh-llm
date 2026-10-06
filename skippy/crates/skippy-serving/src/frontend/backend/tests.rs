@@ -2004,5 +2004,3 @@ fn lane_checkout_connect_failure_emits_connect_event() {
     );
     assert!(rx.try_recv().is_err(), "no additional events on failure");
 }
-
-mod token_counting;

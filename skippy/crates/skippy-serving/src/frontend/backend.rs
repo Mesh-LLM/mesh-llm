@@ -3,7 +3,6 @@ mod exchange_hooks;
 mod prepared_exchange;
 #[cfg(test)]
 mod prepared_exchange_tests;
-mod token_count_admission;
 use crate::frontend::admission::GenerationTokenBudget;
 use crate::frontend::admission::GenerationTokenBudgetRequest;
 use crate::frontend::admission::GenerationTokenReservation;

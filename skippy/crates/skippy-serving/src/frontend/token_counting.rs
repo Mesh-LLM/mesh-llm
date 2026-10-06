@@ -14,18 +14,16 @@ impl StageOpenAiBackend {
         apply_chat_request_defaults(&mut request, &self.request_defaults)?;
         ensure_chat_runtime_features_supported(&request)?;
         let options = chat_template_options(&request, &self.request_defaults)?;
-        let admission = self.acquire_token_count_admission().await?;
+        let prompt = self
+            .prepare_chat_prompt_offloaded(&request, options)
+            .await?;
+        if !prompt.media.is_empty() {
+            return Err(OpenAiError::unsupported(
+                "media token counting is unavailable",
+            ));
+        }
         let backend = self.clone();
-        // Keep admission inside the blocking task: dropping the HTTP future
-        // must not free capacity while native preparation is still running.
         tokio::task::spawn_blocking(move || {
-            let _admission = admission;
-            let prompt = backend.prepare_chat_prompt(&request, options)?;
-            if !prompt.media.is_empty() {
-                return Err(OpenAiError::unsupported(
-                    "media token counting is unavailable",
-                ));
-            }
             let tokens = backend.tokenize(&prompt.text)?;
             u32::try_from(tokens.len()).map_err(|_| OpenAiError::internal("token count overflow"))
         })
