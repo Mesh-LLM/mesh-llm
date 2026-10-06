@@ -16,7 +16,7 @@ use skippy_cache::{
     SparseCheckpointPolicy, UnifiedRadixCache,
 };
 use skippy_metrics::attr as attr_key;
-use skippy_runtime::{ActivationFrame, RuntimeKvPageDesc};
+use skippy_runtime::{ActivationFrame, MemoryCacheCapabilities, ModelStateKind, RuntimeKvPageDesc};
 
 use crate::kv_proto::{
     Checksum, ChecksumAlgorithm, KvPageManifest, MANIFEST_SCHEMA_VERSION, PageIdentity, PageState,
@@ -162,6 +162,9 @@ pub struct KvStageIntegration {
     pub(crate) payload_selection_reason: &'static str,
     pub(crate) payload_fallbacks: u64,
     pub(crate) graph_loaded_state_mismatches: u64,
+    pub(crate) admitted_graph_state: String,
+    pub(crate) loaded_state_kind: Option<ModelStateKind>,
+    pub(crate) loaded_memory_cache: Option<MemoryCacheCapabilities>,
     /// Exportable representation written to and restored from L3. This is
     /// separate from `payload` because resident KV is native and borrow-only.
     pub(crate) durable_payload: Option<StagePrefixCachePayload>,
@@ -1071,6 +1074,22 @@ impl KvStageIntegration {
                 json!(self.payload_selection_reason),
             ),
             ("skippy.kv.payload_fallbacks", json!(self.payload_fallbacks)),
+            (
+                "skippy.kv.admitted_graph_state",
+                json!(self.admitted_graph_state),
+            ),
+            (
+                "skippy.kv.loaded_state_kind",
+                json!(self.loaded_state_kind.map(|kind| format!("{kind:?}"))),
+            ),
+            (
+                "skippy.kv.loaded_memory_cache_resident",
+                json!(self.loaded_memory_cache.map(|cache| cache.resident)),
+            ),
+            (
+                "skippy.kv.loaded_memory_cache_kv_recurrent",
+                json!(self.loaded_memory_cache.map(|cache| cache.kv_recurrent)),
+            ),
             (
                 "skippy.kv.graph_loaded_state_mismatches",
                 json!(self.graph_loaded_state_mismatches),

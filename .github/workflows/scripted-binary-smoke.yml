@@ -160,6 +160,8 @@ jobs:
 
       - name: Run scripted smoke
         env:
+          MESH_TWO_NODE_SPLIT_DENSE_ARTIFACT_ID: ${{ inputs.model_artifact_id }}
+          MESH_TWO_NODE_SPLIT_RECURRENT_ARTIFACT_ID: ${{ inputs.kv_recurrent_model_artifact_id }}
           MESH_TWO_NODE_SPLIT_RECURRENT_MODEL: ${{ steps.recurrent_model.outputs.model_path }}
           MESH_TWO_NODE_SPLIT_WORK_DIR: ${{ inputs.split_evidence_artifact_name != '' && format('{0}/{1}', runner.temp, inputs.split_evidence_artifact_name) || '' }}
         run: ${{ inputs.smoke_script }} "${{ inputs.staged_binary_path }}" "${{ inputs.artifact_path }}" "${{ steps.model_inputs.outputs.model_path }}"

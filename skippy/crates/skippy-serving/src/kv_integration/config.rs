@@ -406,6 +406,9 @@ impl KvStageIntegration {
             payload_selection_reason,
             payload_fallbacks: u64::from(payload_fallback),
             graph_loaded_state_mismatches: u64::from(graph_loaded_state_mismatch),
+            admitted_graph_state: config.kv_graph_state.clone(),
+            loaded_state_kind: model_state_kind,
+            loaded_memory_cache: memory_cache,
             durable_payload,
             correctness_mode: false,
             trust_local_writes: true,
@@ -1705,6 +1708,11 @@ mod tests {
             "skippy.kv.payload_selection_reason",
             serde_json::json!("loaded_exporter_unsupported")
         )));
+        assert!(attrs.contains(&("skippy.kv.loaded_state_kind", serde_json::json!("Hybrid"))));
+        assert!(attrs.contains(&(
+            "skippy.kv.loaded_memory_cache_resident",
+            serde_json::Value::Null
+        )));
     }
 
     #[test]
@@ -1755,6 +1763,10 @@ mod tests {
             assert!(kv.attrs().contains(&(
                 "skippy.kv.graph_loaded_state_mismatches",
                 serde_json::json!(1)
+            )));
+            assert!(kv.attrs().contains(&(
+                "skippy.kv.loaded_state_kind",
+                serde_json::json!(format!("{loaded:?}"))
             )));
         }
     }

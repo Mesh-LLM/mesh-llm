@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "models": {
+    "smollm2-q8-inference": {
+      "artifact_id": "smollm2-q8-inference",
+      "revision": "9e6855bc4be717fca1ef21360a1db4b29d5c559a",
+      "sha256": "c4a3dd037301b6ecea31d6da37f5cd793ead920dd5ddfe6d589294628d6ce66a",
+      "stages": [
+        {"admitted_graph_state": "dense", "loaded_state_kind": "Dense", "resident": true, "kv_recurrent": true, "payload": "ResidentKv", "reason": "admitted_graph_and_exporter", "fallbacks": 0, "graph_loaded_state_mismatches": 0, "exact_payload_kind": "full-state"},
+        {"admitted_graph_state": "dense", "loaded_state_kind": "Dense", "resident": true, "kv_recurrent": true, "payload": "ResidentKv", "reason": "admitted_graph_and_exporter", "fallbacks": 0, "graph_loaded_state_mismatches": 0, "exact_payload_kind": "kv-recurrent"}
+      ]
+    },
+    "family-granite-hybrid": {
+      "artifact_id": "family-granite-hybrid",
+      "revision": "a864f823cce6e6048b5752e2816fe7a23987d790",
+      "sha256": "0a8d6a7373602fadfba274a640ba784b86cc6847f1c67f1b0a90fa2ec266b7fb",
+      "stages": [
+        {"admitted_graph_state": "recurrent", "loaded_state_kind": "Hybrid", "resident": false, "kv_recurrent": true, "payload": "KvRecurrent", "reason": "admitted_graph_and_exporter", "fallbacks": 0, "graph_loaded_state_mismatches": 0, "exact_payload_kind": "kv-recurrent"},
+        {"admitted_graph_state": "recurrent", "loaded_state_kind": "Hybrid", "resident": false, "kv_recurrent": true, "payload": "KvRecurrent", "reason": "admitted_graph_and_exporter", "fallbacks": 0, "graph_loaded_state_mismatches": 0, "exact_payload_kind": "kv-recurrent"}
+      ]
+    }
+  }
+}

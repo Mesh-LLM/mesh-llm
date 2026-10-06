@@ -326,6 +326,15 @@ fn embedded_openai_backend_with_scheduler(
         args.kv_lifecycle_observer.clone(),
     )?
     .map(Arc::new);
+    if let Some(kv) = kv.as_ref() {
+        let mut attrs = lifecycle_attrs(&args.config);
+        attrs.extend(
+            kv.attrs()
+                .into_iter()
+                .map(|(key, value)| (key.to_owned(), value)),
+        );
+        args.telemetry.emit("stage.kv_payload_selected", attrs);
+    }
     let ctx_size = usize::try_from(args.config.ctx_size).unwrap_or(usize::MAX);
     let iteration_scheduler = match iteration_scheduler {
         Some(iteration_scheduler) => iteration_scheduler,

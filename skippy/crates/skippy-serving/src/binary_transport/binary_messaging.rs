@@ -475,6 +475,15 @@ fn run_binary_stage(
         None,
     )?
     .map(Arc::new);
+    if let Some(kv) = kv.as_ref() {
+        let mut attrs = lifecycle_attrs(&config);
+        attrs.extend(
+            kv.attrs()
+                .into_iter()
+                .map(|(key, value)| (key.to_owned(), value)),
+        );
+        telemetry.emit("stage.kv_payload_selected", attrs);
+    }
     let prediction_returns = Arc::new(PredictionReturnHub::default());
     let prediction_return_sinks = Arc::new(PredictionReturnSinks::default());
     let session_ownership = Arc::new(ConnectionSessionOwnership::default());
