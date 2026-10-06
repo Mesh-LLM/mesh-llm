@@ -1474,6 +1474,34 @@ mod tests {
         );
     }
 
+    /// Windows CUDA archives are split by toolkit major like the Linux ones;
+    /// the update path keeps resolving to the CUDA 12 archive.
+    #[test]
+    fn test_resolve_release_asset_name_picks_cuda12_for_split_windows_cuda_assets() {
+        let release = ReleaseInfo {
+            tag: "v0.79.0".to_string(),
+            version: "0.79.0".to_string(),
+            assets: vec![
+                test_release_asset("mesh-llm-x86_64-pc-windows-msvc-cuda-12.zip"),
+                test_release_asset("mesh-llm-x86_64-pc-windows-msvc-cuda-13.zip"),
+                test_release_asset("mesh-llm-v0.79.0-x86_64-pc-windows-msvc-cuda-12.zip"),
+                test_release_asset("mesh-llm-v0.79.0-x86_64-pc-windows-msvc-cuda-13.zip"),
+            ],
+        };
+        let target =
+            ReleaseTarget::from_raw("windows", "x86_64", backend::BinaryFlavor::Cuda).unwrap();
+
+        for preference in [
+            ReleaseAssetPreference::StableFirst,
+            ReleaseAssetPreference::VersionedFirst,
+        ] {
+            assert_eq!(
+                resolve_release_asset_name(&release, target, preference),
+                Some("mesh-llm-x86_64-pc-windows-msvc-cuda-12.zip".to_string())
+            );
+        }
+    }
+
     #[test]
     fn test_resolve_release_asset_name_prefers_versioned_for_explicit_install() {
         let release = ReleaseInfo {
