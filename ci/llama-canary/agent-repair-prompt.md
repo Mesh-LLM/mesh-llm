@@ -35,7 +35,9 @@ Own the repair end to end:
    real-model reproductions for your repairs. Inspect failures and fix them.
    Run every build and test command through
    `scripts/llama-canary-log-command.sh <short-label> <command> [args...]`.
-   For commands requiring shell syntax, use `bash -c` as the command argument.
+   For build or test commands containing pipelines, use `bash -o pipefail -c`
+   as the command argument so failures in earlier pipeline stages are reported.
+   For commands requiring shell syntax without pipelines, use `bash -c`.
    The wrapper streams output, preserves the command's exit status, and saves a
    separate full log for each invocation in the canary's 14-day build evidence
    artifact. Use it on failed reproductions and retries too. Do not put secrets
