@@ -520,3 +520,5 @@ async fn real_non_chat_class_smoke_when_fixture_is_set() -> Result<()> {
     }
     Ok(())
 }
+
+mod payment_gate;

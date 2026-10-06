@@ -102,6 +102,9 @@ impl StageOpenAiBackend {
         };
         let workload = self.model_workload()?;
         if workload == ModelWorkload::EncoderDecoder {
+            // This loop does not implement prefill/token gate callbacks. Never
+            // start native generation under a gate it cannot enforce.
+            ensure_encoder_decoder_gate_supported(payment_gate.is_some())?;
             let mut collector =
                 TextGenerationCollector::new(self.runtime.clone(), stop_values, on_text_chunk)?
                     .with_ignore_eos(sampling.ignore_eos);
@@ -321,5 +324,25 @@ impl StageOpenAiBackend {
         );
         self.record_speculation_outcome(&output, speculating);
         Ok(output)
+    }
+}
+
+fn ensure_encoder_decoder_gate_supported(has_gate: bool) -> OpenAiResult<()> {
+    if has_gate {
+        return Err(OpenAiError::unsupported(
+            "gated inference is unavailable for encoder-decoder models",
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod gate_tests {
+    use super::*;
+
+    #[test]
+    fn encoder_decoder_rejects_gates_but_preserves_ungated_generation() {
+        assert!(ensure_encoder_decoder_gate_supported(true).is_err());
+        assert!(ensure_encoder_decoder_gate_supported(false).is_ok());
     }
 }
