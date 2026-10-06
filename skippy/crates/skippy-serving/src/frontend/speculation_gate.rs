@@ -78,10 +78,28 @@ pub(crate) struct SpeculationGateConfig {
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct SpeculationGateSettings {
-    /// Off by default: the gate costs one window in every `cooldown` measuring
-    /// the setting not in use, and that trade wants stating rather than
-    /// inheriting.
-    #[serde(default)]
+    /// On by default, and the reason is that speculation is not opt-in.
+    ///
+    /// A model package can declare a speculative strategy, so a deployment can
+    /// be speculating without anybody having chosen to. The regression that
+    /// costs — #1581 measured 12.2-12.4 tok/s against 13.8 for plain decode on
+    /// a freeform workload — is therefore not opt-in either, and protection
+    /// that has to be asked for would not reach the people who need it.
+    ///
+    /// The cost lands only where the risk is. A governor is constructed solely
+    /// when the resolved plan actually speculates (see
+    /// `speculation_plan_is_active`), so a deployment that does not speculate
+    /// pays nothing at all. One that does pays one window per `cooldown` spent
+    /// measuring the setting not in force — against a default 1800s cooldown
+    /// and a 60s window, under a thirtieth of the time, and only the difference
+    /// between the two settings within it.
+    ///
+    /// Deliberately *not* composed by `--strategy balanced`: that stays a
+    /// no-op, so #2112's parity property - an intent can never change an
+    /// existing deployment - holds exactly. The gate is a safety property
+    /// rather than a tuning preference, so it belongs in the defaults and not
+    /// in an intent.
+    #[serde(default = "default_gate_enabled")]
     pub enabled: bool,
     #[serde(default = "default_gate_min_window_s")]
     pub min_window_s: u64,
@@ -91,6 +109,10 @@ pub struct SpeculationGateSettings {
     pub decisive_margin: f64,
     #[serde(default = "default_gate_cooldown_s")]
     pub cooldown_s: u64,
+}
+
+fn default_gate_enabled() -> bool {
+    true
 }
 
 fn default_gate_min_window_s() -> u64 {
@@ -112,7 +134,7 @@ fn default_gate_cooldown_s() -> u64 {
 impl Default for SpeculationGateSettings {
     fn default() -> Self {
         Self {
-            enabled: false,
+            enabled: default_gate_enabled(),
             min_window_s: default_gate_min_window_s(),
             min_requests: default_gate_min_requests(),
             decisive_margin: default_gate_decisive_margin(),
@@ -561,8 +583,14 @@ mod tests {
     }
 
     #[test]
-    fn the_gate_is_off_unless_asked_for() {
-        assert!(!SpeculationGateSettings::default().enabled);
+    fn the_gate_is_on_unless_turned_off() {
+        // Speculation can arrive from a model package declaration, so a
+        // deployment can be in the losing regime without having opted in.
+        // Protection that had to be asked for would miss exactly those.
+        assert!(SpeculationGateSettings::default().enabled);
+        // And it is still switchable, from config or from the environment.
+        assert!(!resolve_speculation_gate_enabled(Some("0"), true));
+        assert!(!resolve_speculation_gate_enabled(None, false));
     }
 
     fn config() -> SpeculationGateConfig {
