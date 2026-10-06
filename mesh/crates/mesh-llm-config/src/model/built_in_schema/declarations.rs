@@ -812,6 +812,23 @@ fn speculative_settings(prefix: &str) -> Vec<ConfigSettingSchema> {
             ConfigValueSchema::Integer,
         ),
         basic_setting(&format!("{prefix}.ngram_fallback"), ConfigValueSchema::String),
+        basic_setting(&format!("{prefix}.gate"), bool_or_auto_schema()),
+        basic_setting(
+            &format!("{prefix}.gate_min_window_s"),
+            ConfigValueSchema::Integer,
+        ),
+        basic_setting(
+            &format!("{prefix}.gate_min_requests"),
+            ConfigValueSchema::Integer,
+        ),
+        basic_setting(
+            &format!("{prefix}.gate_decisive_margin"),
+            ConfigValueSchema::Float,
+        ),
+        basic_setting(
+            &format!("{prefix}.gate_cooldown_s"),
+            ConfigValueSchema::Integer,
+        ),
         basic_setting(&format!("{prefix}.spec_default"), bool_or_auto_schema()),
     ]
 }

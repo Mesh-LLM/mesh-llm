@@ -43,6 +43,10 @@ pub struct SpeculativeDecodeConfig {
     pub draft_cache_type_k: String,
     #[serde(default = "default_draft_cache_type")]
     pub draft_cache_type_v: String,
+    /// Closed-loop gating: measure whether speculation pays and stand it down
+    /// when it does not. Off unless stated.
+    #[serde(default)]
+    pub gate: crate::frontend::SpeculationGateSettings,
 }
 
 fn default_draft_cache_type() -> String {
@@ -147,6 +151,7 @@ impl Default for SpeculativeDecodeConfig {
             draft_threads: None,
             draft_cache_type_k: default_draft_cache_type(),
             draft_cache_type_v: default_draft_cache_type(),
+            gate: crate::frontend::SpeculationGateSettings::default(),
         }
     }
 }

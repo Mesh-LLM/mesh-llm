@@ -48,6 +48,7 @@
 //! still recorded on every window, because it is what makes a verdict
 //! interpretable afterwards — it just does not decide when to look.
 
+use serde::{Deserialize, Serialize};
 use std::time::{Duration, Instant};
 
 /// Thresholds for [`SpeculationGate`].
@@ -64,6 +65,83 @@ pub(crate) struct SpeculationGateConfig {
     pub(crate) decisive_margin: f64,
     /// Quiet period after a verdict, so the gate cannot oscillate.
     pub(crate) cooldown: Duration,
+}
+
+/// The gate's settings as an operator states them.
+///
+/// Separate from [`SpeculationGateConfig`] because that one holds `Duration`s
+/// for the controller to compare against, while a config file states seconds.
+/// Promoted out of the environment because #2112 workstream 5 puts the gate
+/// under the `balanced` strategy, and a strategy composes configuration — an
+/// environment-only switch cannot be composed, and a 1800s cooldown nobody can
+/// shorten cannot be validated either.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SpeculationGateSettings {
+    /// Off by default: the gate costs one window in every `cooldown` measuring
+    /// the setting not in use, and that trade wants stating rather than
+    /// inheriting.
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_gate_min_window_s")]
+    pub min_window_s: u64,
+    #[serde(default = "default_gate_min_requests")]
+    pub min_requests: u64,
+    #[serde(default = "default_gate_decisive_margin")]
+    pub decisive_margin: f64,
+    #[serde(default = "default_gate_cooldown_s")]
+    pub cooldown_s: u64,
+}
+
+fn default_gate_min_window_s() -> u64 {
+    60
+}
+
+fn default_gate_min_requests() -> u64 {
+    3
+}
+
+fn default_gate_decisive_margin() -> f64 {
+    0.15
+}
+
+fn default_gate_cooldown_s() -> u64 {
+    1800
+}
+
+impl Default for SpeculationGateSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            min_window_s: default_gate_min_window_s(),
+            min_requests: default_gate_min_requests(),
+            decisive_margin: default_gate_decisive_margin(),
+            cooldown_s: default_gate_cooldown_s(),
+        }
+    }
+}
+
+impl From<SpeculationGateSettings> for SpeculationGateConfig {
+    fn from(settings: SpeculationGateSettings) -> Self {
+        let default = Self::default();
+        // A zero means "unset" rather than "instant": a zero-length window or a
+        // zero-request quorum would judge on a single sample, which is the coin
+        // flip `min_requests` exists to prevent.
+        Self {
+            min_window: if settings.min_window_s == 0 {
+                default.min_window
+            } else {
+                Duration::from_secs(settings.min_window_s)
+            },
+            min_requests: settings.min_requests.max(1),
+            decisive_margin: if settings.decisive_margin > 0.0 {
+                settings.decisive_margin
+            } else {
+                default.decisive_margin
+            },
+            cooldown: Duration::from_secs(settings.cooldown_s),
+        }
+    }
 }
 
 impl Default for SpeculationGateConfig {
@@ -326,13 +404,32 @@ impl SpeculationGate {
 /// guessing a stated intent rather than filling an unstated gap.
 pub(crate) const SPECULATION_GATE_ENV: &str = "SKIPPY_SPECULATION_GATE";
 
-pub(crate) fn speculation_gate_enabled() -> bool {
-    std::env::var(SPECULATION_GATE_ENV).is_ok_and(|value| {
-        matches!(
-            value.trim().to_ascii_lowercase().as_str(),
-            "1" | "true" | "yes" | "on"
-        )
-    })
+fn truthy(value: &str) -> bool {
+    matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "1" | "true" | "yes" | "on"
+    )
+}
+
+/// Whether the gate runs, from the configured setting and the environment
+/// override.
+///
+/// The environment is read first and decides on its own, the same shape as
+/// `SKIPPY_LAST_STAGE_DECODE_BATCH`: a bench or incident override that needs no
+/// replan. A set-but-unparseable value means off rather than deferring to the
+/// config, so an operator's typo cannot look like a policy.
+pub(crate) fn resolve_speculation_gate_enabled(env_value: Option<&str>, configured: bool) -> bool {
+    match env_value {
+        Some(value) => truthy(value),
+        None => configured,
+    }
+}
+
+pub(crate) fn speculation_gate_enabled(settings: SpeculationGateSettings) -> bool {
+    resolve_speculation_gate_enabled(
+        std::env::var(SPECULATION_GATE_ENV).ok().as_deref(),
+        settings.enabled,
+    )
 }
 
 /// Whether a resolved plan speculates at all.
@@ -408,6 +505,65 @@ mod tests {
     use super::*;
 
     const WINDOW: Duration = Duration::from_secs(60);
+
+    #[test]
+    fn the_environment_overrides_the_configured_gate_either_way() {
+        // Same precedence as SKIPPY_LAST_STAGE_DECODE_BATCH: the environment is a
+        // bench and incident override that needs no replan, so it decides alone.
+        assert!(resolve_speculation_gate_enabled(Some("1"), false));
+        assert!(!resolve_speculation_gate_enabled(Some("0"), true));
+        // Unset defers to configuration, which is what lets a strategy compose it.
+        assert!(resolve_speculation_gate_enabled(None, true));
+        assert!(!resolve_speculation_gate_enabled(None, false));
+        // A typo must not read as a policy.
+        assert!(!resolve_speculation_gate_enabled(Some("ture"), true));
+    }
+
+    #[test]
+    fn settings_become_durations_and_zero_means_unset() {
+        let settings = SpeculationGateSettings {
+            enabled: true,
+            min_window_s: 5,
+            min_requests: 4,
+            decisive_margin: 0.2,
+            cooldown_s: 30,
+        };
+        let config = SpeculationGateConfig::from(settings);
+        assert_eq!(config.min_window, Duration::from_secs(5));
+        assert_eq!(config.min_requests, 4);
+        assert_eq!(config.decisive_margin, 0.2);
+        assert_eq!(config.cooldown, Duration::from_secs(30));
+
+        // A zero window or quorum would judge on a single sample, which is the
+        // coin flip `min_requests` exists to prevent, so it restores the default
+        // rather than meaning "instantly".
+        let defaults = SpeculationGateConfig::default();
+        let zeroed = SpeculationGateConfig::from(SpeculationGateSettings {
+            min_window_s: 0,
+            min_requests: 0,
+            decisive_margin: 0.0,
+            ..settings
+        });
+        assert_eq!(zeroed.min_window, defaults.min_window);
+        assert_eq!(zeroed.min_requests, 1);
+        assert_eq!(zeroed.decisive_margin, defaults.decisive_margin);
+
+        // A zero cooldown IS meaningful: it is how a validation run reaches a
+        // verdict without waiting half an hour for the first trial.
+        assert_eq!(
+            SpeculationGateConfig::from(SpeculationGateSettings {
+                cooldown_s: 0,
+                ..settings
+            })
+            .cooldown,
+            Duration::ZERO
+        );
+    }
+
+    #[test]
+    fn the_gate_is_off_unless_asked_for() {
+        assert!(!SpeculationGateSettings::default().enabled);
+    }
 
     fn config() -> SpeculationGateConfig {
         SpeculationGateConfig {
