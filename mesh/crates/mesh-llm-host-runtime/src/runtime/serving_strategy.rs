@@ -57,7 +57,38 @@ pub struct StrategyDecision {
     pub because: &'static str,
 }
 
-/// What a strategy did, for the startup log and `doctor split`.
+/// The plan this process resolved at startup, for everything that asks later.
+///
+/// A startup `tracing::info!` was the only record of what a strategy composed,
+/// which makes the composition invisible exactly where somebody looks when a
+/// split is slow: the console, `doctor split`, a benchmark harness reading
+/// results. That is the same silently-unobservable-setting problem #2112 was
+/// opened about, one level up — the flags compose now, but whether they
+/// composed was still only in a log line.
+///
+/// Set once per process, immediately after the plan is applied. A lock rather
+/// than a `OnceLock` because `local_model_only` and `run_auto` are alternative
+/// startup paths and a reload can re-resolve.
+static RESOLVED_PLAN: std::sync::RwLock<Option<StrategyPlan>> = std::sync::RwLock::new(None);
+
+/// Remember what the strategy did, so the status API and `doctor split` can
+/// report it rather than each re-deriving it.
+pub fn record_resolved_plan(plan: &StrategyPlan) {
+    if let Ok(mut slot) = RESOLVED_PLAN.write() {
+        *slot = Some(plan.clone());
+    }
+}
+
+/// The plan this process resolved, if a strategy was named.
+///
+/// `None` both when no strategy was given and when the lock is poisoned: a
+/// report that cannot be produced is better absent than wrong, and losing it
+/// must not take serving down.
+pub fn resolved_plan() -> Option<StrategyPlan> {
+    RESOLVED_PLAN.read().ok().and_then(|slot| slot.clone())
+}
+
+/// What a strategy did, for the startup log, the status API and `doctor split`.
 ///
 /// `declined` records an axis the strategy wanted but did not take, because
 /// something more specific had already stated it. Surfacing those is the point:
@@ -340,9 +371,20 @@ pub(in crate::runtime) fn strategy_placement_policy(
 /// flag turned into — and, just as importantly, which of their own values it
 /// left alone.
 pub(in crate::runtime) fn log_strategy_plan(plan: &StrategyPlan) {
+    // Recorded even when no strategy was named, so a later reader can tell
+    // "nothing was composed" from "nobody has resolved a plan yet".
+    record_resolved_plan(plan);
     let Some(strategy) = plan.strategy else {
         return;
     };
+    // The interactive dashboard reads events, not the tracing log, so the
+    // header has to be told. Counts only: the header is one line and the full
+    // per-axis report lives in `doctor split` and `/api/status`.
+    let _ = mesh_llm_events::emit_event(mesh_llm_events::OutputEvent::ServingStrategyResolved {
+        strategy: strategy.to_string(),
+        applied: plan.applied.len(),
+        declined: plan.declined.len(),
+    });
     for decision in &plan.applied {
         tracing::info!(
             strategy,
