@@ -38,6 +38,7 @@ fn peer_state_test_announcement(addr: EndpointAddr) -> super::PeerAnnouncement {
         stage_protocol_generation_supported: true,
         stage_status_list_supported: true,
         local_gguf_content_id_supported: true,
+        decode_batch_policy_supported: true,
         advertised_model_throughput: vec![],
         #[cfg(feature = "payments")]
         lightning_offers: Default::default(),
@@ -571,6 +572,7 @@ fn gossip_frame_roundtrip_preserves_scanned_model_metadata() {
         stage_protocol_generation_supported: false,
         stage_status_list_supported: false,
         local_gguf_content_id_supported: false,
+        decode_batch_policy_supported: false,
         advertised_model_throughput: vec![],
         #[cfg(feature = "payments")]
         lightning_offers: Default::default(),
@@ -938,6 +940,7 @@ fn transitive_peer_update_refreshes_metadata_fields() {
         stage_protocol_generation_supported: true,
         stage_status_list_supported: true,
         local_gguf_content_id_supported: true,
+        decode_batch_policy_supported: true,
         advertised_model_throughput: vec![],
         #[cfg(feature = "payments")]
         lightning_offers: Default::default(),
@@ -1037,6 +1040,7 @@ fn transitive_peer_merge_preserves_richer_direct_address() {
         stage_protocol_generation_supported: true,
         stage_status_list_supported: true,
         local_gguf_content_id_supported: true,
+        decode_batch_policy_supported: true,
         advertised_model_throughput: vec![],
         #[cfg(feature = "payments")]
         lightning_offers: Default::default(),
@@ -1108,6 +1112,7 @@ fn transitive_peer_merge_preserves_richer_direct_address() {
         stage_protocol_generation_supported: true,
         stage_status_list_supported: true,
         local_gguf_content_id_supported: true,
+        decode_batch_policy_supported: true,
         advertised_model_throughput: vec![],
         #[cfg(feature = "payments")]
         lightning_offers: Default::default(),

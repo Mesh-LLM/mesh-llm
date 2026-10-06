@@ -66,6 +66,20 @@ fn supports_local_gguf_content_id(subprotocols: &[crate::proto::node::MeshSubpro
     )
 }
 
+/// Whether a peer can act on a planned last-stage decode batching policy.
+///
+/// A peer predating the feature ignores `StageLoad.last_stage_decode_batch`
+/// and serves correctly, just unbatched — so the operator asks for batching,
+/// gets none, and sees only lower throughput with no diagnostic. That is the
+/// silently-ignored-setting failure #2112 is about, which is why the
+/// coordinator warns rather than leaving it to be inferred from a number.
+fn supports_decode_batch_policy(subprotocols: &[crate::proto::node::MeshSubprotocol]) -> bool {
+    supports_skippy_stage_feature(
+        subprotocols,
+        skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_DECODE_BATCH_POLICY_V1,
+    )
+}
+
 fn supports_skippy_stage_generation(subprotocols: &[crate::proto::node::MeshSubprotocol]) -> bool {
     let required_features = [
         skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V11,
@@ -1169,6 +1183,7 @@ pub(crate) fn proto_ann_to_local(
         stage_protocol_generation_supported: supports_skippy_stage_generation(&pa.subprotocols),
         stage_status_list_supported: supports_skippy_status_list(&pa.subprotocols),
         local_gguf_content_id_supported: supports_local_gguf_content_id(&pa.subprotocols),
+        decode_batch_policy_supported: supports_decode_batch_policy(&pa.subprotocols),
         advertised_model_throughput: pa
             .advertised_model_throughput
             .iter()

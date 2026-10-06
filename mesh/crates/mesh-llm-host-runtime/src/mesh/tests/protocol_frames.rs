@@ -316,6 +316,7 @@ async fn transitive_peer_update_refreshes_last_mentioned() {
         stage_protocol_generation_supported: true,
         stage_status_list_supported: true,
         local_gguf_content_id_supported: true,
+        decode_batch_policy_supported: true,
         advertised_model_throughput: vec![],
         #[cfg(feature = "payments")]
         lightning_offers: Default::default(),
@@ -897,6 +898,7 @@ fn stale_serving_announcement(
         stage_protocol_generation_supported: true,
         stage_status_list_supported: true,
         local_gguf_content_id_supported: true,
+        decode_batch_policy_supported: true,
         advertised_model_throughput: vec![],
         cache_affinity: None,
         latency_ms: None,
