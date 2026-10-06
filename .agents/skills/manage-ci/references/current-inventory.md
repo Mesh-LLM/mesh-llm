@@ -818,9 +818,10 @@ boundary.
 - `restore-sccache-seed`: exact-key restore of the trusted 2 GiB Linux seed;
   central runner policy permits it only for GitHub-hosted selections, and
   native runtime restore is explicitly disabled after zero-reuse qualification.
-- `capture-sccache-stats`: machine-readable cache evidence. Warm consumers with
-  a positive floor fail when no cache requests are observable; the zero-floor
-  SafeTensors observation remains non-failing and emits a wiring warning.
+- `capture-sccache-stats`: machine-readable cache evidence. Required CI
+  consumers use a zero hit-rate floor and emit a wiring warning when no cache
+  requests are observable. Dedicated cache qualification canaries retain their
+  positive warm-restore floors.
 
 Rust-test batches that contain `skippy-runtime` or `skippy-package-builder`
 resolve the generated Skippy correctness manifest, then restore the pinned Qwen

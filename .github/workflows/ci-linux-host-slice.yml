@@ -167,4 +167,4 @@ jobs:
         with:
           artifact_name: sccache-ci-host-linux-${{ matrix.host.architecture }}-${{ github.run_attempt }}
           cache_expectation: ${{ steps.sccache_seed.outputs.cache_hit == 'true' && 'warm' || 'cold' }}
-          minimum_hit_rate: "0.20"
+          minimum_hit_rate: "0"

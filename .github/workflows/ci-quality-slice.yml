@@ -375,7 +375,7 @@ jobs:
         with:
           artifact_name: sccache-ci-quality-clippy-${{ matrix.batch.id }}-${{ github.run_attempt }}
           cache_expectation: ${{ steps.sccache_seed.outputs.cache_hit == 'true' && 'warm' || 'cold' }}
-          minimum_hit_rate: "0.20"
+          minimum_hit_rate: "0"
 
   cli_docs_sync:
     name: CLI inventory freshness

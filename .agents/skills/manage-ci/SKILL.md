@@ -307,8 +307,10 @@ owning source, and update the inventory and topology in the same change.
   or enable per-object GHA publication for Linux Clippy, Rust tests, host, or
   runtime jobs.
 - Every seeded compiler job records whether the exact seed was warm or cold.
-  Enforce a measured minimum hit rate only for an exact warm restore; an
-  intentional cache miss is classified cold and must not fail the build.
+  Required CI jobs capture the measured hit rate as evidence with a zero floor;
+  cache efficiency does not block correctness while the Skippy-first workflow
+  is established. Dedicated cache qualification canaries retain their positive
+  warm-restore floors. An intentional cache miss is classified cold.
 
 ### Bounded Depot PR cache-risk exception
 

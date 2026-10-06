@@ -1097,8 +1097,10 @@ This is intentionally not a universal PR write-through policy. One protected
 GitHub-hosted warmer publishes an exact-key compiler seed capped at 2 GiB after
 successful Main Quality. Central runner policy denies that seed to every Depot
 selection because Depot's Actions-cache proxy crosses trust scopes. Seeded
-jobs enforce measured hit-rate floors only after an exact warm restore; a
-missing seed is explicitly cold and does not fail. The seed key fingerprints
+jobs record measured hit rates after an exact warm restore with a zero floor;
+cache efficiency does not block required CI while the Skippy-first workflow is
+established. Dedicated cache qualification canaries retain their positive
+warm-restore floors. A missing seed is explicitly cold. The seed key fingerprints
 the warmer container image and toolchain epoch. Production runtime rows
 explicitly skip seed restoration after three verified CPU warm samples observed
 zero reuse in run `34272984200/1`.
