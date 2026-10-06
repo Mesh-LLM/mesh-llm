@@ -1,3 +1,5 @@
+mod request;
+
 use super::config::{ExternalPluginSpec, PluginHostMode};
 use super::plugin_manifest_overview;
 use super::support::{plugin_error, serialize_params, summarize_capabilities};
@@ -671,56 +673,6 @@ impl ExternalPlugin {
         })
     }
 
-    /// `None` waits indefinitely; the caller owns cancellation.
-    pub(crate) async fn call_tool_with_timeout(
-        &self,
-        tool_name: &str,
-        arguments_json: &str,
-        timeout: Option<std::time::Duration>,
-    ) -> Result<ToolCallResult> {
-        let response = self
-            .invoke_service(
-                proto::ServiceKind::Operation,
-                tool_name,
-                arguments_json,
-                timeout,
-            )
-            .await?;
-        Ok(ToolCallResult {
-            content_json: response.output_json,
-            is_error: response.is_error,
-        })
-    }
-
-    pub(crate) async fn invoke_service(
-        &self,
-        kind: proto::ServiceKind,
-        service_name: &str,
-        input_json: &str,
-        timeout: Option<std::time::Duration>,
-    ) -> Result<proto::InvokeServiceResponse> {
-        let response = self
-            .request_with_timeout(
-                proto::envelope::Payload::InvokeServiceRequest(proto::InvokeServiceRequest {
-                    kind: kind as i32,
-                    service_name: service_name.to_string(),
-                    input_json: input_json.to_string(),
-                }),
-                timeout,
-            )
-            .await?;
-        match response.payload {
-            Some(proto::envelope::Payload::InvokeServiceResponse(resp)) => Ok(resp),
-            Some(proto::envelope::Payload::ErrorResponse(err)) => {
-                Err(plugin_error(&self.spec.name, "invoke_service", &err))
-            }
-            _ => bail!(
-                "Plugin '{}' returned an unexpected payload for 'invoke_service'",
-                self.spec.name
-            ),
-        }
-    }
-
     pub(crate) async fn mcp_request<T, P>(&self, method: &str, params: P) -> Result<T>
     where
         T: serde::de::DeserializeOwned,
@@ -829,32 +781,6 @@ impl ExternalPlugin {
             Some(std::time::Duration::from_secs(REQUEST_TIMEOUT_SECS)),
         )
         .await
-    }
-
-    async fn request_with_timeout(
-        &self,
-        payload: proto::envelope::Payload,
-        timeout: Option<std::time::Duration>,
-    ) -> Result<proto::Envelope> {
-        for attempt in 0..2 {
-            self.ensure_running().await?;
-            let (generation, outbound_tx, pending) = self.runtime_handles().await?;
-            match self
-                .request_once(generation, outbound_tx, pending, payload.clone(), timeout)
-                .await
-            {
-                Ok(response) => return Ok(response),
-                Err(err) if attempt == 0 => {
-                    tracing::debug!(
-                        plugin = %self.spec.name,
-                        error = %err,
-                        "Retrying plugin request after restart"
-                    );
-                }
-                Err(err) => return Err(err),
-            }
-        }
-        bail!("Plugin '{}' request failed after restart", self.spec.name)
     }
 
     async fn send_unsolicited(&self, payload: proto::envelope::Payload, kind: &str) -> Result<()> {
