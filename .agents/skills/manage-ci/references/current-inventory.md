@@ -164,6 +164,9 @@ digests bind all handoff bytes to the candidate, main base, run/attempt, and
 pass identity.
 The build job sets `CTEST_PARALLEL_LEVEL=16` for complete upstream CTest runs
 in the repair session and trusted build; the per-case timeout remains 900 seconds.
+Goose's build and test commands use `scripts/llama-canary-log-command.sh` to
+stream output and retain separate invocation logs, exit statuses, and available
+CTest result files under the build job's 14-day repair evidence artifact.
 
 Before compilation, the controller runs the selected battery in cache-free
 `--dry-run --skip-build` mode against its own planner output. This checks the
