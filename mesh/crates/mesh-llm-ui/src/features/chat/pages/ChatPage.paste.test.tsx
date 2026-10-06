@@ -83,4 +83,45 @@ describe('ChatPage composer paste', () => {
     expect(pendingAttachments).toHaveTextContent('first.png')
     expect(pendingAttachments).toHaveTextContent('second.jpg')
   })
+
+  it('ignores a paste event without clipboardData', () => {
+    renderChatPage({ mode: 'live' })
+
+    const notConsumed = fireEvent.paste(screen.getByLabelText('Prompt'), {})
+
+    expect(notConsumed).toBe(true)
+    expect(screen.queryByTestId('composer-attachments')).not.toBeInTheDocument()
+  })
+
+  it('attaches a pasted image while a response is streaming', async () => {
+    const user = userEvent.setup()
+
+    renderChatPage({ mode: 'live' })
+
+    await user.type(screen.getByLabelText('Prompt'), 'Start a response')
+    await user.click(screen.getByRole('button', { name: 'Send' }))
+    expect(screen.getByRole('button', { name: 'Stop streaming' })).toBeInTheDocument()
+
+    const consumed = pasteIntoComposer([new File(['image-bytes'], 'during-stream.png', { type: 'image/png' })])
+
+    expect(consumed).toBe(false)
+    expect(screen.getByTestId('composer-attachments')).toHaveTextContent('during-stream.png')
+  })
+
+  it('removes only one chip when two pasted files share a name', async () => {
+    const user = userEvent.setup()
+
+    renderChatPage({ mode: 'live' })
+
+    pasteIntoComposer([
+      new File(['first-bytes'], 'same.png', { type: 'image/png' }),
+      new File(['second-bytes'], 'same.png', { type: 'image/png' })
+    ])
+    expect(screen.getAllByRole('button', { name: 'Remove attachment same.png' })).toHaveLength(2)
+
+    await user.click(screen.getAllByRole('button', { name: 'Remove attachment same.png' })[0])
+
+    expect(screen.getAllByRole('button', { name: 'Remove attachment same.png' })).toHaveLength(1)
+    expect(screen.getByTestId('composer-attachments')).toBeInTheDocument()
+  })
 })

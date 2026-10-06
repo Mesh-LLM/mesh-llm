@@ -788,7 +788,6 @@ export function ChatPageContent({ data = CHAT_HARNESS, target, onClearTarget }: 
         updateComposerAttachments((current) => [...current, ...files])
       }}
       onRemoveComposerAttachment={removeComposerAttachment}
-      composerAttachmentCount={composerDraft.attachments.length}
       composerDisabled={composerIsPreparingAttachments || !canChat}
       composerIsPreparingAttachments={composerIsPreparingAttachments}
       attachmentProcessingStage={attachmentProcessingStatus?.stage}

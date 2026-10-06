@@ -73,7 +73,6 @@ type ChatPageLayoutProps = {
   onComposerPromptChange: (value: string) => void
   onComposerAttachmentsChange: (files: File[]) => void
   onRemoveComposerAttachment: (index: number) => void
-  composerAttachmentCount: number
   composerDisabled: boolean
   composerIsPreparingAttachments: boolean
   attachmentProcessingStage: AttachmentProcessingStatus['stage'] | undefined
@@ -160,7 +159,6 @@ export function ChatPageLayout({
   onComposerPromptChange,
   onComposerAttachmentsChange,
   onRemoveComposerAttachment,
-  composerAttachmentCount,
   composerDisabled,
   composerIsPreparingAttachments,
   attachmentProcessingStage,
@@ -286,7 +284,6 @@ export function ChatPageLayout({
               value={composerDraft.prompt}
               onChange={onComposerPromptChange}
               onAttach={onComposerAttachmentsChange}
-              attachmentCount={composerAttachmentCount}
               attachments={composerDraft.attachments}
               onRemoveAttachment={onRemoveComposerAttachment}
               disabled={composerDisabled}

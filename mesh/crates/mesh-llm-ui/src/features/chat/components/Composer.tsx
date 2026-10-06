@@ -15,7 +15,6 @@ type ComposerProps = {
   onSend: () => void
   onAttach?: (files: File[]) => void
   onSystemPrompt?: () => void
-  attachmentCount?: number
   attachments?: File[]
   onRemoveAttachment?: (index: number) => void
   onStop?: () => void
@@ -46,7 +45,6 @@ export function Composer({
   onSend,
   onAttach,
   onSystemPrompt,
-  attachmentCount = 0,
   attachments = [],
   onRemoveAttachment,
   onStop,
@@ -66,10 +64,10 @@ export function Composer({
 }: ComposerProps) {
   const attachmentInputRef = useRef<HTMLInputElement | null>(null)
   const handleSend = useCallback(() => {
-    if (!disabled && (value.trim() || attachmentCount > 0)) onSend()
-  }, [attachmentCount, disabled, value, onSend])
+    if (!disabled && (value.trim() || attachments.length > 0)) onSend()
+  }, [attachments.length, disabled, value, onSend])
 
-  const sendDisabled = disabled || (!value.trim() && attachmentCount === 0)
+  const sendDisabled = disabled || (!value.trim() && attachments.length === 0)
   const retryDisabled = disabled || !canRetry
   const stopDisabled = disabled || !isStreaming || !onStop
   const submitQueuesPrompt = sendMode === 'queue' || isStreaming
@@ -216,9 +214,9 @@ export function Composer({
                     <div className="text-fg-faint">Try selecting another model, then send the prompt again.</div>
                   </div>
                 </div>
-                {attachmentCount > 0 ? (
+                {attachments.length > 0 ? (
                   <span className="block text-fg-faint">
-                    {attachmentCount} attachment{attachmentCount === 1 ? '' : 's'} ready
+                    {attachments.length} attachment{attachments.length === 1 ? '' : 's'} ready
                   </span>
                 ) : null}
               </div>
