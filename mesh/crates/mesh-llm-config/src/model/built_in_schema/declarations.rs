@@ -809,7 +809,7 @@ fn speculative_settings(prefix: &str) -> Vec<ConfigSettingSchema> {
         ),
         basic_setting(
             &format!("{prefix}.verify_window_runahead_tokens"),
-            ConfigValueSchema::Integer,
+            integer_or_auto_schema(),
         ),
         basic_setting(&format!("{prefix}.ngram_fallback"), ConfigValueSchema::String),
         basic_setting(&format!("{prefix}.gate"), bool_or_auto_schema()),

@@ -286,6 +286,14 @@ impl SpeculationGate {
         }
     }
 
+    /// Whether a trial is open, so its flip is inside the current window.
+    ///
+    /// Read by the run-ahead budget search, which must not attribute a rate
+    /// shaped by this gate's flip to a budget of its own.
+    pub(crate) fn is_trialling(&self) -> bool {
+        self.trial.is_some()
+    }
+
     /// Fold one finished request in, and decide if its window has closed.
     ///
     /// `speculating` is the gate's current setting, which the caller owns.
@@ -467,6 +475,15 @@ impl SpeculationGovernor {
             gate: std::sync::Mutex::new(SpeculationGate::new(config)),
             speculating: std::sync::atomic::AtomicBool::new(speculating),
         }
+    }
+
+    /// Whether a trial is open. `false` if the lock is poisoned, which keeps
+    /// the run-ahead search sampling rather than starving it on a dead gate.
+    pub(crate) fn is_trialling(&self) -> bool {
+        self.gate
+            .lock()
+            .map(|gate| gate.is_trialling())
+            .unwrap_or(false)
     }
 
     /// Whether the generation path should speculate right now.

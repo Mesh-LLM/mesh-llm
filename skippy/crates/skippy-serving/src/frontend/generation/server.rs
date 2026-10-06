@@ -378,6 +378,13 @@ fn embedded_openai_backend_with_scheduler(
                 true,
             ))
         }),
+        // Only when the plan declines to state a number. A stated budget,
+        // including a stated zero, is the operator's and is not searched.
+        runahead_governor: args.speculative.verify_window.runahead_auto.then(|| {
+            std::sync::Arc::new(crate::frontend::runahead_search::RunaheadGovernor::new(
+                crate::frontend::runahead_search::RunaheadSearchConfig::default(),
+            ))
+        }),
         speculative: args.speculative,
         generation_limit: Arc::new(match args.adaptive_generation_min_concurrency {
             Some(initial_limit) => GenerationConcurrencyController::adaptive(

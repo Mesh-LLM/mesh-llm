@@ -476,17 +476,38 @@ fn resolve_decode_config(input: DecodeResolutionInput<'_>) -> Result<Speculative
             .and_then(|config| config.verify_window_pipeline_depth),
     )
     .map_or(config.verify_window.pipeline_depth, |value| value as usize);
-    config.verify_window.runahead_max_tokens = pick_optional_u32(
-        input
-            .model_config
-            .and_then(|config| config.verify_window_runahead_tokens),
-        input
-            .global_config
-            .and_then(|config| config.verify_window_runahead_tokens),
-    )
-    .map_or(config.verify_window.runahead_max_tokens, |value| {
-        value as usize
-    });
+    // A number, or "auto" to let the per-deployment search decide. `auto` is
+    // not a value the engine can use, so it sets a flag instead and leaves the
+    // token figure at fixed-depth admission until the search moves it — the
+    // measured cost of guessing a shallow budget is a 10% loss, so an unsearched
+    // "auto" must not guess.
+    match input
+        .model_config
+        .and_then(|config| config.verify_window_runahead_tokens.as_ref())
+        .or_else(|| {
+            input
+                .global_config
+                .and_then(|config| config.verify_window_runahead_tokens.as_ref())
+        }) {
+        None => {}
+        Some(mesh_llm_config::IntegerOrString::String(value))
+            if value.eq_ignore_ascii_case("auto") =>
+        {
+            config.verify_window.runahead_auto = true;
+        }
+        Some(mesh_llm_config::IntegerOrString::String(_)) => {
+            bail!(
+                "skippy speculative verify_window_runahead_tokens must be an integer or \"auto\""
+            );
+        }
+        Some(mesh_llm_config::IntegerOrString::Integer(value)) => {
+            config.verify_window.runahead_max_tokens = usize::try_from(*value).map_err(|_| {
+                anyhow::anyhow!(
+                    "skippy speculative verify_window_runahead_tokens must not be negative"
+                )
+            })?;
+        }
+    }
     if config.verify_window.min_tokens > config.verify_window.max_tokens {
         bail!("skippy speculative verify window requires min_tokens <= max_tokens");
     }
@@ -663,6 +684,7 @@ fn package_decode_config(
             max_tokens: 4,
             pipeline_depth: 1,
             runahead_max_tokens: 0,
+            runahead_auto: false,
         });
     let effective_strategy = match (native_mtp.enabled, ngram.as_ref().map(|value| value.kind)) {
         (true, Some(NgramProposerKind::Cache)) => "native-mtp+ngram-cache",
@@ -751,6 +773,7 @@ fn verify_window_config(policy: &PackageWindowPolicyInfo) -> VerifyWindowConfig 
         max_tokens: policy.max_window as usize,
         pipeline_depth: policy.pipeline_depth.unwrap_or(1) as usize,
         runahead_max_tokens: 0,
+        runahead_auto: false,
     }
 }
 
