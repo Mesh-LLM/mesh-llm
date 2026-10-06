@@ -339,6 +339,9 @@ async fn finish_runtime_model_load(
     ctx.survey_telemetry
         .record_launch_success(&survey_loaded_model, launch_started.elapsed());
     add_runtime_local_target(ctx.target_tx, &loaded_name, handle.port);
+    // Publish Skippy's render-only reasoning-control observations for this model,
+    // so `/v1/models` can attach them to the entry this node serves.
+    skippy::register_local_thinking(&loaded_name, handle.thinking.as_ref());
     register_runtime_instance(
         ctx.runtime_instance_registry,
         ctx.node,

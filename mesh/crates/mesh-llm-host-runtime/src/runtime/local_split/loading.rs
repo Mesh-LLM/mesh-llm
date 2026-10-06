@@ -363,6 +363,7 @@ pub(super) async fn load_split_runtime_generation_inner(
             slots: spec.slots,
             capabilities,
             workload_class: mesh::ModelWorkloadClass::CausalGeneration,
+            thinking: handle.thinking().cloned(),
             inner: LocalRuntimeBackendHandle::Skippy {
                 model: Box::new(handle),
                 http,

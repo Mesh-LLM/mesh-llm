@@ -68,6 +68,7 @@ pub use self::linear_proposal::{
     LinearProposalSourceOutcome, LinearProposalSourceResponse, LinearProposalSourceTelemetry,
     OpaqueProposalDecisionId,
 };
+pub(crate) use self::request::thinking_probe_options;
 pub use self::speculative::{
     NativeMtpProposalConfig, NgramExtensionConfig, NgramProposalConfig, NgramProposerKind,
     SpeculativeDecodeConfig, VerifyWindowConfig,

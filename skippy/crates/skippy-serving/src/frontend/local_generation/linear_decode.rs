@@ -427,6 +427,7 @@ mod tests {
             model_id: "linear-proposal-test".to_string(),
             default_max_tokens: 4,
             request_defaults: EmbeddedOpenAiRequestDefaults::default(),
+            thinking: None,
             ctx_size: 128,
             mode: OpenAiBackendMode::LocalRuntime,
             draft: None,
