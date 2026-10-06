@@ -1,0 +1,253 @@
+From 9a0233b5ef8ddcbf563486917b69437e1dd42c65 Mon Sep 17 00:00:00 2001
+From: Virgile-pct <222121099+Virgile-pct@users.noreply.github.com>
+Date: Sun, 4 Oct 2026 00:13:52 +0200
+Subject: [PATCH 59/67] test(skippy): check every auto fused op on split stages
+
+check_stage_flash_attention_auto() only asserted flash attention, although
+the three DeepSeek V4 HC fusions go through the same resolve() walk over
+the same fused-node list, and the Gated Delta Net and Lightning Indexer
+nodes share that list too.
+
+Rename it to check_stage_fused_ops_auto(). On auto, each stage must now
+resolve flash attention and the three HC fusions to enabled, and for every
+fused op of the whole model it must keep the nodes of exactly its own
+layers. A --stage-fused-ops mode runs only this check, and a new ctest,
+skippy_stage_fused_ops_auto_deepseek4, runs it on the deepseek4-moe
+fixture, whose layers carry the HC fusions.
+---
+ src/CMakeLists.txt                      |   8 ++
+ src/skippy/tests/graph_build_inputs.cpp | 141 +++++++++++++++++++-----
+ 2 files changed, 124 insertions(+), 25 deletions(-)
+
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+index b4ee9bd87..6b0fb5098 100644
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -562,6 +562,14 @@ if (LLAMA_STAGE_BUILD_TESTS)
+     set_tests_properties(skippy_noalloc_graph_planning_deepseek4_hyperconnection PROPERTIES
+         FIXTURES_REQUIRED skippy-noalloc-deepseek4-fixture)
+ 
++    add_test(
++        NAME skippy_stage_fused_ops_auto_deepseek4
++        COMMAND skippy-graph-build-inputs
++            --stage-fused-ops
++            "${SKIPPY_MODEL_FIXTURE_DIR}/deepseek4-moe.gguf")
++    set_tests_properties(skippy_stage_fused_ops_auto_deepseek4 PROPERTIES
++        FIXTURES_REQUIRED skippy-noalloc-deepseek4-fixture)
++
+     add_test(
+         NAME skippy_noalloc_graph_planning_granite_hybrid
+         COMMAND skippy-noalloc-graph-planning
+diff --git a/src/skippy/tests/graph_build_inputs.cpp b/src/skippy/tests/graph_build_inputs.cpp
+index e66224f9d..4b0b430ed 100644
+--- a/src/skippy/tests/graph_build_inputs.cpp
++++ b/src/skippy/tests/graph_build_inputs.cpp
+@@ -16,6 +16,7 @@
+ #include <cstdio>
+ #include <cstring>
+ #include <functional>
++#include <map>
+ #include <memory>
+ #include <set>
+ #include <stdexcept>
+@@ -610,11 +611,25 @@ static int check_sched_reserve_and_memory_update(const char * model_path) {
+     return 0;
+ }
+ 
+-// A stage reserves only its own layers. Auto flash attention must resolve the
+-// same way it does for the whole model instead of tripping on the attention
+-// nodes of layers the stage does not run, and the stage must still check the
+-// attention nodes of the layers it does run.
+-static int check_stage_flash_attention_auto(const char * model_path) {
++static const char * fused_op_name(llm_fused_op op) {
++    switch (op) {
++        case LLM_FUSED_OP_FLASH_ATTN:         return "flash attention";
++        case LLM_FUSED_OP_GDN_AR:             return "Gated Delta Net (autoregressive)";
++        case LLM_FUSED_OP_GDN_CH:             return "Gated Delta Net (chunked)";
++        case LLM_FUSED_OP_LIGHTNING_INDEXER:  return "Lightning Indexer";
++        case LLM_FUSED_OP_DSV4_HC_PRE:        return "DeepSeek V4 HC pre";
++        case LLM_FUSED_OP_DSV4_HC_COMB:       return "DeepSeek V4 HC comb";
++        case LLM_FUSED_OP_DSV4_HC_POST:       return "DeepSeek V4 HC post";
++    }
++    return "unknown fused op";
++}
++
++// A stage reserves only its own layers. Every fused op resolved on auto (flash
++// attention and the DeepSeek V4 HC fusions) must resolve the same way it does
++// for the whole model instead of tripping on the fused nodes of layers the stage
++// does not run, and for every fused op of the whole model the stage must keep
++// the nodes of exactly the layers it runs.
++static int check_stage_fused_ops_auto(const char * model_path) {
+     llama_model * model = load_model(model_path);
+     const int32_t n_layer = model == nullptr ? 0 : llama_model_n_layer(model);
+     if (n_layer < 2) {
+@@ -622,20 +637,37 @@ static int check_stage_flash_attention_auto(const char * model_path) {
+         return 40;
+     }
+ 
+-    const auto resolve_auto = [model](const skippy_graph_build_inputs & inputs, bool & enabled,
+-            std::set<int32_t> & checked_layers) {
++    struct auto_fused_op {
++        llm_fused_op op;
++        bool llama_cparams::* enabled;
++    };
++    const auto_fused_op auto_ops[] = {
++        {LLM_FUSED_OP_FLASH_ATTN, &llama_cparams::flash_attn},
++        {LLM_FUSED_OP_DSV4_HC_PRE, &llama_cparams::fused_dsv4_hc_pre},
++        {LLM_FUSED_OP_DSV4_HC_COMB, &llama_cparams::fused_dsv4_hc_comb},
++        {LLM_FUSED_OP_DSV4_HC_POST, &llama_cparams::fused_dsv4_hc_post},
++    };
++    // Per (op, layer) node counts, not a set of layers: DeepSeek V4 builds two
++    // HC nodes of the same op inside one layer (attention and FFN), so a stage
++    // that dropped one of them would still keep the layer in a set comparison.
++    using fused_node_counts = std::map<llm_fused_op, std::map<int32_t, size_t>>;
++
++    const auto resolve_auto = [model, &auto_ops](const skippy_graph_build_inputs & inputs,
++            std::vector<llm_fused_op> & disabled, fused_node_counts & counts) {
+         llama_context_params params = make_context_params(1);
+         params.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_AUTO;
+         llama_context * context = llama_init_from_model_with_graph_inputs(model, params, inputs);
+         if (context == nullptr) {
+             return false;
+         }
+-        enabled = context->get_cparams().flash_attn;
+-        for (const auto & node : context->get_gf_res_reserve()->get_fused_nodes()) {
+-            if (node.op == LLM_FUSED_OP_FLASH_ATTN) {
+-                checked_layers.insert(node.il);
++        for (const auto & auto_op : auto_ops) {
++            if (!(context->get_cparams().*auto_op.enabled)) {
++                disabled.push_back(auto_op.op);
+             }
+         }
++        for (const auto & node : context->get_gf_res_reserve()->get_fused_nodes()) {
++            ++counts[node.op][node.il];
++        }
+         llama_free(context);
+         return true;
+     };
+@@ -646,11 +678,26 @@ static int check_stage_flash_attention_auto(const char * model_path) {
+         }
+         return layers;
+     };
++    const auto counted_layers = [](const std::map<int32_t, size_t> & counts) {
++        std::set<int32_t> layers;
++        for (const auto & entry : counts) {
++            layers.insert(entry.first);
++        }
++        return layers;
++    };
++    const auto counted_nodes = [](const std::map<int32_t, size_t> & counts) {
++        size_t nodes = 0;
++        for (const auto & entry : counts) {
++            nodes += entry.second;
++        }
++        return nodes;
++    };
+ 
+-    bool whole_model_enabled = false;
+-    std::set<int32_t> whole_model_layers;
+-    if (!resolve_auto(skippy_graph_build_inputs(), whole_model_enabled, whole_model_layers) ||
+-            !whole_model_enabled || whole_model_layers != layer_range(0, n_layer)) {
++    std::vector<llm_fused_op> whole_model_disabled;
++    fused_node_counts whole_model_counts;
++    if (!resolve_auto(skippy_graph_build_inputs(), whole_model_disabled, whole_model_counts) ||
++            !whole_model_disabled.empty() ||
++            counted_layers(whole_model_counts[LLM_FUSED_OP_FLASH_ATTN]) != layer_range(0, n_layer)) {
+         llama_model_free(model);
+         return 41;
+     }
+@@ -658,22 +705,60 @@ static int check_stage_flash_attention_auto(const char * model_path) {
+     const std::pair<int32_t, int32_t> stages[] = {{0, 1}, {1, n_layer}};
+     for (const auto & [layer_start, layer_end] : stages) {
+         skippy_graph_build_inputs inputs;
+-        bool enabled = false;
+-        std::set<int32_t> checked_layers;
++        std::vector<llm_fused_op> disabled;
++        fused_node_counts counts;
+         if (!make_stage_inputs(model, 1, layer_start, layer_end, inputs) ||
+-                !resolve_auto(inputs, enabled, checked_layers)) {
++                !resolve_auto(inputs, disabled, counts)) {
+             llama_model_free(model);
+             return 42;
+         }
+-        if (!enabled) {
+-            std::fprintf(stderr, "stage %d..%d resolved auto flash attention to disabled\n",
+-                    layer_start, layer_end);
++        if (!disabled.empty()) {
++            for (const llm_fused_op op : disabled) {
++                std::fprintf(stderr, "stage %d..%d resolved auto %s to disabled\n",
++                        layer_start, layer_end, fused_op_name(op));
++            }
+             llama_model_free(model);
+             return 43;
+         }
+-        if (checked_layers != layer_range(layer_start, layer_end)) {
+-            std::fprintf(stderr, "stage %d..%d kept flash attention nodes for %zu layers, expected %d\n",
+-                    layer_start, layer_end, checked_layers.size(), layer_end - layer_start);
++        // The whole-model counts restricted to this stage's layers are the exact
++        // baseline: the same ops, the same layers, and the same number of nodes
++        // per (op, layer).
++        fused_node_counts expected;
++        for (const auto & [op, op_counts] : whole_model_counts) {
++            for (const auto & [il, node_count] : op_counts) {
++                if (il >= layer_start && il < layer_end) {
++                    expected[op][il] = node_count;
++                }
++            }
++        }
++        // A stage is a slice of the whole-model graph, so it cannot introduce an
++        // op the whole model lacks; report one if that ever changes.
++        for (const auto & [op, op_counts] : counts) {
++            if (expected.count(op) == 0) {
++                std::fprintf(stderr, "stage %d..%d kept unexpected %s nodes (%zu)\n",
++                        layer_start, layer_end, fused_op_name(op), counted_nodes(op_counts));
++                llama_model_free(model);
++                return 45;
++            }
++        }
++        const std::map<int32_t, size_t> no_nodes;
++        for (const auto & [op, expected_counts] : expected) {
++            const auto stage_it = counts.find(op);
++            const std::map<int32_t, size_t> & stage_counts =
++                    stage_it == counts.end() ? no_nodes : stage_it->second;
++            if (stage_counts == expected_counts) {
++                continue;
++            }
++            const std::set<int32_t> stage_layers = counted_layers(stage_counts);
++            const std::set<int32_t> expected_layers = counted_layers(expected_counts);
++            if (stage_layers != expected_layers) {
++                std::fprintf(stderr, "stage %d..%d kept %s nodes for %zu layers, expected %zu\n",
++                        layer_start, layer_end, fused_op_name(op), stage_layers.size(), expected_layers.size());
++            } else {
++                std::fprintf(stderr, "stage %d..%d kept %zu %s nodes, expected %zu\n",
++                        layer_start, layer_end, counted_nodes(stage_counts), fused_op_name(op),
++                        counted_nodes(expected_counts));
++            }
+             llama_model_free(model);
+             return 44;
+         }
+@@ -1740,6 +1825,12 @@ int main(int argc, char ** argv) {
+     if (argc == 2 && std::strcmp(argv[1], "--input-width") == 0) {
+         return check_decode_input_width();
+     }
++    if (argc == 3 && std::strcmp(argv[1], "--stage-fused-ops") == 0) {
++        llama_backend_init();
++        const int rc = check_stage_fused_ops_auto(argv[2]);
++        llama_backend_free();
++        return rc;
++    }
+     const bool stage_program_only = argc == 4 && std::strcmp(argv[3], "--stage-program") == 0;
+     if (argc != 3 && !stage_program_only) {
+         return 64;
+@@ -1773,7 +1864,7 @@ int main(int argc, char ** argv) {
+     }
+ #endif
+     if (rc == 0) rc = check_sched_reserve_and_memory_update(argv[1]);
+-    if (rc == 0) rc = check_stage_flash_attention_auto(argv[1]);
++    if (rc == 0) rc = check_stage_fused_ops_auto(argv[1]);
+     if (rc == 0) {
+         rc = check_decode_encode_fallback(argv[2]);
+     }
+-- 
+2.54.0 (Apple Git-157)
+

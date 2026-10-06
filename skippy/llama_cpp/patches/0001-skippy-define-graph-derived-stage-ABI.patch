@@ -1,7 +1,7 @@
-From 11d8f884b831dbd3e4d0cf41e7953e776e233125 Mon Sep 17 00:00:00 2001
+From 659175ea96dcba4628fed4b0cc32a91de6dca2d1 Mon Sep 17 00:00:00 2001
 From: James Dumay <jameswdumay@gmail.com>
 Date: Sat, 19 Sep 2026 15:17:03 +1000
-Subject: [PATCH] skippy: define graph-derived stage ABI
+Subject: [PATCH 01/67] skippy: define graph-derived stage ABI
 
 ---
  include/skippy.h                      |  28 +++

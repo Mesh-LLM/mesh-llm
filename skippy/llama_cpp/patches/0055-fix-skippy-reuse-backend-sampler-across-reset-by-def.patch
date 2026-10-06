@@ -1,0 +1,66 @@
+From 86406f153633fb2bd78b7c5c69037af80b91f75d Mon Sep 17 00:00:00 2001
+From: Daniel Winter-Wijntjes <danwinter1@me.com>
+Date: Mon, 28 Sep 2026 08:40:55 +1000
+Subject: [PATCH 55/67] fix(skippy): reuse backend sampler across reset by
+ default
+
+---
+ src/skippy/session.cpp              | 14 ++++++++------
+ src/skippy/tests/runtime_events.cpp |  8 ++++----
+ 2 files changed, 12 insertions(+), 10 deletions(-)
+
+diff --git a/src/skippy/session.cpp b/src/skippy/session.cpp
+index 1babdd733..81f837f35 100644
+--- a/src/skippy/session.cpp
++++ b/src/skippy/session.cpp
+@@ -360,13 +360,15 @@ enum skippy_status skippy_session_reset(
+         session->token_history.clear();
+     }
+     session->signal_history.clear();
+-    // Preserve the established detach-on-reset behavior by default until the
+-    // reuse path has production benchmark coverage on every backend. Operators
+-    // can opt in with SKIPPY_DETACH_SAMPLER_ON_RESET=0. Single-session prefill
+-    // requests no output rows; batched prefill requests at most the final row,
+-    // so the opt-in path remains within the one-output-per-sequence contract.
++    // Keep a reusable backend sampler attached across reset. Detaching it
++    // makes the next sampled decode reattach the chain and mark the scheduler
++    // for reserve, which rebuilds compute buffers at every request boundary.
++    // Operators can restore detach-on-reset with
++    // SKIPPY_DETACH_SAMPLER_ON_RESET=1. Single-session prefill requests no
++    // output rows; batched prefill requests at most the final row, so the
++    // reuse path remains within the one-output-per-sequence contract.
+     const bool detach_sampler_on_reset =
+-            !skippy_env_disabled("SKIPPY_DETACH_SAMPLER_ON_RESET");
++            skippy_env_enabled("SKIPPY_DETACH_SAMPLER_ON_RESET");
+     if (detach_sampler_on_reset || !skippy_reset_reusable_sampling(session)) {
+         skippy_clear_chat_sampling(session);
+     }
+diff --git a/src/skippy/tests/runtime_events.cpp b/src/skippy/tests/runtime_events.cpp
+index 40f056cdc..75b65fc55 100644
+--- a/src/skippy/tests/runtime_events.cpp
++++ b/src/skippy/tests/runtime_events.cpp
+@@ -331,7 +331,7 @@ int test_native_model_load_production(const char * fixture_path) {
+     const char * old_detach_setting = std::getenv("SKIPPY_DETACH_SAMPLER_ON_RESET");
+     const bool had_detach_setting = old_detach_setting != nullptr;
+     const std::string saved_detach_setting = had_detach_setting ? old_detach_setting : "";
+-    set_detach_sampler_on_reset_environment(nullptr);
++    set_detach_sampler_on_reset_environment("1");
+     CHECK(fixture_path != nullptr && fixture_path[0] != '\0');
+ 
+     // A legacy entrypoint with only the process reporter receives concrete
+@@ -366,9 +366,9 @@ int test_native_model_load_production(const char * fixture_path) {
+     CHECK(!session->sampling_backend_enabled);
+     CHECK(session->sampling_chain == nullptr);
+ 
+-    // Reuse is an explicit opt-in until every backend has production
+-    // benchmark coverage. Exercise the opt-in path below.
+-    set_detach_sampler_on_reset_environment("0");
++    // SKIPPY_DETACH_SAMPLER_ON_RESET=1 restores detach-on-reset, exercised
++    // above. Reuse is the default; exercise it below with the setting unset.
++    set_detach_sampler_on_reset_environment(nullptr);
+     CHECK(skippy_session_configure_chat_sampling(
+             session, &sampling, "{\"grammar\":\"\"}", 0, &error) == SKIPPY_STATUS_OK);
+     CHECK(session->sampling_backend_enabled);
+-- 
+2.54.0 (Apple Git-157)
+

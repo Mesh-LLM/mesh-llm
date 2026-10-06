@@ -1,7 +1,8 @@
-From dc269e5f276973cc24970ea789ba75541998a964 Mon Sep 17 00:00:00 2001
+From f977816fdb034d7d585e116c2e7f1606e6d271ac Mon Sep 17 00:00:00 2001
 From: James Dumay <jameswdumay@gmail.com>
 Date: Mon, 21 Sep 2026 05:39:11 +1000
-Subject: [PATCH] fix(skippy): preserve prepared activation export token axes
+Subject: [PATCH 09/67] fix(skippy): preserve prepared activation export token
+ axes
 
 ---
  src/llama-context.cpp                   | 11 +++++++++++
@@ -12,10 +13,10 @@ Subject: [PATCH] fix(skippy): preserve prepared activation export token axes
  5 files changed, 55 insertions(+), 2 deletions(-)
 
 diff --git a/src/llama-context.cpp b/src/llama-context.cpp
-index ccfe6133e..44e8cb7ad 100644
+index 773842bc4..b637e24ff 100644
 --- a/src/llama-context.cpp
 +++ b/src/llama-context.cpp
-@@ -2808,6 +2808,16 @@ llm_graph_params llama_context::graph_params(
+@@ -2853,6 +2853,16 @@ llm_graph_params llama_context::graph_params(
              const llama_memory_context_i * mctx,
                            llm_graph_type   gtype,
              const skippy_graph_build_inputs & graph_build_inputs) const {
@@ -32,8 +33,8 @@ index ccfe6133e..44e8cb7ad 100644
      return {
          /*.arch        =*/ model.arch,
          /*.hparams     =*/ model.hparams,
-@@ -2822,6 +2832,7 @@ llm_graph_params llama_context::graph_params(
-         /*.cross       =*/ &cross,
+@@ -2868,6 +2878,7 @@ llm_graph_params llama_context::graph_params(
+         /*.prec_policy =*/ &model.prec_policy,
          /*.samplers    =*/ sampling.samplers,
          /*.build_inputs=*/ graph_build_inputs,
 +        /*.activation_export_token_axes=*/ std::move(export_token_axes),
@@ -41,10 +42,10 @@ index ccfe6133e..44e8cb7ad 100644
          /*.cb          =*/ graph_get_cb(),
          /*.res         =*/ res,
 diff --git a/src/llama-graph.h b/src/llama-graph.h
-index ba320bff1..732af4c7b 100644
+index 6585609e5..721734d72 100644
 --- a/src/llama-graph.h
 +++ b/src/llama-graph.h
-@@ -970,6 +970,7 @@ struct llm_graph_params {
+@@ -979,6 +979,7 @@ struct llm_graph_params {
      std::map<llama_seq_id, llama_sampler *> samplers;
  
      skippy_graph_build_inputs build_inputs;
@@ -52,7 +53,7 @@ index ba320bff1..732af4c7b 100644
  
      static bool samplers_equal(
            const std::map<llama_seq_id, llama_sampler *> & lhs,
-@@ -1030,7 +1031,8 @@ struct llm_graph_params {
+@@ -1040,7 +1041,8 @@ struct llm_graph_params {
              return false;
          }
  

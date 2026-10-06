@@ -72,6 +72,17 @@ impl RuntimeState {
             .into_iter()
             .next()
             .unwrap_or(0);
+        // The warmup borrows a transient lane, which must not exceed
+        // `lane_count`. Skip the optional warm instead of failing startup when
+        // the pool already owns every lane; the first request then pays the
+        // graph build.
+        if !warmup_lane_is_available(
+            self.sessions.len(),
+            self.idle_sessions.len(),
+            self.lane_count,
+        ) {
+            return Ok(false);
+        }
         let mut session = self.model.create_session()?;
         session.decode_step(token_id)?;
         session.reset()?;
@@ -522,6 +533,16 @@ fn system_one_endpoint_is_runnable(
     lane_count: u32,
 ) -> bool {
     has_canvas && !has_input_boundary && !has_output_boundary && lane_count == 1
+}
+
+/// Whether the generation warmup may borrow a transient lane.
+///
+/// The warmup opens a session outside the idle pool, so it needs a lane that
+/// [`RuntimeState::prewarm_idle_sessions`] has not already parked. A binary
+/// stage prewarms `--max-inflight` lanes before the embedded OpenAI frontend
+/// starts, so a pool that owns every lane is a normal startup state there.
+fn warmup_lane_is_available(active_sessions: usize, idle_sessions: usize, lane_count: u32) -> bool {
+    active_sessions + idle_sessions < lane_count as usize
 }
 
 /// Clamps a requested idle-pool prewarm target to `model_fit.cache_idle_slots`

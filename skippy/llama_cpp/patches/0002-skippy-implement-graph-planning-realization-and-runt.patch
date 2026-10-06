@@ -1,25 +1,26 @@
-From 788a2d5585b53573899dcaa7835efe705faf5dd4 Mon Sep 17 00:00:00 2001
+From f47382d736abc703198ea035e555b8f9d2284861 Mon Sep 17 00:00:00 2001
 From: James Dumay <jameswdumay@gmail.com>
 Date: Sat, 19 Sep 2026 15:17:16 +1000
-Subject: [PATCH] skippy: implement graph planning realization and runtime
+Subject: [PATCH 02/67] skippy: implement graph planning realization and
+ runtime
 
 ---
  src/skippy-verify-checkpoint.h          |   24 +
  src/skippy/abi.cpp                      |   57 ++
- src/skippy/activation.cpp               |  995 +++++++++++++++++++
+ src/skippy/activation.cpp               | 1000 +++++++++++++++++++
  src/skippy/activation_internal.h        |   86 ++
  src/skippy/activation_layout.cpp        |  171 ++++
  src/skippy/block_boundaries.cpp         |   64 ++
  src/skippy/block_boundaries.h           |   42 +
  src/skippy/devices.cpp                  |  106 ++
  src/skippy/environment.h                |   49 +
- src/skippy/errors.h                     |   44 +
+ src/skippy/errors.h                     |   66 ++
  src/skippy/events.cpp                   |  243 +++++
  src/skippy/events_internal.h            |   35 +
  src/skippy/executable_graph.cpp         |  329 +++++++
  src/skippy/executable_graph.h           |   37 +
- src/skippy/execution-batch.cpp          |  417 ++++++++
- src/skippy/execution-single.cpp         |  613 ++++++++++++
+ src/skippy/execution-batch.cpp          |  422 ++++++++
+ src/skippy/execution-single.cpp         |  619 ++++++++++++
  src/skippy/execution_internal.h         |   20 +
  src/skippy/glm_dsa.cpp                  |  857 +++++++++++++++++
  src/skippy/glm_dsa.h                    |   14 +
@@ -29,9 +30,9 @@ Subject: [PATCH] skippy: implement graph planning realization and runtime
  src/skippy/graph_identity.cpp           | 1092 +++++++++++++++++++++
  src/skippy/graph_identity.h             |   71 ++
  src/skippy/model_lifecycle.cpp          |  155 +++
- src/skippy/model_load_config.cpp        |  186 ++++
+ src/skippy/model_load_config.cpp        |  194 ++++
  src/skippy/model_load_config_internal.h |   25 +
- src/skippy/model_loading.cpp            | 1174 +++++++++++++++++++++++
+ src/skippy/model_loading.cpp            | 1172 +++++++++++++++++++++++
  src/skippy/model_loading_internal.h     |   38 +
  src/skippy/model_package.cpp            |  782 +++++++++++++++
  src/skippy/model_source.cpp             |  457 +++++++++
@@ -42,7 +43,7 @@ Subject: [PATCH] skippy: implement graph planning realization and runtime
  src/skippy/sampling.cpp                 |  961 +++++++++++++++++++
  src/skippy/sampling_internal.h          |   49 +
  src/skippy/session.cpp                  |  483 ++++++++++
- src/skippy/speculative_decoding.cpp     |  531 ++++++++++
+ src/skippy/speculative_decoding.cpp     |  547 +++++++++++
  src/skippy/speculative_internal.h       |   32 +
  src/skippy/stage_plan.cpp               |  632 ++++++++++++
  src/skippy/stage_realization.cpp        |  247 +++++
@@ -54,7 +55,7 @@ Subject: [PATCH] skippy: implement graph planning realization and runtime
  src/skippy/state_effects.h              |   74 ++
  src/skippy/tokenization.cpp             |  179 ++++
  src/skippy/verification.cpp             |  265 +++++
- 50 files changed, 14714 insertions(+)
+ 50 files changed, 14774 insertions(+)
  create mode 100644 src/skippy-verify-checkpoint.h
  create mode 100644 src/skippy/abi.cpp
  create mode 100644 src/skippy/activation.cpp
@@ -5993,7 +5994,7 @@ index 000000000..caa9fcd6d
 +} // extern "C"
 diff --git a/src/skippy/model_load_config.cpp b/src/skippy/model_load_config.cpp
 new file mode 100644
-index 000000000..7a3e0fe09
+index 000000000..22aa384f8
 --- /dev/null
 +++ b/src/skippy/model_load_config.cpp
 @@ -0,0 +1,194 @@
@@ -6224,7 +6225,7 @@ index 000000000..0f7c83139
 +        llama_context_params & params);
 diff --git a/src/skippy/model_loading.cpp b/src/skippy/model_loading.cpp
 new file mode 100644
-index 000000000..20b7abad7
+index 000000000..460cf5688
 --- /dev/null
 +++ b/src/skippy/model_loading.cpp
 @@ -0,0 +1,1172 @@

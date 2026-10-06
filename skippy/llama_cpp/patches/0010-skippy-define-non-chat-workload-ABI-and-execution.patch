@@ -1,7 +1,7 @@
-From 8c251178c549337156a794c9a1355c6f16cf6530 Mon Sep 17 00:00:00 2001
+From bca9fdb3f4e8cce4e785cc7780494b5a8fd23c18 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Sat, 12 Sep 2026 01:35:50 -0700
-Subject: [PATCH] skippy: define non-chat workload ABI and execution
+Subject: [PATCH 10/67] skippy: define non-chat workload ABI and execution
 
 ---
  include/skippy.h                      |   1 +
@@ -10,10 +10,10 @@ Subject: [PATCH] skippy: define non-chat workload ABI and execution
  src/CMakeLists.txt                    |   1 +
  src/skippy/abi.cpp                    |   3 +-
  src/skippy/rerank_template.h          |  36 +++
- src/skippy/workloads.cpp              | 360 ++++++++++++++++++++++++++
+ src/skippy/workloads.cpp              | 365 ++++++++++++++++++++++++++
  tests/CMakeLists.txt                  |   1 +
  tests/test-skippy-rerank-template.cpp |  34 +++
- 9 files changed, 531 insertions(+), 2 deletions(-)
+ 9 files changed, 536 insertions(+), 2 deletions(-)
  create mode 100644 include/skippy/workloads.h
  create mode 100644 src/skippy/rerank_template.h
  create mode 100644 src/skippy/workloads.cpp
@@ -591,7 +591,7 @@ index 000000000..b54096e58
 +
 +}  // extern "C"
 diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
-index 66694d54e..1d03ce428 100644
+index d7e03a275..a20d70f01 100644
 --- a/tests/CMakeLists.txt
 +++ b/tests/CMakeLists.txt
 @@ -150,6 +150,7 @@ endif ()

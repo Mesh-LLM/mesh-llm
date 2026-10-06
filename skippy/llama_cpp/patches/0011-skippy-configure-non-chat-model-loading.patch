@@ -1,17 +1,17 @@
-From 5c8c5553cf3da845822fbc1c56b39ae41c4f5273 Mon Sep 17 00:00:00 2001
+From 0dd839744a945bee70dbf9a007d42a13cc7b8efb Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Sat, 12 Sep 2026 01:36:02 -0700
-Subject: [PATCH] skippy: configure non-chat model loading
+Subject: [PATCH 11/67] skippy: configure non-chat model loading
 
 ---
  src/skippy/model_loading.cpp | 25 ++++++++++++++++++++++---
  1 file changed, 22 insertions(+), 3 deletions(-)
 
 diff --git a/src/skippy/model_loading.cpp b/src/skippy/model_loading.cpp
-index f38f4a936..15b29abfa 100644
+index b00f99df9..1e1b12500 100644
 --- a/src/skippy/model_loading.cpp
 +++ b/src/skippy/model_loading.cpp
-@@ -648,9 +648,19 @@ enum skippy_status skippy_finish_model_open(
+@@ -650,9 +650,19 @@ enum skippy_status skippy_finish_model_open(
          }
      }
  
@@ -32,7 +32,9 @@ index f38f4a936..15b29abfa 100644
      uint32_t context_size_per_lane = 0;
      uint32_t context_size_total = 0;
      if (!skippy_context_capacity(config, lane_count, context_size_per_lane, context_size_total)) {
-@@ -712,6 +722,15 @@ enum skippy_status skippy_finish_model_open(
+@@ -714,8 +724,17 @@ enum skippy_status skippy_finish_model_open(
+         skippy_apply_context_hardware_config(config, params);
+     }
      params.flash_attn_type = config != nullptr ? static_cast<llama_flash_attn_type>(config->flash_attn_type) : LLAMA_FLASH_ATTN_TYPE_AUTO;
 -    params.embeddings = skippy_runtime_has_stage_plan(config) &&
 -            !skippy_runtime_is_terminal_stage(config);

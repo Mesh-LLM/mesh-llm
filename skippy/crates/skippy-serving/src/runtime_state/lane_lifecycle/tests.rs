@@ -63,6 +63,24 @@ fn system_one_advertisement_requires_a_single_unsplit_runtime_lane() {
     assert!(!system_one_endpoint_is_runnable(false, false, false, 1));
 }
 
+/// The warmup needs a lane beyond the sessions the pool already owns. Making
+/// that precondition explicit keeps a fully parked pool (binary stage prewarm
+/// plus the embedded OpenAI frontend) from failing startup on the optional
+/// graph warm.
+#[test]
+fn warmup_needs_a_lane_outside_the_owned_pool() {
+    // Every lane parked idle: the binary stage prewarm case.
+    assert!(!warmup_lane_is_available(0, 4, 4));
+    // Spaces left for the transient lane.
+    assert!(warmup_lane_is_available(0, 3, 4));
+    assert!(warmup_lane_is_available(0, 0, 1));
+    // A single lane already serving leaves none.
+    assert!(!warmup_lane_is_available(1, 0, 1));
+    // Serving sessions and parked lanes share the same budget.
+    assert!(!warmup_lane_is_available(2, 2, 4));
+    assert!(warmup_lane_is_available(1, 2, 4));
+}
+
 /// `drop_session_timed`'s real reset/discard branches require a
 /// native `StageSession` (the same model-backed requirement
 /// `evict_resident_prefix_for_tokens`'s native drop hit in the KV

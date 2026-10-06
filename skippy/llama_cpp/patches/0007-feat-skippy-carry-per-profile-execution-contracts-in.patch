@@ -1,8 +1,8 @@
-From f9edb82ec7f297ddb4011adb79c9305eed91d08b Mon Sep 17 00:00:00 2001
+From 229867c4ea8365f0931104939cfa70673844dad9 Mon Sep 17 00:00:00 2001
 From: James Dumay <jameswdumay@gmail.com>
 Date: Sun, 20 Sep 2026 10:04:24 +1000
-Subject: [PATCH] feat(skippy): carry per-profile execution contracts in the
- ABI
+Subject: [PATCH 07/67] feat(skippy): carry per-profile execution contracts in
+ the ABI
 
 ---
  include/skippy/common.h     | 2 +-

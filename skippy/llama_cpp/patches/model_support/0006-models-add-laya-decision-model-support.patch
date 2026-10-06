@@ -1,7 +1,7 @@
-From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From c6540b93628a4f0c65fabe3b343656cc09487627 Mon Sep 17 00:00:00 2001
 From: Daniel Winter <danielwinterw@gmail.com>
 Date: Sun, 27 Sep 2026 21:12:21 +1000
-Subject: [PATCH] models: add Laya decision model support
+Subject: [PATCH 6/6] models: add Laya decision model support
 
 Port ggml-org/llama.cpp#29363 (head 6367bdd2da) onto the pinned revision:
 the LAYA architecture, GGUF keys and tensor names, the laya-multilingual
@@ -65,10 +65,10 @@ Co-authored-by: ZhangYu <zhangyub@uniontech.com>
  create mode 100644 tools/laya/laya.h
 
 diff --git a/conversion/__init__.py b/conversion/__init__.py
-index f50f7716e..8a7cee2cb 100644
+index 138391fd8..6392b9be6 100644
 --- a/conversion/__init__.py
 +++ b/conversion/__init__.py
-@@ -165,6 +165,7 @@ TEXT_MODEL_MAP: dict[str, str] = {
+@@ -171,6 +171,7 @@ TEXT_MODEL_MAP: dict[str, str] = {
      "Eagle3DraftModel": "llama",
      "Eagle3Speculator": "llama",
      "Eagle3LlamaForCausalLM": "llama",
@@ -205,10 +205,10 @@ index 000000000..81fd642ae
 +
 +        return name, gen
 diff --git a/gguf-py/gguf/constants.py b/gguf-py/gguf/constants.py
-index e6a96308a..16a3568a2 100644
+index 7f99c30de..b013419da 100644
 --- a/gguf-py/gguf/constants.py
 +++ b/gguf-py/gguf/constants.py
-@@ -157,6 +157,13 @@ class Keys:
+@@ -161,6 +161,13 @@ class Keys:
          SWIGLU_CLAMP_EXP                  = "{arch}.swiglu_clamp_exp"
          SWIGLU_CLAMP_SHEXP                = "{arch}.swiglu_clamp_shexp"
          HIDDEN_ACT                        = "{arch}.hidden_activation"
@@ -222,7 +222,7 @@ index e6a96308a..16a3568a2 100644
          DENSE_FEAT_IN_SIZE                = "{arch}.{dense}_feat_in"
          DENSE_FEAT_OUT_SIZE               = "{arch}.{dense}_feat_out"
          TARGET_LAYERS                     = "{arch}.target_layers"
-@@ -647,6 +654,7 @@ class MODEL_ARCH(IntEnum):
+@@ -666,6 +673,7 @@ class MODEL_ARCH(IntEnum):
      QWEN3TTS         = auto()
      POCKETTTS        = auto()
      INKLING          = auto()
@@ -230,10 +230,10 @@ index e6a96308a..16a3568a2 100644
  
  
  class VISION_PROJECTOR_TYPE(IntEnum):
-@@ -883,6 +891,18 @@ class MODEL_TENSOR(IntEnum):
-     CLS                  = auto() # classifier
-     CLS_OUT              = auto() # classifier output projection
-     CLS_NORM             = auto()
+@@ -916,6 +924,18 @@ class MODEL_TENSOR(IntEnum):
+     DECISION_SCALES               = auto()
+     DECISION_SCORER               = auto()
+     DECISION_SCORER_OUT           = auto()
 +    TYPE_EMB             = auto() # laya: question type embedding
 +    HEAD_ATTN_QKV        = auto() # laya: decision head attention qkv
 +    HEAD_ATTN_OUT        = auto() # laya: decision head attention output
@@ -249,7 +249,7 @@ index e6a96308a..16a3568a2 100644
      CONV1D               = auto()
      CONVNEXT_DW          = auto()
      CONVNEXT_NORM        = auto()
-@@ -1421,6 +1441,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
+@@ -1461,6 +1481,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
      MODEL_ARCH.QWEN3TTS:         "qwen3tts",
      MODEL_ARCH.POCKETTTS:        "pockettts",
      MODEL_ARCH.INKLING:          "inkling",
@@ -257,10 +257,10 @@ index e6a96308a..16a3568a2 100644
  }
  
  VISION_PROJECTOR_TYPE_NAMES: dict[VISION_PROJECTOR_TYPE, str] = {
-@@ -1655,6 +1676,18 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
-     MODEL_TENSOR.CLS:                       "cls",
-     MODEL_TENSOR.CLS_OUT:                   "cls.output",
-     MODEL_TENSOR.CLS_NORM:                  "cls.norm",
+@@ -1709,6 +1730,18 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
+     MODEL_TENSOR.DECISION_SCALES:               "decision.scales",
+     MODEL_TENSOR.DECISION_SCORER:               "decision.scorer",
+     MODEL_TENSOR.DECISION_SCORER_OUT:           "decision.scorer_out",
 +    MODEL_TENSOR.TYPE_EMB:                  "type_emb",
 +    MODEL_TENSOR.HEAD_ATTN_QKV:             "head.{bid}.attn_qkv",
 +    MODEL_TENSOR.HEAD_ATTN_OUT:             "head.{bid}.attn_output",
@@ -276,7 +276,7 @@ index e6a96308a..16a3568a2 100644
      MODEL_TENSOR.CONV1D:                    "conv1d",
      MODEL_TENSOR.CONVNEXT_DW:               "convnext.{bid}.dw",
      MODEL_TENSOR.CONVNEXT_NORM:             "convnext.{bid}.norm",
-@@ -2514,6 +2547,31 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
+@@ -2574,6 +2607,31 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
          MODEL_TENSOR.CLS_OUT,
          MODEL_TENSOR.CLS_NORM,
      ],
@@ -308,7 +308,7 @@ index e6a96308a..16a3568a2 100644
      MODEL_ARCH.NOMIC_BERT: [
          MODEL_TENSOR.TOKEN_EMBD,
          MODEL_TENSOR.TOKEN_EMBD_NORM,
-@@ -6040,6 +6098,15 @@ KEY_FEED_FORWARD_LENGTH   = Keys.LLM.FEED_FORWARD_LENGTH
+@@ -6236,6 +6294,15 @@ KEY_FEED_FORWARD_LENGTH   = Keys.LLM.FEED_FORWARD_LENGTH
  KEY_USE_PARALLEL_RESIDUAL = Keys.LLM.USE_PARALLEL_RESIDUAL
  KEY_TENSOR_DATA_LAYOUT    = Keys.LLM.TENSOR_DATA_LAYOUT
  
@@ -325,10 +325,10 @@ index e6a96308a..16a3568a2 100644
  KEY_ATTENTION_HEAD_COUNT        = Keys.Attention.HEAD_COUNT
  KEY_ATTENTION_HEAD_COUNT_KV     = Keys.Attention.HEAD_COUNT_KV
 diff --git a/gguf-py/gguf/gguf_writer.py b/gguf-py/gguf/gguf_writer.py
-index c2236bef1..beea7084c 100644
+index b7fa25713..9e7008ab9 100644
 --- a/gguf-py/gguf/gguf_writer.py
 +++ b/gguf-py/gguf/gguf_writer.py
-@@ -899,6 +899,27 @@ class GGUFWriter:
+@@ -911,6 +911,27 @@ class GGUFWriter:
      def add_hidden_act(self, value: str) -> None:
          self.add_string(Keys.LLM.HIDDEN_ACT.format(arch=self.arch), value)
  
@@ -357,12 +357,12 @@ index c2236bef1..beea7084c 100644
          self.add_float32(Keys.LLM.EXPERT_GROUP_SCALE.format(arch=self.arch), value)
  
 diff --git a/gguf-py/gguf/tensor_mapping.py b/gguf-py/gguf/tensor_mapping.py
-index 3b1732e88..cf474a5c0 100644
+index 7d57d78b3..b058de273 100644
 --- a/gguf-py/gguf/tensor_mapping.py
 +++ b/gguf-py/gguf/tensor_mapping.py
-@@ -1438,6 +1438,26 @@ class TensorNameMap:
-         MODEL_TENSOR.CLS_NORM: (
+@@ -1536,6 +1536,26 @@ class TensorNameMap:
              "head.norm", # modern-bert
+             "scorer.0",  # laya
          ),
 +
 +        # laya decision head
@@ -387,7 +387,7 @@ index 3b1732e88..cf474a5c0 100644
          #############################################################################
  
          MODEL_TENSOR.CONVNEXT_DW: (
-@@ -2810,6 +2830,26 @@ class TensorNameMap:
+@@ -2908,6 +2928,26 @@ class TensorNameMap:
                  "model.layers.{bid}.mlp.w2_md",
              ),
          },
@@ -643,7 +643,7 @@ index 0d7bb7872..9c00568ca 100644
  target_compile_features   (llama PRIVATE cxx_std_17) # don't bump
  # Upstream added a models.h PCH for the llama target. The Skippy stage
 diff --git a/src/llama-arch.cpp b/src/llama-arch.cpp
-index 1160e3c30..0d5458b10 100644
+index f6e1553b7..fb3cc3077 100644
 --- a/src/llama-arch.cpp
 +++ b/src/llama-arch.cpp
 @@ -21,6 +21,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
@@ -654,7 +654,7 @@ index 1160e3c30..0d5458b10 100644
      { LLM_ARCH_NOMIC_BERT,       "nomic-bert"       },
      { LLM_ARCH_NOMIC_BERT_MOE,   "nomic-bert-moe"   },
      { LLM_ARCH_NEO_BERT,         "neo-bert"         },
-@@ -226,6 +227,13 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
+@@ -230,6 +231,13 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
      { LLM_KV_NUM_DEEPSTACK_LAYERS,              "%s.n_deepstack_layers"                },
      { LLM_KV_DEEPSTACK_MAPPING,                 "%s.deepstack_mapping"                 },
      { LLM_KV_HIDDEN_ACT,                        "%s.hidden_activation"                 },
@@ -668,10 +668,10 @@ index 1160e3c30..0d5458b10 100644
      { LLM_KV_POOLING_TYPE,                      "%s.pooling_type"                      },
      { LLM_KV_LOGIT_SCALE,                       "%s.logit_scale"                       },
      { LLM_KV_DECODER_START_TOKEN_ID,            "%s.decoder_start_token_id"            },
-@@ -506,6 +514,18 @@ static const std::map<llm_tensor, const char *> LLM_TENSOR_NAMES = {
-     { LLM_TENSOR_CLS,                                    "cls" },
-     { LLM_TENSOR_CLS_OUT,                                "cls.output" },
-     { LLM_TENSOR_CLS_NORM,                               "cls.norm" },
+@@ -530,6 +538,18 @@ static const std::map<llm_tensor, const char *> LLM_TENSOR_NAMES = {
+     { LLM_TENSOR_DECISION_SCALES,                        "decision.scales" },
+     { LLM_TENSOR_DECISION_SCORER,                        "decision.scorer" },
+     { LLM_TENSOR_DECISION_SCORER_OUT,                    "decision.scorer_out" },
 +    { LLM_TENSOR_TYPE_EMB,                               "type_emb" },
 +    { LLM_TENSOR_HEAD_ATTN_QKV,                          "head.%d.attn_qkv" },
 +    { LLM_TENSOR_HEAD_ATTN_OUT,                          "head.%d.attn_output" },
@@ -687,10 +687,10 @@ index 1160e3c30..0d5458b10 100644
      { LLM_TENSOR_ENC_OUTPUT_NORM,                        "enc.output_norm" },
      { LLM_TENSOR_FFN_GATE_INP_SHEXP,                     "blk.%d.ffn_gate_inp_shexp" },
      { LLM_TENSOR_SSM_A_NOSCAN,                           "blk.%d.ssm_a" },
-@@ -760,6 +780,18 @@ static const std::map<llm_tensor, llm_tensor_info> LLM_TENSOR_INFOS = {
-     {LLM_TENSOR_CLS,                        {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_MUL_MAT}},
-     {LLM_TENSOR_CLS_OUT,                    {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_MUL_MAT}},
-     {LLM_TENSOR_CLS_NORM,                   {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_MUL}},
+@@ -803,6 +823,18 @@ static const std::map<llm_tensor, llm_tensor_info> LLM_TENSOR_INFOS = {
+     {LLM_TENSOR_DECISION_SCALES,            {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_MUL}},
+     {LLM_TENSOR_DECISION_SCORER,            {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_MUL_MAT}},
+     {LLM_TENSOR_DECISION_SCORER_OUT,        {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_MUL_MAT}},
 +    {LLM_TENSOR_TYPE_EMB,                   {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_GET_ROWS}},
 +    {LLM_TENSOR_HEAD_ATTN_QKV,              {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
 +    {LLM_TENSOR_HEAD_ATTN_OUT,              {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
@@ -707,7 +707,7 @@ index 1160e3c30..0d5458b10 100644
      {LLM_TENSOR_DENSE_3_OUT,                {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_MUL_MAT}}, // Dense layer output
      {LLM_TENSOR_OUTPUT_NORM,                {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_MUL}},
 diff --git a/src/llama-arch.h b/src/llama-arch.h
-index 4c271709f..9691bae52 100644
+index e3a6ac5ec..3ef0877ba 100644
 --- a/src/llama-arch.h
 +++ b/src/llama-arch.h
 @@ -26,6 +26,7 @@ enum llm_arch {
@@ -718,7 +718,7 @@ index 4c271709f..9691bae52 100644
      LLM_ARCH_NOMIC_BERT,
      LLM_ARCH_NOMIC_BERT_MOE,
      LLM_ARCH_NEO_BERT,
-@@ -231,6 +232,13 @@ enum llm_kv {
+@@ -235,6 +236,13 @@ enum llm_kv {
      LLM_KV_NUM_DEEPSTACK_LAYERS,
      LLM_KV_DEEPSTACK_MAPPING,
      LLM_KV_HIDDEN_ACT,
@@ -732,10 +732,10 @@ index 4c271709f..9691bae52 100644
      LLM_KV_POOLING_TYPE,
      LLM_KV_LOGIT_SCALE,
      LLM_KV_DECODER_START_TOKEN_ID,
-@@ -677,6 +685,18 @@ enum llm_tensor {
-     LLM_TENSOR_CLS,
-     LLM_TENSOR_CLS_OUT,
-     LLM_TENSOR_CLS_NORM,
+@@ -702,6 +710,18 @@ enum llm_tensor {
+     LLM_TENSOR_DECISION_SCALES,
+     LLM_TENSOR_DECISION_SCORER,
+     LLM_TENSOR_DECISION_SCORER_OUT,
 +    LLM_TENSOR_TYPE_EMB,              // laya: question type embedding
 +    LLM_TENSOR_HEAD_ATTN_QKV,         // laya: decision head attention qkv
 +    LLM_TENSOR_HEAD_ATTN_OUT,         // laya: decision head attention output
@@ -752,22 +752,22 @@ index 4c271709f..9691bae52 100644
      LLM_TENSOR_CONVNEXT_DW,
      LLM_TENSOR_CONVNEXT_NORM,
 diff --git a/src/llama-model-saver.cpp b/src/llama-model-saver.cpp
-index c4cda0421..7618d8148 100644
+index f77a5bdcd..44caab743 100644
 --- a/src/llama-model-saver.cpp
 +++ b/src/llama-model-saver.cpp
-@@ -21,6 +21,7 @@ bool llama_model_saver_supports_arch(llm_arch arch) {
-         case LLM_ARCH_APERTUS:
+@@ -22,6 +22,7 @@ bool llama_model_saver_supports_arch(llm_arch arch) {
          case LLM_ARCH_STEP35:
+         case LLM_ARCH_CLEF: // the head tensors are not saved
          case LLM_ARCH_INKLING:
 +        case LLM_ARCH_LAYA: // decision head tensors are not in the reused ModernBERT saver
          case LLM_ARCH_DIFFUSION_GEMMA: // same: a per-layer SWA pattern add_kv_from_model cannot write back
              return false;
          default:
 diff --git a/src/llama-model.cpp b/src/llama-model.cpp
-index 650cbd25f..680e1a0f8 100644
+index bb1b87ce2..a900f1b08 100644
 --- a/src/llama-model.cpp
 +++ b/src/llama-model.cpp
-@@ -348,6 +348,11 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
+@@ -352,6 +352,11 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
              return new llama_model_spark2_5(params);
          case LLM_ARCH_INKLING:
              return new llama_model_inkling(params);
@@ -779,7 +779,7 @@ index 650cbd25f..680e1a0f8 100644
          default:
              throw std::runtime_error(std::string("unsupported model architecture: '") + llm_arch_name(arch) + "'");
      }
-@@ -2407,6 +2412,7 @@ llama_memory_i * llama_model::create_memory(
+@@ -2491,6 +2496,7 @@ llama_memory_i * llama_model::create_memory(
          case LLM_ARCH_EUROBERT:
          case LLM_ARCH_WAVTOKENIZER_DEC:
          case LLM_ARCH_MODERN_BERT:
@@ -787,7 +787,7 @@ index 650cbd25f..680e1a0f8 100644
          case LLM_ARCH_GEMMA_EMBEDDING:
          case LLM_ARCH_DREAM:
          case LLM_ARCH_LLADA:
-@@ -3156,6 +3162,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
+@@ -3295,6 +3301,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
          case LLM_ARCH_BERT:
          case LLM_ARCH_JINA_BERT_V3:
          case LLM_ARCH_MODERN_BERT:

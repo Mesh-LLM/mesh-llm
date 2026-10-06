@@ -1,7 +1,7 @@
-From 0600365fa79a9e24e3975a80103dca3fa66fdfd3 Mon Sep 17 00:00:00 2001
+From 9e1f9dd6262484e1a00a09120346d800a45394bd Mon Sep 17 00:00:00 2001
 From: Codex <codex@openai.com>
 Date: Sun, 20 Sep 2026 11:19:07 +1000
-Subject: [PATCH 2/2] skippy: add DiffusionGemma system-one reads
+Subject: [PATCH 4/6] skippy: add DiffusionGemma system-one reads
 
 Expose a narrow native operation that prefills a DiffusionGemma prompt, performs one zero-self-conditioning canvas read, and returns normalized probabilities over caller-declared label tokens.
 
@@ -10,7 +10,7 @@ Co-authored-by: Michael Neale <14976+michaelneale@users.noreply.github.com>
 Signed-off-by: Michael Neale <14976+michaelneale@users.noreply.github.com>
 ---
  include/skippy.h            |   1 +
- include/skippy/common.h     |   3 ++-
+ include/skippy/common.h     |   3 +-
  include/skippy/system_one.h |  60 +++++++++
  src/CMakeLists.txt          |   1 +
  src/skippy/abi.cpp          |   1 +
@@ -31,7 +31,7 @@ index dc8cbb431..571841a60 100644
  
  #endif // SKIPPY_H
 diff --git a/include/skippy/common.h b/include/skippy/common.h
-index 149989b1f..8a2781dcb 100644
+index 149989b1f..9adaa27d4 100644
 --- a/include/skippy/common.h
 +++ b/include/skippy/common.h
 @@ -46,7 +46,7 @@ extern "C" {
@@ -118,10 +118,10 @@ index 000000000..4faf057ba
 +
 +#endif // SKIPPY_SYSTEM_ONE_H
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index 756acbae6..b7e0a38d9 100644
+index 6b0fb5098..0d7bb7872 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
-@@ -78,6 +78,7 @@ add_library(llama
+@@ -87,6 +87,7 @@ add_library(llama
              skippy/speculative_decoding.cpp
              skippy/tokenization.cpp
              skippy/events.cpp
@@ -392,3 +392,4 @@ index 000000000..5044b13df
 +}
 -- 
 2.54.0 (Apple Git-157)
+

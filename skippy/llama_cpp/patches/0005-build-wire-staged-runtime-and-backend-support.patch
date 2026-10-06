@@ -1,7 +1,7 @@
-From 183448eec25bd236184c64eec7b67b1f8420c3bd Mon Sep 17 00:00:00 2001
+From b246f0646d64c480b11abf091b9abfb95ee5138d Mon Sep 17 00:00:00 2001
 From: James Dumay <jameswdumay@gmail.com>
 Date: Sat, 19 Sep 2026 15:17:50 +1000
-Subject: [PATCH] build: wire staged runtime and backend support
+Subject: [PATCH 05/67] build: wire staged runtime and backend support
 
 ---
  CMakeLists.txt                          |  17 +
@@ -13,7 +13,7 @@ Subject: [PATCH] build: wire staged runtime and backend support
  6 files changed, 656 insertions(+), 24 deletions(-)
 
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index 8a874c96e..beb8af2a7 100644
+index 3086e81b1..df2b448c6 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
 @@ -2,6 +2,18 @@ cmake_minimum_required(VERSION 3.14...3.28) # for add_link_options and implicit
@@ -34,7 +34,7 @@ index 8a874c96e..beb8af2a7 100644
 +
  ### llama.cpp version
  set(LLAMA_VERSION_MAJOR 0)
- set(LLAMA_VERSION_MINOR 5)
+ set(LLAMA_VERSION_MINOR 6)
 @@ -281,6 +293,7 @@ set(LLAMA_BIN_INSTALL_DIR     ${CMAKE_INSTALL_BINDIR}     CACHE PATH "Location o
  
  set(LLAMA_PUBLIC_HEADERS
@@ -55,10 +55,10 @@ index 8a874c96e..beb8af2a7 100644
  if (LLAMA_BUILD_COMMON)
      install(TARGETS llama-common LIBRARY)
 diff --git a/ggml/cmake/common.cmake b/ggml/cmake/common.cmake
-index 25eff7a5e..29e71898b 100644
+index f3610298f..fdf4ac7b6 100644
 --- a/ggml/cmake/common.cmake
 +++ b/ggml/cmake/common.cmake
-@@ -92,8 +92,13 @@ function(ggml_cuda_fattn_vec_instances DIR OUT_SRCS)
+@@ -93,8 +93,13 @@ function(ggml_cuda_fattn_vec_instances DIR OUT_SRCS)
      endif()
      list(REMOVE_DUPLICATES FA_COMBINATIONS)
  
@@ -75,10 +75,10 @@ index 25eff7a5e..29e71898b 100644
          foreach (TYPE_K IN LISTS FA_TYPES)
              if ("${TYPE_K}-${TYPE_V}" IN_LIST FA_COMBINATIONS)
 diff --git a/ggml/src/ggml-cuda/ggml-cuda.cu b/ggml/src/ggml-cuda/ggml-cuda.cu
-index 9dd34c866..b7855d016 100644
+index e068116f3..a68d3c861 100644
 --- a/ggml/src/ggml-cuda/ggml-cuda.cu
 +++ b/ggml/src/ggml-cuda/ggml-cuda.cu
-@@ -5727,7 +5727,12 @@ static ggml_backend_feature * ggml_backend_cuda_get_features(ggml_backend_reg_t
+@@ -5859,7 +5859,12 @@ static ggml_backend_feature * ggml_backend_cuda_get_features(ggml_backend_reg_t
      #endif
  
      #ifdef GGML_CUDA_FA_QUANTS
@@ -93,7 +93,7 @@ index 9dd34c866..b7855d016 100644
  
      {
 diff --git a/ggml/src/ggml-metal/ggml-metal-device.m b/ggml/src/ggml-metal/ggml-metal-device.m
-index 81ea7f9d7..5f02543f2 100644
+index 827d92622..aa5a22c2d 100644
 --- a/ggml/src/ggml-metal/ggml-metal-device.m
 +++ b/ggml/src/ggml-metal/ggml-metal-device.m
 @@ -11,6 +11,7 @@
@@ -104,7 +104,7 @@ index 81ea7f9d7..5f02543f2 100644
  
  #ifndef TARGET_OS_VISION
  #define TARGET_OS_VISION 0
-@@ -164,6 +165,11 @@ int ggml_metal_pipeline_max_theads_per_threadgroup(struct ggml_metal_pipeline_wi
+@@ -179,6 +180,11 @@ int ggml_metal_pipeline_max_theads_per_threadgroup(struct ggml_metal_pipeline_wi
      ggml_metal_device_t dev;
      ggml_metal_pipelines_t pipelines; // cache of compiled pipelines
  
@@ -116,7 +116,7 @@ index 81ea7f9d7..5f02543f2 100644
      NSLock * lock;
  };
  
-@@ -193,6 +199,98 @@ static void ggml_metal_compile_options_set_lang(MTLCompileOptions * options, boo
+@@ -208,6 +214,98 @@ static void ggml_metal_compile_options_set_lang(MTLCompileOptions * options, boo
      options.languageVersion = (MTLLanguageVersion) MTLLanguageVersion4_0_GGML;
  }
  
@@ -215,7 +215,7 @@ index 81ea7f9d7..5f02543f2 100644
  // Parse a `#include "name"` line. Returns the quoted name in *include_name on
  // success. Whitespace-tolerant; ignores `#include <...>` (system headers).
  static bool ggml_metal_library_parse_quoted_include(NSString * line, NSString ** include_name) {
-@@ -303,12 +401,14 @@ static bool ggml_metal_library_compile_all(
+@@ -318,12 +416,14 @@ static bool ggml_metal_library_compile_all(
          id<MTLDevice> device,
          NSDictionary * prep,
          NSString * (^source_for_kind)(int kind, NSError ** err),
@@ -231,7 +231,7 @@ index 81ea7f9d7..5f02543f2 100644
  
      dispatch_group_t group = dispatch_group_create();
      dispatch_queue_t queue = dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0);
-@@ -327,6 +427,11 @@ static bool ggml_metal_library_compile_all(
+@@ -342,6 +442,11 @@ static bool ggml_metal_library_compile_all(
                  return;
              }
  
@@ -243,7 +243,7 @@ index 81ea7f9d7..5f02543f2 100644
              id<MTLLibrary> lib = nil;
  
              @autoreleasepool {
-@@ -361,6 +466,18 @@ static bool ggml_metal_library_compile_all(
+@@ -376,6 +481,18 @@ static bool ggml_metal_library_compile_all(
  
      const bool ok = !atomic_load(&any_failure);
  
@@ -262,7 +262,7 @@ index 81ea7f9d7..5f02543f2 100644
      if (ok) {
          const int64_t t_total = ggml_time_us() - t_start;
          int64_t t_max = 0;
-@@ -468,19 +585,23 @@ ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
+@@ -483,19 +600,23 @@ ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
  #undef X
      };
  
@@ -287,7 +287,7 @@ index 81ea7f9d7..5f02543f2 100644
      return res;
  #else
  #ifdef SWIFT_PACKAGE
-@@ -532,6 +653,9 @@ ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
+@@ -547,6 +668,9 @@ ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
          }
  
          GGML_LOG_INFO("%s: loaded in %.3f sec\n", __func__, (ggml_time_us() - t_start) / 1e6);
@@ -297,7 +297,7 @@ index 81ea7f9d7..5f02543f2 100644
          return res;
      }
  
-@@ -566,10 +690,11 @@ ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
+@@ -581,10 +705,11 @@ ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
          path_per_kind[kind] = [path_source retain];
      }
  
@@ -310,7 +310,7 @@ index 81ea7f9d7..5f02543f2 100644
  
      for (int kind = 0; kind < GGML_METAL_LIB_COUNT; ++kind) {
          [path_per_kind[kind] release];
-@@ -581,6 +706,8 @@ ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
+@@ -596,6 +721,8 @@ ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
          return NULL;
      }
  
@@ -319,7 +319,7 @@ index 81ea7f9d7..5f02543f2 100644
      return res;
  #endif
  }
-@@ -675,6 +802,14 @@ void ggml_metal_library_free(ggml_metal_library_t lib) {
+@@ -690,6 +817,14 @@ void ggml_metal_library_free(ggml_metal_library_t lib) {
  
      ggml_metal_pipelines_free(lib->pipelines);
  
@@ -334,7 +334,7 @@ index 81ea7f9d7..5f02543f2 100644
      [lib->lock release];
  
      free(lib);
-@@ -768,7 +903,32 @@ struct ggml_metal_pipeline_with_params ggml_metal_library_compile_pipeline(ggml_
+@@ -783,7 +918,32 @@ struct ggml_metal_pipeline_with_params ggml_metal_library_compile_pipeline(ggml_
          }
  
          id<MTLDevice> device = ggml_metal_device_get_obj(lib->dev);
@@ -368,7 +368,7 @@ index 81ea7f9d7..5f02543f2 100644
  
          [mtl_function release];
  
-@@ -1744,6 +1904,29 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
+@@ -1750,6 +1910,29 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
              if (op->src[1]->type != op->src[2]->type) {
                  return false;
              }
@@ -399,10 +399,10 @@ index 81ea7f9d7..5f02543f2 100644
                  case GGML_TYPE_F32:
                  case GGML_TYPE_F16:
 diff --git a/ggml/src/ggml-metal/ggml-metal-impl.h b/ggml/src/ggml-metal/ggml-metal-impl.h
-index 490dd83a1..3f8e638eb 100644
+index e7c895631..f68713e48 100644
 --- a/ggml/src/ggml-metal/ggml-metal-impl.h
 +++ b/ggml/src/ggml-metal/ggml-metal-impl.h
-@@ -1029,6 +1029,23 @@ typedef struct {
+@@ -1038,6 +1038,23 @@ typedef struct {
      uint64_t nb3;
  } ggml_metal_kargs_solve_tri;
  
@@ -426,7 +426,7 @@ index 490dd83a1..3f8e638eb 100644
  typedef struct {
      int32_t  ne00t;
      int32_t  ne00;
-@@ -1262,23 +1279,6 @@ typedef struct {
+@@ -1280,23 +1297,6 @@ typedef struct {
      int64_t val;
  } ggml_metal_kargs_memset;
  

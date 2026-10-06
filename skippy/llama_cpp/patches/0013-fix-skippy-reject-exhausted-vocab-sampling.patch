@@ -1,8 +1,8 @@
-From 90fc873c2ce236943ef42493174a84c0bebac5f1 Mon Sep 17 00:00:00 2001
+From 5177f83d80bbdd2e5d1d897f0a5abdc76f6b9fc0 Mon Sep 17 00:00:00 2001
 From: scama
  <a1860575018c4680d5669dd7bc3bd356b478bccb8d42e194df46304a5e25f49a@meshllm.communities.buzz.xyz>
 Date: Sun, 13 Sep 2026 10:45:49 +1000
-Subject: [PATCH] fix(skippy): reject exhausted vocab sampling
+Subject: [PATCH 13/67] fix(skippy): reject exhausted vocab sampling
 
 ---
  src/skippy/execution-single.cpp     | 6 ++++++
@@ -12,10 +12,10 @@ Subject: [PATCH] fix(skippy): reject exhausted vocab sampling
  4 files changed, 23 insertions(+)
 
 diff --git a/src/skippy/execution-single.cpp b/src/skippy/execution-single.cpp
-index 2d5fa4a32..80a0a9142 100644
+index d5ae4d66d..db2a1ac94 100644
 --- a/src/skippy/execution-single.cpp
 +++ b/src/skippy/execution-single.cpp
-@@ -282,6 +282,12 @@ enum skippy_status skippy_verify_tokens(
+@@ -288,6 +288,12 @@ enum skippy_status skippy_verify_tokens(
          const int32_t n_tokens = static_cast<int32_t>(token_count);
          for (int32_t i = 0; i < n_tokens; ++i) {
              output_tokens[i] = skippy_greedy_sample_ith(session, i);
@@ -45,10 +45,10 @@ index d5cce47f2..c785d62cf 100644
  }
  
 diff --git a/src/skippy/speculative_decoding.cpp b/src/skippy/speculative_decoding.cpp
-index 2dfac488a..2a8b34ab3 100644
+index e5f0d9032..b1d56f21f 100644
 --- a/src/skippy/speculative_decoding.cpp
 +++ b/src/skippy/speculative_decoding.cpp
-@@ -439,6 +439,9 @@ enum skippy_status skippy_mtp_propose_next(
+@@ -450,6 +450,9 @@ enum skippy_status skippy_mtp_propose_next(
              }
  
              token = skippy_greedy_sample_context(llama_get_model(mtp_ctx), mtp_ctx, -1);
@@ -58,7 +58,7 @@ index 2dfac488a..2a8b34ab3 100644
              if (out_mtp_draft != nullptr) {
                  out_mtp_draft->token_ids[token_count] = token;
              }
-@@ -499,6 +502,9 @@ enum skippy_status skippy_mtp_propose_next(
+@@ -515,6 +518,9 @@ enum skippy_status skippy_mtp_propose_next(
              }
  
              token = skippy_greedy_sample_context(llama_get_model(mtp_ctx), mtp_ctx, -1);

@@ -1,14 +1,14 @@
-From c6c88733461bd0fb9ac727f478b614416f1086b7 Mon Sep 17 00:00:00 2001
+From e739861a794f62d26436f4db754350f40073026e Mon Sep 17 00:00:00 2001
 From: James Dumay <jameswdumay@gmail.com>
 Date: Tue, 22 Sep 2026 16:46:12 +1000
-Subject: [PATCH] fix(mtmd): expose every media decode microbatch for stage
- export
+Subject: [PATCH 16/67] fix(mtmd): expose every media decode microbatch for
+ stage export
 
 ---
  include/skippy/common.h    |  2 +-
- tools/mtmd/mtmd-helper.cpp | 36 +++++++++++++++++++++++++++++++++++-
+ tools/mtmd/mtmd-helper.cpp | 35 ++++++++++++++++++++++++++++++++++-
  tools/mtmd/mtmd-helper.h   | 16 ++++++++++++++++
- 3 files changed, 52 insertions(+), 2 deletions(-)
+ 3 files changed, 51 insertions(+), 2 deletions(-)
 
 diff --git a/include/skippy/common.h b/include/skippy/common.h
 index c0c7e6aa4..ba62a2c8b 100644
@@ -24,7 +24,7 @@ index c0c7e6aa4..ba62a2c8b 100644
  #if defined(_MSC_VER)
  #define SKIPPY_DEPRECATED(message) __declspec(deprecated(message))
 diff --git a/tools/mtmd/mtmd-helper.cpp b/tools/mtmd/mtmd-helper.cpp
-index bdf8bf6fe..cc16807ba 100644
+index eba034f79..638b8555f 100644
 --- a/tools/mtmd/mtmd-helper.cpp
 +++ b/tools/mtmd/mtmd-helper.cpp
 @@ -207,6 +207,25 @@ int32_t mtmd_helper_eval_chunk_single(mtmd_context * ctx,
@@ -52,19 +52,18 @@ index bdf8bf6fe..cc16807ba 100644
 +    }
      GGML_ASSERT(n_batch > 0);
      int32_t ret;
-     llama_batch text_batch = llama_batch_init(n_batch, 0, 1);
-@@ -239,6 +258,10 @@ int32_t mtmd_helper_eval_chunk_single(mtmd_context * ctx,
-                 llama_batch_free(text_batch);
+     auto chunk_type = mtmd_input_chunk_get_type(chunk);
+@@ -237,6 +256,9 @@ int32_t mtmd_helper_eval_chunk_single(mtmd_context * ctx,
+                 LOG_ERR("failed to decode text\n");
                  return ret;
              }
-+            if (callback != nullptr && (ret = callback(text_batch.n_tokens, user_data)) != 0) {
-+                llama_batch_free(text_batch);
++            if (callback != nullptr && (ret = callback(n_added, user_data)) != 0) {
 +                return ret;
 +            }
-             *new_n_past += text_batch.n_tokens;
+             *new_n_past += n_added;
          }
  
-@@ -258,7 +281,18 @@ int32_t mtmd_helper_eval_chunk_single(mtmd_context * ctx,
+@@ -255,7 +277,18 @@ int32_t mtmd_helper_eval_chunk_single(mtmd_context * ctx,
          LOG_INF("%s slice encoded in %" PRId64 " ms\n", name, ggml_time_ms() - t0);
  
          float * embd = mtmd_get_output_embd(ctx);
@@ -75,22 +74,22 @@ index bdf8bf6fe..cc16807ba 100644
 +            void *                            user_data;
 +        } capture{ callback, user_data };
 +
-+        const auto after_decode = [](llama_batch batch, void * opaque) -> int32_t {
++        const auto after_decode = [](const struct mtmd_helper_embd_batch * batch, void * opaque) -> int32_t {
 +            auto * capture = static_cast<callback_context *>(opaque);
-+            return capture->callback(batch.n_tokens, capture->user_data);
++            return capture->callback(batch->n_tokens, capture->user_data);
 +        };
 +        ret = mtmd_helper_decode_image_chunk(ctx, lctx, chunk, embd, n_past, seq_id, n_batch, new_n_past,
 +                                             callback != nullptr ? +after_decode : nullptr, &capture);
          if (ret != 0) {
              LOG_ERR("failed to decode %s\n", name);
-             llama_batch_free(text_batch);
+             return ret;
 diff --git a/tools/mtmd/mtmd-helper.h b/tools/mtmd/mtmd-helper.h
-index 10f2171c0..1bc8c89c5 100644
+index 7436230f0..aa1bf0dc1 100644
 --- a/tools/mtmd/mtmd-helper.h
 +++ b/tools/mtmd/mtmd-helper.h
-@@ -117,6 +117,22 @@ MTMD_API int32_t mtmd_helper_eval_chunk_single(mtmd_context * ctx,
-                                                bool logits_last,
-                                                llama_pos * new_n_past);
+@@ -127,6 +127,22 @@ struct mtmd_helper_embd_batch {
+     llama_seq_id      seq_id;
+ };
  
 +// Called after each bounded decode while its graph outputs are still live.
 +// A nonzero result stops evaluation and is returned to the caller.
@@ -108,7 +107,7 @@ index 10f2171c0..1bc8c89c5 100644
 +                                                             mtmd_helper_chunk_decode_callback callback,
 +                                                             void *                            user_data);
 +
- typedef int32_t (*mtmd_helper_post_decode_callback)(struct llama_batch batch, void * user_data);
+ typedef int32_t (*mtmd_helper_post_decode_callback)(const struct mtmd_helper_embd_batch * batch, void * user_data);
  
  // helper function to decode an image whose embeddings have already been calculated
 -- 

@@ -1,8 +1,8 @@
-From 94bb76cf1ef1fc1b4e4815264ab1835555dd0c9b Mon Sep 17 00:00:00 2001
+From 723a33fe6e4ed4535f4840553f7f31875cda9237 Mon Sep 17 00:00:00 2001
 From: James Dumay <jameswdumay@gmail.com>
 Date: Sun, 20 Sep 2026 10:04:24 +1000
-Subject: [PATCH] fix(skippy): validate execution profiles separately from
- shared residency
+Subject: [PATCH 08/67] fix(skippy): validate execution profiles separately
+ from shared residency
 
 ---
  src/CMakeLists.txt                            |  11 +-
@@ -63,7 +63,7 @@ index 0cc6123c7..8726265a6 100644
  
      add_test(
 diff --git a/src/llama-graph.cpp b/src/llama-graph.cpp
-index 607f8e9a2..b17e99e9a 100644
+index db951b376..28753c034 100644
 --- a/src/llama-graph.cpp
 +++ b/src/llama-graph.cpp
 @@ -30,7 +30,8 @@ bool skippy_graph_build_inputs::topology_equal(const skippy_graph_build_inputs &
@@ -77,10 +77,10 @@ index 607f8e9a2..b17e99e9a 100644
      for (size_t index = 0; index < activation_frontier.size(); ++index) {
          const auto & left = activation_frontier[index];
 diff --git a/src/llama-graph.h b/src/llama-graph.h
-index 4730915b1..ba320bff1 100644
+index c3c7d69b3..6585609e5 100644
 --- a/src/llama-graph.h
 +++ b/src/llama-graph.h
-@@ -94,6 +94,7 @@ struct skippy_graph_build_inputs {
+@@ -95,6 +95,7 @@ struct skippy_graph_build_inputs {
      std::vector<std::string> activation_export_identities;
      std::vector<std::string> activation_export_bindings;
      std::vector<std::string> resident_tensor_names;
@@ -89,7 +89,7 @@ index 4730915b1..ba320bff1 100644
      bool topology_equal(const skippy_graph_build_inputs & other) const;
  };
 diff --git a/src/skippy/activation.cpp b/src/skippy/activation.cpp
-index 37bca572d..4e8cfaa95 100644
+index abe36674c..fc42db536 100644
 --- a/src/skippy/activation.cpp
 +++ b/src/skippy/activation.cpp
 @@ -460,6 +460,7 @@ enum skippy_status skippy_decode_batch(
@@ -113,7 +113,7 @@ index 16b33929d..c08f2d510 100644
              inputs.selection.layer_end = config->layer_end;
              inputs.selection.glm_dsa_policy_profile = config->glm_dsa_policy_profile;
 diff --git a/src/skippy/model_loading.cpp b/src/skippy/model_loading.cpp
-index 20b7abad7..f38f4a936 100644
+index 460cf5688..b00f99df9 100644
 --- a/src/skippy/model_loading.cpp
 +++ b/src/skippy/model_loading.cpp
 @@ -442,6 +442,9 @@ static const char * skippy_validate_stage_plan_config(const struct skippy_runtim
@@ -141,7 +141,7 @@ index 20b7abad7..f38f4a936 100644
  }
  
  // Applies a tri-state config override on top of a derived default. Auto
-@@ -687,6 +690,8 @@ enum skippy_status skippy_finish_model_open(
+@@ -689,6 +692,8 @@ enum skippy_status skippy_finish_model_open(
          stage_model->config.activation_export_identities = stage_model->activation_export_identity_ptrs.data();
          stage_model->config.activation_export_bindings = stage_model->activation_export_binding_ptrs.data();
          stage_model->config.resident_tensor_names = stage_model->resident_tensor_name_ptrs.data();
