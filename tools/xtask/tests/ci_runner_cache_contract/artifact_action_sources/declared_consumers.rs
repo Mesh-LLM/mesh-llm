@@ -542,7 +542,12 @@ fn quality_declares_noninteractive_dependency_install_and_refuses_unverified_act
         .get("quality_contracts")
         .unwrap();
     let items = steps(quality);
-    assert!(items.iter().filter_map(|step|text(step,"run")).any(|run|run.contains("python3 -m pip install --disable-pip-version-check --no-input -r ci/requirements-ci-python.txt")));
+    assert!(items.iter().all(|step| {
+        !text(step, "uses").is_some_and(|value| value.starts_with("actions/setup-python@"))
+            && !text(step, "run").is_some_and(|run| {
+                run.contains("requirements-ci-python.txt") || run.contains("pip install")
+            })
+    }));
     for step in items {
         assert!(
             !input(step, "tool").is_some_and(|tool| tool.starts_with("actionlint@")),

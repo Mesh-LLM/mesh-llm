@@ -23,6 +23,7 @@ mod output;
 mod plan_convert;
 mod preflight;
 mod projector_validate;
+mod quant_run;
 mod quantize;
 mod records;
 mod residency;
@@ -63,6 +64,7 @@ use output::{
 use plan_convert::{PlanConvertArgs, run_plan_convert};
 use preflight::run_job_preflight;
 use projector_validate::{ValidateProjectorArgs, run_validate_projector};
+use quant_run::{RunQuantArgs, run_quant, run_quant_unlocked};
 use records::{WindowRunRecordInput, unix_timestamp_ms, write_window_record};
 use residency::remove_dir_if_exists;
 use safetensors_load::{ValidateSafetensorsLoadArgs, run_validate_safetensors_load};
@@ -447,16 +449,6 @@ struct QuantRunnerArgs {
 }
 
 #[derive(Debug, Parser)]
-struct RunQuantArgs {
-    #[command(flatten)]
-    window: RunQuantWindowArgs,
-    #[arg(skip)]
-    window_override: Option<SplitWindow>,
-    #[arg(long)]
-    max_windows: Option<u32>,
-}
-
-#[derive(Debug, Parser)]
 struct ValidateTensorTypesArgs {
     file: PathBuf,
     #[arg(long)]
@@ -675,6 +667,7 @@ fn quant_job(args: QuantJobArgs) -> Result<()> {
                 json: args.run.json,
             },
             window_override: None,
+            requested_range: Default::default(),
             max_windows: args.run.max_windows,
         })?;
         print_verify_on_complete(&manifest_path, verify_options)
@@ -721,6 +714,7 @@ fn quantize_layer_package(args: QuantizeLayerPackageArgs) -> Result<()> {
                 json: args.json,
             },
             window_override: None,
+            requested_range: Default::default(),
             max_windows: None,
         })?;
         write_and_preflight_layer_package(&args, &manifest)?;
@@ -1112,24 +1106,6 @@ pub(crate) fn run_convert_window_once_with_manifest(
     }
     event_reporter.finish("complete")?;
     Ok(true)
-}
-
-fn run_quant(args: RunQuantArgs) -> Result<()> {
-    let manifest_path = args.window.manifest.clone();
-    with_manifest_lock(&manifest_path, || run_quant_unlocked(args))
-}
-
-pub(crate) fn run_quant_unlocked(args: RunQuantArgs) -> Result<()> {
-    ensure!(
-        !args.window.runner.print_only,
-        "run-quant does not support --print-only; use run-quant-window"
-    );
-    if args.window.runner.dry_run {
-        return run_quant_window_once(&args.window, args.window_override).map(|_| ());
-    }
-    run_window_loop("quant", args.max_windows, || {
-        run_quant_window_once(&args.window, args.window_override)
-    })
 }
 
 fn run_quant_window(args: RunQuantWindowArgs) -> Result<()> {

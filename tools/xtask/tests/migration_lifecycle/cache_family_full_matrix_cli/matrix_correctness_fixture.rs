@@ -10,14 +10,33 @@ pub(super) fn run() {
     assert_eq!(argv[0], "state-handoff");
     let mut flags = BTreeMap::new();
     let mut index = 1;
+    let mut borrowed = false;
     while index < argv.len() {
         if argv[index] == "--n-gpu-layers=0" {
+            index += 1;
+            continue;
+        }
+        if argv[index] == "--borrow-resident-hits" {
+            assert!(!borrowed, "duplicate resident borrow switch");
+            borrowed = true;
             index += 1;
             continue;
         }
         assert!(index + 1 < argv.len());
         assert!(flags.insert(argv[index], argv[index + 1]).is_none());
         index += 2;
+    }
+    let root = PathBuf::from(std::env::var_os("CACHE_FIXTURE_ROOT").unwrap());
+    std::fs::write(
+        root.join("borrow-observation.json"),
+        serde_json::to_vec(&json!({"borrow_resident_hits":borrowed,"argv":argv})).unwrap(),
+    )
+    .unwrap();
+    if root.join("moe-borrow-required").exists() {
+        assert!(
+            borrowed,
+            "MoE fixture requires observed --borrow-resident-hits"
+        );
     }
     let known = [
         "--model",
@@ -53,7 +72,7 @@ pub(super) fn run() {
     let end = flags["--state-layer-end"].parse::<u32>().unwrap();
     let stage = flags["--state-stage-index"].parse::<u32>().unwrap();
     assert!([(0, 28, 0), (0, 9, 0), (9, 18, 1), (18, 28, 2)].contains(&(start, end, stage)));
-    let report = json!({"mode":"state-handoff","status":"pass","matches":true,"predicted_token_matches":true,"cache_hit_matches":true,"model_identity":{"model_id":"Qwen/Qwen3-0.6B:Q8_0"},"state_payload_kind":"resident-kv","stage_index":stage,"layer_start":start,"layer_end":end,"requested_prefix_token_count":64,"benchmark_prompt_token_count":65,"benchmark_prompt_text":"fixed prompt","activation_width":1024,"cache_hit_repeats":3,"cache_hit_import_ms":[1.0,2.0,3.0],"cache_hit_decode_ms":[3.0,4.0,5.0],"recompute_total_ms":8.0,"cache_hit_total_ms":6.0});
+    let report = json!({"mode":"state-handoff","status":"pass","matches":true,"predicted_token_matches":true,"cache_hit_matches":true,"model_identity":{"model_id":"Qwen/Qwen3-0.6B:Q8_0"},"state_payload_kind":"resident-kv","stage_index":stage,"layer_start":start,"layer_end":end,"requested_prefix_token_count":64,"benchmark_prompt_token_count":65,"benchmark_prompt_text":"fixed prompt","activation_width":1024,"cache_hit_repeats":3,"cache_hit_import_ms":[1.0,2.0,3.0],"cache_hit_decode_ms":[3.0,4.0,5.0],"recompute_total_ms":8.0,"cache_hit_total_ms":6.0,"prompt_token_count":64,"suffix_prefill_matches":true,"borrowed_resident_hits":borrowed,"resident_state_bytes":512,"cache_storage_bytes":512,"state_bytes":0});
     let bytes = serde_json::to_vec_pretty(&report).unwrap();
     std::fs::write(flags["--report-out"], &bytes).unwrap();
     println!("{}", String::from_utf8(bytes).unwrap());

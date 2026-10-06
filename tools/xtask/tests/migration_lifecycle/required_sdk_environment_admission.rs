@@ -61,7 +61,7 @@ fn missing_empty_relative_directory_and_nonexecutable_sdk_environments_fail_clos
 }
 
 #[test]
-fn embedding_missing_package_rejects_before_native_work_and_nonembedding_needs_no_sdk() {
+fn embedding_admission_defers_execution_to_supervised_client_and_nonembedding_needs_no_sdk() {
     let directory = tempfile::tempdir().unwrap();
     let interpreter = directory.path().join("SDK Python with spaces");
     fs::write(&interpreter, "#!/bin/bash\nexit 23\n").unwrap();
@@ -72,9 +72,40 @@ fn embedding_missing_package_rejects_before_native_work_and_nonembedding_needs_n
         interpreter.to_str(),
         "embedding",
     );
-    assert!(!output.status.success());
-    assert!(output.stdout.is_empty());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("openai package"));
+    // Admission checks the executable path without an unbounded interpreter probe.
+    // The failing executable is accepted here and must fail in the actual SDK owner.
+    assert!(output.status.success());
+    assert!(String::from_utf8_lossy(&output.stdout).contains("admitted"));
+    let receipt = directory.path().join("embedding-sdk.json");
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let supervised = Command::new(env!("CARGO_BIN_EXE_xtask"))
+        .args([
+            "automation",
+            "smoke-observation",
+            "sdk-client",
+            "--client",
+            "embeddings",
+            "--python",
+            interpreter.to_str().unwrap(),
+            "--base-url",
+            "http://127.0.0.1:1/v1",
+            "--model",
+            "fixture-model",
+            "--timeout-secs",
+            "8",
+            "--receipt",
+            receipt.to_str().unwrap(),
+        ])
+        .current_dir(root)
+        .output()
+        .unwrap();
+    assert!(!supervised.status.success());
+    let observed: serde_json::Value = serde_json::from_slice(&fs::read(receipt).unwrap()).unwrap();
+    assert_eq!(observed["status"], "SDK_CHILD_OBSERVED");
+    assert_eq!(observed["child_success"], false);
+    assert_eq!(observed["sdk_qualified"], false);
+    assert_eq!(observed["process"]["exit_code"], 23);
+    assert_eq!(observed["process"]["cleanup_complete"], true);
     let other = run(
         "scripts/skippy-workload-certify.sh",
         "SKIPPY_WORKLOAD_SDK_PYTHON",

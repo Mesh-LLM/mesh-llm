@@ -423,12 +423,11 @@ fn provenance_and_candidate_verifier_errors_cannot_admit_cpu_outputs() {
 }
 
 #[test]
-fn executable_embedding_sdk_import_failure_stops_before_model_execution() {
+fn executable_embedding_sdk_admission_defers_import_to_supervised_client() {
     let fixture = Fixture::new();
     fixture.executable(
         "bin/sdk-import-failure",
         r#"
-[[ "$#" == 3 && "$1" == -I && "$2" == -c && "$3" == 'import openai' ]] || exit 94
 printf '%s\n' "$@" > "$FIXTURE_ROOT/sdk-import.argv"
 exit 23
 "#,
@@ -452,11 +451,10 @@ exit 23
         .arg(fixture.path().join("work"))
         .arg("--skip-build");
     let receipt = fixture.run(command);
-    fixture.rejected_without_execution(&receipt, "official openai-python SDK smoke requires");
-    assert_eq!(
-        fs::read_to_string(fixture.path().join("sdk-import.argv")).unwrap(),
-        "-I\n-c\nimport openai\n"
-    );
+    // The wrapper admits an executable path; imports belong to the supervised SDK child.
+    // This inert GGUF is rejected before native startup or any SDK process.
+    fixture.rejected_without_execution(&receipt, "invalid GGUF dimension field header");
+    assert!(!fixture.path().join("sdk-import.argv").exists());
     assert!(receipt.stdout.is_empty());
     assert_eq!(
         fs::read_dir(fixture.path().join("work")).unwrap().count(),

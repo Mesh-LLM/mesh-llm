@@ -1,8 +1,10 @@
 //! Bounded composition of existing cache plan/correctness/retained serving owners.
 #[path = "cache_family_run/child.rs"]
-mod child;
+pub(super) mod child;
 #[path = "cache_family_run/contract.rs"]
 pub(in crate::automation) mod contract;
+#[path = "cache_family_run/final_publication.rs"]
+mod final_publication;
 #[path = "cache_family_run/metrics.rs"]
 mod metrics;
 #[path = "cache_family_run/pipeline.rs"]
@@ -85,17 +87,15 @@ pub(crate) fn run(args: &[String]) -> DynResult<()> {
     let terminal_deadline =
         std::time::Instant::now() + std::time::Duration::from_secs(input.execution_seconds);
     let result = pipeline::execute(&input, Path::new(output), &cancel);
-    let finish = interrupt.finish();
     let mut value=result.unwrap_or_else(|_|serde_json::json!({"schema_version":1,"status":"failed","reason":"owned_plan_or_matrix_execution_refused"}));
     value["request_sha256"] = serde_json::json!(hash(&bytes));
-    finalize(
+    final_publication::finish(
         &mut value,
-        cancel.is_cancelled(),
-        std::time::Instant::now() >= terminal_deadline,
-        finish.is_ok(),
-    );
-    publish(&Path::new(output).join("cache-family-matrix.json"), &value)?;
-    finish?;
+        &Path::new(output).join("cache-family-matrix.json"),
+        terminal_deadline,
+        interrupt,
+        &mut |_| Ok(()),
+    )?;
     if value["status"] != "completed" {
         return Err("cache family producer incomplete; partial evidence retained".into());
     }

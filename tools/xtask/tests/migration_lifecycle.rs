@@ -420,3 +420,10 @@ mod cache_family_artifact_cli;
 #[cfg(unix)]
 #[path = "migration_lifecycle/cache_family_artifact_matrix_cli.rs"]
 mod cache_family_artifact_matrix_cli;
+
+#[path = "migration_lifecycle/cache_family_moe_cli.rs"]
+mod cache_family_moe_cli;
+
+#[cfg(unix)]
+#[path = "migration_lifecycle/mtp_cli.rs"]
+mod mtp_cli;

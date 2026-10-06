@@ -6,6 +6,7 @@ const HF_CONVERTED_ARTIFACT_USAGE: &str =
 
 pub(crate) fn print_usage() {
     println!("  cargo xtool ci-ops pr-authority-audit --help");
+    println!("  cargo xtool automation mtp-scheduler --help");
     println!(
         "  cargo xtool automation agent-recording-proxy UPSTREAM_API_BASE CAPTURE_JSONL READY_FILE LIFETIME_SECONDS"
     );
@@ -106,10 +107,13 @@ pub(crate) struct Cli<'a> {
 }
 
 pub(crate) enum CliCommand<'a> {
+    MtpScheduler(&'a [String]),
+    MtpSchedulerWorker(&'a [String]),
     SuffixProposer(&'a [String]),
     AgentClientConfig(&'a [String]),
     CacheFamilyReport(&'a [String]),
     CacheFamilyRun(&'a [String]),
+    CacheFamilyMoe(&'a [String]),
     CacheFamilyCorrectness(&'a [String]),
     CacheFamilyPlan(&'a [String]),
     CacheFamilyMeasure(&'a [String]),
@@ -229,6 +233,14 @@ impl<'a> Cli<'a> {
             _ => (None, args),
         };
         let command = match command_args {
+            [domain, scope, rest @ ..] if domain == "automation" && scope == "mtp-scheduler" => {
+                CliCommand::MtpScheduler(rest)
+            }
+            [domain, scope, rest @ ..]
+                if domain == "automation" && scope == "mtp-scheduler-worker" =>
+            {
+                CliCommand::MtpSchedulerWorker(rest)
+            }
             [domain, scope, rest @ ..]
                 if domain == "automation" && scope == "openai-cache-matrix" =>
             {
@@ -293,6 +305,9 @@ impl<'a> Cli<'a> {
                 if domain == "automation" && scope == "agent-client-config" =>
             {
                 CliCommand::AgentClientConfig(rest)
+            }
+            [domain, scope, rest @ ..] if domain == "automation" && scope == "cache-family-moe" => {
+                CliCommand::CacheFamilyMoe(rest)
             }
             [domain, scope, rest @ ..] if domain == "automation" && scope == "cache-family-run" => {
                 CliCommand::CacheFamilyRun(rest)

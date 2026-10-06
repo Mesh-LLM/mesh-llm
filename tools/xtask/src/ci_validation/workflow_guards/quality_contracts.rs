@@ -301,6 +301,17 @@ fn quality(workflow: &Node) -> DynResult<()> {
     let Node::Seq(steps) = steps else {
         return Err("Quality steps must be sequence".into());
     };
+    if steps.iter().any(|step| {
+        field(step, "uses").is_some_and(|value| value.starts_with("actions/setup-python@"))
+            || field(step, "run").is_some_and(|run| {
+                run.contains("requirements-ci-python.txt")
+                    || run
+                        .split_whitespace()
+                        .any(|word| matches!(word, "python" | "python3" | "pip" | "pip3"))
+            })
+    }) {
+        return Err("Quality contracts require native tooling, not Python setup or install".into());
+    }
     let selected: Vec<_> = steps
         .iter()
         .filter(|s| field(s, "name") == Some("Test CI, packaging, and SDK contracts"))

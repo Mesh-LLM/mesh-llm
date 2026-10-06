@@ -64,6 +64,12 @@ pub(super) fn expand(
             continued.push_str(command.trim());
             let command = std::mem::take(&mut continued);
             let block = command.trim();
+            #[cfg(test)]
+            if !block.starts_with('#') {
+                builder
+                    .selected_recipe_commands
+                    .push((format!("just:{name}"), block.to_owned()));
+            }
             if block.starts_with('#') || block.starts_with("echo ") {
                 continue;
             }

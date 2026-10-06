@@ -16,9 +16,7 @@ pub(super) fn is_instruction(path: &str) -> bool {
     path == "AGENTS.md"
         || path.ends_with("/AGENTS.md")
         || (path.starts_with(".agents/skills/")
-            && (path.ends_with(".md")
-                || path.ends_with("/agents/openai.yaml")
-                || path.ends_with("/scripts/collect-release-inventory.py")))
+            && (path.ends_with(".md") || path.ends_with("/agents/openai.yaml")))
         || path == ".agents/agents/release-validation.md"
         || path == ".github/instructions/pr.instructions.md"
         || path == "ci/llama-canary/agent-repair-prompt.md"

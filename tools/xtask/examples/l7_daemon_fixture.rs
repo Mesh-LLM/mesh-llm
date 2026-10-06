@@ -10,6 +10,8 @@ mod hf_raw_conversion_fixture;
 mod lightning_peer_fixture;
 #[path = "l7_daemon_fixture/manual_smoke_fixture.rs"]
 mod manual_smoke_fixture;
+#[path = "l7_daemon_fixture/mtp_fixture.rs"]
+mod mtp_fixture;
 #[path = "../tests/migration_lifecycle/signals.rs"]
 #[expect(dead_code, reason = "shared fixture signal ownership")]
 mod signals;
@@ -28,6 +30,9 @@ mod parity_fixture;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let arguments: Vec<_> = std::env::args().skip(1).collect();
+    if mtp_fixture::selected(&arguments) {
+        return mtp_fixture::run(&arguments);
+    }
     if arguments.first().is_some_and(|arg| arg == "--family") {
         return parity_fixture::run(&arguments);
     }

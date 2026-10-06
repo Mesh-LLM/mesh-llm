@@ -643,8 +643,16 @@ fn migration_inventory_preserves_source_verified_edge_when_shard_is_complete() -
     let observed = scan::scan_paths(&root, &paths)?;
     let validated = super::shards::check_shards(&root, &observed)?;
     let mut ledgers = MigrationLedgers::load(&root)?;
-    ledgers.invocations.source_verified_edges[0].id =
-        "invented#candidate:0000000000000000:1".into();
+    ledgers
+        .invocations
+        .source_verified_edges
+        .push(VerifiedEdge {
+            id: "invented#candidate:0000000000000000:1".into(),
+            owner: "fixture".into(),
+            reason: "A stale reviewed record cannot be admitted by complete shard coverage".into(),
+            target: "fixture target".into(),
+            replacement_task: 5,
+        });
     // When inventory checks reviewed evidence, then the stale record still fails.
     let error =
         checks::check_inventory(&root, &paths, &ledgers, &observed, &validated).unwrap_err();
@@ -683,3 +691,6 @@ fn migration_inventory_rejects_new_interpreter_on_actual_source() -> DynResult<(
 
 #[path = "tests/sdk_exception_policy.rs"]
 mod sdk_exception_policy;
+
+#[path = "tests/sdk_component_policy.rs"]
+mod sdk_component_policy;

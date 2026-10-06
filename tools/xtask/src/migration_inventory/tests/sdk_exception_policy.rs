@@ -255,3 +255,144 @@ fn granite_reference_is_absent_from_actual_required_and_default_execution_graph(
     }
     Ok(())
 }
+
+#[test]
+fn research16_is_absent_from_actual_required_and_default_execution_graph() -> DynResult<()> {
+    let root = crate::repo_consistency::repo_root()?;
+    let declaration: serde_json::Value = serde_json::from_slice(&std::fs::read(
+        root.join("evals/research-python/BOUNDARIES.json"),
+    )?)?;
+    let rows = declaration["rows"]
+        .as_array()
+        .ok_or("research roster absent")?;
+    assert_eq!(rows.len(), 16);
+    let forbidden = rows
+        .iter()
+        .map(|row| row["path"].as_str().expect("exact research path"))
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(forbidden.len(), 16);
+    let expected = [
+        "crates/skippy-cache/src/cachegen/fixtures/generate_lmcache_compat.py",
+        "crates/skippy-quantize/scripts/compare-reference-quantization.py",
+        "evals/latency-benchmarking/latency-proxy.py",
+        "evals/latency-benchmarking/measure.py",
+        "evals/moa-openrouter/analyze_ablation.py",
+        "evals/moa-openrouter/lite_agent.py",
+        "evals/moa-openrouter/make_fixture.py",
+        "evals/moa-openrouter/orclient.py",
+        "evals/moa-openrouter/probe_tools.py",
+        "evals/moa-openrouter/record.py",
+        "evals/moa-openrouter/record_agentic.py",
+        "evals/scenarios/debug-session/buggy.py",
+        "evals/scenarios/edit-file/server.py",
+        "evals/scenarios/refactor/config.py",
+        "evals/test_injection_framing.py",
+        "evals/virtual_llm_eval.py",
+    ]
+    .into_iter()
+    .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(forbidden, expected);
+    let project: toml::Value = toml::from_str(&std::fs::read_to_string(
+        root.join("evals/research-python/pyproject.toml"),
+    )?)?;
+    assert_eq!(
+        project["project"]["requires-python"].as_str(),
+        Some(">=3.11,<3.15")
+    );
+    assert!(
+        project["project"]["dependencies"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+
+    let reference: toml::Value = toml::from_str(&std::fs::read_to_string(
+        root.join("evals/quantizer-reference/pyproject.toml"),
+    )?)?;
+    assert_eq!(
+        reference["project"]["requires-python"].as_str(),
+        Some(">=3.12,<3.13")
+    );
+    let direct = reference["project"]["dependencies"].as_array().unwrap();
+    assert_eq!(
+        direct
+            .iter()
+            .map(|item| item.as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["numpy~=2.2.6", "gguf>=0.1.0"]
+    );
+    let paths = super::super::ledger::tracked_paths(&root)?;
+    let observed = super::super::scan::scan_paths(&root, &paths)?;
+    let owned = super::super::shards::check_shards(&root, &observed)?;
+    let roots = super::super::required_closure::required_roots(&root, &paths)?;
+    let roots = roots.iter().map(String::as_str).collect::<Vec<_>>();
+    let graph = super::super::required_graph::report(&root, &paths, &observed, &owned, &roots)?;
+    assert!(graph.complete_census, "{graph:?}");
+    for edge in &graph.edges {
+        assert!(
+            !edge
+                .child
+                .as_deref()
+                .is_some_and(|child| forbidden.contains(child)),
+            "{edge:?}"
+        );
+        for path in &forbidden {
+            assert!(!edge.source_block.contains(path), "{edge:?}");
+        }
+        assert!(
+            !edge.source_block.contains("evals/research-python")
+                && !edge.source_block.contains("evals/quantizer-reference"),
+            "{edge:?}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn research16_policy_refuses_unrecorded_wrong_class_and_undeclared_dependencies() -> DynResult<()> {
+    with_ledgers(|mut paths, mut ledgers| {
+        for path in super::super::exception_policy::research::PATHS {
+            ledgers.exceptions.exceptions = vec![research_entry(path)];
+            assert!(check_exceptions(&paths, &ledgers).is_err());
+            recorded(path, &mut paths, &mut ledgers);
+            check_exceptions(&paths, &ledgers)?;
+            ledgers.exceptions.exceptions[0].status =
+                if super::super::exception_policy::research::is_upstream(path) {
+                    "isolated_research_evaluation"
+                } else {
+                    "isolated_upstream_reference"
+                }
+                .into();
+            assert!(check_exceptions(&paths, &ledgers).is_err());
+            ledgers.exceptions.exceptions[0].status = "qualified".into();
+            assert!(check_exceptions(&paths, &ledgers).is_err());
+            ledgers.exceptions.exceptions[0] = research_entry(path);
+            ledgers.exceptions.exceptions[0].local_dependency_files =
+                Some(vec!["ci/requirements-ci-python.txt".into()]);
+            assert!(check_exceptions(&paths, &ledgers).is_err());
+            ledgers.exceptions.exceptions = vec![research_entry(path), research_entry(path)];
+            assert!(check_exceptions(&paths, &ledgers).is_err());
+        }
+        ledgers.exceptions.exceptions =
+            vec![entry("evals/unreviewed.py", "isolated_research_evaluation")];
+        assert!(check_exceptions(&paths, &ledgers).is_err());
+        Ok(())
+    })
+}
+
+fn research_entry(path: &str) -> ExceptionEntry {
+    let mut candidate = entry(
+        path,
+        if super::super::exception_policy::research::is_upstream(path) {
+            "isolated_upstream_reference"
+        } else {
+            "isolated_research_evaluation"
+        },
+    );
+    candidate.cadence = Some("optional explicit operator research/upstream regeneration only; never PR/main required setup".into());
+    candidate.local_dependency_files = Some(vec![
+        super::super::exception_policy::research::project(path).into(),
+        "evals/research-python/BOUNDARIES.json".into(),
+    ]);
+    candidate
+}

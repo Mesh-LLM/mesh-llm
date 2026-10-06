@@ -808,7 +808,7 @@ curl -s localhost:3131/api/status | jq '.runtime.openai_guardrails'
 ```
 
 ```bash
-python3 scripts/run-openai-guardrail-corpus.py \
+just automation-run automation guardrail-corpus \
   --base-url http://127.0.0.1:9337/v1 \
   --model MiniMax-M2.5-Q4_K_M \
   --guardrail-mode metrics \
@@ -821,8 +821,9 @@ python3 scripts/run-openai-guardrail-corpus.py \
   `mesh_guardrails` request override. It does not reconfigure the server; use
   `--mesh-guardrails`, `mesh-llm runtime guardrails`, or the management API
   for server-side activation.
-- If the runtime is unavailable, the script falls back to deterministic
-  fake-backend mode and still writes the expected JSON artifact.
+- Endpoint failure leaves incomplete live evidence and returns nonzero. For
+  a deliberate synthetic corpus check, use `--base-url fake://local`; its
+  report labels every row as fake evidence and does not qualify the runtime.
 - The corpus covers streaming pass-through, native tool-call validation,
   structured `_mesh_respond` output, strict structured output, and the
   unsupported real tools plus strict structured combination.

@@ -19,17 +19,13 @@ ci-validate:
     just no-console-print
     just publish-crates
 
-# Explicit surviving transitional coverage; retire modules only with intent owners.
+# Required native ownership for the former Windows Python contract modules.
+# The ordered quality caller retains this recipe; actual Windows execution stays in
+# the existing selected Windows unit workflow (18 methods plus wrapper1).
 ci-legacy-contracts:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    # Verify one current controller before the bounded legacy fixtures start.
-    # Re-entering Cargo for every controller call can exhaust fixture deadlines.
-    bootstrap="$(just automation-bootstrap)"
-    binary="$(printf '%s\n' "$bootstrap" | awk -F= '$1 == "binary_path" { count++; print substr($0, index($0, "=") + 1) } END { if (count != 1) exit 1 }')"
-    test -n "$binary"
-    export MESH_LLM_AUTOMATION_BIN="$binary"
-    python3 -m unittest scripts.tests.test_skippy_llama_parity scripts.tests.test_ci_windows_composition  scripts.tests.test_build_windows scripts.tests.test_skippy_radix_cache_ab  scripts.tests.test_skippy_competitive_benchmark scripts.tests.test_hf_skippy_mtp_certify_job scripts.tests.test_install_ps1 scripts.tests.test_kv_restart_replay scripts.tests.test_llama_canary_agent_repair_contract  scripts.tests.test_llama_upstream_canary_contract scripts.tests.test_llama_review_regressions scripts.tests.test_skippy_adaptive_prefill_ab  scripts.tests.test_skippy_mixed_prefill_decode_ab  scripts.tests.test_llama_native_full_replay  scripts.tests.test_skippy_system_one_smoke
+    just with-lld cargo test --locked -p xtask --bin xtask ci_validation::windows_runtime::tests:: -- --test-threads=1
+    just with-lld cargo test --locked -p xtask --test ci_runner_cache_contract windows_ -- --test-threads=1
+    just with-lld cargo test --locked -p xtask --test migration_lifecycle windows_ -- --test-threads=1
 
 # Approved research-reader fixtures are optional and use only the existing lock.
 # Prepare deliberately: uv sync --locked --no-python-downloads --project ci/agentic-replay-nightly

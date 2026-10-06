@@ -54,7 +54,7 @@ impl Fixture {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let mut command = Command::new("/bin/bash");
         command
-            .arg(root.join("scripts/build-llama.sh"))
+            .arg(root.join("skippy/scripts/build-llama.sh"))
             .current_dir(root);
         for (key, _) in std::env::vars_os() {
             let name = key.to_string_lossy();

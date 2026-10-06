@@ -1,3 +1,4 @@
+pub(super) mod research;
 use super::ledger::MigrationLedgers;
 use crate::command::DynResult;
 use std::collections::BTreeSet;
@@ -22,7 +23,8 @@ pub(super) fn check_exceptions(paths: &[String], ledgers: &MigrationLedgers) -> 
         if !exception_paths.insert(&entry.path)
             || !(SDK_CANDIDATES.contains(&entry.path.as_str())
                 || retained_reader
-                || entry.path == MODEL_REFERENCE)
+                || entry.path == MODEL_REFERENCE
+                || research::PATHS.contains(&entry.path.as_str()))
         {
             return Err(format!(
                 "automation policy: fabricated or duplicate Python exception {}",
@@ -73,6 +75,9 @@ pub(super) fn check_exceptions(paths: &[String], ledgers: &MigrationLedgers) -> 
                             "evals/granite-reference/uv.lock",
                         ])
                     }) => {}
+
+            "isolated_research_evaluation" | "isolated_upstream_reference"
+                if source_recorded && research::admitted(entry) => {}
 
             // L8 retains required SDK cadence. A workflow filename is not qualification.
             // Qualification requires a separately reviewed execution-evidence contract.

@@ -56,6 +56,7 @@ fn run() -> DynResult<()> {
         cli::CliCommand::SuffixProposer(rest) => automation::suffix_proposer::run(rest),
         cli::CliCommand::EventBenchmarkRun(rest) => automation::event_benchmark_runner::run(rest),
         cli::CliCommand::AgentClientConfig(rest) => automation::agent_client_config::run(rest),
+        cli::CliCommand::CacheFamilyMoe(rest) => automation::cache_family_moe::run(rest),
         cli::CliCommand::CacheFamilyRun(rest) => automation::cache_family_run::run(rest),
         cli::CliCommand::CacheFamilyReport(rest) => automation::cache_family_report::run(rest),
         cli::CliCommand::CacheFamilyCorrectness(rest) => {
@@ -148,6 +149,8 @@ fn run() -> DynResult<()> {
         cli::CliCommand::AgentPickModel(rest) => automation::agent_model::run(rest),
         cli::CliCommand::HfCertification(rest) => automation::hf_certify::run(rest),
         cli::CliCommand::HfMtpCompose(rest) => automation::hf_mtp_compose::run(rest),
+        cli::CliCommand::MtpScheduler(rest) => automation::mtp_scheduler::run(rest),
+        cli::CliCommand::MtpSchedulerWorker(rest) => automation::mtp_scheduler::run_worker(rest),
         cli::CliCommand::HfConvertedArtifact(rest) => automation::hf_converted_artifact::run(rest),
         cli::CliCommand::Rollout(rest) => automation::rollout::run(rest),
         cli::CliCommand::GenerateKeypair(rest) => {

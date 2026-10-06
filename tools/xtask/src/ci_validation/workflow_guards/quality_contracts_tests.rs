@@ -229,3 +229,24 @@ fn optional_reader_contracts_require_actual_bootstrap_binary_and_full_coverage()
         assert!(recipe(&changed, &targets).is_err());
     }
 }
+
+#[test]
+fn quality_native_tooling_rejects_reintroduced_python_setup_and_installs() {
+    let source =
+        std::fs::read_to_string(root().join(".github/workflows/ci-quality-slice.yml")).unwrap();
+    let workflow = super::super::workflow_yaml::parse(&source).unwrap();
+    quality(&workflow).unwrap();
+    for added in [
+        "      - uses: actions/setup-python@pinned\n",
+        "      - run: python3 -m pip install -r ci/requirements-ci-python.txt\n",
+        "      - run: pip install PyYAML\n",
+    ] {
+        let changed = source.replace(
+            "      - name: Test CI, packaging, and SDK contracts\n",
+            &format!("{added}      - name: Test CI, packaging, and SDK contracts\n"),
+        );
+        assert_ne!(source, changed);
+        let document = super::super::workflow_yaml::parse(&changed).unwrap();
+        assert!(quality(&document).is_err());
+    }
+}

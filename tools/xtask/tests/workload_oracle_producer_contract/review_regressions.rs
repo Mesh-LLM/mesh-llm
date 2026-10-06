@@ -1,7 +1,7 @@
 //! Capability-owned postimage hunk contracts; mail prose and removed lines cannot qualify.
 use std::{fs, path::Path};
 fn patch(suffix: &str) -> String {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../third_party/llama.cpp/patches");
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../skippy/llama_cpp/patches");
     let directory = if suffix.starts_with("model_support/") {
         root.join("model_support")
     } else {
