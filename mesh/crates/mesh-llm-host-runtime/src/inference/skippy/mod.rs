@@ -672,19 +672,9 @@ mod tests {
     use skippy_serving::telemetry::TelemetryStats;
 
     fn thinking_fixture() -> ThinkingControls {
-        use skippy_inference_api::thinking::*;
         ThinkingControls {
-            fingerprint: ThinkingControlsFingerprint {
-                model_id: "local-model".to_string(),
-                artifact: None,
-                template: "embedded".to_string(),
-                renderer: "skippy-abi-0.1.66".to_string(),
-            },
-            evidence: ThinkingEvidence::RenderedPromptOnly,
-            model_obeys_control: ControlObedience::Unknown,
-            untested: "budget semantics".to_string(),
-            cases: vec![],
-            differences: vec![],
+            enabled: true,
+            efforts: vec!["low".to_string(), "medium".to_string(), "high".to_string()],
         }
     }
 
@@ -696,8 +686,8 @@ mod tests {
 
         register_local_thinking(model, Some(&thinking_fixture()));
         let value = local_thinking(model).expect("registered thinking");
-        assert_eq!(value["evidence"], "rendered_prompt_only");
-        assert_eq!(value["fingerprint"]["template"], "embedded");
+        assert_eq!(value["enabled"], true);
+        assert_eq!(value["efforts"][2], "high");
 
         // A reload that produced no observations must not leave the previous
         // load's report behind.

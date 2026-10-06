@@ -404,23 +404,9 @@ mod tests {
     }
 
     fn thinking_fixture() -> skippy_inference_api::thinking::ThinkingControls {
-        use skippy_inference_api::thinking::*;
-        ThinkingControls {
-            fingerprint: ThinkingControlsFingerprint {
-                model_id: "Qwen3-32B-Q4_K_M".to_string(),
-                artifact: Some("abc".to_string()),
-                template: "embedded".to_string(),
-                renderer: "skippy-abi-0.1.66".to_string(),
-            },
-            evidence: ThinkingEvidence::RenderedPromptOnly,
-            model_obeys_control: ControlObedience::Unknown,
-            untested: "budget semantics".to_string(),
-            cases: vec![],
-            differences: vec![ThinkingControlDifference {
-                left: "off".to_string(),
-                right: ThinkingControls::BASELINE_CASE.to_string(),
-                effect: ThinkingEffect::ChangesPrompt,
-            }],
+        skippy_inference_api::thinking::ThinkingControls {
+            enabled: true,
+            efforts: vec!["low".to_string(), "medium".to_string(), "high".to_string()],
         }
     }
 
@@ -430,10 +416,8 @@ mod tests {
         crate::inference::skippy::register_local_thinking(model, Some(&thinking_fixture()));
         let body = models_list_json(&[model.to_string()], &[local_gguf_descriptor(model)], &[]);
         let thinking = &body["data"][0]["thinking"];
-        assert_eq!(thinking["evidence"], "rendered_prompt_only");
-        assert_eq!(thinking["model_obeys_control"], "unknown");
-        assert_eq!(thinking["fingerprint"]["template"], "embedded");
-        assert_eq!(thinking["differences"][0]["effect"], "changes_prompt");
+        assert_eq!(thinking["enabled"], true);
+        assert_eq!(thinking["efforts"][1], "medium");
         crate::inference::skippy::forget_local_thinking(model);
     }
 

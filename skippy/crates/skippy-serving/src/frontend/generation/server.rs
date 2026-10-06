@@ -426,7 +426,6 @@ fn embedded_openai_backend_with_scheduler(
 /// and cannot claim. A poisoned runtime lock leaves the model unprobed, which is
 /// reported as absent rather than as a default.
 fn probe_thinking_controls(args: &EmbeddedOpenAiArgs) -> Option<ThinkingControls> {
-    let template_override = args.request_defaults.chat_template.clone();
     let artifact = args
         .config
         .source_model_sha256
@@ -435,17 +434,15 @@ fn probe_thinking_controls(args: &EmbeddedOpenAiArgs) -> Option<ThinkingControls
     let report = probe_loaded_model(
         &args.runtime,
         &ThinkingProbeInputs {
+            defaults: &args.request_defaults,
             model_id: &args.config.model_id,
             artifact: artifact.as_deref(),
-            template_override: template_override.as_deref(),
-            use_jinja: args.request_defaults.jinja.unwrap_or(true),
+            template_override: args.request_defaults.chat_template.as_deref(),
             renderer: &native_renderer_identity(),
         },
-    );
-    if let Some(report) = &report {
-        let _ = emit_probe_status(report);
-    }
-    report
+    )?;
+    let _ = emit_probe_status(&report);
+    Some(report.controls().clone())
 }
 
 fn validate_generation_receipt_topology(

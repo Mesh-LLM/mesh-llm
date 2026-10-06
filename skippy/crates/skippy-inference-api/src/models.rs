@@ -117,28 +117,14 @@ mod tests {
         assert!(bare.get("thinking").is_none());
 
         let controls = crate::thinking::ThinkingControls {
-            fingerprint: crate::thinking::ThinkingControlsFingerprint {
-                model_id: "org/model:Q4_K_M".to_string(),
-                artifact: None,
-                template: "embedded".to_string(),
-                renderer: "skippy-abi-0.1.66".to_string(),
-            },
-            evidence: crate::thinking::ThinkingEvidence::RenderedPromptOnly,
-            model_obeys_control: crate::thinking::ControlObedience::Unknown,
-            untested: "budget semantics".to_string(),
-            cases: vec![],
-            differences: vec![crate::thinking::ThinkingControlDifference {
-                left: "off".to_string(),
-                right: crate::thinking::ThinkingControls::BASELINE_CASE.to_string(),
-                effect: crate::thinking::ThinkingEffect::ChangesPrompt,
-            }],
+            enabled: true,
+            efforts: vec!["low".to_string(), "medium".to_string()],
         };
         let probed = serde_json::to_value(
             ModelObject::new("org/model:Q4_K_M").with_thinking(Some(controls)),
         )
         .unwrap();
-        assert_eq!(probed["thinking"]["evidence"], "rendered_prompt_only");
-        assert_eq!(probed["thinking"]["model_obeys_control"], "unknown");
-        assert_eq!(probed["thinking"]["differences"][0]["left"], "off");
+        assert_eq!(probed["thinking"]["enabled"], true);
+        assert_eq!(probed["thinking"]["efforts"][0], "low");
     }
 }
