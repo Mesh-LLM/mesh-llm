@@ -53,6 +53,7 @@ pub(crate) fn test_announcement(ts: Option<u64>) -> PeerAnnouncement {
         stage_protocol_generation_supported: true,
         stage_status_list_supported: true,
         local_gguf_content_id_supported: true,
+        decode_batch_policy_supported: true,
         #[cfg(feature = "payments")]
         lightning_offers: Default::default(),
         advertised_model_throughput: vec![],

@@ -112,6 +112,7 @@ pub(super) fn test_peer_serving_model(peer_id: iroh::EndpointId, model: &str) ->
         stage_protocol_generation_supported: false,
         stage_status_list_supported: false,
         local_gguf_content_id_supported: false,
+        decode_batch_policy_supported: false,
         advertised_model_throughput: vec![],
         #[cfg(feature = "payments")]
         lightning_offers: Default::default(),

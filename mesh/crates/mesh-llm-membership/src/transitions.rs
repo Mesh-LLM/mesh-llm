@@ -116,6 +116,7 @@ impl MembershipState {
             let mut peer = PeerInfo::from_announcement(id, addr.clone(), ann, owner_summary);
             // Capability provenance must be direct: a bridge cannot grant eligibility.
             peer.local_gguf_content_id_supported = false;
+            peer.decode_batch_policy_supported = false;
             peer.stage_protocol_generation_supported = false;
             peer.admitted = false;
             peer.last_seen = Instant::now() - Duration::from_secs(PEER_STALE_SECS * 2);
