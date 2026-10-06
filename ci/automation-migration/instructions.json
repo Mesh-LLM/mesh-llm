@@ -418,16 +418,45 @@
         "python3 evals/skippy-cache-production-bench.py ...",
         "python3 evals/skippy-cache-family-report.py ..."
       ],
-      "replacement_owner": "tools/xtask benchmark/evidence commands plus cache-owned Rust coverage",
+      "replacement_owner": "tools/xtask/src/automation/cache_family_run/preparation.rs, cache_family_run.rs and cache_family_report.rs via Just automation-run",
       "cutover_task": 5,
-      "actionability": "skill-local executable benchmark examples; negative fixture source",
+      "actionability": "Current literal native prepare-full/full-matrix/prepare-use-cases/all-use-case/report commands; historical Python examples retained only in old_commands.",
       "unresolved": true,
       "current_source_binding": {
         "path": ".agents/skills/skippy-cache-family-bench/SKILL.md",
-        "sha256": "754def93983ed96e422e2e512226808b407a92d7d1d49e692a1e09b07c5a4f5a",
-        "line_count": 82
+        "sha256": "de4dd7d3803d24fb5a07b69a23d9c32c84f41d4b3e62e720ff2fb28791e47d25",
+        "line_count": 109,
+        "mode": 420
       },
-      "latest_review": "Generic JSON display uses jq; family report uses typed owner. Historical example records retained; no live/platform benchmark qualification implied."
+      "latest_review": "Actual applied wrapper and skill use native typed owners. Caller source is reconciled; complete batch/report fixture and actual model/backend qualification remain separate. No producer/importer retirement.",
+      "native_commands": [
+        {
+          "phase": "prepare-full",
+          "source_block": "\"${automation[@]}\" automation cache-family-run prepare-full --input \"$SKIPPY_CACHE_OPERATOR_INPUT\" --output \"$OUTPUT_DIR/full-input\" \"${COMMON_ARGS[@]}\"",
+          "owner": "tools/xtask/src/automation/cache_family_run.rs"
+        },
+        {
+          "phase": "full-matrix",
+          "source_block": "\"${automation[@]}\" automation cache-family-run --input \"$OUTPUT_DIR/full-input/cache-family-input.json\" --output \"$OUTPUT_DIR/full-gguf\"",
+          "owner": "tools/xtask/src/automation/cache_family_run.rs"
+        },
+        {
+          "phase": "prepare-use-cases",
+          "source_block": "\"${automation[@]}\" automation cache-family-run prepare-use-cases --input \"$SKIPPY_CACHE_OPERATOR_INPUT\" --output \"$OUTPUT_DIR/usecase-input\" \"${COMMON_ARGS[@]}\"",
+          "owner": "tools/xtask/src/automation/cache_family_run.rs"
+        },
+        {
+          "phase": "all-use-case-matrix",
+          "source_block": "\"${automation[@]}\" automation cache-family-run --input \"$OUTPUT_DIR/usecase-input/cache-family-input.json\" --output \"$OUTPUT_DIR/use-cases\"",
+          "owner": "tools/xtask/src/automation/cache_family_run.rs"
+        },
+        {
+          "phase": "combined-report",
+          "source_block": "\"${automation[@]}\" automation cache-family-report --input \"$OUTPUT_DIR/full-gguf/production-cache-bench.json\" --input \"$OUTPUT_DIR/use-cases/production-cache-bench.json\" --use-case-corpus \"$USECASE_CORPUS\" --output \"$OUTPUT_DIR/readme-tables.md\"",
+          "owner": "tools/xtask/src/automation/cache_family_report.rs"
+        }
+      ],
+      "actual_qualification_receipt": null
     },
     {
       "path": ".agents/skills/skippy-bench/SKILL.md",

@@ -3,6 +3,8 @@
 mod admission;
 #[path = "cache_family_correctness/artifact.rs"]
 pub(in crate::automation) mod artifact;
+#[path = "cache_family_correctness/batch.rs"]
+mod batch;
 #[path = "cache_family_correctness/catalog.rs"]
 mod catalog;
 #[path = "cache_family_correctness/report.rs"]
@@ -25,7 +27,7 @@ use std::{
     path::{Path, PathBuf},
     time::{Duration, Instant},
 };
-const USAGE: &str = "cargo xtool automation cache-family-correctness [admit-worker] --input ABSOLUTE_JSON --output ABSOLUTE_FRESH_DIRECTORY_OR_WORKER_FILE";
+const USAGE: &str = "cargo xtool automation cache-family-correctness [batch|admit-worker] --input ABSOLUTE_JSON --output ABSOLUTE_FRESH_DIRECTORY_OR_WORKER_FILE";
 fn paths(args: &[String]) -> DynResult<(PathBuf, PathBuf)> {
     if args.len() != 4 {
         return Err(USAGE.into());
@@ -57,6 +59,11 @@ pub(crate) fn run(args: &[String]) -> DynResult<()> {
     {
         let (input, output) = paths(rest)?;
         return admission::run(&input, &output);
+    }
+    if let [verb, rest @ ..] = args
+        && verb == "batch"
+    {
+        return batch::run(rest);
     }
     let (path, output) = paths(args)?;
     let bytes = crate::automation::waiting_prefix::adaptive_identity::bounded(&path, 1024 * 1024)?;

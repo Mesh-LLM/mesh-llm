@@ -4,7 +4,7 @@ use serde_json::Value;
 use std::collections::BTreeMap;
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct Profile {
+pub(in crate::automation) struct Profile {
     /// Exact typed existing correctness frontend input, prior to plan overrides.
     pub correctness: Value,
     pub native: Option<Value>,
@@ -13,7 +13,7 @@ pub(super) struct Profile {
 }
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct Input {
+pub(in crate::automation) struct Input {
     pub schema_version: u64,
     /// Existing cache-family-plan frontend input; its owner validates/catalogs it.
     pub plan: Value,
@@ -23,7 +23,7 @@ pub(super) struct Input {
     pub cell_seconds: u64,
 }
 impl Input {
-    pub(super) fn validate(&self) -> DynResult<()> {
+    pub(in crate::automation) fn validate(&self) -> DynResult<()> {
         if self.schema_version != 1
             || !(30..=86400).contains(&self.execution_seconds)
             || !(15..=3600).contains(&self.cell_seconds)

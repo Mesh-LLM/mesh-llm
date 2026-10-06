@@ -398,3 +398,290 @@ fn cache_matrix_actual_persistent_warm_hosts_and_consumed_device_toolkit_profile
     }
     fixture.directory.close().unwrap();
 }
+
+fn operator_input(fixture: &Fixture) -> Value {
+    let input: Value = serde_json::from_slice(&fs::read(&fixture.input).unwrap()).unwrap();
+    let profile = &input["profiles"]["qwen3_dense"];
+    json!({"schema_version":1,"plan":input["plan"],"correctness":profile["correctness"]["correctness"],"stage_server":profile["correctness"]["stage_server"],"native_server":profile["native"]["binary"],"artifact_tool":null,"native_build":profile["correctness"]["native_build"],"old_source_commit":"a".repeat(40),"new_source_commit":"a".repeat(40),"native_source_commit":"a".repeat(40),"environment":{"OMP_NUM_THREADS":"2"},"toolkit_directories":{},"execution_seconds":120,"cell_seconds":30,"request_timeout_ms":5000,"preparation_seconds":60})
+}
+fn preparation_spec(
+    fixture: &Fixture,
+    input: &std::path::Path,
+    output: &std::path::Path,
+    mode: &str,
+) -> ProcessSpec {
+    let mut spec = fixture.spec();
+    spec.arguments = [
+        "automation".into(),
+        "cache-family-run".into(),
+        mode.into(),
+        "--input".into(),
+        input.to_path_buf().into_os_string(),
+        "--output".into(),
+        output.to_path_buf().into_os_string(),
+    ]
+    .into_iter()
+    .map(Arg::Public)
+    .collect();
+    spec
+}
+#[test]
+fn cache_operator_actual_preparation_observes_pins_and_runs_complete_inert_producer() {
+    let mut fixture = Fixture::new();
+    let operator = fixture.root.join("operator.json");
+    let prepared = fixture.root.join("prepared");
+    fs::write(
+        &operator,
+        serde_json::to_vec(&operator_input(&fixture)).unwrap(),
+    )
+    .unwrap();
+    let report = invoke(
+        &preparation_spec(&fixture, &operator, &prepared, "prepare-full"),
+        &Cancellation::default(),
+    );
+    assert!(report.success());
+    let observed: Value =
+        serde_json::from_slice(&fs::read(prepared.join("observations.json")).unwrap()).unwrap();
+    let request = fs::read(prepared.join("request.json")).unwrap();
+    assert_eq!(observed["request_sha256"], hash(&request));
+    fixture.input = prepared.join("cache-family-input.json");
+    let input: Value = serde_json::from_slice(&fs::read(&fixture.input).unwrap()).unwrap();
+    assert_eq!(input["profiles"].as_object().unwrap().len(), 1);
+    assert_eq!(input["plan"]["use_cases"], json!([]));
+    assert_eq!(
+        input["profiles"]["qwen3_dense"]["correctness"]["model_sha256"],
+        hash(&model())
+    );
+    assert_eq!(
+        input["profiles"]["qwen3_dense"]["old"]["environment"]["OMP_NUM_THREADS"],
+        "2"
+    );
+    let result = invoke(&fixture.spec(), &Cancellation::default());
+    assert!(result.success());
+    assert_eq!(fixture.receipt()["status"], "completed");
+    fixture.directory.close().unwrap();
+}
+#[test]
+fn cache_operator_actual_usecase_all_and_optional_pair_missing_model_selection() {
+    let fixture = Fixture::new();
+    let mut operator = operator_input(&fixture);
+    let corpus = fixture.root.join("corpus.json");
+    let bytes=serde_json::to_vec(&json!({"version":1,"use_cases":[{"key":"one","label":"One","prompt":"fixed prompt","prefix_tokens":64,"source":{}},{"key":"two","label":"Two","prompt":"fixed prompt","prefix_tokens":64,"source":{}}]})).unwrap();
+    fs::write(&corpus, &bytes).unwrap();
+    operator["plan"]["corpus"] = json!({"path":corpus,"sha256":hash(&bytes)});
+    operator["plan"]["cases"] = json!(["qwen3_dense", "llama"]);
+    operator["plan"]["old_server"] = Value::Null;
+    operator["plan"]["new_server"] = Value::Null;
+    let path = fixture.root.join("operator.json");
+    fs::write(&path, serde_json::to_vec(&operator).unwrap()).unwrap();
+    let prepared = fixture.root.join("prepared");
+    let result = invoke(
+        &preparation_spec(&fixture, &path, &prepared, "prepare-use-cases"),
+        &Cancellation::default(),
+    );
+    assert!(result.success());
+    let input: Value =
+        serde_json::from_slice(&fs::read(prepared.join("cache-family-input.json")).unwrap())
+            .unwrap();
+    assert_eq!(input["plan"]["use_cases"], json!(["all"]));
+    assert_eq!(input["plan"]["cases"], json!(["qwen3_dense", "llama"]));
+    assert_eq!(input["profiles"].as_object().unwrap().len(), 1);
+    assert!(input["profiles"]["qwen3_dense"]["old"].is_null());
+    assert!(input["profiles"]["qwen3_dense"]["new"].is_null());
+    assert_eq!(
+        input["profiles"]["qwen3_dense"]["correctness"]["stage_server"],
+        json!(fixture.root.join("new"))
+    );
+    fixture.directory.close().unwrap();
+}
+#[test]
+fn cache_operator_actual_mismatched_pin_and_fifo_refuse_eligible_input() {
+    for fifo in [false, true] {
+        let fixture = Fixture::new();
+        let mut operator = operator_input(&fixture);
+        if fifo {
+            use std::os::unix::ffi::OsStrExt as _;
+            let path = fixture.root.join("tool-fifo");
+            let name = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap();
+            assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
+            operator["correctness"] = json!(path);
+        } else {
+            operator["plan"]["old_server"]["sha256"] = json!("0".repeat(64));
+        }
+        let path = fixture.root.join("operator.json");
+        fs::write(&path, serde_json::to_vec(&operator).unwrap()).unwrap();
+        let prepared = fixture.root.join("prepared");
+        let result = invoke(
+            &preparation_spec(&fixture, &path, &prepared, "prepare-full"),
+            &Cancellation::default(),
+        );
+        assert_eq!(result.status.and_then(|s| s.code()), Some(1));
+        assert!(!prepared.join("cache-family-input.json").exists());
+        fixture.directory.close().unwrap();
+    }
+}
+
+#[test]
+fn cache_operator_actual_wrapper_full_usecase_report_and_failure_dispatch() {
+    use std::os::unix::fs::PermissionsExt as _;
+    for fail in [false, true] {
+        let fixture = Fixture::new();
+        let script = fixture.root.join("evals/skippy-cache-family-bench.sh");
+        fs::create_dir(script.parent().unwrap()).unwrap();
+        fs::write(
+            &script,
+            include_str!("../../../../evals/skippy-cache-family-bench.sh"),
+        )
+        .unwrap();
+        let automation = fixture.root.join("automation");
+        let record = fixture.root.join("dispatch.log");
+        let body = format!(
+            "#!/bin/bash\nprintf '%s\\n' \"$*\" >> {}\n{}\n",
+            quote(record.to_str().unwrap()),
+            if fail {
+                "if [[ $3 == prepare-use-cases ]]; then exit 41; fi"
+            } else {
+                ":"
+            }
+        );
+        fs::write(&automation, body).unwrap();
+        fs::set_permissions(&automation, fs::Permissions::from_mode(0o700)).unwrap();
+        let operator = fixture.root.join("operator.json");
+        fs::write(&operator, b"{}").unwrap();
+        let output = fixture.root.join("wrapper-output");
+        let spec = ProcessSpec {
+            executable: "/bin/bash".into(),
+            arguments: [script.into_os_string(), output.into_os_string()]
+                .into_iter()
+                .map(Arg::Public)
+                .collect(),
+            cwd: fixture.root.clone(),
+            environment: [
+                ("PATH", "/usr/bin:/bin".into()),
+                ("MESH_LLM_AUTOMATION_BIN", automation.into_os_string()),
+                ("SKIPPY_CACHE_OPERATOR_INPUT", operator.into_os_string()),
+                ("SKIPPY_CACHE_SKIP_BUILD", "1".into()),
+            ]
+            .into_iter()
+            .map(|(k, v)| (k.into(), Arg::Public(v)))
+            .collect(),
+        };
+        let result = invoke(&spec, &Cancellation::default());
+        assert_eq!(
+            result.status.and_then(|s| s.code()),
+            Some(if fail { 41 } else { 0 })
+        );
+        let lines = fs::read_to_string(record).unwrap();
+        let lines: Vec<_> = lines.lines().collect();
+        assert_eq!(lines.len(), if fail { 3 } else { 5 });
+        assert!(lines[0].starts_with("automation cache-family-run prepare-full --input "));
+        assert!(lines[0].contains("--prefix-tokens 128 --runtime-lane-count 1 --llama-parallel 1 --llama-repeats 3 --cache-hit-repeats 3"));
+        assert!(lines[2].starts_with("automation cache-family-run prepare-use-cases --input "));
+        if !fail {
+            assert!(lines[4].starts_with("automation cache-family-report --input "));
+            assert!(lines[4].contains("/full-gguf/production-cache-bench.json --input "));
+            assert!(lines[4].contains("/use-cases/production-cache-bench.json --use-case-corpus "));
+        }
+        fixture.directory.close().unwrap();
+    }
+}
+
+#[test]
+fn cache_operator_actual_minimax_snapshot_links_preserve_runtime_shard_and_sibling_pins() {
+    use std::os::unix::fs::symlink;
+    let fixture = Fixture::new();
+    let mut operator = operator_input(&fixture);
+    let catalog: Value = serde_json::from_str(include_str!(
+        "../../src/automation/cache_family_plan/catalog.json"
+    ))
+    .unwrap();
+    let case = catalog
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|case| case["key"] == "minimax_m27")
+        .unwrap();
+    let cache = PathBuf::from(operator["plan"]["cache_root"].as_str().unwrap());
+    let first = cache.join(case["snapshot_relative"].as_str().unwrap());
+    fs::create_dir_all(first.parent().unwrap()).unwrap();
+    let blobs = cache.join("blobs");
+    fs::create_dir(&blobs).unwrap();
+    let mut pins = serde_json::Map::new();
+    for i in 1..=3 {
+        let bytes = format!("supplied inert MiniMax shard {i}");
+        let blob = blobs.join(hash(bytes.as_bytes()));
+        fs::write(&blob, bytes.as_bytes()).unwrap();
+        let name = format!("MiniMax-M2.7-UD-Q2_K_XL-{i:05}-of-00003.gguf");
+        symlink(&blob, first.parent().unwrap().join(&name)).unwrap();
+        pins.insert(name, json!(hash(bytes.as_bytes())));
+    }
+    operator["plan"]["cases"] = json!(["minimax_m27"]);
+    operator["plan"]["model_sha256"] =
+        json!({"minimax_m27":pins[first.file_name().unwrap().to_str().unwrap()]});
+    operator["artifact_tool"] = json!(fixture.root.join("native"));
+    let input = fixture.root.join("operator.json");
+    fs::write(&input, serde_json::to_vec(&operator).unwrap()).unwrap();
+    let prepared = fixture.root.join("prepared");
+    let result = invoke(
+        &preparation_spec(&fixture, &input, &prepared, "prepare-full"),
+        &Cancellation::default(),
+    );
+    assert!(result.success());
+    let value: Value =
+        serde_json::from_slice(&fs::read(prepared.join("cache-family-input.json")).unwrap())
+            .unwrap();
+    let profile = &value["profiles"]["minimax_m27"];
+    assert_ne!(first, first.canonicalize().unwrap());
+    assert_eq!(profile["correctness"]["model"], json!(first));
+    assert_eq!(
+        profile["correctness"]["artifact"]["shard_pins"],
+        json!(pins)
+    );
+    for arm in ["native", "old", "new"] {
+        assert_eq!(profile[arm]["model"], json!(first));
+        assert_eq!(profile[arm]["artifact"], profile["correctness"]["artifact"]);
+    }
+    fixture.directory.close().unwrap();
+}
+
+#[test]
+fn cache_operator_actual_source_tree_output_refusal_precedes_any_mutation() {
+    for kind in ["build", "cache", "toolkit"] {
+        let fixture = Fixture::new();
+        let mut operator = operator_input(&fixture);
+        let mut source = PathBuf::from(
+            operator[if kind == "cache" {
+                "plan"
+            } else {
+                "native_build"
+            }]
+            .as_str()
+            .unwrap_or_else(|| operator["plan"]["cache_root"].as_str().unwrap()),
+        );
+        if kind == "toolkit" {
+            source = fixture.root.join("independent-toolkit");
+            fs::create_dir(&source).unwrap();
+            fs::write(source.join("version.txt"), b"pinned inert toolkit").unwrap();
+            operator["toolkit_directories"] =
+                json!({"CUDA_PATH":{"path":source,"sha256":"a".repeat(64)}});
+        }
+        let output = source.join("must-not-create");
+        let before = fs::read_dir(&source).unwrap().count();
+        let input = fixture.root.join("operator.json");
+        fs::write(&input, serde_json::to_vec(&operator).unwrap()).unwrap();
+        let result = invoke(
+            &preparation_spec(&fixture, &input, &output, "prepare-full"),
+            &Cancellation::default(),
+        );
+        assert_eq!(result.status.and_then(|s| s.code()), Some(1));
+        assert!(!output.exists());
+        assert_eq!(fs::read_dir(&source).unwrap().count(), before);
+        if kind == "toolkit" {
+            assert_eq!(
+                fs::read(source.join("version.txt")).unwrap(),
+                b"pinned inert toolkit"
+            );
+        }
+        fixture.directory.close().unwrap();
+    }
+}

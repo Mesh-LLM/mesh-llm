@@ -371,24 +371,7 @@
     },
     {
       "file": "evals/skippy-cache-family-bench.sh",
-      "members": [
-        [
-          45,
-          "7cb16c057dc35a94",
-          1,
-          "execution",
-          "evals/skippy-cache-production-bench.py",
-          "Optional full-GGUF benchmark in repo root; writes benchmark JSON under selected output dir; nonzero aborts shell"
-        ],
-        [
-          49,
-          "7cb16c057dc35a94",
-          2,
-          "execution",
-          "evals/skippy-cache-production-bench.py",
-          "Second use-case benchmark invocation with distinct options/output"
-        ]
-      ]
+      "members": []
     },
     {
       "file": ".agents/skills/hf-gguf-quant-jobs/SKILL.md",
@@ -516,24 +499,7 @@
     },
     {
       "file": ".agents/skills/skippy-cache-family-bench/SKILL.md",
-      "members": [
-        [
-          42,
-          "1454bb892209a0a3",
-          1,
-          "instruction",
-          "evals/skippy-cache-production-bench.py",
-          "Manual LLAMA_STAGE_BUILD_DIR=... python3 benchmark --output-dir /tmp/skippy-cache-family-bench/full-gguf --runtime-lane-count 1 --llama-parallel 1 --prefix-tokens 128; optional benchmark writes results"
-        ],
-        [
-          53,
-          "1454bb892209a0a3",
-          2,
-          "instruction",
-          "evals/skippy-cache-production-bench.py",
-          "Manual same benchmark --output-dir /tmp/skippy-cache-family-bench/use-cases --use-case all; distinct invocation and output"
-        ]
-      ]
+      "members": []
     },
     {
       "file": "ci/ownership.yml",
@@ -18400,5 +18366,190 @@
         "limits": "Complete local current retirement normal only; no HF/native/model/Windows/hosted qualification."
       }
     }
+  },
+  "cache_family_operator_active_reconciliation": {
+    "schema_version": 1,
+    "status": "source_reconciled_execution_receipt_pending",
+    "scope": "Applied optional operator wrapper and skill only; no producer/importer deletion, core retirement or backend/model qualification.",
+    "source_bindings": [
+      {
+        "path": "evals/skippy-cache-family-bench.sh",
+        "sha256": "b5b879a4a4ab7cc77b73c8e1e97f01e9f5bc40ae0d0bd620fda699410956869e",
+        "line_count": 33,
+        "mode": 493
+      },
+      {
+        "path": ".agents/skills/skippy-cache-family-bench/SKILL.md",
+        "sha256": "de4dd7d3803d24fb5a07b69a23d9c32c84f41d4b3e62e720ff2fb28791e47d25",
+        "line_count": 109,
+        "mode": 420
+      }
+    ],
+    "removed_active_groups": [
+      {
+        "file": "evals/skippy-cache-family-bench.sh",
+        "members": [
+          [
+            45,
+            "7cb16c057dc35a94",
+            1,
+            "execution",
+            "evals/skippy-cache-production-bench.py",
+            "Optional full-GGUF benchmark in repo root; writes benchmark JSON under selected output dir; nonzero aborts shell"
+          ],
+          [
+            49,
+            "7cb16c057dc35a94",
+            2,
+            "execution",
+            "evals/skippy-cache-production-bench.py",
+            "Second use-case benchmark invocation with distinct options/output"
+          ]
+        ]
+      },
+      {
+        "file": ".agents/skills/skippy-cache-family-bench/SKILL.md",
+        "members": [
+          [
+            42,
+            "1454bb892209a0a3",
+            1,
+            "instruction",
+            "evals/skippy-cache-production-bench.py",
+            "Manual LLAMA_STAGE_BUILD_DIR=... python3 benchmark --output-dir /tmp/skippy-cache-family-bench/full-gguf --runtime-lane-count 1 --llama-parallel 1 --prefix-tokens 128; optional benchmark writes results"
+          ],
+          [
+            53,
+            "1454bb892209a0a3",
+            2,
+            "instruction",
+            "evals/skippy-cache-production-bench.py",
+            "Manual same benchmark --output-dir /tmp/skippy-cache-family-bench/use-cases --use-case all; distinct invocation and output"
+          ]
+        ]
+      }
+    ],
+    "native_dispatches": [
+      {
+        "file": "evals/skippy-cache-family-bench.sh",
+        "line": 26,
+        "source_block": "\"${automation[@]}\" automation cache-family-run prepare-full --input \"$SKIPPY_CACHE_OPERATOR_INPUT\" --output \"$OUTPUT_DIR/full-input\" \"${COMMON_ARGS[@]}\"",
+        "owner": "tools/xtask/src/automation/cache_family_run.rs",
+        "phase": "prepare-full"
+      },
+      {
+        "file": "evals/skippy-cache-family-bench.sh",
+        "line": 27,
+        "source_block": "\"${automation[@]}\" automation cache-family-run --input \"$OUTPUT_DIR/full-input/cache-family-input.json\" --output \"$OUTPUT_DIR/full-gguf\"",
+        "owner": "tools/xtask/src/automation/cache_family_run.rs",
+        "phase": "full-matrix"
+      },
+      {
+        "file": "evals/skippy-cache-family-bench.sh",
+        "line": 28,
+        "source_block": "\"${automation[@]}\" automation cache-family-run prepare-use-cases --input \"$SKIPPY_CACHE_OPERATOR_INPUT\" --output \"$OUTPUT_DIR/usecase-input\" \"${COMMON_ARGS[@]}\"",
+        "owner": "tools/xtask/src/automation/cache_family_run.rs",
+        "phase": "prepare-use-cases"
+      },
+      {
+        "file": "evals/skippy-cache-family-bench.sh",
+        "line": 29,
+        "source_block": "\"${automation[@]}\" automation cache-family-run --input \"$OUTPUT_DIR/usecase-input/cache-family-input.json\" --output \"$OUTPUT_DIR/use-cases\"",
+        "owner": "tools/xtask/src/automation/cache_family_run.rs",
+        "phase": "all-use-case-matrix"
+      },
+      {
+        "file": "evals/skippy-cache-family-bench.sh",
+        "line": 30,
+        "source_block": "\"${automation[@]}\" automation cache-family-report --input \"$OUTPUT_DIR/full-gguf/production-cache-bench.json\" --input \"$OUTPUT_DIR/use-cases/production-cache-bench.json\" --use-case-corpus \"$USECASE_CORPUS\" --output \"$OUTPUT_DIR/readme-tables.md\"",
+        "owner": "tools/xtask/src/automation/cache_family_report.rs",
+        "phase": "combined-report"
+      }
+    ],
+    "operator_manifest": {
+      "path": ".omo/evidence/resume-20261002/cache-family-operator-current-format-rebind-v1/manifest-v1.json",
+      "sha256": "a49a35c7795514aafc1ee0fb5a2cebe4f913db3d73735c7fd8b22102ba603a0a"
+    },
+    "required_selections": [
+      {
+        "name": "cache_preparation_guard_refuses_cancelled_and_expired_file_observation",
+        "path": "tools/xtask/src/automation/cache_family_run/preparation.rs",
+        "source_sha256": "eeaa8f4d81ad3f34a448830493e294836d4040d23de1e5314f8a5a64cfb6664f",
+        "package": "xtask",
+        "target": "bin",
+        "selector": "automation::cache_family_run::preparation::tests::cache_preparation_guard_refuses_cancelled_and_expired_file_observation",
+        "observed_positive": null
+      },
+      {
+        "name": "cache_preparation_final_publication_revokes_owned_input_on_late_cancel_deadline",
+        "path": "tools/xtask/src/automation/cache_family_run/preparation.rs",
+        "source_sha256": "eeaa8f4d81ad3f34a448830493e294836d4040d23de1e5314f8a5a64cfb6664f",
+        "package": "xtask",
+        "target": "bin",
+        "selector": "automation::cache_family_run::preparation::publication_tests::cache_preparation_final_publication_revokes_owned_input_on_late_cancel_deadline",
+        "observed_positive": null
+      },
+      {
+        "name": "cache_operator_actual_preparation_observes_pins_and_runs_complete_inert_producer",
+        "path": "tools/xtask/tests/migration_lifecycle/cache_family_full_matrix_cli.rs",
+        "source_sha256": "6dfa9d289f99f9d4e4d000fba33188153fbeb0d8cb8f67c2db07effd340c2d2a",
+        "package": "xtask",
+        "target": "migration_lifecycle",
+        "selector": "cache_family_full_matrix_cli::cache_operator_actual_preparation_observes_pins_and_runs_complete_inert_producer",
+        "observed_positive": null
+      },
+      {
+        "name": "cache_operator_actual_usecase_all_and_optional_pair_missing_model_selection",
+        "path": "tools/xtask/tests/migration_lifecycle/cache_family_full_matrix_cli.rs",
+        "source_sha256": "6dfa9d289f99f9d4e4d000fba33188153fbeb0d8cb8f67c2db07effd340c2d2a",
+        "package": "xtask",
+        "target": "migration_lifecycle",
+        "selector": "cache_family_full_matrix_cli::cache_operator_actual_usecase_all_and_optional_pair_missing_model_selection",
+        "observed_positive": null
+      },
+      {
+        "name": "cache_operator_actual_mismatched_pin_and_fifo_refuse_eligible_input",
+        "path": "tools/xtask/tests/migration_lifecycle/cache_family_full_matrix_cli.rs",
+        "source_sha256": "6dfa9d289f99f9d4e4d000fba33188153fbeb0d8cb8f67c2db07effd340c2d2a",
+        "package": "xtask",
+        "target": "migration_lifecycle",
+        "selector": "cache_family_full_matrix_cli::cache_operator_actual_mismatched_pin_and_fifo_refuse_eligible_input",
+        "observed_positive": null
+      },
+      {
+        "name": "cache_operator_actual_wrapper_full_usecase_report_and_failure_dispatch",
+        "path": "tools/xtask/tests/migration_lifecycle/cache_family_full_matrix_cli.rs",
+        "source_sha256": "6dfa9d289f99f9d4e4d000fba33188153fbeb0d8cb8f67c2db07effd340c2d2a",
+        "package": "xtask",
+        "target": "migration_lifecycle",
+        "selector": "cache_family_full_matrix_cli::cache_operator_actual_wrapper_full_usecase_report_and_failure_dispatch",
+        "observed_positive": null
+      },
+      {
+        "name": "cache_operator_actual_minimax_snapshot_links_preserve_runtime_shard_and_sibling_pins",
+        "path": "tools/xtask/tests/migration_lifecycle/cache_family_full_matrix_cli.rs",
+        "source_sha256": "6dfa9d289f99f9d4e4d000fba33188153fbeb0d8cb8f67c2db07effd340c2d2a",
+        "package": "xtask",
+        "target": "migration_lifecycle",
+        "selector": "cache_family_full_matrix_cli::cache_operator_actual_minimax_snapshot_links_preserve_runtime_shard_and_sibling_pins",
+        "observed_positive": null
+      },
+      {
+        "name": "cache_operator_actual_source_tree_output_refusal_precedes_any_mutation",
+        "path": "tools/xtask/tests/migration_lifecycle/cache_family_full_matrix_cli.rs",
+        "source_sha256": "6dfa9d289f99f9d4e4d000fba33188153fbeb0d8cb8f67c2db07effd340c2d2a",
+        "package": "xtask",
+        "target": "migration_lifecycle",
+        "selector": "cache_family_full_matrix_cli::cache_operator_actual_source_tree_output_refusal_precedes_any_mutation",
+        "observed_positive": null
+      }
+    ],
+    "actual_run_receipt": null,
+    "reported_root_run": "Root reported session33712: all eight new attrs passed; whole batch exit101 from older report-wrapper source extraction. No exact terminal log bound here.",
+    "remaining": [
+      "Preserve producer and importer ownership until separate full original-intent cutover.",
+      "Real current model/backend/native measurements remain external qualification.",
+      "Root must qualify repaired existing report-wrapper fixture."
+    ]
   }
 }
