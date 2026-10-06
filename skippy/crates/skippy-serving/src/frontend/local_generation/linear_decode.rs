@@ -436,6 +436,7 @@ mod tests {
             ngram_max: 0,
             speculative: speculative.clone(),
             speculation_governor: None,
+            runahead_governor: None,
             generation_limit: Arc::new(GenerationConcurrencyController::fixed(1)),
             generation_queue_depth: Arc::new(AtomicUsize::new(0)),
             generation_queue_limit: 1,

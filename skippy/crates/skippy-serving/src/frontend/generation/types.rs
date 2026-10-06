@@ -69,6 +69,10 @@ pub(in crate::frontend) struct StageOpenAiBackend {
     /// keep. `None` leaves the resolved plan's setting in force unconditionally.
     pub(in crate::frontend) speculation_governor:
         Option<std::sync::Arc<crate::frontend::speculation_gate::SpeculationGovernor>>,
+    /// Searches for the run-ahead budget when the plan states `auto` instead of
+    /// a number. `None` leaves the plan's own figure in force.
+    pub(in crate::frontend) runahead_governor:
+        Option<std::sync::Arc<crate::frontend::runahead_search::RunaheadGovernor>>,
     pub(in crate::frontend) generation_limit: Arc<GenerationConcurrencyController>,
     pub(in crate::frontend) generation_queue_depth: Arc<AtomicUsize>,
     pub(in crate::frontend) generation_queue_limit: usize,

@@ -163,11 +163,14 @@ fn compose_interactive(config: &mut plugin::MeshConfig, plan: &mut StrategyPlan)
     }
 
     if speculative.verify_window_runahead_tokens.is_none() {
-        speculative.verify_window_runahead_tokens = Some(RUNAHEAD_TOKENS);
+        speculative.verify_window_runahead_tokens = Some(mesh_llm_config::IntegerOrString::String(
+            RUNAHEAD_ADMISSION.to_string(),
+        ));
         plan.note_applied(
             "defaults.speculative.verify_window_runahead_tokens",
-            RUNAHEAD_TOKENS.to_string(),
-            "run-ahead admission beat every fixed depth in #1409, clean and jittered",
+            RUNAHEAD_ADMISSION.to_string(),
+            "the budget is measured per deployment: it is a loss at near-zero RTT and \
+             does not scale with it, so no fixed number is right",
         );
     } else {
         plan.note_declined(
@@ -262,11 +265,23 @@ fn compose_throughput(
     }
 }
 
-/// Run-ahead speculative-token budget for `interactive`.
+/// Run-ahead admission for `interactive`: searched, not stated.
 ///
-/// 96 is the budget #1409 measured at 108.3 tok/s; the native
-/// checkpoint-retention bound caps the window count above it.
-const RUNAHEAD_TOKENS: u32 = 96;
+/// This was `96`, from #1409's 108.3 tok/s. Two-box measurement on #2112 does
+/// not support composing any fixed number:
+///
+/// - At near-zero RTT a budget of 96 is a 2.7% **loss** against fixed-depth
+///   admission. #1409's runs were loopback-only by their own admission.
+/// - The optimum does not move with RTT — it sat at 192 tokens at both 25ms
+///   and 50ms of conditioned one-way delay — so the derivation this issue
+///   originally proposed, `RTT x decode rate`, has no slope to fit.
+/// - Too small is worse than nothing: 48 tokens lost 10%, a bigger loss than
+///   guessing too high costs.
+///
+/// So the strategy states the intent and the per-deployment search in
+/// `skippy-serving`'s `runahead_search` finds the rung. Composing 192 instead
+/// would just be this lab's cut and this lab's pair written into the product.
+const RUNAHEAD_ADMISSION: &str = "auto";
 
 /// Decode-wave groups for `throughput`. 4 lanes in 2 groups is #1935's arm; its
 /// own 6 lanes / 3 groups measurement was slower, at 27.66.
@@ -419,7 +434,7 @@ mod tests {
     }
 
     #[test]
-    fn interactive_speculates_with_a_runahead_budget_and_no_batching() {
+    fn interactive_speculates_with_a_searched_runahead_budget_and_no_batching() {
         let mut config = plugin::MeshConfig::default();
         apply_serving_strategy(
             &mut config,
@@ -429,7 +444,14 @@ mod tests {
 
         let (throughput, speculative) = defaults(&config);
         assert_eq!(speculative.strategy.as_deref(), Some("ngram-suffix"));
-        assert_eq!(speculative.verify_window_runahead_tokens, Some(96));
+        // "auto", not a number. A composed figure would be this lab's; the
+        // measured curve has an interior optimum that does not move with RTT,
+        // so the budget is searched per deployment instead. See
+        // RUNAHEAD_ADMISSION.
+        assert_eq!(
+            speculative.verify_window_runahead_tokens,
+            Some(mesh_llm_config::IntegerOrString::String("auto".to_string()))
+        );
         assert_eq!(
             throughput.last_stage_decode_batch,
             Some(BoolOrAuto::Bool(false))

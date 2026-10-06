@@ -443,6 +443,7 @@ mod tests {
                 max_tokens: 6,
                 pipeline_depth: 2,
                 runahead_max_tokens: 0,
+                runahead_auto: false,
             },
             ..SpeculativeDecodeConfig::default()
         }
