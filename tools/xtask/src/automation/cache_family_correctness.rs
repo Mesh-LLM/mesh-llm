@@ -7,6 +7,8 @@ pub(in crate::automation) mod artifact;
 mod batch;
 #[path = "cache_family_correctness/catalog.rs"]
 mod catalog;
+#[path = "cache_family_correctness/final_publication.rs"]
+mod final_publication;
 #[path = "cache_family_correctness/report.rs"]
 mod report;
 #[cfg(test)]
@@ -78,24 +80,22 @@ pub(crate) fn run(args: &[String]) -> DynResult<()> {
     let interrupt = crate::automation::command_interrupt::Interrupt::install()?;
     let cancellation = interrupt.cancellation();
     let result = execute(&input, &output, &cancellation);
-    let finish = interrupt.finish();
     let mut value = result?;
-    finalize(
+    final_publication::finish(
         &mut value,
-        cancellation.is_cancelled(),
-        Instant::now() >= terminal_deadline,
-        finish.is_ok(),
-    );
-    publish(&output.join("cache-correctness-stage.json"), &value)?;
-    finish?;
-    writeln!(
-        std::io::stdout().lock(),
-        "{}",
-        serde_json::to_string(&json!({
-            "schema_version": 1,
-            "status": value["status"],
-            "report": "cache-correctness-stage.json"
-        }))?
+        &output.join("cache-correctness-stage.json"),
+        terminal_deadline,
+        interrupt,
+        &mut |value| {
+            writeln!(
+                std::io::stdout().lock(),
+                "{}",
+                serde_json::to_string(&json!({
+                    "schema_version": 1, "status": value["status"], "report": "cache-correctness-stage.json"
+                }))?
+            )?;
+            Ok(())
+        },
     )?;
     if value["status"] != "completed" {
         return Err("cache correctness stage incomplete/failed; partial evidence retained".into());

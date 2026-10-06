@@ -21,9 +21,10 @@ Linux measurements, provider isolation or protected rollout.
 
 L12 local reconciliation preserves the five PR/main entrypoints and protected
 executor boundaries. Quality runs Rust workflow permission, container-shell and
-expression guards plus the real build-script adapter tests. Surviving transitional
-contract modules are enumerated by `just ci-legacy-contracts`; automatic test
-discovery is removed. SDK compatibility, blocked control-plane callers and live
+expression guards plus the real build-script adapter tests. The native Windows
+focused owner remains selected by `just ci-legacy-contracts`; unused Quality
+interpreter setup and CI requirement installation are removed. SDK compatibility,
+blocked control-plane callers and live
 canary coverage still require their existing environments. This is not a claim
 that the required graph has no interpreter dependency.
 

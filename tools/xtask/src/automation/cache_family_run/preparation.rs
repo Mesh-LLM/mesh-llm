@@ -1,4 +1,6 @@
 //! Local observations construct existing typed producer requests; no build/download.
+#[path = "preparation_publication.rs"]
+mod final_publication;
 use super::{contract, hash};
 use crate::{
     command::DynResult,
@@ -322,14 +324,16 @@ pub(super) fn worker(path: &Path, output: &Path) -> DynResult<()> {
         cancel: &cancel,
     };
     let value = materialize(&mut request, directory, &budget);
-    let finish = interrupt.finish();
     let value = value?;
-    finish?;
     budget.guard()?;
+    let observation = json!({"request_sha256":hash(&bytes),"input":value,"scope":"observed_local_bytes_and_declared_source_commits_not_build_attestation"});
+    // A nonfinal checkpoint retains observed identities even when final admission revokes the candidate.
     super::publish(
-        output,
-        &json!({"request_sha256":hash(&bytes),"input":value,"scope":"observed_local_bytes_and_declared_source_commits_not_build_attestation"}),
-    )
+        &output.with_extension("partial.json"),
+        &json!({"publication_state":"pending", "observation":observation}),
+    )?;
+    let candidate = serde_json::to_vec_pretty(&observation)?;
+    final_publication::finish(output, &candidate, budget.until, interrupt, &mut || Ok(()))
 }
 pub(super) fn run(args: &[String], use_cases: bool) -> DynResult<()> {
     let [a, input, b, output, overrides @ ..] = args else {
@@ -370,9 +374,7 @@ pub(super) fn run(args: &[String], use_cases: bool) -> DynResult<()> {
         parsed.operator.preparation_seconds,
         &cancel,
     );
-    let finish = interrupt.finish();
     let process = result?;
-    finish?;
     if !process.success()
         || process.cleanup.forced
         || !process.cleanup.complete
@@ -395,18 +397,12 @@ pub(super) fn run(args: &[String], use_cases: bool) -> DynResult<()> {
     let value: contract::Input = serde_json::from_value(observed["input"].clone())?;
     value.validate()?;
     let bytes = serde_json::to_vec_pretty(&value)?;
-    publish_eligible(
+    final_publication::finish(
         &Path::new(output).join("cache-family-input.json"),
         &bytes,
-        &mut || {
-            Budget {
-                until: deadline,
-                cancel: &cancel,
-            }
-            .guard()
-            .map_err(Into::into)
-        },
-        &mut |path, bytes| crate::automation::waiting_prefix::adaptive_identity::fresh(path, bytes),
+        deadline,
+        interrupt,
+        &mut || Ok(()),
     )
 }
 
@@ -482,21 +478,6 @@ fn admit_output(operator: &Operator, output: &Path) -> DynResult<()> {
     }
     Ok(())
 }
-fn publish_eligible(
-    path: &Path,
-    bytes: &[u8],
-    guard: &mut impl FnMut() -> DynResult<()>,
-    writer: &mut impl FnMut(&Path, &[u8]) -> DynResult<()>,
-) -> DynResult<()> {
-    guard()?;
-    writer(path, bytes)?;
-    if let Err(error) = guard() {
-        std::fs::remove_file(path)?;
-        return Err(error);
-    }
-    Ok(())
-}
-
 fn supervise_worker(
     path: &Path,
     receipt: &Path,
@@ -546,6 +527,9 @@ mod tests {
     use super::*;
     #[test]
     fn cache_preparation_guard_refuses_cancelled_and_expired_file_observation() {
+        for mode in ["pre-cancel", "deadline"] {
+            final_publication::tests::assert_publication_mode(mode);
+        }
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("tool");
         std::fs::write(&path, b"observed bytes").unwrap();
@@ -575,42 +559,8 @@ mod publication_tests {
     use super::*;
     #[test]
     fn cache_preparation_final_publication_revokes_owned_input_on_late_cancel_deadline() {
-        for reason in ["cancelled", "deadline"] {
-            let directory = tempfile::tempdir().unwrap();
-            let path = directory.path().join("eligible.json");
-            let mut calls = 0;
-            let result = publish_eligible(
-                &path,
-                b"candidate",
-                &mut || {
-                    calls += 1;
-                    if calls == 2 {
-                        Err(reason.into())
-                    } else {
-                        Ok(())
-                    }
-                },
-                &mut |p, b| crate::automation::waiting_prefix::adaptive_identity::fresh(p, b),
-            );
-            assert!(result.is_err());
-            assert_eq!(calls, 2);
-            assert!(!path.exists());
+        for mode in ["cancel", "late-deadline", "foreign", "success"] {
+            final_publication::tests::assert_publication_mode(mode);
         }
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("existing.json");
-        std::fs::write(&path, b"outside candidate").unwrap();
-        assert!(
-            publish_eligible(&path, b"replacement", &mut || Ok(()), &mut |p, b| {
-                crate::automation::waiting_prefix::adaptive_identity::fresh(p, b)
-            })
-            .is_err()
-        );
-        assert_eq!(std::fs::read(&path).unwrap(), b"outside candidate");
-        let path = directory.path().join("success.json");
-        publish_eligible(&path, b"candidate", &mut || Ok(()), &mut |p, b| {
-            crate::automation::waiting_prefix::adaptive_identity::fresh(p, b)
-        })
-        .unwrap();
-        assert_eq!(std::fs::read(&path).unwrap(), b"candidate");
     }
 }

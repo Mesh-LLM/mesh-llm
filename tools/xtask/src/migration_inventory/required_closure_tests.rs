@@ -22,43 +22,30 @@ fn check(root: &Path, files: &[&str], roots: &[&str]) -> DynResult<()> {
 }
 
 #[test]
-fn required_closure_allows_source_owned_unittest_but_rejects_new_inline() -> DynResult<()> {
+fn required_closure_accepts_native_quality_but_rejects_new_inline() -> DynResult<()> {
     // Given the checked-in Just recipe and its independently checked shard ownership.
     let repo = crate::repo_consistency::repo_root()?;
     let paths = super::ledger::tracked_paths(&repo)?;
     let observed = scan::scan_paths(&repo, &paths)?;
     let owned = super::shards::check_shards(&repo, &observed)?;
-    let baseline = observed
-        .iter()
-        .find(|row| {
-            row.path == "just/ci.just" && row.source_block.starts_with("python3 -m unittest")
-        })
-        .ok_or("missing checked-in unittest candidate")?;
-    assert!(owned.contains(&baseline.id));
-    // When the required recipe is checked, then its owned Python call is transitional.
+    assert!(!observed.iter().any(|row| {
+        row.path == "just/ci.just" && row.source_block.starts_with("python3 -m unittest")
+    }));
+    // The actual native recipe remains admissible after the legacy suite is retired.
     check_required_closure(&repo, &paths, &observed, &owned, &["just/ci.just"])?;
 
-    // Given the same owned source ID but a newly inserted required inline call.
+    // Ownership from the current repository must not authorize a newly inserted call.
     let root = crate::command::unique_temp_dir("closure-transitional");
     source(
         &root,
         "just/ci.just",
-        &format!(
-            "ci-validate:\n    {}\n    python3 -c 'print(1)'\n",
-            baseline.source_block
-        ),
+        "ci-validate:\n    python3 -c 'print(1)'\n",
     )?;
     let paths = vec!["just/ci.just".to_owned()];
     let observed = scan::scan_paths(&root, &paths)?;
-    // When checked with only the verified baseline ID, the new call fails.
-    let error = check_required_closure(
-        &root,
-        &paths,
-        &observed,
-        &BTreeSet::from([baseline.id.clone()]),
-        &["just/ci.just"],
-    )
-    .unwrap_err();
+    // When checked with all actual verified IDs, the new call still fails.
+    let error =
+        check_required_closure(&root, &paths, &observed, &owned, &["just/ci.just"]).unwrap_err();
     assert!(error.to_string().contains("inline Python"), "{error}");
     fs::remove_dir_all(root)?;
     Ok(())

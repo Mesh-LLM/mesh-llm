@@ -56,7 +56,9 @@
       "path": ".github/AGENTS.md",
       "classification": "actionable",
       "owner": "CI maintainers",
-      "old_commands": [],
+      "old_commands": [
+
+      ],
       "replacement_owner": "tools/xtask ci_validation and checked workflow contracts",
       "cutover_task": 5,
       "actionability": "actionable CI procedures and ownership policy; no direct interpreter invocation",
@@ -66,7 +68,9 @@
       "path": "website/AGENTS.md",
       "classification": "prose_only",
       "owner": "website maintainers",
-      "old_commands": [],
+      "old_commands": [
+
+      ],
       "replacement_owner": "none; web build remains npm/Just owned",
       "cutover_task": 5,
       "actionability": "web development guidance, no Python automation invocation",
@@ -89,7 +93,9 @@
       "path": "crates/mesh-llm-ui/AGENTS.md",
       "classification": "prose_only",
       "owner": "console maintainers",
-      "old_commands": [],
+      "old_commands": [
+
+      ],
       "replacement_owner": "none; TypeScript tests/build remain npm/Just owned",
       "cutover_task": 5,
       "actionability": "UI setup/test/build guidance, no Python command",
@@ -99,7 +105,9 @@
       "path": "crates/skippy-protocol/AGENTS.md",
       "classification": "prose_only",
       "owner": "skippy-protocol maintainers",
-      "old_commands": [],
+      "old_commands": [
+
+      ],
       "replacement_owner": "Rust crate tests",
       "cutover_task": 5,
       "actionability": "protocol change policy only",
@@ -110,25 +118,35 @@
       "classification": "actionable",
       "owner": "skippy-scheduler maintainers",
       "old_commands": [
-        "evals/skippy-competitive-benchmark.py workload"
+
       ],
-      "replacement_owner": "tools/xtask benchmark orchestration with scheduler-owned Rust bench and evidence",
+      "replacement_owner": "Existing competitive prepared plan/run/report and native acquisition owners",
       "cutover_task": 5,
       "actionability": "performance validation directs to a Python benchmark",
-      "unresolved": true
+      "unresolved": false,
+      "historical_old_commands": [
+        "evals/skippy-competitive-benchmark.py workload"
+      ],
+      "native_caller": "cargo xtool automation replay-matrix competitive-run --input /absolute/prepared.json",
+      "source_sha256": "94857fe82a7932ca9891c45787bfc69e4246766b87e0dbcce5a29f61f12a24f5"
     },
     {
       "path": "crates/skippy-cache/AGENTS.md",
       "classification": "actionable",
       "owner": "skippy-cache maintainers",
       "old_commands": [
+        "evals/skippy-cache-family-bench.sh <artifact-dir>"
+      ],
+      "replacement_owner": "Existing competitive prepared plan/run/report and native acquisition owners",
+      "cutover_task": 5,
+      "actionability": "shell entrypoint invokes Python-backed benchmark and another Python benchmark",
+      "unresolved": false,
+      "historical_old_commands": [
         "evals/skippy-cache-family-bench.sh <artifact-dir>",
         "evals/skippy-competitive-benchmark.py workload"
       ],
-      "replacement_owner": "tools/xtask benchmark orchestration with cache-owned Rust tests and evidence",
-      "cutover_task": 5,
-      "actionability": "shell entrypoint invokes Python-backed benchmark and another Python benchmark",
-      "unresolved": true
+      "native_caller": "cargo xtool automation replay-matrix competitive-run --input /absolute/prepared.json",
+      "source_sha256": "0d90a7beb74acc31e6e3ab70e740e7d6983934015b027cda4a2788162e9e700a"
     },
     {
       "path": ".agents/agents/release-validation.md",
@@ -152,7 +170,9 @@
       "path": ".agents/skills/README.md",
       "classification": "prose_only",
       "owner": "repo-local skill maintainers",
-      "old_commands": [],
+      "old_commands": [
+
+      ],
       "replacement_owner": "none",
       "cutover_task": 5,
       "actionability": "skill catalog and scope description",
@@ -186,13 +206,22 @@
       "replacement_owner": "tools/xtask ci_plan/evidence and native Rust test owners",
       "cutover_task": 5,
       "actionability": "implementation inventory contains concrete Python CI commands and named scripts",
-      "unresolved": true
+      "unresolved": true,
+      "native_windows_guidance": {
+        "source_sha256": "cb24922905d5bacda17ceb878908764124d7e6d46e1b31a12c878eeeac53872a",
+        "owner": "tools/xtask/tests/ci_runner_cache_contract/windows_composition/cfg_census.rs",
+        "owner_sha256": "21c3d353fcdf99be7345f21d438def53c89ddaa09e3995d31805bbd06cf5500d",
+        "policy": "Preserve direct-domain PR parity, main/manual-full Windows cadence and platform qualification distinction; no new routing exception.",
+        "historical_source_sha256": "5cf196a8135db474df46997a5f09be91a0c77b16039ff09e69f12eaa8e1135ec"
+      }
     },
     {
       "path": ".agents/skills/connect-agents/SKILL.md",
       "classification": "prose_only",
       "owner": "agent integration maintainers",
-      "old_commands": [],
+      "old_commands": [
+
+      ],
       "replacement_owner": "none",
       "cutover_task": 5,
       "actionability": "client setup guidance; no Python automation",
@@ -215,7 +244,9 @@
       "path": ".agents/skills/llama-patch-changes/SKILL.md",
       "classification": "prose_only",
       "owner": "llama.cpp patch maintainers",
-      "old_commands": [],
+      "old_commands": [
+
+      ],
       "replacement_owner": "native patch scripts and Just entrypoints; no Python command identified",
       "cutover_task": 5,
       "actionability": "patch queue procedures; command paths are shell/native",
@@ -238,7 +269,9 @@
       "path": ".agents/skills/remote-observable-process/SKILL.md",
       "classification": "prose_only",
       "owner": "operations maintainers",
-      "old_commands": [],
+      "old_commands": [
+
+      ],
       "replacement_owner": "none",
       "cutover_task": 5,
       "actionability": "process observation guidance; no Python invocation",
@@ -284,7 +317,9 @@
       "path": ".agents/skills/deploy-windows/SKILL.md",
       "classification": "prose_only",
       "owner": "Windows deployment maintainers",
-      "old_commands": [],
+      "old_commands": [
+
+      ],
       "replacement_owner": "none",
       "cutover_task": 5,
       "actionability": "deployment guidance, no Python automation",
@@ -309,22 +344,12 @@
       "latest_review": "Typed public release inventory command replaces live instruction; all original release readiness, dirty-build, approved-host and publication boundaries preserved. Owning qualification remains root activation gate."
     },
     {
-      "path": ".agents/skills/release-validation/scripts/collect-release-inventory.py",
-      "classification": "actionable",
-      "owner": "release-validation maintainers",
-      "old_commands": [
-        "python3 collect-release-inventory.py"
-      ],
-      "replacement_owner": "tools/xtask release inventory command",
-      "cutover_task": 5,
-      "actionability": "skill-local executable generates raw release evidence",
-      "unresolved": true
-    },
-    {
       "path": ".agents/skills/release-validation/agents/openai.yaml",
       "classification": "prose_only",
       "owner": "release-validation maintainers",
-      "old_commands": [],
+      "old_commands": [
+
+      ],
       "replacement_owner": "none",
       "cutover_task": 5,
       "actionability": "agent prompt routes to the canonical skill; no command",
@@ -334,7 +359,9 @@
       "path": ".agents/skills/release-validation/references/evidence-and-gates.md",
       "classification": "prose_only",
       "owner": "release-validation maintainers",
-      "old_commands": [],
+      "old_commands": [
+
+      ],
       "replacement_owner": "none; retain human evidence matrix/readiness/defect criteria; executable release inventory and evidence collection migrate to tools/xtask",
       "cutover_task": 5,
       "actionability": "fully read: validation requirements and illustrative command-check categories, but no interpreter invocation or automation steps",
@@ -344,7 +371,9 @@
       "path": ".agents/skills/release-validation/assets/release-validation-report-template.md",
       "classification": "prose_only",
       "owner": "release-validation maintainers",
-      "old_commands": [],
+      "old_commands": [
+
+      ],
       "replacement_owner": "none; retain the human-authored report template populated using tools/xtask inventory/evidence outputs",
       "cutover_task": 5,
       "actionability": "fully read: blank report fields and tables for validator completion, no executable commands or automation procedure",
@@ -354,7 +383,9 @@
       "path": ".agents/skills/skippy-model-package/SKILL.md",
       "classification": "prose_only",
       "owner": "Skippy packaging maintainers",
-      "old_commands": [],
+      "old_commands": [
+
+      ],
       "replacement_owner": "Rust package CLI and tests",
       "cutover_task": 5,
       "actionability": "Cargo command guidance only",
@@ -364,7 +395,9 @@
       "path": ".agents/skills/skippy-prompt/SKILL.md",
       "classification": "prose_only",
       "owner": "Skippy prompt maintainers",
-      "old_commands": [],
+      "old_commands": [
+
+      ],
       "replacement_owner": "Rust/Just runtime commands",
       "cutover_task": 5,
       "actionability": "no Python command identified",
@@ -374,7 +407,9 @@
       "path": ".agents/skills/skippy-spec-bench/SKILL.md",
       "classification": "prose_only",
       "owner": "Skippy benchmark maintainers",
-      "old_commands": [],
+      "old_commands": [
+
+      ],
       "replacement_owner": "Rust/Just benchmark owners",
       "cutover_task": 5,
       "actionability": "no Python command identified in skill content checked",
@@ -384,7 +419,9 @@
       "path": ".agents/skills/skippy-metrics/SKILL.md",
       "classification": "prose_only",
       "owner": "Skippy telemetry maintainers",
-      "old_commands": [],
+      "old_commands": [
+
+      ],
       "replacement_owner": "Rust tests",
       "cutover_task": 5,
       "actionability": "Cargo test guidance only",
@@ -394,7 +431,9 @@
       "path": ".agents/skills/telemetry-privacy-review/SKILL.md",
       "classification": "prose_only",
       "owner": "telemetry maintainers",
-      "old_commands": [],
+      "old_commands": [
+
+      ],
       "replacement_owner": "Rust tests",
       "cutover_task": 5,
       "actionability": "Cargo test guidance only",
@@ -404,7 +443,9 @@
       "path": ".agents/skills/skippy-server/SKILL.md",
       "classification": "prose_only",
       "owner": "Skippy server maintainers",
-      "old_commands": [],
+      "old_commands": [
+
+      ],
       "replacement_owner": "Rust tests",
       "cutover_task": 5,
       "actionability": "Cargo test guidance only",
@@ -421,14 +462,14 @@
       "replacement_owner": "tools/xtask/src/automation/cache_family_run/preparation.rs, cache_family_run.rs and cache_family_report.rs via Just automation-run",
       "cutover_task": 5,
       "actionability": "Current literal native prepare-full/full-matrix/prepare-use-cases/all-use-case/report commands; historical Python examples retained only in old_commands.",
-      "unresolved": true,
+      "unresolved": false,
       "current_source_binding": {
         "path": ".agents/skills/skippy-cache-family-bench/SKILL.md",
         "sha256": "de4dd7d3803d24fb5a07b69a23d9c32c84f41d4b3e62e720ff2fb28791e47d25",
         "line_count": 109,
         "mode": 420
       },
-      "latest_review": "Actual applied wrapper and skill use native typed owners. Caller source is reconciled; complete batch/report fixture and actual model/backend qualification remain separate. No producer/importer retirement.",
+      "latest_review": "Native operator and persistent matrix, correctness batch, and MoE owners replace generic Python orchestration; actual model/backend performance remains separate. Historical old_commands preserved.",
       "native_commands": [
         {
           "phase": "prepare-full",
@@ -476,7 +517,9 @@
       "path": ".agents/skills/skippy-correctness/SKILL.md",
       "classification": "prose_only",
       "owner": "Skippy correctness maintainers",
-      "old_commands": [],
+      "old_commands": [
+
+      ],
       "replacement_owner": "Rust tests",
       "cutover_task": 5,
       "actionability": "Cargo tests only",
@@ -486,7 +529,9 @@
       "path": ".agents/skills/plugin-web-ui-extension/SKILL.md",
       "classification": "prose_only",
       "owner": "plugin web UI maintainers",
-      "old_commands": [],
+      "old_commands": [
+
+      ],
       "replacement_owner": "Rust/Just tests",
       "cutover_task": 5,
       "actionability": "Cargo and Just validation only",
@@ -496,7 +541,9 @@
       "path": ".agents/skills/skippy-family-certification/SKILL.md",
       "classification": "prose_only",
       "owner": "family certification maintainers",
-      "old_commands": [],
+      "old_commands": [
+
+      ],
       "replacement_owner": "Rust/Just certification owners",
       "cutover_task": 5,
       "actionability": "no Python command confirmed in reviewed content",
@@ -506,19 +553,25 @@
       "path": ".agents/skills/hf-quant-and-layer-package-jobs/SKILL.md",
       "classification": "actionable",
       "owner": "Hugging Face job maintainers",
-      "old_commands": [
-        "hf jobs uv run ..."
-      ],
-      "replacement_owner": "tools/xtask planning plus isolated Hugging Face job SDK entrypoint",
+      "old_commands": [],
+      "replacement_owner": "Native metadata/verification and existing artifact packaging owners; supported supplied quantizer Jobs orchestration pending",
       "cutover_task": 5,
-      "actionability": "remote HF Jobs project invocation",
-      "unresolved": true
+      "actionability": "Native artifact checks and conditional existing-artifact packaging guidance; no runnable quant Jobs launch",
+      "unresolved": true,
+      "current_source_binding": {
+        "path": ".agents/skills/hf-quant-and-layer-package-jobs/SKILL.md",
+        "sha256": "74fdf1fb481b2d37c0ffdba2b54830effc6a8a00429bd24f29e5bbb0499677f6",
+        "line_count": 157
+      },
+      "latest_review": "Removed unprovided external Python Job templates and unsupported current-tool memory/window examples. Supplied supported quantizer native Jobs orchestration remains pending; no execution, new exception or capability completion."
     },
     {
       "path": ".agents/skills/hf-quant-and-layer-package-jobs/agents/openai.yaml",
       "classification": "prose_only",
       "owner": "Hugging Face job maintainers",
-      "old_commands": [],
+      "old_commands": [
+
+      ],
       "replacement_owner": "none",
       "cutover_task": 5,
       "actionability": "prompt metadata only",
@@ -559,7 +612,9 @@
       "path": ".agents/skills/metrics-server/SKILL.md",
       "classification": "prose_only",
       "owner": "metrics-server maintainers",
-      "old_commands": [],
+      "old_commands": [
+
+      ],
       "replacement_owner": "Rust tests and binary",
       "cutover_task": 5,
       "actionability": "no Python command identified",
@@ -569,7 +624,9 @@
       "path": ".agents/skills/config-settings-management/SKILL.md",
       "classification": "prose_only",
       "owner": "configuration maintainers",
-      "old_commands": [],
+      "old_commands": [
+
+      ],
       "replacement_owner": "Rust tests and Just",
       "cutover_task": 5,
       "actionability": "Cargo/Just commands only",
@@ -579,19 +636,25 @@
       "path": ".agents/skills/hf-gguf-quant-jobs/SKILL.md",
       "classification": "actionable",
       "owner": "Hugging Face quantization maintainers",
-      "old_commands": [
-        "hf jobs uv run ..."
-      ],
-      "replacement_owner": "tools/xtask planning plus isolated Hugging Face job SDK entrypoint",
+      "old_commands": [],
+      "replacement_owner": "Native metadata/verification and existing artifact packaging owners; supported supplied quantizer Jobs orchestration pending",
       "cutover_task": 5,
-      "actionability": "remote HF Jobs project invocation",
-      "unresolved": true
+      "actionability": "Native artifact checks and conditional existing-artifact packaging guidance; no runnable quant Jobs launch",
+      "unresolved": true,
+      "current_source_binding": {
+        "path": ".agents/skills/hf-gguf-quant-jobs/SKILL.md",
+        "sha256": "dc394606bf90c028281633e4e3cd5406933cb0683ac10b464d41e9fe4c875f2d",
+        "line_count": 174
+      },
+      "latest_review": "Removed unprovided external Python Job templates and unsupported current-tool memory/window examples. Supplied supported quantizer native Jobs orchestration remains pending; no execution, new exception or capability completion."
     },
     {
       "path": ".agents/skills/hf-gguf-quant-jobs/agents/openai.yaml",
       "classification": "prose_only",
       "owner": "Hugging Face quantization maintainers",
-      "old_commands": [],
+      "old_commands": [
+
+      ],
       "replacement_owner": "none",
       "cutover_task": 5,
       "actionability": "prompt metadata only",
@@ -625,7 +688,9 @@
       "path": ".agents/skills/hf-bf16-gguf-conversion-jobs/agents/openai.yaml",
       "classification": "prose_only",
       "owner": "Hugging Face conversion maintainers",
-      "old_commands": [],
+      "old_commands": [
+
+      ],
       "replacement_owner": "none",
       "cutover_task": 5,
       "actionability": "prompt metadata only",
@@ -635,7 +700,9 @@
       "path": ".agents/skills/benchmark-tune/SKILL.md",
       "classification": "prose_only",
       "owner": "benchmark tune maintainers",
-      "old_commands": [],
+      "old_commands": [
+
+      ],
       "replacement_owner": "none; documented command surface is mesh-llm/Just, and Python appears only in referenced external/image context",
       "cutover_task": 5,
       "actionability": "read entire file; no Python interpreter/script automation examples, user-facing examples invoke mesh-llm and just",
@@ -645,7 +712,9 @@
       "path": ".agents/skills/benchmark-tune/agents/openai.yaml",
       "classification": "prose_only",
       "owner": "benchmark tune maintainers",
-      "old_commands": [],
+      "old_commands": [
+
+      ],
       "replacement_owner": "none",
       "cutover_task": 5,
       "actionability": "prompt metadata only",
@@ -655,7 +724,9 @@
       "path": ".agents/skills/manage-ci/agents/openai.yaml",
       "classification": "prose_only",
       "owner": "CI maintainers",
-      "old_commands": [],
+      "old_commands": [
+
+      ],
       "replacement_owner": "none",
       "cutover_task": 5,
       "actionability": "prompt metadata only",
@@ -677,7 +748,9 @@
       "path": ".github/instructions/pr.instructions.md",
       "classification": "prose_only",
       "owner": "repository maintainers",
-      "old_commands": [],
+      "old_commands": [
+
+      ],
       "replacement_owner": "none",
       "cutover_task": 5,
       "actionability": "PR communication instruction only",
@@ -694,7 +767,9 @@
     "source_snapshot": "Frozen source after provenance/package local qualification; pending full latest validation union",
     "python_paths": 196,
     "just_roster": 109,
-    "removed_edges": [],
+    "removed_edges": [
+
+    ],
     "limits": "Surviving generic quality roster, native smoke/oracle/manual protected and real required SDK/model/platform qualifications remain open; no exception or gate demotion."
   },
   "release_inventory_public_cutover": {
@@ -848,5 +923,165 @@
       "full_log_sha256": "cae5759b5d7ebe2a3dcff62fe4dfee2f605ec280e09a21e496f272dfea0bbfa6",
       "normal_log_sha256": "f540ad4ef0ffffdb702b732f4487689995e7f40cff42e9134dd2c3d65fd89a3b"
     }
+  },
+  "competitive28_conditional_last_caller": {
+    "status": "SOURCE_COMPLETE_PENDING_CURRENT_27_OWNER_AND_FINAL_NORMAL",
+    "removed": [
+      "evals/skippy-competitive-benchmark.py",
+      "scripts/tests/test_skippy_competitive_benchmark.py"
+    ],
+    "coverage": "ci/automation-migration/competitive-benchmark-retirement-coverage.json",
+    "qualification": null,
+    "retirement": null,
+    "scope": "Generic orchestration/serializer/report contracts; real engines/model/platform acceptance remains separate; materializer retained with actual extraction callers",
+    "historical_implementation_dispositions": {
+    }
+  },
+  "cache_family_three_native_caller_retirement": {
+    "status": "conditional_retirement_pending_root_admission",
+    "coverage": "ci/automation-migration/cache-family-production-retirement-coverage.json",
+    "retired_paths": [
+      "evals/skippy-cache-production-bench.py",
+      "evals/skippy-cache-correctness-gate.py",
+      "evals/skippy-moe-expert-smoke.py"
+    ],
+    "proof": null,
+    "normal_ci": null,
+    "requires_absent_importers": [
+      "evals/skippy-radix-cache-ab.py",
+      "evals/skippy-waiting-prefix-ab.py",
+      "scripts/tests/test_skippy_radix_cache_ab.py"
+    ],
+    "external_model_qualification": "Separate unverified scope; no native/model/performance claim."
+  },
+  "windows_three_required_caller_guidance": {
+    "path": ".agents/skills/manage-ci/references/current-inventory.md",
+    "source_sha256": "cb24922905d5bacda17ceb878908764124d7e6d46e1b31a12c878eeeac53872a",
+    "removed_candidate": {
+      "line": 31,
+      "hash": "9de9f9314729099c",
+      "reason": "Old Python source owner replaced by native owner; replacement contains no Python/interpreter candidate, unchanged line count preserves all later scanner joins."
+    },
+    "qualification": null,
+    "historical_source_sha256": "5cf196a8135db474df46997a5f09be91a0c77b16039ff09e69f12eaa8e1135ec"
+  },
+  "native_hf_manual_protocol_last_caller_retirement": {
+    "status": "conditional_not_executed",
+    "coverage": "ci/automation-migration/native-hf-manual-protocol-retirement-coverage.json",
+    "removed_paths": [
+      "scripts/hf-skippy-convert-job.py",
+      "scripts/hf-skippy-mtp-certify-job.py",
+      "scripts/hf-skippy-mtp-compose-job.py",
+      "docs/skippy/manual-smoke/runtime_smoke.py",
+      "docs/skippy/manual-smoke/check_coverage.py",
+      "evals/skippy-openai-cache-matrix.py",
+      "evals/skippy-suffix-proposer-bench.py",
+      "scripts/run-openai-guardrail-corpus.py",
+      "evals/skippy-agentic-prompt-manifest.py"
+    ],
+    "required_selections": 83,
+    "actual_owning_positives": null,
+    "normal_ci": null,
+    "prior_source_history_preserved": true,
+    "current_guidance_source_bindings": [
+      {
+        "path": "docs/BENCHMARKS.md",
+        "sha256": "21866ca5955c5bbcd6ff62790e4e123d97f7e68299ceecd6b4fe557f25f8b14c",
+        "kind": "actual root-applied native caller guidance"
+      },
+      {
+        "path": "docs/design/TESTING.md",
+        "sha256": "d9a2c8af4f9b71b53cddd0be0027e7950cd9adc9694d76b2c0cd8f6d80b7ab51",
+        "kind": "actual root-applied native caller guidance"
+      },
+      {
+        "path": "docs/skippy/LLAMA_BENCHY.md",
+        "sha256": "8911096e9351021a60e09769caf329e54545e964ffdfa753be64cccdb206a02e",
+        "kind": "actual root-applied native caller guidance"
+      },
+      {
+        "path": "docs/design/OPENAI_GUARDRAILS.md",
+        "sha256": "2a165056321484f078aaf48bfed5d0b81b78402e7bf4b0b4461343f10668d016",
+        "kind": "actual root-applied native caller guidance"
+      },
+      {
+        "path": "docs/skippy/PROMPT_CACHE.md",
+        "sha256": "c2295b2f09f115a93c318f82be810eb2e2a258c2a114d0877793304abbf70fae",
+        "kind": "actual root-applied native caller guidance"
+      },
+      {
+        "path": "docs/skippy/HF_MTP_COMPOSE_NATIVE.md",
+        "sha256": "06b1a1f99de917bd7d9816ed28893c64fc1bb66b718bd6f92ddfe8e7f187ac1f",
+        "kind": "actual root-applied native caller guidance"
+      }
+    ],
+    "historical_removed_records": {
+    }
+  },
+  "quality_native_current_guidance_join_reconciliation": {
+    "path": ".agents/skills/manage-ci/references/current-inventory.md",
+    "historical_source_sha256": "5cf196a8135db474df46997a5f09be91a0c77b16039ff09e69f12eaa8e1135ec",
+    "current_source_sha256": "cb24922905d5bacda17ceb878908764124d7e6d46e1b31a12c878eeeac53872a",
+    "reason": "Quality native setup V4 changed the current inventory guide after the Windows guidance join. All other six native guidance joins and SDK holds are unchanged."
+  },
+  "release_inventory_retired_instruction_asset": {
+    "path": ".agents/skills/release-validation/scripts/collect-release-inventory.py",
+    "classification": "retired",
+    "owner": "release-validation maintainers",
+    "old_commands": [
+      "python3 collect-release-inventory.py"
+    ],
+    "replacement_owner": "tools/xtask release inventory command",
+    "cutover_task": 5,
+    "actionability": "skill-local executable generates raw release evidence",
+    "unresolved": false,
+    "conditional_retirement": {
+      "coverage": "ci/automation-migration/release-inventory-retirement-coverage.json",
+      "qualification": null,
+      "reason": "Existing native release inventory owns complete16 functions; no executing skill caller remains"
+    }
+  },
+  "quant_jobs_template_guidance_history": {
+    "reason": "Removed unprovided external Python Job templates and unsupported current-tool memory/window examples. Supplied supported quantizer native Jobs orchestration remains pending; no execution, new exception or capability completion.",
+    "source_bindings": [
+      {
+        "path": ".agents/skills/hf-gguf-quant-jobs/SKILL.md",
+        "sha256": "dc394606bf90c028281633e4e3cd5406933cb0683ac10b464d41e9fe4c875f2d",
+        "line_count": 174
+      },
+      {
+        "path": ".agents/skills/hf-quant-and-layer-package-jobs/SKILL.md",
+        "sha256": "74fdf1fb481b2d37c0ffdba2b54830effc6a8a00429bd24f29e5bbb0499677f6",
+        "line_count": 157
+      }
+    ],
+    "original_records": [
+      {
+        "path": ".agents/skills/hf-gguf-quant-jobs/SKILL.md",
+        "classification": "actionable",
+        "owner": "Hugging Face quantization maintainers",
+        "old_commands": [
+          "hf jobs uv run ..."
+        ],
+        "replacement_owner": "tools/xtask planning plus isolated Hugging Face job SDK entrypoint",
+        "cutover_task": 5,
+        "actionability": "remote HF Jobs project invocation",
+        "unresolved": true
+      },
+      {
+        "path": ".agents/skills/hf-quant-and-layer-package-jobs/SKILL.md",
+        "classification": "actionable",
+        "owner": "Hugging Face job maintainers",
+        "old_commands": [
+          "hf jobs uv run ..."
+        ],
+        "replacement_owner": "tools/xtask planning plus isolated Hugging Face job SDK entrypoint",
+        "cutover_task": 5,
+        "actionability": "remote HF Jobs project invocation",
+        "unresolved": true
+      }
+    ],
+    "qualification": null,
+    "native_jobs_complete": false
   }
 }

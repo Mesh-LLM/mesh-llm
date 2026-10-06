@@ -559,3 +559,17 @@ uv run --python 3.12 \
 `--generate-imatrix` creates a deterministic all-ones legacy imatrix from the
 GGUF tensor metadata so very low-bit and IQ modes are tested instead of being
 accepted as matching failures.
+
+### Explicit run-quant resume range
+
+`run-quant --manifest FILE --first-split N --last-split M` admits an inclusive
+range against the manifest split count. Both flags are required together;
+splits start at1 and N must be <=M. Omitted flags preserve automatic local
+resume. A selected range skips missing earlier output shards, which is useful
+when a separately owned workflow has already verified/published/unlinked them.
+The tool itself does not establish remote upload or resume integrity.
+
+This only exposes the existing range-selection path. It does not restore
+partial-window or memory-chunked quantization support: the current native
+backend still refuses partial windows and `--max-memory`. Supply a tool with
+actual proven capabilities for the pending low-memory Jobs workflow.

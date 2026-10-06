@@ -1,0 +1,11 @@
+[project]
+name = "meshllm-upstream-quantizer-reference"
+version = "0.0.0"
+requires-python = ">=3.12,<3.13"
+dependencies = ["numpy~=2.2.6", "gguf>=0.1.0"]
+
+[project.optional-dependencies]
+upstream-conversion = ["torch==2.11.0", "sentencepiece>=0.1.98,<0.3.0", "transformers==4.57.6", "protobuf>=4.21.0,<5.0.0"]
+
+[tool.uv]
+package = false

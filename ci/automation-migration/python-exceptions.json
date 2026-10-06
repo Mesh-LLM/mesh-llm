@@ -106,6 +106,269 @@
       "purpose": "Compare all Granite Hybrid GGUF values against supplied BF16 SafeTensors and compute canonical source tensor equivalence identity; no acquisition or generic orchestration",
       "isolation_test": "Owning native policy cases enforce exact recorded reference path/status/local lock and exclude the evaluator/project from actual required/default execution graph. Dependency lock resolution and offline check passed; installed imports and real artifact values are separately unqualified. Local fixture selections pending root execution.",
       "status": "isolated_model_reference"
+    },
+    {
+      "path": "crates/skippy-cache/src/cachegen/fixtures/generate_lmcache_compat.py",
+      "status": "isolated_upstream_reference",
+      "callers": [
+        "From crates/skippy-cache/src/cachegen/fixtures: python3 generate_lmcache_compat.py; overwrites exactly two checked compatibility binaries."
+      ],
+      "local_dependency_files": [
+        "evals/research-python/pyproject.toml",
+        "evals/research-python/BOUNDARIES.json"
+      ],
+      "cadence": "optional explicit operator research/upstream regeneration only; never PR/main required setup",
+      "purpose": "native cache compatibility fixture generator",
+      "isolation_test": "migration_inventory::tests::sdk_exception_policy::research16_is_absent_from_actual_required_and_default_execution_graph"
+    },
+    {
+      "path": "crates/skippy-quantize/scripts/compare-reference-quantization.py",
+      "status": "isolated_upstream_reference",
+      "callers": [
+        "crates/skippy-quantize/README.md opt-in conversion/quantization comparison commands; operator supplies reference converter, interpreter, GGUF/checkpoint and native binaries."
+      ],
+      "local_dependency_files": [
+        "evals/quantizer-reference/pyproject.toml",
+        "evals/research-python/BOUNDARIES.json"
+      ],
+      "cadence": "optional explicit operator research/upstream regeneration only; never PR/main required setup",
+      "purpose": "upstream reference comparison",
+      "isolation_test": "migration_inventory::tests::sdk_exception_policy::research16_is_absent_from_actual_required_and_default_execution_graph"
+    },
+    {
+      "path": "evals/latency-benchmarking/latency-proxy.py",
+      "status": "isolated_research_evaluation",
+      "callers": [
+        "evals/latency-benchmarking/README.md upstream RPC delay experiment; python3 latency-proxy.py --listen-port 60052 --target-port 50052 --latency-ms 50 from that directory.",
+        "evals/latency-benchmarking/bench.sh:45 explicit optional historical latency experiment; nohup python3 \"$SCRIPT_DIR/latency-proxy.py\" \\",
+        "evals/latency-benchmarking/bench-b2b.sh:44 explicit optional historical latency experiment; nohup python3 \"$SCRIPT_DIR/latency-proxy.py\" \\",
+        "evals/latency-benchmarking/demo.sh:151 explicit optional historical latency experiment; nohup python3 \"$SCRIPT_DIR/latency-proxy.py\" \\",
+        "evals/latency-benchmarking/demo.sh:161 explicit optional historical latency experiment; nohup python3 \"$SCRIPT_DIR/latency-proxy.py\" \\"
+      ],
+      "local_dependency_files": [
+        "evals/research-python/pyproject.toml",
+        "evals/research-python/BOUNDARIES.json"
+      ],
+      "cadence": "optional explicit operator research/upstream regeneration only; never PR/main required setup",
+      "purpose": "evaluation harness",
+      "isolation_test": "migration_inventory::tests::sdk_exception_policy::research16_is_absent_from_actual_required_and_default_execution_graph",
+      "caller_source_bindings": [
+        {
+          "path": "evals/latency-benchmarking/bench.sh",
+          "sha256": "39825a30c74c33f2c109409ebb074fcdf8755cf50afc5728288aaaa5dba96996",
+          "line": 45,
+          "source_block": "        nohup python3 \"$SCRIPT_DIR/latency-proxy.py\" \\"
+        },
+        {
+          "path": "evals/latency-benchmarking/bench-b2b.sh",
+          "sha256": "a16381d3e726192d3b1509fdd5479d40072c6db731fcb81a04e71bf840c45d6a",
+          "line": 44,
+          "source_block": "        nohup python3 \"$SCRIPT_DIR/latency-proxy.py\" \\"
+        },
+        {
+          "path": "evals/latency-benchmarking/demo.sh",
+          "sha256": "85987999bbda4653a9f8ff76bba09896dbabcbfffba9f75cd5040b055c9e3c74",
+          "line": 151,
+          "source_block": "        nohup python3 \"$SCRIPT_DIR/latency-proxy.py\" \\"
+        },
+        {
+          "path": "evals/latency-benchmarking/demo.sh",
+          "sha256": "85987999bbda4653a9f8ff76bba09896dbabcbfffba9f75cd5040b055c9e3c74",
+          "line": 161,
+          "source_block": "        nohup python3 \"$SCRIPT_DIR/latency-proxy.py\" \\"
+        }
+      ]
+    },
+    {
+      "path": "evals/latency-benchmarking/measure.py",
+      "status": "isolated_research_evaluation",
+      "callers": [
+        "evals/latency-benchmarking/README.md measurement commands; existing external research endpoints and local supplied model only.",
+        "evals/latency-benchmarking/bench-b2b.sh:102 explicit optional historical latency experiment; result=$(python3 \"$SCRIPT_DIR/measure.py\" \\"
+      ],
+      "local_dependency_files": [
+        "evals/research-python/pyproject.toml",
+        "evals/research-python/BOUNDARIES.json"
+      ],
+      "cadence": "optional explicit operator research/upstream regeneration only; never PR/main required setup",
+      "purpose": "evaluation orchestration",
+      "isolation_test": "migration_inventory::tests::sdk_exception_policy::research16_is_absent_from_actual_required_and_default_execution_graph",
+      "caller_source_bindings": [
+        {
+          "path": "evals/latency-benchmarking/bench-b2b.sh",
+          "sha256": "a16381d3e726192d3b1509fdd5479d40072c6db731fcb81a04e71bf840c45d6a",
+          "line": 102,
+          "source_block": "    result=$(python3 \"$SCRIPT_DIR/measure.py\" \\"
+        }
+      ]
+    },
+    {
+      "path": "evals/moa-openrouter/analyze_ablation.py",
+      "status": "isolated_research_evaluation",
+      "callers": [
+        "From evals/moa-openrouter: python3 analyze_ablation.py /tmp/moa_ablation.jsonl --iters 10000 --seed 0; optional analysis suggested by ignored live Rust eval_openrouter tests."
+      ],
+      "local_dependency_files": [
+        "evals/research-python/pyproject.toml",
+        "evals/research-python/BOUNDARIES.json"
+      ],
+      "cadence": "optional explicit operator research/upstream regeneration only; never PR/main required setup",
+      "purpose": "research/evaluation",
+      "isolation_test": "migration_inventory::tests::sdk_exception_policy::research16_is_absent_from_actual_required_and_default_execution_graph"
+    },
+    {
+      "path": "evals/moa-openrouter/lite_agent.py",
+      "status": "isolated_research_evaluation",
+      "callers": [
+        "From evals/moa-openrouter: python3 lite_agent.py --base http://localhost:9337/v1 --model mesh; optional supplied endpoint lightweight-agent experiment."
+      ],
+      "local_dependency_files": [
+        "evals/research-python/pyproject.toml",
+        "evals/research-python/BOUNDARIES.json"
+      ],
+      "cadence": "optional explicit operator research/upstream regeneration only; never PR/main required setup",
+      "purpose": "research/evaluation",
+      "isolation_test": "migration_inventory::tests::sdk_exception_policy::research16_is_absent_from_actual_required_and_default_execution_graph"
+    },
+    {
+      "path": "evals/moa-openrouter/make_fixture.py",
+      "status": "isolated_research_evaluation",
+      "callers": [
+        "From evals/moa-openrouter: python3 make_fixture.py; reads existing corpus.jsonl/agentic.jsonl and writes actual Rust real_traces.json fixture."
+      ],
+      "local_dependency_files": [
+        "evals/research-python/pyproject.toml",
+        "evals/research-python/BOUNDARIES.json"
+      ],
+      "cadence": "optional explicit operator research/upstream regeneration only; never PR/main required setup",
+      "purpose": "research/evaluation fixture generator",
+      "isolation_test": "migration_inventory::tests::sdk_exception_policy::research16_is_absent_from_actual_required_and_default_execution_graph"
+    },
+    {
+      "path": "evals/moa-openrouter/orclient.py",
+      "status": "isolated_research_evaluation",
+      "callers": [
+        "Imported by record.py, record_agentic.py and probe_tools.py from their own directory; not an independent CLI."
+      ],
+      "local_dependency_files": [
+        "evals/research-python/pyproject.toml",
+        "evals/research-python/BOUNDARIES.json"
+      ],
+      "cadence": "optional explicit operator research/upstream regeneration only; never PR/main required setup",
+      "purpose": "external client evaluation",
+      "isolation_test": "migration_inventory::tests::sdk_exception_policy::research16_is_absent_from_actual_required_and_default_execution_graph"
+    },
+    {
+      "path": "evals/moa-openrouter/probe_tools.py",
+      "status": "isolated_research_evaluation",
+      "callers": [
+        "From evals/moa-openrouter: python3 probe_tools.py; explicit OPENROUTER_API_KEY, remote paid calls, writes fanout.jsonl."
+      ],
+      "local_dependency_files": [
+        "evals/research-python/pyproject.toml",
+        "evals/research-python/BOUNDARIES.json"
+      ],
+      "cadence": "optional explicit operator research/upstream regeneration only; never PR/main required setup",
+      "purpose": "research/evaluation",
+      "isolation_test": "migration_inventory::tests::sdk_exception_policy::research16_is_absent_from_actual_required_and_default_execution_graph"
+    },
+    {
+      "path": "evals/moa-openrouter/record.py",
+      "status": "isolated_research_evaluation",
+      "callers": [
+        "From evals/moa-openrouter: python3 record.py; explicit OPENROUTER_API_KEY, paid capture, writes corpus.jsonl."
+      ],
+      "local_dependency_files": [
+        "evals/research-python/pyproject.toml",
+        "evals/research-python/BOUNDARIES.json"
+      ],
+      "cadence": "optional explicit operator research/upstream regeneration only; never PR/main required setup",
+      "purpose": "research/evaluation",
+      "isolation_test": "migration_inventory::tests::sdk_exception_policy::research16_is_absent_from_actual_required_and_default_execution_graph"
+    },
+    {
+      "path": "evals/moa-openrouter/record_agentic.py",
+      "status": "isolated_research_evaluation",
+      "callers": [
+        "From evals/moa-openrouter: python3 record_agentic.py; explicit OPENROUTER_API_KEY, paid capture with canned tool results, writes agentic.jsonl."
+      ],
+      "local_dependency_files": [
+        "evals/research-python/pyproject.toml",
+        "evals/research-python/BOUNDARIES.json"
+      ],
+      "cadence": "optional explicit operator research/upstream regeneration only; never PR/main required setup",
+      "purpose": "research/evaluation",
+      "isolation_test": "migration_inventory::tests::sdk_exception_policy::research16_is_absent_from_actual_required_and_default_execution_graph"
+    },
+    {
+      "path": "evals/scenarios/debug-session/buggy.py",
+      "status": "isolated_research_evaluation",
+      "callers": [
+        "Supplied optional agent debug-session task source; execution/editing belongs to that research task, deliberately buggy content remains unchanged."
+      ],
+      "local_dependency_files": [
+        "evals/research-python/pyproject.toml",
+        "evals/research-python/BOUNDARIES.json"
+      ],
+      "cadence": "optional explicit operator research/upstream regeneration only; never PR/main required setup",
+      "purpose": "evaluation fixture",
+      "isolation_test": "migration_inventory::tests::sdk_exception_policy::research16_is_absent_from_actual_required_and_default_execution_graph"
+    },
+    {
+      "path": "evals/scenarios/edit-file/server.py",
+      "status": "isolated_research_evaluation",
+      "callers": [
+        "Supplied optional agent edit-file task source; direct Python server execution belongs to that research task."
+      ],
+      "local_dependency_files": [
+        "evals/research-python/pyproject.toml",
+        "evals/research-python/BOUNDARIES.json"
+      ],
+      "cadence": "optional explicit operator research/upstream regeneration only; never PR/main required setup",
+      "purpose": "evaluation fixture/server",
+      "isolation_test": "migration_inventory::tests::sdk_exception_policy::research16_is_absent_from_actual_required_and_default_execution_graph"
+    },
+    {
+      "path": "evals/scenarios/refactor/config.py",
+      "status": "isolated_research_evaluation",
+      "callers": [
+        "Supplied optional refactor task module; task-local imports, no repository required validation entrypoint."
+      ],
+      "local_dependency_files": [
+        "evals/research-python/pyproject.toml",
+        "evals/research-python/BOUNDARIES.json"
+      ],
+      "cadence": "optional explicit operator research/upstream regeneration only; never PR/main required setup",
+      "purpose": "evaluation fixture",
+      "isolation_test": "migration_inventory::tests::sdk_exception_policy::research16_is_absent_from_actual_required_and_default_execution_graph"
+    },
+    {
+      "path": "evals/test_injection_framing.py",
+      "status": "isolated_research_evaluation",
+      "callers": [
+        "python3 evals/test_injection_framing.py --model /absolute/supplied.gguf; historical external llama-server hook experiment, not current product serving."
+      ],
+      "local_dependency_files": [
+        "evals/research-python/pyproject.toml",
+        "evals/research-python/BOUNDARIES.json"
+      ],
+      "cadence": "optional explicit operator research/upstream regeneration only; never PR/main required setup",
+      "purpose": "evaluation test",
+      "isolation_test": "migration_inventory::tests::sdk_exception_policy::research16_is_absent_from_actual_required_and_default_execution_graph"
+    },
+    {
+      "path": "evals/virtual_llm_eval.py",
+      "status": "isolated_research_evaluation",
+      "callers": [
+        "python3 evals/virtual_llm_eval.py --port 9337 [--no-hooks]; optional already-running supplied endpoint ablation. Existing startup doc is historical."
+      ],
+      "local_dependency_files": [
+        "evals/research-python/pyproject.toml",
+        "evals/research-python/BOUNDARIES.json"
+      ],
+      "cadence": "optional explicit operator research/upstream regeneration only; never PR/main required setup",
+      "purpose": "evaluation orchestration",
+      "isolation_test": "migration_inventory::tests::sdk_exception_policy::research16_is_absent_from_actual_required_and_default_execution_graph"
     }
   ],
   "explicit_non_exceptions": [
@@ -130,18 +393,6 @@
       "reason": "Generic read-only report/evidence processing; migrate to tools/xtask."
     },
     {
-      "path": "scripts/hf-skippy-convert-job.py",
-      "reason": "Remote job submission does not exempt generic planning, serialization, artifact or process logic; no exact isolated retained-path contract established."
-    },
-    {
-      "path": "scripts/hf-skippy-mtp-certify-job.py",
-      "reason": "Remote job adapter is not a blanket ecosystem exception; generic orchestration still migrates."
-    },
-    {
-      "path": "scripts/hf-skippy-mtp-compose-job.py",
-      "reason": "Remote job adapter is not a blanket ecosystem exception; generic artifact logic still migrates."
-    },
-    {
       "path": ".agents/skills/release-validation/scripts/collect-release-inventory.py",
       "reason": "Skill-local generic release inventory automation is not an ecosystem dependency; task-5 owner is tools/xtask."
     }
@@ -155,14 +406,19 @@
       ],
       "owner": "tools/xtask benchmark/evidence commands",
       "cutover_task": 5,
-      "status": "actionable_migration_example",
+      "status": "native_caller_cutover_historical_examples_only",
       "task5_negative_fixture": true,
       "current_source_binding": {
         "path": ".agents/skills/skippy-cache-family-bench/SKILL.md",
+        "sha256": "de4dd7d3803d24fb5a07b69a23d9c32c84f41d4b3e62e720ff2fb28791e47d25",
+        "line_count": 109
+      },
+      "latest_review": "Historical examples preserved as history; actual skill and wrapper use native owners. These three generic Python implementations are not retained ecosystem exceptions.",
+      "historical_source_binding": {
+        "path": ".agents/skills/skippy-cache-family-bench/SKILL.md",
         "sha256": "754def93983ed96e422e2e512226808b407a92d7d1d49e692a1e09b07c5a4f5a",
         "line_count": 82
-      },
-      "latest_review": "Generic JSON display uses jq; family report uses typed owner. Historical example records retained; no live/platform benchmark qualification implied."
+      }
     },
     {
       "path": ".agents/skills/skippy-bench/SKILL.md",
@@ -263,31 +519,47 @@
     {
       "path": ".agents/skills/hf-gguf-quant-jobs/SKILL.md",
       "examples": [
-        "hf jobs uv run ..."
+
       ],
-      "owner": "tools/xtask planning plus Hugging Face job SDK entrypoint",
+      "owner": "Native supplied-quantizer orchestration pending; not a retained Python exception",
       "cutover_task": 5,
-      "status": "actionable_remote_job_example"
+      "status": "native_quant_jobs_pending_unsupported_current_tool",
+      "current_source_binding": {
+        "path": ".agents/skills/hf-gguf-quant-jobs/SKILL.md",
+        "sha256": "dc394606bf90c028281633e4e3cd5406933cb0683ac10b464d41e9fe4c875f2d",
+        "line_count": 174
+      },
+      "latest_review": "Removed unprovided external Python Job templates and unsupported current-tool memory/window examples. Supplied supported quantizer native Jobs orchestration remains pending; no execution, new exception or capability completion."
     },
     {
       "path": ".agents/skills/hf-quant-and-layer-package-jobs/SKILL.md",
       "examples": [
-        "hf jobs uv run ..."
+
       ],
-      "owner": "tools/xtask planning plus Hugging Face job SDK entrypoint",
+      "owner": "Native supplied-quantizer orchestration pending; not a retained Python exception",
       "cutover_task": 5,
-      "status": "actionable_remote_job_example"
+      "status": "native_quant_jobs_pending_unsupported_current_tool",
+      "current_source_binding": {
+        "path": ".agents/skills/hf-quant-and-layer-package-jobs/SKILL.md",
+        "sha256": "74fdf1fb481b2d37c0ffdba2b54830effc6a8a00429bd24f29e5bbb0499677f6",
+        "line_count": 157
+      },
+      "latest_review": "Removed unprovided external Python Job templates and unsupported current-tool memory/window examples. Supplied supported quantizer native Jobs orchestration remains pending; no execution, new exception or capability completion."
     },
     {
       "path": ".agents/skills/release-validation/references/evidence-and-gates.md",
-      "examples": [],
+      "examples": [
+
+      ],
       "owner": "retain human evidence matrix and decision criteria; machine evidence commands belong to tools/xtask",
       "cutover_task": 5,
       "status": "reviewed_no_interpreter_automation"
     },
     {
       "path": ".agents/skills/release-validation/assets/release-validation-report-template.md",
-      "examples": [],
+      "examples": [
+
+      ],
       "owner": "retain human-authored report template populated using tools/xtask outputs",
       "cutover_task": 5,
       "status": "reviewed_no_executable_examples"
@@ -370,7 +642,9 @@
     "source_snapshot": "Frozen source after provenance/package local qualification; pending full latest validation union",
     "python_paths": 196,
     "just_roster": 109,
-    "removed_edges": [],
+    "removed_edges": [
+
+    ],
     "limits": "Surviving generic quality roster, native smoke/oracle/manual protected and real required SDK/model/platform qualifications remain open; no exception or gate demotion."
   },
   "next_wave_source_reconciliation": {
@@ -536,8 +810,12 @@
       }
     ],
     "limits": "Source-bound caller reconciliation only. Generic Python implementations and unqualified test methods retained; required SDK, native, model, platform and protected gates unchanged. Literal typed command selection and continued argv are reviewed, but runtime dynamic expansion is not parser-complete reachability proof.",
-    "removed_edges": [],
-    "rebound_rows": []
+    "removed_edges": [
+
+    ],
+    "rebound_rows": [
+
+    ]
   },
   "next_wave_comparator_and_test_retirement": {
     "coverage": "ci/automation-migration/next-wave-test-tts-retirement-coverage.json",
@@ -646,7 +924,9 @@
     },
     "qualification": "Authored, unrun; parent must qualify the transaction before any legacy retirement",
     "retained": "All Python helpers and legacy tests remain. Normal verify timeout helper remains reachable; no inventory/roster reductions.",
-    "rebound_rows": []
+    "rebound_rows": [
+
+    ]
   },
   "projected_final_repair_caller_binding": {
     "source": "scripts/llama-canary-agent-repair.sh",
@@ -949,5 +1229,132 @@
     "preserved_exception_status": "Four conditional_unqualified; no new exception, no installed SDK/platform/model execution claim",
     "retirement": null,
     "qualification": null
+  },
+  "cache_family_three_native_caller_retirement": {
+    "status": "conditional_retirement_pending_root_admission",
+    "coverage": "ci/automation-migration/cache-family-production-retirement-coverage.json",
+    "retired_paths": [
+      "evals/skippy-cache-production-bench.py",
+      "evals/skippy-cache-correctness-gate.py",
+      "evals/skippy-moe-expert-smoke.py"
+    ],
+    "proof": null,
+    "normal_ci": null,
+    "requires_absent_importers": [
+      "evals/skippy-radix-cache-ab.py",
+      "evals/skippy-waiting-prefix-ab.py",
+      "scripts/tests/test_skippy_radix_cache_ab.py"
+    ],
+    "external_model_qualification": "Separate unverified scope; no native/model/performance claim."
+  },
+  "native_hf_manual_protocol_last_caller_retirement": {
+    "status": "conditional_not_executed",
+    "coverage": "ci/automation-migration/native-hf-manual-protocol-retirement-coverage.json",
+    "removed_paths": [
+      "scripts/hf-skippy-convert-job.py",
+      "scripts/hf-skippy-mtp-certify-job.py",
+      "scripts/hf-skippy-mtp-compose-job.py",
+      "docs/skippy/manual-smoke/runtime_smoke.py",
+      "docs/skippy/manual-smoke/check_coverage.py",
+      "evals/skippy-openai-cache-matrix.py",
+      "evals/skippy-suffix-proposer-bench.py",
+      "scripts/run-openai-guardrail-corpus.py",
+      "evals/skippy-agentic-prompt-manifest.py"
+    ],
+    "required_selections": 83,
+    "actual_owning_positives": null,
+    "normal_ci": null,
+    "prior_source_history_preserved": true,
+    "current_guidance_source_bindings": [
+      {
+        "path": "docs/BENCHMARKS.md",
+        "sha256": "21866ca5955c5bbcd6ff62790e4e123d97f7e68299ceecd6b4fe557f25f8b14c",
+        "kind": "actual root-applied native caller guidance"
+      },
+      {
+        "path": "docs/design/TESTING.md",
+        "sha256": "d9a2c8af4f9b71b53cddd0be0027e7950cd9adc9694d76b2c0cd8f6d80b7ab51",
+        "kind": "actual root-applied native caller guidance"
+      },
+      {
+        "path": "docs/skippy/LLAMA_BENCHY.md",
+        "sha256": "8911096e9351021a60e09769caf329e54545e964ffdfa753be64cccdb206a02e",
+        "kind": "actual root-applied native caller guidance"
+      },
+      {
+        "path": "docs/design/OPENAI_GUARDRAILS.md",
+        "sha256": "2a165056321484f078aaf48bfed5d0b81b78402e7bf4b0b4461343f10668d016",
+        "kind": "actual root-applied native caller guidance"
+      },
+      {
+        "path": "docs/skippy/PROMPT_CACHE.md",
+        "sha256": "c2295b2f09f115a93c318f82be810eb2e2a258c2a114d0877793304abbf70fae",
+        "kind": "actual root-applied native caller guidance"
+      },
+      {
+        "path": "docs/skippy/HF_MTP_COMPOSE_NATIVE.md",
+        "sha256": "06b1a1f99de917bd7d9816ed28893c64fc1bb66b718bd6f92ddfe8e7f187ac1f",
+        "kind": "actual root-applied native caller guidance"
+      }
+    ],
+    "historical_removed_records": {
+      "explicit_non_exceptions": [
+        {
+          "path": "scripts/hf-skippy-convert-job.py",
+          "reason": "Remote job submission does not exempt generic planning, serialization, artifact or process logic; no exact isolated retained-path contract established."
+        },
+        {
+          "path": "scripts/hf-skippy-mtp-certify-job.py",
+          "reason": "Remote job adapter is not a blanket ecosystem exception; generic orchestration still migrates."
+        },
+        {
+          "path": "scripts/hf-skippy-mtp-compose-job.py",
+          "reason": "Remote job adapter is not a blanket ecosystem exception; generic artifact logic still migrates."
+        }
+      ]
+    }
+  },
+  "quant_jobs_template_guidance_history": {
+    "reason": "Removed unprovided external Python Job templates and unsupported current-tool memory/window examples. Supplied supported quantizer native Jobs orchestration remains pending; no execution, new exception or capability completion.",
+    "source_bindings": [
+      {
+        "path": ".agents/skills/hf-gguf-quant-jobs/SKILL.md",
+        "sha256": "dc394606bf90c028281633e4e3cd5406933cb0683ac10b464d41e9fe4c875f2d",
+        "line_count": 174
+      },
+      {
+        "path": ".agents/skills/hf-quant-and-layer-package-jobs/SKILL.md",
+        "sha256": "74fdf1fb481b2d37c0ffdba2b54830effc6a8a00429bd24f29e5bbb0499677f6",
+        "line_count": 157
+      }
+    ],
+    "original_records": [
+      {
+        "path": ".agents/skills/hf-gguf-quant-jobs/SKILL.md",
+        "examples": [
+          "hf jobs uv run ..."
+        ],
+        "owner": "tools/xtask planning plus Hugging Face job SDK entrypoint",
+        "cutover_task": 5,
+        "status": "actionable_remote_job_example"
+      },
+      {
+        "path": ".agents/skills/hf-quant-and-layer-package-jobs/SKILL.md",
+        "examples": [
+          "hf jobs uv run ..."
+        ],
+        "owner": "tools/xtask planning plus Hugging Face job SDK entrypoint",
+        "cutover_task": 5,
+        "status": "actionable_remote_job_example"
+      }
+    ],
+    "qualification": null,
+    "native_jobs_complete": false
+  },
+  "existing_research16_isolation": {
+    "declaration": "evals/research-python/BOUNDARIES.json",
+    "policy": "Exact16 paths, exact class/status/dependencies/cadence; actual required graph must be complete before exclusion can qualify isolation. SDK candidates/reader/Granite statuses unchanged.",
+    "qualification": null,
+    "reference_runtime": null
   }
 }

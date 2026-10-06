@@ -38,4 +38,28 @@ A successful run writes `report.json` with status `PASS` and an immutable `publi
 
 Failed or interrupted runs retain partial process/log/identity evidence and a nonpassing report; they must not yield an eligible publication plan. Do not promote scratch output from a failed run. The nominal execution timeout has bounded owned cleanup phases in addition; stalled ordinary filesystem operations or hostile concurrent path replacement are not claimed to be sandboxed by this adapter.
 
-The original `scripts/hf-skippy-mtp-compose-job.py` still owns bootstrap/acquisition, source checkout, native build, MTP converter input preparation, conversion and remote upload. This local command covers only already-converted composition/attachment and a publication declaration. Keep remote callers and their metadata until the remaining native Jobs/acquisition/conversion/upload paths, actual source custody and relevant platform/model qualification are complete. Native Nemotron structural writer planning alone does not satisfy its mandatory tokenizer/reference qualification.
+For immutable checkpoint/tokenizer staging, observed source checkout and native
+build, conversion/attachment, and confirmed ordered publication, use the
+separate default workflow:
+
+```sh
+just hf-skippy-mtp-compose-default \
+  /absolute/default-mtp-input.json \
+  /absolute/existing-parent/fresh-default-mtp-evidence
+```
+
+Its closed input is owned by
+`tools/xtask/src/automation/hf_certify/mtp_default/contract.rs::Input`; it binds
+bootstrap/source identities, immutable checkpoint and tokenizer rosters, an
+explicit source-bound tokenizer profile, ordered target parts and helper
+identities. Use `dry_run: true` to stage and inspect the plan; publication
+requires `confirm_publication: true` and explicit credential custody. A full
+publish verifies the complete ordered GGUF/sidecar roster at one parent-bound
+immutable commit. The inherited deadline and cancellation cover the workflow.
+
+See [default MTP Jobs](HF_DEFAULT_MTP_COMPOSITION_JOBS.md) and
+[common Jobs delivery](HF_GENERIC_CONVERSION_JOBS.md) for native
+prepare/confirmed-submit/collect. Local fixture proof does not establish real
+family tokenizer/conversion, native build, image delivery or hosted publication
+acceptance. Keep the conditional legacy caller/ledger deletion held until its
+complete intent map, current owning positives and final normal are admitted.

@@ -47,8 +47,8 @@ The shared `mesh-llm-skippy-adapter` owner appears when the product extraction
 is checked out. It also reaches `skippy-ffi` without its dynamic loader by
 default, so its Windows unit invocation enables
 `mesh-llm-skippy-adapter/dynamic-native-runtime`.
-`scripts/tests/test_ci_windows_composition.py` keeps the list, the crates the
-row resolves, and the still-unverified census in agreement.
+Native `windows_composition::cfg_census` keeps the catalog, resolved
+workflow owners, direct PR routing and still-unverified census in agreement.
 
 ## Entry workflows
 
@@ -1457,10 +1457,10 @@ checks admitted stage chains and explicit unsupported contracts without model
 weights; it does not confer real-model certification. See
 `ci/llama-canary/SYNTHETIC_GRAPH_CONTRACTS.md` for structural coverage and limits.
 
-L12 keeps existing setup steps with live consumers. Quality uses Rust workflow
-guards and build-script fixtures, followed by the explicitly enumerated
-`ci-legacy-contracts` modules. Core SDK compatibility and live canary environments
-remain required. No provider, permission, cache-authority or five-entrypoint
+Quality uses Rust workflow and build-script fixtures plus the retained native
+Windows focused `ci-legacy-contracts` facade; unused interpreter setup and CI
+requirements installation are removed. Core SDK compatibility and live canary
+environments remain required. No provider, permission, cache-authority or five-entrypoint
 contract changed. The shared runtime-reuse adapter honors the prepared automation
 executable, so copied SDK consumers do not depend on local Cargo aliases.
 

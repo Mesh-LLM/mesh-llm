@@ -1,0 +1,472 @@
+{
+  "schema_version": 1,
+  "purpose": "Existing optional research, task-source and upstream compatibility Python boundary; not new automation or a model/platform acceptance claim.",
+  "dependencies": {
+    "stdlib15": "evals/research-python/pyproject.toml",
+    "quantizer_local_and_upstream_optional": "evals/quantizer-reference/pyproject.toml"
+  },
+  "rows": [
+    {
+      "path": "crates/skippy-cache/src/cachegen/fixtures/generate_lmcache_compat.py",
+      "source_sha256": "4e8ece660bc249967c2cc404df034f6c240a40f0bb2bc29b0979e3a655a30697",
+      "purpose": "native cache compatibility fixture generator",
+      "imports": [
+        "from pathlib import Path",
+        "import math",
+        "import struct"
+      ],
+      "dependencies": "CPython standard library only; no third-party Python package imports.",
+      "local_dependency_files": [
+        "evals/research-python/pyproject.toml",
+        "evals/research-python/BOUNDARIES.json"
+      ],
+      "callers": [
+        "From crates/skippy-cache/src/cachegen/fixtures: python3 generate_lmcache_compat.py; overwrites exactly two checked compatibility binaries."
+      ],
+      "cadence": "optional explicit operator research/upstream regeneration only; never PR/main required setup",
+      "isolation_test": "migration_inventory::tests::sdk_exception_policy::research16_is_absent_from_actual_required_and_default_execution_graph",
+      "status": "isolated_upstream_reference",
+      "remaining_boundary": "Pinned LMCache codec transcription is not a migration differential oracle; still must meet §9 and must never become generic required validation.",
+      "exception_admission": "Exact recorded existing source class only, not installed environment or actual experiment qualification."
+    },
+    {
+      "path": "crates/skippy-quantize/scripts/compare-reference-quantization.py",
+      "source_sha256": "a29d82d4fead1e324953ec775c53946e659f66cd77e4123701cf7a0ce21c1259",
+      "purpose": "upstream reference comparison",
+      "imports": [
+        "from __future__ import annotations",
+        "import argparse",
+        "import hashlib",
+        "import json",
+        "import os",
+        "import shutil",
+        "import struct",
+        "import subprocess",
+        "import sys",
+        "from dataclasses import asdict, dataclass",
+        "from pathlib import Path",
+        "from typing import Any",
+        "import numpy as np",
+        "from gguf import GGUFReader",
+        "from gguf import GGUFReader"
+      ],
+      "dependencies": "Local driver uses numpy and gguf.GGUFReader lazily for tensor comparisons and generated imatrix. Supplied upstream converter child also requires the separately declared upstream conversion dependencies.",
+      "local_dependency_files": [
+        "evals/quantizer-reference/pyproject.toml",
+        "evals/research-python/BOUNDARIES.json"
+      ],
+      "callers": [
+        "crates/skippy-quantize/README.md opt-in conversion/quantization comparison commands; operator supplies reference converter, interpreter, GGUF/checkpoint and native binaries."
+      ],
+      "cadence": "optional explicit operator research/upstream regeneration only; never PR/main required setup",
+      "isolation_test": "migration_inventory::tests::sdk_exception_policy::research16_is_absent_from_actual_required_and_default_execution_graph",
+      "status": "isolated_upstream_reference",
+      "remaining_boundary": "README provides opt-in reference commands; upstream Python quantizer execution and supplied native binaries remain real external prerequisites.",
+      "exception_admission": "Exact recorded existing source class only, not installed environment or actual experiment qualification."
+    },
+    {
+      "path": "evals/latency-benchmarking/latency-proxy.py",
+      "source_sha256": "88917c47eba039ed5c4b2996f7a7e876d8bf5f6af292c1180a5f248628e66169",
+      "purpose": "evaluation harness",
+      "imports": [
+        "import argparse",
+        "import socket",
+        "import struct",
+        "import threading",
+        "import time",
+        "import sys"
+      ],
+      "dependencies": "CPython standard library only; no third-party Python package imports.",
+      "local_dependency_files": [
+        "evals/research-python/pyproject.toml",
+        "evals/research-python/BOUNDARIES.json"
+      ],
+      "callers": [
+        "evals/latency-benchmarking/README.md upstream RPC delay experiment; python3 latency-proxy.py --listen-port 60052 --target-port 50052 --latency-ms 50 from that directory.",
+        "evals/latency-benchmarking/bench.sh:45 explicit optional historical latency experiment; nohup python3 \"$SCRIPT_DIR/latency-proxy.py\" \\",
+        "evals/latency-benchmarking/bench-b2b.sh:44 explicit optional historical latency experiment; nohup python3 \"$SCRIPT_DIR/latency-proxy.py\" \\",
+        "evals/latency-benchmarking/demo.sh:151 explicit optional historical latency experiment; nohup python3 \"$SCRIPT_DIR/latency-proxy.py\" \\",
+        "evals/latency-benchmarking/demo.sh:161 explicit optional historical latency experiment; nohup python3 \"$SCRIPT_DIR/latency-proxy.py\" \\"
+      ],
+      "cadence": "optional explicit operator research/upstream regeneration only; never PR/main required setup",
+      "isolation_test": "migration_inventory::tests::sdk_exception_policy::research16_is_absent_from_actual_required_and_default_execution_graph",
+      "status": "isolated_research_evaluation",
+      "remaining_boundary": "No required caller found; README names fork/manual cmake/external rpc-server and llama-server. Delay and chunk metrics are research, not measured current product proof.",
+      "exception_admission": "Exact recorded existing source class only, not installed environment or actual experiment qualification.",
+      "caller_source_bindings": [
+        {
+          "path": "evals/latency-benchmarking/bench.sh",
+          "sha256": "39825a30c74c33f2c109409ebb074fcdf8755cf50afc5728288aaaa5dba96996",
+          "line": 45,
+          "source_block": "        nohup python3 \"$SCRIPT_DIR/latency-proxy.py\" \\"
+        },
+        {
+          "path": "evals/latency-benchmarking/bench-b2b.sh",
+          "sha256": "a16381d3e726192d3b1509fdd5479d40072c6db731fcb81a04e71bf840c45d6a",
+          "line": 44,
+          "source_block": "        nohup python3 \"$SCRIPT_DIR/latency-proxy.py\" \\"
+        },
+        {
+          "path": "evals/latency-benchmarking/demo.sh",
+          "sha256": "85987999bbda4653a9f8ff76bba09896dbabcbfffba9f75cd5040b055c9e3c74",
+          "line": 151,
+          "source_block": "        nohup python3 \"$SCRIPT_DIR/latency-proxy.py\" \\"
+        },
+        {
+          "path": "evals/latency-benchmarking/demo.sh",
+          "sha256": "85987999bbda4653a9f8ff76bba09896dbabcbfffba9f75cd5040b055c9e3c74",
+          "line": 161,
+          "source_block": "        nohup python3 \"$SCRIPT_DIR/latency-proxy.py\" \\"
+        }
+      ]
+    },
+    {
+      "path": "evals/latency-benchmarking/measure.py",
+      "source_sha256": "377739b83129a829558f72f8728f2914ad28667085fb07dd6151b284a4620e4e",
+      "purpose": "evaluation orchestration",
+      "imports": [
+        "import argparse",
+        "import json",
+        "import time",
+        "import sys",
+        "import urllib.request"
+      ],
+      "dependencies": "CPython standard library only; no third-party Python package imports.",
+      "local_dependency_files": [
+        "evals/research-python/pyproject.toml",
+        "evals/research-python/BOUNDARIES.json"
+      ],
+      "callers": [
+        "evals/latency-benchmarking/README.md measurement commands; existing external research endpoints and local supplied model only.",
+        "evals/latency-benchmarking/bench-b2b.sh:102 explicit optional historical latency experiment; result=$(python3 \"$SCRIPT_DIR/measure.py\" \\"
+      ],
+      "cadence": "optional explicit operator research/upstream regeneration only; never PR/main required setup",
+      "isolation_test": "migration_inventory::tests::sdk_exception_policy::research16_is_absent_from_actual_required_and_default_execution_graph",
+      "status": "isolated_research_evaluation",
+      "remaining_boundary": "No required caller found; README names fork/manual cmake/external rpc-server and llama-server. Delay and chunk metrics are research, not measured current product proof.",
+      "exception_admission": "Exact recorded existing source class only, not installed environment or actual experiment qualification.",
+      "caller_source_bindings": [
+        {
+          "path": "evals/latency-benchmarking/bench-b2b.sh",
+          "sha256": "a16381d3e726192d3b1509fdd5479d40072c6db731fcb81a04e71bf840c45d6a",
+          "line": 102,
+          "source_block": "    result=$(python3 \"$SCRIPT_DIR/measure.py\" \\"
+        }
+      ]
+    },
+    {
+      "path": "evals/moa-openrouter/analyze_ablation.py",
+      "source_sha256": "0bb638a1d8609a176b4311fc16439abbedbd7c6f055cde92c927e34c4dfd3ff7",
+      "purpose": "research/evaluation",
+      "imports": [
+        "import argparse",
+        "import json",
+        "import random",
+        "import sys",
+        "from collections import defaultdict"
+      ],
+      "dependencies": "CPython standard library; exact local orclient.py/probe_tools.py siblings where imported; no third-party packages.",
+      "local_dependency_files": [
+        "evals/research-python/pyproject.toml",
+        "evals/research-python/BOUNDARIES.json"
+      ],
+      "callers": [
+        "From evals/moa-openrouter: python3 analyze_ablation.py /tmp/moa_ablation.jsonl --iters 10000 --seed 0; optional analysis suggested by ignored live Rust eval_openrouter tests."
+      ],
+      "cadence": "optional explicit operator research/upstream regeneration only; never PR/main required setup",
+      "isolation_test": "migration_inventory::tests::sdk_exception_policy::research16_is_absent_from_actual_required_and_default_execution_graph",
+      "status": "isolated_research_evaluation",
+      "remaining_boundary": "Live OpenRouter capture remains key/cost gated and ignored; native sim_real_traces consumes captured data without importing Python.",
+      "exception_admission": "Exact recorded existing source class only, not installed environment or actual experiment qualification."
+    },
+    {
+      "path": "evals/moa-openrouter/lite_agent.py",
+      "source_sha256": "0540c2b0d8c8a1d59bd48dd937cb98aa8021223322c603dbf7c562044be45e50",
+      "purpose": "research/evaluation",
+      "imports": [
+        "import argparse",
+        "import json",
+        "import os",
+        "import time",
+        "import urllib.request"
+      ],
+      "dependencies": "CPython standard library; exact local orclient.py/probe_tools.py siblings where imported; no third-party packages.",
+      "local_dependency_files": [
+        "evals/research-python/pyproject.toml",
+        "evals/research-python/BOUNDARIES.json"
+      ],
+      "callers": [
+        "From evals/moa-openrouter: python3 lite_agent.py --base http://localhost:9337/v1 --model mesh; optional supplied endpoint lightweight-agent experiment."
+      ],
+      "cadence": "optional explicit operator research/upstream regeneration only; never PR/main required setup",
+      "isolation_test": "migration_inventory::tests::sdk_exception_policy::research16_is_absent_from_actual_required_and_default_execution_graph",
+      "status": "isolated_research_evaluation",
+      "remaining_boundary": "Live OpenRouter capture remains key/cost gated and ignored; native sim_real_traces consumes captured data without importing Python.",
+      "exception_admission": "Exact recorded existing source class only, not installed environment or actual experiment qualification."
+    },
+    {
+      "path": "evals/moa-openrouter/make_fixture.py",
+      "source_sha256": "869e442651082724bce8060de5b9305ab8b80c2508861fd5f06a3e4d884d5fc9",
+      "purpose": "research/evaluation fixture generator",
+      "imports": [
+        "import json"
+      ],
+      "dependencies": "CPython standard library; exact local orclient.py/probe_tools.py siblings where imported; no third-party packages.",
+      "local_dependency_files": [
+        "evals/research-python/pyproject.toml",
+        "evals/research-python/BOUNDARIES.json"
+      ],
+      "callers": [
+        "From evals/moa-openrouter: python3 make_fixture.py; reads existing corpus.jsonl/agentic.jsonl and writes actual Rust real_traces.json fixture."
+      ],
+      "cadence": "optional explicit operator research/upstream regeneration only; never PR/main required setup",
+      "isolation_test": "migration_inventory::tests::sdk_exception_policy::research16_is_absent_from_actual_required_and_default_execution_graph",
+      "status": "isolated_research_evaluation",
+      "remaining_boundary": "Live OpenRouter capture remains key/cost gated and ignored; native sim_real_traces consumes captured data without importing Python.",
+      "exception_admission": "Exact recorded existing source class only, not installed environment or actual experiment qualification."
+    },
+    {
+      "path": "evals/moa-openrouter/orclient.py",
+      "source_sha256": "217b06552f9131cf64cafa0d7dc9bb62bf72ed34edca58d97f816a6241cb808c",
+      "purpose": "external client evaluation",
+      "imports": [
+        "import json",
+        "import os",
+        "import time",
+        "import urllib.error",
+        "import urllib.request"
+      ],
+      "dependencies": "CPython standard library; exact local orclient.py/probe_tools.py siblings where imported; no third-party packages.",
+      "local_dependency_files": [
+        "evals/research-python/pyproject.toml",
+        "evals/research-python/BOUNDARIES.json"
+      ],
+      "callers": [
+        "Imported by record.py, record_agentic.py and probe_tools.py from their own directory; not an independent CLI."
+      ],
+      "cadence": "optional explicit operator research/upstream regeneration only; never PR/main required setup",
+      "isolation_test": "migration_inventory::tests::sdk_exception_policy::research16_is_absent_from_actual_required_and_default_execution_graph",
+      "status": "isolated_research_evaluation",
+      "remaining_boundary": "Live OpenRouter capture remains key/cost gated and ignored; native sim_real_traces consumes captured data without importing Python.",
+      "exception_admission": "Exact recorded existing source class only, not installed environment or actual experiment qualification."
+    },
+    {
+      "path": "evals/moa-openrouter/probe_tools.py",
+      "source_sha256": "b6f18d47d641754a93f5830dd8889936aef7a88d07d235e5e1d859ab31e98b65",
+      "purpose": "research/evaluation",
+      "imports": [
+        "import json",
+        "import sys",
+        "from concurrent.futures import ThreadPoolExecutor",
+        "import orclient as oc"
+      ],
+      "dependencies": "CPython standard library; exact local orclient.py/probe_tools.py siblings where imported; no third-party packages.",
+      "local_dependency_files": [
+        "evals/research-python/pyproject.toml",
+        "evals/research-python/BOUNDARIES.json"
+      ],
+      "callers": [
+        "From evals/moa-openrouter: python3 probe_tools.py; explicit OPENROUTER_API_KEY, remote paid calls, writes fanout.jsonl."
+      ],
+      "cadence": "optional explicit operator research/upstream regeneration only; never PR/main required setup",
+      "isolation_test": "migration_inventory::tests::sdk_exception_policy::research16_is_absent_from_actual_required_and_default_execution_graph",
+      "status": "isolated_research_evaluation",
+      "remaining_boundary": "Live OpenRouter capture remains key/cost gated and ignored; native sim_real_traces consumes captured data without importing Python.",
+      "exception_admission": "Exact recorded existing source class only, not installed environment or actual experiment qualification."
+    },
+    {
+      "path": "evals/moa-openrouter/record.py",
+      "source_sha256": "2382f67de9e29e4477af7f50040d904966c6f5b0da1c50262d63a760045cca04",
+      "purpose": "research/evaluation",
+      "imports": [
+        "import json",
+        "import sys",
+        "from concurrent.futures import ThreadPoolExecutor",
+        "import orclient as oc",
+        "from probe_tools import TOOLS"
+      ],
+      "dependencies": "CPython standard library; exact local orclient.py/probe_tools.py siblings where imported; no third-party packages.",
+      "local_dependency_files": [
+        "evals/research-python/pyproject.toml",
+        "evals/research-python/BOUNDARIES.json"
+      ],
+      "callers": [
+        "From evals/moa-openrouter: python3 record.py; explicit OPENROUTER_API_KEY, paid capture, writes corpus.jsonl."
+      ],
+      "cadence": "optional explicit operator research/upstream regeneration only; never PR/main required setup",
+      "isolation_test": "migration_inventory::tests::sdk_exception_policy::research16_is_absent_from_actual_required_and_default_execution_graph",
+      "status": "isolated_research_evaluation",
+      "remaining_boundary": "Live OpenRouter capture remains key/cost gated and ignored; native sim_real_traces consumes captured data without importing Python.",
+      "exception_admission": "Exact recorded existing source class only, not installed environment or actual experiment qualification."
+    },
+    {
+      "path": "evals/moa-openrouter/record_agentic.py",
+      "source_sha256": "b880a243559740e6d3a199a2e4ace3d753f1e954ef8dcfd56ed3ac4e9137a873",
+      "purpose": "research/evaluation",
+      "imports": [
+        "import json",
+        "import sys",
+        "from concurrent.futures import ThreadPoolExecutor",
+        "import orclient as oc"
+      ],
+      "dependencies": "CPython standard library; exact local orclient.py/probe_tools.py siblings where imported; no third-party packages.",
+      "local_dependency_files": [
+        "evals/research-python/pyproject.toml",
+        "evals/research-python/BOUNDARIES.json"
+      ],
+      "callers": [
+        "From evals/moa-openrouter: python3 record_agentic.py; explicit OPENROUTER_API_KEY, paid capture with canned tool results, writes agentic.jsonl."
+      ],
+      "cadence": "optional explicit operator research/upstream regeneration only; never PR/main required setup",
+      "isolation_test": "migration_inventory::tests::sdk_exception_policy::research16_is_absent_from_actual_required_and_default_execution_graph",
+      "status": "isolated_research_evaluation",
+      "remaining_boundary": "Live OpenRouter capture remains key/cost gated and ignored; native sim_real_traces consumes captured data without importing Python.",
+      "exception_admission": "Exact recorded existing source class only, not installed environment or actual experiment qualification."
+    },
+    {
+      "path": "evals/scenarios/debug-session/buggy.py",
+      "source_sha256": "15b74dc42b7fbee4bb34003939feba8182b765bbffa8627dcc12ec6067182c08",
+      "purpose": "evaluation fixture",
+      "imports": [
+        "import csv",
+        "import sys",
+        "from datetime import datetime"
+      ],
+      "dependencies": "CPython standard library only; no third-party Python package imports.",
+      "local_dependency_files": [
+        "evals/research-python/pyproject.toml",
+        "evals/research-python/BOUNDARIES.json"
+      ],
+      "callers": [
+        "Supplied optional agent debug-session task source; execution/editing belongs to that research task, deliberately buggy content remains unchanged."
+      ],
+      "cadence": "optional explicit operator research/upstream regeneration only; never PR/main required setup",
+      "isolation_test": "migration_inventory::tests::sdk_exception_policy::research16_is_absent_from_actual_required_and_default_execution_graph",
+      "status": "isolated_research_evaluation",
+      "remaining_boundary": "No required workflow/Just execution caller found; explicit class/dependency/isolation declaration still needed.",
+      "exception_admission": "Exact recorded existing source class only, not installed environment or actual experiment qualification."
+    },
+    {
+      "path": "evals/scenarios/edit-file/server.py",
+      "source_sha256": "695620781eafdc9d85e553c4d826f60fc60c000425e72207e7e5b9005d72297f",
+      "purpose": "evaluation fixture/server",
+      "imports": [
+        "import json",
+        "from http.server import HTTPServer, BaseHTTPRequestHandler"
+      ],
+      "dependencies": "CPython standard library only; no third-party Python package imports.",
+      "local_dependency_files": [
+        "evals/research-python/pyproject.toml",
+        "evals/research-python/BOUNDARIES.json"
+      ],
+      "callers": [
+        "Supplied optional agent edit-file task source; direct Python server execution belongs to that research task."
+      ],
+      "cadence": "optional explicit operator research/upstream regeneration only; never PR/main required setup",
+      "isolation_test": "migration_inventory::tests::sdk_exception_policy::research16_is_absent_from_actual_required_and_default_execution_graph",
+      "status": "isolated_research_evaluation",
+      "remaining_boundary": "No required workflow/Just execution caller found; explicit class/dependency/isolation declaration still needed.",
+      "exception_admission": "Exact recorded existing source class only, not installed environment or actual experiment qualification."
+    },
+    {
+      "path": "evals/scenarios/refactor/config.py",
+      "source_sha256": "a72729256960d49d69e2336060b63eff820760fabe83b198f02e88e39086b7cc",
+      "purpose": "evaluation fixture",
+      "imports": [
+        "import os",
+        "import json"
+      ],
+      "dependencies": "CPython standard library only; no third-party Python package imports.",
+      "local_dependency_files": [
+        "evals/research-python/pyproject.toml",
+        "evals/research-python/BOUNDARIES.json"
+      ],
+      "callers": [
+        "Supplied optional refactor task module; task-local imports, no repository required validation entrypoint."
+      ],
+      "cadence": "optional explicit operator research/upstream regeneration only; never PR/main required setup",
+      "isolation_test": "migration_inventory::tests::sdk_exception_policy::research16_is_absent_from_actual_required_and_default_execution_graph",
+      "status": "isolated_research_evaluation",
+      "remaining_boundary": "No required workflow/Just execution caller found; explicit class/dependency/isolation declaration still needed.",
+      "exception_admission": "Exact recorded existing source class only, not installed environment or actual experiment qualification."
+    },
+    {
+      "path": "evals/test_injection_framing.py",
+      "source_sha256": "3fe8aea60fa43641a5a6d8ee7792c8d692fbd51f05ccf0e9ed0d88dff38118a5",
+      "purpose": "evaluation test",
+      "imports": [
+        "import argparse",
+        "import json",
+        "import os",
+        "import signal",
+        "import subprocess",
+        "import sys",
+        "import threading",
+        "import time",
+        "import urllib.request",
+        "from http.server import HTTPServer, BaseHTTPRequestHandler"
+      ],
+      "dependencies": "CPython standard library only; no third-party Python package imports.",
+      "local_dependency_files": [
+        "evals/research-python/pyproject.toml",
+        "evals/research-python/BOUNDARIES.json"
+      ],
+      "callers": [
+        "python3 evals/test_injection_framing.py --model /absolute/supplied.gguf; historical external llama-server hook experiment, not current product serving."
+      ],
+      "cadence": "optional explicit operator research/upstream regeneration only; never PR/main required setup",
+      "isolation_test": "migration_inventory::tests::sdk_exception_policy::research16_is_absent_from_actual_required_and_default_execution_graph",
+      "status": "isolated_research_evaluation",
+      "remaining_boundary": "No default required caller found; old external hook capability needs current semantic validation before any product compatibility claim.",
+      "exception_admission": "Exact recorded existing source class only, not installed environment or actual experiment qualification."
+    },
+    {
+      "path": "evals/virtual_llm_eval.py",
+      "source_sha256": "77c45313fcd74dae382698348bc6acb3e6542cd4a40d6c1b926e2a5c8b9c4ee3",
+      "purpose": "evaluation orchestration",
+      "imports": [
+        "import argparse",
+        "import json",
+        "import time",
+        "import os",
+        "import urllib.request"
+      ],
+      "dependencies": "CPython standard library only; no third-party Python package imports.",
+      "local_dependency_files": [
+        "evals/research-python/pyproject.toml",
+        "evals/research-python/BOUNDARIES.json"
+      ],
+      "callers": [
+        "python3 evals/virtual_llm_eval.py --port 9337 [--no-hooks]; optional already-running supplied endpoint ablation. Existing startup doc is historical."
+      ],
+      "cadence": "optional explicit operator research/upstream regeneration only; never PR/main required setup",
+      "isolation_test": "migration_inventory::tests::sdk_exception_policy::research16_is_absent_from_actual_required_and_default_execution_graph",
+      "status": "isolated_research_evaluation",
+      "remaining_boundary": "No required caller found; self usage still contains old --model/--auto surface. Actual ablation requires model/runtime separately.",
+      "exception_admission": "Exact recorded existing source class only, not installed environment or actual experiment qualification."
+    }
+  ],
+  "required_sdk_cadence": "Unchanged. Four actual third-party SDK clients remain conditional_unqualified and use their own locked SDK environments.",
+  "interpreter_setup": "Use an existing explicitly selected CPython interpreter. No interpreter downloads or required-lane installation. These stdlib commands require no package synchronization.",
+  "upstream_converter_boundary": "The quantizer driver directly requires numpy/gguf; conversion additionally calls operator --python/--python-converter. Separate optional upstream-conversion dependency group is copied from the locally prepared pinned llama.cpp requirements, with both requirement source hashes recorded; arbitrary external converter revisions are not qualified by this group.",
+  "execution_qualification": null,
+  "exception_policy_admission": null,
+  "stdlib_paths": 15,
+  "third_party_reference_paths": 1,
+  "upstream_requirement_sources": [
+    {
+      "path": ".deps/llama.cpp/requirements/requirements-convert_hf_to_gguf.txt",
+      "sha256": "3c1d689a0fb8b17057f012848819e405ca3949482e0554d8ae4586391b5bbbd4",
+      "source": "-r ./requirements-convert_legacy_llama.txt\n--extra-index-url https://download.pytorch.org/whl/cpu\n\n## Embedding Gemma requires PyTorch 2.6.0 or later, bumped to 2.11.0 for compatibility\ntorch==2.11.0\n"
+    },
+    {
+      "path": ".deps/llama.cpp/requirements/requirements-convert_legacy_llama.txt",
+      "sha256": "8e462f800429e87972ad4ecbf06a30c5e38bc381cda5597d0a36fb5110ca3cc8",
+      "source": "numpy~=2.2.6\nsentencepiece>=0.1.98,<0.3.0\n\ntransformers==4.57.6\n\ngguf>=0.1.0\nprotobuf>=4.21.0,<5.0.0\n"
+    }
+  ],
+  "python_profiles": {
+    "stdlib15": ">=3.11,<3.15",
+    "quantizer_reference": ">=3.12,<3.13"
+  }
+}

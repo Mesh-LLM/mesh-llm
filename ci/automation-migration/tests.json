@@ -159,7 +159,6 @@
           "scripts/tests/test_generate_native_runtime_release_manifest.py",
           "scripts/tests/test_validate_release_native_runtime_matrix.py",
           "scripts/tests/test_ui_distribution.py",
-          "scripts/tests/test_ci_windows_composition.py",
           "scripts/tests/test_ci_prepare_native_runtime.py",
           "scripts/tests/test_ci_sdk_json_consumer.py"
         ],
@@ -233,12 +232,10 @@
           "scripts/tests/test_resume_crates_release_workflow.py",
           "scripts/tests/test_rc_release_smoke.py",
           "scripts/tests/test_install_sh.py",
-          "scripts/tests/test_install_ps1.py",
           "scripts/tests/test_install_sccache.py",
           "scripts/tests/test_build_release.py",
           "scripts/tests/test_build_development_product.py",
           "scripts/tests/test_build_linux.py",
-          "scripts/tests/test_build_windows.py",
           "scripts/tests/test_build_ui.py",
           "scripts/tests/test_build_llama.py",
           "scripts/tests/test_build_accelerator_defaults.py",
@@ -622,22 +619,6 @@
     },
     {
       "case_ownership": "Per-case replacement must test behavior, including positive, negative, edge and identity-preserving cases; source-text-only assertions do not qualify.",
-      "deletion_condition": "Delete only after behavioral success/failure cases run in the typed owner and relevant platform gate.",
-      "gate": "Legacy just ci-validate plus owning build/install/platform gate",
-      "module": "scripts/tests/test_build_windows.py",
-      "owner": "tools/xtask semantic owner or existing platform/tool component",
-      "rust_or_ctest_gate": "Not yet ported; listed owner target is future migration ownership, not claimed execution.",
-      "sha256": "9f83a069ad2f969babbc420cc8f42c517784760d4e653441587c659d0aa60ce4",
-      "test_method_count": 4,
-      "test_methods": [
-        "test_windows_host_ui_fallback_requires_index_entry_point",
-        "test_windows_release_recipes_request_dynamic_hosts",
-        "test_windows_runtime_slice_uses_verified_cache_and_composer",
-        "test_windows_script_keeps_dynamic_host_and_runtime_separation"
-      ]
-    },
-    {
-      "case_ownership": "Per-case replacement must test behavior, including positive, negative, edge and identity-preserving cases; source-text-only assertions do not qualify.",
       "cutover_status": "deleted; Rust process owner replaces helper",
       "deletion_condition": "Delete only after each behavior case has an owning replacement and required platform evidence.",
       "gate": "Legacy just ci-validate and relevant workflow/platform lane",
@@ -743,26 +724,6 @@
         "test_bad_cli_json_blocks_product_publication_without_building",
         "test_composition_runs_the_sdk_reader_before_publishing",
         "test_original_cli_change_selects_the_consumer_and_producers"
-      ]
-    },
-    {
-      "case_ownership": "Per-case replacement must test behavior, including positive, negative, edge and identity-preserving cases; source-text-only assertions do not qualify.",
-      "deletion_condition": "Delete only after each behavior case has an owning replacement and required platform evidence.",
-      "gate": "Legacy just ci-validate and relevant workflow/platform lane",
-      "module": "scripts/tests/test_ci_windows_composition.py",
-      "owner": "tools/xtask/src/ci_validation or owning action/workflow component",
-      "rust_or_ctest_gate": "Not yet ported; listed owner target is future migration ownership, not claimed execution.",
-      "sha256": "fa70c63afc70c3825531c5aea85909bcc528eec2795c66be1ef312bff38b5b0b",
-      "test_method_count": 8,
-      "test_methods": [
-        "test_host_action_uses_canonical_dynamic_host_builder",
-        "test_windows_abi_cache_action_keys_every_compatibility_boundary",
-        "test_windows_attestation_verifier_stays_native_abi_free",
-        "test_windows_cache_warmup_supports_focused_cpu_dispatch",
-        "test_windows_debug_host_uses_the_package_version_for_composition",
-        "test_windows_host_action_owns_the_neutral_host_integrity_contract",
-        "test_windows_native_cache_inputs_fail_closed_and_callers_opt_in",
-        "test_windows_routes_cover_every_shared_product_primitive"
       ]
     },
     {
@@ -1047,48 +1008,6 @@
       "case_ownership": "Per-case replacement must test behavior, including positive, negative, edge and identity-preserving cases; source-text-only assertions do not qualify.",
       "deletion_condition": "Delete only after behavioral success/failure cases run in the typed owner and relevant platform gate.",
       "gate": "Legacy just ci-validate plus owning build/install/platform gate",
-      "module": "scripts/tests/test_hf_skippy_mtp_certify_job.py",
-      "owner": "tools/xtask semantic owner or existing platform/tool component",
-      "rust_or_ctest_gate": "Not yet ported; listed owner target is future migration ownership, not claimed execution.",
-      "sha256": "1a81582b9f3b1fcfa5fc23649fedd2270cd65a465de5408e81a385beae83860e",
-      "test_method_count": 4,
-      "test_methods": [
-        "test_accepts_public_hugging_face_https_url",
-        "test_copy_rejects_body_over_limit",
-        "test_rejects_private_resolution_for_trusted_host",
-        "test_rejects_untrusted_projector_host"
-      ]
-    },
-    {
-      "case_ownership": "Per-case replacement must test behavior, including positive, negative, edge and identity-preserving cases; source-text-only assertions do not qualify.",
-      "deletion_condition": "Delete only after behavioral success/failure cases run in the typed owner and relevant platform gate.",
-      "gate": "Legacy just ci-validate plus owning build/install/platform gate",
-      "module": "scripts/tests/test_install_ps1.py",
-      "owner": "tools/xtask semantic owner or existing platform/tool component",
-      "rust_or_ctest_gate": "Not yet ported; listed owner target is future migration ownership, not claimed execution.",
-      "sha256": "f4ffebf97eda2bfd1c32ed8288ee14f61a3cfa67cd7bc923aea785b23538b6f1",
-      "test_method_count": 14,
-      "test_methods": [
-        "test_architecture_probe_handles_windows_powershell_null",
-        "test_failed_runtime_replacement_restores_previous_install",
-        "test_interactive_install_runs_setup_and_warns_for_legacy_flavor",
-        "test_no_setup_prints_command_without_running_setup",
-        "test_noninteractive_install_prints_setup_command",
-        "test_script_keeps_host_archive_and_setup_handoff_flags",
-        "test_script_removes_runtime_and_service_policy_strings",
-        "test_script_stages_before_mutation_and_cleans_failed_staging",
-        "test_script_stages_replacement_and_removes_stale_host_imports",
-        "test_script_validates_product_bundle_before_mutation",
-        "test_stale_cleanup_failure_does_not_roll_back_committed_product",
-        "test_stale_host_imports_is_removed_when_bundle_omits_it",
-        "test_tampered_product_manifest_fails_before_existing_install_mutation",
-        "test_tree_digest_normalizes_platform_path_separators"
-      ]
-    },
-    {
-      "case_ownership": "Per-case replacement must test behavior, including positive, negative, edge and identity-preserving cases; source-text-only assertions do not qualify.",
-      "deletion_condition": "Delete only after behavioral success/failure cases run in the typed owner and relevant platform gate.",
-      "gate": "Legacy just ci-validate plus owning build/install/platform gate",
       "module": "scripts/tests/test_install_sccache.py",
       "owner": "tools/xtask semantic owner or existing platform/tool component",
       "rust_or_ctest_gate": "Not yet ported; listed owner target is future migration ownership, not claimed execution.",
@@ -1174,39 +1093,6 @@
       "case_ownership": "Per-case replacement must test behavior, including positive, negative, edge and identity-preserving cases; source-text-only assertions do not qualify.",
       "deletion_condition": "Delete only after every behavioral case has a Rust/CTest/component owner with identity, tolerance, and failure parity.",
       "gate": "Legacy just ci-validate plus owning CTest/Rust/model gate",
-      "module": "scripts/tests/test_llama_canary_agent_repair_contract.py",
-      "owner": "Owning Skippy/native/model component; generic orchestration in tools/xtask/src/automation",
-      "rust_or_ctest_gate": "Not yet ported; listed owner target is future migration ownership, not claimed execution.",
-      "sha256": "220cc4bdb093d9d5eb3462c0c7fc27a59ac8e03533f71d0453e2d9e3c66d3519",
-      "test_method_count": 21,
-      "test_methods": [
-        "test_wrapper_keeps_one_agent_session_until_ordered_gates_are_green",
-        "test_pinned_build_checks_pin_without_rewriting_it",
-        "test_wrapper_reexecs_natively_before_state_initialization",
-        "test_agent_and_final_verification_have_explicit_budgets",
-        "test_each_returned_candidate_gets_a_full_verification_window",
-        "test_prepare_owns_pin_and_exact_prepared_upstream",
-        "test_build_gate_is_complete",
-        "test_model_cache_is_an_infrastructure_gate_outside_agent_repair",
-        "test_certification_is_full_and_uses_prebuilt_candidate",
-        "test_agent_has_no_github_credentials_or_publication_authority",
-        "test_agent_failure_records_the_exit_status_in_evidence",
-        "test_failure_paths_do_not_publish",
-        "test_certified_commit_is_bound_to_verified_tree",
-        "test_verify_mode_restores_tree_identity_from_candidate_commit",
-        "test_publisher_pushes_only_exact_ready_commit",
-        "test_final_verification_clears_agent_native_products_and_forces_smokes",
-        "test_agent_runbook_describes_complete_developer_task",
-        "test_dispatch_sha_is_rejected_before_use",
-        "test_shell_syntax",
-        "test_persistent_runner_scratch_is_scoped_and_pruned",
-        "test_runnable_row_carrying_unsupported_reason_is_rejected"
-      ]
-    },
-    {
-      "case_ownership": "Per-case replacement must test behavior, including positive, negative, edge and identity-preserving cases; source-text-only assertions do not qualify.",
-      "deletion_condition": "Delete only after every behavioral case has a Rust/CTest/component owner with identity, tolerance, and failure parity.",
-      "gate": "Legacy just ci-validate plus owning CTest/Rust/model gate",
       "module": "scripts/tests/test_llama_canary_mesh_ref.py",
       "owner": "Owning Skippy/native/model component; generic orchestration in tools/xtask/src/automation",
       "rust_or_ctest_gate": "Not yet ported; listed owner target is future migration ownership, not claimed execution.",
@@ -1218,24 +1104,6 @@
         "test_invalid_or_external_refs_and_upstream_override_fail",
         "test_invalid_selected_pin_fails",
         "test_only_manual_dispatch_can_select_source"
-      ]
-    },
-    {
-      "case_ownership": "Per-case replacement must test behavior, including positive, negative, edge and identity-preserving cases; source-text-only assertions do not qualify.",
-      "deletion_condition": "Delete only after every behavioral case has a Rust/CTest/component owner with identity, tolerance, and failure parity.",
-      "gate": "Legacy just ci-validate plus owning CTest/Rust/model gate",
-      "module": "scripts/tests/test_llama_native_full_replay.py",
-      "owner": "Owning Skippy/native/model component; generic orchestration in tools/xtask/src/automation",
-      "rust_or_ctest_gate": "Not yet ported; listed owner target is future migration ownership, not claimed execution.",
-      "sha256": "dd22f0a1a65f6acf99d1829ef596bf260e76e285beb03b91c9f330249c4bb486",
-      "test_method_count": 6,
-      "test_methods": [
-        "test_cached_full_replay_rebuilds_and_runs_skippy_gates",
-        "test_cached_standard_build_keeps_cache_shortcut",
-        "test_default_build_keeps_standard_and_private_tests_disabled",
-        "test_full_replay_builds_and_runs_only_skippy_gates",
-        "test_just_recipe_uses_a_dedicated_forced_replay_build",
-        "test_upstream_suite_builds_default_targets_and_runs_all_ctests"
       ]
     },
     {
@@ -1360,94 +1228,6 @@
           }
         ]
       }
-    },
-    {
-      "case_ownership": "Per-case replacement must test behavior, including positive, negative, edge and identity-preserving cases; source-text-only assertions do not qualify.",
-      "deletion_condition": "Delete only after every behavioral case has a Rust/CTest/component owner with identity, tolerance, and failure parity.",
-      "gate": "Legacy just ci-validate plus owning CTest/Rust/model gate",
-      "module": "scripts/tests/test_llama_upstream_canary_contract.py",
-      "owner": "Owning Skippy/native/model component; generic orchestration in tools/xtask/src/automation",
-      "rust_or_ctest_gate": "Not yet ported; listed owner target is future migration ownership, not claimed execution.",
-      "sha256": "1ce90c16527c66534941cf9f41f86f3dcbcbe3a0270fb59a582a514482cb5e28",
-      "test_method_count": 36,
-      "test_methods": [
-        "test_battery_builds_once_then_skips_build_in_each_lane",
-        "test_build_and_workers_load_runner_cache_configuration",
-        "test_changed_pin_jobs_configure_local_git_identity_before_harness",
-        "test_changed_pin_never_pushes_directly_to_main",
-        "test_changed_pin_uses_one_agent_then_success_gated_publication",
-        "test_dry_run_reconciles_every_planned_family",
-        "test_family_battery_has_no_activation_wire_dtype_switches",
-        "test_family_filter_limits_the_resolved_dry_run",
-        "test_family_results_have_typed_failure_outcomes",
-        "test_large_family_certification_budget_is_not_truncated",
-        "test_mixed_roster_keeps_workload_and_split_certification_separate",
-        "test_mmproj_failure_is_accounted_separately_from_core_certification",
-        "test_mmproj_smoke_image_fixture_is_deterministic",
-        "test_mmproj_smoke_lane_runs_only_for_families_with_a_projector",
-        "test_native_mtp_uses_one_target_model_and_correctness_sidebands",
-        "test_new_canary_queues_behind_active_runner_work",
-        "test_next_boundary_target_global_llama_src_before_subcommand",
-        "test_outcome_classifier_uses_terminal_evidence_not_option_names",
-        "test_persistent_runner_executes_goose_preflight",
-        "test_persistent_runner_executes_only_trusted_main_with_read_access",
-        "test_portable_timeout_runner_bounds_the_process_group",
-        "test_post_green_modifying_review_is_removed",
-        "test_preflight_pins_snapshot_and_records_native_mtp_models",
-        "test_rewriter_check_reexecs_and_pins_native_architecture",
-        "test_skip_build_omits_the_one_time_build",
-        "test_supplied_plan_cannot_omit_a_manifest_selected_family",
-        "test_timeout_runner_cleans_process_group_when_signalled",
-        "test_timeout_runner_closes_manifest_stdin_for_children",
-        "test_trusted_canary_owns_split_roster_promotion",
-        "test_two_scheduled_failures_raise_one_reconciled_issue",
-        "test_update_pin_script_writes_pin_and_rejects_invalid_sha",
-        "test_validate_global_llama_src_before_subcommand",
-        "test_workflow_and_wrapper_use_valid_invocations",
-        "test_workflow_builds_binaries_before_skipping_per_lane_builds",
-        "test_workflow_runs_only_daily_or_by_manual_dispatch",
-        "test_workload_dry_run_needs_no_oracle_and_forwards_startup_deadline"
-      ],
-      "current_source_sha256": "e407a67d0d2404eff95dc1a4a0f2b63f8307259d701407927d78da1e1c8fca90",
-      "current_test_method_count": 34,
-      "current_test_methods": [
-        "test_battery_builds_once_then_skips_build_in_each_lane",
-        "test_build_and_workers_load_runner_cache_configuration",
-        "test_changed_pin_jobs_configure_local_git_identity_before_harness",
-        "test_changed_pin_never_pushes_directly_to_main",
-        "test_changed_pin_uses_linear_preflight_candidate_and_verification",
-        "test_dry_run_reconciles_every_planned_family",
-        "test_family_battery_has_no_activation_wire_dtype_switches",
-        "test_family_certification_uses_os_assigned_ports",
-        "test_family_filter_limits_the_resolved_dry_run",
-        "test_family_results_have_typed_failure_outcomes",
-        "test_large_family_certification_budget_is_not_truncated",
-        "test_mixed_roster_keeps_workload_and_split_certification_separate",
-        "test_mmproj_failure_is_accounted_separately_from_core_certification",
-        "test_mmproj_smoke_image_fixture_is_deterministic",
-        "test_mmproj_smoke_lane_runs_only_for_families_with_a_projector",
-        "test_native_mtp_planning_includes_all_head_lane_load_budget",
-        "test_native_mtp_uses_one_target_model_and_correctness_sidebands",
-        "test_new_canary_queues_behind_active_runner_work",
-        "test_next_boundary_target_global_llama_src_before_subcommand",
-        "test_outcome_classifier_uses_terminal_evidence_not_option_names",
-        "test_persistent_runner_executes_goose_preflight",
-        "test_persistent_runner_executes_only_trusted_main_with_read_access",
-        "test_post_green_modifying_review_is_removed",
-        "test_preflight_pins_snapshot_and_records_native_mtp_models",
-        "test_rewriter_check_reexecs_and_pins_native_architecture",
-        "test_skip_build_omits_the_one_time_build",
-        "test_trusted_canary_owns_split_roster_promotion",
-        "test_two_scheduled_failures_raise_one_reconciled_issue",
-        "test_update_pin_script_writes_pin_and_rejects_invalid_sha",
-        "test_validate_global_llama_src_before_subcommand",
-        "test_workflow_and_wrapper_use_valid_invocations",
-        "test_workflow_builds_binaries_before_skipping_per_lane_builds",
-        "test_workflow_runs_only_daily_or_by_manual_dispatch",
-        "test_workload_dry_run_needs_no_oracle_and_forwards_startup_deadline"
-      ],
-      "baseline_inventory_preserved": "sha256, test_method_count and test_methods retain historical Task2 baseline; current_* fields bind the present partial-retirement source.",
-      "current_change": "Deletion-only retirement of selected-family omission method; 34 unchanged methods remain selected by required transitional CI. Historical baseline fields preserved."
     },
     {
       "case_ownership": "Per-case replacement must test behavior, including positive, negative, edge and identity-preserving cases; source-text-only assertions do not qualify.",
@@ -2520,131 +2300,6 @@
       "case_ownership": "Per-case replacement must test behavior, including positive, negative, edge and identity-preserving cases; source-text-only assertions do not qualify.",
       "deletion_condition": "Delete only after every behavioral case has a Rust/CTest/component owner with identity, tolerance, and failure parity.",
       "gate": "Legacy just ci-validate plus owning CTest/Rust/model gate",
-      "module": "scripts/tests/test_skippy_adaptive_prefill_ab.py",
-      "owner": "Owning Skippy/native/model component; generic orchestration in tools/xtask/src/automation",
-      "rust_or_ctest_gate": "Not yet ported; listed owner target is future migration ownership, not claimed execution.",
-      "sha256": "6d62522aaa21db4d0ff58716ca5bdca9c83de90dcb49ea129cca02291db83d5a",
-      "test_method_count": 4,
-      "test_methods": [
-        "test_markdown_renders_missing_metrics_as_na",
-        "test_paired_intervals_are_deterministic",
-        "test_prompt_manifest_preserves_provenance",
-        "test_prompt_manifest_rejects_missing_family"
-      ]
-    },
-    {
-      "case_ownership": "Per-case replacement must test behavior, including positive, negative, edge and identity-preserving cases; source-text-only assertions do not qualify.",
-      "deletion_condition": "Delete only after every behavioral case has a Rust/CTest/component owner with identity, tolerance, and failure parity.",
-      "gate": "Legacy just ci-validate plus owning CTest/Rust/model gate",
-      "module": "scripts/tests/test_skippy_competitive_benchmark.py",
-      "owner": "Owning Skippy/native/model component; generic orchestration in tools/xtask/src/automation",
-      "rust_or_ctest_gate": "Not yet ported; listed owner target is future migration ownership, not claimed execution.",
-      "sha256": "5cf2b06c462309e8edb757a8395798e77522a19a7ce9762f14b5d505bc6bf351",
-      "test_method_count": 28,
-      "test_methods": [
-        "test_adaptive_mesh_command_keeps_fixed_lane_ceiling",
-        "test_alternate_container_is_fail_closed_against_pinned_hash",
-        "test_checked_in_plan_covers_both_platforms_all_models_and_full_ladder",
-        "test_config_rejects_boolean_model_trace_shape",
-        "test_config_rejects_nonpositive_model_trace_shape",
-        "test_config_requires_a_reason_for_comparison_exclusions",
-        "test_controlled_run_can_require_all_comparison_backends",
-        "test_forced_rerun_quarantines_the_previous_cell",
-        "test_loaders_ignore_results_without_matching_completion_markers",
-        "test_manifest_verification_rejects_provenance_drift",
-        "test_mesh_stage_uses_native_sequence_budget_as_resident_ceiling",
-        "test_model_capability_exclusions_remove_only_unsupported_arms",
-        "test_optional_backends_can_match_unified_total_kv_capacity",
-        "test_optional_comparisons_skip_cleanly_off_linux_cuda",
-        "test_parity_rejects_empty_or_short_success_responses",
-        "test_report_writes_csv_svg_markdown_and_hash_manifest",
-        "test_request_completion_records_cached_and_new_prompt_tokens",
-        "test_required_backends_allow_only_pinned_capability_exclusions",
-        "test_server_commands_keep_raw_and_mesh_lane_counts_equal",
-        "test_sglang_defaults_to_the_pinned_gguf_and_tokenizer",
-        "test_synthetic_benchy_command_is_fail_closed_and_sglang_compatible",
-        "test_synthetic_cell_validation_accepts_complete_finite_result",
-        "test_synthetic_cell_validation_rejects_hidden_request_failures",
-        "test_synthetic_cell_validation_rejects_null_throughput",
-        "test_thoughtworks_runtime_shape_allows_per_model_override",
-        "test_trace_arm_order_alternates_to_reduce_time_order_bias",
-        "test_vllm_native_override_omits_gguf_loader_flags",
-        "test_vllm_uses_the_verified_config_for_the_pinned_gguf"
-      ]
-    },
-    {
-      "case_ownership": "Per-case replacement must test behavior, including positive, negative, edge and identity-preserving cases; source-text-only assertions do not qualify.",
-      "deletion_condition": "Delete only after every behavioral case has a Rust/CTest/component owner with identity, tolerance, and failure parity.",
-      "gate": "Legacy just ci-validate plus owning CTest/Rust/model gate",
-      "module": "scripts/tests/test_skippy_llama_parity.py",
-      "owner": "Owning Skippy/native/model component; generic orchestration in tools/xtask/src/automation",
-      "rust_or_ctest_gate": "Not yet ported; listed owner target is future migration ownership, not claimed execution.",
-      "sha256": "7d142d8f1c1eb9662697c0a49dafd6b8e47bf988febbc1f30c2bbdf28cd25bcb",
-      "test_method_count": 38,
-      "test_methods": [
-        "test_both_hooks_required",
-        "test_candidate_stateful_row_with_reason_fails",
-        "test_certified_row_with_reason_fails_even_when_registered",
-        "test_comment_only_mentions_do_not_register",
-        "test_disagreeing_integrity_fails",
-        "test_floating_pin_fails",
-        "test_inventory_checks_admission_in_the_explicit_checkout",
-        "test_malformed_blob_fails",
-        "test_matching_pin_joins",
-        "test_missing_models_dir_is_empty",
-        "test_needs_boundary_registration_rows_lists_pending",
-        "test_no_gaps_returns_none",
-        "test_non_runnable_statuses_skipped",
-        "test_pin_without_manifest_entry_passes_when_no_pin_rows",
-        "test_registered_row_with_reason_fails",
-        "test_registered_row_without_reason_passes",
-        "test_resolves_first_gguf_shard_for_split_candidates",
-        "test_runtime_slice_admission_accepts_architecture_independent_contract",
-        "test_runtime_slice_admission_allows_architecture_specific_implementation",
-        "test_runtime_slice_admission_rejects_architecture_allowlists",
-        "test_runtime_slice_admission_rejects_commented_out_control",
-        "test_runtime_slice_admission_rejects_detached_failure_path",
-        "test_runtime_slice_admission_rejects_diagnostic_literals_without_controls",
-        "test_runtime_slice_admission_rejects_failure_after_early_return",
-        "test_runtime_slice_admission_rejects_inactive_controls",
-        "test_runtime_slice_admission_rejects_nested_boundary_failure",
-        "test_runtime_slice_admission_rejects_nested_invalid_argument_failure",
-        "test_runtime_slice_admission_rejects_raw_string_controls",
-        "test_runtime_slice_admission_rejects_unbraced_boundary_failure",
-        "test_runtime_slice_admission_rejects_unbraced_invalid_argument_failure",
-        "test_runtime_slice_admission_requires_realized_contract_checks",
-        "test_selects_deterministic_lexicographic_first",
-        "test_skips_rows_already_registered",
-        "test_skips_rows_with_unsupported_reason",
-        "test_unknown_pin_fails",
-        "test_unregistered_candidate_row_with_reason_fails",
-        "test_unregistered_runnable_row_fails_without_reason",
-        "test_valid_pin_passes"
-      ]
-    },
-    {
-      "case_ownership": "Per-case replacement must test behavior, including positive, negative, edge and identity-preserving cases; source-text-only assertions do not qualify.",
-      "deletion_condition": "Delete only after every behavioral case has a Rust/CTest/component owner with identity, tolerance, and failure parity.",
-      "gate": "Legacy just ci-validate plus owning CTest/Rust/model gate",
-      "module": "scripts/tests/test_skippy_mixed_prefill_decode_ab.py",
-      "owner": "Owning Skippy/native/model component; generic orchestration in tools/xtask/src/automation",
-      "rust_or_ctest_gate": "Not yet ported; listed owner target is future migration ownership, not claimed execution.",
-      "sha256": "ade603e9eaf96629df235fde06cb9f2e22c9cc8fff797ffdb0bcf08a891f1005",
-      "test_method_count": 7,
-      "test_methods": [
-        "test_markdown_survives_missing_and_zero_metrics",
-        "test_paired_intervals_are_deterministic",
-        "test_prompt_manifest_preserves_trace_provenance",
-        "test_prompt_manifest_rejects_missing_prompt",
-        "test_scheduler_events_accept_feature_telemetry",
-        "test_stable_prompt_is_deterministic_and_nonempty",
-        "test_stage_config_connects_two_stage_topology"
-      ]
-    },
-    {
-      "case_ownership": "Per-case replacement must test behavior, including positive, negative, edge and identity-preserving cases; source-text-only assertions do not qualify.",
-      "deletion_condition": "Delete only after every behavioral case has a Rust/CTest/component owner with identity, tolerance, and failure parity.",
-      "gate": "Legacy just ci-validate plus owning CTest/Rust/model gate",
       "module": "scripts/tests/test_skippy_ocr_asr_oracle.py",
       "owner": "Owning Skippy/native/model component; generic orchestration in tools/xtask/src/automation",
       "rust_or_ctest_gate": "Not yet ported; listed owner target is future migration ownership, not claimed execution.",
@@ -2854,29 +2509,6 @@
           }
         ]
       }
-    },
-    {
-      "case_ownership": "Per-case replacement must test behavior, including positive, negative, edge and identity-preserving cases; source-text-only assertions do not qualify.",
-      "deletion_condition": "Delete only after every behavioral case has a Rust/CTest/component owner with identity, tolerance, and failure parity.",
-      "gate": "Legacy just ci-validate plus owning CTest/Rust/model gate",
-      "module": "scripts/tests/test_skippy_radix_cache_ab.py",
-      "owner": "Owning Skippy/native/model component; generic orchestration in tools/xtask/src/automation",
-      "rust_or_ctest_gate": "Not yet ported; listed owner target is future migration ownership, not claimed execution.",
-      "sha256": "abb5fe96198b5089693d017fe7e92a217771c65f76ee6a949edf32a95fae6d8a",
-      "test_method_count": 11,
-      "test_methods": [
-        "test_cache_lift_and_per_prompt_preservation_are_separate",
-        "test_coding_agent_trace_grows_without_changing_its_prefix",
-        "test_concurrent_gate_rejects_hit_regression_beyond_round_tolerance",
-        "test_concurrent_gate_tolerates_one_transient_miss_per_round",
-        "test_divergent_prompts_are_unique_and_nonempty",
-        "test_empty_telemetry_does_not_invent_cache_metrics",
-        "test_fails_explicitly_when_summary_telemetry_never_arrives",
-        "test_new_n1_output_mismatch_only_fails_when_old_preserves_output",
-        "test_recurrent_gate_requires_only_exact_checkpoint_hits",
-        "test_stage_config_offloads_model_layers_explicitly",
-        "test_waits_for_delayed_summary_telemetry"
-      ]
     },
     {
       "case_ownership": "Per-case replacement must test behavior, including positive, negative, edge and identity-preserving cases; source-text-only assertions do not qualify.",
@@ -19915,5 +19547,132 @@
         "limits": "Complete local current retirement normal only; no HF/native/model/Windows/hosted qualification."
       }
     }
+  },
+  "next57_generic_last_caller_cutover": {
+    "status": "SOURCE_PROPOSED_UNQUALIFIED",
+    "durable_coverage": {
+      "path": "ci/automation-migration/next57-generic-last-caller-coverage.json",
+      "sha256": "65b09092b116b1c9463c70b0c2aee9925572c2a19d624e47cd862cd8a2fc36ba"
+    },
+    "deleted_paths": [
+      {
+        "path": "scripts/tests/test_kv_restart_replay.py",
+        "sha256": "d19cd4a8b6ca61401bb70cce8bbcf893332bcec50a92993c8de6dd777b80d313"
+      },
+      {
+        "path": "scripts/tests/test_skippy_mixed_prefill_decode_ab.py",
+        "sha256": "ade603e9eaf96629df235fde06cb9f2e22c9cc8fff797ffdb0bcf08a891f1005"
+      },
+      {
+        "path": "scripts/tests/test_skippy_system_one_smoke.py",
+        "sha256": "6d1885c38cd3cabcf09edbc444f8e812ffb1b248924d8f4cd890127f61687445"
+      },
+      {
+        "path": "evals/kv-restart-replay.py",
+        "sha256": "17c2e74001ca9accf132c791d4a6350ddedeac49dbef678f4cef63ab0aa3af7d"
+      },
+      {
+        "path": "evals/skippy-mixed-prefill-decode-ab.py",
+        "sha256": "234e8b6544f9b3a260a788e945df42c13ed97742338474456491dc844f71f2c5"
+      },
+      {
+        "path": "scripts/skippy-system-one-cases.py",
+        "sha256": "189436fc0a4e45e8608fa1e1aa801d72e79939a67b7e4898f0845c0673c760f4"
+      }
+    ],
+    "core_methods_removed": 45,
+    "qualification": {
+      "focused": null,
+      "final_normal": null
+    },
+    "preserve": "All existing retirement history, source_blocks, protected catalog/pins, approved readers and conditional SDK exceptions"
+  },
+  "radix_adaptive_hf_projector_last_caller_cutover": {
+    "status": "SOURCE_PROPOSED_UNQUALIFIED",
+    "durable_coverage": {
+      "path": "ci/automation-migration/radix-adaptive-hf-projector-last-caller-coverage.json",
+      "sha256": "ac27f5840e951f68eb29291263cbbc26512fae70539d6f4c79761f8befa5ff4c"
+    },
+    "deleted_paths": [
+      {
+        "path": "scripts/tests/test_skippy_radix_cache_ab.py",
+        "sha256": "abb5fe96198b5089693d017fe7e92a217771c65f76ee6a949edf32a95fae6d8a"
+      },
+      {
+        "path": "scripts/tests/test_skippy_adaptive_prefill_ab.py",
+        "sha256": "6d62522aaa21db4d0ff58716ca5bdca9c83de90dcb49ea129cca02291db83d5a"
+      },
+      {
+        "path": "scripts/tests/test_hf_skippy_mtp_certify_job.py",
+        "sha256": "1a81582b9f3b1fcfa5fc23649fedd2270cd65a465de5408e81a385beae83860e"
+      },
+      {
+        "path": "evals/skippy-radix-cache-ab.py",
+        "sha256": "a63a8a7a812b1c58326455c0e1d7a6d0dc595389fb8c3cd665c5654cf9f114ae"
+      },
+      {
+        "path": "evals/skippy-waiting-prefix-ab.py",
+        "sha256": "60b1afc8fea7f79f55c168d0ba8800c3be8a544f5e14b46a1f32a5ad40c467d0"
+      },
+      {
+        "path": "evals/skippy-adaptive-prefill-ab.py",
+        "sha256": "9ff5e3d3cff95f07e97d70c17d2a936788e6d2758500e3c86878258a0e4ca8e1"
+      }
+    ],
+    "core_methods_removed": 19,
+    "qualification": {
+      "focused": null,
+      "final_normal": null
+    },
+    "held_hf_implementation": "scripts/hf-skippy-mtp-certify-job.py",
+    "held_scheduler_helper": "evals/skippy-scheduler-fixtures.py",
+    "preserve": "Historical source_blocks, all earlier coverage, protected catalogs/pins, approved readers/SDK exceptions unchanged."
+  },
+  "canary_replay_release_conditional_cutover": {
+    "status": "SOURCE_ONLY_PENDING_OWNING_FINAL_NORMAL",
+    "removed": [
+      "scripts/tests/test_llama_native_full_replay.py",
+      "scripts/tests/test_llama_review_regressions.py",
+      "scripts/tests/test_llama_canary_agent_repair_contract.py",
+      "scripts/tests/test_llama_upstream_canary_contract.py",
+      ".agents/skills/release-validation/scripts/collect-release-inventory.py"
+    ],
+    "coverage": [
+      "ci/automation-migration/canary-current-contract-retirement-coverage.json",
+      "ci/automation-migration/llama-replay-review-retirement-coverage.json",
+      "ci/automation-migration/release-inventory-retirement-coverage.json"
+    ],
+    "qualification": null
+  },
+  "parity38_conditional_last_caller": {
+    "status": "SOURCE_ONLY_PENDING_CURRENT_OWNING_FINAL_NORMAL",
+    "removed": [
+      "scripts/skippy-llama-parity.py",
+      "scripts/tests/test_skippy_llama_parity.py"
+    ],
+    "coverage": "ci/automation-migration/parity38-last-caller-retirement-coverage.json",
+    "qualification": null
+  },
+  "competitive28_conditional_last_caller": {
+    "status": "SOURCE_COMPLETE_PENDING_CURRENT_27_OWNER_AND_FINAL_NORMAL",
+    "removed": [
+      "evals/skippy-competitive-benchmark.py",
+      "scripts/tests/test_skippy_competitive_benchmark.py"
+    ],
+    "coverage": "ci/automation-migration/competitive-benchmark-retirement-coverage.json",
+    "qualification": null,
+    "retirement": null,
+    "scope": "Generic orchestration/serializer/report contracts; real engines/model/platform acceptance remains separate; materializer retained with actual extraction callers"
+  },
+  "windows_three_required_caller_cutover": {
+    "status": "source_only_conditional_not_admitted",
+    "original_methods": 42,
+    "portable_source_or_unix_intents": 30,
+    "actual_powershell_intents": 12,
+    "intent_map": "ci/automation-migration/windows-three-retirement-coverage.json",
+    "required_owner_count": 42,
+    "retirement_admission": null,
+    "platform_qualification": "Actual Windows remains unverified until corresponding Windows workflow receipt. Missing pwsh already caused original seven installer cases to skip; do not claim local execution.",
+    "preserved": "Historical census/source_blocks and unrelated active SDK435/HF/protected/operator/cache retirement fields remain inherited."
   }
 }

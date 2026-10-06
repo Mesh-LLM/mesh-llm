@@ -7,15 +7,6 @@
   },
   "files": [
     {
-      "classification": "skill-local automation",
-      "deletion_condition": "Port generic inventory logic or prove a documented isolated skill dependency with a named caller and local dependency declaration.",
-      "exception": null,
-      "path": ".agents/skills/release-validation/scripts/collect-release-inventory.py",
-      "phase": 5,
-      "replacement_owner": "tools/xtask release evidence or skill-owned Rust command",
-      "required": false
-    },
-    {
       "classification": "native cache compatibility fixture generator",
       "deletion_condition": "Retain only while the LMCache compatibility fixture requires this generator; do not make it a generic CI entrypoint.",
       "exception": null,
@@ -34,39 +25,12 @@
       "required": false
     },
     {
-      "classification": "documentation/manual smoke helper",
-      "deletion_condition": "Port generic coverage logic or remove obsolete documented command after replacement.",
-      "exception": null,
-      "path": "docs/skippy/manual-smoke/check_coverage.py",
-      "phase": 5,
-      "replacement_owner": "tools/xtask qa or documented manual native checks",
-      "required": false
-    },
-    {
-      "classification": "documentation/manual smoke helper",
-      "deletion_condition": "Port generic orchestration or remove obsolete documented command after replacement.",
-      "exception": null,
-      "path": "docs/skippy/manual-smoke/runtime_smoke.py",
-      "phase": 5,
-      "replacement_owner": "tools/xtask qa or documented manual native checks",
-      "required": false
-    },
-    {
       "classification": "evaluation manifest tooling",
       "deletion_condition": "Retained by explicit maintainer decision on 2026-10-01; Rust execution must invoke only this reader as a bounded external step.",
       "exception": "Maintainer-retained DuckDB Parquet trajectory reader; not a blanket replay execution exception.",
       "path": "evals/agentic-trajectory-manifest.py",
       "phase": 5,
       "replacement_owner": "Python DuckDB trajectory reader; tools/xtask owns caller supervision and all other replay execution",
-      "required": false
-    },
-    {
-      "classification": "optional KV-cache lifecycle evaluation",
-      "deletion_condition": "Port generic server/process and provenance work while retaining explicit optional L3 replay coverage.",
-      "exception": null,
-      "path": "evals/kv-restart-replay.py",
-      "phase": 5,
-      "replacement_owner": "tools/xtask qa/process and cache evaluation owner",
       "required": false
     },
     {
@@ -178,129 +142,12 @@
       "required": false
     },
     {
-      "classification": "benchmark/evaluation",
-      "deletion_condition": "Port generic execution/report logic or establish isolated evaluation boundary.",
-      "exception": null,
-      "path": "evals/skippy-adaptive-prefill-ab.py",
-      "phase": 5,
-      "replacement_owner": "tools/xtask benchmark orchestration and domain owner",
-      "required": false
-    },
-    {
-      "classification": "evaluation manifest tooling",
-      "deletion_condition": "Port generic manifest logic or document isolated caller.",
-      "exception": null,
-      "path": "evals/skippy-agentic-prompt-manifest.py",
-      "phase": 5,
-      "replacement_owner": "tools/xtask artifact/repository",
-      "required": false
-    },
-    {
-      "classification": "evaluation/correctness gate",
-      "deletion_condition": "Port generic gate or prove it is not a required gate and isolate it.",
-      "exception": null,
-      "path": "evals/skippy-cache-correctness-gate.py",
-      "phase": 5,
-      "replacement_owner": "tools/xtask qa plus Rust correctness tests",
-      "required": false
-    },
-    {
-      "classification": "benchmark implementation",
-      "deletion_condition": "Keep only as isolated opt-in benchmark code with dependencies declared.",
-      "exception": "Potential domain benchmark implementation; opt-in boundary must be documented.",
-      "path": "evals/skippy-cache-production-bench.py",
-      "phase": 5,
-      "replacement_owner": "Language-specific benchmark owner",
-      "required": false
-    },
-    {
-      "classification": "benchmark orchestration",
-      "deletion_condition": "Port generic orchestration; preserve optional benchmark boundary.",
-      "exception": null,
-      "path": "evals/skippy-competitive-benchmark.py",
-      "phase": 5,
-      "replacement_owner": "tools/xtask process/qa and report owners",
-      "required": false
-    },
-    {
       "classification": "model-specific evaluation",
       "deletion_condition": "Keep only if isolated and genuinely model-specific, otherwise port generic checks.",
       "exception": "Potential model-specific behavior test; callers/cadence require review.",
       "path": "evals/skippy-granite-tensor-equivalence.py",
       "phase": 5,
       "replacement_owner": "Rust/native model test or isolated evaluation owner",
-      "required": false
-    },
-    {
-      "classification": "benchmark/evaluation",
-      "deletion_condition": "Port generic process/report behavior or document isolation.",
-      "exception": null,
-      "path": "evals/skippy-mixed-prefill-decode-ab.py",
-      "phase": 5,
-      "replacement_owner": "tools/xtask benchmark orchestration",
-      "required": false
-    },
-    {
-      "classification": "model smoke/evaluation",
-      "deletion_condition": "Classify actual protocol/model behavior; port generic supervision and isolate any ecosystem code.",
-      "exception": null,
-      "path": "evals/skippy-moe-expert-smoke.py",
-      "phase": 5,
-      "replacement_owner": "Rust/native smoke owner",
-      "required": false
-    },
-    {
-      "classification": "benchmark/evaluation",
-      "deletion_condition": "Port generic orchestration or document opt-in boundary.",
-      "exception": null,
-      "path": "evals/skippy-mtp-scheduler-bench.py",
-      "phase": 5,
-      "replacement_owner": "tools/xtask benchmark orchestration",
-      "required": false
-    },
-    {
-      "classification": "benchmark/evaluation",
-      "deletion_condition": "Port generic matrix/process handling or document opt-in boundary.",
-      "exception": null,
-      "path": "evals/skippy-openai-cache-matrix.py",
-      "phase": 5,
-      "replacement_owner": "tools/xtask benchmark orchestration",
-      "required": false
-    },
-    {
-      "classification": "benchmark/evaluation",
-      "deletion_condition": "Port generic orchestration or document opt-in boundary.",
-      "exception": null,
-      "path": "evals/skippy-radix-cache-ab.py",
-      "phase": 5,
-      "replacement_owner": "tools/xtask benchmark orchestration",
-      "required": false
-    },
-    {
-      "classification": "fixture tooling",
-      "deletion_condition": "Port generic fixture generation/validation or document explicit opt-in use.",
-      "exception": null,
-      "path": "evals/skippy-scheduler-fixtures.py",
-      "phase": 5,
-      "replacement_owner": "tools/xtask fixture owner",
-      "required": false
-    },
-    {
-      "classification": "benchmark/evaluation",
-      "deletion_condition": "Port generic orchestration or document opt-in boundary.",
-      "exception": null,
-      "path": "evals/skippy-suffix-proposer-bench.py",
-      "phase": 5,
-      "replacement_owner": "tools/xtask benchmark orchestration",
-      "required": false
-    },
-    {
-      "classification": "benchmark/evaluation",
-      "deletion_condition": "Port generic orchestration or document opt-in boundary.",
-      "exception": null,
-      "path": "evals/skippy-waiting-prefix-ab.py",
-      "phase": 5,
-      "replacement_owner": "tools/xtask benchmark orchestration",
       "required": false
     },
     {
@@ -367,78 +214,6 @@
       "required": false
     },
     {
-      "classification": "HF remote conversion job adapter",
-      "deletion_condition": "Keep only with explicit remote job workflow and local project dependency declaration.",
-      "exception": "Remote Hugging Face conversion may remain isolated with its own dependency environment; generic planning is not exempt.",
-      "path": "scripts/hf-skippy-convert-job.py",
-      "phase": 5,
-      "replacement_owner": "tools/xtask HF planning plus HF job adapter",
-      "required": false
-    },
-    {
-      "classification": "HF remote certification job adapter",
-      "deletion_condition": "Document actual optional caller/environment or port/delete after parity.",
-      "exception": "Remote Hugging Face job may remain isolated; generic orchestration remains migration scope.",
-      "path": "scripts/hf-skippy-mtp-certify-job.py",
-      "phase": 5,
-      "replacement_owner": "tools/xtask HF planning plus job adapter",
-      "required": false
-    },
-    {
-      "classification": "HF remote composition job adapter",
-      "deletion_condition": "Document exact optional caller/dependencies and port generic composition behavior.",
-      "exception": "Remote Hugging Face job may remain isolated; generic artifact logic is not exempt.",
-      "path": "scripts/hf-skippy-mtp-compose-job.py",
-      "phase": 5,
-      "replacement_owner": "tools/xtask artifact/HF job adapter",
-      "required": false
-    },
-    {
-      "classification": "optional protocol/evaluation harness",
-      "deletion_condition": "Separate actual protocol assertions from generic corpus orchestration; document caller.",
-      "exception": null,
-      "path": "scripts/run-openai-guardrail-corpus.py",
-      "phase": 5,
-      "replacement_owner": "tools/xtask qa or Rust protocol tests",
-      "required": false
-    },
-    {
-      "classification": "upstream/native parity validation",
-      "deletion_condition": "Port generic inventory/report logic; preserve only proven upstream-specific operations if isolated.",
-      "exception": null,
-      "path": "scripts/skippy-llama-parity.py",
-      "phase": 5,
-      "replacement_owner": "tools/xtask native patch/automation",
-      "required": false
-    },
-    {
-      "classification": "optional System One smoke driver",
-      "deletion_condition": "Port generic HTTP/evidence driver while preserving pinned contract and full-model read cases.",
-      "exception": null,
-      "path": "scripts/skippy-system-one-cases.py",
-      "phase": 5,
-      "replacement_owner": "tools/xtask qa and System One domain tests",
-      "required": false
-    },
-    {
-      "classification": "generic repository test helper",
-      "deletion_condition": "All consuming test modules are migrated; no generic Python test suite remains in required CI.",
-      "exception": null,
-      "path": "scripts/tests/ci_test_helpers.py",
-      "phase": 2,
-      "replacement_owner": "Rust test support fixtures",
-      "required": true
-    },
-    {
-      "classification": "generic repository test helper",
-      "deletion_condition": "Consuming tests move to Rust and preserve recipe/source assertions.",
-      "exception": null,
-      "path": "scripts/tests/justfile_source.py",
-      "phase": 2,
-      "replacement_owner": "tools/xtask Just/source contract tests",
-      "required": true
-    },
-    {
       "classification": "isolated approved trajectory-reader constructor test",
       "deletion_condition": "Retain with the maintainer-approved trajectory reader; excluded from required generic core.",
       "exception": "evals/agentic-trajectory-manifest.py",
@@ -446,141 +221,6 @@
       "phase": 2,
       "replacement_owner": "Approved trajectory-reader helper and optional agentic-trajectory-reader-contracts",
       "required": false
-    },
-    {
-      "classification": "generic build contract test",
-      "deletion_condition": "Windows build wrapper behavior is covered on Windows.",
-      "exception": null,
-      "path": "scripts/tests/test_build_windows.py",
-      "phase": 2,
-      "replacement_owner": "tools/xtask repository/native Windows tests",
-      "required": true
-    },
-    {
-      "classification": "generic Windows artifact test",
-      "deletion_condition": "Native Windows composition cases execute on Windows after migration.",
-      "exception": null,
-      "path": "scripts/tests/test_ci_windows_composition.py",
-      "phase": 2,
-      "replacement_owner": "tools/xtask artifact tests on Windows",
-      "required": true
-    },
-    {
-      "classification": "generic remote job test",
-      "deletion_condition": "Local deterministic contract tests ported.",
-      "exception": null,
-      "path": "scripts/tests/test_hf_skippy_mtp_certify_job.py",
-      "phase": 2,
-      "replacement_owner": "tools/xtask HF planning tests",
-      "required": true
-    },
-    {
-      "classification": "consumer installer contract test",
-      "deletion_condition": "Move tests to platform-native harness or Rust fixtures while preserving consumer install contract.",
-      "exception": "PowerShell installer behavior belongs to platform-specific test owner; test runner itself cannot remain generic Python in required path.",
-      "path": "scripts/tests/test_install_ps1.py",
-      "phase": 5,
-      "replacement_owner": "PowerShell/native installer test owner",
-      "required": true
-    },
-    {
-      "classification": "evaluation replay contract test",
-      "deletion_condition": "L3 replay fixture semantics and process cleanup pass under replacement owner.",
-      "exception": null,
-      "path": "scripts/tests/test_kv_restart_replay.py",
-      "phase": 5,
-      "replacement_owner": "component-owned L3 replay tests",
-      "required": true
-    },
-    {
-      "classification": "generic canary workflow test",
-      "deletion_condition": "Repair guards and admission contract tests migrated.",
-      "exception": null,
-      "path": "scripts/tests/test_llama_canary_agent_repair_contract.py",
-      "phase": 2,
-      "replacement_owner": "tools/xtask ci_validation",
-      "required": true
-    },
-    {
-      "classification": "generic native/canary test",
-      "deletion_condition": "Native replay policy covered by component tests.",
-      "exception": null,
-      "path": "scripts/tests/test_llama_native_full_replay.py",
-      "phase": 2,
-      "replacement_owner": "tools/xtask native patch tests",
-      "required": true
-    },
-    {
-      "classification": "generic llama source review test",
-      "deletion_condition": "Reviewed native source contracts remain covered by typed checks.",
-      "exception": null,
-      "path": "scripts/tests/test_llama_review_regressions.py",
-      "phase": 2,
-      "replacement_owner": "tools/xtask native policy tests",
-      "required": true
-    },
-    {
-      "classification": "generic workflow contract test",
-      "deletion_condition": "Canary workflow trust/cadence constraints tested in Rust.",
-      "exception": null,
-      "path": "scripts/tests/test_llama_upstream_canary_contract.py",
-      "phase": 2,
-      "replacement_owner": "tools/xtask ci_validation",
-      "required": true
-    },
-    {
-      "classification": "generic benchmark test",
-      "deletion_condition": "Generic CLI/process/report behavior ported.",
-      "exception": null,
-      "path": "scripts/tests/test_skippy_adaptive_prefill_ab.py",
-      "phase": 2,
-      "replacement_owner": "tools/xtask process/benchmark tests",
-      "required": true
-    },
-    {
-      "classification": "generic benchmark test",
-      "deletion_condition": "Orchestration/report tests migrated.",
-      "exception": null,
-      "path": "scripts/tests/test_skippy_competitive_benchmark.py",
-      "phase": 2,
-      "replacement_owner": "tools/xtask process/benchmark tests",
-      "required": true
-    },
-    {
-      "classification": "generic native parity test",
-      "deletion_condition": "Parity inventory and source checks migrated.",
-      "exception": null,
-      "path": "scripts/tests/test_skippy_llama_parity.py",
-      "phase": 2,
-      "replacement_owner": "tools/xtask native patch tests",
-      "required": true
-    },
-    {
-      "classification": "generic benchmark test",
-      "deletion_condition": "Benchmark process behavior covered in Rust.",
-      "exception": null,
-      "path": "scripts/tests/test_skippy_mixed_prefill_decode_ab.py",
-      "phase": 2,
-      "replacement_owner": "tools/xtask process/benchmark tests",
-      "required": true
-    },
-    {
-      "classification": "generic benchmark test",
-      "deletion_condition": "Benchmark orchestration cases migrated.",
-      "exception": null,
-      "path": "scripts/tests/test_skippy_radix_cache_ab.py",
-      "phase": 2,
-      "replacement_owner": "tools/xtask process/benchmark tests",
-      "required": true
-    },
-    {
-      "classification": "generic System One smoke contract test",
-      "deletion_condition": "Pinned case driver, qualified backend and failure evidence remain tested in Rust/domain owners.",
-      "exception": null,
-      "path": "scripts/tests/test_skippy_system_one_smoke.py",
-      "phase": 2,
-      "replacement_owner": "tools/xtask ci_validation and domain smoke tests",
-      "required": true
     },
     {
       "classification": "retained Python SDK packaging component",
@@ -792,7 +432,7 @@
   "revision": "2c4c92fcef592798efb3efedb721a74e2003afa6",
   "schema_version": 1,
   "source_command": "GIT_MASTER=1 git ls-files '*.py'",
-  "tracked_file_count": 72,
+  "tracked_file_count": 32,
   "tracked_path_categories": {
     "directory_name_does_not_establish_optional_status": true,
     "note": "Path set is intended to equal source_command output. Task evidence validates this exact set, not a suffix-based approximation.",
@@ -867,7 +507,9 @@
     "source_snapshot": "Frozen source after provenance/package local qualification; pending full latest validation union",
     "python_paths": 196,
     "just_roster": 109,
-    "removed_edges": [],
+    "removed_edges": [
+
+    ],
     "limits": "Surviving generic quality roster, native smoke/oracle/manual protected and real required SDK/model/platform qualifications remain open; no exception or gate demotion."
   },
   "zip_extraction_test_retirement": {
@@ -9862,7 +9504,9 @@
       "sha256": "fa4342e63b8d4f93e425e88f106d9585ba5ef3e06a057cff3c83ad2ed92c9d5c",
       "head": "3fbd1fcbcd390c86083a8265de3a4ce4734e3a58",
       "status": "FROZEN_SOURCES_NOT_TERMINAL_EXECUTION",
-      "drift": [],
+      "drift": [
+
+      ],
       "additional_native_sources": [
         {
           "path": "tools/xtask/src/automation/event_benchmark_comparison/manifest_tests.rs",
@@ -17806,6 +17450,111 @@
       }
     }
   },
+  "next57_generic_last_caller_cutover": {
+    "status": "SOURCE_PROPOSED_UNQUALIFIED",
+    "durable_coverage": {
+      "path": "ci/automation-migration/next57-generic-last-caller-coverage.json",
+      "sha256": "65b09092b116b1c9463c70b0c2aee9925572c2a19d624e47cd862cd8a2fc36ba"
+    },
+    "deleted_paths": [
+      {
+        "path": "scripts/tests/test_kv_restart_replay.py",
+        "sha256": "d19cd4a8b6ca61401bb70cce8bbcf893332bcec50a92993c8de6dd777b80d313"
+      },
+      {
+        "path": "scripts/tests/test_skippy_mixed_prefill_decode_ab.py",
+        "sha256": "ade603e9eaf96629df235fde06cb9f2e22c9cc8fff797ffdb0bcf08a891f1005"
+      },
+      {
+        "path": "scripts/tests/test_skippy_system_one_smoke.py",
+        "sha256": "6d1885c38cd3cabcf09edbc444f8e812ffb1b248924d8f4cd890127f61687445"
+      },
+      {
+        "path": "evals/kv-restart-replay.py",
+        "sha256": "17c2e74001ca9accf132c791d4a6350ddedeac49dbef678f4cef63ab0aa3af7d"
+      },
+      {
+        "path": "evals/skippy-mixed-prefill-decode-ab.py",
+        "sha256": "234e8b6544f9b3a260a788e945df42c13ed97742338474456491dc844f71f2c5"
+      },
+      {
+        "path": "scripts/skippy-system-one-cases.py",
+        "sha256": "189436fc0a4e45e8608fa1e1aa801d72e79939a67b7e4898f0845c0673c760f4"
+      }
+    ],
+    "core_methods_removed": 45,
+    "qualification": {
+      "focused": null,
+      "final_normal": null
+    },
+    "preserve": "All existing retirement history, source_blocks, protected catalog/pins, approved readers and conditional SDK exceptions"
+  },
+  "radix_adaptive_hf_projector_last_caller_cutover": {
+    "status": "SOURCE_PROPOSED_UNQUALIFIED",
+    "durable_coverage": {
+      "path": "ci/automation-migration/radix-adaptive-hf-projector-last-caller-coverage.json",
+      "sha256": "ac27f5840e951f68eb29291263cbbc26512fae70539d6f4c79761f8befa5ff4c"
+    },
+    "deleted_paths": [
+      {
+        "path": "scripts/tests/test_skippy_radix_cache_ab.py",
+        "sha256": "abb5fe96198b5089693d017fe7e92a217771c65f76ee6a949edf32a95fae6d8a"
+      },
+      {
+        "path": "scripts/tests/test_skippy_adaptive_prefill_ab.py",
+        "sha256": "6d62522aaa21db4d0ff58716ca5bdca9c83de90dcb49ea129cca02291db83d5a"
+      },
+      {
+        "path": "scripts/tests/test_hf_skippy_mtp_certify_job.py",
+        "sha256": "1a81582b9f3b1fcfa5fc23649fedd2270cd65a465de5408e81a385beae83860e"
+      },
+      {
+        "path": "evals/skippy-radix-cache-ab.py",
+        "sha256": "a63a8a7a812b1c58326455c0e1d7a6d0dc595389fb8c3cd665c5654cf9f114ae"
+      },
+      {
+        "path": "evals/skippy-waiting-prefix-ab.py",
+        "sha256": "60b1afc8fea7f79f55c168d0ba8800c3be8a544f5e14b46a1f32a5ad40c467d0"
+      },
+      {
+        "path": "evals/skippy-adaptive-prefill-ab.py",
+        "sha256": "9ff5e3d3cff95f07e97d70c17d2a936788e6d2758500e3c86878258a0e4ca8e1"
+      }
+    ],
+    "core_methods_removed": 19,
+    "qualification": {
+      "focused": null,
+      "final_normal": null
+    },
+    "held_hf_implementation": "scripts/hf-skippy-mtp-certify-job.py",
+    "held_scheduler_helper": "evals/skippy-scheduler-fixtures.py",
+    "preserve": "Historical source_blocks, all earlier coverage, protected catalogs/pins, approved readers/SDK exceptions unchanged."
+  },
+  "canary_replay_release_conditional_cutover": {
+    "status": "SOURCE_ONLY_PENDING_OWNING_FINAL_NORMAL",
+    "removed": [
+      "scripts/tests/test_llama_native_full_replay.py",
+      "scripts/tests/test_llama_review_regressions.py",
+      "scripts/tests/test_llama_canary_agent_repair_contract.py",
+      "scripts/tests/test_llama_upstream_canary_contract.py",
+      ".agents/skills/release-validation/scripts/collect-release-inventory.py"
+    ],
+    "coverage": [
+      "ci/automation-migration/canary-current-contract-retirement-coverage.json",
+      "ci/automation-migration/llama-replay-review-retirement-coverage.json",
+      "ci/automation-migration/release-inventory-retirement-coverage.json"
+    ],
+    "qualification": null
+  },
+  "parity38_conditional_last_caller": {
+    "status": "SOURCE_ONLY_PENDING_CURRENT_OWNING_FINAL_NORMAL",
+    "removed": [
+      "scripts/skippy-llama-parity.py",
+      "scripts/tests/test_skippy_llama_parity.py"
+    ],
+    "coverage": "ci/automation-migration/parity38-last-caller-retirement-coverage.json",
+    "qualification": null
+  },
   "current_native_sdk_supervision_reconciliation": {
     "status": "source_only_projected_native_supervision_reconciliation",
     "candidate": {
@@ -17967,5 +17716,290 @@
     "preserved_exception_status": "Four conditional_unqualified; no new exception, no installed SDK/platform/model execution claim",
     "retirement": null,
     "qualification": null
+  },
+  "competitive28_conditional_last_caller": {
+    "status": "SOURCE_COMPLETE_PENDING_CURRENT_27_OWNER_AND_FINAL_NORMAL",
+    "removed": [
+      "evals/skippy-competitive-benchmark.py",
+      "scripts/tests/test_skippy_competitive_benchmark.py"
+    ],
+    "coverage": "ci/automation-migration/competitive-benchmark-retirement-coverage.json",
+    "qualification": null,
+    "retirement": null,
+    "scope": "Generic orchestration/serializer/report contracts; real engines/model/platform acceptance remains separate; materializer retained with actual extraction callers"
+  },
+  "cache_family_three_native_caller_retirement": {
+    "status": "conditional_retirement_pending_root_admission",
+    "coverage": "ci/automation-migration/cache-family-production-retirement-coverage.json",
+    "retired_paths": [
+      "evals/skippy-cache-production-bench.py",
+      "evals/skippy-cache-correctness-gate.py",
+      "evals/skippy-moe-expert-smoke.py"
+    ],
+    "proof": null,
+    "normal_ci": null,
+    "requires_absent_importers": [
+      "evals/skippy-radix-cache-ab.py",
+      "evals/skippy-waiting-prefix-ab.py",
+      "scripts/tests/test_skippy_radix_cache_ab.py"
+    ],
+    "external_model_qualification": "Separate unverified scope; no native/model/performance claim.",
+    "historical_rows": [
+      {
+        "classification": "evaluation/correctness gate",
+        "deletion_condition": "Port generic gate or prove it is not a required gate and isolate it.",
+        "exception": null,
+        "path": "evals/skippy-cache-correctness-gate.py",
+        "phase": 5,
+        "replacement_owner": "tools/xtask qa plus Rust correctness tests",
+        "required": false
+      },
+      {
+        "classification": "benchmark implementation",
+        "deletion_condition": "Keep only as isolated opt-in benchmark code with dependencies declared.",
+        "exception": "Potential domain benchmark implementation; opt-in boundary must be documented.",
+        "path": "evals/skippy-cache-production-bench.py",
+        "phase": 5,
+        "replacement_owner": "Language-specific benchmark owner",
+        "required": false
+      },
+      {
+        "classification": "model smoke/evaluation",
+        "deletion_condition": "Classify actual protocol/model behavior; port generic supervision and isolate any ecosystem code.",
+        "exception": null,
+        "path": "evals/skippy-moe-expert-smoke.py",
+        "phase": 5,
+        "replacement_owner": "Rust/native smoke owner",
+        "required": false
+      }
+    ],
+    "projected_path_count": 47
+  },
+  "windows_three_required_caller_cutover": {
+    "status": "source_only_conditional_not_admitted",
+    "original_methods": 42,
+    "portable_source_or_unix_intents": 30,
+    "actual_powershell_intents": 12,
+    "intent_map": "ci/automation-migration/windows-three-retirement-coverage.json",
+    "required_owner_count": 42,
+    "retirement_admission": null,
+    "platform_qualification": "Actual Windows remains unverified until corresponding Windows workflow receipt. Missing pwsh already caused original seven installer cases to skip; do not claim local execution.",
+    "preserved": "Historical census/source_blocks and unrelated active SDK435/HF/protected/operator/cache retirement fields remain inherited."
+  },
+  "quality_native_python_setup_removal": {
+    "status": "source_only_after_native_windows_caller_cutover",
+    "workflow": ".github/workflows/ci-quality-slice.yml",
+    "source_sha256": "25cf8784e2d6cb07eca207447dd62e453f5e0793954f31960085c639feab36d5",
+    "removed_group": {
+      "file": ".github/workflows/ci-quality-slice.yml",
+      "members": [
+        [
+          242,
+          "d7149b0913e92921",
+          1,
+          "provision",
+          "quality_contracts Python 3.12 for required contracts and unittest"
+        ],
+        [
+          244,
+          "8c1dfd95e0d605d6",
+          1,
+          "metadata",
+          "quality_contracts setup-python version 3.12"
+        ],
+        [
+          246,
+          "78b39ffedbd6d228",
+          1,
+          "installer",
+          "python3 -m pip install --disable-pip-version-check --no-input -r ci/requirements-ci-python.txt; installs required test deps"
+        ]
+      ]
+    },
+    "required_cadence": "Existing actionlint/Rust/native Windows focused recipes unchanged; SDK clients remain required in their platform owners",
+    "qualification": null
+  },
+  "native_hf_manual_protocol_last_caller_retirement": {
+    "status": "conditional_not_executed",
+    "coverage": "ci/automation-migration/native-hf-manual-protocol-retirement-coverage.json",
+    "removed_paths": [
+      "scripts/hf-skippy-convert-job.py",
+      "scripts/hf-skippy-mtp-certify-job.py",
+      "scripts/hf-skippy-mtp-compose-job.py",
+      "docs/skippy/manual-smoke/runtime_smoke.py",
+      "docs/skippy/manual-smoke/check_coverage.py",
+      "evals/skippy-openai-cache-matrix.py",
+      "evals/skippy-suffix-proposer-bench.py",
+      "scripts/run-openai-guardrail-corpus.py",
+      "evals/skippy-agentic-prompt-manifest.py"
+    ],
+    "required_selections": 83,
+    "actual_owning_positives": null,
+    "normal_ci": null,
+    "prior_source_history_preserved": true,
+    "current_guidance_source_bindings": [
+      {
+        "path": "docs/BENCHMARKS.md",
+        "sha256": "21866ca5955c5bbcd6ff62790e4e123d97f7e68299ceecd6b4fe557f25f8b14c",
+        "kind": "actual root-applied native caller guidance"
+      },
+      {
+        "path": "docs/design/TESTING.md",
+        "sha256": "d9a2c8af4f9b71b53cddd0be0027e7950cd9adc9694d76b2c0cd8f6d80b7ab51",
+        "kind": "actual root-applied native caller guidance"
+      },
+      {
+        "path": "docs/skippy/LLAMA_BENCHY.md",
+        "sha256": "8911096e9351021a60e09769caf329e54545e964ffdfa753be64cccdb206a02e",
+        "kind": "actual root-applied native caller guidance"
+      },
+      {
+        "path": "docs/design/OPENAI_GUARDRAILS.md",
+        "sha256": "2a165056321484f078aaf48bfed5d0b81b78402e7bf4b0b4461343f10668d016",
+        "kind": "actual root-applied native caller guidance"
+      },
+      {
+        "path": "docs/skippy/PROMPT_CACHE.md",
+        "sha256": "c2295b2f09f115a93c318f82be810eb2e2a258c2a114d0877793304abbf70fae",
+        "kind": "actual root-applied native caller guidance"
+      },
+      {
+        "path": "docs/skippy/HF_MTP_COMPOSE_NATIVE.md",
+        "sha256": "06b1a1f99de917bd7d9816ed28893c64fc1bb66b718bd6f92ddfe8e7f187ac1f",
+        "kind": "actual root-applied native caller guidance"
+      }
+    ],
+    "historical_removed_records": {
+      "files": [
+        {
+          "classification": "documentation/manual smoke helper",
+          "deletion_condition": "Port generic coverage logic or remove obsolete documented command after replacement.",
+          "exception": null,
+          "path": "docs/skippy/manual-smoke/check_coverage.py",
+          "phase": 5,
+          "replacement_owner": "tools/xtask qa or documented manual native checks",
+          "required": false
+        },
+        {
+          "classification": "documentation/manual smoke helper",
+          "deletion_condition": "Port generic orchestration or remove obsolete documented command after replacement.",
+          "exception": null,
+          "path": "docs/skippy/manual-smoke/runtime_smoke.py",
+          "phase": 5,
+          "replacement_owner": "tools/xtask qa or documented manual native checks",
+          "required": false
+        },
+        {
+          "classification": "evaluation manifest tooling",
+          "deletion_condition": "Port generic manifest logic or document isolated caller.",
+          "exception": null,
+          "path": "evals/skippy-agentic-prompt-manifest.py",
+          "phase": 5,
+          "replacement_owner": "tools/xtask artifact/repository",
+          "required": false
+        },
+        {
+          "classification": "benchmark/evaluation",
+          "deletion_condition": "Port generic matrix/process handling or document opt-in boundary.",
+          "exception": null,
+          "path": "evals/skippy-openai-cache-matrix.py",
+          "phase": 5,
+          "replacement_owner": "tools/xtask benchmark orchestration",
+          "required": false
+        },
+        {
+          "classification": "benchmark/evaluation",
+          "deletion_condition": "Port generic orchestration or document opt-in boundary.",
+          "exception": null,
+          "path": "evals/skippy-suffix-proposer-bench.py",
+          "phase": 5,
+          "replacement_owner": "tools/xtask benchmark orchestration",
+          "required": false
+        },
+        {
+          "classification": "HF remote conversion job adapter",
+          "deletion_condition": "Keep only with explicit remote job workflow and local project dependency declaration.",
+          "exception": "Remote Hugging Face conversion may remain isolated with its own dependency environment; generic planning is not exempt.",
+          "path": "scripts/hf-skippy-convert-job.py",
+          "phase": 5,
+          "replacement_owner": "tools/xtask HF planning plus HF job adapter",
+          "required": false
+        },
+        {
+          "classification": "HF remote certification job adapter",
+          "deletion_condition": "Document actual optional caller/environment or port/delete after parity.",
+          "exception": "Remote Hugging Face job may remain isolated; generic orchestration remains migration scope.",
+          "path": "scripts/hf-skippy-mtp-certify-job.py",
+          "phase": 5,
+          "replacement_owner": "tools/xtask HF planning plus job adapter",
+          "required": false
+        },
+        {
+          "classification": "HF remote composition job adapter",
+          "deletion_condition": "Document exact optional caller/dependencies and port generic composition behavior.",
+          "exception": "Remote Hugging Face job may remain isolated; generic artifact logic is not exempt.",
+          "path": "scripts/hf-skippy-mtp-compose-job.py",
+          "phase": 5,
+          "replacement_owner": "tools/xtask artifact/HF job adapter",
+          "required": false
+        },
+        {
+          "classification": "optional protocol/evaluation harness",
+          "deletion_condition": "Separate actual protocol assertions from generic corpus orchestration; document caller.",
+          "exception": null,
+          "path": "scripts/run-openai-guardrail-corpus.py",
+          "phase": 5,
+          "replacement_owner": "tools/xtask qa or Rust protocol tests",
+          "required": false
+        }
+      ]
+    }
+  },
+  "obsolete_generic_test_helper_retirement": {
+    "status": "conditional_unexecuted",
+    "coverage": "ci/automation-migration/obsolete-test-helper-retirement-coverage.json",
+    "removed_paths": [
+      "scripts/tests/ci_test_helpers.py",
+      "scripts/tests/justfile_source.py"
+    ],
+    "qualification": null,
+    "normal_ci": null,
+    "original_harness_api_not_recreated": true,
+    "historical_rows": [
+      {
+        "classification": "generic repository test helper",
+        "deletion_condition": "All consuming test modules are migrated; no generic Python test suite remains in required CI.",
+        "exception": null,
+        "path": "scripts/tests/ci_test_helpers.py",
+        "phase": 2,
+        "replacement_owner": "Rust test support fixtures",
+        "required": true
+      },
+      {
+        "classification": "generic repository test helper",
+        "deletion_condition": "Consuming tests move to Rust and preserve recipe/source assertions.",
+        "exception": null,
+        "path": "scripts/tests/justfile_source.py",
+        "phase": 2,
+        "replacement_owner": "tools/xtask Just/source contract tests",
+        "required": true
+      }
+    ]
+  },
+  "mtp_scheduler_native_last_caller_retirement": {
+    "original_records": [
+      {
+        "classification": "benchmark/evaluation",
+        "deletion_condition": "Port generic orchestration or document opt-in boundary.",
+        "exception": null,
+        "path": "evals/skippy-mtp-scheduler-bench.py",
+        "phase": 5,
+        "replacement_owner": "tools/xtask benchmark orchestration",
+        "required": false
+      }
+    ],
+    "coverage": "ci/automation-migration/mtp-scheduler-retirement-coverage.json",
+    "qualification": null,
+    "normal_ci": null
   }
 }

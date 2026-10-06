@@ -2,8 +2,9 @@
 
 The native `automation replay-matrix competitive-plan`, `competitive-run` and
 `competitive-report` commands own generic planning, prepared execution and
-reporting. Input acquisition/build preparation remains a separate migration
-frontdoor; the native run consumes independently prepared pinned inputs. It compares the release `skippy` CLI
+reporting. Native `competitive-inputs-prefetch` acquires source-pinned inputs,
+and `competitive-prepare` composes a local prepared layout. Independent build
+custody and real-family benchmark qualification remain separate requirements. It compares the release `skippy` CLI
 OpenAI surface with the repository's pinned raw llama.cpp baseline without
 changing serving code during a run.
 
@@ -31,8 +32,8 @@ and model bytes are never checked into the repository.
 Native `competitive-plan` is side-effect free and classifies the required
 raw-versus-Mesh matrix without starting a backend. Its schema version 2 binds
 `config_sha256` to the exact config file bytes (`source_bytes_sha256`), rather
-than the legacy logical JSON hash. The prepared native run/report interfaces are described below; acquisition and
-build-to-prepared-input composition remain separate open migration work.
+than the legacy logical JSON hash. The native acquisition, local-layout preparation and run/report interfaces are
+described below; executable observations do not authenticate a build producer.
 
 ```bash
 cargo xtool automation replay-matrix competitive-plan --config skippy/evals/skippy-competitive-benchmark.json
@@ -51,45 +52,86 @@ cargo xtool automation replay-matrix competitive-plan --config skippy/evals/skip
 
 ## Acquire pinned inputs
 
-Run `prefetch` outside the timed benchmark window. It invokes `hf download` at
-the checked-in revisions, invokes `hf cache verify`, verifies each required
-file's SHA-256, regenerates the prompt manifest, then verifies its SHA-256 and
-row provenance.
+Run native acquisition outside measurement. It resolves configured model artifacts
+at manual cadence, downloads selected immutable files, checks their byte pins,
+exports declared tokenizer layouts, and uses the native trajectory reader and
+manifest owner for the Thoughtworks selection. It owns a fresh private cache and
+output tree; it does not require a Python Transformers or DuckDB environment.
+
+Build the acquisition helper and prepared reader through existing Just recipes:
 
 ```bash
-python3 skippy/evals/skippy-competitive-benchmark.py prefetch \
-  --model-root /path/to/competitive/models \
-  --dataset-root /path/to/competitive/dataset \
-  --manifest /path/to/competitive/thoughtworks-256.json
+just competitive-inputs-helper-build
+just ci-automation-contracts
 ```
 
-The manifest generator requires DuckDB in the selected Python environment.
-The model and dataset SHA-256 checks are authoritative for the selectively
-downloaded files; `hf cache verify` additionally validates every locally
-present Hub file without requiring unrelated quantizations from the same repo.
-In the two-machine lab, download from Studio54 with
-`HF_HOME=/Volumes/External/models/huggingface`; Micstudio reads the shared NFS
-cache and must not download the same input concurrently.
+The helper is `target/debug/model-package-competitive-inputs`; the second recipe
+also builds `target/debug/trajectory-reader` with its Parquet input feature and
+runs the automation contracts. Use the same-source xtask from
+`just automation-bootstrap`. Verify these executable bytes before invoking them.
 
-The llama-benchy tokenizer directories are inputs rather than generated report
-data. Put the pinned directories under `<tokenizer-root>/<model-key>`; `run`
-hashes every relative file and fails before timing if a directory differs from
-the checked-in digest.
+Create an acquisition request with the closed schema below. All file paths are
+absolute. `output_directory` must be fresh with an existing canonical parent.
+`model_keys: []` selects all four configured families; nonempty keys select only
+those rows, and unknown or duplicate keys refuse. There is no implicit repinning.
 
-`scripts/materialize-competitive-inputs.sh` materializes every pinned input —
-GGUF models, tokenizer directories, per-model vLLM `config.json` files, the
-Thoughtworks parquet, and the deterministic prompt manifest — from Hugging Face
-into the HF cache and verifies each digest before linking a runnable input tree:
+| Field | Contract |
+| --- | --- |
+| `schema_version` | `1` |
+| `config`, `config_sha256` | Checked-in benchmark config path and exact byte SHA |
+| `model_manifest`, `model_manifest_sha256` | Absolute source artifact manifest path and exact byte SHA, required by the native prefetch authority phase |
+| `model_keys` | Empty for all configured families, or explicit selected keys |
+| `output_directory` | Fresh absolute input tree |
+| `timeout_seconds`, `maximum_bytes` | Positive budget up to 86400 seconds and total admitted bytes up to 1 TiB |
+| `credential_file` | Private credential file path, or null for anonymous access; never a token in argv |
+| `skip_dataset`, `skip_tokenizers`, `skip_vllm_configs` | Explicit selection flags, normally false |
+| `export_sha256` | Accepted derived tokenizer tree SHA per selected family when exporting |
+| `semantic_cases` | Per-family source-tokenizer reference cases for non-Granite exports |
+
+Each semantic case supplies `text`, `add_special_tokens`, `decode_ids`,
+`skip_special_tokens`, `expected_ids`, and `expected_decoded_sha256`. These are
+independent source reference observations, not values fabricated from the export.
+Granite uses the complete pinned snapshot minus README files. Other families use
+the native tokenizer engine and retain the exact declared chat-template bytes.
+Token ID/decoder cases and byte identity do not qualify chat-template rendering
+or claim byte identity with historical Transformers exports. Review the accepted
+export pins and real-family behavior before measuring a derived layout.
+
+For a reviewed request at `/absolute/acquisition-request.json`, supply observed
+helper and reader byte hashes:
 
 ```bash
-scripts/materialize-competitive-inputs.sh --root /path/to/competitive
+just competitive-inputs-prefetch /absolute/acquisition-request.json \
+  /absolute/repo/target/debug/model-package-competitive-inputs HELPER_SHA256 \
+  /absolute/repo/target/debug/trajectory-reader READER_SHA256 \
+  /absolute/fresh-acquisition-evidence 3600
 ```
 
-The Python environment needs `transformers` v5 (tokenizer re-exports) and
-`duckdb` (manifest generation). deepseek/falcon tokenizer directories are
-transformers v5 re-exports of the pinned `vllm_hf_config` revisions — verified
-byte-identical to the checked-in digests — and granite's directory is the
-pinned snapshot minus `README.md`; the script header documents each provenance.
+`prefetch.json` must be request-correlated and `MATERIALIZED` with null error for
+the complete acquisition. `MATERIALIZED_SELECTED` records explicitly skipped
+groups and is not full-input acceptance. For a readerless request with
+`skip_dataset: true`, call the same native command directly and omit `--reader`
+and `--reader-sha256`; the remaining helper/request/evidence/budget flags still
+apply. Unsupported families, missing pins, dataset/manifest provenance drift,
+byte drift, timeout or cancellation refuse while retaining partial evidence.
+
+The acquired layout contains `models/<key>/<configured-basename>`,
+`tokenizers/<key>`, `vllm-configs/<key>/config.json`, and
+`thoughtworks/manifest.json` for selected groups. Use its
+`derived-benchmark-config.json` when exports declare new accepted tokenizer pins;
+keep the original config and acquisition receipt as lineage. The native
+`competitive-prepare` interface below consumes those local layouts and verifies
+file/tree identities before constructing the run request.
+
+Qualify the full acquisition-to-native-manifest composition explicitly with the
+same-source xtask executable before retiring the transitional materializer:
+
+```bash
+just competitive-inputs-prefetch-fixture /absolute/repo/target/debug/xtask
+```
+
+That inert fixture establishes local orchestration, export and reader composition;
+it does not establish real model performance or the external HF service behavior.
 
 Granite's alternate container digest is derived only after this optional,
 model-specific reference evaluation succeeds. It is not a build, quality or
@@ -204,8 +246,10 @@ field and skipped without weakening required raw/fixed Mesh cells. Supplied
 artifacts whose pins fail verification refuse preflight; they are not silently
 reclassified as missing. The native owner emits no legacy comparisons directory.
 Put every required optional arm in `required_comparisons` for a controlled comparison that must
-produce every requested external-backend number; preflight then fails before
-timing if either runtime or any model input is missing. A controlled CUDA comparison can require both vLLM and SGLang this way.
+produce every configured supported external-backend number. A missing or
+platform-ineligible prepared backend for a supported row refuses before timing;
+explicit source-pinned unsupported model rows remain declared exclusions. A
+controlled CUDA comparison can require both vLLM and SGLang this way.
 
 Mesh arms pin `--generation-queue-capacity 256` and
 `--generation-admission-timeout-secs 600`; these are benchmark overrides, not
@@ -246,6 +290,9 @@ artifact/
     synthetic.csv
     thoughtworks.csv
     parity.csv
+    parity.json
+    report.json
+    promotion.json
     charts/*.svg
     REPORT.md
   artifact-sha256.txt
@@ -256,12 +303,37 @@ continuation matches exactly and both arms completed every request in the
 cell. Failed parity, HTTP overload, timeouts, or incomplete waves remain in the
 artifact but are labeled diagnostic.
 
+`summary/report.json` retains the accepted cell rows, capacity policies, paired
+parity gates, source config SHA, requested cell count and `report_complete`.
+Its `promotion` field and `summary/promotion.json` contain the same decisions,
+grouped separately by hardware platform and model; `REPORT.md` renders them.
+
+An optional or adaptive arm is a promotion candidate only when it and fixed
+Mesh both cover the complete configured synthetic concurrency/output-token
+cross-product and the complete Thoughtworks concurrency roster. Every compared
+cell must be accepted and complete with positive finite throughput. Every
+configured synthetic output size must also pass its concurrency-one paired
+exact-continuation gate against raw llama.cpp. A filtered or incomplete run
+cannot satisfy the full promotion roster merely because all observed rows pass.
+
+For each workload, the reducer averages the per-cell percentage gain over fixed
+Mesh. Both means must be strictly positive. Capacity policy must be consistent
+within each arm; candidate and fixed Mesh policies remain separately recorded.
+Among eligible arms, the highest sum of the two means wins, with lexical arm
+order breaking equal-gain ties. Missing cells or gates, failed parity, mixed
+within-arm capacity policies, or a nonpositive mean produce an explicit hold;
+if no arm is eligible, the group has no winner. This records a candidate from
+supplied benchmark evidence and never automatically promotes a serving policy.
+It establishes no performance result until an actual qualified run provides the
+measurements.
+
 Native synthetic cells own separate retained servers/warmups and deterministic
 continuation probes. This changes warmup/cache amortization from the historical
 Python sweep, so compare fresh measured baselines. Fixture success establishes
-local orchestration only. The local-layout adapter below is implemented in the
-native draft pending execution. Acquisition and independent build custody
-remain open migration work; schema documentation does not certify them.
+local orchestration only. Native acquisition and the local-layout adapter below
+own input and prepared-request composition. Independent build custody and
+real-family/tokenizer/platform qualification remain operator requirements;
+schema documentation and inert fixtures do not certify those external values.
 
 ## Compose a local prepared layout
 
@@ -306,5 +378,5 @@ is tagged `local_checkout_and_artifact_observation_no_build_attestation`. A
 checkout HEAD beside a binary does not prove that binary was built from it.
 Independent release/build custody and real model/platform acceptance remain
 required operator evidence. Acquisition/materialization stays with its existing
-native HF owners and retained trajectory reader; this adapter does not replace
+native HF owners and native trajectory reader; this adapter does not replace
 them with a general download/build engine.

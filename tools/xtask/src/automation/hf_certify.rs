@@ -13,6 +13,8 @@ mod job_worker;
 mod mtp_default;
 #[path = "hf_certify/publication.rs"]
 mod publication;
+#[path = "hf_certify/quantization_probe.rs"]
+mod quantization_probe;
 use crate::{automation::command_interrupt::Interrupt, command::DynResult};
 use serde_json::json;
 use std::{
@@ -20,6 +22,11 @@ use std::{
     time::{Duration, Instant},
 };
 pub(crate) fn run(args: &[String]) -> DynResult<()> {
+    if let [verb, rest @ ..] = args
+        && verb == "quantizer-window-probe"
+    {
+        return quantization_probe::run(rest);
+    }
     if let Some((verb, rest)) = args.split_first()
         && verb == "composition-job-worker"
     {

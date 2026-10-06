@@ -47,6 +47,9 @@ pub(super) struct Graph {
     pub(super) unresolved: usize,
     pub(super) unbound_boundary_records: Vec<String>,
     pub(super) complete_census: bool,
+    #[cfg(test)]
+    #[serde(skip)]
+    pub(super) selected_recipe_commands: Vec<(String, String)>,
 }
 
 #[derive(Debug, Serialize)]
@@ -69,6 +72,8 @@ struct GraphBuilder<'a> {
     edges: Vec<Edge>,
     observed: &'a [Candidate],
     contracts: Contracts,
+    #[cfg(test)]
+    selected_recipe_commands: Vec<(String, String)>,
     validated: &'a BTreeSet<String>,
 }
 
@@ -100,6 +105,8 @@ pub(super) fn report(
         edges: Vec::new(),
         observed,
         contracts: Contracts::load(root)?,
+        #[cfg(test)]
+        selected_recipe_commands: Vec::new(),
         validated,
     };
     let mut recipes = BTreeSet::new();
@@ -197,6 +204,8 @@ pub(super) fn report(
         .sort_by(|a, b| (&a.parent, a.line, &a.child).cmp(&(&b.parent, b.line, &b.child)));
     let classified = boundaries.classify(root, builder.edges, observed, validated)?;
     Ok(Graph {
+        #[cfg(test)]
+        selected_recipe_commands: builder.selected_recipe_commands,
         schema_version: 2,
         roots: roots.iter().map(|root| (*root).to_owned()).collect(),
         edges: classified.edges,

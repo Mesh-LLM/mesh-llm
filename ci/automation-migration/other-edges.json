@@ -10,179 +10,6 @@
         "<--llama-quantize> <quant args>"
       ]
     },
-    "docs/skippy/manual-smoke/runtime_smoke.py:62": {
-      "contract": "68 manual TSV rows prescribe target/debug/mesh-llm but --binary accepts another operator path. Combined stdout/stderr in temporary log; status/API readiness, models and chat probes; finally SIGTERM/wait then kill, removes temporary config. Not automatic CI.",
-      "source": "main:30-105; docs/skippy/manual-smoke/manifest.tsv:2-151",
-      "target_class": "unresolved",
-      "targets": [
-        "<--binary> serve --config <temporary fixture TOML> --headless --port <api> --console <console>"
-      ]
-    },
-    "evals/skippy-adaptive-prefill-ab.py:385": {
-      "contract": "Downstream first; cwd REPO, Skippy env, merged streams in stage1 log, TCP readiness or early-exit failure; finally terminates/waits/kills. Binary bytes selected by operator.",
-      "source": "main:691-699; launch_cell:347-353,385-393; parser:621-663",
-      "target_class": "unresolved",
-      "targets": [
-        "<selected --old-binary or --new-binary> serve-binary --config <stage1> --max-inflight 2 --reply-credit-limit 1 --async-prefill-forward --telemetry-level debug"
-      ]
-    },
-    "evals/skippy-adaptive-prefill-ab.py:394": {
-      "contract": "Upstream after stage1 readiness; merged streams in stage0 log, /v1/models readiness and request/telemetry evidence, finally terminate/wait/kill; selected binary unresolved.",
-      "source": "launch_cell:354-402; main:691-699",
-      "target_class": "unresolved",
-      "targets": [
-        "<selected --old-binary or --new-binary> serve-binary --config <stage0> --max-inflight 2 --reply-credit-limit 1 --async-prefill-forward --telemetry-level debug --openai-bind-addr <port> --openai-generation-concurrency 1 --openai-default-max-tokens <tokens> --openai-prefill-chunk-policy adaptive-ramp --openai-prefill-chunk-size 256 --openai-prefill-adaptive-start 128 --openai-prefill-adaptive-step 128 --openai-prefill-adaptive-max 384 [--openai-prefill-adaptive-target-ms <ms> for new]"
-      ]
-    },
-    "evals/skippy-cache-production-bench.py:1386": {
-      "contract": "Combined streams to case log, health check and concurrent request/goodput evidence; finally terminate/wait/kill. CLI-selected server unresolved.",
-      "source": "concurrency sweep:1360-1437",
-      "target_class": "unresolved",
-      "targets": [
-        "<args.llama_server_bin> -m <model> -c <context> -ngl <layers> --host 127.0.0.1 --port <port> --parallel <lanes> --no-webui"
-      ]
-    },
-    "evals/skippy-cache-production-bench.py:371": {
-      "contract": "cwd REPO, LLAMA_STAGE_BUILD_DIR env, stdout and stderr merged to log, bounded correctness timeout; nonzero recorded as fail, success reads report JSON. CLI-selected executable unresolved.",
-      "source": "run_correctness:331-389",
-      "target_class": "unresolved",
-      "targets": [
-        "<args.skippy_correctness_bin> state-handoff <model/layer/cache/report options>"
-      ]
-    },
-    "evals/skippy-cache-production-bench.py:415": {
-      "contract": "Combined streams to case log, /health and early-exit readiness, timed request results; finally terminate/wait then kill/wait. CLI-selected server unresolved.",
-      "source": "run_llama_case:390-457",
-      "target_class": "unresolved",
-      "targets": [
-        "<args.llama_server_bin> -m <model> -c <context> -ngl <layers> --host <host> --port <port> --parallel <lanes> --no-webui"
-      ]
-    },
-    "evals/skippy-cache-production-bench.py:829": {
-      "contract": "Caller supplies server_bin; stage-build/telemetry env, combined log, /v1/models readiness, concurrency curve; finally terminate/wait/kill. Binary contents unresolved.",
-      "source": "run_skippy_case:787-886",
-      "target_class": "unresolved",
-      "targets": [
-        "<server_bin> serve-openai --config <config> --bind-addr <addr> --generation-concurrency <lanes> --telemetry-level debug"
-      ]
-    },
-    "evals/skippy-competitive-benchmark.py:1489": {
-      "contract": "Combined streams warmup.out, check=False then nonzero raises RuntimeError. User-selected benchmark executable unresolved.",
-      "source": "synthetic_benchy_common_command; warmup:1484-1496; CLI:2459",
-      "target_class": "unresolved",
-      "targets": [
-        "<selected benchy executable> <synthetic common args> --tg 8 --concurrency 4 --format json"
-      ]
-    },
-    "evals/skippy-competitive-benchmark.py:1515": {
-      "contract": "Combined streams <stem>.out; status.tsv and JSON/progress evidence; nonzero or invalid artifacts fail cell. Benchy executable unresolved.",
-      "source": "measurement:1498-1543; CLI:2459",
-      "target_class": "unresolved",
-      "targets": [
-        "<selected benchy executable> <synthetic common args> --tg <tokens> --concurrency <n> --format json --save-result <stem>.json --emit-progress <stem>-progress.jsonl"
-      ]
-    },
-    "evals/skippy-competitive-benchmark.py:315": {
-      "contract": "check=True with caller kwargs; prefetch downloads/verifies files, version probe captures output. hf is fixed name but --benchy executable is operator-selected; no assertion that prefetch is automatic run.",
-      "source": "run_checked:313-319; prefetch:332-390; preflight:1103-1112; CLI dispatch:2442-2447",
-      "target_class": "unresolved",
-      "targets": [
-        "hf download <pinned model/dataset options>",
-        "hf cache verify <pinned revision/options>",
-        "<args.benchy> --version"
-      ]
-    },
-    "evals/skippy-competitive-benchmark.py:765": {
-      "contract": "Writes stage/server-command JSON; combined streams server.log, readiness and finally stop; selected binary/Python and child closure unresolved.",
-      "source": "server_command:545-695; running_server:729-773; CLI:2455-2487; preflight_run:1057-1077",
-      "target_class": "unresolved",
-      "targets": [
-        "<args.mesh_binary> serve-openai --config <stage> ...",
-        "<args.llama_binary> --model <model> ...",
-        "<args.vllm_binary or PATH-resolved vllm> serve <model> ...",
-        "<args.sglang_python or sys.executable> -m sglang.launch_server ..."
-      ]
-    },
-    "evals/skippy-competitive-benchmark.py:873": {
-      "contract": "Captured separate text stdout/stderr, check=False; nonzero marks plugin unavailable. Selected vLLM environment determines interpreter.",
-      "source": "vllm preflight:858-885",
-      "target_class": "unresolved",
-      "targets": [
-        "<python sibling of selected vllm binary> -c importlib.metadata.version('vllm-gguf-plugin')"
-      ]
-    },
-    "evals/skippy-competitive-benchmark.py:928": {
-      "contract": "Captured separate text stdout/stderr, check=False; version stdout-or-stderr recorded, nonzero not immediately raised. Binary selected by CLI or PATH.",
-      "source": "vllm preflight:928-943; CLI:2455-2487",
-      "target_class": "unresolved",
-      "targets": [
-        "<args.vllm_binary> --version"
-      ]
-    },
-    "evals/skippy-competitive-benchmark.py:953": {
-      "contract": "Captured separate text stdout/stderr, check=False; nonzero marks unavailable. CLI override may select arbitrary interpreter.",
-      "source": "sglang preflight:947-965; CLI:2487",
-      "target_class": "unresolved",
-      "targets": [
-        "<args.sglang_python or sys.executable> -c importlib.metadata.version('sglang')"
-      ]
-    },
-    "evals/skippy-mixed-prefill-decode-ab.py:515": {
-      "contract": "Only if --split-layer supplied; selected build env, merged stage1 log; binary readiness/early exit check; finally stop/wait/kill. Operator binary unresolved.",
-      "source": "launch_cell:498-523; main:990-1002",
-      "target_class": "unresolved",
-      "targets": [
-        "<selected --old-binary or --new-binary> serve-binary --config <stage1> --max-inflight <lanes> --telemetry-level debug --reply-credit-limit 1 --async-prefill-forward"
-      ]
-    },
-    "evals/skippy-mixed-prefill-decode-ab.py:528": {
-      "contract": "Always starts after optional stage1; combined stage0 log, /v1/models readiness, request results; finally stop/wait/kill. Operator binary unresolved.",
-      "source": "launch_cell:498-550; main:990-1002",
-      "target_class": "unresolved",
-      "targets": [
-        "<selected --old-binary or --new-binary> serve-binary --config <stage0> --max-inflight <lanes> --telemetry-level debug --openai-bind-addr <port> --openai-generation-concurrency <lanes> --openai-default-max-tokens <max> --openai-prefill-chunk-policy adaptive-ramp --openai-prefill-chunk-size <ubatch> --openai-prefill-adaptive-start/step/max <values> [--openai-prefill-adaptive-target-ms <ms>]"
-      ]
-    },
-    "evals/skippy-moe-expert-smoke.py:69": {
-      "contract": "Default target/debug/skippy-model-package is overridable; cwd REPO, text stdout/stderr captured separately, check=True and JSON parse; nonzero raises. Separate imported production-bench correctness child at line 371.",
-      "source": "inspect_model:57-79; CLI:201-202; run:249-257",
-      "target_class": "unresolved",
-      "targets": [
-        "<args.inspect_bin> inspect <model_path>"
-      ]
-    },
-    "evals/skippy-mtp-scheduler-bench.py:148": {
-      "contract": "Selected native-build env, combined server log; readiness or early exit, finally terminate/wait/kill. Both binary paths are required CLI inputs.",
-      "source": "run_server:131-152; main:255-282",
-      "target_class": "unresolved",
-      "targets": [
-        "<--old-bin or --new-bin> serve-binary --config <config> --bind-addr <port> --max-inflight <max sweep> --telemetry-level debug"
-      ]
-    },
-    "evals/skippy-mtp-scheduler-bench.py:159": {
-      "contract": "Required operator client path; check=True, captured stdout/stderr, text, timeout=1800; parse stdout JSON; failure aborts benchmark while server finally stops.",
-      "source": "run_server:153-177; main:255-282",
-      "target_class": "unresolved",
-      "targets": [
-        "<--client-bin> --addr <server> --requests <max(requests,concurrency)> --concurrency <n> --activation-width <width>"
-      ]
-    },
-    "evals/skippy-radix-cache-ab.py:492": {
-      "contract": "Skippy env, combined server log, /v1/models readiness, request/telemetry results, finally terminate/wait/kill; operator binary identity unresolved.",
-      "source": "run_server_cell:470-550; CLI:927-928",
-      "target_class": "unresolved",
-      "targets": [
-        "<--old-bin or --new-bin> serve-openai --config <config> --bind-addr <port> --generation-concurrency <n> --telemetry-level debug"
-      ]
-    },
-    "evals/skippy-waiting-prefix-ab.py:426": {
-      "contract": "Skippy env, combined server log, /v1/models readiness, seed/request/telemetry results, finally terminate/wait/kill; operator binary identity unresolved.",
-      "source": "run_server_cell:401-490; CLI:782-784",
-      "target_class": "unresolved",
-      "targets": [
-        "<--old-bin or --new-bin> serve-openai --config <config> --bind-addr <port> --generation-concurrency <n> --telemetry-level debug"
-      ]
-    },
     "evals/test_injection_framing.py:174": {
       "contract": "First existing relative candidate from process cwd; argv -m <model> --host 127.0.0.1 --port <server> --mesh-port <hook> -ngl 99 --no-warmup. Merged stdout/stderr PIPE, /health readiness and early-exit/timeout handling, finally SIGTERM/wait. Fixture itself is optional and candidates' contents/availability are not proved.",
       "source": "find_llama_server:146-155; start_llama_server:158-197; main:223-260",
@@ -371,34 +198,15 @@
     },
     {
       "file": "evals/skippy-cache-family-bench.sh",
-      "members": []
-    },
-    {
-      "file": ".agents/skills/hf-gguf-quant-jobs/SKILL.md",
       "members": [
-        [
-          122,
-          "1d55600f7abb5891",
-          1,
-          "provisioning",
-          "hf jobs uv run; /path/to/skippy_quant_job.py",
-          "Manual remote HF Jobs invocation, job script operator-supplied; side effects remote and spend-bearing; not CI-required"
-        ],
-        [
-          132,
-          "e6b9ab4cb17692a2",
-          1,
-          "selection",
-          "/path/to/skippy_quant_job.py",
-          "Continued remote job program path from line 122, not independent invocation"
-        ]
+
       ]
     },
     {
       "file": ".agents/skills/hf-quant-and-layer-package-jobs/SKILL.md",
       "members": [
         [
-          21,
+          20,
           "789d74bfd77cb0f2",
           1,
           "prose",
@@ -406,28 +214,12 @@
           "Deprecated tools prohibited by text; no execution"
         ],
         [
-          22,
+          21,
           "27a2d94a159902fc",
           1,
           "prose",
           "hf_to_gguff.py",
           "Forbidden typo variant, no execution"
-        ],
-        [
-          146,
-          "1d55600f7abb5891",
-          1,
-          "provisioning",
-          "hf jobs uv run; /path/to/skippy_quant_then_package_job.py",
-          "Manual HF remote quantize/package job; external operator path, optional and potentially spend-bearing"
-        ],
-        [
-          156,
-          "3869f12b3db6eb82",
-          1,
-          "selection",
-          "/path/to/skippy_quant_then_package_job.py",
-          "Argument in continued line-146 job command, no second process on this source line"
         ]
       ]
     },
@@ -499,7 +291,9 @@
     },
     {
       "file": ".agents/skills/skippy-cache-family-bench/SKILL.md",
-      "members": []
+      "members": [
+
+      ]
     },
     {
       "file": "ci/ownership.yml",
@@ -689,14 +483,6 @@
           "prose",
           "CI ownership or retained HF conversion environment description",
           "Instruction inventory records descriptions only; actual executable callers remain independently classified in script and workflow shards"
-        ],
-        [
-          31,
-          "9de9f9314729099c",
-          1,
-          "prose",
-          "selected existing source-owned command or inert source reference retained from main",
-          "Main bd5514dd8 retained source: itself. `scripts/tests/test_ci_windows_composition.py` keeps the list, the; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
         ]
       ]
     }
@@ -1212,7 +998,7 @@
       "target": "crates/skippy-quantize/scripts/compare-reference-quantization.py"
     },
     {
-      "boundary": "Manual data row, not automatic CI. Requires the selected local model path and debug binary; probes local status, model list and chat, prints evidence, and cleans up the server. Source-bound argv and model identity are in manual_tsv_rows and manual_tsv_commands.",
+      "boundary": "Historical task-11 executed-command and evidence data, preserved byte-for-byte. Not a current rerun instruction or Python dependency. Current reruns use cargo xtool automation manual-smoke run; see docs/skippy/manual-smoke/README.md. Existing source-bound command/model fields preserve historical provenance.",
       "file": "docs/skippy/manual-smoke/manifest.tsv",
       "kind": "data",
       "line": 2,
@@ -1221,440 +1007,6 @@
     }
   ],
   "python_implementation_edges": [
-    {
-      "file": "evals/kv-restart-replay.py",
-      "members": [
-        [
-          183,
-          "b5d0cbbbbd5343cb",
-          1,
-          "prose",
-          "subprocess.Popen type annotation",
-          "wait_for_model receives an existing server process; no launch"
-        ],
-        [
-          208,
-          "4b2709dadd4438f9",
-          1,
-          "prose",
-          "subprocess.Popen type annotation",
-          "stop_server receives an existing server process; no launch"
-        ],
-        [
-          250,
-          "e231e3a2b65c72af",
-          1,
-          "prose",
-          "subprocess.Popen return annotation",
-          "start_server return type, not a process call"
-        ],
-        [
-          256,
-          "091b630b3a4be637",
-          1,
-          "execution",
-          "selected Mesh binary serve --model <operator model> --log-format json",
-          "Optional KV restart replay starts the selected local binary with isolated HOME and runtime root, redirects output to a log and owns process-group shutdown"
-        ],
-        [
-          387,
-          "227b092c1f2b3e39",
-          1,
-          "execution",
-          "sysctl -n machdep.cpu.brand_string",
-          "macOS-only hardware fingerprint; captured stdout, failures omit the optional chip field"
-        ],
-        [
-          395,
-          "227b092c1f2b3e39",
-          2,
-          "execution",
-          "sysctl -n hw.model",
-          "macOS-only machine model probe; captured stdout, failures omit the optional model field"
-        ],
-        [
-          402,
-          "4ab6cd9aeab5a872",
-          1,
-          "execution",
-          "sysctl -n hw.memsize",
-          "macOS-only physical memory probe; captured stdout, failures set memory to null"
-        ],
-        [
-          427,
-          "454e86713254c6b7",
-          1,
-          "execution",
-          "git describe --always --dirty --tags",
-          "Optional binary provenance reads the local repository and captures stdout; failures set Git identity unknown"
-        ],
-        [
-          435,
-          "1f990d2709d3d263",
-          1,
-          "execution",
-          "git rev-parse HEAD",
-          "Optional binary provenance captures local commit SHA; failures set Git identity unknown"
-        ]
-      ]
-    },
-    {
-      "file": "evals/skippy-adaptive-prefill-ab.py",
-      "members": [
-        [
-          60,
-          "495a916fe1a70992",
-          1,
-          "prose",
-          "subprocess.Popen type annotation",
-          "wait_tcp parameter"
-        ],
-        [
-          79,
-          "e0f6be332d603a41",
-          1,
-          "prose",
-          "subprocess.Popen type annotation",
-          "wait_openai parameter"
-        ],
-        [
-          103,
-          "07cba2052e1de431",
-          1,
-          "prose",
-          "subprocess.Popen type annotation",
-          "stop parameter"
-        ],
-        [
-          385,
-          "007682cf36244879",
-          1,
-          "conditional",
-          "stage1 command assembled from selected benchmark server/model arguments",
-          "Popen launches optional downstream stage, executable runtime-selected; stdout/status/lifetime owned by benchmark orchestration"
-        ],
-        [
-          394,
-          "eb539fae050f54d2",
-          1,
-          "conditional",
-          "stage0 command assembled from selected benchmark server/model arguments",
-          "Popen launches optional upstream stage, executable runtime-selected"
-        ]
-      ]
-    },
-    {
-      "file": "evals/skippy-cache-production-bench.py",
-      "members": [
-        [
-          274,
-          "0dc6e899914acaa1",
-          1,
-          "prose",
-          "subprocess.Popen type annotation",
-          "proc parameter only"
-        ],
-        [
-          371,
-          "dbef69df4b6c3a92",
-          1,
-          "conditional",
-          "benchmark command vector selected at callsite",
-          "subprocess.run executes supplied command; exit/output depends on caller; optional benchmark not a fixed Python interpreter"
-        ],
-        [
-          415,
-          "dd55eecf328a663f",
-          1,
-          "conditional",
-          "benchmark-selected server command",
-          "Popen starts first benchmark process; argv configured by selected runtime"
-        ],
-        [
-          829,
-          "dd55eecf328a663f",
-          2,
-          "conditional",
-          "benchmark-selected server command",
-          "Popen starts second server/process variant; configured executable"
-        ],
-        [
-          1386,
-          "dd55eecf328a663f",
-          3,
-          "conditional",
-          "benchmark-selected server command",
-          "Popen starts third benchmark process variant; configured executable"
-        ]
-      ]
-    },
-    {
-      "file": "evals/skippy-competitive-benchmark.py",
-      "members": [
-        [
-          315,
-          "f674827b15e3b4d5",
-          1,
-          "conditional",
-          "run_checked(command): first argv selected by caller",
-          "check=True, other kwargs from caller; can run hf, Python prompt generator or selected native benchmark tool"
-        ],
-        [
-          399,
-          "b055144f6196d6bd",
-          1,
-          "selection",
-          "sys.executable evals/skippy-agentic-prompt-manifest.py",
-          "Builds prompt-generator argv with verified parquet/dataset revision/output/selection; run_checked at enclosing call launches it"
-        ],
-        [
-          698,
-          "ff62d006b3bf7557",
-          1,
-          "prose",
-          "subprocess.Popen type annotation",
-          "wait_ready signature"
-        ],
-        [
-          718,
-          "70b88a5a20732d11",
-          1,
-          "prose",
-          "subprocess.Popen type annotation",
-          "stop_process signature"
-        ],
-        [
-          765,
-          "091b630b3a4be637",
-          1,
-          "conditional",
-          "configured Mesh or external engine binary command",
-          "Popen server launch from selected engine, runtime path not statically fixed"
-        ],
-        [
-          873,
-          "6cb92e1577f16196",
-          1,
-          "conditional",
-          "configured vLLM Python executable; plugin availability probe",
-          "subprocess.run captures result; target runtime-configured, not a tracked script"
-        ],
-        [
-          928,
-          "b733fde7f23b0635",
-          1,
-          "conditional",
-          "configured external engine --version",
-          "subprocess.run version probe, configured binary"
-        ],
-        [
-          947,
-          "cddfc0a2ff7661c2",
-          1,
-          "selection",
-          "args.sglang_python or Path(sys.executable)",
-          "Assigns selected Python, no execution"
-        ],
-        [
-          953,
-          "7189acb62aac57cd",
-          1,
-          "conditional",
-          "configured SGLang Python -c import probe",
-          "subprocess.run checks SGLang import, external environment selected by args"
-        ],
-        [
-          1489,
-          "6a117ca52564682a",
-          1,
-          "conditional",
-          "selected benchmark warm-up command",
-          "subprocess.run warmup; executable conditional on engine/CLI"
-        ],
-        [
-          1515,
-          "0bb8fafe2022eacf",
-          1,
-          "conditional",
-          "selected benchmark measurement command",
-          "subprocess.run measurement; executable conditional on engine/CLI"
-        ]
-      ]
-    },
-    {
-      "file": "evals/skippy-mixed-prefill-decode-ab.py",
-      "members": [
-        [
-          50,
-          "e0f6be332d603a41",
-          1,
-          "prose",
-          "subprocess.Popen type annotation",
-          "wait_openai signature"
-        ],
-        [
-          74,
-          "c9204078ecbe4506",
-          1,
-          "prose",
-          "subprocess.Popen type annotation",
-          "wait_binary signature"
-        ],
-        [
-          93,
-          "07cba2052e1de431",
-          1,
-          "prose",
-          "subprocess.Popen type annotation",
-          "stop signature"
-        ],
-        [
-          515,
-          "3c8518772413edf2",
-          1,
-          "conditional",
-          "configured stage1 server executable",
-          "Popen downstream server with runtime-selected argv"
-        ],
-        [
-          528,
-          "7cdeb559e84c8668",
-          1,
-          "conditional",
-          "configured stage0 server executable",
-          "Popen upstream server with runtime-selected argv"
-        ]
-      ]
-    },
-    {
-      "file": "evals/skippy-moe-expert-smoke.py",
-      "members": [
-        [
-          69,
-          "dbef69df4b6c3a92",
-          1,
-          "conditional",
-          "smoke-selected command vector",
-          "subprocess.run command assembled from smoke config; not necessarily Python"
-        ],
-        [
-          43,
-          "ee9ea5137a7a51d9",
-          1,
-          "conditional",
-          "selected existing source-owned command or inert source reference retained from main",
-          "Main bd5514dd8 retained source: spec = importlib.util.spec_from_file_location(\"skippy_cache_production_bench\", PRODUCTION_BENCH); preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
-        ]
-      ]
-    },
-    {
-      "file": "evals/skippy-mtp-scheduler-bench.py",
-      "members": [
-        [
-          96,
-          "73c72c1dff829be4",
-          1,
-          "prose",
-          "subprocess.Popen type annotation",
-          "wait_ready signature"
-        ],
-        [
-          148,
-          "dd55eecf328a663f",
-          1,
-          "conditional",
-          "configured scheduler server command",
-          "Popen server, executable from CLI/model config"
-        ],
-        [
-          159,
-          "dbef69df4b6c3a92",
-          1,
-          "conditional",
-          "configured scheduler benchmark command",
-          "subprocess.run benchmark command"
-        ]
-      ]
-    },
-    {
-      "file": "evals/skippy-radix-cache-ab.py",
-      "members": [
-        [
-          353,
-          "cbe66c21195598a1",
-          1,
-          "prose",
-          "subprocess.Popen type annotation",
-          "Process holder only"
-        ],
-        [
-          492,
-          "091b630b3a4be637",
-          1,
-          "conditional",
-          "configured cache benchmark server command",
-          "Popen selected server; no fixed Python child"
-        ],
-        [
-          65,
-          "3c18db1c9af79f96",
-          1,
-          "conditional",
-          "selected existing source-owned command or inert source reference retained from main",
-          "Main bd5514dd8 retained source: spec = importlib.util.spec_from_file_location(\"skippy_cache_production_bench\", path); preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
-        ]
-      ]
-    },
-    {
-      "file": "evals/skippy-scheduler-fixtures.py",
-      "members": [
-        [
-          201,
-          "383b596b3b283778",
-          1,
-          "selection",
-          "runner Callable default subprocess.run",
-          "Function parameter default, no process until invoked with command; injectable runner is explicit runtime parameter"
-        ],
-        [
-          215,
-          "383b596b3b283778",
-          2,
-          "selection",
-          "runner Callable default subprocess.run",
-          "Second function with injectable runner; not invocation by itself"
-        ],
-        [
-          250,
-          "892caa4372698f91",
-          1,
-          "conditional",
-          "selected existing source-owned command or inert source reference retained from main",
-          "Main bd5514dd8 retained source: spec = importlib.util.spec_from_file_location(\"skippy_agentic_prompt_manifest\", GENERATOR); preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
-        ]
-      ]
-    },
-    {
-      "file": "evals/skippy-waiting-prefix-ab.py",
-      "members": [
-        [
-          426,
-          "091b630b3a4be637",
-          1,
-          "conditional",
-          "configured waiting-prefix server command",
-          "Popen optional server from selected executable; not statically a Python target"
-        ],
-        [
-          37,
-          "af10afe85077572f",
-          1,
-          "conditional",
-          "selected existing source-owned command or inert source reference retained from main",
-          "Main bd5514dd8 retained source: spec = importlib.util.spec_from_file_location(name, path); preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
-        ]
-      ]
-    },
     {
       "file": "evals/test_injection_framing.py",
       "members": [
@@ -1694,69 +1046,6 @@
           "conditional",
           "run_logged(argv): [--python, --python-converter, ...] OR --skippy-quantize OR --llama-quantize",
           "Optional reference parity: argv supplied by conversion/quant mode callers; stdout+stderr combined to log, returns status for matching-failure handling; creates work dir/logs/GGUFs. Python interpreter and upstream converter are operator-provided, not required CI"
-        ]
-      ]
-    },
-    {
-      "file": "docs/skippy/manual-smoke/runtime_smoke.py",
-      "members": [
-        [
-          62,
-          "2c357581bf36468a",
-          1,
-          "conditional",
-          "--binary <operator path> serve --config <temporary TOML> --headless --port/--console",
-          "Manual smoke Popen stdout/stderr to temp log, polls readiness, terminates server in finally; binary selected by operator, not a fixed Python child"
-        ]
-      ]
-    },
-    {
-      "file": ".agents/skills/release-validation/scripts/collect-release-inventory.py",
-      "members": [
-        [
-          16,
-          "0bb8fafe2022eacf",
-          1,
-          "execution",
-          "run(*args): git or gh argument vector supplied by local git()/gh_json() callers",
-          "check=False; stdout/stderr captured, RuntimeError on nonzero; read-only local git and GitHub API calls, optional release-validation skill"
-        ],
-        [
-          130,
-          "867b353dcf68d2ff",
-          1,
-          "execution",
-          "git merge-base --is-ancestor <base_release_base> <head_release_base>",
-          "check=False; nonzero raises release provenance error; no output captured, no intended persistent write"
-        ],
-        [
-          204,
-          "0bb8fafe2022eacf",
-          2,
-          "execution",
-          "git merge-base --is-ancestor <pr mergeCommit oid> <head_sha>",
-          "check=False; returncode contributes to per-PR in-range boolean; no intended write"
-        ],
-        [
-          207,
-          "cc200424e10ed9f2",
-          1,
-          "execution",
-          "git merge-base --is-ancestor <base_sha> <pr mergeCommit oid>",
-          "check=False; returncode contributes to per-PR in-range boolean; no intended write"
-        ]
-      ]
-    },
-    {
-      "file": "evals/skippy-cache-correctness-gate.py",
-      "members": [
-        [
-          21,
-          "ee9ea5137a7a51d9",
-          1,
-          "conditional",
-          "selected existing source-owned command or inert source reference retained from main",
-          "Main bd5514dd8 retained source: spec = importlib.util.spec_from_file_location(\"skippy_cache_production_bench\", PRODUCTION_BENCH); preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
         ]
       ]
     },
@@ -1995,8 +1284,12 @@
       }
     ],
     "limits": "Source-bound caller reconciliation only. Generic Python implementations and unqualified test methods retained; required SDK, native, model, platform and protected gates unchanged. Literal typed command selection and continued argv are reviewed, but runtime dynamic expansion is not parser-complete reachability proof.",
-    "removed_edges": [],
-    "rebound_rows": []
+    "removed_edges": [
+
+    ],
+    "rebound_rows": [
+
+    ]
   },
   "next_wave_comparator_and_test_retirement": {
     "coverage": "ci/automation-migration/next-wave-test-tts-retirement-coverage.json",
@@ -2095,7 +1388,9 @@
     },
     "qualification": "Authored, unrun; parent must qualify the transaction before any legacy retirement",
     "retained": "All Python helpers and legacy tests remain. Normal verify timeout helper remains reachable; no inventory/roster reductions.",
-    "rebound_rows": []
+    "rebound_rows": [
+
+    ]
   },
   "projected_final_repair_caller_binding": {
     "source": "scripts/llama-canary-agent-repair.sh",
@@ -11424,7 +10719,9 @@
       "sha256": "fa4342e63b8d4f93e425e88f106d9585ba5ef3e06a057cff3c83ad2ed92c9d5c",
       "head": "3fbd1fcbcd390c86083a8265de3a4ce4734e3a58",
       "status": "FROZEN_SOURCES_NOT_TERMINAL_EXECUTION",
-      "drift": [],
+      "drift": [
+
+      ],
       "additional_native_sources": [
         {
           "path": "tools/xtask/src/automation/event_benchmark_comparison/manifest_tests.rs",
@@ -18367,6 +17664,139 @@
       }
     }
   },
+  "next57_generic_last_caller_cutover": {
+    "status": "SOURCE_PROPOSED_UNQUALIFIED",
+    "durable_coverage": {
+      "path": "ci/automation-migration/next57-generic-last-caller-coverage.json",
+      "sha256": "65b09092b116b1c9463c70b0c2aee9925572c2a19d624e47cd862cd8a2fc36ba"
+    },
+    "deleted_paths": [
+      {
+        "path": "scripts/tests/test_kv_restart_replay.py",
+        "sha256": "d19cd4a8b6ca61401bb70cce8bbcf893332bcec50a92993c8de6dd777b80d313"
+      },
+      {
+        "path": "scripts/tests/test_skippy_mixed_prefill_decode_ab.py",
+        "sha256": "ade603e9eaf96629df235fde06cb9f2e22c9cc8fff797ffdb0bcf08a891f1005"
+      },
+      {
+        "path": "scripts/tests/test_skippy_system_one_smoke.py",
+        "sha256": "6d1885c38cd3cabcf09edbc444f8e812ffb1b248924d8f4cd890127f61687445"
+      },
+      {
+        "path": "evals/kv-restart-replay.py",
+        "sha256": "17c2e74001ca9accf132c791d4a6350ddedeac49dbef678f4cef63ab0aa3af7d"
+      },
+      {
+        "path": "evals/skippy-mixed-prefill-decode-ab.py",
+        "sha256": "234e8b6544f9b3a260a788e945df42c13ed97742338474456491dc844f71f2c5"
+      },
+      {
+        "path": "scripts/skippy-system-one-cases.py",
+        "sha256": "189436fc0a4e45e8608fa1e1aa801d72e79939a67b7e4898f0845c0673c760f4"
+      }
+    ],
+    "core_methods_removed": 45,
+    "qualification": {
+      "focused": null,
+      "final_normal": null
+    },
+    "preserve": "All existing retirement history, source_blocks, protected catalog/pins, approved readers and conditional SDK exceptions"
+  },
+  "radix_adaptive_hf_projector_last_caller_cutover": {
+    "status": "SOURCE_PROPOSED_UNQUALIFIED",
+    "durable_coverage": {
+      "path": "ci/automation-migration/radix-adaptive-hf-projector-last-caller-coverage.json",
+      "sha256": "ac27f5840e951f68eb29291263cbbc26512fae70539d6f4c79761f8befa5ff4c"
+    },
+    "deleted_paths": [
+      {
+        "path": "scripts/tests/test_skippy_radix_cache_ab.py",
+        "sha256": "abb5fe96198b5089693d017fe7e92a217771c65f76ee6a949edf32a95fae6d8a"
+      },
+      {
+        "path": "scripts/tests/test_skippy_adaptive_prefill_ab.py",
+        "sha256": "6d62522aaa21db4d0ff58716ca5bdca9c83de90dcb49ea129cca02291db83d5a"
+      },
+      {
+        "path": "scripts/tests/test_hf_skippy_mtp_certify_job.py",
+        "sha256": "1a81582b9f3b1fcfa5fc23649fedd2270cd65a465de5408e81a385beae83860e"
+      },
+      {
+        "path": "evals/skippy-radix-cache-ab.py",
+        "sha256": "a63a8a7a812b1c58326455c0e1d7a6d0dc595389fb8c3cd665c5654cf9f114ae"
+      },
+      {
+        "path": "evals/skippy-waiting-prefix-ab.py",
+        "sha256": "60b1afc8fea7f79f55c168d0ba8800c3be8a544f5e14b46a1f32a5ad40c467d0"
+      },
+      {
+        "path": "evals/skippy-adaptive-prefill-ab.py",
+        "sha256": "9ff5e3d3cff95f07e97d70c17d2a936788e6d2758500e3c86878258a0e4ca8e1"
+      }
+    ],
+    "core_methods_removed": 19,
+    "qualification": {
+      "focused": null,
+      "final_normal": null
+    },
+    "held_hf_implementation": "scripts/hf-skippy-mtp-certify-job.py",
+    "held_scheduler_helper": "evals/skippy-scheduler-fixtures.py",
+    "preserve": "Historical source_blocks, all earlier coverage, protected catalogs/pins, approved readers/SDK exceptions unchanged.",
+    "test_fingerprint": {
+      "paths": [
+        "scripts/tests/ci_test_helpers.py",
+        "scripts/tests/test_agentic_trajectory_manifest.py",
+        "scripts/tests/test_build_windows.py",
+        "scripts/tests/test_ci_windows_composition.py",
+        "scripts/tests/test_install_ps1.py",
+        "scripts/tests/test_llama_canary_agent_repair_contract.py",
+        "scripts/tests/test_llama_native_full_replay.py",
+        "scripts/tests/test_llama_upstream_canary_contract.py",
+        "scripts/tests/test_skippy_competitive_benchmark.py",
+        "scripts/tests/test_skippy_llama_parity.py"
+      ],
+      "sha256": "2f9e82753a2c972c102ad184690f760e9f70eee5dedbb143d510cc3d7704783a"
+    }
+  },
+  "canary_replay_release_conditional_cutover": {
+    "status": "SOURCE_ONLY_PENDING_OWNING_FINAL_NORMAL",
+    "removed": [
+      "scripts/tests/test_llama_native_full_replay.py",
+      "scripts/tests/test_llama_review_regressions.py",
+      "scripts/tests/test_llama_canary_agent_repair_contract.py",
+      "scripts/tests/test_llama_upstream_canary_contract.py",
+      ".agents/skills/release-validation/scripts/collect-release-inventory.py"
+    ],
+    "coverage": [
+      "ci/automation-migration/canary-current-contract-retirement-coverage.json",
+      "ci/automation-migration/llama-replay-review-retirement-coverage.json",
+      "ci/automation-migration/release-inventory-retirement-coverage.json"
+    ],
+    "qualification": null
+  },
+  "parity38_conditional_last_caller": {
+    "status": "SOURCE_ONLY_PENDING_CURRENT_OWNING_FINAL_NORMAL",
+    "removed": [
+      "scripts/skippy-llama-parity.py",
+      "scripts/tests/test_skippy_llama_parity.py"
+    ],
+    "coverage": "ci/automation-migration/parity38-last-caller-retirement-coverage.json",
+    "qualification": null
+  },
+  "competitive28_conditional_last_caller": {
+    "status": "SOURCE_COMPLETE_PENDING_CURRENT_27_OWNER_AND_FINAL_NORMAL",
+    "removed": [
+      "evals/skippy-competitive-benchmark.py",
+      "scripts/tests/test_skippy_competitive_benchmark.py"
+    ],
+    "coverage": "ci/automation-migration/competitive-benchmark-retirement-coverage.json",
+    "qualification": null,
+    "retirement": null,
+    "scope": "Generic orchestration/serializer/report contracts; real engines/model/platform acceptance remains separate; materializer retained with actual extraction callers",
+    "historical_implementation_dispositions": {
+    }
+  },
   "cache_family_operator_active_reconciliation": {
     "schema_version": 1,
     "status": "source_reconciled_execution_receipt_pending",
@@ -18551,5 +17981,540 @@
       "Real current model/backend/native measurements remain external qualification.",
       "Root must qualify repaired existing report-wrapper fixture."
     ]
+  },
+  "cache_family_three_native_caller_retirement": {
+    "status": "conditional_retirement_pending_root_admission",
+    "coverage": "ci/automation-migration/cache-family-production-retirement-coverage.json",
+    "retired_paths": [
+      "evals/skippy-cache-production-bench.py",
+      "evals/skippy-cache-correctness-gate.py",
+      "evals/skippy-moe-expert-smoke.py"
+    ],
+    "proof": null,
+    "normal_ci": null,
+    "requires_absent_importers": [
+      "evals/skippy-radix-cache-ab.py",
+      "evals/skippy-waiting-prefix-ab.py",
+      "scripts/tests/test_skippy_radix_cache_ab.py"
+    ],
+    "external_model_qualification": "Separate unverified scope; no native/model/performance claim.",
+    "historical_implementation_groups": [
+      {
+        "file": "evals/skippy-cache-production-bench.py",
+        "members": [
+          [
+            274,
+            "0dc6e899914acaa1",
+            1,
+            "prose",
+            "subprocess.Popen type annotation",
+            "proc parameter only"
+          ],
+          [
+            371,
+            "dbef69df4b6c3a92",
+            1,
+            "conditional",
+            "benchmark command vector selected at callsite",
+            "subprocess.run executes supplied command; exit/output depends on caller; optional benchmark not a fixed Python interpreter"
+          ],
+          [
+            415,
+            "dd55eecf328a663f",
+            1,
+            "conditional",
+            "benchmark-selected server command",
+            "Popen starts first benchmark process; argv configured by selected runtime"
+          ],
+          [
+            829,
+            "dd55eecf328a663f",
+            2,
+            "conditional",
+            "benchmark-selected server command",
+            "Popen starts second server/process variant; configured executable"
+          ],
+          [
+            1386,
+            "dd55eecf328a663f",
+            3,
+            "conditional",
+            "benchmark-selected server command",
+            "Popen starts third benchmark process variant; configured executable"
+          ]
+        ]
+      },
+      {
+        "file": "evals/skippy-moe-expert-smoke.py",
+        "members": [
+          [
+            69,
+            "dbef69df4b6c3a92",
+            1,
+            "conditional",
+            "smoke-selected command vector",
+            "subprocess.run command assembled from smoke config; not necessarily Python"
+          ],
+          [
+            43,
+            "ee9ea5137a7a51d9",
+            1,
+            "conditional",
+            "selected existing source-owned command or inert source reference retained from main",
+            "Main bd5514dd8 retained source: spec = importlib.util.spec_from_file_location(\"skippy_cache_production_bench\", PRODUCTION_BENCH); preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
+          ]
+        ]
+      },
+      {
+        "file": "evals/skippy-cache-correctness-gate.py",
+        "members": [
+          [
+            21,
+            "ee9ea5137a7a51d9",
+            1,
+            "conditional",
+            "selected existing source-owned command or inert source reference retained from main",
+            "Main bd5514dd8 retained source: spec = importlib.util.spec_from_file_location(\"skippy_cache_production_bench\", PRODUCTION_BENCH); preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
+          ]
+        ]
+      }
+    ],
+    "historical_target_proofs": {
+      "evals/skippy-cache-production-bench.py:1386": {
+        "contract": "Combined streams to case log, health check and concurrent request/goodput evidence; finally terminate/wait/kill. CLI-selected server unresolved.",
+        "source": "concurrency sweep:1360-1437",
+        "target_class": "unresolved",
+        "targets": [
+          "<args.llama_server_bin> -m <model> -c <context> -ngl <layers> --host 127.0.0.1 --port <port> --parallel <lanes> --no-webui"
+        ]
+      },
+      "evals/skippy-cache-production-bench.py:371": {
+        "contract": "cwd REPO, LLAMA_STAGE_BUILD_DIR env, stdout and stderr merged to log, bounded correctness timeout; nonzero recorded as fail, success reads report JSON. CLI-selected executable unresolved.",
+        "source": "run_correctness:331-389",
+        "target_class": "unresolved",
+        "targets": [
+          "<args.skippy_correctness_bin> state-handoff <model/layer/cache/report options>"
+        ]
+      },
+      "evals/skippy-cache-production-bench.py:415": {
+        "contract": "Combined streams to case log, /health and early-exit readiness, timed request results; finally terminate/wait then kill/wait. CLI-selected server unresolved.",
+        "source": "run_llama_case:390-457",
+        "target_class": "unresolved",
+        "targets": [
+          "<args.llama_server_bin> -m <model> -c <context> -ngl <layers> --host <host> --port <port> --parallel <lanes> --no-webui"
+        ]
+      },
+      "evals/skippy-cache-production-bench.py:829": {
+        "contract": "Caller supplies server_bin; stage-build/telemetry env, combined log, /v1/models readiness, concurrency curve; finally terminate/wait/kill. Binary contents unresolved.",
+        "source": "run_skippy_case:787-886",
+        "target_class": "unresolved",
+        "targets": [
+          "<server_bin> serve-openai --config <config> --bind-addr <addr> --generation-concurrency <lanes> --telemetry-level debug"
+        ]
+      },
+      "evals/skippy-moe-expert-smoke.py:69": {
+        "contract": "Default target/debug/skippy-model-package is overridable; cwd REPO, text stdout/stderr captured separately, check=True and JSON parse; nonzero raises. Separate imported production-bench correctness child at line 371.",
+        "source": "inspect_model:57-79; CLI:201-202; run:249-257",
+        "target_class": "unresolved",
+        "targets": [
+          "<args.inspect_bin> inspect <model_path>"
+        ]
+      }
+    },
+    "historical_prior_retired_caller_proofs": {
+      "evals/skippy-adaptive-prefill-ab.py:385": {
+        "contract": "Downstream first; cwd REPO, Skippy env, merged streams in stage1 log, TCP readiness or early-exit failure; finally terminates/waits/kills. Binary bytes selected by operator.",
+        "source": "main:691-699; launch_cell:347-353,385-393; parser:621-663",
+        "target_class": "unresolved",
+        "targets": [
+          "<selected --old-binary or --new-binary> serve-binary --config <stage1> --max-inflight 2 --reply-credit-limit 1 --async-prefill-forward --telemetry-level debug"
+        ]
+      },
+      "evals/skippy-adaptive-prefill-ab.py:394": {
+        "contract": "Upstream after stage1 readiness; merged streams in stage0 log, /v1/models readiness and request/telemetry evidence, finally terminate/wait/kill; selected binary unresolved.",
+        "source": "launch_cell:354-402; main:691-699",
+        "target_class": "unresolved",
+        "targets": [
+          "<selected --old-binary or --new-binary> serve-binary --config <stage0> --max-inflight 2 --reply-credit-limit 1 --async-prefill-forward --telemetry-level debug --openai-bind-addr <port> --openai-generation-concurrency 1 --openai-default-max-tokens <tokens> --openai-prefill-chunk-policy adaptive-ramp --openai-prefill-chunk-size 256 --openai-prefill-adaptive-start 128 --openai-prefill-adaptive-step 128 --openai-prefill-adaptive-max 384 [--openai-prefill-adaptive-target-ms <ms> for new]"
+        ]
+      },
+      "evals/skippy-competitive-benchmark.py:1489": {
+        "contract": "Combined streams warmup.out, check=False then nonzero raises RuntimeError. User-selected benchmark executable unresolved.",
+        "source": "synthetic_benchy_common_command; warmup:1484-1496; CLI:2459",
+        "target_class": "unresolved",
+        "targets": [
+          "<selected benchy executable> <synthetic common args> --tg 8 --concurrency 4 --format json"
+        ]
+      },
+      "evals/skippy-competitive-benchmark.py:1515": {
+        "contract": "Combined streams <stem>.out; status.tsv and JSON/progress evidence; nonzero or invalid artifacts fail cell. Benchy executable unresolved.",
+        "source": "measurement:1498-1543; CLI:2459",
+        "target_class": "unresolved",
+        "targets": [
+          "<selected benchy executable> <synthetic common args> --tg <tokens> --concurrency <n> --format json --save-result <stem>.json --emit-progress <stem>-progress.jsonl"
+        ]
+      },
+      "evals/skippy-competitive-benchmark.py:315": {
+        "contract": "check=True with caller kwargs; prefetch downloads/verifies files, version probe captures output. hf is fixed name but --benchy executable is operator-selected; no assertion that prefetch is automatic run.",
+        "source": "run_checked:313-319; prefetch:332-390; preflight:1103-1112; CLI dispatch:2442-2447",
+        "target_class": "unresolved",
+        "targets": [
+          "hf download <pinned model/dataset options>",
+          "hf cache verify <pinned revision/options>",
+          "<args.benchy> --version"
+        ]
+      },
+      "evals/skippy-competitive-benchmark.py:765": {
+        "contract": "Writes stage/server-command JSON; combined streams server.log, readiness and finally stop; selected binary/Python and child closure unresolved.",
+        "source": "server_command:545-695; running_server:729-773; CLI:2455-2487; preflight_run:1057-1077",
+        "target_class": "unresolved",
+        "targets": [
+          "<args.mesh_binary> serve-openai --config <stage> ...",
+          "<args.llama_binary> --model <model> ...",
+          "<args.vllm_binary or PATH-resolved vllm> serve <model> ...",
+          "<args.sglang_python or sys.executable> -m sglang.launch_server ..."
+        ]
+      },
+      "evals/skippy-competitive-benchmark.py:873": {
+        "contract": "Captured separate text stdout/stderr, check=False; nonzero marks plugin unavailable. Selected vLLM environment determines interpreter.",
+        "source": "vllm preflight:858-885",
+        "target_class": "unresolved",
+        "targets": [
+          "<python sibling of selected vllm binary> -c importlib.metadata.version('vllm-gguf-plugin')"
+        ]
+      },
+      "evals/skippy-competitive-benchmark.py:928": {
+        "contract": "Captured separate text stdout/stderr, check=False; version stdout-or-stderr recorded, nonzero not immediately raised. Binary selected by CLI or PATH.",
+        "source": "vllm preflight:928-943; CLI:2455-2487",
+        "target_class": "unresolved",
+        "targets": [
+          "<args.vllm_binary> --version"
+        ]
+      },
+      "evals/skippy-competitive-benchmark.py:953": {
+        "contract": "Captured separate text stdout/stderr, check=False; nonzero marks unavailable. CLI override may select arbitrary interpreter.",
+        "source": "sglang preflight:947-965; CLI:2487",
+        "target_class": "unresolved",
+        "targets": [
+          "<args.sglang_python or sys.executable> -c importlib.metadata.version('sglang')"
+        ]
+      },
+      "evals/skippy-mixed-prefill-decode-ab.py:515": {
+        "contract": "Only if --split-layer supplied; selected build env, merged stage1 log; binary readiness/early exit check; finally stop/wait/kill. Operator binary unresolved.",
+        "source": "launch_cell:498-523; main:990-1002",
+        "target_class": "unresolved",
+        "targets": [
+          "<selected --old-binary or --new-binary> serve-binary --config <stage1> --max-inflight <lanes> --telemetry-level debug --reply-credit-limit 1 --async-prefill-forward"
+        ]
+      },
+      "evals/skippy-mixed-prefill-decode-ab.py:528": {
+        "contract": "Always starts after optional stage1; combined stage0 log, /v1/models readiness, request results; finally stop/wait/kill. Operator binary unresolved.",
+        "source": "launch_cell:498-550; main:990-1002",
+        "target_class": "unresolved",
+        "targets": [
+          "<selected --old-binary or --new-binary> serve-binary --config <stage0> --max-inflight <lanes> --telemetry-level debug --openai-bind-addr <port> --openai-generation-concurrency <lanes> --openai-default-max-tokens <max> --openai-prefill-chunk-policy adaptive-ramp --openai-prefill-chunk-size <ubatch> --openai-prefill-adaptive-start/step/max <values> [--openai-prefill-adaptive-target-ms <ms>]"
+        ]
+      },
+      "evals/skippy-radix-cache-ab.py:492": {
+        "contract": "Skippy env, combined server log, /v1/models readiness, request/telemetry results, finally terminate/wait/kill; operator binary identity unresolved.",
+        "source": "run_server_cell:470-550; CLI:927-928",
+        "target_class": "unresolved",
+        "targets": [
+          "<--old-bin or --new-bin> serve-openai --config <config> --bind-addr <port> --generation-concurrency <n> --telemetry-level debug"
+        ]
+      },
+      "evals/skippy-waiting-prefix-ab.py:426": {
+        "contract": "Skippy env, combined server log, /v1/models readiness, seed/request/telemetry results, finally terminate/wait/kill; operator binary identity unresolved.",
+        "source": "run_server_cell:401-490; CLI:782-784",
+        "target_class": "unresolved",
+        "targets": [
+          "<--old-bin or --new-bin> serve-openai --config <config> --bind-addr <port> --generation-concurrency <n> --telemetry-level debug"
+        ]
+      }
+    },
+    "prior_retirement_manifests": [
+      {
+        "path": ".omo/evidence/resume-20261002/ready20-competitive-operator-current-ledger-rebind-v4/ready20-manifest.json",
+        "sha256": "171e77c15d3dee7752a8e539f8bd94a91b4569cdbdc5f44165de77d6052a0729"
+      },
+      {
+        "path": ".omo/evidence/resume-20261002/ready20-competitive-operator-current-ledger-rebind-v4/competitive-manifest.json",
+        "sha256": "f58556eee6815bf93c9dd6cccd3299bd5fecf0701bd090234c6c6d5f5a6be0ab"
+      }
+    ]
+  },
+  "windows_three_required_caller_guidance": {
+    "path": ".agents/skills/manage-ci/references/current-inventory.md",
+    "source_sha256": "5cf196a8135db474df46997a5f09be91a0c77b16039ff09e69f12eaa8e1135ec",
+    "removed_candidate": {
+      "line": 31,
+      "hash": "9de9f9314729099c",
+      "reason": "Old Python source owner replaced by native owner; replacement contains no Python/interpreter candidate, unchanged line count preserves all later scanner joins."
+    },
+    "qualification": null
+  },
+  "native_hf_manual_protocol_last_caller_retirement": {
+    "status": "conditional_not_executed",
+    "coverage": "ci/automation-migration/native-hf-manual-protocol-retirement-coverage.json",
+    "removed_paths": [
+      "scripts/hf-skippy-convert-job.py",
+      "scripts/hf-skippy-mtp-certify-job.py",
+      "scripts/hf-skippy-mtp-compose-job.py",
+      "docs/skippy/manual-smoke/runtime_smoke.py",
+      "docs/skippy/manual-smoke/check_coverage.py",
+      "evals/skippy-openai-cache-matrix.py",
+      "evals/skippy-suffix-proposer-bench.py",
+      "scripts/run-openai-guardrail-corpus.py",
+      "evals/skippy-agentic-prompt-manifest.py"
+    ],
+    "required_selections": 83,
+    "actual_owning_positives": null,
+    "normal_ci": null,
+    "prior_source_history_preserved": true,
+    "current_guidance_source_bindings": [
+      {
+        "path": "docs/BENCHMARKS.md",
+        "sha256": "21866ca5955c5bbcd6ff62790e4e123d97f7e68299ceecd6b4fe557f25f8b14c",
+        "kind": "actual root-applied native caller guidance"
+      },
+      {
+        "path": "docs/design/TESTING.md",
+        "sha256": "d9a2c8af4f9b71b53cddd0be0027e7950cd9adc9694d76b2c0cd8f6d80b7ab51",
+        "kind": "actual root-applied native caller guidance"
+      },
+      {
+        "path": "docs/skippy/LLAMA_BENCHY.md",
+        "sha256": "8911096e9351021a60e09769caf329e54545e964ffdfa753be64cccdb206a02e",
+        "kind": "actual root-applied native caller guidance"
+      },
+      {
+        "path": "docs/design/OPENAI_GUARDRAILS.md",
+        "sha256": "2a165056321484f078aaf48bfed5d0b81b78402e7bf4b0b4461343f10668d016",
+        "kind": "actual root-applied native caller guidance"
+      },
+      {
+        "path": "docs/skippy/PROMPT_CACHE.md",
+        "sha256": "c2295b2f09f115a93c318f82be810eb2e2a258c2a114d0877793304abbf70fae",
+        "kind": "actual root-applied native caller guidance"
+      },
+      {
+        "path": "docs/skippy/HF_MTP_COMPOSE_NATIVE.md",
+        "sha256": "06b1a1f99de917bd7d9816ed28893c64fc1bb66b718bd6f92ddfe8e7f187ac1f",
+        "kind": "actual root-applied native caller guidance"
+      }
+    ],
+    "historical_removed_records": {
+      "python_implementation_edges": [
+        {
+          "file": "docs/skippy/manual-smoke/runtime_smoke.py",
+          "members": [
+            [
+              62,
+              "2c357581bf36468a",
+              1,
+              "conditional",
+              "--binary <operator path> serve --config <temporary TOML> --headless --port/--console",
+              "Manual smoke Popen stdout/stderr to temp log, polls readiness, terminates server in finally; binary selected by operator, not a fixed Python child"
+            ]
+          ]
+        }
+      ],
+      "conditional_target_proofs": {
+        "docs/skippy/manual-smoke/runtime_smoke.py:62": {
+          "contract": "68 manual TSV rows prescribe target/debug/mesh-llm but --binary accepts another operator path. Combined stdout/stderr in temporary log; status/API readiness, models and chat probes; finally SIGTERM/wait then kill, removes temporary config. Not automatic CI.",
+          "source": "main:30-105; docs/skippy/manual-smoke/manifest.tsv:2-151",
+          "target_class": "unresolved",
+          "targets": [
+            "<--binary> serve --config <temporary fixture TOML> --headless --port <api> --console <console>"
+          ]
+        }
+      }
+    }
+  },
+  "mtp_scheduler_native_last_caller_retirement": {
+    "historical_python_implementation_groups": [
+      {
+        "file": "evals/skippy-mtp-scheduler-bench.py",
+        "members": [
+          [
+            96,
+            "73c72c1dff829be4",
+            1,
+            "prose",
+            "subprocess.Popen type annotation",
+            "wait_ready signature"
+          ],
+          [
+            148,
+            "dd55eecf328a663f",
+            1,
+            "conditional",
+            "configured scheduler server command",
+            "Popen server, executable from CLI/model config"
+          ],
+          [
+            159,
+            "dbef69df4b6c3a92",
+            1,
+            "conditional",
+            "configured scheduler benchmark command",
+            "subprocess.run benchmark command"
+          ]
+        ]
+      }
+    ],
+    "historical_conditional_target_proofs": {
+      "evals/skippy-mtp-scheduler-bench.py:148": {
+        "contract": "Selected native-build env, combined server log; readiness or early exit, finally terminate/wait/kill. Both binary paths are required CLI inputs.",
+        "source": "run_server:131-152; main:255-282",
+        "target_class": "unresolved",
+        "targets": [
+          "<--old-bin or --new-bin> serve-binary --config <config> --bind-addr <port> --max-inflight <max sweep> --telemetry-level debug"
+        ]
+      },
+      "evals/skippy-mtp-scheduler-bench.py:159": {
+        "contract": "Required operator client path; check=True, captured stdout/stderr, text, timeout=1800; parse stdout JSON; failure aborts benchmark while server finally stops.",
+        "source": "run_server:153-177; main:255-282",
+        "target_class": "unresolved",
+        "targets": [
+          "<--client-bin> --addr <server> --requests <max(requests,concurrency)> --concurrency <n> --activation-width <width>"
+        ]
+      }
+    },
+    "current_native_sources": [
+      {
+        "path": "tools/xtask/src/automation/mtp_scheduler.rs",
+        "sha256": "1beb9af15c9f194e1552aceb89768e1de7acce82b954aa8ec59bf3e4d0131c70"
+      },
+      {
+        "path": "tools/xtask/src/automation/mtp_scheduler/execution.rs",
+        "sha256": "e3f4605f30152162e511dcf5b190ca3d1197d74775042561e03b84243ec54009"
+      },
+      {
+        "path": "tools/xtask/src/automation/mtp_scheduler/worker.rs",
+        "sha256": "7b67097bb65ef97acd53629338c95402ccae84a83b4d606e054502385243c7a7"
+      },
+      {
+        "path": "tools/xtask/src/automation/mtp_scheduler/metrics.rs",
+        "sha256": "f3cd7525da8de708469bfa21c00ae0fca18e780ecb6f320df2bf8d954998f5ea"
+      },
+      {
+        "path": "tools/xtask/examples/l7_daemon_fixture/mtp_fixture.rs",
+        "sha256": "1081fa4ba6369ec5611a516e571400adf166f2513180e69bb9c781a8f08de9cc",
+        "historical_applied_sha256": "288ccd8c3f31812be053680cc5ae2e992149edbfe945f59727194f17edea698d"
+      },
+      {
+        "path": "tools/xtask/tests/migration_lifecycle/mtp_cli.rs",
+        "sha256": "455ab844c77d1127b38bad18aaf8c6184d0d2517a7ed951058c54e2c26795409"
+      },
+      {
+        "path": "tools/xtask/src/automation/mod.rs",
+        "sha256": "936ab616d6d22f0e980b1ac9dd426e3822bd12cc9b8015fd57ac3c19c6492cbd"
+      },
+      {
+        "path": "tools/xtask/src/cli.rs",
+        "sha256": "922bab1068daafed3707efade979f846df4938b193f4a2f044a69adc892d104d"
+      },
+      {
+        "path": "tools/xtask/src/main.rs",
+        "sha256": "38b309f29617fc8f1ee05cabd33687cf2985c8ffddb04dd3ccd4521218749e4f"
+      },
+      {
+        "path": "tools/xtask/examples/l7_daemon_fixture.rs",
+        "sha256": "3eeb25d7d40422f20db3d222a11c2f49ab7f3b6e36d10073ed928bb38cc92711"
+      },
+      {
+        "path": "tools/xtask/tests/migration_lifecycle.rs",
+        "sha256": "c7898c8e4f9c68be7147a0b7afd69b849e6b4254b5317c4dfb75aa4f89438f55"
+      },
+      {
+        "path": "tools/xtask/src/automation/mtp_scheduler/final_publication.rs",
+        "sha256": "028e8eaef067df542938e2340f82c11f33d702a3928c944499a299596410ce91"
+      },
+      {
+        "path": "tools/xtask/src/automation/mtp_scheduler/final_publication_tests.rs",
+        "sha256": "31591bdc1be167b17402420fb40286030c781d3ad87d8ef2d8d9f3f8bed6788b"
+      }
+    ],
+    "coverage": "ci/automation-migration/mtp-scheduler-retirement-coverage.json",
+    "qualification": null,
+    "normal_ci": null
+  },
+  "quant_jobs_template_guidance_history": {
+    "reason": "Removed unprovided external Python Job templates and unsupported current-tool memory/window examples. Supplied supported quantizer native Jobs orchestration remains pending; no execution, new exception or capability completion.",
+    "source_bindings": [
+      {
+        "path": ".agents/skills/hf-gguf-quant-jobs/SKILL.md",
+        "sha256": "dc394606bf90c028281633e4e3cd5406933cb0683ac10b464d41e9fe4c875f2d",
+        "line_count": 174
+      },
+      {
+        "path": ".agents/skills/hf-quant-and-layer-package-jobs/SKILL.md",
+        "sha256": "74fdf1fb481b2d37c0ffdba2b54830effc6a8a00429bd24f29e5bbb0499677f6",
+        "line_count": 157
+      }
+    ],
+    "original_records": [
+      {
+        "file": ".agents/skills/hf-gguf-quant-jobs/SKILL.md",
+        "members": [
+          [
+            122,
+            "1d55600f7abb5891",
+            1,
+            "provisioning",
+            "hf jobs uv run; /path/to/skippy_quant_job.py",
+            "Manual remote HF Jobs invocation, job script operator-supplied; side effects remote and spend-bearing; not CI-required"
+          ],
+          [
+            132,
+            "e6b9ab4cb17692a2",
+            1,
+            "selection",
+            "/path/to/skippy_quant_job.py",
+            "Continued remote job program path from line 122, not independent invocation"
+          ]
+        ]
+      },
+      {
+        "file": ".agents/skills/hf-quant-and-layer-package-jobs/SKILL.md",
+        "members": [
+          [
+            21,
+            "789d74bfd77cb0f2",
+            1,
+            "prose",
+            "convert_hf_to_gguf.py; hf_to_gguf.py",
+            "Deprecated tools prohibited by text; no execution"
+          ],
+          [
+            22,
+            "27a2d94a159902fc",
+            1,
+            "prose",
+            "hf_to_gguff.py",
+            "Forbidden typo variant, no execution"
+          ],
+          [
+            146,
+            "1d55600f7abb5891",
+            1,
+            "provisioning",
+            "hf jobs uv run; /path/to/skippy_quant_then_package_job.py",
+            "Manual HF remote quantize/package job; external operator path, optional and potentially spend-bearing"
+          ],
+          [
+            156,
+            "3869f12b3db6eb82",
+            1,
+            "selection",
+            "/path/to/skippy_quant_then_package_job.py",
+            "Argument in continued line-146 job command, no second process on this source line"
+          ]
+        ]
+      }
+    ],
+    "qualification": null,
+    "native_jobs_complete": false
   }
 }

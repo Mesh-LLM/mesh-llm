@@ -10,13 +10,18 @@ use std::{
     path::Path,
     time::{Duration, Instant},
 };
-pub(super) fn run(
+pub(in crate::automation) fn run(
     route: &str,
     input: &Value,
     directory: &Path,
     until: Instant,
     cancel: &Cancellation,
 ) -> DynResult<(Value, bool)> {
+    let (command, admission) = match route {
+        "cache-family-plan" | "cache-family-correctness" | "cache-family-cell" => (route, false),
+        "cache-family-cell-admission" => ("cache-family-cell", true),
+        _ => return Err("unsupported cache matrix child".into()),
+    };
     let remaining = until
         .saturating_duration_since(Instant::now())
         .saturating_sub(Duration::from_secs(14));
@@ -35,17 +40,19 @@ pub(super) fn run(
     let report = process::supervise(
         &ProcessSpec {
             executable: std::env::current_exe()?,
-            arguments: [
-                "automation".into(),
-                route.into(),
-                "--input".into(),
-                request.into_os_string(),
-                "--output".into(),
-                output.clone().into_os_string(),
-            ]
-            .into_iter()
-            .map(Arg::Public)
-            .collect(),
+            arguments: {
+                let mut args = vec!["automation".into(), command.into()];
+                if admission {
+                    args.push("admit-worker".into());
+                }
+                args.extend([
+                    "--input".into(),
+                    request.into_os_string(),
+                    "--output".into(),
+                    output.clone().into_os_string(),
+                ]);
+                args.into_iter().map(Arg::Public).collect()
+            },
             cwd: directory.into(),
             environment,
         },
@@ -72,7 +79,7 @@ pub(super) fn run(
             .iter()
             .all(|s| s.line_capture_complete && !s.truncated && s.oversized_lines == 0);
     let leaf = match route {
-        "cache-family-plan" => output,
+        "cache-family-plan" | "cache-family-cell-admission" => output,
         "cache-family-correctness" => output.join("cache-correctness-stage.json"),
         "cache-family-cell" => output.join("cell.json"),
         _ => return Err("unsupported cache matrix child".into()),
@@ -81,7 +88,7 @@ pub(super) fn run(
         crate::automation::waiting_prefix::adaptive_identity::bounded(&leaf, 64 * 1024 * 1024)
             .ok()
             .and_then(|b| serde_json::from_slice::<Value>(&b).ok());
-    let correlation = route != "cache-family-cell"
+    let correlation = !matches!(route, "cache-family-cell" | "cache-family-cell-admission")
         || receipt
             .as_ref()
             .is_some_and(|r| r["request_sha256"] == super::hash(&bytes));

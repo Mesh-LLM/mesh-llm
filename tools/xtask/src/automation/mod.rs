@@ -166,7 +166,9 @@ pub(crate) mod native_runtime_evidence;
 pub(crate) mod lightning_compatibility;
 pub(crate) mod remote_handoff_summary;
 
+pub(crate) mod cache_family_moe;
 pub(crate) mod cache_family_profile;
 pub(crate) mod cache_family_run;
 pub(crate) mod hf_certify;
 pub(crate) mod hf_mtp_compose;
+pub(crate) mod mtp_scheduler;

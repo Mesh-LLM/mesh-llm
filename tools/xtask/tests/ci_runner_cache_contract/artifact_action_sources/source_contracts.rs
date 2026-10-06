@@ -57,7 +57,6 @@ fn artifact_quality_job_keeps_tooling_release_targets_and_client_dependency_vali
         &run,
         &[
             "actionlint -config-file .github/actionlint.yaml",
-            "-r ci/requirements-ci-python.txt",
             "just ci-legacy-contracts",
             "cargo run -p xtask -- repo-consistency release-targets",
             "cargo tree -p mesh-llm-client",
@@ -74,11 +73,14 @@ fn artifact_quality_job_keeps_tooling_release_targets_and_client_dependency_vali
             .count(),
         1
     );
-    assert!(
-        source("ci/requirements-ci-python.txt")
-            .lines()
-            .any(|line| line == "PyYAML>=6.0")
-    );
+    assert!(steps.iter().all(|step| {
+        !step
+            .get("uses")
+            .and_then(Node::text)
+            .is_some_and(|value| value.starts_with("actions/setup-python@"))
+    }));
+    assert!(!run.contains("requirements-ci-python.txt"));
+    assert!(!run.contains("pip install"));
 }
 #[test]
 fn artifact_windows_host_source_preserves_neutral_integrity_and_explicit_commit_contracts() {

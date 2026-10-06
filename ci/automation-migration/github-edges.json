@@ -280,32 +280,6 @@
       ]
     },
     {
-      "file": ".github/workflows/ci-quality-slice.yml",
-      "members": [
-        [
-          242,
-          "d7149b0913e92921",
-          1,
-          "provision",
-          "quality_contracts Python 3.12 for required contracts and unittest"
-        ],
-        [
-          244,
-          "8c1dfd95e0d605d6",
-          1,
-          "metadata",
-          "quality_contracts setup-python version 3.12"
-        ],
-        [
-          246,
-          "78b39ffedbd6d228",
-          1,
-          "installer",
-          "python3 -m pip install --disable-pip-version-check --no-input -r ci/requirements-ci-python.txt; installs required test deps"
-        ]
-      ]
-    },
-    {
       "file": ".github/actions/setup-canary-python/action.yml",
       "members": [
         [
@@ -11103,5 +11077,39 @@
       "roster_line": 32,
       "count": 30
     }
+  }
+,
+  "quality_native_python_setup_removal": {
+    "status": "source_only_after_native_windows_caller_cutover",
+    "workflow": ".github/workflows/ci-quality-slice.yml",
+    "source_sha256": "25cf8784e2d6cb07eca207447dd62e453f5e0793954f31960085c639feab36d5",
+    "removed_group": {
+      "file": ".github/workflows/ci-quality-slice.yml",
+      "members": [
+        [
+          242,
+          "d7149b0913e92921",
+          1,
+          "provision",
+          "quality_contracts Python 3.12 for required contracts and unittest"
+        ],
+        [
+          244,
+          "8c1dfd95e0d605d6",
+          1,
+          "metadata",
+          "quality_contracts setup-python version 3.12"
+        ],
+        [
+          246,
+          "78b39ffedbd6d228",
+          1,
+          "installer",
+          "python3 -m pip install --disable-pip-version-check --no-input -r ci/requirements-ci-python.txt; installs required test deps"
+        ]
+      ]
+    },
+    "required_cadence": "Existing actionlint/Rust/native Windows focused recipes unchanged; SDK clients remain required in their platform owners",
+    "qualification": null
   }
 }
