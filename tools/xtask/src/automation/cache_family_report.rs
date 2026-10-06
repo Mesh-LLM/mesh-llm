@@ -60,3 +60,23 @@ pub(crate) fn run(args: &[String]) -> DynResult<()> {
         CheckReport::success(format!("{text}\n")).emit()
     }
 }
+
+/// Existing typed renderer boundary for an owned native benchmark producer.
+/// Supplied rows are observations, not a promotion/real-platform certificate.
+pub(in crate::automation) fn producer(
+    rows: &serde_json::Value,
+    corpus: &serde_json::Value,
+) -> DynResult<String> {
+    let rows: Vec<input::Row> = serde_json::from_value(rows.clone())?;
+    if rows.len() > 100_000 {
+        return Err("cache producer report exceeds100000rows".into());
+    }
+    for row in &rows {
+        input::validate(row)?;
+    }
+    let corpus: input::Corpus = serde_json::from_value(corpus.clone())?;
+    if corpus.use_cases.len() > 10_000 {
+        return Err("cache producer corpus exceeds10000entries".into());
+    }
+    render::producer(&rows, &corpus)
+}

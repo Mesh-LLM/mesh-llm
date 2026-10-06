@@ -11,16 +11,13 @@ use std::{
 };
 
 const UNVERIFIED: &[&str] = &[
-    "mesh-llm-commands",
     "mesh-llm-hardware-profile",
     "mesh-llm-native-runtime",
     "model-hf",
     // Native HF publication input custody and model FIFO fixtures need Windows qualification.
     "model-package",
     "mesh-llm-routing",
-    "mesh-llm-system",
     "skippy-bench",
-    "skippy-cache",
     "skippy-model",
     "skippy-model-package",
     "skippy-quantize",
@@ -276,11 +273,11 @@ fn live_divergent_workspace_is_routed_or_explicitly_unverified_without_stale_exc
     );
     assert!(catalog("platform-windows-cfg").is_subset(&windows));
     assert!(
-        divergent
-            .intersection(&windows)
-            .all(|n| catalog("platform-windows").contains(n)),
-        "row-only divergent owner never selected"
+        windows.is_subset(&packages.keys().cloned().collect()),
+        "unknown Windows workflow unit owner"
     );
+    // Catalog domains control per-PR selection; complete workflow owners run on
+    // exhaustive main/manual profiles. The actual planner tests below bind both.
 }
 #[test]
 fn windows_unit_resolver_outputs_keep_shared_macos_owners_and_windows_only_plugin() {
@@ -316,76 +313,134 @@ fn windows_unit_resolver_outputs_keep_shared_macos_owners_and_windows_only_plugi
     }
     assert!(!run.contains("foreach ($crate in '"));
 }
-#[test]
-fn every_current_windows_catalog_unit_owner_selects_the_native_planner_row() {
+fn plan_for_workflow_owner(owner: &str, profile: &str) -> serde_json::Value {
     let root = support::root();
     let packages = packages(&root);
-    let unit_only = catalog("platform-windows-cfg");
     let mut input: serde_json::Value = serde_json::from_slice(
         &fs::read(root.join("tools/xtask/tests/fixtures/ci_plan/cases/windows-log-store.json"))
             .unwrap(),
     )
     .unwrap();
     input = input["input"].take();
+    input["profile"] = serde_json::json!(profile);
+    input["event_name"] = serde_json::json!(match profile {
+        "main" => "push",
+        "manual-full" => "workflow_dispatch",
+        _ => "pull_request",
+    });
     input["workspace_packages"] = serde_json::json!(
         packages
             .iter()
             .map(|(name, path)| serde_json::json!({"name":name,"path":path}))
             .collect::<Vec<_>>()
     );
-    let owners: BTreeSet<_> = unit_owners("windows")
-        .intersection(&catalog("platform-windows"))
-        .cloned()
-        .collect();
+    input["changed_files"] = serde_json::json!([format!("{}/src/lib.rs", packages[owner])]);
+    // Empty explicit scope delegates to the real native reverse-dependency owner
+    // for PR; exhaustive profiles admit the complete declared workspace themselves.
+    input["affected_crates"] = serde_json::json!([]);
+    let f = support::Fixture::new();
+    let payload = f.path().join("input.json");
+    fs::write(&payload, serde_json::to_vec(&input).unwrap()).unwrap();
+    let mut command = Command::new("bash");
+    command
+        .current_dir(&root)
+        .args([
+            "-euo",
+            "pipefail",
+            "-c",
+            "exec \"$XTASK\" ci plan < \"$INPUT\"",
+        ])
+        .env("XTASK", env!("CARGO_BIN_EXE_xtask"))
+        .env("INPUT", &payload);
+    let output = f.run(command);
     assert!(
-        owners.contains("mesh-llm-host-runtime"),
-        "shared host-runtime must select the Windows unit row"
+        output.status.success(),
+        "{owner}/{profile}: {}",
+        String::from_utf8_lossy(&output.stderr)
     );
-    for owner in &owners {
-        input["changed_files"] = serde_json::json!([format!("{}/src/lib.rs", packages[owner])]);
-        input["affected_crates"] = serde_json::json!([owner]);
-        let f = support::Fixture::new();
-        let payload = f.path().join("input.json");
-        fs::write(&payload, serde_json::to_vec(&input).unwrap()).unwrap();
-        let mut command = Command::new("bash");
-        command
-            .current_dir(&root)
-            .args([
-                "-euo",
-                "pipefail",
-                "-c",
-                "exec \"$XTASK\" ci plan < \"$INPUT\"",
-            ])
-            .env("XTASK", env!("CARGO_BIN_EXE_xtask"))
-            .env("INPUT", &payload);
-        let output = f.run(command);
-        assert!(
-            output.status.success(),
-            "{owner}: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        let plan: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-        let rows = plan["matrices"]["platform_checks"].as_array().unwrap();
-        assert!(
-            rows.iter().any(|row| row["id"] == "windows-unit"),
-            "{owner}"
-        );
-        if unit_only.contains(owner) {
+    serde_json::from_slice(&output.stdout).unwrap()
+}
+#[test]
+fn every_current_windows_catalog_unit_owner_selects_the_native_planner_row() {
+    let unit_only = catalog("platform-windows-cfg");
+    let catalog_owners = catalog("platform-windows");
+    let owners = unit_owners("windows");
+    assert!(owners.contains("mesh-llm-host-runtime"));
+    for profile in ["pr-ready", "main", "manual-full"] {
+        for owner in &owners {
+            if profile == "pr-ready" && !catalog_owners.contains(owner) {
+                continue;
+            }
+            let plan = plan_for_workflow_owner(owner, profile);
+            let rows = plan["matrices"]["platform_checks"].as_array().unwrap();
             assert!(
-                rows.iter().all(|row| row["id"] == "windows-unit"),
-                "{owner}"
+                rows.iter().any(|row| row["id"] == "windows-unit"),
+                "{owner}/{profile}"
             );
-            for matrix in ["hosts", "runtime_products"] {
+            if profile == "pr-ready" && unit_only.contains(owner) {
                 assert!(
-                    plan["matrices"][matrix]
-                        .as_array()
-                        .unwrap()
-                        .iter()
-                        .all(|row| row["platform"] != "windows"),
+                    rows.iter().all(|row| row["id"] == "windows-unit"),
                     "{owner}"
                 );
+                for matrix in ["hosts", "runtime_products"] {
+                    assert!(
+                        plan["matrices"][matrix]
+                            .as_array()
+                            .unwrap()
+                            .iter()
+                            .all(|row| row["platform"] != "windows"),
+                        "{owner}"
+                    );
+                }
             }
         }
+    }
+}
+#[test]
+fn wallet_dependency_closure_preserves_direct_domain_pr_routing_and_full_cadence() {
+    let plan = plan_for_workflow_owner("mesh-wallet-lexe", "pr-ready");
+    assert_eq!(
+        plan["direct_crates"],
+        serde_json::json!(["mesh-wallet-lexe"])
+    );
+    assert!(
+        plan["affected_crates"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|name| name == "mesh-llm-host-runtime")
+    );
+    assert!(
+        !plan["domains"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|domain| domain.as_str().unwrap().starts_with("platform-windows"))
+    );
+    assert!(
+        plan["matrices"]["platform_checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|row| row["id"] != "windows-unit")
+    );
+    assert!(
+        plan["matrices"]["rust_tests"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|row| row["crates"].as_array().unwrap())
+            .any(|name| name == "mesh-wallet-lexe")
+    );
+    assert!(unit_owners("windows").contains("mesh-wallet-lexe"));
+    for profile in ["main", "manual-full"] {
+        assert!(
+            plan_for_workflow_owner("mesh-wallet-lexe", profile)["matrices"]["platform_checks"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|row| row["id"] == "windows-unit")
+        );
     }
 }
 

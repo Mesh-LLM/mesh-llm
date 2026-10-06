@@ -104,9 +104,10 @@ pub(super) fn check_required_closure(
         {
             return Err(format!("automation inventory: required Python shebang in {path}").into());
         }
-        for line in text
+        for (line_index, line) in text
             .lines()
-            .filter(|line| !line.trim_start().starts_with('#'))
+            .enumerate()
+            .filter(|(_, line)| !line.trim_start().starts_with('#'))
         {
             if (path.ends_with(".yml") || path.ends_with(".yaml"))
                 && !line.trim_start().starts_with("echo ")
@@ -140,7 +141,9 @@ pub(super) fn check_required_closure(
             if let Some(workflow) = workflow_reference(line) {
                 queue.push_back(format!(".github/workflows/{workflow}"));
             }
-            for child in references(line) {
+            let sdk_child =
+                super::sdk_calls::target(root, &path, &text, line_index + 1, line.trim())?;
+            for child in references(line).chain(sdk_child) {
                 let source_edge = observed
                     .iter()
                     .find(|row| row.path == path && row.source_block == line.trim());

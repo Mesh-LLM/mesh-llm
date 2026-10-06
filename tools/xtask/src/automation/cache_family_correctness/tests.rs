@@ -13,7 +13,10 @@ fn cache_topology_covers_actual_layer_ranges_and_recurrent_payload() {
     assert_eq!(ranges, [(0, 2, 0), (2, 5, 1), (5, 8, 2)]);
     assert_eq!(Topology::OneStage.range(8).unwrap(), (0, 8, 0));
     assert_eq!(catalog::family("falcon_h1").unwrap().1, "kv-recurrent");
-    assert!(catalog::family("deepseek3").is_err());
+    assert_eq!(
+        catalog::family("deepseek3").unwrap(),
+        ("DeepSeek3", "resident-kv")
+    );
     assert!(catalog::family("qwen3moe").is_err());
 }
 #[test]
@@ -62,10 +65,19 @@ fn cache_precancel_retains_partial_receipt_without_launch() {
     let root = tempfile::tempdir().unwrap();
     let c = Cancellation::default();
     c.cancel();
-    let v = execute(&input(), root.path(), &c).unwrap();
+    let mut v = execute(&input(), root.path(), &c).unwrap();
     assert_eq!(v["status"], "failed-or-incomplete");
     assert_eq!(v["completed_topologies"], 0);
-    assert!(root.path().join("cache-correctness-stage.json").is_file());
+    assert!(!root.path().join("cache-correctness-stage.json").exists());
+    super::finalize(&mut v, true, false, true);
+    super::publish(&root.path().join("cache-correctness-stage.json"), &v).unwrap();
+    let observed: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(root.path().join("cache-correctness-stage.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(observed["completed_topologies"], 0);
+    assert_eq!(observed["status"], "failed-or-incomplete");
+    assert_eq!(observed["terminal_refusal"]["cancelled"], true);
     assert!(!root.path().join("topology-00").exists());
 }
 #[test]
@@ -112,5 +124,91 @@ fn cache_observed_report_refuses_finite_sample_sum_overflow() {
         report["cache_hit_import_ms"] = json!([1e308, 1e308]);
         report["cache_hit_decode_ms"] = decode;
         assert!(report::accept(&report, &receipt, Topology::OneStage).is_err());
+    }
+}
+
+#[test]
+fn cache_artifact_package_profile_preserves_exact_range_context_and_refuses_plain_deepseek() {
+    let root = std::env::current_dir().unwrap().canonicalize().unwrap();
+    let mut i = input();
+    i.model = root.join("package");
+    i.correctness = root.join("correctness");
+    i.stage_server = root.join("stage");
+    i.native_build = root.join("build");
+    i.case_key = "deepseek3".into();
+    i.ctx_size = 32;
+    i.prefix_tokens = 4;
+    i.topologies = vec![Topology::PackageStage1];
+    assert!(i.validate().is_err());
+    i.artifact = Some(artifact::Artifact {
+        kind: artifact::Kind::LayerPackage,
+        tool: root.join("tool"),
+        tool_sha256: "a".repeat(64),
+        shard_pins: BTreeMap::new(),
+    });
+    i.validate().unwrap();
+    assert_eq!(i.range(Topology::PackageStage1, 61).unwrap(), (3, 4, 1));
+    i.ctx_size = 33;
+    assert!(i.validate().is_err());
+}
+#[test]
+fn cache_artifact_minimax_requires_all_three_pins_and_keeps_existing_single_file_refusal() {
+    let root = std::env::current_dir().unwrap().canonicalize().unwrap();
+    let mut i = input();
+    i.correctness = root.join("correctness");
+    i.stage_server = root.join("stage");
+    i.native_build = root.join("build");
+    i.case_key = "minimax_m27".into();
+    i.model = root.join("MiniMax-M2.7-UD-Q2_K_XL-00001-of-00003.gguf");
+    i.model_sha256 = "a".repeat(64);
+    let pins = (1..=3)
+        .map(|n| {
+            (
+                format!("MiniMax-M2.7-UD-Q2_K_XL-{n:05}-of-00003.gguf"),
+                "a".repeat(64),
+            )
+        })
+        .collect();
+    i.artifact = Some(artifact::Artifact {
+        kind: artifact::Kind::CompleteShards,
+        tool: root.join("tool"),
+        tool_sha256: "a".repeat(64),
+        shard_pins: pins,
+    });
+    i.validate().unwrap();
+    i.artifact.as_mut().unwrap().shard_pins.pop_last();
+    assert!(i.validate().is_err());
+}
+
+#[test]
+fn cache_family_correctness_terminal_admission_retains_observed_rows_process_and_prior_failure() {
+    for (cancelled, expired, finish_ok) in [
+        (false, false, true),
+        (true, false, true),
+        (false, true, true),
+        (false, false, false),
+    ] {
+        let mut receipt = json!({"status":"completed","rows":[{"status":"pass"}],"measurement":{"status":"completed"},"process":{"cleanup_complete":true},"error":"prior classified failure"});
+        super::finalize(&mut receipt, cancelled, expired, finish_ok);
+        assert_eq!(
+            receipt["status"],
+            if cancelled || expired || !finish_ok {
+                "failed-or-incomplete"
+            } else {
+                "completed"
+            }
+        );
+        assert_eq!(receipt["rows"][0]["status"], "pass");
+        assert_eq!(receipt["measurement"]["status"], "completed");
+        assert_eq!(receipt["process"]["cleanup_complete"], true);
+        assert_eq!(receipt["error"], "prior classified failure");
+        if cancelled || expired || !finish_ok {
+            assert_eq!(receipt["terminal_refusal"]["cancelled"], cancelled);
+            assert_eq!(receipt["terminal_refusal"]["deadline_expired"], expired);
+            assert_eq!(
+                receipt["terminal_refusal"]["interrupt_finish_failed"],
+                !finish_ok
+            );
+        }
     }
 }

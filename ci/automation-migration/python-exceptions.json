@@ -37,7 +37,7 @@
     {
       "path": "scripts/ci-openai-python-smoke.py",
       "callers": [
-        "scripts/ci-compat-smoke.sh:159; unchanged actual SDK client and required workflow/runtime gates"
+        "scripts/ci-compat-smoke.sh:141 -> native sdk-client openai -> tools/xtask/src/automation/smoke_observation/sdk_supervision/child.rs:32; actual retained SDK -I child, existing required/workload cadence preserved"
       ],
       "local_dependency_files": [
         "ci/required-sdk-python/pyproject.toml",
@@ -46,13 +46,13 @@
       ],
       "cadence": "Existing required smoke and release compatibility rows, retained by the newer L8 maintainer decision",
       "purpose": "Exercise the actual third-party OpenAI Python SDK request and response behavior against the mesh OpenAI-compatible endpoint.",
-      "isolation_test": "SDK-only declared environment is now wired: existing CPython3.12 stdlib venv, isolated hash-locked binary pip installation/check/import and explicit MESH_REQUIRED_SDK_PYTHON; all three required clients invoked with -I. Dependency installation receipts and finite admission fixtures do not establish actual endpoint/model/platform qualification. Required gate/cadence and current unqualified status are preserved.",
+      "isolation_test": "SDK-only declared environment is now wired: existing CPython3.12 stdlib venv, isolated hash-locked binary pip installation/check/import and explicit MESH_REQUIRED_SDK_PYTHON; all three required clients invoked with -I. Dependency installation receipts and finite admission fixtures do not establish actual endpoint/model/platform qualification. Required gate/cadence and current unqualified status are preserved. Existing owned native supervision adds closed credential-free child environment, bounded capture/deadline and interpreter/script/lock pre/post observations; SDK_CHILD_OBSERVED is not SDK qualification.",
       "status": "conditional_unqualified"
     },
     {
       "path": "scripts/ci-langchain-openai-smoke.py",
       "callers": [
-        "scripts/ci-compat-smoke.sh:161; unchanged actual SDK client and required workflow/runtime gates"
+        "scripts/ci-compat-smoke.sh:143 -> native sdk-client langchain -> tools/xtask/src/automation/smoke_observation/sdk_supervision/child.rs:36; actual retained SDK -I child, existing required/workload cadence preserved"
       ],
       "local_dependency_files": [
         "ci/required-sdk-python/pyproject.toml",
@@ -61,13 +61,13 @@
       ],
       "cadence": "Existing required smoke and release compatibility rows, retained by the newer L8 maintainer decision",
       "purpose": "Exercise actual LangChain adapter integration with the external OpenAI client protocol.",
-      "isolation_test": "SDK-only declared environment is now wired: existing CPython3.12 stdlib venv, isolated hash-locked binary pip installation/check/import and explicit MESH_REQUIRED_SDK_PYTHON; all three required clients invoked with -I. Dependency installation receipts and finite admission fixtures do not establish actual endpoint/model/platform qualification. Required gate/cadence and current unqualified status are preserved.",
+      "isolation_test": "SDK-only declared environment is now wired: existing CPython3.12 stdlib venv, isolated hash-locked binary pip installation/check/import and explicit MESH_REQUIRED_SDK_PYTHON; all three required clients invoked with -I. Dependency installation receipts and finite admission fixtures do not establish actual endpoint/model/platform qualification. Required gate/cadence and current unqualified status are preserved. Existing owned native supervision adds closed credential-free child environment, bounded capture/deadline and interpreter/script/lock pre/post observations; SDK_CHILD_OBSERVED is not SDK qualification.",
       "status": "conditional_unqualified"
     },
     {
       "path": "scripts/ci-litellm-smoke.py",
       "callers": [
-        "scripts/ci-compat-smoke.sh:160; unchanged actual SDK client and required workflow/runtime gates"
+        "scripts/ci-compat-smoke.sh:142 -> native sdk-client litellm -> tools/xtask/src/automation/smoke_observation/sdk_supervision/child.rs:40; actual retained SDK -I child, existing required/workload cadence preserved"
       ],
       "local_dependency_files": [
         "ci/required-sdk-python/pyproject.toml",
@@ -76,13 +76,13 @@
       ],
       "cadence": "Existing required smoke and release compatibility rows, retained by the newer L8 maintainer decision",
       "purpose": "Exercise actual LiteLLM's client compatibility against the mesh OpenAI-compatible endpoint.",
-      "isolation_test": "SDK-only declared environment is now wired: existing CPython3.12 stdlib venv, isolated hash-locked binary pip installation/check/import and explicit MESH_REQUIRED_SDK_PYTHON; all three required clients invoked with -I. Dependency installation receipts and finite admission fixtures do not establish actual endpoint/model/platform qualification. Required gate/cadence and current unqualified status are preserved.",
+      "isolation_test": "SDK-only declared environment is now wired: existing CPython3.12 stdlib venv, isolated hash-locked binary pip installation/check/import and explicit MESH_REQUIRED_SDK_PYTHON; all three required clients invoked with -I. Dependency installation receipts and finite admission fixtures do not establish actual endpoint/model/platform qualification. Required gate/cadence and current unqualified status are preserved. Existing owned native supervision adds closed credential-free child environment, bounded capture/deadline and interpreter/script/lock pre/post observations; SDK_CHILD_OBSERVED is not SDK qualification.",
       "status": "conditional_unqualified"
     },
     {
       "path": "scripts/ci-openai-embeddings-smoke.py",
       "callers": [
-        "scripts/skippy-workload-certify.sh:438; unchanged actual SDK client and required workflow/runtime gates"
+        "scripts/skippy-workload-certify.sh:436 -> native sdk-client embeddings -> tools/xtask/src/automation/smoke_observation/sdk_supervision/child.rs:43; actual retained SDK -I child, existing required/workload cadence preserved"
       ],
       "local_dependency_files": [
         "ci/canary-python/pyproject.toml",
@@ -90,7 +90,7 @@
       ],
       "cadence": "Explicit embedding workload certification; validator fixtures remain in required CI. This client is not called by smoke.yml.",
       "purpose": "Exercise third-party OpenAI Python SDK embeddings behavior against the mesh endpoint.",
-      "isolation_test": "SDK-only declared environment is now wired: existing canary OpenAI-only uv lock, explicit SKIPPY_WORKLOAD_SDK_PYTHON, isolated -I embedding invocation. Dependency installation receipts and finite admission fixtures do not establish actual endpoint/model/platform qualification. Required gate/cadence and current unqualified status are preserved.",
+      "isolation_test": "SDK-only declared environment is now wired: existing canary OpenAI-only uv lock, explicit SKIPPY_WORKLOAD_SDK_PYTHON, isolated -I embedding invocation. Dependency installation receipts and finite admission fixtures do not establish actual endpoint/model/platform qualification. Required gate/cadence and current unqualified status are preserved. Existing owned native supervision adds closed credential-free child environment, bounded capture/deadline and interpreter/script/lock pre/post observations; SDK_CHILD_OBSERVED is not SDK qualification.",
       "status": "conditional_unqualified"
     },
     {
@@ -280,18 +280,14 @@
     },
     {
       "path": ".agents/skills/release-validation/references/evidence-and-gates.md",
-      "examples": [
-
-      ],
+      "examples": [],
       "owner": "retain human evidence matrix and decision criteria; machine evidence commands belong to tools/xtask",
       "cutover_task": 5,
       "status": "reviewed_no_interpreter_automation"
     },
     {
       "path": ".agents/skills/release-validation/assets/release-validation-report-template.md",
-      "examples": [
-
-      ],
+      "examples": [],
       "owner": "retain human-authored report template populated using tools/xtask outputs",
       "cutover_task": 5,
       "status": "reviewed_no_executable_examples"
@@ -312,13 +308,15 @@
     },
     {
       "path": "scripts/ci-compat-smoke.sh",
-      "sha256": "80f9a48e8d6f5f98946623ae6cdc11ccbe653aa8d882faedf80b173f091b82de",
-      "line_count": 164
+      "sha256": "b071d380556f12a7427b30ff1f5bb9960ea8ba932d3a738d5654daf09becd63d",
+      "line_count": 146,
+      "projected_source": ".omo/evidence/resume-20261002/sdk-native-supervision-http-draft-v3/files/ci-compat-smoke.sh"
     },
     {
       "path": "scripts/skippy-workload-certify.sh",
-      "sha256": "607705da433c993e9fc22c7761b3cd4ddf2f0812ea1db47d5ea645c55bb059e0",
-      "line_count": 460
+      "sha256": "c149de8b7aedc34b4d1f3d27f060840eba160318dde9fa1a755ee00964244fba",
+      "line_count": 459,
+      "projected_source": ".omo/evidence/resume-20261002/sdk-native-supervision-http-draft-v3/files/skippy-workload-certify.sh"
     },
     {
       "path": ".github/actions/upload-automation/action.yml",
@@ -372,9 +370,7 @@
     "source_snapshot": "Frozen source after provenance/package local qualification; pending full latest validation union",
     "python_paths": 196,
     "just_roster": 109,
-    "removed_edges": [
-
-    ],
+    "removed_edges": [],
     "limits": "Surviving generic quality roster, native smoke/oracle/manual protected and real required SDK/model/platform qualifications remain open; no exception or gate demotion."
   },
   "next_wave_source_reconciliation": {
@@ -540,12 +536,8 @@
       }
     ],
     "limits": "Source-bound caller reconciliation only. Generic Python implementations and unqualified test methods retained; required SDK, native, model, platform and protected gates unchanged. Literal typed command selection and continued argv are reviewed, but runtime dynamic expansion is not parser-complete reachability proof.",
-    "removed_edges": [
-
-    ],
-    "rebound_rows": [
-
-    ]
+    "removed_edges": [],
+    "rebound_rows": []
   },
   "next_wave_comparator_and_test_retirement": {
     "coverage": "ci/automation-migration/next-wave-test-tts-retirement-coverage.json",
@@ -654,9 +646,7 @@
     },
     "qualification": "Authored, unrun; parent must qualify the transaction before any legacy retirement",
     "retained": "All Python helpers and legacy tests remain. Normal verify timeout helper remains reachable; no inventory/roster reductions.",
-    "rebound_rows": [
-
-    ]
+    "rebound_rows": []
   },
   "projected_final_repair_caller_binding": {
     "source": "scripts/llama-canary-agent-repair.sh",
@@ -797,5 +787,167 @@
       "remaining_python_candidates": 3
     },
     "pending": "Root actual syntax, ShellCheck, six-launch scanner ownership/mutations, serializer and copied wrapper fixtures, full inventory/required closures/Clippy/format/CI; no native/model qualification or deletion implied."
+  },
+  "current_native_sdk_supervision_reconciliation": {
+    "status": "source_only_projected_native_supervision_reconciliation",
+    "candidate": {
+      "path": ".omo/evidence/resume-20261002/sdk-native-supervision-http-draft-v3/manifest-v1.json",
+      "sha256": "98b864d83c22eb071cd21815f8d8210c4f6ebfd2aefc44ffa4171d13db7500e1"
+    },
+    "clients": [
+      {
+        "client": "openai",
+        "path": "scripts/ci-openai-python-smoke.py",
+        "status": "conditional_unqualified",
+        "required": true,
+        "caller": {
+          "path": "scripts/ci-compat-smoke.sh",
+          "line": 141,
+          "source_block": "\"${automation[@]}\" automation smoke-observation sdk-client --client openai --python \"$SDK_PYTHON\" --base-url \"$BASE_URL\" --timeout-secs \"${MESH_COMPAT_SDK_TIMEOUT_SECS:-240}\" --receipt \"$SDK_EVIDENCE_DIR/openai-sdk.json\"",
+          "normalized_sha256_16": "3e5d3dc47715dd08"
+        },
+        "native_owner": {
+          "path": "tools/xtask/src/automation/smoke_observation/sdk_supervision/child.rs",
+          "roster_line": 32,
+          "source_sha256": "94f7f96654d0433cb110e1a2d78ff55ee6b57c557570094358d6773dc5900df5"
+        },
+        "interpreter": "Validated explicit SDK_PYTHON passed from MESH_REQUIRED_SDK_PYTHON or SKIPPY_WORKLOAD_SDK_PYTHON; literal supplied venv spelling retained",
+        "argv": "-I closed repository SDK script --base-url canonical endpoint; --model for LiteLLM/LangChain/embeddings only",
+        "environment": "Existing supervisor env_clear, private HOME/TMPDIR, closed PATH and NO_PROXY; inherited credentials absent",
+        "cadence": "Existing required dense/recurrent compatibility workflow/release cadence unchanged",
+        "failure_contract": "Child nonzero/deadline/cancel/custody/capture/cleanup or terminal refusal fails caller; bounded sanitized observations preserved",
+        "receipt": "SDK_CHILD_OBSERVED; sdk_qualified:false; child observation is not SDK/model/platform qualification",
+        "deletion_condition": "Retained genuine ecosystem client; no removal or required/advisory demotion authorized",
+        "qualification": null
+      },
+      {
+        "client": "litellm",
+        "path": "scripts/ci-litellm-smoke.py",
+        "status": "conditional_unqualified",
+        "required": true,
+        "caller": {
+          "path": "scripts/ci-compat-smoke.sh",
+          "line": 142,
+          "source_block": "\"${automation[@]}\" automation smoke-observation sdk-client --client litellm --python \"$SDK_PYTHON\" --base-url \"$BASE_URL\" --model \"$MODEL_ID\" --timeout-secs \"${MESH_COMPAT_SDK_TIMEOUT_SECS:-240}\" --receipt \"$SDK_EVIDENCE_DIR/litellm-sdk.json\"",
+          "normalized_sha256_16": "06789805c4c77a0e"
+        },
+        "native_owner": {
+          "path": "tools/xtask/src/automation/smoke_observation/sdk_supervision/child.rs",
+          "roster_line": 40,
+          "source_sha256": "94f7f96654d0433cb110e1a2d78ff55ee6b57c557570094358d6773dc5900df5"
+        },
+        "interpreter": "Validated explicit SDK_PYTHON passed from MESH_REQUIRED_SDK_PYTHON or SKIPPY_WORKLOAD_SDK_PYTHON; literal supplied venv spelling retained",
+        "argv": "-I closed repository SDK script --base-url canonical endpoint; --model for LiteLLM/LangChain/embeddings only",
+        "environment": "Existing supervisor env_clear, private HOME/TMPDIR, closed PATH and NO_PROXY; inherited credentials absent",
+        "cadence": "Existing required dense/recurrent compatibility workflow/release cadence unchanged",
+        "failure_contract": "Child nonzero/deadline/cancel/custody/capture/cleanup or terminal refusal fails caller; bounded sanitized observations preserved",
+        "receipt": "SDK_CHILD_OBSERVED; sdk_qualified:false; child observation is not SDK/model/platform qualification",
+        "deletion_condition": "Retained genuine ecosystem client; no removal or required/advisory demotion authorized",
+        "qualification": null
+      },
+      {
+        "client": "langchain",
+        "path": "scripts/ci-langchain-openai-smoke.py",
+        "status": "conditional_unqualified",
+        "required": true,
+        "caller": {
+          "path": "scripts/ci-compat-smoke.sh",
+          "line": 143,
+          "source_block": "\"${automation[@]}\" automation smoke-observation sdk-client --client langchain --python \"$SDK_PYTHON\" --base-url \"$BASE_URL\" --model \"$MODEL_ID\" --timeout-secs \"${MESH_COMPAT_SDK_TIMEOUT_SECS:-240}\" --receipt \"$SDK_EVIDENCE_DIR/langchain-sdk.json\"",
+          "normalized_sha256_16": "55556d37dc56520c"
+        },
+        "native_owner": {
+          "path": "tools/xtask/src/automation/smoke_observation/sdk_supervision/child.rs",
+          "roster_line": 36,
+          "source_sha256": "94f7f96654d0433cb110e1a2d78ff55ee6b57c557570094358d6773dc5900df5"
+        },
+        "interpreter": "Validated explicit SDK_PYTHON passed from MESH_REQUIRED_SDK_PYTHON or SKIPPY_WORKLOAD_SDK_PYTHON; literal supplied venv spelling retained",
+        "argv": "-I closed repository SDK script --base-url canonical endpoint; --model for LiteLLM/LangChain/embeddings only",
+        "environment": "Existing supervisor env_clear, private HOME/TMPDIR, closed PATH and NO_PROXY; inherited credentials absent",
+        "cadence": "Existing required dense/recurrent compatibility workflow/release cadence unchanged",
+        "failure_contract": "Child nonzero/deadline/cancel/custody/capture/cleanup or terminal refusal fails caller; bounded sanitized observations preserved",
+        "receipt": "SDK_CHILD_OBSERVED; sdk_qualified:false; child observation is not SDK/model/platform qualification",
+        "deletion_condition": "Retained genuine ecosystem client; no removal or required/advisory demotion authorized",
+        "qualification": null
+      },
+      {
+        "client": "embeddings",
+        "path": "scripts/ci-openai-embeddings-smoke.py",
+        "status": "conditional_unqualified",
+        "required": false,
+        "caller": {
+          "path": "scripts/skippy-workload-certify.sh",
+          "line": 436,
+          "source_block": "--client embeddings --python \"$SDK_PYTHON\" \\",
+          "normalized_sha256_16": "de0b3268e7c84360"
+        },
+        "native_owner": {
+          "path": "tools/xtask/src/automation/smoke_observation/sdk_supervision/child.rs",
+          "roster_line": 43,
+          "source_sha256": "94f7f96654d0433cb110e1a2d78ff55ee6b57c557570094358d6773dc5900df5"
+        },
+        "interpreter": "Validated explicit SDK_PYTHON passed from MESH_REQUIRED_SDK_PYTHON or SKIPPY_WORKLOAD_SDK_PYTHON; literal supplied venv spelling retained",
+        "argv": "-I closed repository SDK script --base-url canonical endpoint; --model for LiteLLM/LangChain/embeddings only",
+        "environment": "Existing supervisor env_clear, private HOME/TMPDIR, closed PATH and NO_PROXY; inherited credentials absent",
+        "cadence": "Explicit embedding workload only; not smoke.yml",
+        "failure_contract": "Child nonzero/deadline/cancel/custody/capture/cleanup or terminal refusal fails caller; bounded sanitized observations preserved",
+        "receipt": "SDK_CHILD_OBSERVED; sdk_qualified:false; child observation is not SDK/model/platform qualification",
+        "deletion_condition": "Retained genuine ecosystem client; no removal or required/advisory demotion authorized",
+        "qualification": null
+      }
+    ],
+    "source_bindings": [
+      {
+        "path": "scripts/ci-compat-smoke.sh",
+        "projected_source": ".omo/evidence/resume-20261002/sdk-native-supervision-http-draft-v3/files/ci-compat-smoke.sh",
+        "sha256": "b071d380556f12a7427b30ff1f5bb9960ea8ba932d3a738d5654daf09becd63d",
+        "line_count": 146
+      },
+      {
+        "path": "scripts/skippy-workload-certify.sh",
+        "projected_source": ".omo/evidence/resume-20261002/sdk-native-supervision-http-draft-v3/files/skippy-workload-certify.sh",
+        "sha256": "c149de8b7aedc34b4d1f3d27f060840eba160318dde9fa1a755ee00964244fba",
+        "line_count": 459
+      },
+      {
+        "path": "tools/xtask/src/automation/smoke_observation/sdk_supervision/child.rs",
+        "projected_source": ".omo/evidence/resume-20261002/sdk-native-supervision-http-draft-v3/files/sdk_child.rs",
+        "sha256": "94f7f96654d0433cb110e1a2d78ff55ee6b57c557570094358d6773dc5900df5",
+        "line_count": 182
+      },
+      {
+        "path": "tools/xtask/src/automation/smoke_observation/sdk_supervision.rs",
+        "projected_source": ".omo/evidence/resume-20261002/sdk-native-supervision-http-draft-v3/files/sdk_supervision.rs",
+        "sha256": "17ec10c0ebe18f822505d4107e4a2de71b67863e8ac902c244ab8fb20425ec52",
+        "line_count": 99
+      },
+      {
+        "path": "scripts/ci-openai-python-smoke.py",
+        "projected_source": ".omo/evidence/resume-20261002/sdk-native-supervision-http-draft-v3/files/ci-openai-python-smoke.py",
+        "sha256": "ae2e2ce989257a83d88a51e8ba14345206af2aa5f5be62e21d28b574f36024e4",
+        "line_count": 81
+      },
+      {
+        "path": "scripts/ci-litellm-smoke.py",
+        "projected_source": ".omo/evidence/resume-20261002/sdk-native-supervision-http-draft-v3/files/ci-litellm-smoke.py",
+        "sha256": "c4df8c820a669beb227b16392402702079701bbdd538060824269ed703bb1cc8",
+        "line_count": 85
+      },
+      {
+        "path": "scripts/ci-langchain-openai-smoke.py",
+        "projected_source": ".omo/evidence/resume-20261002/sdk-native-supervision-http-draft-v3/files/ci-langchain-openai-smoke.py",
+        "sha256": "1215b0e6c77a234dd5294cd5a5e90fda3937a2056d842360410f9fb2fad522f4",
+        "line_count": 78
+      },
+      {
+        "path": "scripts/ci-openai-embeddings-smoke.py",
+        "projected_source": ".omo/evidence/resume-20261002/sdk-native-supervision-http-draft-v3/files/ci-openai-embeddings-smoke.py",
+        "sha256": "7640e3443baa7dfcef2e09fcf455d87543a29703dd7a394e16e160616d289ecc",
+        "line_count": 94
+      }
+    ],
+    "preserved_exception_status": "Four conditional_unqualified; no new exception, no installed SDK/platform/model execution claim",
+    "retirement": null,
+    "qualification": null
   }
 }

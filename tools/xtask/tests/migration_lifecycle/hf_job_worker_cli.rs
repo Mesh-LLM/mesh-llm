@@ -568,7 +568,7 @@ fn native_conversion_fixture(mode: &str) -> (tempfile::TempDir, PathBuf, PathBuf
         .remove("composition")
         .unwrap();
     request["workflow"] = json!("native-nemotron-compose");
-    request["conversion"] = json!({"checkpoint_directory":source,"checkpoint_files":["config.json","tokenizer.json","weights.safetensors","fixture-mode"].iter().map(|n|pin(&source.join(n))).collect::<Vec<_>>(),"tokenizer_profile":pin(&profile),"target_parts":composition["target_parts"],"target_basename":"Target","composite_basename":"Composite","expected_parts":3,"mtp_block":88,"composite_repo":"fixture/composite"});
+    request["conversion"] = json!({"checkpoint_directory":source,"checkpoint_files":(["config.json","tokenizer.json","weights.safetensors","fixture-mode"].iter().map(|n|pin(&source.join(n))).collect::<Vec<_>>()),"tokenizer_profile":pin(&profile),"target_parts":composition["target_parts"],"target_basename":"Target","composite_basename":"Composite","expected_parts":3,"mtp_block":88,"composite_repo":"fixture/composite"});
     std::fs::write(&input, serde_json::to_vec(&request).unwrap()).unwrap();
     (root, input, output, parts)
 }

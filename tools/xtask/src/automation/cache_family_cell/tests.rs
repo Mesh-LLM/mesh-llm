@@ -162,3 +162,102 @@ fn cache_cell_http_readiness_uses_remaining_host_startup_budget() {
     };
     assert_eq!(policy.deadline(), Duration::from_secs(1));
 }
+
+#[test]
+fn cache_cell_complete_shards_require_all_pins_and_refuse_package_serving() {
+    use crate::automation::cache_family_correctness::artifact::{Artifact, Kind};
+    let mut value = input();
+    value.layer_end = 62;
+    value.model = value
+        .model
+        .parent()
+        .unwrap()
+        .join("MiniMax-M2.7-UD-Q2_K_XL-00001-of-00003.gguf");
+    value.artifact = Some(Artifact {
+        kind: Kind::CompleteShards,
+        tool: value.binary.clone(),
+        tool_sha256: "a".repeat(64),
+        shard_pins: (1..=3)
+            .map(|i| {
+                (
+                    format!("MiniMax-M2.7-UD-Q2_K_XL-{i:05}-of-00003.gguf"),
+                    "c".repeat(64),
+                )
+            })
+            .collect(),
+    });
+    value.validate().unwrap();
+    value
+        .artifact
+        .as_mut()
+        .unwrap()
+        .shard_pins
+        .remove("MiniMax-M2.7-UD-Q2_K_XL-00003-of-00003.gguf");
+    assert!(value.validate().is_err());
+    value.artifact.as_mut().unwrap().kind = Kind::LayerPackage;
+    assert!(value.validate().is_err());
+}
+
+#[test]
+fn cache_family_cell_terminal_admission_retains_observed_rows_process_and_prior_failure() {
+    for (cancelled, expired, finish_ok) in [
+        (false, false, true),
+        (true, false, true),
+        (false, true, true),
+        (false, false, false),
+    ] {
+        let mut receipt = json!({"status":"completed","rows":[{"status":"pass"}],"measurement":{"status":"completed"},"process":{"cleanup_complete":true},"error":"prior classified failure"});
+        super::finalize(&mut receipt, cancelled, expired, finish_ok);
+        assert_eq!(
+            receipt["status"],
+            if cancelled || expired || !finish_ok {
+                "incomplete"
+            } else {
+                "completed"
+            }
+        );
+        assert_eq!(receipt["rows"][0]["status"], "pass");
+        assert_eq!(receipt["measurement"]["status"], "completed");
+        assert_eq!(receipt["process"]["cleanup_complete"], true);
+        assert_eq!(receipt["error"], "prior classified failure");
+        if cancelled || expired || !finish_ok {
+            assert_eq!(receipt["terminal_refusal"]["cancelled"], cancelled);
+            assert_eq!(receipt["terminal_refusal"]["deadline_expired"], expired);
+            assert_eq!(
+                receipt["terminal_refusal"]["interrupt_finish_failed"],
+                !finish_ok
+            );
+        }
+    }
+}
+
+#[test]
+fn cache_cell_remaining_budget_preserves_sweep_primary_and_bounds_every_stage() {
+    let mut original = input();
+    let first = original.worker.clone();
+    let mut second = first.clone();
+    second.concurrency = 4;
+    second.requests = 4;
+    second.execution_timeout_ms = 5000;
+    original.worker_sweep = vec![first, second];
+    original.validate().unwrap();
+    let admitted =
+        super::execution::bound_measurement(&original, Duration::from_millis(3000)).unwrap();
+    admitted.validate().unwrap();
+    assert_eq!(admitted.worker.execution_timeout_ms, 3000);
+    assert!(
+        admitted
+            .worker_sweep
+            .iter()
+            .all(|stage| stage.execution_timeout_ms == 3000)
+    );
+    assert_eq!(
+        serde_json::to_value(&admitted.worker).unwrap(),
+        serde_json::to_value(&admitted.worker_sweep[0]).unwrap()
+    );
+    assert_eq!(original.worker.execution_timeout_ms, 10000);
+    assert_eq!(original.worker_sweep[1].execution_timeout_ms, 5000);
+    let generous = super::execution::bound_measurement(&original, Duration::from_secs(20)).unwrap();
+    assert_eq!(generous.worker_sweep[1].execution_timeout_ms, 5000);
+    assert!(super::execution::bound_measurement(&original, Duration::ZERO).is_err());
+}

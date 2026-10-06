@@ -29,6 +29,7 @@ UBATCH_SIZE="${MESH_COMPAT_UBATCH_SIZE:-}"
 ATTESTATION_PUBLIC_KEY_FILE="${MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE:-}"
 ATTESTATION_EXPECTED_STATUS="${MESH_RELEASE_ATTESTATION_EXPECTED_STATUS:-valid}"
 SMOKE_STATE_DIR="$(mktemp -d /tmp/mesh-llm-compat-state.XXXXXX)"
+SDK_EVIDENCE_DIR="$(mktemp -d /tmp/mesh-llm-sdk-evidence.XXXXXX)"
 SMOKE_CONFIG_PATH="$SMOKE_STATE_DIR/config.toml"
 SMOKE_RUNTIME_ROOT="$SMOKE_STATE_DIR/runtime"
 
@@ -113,40 +114,21 @@ cleanup() {
     echo "--- compat mesh-llm log tail ---"
     tail -100 "$LOG" 2>/dev/null || true
     echo "--- end log ---"
+    echo "SDK evidence retained: $SDK_EVIDENCE_DIR"
     rm -rf "$SMOKE_STATE_DIR"
 }
 trap cleanup EXIT
 
 BASE_URL="http://127.0.0.1:${API_PORT}/v1"
-MODEL_ID=""
-for i in $(seq 1 "$MAX_WAIT"); do
-    if ! kill -0 "$MESH_PID" 2>/dev/null; then
-        echo "mesh-llm exited unexpectedly" >&2
-        tail -120 "$LOG" >&2 || true
-        exit 1
-    fi
-
-    MODELS_JSON="$(curl -sf "${BASE_URL}/models" 2>/dev/null || true)"
-    MODEL_ID="$(
-        printf '%s' "$MODELS_JSON" |
-            "${automation[@]}" automation smoke-observation first-model 2>/dev/null ||
-            echo ""
-    )"
-    if [[ -n "$MODEL_ID" ]]; then
-        echo "OpenAI endpoint ready with model: $MODEL_ID"
-        break
-    fi
-
-    if [[ "$i" -eq "$MAX_WAIT" ]]; then
-        echo "Timed out waiting for OpenAI endpoint" >&2
-        tail -120 "$LOG" >&2 || true
-        exit 1
-    fi
-    sleep 1
-done
+sdk_owned_model_ready() {
+    kill -0 "$MESH_PID" 2>/dev/null || return 1
+    MODEL_ID="$("${automation[@]}" automation smoke-observation sdk-ready --base-url "$BASE_URL" --timeout-secs "$MAX_WAIT")" || return 1
+    kill -0 "$MESH_PID" 2>/dev/null || return 1
+}
+sdk_owned_model_ready
 
 RUNTIME_ATTESTATION_STATUS="$({
-    curl -sf "http://127.0.0.1:${CONSOLE_PORT}/api/status" 2>/dev/null |
+    curl --max-time 5 --connect-timeout 5 -sf "http://127.0.0.1:${CONSOLE_PORT}/api/status" 2>/dev/null |
         "${automation[@]}" automation smoke-observation attestation 2>/dev/null ||
         echo ""
 })"
@@ -156,9 +138,9 @@ if [[ -n "$ATTESTATION_PUBLIC_KEY_FILE" && "$RUNTIME_ATTESTATION_STATUS" != "$AT
     exit 1
 fi
 
-"$SDK_PYTHON" -I scripts/ci-openai-python-smoke.py --base-url "$BASE_URL"
-"$SDK_PYTHON" -I scripts/ci-litellm-smoke.py --base-url "$BASE_URL" --model "$MODEL_ID"
-"$SDK_PYTHON" -I scripts/ci-langchain-openai-smoke.py --base-url "$BASE_URL" --model "$MODEL_ID"
+"${automation[@]}" automation smoke-observation sdk-client --client openai --python "$SDK_PYTHON" --base-url "$BASE_URL" --timeout-secs "${MESH_COMPAT_SDK_TIMEOUT_SECS:-240}" --receipt "$SDK_EVIDENCE_DIR/openai-sdk.json"
+"${automation[@]}" automation smoke-observation sdk-client --client litellm --python "$SDK_PYTHON" --base-url "$BASE_URL" --model "$MODEL_ID" --timeout-secs "${MESH_COMPAT_SDK_TIMEOUT_SECS:-240}" --receipt "$SDK_EVIDENCE_DIR/litellm-sdk.json"
+"${automation[@]}" automation smoke-observation sdk-client --client langchain --python "$SDK_PYTHON" --base-url "$BASE_URL" --model "$MODEL_ID" --timeout-secs "${MESH_COMPAT_SDK_TIMEOUT_SECS:-240}" --receipt "$SDK_EVIDENCE_DIR/langchain-sdk.json"
 NODE_PATH="${NODE_PATH:-$(npm root -g 2>/dev/null || true)}" node scripts/ci-openai-node-smoke.cjs --base-url "$BASE_URL"
 
 echo "OpenAI compatibility smoke passed"

@@ -27,7 +27,7 @@ struct Report {
 }
 pub(super) fn accept(value: &Value, receipt: &Receipt, topology: Topology) -> DynResult<()> {
     let r: Report = serde_json::from_value(value.clone())?;
-    let (start, end, index) = topology.range(receipt.layers)?;
+    let (start, end, index) = receipt.admitted.range(topology, receipt.layers)?;
     let payload = super::catalog::family(&receipt.admitted.case_key)?.1;
     if r.mode != "state-handoff"
         || r.status != "pass"

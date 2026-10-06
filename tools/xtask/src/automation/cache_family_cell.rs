@@ -53,6 +53,8 @@ pub(crate) fn run(args: &[String]) -> DynResult<()> {
         return Err("cache cell output parent must be a regular directory".into());
     }
     std::fs::create_dir(&directory)?;
+    let terminal_deadline =
+        std::time::Instant::now() + std::time::Duration::from_secs(input.execution_timeout_secs);
     let interrupt = crate::automation::command_interrupt::Interrupt::install()?;
     let cancel = interrupt.cancellation();
     let result = execution::execute(&input, &directory, &cancel);
@@ -64,10 +66,12 @@ pub(crate) fn run(args: &[String]) -> DynResult<()> {
         }
     };
     receipt["request_sha256"] = serde_json::json!(admission::hash(&bytes));
-    if finish.is_err() {
-        receipt["status"] = serde_json::json!("incomplete");
-        receipt["interrupt_observed"] = serde_json::json!(true);
-    }
+    finalize(
+        &mut receipt,
+        cancel.is_cancelled(),
+        std::time::Instant::now() >= terminal_deadline,
+        finish.is_ok(),
+    );
     crate::automation::waiting_prefix::adaptive_identity::fresh(
         &directory.join("cell.json"),
         &serde_json::to_vec_pretty(&receipt)?,
@@ -77,4 +81,11 @@ pub(crate) fn run(args: &[String]) -> DynResult<()> {
         return Err("cache retained cell incomplete; partial evidence retained".into());
     }
     Ok(())
+}
+
+fn finalize(receipt: &mut serde_json::Value, cancelled: bool, expired: bool, finish_ok: bool) {
+    if cancelled || expired || !finish_ok {
+        receipt["status"] = serde_json::json!("incomplete");
+        receipt["terminal_refusal"] = serde_json::json!({"cancelled":cancelled,"deadline_expired":expired,"interrupt_finish_failed":!finish_ok});
+    }
 }

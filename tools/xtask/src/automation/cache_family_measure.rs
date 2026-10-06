@@ -4,17 +4,23 @@
 pub(super) mod contract;
 #[path = "cache_family_measure/measurement.rs"]
 mod measurement;
+#[path = "cache_family_measure/sweep.rs"]
+mod sweep;
+fn hash(bytes: &[u8]) -> String {
+    hex::encode(Sha256::digest(bytes))
+}
 #[cfg(test)]
 #[path = "cache_family_measure/tests.rs"]
 mod tests;
 use crate::command::DynResult;
 use sha2::{Digest, Sha256};
-use std::path::Path;
+use std::{io::Write as _, path::Path};
 pub(crate) fn run(args: &[String]) -> DynResult<()> {
     if args == ["--help"] {
-        println!(
+        writeln!(
+            std::io::stdout().lock(),
             "cargo xtool automation cache-family-measure --input ABS_JSON --output ABS_FRESH_JSON"
-        );
+        )?;
         return Ok(());
     }
     let [input_flag, input, output_flag, output] = args else {
@@ -39,21 +45,41 @@ pub(crate) fn run(args: &[String]) -> DynResult<()> {
     }
     let bytes = crate::automation::waiting_prefix::adaptive_identity::bounded(
         Path::new(input),
-        512 * 1024,
+        2 * 1024 * 1024,
     )?;
-    let input: contract::Input = serde_json::from_slice(&bytes)?;
-    input.validate()?;
+    let input: serde_json::Value = serde_json::from_slice(&bytes)?;
+    if input.get("stages").is_some() {
+        let value: sweep::InputSweep = serde_json::from_value(input.clone())?;
+        value.validate()?;
+    } else {
+        let value: contract::Input = serde_json::from_value(input.clone())?;
+        value.validate()?;
+    }
+    let terminal_deadline = std::time::Instant::now()
+        + std::time::Duration::from_millis(
+            input["execution_timeout_ms"]
+                .as_u64()
+                .ok_or("cache measurement terminal budget absent")?,
+        );
     let interrupt = crate::automation::command_interrupt::Interrupt::install()?;
     let cancellation = interrupt.cancellation();
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?;
-    let receipt = runtime.block_on(measurement::execute(
-        &input,
-        hex::encode(Sha256::digest(&bytes)),
-        &cancellation,
-    ));
+    let mut receipt = if input.get("stages").is_some() {
+        let value: sweep::InputSweep = serde_json::from_value(input)?;
+        runtime.block_on(sweep::execute(&value, hash(&bytes), &cancellation))
+    } else {
+        let value: contract::Input = serde_json::from_value(input)?;
+        runtime.block_on(measurement::execute(&value, hash(&bytes), &cancellation))
+    };
     let finish = interrupt.finish();
+    finalize(
+        &mut receipt,
+        cancellation.is_cancelled(),
+        std::time::Instant::now() >= terminal_deadline,
+        finish.is_ok(),
+    );
     let encoded = serde_json::to_vec_pretty(&receipt)?;
     if encoded.len() > 64 * 1024 * 1024 {
         return Err("cache measurement receipt exceeds 64 MiB".into());
@@ -64,4 +90,11 @@ pub(crate) fn run(args: &[String]) -> DynResult<()> {
         return Err("cache measurement incomplete; partial receipt retained".into());
     }
     Ok(())
+}
+
+fn finalize(receipt: &mut serde_json::Value, cancelled: bool, expired: bool, finish_ok: bool) {
+    if cancelled || expired || !finish_ok {
+        receipt["status"] = serde_json::json!("incomplete");
+        receipt["terminal_refusal"] = serde_json::json!({"cancelled":cancelled,"deadline_expired":expired,"interrupt_finish_failed":!finish_ok});
+    }
 }

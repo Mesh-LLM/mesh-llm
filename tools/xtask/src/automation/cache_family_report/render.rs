@@ -130,6 +130,12 @@ fn sources(corpus: &Corpus) -> String {
 }
 
 pub(super) fn report(rows: &[Row], corpus: &Corpus) -> DynResult<String> {
+    contextual(rows, corpus, false)
+}
+pub(super) fn producer(rows: &[Row], corpus: &Corpus) -> DynResult<String> {
+    contextual(rows, corpus, true)
+}
+fn contextual(rows: &[Row], corpus: &Corpus, producer: bool) -> DynResult<String> {
     let mut ordered = rows.iter().collect::<Vec<_>>();
     ordered.sort_by(|a, b| order(&a.family, FAMILIES).cmp(&order(&b.family, FAMILIES)));
     let has_case = |row: &&Row| row.use_case.as_deref().is_some_and(|s| !s.is_empty());
@@ -161,16 +167,16 @@ pub(super) fn report(rows: &[Row], corpus: &Corpus) -> DynResult<String> {
         "### Use-Case Benchmark Matrix".into(),
         String::new(),
         "This matrix uses one Hugging Face-sourced representative prompt per use case,".into(),
-        "the same requested prefix tokens, one generated token, Skippy".into(),
-        "`--runtime-lane-count 1`, llama-server `--parallel 1`, and the same full-GGUF".into(),
-        "family set as the table above. Values are Skippy warm-hit latency speedup over".into(),
+        if producer { "the configured requested prefix tokens and one generated token for serial baselines, with".into() } else { "the same requested prefix tokens, one generated token, Skippy".into() },
+        if producer { "host lanes and baseline parallelism from each owning plan/profile; consult typed cell evidence.".into() } else { "`--runtime-lane-count 1`, llama-server `--parallel 1`, and the same full-GGUF".into() },
+        if producer { "Rows can contain different prefix sizes and configured profiles. Values use observed warm-hit latency over".into() } else { "family set as the table above. Values are Skippy warm-hit latency speedup over".into() },
         "llama-server warm-cache latency. DeepSeek3 stays in the package-only section".into(),
         "because there is no practical local full-GGUF llama-server baseline for that".into(),
         "artifact.".into(),
         String::new(),
         matrix(&use_cases),
         String::new(),
-        "Prompt sources are checked in at `evals/skippy-usecase-corpus.json` with source".into(),
+        if producer { "Prompt source metadata below comes from the owning plan's selected corpus, which may be supplied separately.".into() } else { "Prompt sources are checked in at `evals/skippy-usecase-corpus.json` with source".into() },
         "dataset metadata:".into(),
         String::new(),
         sources(corpus),

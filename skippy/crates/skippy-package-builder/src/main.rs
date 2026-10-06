@@ -1,7 +1,9 @@
 use anyhow::{Context, Result};
 use clap::Parser;
 
+mod artifact_admission;
 mod cli;
+use std::io::Write as _;
 mod generation_manifest;
 mod glm_dsa_contract;
 mod glm_dsa_generation_policy;
@@ -48,10 +50,7 @@ const MAIN_STACK_SIZE: usize = 8 * 1024 * 1024;
 fn main() -> Result<()> {
     let args = Args::parse();
     // Local inspection and verification must not touch download caches.
-    if !matches!(
-        args.command,
-        Command::Inspect { .. } | Command::VerifyPackageV2 { .. }
-    ) {
+    if args.command.requires_download_preparation() {
         prepare_model_download_directories();
     }
 
@@ -66,6 +65,42 @@ fn main() -> Result<()> {
 
 fn run(args: Args) -> Result<()> {
     match args.command {
+        Command::AdmitSource {
+            model,
+            pins,
+            minimum_context,
+        } => {
+            let receipt = artifact_admission::source(&model, &pins, minimum_context)?;
+            writeln!(
+                mesh_llm_events::machine_out(),
+                "{}",
+                serde_json::to_string_pretty(&receipt)?
+            )?;
+            Ok(())
+        }
+        Command::AdmitPackage {
+            package,
+            manifest_sha256,
+            model_id,
+            layer_start,
+            layer_end,
+            minimum_context,
+        } => {
+            let receipt = artifact_admission::package(
+                &package,
+                &manifest_sha256,
+                &model_id,
+                layer_start,
+                layer_end,
+                minimum_context,
+            )?;
+            writeln!(
+                mesh_llm_events::machine_out(),
+                "{}",
+                serde_json::to_string_pretty(&receipt)?
+            )?;
+            Ok(())
+        }
         Command::Inspect { model } => inspect::inspect(model),
         Command::WritePackage {
             model,

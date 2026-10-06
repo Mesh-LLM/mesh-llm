@@ -547,15 +547,47 @@
           "Planner path ownership rule, not process"
         ],
         [
+          39,
+          "3628baad1e6c0f7c",
+          1,
+          "data",
+          "scripts/collect-ci-metrics.py",
+          "Protected-main planner path rule, not process execution"
+        ],
+        [
           40,
-          "4b0126756bc33aab",
+          "fe08231b9f19d2fe",
           1,
           "data",
           "scripts/tests/test_plan_ci.py",
           "Planner path ownership rule"
         ],
         [
-          140,
+          41,
+          "64a73d97b189a427",
+          1,
+          "data",
+          "skippy/scripts/compose-ci-product.py",
+          "Protected-main planner path rule, not process execution"
+        ],
+        [
+          42,
+          "84a70029d76b4356",
+          1,
+          "data",
+          "skippy/scripts/verify-cli-input.py",
+          "Protected-main planner path rule, not process execution"
+        ],
+        [
+          43,
+          "6b559ee4e477d851",
+          1,
+          "data",
+          "skippy/scripts/tests/test_ci_product_contract.py",
+          "Protected-main planner path rule, not process execution"
+        ],
+        [
+          143,
           "406870f6a54d8a8a",
           1,
           "data",
@@ -563,7 +595,7 @@
           "Planner pattern, not glob execution"
         ],
         [
-          144,
+          147,
           "c5e5bc1944eb3e6a",
           1,
           "data",
@@ -571,7 +603,7 @@
           "Planner rule"
         ],
         [
-          233,
+          236,
           "d85a2a51bf30b0a6",
           1,
           "data",
@@ -579,7 +611,7 @@
           "Planner rule"
         ],
         [
-          322,
+          325,
           "a7f4b190250fb094",
           1,
           "data",
@@ -587,7 +619,7 @@
           "Future layout path rule, not existing executable"
         ],
         [
-          323,
+          326,
           "83f9b77a8c65be10",
           1,
           "data",
@@ -595,7 +627,7 @@
           "Future layout path rule"
         ],
         [
-          330,
+          333,
           "e12c6dc214d17902",
           1,
           "data",
@@ -603,7 +635,7 @@
           "Future layout path rule"
         ],
         [
-          331,
+          334,
           "555eafb3d24ac43c",
           1,
           "data",
@@ -611,7 +643,7 @@
           "Future layout path rule"
         ],
         [
-          430,
+          433,
           "9813dc3a9fbcce2e",
           1,
           "data",
@@ -619,7 +651,7 @@
           "Future layout path rule"
         ],
         [
-          431,
+          434,
           "485a939f1620237a",
           1,
           "data",

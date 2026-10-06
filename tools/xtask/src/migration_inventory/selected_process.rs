@@ -97,6 +97,10 @@ fn typed_source_argv(lines: &[&str], index: usize) -> DynResult<String> {
 fn typed_owner(argv: &str) -> Option<&'static str> {
     [
         (
+            "automation smoke-observation sdk-client",
+            "tools/xtask/src/automation/smoke_observation/sdk_supervision/child.rs",
+        ),
+        (
             "automation system-one-smoke stage",
             "tools/xtask/src/automation/system_one_smoke.rs",
         ),
@@ -208,6 +212,7 @@ fn check_system_one_binding(
 }
 
 fn check_typed_binding(
+    root: &Path,
     record: &SelectedProcessCall,
     lines: &[&str],
     index: usize,
@@ -225,6 +230,25 @@ fn check_typed_binding(
         return Ok(());
     }
     let argv = typed_source_argv(lines, index)?;
+    if argv.contains("automation smoke-observation sdk-client") {
+        let text = lines.join("\n");
+        let selection = if lines[index].trim().ends_with('\\') {
+            index + 1
+        } else {
+            index
+        };
+        let child = super::sdk_calls::target(
+            root,
+            &record.caller,
+            &text,
+            selection + 1,
+            lines[selection].trim(),
+        )?
+        .ok_or("selected process: missing closed SDK selection")?;
+        if record.child != child || !record.child_source_known {
+            return Err("selected process: changed SDK child binding".into());
+        }
+    }
     let owner = typed_owner(&argv).ok_or("selected process: unowned typed command")?;
     if record.argv != argv || record.replacement_owner != owner {
         return Err(format!(
@@ -327,7 +351,7 @@ pub(super) fn check_selected_processes(
                 .into());
             };
             check_system_one_binding(record, &lines, index)?;
-            check_typed_binding(record, &lines, index)?;
+            check_typed_binding(root, record, &lines, index)?;
             if record.source_block != line.trim() {
                 return Err(format!("selected interpreter: changed source {path}:{number}").into());
             }

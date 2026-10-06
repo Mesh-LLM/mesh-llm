@@ -49,7 +49,7 @@ def main() -> None:
         from langchain_openai import ChatOpenAI
     except ModuleNotFoundError as exc:
         raise SystemExit(
-            "langchain-openai package not installed; run `python -m pip install langchain-openai` first"
+            "langchain-openai package not installed; use the existing locked ci/required-sdk-python environment and MESH_REQUIRED_SDK_PYTHON; do not install ambient packages"
         ) from exc
 
     llm = ChatOpenAI(

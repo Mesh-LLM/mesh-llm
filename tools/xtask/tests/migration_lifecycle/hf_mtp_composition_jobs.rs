@@ -26,26 +26,22 @@ fn invoke(
     cancel: &Cancellation,
 ) -> process::RawProcessReport {
     let output = root.join(label);
+    let request = root.join(format!("{label}-request.json"));
+    std::fs::write(&request, serde_json::to_vec(input).unwrap()).unwrap();
     let raw = process::supervise_raw_with_files(
         &ProcessSpec {
             executable: env!("CARGO_BIN_EXE_xtask").into(),
             cwd: root.into(),
-            environment: std::collections::BTreeMap::from([
-                (
-                    "MESH_HF_JOB_INPUT".into(),
-                    Arg::Secret(serde_json::to_string(input).unwrap().into()),
-                ),
-                (
-                    "MESH_HF_PUBLICATION_TOKEN".into(),
-                    Arg::Secret("inert-explicit-token".into()),
-                ),
-            ]),
+            environment: std::collections::BTreeMap::from([(
+                "MESH_HF_PUBLICATION_TOKEN".into(),
+                Arg::Secret("inert-explicit-token".into()),
+            )]),
             arguments: [
                 "automation",
                 "hf-certify",
                 "composition-job-worker",
-                "--input-environment",
-                "MESH_HF_JOB_INPUT",
+                "--input",
+                request.to_str().unwrap(),
                 "--output-directory",
                 output.to_str().unwrap(),
             ]

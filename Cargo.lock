@@ -9056,6 +9056,7 @@ version = "0.78.0"
 dependencies = [
  "anyhow",
  "clap",
+ "mesh-llm-events",
  "ratatui",
  "same-file",
  "serde",

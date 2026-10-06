@@ -8,6 +8,7 @@ pub(super) enum Topology {
     SplitStage0,
     SplitMiddle,
     SplitFinal,
+    PackageStage1,
 }
 impl Topology {
     pub(super) fn range(self, layers: u32) -> DynResult<(u32, u32, u32)> {
@@ -21,25 +22,35 @@ impl Topology {
             Self::SplitStage0 => (0, first, 0),
             Self::SplitMiddle => (first, second, 1),
             Self::SplitFinal => (second, layers, 2),
+            Self::PackageStage1 => return Err("requires admitted package profile".into()),
         })
     }
 }
 pub(super) fn family(key: &str) -> DynResult<(&'static str, &'static str)> {
     Ok(match key {
-        "qwen3_dense"=>("Qwen3 dense","resident-kv"),"llama"=>("Llama","resident-kv"),
-        "deepseek2"=>("DeepSeek2","resident-kv"),"deepseek3"=>return Err("DeepSeek3 layer-package producer requires separate package admission; no full-GGUF substitution".into()),
-        "glm47_flash"=>("GLM-4.7 Flash","resident-kv"),"glm4"=>("GLM4","resident-kv"),
-        "gemma4_a4b"=>("Gemma4 A4B","resident-kv"),"gemma4_e4b"=>("Gemma4 E4B","resident-kv"),
-        "gemma3"=>("Gemma3","resident-kv"),"gemma2"=>("Gemma2","resident-kv"),
-        "falcon_h1"=>("Falcon-H1","kv-recurrent"),"olmo"=>("OLMo","resident-kv"),
-        "minimax_m27"=>("MiniMax M2.7","resident-kv"),"qwen3next"=>("Qwen3Next","kv-recurrent"),
-        _=>return Err("unknown current cache-family catalog key".into()),
+        "qwen3_dense" => ("Qwen3 dense", "resident-kv"),
+        "llama" => ("Llama", "resident-kv"),
+        "deepseek2" => ("DeepSeek2", "resident-kv"),
+        "deepseek3" => ("DeepSeek3", "resident-kv"),
+        "glm47_flash" => ("GLM-4.7 Flash", "resident-kv"),
+        "glm4" => ("GLM4", "resident-kv"),
+        "gemma4_a4b" => ("Gemma4 A4B", "resident-kv"),
+        "gemma4_e4b" => ("Gemma4 E4B", "resident-kv"),
+        "gemma3" => ("Gemma3", "resident-kv"),
+        "gemma2" => ("Gemma2", "resident-kv"),
+        "falcon_h1" => ("Falcon-H1", "kv-recurrent"),
+        "olmo" => ("OLMo", "resident-kv"),
+        "minimax_m27" => ("MiniMax M2.7", "resident-kv"),
+        "qwen3next" => ("Qwen3Next", "kv-recurrent"),
+        _ => return Err("unknown current cache-family catalog key".into()),
     })
 }
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct Input {
     pub schema_version: u64,
+    #[serde(default)]
+    pub artifact: Option<super::artifact::Artifact>,
     pub case_key: String,
     pub model_id: String,
     pub correctness: std::path::PathBuf,
@@ -64,10 +75,33 @@ pub(super) struct Input {
     pub execution_seconds: u64,
     pub cell_seconds: u64,
     pub settings: std::collections::BTreeMap<String, String>,
+    #[serde(default)]
+    pub toolkit_directories:
+        std::collections::BTreeMap<String, crate::automation::cache_family_profile::Toolkit>,
 }
 impl Input {
+    pub(super) fn range(&self, topology: Topology, layers: u32) -> DynResult<(u32, u32, u32)> {
+        if matches!(topology, Topology::PackageStage1) {
+            if self.case_key == "deepseek3"
+                && layers == 61
+                && self
+                    .artifact
+                    .as_ref()
+                    .is_some_and(|a| a.kind == super::artifact::Kind::LayerPackage)
+            {
+                return Ok((3, 4, 1));
+            }
+            return Err("package range requires exact admitted DeepSeek3 profile".into());
+        }
+        topology.range(layers)
+    }
     pub(super) fn validate(&self) -> DynResult<()> {
         family(&self.case_key)?;
+        if let Some(artifact) = &self.artifact {
+            artifact.validate(self)?;
+        } else if self.case_key == "deepseek3" {
+            return Err("DeepSeek3 requires explicit package admission".into());
+        }
         let digest = |s: &str| {
             s.len() == 64
                 && s.bytes()
@@ -84,7 +118,7 @@ impl Input {
             || self.prefix_tokens == 0
             || self
                 .prefix_tokens
-                .checked_add(128)
+                .checked_add(if self.case_key == "deepseek3" { 1 } else { 128 })
                 .is_none_or(|v| v > self.ctx_size)
             || !(1..=1024).contains(&self.cache_hit_repeats)
             || !(1..=1024).contains(&self.runtime_lane_count)
@@ -118,25 +152,14 @@ impl Input {
         }
         let mut ranges = std::collections::BTreeSet::new();
         for t in &self.topologies {
-            if !ranges.insert(t.range(6)?) {
+            if !ranges.insert(self.range(*t, if self.case_key == "deepseek3" { 61 } else { 6 })?) {
                 return Err("duplicate cache topology".into());
             }
         }
-        for (name, value) in &self.settings {
-            if ![
-                "CUDA_VISIBLE_DEVICES",
-                "HIP_VISIBLE_DEVICES",
-                "ROCR_VISIBLE_DEVICES",
-                "GGML_CUDA_NO_VMM",
-                "OMP_NUM_THREADS",
-            ]
-            .contains(&name.as_str())
-                || value.len() > 4096
-                || value.contains(['\0', '\n', '\r'])
-            {
-                return Err("unreviewed cache runtime setting".into());
-            }
-        }
+        crate::automation::cache_family_profile::validate(
+            &self.settings,
+            &self.toolkit_directories,
+        )?;
         Ok(())
     }
 }

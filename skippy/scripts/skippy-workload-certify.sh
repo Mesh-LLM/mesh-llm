@@ -162,13 +162,10 @@ if [[ "$MODEL_CLASS" == embedding ]]; then
     echo "embedding SDK smoke needs an absolute executable SKIPPY_WORKLOAD_SDK_PYTHON from the locked environment" >&2
     exit 1
   fi
-  if ! "$SDK_PYTHON" -I -c 'import openai' >/dev/null 2>&1; then
-    echo "official openai-python SDK smoke requires the openai package in $SDK_PYTHON" >&2
-    exit 1
-  fi
+  # The supervised SDK client performs its real import below; no unbounded interpreter probe.
 fi
-
 # Required SDK environment admission ends.
+
 mkdir -p "$WORK_DIR"
 EVIDENCE_PATH="$WORK_DIR/workload-oracle-evidence.json"
 COMPARISON_LOG="$WORK_DIR/workload-oracle-comparison.txt"
@@ -329,7 +326,6 @@ start_candidate_server() {
 }
 
 start_candidate_server
-
 "${workload_automation[@]}" automation workload-smoke \
   --base-url "http://127.0.0.1:$PORT/v1" \
   --model "$MODEL_ID" \
@@ -436,9 +432,11 @@ if [[ -n "$ORACLE_TTS" ]]; then
 fi
 
 if [[ "$MODEL_CLASS" == "embedding" ]]; then
-  "$SDK_PYTHON" -I "$ROOT/scripts/ci-openai-embeddings-smoke.py" \
-    --base-url "http://127.0.0.1:$PORT/v1" \
-    --model "$MODEL_ID"
+  "${workload_automation[@]}" automation smoke-observation sdk-client \
+    --client embeddings --python "$SDK_PYTHON" \
+    --base-url "http://127.0.0.1:$PORT/v1" --model "$MODEL_ID" \
+    --timeout-secs "${SKIPPY_WORKLOAD_SDK_TIMEOUT_SECS:-240}" \
+    --receipt "$WORK_DIR/embedding-sdk.json"
 fi
 
 if [[ -n "$ORACLE_SERVER" || -n "$ORACLE_COMPLETION" || -n "$ORACLE_TTS" ]]; then

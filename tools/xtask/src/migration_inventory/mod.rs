@@ -13,6 +13,7 @@ mod required_graph;
 mod required_graph_tests;
 mod scan;
 mod script_source_calls;
+mod sdk_calls;
 mod selected_process;
 mod shard_rows;
 mod shards;

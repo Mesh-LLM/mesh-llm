@@ -44,7 +44,7 @@ def main() -> None:
         from litellm import completion
     except ModuleNotFoundError as exc:
         raise SystemExit(
-            "litellm package not installed; run `python -m pip install litellm` first"
+            "litellm package not installed; use the existing locked ci/required-sdk-python environment and MESH_REQUIRED_SDK_PYTHON; do not install ambient packages"
         ) from exc
 
     provider_model = f"openai/{args.model}"

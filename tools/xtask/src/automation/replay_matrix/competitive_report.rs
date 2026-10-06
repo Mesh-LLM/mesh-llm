@@ -1,4 +1,6 @@
 //! Report only correlated complete cells; parity gates labels, never synthetic performance proof.
+#[path = "competitive_report_promotion.rs"]
+mod promotion;
 use crate::command::DynResult;
 use serde_json::{Value, json};
 use std::{
@@ -12,9 +14,10 @@ pub(super) fn write(
     deadline: Instant,
     partial: bool,
 ) -> DynResult<()> {
-    let rows = load_rows(root, cells, config, partial)?;
+    let (rows, source) = load_rows(root, cells, config, partial)?;
     admit_outputs(root, &rows)?;
     let gates = gates(&rows);
+    let promotion = promotion::evaluate(&source, cells, &rows, &gates)?;
     if Instant::now() >= deadline {
         return Err("report generation deadline reached".into());
     }
@@ -32,6 +35,7 @@ pub(super) fn write(
         )?;
     }
     super::competitive_report_output::json(root, &summary.join("parity.json"), &gates)?;
+    super::competitive_report_output::json(root, &summary.join("promotion.json"), &promotion)?;
     let mut parity_csv = String::from(
         "platform,model,arm,output_tokens,concurrency,passed
 ",
@@ -85,6 +89,7 @@ Rows below are measured local artifacts. A comparison is qualified only when exa
             }
         ));
     }
+    markdown.push_str(&promotion::markdown(&promotion));
     markdown.push_str("
 Capacity policy is retained per row in report.json. Optional engines with default paged capacity must be compared separately from aggregate KV-matched rows; no cross-platform/family throughput aggregation is performed.
 ");
@@ -96,7 +101,7 @@ Capacity policy is retained per row in report.json. Optional engines with defaul
     super::competitive_report_output::json(
         root,
         &summary.join("report.json"),
-        &json!({"schema_version":1,"config_sha256":config,"rows":rows,"parity":gates,"report_complete":rows.len()==cells.len(),"requested_cells":cells.len()}),
+        &json!({"schema_version":1,"config_sha256":config,"rows":rows,"parity":gates,"report_complete":rows.len()==cells.len(),"requested_cells":cells.len(),"promotion":promotion}),
     )?;
     charts(root, &summary, &rows)?;
     inventory(root, deadline)
@@ -338,7 +343,12 @@ pub(in crate::automation) fn run(args: &[String]) -> DynResult<()> {
     )
 }
 
-fn load_rows(root: &Path, cells: &[Value], config: &str, partial: bool) -> DynResult<Vec<Value>> {
+fn load_rows(
+    root: &Path,
+    cells: &[Value],
+    config: &str,
+    partial: bool,
+) -> DynResult<(Vec<Value>, Value)> {
     let plan = read(&root.join("matrix-plan.json"))?;
     let config_bytes =
         super::competitive_cell::read(&root.join("benchmark-config.source.json"), 8 * 1024 * 1024)?;
@@ -379,7 +389,7 @@ fn load_rows(root: &Path, cells: &[Value], config: &str, partial: bool) -> DynRe
         };
         rows.push(json!({"cell":cell,"throughput":throughput,"complete":true,"launch_sha256":crate::product::digest::file_sha256(&directory.join("launch.json")).map_err(|error|error.error)?,"capacity_policy":launch["capacity_policy"],"parity":parity}));
     }
-    Ok(rows)
+    Ok((rows, source))
 }
 fn throughput(directory: &Path, cell: &Value, summary: &Value) -> DynResult<f64> {
     let throughput = if cell["workload"] == "synthetic" {
@@ -456,6 +466,7 @@ fn admit_outputs(root: &Path, rows: &[Value]) -> DynResult<()> {
         "parity.csv",
         "parity.json",
         "report.json",
+        "promotion.json",
         "REPORT.md",
     ] {
         super::competitive_report_output::admit(root, &root.join("summary").join(name))?;
@@ -474,3 +485,7 @@ fn admit_outputs(root: &Path, rows: &[Value]) -> DynResult<()> {
 #[cfg(test)]
 #[path = "competitive_report_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "competitive_report_archive_tests.rs"]
+mod archive_tests;

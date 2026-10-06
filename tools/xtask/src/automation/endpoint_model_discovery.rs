@@ -3,7 +3,7 @@ use super::{command_interrupt::Interrupt, guardrail_corpus::transport};
 use crate::{command::DynResult, process::Cancellation};
 use std::time::{Duration, Instant};
 const USAGE: &str = "automation endpoint-model-discovery --base-url HTTP_OR_HTTPS_V1 [--timeout-secs 1..60]; API_KEY is read privately from the environment, default EMPTY";
-fn endpoint(base: &str) -> DynResult<String> {
+pub(super) fn endpoint(base: &str) -> DynResult<String> {
     let url = url::Url::parse(base).map_err(|_| "invalid model discovery endpoint")?;
     if !matches!(url.scheme(), "http" | "https")
         || url.host().is_none()
@@ -51,7 +51,7 @@ async fn cancelled(token: &Cancellation) {
         tokio::time::sleep(Duration::from_millis(5)).await;
     }
 }
-async fn discover(
+pub(super) async fn discover(
     base: &str,
     key: &str,
     deadline: Instant,

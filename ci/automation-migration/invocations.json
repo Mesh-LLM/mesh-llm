@@ -3793,7 +3793,7 @@
     },
     {
       "caller": "scripts/skippy-workload-certify.sh",
-      "line": 176,
+      "line": 173,
       "source_block": "DIMENSIONS=\"$(\"${workload_automation[@]}\" automation family-battery-policy --inspect-gguf \"$MODEL_PATH\")\"",
       "child": "tools/xtask configured absolute regular executable or trusted Just automation facade",
       "child_source_known": true,
@@ -3803,7 +3803,7 @@
     },
     {
       "caller": "scripts/skippy-workload-certify.sh",
-      "line": 199,
+      "line": 196,
       "source_block": "\"${workload_automation[@]}\" automation canary-receipts workload-manifest verify \\",
       "child": "tools/xtask configured absolute regular executable or trusted Just automation facade",
       "child_source_known": true,
@@ -3813,7 +3813,7 @@
     },
     {
       "caller": "scripts/skippy-workload-certify.sh",
-      "line": 212,
+      "line": 209,
       "source_block": "\"${workload_automation[@]}\" automation canary-receipts workload-manifest fresh \\",
       "child": "tools/xtask configured absolute regular executable or trusted Just automation facade",
       "child_source_known": true,
@@ -3823,7 +3823,7 @@
     },
     {
       "caller": "scripts/skippy-workload-certify.sh",
-      "line": 247,
+      "line": 244,
       "source_block": "\"${workload_automation[@]}\" automation workload-smoke-config \\",
       "child": "tools/xtask configured absolute regular executable or trusted Just automation facade",
       "child_source_known": true,
@@ -3833,7 +3833,7 @@
     },
     {
       "caller": "scripts/skippy-workload-certify.sh",
-      "line": 300,
+      "line": 297,
       "source_block": "PORT=\"$(\"${workload_automation[@]}\" automation local-ports 1)\"",
       "child": "tools/xtask configured absolute regular executable or trusted Just automation facade",
       "child_source_known": true,
@@ -3843,7 +3843,7 @@
     },
     {
       "caller": "scripts/skippy-workload-certify.sh",
-      "line": 332,
+      "line": 329,
       "source_block": "\"${workload_automation[@]}\" automation workload-smoke \\",
       "child": "tools/xtask configured absolute regular executable or trusted Just automation facade",
       "child_source_known": true,
@@ -3853,7 +3853,7 @@
     },
     {
       "caller": "scripts/skippy-workload-certify.sh",
-      "line": 362,
+      "line": 359,
       "source_block": "ORACLE_PORT=\"$(\"${workload_automation[@]}\" automation local-ports 1)\"",
       "child": "tools/xtask configured absolute regular executable or trusted Just automation facade",
       "child_source_known": true,
@@ -3863,7 +3863,7 @@
     },
     {
       "caller": "scripts/skippy-workload-certify.sh",
-      "line": 402,
+      "line": 399,
       "source_block": "\"${workload_automation[@]}\" automation workload-media-oracle \\",
       "child": "tools/xtask configured absolute regular executable or trusted Just automation facade",
       "child_source_known": true,
@@ -3873,7 +3873,7 @@
     },
     {
       "caller": "scripts/skippy-workload-certify.sh",
-      "line": 409,
+      "line": 406,
       "source_block": "\"${workload_automation[@]}\" automation workload-monolithic-oracle \\",
       "child": "tools/xtask configured absolute regular executable or trusted Just automation facade",
       "child_source_known": true,
@@ -3883,7 +3883,7 @@
     },
     {
       "caller": "scripts/skippy-workload-certify.sh",
-      "line": 418,
+      "line": 415,
       "source_block": "\"${workload_automation[@]}\" automation workload-monolithic-oracle \\",
       "child": "tools/xtask configured absolute regular executable or trusted Just automation facade",
       "child_source_known": true,
@@ -3893,7 +3893,7 @@
     },
     {
       "caller": "scripts/skippy-workload-certify.sh",
-      "line": 427,
+      "line": 424,
       "source_block": "\"${workload_automation[@]}\" automation workload-tts-oracle \\",
       "child": "tools/xtask configured absolute regular executable or trusted Just automation facade",
       "child_source_known": true,
@@ -3903,7 +3903,7 @@
     },
     {
       "caller": "scripts/skippy-workload-certify.sh",
-      "line": 454,
+      "line": 453,
       "source_block": "--pinned-patch-sha \"$(\"${workload_automation[@]}\" automation canary-receipts prepared-source --root \"$ROOT\")\"",
       "child": "tools/xtask configured absolute regular executable or trusted Just automation facade",
       "child_source_known": true,
@@ -3923,7 +3923,7 @@
     },
     {
       "caller": "scripts/skippy-workload-certify.sh",
-      "line": 459,
+      "line": 458,
       "source_block": "\"${evidence_command[@]}\"",
       "child": "tools/xtask frozen configured executable or trusted Just automation-run facade",
       "child_source_known": true,
@@ -4060,6 +4060,16 @@
       "argv": "verification_source_inspection() {\nlocal verb=\"$1\" log=\"${2:-}\" transaction_root input status\n[[ \"$HARNESS_MODE\" == verify ]] || return 1\ncase \"$verb\" in\nverification-source-admit|verification-manifest-policy|verification-parity-inventory|verification-split-roster-check) ;;\n*) echo \"unsupported independent verification inspection\" >&2; return 1 ;;\nesac\nrepair_workload_controller_unchanged || return 1\ntransaction_root=\"$(mktemp -d \"${RUNNER_TEMP:-/tmp}/independent-verification.XXXXXXXX\")\" || return 1\ninput=\"$transaction_root/input.json\"\nif ! jq -n --arg controller_root \"$TRUSTED_ROOT\" --arg controller_revision \"$BASE_HEAD\" \\\n--arg controller_sha \"$repair_workload_controller_sha\" --arg root \"$ROOT\" \\\n--arg base \"$CANDIDATE_BASE_HEAD\" --arg candidate \"$CERTIFIED_SHA\" --arg tree \"$VERIFICATION_TREE\" \\\n'{authority:{controller:{root:$controller_root,revision:$controller_revision,executable_sha256:$controller_sha},\nroot:$root,base:$base,candidate:$candidate,tree:$tree}}' > \"$input\"; then\nrm -rf \"$transaction_root\"\nreturn 1\nfi\nif [[ -n \"$log\" ]]; then\nif run_verification_logged \"parity manifest validation\" \"$log\" \\\n\"${repair_workload_automation[@]}\" automation canary-receipts \"$verb\" --input \"$input\"; then\nstatus=0\nelse\nstatus=$?\nfi\nelif \"${repair_workload_automation[@]}\" automation canary-receipts \"$verb\" --input \"$input\"; then\nstatus=0\nelse\nstatus=$?\nfi\nrm -rf \"$transaction_root\" || return 1\nrepair_workload_controller_unchanged || return 1\nreturn \"$status\"\n}\nverification_source_inspection verification-source-admit\nverification_source_inspection verification-manifest-policy > >(tee -a \"$MANIFEST_POLICY_LOG\") 2>&1\nverification_source_inspection verification-parity-inventory \"$CERTIFY_LOG\" || return 1\nverification_source_inspection verification-split-roster-check\nverification_source_inspection verification-source-admit || exit 1",
       "replacement_owner": "tools/xtask/src/automation/canary_receipts/package_closure/verification_source.rs",
       "status_streams_effects": "Authored/unrun narrow actual-launch binding. Closed helper and literal callset retain selected scanner scopes; normal verify has separate immutable candidate authority and controller revision. Plan/cache keep original shards, flags and budgets. Final export/bundle/success gates and real native/full-family qualification remain required. LocalRepairSource remains repair-only; Python source/family imports remain retained."
+    },
+    {
+      "caller": "scripts/skippy-workload-certify.sh",
+      "line": 435,
+      "source_block": "\"${workload_automation[@]}\" automation smoke-observation sdk-client \\",
+      "child": "scripts/ci-openai-embeddings-smoke.py",
+      "child_source_known": true,
+      "argv": "\"${workload_automation[@]}\" automation smoke-observation sdk-client \\\n--client embeddings --python \"$SDK_PYTHON\" \\\n--base-url \"http://127.0.0.1:$PORT/v1\" --model \"$MODEL_ID\" \\\n--timeout-secs \"${SKIPPY_WORKLOAD_SDK_TIMEOUT_SECS:-240}\" \\\n--receipt \"$WORK_DIR/embedding-sdk.json\"",
+      "replacement_owner": "tools/xtask/src/automation/smoke_observation/sdk_supervision/child.rs",
+      "status_streams_effects": "Native SDK owner admits the explicit locked interpreter and closed embeddings source/lock roster, runs the literal -I SDK child under bounded supervision, and retains sanitized complete stream/process observations. Embeddings remains conditional_unqualified; this record establishes execution ownership, not SDK/model qualification."
     }
   ],
   "source_verified_edges": [
@@ -17275,5 +17285,167 @@
       "roster_line": 32,
       "count": 30
     }
+  },
+  "current_native_sdk_supervision_reconciliation": {
+    "status": "source_only_projected_native_supervision_reconciliation",
+    "candidate": {
+      "path": ".omo/evidence/resume-20261002/sdk-native-supervision-http-draft-v3/manifest-v1.json",
+      "sha256": "98b864d83c22eb071cd21815f8d8210c4f6ebfd2aefc44ffa4171d13db7500e1"
+    },
+    "clients": [
+      {
+        "client": "openai",
+        "path": "scripts/ci-openai-python-smoke.py",
+        "status": "conditional_unqualified",
+        "required": true,
+        "caller": {
+          "path": "scripts/ci-compat-smoke.sh",
+          "line": 141,
+          "source_block": "\"${automation[@]}\" automation smoke-observation sdk-client --client openai --python \"$SDK_PYTHON\" --base-url \"$BASE_URL\" --timeout-secs \"${MESH_COMPAT_SDK_TIMEOUT_SECS:-240}\" --receipt \"$SDK_EVIDENCE_DIR/openai-sdk.json\"",
+          "normalized_sha256_16": "3e5d3dc47715dd08"
+        },
+        "native_owner": {
+          "path": "tools/xtask/src/automation/smoke_observation/sdk_supervision/child.rs",
+          "roster_line": 32,
+          "source_sha256": "94f7f96654d0433cb110e1a2d78ff55ee6b57c557570094358d6773dc5900df5"
+        },
+        "interpreter": "Validated explicit SDK_PYTHON passed from MESH_REQUIRED_SDK_PYTHON or SKIPPY_WORKLOAD_SDK_PYTHON; literal supplied venv spelling retained",
+        "argv": "-I closed repository SDK script --base-url canonical endpoint; --model for LiteLLM/LangChain/embeddings only",
+        "environment": "Existing supervisor env_clear, private HOME/TMPDIR, closed PATH and NO_PROXY; inherited credentials absent",
+        "cadence": "Existing required dense/recurrent compatibility workflow/release cadence unchanged",
+        "failure_contract": "Child nonzero/deadline/cancel/custody/capture/cleanup or terminal refusal fails caller; bounded sanitized observations preserved",
+        "receipt": "SDK_CHILD_OBSERVED; sdk_qualified:false; child observation is not SDK/model/platform qualification",
+        "deletion_condition": "Retained genuine ecosystem client; no removal or required/advisory demotion authorized",
+        "qualification": null
+      },
+      {
+        "client": "litellm",
+        "path": "scripts/ci-litellm-smoke.py",
+        "status": "conditional_unqualified",
+        "required": true,
+        "caller": {
+          "path": "scripts/ci-compat-smoke.sh",
+          "line": 142,
+          "source_block": "\"${automation[@]}\" automation smoke-observation sdk-client --client litellm --python \"$SDK_PYTHON\" --base-url \"$BASE_URL\" --model \"$MODEL_ID\" --timeout-secs \"${MESH_COMPAT_SDK_TIMEOUT_SECS:-240}\" --receipt \"$SDK_EVIDENCE_DIR/litellm-sdk.json\"",
+          "normalized_sha256_16": "06789805c4c77a0e"
+        },
+        "native_owner": {
+          "path": "tools/xtask/src/automation/smoke_observation/sdk_supervision/child.rs",
+          "roster_line": 40,
+          "source_sha256": "94f7f96654d0433cb110e1a2d78ff55ee6b57c557570094358d6773dc5900df5"
+        },
+        "interpreter": "Validated explicit SDK_PYTHON passed from MESH_REQUIRED_SDK_PYTHON or SKIPPY_WORKLOAD_SDK_PYTHON; literal supplied venv spelling retained",
+        "argv": "-I closed repository SDK script --base-url canonical endpoint; --model for LiteLLM/LangChain/embeddings only",
+        "environment": "Existing supervisor env_clear, private HOME/TMPDIR, closed PATH and NO_PROXY; inherited credentials absent",
+        "cadence": "Existing required dense/recurrent compatibility workflow/release cadence unchanged",
+        "failure_contract": "Child nonzero/deadline/cancel/custody/capture/cleanup or terminal refusal fails caller; bounded sanitized observations preserved",
+        "receipt": "SDK_CHILD_OBSERVED; sdk_qualified:false; child observation is not SDK/model/platform qualification",
+        "deletion_condition": "Retained genuine ecosystem client; no removal or required/advisory demotion authorized",
+        "qualification": null
+      },
+      {
+        "client": "langchain",
+        "path": "scripts/ci-langchain-openai-smoke.py",
+        "status": "conditional_unqualified",
+        "required": true,
+        "caller": {
+          "path": "scripts/ci-compat-smoke.sh",
+          "line": 143,
+          "source_block": "\"${automation[@]}\" automation smoke-observation sdk-client --client langchain --python \"$SDK_PYTHON\" --base-url \"$BASE_URL\" --model \"$MODEL_ID\" --timeout-secs \"${MESH_COMPAT_SDK_TIMEOUT_SECS:-240}\" --receipt \"$SDK_EVIDENCE_DIR/langchain-sdk.json\"",
+          "normalized_sha256_16": "55556d37dc56520c"
+        },
+        "native_owner": {
+          "path": "tools/xtask/src/automation/smoke_observation/sdk_supervision/child.rs",
+          "roster_line": 36,
+          "source_sha256": "94f7f96654d0433cb110e1a2d78ff55ee6b57c557570094358d6773dc5900df5"
+        },
+        "interpreter": "Validated explicit SDK_PYTHON passed from MESH_REQUIRED_SDK_PYTHON or SKIPPY_WORKLOAD_SDK_PYTHON; literal supplied venv spelling retained",
+        "argv": "-I closed repository SDK script --base-url canonical endpoint; --model for LiteLLM/LangChain/embeddings only",
+        "environment": "Existing supervisor env_clear, private HOME/TMPDIR, closed PATH and NO_PROXY; inherited credentials absent",
+        "cadence": "Existing required dense/recurrent compatibility workflow/release cadence unchanged",
+        "failure_contract": "Child nonzero/deadline/cancel/custody/capture/cleanup or terminal refusal fails caller; bounded sanitized observations preserved",
+        "receipt": "SDK_CHILD_OBSERVED; sdk_qualified:false; child observation is not SDK/model/platform qualification",
+        "deletion_condition": "Retained genuine ecosystem client; no removal or required/advisory demotion authorized",
+        "qualification": null
+      },
+      {
+        "client": "embeddings",
+        "path": "scripts/ci-openai-embeddings-smoke.py",
+        "status": "conditional_unqualified",
+        "required": false,
+        "caller": {
+          "path": "scripts/skippy-workload-certify.sh",
+          "line": 436,
+          "source_block": "--client embeddings --python \"$SDK_PYTHON\" \\",
+          "normalized_sha256_16": "de0b3268e7c84360"
+        },
+        "native_owner": {
+          "path": "tools/xtask/src/automation/smoke_observation/sdk_supervision/child.rs",
+          "roster_line": 43,
+          "source_sha256": "94f7f96654d0433cb110e1a2d78ff55ee6b57c557570094358d6773dc5900df5"
+        },
+        "interpreter": "Validated explicit SDK_PYTHON passed from MESH_REQUIRED_SDK_PYTHON or SKIPPY_WORKLOAD_SDK_PYTHON; literal supplied venv spelling retained",
+        "argv": "-I closed repository SDK script --base-url canonical endpoint; --model for LiteLLM/LangChain/embeddings only",
+        "environment": "Existing supervisor env_clear, private HOME/TMPDIR, closed PATH and NO_PROXY; inherited credentials absent",
+        "cadence": "Explicit embedding workload only; not smoke.yml",
+        "failure_contract": "Child nonzero/deadline/cancel/custody/capture/cleanup or terminal refusal fails caller; bounded sanitized observations preserved",
+        "receipt": "SDK_CHILD_OBSERVED; sdk_qualified:false; child observation is not SDK/model/platform qualification",
+        "deletion_condition": "Retained genuine ecosystem client; no removal or required/advisory demotion authorized",
+        "qualification": null
+      }
+    ],
+    "source_bindings": [
+      {
+        "path": "scripts/ci-compat-smoke.sh",
+        "projected_source": ".omo/evidence/resume-20261002/sdk-native-supervision-http-draft-v3/files/ci-compat-smoke.sh",
+        "sha256": "b071d380556f12a7427b30ff1f5bb9960ea8ba932d3a738d5654daf09becd63d",
+        "line_count": 146
+      },
+      {
+        "path": "scripts/skippy-workload-certify.sh",
+        "projected_source": ".omo/evidence/resume-20261002/sdk-native-supervision-http-draft-v3/files/skippy-workload-certify.sh",
+        "sha256": "c149de8b7aedc34b4d1f3d27f060840eba160318dde9fa1a755ee00964244fba",
+        "line_count": 459
+      },
+      {
+        "path": "tools/xtask/src/automation/smoke_observation/sdk_supervision/child.rs",
+        "projected_source": ".omo/evidence/resume-20261002/sdk-native-supervision-http-draft-v3/files/sdk_child.rs",
+        "sha256": "94f7f96654d0433cb110e1a2d78ff55ee6b57c557570094358d6773dc5900df5",
+        "line_count": 182
+      },
+      {
+        "path": "tools/xtask/src/automation/smoke_observation/sdk_supervision.rs",
+        "projected_source": ".omo/evidence/resume-20261002/sdk-native-supervision-http-draft-v3/files/sdk_supervision.rs",
+        "sha256": "17ec10c0ebe18f822505d4107e4a2de71b67863e8ac902c244ab8fb20425ec52",
+        "line_count": 99
+      },
+      {
+        "path": "scripts/ci-openai-python-smoke.py",
+        "projected_source": ".omo/evidence/resume-20261002/sdk-native-supervision-http-draft-v3/files/ci-openai-python-smoke.py",
+        "sha256": "ae2e2ce989257a83d88a51e8ba14345206af2aa5f5be62e21d28b574f36024e4",
+        "line_count": 81
+      },
+      {
+        "path": "scripts/ci-litellm-smoke.py",
+        "projected_source": ".omo/evidence/resume-20261002/sdk-native-supervision-http-draft-v3/files/ci-litellm-smoke.py",
+        "sha256": "c4df8c820a669beb227b16392402702079701bbdd538060824269ed703bb1cc8",
+        "line_count": 85
+      },
+      {
+        "path": "scripts/ci-langchain-openai-smoke.py",
+        "projected_source": ".omo/evidence/resume-20261002/sdk-native-supervision-http-draft-v3/files/ci-langchain-openai-smoke.py",
+        "sha256": "1215b0e6c77a234dd5294cd5a5e90fda3937a2056d842360410f9fb2fad522f4",
+        "line_count": 78
+      },
+      {
+        "path": "scripts/ci-openai-embeddings-smoke.py",
+        "projected_source": ".omo/evidence/resume-20261002/sdk-native-supervision-http-draft-v3/files/ci-openai-embeddings-smoke.py",
+        "sha256": "7640e3443baa7dfcef2e09fcf455d87543a29703dd7a394e16e160616d289ecc",
+        "line_count": 94
+      }
+    ],
+    "preserved_exception_status": "Four conditional_unqualified; no new exception, no installed SDK/platform/model execution claim",
+    "retirement": null,
+    "qualification": null
   }
 }
