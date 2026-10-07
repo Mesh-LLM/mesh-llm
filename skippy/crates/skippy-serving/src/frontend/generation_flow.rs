@@ -30,6 +30,7 @@ use crate::frontend::wire_messages::ReusableDecodeMessageArgs;
 use crate::frontend::wire_messages::generation_config_message;
 use crate::frontend::wire_messages::multimodal_prefill_message;
 use crate::kv_integration::proactive_eviction_attrs;
+use crate::runtime_state::panic_recovery::lock_runtime;
 use anyhow::anyhow;
 use serde_json::json;
 use skippy_inference_api::ChatCompletionRequest;
@@ -1045,10 +1046,8 @@ impl StageOpenAiBackend {
                 // a stride so the rate is observable without a debug build or a
                 // telemetry sink: phase spans only reach a job artifact, and
                 // SKIPPY_GRAPH_TRACE emits nothing here.
-                if decode_input_index.is_multiple_of(GRAPH_REUSE_LOG_STRIDE)
-                    && let Ok(runtime) = self.runtime.lock()
-                {
-                    let stats = runtime.session_stats();
+                if decode_input_index.is_multiple_of(GRAPH_REUSE_LOG_STRIDE) {
+                    let stats = lock_runtime(&self.runtime).session_stats();
                     if stats.tokens_evaluated > 0 {
                         tracing::info!(
                             target: "skippy::graph_reuse",

@@ -271,7 +271,7 @@ fn embedded_openai_backend_with_scheduler(
     // Render-only probe of the selected chat template, run once at load. This is
     // where every input is in hand: the loaded runtime, the stage config, and the
     // selected template. `/v1/models` publishes the result as `thinking`.
-    let thinking = probe_thinking_controls(&args);
+    let thinking = Some(probe_thinking_controls(&args));
     let model_id = ModelId::new(
         args.model_id
             .unwrap_or_else(|| args.config.model_id.clone()),
@@ -433,9 +433,8 @@ fn embedded_openai_backend_with_scheduler(
 /// Renders the selected template to learn which reasoning controls it reacts to.
 ///
 /// Never generates: see [`crate::thinking_probe`] for what the observations can
-/// and cannot claim. A poisoned runtime lock leaves the model unprobed, which is
-/// reported as absent rather than as a default.
-fn probe_thinking_controls(args: &EmbeddedOpenAiArgs) -> Option<ThinkingControls> {
+/// and cannot claim.
+fn probe_thinking_controls(args: &EmbeddedOpenAiArgs) -> ThinkingControls {
     let artifact = args
         .config
         .source_model_sha256
@@ -450,9 +449,9 @@ fn probe_thinking_controls(args: &EmbeddedOpenAiArgs) -> Option<ThinkingControls
             template_override: args.request_defaults.chat_template.as_deref(),
             renderer: &native_renderer_identity(),
         },
-    )?;
+    );
     let _ = emit_probe_status(&report);
-    Some(report.controls().clone())
+    report.controls().clone()
 }
 
 fn validate_generation_receipt_topology(

@@ -604,6 +604,7 @@ impl RuntimeState {
 
     pub(super) fn session(&mut self, session_id: &str) -> Result<&mut StageSession> {
         if !self.sessions.contains_key(session_id) {
+            self.ensure_not_reset_by_panic(session_id)?;
             let lane_session = self.take_idle_session().map(Ok).unwrap_or_else(|| {
                 if self.sessions.len() >= self.lane_count as usize {
                     bail!("all execution lanes are busy");

@@ -15,6 +15,7 @@ use crate::frontend::util::saturating_u32;
 use crate::frontend::util::trim_at_stop;
 use crate::frontend::util::valid_utf8_prefix_len;
 use crate::runtime_state::RuntimeState;
+use crate::runtime_state::panic_recovery::lock_runtime;
 use serde_json::Value;
 use skippy_inference_api::ChatCompletionChunk;
 use skippy_inference_api::ChatCompletionRequest;
@@ -172,12 +173,7 @@ impl ChatOutputStreamParser {
     ) -> InferenceResult<Self> {
         let passthrough_content =
             chat_stream_can_passthrough_content(&request, &metadata, emit_reasoning);
-        let model = backend
-            .runtime
-            .lock()
-            .map_err(|_| InferenceError::backend("runtime lock poisoned"))?
-            .model
-            .reader();
+        let model = lock_runtime(&backend.runtime).model.reader();
         Ok(Self {
             backend,
             model,
@@ -370,11 +366,7 @@ where
             .map(|value| value.len())
             .max()
             .unwrap_or(0);
-        let model = runtime
-            .lock()
-            .map_err(|_| InferenceError::backend("runtime lock poisoned"))?
-            .model
-            .reader();
+        let model = lock_runtime(&runtime).model.reader();
         Ok(Self {
             model,
             stop_values,

@@ -1,6 +1,9 @@
 use super::*;
 use crate::frontend::local_generation::CaptureTaskOutstandingGuard;
 
+/// A direct iteration on this session panics inside the worker's batch run.
+pub(super) const PANICKING_DIRECT_SESSION: &str = "panicking-direct-iteration";
+
 fn direct_iteration(session_id: &str, token_count: usize) -> DirectIteration {
     let (reply, _result) = std_mpsc::sync_channel(1);
     DirectIteration {
@@ -15,7 +18,7 @@ fn direct_iteration(session_id: &str, token_count: usize) -> DirectIteration {
         deadline: None,
         cancellation: None,
         enqueued_at: Instant::now(),
-        reply,
+        reply: reply.into(),
     }
 }
 
@@ -120,7 +123,7 @@ fn expired_direct_iteration_behind_blocked_worker_never_reaches_native_runtime()
     let (reply, result) = std_mpsc::sync_channel(1);
     let mut request = direct_iteration("expired-deferred-suffix", 1);
     request.deadline = Some(deadline);
-    request.reply = reply;
+    request.reply = reply.into();
     commands
         .send(SchedulerCommand::ExecuteIteration(Box::new(request)))
         .unwrap();
@@ -177,8 +180,7 @@ fn direct_iteration_rechecks_deadline_after_worker_reply() {
     );
     request
         .reply
-        .send(Err(InferenceError::backend("late worker result")))
-        .unwrap();
+        .send(Err(InferenceError::backend("late worker result")));
 
     let error = caller.join().unwrap().unwrap_err();
     assert!(error.to_string().contains("deadline exceeded"));
@@ -983,6 +985,8 @@ fn worker_panic_is_contained_and_fails_active_requests() {
         panic!("expected contained worker panic to fail the request");
     };
     assert!(error.to_string().contains("worker panicked"));
+    // The worker survives the panic, so it stops only when told to.
+    commands.send(SchedulerCommand::Shutdown).unwrap();
     worker.join().unwrap();
 }
 
@@ -1093,4 +1097,142 @@ fn capture_operation(counter: &Arc<AtomicUsize>, label: &'static str) -> Runtime
             Duration::ZERO
         }),
     }
+}
+
+#[test]
+fn runtime_operation_succeeds_after_a_panic_poisons_the_runtime_lock() {
+    let runtime = Arc::new(Mutex::new(RuntimeState::new_modelless_for_test(1)));
+    let poisoner = Arc::clone(&runtime);
+    let _ = thread::spawn(move || {
+        let mut runtime = poisoner.lock().unwrap();
+        runtime.track_session_tokens_for_test("panicked", 3);
+        panic!("request panicked while holding the runtime lock");
+    })
+    .join();
+    assert!(runtime.is_poisoned(), "precondition: runtime is poisoned");
+
+    let (operation, result) = runtime_operation("after-panic", |runtime| {
+        Ok(runtime.session_stats().tracked_token_counts)
+    });
+    (operation.run)(&runtime);
+    let outcome = result
+        .recv()
+        .unwrap()
+        .expect("the next request must not fail on a poisoned lock");
+    assert_eq!(
+        outcome.value, 0,
+        "the panicked request's lane state is reset"
+    );
+    assert!(!runtime.is_poisoned());
+}
+
+#[test]
+fn scheduler_worker_keeps_serving_after_an_operation_panics() {
+    // A panic inside a runtime operation must not end the worker; otherwise
+    // every later request finds a disconnected command channel and never
+    // reaches the runtime lock's recovery.
+    let runtime = Arc::new(Mutex::new(RuntimeState::new_modelless_for_test(1)));
+    let (commands, receiver) = std_mpsc::sync_channel(8);
+    let worker = thread::spawn(move || {
+        SchedulerWorker {
+            compute_meter: std::sync::Arc::default(),
+            runtime,
+            scheduler: Scheduler::new(build_scheduler_config(1, 64, 0, Some(8), Some(8), 8, false)),
+            requests: BTreeMap::new(),
+            direct_iterations: VecDeque::new(),
+            cache_runtime_queue: CacheRuntimeQueue::new(CACHE_AGING_COST_PER_TURN, true),
+            commands: receiver,
+            kv_capacity_tokens: 64,
+            max_direct_batch_size: 1,
+            direct_group_batch_size: 1,
+            max_direct_iteration_tokens: MAX_NATIVE_ITERATION_TOKENS,
+            max_commands_per_turn: 8,
+            iteration_interval: Duration::ZERO,
+            active_runtime_sessions: 0,
+            direct_wave_full: false,
+            telemetry: None,
+            last_served_direct: false,
+            last_served_cache_runtime: false,
+            last_emitted_lifecycle_counters: (0, 0, 0, 0),
+        }
+        .run();
+    });
+
+    let (panicking, panicking_result) = runtime_operation("panics", |runtime| {
+        if runtime.lane_count() > 0 {
+            panic!("runtime operation panicked");
+        }
+        Ok(0usize)
+    });
+    commands
+        .send(SchedulerCommand::ExecuteRuntime(panicking))
+        .unwrap();
+    assert!(
+        panicking_result
+            .recv_timeout(Duration::from_secs(5))
+            .map_or(true, |outcome| outcome.is_err()),
+        "the panicking operation must not report success"
+    );
+
+    let (next, next_result) =
+        runtime_operation("after-panic", |runtime| Ok(runtime.active_session_count()));
+    commands
+        .send(SchedulerCommand::ExecuteRuntime(next))
+        .expect("the worker must still accept commands after a panic");
+    let outcome = next_result
+        .recv_timeout(Duration::from_secs(5))
+        .expect("the worker must still run operations after a panic")
+        .expect("the operation after the panic succeeds");
+    assert_eq!(outcome.value, 0);
+
+    commands.send(SchedulerCommand::Shutdown).unwrap();
+    worker.join().unwrap();
+}
+
+#[test]
+fn direct_iterations_in_a_panicking_batch_get_an_error() {
+    // The waiter keeps its own reply sender, so a batch dropped by a panic
+    // must still answer each request; otherwise its waiter blocks forever.
+    let runtime = Arc::new(Mutex::new(RuntimeState::new_modelless_for_test(1)));
+    let (commands, receiver) = std_mpsc::sync_channel(8);
+    let worker = thread::spawn(move || {
+        SchedulerWorker {
+            compute_meter: std::sync::Arc::default(),
+            runtime,
+            scheduler: Scheduler::new(build_scheduler_config(1, 64, 0, Some(8), Some(8), 8, false)),
+            requests: BTreeMap::new(),
+            direct_iterations: VecDeque::new(),
+            cache_runtime_queue: CacheRuntimeQueue::new(CACHE_AGING_COST_PER_TURN, true),
+            commands: receiver,
+            kv_capacity_tokens: 64,
+            max_direct_batch_size: 1,
+            direct_group_batch_size: 1,
+            max_direct_iteration_tokens: MAX_NATIVE_ITERATION_TOKENS,
+            max_commands_per_turn: 8,
+            iteration_interval: Duration::ZERO,
+            active_runtime_sessions: 0,
+            direct_wave_full: false,
+            telemetry: None,
+            last_served_direct: false,
+            last_served_cache_runtime: false,
+            last_emitted_lifecycle_counters: (0, 0, 0, 0),
+        }
+        .run();
+    });
+
+    let mut request = direct_iteration(PANICKING_DIRECT_SESSION, 1);
+    let (reply, result) = std_mpsc::sync_channel(1);
+    let waiter_reply = reply.clone();
+    request.reply = reply.into();
+    commands
+        .send(SchedulerCommand::ExecuteIteration(Box::new(request)))
+        .unwrap();
+    let outcome = result
+        .recv_timeout(Duration::from_secs(5))
+        .expect("a request in a panicking batch must get an answer");
+    assert!(outcome.is_err());
+    drop(waiter_reply);
+
+    commands.send(SchedulerCommand::Shutdown).unwrap();
+    worker.join().unwrap();
 }

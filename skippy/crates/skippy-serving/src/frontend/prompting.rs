@@ -10,6 +10,7 @@ use crate::frontend::generation::tool_calls_requested;
 use crate::frontend::tool_emulation;
 use crate::frontend::util::openai_backend_error;
 use crate::kv_integration::StagePrefixCachePayload;
+use crate::runtime_state::panic_recovery::lock_runtime;
 use serde_json::Value;
 use skippy_inference_api::ChatCompletionRequest;
 use skippy_inference_api::GenerationHookSignals;
@@ -63,10 +64,7 @@ impl StageOpenAiBackend {
         options: ChatTemplateOptions,
     ) -> InferenceResult<PreparedGenerationPrompt> {
         let marker = {
-            let runtime = self
-                .runtime
-                .lock()
-                .map_err(|_| InferenceError::backend("runtime lock poisoned"))?;
+            let runtime = lock_runtime(&self.runtime);
             runtime.media_marker()
         };
 
@@ -180,12 +178,7 @@ impl StageOpenAiBackend {
         // Short-lock reader pattern: clone the immutable reader and run the
         // template FFI on it, so template rendering never waits behind
         // decode's hold of the runtime mutex (and vice versa).
-        let reader = self
-            .runtime
-            .lock()
-            .map_err(|_| InferenceError::backend("runtime lock poisoned"))?
-            .model
-            .reader();
+        let reader = lock_runtime(&self.runtime).model.reader();
         let result = reader
             .apply_chat_template_json(
                 &messages_json,
@@ -234,12 +227,7 @@ impl StageOpenAiBackend {
             }));
         }
 
-        let model = self
-            .runtime
-            .lock()
-            .map_err(|_| InferenceError::backend("runtime lock poisoned"))?
-            .model
-            .reader();
+        let model = lock_runtime(&self.runtime).model.reader();
         self.parse_chat_output_with_reader(&model, text, request, metadata, is_partial)
     }
 
@@ -283,12 +271,7 @@ impl StageOpenAiBackend {
         // reader; the tokenizer FFI runs on the reader, so decode can hold
         // the runtime lock concurrently without serializing tokenization
         // behind it (see render_chat_prompt for the same pattern).
-        let reader = self
-            .runtime
-            .lock()
-            .map_err(|_| InferenceError::backend("runtime lock poisoned"))?
-            .model
-            .reader();
+        let reader = lock_runtime(&self.runtime).model.reader();
         reader
             .tokenize(text, add_special)
             .map_err(openai_backend_error)
@@ -304,10 +287,7 @@ impl StageOpenAiBackend {
             return Ok(None);
         }
         if token_ids.len() > 1 {
-            let mut runtime = self
-                .runtime
-                .lock()
-                .map_err(|_| InferenceError::backend("runtime lock poisoned"))?;
+            let mut runtime = lock_runtime(&self.runtime);
             runtime
                 .prefill(session_id, &token_ids[..token_ids.len() - 1])
                 .map_err(openai_backend_error)?;

@@ -20,6 +20,7 @@ use skippy_runtime::{
 mod frame_operations;
 mod lane_lifecycle;
 pub mod lifecycle;
+pub mod panic_recovery;
 mod restore_transaction;
 mod state_transfer;
 
@@ -67,6 +68,9 @@ pub struct RuntimeState {
     session_token_counts: BTreeMap<String, u64>,
     session_resident_prefixes: BTreeMap<String, ResidentLanePrefix>,
     session_lifecycle_observer: Option<Arc<dyn SessionLifecycleObserver>>,
+    /// Sessions discarded by panic recovery whose requests have not cleaned
+    /// up yet; see `panic_recovery`.
+    sessions_reset_by_panic: BTreeSet<String>,
     #[cfg(test)]
     modelless_for_test: bool,
 }
@@ -227,6 +231,7 @@ impl RuntimeState {
             idle_sessions: Vec::new(),
             max_idle_sessions: None,
             session_token_counts: BTreeMap::new(),
+            sessions_reset_by_panic: BTreeSet::new(),
             session_resident_prefixes: BTreeMap::new(),
             session_lifecycle_observer: None,
             compute_meter: Arc::default(),
@@ -310,9 +315,7 @@ pub fn loaded_model_state_kind(
     runtime: Option<&Arc<Mutex<RuntimeState>>>,
 ) -> Option<ModelStateKind> {
     runtime.and_then(|runtime| {
-        runtime
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+        panic_recovery::lock_runtime(runtime)
             .model
             .capability()
             .map(|capability| capability.state_kind)
@@ -326,9 +329,7 @@ pub fn loaded_model_state_kind(
 /// runtime without the metadata accessor must not silently claim safety.
 pub fn loaded_model_has_indexer_memory(runtime: Option<&Arc<Mutex<RuntimeState>>>) -> Option<bool> {
     runtime.and_then(|runtime| {
-        runtime
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+        panic_recovery::lock_runtime(runtime)
             .model
             .capability()
             .map(|capability| capability.has_indexer_memory)
@@ -386,6 +387,7 @@ fn runtime_from_loaded_model(
         idle_sessions: Vec::new(),
         max_idle_sessions: max_idle_sessions_from_stage_config(config),
         session_token_counts: BTreeMap::new(),
+        sessions_reset_by_panic: BTreeSet::new(),
         session_resident_prefixes: BTreeMap::new(),
         session_lifecycle_observer,
         compute_meter: Arc::default(),

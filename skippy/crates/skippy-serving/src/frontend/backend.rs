@@ -45,6 +45,7 @@ use crate::frontend::request::{
     resolve_completion_request_defaults, sampling_config,
 };
 use crate::runtime_state::RuntimeSessionStats;
+use crate::runtime_state::panic_recovery::lock_runtime;
 use crate::telemetry::Telemetry;
 use crate::telemetry::lifecycle_attrs;
 use crate::telemetry::now_unix_nanos;
@@ -1508,10 +1509,7 @@ impl InferenceBackend for StageOpenAiBackend {
             }
         };
         {
-            let runtime = self
-                .runtime
-                .lock()
-                .map_err(|_| InferenceError::backend("runtime lock poisoned"))?;
+            let runtime = lock_runtime(&self.runtime);
             if runtime.input_activation_boundary().is_some()
                 || runtime.output_activation_boundary().is_some()
                 || !runtime.supports_speech_synthesis()
