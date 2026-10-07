@@ -4,6 +4,7 @@ use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fs;
 use std::path::Path;
+mod action_recipes;
 mod boundaries;
 #[cfg(test)]
 mod boundary_tests;
@@ -22,6 +23,7 @@ mod inline_launch;
 #[cfg(test)]
 mod inline_launch_tests;
 mod just_bindings;
+mod product_forwarders;
 mod python_children;
 #[cfg(test)]
 mod python_children_tests;
@@ -147,23 +149,37 @@ pub(super) fn report(
                 continue;
             }
             if path.ends_with(".yml") || path.ends_with(".yaml") {
-                match just_bindings::call(&block) {
-                    Ok(Some(invocation)) => {
+                if trust == "same_commit"
+                    && let Some(selected) = action_recipes::selected(&path, &text, line, &block)?
+                {
+                    for invocation in selected {
+                        builder.edges.push(Edge {
+                            parent: path.clone(), line, source_block: block.clone(), trust_revision: trust,
+                            status: "unknown_selection", child: Some(format!("just:{}", invocation.recipe)),
+                            unresolved_reason: Some("finite Skippy CLI profile selector; both declared native recipes are traversed".into()),
+                            argv: Some(format!("just {}", invocation.recipe)), status_streams_effects: None, contract_source: None,
+                        });
                         recipes.insert((invocation.recipe, invocation.arguments));
                     }
-                    Err(reason) => builder.edges.push(Edge {
-                        parent: path.clone(),
-                        line,
-                        source_block: block.clone(),
-                        trust_revision: trust,
-                        status: "unknown_selection",
-                        child: None,
-                        unresolved_reason: Some(reason),
-                        argv: None,
-                        status_streams_effects: None,
-                        contract_source: None,
-                    }),
-                    Ok(None) => {}
+                } else {
+                    match just_bindings::call(&block) {
+                        Ok(Some(invocation)) => {
+                            recipes.insert((invocation.recipe, invocation.arguments));
+                        }
+                        Err(reason) => builder.edges.push(Edge {
+                            parent: path.clone(),
+                            line,
+                            source_block: block.clone(),
+                            trust_revision: trust,
+                            status: "unknown_selection",
+                            child: None,
+                            unresolved_reason: Some(reason),
+                            argv: None,
+                            status_streams_effects: None,
+                            contract_source: None,
+                        }),
+                        Ok(None) => {}
+                    }
                 }
             }
             if workflow_sources::record(&mut builder, &path, line, &block, trust)? {
@@ -186,6 +202,9 @@ pub(super) fn report(
                 && !contexts::selected_interpreter_call(&block)
                 && !variable_script
             {
+                continue;
+            }
+            if product_forwarders::record(&mut builder, &path, line, &block, trust)? {
                 continue;
             }
             if rooted_scripts::record(&mut builder, &path, &text, (line, &block), trust)? {

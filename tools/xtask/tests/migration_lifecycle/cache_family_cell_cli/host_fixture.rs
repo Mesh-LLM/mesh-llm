@@ -183,6 +183,11 @@ async fn serve(root: PathBuf) -> Result<(), String> {
     }
     if native {
         println!("srv  llama_server: listening on http://{address}");
+    } else if std::env::var_os("CACHE_FIXTURE_CURRENT").is_some() {
+        println!(
+            "{}",
+            serde_json::json!({"schema_version":1,"sequence":1,"type":"status","data":{"message":format!("skippy-serving listening: openai={address}"),"context":null}})
+        );
     } else {
         println!(
             "skippy-server listening: openai={address} model_id=fixture backend=fixture generation_concurrency=1 generation_queue_capacity=256 generation_admission_timeout_secs=30"

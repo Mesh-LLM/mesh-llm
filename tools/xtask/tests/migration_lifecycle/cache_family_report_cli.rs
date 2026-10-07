@@ -226,7 +226,10 @@ fn actual_report_caller_preserves_two_inputs_and_configured_invalid_owner_fails_
         let spec = ProcessSpec {
             executable: "/bin/bash".into(),
             arguments: vec![
-                Value::Public(root.join("evals/skippy-cache-family-bench.sh").into()),
+                Value::Public(
+                    root.join("skippy/evals/skippy-cache-family-bench.sh")
+                        .into(),
+                ),
                 Value::Public(output.clone().into()),
             ],
             cwd: directory.path().into(),

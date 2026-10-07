@@ -5,7 +5,7 @@ const CALLER: &str = "scripts/skippy-system-one-smoke.sh";
 // These are caller admission boundaries, not a general Bash parser. Minimal
 // mixed-driver fixtures remain independently admitted by the existing binding.
 pub(super) fn check_shape(path: &str, lines: &[&str]) -> DynResult<()> {
-    if path != CALLER
+    if (path != CALLER && path != "skippy/scripts/skippy-system-one-smoke.sh")
         || !lines
             .iter()
             .any(|line| line.trim().starts_with("SMOKE_MANIFEST="))

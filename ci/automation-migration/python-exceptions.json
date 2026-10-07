@@ -4,11 +4,11 @@
   "policy": "Only exact existing paths with named callers, local dependency files, cadence, purpose, and isolation evidence qualify. Transitional generic automation is never an ecosystem exception.",
   "exceptions": [
     {
-      "path": "evals/agentic-trajectory-manifest.py",
+      "path": "mesh/evals/agentic-trajectory-manifest.py",
       "callers": [
         "tools/xtask/src/automation/replay_matrix/run_input.rs::prepare via bounded trajectory_reader for execute-run/run-family",
         "tools/xtask/src/automation/replay_matrix/trajectory_reader.rs::run direct typed trajectory-reader CLI",
-        "evals/README.md explicit locked-interpreter manifest example",
+        "mesh/evals/README.md explicit locked-interpreter manifest example",
         "just/ci.just::agentic-trajectory-reader-contracts isolated five retained-helper fixtures (optional manual/trusted-main only)"
       ],
       "local_dependency_files": [
@@ -17,7 +17,7 @@
       ],
       "cadence": "Trusted-main optional agentic replay and explicit manual replay only",
       "purpose": "Read the pinned Parquet trajectory dataset through DuckDB and emit the existing deterministic trajectory manifest. This exception does not retain replay execution or evidence processing in Python.",
-      "isolation_test": "Maintainer retention decision on 2026-10-01. Rust trajectory-reader bounds the fixed reader path and explicit executable. migration_run_family and manual replay fixtures exercise Rust owners with bounded reader fixtures, including failure, timeout and process-tree cleanup. The seven obsolete manual replay implementations/tests are retired with the durable replay-retirement coverage map; real DuckDB dataset and live model qualification are separate. The five original constructor fixtures remain in scripts/tests/test_agentic_trajectory_manifest.py and move to the optional locked offline/no-sync/no-python-downloads -I reader lane; they are not a required generic core Python dependency. Source proposal; actual isolated execution receipt required before admission. The optional recipe requires the existing project interpreter; constructor-only fixtures do not exercise the lazy DuckDB import, installed DuckDB or real Parquet.",
+      "isolation_test": "Maintainer retention decision on 2026-10-01. Rust trajectory-reader bounds the fixed reader path and explicit executable. migration_run_family and manual replay fixtures exercise Rust owners with bounded reader fixtures, including failure, timeout and process-tree cleanup. The seven obsolete manual replay implementations/tests are retired with the durable replay-retirement coverage map; real DuckDB dataset and live model qualification are separate. The five original constructor fixtures remain in mesh/scripts/tests/test_agentic_trajectory_manifest.py (the root scripts/tests path is a discovery forwarder) and move to the optional locked offline/no-sync/no-python-downloads -I reader lane; they are not a required generic core Python dependency. Source proposal; actual isolated execution receipt required before admission. The optional recipe requires the existing project interpreter; constructor-only fixtures do not exercise the lazy DuckDB import, installed DuckDB or real Parquet.",
       "status": "maintainer_retained"
     },
     {
@@ -82,7 +82,7 @@
     {
       "path": "scripts/ci-openai-embeddings-smoke.py",
       "callers": [
-        "scripts/skippy-workload-certify.sh:436 -> native sdk-client embeddings -> tools/xtask/src/automation/smoke_observation/sdk_supervision/child.rs:43; actual retained SDK -I child, existing required/workload cadence preserved"
+        "skippy/scripts/skippy-workload-certify.sh:436 -> native sdk-client embeddings -> tools/xtask/src/automation/smoke_observation/sdk_supervision/child.rs:43; actual retained SDK -I child, existing required/workload cadence preserved"
       ],
       "local_dependency_files": [
         "ci/canary-python/pyproject.toml",
@@ -94,9 +94,9 @@
       "status": "conditional_unqualified"
     },
     {
-      "path": "evals/skippy-granite-tensor-equivalence.py",
+      "path": "skippy/evals/skippy-granite-tensor-equivalence.py",
       "callers": [
-        "docs/skippy/COMPETITIVE_BENCHMARK.md explicit supplied-artifact reference evaluation"
+        "skippy/docs/COMPETITIVE_BENCHMARK.md explicit supplied-artifact reference evaluation"
       ],
       "local_dependency_files": [
         "evals/granite-reference/pyproject.toml",
@@ -108,10 +108,10 @@
       "status": "isolated_model_reference"
     },
     {
-      "path": "crates/skippy-cache/src/cachegen/fixtures/generate_lmcache_compat.py",
+      "path": "skippy/crates/skippy-cache/src/cachegen/fixtures/generate_lmcache_compat.py",
       "status": "isolated_upstream_reference",
       "callers": [
-        "From crates/skippy-cache/src/cachegen/fixtures: python3 generate_lmcache_compat.py; overwrites exactly two checked compatibility binaries."
+        "From skippy/crates/skippy-cache/src/cachegen/fixtures: python3 generate_lmcache_compat.py; overwrites exactly two checked compatibility binaries."
       ],
       "local_dependency_files": [
         "evals/research-python/pyproject.toml",
@@ -122,10 +122,10 @@
       "isolation_test": "migration_inventory::tests::sdk_exception_policy::research16_is_absent_from_actual_required_and_default_execution_graph"
     },
     {
-      "path": "crates/skippy-quantize/scripts/compare-reference-quantization.py",
+      "path": "skippy/crates/skippy-quantize/scripts/compare-reference-quantization.py",
       "status": "isolated_upstream_reference",
       "callers": [
-        "crates/skippy-quantize/README.md opt-in conversion/quantization comparison commands; operator supplies reference converter, interpreter, GGUF/checkpoint and native binaries."
+        "skippy/crates/skippy-quantize/README.md opt-in conversion/quantization comparison commands; operator supplies reference converter, interpreter, GGUF/checkpoint and native binaries."
       ],
       "local_dependency_files": [
         "evals/quantizer-reference/pyproject.toml",
@@ -136,14 +136,14 @@
       "isolation_test": "migration_inventory::tests::sdk_exception_policy::research16_is_absent_from_actual_required_and_default_execution_graph"
     },
     {
-      "path": "evals/latency-benchmarking/latency-proxy.py",
+      "path": "skippy/evals/latency-benchmarking/latency-proxy.py",
       "status": "isolated_research_evaluation",
       "callers": [
-        "evals/latency-benchmarking/README.md upstream RPC delay experiment; python3 latency-proxy.py --listen-port 60052 --target-port 50052 --latency-ms 50 from that directory.",
-        "evals/latency-benchmarking/bench.sh:45 explicit optional historical latency experiment; nohup python3 \"$SCRIPT_DIR/latency-proxy.py\" \\",
-        "evals/latency-benchmarking/bench-b2b.sh:44 explicit optional historical latency experiment; nohup python3 \"$SCRIPT_DIR/latency-proxy.py\" \\",
-        "evals/latency-benchmarking/demo.sh:151 explicit optional historical latency experiment; nohup python3 \"$SCRIPT_DIR/latency-proxy.py\" \\",
-        "evals/latency-benchmarking/demo.sh:161 explicit optional historical latency experiment; nohup python3 \"$SCRIPT_DIR/latency-proxy.py\" \\"
+        "skippy/evals/latency-benchmarking/README.md upstream RPC delay experiment; python3 latency-proxy.py --listen-port 60052 --target-port 50052 --latency-ms 50 from that directory.",
+        "skippy/evals/latency-benchmarking/bench.sh:45 explicit optional historical latency experiment; nohup python3 \"$SCRIPT_DIR/latency-proxy.py\" \\",
+        "skippy/evals/latency-benchmarking/bench-b2b.sh:44 explicit optional historical latency experiment; nohup python3 \"$SCRIPT_DIR/latency-proxy.py\" \\",
+        "skippy/evals/latency-benchmarking/demo.sh:151 explicit optional historical latency experiment; nohup python3 \"$SCRIPT_DIR/latency-proxy.py\" \\",
+        "skippy/evals/latency-benchmarking/demo.sh:161 explicit optional historical latency experiment; nohup python3 \"$SCRIPT_DIR/latency-proxy.py\" \\"
       ],
       "local_dependency_files": [
         "evals/research-python/pyproject.toml",
@@ -154,25 +154,25 @@
       "isolation_test": "migration_inventory::tests::sdk_exception_policy::research16_is_absent_from_actual_required_and_default_execution_graph",
       "caller_source_bindings": [
         {
-          "path": "evals/latency-benchmarking/bench.sh",
+          "path": "skippy/evals/latency-benchmarking/bench.sh",
           "sha256": "39825a30c74c33f2c109409ebb074fcdf8755cf50afc5728288aaaa5dba96996",
           "line": 45,
           "source_block": "        nohup python3 \"$SCRIPT_DIR/latency-proxy.py\" \\"
         },
         {
-          "path": "evals/latency-benchmarking/bench-b2b.sh",
+          "path": "skippy/evals/latency-benchmarking/bench-b2b.sh",
           "sha256": "a16381d3e726192d3b1509fdd5479d40072c6db731fcb81a04e71bf840c45d6a",
           "line": 44,
           "source_block": "        nohup python3 \"$SCRIPT_DIR/latency-proxy.py\" \\"
         },
         {
-          "path": "evals/latency-benchmarking/demo.sh",
+          "path": "skippy/evals/latency-benchmarking/demo.sh",
           "sha256": "85987999bbda4653a9f8ff76bba09896dbabcbfffba9f75cd5040b055c9e3c74",
           "line": 151,
           "source_block": "        nohup python3 \"$SCRIPT_DIR/latency-proxy.py\" \\"
         },
         {
-          "path": "evals/latency-benchmarking/demo.sh",
+          "path": "skippy/evals/latency-benchmarking/demo.sh",
           "sha256": "85987999bbda4653a9f8ff76bba09896dbabcbfffba9f75cd5040b055c9e3c74",
           "line": 161,
           "source_block": "        nohup python3 \"$SCRIPT_DIR/latency-proxy.py\" \\"
@@ -180,11 +180,11 @@
       ]
     },
     {
-      "path": "evals/latency-benchmarking/measure.py",
+      "path": "skippy/evals/latency-benchmarking/measure.py",
       "status": "isolated_research_evaluation",
       "callers": [
-        "evals/latency-benchmarking/README.md measurement commands; existing external research endpoints and local supplied model only.",
-        "evals/latency-benchmarking/bench-b2b.sh:102 explicit optional historical latency experiment; result=$(python3 \"$SCRIPT_DIR/measure.py\" \\"
+        "skippy/evals/latency-benchmarking/README.md measurement commands; existing external research endpoints and local supplied model only.",
+        "skippy/evals/latency-benchmarking/bench-b2b.sh:102 explicit optional historical latency experiment; result=$(python3 \"$SCRIPT_DIR/measure.py\" \\"
       ],
       "local_dependency_files": [
         "evals/research-python/pyproject.toml",
@@ -195,7 +195,7 @@
       "isolation_test": "migration_inventory::tests::sdk_exception_policy::research16_is_absent_from_actual_required_and_default_execution_graph",
       "caller_source_bindings": [
         {
-          "path": "evals/latency-benchmarking/bench-b2b.sh",
+          "path": "skippy/evals/latency-benchmarking/bench-b2b.sh",
           "sha256": "a16381d3e726192d3b1509fdd5479d40072c6db731fcb81a04e71bf840c45d6a",
           "line": 102,
           "source_block": "    result=$(python3 \"$SCRIPT_DIR/measure.py\" \\"
@@ -203,10 +203,10 @@
       ]
     },
     {
-      "path": "evals/moa-openrouter/analyze_ablation.py",
+      "path": "mesh/evals/moa-openrouter/analyze_ablation.py",
       "status": "isolated_research_evaluation",
       "callers": [
-        "From evals/moa-openrouter: python3 analyze_ablation.py /tmp/moa_ablation.jsonl --iters 10000 --seed 0; optional analysis suggested by ignored live Rust eval_openrouter tests."
+        "From mesh/evals/moa-openrouter: python3 analyze_ablation.py /tmp/moa_ablation.jsonl --iters 10000 --seed 0; optional analysis suggested by ignored live Rust eval_openrouter tests."
       ],
       "local_dependency_files": [
         "evals/research-python/pyproject.toml",
@@ -217,10 +217,10 @@
       "isolation_test": "migration_inventory::tests::sdk_exception_policy::research16_is_absent_from_actual_required_and_default_execution_graph"
     },
     {
-      "path": "evals/moa-openrouter/lite_agent.py",
+      "path": "mesh/evals/moa-openrouter/lite_agent.py",
       "status": "isolated_research_evaluation",
       "callers": [
-        "From evals/moa-openrouter: python3 lite_agent.py --base http://localhost:9337/v1 --model mesh; optional supplied endpoint lightweight-agent experiment."
+        "From mesh/evals/moa-openrouter: python3 lite_agent.py --base http://localhost:9337/v1 --model mesh; optional supplied endpoint lightweight-agent experiment."
       ],
       "local_dependency_files": [
         "evals/research-python/pyproject.toml",
@@ -231,10 +231,10 @@
       "isolation_test": "migration_inventory::tests::sdk_exception_policy::research16_is_absent_from_actual_required_and_default_execution_graph"
     },
     {
-      "path": "evals/moa-openrouter/make_fixture.py",
+      "path": "mesh/evals/moa-openrouter/make_fixture.py",
       "status": "isolated_research_evaluation",
       "callers": [
-        "From evals/moa-openrouter: python3 make_fixture.py; reads existing corpus.jsonl/agentic.jsonl and writes actual Rust real_traces.json fixture."
+        "From mesh/evals/moa-openrouter: python3 make_fixture.py; reads existing corpus.jsonl/agentic.jsonl and writes actual Rust real_traces.json fixture."
       ],
       "local_dependency_files": [
         "evals/research-python/pyproject.toml",
@@ -245,7 +245,7 @@
       "isolation_test": "migration_inventory::tests::sdk_exception_policy::research16_is_absent_from_actual_required_and_default_execution_graph"
     },
     {
-      "path": "evals/moa-openrouter/orclient.py",
+      "path": "mesh/evals/moa-openrouter/orclient.py",
       "status": "isolated_research_evaluation",
       "callers": [
         "Imported by record.py, record_agentic.py and probe_tools.py from their own directory; not an independent CLI."
@@ -259,10 +259,10 @@
       "isolation_test": "migration_inventory::tests::sdk_exception_policy::research16_is_absent_from_actual_required_and_default_execution_graph"
     },
     {
-      "path": "evals/moa-openrouter/probe_tools.py",
+      "path": "mesh/evals/moa-openrouter/probe_tools.py",
       "status": "isolated_research_evaluation",
       "callers": [
-        "From evals/moa-openrouter: python3 probe_tools.py; explicit OPENROUTER_API_KEY, remote paid calls, writes fanout.jsonl."
+        "From mesh/evals/moa-openrouter: python3 probe_tools.py; explicit OPENROUTER_API_KEY, remote paid calls, writes fanout.jsonl."
       ],
       "local_dependency_files": [
         "evals/research-python/pyproject.toml",
@@ -273,10 +273,10 @@
       "isolation_test": "migration_inventory::tests::sdk_exception_policy::research16_is_absent_from_actual_required_and_default_execution_graph"
     },
     {
-      "path": "evals/moa-openrouter/record.py",
+      "path": "mesh/evals/moa-openrouter/record.py",
       "status": "isolated_research_evaluation",
       "callers": [
-        "From evals/moa-openrouter: python3 record.py; explicit OPENROUTER_API_KEY, paid capture, writes corpus.jsonl."
+        "From mesh/evals/moa-openrouter: python3 record.py; explicit OPENROUTER_API_KEY, paid capture, writes corpus.jsonl."
       ],
       "local_dependency_files": [
         "evals/research-python/pyproject.toml",
@@ -287,10 +287,10 @@
       "isolation_test": "migration_inventory::tests::sdk_exception_policy::research16_is_absent_from_actual_required_and_default_execution_graph"
     },
     {
-      "path": "evals/moa-openrouter/record_agentic.py",
+      "path": "mesh/evals/moa-openrouter/record_agentic.py",
       "status": "isolated_research_evaluation",
       "callers": [
-        "From evals/moa-openrouter: python3 record_agentic.py; explicit OPENROUTER_API_KEY, paid capture with canned tool results, writes agentic.jsonl."
+        "From mesh/evals/moa-openrouter: python3 record_agentic.py; explicit OPENROUTER_API_KEY, paid capture with canned tool results, writes agentic.jsonl."
       ],
       "local_dependency_files": [
         "evals/research-python/pyproject.toml",
@@ -301,7 +301,7 @@
       "isolation_test": "migration_inventory::tests::sdk_exception_policy::research16_is_absent_from_actual_required_and_default_execution_graph"
     },
     {
-      "path": "evals/scenarios/debug-session/buggy.py",
+      "path": "mesh/evals/scenarios/debug-session/buggy.py",
       "status": "isolated_research_evaluation",
       "callers": [
         "Supplied optional agent debug-session task source; execution/editing belongs to that research task, deliberately buggy content remains unchanged."
@@ -315,7 +315,7 @@
       "isolation_test": "migration_inventory::tests::sdk_exception_policy::research16_is_absent_from_actual_required_and_default_execution_graph"
     },
     {
-      "path": "evals/scenarios/edit-file/server.py",
+      "path": "mesh/evals/scenarios/edit-file/server.py",
       "status": "isolated_research_evaluation",
       "callers": [
         "Supplied optional agent edit-file task source; direct Python server execution belongs to that research task."
@@ -329,7 +329,7 @@
       "isolation_test": "migration_inventory::tests::sdk_exception_policy::research16_is_absent_from_actual_required_and_default_execution_graph"
     },
     {
-      "path": "evals/scenarios/refactor/config.py",
+      "path": "mesh/evals/scenarios/refactor/config.py",
       "status": "isolated_research_evaluation",
       "callers": [
         "Supplied optional refactor task module; task-local imports, no repository required validation entrypoint."
@@ -343,10 +343,10 @@
       "isolation_test": "migration_inventory::tests::sdk_exception_policy::research16_is_absent_from_actual_required_and_default_execution_graph"
     },
     {
-      "path": "evals/test_injection_framing.py",
+      "path": "mesh/evals/test_injection_framing.py",
       "status": "isolated_research_evaluation",
       "callers": [
-        "python3 evals/test_injection_framing.py --model /absolute/supplied.gguf; historical external llama-server hook experiment, not current product serving."
+        "python3 mesh/evals/test_injection_framing.py --model /absolute/supplied.gguf; historical external llama-server hook experiment, not current product serving."
       ],
       "local_dependency_files": [
         "evals/research-python/pyproject.toml",
@@ -357,10 +357,10 @@
       "isolation_test": "migration_inventory::tests::sdk_exception_policy::research16_is_absent_from_actual_required_and_default_execution_graph"
     },
     {
-      "path": "evals/virtual_llm_eval.py",
+      "path": "mesh/evals/virtual_llm_eval.py",
       "status": "isolated_research_evaluation",
       "callers": [
-        "python3 evals/virtual_llm_eval.py --port 9337 [--no-hooks]; optional already-running supplied endpoint ablation. Existing startup doc is historical."
+        "python3 mesh/evals/virtual_llm_eval.py --port 9337 [--no-hooks]; optional already-running supplied endpoint ablation. Existing startup doc is historical."
       ],
       "local_dependency_files": [
         "evals/research-python/pyproject.toml",

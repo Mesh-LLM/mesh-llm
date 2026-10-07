@@ -127,7 +127,9 @@ fn binary_archive_requires_exact_regular_executable_member_set() {
     write_tar(&path, bytes.clone());
     assert!(archive::binaries(&path).is_ok());
     for (name, kind, mode) in [
+        ("skippy", b'0', 0o755),
         ("skippy-server", b'0', 0o755),
+        ("skippy-model-package", b'0', 0o755),
         ("foreign", b'0', 0o755),
         ("linked", b'2', 0o755),
         ("../escape", b'0', 0o755),
@@ -303,7 +305,7 @@ fn workload_archive_binds_candidate_native_stamp_full_closure_and_strict_freshne
 fn prepared_recipe_uses_ordered_lane_names_and_rejects_orphans_and_stale_markers() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path();
-    let patches = root.join("third_party/llama.cpp/patches");
+    let patches = root.join("skippy/llama_cpp/patches");
     fs::create_dir_all(patches.join("model_support")).unwrap();
     fs::create_dir(patches.join("generated")).unwrap();
     fs::write(patches.join("0001-core.patch"), b"core").unwrap();
@@ -321,7 +323,7 @@ fn prepared_recipe_uses_ordered_lane_names_and_rejects_orphans_and_stale_markers
     assert_eq!(source::patch_digest(&patches).unwrap(), expected);
     let upstream = "a".repeat(40);
     let head = "b".repeat(40);
-    fs::write(root.join("third_party/llama.cpp/upstream.txt"), &upstream).unwrap();
+    fs::write(root.join("skippy/llama_cpp/upstream.txt"), &upstream).unwrap();
     let mut provenance = source::Provenance {
         head: head.clone(),
         markers: std::collections::BTreeMap::from([
@@ -346,13 +348,16 @@ fn prepared_recipe_uses_ordered_lane_names_and_rejects_orphans_and_stale_markers
 }
 
 #[test]
-fn test_build_stream_requires_one_exact_skippy_server_test_artifact() {
-    let artifact = json!({"reason":"compiler-artifact","target":{"name":"skippy_server"},"profile":{"test":true},"executable":"/candidate/target/debug/deps/skippy_server-fixture"});
+fn test_build_stream_requires_one_exact_skippy_serving_test_artifact() {
+    let artifact = json!({"reason":"compiler-artifact","target":{"name":"skippy_serving"},"profile":{"test":true},"executable":"/candidate/target/debug/deps/skippy_serving-fixture"});
     let one = serde_json::to_vec(&artifact).unwrap();
     assert_eq!(
         executable::test_binary(&one).unwrap(),
-        Path::new("/candidate/target/debug/deps/skippy_server-fixture")
+        Path::new("/candidate/target/debug/deps/skippy_serving-fixture")
     );
+    let mut retired = artifact.clone();
+    retired["target"]["name"] = json!("skippy_server");
+    assert!(executable::test_binary(&serde_json::to_vec(&retired).unwrap()).is_err());
     let mut two = one.clone();
     two.push(b'\n');
     two.extend_from_slice(&one);

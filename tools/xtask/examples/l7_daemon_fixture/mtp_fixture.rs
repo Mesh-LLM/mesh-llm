@@ -25,7 +25,17 @@ pub(super) fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     };
     let native =
         PathBuf::from(std::env::var_os("LLAMA_STAGE_BUILD_DIR").ok_or("fixture build env")?);
-    if args.first().is_some_and(|s| s == "serve-binary") {
+    if args
+        .first()
+        .is_some_and(|s| s == "serve-binary" || s == "serve")
+    {
+        if args[0] == "serve" {
+            assert!(
+                args.windows(2)
+                    .any(|pair| pair == ["--stage-transport", "binary"])
+            );
+            assert!(args.iter().any(|argument| argument == "--worker-only"));
+        }
         if !native.join("default-signal").exists() {
             crate::signals::install()?;
         }

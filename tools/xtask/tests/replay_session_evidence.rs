@@ -171,7 +171,7 @@ fn retained_reader_adapter_bounds_an_explicit_executable_and_forwards_selection(
     use std::os::unix::fs::PermissionsExt;
     let state = tempfile::tempdir().unwrap();
     let executable = state.path().join("reader-fixture");
-    std::fs::write(&executable, "#!/bin/sh\ncase \"$1\" in */evals/agentic-trajectory-manifest.py) ;; *) exit 8;; esac\nshift\n[ \"$1\" = '--dataset-file' ] && [ \"$2\" = 'input.parquet' ] || exit 9\nexit 0\n").unwrap();
+    std::fs::write(&executable, "#!/bin/sh\ncase \"$1\" in */mesh/evals/agentic-trajectory-manifest.py) ;; *) exit 8;; esac\nshift\n[ \"$1\" = '--dataset-file' ] && [ \"$2\" = 'input.parquet' ] || exit 9\nexit 0\n").unwrap();
     std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
     let result = Command::new(env!("CARGO_BIN_EXE_xtask"))
         .args([

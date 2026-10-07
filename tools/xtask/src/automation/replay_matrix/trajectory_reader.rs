@@ -53,7 +53,7 @@ pub(in crate::automation) fn run(root: Option<&Path>, args: &[String]) -> DynRes
     }
     let script = root
         .as_path()
-        .join("evals/agentic-trajectory-manifest.py")
+        .join("mesh/evals/agentic-trajectory-manifest.py")
         .canonicalize()?;
     let mut arguments = vec![Value::Public(script.into_os_string())];
     for option in GRAMMAR

@@ -5,7 +5,7 @@ fn main() {
         Ok(true) => (),
         Ok(false) | Err(_) => {
             let _ = writeln!(
-                mesh_llm_events::console_err(),
+                std::io::stderr().lock(),
                 "generic Jobs operation incomplete; inspect local receipts and authorized Jobs status; remote acceptance or completion may remain unconfirmed"
             );
             std::process::exit(1);
@@ -15,7 +15,7 @@ fn main() {
 #[cfg(not(unix))]
 fn main() {
     let _ = writeln!(
-        mesh_llm_events::console_err(),
+        std::io::stderr().lock(),
         "generic Jobs facade safe local file/credential admission requires Unix"
     );
     std::process::exit(1);

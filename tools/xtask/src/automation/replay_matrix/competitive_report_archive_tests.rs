@@ -24,7 +24,7 @@ impl Archive {
     fn new(root: &Path) -> Self {
         let mut source: Value = serde_json::from_slice(include_bytes!(concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/../../evals/skippy-competitive-benchmark.json"
+            "/../../skippy/evals/skippy-competitive-benchmark.json"
         )))
         .unwrap();
         source["synthetic"]["output_tokens"] = json!([8]);

@@ -53,6 +53,8 @@ struct Reader<'a> {
     at: usize,
     path: Vec<String>,
     actions: Vec<ActionReference>,
+    anchors: Option<std::collections::BTreeMap<String, Node>>,
+    expanded_alias_nodes: usize,
 }
 
 /// Source evidence for a real job or step action reference, excluding shell data.
@@ -68,11 +70,24 @@ pub(crate) fn parse(source: &str) -> Result<Node, String> {
 }
 
 pub(crate) fn parse_with_actions(source: &str) -> Result<(Node, Vec<ActionReference>), String> {
+    read_document(source, false)
+}
+
+/// Resolve authored anchors for guards that consume their concrete custody maps.
+pub(crate) fn parse_resolved_aliases(source: &str) -> Result<Node, String> {
+    read_document(source, true).map(|(document, _)| document)
+}
+fn read_document(
+    source: &str,
+    resolve_aliases: bool,
+) -> Result<(Node, Vec<ActionReference>), String> {
     let mut reader = Reader {
         raw: source.lines().collect(),
         at: 0,
         path: Vec::new(),
         actions: Vec::new(),
+        anchors: resolve_aliases.then(std::collections::BTreeMap::new),
+        expanded_alias_nodes: 0,
     };
     let Some(first) = reader.peek() else {
         return Ok((Node::Map(Vec::new()), Vec::new()));
@@ -179,7 +194,29 @@ impl<'a> Reader<'a> {
     }
 
     fn value(&mut self, indent: usize, value: &str) -> Result<Node, String> {
-        let value = strip_anchor(strip_comment(value));
+        let source_value = strip_comment(value);
+        if let (Some(anchors), Some(alias)) = (&self.anchors, source_value.strip_prefix('*')) {
+            let node = anchors
+                .get(alias)
+                .ok_or_else(|| format!("unknown workflow alias {alias}"))?;
+            self.expanded_alias_nodes = self.expanded_alias_nodes.saturating_add(node_size(node));
+            if self.expanded_alias_nodes > 100_000 {
+                return Err("workflow alias expansion exceeds node limit".into());
+            }
+            return Ok(node.clone());
+        }
+        let anchor = source_value
+            .strip_prefix('&')
+            .map(|rest| rest.split_whitespace().next().unwrap_or(""));
+        let node = self.unanchored_value(indent, strip_anchor(source_value))?;
+        if let (Some(anchors), Some(anchor)) = (&mut self.anchors, anchor)
+            && (anchor.is_empty() || anchors.insert(anchor.to_owned(), node.clone()).is_some())
+        {
+            return Err(format!("duplicate or empty workflow anchor {anchor}"));
+        }
+        Ok(node)
+    }
+    fn unanchored_value(&mut self, indent: usize, value: &str) -> Result<Node, String> {
         if matches!(value.chars().next(), Some('|' | '>')) {
             return Ok(Node::Scalar(self.block_scalar(indent)));
         }
@@ -262,6 +299,20 @@ fn strip_comment(value: &str) -> &str {
     value
 }
 
+fn node_size(node: &Node) -> usize {
+    let children = match node {
+        Node::Scalar(_) => 0,
+        Node::Seq(items) => items
+            .iter()
+            .map(node_size)
+            .fold(0usize, usize::saturating_add),
+        Node::Map(entries) => entries
+            .iter()
+            .map(|(_, node)| node_size(node))
+            .fold(0usize, usize::saturating_add),
+    };
+    children.saturating_add(1)
+}
 fn strip_anchor(value: &str) -> &str {
     match value.strip_prefix('&') {
         Some(rest) => rest

@@ -3,13 +3,16 @@ use clap::Parser;
 
 mod artifact_admission;
 mod cli;
-use std::io::Write as _;
 mod generation_manifest;
 mod glm_dsa_contract;
 mod glm_dsa_generation_policy;
 mod hash;
 mod inspect;
+mod layer_package_fetch;
+mod layer_package_inspection;
+mod layer_package_planning;
 mod package;
+mod package_reference;
 mod package_v2;
 mod part_writer;
 mod progress;
@@ -64,18 +67,87 @@ fn main() -> Result<()> {
 }
 
 fn run(args: Args) -> Result<()> {
+    run_with_output(args, &mut std::io::stdout().lock())
+}
+
+fn run_with_output(args: Args, output: &mut dyn std::io::Write) -> Result<()> {
     match args.command {
+        Command::FetchLayerPackageWorker {
+            reference,
+            cache_root,
+            stage_index,
+            stage_count,
+            timeout_millis,
+            expected_layer_count,
+            expected_activation_width,
+        } => {
+            let report = layer_package_fetch::fetch_worker(layer_package_fetch::Input {
+                reference: &reference,
+                cache_root: &cache_root,
+                stage: stage_index.zip(stage_count),
+                timeout: std::time::Duration::from_millis(timeout_millis),
+                expected_layers: expected_layer_count,
+                expected_width: expected_activation_width,
+            })?;
+            write_admission_receipt(output, &report)
+        }
+        Command::FetchLayerPackage {
+            reference,
+            cache_root,
+            stage_index,
+            stage_count,
+            timeout_secs,
+            expected_layer_count,
+            expected_activation_width,
+        } => {
+            let report = layer_package_fetch::fetch(layer_package_fetch::Input {
+                reference: &reference,
+                cache_root: &cache_root,
+                stage: stage_index.zip(stage_count),
+                timeout: std::time::Duration::from_secs(timeout_secs),
+                expected_layers: expected_layer_count,
+                expected_width: expected_activation_width,
+            })?;
+            write_admission_receipt(output, &report)
+        }
+        Command::ResolveLayerPackageCache {
+            reference,
+            cache_root,
+        } => {
+            let reference =
+                skippy_model_ref::package_reference::PackageReference::parse(&reference)?;
+            let snapshot = skippy_model_hf::package_cache::resolve(&reference, &cache_root)?;
+            write_admission_receipt(output, &snapshot)
+        }
+        Command::PlanLayerPackageArtifacts {
+            manifest,
+            stage_index,
+            stage_count,
+            layer_start,
+            layer_end,
+        } => layer_package_planning::write_artifacts(
+            &manifest,
+            stage_index,
+            stage_count,
+            layer_start,
+            layer_end,
+            output,
+        ),
+        Command::EvenLayerStageRange {
+            stage_index,
+            stage_count,
+            layer_count,
+        } => layer_package_planning::write_range(stage_index, stage_count, layer_count, output),
+        Command::ParsePackageReference { reference } => {
+            package_reference::write(&reference, output)
+        }
         Command::AdmitSource {
             model,
             pins,
             minimum_context,
         } => {
             let receipt = artifact_admission::source(&model, &pins, minimum_context)?;
-            writeln!(
-                mesh_llm_events::machine_out(),
-                "{}",
-                serde_json::to_string_pretty(&receipt)?
-            )?;
+            write_admission_receipt(output, &receipt)?;
             Ok(())
         }
         Command::AdmitPackage {
@@ -94,14 +166,22 @@ fn run(args: Args) -> Result<()> {
                 layer_end,
                 minimum_context,
             )?;
-            writeln!(
-                mesh_llm_events::machine_out(),
-                "{}",
-                serde_json::to_string_pretty(&receipt)?
-            )?;
+            write_admission_receipt(output, &receipt)?;
             Ok(())
         }
         Command::Inspect { model } => inspect::inspect(model),
+        Command::InspectLayerPackage {
+            package,
+            expected_layer_count,
+            expected_activation_width,
+        } => {
+            let report = layer_package_inspection::inspect(
+                &package,
+                expected_layer_count,
+                expected_activation_width,
+            )?;
+            write_admission_receipt(output, &report)
+        }
         Command::WritePackage {
             model,
             out_dir,
@@ -176,6 +256,65 @@ fn run(args: Args) -> Result<()> {
         }
         Command::RepairGlmDsaGenerationPolicy { package, in_place } => {
             glm_dsa_generation_policy::repair_package(&package, in_place)
+        }
+    }
+}
+
+fn write_admission_receipt(
+    output: &mut dyn std::io::Write,
+    receipt: &impl serde::Serialize,
+) -> Result<()> {
+    serde_json::to_writer_pretty(&mut *output, receipt)?;
+    writeln!(output)?;
+    output.flush()?;
+    Ok(())
+}
+#[cfg(test)]
+mod admission_output_tests {
+    use super::*;
+    struct Refusal {
+        bytes: Vec<u8>,
+        reject_write: bool,
+    }
+    impl std::io::Write for Refusal {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            if self.reject_write {
+                return Err(std::io::ErrorKind::BrokenPipe.into());
+            }
+            self.bytes.extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Err(std::io::ErrorKind::BrokenPipe.into())
+        }
+    }
+    #[test]
+    fn admission_machine_output_is_one_json_document_with_terminal_newline() {
+        let mut output = Vec::new();
+        write_admission_receipt(
+            &mut output,
+            &serde_json::json!({"admitted":true,"path":"a b"}),
+        )
+        .unwrap();
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&output).unwrap(),
+            serde_json::json!({"admitted":true,"path":"a b"})
+        );
+        assert!(output.ends_with(b"}\n"));
+        assert!(!output.ends_with(b"\n\n"));
+    }
+    #[test]
+    fn admission_machine_output_refuses_write_and_flush_failures() {
+        for reject_write in [true, false] {
+            let mut output = Refusal {
+                bytes: Vec::new(),
+                reject_write,
+            };
+            assert!(
+                write_admission_receipt(&mut output, &serde_json::json!({"admitted":true}))
+                    .is_err()
+            );
+            assert_eq!(output.bytes.is_empty(), reject_write);
         }
     }
 }

@@ -351,12 +351,20 @@ fn graph_main_base_identity_and_manual_depot_forwarding_remain_owned() {
             Some("false")
         );
         let mut ordinary_selectors = 0;
+        let mut cpu_selectors = 0;
         for (_, j) in doc.get("jobs").unwrap().entries() {
             if j.get("steps").is_some() {
                 for s in steps(j) {
                     if text(s, "uses") == Some("./.github/actions/select-ci-runners") {
                         if text(s, "id") == Some("sentinel_policy") {
                             assert_eq!(input(s, "manual_use_depot"), Some("false"));
+                            continue;
+                        }
+                        if text(s, "id") == Some("cpu_policy") {
+                            assert_eq!(file, "ci-linux-runtime-slice.yml");
+                            assert_eq!(input(s, "force_hosted"), Some("true"));
+                            assert!(input(s, "manual_use_depot").is_none());
+                            cpu_selectors += 1;
                             continue;
                         }
                         ordinary_selectors += 1;
@@ -369,6 +377,13 @@ fn graph_main_base_identity_and_manual_depot_forwarding_remain_owned() {
             }
         }
         assert_eq!(ordinary_selectors, 1, "{file}");
+        assert_eq!(
+            cpu_selectors,
+            usize::from(file == "ci-linux-runtime-slice.yml")
+        );
+        if cpu_selectors == 1 {
+            cpu_runtime_projection(&doc);
+        }
     }
     let doc = document("ci-control.yml");
     let resolve = steps(job(&doc, "plan"))
@@ -384,6 +399,23 @@ fn graph_main_base_identity_and_manual_depot_forwarding_remain_owned() {
         Some("read")
     );
     assert!(!source("ci-control.yml").contains("SOURCE_REF"));
+}
+fn cpu_runtime_projection(doc: &Node) {
+    let outputs = job(doc, "runner_policy").get("outputs").unwrap();
+    assert_eq!(
+        text(outputs, "runner_cpu"),
+        Some("${{ steps.cpu_policy.outputs.runner_16 }}")
+    );
+    assert_eq!(
+        text(outputs, "allow_native_github_cache_cpu"),
+        Some("${{ steps.cpu_policy.outputs.allow_native_github_cache }}")
+    );
+    assert_eq!(
+        text(job(doc, "linux_runtime"), "runs-on"),
+        Some(
+            "${{ matrix.runtime.backend == 'cpu' && needs.runner_policy.outputs.runner_cpu || needs.runner_policy.outputs.runner_16 }}"
+        )
+    );
 }
 #[test]
 fn graph_product_source_checkouts_bind_declared_identity_and_windows_refuses_fallback() {

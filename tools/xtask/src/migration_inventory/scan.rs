@@ -12,6 +12,11 @@ pub(super) struct Candidate {
     pub(super) executable: bool,
 }
 
+pub(super) struct LocatedCandidate {
+    pub(super) line: usize,
+    pub(super) candidate: Candidate,
+}
+
 pub(super) fn is_instruction(path: &str) -> bool {
     path == "AGENTS.md"
         || path.ends_with("/AGENTS.md")
@@ -20,6 +25,23 @@ pub(super) fn is_instruction(path: &str) -> bool {
         || path == ".agents/agents/release-validation.md"
         || path == ".github/instructions/pr.instructions.md"
         || path == "ci/llama-canary/agent-repair-prompt.md"
+}
+
+pub(super) fn is_script(path: &str) -> bool {
+    ["scripts/", "mesh/scripts/", "skippy/scripts/"]
+        .iter()
+        .any(|prefix| path.starts_with(prefix))
+}
+
+pub(super) fn is_script_test(path: &str) -> bool {
+    [
+        "scripts/tests/",
+        "mesh/scripts/tests/",
+        "skippy/scripts/tests/",
+    ]
+    .iter()
+    .any(|prefix| path.starts_with(prefix))
+        && path.ends_with(".py")
 }
 
 fn is_source(path: &str) -> bool {
@@ -31,6 +53,8 @@ fn is_source(path: &str) -> bool {
             "tools/",
             "ci/",
             "evals/",
+            "mesh/",
+            "skippy/",
             ".agents/",
             ".omo/prompts/",
         ]
@@ -82,6 +106,21 @@ fn js_token(line: &str) -> bool {
         || line.contains(".py")
         || line.contains("$sdk_python")
         || line.contains("setup-python")
+}
+
+// Configured SDK variables in the two admitted upstream adapters identify
+// interpreter launches for census only; this does not approve their interfaces.
+fn configured_sdk_launch(path: &str, line: &str) -> bool {
+    let variable = match path {
+        "skippy/crates/skippy-bench/src/evals/adapters/templates/mcp_atlas_run.sh" => "SDK_PYTHON",
+        "skippy/crates/skippy-bench/src/evals/adapters/templates/swe_bench_pro_run.sh" => {
+            "PREPARED_PYTHON"
+        }
+        _ => return false,
+    };
+    line.split_whitespace().next().is_some_and(|word| {
+        word == format!("\"${variable}\"") || word == format!("\"${{{variable}}}\"")
+    })
 }
 
 fn github_command(line: &str, in_run: bool, selected: Option<&str>) -> bool {
@@ -149,6 +188,9 @@ fn shell_execution(text: &str) -> bool {
 
 fn source_execution(path: &str, line: &str) -> bool {
     let text = line.trim();
+    if configured_sdk_launch(path, line) {
+        return shell_execution(text);
+    }
     if is_instruction(path)
         && !text.starts_with("python")
         && !text.starts_with("pip")
@@ -171,13 +213,13 @@ fn source_execution(path: &str, line: &str) -> bool {
     shell_execution(text)
 }
 
-fn scan_github(path: &str, text: &str) -> Vec<Candidate> {
+fn scan_github(path: &str, text: &str) -> Vec<LocatedCandidate> {
     let mut rows = Vec::new();
     let mut occurrences = BTreeMap::new();
     let mut block: Option<(&str, usize)> = None;
     let mut selected: Option<&str> = None;
     let mut heredoc: Option<&str> = None;
-    for line in text.lines() {
+    for (index, line) in text.lines().enumerate() {
         let trimmed = line.trim();
         if let Some(end) = heredoc {
             if trimmed == end {
@@ -222,7 +264,10 @@ fn scan_github(path: &str, text: &str) -> Vec<Candidate> {
                 && !trimmed.starts_with("PIP_CACHE_DIR:")
                 && !trimmed.starts_with("ci/requirements-ci-python.txt")
                 && !trimmed.contains("- uses: actions/setup-python@");
-            rows.push(row);
+            rows.push(LocatedCandidate {
+                line: index + 1,
+                candidate: row,
+            });
             if in_run && let Some((_, end)) = trimmed.rsplit_once("<<") {
                 let delimiter = end
                     .split_whitespace()
@@ -263,12 +308,20 @@ fn candidate(
 }
 
 pub(super) fn scan_source(path: &str, text: &str) -> Vec<Candidate> {
+    scan_source_located(path, text)
+        .into_iter()
+        .map(|located| located.candidate)
+        .collect()
+}
+
+pub(super) fn scan_source_located(path: &str, text: &str) -> Vec<LocatedCandidate> {
     if path.starts_with(".github/") && (path.ends_with(".yml") || path.ends_with(".yaml")) {
         return scan_github(path, text);
     }
     let mut occurrences = BTreeMap::new();
     text.lines()
-        .filter_map(|line| {
+        .enumerate()
+        .filter_map(|(index, line)| {
             if path.ends_with(".py") {
                 let kind = if line.contains("spec_from_file_location(")
                     || line.contains("run_path(")
@@ -291,10 +344,13 @@ pub(super) fn scan_source(path: &str, text: &str) -> Vec<Candidate> {
                 } else {
                     None
                 };
-                kind.map(|kind| candidate(path, kind, line, &mut occurrences))
+                kind.map(|kind| LocatedCandidate {
+                    line: index + 1,
+                    candidate: candidate(path, kind, line, &mut occurrences),
+                })
             } else if is_source(path)
                 && executable(path)
-                && js_token(line)
+                && (js_token(line) || configured_sdk_launch(path, line))
                 && !line.trim().starts_with("set -e")
                 && !line.contains("grep -E '")
                 && (!line.trim().starts_with("#") || line.trim().contains(".py"))
@@ -304,7 +360,10 @@ pub(super) fn scan_source(path: &str, text: &str) -> Vec<Candidate> {
             {
                 let mut row = candidate(path, "candidate", line, &mut occurrences);
                 row.executable = source_execution(path, line);
-                Some(row)
+                Some(LocatedCandidate {
+                    line: index + 1,
+                    candidate: row,
+                })
             } else {
                 None
             }
@@ -312,13 +371,21 @@ pub(super) fn scan_source(path: &str, text: &str) -> Vec<Candidate> {
         .collect()
 }
 
+pub(super) fn scans_path(path: &str) -> bool {
+    (is_source(path) && executable(path)) || path.ends_with(".py") || is_instruction(path)
+}
+
 pub(super) fn scan_paths(root: &Path, paths: &[String]) -> DynResult<Vec<Candidate>> {
     let mut observed = Vec::new();
     for path in paths {
-        if (is_source(path) && executable(path)) || path.ends_with(".py") || is_instruction(path) {
+        if scans_path(path) {
             let source = fs::read_to_string(root.join(path))?;
             observed.extend(scan_source(path, &source));
         }
     }
     Ok(observed)
 }
+
+#[cfg(test)]
+#[path = "scan_sdk_tests.rs"]
+mod sdk_tests;

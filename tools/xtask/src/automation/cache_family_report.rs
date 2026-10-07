@@ -38,7 +38,7 @@ pub(crate) fn run(args: &[String]) -> DynResult<()> {
         }
         rows.append(&mut given);
     }
-    let default = std::env::current_dir()?.join("evals/skippy-usecase-corpus.json");
+    let default = std::env::current_dir()?.join("skippy/evals/skippy-usecase-corpus.json");
     let corpus = input::load::<input::Corpus>(
         parsed
             .last("--use-case-corpus")

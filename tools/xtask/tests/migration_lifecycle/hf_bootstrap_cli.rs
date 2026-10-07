@@ -21,7 +21,7 @@ if [ "$1" = '--version' ]; then printf 'inert pinned tool 1\n'; exit 0; fi
 case "${{0##*/}}" in
  git)
   case "$1" in
-   clone) test "$2" = '--no-checkout'; test "$3" = '--filter=blob:none'; test "$4" = '--'; test "$5" = 'https://github.com/Mesh-LLM/mesh-llm.git'; /bin/mkdir -p "$6/third_party/llama.cpp"; printf '%s\n' 'cccccccccccccccccccccccccccccccccccccccc' > "$6/third_party/llama.cpp/upstream.txt" ;;
+   clone) test "$2" = '--no-checkout'; test "$3" = '--filter=blob:none'; test "$4" = '--'; test "$5" = 'https://github.com/Mesh-LLM/mesh-llm.git'; /bin/mkdir -p "$6/skippy/llama_cpp"; printf '%s\n' 'cccccccccccccccccccccccccccccccccccccccc' > "$6/skippy/llama_cpp/upstream.txt" ;;
    checkout) test "$2" = '--detach'; test "$3" = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' ;;
    rev-parse) if [ "$2" = HEAD ]; then if [ "${{PWD##*/}}" = llama.cpp ]; then printf '%s\n' 'dddddddddddddddddddddddddddddddddddddddd'; elif [ "$mode" = wrong-head ]; then printf '%s\n' 'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee'; else printf '%s\n' 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'; fi; else test "$2" = 'HEAD^{{tree}}'; printf '%s\n' 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'; fi ;;
    merge-base) test "$2" = --is-ancestor; test "$3" = cccccccccccccccccccccccccccccccccccccccc; test "$4" = HEAD ;;

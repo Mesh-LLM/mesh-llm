@@ -28,6 +28,10 @@ fn context(step: &Node) -> DynResult<()> {
 }
 
 pub(super) fn worker(steps: &[Node]) -> DynResult<()> {
+    worker_transactions(steps, "Bind worker result to candidate and plan")
+}
+
+fn worker_transactions(steps: &[Node], receipt_name: &str) -> DynResult<()> {
     let (certify, battery) = h::step(steps, "id", "certify")?;
     input_owner(battery, "certify")?;
     context(battery)?;
@@ -47,7 +51,7 @@ pub(super) fn worker(steps: &[Node]) -> DynResult<()> {
             ),
         ],
     )?;
-    let (receipt, command) = h::step(steps, "name", "Bind worker result to candidate and plan")?;
+    let (receipt, command) = h::step(steps, "name", receipt_name)?;
     h::before(certify, receipt)?;
     h::condition(command, "${{ !cancelled() }}")?;
     let env = h::member(command, "env")?;
@@ -78,6 +82,7 @@ pub(super) fn aggregate(job: &Node) -> DynResult<()> {
     let steps = h::steps(job)?;
     let (execute, command) = h::step(steps, "id", "aggregate")?;
     preparation(steps, "${{ inputs.source }}", execute)?;
+    classified_context(command)?;
     h::command(
         command,
         &[
@@ -90,10 +95,11 @@ pub(super) fn aggregate(job: &Node) -> DynResult<()> {
             ("--package", "\"$RUNNER_TEMP/aggregate-input\""),
             ("--identity", "\"$IDENTITY\""),
             ("--evidence", "\"$RUNNER_TEMP/aggregate-evidence\""),
-            ("--run-id", "\"$GITHUB_RUN_ID\""),
-            ("--run-attempt", "\"$GITHUB_RUN_ATTEMPT\""),
-            ("--controller-revision", "\"$CANARY_CONTROLLER_SHA\""),
-            ("--selected-source", "\"$CANARY_MESH_SOURCE\""),
+            ("--family-result", "\"$FAMILY_RESULT\""),
+            (
+                "--feedback-output",
+                "\"$RUNNER_TEMP/canary-family-feedback\"",
+            ),
         ],
     )?;
     download(
@@ -110,6 +116,106 @@ pub(super) fn aggregate(job: &Node) -> DynResult<()> {
         "${{ runner.temp }}/aggregate-evidence",
         execute,
     )
+}
+
+pub(super) fn retry_worker(job: &Node) -> DynResult<()> {
+    let steps = h::steps(job)?;
+    let controller = h::checkout(steps, "${{ inputs.source }}", None)?;
+    let selected = h::checkout(
+        steps,
+        "${{ inputs.mesh_source || inputs.source }}",
+        Some("canary-source"),
+    )?;
+    if steps[selected].get("if").is_some() {
+        return Err(
+            "retry consumer checkout must run for ordinary and selected-source modes".into(),
+        );
+    }
+    h::binding(
+        h::member(job, "env")?,
+        "CANARY_SOURCE_ROOT",
+        "${{ github.workspace }}/canary-source",
+    )?;
+    let (prepare, _) = h::step(steps, "uses", "./.github/actions/prepare-automation")?;
+    let (restore, command) = h::step(
+        steps,
+        "name",
+        "Verify immutable handoff and restore producer executables",
+    )?;
+    h::before(controller, prepare)?;
+    h::before(selected, restore)?;
+    h::before(prepare, restore)?;
+    download(
+        steps,
+        "name",
+        "${{ needs.build.outputs.package }}",
+        "${{ env.PACKAGE }}",
+        restore,
+    )?;
+    input_owner(command, "restore")?;
+    context(command)?;
+    h::command(
+        command,
+        &["jq", "-n"],
+        &[
+            ("controller_root", "\"$GITHUB_WORKSPACE\""),
+            ("root", "\"$CANARY_SOURCE_ROOT\""),
+            ("package", "\"$PACKAGE\""),
+            ("identity_sha256", "\"$IDENTITY\""),
+        ],
+    )?;
+    let receipt = retry_certification_receipt(steps, restore)?;
+    let (upload, step) = h::step(steps, "id", "upload_evidence")?;
+    h::before(receipt, upload)?;
+    let inputs = h::member(step, "with")?;
+    h::binding(
+        inputs,
+        "name",
+        "llama-family-retry-${{ github.run_id }}-${{ needs.build.outputs.identity }}-${{ github.run_attempt }}-${{ inputs.pass_id }}-${{ matrix.shard_index }}",
+    )?;
+    h::binding(
+        inputs,
+        "path",
+        "${{ env.FAMILY_BATTERY_ARTIFACT_ROOT }}/${{ env.FAMILY_BATTERY_RUN_ID }}/",
+    )?;
+    h::binding(inputs, "if-no-files-found", "error")?;
+    final_certification_gate(steps, "Require successful infrastructure retry")
+}
+
+pub(super) fn final_certification_gate(steps: &[Node], name: &str) -> DynResult<()> {
+    let (upload, _) = h::step(steps, "id", "upload_evidence")?;
+    let (gate, required) = h::step(steps, "name", name)?;
+    h::before(upload, gate)?;
+    h::condition(required, "${{ !cancelled() }}")?;
+    if required.get("continue-on-error").is_some() {
+        return Err("family final outcome gate must fail its job".into());
+    }
+    h::binding(
+        h::member(required, "env")?,
+        "OUTCOME",
+        "${{ steps.certify.outcome }}",
+    )?;
+    h::binding(required, "run", "test \"$OUTCOME\" = success")
+}
+
+fn retry_certification_receipt(steps: &[Node], restore: usize) -> DynResult<usize> {
+    let (certify, command) = h::step(steps, "id", "certify")?;
+    h::before(restore, certify)?;
+    h::binding(command, "continue-on-error", "true")?;
+    h::binding(command, "timeout-minutes", "720")?;
+    h::binding(
+        h::member(command, "env")?,
+        "SHARD_INDEX",
+        "${{ matrix.shard_index }}",
+    )?;
+    h::binding(
+        h::member(command, "env")?,
+        "MEMORY_TIER",
+        "${{ matrix.memory_tier }}",
+    )?;
+    worker_transactions(steps, "Bind retry result to candidate and plan")?;
+    let (receipt, _) = h::step(steps, "name", "Bind retry result to candidate and plan")?;
+    Ok(receipt)
 }
 
 pub(super) fn publication(job: &Node) -> DynResult<()> {
@@ -156,9 +262,19 @@ pub(super) fn publication(job: &Node) -> DynResult<()> {
     h::before(verify, publish)
 }
 
-fn preparation(steps: &[Node], revision: &str, execute: usize) -> DynResult<()> {
+pub(super) fn preparation(steps: &[Node], revision: &str, execute: usize) -> DynResult<()> {
     let checkout = h::checkout(steps, revision, None)?;
     let (prepare, step) = h::step(steps, "uses", "./.github/actions/prepare-automation")?;
+    if steps
+        .iter()
+        .filter(|step| field(step, "uses") == Some("./.github/actions/prepare-automation"))
+        .count()
+        != 1
+        || step.get("if").is_some()
+        || step.get("continue-on-error").is_some()
+    {
+        return Err("canary controller preparation must run exactly once and fail closed".into());
+    }
     h::binding(h::member(step, "with")?, "runner-profile", "hosted-bare")?;
     h::before(checkout, prepare)?;
     h::before(prepare, execute)?;
@@ -169,7 +285,33 @@ fn preparation(steps: &[Node], revision: &str, execute: usize) -> DynResult<()> 
     }
     Ok(())
 }
-fn download(steps: &[Node], key: &str, value: &str, path: &str, execute: usize) -> DynResult<()> {
+
+pub(super) fn classified_context(command: &Node) -> DynResult<()> {
+    h::binding(command, "continue-on-error", "true")?;
+    let verb = field(command, "id").ok_or("missing classified canary command id")?;
+    h::command(
+        command,
+        &[
+            "\"$MESH_LLM_AUTOMATION_BIN\"",
+            "automation",
+            "canary-receipts",
+            verb,
+        ],
+        &[
+            ("--run-id", "\"$GITHUB_RUN_ID\""),
+            ("--run-attempt", "\"$GITHUB_RUN_ATTEMPT\""),
+            ("--controller-revision", "\"$CANARY_CONTROLLER_SHA\""),
+            ("--selected-source", "\"$CANARY_MESH_SOURCE\""),
+        ],
+    )
+}
+pub(super) fn download(
+    steps: &[Node],
+    key: &str,
+    value: &str,
+    path: &str,
+    execute: usize,
+) -> DynResult<()> {
     for (index, step) in steps.iter().enumerate() {
         if !field(step, "uses").is_some_and(|value| value.starts_with("actions/download-artifact@"))
         {
@@ -200,7 +342,7 @@ mod tests {
         .unwrap()
     }
     #[test]
-    fn current_rust_owners_bind_their_context_and_evidence() {
+    fn current_owners_bind_their_context_and_classified_evidence() {
         worker(h::steps(h::job(&family(), "family").unwrap()).unwrap()).unwrap();
         aggregate(h::job(&family(), "aggregate").unwrap()).unwrap();
         publication(h::job(&upstream(), "publish-certified-canary").unwrap()).unwrap();
@@ -293,5 +435,243 @@ mod tests {
         )
         .unwrap();
         worker(steps).unwrap();
+    }
+    #[test]
+    fn retry_requires_controller_restore_certification_and_outcome_custody() {
+        for name in [
+            "Verify immutable handoff and restore producer executables",
+            "Recheck one infrastructure-failed family",
+            "Bind retry result to candidate and plan",
+        ] {
+            let mut node = family();
+            let Node::Seq(steps) = h::mutable(
+                h::mutable(h::mutable(&mut node, "jobs"), "retry_family"),
+                "steps",
+            ) else {
+                unreachable!()
+            };
+            let command = steps
+                .iter_mut()
+                .find(|step| field(step, "name") == Some(name))
+                .unwrap();
+            h::replace(command, &["run"], Node::Scalar("echo skipped".into()));
+            assert!(
+                retry_worker(h::job(&node, "retry_family").unwrap()).is_err(),
+                "{name}"
+            );
+        }
+        for change in 0..3 {
+            let mut node = family();
+            let Node::Seq(steps) = h::mutable(
+                h::mutable(h::mutable(&mut node, "jobs"), "retry_family"),
+                "steps",
+            ) else {
+                unreachable!()
+            };
+            if change == 0 {
+                h::replace(
+                    &mut steps[0],
+                    &["with", "ref"],
+                    Node::Scalar("${{ inputs.mesh_source }}".into()),
+                );
+            } else if change == 1 {
+                let step = steps
+                    .iter_mut()
+                    .find(|step| {
+                        field(step, "uses")
+                            .is_some_and(|value| value.starts_with("actions/download-artifact@"))
+                    })
+                    .unwrap();
+                h::replace(step, &["with", "name"], Node::Scalar("unbound".into()));
+            } else {
+                let step = steps
+                    .iter_mut()
+                    .find(|step| {
+                        field(step, "name") == Some("Bind retry result to candidate and plan")
+                    })
+                    .unwrap();
+                h::replace(step, &["env", "OUTCOME"], Node::Scalar("success".into()));
+            }
+            assert!(retry_worker(h::job(&node, "retry_family").unwrap()).is_err());
+        }
+    }
+    #[test]
+    fn retry_native_transactions_bind_current_context_and_placement() {
+        retry_worker(h::job(&family(), "retry_family").unwrap()).unwrap();
+        for (name, before, after) in [
+            (
+                "Verify immutable handoff and restore producer executables",
+                "canary-receipts restore",
+                "canary-receipts certify",
+            ),
+            (
+                "Verify immutable handoff and restore producer executables",
+                "run_id \"$GITHUB_RUN_ID\"",
+                "run_id foreign",
+            ),
+            (
+                "Verify immutable handoff and restore producer executables",
+                "root \"$CANARY_SOURCE_ROOT\"",
+                "root \"$GITHUB_WORKSPACE\"",
+            ),
+            (
+                "Recheck one infrastructure-failed family",
+                "controller_revision \"$CANARY_CONTROLLER_SHA\"",
+                "controller_revision foreign",
+            ),
+            (
+                "Recheck one infrastructure-failed family",
+                "selected_source \"$CANARY_MESH_SOURCE\"",
+                "selected_source foreign",
+            ),
+            (
+                "Recheck one infrastructure-failed family",
+                "identity_sha256 \"$IDENTITY\"",
+                "identity_sha256 foreign",
+            ),
+            (
+                "Recheck one infrastructure-failed family",
+                "shard_index \"$SHARD_INDEX\"",
+                "shard_index 0",
+            ),
+            (
+                "Recheck one infrastructure-failed family",
+                "memory_tier \"$MEMORY_TIER\"",
+                "memory_tier unbound",
+            ),
+            (
+                "Bind retry result to candidate and plan",
+                "run_attempt \"$GITHUB_RUN_ATTEMPT\"",
+                "run_attempt 1",
+            ),
+            (
+                "Bind retry result to candidate and plan",
+                "family \"$FAMILY\"",
+                "family unplanned",
+            ),
+            (
+                "Bind retry result to candidate and plan",
+                "outcome \"$OUTCOME\"",
+                "outcome success",
+            ),
+            (
+                "Bind retry result to candidate and plan",
+                "canary-receipts receipt",
+                "canary-receipts publication",
+            ),
+        ] {
+            let mut node = family();
+            let Node::Seq(steps) = h::mutable(
+                h::mutable(h::mutable(&mut node, "jobs"), "retry_family"),
+                "steps",
+            ) else {
+                unreachable!()
+            };
+            let step = steps
+                .iter_mut()
+                .find(|step| field(step, "name") == Some(name))
+                .unwrap();
+            let run = field(step, "run").unwrap();
+            assert!(run.contains(before), "missing causal mutation: {before}");
+            let changed = run.replace(before, after);
+            h::replace(step, &["run"], Node::Scalar(changed));
+            assert!(
+                retry_worker(h::job(&node, "retry_family").unwrap()).is_err(),
+                "{name}: {before}"
+            );
+        }
+    }
+
+    #[test]
+    fn retry_requires_fresh_dedicated_consumer_in_both_source_modes() {
+        for mutation in 0..3 {
+            let mut node = family();
+            let job = h::mutable(h::mutable(&mut node, "jobs"), "retry_family");
+            if mutation == 0 {
+                h::replace(
+                    job,
+                    &["env", "CANARY_SOURCE_ROOT"],
+                    Node::Scalar("${{ github.workspace }}".into()),
+                );
+            } else {
+                let Node::Seq(steps) = h::mutable(job, "steps") else {
+                    unreachable!()
+                };
+                let selected = steps
+                    .iter_mut()
+                    .find(|step| {
+                        step.get("with")
+                            .is_some_and(|with| field(with, "path") == Some("canary-source"))
+                    })
+                    .unwrap();
+                if mutation == 1 {
+                    h::replace(
+                        selected,
+                        &["with", "ref"],
+                        Node::Scalar("${{ inputs.mesh_source }}".into()),
+                    );
+                } else {
+                    let Node::Map(fields) = selected else {
+                        unreachable!()
+                    };
+                    fields.push(("if".into(), Node::Scalar("inputs.mesh_source != ''".into())));
+                }
+            }
+            assert!(
+                retry_worker(h::job(&node, "retry_family").unwrap()).is_err(),
+                "consumer mutation {mutation}"
+            );
+        }
+    }
+    #[test]
+    fn retry_family_final_gate_preserves_uploaded_evidence_and_actual_failure() {
+        for mutation in 0..6 {
+            let mut node = family();
+            let Node::Seq(steps) = h::mutable(
+                h::mutable(h::mutable(&mut node, "jobs"), "retry_family"),
+                "steps",
+            ) else {
+                unreachable!()
+            };
+            let gate = steps
+                .iter()
+                .position(|step| {
+                    field(step, "name") == Some("Require successful infrastructure retry")
+                })
+                .unwrap();
+            let upload = steps
+                .iter()
+                .position(|step| field(step, "id") == Some("upload_evidence"))
+                .unwrap();
+            match mutation {
+                0 => steps.swap(gate, upload),
+                1 => h::replace(&mut steps[gate], &["if"], Node::Scalar("false".into())),
+                2 => {
+                    let Node::Map(fields) = &mut steps[gate] else {
+                        unreachable!()
+                    };
+                    fields.push(("continue-on-error".into(), Node::Scalar("true".into())));
+                }
+                3 => h::replace(
+                    &mut steps[gate],
+                    &["env", "OUTCOME"],
+                    Node::Scalar("success".into()),
+                ),
+                4 => h::replace(
+                    &mut steps[gate],
+                    &["run"],
+                    Node::Scalar("echo skipped".into()),
+                ),
+                _ => h::replace(
+                    &mut steps[gate],
+                    &["run"],
+                    Node::Scalar("test \"$OUTCOME\" = success || true".into()),
+                ),
+            }
+            assert!(
+                retry_worker(h::job(&node, "retry_family").unwrap()).is_err(),
+                "final gate mutation {mutation}"
+            );
+        }
     }
 }

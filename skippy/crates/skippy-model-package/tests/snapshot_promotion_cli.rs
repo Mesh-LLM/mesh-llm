@@ -298,7 +298,7 @@ fn embedded_native_helper_survives_build_workspace_cleanup() {
         .find("just snapshot-promoter-release-build\n")
         .unwrap();
     let end = source[start..]
-        .find("SLICER=\"${TOOL_DIR}/skippy-model-package\"")
+        .find("SLICER=\"${TOOL_DIR}/skippy-package-builder\"")
         .unwrap()
         + start;
     let target = root.join("target");

@@ -37,6 +37,8 @@ mod restoring;
 mod runtime_slice;
 #[path = "package_closure/source.rs"]
 mod source;
+#[path = "package_closure/source_recovery.rs"]
+pub(crate) mod source_recovery;
 #[path = "package_closure/split_roster.rs"]
 mod split_roster;
 #[cfg(test)]

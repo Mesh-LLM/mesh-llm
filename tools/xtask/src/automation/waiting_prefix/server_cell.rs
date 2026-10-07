@@ -318,6 +318,18 @@ fn session(input: &Input, owner: &mut Owner, directory: &Path, receipt: &mut Rec
     let cancellation = interrupt.cancellation();
     let started = std::time::Instant::now();
     let result = (|| -> DynResult<()> {
+        let server = owner
+            .server
+            .as_mut()
+            .ok_or("waiting-prefix server absent")?;
+        crate::automation::skippy_cli_admission::prepare(
+            &mut server.spec,
+            &input.binary_sha256,
+            crate::automation::skippy_cli_admission::Role::Public,
+            started + Duration::from_secs(input.execution_timeout_secs),
+            &cancellation,
+            &directory.join("cli-admission.json"),
+        )?;
         if let Some(endpoint) = &input.worker.metrics {
             let runtime = tokio::runtime::Builder::new_current_thread()
                 .enable_all()

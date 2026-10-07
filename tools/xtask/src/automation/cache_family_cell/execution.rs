@@ -314,9 +314,25 @@ pub(super) fn execute(input: &Input, directory: &Path, cancel: &Cancellation) ->
                 execution,
             )),
             input: admitted,
+            dialect: crate::automation::skippy_cli_admission::Dialect::Legacy,
             marker: false,
             stopping: false,
         };
+        if input.host != Host::NativeBaseline {
+            let server = owner.server.as_mut().ok_or("cache host absent")?;
+            owner.dialect = crate::automation::skippy_cli_admission::prepare(
+                &mut server.spec,
+                &input.binary_sha256,
+                crate::automation::skippy_cli_admission::Role::Public,
+                until,
+                cancel,
+                &directory.join("cli-admission.json"),
+            )?;
+        }
+        let execution = remaining(until, Duration::from_secs(9))?;
+        // Admission and request preparation consume the original launch budget.
+        // Every pending child must fit the final session without extending it.
+        owner.bound_session(execution);
         drop(reservation);
         let report = process::retained::run(&mut owner, &limits(execution), cancel)?;
         let lifecycle = projection(&report);

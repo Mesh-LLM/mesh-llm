@@ -117,7 +117,7 @@ fn launch(
     })
 }
 fn lifecycle(report: &process::retained::Report<String>) -> Value {
-    json!({"outcome":format!("{:?}",report.outcome),"members":report.members.iter().map(|m|json!({"member":String::from_utf8_lossy(m.member.name()),"disposition":m.disposition.label(),"status":m.process.status.as_ref().and_then(std::process::ExitStatus::code),"cleanup_complete":m.process.cleanup.complete,"forced":m.process.cleanup.forced,"graceful_signal_failed":m.process.cleanup.graceful_signal_failed,"cleanup_failure":m.process.cleanup.failure.as_ref().map(|e|format!("{e:?}")),"process_failure":m.process.failure.as_ref().map(|e|format!("{e:?}")),"stdout_complete":m.process.stdout.line_capture_complete,"stderr_complete":m.process.stderr.line_capture_complete})).collect::<Vec<_>>()})
+    json!({"outcome":format!("{:?}",report.outcome),"session_failure":report.failure.as_ref().map(|error|format!("{error:?}")),"members":report.members.iter().map(|m|json!({"member":String::from_utf8_lossy(m.member.name()),"disposition":m.disposition.label(),"status":m.process.status.as_ref().and_then(std::process::ExitStatus::code),"cleanup_complete":m.process.cleanup.complete,"forced":m.process.cleanup.forced,"graceful_signal_failed":m.process.cleanup.graceful_signal_failed,"cleanup_failure":m.process.cleanup.failure.as_ref().map(|e|format!("{e:?}")),"process_failure":m.process.failure.as_ref().map(|e|format!("{e:?}")),"stdout_complete":m.process.stdout.line_capture_complete,"stderr_complete":m.process.stderr.line_capture_complete})).collect::<Vec<_>>()})
 }
 fn run_owned(
     input: &Input,
@@ -222,6 +222,41 @@ fn run_owned(
             telemetry: Observation::default(),
             stopping: 0,
         };
+        let upstream = owner
+            .upstream
+            .as_mut()
+            .ok_or("mixed frontend launch absent")?;
+        let dialect = crate::automation::skippy_cli_admission::prepare(
+            &mut upstream.spec,
+            &arm.binary_sha256,
+            crate::automation::skippy_cli_admission::Role::BinaryFrontend,
+            until,
+            cancel,
+            &directory.join("cli-admission.json"),
+        )?;
+        if let Some(downstream) = &mut owner.downstream {
+            dialect.arguments(
+                crate::automation::skippy_cli_admission::Role::BinaryWorker,
+                &mut downstream.spec.arguments,
+            )?;
+        }
+        let execution = static_cell::remaining(until, Duration::from_secs(3 * (count + 1) as u64))?;
+        if Duration::from_secs(worker.timeout_secs) >= execution {
+            return Err(
+                "mixed worker cannot fit retained execution budget after CLI admission".into(),
+            );
+        }
+        for launch in [
+            &mut owner.downstream,
+            &mut owner.upstream,
+            &mut owner.worker,
+        ]
+        .into_iter()
+        .flatten()
+        {
+            launch.readiness_deadline = execution;
+        }
+        owner.policy = ExpectedExit::new(&[0, 1], execution)?;
         let limits = Limits {
             execution,
             graceful_shutdown: Duration::from_secs(1),

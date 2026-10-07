@@ -1,4 +1,6 @@
 use super::*;
+#[path = "parity_inventory/boundary_selection_tests.rs"]
+mod boundary_selection_tests;
 fn set(names: &[&str]) -> BTreeSet<String> {
     names.iter().map(|name| (*name).into()).collect()
 }

@@ -98,8 +98,10 @@ fn run() -> DynResult<()> {
             rest,
         ),
         cli::CliCommand::WanObservation(rest) => automation::wan_observation::run(rest),
+        cli::CliCommand::WanStageDeployment(rest) => automation::wan_stage_deployment::run(rest),
         cli::CliCommand::SystemOneCases(rest) => automation::system_one_cases::run(rest),
         cli::CliCommand::SystemOneSmoke(rest) => automation::system_one_smoke::run(rest),
+        cli::CliCommand::DecisionsSmoke(rest) => automation::decisions_smoke::run(rest),
         cli::CliCommand::BinaryStageReadiness(rest) => {
             automation::binary_stage_readiness::run(rest)
         }

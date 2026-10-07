@@ -252,7 +252,14 @@ impl Runner<'_> {
             root,
             &format!("{label}-clean"),
         )?;
-        let path = root.join("third_party/llama.cpp/upstream.txt");
+        let current = root.join("skippy/llama_cpp/upstream.txt");
+        let path = match std::fs::symlink_metadata(&current) {
+            Ok(_) => current,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                root.join("third_party/llama.cpp/upstream.txt")
+            }
+            Err(error) => return Err(error.into()),
+        };
         let bytes = admission::read(&path, 4096)?;
         if admission::digest(&bytes) != input.upstream_file_sha256
             || !std::str::from_utf8(&bytes)?

@@ -17,9 +17,9 @@ mod archive_zip;
 mod attestation_status;
 mod canonical_inputs;
 mod compose;
-mod host_contract;
 mod compose_argv;
 pub(crate) mod digest;
+mod host_contract;
 mod json_object;
 mod manifest_load;
 mod posix_path;
@@ -28,6 +28,7 @@ mod rc_ok;
 mod release_manifest;
 mod release_manifest_order;
 mod runtime_version;
+mod skippy_cli_input;
 
 use crate::command::DynResult;
 
@@ -42,6 +43,7 @@ pub(crate) enum ProductCommand {
     ArchiveWrite,
     AttestationStatus,
     RcOk,
+    SkippyCliInput,
 }
 
 impl ProductCommand {
@@ -55,6 +57,7 @@ impl ProductCommand {
             "archive-write" => Some(Self::ArchiveWrite),
             "attestation-status" => Some(Self::AttestationStatus),
             "rc-ok" => Some(Self::RcOk),
+            "skippy-cli-input" => Some(Self::SkippyCliInput),
             _ => None,
         }
     }
@@ -70,6 +73,7 @@ pub(crate) fn run(command: ProductCommand, args: &[String]) -> DynResult<()> {
         ProductCommand::ArchiveWrite => archive::run(args, true),
         ProductCommand::AttestationStatus => attestation_status::run(args),
         ProductCommand::RcOk => rc_ok::run(args),
+        ProductCommand::SkippyCliInput => skippy_cli_input::run(args),
     };
     report.emit()
 }

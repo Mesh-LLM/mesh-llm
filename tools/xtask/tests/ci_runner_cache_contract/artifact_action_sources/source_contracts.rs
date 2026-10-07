@@ -184,7 +184,7 @@ fn artifact_native_attestation_verifier_dependencies_remain_abi_free() {
         assert!(!dependencies.contains_key(name));
     }
     let footer: toml::Value =
-        toml::from_str(&source("crates/mesh-llm-release-footer/Cargo.toml")).unwrap();
+        toml::from_str(&source("mesh/crates/mesh-llm-release-footer/Cargo.toml")).unwrap();
     let names = footer["dependencies"]
         .as_table()
         .unwrap()

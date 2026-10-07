@@ -81,8 +81,9 @@ impl Fixture {
             fs::set_permissions(root.join(TOOL), fs::Permissions::from_mode(0o755)).unwrap();
         }
         let mut document = json!({
+            "schema_version": 2,
             "runtime": {
-                "id": id, "mesh_version": "fixture", "skippy_abi": "fixture",
+                "id": id, "release_version": "fixture", "skippy_abi": "fixture",
                 "platform": {"os": "linux", "arch": "x86_64", "target": "x86_64-unknown-linux-gnu"},
                 "backend": {"kind": "cpu"}, "libraries": [LIBRARY],
                 "files": {(LIBRARY): checksum.clone()}, "tools": {(TOOL): checksum.clone()}

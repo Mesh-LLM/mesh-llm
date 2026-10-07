@@ -36,6 +36,16 @@ mod windows_deps_policy;
 use crate::command::DynResult;
 use std::path::PathBuf;
 
+/// The same regular-file identity used by the import-policy producer.
+pub(crate) fn host_binary_sha256(path: &std::path::Path) -> Result<String, String> {
+    host_dependencies::binary_sha256(path)
+}
+
+/// Reapply the owning neutral-host import policy when admitting a producer report.
+pub(crate) fn rejected_host_imports(imports: &[String]) -> Vec<String> {
+    forbidden::forbidden(imports)
+}
+
 /// A `native` subcommand.
 #[derive(Clone, Copy)]
 pub(crate) enum NativeCommand {

@@ -11,7 +11,8 @@ fn actual_smoke_case_wrapper_consumes_typed_status_and_per_mode_report_without_m
         let scratch = tempfile::tempdir().unwrap();
         let root = scratch.path().canonicalize().unwrap();
         let source = fs::read_to_string(
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scripts/skippy-system-one-smoke.sh"),
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../skippy/scripts/skippy-system-one-smoke.sh"),
         )
         .unwrap();
         let function = source

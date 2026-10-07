@@ -1,6 +1,6 @@
 use super::other_shard;
 use super::python_shard;
-use super::scan::Candidate;
+use super::scan::{self, Candidate};
 use super::script_source_calls;
 use super::shard_rows::{GithubMember, Group, Member, ScriptShard, Shard};
 use super::test_shard;
@@ -163,38 +163,36 @@ fn validate_shard(
     }
 }
 
+fn in_shard(name: &str, path: &str) -> bool {
+    match name {
+        "github-edges.json" => {
+            path.starts_with(".github/") && (path.ends_with(".yml") || path.ends_with(".yaml"))
+        }
+        "script-edges.json" => {
+            path == "Justfile"
+                || path.starts_with("just/")
+                || scan::is_script(path) && !scan::is_script_test(path)
+                || path == "tools/skippy-stage-rewriter/CMakeLists.txt"
+        }
+        "test-edges.json" => scan::is_script_test(path),
+        "other-edges.json" => {
+            !path.starts_with(".github/")
+                && path != "Justfile"
+                && !path.starts_with("just/")
+                && !scan::is_script(path)
+                && path != "tools/skippy-stage-rewriter/CMakeLists.txt"
+        }
+        _ => unreachable!("closed shard list"),
+    }
+}
+
 pub(super) fn check_shards(root: &Path, observed: &[Candidate]) -> DynResult<BTreeSet<String>> {
     for name in SHARDS {
         let path = root.join("ci/automation-migration").join(name);
         let text = fs::read_to_string(&path)?;
         let subset = observed
             .iter()
-            .filter(|row| match name {
-                "github-edges.json" => {
-                    row.path.starts_with(".github/")
-                        && (row.path.ends_with(".yml") || row.path.ends_with(".yaml"))
-                }
-                "script-edges.json" => {
-                    row.path == "Justfile"
-                        || row.path.starts_with("just/")
-                        || row.path.starts_with("scripts/") && !row.path.ends_with(".py")
-                        || row.path == "tools/skippy-stage-rewriter/CMakeLists.txt"
-                        || row.path.starts_with("scripts/")
-                            && row.path.ends_with(".py")
-                            && !row.path.starts_with("scripts/tests/")
-                }
-                "test-edges.json" => {
-                    row.path.starts_with("scripts/tests/") && row.path.ends_with(".py")
-                }
-                "other-edges.json" => {
-                    !row.path.starts_with(".github/")
-                        && row.path != "Justfile"
-                        && !row.path.starts_with("just/")
-                        && !row.path.starts_with("scripts/")
-                        && row.path != "tools/skippy-stage-rewriter/CMakeLists.txt"
-                }
-                _ => unreachable!("closed shard list"),
-            })
+            .filter(|row| in_shard(name, &row.path))
             .cloned()
             .collect::<Vec<_>>();
         if name == "other-edges.json" {
@@ -204,4 +202,29 @@ pub(super) fn check_shards(root: &Path, observed: &[Candidate]) -> DynResult<BTr
         }
     }
     Ok(observed.iter().map(|row| row.id.clone()).collect())
+}
+
+#[cfg(test)]
+mod product_routing_tests {
+    use super::*;
+    #[test]
+    fn product_sources_have_exactly_one_owning_shard() {
+        for (path, expected) in [
+            ("scripts/fixture.sh", "script-edges.json"),
+            ("mesh/scripts/fixture.py", "script-edges.json"),
+            ("skippy/scripts/fixture.sh", "script-edges.json"),
+            ("scripts/tests/fixture.py", "test-edges.json"),
+            ("mesh/scripts/tests/fixture.py", "test-edges.json"),
+            ("skippy/scripts/tests/fixture.py", "test-edges.json"),
+            ("mesh/evals/fixture.py", "other-edges.json"),
+            ("skippy/evals/fixture.sh", "other-edges.json"),
+            (".github/workflows/fixture.yml", "github-edges.json"),
+        ] {
+            let owners = SHARDS
+                .into_iter()
+                .filter(|name| in_shard(name, path))
+                .collect::<Vec<_>>();
+            assert_eq!(owners, [expected], "{path}");
+        }
+    }
 }

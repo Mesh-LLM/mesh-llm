@@ -167,11 +167,21 @@ a branch moving later cannot change the selected source for that run.
 `llama-canary-family-pass.yml` owns the reusable build → family matrix → hosted
 aggregate. The protected controller prepares automation and invokes `canary-receipts build`
 with frozen controller/selected revisions, pass identity, budgets and previous-package admission.
+Resumed repairs admit candidate-only feedback from the exact preceding pass,
+retain its immutable evidence snapshot throughout the wrapper, and render a
+bounded native summary for the repair prompt. Independent verification remains
+feedback-free. Cached Linux runtime admission checks the planned backend and
+exact target on every directory/archive input before native probes.
+Native aggregation and reconciliation bind run/controller/source and family
+job results, then export verified classified feedback. Retry rows overlay only
+controller placement fields over admitted source rows. Each attempt selector
+and the final selector prepare the frozen controller with both cache authorities
+disabled before invoking native selection.
 Its bounded process owner retains redacted logs and owns the repair heartbeat tree.
 The retained repair wrapper performs prepare, manifest-policy, full native and Rust
 builds, generated-family validation, smoke, and split-roster checks. It validates
 the immutable HF cache before compilation and exports a candidate Git bundle,
-one-family-per-shard plan, four arm64 certification binaries, a prebuilt
+one-family-per-shard plan, five arm64 certification binaries, a prebuilt
 multimodal library-test executable, and the run-scoped CPU workload oracle
 closure built by `just skippy-workload-oracles-build`. Static Metal resources
 are embedded; an unpackaged non-system dylib makes the handoff fail. SHA-256
@@ -807,7 +817,8 @@ boundary.
 - `prepare-skippy-cli-input`: one backend-neutral standalone Skippy CLI and
   checksum per platform host slice, built before the MeshLLM host. PR/main CI
   publishes `ci-skippy-cli-<platform>-<architecture>` once per platform;
-  Unix and Windows producers verify host imports before checksumming and retain
+  Unix and Windows producers use Rust `native verify-host-dependencies` before
+  checksumming and retain
   `host-imports.json`; release publishes separate versioned CLI archives from the
   same producer, verifies the report matches the executable SHA-256, and includes
   it in the archive.
@@ -1343,13 +1354,13 @@ Release version propagation discovers both relocated crate trees, including
 versioned local dependencies. The compiler seed warmer uses the resolved UI
 placeholder directory. Neither change expands runner or cache authority.
 
-Product script test implementations now live in `mesh/scripts/tests/` and
-`skippy/scripts/tests/`. Existing `scripts/tests/test_*.py` entrypoints delegate
-through `product_test_loader.py`, preserving the same unittest discovery and
-CI gates. Cross-workspace planner and contract tests stay at root. The Skippy
-rewriter and recipe fixtures live under its existing `scripts/` ownership
-pattern; deployment assets live under `mesh/deploy/`. Protected catalogs and
-required checks are unchanged.
+Superseded generic Python script tests and their root forwarding loader are
+retired after their native owning contract tests pass. The canonical optional
+trajectory reader constructor remains at
+`mesh/scripts/tests/test_agentic_trajectory_manifest.py`, executed directly by
+its existing isolated pinned recipe. The native contract roster selects the replacement Rust tests. The Skippy rewriter and recipe fixtures live under its existing
+`scripts/` ownership pattern; deployment assets live under `mesh/deploy/`.
+Protected catalogs and required checks are unchanged.
 
 The dormant `docker-precheck.yml` reusable validates the relocated product
 crate/script COPY roots and Mesh entrypoint path. It remains unreferenced;
@@ -1399,10 +1410,11 @@ execution budgets two complete weight copies plus 25% and 2 GiB per process.
 These are explicit admission estimates for the current short-context harness,
 not measured peak guarantees; changes to concurrency/context require review.
 
-The worker recomputes placement from the digest-verified plan, waits for one
+Native `automation canary-receipts certify` workers recompute placement from the
+digest-verified plan, wait for one
 pre-provisioned cross-account physical-host lock in the root-owned
-`/Library/Application Support/MeshLLM/locks` directory, checks actual physical capacity and
-available memory, and polls availability once per second while running the battery.
+`/Library/Application Support/MeshLLM/locks` directory, check actual physical capacity and
+available memory, and poll availability once per second while running the battery.
 Expected contention between runner services on one machine is serialized rather
 than reported as a family failure; the evidence records whether and how long the
 worker waited. Available memory is macOS free + inactive + speculative pages;

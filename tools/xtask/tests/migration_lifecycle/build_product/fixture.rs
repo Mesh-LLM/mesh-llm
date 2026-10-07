@@ -40,6 +40,36 @@ impl Fixture {
                 &source(&format!("scripts/{name}")),
             );
         }
+        for name in [
+            "build-host.sh",
+            "build-release.sh",
+            "build-development-product.sh",
+            "build-linux.sh",
+        ] {
+            fixture.write(
+                &format!("mesh/scripts/{name}"),
+                &source(&format!("mesh/scripts/{name}")),
+            );
+        }
+        fixture.write(
+            "skippy/scripts/build-development-product.sh",
+            &source("skippy/scripts/build-development-product.sh"),
+        );
+        let just = std::env::split_paths(&std::env::var_os("PATH").unwrap())
+            .map(|directory| directory.join("just"))
+            .find(|path| path.is_file())
+            .unwrap()
+            .canonicalize()
+            .unwrap();
+        std::os::unix::fs::symlink(just, fixture.root().join("bin/just")).unwrap();
+        let recipes = [
+            ("just/skippy.just", "skippy"),
+            ("just/skippy.just", "skippy-cli-build"),
+            ("just/mesh.just", "mesh"),
+        ]
+        .map(|(path, name)| recipe(path, name))
+        .join("\n\n");
+        fixture.write("Justfile", &recipes);
         fixture.write("bin/uname", "#!/bin/sh\nprintf 'Linux\\n'\n");
         fixture.write("bin/git", "#!/bin/sh\nset -eu\nif [ \"$1\" = -C ]; then shift 2; fi\ncase \"$1\" in rev-parse) printf 'abc123\\n';; status) :;; *) exit 81;; esac\n");
         fixture.write(
@@ -49,6 +79,12 @@ set -eu
 case "$1" in
   pkgid) printf '%s\n' "$@" > "$BUILD_FIXTURE_ROOT/pkgid.args"; printf 'file:///fixture/mesh-llm#0.68.0\n' ;;
   build)
+    case " $* " in
+      *' -p skippy-cli '*)
+        printf '%s\n' "$@" > "$BUILD_FIXTURE_ROOT/skippy-cargo.args"
+        printf 'cli\n' >> "$BUILD_FIXTURE_ROOT/events"
+        exit 0 ;;
+    esac
     printf '%s\n' "$@" > "$BUILD_FIXTURE_ROOT/cargo.args"
     printf '%s\n' "${MESH_LLM_BUILD_VERSION:-<unset>}" > "$BUILD_FIXTURE_ROOT/version"
     printf 'cargo\n' >> "$BUILD_FIXTURE_ROOT/events"
@@ -140,4 +176,22 @@ esac
         );
         result
     }
+}
+
+// Keep actual Unix recipe bodies; only their compiler and package leaves are inert.
+fn recipe(path: &str, name: &str) -> String {
+    let text = source(path);
+    let lines = text.lines().collect::<Vec<_>>();
+    let index = lines
+        .iter()
+        .position(|line| {
+            line.starts_with(&format!("{name} ")) || line.starts_with(&format!("{name}:"))
+        })
+        .unwrap();
+    assert_eq!(lines[index - 1], "[unix]");
+    let end = lines[index..]
+        .iter()
+        .position(|line| line.is_empty())
+        .map_or(lines.len(), |length| index + length);
+    lines[index - 1..end].join("\n")
 }

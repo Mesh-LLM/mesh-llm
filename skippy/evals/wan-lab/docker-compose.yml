@@ -14,6 +14,7 @@ x-stage-env: &stage-env
   CACHE_TYPE_V: ${CACHE_TYPE_V:-f16}
   LOAD_MODE: ${LOAD_MODE:-layer-package}
   HF_CACHE_ROOT: /hf-cache
+  HF_HUB_CACHE: /hf-cache
   HF_PACKAGE_SOURCE: host-cache
   METRICS_OTLP_GRPC: http://metrics:14317
   TELEMETRY_LEVEL: ${TELEMETRY_LEVEL:-debug}

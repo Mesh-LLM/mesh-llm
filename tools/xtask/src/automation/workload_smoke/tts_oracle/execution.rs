@@ -106,7 +106,7 @@ fn execute(
                     .to_string_lossy()
                     .into_owned(),
                 "-p".into(),
-                "skippy-server".into(),
+                "skippy-serving".into(),
                 "--lib".into(),
                 TEST.into(),
                 "--".into(),

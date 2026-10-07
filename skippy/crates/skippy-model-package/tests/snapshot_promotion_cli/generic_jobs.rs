@@ -1,7 +1,7 @@
 //! Actual facade executable: read-only preparation and pre-network refusal only.
 #![cfg(unix)]
-use skippy_model_package::jobs::{HardwareFlavor, plan_cpu_job_from_hardware};
 use serde_json::{Value, json};
+use skippy_model_package::jobs::{HardwareFlavor, plan_cpu_job_from_hardware};
 use std::{
     path::Path,
     process::{Command, Stdio},

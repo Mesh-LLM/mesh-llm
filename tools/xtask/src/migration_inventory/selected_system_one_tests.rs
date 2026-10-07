@@ -4,8 +4,8 @@ use super::{
 use crate::command::DynResult;
 use std::fs;
 
-const CALLER: &str = "scripts/skippy-system-one-smoke.sh";
-const SOURCE: &str = include_str!("../../../../scripts/skippy-system-one-smoke.sh");
+const CALLER: &str = "skippy/scripts/skippy-system-one-smoke.sh";
+const SOURCE: &str = include_str!("../../../../skippy/scripts/skippy-system-one-smoke.sh");
 
 fn records(source: &str) -> DynResult<Vec<super::SelectedProcessCall>> {
     let lines = source.lines().collect::<Vec<_>>();
@@ -28,7 +28,7 @@ fn records(source: &str) -> DynResult<Vec<super::SelectedProcessCall>> {
 #[test]
 fn system_one_serializers_require_each_actual_typed_launch_and_owner() -> DynResult<()> {
     let root = crate::command::unique_temp_dir("system-one-serializer-binding");
-    fs::create_dir_all(root.join("scripts"))?;
+    fs::create_dir_all(root.join("skippy/scripts"))?;
     fs::write(root.join(CALLER), SOURCE)?;
     let bindings = records(SOURCE)?;
     assert_eq!(bindings.len(), 6); // port, two resolvers, stage, mixed driver, outcome.
@@ -52,7 +52,7 @@ fn system_one_serializers_require_each_actual_typed_launch_and_owner() -> DynRes
 fn system_one_serializers_reject_rebound_helpers_and_conditional_native_driver_drift()
 -> DynResult<()> {
     let root = crate::command::unique_temp_dir("system-one-serializer-shape");
-    fs::create_dir_all(root.join("scripts"))?;
+    fs::create_dir_all(root.join("skippy/scripts"))?;
     let bindings = records(SOURCE)?;
     for (old, new) in [
         ("automation local-ports 1", "automation local-ports 2"),

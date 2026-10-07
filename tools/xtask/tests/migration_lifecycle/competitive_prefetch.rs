@@ -20,7 +20,7 @@ fn actual_prefetch_cli_native_reader_refusal_precedes_any_acquisition_and_preser
         .parent()
         .unwrap()
         .to_owned();
-    let config = repo.join("evals/skippy-competitive-benchmark.json");
+    let config = repo.join("skippy/evals/skippy-competitive-benchmark.json");
     let manifest = repo.join("ci/model-artifacts/manifests/competitive-benchmark.json");
     let original_config = std::fs::read(&config).unwrap();
     let original_manifest = std::fs::read(&manifest).unwrap();

@@ -28,7 +28,7 @@ pub fn lock_cache(root: &Path) -> Result<File> {
     Ok(file)
 }
 
-fn model_folder(repo: &str) -> Result<String> {
+pub(super) fn model_folder(repo: &str) -> Result<String> {
     let parts = repo.split('/').collect::<Vec<_>>();
     ensure!(
         (1..=2).contains(&parts.len()),

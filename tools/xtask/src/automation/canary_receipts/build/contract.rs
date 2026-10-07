@@ -1,3 +1,4 @@
+use crate::automation::canary_receipts::pass_identity::PassId;
 use crate::command::DynResult;
 use serde::Deserialize;
 use std::path::PathBuf;
@@ -42,6 +43,7 @@ pub(super) struct Input {
     pub(super) run_id: String,
     pub(super) run_attempt: String,
     pub(super) previous: Option<Previous>,
+    pub(super) previous_feedback: Option<PathBuf>,
     pub(super) evidence: PathBuf,
     pub(super) export: PathBuf,
     pub(super) agent_timeout_seconds: u64,
@@ -71,13 +73,7 @@ impl Input {
         } else if self.selected_revision != self.controller_revision {
             return Err("ordinary canary source must match the frozen controller revision".into());
         }
-        if ![
-            "repair-1", "repair-2", "repair-3", "verify-1", "verify-2", "verify-3",
-        ]
-        .contains(&self.pass_id.as_str())
-        {
-            return Err("invalid bounded canary pass identity".into());
-        }
+        let pass = PassId::parse(&self.pass_id)?;
         crate::automation::canary_receipts::RunAttempt::try_from(self.run_attempt.clone())?;
         if self.run_id.is_empty() || !self.run_id.bytes().all(|byte| byte.is_ascii_digit()) {
             return Err("invalid canary workflow run identity".into());
@@ -87,14 +83,21 @@ impl Input {
         {
             return Err("canary coding and verification budgets exceed approved ceilings".into());
         }
-        match (self.mode, &self.previous) {
-            (Mode::Verify, None) => {
-                return Err("independent verification requires a candidate".into());
+        let first = matches!(pass, PassId::Repair1);
+        let valid = match self.mode {
+            Mode::Repair if first => self.previous.is_none() && self.previous_feedback.is_none(),
+            Mode::Repair => {
+                pass.is_repair() && self.previous.is_some() && self.previous_feedback.is_some()
             }
-            (Mode::Pinned | Mode::Repair, Some(_)) => {
-                return Err("previous candidate is only valid for independent verification".into());
+            Mode::Verify => {
+                !pass.is_repair() && self.previous.is_some() && self.previous_feedback.is_none()
             }
-            _ => {}
+            Mode::Pinned => first && self.previous.is_none() && self.previous_feedback.is_none(),
+        };
+        if !valid {
+            return Err(
+                "canary mode/pass requires its exact candidate and feedback dependencies".into(),
+            );
         }
         for checkout in [&mut self.controller_root, &mut self.source_root] {
             if !checkout.is_absolute() || !checkout.is_dir() {

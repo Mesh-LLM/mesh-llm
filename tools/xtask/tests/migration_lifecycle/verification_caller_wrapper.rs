@@ -4,18 +4,18 @@ use std::time::Instant;
 
 fn policy_source(root: &Path) {
     for dir in [
-        "third_party/llama.cpp/patches/model_support",
-        "third_party/llama.cpp/patches/generated",
+        "skippy/llama_cpp/patches/model_support",
+        "skippy/llama_cpp/patches/generated",
         "ci/llama-canary",
-        "docs/skippy",
-        "crates/skippy-ffi/src",
-        "crates/mesh-llm-host-runtime/src/inference/skippy",
+        "skippy/docs",
+        "skippy/crates/skippy-ffi/src",
+        "skippy/crates/skippy-api/src",
     ] {
         fs::create_dir_all(root.join(dir)).unwrap();
     }
     fs::write(root.join(".gitignore"), ".deps/\ntarget/\n").unwrap();
     fs::write(
-        root.join("third_party/llama.cpp/patches/0001-fixture.patch"),
+        root.join("skippy/llama_cpp/patches/0001-fixture.patch"),
         "fixture",
     )
     .unwrap();
@@ -24,29 +24,29 @@ fn policy_source(root: &Path) {
         ("generated", "0001-family-fixture.patch"),
     ] {
         fs::write(
-            root.join(format!("third_party/llama.cpp/patches/{lane}/series")),
+            root.join(format!("skippy/llama_cpp/patches/{lane}/series")),
             format!("{name}\n"),
         )
         .unwrap();
         fs::write(
-            root.join(format!("third_party/llama.cpp/patches/{lane}/{name}")),
+            root.join(format!("skippy/llama_cpp/patches/{lane}/{name}")),
             "fixture",
         )
         .unwrap();
     }
     fs::write(
-        root.join("third_party/llama.cpp/upstream.txt"),
+        root.join("skippy/llama_cpp/upstream.txt"),
         format!("{}\n", "a".repeat(40)),
     )
     .unwrap();
-    fs::write(root.join("crates/skippy-ffi/src/lib.rs"), "pub const ABI_VERSION_MAJOR: u32 = 1;\npub const ABI_VERSION_MINOR: u32 = 2;\npub const ABI_VERSION_PATCH: u32 = 3;\n").unwrap();
+    fs::write(root.join("skippy/crates/skippy-ffi/src/lib.rs"), "pub const ABI_VERSION_MAJOR: u32 = 1;\npub const ABI_VERSION_MINOR: u32 = 2;\npub const ABI_VERSION_PATCH: u32 = 3;\n").unwrap();
     let family = json!({"policy":{"profiles":{"full":{"status":"certified","required_lanes":["single-step","chain","state-handoff"]}}},"models":[{"family":"fixture","class":"causal_generation","architecture":"fixture","profile":"full","resources":{"estimated_model_bytes":1}}]});
     fs::write(
         root.join("ci/llama-canary/family-certified.json"),
         serde_json::to_vec(&family).unwrap(),
     )
     .unwrap();
-    fs::write(root.join("docs/skippy/llama-parity-candidates.json"), serde_json::to_vec(&json!({"candidates":[{"llama_model":"fixture","family":"fixture","status":"needs_candidate"}]})).unwrap()).unwrap();
+    fs::write(root.join("skippy/docs/llama-parity-candidates.json"), serde_json::to_vec(&json!({"candidates":[{"llama_model":"fixture","family":"fixture","status":"needs_candidate"}]})).unwrap()).unwrap();
 }
 fn prepared_source(root: &Path) {
     let native = root.join(".deps/llama.cpp");
@@ -246,7 +246,7 @@ fn copied_real_verify_content_wrappers_admit_all_three_with_advanced_controller_
     );
     let roster = f
         .work
-        .join("candidate/crates/mesh-llm-host-runtime/src/inference/skippy/split-certified.json");
+        .join("candidate/skippy/crates/skippy-api/src/split-certified.json");
     let before = fs::read(&roster).unwrap();
     for (verb, status) in [
         (
@@ -453,7 +453,7 @@ fn copied_real_final_bundle_uses_candidate_base_when_controller_contains_candida
     let finalization = caller_function(&source, "finalize_certified_tree");
     let pin = caller_function(&source, "verify_repair_pin");
     let action = format!(
-        "cd \"$ROOT\"\nPIN_FILE=\"$ROOT/third_party/llama.cpp/upstream.txt\"\nUPSTREAM_SHA={}\nBRANCH=llama-canary/repair-fixture\nBUNDLE=\"$RUNNER_TEMP/final.bundle\"\nPR_BODY=\"$RUNNER_TEMP/body.md\"\nGITHUB_OUTPUT=\"$RUNNER_TEMP/final.outputs\"\nwrite_pr_body() {{ printf 'finite body\\n' > \"$PR_BODY\"; }}\n{pin}\n{finalization}\nfinalize_certified_tree\n",
+        "cd \"$ROOT\"\nPIN_FILE=\"$ROOT/skippy/llama_cpp/upstream.txt\"\nUPSTREAM_SHA={}\nBRANCH=llama-canary/repair-fixture\nBUNDLE=\"$RUNNER_TEMP/final.bundle\"\nPR_BODY=\"$RUNNER_TEMP/body.md\"\nGITHUB_OUTPUT=\"$RUNNER_TEMP/final.outputs\"\nwrite_pr_body() {{ printf 'finite body\\n' > \"$PR_BODY\"; }}\n{pin}\n{finalization}\nfinalize_certified_tree\n",
         "a".repeat(40)
     );
     let report = fixture.logged(&action);

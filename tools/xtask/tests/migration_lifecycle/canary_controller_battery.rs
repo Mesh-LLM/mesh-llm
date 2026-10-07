@@ -94,8 +94,10 @@ fn selected_source(root: &Path, source: &Path) {
         "Cargo.toml",
         "tools/xtask/Cargo.toml",
         "scripts/skippy-family-battery.sh",
+        "skippy/scripts/skippy-family-battery.sh",
         "ci/llama-canary/family-certified.json",
     ] {
+        fs::create_dir_all(source.join(relative).parent().unwrap()).unwrap();
         fs::copy(root.join(relative), source.join(relative)).unwrap();
     }
     for entry in fs::read_dir(root.join("scripts/lib")).unwrap() {

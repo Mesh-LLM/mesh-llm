@@ -11,6 +11,9 @@ use tokio::{
 pub(super) fn selected(args: &[String]) -> bool {
     args.iter()
         .any(|arg| arg == "--pp" || arg == "serve-openai")
+        || (args.first().is_some_and(|arg| arg == "serve")
+            && args.iter().any(|arg| arg == "--model-id")
+            && !args.iter().any(|arg| arg == "--console"))
         || (args.iter().any(|arg| arg == "--port") && !args.iter().any(|arg| arg == "--console"))
 }
 fn value<'a>(args: &'a [String], flag: &str) -> Result<&'a str, Box<dyn std::error::Error>> {
@@ -23,7 +26,10 @@ pub(super) fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     if args.iter().any(|arg| arg == "--pp") {
         return benchy(args);
     }
-    let (port, model, root) = if args.iter().any(|arg| arg == "serve-openai") {
+    let (port, model, root) = if args
+        .iter()
+        .any(|arg| arg == "serve-openai" || arg == "serve")
+    {
         let stage: Value = serde_json::from_slice(&std::fs::read(value(args, "--config")?)?)?;
         let root = Path::new(stage["model_path"].as_str().ok_or("model path")?)
             .parent()

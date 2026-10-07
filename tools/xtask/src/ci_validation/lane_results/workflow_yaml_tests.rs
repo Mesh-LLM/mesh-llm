@@ -79,3 +79,21 @@ fn workflow_yaml_same_keys_in_distinct_owners_and_scalar_bodies_remain_valid() {
         Some("Second")
     );
 }
+
+#[test]
+fn resolved_workflow_aliases_bind_actual_definitions_and_reject_unknown_or_duplicate() {
+    let source =
+        "first: &safe\n  value: valid\nforged: &target\n  value: forged\nconsumer: *target\n";
+    let tree = parse_resolved_aliases(source).unwrap();
+    assert_eq!(tree.get("consumer"), tree.get("forged"));
+    assert_ne!(tree.get("consumer"), tree.get("first"));
+    assert!(parse_resolved_aliases("consumer: *unknown\n").is_err());
+    assert!(parse_resolved_aliases("first: &same {}\nsecond: &same {}\n").is_err());
+    assert_eq!(
+        parse("consumer: *unknown\n")
+            .unwrap()
+            .get("consumer")
+            .and_then(Node::text),
+        Some("*unknown")
+    );
+}

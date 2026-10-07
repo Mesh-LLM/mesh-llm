@@ -4,7 +4,7 @@ use crate::command::DynResult;
 use std::collections::BTreeMap;
 
 const CLIENT: &str = "@anthropic-ai/claude-code@2.1.273";
-const AFFECTED: &str = "${{ contains(steps.changes.outputs.affected_crates, 'openai-frontend') || contains(steps.changes.outputs.affected_crates, 'mesh-llm-host-runtime') }}";
+const AFFECTED: &str = "${{ contains(steps.changes.outputs.affected_crates, 'skippy-inference-api') || contains(steps.changes.outputs.affected_crates, 'mesh-llm-host-runtime') }}";
 const PR_TEST: &str = "claude_cli_executes_read_tool_through_host_ingress";
 const LIVE_TEST: &str = "claude_cli_round_trips_through_host_ingress_and_live_claude_model";
 
@@ -62,7 +62,9 @@ fn execution(step: &Node, feature: &str, filter: &str, protocol: bool) -> DynRes
         .count();
     let protocols = observed
         .iter()
-        .filter(|call| call.package.as_deref() == Some("openai-frontend") && call.filter.is_none())
+        .filter(|call| {
+            call.package.as_deref() == Some("skippy-inference-api") && call.filter.is_none()
+        })
         .count();
     if client != 1
         || protocols != usize::from(protocol)

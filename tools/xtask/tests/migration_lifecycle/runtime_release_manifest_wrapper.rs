@@ -76,10 +76,18 @@ impl Fixture {
             .unwrap();
         for relative in [
             "scripts/generate-native-runtime-release-manifest.sh",
+            "skippy/scripts/generate-native-runtime-release-manifest.sh",
+            "skippy/crates/skippy-native-runtime/RUNTIME_VERSION",
             "scripts/lib/automation.sh",
         ] {
+            fs::create_dir_all(root.join(relative).parent().unwrap()).unwrap();
             fs::copy(source.join(relative), root.join(relative)).unwrap();
         }
+        fs::write(
+            root.join("Cargo.toml"),
+            "[workspace.package]\nversion = \"99.0.0\"\n",
+        )
+        .unwrap();
         executable(
             &root.join("bin/owner"),
             "printf '%s\\t' \"$@\" >> \"$OWNER_LOG\"\nprintf '\\n' >> \"$OWNER_LOG\"\nexec \"$REAL_XTASK\" \"$@\"",
@@ -96,13 +104,13 @@ impl Fixture {
             root,
             archive: archive_path,
         };
-        fixture.package(attack);
+        fixture.package(attack, "0.68.0");
         fixture
     }
-    fn package(&self, attack: &str) {
+    fn package(&self, attack: &str, version: &str) {
         let library = b"inert portable runtime library".to_vec();
         let digest = sha(&library);
-        let mut manifest = json!({"runtime":{"id":ID,"mesh_version":"0.68.0","skippy_abi":"0.1.25","platform":{"os":"linux","arch":"aarch64","target":"aarch64-unknown-linux-gnu"},"backend":{"kind":"cpu"},"rank":0,"libraries":["lib/runtime.bin"],"files":{"lib/runtime.bin":digest}},"build":{"primary_library":"lib/runtime.bin","library_sha256":digest}});
+        let mut manifest = json!({"schema_version":2,"runtime":{"id":ID,"release_version":version,"skippy_abi":"0.1.25","platform":{"os":"linux","arch":"aarch64","target":"aarch64-unknown-linux-gnu"},"backend":{"kind":"cpu"},"rank":0,"libraries":["lib/runtime.bin"],"files":{"lib/runtime.bin":digest}},"build":{"primary_library":"lib/runtime.bin","library_sha256":digest}});
         if attack == "malformed-manifest" {
             manifest["runtime"]["files"] = json!([]);
         }
@@ -142,6 +150,9 @@ impl Fixture {
         fs::write(self.root.join(format!("{name}.sha256")), text).unwrap();
     }
     fn invoke(&self, tag: &str) -> process::RawProcessReport {
+        self.invoke_version(tag, Some("0.68.0"))
+    }
+    fn invoke_version(&self, tag: &str, version: Option<&str>) -> process::RawProcessReport {
         let environment: BTreeMap<_, _> = [
             (
                 "PATH",
@@ -166,26 +177,27 @@ impl Fixture {
         .into_iter()
         .map(|(key, value)| (key.into(), Value::Public(value.into())))
         .collect();
+        let mut arguments = vec![
+            self.root
+                .join("scripts/generate-native-runtime-release-manifest.sh")
+                .into_os_string(),
+            "--tag".into(),
+            tag.into(),
+            "--out".into(),
+            self.root.join("native-runtimes.json").into_os_string(),
+            "--repo".into(),
+            "Fixture/runtime".into(),
+        ];
+        if let Some(version) = version {
+            arguments.extend(["--runtime-version".into(), version.into()]);
+        }
+        arguments.push(self.archive.clone().into_os_string());
         let result = process::supervise_raw(
             &ProcessSpec {
                 executable: "/bin/bash".into(),
                 cwd: self.root.clone(),
                 environment,
-                arguments: vec![
-                    self.root
-                        .join("scripts/generate-native-runtime-release-manifest.sh")
-                        .into_os_string(),
-                    "--tag".into(),
-                    tag.into(),
-                    "--out".into(),
-                    self.root.join("native-runtimes.json").into_os_string(),
-                    "--repo".into(),
-                    "Fixture/runtime".into(),
-                    self.archive.clone().into_os_string(),
-                ]
-                .into_iter()
-                .map(Value::Public)
-                .collect(),
+                arguments: arguments.into_iter().map(Value::Public).collect(),
             },
             &Limits {
                 execution: Duration::from_secs(8),
@@ -226,7 +238,8 @@ fn release_wrapper_publishes_one_document_after_actual_portable_admission() {
     let document: serde_json::Value =
         serde_json::from_slice(&fs::read(fixture.root.join("native-runtimes.json")).unwrap())
             .unwrap();
-    assert_eq!(document["mesh_version"], "0.68.0");
+    assert_eq!(document["release_version"], "0.68.0");
+    assert!(document.get("mesh_version").is_none());
     assert_eq!(document["artifacts"].as_array().unwrap().len(), 1);
     assert_eq!(document["artifacts"][0]["id"], ID);
     assert_eq!(
@@ -287,16 +300,56 @@ fn release_wrapper_rejects_escape_sibling_and_malformed_runtime_before_publicati
     }
 }
 #[test]
-fn release_wrapper_rejects_tag_mismatch_without_overwriting_previous_publication() {
-    let fixture = Fixture::new("");
-    let out = fixture.root.join("native-runtimes.json");
-    fs::write(&out, b"previous immutable publication").unwrap();
-    let result = fixture.invoke("v0.69.0-rc1");
-    assert!(!result.process.success());
-    assert_eq!(fs::read(out).unwrap(), b"previous immutable publication");
-    assert_eq!(
-        fixture.calls().len(),
-        2,
-        "valid portable input reaches actual tag admission"
-    );
+fn release_wrapper_accepts_independent_tag_with_explicit_or_default_runtime_version() {
+    for explicit in [false, true] {
+        let fixture = Fixture::new("");
+        let owned = fs::read_to_string(
+            fixture
+                .root
+                .join("skippy/crates/skippy-native-runtime/RUNTIME_VERSION"),
+        )
+        .unwrap();
+        let version = if explicit { "0.68.0" } else { owned.trim() };
+        fixture.package("", version);
+        let result = fixture.invoke_version("product-test-v99.0.0", explicit.then_some(version));
+        assert!(result.process.success(), "{:?}", result.process);
+        let document: serde_json::Value =
+            serde_json::from_slice(&fs::read(fixture.root.join("native-runtimes.json")).unwrap())
+                .unwrap();
+        assert_eq!(document["release_version"], version);
+        assert_eq!(document["artifacts"][0]["release_version"], version);
+        assert_eq!(
+            document["artifacts"][0]["url"],
+            format!(
+                "https://github.com/Fixture/runtime/releases/download/product-test-v99.0.0/{ID}.tar.gz"
+            )
+        );
+        assert_eq!(fixture.calls().len(), 2);
+    }
+}
+#[test]
+fn release_wrapper_rejects_requested_runtime_mismatch_without_publication() {
+    for previous in [false, true] {
+        let fixture = Fixture::new("");
+        let out = fixture.root.join("native-runtimes.json");
+        if previous {
+            fs::write(&out, b"previous immutable publication").unwrap();
+        }
+        let result = fixture.invoke_version("product-test-v99.0.0", Some("0.69.0-rc1"));
+        assert!(!result.process.success());
+        assert!(
+            String::from_utf8_lossy(result.stderr.as_ref().unwrap().as_bytes())
+                .contains("does not match requested runtime release")
+        );
+        if previous {
+            assert_eq!(fs::read(out).unwrap(), b"previous immutable publication");
+        } else {
+            assert!(!out.exists());
+        }
+        assert_eq!(
+            fixture.calls().len(),
+            2,
+            "valid portable input reaches actual runtime admission"
+        );
+    }
 }

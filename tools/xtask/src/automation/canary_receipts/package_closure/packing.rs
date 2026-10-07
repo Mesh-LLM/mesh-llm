@@ -6,10 +6,7 @@ use super::{
     source, workload,
 };
 use crate::{
-    automation::{
-        canary_receipts::{Digest, PackageVerification, verify_package},
-        canary_source_plan,
-    },
+    automation::canary_receipts::{Digest, PackageVerification, placement, verify_package},
     command::DynResult,
 };
 use serde::Deserialize;
@@ -133,7 +130,7 @@ pub(super) fn pack(input: &Input) -> DynResult<serde_json::Value> {
     }
     input.context.validate()?;
     process::check()?;
-    let matrix = serde_json::to_value(canary_source_plan::placement::project(&plan)?)?;
+    let matrix = serde_json::to_value(placement::project(&plan)?)?;
     stage.publish(&destination)?;
     Ok(
         serde_json::json!({"matrix":matrix,"identity_sha256":digest,"candidate":input.candidate,"branch":input.branch,"admitted_identity_sha256":input.admitted_identity_sha256}),

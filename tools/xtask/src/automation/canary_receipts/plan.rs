@@ -1,6 +1,7 @@
 use super::boundary::{ModelClass, Truth, object_last_wins, object_rows_last_wins};
 use super::{Error, ErrorKind, Family};
 use serde::Deserialize;
+use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Debug, Deserialize)]
@@ -51,6 +52,8 @@ struct Shard {
 
 pub(crate) struct SourceFamilyPlan {
     pub(super) models: BTreeMap<Family, FamilyModel>,
+    source_matrix: Vec<Value>,
+    canonical_bytes: Vec<u8>,
 }
 
 impl SourceFamilyPlan {
@@ -117,7 +120,61 @@ impl SourceFamilyPlan {
                 "required lane contract changed",
             ));
         }
-        Ok(Self { models })
+        let source: Value = serde_json::from_slice(bytes)?;
+        let source_matrix = source["github_matrix"]["include"]
+            .as_array()
+            .ok_or_else(|| Error::new(ErrorKind::Plan, "source matrix rows missing"))?
+            .clone();
+        Ok(Self {
+            models,
+            source_matrix,
+            canonical_bytes: bytes.to_vec(),
+        })
+    }
+
+    /// Retain source rows and order, overlaying only controller-owned placement.
+    pub(super) fn retry_matrix(&self, families: &BTreeSet<Family>) -> Result<Value, Error> {
+        for family in families {
+            self.model(family)?;
+        }
+        if families.is_empty() {
+            return Ok(serde_json::json!({"include": []}));
+        }
+        let placements = super::placement::by_family(&self.canonical_bytes)
+            .map_err(|error| Error::new(ErrorKind::Plan, error))?;
+        let mut include = Vec::new();
+        for source in &self.source_matrix {
+            let name = source["families"]
+                .as_str()
+                .ok_or_else(|| Error::new(ErrorKind::Plan, "source row family missing"))?;
+            if !families.iter().any(|family| family.as_str() == name) {
+                continue;
+            }
+            let placement = placements
+                .get(name)
+                .and_then(Value::as_object)
+                .ok_or_else(|| Error::new(ErrorKind::Plan, "retry placement family missing"))?;
+            let mut row = source.clone();
+            let fields = row
+                .as_object_mut()
+                .ok_or_else(|| Error::new(ErrorKind::Plan, "retry row must be an object"))?;
+            for key in super::placement::PLACEMENT_FIELDS {
+                fields.remove(key);
+            }
+            fields.extend(
+                placement
+                    .iter()
+                    .map(|(key, value)| (key.clone(), value.clone())),
+            );
+            include.push(row);
+        }
+        if include.len() != families.len() {
+            return Err(Error::new(
+                ErrorKind::Plan,
+                "retry matrix membership changed",
+            ));
+        }
+        Ok(serde_json::json!({"include": include}))
     }
 
     pub(super) fn model(&self, family: &Family) -> Result<&FamilyModel, Error> {
@@ -126,3 +183,7 @@ impl SourceFamilyPlan {
             .ok_or_else(|| Error::new(ErrorKind::UnplannedFamily, "unplanned family"))
     }
 }
+
+#[cfg(test)]
+#[path = "plan_retry_tests.rs"]
+mod retry_tests;

@@ -127,7 +127,7 @@ pub(super) fn plan(options: &Options, commits: &BTreeMap<String, String>) -> Dyn
 }
 fn dataset(repo: &Path, options: &Options, python: &Path) -> DynResult<Value> {
     let config: Value = serde_json::from_slice(&std::fs::read(
-        repo.join("evals/skippy-competitive-benchmark.json"),
+        repo.join("skippy/evals/skippy-competitive-benchmark.json"),
     )?)?;
     let pin = &config["thoughtworks"]["dataset"];
     Ok(

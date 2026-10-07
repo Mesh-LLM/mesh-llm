@@ -47,8 +47,8 @@ fn package(
         .filter(|v| !v.is_empty())
         .unwrap_or("13");
     inputs(fixture, version, observed_major);
-    let script =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scripts/package-native-runtime.sh");
+    let script = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../skippy/scripts/package-native-runtime.sh");
     let values = [
         ("PACKAGE_SCRIPT", script.to_string_lossy().into_owned()),
         (
@@ -106,6 +106,15 @@ fn emitted(fixture: &Fixture, major: u64) {
     let stage = output.join(&artifact);
     let manifest: serde_json::Value =
         serde_json::from_slice(&fs::read(stage.join("manifest.json")).unwrap()).unwrap();
+    assert_eq!(manifest["schema_version"], 2);
+    let version = fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../skippy/crates/skippy-native-runtime/RUNTIME_VERSION"),
+    )
+    .unwrap();
+    assert_eq!(manifest["runtime"]["release_version"], version.trim());
+    assert!(manifest["runtime"].get("mesh_version").is_none());
+    assert!(manifest["runtime"]["tools"]["tools/skippy-package-builder"].is_string());
     assert_eq!(manifest["runtime"]["backend"]["kind"], "cuda");
     assert_eq!(
         manifest["runtime"]["backend"]["cuda"]["toolkit_major"],

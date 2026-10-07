@@ -27,6 +27,8 @@ mod cache_consumers;
 mod cache_predicate;
 #[path = "ci_runner_cache_contract/consumers.rs"]
 mod consumers;
+#[path = "../src/ci_validation/workflow_guards/cpu_runtime_cache.rs"]
+mod cpu_runtime_cache;
 
 #[path = "../src/ci_validation/workflow_guards/cache_boundaries.rs"]
 mod cache_boundaries;

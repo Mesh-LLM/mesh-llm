@@ -22,21 +22,25 @@ impl Fixture {
     fn new() -> Self {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path().canonicalize().unwrap();
-        fs::create_dir_all(root.join("scripts/lib")).unwrap();
         let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-        for name in ["download-skippy-parity-candidates.sh", "lib/automation.sh"] {
-            fs::copy(
-                repo.join("scripts").join(name),
-                root.join("scripts").join(name),
-            )
-            .unwrap();
+        for name in [
+            "scripts/download-skippy-parity-candidates.sh",
+            "skippy/scripts/download-skippy-parity-candidates.sh",
+            "scripts/lib/automation.sh",
+        ] {
+            let destination = root.join(name);
+            fs::create_dir_all(destination.parent().unwrap()).unwrap();
+            fs::copy(repo.join(name), destination).unwrap();
         }
         let snapshot = root.join("snapshot/nested");
         fs::create_dir_all(&snapshot).unwrap();
         fs::write(snapshot.join("model.gguf"), b"model-bytes").unwrap();
         fs::write(snapshot.join("projector.gguf"), b"projector-bytes").unwrap();
-        let manifest = root.join("candidates.json");
-        let registry = root.join("models.json");
+        let manifest = root.join("skippy/docs/llama-parity-candidates.json");
+        let registry = root.join("ci/model-artifacts/manifests/skippy-parity.json");
+        for path in [&manifest, &registry] {
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+        }
         let hf = root.join("hf");
         fs::write(&hf,"#!/bin/sh\nprintf '%s\\n' \"$@\" >> \"$TRACE\"\nprintf 'path=%s\\n' \"$SNAPSHOT\"\nexit \"${HF_STATUS:-0}\"\n").unwrap();
         fs::set_permissions(&hf, fs::Permissions::from_mode(0o755)).unwrap();

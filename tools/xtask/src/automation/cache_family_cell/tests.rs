@@ -24,6 +24,7 @@ fn owner() -> Owner {
         readiness: None,
         measurement: None,
         input: input(),
+        dialect: crate::automation::skippy_cli_admission::Dialect::Legacy,
         marker: false,
         stopping: false,
     }
@@ -126,6 +127,49 @@ fn cache_cell_failed_http_readiness_cannot_progress_to_measurement() {
         }),
         Action::Reject(_)
     ));
+}
+
+#[test]
+fn cache_cell_final_session_budget_shrinks_workers_without_extending_startup() {
+    let mut owner = owner();
+    let launch = |member, seconds| crate::process::retained::Launch {
+        member,
+        spec: crate::process::ProcessSpec {
+            executable: "/inert-not-launched".into(),
+            arguments: vec![],
+            cwd: "/tmp".into(),
+            environment: std::collections::BTreeMap::new(),
+        },
+        files: crate::process::OutputFiles::default(),
+        readiness_deadline: Duration::from_secs(seconds),
+    };
+    owner.server = Some(launch(MemberId::Seed, 5));
+    owner.readiness = Some(launch(MemberId::WorkerOne, 31));
+    owner.measurement = Some(launch(MemberId::WorkerTwo, 31));
+    let final_session = Duration::from_millis(30_900);
+    owner.bound_session(final_session);
+    assert_eq!(
+        owner.server.as_ref().unwrap().readiness_deadline,
+        Duration::from_secs(5)
+    );
+    assert_eq!(
+        owner.readiness.as_ref().unwrap().readiness_deadline,
+        final_session
+    );
+    assert_eq!(
+        owner.measurement.as_ref().unwrap().readiness_deadline,
+        final_session
+    );
+    // A further reduction can shorten startup; a later larger budget cannot
+    // restore any previously consumed time.
+    owner.bound_session(Duration::from_secs(2));
+    owner.bound_session(Duration::from_secs(40));
+    for launch in [owner.server, owner.readiness, owner.measurement]
+        .into_iter()
+        .flatten()
+    {
+        assert_eq!(launch.readiness_deadline, Duration::from_secs(2));
+    }
 }
 
 #[test]
@@ -260,4 +304,54 @@ fn cache_cell_remaining_budget_preserves_sweep_primary_and_bounds_every_stage() 
     let generous = super::execution::bound_measurement(&original, Duration::from_secs(20)).unwrap();
     assert_eq!(generous.worker_sweep[1].execution_timeout_ms, 5000);
     assert!(super::execution::bound_measurement(&original, Duration::ZERO).is_err());
+}
+
+#[test]
+fn current_cache_readiness_binds_owned_jsonl_status_address_then_model_worker() {
+    use crate::process::retained::{Coordinator, MemberId};
+    use crate::process::{LineEnding, ObservedLine, Stream};
+    let mut owner = owner();
+    owner.dialect = crate::automation::skippy_cli_admission::Dialect::Current;
+    let valid = serde_json::json!({"schema_version":1,"sequence":1,"type":"status","data":{"message":"skippy-serving listening: openai=127.0.0.1:12345","context":null}});
+    for (field, replacement) in [
+        ("schema_version", serde_json::json!(2)),
+        ("sequence", serde_json::json!(0)),
+        ("type", serde_json::json!("info")),
+        (
+            "data",
+            serde_json::json!({"message":"skippy-serving listening: openai=127.0.0.1:12346"}),
+        ),
+    ] {
+        let mut wrong = valid.clone();
+        wrong[field] = replacement;
+        let bytes = serde_json::to_vec(&wrong).unwrap();
+        owner.captured_line(
+            MemberId::Seed,
+            ObservedLine {
+                ending: LineEnding::Lf,
+                stream: Stream::Stdout,
+                bytes: &bytes,
+            },
+        );
+        assert!(!owner.marker);
+    }
+    let bytes = serde_json::to_vec(&valid).unwrap();
+    owner.captured_line(
+        MemberId::WorkerOne,
+        ObservedLine {
+            ending: LineEnding::Lf,
+            stream: Stream::Stdout,
+            bytes: &bytes,
+        },
+    );
+    assert!(!owner.marker);
+    owner.captured_line(
+        MemberId::Seed,
+        ObservedLine {
+            ending: LineEnding::Lf,
+            stream: Stream::Stdout,
+            bytes: &bytes,
+        },
+    );
+    assert!(owner.marker);
 }

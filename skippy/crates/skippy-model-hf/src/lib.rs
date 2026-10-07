@@ -2,6 +2,7 @@ pub mod blocking;
 mod cache_paths;
 mod checkpoint;
 pub mod local_cache;
+pub mod package_cache;
 pub mod remote_catalog;
 pub mod search;
 pub mod store;
@@ -166,6 +167,7 @@ pub fn build_hf_sync_api_in(cache_root: &Path) -> Result<HFClientSync> {
 pub struct HfModelRepositoryBuilder {
     cache_dir: Option<PathBuf>,
     endpoint: Option<String>,
+    request_timeout: Option<Duration>,
     token: Option<String>,
     retry_max_attempts: Option<usize>,
     retry_base_delay: Option<Duration>,
@@ -179,6 +181,11 @@ impl HfModelRepositoryBuilder {
 
     pub fn endpoint(mut self, endpoint: impl Into<String>) -> Self {
         self.endpoint = Some(endpoint.into());
+        self
+    }
+
+    pub fn request_timeout(mut self, timeout: Duration) -> Self {
+        self.request_timeout = Some(timeout);
         self
     }
 
@@ -204,6 +211,10 @@ impl HfModelRepositoryBuilder {
             .cache_dir(cache_dir.clone())
             .retry_max_attempts(6)
             .retry_base_delay(Duration::from_millis(500));
+
+        if let Some(timeout) = self.request_timeout {
+            builder = builder.request_timeout(timeout);
+        }
 
         let endpoint = self
             .endpoint

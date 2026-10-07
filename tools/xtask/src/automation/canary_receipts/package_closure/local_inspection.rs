@@ -127,8 +127,7 @@ pub(super) fn with_parity<T>(
         let root = input.authority.validate()?;
         let prepared = source::prepared(&root)?;
         let admitted = parity_inventory::admit(&root, &input.authority.base)?;
-        let manifest =
-            super::policy_document::json(&root, "docs/skippy/llama-parity-candidates.json")?;
+        let manifest = super::policy_document::json(&root, source::parity_manifest_path(&root)?)?;
         let registry = if admitted["classifications"].as_array().is_some_and(|rows| {
             rows.iter()
                 .any(|row| row["artifact_id"].is_string() && !row["model_pin"].is_object())
@@ -144,9 +143,7 @@ pub(super) fn with_parity<T>(
             &registry,
             &process::cancellation(),
         );
-        if super::policy_document::json(&root, "docs/skippy/llama-parity-candidates.json")?
-            != manifest
-        {
+        if super::policy_document::json(&root, source::parity_manifest_path(&root)?)? != manifest {
             return Err("parity manifest changed during manual operation".into());
         }
         if !registry.is_null()

@@ -127,7 +127,7 @@ fn test_shard_checks_all_tracked_test_candidates() -> DynResult<()> {
     let paths = super::ledger::tracked_paths(&root)?;
     let observed = scan::scan_paths(&root, &paths)?
         .into_iter()
-        .filter(|row| row.path.starts_with("scripts/tests/") && row.path.ends_with(".py"))
+        .filter(|row| scan::is_script_test(&row.path))
         .collect::<Vec<_>>();
     let text = fs::read_to_string(root.join("ci/automation-migration/test-edges.json"))?;
     let ledger: super::shard_rows::TestShard = serde_json::from_str(&text)?;
@@ -143,4 +143,30 @@ fn test_shard_checks_all_tracked_test_candidates() -> DynResult<()> {
         .sum::<usize>();
     assert_eq!(observed.len(), grouped + additional);
     check_test_source_shard(&root, &text, &observed)
+}
+
+#[test]
+fn test_shard_accepts_exact_product_test_roots_without_unclassified_exemptions() -> DynResult<()> {
+    for prefix in ["mesh/", "skippy/"] {
+        let (root, _, mut ledger) = fixture()?;
+        let old = "scripts/tests/fixture.py";
+        let path = format!("{prefix}{old}");
+        let source = "subprocess.run(['python3', 'runner.py'])\n";
+        fs::create_dir_all(root.join(&path).parent().unwrap())?;
+        fs::write(root.join(&path), source)?;
+        let observed = scan::scan_source(&path, source);
+        let mut digest = Sha256::new();
+        digest.update(path.as_bytes());
+        digest.update([0]);
+        digest.update(source.as_bytes());
+        digest.update([0]);
+        ledger["observed_source_sha256"] = serde_json::json!(hex::encode(digest.finalize()));
+        ledger["additional_groups"][0][0] = serde_json::json!(path);
+        check_test_source_shard(&root, &ledger.to_string(), &observed)?;
+        ledger["additional_groups"][0][0] =
+            serde_json::json!(format!("{prefix}scripts/tests/../fixture.py"));
+        assert!(check_test_source_shard(&root, &ledger.to_string(), &observed).is_err());
+        fs::remove_dir_all(root)?;
+    }
+    Ok(())
 }

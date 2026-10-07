@@ -1,15 +1,18 @@
 use std::{fs, os::unix::fs::PermissionsExt, path::Path, process::Command};
 
 const CALLERS: [(&str, &str); 6] = [
-    ("scripts/family-certify.sh", "family_automation"),
-    ("scripts/skippy-workload-certify.sh", "workload_automation"),
+    ("skippy/scripts/family-certify.sh", "family_automation"),
     (
-        "scripts/skippy-workload-oracles-build.sh",
+        "skippy/scripts/skippy-workload-certify.sh",
+        "workload_automation",
+    ),
+    (
+        "skippy/scripts/skippy-workload-oracles-build.sh",
         "workload_automation",
     ),
     ("scripts/ci-pi-smoke.sh", "agent_automation"),
     ("scripts/ci-goose-smoke.sh", "agent_automation"),
-    ("scripts/skippy-openai-smoke.sh", "automation"),
+    ("skippy/scripts/skippy-openai-smoke.sh", "automation"),
 ];
 
 fn selector(path: &str) -> String {

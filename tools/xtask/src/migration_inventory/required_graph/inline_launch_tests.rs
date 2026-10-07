@@ -157,3 +157,40 @@ fn checked_in_required_graph_has_no_generic_inline_reason() -> DynResult<()> {
     assert_eq!(count(VARIABLE), 0);
     Ok(())
 }
+
+#[test]
+fn sdk_version_manifest_data_reason_is_exact_and_does_not_admit_interpreter_launches() {
+    let reason = super::inline_launch::unresolved_reason;
+    let data = "Python SDK path is shell validation or version data; its source-backed data boundary is recorded";
+    for literal in [
+        "\"sdk/python/pyproject.toml\"",
+        "\"mesh/sdk/python/pyproject.toml\"",
+    ] {
+        assert_eq!(reason(literal), data);
+    }
+    for unbound in [
+        "\"foreign/sdk/python/pyproject.toml\"",
+        "python3 \"mesh/sdk/python/pyproject.toml\"",
+        "exec \"mesh/sdk/python/pyproject.toml\"",
+        "uv sync --python \"mesh/sdk/python/pyproject.toml\"",
+        "\"mesh/sdk/python/pyproject.toml\" extra",
+    ] {
+        assert_eq!(reason(unbound), GENERIC, "{unbound}");
+    }
+    assert_eq!(reason("\"$python\" -c 'print(1)'"), SELECTED);
+    let root = crate::repo_consistency::repo_root().unwrap();
+    let source = fs::read_to_string(root.join("scripts/release-version.sh")).unwrap();
+    let literals = source
+        .split_once("literal_version_files=(\n")
+        .unwrap()
+        .1
+        .split_once("\n)\n")
+        .unwrap()
+        .0;
+    assert!(
+        literals
+            .lines()
+            .any(|line| line.trim() == "\"mesh/sdk/python/pyproject.toml\"")
+    );
+    assert!(source.contains("for logical_file in \"${literal_version_files[@]}\"; do"));
+}

@@ -119,10 +119,13 @@ fn windows_abi_cache_declares_exact_compatibility_identity_and_restore_outputs()
             "prepare-native-runtime-input/action.yml",
             "setup-windows-rocm-sdk/action.yml",
             "scripts/build-llama.sh",
+            "skippy/scripts/build-llama.sh",
             "scripts/prepare-llama.sh",
+            "skippy/scripts/prepare-llama.sh",
             "scripts/package-native-runtime.sh",
-            "third_party/llama.cpp/upstream.txt",
-            "third_party/llama.cpp/patches/**",
+            "skippy/scripts/package-native-runtime.sh",
+            "skippy/llama_cpp/upstream.txt",
+            "skippy/llama_cpp/patches/**",
             ".github/cache-version.txt",
         ],
     );
@@ -423,7 +426,7 @@ fn swift_smoke_declares_immutable_binding_safe_destination_and_legacy_store_guar
 }
 #[test]
 fn swift_host_builder_declares_target_specific_cache_and_all_cmake_platform_arguments() {
-    let script = source("sdk/swift/scripts/build-host-macos-xcframework.sh");
+    let script = source("mesh/sdk/swift/scripts/build-host-macos-xcframework.sh");
     required_tokens(
         &script,
         &[
@@ -435,11 +438,73 @@ fn swift_host_builder_declares_target_specific_cache_and_all_cmake_platform_argu
     );
     assert!(!script.contains("build-stage-abi-host-metal"));
 }
+fn assert_hosted_cpu_selector(step: &Node) {
+    assert_eq!(text(step, "id"), Some("cpu_policy"));
+    let bindings = BTreeMap::from([
+        ("event_name", "${{ github.event_name }}"),
+        ("original_event_name", "${{ inputs.original_event_name }}"),
+        ("repository", "${{ github.repository }}"),
+        (
+            "head_repository",
+            "${{ github.event.pull_request.head.repo.full_name }}",
+        ),
+        (
+            "head_sha",
+            "${{ github.event.pull_request.head.sha || github.sha }}",
+        ),
+        ("ref", "${{ github.ref }}"),
+        (
+            "depot_main_enabled",
+            "${{ vars.DEPOT_RUNNERS_ENABLED == 'true' }}",
+        ),
+        (
+            "depot_pr_enabled",
+            "${{ vars.DEPOT_PR_RUNNERS_ENABLED == 'true' }}",
+        ),
+        ("pr_canary_ref", "${{ vars.DEPOT_PR_CANARY_REF }}"),
+        ("force_hosted", "true"),
+    ]);
+    let actual = step
+        .get("with")
+        .unwrap()
+        .entries()
+        .iter()
+        .map(|(key, value)| (key.as_str(), value.text().unwrap()))
+        .collect::<BTreeMap<_, _>>();
+    assert_eq!(actual, bindings);
+}
 #[test]
 fn selector_call_census_declares_exact_head_and_paired_approval_inputs() {
     let calls = action_calls("select-ci-runners");
     let total = calls.values().map(Vec::len).sum::<usize>();
-    assert_eq!(total, 19);
+    assert_eq!(total, 20);
+    let expected = BTreeMap::from([
+        ("ci-quality-slice.yml", 2),
+        ("ci-linux-product-slice.yml", 1),
+        ("native-sdk-artifact.yml", 1),
+        ("ci-windows-runtime-slice.yml", 1),
+        ("ci-linux-host-slice.yml", 1),
+        ("ci-ui-artifact-slice.yml", 1),
+        ("release.yml", 1),
+        ("ci-macos-runtime-slice.yml", 1),
+        ("ci-windows-host-slice.yml", 1),
+        ("ci-platform-checks-slice.yml", 1),
+        ("static-abi-artifact.yml", 1),
+        ("swift-sdk-artifact.yml", 1),
+        ("ci-macos-host-slice.yml", 1),
+        ("ci-macos-product-slice.yml", 1),
+        ("ci-linux-runtime-slice.yml", 2),
+        ("ci-windows-product-slice.yml", 1),
+        ("ci-web-slice.yml", 1),
+        ("ci-rust-tests-slice.yml", 1),
+    ]);
+    assert_eq!(
+        calls
+            .iter()
+            .map(|(name, steps)| (name.as_str(), steps.len()))
+            .collect::<BTreeMap<_, _>>(),
+        expected
+    );
     let mut approval = 0;
     for (workflow, steps) in calls {
         for step in steps {
@@ -452,6 +517,9 @@ fn selector_call_census_declares_exact_head_and_paired_approval_inputs() {
                 input(&step, "pr_approved_sha"),
             ) {
                 (Some(_), Some(_)) => approval += 1,
+                (None, None) if workflow == "ci-linux-runtime-slice.yml" => {
+                    assert_hosted_cpu_selector(&step);
+                }
                 (None, None) => assert_eq!(workflow, "release.yml"),
                 _ => panic!("incomplete approval pair: {workflow}"),
             }
@@ -528,9 +596,17 @@ fn swift_producer_compiler_cache_and_verifier_declarations() {
                 .any(|step| text(step, "uses") == Some("./.github/actions/configure-sccache-gha"))
         );
     }
+    assert!(
+        source("scripts/verify-swift-release-artifact.sh")
+            .contains("/mesh/scripts/verify-swift-release-artifact.sh\" \"$@\"")
+    );
+    let verifier = source("mesh/scripts/verify-swift-release-artifact.sh");
     required_tokens(
-        &source("scripts/verify-swift-release-artifact.sh"),
-        &["mesh_automation release swift-xcframework"],
+        &verifier,
+        &[
+            "source \"$REPO_ROOT/scripts/lib/automation.sh\"",
+            "mesh_automation release swift-xcframework \\\n  \"${xcframework_args[@]}\"",
+        ],
     );
 }
 #[test]

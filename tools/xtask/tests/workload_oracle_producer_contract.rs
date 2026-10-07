@@ -36,6 +36,7 @@ impl Fixture {
         for dir in [
             "bin",
             "scripts",
+            "skippy/scripts",
             "primary-metal/native",
             "primary-metal/cargo",
         ] {
@@ -46,6 +47,13 @@ impl Fixture {
             fixture
                 .path()
                 .join("scripts/skippy-workload-oracles-build.sh"),
+        )
+        .unwrap();
+        fs::copy(
+            root().join("skippy/scripts/skippy-workload-oracles-build.sh"),
+            fixture
+                .path()
+                .join("skippy/scripts/skippy-workload-oracles-build.sh"),
         )
         .unwrap();
         fs::write(
@@ -191,12 +199,12 @@ workload-manifest)
     ;;
   produce)
     [[ $# == 5 && "$2" == "$FIXTURE_ROOT" && "$3" == "$FIXTURE_ROOT/cpu closure" && "$4" == "$3/cargo/debug/skippy-test" && "$5" == "$3/source.json" ]] || exit 97
-    [[ -f "$3/cargo/debug/skippy-server" && -d "$3/native" && -f "$4" && -f "$5" ]] || exit 97
-    for tool in skippy-server skippy-model-package skippy-correctness skippy-topology; do [[ -f "$3/cargo/debug/$tool" ]] || exit 97; done
+    [[ -f "$3/cargo/debug/skippy" && -d "$3/native" && -f "$4" && -f "$5" ]] || exit 97
+    for tool in skippy skippy-package-builder skippy-correctness skippy-topology; do [[ -f "$3/cargo/debug/$tool" ]] || exit 97; done
     for tool in llama-server llama-completion llama-tts; do [[ -f "$3/native/bin/$tool" ]] || exit 97; done
     printf 'manifest\n' >> "$FIXTURE_ROOT/events"
     if [[ "${FIXTURE_FAIL_STAGE:-}" == manifest ]]; then exit 43; fi
-    printf '%s\n' "$3/cargo/debug/skippy-server" "$3/native" "$4" "$5" > "$3/producer.json"
+    printf '%s\n' "$3/cargo/debug/skippy" "$3/native" "$4" "$5" > "$3/producer.json"
     ;;
   *) exit 97 ;;
   esac
@@ -229,18 +237,18 @@ for tool in llama-server llama-completion llama-tts; do printf 'CPU oracle\n' > 
 shift 2
 case "$1" in
 build)
-  [[ "$*" == 'build --locked -p skippy-server -p skippy-model-package -p skippy-correctness -p skippy-topology --bins' ]] || exit 97
+  [[ "$*" == 'build --locked -p skippy-cli -p skippy-package-builder -p skippy-correctness -p skippy-topology --bins' ]] || exit 97
   printf 'build\n' >> "$FIXTURE_ROOT/events"
   if [[ "${{FIXTURE_FAIL_STAGE:-}}" == build ]]; then exit 44; fi
   mkdir -p "$CARGO_TARGET_DIR/debug"
-  for tool in skippy-server skippy-model-package skippy-correctness skippy-topology; do printf 'CPU candidate\n' > "$CARGO_TARGET_DIR/debug/$tool"; done
+  for tool in skippy skippy-package-builder skippy-correctness skippy-topology; do printf 'CPU candidate\n' > "$CARGO_TARGET_DIR/debug/$tool"; done
   ;;
 test)
-  [[ "$*" == 'test --locked -p skippy-server --lib --no-run --message-format=json' ]] || exit 97
+  [[ "$*" == 'test --locked -p skippy-serving --lib --no-run --message-format=json' ]] || exit 97
   printf 'test\n' >> "$FIXTURE_ROOT/events"
   if [[ "${{FIXTURE_FAIL_STAGE:-}}" == test ]]; then exit 45; fi
   printf 'CPU library tests\n' > "$CARGO_TARGET_DIR/debug/skippy-test"
-  printf '{{"reason":"compiler-artifact","profile":{{"test":true}},"target":{{"name":"skippy_server"}},"executable":"%s"}}\n' "$CARGO_TARGET_DIR/debug/skippy-test"
+  printf '{{"reason":"compiler-artifact","profile":{{"test":true}},"target":{{"name":"skippy_serving"}},"executable":"%s"}}\n' "$CARGO_TARGET_DIR/debug/skippy-test"
   ;;
 *) exit 97 ;;
 esac
@@ -288,6 +296,19 @@ esac
 #[test]
 fn print_env_has_exact_export_bytes_and_preserves_spaced_paths() {
     let fixture = Fixture::new();
+    assert_eq!(
+        fs::metadata(
+            fixture
+                .path()
+                .join("skippy/scripts/skippy-workload-oracles-build.sh")
+        )
+        .unwrap()
+        .permissions()
+        .mode()
+            & 0o111,
+        0,
+        "root forwarding must support the actual non-executable product shell owner"
+    );
     let build_root = fixture.path().join("cpu closure");
     let receipt = fixture.run(fixture.producer(true, &build_root));
     assert!(
@@ -373,7 +394,7 @@ fn cpu_graph_is_isolated_and_exports_all_producer_artifact_paths() {
     );
     let build = fixture.path().join("cpu closure");
     let expected = format!(
-        "{}/cargo/debug/skippy-server\n{}/native\n{}/cargo/debug/skippy-test\n{}/source.json\n",
+        "{}/cargo/debug/skippy\n{}/native\n{}/cargo/debug/skippy-test\n{}/source.json\n",
         build.display(),
         build.display(),
         build.display(),

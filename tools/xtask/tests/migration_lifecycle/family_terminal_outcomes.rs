@@ -9,7 +9,7 @@ fn repository() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
 fn record_declaration() -> String {
-    let source = fs::read_to_string(repository().join("scripts/family-certify.sh")).unwrap();
+    let source = fs::read_to_string(repository().join("skippy/scripts/family-certify.sh")).unwrap();
     let marker = "\nrecord_event() {\n";
     assert_eq!(source.matches(marker).count(), 1);
     format!(

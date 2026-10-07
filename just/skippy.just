@@ -41,6 +41,7 @@ skippy-rewriter-build:
     #!/usr/bin/env bash
     set -euo pipefail
     prefix="${SKIPPY_REWRITER_LLVM_PREFIX:-}"
+    build_dir="${SKIPPY_REWRITER_BUILD_DIR:-.scratch/skippy-stage-rewriter-build}"
     if [[ -z "$prefix" || ! -x "$prefix/bin/clang" || ! -f "$prefix/lib/cmake/llvm/LLVMConfig.cmake" || ! -f "$prefix/lib/cmake/clang/ClangConfig.cmake" ]]; then
       printf '%s\n' 'SKIPPY_REWRITER_LLVM_PREFIX must name an existing pinned LLVM with clang and LLVM/Clang CMake packages' >&2
       exit 1
@@ -57,10 +58,19 @@ skippy-rewriter-build:
       fi
       arch_args=(-DCMAKE_OSX_ARCHITECTURES="$native_arch")
     fi
-    cmake -S skippy/scripts/tools/skippy-stage-rewriter -B .scratch/skippy-stage-rewriter-build -G Ninja \
+    cmake -S skippy/scripts/tools/skippy-stage-rewriter -B "$build_dir" -G Ninja \
       -DBUILD_TESTING=ON "${arch_args[@]}" \
       -DLLVM_DIR="$prefix/lib/cmake/llvm" -DClang_DIR="$prefix/lib/cmake/clang"
-    cmake --build .scratch/skippy-stage-rewriter-build
+    cmake --build "$build_dir"
+
+# Run the native C++ fixture against the same explicitly selected build directory.
+[unix]
+skippy-rewriter-test: skippy-rewriter-build
+    #!/usr/bin/env bash
+    set -euo pipefail
+    build_dir="${SKIPPY_REWRITER_BUILD_DIR:-.scratch/skippy-stage-rewriter-build}"
+    ctest --test-dir "$build_dir" --output-on-failure --no-tests=error \
+      -R '^skippy-stage-rewriter-fixture-native$' --timeout 120
 
 # Build the skippy benchmark/debug telemetry collector.
 [unix]
@@ -76,8 +86,9 @@ metrics-server-build:
 skippy-wan-lab-build-bins:
     just release-runtime-build cpu
     just skippy-cli-release-build
-    python3 scripts/verify-host-dependencies.py target/release/skippy --report dist/skippy-host-imports.json
+    cargo xtool native verify-host-dependencies target/release/skippy --report dist/skippy-host-imports.json
     just with-lld cargo build --release --locked -p metrics-server
+    just with-lld cargo build --release --locked -p xtask --bin xtask
 
 # Build the resumable GGUF conversion/quantization replacement CLI.
 [unix]
@@ -204,3 +215,49 @@ skippy-adaptive-prefill-ab input output:
 # Native cold/warm radix-prefix evaluation; supplied artifacts only.
 skippy-radix-cache-ab input output:
     just with-lld cargo xtool automation waiting-prefix radix-run --input "{{input}}" --output-directory "{{output}}"
+
+# Read a local legacy package cache through the native product owner, with no ABI calls.
+[private]
+[unix]
+[positional-arguments]
+skippy-layer-package-inspect *ARGS:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    just with-lld cargo build --quiet --locked -p skippy-package-builder --features skippy-runtime/dynamic-native-runtime
+    exec cargo run --quiet --locked -p skippy-package-builder --features skippy-runtime/dynamic-native-runtime -- inspect-layer-package "$@"
+
+# Parse package references through the source-built product owner.
+[private]
+[unix]
+[positional-arguments]
+skippy-package-reference REFERENCE:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    just with-lld cargo build --quiet --locked -p skippy-package-builder --features skippy-runtime/dynamic-native-runtime
+    exec cargo run --quiet --locked -p skippy-package-builder --features skippy-runtime/dynamic-native-runtime -- parse-package-reference "$1"
+
+# Resolve exact existing package cache custody without downloading.
+[private]
+[unix]
+[positional-arguments]
+skippy-layer-package-cache *ARGS:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    just with-lld cargo build --quiet --locked -p skippy-package-builder --features skippy-runtime/dynamic-native-runtime
+    exec cargo run --quiet --locked -p skippy-package-builder --features skippy-runtime/dynamic-native-runtime -- resolve-layer-package-cache "$@"
+
+# Explicit native package acquisition, using the same source-built product owner.
+[private]
+[unix]
+[positional-arguments]
+skippy-layer-package-fetch *ARGS:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    just with-lld cargo build --quiet --locked -p skippy-package-builder --features skippy-runtime/dynamic-native-runtime
+    exec cargo run --quiet --locked -p skippy-package-builder --features skippy-runtime/dynamic-native-runtime -- fetch-layer-package "$@"
+
+# Qualify Decisions HTTP responses from an already running System One model.
+[unix]
+[positional-arguments]
+decisions-smoke *ARGS:
+    @just automation-run automation decisions-smoke "$@"

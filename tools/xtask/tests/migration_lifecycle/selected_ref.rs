@@ -253,9 +253,7 @@ fn locally_present_commit_outside_fetched_branch_ancestry_is_rejected() {
 fn relocated_pin_is_admitted_but_bad_ambiguous_and_missing_pin_fail_before_publication() {
     let fixture = Fixture::new();
     let primary = fixture.origin.join("third_party/llama.cpp/upstream.txt");
-    let relocated = fixture
-        .origin
-        .join("skippy/llama_cpp/upstream.txt");
+    let relocated = fixture.origin.join("skippy/llama_cpp/upstream.txt");
     fs::create_dir_all(relocated.parent().unwrap()).unwrap();
     fs::rename(&primary, &relocated).unwrap();
     fixture.commit("relocate");

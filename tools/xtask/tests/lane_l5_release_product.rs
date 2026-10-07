@@ -61,8 +61,9 @@ esac
     fs::write(runtime.join("lib/runtime.so"), library)?;
     let digest = hex::encode(Sha256::digest(library));
     let manifest = serde_json::json!({
+        "schema_version":2,
         "runtime": {
-            "id":"runtime", "mesh_version":"1.0.0", "skippy_abi":"0.1.0",
+            "id":"runtime", "release_version":"1.0.0", "skippy_abi":"0.1.0",
             "platform":{"os":"linux","arch":"x86_64","target":"x86_64-unknown-linux-gnu"},
             "backend":{"kind":"cpu"}, "libraries":["lib/runtime.so"],
             "files":{"lib/runtime.so":digest}, "tools":{}
@@ -126,8 +127,9 @@ fn release_manifest_adapter_runs_from_prepared_binary() -> TestResult {
     fs::write(runtime.join("lib/runtime.bin"), bytes)?;
     let digest = hex::encode(Sha256::digest(bytes));
     let manifest = serde_json::json!({
+        "schema_version":2,
         "runtime":{
-            "id":"runtime","mesh_version":"1.0.0","skippy_abi":"0.1.0",
+            "id":"runtime","release_version":"1.0.0","skippy_abi":"0.1.0",
             "platform":{"os":"macos","arch":"aarch64","target":"aarch64-apple-darwin"},
             "backend":{"kind":"metal"},"libraries":["lib/runtime.bin"],
             "files":{"lib/runtime.bin":digest},"tools":{}
@@ -156,7 +158,7 @@ fn release_manifest_adapter_runs_from_prepared_binary() -> TestResult {
     let destination = scratch.0.join("native-runtimes.json");
     let output = Command::new("bash")
         .arg(root.join("scripts/generate-native-runtime-release-manifest.sh"))
-        .args(["--tag", "v1.0.0", "--out"])
+        .args(["--tag", "v1.0.0", "--runtime-version", "1.0.0", "--out"])
         .arg(&destination)
         .arg(&archive)
         .env("MESH_LLM_AUTOMATION_BIN", env!("CARGO_BIN_EXE_xtask"))
@@ -168,7 +170,7 @@ fn release_manifest_adapter_runs_from_prepared_binary() -> TestResult {
     );
     let release: serde_json::Value = serde_json::from_slice(&fs::read(destination)?)?;
     assert_eq!(release["artifacts"][0]["sha256"], checksum);
-    assert_eq!(release["mesh_version"], "1.0.0");
+    assert_eq!(release["release_version"], "1.0.0");
     Ok(())
 }
 
@@ -181,7 +183,14 @@ fn product_adapter_composes_immutable_inputs_and_rejects_host_checksum_drift() -
     let runtime = workspace.join("runtime-input/runtime");
     fs::create_dir(&host_input)?;
     fs::create_dir_all(runtime.join("lib"))?;
-    let host = b"#!/bin/sh\nprintf 'mesh-llm 1.0.0\\n'\n";
+    let host = br#"#!/bin/sh
+case "$*" in
+    --version) printf 'mesh-llm 1.0.0\n' ;;
+    '--log-format json --print-build-contract')
+        printf '%s\n' '{"schema_version":1,"product_version":"1.0.0","runtime_release":"1.0.0","skippy_abi":"0.1.0"}' ;;
+    *) exit 98 ;;
+esac
+"#;
     executable(&host_input.join("mesh-llm"), host)?;
     fs::write(host_input.join("host-imports.json"), b"{}")?;
     fs::write(
@@ -192,8 +201,9 @@ fn product_adapter_composes_immutable_inputs_and_rejects_host_checksum_drift() -
     fs::write(runtime.join("lib/runtime.bin"), library)?;
     let digest = hex::encode(Sha256::digest(library));
     let manifest = serde_json::json!({
+        "schema_version":2,
         "runtime":{
-            "id":"runtime","mesh_version":"1.0.0","skippy_abi":"0.1.0",
+            "id":"runtime","release_version":"1.0.0","skippy_abi":"0.1.0",
             "platform":{"os":"macos","arch":"aarch64","target":"aarch64-apple-darwin"},
             "backend":{"kind":"metal"},"libraries":["lib/runtime.bin"],
             "files":{"lib/runtime.bin":digest},"tools":{}
@@ -226,9 +236,18 @@ fn product_adapter_composes_immutable_inputs_and_rejects_host_checksum_drift() -
         assert_eq!(
             output.status.success(),
             accepted,
-            "{}",
+            "status={:?}\nstdout={}\nstderr={}",
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
         );
+        if !accepted {
+            assert!(
+                String::from_utf8_lossy(&output.stderr).contains("archive checksum mismatch"),
+                "checksum drift must refuse at the checksum owner: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
         if accepted {
             assert_eq!(fs::read(workspace.join("product/mesh-llm"))?, host);
             assert!(workspace.join("product.tar.gz").is_file());

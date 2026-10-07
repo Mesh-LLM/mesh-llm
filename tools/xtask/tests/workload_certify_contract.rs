@@ -275,7 +275,8 @@ fn oracle_executable_and_class_compatibility_fail_closed() {
 }
 
 fn candidate_branches() -> String {
-    let source = fs::read_to_string(root().join("scripts/skippy-workload-certify.sh")).unwrap();
+    let source =
+        fs::read_to_string(root().join("skippy/scripts/skippy-workload-certify.sh")).unwrap();
     let candidate = source
         .split_once("require_pinned_cpu_candidate() {")
         .unwrap()
@@ -316,7 +317,7 @@ workload_owner() {
     workload-manifest)
       shift
       mode="$1"; shift
-      [[ "$1" == selected-source && "$2" == candidate/skippy-server && "$3" == "$CANDIDATE_BUILD_DIR" ]] || exit 93
+      [[ "$1" == selected-source && "$2" == candidate/skippy && "$3" == "$CANDIDATE_BUILD_DIR" ]] || exit 93
       case "$mode" in
         verify) [[ "$#" == 4 && "$4" == manifest ]] || exit 94 ;;
         fresh) [[ "$#" == 3 ]] || exit 95 ;;
@@ -335,7 +336,7 @@ jq() {
 }
 
 cargo() {
-  [[ "$*" == 'build -p skippy-server' ]] || exit 93
+  [[ "$*" == 'build -p skippy-cli' ]] || exit 93
   printf 'built\n' >> "$FIXTURE_ROOT/events"
   if [[ "$BUILT" == metal ]]; then write_stamp current metal; else write_stamp "$BUILT" cpu; fi
 }

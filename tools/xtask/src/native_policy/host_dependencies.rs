@@ -16,6 +16,13 @@ use crate::model_registry::json_bytes::{ASCII, Style, dumps};
 use crate::repository::check_report::CheckReport;
 use std::path::{Path, PathBuf};
 
+#[path = "host_dependencies/binary_identity.rs"]
+mod binary_identity;
+
+pub(super) fn binary_sha256(path: &Path) -> Result<String, String> {
+    binary_identity::digest(path)
+}
+
 const GRAMMAR: Grammar = Grammar {
     prog: "verify-host-dependencies.py",
     usage: "\
@@ -49,6 +56,7 @@ options:
         Opt::choice("--format", &["elf", "macho", "pe"]),
         Opt::value("--report"),
         Opt::flag("--no-import-policy"),
+        Opt::flag("--bind-sha256"),
         Opt::value("--max-glibc"),
     ],
     positional: Some("binary"),
@@ -95,6 +103,10 @@ fn verify(
     floor_file: FloorFile<'_>,
 ) -> Result<CheckReport, String> {
     let binary = python_path_display(Path::new(parsed.positional.as_deref().unwrap_or_default()));
+    let identity = parsed
+        .flag("--bind-sha256")
+        .then(|| binary_identity::digest(Path::new(&binary)))
+        .transpose()?;
     let no_policy = parsed.flag("--no-import-policy");
     let (format, imports) = inspect(&binary, parsed.value("--format"), tools)?;
     let rejected = if no_policy {
@@ -111,7 +123,7 @@ fn verify(
     };
     let name = file_name(&binary);
     let strings = |items: &[String]| Json::Array(items.iter().cloned().map(Json::String).collect());
-    let report = Json::Object(vec![
+    let mut fields = vec![
         ("binary".to_owned(), Json::String(name.to_owned())),
         ("format".to_owned(), Json::String(format.to_owned())),
         (
@@ -133,7 +145,14 @@ fn verify(
             ),
         ),
         ("rejected_imports".to_owned(), strings(&rejected)),
-    ]);
+    ];
+    if let Some(identity) = identity {
+        if binary_identity::digest(Path::new(&binary))? != identity {
+            return Err("host binary changed during dependency inspection".to_owned());
+        }
+        fields.push(("binary_sha256".to_owned(), Json::String(identity)));
+    }
+    let report = Json::Object(fields);
     if let Some(path) = parsed.value("--report") {
         write_report(path, &report)?;
     }

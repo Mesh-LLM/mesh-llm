@@ -61,9 +61,11 @@ impl Fixture {
         let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         for relative in [
             "scripts/build-llama.sh",
+            "skippy/scripts/build-llama.sh",
             "scripts/lib/cuda-toolkit.sh",
             "scripts/lib/macos-deployment-target.sh",
         ] {
+            fs::create_dir_all(root.join(relative).parent().unwrap()).unwrap();
             fs::copy(source.join(relative), root.join(relative)).unwrap();
         }
         fs::write(

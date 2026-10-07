@@ -89,6 +89,16 @@ pub enum EvalCommandKind {
     Sync(EvalSyncArgs),
     Install(EvalSyncArgs),
     Doctor(EvalDoctorArgs),
+    /// Explicitly prepare the pinned MCP SDK in a fresh isolated environment.
+    PrepareMcp(EvalPrepareMcpArgs),
+    /// Prepare the fixed upstream SWE SDK without running benchmark tasks.
+    PrepareSwe(EvalPrepareSweArgs),
+    #[command(hide = true)]
+    PortReady(EvalPortReadyArgs),
+    #[command(hide = true)]
+    PatchSwerexIndex(EvalPatchSwerexIndexArgs),
+    #[command(hide = true)]
+    PatchSwerexModal(EvalPatchSwerexModalArgs),
     Run(Box<EvalRunArgs>),
 }
 
@@ -158,6 +168,43 @@ pub struct EvalSyncArgs {
 }
 
 #[derive(Parser)]
+pub struct EvalPrepareMcpArgs {
+    #[arg(long)]
+    pub cache_root: Option<PathBuf>,
+    #[arg(long)]
+    pub uv: PathBuf,
+    #[arg(long)]
+    pub python: PathBuf,
+    #[arg(long)]
+    pub dry_run: bool,
+}
+
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize, clap::ValueEnum,
+)]
+#[serde(rename_all = "lowercase")]
+pub enum SweDeployment {
+    Docker,
+    Modal,
+}
+
+#[derive(Parser)]
+pub struct EvalPrepareSweArgs {
+    #[arg(long)]
+    pub cache_root: Option<PathBuf>,
+    #[arg(long)]
+    pub uv: PathBuf,
+    #[arg(long)]
+    pub python: PathBuf,
+    #[arg(long, value_enum, default_value_t = SweDeployment::Docker)]
+    pub deployment: SweDeployment,
+    #[arg(long, default_value = "https://pypi.org/simple")]
+    pub index_url: String,
+    #[arg(long)]
+    pub dry_run: bool,
+}
+
+#[derive(Parser)]
 pub struct EvalDoctorArgs {
     #[arg(value_enum)]
     pub evals: Vec<EvalId>,
@@ -167,6 +214,32 @@ pub struct EvalDoctorArgs {
     pub cache_root: Option<PathBuf>,
     #[arg(long)]
     pub json: bool,
+}
+
+#[derive(Parser)]
+pub struct EvalPortReadyArgs {
+    #[arg(value_parser = clap::value_parser!(u16).range(1..))]
+    pub port: u16,
+}
+
+#[derive(Parser)]
+pub struct EvalPatchSwerexIndexArgs {
+    #[arg(long)]
+    pub module_source: PathBuf,
+    #[arg(long)]
+    pub environment_root: PathBuf,
+    #[arg(long)]
+    pub index_url: String,
+}
+
+#[derive(Parser)]
+pub struct EvalPatchSwerexModalArgs {
+    #[arg(long)]
+    pub module_source: PathBuf,
+    #[arg(long)]
+    pub environment_root: PathBuf,
+    #[arg(long)]
+    pub patch_root: PathBuf,
 }
 
 #[derive(Parser)]

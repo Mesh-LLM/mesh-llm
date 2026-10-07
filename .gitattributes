@@ -3,3 +3,8 @@
 # Skippy patch-queue digest read files from the working tree byte for byte, so
 # a Windows checkout with core.autocrlf=true changed what they saw.
 * text=auto eol=lf
+
+# Preserve byte-pinned upstream SWE-rex fixtures, including upstream whitespace.
+skippy/crates/skippy-bench/tests/fixtures/swerex_modal/METADATA whitespace=-blank-at-eof
+skippy/crates/skippy-bench/tests/fixtures/swerex_modal/official/deployment/config.py.fixture whitespace=-blank-at-eol
+skippy/crates/skippy-bench/tests/fixtures/swerex_modal/legacy/swerex/deployment/config.py.fixture whitespace=-blank-at-eol

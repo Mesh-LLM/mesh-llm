@@ -162,3 +162,59 @@ fn a_request_without_tool_calls_streams_content_exactly_as_before() {
     );
     assert_eq!(deltas.finish_reason(FinishReason::Stop), FinishReason::Stop);
 }
+
+#[test]
+fn reasoning_prefix_frames_reconstruct_on_auto_wire_and_remain_absent_when_hidden() {
+    for format in ["auto", "hidden"] {
+        let request: ChatCompletionRequest = serde_json::from_value(json!({
+            "model": "test",
+            "messages": [{"role": "user", "content": "choose"}],
+            "reasoning_format": format
+        }))
+        .unwrap();
+        let options =
+            chat_template_options(&request, &EmbeddedOpenAiRequestDefaults::default()).unwrap();
+        let mut deltas = ChatStreamDeltas::new(template_exposes_reasoning(&options));
+        let mut wire = Vec::new();
+        for (reasoning, content) in [
+            ("Weigh", None),
+            ("Weigh both ", None),
+            ("Weigh both options.", None),
+            ("Weigh both options.", Some("Ans")),
+            ("Weigh both options.", Some("Answer.")),
+        ] {
+            let parsed = ParsedChatMessage {
+                content: content.map(str::to_owned),
+                reasoning_content: Some(reasoning.to_owned()),
+                tool_calls: None,
+            };
+            for event in deltas.events_for_parse(&parsed, true) {
+                let chunk = generation_event_to_chat_chunk(Ok(event), "test").unwrap();
+                wire.push(serde_json::to_value(chunk).unwrap());
+            }
+        }
+        let terminal = ParsedChatMessage {
+            content: Some("Answer.".to_owned()),
+            reasoning_content: Some("Weigh both options.".to_owned()),
+            tool_calls: None,
+        };
+        assert!(deltas.events_for_parse(&terminal, false).is_empty());
+        let reasoning = wire
+            .iter()
+            .filter_map(|chunk| chunk["choices"][0]["delta"]["reasoning_content"].as_str())
+            .collect::<Vec<_>>();
+        let content = wire
+            .iter()
+            .filter_map(|chunk| chunk["choices"][0]["delta"]["content"].as_str())
+            .collect::<String>();
+        assert_eq!(content, "Answer.", "format={format}");
+        if format == "auto" {
+            assert_eq!(reasoning, ["Weigh", " both ", "options."]);
+            assert_eq!(reasoning.concat(), "Weigh both options.");
+        } else {
+            assert!(reasoning.is_empty(), "hidden reasoning leaked: {wire:?}");
+            assert_eq!(wire.len(), 2);
+        }
+        assert_eq!(deltas.finish_reason(FinishReason::Stop), FinishReason::Stop);
+    }
+}

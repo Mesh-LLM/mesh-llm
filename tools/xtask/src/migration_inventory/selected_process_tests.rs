@@ -125,12 +125,18 @@ fn typed_records_fixture()
     let cases = [
         ("scripts/skippy-ci-smoke.sh", "automation"),
         ("scripts/skippy-workload-certify.sh", "workload_automation"),
+        ("skippy/scripts/skippy-ci-smoke.sh", "automation"),
+        (
+            "skippy/scripts/skippy-workload-certify.sh",
+            "workload_automation",
+        ),
         (
             "scripts/llama-canary-agent-repair.sh",
             "repair_workload_automation",
         ),
     ];
     fs::create_dir_all(root.join("scripts"))?;
+    fs::create_dir_all(root.join("skippy/scripts"))?;
     let mut records = Vec::new();
     for (caller, name) in cases {
         let expansion = format!("\"${{{name}[@]}}\"");
@@ -258,8 +264,13 @@ fn current_battery_plan_record_preserves_original_scope_with_other_typed_calls_p
 -> DynResult<()> {
     let repo = crate::repo_consistency::repo_root()?;
     let root = crate::command::unique_temp_dir("selected-current-battery-scope");
-    let caller = "scripts/skippy-family-battery.sh";
+    let caller = "skippy/scripts/skippy-family-battery.sh";
+    fs::create_dir_all(root.join("skippy/scripts"))?;
     fs::create_dir_all(root.join("scripts"))?;
+    fs::copy(
+        repo.join("scripts/skippy-family-battery.sh"),
+        root.join("scripts/skippy-family-battery.sh"),
+    )?;
     fs::copy(repo.join(caller), root.join(caller))?;
     let records = MigrationLedgers::load(&repo)?
         .invocations

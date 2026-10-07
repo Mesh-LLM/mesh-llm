@@ -28,11 +28,12 @@ impl Fixture {
     pub(super) fn new() -> Result<Self, Box<dyn std::error::Error>> {
         let root = tempfile::Builder::new().prefix("run-family ").tempdir()?;
         fs::create_dir_all(root.path().join("tools/xtask"))?;
-        fs::create_dir(root.path().join("evals"))?;
+        fs::create_dir_all(root.path().join("mesh/evals"))?;
         fs::write(root.path().join("Cargo.toml"), "[workspace]\n")?;
         fs::write(root.path().join("tools/xtask/Cargo.toml"), "[package]\n")?;
         fs::write(
-            root.path().join("evals/agentic-trajectory-manifest.py"),
+            root.path()
+                .join("mesh/evals/agentic-trajectory-manifest.py"),
             "# Retained reader path fixture; executed by a Rust adapter.\n",
         )?;
         let model = root.path().join("model.gguf");
@@ -44,7 +45,7 @@ impl Fixture {
             &reader,
             concat!(
                 "#!/bin/sh\n",
-                "case \"$1\" in */evals/agentic-trajectory-manifest.py) ;; *) exit 90;; esac\n",
+                "case \"$1\" in */mesh/evals/agentic-trajectory-manifest.py) ;; *) exit 90;; esac\n",
                 "printf '%s\\n' \"$@\" > \"$REPLAY_ARGV\"\n",
                 "shift\n",
                 "while [ \"$#\" -gt 0 ]; do\n",

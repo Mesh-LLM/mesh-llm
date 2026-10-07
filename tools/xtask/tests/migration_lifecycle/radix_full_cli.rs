@@ -49,6 +49,9 @@ fn wrapper(path: &Path, version: &str, mode: &str, record: &Path) {
         quote(record),
         quote(&std::env::current_exe().unwrap())
     );
+    let current = version == "new";
+    let verb = if current { "serve" } else { "serve-openai" };
+    let script = script.replace("serve-openai", verb).replace("set -eu\n", &format!("set -eu\nif [[ \"$#\" == 2 && \"$2\" == --help ]]; then [[ \"$1\" == {verb} ]] || exit 64; printf 'inert help\\n'; exit 0; fi\n"));
     std::fs::write(path, script).unwrap();
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).unwrap();
 }
@@ -135,6 +138,53 @@ fn cleanup(raw: &process::RawProcessReport) {
     );
 }
 
+fn failure_evidence(root: &Path, raw: &process::RawProcessReport) -> String {
+    let mut evidence = format!(
+        "process={:?}\nstderr={}\n",
+        raw.process,
+        String::from_utf8_lossy(raw.stderr.as_ref().unwrap().as_bytes())
+    );
+    let mut pending = vec![root.to_path_buf()];
+    let mut inspected = 0;
+    while let Some(path) = pending.pop() {
+        if inspected >= 100 || evidence.len() >= 128 * 1024 {
+            break;
+        }
+        inspected += 1;
+        let Ok(metadata) = std::fs::symlink_metadata(&path) else {
+            continue;
+        };
+        if metadata.is_dir() {
+            if let Ok(entries) = std::fs::read_dir(&path) {
+                let mut paths = entries
+                    .flatten()
+                    .map(|entry| entry.path())
+                    .collect::<Vec<_>>();
+                paths.sort();
+                pending.extend(paths.into_iter().rev());
+            }
+        } else if metadata.is_file()
+            && matches!(
+                path.extension().and_then(|s| s.to_str()),
+                Some("json" | "log")
+            )
+        {
+            use std::io::Read as _;
+            if let Ok(file) = std::fs::File::open(&path) {
+                let mut bytes = Vec::new();
+                if file.take(8192).read_to_end(&mut bytes).is_ok() {
+                    evidence.push_str(&format!(
+                        "\n{}:\n{}\n",
+                        path.strip_prefix(root).unwrap().display(),
+                        String::from_utf8_lossy(&bytes)
+                    ));
+                }
+            }
+        }
+    }
+    evidence
+}
+
 fn read(root: &Path) -> Value {
     serde_json::from_slice(&std::fs::read(root.join("output/comparison.json")).unwrap()).unwrap()
 }
@@ -144,7 +194,11 @@ fn radix_full_cli_alternating_cold_warm_matrix_waits_post_receipt_summaries_and_
     let root = fixture("slow-readiness");
     let raw = invoke(root.path().into(), process::Cancellation::default());
     cleanup(&raw);
-    assert!(raw.process.success(), "{raw:?}");
+    assert!(
+        raw.process.success(),
+        "{}",
+        failure_evidence(root.path(), &raw)
+    );
     let result = read(root.path());
     assert!(result["error"].is_null(), "{result}");
     let case = &result["cases"][0];
@@ -173,6 +227,10 @@ fn radix_full_cli_alternating_cold_warm_matrix_waits_post_receipt_summaries_and_
         ]
     );
     for cell in cells {
+        let session_failure = cell["lifecycle"]
+            .get("session_failure")
+            .expect("successful cell must retain supervisor failure metadata");
+        assert!(session_failure.is_null(), "{cell}");
         assert!(cell["error"].is_null());
         assert_eq!(cell["config"]["n_gpu_layers"], 999);
         assert_eq!(cell["observations"].as_array().unwrap().len(), 6);
@@ -253,7 +311,7 @@ fn radix_full_cli_missing_summary_stream_failure_and_suffix_regression_refuse_wi
         let case = &result["cases"][0];
         assert_eq!(case["gate"]["passed"], false);
         let cells = case["cells"].as_array().unwrap();
-        assert!(cells.len() >= 4);
+        assert!(cells.len() >= 4, "{}", failure_evidence(root.path(), &raw));
         assert!(cells[..3].iter().all(|c| c["error"].is_null()));
         if mode == "missing-summary" {
             assert!(
@@ -299,7 +357,8 @@ fn radix_full_cli_marker_cancellation_after_warmup_retains_prior_cells_and_clean
     cleanup(&raw);
     assert!(
         marker,
-        "owned supervisor cancelled and joined before missing-marker assertion"
+        "owned supervisor cancelled and joined before missing-marker assertion: {}",
+        failure_evidence(root.path(), &raw)
     );
     assert!(cancel.is_cancelled());
     let result = read(root.path());

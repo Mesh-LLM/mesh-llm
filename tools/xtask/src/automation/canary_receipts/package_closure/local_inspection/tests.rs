@@ -73,18 +73,18 @@ impl Fixture {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path().canonicalize().unwrap();
         for dir in [
-            "third_party/llama.cpp/patches/model_support",
-            "third_party/llama.cpp/patches/generated",
+            "skippy/llama_cpp/patches/model_support",
+            "skippy/llama_cpp/patches/generated",
             "ci/llama-canary",
-            "docs/skippy",
-            "crates/skippy-ffi/src",
-            "crates/mesh-llm-host-runtime/src/inference/skippy",
+            "skippy/docs",
+            "skippy/crates/skippy-ffi/src",
+            "skippy/crates/skippy-api/src",
         ] {
             fs::create_dir_all(root.join(dir)).unwrap();
         }
         fs::write(root.join(".gitignore"), ".deps/\n").unwrap();
         fs::write(
-            root.join("third_party/llama.cpp/patches/0001-fixture.patch"),
+            root.join("skippy/llama_cpp/patches/0001-fixture.patch"),
             "fixture",
         )
         .unwrap();
@@ -93,29 +93,29 @@ impl Fixture {
             ("generated", "0001-family-fixture.patch"),
         ] {
             fs::write(
-                root.join(format!("third_party/llama.cpp/patches/{lane}/series")),
+                root.join(format!("skippy/llama_cpp/patches/{lane}/series")),
                 format!("{name}\n"),
             )
             .unwrap();
             fs::write(
-                root.join(format!("third_party/llama.cpp/patches/{lane}/{name}")),
+                root.join(format!("skippy/llama_cpp/patches/{lane}/{name}")),
                 "fixture",
             )
             .unwrap();
         }
         fs::write(
-            root.join("third_party/llama.cpp/upstream.txt"),
+            root.join("skippy/llama_cpp/upstream.txt"),
             format!("{}\n", "a".repeat(40)),
         )
         .unwrap();
-        fs::write(root.join("crates/skippy-ffi/src/lib.rs"),"pub const ABI_VERSION_MAJOR: u32 = 1;\npub const ABI_VERSION_MINOR: u32 = 2;\npub const ABI_VERSION_PATCH: u32 = 3;\n").unwrap();
+        fs::write(root.join("skippy/crates/skippy-ffi/src/lib.rs"),"pub const ABI_VERSION_MAJOR: u32 = 1;\npub const ABI_VERSION_MINOR: u32 = 2;\npub const ABI_VERSION_PATCH: u32 = 3;\n").unwrap();
         let family = json!({"policy":{"profiles":{"full":{"status":"certified","required_lanes":["single-step","chain","state-handoff"]}}},"models":[{"family":"fixture","class":"causal_generation","architecture":"fixture","profile":"full","resources":{"estimated_model_bytes":1}}]});
         fs::write(
             root.join("ci/llama-canary/family-certified.json"),
             serde_json::to_vec(&family).unwrap(),
         )
         .unwrap();
-        fs::write(root.join("docs/skippy/llama-parity-candidates.json"),serde_json::to_vec(&json!({"candidates":[{"llama_model":"fixture","family":"fixture","status":"needs_candidate"}]})).unwrap()).unwrap();
+        fs::write(root.join("skippy/docs/llama-parity-candidates.json"),serde_json::to_vec(&json!({"candidates":[{"llama_model":"fixture","family":"fixture","status":"needs_candidate"}]})).unwrap()).unwrap();
         process::text(&root, &["init", "--quiet"]).unwrap();
         let base = commit(&root);
         let native = root.join(".deps/llama.cpp");
@@ -133,7 +133,7 @@ impl Fixture {
             (".mesh-llm-prepare-schema", "5".into()),
             (
                 ".mesh-llm-patch-digest",
-                source::patch_digest(&root.join("third_party/llama.cpp/patches"))
+                source::patch_digest(&root.join("skippy/llama_cpp/patches"))
                     .unwrap()
                     .as_str()
                     .to_owned(),
@@ -193,7 +193,7 @@ fn local_authority_composes_dirty_manifest_parity_and_split_write_check_without_
         f.execute("local-split-roster", Some(true))?;
         fs::write(
             f.root
-                .join("crates/mesh-llm-host-runtime/src/inference/skippy/split-certified.json"),
+                .join("skippy/crates/skippy-api/src/split-certified.json"),
             "stale",
         )?;
         assert!(f.execute("local-split-roster", Some(true)).is_err());
@@ -309,7 +309,7 @@ fn policy_documents_reject_special_escaping_and_oversize_sources_in_local_and_wo
         fs::write(&target, b"foreign sentinel")?;
         for relative in [
             "ci/llama-canary/family-certified.json",
-            "docs/skippy/llama-parity-candidates.json",
+            "skippy/docs/llama-parity-candidates.json",
         ] {
             let path = f.root.join(relative);
             let original = fs::read(&path)?;
@@ -358,9 +358,7 @@ fn split_output_rejects_special_paths_in_local_and_workflow_check_and_write_with
     }
     process::operation(|| {
         let f = Fixture::new();
-        let parent = f
-            .root
-            .join("crates/mesh-llm-host-runtime/src/inference/skippy");
+        let parent = f.root.join("skippy/crates/skippy-api/src");
         let output = parent.join("split-certified.json");
         let outside = tempfile::tempdir()?;
         let target = outside.path().join("split-certified.json");

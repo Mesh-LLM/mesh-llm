@@ -6,7 +6,6 @@ license.workspace = true
 version.workspace = true
 
 [dependencies]
-mesh-llm-events = { path = "../../../mesh/crates/mesh-llm-events", version = "0.78.0" }
 anyhow.workspace = true
 same-file = "1.0.6"
 clap.workspace = true
@@ -21,7 +20,9 @@ ratatui = "0.30"
 serde.workspace = true
 serde_json.workspace = true
 sha2 = "0.11"
-tokio = { version = "1", features = ["rt"] }
+tokio = { version = "1", features = ["rt", "time"] }
 
-[dev-dependencies]
 tempfile = "3"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

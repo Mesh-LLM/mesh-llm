@@ -221,3 +221,108 @@ fn migration_canary_receipts_missing_required_lane_still_fails_with_matching_dig
     );
     assert!(when.github_outputs().is_none());
 }
+
+#[test]
+fn migration_canary_classification_preserves_mixed_failures_and_terminal_precedence() {
+    use crate::canary_receipts::aggregate::AggregateState;
+    let fixture = Fixture::complete();
+    fixture.edit("dense", "outcome", json!("failure"));
+    fixture.edit("hybrid", "outcome", json!("cancelled"));
+    let report = aggregate(&context(), &fixture.0).unwrap();
+    assert_eq!(report.state, AggregateState::InfrastructureRetryable);
+    assert_eq!(report.candidate_failures, [family("dense")].into());
+    assert_eq!(report.infrastructure_failures, [family("hybrid")].into());
+    assert!(!report.is_green());
+    assert!(report.github_outputs().is_none());
+    fixture.put("foreign", "dense", "2", "failure");
+    let report = aggregate(&context(), &fixture.0).unwrap();
+    assert_eq!(report.state, AggregateState::TerminalContract);
+    assert_eq!(report.candidate_failures, [family("dense")].into());
+}
+
+#[test]
+fn migration_canary_classification_requires_identity_and_result_digest_before_repair() {
+    use crate::canary_receipts::aggregate::AggregateState;
+    for (field, value) in [
+        ("candidate", json!("c".repeat(40))),
+        ("identity_sha256", json!("e".repeat(64))),
+        ("results_sha256", json!("e".repeat(64))),
+    ] {
+        let fixture = Fixture::complete();
+        fixture.edit("dense", "outcome", json!("failure"));
+        fixture.edit("dense", field, value);
+        let report = aggregate(&context(), &fixture.0).unwrap();
+        assert_eq!(report.state, AggregateState::TerminalContract, "{field}");
+        assert!(report.candidate_failures.is_empty());
+    }
+}
+
+#[test]
+fn migration_canary_classification_missing_memory_and_graph_outcomes_remain_distinct() {
+    use crate::canary_receipts::aggregate::AggregateState;
+    use crate::canary_receipts::{FamilyJobResult, aggregate_with_job_result};
+    let fixture = Fixture::complete();
+    fixture.edit("dense", "outcome", json!("failure"));
+    for memory in [
+        br#"{"status":"failed"}"#.as_slice(),
+        b"{",
+        b"{}",
+        br#"{"status":false}"#,
+        br#"{"status":"unknown"}"#,
+    ] {
+        fs::write(fixture.0.join("dense/memory-admission.json"), memory).unwrap();
+        let report = aggregate(&context(), &fixture.0).unwrap();
+        assert_eq!(report.state, AggregateState::InfrastructureRetryable);
+        assert_eq!(report.infrastructure_failures, [family("dense")].into());
+    }
+    fs::write(
+        fixture.0.join("dense/memory-admission.json"),
+        br#"{"status":"passed"}"#,
+    )
+    .unwrap();
+    assert_eq!(
+        aggregate(&context(), &fixture.0).unwrap().state,
+        AggregateState::CandidateRepairable
+    );
+    fs::remove_file(fixture.0.join("dense/memory-admission.json")).unwrap();
+    assert_eq!(
+        aggregate(&context(), &fixture.0).unwrap().state,
+        AggregateState::CandidateRepairable
+    );
+    fixture.edit("dense", "outcome", json!("success"));
+    for outcome in [
+        FamilyJobResult::Failure,
+        FamilyJobResult::Cancelled,
+        FamilyJobResult::Skipped,
+    ] {
+        assert_eq!(
+            aggregate_with_job_result(&context(), &fixture.0, outcome)
+                .unwrap()
+                .state,
+            AggregateState::TerminalContract
+        );
+    }
+    fs::remove_file(fixture.0.join("dense/receipt.json")).unwrap();
+    for outcome in [
+        FamilyJobResult::Success,
+        FamilyJobResult::Failure,
+        FamilyJobResult::Cancelled,
+        FamilyJobResult::Skipped,
+    ] {
+        let report = aggregate_with_job_result(&context(), &fixture.0, outcome).unwrap();
+        assert_eq!(report.state, AggregateState::InfrastructureRetryable);
+        assert_eq!(report.infrastructure_failures, [family("dense")].into());
+        assert!(report.candidate_failures.is_empty());
+    }
+}
+
+#[test]
+fn migration_canary_family_graph_result_admission_is_finite() {
+    use crate::canary_receipts::FamilyJobResult;
+    for result in ["success", "failure", "cancelled", "skipped"] {
+        assert!(FamilyJobResult::parse(result).is_ok());
+    }
+    for result in ["", "Success", "neutral", "failure\n", "timed_out"] {
+        assert!(FamilyJobResult::parse(result).is_err());
+    }
+}

@@ -1,3 +1,4 @@
+mod binding_observations;
 mod checks;
 mod exception_policy;
 mod just_process;
@@ -24,6 +25,12 @@ use checks::{check_inventory, check_policy};
 use ledger::{MigrationLedgers, tracked_paths};
 
 fn run_inventory(args: &[String]) -> DynResult<()> {
+    if args
+        .first()
+        .is_some_and(|command| command == "binding-observations")
+    {
+        return binding_observations::run(args);
+    }
     let root = crate::repo_consistency::repo_root()?;
     let ledgers = MigrationLedgers::load(&root)?;
     let paths = tracked_paths(&root)?;

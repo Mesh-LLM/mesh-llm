@@ -173,7 +173,7 @@ fn discover(root: &Path) -> DynResult<BTreeMap<String, usize>> {
 /// The Metal cache mutation must precede the application thread and the
 /// Tokio runtime inside `fn main()` of the shipped binary.
 fn bootstrap_order(root: &Path) -> DynResult<Option<String>> {
-    const MAIN: &str = "crates/mesh-llm/src/main.rs";
+    const MAIN: &str = "mesh/crates/mesh-llm/src/main.rs";
     let path = root.join(MAIN);
     if !path.is_file() {
         return Ok(Some(format!("{MAIN}: bootstrap caller is missing")));

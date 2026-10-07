@@ -2,7 +2,6 @@ use crate::snapshot_promotion::{lfs_transfer, local_publisher::SignalLatch};
 use anyhow::{Result, bail};
 use clap::Args;
 use std::{
-    io::Write as _,
     path::PathBuf,
     time::{Duration, Instant},
 };
@@ -21,7 +20,11 @@ pub(super) struct Options {
     #[arg(long, default_value_t = 3600)]
     pub timeout_seconds: u64,
 }
-pub(super) fn run(options: Options, latch: &SignalLatch) -> Result<()> {
+pub(super) fn run(
+    options: Options,
+    latch: &SignalLatch,
+    output: &mut dyn std::io::Write,
+) -> Result<()> {
     if !(1..=86400).contains(&options.timeout_seconds) {
         bail!("projector time bound refused");
     }
@@ -61,6 +64,6 @@ pub(super) fn run(options: Options, latch: &SignalLatch) -> Result<()> {
         std::fs::remove_file(root.join("projector.json"))?;
         return Err(error);
     }
-    writeln!(mesh_llm_events::machine_out(), "{}", path.display())?;
+    writeln!(output, "{}", path.display())?;
     Ok(())
 }

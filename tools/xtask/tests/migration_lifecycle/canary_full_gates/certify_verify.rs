@@ -161,12 +161,16 @@ repair_family_plan_step() { scripts/inert-plan-step.sh "$@"; }
 #[test]
 fn actual_verifier_materialization_invalidates_only_fixture_native_and_smoke_products() {
     let fixture = Fixture::new();
-    fixture.tool("tools/git", "git", r#"
+    fixture.tool(
+        "tools/git",
+        "git",
+        r#"
 if [[ "$*" == *'worktree add --detach'* ]]; then
-  mkdir -p "$INERT_ROOT/verification/third_party/llama.cpp"
-  printf '%s\n' "$INERT_VERIFIED_SHA" > "$INERT_ROOT/verification/third_party/llama.cpp/upstream.txt"
+  mkdir -p "$INERT_ROOT/verification/skippy/llama_cpp"
+  printf '%s\n' "$INERT_VERIFIED_SHA" > "$INERT_ROOT/verification/skippy/llama_cpp/upstream.txt"
 fi
-"#);
+"#,
+    );
     let relative = [
         "native-verification-fixture",
         "verification/.deps/llama.cpp",
@@ -230,7 +234,7 @@ printf '%s\0' "$ROOT" "$PIN_FILE" "$FAMILY_BATTERY_RUN_ID" "$PLAN_PATH" "$LLAMA_
         [
             verify.display().to_string(),
             verify
-                .join("third_party/llama.cpp/upstream.txt")
+                .join("skippy/llama_cpp/upstream.txt")
                 .display()
                 .to_string(),
             "fixture-verification".into(),
@@ -248,4 +252,120 @@ printf '%s\0' "$ROOT" "$PIN_FILE" "$FAMILY_BATTERY_RUN_ID" "$PLAN_PATH" "$LLAMA_
         ]
     );
     fixture.finish();
+}
+
+#[test]
+fn actual_candidate_gate_admits_descriptors_with_custody_before_compilation() {
+    for mode in [
+        "repair",
+        "verify",
+        "repair-build",
+        "verify-build",
+        "pinned-build",
+    ] {
+        for scenario in ["success", "refused", "substituted"] {
+            candidate_descriptor_gate(mode, scenario);
+        }
+    }
+}
+
+fn candidate_descriptor_gate(mode: &str, scenario: &str) {
+    let fixture = Fixture::new();
+    fixture.tool(
+        "scripts/inert-native-plan.sh",
+        "native",
+        r#"
+case "$*" in
+  *--cache-descriptors*)
+    [[ "$DESCRIPTOR_SCENARIO" != refused ]] || exit 17
+    if [[ "$DESCRIPTOR_SCENARIO" == substituted ]]; then printf '%s\n' '# replacement' >> "$0"; fi;;
+esac
+"#,
+    );
+    fixture.tool("scripts/inert-build.sh", "build", "");
+    let report = fixture.run(
+        mode,
+        &[
+            "repair_family_plan_step",
+            "repair_family_plan",
+            "run_candidate_gates",
+        ],
+        r#"
+MANIFEST_POLICY_LOG="$ROOT/manifest.log"
+HF_CACHE="$ROOT/immutable-cache"
+run_prepare() { printf '%s\n' prepare >> "$INERT_ROOT/order"; }
+verification_candidate_unchanged() { printf '%s\n' candidate >> "$INERT_ROOT/order"; }
+run_verification_logged() { shift 2; "$@"; }
+validate_agent_manifest_changes() { printf '%s\n' manifest >> "$INERT_ROOT/order"; }
+run_full_build() { scripts/inert-build.sh; }
+run_certification() { printf '%s\n' certify >> "$INERT_ROOT/order"; }
+run_early_metal_certification() { printf '%s\n' early >> "$INERT_ROOT/order"; }
+controller_parity_inventory() { printf '%s\n' inventory >> "$INERT_ROOT/order"; }
+"#,
+        "run_candidate_gates",
+        &[
+            ("DESCRIPTOR_SCENARIO", scenario.into()),
+            (
+                "MESH_LLM_AUTOMATION_BIN",
+                fixture
+                    .root
+                    .join("scripts/inert-native-plan.sh")
+                    .display()
+                    .to_string(),
+            ),
+        ],
+    );
+    assert_eq!(
+        report.process.status.unwrap().code(),
+        Some(if scenario == "success" { 0 } else { 1 }),
+        "{mode}/{scenario}: {}",
+        fixture.diagnostic(&report)
+    );
+    let mut expected = vec!["prepare"];
+    for _ in 0..4 {
+        expected.extend(["candidate", "native", "candidate"]);
+    }
+    if scenario == "success" {
+        if mode.ends_with("-build") {
+            expected.extend(["manifest", "native", "build", "early", "inventory"]);
+        } else {
+            expected.extend(["manifest", "build", "certify"]);
+        }
+    }
+    assert_eq!(fixture.order(), expected, "{mode}/{scenario}");
+    if scenario == "substituted" {
+        assert!(
+            fixture
+                .diagnostic(&report)
+                .contains("frozen workload automation controller changed")
+        );
+    }
+    assert_descriptor_arguments(&fixture);
+    fixture.finish();
+}
+
+fn assert_descriptor_arguments(fixture: &Fixture) {
+    let arguments = fixture.args("native-4");
+    assert_eq!(
+        &arguments[..3],
+        ["automation", "family-battery-policy", "--cache-descriptors"]
+    );
+    assert_eq!(arguments[3], fixture.root.display().to_string());
+    assert_eq!(
+        arguments[4],
+        fixture
+            .root
+            .join("ci/llama-canary/family-certified.json")
+            .display()
+            .to_string()
+    );
+    assert_eq!(
+        arguments[5],
+        fixture.root.join("plan.json").display().to_string()
+    );
+    assert_eq!(
+        arguments[6],
+        fixture.root.join("immutable-cache").display().to_string()
+    );
+    assert!(!arguments.iter().any(|arg| arg.contains(".py")));
 }

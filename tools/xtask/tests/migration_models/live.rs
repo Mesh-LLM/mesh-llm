@@ -79,6 +79,17 @@ fn migration_models_frozen_manifests_match_the_checkout() -> TestResult {
         }
         if let Some(rows) = frozen["artifacts"].as_array_mut() {
             for row in rows {
+                if row["id"] == "qwen3-q8-correctness" {
+                    assert_eq!(
+                        row["notes"],
+                        "Pinned Skippy runtime/model-package correctness fixture."
+                    );
+                    // Main added the Skippy crate prefix to this human-readable note;
+                    // frozen identities and every integrity field remain asserted below.
+                    row["notes"] = Value::from(
+                        "Pinned Skippy runtime/skippy-model-package correctness fixture.",
+                    );
+                }
                 if row["id"] == "family-qwen3-dense" {
                     row["suites"]
                         .as_array_mut()

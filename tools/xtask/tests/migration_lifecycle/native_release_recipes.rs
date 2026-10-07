@@ -92,12 +92,16 @@ impl Fixture {
         fs::create_dir_all(root.join("scripts")).unwrap();
         fs::create_dir_all(root.join("bin")).unwrap();
         // The selected recipe body is emitted by native Just, never flattened/reparsed in Rust.
+        let product_steps = "skippy-cli-release-build:\n    @printf 'skippy\\n' >> events\n\nrelease-host-build:\n    @printf 'mesh\\n' >> events\n\n";
         let dependencies = match name {
-            "release-build-cuda" | "release-build-aarch64-cuda" => {
-                "release-host-build:\n    @true\n\n"
-            }
-            "bundle" => "release-build:\n    @true\n\n",
-            _ => "",
+            "release-build" => format!("{}\n{product_steps}", recipe("release-runtime-build")),
+            "release-build-cuda"
+            | "release-build-aarch64-cuda"
+            | "release-build-aarch64"
+            | "release-build-rocm"
+            | "release-build-vulkan" => product_steps.to_owned(),
+            "bundle" => "release-build:\n    @true\n\n".to_owned(),
+            _ => String::new(),
         };
         fs::write(
             root.join("Justfile"),
@@ -116,6 +120,7 @@ impl Fixture {
             &root.join("scripts/package-native-runtime.sh"),
             r#"#!/bin/bash
 set -euo pipefail
+printf 'runtime\n' >> "$FIXTURE_ROOT/events"
 printf '%s\n' "${LLAMA_STAGE_CUDA_ARCHITECTURES:-}" "${MESH_LLM_CUDA_TOOLKIT_MAJOR:-}" > "$FIXTURE_ROOT/environment"
 printf '%s\0' "$@" > "$FIXTURE_ROOT/arguments"
 "#,
@@ -249,18 +254,67 @@ fn native_release_recipes_runtime_arguments_survive_empty_defaults_under_nounset
             expected
         );
     }
-    #[cfg(target_os = "linux")]
-    {
-        let f = Fixture::new("build-runtime");
-        assert_eq!(
-            f.run("build-runtime", &[], None, None).1,
-            ["--build", "--backend", "cpu"]
+}
+
+#[test]
+fn native_release_recipes_platform_default_is_metal_on_darwin_and_cpu_elsewhere() {
+    let fixture = Fixture::new("release-runtime-build");
+    for (platform, backend) in [("Darwin", "metal"), ("Linux", "cpu")] {
+        executable(
+            &fixture.root.join("bin/uname"),
+            &format!("#!/bin/sh\nprintf '%s\\n' '{platform}'\n"),
         );
         assert_eq!(
-            f.run("build-runtime", &["cuda"], None, None).1,
-            ["--build", "--backend", "cuda"]
+            fixture.run("release-runtime-build", &[], None, None).1,
+            ["--build", "--backend", backend]
         );
     }
+}
+
+#[test]
+fn native_release_recipes_execute_runtime_then_skippy_then_mesh_for_all_six_products() {
+    for name in [
+        "release-build",
+        "release-build-aarch64",
+        "release-build-aarch64-cuda",
+        "release-build-cuda",
+        "release-build-rocm",
+        "release-build-vulkan",
+    ] {
+        let fixture = Fixture::new(name);
+        fixture.run(name, &[], Some("13.1.2"), None);
+        assert_eq!(
+            fs::read_to_string(fixture.root.join("events")).unwrap(),
+            "runtime\nskippy\nmesh\n",
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn native_release_bundle_preserves_flavor_arch_version_and_output_arguments() {
+    let fixture = Fixture::new("release-bundle");
+    executable(
+        &fixture.root.join("scripts/package-release.sh"),
+        "#!/bin/sh\nprintf '%s\\n' \"$MESH_RELEASE_FLAVOR\" \"$MESH_RELEASE_ARCH\" \"$1\" \"$2\" > forwarded\n",
+    );
+    invoke(
+        &fixture.root,
+        &[
+            "--justfile",
+            "Justfile",
+            "release-bundle",
+            "v1.2.3",
+            "output with spaces",
+            "cuda",
+            "aarch64",
+        ],
+        &[],
+    );
+    assert_eq!(
+        fs::read_to_string(fixture.root.join("forwarded")).unwrap(),
+        "cuda\naarch64\nv1.2.3\noutput with spaces\n"
+    );
 }
 #[test]
 fn native_release_recipes_bundle_copies_product_and_checksum_not_host_binary() {
@@ -306,7 +360,6 @@ printf 'version-specific bytes\n' > "$2/mesh-llm-v1.2.3-linux-x86_64.tar.gz"
 #[test]
 fn native_release_recipes_windows_select_dynamic_hosts_and_cuda12_pascal_default() {
     for (name, backend) in [
-        ("release-build-windows", "cpu"),
         ("release-build-cuda-windows", "cuda"),
         ("release-build-rocm-windows", "rocm"),
         ("release-build-vulkan-windows", "vulkan"),

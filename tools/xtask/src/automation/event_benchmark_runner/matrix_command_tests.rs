@@ -120,7 +120,9 @@ fn fake_trial(
     let report = process::supervise(
         &spec,
         &Limits {
-            execution: Duration::from_secs(2),
+            // This fixture proves forwarding/order, not scheduler timing. Keep its
+            // finite printf child bounded without a two-second full-suite race.
+            execution: Duration::from_secs(10),
             graceful_shutdown: Duration::from_millis(100),
             forced_shutdown: Duration::from_millis(100),
             retained_bytes_per_stream: 4096,
@@ -133,7 +135,12 @@ fn fake_trial(
             stderr: Some(input.directory.join("server.stderr.log")),
         },
     )?;
-    assert_eq!(report.outcome, process::Outcome::Exited);
+    assert_eq!(
+        report.outcome,
+        process::Outcome::Exited,
+        "finite printf-only fixture completion failed: {report:?}; observed argv: {:?}",
+        std::fs::read_to_string(input.directory.join("observed-argv"))
+    );
     assert_eq!(
         report
             .status

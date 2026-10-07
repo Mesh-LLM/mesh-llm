@@ -110,24 +110,36 @@ frozen_case!(migration_ci_plan_native_pin_escalates, "native-pin");
 fn native_pin_current_workspace_adds_reader_to_required_rust_batches() -> TestResult {
     let stage = Stage::new("native-pin-current-workspace")?;
     let manifests = stage.manifest_root("default")?;
-    let metadata: Value =
-        serde_json::from_slice(&fs::read(fixture_root().join("cargo-metadata.json"))?)?;
-    let packages = metadata["packages"].as_array().ok_or("fixture packages")?;
-    let mut workspace = packages
+    // Current catalogs and member manifests form one source-owned generation.
+    // Frozen63 goldens below continue using their isolated historical fixtures.
+    let root = repository_root();
+    for catalog in ["ownership", "slices"] {
+        fs::copy(
+            root.join(format!("ci/{catalog}.yml")),
+            manifests.join(format!("ci/{catalog}.yml")),
+        )?;
+    }
+    let manifest: toml::Value = toml::from_str(&fs::read_to_string(root.join("Cargo.toml"))?)?;
+    let members = manifest["workspace"]["members"]
+        .as_array()
+        .ok_or("current workspace members")?;
+    let workspace = members
         .iter()
-        .map(|package| {
-            let manifest = package["manifest_path"]
+        .map(|member| {
+            let path = member.as_str().ok_or("current member path")?;
+            let package: toml::Value =
+                toml::from_str(&fs::read_to_string(root.join(path).join("Cargo.toml"))?)?;
+            let name = package["package"]["name"]
                 .as_str()
-                .ok_or("package manifest")?;
-            let path = manifest
-                .strip_prefix("/workspace/")
-                .and_then(|path| path.strip_suffix("/Cargo.toml"))
-                .ok_or("workspace-relative package manifest")?;
-            Ok(serde_json::json!({"name":package["name"],"path":path}))
+                .ok_or("current package name")?;
+            Ok(serde_json::json!({"name": name, "path": path}))
         })
         .collect::<Result<Vec<_>, Box<dyn std::error::Error>>>()?;
-    workspace
-        .push(serde_json::json!({"name":"trajectory-reader","path":"tools/trajectory-reader"}));
+    assert!(
+        workspace
+            .iter()
+            .any(|member| member["name"] == "trajectory-reader")
+    );
     let mut input: Value = serde_json::from_slice(&load_case("native-pin")?.input)?;
     input
         .as_object_mut()

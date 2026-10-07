@@ -670,6 +670,12 @@ dependencies = [
 
 [[package]]
 name = "base64"
+version = "0.13.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9e1b586273c5702936fe7b7d6896644d8be71e6314cfe09d3167c95f712589e8"
+
+[[package]]
+name = "base64"
 version = "0.22.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
@@ -679,12 +685,6 @@ name = "base64"
 version = "0.23.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ac07cdecf99051d9a5238b80f35af32cdeba5b336e55d957b318b50137e18da5"
-
-[[package]]
-name = "base64"
-version = "0.13.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9e1b586273c5702936fe7b7d6896644d8be71e6314cfe09d3167c95f712589e8"
 
 [[package]]
 name = "base64ct"
@@ -6929,11 +6929,11 @@ checksum = "b4596b6d070b27117e987119b4dac604f3c58cfb0b191112e24771b2faeac1a6"
 
 [[package]]
 name = "plist"
-version = "1.10.1"
+version = "1.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2896bade328c13f7042a297ea5ac5b0951f6cf989dea5f32c2fd98da398195cb"
+checksum = "7da1d65da6dd5d1e44199ac0f58712d241c0f439f80adea8924d832384087f85"
 dependencies = [
- "base64 0.23.1",
+ "base64 0.22.1",
  "indexmap",
  "quick-xml",
  "serde",
@@ -7278,9 +7278,9 @@ checksum = "95067976aca6421a523e491fce939a3e65249bac4b977adee0ee9771568e8aa3"
 
 [[package]]
 name = "quick-xml"
-version = "0.42.0"
+version = "0.41.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "41b1177fdf999d2321d3fb46ff47159d9c1fb9ad66a4879f8c50a0b504615e9b"
+checksum = "e660451e55124f798a69a5af3f49ccfbefbd41910eefd25caf2393e1f3473ec1"
 dependencies = [
  "memchr",
 ]
@@ -8003,9 +8003,9 @@ dependencies = [
 
 [[package]]
 name = "rustls"
-version = "0.23.45"
+version = "0.23.43"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0d41d731c7d2f962d1ccc364cec258de3c0e93b38c2fb3ba97ac74513048d634"
+checksum = "0283386ce02abc0151e1761d08802dfe86c173b0b494af5cbc086574e453da06"
 dependencies = [
  "aws-lc-rs",
  "log",
@@ -8741,6 +8741,7 @@ dependencies = [
  "reqwest 0.13.5",
  "serde",
  "serde_json",
+ "sha2 0.11.0",
  "skippy-cache",
  "skippy-model-artifact",
  "skippy-model-hf",
@@ -8748,6 +8749,7 @@ dependencies = [
  "skippy-protocol",
  "skippy-runtime",
  "skippy-topology",
+ "tempfile",
 ]
 
 [[package]]
@@ -8925,6 +8927,7 @@ dependencies = [
  "hf-xet",
  "http",
  "hyper",
+ "libc",
  "pathdiff",
  "percent-encoding",
  "reqwest 0.13.5",
@@ -9032,7 +9035,6 @@ dependencies = [
  "clap",
  "futures",
  "libc",
- "mesh-llm-events",
  "reqwest 0.13.5",
  "serde",
  "serde_json",
@@ -9084,7 +9086,7 @@ version = "0.78.0"
 dependencies = [
  "anyhow",
  "clap",
- "mesh-llm-events",
+ "libc",
  "ratatui",
  "same-file",
  "serde",
@@ -10359,7 +10361,7 @@ dependencies = [
 
 [[package]]
 name = "trajectory-reader"
-version = "0.77.0"
+version = "0.78.0"
 dependencies = [
  "hyper",
  "libc",
@@ -10747,9 +10749,9 @@ checksum = "06abde3611657adf66d383f00b093d7faecc7fa57071cce2578660c9f1010821"
 
 [[package]]
 name = "uuid"
-version = "1.26.1"
+version = "1.26.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2ef6dac1e96601b4fb3acccccff2139741fcb757cb9a36089bf5be91cfb285ce"
+checksum = "b5772d71c9be8a8a6ac2117d949c5b224c1b72241bb611d9a3012edcf8af7812"
 dependencies = [
  "atomic",
  "getrandom 0.4.3",

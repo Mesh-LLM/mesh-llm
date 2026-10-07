@@ -217,7 +217,7 @@ fn actual_whole_smoke_wrapper_preserves_gate_exits_without_python_or_native_exec
     let bin = scratch.path().join("bin");
     fs::create_dir(&bin).unwrap();
     let search = std::env::var_os("PATH").unwrap();
-    for name in ["jq", "curl", "mkdir", "dirname", "cat"] {
+    for name in ["jq", "curl", "mkdir", "dirname", "cat", "bash"] {
         let executable = std::env::split_paths(&search)
             .map(|directory| directory.join(name))
             .find(|path| path.is_file())

@@ -10,10 +10,19 @@ pub(super) struct Owner {
     pub readiness: Option<Launch>,
     pub measurement: Option<Launch>,
     pub input: Input,
+    pub dialect: crate::automation::skippy_cli_admission::Dialect,
     pub marker: bool,
     pub stopping: bool,
 }
 impl Owner {
+    pub(super) fn bound_session(&mut self, execution: Duration) {
+        for launch in [&mut self.server, &mut self.readiness, &mut self.measurement]
+            .into_iter()
+            .flatten()
+        {
+            launch.readiness_deadline = launch.readiness_deadline.min(execution);
+        }
+    }
     fn listening(&self, bytes: &[u8]) -> bool {
         if bytes.len() > 16384 {
             return false;
@@ -27,6 +36,24 @@ impl Owner {
                 self.input.port
             );
             return line.trim() == marker;
+        }
+        if matches!(
+            self.dialect,
+            crate::automation::skippy_cli_admission::Dialect::Current
+        ) {
+            let Ok(event) = serde_json::from_str::<serde_json::Value>(line) else {
+                return false;
+            };
+            return event["schema_version"].as_u64() == Some(1)
+                && event["type"] == "status"
+                && event["sequence"]
+                    .as_u64()
+                    .is_some_and(|sequence| sequence > 0)
+                && event["data"]["message"].as_str()
+                    == Some(&format!(
+                        "skippy-serving listening: openai=127.0.0.1:{}",
+                        self.input.port
+                    ));
         }
         let marker = format!(
             "skippy-server listening: openai=127.0.0.1:{} model_id={} backend=",

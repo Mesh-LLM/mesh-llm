@@ -19,6 +19,22 @@ Protected pinned resolver and no-checkout authority callers remain transitional
 pending protected-main delivery. These source changes do not qualify live
 Linux measurements, provider isolation or protected rollout.
 
+Standalone Skippy CLI preparation verifies Unix and Windows host imports through
+`native verify-host-dependencies`, preserving the import report and checksum
+before the immutable input is handed to consumers.
+
+Cached Linux runtimes use `native verify-runtime-package` with the planned
+backend and exact target for both the directory and archive. Schema, integrity,
+native probes and directory/archive manifest equality remain required.
+Distributed canary repair uses native build admission for the exact previous
+producer and candidate-only feedback. The repair prompt's bounded summary is
+rendered from the admitted immutable snapshot before the wrapper starts.
+Attempt and final selection use native commands after frozen-controller
+preparation. Native aggregation and reconciliation bind run, controller,
+selected-source and family job results before publishing classified feedback.
+Infrastructure retry rows reuse controller placement over verified canonical
+plan bytes while preserving source row identity, order and unknown fields.
+
 L12 local reconciliation preserves the five PR/main entrypoints and protected
 executor boundaries. Quality runs Rust workflow permission, container-shell and
 expression guards plus the real build-script adapter tests. The native Windows
@@ -1552,8 +1568,7 @@ promote an estimate-selected row but cannot demote it; plans without the field
 remain estimate-only. GLM-4.5-Air, Qwen4exp and Llama4 currently require the
 256-plus tier through this policy.
 
-The controller Rust canary preflight placement owner and retained worker
-`scripts/lib/canary_family_memory.py` use the greater of pinned file sizes and
+The Rust canary source-plan placement owner uses the greater of pinned file sizes and
 the model estimate, including projector/draft artifacts. Causal parity releases
 the monolithic oracle before partitioned execution and releases state source
 before restore: one aggregate weight copy plus a 25% tensor/KV/state/scratch
@@ -1562,10 +1577,11 @@ execution budgets two complete weight copies plus 25% and 2 GiB per process.
 These are explicit admission estimates for the current short-context harness,
 not measured peak guarantees; changes to concurrency/context require review.
 
-The worker recomputes placement from the digest-verified plan, waits for one
+Native `automation canary-receipts certify` workers recompute placement from the
+digest-verified plan, wait for one
 pre-provisioned cross-account physical-host lock in the root-owned
-`/Library/Application Support/MeshLLM/locks` directory, checks actual physical capacity and
-available memory, and polls availability once per second while running the battery.
+`/Library/Application Support/MeshLLM/locks` directory, check actual physical capacity and
+available memory, and poll availability once per second while running the battery.
 Expected contention between runner services on one machine is serialized rather
 than reported as a family failure; the evidence records whether and how long the
 worker waited. Available memory is macOS free + inactive + speculative pages;

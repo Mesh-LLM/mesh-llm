@@ -1,3 +1,6 @@
+#[path = "current_composition.rs"]
+mod current_composition;
+
 use crate::support::{TestResult, execute, fixture, read_json};
 use serde_json::Value;
 
@@ -98,17 +101,17 @@ fn run_group(group: &str) -> TestResult {
 
 #[test]
 fn migration_product_compose_writes_manifests() -> TestResult {
-    run_group("compose")
+    current_composition::writes_manifests()
 }
 
 #[test]
 fn migration_product_compose_check_verifies_existing_manifests() -> TestResult {
-    run_group("check")
+    current_composition::checks_existing_manifest()
 }
 
 #[test]
 fn migration_product_compose_rejects_mismatched_or_missing_inputs() -> TestResult {
-    run_group("reject")
+    current_composition::rejects_mismatch()
 }
 
 #[test]
@@ -118,5 +121,5 @@ fn migration_product_compose_reports_malformed_runtime_manifests() -> TestResult
 
 #[test]
 fn migration_product_compose_argv_matches_argparse() -> TestResult {
-    run_group("argv")
+    current_composition::argv_contract()
 }

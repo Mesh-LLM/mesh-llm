@@ -191,9 +191,23 @@
       "file": ".github/workflows/llama-canary-family-pass.yml",
       "members": [
         [
-          279,
+          101,
           "aecf7d458f8b1108",
           1,
+          "metadata",
+          "uses local setup-canary-python action (separately inventoried), not a shell invocation on this line"
+        ],
+        [
+          300,
+          "aecf7d458f8b1108",
+          2,
+          "metadata",
+          "uses local setup-canary-python action (separately inventoried), not a shell invocation on this line"
+        ],
+        [
+          474,
+          "aecf7d458f8b1108",
+          3,
           "metadata",
           "uses local setup-canary-python action (separately inventoried), not a shell invocation on this line"
         ]

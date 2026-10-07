@@ -16,6 +16,7 @@ pub(super) fn check(workflows: &BTreeMap<String, Node>) -> DynResult<()> {
         "CANARY_SOURCE_ROOT",
         "${{ github.workspace }}${{ inputs.mesh_source != '' && '/canary-source' || '' }}",
     )?;
+    super::canary_sdk::check(document)?;
     let build = h::job(document, "build")?;
     h::condition(
         build,
@@ -34,11 +35,153 @@ pub(super) fn check(workflows: &BTreeMap<String, Node>) -> DynResult<()> {
     let env = h::member(admission, "env")?;
     h::binding(env, "IDENTITY", "${{ needs.build.outputs.identity }}")?;
     h::binding(env, "FAMILY_RESULT", "${{ needs.family.result }}")?;
+    classified_outputs(aggregate, "aggregate")?;
+    classified_outputs(h::job(document, "reconcile")?, "reconcile")?;
+    classified_recheck(document)
+}
+
+fn classified_outputs(job: &Node, id: &str) -> DynResult<()> {
+    let outputs = h::member(job, "outputs")?;
+    for key in [
+        "green",
+        "state",
+        "repairable",
+        "failure_class",
+        "failure_stage",
+    ] {
+        h::binding(
+            outputs,
+            key,
+            &format!("${{{{ steps.{id}.outputs.{key} }}}}"),
+        )?;
+    }
+    if id == "aggregate" {
+        for key in ["retry_matrix", "feedback_ready"] {
+            h::binding(
+                outputs,
+                key,
+                &format!("${{{{ steps.{id}.outputs.{key} }}}}"),
+            )?;
+        }
+    }
+    let (kind, name, path) = if id == "aggregate" {
+        (
+            "feedback",
+            "Upload classified family failure evidence",
+            "canary-family-feedback",
+        )
+    } else {
+        (
+            "reconciled-feedback",
+            "Upload reconciled candidate repair evidence",
+            "reconciled-family-feedback",
+        )
+    };
+    let identity = format!(
+        "llama-family-{kind}-${{{{ github.run_id }}}}-${{{{ github.run_attempt }}}}-${{{{ inputs.pass_id }}}}-${{{{ needs.build.outputs.identity }}}}"
+    );
+    h::binding(outputs, "feedback", &identity)?;
+    let steps = h::steps(job)?;
+    let (execute, _) = h::step(steps, "id", id)?;
+    let (upload, step) = h::step(steps, "name", name)?;
+    h::before(execute, upload)?;
+    h::condition(
+        step,
+        &format!("${{{{ !cancelled() && steps.{id}.outputs.feedback_ready == 'true' }}}}"),
+    )?;
+    if !field(step, "uses").is_some_and(|value| value.starts_with("actions/upload-artifact@")) {
+        return Err("classified feedback requires an artifact upload".into());
+    }
+    let inputs = h::member(step, "with")?;
+    h::binding(inputs, "name", &identity)?;
+    h::binding(inputs, "path", &format!("${{{{ runner.temp }}}}/{path}/"))?;
+    h::binding(inputs, "if-no-files-found", "error")
+}
+
+fn classified_recheck(document: &Node) -> DynResult<()> {
+    let retry = h::job(document, "retry_family")?;
+    h::needs(retry, &["build", "aggregate"])?;
+    h::condition(
+        retry,
+        "${{ !cancelled() && needs.aggregate.outputs.state == 'infrastructure_retryable' }}",
+    )?;
+    h::binding(
+        h::member(retry, "strategy")?,
+        "matrix",
+        "${{ fromJSON(needs.aggregate.outputs.retry_matrix) }}",
+    )?;
+    h::binding(
+        h::member(retry, "env")?,
+        "IDENTITY",
+        "${{ needs.build.outputs.identity }}",
+    )?;
+    super::canary_execution::retry_worker(retry)?;
+    let reconcile = h::job(document, "reconcile")?;
+    h::needs(reconcile, &["build", "aggregate", "retry_family"])?;
+    h::condition(
+        reconcile,
+        "${{ !cancelled() && needs.aggregate.outputs.state == 'infrastructure_retryable' }}",
+    )?;
+    let steps = h::steps(reconcile)?;
+    let (execute, command) = h::step(steps, "id", "reconcile")?;
+    let checkout = h::checkout(steps, "${{ inputs.source }}", None)?;
+    h::before(checkout, execute)?;
+    super::canary_execution::preparation(steps, "${{ inputs.source }}", execute)?;
+    super::canary_execution::classified_context(command)?;
+    reconciliation_downloads(steps, execute)?;
+    h::binding(
+        h::member(command, "env")?,
+        "IDENTITY",
+        "${{ needs.build.outputs.identity }}",
+    )?;
+    h::binding(
+        h::member(command, "env")?,
+        "FAMILY_RESULT",
+        "${{ needs.retry_family.result }}",
+    )?;
     h::command(
-        admission,
-        &["test", "\"$FAMILY_RESULT\""],
-        &[("=", "success")],
+        command,
+        &[
+            "\"$MESH_LLM_AUTOMATION_BIN\"",
+            "automation",
+            "canary-receipts",
+            "reconcile",
+        ],
+        &[
+            ("--package", "\"$RUNNER_TEMP/reconcile-input\""),
+            ("--identity", "\"$IDENTITY\""),
+            ("--previous-feedback", "\"$RUNNER_TEMP/previous-feedback\""),
+            ("--evidence", "\"$RUNNER_TEMP/retry-evidence\""),
+            ("--family-result", "\"$FAMILY_RESULT\""),
+            (
+                "--feedback-output",
+                "\"$RUNNER_TEMP/reconciled-family-feedback\"",
+            ),
+        ],
     )
+}
+
+fn reconciliation_downloads(steps: &[Node], execute: usize) -> DynResult<()> {
+    for (key, identity, path) in [
+        (
+            "name",
+            "${{ needs.build.outputs.package }}",
+            "${{ runner.temp }}/reconcile-input",
+        ),
+        (
+            "name",
+            "${{ needs.aggregate.outputs.feedback }}",
+            "${{ runner.temp }}/previous-feedback",
+        ),
+        (
+            "pattern",
+            "llama-family-retry-${{ github.run_id }}-${{ needs.build.outputs.identity }}-*-${{ inputs.pass_id }}-*",
+            "${{ runner.temp }}/retry-evidence",
+        ),
+    ] {
+        super::canary_execution::download(steps, key, identity, path, execute)?;
+    }
+    Ok(())
 }
 
 fn build_handoffs(build: &Node) -> DynResult<()> {
@@ -77,6 +220,10 @@ fn build_handoffs(build: &Node) -> DynResult<()> {
             "CANARY_PREVIOUS_PACKAGE",
             "${{ inputs.previous_package != '' && format('{0}/canary-previous-{1}', runner.temp, inputs.pass_id) || '' }}",
         ),
+        (
+            "CANARY_PREVIOUS_FEEDBACK",
+            "${{ inputs.previous_feedback != '' && format('{0}/canary-feedback-{1}', runner.temp, inputs.pass_id) || '' }}",
+        ),
     ] {
         h::binding(env, key, value)?;
     }
@@ -100,6 +247,7 @@ fn build_handoffs(build: &Node) -> DynResult<()> {
             ("selected_revision", "\"$CANARY_BUILD_SOURCE_REVISION\""),
             ("previous_identity", "\"$CANARY_PREVIOUS_IDENTITY\""),
             ("previous_candidate", "\"$CANARY_CANDIDATE_SHA\""),
+            ("previous_feedback", "\"$CANARY_PREVIOUS_FEEDBACK\""),
         ],
     )?;
     let outputs = h::member(build, "outputs")?;
@@ -198,13 +346,10 @@ fn worker(job: &Node) -> DynResult<()> {
         "MEMORY_TIER",
         "${{ matrix.memory_tier }}",
     )?;
-    let (_, admission) = h::step(steps, "name", "Require successful family certification")?;
-    h::binding(
-        h::member(admission, "env")?,
-        "OUTCOME",
-        "${{ steps.certify.outcome }}",
-    )?;
-    h::command(admission, &["test", "\"$OUTCOME\""], &[("=", "success")])
+    super::canary_execution::final_certification_gate(
+        steps,
+        "Require successful family certification",
+    )
 }
 
 #[cfg(test)]
@@ -299,6 +444,214 @@ mod tests {
                 .unwrap();
             h::replace(command, &["env", key], Node::Scalar(value.into()));
             assert!(validate(node).is_err());
+        }
+    }
+    #[test]
+    fn retry_cannot_replace_feedback_custody() {
+        for (path, value) in [
+            (vec!["jobs", "retry_family", "if"], "true"),
+            (
+                vec!["jobs", "retry_family", "strategy", "matrix"],
+                "${{ needs.build.outputs.matrix }}",
+            ),
+            (
+                vec!["jobs", "retry_family", "env", "IDENTITY"],
+                "${{ needs.build.outputs.head }}",
+            ),
+            (vec!["jobs", "reconcile", "if"], "true"),
+        ] {
+            let mut node = document();
+            h::replace(&mut node, &path, Node::Scalar(value.into()));
+            assert!(validate(node).is_err(), "{path:?}");
+        }
+        let mut node = document();
+        let Node::Seq(steps) = h::mutable(
+            h::mutable(h::mutable(&mut node, "jobs"), "reconcile"),
+            "steps",
+        ) else {
+            unreachable!()
+        };
+        let execute = steps
+            .iter_mut()
+            .find(|step| field(step, "id") == Some("reconcile"))
+            .unwrap();
+        let source = field(execute, "run").unwrap().replace(
+            "--previous-feedback \"$RUNNER_TEMP/previous-feedback\"",
+            "--previous-feedback unbound",
+        );
+        h::replace(execute, &["run"], Node::Scalar(source));
+        assert!(validate(node).is_err());
+    }
+
+    #[test]
+    fn classified_transactions_require_native_context_and_feedback_destination() {
+        for id in ["aggregate", "reconcile"] {
+            for (before, after) in [
+                ("--run-id \"$GITHUB_RUN_ID\"", "--run-id foreign"),
+                ("--run-attempt \"$GITHUB_RUN_ATTEMPT\"", "--run-attempt 1"),
+                (
+                    "--controller-revision \"$CANARY_CONTROLLER_SHA\"",
+                    "--controller-revision foreign",
+                ),
+                (
+                    "--selected-source \"$CANARY_MESH_SOURCE\"",
+                    "--selected-source foreign",
+                ),
+                (
+                    "--family-result \"$FAMILY_RESULT\"",
+                    "--family-result success",
+                ),
+                ("--feedback-output", "--feedback"),
+                ("\"$MESH_LLM_AUTOMATION_BIN\" automation", "echo automation"),
+            ] {
+                let mut node = document();
+                let job = h::mutable(h::mutable(&mut node, "jobs"), id);
+                let Node::Seq(steps) = h::mutable(job, "steps") else {
+                    unreachable!()
+                };
+                let command = steps
+                    .iter_mut()
+                    .find(|step| field(step, "id") == Some(id))
+                    .unwrap();
+                let run = field(command, "run").unwrap();
+                assert!(run.contains(before), "missing mutation {id}: {before}");
+                let run = run.replace(before, after);
+                h::replace(command, &["run"], Node::Scalar(run));
+                assert!(validate(node).is_err(), "{id}: {before}");
+            }
+        }
+    }
+
+    #[test]
+    fn classified_transactions_cannot_skip_or_reorder_controller_preparation() {
+        for id in ["aggregate", "reconcile"] {
+            for mutation in 0..4 {
+                let mut node = document();
+                let job = h::mutable(h::mutable(&mut node, "jobs"), id);
+                let Node::Seq(steps) = h::mutable(job, "steps") else {
+                    unreachable!()
+                };
+                let prepare = steps
+                    .iter()
+                    .position(|step| {
+                        field(step, "uses") == Some("./.github/actions/prepare-automation")
+                    })
+                    .unwrap();
+                let execute = steps
+                    .iter()
+                    .position(|step| field(step, "id") == Some(id))
+                    .unwrap();
+                match mutation {
+                    0 => {
+                        steps.remove(prepare);
+                    }
+                    1 => steps.swap(prepare, execute),
+                    2 => {
+                        let Node::Map(entries) = &mut steps[prepare] else {
+                            unreachable!()
+                        };
+                        entries.push(("if".into(), Node::Scalar("false".into())));
+                    }
+                    _ => h::replace(
+                        &mut steps[prepare],
+                        &["with", "runner-profile"],
+                        Node::Scalar("untrusted".into()),
+                    ),
+                }
+                assert!(validate(node).is_err(), "{id}: preparation {mutation}");
+            }
+        }
+    }
+
+    #[test]
+    fn classified_outputs_and_feedback_uploads_cannot_forge_or_lose_readiness() {
+        for id in ["aggregate", "reconcile"] {
+            for key in [
+                "green",
+                "state",
+                "repairable",
+                "failure_class",
+                "failure_stage",
+                "feedback",
+            ] {
+                let mut node = document();
+                h::replace(
+                    &mut node,
+                    &["jobs", id, "outputs", key],
+                    Node::Scalar("true".into()),
+                );
+                assert!(validate(node).is_err(), "{id} output {key}");
+            }
+            for (path, value) in [
+                (vec!["if"], "${{ success() }}"),
+                (vec!["with", "name"], "foreign-feedback"),
+                (vec!["with", "path"], "foreign-evidence/"),
+                (vec!["with", "if-no-files-found"], "ignore"),
+            ] {
+                let mut node = document();
+                let job = h::mutable(h::mutable(&mut node, "jobs"), id);
+                let Node::Seq(steps) = h::mutable(job, "steps") else {
+                    unreachable!()
+                };
+                let upload = steps
+                    .iter_mut()
+                    .find(|step| {
+                        field(step, "name").is_some_and(|name| {
+                            name.starts_with("Upload classified")
+                                || name.starts_with("Upload reconciled")
+                        })
+                    })
+                    .unwrap();
+                h::replace(upload, &path, Node::Scalar(value.into()));
+                assert!(validate(node).is_err(), "{id} upload {path:?}");
+            }
+        }
+    }
+    #[test]
+    fn family_final_gate_preserves_uploaded_evidence_and_actual_failure() {
+        for mutation in 0..6 {
+            let mut node = document();
+            let Node::Seq(steps) =
+                h::mutable(h::mutable(h::mutable(&mut node, "jobs"), "family"), "steps")
+            else {
+                unreachable!()
+            };
+            let gate = steps
+                .iter()
+                .position(|step| {
+                    field(step, "name") == Some("Require successful family certification")
+                })
+                .unwrap();
+            let upload = steps
+                .iter()
+                .position(|step| field(step, "id") == Some("upload_evidence"))
+                .unwrap();
+            match mutation {
+                0 => steps.swap(gate, upload),
+                1 => h::replace(&mut steps[gate], &["if"], Node::Scalar("false".into())),
+                2 => {
+                    let Node::Map(fields) = &mut steps[gate] else {
+                        unreachable!()
+                    };
+                    fields.push(("continue-on-error".into(), Node::Scalar("true".into())));
+                }
+                3 => h::replace(
+                    &mut steps[gate],
+                    &["env", "OUTCOME"],
+                    Node::Scalar("success".into()),
+                ),
+                4 => h::replace(
+                    &mut steps[gate],
+                    &["run"],
+                    Node::Scalar("echo skipped".into()),
+                ),
+                _ => h::replace(
+                    &mut steps[gate],
+                    &["run"],
+                    Node::Scalar("test \"$OUTCOME\" = success || true".into()),
+                ),
+            }
+            assert!(validate(node).is_err(), "final gate mutation {mutation}");
         }
     }
 }

@@ -1,5 +1,9 @@
 use super::contract::{Input, Mode, revision_valid};
-use crate::automation::canary_receipts::{Digest, PackageVerification, verify_package};
+use crate::automation::canary_receipts::feedback::{self, FeedbackState, VerifiedFeedback};
+use crate::automation::canary_receipts::pass_identity::PassId;
+use crate::automation::canary_receipts::{
+    Digest, PackageVerification, ReceiptContext, verify_package,
+};
 use crate::command::DynResult;
 use serde::Deserialize;
 use std::{
@@ -24,13 +28,44 @@ pub(super) fn previous(input: &Input) -> DynResult<Option<(PathBuf, Identity)>> 
     if identity.candidate != previous.candidate || identity.base != input.selected_revision {
         return Err("previous candidate/base does not match frozen dependency outputs".into());
     }
-    if !["repair-1", "repair-2", "repair-3"].contains(&identity.pass_id.as_str()) {
-        return Err("independent verifier requires a repair producer package".into());
+    let pass = PassId::parse(&input.pass_id)?;
+    let producer = PassId::parse(&identity.pass_id)?;
+    if matches!(input.mode, Mode::Pinned)
+        || matches!(input.mode, Mode::Verify) == pass.is_repair()
+        || !pass.accepts_previous(producer)
+    {
+        return Err("canary pass requires its exact preceding producer package".into());
     }
     if identity.candidate == identity.base || !previous.package.join("candidate.bundle").is_file() {
-        return Err("independent verifier requires a changed candidate bundle".into());
+        return Err("canary continuation requires a changed candidate bundle".into());
     }
     Ok(Some((previous.package.canonicalize()?, identity)))
+}
+
+pub(super) fn previous_feedback(input: &Input) -> DynResult<Option<VerifiedFeedback>> {
+    let Some(directory) = &input.previous_feedback else {
+        return Ok(None);
+    };
+    let previous = input
+        .previous
+        .as_ref()
+        .ok_or("feedback requires a previous package")?;
+    let package = verify_package(
+        &previous.package,
+        PackageVerification {
+            expected_identity_sha256: Digest::try_from(previous.identity.clone())?,
+            current_run_id: input.run_id.clone(),
+            current_run_attempt: input.run_attempt.clone(),
+            controller_revision: Some(input.controller_revision.clone()),
+            selected_source: input.mesh_source.clone(),
+        },
+    )?;
+    let context = ReceiptContext::from_verified_package(package);
+    Ok(Some(feedback::verify(
+        &context,
+        directory,
+        FeedbackState::CandidateRepairable,
+    )?))
 }
 
 pub(super) fn verified(input: &Input, package: &Path, expected: &str) -> DynResult<Identity> {

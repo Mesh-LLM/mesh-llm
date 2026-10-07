@@ -6,8 +6,8 @@ pub(super) fn runtime_files() -> BTreeMap<String, Vec<u8>> {
     BTreeMap::from([
         (
             "manifest.json".into(),
-            serde_json::to_vec(&json!({"runtime": {
-                "id":"test-runtime", "mesh_version":"0.73.1", "skippy_abi":"0.1.0",
+            serde_json::to_vec(&json!({"schema_version":2,"runtime": {
+                "id":"test-runtime", "release_version":"9.0.0", "skippy_abi":"0.1.0",
                 "platform":{"os":"windows","arch":"x86_64","target":"x86_64-pc-windows-msvc"},
                 "backend":{"kind":"cpu"}, "rank":0, "libraries":["lib/llama.dll"],
                 "url":null,"sha256":null,"signature":null
@@ -30,8 +30,9 @@ fn tree_digest(files: &BTreeMap<String, Vec<u8>>) -> String {
 }
 pub(super) fn product(host: &[u8], files: &BTreeMap<String, Vec<u8>>, tampered: bool) -> Value {
     json!({"schema_version":2,"contract":"mesh-llm-product-v2","mesh_version":"0.73.1","backend":"cpu",
-        "host":{"path":"mesh-llm.exe","sha256":if tampered { "0".repeat(64) } else {hex::encode(Sha256::digest(host))}},
+        "host":{"path":"mesh-llm.exe","required_skippy_abi":"0.1.0","sha256":if tampered { "0".repeat(64) } else {hex::encode(Sha256::digest(host))}},
         "runtime":{"id":"test-runtime","path":"native-runtimes/test-runtime","sha256":tree_digest(files),
+            "release_version":"9.0.0",
             "manifest_sha256":hex::encode(Sha256::digest(&files["manifest.json"]))}})
 }
 pub(super) fn write_bundle(root: &Path, host: &[u8], tampered: bool) {

@@ -1,5 +1,9 @@
+#[path = "selected_battery.rs"]
+mod battery;
 #[path = "selected_repair.rs"]
 mod repair;
+#[path = "selected_repair_producer.rs"]
+mod repair_producer;
 #[cfg(test)]
 #[path = "selected_repair_tests.rs"]
 mod repair_tests;
@@ -14,7 +18,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
-const SELECTED_SCRIPTS: [&str; 8] = [
+const SELECTED_SCRIPTS: [&str; 14] = [
     "scripts/skippy-system-one-smoke.sh",
     "scripts/ci-compose-product-input.sh",
     "scripts/package-native-runtime.sh",
@@ -23,11 +27,17 @@ const SELECTED_SCRIPTS: [&str; 8] = [
     "scripts/skippy-ci-smoke.sh",
     "scripts/skippy-workload-certify.sh",
     "scripts/llama-canary-agent-repair.sh",
+    "skippy/scripts/skippy-system-one-smoke.sh",
+    "skippy/scripts/package-native-runtime.sh",
+    "skippy/scripts/verify-native-runtime-package.sh",
+    "skippy/scripts/skippy-family-battery.sh",
+    "skippy/scripts/skippy-ci-smoke.sh",
+    "skippy/scripts/skippy-workload-certify.sh",
 ];
 
 fn typed_caller(path: &str) -> bool {
     matches!(
-        path,
+        path.strip_prefix("skippy/").unwrap_or(path),
         "scripts/skippy-system-one-smoke.sh"
             | "scripts/skippy-ci-smoke.sh"
             | "scripts/skippy-workload-certify.sh"
@@ -44,8 +54,10 @@ fn indirect_launch(path: &str, line: &str) -> bool {
         || line.starts_with("\"${plan_args[@]}\"")
         || line.starts_with("\"$PLANNER\" ")
         || line.contains("\"$PLANNER\" --inspect-gguf ")
-        || (path == "scripts/skippy-system-one-smoke.sh"
-            && line.starts_with("\"${case_command[@]}\""))
+        || (matches!(
+            path,
+            "scripts/skippy-system-one-smoke.sh" | "skippy/scripts/skippy-system-one-smoke.sh"
+        ) && line.starts_with("\"${case_command[@]}\""))
         || (typed_caller(path) && typed_launch(line))
 }
 
@@ -176,8 +188,10 @@ fn check_system_one_binding(
     lines: &[&str],
     index: usize,
 ) -> DynResult<()> {
-    if record.caller != "scripts/skippy-system-one-smoke.sh"
-        || !lines[index].trim().starts_with("\"${case_command[@]}\"")
+    if !matches!(
+        record.caller.as_str(),
+        "scripts/skippy-system-one-smoke.sh" | "skippy/scripts/skippy-system-one-smoke.sh"
+    ) || !lines[index].trim().starts_with("\"${case_command[@]}\"")
     {
         return Ok(());
     }
@@ -217,7 +231,9 @@ fn check_typed_binding(
     lines: &[&str],
     index: usize,
 ) -> DynResult<()> {
-    if let Some(binding) = repair::binding(&record.caller, lines, index)? {
+    if let Some(binding) = repair_producer::binding(&record.caller, lines, index)?
+        .or(repair::binding(&record.caller, lines, index)?)
+    {
         if record.argv != binding.argv
             || record.replacement_owner != binding.owner
             || record.child != binding.child
@@ -276,7 +292,7 @@ fn validate_record(root: &Path, record: &SelectedProcessCall) -> DynResult<()> {
         .into());
     }
     if record.child_source_known
-        && record.child.starts_with("scripts/")
+        && super::scan::is_script(&record.child)
         && !root.join(&record.child).is_file()
     {
         return Err(format!(
@@ -325,13 +341,23 @@ pub(super) fn check_selected_processes(
             continue;
         }
         let text = fs::read_to_string(root.join(path))?;
-        if path == "scripts/skippy-family-battery.sh"
-            && text
-                .lines()
-                .any(|line| indirect_launch(path, line) && line.contains("$PLANNER"))
-            && !text
-                .lines()
-                .any(|line| line.trim() == "PLANNER=\"$ROOT/scripts/plan-family-battery.py\"")
+        if matches!(
+            path,
+            "scripts/skippy-family-battery.sh" | "skippy/scripts/skippy-family-battery.sh"
+        ) && text
+            .lines()
+            .any(|line| indirect_launch(path, line) && line.contains("$PLANNER"))
+            && !text.lines().any(|line| {
+                line.trim()
+                    == format!(
+                        "PLANNER=\"$ROOT/{}plan-family-battery.py\"",
+                        if path.starts_with("skippy/") {
+                            "skippy/scripts/"
+                        } else {
+                            "scripts/"
+                        }
+                    )
+            })
         {
             return Err("selected interpreter: changed family planner binding".into());
         }
@@ -350,6 +376,7 @@ pub(super) fn check_selected_processes(
                 )
                 .into());
             };
+            battery::check(record, &lines, index)?;
             check_system_one_binding(record, &lines, index)?;
             check_typed_binding(root, record, &lines, index)?;
             if record.source_block != line.trim() {

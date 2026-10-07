@@ -31,7 +31,57 @@
   },
   "groups": [
     {
-      "file": "evals/ab-test.sh",
+      "file": "mesh/sdk/python/scripts/build-native.sh",
+      "members": [
+        [
+          5,
+          "2599ff75e5cb01c2",
+          1,
+          "selection",
+          "mesh/sdk/python/src/meshllm/_generated output directory",
+          "Inert OUT_DIR assignment selects the destination for Cargo-built FFI library staging; this line starts no interpreter and grants no SDK qualification."
+        ]
+      ]
+    },
+    {
+      "file": "mesh/sdk/python/scripts/generate-python-bindings.sh",
+      "members": [
+        [
+          6,
+          "2599ff75e5cb01c2",
+          1,
+          "selection",
+          "mesh/sdk/python/src/meshllm/_generated output directory",
+          "Inert OUT_DIR assignment selects the generated SDK artifact destination; this line starts no interpreter."
+        ],
+        [
+          17,
+          "2a0ddb88ff191ce9",
+          1,
+          "conditional",
+          "configured MESH_UNIFFI_BINDGEN_ROOT/bin/uniffi-bindgen executable",
+          "Rust UniFFI generates mesh/crates/mesh-llm-ffi/src/mesh_ffi.udl with --language python --out-dir OUT_DIR --no-format. The default missing tool is installed through cargo install uniffi 0.32.0 with cli, matching the owning FFI dependency. Generated Python is not executed; an operator-selected tool is not qualified by this binding."
+        ],
+        [
+          18,
+          "bcba1cb2d8759942",
+          1,
+          "execution",
+          "perl -pi trailing-whitespace rewrite of generated mesh_ffi.py",
+          "Perl edits the generated SDK artifact; no Python interpreter or SDK test starts."
+        ],
+        [
+          20,
+          "2dcaa02e298053dd",
+          1,
+          "prose",
+          "echo generated SDK artifact path",
+          "Diagnostic message only; it neither invokes nor qualifies the Python SDK."
+        ]
+      ]
+    },
+    {
+      "file": "mesh/evals/ab-test.sh",
       "members": [
         [
           79,
@@ -52,7 +102,7 @@
       ]
     },
     {
-      "file": "evals/latency-benchmarking/bench-b2b.sh",
+      "file": "skippy/evals/latency-benchmarking/bench-b2b.sh",
       "members": [
         [
           44,
@@ -105,7 +155,7 @@
       ]
     },
     {
-      "file": "evals/latency-benchmarking/bench.sh",
+      "file": "skippy/evals/latency-benchmarking/bench.sh",
       "members": [
         [
           45,
@@ -126,7 +176,7 @@
       ]
     },
     {
-      "file": "evals/latency-benchmarking/demo.sh",
+      "file": "skippy/evals/latency-benchmarking/demo.sh",
       "members": [
         [
           61,
@@ -163,7 +213,7 @@
       ]
     },
     {
-      "file": "evals/scenarios/edit-file/prompt.txt",
+      "file": "mesh/evals/scenarios/edit-file/prompt.txt",
       "members": [
         [
           9,
@@ -176,7 +226,7 @@
       ]
     },
     {
-      "file": "evals/scenarios/refactor/prompt.txt",
+      "file": "mesh/evals/scenarios/refactor/prompt.txt",
       "members": [
         [
           1,
@@ -197,7 +247,7 @@
       ]
     },
     {
-      "file": "evals/skippy-cache-family-bench.sh",
+      "file": "skippy/evals/skippy-cache-family-bench.sh",
       "members": [
 
       ]
@@ -235,7 +285,7 @@
           "Policy says SDK candidates remain conditional; path mention is not Python execution"
         ],
         [
-          486,
+          490,
           "8c58a6a69751aa88",
           1,
           "prose",
@@ -248,7 +298,7 @@
       "file": ".agents/skills/skippy-bench/SKILL.md",
       "members": [
         [
-          105,
+          111,
           "36b82400ff0a2c88",
           1,
           "prose",
@@ -256,7 +306,7 @@
           "External SWE-agent benchmark description, not an invocation"
         ],
         [
-          121,
+          125,
           "8bdba36f18e9f625",
           1,
           "instruction",
@@ -264,7 +314,7 @@
           "Optional operator installation instruction in prose; mutates external uv tool environment, not core CI"
         ],
         [
-          146,
+          150,
           "b7ba863bf4b658eb",
           1,
           "prose",
@@ -272,20 +322,28 @@
           "Upstream benchmark implementation description"
         ],
         [
-          152,
-          "35fe10f882f79954",
+          163,
+          "000af5df1d581329",
           1,
           "prose",
-          "python:3.11.9-slim-bookworm",
-          "Docker image description, not interpreter call"
+          "Explicit operator-supplied uv/Python executable paths for optional native prepared SDK environments",
+          "Describes explicit preparation inputs and no interpreter download; this line invokes no executable."
         ],
         [
-          154,
-          "20557c6259cfec72",
+          170,
+          "4439bbc2a136cb22",
           1,
-          "prose",
-          "pip",
-          "External image mirror description, not install command"
+          "selection",
+          "continued prepare-mcp --uv and --python explicit executable arguments",
+          "Continuation of explicit native prepare-mcp command; selects existing CPython3.12 and uv paths, not a Python invocation or benchmark qualification."
+        ],
+        [
+          173,
+          "a493085d75d85d5f",
+          1,
+          "selection",
+          "continued prepare-swe --uv and --python explicit executable arguments",
+          "Continuation of explicit native prepare-swe command; selects existing CPython3.11.13 and uv paths, not a Python invocation or benchmark qualification."
         ]
       ]
     },
@@ -445,7 +503,7 @@
       "file": ".agents/skills/manage-ci/references/current-inventory.md",
       "members": [
         [
-          427,
+          492,
           "b4b4c134cd581a78",
           1,
           "prose",
@@ -453,7 +511,7 @@
           "Instruction inventory records descriptions only; actual executable callers remain independently classified in script and workflow shards"
         ],
         [
-          469,
+          534,
           "3858c48032d98379",
           1,
           "prose",
@@ -461,7 +519,7 @@
           "Instruction inventory records descriptions only; actual executable callers remain independently classified in script and workflow shards"
         ],
         [
-          707,
+          772,
           "eeb405e9c110db5a",
           1,
           "prose",
@@ -469,7 +527,15 @@
           "Instruction inventory records descriptions only; actual executable callers remain independently classified in script and workflow shards"
         ],
         [
-          1224,
+          1360,
+          "bf3e3a0950d9008a",
+          1,
+          "prose",
+          "Retained canonical optional trajectory reader test description",
+          "Documents the actual isolated optional reader test and native gate ownership; grants no generic Python execution or SDK qualification."
+        ],
+        [
+          1433,
           "d1e95ba515d2e6ee",
           1,
           "prose",
@@ -477,7 +543,7 @@
           "Instruction inventory records descriptions only; actual executable callers remain independently classified in script and workflow shards"
         ],
         [
-          1228,
+          1437,
           "d6b4ea35c364a6aa",
           1,
           "prose",
@@ -485,484 +551,558 @@
           "Instruction inventory records descriptions only; actual executable callers remain independently classified in script and workflow shards"
         ]
       ]
+    },
+    {
+      "file": "skippy/crates/skippy-bench/src/evals/adapters/templates/mcp_atlas_run.sh",
+      "members": [
+        [
+          92,
+          "1e3040fbd2800f79",
+          1,
+          "conditional",
+          "configured native-admitted prepared SDK executable -> mcp_completion.main service",
+          "Explicitly approved isolated pinned upstream SDK interface (CPython3.12; MCP Atlas b290e672645791fea0bcb23e2c0f4fec50715cca). Native preparation/source/environment admission precedes this fixed -I -B leaf; no install, generic readiness probing or source patching at runtime. Exact enclosing template supplies argv/env/output/status; SDK or benchmark qualification remains conditional and benchmark_qualified=false. Actual upstream SDK service/client/helper execution, not inert filename metadata."
+        ],
+        [
+          106,
+          "b07ff933837b06e4",
+          1,
+          "conditional",
+          "configured native-admitted prepared SDK executable -> mcp_completion_script.py completion client",
+          "Explicitly approved isolated pinned upstream SDK interface (CPython3.12; MCP Atlas b290e672645791fea0bcb23e2c0f4fec50715cca). Native preparation/source/environment admission precedes this fixed -I -B leaf; no install, generic readiness probing or source patching at runtime. Exact enclosing template supplies argv/env/output/status; SDK or benchmark qualification remains conditional and benchmark_qualified=false. Actual upstream SDK service/client/helper execution, not inert filename metadata."
+        ],
+        [
+          115,
+          "c75e957750de6a6b",
+          1,
+          "conditional",
+          "configured native-admitted prepared SDK executable -> mcp_evals_scores.py evaluator",
+          "Explicitly approved isolated pinned upstream SDK interface (CPython3.12; MCP Atlas b290e672645791fea0bcb23e2c0f4fec50715cca). Native preparation/source/environment admission precedes this fixed -I -B leaf; no install, generic readiness probing or source patching at runtime. Exact enclosing template supplies argv/env/output/status; SDK or benchmark qualification remains conditional and benchmark_qualified=false. Actual upstream SDK service/client/helper execution, not inert filename metadata."
+        ]
+      ]
+    },
+    {
+      "file": "skippy/crates/skippy-bench/src/evals/adapters/templates/swe_bench_pro_run.sh",
+      "members": [
+        [
+          69,
+          "731c1b7c3c507458",
+          1,
+          "conditional",
+          "configured native-admitted prepared SDK executable -> fixed generate_sweagent_instances.py upstream instance generator",
+          "Explicitly approved isolated pinned upstream SDK interface (CPython3.11.13; SWE parent66f92766bba642462d4bbe5479e83f91f9211862, agent402a7b8fdac8193f3f255bb53859ba274234f596, swe-rex1.4.0). Native preparation/source/environment admission precedes this fixed -I -B leaf; no install, generic readiness probing or source patching at runtime. Exact enclosing template supplies argv/env/output/status; SDK or benchmark qualification remains conditional and benchmark_qualified=false. Fixed runpy namespace bridge admits only the pinned helper entrypoint and its actual SDK module dependencies; no dynamic arbitrary tool interface."
+        ],
+        [
+          76,
+          "1e2a4c074e83a213",
+          1,
+          "conditional",
+          "configured native-admitted prepared SDK executable -> fixed SWE-agent BatchInstance/DockerDeploymentConfig serialization",
+          "Explicitly approved isolated pinned upstream SDK interface (CPython3.11.13; SWE parent66f92766bba642462d4bbe5479e83f91f9211862, agent402a7b8fdac8193f3f255bb53859ba274234f596, swe-rex1.4.0). Native preparation/source/environment admission precedes this fixed -I -B leaf; no install, generic readiness probing or source patching at runtime. Exact enclosing template supplies argv/env/output/status; SDK or benchmark qualification remains conditional and benchmark_qualified=false. Inline code constructs and serializes actual SDK objects under the selected Docker profile; no separate generic Python automation approval."
+        ],
+        [
+          135,
+          "4ffb86ecd7a6a130",
+          1,
+          "conditional",
+          "configured native-admitted prepared SDK executable -> sweagent.run.run run-batch actual agent interface",
+          "Explicitly approved isolated pinned upstream SDK interface (CPython3.11.13; SWE parent66f92766bba642462d4bbe5479e83f91f9211862, agent402a7b8fdac8193f3f255bb53859ba274234f596, swe-rex1.4.0). Native preparation/source/environment admission precedes this fixed -I -B leaf; no install, generic readiness probing or source patching at runtime. Exact enclosing template supplies argv/env/output/status; SDK or benchmark qualification remains conditional and benchmark_qualified=false. Actual upstream SDK service/client/helper execution, not inert filename metadata."
+        ],
+        [
+          153,
+          "83c93f8f59564ce7",
+          1,
+          "conditional",
+          "configured native-admitted prepared SDK executable -> gather_patches.py upstream patch collector",
+          "Explicitly approved isolated pinned upstream SDK interface (CPython3.11.13; SWE parent66f92766bba642462d4bbe5479e83f91f9211862, agent402a7b8fdac8193f3f255bb53859ba274234f596, swe-rex1.4.0). Native preparation/source/environment admission precedes this fixed -I -B leaf; no install, generic readiness probing or source patching at runtime. Exact enclosing template supplies argv/env/output/status; SDK or benchmark qualification remains conditional and benchmark_qualified=false. Actual upstream SDK service/client/helper execution, not inert filename metadata."
+        ],
+        [
+          158,
+          "54fe76481bb1d4b3",
+          1,
+          "conditional",
+          "configured native-admitted prepared SDK executable -> fixed swe_bench_pro_eval.py upstream evaluation entrypoint",
+          "Explicitly approved isolated pinned upstream SDK interface (CPython3.11.13; SWE parent66f92766bba642462d4bbe5479e83f91f9211862, agent402a7b8fdac8193f3f255bb53859ba274234f596, swe-rex1.4.0). Native preparation/source/environment admission precedes this fixed -I -B leaf; no install, generic readiness probing or source patching at runtime. Exact enclosing template supplies argv/env/output/status; SDK or benchmark qualification remains conditional and benchmark_qualified=false. Fixed runpy namespace bridge admits only the pinned helper entrypoint and its actual SDK module dependencies; no dynamic arbitrary tool interface."
+        ]
+      ]
     }
   ],
   "identity": "<path>#candidate|dynamic-import|subprocess-or-interpreter:<normalized-line-sha256-prefix>:<within-file-occurrence>",
   "manual_tsv_commands": {
-    "advanced_server": "python3 docs/skippy/manual-smoke/runtime_smoke.py --binary target/debug/mesh-llm --fixture docs/skippy/manual-smoke/fixtures/advanced.server/runtime-alias.toml --model-path $MESH_LLM_SMOKE_MODEL_PATH --api-port 9441 --console-port 3235 --max-wait 600",
-    "hardware": "python3 docs/skippy/manual-smoke/runtime_smoke.py --binary target/debug/mesh-llm --fixture docs/skippy/manual-smoke/fixtures/hardware/runtime-single-stage.toml --model-path $MESH_LLM_SMOKE_MODEL_PATH --api-port 9438 --console-port 3232 --max-wait 600",
-    "model_fit": "python3 docs/skippy/manual-smoke/runtime_smoke.py --binary target/debug/mesh-llm --fixture docs/skippy/manual-smoke/fixtures/model_fit/runtime-single-stage.toml --model-path $MESH_LLM_SMOKE_MODEL_PATH --api-port 9437 --console-port 3231 --max-wait 600",
-    "request_defaults": "python3 docs/skippy/manual-smoke/runtime_smoke.py --binary target/debug/mesh-llm --fixture docs/skippy/manual-smoke/fixtures/request_defaults/runtime-supported.toml --model-path $MESH_LLM_SMOKE_MODEL_PATH --api-port 9440 --console-port 3234 --max-wait 600",
-    "speculative": "python3 docs/skippy/manual-smoke/runtime_smoke.py --binary target/debug/mesh-llm --fixture docs/skippy/manual-smoke/fixtures/speculative/runtime-warn-disable.toml --model-path $MESH_LLM_SMOKE_MODEL_PATH --draft-path $MESH_LLM_SMOKE_DRAFT_PATH --api-port 9442 --console-port 3236 --max-wait 600",
-    "throughput": "python3 docs/skippy/manual-smoke/runtime_smoke.py --binary target/debug/mesh-llm --fixture docs/skippy/manual-smoke/fixtures/throughput/runtime-single-stage.toml --model-path $MESH_LLM_SMOKE_MODEL_PATH --api-port 9439 --console-port 3233 --max-wait 600"
+    "advanced_server": "python3 skippy/docs/manual-smoke/runtime_smoke.py --binary target/debug/mesh-llm --fixture skippy/docs/manual-smoke/fixtures/advanced.server/runtime-alias.toml --model-path $MESH_LLM_SMOKE_MODEL_PATH --api-port 9441 --console-port 3235 --max-wait 600",
+    "hardware": "python3 skippy/docs/manual-smoke/runtime_smoke.py --binary target/debug/mesh-llm --fixture skippy/docs/manual-smoke/fixtures/hardware/runtime-single-stage.toml --model-path $MESH_LLM_SMOKE_MODEL_PATH --api-port 9438 --console-port 3232 --max-wait 600",
+    "model_fit": "python3 skippy/docs/manual-smoke/runtime_smoke.py --binary target/debug/mesh-llm --fixture skippy/docs/manual-smoke/fixtures/model_fit/runtime-single-stage.toml --model-path $MESH_LLM_SMOKE_MODEL_PATH --api-port 9437 --console-port 3231 --max-wait 600",
+    "request_defaults": "python3 skippy/docs/manual-smoke/runtime_smoke.py --binary target/debug/mesh-llm --fixture skippy/docs/manual-smoke/fixtures/request_defaults/runtime-supported.toml --model-path $MESH_LLM_SMOKE_MODEL_PATH --api-port 9440 --console-port 3234 --max-wait 600",
+    "speculative": "python3 skippy/docs/manual-smoke/runtime_smoke.py --binary target/debug/mesh-llm --fixture skippy/docs/manual-smoke/fixtures/speculative/runtime-warn-disable.toml --model-path $MESH_LLM_SMOKE_MODEL_PATH --draft-path $MESH_LLM_SMOKE_DRAFT_PATH --api-port 9442 --console-port 3236 --max-wait 600",
+    "throughput": "python3 skippy/docs/manual-smoke/runtime_smoke.py --binary target/debug/mesh-llm --fixture skippy/docs/manual-smoke/fixtures/throughput/runtime-single-stage.toml --model-path $MESH_LLM_SMOKE_MODEL_PATH --api-port 9439 --console-port 3233 --max-wait 600"
   },
   "manual_tsv_rows": [
     [
       2,
       "model_fit.ctx_size",
-      "docs/skippy/manual-smoke/fixtures/model_fit/runtime-single-stage.toml",
+      "skippy/docs/manual-smoke/fixtures/model_fit/runtime-single-stage.toml",
       "unsloth/Qwen3.5-4B-GGUF:UD-Q4_K_XL",
       "model_fit"
     ],
     [
       3,
       "model_fit.batch",
-      "docs/skippy/manual-smoke/fixtures/model_fit/runtime-single-stage.toml",
+      "skippy/docs/manual-smoke/fixtures/model_fit/runtime-single-stage.toml",
       "unsloth/Qwen3.5-4B-GGUF:UD-Q4_K_XL",
       "model_fit"
     ],
     [
       4,
       "model_fit.ubatch",
-      "docs/skippy/manual-smoke/fixtures/model_fit/runtime-single-stage.toml",
+      "skippy/docs/manual-smoke/fixtures/model_fit/runtime-single-stage.toml",
       "unsloth/Qwen3.5-4B-GGUF:UD-Q4_K_XL",
       "model_fit"
     ],
     [
       5,
       "model_fit.cache_type_k",
-      "docs/skippy/manual-smoke/fixtures/model_fit/runtime-single-stage.toml",
+      "skippy/docs/manual-smoke/fixtures/model_fit/runtime-single-stage.toml",
       "unsloth/Qwen3.5-4B-GGUF:UD-Q4_K_XL",
       "model_fit"
     ],
     [
       6,
       "model_fit.cache_type_v",
-      "docs/skippy/manual-smoke/fixtures/model_fit/runtime-single-stage.toml",
+      "skippy/docs/manual-smoke/fixtures/model_fit/runtime-single-stage.toml",
       "unsloth/Qwen3.5-4B-GGUF:UD-Q4_K_XL",
       "model_fit"
     ],
     [
       7,
       "model_fit.kv_offload",
-      "docs/skippy/manual-smoke/fixtures/model_fit/runtime-single-stage.toml",
+      "skippy/docs/manual-smoke/fixtures/model_fit/runtime-single-stage.toml",
       "unsloth/Qwen3.5-4B-GGUF:UD-Q4_K_XL",
       "model_fit"
     ],
     [
       8,
       "model_fit.prompt_cache",
-      "docs/skippy/manual-smoke/fixtures/model_fit/runtime-single-stage.toml",
+      "skippy/docs/manual-smoke/fixtures/model_fit/runtime-single-stage.toml",
       "unsloth/Qwen3.5-4B-GGUF:UD-Q4_K_XL",
       "model_fit"
     ],
     [
       9,
       "model_fit.prefix_cache.enabled",
-      "docs/skippy/manual-smoke/fixtures/model_fit/runtime-single-stage.toml",
+      "skippy/docs/manual-smoke/fixtures/model_fit/runtime-single-stage.toml",
       "unsloth/Qwen3.5-4B-GGUF:UD-Q4_K_XL",
       "model_fit"
     ],
     [
       10,
       "model_fit.prefix_cache.max_entries",
-      "docs/skippy/manual-smoke/fixtures/model_fit/runtime-single-stage.toml",
+      "skippy/docs/manual-smoke/fixtures/model_fit/runtime-single-stage.toml",
       "unsloth/Qwen3.5-4B-GGUF:UD-Q4_K_XL",
       "model_fit"
     ],
     [
       11,
       "model_fit.prefix_cache.max_bytes",
-      "docs/skippy/manual-smoke/fixtures/model_fit/runtime-single-stage.toml",
+      "skippy/docs/manual-smoke/fixtures/model_fit/runtime-single-stage.toml",
       "unsloth/Qwen3.5-4B-GGUF:UD-Q4_K_XL",
       "model_fit"
     ],
     [
       12,
       "model_fit.prefix_cache.min_tokens",
-      "docs/skippy/manual-smoke/fixtures/model_fit/runtime-single-stage.toml",
+      "skippy/docs/manual-smoke/fixtures/model_fit/runtime-single-stage.toml",
       "unsloth/Qwen3.5-4B-GGUF:UD-Q4_K_XL",
       "model_fit"
     ],
     [
       13,
       "model_fit.prefix_cache.shared_stride_tokens",
-      "docs/skippy/manual-smoke/fixtures/model_fit/runtime-single-stage.toml",
+      "skippy/docs/manual-smoke/fixtures/model_fit/runtime-single-stage.toml",
       "unsloth/Qwen3.5-4B-GGUF:UD-Q4_K_XL",
       "model_fit"
     ],
     [
       14,
       "model_fit.prefix_cache.shared_record_limit",
-      "docs/skippy/manual-smoke/fixtures/model_fit/runtime-single-stage.toml",
+      "skippy/docs/manual-smoke/fixtures/model_fit/runtime-single-stage.toml",
       "unsloth/Qwen3.5-4B-GGUF:UD-Q4_K_XL",
       "model_fit"
     ],
     [
       15,
       "model_fit.prefix_cache.payload_mode",
-      "docs/skippy/manual-smoke/fixtures/model_fit/runtime-single-stage.toml",
+      "skippy/docs/manual-smoke/fixtures/model_fit/runtime-single-stage.toml",
       "unsloth/Qwen3.5-4B-GGUF:UD-Q4_K_XL",
       "model_fit"
     ],
     [
       16,
       "model_fit.swa_full",
-      "docs/skippy/manual-smoke/fixtures/model_fit/runtime-single-stage.toml",
+      "skippy/docs/manual-smoke/fixtures/model_fit/runtime-single-stage.toml",
       "unsloth/Qwen3.5-4B-GGUF:UD-Q4_K_XL",
       "model_fit"
     ],
     [
       26,
       "hardware.model_runtime",
-      "docs/skippy/manual-smoke/fixtures/hardware/runtime-single-stage.toml",
+      "skippy/docs/manual-smoke/fixtures/hardware/runtime-single-stage.toml",
       "unsloth/Qwen3.5-4B-GGUF:UD-Q4_K_XL",
       "hardware"
     ],
     [
       27,
       "hardware.device",
-      "docs/skippy/manual-smoke/fixtures/hardware/runtime-single-stage.toml",
+      "skippy/docs/manual-smoke/fixtures/hardware/runtime-single-stage.toml",
       "unsloth/Qwen3.5-4B-GGUF:UD-Q4_K_XL",
       "hardware"
     ],
     [
       28,
       "hardware.gpu_layers",
-      "docs/skippy/manual-smoke/fixtures/hardware/runtime-single-stage.toml",
+      "skippy/docs/manual-smoke/fixtures/hardware/runtime-single-stage.toml",
       "unsloth/Qwen3.5-4B-GGUF:UD-Q4_K_XL",
       "hardware"
     ],
     [
       29,
       "hardware.placement",
-      "docs/skippy/manual-smoke/fixtures/hardware/runtime-single-stage.toml",
+      "skippy/docs/manual-smoke/fixtures/hardware/runtime-single-stage.toml",
       "unsloth/Qwen3.5-4B-GGUF:UD-Q4_K_XL",
       "hardware"
     ],
     [
       30,
       "hardware.tensor_split",
-      "docs/skippy/manual-smoke/fixtures/hardware/runtime-single-stage.toml",
+      "skippy/docs/manual-smoke/fixtures/hardware/runtime-single-stage.toml",
       "unsloth/Qwen3.5-4B-GGUF:UD-Q4_K_XL",
       "hardware"
     ],
     [
       31,
       "hardware.split_mode",
-      "docs/skippy/manual-smoke/fixtures/hardware/runtime-single-stage.toml",
+      "skippy/docs/manual-smoke/fixtures/hardware/runtime-single-stage.toml",
       "unsloth/Qwen3.5-4B-GGUF:UD-Q4_K_XL",
       "hardware"
     ],
     [
       32,
       "hardware.main_gpu",
-      "docs/skippy/manual-smoke/fixtures/hardware/runtime-single-stage.toml",
+      "skippy/docs/manual-smoke/fixtures/hardware/runtime-single-stage.toml",
       "unsloth/Qwen3.5-4B-GGUF:UD-Q4_K_XL",
       "hardware"
     ],
     [
       33,
       "hardware.cpu_moe",
-      "docs/skippy/manual-smoke/fixtures/hardware/runtime-single-stage.toml",
+      "skippy/docs/manual-smoke/fixtures/hardware/runtime-single-stage.toml",
       "unsloth/Qwen3.5-4B-GGUF:UD-Q4_K_XL",
       "hardware"
     ],
     [
       34,
       "hardware.n_cpu_moe",
-      "docs/skippy/manual-smoke/fixtures/hardware/runtime-single-stage.toml",
+      "skippy/docs/manual-smoke/fixtures/hardware/runtime-single-stage.toml",
       "unsloth/Qwen3.5-4B-GGUF:UD-Q4_K_XL",
       "hardware"
     ],
     [
       35,
       "hardware.fit_target_mib",
-      "docs/skippy/manual-smoke/fixtures/hardware/runtime-single-stage.toml",
+      "skippy/docs/manual-smoke/fixtures/hardware/runtime-single-stage.toml",
       "unsloth/Qwen3.5-4B-GGUF:UD-Q4_K_XL",
       "hardware"
     ],
     [
       36,
       "hardware.fit_context",
-      "docs/skippy/manual-smoke/fixtures/hardware/runtime-single-stage.toml",
+      "skippy/docs/manual-smoke/fixtures/hardware/runtime-single-stage.toml",
       "unsloth/Qwen3.5-4B-GGUF:UD-Q4_K_XL",
       "hardware"
     ],
     [
       37,
       "hardware.model_path",
-      "docs/skippy/manual-smoke/fixtures/hardware/runtime-single-stage.toml",
+      "skippy/docs/manual-smoke/fixtures/hardware/runtime-single-stage.toml",
       "unsloth/Qwen3.5-4B-GGUF:UD-Q4_K_XL",
       "hardware"
     ],
     [
       38,
       "hardware.check_tensors",
-      "docs/skippy/manual-smoke/fixtures/hardware/runtime-single-stage.toml",
+      "skippy/docs/manual-smoke/fixtures/hardware/runtime-single-stage.toml",
       "unsloth/Qwen3.5-4B-GGUF:UD-Q4_K_XL",
       "hardware"
     ],
     [
       39,
       "hardware.mmap",
-      "docs/skippy/manual-smoke/fixtures/hardware/runtime-single-stage.toml",
+      "skippy/docs/manual-smoke/fixtures/hardware/runtime-single-stage.toml",
       "unsloth/Qwen3.5-4B-GGUF:UD-Q4_K_XL",
       "hardware"
     ],
     [
       40,
       "hardware.mlock",
-      "docs/skippy/manual-smoke/fixtures/hardware/runtime-single-stage.toml",
+      "skippy/docs/manual-smoke/fixtures/hardware/runtime-single-stage.toml",
       "unsloth/Qwen3.5-4B-GGUF:UD-Q4_K_XL",
       "hardware"
     ],
     [
       41,
       "hardware.direct_io",
-      "docs/skippy/manual-smoke/fixtures/hardware/runtime-single-stage.toml",
+      "skippy/docs/manual-smoke/fixtures/hardware/runtime-single-stage.toml",
       "unsloth/Qwen3.5-4B-GGUF:UD-Q4_K_XL",
       "hardware"
     ],
     [
       42,
       "hardware.repack",
-      "docs/skippy/manual-smoke/fixtures/hardware/runtime-single-stage.toml",
+      "skippy/docs/manual-smoke/fixtures/hardware/runtime-single-stage.toml",
       "unsloth/Qwen3.5-4B-GGUF:UD-Q4_K_XL",
       "hardware"
     ],
     [
       43,
       "hardware.op_offload",
-      "docs/skippy/manual-smoke/fixtures/hardware/runtime-single-stage.toml",
+      "skippy/docs/manual-smoke/fixtures/hardware/runtime-single-stage.toml",
       "unsloth/Qwen3.5-4B-GGUF:UD-Q4_K_XL",
       "hardware"
     ],
     [
       44,
       "hardware.no_host_buffer",
-      "docs/skippy/manual-smoke/fixtures/hardware/runtime-single-stage.toml",
+      "skippy/docs/manual-smoke/fixtures/hardware/runtime-single-stage.toml",
       "unsloth/Qwen3.5-4B-GGUF:UD-Q4_K_XL",
       "hardware"
     ],
     [
       45,
       "hardware.warmup",
-      "docs/skippy/manual-smoke/fixtures/hardware/runtime-single-stage.toml",
+      "skippy/docs/manual-smoke/fixtures/hardware/runtime-single-stage.toml",
       "unsloth/Qwen3.5-4B-GGUF:UD-Q4_K_XL",
       "hardware"
     ],
     [
       53,
       "throughput.parallel",
-      "docs/skippy/manual-smoke/fixtures/throughput/runtime-single-stage.toml",
+      "skippy/docs/manual-smoke/fixtures/throughput/runtime-single-stage.toml",
       "unsloth/Qwen3.5-4B-GGUF:UD-Q4_K_XL",
       "throughput"
     ],
     [
       54,
       "throughput.continuous_batching",
-      "docs/skippy/manual-smoke/fixtures/throughput/runtime-single-stage.toml",
+      "skippy/docs/manual-smoke/fixtures/throughput/runtime-single-stage.toml",
       "unsloth/Qwen3.5-4B-GGUF:UD-Q4_K_XL",
       "throughput"
     ],
     [
       55,
       "throughput.threads",
-      "docs/skippy/manual-smoke/fixtures/throughput/runtime-single-stage.toml",
+      "skippy/docs/manual-smoke/fixtures/throughput/runtime-single-stage.toml",
       "unsloth/Qwen3.5-4B-GGUF:UD-Q4_K_XL",
       "throughput"
     ],
     [
       56,
       "throughput.threads_batch",
-      "docs/skippy/manual-smoke/fixtures/throughput/runtime-single-stage.toml",
+      "skippy/docs/manual-smoke/fixtures/throughput/runtime-single-stage.toml",
       "unsloth/Qwen3.5-4B-GGUF:UD-Q4_K_XL",
       "throughput"
     ],
     [
       57,
       "throughput.priority",
-      "docs/skippy/manual-smoke/fixtures/throughput/runtime-single-stage.toml",
+      "skippy/docs/manual-smoke/fixtures/throughput/runtime-single-stage.toml",
       "unsloth/Qwen3.5-4B-GGUF:UD-Q4_K_XL",
       "throughput"
     ],
     [
       58,
       "throughput.poll",
-      "docs/skippy/manual-smoke/fixtures/throughput/runtime-single-stage.toml",
+      "skippy/docs/manual-smoke/fixtures/throughput/runtime-single-stage.toml",
       "unsloth/Qwen3.5-4B-GGUF:UD-Q4_K_XL",
       "throughput"
     ],
     [
       59,
       "throughput.cpu_affinity",
-      "docs/skippy/manual-smoke/fixtures/throughput/runtime-single-stage.toml",
+      "skippy/docs/manual-smoke/fixtures/throughput/runtime-single-stage.toml",
       "unsloth/Qwen3.5-4B-GGUF:UD-Q4_K_XL",
       "throughput"
     ],
     [
       60,
       "throughput.numa",
-      "docs/skippy/manual-smoke/fixtures/throughput/runtime-single-stage.toml",
+      "skippy/docs/manual-smoke/fixtures/throughput/runtime-single-stage.toml",
       "unsloth/Qwen3.5-4B-GGUF:UD-Q4_K_XL",
       "throughput"
     ],
     [
       61,
       "throughput.slot_prompt_similarity",
-      "docs/skippy/manual-smoke/fixtures/throughput/runtime-single-stage.toml",
+      "skippy/docs/manual-smoke/fixtures/throughput/runtime-single-stage.toml",
       "unsloth/Qwen3.5-4B-GGUF:UD-Q4_K_XL",
       "throughput"
     ],
     [
       62,
       "throughput.tuning_profile",
-      "docs/skippy/manual-smoke/fixtures/throughput/runtime-single-stage.toml",
+      "skippy/docs/manual-smoke/fixtures/throughput/runtime-single-stage.toml",
       "unsloth/Qwen3.5-4B-GGUF:UD-Q4_K_XL",
       "throughput"
     ],
     [
       75,
       "speculative.mode",
-      "docs/skippy/manual-smoke/fixtures/speculative/runtime-warn-disable.toml",
+      "skippy/docs/manual-smoke/fixtures/speculative/runtime-warn-disable.toml",
       "main unsloth/Qwen3.5-4B-GGUF:UD-Q4_K_XL with draft from $MESH_LLM_SMOKE_DRAFT_PATH",
       "speculative"
     ],
     [
       76,
       "speculative.draft_model_path",
-      "docs/skippy/manual-smoke/fixtures/speculative/runtime-warn-disable.toml",
+      "skippy/docs/manual-smoke/fixtures/speculative/runtime-warn-disable.toml",
       "main unsloth/Qwen3.5-4B-GGUF:UD-Q4_K_XL with draft from $MESH_LLM_SMOKE_DRAFT_PATH",
       "speculative"
     ],
     [
       77,
       "speculative.draft_selection_policy",
-      "docs/skippy/manual-smoke/fixtures/speculative/runtime-warn-disable.toml",
+      "skippy/docs/manual-smoke/fixtures/speculative/runtime-warn-disable.toml",
       "main unsloth/Qwen3.5-4B-GGUF:UD-Q4_K_XL with draft from $MESH_LLM_SMOKE_DRAFT_PATH",
       "speculative"
     ],
     [
       78,
       "speculative.pairing_fault",
-      "docs/skippy/manual-smoke/fixtures/speculative/runtime-warn-disable.toml",
+      "skippy/docs/manual-smoke/fixtures/speculative/runtime-warn-disable.toml",
       "main unsloth/Qwen3.5-4B-GGUF:UD-Q4_K_XL with draft from $MESH_LLM_SMOKE_DRAFT_PATH",
       "speculative"
     ],
     [
       79,
       "speculative.draft_max_tokens",
-      "docs/skippy/manual-smoke/fixtures/speculative/runtime-warn-disable.toml",
+      "skippy/docs/manual-smoke/fixtures/speculative/runtime-warn-disable.toml",
       "main unsloth/Qwen3.5-4B-GGUF:UD-Q4_K_XL with draft from $MESH_LLM_SMOKE_DRAFT_PATH",
       "speculative"
     ],
     [
       80,
       "speculative.draft_gpu_layers",
-      "docs/skippy/manual-smoke/fixtures/speculative/runtime-warn-disable.toml",
+      "skippy/docs/manual-smoke/fixtures/speculative/runtime-warn-disable.toml",
       "main unsloth/Qwen3.5-4B-GGUF:UD-Q4_K_XL with draft from $MESH_LLM_SMOKE_DRAFT_PATH",
       "speculative"
     ],
     [
       93,
       "request_defaults.max_tokens",
-      "docs/skippy/manual-smoke/fixtures/request_defaults/runtime-supported.toml",
+      "skippy/docs/manual-smoke/fixtures/request_defaults/runtime-supported.toml",
       "unsloth/Qwen3.5-4B-GGUF:UD-Q4_K_XL",
       "request_defaults"
     ],
     [
       94,
       "request_defaults.stop",
-      "docs/skippy/manual-smoke/fixtures/request_defaults/runtime-supported.toml",
+      "skippy/docs/manual-smoke/fixtures/request_defaults/runtime-supported.toml",
       "unsloth/Qwen3.5-4B-GGUF:UD-Q4_K_XL",
       "request_defaults"
     ],
     [
       95,
       "request_defaults.temperature",
-      "docs/skippy/manual-smoke/fixtures/request_defaults/runtime-supported.toml",
+      "skippy/docs/manual-smoke/fixtures/request_defaults/runtime-supported.toml",
       "unsloth/Qwen3.5-4B-GGUF:UD-Q4_K_XL",
       "request_defaults"
     ],
     [
       96,
       "request_defaults.top_p",
-      "docs/skippy/manual-smoke/fixtures/request_defaults/runtime-supported.toml",
+      "skippy/docs/manual-smoke/fixtures/request_defaults/runtime-supported.toml",
       "unsloth/Qwen3.5-4B-GGUF:UD-Q4_K_XL",
       "request_defaults"
     ],
     [
       97,
       "request_defaults.top_k",
-      "docs/skippy/manual-smoke/fixtures/request_defaults/runtime-supported.toml",
+      "skippy/docs/manual-smoke/fixtures/request_defaults/runtime-supported.toml",
       "unsloth/Qwen3.5-4B-GGUF:UD-Q4_K_XL",
       "request_defaults"
     ],
     [
       98,
       "request_defaults.min_p",
-      "docs/skippy/manual-smoke/fixtures/request_defaults/runtime-supported.toml",
+      "skippy/docs/manual-smoke/fixtures/request_defaults/runtime-supported.toml",
       "unsloth/Qwen3.5-4B-GGUF:UD-Q4_K_XL",
       "request_defaults"
     ],
     [
       99,
       "request_defaults.repeat_penalty",
-      "docs/skippy/manual-smoke/fixtures/request_defaults/runtime-supported.toml",
+      "skippy/docs/manual-smoke/fixtures/request_defaults/runtime-supported.toml",
       "unsloth/Qwen3.5-4B-GGUF:UD-Q4_K_XL",
       "request_defaults"
     ],
     [
       100,
       "request_defaults.repeat_last_n",
-      "docs/skippy/manual-smoke/fixtures/request_defaults/runtime-supported.toml",
+      "skippy/docs/manual-smoke/fixtures/request_defaults/runtime-supported.toml",
       "unsloth/Qwen3.5-4B-GGUF:UD-Q4_K_XL",
       "request_defaults"
     ],
     [
       101,
       "request_defaults.presence_penalty",
-      "docs/skippy/manual-smoke/fixtures/request_defaults/runtime-supported.toml",
+      "skippy/docs/manual-smoke/fixtures/request_defaults/runtime-supported.toml",
       "unsloth/Qwen3.5-4B-GGUF:UD-Q4_K_XL",
       "request_defaults"
     ],
     [
       102,
       "request_defaults.frequency_penalty",
-      "docs/skippy/manual-smoke/fixtures/request_defaults/runtime-supported.toml",
+      "skippy/docs/manual-smoke/fixtures/request_defaults/runtime-supported.toml",
       "unsloth/Qwen3.5-4B-GGUF:UD-Q4_K_XL",
       "request_defaults"
     ],
     [
       103,
       "request_defaults.seed",
-      "docs/skippy/manual-smoke/fixtures/request_defaults/runtime-supported.toml",
+      "skippy/docs/manual-smoke/fixtures/request_defaults/runtime-supported.toml",
       "unsloth/Qwen3.5-4B-GGUF:UD-Q4_K_XL",
       "request_defaults"
     ],
     [
       104,
       "request_defaults.logit_bias",
-      "docs/skippy/manual-smoke/fixtures/request_defaults/runtime-supported.toml",
+      "skippy/docs/manual-smoke/fixtures/request_defaults/runtime-supported.toml",
       "unsloth/Qwen3.5-4B-GGUF:UD-Q4_K_XL",
       "request_defaults"
     ],
     [
       105,
       "request_defaults.reasoning_format",
-      "docs/skippy/manual-smoke/fixtures/request_defaults/runtime-supported.toml",
+      "skippy/docs/manual-smoke/fixtures/request_defaults/runtime-supported.toml",
       "unsloth/Qwen3.5-4B-GGUF:UD-Q4_K_XL",
       "request_defaults"
     ],
     [
       106,
       "request_defaults.reasoning_enabled",
-      "docs/skippy/manual-smoke/fixtures/request_defaults/runtime-supported.toml",
+      "skippy/docs/manual-smoke/fixtures/request_defaults/runtime-supported.toml",
       "unsloth/Qwen3.5-4B-GGUF:UD-Q4_K_XL",
       "request_defaults"
     ],
     [
       107,
       "request_defaults.reasoning_budget",
-      "docs/skippy/manual-smoke/fixtures/request_defaults/runtime-supported.toml",
+      "skippy/docs/manual-smoke/fixtures/request_defaults/runtime-supported.toml",
       "unsloth/Qwen3.5-4B-GGUF:UD-Q4_K_XL",
       "request_defaults"
     ],
     [
       143,
       "advanced.server.alias",
-      "docs/skippy/manual-smoke/fixtures/advanced.server/runtime-alias.toml",
+      "skippy/docs/manual-smoke/fixtures/advanced.server/runtime-alias.toml",
       "unsloth/Qwen3.5-4B-GGUF:UD-Q4_K_XL",
       "advanced_server"
     ]
@@ -983,32 +1123,32 @@
   "outside_scanner_source_calls": [
     {
       "boundary": "manual reference conversion; --with torch/transformers/numpy/sentencepiece/protobuf/gguf --no-project, --python-converter points to upstream llama.cpp file; uv installs optional packages; not required CI",
-      "file": "crates/skippy-quantize/README.md",
+      "file": "skippy/crates/skippy-quantize/README.md",
       "kind": "provisioning",
-      "line": 524,
+      "line": 525,
       "source_block": "uv run --python 3.12 \\",
-      "target": "crates/skippy-quantize/scripts/compare-reference-quantization.py"
+      "target": "skippy/crates/skippy-quantize/scripts/compare-reference-quantization.py"
     },
     {
       "boundary": "manual all-modes comparison; --with gguf/numpy --no-project, native/reference quantizer paths supplied; uv installs optional packages",
-      "file": "crates/skippy-quantize/README.md",
+      "file": "skippy/crates/skippy-quantize/README.md",
       "kind": "provisioning",
-      "line": 545,
+      "line": 546,
       "source_block": "uv run --python 3.12 \\",
-      "target": "crates/skippy-quantize/scripts/compare-reference-quantization.py"
+      "target": "skippy/crates/skippy-quantize/scripts/compare-reference-quantization.py"
     },
     {
       "boundary": "Historical task-11 executed-command and evidence data, preserved byte-for-byte. Not a current rerun instruction or Python dependency. Current reruns use cargo xtool automation manual-smoke run; see docs/skippy/manual-smoke/README.md. Existing source-bound command/model fields preserve historical provenance.",
-      "file": "docs/skippy/manual-smoke/manifest.tsv",
+      "file": "skippy/docs/manual-smoke/manifest.tsv",
       "kind": "data",
       "line": 2,
-      "source_block": "model_fit.ctx_size\tdocs/skippy/manual-smoke/fixtures/model_fit/runtime-single-stage.toml\tpython3 docs/skippy/manual-smoke/runtime_smoke.py --binary target/debug/mesh-llm --fixture docs/skippy/manual-smoke/fixtures/model_fit/runtime-single-stage.toml --model-path $MESH_LLM_SMOKE_MODEL_PATH --api-port 9437 --console-port 3231 --max-wait 600\tunsloth/Qwen3.5-4B-GGUF:UD-Q4_K_XL\twait for /api/status and /v1/models, then send /v1/chat/completions\tLive local runtime smoke succeeded; see model_fit section in evidence for /api/status, /v1/models, chat completion, and cleanup.\t.sisyphus/evidence/task-11-manual-runtime-smoke.txt\tPASS",
-      "target": "docs/skippy/manual-smoke/runtime_smoke.py"
+      "source_block": "model_fit.ctx_size\tskippy/docs/manual-smoke/fixtures/model_fit/runtime-single-stage.toml\tpython3 skippy/docs/manual-smoke/runtime_smoke.py --binary target/debug/mesh-llm --fixture skippy/docs/manual-smoke/fixtures/model_fit/runtime-single-stage.toml --model-path $MESH_LLM_SMOKE_MODEL_PATH --api-port 9437 --console-port 3231 --max-wait 600\tunsloth/Qwen3.5-4B-GGUF:UD-Q4_K_XL\twait for /api/status and /v1/models, then send /v1/chat/completions\tLive local runtime smoke succeeded; see model_fit section in evidence for /api/status, /v1/models, chat completion, and cleanup.\t.sisyphus/evidence/task-11-manual-runtime-smoke.txt\tPASS",
+      "target": "skippy/docs/manual-smoke/runtime_smoke.py"
     }
   ],
   "python_implementation_edges": [
     {
-      "file": "evals/test_injection_framing.py",
+      "file": "mesh/evals/test_injection_framing.py",
       "members": [
         [
           174,
@@ -1021,7 +1161,7 @@
       ]
     },
     {
-      "file": "crates/skippy-quantize/scripts/compare-reference-quantization.py",
+      "file": "skippy/crates/skippy-quantize/scripts/compare-reference-quantization.py",
       "members": [
         [
           107,
@@ -1050,7 +1190,7 @@
       ]
     },
     {
-      "file": "sdk/python/src/meshllm/_binding.py",
+      "file": "mesh/sdk/python/src/meshllm/_binding.py",
       "members": [
         [
           13,

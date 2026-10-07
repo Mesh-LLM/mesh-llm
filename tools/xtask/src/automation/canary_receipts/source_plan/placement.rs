@@ -1,5 +1,4 @@
 //! Controller scheduling projection. Canonical source plan bytes stay unchanged.
-use crate::command::DynResult;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -78,9 +77,9 @@ struct Placement {
     memory_tier: String,
 }
 
-pub(crate) fn project(bytes: &[u8]) -> DynResult<Matrix> {
-    super::SourceFamilyPlan::parse(bytes)?;
-    let plan: Plan = serde_json::from_slice(bytes)?;
+pub(crate) fn project(bytes: &[u8]) -> Result<Matrix, String> {
+    super::SourceFamilyPlan::parse(bytes).map_err(|error| error.to_string())?;
+    let plan: Plan = serde_json::from_slice(bytes).map_err(|error| error.to_string())?;
     let placements = plan
         .selected_models
         .into_iter()
@@ -105,7 +104,29 @@ pub(crate) fn project(bytes: &[u8]) -> DynResult<Matrix> {
     Ok(Matrix { include })
 }
 
-fn estimate(model: &Model) -> DynResult<Placement> {
+/// The controller owns these fields even when historical source rows contain
+/// stale placement claims. No row identity or unknown source field is replaced.
+pub(super) const PLACEMENT_FIELDS: [&str; 5] = [
+    "resident_model_bytes",
+    "runtime_allowance_bytes",
+    "estimated_peak_bytes",
+    "minimum_runner_memory_gib",
+    "memory_tier",
+];
+
+pub(super) fn by_family(bytes: &[u8]) -> Result<BTreeMap<String, serde_json::Value>, String> {
+    project(bytes)?
+        .include
+        .into_iter()
+        .map(|row| {
+            serde_json::to_value(row.placement)
+                .map(|placement| (row.row.families, placement))
+                .map_err(|error| error.to_string())
+        })
+        .collect()
+}
+
+fn estimate(model: &Model) -> Result<Placement, String> {
     positive(model.resources.estimated_model_bytes)?;
     let weights = artifact_bytes(&model.artifact)?.max(model.resources.estimated_model_bytes);
     let mut auxiliaries = 0_u64;
@@ -142,7 +163,7 @@ fn estimate(model: &Model) -> DynResult<Placement> {
     })
 }
 
-fn artifact_bytes(artifact: &Artifact) -> DynResult<u64> {
+fn artifact_bytes(artifact: &Artifact) -> Result<u64, String> {
     if artifact.files.is_empty()
         || artifact.files.iter().collect::<BTreeSet<_>>().len() != artifact.files.len()
     {
@@ -159,7 +180,7 @@ fn artifact_bytes(artifact: &Artifact) -> DynResult<u64> {
     })
 }
 
-fn tier_for(peak: u64, minimum: Option<u64>) -> DynResult<u64> {
+fn tier_for(peak: u64, minimum: Option<u64>) -> Result<u64, String> {
     positive(peak)?;
     if minimum.is_some_and(|tier| !TIERS.contains(&tier)) {
         return Err("minimum runner memory must be 128 or 256 GiB".into());
@@ -171,13 +192,13 @@ fn tier_for(peak: u64, minimum: Option<u64>) -> DynResult<u64> {
     Ok(estimated.max(minimum.unwrap_or(estimated)))
 }
 
-fn positive(bytes: u64) -> DynResult<()> {
+fn positive(bytes: u64) -> Result<(), String> {
     if bytes == 0 {
         return Err("memory estimate requires positive pinned sizes".into());
     }
     Ok(())
 }
-fn add(left: u64, right: u64) -> DynResult<u64> {
+fn add(left: u64, right: u64) -> Result<u64, String> {
     left.checked_add(right)
         .ok_or_else(|| "memory estimate overflow".into())
 }

@@ -1,4 +1,12 @@
 //! Flat Just facade ownership checked against native Just parsing and visibility.
+const PRIVATE_RECIPES: &[&str] = &[
+    "with-lld",
+    "automation-run",
+    "skippy-layer-package-inspect",
+    "skippy-package-reference",
+    "skippy-layer-package-cache",
+    "skippy-layer-package-fetch",
+];
 use crate::process::{
     self, Cancellation, Completion, Limits, ProcessSpec, RawCaptureOptions, Readiness, Value,
 };
@@ -10,6 +18,10 @@ use std::{
     path::{Path, PathBuf},
     time::Duration,
 };
+
+#[cfg(unix)]
+#[path = "just_layout_contracts/product_behaviors.rs"]
+mod product_behaviors;
 
 #[derive(Deserialize)]
 struct Ownership {
@@ -139,14 +151,14 @@ fn check(root: &Path) -> Result<(), String> {
         if !known.contains(name) {
             return Err(format!("unowned native recipe: {name}"));
         }
-        let expected = matches!(name.as_str(), "with-lld" | "automation-run");
+        let expected = PRIVATE_RECIPES.contains(&name.as_str());
         if recipe["private"].as_bool() != Some(expected) {
             return Err(format!("private visibility changed: {name}"));
         }
     }
     let summary = String::from_utf8(just(root, &["--summary"])?).map_err(|e| e.to_string())?;
     let public = summary.split_whitespace().collect::<BTreeSet<_>>();
-    if public.contains("with-lld") || public.contains("automation-run") {
+    if PRIVATE_RECIPES.iter().any(|name| public.contains(name)) {
         return Err("internal facade listed as public".into());
     }
     Ok(())

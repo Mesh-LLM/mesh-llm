@@ -14,7 +14,7 @@ path through `ownerKeyPath`/`owner_key_path` if owner identity is required.
 From the repository root, use an existing Python 3.10 or newer interpreter:
 
 ```bash
-python3 -I mesh/sdk/python/tests/test_node.py
+python3 -I mesh/sdk/python/tests/test_client.py
 ```
 
 This existing unittest runner adds only this component's source directory to

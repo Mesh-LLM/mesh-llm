@@ -5,11 +5,11 @@ use crate::support::{Invocation, Scratch, TestResult, assert_output, repository_
 use std::path::Path;
 use std::process::Output;
 
-const AUDITED_FILE: &str = "crates/model-hf/src/store/local.rs";
+const AUDITED_FILE: &str = "skippy/crates/skippy-model-hf/src/store/local.rs";
 const TODO: &str =
     "// TODO: Audit that the environment access only happens in single-threaded code.";
 const BOOTSTRAP_FILE: &str =
-    "crates/mesh-llm-host-runtime/src/inference/skippy/metal_pipeline_cache.rs";
+    "mesh/crates/mesh-llm-host-runtime/src/inference/skippy/metal_pipeline_cache.rs";
 const HEADER: &str = "environment mutation contract violations:\n";
 
 /// Writes a fixture source, expanding `{SET}` / `{REMOVE}` into the mutation
@@ -56,7 +56,7 @@ fn migration_repository_census_matches_repository_baseline() -> TestResult {
     assert_output(
         &output,
         0,
-        "environment mutation contract: discovered 38 Rust files and 237 mutation sites; 22 contract-audited files; unresolved runtime sites remain explicit\n",
+        "environment mutation contract: discovered 37 Rust files and 235 mutation sites; 21 contract-audited files; unresolved runtime sites remain explicit\n",
         "",
     );
     Ok(())
@@ -66,7 +66,7 @@ fn migration_repository_census_matches_repository_baseline() -> TestResult {
 fn migration_repository_census_excludes_root_evidence_but_audits_nested_source() -> TestResult {
     let scratch = Scratch::new("census-evidence")?;
     scratch.write(
-        "crates/mesh-llm/src/main.rs",
+        "mesh/crates/mesh-llm/src/main.rs",
         "fn main() {\n    configure_metal_pipeline_cache();\n    run_on_application_thread(|| {\n        tokio::runtime::Builder::new_multi_thread()\n    });\n}\n",
     )?;
     write_source(
@@ -113,12 +113,12 @@ fn migration_repository_census_rejects_stale_census() -> TestResult {
     )?;
     write_source(
         &scratch,
-        "crates/model-hf/src/cache_paths.rs",
+        "skippy/crates/skippy-model-hf/src/cache_paths.rs",
         "fn a() {\n    unsafe { {SET}(\"A\", \"1\") };\n}\n",
     )?;
     write_source(
         &scratch,
-        "crates/skippy-protocol/build.rs",
+        "skippy/crates/skippy-protocol/build.rs",
         "fn main() {\n    // SAFETY: fine\n    unsafe { {SET}(\"A\", \"1\") };\n}\n",
     )?;
     write_source(&scratch, "target/x/a.rs", "{SET}(\n")?;
@@ -132,9 +132,9 @@ fn migration_repository_census_rejects_stale_census() -> TestResult {
         "",
         &violations(&[
             "crates/new-crate/src/lib.rs: unregistered process-environment mutation file (1 sites)",
-            "crates/model-hf/src/cache_paths.rs: unaudited mutation census changed from 2 to 1 sites",
-            "crates/skippy-protocol/build.rs:3 (main): build-script environment mutation needs a build-script SAFETY comment",
-            "crates/mesh-llm/src/main.rs: bootstrap caller is missing",
+            "skippy/crates/skippy-model-hf/src/cache_paths.rs: unaudited mutation census changed from 2 to 1 sites",
+            "skippy/crates/skippy-protocol/build.rs:3 (main): build-script environment mutation needs a build-script SAFETY comment",
+            "mesh/crates/mesh-llm/src/main.rs: bootstrap caller is missing",
         ]),
     );
     Ok(())
@@ -145,7 +145,7 @@ fn migration_repository_census_checks_bootstrap_order() -> TestResult {
     // Given: a main.rs that starts the application thread before the mutation.
     let scratch = Scratch::new("census-order")?;
     scratch.write(
-        "crates/mesh-llm/src/main.rs",
+        "mesh/crates/mesh-llm/src/main.rs",
         "fn main() {\n    run_on_application_thread(|| {});\n    configure_metal_pipeline_cache();\n    tokio::runtime::Builder::new_multi_thread()\n}\n",
     )?;
     let output = census(scratch.path(), &[])?;
@@ -154,12 +154,12 @@ fn migration_repository_census_checks_bootstrap_order() -> TestResult {
         1,
         "",
         &violations(&[
-            "crates/mesh-llm/src/main.rs: Metal cache environment mutation must run before application-thread and Tokio runtime construction",
+            "mesh/crates/mesh-llm/src/main.rs: Metal cache environment mutation must run before application-thread and Tokio runtime construction",
         ]),
     );
     // When: the order is correct, the empty census passes.
     scratch.write(
-        "crates/mesh-llm/src/main.rs",
+        "mesh/crates/mesh-llm/src/main.rs",
         "fn main() {\n    configure_metal_pipeline_cache();\n    run_on_application_thread(|| {\n        tokio::runtime::Builder::new_multi_thread()\n    });\n}\n",
     )?;
     let output = census(scratch.path(), &[])?;
@@ -189,7 +189,7 @@ fn migration_repository_census_strict_test_contracts() -> TestResult {
         1,
         "",
         &violations(&[
-            "crates/model-hf/src/store/local.rs:6 (mutates): test environment mutation is not covered by #[serial]",
+            "skippy/crates/skippy-model-hf/src/store/local.rs:6 (mutates): test environment mutation is not covered by #[serial]",
         ]),
     );
     let distant = strict(
@@ -201,7 +201,7 @@ fn migration_repository_census_strict_test_contracts() -> TestResult {
         1,
         "",
         &violations(&[
-            "crates/model-hf/src/store/local.rs:9 (distant): test environment mutation needs a SAFETY comment",
+            "skippy/crates/skippy-model-hf/src/store/local.rs:9 (distant): test environment mutation needs a SAFETY comment",
         ]),
     );
     let helper = strict(
@@ -220,7 +220,7 @@ fn migration_repository_census_strict_test_contracts() -> TestResult {
 #[test]
 fn migration_repository_census_strict_runtime_contracts() -> TestResult {
     let deferred = strict(
-        "crates/skippy-runtime/src/logging.rs",
+        "skippy/crates/skippy-runtime/src/logging.rs",
         &format!(
             "fn configure_runtime() {{\n    {TODO}\n    unsafe {{ {{SET}}(\"R\", \"1\") }};\n}}\n"
         ),
@@ -230,7 +230,7 @@ fn migration_repository_census_strict_runtime_contracts() -> TestResult {
         1,
         "",
         &violations(&[
-            "crates/skippy-runtime/src/logging.rs:3 (configure_runtime): deferred runtime mutation needs adjacent SAFETY and audit TODO comments",
+            "skippy/crates/skippy-runtime/src/logging.rs:3 (configure_runtime): deferred runtime mutation needs adjacent SAFETY and audit TODO comments",
         ]),
     );
     let stale_todo = strict(
@@ -265,7 +265,7 @@ fn migration_repository_census_strict_runtime_contracts() -> TestResult {
         ]),
     );
     let outside = strict(
-        "crates/mesh-llm-system/src/autoupdate.rs",
+        "mesh/crates/mesh-llm-system/src/autoupdate.rs",
         "fn update<T>() {\n    // SAFETY: none\n    unsafe { {SET}(\"U\", \"1\") };\n}\n",
     )?;
     assert_output(
@@ -273,7 +273,7 @@ fn migration_repository_census_strict_runtime_contracts() -> TestResult {
         1,
         "",
         &violations(&[
-            "crates/mesh-llm-system/src/autoupdate.rs:3 (update): audited mutation is outside a recognized test module",
+            "mesh/crates/mesh-llm-system/src/autoupdate.rs:3 (update): audited mutation is outside a recognized test module",
         ]),
     );
     Ok(())
@@ -288,9 +288,30 @@ fn migration_repository_census_strict_missing_file() -> TestResult {
         1,
         "",
         &violations(&[
-            "crates/model-hf/src/store/local.rs: audited source file is missing",
+            "skippy/crates/skippy-model-hf/src/store/local.rs: audited source file is missing",
             "crates/nope.rs: audited source file is missing",
         ]),
     );
+    Ok(())
+}
+
+#[test]
+fn current_registered_serial_test_sites_keep_strict_safety_and_serial_refusals() -> TestResult {
+    let scratch = Scratch::new("current-serial-env-sites")?;
+    for relative in [
+        "skippy/crates/skippy-model-hf/src/remote_catalog/tests.rs",
+        "mesh/crates/mesh-llm-host-runtime/tests/membership_test_home_isolation.rs",
+    ] {
+        let admitted = "#[test]\n#[serial_test::serial]\nfn isolated() {\n// SAFETY: this serial test restores its scoped environment.\nunsafe { {SET}(\"FIXTURE\", \"1\") };\n}\n";
+        write_source(&scratch, relative, admitted)?;
+        assert!(census(scratch.path(), &[relative])?.status.success());
+        for rejected in [
+            admitted.replace("#[serial_test::serial]\n", ""),
+            admitted.replace("SAFETY:", "COMMENT:"),
+        ] {
+            write_source(&scratch, relative, &rejected)?;
+            assert!(!census(scratch.path(), &[relative])?.status.success());
+        }
+    }
     Ok(())
 }

@@ -139,8 +139,8 @@ benchmark-run dependency. Prepare its separate locked Python3.12 environment
 explicitly; dependency resolution alone does not qualify model values.
 
 ```bash
-uv sync --locked --no-python-downloads --project skippy/evals/granite-reference --python python3.12
-skippy/evals/granite-reference/.venv/bin/python -I skippy/evals/skippy-granite-tensor-equivalence.py \
+uv sync --locked --no-python-downloads --project evals/granite-reference --python python3.12
+evals/granite-reference/.venv/bin/python -I skippy/evals/skippy-granite-tensor-equivalence.py \
   --gguf /path/to/granite-4.0-h-1b-bf16.gguf \
   --safetensors /path/to/model.safetensors
 ```

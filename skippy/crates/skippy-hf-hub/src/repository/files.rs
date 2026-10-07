@@ -25,7 +25,10 @@ use serde::{Deserialize, Serialize};
 #[allow(unused_imports)] // used by intra-doc links
 use super::HFRepository;
 use crate::constants;
+#[path = "commit_admission.rs"]
+mod commit_admission;
 use crate::error::HFResult;
+pub(super) use commit_admission::{admit_commit, admit_etag};
 
 /// LFS metadata attached to a repository file, when the file is stored in Git LFS.
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -26,7 +26,7 @@ impl Fixture {
             .split("  repair_workload_controller_unchanged() {")
             .nth(1)
             .unwrap()
-            .split("\nfi\n# Legacy workload automation selection ends.")
+            .split("\n# Legacy workload automation selection ends.")
             .next()
             .unwrap();
         fs::write(root.join("adapter.sh"),format!("set -euo pipefail\nrepair_workload_controller_unchanged() {{{guard}\nrepair_source_inspection() {{{helper}\nrun_verification_logged() {{ local label=\"$1\" log=\"$2\"; shift 2; printf '%s\\n' \"$label\" >> \"$log\"; \"$@\"; }}\n")).unwrap();

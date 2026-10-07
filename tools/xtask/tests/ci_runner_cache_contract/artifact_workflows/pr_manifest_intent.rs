@@ -105,7 +105,6 @@ printf '%s\n' "$4" > planner-manifest-root
             ("EVENT_NAME", "pull_request"),
             ("BASE_SHA", ""),
             ("DRAFT", if mode == "draft" { "true" } else { "false" }),
-            ("CHANGED_FILES", "docs/MESHES.md\n"),
             ("AFFECTED_CRATES", "[]"),
             ("UPLOAD_ARTIFACT", "false"),
             ("ARTIFACT_NAME", ""),
@@ -113,6 +112,11 @@ printf '%s\n' "$4" > planner-manifest-root
         ] {
             command.env(key, value);
         }
+        fs::write(f.path().join("changed.txt"), "docs/MESHES.md\n").unwrap();
+        let run = run.replace(
+            "/tmp/changed_files.txt",
+            &format!("\"{}\"", f.path().join("changed.txt").display()),
+        );
         command
             .env(
                 "SOURCE_SHA",
@@ -127,7 +131,7 @@ printf '%s\n' "$4" > planner-manifest-root
             .env("GITHUB_OUTPUT", f.path().join("outputs"))
             .env("GITHUB_STEP_SUMMARY", f.path().join("summary"))
             .env("MESH_LLM_AUTOMATION_BIN", f.path().join("bin/automation"))
-            .args(["-c", run]);
+            .args(["-c", &run]);
         let output = f.run(command);
         if matches!(mode, "matching" | "draft") {
             assert!(output.status.success(), "{output:?}");

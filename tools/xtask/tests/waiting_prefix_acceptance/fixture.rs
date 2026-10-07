@@ -91,6 +91,12 @@ fn main() -> Result<()> {
     if arguments.first().map(String::as_str) != Some("serve-openai") {
         return Err("expected native serve-openai command".into());
     }
+    if arguments.len() == 2 && arguments[1] == "--help" {
+        let mut stdout = std::io::stdout().lock();
+        stdout.write_all(b"inert legacy serve-openai help\n")?;
+        stdout.flush()?;
+        return Ok(());
+    }
     if option(&arguments, "--telemetry-level")? != "debug"
         || std::env::var("SKIPPY_TELEMETRY_STDERR")? != "1"
     {

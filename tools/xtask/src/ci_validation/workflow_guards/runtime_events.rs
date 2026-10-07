@@ -10,6 +10,11 @@ pub(super) fn check(workflows: &BTreeMap<String, Node>) -> DynResult<()> {
     let steps = h::steps(h::job(workflow, "linux_runtime")?)?;
     let (prepare, product) = h::step(steps, "name", "Prepare immutable Linux native runtime")?;
     h::binding(product, "id", "native_runtime")?;
+    h::condition(
+        product,
+        "${{ steps.runtime_cache.outputs.cache-hit != 'true' }}",
+    )?;
+    let cached = cached_runtime(steps)?;
     let (restore, model) = h::step(steps, "name", "Restore runtime-event gate model")?;
     h::binding(model, "id", "gate_model")?;
     h::binding(model, "uses", "./.github/actions/restore-test-model")?;
@@ -31,6 +36,18 @@ pub(super) fn check(workflows: &BTreeMap<String, Node>) -> DynResult<()> {
         "${{ !cancelled() && matrix.runtime.backend == 'cpu' }}",
     )?;
     h::before(prepare, execute)?;
+    h::before(cached, execute)?;
+    let env = h::member(gate, "env")?;
+    h::binding(
+        env,
+        "RUNTIME_DIR",
+        "${{ steps.cached_runtime.outputs.runtime_dir || steps.native_runtime.outputs.runtime_dir }}",
+    )?;
+    h::binding(
+        env,
+        "MODEL_PATH",
+        "${{ steps.gate_model.outputs.model_path }}",
+    )?;
     h::before(restore, execute)?;
     h::before(execute, upload)?;
     gate_arguments(gate)?;
@@ -42,6 +59,54 @@ pub(super) fn check(workflows: &BTreeMap<String, Node>) -> DynResult<()> {
     let inputs = h::member(evidence, "with")?;
     h::binding(inputs, "path", "runtime-events-native-evidence.txt")?;
     h::binding(inputs, "if-no-files-found", "error")
+}
+fn cached_runtime(steps: &[Node]) -> DynResult<usize> {
+    let (cached, verification) = h::step(steps, "name", "Verify restored Linux CPU runtime")?;
+    h::binding(verification, "id", "cached_runtime")?;
+    h::binding(
+        h::member(verification, "env")?,
+        "EXPECTED_BACKEND",
+        "${{ matrix.runtime.backend }}",
+    )?;
+    h::binding(
+        h::member(verification, "env")?,
+        "EXPECTED_TARGET",
+        "${{ matrix.runtime.target }}",
+    )?;
+    h::condition(
+        verification,
+        "${{ steps.runtime_cache.outputs.cache-hit == 'true' }}",
+    )?;
+    h::command(
+        verification,
+        &["scripts/verify-native-runtime-package.sh"],
+        &[
+            ("--expected-backend", "\"$EXPECTED_BACKEND\""),
+            ("--expected-target", "\"$EXPECTED_TARGET\""),
+            ("\"$EXPECTED_TARGET\"", "\"$runtime_dir\""),
+            ("\"$runtime_dir\"", "\"$runtime_dir.tar.gz\""),
+        ],
+    )?;
+    h::command(
+        verification,
+        &["if", "!", "tar"],
+        &[
+            ("-xOzf", "\"$runtime_dir.tar.gz\""),
+            ("cmp", "-s"),
+            ("-s", "\"$runtime_dir/manifest.json\""),
+        ],
+    )?;
+    h::command(
+        verification,
+        &[
+            "echo",
+            "\"runtime_dir=$PWD/$runtime_dir\"",
+            ">>",
+            "\"$GITHUB_OUTPUT\"",
+        ],
+        &[],
+    )?;
+    Ok(cached)
 }
 fn gate_arguments(step: &Node) -> DynResult<()> {
     let run = super::field(step, "run").ok_or("native reporter gate command missing")?;
@@ -76,11 +141,8 @@ fn gate_arguments(step: &Node) -> DynResult<()> {
         }
     }
     let expected = BTreeMap::from([
-        (
-            "--bundle-dir",
-            "\"$(dirname \"${{ steps.native_runtime.outputs.runtime_dir }}\")\"",
-        ),
-        ("--model", "\"${{ steps.gate_model.outputs.model_path }}\""),
+        ("--bundle-dir", "\"$(dirname \"$RUNTIME_DIR\")\""),
+        ("--model", "\"$MODEL_PATH\""),
         ("--evidence", "runtime-events-native-evidence.txt"),
     ]);
     if values != expected {

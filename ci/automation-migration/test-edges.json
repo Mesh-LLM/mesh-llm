@@ -1,10 +1,7 @@
 {
-  "additional_groups": [
-
-  ],
+  "additional_groups": [],
   "discovery_roots": [
-    "just/ci.just:15 python3 -m unittest discover -s scripts/tests -p test_*.py",
-    ".github/workflows/ci-quality-slice.yml:186 python3 -m unittest discover -s scripts/tests -p test_*.py"
+    "just/ci.just:34 agentic-trajectory-reader-contracts; optional locked offline/no-sync/no-python-downloads -I execution of mesh/scripts/tests/test_agentic_trajectory_manifest.py at line36"
   ],
   "dispositions": {
     "assembly": "constructs a command, generated source, or interpreter reference without launching a process at this line",
@@ -15,7 +12,7 @@
   },
   "groups": [
     {
-      "file": "scripts/tests/test_agentic_trajectory_manifest.py",
+      "file": "mesh/scripts/tests/test_agentic_trajectory_manifest.py",
       "members": [
         [
           15,
@@ -23,8 +20,8 @@
           1,
           "dynamic-import",
           "import",
-          "evals/agentic-trajectory-manifest.py",
-          "SCRIPT names the fixture manifest implementation"
+          "mesh/evals/agentic-trajectory-manifest.py",
+          "Optional approved reader constructor imports its fixed implementation; DuckDB and real data are not exercised."
         ]
       ]
     }
@@ -38,10 +35,10 @@
     "target_or_boundary",
     "source_specific_reason"
   ],
-  "observed_source_sha256": "9629f589c82bca7cf66a39124664cb42238093b939bc826c8cb0067bb38e18ad",
+  "observed_source_sha256": "9536cc5b5f0619919bd48b2da3f236aa75a90ed2191e30870d07bb70280c3beb",
   "schema_version": 1,
-  "scope": "tracked scripts/tests/**/*.py; source candidate shard, not global acceptance",
-  "status": "All observed test-source scanner candidates are bound; transitive child closure and global task 1 remain incomplete. No optional subprocess test is asserted to be a production dependency.",
+  "scope": "Tracked root scripts/tests/**/*.py plus mesh/scripts/tests/**/*.py and skippy/scripts/tests/**/*.py; exact source candidate shard only, not global acceptance.",
+  "status": "The active test-source bindings retain only the canonical optional Mesh trajectory reader constructor under its existing isolated pinned environment. The 17 superseded generic test/helper source groups (73 members) are removed with their exact source retirements. Historical records and the observed source-tree fingerprint remain unchanged pending a fresh native observation after application; this draft does not claim accepted census, platform/model/SDK qualification, or global completion.",
   "zip_extraction_test_retirement": {
     "coverage": "ci/automation-migration/zip-extraction-test-retirement-coverage.json",
     "path": "scripts/tests/test_safe_extract_zip.py",

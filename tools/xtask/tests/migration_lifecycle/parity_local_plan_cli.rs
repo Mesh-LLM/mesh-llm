@@ -916,3 +916,5 @@ fn assert_final_source_refusal(root: &Path, request: &mut Value) {
     assert_eq!(observed["observed_status"], "completed");
     assert_eq!(observed["receipts"], receipt["receipts"]);
 }
+#[path = "parity_local_plan_cli/boundary_selection.rs"]
+mod boundary_selection;

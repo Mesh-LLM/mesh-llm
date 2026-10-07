@@ -33,7 +33,7 @@ ci-legacy-contracts:
 [unix]
 agentic-trajectory-reader-contracts:
     test -x "{{justfile_directory()}}/ci/agentic-replay-nightly/.venv/bin/python" || { echo "Prepare the locked trajectory-reader environment explicitly before this optional fixture lane." >&2; exit 1; }
-    uv run --offline --locked --no-sync --no-python-downloads --project "{{justfile_directory()}}/ci/agentic-replay-nightly" python -I "{{justfile_directory()}}/scripts/tests/test_agentic_trajectory_manifest.py"
+    uv run --offline --locked --no-sync --no-python-downloads --project "{{justfile_directory()}}/ci/agentic-replay-nightly" python -I "{{justfile_directory()}}/mesh/scripts/tests/test_agentic_trajectory_manifest.py"
 
 # Run CI/workspace crate-list consistency checks.
 ci-crate-lists:
@@ -322,4 +322,4 @@ ci-automation-contracts:
 
 # Native component owner and actual CLI, including the embedded job caller.
 ci-snapshot-promotion-contracts:
-    just with-lld cargo test --locked -p model-package --lib --test snapshot_promotion_cli -- --test-threads=1
+    just with-lld cargo test --locked -p skippy-model-package --lib --test snapshot_promotion_cli -- --test-threads=1

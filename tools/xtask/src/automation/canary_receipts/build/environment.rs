@@ -6,6 +6,8 @@ use std::{collections::BTreeMap, ffi::OsString, path::Path};
 pub(super) fn wrapper(
     input: &Input,
     previous: Option<(&Path, &Identity)>,
+    feedback: Option<&Path>,
+    feedback_summary: Option<&Path>,
 ) -> BTreeMap<OsString, Value> {
     let mut environment = inherited(std::env::vars_os());
     let values = [
@@ -42,6 +44,8 @@ pub(super) fn wrapper(
         "CANARY_CANDIDATE_SHA",
         "CANARY_PREVIOUS_PACKAGE",
         "CANARY_PREVIOUS_IDENTITY",
+        "CANARY_PREVIOUS_FEEDBACK",
+        "CANARY_PREVIOUS_FEEDBACK_SUMMARY",
         "CANARY_VERIFIED_WORKLOAD_PRODUCER",
     ] {
         environment.remove(std::ffi::OsStr::new(key));
@@ -58,6 +62,18 @@ pub(super) fn wrapper(
         environment.insert(
             "CANARY_CANDIDATE_SHA".into(),
             Value::Public(identity.candidate.clone().into()),
+        );
+    }
+    if let Some(directory) = feedback {
+        environment.insert(
+            "CANARY_PREVIOUS_FEEDBACK".into(),
+            Value::Public(directory.into()),
+        );
+    }
+    if let Some(path) = feedback_summary {
+        environment.insert(
+            "CANARY_PREVIOUS_FEEDBACK_SUMMARY".into(),
+            Value::Public(path.into()),
         );
     }
     environment

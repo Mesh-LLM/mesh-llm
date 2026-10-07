@@ -92,6 +92,19 @@ exec {helper} --ignored --exact cache_family_cell_cli::inert_cache_host --nocapt
             root = quoted(root.to_str().unwrap()),
             helper = quoted(std::env::current_exe().unwrap().to_str().unwrap())
         );
+        let mut body = body;
+        if host == "skippy-new" {
+            body = body.replace("serve-openai", "serve").replace(
+                " export CACHE_FIXTURE_NATIVE=0",
+                " export CACHE_FIXTURE_CURRENT=1\n export CACHE_FIXTURE_NATIVE=0",
+            );
+        }
+        let verb = if host == "skippy-new" {
+            "serve"
+        } else {
+            "serve-openai"
+        };
+        body = body.replace("#!/bin/sh\n", &format!("#!/bin/sh\nif [ \"$#\" = 2 ] && [ \"$2\" = --help ]; then [ \"$1\" = {verb} ] || exit 64; printf 'inert help\\n'; exit 0; fi\n"));
         fs::write(&executable, &body).unwrap();
         fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();

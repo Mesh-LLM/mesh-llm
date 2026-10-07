@@ -6,7 +6,7 @@ use std::{fs, os::unix::fs::symlink, process::Command};
 
 fn fixture() -> support::Fixture {
     let fixture = support::Fixture::new();
-    for tool in ["jq", "awk"] {
+    for tool in ["jq", "awk", "mktemp"] {
         let executable = ["/usr/bin", "/bin", "/opt/homebrew/bin", "/usr/local/bin"]
             .into_iter()
             .map(|dir| std::path::Path::new(dir).join(tool))
@@ -54,7 +54,6 @@ fn project(fixture: &support::Fixture, affected: &str) -> Value {
         ("SOURCE_SHA", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
         ("BASE_SHA", ""),
         ("DRAFT", "false"),
-        ("CHANGED_FILES", "docs/MESHES.md\n"),
         ("AFFECTED_CRATES", affected),
         ("UPLOAD_ARTIFACT", "false"),
         ("ARTIFACT_NAME", ""),
@@ -73,7 +72,13 @@ fn project(fixture: &support::Fixture, affected: &str) -> Value {
         "MESH_LLM_AUTOMATION_BIN",
         fixture.path().join("bin/automation"),
     );
-    command.args(["-c", plan.get("run").unwrap().text().unwrap()]);
+    fs::write(fixture.path().join("changed.txt"), "docs/MESHES.md\n").unwrap();
+    // Isolate only the action's fixed file transport, preserving its actual body.
+    let source = plan.get("run").unwrap().text().unwrap().replace(
+        "/tmp/changed_files.txt",
+        &format!("\"{}\"", fixture.path().join("changed.txt").display()),
+    );
+    command.args(["-c", &source]);
     let output = fixture.run(command);
     assert!(output.status.success(), "{output:?}");
     fixture.outputs()
@@ -121,6 +126,8 @@ fn artifact_plan_action_emits_exact_platform_matrices_and_omits_empty_affected_c
     }
 }
 
+#[path = "change_transport.rs"]
+mod change_transport;
 #[path = "pr_manifest_intent.rs"]
 mod pr_manifest_intent;
 #[path = "projection_intent.rs"]

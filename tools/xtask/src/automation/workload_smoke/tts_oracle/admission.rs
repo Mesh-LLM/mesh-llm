@@ -104,7 +104,7 @@ pub(super) fn admit(options: &Options) -> DynResult<Admission> {
                 .filter(|v| !v.is_empty())
                 .ok_or("prebuilt TTS requires candidate path")?,
         )
-        .join("skippy-server");
+        .join("skippy");
         let native = PathBuf::from(
             native
                 .filter(|v| !v.is_empty())

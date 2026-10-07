@@ -35,7 +35,8 @@ fn executable(path: &Path, contents: &str) {
 impl Fixture {
     fn new() -> Self {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let source = fs::read_to_string(root.join("scripts/skippy-workload-certify.sh")).unwrap();
+        let source =
+            fs::read_to_string(root.join("skippy/scripts/skippy-workload-certify.sh")).unwrap();
         let selector = source
             .split_once("# Frozen automation selection begins.\n")
             .unwrap()
@@ -74,7 +75,7 @@ fi
 "#,
         );
         executable(
-            &fixture.path().join("bin/skippy-server"),
+            &fixture.path().join("bin/skippy"),
             r#"#!/bin/bash
 printf '%s\0' "$@" >> "$FIXTURE_ROOT/candidate-argv"
 while (( $# > 0 )); do
@@ -154,7 +155,7 @@ printf 'fixture candidate started\n'
         let mut expected = Vec::new();
         for port in ports {
             expected.extend([
-                "serve-openai".to_owned(),
+                "serve".to_owned(),
                 "--config".to_owned(),
                 self.path()
                     .join("stage config.json")

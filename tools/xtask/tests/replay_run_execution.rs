@@ -100,7 +100,7 @@ fn execute_case(minimum_cache: f64, passed: bool, mode: &str) {
         use std::os::unix::fs::PermissionsExt;
         let generated = state.path().join("generated.json");
         let reader = state.path().join("reader-fixture");
-        std::fs::write(&reader, format!("#!/bin/sh\ncase \"$1\" in */evals/agentic-trajectory-manifest.py) ;; *) exit 8;; esac\nshift\noutput=''\nwhile [ \"$#\" -gt 0 ]; do\nif [ \"$1\" = '--output' ]; then output=\"$2\"; fi\nshift 2\ndone\ncp '{}' \"$output\"\n",manifest.display())).unwrap();
+        std::fs::write(&reader, format!("#!/bin/sh\ncase \"$1\" in */mesh/evals/agentic-trajectory-manifest.py) ;; *) exit 8;; esac\nshift\noutput=''\nwhile [ \"$#\" -gt 0 ]; do\nif [ \"$1\" = '--output' ]; then output=\"$2\"; fi\nshift 2\ndone\ncp '{}' \"$output\"\n",manifest.display())).unwrap();
         std::fs::set_permissions(&reader, std::fs::Permissions::from_mode(0o700)).unwrap();
         let dataset = state.path().join("input.parquet");
         std::fs::write(&dataset, b"fixture dataset").unwrap();

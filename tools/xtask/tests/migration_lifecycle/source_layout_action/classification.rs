@@ -69,7 +69,7 @@ fn relocated_runtime_owners_gate_sdk_and_inference_consumers() {
             &[
                 (
                     "CHANGED_FILES",
-                    "mesh/crates/skippy-native-runtime/src/lib.rs",
+                    "skippy/crates/skippy-native-runtime/src/lib.rs",
                 ),
                 ("ALL_RUST", "false"),
                 ("FORCE_ALL", "false"),

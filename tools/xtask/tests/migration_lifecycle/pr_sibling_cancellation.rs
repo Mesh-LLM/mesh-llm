@@ -364,3 +364,168 @@ fn sibling_permission_guard_rejects_implicit_scalars_and_actions_access() {
         );
     }
 }
+
+#[test]
+fn sibling_newer_quality_supersedes_same_epoch_without_cancelling_lanes() {
+    let result = action_case(
+        r#"
+const sha = "2".repeat(40);
+const trigger = {
+  createdAt: Date.parse("2026-10-03T14:05:04Z"),
+  headSha: sha,
+  pullNumber: 42,
+  triggerRunId: 901,
+};
+const base = {
+  event: "pull_request",
+  head_sha: sha,
+  created_at: "2026-10-03T14:05:04Z",
+  pull_requests: [{number: 42}],
+  status: "in_progress",
+};
+const runs = [
+  {...base, id: 901, name: "PR · Quality", status: "completed", conclusion: "cancelled"},
+  {...base, id: 902, name: "PR · Website"},
+  {...base, id: 903, name: "PR · Linux"},
+  {...base, id: 904, name: "PR · macOS"},
+  {...base, id: 905, name: "PR · Windows"},
+  {...base, id: 951, name: "PR · Quality", created_at: "2026-10-03T14:05:55Z"},
+];
+let clock = 0;
+let polls = 0;
+const cancelled = [];
+let outcome = null;
+let error = null;
+try {
+  outcome = await action.monitor({
+    api: {
+      listRuns: async () => { polls += 1; return runs; },
+      listJobs: async () => [],
+      cancelRun: async (runId) => { cancelled.push(runId); return true; },
+    },
+    trigger,
+    pollSeconds: 30,
+    maxMinutes: 10,
+    log: () => {},
+    now: () => clock,
+    sleepFn: async (milliseconds) => { clock += milliseconds; },
+  });
+} catch (caught) {
+  error = caught.message;
+}
+return {error, polls, cancelled, supersededBy: outcome ? outcome.supersededBy : null};
+"#,
+    );
+    assert_eq!(
+        result,
+        json!({"error":null,"polls":1,"cancelled":[],"supersededBy":951})
+    );
+}
+
+#[test]
+fn sibling_edit_only_epoch_finishes_after_elapsed_window() {
+    let result = action_case(
+        r#"
+const sha = "3".repeat(40);
+const trigger = {
+  createdAt: Date.parse("2026-10-03T16:14:11Z"),
+  headSha: sha,
+  pullNumber: 42,
+  triggerRunId: 1001,
+};
+const quality = {
+  id: 1001,
+  name: "PR · Quality",
+  event: "pull_request",
+  head_sha: sha,
+  created_at: "2026-10-03T16:14:11Z",
+  pull_requests: [{number: 42}],
+  status: "in_progress",
+};
+const opened = ["PR · Website", "PR · Linux", "PR · macOS", "PR · Windows"].map((name, index) => ({
+  ...quality,
+  id: 990 + index,
+  name,
+  created_at: "2026-10-03T10:39:26Z",
+  status: "completed",
+}));
+let clock = 0;
+let polls = 0;
+let outcome = null;
+let error = null;
+try {
+  outcome = await action.monitor({
+    api: {
+      listRuns: async () => {
+        polls += 1;
+        return [...opened, {...quality, status: polls >= 3 ? "completed" : "in_progress"}];
+      },
+      listJobs: async () => [],
+      cancelRun: async () => true,
+    },
+    trigger,
+    pollSeconds: 30,
+    maxMinutes: 10,
+    log: () => {},
+    now: () => clock,
+    sleepFn: async (milliseconds) => { clock += milliseconds; },
+  });
+} catch (caught) {
+  error = caught.message;
+}
+return {error, polls, runIds: outcome ? outcome.runs.map((run) => run.id) : null};
+"#,
+    );
+    assert_eq!(result, json!({"error":null,"polls":5,"runIds":[1001]}));
+}
+
+#[test]
+fn sibling_closed_pr_retains_same_sha_epoch_lanes() {
+    let result = action_case(
+        r#"
+const sha = "4".repeat(40);
+const trigger = {
+  createdAt: Date.parse("2026-09-04T06:43:35Z"),
+  headSha: sha,
+  pullNumber: 42,
+  triggerRunId: 1101,
+};
+const base = {
+  event: "pull_request",
+  head_sha: sha,
+  created_at: "2026-09-04T06:43:35Z",
+  pull_requests: [{number: 42}],
+  status: "in_progress",
+};
+const lanes = action.TARGET_WORKFLOWS.map((name, index) => ({...base, id: 1101 + index, name}));
+let clock = 0;
+let polls = 0;
+let outcome = null;
+let error = null;
+try {
+  outcome = await action.monitor({
+    api: {
+      listRuns: async () => {
+        polls += 1;
+        return polls === 1
+          ? lanes
+          : lanes.map((run) => ({...run, pull_requests: [], status: "completed"}));
+      },
+      listJobs: async () => [],
+      cancelRun: async () => true,
+    },
+    trigger,
+    pollSeconds: 30,
+    maxMinutes: 10,
+    log: () => {},
+    now: () => clock,
+    sleepFn: async (milliseconds) => { clock += milliseconds; },
+  });
+} catch (caught) {
+  error = caught.message;
+}
+return {error, polls, runCount: outcome ? outcome.runs.length : null};
+"#,
+    );
+    assert_eq!(result, json!({"error":null,"polls":2,"runCount":5}));
+}

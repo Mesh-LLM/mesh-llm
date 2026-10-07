@@ -1,19 +1,33 @@
-use super::other_shard::source_lines;
 use super::shard_rows::{ManualTsvRow, OutsideCall, OutsideKind};
 use crate::command::DynResult;
 use std::collections::{BTreeMap, BTreeSet};
+use std::fs;
 use std::path::Path;
 
 const SOURCES: [&str; 5] = [
-    "evals/README.md",
-    "crates/skippy-quantize/README.md",
-    "tools/skippy-stage-rewriter/README.md",
-    "docs/AGENTS.md",
-    "docs/skippy/manual-smoke/manifest.tsv",
+    "mesh/evals/README.md",
+    "skippy/crates/skippy-quantize/README.md",
+    "skippy/scripts/tools/skippy-stage-rewriter/README.md",
+    "mesh/docs/AGENTS.md",
+    "skippy/docs/manual-smoke/manifest.tsv",
 ];
-const MANUAL_TSV: &str = "docs/skippy/manual-smoke/manifest.tsv";
+const MANUAL_TSV: &str = "skippy/docs/manual-smoke/manifest.tsv";
 const MANUAL_HEADER: &str = "key_path\tfixture_path\tstartup_apply_command\tmodel_identifier\tverification_command\texpected_result\tactual_evidence_path\tpass_fail_status";
-const SMOKE_RUNNER: &str = "docs/skippy/manual-smoke/runtime_smoke.py";
+const SMOKE_RUNNER: &str = "skippy/docs/manual-smoke/runtime_smoke.py";
+
+// This closed manual-instruction roster includes a relocated tool README under
+// skippy/scripts/. It is deliberately separate from the other-shard census.
+fn manual_source_lines(root: &Path, file: &str) -> DynResult<Vec<String>> {
+    if !SOURCES.contains(&file) || file.starts_with('/') || file.split('/').any(|part| part == "..")
+    {
+        return Err(format!("other-edges.json: invalid manual source path {file}").into());
+    }
+    Ok(fs::read_to_string(root.join(file))?
+        .lines()
+        .map(str::trim)
+        .map(str::to_owned)
+        .collect())
+}
 
 fn tsv_command(text: &str) -> Option<&str> {
     let mut columns = text.split('\t');
@@ -45,7 +59,7 @@ fn validate_tsv_rows(
     if commands.is_empty() && rows.is_empty() && !root.join(MANUAL_TSV).exists() {
         return Ok(BTreeSet::new());
     }
-    let lines = source_lines(root, MANUAL_TSV)?;
+    let lines = manual_source_lines(root, MANUAL_TSV)?;
     if lines.first().is_none_or(|header| header != MANUAL_HEADER) {
         return Err("other-edges.json: changed manual TSV header".into());
     }
@@ -105,7 +119,7 @@ pub(super) fn validate_manual(
             )
             .into());
         }
-        let lines = source_lines(root, &call.file)?;
+        let lines = manual_source_lines(root, &call.file)?;
         if lines
             .get(call.line - 1)
             .is_none_or(|line| line != &call.source_block)
@@ -132,8 +146,8 @@ pub(super) fn validate_manual(
             .into());
         }
         match (&call.kind, call.file.as_str()) {
-            (OutsideKind::Data, "docs/skippy/manual-smoke/manifest.tsv")
-            | (OutsideKind::Provisioning, "crates/skippy-quantize/README.md")
+            (OutsideKind::Data, "skippy/docs/manual-smoke/manifest.tsv")
+            | (OutsideKind::Provisioning, "skippy/crates/skippy-quantize/README.md")
             | (OutsideKind::Instruction, _) => {}
             _ => {
                 return Err(format!(
@@ -156,7 +170,7 @@ pub(super) fn validate_manual(
         if !root.join(path).is_file() {
             continue;
         }
-        for (index, line) in source_lines(root, path)?.iter().enumerate() {
+        for (index, line) in manual_source_lines(root, path)?.iter().enumerate() {
             if is_manual_command(path, line) {
                 actual.insert((path.to_owned(), index + 1));
             }
@@ -171,3 +185,7 @@ pub(super) fn validate_manual(
     }
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "manual_calls/source_admission_tests.rs"]
+mod source_admission_tests;

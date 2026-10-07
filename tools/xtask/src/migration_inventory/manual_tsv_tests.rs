@@ -4,17 +4,17 @@ use std::fs;
 
 fn fixture_with_tsv() -> DynResult<(std::path::PathBuf, Vec<scan::Candidate>, serde_json::Value)> {
     let (root, observed, mut ledger) = fixture()?;
-    let directory = root.join("docs/skippy/manual-smoke");
+    let directory = root.join("skippy/docs/manual-smoke");
     fs::create_dir_all(&directory)?;
     let rows = [
         "key_path\tfixture_path\tstartup_apply_command\tmodel_identifier\tverification_command\texpected_result\tactual_evidence_path\tpass_fail_status",
-        "model_fit.ctx_size\tfixtures/first.toml\tpython3 docs/skippy/manual-smoke/runtime_smoke.py --fixture fixtures/first.toml --model-path $MESH_LLM_SMOKE_MODEL_PATH\torg/model:q4\twait for /v1/models\tready\tevidence.txt\tPASS",
-        "hardware.device\tfixtures/second.toml\tpython3 docs/skippy/manual-smoke/runtime_smoke.py --fixture fixtures/second.toml --model-path $MESH_LLM_SMOKE_MODEL_PATH\torg/model:q4\twait for /v1/models\tready\tevidence.txt\tPASS",
+        "model_fit.ctx_size\tfixtures/first.toml\tpython3 skippy/docs/manual-smoke/runtime_smoke.py --fixture fixtures/first.toml --model-path $MESH_LLM_SMOKE_MODEL_PATH\torg/model:q4\twait for /v1/models\tready\tevidence.txt\tPASS",
+        "hardware.device\tfixtures/second.toml\tpython3 skippy/docs/manual-smoke/runtime_smoke.py --fixture fixtures/second.toml --model-path $MESH_LLM_SMOKE_MODEL_PATH\torg/model:q4\twait for /v1/models\tready\tevidence.txt\tPASS",
     ];
     fs::write(directory.join("manifest.tsv"), rows.join("\n"))?;
     ledger["manual_tsv_commands"] = serde_json::json!({
-        "first": "python3 docs/skippy/manual-smoke/runtime_smoke.py --fixture fixtures/first.toml --model-path $MESH_LLM_SMOKE_MODEL_PATH",
-        "second": "python3 docs/skippy/manual-smoke/runtime_smoke.py --fixture fixtures/second.toml --model-path $MESH_LLM_SMOKE_MODEL_PATH"
+        "first": "python3 skippy/docs/manual-smoke/runtime_smoke.py --fixture fixtures/first.toml --model-path $MESH_LLM_SMOKE_MODEL_PATH",
+        "second": "python3 skippy/docs/manual-smoke/runtime_smoke.py --fixture fixtures/second.toml --model-path $MESH_LLM_SMOKE_MODEL_PATH"
     });
     ledger["manual_tsv_rows"] = serde_json::json!([
         [
@@ -78,11 +78,11 @@ fn rejects_duplicate_source_identity() -> DynResult<()> {
 #[test]
 fn rejects_prose_as_command() -> DynResult<()> {
     let (root, observed, ledger) = fixture_with_tsv()?;
-    let path = root.join("docs/skippy/manual-smoke/manifest.tsv");
+    let path = root.join("skippy/docs/manual-smoke/manifest.tsv");
     let original = fs::read_to_string(&path)?;
     let text = original.replace(
-        "python3 docs/skippy/manual-smoke/runtime_smoke.py --fixture fixtures/second.toml --model-path $MESH_LLM_SMOKE_MODEL_PATH\torg/model:q4\twait for /v1/models",
-        "not-run locally\torg/model:q4\tpython3 docs/skippy/manual-smoke/runtime_smoke.py --fixture fixtures/second.toml",
+        "python3 skippy/docs/manual-smoke/runtime_smoke.py --fixture fixtures/second.toml --model-path $MESH_LLM_SMOKE_MODEL_PATH\torg/model:q4\twait for /v1/models",
+        "not-run locally\torg/model:q4\tpython3 skippy/docs/manual-smoke/runtime_smoke.py --fixture fixtures/second.toml",
     );
     fs::write(path, text)?;
     let error = check_other_shard(&root, &ledger.to_string(), &observed).unwrap_err();

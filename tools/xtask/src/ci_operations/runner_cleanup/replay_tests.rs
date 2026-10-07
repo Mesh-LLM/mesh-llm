@@ -10,14 +10,42 @@ pub(super) struct Repository {
     executable: std::path::PathBuf,
     pub(super) environment: BTreeMap<OsString, OsString>,
 }
+fn executable_file(path: &Path) -> bool {
+    let Ok(metadata) = path.metadata() else {
+        return false;
+    };
+    if !metadata.is_file() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        metadata.permissions().mode() & 0o111 != 0
+    }
+    #[cfg(windows)]
+    {
+        path.extension()
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("exe"))
+    }
+}
+fn git_executable() -> std::path::PathBuf {
+    let executable = match std::env::var_os("MIGRATION_TEST_GIT") {
+        Some(path) => std::path::PathBuf::from(path),
+        None => {
+            std::env::split_paths(&std::env::var_os("PATH").expect("Git discovery requires PATH"))
+                .map(|directory| directory.join(format!("git{}", std::env::consts::EXE_SUFFIX)))
+                .find(|path| executable_file(path))
+                .expect("install Git or set MIGRATION_TEST_GIT to its absolute executable")
+        }
+    };
+    assert!(executable.is_absolute() && executable_file(&executable));
+    executable.canonicalize().unwrap()
+}
+
 impl Repository {
     pub(super) fn new() -> Self {
         let fixture = Fixture::new();
-        let executable = std::path::PathBuf::from(
-            std::env::var_os("MIGRATION_TEST_GIT")
-                .expect("set MIGRATION_TEST_GIT to an absolute Git executable"),
-        );
-        assert!(executable.is_absolute());
+        let executable = git_executable();
         let mut environment: BTreeMap<OsString, OsString> =
             ["PATH", "SYSTEMROOT", "WINDIR", "TEMP", "TMP"]
                 .into_iter()

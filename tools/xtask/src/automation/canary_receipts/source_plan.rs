@@ -12,8 +12,7 @@ mod gguf;
 #[cfg(test)]
 #[path = "source_plan/gguf_tests.rs"]
 mod gguf_tests;
-#[path = "source_plan/placement.rs"]
-pub(crate) mod placement;
+use super::canary_receipts::placement;
 #[cfg(test)]
 #[path = "source_plan/placement_tests.rs"]
 mod placement_tests;

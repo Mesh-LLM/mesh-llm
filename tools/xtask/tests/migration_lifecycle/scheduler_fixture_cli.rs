@@ -8,7 +8,7 @@ use std::{collections::BTreeMap, path::Path, time::Duration};
 fn catalog() -> Value {
     serde_json::from_str(include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../evals/skippy-scheduler-fixtures.json"
+        "/../../skippy/evals/skippy-scheduler-fixtures.json"
     )))
     .unwrap()
 }

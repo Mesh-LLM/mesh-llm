@@ -28,7 +28,12 @@ impl Fixture {
             fs::create_dir_all(root.join(relative)).unwrap();
         }
         let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-        for relative in ["scripts/package-release.sh", "scripts/lib/automation.sh"] {
+        for relative in [
+            "scripts/package-release.sh",
+            "mesh/scripts/package-release.sh",
+            "scripts/lib/automation.sh",
+        ] {
+            fs::create_dir_all(root.join(relative).parent().unwrap()).unwrap();
             fs::copy(source.join(relative), root.join(relative)).unwrap();
         }
         fs::write(root.join("Justfile"), "# finite fixture facade\n").unwrap();
@@ -56,7 +61,8 @@ exec "$PACKAGE_FIXTURE_OWNER" "$@"
         fs::create_dir_all(path.join("lib")).unwrap();
         fs::write(path.join("lib/libllama.so"), b"inert runtime bytes").unwrap();
         let document = json!({
-            "runtime": {"id":id,"mesh_version":"0.73.1","skippy_abi":"0.1.0",
+            "schema_version":2,
+            "runtime": {"id":id,"release_version":"9.0.0","skippy_abi":"0.1.0",
                 "platform":{"os":"linux","arch":"x86_64","target":"x86_64-unknown-linux-gnu"},
                 "backend":{"kind":kind},"rank":0,"libraries":["lib/libllama.so"],
                 "url":null,"sha256":null,"signature":null},
@@ -202,8 +208,8 @@ fn package_release_adapter_composes_product_contract_aliases_and_rejects_backend
         let fixture = Fixture::new();
         let bundle = fixture.root.join("mesh-bundle");
         fs::create_dir(&bundle).unwrap();
-        let host = b"immutable inert host bytes";
-        fs::write(bundle.join("mesh-llm"), host).unwrap();
+        let host = "#!/bin/sh\n[ \"$*\" = \"--log-format json --print-build-contract\" ] || exit 98\nprintf '%s\\n' '{\"schema_version\":1,\"product_version\":\"0.73.1\",\"runtime_release\":\"1.0.0\",\"skippy_abi\":\"0.1.0\"}'\n";
+        executable(&bundle.join("mesh-llm"), host);
         let runtime = fixture.runtime("mesh-bundle/native-runtimes", id, kind, build);
         let command = format!(
             "write_product_manifest \"$PWD/mesh-bundle\" \"$PWD/mesh-bundle/mesh-llm\" \"$PWD/mesh-bundle/native-runtimes/{id}\" v0.73.1 {requested}"
@@ -227,6 +233,7 @@ fn package_release_adapter_composes_product_contract_aliases_and_rejects_backend
                 hex::encode(Sha256::digest(host))
             );
             assert_eq!(manifest["runtime"]["id"], id);
+            assert_eq!(manifest["runtime"]["release_version"], "9.0.0");
             assert_eq!(manifest["runtime"]["path"], format!("native-runtimes/{id}"));
             assert_eq!(
                 manifest["runtime"]["manifest_sha256"],

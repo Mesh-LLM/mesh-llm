@@ -5,6 +5,7 @@ fn authority_all_eligible_selector_inputs_are_bounded_and_mutations_refused() {
     let original = workflows();
     cache_callers::check(&original).unwrap();
     let mut count = 0;
+    let mut cpu_selectors = 0;
     for (name, document) in &original {
         let Some(policy) = document.get("jobs").and_then(|j| j.get("runner_policy")) else {
             continue;
@@ -30,6 +31,15 @@ fn authority_all_eligible_selector_inputs_are_bounded_and_mutations_refused() {
         // The owner intentionally admits release's distinct current identity contract separately.
         if name == "release.yml" {
             continue;
+        }
+        if name == "ci-linux-runtime-slice.yml" {
+            cpu_selectors = keys.len();
+            assert_eq!(
+                keys.iter()
+                    .map(|(index, _)| steps(policy)[*index].get("id").and_then(Node::text))
+                    .collect::<Vec<_>>(),
+                [Some("policy"), Some("cpu_policy")]
+            );
         }
         for (index, fields) in keys {
             count += 1;
@@ -58,7 +68,9 @@ fn authority_all_eligible_selector_inputs_are_bounded_and_mutations_refused() {
             }
         }
     }
-    assert_eq!(count, 18); // Seventeen eligible workflows plus Quality's dedicated sentinel.
+    assert_eq!(cpu_selectors, 2); // Ordinary selector plus forced-hosted CPU policy.
+    assert_eq!(count - cpu_selectors, 17); // Other sixteen workflows plus Quality sentinel.
+    assert_eq!(count, 19);
 }
 #[test]
 fn authority_protected_audit27_keep_exact_pin_and_central_runner_projection() {
@@ -88,22 +100,17 @@ fn authority_protected_audit27_keep_exact_pin_and_central_runner_projection() {
                     .unwrap()
                     .strip_suffix(" }}")
                     .unwrap();
-                assert!(
-                    inner.starts_with("needs.runner_policy.outputs.")
-                        || inner
-                            == "fromJSON(needs.runner_policy.outputs.runner_by_platform)[matrix.check.platform]"
-                );
+                let expected = protected_depot_projection(name, job_name, inner)
+                    .unwrap_or_else(|| panic!("{name}/{job_name}: unbounded runner {inner}"));
                 assert_eq!(
                     with.get("depot_selected").and_then(Node::text),
-                    Some(format!("${{{{ startsWith({inner}, 'depot-') }}}}").as_str()),
+                    Some(expected.as_str()),
                     "{name}/{job_name}"
                 );
-                for key in ["allow_native_github_cache", "allow_depot_remote_cache"] {
-                    assert_eq!(
-                        with.get(key).and_then(Node::text),
-                        Some(format!("${{{{ needs.runner_policy.outputs.{key} }}}}").as_str())
-                    )
-                }
+                assert!(
+                    protected_cache_projection(with, name, job_name),
+                    "{name}/{job_name}: cache authority projection changed"
+                );
                 assert_eq!(
                     with.get("original_event_name").and_then(Node::text),
                     Some("${{ inputs.original_event_name }}")
@@ -168,5 +175,137 @@ fn authority_normal_quality_and_runtime_seed_jobs_keep_current_declared_trust_sh
             with.get("persist-credentials").and_then(Node::text),
             Some("false")
         );
+    }
+}
+
+const CPU_RUNNER: &str = "matrix.runtime.backend == 'cpu' && needs.runner_policy.outputs.runner_cpu || needs.runner_policy.outputs.runner_16";
+fn protected_depot_projection(workflow: &str, job: &str, inner: &str) -> Option<String> {
+    if workflow == "ci-linux-runtime-slice.yml" && job == "linux_runtime" {
+        return (inner == CPU_RUNNER).then(||
+            "${{ matrix.runtime.backend != 'cpu' && startsWith(needs.runner_policy.outputs.runner_16, 'depot-') }}".into()
+        );
+    }
+    (inner.starts_with("needs.runner_policy.outputs.")
+        || inner
+            == "fromJSON(needs.runner_policy.outputs.runner_by_platform)[matrix.check.platform]")
+        .then(|| format!("${{{{ startsWith({inner}, 'depot-') }}}}"))
+}
+#[test]
+fn protected_cpu_projection_is_exact_and_admitted_only_in_its_declared_context() {
+    assert!(
+        protected_depot_projection("ci-linux-runtime-slice.yml", "linux_runtime", CPU_RUNNER)
+            .is_some()
+    );
+    for (workflow, job, runner) in [
+        (
+            "ci-linux-host-slice.yml",
+            "linux_runtime",
+            CPU_RUNNER.to_owned(),
+        ),
+        (
+            "ci-linux-runtime-slice.yml",
+            "other_job",
+            CPU_RUNNER.to_owned(),
+        ),
+        (
+            "ci-linux-runtime-slice.yml",
+            "linux_runtime",
+            CPU_RUNNER.replace("== 'cpu'", "!= 'cpu'"),
+        ),
+        (
+            "ci-linux-runtime-slice.yml",
+            "linux_runtime",
+            CPU_RUNNER.replace("runner_cpu", "runner_16"),
+        ),
+        (
+            "ci-linux-runtime-slice.yml",
+            "linux_runtime",
+            "needs.runner_policy.outputs.runner_16".into(),
+        ),
+    ] {
+        assert!(
+            protected_depot_projection(workflow, job, &runner).is_none(),
+            "{workflow}/{job}/{runner}"
+        );
+    }
+}
+
+fn protected_cache_projection(inputs: &Node, workflow: &str, job: &str) -> bool {
+    let cpu = workflow == "ci-linux-runtime-slice.yml" && job == "linux_runtime";
+    let expected = if cpu {
+        [
+            (
+                "allow_native_github_cache",
+                "${{ matrix.runtime.backend == 'cpu' && needs.runner_policy.outputs.allow_native_github_cache_cpu || needs.runner_policy.outputs.allow_native_github_cache }}",
+            ),
+            (
+                "allow_depot_remote_cache",
+                "${{ matrix.runtime.backend != 'cpu' && needs.runner_policy.outputs.allow_depot_remote_cache }}",
+            ),
+        ]
+    } else {
+        [
+            (
+                "allow_native_github_cache",
+                "${{ needs.runner_policy.outputs.allow_native_github_cache }}",
+            ),
+            (
+                "allow_depot_remote_cache",
+                "${{ needs.runner_policy.outputs.allow_depot_remote_cache }}",
+            ),
+        ]
+    };
+    expected
+        .into_iter()
+        .all(|(key, value)| inputs.get(key).and_then(Node::text) == Some(value))
+}
+#[test]
+fn protected_cpu_cache_authority_refuses_cross_context_and_unconditional_cache() {
+    let documents = workflows();
+    let runtime = job(&documents, "ci-linux-runtime-slice.yml", "linux_runtime");
+    let audit = steps(runtime)
+        .iter()
+        .find(|step| {
+            step.get("uses")
+                .and_then(Node::text)
+                .is_some_and(|uses| uses.contains("audit-depot-pr-isolation@"))
+        })
+        .unwrap();
+    let inputs = audit.get("with").unwrap();
+    assert!(protected_cache_projection(
+        inputs,
+        "ci-linux-runtime-slice.yml",
+        "linux_runtime"
+    ));
+    assert!(!protected_cache_projection(
+        inputs,
+        "ci-linux-host-slice.yml",
+        "linux_runtime"
+    ));
+    assert!(!protected_cache_projection(
+        inputs,
+        "ci-linux-runtime-slice.yml",
+        "other_job"
+    ));
+    for key in ["allow_native_github_cache", "allow_depot_remote_cache"] {
+        let original = inputs.get(key).and_then(Node::text).unwrap();
+        for value in [
+            "true".into(),
+            format!("${{{{ needs.runner_policy.outputs.{key} }}}}"),
+            original
+                .replace("== 'cpu'", "!= 'cpu'")
+                .replace("!= 'cpu'", "== 'cuda'"),
+        ] {
+            let mut changed = inputs.clone();
+            replace(&mut changed, &[key], Node::Scalar(value));
+            assert!(
+                !protected_cache_projection(
+                    &changed,
+                    "ci-linux-runtime-slice.yml",
+                    "linux_runtime"
+                ),
+                "{key}"
+            );
+        }
     }
 }

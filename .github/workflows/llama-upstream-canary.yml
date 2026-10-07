@@ -207,13 +207,21 @@ jobs:
         with:
           ref: ${{ needs.resolve.outputs.source }}
           persist-credentials: false
+      - name: Prepare frozen controller automation for attempt 1 selection
+        uses: ./.github/actions/prepare-automation
+        with:
+          runner-profile: hosted-bare
+          allow_depot_remote_cache: 'false'
+          allow_native_github_cache: 'false'
       - name: Select distributed repair attempt 1
         id: select
         env:
           CHANGED: ${{ needs.resolve.outputs.changed }}
           REPAIR_JSON: ${{ toJSON(needs.repair_1) }}
           VERIFY_JSON: ${{ toJSON(needs.verify_1) }}
-        run: python3 scripts/llama-canary-select-attempt.py attempt --changed "$CHANGED" --repair-json "$REPAIR_JSON" --verification-json "$VERIFY_JSON"
+        run: |
+          set -euo pipefail
+          "$MESH_LLM_AUTOMATION_BIN" automation canary-receipts select-attempt --changed "$CHANGED" --repair-json "$REPAIR_JSON" --verification-json "$VERIFY_JSON"
 
   repair_2:
     needs: [resolve, attempt_1]
@@ -252,13 +260,21 @@ jobs:
         with:
           ref: ${{ needs.resolve.outputs.source }}
           persist-credentials: false
+      - name: Prepare frozen controller automation for attempt 2 selection
+        uses: ./.github/actions/prepare-automation
+        with:
+          runner-profile: hosted-bare
+          allow_depot_remote_cache: 'false'
+          allow_native_github_cache: 'false'
       - name: Select distributed repair attempt 2
         id: select
         env:
           CHANGED: ${{ needs.resolve.outputs.changed }}
           REPAIR_JSON: ${{ toJSON(needs.repair_2) }}
           VERIFY_JSON: ${{ toJSON(needs.verify_2) }}
-        run: python3 scripts/llama-canary-select-attempt.py attempt --changed "$CHANGED" --repair-json "$REPAIR_JSON" --verification-json "$VERIFY_JSON"
+        run: |
+          set -euo pipefail
+          "$MESH_LLM_AUTOMATION_BIN" automation canary-receipts select-attempt --changed "$CHANGED" --repair-json "$REPAIR_JSON" --verification-json "$VERIFY_JSON"
 
   repair_3:
     needs: [resolve, attempt_2]
@@ -297,13 +313,21 @@ jobs:
         with:
           ref: ${{ needs.resolve.outputs.source }}
           persist-credentials: false
+      - name: Prepare frozen controller automation for attempt 3 selection
+        uses: ./.github/actions/prepare-automation
+        with:
+          runner-profile: hosted-bare
+          allow_depot_remote_cache: 'false'
+          allow_native_github_cache: 'false'
       - name: Select distributed repair attempt 3
         id: select
         env:
           CHANGED: ${{ needs.resolve.outputs.changed }}
           REPAIR_JSON: ${{ toJSON(needs.repair_3) }}
           VERIFY_JSON: ${{ toJSON(needs.verify_3) }}
-        run: python3 scripts/llama-canary-select-attempt.py attempt --changed "$CHANGED" --repair-json "$REPAIR_JSON" --verification-json "$VERIFY_JSON"
+        run: |
+          set -euo pipefail
+          "$MESH_LLM_AUTOMATION_BIN" automation canary-receipts select-attempt --changed "$CHANGED" --repair-json "$REPAIR_JSON" --verification-json "$VERIFY_JSON"
 
   result:
     needs: [resolve, preflight, attempt_1, attempt_2, attempt_3]
@@ -329,6 +353,12 @@ jobs:
         with:
           ref: ${{ needs.resolve.outputs.source }}
           persist-credentials: false
+      - name: Prepare frozen controller automation for final selection
+        uses: ./.github/actions/prepare-automation
+        with:
+          runner-profile: hosted-bare
+          allow_depot_remote_cache: 'false'
+          allow_native_github_cache: 'false'
       - name: Require complete certification and independent verification
         id: result
         env:
@@ -339,7 +369,7 @@ jobs:
           ATTEMPTS_JSON: ${{ toJSON(needs) }}
         run: |
           set -euo pipefail
-          python3 scripts/llama-canary-select-attempt.py final \
+          "$MESH_LLM_AUTOMATION_BIN" automation canary-receipts select-final \
             --certify "$CERTIFY" --changed "$CHANGED" --mesh-source "$MESH_SOURCE" \
             --preflight "$PREFLIGHT" --attempts-json "$ATTEMPTS_JSON"
 

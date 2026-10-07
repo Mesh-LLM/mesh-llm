@@ -162,7 +162,7 @@ fn actual_pinned_resolver_and_direct_prewarm_preserve_published_identity_and_sui
 fn actual_wrapper_resolver_authorization_and_digest_refusals_stop_before_native_launch() {
     let scratch = tempfile::tempdir().unwrap();
     let root = scratch.path();
-    let script = source("scripts/skippy-system-one-smoke.sh");
+    let script = source("skippy/scripts/skippy-system-one-smoke.sh");
     let mut manifest: Json = serde_json::from_str(&source(
         "ci/model-artifacts/manifests/skippy-system-one-smoke.json",
     ))
@@ -211,34 +211,55 @@ fn document(path: &str) -> Node {
 fn text<'a>(node: &'a Node, key: &str) -> &'a str {
     node.get(key).and_then(Node::text).unwrap()
 }
-#[test]
-fn parsed_both_canary_passes_preserve_report_upload_and_execute_actual_cache_state_summary() {
-    let top = document(".github/workflows/llama-upstream-canary.yml");
-    let jobs = top.get("jobs").unwrap();
-    for name in ["candidate", "verification"] {
+fn assert_canary_pass_pair(jobs: &Node, attempt: u8) {
+    let candidate_name = format!("repair_{attempt}");
+    let verification_name = format!("verify_{attempt}");
+    for name in [&candidate_name, &verification_name] {
         let job = jobs.get(name).unwrap();
         assert_eq!(
             text(job, "uses"),
             "./.github/workflows/llama-canary-family-pass.yml"
         );
         assert!(text(job, "if").contains("!cancelled()"));
-        assert!(job.get("with").unwrap().get("pass_id").is_some());
     }
+    let candidate = jobs.get(&candidate_name).unwrap();
+    let verification = jobs.get(&verification_name).unwrap();
+    let inputs = verification.get("with").unwrap();
     assert_eq!(
-        text(
-            jobs.get("verification").unwrap().get("with").unwrap(),
-            "mode"
-        ),
-        "verify-build"
+        text(candidate.get("with").unwrap(), "pass_id"),
+        format!("repair-{attempt}")
     );
+    assert_eq!(text(inputs, "pass_id"), format!("verify-{attempt}"));
+    assert_eq!(text(inputs, "mode"), "verify-build");
     assert!(
-        jobs.get("verification")
-            .unwrap()
+        verification
             .get("needs")
             .unwrap()
             .list()
-            .contains(&"candidate")
+            .contains(&candidate_name.as_str())
     );
+    assert!(
+        text(verification, "if")
+            .contains(&format!("needs.{candidate_name}.outputs.green == 'true'"))
+    );
+    for (input, output) in [
+        ("previous_package", "package"),
+        ("previous_identity", "identity"),
+        ("previous_head", "head"),
+    ] {
+        assert_eq!(
+            text(inputs, input),
+            format!("${{{{ needs.{candidate_name}.outputs.{output} }}}}")
+        );
+    }
+}
+#[test]
+fn parsed_both_canary_passes_preserve_report_upload_and_execute_actual_cache_state_summary() {
+    let top = document(".github/workflows/llama-upstream-canary.yml");
+    let jobs = top.get("jobs").unwrap();
+    for attempt in 1..=3 {
+        assert_canary_pass_pair(jobs, attempt);
+    }
     let family = document(".github/workflows/llama-canary-family-pass.yml");
     let build = family.get("jobs").unwrap().get("build").unwrap();
     let Node::Seq(steps) = build.get("steps").unwrap() else {

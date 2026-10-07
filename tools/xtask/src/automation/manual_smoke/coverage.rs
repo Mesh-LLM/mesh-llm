@@ -45,12 +45,12 @@ pub(super) fn run(args: &[String]) -> DynResult<()> {
     let matrix = root.join(
         parsed
             .last("--matrix")
-            .unwrap_or("docs/skippy/CONFIGURATION.md"),
+            .unwrap_or("skippy/docs/CONFIGURATION.md"),
     );
     let manifest = root.join(
         parsed
             .last("--manifest")
-            .unwrap_or("docs/skippy/manual-smoke/manifest.tsv"),
+            .unwrap_or("skippy/docs/manual-smoke/manifest.tsv"),
     );
     let required = parsed.all("--required-evidence");
     // Historical default coverage retains both task-11 receipts. Overrides are explicit.

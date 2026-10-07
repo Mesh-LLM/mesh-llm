@@ -4,6 +4,10 @@ use std::fs;
 
 fn observers(fixture: &Fixture) {
     let host = r#"#!/bin/sh
+if [ "$#" -eq 3 ] && [ "$1" = --log-format ] && [ "$2" = json ] && [ "$3" = --print-build-contract ]; then
+  printf '%s\n' '{"schema_version":1,"product_version":"1.2.3","runtime_release":"1.0.0","skippy_abi":"0.1.0"}'
+  exit 0
+fi
 if [ "$#" -eq 1 ] && [ "$1" = --version ]; then
   printf 'host-version\n' >> "$PRODUCT_EVENTS"
   printf 'mesh-llm 1.2.3\n'
@@ -116,6 +120,19 @@ fn actual_composer_readiness_failures_and_invalid_mode_preserve_prior_publicatio
             ],
         );
         assert!(!report.process.success(), "{failure}: {report:?}");
+        if failure != "invalid-mode" {
+            let expected = match failure {
+                "version" => "readiness host-version",
+                "runtime-list" => "readiness runtime-list",
+                "sdk" => "readiness SDK reuse",
+                "client" => "readiness client",
+                _ => unreachable!(),
+            };
+            assert!(
+                fixture.events().iter().any(|event| event == expected),
+                "{failure}: requested readiness refusal was not reached: {report:?}"
+            );
+        }
         assert_eq!(snapshot(&fixture.root.join("inputs")), before);
         assert_eq!(
             fs::read(fixture.root.join("product.tar.gz")).unwrap(),

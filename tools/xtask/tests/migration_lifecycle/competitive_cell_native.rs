@@ -143,7 +143,7 @@ impl Drop for Server {
 fn input(root: &Path, base: &str) -> std::path::PathBuf {
     let mut config: Value = serde_json::from_slice(include_bytes!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../evals/skippy-competitive-benchmark.json"
+        "/../../skippy/evals/skippy-competitive-benchmark.json"
     )))
     .unwrap();
     config["thoughtworks"]["minimum_prompts"] = json!(1);

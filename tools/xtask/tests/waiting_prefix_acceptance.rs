@@ -186,8 +186,8 @@ fn native_request_phase_enforces_deadline_and_refuses_invalid_input_before_publi
 #[test]
 fn native_workload_plan_binds_checked_in_shape_and_preserves_prior_output_on_refusal() {
     let directory = tempfile::tempdir().unwrap();
-    let catalog =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../evals/skippy-scheduler-fixtures.json");
+    let catalog = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../skippy/evals/skippy-scheduler-fixtures.json");
     let document: Value = serde_json::from_slice(&fs::read(&catalog).unwrap()).unwrap();
     let model = &document["profiles"]["warm-affinity"]["model"];
     let output = directory.path().join("plan.json");
@@ -242,8 +242,8 @@ fn aggregate(version: &str) -> Value {
 }
 
 fn run(directory: &Path) -> std::process::Output {
-    let catalog =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../evals/skippy-scheduler-fixtures.json");
+    let catalog = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../skippy/evals/skippy-scheduler-fixtures.json");
     Command::new(env!("CARGO_BIN_EXE_xtask"))
         .current_dir(directory)
         .env_clear()

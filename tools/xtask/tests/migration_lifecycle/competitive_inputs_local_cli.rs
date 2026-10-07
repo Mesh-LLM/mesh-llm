@@ -36,7 +36,7 @@ fn actual_local_tokenizer_materializer_cli_success_pin_refusal_and_fresh_output_
         let mut config: serde_json::Value = serde_json::from_slice(
             &fs::read(
                 Path::new(env!("CARGO_MANIFEST_DIR"))
-                    .join("../../evals/skippy-competitive-benchmark.json"),
+                    .join("../../skippy/evals/skippy-competitive-benchmark.json"),
             )
             .unwrap(),
         )

@@ -35,6 +35,7 @@ fn graph(document: &Node) -> bool {
         .unwrap();
     let (epoch_index, epoch) = step(producer, "Resolve static ABI toolchain epoch");
     let (prepare_index, _) = step(producer, "Prepare patched llama.cpp checkout");
+    let (patched_index, patched) = step(producer, "Identify patched llama.cpp for cache reuse");
     let (cache_index, cache) = step(producer, "Cache portable static ABI input");
     let (restore_index, restore) = step(producer, "Restore and verify cached portable static ABI");
     let (build_index, build) = step(producer, "Build and archive immutable static ABI input");
@@ -44,14 +45,20 @@ fn graph(document: &Node) -> bool {
     };
     let hash_inputs = [
         "'scripts/build-llama.sh'",
+        "'skippy/scripts/build-llama.sh'",
         "'scripts/prepare-llama.sh'",
+        "'skippy/scripts/prepare-llama.sh'",
         "'scripts/restore-static-abi-input.sh'",
         "'tools/xtask/src/artifact/**'",
         "'tools/xtask/src/prepared_input/**'",
+        "'tools/xtask/src/repository/python_text.rs'",
+        "'tools/xtask/src/ci_plan/document.rs'",
         "'Cargo.lock'",
         "'tools/xtask/Cargo.toml'",
         "'.github/actions/prepare-static-abi-input/action.yml'",
         "'.github/actions/resolve-native-toolchain-epoch/action.yml'",
+        "'skippy/llama_cpp/upstream.txt'",
+        "'skippy/llama_cpp/patches/**'",
         "'third_party/llama.cpp/upstream.txt'",
         "'third_party/llama.cpp/patches/**'",
         "'Justfile'",
@@ -70,7 +77,7 @@ fn graph(document: &Node) -> bool {
             .zip(pinned.strip_prefix("mesh-llm-cuda-runner-sha256-"))
             .is_some_and(|(left, right)| left == right && left.len() == 64)
     });
-    epoch_index<cache_index && prepare_index<cache_index && cache_index<restore_index
+    epoch_index<cache_index && prepare_index<patched_index && patched_index<cache_index && cache_index<restore_index
         && restore_index<build_index && build_index<upload_index && epoch_matches
         && document.get("env").and_then(|env|text(env,"CACHE_NAMESPACE"))==Some("mesh-llm")
         && text(epoch,"id")==Some("native_toolchain")
@@ -80,7 +87,10 @@ fn graph(document: &Node) -> bool {
         && input(cache,"path","static-abi-artifact-output")
         && cache.get("with").unwrap().get("restore-keys").is_none()
         && text(cache,"if")==Some("${{ needs.runner_policy.outputs.allow_native_github_cache == 'true' }}")
-        && key.starts_with("${{ format('{0}-{1}-skippy-abi-{2}-{3}-{4}-{5}', env.CACHE_NAMESPACE, runner.os, inputs.backend, inputs.target, steps.native_toolchain.outputs.epoch, hashFiles(")
+        && text(patched,"id")==Some("patched_llama")
+        && text(patched,"shell")==Some("bash")
+        && text(patched,"run").is_some_and(patched_identity)
+        && key.starts_with("${{ format('{0}-{1}-skippy-abi-{2}-{3}-{4}-{5}-{6}', env.CACHE_NAMESPACE, runner.os, inputs.backend, inputs.target, steps.native_toolchain.outputs.epoch, steps.patched_llama.outputs.sha, hashFiles(")
         && hash_inputs.into_iter().all(|value|key.contains(value))
         && text(restore,"if")==Some("${{ steps.static_abi_cache.outputs.cache-hit == 'true' }}")
         && text(build,"if")==Some("${{ steps.static_abi_cache.outputs.cache-hit != 'true' }}")
@@ -88,6 +98,15 @@ fn graph(document: &Node) -> bool {
         && input(build,"backend","${{ inputs.backend }}") && input(build,"target","${{ inputs.target }}") && input(build,"build","true")
         && input(upload,"name","${{ inputs.artifact_name }}") && input(upload,"path","static-abi-artifact-output/*")
         && input(upload,"if-no-files-found","error") && upload.get("if").is_none()
+}
+fn patched_identity(run: &str) -> bool {
+    run.lines().map(str::trim).collect::<Vec<_>>()
+        == [
+            "set -euo pipefail",
+            "patched_sha=\"$(tr -d '[:space:]' < .deps/llama.cpp/.mesh-llm-patched-sha)\"",
+            "[[ \"$patched_sha\" =~ ^[0-9a-f]{40}$ ]]",
+            "echo \"sha=$patched_sha\" >> \"$GITHUB_OUTPUT\"",
+        ]
 }
 #[test]
 fn static_abi_workflow_binds_portable_exact_cache_identity_prepare_restore_and_immutable_upload() {
@@ -98,8 +117,8 @@ fn static_abi_workflow_binds_portable_exact_cache_identity_prepare_restore_and_i
             "path: .deps/llama.cpp/build-stage-abi-static\n",
         ),
         (
-            "inputs.backend, inputs.target, steps.native_toolchain.outputs.epoch, hashFiles(",
-            "inputs.backend, inputs.target, 'unknown-epoch', hashFiles(",
+            "steps.native_toolchain.outputs.epoch, steps.patched_llama.outputs.sha, hashFiles(",
+            "'unknown-epoch', steps.patched_llama.outputs.sha, hashFiles(",
         ),
         ("'Justfile', 'just/**'", "'Justfile'"),
         (
@@ -115,5 +134,50 @@ fn static_abi_workflow_binds_portable_exact_cache_identity_prepare_restore_and_i
         assert!(original.contains(valid));
         let changed = format!("{}\n# {valid}\n", original.replace(valid, invalid));
         assert!(!graph(&workflow_yaml::parse(&changed).unwrap()));
+    }
+}
+
+#[test]
+fn static_abi_cache_refuses_any_missing_identity_dimension_or_unbound_patched_source() {
+    for dimension in [
+        "env.CACHE_NAMESPACE",
+        "runner.os",
+        "inputs.backend",
+        "inputs.target",
+        "steps.native_toolchain.outputs.epoch",
+        "steps.patched_llama.outputs.sha",
+        "hashFiles(",
+    ] {
+        let original = source();
+        let anchor = format!(", {dimension}");
+        assert!(original.contains(&anchor));
+        let changed = format!(
+            "{}\n# {anchor}\n",
+            original.replacen(&anchor, ", 'unbound'", 1)
+        );
+        assert!(
+            !graph(&workflow_yaml::parse(&changed).unwrap()),
+            "{dimension}"
+        );
+    }
+    for (valid, invalid) in [
+        ("id: patched_llama", "id: unrelated_source"),
+        (
+            "< .deps/llama.cpp/.mesh-llm-patched-sha",
+            "< ci/unverified-source.txt",
+        ),
+        (
+            "[[ \"$patched_sha\" =~ ^[0-9a-f]{40}$ ]]",
+            "true # unchecked source",
+        ),
+        (
+            "echo \"sha=$patched_sha\" >> \"$GITHUB_OUTPUT\"",
+            "echo \"sha=unverified\" >> \"$GITHUB_OUTPUT\"",
+        ),
+    ] {
+        let original = source();
+        assert!(original.contains(valid));
+        let changed = format!("{}\n# {valid}\n", original.replacen(valid, invalid, 1));
+        assert!(!graph(&workflow_yaml::parse(&changed).unwrap()), "{valid}");
     }
 }

@@ -36,7 +36,8 @@ impl Fixture {
         for path in [&build, &root.join("bin")] {
             fs::create_dir_all(path).unwrap();
         }
-        let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scripts/build-llama.sh");
+        let source =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../skippy/scripts/build-llama.sh");
         let source = fs::read_to_string(source).unwrap();
         let start = source.find("dynamic_library_name_groups() {\n").unwrap();
         let end = source[start..]

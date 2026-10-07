@@ -5,15 +5,6 @@ const SCRIPT: &str = include_str!("../../../../scripts/publish-crates.sh");
 const SELECTOR: &str = include_str!("../../../../scripts/lib/automation.sh");
 
 fn historical_fixture() -> (Fixture, std::path::PathBuf, Vec<String>) {
-    let fixture = Fixture::publishing();
-    let root = fixture.temporary.path();
-    let historical = root.join("release source");
-    fs::create_dir_all(historical.join("scripts")).unwrap();
-    fs::write(
-        historical.join("Cargo.toml"),
-        "[workspace.package]\nversion = \"0.76.1\"\n",
-    )
-    .unwrap();
     let data: serde_json::Value = serde_json::from_str(include_str!(
         "../fixtures/crates_recovery/v0761-roster.json"
     ))
@@ -29,7 +20,20 @@ fn historical_fixture() -> (Fixture, std::path::PathBuf, Vec<String>) {
         .map(|name| name.as_str().unwrap().to_owned())
         .collect();
     assert_eq!(roster.len(), 50);
-    assert_eq!(fixture.order.len(), 56);
+    let fixture = Fixture::publication_tools(Fixture::new_with_order(
+        "model-artifact",
+        "model-ref",
+        roster.clone(),
+    ));
+    let root = fixture.temporary.path();
+    let historical = root.join("release source");
+    fs::create_dir_all(historical.join("scripts")).unwrap();
+    assert_eq!(fixture.order, roster);
+    fs::write(
+        historical.join("Cargo.toml"),
+        "[workspace.package]\nversion = \"0.76.1\"\n",
+    )
+    .unwrap();
     let script = format!(
         "printf executed > \"$PWD/historical-executed\"\nexit 97\npublish_crates=(\n{}\n)\n",
         roster.join("\n")
@@ -44,7 +48,13 @@ fn historical_fixture() -> (Fixture, std::path::PathBuf, Vec<String>) {
     packages.retain(|package| roster.iter().any(|name| package["name"] == *name));
     for package in packages {
         let name = package["name"].as_str().unwrap();
-        let package_dir = historical.join("crates").join(name);
+        // The historical Cargo package name differs from its source directory.
+        let directory = if name == "mesh-llm-client" {
+            "mesh-client"
+        } else {
+            name
+        };
+        let package_dir = historical.join("crates").join(directory);
         fs::create_dir_all(&package_dir).unwrap();
         fs::write(package_dir.join("Cargo.toml"), "[package]\n").unwrap();
         fs::write(
@@ -126,7 +136,10 @@ fn actual_controller_resume_uses_historical_roster_version_and_cargo_directory()
         fixture.log("cargo-cwd.log").lines().count(),
         expected.len() + 1
     );
-    assert!(fixture.log("cargo-cwd.log").lines().all(|cwd| Path::new(cwd).canonicalize().unwrap() == historical.canonicalize().unwrap()));
+    assert!(fixture
+        .log("cargo-cwd.log")
+        .lines()
+        .all(|cwd| Path::new(cwd).canonicalize().unwrap() == historical.canonicalize().unwrap()));
     assert_eq!(fixture.log("curl.log").lines().count(), roster.len());
     assert!(
         fixture
@@ -204,10 +217,14 @@ fn declared_crates() -> Vec<String> {
 struct Fixture {
     temporary: tempfile::TempDir,
     order: Vec<String>,
+    provider: String,
 }
 
 impl Fixture {
     fn new(consumer: &str, provider: &str) -> Self {
+        Self::new_with_order(consumer, provider, declared_crates())
+    }
+    fn new_with_order(consumer: &str, provider: &str, order: Vec<String>) -> Self {
         let temporary = tempfile::Builder::new()
             .prefix("publish dry run ")
             .tempdir()
@@ -222,7 +239,7 @@ impl Fixture {
             "[workspace.package]\nversion = \"0.68.0\"\n",
         )
         .unwrap();
-        let order = declared_crates();
+
         assert!(order.iter().any(|name| name == consumer));
         assert!(order.iter().any(|name| name == provider));
         fs::create_dir_all(root.join("tools/xtask")).unwrap();
@@ -231,25 +248,47 @@ impl Fixture {
             "historical automation marker\n",
         )
         .unwrap();
+        let current_layout = order.iter().any(|name| name == "skippy-model-ref");
+        let package_directory = |name: &str| {
+            if !current_layout {
+                return root.join("crates").join(name);
+            }
+            let product = if name.starts_with("skippy-") {
+                "skippy"
+            } else {
+                "mesh"
+            };
+            let directory = if name == "mesh-llm-client" {
+                "mesh-client"
+            } else {
+                name
+            };
+            root.join(product).join("crates").join(directory)
+        };
         for name in &order {
-            let package = root.join("crates").join(name);
+            let package = package_directory(name);
             fs::create_dir_all(&package).unwrap();
             fs::write(package.join("Cargo.toml"), "[package]\n").unwrap();
             fs::write(package.join("README.md"), "publication fixture\n").unwrap();
         }
+        let catalog_root = if current_layout {
+            root.join("mesh")
+        } else {
+            root.to_path_buf()
+        };
         for relative in [
             "crates/mesh-client/src/models/catalog.json",
             "crates/mesh-llm-node/src/catalog.json",
         ] {
-            let path = root.join(relative);
+            let path = catalog_root.join(relative);
             fs::create_dir_all(path.parent().unwrap()).unwrap();
             fs::write(path, "{}\n").unwrap();
         }
         let packages: Vec<_> = order.iter().map(|name| {
             let dependencies = if name == consumer {
-                vec![serde_json::json!({"name":provider,"req":"^0.68.0","kind":null,"path":root.join("crates").join(provider),"optional":true})]
+                vec![serde_json::json!({"name":provider,"req":"^0.68.0","kind":null,"path":package_directory(provider),"optional":true})]
             } else { Vec::new() };
-            serde_json::json!({"id":name,"name":name,"version":"0.68.0","description":"publication fixture","license":"MIT","license_file":null,"repository":"https://example.invalid/repository","readme":"README.md","manifest_path":root.join("crates").join(name).join("Cargo.toml"),"publish":null,"dependencies":dependencies})
+            serde_json::json!({"id":name,"name":name,"version":"0.68.0","description":"publication fixture","license":"MIT","license_file":null,"repository":"https://example.invalid/repository","readme":"README.md","manifest_path":package_directory(name).join("Cargo.toml"),"publish":null,"dependencies":dependencies})
         }).collect();
         fs::write(
             root.join("metadata.json"),
@@ -299,7 +338,11 @@ esac
             "date",
             "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$FIXTURE/date.log\"\nexit 94\n",
         );
-        Self { temporary, order }
+        Self {
+            temporary,
+            order,
+            provider: provider.to_owned(),
+        }
     }
 
     fn run(&self, provider: &str) -> process::RawProcessReport {
@@ -332,7 +375,10 @@ esac
                 ),
                 ("HOME".into(), Value::Public(root.into())),
                 ("FIXTURE".into(), Value::Public(root.into())),
-                ("PROVIDER".into(), Value::Public("model-ref".into())),
+                (
+                    "PROVIDER".into(),
+                    Value::Public(self.provider.clone().into()),
+                ),
                 (
                     "MESH_LLM_AUTOMATION_BIN".into(),
                     Value::Public(env!("CARGO_BIN_EXE_xtask").into()),
@@ -433,12 +479,15 @@ fn actual_publish_dry_run_derives_new_workspace_dependency_and_skips_consumer() 
 #[test]
 fn actual_publish_dry_run_retains_provider_order_and_skips_missing_registry_dependency_without_sleep()
  {
-    Fixture::new("model-artifact", "model-ref").assert_skip("model-artifact", "model-ref");
+    Fixture::new("skippy-model-artifact", "skippy-model-ref")
+        .assert_skip("skippy-model-artifact", "skippy-model-ref");
 }
 
 impl Fixture {
     fn publishing() -> Self {
-        let fixture = Self::new("model-artifact", "model-ref");
+        Self::publication_tools(Self::new("skippy-model-artifact", "skippy-model-ref"))
+    }
+    fn publication_tools(fixture: Self) -> Self {
         let root = fixture.temporary.path();
         executable(
             root,
@@ -482,7 +531,7 @@ for argument do url="$argument"; done
 printf '%s\n' "$url" >> "$FIXTURE/curl.log"
 printf '%s\n' "$*" >> "$FIXTURE/curl-args.log"
 case "$url" in
-  "https://crates.io/api/v1/crates/model-ref/0.68.0") printf '%s' "${PROVIDER_STATUS:-404}" ;;
+  "https://crates.io/api/v1/crates/$PROVIDER/0.68.0") printf '%s' "${PROVIDER_STATUS:-404}" ;;
   https://crates.io/api/v1/crates/*/0.68.0) printf '404' ;;
   *) exit 92 ;;
 esac
@@ -576,7 +625,7 @@ fn actual_publish_rate_limit_retries_then_continues_in_declared_order() {
     let report = fixture.real(
         &[],
         &[
-            ("FAIL_CRATE", "model-artifact"),
+            ("FAIL_CRATE", "skippy-model-artifact"),
             ("FAIL_COUNT", "1"),
             ("FAIL_MODE", "rate"),
             ("CRATES_IO_PUBLISH_MAX_ATTEMPTS", "3"),
@@ -586,16 +635,16 @@ fn actual_publish_rate_limit_retries_then_continues_in_declared_order() {
     let mut expected = fixture.order.clone();
     let index = expected
         .iter()
-        .position(|name| name == "model-artifact")
+        .position(|name| name == "skippy-model-artifact")
         .unwrap();
-    expected.insert(index, "model-artifact".into());
+    expected.insert(index, "skippy-model-artifact".into());
     assert_eq!(fixture.published(), expected);
     let delays = fixture.log("sleep.log");
     assert_eq!(delays.lines().count(), 1);
     assert!(delays.trim().parse::<u64>().unwrap() > 0);
     assert!(
         String::from_utf8_lossy(report.stderr.as_ref().unwrap().as_bytes())
-            .contains("crates.io rate limit hit for model-artifact@0.68.0")
+            .contains("crates.io rate limit hit for skippy-model-artifact@0.68.0")
     );
     assert!(fixture.log("curl.log").is_empty());
 }
@@ -605,7 +654,7 @@ fn actual_publish_exhausted_retry_stops_before_later_crates() {
     let report = fixture.real(
         &[],
         &[
-            ("FAIL_CRATE", "model-artifact"),
+            ("FAIL_CRATE", "skippy-model-artifact"),
             ("FAIL_COUNT", "5"),
             ("FAIL_MODE", "rate"),
             ("CRATES_IO_PUBLISH_MAX_ATTEMPTS", "2"),
@@ -623,15 +672,15 @@ fn actual_publish_exhausted_retry_stops_before_later_crates() {
     let index = fixture
         .order
         .iter()
-        .position(|name| name == "model-artifact")
+        .position(|name| name == "skippy-model-artifact")
         .unwrap();
     let mut expected = fixture.order[..=index].to_vec();
-    expected.push("model-artifact".into());
+    expected.push("skippy-model-artifact".into());
     assert_eq!(fixture.published(), expected);
     assert_eq!(fixture.log("sleep.log").lines().count(), 1);
     assert!(
         String::from_utf8_lossy(report.stderr.as_ref().unwrap().as_bytes())
-            .contains("retry limit exceeded for model-artifact@0.68.0 after 2 attempts")
+            .contains("retry limit exceeded for skippy-model-artifact@0.68.0 after 2 attempts")
     );
 }
 #[test]
@@ -668,7 +717,7 @@ fn actual_publish_uses_cargo_without_speculative_registry_probe_or_duplicate_ret
         let fixture = Fixture::publishing();
         let extra = if uploaded {
             vec![
-                ("FAIL_CRATE", "model-ref"),
+                ("FAIL_CRATE", "skippy-model-ref"),
                 ("FAIL_COUNT", "1"),
                 ("FAIL_MODE", "uploaded"),
                 ("PROVIDER_STATUS", "500"),
@@ -683,8 +732,9 @@ fn actual_publish_uses_cargo_without_speculative_registry_probe_or_duplicate_ret
         assert!(fixture.log("sleep.log").is_empty());
         if uploaded {
             assert!(
-                String::from_utf8_lossy(report.stdout.as_ref().unwrap().as_bytes())
-                    .contains("model-ref@0.68.0 already published according to cargo; continuing")
+                String::from_utf8_lossy(report.stdout.as_ref().unwrap().as_bytes()).contains(
+                    "skippy-model-ref@0.68.0 already published according to cargo; continuing"
+                )
             );
         }
     }
@@ -698,7 +748,7 @@ fn actual_publish_resume_skips_only_confirmed_versions_and_defers_unknown_to_car
         let expected: Vec<_> = fixture
             .order
             .iter()
-            .filter(|name| status != "200" || *name != "model-ref")
+            .filter(|name| status != "200" || *name != "skippy-model-ref")
             .cloned()
             .collect();
         assert_eq!(fixture.published(), expected);
@@ -712,7 +762,7 @@ fn actual_publish_resume_skips_only_confirmed_versions_and_defers_unknown_to_car
         if status == "200" {
             assert!(
                 String::from_utf8_lossy(report.stdout.as_ref().unwrap().as_bytes())
-                    .contains("model-ref@0.68.0 already published; skipping")
+                    .contains("skippy-model-ref@0.68.0 already published; skipping")
             );
         }
         assert!(fixture.log("sleep.log").is_empty());
@@ -724,7 +774,7 @@ fn actual_publish_fatal_cargo_output_redacts_token_and_does_not_continue() {
     let report = fixture.real(
         &[],
         &[
-            ("FAIL_CRATE", "model-ref"),
+            ("FAIL_CRATE", "skippy-model-ref"),
             ("FAIL_COUNT", "1"),
             ("FAIL_MODE", "fatal"),
         ],
@@ -751,7 +801,7 @@ fn actual_publish_fatal_cargo_output_redacts_token_and_does_not_continue() {
     let index = fixture
         .order
         .iter()
-        .position(|name| name == "model-ref")
+        .position(|name| name == "skippy-model-ref")
         .unwrap();
     assert_eq!(fixture.published(), fixture.order[..=index]);
     assert!(fixture.log("sleep.log").is_empty());

@@ -45,15 +45,11 @@ pub(crate) fn verify_package(
     verification: PackageVerification,
 ) -> Result<VerifiedPackage, Error> {
     let identity_path = package.join("identity.json");
-    let identity_sha256 = Digest::of_file(&identity_path)?;
-    if identity_sha256 != verification.expected_identity_sha256 {
-        return Err(package_identity_error("build identity digest mismatch"));
-    }
-
     let identity_bytes = std::fs::read(&identity_path)?;
-    let identity: Value = serde_json::from_slice(&identity_bytes)?;
+    let identity = identity_from_captured(&identity_bytes, &verification.expected_identity_sha256)?;
+    let identity_sha256 = verification.expected_identity_sha256.clone();
     let plan_bytes = std::fs::read(package.join("plan.json"))?;
-    let _plan_document: Value = serde_json::from_slice(&plan_bytes)?;
+    let plan = plan_from_captured(&plan_bytes, &identity)?;
 
     if !identity
         .get("schema")
@@ -120,7 +116,6 @@ pub(crate) fn verify_package(
         verify_artifact(package, &identity, "candidate.bundle", "bundle_sha256")?;
     }
 
-    let plan = SourceFamilyPlan::parse(&plan_bytes)?;
     let producer_identity: ProducerIdentity = serde_json::from_slice(&identity_bytes)?;
     Ok(VerifiedPackage {
         candidate_bundle: optional_digest(&identity, "bundle_sha256")?.is_some(),
@@ -134,6 +129,27 @@ pub(crate) fn verify_package(
             run_attempt: current_run_attempt,
         },
     })
+}
+
+// Verify the same captured bytes that all parsing and retained projections consume.
+// A later path hash cannot establish custody of an earlier captured buffer.
+fn identity_from_captured(bytes: &[u8], expected: &Digest) -> Result<Value, Error> {
+    if &Digest::of_bytes(bytes) != expected {
+        return Err(package_identity_error("build identity digest mismatch"));
+    }
+    Ok(serde_json::from_slice(bytes)?)
+}
+
+fn plan_from_captured(bytes: &[u8], identity: &Value) -> Result<SourceFamilyPlan, Error> {
+    let expected = Digest::try_from(string_field(identity, "plan_sha256")?.to_owned())
+        .map_err(package_identity_error)?;
+    if Digest::of_bytes(bytes) != expected {
+        return Err(Error::new(
+            ErrorKind::PackageArtifact,
+            "plan.json digest mismatch",
+        ));
+    }
+    SourceFamilyPlan::parse(bytes)
 }
 
 fn source_identity<'a>(identity: &'a Value, key: &str) -> Result<&'a str, Error> {
@@ -194,3 +210,7 @@ fn optional_digest<'a>(identity: &'a Value, key: &str) -> Result<Option<&'a str>
         ))),
     }
 }
+
+#[cfg(test)]
+#[path = "package_tests.rs"]
+mod tests;

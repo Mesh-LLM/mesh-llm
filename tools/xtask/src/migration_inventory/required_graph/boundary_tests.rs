@@ -223,3 +223,43 @@ fn boundary_record_without_owner_or_rationale_fails() -> DynResult<()> {
     fs::remove_dir_all(root)?;
     Ok(())
 }
+
+#[test]
+fn mesh_python_sdk_contract_data_boundaries_refuse_helper_or_path_retargeting() -> DynResult<()> {
+    let current = crate::repo_consistency::repo_root()?;
+    let caller = "mesh/scripts/check-sdk-contract.sh";
+    let text = fs::read_to_string(current.join(caller))?;
+    let declarations: Value = serde_json::from_slice(&fs::read(
+        current.join("ci/automation-migration/invocations.json"),
+    )?)?;
+    let records = declarations["boundary_records"]
+        .as_array()
+        .ok_or("boundary records")?
+        .iter()
+        .filter(|record| {
+            record["id"]
+                .as_str()
+                .is_some_and(|id| id.starts_with("boundary:mesh-sdk-contract:python-"))
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    assert_eq!(records.len(), 2);
+    let root = crate::command::unique_temp_dir("mesh-sdk-contract-data");
+    source(&root, caller, &text)?;
+    ledger(&root, &records)?;
+    let closed = graph(&root, &[caller], &[caller])?;
+    assert_eq!(closed.unresolved, 0, "{closed:?}");
+    assert!(closed.complete_census);
+    for (before, after) in [
+        ("grep -Fq", "python3"),
+        ("meshllm/client.py", "meshllm/foreign.py"),
+        ("require \"$PYTHON_TYPES\"", "exec \"$PYTHON_TYPES\""),
+        ("missing=1", "missing=0"),
+    ] {
+        assert!(text.contains(before));
+        source(&root, caller, &text.replace(before, after))?;
+        assert!(graph(&root, &[caller], &[caller]).is_err(), "{before}");
+    }
+    fs::remove_dir_all(root)?;
+    Ok(())
+}

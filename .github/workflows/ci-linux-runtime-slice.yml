@@ -201,19 +201,7 @@ jobs:
             exit 1
           fi
           runtime_dir="$(dirname "${manifests[0]}")"
-          python3 - "$runtime_dir/manifest.json" <<'PY'
-          import json
-          import os
-          import sys
-
-          with open(sys.argv[1], encoding="utf-8") as manifest_file:
-              runtime = json.load(manifest_file)["runtime"]
-          if runtime["backend"]["kind"] != os.environ["EXPECTED_BACKEND"]:
-              raise SystemExit("cached runtime backend does not match the planned row")
-          if runtime["platform"]["target"] != os.environ["EXPECTED_TARGET"]:
-              raise SystemExit("cached runtime target does not match the planned row")
-          PY
-          scripts/verify-native-runtime-package.sh "$runtime_dir" "$runtime_dir.tar.gz"
+          scripts/verify-native-runtime-package.sh --expected-backend "$EXPECTED_BACKEND" --expected-target "$EXPECTED_TARGET" "$runtime_dir" "$runtime_dir.tar.gz"
           if ! tar -xOzf "$runtime_dir.tar.gz" "$(basename "$runtime_dir")/manifest.json" | cmp -s "$runtime_dir/manifest.json" -; then
             echo "cached runtime directory and archive manifests differ" >&2
             exit 1

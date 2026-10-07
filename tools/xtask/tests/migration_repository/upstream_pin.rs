@@ -109,7 +109,7 @@ fn migration_repository_pin_backward_is_rejected() -> TestResult {
         1,
         &header(&base, &pins.latest, &pins.forward),
         &format!(
-            "ERROR: PR moves third_party/llama.cpp/upstream.txt backward: {} is an ancestor of the base pin {}\n",
+            "ERROR: PR moves llama.cpp upstream pin backward: {} is an ancestor of the base pin {}\n",
             pins.forward, pins.latest
         ),
     );
@@ -213,5 +213,31 @@ fn migration_repository_pin_rejects_symlink_and_invalid_pin() -> TestResult {
         "",
         &format!("ERROR: head commit {link} {PIN_PATH} must be a regular 100644 blob\n"),
     );
+    Ok(())
+}
+
+#[test]
+fn current_product_pin_overrides_legacy_and_accepts_layout_transition() -> TestResult {
+    let scratch = Scratch::new("pin-product-layout")?;
+    let pins = create_upstream(&scratch.path().join("upstream"))?;
+    let mesh = scratch.path().join("mesh");
+    git_init(&mesh)?;
+    write_pin(&mesh, &pins.base)?;
+    let base = commit_all(&mesh, "legacy pin")?;
+    let current = mesh.join("skippy/llama_cpp/upstream.txt");
+    std::fs::create_dir_all(current.parent().ok_or("current pin parent")?)?;
+    std::fs::write(&current, format!("{}\n", pins.latest))?;
+    let head = commit_all(&mesh, "current product pin")?;
+    assert_output(
+        &guard(&scratch, &base, &head)?,
+        0,
+        &(header(&base, &pins.base, &pins.latest) + "llama.cpp upstream pin moves forward\n"),
+        "",
+    );
+    std::fs::write(&current, "invalid-current-pin\n")?;
+    let malformed = commit_all(&mesh, "invalid current pin")?;
+    let output = guard(&scratch, &base, &malformed)?;
+    assert!(!output.status.success());
+    assert!(text(&output.stderr).contains("invalid skippy/llama_cpp/upstream.txt value"));
     Ok(())
 }

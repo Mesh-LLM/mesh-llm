@@ -119,7 +119,8 @@ fn arm(
     let config = input.output_dir.join(format!("{label}-stage.json"));
     crate::command::write_json_file(&config, &super::config(input, &address))?;
     let budget = arm_budget(input)?;
-    let server = launch(
+    let deadline = std::time::Instant::now() + budget;
+    let mut server = launch(
         input,
         MemberId::Seed,
         binary.into(),
@@ -143,6 +144,28 @@ fn arm(
         &input.output_dir.join(format!("{label}-server.log")),
         budget,
     );
+    let expected_binary =
+        crate::product::digest::file_sha256(binary).map_err(|error| error.error)?;
+    let dialect = crate::automation::skippy_cli_admission::admit(
+        &server.spec,
+        &expected_binary,
+        crate::automation::skippy_cli_admission::Role::BinaryWorker,
+        deadline,
+        cancellation,
+    )?;
+    dialect.arguments(
+        crate::automation::skippy_cli_admission::Role::BinaryWorker,
+        &mut server.spec.arguments,
+    )?;
+    crate::command::write_json_file(
+        &input.output_dir.join(format!("{label}-cli-admission.json")),
+        &serde_json::json!({"binary_sha256":expected_binary,"role":"binary-worker","dialect":dialect,"scope":"bounded help command observation; no native qualification"}),
+    )?;
+    let budget = deadline.saturating_duration_since(std::time::Instant::now());
+    if budget.is_zero() {
+        return Err("MTP CLI admission consumed arm budget".into());
+    }
+    server.readiness_deadline = budget;
     let worker = launch(
         input,
         MemberId::WorkerOne,

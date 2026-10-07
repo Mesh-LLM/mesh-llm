@@ -146,7 +146,7 @@ pub(super) fn test_binary(bytes: &[u8]) -> DynResult<std::path::PathBuf> {
     {
         let row: serde_json::Value = serde_json::from_slice(line)?;
         if row["reason"] == "compiler-artifact"
-            && row["target"]["name"] == "skippy_server"
+            && row["target"]["name"] == "skippy_serving"
             && row["profile"]["test"] == true
             && let Some(path) = row["executable"].as_str().filter(|path| !path.is_empty())
         {
@@ -154,7 +154,7 @@ pub(super) fn test_binary(bytes: &[u8]) -> DynResult<std::path::PathBuf> {
         }
     }
     if selected.len() != 1 {
-        return Err("expected exactly one prebuilt skippy_server library-test artifact".into());
+        return Err("expected exactly one prebuilt skippy_serving library-test artifact".into());
     }
     Ok(selected.remove(0))
 }

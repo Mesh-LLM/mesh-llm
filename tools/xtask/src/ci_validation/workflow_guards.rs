@@ -13,9 +13,11 @@ mod cache_predicate;
 mod canary_build;
 mod canary_execution;
 mod canary_graph;
+mod canary_sdk;
 mod cancellation;
 mod claude_clients;
 mod compute_changes_budget;
+mod cpu_runtime_cache;
 mod crates_recovery;
 mod handoffs;
 mod laya;
@@ -59,7 +61,12 @@ pub(super) fn check(root: &Path) -> DynResult<()> {
             .to_owned();
         let source = std::fs::read_to_string(&path)?;
         shell::check_expressions(&source).map_err(|error| format!("{name}: {error}"))?;
-        let document = workflow_yaml::parse(&source).map_err(|error| format!("{name}: {error}"))?;
+        let document = if name == "llama-upstream-canary.yml" {
+            workflow_yaml::parse_resolved_aliases(&source)
+        } else {
+            workflow_yaml::parse(&source)
+        }
+        .map_err(|error| format!("{name}: {error}"))?;
         shell::check_containers(&document).map_err(|error| format!("{name}: {error}"))?;
         workflows.insert(name, document);
     }
@@ -98,6 +105,7 @@ pub(super) fn check(root: &Path) -> DynResult<()> {
     authority_sources::documentation(&std::fs::read_to_string(
         root.join("ci/DEPOT_MIGRATION.md"),
     )?)?;
+    cpu_runtime_cache::check(&workflows)?;
     cache_consumers::check(&workflows)?;
     cache_callers::check(&workflows)?;
     cache_boundaries::check(&workflows)?;

@@ -15,7 +15,7 @@ fn stale_native_pin_refuses_before_any_restored_checkout_is_created() {
     let root = fixture.consumer();
     let provenance: source::Provenance =
         serde_json::from_slice(&fs::read(package.join("llama-source.json")).unwrap()).unwrap();
-    let pin = root.join("third_party/llama.cpp/upstream.txt");
+    let pin = root.join("skippy/llama_cpp/upstream.txt");
     fs::write(&pin, "c".repeat(40)).unwrap();
     let target = root.join(".deps/llama.cpp");
     let result = admission::restore_native(&root, &package, &provenance, &target);
@@ -82,7 +82,7 @@ fn sealed_handoff_preserves_producer_and_refuses_untracked_source_or_replaced_ar
                 fs::write(fixture.root.join("untracked-source.rs"), b"new source").unwrap()
             }
             "artifact" => fs::write(
-                fixture.closure.join("cargo/debug/skippy-server"),
+                fixture.closure.join("cargo/debug/skippy"),
                 b"replaced executable",
             )
             .unwrap(),

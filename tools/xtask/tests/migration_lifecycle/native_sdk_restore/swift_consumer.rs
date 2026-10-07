@@ -18,14 +18,19 @@ fn swift_fixture() -> Fixture {
         fixture.root.join("Package.swift"),
     )
     .unwrap();
-    fs::create_dir_all(fixture.root.join("sdk/swift/Sources/MeshLLM/Generated")).unwrap();
+    fs::create_dir_all(
+        fixture
+            .root
+            .join("mesh/sdk/swift/Sources/MeshLLM/Generated"),
+    )
+    .unwrap();
     fs::write(
         fixture.root.join("input-binding.swift"),
         b"inert binding bytes",
     )
     .unwrap();
     fs::write(
-        fixture.root.join("sdk/swift/PrivacyInfo.xcprivacy"),
+        fixture.root.join("mesh/sdk/swift/PrivacyInfo.xcprivacy"),
         b"inert privacy observer input",
     )
     .unwrap();
@@ -55,7 +60,7 @@ fn write_component_observers(root: &Path) {
         r#"#!/bin/bash
 set -euo pipefail
 [[ "$#" == 2 && "$1" == "$GITHUB_WORKSPACE/swift.zip" && "$2" == host-only ]] || exit 80
-[[ "$(cat sdk/swift/Sources/MeshLLM/Generated/mesh_ffi.swift)" == 'inert binding bytes' ]] || exit 81
+[[ "$(cat mesh/sdk/swift/Sources/MeshLLM/Generated/mesh_ffi.swift)" == 'inert binding bytes' ]] || exit 81
 [[ ! -f fail-artifact ]] || exit 21
 printf 'artifact-component-observed\n' > artifact-observer
 "#,
@@ -65,7 +70,7 @@ printf 'artifact-component-observed\n' > artifact-observer
         "scripts/verify-swift-privacy-manifest.sh",
         r#"#!/bin/bash
 set -euo pipefail
-[[ "$#" == 2 && "$1" == sdk/swift/PrivacyInfo.xcprivacy && "$2" == sdk/swift/Generated/MeshLLMFFI.xcframework ]] || exit 80
+[[ "$#" == 2 && "$1" == mesh/sdk/swift/PrivacyInfo.xcprivacy && "$2" == mesh/sdk/swift/Generated/MeshLLMFFI.xcframework ]] || exit 80
 [[ "$(cat "$2/fixture")" == 'producer archive bytes' ]] || exit 81
 printf 'privacy-component-observed\n' > privacy-observer
 "#,
@@ -102,8 +107,8 @@ export MESH_SDK_INVITE_TOKEN=inert-invite
         r#"#!/bin/bash
 set -euo pipefail
 [[ "$PWD" == "$GITHUB_WORKSPACE" ]] || exit 80
-[[ "$#" == 5 && "$1" == run && "$2" == --package-path && "$3" == sdk/swift/example/MeshExampleApp && "$4" == MeshExampleApp && "$5" == inert-invite ]] || exit 81
-[[ "$(cat sdk/swift/Generated/MeshLLMFFI.xcframework/fixture)" == 'producer archive bytes' ]] || exit 82
+[[ "$#" == 5 && "$1" == run && "$2" == --package-path && "$3" == mesh/sdk/swift/example/MeshExampleApp && "$4" == MeshExampleApp && "$5" == inert-invite ]] || exit 81
+[[ "$(cat mesh/sdk/swift/Generated/MeshLLMFFI.xcframework/fixture)" == 'producer archive bytes' ]] || exit 82
 printf 'literal-root-client-body\n' > client-body-observer
 [[ ! -f fail-client-body ]] || exit 23
 "#,
@@ -159,7 +164,7 @@ fn swift_actual_handoff_keeps_literal_root_and_restores_producer_archive_bytes()
     assert!(
         fixture
             .root
-            .join("sdk/swift/Sources/MeshLLM/Resources/Console/manifest.txt")
+            .join("mesh/sdk/swift/Sources/MeshLLM/Resources/Console/manifest.txt")
             .is_file()
     );
 }

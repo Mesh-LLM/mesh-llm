@@ -147,6 +147,7 @@ jobs:
             --arg pass_id "$CANARY_PASS_ID" --arg run_id "$GITHUB_RUN_ID" --arg run_attempt "$GITHUB_RUN_ATTEMPT" \
             --arg previous_package "$CANARY_PREVIOUS_PACKAGE" --arg previous_identity "$CANARY_PREVIOUS_IDENTITY" \
             --arg previous_candidate "$CANARY_CANDIDATE_SHA" \
+            --arg previous_feedback "$CANARY_PREVIOUS_FEEDBACK" \
             --arg evidence "$RUNNER_TEMP/canary-build-contract-${CANARY_PASS_ID}" --arg export "$CANARY_EXPORT_DIR" \
             --argjson agent_timeout_seconds "$CANARY_AGENT_TIMEOUT_SECONDS" \
             --argjson verification_timeout_seconds "$CANARY_VERIFICATION_TIMEOUT_SECONDS" \
@@ -156,14 +157,10 @@ jobs:
               pass_id:$pass_id, run_id:$run_id, run_attempt:$run_attempt,
               previous:(if $previous_package == "" then null else
                 {package:$previous_package, identity:$previous_identity, candidate:$previous_candidate} end),
+              previous_feedback:(if $previous_feedback == "" then null else $previous_feedback end),
               evidence:$evidence, export:$export, agent_timeout_seconds:$agent_timeout_seconds,
               verification_timeout_seconds:$verification_timeout_seconds}' > "$input"
-          if [[ -n "${CANARY_PREVIOUS_FEEDBACK:-}" ]]; then
-            # Main's digest-bound distributed repair feedback is not in the native build contract yet.
-            python3 scripts/llama-canary-family-evidence.py build
-          else
-            "$MESH_LLM_AUTOMATION_BIN" automation canary-receipts build --input "$input"
-          fi
+          "$MESH_LLM_AUTOMATION_BIN" automation canary-receipts build --input "$input"
       - name: Report System One smoke result
         if: ${{ !cancelled() }}
         env:
@@ -396,6 +393,8 @@ jobs:
         uses: ./.github/actions/prepare-automation
         with:
           runner-profile: hosted-bare
+          allow_depot_remote_cache: 'false'
+          allow_native_github_cache: 'false'
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: ${{ needs.build.outputs.package }}
@@ -412,9 +411,11 @@ jobs:
           FAMILY_RESULT: ${{ needs.family.result }}
         run: |
           set -euo pipefail
-          python3 scripts/llama-canary-family-evidence.py aggregate --package "$RUNNER_TEMP/aggregate-input" \
+          "$MESH_LLM_AUTOMATION_BIN" automation canary-receipts aggregate --package "$RUNNER_TEMP/aggregate-input" \
             --identity "$IDENTITY" --evidence "$RUNNER_TEMP/aggregate-evidence" \
-            --family-result "$FAMILY_RESULT" --feedback "$RUNNER_TEMP/canary-family-feedback"
+            --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --controller-revision "$CANARY_CONTROLLER_SHA" --selected-source "$CANARY_MESH_SOURCE" \
+            --family-result "$FAMILY_RESULT" --feedback-output "$RUNNER_TEMP/canary-family-feedback"
       - name: Upload classified family failure evidence
         if: ${{ !cancelled() && steps.aggregate.outputs.feedback_ready == 'true' }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
@@ -435,29 +436,29 @@ jobs:
       max-parallel: 8
       matrix: ${{ fromJSON(needs.aggregate.outputs.retry_matrix) }}
     env:
+      CANARY_SOURCE_ROOT: ${{ github.workspace }}/canary-source
       LLAMA_STAGE_BACKEND: metal
       FAMILY_BATTERY_RUN_ID: ${{ inputs.pass_id }}-infrastructure-retry-${{ matrix.shard_index }}
       FAMILY_BATTERY_ARTIFACT_ROOT: ${{ github.workspace }}/target/canary-evidence-${{ github.run_id }}-${{ github.run_attempt }}
-      FAMILY_BATTERY_MM_TEST_BIN: ${{ github.workspace }}${{ inputs.mesh_source != '' && '/canary-source' || '' }}/target/debug/skippy-mm-test
+      FAMILY_BATTERY_MM_TEST_BIN: ${{ github.workspace }}/canary-source/target/debug/skippy-mm-test
       PACKAGE: ${{ github.workspace }}/.deps/canary-retry-input-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.pass_id }}-${{ matrix.shard_index }}
       IDENTITY: ${{ needs.build.outputs.identity }}
-      SKIPPY_WORKLOAD_ORACLE_SERVER: ${{ github.workspace }}${{ inputs.mesh_source != '' && '/canary-source' || '' }}/.deps/canary-workload-oracles/native/bin/llama-server
-      SKIPPY_WORKLOAD_ORACLE_COMPLETION: ${{ github.workspace }}${{ inputs.mesh_source != '' && '/canary-source' || '' }}/.deps/canary-workload-oracles/native/bin/llama-completion
-      SKIPPY_WORKLOAD_ORACLE_TTS: ${{ github.workspace }}${{ inputs.mesh_source != '' && '/canary-source' || '' }}/.deps/canary-workload-oracles/native/bin/llama-tts
-      SKIPPY_WORKLOAD_NATIVE_BUILD_DIR: ${{ github.workspace }}${{ inputs.mesh_source != '' && '/canary-source' || '' }}/.deps/canary-workload-oracles/native
-      SKIPPY_WORKLOAD_CANDIDATE_BIN_DIR: ${{ github.workspace }}${{ inputs.mesh_source != '' && '/canary-source' || '' }}/.deps/canary-workload-oracles/cargo/debug
-      SKIPPY_WORKLOAD_PRODUCER_MANIFEST: ${{ github.workspace }}${{ inputs.mesh_source != '' && '/canary-source' || '' }}/.deps/canary-workload-oracles/producer.json
+      SKIPPY_WORKLOAD_ORACLE_SERVER: ${{ github.workspace }}/canary-source/.deps/canary-workload-oracles/native/bin/llama-server
+      SKIPPY_WORKLOAD_ORACLE_COMPLETION: ${{ github.workspace }}/canary-source/.deps/canary-workload-oracles/native/bin/llama-completion
+      SKIPPY_WORKLOAD_ORACLE_TTS: ${{ github.workspace }}/canary-source/.deps/canary-workload-oracles/native/bin/llama-tts
+      SKIPPY_WORKLOAD_NATIVE_BUILD_DIR: ${{ github.workspace }}/canary-source/.deps/canary-workload-oracles/native
+      SKIPPY_WORKLOAD_CANDIDATE_BIN_DIR: ${{ github.workspace }}/canary-source/.deps/canary-workload-oracles/cargo/debug
+      SKIPPY_WORKLOAD_PRODUCER_MANIFEST: ${{ github.workspace }}/canary-source/.deps/canary-workload-oracles/producer.json
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           ref: ${{ inputs.source }}
           fetch-depth: 0
           persist-credentials: false
-      - name: Check out explicitly trusted certification source
-        if: inputs.mesh_source != ''
+      - name: Check out fresh dedicated certification consumer
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
-          ref: ${{ inputs.mesh_source }}
+          ref: ${{ inputs.mesh_source || inputs.source }}
           path: canary-source
           fetch-depth: 0
           persist-credentials: false
@@ -478,7 +479,13 @@ jobs:
       - name: Verify immutable handoff and restore producer executables
         run: |
           set -euo pipefail
-          python3 scripts/llama-canary-family-evidence.py restore --root "$CANARY_SOURCE_ROOT" --package "$PACKAGE" --identity "$IDENTITY"
+          input="$RUNNER_TEMP/canary-restore-${FAMILY_BATTERY_RUN_ID}.json"
+          jq -n --arg controller_root "$GITHUB_WORKSPACE" --arg controller_revision "$CANARY_CONTROLLER_SHA" \
+            --arg selected_source "$CANARY_MESH_SOURCE" --arg run_id "$GITHUB_RUN_ID" --arg run_attempt "$GITHUB_RUN_ATTEMPT" \
+            --arg root "$CANARY_SOURCE_ROOT" --arg package "$PACKAGE" --arg identity_sha256 "$IDENTITY" \
+            '{context:{controller_root:$controller_root,controller_revision:$controller_revision,selected_source:$selected_source,run_id:$run_id,run_attempt:$run_attempt},
+              root:$root,package:$package,identity_sha256:$identity_sha256}' > "$input"
+          "$MESH_LLM_AUTOMATION_BIN" automation canary-receipts restore --input "$input"
       - name: Recheck one infrastructure-failed family
         id: certify
         continue-on-error: true
@@ -488,9 +495,15 @@ jobs:
           MEMORY_TIER: ${{ matrix.memory_tier }}
         run: |
           set -euo pipefail
-          python3 scripts/llama-canary-family-evidence.py certify --root "$CANARY_SOURCE_ROOT" \
-            --package "$PACKAGE" --identity "$IDENTITY" --shard-index "$SHARD_INDEX" \
-            --memory-tier "$MEMORY_TIER" --evidence "$FAMILY_BATTERY_ARTIFACT_ROOT/$FAMILY_BATTERY_RUN_ID"
+          input="$RUNNER_TEMP/canary-certify-${FAMILY_BATTERY_RUN_ID}.json"
+          jq -n --arg controller_root "$GITHUB_WORKSPACE" --arg controller_revision "$CANARY_CONTROLLER_SHA" \
+            --arg selected_source "$CANARY_MESH_SOURCE" --arg run_id "$GITHUB_RUN_ID" --arg run_attempt "$GITHUB_RUN_ATTEMPT" \
+            --arg root "$CANARY_SOURCE_ROOT" --arg package "$PACKAGE" --arg identity_sha256 "$IDENTITY" \
+            --argjson shard_index "$SHARD_INDEX" --arg memory_tier "$MEMORY_TIER" \
+            --arg evidence "$FAMILY_BATTERY_ARTIFACT_ROOT/$FAMILY_BATTERY_RUN_ID" \
+            '{context:{controller_root:$controller_root,controller_revision:$controller_revision,selected_source:$selected_source,run_id:$run_id,run_attempt:$run_attempt},
+              root:$root,package:$package,identity_sha256:$identity_sha256,shard_index:$shard_index,memory_tier:$memory_tier,evidence:$evidence,max_seconds:43200}' > "$input"
+          "$MESH_LLM_AUTOMATION_BIN" automation canary-receipts certify --input "$input"
       - name: Bind retry result to candidate and plan
         if: ${{ !cancelled() }}
         env:
@@ -498,8 +511,16 @@ jobs:
           OUTCOME: ${{ steps.certify.outcome }}
         run: |
           set -euo pipefail
-          python3 scripts/llama-canary-family-evidence.py receipt --package "$PACKAGE" --identity "$IDENTITY" \
-            --family "$FAMILY" --outcome "$OUTCOME" --evidence "$FAMILY_BATTERY_ARTIFACT_ROOT/$FAMILY_BATTERY_RUN_ID"
+          input="$RUNNER_TEMP/canary-receipt-${FAMILY_BATTERY_RUN_ID}.json"
+          jq -n --arg package "$PACKAGE" --arg identity_sha256 "$IDENTITY" \
+            --arg run_id "$GITHUB_RUN_ID" --arg run_attempt "$GITHUB_RUN_ATTEMPT" \
+            --arg controller_revision "$CANARY_CONTROLLER_SHA" --arg selected_source "$CANARY_MESH_SOURCE" \
+            --arg family "$FAMILY" --arg outcome "$OUTCOME" --arg runner "$RUNNER_NAME" \
+            --arg evidence "$FAMILY_BATTERY_ARTIFACT_ROOT/$FAMILY_BATTERY_RUN_ID" \
+            '{package:$package,identity_sha256:$identity_sha256,run_id:$run_id,run_attempt:$run_attempt,
+              controller_revision:$controller_revision,selected_source:$selected_source,
+              family:$family,outcome:$outcome,runner:$runner,evidence:$evidence}' > "$input"
+          "$MESH_LLM_AUTOMATION_BIN" automation canary-receipts receipt --input "$input"
       - name: Upload infrastructure retry evidence
         id: upload_evidence
         if: ${{ success() || failure() || cancelled() }}
@@ -541,6 +562,12 @@ jobs:
         with:
           ref: ${{ inputs.source }}
           persist-credentials: false
+      - name: Prepare frozen controller automation for reconciliation
+        uses: ./.github/actions/prepare-automation
+        with:
+          runner-profile: hosted-bare
+          allow_depot_remote_cache: 'false'
+          allow_native_github_cache: 'false'
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: ${{ needs.build.outputs.package }}
@@ -561,10 +588,12 @@ jobs:
           FAMILY_RESULT: ${{ needs.retry_family.result }}
         run: |
           set -euo pipefail
-          python3 scripts/llama-canary-family-evidence.py reconcile --package "$RUNNER_TEMP/reconcile-input" \
+          "$MESH_LLM_AUTOMATION_BIN" automation canary-receipts reconcile --package "$RUNNER_TEMP/reconcile-input" \
             --identity "$IDENTITY" --previous-feedback "$RUNNER_TEMP/previous-feedback" \
+            --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --controller-revision "$CANARY_CONTROLLER_SHA" --selected-source "$CANARY_MESH_SOURCE" \
             --evidence "$RUNNER_TEMP/retry-evidence" --family-result "$FAMILY_RESULT" \
-            --feedback "$RUNNER_TEMP/reconciled-family-feedback"
+            --feedback-output "$RUNNER_TEMP/reconciled-family-feedback"
       - name: Upload reconciled candidate repair evidence
         if: ${{ !cancelled() && steps.reconcile.outputs.feedback_ready == 'true' }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0

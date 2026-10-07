@@ -67,7 +67,7 @@ fn invoke(root: &Path, body: &str, extra: &[(&str, String)]) -> (bool, String, S
 fn source() -> String {
     fs::read_to_string(
         Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../scripts/materialize-competitive-inputs.sh"),
+            .join("../../skippy/scripts/materialize-competitive-inputs.sh"),
     )
     .unwrap()
 }
@@ -79,6 +79,12 @@ fn materialize_canonical_path_uses_native_owner_with_spaces_and_no_python() {
     fs::write(temporary.path().join("source with spaces/data"), "fixture").unwrap();
     std::os::unix::fs::symlink("source with spaces/data", temporary.path().join("linked")).unwrap();
     let source = source();
+    let shim = fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../scripts/materialize-competitive-inputs.sh"),
+    )
+    .unwrap();
+    assert!(shim.contains("/skippy/scripts/materialize-competitive-inputs.sh\" \"$@\""));
     assert!(!source.contains("PROMPT_GENERATOR"));
     assert!(
         source.contains("if [[ \"$SKIP_TOKENIZERS\" -eq 0 ]]; then\n  command -v \"$PYTHON_BIN\"")

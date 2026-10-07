@@ -4,7 +4,11 @@ use std::path::Path;
 fn source(name: &str) -> String {
     fs::read_to_string(
         Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../scripts")
+            .join(if name == "package-release.ps1" {
+                "../../mesh/scripts"
+            } else {
+                "../../scripts"
+            })
             .join(name),
     )
     .unwrap()

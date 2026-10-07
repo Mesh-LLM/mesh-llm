@@ -54,7 +54,8 @@ fn raw(spec: &ProcessSpec, token: &Cancellation) -> crate::process::RawProcessRe
 }
 fn caller(root: &Path, label: &str, seconds: u64, arguments: Vec<String>) -> ProcessSpec {
     let source = fs::read_to_string(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../scripts/skippy-family-battery.sh"),
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../skippy/scripts/skippy-family-battery.sh"),
     )
     .unwrap();
     let start = source.find("run_battery_timeout() {").unwrap();
@@ -199,7 +200,8 @@ fn actual_workload_dimensions_caller_consumes_typed_selected_file_projection() {
     let model = root.path().join("selected model.gguf");
     fs::write(&model, &gguf).unwrap();
     let source = fs::read_to_string(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../scripts/skippy-workload-certify.sh"),
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../skippy/scripts/skippy-workload-certify.sh"),
     )
     .unwrap();
     let line = source

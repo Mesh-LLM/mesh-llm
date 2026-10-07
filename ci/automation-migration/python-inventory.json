@@ -10,7 +10,7 @@
       "classification": "native cache compatibility fixture generator",
       "deletion_condition": "Retain only while the LMCache compatibility fixture requires this generator; do not make it a generic CI entrypoint.",
       "exception": null,
-      "path": "crates/skippy-cache/src/cachegen/fixtures/generate_lmcache_compat.py",
+      "path": "skippy/crates/skippy-cache/src/cachegen/fixtures/generate_lmcache_compat.py",
       "phase": 5,
       "replacement_owner": "component-owned cache fixture tests",
       "required": false
@@ -19,7 +19,7 @@
       "classification": "upstream reference comparison",
       "deletion_condition": "Delete only if the reference comparison is retired; otherwise preserve explicit opt-in boundary and dependency declaration.",
       "exception": "Allowed only as opt-in comparison against upstream Python quantizer, not a required validation dependency.",
-      "path": "crates/skippy-quantize/scripts/compare-reference-quantization.py",
+      "path": "skippy/crates/skippy-quantize/scripts/compare-reference-quantization.py",
       "phase": 5,
       "replacement_owner": "Keep beside opt-in reference comparison",
       "required": false
@@ -28,7 +28,7 @@
       "classification": "evaluation manifest tooling",
       "deletion_condition": "Retained by explicit maintainer decision on 2026-10-01; Rust execution must invoke only this reader as a bounded external step.",
       "exception": "Maintainer-retained DuckDB Parquet trajectory reader; not a blanket replay execution exception.",
-      "path": "evals/agentic-trajectory-manifest.py",
+      "path": "mesh/evals/agentic-trajectory-manifest.py",
       "phase": 5,
       "replacement_owner": "Python DuckDB trajectory reader; tools/xtask owns caller supervision and all other replay execution",
       "required": false
@@ -37,7 +37,7 @@
       "classification": "evaluation harness",
       "deletion_condition": "Keep only if documented and isolated from required validation.",
       "exception": "Potential protocol-specific evaluation adapter; isolation not yet proven.",
-      "path": "evals/latency-benchmarking/latency-proxy.py",
+      "path": "skippy/evals/latency-benchmarking/latency-proxy.py",
       "phase": 5,
       "replacement_owner": "Language-specific evaluation owner",
       "required": false
@@ -46,7 +46,7 @@
       "classification": "evaluation orchestration",
       "deletion_condition": "Port generic orchestration or prove isolated benchmark-only caller.",
       "exception": null,
-      "path": "evals/latency-benchmarking/measure.py",
+      "path": "skippy/evals/latency-benchmarking/measure.py",
       "phase": 5,
       "replacement_owner": "tools/xtask process/qa or language-specific benchmark owner",
       "required": false
@@ -55,7 +55,7 @@
       "classification": "research/evaluation",
       "deletion_condition": "Keep only with a documented optional invocation and local dependencies.",
       "exception": "Research/evaluation path allowed only when opt-in and isolated.",
-      "path": "evals/moa-openrouter/analyze_ablation.py",
+      "path": "mesh/evals/moa-openrouter/analyze_ablation.py",
       "phase": 5,
       "replacement_owner": "Language-specific evaluation owner",
       "required": false
@@ -64,7 +64,7 @@
       "classification": "research/evaluation",
       "deletion_condition": "Keep only with a documented optional invocation and local dependencies.",
       "exception": "Research/evaluation path allowed only when opt-in and isolated.",
-      "path": "evals/moa-openrouter/lite_agent.py",
+      "path": "mesh/evals/moa-openrouter/lite_agent.py",
       "phase": 5,
       "replacement_owner": "Language-specific evaluation owner",
       "required": false
@@ -73,7 +73,7 @@
       "classification": "research/evaluation fixture generator",
       "deletion_condition": "Port generic fixture generation or prove evaluation-only boundary.",
       "exception": null,
-      "path": "evals/moa-openrouter/make_fixture.py",
+      "path": "mesh/evals/moa-openrouter/make_fixture.py",
       "phase": 5,
       "replacement_owner": "tools/xtask fixture owner or isolated evaluation project",
       "required": false
@@ -82,7 +82,7 @@
       "classification": "external client evaluation",
       "deletion_condition": "Keep only if isolated and locally declared.",
       "exception": "Potential actual external-client behavior; dependencies/caller require proof.",
-      "path": "evals/moa-openrouter/orclient.py",
+      "path": "mesh/evals/moa-openrouter/orclient.py",
       "phase": 5,
       "replacement_owner": "Language-specific ecosystem owner",
       "required": false
@@ -91,7 +91,7 @@
       "classification": "research/evaluation",
       "deletion_condition": "Port generic orchestration or prove isolated evaluation-only use.",
       "exception": null,
-      "path": "evals/moa-openrouter/probe_tools.py",
+      "path": "mesh/evals/moa-openrouter/probe_tools.py",
       "phase": 5,
       "replacement_owner": "tools/xtask process/qa or isolated evaluation owner",
       "required": false
@@ -100,7 +100,7 @@
       "classification": "research/evaluation",
       "deletion_condition": "Keep only with an explicit optional caller and dependency declaration.",
       "exception": "Research/evaluation exception only if opt-in and isolated.",
-      "path": "evals/moa-openrouter/record.py",
+      "path": "mesh/evals/moa-openrouter/record.py",
       "phase": 5,
       "replacement_owner": "Language-specific evaluation owner",
       "required": false
@@ -109,7 +109,7 @@
       "classification": "research/evaluation",
       "deletion_condition": "Port generic process orchestration or prove isolated evaluation-only use.",
       "exception": null,
-      "path": "evals/moa-openrouter/record_agentic.py",
+      "path": "mesh/evals/moa-openrouter/record_agentic.py",
       "phase": 5,
       "replacement_owner": "tools/xtask process/qa or isolated evaluation owner",
       "required": false
@@ -118,7 +118,7 @@
       "classification": "evaluation fixture",
       "deletion_condition": "Retain only while its scenario references it.",
       "exception": "Fixture source, not an interpreter dependency by itself.",
-      "path": "evals/scenarios/debug-session/buggy.py",
+      "path": "mesh/evals/scenarios/debug-session/buggy.py",
       "phase": 5,
       "replacement_owner": "No automation replacement; intentional test subject",
       "required": false
@@ -127,7 +127,7 @@
       "classification": "evaluation fixture/server",
       "deletion_condition": "Retain only while an explicit opt-in scenario invokes it.",
       "exception": "Potential scenario server; isolation/caller must be documented.",
-      "path": "evals/scenarios/edit-file/server.py",
+      "path": "mesh/evals/scenarios/edit-file/server.py",
       "phase": 5,
       "replacement_owner": "Language-specific evaluation owner",
       "required": false
@@ -136,7 +136,7 @@
       "classification": "evaluation fixture",
       "deletion_condition": "Retain only while its scenario references it.",
       "exception": "Fixture source, not an interpreter dependency by itself.",
-      "path": "evals/scenarios/refactor/config.py",
+      "path": "mesh/evals/scenarios/refactor/config.py",
       "phase": 5,
       "replacement_owner": "No automation replacement; intentional test subject",
       "required": false
@@ -145,7 +145,7 @@
       "classification": "model-specific evaluation",
       "deletion_condition": "Keep only if isolated and genuinely model-specific, otherwise port generic checks.",
       "exception": "Potential model-specific behavior test; callers/cadence require review.",
-      "path": "evals/skippy-granite-tensor-equivalence.py",
+      "path": "skippy/evals/skippy-granite-tensor-equivalence.py",
       "phase": 5,
       "replacement_owner": "Rust/native model test or isolated evaluation owner",
       "required": false
@@ -154,7 +154,7 @@
       "classification": "evaluation test",
       "deletion_condition": "Move protocol contract into component-owned tests or document isolated evaluation.",
       "exception": null,
-      "path": "evals/test_injection_framing.py",
+      "path": "mesh/evals/test_injection_framing.py",
       "phase": 5,
       "replacement_owner": "Rust protocol tests or isolated eval test",
       "required": false
@@ -163,7 +163,7 @@
       "classification": "evaluation orchestration",
       "deletion_condition": "Port generic orchestration or prove opt-in isolation.",
       "exception": null,
-      "path": "evals/virtual_llm_eval.py",
+      "path": "mesh/evals/virtual_llm_eval.py",
       "phase": 5,
       "replacement_owner": "tools/xtask process/qa plus domain-specific eval",
       "required": false
@@ -216,8 +216,8 @@
     {
       "classification": "isolated approved trajectory-reader constructor test",
       "deletion_condition": "Retain with the maintainer-approved trajectory reader; excluded from required generic core.",
-      "exception": "evals/agentic-trajectory-manifest.py",
-      "path": "scripts/tests/test_agentic_trajectory_manifest.py",
+      "exception": "mesh/evals/agentic-trajectory-manifest.py",
+      "path": "mesh/scripts/tests/test_agentic_trajectory_manifest.py",
       "phase": 2,
       "replacement_owner": "Approved trajectory-reader helper and optional agentic-trajectory-reader-contracts",
       "required": false
@@ -226,7 +226,7 @@
       "classification": "retained Python SDK packaging component",
       "deletion_condition": "Retained ecosystem component by task decision; not generic repository automation.",
       "exception": "Python SDK Hatch wheel hook verifies packaged native bridge presence; no SDK isolation qualification claimed.",
-      "path": "sdk/python/hatch_build.py",
+      "path": "mesh/sdk/python/hatch_build.py",
       "phase": 5,
       "replacement_owner": "Python SDK component packaging",
       "required": false
@@ -235,7 +235,7 @@
       "classification": "retained Python SDK package interface",
       "deletion_condition": "Retained ecosystem component by task decision; not generic repository automation.",
       "exception": "Python SDK exports and native identity binding; no SDK isolation qualification claimed.",
-      "path": "sdk/python/src/meshllm/__init__.py",
+      "path": "mesh/sdk/python/src/meshllm/__init__.py",
       "phase": 5,
       "replacement_owner": "Python SDK component; isolation decision remains pending",
       "required": false
@@ -244,7 +244,7 @@
       "classification": "retained Python SDK binding loader",
       "deletion_condition": "Retained ecosystem component by task decision; not generic repository automation.",
       "exception": "Lazy loading of the actual generated Python native binding; no SDK isolation qualification claimed.",
-      "path": "sdk/python/src/meshllm/_binding.py",
+      "path": "mesh/sdk/python/src/meshllm/_binding.py",
       "phase": 5,
       "replacement_owner": "Python SDK component; isolation decision remains pending",
       "required": false
@@ -253,7 +253,7 @@
       "classification": "retained generated Python SDK package",
       "deletion_condition": "Retained ecosystem component by task decision; generated binding package marker.",
       "exception": "UniFFI-generated Python package marker; no SDK isolation qualification claimed.",
-      "path": "sdk/python/src/meshllm/_generated/__init__.py",
+      "path": "mesh/sdk/python/src/meshllm/_generated/__init__.py",
       "phase": 5,
       "replacement_owner": "Python SDK component; isolation decision remains pending",
       "required": false
@@ -262,7 +262,7 @@
       "classification": "retained generated Python SDK bindings",
       "deletion_condition": "Retained ecosystem component by task decision; regenerate only through the component binding generator.",
       "exception": "Actual UniFFI Python ABI bindings; no SDK isolation qualification claimed.",
-      "path": "sdk/python/src/meshllm/_generated/mesh_ffi.py",
+      "path": "mesh/sdk/python/src/meshllm/_generated/mesh_ffi.py",
       "phase": 5,
       "replacement_owner": "Python SDK component; isolation decision remains pending",
       "required": false
@@ -271,7 +271,7 @@
       "classification": "retained Python SDK client implementation",
       "deletion_condition": "Retained ecosystem component by task decision; not generic repository automation.",
       "exception": "Python asynchronous SDK lifecycle and protocol-preserving native client; no SDK isolation qualification claimed.",
-      "path": "sdk/python/src/meshllm/client.py",
+      "path": "mesh/sdk/python/src/meshllm/client.py",
       "phase": 5,
       "replacement_owner": "Python SDK component; isolation decision remains pending",
       "required": false
@@ -280,7 +280,7 @@
       "classification": "retained Python SDK public types",
       "deletion_condition": "Retained ecosystem component by task decision; not generic repository automation.",
       "exception": "Python SDK response, stream, model and error types; no SDK isolation qualification claimed.",
-      "path": "sdk/python/src/meshllm/types.py",
+      "path": "mesh/sdk/python/src/meshllm/types.py",
       "phase": 5,
       "replacement_owner": "Python SDK component; isolation decision remains pending",
       "required": false
@@ -289,7 +289,7 @@
       "classification": "retained Python SDK component tests",
       "deletion_condition": "Retained ecosystem component coverage by task decision; no interpreter differential oracle.",
       "exception": "Tests the actual Python SDK lifecycle, stream cancellation and protocol behavior; no SDK isolation qualification claimed.",
-      "path": "sdk/python/tests/test_client.py",
+      "path": "mesh/sdk/python/tests/test_client.py",
       "phase": 5,
       "replacement_owner": "Python SDK component; isolation decision remains pending",
       "required": false

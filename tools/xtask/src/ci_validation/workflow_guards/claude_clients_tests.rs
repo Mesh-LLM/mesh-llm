@@ -45,9 +45,9 @@ fn actual_required_and_manual_claude_workflows_retain_real_client_contract() {
 fn missing_echoed_nested_or_ignored_only_pr_execution_rejects() {
     for run in [
         "echo claude_cli_executes_read_tool_through_host_ingress",
-        "cargo test --locked -p openai-frontend",
+        "cargo test --locked -p skippy-inference-api",
         "cargo test --locked -p mesh-llm-host-runtime --no-default-features --features claude-code-integration claude_cli_executes_read_tool_through_host_ingress -- --ignored",
-        "if false; then\ncargo test --locked -p openai-frontend\ncargo test --locked -p mesh-llm-host-runtime --no-default-features --features claude-code-integration claude_cli_executes_read_tool_through_host_ingress\nfi",
+        "if false; then\ncargo test --locked -p skippy-inference-api\ncargo test --locked -p mesh-llm-host-runtime --no-default-features --features claude-code-integration claude_cli_executes_read_tool_through_host_ingress\nfi",
     ] {
         let mut workflows = actual();
         let gate = step(
@@ -178,7 +178,7 @@ fn equivalent_flag_order_comments_continuations_and_just_wrapper_remain_admissib
     entry(
         gate,
         "run",
-        "# Real client plus protocol, equivalent order\njust with-lld cargo test --features claude-code-integration --no-default-features -p mesh-llm-host-runtime --locked \\\n claude_cli_executes_read_tool_through_host_ingress -- --nocapture\njust with-lld cargo test --package openai-frontend --locked --quiet\n",
+        "# Real client plus protocol, equivalent order\njust with-lld cargo test --features claude-code-integration --no-default-features -p mesh-llm-host-runtime --locked \\\n claude_cli_executes_read_tool_through_host_ingress -- --nocapture\njust with-lld cargo test --package skippy-inference-api --locked --quiet\n",
     );
     let manual = workflows.get_mut("claude-live-model-gate.yml").unwrap();
     let job = h::mutable(h::mutable(manual, "jobs"), "live_claude");
@@ -209,12 +209,12 @@ fn cargo_invocation_cannot_be_list_only_unlocked_or_success_masked() {
             gate,
             "run",
             &format!(
-                "cargo test --locked -p openai-frontend\ncargo test --locked -p mesh-llm-host-runtime --no-default-features --features claude-code-integration claude_cli_executes_read_tool_through_host_ingress {tail}\n"
+                "cargo test --locked -p skippy-inference-api\ncargo test --locked -p mesh-llm-host-runtime --no-default-features --features claude-code-integration claude_cli_executes_read_tool_through_host_ingress {tail}\n"
             ),
         );
         assert!(check(&workflows).is_err());
     }
-    assert!(invocation(&["cargo", "test", "-p", "openai-frontend"]).is_err());
+    assert!(invocation(&["cargo", "test", "-p", "skippy-inference-api"]).is_err());
 }
 
 #[test]
