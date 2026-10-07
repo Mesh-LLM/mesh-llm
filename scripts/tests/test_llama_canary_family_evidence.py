@@ -323,6 +323,36 @@ class FamilyEvidenceTests(unittest.TestCase):
         self.assertEqual(payload['candidate_failures'], [])
         self.assertEqual(payload['infrastructure_failures'], ['dense'])
 
+    def test_memory_admission_without_results_is_retried(self):
+        directory = self.evidence / 'dense'
+        (directory / 'results.jsonl').unlink()
+        E.write(directory / 'memory-admission.json', {'status': 'failed'})
+        self.make_receipt('dense', 'failure')
+        output = self.root / 'outputs'
+        feedback = self.root / 'feedback'
+        with patch.dict(os.environ, GITHUB_OUTPUT=str(output)):
+            with self.assertRaises(ValueError):
+                self.aggregate(feedback=feedback, family_result='failure')
+        self.assertIn('state=infrastructure_retryable', output.read_text())
+        payload = E.verify_feedback(feedback, self.digest, self.identity,
+                                    expected_state='infrastructure_retryable')
+        self.assertEqual(payload['infrastructure_failures'], ['dense'])
+
+    def test_memory_admission_with_corrupt_results_remains_contract_failure(self):
+        directory = self.evidence / 'dense'
+        E.write(directory / 'memory-admission.json', {'status': 'failed'})
+        (directory / 'results.jsonl').write_text('changed after receipt\n')
+        self.assertEqual(E.classify_family_failure(directory / 'receipt.json', 'dense',
+                                                   self.identity, self.digest), 'contract')
+
+    def test_failed_memory_admission_cannot_have_success_receipt(self):
+        directory = self.evidence / 'dense'
+        (directory / 'results.jsonl').unlink()
+        E.write(directory / 'memory-admission.json', {'status': 'failed'})
+        self.make_receipt('dense', 'success')
+        self.assertEqual(E.classify_family_failure(directory / 'receipt.json', 'dense',
+                                                   self.identity, self.digest), 'contract')
+
     def test_infrastructure_recheck_preserves_prior_candidate_failure(self):
         self.make_receipt('dense', 'failure')
         (self.evidence / 'hybrid/receipt.json').unlink()

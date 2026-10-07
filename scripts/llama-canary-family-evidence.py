@@ -666,7 +666,9 @@ def classify_family_failure(path: Path, family: str, identity: dict, identity_sh
         if receipt.get("outcome") not in {"success", "failure"}:
             return "contract"
         results = path.parent / "results.jsonl"
-        if receipt.get("results_sha256") != sha(results):
+        if results.is_file() and receipt.get("results_sha256") != sha(results):
+            return "contract"
+        if not results.is_file() and receipt.get("results_sha256") is not None:
             return "contract"
     except (ValueError, OSError, KeyError, TypeError):
         return "contract"
@@ -674,9 +676,11 @@ def classify_family_failure(path: Path, family: str, identity: dict, identity_sh
     if memory.is_file():
         try:
             if read(memory).get("status") == "failed":
-                return "infrastructure"
+                return "infrastructure" if receipt.get("outcome") == "failure" else "contract"
         except (ValueError, OSError, TypeError):
             return "infrastructure"
+    if not results.is_file():
+        return "contract"
     try:
         rows = read_json_documents(results)
     except (ValueError, OSError, json.JSONDecodeError):
