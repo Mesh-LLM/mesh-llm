@@ -1086,6 +1086,11 @@ pub(crate) fn proto_ann_to_local(
             addrs: Default::default(),
         }
     };
+    // Gossip keys peers by the address id. An announcement whose address
+    // names a different node than its endpoint id is self-contradictory.
+    if addr.id != peer_id {
+        return None;
+    }
     let role = proto_role_to_local(pa.role, pa.http_port);
     let model_demand: HashMap<String, ModelDemand> = pa
         .demand
