@@ -1197,3 +1197,23 @@ fn deeply_nested_grammar_is_rejected_before_native_parsing() {
 
     assert!(chat_template_options(&request, &EmbeddedOpenAiRequestDefaults::default()).is_err());
 }
+
+#[test]
+fn oversized_stop_lists_are_rejected_before_generation() {
+    let stops = vec!["x"; 65];
+    let chat: ChatCompletionRequest = serde_json::from_value(json!({
+        "model": "test",
+        "messages": [{"role": "user", "content": "hello"}],
+        "stop": stops
+    }))
+    .unwrap();
+    assert!(ensure_chat_runtime_features_supported(&chat).is_err());
+
+    let completion: CompletionRequest = serde_json::from_value(json!({
+        "model": "test",
+        "prompt": "hello",
+        "stop": "x".repeat(1025)
+    }))
+    .unwrap();
+    assert!(ensure_completion_runtime_features_supported(&completion).is_err());
+}
