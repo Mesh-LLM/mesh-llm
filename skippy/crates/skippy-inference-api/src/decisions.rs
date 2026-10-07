@@ -14,6 +14,7 @@ use crate::{
 };
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct DecisionsRequest {
     model: String,
     input: DecisionInput,
@@ -30,9 +31,10 @@ enum DecisionInput {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct DecisionInputMessage {
     role: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "optional_string_without_null")]
     r#type: Option<String>,
     content: DecisionContent,
 }
@@ -45,7 +47,7 @@ enum DecisionContent {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 enum DecisionInputPart {
     InputText {
         text: String,
@@ -99,18 +101,21 @@ impl DecisionInput {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(tag = "type", rename_all = "lowercase")]
+#[serde(tag = "type", rename_all = "lowercase", deny_unknown_fields)]
 enum DecisionsQuestion {
     Predicate {
+        #[serde(default, deserialize_with = "optional_string_without_null")]
         name: Option<String>,
         instructions: String,
     },
     Choice {
+        #[serde(default, deserialize_with = "optional_string_without_null")]
         name: Option<String>,
         instructions: String,
         choices: Vec<ChoiceOption>,
     },
     Score {
+        #[serde(default, deserialize_with = "optional_string_without_null")]
         name: Option<String>,
         instructions: String,
         levels: Vec<ScoreLevel>,
@@ -125,15 +130,26 @@ enum ChoiceValue {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ChoiceOption {
     value: ChoiceValue,
+    #[serde(default, deserialize_with = "optional_string_without_null")]
     description: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ScoreLevel {
     label: String,
+    #[serde(default, deserialize_with = "optional_string_without_null")]
     description: Option<String>,
+}
+
+fn optional_string_without_null<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    String::deserialize(deserializer).map(Some)
 }
 
 impl DecisionsQuestion {
