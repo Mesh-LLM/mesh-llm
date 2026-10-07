@@ -115,3 +115,19 @@ async fn decisions_preserves_string_and_boolean_choice_identity() {
     assert_eq!(body["answers"][0]["probabilities"][1]["value"], true);
     assert_eq!(body["answers"][0]["probabilities"][2]["value"], false);
 }
+
+#[tokio::test]
+async fn decisions_rejects_former_and_undocumented_request_shapes() {
+    let requests = [
+        json!({"model":"laya-test","input":"x","questions":[{"type":"predicate","name":"urgent"}]}),
+        json!({"model":"laya-test","input":"x","questions":[{"type":"predicate","instructions":"Urgent?","criteria":"legacy"}]}),
+        json!({"model":"laya-test","input":"x","questions":[{"type":"predicate","instructions":"Urgent?","name":null}]}),
+        json!({"model":"laya-test","input":"x","questions":[{"type":"predicate","instructions":"Urgent?"}],"state":"legacy"}),
+        json!({"model":"laya-test","input":[{"role":"user","content":"x","metadata":"legacy"}],"questions":[{"type":"predicate","instructions":"Urgent?"}]}),
+        json!({"model":"laya-test","input":[{"role":"user","type":null,"content":"x"}],"questions":[{"type":"predicate","instructions":"Urgent?"}]}),
+    ];
+    for request in requests {
+        let response = post_json("/v1/decisions", request).await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+}
