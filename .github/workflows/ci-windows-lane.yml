@@ -14,7 +14,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   windows_cpu:
-    if: ${{ github.repository == 'Mesh-LLM/mesh-llm' && github.ref == 'refs/heads/codex/xtask-migration-diagnostic-20261006' && inputs.source_sha == 'b6af67ff55db47f6864120c42ccadbc4e82fc71e' }}
+    if: ${{ github.repository == 'Mesh-LLM/mesh-llm' && github.ref == 'refs/heads/codex/xtask-migration-diagnostic-20261006' && inputs.source_sha == 'bf5914ab7d4da88f77595c81a7249e7143afd951' }}
     runs-on: windows-2022
     timeout-minutes: 120
     env:
@@ -176,6 +176,194 @@ jobs:
           save_model_cache: 'false'
           startup_timeout_seconds: '300'
           read_timeout_seconds: '300'
+      # This is a main-representative product smoke selection, not a main event
+      # or release publication. Exact existing cadence admission; no cache save.
+      - name: Restore exact pinned dense inference model
+        id: dense_model
+        timeout-minutes: 10
+        uses: ./.github/actions/restore-test-model
+        with:
+          model_manifest: ci/model-artifacts/manifests/product-smoke.json
+          model_artifact_id: smollm2-q8-inference
+          model_cadence: main
+          model_cache_scope: diagnostic-smollm2-q8
+          cache_key_prefix: diagnostic-windows-
+          save_model_cache: 'false'
+      - name: Restore exact pinned recurrent inference model
+        id: recurrent_model
+        timeout-minutes: 10
+        uses: ./.github/actions/restore-test-model
+        with:
+          model_manifest: ci/model-artifacts/manifests/product-smoke.json
+          model_artifact_id: family-granite-hybrid
+          model_cadence: main
+          model_cache_scope: diagnostic-granite-hybrid
+          cache_key_prefix: diagnostic-windows-
+          save_model_cache: 'false'
+      - name: Actual same-product dense default CPU inference
+        timeout-minutes: 13
+        shell: bash
+        env:
+          PRODUCT_BINARY: ${{ steps.product.outputs.binary_path }}
+          PRODUCT_RUNTIME_ROOT: ${{ steps.product.outputs.runtime_root }}
+          MODEL: ${{ steps.dense_model.outputs.model_path }}
+          MODEL_CLASS: dense
+          STACK: default
+          BASE_PORT: '19371'
+        run: |
+          set -euo pipefail
+          test -x "${MESH_LLM_AUTOMATION_BIN:?candidate native automation required}"
+          mkdir -p diagnostic-evidence/two-family
+          # Refuse occupied private loopback listeners; never stop foreign owners.
+          powershell -NoProfile -Command '$ErrorActionPreference="Stop"; $first=[int]$env:BASE_PORT; $owned=$first..($first+3); $busy=@([System.Net.NetworkInformation.IPGlobalProperties]::GetIPGlobalProperties().GetActiveTcpListeners() | Where-Object { $_.Port -in $owned }); if ($busy.Count -ne 0) { throw "diagnostic loopback port already occupied" }'
+          tmp_parent="$(cygpath -u "$RUNNER_TEMP")"
+          state_parent="$(mktemp -d "$tmp_parent/msXXXXXX")"
+          trap 'rmdir -- "$state_parent" 2>/dev/null || true' EXIT
+          native_state_parent="$(cygpath -w "$state_parent")"
+          native_binary="$(cygpath -w "$PRODUCT_BINARY")"
+          native_runtime_root="$(cygpath -w "$PRODUCT_RUNTIME_ROOT")"
+          test -s "$MODEL"
+          native_model="$(cygpath -w "$MODEL")"
+          receipt="diagnostic-evidence/two-family/$MODEL_CLASS-$STACK.json"
+          # Native owner caps the coordinated serving modes at 660s total,
+          # then 15s graceful +5s forced cleanup. The 13min step leaves margin.
+          just --command "$MESH_LLM_AUTOMATION_BIN" automation required-smoke run \
+            --binary "$native_binary" \
+            --native-runtime-root "$native_runtime_root" \
+            --model "$native_model" \
+            --device CPU --model-class "$MODEL_CLASS" --stack "$STACK" \
+            --expected-attestation missing \
+            --state-parent "$native_state_parent" \
+            --ready-max-wait 180 --shutdown-max-wait 15 \
+            --api-port "$BASE_PORT" --console-port "$((BASE_PORT + 1))" \
+            --headless-api-port "$((BASE_PORT + 2))" --headless-console-port "$((BASE_PORT + 3))" \
+            > "$receipt" 2> "diagnostic-evidence/two-family/$MODEL_CLASS-$STACK.stderr"
+          jq -e --arg model_class "$MODEL_CLASS" --arg stack "$STACK" \
+            '.owner == "required_smoke" and .status == "passed" and .model_class == $model_class and .stack == $stack and (.processes | length == 2) and all(.processes[]; .exit_code == 0 and .cleanup_complete == true and .forced == false and .probe_admitted == true)' \
+            "$receipt" > /dev/null
+      - name: Actual same-product dense constrained CPU inference
+        timeout-minutes: 13
+        shell: bash
+        env:
+          PRODUCT_BINARY: ${{ steps.product.outputs.binary_path }}
+          PRODUCT_RUNTIME_ROOT: ${{ steps.product.outputs.runtime_root }}
+          MODEL: ${{ steps.dense_model.outputs.model_path }}
+          MODEL_CLASS: dense
+          STACK: constrained
+          BASE_PORT: '19375'
+        run: |
+          set -euo pipefail
+          test -x "${MESH_LLM_AUTOMATION_BIN:?candidate native automation required}"
+          mkdir -p diagnostic-evidence/two-family
+          # Refuse occupied private loopback listeners; never stop foreign owners.
+          powershell -NoProfile -Command '$ErrorActionPreference="Stop"; $first=[int]$env:BASE_PORT; $owned=$first..($first+3); $busy=@([System.Net.NetworkInformation.IPGlobalProperties]::GetIPGlobalProperties().GetActiveTcpListeners() | Where-Object { $_.Port -in $owned }); if ($busy.Count -ne 0) { throw "diagnostic loopback port already occupied" }'
+          tmp_parent="$(cygpath -u "$RUNNER_TEMP")"
+          state_parent="$(mktemp -d "$tmp_parent/msXXXXXX")"
+          trap 'rmdir -- "$state_parent" 2>/dev/null || true' EXIT
+          native_state_parent="$(cygpath -w "$state_parent")"
+          native_binary="$(cygpath -w "$PRODUCT_BINARY")"
+          native_runtime_root="$(cygpath -w "$PRODUCT_RUNTIME_ROOT")"
+          test -s "$MODEL"
+          native_model="$(cygpath -w "$MODEL")"
+          receipt="diagnostic-evidence/two-family/$MODEL_CLASS-$STACK.json"
+          # Native owner caps the coordinated serving modes at 660s total,
+          # then 15s graceful +5s forced cleanup. The 13min step leaves margin.
+          just --command "$MESH_LLM_AUTOMATION_BIN" automation required-smoke run \
+            --binary "$native_binary" \
+            --native-runtime-root "$native_runtime_root" \
+            --model "$native_model" \
+            --device CPU --model-class "$MODEL_CLASS" --stack "$STACK" \
+            --expected-attestation missing \
+            --state-parent "$native_state_parent" \
+            --ready-max-wait 180 --shutdown-max-wait 15 \
+            --api-port "$BASE_PORT" --console-port "$((BASE_PORT + 1))" \
+            --headless-api-port "$((BASE_PORT + 2))" --headless-console-port "$((BASE_PORT + 3))" \
+            > "$receipt" 2> "diagnostic-evidence/two-family/$MODEL_CLASS-$STACK.stderr"
+          jq -e --arg model_class "$MODEL_CLASS" --arg stack "$STACK" \
+            '.owner == "required_smoke" and .status == "passed" and .model_class == $model_class and .stack == $stack and (.processes | length == 2) and all(.processes[]; .exit_code == 0 and .cleanup_complete == true and .forced == false and .probe_admitted == true)' \
+            "$receipt" > /dev/null
+      - name: Actual same-product recurrent default CPU inference
+        timeout-minutes: 13
+        shell: bash
+        env:
+          PRODUCT_BINARY: ${{ steps.product.outputs.binary_path }}
+          PRODUCT_RUNTIME_ROOT: ${{ steps.product.outputs.runtime_root }}
+          MODEL: ${{ steps.recurrent_model.outputs.model_path }}
+          MODEL_CLASS: recurrent
+          STACK: default
+          BASE_PORT: '19379'
+        run: |
+          set -euo pipefail
+          test -x "${MESH_LLM_AUTOMATION_BIN:?candidate native automation required}"
+          mkdir -p diagnostic-evidence/two-family
+          # Refuse occupied private loopback listeners; never stop foreign owners.
+          powershell -NoProfile -Command '$ErrorActionPreference="Stop"; $first=[int]$env:BASE_PORT; $owned=$first..($first+3); $busy=@([System.Net.NetworkInformation.IPGlobalProperties]::GetIPGlobalProperties().GetActiveTcpListeners() | Where-Object { $_.Port -in $owned }); if ($busy.Count -ne 0) { throw "diagnostic loopback port already occupied" }'
+          tmp_parent="$(cygpath -u "$RUNNER_TEMP")"
+          state_parent="$(mktemp -d "$tmp_parent/msXXXXXX")"
+          trap 'rmdir -- "$state_parent" 2>/dev/null || true' EXIT
+          native_state_parent="$(cygpath -w "$state_parent")"
+          native_binary="$(cygpath -w "$PRODUCT_BINARY")"
+          native_runtime_root="$(cygpath -w "$PRODUCT_RUNTIME_ROOT")"
+          test -s "$MODEL"
+          native_model="$(cygpath -w "$MODEL")"
+          receipt="diagnostic-evidence/two-family/$MODEL_CLASS-$STACK.json"
+          # Native owner caps the coordinated serving modes at 660s total,
+          # then 15s graceful +5s forced cleanup. The 13min step leaves margin.
+          just --command "$MESH_LLM_AUTOMATION_BIN" automation required-smoke run \
+            --binary "$native_binary" \
+            --native-runtime-root "$native_runtime_root" \
+            --model "$native_model" \
+            --device CPU --model-class "$MODEL_CLASS" --stack "$STACK" \
+            --expected-attestation missing \
+            --state-parent "$native_state_parent" \
+            --ready-max-wait 180 --shutdown-max-wait 15 \
+            --api-port "$BASE_PORT" --console-port "$((BASE_PORT + 1))" \
+            --headless-api-port "$((BASE_PORT + 2))" --headless-console-port "$((BASE_PORT + 3))" \
+            > "$receipt" 2> "diagnostic-evidence/two-family/$MODEL_CLASS-$STACK.stderr"
+          jq -e --arg model_class "$MODEL_CLASS" --arg stack "$STACK" \
+            '.owner == "required_smoke" and .status == "passed" and .model_class == $model_class and .stack == $stack and (.processes | length == 2) and all(.processes[]; .exit_code == 0 and .cleanup_complete == true and .forced == false and .probe_admitted == true)' \
+            "$receipt" > /dev/null
+      - name: Actual same-product recurrent constrained CPU inference
+        timeout-minutes: 13
+        shell: bash
+        env:
+          PRODUCT_BINARY: ${{ steps.product.outputs.binary_path }}
+          PRODUCT_RUNTIME_ROOT: ${{ steps.product.outputs.runtime_root }}
+          MODEL: ${{ steps.recurrent_model.outputs.model_path }}
+          MODEL_CLASS: recurrent
+          STACK: constrained
+          BASE_PORT: '19383'
+        run: |
+          set -euo pipefail
+          test -x "${MESH_LLM_AUTOMATION_BIN:?candidate native automation required}"
+          mkdir -p diagnostic-evidence/two-family
+          # Refuse occupied private loopback listeners; never stop foreign owners.
+          powershell -NoProfile -Command '$ErrorActionPreference="Stop"; $first=[int]$env:BASE_PORT; $owned=$first..($first+3); $busy=@([System.Net.NetworkInformation.IPGlobalProperties]::GetIPGlobalProperties().GetActiveTcpListeners() | Where-Object { $_.Port -in $owned }); if ($busy.Count -ne 0) { throw "diagnostic loopback port already occupied" }'
+          tmp_parent="$(cygpath -u "$RUNNER_TEMP")"
+          state_parent="$(mktemp -d "$tmp_parent/msXXXXXX")"
+          trap 'rmdir -- "$state_parent" 2>/dev/null || true' EXIT
+          native_state_parent="$(cygpath -w "$state_parent")"
+          native_binary="$(cygpath -w "$PRODUCT_BINARY")"
+          native_runtime_root="$(cygpath -w "$PRODUCT_RUNTIME_ROOT")"
+          test -s "$MODEL"
+          native_model="$(cygpath -w "$MODEL")"
+          receipt="diagnostic-evidence/two-family/$MODEL_CLASS-$STACK.json"
+          # Native owner caps the coordinated serving modes at 660s total,
+          # then 15s graceful +5s forced cleanup. The 13min step leaves margin.
+          just --command "$MESH_LLM_AUTOMATION_BIN" automation required-smoke run \
+            --binary "$native_binary" \
+            --native-runtime-root "$native_runtime_root" \
+            --model "$native_model" \
+            --device CPU --model-class "$MODEL_CLASS" --stack "$STACK" \
+            --expected-attestation missing \
+            --state-parent "$native_state_parent" \
+            --ready-max-wait 180 --shutdown-max-wait 15 \
+            --api-port "$BASE_PORT" --console-port "$((BASE_PORT + 1))" \
+            --headless-api-port "$((BASE_PORT + 2))" --headless-console-port "$((BASE_PORT + 3))" \
+            > "$receipt" 2> "diagnostic-evidence/two-family/$MODEL_CLASS-$STACK.stderr"
+          jq -e --arg model_class "$MODEL_CLASS" --arg stack "$STACK" \
+            '.owner == "required_smoke" and .status == "passed" and .model_class == $model_class and .stack == $stack and (.processes | length == 2) and all(.processes[]; .exit_code == 0 and .cleanup_complete == true and .forced == false and .probe_admitted == true)' \
+            "$receipt" > /dev/null
       - name: Retain bounded diagnostic evidence
         if: ${{ always() }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
