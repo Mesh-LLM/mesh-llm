@@ -14,7 +14,7 @@ use crate::mesh::requirements::current_time_unix_ms;
 use crate::mesh::stage_transport::PeerLifecycleCaptureEvent;
 use crate::protocol::{
     ControlProtocol, NODE_PROTOCOL_GENERATION, STREAM_GOSSIP, connection_protocol,
-    decode_gossip_payload, read_len_prefixed, write_gossip_payload,
+    decode_gossip_payload_and_plugin_keys, read_len_prefixed, write_gossip_payload,
 };
 use anyhow::Result;
 use iroh::{EndpointAddr, EndpointId, endpoint::Connection};
@@ -893,12 +893,21 @@ impl Node {
         send.write_all(&[STREAM_GOSSIP]).await?;
 
         let our_announcements = self.collect_announcements().await;
-        write_gossip_payload(&mut send, protocol, &our_announcements, self.endpoint.id()).await?;
+        write_gossip_payload(
+            &mut send,
+            protocol,
+            &our_announcements,
+            self.endpoint.id(),
+            &crate::mesh::plugin_keys::to_proto(&self.plugin_keys.own()),
+        )
+        .await?;
         send.finish()?;
 
         let buf = read_len_prefixed(&mut recv).await?;
         let rtt_ms = t0.elapsed().as_millis() as u32;
-        let their_announcements = decode_gossip_payload(protocol, remote, &buf)?;
+        let (their_announcements, their_plugin_keys) =
+            decode_gossip_payload_and_plugin_keys(protocol, remote, &buf)?;
+        self.plugin_keys.set_peer(remote, their_plugin_keys);
 
         let _ = recv.read_to_end(0).await;
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
@@ -943,7 +952,9 @@ impl Node {
         tracing::info!("Inbound gossip from {}", remote.fmt_short());
 
         let buf = read_len_prefixed(&mut recv).await?;
-        let their_announcements = decode_gossip_payload(protocol, remote, &buf)?;
+        let (their_announcements, their_plugin_keys) =
+            decode_gossip_payload_and_plugin_keys(protocol, remote, &buf)?;
+        self.plugin_keys.set_peer(remote, their_plugin_keys);
         let negotiated_protocol_generation = match protocol {
             ControlProtocol::ProtoV1 => Some(NODE_PROTOCOL_GENERATION),
         };
@@ -952,7 +963,14 @@ impl Node {
             .await?;
 
         let our_announcements = self.collect_announcements().await;
-        write_gossip_payload(&mut send, protocol, &our_announcements, self.endpoint.id()).await?;
+        write_gossip_payload(
+            &mut send,
+            protocol,
+            &our_announcements,
+            self.endpoint.id(),
+            &crate::mesh::plugin_keys::to_proto(&self.plugin_keys.own()),
+        )
+        .await?;
         send.finish()?;
 
         let _ = recv.read_to_end(0).await;
@@ -973,6 +991,8 @@ impl Node {
         Ok(())
     }
     pub(super) async fn remove_peer(&self, id: EndpointId, reason: MeshPeerRemovalReason) {
+        // A peer that leaves stops being listed with plugin keys.
+        self.plugin_keys.set_peer(id, Vec::new());
         let mut state = self.state.lock().await;
         if let Some(removed) = state.remove_peer(id) {
             let peer = removed.peer;

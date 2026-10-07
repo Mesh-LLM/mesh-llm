@@ -97,11 +97,48 @@ pub(crate) async fn write_gossip_payload(
     protocol: ControlProtocol,
     anns: &[PeerAnnouncement],
     sender_id: EndpointId,
+    own_plugin_keys: &[crate::proto::node::PluginKey],
 ) -> Result<()> {
     let _ = protocol;
-    let frame = build_gossip_frame(anns, sender_id);
+    let mut frame = build_gossip_frame(anns, sender_id);
+    attach_own_plugin_keys(&mut frame, own_plugin_keys);
     write_len_prefixed(send, &frame.encode_to_vec()).await?;
     Ok(())
+}
+
+/// This node's own plugin keys go on its own entry only (the one whose
+/// `endpoint_id` is the frame's sender); relayed entries never carry any.
+pub(crate) fn attach_own_plugin_keys(
+    frame: &mut crate::proto::node::GossipFrame,
+    own_plugin_keys: &[crate::proto::node::PluginKey],
+) {
+    let sender = frame.sender_id.clone();
+    if let Some(own) = frame.peers.iter_mut().find(|peer| peer.endpoint_id == sender) {
+        own.plugin_keys = own_plugin_keys.to_vec();
+    }
+}
+
+/// [`decode_gossip_payload`], plus the plugin keys on the sender's own entry
+/// whose binding verifies against the sender's node key.
+pub(crate) fn decode_gossip_payload_and_plugin_keys(
+    protocol: ControlProtocol,
+    remote: EndpointId,
+    buf: &[u8],
+) -> Result<(
+    Vec<(EndpointAddr, PeerAnnouncement)>,
+    Vec<crate::mesh::plugin_keys::BoundPluginKey>,
+)> {
+    let announcements = decode_gossip_payload(protocol, remote, buf)?;
+    // The frame decoded and validated above; read the sender's own entry again.
+    let frame = crate::proto::node::GossipFrame::decode(buf)
+        .map_err(|e| anyhow::anyhow!("gossip decode from {}: {e}", remote.fmt_short()))?;
+    let keys = frame
+        .peers
+        .iter()
+        .find(|peer| peer.endpoint_id.as_slice() == remote.as_bytes())
+        .map(|own| crate::mesh::plugin_keys::verified_from_proto(&remote, &own.plugin_keys))
+        .unwrap_or_default();
+    Ok((announcements, keys))
 }
 
 pub(crate) fn decode_gossip_payload(

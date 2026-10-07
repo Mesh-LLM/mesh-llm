@@ -97,6 +97,7 @@ mod owner_control_response;
 mod owner_lifecycle_cache;
 mod peer_state;
 mod plugin_config;
+pub(crate) mod plugin_keys;
 mod plugin_mesh;
 mod plugin_streams;
 pub mod requirements;

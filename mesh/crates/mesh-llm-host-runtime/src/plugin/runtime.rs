@@ -336,6 +336,7 @@ impl ExternalPlugin {
                     host_capabilities: vec![
                         mesh_llm_plugin::host_capabilities::PEER_BLOCKS.to_string(),
                         mesh_llm_plugin::host_capabilities::OPENAI_EXCHANGE.to_string(),
+                        mesh_llm_plugin::host_capabilities::PLUGIN_KEYS.to_string(),
                     ],
                 }),
                 Some(self.spec.startup.init_timeout()),

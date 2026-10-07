@@ -147,6 +147,41 @@ pub struct PeerAnnouncement {
     pub claimed_log_head: ::core::option::Option<ClaimedLogHead>,
     #[prost(message, repeated, tag = "52")]
     pub lightning_offers: ::prost::alloc::vec::Vec<LightningOffer>,
+    /// Public keys plugins on this node sign with, each bound to this node's key;
+    /// see `PluginKey`. At most 16, one per plugin.
+    #[prost(message, repeated, tag = "53")]
+    pub plugin_keys: ::prost::alloc::vec::Vec<PluginKey>,
+}
+/// A public key a plugin on this node signs with, bound to this node by the
+/// node's own key, so a peer's plugin can check what that plugin signed without
+/// an operator configuring keys by hand. Set by a plugin through the plugin
+/// protocol (`PluginKeyRequest`); opt-in per plugin; never carried for a plugin
+/// that did not ask. A receiver verifies `binding_signature` with the
+/// announcing node's key (its `endpoint_id`) over:
+///
+///   sig_input = b"mesh-llm-plugin-key-v1:"
+///             || u64le(len(endpoint_id))          || endpoint_id
+///             || u64le(len(plugin))               || plugin
+///             || u64le(len(public_key))           || public_key
+///             || u64le(len(signature_algorithm))  || signature_algorithm
+///
+/// with the same conventions as `ClaimedLogHead`. A key whose binding does not
+/// verify is dropped on receipt. Like `claimed_log_head`, plugin keys are not
+/// relayed transitively: a receiver sees those of directly-connected peers.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PluginKey {
+    /// the plugin's name on this node
+    #[prost(string, tag = "1")]
+    pub plugin: ::prost::alloc::string::String,
+    /// exactly 32 bytes (Ed25519)
+    #[prost(bytes = "vec", tag = "2")]
+    pub public_key: ::prost::alloc::vec::Vec<u8>,
+    /// by this node's key over sig_input above
+    #[prost(bytes = "vec", tag = "3")]
+    pub binding_signature: ::prost::alloc::vec::Vec<u8>,
+    /// "ed25519"
+    #[prost(string, tag = "4")]
+    pub signature_algorithm: ::prost::alloc::string::String,
 }
 /// A minimal, self-contained claim about the current head of a peer's
 /// append-only log. `claimed_signature` is claimed by the announcing peer to

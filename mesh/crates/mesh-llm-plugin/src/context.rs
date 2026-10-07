@@ -281,6 +281,57 @@ impl<'a> PluginContext<'a> {
         }
     }
 
+    /// Ask the host to announce `public_key` (32-byte Ed25519) as the key this
+    /// plugin signs with, bound to this node by the node's own key, so peers'
+    /// plugins can check what this plugin signs. An empty key withdraws it. The
+    /// key is announced under the host's name for this plugin; a later request
+    /// replaces it. See `PluginKeyRequest`.
+    ///
+    /// Fails at once, without sending anything, if the host does not list
+    /// [`crate::host_capabilities::PLUGIN_KEYS`].
+    pub async fn announce_plugin_key(
+        &mut self,
+        public_key: Vec<u8>,
+    ) -> Result<proto::PluginKeyResponse> {
+        self.announce_plugin_key_within(public_key, PEER_BLOCK_REQUEST_TIMEOUT)
+            .await
+    }
+
+    async fn announce_plugin_key_within(
+        &mut self,
+        public_key: Vec<u8>,
+        timeout: std::time::Duration,
+    ) -> Result<proto::PluginKeyResponse> {
+        if !self.host_supports(crate::host_capabilities::PLUGIN_KEYS) {
+            bail!(
+                "plugin keys are unsupported by this host: it does not list the `{}` capability",
+                crate::host_capabilities::PLUGIN_KEYS
+            );
+        }
+        let request_id = next_host_request_id();
+        let (tx, rx) = oneshot::channel();
+        insert_pending_host_response(&self.pending_host_responses, request_id, tx);
+        let mut pending_guard =
+            PendingHostResponseGuard::new(request_id, self.pending_host_responses.clone());
+
+        self.send_payload(
+            proto::envelope::Payload::PluginKeyRequest(proto::PluginKeyRequest { public_key }),
+            request_id,
+        )
+        .await?;
+
+        let Ok(response) = tokio::time::timeout(timeout, rx).await else {
+            bail!("plugin key request: the host did not answer within {timeout:?}");
+        };
+        let response = response??;
+        pending_guard.disarm();
+        match response.payload {
+            Some(proto::envelope::Payload::PluginKeyResponse(response)) => Ok(response),
+            Some(proto::envelope::Payload::ErrorResponse(error)) => bail!(error.message),
+            _ => bail!("Host returned an unexpected plugin key response"),
+        }
+    }
+
     pub async fn connect_mesh_stream(
         &mut self,
         request: proto::OpenMeshStreamRequest,
@@ -430,6 +481,58 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.choice_json, "{}");
+        host.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_plugin_key_to_an_older_host_fails_at_once() {
+        let (mut context, mut outbound_rx, pending) = context(&[]);
+        let error = context.announce_plugin_key(vec![1; 32]).await.unwrap_err();
+        assert!(error.to_string().contains("unsupported by this host"), "{error}");
+        assert!(outbound_rx.try_recv().is_err(), "nothing was sent");
+        assert!(pending.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_plugin_key_request_the_host_never_answers_times_out() {
+        let (mut context, mut outbound_rx, pending) =
+            context(&[crate::host_capabilities::PLUGIN_KEYS]);
+        let error = context
+            .announce_plugin_key_within(vec![1; 32], std::time::Duration::from_millis(20))
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("did not answer"), "{error}");
+        let sent = outbound_rx.try_recv().expect("the request was sent");
+        assert!(matches!(
+            sent.payload,
+            Some(proto::envelope::Payload::PluginKeyRequest(ref request)) if request.public_key == vec![1; 32]
+        ));
+        assert!(pending.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_plugin_key_request_returns_the_host_answer() {
+        let (mut context, mut outbound_rx, pending) =
+            context(&[crate::host_capabilities::PLUGIN_KEYS]);
+        let host = tokio::spawn(async move {
+            let request = outbound_rx.recv().await.unwrap();
+            let sender = remove_pending_host_response(&pending, request.request_id).unwrap();
+            sender
+                .send(Ok(proto::Envelope {
+                    request_id: request.request_id,
+                    payload: Some(proto::envelope::Payload::PluginKeyResponse(
+                        proto::PluginKeyResponse {
+                            node_id: "ab".repeat(32),
+                            binding_signature: vec![2; 64],
+                        },
+                    )),
+                    ..Default::default()
+                }))
+                .unwrap();
+        });
+        let response = context.announce_plugin_key(vec![1; 32]).await.unwrap();
+        assert_eq!(response.node_id, "ab".repeat(32));
+        assert_eq!(response.binding_signature, vec![2; 64]);
         host.await.unwrap();
     }
 }

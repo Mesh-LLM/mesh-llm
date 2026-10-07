@@ -1659,3 +1659,118 @@ fn weights_digest_does_not_cross_the_gossip_wire() {
         "weights_digest must be None after gossip roundtrip: it must not cross the wire"
     );
 }
+
+#[test]
+fn plugin_keys_ride_only_the_senders_own_entry_and_are_verified() {
+    use crate::mesh::plugin_keys::{bind, to_proto};
+    use crate::protocol::{attach_own_plugin_keys, decode_gossip_payload_and_plugin_keys};
+    use prost::Message as _;
+
+    let sender = SecretKey::from_bytes(&[0xab; 32]);
+    let other = SecretKey::from_bytes(&[0xcd; 32]);
+    let sender_id = EndpointId::from(sender.public());
+    let other_id = EndpointId::from(other.public());
+    let own = peer_state_test_announcement(EndpointAddr {
+        id: sender_id,
+        addrs: Default::default(),
+    });
+    let relayed = peer_state_test_announcement(EndpointAddr {
+        id: other_id,
+        addrs: Default::default(),
+    });
+    let key = bind(&sender, "capsules", [5; 32]);
+    let mut frame = build_gossip_frame(&[own, relayed], sender_id);
+    attach_own_plugin_keys(&mut frame, &to_proto(std::slice::from_ref(&key)));
+    assert_eq!(frame.peers[0].plugin_keys.len(), 1, "on the sender's own entry");
+    assert!(frame.peers[1].plugin_keys.is_empty(), "never on a relayed entry");
+
+    // Keys on a relayed entry are not read, even validly bound ones.
+    frame.peers[1].plugin_keys = to_proto(&[bind(&other, "capsules", [6; 32])]);
+    let (announcements, keys) = decode_gossip_payload_and_plugin_keys(
+        ControlProtocol::ProtoV1,
+        sender_id,
+        &frame.encode_to_vec(),
+    )
+    .expect("a valid frame decodes");
+    assert_eq!(announcements.len(), 2);
+    assert_eq!(keys, vec![key]);
+
+    // A key on the sender's entry that another node bound is dropped.
+    frame.peers[0].plugin_keys = to_proto(&[bind(&other, "capsules", [5; 32])]);
+    let (_, keys) = decode_gossip_payload_and_plugin_keys(
+        ControlProtocol::ProtoV1,
+        sender_id,
+        &frame.encode_to_vec(),
+    )
+    .expect("a valid frame decodes");
+    assert!(keys.is_empty(), "a binding by another node never verifies");
+}
+
+#[tokio::test]
+async fn a_peer_that_leaves_is_no_longer_listed_with_plugin_keys() {
+    use crate::mesh::plugin_keys::bind;
+
+    let node = make_test_node(super::NodeRole::Worker)
+        .await
+        .expect("test node must start");
+    let peer = SecretKey::from_bytes(&[0xab; 32]);
+    let peer_id = EndpointId::from(peer.public());
+    let key = ed25519_dalek::SigningKey::from_bytes(&[7; 32])
+        .verifying_key()
+        .to_bytes();
+    node.plugin_keys
+        .set_peer(peer_id, vec![bind(&peer, "key-demo", key)]);
+    assert_eq!(node.plugin_keys.peers().len(), 1);
+
+    node.remove_peer(peer_id, super::MeshPeerRemovalReason::CleanShutdown)
+        .await;
+    assert!(
+        node.plugin_keys.peers().is_empty(),
+        "a removed peer's keys are not kept"
+    );
+}
+
+#[tokio::test]
+async fn a_plugin_sets_replaces_and_withdraws_only_its_own_key() {
+    use crate::plugin::proto::PluginKeyRequest;
+
+    let node = make_test_node(super::NodeRole::Worker)
+        .await
+        .expect("test node must start");
+    let key = |seed: u8| {
+        ed25519_dalek::SigningKey::from_bytes(&[seed; 32])
+            .verifying_key()
+            .to_bytes()
+            .to_vec()
+    };
+    let set = node
+        .apply_plugin_key_request("capsules", PluginKeyRequest { public_key: key(1) })
+        .expect("a valid key is announced");
+    assert_eq!(set.node_id, hex::encode(node.endpoint.id().as_bytes()));
+    let own = node.plugin_keys.own();
+    assert_eq!(own.len(), 1);
+    assert_eq!(own[0].plugin, "capsules", "under the connection's name");
+    assert!(crate::mesh::plugin_keys::verify(&node.endpoint.id(), &own[0]));
+    assert_eq!(set.binding_signature, own[0].binding_signature.to_vec());
+
+    node.apply_plugin_key_request("capsules", PluginKeyRequest { public_key: key(2) })
+        .expect("a later key replaces the first");
+    assert_eq!(node.plugin_keys.own().len(), 1);
+    assert_eq!(node.plugin_keys.own()[0].public_key.to_vec(), key(2));
+
+    let withdrawn = node
+        .apply_plugin_key_request("capsules", PluginKeyRequest { public_key: Vec::new() })
+        .expect("an empty key withdraws");
+    assert!(withdrawn.binding_signature.is_empty());
+    assert!(node.plugin_keys.own().is_empty());
+
+    for bad in [vec![1; 31], vec![1; 33]] {
+        assert!(node
+            .apply_plugin_key_request("capsules", PluginKeyRequest { public_key: bad })
+            .is_err());
+    }
+    assert!(node
+        .apply_plugin_key_request("a plugin", PluginKeyRequest { public_key: key(1) })
+        .is_err(), "a name the gossip format cannot carry is refused");
+    assert!(node.plugin_keys.own().is_empty(), "nothing was announced by a refused request");
+}
