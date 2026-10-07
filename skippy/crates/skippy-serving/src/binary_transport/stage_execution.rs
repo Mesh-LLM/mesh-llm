@@ -23,15 +23,15 @@ use skippy_protocol::{
 use skippy_protocol::{
     MessageBase, SCHEMA_VERSION, StageConfig, StageTopology,
     binary::{
-        READY_MAGIC, StageNativeMtpDraft, StageSamplingConfig, StageWireMessage, WireMessageKind,
-        WireReplyKind, sampling_flags, send_ready,
+        READY_MAGIC, StageNativeMtpDraft, StageWireMessage, WireMessageKind, WireReplyKind,
+        send_ready,
     },
 };
 use skippy_runtime::{
-    ACTIVATION_FRAME_VERSION, ACTIVATION_MAX_PARTS, ActivationDesc, ActivationFrame, LogitBias,
-    MAX_LOGIT_BIAS, NativeMtpDraft, SamplingConfig,
+    ACTIVATION_FRAME_VERSION, ACTIVATION_MAX_PARTS, ActivationDesc, ActivationFrame, NativeMtpDraft,
 };
 
+use super::peer_sampling::runtime_sampling_config;
 use super::prefill_execution::runtime_activation_frame;
 
 use super::socket::{
@@ -644,7 +644,8 @@ pub(crate) fn run_binary_stage_message(
             Ok((message.state.current_token, Vec::new(), output, None))
         }
         WireMessageKind::PrefillFinalEmbd if options.sample_final_prefill => {
-            let sampling = runtime_sampling_config(message.sampling.as_ref());
+            let sampling =
+                runtime_sampling_config(message.sampling.as_ref(), runtime.kv_pool_tokens());
             let (predicted, output) = runtime.prefill_final_frame_sampled(
                 session_id,
                 token_ids,
@@ -672,7 +673,8 @@ pub(crate) fn run_binary_stage_message(
                 .first()
                 .copied()
                 .unwrap_or(message.state.current_token);
-            let sampling = runtime_sampling_config(message.sampling.as_ref());
+            let sampling =
+                runtime_sampling_config(message.sampling.as_ref(), runtime.kv_pool_tokens());
             if !options.native_mtp_enabled {
                 let (predicted, output) = runtime.decode_frame_sampled(
                     session_id,
@@ -699,7 +701,8 @@ pub(crate) fn run_binary_stage_message(
             ))
         }
         WireMessageKind::VerifyWindow => {
-            let sampling = runtime_sampling_config(message.sampling.as_ref());
+            let sampling =
+                runtime_sampling_config(message.sampling.as_ref(), runtime.kv_pool_tokens());
             let (predicted_tokens, native_mtp, output) = runtime.verify_frame_sampled(
                 session_id,
                 token_ids,
@@ -801,58 +804,6 @@ pub(in crate::binary_transport) fn is_decode_frame_batch_candidate(
             | WireMessageKind::DecodeReplayFinalEmbd
     ) && message.token_count == 1
         && token_ids.len() == 1
-}
-
-pub(in crate::binary_transport) fn runtime_sampling_config(
-    sampling: Option<&StageSamplingConfig>,
-) -> Option<SamplingConfig> {
-    let sampling = sampling?;
-    let mut config = SamplingConfig {
-        enabled: true,
-        ignore_eos: sampling.ignore_eos || (sampling.flags & sampling_flags::IGNORE_EOS) != 0,
-        seed: sampling.seed,
-        temperature: sampling.temperature,
-        top_p: sampling.top_p,
-        top_k: sampling.top_k,
-        min_p: sampling.min_p,
-        presence_penalty: sampling.presence_penalty,
-        frequency_penalty: sampling.frequency_penalty,
-        repeat_penalty: sampling.repeat_penalty,
-        penalty_last_n: sampling.penalty_last_n,
-        typical_p: sampling.typical_p,
-        top_nsigma: sampling.top_nsigma,
-        dynatemp_range: sampling.dynatemp_range,
-        dynatemp_exponent: sampling.dynatemp_exponent,
-        dry: skippy_runtime::DrySamplingConfig {
-            multiplier: sampling.dry_multiplier,
-            base: sampling.dry_base,
-            allowed_length: sampling.dry_allowed_length,
-            penalty_last_n: sampling.dry_penalty_last_n,
-            sequence_breakers: sampling.dry_sequence_breakers.clone(),
-        },
-        xtc: skippy_runtime::XtcSamplingConfig {
-            probability: sampling.xtc_probability,
-            threshold: sampling.xtc_threshold,
-        },
-        mirostat_mode: sampling.mirostat_mode,
-        mirostat_entropy: sampling.mirostat_entropy,
-        mirostat_learning_rate: sampling.mirostat_learning_rate,
-        samplers: sampling.samplers.clone(),
-        reasoning_budget: skippy_runtime::ReasoningBudget::Resolved(
-            sampling.reasoning_budget_tokens,
-        ),
-        ..SamplingConfig::default()
-    };
-    config.logit_bias = sampling
-        .logit_bias
-        .iter()
-        .take(MAX_LOGIT_BIAS)
-        .map(|source| LogitBias {
-            token_id: source.token_id,
-            bias: source.bias,
-        })
-        .collect();
-    sampling.enabled().then_some(config)
 }
 
 pub(in crate::binary_transport) fn input_activation_frame(
