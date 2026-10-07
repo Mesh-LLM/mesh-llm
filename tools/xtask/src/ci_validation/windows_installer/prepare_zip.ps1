@@ -8,13 +8,13 @@ if (![string]::Equals([System.IO.Path]::GetFullPath($env:MESH_WINDOWS_FIXTURE_CO
 $env:PSModulePath = $expectedCore
 if (![string]::Equals($env:PSModulePath, $expectedCore, [StringComparison]::OrdinalIgnoreCase)) { throw 'fixture core module path mismatch' }
 # Windows PowerShell 5.1 exports Get-FileHash as a Utility script function.
-# Binary Management cmdlets are implemented by the DLL in PSHOME; their
-# ModuleBase need not be the manifest directory under PSHOME/Modules.
+# Actual native Windows evidence binds Utility's ModuleBase to PSHOME and
+# Management's implementation to the exact system GAC version/strong-name path.
 $hashCommand = Get-Command -Name Get-FileHash -CommandType Function -ErrorAction Stop
 [Console]::Error.WriteLine('windows-fixture hash-command kind=' + $hashCommand.CommandType + ' module=' + $hashCommand.ModuleName + ' base=' + $hashCommand.Module.ModuleBase)
-if ($hashCommand.ModuleName -ne 'Microsoft.PowerShell.Utility' -or ![string]::Equals($hashCommand.Module.ModuleBase, [System.IO.Path]::Combine($expectedCore, 'Microsoft.PowerShell.Utility'), [StringComparison]::OrdinalIgnoreCase)) { throw 'fixture Get-FileHash native function mismatch' }
+if ($hashCommand.ModuleName -ne 'Microsoft.PowerShell.Utility' -or ![string]::Equals($hashCommand.Module.ModuleBase, $PSHOME, [StringComparison]::OrdinalIgnoreCase)) { throw 'fixture Get-FileHash native function mismatch' }
 $pathCommand = Get-Command -Name Test-Path -CommandType Cmdlet -ErrorAction Stop
-$managementAssembly = [System.IO.Path]::Combine($PSHOME, 'Microsoft.PowerShell.Commands.Management.dll')
+$managementAssembly = [System.IO.Path]::Combine([System.IO.Path]::Combine($env:SystemRoot, 'Microsoft.Net', 'assembly', 'GAC_MSIL'), 'Microsoft.PowerShell.Commands.Management', 'v4.0_3.0.0.0__31bf3856ad364e35', 'Microsoft.PowerShell.Commands.Management.dll')
 [Console]::Error.WriteLine('windows-fixture path-command kind=' + $pathCommand.CommandType + ' module=' + $pathCommand.ModuleName + ' assembly=' + $pathCommand.ImplementingType.Assembly.Location)
 if ($pathCommand.ModuleName -ne 'Microsoft.PowerShell.Management' -or ![string]::Equals($pathCommand.ImplementingType.Assembly.Location, $managementAssembly, [StringComparison]::OrdinalIgnoreCase)) { throw 'fixture Test-Path native assembly mismatch' }
 [Console]::Error.WriteLine('windows-fixture prepare-core-modules-admitted ms=' + $fixturePhaseClock.ElapsedMilliseconds)

@@ -14,9 +14,10 @@ use crate::plugin::openai_exchange::ExchangeOutputDigests;
 use anyhow::{Context, Result, anyhow};
 use mesh_llm_events::logging::events::TokenUsage;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
+#[path = "normalized_chat_stream.rs"]
+mod normalized_chat_stream;
 #[path = "normalized_stream_completion.rs"]
 mod normalized_stream_completion;
-use normalized_stream_completion::finish_normalized_chat_stream;
 
 /// One tool call's deltas folded across `chat.completion.chunk` frames,
 /// keyed by the `index` OpenAI streaming clients use to tell concurrent tool
@@ -218,139 +219,7 @@ impl ResponsesStreamRelayState {
     }
 }
 
-/// Relay a streaming chat-completions upstream response, normalizing tool-call ids.
-pub(in crate::network::openai::response) async fn relay_normalized_chat_completion_stream<
-    R: AsyncRead + Unpin,
->(
-    tcp_stream: &mut ClientStream,
-    reader: &mut R,
-    probe: ResponseProbe,
-    retry_policy: ResponseRetryPolicy,
-    served_by: Option<&str>,
-    route_observer: OpenAiRouteObserver<'_>,
-) -> Result<RouteAttemptResult> {
-    if retry_policy.context_overflow && probe.retryable_context_overflow {
-        return Ok(RouteAttemptResult::RetryableContextOverflow);
-    }
-
-    if !(200..300).contains(&probe.status_code) {
-        route_observer.stream_error("upstream_status");
-        return relay_error_response(tcp_stream, reader, probe, served_by, route_observer).await;
-    }
-
-    let parsed = try_parse_response_headers(&probe.buffered)?
-        .ok_or_else(|| anyhow!("incomplete HTTP response"))?;
-    if !response_is_event_stream(&parsed) {
-        return relay_success_response(
-            tcp_stream,
-            reader,
-            probe,
-            parsed,
-            retry_policy,
-            served_by,
-            route_observer,
-        )
-        .await;
-    }
-
-    let mut carry = String::from_utf8_lossy(&probe.buffered[parsed.header_end..]).to_string();
-    let mut state = ChatStreamNormalizationState::default();
-    let mut assembly = StreamedChatAssembly::default();
-    let mut observed_usage = None;
-    let mut observed_cache_cost = None;
-    let mut header = String::from(
-        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\nCache-Control: no-cache\r\n",
-    );
-    append_capsule_nonce_headers(
-        &mut header,
-        parsed.client_nonce.as_deref(),
-        parsed.nonce_origin.as_deref(),
-    );
-    append_mesh_served_by_header(&mut header, served_by);
-    header.push_str("Connection: close\r\n\r\n");
-    tcp_stream.write_all(header.as_bytes()).await?;
-    let mut response_capture = route_observer.begin_stream_response_capture();
-    route_observer.stream_started(None);
-
-    let mut done_seen = false;
-    let mut first_chunk_seen = false;
-    let mut upstream_error_seen = false;
-    loop {
-        let mut processed = 0usize;
-        while let Some(frame_end_rel) = carry[processed..].find("\n\n") {
-            let frame_end = processed + frame_end_rel;
-            let frame = &carry[processed..frame_end];
-            processed = frame_end + 2;
-            let data_lines = frame
-                .lines()
-                .filter_map(|line| line.strip_prefix("data:"))
-                .map(str::trim_start)
-                .collect::<Vec<_>>();
-            if data_lines.is_empty() {
-                continue;
-            }
-            let data = data_lines.join("\n");
-            if data == "[DONE]" {
-                done_seen = true;
-                write_captured_sse_event(tcp_stream, &mut response_capture, None, "[DONE]").await?;
-                break;
-            }
-
-            if !upstream_error_seen && sse_data_frame_is_openai_error(&data) {
-                // The upstream backend frames failures as OpenAI error bodies
-                // inside a 200 stream. Relay the frame untouched, but do not
-                // let it count as stream progress or terminal success.
-                upstream_error_seen = true;
-            }
-            if let Some(usage) = parse_token_usage_from_json_body(data.as_bytes()) {
-                observed_usage = Some(usage);
-            }
-            observed_cache_cost =
-                observed_cache_cost.or_else(|| parse_cache_cost_from_json_body(data.as_bytes()));
-            let normalized = state.normalize_data(&data);
-            assembly.ingest_chunk(&normalized);
-            write_captured_sse_event(tcp_stream, &mut response_capture, None, &normalized).await?;
-            if upstream_error_seen {
-                continue;
-            }
-            if first_chunk_seen {
-                route_observer.stream_chunk();
-            } else {
-                route_observer.stream_first_token();
-                first_chunk_seen = true;
-            }
-        }
-        if processed > 0 {
-            carry = carry[processed..].to_string();
-        }
-
-        if done_seen {
-            break;
-        }
-
-        let mut chunk = [0u8; 8192];
-        let n = reader.read(&mut chunk).await?;
-        if n == 0 {
-            break;
-        }
-        let new_data = String::from_utf8_lossy(&chunk[..n]);
-        carry.push_str(&new_data);
-        if carry.contains('\r') {
-            carry = carry.replace("\r\n", "\n");
-        }
-    }
-
-    finish_normalized_chat_stream(
-        tcp_stream,
-        route_observer,
-        (done_seen, upstream_error_seen),
-        response_capture,
-        &assembly,
-        observed_usage,
-        observed_cache_cost,
-    )
-    .await
-}
+pub(super) use normalized_chat_stream::relay_normalized_chat_completion_stream;
 
 fn normalized_stream_is_truncated(done_seen: bool, upstream_error_seen: bool) -> bool {
     !done_seen && !upstream_error_seen
