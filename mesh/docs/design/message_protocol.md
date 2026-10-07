@@ -229,6 +229,8 @@ message GossipFrame {
   uint32 gen = 1;                      // must equal NODE_PROTOCOL_GENERATION (1)
   repeated PeerAnnouncement peers = 2; // all known peers including self
   bytes sender_id = 3;                 // exactly 32 bytes; must match QUIC peer identity
+  repeated SignedNodeRecord signed_records = 4; // records signed by the node they describe
+  repeated SignedCacheAffinity signed_cache_affinity = 5; // signed cache-affinity evidence
 }
 ```
 
@@ -237,6 +239,83 @@ Validation:
 2. `sender_id.len() == 32` — structural check
 3. `sender_id == QUIC TLS peer identity` — anti-spoofing
 4. Per peer: `endpoint_id.len() == 32`; HOST role requires `http_port` present
+5. Per peer: the id inside `serialized_addr` must equal `endpoint_id`; a
+   mismatched entry is dropped
+
+`sender_id` authenticates only the hop. Unsigned `peers` entries about other
+nodes are the sender's claims, not the described node's. Signed node records
+close that gap.
+
+### Signed records
+
+Anything gossiped to the whole mesh is signed by the node it describes, with
+its endpoint key (the Ed25519 key behind `endpoint_id`). Relays store each
+record and forward its bytes unchanged, so a record keeps fields a relay's
+build does not know and cannot be altered on the way. Every kind uses the
+same envelope under its own domain tag:
+
+```text
+signed    = endpoint_id[32] || seq[8, u64 BE] || issued_at_unix_ms[8, u64 BE]
+            || body (protobuf bytes)
+signature = Ed25519(endpoint key, domain_tag || signed)
+```
+
+| Kind | Frame field | Domain tag | Body | Max age | Future skew |
+|------|-------------|------------|------|---------|-------------|
+| Node record | `signed_records` (4) | `mesh-llm-node-record-v1\0` | `NodeRecord` | 1 hour | 10 minutes |
+| Cache affinity | `signed_cache_affinity` (5) | `mesh-llm-cache-affinity-record-v1\0` | `CacheAffinityAdvertisement` | 2 minutes | 30 seconds |
+
+The signature covers the transmitted bytes, so no canonical encoding is
+needed: a receiver verifies the bytes, then decodes those bytes. The header is
+fixed-width and the body is the only variable-length part, so the layout has
+no length prefixes. A new layout gets a new domain tag, and a record of one
+kind never verifies as another.
+
+`NodeRecord` holds only what a node asserts about itself: role, version,
+addresses, hardware, mesh and policy ids, served and requested models,
+subprotocols, admission state, throughput, payment offers, and the owner,
+genesis-policy and release attestations. It leaves out:
+
+- hop measurements (`rtt_ms`, `latency_*`), which each relay sends unsigned in
+  `SignedNodeRecord.hop`;
+- fields derived from others (`primary_serving`, `served_model_identities`)
+  and deprecated duplicates (the flat GPU fields, `available_*`);
+- cache affinity, which changes every gossip round and travels as its own
+  record kind so the node record is not re-signed for it;
+- data that only goes to direct peers (`demand`, `claimed_log_head`,
+  `direct_admission_proof`), which stays on the sender's own unsigned entry.
+
+Receivers apply these rules to every kind:
+
+1. A record must verify against the `endpoint_id` in its header under its
+   kind's domain tag, and its body must decode and pass the same checks as
+   the unsigned equivalent (shape checks for `NodeRecord`; bounds, freshness
+   and routable-model filtering for cache affinity).
+2. The highest `seq` per node and kind wins. A node's own record over its own
+   connection may lower `seq` (for example after a restart with a slower
+   clock); a relay can only move a record forward.
+3. A record older than the kind's max age is dropped when it arrives through
+   a relay, and no node forwards one. A node's own record over its own
+   connection is still accepted when expired (for example after a restart
+   with a slower clock). Every receiver drops records issued further in the
+   future than the kind's skew, even from the node itself. Nodes re-sign a
+   record whenever its body changes; an unchanged node record is re-signed
+   every 15 minutes, and cache affinity is re-signed every gossip round
+   because its advertisement time changes.
+4. An accepted node record replaces the frame's unsigned entry for the same
+   node, and accepted cache affinity replaces the unsigned copy. The sender's
+   own unsigned entry is always applied, because the connection authenticates
+   it and it carries the direct-only data.
+
+Nodes that predate signed records ignore fields 4 and 5 and keep using
+`peers`, which newer nodes still populate, including `cache_affinity`. During
+the transition, unsigned data is still applied whenever no accepted record
+replaces it, including entries relayed by older nodes about nodes that do
+sign. A relay can therefore still misdescribe another node with unsigned data
+until signed records become mandatory; that enforcement is deferred so
+upgraded nodes keep working with nodes that have not upgraded. Phase 2,
+[#2301](https://github.com/Mesh-LLM/mesh-llm/issues/2301), tracks enforcing
+signatures and dropping the unsigned copies.
 
 ### PeerAnnouncement
 

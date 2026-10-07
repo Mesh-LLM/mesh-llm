@@ -749,10 +749,26 @@ pub fn validate_peer_announcement(
             got: pa.endpoint_id.len(),
         });
     }
-    if pa.role == crate::proto::node::NodeRole::Host as i32 && pa.http_port.is_none() {
+    validate_role_and_subprotocols(pa.role, pa.http_port, &pa.subprotocols)
+}
+
+/// The same shape rules as [`validate_peer_announcement`], for the body of a
+/// signed node record. The signer's id lives in the record header.
+pub fn validate_node_record(
+    record: &crate::proto::node::NodeRecord,
+) -> Result<(), ControlFrameError> {
+    validate_role_and_subprotocols(record.role, record.http_port, &record.subprotocols)
+}
+
+fn validate_role_and_subprotocols(
+    role: i32,
+    http_port: Option<u32>,
+    subprotocols: &[crate::proto::node::MeshSubprotocol],
+) -> Result<(), ControlFrameError> {
+    if role == crate::proto::node::NodeRole::Host as i32 && http_port.is_none() {
         return Err(ControlFrameError::MissingHttpPort);
     }
-    for subprotocol in &pa.subprotocols {
+    for subprotocol in subprotocols {
         if subprotocol.name.trim().is_empty() || subprotocol.major == 0 {
             return Err(ControlFrameError::InvalidSubprotocol);
         }
@@ -1441,6 +1457,8 @@ mod tests {
         };
 
         let frame_with_state = GossipFrame {
+            signed_records: Vec::new(),
+            signed_cache_affinity: Vec::new(),
             r#gen: NODE_PROTOCOL_GENERATION,
             sender_id: vec![0x11; 32],
             peers: vec![peer.clone()],
@@ -1459,6 +1477,8 @@ mod tests {
 
         peer.inference_admission_state = None;
         let frame_without_state = GossipFrame {
+            signed_records: Vec::new(),
+            signed_cache_affinity: Vec::new(),
             peers: vec![peer],
             ..frame_with_state
         };
