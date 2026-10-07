@@ -108,6 +108,7 @@ fn migration_lifecycle_child_environment_has_only_execution_inputs_and_private_r
                     "LD_LIBRARY_PATH",
                     "DYLD_LIBRARY_PATH",
                     "DYLD_FALLBACK_LIBRARY_PATH",
+                    "CUDA_VISIBLE_DEVICES",
                 ]
                 .iter()
                 .any(|allowed| key == *allowed)
@@ -117,10 +118,122 @@ fn migration_lifecycle_child_environment_has_only_execution_inputs_and_private_r
                 assert!(
                     path.starts_with(&state.root)
                         || (key == "MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR" && path == native)
+                        || (key == "CUDA_VISIBLE_DEVICES" && value.is_empty())
                 );
             }
         }
     }
+    state.finish(Ok::<_, Error>(())).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn runtime_visibility_reaches_closed_child_without_ambient_inheritance() {
+    use crate::process::{
+        self, Cancellation, Completion, Limits, OutputFiles, ProcessSpec, Readiness,
+    };
+    use std::collections::BTreeMap;
+    use std::time::Duration;
+    let owner = module_path!().split_once("::").unwrap().1;
+    let peer = format!("{owner}::runtime_visibility_subprocess_peer");
+    for selection in [
+        Some("GPU-6b7fe24c-5f15-4ac5-88d6-c8934135a4ea"),
+        Some(""),
+        None,
+    ] {
+        let expected = selection.map_or_else(|| "unset:".to_owned(), |v| format!("set:{v}"));
+        let directory = tempfile::tempdir().unwrap();
+        let mut environment = super::host_environment().collect::<BTreeMap<_, _>>();
+        environment.insert(
+            "MESH_FIXTURE_VISIBILITY_EXPECTED".into(),
+            Value::Public(expected.clone().into()),
+        );
+        environment.insert(
+            "MESH_FIXTURE_UNRELATED_AMBIENT".into(),
+            Value::Public("must-not-reach-runtime".into()),
+        );
+        if let Some(value) = selection {
+            environment.insert("CUDA_VISIBLE_DEVICES".into(), Value::Public(value.into()));
+        } else {
+            environment.remove(std::ffi::OsStr::new("CUDA_VISIBLE_DEVICES"));
+        }
+        let spec = ProcessSpec {
+            executable: std::env::current_exe().unwrap(),
+            arguments: ["--exact", &peer, "--ignored", "--nocapture"]
+                .into_iter()
+                .map(|arg| Value::Public(arg.into()))
+                .collect(),
+            cwd: directory.path().into(),
+            environment,
+        };
+        let output = process::supervise(
+            &spec,
+            &Limits {
+                execution: Duration::from_secs(15),
+                graceful_shutdown: Duration::from_secs(1),
+                forced_shutdown: Duration::from_secs(2),
+                retained_bytes_per_stream: 8192,
+                readiness: Readiness::None,
+                completion: Completion::Exit,
+            },
+            &Cancellation::default(),
+            OutputFiles::default(),
+        )
+        .unwrap();
+        assert!(
+            output.success() && output.cleanup.complete && output.cleanup.failure.is_none(),
+            "{output:?}"
+        );
+        assert!(!output.stdout.truncated && !output.stderr.truncated);
+        assert!(String::from_utf8_lossy(&output.stdout.bytes_retained).contains("1 passed"));
+    }
+}
+
+#[cfg(unix)]
+#[test]
+#[ignore = "native subprocess peer invoked by the normal visibility test"]
+fn runtime_visibility_subprocess_peer() {
+    use crate::process::{
+        self, Cancellation, Completion, Limits, OutputFiles, ProcessSpec, Readiness,
+    };
+    use std::time::Duration;
+    let expected = std::env::var("MESH_FIXTURE_VISIBILITY_EXPECTED").unwrap();
+    let parent = tempfile::tempdir().unwrap();
+    let state = PrivateState::create(parent.path(), "cuda-visibility").unwrap();
+    state.prepare().unwrap();
+    let native = parent.path().join("native");
+    let environment = state.environment(&native);
+    assert!(!environment.contains_key(std::ffi::OsStr::new("MESH_FIXTURE_UNRELATED_AMBIENT")));
+    let spec = ProcessSpec {
+        executable: "/bin/sh".into(),
+        arguments: vec![
+            Value::Public("-c".into()),
+            Value::Public(
+                "test -z \"${MESH_FIXTURE_UNRELATED_AMBIENT+x}\" || exit 1; if test \"${CUDA_VISIBLE_DEVICES+x}\" = x; then actual=\"set:$CUDA_VISIBLE_DEVICES\"; else actual='unset:'; fi; test \"$actual\" = \"$1\" || exit 2; printf matched".into(),
+            ),
+            Value::Public("cuda-visibility-peer".into()),
+            Value::Secret(expected.into()),
+        ],
+        cwd: parent.path().into(),
+        environment,
+    };
+    let report = process::supervise(
+        &spec,
+        &Limits {
+            execution: Duration::from_secs(5),
+            graceful_shutdown: Duration::from_secs(1),
+            forced_shutdown: Duration::from_secs(1),
+            retained_bytes_per_stream: 4096,
+            readiness: Readiness::None,
+            completion: Completion::Exit,
+        },
+        &Cancellation::default(),
+        OutputFiles::default(),
+    )
+    .unwrap();
+    assert!(report.success(), "{report:?}");
+    assert!(report.cleanup.complete && report.cleanup.failure.is_none());
+    assert_eq!(report.stdout.bytes_retained, b"matched");
     state.finish(Ok::<_, Error>(())).unwrap();
 }
 

@@ -201,11 +201,21 @@ fn host_environment() -> impl Iterator<Item = (OsString, Value)> {
         "LD_LIBRARY_PATH",
         "DYLD_LIBRARY_PATH",
         "DYLD_FALLBACK_LIBRARY_PATH",
+        "CUDA_VISIBLE_DEVICES",
     ]
     .into_iter()
     .filter_map(|key| {
         std::env::var_os(key)
-            .filter(|value| !value.is_empty())
-            .map(|value| (key.into(), Value::Secret(value)))
+            // An explicitly empty CUDA visibility set hides all devices.
+            // Preserve it as well as the operator's literal UUID selection.
+            .filter(|value| key == "CUDA_VISIBLE_DEVICES" || !value.is_empty())
+            .map(|value| {
+                let value = if value.is_empty() {
+                    Value::Public(value)
+                } else {
+                    Value::Secret(value)
+                };
+                (key.into(), value)
+            })
     })
 }

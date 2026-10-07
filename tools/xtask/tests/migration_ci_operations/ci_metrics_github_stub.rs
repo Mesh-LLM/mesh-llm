@@ -1,7 +1,8 @@
 //! `ci-ops collect-metrics --workflow/--run-id` against the GitHub collection
 //! path of `scripts/collect-ci-metrics.py` (`gh_json`, `fetch_jobs`,
 //! `fetch_exact_run`, `fetch_runs`). No real `gh` runs: `PATH` is the case's
-//! stub directory followed by `/usr/bin:/bin`. The stub `gh` appends its argv
+//! stub directory followed by `/usr/bin:/bin` for stub-present cases only.
+//! The missing-gh case uses only its owned empty bin directory. The stub `gh` appends its argv
 //! to `gh-argv.log` and replays the canned reply the case wrote to
 //! `gh/<key>.{out,err,code}`, where `<key>` is `run_list`, `run_view_<id>` or
 //! `jobs_<id>_<page>`. Goldens `fixtures/ci_operations/ci_metrics/github_*.json`
@@ -140,6 +141,7 @@ fn run(
     program: &Path,
     prefix: &[PathBuf],
     args: &[&str],
+    with_gh: bool,
 ) -> Result<Observed, Box<dyn Error>> {
     reset(stage);
     let root = stage.root_arg();
@@ -147,7 +149,14 @@ fn run(
         .current_dir(stage.path())
         .args(prefix)
         .args(args)
-        .env("PATH", format!("{root}/bin:/usr/bin:/bin"))
+        .env(
+            "PATH",
+            if with_gh {
+                format!("{root}/bin:/usr/bin:/bin")
+            } else {
+                format!("{root}/bin")
+            },
+        )
         .env("PYTHONDONTWRITEBYTECODE", "1")
         .env_remove("COLUMNS")
         .stdin(Stdio::null())
@@ -204,6 +213,7 @@ pub(crate) fn gh_case(
         Path::new(env!("CARGO_BIN_EXE_xtask")),
         &prefix,
         args,
+        with_gh,
     )?;
     assert_eq!(
         actual,
