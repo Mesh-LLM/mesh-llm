@@ -10,11 +10,13 @@ use super::{
 };
 use crate::crypto::{OwnershipSummary, verify_node_ownership};
 use crate::mesh::peer_state::policy_accepts_peer;
+use crate::mesh::plugin_keys::BoundPluginKey;
 use crate::mesh::requirements::current_time_unix_ms;
 use crate::mesh::stage_transport::PeerLifecycleCaptureEvent;
 use crate::protocol::{
-    ControlProtocol, NODE_PROTOCOL_GENERATION, STREAM_GOSSIP, connection_protocol,
-    decode_gossip_payload_and_plugin_keys, read_len_prefixed, write_gossip_payload,
+    ControlProtocol, GossipWithPluginKeys, NODE_PROTOCOL_GENERATION, STREAM_GOSSIP,
+    connection_protocol, decode_gossip_payload_and_plugin_keys, read_len_prefixed,
+    write_gossip_payload,
 };
 use anyhow::Result;
 use iroh::{EndpointAddr, EndpointId, endpoint::Connection};
@@ -73,6 +75,8 @@ pub(crate) struct JoinProbeSuccess {
     candidate: JoinProbeCandidate,
     conn: Connection,
     announcements: Vec<(EndpointAddr, PeerAnnouncement)>,
+    /// The candidate's verified plugin keys, stored only once it is admitted.
+    plugin_keys: Vec<BoundPluginKey>,
     rtt_ms: u32,
     elapsed: std::time::Duration,
 }
@@ -97,9 +101,16 @@ impl JoinProbeSuccess {
             },
             conn,
             announcements,
+            plugin_keys: Vec::new(),
             rtt_ms,
             elapsed: std::time::Duration::from_millis(0),
         }
+    }
+
+    /// The plugin keys the candidate announced in its gossip.
+    pub(super) fn with_plugin_keys(mut self, plugin_keys: Vec<BoundPluginKey>) -> Self {
+        self.plugin_keys = plugin_keys;
+        self
     }
 }
 
@@ -636,9 +647,11 @@ impl Node {
         )
         .await
         {
-            Ok(Ok((their_announcements, rtt_ms))) => {
+            Ok(Ok(((their_announcements, their_plugin_keys), rtt_ms))) => {
                 self.apply_gossip_announcements(remote, rtt_ms, &their_announcements, true)
                     .await?;
+                self.store_plugin_keys_if_admitted(remote, their_plugin_keys)
+                    .await;
                 if !self.state.lock().await.connections.contains_key(&remote) {
                     self.refresh_gossip_path_rtt_for_connection(remote, &conn, Some(rtt_ms))
                         .await;
@@ -783,8 +796,9 @@ impl Node {
         let started = std::time::Instant::now();
         let result = tokio::time::timeout(CLIENT_AUTO_JOIN_PROBE_TIMEOUT, async {
             let conn = connect_mesh(&self.endpoint, candidate.addr.clone()).await?;
-            let (announcements, rtt_ms) = self.gossip_round_trip(&conn, peer_id).await?;
-            Ok::<_, anyhow::Error>((conn, announcements, rtt_ms))
+            let ((announcements, plugin_keys), rtt_ms) =
+                self.gossip_round_trip(&conn, peer_id).await?;
+            Ok::<_, anyhow::Error>((conn, announcements, plugin_keys, rtt_ms))
         })
         .await
         .map_err(|_| {
@@ -799,7 +813,8 @@ impl Node {
             candidate,
             conn: result.0,
             announcements: result.1,
-            rtt_ms: result.2,
+            plugin_keys: result.2,
+            rtt_ms: result.3,
             elapsed: started.elapsed(),
         })
     }
@@ -812,6 +827,7 @@ impl Node {
             candidate,
             conn,
             announcements,
+            plugin_keys,
             rtt_ms,
             elapsed,
         } = success;
@@ -846,6 +862,8 @@ impl Node {
             record_mesh_operational_event(MeshOperationalEvent::AutoJoinFailed);
             return Err(error);
         }
+        self.store_plugin_keys_if_admitted(peer_id, plugin_keys)
+            .await;
 
         // Match `connect_to_peer`: the probe gossip RTT above likely reflects
         // relay latency, so refresh the selected-path/RTT after holepunch.
@@ -874,9 +892,12 @@ impl Node {
         remote: EndpointId,
         discover_peers: bool,
     ) -> Result<()> {
-        let (their_announcements, rtt_ms) = self.gossip_round_trip(&conn, remote).await?;
+        let ((their_announcements, their_plugin_keys), rtt_ms) =
+            self.gossip_round_trip(&conn, remote).await?;
         self.apply_gossip_announcements(remote, rtt_ms, &their_announcements, discover_peers)
             .await?;
+        self.store_plugin_keys_if_admitted(remote, their_plugin_keys)
+            .await;
         if !self.state.lock().await.connections.contains_key(&remote) {
             self.refresh_gossip_path_rtt_for_connection(remote, &conn, Some(rtt_ms))
                 .await;
@@ -884,11 +905,14 @@ impl Node {
         Ok(())
     }
 
+    /// One gossip exchange: the remote's announcements and verified plugin
+    /// keys, and the round-trip time. Stores nothing: the caller stores the
+    /// keys once the remote is admitted (`store_plugin_keys_if_admitted`).
     pub(crate) async fn gossip_round_trip(
         &self,
         conn: &Connection,
         remote: EndpointId,
-    ) -> Result<(Vec<(EndpointAddr, PeerAnnouncement)>, u32)> {
+    ) -> Result<(GossipWithPluginKeys, u32)> {
         let protocol = connection_protocol(conn);
         let t0 = std::time::Instant::now();
         let (mut send, mut recv) = conn.open_bi().await?;
@@ -907,13 +931,11 @@ impl Node {
 
         let buf = read_len_prefixed(&mut recv).await?;
         let rtt_ms = t0.elapsed().as_millis() as u32;
-        let (their_announcements, their_plugin_keys) =
-            decode_gossip_payload_and_plugin_keys(protocol, remote, &buf)?;
-        self.plugin_keys.set_peer(remote, their_plugin_keys);
+        let decoded = decode_gossip_payload_and_plugin_keys(protocol, remote, &buf)?;
 
         let _ = recv.read_to_end(0).await;
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        Ok((their_announcements, rtt_ms))
+        Ok((decoded, rtt_ms))
     }
 
     pub(crate) async fn apply_gossip_announcements(
@@ -956,7 +978,6 @@ impl Node {
         let buf = read_len_prefixed(&mut recv).await?;
         let (their_announcements, their_plugin_keys) =
             decode_gossip_payload_and_plugin_keys(protocol, remote, &buf)?;
-        self.plugin_keys.set_peer(remote, their_plugin_keys);
         let negotiated_protocol_generation = match protocol {
             ControlProtocol::ProtoV1 => Some(NODE_PROTOCOL_GENERATION),
         };
@@ -985,6 +1006,8 @@ impl Node {
             true,
         )
         .await?;
+        self.store_plugin_keys_if_admitted(remote, their_plugin_keys)
+            .await;
         self.refresh_gossip_path_rtt(remote, None).await;
 
         self.connect_discovered_peers(&their_announcements, false, true)
@@ -992,10 +1015,24 @@ impl Node {
 
         Ok(())
     }
+    /// Lists a peer's plugin keys only while it is an admitted member. Checked
+    /// and written under the state lock, as every removal clears them, so a
+    /// peer rejected or removed in between is never listed again.
+    pub(crate) async fn store_plugin_keys_if_admitted(
+        &self,
+        id: EndpointId,
+        keys: Vec<BoundPluginKey>,
+    ) {
+        let state = self.state.lock().await;
+        if state.peers.get(&id).is_some_and(|peer| peer.is_admitted()) {
+            self.plugin_keys.set_peer(id, keys);
+        }
+    }
+
     pub(super) async fn remove_peer(&self, id: EndpointId, reason: MeshPeerRemovalReason) {
+        let mut state = self.state.lock().await;
         // A peer that leaves stops being listed with plugin keys.
         self.plugin_keys.set_peer(id, Vec::new());
-        let mut state = self.state.lock().await;
         if let Some(removed) = state.remove_peer(id) {
             let peer = removed.peer;
             let had_connection = removed.had_connection;

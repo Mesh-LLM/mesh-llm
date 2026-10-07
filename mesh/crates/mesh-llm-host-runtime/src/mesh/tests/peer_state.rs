@@ -1754,6 +1754,73 @@ async fn a_disallowed_peer_is_no_longer_listed_with_plugin_keys() {
 }
 
 #[tokio::test]
+async fn plugin_keys_are_listed_only_for_an_admitted_peer() {
+    use crate::mesh::plugin_keys::bind;
+    use prost::Message as _;
+
+    let node = make_test_node(super::NodeRole::Worker)
+        .await
+        .expect("test node must start");
+    let admit = |secret: u8, version: &str| {
+        let peer = SecretKey::from_bytes(&[secret; 32]);
+        let peer_id = EndpointId::from(peer.public());
+        let mut announcement = peer_state_test_announcement(EndpointAddr {
+            id: peer_id,
+            addrs: Default::default(),
+        });
+        announcement.version = Some(version.to_string());
+        let frame = build_gossip_frame(&[announcement], peer_id);
+        let decoded =
+            decode_gossip_payload(ControlProtocol::ProtoV1, peer_id, &frame.encode_to_vec())
+                .expect("a valid frame decodes");
+        (peer, peer_id, decoded)
+    };
+
+    // A peer whose gossip has not been accepted is never listed.
+    let (peer, peer_id, decoded) = admit(0xab, env!("CARGO_PKG_VERSION"));
+    let key = bind(&peer, "capsules", [5; 32]);
+    node.store_plugin_keys_if_admitted(peer_id, vec![key.clone()])
+        .await;
+    assert!(
+        node.plugin_keys.peers().is_empty(),
+        "keys of a peer that is not admitted are not kept"
+    );
+
+    // Once its gossip is accepted, it is.
+    node.apply_announced_peers(
+        peer_id,
+        &decoded,
+        None,
+        Some(NODE_PROTOCOL_GENERATION),
+        false,
+    )
+    .await
+    .expect("valid gossip is accepted");
+    node.store_plugin_keys_if_admitted(peer_id, vec![key.clone()])
+        .await;
+    assert_eq!(node.plugin_keys.peers().get(&peer_id), Some(&vec![key]));
+
+    // A peer whose gossip is applied without error but who is refused (here,
+    // below the version floor) is not listed either.
+    let (old, old_id, decoded) = admit(0xcd, "0.1.0");
+    node.apply_announced_peers(
+        old_id,
+        &decoded,
+        None,
+        Some(NODE_PROTOCOL_GENERATION),
+        false,
+    )
+    .await
+    .expect("a refused peer's gossip still applies without error");
+    node.store_plugin_keys_if_admitted(old_id, vec![bind(&old, "capsules", [6; 32])])
+        .await;
+    assert!(
+        !node.plugin_keys.peers().contains_key(&old_id),
+        "keys of a refused peer are not kept"
+    );
+}
+
+#[tokio::test]
 async fn a_plugin_sets_replaces_and_withdraws_only_its_own_key() {
     use crate::plugin::proto::PluginKeyRequest;
 
