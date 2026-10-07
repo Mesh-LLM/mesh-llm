@@ -1820,6 +1820,85 @@ async fn plugin_keys_are_listed_only_for_an_admitted_peer() {
     );
 }
 
+#[test]
+fn a_gossip_frame_without_plugin_keys_decodes_with_no_sender_keys() {
+    use crate::protocol::decode_gossip_payload_and_plugin_keys;
+    use prost::Message as _;
+
+    // A frame as a node without plugin keys writes it: field 53 is never set,
+    // so it is absent from the encoded bytes.
+    let sender = SecretKey::from_bytes(&[0xab; 32]);
+    let sender_id = EndpointId::from(sender.public());
+    let other_id = EndpointId::from(SecretKey::from_bytes(&[0xcd; 32]).public());
+    let frame = build_gossip_frame(
+        &[
+            peer_state_test_announcement(EndpointAddr {
+                id: sender_id,
+                addrs: Default::default(),
+            }),
+            peer_state_test_announcement(EndpointAddr {
+                id: other_id,
+                addrs: Default::default(),
+            }),
+        ],
+        sender_id,
+    );
+    assert!(frame.peers.iter().all(|peer| peer.plugin_keys.is_empty()));
+    let bytes = frame.encode_to_vec();
+
+    let (announcements, keys) =
+        decode_gossip_payload_and_plugin_keys(ControlProtocol::ProtoV1, sender_id, &bytes)
+            .expect("a frame without plugin keys decodes");
+    assert!(keys.is_empty(), "its sender has no plugin keys");
+    let plain = decode_gossip_payload(ControlProtocol::ProtoV1, sender_id, &bytes)
+        .expect("the existing decoder reads it");
+    assert_eq!(announcements.len(), 2);
+    assert_eq!(format!("{announcements:?}"), format!("{plain:?}"));
+}
+
+#[test]
+fn a_gossip_frame_with_plugin_keys_decodes_to_the_same_announcements() {
+    use crate::mesh::plugin_keys::{bind, to_proto};
+    use crate::protocol::{attach_own_plugin_keys, decode_gossip_payload_and_plugin_keys};
+    use prost::Message as _;
+
+    let sender = SecretKey::from_bytes(&[0xab; 32]);
+    let sender_id = EndpointId::from(sender.public());
+    let other_id = EndpointId::from(SecretKey::from_bytes(&[0xcd; 32]).public());
+    let frame = build_gossip_frame(
+        &[
+            peer_state_test_announcement(EndpointAddr {
+                id: sender_id,
+                addrs: Default::default(),
+            }),
+            peer_state_test_announcement(EndpointAddr {
+                id: other_id,
+                addrs: Default::default(),
+            }),
+        ],
+        sender_id,
+    );
+    let without = frame.encode_to_vec();
+    let key = bind(&sender, "capsules", [5; 32]);
+    let mut with_keys = frame.clone();
+    attach_own_plugin_keys(&mut with_keys, &to_proto(std::slice::from_ref(&key)));
+    let with = with_keys.encode_to_vec();
+    assert_ne!(with, without, "field 53 is on the wire");
+
+    // The existing decoder reads the same announcements from either frame.
+    let before = decode_gossip_payload(ControlProtocol::ProtoV1, sender_id, &without)
+        .expect("decodes without field 53");
+    let after = decode_gossip_payload(ControlProtocol::ProtoV1, sender_id, &with)
+        .expect("decodes with field 53");
+    assert_eq!(format!("{after:?}"), format!("{before:?}"));
+
+    let (announcements, keys) =
+        decode_gossip_payload_and_plugin_keys(ControlProtocol::ProtoV1, sender_id, &with)
+            .expect("decodes with field 53");
+    assert_eq!(format!("{announcements:?}"), format!("{before:?}"));
+    assert_eq!(keys, vec![key]);
+}
+
 #[tokio::test]
 async fn a_plugin_sets_replaces_and_withdraws_only_its_own_key() {
     use crate::plugin::proto::PluginKeyRequest;
