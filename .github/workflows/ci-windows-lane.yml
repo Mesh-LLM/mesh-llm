@@ -14,7 +14,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   windows_cpu:
-    if: ${{ github.repository == 'Mesh-LLM/mesh-llm' && github.ref == 'refs/heads/codex/xtask-migration-diagnostic-20261006' && inputs.source_sha == 'de24c46fe662d3a91231a95a0ad26cd71b029fdc' }}
+    if: ${{ github.repository == 'Mesh-LLM/mesh-llm' && github.ref == 'refs/heads/codex/xtask-migration-diagnostic-20261006' && inputs.source_sha == '452ae4b3f0b997267208c3d299fb4e4bfae5adb7' }}
     runs-on: windows-2022
     timeout-minutes: 120
     env:
@@ -129,6 +129,21 @@ jobs:
           if ($LASTEXITCODE -ne 0) { $wrapperResult | Write-Host; exit $LASTEXITCODE }
           $wrapperResult | Write-Host
           if (@($wrapperResult | Where-Object { $_ -match '^test result: ok\. 1 passed; 0 failed; 0 ignored;' }).Count -ne 1) { throw "native Windows wrapper regression must pass without an ignored test" }
+          $productExpected = @(
+            "product::canonical_inputs::tests::migration_product_overlap_is_ancestry_not_prefix",
+            "product::canonical_inputs::tests::native_workspace_join_resolves_producers_and_missing_output_parents",
+            "product::canonical_inputs::tests::native_inputs_refuse_escape_overlap_and_non_directory_without_output",
+            "product::canonical_inputs::tests::native_windows_drive_unc_and_verbatim_ancestry_preserves_boundaries"
+          )
+          $productListing = @(just with-lld cargo test --locked -p xtask --bin xtask product::canonical_inputs::tests:: -- --list)
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $productActual = @($productListing | Where-Object { $_ -match '^(.+): test$' } | ForEach-Object { $_ -replace ': test$', '' })
+          if ($productActual.Count -ne 4 -or @(Compare-Object $productExpected $productActual).Count -ne 0) { throw "native Windows product canonical-input selection differs from the four owning methods" }
+          $productListing | Write-Host
+          $productResult = @(just with-lld cargo test --locked -p xtask --bin xtask product::canonical_inputs::tests:: -- --test-threads=1)
+          if ($LASTEXITCODE -ne 0) { $productResult | Write-Host; exit $LASTEXITCODE }
+          $productResult | Write-Host
+          if (@($productResult | Where-Object { $_ -match '^test result: ok\. 4 passed; 0 failed; 0 ignored;' }).Count -ne 1) { throw "all four native Windows product canonical-input methods must pass without ignored tests" }
       - name: Build backend-neutral Windows release host with console
         timeout-minutes: 65
         id: host
