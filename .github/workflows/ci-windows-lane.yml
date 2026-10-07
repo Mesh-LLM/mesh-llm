@@ -215,6 +215,8 @@ jobs:
           test -x "${MESH_LLM_AUTOMATION_BIN:?candidate native automation required}"
           mkdir -p diagnostic-evidence/two-family
           # Refuse occupied private loopback listeners; never stop foreign owners.
+          # PowerShell expands these variables; Bash must preserve them literally.
+          # shellcheck disable=SC2016
           powershell -NoProfile -Command '$ErrorActionPreference="Stop"; $first=[int]$env:BASE_PORT; $owned=$first..($first+3); $busy=@([System.Net.NetworkInformation.IPGlobalProperties]::GetIPGlobalProperties().GetActiveTcpListeners() | Where-Object { $_.Port -in $owned }); if ($busy.Count -ne 0) { throw "diagnostic loopback port already occupied" }'
           tmp_parent="$(cygpath -u "$RUNNER_TEMP")"
           state_parent="$(mktemp -d "$tmp_parent/msXXXXXX")"
@@ -256,6 +258,8 @@ jobs:
           test -x "${MESH_LLM_AUTOMATION_BIN:?candidate native automation required}"
           mkdir -p diagnostic-evidence/two-family
           # Refuse occupied private loopback listeners; never stop foreign owners.
+          # PowerShell expands these variables; Bash must preserve them literally.
+          # shellcheck disable=SC2016
           powershell -NoProfile -Command '$ErrorActionPreference="Stop"; $first=[int]$env:BASE_PORT; $owned=$first..($first+3); $busy=@([System.Net.NetworkInformation.IPGlobalProperties]::GetIPGlobalProperties().GetActiveTcpListeners() | Where-Object { $_.Port -in $owned }); if ($busy.Count -ne 0) { throw "diagnostic loopback port already occupied" }'
           tmp_parent="$(cygpath -u "$RUNNER_TEMP")"
           state_parent="$(mktemp -d "$tmp_parent/msXXXXXX")"
@@ -297,6 +301,8 @@ jobs:
           test -x "${MESH_LLM_AUTOMATION_BIN:?candidate native automation required}"
           mkdir -p diagnostic-evidence/two-family
           # Refuse occupied private loopback listeners; never stop foreign owners.
+          # PowerShell expands these variables; Bash must preserve them literally.
+          # shellcheck disable=SC2016
           powershell -NoProfile -Command '$ErrorActionPreference="Stop"; $first=[int]$env:BASE_PORT; $owned=$first..($first+3); $busy=@([System.Net.NetworkInformation.IPGlobalProperties]::GetIPGlobalProperties().GetActiveTcpListeners() | Where-Object { $_.Port -in $owned }); if ($busy.Count -ne 0) { throw "diagnostic loopback port already occupied" }'
           tmp_parent="$(cygpath -u "$RUNNER_TEMP")"
           state_parent="$(mktemp -d "$tmp_parent/msXXXXXX")"
@@ -338,6 +344,8 @@ jobs:
           test -x "${MESH_LLM_AUTOMATION_BIN:?candidate native automation required}"
           mkdir -p diagnostic-evidence/two-family
           # Refuse occupied private loopback listeners; never stop foreign owners.
+          # PowerShell expands these variables; Bash must preserve them literally.
+          # shellcheck disable=SC2016
           powershell -NoProfile -Command '$ErrorActionPreference="Stop"; $first=[int]$env:BASE_PORT; $owned=$first..($first+3); $busy=@([System.Net.NetworkInformation.IPGlobalProperties]::GetIPGlobalProperties().GetActiveTcpListeners() | Where-Object { $_.Port -in $owned }); if ($busy.Count -ne 0) { throw "diagnostic loopback port already occupied" }'
           tmp_parent="$(cygpath -u "$RUNNER_TEMP")"
           state_parent="$(mktemp -d "$tmp_parent/msXXXXXX")"
