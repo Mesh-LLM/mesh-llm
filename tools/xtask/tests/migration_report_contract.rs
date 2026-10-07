@@ -5,6 +5,16 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
+// GNU coreutils uses a prefixed name on macOS and an unprefixed name on Linux.
+// Windows System32/timeout is a different program, never a compatible substitute.
+fn timeout_program() -> &'static str {
+    match std::env::consts::OS {
+        "macos" => "gtimeout",
+        "linux" => "/usr/bin/timeout",
+        platform => panic!("report CLI timeout fixture requires a native adapter for {platform}"),
+    }
+}
+
 struct Campaign {
     directory: PathBuf,
     _temporary: Option<tempfile::TempDir>,
@@ -46,7 +56,7 @@ impl Campaign {
         let case = self.directory.join(name);
         fs::create_dir(&case).unwrap();
         save(&case.join("input.json"), body);
-        let output = Command::new("gtimeout")
+        let output = Command::new(timeout_program())
             .args([
                 "-k",
                 "1",
@@ -76,7 +86,7 @@ impl Campaign {
 
     fn legacy(&self, name: &str, args: &[&str]) -> Output {
         let case = self.directory.join(name);
-        let output = Command::new("gtimeout")
+        let output = Command::new(timeout_program())
             .args([
                 "-k",
                 "1",
@@ -820,7 +830,7 @@ fn actual_producer_pair_preserves_four_gate_pairs() {
     for (pass, apply) in [("first", true), ("second", false)] {
         let report_path = campaign.directory.join(format!("{pass}.json"));
         assert!(!report_path.exists());
-        let mut command = Command::new("gtimeout");
+        let mut command = Command::new(timeout_program());
         command
             .args(["-k", "1", "30"])
             .arg(&tool)

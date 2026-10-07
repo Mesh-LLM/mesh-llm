@@ -45,6 +45,8 @@ pub(crate) mod manual_smoke;
 mod openai_exchange;
 pub(crate) mod openai_smoke_config;
 pub(crate) mod runtime_install;
+#[cfg(unix)]
+pub(crate) mod sdk_compat;
 pub(crate) mod sdk_fixture;
 pub(crate) mod stability;
 pub(crate) mod startup_recovery;

@@ -70,6 +70,32 @@ reports before readiness or artifact publication. Publication fixtures execute
 the real dependency projection against complete workspace metadata; fake Cargo
 is confined to metadata acquisition and publish transport.
 
+For isolated Unix whole-wrapper diagnostics, `automation sdk-compat run` owns
+execution of the current `scripts/ci-compat-smoke.sh`. Its named inputs include
+the exact product binary, runtime directory and model, the literal absolute SDK
+venv interpreter path, an explicit Node executable and OpenAI module directory,
+and fresh state/evidence locations. The wrapper must match the controller's
+compiled source; a controller built from a newer checkpoint may inspect an
+independently admitted older product without substituting that product's wrapper.
+Run command discovery through the existing Just facade:
+
+```bash
+just with-lld cargo xtool automation sdk-compat --help
+```
+
+The native owner supplies private HOME, config, runtime, cache and temporary
+paths only to its child environment, bounds the whole process and captures,
+retains the three Python SDK receipts and their captures, and admits success
+only after owned process and private-state cleanup. The shell parent's HOME
+is unchanged. OpenAI Python, LiteLLM, LangChain and the existing Node leaf keep
+their current SDK behavior and defaults; this owner installs no dependencies.
+Callers separately admit pinned dependencies and verify their declared seals
+before and after execution. Native input custody is not a complete SDK environment
+seal. Receipts retain `sdk_qualified=false`: source/fixture checks and a wrapper
+exit do not establish model, platform or SDK qualification. This available
+diagnostic owner does not claim that normal required callers have cut over or
+that protected bootstrap publication is complete.
+
 This is the checked-in implementation. Normative rules live in
 `.agents/skills/manage-ci/SKILL.md`; the factual inventory is in
 `.agents/skills/manage-ci/references/current-inventory.md`; the design record
@@ -682,6 +708,26 @@ callers still pin the old resolver and retain its Python implementation until
 rollout. Pre-checkout audit and no-checkout sentinel jobs must not build
 candidate code and remain blocked on protected delivery. Registry-pull summaries
 use the Rust owner. No provider, cache authority or required result changed.
+
+The seven former optional inline observations in `mesh/evals/ab-test.sh` and
+`skippy/evals/latency-benchmarking/{bench,bench-b2b}.sh` now use prepared or
+source-built native automation. `automation smoke-observation model-count`
+counts admitted Models JSON; `automation wan-observation tensor-split` emits
+checked allocation fractions, and `automation wan-observation latency-summary`
+projects measurement JSON to the existing TSV fields. The callers retain their
+failure and missing-field behavior. `migration_optional_observations` is selected
+by the normal Rust contract roster and `just ci-automation-contracts`. This
+language cutover does not qualify the research runtime or remove its separately
+classified proxy, measurement, or upstream reference interfaces.
+
+The five protected package resolver callers retain their published immutable
+legacy action pin. Native resolver fixtures bind all five package/generation
+inputs, platform conditions, batch correlation and admitted executable identity;
+they do not establish a published protected caller cutover. The separate 27
+pre-checkout audit callers retain the same rollout boundary. Exact retained SDK
+compatibility and isolated upstream interfaces remain governed by
+`ci/automation-migration/python-exceptions.json`; native source fixtures do not
+qualify their environments, datasets, or live model behavior.
 
 `tools/xtask/src/ci_plan` is the production source of slice eligibility. It reads the
 JSON-compatible YAML manifests `ci/ownership.yml` and `ci/slices.yml`, validates

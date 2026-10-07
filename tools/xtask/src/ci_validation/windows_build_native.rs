@@ -15,7 +15,7 @@ fn quote(value: &str) -> String {
 }
 fn execute(body: &str, cwd: &Path) -> process::ProcessReport {
     let body = format!(
-        "$fixturePhaseClock=[System.Diagnostics.Stopwatch]::StartNew(); [Console]::Error.WriteLine('windows-fixture build-body-begin ms='+$fixturePhaseClock.ElapsedMilliseconds); [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); $OutputEncoding = [Console]::OutputEncoding; {body}; [Console]::Error.WriteLine('windows-fixture build-body-complete ms='+$fixturePhaseClock.ElapsedMilliseconds)"
+        "$fixturePhaseClock=[System.Diagnostics.Stopwatch]::StartNew(); [Console]::Error.WriteLine('windows-fixture build-body-begin ms='+$fixturePhaseClock.ElapsedMilliseconds); $expectedCore=[System.IO.Path]::Combine($PSHOME,'Modules'); if (![string]::Equals($env:PSModulePath,$expectedCore,[StringComparison]::OrdinalIgnoreCase)) {{ throw 'fixture core module path mismatch' }}; $pathCommand=Get-Command -Name Test-Path -CommandType Cmdlet; if ($pathCommand.ModuleName -ne 'Microsoft.PowerShell.Management' -or ![string]::Equals($pathCommand.Module.ModuleBase,[System.IO.Path]::Combine($expectedCore,'Microsoft.PowerShell.Management'),[StringComparison]::OrdinalIgnoreCase)) {{ throw 'fixture Test-Path core module mismatch' }}; [Console]::Error.WriteLine('windows-fixture build-core-module-admitted ms='+$fixturePhaseClock.ElapsedMilliseconds); [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); $OutputEncoding = [Console]::OutputEncoding; {body}; [Console]::Error.WriteLine('windows-fixture build-body-complete ms='+$fixturePhaseClock.ElapsedMilliseconds)"
     );
     let system = std::env::var_os("SystemRoot").expect("Windows SystemRoot");
     let executable = PathBuf::from(system).join("System32/WindowsPowerShell/v1.0/powershell.exe");
@@ -23,7 +23,7 @@ fn execute(body: &str, cwd: &Path) -> process::ProcessReport {
         executable.is_file(),
         "native Windows PowerShell is required"
     );
-    let environment = [
+    let mut environment = [
         "SystemRoot",
         "WINDIR",
         "PATH",
@@ -36,6 +36,15 @@ fn execute(body: &str, cwd: &Path) -> process::ProcessReport {
     .into_iter()
     .filter_map(|key| std::env::var_os(key).map(|value| (key.into(), Value::Public(value))))
     .collect::<BTreeMap<_, _>>();
+    let core_modules = executable.parent().unwrap().join("Modules");
+    assert!(
+        core_modules.is_dir(),
+        "Windows PowerShell core modules required"
+    );
+    environment.insert(
+        "PSModulePath".into(),
+        Value::Public(core_modules.into_os_string()),
+    );
     let spec = ProcessSpec {
         executable,
         arguments: ["-NoProfile", "-NonInteractive", "-Command", body.as_str()]
