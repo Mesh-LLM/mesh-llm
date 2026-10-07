@@ -4,14 +4,13 @@ use std::{
     collections::BTreeMap,
     fs::{self, OpenOptions},
     io::{Read, Write},
-    num::NonZeroUsize,
     path::Path,
     time::Duration,
 };
 
 const SYMBOL: &str = "uniffi_meshllm_ffi_checksum_";
 const MAX_SWIFT: usize = 8 * 1024 * 1024;
-const MAX_DISASSEMBLY: usize = 128 * 1024 * 1024;
+mod disassembly;
 static TEMP_SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 pub(crate) fn run(args: &[String]) -> DynResult<()> {
@@ -45,8 +44,7 @@ fn synchronize(
     budget: Duration,
 ) -> DynResult<usize> {
     let original = read_swift(swift)?;
-    let disassembly = disassemble(executable, library, cancellation, budget)?;
-    let values = constants(&disassembly)?;
+    let values = disassemble(executable, library, cancellation, budget)?;
     let (replacement, count) = rewrite(&original, &values)?;
     if cancellation.is_cancelled() {
         return Err("Swift checksum synchronization cancelled before write".into());
@@ -60,8 +58,9 @@ fn disassemble(
     library: &Path,
     cancellation: &process::Cancellation,
     budget: Duration,
-) -> DynResult<String> {
-    let report = process::supervise_raw(
+) -> DynResult<BTreeMap<String, u16>> {
+    let mut facts = disassembly::Constants::new();
+    let report = process::supervise_projected(
         &process::ProcessSpec {
             executable: executable.to_path_buf(),
             arguments: vec![
@@ -81,27 +80,20 @@ fn disassemble(
             execution: budget,
             graceful_shutdown: Duration::from_secs(1),
             forced_shutdown: Duration::from_secs(1),
-            retained_bytes_per_stream: 4096,
+            retained_bytes_per_stream: 0,
             readiness: process::Readiness::None,
             completion: process::Completion::Exit,
         },
         cancellation,
-        process::RawCaptureOptions {
-            stdout: NonZeroUsize::new(MAX_DISASSEMBLY),
-            stderr: None,
-        },
+        &mut |line| facts.observe(line),
     )?;
-    if !report.process.success() {
-        return Err(format!(
-            "otool checksum disassembly failed: {:?}",
-            report.process.outcome
-        )
-        .into());
+    if !report.success()
+        || !report.stdout.line_capture_complete
+        || !report.stderr.line_capture_complete
+    {
+        return Err(format!("otool checksum disassembly failed: {:?}", report.outcome).into());
     }
-    let bytes = report
-        .stdout
-        .ok_or("otool did not return complete disassembly")?;
-    Ok(std::str::from_utf8(bytes.as_bytes())?.to_owned())
+    facts.finish()
 }
 
 fn instruction(line: &str) -> DynResult<(&str, &str)> {
@@ -118,7 +110,7 @@ fn instruction(line: &str) -> DynResult<(&str, &str)> {
         .map_or((text, ""), |(op, args)| (op, args.trim())))
 }
 
-fn return_constant(load: &str, exit: &str) -> DynResult<u16> {
+fn load_constant(load: &str) -> DynResult<u16> {
     let (operation, arguments) = instruction(load)?;
     let compact: String = arguments.chars().filter(|ch| !ch.is_whitespace()).collect();
     let immediate = if operation == "mov" {
@@ -132,10 +124,6 @@ fn return_constant(load: &str, exit: &str) -> DynResult<u16> {
         None
     }
     .ok_or("checksum symbol must return a constant in w0, ax or eax")?;
-    let (ret, operands) = instruction(exit)?;
-    if !matches!(ret, "ret" | "retq") || !operands.is_empty() {
-        return Err("checksum constant must be followed by return".into());
-    }
     let value = match immediate.strip_prefix("0x") {
         Some(hex) => u16::from_str_radix(hex, 16),
         None => immediate.parse::<u16>(),
@@ -143,41 +131,27 @@ fn return_constant(load: &str, exit: &str) -> DynResult<u16> {
     Ok(value)
 }
 
+#[cfg(test)]
+fn return_constant(load: &str, exit: &str) -> DynResult<u16> {
+    let value = load_constant(load)?;
+    let (ret, operands) = instruction(exit)?;
+    if !matches!(ret, "ret" | "retq") || !operands.is_empty() {
+        return Err("checksum constant must be followed by return".into());
+    }
+    Ok(value)
+}
+
+#[cfg(test)]
 fn constants(disassembly: &str) -> DynResult<BTreeMap<String, u16>> {
-    if disassembly.len() > MAX_DISASSEMBLY {
-        return Err("checksum disassembly exceeds 128 MiB".into());
+    let mut facts = disassembly::Constants::new();
+    for line in disassembly.lines() {
+        facts.observe(process::ObservedLine {
+            stream: process::Stream::Stdout,
+            bytes: line.as_bytes(),
+            ending: process::LineEnding::Lf,
+        });
     }
-    let mut lines = disassembly.lines();
-    let mut values = BTreeMap::new();
-    while let Some(line) = lines.next() {
-        let Some(name) = line
-            .trim()
-            .strip_prefix('_')
-            .and_then(|name| name.strip_suffix(':'))
-        else {
-            continue;
-        };
-        if !name.starts_with(SYMBOL) {
-            continue;
-        }
-        if name.len() > 512
-            || !name
-                .bytes()
-                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
-        {
-            return Err("invalid UniFFI checksum symbol".into());
-        }
-        let load = lines.next().ok_or("missing checksum constant")?;
-        let exit = lines.next().ok_or("missing checksum return")?;
-        let value = return_constant(load, exit)?;
-        if values.insert(name.to_owned(), value).is_some() {
-            return Err(format!("ambiguous duplicate checksum symbol: {name}").into());
-        }
-    }
-    if values.is_empty() {
-        return Err("otool output contains no UniFFI API checksum constants".into());
-    }
-    Ok(values)
+    facts.finish()
 }
 
 fn rewrite(swift: &str, values: &BTreeMap<String, u16>) -> DynResult<(String, usize)> {

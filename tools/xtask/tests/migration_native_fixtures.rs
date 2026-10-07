@@ -4,6 +4,16 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
+// GNU coreutils uses a prefixed name on macOS and an unprefixed name on Linux.
+// Windows System32/timeout is a different program, never a compatible substitute.
+fn timeout_program() -> &'static str {
+    match std::env::consts::OS {
+        "macos" => "gtimeout",
+        "linux" => "/usr/bin/timeout",
+        platform => panic!("report CLI timeout fixture requires a native adapter for {platform}"),
+    }
+}
+
 #[derive(Deserialize)]
 struct LegacyCases {
     cases: Vec<Case>,
@@ -36,7 +46,7 @@ fn overlay() -> serde_json::Value {
 }
 
 fn command(binary: &str) -> Command {
-    let mut command = Command::new("gtimeout");
+    let mut command = Command::new(timeout_program());
     command.args(["-k", "1", "5", binary]);
     command
 }
