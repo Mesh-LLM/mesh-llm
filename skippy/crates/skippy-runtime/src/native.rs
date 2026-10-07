@@ -130,30 +130,15 @@ fn classify_model_state(recurrent: bool, hybrid: bool, diffusion: bool) -> Model
     }
 }
 
-/// Architectures that build a separate indexer memory tier on top of their
-/// attention/recurrent state. Mirrors the upstream `needs_mem_idx` allowlist
-/// (llama-model.cpp); extend this alongside that expression when upstream adds
-/// indexer architectures. Indexer state is only covered by full-state
-/// snapshots, so these models must not serve lossy KV-page/recurrent snapshots.
-const INDEXER_MEMORY_ARCHITECTURES: &[&str] = &["qwen4exp"];
-
-/// Reads the model's GGUF `general.architecture` value. `None` means the
-/// native runtime does not export the metadata accessor or the key is absent;
-/// architecture-dependent capability flags must fail closed in that case.
-fn model_architecture(model: *const skippy_ffi::Opaque) -> Option<String> {
-    unsafe { skippy_ffi::llama_model_meta_val_str(model, "general.architecture") }
-}
-
 fn capability_from_state_probes(
     recurrent: Option<bool>,
     hybrid: Option<bool>,
     diffusion: Option<bool>,
-    architecture: Option<&str>,
+    cache_bits: u32,
 ) -> Option<LoadedModelCapability> {
     Some(LoadedModelCapability {
         state_kind: classify_model_state(recurrent?, hybrid?, diffusion?),
-        has_indexer_memory: architecture
-            .is_some_and(|arch| INDEXER_MEMORY_ARCHITECTURES.contains(&arch)),
+        cache_capabilities: crate::MemoryCacheCapabilities::from_native_bits(cache_bits),
     })
 }
 
@@ -162,12 +147,11 @@ fn loaded_model_capability(raw: *mut RawModel) -> Option<LoadedModelCapability> 
     if model.is_null() {
         return None;
     }
-    let architecture = model_architecture(model);
     capability_from_state_probes(
         unsafe { skippy_ffi::llama_model_is_recurrent(model) },
         unsafe { skippy_ffi::llama_model_is_hybrid(model) },
         unsafe { skippy_ffi::llama_model_is_diffusion(model) },
-        architecture.as_deref(),
+        unsafe { skippy_ffi::skippy_model_memory_cache_capabilities(raw) },
     )
 }
 
@@ -700,14 +684,17 @@ impl StageModel {
     ///
     /// The batched path slices exports by request offset out of the last
     /// native microbatch, so it is only sound while the whole iteration is one
-    /// microbatch. Attention memory with a unified KV cache satisfies that. A
-    /// recurrent or hybrid model splits an all-output batch by sequence
-    /// (`split_seq`) and an indexer memory tier is not part of that contract,
-    /// so both fail closed here and run one request at a time instead.
+    /// microbatch. This branch rejects `kv_unified = false` in
+    /// `RuntimeConfig::validate`, and native model loading always enables the
+    /// shared KV pool. #2238 permits non-unified KV only when a multi-lane
+    /// activation-exporting stage is rejected at model open; a single lane
+    /// cannot batch requests. Recurrent and hybrid memory, including the
+    /// qwen4exp indexer, splits an all-output batch by sequence (`split_seq`),
+    /// so those models run one request at a time instead.
+    /// Snapshot export support is a separate contract and is not consulted.
     fn supports_batched_activation_exports(&self) -> bool {
-        self.capability().is_some_and(|capability| {
-            capability.state_kind == ModelStateKind::Dense && !capability.has_indexer_memory
-        })
+        self.capability()
+            .is_some_and(|capability| capability.state_kind == ModelStateKind::Dense)
     }
 
     pub fn apply_chat_template(
@@ -1278,37 +1265,26 @@ mod output_capacity_tests {
 
     #[test]
     fn missing_native_state_probe_fails_capability_closed() {
-        assert!(capability_from_state_probes(None, Some(false), Some(false), None).is_none());
-        assert!(capability_from_state_probes(Some(false), None, Some(false), None).is_none());
-        assert!(capability_from_state_probes(Some(false), Some(false), None, None).is_none());
-        assert_eq!(
-            capability_from_state_probes(Some(true), Some(true), Some(false), Some("qwen4exp"))
-                .expect("all native probes are present")
-                .state_kind,
-            ModelStateKind::Hybrid
-        );
+        assert!(capability_from_state_probes(None, Some(false), Some(false), 0).is_none());
+        assert!(capability_from_state_probes(Some(false), None, Some(false), 0).is_none());
+        assert!(capability_from_state_probes(Some(false), Some(false), None, 0).is_none());
     }
 
     #[test]
-    fn indexer_memory_flag_follows_the_upstream_architecture_allowlist() {
-        // qwen4exp builds the QSA indexer memory (upstream needs_mem_idx).
-        let capability =
-            capability_from_state_probes(Some(true), Some(true), Some(false), Some("qwen4exp"))
-                .expect("all native probes are present");
-        assert!(capability.has_indexer_memory);
-
-        // Every other architecture stays exact-state-free...
-        for arch in ["llama4", "qwen3", "gemma3", "nemotron_h", ""] {
+    fn cache_capabilities_follow_loaded_memory_not_architecture() {
+        for (bits, resident, kv_recurrent) in [
+            (0, false, false),
+            (1, true, false),
+            (2, false, true),
+            (3, true, true),
+        ] {
             let capability =
-                capability_from_state_probes(Some(true), Some(true), Some(false), Some(arch))
-                    .expect("all native probes are present");
-            assert!(!capability.has_indexer_memory, "{arch} must not be flagged");
+                capability_from_state_probes(Some(false), Some(true), Some(false), bits)
+                    .expect("native probes available");
+            assert_eq!(capability.state_kind, ModelStateKind::Hybrid);
+            assert_eq!(capability.cache_capabilities.resident, resident);
+            assert_eq!(capability.cache_capabilities.kv_recurrent, kv_recurrent);
         }
-
-        // ...and a runtime without the metadata probe fails closed to false.
-        let capability = capability_from_state_probes(Some(true), Some(true), Some(false), None)
-            .expect("all native probes are present");
-        assert!(!capability.has_indexer_memory);
     }
 
     #[test]

@@ -290,6 +290,10 @@ pub struct StageConfig {
     pub resident_tensor_names: Vec<String>,
     /// Opaque native dependency contract, reproduced and checked during admission.
     pub execution_contract: String,
+    /// State shape from the admitted graph and package. Empty for legacy
+    /// stage configurations, which cannot authorize a partial KV payload.
+    #[serde(default)]
+    pub kv_graph_state: String,
     /// Planner value identities imported by this stage, in native frontier order.
     #[serde(default)]
     pub activation_import_identities: Vec<String>,

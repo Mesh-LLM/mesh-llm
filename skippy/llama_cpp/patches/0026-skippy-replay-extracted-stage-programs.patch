@@ -1,4 +1,4 @@
-From d3c3791c192e2d44eb68834fcd87e8a109d4a7ea Mon Sep 17 00:00:00 2001
+From 78719eeff91c4f458962a5cffef01932532a76c7 Mon Sep 17 00:00:00 2001
 From: James Dumay <jameswdumay@gmail.com>
 Date: Fri, 25 Sep 2026 06:30:38 +1000
 Subject: [PATCH 26/67] skippy: replay extracted stage programs
@@ -21,6 +21,7 @@ Subject: [PATCH 26/67] skippy: replay extracted stage programs
  src/models/delta-net-base.cpp                 | 120 ++-
  src/models/kimi-linear.cpp                    | 111 ++-
  src/models/laguna.cpp                         |   9 +
+ src/models/lfm2.cpp                           |  25 +-
  src/models/mamba-base.cpp                     | 194 +++-
  src/models/mimo2.cpp                          |   7 +
  src/models/minicpm3.cpp                       |  28 +-
@@ -46,7 +47,7 @@ Subject: [PATCH 26/67] skippy: replay extracted stage programs
  src/skippy/stage_program_internal.h           |  45 +
  src/skippy/stage_program_outputs.cpp          |  61 ++
  src/skippy/stage_program_outputs.h            |  27 +
- src/skippy/stage_program_replay.cpp           | 594 ++++++++++++
+ src/skippy/stage_program_replay.cpp           | 605 ++++++++++++
  src/skippy/stage_program_token_axis.cpp       | 195 ++++
  src/skippy/stage_realization.cpp              |  82 +-
  src/skippy/stage_realization.h                |   1 +
@@ -58,7 +59,7 @@ Subject: [PATCH 26/67] skippy: replay extracted stage programs
  .../tests/renamed_multishard_planning.cpp     | 223 ++++-
  src/skippy/tests/stage_program_parity.h       | 374 ++++++++
  tests/test-llama-archs.cpp                    |  39 +
- 54 files changed, 8010 insertions(+), 265 deletions(-)
+ 55 files changed, 8042 insertions(+), 269 deletions(-)
  create mode 100644 src/skippy/stage_program.cpp
  create mode 100644 src/skippy/stage_program.h
  create mode 100644 src/skippy/stage_program_extraction.cpp
@@ -3121,6 +3122,49 @@ index 2bc4fa8a0..f78b86f7f 100644
              } else {
                  cur = ggml_mul(ctx0, cur, gate);
              }
+diff --git a/src/models/lfm2.cpp b/src/models/lfm2.cpp
+index 9a7eadd24..8b0d5bebb 100644
+--- a/src/models/lfm2.cpp
++++ b/src/models/lfm2.cpp
+@@ -213,10 +213,24 @@ llama_model_lfm2::graph<iswa>::graph(const llama_model & model, const llm_graph_
+         for (int64_t slot = 0; slot < n_written; ++slot) {
+             auto * conv_snap = ggml_view_3d(ctx0, bx, d_conv, bx->ne[1], bx->ne[2], bx->nb[1], bx->nb[2],
+                                             (bx->ne[0] - d_conv - slot) * ggml_element_size(bx));
+-            ggml_tensor * conv_write = ggml_cpy(ctx0, conv_snap,
+-                                                   ggml_view_2d(ctx0, conv_state, (int64_t) d_conv * n_embd, n_seqs,
+-                                                                conv_state->nb[1],
+-                                                                ((size_t) slot * mem_size + kv_head) * row_size));
++            auto conv_snap_geometry = skippy_stage_geometry_static(conv_snap);
++            conv_snap_geometry.dimensions[2] = skippy_stage_geometry_expression::sequences();
++            conv_snap_geometry.byte_strides[1] = skippy_stage_geometry_expression::source_stride(0, 1);
++            conv_snap_geometry.byte_strides[2] = skippy_stage_geometry_expression::source_stride(0, 2);
++            conv_snap_geometry.view_offset = skippy_stage_geometry_expression::tokens_per_sequence_clamped(
++                    -slot, ggml_element_size(bx),
++                    (bx->ne[0] - d_conv - n_seq_tokens) * ggml_element_size(bx));
++            skippy_stage_geometry_note(conv_snap, conv_snap_geometry);
++
++            auto * conv_destination = ggml_view_2d(ctx0, conv_state, (int64_t) d_conv * n_embd, n_seqs,
++                    conv_state->nb[1], ((size_t) slot * mem_size + kv_head) * row_size);
++            auto conv_destination_geometry = skippy_stage_geometry_static(conv_destination);
++            conv_destination_geometry.dimensions[1] = skippy_stage_geometry_expression::sequences();
++            conv_destination_geometry.byte_strides[1] = skippy_stage_geometry_expression::source_stride(0, 1);
++            conv_destination_geometry.view_offset = skippy_stage_geometry_expression::recurrent_head_offset(
++                    0, 1, slot * mem_size * static_cast<int64_t>(row_size));
++            skippy_stage_geometry_note(conv_destination, conv_destination_geometry);
++            ggml_tensor * conv_write = ggml_cpy(ctx0, conv_snap, conv_destination);
+             ggml_build_forward_expand(gf, conv_write);
+             state_write(skippy_state_kind::recurrent_conv, conv_state, conv_write, il);
+         }
+@@ -230,6 +244,9 @@ llama_model_lfm2::graph<iswa>::graph(const llama_model & model, const llm_graph_
+         cb(y, "model.layers.{}.conv.out_proj", il);
+         // {n_embd, n_seq_tokens, n_seqs} => {n_embd, n_tokens}
+         y = ggml_reshape_2d(ctx0, y, y->ne[0], n_seq_tokens * n_seqs);
++        auto flattened_geometry = skippy_stage_geometry_static(y);
++        flattened_geometry.dimensions[1] = skippy_stage_geometry_expression::tokens();
++        skippy_stage_geometry_note(y, flattened_geometry);
+ 
+         return y;
+     };
 diff --git a/src/models/mamba-base.cpp b/src/models/mamba-base.cpp
 index 2d17560e8..01ad85449 100644
 --- a/src/models/mamba-base.cpp
@@ -8047,10 +8091,10 @@ index 000000000..eceba28ba
 +};
 diff --git a/src/skippy/stage_program_replay.cpp b/src/skippy/stage_program_replay.cpp
 new file mode 100644
-index 000000000..ba358c579
+index 000000000..3c98342e5
 --- /dev/null
 +++ b/src/skippy/stage_program_replay.cpp
-@@ -0,0 +1,594 @@
+@@ -0,0 +1,605 @@
 +#include "stage_program.h"
 +
 +#include "stage_slice_plan.h"
@@ -8477,6 +8521,17 @@ index 000000000..ba358c579
 +            }
 +            break;
 +        case GGML_OP_CPY:
++            if (sources[1] != nullptr && ggml_nelements(sources[0]) != ggml_nelements(sources[1])) {
++                const auto shape = [](const ggml_tensor * value) {
++                    return std::to_string(value->ne[0]) + "x" + std::to_string(value->ne[1]) + "x" +
++                            std::to_string(value->ne[2]) + "x" + std::to_string(value->ne[3]);
++                };
++                error = "stage program CPY geometry mismatch for " + operation.name +
++                        " (" + operation.value_id + ") source=" + operation.sources[0] +
++                        " shape=" + shape(sources[0]) + " destination=" + operation.sources[1] +
++                        " shape=" + shape(sources[1]);
++                return nullptr;
++            }
 +            tensor = sources[1] == nullptr
 +                    ? ggml_cast(context, sources[0], static_cast<ggml_type>(operation.type))
 +                    : ggml_cpy(context, sources[0], sources[1]);

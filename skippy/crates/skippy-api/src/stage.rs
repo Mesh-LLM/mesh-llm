@@ -198,6 +198,7 @@ pub fn single_stage_config(
         cache_idle_slots: options.cache_idle_slots,
         resident_tensor_names: Vec::new(),
         execution_contract: String::new(),
+        kv_graph_state: String::new(),
         activation_import_identities: Vec::new(),
         activation_import_bindings: Vec::new(),
         activation_export_identities: Vec::new(),
@@ -220,6 +221,66 @@ pub fn single_stage_config(
         .kv_cache
         .clone()
         .or_else(|| family_policy.stage_kv_cache_config_for_stage(&config));
+    Ok(config)
+}
+
+/// Carry independently admitted native graph state into a direct-GGUF stage.
+/// A missing source or unavailable graph plan leaves the legacy full-state
+/// default in place; neither can authorize a partial snapshot.
+pub fn single_stage_config_with_graph_evidence(
+    options: &SingleStageOptions,
+    identity: crate::package::SkippyPackageIdentity,
+    run_id: String,
+) -> Result<StageConfig> {
+    let mut config = single_stage_config(options, identity.clone().into(), run_id)?;
+    if identity.package_ref.starts_with("safetensors://") || !identity.source_model_path.is_file() {
+        return Ok(config);
+    }
+
+    let Ok(lanes) = u32::try_from(options.generation_concurrency) else {
+        return Ok(config);
+    };
+    let Some(batched) = lanes.checked_mul(8) else {
+        return Ok(config);
+    };
+    let profiles = [
+        crate::stage_admission::StagePlannerProfile {
+            profile_id: "batched".into(),
+            n_tokens: batched,
+            n_sequences: lanes,
+            n_outputs: batched,
+            n_recurrent_rollback_sequences: 0,
+        },
+        crate::stage_admission::StagePlannerProfile {
+            profile_id: "decode".into(),
+            n_tokens: lanes,
+            n_sequences: lanes,
+            n_outputs: lanes,
+            n_recurrent_rollback_sequences: 0,
+        },
+        crate::stage_admission::StagePlannerProfile {
+            profile_id: "prefill".into(),
+            n_tokens: 8,
+            n_sequences: 1,
+            n_outputs: 8,
+            n_recurrent_rollback_sequences: 0,
+        },
+    ];
+    let range = [(config.layer_start, config.layer_end)];
+    match crate::stage_admission::realize_direct_gguf_stage_admissions(
+        &options.model_id,
+        &identity,
+        &range,
+        &profiles,
+        "skippy-graph-configuration:v1:single-stage",
+        "skippy-backend:single-stage:v1",
+    ) {
+        Ok(admissions) if admissions.len() == 1 => {
+            config.kv_graph_state = admissions[0].kv_graph_state.clone();
+        }
+        Ok(_) => tracing::debug!("single-stage graph admission returned no unique stage"),
+        Err(error) => tracing::debug!(%error, "single-stage graph evidence unavailable"),
+    }
     Ok(config)
 }
 

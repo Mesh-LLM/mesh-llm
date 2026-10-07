@@ -24,7 +24,7 @@ use crate::frontend::speculative::{SpeculativeDecodeConfig, standalone_ngram_pro
 use crate::kv_integration::KvStageIntegration;
 use crate::listener::bind_serve_listener;
 use crate::runtime_state::RuntimeState;
-use crate::runtime_state::{loaded_model_has_indexer_memory, loaded_model_state_kind};
+use crate::runtime_state::{loaded_memory_cache_capabilities, loaded_model_state_kind};
 use crate::telemetry::Telemetry;
 use crate::telemetry::lifecycle_attrs;
 use crate::telemetry::now_unix_nanos;
@@ -321,11 +321,20 @@ fn embedded_openai_backend_with_scheduler(
     let kv = KvStageIntegration::from_loaded_model_with_l3_manager(
         &args.config,
         loaded_model_state_kind(Some(&args.runtime)),
-        loaded_model_has_indexer_memory(Some(&args.runtime)),
+        loaded_memory_cache_capabilities(Some(&args.runtime)),
         args.l3_manager.clone(),
         args.kv_lifecycle_observer.clone(),
     )?
     .map(Arc::new);
+    if let Some(kv) = kv.as_ref() {
+        let mut attrs = lifecycle_attrs(&args.config);
+        attrs.extend(
+            kv.attrs()
+                .into_iter()
+                .map(|(key, value)| (key.to_owned(), value)),
+        );
+        args.telemetry.emit("stage.kv_payload_selected", attrs);
+    }
     let ctx_size = usize::try_from(args.config.ctx_size).unwrap_or(usize::MAX);
     let iteration_scheduler = match iteration_scheduler {
         Some(iteration_scheduler) => iteration_scheduler,

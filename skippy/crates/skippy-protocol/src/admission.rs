@@ -14,6 +14,9 @@ pub struct StageAdmissionDescriptor {
     pub resident_tensor_ids: Vec<String>,
     pub sidecars: Vec<StageAdmissionSidecar>,
     pub profiles: Vec<StageAdmissionProfile>,
+    /// State shape derived from all admitted graph profiles. Empty means an
+    /// older planner did not provide graph evidence.
+    pub kv_graph_state: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
@@ -55,6 +58,7 @@ impl From<StageAdmissionDescriptor> for crate::proto::stage::StageAdmissionDescr
             resident_tensor_ids: descriptor.resident_tensor_ids,
             sidecars: descriptor.sidecars.into_iter().map(Into::into).collect(),
             profiles: descriptor.profiles.into_iter().map(Into::into).collect(),
+            kv_graph_state: descriptor.kv_graph_state,
         }
     }
 }
@@ -80,6 +84,7 @@ impl TryFrom<crate::proto::stage::StageAdmissionDescriptor> for StageAdmissionDe
                 .map(TryInto::try_into)
                 .collect::<Result<_, _>>()?,
             profiles: descriptor.profiles.into_iter().map(Into::into).collect(),
+            kv_graph_state: descriptor.kv_graph_state,
         })
     }
 }
@@ -184,6 +189,7 @@ mod tests {
                 activation_import_bindings: vec![],
                 activation_export_bindings: vec![],
             }],
+            kv_graph_state: "dense".into(),
         };
         let wire: crate::proto::stage::StageAdmissionDescriptor = descriptor.clone().into();
         let bytes = wire.encode_to_vec();

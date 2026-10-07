@@ -61,4 +61,16 @@ fn real_direct_model_admits_two_stages_with_exact_tensor_and_frontier_bindings()
         first.activation_export_bindings,
         second.activation_import_bindings
     );
+
+    let options = skippy_api::SingleStageOptions::new("pinned-model", &path);
+    let single = skippy_api::single_stage_config_with_graph_evidence(
+        &options,
+        identity,
+        "single-stage-graph-test".into(),
+    )
+    .unwrap();
+    assert!(matches!(
+        single.kv_graph_state.as_str(),
+        "dense" | "recurrent" | "full-state"
+    ));
 }
