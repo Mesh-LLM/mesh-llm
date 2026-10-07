@@ -143,7 +143,12 @@ async fn run_rediscovery_tick(
         return;
     }
 
-    let candidates = rank_rediscovery_candidates(&filtered);
+    let candidates =
+        viable_rediscovery_candidates(rank_rediscovery_candidates(&filtered), mesh_name);
+    if candidates.is_empty() {
+        report_no_rediscovery_meshes(mesh_name, alone_since);
+        return;
+    }
     let our_mesh_id = node.mesh_id().await;
     if try_rejoin_rediscovery_candidates(node, &candidates, our_mesh_id.as_deref()).await {
         *alone_since = None;
@@ -245,6 +250,14 @@ async fn discover_lan_rediscovery_candidates(
     Some(candidates)
 }
 
+/// Select which Nostr listings a lonely node may re-join.
+///
+/// Mirrors the candidate gate `nostr::smart_auto` applies on the initial
+/// `--auto` join: an explicit `--mesh-name` opts into exactly that name, while
+/// an unnamed `--auto` node only ever follows the community mesh
+/// (`nostr::is_auto_eligible`). Listing fields come from untrusted Nostr
+/// events, so without this gate any publisher could name a mesh and become the
+/// rejoin target for every auto node that briefly lost its peers.
 fn filter_rediscovery_meshes<'a>(
     meshes: &'a [nostr::DiscoveredMesh],
     mesh_name: Option<&str>,
@@ -254,8 +267,23 @@ fn filter_rediscovery_meshes<'a>(
             .iter()
             .filter(|mesh| rediscovery_mesh_name_matches(mesh, name))
             .collect(),
-        None => meshes.iter().collect(),
+        None => meshes
+            .iter()
+            .filter(|mesh| nostr::is_auto_eligible(mesh))
+            .collect(),
     }
+}
+
+/// Drop full or otherwise non-viable community meshes, as `smart_auto` does.
+/// An explicit `--mesh-name` keeps every name match: the operator asked for it.
+fn viable_rediscovery_candidates<'a>(
+    ranked: Vec<(&'a nostr::DiscoveredMesh, i64)>,
+    mesh_name: Option<&str>,
+) -> Vec<(&'a nostr::DiscoveredMesh, i64)> {
+    if mesh_name.is_some() {
+        return ranked;
+    }
+    ranked.into_iter().filter(|(_, score)| *score > 0).collect()
 }
 
 fn rediscovery_mesh_name_matches(mesh: &nostr::DiscoveredMesh, name: &str) -> bool {
@@ -524,5 +552,68 @@ mod tests {
         let ranked = rank_lan_rediscovery_candidates(&candidates);
 
         assert_eq!(ranked[0].0.publisher_npub, "mdns:large");
+    }
+
+    #[test]
+    fn nostr_rediscovery_without_mesh_name_only_considers_community_meshes() {
+        // SECURITY (loupe #27): an --auto node started without --mesh-name must
+        // re-discover only the community mesh (unnamed or "mesh-llm"), exactly
+        // like smart_auto's is_auto_eligible gate on the initial join. Listing
+        // names are attacker-controlled Nostr content, so any other named mesh
+        // must never become a rejoin target.
+        let mut community = rediscovery_mesh("npub-community", Some("mesh-community"), 2);
+        community.listing.name = None;
+        let mut blessed = rediscovery_mesh("npub-blessed", Some("mesh-blessed"), 2);
+        blessed.listing.name = Some("Mesh-LLM".to_string());
+        let mut attacker = rediscovery_mesh("npub-attacker", Some("mesh-attacker"), 9);
+        attacker.listing.name = Some("evil-corp".to_string());
+
+        let meshes = vec![community, attacker, blessed];
+        let filtered = filter_rediscovery_meshes(&meshes, None);
+
+        let publishers: Vec<&str> = filtered
+            .iter()
+            .map(|mesh| mesh.publisher_npub.as_str())
+            .collect();
+        assert_eq!(publishers, vec!["npub-community", "npub-blessed"]);
+        assert!(filtered.iter().all(|mesh| nostr::is_auto_eligible(mesh)));
+    }
+
+    #[test]
+    fn nostr_rediscovery_with_mesh_name_keeps_only_that_name() {
+        let mut community = rediscovery_mesh("npub-community", Some("mesh-community"), 2);
+        community.listing.name = None;
+        let lab = rediscovery_mesh("npub-lab", Some("mesh-lab"), 1);
+        let mut other = rediscovery_mesh("npub-other", Some("mesh-other"), 9);
+        other.listing.name = Some("evil-corp".to_string());
+
+        let meshes = vec![community, lab, other];
+        let filtered = filter_rediscovery_meshes(&meshes, Some("LAB"));
+
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].publisher_npub, "npub-lab");
+    }
+
+    #[test]
+    fn nostr_rediscovery_without_mesh_name_skips_full_meshes() {
+        // smart_auto requires a positive score for unnamed --auto joins; a
+        // full mesh scores -1000 and is skipped. Rediscovery must match.
+        let mut full = rediscovery_mesh("npub-full", Some("mesh-full"), 2);
+        full.listing.name = None;
+        full.listing.client_count = full.listing.max_clients;
+        let mut open = rediscovery_mesh("npub-open", Some("mesh-open"), 2);
+        open.listing.name = None;
+
+        let filtered = vec![&full, &open];
+        let ranked = rank_rediscovery_candidates(&filtered);
+        assert!(ranked.iter().any(|(_, score)| *score <= 0));
+
+        let viable = viable_rediscovery_candidates(ranked.clone(), None);
+        assert_eq!(viable.len(), 1);
+        assert_eq!(viable[0].0.publisher_npub, "npub-open");
+
+        // An explicit --mesh-name keeps every name match, as smart_auto does.
+        let pinned = viable_rediscovery_candidates(ranked, Some("lab"));
+        assert_eq!(pinned.len(), 2);
     }
 }
