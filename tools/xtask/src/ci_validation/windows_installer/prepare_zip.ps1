@@ -7,10 +7,16 @@ if (![string]::Equals([System.IO.Path]::GetFullPath($env:MESH_WINDOWS_FIXTURE_CO
 # before any cmdlet can trigger module autoload. Never accept ambient modules.
 $env:PSModulePath = $expectedCore
 if (![string]::Equals($env:PSModulePath, $expectedCore, [StringComparison]::OrdinalIgnoreCase)) { throw 'fixture core module path mismatch' }
-foreach ($binding in @(@('Get-FileHash', 'Microsoft.PowerShell.Utility'), @('Test-Path', 'Microsoft.PowerShell.Management'))) {
-    $command = Get-Command -Name $binding[0] -CommandType Cmdlet
-    if ($command.ModuleName -ne $binding[1] -or ![string]::Equals($command.Module.ModuleBase, [System.IO.Path]::Combine($expectedCore, $binding[1]), [StringComparison]::OrdinalIgnoreCase)) { throw "fixture core cmdlet mismatch: $($binding[0])" }
-}
+# Windows PowerShell 5.1 exports Get-FileHash as a Utility script function.
+# Binary Management cmdlets are implemented by the DLL in PSHOME; their
+# ModuleBase need not be the manifest directory under PSHOME/Modules.
+$hashCommand = Get-Command -Name Get-FileHash -CommandType Function -ErrorAction Stop
+[Console]::Error.WriteLine('windows-fixture hash-command kind=' + $hashCommand.CommandType + ' module=' + $hashCommand.ModuleName + ' base=' + $hashCommand.Module.ModuleBase)
+if ($hashCommand.ModuleName -ne 'Microsoft.PowerShell.Utility' -or ![string]::Equals($hashCommand.Module.ModuleBase, [System.IO.Path]::Combine($expectedCore, 'Microsoft.PowerShell.Utility'), [StringComparison]::OrdinalIgnoreCase)) { throw 'fixture Get-FileHash native function mismatch' }
+$pathCommand = Get-Command -Name Test-Path -CommandType Cmdlet -ErrorAction Stop
+$managementAssembly = [System.IO.Path]::Combine($PSHOME, 'Microsoft.PowerShell.Commands.Management.dll')
+[Console]::Error.WriteLine('windows-fixture path-command kind=' + $pathCommand.CommandType + ' module=' + $pathCommand.ModuleName + ' assembly=' + $pathCommand.ImplementingType.Assembly.Location)
+if ($pathCommand.ModuleName -ne 'Microsoft.PowerShell.Management' -or ![string]::Equals($pathCommand.ImplementingType.Assembly.Location, $managementAssembly, [StringComparison]::OrdinalIgnoreCase)) { throw 'fixture Test-Path native assembly mismatch' }
 [Console]::Error.WriteLine('windows-fixture prepare-core-modules-admitted ms=' + $fixturePhaseClock.ElapsedMilliseconds)
 [Console]::Error.WriteLine('windows-fixture prepare-hash-begin ms=' + $fixturePhaseClock.ElapsedMilliseconds)
 if ((Get-FileHash -LiteralPath $Source -Algorithm SHA256).Hash.ToLowerInvariant() -ne $SourceSha256) { throw 'installer snapshot digest mismatch' }

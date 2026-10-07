@@ -90,7 +90,10 @@ fn selected_root_and_fixed_argv_when_real_mode_discovers_metadata() {
     let record: Invocation =
         serde_json::from_slice(&std::fs::read(root.path().join("invocation.json")).unwrap())
             .unwrap();
-    assert_eq!(record.cwd, root.path().canonicalize().unwrap());
+    assert_eq!(
+        record.cwd.canonicalize().unwrap(),
+        root.path().canonicalize().unwrap()
+    );
     assert_eq!(
         record.argv,
         ["metadata", "--locked", "--no-deps", "--format-version=1"]
@@ -277,7 +280,10 @@ fn windows_extensionless_cargo_resolves_native_exe_with_fixed_metadata_contract(
         record.argv,
         ["metadata", "--locked", "--no-deps", "--format-version=1"]
     );
-    assert_eq!(record.cwd, root.path().canonicalize().unwrap());
+    assert_eq!(
+        record.cwd.canonicalize().unwrap(),
+        root.path().canonicalize().unwrap()
+    );
 }
 
 #[cfg(windows)]
