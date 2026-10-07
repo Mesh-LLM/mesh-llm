@@ -9,6 +9,136 @@ pub struct GossipFrame {
     /// must be exactly 32 bytes; must match QUIC peer identity
     #[prost(bytes = "vec", tag = "3")]
     pub sender_id: ::prost::alloc::vec::Vec<u8>,
+    /// Node records signed by the node they describe and relayed byte-for-byte.
+    /// Additive: older nodes ignore this field and keep reading `peers`, which
+    /// newer nodes still populate for them.
+    #[prost(message, repeated, tag = "4")]
+    pub signed_records: ::prost::alloc::vec::Vec<SignedNodeRecord>,
+    /// Cache-affinity evidence signed by the node it describes, relayed
+    /// byte-for-byte alongside its node record. Additive: older nodes keep
+    /// reading PeerAnnouncement.cache_affinity, which newer nodes still send.
+    #[prost(message, repeated, tag = "5")]
+    pub signed_cache_affinity: ::prost::alloc::vec::Vec<SignedCacheAffinity>,
+}
+/// A node's self-description, signed with its endpoint key. Relays store and
+/// forward `signed` and `signature` unchanged; they never re-encode them.
+///
+///    signed    = endpoint_id\[32\] || seq\[8, u64 BE\] || issued_at_unix_ms\[8, u64 BE\]
+///                || NodeRecord protobuf bytes
+///    signature = Ed25519(endpoint key, "mesh-llm-node-record-v1\0" || signed)
+///
+/// Every header field has a fixed width and the record is the only
+/// variable-length part, so the layout needs no length prefixes. A new layout
+/// gets a new domain tag. The highest `seq` per node wins; `issued_at_unix_ms`
+/// bounds how long relays keep forwarding a record.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct SignedNodeRecord {
+    #[prost(bytes = "vec", tag = "1")]
+    pub signed: ::prost::alloc::vec::Vec<u8>,
+    /// exactly 64 bytes
+    #[prost(bytes = "vec", tag = "2")]
+    pub signature: ::prost::alloc::vec::Vec<u8>,
+    /// Unsigned. What the sending hop observed about the node; replaced at
+    /// every hop because each relay measures its own view.
+    #[prost(message, optional, tag = "3")]
+    pub hop: ::core::option::Option<HopObservation>,
+}
+/// The same envelope as SignedNodeRecord, signed under
+/// "mesh-llm-cache-affinity-record-v1\0" with a CacheAffinityAdvertisement as
+/// the body. Relays drop it once it is older than the advertisement TTL.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct SignedCacheAffinity {
+    #[prost(bytes = "vec", tag = "1")]
+    pub signed: ::prost::alloc::vec::Vec<u8>,
+    /// exactly 64 bytes
+    #[prost(bytes = "vec", tag = "2")]
+    pub signature: ::prost::alloc::vec::Vec<u8>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct HopObservation {
+    #[prost(uint32, optional, tag = "1")]
+    pub latency_ms: ::core::option::Option<u32>,
+    #[prost(enumeration = "LatencySource", optional, tag = "2")]
+    pub latency_source: ::core::option::Option<i32>,
+    #[prost(uint32, optional, tag = "3")]
+    pub latency_age_ms: ::core::option::Option<u32>,
+    /// 32 bytes when set
+    #[prost(bytes = "vec", tag = "4")]
+    pub latency_observer_id: ::prost::alloc::vec::Vec<u8>,
+}
+/// Only facts the node asserts about itself. Fields a hop measures, fields
+/// derived from other fields, and deprecated compatibility fields stay on the
+/// legacy PeerAnnouncement. Cache affinity travels as its own signed record
+/// (SignedCacheAffinity), and direct-only data (demand, log heads,
+/// per-connection proofs) is not part of the record either.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct NodeRecord {
+    #[prost(enumeration = "NodeRole", tag = "1")]
+    pub role: i32,
+    #[prost(uint32, optional, tag = "2")]
+    pub http_port: ::core::option::Option<u32>,
+    #[prost(string, tag = "3")]
+    pub version: ::prost::alloc::string::String,
+    #[prost(message, repeated, tag = "4")]
+    pub addrs: ::prost::alloc::vec::Vec<TransportAddr>,
+    #[prost(message, optional, tag = "5")]
+    pub hardware: ::core::option::Option<HardwareInfo>,
+    #[prost(uint64, tag = "6")]
+    pub vram_bytes: u64,
+    #[prost(string, tag = "7")]
+    pub mesh_id: ::prost::alloc::string::String,
+    #[prost(string, tag = "8")]
+    pub mesh_policy_hash: ::prost::alloc::string::String,
+    #[prost(string, repeated, tag = "9")]
+    pub serving_models: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    #[prost(string, repeated, tag = "10")]
+    pub hosted_models: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    #[prost(message, repeated, tag = "11")]
+    pub served_models: ::prost::alloc::vec::Vec<ServedModelDescriptor>,
+    #[prost(message, repeated, tag = "12")]
+    pub served_runtime: ::prost::alloc::vec::Vec<ModelRuntimeDescriptor>,
+    #[prost(string, repeated, tag = "13")]
+    pub requested_models: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    #[prost(string, repeated, tag = "14")]
+    pub explicit_model_interests: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    #[prost(string, repeated, tag = "15")]
+    pub catalog_models: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    #[prost(string, tag = "16")]
+    pub model_source: ::prost::alloc::string::String,
+    #[prost(message, optional, tag = "17")]
+    pub experts_summary: ::core::option::Option<ExpertsSummary>,
+    #[prost(uint64, optional, tag = "18")]
+    pub first_joined_mesh_ts: ::core::option::Option<u64>,
+    #[prost(message, repeated, tag = "19")]
+    pub subprotocols: ::prost::alloc::vec::Vec<MeshSubprotocol>,
+    #[prost(enumeration = "InferenceAdmissionState", tag = "20")]
+    pub admission_state: i32,
+    #[prost(message, repeated, tag = "21")]
+    pub throughput: ::prost::alloc::vec::Vec<AdvertisedModelThroughput>,
+    #[prost(message, repeated, tag = "22")]
+    pub lightning_offers: ::prost::alloc::vec::Vec<LightningOffer>,
+    #[prost(message, optional, tag = "23")]
+    pub owner_attestation: ::core::option::Option<SignedNodeOwnership>,
+    #[prost(message, optional, tag = "24")]
+    pub genesis_policy: ::core::option::Option<SignedMeshGenesisPolicy>,
+    #[prost(message, optional, tag = "25")]
+    pub release_attestation: ::core::option::Option<ReleaseBuildAttestation>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct TransportAddr {
+    #[prost(oneof = "transport_addr::Addr", tags = "1, 2")]
+    pub addr: ::core::option::Option<transport_addr::Addr>,
+}
+/// Nested message and enum types in `TransportAddr`.
+pub mod transport_addr {
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
+    pub enum Addr {
+        #[prost(string, tag = "1")]
+        RelayUrl(::prost::alloc::string::String),
+        /// socket address, e.g. "203.0.113.5:4433"
+        #[prost(string, tag = "2")]
+        Ip(::prost::alloc::string::String),
+    }
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PeerAnnouncement {

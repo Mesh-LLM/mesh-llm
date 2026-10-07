@@ -98,6 +98,18 @@ still exercise these operations through real `Node` gossip; version-policy tests
 live with membership. The host composes its local model/plugin advertisement,
 backfills legacy model descriptors and retains network I/O and notifications.
 
+## Signed records
+
+`signed_record` owns the signed envelope every mesh-wide gossip record uses:
+the fixed-width header, Ed25519 signing and verification under a per-kind
+domain tag, sequence ordering and freshness, and `HeldRecords`, which admits
+relayed records and refreshes this node's own. The kinds so far are node
+records and cache affinity; `MembershipState` holds one `HeldRecords` for
+each, and they are relayed byte-for-byte. Callers supply the body decoder, so
+the module carries no knowledge of record contents. The host converts bodies
+into peer announcements and decides how they combine with unsigned entries in
+a frame.
+
 ## Remaining boundary (not yet moved)
 
 The heavier membership modules still live in `mesh-llm-host-runtime/src/mesh/`

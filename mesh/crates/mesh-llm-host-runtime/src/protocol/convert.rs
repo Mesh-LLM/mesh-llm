@@ -595,7 +595,7 @@ pub(crate) fn sanitize_gossip_announcement_for_wire(ann: &PeerAnnouncement) -> P
     sanitized
 }
 
-fn sanitize_cache_affinity_for_ann(
+pub(crate) fn sanitize_cache_affinity_for_ann(
     ann: &PeerAnnouncement,
 ) -> Option<mesh_llm_routing::cache_inventory::CacheAffinityAdvertisement> {
     let routable = routable_model_names(ann);
@@ -728,7 +728,7 @@ fn local_cache_affinity_to_proto(
     }
 }
 
-fn proto_cache_affinity_to_local(
+pub(crate) fn proto_cache_affinity_to_local(
     advertisement: &crate::proto::node::CacheAffinityAdvertisement,
 ) -> Option<mesh_llm_routing::cache_inventory::CacheAffinityAdvertisement> {
     use mesh_llm_routing::cache_inventory::{
@@ -993,6 +993,8 @@ pub(crate) fn build_gossip_frame(
     let peers: Vec<crate::proto::node::PeerAnnouncement> =
         anns.iter().map(local_ann_to_proto_ann).collect();
     crate::proto::node::GossipFrame {
+        signed_records: Vec::new(),
+        signed_cache_affinity: Vec::new(),
         r#gen: NODE_PROTOCOL_GENERATION,
         sender_id: sender_id.as_bytes().to_vec(),
         peers,
