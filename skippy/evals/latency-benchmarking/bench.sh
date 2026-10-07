@@ -1,6 +1,20 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+# Frozen automation selection begins.
+# Standalone fallback follows the existing Just bootstrap/build policy.
+automation=(just --justfile "$ROOT/Justfile" automation-run)
+if [[ "${MESH_LLM_AUTOMATION_BIN+set}" == set ]]; then
+  if [[ "$MESH_LLM_AUTOMATION_BIN" != /* || ! -f "$MESH_LLM_AUTOMATION_BIN" || ! -x "$MESH_LLM_AUTOMATION_BIN" ]]; then
+    echo "MESH_LLM_AUTOMATION_BIN must be an absolute executable" >&2
+    exit 1
+  fi
+  automation=("$MESH_LLM_AUTOMATION_BIN")
+fi
+# Frozen automation selection ends.
+
+
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 BUILD_DIR="$PROJECT_DIR/llama.cpp/build"
@@ -69,7 +83,7 @@ start_server() {
         rpc="${rpc}127.0.0.1:${p}"
     done
     local split
-    split=$(python3 -c "n=$nodes;p=[round(1.0/n,4)]*n;p[-1]=round(1-sum(p[:-1]),4);print(','.join(str(x) for x in p))")
+    split=$("${automation[@]}" automation wan-observation tensor-split "$nodes")
 
     nohup "$BUILD_DIR/bin/llama-server" \
         -m "$MODEL" --rpc "$rpc" -ngl 99 \

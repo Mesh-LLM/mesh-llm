@@ -11,6 +11,20 @@
 
 set -o pipefail
 
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+# Frozen automation selection begins.
+# Standalone fallback follows the existing Just bootstrap/build policy.
+automation=(just --justfile "$ROOT/Justfile" automation-run)
+if [[ "${MESH_LLM_AUTOMATION_BIN+set}" == set ]]; then
+  if [[ "$MESH_LLM_AUTOMATION_BIN" != /* || ! -f "$MESH_LLM_AUTOMATION_BIN" || ! -x "$MESH_LLM_AUTOMATION_BIN" ]]; then
+    echo "MESH_LLM_AUTOMATION_BIN must be an absolute executable" >&2
+    exit 1
+  fi
+  automation=("$MESH_LLM_AUTOMATION_BIN")
+fi
+# Frozen automation selection ends.
+
+
 EVALS_DIR="$(cd "$(dirname "$0")" && pwd)"
 SCENARIOS_DIR="$EVALS_DIR/scenarios"
 RESULTS_DIR="$EVALS_DIR/results"
@@ -47,7 +61,6 @@ run_variant() {
     local result_dir="$RESULTS_DIR/$variant/$scenario"
     local turns_file="$scenario_dir/turns.txt"
     local session="pi-ab-$$"
-    local mesh_session="mesh-ab-$$"
 
     echo ""
     echo "──── $variant / $scenario ────"
@@ -74,15 +87,15 @@ run_variant() {
 
     # Wait for models to load (check /v1/models)
     echo "  ⏳ Waiting for models..."
-    for i in $(seq 1 60); do
+    for ((attempt = 0; attempt < 60; attempt++)); do
         if curl -sf http://localhost:9337/v1/models > /dev/null 2>&1; then
-            model_count=$(curl -s http://localhost:9337/v1/models | python3 -c "import sys,json; print(len(json.load(sys.stdin)['data']))" 2>/dev/null || echo 0)
+            model_count=$(curl -s http://localhost:9337/v1/models | "${automation[@]}" automation smoke-observation model-count 2>/dev/null || echo 0)
             [ "$model_count" -ge 2 ] && break
         fi
         sleep 2
     done
 
-    model_count=$(curl -s http://localhost:9337/v1/models | python3 -c "import sys,json; print(len(json.load(sys.stdin)['data']))" 2>/dev/null || echo 0)
+    model_count=$(curl -s http://localhost:9337/v1/models | "${automation[@]}" automation smoke-observation model-count 2>/dev/null || echo 0)
     if [ "$model_count" -lt 2 ]; then
         echo "  ❌ Models didn't load in time"
         kill $mesh_pid 2>/dev/null; wait $mesh_pid 2>/dev/null
@@ -91,7 +104,8 @@ run_variant() {
     echo "  ✅ $model_count models loaded"
 
     # Launch pi in tmux
-    local start_time=$(date +%s)
+    local start_time
+    start_time=$(date +%s)
     tmux new-session -d -s "$session" -x 200 -y 50
     tmux send-keys -t "$session" "cd $result_dir && pi --provider mesh --model auto --working-dir $result_dir --no-session" Enter
     sleep 5
@@ -115,7 +129,8 @@ run_variant() {
 
     sleep 5
     tmux capture-pane -t "$session" -p -S - > "$result_dir/_output.txt" 2>/dev/null
-    local end_time=$(date +%s)
+    local end_time
+    end_time=$(date +%s)
     local elapsed=$((end_time - start_time))
 
     tmux kill-session -t "$session" 2>/dev/null

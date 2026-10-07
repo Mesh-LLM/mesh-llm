@@ -15,7 +15,7 @@ fn quote(value: &str) -> String {
 }
 fn execute(body: &str, cwd: &Path) -> process::ProcessReport {
     let body = format!(
-        "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); $OutputEncoding = [Console]::OutputEncoding; {body}"
+        "$fixturePhaseClock=[System.Diagnostics.Stopwatch]::StartNew(); [Console]::Error.WriteLine('windows-fixture build-body-begin ms='+$fixturePhaseClock.ElapsedMilliseconds); [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); $OutputEncoding = [Console]::OutputEncoding; {body}; [Console]::Error.WriteLine('windows-fixture build-body-complete ms='+$fixturePhaseClock.ElapsedMilliseconds)"
     );
     let system = std::env::var_os("SystemRoot").expect("Windows SystemRoot");
     let executable = PathBuf::from(system).join("System32/WindowsPowerShell/v1.0/powershell.exe");
@@ -91,7 +91,7 @@ fn native_windows_build_directory_tracks_prepared_pin_and_explicit_override() {
     fs::create_dir(&llama).unwrap();
     let build = directory.path().join("build-é-模型");
     let body = format!(
-        "$ErrorActionPreference='Stop'; $llamaDir={}; $llamaBuildRoot={}; {}; Resolve-StageBuildDir 'cuda'",
+        "$ErrorActionPreference='Stop'; [Console]::Error.WriteLine('windows-fixture build-case=no-stamp'); $llamaDir={}; $llamaBuildRoot={}; [Console]::Error.WriteLine('windows-fixture build-definition-begin'); {}; [Console]::Error.WriteLine('windows-fixture build-resolve-begin'); Resolve-StageBuildDir 'cuda'",
         quote(llama.to_str().unwrap()),
         quote(build.to_str().unwrap()),
         function(&script(), "Resolve-StageBuildDir")
@@ -106,13 +106,19 @@ fn native_windows_build_directory_tracks_prepared_pin_and_explicit_override() {
     ] {
         fs::write(llama.join(".mesh-llm-patched-sha"), format!("{pin}\n")).unwrap();
         assert_eq!(
-            PathBuf::from(accepted(&body, directory.path())),
+            PathBuf::from(accepted(
+                &body.replace("build-case=no-stamp", &format!("build-case=pin-{suffix}")),
+                directory.path()
+            )),
             build.join(format!("build-stage-abi-cuda-{suffix}"))
         );
     }
     assert_eq!(
         accepted(
-            &format!("$env:LLAMA_STAGE_BUILD_DIR='D:/abi'; {body}"),
+            &format!(
+                "$env:LLAMA_STAGE_BUILD_DIR='D:/abi'; {}",
+                body.replace("build-case=no-stamp", "build-case=explicit-override")
+            ),
             directory.path()
         ),
         "D:/abi"

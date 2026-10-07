@@ -6,8 +6,9 @@ use std::{
     io::{Read, Write},
 };
 
-pub(crate) const USAGE: &str =
-    "cargo xtool automation wan-observation {delay RTT_MS | bandwidth < IPERF_JSON}";
+pub(crate) const USAGE: &str = "cargo xtool automation wan-observation {delay RTT_MS | bandwidth < IPERF_JSON | tensor-split N | latency-summary < MEASUREMENT_JSON}";
+#[path = "wan_observation/research_projection.rs"]
+mod research_projection;
 const JSON_LIMIT: usize = 1024 * 1024;
 
 #[derive(Default, Deserialize)]
@@ -101,13 +102,18 @@ pub(crate) fn run(args: &[String]) -> DynResult<()> {
     let output = match args {
         [help] if matches!(help.as_str(), "--help" | "-h") => format!("{USAGE}\n"),
         [verb, value] if verb == "delay" => delay(value)?,
-        [verb] if verb == "bandwidth" => {
+        [verb, value] if verb == "tensor-split" => research_projection::tensor_split(value)?,
+        [verb] if matches!(verb.as_str(), "bandwidth" | "latency-summary") => {
             let mut bytes = Vec::new();
             std::io::stdin()
                 .lock()
                 .take((JSON_LIMIT + 1) as u64)
                 .read_to_end(&mut bytes)?;
-            bandwidth(&bytes)?
+            if verb == "bandwidth" {
+                bandwidth(&bytes)?
+            } else {
+                research_projection::latency_summary(&bytes)?
+            }
         }
         _ => return Err(USAGE.into()),
     };
