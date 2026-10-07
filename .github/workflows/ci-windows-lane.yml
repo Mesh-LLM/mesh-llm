@@ -130,7 +130,7 @@ jobs:
           $wrapperResult | Write-Host
           if (@($wrapperResult | Where-Object { $_ -match '^test result: ok\. 1 passed; 0 failed; 0 ignored;' }).Count -ne 1) { throw "native Windows wrapper regression must pass without an ignored test" }
       - name: Build backend-neutral Windows release host with console
-        timeout-minutes: 35
+        timeout-minutes: 65
         id: host
         uses: ./.github/actions/prepare-windows-host-input
         with:
