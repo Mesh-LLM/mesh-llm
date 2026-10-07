@@ -1184,3 +1184,16 @@ fn oversized_structured_output_is_rejected() {
 
     assert!(chat_template_options(&request, &EmbeddedOpenAiRequestDefaults::default()).is_err());
 }
+
+#[test]
+fn deeply_nested_grammar_is_rejected_before_native_parsing() {
+    let depth = 100_000;
+    let request: ChatCompletionRequest = serde_json::from_value(json!({
+        "model": "test",
+        "messages": [{"role": "user", "content": "hello"}],
+        "grammar": format!("root ::= {}\"a\"{}", "(".repeat(depth), ")".repeat(depth))
+    }))
+    .unwrap();
+
+    assert!(chat_template_options(&request, &EmbeddedOpenAiRequestDefaults::default()).is_err());
+}

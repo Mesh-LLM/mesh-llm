@@ -2,6 +2,7 @@ use crate::frontend::EmbeddedOpenAiRequestDefaults;
 use crate::frontend::EmbeddedReasoningBudget;
 use crate::frontend::EmbeddedReasoningEnabled;
 use crate::frontend::EmbeddedReasoningFormat;
+use crate::frontend::grammar_nesting::check_grammar_group_depth;
 use base64::Engine;
 use serde_json::Value;
 use skippy_inference_api::ChatCompletionRequest;
@@ -1326,6 +1327,9 @@ fn structured_output_string(
         return Err(InferenceError::invalid_request(
             "grammar and json_schema cannot both be set",
         ));
+    }
+    if let Some(grammar) = value.as_deref() {
+        check_grammar_group_depth(grammar).map_err(InferenceError::invalid_request)?;
     }
     Ok(value)
 }

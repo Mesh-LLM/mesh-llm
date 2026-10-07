@@ -10,6 +10,7 @@ mod generation_commit_batcher;
 mod generation_flow;
 pub mod generation_gate;
 mod generation_receipt;
+mod grammar_nesting;
 mod guardrails;
 pub(crate) mod iteration_scheduler;
 mod linear_proposal;
