@@ -875,6 +875,11 @@ pub(in crate::binary_transport) fn token_sideband_or_fill(
         .token_count
         .try_into()
         .context("negative token_count")?;
+    // The upstream peer chooses token_count, and a missing sideband is filled
+    // in below, so bound it by the sideband limit before allocating.
+    if token_count > skippy_protocol::binary::MAX_STAGE_SIDEBAND_VALUES {
+        bail!("token_count {token_count} exceeds the stage message token limit");
+    }
     if let Some(token) = decode_execution_token(message, token_count) {
         return Ok(vec![token]);
     }
@@ -1289,6 +1294,22 @@ mod tests {
             activation: Vec::new(),
             raw_bytes: Vec::new(),
         }
+    }
+
+    #[test]
+    fn token_fill_rejects_counts_beyond_the_sideband_limit() {
+        // An upstream peer chooses token_count. Without a sideband the
+        // tokens are filled in, so the count must be bounded first.
+        let limit = skippy_protocol::binary::MAX_STAGE_SIDEBAND_VALUES;
+        let mut message = test_message(
+            WireMessageKind::PrefillEmbd,
+            i32::try_from(limit + 1).unwrap(),
+        );
+        message.state.current_token = 7;
+        assert!(token_sideband_or_fill(&message).is_err());
+
+        message.token_count = i32::try_from(limit).unwrap();
+        assert_eq!(token_sideband_or_fill(&message).unwrap().len(), limit);
     }
 
     #[test]
