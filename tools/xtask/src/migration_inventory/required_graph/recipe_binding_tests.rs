@@ -88,7 +88,7 @@ fn graph_keeps_platform_selected_recipe_conditional() -> DynResult<()> {
     source(
         &root,
         "Justfile",
-        "default: build\n[macos]\nbuild:\n    python3 scripts/child.py\n",
+        "default: build\n[macos]\nbuild:\n    python3 scripts/child.py\n[linux]\nbuild:\n    python3 scripts/child.py\n[windows]\nbuild:\n    python3 scripts/child.py\n",
     )?;
     source(&root, "scripts/child.py", "pass\n")?;
     let paths = vec!["Justfile".to_owned(), "scripts/child.py".to_owned()];
