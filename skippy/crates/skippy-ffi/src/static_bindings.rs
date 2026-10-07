@@ -892,6 +892,8 @@ unsafe extern "C" {
 
     pub fn mtmd_bitmap_free(bitmap: *mut MtmdBitmap);
 
+    pub fn mtmd_bitmap_get_n_bytes(bitmap: *const MtmdBitmap) -> usize;
+
     pub fn mtmd_input_chunks_init() -> *mut MtmdInputChunks;
 
     pub fn mtmd_input_chunks_free(chunks: *mut MtmdInputChunks);
