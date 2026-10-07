@@ -18,6 +18,7 @@ fn invoke(code: u8, missing_sccache: bool) -> process::ProcessReport {
         "SystemRoot",
         "WINDIR",
         "PATH",
+        "PATHEXT",
         "TEMP",
         "TMP",
         "USERPROFILE",
@@ -28,6 +29,23 @@ fn invoke(code: u8, missing_sccache: bool) -> process::ProcessReport {
     .into_iter()
     .filter_map(|key| std::env::var_os(key).map(|value| (key.into(), Value::Public(value))))
     .collect();
+    let extensions = std::env::var("PATHEXT").expect("native Windows wrapper requires PATHEXT");
+    assert!(
+        extensions
+            .split(';')
+            .any(|value| value.eq_ignore_ascii_case(".EXE")),
+        "native Windows wrapper requires .EXE lookup"
+    );
+    let system = PathBuf::from(std::env::var_os("SystemRoot").expect("Windows SystemRoot"));
+    let core_modules = system.join("System32/WindowsPowerShell/v1.0/Modules");
+    assert!(
+        core_modules.is_dir(),
+        "native PowerShell core modules required"
+    );
+    environment.insert(
+        "PSModulePath".into(),
+        Value::Public(core_modules.into_os_string()),
+    );
     if missing_sccache {
         let system = PathBuf::from(std::env::var_os("SystemRoot").expect("Windows SystemRoot"));
         let path = std::env::join_paths([
@@ -63,16 +81,27 @@ fn invoke(code: u8, missing_sccache: bool) -> process::ProcessReport {
         OutputFiles::default(),
     )
     .unwrap();
-    assert_eq!(report.outcome, process::Outcome::Exited);
-    assert!(report.failure.is_none());
+    assert_eq!(
+        report.outcome,
+        process::Outcome::Exited,
+        "code={code} missing_sccache={missing_sccache}: {report:?}"
+    );
+    assert!(
+        report.failure.is_none(),
+        "code={code} missing_sccache={missing_sccache}: {report:?}"
+    );
     assert!(
         report.cleanup.complete
             && !report.cleanup.forced
             && !report.cleanup.graceful_signal_failed
-            && report.cleanup.failure.is_none()
+            && report.cleanup.failure.is_none(),
+        "code={code} missing_sccache={missing_sccache}: {report:?}"
     );
     for stream in [&report.stdout, &report.stderr] {
-        assert!(stream.line_capture_complete && !stream.truncated && stream.suppressed_lines == 0);
+        assert!(
+            stream.line_capture_complete && !stream.truncated && stream.suppressed_lines == 0,
+            "code={code} missing_sccache={missing_sccache}: {report:?}"
+        );
     }
     report
 }
