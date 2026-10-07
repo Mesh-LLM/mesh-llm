@@ -38,6 +38,9 @@ use skippy_runtime::penalty_window;
 use std::collections::BTreeMap;
 
 const MAX_NATIVE_PARSER_INPUT_BYTES: usize = 1024 * 1024;
+/// Media parts accepted across all messages of one request. Each part is
+/// decoded natively and held in memory until the prompt is evaluated.
+pub(super) const MAX_MEDIA_PARTS_PER_REQUEST: usize = 16;
 
 /// Built-in reasoning default when neither the request nor the deployment config
 /// asks for reasoning: off.
@@ -835,6 +838,11 @@ pub(super) fn message_content_to_generation_text(
                     }
                     continue;
                 }
+                if is_media_part(part) && media.len() >= MAX_MEDIA_PARTS_PER_REQUEST {
+                    return Err(InferenceError::invalid_request(format!(
+                        "a request may include at most {MAX_MEDIA_PARTS_PER_REQUEST} media parts"
+                    )));
+                }
                 if let Some(bytes) = media_bytes_from_part(part)? {
                     media.push(MediaInput { bytes });
                     chunks.push(marker.to_string());
@@ -846,12 +854,15 @@ pub(super) fn message_content_to_generation_text(
     }
 }
 
-pub(super) fn media_bytes_from_part(part: &MessageContentPart) -> InferenceResult<Option<Vec<u8>>> {
-    let is_media = matches!(
+fn is_media_part(part: &MessageContentPart) -> bool {
+    matches!(
         part.content_type.as_str(),
         "image_url" | "input_image" | "image" | "input_audio" | "audio" | "audio_url"
-    );
-    if !is_media {
+    )
+}
+
+pub(super) fn media_bytes_from_part(part: &MessageContentPart) -> InferenceResult<Option<Vec<u8>>> {
+    if !is_media_part(part) {
         return Ok(None);
     }
     if let Some(url) = media_url(part) {

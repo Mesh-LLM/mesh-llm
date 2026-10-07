@@ -282,6 +282,7 @@ dynamic_symbols! {
     mtmd_helper_bitmap_init_from_buf(ctx: *mut MtmdContext, buf: *const u8, len: usize, placeholder: bool, opt: MtmdHelperInitOpt) -> MtmdHelperBitmapWrapper;
     mtmd_helper_video_free(video: *mut MtmdHelperVideo);
     mtmd_bitmap_free(bitmap: *mut MtmdBitmap);
+    mtmd_bitmap_get_n_bytes(bitmap: *const MtmdBitmap) -> usize;
     mtmd_input_chunks_init() -> *mut MtmdInputChunks;
     mtmd_input_chunks_free(chunks: *mut MtmdInputChunks);
     mtmd_tokenize(ctx: *mut MtmdContext, output: *mut MtmdInputChunks, text: *const MtmdInputText, bitmaps: *const *const MtmdBitmap, n_bitmaps: usize) -> c_int;
