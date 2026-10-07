@@ -122,12 +122,12 @@ fn boundary_record_with_stale_source_line_fails() -> DynResult<()> {
 
 #[test]
 fn boundary_gated_body_that_adds_python_is_still_reported() -> DynResult<()> {
-    // Given a macOS-gated recipe whose launched child is owned as a platform conditional.
+    // Given closed platform variants whose launched child is owned as conditional.
     let root = crate::command::unique_temp_dir("boundary-gated");
     source(
         &root,
         "Justfile",
-        "default: build\n[macos]\nbuild:\n    python3 scripts/child.py\n",
+        "default: build\n[macos]\nbuild:\n    python3 scripts/child.py\n[linux]\nbuild:\n    python3 scripts/child.py\n[windows]\nbuild:\n    python3 scripts/child.py\n",
     )?;
     source(&root, "scripts/child.py", "pass\n")?;
     let mut gated = record(
@@ -137,7 +137,11 @@ fn boundary_gated_body_that_adds_python_is_still_reported() -> DynResult<()> {
         "platform_conditional",
     );
     gated["child"] = json!("scripts/child.py");
-    gated["evidence"] = json!([{"path": "Justfile", "line": 2, "text": "[macos]"}]);
+    gated["evidence"] = json!([
+        {"path": "Justfile", "line": 2, "text": "[macos]"},
+        {"path": "Justfile", "line": 5, "text": "[linux]"},
+        {"path": "Justfile", "line": 8, "text": "[windows]"},
+    ]);
     ledger(&root, &[gated])?;
     let owned = graph(&root, &["Justfile", "scripts/child.py"], &["Justfile"])?;
     assert_eq!(owned.unresolved, 0, "{owned:?}");

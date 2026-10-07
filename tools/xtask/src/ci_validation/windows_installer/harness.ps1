@@ -55,6 +55,9 @@ if ($FailRuntime) {
 }
 Install-MeshBinary -BundleDir (Join-Path $unpacked 'mesh-bundle')
 $meshBinary = Join-Path $InstallDir 'mesh-llm.exe'
+# Require native application dispatch, never Windows file association fallback.
+$nativeHost = Get-Command -Name $meshBinary -CommandType Application -ErrorAction Stop
+if ($nativeHost.Path -ne $meshBinary) { throw 'fixture native host command path mismatch' }
 & $meshBinary --version
 if ($LASTEXITCODE -ne 0) { throw "fixture host version failed $LASTEXITCODE" }
 Invoke-SetupOrPrint -MeshBinary $meshBinary

@@ -104,10 +104,24 @@ pub(super) fn fixture_host() -> Vec<u8> {
     bytes
 }
 pub(super) fn environment(root: &Path) -> BTreeMap<std::ffi::OsString, Value> {
-    let mut values = ["SystemRoot", "WINDIR", "PATH", "PROCESSOR_ARCHITECTURE"]
-        .into_iter()
-        .filter_map(|key| std::env::var_os(key).map(|value| (key.into(), Value::Public(value))))
-        .collect::<BTreeMap<_, _>>();
+    let mut values = [
+        "SystemRoot",
+        "WINDIR",
+        "PATH",
+        "PATHEXT",
+        "PROCESSOR_ARCHITECTURE",
+    ]
+    .into_iter()
+    .filter_map(|key| std::env::var_os(key).map(|value| (key.into(), Value::Public(value))))
+    .collect::<BTreeMap<_, _>>();
+    let executable_extensions =
+        std::env::var("PATHEXT").expect("native Windows PowerShell fixture requires PATHEXT");
+    assert!(
+        executable_extensions
+            .split(';')
+            .any(|extension| extension.eq_ignore_ascii_case(".EXE")),
+        "native Windows PowerShell fixture requires .EXE in PATHEXT"
+    );
     for name in ["TEMP", "TMP", "USERPROFILE", "LOCALAPPDATA", "APPDATA"] {
         let destination = root.join(name);
         fs::create_dir_all(&destination).unwrap();
