@@ -908,10 +908,7 @@ pub(crate) fn local_ann_to_proto_ann(
         hardware,
         first_joined_mesh_ts: ann.first_joined_mesh_ts,
         latency_ms: ann.latency_ms,
-        latency_source: match ann.latency_source {
-            Some(s) => s as i32,
-            None => 0i32,
-        },
+        latency_source: ann.latency_source.map(|source| source as i32),
         latency_age_ms: ann.latency_age_ms.map(|v| v as u32),
         latency_observer_id: ann
             .latency_observer_id
@@ -1190,7 +1187,9 @@ pub(crate) fn proto_ann_to_local(
             .map(proto_throughput_hint_to_local)
             .collect(),
         latency_ms: pa.latency_ms,
-        latency_source: crate::proto::node::LatencySource::try_from(pa.latency_source).ok(),
+        latency_source: pa
+            .latency_source
+            .and_then(|source| crate::proto::node::LatencySource::try_from(source).ok()),
         latency_age_ms: pa.latency_age_ms.map(|v| v as u64),
         latency_observer_id: pa.latency_observer_id.as_ref().and_then(|bytes| {
             let arr: [u8; 32] = bytes.as_slice().try_into().ok()?;
