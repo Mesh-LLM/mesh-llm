@@ -1,3 +1,4 @@
+use crate::runtime_state::panic_recovery::lock_runtime;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{SyncSender, TrySendError, sync_channel};
@@ -784,10 +785,7 @@ impl StageOpenAiBackend {
         let request_id = delivery.request_id;
         let session_id = delivery.session_id;
         let receipt = {
-            let mut runtime = self
-                .runtime
-                .lock()
-                .map_err(|_| InferenceError::backend("runtime lock poisoned"))?;
+            let mut runtime = lock_runtime(&self.runtime);
             build_generation_receipt(&mut *runtime, delivery)
         };
         deliver_generation_receipt_outcome(config, request_id, session_id, receipt)

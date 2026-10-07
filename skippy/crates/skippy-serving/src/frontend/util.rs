@@ -1,4 +1,5 @@
 use crate::runtime_state::RuntimeState;
+use crate::runtime_state::panic_recovery::lock_runtime;
 use sha2::Digest;
 use sha2::Sha256;
 use skippy_inference_api::FinishReason;
@@ -92,9 +93,7 @@ pub(super) fn token_is_eog_with_runtime(
     runtime: &Arc<Mutex<RuntimeState>>,
     token_id: i32,
 ) -> InferenceResult<bool> {
-    let runtime = runtime
-        .lock()
-        .map_err(|_| InferenceError::backend("runtime lock poisoned"))?;
+    let runtime = lock_runtime(runtime);
     runtime
         .model
         .token_is_eog(token_id)

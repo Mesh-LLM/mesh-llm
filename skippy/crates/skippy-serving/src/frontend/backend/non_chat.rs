@@ -1,4 +1,5 @@
 use super::*;
+use crate::runtime_state::panic_recovery::lock_runtime;
 
 /// Reject an invalid model descriptor before allocating any embedding sessions.
 pub(super) fn embedding_output_dimensions(dimensions: u32) -> InferenceResult<usize> {
@@ -104,10 +105,7 @@ impl StageOpenAiBackend {
             ));
         }
         {
-            let runtime = self
-                .runtime
-                .lock()
-                .map_err(|_| InferenceError::backend("runtime lock poisoned"))?;
+            let runtime = lock_runtime(&self.runtime);
             if runtime.input_activation_boundary().is_some()
                 || runtime.output_activation_boundary().is_some()
                 || !runtime.has_media_projector()
@@ -170,10 +168,7 @@ impl StageOpenAiBackend {
                 "non-chat workloads currently require an unsplit local runtime",
             ));
         }
-        let runtime = self
-            .runtime
-            .lock()
-            .map_err(|_| InferenceError::backend("runtime lock poisoned"))?;
+        let runtime = lock_runtime(&self.runtime);
         if runtime.input_activation_boundary().is_some()
             || runtime.output_activation_boundary().is_some()
         {
@@ -198,12 +193,7 @@ impl StageOpenAiBackend {
         &self,
         request: EmbeddingsRequest,
     ) -> InferenceResult<Vec<Vec<i32>>> {
-        let reader = self
-            .runtime
-            .lock()
-            .map_err(|_| InferenceError::backend("runtime lock poisoned"))?
-            .model
-            .reader();
+        let reader = lock_runtime(&self.runtime).model.reader();
         match request.input {
             EmbeddingInput::Text(text) => reader
                 .tokenize(&text, true)
@@ -253,9 +243,7 @@ impl StageOpenAiBackend {
             if token.is_cancelled() {
                 return Err(request_cancelled_error());
             }
-            let mut runtime = runtime
-                .lock()
-                .map_err(|_| InferenceError::backend("runtime lock poisoned"))?;
+            let mut runtime = lock_runtime(&runtime);
             let result = work(&mut runtime, &session_id).map_err(workload_error);
             let cleanup = runtime.drop_session_timed(&session_id).map_err(|error| {
                 InferenceError::backend(format!("workload session cleanup failed: {error:#}"))
