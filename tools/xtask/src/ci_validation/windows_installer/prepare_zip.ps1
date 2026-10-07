@@ -2,6 +2,10 @@ param([string]$Root, [string]$Source, [string]$SourceSha256)
 $ErrorActionPreference = 'Stop'
 $fixturePhaseClock = [System.Diagnostics.Stopwatch]::StartNew()
 $expectedCore = [System.IO.Path]::Combine($PSHOME, 'Modules')
+if (![string]::Equals([System.IO.Path]::GetFullPath($env:MESH_WINDOWS_FIXTURE_CORE_MODULE_PATH), $expectedCore, [StringComparison]::OrdinalIgnoreCase)) { throw 'fixture admitted core module path mismatch' }
+# Windows PowerShell inserts AllUsers at startup; restore the closed child path
+# before any cmdlet can trigger module autoload. Never accept ambient modules.
+$env:PSModulePath = $expectedCore
 if (![string]::Equals($env:PSModulePath, $expectedCore, [StringComparison]::OrdinalIgnoreCase)) { throw 'fixture core module path mismatch' }
 foreach ($binding in @(@('Get-FileHash', 'Microsoft.PowerShell.Utility'), @('Test-Path', 'Microsoft.PowerShell.Management'))) {
     $command = Get-Command -Name $binding[0] -CommandType Cmdlet

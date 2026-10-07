@@ -15,7 +15,7 @@ fn quote(value: &str) -> String {
 }
 fn execute(body: &str, cwd: &Path) -> process::ProcessReport {
     let body = format!(
-        "$fixturePhaseClock=[System.Diagnostics.Stopwatch]::StartNew(); [Console]::Error.WriteLine('windows-fixture build-body-begin ms='+$fixturePhaseClock.ElapsedMilliseconds); $expectedCore=[System.IO.Path]::Combine($PSHOME,'Modules'); if (![string]::Equals($env:PSModulePath,$expectedCore,[StringComparison]::OrdinalIgnoreCase)) {{ throw 'fixture core module path mismatch' }}; $pathCommand=Get-Command -Name Test-Path -CommandType Cmdlet; if ($pathCommand.ModuleName -ne 'Microsoft.PowerShell.Management' -or ![string]::Equals($pathCommand.Module.ModuleBase,[System.IO.Path]::Combine($expectedCore,'Microsoft.PowerShell.Management'),[StringComparison]::OrdinalIgnoreCase)) {{ throw 'fixture Test-Path core module mismatch' }}; [Console]::Error.WriteLine('windows-fixture build-core-module-admitted ms='+$fixturePhaseClock.ElapsedMilliseconds); [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); $OutputEncoding = [Console]::OutputEncoding; {body}; [Console]::Error.WriteLine('windows-fixture build-body-complete ms='+$fixturePhaseClock.ElapsedMilliseconds)"
+        "$fixturePhaseClock=[System.Diagnostics.Stopwatch]::StartNew(); [Console]::Error.WriteLine('windows-fixture build-body-begin ms='+$fixturePhaseClock.ElapsedMilliseconds); $expectedCore=[System.IO.Path]::Combine($PSHOME,'Modules'); if (![string]::Equals([System.IO.Path]::GetFullPath($env:MESH_WINDOWS_FIXTURE_CORE_MODULE_PATH),$expectedCore,[StringComparison]::OrdinalIgnoreCase)) {{ throw 'fixture admitted core module path mismatch' }}; $env:PSModulePath=$expectedCore; if (![string]::Equals($env:PSModulePath,$expectedCore,[StringComparison]::OrdinalIgnoreCase)) {{ throw 'fixture core module path mismatch' }}; $pathCommand=Get-Command -Name Test-Path -CommandType Cmdlet; if ($pathCommand.ModuleName -ne 'Microsoft.PowerShell.Management' -or ![string]::Equals($pathCommand.Module.ModuleBase,[System.IO.Path]::Combine($expectedCore,'Microsoft.PowerShell.Management'),[StringComparison]::OrdinalIgnoreCase)) {{ throw 'fixture Test-Path core module mismatch' }}; [Console]::Error.WriteLine('windows-fixture build-core-module-admitted ms='+$fixturePhaseClock.ElapsedMilliseconds); [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); $OutputEncoding = [Console]::OutputEncoding; {body}; [Console]::Error.WriteLine('windows-fixture build-body-complete ms='+$fixturePhaseClock.ElapsedMilliseconds)"
     );
     let system = std::env::var_os("SystemRoot").expect("Windows SystemRoot");
     let executable = PathBuf::from(system).join("System32/WindowsPowerShell/v1.0/powershell.exe");
@@ -40,6 +40,12 @@ fn execute(body: &str, cwd: &Path) -> process::ProcessReport {
     assert!(
         core_modules.is_dir(),
         "Windows PowerShell core modules required"
+    );
+    // PowerShell reconstructs PSModulePath at startup; retain an independent
+    // exact path binding so the child can close its search path before autoload.
+    environment.insert(
+        "MESH_WINDOWS_FIXTURE_CORE_MODULE_PATH".into(),
+        Value::Public(core_modules.clone().into_os_string()),
     );
     environment.insert(
         "PSModulePath".into(),

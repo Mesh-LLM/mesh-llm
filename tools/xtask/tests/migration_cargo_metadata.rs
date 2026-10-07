@@ -46,6 +46,10 @@ fn workspace(mode: &str) -> tempfile::TempDir {
 }
 
 fn invoke(root: &Path, crates: &str) -> Output {
+    invoke_cargo(root, crates, &fixture())
+}
+
+fn invoke_cargo(root: &Path, crates: &str, cargo: &Path) -> Output {
     Command::new(env!("CARGO_BIN_EXE_xtask"))
         .args(["--repo-root"])
         .arg(root)
@@ -58,7 +62,7 @@ fn invoke(root: &Path, crates: &str) -> Output {
             crates,
             "--cargo",
         ])
-        .arg(fixture())
+        .arg(cargo)
         .args(["--timeout", "5"])
         .env("GH_TOKEN", "fixture-private-secret")
         .env("GIT_DIR", "invalid-git-override")
@@ -255,4 +259,45 @@ fn deadline_cleans_owned_descendant_when_unrelated_sentinel_is_running() {
             .status
             .success()
     );
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_extensionless_cargo_resolves_native_exe_with_fixed_metadata_contract() {
+    let root = workspace("success");
+    let cargo = root.path().join("cargo.exe");
+    std::fs::copy(fixture(), &cargo).unwrap();
+    let output = invoke_cargo(root.path(), "[\"model-hf\"]", &cargo.with_extension(""));
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(output.stdout, b"[\"skippy-model-hf\", \"skippy-hf-hub\"]\n");
+    let record: Invocation =
+        serde_json::from_slice(&std::fs::read(root.path().join("invocation.json")).unwrap())
+            .unwrap();
+    assert_eq!(
+        record.argv,
+        ["metadata", "--locked", "--no-deps", "--format-version=1"]
+    );
+    assert_eq!(record.cwd, root.path().canonicalize().unwrap());
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_cargo_command_scripts_and_missing_native_sibling_refuse_before_execution() {
+    let root = workspace("success");
+    let command = root.path().join("cargo.cmd");
+    std::fs::write(&command, b"@echo forbidden\r\n").unwrap();
+    // A sibling executable does not authorize changing an explicit script request.
+    std::fs::copy(fixture(), root.path().join("cargo.exe")).unwrap();
+    let output = invoke_cargo(root.path(), "[\"model-hf\"]", &command);
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("Windows requires an explicit .exe"));
+    assert!(!root.path().join("invocation.json").exists());
+    let missing = invoke_cargo(
+        root.path(),
+        "[\"model-hf\"]",
+        &root.path().join("missing-cargo"),
+    );
+    assert!(!missing.status.success());
+    assert!(missing.stdout.is_empty());
+    assert!(!root.path().join("invocation.json").exists());
 }
