@@ -104,6 +104,7 @@ ryu = "1"
 reqwest = { version = "0.13", features = ["stream", "json"] }
 futures-util = "0.3"
 sha2 = "0.11"
+subtle = "2.6"
 ed25519-dalek = { version = "=3.0.0", features = ["rand_core"] }
 thiserror = "2"
 zeroize = { version = "1", features = ["derive"] }

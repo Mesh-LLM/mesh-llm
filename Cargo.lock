@@ -4784,6 +4784,7 @@ dependencies = [
  "skippy-serving",
  "skippy-topology",
  "socket2",
+ "subtle",
  "tempfile",
  "thiserror 2.0.21",
  "tokio",
