@@ -970,7 +970,8 @@ impl InferenceBackend for StageOpenAiBackend {
                     resolve_chat_request_defaults(&request, &self.request_defaults)?;
                 apply_chat_request_defaults(&mut request, &request_defaults)?;
                 ensure_chat_runtime_features_supported(&request)?;
-                let sampling = chat_sampling_config(&request, &request_defaults)?;
+                let sampling = chat_sampling_config(&request, &request_defaults)?
+                    .with_penalty_windows_within(self.ctx_size);
                 let template_options = chat_template_options(&request, &request_defaults)?;
                 let parse_chat_output = chat_output_parser_required(&request, &template_options);
                 let template_timer = PhaseTimer::start();
@@ -1112,7 +1113,8 @@ impl InferenceBackend for StageOpenAiBackend {
                     resolve_chat_request_defaults(&request, &self.request_defaults)?;
                 apply_chat_request_defaults(&mut request, &request_defaults)?;
                 ensure_chat_runtime_features_supported(&request)?;
-                let sampling = chat_sampling_config(&request, &request_defaults)?;
+                let sampling = chat_sampling_config(&request, &request_defaults)?
+                    .with_penalty_windows_within(self.ctx_size);
                 let include_usage = request.include_usage();
                 let template_options = chat_template_options(&request, &request_defaults)?;
                 let parse_chat_output = chat_output_parser_required(&request, &template_options);
@@ -1209,7 +1211,8 @@ impl InferenceBackend for StageOpenAiBackend {
             resolve_completion_request_defaults(&request, &self.request_defaults);
         apply_completion_request_defaults(&mut request, &request_defaults);
         ensure_completion_runtime_features_supported(&request)?;
-        let sampling = completion_sampling_config(&request)?;
+        let sampling =
+            completion_sampling_config(&request)?.with_penalty_windows_within(self.ctx_size);
         let max_tokens =
             GenerationTokenLimit::from_request(request.max_tokens, self.default_max_tokens);
         let prompt_timer = PhaseTimer::start();
@@ -1309,7 +1312,8 @@ impl InferenceBackend for StageOpenAiBackend {
             resolve_completion_request_defaults(&request, &self.request_defaults);
         apply_completion_request_defaults(&mut request, &request_defaults);
         ensure_completion_runtime_features_supported(&request)?;
-        let sampling = completion_sampling_config(&request)?;
+        let sampling =
+            completion_sampling_config(&request)?.with_penalty_windows_within(self.ctx_size);
         let include_usage = request.include_usage();
         let max_tokens =
             GenerationTokenLimit::from_request(request.max_tokens, self.default_max_tokens);

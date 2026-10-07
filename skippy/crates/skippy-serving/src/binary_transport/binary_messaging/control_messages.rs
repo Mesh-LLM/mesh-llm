@@ -11,9 +11,10 @@ use crate::binary_transport::binary_kv::{
     take_shared_prefill_tokens,
 };
 use crate::binary_transport::direct_return::PredictionReturnSinks;
+use crate::binary_transport::peer_sampling::runtime_sampling_config;
 use crate::binary_transport::restore_prefill_decode::handle_binary_restore_prefill_decode_control;
 use crate::binary_transport::stage_execution::{
-    binary_message_attrs, elapsed_ms, runtime_sampling_config, stage_mask, token_sideband_or_fill,
+    binary_message_attrs, elapsed_ms, stage_mask, token_sideband_or_fill,
 };
 use crate::binary_transport::write_stage_message_conditioned;
 use crate::frontend::iteration_scheduler::IterationScheduler;
@@ -287,7 +288,7 @@ pub(super) fn handle_generation_control(
         generation_stats.merge(reply.stats);
     } else {
         if let Some(metadata) = message.chat_sampling_metadata.as_deref() {
-            let sampling = runtime_sampling_config(message.sampling.as_ref());
+            let sampling = runtime_sampling_config(message.sampling.as_ref(), config.ctx_size);
             let scheduler_session_key = session_key.to_string();
             let metadata = metadata.to_string();
             let prompt_token_count = message.state.prompt_token_count.max(0) as u64;

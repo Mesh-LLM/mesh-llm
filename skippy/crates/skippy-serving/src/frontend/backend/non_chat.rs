@@ -141,7 +141,8 @@ impl StageOpenAiBackend {
             chat_request.seed,
             chat_request.logit_bias.as_ref(),
             &chat_request.extra,
-        )?;
+        )?
+        .with_penalty_windows_within(self.ctx_size);
         let ids = generation_ids(InferenceCacheHints::default(), None, &context);
         let output = self
             .run_generation(
