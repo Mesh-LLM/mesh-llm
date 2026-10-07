@@ -9,6 +9,7 @@ use super::{
 use crate::api;
 use crate::inference::{election, skippy};
 use crate::mesh;
+use crate::network::openai::accept::IngressListener;
 use crate::network::{affinity, discovery as mesh_discovery, nostr, tunnel};
 use crate::plugin;
 use crate::runtime::interactive;
@@ -877,7 +878,7 @@ pub(super) fn start_run_auto_bootstrap_proxy(
     }
 
     let (stop_tx, stop_rx) =
-        tokio::sync::mpsc::channel::<tokio::sync::oneshot::Sender<tokio::net::TcpListener>>(1);
+        tokio::sync::mpsc::channel::<tokio::sync::oneshot::Sender<IngressListener>>(1);
     let boot_node = node.clone();
     let boot_port = api_port;
     let boot_affinity = affinity_router.clone();
@@ -1238,8 +1239,11 @@ pub(super) async fn setup_run_auto_serving_surface(
         run_auto_api_listener(ctx.options, ctx.api_port, ctx.bootstrap_listener_tx).await?;
     let console_listener =
         run_auto_console_listener(ctx.options, ctx.console_port, ctx.console_state).await?;
-    let (api_ready_url, ready_api_port) =
-        listener_http_endpoint(&api_listener, ctx.api_port, "OpenAI-compatible API");
+    let (api_ready_url, ready_api_port) = listener_http_endpoint(
+        &api_listener.listener,
+        ctx.api_port,
+        "OpenAI-compatible API",
+    );
     let (ready_console_url, ready_console_port) =
         run_auto_ready_console_endpoint(&console_listener);
     emit_run_auto_builtin_endpoint_ready(ctx.options, &api_ready_url, ready_console_url.as_ref());
@@ -1298,7 +1302,7 @@ pub(super) async fn run_auto_api_listener(
     options: &RuntimeOptions,
     api_port: u16,
     bootstrap_listener_tx: Option<BootstrapProxyStopTx>,
-) -> Result<tokio::net::TcpListener> {
+) -> Result<IngressListener> {
     if let Some(tx) = bootstrap_listener_tx {
         let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
         let _ = tx.send(resp_tx).await;
@@ -1306,7 +1310,9 @@ pub(super) async fn run_auto_api_listener(
             .await
             .context("bootstrap API listener handoff was cancelled");
     }
-    bind_runtime_tcp_listener(api_port, options.listen_all, "OpenAI-compatible API").await
+    bind_runtime_tcp_listener(api_port, options.listen_all, "OpenAI-compatible API")
+        .await
+        .map(IngressListener::from)
 }
 
 pub(super) async fn run_auto_console_listener(
@@ -1353,7 +1359,7 @@ pub(super) fn spawn_run_auto_api_proxy(
     options: &RuntimeOptions,
     node: &mesh::Node,
     api_port: u16,
-    api_listener: tokio::net::TcpListener,
+    api_listener: IngressListener,
     target_rx: &tokio::sync::watch::Receiver<election::ModelTargets>,
     affinity_router: &affinity::AffinityRouter,
 ) -> tokio::task::JoinHandle<()> {

@@ -1,12 +1,13 @@
 use crate::inference::election;
 use crate::mesh;
 use crate::network::affinity;
+use crate::network::openai::accept::IngressListener;
 
 pub(super) async fn api_proxy(
     node: mesh::Node,
     port: u16,
     target_rx: tokio::sync::watch::Receiver<election::ModelTargets>,
-    existing_listener: Option<tokio::net::TcpListener>,
+    existing_listener: Option<IngressListener>,
     listen_all: bool,
     affinity: affinity::AffinityRouter,
 ) {
@@ -24,7 +25,7 @@ pub(super) async fn api_proxy(
 pub(super) async fn bootstrap_proxy(
     node: mesh::Node,
     port: u16,
-    stop_rx: tokio::sync::mpsc::Receiver<tokio::sync::oneshot::Sender<tokio::net::TcpListener>>,
+    stop_rx: tokio::sync::mpsc::Receiver<tokio::sync::oneshot::Sender<IngressListener>>,
     listen_all: bool,
     affinity: affinity::AffinityRouter,
 ) {
