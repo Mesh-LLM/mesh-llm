@@ -9,10 +9,10 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/lfm2.cpp b/src/models/lfm2.cpp
-index 9a7eadd24d6dc6dbfac10f3a73b3679e9d3a4eea..bbb857d7038cd7abb3cfa60bbc4eafbebdc991ab 100644
+index 8b0d5bebb679f303390ec383cc583a6c927fe1b5..0d634065a71720d83a8405894c94708a0efe0dc1 100644
 --- a/src/models/lfm2.cpp
 +++ b/src/models/lfm2.cpp
-@@ -251,6 +251,8 @@ llama_model_lfm2::graph<iswa>::graph(const llama_model & model, const llm_graph_
+@@ -268,6 +268,8 @@ llama_model_lfm2::graph<iswa>::graph(const llama_model & model, const llm_graph_
      ggml_tensor * inp_out_ids = build_inp_out_ids();
  
      for (int il = 0; il < n_layer; ++il) {
@@ -21,7 +21,7 @@ index 9a7eadd24d6dc6dbfac10f3a73b3679e9d3a4eea..bbb857d7038cd7abb3cfa60bbc4eafbe
          res->t_layer_inp[il] = cur;
  
          const bool is_moe_layer = il >= static_cast<int>(hparams.n_layer_dense_lead);
-@@ -280,6 +282,7 @@ llama_model_lfm2::graph<iswa>::graph(const llama_model & model, const llm_graph_
+@@ -297,6 +299,7 @@ llama_model_lfm2::graph<iswa>::graph(const llama_model & model, const llm_graph_
  
          cur = build_cvec(cur, il);
          cb(cur, "l_out", il);

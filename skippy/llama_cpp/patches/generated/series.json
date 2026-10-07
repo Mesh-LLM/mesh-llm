@@ -1,5 +1,5 @@
 {
-  "full_patch_sha256": "a78692ef6a8c42ca4a658df72325804878a32b96b1256bad09f42fce5fa34342",
+  "full_patch_sha256": "23b33d23537ba7d4c0b56873db4bd4e8da07056eb910dbe045f2e6a13568ca9e",
   "generator_version": "0.5.0",
   "schema_version": 1,
   "shards": [
@@ -456,7 +456,7 @@
         "lfm2-vl"
       ],
       "file": "0045-family-lfm2--lfm2-moe--lfm2-vl.patch",
-      "sha256": "4680f006304e8d81c02bb0332f51eee3edf0ee5849baf5f2c52b6be8eff19ad8",
+      "sha256": "a618ac4f1ffb3e256350c4581a223d2d6321b04a5846822028055a1a86952761",
       "sources": [
         "src/models/lfm2.cpp"
       ]
