@@ -136,6 +136,12 @@ pub(super) fn environment(root: &Path) -> BTreeMap<std::ffi::OsString, Value> {
         core_modules.is_dir(),
         "Windows PowerShell core modules required"
     );
+    // PowerShell reconstructs PSModulePath at startup; retain an independent
+    // exact path binding so the child can close its search path before autoload.
+    values.insert(
+        "MESH_WINDOWS_FIXTURE_CORE_MODULE_PATH".into(),
+        Value::Public(core_modules.clone().into_os_string()),
+    );
     values.insert(
         "PSModulePath".into(),
         Value::Public(core_modules.into_os_string()),

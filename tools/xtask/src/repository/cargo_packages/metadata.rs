@@ -66,6 +66,8 @@ pub(super) fn discover(cwd: &Path, source: Source) -> Result<BTreeSet<PackageNam
             executable,
             timeout,
         } => {
+            #[cfg(windows)]
+            let executable = explicit_windows_executable(executable)?;
             let spec = ProcessSpec {
                 executable,
                 arguments: ["metadata", "--locked", "--no-deps", "--format-version=1"]
@@ -108,6 +110,23 @@ pub(super) fn discover(cwd: &Path, source: Source) -> Result<BTreeSet<PackageNam
             parse(report.stdout.ok_or(Error::MissingPayload)?.as_bytes())
         }
     }
+}
+
+// Git Bash's command -v omits .exe for Windows executable lookup. Resolve only
+// that literal suffix; ProcessSpec keeps refusing command scripts and PATH search.
+#[cfg(windows)]
+fn explicit_windows_executable(path: PathBuf) -> Result<PathBuf, std::io::Error> {
+    if path.extension().is_some() {
+        return Ok(path);
+    }
+    let executable = path.with_extension("exe");
+    if !std::fs::metadata(&executable)?.is_file() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "Cargo executable must be a regular .exe file",
+        ));
+    }
+    Ok(executable)
 }
 
 fn finalize(
