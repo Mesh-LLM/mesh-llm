@@ -81,31 +81,10 @@
       ]
     },
     {
-      "file": "mesh/evals/ab-test.sh",
-      "members": [
-        [
-          79,
-          "1cdad85c67df58de",
-          1,
-          "execution",
-          "inline python3 -c stdlib json/sys",
-          "Optional A/B live /v1/models curl response to model_count; stderr discarded, failure falls back to 0"
-        ],
-        [
-          85,
-          "1cdad85c67df58de",
-          2,
-          "execution",
-          "inline python3 -c stdlib json/sys",
-          "Second branch of same A/B model-count probe; failure falls back to 0"
-        ]
-      ]
-    },
-    {
       "file": "skippy/evals/latency-benchmarking/bench-b2b.sh",
       "members": [
         [
-          44,
+          58,
           "10d791bdf8518ccf",
           1,
           "execution",
@@ -113,44 +92,12 @@
           "Optional nohup background proxy with arguments continued in shell; proxy is a Python service, not CI requirement"
         ],
         [
-          74,
-          "cd4adc0dc2024669",
-          1,
-          "execution",
-          "inline python3 -c split calculator",
-          "Prints rounded n-node fractions into split shell variable; nonzero fails command under shell policy"
-        ],
-        [
-          102,
+          116,
           "7eeae8db7dc78867",
           1,
           "execution",
           "evals/latency-benchmarking/measure.py",
           "Optional benchmark with continued arguments; captures JSON stdout in result for following report fields"
-        ],
-        [
-          109,
-          "61ae6d4c230e26a8",
-          1,
-          "execution",
-          "inline python3 -c JSON ttft_ms formatter",
-          "Parses result stdin, prints formatted ms or err; stderr discarded, failure sets ttft=err"
-        ],
-        [
-          110,
-          "c1679d4b3d5f05b7",
-          1,
-          "execution",
-          "inline python3 -c JSON total_ms formatter",
-          "Parses result stdin, prints formatted ms or err; stderr discarded, failure sets total=err"
-        ],
-        [
-          111,
-          "94108b33b22ee1c4",
-          1,
-          "execution",
-          "inline python3 -c JSON tok_s formatter",
-          "Parses result stdin, prints formatted tok/s or err; stderr discarded, failure sets tps=err"
         ]
       ]
     },
@@ -158,20 +105,12 @@
       "file": "skippy/evals/latency-benchmarking/bench.sh",
       "members": [
         [
-          45,
+          59,
           "10d791bdf8518ccf",
           1,
           "execution",
           "evals/latency-benchmarking/latency-proxy.py",
           "Optional nohup background proxy with continued args"
-        ],
-        [
-          72,
-          "cd4adc0dc2024669",
-          1,
-          "execution",
-          "inline python3 -c split calculator",
-          "Prints split fractions for configured node count"
         ]
       ]
     },

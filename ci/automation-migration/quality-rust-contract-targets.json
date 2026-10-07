@@ -54,6 +54,7 @@
   "migration_native_fixtures",
   "migration_native_generator",
   "migration_native_policy",
+  "migration_optional_observations",
   "migration_optional_isolation",
   "migration_package_source_version",
   "migration_patch_bytes",

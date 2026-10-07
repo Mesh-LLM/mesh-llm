@@ -264,6 +264,7 @@ ci-automation-contracts:
         --test migration_native_fixtures \
         --test migration_native_generator \
         --test migration_native_policy \
+        --test migration_optional_observations \
         --test migration_optional_isolation \
         --test migration_package_source_version \
         --test migration_patch_bytes \

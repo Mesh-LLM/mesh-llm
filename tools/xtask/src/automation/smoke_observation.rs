@@ -39,8 +39,14 @@ struct Chunk {
 
 fn observe(verb: &str, bytes: &[u8], expected: Option<&str>) -> DynResult<String> {
     match verb {
-        "first-model" | "has-model" => {
+        "model-count" | "first-model" | "has-model" => {
+            if verb == "model-count" && bytes.len() > 1024 * 1024 {
+                return Err("model-count input exceeds bound".into());
+            }
             let models: Models = serde_json::from_slice(bytes)?;
+            if verb == "model-count" {
+                return Ok(format!("{}\n", models.data.len()));
+            }
             if verb == "has-model" {
                 if !models
                     .data
@@ -156,7 +162,13 @@ pub(crate) fn run(args: &[String]) -> DynResult<()> {
         return Err("smoke-observation accepts at most one model id".into());
     }
     let mut bytes = Vec::new();
-    std::io::stdin().read_to_end(&mut bytes)?;
+    if verb == "model-count" {
+        std::io::stdin()
+            .take(1024 * 1024 + 1)
+            .read_to_end(&mut bytes)?;
+    } else {
+        std::io::stdin().read_to_end(&mut bytes)?;
+    }
     crate::cli_output::stdout()
         .write_all(observe(verb, &bytes, rest.first().map(String::as_str))?.as_bytes())?;
     Ok(())
