@@ -64,15 +64,17 @@ class PackageNativeRuntimeTests(unittest.TestCase):
         self.assertIn('version == "GLIBC_ABI_DT_RELR"', probe)
         self.assertIn("return (2, 36)", probe)
 
-    def test_linux_cuda_benchmark_links_shared_cudart(self) -> None:
+    def run_cuda_benchmark_build(
+        self, backend: str = "cuda", extra_env: dict[str, str] | None = None
+    ) -> list[str]:
         script = SCRIPT.read_text(encoding="utf-8")
-        start = script.index("build_gpu_benchmark_tool() {")
+        start = script.index("cuda_gencode_args() {")
         end = script.index("build_model_package_tool() {", start)
         function = script[start:end]
         harness = (
             "set -euo pipefail\n"
             + function
-            + 'BACKEND="cuda"\n'
+            + f'BACKEND="{backend}"\n'
             + 'runtime_os="linux"\n'
             + 'stage_dir="$TEST_ROOT/stage"\n'
             + 'REPO_ROOT="$TEST_ROOT/repo"\n'
@@ -107,6 +109,9 @@ class PackageNativeRuntimeTests(unittest.TestCase):
                 "PATH": f"{root}{os.pathsep}{os.environ['PATH']}",
                 "TEST_ROOT": str(root),
             }
+            for name in ("LLAMA_STAGE_CUDA_ARCHITECTURES", "SKIPPY_CUDA_ARCHITECTURES"):
+                env.pop(name, None)
+            env.update(extra_env or {})
             result = subprocess.run(
                 ["/bin/bash", "-s"],
                 input=harness,
@@ -117,9 +122,33 @@ class PackageNativeRuntimeTests(unittest.TestCase):
             )
 
             self.assertEqual(result.returncode, 0, result.stderr)
-            arguments = (root / "nvcc-args.log").read_text(encoding="utf-8").splitlines()
-            self.assertIn("-cudart", arguments)
-            self.assertEqual(arguments[arguments.index("-cudart") + 1], "shared")
+            return (root / "nvcc-args.log").read_text(encoding="utf-8").splitlines()
+
+    def test_linux_cuda_benchmark_links_shared_cudart(self) -> None:
+        arguments = self.run_cuda_benchmark_build()
+        self.assertIn("-cudart", arguments)
+        self.assertEqual(arguments[arguments.index("-cudart") + 1], "shared")
+        # Without configured architectures, nvcc keeps its own default.
+        self.assertFalse(
+            [argument for argument in arguments if argument.startswith(("--generate-code", "-arch"))]
+        )
+
+    def test_cuda_benchmark_tool_uses_configured_architectures(self) -> None:
+        arguments = self.run_cuda_benchmark_build(
+            extra_env={"LLAMA_STAGE_CUDA_ARCHITECTURES": "87;120a-real, 75-virtual"}
+        )
+        self.assertEqual(
+            [argument for argument in arguments if argument.startswith("--generate-code")],
+            [
+                "--generate-code=arch=compute_87,code=[compute_87,sm_87]",
+                "--generate-code=arch=compute_120a,code=sm_120a",
+                "--generate-code=arch=compute_75,code=compute_75",
+            ],
+        )
+
+    def test_cuda_blackwell_benchmark_tool_defaults_to_sm_120(self) -> None:
+        arguments = self.run_cuda_benchmark_build(backend="cuda-blackwell")
+        self.assertIn("--generate-code=arch=compute_120,code=[compute_120,sm_120]", arguments)
 
     def test_linux_gnu_cuda_target_collects_runtime_dependencies(self) -> None:
         script = SCRIPT.read_text(encoding="utf-8")
