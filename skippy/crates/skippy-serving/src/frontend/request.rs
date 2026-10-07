@@ -707,10 +707,6 @@ fn apply_chat_only_request_defaults(
     defaults: &EmbeddedOpenAiRequestDefaults,
 ) -> InferenceResult<()> {
     for (name, value) in [
-        (
-            "chat_template",
-            defaults.chat_template.clone().map(Value::from),
-        ),
         ("jinja", defaults.jinja.map(Value::from)),
         (
             "chat_template_kwargs",
@@ -1089,7 +1085,7 @@ pub(super) fn chat_template_options(
         .map(|kwargs| serialize_bounded_native_parser_json("chat_template_kwargs", &kwargs))
         .transpose()
         .map_err(|error| InferenceError::invalid_request(error.to_string()))?,
-        chat_template: bounded_optional_string_extra(&request.extra, "chat_template")?,
+        chat_template: chat_template(request, defaults)?,
         use_jinja: optional_bool_extra(&request.extra, "jinja")?.unwrap_or(true),
         grammar: structured_output_string(request, "grammar")?,
         json_schema: structured_output_json(request, "json_schema")?,
@@ -1292,6 +1288,39 @@ fn optional_string_extra(
                 .ok_or_else(|| InferenceError::invalid_request(format!("{name} must be a string")))
         })
         .transpose()
+}
+
+/// The chat template to render with. A request's own template is accepted
+/// only where the operator set `allow_request_chat_template`: the native
+/// template engine has no recursion, loop, or memory limits, so a template
+/// is code the serving process runs.
+fn chat_template(
+    request: &ChatCompletionRequest,
+    defaults: &EmbeddedOpenAiRequestDefaults,
+) -> InferenceResult<Option<String>> {
+    match bounded_optional_string_extra(&request.extra, "chat_template")? {
+        Some(_) if !defaults.allow_request_chat_template.unwrap_or(false) => {
+            Err(InferenceError::invalid_request(
+                "chat_template cannot be set per request on this server; the operator \
+                 configures the chat template, or enables allow_request_chat_template",
+            ))
+        }
+        Some(template) => Ok(Some(template)),
+        None => operator_chat_template(defaults),
+    }
+}
+
+fn operator_chat_template(
+    defaults: &EmbeddedOpenAiRequestDefaults,
+) -> InferenceResult<Option<String>> {
+    match defaults.chat_template.as_ref() {
+        Some(template) if template.len() > MAX_NATIVE_PARSER_INPUT_BYTES => {
+            Err(InferenceError::invalid_request(format!(
+                "chat_template exceeds the {MAX_NATIVE_PARSER_INPUT_BYTES}-byte limit"
+            )))
+        }
+        template => Ok(template.cloned()),
+    }
 }
 
 fn bounded_optional_string_extra(

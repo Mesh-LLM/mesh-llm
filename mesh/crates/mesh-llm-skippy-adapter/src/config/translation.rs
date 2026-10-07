@@ -371,6 +371,7 @@ impl ResolvedSkippyConfig {
                     .as_ref()
                     .and_then(resolve_reasoning_budget),
                 chat_template,
+                allow_request_chat_template: self.request_defaults.allow_request_chat_template,
                 jinja: self.request_defaults.jinja,
                 chat_template_kwargs,
                 skip_chat_parsing: self.request_defaults.skip_chat_parsing,

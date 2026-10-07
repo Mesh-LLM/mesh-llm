@@ -1217,3 +1217,85 @@ fn oversized_stop_lists_are_rejected_before_generation() {
     .unwrap();
     assert!(ensure_completion_runtime_features_supported(&completion).is_err());
 }
+
+#[test]
+fn request_chat_templates_are_rejected_by_default() {
+    // The template engine has no recursion, loop, or memory limits, so a
+    // request's own template is only rendered where the operator opted in.
+    let hostile = "{% macro f() %}{{ f() }}{% endmacro %}{{ f() }}";
+    let mut request: ChatCompletionRequest = serde_json::from_value(json!({
+        "model": "test",
+        "messages": [{"role": "user", "content": "hello"}],
+        "chat_template": hostile,
+        // A request cannot grant itself the operator setting.
+        "allow_request_chat_template": true
+    }))
+    .unwrap();
+    let defaults = EmbeddedOpenAiRequestDefaults::default();
+    apply_chat_request_defaults(&mut request, &defaults).unwrap();
+
+    let error = chat_template_options(&request, &defaults).unwrap_err();
+    assert_eq!(error.status().as_u16(), 400);
+    assert!(
+        error.to_string().contains("allow_request_chat_template"),
+        "{error}"
+    );
+
+    let disabled = EmbeddedOpenAiRequestDefaults {
+        allow_request_chat_template: Some(false),
+        ..EmbeddedOpenAiRequestDefaults::default()
+    };
+    assert!(chat_template_options(&request, &disabled).is_err());
+}
+
+#[test]
+fn operators_can_allow_request_chat_templates() {
+    let mut request: ChatCompletionRequest = serde_json::from_value(json!({
+        "model": "test",
+        "messages": [{"role": "user", "content": "hello"}],
+        "chat_template": "{{ messages[0].role }}"
+    }))
+    .unwrap();
+    let defaults = EmbeddedOpenAiRequestDefaults {
+        allow_request_chat_template: Some(true),
+        chat_template: Some("{{ messages[0].content }}".to_string()),
+        ..EmbeddedOpenAiRequestDefaults::default()
+    };
+    apply_chat_request_defaults(&mut request, &defaults).unwrap();
+
+    ensure_chat_runtime_features_supported(&request).unwrap();
+    let options = chat_template_options(&request, &defaults).unwrap();
+    assert_eq!(
+        options.chat_template.as_deref(),
+        Some("{{ messages[0].role }}")
+    );
+
+    let oversized: ChatCompletionRequest = serde_json::from_value(json!({
+        "model": "test",
+        "messages": [{"role": "user", "content": "hello"}],
+        "chat_template": "x".repeat(1_048_577)
+    }))
+    .unwrap();
+    assert!(chat_template_options(&oversized, &defaults).is_err());
+}
+
+#[test]
+fn operator_chat_template_still_reaches_the_renderer() {
+    let mut request: ChatCompletionRequest = serde_json::from_value(json!({
+        "model": "test",
+        "messages": [{"role": "user", "content": "hello"}]
+    }))
+    .unwrap();
+    let defaults = EmbeddedOpenAiRequestDefaults {
+        chat_template: Some("{{ messages[0].content }}".to_string()),
+        ..EmbeddedOpenAiRequestDefaults::default()
+    };
+    apply_chat_request_defaults(&mut request, &defaults).unwrap();
+
+    ensure_chat_runtime_features_supported(&request).unwrap();
+    let options = chat_template_options(&request, &defaults).unwrap();
+    assert_eq!(
+        options.chat_template.as_deref(),
+        Some("{{ messages[0].content }}")
+    );
+}
