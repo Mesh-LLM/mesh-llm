@@ -18,7 +18,7 @@ concurrency:
 
 jobs:
   native_source_contracts:
-    if: github.ref == 'refs/heads/codex/xtask-migration-diagnostic-20261006'
+    if: github.repository == 'Mesh-LLM/mesh-llm' && github.ref == 'refs/heads/codex/xtask-migration-diagnostic-20261006' && inputs.source_sha == '2c90866e9858b73c2263a3076b70f69415ae9fb1'
     name: Diagnostic native source contracts
     runs-on: ubuntu-24.04
     timeout-minutes: 120

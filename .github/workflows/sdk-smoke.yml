@@ -1,308 +1,962 @@
-name: Reusable SDK Smoke Tests
-
+name: Diagnostic Swift four-slice and native automation transport
+run-name: Diagnostic Swift + automation · ${{ inputs.source_sha }}
 on:
-  workflow_call:
+  workflow_dispatch:
     inputs:
       source_sha:
-        description: Immutable product source revision.
-        required: false
-        default: ''
-        type: string
-      sdk_kind:
+        description: Exact reviewed complete checkpoint shared by both diagnostic graphs
         required: true
         type: string
-      artifact_name:
-        required: true
-        type: string
-      artifact_path:
-        required: true
-        type: string
-      ui_artifact_name:
-        description: Immutable console UI producer artifact.
-        required: true
-        type: string
-      binary_name:
-        required: false
-        default: mesh-llm
-        type: string
-      staged_binary_path:
-        required: true
-        type: string
-      swift_artifact_name:
-        required: false
-        default: ''
-        type: string
-      swift_artifact_path:
-        required: false
-        default: sdk-artifacts/swift
-        type: string
-      swift_artifact_mode:
-        required: false
-        default: ''
-        type: string
-      kotlin_artifact_name:
-        required: false
-        default: ''
-        type: string
-      kotlin_artifact_path:
-        required: false
-        default: sdk-artifacts/kotlin
-        type: string
-      kotlin_artifact_target:
-        required: false
-        default: ''
-        type: string
-      kotlin_artifact_backend:
-        required: false
-        default: ''
-        type: string
-      kotlin_artifact_profile:
-        required: false
-        default: ''
-        type: string
-      model_url:
-        required: false
-        default: ''
-        type: string
-      model_file:
-        required: false
-        default: ''
-        type: string
-      model_manifest:
-        description: Generated manifest for the immutable SDK smoke model.
-        required: false
-        default: ci/model-artifacts/manifests/sdk-smoke.json
-        type: string
-      model_cache_scope:
-        required: true
-        type: string
-      cache_key_prefix:
-        required: false
-        default: ''
-        type: string
-      timeout_minutes:
-        required: false
-        default: 30
-        type: number
-    secrets:
-      HF_TOKEN:
-        required: false
-
-env:
-  CACHE_NAMESPACE: mesh-llm
-  # These values are part of the Rust SDK smoke cache ABI. Keep the target
-  # and linker/profile recipe separate from the action's own rustc/manifest
-  # suffix so a compatible cache can never cross a toolchain or image epoch.
-  SDK_RUST_TARGET: x86_64-unknown-linux-gnu
-  SDK_RUST_IMAGE_DIGEST: f499b79bc52dc7492d57397fdbec9f890c6f6bb1d8c1fcde9c1c97d45c0541a7
-  SDK_RUST_TOOLCHAIN_EPOCH: rust-stable-2026-08-20-4360b52568e2003a75bf9bc1d59f33a8e3fc893c
-  SDK_RUST_PROFILE_LINKER: debug-repository-mold-driver
-
+permissions:
+  contents: read
+concurrency:
+  group: diagnostic-swift-automation-${{ github.ref }}-${{ inputs.source_sha }}
+  cancel-in-progress: false
+# Each owning graph retains its original environment at job scope below.
+# No workflow-global native backend/link selectors or compiler settings.
 jobs:
-  sdk_smoke:
-    name: ${{ inputs.sdk_kind }} SDK Smoke
-    # Swift stays on the same pinned Apple toolchain boundary as its producer.
-    # Kotlin maps its validated artifact architecture to a bounded hosted
-    # runner; every other Linux SDK smoke stays on hosted x86 Ubuntu.
-    runs-on: ${{ inputs.sdk_kind == 'swift' && 'macos-15' || inputs.sdk_kind == 'kotlin' && inputs.kotlin_artifact_target == 'aarch64-unknown-linux-gnu' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
-    timeout-minutes: ${{ inputs.timeout_minutes }}
-    permissions:
-      contents: read
-      packages: read
-    # Rust and Kotlin smoke both run on Linux (x86 or arm) and get the
-    # prebuilt image; Swift stays on bare macos-15, unchanged (that's
-    # chunk 6). Empty string opts the job out of containerization
-    # per-run. The truthy value must stay first in the `&&` here --
-    # see smoke.yml's container block for what breaks if it isn't.
-    container:
-      image: ${{ inputs.sdk_kind != 'swift' && 'ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:f499b79bc52dc7492d57397fdbec9f890c6f6bb1d8c1fcde9c1c97d45c0541a7' || '' }}
+  target:
+    env:
+      GIT_MASTER: '1'
+      CARGO_INCREMENTAL: '0'
+      CARGO_BUILD_JOBS: '2'
+      CMAKE_BUILD_PARALLEL_LEVEL: '2'
+      RUSTC_WRAPPER: ''
+      LLAMA_STAGE_USE_SCCACHE: '0'
+      SCCACHE_GHA_ENABLED: 'false'
+      LLAMA_STAGE_LINK_MODE: static
+      LLAMA_STAGE_BACKEND: metal
+      MESH_LLM_POSTHOG_KEY: ''
+    if: ${{ github.repository == 'Mesh-LLM/mesh-llm' && github.ref == 'refs/heads/codex/xtask-migration-diagnostic-20261006' && inputs.source_sha == '2c90866e9858b73c2263a3076b70f69415ae9fb1' }}
+    runs-on: macos-15
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        target: [aarch64-apple-ios, aarch64-apple-ios-sim, aarch64-apple-ios-macabi, aarch64-apple-darwin]
     defaults:
       run:
         shell: bash
-    env:
-      HF_TOKEN: ${{ secrets.HF_TOKEN }}
-      HUGGING_FACE_HUB_TOKEN: ${{ secrets.HF_TOKEN }}
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
-          ref: ${{ inputs.source_sha || github.sha }}
+          ref: ${{ inputs.source_sha }}
           persist-credentials: false
-      - name: Resolve product source layout
-        id: layout
-        uses: Mesh-LLM/mesh-llm/.github/actions/resolve-source-layout@5c8fb4d472bc57058c8153761c561daa77dd5b94 # product-layout compatibility helpers
-
-      - name: Download immutable UI distribution
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: ${{ inputs.ui_artifact_name }}
-          path: ${{ steps.layout.outputs.ui_dir }}/dist
-
-      - name: Verify UI distribution input
+      - name: Admit exact fresh hosted source
         env:
-          UI_DIR: ${{ steps.layout.outputs.ui_dir }}
-        run: test -s "$UI_DIR/dist/index.html"
-
-      - name: Validate bounded SDK smoke inputs
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test -z "$(git status --porcelain --untracked-files=all)"
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          test "$(uname -m)" = arm64
+          test ! -e target
+          test ! -e .deps/llama-build
+          mkdir -p diagnostic-evidence
+          printf '%s\n' "$SOURCE_SHA" > diagnostic-evidence/source.txt
+          xcodebuild -version > diagnostic-evidence/xcode.txt
+          xcodebuild -showsdks > diagnostic-evidence/sdks.txt
+          for sdk in iphoneos iphonesimulator macosx; do xcrun --sdk "$sdk" --show-sdk-path; done
+          df -h .
+      - name: Prepare current native automation
+        uses: ./.github/actions/prepare-automation
+        with:
+          runner-profile: image
+          allow_depot_remote_cache: 'false'
+          allow_native_github_cache: 'false'
+      - name: Prepare target build prerequisites
+        timeout-minutes: 15
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          brew install cmake ninja
+          rustup target add "$TARGET"
+          rustc --version
+          cargo --version
+          swift --version
+          just --version
+          test -x "$MESH_LLM_AUTOMATION_BIN"
+      - name: Build exact canonical target and retain immutable input
+        timeout-minutes: 100
+        env:
+          TARGET: ${{ matrix.target }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: |
+          set -euo pipefail
+          unset LLAMA_BUILD_DIR SKIPPY_LLAMA_BUILD_DIR LLAMA_STAGE_BUILD_DIR LLAMA_STAGE_LIB_DIR SKIPPY_LLAMA_LIB_DIR
+          unset LLAMA_WORKDIR LLAMA_PATCH_DIR LLAMA_PIN_FILE LLAMA_UPSTREAM_URL MESH_LLM_LLAMA_PIN_SHA
+          unset SKIPPY_LLAMA_LINK_MODE SKIPPY_LLAMA_BACKEND RUSTFLAGS CARGO_ENCODED_RUSTFLAGS RUSTC_WORKSPACE_WRAPPER
+          export CARGO_TARGET_DIR="$RUNNER_TEMP/swift-target-cargo"
+          export SWIFT_TARGET_OUTPUT_DIR="$PWD/dist/swift-targets"
+          test ! -e "$CARGO_TARGET_DIR"
+          just --command bash mesh/sdk/swift/scripts/build-xcframework.sh --target "$TARGET" > diagnostic-evidence/target-build.log 2>&1
+          dir="dist/swift-targets/$TARGET"
+          test -s "$dir/libmeshllm_ffi.a"
+          lipo -info "$dir/libmeshllm_ffi.a" > diagnostic-evidence/library-architecture.txt
+          test "$(lipo -archs "$dir/libmeshllm_ffi.a")" = arm64
+          printf '%s\n' "$SOURCE_SHA" > "$dir/source.txt"
+          printf '%s\n' "$TARGET" > "$dir/target.txt"
+          cp .deps/llama.cpp/.mesh-llm-patch-digest "$dir/queue.txt"
+          cp .deps/llama.cpp/.mesh-llm-upstream-sha "$dir/upstream.txt"
+          git -C .deps/llama.cpp rev-parse 'HEAD^{tree}' > "$dir/native-tree.txt"
+          shasum -a 256 .deps/llama.cpp/include/skippy/common.h | awk '{print $1}' > "$dir/abi-header.txt"
+          shasum -a 256 "$dir/libmeshllm_ffi.a" | awk '{print $1}' > "$dir/library.sha256"
+          cp ".deps/llama-build/build-stage-abi-$TARGET-metal/.mesh-llm-build-stamp" diagnostic-evidence/native-build-stamp.txt
+          for name in upstream-sha patched-sha patch-digest prepare-schema; do cp ".deps/llama.cpp/.mesh-llm-$name" "diagnostic-evidence/$name.txt"; done
+          git diff --exit-code
+      - name: Upload same-run target input
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: diagnostic-swift-${{ matrix.target }}-${{ inputs.source_sha }}-${{ github.run_attempt }}
+          path: dist/swift-targets/${{ matrix.target }}
+          if-no-files-found: error
+          retention-days: 1
+      - name: Retain target diagnostic evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: diagnostic-swift-evidence-${{ matrix.target }}-${{ github.run_attempt }}
+          path: diagnostic-evidence
+          if-no-files-found: warn
+          retention-days: 1
+  assemble:
+    env:
+      GIT_MASTER: '1'
+      CARGO_INCREMENTAL: '0'
+      CARGO_BUILD_JOBS: '2'
+      CMAKE_BUILD_PARALLEL_LEVEL: '2'
+      RUSTC_WRAPPER: ''
+      LLAMA_STAGE_USE_SCCACHE: '0'
+      SCCACHE_GHA_ENABLED: 'false'
+      LLAMA_STAGE_LINK_MODE: static
+      LLAMA_STAGE_BACKEND: metal
+      MESH_LLM_POSTHOG_KEY: ''
+    needs: target
+    if: ${{ !cancelled() && needs.target.result == 'success' && github.repository == 'Mesh-LLM/mesh-llm' && github.ref == 'refs/heads/codex/xtask-migration-diagnostic-20261006' && inputs.source_sha == '2c90866e9858b73c2263a3076b70f69415ae9fb1' }}
+    runs-on: macos-15
+    timeout-minutes: 120
+    defaults:
+      run:
         shell: bash
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ inputs.source_sha }}
+          persist-credentials: false
+      - name: Admit exact fresh hosted assembly source
         env:
-          SDK_KIND: ${{ inputs.sdk_kind }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
         run: |
           set -euo pipefail
-          case "$SDK_KIND" in
-            rust|kotlin|swift) ;;
-            *)
-              echo "unsupported SDK smoke kind: $SDK_KIND" >&2
-              exit 1
-              ;;
-          esac
-
-      - name: Validate Swift SDK producer contract
-        if: ${{ inputs.sdk_kind == 'swift' }}
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test -z "$(git status --porcelain --untracked-files=all)"
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          test "$(uname -m)" = arm64
+          test ! -e mesh/sdk/swift/Generated/MeshLLMFFI.xcframework
+          test ! -e dist/swift-targets
+          mkdir -p diagnostic-evidence
+          cp mesh/sdk/swift/Sources/MeshLLM/Generated/mesh_ffi.swift diagnostic-evidence/binding-pre.swift
+          xcodebuild -version > diagnostic-evidence/xcode.txt
+          df -h .
+      - uses: ./.github/actions/prepare-automation
+        with:
+          runner-profile: image
+          allow_depot_remote_cache: 'false'
+          allow_native_github_cache: 'false'
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.20.0
+          package-manager-cache: false
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86
+        with:
+          version: 10.34.5
+          run_install: false
+      - name: Download exact aarch64-apple-ios input
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: diagnostic-swift-aarch64-apple-ios-${{ inputs.source_sha }}-${{ github.run_attempt }}
+          path: dist/swift-targets/aarch64-apple-ios
+      - name: Download exact aarch64-apple-ios-sim input
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: diagnostic-swift-aarch64-apple-ios-sim-${{ inputs.source_sha }}-${{ github.run_attempt }}
+          path: dist/swift-targets/aarch64-apple-ios-sim
+      - name: Download exact aarch64-apple-ios-macabi input
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: diagnostic-swift-aarch64-apple-ios-macabi-${{ inputs.source_sha }}-${{ github.run_attempt }}
+          path: dist/swift-targets/aarch64-apple-ios-macabi
+      - name: Download exact aarch64-apple-darwin input
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: diagnostic-swift-aarch64-apple-darwin-${{ inputs.source_sha }}-${{ github.run_attempt }}
+          path: dist/swift-targets/aarch64-apple-darwin
+      - name: Admit complete four-target artifact custody
+        timeout-minutes: 10
         env:
-          SWIFT_ARTIFACT_NAME: ${{ inputs.swift_artifact_name }}
-          SWIFT_ARTIFACT_MODE: ${{ inputs.swift_artifact_mode }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
         run: |
           set -euo pipefail
-          if [[ -z "$SWIFT_ARTIFACT_NAME" ]]; then
-            echo "swift_artifact_name is required for Swift SDK smoke" >&2
-            exit 1
-          fi
-          case "$SWIFT_ARTIFACT_MODE" in
-            host-only|full) ;;
-            *)
-              echo "unsupported Swift SDK artifact mode: $SWIFT_ARTIFACT_MODE" >&2
-              exit 1
-              ;;
-          esac
-
-      - name: Download immutable Swift SDK input
-        if: ${{ inputs.sdk_kind == 'swift' }}
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: ${{ inputs.swift_artifact_name }}
-          path: ${{ inputs.swift_artifact_path }}
-
-      - name: Download immutable generated Swift binding
-        if: ${{ inputs.sdk_kind == 'swift' }}
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: generated-swift-binding-${{ inputs.swift_artifact_name }}
-          path: sdk-artifacts/swift-generated-binding
-
-      - name: Validate Kotlin SDK producer contract
-        if: ${{ inputs.sdk_kind == 'kotlin' }}
-        env:
-          KOTLIN_ARTIFACT_NAME: ${{ inputs.kotlin_artifact_name }}
-          KOTLIN_ARTIFACT_TARGET: ${{ inputs.kotlin_artifact_target }}
-          KOTLIN_ARTIFACT_BACKEND: ${{ inputs.kotlin_artifact_backend }}
-          KOTLIN_ARTIFACT_PROFILE: ${{ inputs.kotlin_artifact_profile }}
+          targets=(aarch64-apple-ios aarch64-apple-ios-sim aarch64-apple-ios-macabi aarch64-apple-darwin)
+          test "$(find dist/swift-targets -mindepth 1 -maxdepth 1 | wc -l | tr -d ' ')" = 4
+          for target in "${targets[@]}"; do
+            dir="dist/swift-targets/$target"
+            test -d "$dir" && test ! -L "$dir"
+            test "$(find "$dir" -mindepth 1 -maxdepth 1 | wc -l | tr -d ' ')" = 8
+            for name in libmeshllm_ffi.a source.txt target.txt queue.txt upstream.txt native-tree.txt abi-header.txt library.sha256; do test -s "$dir/$name" && test -f "$dir/$name" && test ! -L "$dir/$name"; done
+            test "$(cat "$dir/source.txt")" = "$SOURCE_SHA"
+            test "$(cat "$dir/target.txt")" = "$target"
+            digest="$(cat "$dir/library.sha256")"
+            [[ "$digest" =~ ^[0-9a-f]{64}$ ]]
+            test "$(shasum -a 256 "$dir/libmeshllm_ffi.a" | awk '{print $1}')" = "$digest"
+            test "$(lipo -archs "$dir/libmeshllm_ffi.a")" = arm64
+            for name in queue.txt upstream.txt native-tree.txt abi-header.txt; do cmp "dist/swift-targets/aarch64-apple-ios/$name" "$dir/$name"; done
+          done
+          shasum -a 256 Cargo.lock skippy/llama_cpp/upstream.txt skippy/crates/skippy-ffi/src/lib.rs > diagnostic-evidence/assembly-source.sha256
+          find dist/swift-targets -type f -exec shasum -a 256 {} + > diagnostic-evidence/target-inputs.sha256
+      - name: Prepare current console assets
+        timeout-minutes: 20
         run: |
           set -euo pipefail
-          if [[ -z "$KOTLIN_ARTIFACT_NAME" ]]; then
-            echo "kotlin_artifact_name is required for Kotlin SDK smoke" >&2
-            exit 1
-          fi
-          case "$KOTLIN_ARTIFACT_TARGET" in
-            x86_64-unknown-linux-gnu|aarch64-unknown-linux-gnu) ;;
-            *)
-              echo "unsupported Kotlin native SDK target: $KOTLIN_ARTIFACT_TARGET" >&2
-              exit 1
-              ;;
-          esac
-          if [[ "$KOTLIN_ARTIFACT_BACKEND" != "cpu" ]]; then
-            echo "Kotlin smoke requires the CPU native SDK input" >&2
-            exit 1
-          fi
-          case "$KOTLIN_ARTIFACT_PROFILE" in
-            debug|release) ;;
-            *)
-              echo "unsupported Kotlin native SDK profile: $KOTLIN_ARTIFACT_PROFILE" >&2
-              exit 1
-              ;;
-          esac
-
-      - name: Download immutable Kotlin native SDK input
-        if: ${{ inputs.sdk_kind == 'kotlin' }}
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: ${{ inputs.kotlin_artifact_name }}
-          path: ${{ inputs.kotlin_artifact_path }}
-
-      - uses: actions/setup-java@03ad4de0992f5dab5e18fcb136590ce7c4a0ac95 # v5.6.0
-        # No JDK is baked into the image (not in verify-runner-image's
-        # asserted tool list), so this stays ungated.
-        if: ${{ inputs.sdk_kind == 'kotlin' }}
-        with:
-          distribution: temurin
-          java-version: '21'
-
-      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable 2026-08-20
-        if: ${{ inputs.sdk_kind == 'rust' }}
-
-      - if: ${{ inputs.sdk_kind == 'rust' }}
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        continue-on-error: true
-        with:
-          workspaces: . -> target
-          cache-bin: "false"
-          # Swatinem/rust-cache appends its runner OS/arch, rustc/environment,
-          # and Cargo manifest/lock hashes to this prefix. The explicit prefix
-          # carries the boundaries that the action cannot infer: the pinned
-          # Linux image, toolchain epoch, test profile/linker recipe, and the
-          # workflow/scripts/cache-version inputs that define this smoke lane.
-          prefix-key: ${{ format('{0}-sdk-rust-cargo-v1-{1}-{2}-{3}-image-{4}-{5}-{6}-{7}', env.CACHE_NAMESPACE, runner.os, runner.arch, env.SDK_RUST_TARGET, env.SDK_RUST_IMAGE_DIGEST, env.SDK_RUST_TOOLCHAIN_EPOCH, env.SDK_RUST_PROFILE_LINKER, hashFiles('Cargo.lock', '.github/cache-version.txt', '.cargo/config.toml', 'scripts/cargo-linker', 'scripts/cargo-linker-linux-*', 'scripts/lib/lld.sh', '**/Cargo.toml', 'scripts/ci-rust-sdk-smoke.sh', 'scripts/ci-sdk-fixture.sh', 'scripts/ci-prepare-native-runtime.sh', 'scripts/package-sdk-console-assets.sh', 'mesh/scripts/package-sdk-console-assets.sh', 'scripts/check-sdk-contract.sh', 'mesh/scripts/check-sdk-contract.sh', 'scripts/verify-sdk-console-assets.sh', 'mesh/scripts/verify-sdk-console-assets.sh', '.github/workflows/sdk-smoke.yml')) }}
-          shared-key: ci-sdk-smoke-rust
-          save-if: ${{ github.ref == 'refs/heads/main' && github.event.inputs.original_event_name != 'pull_request' && github.event.inputs.original_event_name != 'pull_request_target' }}
-
-      - name: Verify prebuilt smoke environment
-        if: ${{ inputs.sdk_kind != 'swift' }}
-        run: verify-runner-image public cpu
-
-      - uses: ./.github/actions/restore-smoke-inputs
-        id: model_inputs
-        with:
-          artifact_name: ${{ inputs.artifact_name }}
-          artifact_path: ${{ inputs.artifact_path }}
-          binary_name: ${{ inputs.binary_name }}
-          staged_binary_path: ${{ inputs.staged_binary_path }}
-          model_url: ${{ inputs.model_url }}
-          model_file: ${{ inputs.model_file }}
-          model_manifest: ${{ inputs.model_manifest }}
-          model_cadence: ${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_target' || github.event.inputs.original_event_name == 'pull_request' || github.event.inputs.original_event_name == 'pull_request_target') && 'pull-request' || 'main' }}
-          model_cache_scope: ${{ inputs.model_cache_scope }}
-          cache_key_prefix: ${{ inputs.cache_key_prefix }}
-          save_model_cache: ${{ github.ref == 'refs/heads/main' && github.event.inputs.original_event_name != 'pull_request' && github.event.inputs.original_event_name != 'pull_request_target' }}
-
-      - name: Rust SDK smoke test
-        if: ${{ inputs.sdk_kind == 'rust' }}
-        run: scripts/ci-rust-sdk-smoke.sh "${{ inputs.staged_binary_path }}" "${{ inputs.artifact_path }}" "$HOME/.models/${{ steps.model_inputs.outputs.model_file }}" --skip-build
-
-      - name: Kotlin SDK smoke test
-        if: ${{ inputs.sdk_kind == 'kotlin' }}
+          test "$(pnpm --version)" = 10.34.5
+          just --command bash scripts/package-sdk-console-assets.sh --sdk swift > diagnostic-evidence/console-build.log 2>&1
+          just --command bash scripts/verify-sdk-console-assets.sh --sdk swift > diagnostic-evidence/console-admission.log 2>&1
+      - name: Assemble exact current full producer
+        timeout-minutes: 35
         run: |
-          scripts/ci-kotlin-sdk-smoke.sh \
-            "${{ inputs.staged_binary_path }}" \
-            "${{ inputs.artifact_path }}" \
-            "$HOME/.models/${{ steps.model_inputs.outputs.model_file }}" \
-            "${{ inputs.kotlin_artifact_path }}" \
-            "${{ inputs.kotlin_artifact_target }}" \
-            "${{ inputs.kotlin_artifact_backend }}" \
-            "${{ inputs.kotlin_artifact_profile }}" \
-            --skip-build
-
-      - name: Swift SDK smoke test
-        if: ${{ inputs.sdk_kind == 'swift' }}
+          set -euo pipefail
+          unset LLAMA_BUILD_DIR SKIPPY_LLAMA_BUILD_DIR LLAMA_STAGE_BUILD_DIR LLAMA_STAGE_LIB_DIR SKIPPY_LLAMA_LIB_DIR
+          unset LLAMA_WORKDIR LLAMA_PATCH_DIR LLAMA_PIN_FILE LLAMA_UPSTREAM_URL MESH_LLM_LLAMA_PIN_SHA
+          unset SKIPPY_LLAMA_LINK_MODE SKIPPY_LLAMA_BACKEND RUSTFLAGS CARGO_ENCODED_RUSTFLAGS RUSTC_WORKSPACE_WRAPPER
+          export CARGO_TARGET_DIR="$RUNNER_TEMP/swift-assembly-cargo"
+          test ! -e "$CARGO_TARGET_DIR"
+          just --command bash mesh/sdk/swift/scripts/build-xcframework.sh --assemble-from dist/swift-targets > diagnostic-evidence/assembly.log 2>&1
+          cp mesh/sdk/swift/Sources/MeshLLM/Generated/mesh_ffi.swift diagnostic-evidence/binding-post.swift
+          git diff -- mesh/sdk/swift/Sources/MeshLLM/Generated/mesh_ffi.swift > diagnostic-evidence/binding.diff
+          git ls-files --error-unmatch mesh/sdk/swift/Sources/MeshLLM/Generated/mesh_ffi.swift
+          git diff --exit-code -- mesh/sdk/swift/Sources/MeshLLM/Generated/mesh_ffi.swift
+          mkdir -p dist/swift-diagnostic-output
+          install -m 0644 mesh/sdk/swift/Sources/MeshLLM/Generated/mesh_ffi.swift dist/swift-diagnostic-output/mesh_ffi.swift
+          cmp mesh/sdk/swift/Sources/MeshLLM/Generated/mesh_ffi.swift dist/swift-diagnostic-output/mesh_ffi.swift
+          ditto -c -k --sequesterRsrc --keepParent mesh/sdk/swift/Generated/MeshLLMFFI.xcframework dist/swift-diagnostic-output/MeshLLMFFI.xcframework.zip
+      - name: Verify all four slices and actual SwiftPM artifact consumer
+        timeout-minutes: 45
+        run: |
+          set -euo pipefail
+          just --command bash scripts/verify-swift-release-artifact.sh dist/swift-diagnostic-output/MeshLLMFFI.xcframework.zip full > diagnostic-evidence/artifact-verification.log 2>&1
+          just --command bash scripts/verify-swift-privacy-manifest.sh mesh/sdk/swift/PrivacyInfo.xcprivacy mesh/sdk/swift/Generated/MeshLLMFFI.xcframework > diagnostic-evidence/privacy-verification.log 2>&1
+          shasum -a 256 dist/swift-diagnostic-output/* > diagnostic-evidence/output.sha256
+          plutil -p mesh/sdk/swift/Generated/MeshLLMFFI.xcframework/Info.plist > diagnostic-evidence/xcframework-info.txt
+          printf 'full-producer-and-artifact-consumer=passed; CPU/model/application/publication=unperformed\n' > diagnostic-evidence/result.txt
+      - name: Retain admitted full SDK artifact
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: diagnostic-swift-full-${{ inputs.source_sha }}-${{ github.run_attempt }}
+          path: dist/swift-diagnostic-output
+          if-no-files-found: error
+          retention-days: 1
+      - name: Retain assembly diagnostic evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: diagnostic-swift-assembly-evidence-${{ github.run_attempt }}
+          path: diagnostic-evidence
+          if-no-files-found: warn
+          retention-days: 1
+  producer_linux_x64:
+    env:
+      GIT_MASTER: '1'
+      CARGO_INCREMENTAL: '0'
+      CARGO_BUILD_JOBS: '2'
+      RUSTC_WRAPPER: ''
+      SCCACHE_GHA_ENABLED: 'false'
+      LLAMA_STAGE_USE_SCCACHE: '0'
+      MESH_LLM_POSTHOG_KEY: ''
+    if: ${{ github.repository == 'Mesh-LLM/mesh-llm' && github.ref == 'refs/heads/codex/xtask-migration-diagnostic-20261006' && inputs.source_sha == '2c90866e9858b73c2263a3076b70f69415ae9fb1' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    outputs:
+      source_sha: ${{ steps.upload.outputs.source_sha }}
+      artifact_id: ${{ steps.upload.outputs.artifact_id }}
+      binary_sha256: ${{ steps.upload.outputs.binary_sha256 }}
+      producer_os: ${{ steps.identity.outputs.producer_os }}
+      producer_arch: ${{ steps.identity.outputs.producer_arch }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Admit fixed diagnostic native executor
+        id: identity
         env:
-          STAGED_BINARY_PATH: ${{ inputs.staged_binary_path }}
-          SWIFT_INPUT_ARCHIVE: ${{ format('{0}/MeshLLMFFI.xcframework.zip', inputs.swift_artifact_path) }}
-          SWIFT_INPUT_BINDING: sdk-artifacts/swift-generated-binding/mesh_ffi.swift
-          SWIFT_INPUT_MODE: ${{ inputs.swift_artifact_mode }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
         run: |
-          scripts/ci-swift-sdk-smoke.sh \
-            "$STAGED_BINARY_PATH" \
-            "$(dirname "$STAGED_BINARY_PATH")" \
-            "$HOME/.models/${{ steps.model_inputs.outputs.model_file }}" \
-            "$SWIFT_INPUT_ARCHIVE" \
-            "$SWIFT_INPUT_MODE" \
-            "$SWIFT_INPUT_BINDING" \
-            --skip-build
+          set -euo pipefail
+          umask 077
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          test "$RUNNER_OS:$RUNNER_ARCH" = Linux:X64
+          evidence="$RUNNER_TEMP/automation-diagnostic-evidence"
+          mkdir "$evidence"
+          printf 'source_sha=%s\nrunner_os=%s\nrunner_arch=%s\nprotected_ancestry_qualified=false\n' "$SOURCE_SHA" "$RUNNER_OS" "$RUNNER_ARCH" > "$evidence/context.txt"
+          printf 'producer_os=%s\nproducer_arch=%s\n' "$RUNNER_OS" "$RUNNER_ARCH" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ inputs.source_sha }}
+          persist-credentials: false
+      - name: Admit clean immutable source
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test -z "$(git status --porcelain --untracked-files=normal)"
+          git rev-parse 'HEAD^{tree}' > "$RUNNER_TEMP/automation-diagnostic-evidence/source-tree.txt"
+          git diff --exit-code
+      - name: Produce exact native diagnostic artifact
+        id: upload
+        uses: ./.github/actions/upload-automation
+        with:
+          source_sha: ${{ inputs.source_sha }}
+          source-profile: protected-clean
+          runner-profile: hosted-bare
+          ci-lane: quality
+      - name: Retain independent producer tuple
+        env:
+          SOURCE_SHA: ${{ steps.upload.outputs.source_sha }}
+          ARTIFACT_ID: ${{ steps.upload.outputs.artifact_id }}
+          BINARY_SHA256: ${{ steps.upload.outputs.binary_sha256 }}
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$ARTIFACT_ID" =~ ^[1-9][0-9]{0,19}$ ]]
+          [[ "$BINARY_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          printf 'source_sha=%s\nartifact_id=%s\nbinary_sha256=%s\n' "$SOURCE_SHA" "$ARTIFACT_ID" "$BINARY_SHA256" > "$RUNNER_TEMP/automation-diagnostic-evidence/producer.txt"
+          cp "$RUNNER_TEMP/immutable-automation/source.txt" "$RUNNER_TEMP/automation-diagnostic-evidence/source.txt"
+          cp "$RUNNER_TEMP/immutable-automation/SHA256SUMS" "$RUNNER_TEMP/automation-diagnostic-evidence/SHA256SUMS"
+      - name: Retain producer evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: diagnostic-automation-producer-linux_x64-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/automation-diagnostic-evidence
+          if-no-files-found: warn
+          retention-days: 1
+  consumer_linux_x64:
+    env:
+      GIT_MASTER: '1'
+      CARGO_INCREMENTAL: '0'
+      CARGO_BUILD_JOBS: '2'
+      RUSTC_WRAPPER: ''
+      SCCACHE_GHA_ENABLED: 'false'
+      LLAMA_STAGE_USE_SCCACHE: '0'
+      MESH_LLM_POSTHOG_KEY: ''
+    needs: producer_linux_x64
+    if: ${{ needs.producer_linux_x64.result == 'success' && github.repository == 'Mesh-LLM/mesh-llm' && github.ref == 'refs/heads/codex/xtask-migration-diagnostic-20261006' && inputs.source_sha == '2c90866e9858b73c2263a3076b70f69415ae9fb1' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Admit fresh no-checkout diagnostic consumer
+        env:
+          SOURCE_SHA: ${{ needs.producer_linux_x64.outputs.source_sha }}
+        run: |
+          set -euo pipefail
+          umask 077
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          test "$RUNNER_OS:$RUNNER_ARCH" = Linux:X64
+          test ! -e .git
+          test ! -e Cargo.toml
+          mkdir "$RUNNER_TEMP/automation-diagnostic-evidence"
+          printf 'source_sha=%s\nprotected_ancestry_qualified=false\npre_checkout=true\n' "$SOURCE_SHA" > "$RUNNER_TEMP/automation-diagnostic-evidence/context.txt"
+      - name: Admit immutable native bytes and execute actual PR audit before checkout
+        timeout-minutes: 5
+        uses: Mesh-LLM/mesh-llm/.github/actions/audit-pr-authority-verified@2c90866e9858b73c2263a3076b70f69415ae9fb1
+        with:
+          source_sha: ${{ needs.producer_linux_x64.outputs.source_sha }}
+          artifact_id: ${{ needs.producer_linux_x64.outputs.artifact_id }}
+          binary_sha256: ${{ needs.producer_linux_x64.outputs.binary_sha256 }}
+          producer_os: ${{ needs.producer_linux_x64.outputs.producer_os }}
+          producer_arch: ${{ needs.producer_linux_x64.outputs.producer_arch }}
+          original_event_name: pull_request
+          depot_selected: 'false'
+          allow_native_github_cache: 'false'
+          allow_depot_remote_cache: 'false'
+      - name: Retain verified loader and precheckout execution evidence
+        env:
+          SOURCE_SHA: ${{ needs.producer_linux_x64.outputs.source_sha }}
+          ARTIFACT_ID: ${{ needs.producer_linux_x64.outputs.artifact_id }}
+          BINARY_SHA256: ${{ needs.producer_linux_x64.outputs.binary_sha256 }}
+        run: |
+          set -euo pipefail
+          binary=xtask
+          if [[ "$RUNNER_OS" == Windows ]]; then binary=xtask.exe; fi
+          executable="$RUNNER_TEMP/immutable-automation-restored/$binary"
+          test -f "$executable" && test ! -L "$executable" && test -x "$executable"
+          "$executable" --help > "$RUNNER_TEMP/automation-diagnostic-evidence/native-help.txt"
+          printf 'MESH_LLM_AUTOMATION_BIN=%s\n' "$executable" >> "$GITHUB_ENV"
+          printf 'source_sha=%s\nartifact_id=%s\nbinary_sha256=%s\npre_checkout_audit=passed\n' "$SOURCE_SHA" "$ARTIFACT_ID" "$BINARY_SHA256" > "$RUNNER_TEMP/automation-diagnostic-evidence/consumer.txt"
+          cp "$RUNNER_TEMP/immutable-automation-restored/source.txt" "$RUNNER_TEMP/automation-diagnostic-evidence/source.txt"
+          cp "$RUNNER_TEMP/immutable-automation-restored/SHA256SUMS" "$RUNNER_TEMP/automation-diagnostic-evidence/SHA256SUMS"
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ inputs.source_sha }}
+          persist-credentials: false
+      - name: Admit current immutable resolver source
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test -z "$(git status --porcelain --untracked-files=normal)"
+          command -v cargo
+      - name: Execute native package resolver against actual current workspace
+        id: resolve
+        timeout-minutes: 3
+        uses: ./.github/actions/resolve-cargo-packages
+        with:
+          crates: '["xtask"]'
+          batches: ''
+          generation: current
+      - name: Admit exact resolver result
+        env:
+          RESOLVED: ${{ steps.resolve.outputs.crates }}
+        run: |
+          set -euo pipefail
+          test "$RESOLVED" = '["xtask"]'
+          printf '%s\n' "$RESOLVED" > "$RUNNER_TEMP/automation-diagnostic-evidence/resolved.json"
+          git diff --exit-code
+      - name: Retain consumer evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: diagnostic-automation-consumer-linux_x64-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/automation-diagnostic-evidence
+          if-no-files-found: warn
+          retention-days: 1
+  producer_linux_arm64:
+    env:
+      GIT_MASTER: '1'
+      CARGO_INCREMENTAL: '0'
+      CARGO_BUILD_JOBS: '2'
+      RUSTC_WRAPPER: ''
+      SCCACHE_GHA_ENABLED: 'false'
+      LLAMA_STAGE_USE_SCCACHE: '0'
+      MESH_LLM_POSTHOG_KEY: ''
+    if: ${{ github.repository == 'Mesh-LLM/mesh-llm' && github.ref == 'refs/heads/codex/xtask-migration-diagnostic-20261006' && inputs.source_sha == '2c90866e9858b73c2263a3076b70f69415ae9fb1' }}
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
+    outputs:
+      source_sha: ${{ steps.upload.outputs.source_sha }}
+      artifact_id: ${{ steps.upload.outputs.artifact_id }}
+      binary_sha256: ${{ steps.upload.outputs.binary_sha256 }}
+      producer_os: ${{ steps.identity.outputs.producer_os }}
+      producer_arch: ${{ steps.identity.outputs.producer_arch }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Admit fixed diagnostic native executor
+        id: identity
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: |
+          set -euo pipefail
+          umask 077
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          test "$RUNNER_OS:$RUNNER_ARCH" = Linux:ARM64
+          evidence="$RUNNER_TEMP/automation-diagnostic-evidence"
+          mkdir "$evidence"
+          printf 'source_sha=%s\nrunner_os=%s\nrunner_arch=%s\nprotected_ancestry_qualified=false\n' "$SOURCE_SHA" "$RUNNER_OS" "$RUNNER_ARCH" > "$evidence/context.txt"
+          printf 'producer_os=%s\nproducer_arch=%s\n' "$RUNNER_OS" "$RUNNER_ARCH" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ inputs.source_sha }}
+          persist-credentials: false
+      - name: Admit clean immutable source
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test -z "$(git status --porcelain --untracked-files=normal)"
+          git rev-parse 'HEAD^{tree}' > "$RUNNER_TEMP/automation-diagnostic-evidence/source-tree.txt"
+          git diff --exit-code
+      - name: Produce exact native diagnostic artifact
+        id: upload
+        uses: ./.github/actions/upload-automation
+        with:
+          source_sha: ${{ inputs.source_sha }}
+          source-profile: protected-clean
+          runner-profile: hosted-bare
+          ci-lane: quality
+      - name: Retain independent producer tuple
+        env:
+          SOURCE_SHA: ${{ steps.upload.outputs.source_sha }}
+          ARTIFACT_ID: ${{ steps.upload.outputs.artifact_id }}
+          BINARY_SHA256: ${{ steps.upload.outputs.binary_sha256 }}
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$ARTIFACT_ID" =~ ^[1-9][0-9]{0,19}$ ]]
+          [[ "$BINARY_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          printf 'source_sha=%s\nartifact_id=%s\nbinary_sha256=%s\n' "$SOURCE_SHA" "$ARTIFACT_ID" "$BINARY_SHA256" > "$RUNNER_TEMP/automation-diagnostic-evidence/producer.txt"
+          cp "$RUNNER_TEMP/immutable-automation/source.txt" "$RUNNER_TEMP/automation-diagnostic-evidence/source.txt"
+          cp "$RUNNER_TEMP/immutable-automation/SHA256SUMS" "$RUNNER_TEMP/automation-diagnostic-evidence/SHA256SUMS"
+      - name: Retain producer evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: diagnostic-automation-producer-linux_arm64-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/automation-diagnostic-evidence
+          if-no-files-found: warn
+          retention-days: 1
+  consumer_linux_arm64:
+    env:
+      GIT_MASTER: '1'
+      CARGO_INCREMENTAL: '0'
+      CARGO_BUILD_JOBS: '2'
+      RUSTC_WRAPPER: ''
+      SCCACHE_GHA_ENABLED: 'false'
+      LLAMA_STAGE_USE_SCCACHE: '0'
+      MESH_LLM_POSTHOG_KEY: ''
+    needs: producer_linux_arm64
+    if: ${{ needs.producer_linux_arm64.result == 'success' && github.repository == 'Mesh-LLM/mesh-llm' && github.ref == 'refs/heads/codex/xtask-migration-diagnostic-20261006' && inputs.source_sha == '2c90866e9858b73c2263a3076b70f69415ae9fb1' }}
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 10
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Admit fresh no-checkout diagnostic consumer
+        env:
+          SOURCE_SHA: ${{ needs.producer_linux_arm64.outputs.source_sha }}
+        run: |
+          set -euo pipefail
+          umask 077
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          test "$RUNNER_OS:$RUNNER_ARCH" = Linux:ARM64
+          test ! -e .git
+          test ! -e Cargo.toml
+          mkdir "$RUNNER_TEMP/automation-diagnostic-evidence"
+          printf 'source_sha=%s\nprotected_ancestry_qualified=false\npre_checkout=true\n' "$SOURCE_SHA" > "$RUNNER_TEMP/automation-diagnostic-evidence/context.txt"
+      - name: Admit immutable native bytes and execute actual PR audit before checkout
+        timeout-minutes: 5
+        uses: Mesh-LLM/mesh-llm/.github/actions/audit-pr-authority-verified@2c90866e9858b73c2263a3076b70f69415ae9fb1
+        with:
+          source_sha: ${{ needs.producer_linux_arm64.outputs.source_sha }}
+          artifact_id: ${{ needs.producer_linux_arm64.outputs.artifact_id }}
+          binary_sha256: ${{ needs.producer_linux_arm64.outputs.binary_sha256 }}
+          producer_os: ${{ needs.producer_linux_arm64.outputs.producer_os }}
+          producer_arch: ${{ needs.producer_linux_arm64.outputs.producer_arch }}
+          original_event_name: pull_request
+          depot_selected: 'false'
+          allow_native_github_cache: 'false'
+          allow_depot_remote_cache: 'false'
+      - name: Retain verified loader and precheckout execution evidence
+        env:
+          SOURCE_SHA: ${{ needs.producer_linux_arm64.outputs.source_sha }}
+          ARTIFACT_ID: ${{ needs.producer_linux_arm64.outputs.artifact_id }}
+          BINARY_SHA256: ${{ needs.producer_linux_arm64.outputs.binary_sha256 }}
+        run: |
+          set -euo pipefail
+          binary=xtask
+          if [[ "$RUNNER_OS" == Windows ]]; then binary=xtask.exe; fi
+          executable="$RUNNER_TEMP/immutable-automation-restored/$binary"
+          test -f "$executable" && test ! -L "$executable" && test -x "$executable"
+          "$executable" --help > "$RUNNER_TEMP/automation-diagnostic-evidence/native-help.txt"
+          printf 'MESH_LLM_AUTOMATION_BIN=%s\n' "$executable" >> "$GITHUB_ENV"
+          printf 'source_sha=%s\nartifact_id=%s\nbinary_sha256=%s\npre_checkout_audit=passed\n' "$SOURCE_SHA" "$ARTIFACT_ID" "$BINARY_SHA256" > "$RUNNER_TEMP/automation-diagnostic-evidence/consumer.txt"
+          cp "$RUNNER_TEMP/immutable-automation-restored/source.txt" "$RUNNER_TEMP/automation-diagnostic-evidence/source.txt"
+          cp "$RUNNER_TEMP/immutable-automation-restored/SHA256SUMS" "$RUNNER_TEMP/automation-diagnostic-evidence/SHA256SUMS"
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ inputs.source_sha }}
+          persist-credentials: false
+      - name: Admit current immutable resolver source
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test -z "$(git status --porcelain --untracked-files=normal)"
+          command -v cargo
+      - name: Execute native package resolver against actual current workspace
+        id: resolve
+        timeout-minutes: 3
+        uses: ./.github/actions/resolve-cargo-packages
+        with:
+          crates: '["xtask"]'
+          batches: ''
+          generation: current
+      - name: Admit exact resolver result
+        env:
+          RESOLVED: ${{ steps.resolve.outputs.crates }}
+        run: |
+          set -euo pipefail
+          test "$RESOLVED" = '["xtask"]'
+          printf '%s\n' "$RESOLVED" > "$RUNNER_TEMP/automation-diagnostic-evidence/resolved.json"
+          git diff --exit-code
+      - name: Retain consumer evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: diagnostic-automation-consumer-linux_arm64-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/automation-diagnostic-evidence
+          if-no-files-found: warn
+          retention-days: 1
+  producer_macos_arm64:
+    env:
+      GIT_MASTER: '1'
+      CARGO_INCREMENTAL: '0'
+      CARGO_BUILD_JOBS: '2'
+      RUSTC_WRAPPER: ''
+      SCCACHE_GHA_ENABLED: 'false'
+      LLAMA_STAGE_USE_SCCACHE: '0'
+      MESH_LLM_POSTHOG_KEY: ''
+    if: ${{ github.repository == 'Mesh-LLM/mesh-llm' && github.ref == 'refs/heads/codex/xtask-migration-diagnostic-20261006' && inputs.source_sha == '2c90866e9858b73c2263a3076b70f69415ae9fb1' }}
+    runs-on: macos-15
+    timeout-minutes: 30
+    outputs:
+      source_sha: ${{ steps.upload.outputs.source_sha }}
+      artifact_id: ${{ steps.upload.outputs.artifact_id }}
+      binary_sha256: ${{ steps.upload.outputs.binary_sha256 }}
+      producer_os: ${{ steps.identity.outputs.producer_os }}
+      producer_arch: ${{ steps.identity.outputs.producer_arch }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Admit fixed diagnostic native executor
+        id: identity
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: |
+          set -euo pipefail
+          umask 077
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          test "$RUNNER_OS:$RUNNER_ARCH" = macOS:ARM64
+          evidence="$RUNNER_TEMP/automation-diagnostic-evidence"
+          mkdir "$evidence"
+          printf 'source_sha=%s\nrunner_os=%s\nrunner_arch=%s\nprotected_ancestry_qualified=false\n' "$SOURCE_SHA" "$RUNNER_OS" "$RUNNER_ARCH" > "$evidence/context.txt"
+          printf 'producer_os=%s\nproducer_arch=%s\n' "$RUNNER_OS" "$RUNNER_ARCH" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ inputs.source_sha }}
+          persist-credentials: false
+      - name: Admit clean immutable source
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test -z "$(git status --porcelain --untracked-files=normal)"
+          git rev-parse 'HEAD^{tree}' > "$RUNNER_TEMP/automation-diagnostic-evidence/source-tree.txt"
+          git diff --exit-code
+      - name: Produce exact native diagnostic artifact
+        id: upload
+        uses: ./.github/actions/upload-automation
+        with:
+          source_sha: ${{ inputs.source_sha }}
+          source-profile: protected-clean
+          runner-profile: image
+          ci-lane: quality
+      - name: Retain independent producer tuple
+        env:
+          SOURCE_SHA: ${{ steps.upload.outputs.source_sha }}
+          ARTIFACT_ID: ${{ steps.upload.outputs.artifact_id }}
+          BINARY_SHA256: ${{ steps.upload.outputs.binary_sha256 }}
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$ARTIFACT_ID" =~ ^[1-9][0-9]{0,19}$ ]]
+          [[ "$BINARY_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          printf 'source_sha=%s\nartifact_id=%s\nbinary_sha256=%s\n' "$SOURCE_SHA" "$ARTIFACT_ID" "$BINARY_SHA256" > "$RUNNER_TEMP/automation-diagnostic-evidence/producer.txt"
+          cp "$RUNNER_TEMP/immutable-automation/source.txt" "$RUNNER_TEMP/automation-diagnostic-evidence/source.txt"
+          cp "$RUNNER_TEMP/immutable-automation/SHA256SUMS" "$RUNNER_TEMP/automation-diagnostic-evidence/SHA256SUMS"
+      - name: Retain producer evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: diagnostic-automation-producer-macos_arm64-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/automation-diagnostic-evidence
+          if-no-files-found: warn
+          retention-days: 1
+  consumer_macos_arm64:
+    env:
+      GIT_MASTER: '1'
+      CARGO_INCREMENTAL: '0'
+      CARGO_BUILD_JOBS: '2'
+      RUSTC_WRAPPER: ''
+      SCCACHE_GHA_ENABLED: 'false'
+      LLAMA_STAGE_USE_SCCACHE: '0'
+      MESH_LLM_POSTHOG_KEY: ''
+    needs: producer_macos_arm64
+    if: ${{ needs.producer_macos_arm64.result == 'success' && github.repository == 'Mesh-LLM/mesh-llm' && github.ref == 'refs/heads/codex/xtask-migration-diagnostic-20261006' && inputs.source_sha == '2c90866e9858b73c2263a3076b70f69415ae9fb1' }}
+    runs-on: macos-15
+    timeout-minutes: 10
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Admit fresh no-checkout diagnostic consumer
+        env:
+          SOURCE_SHA: ${{ needs.producer_macos_arm64.outputs.source_sha }}
+        run: |
+          set -euo pipefail
+          umask 077
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          test "$RUNNER_OS:$RUNNER_ARCH" = macOS:ARM64
+          test ! -e .git
+          test ! -e Cargo.toml
+          mkdir "$RUNNER_TEMP/automation-diagnostic-evidence"
+          printf 'source_sha=%s\nprotected_ancestry_qualified=false\npre_checkout=true\n' "$SOURCE_SHA" > "$RUNNER_TEMP/automation-diagnostic-evidence/context.txt"
+      - name: Admit immutable native bytes and execute actual PR audit before checkout
+        timeout-minutes: 5
+        uses: Mesh-LLM/mesh-llm/.github/actions/audit-pr-authority-verified@2c90866e9858b73c2263a3076b70f69415ae9fb1
+        with:
+          source_sha: ${{ needs.producer_macos_arm64.outputs.source_sha }}
+          artifact_id: ${{ needs.producer_macos_arm64.outputs.artifact_id }}
+          binary_sha256: ${{ needs.producer_macos_arm64.outputs.binary_sha256 }}
+          producer_os: ${{ needs.producer_macos_arm64.outputs.producer_os }}
+          producer_arch: ${{ needs.producer_macos_arm64.outputs.producer_arch }}
+          original_event_name: pull_request
+          depot_selected: 'false'
+          allow_native_github_cache: 'false'
+          allow_depot_remote_cache: 'false'
+      - name: Retain verified loader and precheckout execution evidence
+        env:
+          SOURCE_SHA: ${{ needs.producer_macos_arm64.outputs.source_sha }}
+          ARTIFACT_ID: ${{ needs.producer_macos_arm64.outputs.artifact_id }}
+          BINARY_SHA256: ${{ needs.producer_macos_arm64.outputs.binary_sha256 }}
+        run: |
+          set -euo pipefail
+          binary=xtask
+          if [[ "$RUNNER_OS" == Windows ]]; then binary=xtask.exe; fi
+          executable="$RUNNER_TEMP/immutable-automation-restored/$binary"
+          test -f "$executable" && test ! -L "$executable" && test -x "$executable"
+          "$executable" --help > "$RUNNER_TEMP/automation-diagnostic-evidence/native-help.txt"
+          printf 'MESH_LLM_AUTOMATION_BIN=%s\n' "$executable" >> "$GITHUB_ENV"
+          printf 'source_sha=%s\nartifact_id=%s\nbinary_sha256=%s\npre_checkout_audit=passed\n' "$SOURCE_SHA" "$ARTIFACT_ID" "$BINARY_SHA256" > "$RUNNER_TEMP/automation-diagnostic-evidence/consumer.txt"
+          cp "$RUNNER_TEMP/immutable-automation-restored/source.txt" "$RUNNER_TEMP/automation-diagnostic-evidence/source.txt"
+          cp "$RUNNER_TEMP/immutable-automation-restored/SHA256SUMS" "$RUNNER_TEMP/automation-diagnostic-evidence/SHA256SUMS"
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ inputs.source_sha }}
+          persist-credentials: false
+      - name: Admit current immutable resolver source
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test -z "$(git status --porcelain --untracked-files=normal)"
+          command -v cargo
+      - name: Execute native package resolver against actual current workspace
+        id: resolve
+        timeout-minutes: 3
+        uses: ./.github/actions/resolve-cargo-packages
+        with:
+          crates: '["xtask"]'
+          batches: ''
+          generation: current
+      - name: Admit exact resolver result
+        env:
+          RESOLVED: ${{ steps.resolve.outputs.crates }}
+        run: |
+          set -euo pipefail
+          test "$RESOLVED" = '["xtask"]'
+          printf '%s\n' "$RESOLVED" > "$RUNNER_TEMP/automation-diagnostic-evidence/resolved.json"
+          git diff --exit-code
+      - name: Retain consumer evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: diagnostic-automation-consumer-macos_arm64-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/automation-diagnostic-evidence
+          if-no-files-found: warn
+          retention-days: 1
+  producer_windows_x64:
+    env:
+      GIT_MASTER: '1'
+      CARGO_INCREMENTAL: '0'
+      CARGO_BUILD_JOBS: '2'
+      RUSTC_WRAPPER: ''
+      SCCACHE_GHA_ENABLED: 'false'
+      LLAMA_STAGE_USE_SCCACHE: '0'
+      MESH_LLM_POSTHOG_KEY: ''
+    if: ${{ github.repository == 'Mesh-LLM/mesh-llm' && github.ref == 'refs/heads/codex/xtask-migration-diagnostic-20261006' && inputs.source_sha == '2c90866e9858b73c2263a3076b70f69415ae9fb1' }}
+    runs-on: windows-2022
+    timeout-minutes: 30
+    outputs:
+      source_sha: ${{ steps.upload.outputs.source_sha }}
+      artifact_id: ${{ steps.upload.outputs.artifact_id }}
+      binary_sha256: ${{ steps.upload.outputs.binary_sha256 }}
+      producer_os: ${{ steps.identity.outputs.producer_os }}
+      producer_arch: ${{ steps.identity.outputs.producer_arch }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Admit fixed diagnostic native executor
+        id: identity
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: |
+          set -euo pipefail
+          umask 077
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          test "$RUNNER_OS:$RUNNER_ARCH" = Windows:X64
+          evidence="$RUNNER_TEMP/automation-diagnostic-evidence"
+          mkdir "$evidence"
+          printf 'source_sha=%s\nrunner_os=%s\nrunner_arch=%s\nprotected_ancestry_qualified=false\n' "$SOURCE_SHA" "$RUNNER_OS" "$RUNNER_ARCH" > "$evidence/context.txt"
+          printf 'producer_os=%s\nproducer_arch=%s\n' "$RUNNER_OS" "$RUNNER_ARCH" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ inputs.source_sha }}
+          persist-credentials: false
+      - name: Admit clean immutable source
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test -z "$(git status --porcelain --untracked-files=normal)"
+          git rev-parse 'HEAD^{tree}' > "$RUNNER_TEMP/automation-diagnostic-evidence/source-tree.txt"
+          git diff --exit-code
+      - name: Produce exact native diagnostic artifact
+        id: upload
+        uses: ./.github/actions/upload-automation
+        with:
+          source_sha: ${{ inputs.source_sha }}
+          source-profile: protected-clean
+          runner-profile: image
+          ci-lane: quality
+      - name: Retain independent producer tuple
+        env:
+          SOURCE_SHA: ${{ steps.upload.outputs.source_sha }}
+          ARTIFACT_ID: ${{ steps.upload.outputs.artifact_id }}
+          BINARY_SHA256: ${{ steps.upload.outputs.binary_sha256 }}
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$ARTIFACT_ID" =~ ^[1-9][0-9]{0,19}$ ]]
+          [[ "$BINARY_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          printf 'source_sha=%s\nartifact_id=%s\nbinary_sha256=%s\n' "$SOURCE_SHA" "$ARTIFACT_ID" "$BINARY_SHA256" > "$RUNNER_TEMP/automation-diagnostic-evidence/producer.txt"
+          cp "$RUNNER_TEMP/immutable-automation/source.txt" "$RUNNER_TEMP/automation-diagnostic-evidence/source.txt"
+          cp "$RUNNER_TEMP/immutable-automation/SHA256SUMS" "$RUNNER_TEMP/automation-diagnostic-evidence/SHA256SUMS"
+      - name: Retain producer evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: diagnostic-automation-producer-windows_x64-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/automation-diagnostic-evidence
+          if-no-files-found: warn
+          retention-days: 1
+  consumer_windows_x64:
+    env:
+      GIT_MASTER: '1'
+      CARGO_INCREMENTAL: '0'
+      CARGO_BUILD_JOBS: '2'
+      RUSTC_WRAPPER: ''
+      SCCACHE_GHA_ENABLED: 'false'
+      LLAMA_STAGE_USE_SCCACHE: '0'
+      MESH_LLM_POSTHOG_KEY: ''
+    needs: producer_windows_x64
+    if: ${{ needs.producer_windows_x64.result == 'success' && github.repository == 'Mesh-LLM/mesh-llm' && github.ref == 'refs/heads/codex/xtask-migration-diagnostic-20261006' && inputs.source_sha == '2c90866e9858b73c2263a3076b70f69415ae9fb1' }}
+    runs-on: windows-2022
+    timeout-minutes: 10
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Admit fresh no-checkout diagnostic consumer
+        env:
+          SOURCE_SHA: ${{ needs.producer_windows_x64.outputs.source_sha }}
+        run: |
+          set -euo pipefail
+          umask 077
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          test "$RUNNER_OS:$RUNNER_ARCH" = Windows:X64
+          test ! -e .git
+          test ! -e Cargo.toml
+          mkdir "$RUNNER_TEMP/automation-diagnostic-evidence"
+          printf 'source_sha=%s\nprotected_ancestry_qualified=false\npre_checkout=true\n' "$SOURCE_SHA" > "$RUNNER_TEMP/automation-diagnostic-evidence/context.txt"
+      - name: Admit immutable native bytes and execute actual PR audit before checkout
+        timeout-minutes: 5
+        uses: Mesh-LLM/mesh-llm/.github/actions/audit-pr-authority-verified@2c90866e9858b73c2263a3076b70f69415ae9fb1
+        with:
+          source_sha: ${{ needs.producer_windows_x64.outputs.source_sha }}
+          artifact_id: ${{ needs.producer_windows_x64.outputs.artifact_id }}
+          binary_sha256: ${{ needs.producer_windows_x64.outputs.binary_sha256 }}
+          producer_os: ${{ needs.producer_windows_x64.outputs.producer_os }}
+          producer_arch: ${{ needs.producer_windows_x64.outputs.producer_arch }}
+          original_event_name: pull_request
+          depot_selected: 'false'
+          allow_native_github_cache: 'false'
+          allow_depot_remote_cache: 'false'
+      - name: Retain verified loader and precheckout execution evidence
+        env:
+          SOURCE_SHA: ${{ needs.producer_windows_x64.outputs.source_sha }}
+          ARTIFACT_ID: ${{ needs.producer_windows_x64.outputs.artifact_id }}
+          BINARY_SHA256: ${{ needs.producer_windows_x64.outputs.binary_sha256 }}
+        run: |
+          set -euo pipefail
+          binary=xtask
+          if [[ "$RUNNER_OS" == Windows ]]; then binary=xtask.exe; fi
+          executable="$RUNNER_TEMP/immutable-automation-restored/$binary"
+          test -f "$executable" && test ! -L "$executable" && test -x "$executable"
+          "$executable" --help > "$RUNNER_TEMP/automation-diagnostic-evidence/native-help.txt"
+          printf 'MESH_LLM_AUTOMATION_BIN=%s\n' "$executable" >> "$GITHUB_ENV"
+          printf 'source_sha=%s\nartifact_id=%s\nbinary_sha256=%s\npre_checkout_audit=passed\n' "$SOURCE_SHA" "$ARTIFACT_ID" "$BINARY_SHA256" > "$RUNNER_TEMP/automation-diagnostic-evidence/consumer.txt"
+          cp "$RUNNER_TEMP/immutable-automation-restored/source.txt" "$RUNNER_TEMP/automation-diagnostic-evidence/source.txt"
+          cp "$RUNNER_TEMP/immutable-automation-restored/SHA256SUMS" "$RUNNER_TEMP/automation-diagnostic-evidence/SHA256SUMS"
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ inputs.source_sha }}
+          persist-credentials: false
+      - name: Admit current immutable resolver source
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test -z "$(git status --porcelain --untracked-files=normal)"
+          command -v cargo
+      - name: Execute native package resolver against actual current workspace
+        id: resolve
+        timeout-minutes: 3
+        uses: ./.github/actions/resolve-cargo-packages
+        with:
+          crates: '["xtask"]'
+          batches: ''
+          generation: current
+      - name: Admit exact resolver result
+        env:
+          RESOLVED: ${{ steps.resolve.outputs.crates }}
+        run: |
+          set -euo pipefail
+          test "$RESOLVED" = '["xtask"]'
+          printf '%s\n' "$RESOLVED" > "$RUNNER_TEMP/automation-diagnostic-evidence/resolved.json"
+          git diff --exit-code
+      - name: Retain consumer evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: diagnostic-automation-consumer-windows_x64-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/automation-diagnostic-evidence
+          if-no-files-found: warn
+          retention-days: 1
