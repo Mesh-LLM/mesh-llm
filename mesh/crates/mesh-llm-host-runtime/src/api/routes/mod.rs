@@ -1,4 +1,4 @@
-mod chat;
+pub(super) mod chat;
 mod control_apply_diagnostics;
 mod diagnostics;
 mod discover;
@@ -37,10 +37,11 @@ type DispatchRequestFn =
         &'a str,
         &'a str,
         &'a [u8],
+        chat::CallerTrust,
     ) -> Pin<Box<dyn Future<Output = anyhow::Result<bool>> + Send + 'a>>;
 
 pub(super) const DISPATCH_REQUEST: DispatchRequestFn =
-    |stream, state, method, path, path_only, body, req, raw_request| {
+    |stream, state, method, path, path_only, body, req, raw_request, caller| {
         Box::pin(async move {
             match (method, path_only) {
                 #[cfg(feature = "payments")]
@@ -208,18 +209,18 @@ pub(super) const DISPATCH_REQUEST: DispatchRequestFn =
                     if matches!(m, "GET" | "POST" | "OPTIONS")
                         && (p.starts_with("/v1/") || p == "/models") =>
                 {
-                    chat::handle(stream, state, method, path_only, req).await?;
+                    chat::handle(stream, state, method, path_only, req, caller).await?;
                     Ok(true)
                 }
                 (m, p)
                     if m != "POST"
                         && (p.starts_with("/api/chat") || p.starts_with("/api/responses")) =>
                 {
-                    chat::handle(stream, state, method, path_only, req).await?;
+                    chat::handle(stream, state, method, path_only, req, caller).await?;
                     Ok(true)
                 }
                 ("POST", p) if p.starts_with("/api/chat") || p.starts_with("/api/responses") => {
-                    chat::handle(stream, state, method, path_only, req).await?;
+                    chat::handle(stream, state, method, path_only, req, caller).await?;
                     Ok(true)
                 }
                 _ => Ok(false),
