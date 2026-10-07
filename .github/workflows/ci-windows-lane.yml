@@ -14,7 +14,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   windows_cpu:
-    if: ${{ github.repository == 'Mesh-LLM/mesh-llm' && github.ref == 'refs/heads/codex/xtask-migration-diagnostic-20261006' && inputs.source_sha == 'cf1e6c335bb3b5a02ce9dbd14ba040dfc5c36c92' }}
+    if: ${{ github.repository == 'Mesh-LLM/mesh-llm' && github.ref == 'refs/heads/codex/xtask-migration-diagnostic-20261006' && inputs.source_sha == 'de24c46fe662d3a91231a95a0ad26cd71b029fdc' }}
     runs-on: windows-2022
     timeout-minutes: 120
     env:
