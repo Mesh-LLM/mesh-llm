@@ -37,7 +37,7 @@ fn hold_usage_frame(data: &str, pending: &mut Option<String>) -> bool {
     // Without final backend totals, this remains the last partial watermark.
     if usage_only {
         *pending = Some(data.to_owned());
-    } else if !is_finish_frame(data) {
+    } else if !data.is_empty() && !is_finish_frame(data) {
         *pending = None;
     }
     usage_only
@@ -339,6 +339,20 @@ mod tests {
         assert!(result.is_ok());
         assert_eq!(wire.matches("\"usage\"").count(), 1);
         assert!(wire.find("tool_calls").unwrap() < wire.find("\"usage\"").unwrap());
+    }
+
+    #[tokio::test]
+    async fn empty_data_frames_preserve_trailing_usage() {
+        let body =
+            frames(false).replace("data: [DONE]\n\n", "data:\n\ndata:   \n\ndata: [DONE]\n\n");
+        let (wire, result) = relay(body).await;
+        assert!(matches!(
+            result.unwrap(),
+            RouteAttemptResult::Delivered { .. }
+        ));
+        assert_eq!(wire.matches("\"usage\"").count(), 1);
+        assert!(wire.contains("\"prompt_tokens\":12"));
+        assert!(wire.find("\"usage\"").unwrap() < wire.find("[DONE]").unwrap());
     }
 
     #[test]
