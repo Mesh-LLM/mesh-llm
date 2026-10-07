@@ -3,6 +3,7 @@ use crate::frontend::EmbeddedReasoningBudget;
 use crate::frontend::EmbeddedReasoningEnabled;
 use crate::frontend::EmbeddedReasoningFormat;
 use crate::frontend::grammar_nesting::check_grammar_group_depth;
+use crate::frontend::stop_sequences::validate_stop_sequences;
 use base64::Engine;
 use serde_json::Value;
 use skippy_inference_api::ChatCompletionRequest;
@@ -1417,7 +1418,7 @@ pub(super) fn ensure_chat_runtime_features_supported(
             "chat logprobs are parsed by skippy-inference-api but not yet implemented by skippy runtime",
         ));
     }
-    Ok(())
+    validate_stop_sequences(request.stop.as_ref())
 }
 
 pub(super) fn ensure_completion_runtime_features_supported(
@@ -1428,7 +1429,7 @@ pub(super) fn ensure_completion_runtime_features_supported(
             "completion logprobs are parsed by skippy-inference-api but not yet implemented by skippy runtime",
         ));
     }
-    Ok(())
+    validate_stop_sequences(request.stop.as_ref())
 }
 
 pub(super) fn has_requested_tools(value: &Value) -> bool {
