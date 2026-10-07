@@ -1,10 +1,10 @@
-From 78719eeff91c4f458962a5cffef01932532a76c7 Mon Sep 17 00:00:00 2001
+From 80844f9806f891a2f2e231ef966fae963068d89f Mon Sep 17 00:00:00 2001
 From: James Dumay <jameswdumay@gmail.com>
 Date: Fri, 25 Sep 2026 06:30:38 +1000
 Subject: [PATCH 26/67] skippy: replay extracted stage programs
 
 ---
- src/CMakeLists.txt                            |  98 ++
+ src/CMakeLists.txt                            | 107 +++
  src/llama-context.cpp                         | 234 +++++
  src/llama-context.h                           |  20 +
  src/llama-graph.cpp                           | 356 +++++--
@@ -49,17 +49,17 @@ Subject: [PATCH 26/67] skippy: replay extracted stage programs
  src/skippy/stage_program_outputs.h            |  27 +
  src/skippy/stage_program_replay.cpp           | 605 ++++++++++++
  src/skippy/stage_program_token_axis.cpp       | 195 ++++
- src/skippy/stage_realization.cpp              |  82 +-
+ src/skippy/stage_realization.cpp              |  97 +-
  src/skippy/stage_realization.h                |   1 +
  src/skippy/stage_slice_plan.cpp               |   4 +
  src/skippy/state_effects.cpp                  |   8 +-
  src/skippy/tests/graph_build_inputs.cpp       | 891 +++++++++++++++++-
  src/skippy/tests/noalloc_graph_planning.cpp   |  45 +
- src/skippy/tests/profile_residency.cpp        | 137 ++-
+ src/skippy/tests/profile_residency.cpp        | 153 ++-
  .../tests/renamed_multishard_planning.cpp     | 223 ++++-
  src/skippy/tests/stage_program_parity.h       | 374 ++++++++
  tests/test-llama-archs.cpp                    |  39 +
- 55 files changed, 8042 insertions(+), 269 deletions(-)
+ 55 files changed, 8082 insertions(+), 269 deletions(-)
  create mode 100644 src/skippy/stage_program.cpp
  create mode 100644 src/skippy/stage_program.h
  create mode 100644 src/skippy/stage_program_extraction.cpp
@@ -77,7 +77,7 @@ Subject: [PATCH 26/67] skippy: replay extracted stage programs
  create mode 100644 src/skippy/tests/stage_program_parity.h
 
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index b4f9bb467..de75e976a 100644
+index b4f9bb467..37c303bd6 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
 @@ -70,6 +70,15 @@ add_library(llama
@@ -125,7 +125,23 @@ index b4f9bb467..de75e976a 100644
  
      add_executable(skippy-model-loader-accounting
          ../tests/test-skippy-model-loader-accounting.cpp)
-@@ -268,6 +294,7 @@ if (LLAMA_STAGE_BUILD_TESTS)
+@@ -210,6 +236,15 @@ if (LLAMA_STAGE_BUILD_TESTS)
+     add_dependencies(skippy-noalloc-graph-planning skippy-graph-contract-models)
+     include(skippy/tests/graph_contract_cases.cmake)
+ 
++    foreach(LFM_FAMILY lfm2 lfm2-vl)
++        add_test(NAME skippy_stage_program_${LFM_FAMILY}_cross_sequence_geometry
++            COMMAND skippy-profile-residency
++                "${SKIPPY_MODEL_FIXTURE_DIR}/contract-${LFM_FAMILY}/graph-contract.gguf"
++                cross-sequence-geometry)
++        set_tests_properties(skippy_stage_program_${LFM_FAMILY}_cross_sequence_geometry PROPERTIES
++            FIXTURES_REQUIRED contract-${LFM_FAMILY} TIMEOUT 900)
++    endforeach()
++
+     add_executable(skippy-input-capabilities skippy/tests/input_capabilities.cpp)
+     target_compile_features(skippy-input-capabilities PRIVATE cxx_std_17)
+     target_link_libraries(skippy-input-capabilities PRIVATE llama)
+@@ -268,6 +303,7 @@ if (LLAMA_STAGE_BUILD_TESTS)
      add_executable(skippy-graph-build-inputs
          skippy/tests/graph_build_inputs.cpp)
      target_include_directories(skippy-graph-build-inputs PRIVATE .)
@@ -133,7 +149,7 @@ index b4f9bb467..de75e976a 100644
      target_compile_features(skippy-graph-build-inputs PRIVATE cxx_std_17)
      target_link_libraries(skippy-graph-build-inputs PRIVATE llama)
      add_dependencies(skippy-stage-slice-plan skippy-graph-build-inputs skippy-profile-residency)
-@@ -281,6 +308,15 @@ if (LLAMA_STAGE_BUILD_TESTS)
+@@ -281,6 +317,15 @@ if (LLAMA_STAGE_BUILD_TESTS)
      set_tests_properties(skippy_graph_build_inputs PROPERTIES
          FIXTURES_REQUIRED "skippy-model-loader-fixtures;skippy-graph-build-input-fixtures")
  
@@ -149,7 +165,7 @@ index b4f9bb467..de75e976a 100644
      add_test(
          NAME skippy_generate_graph_build_input_fixture
          COMMAND skippy-model-fixture-generator
-@@ -358,6 +394,15 @@ if (LLAMA_STAGE_BUILD_TESTS)
+@@ -358,6 +403,15 @@ if (LLAMA_STAGE_BUILD_TESTS)
      set_tests_properties(skippy_model_loader_accounting_moe PROPERTIES
          FIXTURES_REQUIRED skippy-model-loader-fixtures)
  
@@ -165,7 +181,7 @@ index b4f9bb467..de75e976a 100644
      add_test(
          NAME skippy_noalloc_graph_planning_dense
          COMMAND skippy-noalloc-graph-planning
-@@ -378,6 +423,15 @@ if (LLAMA_STAGE_BUILD_TESTS)
+@@ -378,6 +432,15 @@ if (LLAMA_STAGE_BUILD_TESTS)
      set_tests_properties(skippy_noalloc_graph_planning_qwen3 PROPERTIES
          FIXTURES_REQUIRED skippy-noalloc-qwen3-fixture)
  
@@ -181,7 +197,7 @@ index b4f9bb467..de75e976a 100644
      add_test(
          NAME skippy_generate_gemma2_fixture
          COMMAND skippy-model-fixture-generator
-@@ -396,6 +450,15 @@ if (LLAMA_STAGE_BUILD_TESTS)
+@@ -396,6 +459,15 @@ if (LLAMA_STAGE_BUILD_TESTS)
      set_tests_properties(skippy_noalloc_graph_planning_iswa PROPERTIES
          FIXTURES_REQUIRED skippy-noalloc-gemma2-fixture)
  
@@ -197,7 +213,7 @@ index b4f9bb467..de75e976a 100644
      add_test(
          NAME skippy_generate_minimax_m3_fixture
          COMMAND skippy-model-fixture-generator
-@@ -414,6 +477,15 @@ if (LLAMA_STAGE_BUILD_TESTS)
+@@ -414,6 +486,15 @@ if (LLAMA_STAGE_BUILD_TESTS)
      set_tests_properties(skippy_noalloc_graph_planning_msa PROPERTIES
          FIXTURES_REQUIRED skippy-noalloc-minimax-m3-fixture)
  
@@ -213,7 +229,7 @@ index b4f9bb467..de75e976a 100644
      add_test(
          NAME skippy_generate_kimi_linear_fixture
          COMMAND skippy-model-fixture-generator
-@@ -432,6 +504,14 @@ if (LLAMA_STAGE_BUILD_TESTS)
+@@ -432,6 +513,14 @@ if (LLAMA_STAGE_BUILD_TESTS)
      set_tests_properties(skippy_noalloc_graph_planning_kimi_linear PROPERTIES
          FIXTURES_REQUIRED skippy-noalloc-kimi-linear-fixture)
  
@@ -228,7 +244,7 @@ index b4f9bb467..de75e976a 100644
      add_test(
          NAME skippy_generate_deepseek4_fixture
          COMMAND skippy-model-fixture-generator
-@@ -517,6 +597,15 @@ if (LLAMA_STAGE_BUILD_TESTS)
+@@ -517,6 +606,15 @@ if (LLAMA_STAGE_BUILD_TESTS)
      set_tests_properties(skippy_noalloc_graph_planning_recurrent_source PROPERTIES
          FIXTURES_REQUIRED skippy-noalloc-mamba2-fixture)
  
@@ -244,7 +260,7 @@ index b4f9bb467..de75e976a 100644
      add_test(
          NAME skippy_generate_mamba_fixture
          COMMAND skippy-model-fixture-generator
-@@ -534,6 +623,15 @@ if (LLAMA_STAGE_BUILD_TESTS)
+@@ -534,6 +632,15 @@ if (LLAMA_STAGE_BUILD_TESTS)
              "recurrent,recurrent")
      set_tests_properties(skippy_noalloc_graph_planning_mamba_state_ownership PROPERTIES
          FIXTURES_REQUIRED skippy-noalloc-mamba-fixture)
@@ -8902,7 +8918,7 @@ index 000000000..61b38ea71
 +    return source_axis(target);
 +}
 diff --git a/src/skippy/stage_realization.cpp b/src/skippy/stage_realization.cpp
-index 148a2d4a2..1b7019de7 100644
+index 148a2d4a2..0f3685bf5 100644
 --- a/src/skippy/stage_realization.cpp
 +++ b/src/skippy/stage_realization.cpp
 @@ -2,10 +2,13 @@
@@ -8919,7 +8935,27 @@ index 148a2d4a2..1b7019de7 100644
  #include <algorithm>
  #include <cstring>
  #include <stdexcept>
-@@ -117,10 +120,17 @@ void describe_frontier(
+@@ -56,6 +59,19 @@ int32_t infer_token_axis(const ggml_tensor * tensor, uint32_t n_tokens) {
+     throw std::runtime_error("stage frontier tensor has no token dimension");
+ }
+ 
++int32_t unique_cut_import_token_axis(const ggml_tensor * tensor, uint32_t n_tokens) {
++    // An admitted import is a graph cut. The stage-local builder may retain
++    // its producer node without retaining the producer's ancestors, so it
++    // cannot always trace back to a token input. Require one candidate axis.
++    int32_t axis = -1;
++    for (int32_t dimension = 0; dimension < GGML_MAX_DIMS; ++dimension) {
++        if (tensor->ne[dimension] != static_cast<int64_t>(n_tokens)) continue;
++        if (axis >= 0) return -1;
++        axis = dimension;
++    }
++    return axis;
++}
++
+ ggml_tensor * detach_import(ggml_context * context, const ggml_tensor * source) {
+     ggml_tensor * result = ggml_dup_tensor(context, source);
+     std::memcpy(result->nb, source->nb, sizeof(result->nb));
+@@ -117,10 +133,17 @@ void describe_frontier(
  
  int32_t skippy_activation_token_axis(const ggml_tensor * tensor, uint32_t n_tokens, int32_t prepared_axis) {
      if (prepared_axis < 0) return infer_token_axis(tensor, n_tokens);
@@ -8939,7 +8975,7 @@ index 148a2d4a2..1b7019de7 100644
  }
  
  void skippy_realize_stage_graph(
-@@ -132,7 +142,6 @@ void skippy_realize_stage_graph(
+@@ -132,7 +155,6 @@ void skippy_realize_stage_graph(
      }
  
      const auto parameters = parameter_bindings(model);
@@ -8947,7 +8983,7 @@ index 148a2d4a2..1b7019de7 100644
      std::string error;
      if (params.gtype == LLM_GRAPH_TYPE_DECODER_MTP) {
          skippy_auxiliary_graph_plan auxiliary;
-@@ -142,8 +151,24 @@ void skippy_realize_stage_graph(
+@@ -142,8 +164,24 @@ void skippy_realize_stage_graph(
          }
          skippy_validate_execution_dependencies(params.build_inputs, true,
                  params.cparams.nextn_layer_offset, auxiliary.parameter_identities);
@@ -8972,7 +9008,7 @@ index 148a2d4a2..1b7019de7 100644
      if (!skippy_select_stage_slice(
                  result.get_gf(),
                  result.get_block_boundaries(),
-@@ -186,6 +211,38 @@ void skippy_realize_stage_graph(
+@@ -186,6 +224,40 @@ void skippy_realize_stage_graph(
          throw std::runtime_error("admitted stage frontier bindings do not match the realized graph slice");
      }
  
@@ -8995,8 +9031,10 @@ index 148a2d4a2..1b7019de7 100644
 +            explicit_import_token_axes.push_back(admitted_axis >= 0);
 +        } else if (installing_stage_program) {
 +            const int32_t builder_axis = skippy_stage_program_builder_token_axis(result, source);
++            const int32_t cut_axis = builder_axis < 0
++                    ? unique_cut_import_token_axis(source, params.ubatch.n_tokens) : -1;
 +            import_token_axes.push_back(skippy_stage_program_token_axis(
-+                    source, params.ubatch.n_tokens, builder_axis));
++                    source, params.ubatch.n_tokens, builder_axis >= 0 ? builder_axis : cut_axis));
 +            explicit_import_token_axes.push_back(true);
 +        } else {
 +            import_token_axes.push_back(infer_token_axis(source, params.ubatch.n_tokens));
@@ -9011,7 +9049,7 @@ index 148a2d4a2..1b7019de7 100644
      std::unordered_map<const ggml_tensor *, ggml_tensor *> replacements;
      std::vector<skippy_activation_port> imports;
      imports.reserve(selection.activation_imports.size());
-@@ -193,11 +250,8 @@ void skippy_realize_stage_graph(
+@@ -193,11 +265,8 @@ void skippy_realize_stage_graph(
          const ggml_tensor * source = selection.activation_imports[index];
          ggml_tensor * detached = detach_import(result.get_ctx(), source);
          replacements.emplace(source, detached);
@@ -9025,7 +9063,7 @@ index 148a2d4a2..1b7019de7 100644
      }
      replace_references(selection, replacements);
  
-@@ -252,10 +306,16 @@ void skippy_realize_stage_graph(
+@@ -252,10 +321,16 @@ void skippy_realize_stage_graph(
              tensor = replacement->second;
          }
          ggml_set_output(tensor);
@@ -10124,7 +10162,7 @@ index 11559ce5c..5c8617fe9 100644
              n_tokens,
              n_seqs,
 diff --git a/src/skippy/tests/profile_residency.cpp b/src/skippy/tests/profile_residency.cpp
-index e2ec9e4a6..0d4d602fa 100644
+index e2ec9e4a6..a2a74d889 100644
 --- a/src/skippy/tests/profile_residency.cpp
 +++ b/src/skippy/tests/profile_residency.cpp
 @@ -4,6 +4,8 @@
@@ -10144,7 +10182,7 @@ index e2ec9e4a6..0d4d602fa 100644
  #include <string>
  #include <vector>
  
-@@ -26,7 +29,14 @@ static std::string read_string(skippy_stage_plan * plan, skippy_stage_plan_strin
+@@ -26,7 +29,15 @@ static std::string read_string(skippy_stage_plan * plan, skippy_stage_plan_strin
      return std::string(value, size);
  }
  
@@ -10156,11 +10194,12 @@ index e2ec9e4a6..0d4d602fa 100644
 +};
 +
 +static int run(const char * path, bool integrated, mtp_receipt * receipt = nullptr,
-+        bool force_unfused_gdn = false, bool ordinary_reference = false) {
++        bool force_unfused_gdn = false, bool ordinary_reference = false,
++        bool cross_sequence_geometry = false) {
      ggml_context * tensor_context = nullptr;
      const gguf_init_params inspect = {true, &tensor_context};
      std::unique_ptr<gguf_context, decltype(&gguf_free)> metadata(gguf_init_from_file(path, inspect), gguf_free);
-@@ -58,12 +68,13 @@ static int run(const char * path, bool integrated) {
+@@ -58,12 +69,14 @@ static int run(const char * path, bool integrated) {
      mp.use_extra_bufts = false;
      mp.load_mtp = true;
      std::unique_ptr<llama_model, decltype(&llama_model_free)> model(llama_model_load_from_file(path, mp), llama_model_free);
@@ -10172,11 +10211,12 @@ index e2ec9e4a6..0d4d602fa 100644
      const skippy_stage_planner_profile_v1 profiles[] = {
          {1, sizeof(skippy_stage_planner_profile_v1), "decode", 1, 1, 1, 0},
 -        {1, sizeof(skippy_stage_planner_profile_v1), "prefill", 8, 1, 8, 0},
-+        {1, sizeof(skippy_stage_planner_profile_v1), "prefill", prefill_capacity, 1, prefill_capacity, 0},
++        {1, sizeof(skippy_stage_planner_profile_v1), "prefill", prefill_capacity,
++            cross_sequence_geometry ? 2u : 1u, prefill_capacity, 0},
      };
      const std::string package_id = "sha256:" + std::string(64, 'a');
      const skippy_stage_planner_config_v1 pc = {1, sizeof(skippy_stage_planner_config_v1),
-@@ -96,8 +107,8 @@ static int run(const char * path, bool integrated) {
+@@ -96,8 +109,8 @@ static int run(const char * path, bool integrated) {
      config.layer_start = 0;
      config.layer_end = layer_count;
      config.ctx_size = 32;
@@ -10187,7 +10227,7 @@ index e2ec9e4a6..0d4d602fa 100644
      config.n_gpu_layers = 0;
      config.n_threads = config.n_threads_batch = 1;
      config.flash_attn_type = 0;
-@@ -128,35 +139,106 @@ static int run(const char * path, bool integrated) {
+@@ -128,35 +141,107 @@ static int run(const char * path, bool integrated) {
          if (found == runtime->model->tensors_by_name.end() || found->second == nullptr ||
                  (found->second->data == nullptr && found->second->buffer == nullptr)) return 13;
      }
@@ -10271,9 +10311,10 @@ index e2ec9e4a6..0d4d602fa 100644
 +            if (step_rc != 0) return 23;
 +            if (!ordinary_reference && (skippy_stage_program_arch_builder_calls() ||
 +                        skippy_stage_program_selector_calls())) return 24;
-+            if (receipt && !stage_program_reference::snapshot(
-+                        runtime->ctx, receipt->target_roots, receipt->target)) return 25;
 +        }
++        if (receipt && (force_unfused_gdn || cross_sequence_geometry) &&
++                !stage_program_reference::snapshot(
++                    runtime->ctx, receipt->target_roots, receipt->target)) return 25;
          skippy_session_free(session, &error);
          skippy_model_free(runtime, &error);
          skippy_error_free(error);
@@ -10303,7 +10344,7 @@ index e2ec9e4a6..0d4d602fa 100644
      skippy_session_free(session, &error);
      skippy_model_free(runtime, &error);
      skippy_error_free(error);
-@@ -164,10 +246,33 @@ static int run(const char * path, bool integrated) {
+@@ -164,10 +249,46 @@ static int run(const char * path, bool integrated) {
  }
  
  int main(int argc, char ** argv) {
@@ -10311,6 +10352,19 @@ index e2ec9e4a6..0d4d602fa 100644
 +    if (argc != 2 && argc != 3) return 64;
      llama_backend_init();
 +    const bool force_unfused_gdn = argc == 3 && std::string(argv[2]) == "unfused-gdn";
++    const bool cross_sequence_geometry = argc == 3 && std::string(argv[2]) == "cross-sequence-geometry";
++    if (cross_sequence_geometry) {
++        mtp_receipt actual;
++        int result = run(argv[1], false, &actual, false, false, true);
++        if (result == 0) {
++            mtp_receipt reference;
++            reference.target_roots = actual.target_roots;
++            result = run(argv[1], false, &reference, false, true, true);
++            if (result == 0 && !stage_program_reference::compare_snapshots(actual.target, reference.target)) result = 26;
++        }
++        llama_backend_free();
++        return result;
++    }
 +    if (force_unfused_gdn) {
 +        mtp_receipt actual;
 +        int result = run(argv[1], false, &actual, true);

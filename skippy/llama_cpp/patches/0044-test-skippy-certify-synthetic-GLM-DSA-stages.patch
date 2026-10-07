@@ -1,4 +1,4 @@
-From cadc3fa464fbaedca95f813cf0a83c73e37c1ab8 Mon Sep 17 00:00:00 2001
+From f80dfb8136d29c58224f25705ead4d720202ea97 Mon Sep 17 00:00:00 2001
 From: James Dumay <jameswdumay@gmail.com>
 Date: Fri, 25 Sep 2026 16:50:20 +1000
 Subject: [PATCH 44/67] test(skippy): certify synthetic GLM-DSA stages
@@ -13,12 +13,12 @@ Subject: [PATCH 44/67] test(skippy): certify synthetic GLM-DSA stages
  6 files changed, 128 insertions(+), 14 deletions(-)
 
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index c30e1e030..027c97dd1 100644
+index 2559a3258..ff5f2dc73 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
-@@ -237,6 +237,24 @@ if (LLAMA_STAGE_BUILD_TESTS)
-     add_dependencies(skippy-noalloc-graph-planning skippy-graph-contract-models)
-     include(skippy/tests/graph_contract_cases.cmake)
+@@ -246,6 +246,24 @@ if (LLAMA_STAGE_BUILD_TESTS)
+             FIXTURES_REQUIRED contract-${LFM_FAMILY} TIMEOUT 900)
+     endforeach()
  
 +    set(GLM_DSA_SYNTHETIC_FIXTURE_DIR "${SKIPPY_MODEL_FIXTURE_DIR}/glm-dsa-synthetic")
 +    file(MAKE_DIRECTORY "${GLM_DSA_SYNTHETIC_FIXTURE_DIR}")

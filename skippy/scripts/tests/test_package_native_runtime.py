@@ -19,6 +19,40 @@ def write_failing_nvcc(path: Path) -> None:
 
 
 class PackageNativeRuntimeTests(unittest.TestCase):
+    def test_macos_collects_one_loadable_image_per_library(self) -> None:
+        script = SCRIPT.read_text(encoding="utf-8")
+        start = script.index("collect_runtime_libraries() {")
+        end = script.index("linux_cuda_redistributable_present() {", start)
+        harness = (
+            "set -euo pipefail\n"
+            + script[start:end]
+            + 'TARGET_TRIPLE="aarch64-apple-darwin"\n'
+            + 'library_pattern() { printf "*.dylib\\n"; }\n'
+            + 'primary_library_names() { printf "libllama.dylib\\n"; }\n'
+            + 'collect_runtime_libraries\n'
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            build_dir = Path(directory)
+            for name in (
+                "libggml.0.26.0.dylib",
+                "libggml.0.dylib",
+                "libggml.dylib",
+                "libllama.0.6.0.dylib",
+                "libllama.0.dylib",
+                "libllama.dylib",
+            ):
+                (build_dir / name).write_bytes(b"library")
+            result = subprocess.run(
+                ["bash", "-s"], input=harness,
+                env={**os.environ, "LLAMA_STAGE_BUILD_DIR": str(build_dir)},
+                text=True, capture_output=True, check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(
+                [Path(path).name for path in result.stdout.splitlines()],
+                ["libggml.dylib", "libllama.dylib"],
+            )
+
     def test_runtime_version_comes_from_skippy_not_workspace(self) -> None:
         script = SCRIPT.read_text(encoding="utf-8")
         start = script.index("skippy_runtime_version() {")

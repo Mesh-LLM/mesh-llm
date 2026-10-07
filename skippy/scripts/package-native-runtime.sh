@@ -394,13 +394,15 @@ build_model_package_tool() {
 }
 
 collect_runtime_libraries() {
-    local pattern primary_names
+    local pattern primary_names macos
     pattern="$(library_pattern)"
     primary_names="$(primary_library_names | tr '\n' ' ')"
+    macos=0
+    [[ "$TARGET_TRIPLE" != *apple-darwin ]] || macos=1
     find "$LLAMA_STAGE_BUILD_DIR" \( -type f -o -type l \) -name "$pattern" \
         ! -path '*/CMakeFiles/*' \
         | sort \
-        | awk -v primary_names="$primary_names" '
+        | awk -v primary_names="$primary_names" -v macos="$macos" '
             BEGIN {
                 primary_count = split(primary_names, names, " ")
                 for (idx = 1; idx <= primary_count; idx++) {
@@ -410,6 +412,9 @@ collect_runtime_libraries() {
             {
                 name = $0
                 sub(/^.*\//, "", name)
+                # macOS versioned aliases must not become separate loadable
+                # images: their duplicate C++ RTTI breaks dynamic_cast.
+                if (macos && name ~ /\.[0-9][0-9.]*\.dylib$/) next
                 paths[++path_count] = $0
                 if (name in primary) primary_paths[name] = $0
             }
@@ -575,7 +580,7 @@ rewrite_macos_runtime_paths() {
         exit 1
     fi
 
-    local rel_path library name dep dep_name candidate candidate_name
+    local rel_path library name dep dep_name candidate candidate_name candidate_stem
     for rel_path in "${library_paths[@]}"; do
         library="$stage_dir/$rel_path"
         name="$(basename "$library")"
@@ -601,13 +606,15 @@ rewrite_macos_runtime_paths() {
         fi
     done
 
-    for rel_path in "${library_paths[@]}"; do
+    for rel_path in "${library_paths[@]}" "${tool_paths[@]}"; do
         library="$stage_dir/$rel_path"
         while IFS= read -r dep; do
             dep_name="$(basename "$dep")"
             for candidate in "${library_paths[@]}"; do
                 candidate_name="$(basename "$candidate")"
-                if [[ "$dep_name" == "$candidate_name" && "$dep" != "@rpath/$candidate_name" ]]; then
+                candidate_stem="${candidate_name%.dylib}"
+                if [[ "$dep_name" == "$candidate_name" && "$dep" != "@rpath/$candidate_name" ]] ||
+                        [[ "$dep_name" == "$candidate_stem".[0-9]*.dylib ]]; then
                     install_name_tool -change "$dep" "@rpath/$candidate_name" "$library"
                 fi
             done

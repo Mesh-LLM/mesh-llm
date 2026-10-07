@@ -1052,6 +1052,7 @@ assert_expected_stage_payload() {
         --runtime-bundle "$RUNTIME_BUNDLE" \
         --tested-commit "$(git rev-parse HEAD)" \
         --artifact-id "$artifact_id" --model-sha256 "$model_sha256" \
+        --backend-device "$DEVICE" \
         --seed-log "$SEED_LOG" --worker-log "$WORKER_LOG" \
         --responses-dir "$response_dir" \
         --output "${WORK_DIR}/${MODEL_LABEL}-auto-payload-certification.json"

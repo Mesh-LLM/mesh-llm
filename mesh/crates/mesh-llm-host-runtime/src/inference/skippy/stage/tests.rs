@@ -430,6 +430,45 @@ async fn stage_control_shutdown_cancels_and_joins_an_active_readiness_probe() {
     server.join().unwrap();
 }
 
+#[tokio::test]
+async fn failed_binary_stage_ends_readiness_wait_before_load_deadline() {
+    let bind_addr = materialize_stage_bind_addr("127.0.0.1:0".parse().unwrap()).unwrap();
+    let mut probe = Some(start_binary_stage_ready_probe(
+        bind_addr,
+        Duration::from_secs(900),
+    ));
+    let mut polls = 0;
+    let result = tokio::time::timeout(
+        Duration::from_secs(2),
+        wait_for_stage_readiness(&mut probe, || {
+            polls += 1;
+            skippy_serving::EmbeddedServerStatus {
+                name: "binary-stage",
+                bind_addr,
+                state: if polls < 2 {
+                    skippy_serving::EmbeddedState::Starting
+                } else {
+                    skippy_serving::EmbeddedState::Failed
+                },
+                started_at_unix_nanos: 0,
+                stopped_at_unix_nanos: None,
+                last_error: Some("native model open failed".to_string()),
+                input_activation_boundary: None,
+                output_activation_boundary: None,
+            }
+        }),
+    )
+    .await
+    .expect("failed server must end the readiness wait promptly")
+    .unwrap_err();
+    assert!(
+        result
+            .to_string()
+            .contains("server stopped before readiness")
+    );
+    assert!(probe.is_none(), "failed probe must be cancelled and joined");
+}
+
 #[test]
 fn inventory_source_candidates_prefer_explicit_gguf_ref() {
     let request = StageInventoryRequest {

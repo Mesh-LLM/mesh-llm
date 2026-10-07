@@ -12,7 +12,9 @@ use mesh_llm_skippy_adapter::readiness::{
 };
 use skippy_coordinator::{ClaimDecision, ClaimFence, LoadClaimRef};
 use skippy_protocol::{FlashAttentionType, PeerConfig, StageConfig};
-use skippy_serving::{EmbeddedServerHandle, binary_transport::BinaryStageOptions};
+use skippy_serving::{
+    EmbeddedServerHandle, EmbeddedServerStatus, binary_transport::BinaryStageOptions,
+};
 use tokio::{
     sync::{mpsc, oneshot},
     task::JoinHandle,
@@ -40,6 +42,34 @@ struct StageControlState {
     coordinator_claims: ClaimFence,
     readiness_probe: Option<StageReadinessProbe>,
     telemetry: super::SkippyTelemetryOptions,
+}
+
+async fn wait_for_stage_readiness(
+    probe: &mut Option<StageReadinessProbe>,
+    mut server_status: impl FnMut() -> EmbeddedServerStatus,
+) -> Result<()> {
+    let mut status_poll = tokio::time::interval(Duration::from_millis(100));
+    loop {
+        tokio::select! {
+            result = probe
+                .as_mut()
+                .expect("binary stage readiness probe must remain registered while pending")
+                .wait() => return result,
+            _ = status_poll.tick() => {
+                if matches!(
+                    server_status().state,
+                    skippy_serving::EmbeddedState::Failed | skippy_serving::EmbeddedState::Stopped
+                ) {
+                    probe
+                        .take()
+                        .expect("failed stage must have a readiness probe")
+                        .cancel_and_join()
+                        .await;
+                    return Err(anyhow!("binary stage server stopped before readiness"));
+                }
+            }
+        }
+    }
 }
 
 pub(crate) struct StageControlHandle {
@@ -357,13 +387,14 @@ impl StageControlState {
             bind_addr,
             stage_load_timeout(&effective_load),
         ));
-        let readiness_result = {
-            let probe = self
-                .readiness_probe
-                .as_mut()
-                .expect("binary stage readiness probe must remain registered while pending");
-            probe.wait().await
-        };
+        let readiness_result = wait_for_stage_readiness(&mut self.readiness_probe, || {
+            self.stages
+                .get(&key)
+                .expect("newly started stage must remain registered while readiness is pending")
+                .server
+                .status()
+        })
+        .await;
         self.readiness_probe.take();
         if let Err(error) = readiness_result {
             let stage = self

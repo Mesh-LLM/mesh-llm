@@ -145,6 +145,24 @@ class StagePayloadCertificationTests(unittest.TestCase):
         with self.assertRaisesRegex(MODULE.PayloadError, "exact payload"):
             self.certify(evidence, expectation, logs)
 
+    def test_resident_stage_requires_no_exact_payload(self):
+        evidence, expectation, logs, _ = fixture()
+        expectation["stages"][0]["exact_payload_kind"] = None
+        self.assertEqual(self.certify(evidence, expectation, logs)["status"], "pass")
+        logs["seed"].append({
+            "event": "stage.binary_kv_record_decision",
+            "attributes": {
+                "skippy.run_id": "current-run",
+                "skippy.model_id": "pinned-model",
+                "skippy.topology_id": "topology",
+                "skippy.stage_id": "stage-0",
+                "skippy.stage_index": 0,
+                "skippy.exact_cache.payload_kind": "kv-recurrent",
+            },
+        })
+        with self.assertRaisesRegex(MODULE.PayloadError, "exact payload"):
+            self.certify(evidence, expectation, logs)
+
     def test_cli_records_warm_evidence_and_failure_artifact(self):
         evidence, expectation, logs, event = fixture()
         expectation["revision"] = "pinned-revision"
@@ -200,6 +218,16 @@ class StagePayloadCertificationTests(unittest.TestCase):
             failed = json.loads((root / "result.json").read_text())
             self.assertEqual(failed["status"], "fail")
             self.assertIn("stage stage-1 payload", failed["error"])
+
+            expectation["metal_stages"] = [
+                expectation["stages"][0],
+                {**expectation["stages"][1], "payload": "FullState"},
+            ]
+            (root / "expectations.json").write_text(
+                json.dumps({"models": {"pinned": expectation}}), encoding="utf-8"
+            )
+            command.extend(["--backend-device", "MTL0"])
+            self.assertEqual(run_with_worker(event(1, payload="FullState")).returncode, 0)
 
 
 if __name__ == "__main__":

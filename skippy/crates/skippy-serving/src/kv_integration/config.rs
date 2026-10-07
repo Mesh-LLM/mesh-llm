@@ -130,7 +130,15 @@ impl KvStageIntegration {
             }
             _ => false,
         };
-        let payload = if graph_loaded_state_mismatch {
+        // A Metal hybrid stage can round-trip the partial payload bytes yet
+        // produce a different continuation after restore. FullState preserves
+        // the observed cold continuation until the native difference is fixed.
+        let metal_recurrent_state = matches!(model_capability, ModelKvCapability::KnownRecurrent)
+            && config.selected_device.as_ref().is_some_and(|device| {
+                let backend = device.backend_device.to_ascii_lowercase();
+                backend.starts_with("mtl") || backend.contains("metal")
+            });
+        let payload = if graph_loaded_state_mismatch || metal_recurrent_state {
             StagePrefixCachePayload::FullState
         } else {
             effective_cache_payload(cache_config.payload, &model_capability, memory_cache)
@@ -149,6 +157,8 @@ impl KvStageIntegration {
         );
         let payload_selection_reason = if graph_loaded_state_mismatch {
             "graph_loaded_state_mismatch"
+        } else if metal_recurrent_state && cache_config.payload != StageKvCachePayload::FullState {
+            "metal_recurrent_full_state"
         } else if cache_config.payload == StageKvCachePayload::FullState {
             "explicit_full_state"
         } else if matches!(model_capability, ModelKvCapability::Unknown(_)) {
@@ -1734,6 +1744,44 @@ mod tests {
 
         assert_eq!(kv.payload, StagePrefixCachePayload::KvRecurrent);
         assert_eq!(kv.graph_loaded_state_mismatches, 0);
+    }
+
+    #[test]
+    fn metal_recurrent_state_uses_full_state_while_cpu_keeps_partial_cache() {
+        let mut config = enabled_auto_config("future/hybrid");
+        config.kv_graph_state = "recurrent".into();
+        let capabilities = Some(skippy_runtime::MemoryCacheCapabilities {
+            resident: false,
+            kv_recurrent: true,
+        });
+        config.selected_device = Some(StageDevice {
+            backend_device: "MTL0".into(),
+            stable_id: None,
+            index: Some(0),
+            vram_bytes: None,
+        });
+        let metal = KvStageIntegration::from_loaded_model(
+            &config,
+            Some(ModelStateKind::Hybrid),
+            capabilities,
+            None,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(metal.payload, StagePrefixCachePayload::FullState);
+        assert_eq!(metal.payload_selection_reason, "metal_recurrent_full_state");
+        assert_eq!(metal.payload_fallbacks, 1);
+
+        config.selected_device.as_mut().unwrap().backend_device = "CPU".into();
+        let cpu = KvStageIntegration::from_loaded_model(
+            &config,
+            Some(ModelStateKind::Hybrid),
+            capabilities,
+            None,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(cpu.payload, StagePrefixCachePayload::KvRecurrent);
     }
 
     #[test]

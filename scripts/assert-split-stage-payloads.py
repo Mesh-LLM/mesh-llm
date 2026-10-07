@@ -129,7 +129,8 @@ def certify(
         expected = expected_stages[stage_index]
         for field, value in expected.items():
             if field == "exact_payload_kind":
-                if exact_kinds[stage_id] != {value}:
+                expected_kinds = set() if value is None else {value}
+                if exact_kinds[stage_id] != expected_kinds:
                     raise PayloadError(
                         f"stage {stage_id} exact payload: expected {value!r}, "
                         f"observed {sorted(exact_kinds[stage_id])}"
@@ -168,6 +169,10 @@ def certify_from_files(args: argparse.Namespace) -> dict[str, Any]:
         for key in ("revision", "sha256")
     ):
         raise PayloadError("Auto expectation differs from the immutable model manifest")
+    backend_device = getattr(args, "backend_device", "").lower()
+    metal = backend_device.startswith("mtl") or "metal" in backend_device
+    if metal and "metal_stages" in expectation:
+        expectation = {**expectation, "stages": expectation["metal_stages"]}
     result = certify(
         load_json(args.evidence), expectation,
         {"seed": log_events(args.seed_log), "worker": log_events(args.worker_log)},
@@ -218,6 +223,7 @@ def main() -> None:
     parser.add_argument("--tested-commit", required=True)
     parser.add_argument("--artifact-id", required=True)
     parser.add_argument("--model-sha256", required=True)
+    parser.add_argument("--backend-device", default="")
     parser.add_argument("--seed-log", type=Path, required=True)
     parser.add_argument("--worker-log", type=Path, required=True)
     parser.add_argument("--responses-dir", type=Path, required=True)
