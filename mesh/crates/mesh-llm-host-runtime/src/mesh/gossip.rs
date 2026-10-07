@@ -480,6 +480,7 @@ impl Node {
 
     pub(crate) async fn remove_disallowed_peer(&self, id: EndpointId) {
         let mut state = self.state.lock().await;
+        self.plugin_keys.set_peer(id, Vec::new());
         if let Some(admitted_count) = state.remove_disallowed_peer(id) {
             let _ = self.peer_change_tx.send(admitted_count);
         }
@@ -522,6 +523,7 @@ impl Node {
                 .policy_rejected_peers
                 .insert(id, owner_summary.status.clone());
         }
+        self.plugin_keys.set_peer(id, Vec::new());
         if let Some(admitted_count) = state.remove_disallowed_peer(id) {
             let _ = self.peer_change_tx.send(admitted_count);
         }
@@ -1060,6 +1062,7 @@ impl Node {
             );
             let mut state = self.state.lock().await;
             state.requirement_rejected_peers.insert(id);
+            self.plugin_keys.set_peer(id, Vec::new());
             if let Some(admitted_count) = state.remove_disallowed_peer(id) {
                 let _ = self.peer_change_tx.send(admitted_count);
             }
@@ -1153,6 +1156,7 @@ impl Node {
         // /api/status, the UI, and routing all stop seeing them.
         if !version_allowed_for_rebroadcast(ann.version.as_deref()) {
             let mut state = self.state.lock().await;
+            self.plugin_keys.set_peer(id, Vec::new());
             if let Some(admitted_count) = state.remove_disallowed_peer(id) {
                 let _ = self.peer_change_tx.send(admitted_count);
             }
@@ -1171,6 +1175,7 @@ impl Node {
         // gets in.
         if peer_is_idle_transitive_client(ann) {
             let mut state = self.state.lock().await;
+            self.plugin_keys.set_peer(id, Vec::new());
             if let Some(admitted_count) = state.remove_disallowed_peer(id) {
                 let _ = self.peer_change_tx.send(admitted_count);
             }
@@ -1186,6 +1191,7 @@ impl Node {
         );
         if !policy_accepts_peer(self.trust_policy, &owner_summary) {
             let mut state = self.state.lock().await;
+            self.plugin_keys.set_peer(id, Vec::new());
             if let Some(admitted_count) = state.remove_disallowed_peer(id) {
                 let _ = self.peer_change_tx.send(admitted_count);
             }

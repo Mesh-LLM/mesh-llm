@@ -1731,6 +1731,29 @@ async fn a_peer_that_leaves_is_no_longer_listed_with_plugin_keys() {
 }
 
 #[tokio::test]
+async fn a_disallowed_peer_is_no_longer_listed_with_plugin_keys() {
+    use crate::mesh::plugin_keys::bind;
+
+    let node = make_test_node(super::NodeRole::Worker)
+        .await
+        .expect("test node must start");
+    let peer = SecretKey::from_bytes(&[0xab; 32]);
+    let peer_id = EndpointId::from(peer.public());
+    let key = ed25519_dalek::SigningKey::from_bytes(&[7; 32])
+        .verifying_key()
+        .to_bytes();
+    node.plugin_keys
+        .set_peer(peer_id, vec![bind(&peer, "key-demo", key)]);
+    assert_eq!(node.plugin_keys.peers().len(), 1);
+
+    node.remove_disallowed_peer(peer_id).await;
+    assert!(
+        node.plugin_keys.peers().is_empty(),
+        "a disallowed peer's keys are not kept"
+    );
+}
+
+#[tokio::test]
 async fn a_plugin_sets_replaces_and_withdraws_only_its_own_key() {
     use crate::plugin::proto::PluginKeyRequest;
 
