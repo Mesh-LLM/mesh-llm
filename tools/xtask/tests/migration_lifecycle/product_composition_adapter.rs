@@ -24,6 +24,7 @@ struct Fixture {
     _scratch: tempfile::TempDir,
     root: PathBuf,
     outside: PathBuf,
+    product_version: String,
 }
 
 fn executable(path: &Path, text: &str) {
@@ -144,8 +145,13 @@ impl Fixture {
                 "#!/bin/sh\nprintf 'forbidden %s\\n' \"$0\" >> \"$PRODUCT_EVENTS\"\nexit 98\n",
             );
         }
+        let product_version = version.split('+').next().unwrap().to_owned();
+        let contract = serde_json::json!({
+            "schema_version":1, "product_version":product_version,
+            "runtime_release":"1.0.0", "skippy_abi":"0.1.0"
+        });
         let host = format!(
-            "#!/bin/sh\n[ \"$#\" -eq 1 ] && [ \"$1\" = --version ] || exit 98\nprintf 'host-version\\n' >> \"$PRODUCT_EVENTS\"\nprintf 'mesh-llm {version}\\n'\n"
+            "#!/bin/sh\ncase \"$*\" in\n--version) printf 'host-version\\n' >> \"$PRODUCT_EVENTS\"; printf 'mesh-llm {version}\\n';;\n'--log-format json --print-build-contract') printf 'host-contract\\n' >> \"$PRODUCT_EVENTS\"; printf '%s\\n' '{contract}';;\n*) exit 98;;\nesac\n"
         );
         executable(&root.join("inputs/host/mesh-llm"), &host);
         fs::write(root.join("inputs/host/host-imports.json"), b"{}").unwrap();
@@ -159,6 +165,7 @@ impl Fixture {
             _scratch: scratch,
             root: root.canonicalize().unwrap(),
             outside,
+            product_version,
         }
     }
 
@@ -292,13 +299,15 @@ impl Fixture {
             &fs::read(self.root.join("product/product-manifest.json")).unwrap(),
         )
         .unwrap();
-        assert_eq!(manifest["mesh_version"], "1.2.3");
+        assert_eq!(manifest["schema_version"], 2);
+        assert_eq!(manifest["mesh_version"], self.product_version);
         assert_eq!(manifest["backend"], "cpu");
         assert_eq!(
             manifest["host"]["sha256"],
             digest(&fs::read(self.root.join("inputs/host/mesh-llm")).unwrap())
         );
         assert_eq!(manifest["runtime"]["id"], "runtime");
+        assert_eq!(manifest["runtime"]["release_version"], "9.0.0");
         assert_eq!(
             fs::read(
                 self.root
@@ -362,8 +371,9 @@ fn write_runtime(directory: &Path) {
     fs::write(directory.join("lib/runtime.bin"), library).unwrap();
     executable(&directory.join("tools/mesh-runtime-bench"), tool);
     let manifest = serde_json::json!({
+        "schema_version":2,
         "runtime": {
-            "id":"runtime", "mesh_version":"1.2.3", "skippy_abi":"0.1.0",
+            "id":"runtime", "release_version":"9.0.0", "skippy_abi":"0.1.0",
             "platform":{"os":"macos","arch":"x86_64","target":"x86_64-apple-darwin"},
             "backend":{"kind":"cpu"}, "libraries":["lib/runtime.bin"],
             "files":{"lib/runtime.bin":digest(library)},
@@ -445,7 +455,7 @@ fn product_composition_adapter_compares_release_version_without_discarding_drift
         ("1.2.3", "", true),
         ("1.2.3+gABC123", "1.2.3", true),
         ("1.2.3+gABC123.dirty", "v1.2.3", true),
-        ("9.9.9", "", false),
+        ("9.9.9", "", true),
         ("9.9.9+gABC123", "1.2.3", false),
     ] {
         let fixture = Fixture::new(version);

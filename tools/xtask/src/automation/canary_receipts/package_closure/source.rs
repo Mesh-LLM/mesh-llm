@@ -187,6 +187,29 @@ fn revision_metadata(path: &Path) -> DynResult<String> {
     Ok(String::from_utf8(bytes)?)
 }
 
+/// Prefer the current product queue; a malformed current entry must not fall back.
+pub(super) fn llama_queue_directory(root: &Path) -> DynResult<PathBuf> {
+    let current = root.join("skippy/llama_cpp");
+    match fs::symlink_metadata(&current) {
+        Ok(_) => Ok(current),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            Ok(root.join("third_party/llama.cpp"))
+        }
+        Err(error) => Err(error.into()),
+    }
+}
+
+pub(super) fn parity_manifest_path(root: &Path) -> DynResult<&'static str> {
+    const CURRENT: &str = "skippy/docs/llama-parity-candidates.json";
+    match fs::symlink_metadata(root.join(CURRENT)) {
+        Ok(_) => Ok(CURRENT),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            Ok("docs/skippy/llama-parity-candidates.json")
+        }
+        Err(error) => Err(error.into()),
+    }
+}
+
 pub(super) fn validate_recipe(root: &Path, provenance: &Provenance) -> DynResult<()> {
     revision(&provenance.head)?;
     if provenance.markers.len() != MARKERS.len()
@@ -197,13 +220,13 @@ pub(super) fn validate_recipe(root: &Path, provenance: &Provenance) -> DynResult
         return Err("prepared source marker set mismatch".into());
     }
     let marker = |name: &str| provenance.markers[name].trim();
-    let upstream = revision_metadata(&root.join("third_party/llama.cpp/upstream.txt"))?;
+    let queue = llama_queue_directory(root)?;
+    let upstream = revision_metadata(&queue.join("upstream.txt"))?;
     revision(upstream.trim())?;
     if marker(".mesh-llm-prepare-schema") != "5"
         || marker(".mesh-llm-upstream-sha") != upstream.trim()
         || marker(".mesh-llm-patched-sha") != provenance.head
-        || marker(".mesh-llm-patch-digest")
-            != patch_digest(&root.join("third_party/llama.cpp/patches"))?.as_str()
+        || marker(".mesh-llm-patch-digest") != patch_digest(&queue.join("patches"))?.as_str()
     {
         return Err("prepared source differs from current pinned patch recipe".into());
     }
@@ -261,5 +284,55 @@ mod bundle_identity_tests {
         ] {
             assert!(candidate_bundle_identity(advertised.as_bytes(), &candidate, branch).is_err());
         }
+    }
+}
+
+#[cfg(test)]
+mod product_layout_tests {
+    use super::*;
+    #[test]
+    fn product_sources_win_without_falling_back_on_invalid_current_bytes() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        fs::create_dir_all(root.join("third_party/llama.cpp")).unwrap();
+        fs::write(
+            root.join("third_party/llama.cpp/upstream.txt"),
+            "a".repeat(40),
+        )
+        .unwrap();
+        assert_eq!(
+            llama_queue_directory(root).unwrap(),
+            root.join("third_party/llama.cpp")
+        );
+        assert_eq!(
+            parity_manifest_path(root).unwrap(),
+            "docs/skippy/llama-parity-candidates.json"
+        );
+        fs::create_dir_all(root.join("skippy/llama_cpp")).unwrap();
+        fs::create_dir_all(root.join("skippy/docs")).unwrap();
+        fs::write(root.join("skippy/llama_cpp/upstream.txt"), "invalid").unwrap();
+        fs::write(
+            root.join("skippy/docs/llama-parity-candidates.json"),
+            "invalid",
+        )
+        .unwrap();
+        assert_eq!(
+            llama_queue_directory(root).unwrap(),
+            root.join("skippy/llama_cpp")
+        );
+        assert!(
+            revision(
+                &revision_metadata(&llama_queue_directory(root).unwrap().join("upstream.txt"))
+                    .unwrap()
+            )
+            .is_err()
+        );
+        assert_eq!(
+            parity_manifest_path(root).unwrap(),
+            "skippy/docs/llama-parity-candidates.json"
+        );
+        assert!(
+            super::super::policy_document::json(root, parity_manifest_path(root).unwrap()).is_err()
+        );
     }
 }

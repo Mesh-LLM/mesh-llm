@@ -2,6 +2,8 @@
 set -euo pipefail
 
 HARNESS={harness}
+PREPARED_PYTHON={prepared_python}
+PREPARED_AGENT={prepared_agent}
 RAW_DIR={raw_dir}
 INSTANCES={instances}
 EXPERT_INSTANCES={expert_instances}
@@ -18,9 +20,6 @@ EVAL_WORKERS={eval_workers}
 LOCAL_EVAL_FLAG={local_eval_flag}
 DOCKER_PLATFORM={docker_platform}
 PARSE_FUNCTION={parse_function}
-SWEAGENT_PYTHON={sweagent_python}
-SWEREX_SPEC={swerex_spec}
-SWEREX_PIP_INDEX_URL={swerex_pip_index_url}
 HF_HOME_DIR={hf_home}
 HF_DATASETS_CACHE_DIR={hf_datasets_cache}
 UV_CACHE_DIR_LOCAL={uv_cache_dir}
@@ -64,55 +63,17 @@ if [[ -n "$PARSE_FUNCTION" ]]; then
     --agent.tools.parse_function.type "$PARSE_FUNCTION"
   )
 fi
-if [[ -z "$SWEREX_SPEC" && "$DEPLOYMENT_TYPE" == "docker" ]]; then
-  SWEREX_SPEC="swe-rex[modal]==1.4.0"
-fi
-
 cd "$HARNESS"
 
-uv run \
-  --with-requirements requirements.txt \
-  --with pyyaml \
-  python helper_code/generate_sweagent_instances.py \
+# Fixed SDK generator needs its pinned sibling modules under isolated Python.
+"$PREPARED_PYTHON" -I -B -c 'import sys,runpy; parent=sys.argv[1]; sys.path.insert(0,parent+"/helper_code"); sys.argv=[parent+"/helper_code/generate_sweagent_instances.py",*sys.argv[2:]]; runpy.run_path(sys.argv[0],run_name="__main__")' "$HARNESS" \
     --dockerhub_username "$DOCKERHUB_USERNAME" \
     --output_path "$INSTANCES"
 
-(
-  cd SWE-agent
-  uv venv --clear --python "$SWEAGENT_PYTHON" .venv
-  uv pip install --python .venv/bin/python -e .
-  if [[ -n "$SWEREX_SPEC" ]]; then
-    uv pip install --python .venv/bin/python --upgrade "$SWEREX_SPEC"
-  fi
-  if [[ "$DEPLOYMENT_TYPE" == "docker" && -n "$SWEREX_PIP_INDEX_URL" ]]; then
-    .venv/bin/python - "$SWEREX_PIP_INDEX_URL" <<'PY'
-import sys
-from pathlib import Path
-
-import swerex.deployment.docker as docker
-
-path = Path(docker.__file__)
-text = path.read_text()
-old = 'f"RUN /root/python3.11/bin/pip3 install --no-cache-dir {{PACKAGE_NAME}}\\n\\n"'
-new = (
-    f'f"RUN /root/python3.11/bin/pip3 install --index-url {{sys.argv[1]}} '
-    '--no-cache-dir {{PACKAGE_NAME}}\\n\\n"'
-)
-if old in text:
-    path.write_text(text.replace(old, new))
-elif new not in text:
-    raise RuntimeError(f"could not patch SWE-ReX Docker pip index in {{path}}")
-PY
-  fi
-  if [[ "$DEPLOYMENT_TYPE" == "modal" ]]; then
-    .venv/bin/python swerex_patches/patch.py --yes
-  fi
-)
-
 if [[ "$DEPLOYMENT_TYPE" == "docker" ]]; then
   (
-    cd SWE-agent
-    .venv/bin/python - "$INSTANCES" "$EXPERT_INSTANCES" "$DOCKER_PLATFORM" <<'PY'
+    cd "$PREPARED_AGENT"
+    "$PREPARED_PYTHON" -I -B - "$INSTANCES" "$EXPERT_INSTANCES" "$DOCKER_PLATFORM" <<'PY'
 import sys
 
 import yaml
@@ -168,10 +129,10 @@ PY
 fi
 
 (
-  cd SWE-agent
+  cd "$PREPARED_AGENT"
   OPENAI_BASE_URL="$BASE_URL" \
   OPENAI_API_KEY="$API_KEY" \
-  .venv/bin/sweagent run-batch \
+  "$PREPARED_PYTHON" -I -B -m sweagent.run.run run-batch \
     --config config/tool_use.yaml \
     --output_dir "$SWEAGENT_OUTPUT" \
     --num_workers "$NUM_WORKERS" \
@@ -189,18 +150,12 @@ fi
     --agent.model.total_cost_limit 0
 )
 
-uv run \
-  --with-requirements requirements.txt \
-  python helper_code/gather_patches.py \
+"$PREPARED_PYTHON" -I -B "$HARNESS/helper_code/gather_patches.py" \
     --directory "$SWEAGENT_OUTPUT" \
     --prefix skippybench \
     --output "$PATCHES"
 
-uv run \
-  --with-requirements requirements.txt \
-  --with docker \
-  --with modal \
-  python swe_bench_pro_eval.py \
+"$PREPARED_PYTHON" -I -B -c 'import sys,runpy,types; parent=sys.argv[1]; helper=types.ModuleType("helper_code"); helper.__path__=[parent+"/helper_code"]; sys.modules["helper_code"]=helper; sys.argv=[parent+"/swe_bench_pro_eval.py",*sys.argv[2:]]; runpy.run_path(sys.argv[0],run_name="__main__")' "$HARNESS" \
     --raw_sample_path helper_code/sweap_eval_full_v2.jsonl \
     --patch_path "$PATCHES" \
     --output_dir "$EVAL_DIR" \

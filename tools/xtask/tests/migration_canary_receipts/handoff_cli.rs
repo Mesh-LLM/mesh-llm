@@ -6,13 +6,32 @@ use std::{
     process::{Command, Output},
 };
 
+fn scheduled_plan() -> Vec<u8> {
+    let mut plan: Value = serde_json::from_slice(PLAN).unwrap();
+    let weights = b"pinned synthetic GGUF fixture";
+    for model in plan["selected_models"].as_array_mut().unwrap() {
+        model["artifact"] = json!({"files":["fixture-model.gguf"],"file_integrity":{"fixture-model.gguf":{"size_bytes":weights.len(),"sha256":Digest::of_bytes(weights)}}});
+        model["resources"] = json!({"estimated_model_bytes":8_u64*1024*1024*1024});
+        if model["family"] == "hybrid" {
+            model["resources"]["minimum_runner_memory_gib"] = json!(256);
+        }
+    }
+    for row in plan["github_matrix"]["include"].as_array_mut().unwrap() {
+        row["id"] = json!(format!("family-{}", row["families"].as_str().unwrap()));
+        row["estimated_work_bytes"] = json!(8_u64 * 1024 * 1024 * 1024);
+        row["historical_row_owner"] = json!({"opaque":"retained"});
+    }
+    serde_json::to_vec(&plan).unwrap()
+}
+
 fn package(pass: &str, bundle: bool) -> (Fixture, Value) {
     let fixture = Fixture::new();
     let package = fixture.0.join("package");
     fs::create_dir(&package).unwrap();
+    let plan = scheduled_plan();
     let mut identity = json!({"schema":3,"platform":"macos-arm64-metal","candidate":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","base":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","controller":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","mesh_source":"","pass_id":pass,"branch":"llama-canary/fixture","run_id":"123","run_attempt":"2","bundle_sha256":null});
     for (name, field, bytes) in [
-        ("plan.json", "plan_sha256", PLAN),
+        ("plan.json", "plan_sha256", plan.as_slice()),
         (
             "binaries.tar",
             "binaries_sha256",
@@ -135,3 +154,99 @@ fn actual_handoff_rejects_foreign_run_and_corrupt_artifact_before_output() {
         assert!(!fixture.0.join("package/pr-body.md").exists());
     }
 }
+
+#[test]
+fn actual_aggregate_refuses_unknown_graph_result_before_package_io() {
+    let fixture = Fixture::new();
+    let output = Command::new(env!("CARGO_BIN_EXE_xtask"))
+        .args(["automation", "canary-receipts", "aggregate", "--package"])
+        .arg(fixture.0.join("absent-package"))
+        .args(["--identity", &"a".repeat(64), "--evidence"])
+        .arg(fixture.0.join("absent-evidence"))
+        .args([
+            "--run-id",
+            "123",
+            "--run-attempt",
+            "4",
+            "--family-result",
+            "neutral",
+        ])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("unknown family job graph result"),
+        "{stderr}"
+    );
+    assert!(!fixture.0.join("absent-package").exists());
+    assert!(!fixture.0.join("absent-evidence").exists());
+}
+
+#[test]
+fn actual_aggregate_failed_graph_cannot_publish_green_with_complete_receipts() {
+    let (fixture, input) = package("repair-1", false);
+    let evidence = fixture.0.join("evidence");
+    fs::create_dir(&evidence).unwrap();
+    for (family, results) in [
+        ("dense", super::support::DENSE),
+        ("hybrid", super::support::HYBRID),
+    ] {
+        let directory = evidence.join(family);
+        fs::create_dir(&directory).unwrap();
+        fs::write(directory.join("results.jsonl"), results).unwrap();
+        let receipt = json!({"candidate":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "family":family,
+            "identity_sha256":input["identity_sha256"], "outcome":"success", "pass_id":"repair-1",
+            "results_sha256":Digest::of_bytes(results).as_str(), "run_attempt":"4", "run_id":"123", "runner":"fixture"});
+        fs::write(
+            directory.join("receipt.json"),
+            serde_json::to_vec(&receipt).unwrap(),
+        )
+        .unwrap();
+    }
+    for graph in ["success", "failure", "cancelled", "skipped"] {
+        let outputs = fixture.0.join(format!("outputs-{graph}"));
+        let output = Command::new(env!("CARGO_BIN_EXE_xtask"))
+            .args(["automation", "canary-receipts", "aggregate", "--package"])
+            .arg(input["package"].as_str().unwrap())
+            .args([
+                "--identity",
+                input["identity_sha256"].as_str().unwrap(),
+                "--evidence",
+            ])
+            .arg(&evidence)
+            .args([
+                "--run-id",
+                "123",
+                "--run-attempt",
+                "4",
+                "--controller-revision",
+                input["controller_revision"].as_str().unwrap(),
+                "--family-result",
+                graph,
+            ])
+            .env("GITHUB_OUTPUT", &outputs)
+            .env_remove("GITHUB_STEP_SUMMARY")
+            .output()
+            .unwrap();
+        assert_eq!(
+            output.status.success(),
+            graph == "success",
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        if graph == "success" {
+            assert!(fs::read_to_string(outputs).unwrap().contains("green=true"));
+        } else {
+            assert!(!outputs.exists());
+            assert!(
+                String::from_utf8_lossy(&output.stderr)
+                    .contains(&format!("family job graph result: {graph}"))
+            );
+        }
+    }
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[path = "handoff_cli/feedback_command.rs"]
+mod feedback_command;

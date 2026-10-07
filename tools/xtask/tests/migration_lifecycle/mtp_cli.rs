@@ -129,6 +129,10 @@ fn mtp_scheduler_full_old_new_sweeps_preserve_cpu_profile_metrics_and_exact_rost
     let v = f.json("success/comparison.json");
     assert_eq!(v["status"], "completed");
     for label in ["old", "new"] {
+        assert_eq!(
+            f.json(&format!("success/{label}-cli-admission.json"))["dialect"],
+            "Current"
+        );
         let arm = &v[label];
         assert_eq!(arm["concurrency_sweep"].as_array().unwrap().len(), 2);
         for row in arm["concurrency_sweep"].as_array().unwrap() {
@@ -325,4 +329,29 @@ fn mtp_scheduler_direct_worker_refuses_unbounded_profiles_before_socket_or_clien
             .contains("bounded regular file")
     );
     f.root.close().unwrap();
+}
+
+#[test]
+fn mtp_scheduler_admits_actual_legacy_help_without_changing_historical_arm_identity() {
+    let fixture = Fixture::new();
+    std::fs::write(
+        fixture.build.join("cli-legacy"),
+        b"finite legacy help fixture",
+    )
+    .unwrap();
+    let raw = fixture.invoke("legacy", &[]);
+    assert!(raw.process.success());
+    assert_eq!(
+        fixture.json("legacy/comparison.json")["status"],
+        "completed"
+    );
+    for label in ["old", "new"] {
+        let receipt = fixture.json(&format!("legacy/{label}-cli-admission.json"));
+        assert_eq!(receipt["dialect"], "Legacy");
+        assert_eq!(receipt["role"], "binary-worker");
+        assert_eq!(
+            fixture.json("legacy/comparison.json")[label]["label"],
+            label
+        );
+    }
 }

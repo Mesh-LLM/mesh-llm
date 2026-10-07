@@ -67,10 +67,13 @@ fn windows_abi_cache_key_binds_every_compatibility_dimension_and_exact_restore()
         ".github/actions/prepare-native-runtime-input/action.yml",
         ".github/actions/setup-windows-rocm-sdk/action.yml",
         "scripts/build-llama.sh",
+        "skippy/scripts/build-llama.sh",
         "scripts/prepare-llama.sh",
+        "skippy/scripts/prepare-llama.sh",
         "scripts/package-native-runtime.sh",
-        "third_party/llama.cpp/upstream.txt",
-        "third_party/llama.cpp/patches/**",
+        "skippy/scripts/package-native-runtime.sh",
+        "skippy/llama_cpp/upstream.txt",
+        "skippy/llama_cpp/patches/**",
         ".github/cache-version.txt",
     ] {
         assert!(hash.contains(&format!("'{source}'")), "unbound {source}");

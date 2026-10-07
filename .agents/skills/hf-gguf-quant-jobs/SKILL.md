@@ -12,7 +12,7 @@ commands behind thin Just recipes. From the repository root,
 a job planner. Native quant Jobs use the existing
 `model-package-generic-jobs` facade and
 `automation hf-certify quant-job-worker`. See
-[the operator contract](../../../docs/skippy/HF_QUANTIZATION_JOBS.md).
+[the operator contract](../../../skippy/docs/HF_QUANTIZATION_JOBS.md).
 
 Use this skill to turn an existing split BF16/FP16 GGUF model repo into a
 quantized GGUF model repo without requiring the host to hold the full model in
@@ -113,7 +113,7 @@ explicit publication authorization and durable receipt export. Source mounts
 must be read-only. A target directory or model mount is not proof of Hub
 publication; use verified upload receipts before cleanup or remote resume.
 Use the prepare/submit/collect grammar in
-[HF quantization Jobs](../../../docs/skippy/HF_QUANTIZATION_JOBS.md).
+[HF quantization Jobs](../../../skippy/docs/HF_QUANTIZATION_JOBS.md).
 Preparation makes no remote request; submission requires explicit authorization
 and `--confirm-submission`. These receipts always leave
 `tool_profile_qualified:false` and `workflow_qualified:false`. Separate real

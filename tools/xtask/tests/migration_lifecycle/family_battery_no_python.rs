@@ -28,8 +28,8 @@ fn native_tool(name: &str) -> PathBuf {
 fn finite_path(directory: &Path) {
     fs::create_dir(directory).unwrap();
     for name in [
-        "awk", "basename", "cat", "cp", "cut", "date", "dirname", "mkdir", "paste", "sed", "tail",
-        "tr", "wc", "jq",
+        "awk", "bash", "basename", "cat", "cp", "cut", "date", "dirname", "mkdir", "paste", "sed",
+        "tail", "tr", "wc", "jq",
     ] {
         symlink(native_tool(name), directory.join(name)).unwrap();
     }
@@ -94,11 +94,14 @@ fn actual_battery_causal_dry_run_needs_no_python_and_rejects_tampered_plan_befor
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().canonicalize().unwrap();
     fs::create_dir(root.join("scripts")).unwrap();
-    fs::copy(
-        super::support::repository().join("scripts/skippy-family-battery.sh"),
-        root.join("scripts/skippy-family-battery.sh"),
-    )
-    .unwrap();
+    for relative in [
+        "scripts/skippy-family-battery.sh",
+        "skippy/scripts/skippy-family-battery.sh",
+    ] {
+        let destination = root.join(relative);
+        fs::create_dir_all(destination.parent().unwrap()).unwrap();
+        fs::copy(super::support::repository().join(relative), destination).unwrap();
+    }
     fs::write(root.join("Cargo.toml"), "[workspace]\n").unwrap();
     fs::create_dir_all(root.join("tools/xtask")).unwrap();
     fs::write(
@@ -172,11 +175,14 @@ fn intent_root(policy: &serde_json::Value) -> tempfile::TempDir {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().canonicalize().unwrap();
     fs::create_dir(root.join("scripts")).unwrap();
-    fs::copy(
-        super::support::repository().join("scripts/skippy-family-battery.sh"),
-        root.join("scripts/skippy-family-battery.sh"),
-    )
-    .unwrap();
+    for relative in [
+        "scripts/skippy-family-battery.sh",
+        "skippy/scripts/skippy-family-battery.sh",
+    ] {
+        let destination = root.join(relative);
+        fs::create_dir_all(destination.parent().unwrap()).unwrap();
+        fs::copy(super::support::repository().join(relative), destination).unwrap();
+    }
     fs::write(root.join("Cargo.toml"), "[workspace]\n").unwrap();
     fs::create_dir_all(root.join("tools/xtask")).unwrap();
     fs::write(
@@ -396,9 +402,10 @@ fn multimodal_fixture_digest() -> String {
 fn actual_projector_smoke_failure_preserves_separate_count_and_terminal_receipt() {
     let directory = intent_root(&intent_policy());
     let root = directory.path().canonicalize().unwrap();
-    let source =
-        fs::read_to_string(super::support::repository().join("scripts/skippy-family-battery.sh"))
-            .unwrap();
+    let source = fs::read_to_string(
+        super::support::repository().join("skippy/scripts/skippy-family-battery.sh"),
+    )
+    .unwrap();
     let body = source
         .split_once("\nrun_mmproj_smoke() {\n")
         .unwrap()
@@ -524,14 +531,14 @@ fn complete_battery_preflight_pins_snapshot_and_refuses_incomplete_nextn_head_be
     let native = root.join("native");
     fs::create_dir(&native).unwrap();
     battery_executable(
-        &native.join("skippy-model-package"),
+        &native.join("skippy-package-builder"),
         "#!/bin/bash\n[[ $# == 2 && $1 == inspect && $2 == \"$FAKE_MODEL_PATH\" ]] || exit 91\ncat \"$FAKE_SCAN_PATH\"\n",
     );
     battery_executable(
         &native.join("skippy-topology-plan"),
         "#!/bin/bash\n[[ $# == 3 && $1 == fixture/zeta:fixture && $2 == 6 && $3 == 1024 ]] || exit 92\ncat \"$FAKE_TOPOLOGY_PATH\"\n",
     );
-    for name in ["skippy-correctness", "skippy-server"] {
+    for name in ["skippy-correctness", "skippy"] {
         battery_executable(&native.join(name), "#!/bin/sh\nexit 93\n");
     }
     battery_executable(

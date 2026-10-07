@@ -25,13 +25,6 @@ pub(super) fn get<'a>(value: &'a Json, key: &str) -> Option<&'a Json> {
     value.get(key)
 }
 
-pub(super) fn remove_v_prefix(value: &Json) -> Result<String, String> {
-    value
-        .as_str()
-        .map(|text| text.strip_prefix('v').unwrap_or(text).to_owned())
-        .ok_or_else(|| "version must be a string".to_owned())
-}
-
 pub(super) fn require_hashable(value: &Json) -> Result<(), String> {
     match value {
         Json::Array(_) | Json::Object(_) => Err("backend must be a scalar value".into()),

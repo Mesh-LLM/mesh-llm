@@ -3,10 +3,11 @@ use crate::command::DynResult;
 use std::ops::Range;
 
 const CALLER: &str = "scripts/llama-canary-agent-repair.sh";
-const PLAN_CALLS: [&str; 3] = [
+const PLAN_CALLS: [&str; 4] = [
     "repair_family_plan_step \"$log\" \"${repair_workload_automation[@]}\" --repo-root \"$ROOT\" ci family-plan \\",
     "repair_family_plan_step \"$log\" \"${repair_workload_automation[@]}\" --repo-root \"$ROOT\" ci family-plan \\",
     "repair_family_plan_step \"$log\" \"${repair_workload_automation[@]}\" automation family-battery-policy --cache \\",
+    r#"repair_family_plan_step "$CERTIFY_LOG" "${repair_workload_automation[@]}" \"#,
 ];
 const LOCAL_CALLS: [&str; 4] = [
     "repair_source_inspection local-manifest-policy > >(tee -a \"$MANIFEST_POLICY_LOG\") 2>&1",
@@ -14,9 +15,10 @@ const LOCAL_CALLS: [&str; 4] = [
     "repair_source_inspection local-split-roster false",
     "repair_source_inspection local-split-roster true",
 ];
-const PLAN_USES: [&str; 2] = [
+const PLAN_USES: [&str; 3] = [
     "repair_family_plan 256",
     "repair_family_plan 1 \"$CERTIFY_LOG\" || return 1",
+    "repair_family_plan 256 \"$CERTIFY_LOG\" || return 1",
 ];
 
 pub(super) struct Binding {
@@ -65,14 +67,31 @@ fn check_plan_arguments(lines: &[&str]) -> DynResult<()> {
         r#"--manifest "$manifest" --shard-count "$shards" --output "$PLAN_PATH" || return 1"#,
         r#"--manifest "$manifest" --verify-plan "$PLAN_PATH" || return 1"#,
         r#""$ROOT" "$manifest" "$PLAN_PATH" "${HF_CACHE:?}" || return 1"#,
+        r#"automation family-battery-policy --cache-descriptors "$ROOT" \
+"$ROOT/ci/llama-canary/family-certified.json" "$PLAN_PATH" "${HF_CACHE:?}" || return 1"#,
     ];
-    let actual = lines
+    let mut actual = Vec::new();
+    for (index, _) in lines
         .iter()
         .enumerate()
         .filter(|(_, line)| line.trim().starts_with("repair_family_plan_step "))
-        .map(|(index, _)| lines.get(index + 1).map(|line| line.trim()))
-        .collect::<Vec<_>>();
-    if actual != expected.map(Some) {
+    {
+        let mut at = index + 1;
+        let mut arguments = Vec::new();
+        loop {
+            let line = lines
+                .get(at)
+                .ok_or("selected repair: missing continued plan authority")?
+                .trim();
+            arguments.push(line);
+            if !line.ends_with('\\') {
+                break;
+            }
+            at += 1;
+        }
+        actual.push(arguments.join("\n"));
+    }
+    if actual != expected {
         return Err("selected repair: changed plan input authority".into());
     }
     Ok(())
@@ -126,6 +145,35 @@ fn guarded_certification_plan(lines: &[&str], index: usize) -> DynResult<bool> {
             .map(|line| line.trim())
             .eq(expected))
 }
+fn guarded_candidate_plan(lines: &[&str], index: usize) -> DynResult<bool> {
+    let Some(range) = function(lines, "run_candidate_gates")? else {
+        return Ok(false);
+    };
+    let prefix = [
+        "run_candidate_gates() {",
+        r#"local roster_mode="${1:-verify}""#,
+        r#"if [[ "$roster_mode" != "verify" && "$roster_mode" != "refresh" ]]; then"#,
+        r#"echo "invalid candidate-gate roster mode: $roster_mode" >&2"#,
+        "return 2",
+        "fi",
+    ];
+    let sequence = [
+        PLAN_USES[2],
+        PLAN_CALLS[3],
+        r#"automation family-battery-policy --cache-descriptors "$ROOT" \"#,
+        r#""$ROOT/ci/llama-canary/family-certified.json" "$PLAN_PATH" "${HF_CACHE:?}" || return 1"#,
+        "validate_agent_manifest_changes || return 1",
+    ];
+    Ok(range.contains(&index)
+        && lines[range]
+            .iter()
+            .take(prefix.len())
+            .map(|line| line.trim())
+            .eq(prefix)
+        && lines
+            .get(index..index + sequence.len())
+            .is_some_and(|body| body.iter().map(|line| line.trim()).eq(sequence)))
+}
 pub(super) fn check_shape(path: &str, lines: &[&str]) -> DynResult<()> {
     if path != CALLER {
         return Ok(());
@@ -151,7 +199,10 @@ pub(super) fn check_shape(path: &str, lines: &[&str]) -> DynResult<()> {
                     "if [[ \"$HARNESS_MODE\" == repair ]]; then"
                         | "if [[ \"$HARNESS_MODE\" == repair || \"$HARNESS_MODE\" == verify ]]; then"
                 );
-            if !directly_guarded && !guarded_certification_plan(lines, index)? {
+            if !directly_guarded
+                && !guarded_certification_plan(lines, index)?
+                && !guarded_candidate_plan(lines, index)?
+            {
                 return Err("selected repair: plan call outside exact repair mode".into());
             }
         }
@@ -252,6 +303,11 @@ pub(super) fn binding(path: &str, lines: &[&str], index: usize) -> DynResult<Opt
             .ok_or("selected repair: missing plan projection")?;
         source.extend(lines[projection].iter().map(|l| l.trim()));
         source.extend(PLAN_USES);
+        source.extend([
+            PLAN_CALLS[3],
+            r#"automation family-battery-policy --cache-descriptors "$ROOT" \"#,
+            r#""$ROOT/ci/llama-canary/family-certified.json" "$PLAN_PATH" "${HF_CACHE:?}" || return 1"#,
+        ]);
         if let Some(candidate) = function(lines, "verification_candidate_unchanged")? {
             source.extend(lines[candidate].iter().map(|line| line.trim()));
         }

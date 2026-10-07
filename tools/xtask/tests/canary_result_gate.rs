@@ -208,3 +208,6 @@ fn output_file_is_required_only_when_publication_is_approved() {
     input["resolve"]["outputs"]["certify"] = json!("false");
     assert!(run(input).status.success());
 }
+
+#[path = "canary_result_gate/attempt_selection.rs"]
+mod attempt_selection;

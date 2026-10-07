@@ -5,24 +5,31 @@ use std::collections::BTreeSet;
 use std::fs;
 
 const COMPONENT: [&str; 8] = [
-    "sdk/python/hatch_build.py",
-    "sdk/python/src/meshllm/__init__.py",
-    "sdk/python/src/meshllm/_binding.py",
-    "sdk/python/src/meshllm/_generated/__init__.py",
-    "sdk/python/src/meshllm/_generated/mesh_ffi.py",
-    "sdk/python/src/meshllm/client.py",
-    "sdk/python/src/meshllm/types.py",
-    "sdk/python/tests/test_client.py",
+    "mesh/sdk/python/hatch_build.py",
+    "mesh/sdk/python/src/meshllm/__init__.py",
+    "mesh/sdk/python/src/meshllm/_binding.py",
+    "mesh/sdk/python/src/meshllm/_generated/__init__.py",
+    "mesh/sdk/python/src/meshllm/_generated/mesh_ffi.py",
+    "mesh/sdk/python/src/meshllm/client.py",
+    "mesh/sdk/python/src/meshllm/types.py",
+    "mesh/sdk/python/tests/test_client.py",
 ];
 
 fn component_execution(parent: &str, child: Option<&str>, block: &str) -> bool {
     // Release version propagation lists this manifest as data, as recorded by
     // the complete graph's source-backed SDK boundary. It executes no component.
-    if !parent.starts_with("sdk/python/") && block == "\"sdk/python/pyproject.toml\"" {
+    let component_parent =
+        parent.starts_with("mesh/sdk/python/") || parent.starts_with("sdk/python/");
+    if !component_parent
+        && matches!(
+            block,
+            "\"mesh/sdk/python/pyproject.toml\"" | "\"sdk/python/pyproject.toml\""
+        )
+    {
         return false;
     }
-    parent.starts_with("sdk/python/")
-        || child.is_some_and(|child| COMPONENT.contains(&child))
+    component_parent
+        || child.is_some_and(|child| COMPONENT.contains(&child) || child.starts_with("sdk/python/"))
         || block.contains("sdk/python")
         || block.contains("import meshllm")
         || block.contains("from meshllm")
@@ -88,7 +95,7 @@ fn python_sdk_component_stays_outside_actual_required_graph_and_closure() -> Dyn
     let paths = super::super::ledger::tracked_paths(&root)?;
     let actual = paths
         .iter()
-        .filter(|path| path.starts_with("sdk/python/") && path.ends_with(".py"))
+        .filter(|path| path.starts_with("mesh/sdk/python/") && path.ends_with(".py"))
         .map(String::as_str)
         .collect::<BTreeSet<_>>();
     assert_eq!(actual, COMPONENT.into_iter().collect());
@@ -106,16 +113,17 @@ fn python_sdk_component_stays_outside_actual_required_graph_and_closure() -> Dyn
         &observed,
         &graph.selected_recipe_commands,
     )?;
-    let data = fs::read_to_string(root.join("scripts/check-sdk-contract.sh"))?;
-    assert!(data.contains("PYTHON_SDK=\"$ROOT/sdk/python/src/meshllm/client.py\""));
+    let data = fs::read_to_string(root.join("mesh/scripts/check-sdk-contract.sh"))?;
+    assert!(data.contains("PYTHON_SDK=\"$ROOT/mesh/sdk/python/src/meshllm/client.py\""));
     assert!(data.contains("if ! grep -Fq \"$pattern\" \"$file\""));
-    let docs = fs::read_to_string(root.join("sdk/python/README.md"))?;
-    assert!(docs.contains("python3 -I sdk/python/tests/test_client.py"));
+    let docs = fs::read_to_string(root.join("mesh/sdk/python/README.md"))?;
+    assert!(docs.contains("python3 -I mesh/sdk/python/tests/test_client.py"));
     let tests = fs::read_to_string(root.join(COMPONENT[7]))?;
     assert!(tests.contains("sys.path.insert(0,"));
     assert!(tests.contains("unittest.main()"));
-    let project: toml::Value =
-        toml::from_str(&fs::read_to_string(root.join("sdk/python/pyproject.toml"))?)?;
+    let project: toml::Value = toml::from_str(&fs::read_to_string(
+        root.join("mesh/sdk/python/pyproject.toml"),
+    )?)?;
     assert_eq!(
         project["build-system"]["build-backend"].as_str(),
         Some("hatchling.build")
@@ -131,7 +139,9 @@ fn python_sdk_component_guard_rejects_actual_inline_install_import_and_test_call
     for command in [
         "python3 -m pip install -e sdk/python",
         "python3 -c 'import meshllm'",
+        "python3 -I mesh/sdk/python/tests/test_client.py",
         "python3 -I sdk/python/tests/test_client.py",
+        "python3 -m pip install -e mesh/sdk/python",
     ] {
         fs::write(
             private.path().join("Justfile"),
@@ -163,7 +173,7 @@ fn python_sdk_component_guard_rejects_actual_inline_install_import_and_test_call
     fs::create_dir(private.path().join("scripts"))?;
     fs::write(
         private.path().join("scripts/run.sh"),
-        "PYTHON_SDK=\"$ROOT/sdk/python/src/meshllm/client.py\"\n",
+        "PYTHON_SDK=\"$ROOT/mesh/sdk/python/src/meshllm/client.py\"\n",
     )?;
     let paths = vec!["scripts/run.sh".to_owned()];
     let observed = super::super::scan::scan_paths(private.path(), &paths)?;

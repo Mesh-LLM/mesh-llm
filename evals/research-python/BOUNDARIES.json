@@ -7,7 +7,7 @@
   },
   "rows": [
     {
-      "path": "crates/skippy-cache/src/cachegen/fixtures/generate_lmcache_compat.py",
+      "path": "skippy/crates/skippy-cache/src/cachegen/fixtures/generate_lmcache_compat.py",
       "source_sha256": "4e8ece660bc249967c2cc404df034f6c240a40f0bb2bc29b0979e3a655a30697",
       "purpose": "native cache compatibility fixture generator",
       "imports": [
@@ -21,7 +21,7 @@
         "evals/research-python/BOUNDARIES.json"
       ],
       "callers": [
-        "From crates/skippy-cache/src/cachegen/fixtures: python3 generate_lmcache_compat.py; overwrites exactly two checked compatibility binaries."
+        "From skippy/crates/skippy-cache/src/cachegen/fixtures: python3 generate_lmcache_compat.py; overwrites exactly two checked compatibility binaries."
       ],
       "cadence": "optional explicit operator research/upstream regeneration only; never PR/main required setup",
       "isolation_test": "migration_inventory::tests::sdk_exception_policy::research16_is_absent_from_actual_required_and_default_execution_graph",
@@ -30,8 +30,8 @@
       "exception_admission": "Exact recorded existing source class only, not installed environment or actual experiment qualification."
     },
     {
-      "path": "crates/skippy-quantize/scripts/compare-reference-quantization.py",
-      "source_sha256": "a29d82d4fead1e324953ec775c53946e659f66cd77e4123701cf7a0ce21c1259",
+      "path": "skippy/crates/skippy-quantize/scripts/compare-reference-quantization.py",
+      "source_sha256": "d09ae14d121206ff5f794cdf38c17cf7ad345ddf456a7bcbbec5115a2e35a585",
       "purpose": "upstream reference comparison",
       "imports": [
         "from __future__ import annotations",
@@ -56,7 +56,7 @@
         "evals/research-python/BOUNDARIES.json"
       ],
       "callers": [
-        "crates/skippy-quantize/README.md opt-in conversion/quantization comparison commands; operator supplies reference converter, interpreter, GGUF/checkpoint and native binaries."
+        "skippy/crates/skippy-quantize/README.md opt-in conversion/quantization comparison commands; operator supplies reference converter, interpreter, GGUF/checkpoint and native binaries."
       ],
       "cadence": "optional explicit operator research/upstream regeneration only; never PR/main required setup",
       "isolation_test": "migration_inventory::tests::sdk_exception_policy::research16_is_absent_from_actual_required_and_default_execution_graph",
@@ -65,7 +65,7 @@
       "exception_admission": "Exact recorded existing source class only, not installed environment or actual experiment qualification."
     },
     {
-      "path": "evals/latency-benchmarking/latency-proxy.py",
+      "path": "skippy/evals/latency-benchmarking/latency-proxy.py",
       "source_sha256": "88917c47eba039ed5c4b2996f7a7e876d8bf5f6af292c1180a5f248628e66169",
       "purpose": "evaluation harness",
       "imports": [
@@ -82,11 +82,11 @@
         "evals/research-python/BOUNDARIES.json"
       ],
       "callers": [
-        "evals/latency-benchmarking/README.md upstream RPC delay experiment; python3 latency-proxy.py --listen-port 60052 --target-port 50052 --latency-ms 50 from that directory.",
-        "evals/latency-benchmarking/bench.sh:45 explicit optional historical latency experiment; nohup python3 \"$SCRIPT_DIR/latency-proxy.py\" \\",
-        "evals/latency-benchmarking/bench-b2b.sh:44 explicit optional historical latency experiment; nohup python3 \"$SCRIPT_DIR/latency-proxy.py\" \\",
-        "evals/latency-benchmarking/demo.sh:151 explicit optional historical latency experiment; nohup python3 \"$SCRIPT_DIR/latency-proxy.py\" \\",
-        "evals/latency-benchmarking/demo.sh:161 explicit optional historical latency experiment; nohup python3 \"$SCRIPT_DIR/latency-proxy.py\" \\"
+        "skippy/evals/latency-benchmarking/README.md upstream RPC delay experiment; python3 latency-proxy.py --listen-port 60052 --target-port 50052 --latency-ms 50 from that directory.",
+        "skippy/evals/latency-benchmarking/bench.sh:45 explicit optional historical latency experiment; nohup python3 \"$SCRIPT_DIR/latency-proxy.py\" \\",
+        "skippy/evals/latency-benchmarking/bench-b2b.sh:44 explicit optional historical latency experiment; nohup python3 \"$SCRIPT_DIR/latency-proxy.py\" \\",
+        "skippy/evals/latency-benchmarking/demo.sh:151 explicit optional historical latency experiment; nohup python3 \"$SCRIPT_DIR/latency-proxy.py\" \\",
+        "skippy/evals/latency-benchmarking/demo.sh:161 explicit optional historical latency experiment; nohup python3 \"$SCRIPT_DIR/latency-proxy.py\" \\"
       ],
       "cadence": "optional explicit operator research/upstream regeneration only; never PR/main required setup",
       "isolation_test": "migration_inventory::tests::sdk_exception_policy::research16_is_absent_from_actual_required_and_default_execution_graph",
@@ -95,25 +95,25 @@
       "exception_admission": "Exact recorded existing source class only, not installed environment or actual experiment qualification.",
       "caller_source_bindings": [
         {
-          "path": "evals/latency-benchmarking/bench.sh",
+          "path": "skippy/evals/latency-benchmarking/bench.sh",
           "sha256": "39825a30c74c33f2c109409ebb074fcdf8755cf50afc5728288aaaa5dba96996",
           "line": 45,
           "source_block": "        nohup python3 \"$SCRIPT_DIR/latency-proxy.py\" \\"
         },
         {
-          "path": "evals/latency-benchmarking/bench-b2b.sh",
+          "path": "skippy/evals/latency-benchmarking/bench-b2b.sh",
           "sha256": "a16381d3e726192d3b1509fdd5479d40072c6db731fcb81a04e71bf840c45d6a",
           "line": 44,
           "source_block": "        nohup python3 \"$SCRIPT_DIR/latency-proxy.py\" \\"
         },
         {
-          "path": "evals/latency-benchmarking/demo.sh",
+          "path": "skippy/evals/latency-benchmarking/demo.sh",
           "sha256": "85987999bbda4653a9f8ff76bba09896dbabcbfffba9f75cd5040b055c9e3c74",
           "line": 151,
           "source_block": "        nohup python3 \"$SCRIPT_DIR/latency-proxy.py\" \\"
         },
         {
-          "path": "evals/latency-benchmarking/demo.sh",
+          "path": "skippy/evals/latency-benchmarking/demo.sh",
           "sha256": "85987999bbda4653a9f8ff76bba09896dbabcbfffba9f75cd5040b055c9e3c74",
           "line": 161,
           "source_block": "        nohup python3 \"$SCRIPT_DIR/latency-proxy.py\" \\"
@@ -121,7 +121,7 @@
       ]
     },
     {
-      "path": "evals/latency-benchmarking/measure.py",
+      "path": "skippy/evals/latency-benchmarking/measure.py",
       "source_sha256": "377739b83129a829558f72f8728f2914ad28667085fb07dd6151b284a4620e4e",
       "purpose": "evaluation orchestration",
       "imports": [
@@ -137,8 +137,8 @@
         "evals/research-python/BOUNDARIES.json"
       ],
       "callers": [
-        "evals/latency-benchmarking/README.md measurement commands; existing external research endpoints and local supplied model only.",
-        "evals/latency-benchmarking/bench-b2b.sh:102 explicit optional historical latency experiment; result=$(python3 \"$SCRIPT_DIR/measure.py\" \\"
+        "skippy/evals/latency-benchmarking/README.md measurement commands; existing external research endpoints and local supplied model only.",
+        "skippy/evals/latency-benchmarking/bench-b2b.sh:102 explicit optional historical latency experiment; result=$(python3 \"$SCRIPT_DIR/measure.py\" \\"
       ],
       "cadence": "optional explicit operator research/upstream regeneration only; never PR/main required setup",
       "isolation_test": "migration_inventory::tests::sdk_exception_policy::research16_is_absent_from_actual_required_and_default_execution_graph",
@@ -147,7 +147,7 @@
       "exception_admission": "Exact recorded existing source class only, not installed environment or actual experiment qualification.",
       "caller_source_bindings": [
         {
-          "path": "evals/latency-benchmarking/bench-b2b.sh",
+          "path": "skippy/evals/latency-benchmarking/bench-b2b.sh",
           "sha256": "a16381d3e726192d3b1509fdd5479d40072c6db731fcb81a04e71bf840c45d6a",
           "line": 102,
           "source_block": "    result=$(python3 \"$SCRIPT_DIR/measure.py\" \\"
@@ -155,7 +155,7 @@
       ]
     },
     {
-      "path": "evals/moa-openrouter/analyze_ablation.py",
+      "path": "mesh/evals/moa-openrouter/analyze_ablation.py",
       "source_sha256": "0bb638a1d8609a176b4311fc16439abbedbd7c6f055cde92c927e34c4dfd3ff7",
       "purpose": "research/evaluation",
       "imports": [
@@ -180,7 +180,7 @@
       "exception_admission": "Exact recorded existing source class only, not installed environment or actual experiment qualification."
     },
     {
-      "path": "evals/moa-openrouter/lite_agent.py",
+      "path": "mesh/evals/moa-openrouter/lite_agent.py",
       "source_sha256": "0540c2b0d8c8a1d59bd48dd937cb98aa8021223322c603dbf7c562044be45e50",
       "purpose": "research/evaluation",
       "imports": [
@@ -205,8 +205,8 @@
       "exception_admission": "Exact recorded existing source class only, not installed environment or actual experiment qualification."
     },
     {
-      "path": "evals/moa-openrouter/make_fixture.py",
-      "source_sha256": "869e442651082724bce8060de5b9305ab8b80c2508861fd5f06a3e4d884d5fc9",
+      "path": "mesh/evals/moa-openrouter/make_fixture.py",
+      "source_sha256": "08acee13bc12ef2905a38848fda3f7d6a140c8f5526f808362d2ea9f30adae5a",
       "purpose": "research/evaluation fixture generator",
       "imports": [
         "import json"
@@ -226,7 +226,7 @@
       "exception_admission": "Exact recorded existing source class only, not installed environment or actual experiment qualification."
     },
     {
-      "path": "evals/moa-openrouter/orclient.py",
+      "path": "mesh/evals/moa-openrouter/orclient.py",
       "source_sha256": "217b06552f9131cf64cafa0d7dc9bb62bf72ed34edca58d97f816a6241cb808c",
       "purpose": "external client evaluation",
       "imports": [
@@ -251,7 +251,7 @@
       "exception_admission": "Exact recorded existing source class only, not installed environment or actual experiment qualification."
     },
     {
-      "path": "evals/moa-openrouter/probe_tools.py",
+      "path": "mesh/evals/moa-openrouter/probe_tools.py",
       "source_sha256": "b6f18d47d641754a93f5830dd8889936aef7a88d07d235e5e1d859ab31e98b65",
       "purpose": "research/evaluation",
       "imports": [
@@ -275,7 +275,7 @@
       "exception_admission": "Exact recorded existing source class only, not installed environment or actual experiment qualification."
     },
     {
-      "path": "evals/moa-openrouter/record.py",
+      "path": "mesh/evals/moa-openrouter/record.py",
       "source_sha256": "2382f67de9e29e4477af7f50040d904966c6f5b0da1c50262d63a760045cca04",
       "purpose": "research/evaluation",
       "imports": [
@@ -300,7 +300,7 @@
       "exception_admission": "Exact recorded existing source class only, not installed environment or actual experiment qualification."
     },
     {
-      "path": "evals/moa-openrouter/record_agentic.py",
+      "path": "mesh/evals/moa-openrouter/record_agentic.py",
       "source_sha256": "b880a243559740e6d3a199a2e4ace3d753f1e954ef8dcfd56ed3ac4e9137a873",
       "purpose": "research/evaluation",
       "imports": [
@@ -324,7 +324,7 @@
       "exception_admission": "Exact recorded existing source class only, not installed environment or actual experiment qualification."
     },
     {
-      "path": "evals/scenarios/debug-session/buggy.py",
+      "path": "mesh/evals/scenarios/debug-session/buggy.py",
       "source_sha256": "15b74dc42b7fbee4bb34003939feba8182b765bbffa8627dcc12ec6067182c08",
       "purpose": "evaluation fixture",
       "imports": [
@@ -347,7 +347,7 @@
       "exception_admission": "Exact recorded existing source class only, not installed environment or actual experiment qualification."
     },
     {
-      "path": "evals/scenarios/edit-file/server.py",
+      "path": "mesh/evals/scenarios/edit-file/server.py",
       "source_sha256": "695620781eafdc9d85e553c4d826f60fc60c000425e72207e7e5b9005d72297f",
       "purpose": "evaluation fixture/server",
       "imports": [
@@ -369,7 +369,7 @@
       "exception_admission": "Exact recorded existing source class only, not installed environment or actual experiment qualification."
     },
     {
-      "path": "evals/scenarios/refactor/config.py",
+      "path": "mesh/evals/scenarios/refactor/config.py",
       "source_sha256": "a72729256960d49d69e2336060b63eff820760fabe83b198f02e88e39086b7cc",
       "purpose": "evaluation fixture",
       "imports": [
@@ -391,8 +391,8 @@
       "exception_admission": "Exact recorded existing source class only, not installed environment or actual experiment qualification."
     },
     {
-      "path": "evals/test_injection_framing.py",
-      "source_sha256": "3fe8aea60fa43641a5a6d8ee7792c8d692fbd51f05ccf0e9ed0d88dff38118a5",
+      "path": "mesh/evals/test_injection_framing.py",
+      "source_sha256": "02986544203d30b195e60369bbd7a71dc4489395063c60aaa5258cc5dd91ada5",
       "purpose": "evaluation test",
       "imports": [
         "import argparse",
@@ -412,7 +412,7 @@
         "evals/research-python/BOUNDARIES.json"
       ],
       "callers": [
-        "python3 evals/test_injection_framing.py --model /absolute/supplied.gguf; historical external llama-server hook experiment, not current product serving."
+        "python3 mesh/evals/test_injection_framing.py --model /absolute/supplied.gguf; historical external llama-server hook experiment, not current product serving."
       ],
       "cadence": "optional explicit operator research/upstream regeneration only; never PR/main required setup",
       "isolation_test": "migration_inventory::tests::sdk_exception_policy::research16_is_absent_from_actual_required_and_default_execution_graph",
@@ -421,8 +421,8 @@
       "exception_admission": "Exact recorded existing source class only, not installed environment or actual experiment qualification."
     },
     {
-      "path": "evals/virtual_llm_eval.py",
-      "source_sha256": "77c45313fcd74dae382698348bc6acb3e6542cd4a40d6c1b926e2a5c8b9c4ee3",
+      "path": "mesh/evals/virtual_llm_eval.py",
+      "source_sha256": "6cdafeb14fa3527795e3f948d9256c3610b8a2a98f1af47834bf9cb0be90e9da",
       "purpose": "evaluation orchestration",
       "imports": [
         "import argparse",
@@ -437,7 +437,7 @@
         "evals/research-python/BOUNDARIES.json"
       ],
       "callers": [
-        "python3 evals/virtual_llm_eval.py --port 9337 [--no-hooks]; optional already-running supplied endpoint ablation. Existing startup doc is historical."
+        "python3 mesh/evals/virtual_llm_eval.py --port 9337 [--no-hooks]; optional already-running supplied endpoint ablation. Existing startup doc is historical."
       ],
       "cadence": "optional explicit operator research/upstream regeneration only; never PR/main required setup",
       "isolation_test": "migration_inventory::tests::sdk_exception_policy::research16_is_absent_from_actual_required_and_default_execution_graph",

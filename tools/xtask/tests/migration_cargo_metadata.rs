@@ -118,7 +118,7 @@ fn every_mapping_when_owned_metadata_has_all_extracted_members() {
         ("model-package", vec!["skippy-model-package"]),
         ("model-ref", vec!["skippy-model-ref"]),
         ("model-resolver", vec!["skippy-model-resolver"]),
-        ("openai-frontend", vec!["skippy-openai-frontend"]),
+        ("openai-frontend", vec!["skippy-inference-api"]),
         ("skippy-model-package", vec!["skippy-package-builder"]),
         (
             "skippy-server",

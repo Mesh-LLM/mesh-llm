@@ -150,6 +150,7 @@ fn retained_canary_main_failures_stop_before_snapshot_or_publication() {
             r#"#!/bin/bash
 set -euo pipefail
 mark() {{ printf '%s\n' "$1" >> "$TRACE"; }}
+restore_previous_repair_candidate() {{ mark restore; }}
 write_repair_pin() {{ mark pin; }}
 verify_repair_pin() {{ mark verify-pin; }}
 repair_candidate_until_green() {{ mark repair; return 37; }}
@@ -408,7 +409,7 @@ fn retained_publisher_admits_exact_push_and_refuses_identity_drift_without_unsaf
         let fixture = Fixture::new();
         for path in [
             fixture.root.join("scripts"),
-            fixture.root.join("third_party/llama.cpp"),
+            fixture.root.join("skippy/llama_cpp"),
             fixture.root.join("runner"),
         ] {
             fs::create_dir_all(path).unwrap();
@@ -418,11 +419,7 @@ fn retained_publisher_admits_exact_push_and_refuses_identity_drift_without_unsaf
             fixture.root.join("scripts/llama-canary-publish.sh"),
         )
         .unwrap();
-        fs::write(
-            fixture.root.join("third_party/llama.cpp/upstream.txt"),
-            HEAD,
-        )
-        .unwrap();
+        fs::write(fixture.root.join("skippy/llama_cpp/upstream.txt"), HEAD).unwrap();
         publisher_tools(&fixture);
         // Invoke the whole production script: the controller is copied before its redactor is used.
         let script = "#!/bin/bash\nset -euo pipefail\nexport CANARY_PR_BODY=\"$PWD/body\" CANARY_BUNDLE=\"$PWD/bundle\" RUNNER_TEMP=\"$PWD/runner\"\nexec /bin/bash scripts/llama-canary-publish.sh\n";

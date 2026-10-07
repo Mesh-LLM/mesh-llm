@@ -10,7 +10,7 @@ fn other_scope(path: &str) -> bool {
     !path.starts_with(".github/")
         && path != "Justfile"
         && !path.starts_with("just/")
-        && !path.starts_with("scripts/")
+        && !super::scan::is_script(path)
         && path != "tools/skippy-stage-rewriter/CMakeLists.txt"
 }
 

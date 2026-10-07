@@ -199,12 +199,18 @@ run_candidate_gates() {{ printf 'gate once\n'; now=$((now+100)); return 1; }}
 }
 const GATE_SETUP: &str = r#"
 HARNESS_MODE=repair
+ROOT="$PWD"
+PLAN_PATH="$PWD/plan.json"
+HF_CACHE="$PWD/hf-cache"
+repair_workload_automation=("${MESH_LLM_AUTOMATION_BIN:-/usr/bin/true}")
 PREPARE_LOG=prepare.log
 MANIFEST_POLICY_LOG=policy.log
 BUILD_LOG=build.log
 CERTIFY_LOG=certify.log
 observe() { printf '%s\n' "$1"; [[ "$1" != "$FAIL_AT" ]]; }
 run_prepare() { observe prepare; }
+repair_family_plan() { [[ "$*" == "256 $CERTIFY_LOG" ]] || return 96; observe plan; }
+repair_family_plan_step() { [[ $# == 9 && "$1" == "$CERTIFY_LOG" && "$2" == "${repair_workload_automation[0]}" && "$3 $4 $5" == "automation family-battery-policy --cache-descriptors" && "$6" == "$ROOT" && "$7" == "$ROOT/ci/llama-canary/family-certified.json" && "$8" == "$PLAN_PATH" && "$9" == "$HF_CACHE" ]] || return 97; observe descriptors; }
 write_split_certification_roster() { observe refresh; }
 validate_agent_manifest_changes() { observe policy; }
 run_full_build() { observe build; }
@@ -215,9 +221,24 @@ fn candidate_gates_preserve_order_refresh_boundary_and_short_circuit_every_failu
     let source = declaration(&source(), "run_candidate_gates");
     for mode in ["verify", "refresh"] {
         let expected: Vec<_> = if mode == "refresh" {
-            vec!["prepare", "refresh", "policy", "build", "certification"]
+            vec![
+                "prepare",
+                "refresh",
+                "plan",
+                "descriptors",
+                "policy",
+                "build",
+                "certification",
+            ]
         } else {
-            vec!["prepare", "policy", "build", "certification"]
+            vec![
+                "prepare",
+                "plan",
+                "descriptors",
+                "policy",
+                "build",
+                "certification",
+            ]
         };
         for failure in std::iter::once("none").chain(expected.iter().copied()) {
             let fixture = Fixture::new();
@@ -307,6 +328,13 @@ fn actual_pin_updater_writes_only_admitted_explicit_or_prepared_sha_and_preserve
         scripts.join("update-llama-pin.sh"),
     )
     .unwrap();
+    let owner = fixture.0.path().join("skippy/scripts");
+    fs::create_dir_all(&owner).unwrap();
+    fs::copy(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../skippy/scripts/update-llama-pin.sh"),
+        owner.join("update-llama-pin.sh"),
+    )
+    .unwrap();
     fs::create_dir(fixture.0.path().join("prepared")).unwrap();
     let setup = "export LLAMA_PIN_FILE=\"$PWD/pin\" LLAMA_WORKDIR=\"$PWD/prepared\"";
     let target = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -354,7 +382,7 @@ fn actual_family_core_and_state_callers_allocate_os_ports_and_retry_only_address
     )
     .unwrap();
     let source = fs::read_to_string(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../scripts/family-certify.sh"),
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../skippy/scripts/family-certify.sh"),
     )
     .unwrap();
     assert!(source.lines().any(|line| line == "PORT_START_ATTEMPTS=3"));

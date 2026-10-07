@@ -66,14 +66,8 @@ fn restore_model_identity_and_original_event_cadence_cannot_be_substituted() {
 #[test]
 fn native_reporter_requires_restored_bundle_parent_model_and_same_evidence_path() {
     for (before, after) in [
-        (
-            "$(dirname \"${{ steps.native_runtime.outputs.runtime_dir }}\")",
-            "${{ steps.native_runtime.outputs.runtime_dir }}",
-        ),
-        (
-            "${{ steps.gate_model.outputs.model_path }}",
-            "unrelated-model.gguf",
-        ),
+        ("$(dirname \"$RUNTIME_DIR\")", "$RUNTIME_DIR"),
+        ("$MODEL_PATH", "unrelated-model.gguf"),
         (
             "--evidence runtime-events-native-evidence.txt",
             "--evidence unrelated.txt",
@@ -165,4 +159,56 @@ fn direct_argument_order_changes_preserve_the_same_native_admission() {
     }
     replace(gate, "run", &owned.join("\n"));
     check(&workflows).unwrap();
+}
+
+#[test]
+fn cached_or_prepared_runtime_requires_both_verified_producer_bindings() {
+    for (name, key, value) in [
+        ("Verify restored Linux CPU runtime", "id", "unverified"),
+        ("Verify restored Linux CPU runtime", "if", "true"),
+        ("Prepare immutable Linux native runtime", "if", "true"),
+    ] {
+        let mut workflows = actual();
+        replace(step(&mut workflows, name), key, value);
+        assert!(check(&workflows).is_err());
+    }
+    for (key, value) in [
+        (
+            "RUNTIME_DIR",
+            "${{ steps.native_runtime.outputs.runtime_dir }}",
+        ),
+        ("MODEL_PATH", "unrelated.gguf"),
+    ] {
+        let mut workflows = actual();
+        replace(
+            h::mutable(step(&mut workflows, "Run native runtime-event gate"), "env"),
+            key,
+            value,
+        );
+        assert!(check(&workflows).is_err());
+    }
+}
+
+#[test]
+fn cached_runtime_cannot_drop_or_swap_exact_planned_row_expectations() {
+    for (before, after) in [
+        ("--expected-backend \"$EXPECTED_BACKEND\"", ""),
+        ("--expected-target \"$EXPECTED_TARGET\"", ""),
+        (
+            "--expected-backend \"$EXPECTED_BACKEND\"",
+            "--expected-backend cpu",
+        ),
+        (
+            "--expected-target \"$EXPECTED_TARGET\"",
+            "--expected-target \"$EXPECTED_BACKEND\"",
+        ),
+    ] {
+        let mut workflows = actual();
+        let verification = step(&mut workflows, "Verify restored Linux CPU runtime");
+        let run = super::super::field(verification, "run")
+            .unwrap()
+            .replace(before, after);
+        replace(verification, "run", &run);
+        assert!(check(&workflows).is_err(), "{before}");
+    }
 }

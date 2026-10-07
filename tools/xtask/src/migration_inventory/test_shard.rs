@@ -135,7 +135,5 @@ pub(super) fn validate(root: Option<&Path>, text: &str, observed: &[Candidate]) 
 }
 
 fn valid_path(path: &str) -> bool {
-    path.starts_with("scripts/tests/")
-        && path.ends_with(".py")
-        && !path.split('/').any(|part| part == "..")
+    scan::is_script_test(path) && !path.split('/').any(|part| part == "..")
 }

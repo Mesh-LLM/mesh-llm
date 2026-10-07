@@ -119,7 +119,7 @@ Attempted automated repair by Goose from nightly run evidence."
   REPLAY_MODELS_FILE=$(mktemp "${TMPDIR:-/tmp}/agentic-replay-models.XXXXXX")
   REPLAY_DATASET_PINS_FILE=$(mktemp "${TMPDIR:-/tmp}/agentic-replay-dataset.XXXXXX")
   run_untrusted cargo xtool automation replay-matrix pins --matrix "$MATRIX_FILE" \
-    --canonical evals/skippy-competitive-benchmark.json \
+    --canonical skippy/evals/skippy-competitive-benchmark.json \
     --models-output "$REPLAY_MODELS_FILE" --dataset-output "$REPLAY_DATASET_PINS_FILE"
   while IFS=$'\t' read -r family _repo _revision _file expected_sha; do
     if [[ "$RERUN_FAILED" == "1" && -z "$REPLAY_DATASET_FILE" ]]; then break; fi

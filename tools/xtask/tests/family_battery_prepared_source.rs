@@ -63,7 +63,8 @@ fn assert_evidence_arguments(verify: &std::path::Path) {
 #[test]
 fn selected_source_provenance_gate_precedes_evidence_and_preserves_owner_failure() {
     let source = fs::read_to_string(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../scripts/skippy-family-battery.sh"),
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../skippy/scripts/skippy-family-battery.sh"),
     )
     .unwrap();
     let function = source

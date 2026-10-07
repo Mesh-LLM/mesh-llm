@@ -131,7 +131,7 @@ fn epoch_resolver_declares_one_selected_run_and_all_exact_input_projections() {
 #[test]
 fn swift_host_architecture_branch_admits_apple_silicon_and_refuses_intel_before_native_build() {
     let source = fs::read_to_string(
-        support::root().join("sdk/swift/scripts/build-host-macos-xcframework.sh"),
+        support::root().join("mesh/sdk/swift/scripts/build-host-macos-xcframework.sh"),
     )
     .unwrap();
     assert!(!source.contains("x86_64-apple-darwin"));

@@ -4,6 +4,10 @@ pub(in crate::automation) mod dimensions;
 #[cfg(test)]
 #[path = "model_dimensions_tests.rs"]
 mod dimensions_tests;
+#[path = "tensor_descriptors.rs"]
+pub(in crate::automation) mod tensor_descriptors;
+#[path = "tensor_layouts.rs"]
+pub(in crate::automation) mod tensor_layouts;
 use crate::repository::{check_args::Grammar, check_report::CheckReport};
 use serde::Serialize;
 use std::{

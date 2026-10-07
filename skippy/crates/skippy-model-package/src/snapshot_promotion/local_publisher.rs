@@ -9,7 +9,6 @@ use clap::{Parser, Subcommand};
 use contract::{Input, Receipt};
 use sha2::{Digest, Sha256};
 use std::{
-    io::Write as _,
     path::PathBuf,
     time::{Duration, Instant},
 };
@@ -33,14 +32,15 @@ enum Operation {
     #[cfg(unix)]
     PublishRegularReceipt,
 }
-pub fn run() -> Result<bool> {
+pub fn run(help: &mut dyn std::io::Write) -> Result<bool> {
     let cli = match Cli::try_parse() {
         Ok(cli) => cli,
         Err(error)
             if error.kind() == clap::error::ErrorKind::DisplayHelp
                 || error.kind() == clap::error::ErrorKind::DisplayVersion =>
         {
-            write!(mesh_llm_events::console_out(), "{error}")?;
+            write!(help, "{error}")?;
+            help.flush()?;
             return Ok(true);
         }
         Err(_) => bail!("publisher arguments refused"),

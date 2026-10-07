@@ -80,6 +80,7 @@ pub(super) fn execute(
     let port = reservation.local_addr()?.port();
     let execution = Duration::from_secs(cell_secs)
         .min(adaptive_cell::remaining(until, Duration::from_secs(6))?);
+    let cell_deadline = Instant::now() + execution;
     let state = crate::automation::private_state::PrivateState::create(
         &std::env::temp_dir(),
         "radix-cell",
@@ -104,7 +105,7 @@ pub(super) fn execute(
             &directory.join("stage.json"),
             &serde_json::to_vec_pretty(&config(arm, shape, warm))?,
         )?;
-        let server = Launch {
+        let mut server = Launch {
             member: MemberId::Seed,
             spec: spec(
                 arm.binary.clone(),
@@ -174,6 +175,29 @@ pub(super) fn execute(
                 warmup: batch.warmup,
             });
         }
+        crate::automation::skippy_cli_admission::prepare(
+            &mut server.spec,
+            &arm.binary_sha256,
+            crate::automation::skippy_cli_admission::Role::Public,
+            cell_deadline.min(until),
+            cancel,
+            &directory.join("cli-admission.json"),
+        )?;
+        let execution = cell_deadline
+            .saturating_duration_since(Instant::now())
+            .min(adaptive_cell::remaining(until, Duration::from_secs(6))?);
+        if execution.is_zero() {
+            return Err("radix CLI admission consumed cell budget".into());
+        }
+        if Duration::from_secs(batch_secs + 1) > execution {
+            return Err(
+                "radix batch cannot fit retained execution budget after CLI admission".into(),
+            );
+        }
+        server.readiness_deadline = execution;
+        for batch in &mut batches {
+            batch.launch.readiness_deadline = execution;
+        }
         let mut owner = Owner {
             server: Some(server),
             batches,
@@ -198,7 +222,7 @@ pub(super) fn execute(
             },
             cancel,
         )?;
-        let lifecycle = json!({"outcome":format!("{:?}",report.outcome),"rejection":report.rejection,"members":report.members.iter().map(|m|json!({"member":String::from_utf8_lossy(m.member.name()),"status":m.process.status.as_ref().and_then(std::process::ExitStatus::code),"clean":clean(&m.process),"forced":m.process.cleanup.forced,"cleanup_failure":m.process.cleanup.failure.as_ref().map(|e|format!("{e:?}")),"process_failure":m.process.failure.as_ref().map(|e|format!("{e:?}")),"stdout_complete":m.process.stdout.line_capture_complete,"stderr_complete":m.process.stderr.line_capture_complete})).collect::<Vec<_>>()});
+        let lifecycle = json!({"outcome":format!("{:?}",report.outcome),"session_failure":report.failure.as_ref().map(|error|format!("{error:?}")),"rejection":report.rejection,"members":report.members.iter().map(|m|json!({"member":String::from_utf8_lossy(m.member.name()),"status":m.process.status.as_ref().and_then(std::process::ExitStatus::code),"clean":clean(&m.process),"forced":m.process.cleanup.forced,"cleanup_failure":m.process.cleanup.failure.as_ref().map(|e|format!("{e:?}")),"process_failure":m.process.failure.as_ref().map(|e|format!("{e:?}")),"stdout_complete":m.process.stdout.line_capture_complete,"stderr_complete":m.process.stderr.line_capture_complete})).collect::<Vec<_>>()});
         io::fresh(
             &directory.join("lifecycle.json"),
             &serde_json::to_vec_pretty(&lifecycle)?,

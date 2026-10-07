@@ -159,7 +159,7 @@ fn actual_wan_wrapper_preserves_defaults_and_optional_bandwidth_without_network(
         fs::create_dir(root.join("bin")).unwrap();
         let source = include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/../../scripts/skippy-wan-calibrate.sh"
+            "/../../skippy/scripts/skippy-wan-calibrate.sh"
         ));
         fs::write(root.join("wrapper.sh"), source).unwrap();
         executable(
@@ -191,7 +191,7 @@ fn actual_wan_wrapper_preserves_defaults_and_optional_bandwidth_without_network(
                 .join("\0")
                 .as_bytes()
         );
-        let env = fs::read_to_string(root.join("docker/skippy-wan-lab/.env.link")).unwrap();
+        let env = fs::read_to_string(root.join("skippy/evals/wan-lab/.env.link")).unwrap();
         assert!(env.contains(&format!("WAN_RTT_MS={rtt}\n")));
         assert!(env.contains(&format!(
             "WAN_DELAY_MS={}\n",
@@ -243,7 +243,7 @@ fn actual_wan_wrapper_preserves_defaults_and_optional_bandwidth_without_network(
             root.join("wrapper.sh"),
             include_str!(concat!(
                 env!("CARGO_MANIFEST_DIR"),
-                "/../../scripts/skippy-wan-calibrate.sh"
+                "/../../skippy/scripts/skippy-wan-calibrate.sh"
             )),
         )
         .unwrap();
@@ -257,7 +257,7 @@ fn actual_wan_wrapper_preserves_defaults_and_optional_bandwidth_without_network(
         );
         let refused = invoke(&root, "exec /bin/bash wrapper.sh\n");
         assert!(!refused.process.status.unwrap().success());
-        assert!(!root.join("docker/skippy-wan-lab/.env.link").exists());
+        assert!(!root.join("skippy/evals/wan-lab/.env.link").exists());
         assert!(!root.join("iperf.called").exists());
         temp.close().unwrap();
     }

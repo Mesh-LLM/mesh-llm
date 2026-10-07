@@ -147,7 +147,7 @@ fn rejects_file_api_path_when_upload_artifact_is_absent() {
 
 #[test]
 fn jobs_cancel_cli_consumes_unconfirmed_acknowledgment_receipt() {
-    let cli = include_str!("../../../crates/mesh-llm-commands/src/model_package.rs");
+    let cli = include_str!("../../../skippy/crates/skippy-commands/src/models/package.rs");
     let region = cli
         .split_once("async fn run_cancel(")
         .unwrap()

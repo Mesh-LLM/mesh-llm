@@ -24,8 +24,7 @@ pub(super) fn check(workflows: &BTreeMap<String, Node>) -> DynResult<()> {
         "github.repository == 'Mesh-LLM/mesh-llm' && github.ref == 'refs/heads/main'",
     )?;
     preflight(h::job(document, "preflight")?)?;
-    candidate(h::job(document, "candidate")?)?;
-    verification(h::job(document, "verification")?)?;
+    distributed_attempts(document)?;
     result(h::job(document, "result")?)?;
     let publish = h::job(document, "publish-certified-canary")?;
     h::needs(publish, &["resolve", "result"])?;
@@ -44,7 +43,16 @@ pub(super) fn check(workflows: &BTreeMap<String, Node>) -> DynResult<()> {
 }
 
 fn result(job: &Node) -> DynResult<()> {
-    h::needs(job, &["resolve", "preflight", "candidate", "verification"])?;
+    h::needs(
+        job,
+        &[
+            "resolve",
+            "preflight",
+            "attempt_1",
+            "attempt_2",
+            "attempt_3",
+        ],
+    )?;
     h::condition(job, "${{ !cancelled() }}")?;
     let steps = h::steps(job)?;
     let (resolution, guard) = h::step(
@@ -72,31 +80,35 @@ fn result(job: &Node) -> DynResult<()> {
     )?;
     h::command(guard, &["exit", "1"], &[])?;
     let controller = h::checkout(steps, "${{ needs.resolve.outputs.source }}", None)?;
-    let (prepare, prepared) = h::step(steps, "uses", "./.github/actions/prepare-automation")?;
-    h::binding(
-        h::member(prepared, "with")?,
-        "runner-profile",
-        "hosted-bare",
-    )?;
     let (decision, command) = h::step(steps, "id", "result")?;
-    h::binding(
-        h::member(command, "env")?,
-        "NEEDS_JSON",
-        "${{ toJSON(needs) }}",
-    )?;
+    let env = h::member(command, "env")?;
+    for (key, value) in [
+        ("CERTIFY", "${{ needs.resolve.outputs.certify }}"),
+        ("CHANGED", "${{ needs.resolve.outputs.changed }}"),
+        ("MESH_SOURCE", "${{ needs.resolve.outputs.mesh_source }}"),
+        ("PREFLIGHT", "${{ needs.preflight.result }}"),
+        ("ATTEMPTS_JSON", "${{ toJSON(needs) }}"),
+    ] {
+        h::binding(env, key, value)?;
+    }
     h::command(
         command,
         &[
             "\"$MESH_LLM_AUTOMATION_BIN\"",
             "automation",
             "canary-receipts",
-            "result",
+            "select-final",
         ],
-        &[],
+        &[
+            ("--certify", "\"$CERTIFY\""),
+            ("--changed", "\"$CHANGED\""),
+            ("--mesh-source", "\"$MESH_SOURCE\""),
+            ("--preflight", "\"$PREFLIGHT\""),
+            ("--attempts-json", "\"$ATTEMPTS_JSON\""),
+        ],
     )?;
     h::before(resolution, controller)?;
-    h::before(controller, prepare)?;
-    h::before(prepare, decision)
+    selector_preparation(job, steps, controller, decision)
 }
 
 fn preflight(job: &Node) -> DynResult<()> {
@@ -158,63 +170,208 @@ fn preflight(job: &Node) -> DynResult<()> {
         &[("--input", "\"$input\"")],
     )
 }
-fn candidate(job: &Node) -> DynResult<()> {
-    h::needs(job, &["resolve", "preflight"])?;
-    h::condition(
-        job,
-        "${{ !cancelled() && needs.preflight.result == 'success' }}",
-    )?;
-    h::binding(
-        job,
-        "uses",
-        "./.github/workflows/llama-canary-family-pass.yml",
-    )?;
-    let inputs = h::member(job, "with")?;
-    for (key, value) in [
-        ("source", "${{ needs.resolve.outputs.source }}"),
-        ("mesh_source", "${{ needs.resolve.outputs.mesh_source }}"),
-        ("upstream", "${{ needs.resolve.outputs.upstream }}"),
-        ("pass_id", "repair-1"),
-        ("mode", "${{ needs.resolve.outputs.mode }}"),
-    ] {
-        h::binding(inputs, key, value)?;
+// Native selectors bind the finite distributed attempts to protected job outputs.
+// The guard binds all three bounded attempts to producer identities and a fresh
+// independent verification instead of treating a local repair result as green.
+fn distributed_attempts(document: &Node) -> DynResult<()> {
+    attempt_outputs(document)?;
+    for number in 1..=3 {
+        let repair_name = format!("repair_{number}");
+        let verify_name = format!("verify_{number}");
+        let attempt_name = format!("attempt_{number}");
+        let repair = h::job(document, &repair_name)?;
+        let previous = format!("attempt_{}", number - 1);
+        let dependency = if number == 1 { "preflight" } else { &previous };
+        h::needs(repair, &["resolve", dependency])?;
+        let gate = if number == 1 {
+            "${{ !cancelled() && needs.preflight.result == 'success' }}".to_owned()
+        } else {
+            format!(
+                "${{{{ !cancelled() && needs.resolve.outputs.changed == 'true' && needs.{previous}.outputs.state == 'repairable' }}}}"
+            )
+        };
+        h::condition(repair, &gate)?;
+        pass(repair, &format!("repair-{number}"))?;
+        let inputs = h::member(repair, "with")?;
+        h::binding(
+            inputs,
+            "mode",
+            if number == 1 {
+                "${{ needs.resolve.outputs.mode }}"
+            } else {
+                "repair-build"
+            },
+        )?;
+        if number == 1 {
+            h::binding(
+                inputs,
+                "mesh_source",
+                "${{ needs.resolve.outputs.mesh_source }}",
+            )?;
+        } else {
+            for field in ["package", "identity", "head", "feedback"] {
+                h::binding(
+                    inputs,
+                    &format!("previous_{field}"),
+                    &format!("${{{{ needs.{previous}.outputs.resume_{field} }}}}"),
+                )?;
+            }
+        }
+        independent_pass(document, number, &repair_name, &verify_name)?;
+        let attempt = h::job(document, &attempt_name)?;
+        h::needs(attempt, &["resolve", &repair_name, &verify_name])?;
+        if number > 1 {
+            h::needs(attempt, &[&previous])?;
+        }
+        h::condition(
+            attempt,
+            if number == 1 {
+                "${{ !cancelled() && needs.resolve.outputs.certify == 'true' }}"
+            } else {
+                &gate
+            },
+        )?;
+        select_attempt(attempt, &repair_name, &verify_name)?;
     }
     Ok(())
 }
-fn verification(job: &Node) -> DynResult<()> {
-    h::needs(job, &["resolve", "candidate"])?;
+fn attempt_outputs(document: &Node) -> DynResult<()> {
+    for number in 1..=3 {
+        let outputs = h::member(h::job(document, &format!("attempt_{number}"))?, "outputs")?;
+        for field in [
+            "state",
+            "green",
+            "repairable",
+            "resume_package",
+            "resume_identity",
+            "resume_head",
+            "resume_feedback",
+            "failure_class",
+            "failure_stage",
+            "package",
+            "identity",
+            "head",
+            "branch",
+        ] {
+            h::binding(
+                outputs,
+                field,
+                &format!("${{{{ steps.select.outputs.{field} }}}}"),
+            )?;
+        }
+    }
+    Ok(())
+}
+fn independent_pass(
+    document: &Node,
+    number: usize,
+    repair_name: &str,
+    verify_name: &str,
+) -> DynResult<()> {
+    let verify = h::job(document, verify_name)?;
+    h::needs(verify, &["resolve", repair_name])?;
+    let changed = if number == 1 {
+        "needs.resolve.outputs.changed == 'true' && "
+    } else {
+        ""
+    };
     h::condition(
-        job,
-        "${{ !cancelled() && needs.resolve.outputs.changed == 'true' && needs.candidate.outputs.green == 'true' }}",
+        verify,
+        &format!("${{{{ !cancelled() && {changed}needs.{repair_name}.outputs.green == 'true' }}}}"),
     )?;
+    pass(verify, &format!("verify-{number}"))?;
+    let inputs = h::member(verify, "with")?;
+    h::binding(inputs, "mode", "verify-build")?;
+    for field in ["package", "identity", "head"] {
+        h::binding(
+            inputs,
+            &format!("previous_{field}"),
+            &format!("${{{{ needs.{repair_name}.outputs.{field} }}}}"),
+        )?;
+    }
+    Ok(())
+}
+fn select_attempt(attempt: &Node, repair_name: &str, verify_name: &str) -> DynResult<()> {
+    let steps = h::steps(attempt)?;
+    let checkout = h::checkout(steps, "${{ needs.resolve.outputs.source }}", None)?;
+    let (select, command) = h::step(steps, "id", "select")?;
+    selector_preparation(attempt, steps, checkout, select)?;
+    let env = h::member(command, "env")?;
+    h::binding(env, "CHANGED", "${{ needs.resolve.outputs.changed }}")?;
+    h::binding(
+        env,
+        "REPAIR_JSON",
+        &format!("${{{{ toJSON(needs.{repair_name}) }}}}"),
+    )?;
+    h::binding(
+        env,
+        "VERIFY_JSON",
+        &format!("${{{{ toJSON(needs.{verify_name}) }}}}"),
+    )?;
+    h::command(
+        command,
+        &[
+            "\"$MESH_LLM_AUTOMATION_BIN\"",
+            "automation",
+            "canary-receipts",
+            "select-attempt",
+        ],
+        &[
+            ("--changed", "\"$CHANGED\""),
+            ("--repair-json", "\"$REPAIR_JSON\""),
+            ("--verification-json", "\"$VERIFY_JSON\""),
+        ],
+    )?;
+    Ok(())
+}
+fn selector_preparation(
+    job: &Node,
+    steps: &[Node],
+    checkout: usize,
+    decision: usize,
+) -> DynResult<()> {
+    h::binding(job, "runs-on", "ubuntu-24.04")?;
+    let preparations = steps
+        .iter()
+        .enumerate()
+        .filter(|(_, step)| {
+            super::field(step, "uses") == Some("./.github/actions/prepare-automation")
+        })
+        .collect::<Vec<_>>();
+    let [(prepare, step)] = preparations.as_slice() else {
+        return Err("selector requires exactly one protected automation preparation".into());
+    };
+    if step.get("if").is_some()
+        || step.get("continue-on-error").is_some()
+        || step.get("run").is_some()
+    {
+        return Err("selector preparation must run unconditionally and fail closed".into());
+    }
+    let inputs = h::member(step, "with")?;
+    h::binding(inputs, "runner-profile", "hosted-bare")?;
+    h::binding(inputs, "allow_depot_remote_cache", "false")?;
+    h::binding(inputs, "allow_native_github_cache", "false")?;
+    h::before(checkout, *prepare)?;
+    h::before(*prepare, decision)
+}
+
+fn pass(job: &Node, pass_id: &str) -> DynResult<()> {
     h::binding(
         job,
         "uses",
         "./.github/workflows/llama-canary-family-pass.yml",
     )?;
     let inputs = h::member(job, "with")?;
-    for (key, value) in [
-        ("source", "${{ needs.resolve.outputs.source }}"),
-        ("upstream", "${{ needs.resolve.outputs.upstream }}"),
-        ("pass_id", "verify-1"),
-        ("mode", "verify-build"),
-        ("previous_package", "${{ needs.candidate.outputs.package }}"),
-        (
-            "previous_identity",
-            "${{ needs.candidate.outputs.identity }}",
-        ),
-        ("previous_head", "${{ needs.candidate.outputs.head }}"),
-    ] {
-        h::binding(inputs, key, value)?;
-    }
-    Ok(())
+    h::binding(inputs, "source", "${{ needs.resolve.outputs.source }}")?;
+    h::binding(inputs, "upstream", "${{ needs.resolve.outputs.upstream }}")?;
+    h::binding(inputs, "pass_id", pass_id)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     fn document() -> Node {
-        super::super::workflow_yaml::parse(include_str!(
+        super::super::workflow_yaml::parse_resolved_aliases(include_str!(
             "../../../../../.github/workflows/llama-upstream-canary.yml"
         ))
         .unwrap()
@@ -258,16 +415,16 @@ mod tests {
     fn omitted_preflight_gate_and_unverified_identity_are_rejected() {
         for (path, value) in [
             (
-                vec!["jobs", "candidate", "needs"],
+                vec!["jobs", "repair_1", "needs"],
                 Node::Scalar("resolve".into()),
             ),
-            (vec!["jobs", "candidate", "if"], Node::Scalar("true".into())),
+            (vec!["jobs", "repair_1", "if"], Node::Scalar("true".into())),
             (
-                vec!["jobs", "verification", "with", "previous_identity"],
-                Node::Scalar("${{ needs.candidate.outputs.head }}".into()),
+                vec!["jobs", "verify_1", "with", "previous_identity"],
+                Node::Scalar("${{ needs.repair_1.outputs.head }}".into()),
             ),
             (
-                vec!["jobs", "verification", "with", "mode"],
+                vec!["jobs", "verify_1", "with", "mode"],
                 Node::Scalar("repair-build".into()),
             ),
             (
@@ -294,9 +451,11 @@ mod tests {
                 .find(|step| super::super::field(step, "id") == Some("result"))
                 .unwrap();
             if comment {
-                *h::mutable(result, "run") = Node::Scalar("# \"$MESH_LLM_AUTOMATION_BIN\" automation canary-receipts result\necho skipped".into());
+                *h::mutable(result, "run") = Node::Scalar(
+                    "# \"$MESH_LLM_AUTOMATION_BIN\" automation canary-receipts select-final\necho skipped".into(),
+                );
             } else {
-                *h::mutable(h::mutable(result, "env"), "NEEDS_JSON") = Node::Scalar("{}".into());
+                *h::mutable(h::mutable(result, "env"), "ATTEMPTS_JSON") = Node::Scalar("{}".into());
             }
             assert!(validate(node).is_err());
         }
@@ -340,6 +499,247 @@ mod tests {
                 steps.swap(prepare, execute);
             }
             assert!(validate(node).is_err());
+        }
+    }
+    #[test]
+    fn resumed_attempts_require_previous_identity_feedback_and_fresh_verification() {
+        for number in 2..=3 {
+            for field in ["package", "identity", "head", "feedback"] {
+                let mut node = document();
+                h::replace(
+                    &mut node,
+                    &[
+                        "jobs",
+                        &format!("repair_{number}"),
+                        "with",
+                        &format!("previous_{field}"),
+                    ],
+                    Node::Scalar("unbound".into()),
+                );
+                assert!(validate(node).is_err());
+            }
+            let mut node = document();
+            h::replace(
+                &mut node,
+                &[
+                    "jobs",
+                    &format!("verify_{number}"),
+                    "with",
+                    "previous_identity",
+                ],
+                Node::Scalar("unbound".into()),
+            );
+            assert!(validate(node).is_err());
+        }
+        let mut node = document();
+        let Node::Seq(steps) = h::mutable(
+            h::mutable(h::mutable(&mut node, "jobs"), "attempt_2"),
+            "steps",
+        ) else {
+            unreachable!()
+        };
+        let select = steps
+            .iter_mut()
+            .find(|step| super::super::field(step, "id") == Some("select"))
+            .unwrap();
+        h::replace(
+            select,
+            &["env", "VERIFY_JSON"],
+            Node::Scalar("${{ toJSON(needs.repair_2) }}".into()),
+        );
+        assert!(validate(node).is_err());
+    }
+    #[test]
+    fn selector_outputs_cannot_claim_green_or_forward_unverified_repair_bytes() {
+        for field in ["state", "green", "package", "identity", "head", "branch"] {
+            let mut node = document();
+            h::replace(
+                &mut node,
+                &["jobs", "attempt_1", "outputs", field],
+                Node::Scalar(if field == "state" {
+                    "green".into()
+                } else {
+                    format!("${{{{ needs.repair_1.outputs.{field} }}}}")
+                }),
+            );
+            assert!(validate(node).is_err(), "{field}");
+        }
+        let mut node = document();
+        h::replace(
+            &mut node,
+            &["jobs", "attempt_2", "outputs"],
+            Node::Scalar("*unchecked_outputs".into()),
+        );
+        assert!(validate(node).is_err());
+    }
+    #[test]
+    fn yaml_anchor_substitution_cannot_redirect_validated_attempt_outputs() {
+        let source = include_str!("../../../../../.github/workflows/llama-upstream-canary.yml");
+        let mut replaced = source.replace("outputs: &attempt_outputs", "outputs: &safe_outputs");
+        // Earlier unrelated mapping now owns the alias consumed by attempts 2/3.
+        replaced = replaced.replacen("jobs:\n", "env: &attempt_outputs\n  state: green\n  green: 'true'\n  package: forged\n  identity: forged\n  head: forged\n  branch: forged\njobs:\n", 1);
+        let node = super::super::workflow_yaml::parse_resolved_aliases(&replaced).unwrap();
+        assert!(validate(node).is_err());
+        assert!(
+            super::super::workflow_yaml::parse_resolved_aliases(
+                &source.replace("*attempt_outputs", "*unknown_outputs")
+            )
+            .is_err()
+        );
+        assert!(
+            super::super::workflow_yaml::parse_resolved_aliases(&source.replace(
+                "  attempt_1:\n",
+                "  duplicate: &attempt_outputs {}\n  attempt_1:\n"
+            ))
+            .is_err()
+        );
+    }
+    fn selector_steps<'a>(node: &'a mut Node, job: &str) -> &'a mut Vec<Node> {
+        let Node::Seq(steps) = h::mutable(h::mutable(h::mutable(node, "jobs"), job), "steps")
+        else {
+            unreachable!()
+        };
+        steps
+    }
+
+    #[test]
+    fn native_selector_preparation_is_exact_ordered_unconditional_and_cache_denied() {
+        for job in ["attempt_1", "attempt_2", "attempt_3", "result"] {
+            for mutation in [
+                "missing",
+                "duplicate",
+                "before-checkout",
+                "after-decision",
+                "profile",
+                "depot",
+                "github",
+                "conditional",
+                "optional",
+            ] {
+                let mut node = document();
+                let steps = selector_steps(&mut node, job);
+                let prepare = steps
+                    .iter()
+                    .position(|step| {
+                        super::super::field(step, "uses")
+                            == Some("./.github/actions/prepare-automation")
+                    })
+                    .unwrap();
+                let checkout = steps
+                    .iter()
+                    .position(|step| {
+                        super::super::field(step, "uses")
+                            .is_some_and(|value| value.starts_with("actions/checkout@"))
+                    })
+                    .unwrap();
+                let decision = steps
+                    .iter()
+                    .position(|step| {
+                        super::super::field(step, "id")
+                            == Some(if job == "result" { "result" } else { "select" })
+                    })
+                    .unwrap();
+                match mutation {
+                    "missing" => {
+                        steps.remove(prepare);
+                    }
+                    "duplicate" => {
+                        steps.push(steps[prepare].clone());
+                    }
+                    "before-checkout" => steps.swap(prepare, checkout),
+                    "after-decision" => steps.swap(prepare, decision),
+                    "profile" => h::replace(
+                        &mut steps[prepare],
+                        &["with", "runner-profile"],
+                        Node::Scalar("image".into()),
+                    ),
+                    "depot" => h::replace(
+                        &mut steps[prepare],
+                        &["with", "allow_depot_remote_cache"],
+                        Node::Scalar("true".into()),
+                    ),
+                    "github" => h::replace(
+                        &mut steps[prepare],
+                        &["with", "allow_native_github_cache"],
+                        Node::Scalar("true".into()),
+                    ),
+                    "conditional" | "optional" => {
+                        let Node::Map(fields) = &mut steps[prepare] else {
+                            unreachable!()
+                        };
+                        fields.push((
+                            if mutation == "conditional" {
+                                "if"
+                            } else {
+                                "continue-on-error"
+                            }
+                            .into(),
+                            Node::Scalar("true".into()),
+                        ));
+                    }
+                    _ => unreachable!(),
+                }
+                assert!(validate(node).is_err(), "{job}: {mutation}");
+            }
+        }
+    }
+
+    #[test]
+    fn native_selector_commands_require_executable_arguments_and_bound_environment() {
+        for job in ["attempt_1", "attempt_2", "attempt_3", "result"] {
+            for mutation in ["comment", "legacy", "executable", "argument", "environment"] {
+                let mut node = document();
+                let steps = selector_steps(&mut node, job);
+                let command = steps
+                    .iter_mut()
+                    .find(|step| {
+                        super::super::field(step, "id")
+                            == Some(if job == "result" { "result" } else { "select" })
+                    })
+                    .unwrap();
+                let original = super::super::field(command, "run").unwrap().to_owned();
+                let changed = match mutation {
+                    "comment" => format!("# {}\necho skipped", original.replace('\n', " ")),
+                    "legacy" => original.replace(
+                        "\"$MESH_LLM_AUTOMATION_BIN\" automation canary-receipts select-",
+                        "python3 scripts/llama-canary-select-attempt.py ",
+                    ),
+                    "executable" => original.replace("$MESH_LLM_AUTOMATION_BIN", "$UNTRUSTED_BIN"),
+                    "argument" => original.replace(
+                        if job == "result" {
+                            "--attempts-json"
+                        } else {
+                            "--verification-json"
+                        },
+                        "--unknown-input",
+                    ),
+                    "environment" => {
+                        h::replace(
+                            command,
+                            &[
+                                "env",
+                                if job == "result" {
+                                    "ATTEMPTS_JSON"
+                                } else {
+                                    "VERIFY_JSON"
+                                },
+                            ],
+                            Node::Scalar(if job == "result" {
+                                "{}".into()
+                            } else {
+                                format!(
+                                    "${{{{ toJSON(needs.repair_{}) }}}}",
+                                    job.trim_start_matches("attempt_")
+                                )
+                            }),
+                        );
+                        original
+                    }
+                    _ => unreachable!(),
+                };
+                *h::mutable(command, "run") = Node::Scalar(changed);
+                assert!(validate(node).is_err(), "{job}: {mutation}");
+            }
         }
     }
 }

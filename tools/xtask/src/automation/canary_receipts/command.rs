@@ -1,16 +1,21 @@
 use super::canary_receipts::{
-    Digest, PackageVerification, ReceiptContext, aggregate, verify_package,
+    Digest, FamilyJobResult, PackageVerification, ReceiptContext, aggregate,
+    aggregate_with_job_result, feedback_command, verify_package,
 };
 use crate::command::DynResult;
 use crate::repository::check_args::{Grammar, ParsedArgs};
 use crate::repository::check_report::CheckReport;
 use std::{fs::OpenOptions, io::Write, path::Path};
+#[path = "attempt_selection.rs"]
+mod attempt_selection;
 #[path = "publication_diagnostics.rs"]
 mod publication_diagnostics;
+#[path = "reconcile_command.rs"]
+mod reconcile_command;
 #[path = "result_gate.rs"]
 mod result_gate;
 
-pub(crate) const USAGE: &str = "cargo xtool automation canary-receipts aggregate --package <path> --identity <sha256> --evidence <path> --run-id <id> --run-attempt <attempt> [--controller-revision <sha>] [--selected-source <sha>]";
+pub(crate) const USAGE: &str = "cargo xtool automation canary-receipts aggregate --package <path> --identity <sha256> --evidence <path> --run-id <id> --run-attempt <attempt> [--controller-revision <sha>] [--selected-source <sha>] [--family-result <success|failure|cancelled|skipped>] [--feedback-output <path>]";
 
 const GRAMMAR: Grammar = Grammar {
     usage: USAGE,
@@ -22,12 +27,21 @@ const GRAMMAR: Grammar = Grammar {
         "--run-attempt",
         "--controller-revision",
         "--selected-source",
+        "--family-result",
+        "--feedback-output",
     ],
     flags: &["--help"],
 };
 
 pub(crate) fn run(args: &[String]) -> DynResult<()> {
     match args {
+        [verb, rest @ ..] if verb == "reconcile" => return reconcile_command::run(rest),
+        [verb, rest @ ..] if verb == "select-attempt" => {
+            return attempt_selection::run_attempt(rest);
+        }
+        [verb, rest @ ..] if verb == "select-final" => {
+            return attempt_selection::run_final(rest);
+        }
         [verb, rest @ ..] if verb == "verification-source-admit" => {
             return super::canary_package_closure::verification_source::run(rest);
         }
@@ -71,6 +85,9 @@ pub(crate) fn run(args: &[String]) -> DynResult<()> {
         }
         [verb, rest @ ..] if verb == "prepared-source" => {
             return super::canary_package_closure::prepared_source::run(rest);
+        }
+        [verb, rest @ ..] if verb == "recover-source" => {
+            return super::canary_package_closure::source_recovery::run(rest);
         }
         [verb, rest @ ..] if verb == "verify-package-closure" => {
             return super::canary_package_closure::run(rest, false);
@@ -127,6 +144,10 @@ pub(crate) fn run(args: &[String]) -> DynResult<()> {
 }
 
 fn execute(args: &ParsedArgs) -> DynResult<CheckReport> {
+    let family_result = args
+        .last("--family-result")
+        .map(FamilyJobResult::parse)
+        .transpose()?;
     let identity = Digest::try_from(value(args, "--identity").to_owned())?;
     let package = verify_package(
         Path::new(value(args, "--package")),
@@ -139,7 +160,36 @@ fn execute(args: &ParsedArgs) -> DynResult<CheckReport> {
         },
     )?;
     let context = ReceiptContext::from_verified_package(package);
-    let report = aggregate(&context, Path::new(value(args, "--evidence")))?;
+    let evidence = Path::new(value(args, "--evidence"));
+    let report = match family_result {
+        Some(result) => aggregate_with_job_result(&context, evidence, result)?,
+        None => aggregate(&context, evidence)?,
+    };
+    let retry_matrix = if args.last("--feedback-output").is_some() {
+        let families = if report.state
+            == super::canary_receipts::aggregate::AggregateState::InfrastructureRetryable
+        {
+            report.infrastructure_failures.clone()
+        } else {
+            Default::default()
+        };
+        Some(serde_json::to_string(&context.retry_matrix(&families)?)?)
+    } else {
+        None
+    };
+    let feedback = args
+        .last("--feedback-output")
+        .map(|path| feedback_command::publish(&context, &report, Path::new(path)))
+        .transpose()?
+        .flatten();
+    if args.last("--feedback-output").is_some() {
+        let outputs = format!(
+            "{}retry_matrix={}\n",
+            feedback_command::aggregate_outputs(&report, feedback.as_ref()),
+            retry_matrix.as_deref().unwrap_or("{\"include\":[]}")
+        );
+        append_environment("GITHUB_OUTPUT", &outputs)?;
+    }
     CheckReport::success(format!("{}\n", report.summary())).emit()?;
     append_environment("GITHUB_STEP_SUMMARY", &format!("{}\n", report.summary()))?;
     match report.github_outputs() {

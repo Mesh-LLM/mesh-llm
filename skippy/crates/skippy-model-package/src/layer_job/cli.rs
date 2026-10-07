@@ -2,7 +2,6 @@ use crate::snapshot_promotion::local_publisher::{SignalLatch, regular_input};
 use anyhow::{Result, bail};
 use clap::{Parser, Subcommand};
 use std::{
-    io::Write as _,
     path::{Path, PathBuf},
     time::{Duration, Instant},
 };
@@ -98,36 +97,28 @@ pub(super) fn fresh(root: &Path, name: &str, bytes: &[u8]) -> Result<()> {
     staged.persist_noclobber(root.join(name))?;
     Ok(())
 }
-pub fn run() -> Result<()> {
+pub fn run(output: &mut dyn std::io::Write) -> Result<()> {
     #[cfg(not(unix))]
     {
         bail!("layer job input custody currently requires Unix");
     }
     #[cfg(unix)]
     {
-        run_unix(Cli::parse())
+        run_unix(Cli::parse(), output)
     }
 }
 #[cfg(unix)]
-fn run_unix(cli: Cli) -> Result<()> {
+fn run_unix(cli: Cli, writer: &mut dyn std::io::Write) -> Result<()> {
     let latch = SignalLatch::install()?;
     match cli.command {
-        Command::Projector(options) => super::projector_frontdoor::run(options, &latch)?,
-        Command::FormatBytes { bytes } => writeln!(
-            mesh_llm_events::machine_out(),
-            "{}",
-            super::workspace::format(bytes)
-        )?,
-        Command::WorkspaceEstimate { bytes } => writeln!(
-            mesh_llm_events::machine_out(),
-            "{}",
-            super::workspace::estimate(bytes)?
-        )?,
-        Command::GenerationDefaults { file } => writeln!(
-            mesh_llm_events::machine_out(),
-            "{}",
-            super::workspace::generation(&file)?
-        )?,
+        Command::Projector(options) => super::projector_frontdoor::run(options, &latch, writer)?,
+        Command::FormatBytes { bytes } => writeln!(writer, "{}", super::workspace::format(bytes))?,
+        Command::WorkspaceEstimate { bytes } => {
+            writeln!(writer, "{}", super::workspace::estimate(bytes)?)?
+        }
+        Command::GenerationDefaults { file } => {
+            writeln!(writer, "{}", super::workspace::generation(&file)?)?
+        }
         Command::PrepareCard(options) => super::card_frontdoor::run(options, &latch)?,
         Command::UpdateCatalog(options) => super::catalog_frontdoor::run(options, &latch)?,
         Command::Upload(options) => super::upload_frontdoor::run(options, &latch)?,
@@ -169,7 +160,7 @@ fn run_unix(cli: Cli) -> Result<()> {
             terminal(&latch, deadline)?;
             fresh(&root, "source.json", &serde_json::to_vec(&source)?)?;
             terminal(&latch, deadline)?;
-            writeln!(mesh_llm_events::machine_out(), "{}", source.revision)?;
+            writeln!(writer, "{}", source.revision)?;
         }
         Command::Project {
             manifest,
@@ -209,14 +200,13 @@ fn run_unix(cli: Cli) -> Result<()> {
             fresh(&root, "projection.json", &serde_json::to_vec(&projection)?)?;
             terminal(&latch, deadline)?;
             writeln!(
-                mesh_llm_events::machine_out(),
+                writer,
                 "{}\n{}\n{}",
-                projection.source_identity,
-                projection.layer_count,
-                projection.total_bytes
+                projection.source_identity, projection.layer_count, projection.total_bytes
             )?;
         }
     }
+    writer.flush()?;
     Ok(())
 }
 #[cfg(unix)]
@@ -233,5 +223,35 @@ pub(super) async fn cancelled(latch: &SignalLatch) {
             return;
         }
         tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+}
+
+#[cfg(test)]
+mod output_tests {
+    use super::*;
+    struct Refusal(bool);
+    impl std::io::Write for Refusal {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            if self.0 {
+                Err(std::io::ErrorKind::BrokenPipe.into())
+            } else {
+                Ok(bytes.len())
+            }
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Err(std::io::ErrorKind::BrokenPipe.into())
+        }
+    }
+    #[test]
+    fn supplied_plain_output_has_one_newline_and_propagates_writer_refusal() {
+        let cli = || Cli {
+            command: Command::FormatBytes { bytes: 1024 },
+        };
+        let mut output = Vec::new();
+        run_unix(cli(), &mut output).unwrap();
+        assert_eq!(output, b"1.0 KiB\n");
+        for reject_write in [true, false] {
+            assert!(run_unix(cli(), &mut Refusal(reject_write)).is_err());
+        }
     }
 }

@@ -1,3 +1,5 @@
+pub mod package_reference;
+
 use std::{error::Error, fmt, path::Path, str::FromStr};
 
 use serde::{Deserialize, Serialize};

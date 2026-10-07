@@ -75,11 +75,11 @@ impl Fixture {
         fs::create_dir(&root).unwrap();
         process::text(&root, &["init", "--quiet"]).unwrap();
         fs::write(root.join(".gitignore"), ".deps/\ntarget/\ncanary-source/\n").unwrap();
-        let patches = root.join("third_party/llama.cpp/patches");
+        let patches = root.join("skippy/llama_cpp/patches");
         fs::create_dir_all(&patches).unwrap();
         fs::write(patches.join("0001-core.patch"), b"authored recipe fixture").unwrap();
         let upstream = "a".repeat(40);
-        fs::write(root.join("third_party/llama.cpp/upstream.txt"), &upstream).unwrap();
+        fs::write(root.join("skippy/llama_cpp/upstream.txt"), &upstream).unwrap();
         fs::create_dir_all(root.join("ci/llama-canary")).unwrap();
         fs::write(
             root.join("ci/llama-canary/family-certified.json"),
@@ -115,10 +115,10 @@ impl Fixture {
         archive_extract::extract(&archive_path, &closure).unwrap();
         archive_extract::normalize_workload(&closure).unwrap();
         fs::create_dir_all(root.join("target/debug/deps")).unwrap();
-        let binary = fs::read(closure.join("cargo/debug/skippy-server")).unwrap();
+        let binary = fs::read(closure.join("cargo/debug/skippy")).unwrap();
         for name in archive::BINARIES {
             let path = if name == "skippy-mm-test" {
-                root.join("target/debug/deps/skippy_server-fixture")
+                root.join("target/debug/deps/skippy_serving-fixture")
             } else {
                 root.join("target/debug").join(name)
             };
@@ -130,7 +130,7 @@ impl Fixture {
             }
         }
         let test_build = directory.path().join("test-build.jsonl");
-        fs::write(&test_build,serde_json::to_vec(&json!({"reason":"compiler-artifact","target":{"name":"skippy_server"},"profile":{"test":true},"executable":root.join("target/debug/deps/skippy_server-fixture")})).unwrap()).unwrap();
+        fs::write(&test_build,serde_json::to_vec(&json!({"reason":"compiler-artifact","target":{"name":"skippy_serving"},"profile":{"test":true},"executable":root.join("target/debug/deps/skippy_serving-fixture")})).unwrap()).unwrap();
         let admitted = directory.path().join("admitted");
         fs::create_dir(&admitted).unwrap();
         let plan=serde_json::to_vec(&json!({"selected_models":[{"family":"fixture","class":"causal_generation","certification_lanes":[],"artifact":{"files":["weights.gguf"],"file_integrity":{"weights.gguf":{"size_bytes":1}}},"resources":{"estimated_model_bytes":1}}],"github_matrix":{"include":[{"id":"shard-0","shard_index":0,"families":"fixture","estimated_work_bytes":1}]},"shards":[{"shard_index":0,"families":["fixture"]}],"required_certification_lanes":["single-step","chain","state-handoff"]})).unwrap();
@@ -243,8 +243,8 @@ fn full_pack_restore_consumes_immutable_plan_and_real_closure_bytes_without_exec
     );
     assert_eq!(source::prepared(&root).unwrap().head, fixture.native);
     assert_eq!(
-        fs::read(root.join("target/debug/skippy-server")).unwrap(),
-        fs::read(fixture.root.join("target/debug/skippy-server")).unwrap()
+        fs::read(root.join("target/debug/skippy")).unwrap(),
+        fs::read(fixture.root.join("target/debug/skippy")).unwrap()
     );
     assert!(
         workload::verify_producer(

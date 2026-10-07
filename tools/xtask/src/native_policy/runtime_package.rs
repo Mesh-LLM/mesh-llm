@@ -5,34 +5,75 @@ use crate::repository::check_report::CheckReport;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-const USAGE: &str = "Usage: scripts/verify-native-runtime-package.sh [--portable] <artifact-dir-or-tar.gz> [...]\n\nVerifies MeshLLM native runtime artifacts:\n  - manifest schema and resolver fields\n  - artifact directory name matches runtime.id\n  - all runtime.libraries exist\n  - library_sha256 matches the primary library\n  - Linux platform.min_glibc is a valid major.minor floor and matches the\n    packaged ELF requirement exactly when present\n  - Linux ELF libraries and tools stay within the declared glibc floor\n  - Linux shared-library RUNPATH/RPATH is relocatable and resolves packaged deps\n  - Linux CUDA ELF dependencies are closed, same-architecture, and non-stub\n  - Windows non-system DLL imports are present in the artifact\n  - required archive checksum sidecar\n  - archive paths and links cannot escape the extraction directory\n\n--portable validates integrity, archive shape, manifest schema, paths, and\nchecksums without running host-specific binary dependency probes.\n";
+const USAGE: &str = "Usage: scripts/verify-native-runtime-package.sh [--portable] [--expected-backend KIND] [--expected-target TARGET] <artifact-dir-or-tar.gz> [...]\n\nVerifies MeshLLM native runtime artifacts:\n  - manifest schema and resolver fields\n  - artifact directory name matches runtime.id\n  - all runtime.libraries exist\n  - library_sha256 matches the primary library\n  - Linux platform.min_glibc is a valid major.minor floor and matches the\n    packaged ELF requirement exactly when present\n  - Linux ELF libraries and tools stay within the declared glibc floor\n  - Linux shared-library RUNPATH/RPATH is relocatable and resolves packaged deps\n  - Linux CUDA ELF dependencies are closed, same-architecture, and non-stub\n  - Windows non-system DLL imports are present in the artifact\n  - required archive checksum sidecar\n  - archive paths and links cannot escape the extraction directory\n\n--portable validates integrity, archive shape, manifest schema, paths, and\nchecksums without running host-specific binary dependency probes.\n--expected-backend and --expected-target require each artifact to match the planned row.\n";
+
+#[derive(Default)]
+struct Options {
+    portable: bool,
+    backend: Option<String>,
+    target: Option<String>,
+}
+impl Options {
+    fn parse(args: &[String]) -> Result<(Self, usize), String> {
+        let mut options = Self::default();
+        let mut index = 0;
+        while let Some(arg) = args.get(index) {
+            match arg.as_str() {
+                "--portable" => options.portable = true,
+                "--" => return Ok((options, index + 1)),
+                "--expected-backend" | "--expected-target" => {
+                    let value = args
+                        .get(index + 1)
+                        .filter(|value| !value.is_empty() && !value.starts_with('-'))
+                        .ok_or_else(|| format!("{arg} requires a non-empty value"))?;
+                    let slot = if arg == "--expected-backend" {
+                        &mut options.backend
+                    } else {
+                        &mut options.target
+                    };
+                    if slot.is_some() {
+                        return Err(format!("duplicate argument: {arg}"));
+                    }
+                    *slot = Some(value.clone());
+                    index += 1;
+                }
+                word if word.starts_with('-') => return Err(format!("unknown argument: {word}")),
+                _ => break,
+            }
+            index += 1;
+        }
+        Ok((options, index))
+    }
+    fn check(&self, package: &Package) -> Result<(), String> {
+        if self
+            .backend
+            .as_ref()
+            .is_some_and(|expected| expected != &package.backend)
+        {
+            return Err("cached runtime backend does not match the planned row".into());
+        }
+        if self
+            .target
+            .as_ref()
+            .is_some_and(|expected| expected != &package.target)
+        {
+            return Err("cached runtime target does not match the planned row".into());
+        }
+        Ok(())
+    }
+}
 
 pub(super) fn run(args: &[String], tools: &dyn Toolchain) -> CheckReport {
-    let mut portable = false;
-    let mut index = 0;
-    while let Some(arg) = args.get(index) {
-        match arg.as_str() {
-            "--portable" => portable = true,
-            "--" => {
-                index += 1;
-                break;
-            }
-            word if word.starts_with('-') => {
-                return CheckReport::failure(
-                    String::new(),
-                    format!("unknown argument: {word}\n{USAGE}"),
-                );
-            }
-            _ => break,
-        }
-        index += 1;
-    }
+    let (options, index) = match Options::parse(args) {
+        Ok(parsed) => parsed,
+        Err(error) => return CheckReport::failure(String::new(), format!("{error}\n{USAGE}")),
+    };
     if index == args.len() {
         return CheckReport::failure(String::new(), USAGE.to_owned());
     }
     let mut stdout = String::new();
     for (position, input) in args[index..].iter().enumerate() {
-        match verify_input(input, position, portable, tools) {
+        match verify_input(input, position, &options, tools) {
             Ok(message) => stdout.push_str(&message),
             Err(error) => return CheckReport::failure(stdout, format!("{error}\n")),
         }
@@ -43,12 +84,12 @@ pub(super) fn run(args: &[String], tools: &dyn Toolchain) -> CheckReport {
 fn verify_input(
     input: &str,
     position: usize,
-    portable: bool,
+    options: &Options,
     tools: &dyn Toolchain,
 ) -> Result<String, String> {
     let source = Path::new(input);
     if source.is_dir() {
-        return verify_dir(source, portable, tools);
+        return verify_dir(source, options, tools);
     }
     if !input.ends_with(".tar.gz") && !input.ends_with(".tgz") {
         return Err(format!(
@@ -86,12 +127,13 @@ fn verify_input(
             ));
         }
     };
-    verify_dir(directory, portable, tools)
+    verify_dir(directory, options, tools)
 }
 
-fn verify_dir(path: &Path, portable: bool, tools: &dyn Toolchain) -> Result<String, String> {
+fn verify_dir(path: &Path, options: &Options, tools: &dyn Toolchain) -> Result<String, String> {
     let package = Package::read(path)?;
-    if !portable {
+    options.check(&package)?;
+    if !options.portable {
         match package.os.as_str() {
             "linux" => super::runtime_package_linux::verify(&package, tools)?,
             "macos" => super::runtime_package_macos::verify(&package, tools)?,
@@ -111,7 +153,7 @@ fn verify_dir(path: &Path, portable: bool, tools: &dyn Toolchain) -> Result<Stri
             _ => unreachable!(),
         }
     }
-    let label = if portable {
+    let label = if options.portable {
         "verified portable native runtime artifact"
     } else {
         "verified native runtime artifact"

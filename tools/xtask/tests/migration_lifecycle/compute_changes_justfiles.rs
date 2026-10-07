@@ -366,12 +366,12 @@ fn compute_changes_justfiles_nested_added_deleted_import_and_root_changes_preser
     assert!(f.classify(&light, &backend, "just/build.just", "push"));
     f.write(
         "just/nested/runtime.just",
-        "build-runtime:\n    printf backend\n",
+        "release-runtime-build:\n    printf backend\n",
     );
     let nested = f.commit();
     f.write(
         "just/nested/runtime.just",
-        "build-runtime:\n    printf changed\n",
+        "release-runtime-build:\n    printf changed\n",
     );
     let nested_head = f.commit();
     assert!(f.classify(&nested, &nested_head, "just/nested/runtime.just", "push"));

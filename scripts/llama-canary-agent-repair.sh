@@ -116,6 +116,10 @@ if [[ "$HARNESS_MODE" == repair || "$HARNESS_MODE" == verify ]]; then
       END { if (count != 1 || value == "") exit 1; print value }
     ')" || { echo 'automation bootstrap must return one nonempty binary_path' >&2; exit 1; }
   fi
+else
+  # Native build modes already require the hosted-prepared trusted controller.
+  repair_workload_controller="${MESH_LLM_AUTOMATION_BIN:-}"
+fi
   if [[ "$repair_workload_controller" != /* || ! -f "$repair_workload_controller" || ! -x "$repair_workload_controller" ]]; then
     echo 'MESH_LLM_AUTOMATION_BIN or bootstrap binary_path must be an absolute executable' >&2
     exit 1
@@ -130,8 +134,21 @@ if [[ "$HARNESS_MODE" == repair || "$HARNESS_MODE" == verify ]]; then
       return 1
     fi
   }
-fi
 # Legacy workload automation selection ends.
+if [[ "$HARNESS_MODE" == repair* ]]; then
+  repair_recovery_controller="${MESH_LLM_AUTOMATION_BIN:-${repair_workload_controller:-}}"
+  if [[ "$repair_recovery_controller" != /* || ! -f "$repair_recovery_controller" || ! -x "$repair_recovery_controller" || -L "$repair_recovery_controller" ]]; then
+    echo 'source recovery requires the admitted immutable automation executable' >&2
+    exit 1
+  fi
+  repair_recovery_controller_sha="$(shasum -a 256 "$repair_recovery_controller" | awk '{print $1}')" || exit 1
+  repair_recovery_controller_unchanged() {
+    local current
+    [[ ! -L "$repair_recovery_controller" ]] || return 1
+    current="$(shasum -a 256 "$repair_recovery_controller" | awk '{print $1}')" || return 1
+    [[ "$current" == "$repair_recovery_controller_sha" ]]
+  }
+fi
 if [[ "$HARNESS_MODE" != pinned-build ]] && [[ -z "$(git config user.name)" || -z "$(git config user.email)" ]]; then
   echo "git user.name and user.email must be configured before canary repair" >&2
   exit 1
@@ -361,7 +378,11 @@ Do not weaken, skip, or narrow a gate. Do not edit the workflow, this wrapper, i
   if [[ -n "${CANARY_PREVIOUS_FEEDBACK:-}" ]]; then
     printf '\n\nThis is distributed repair attempt %s. The exact prior candidate has already been restored as uncommitted changes on the frozen base. Read the digest-bound family failure summary and every failed-family directory under %s before editing. Preserve the prior repairs, fix the candidate failures demonstrated there, and use focused reproductions before returning control for a new complete family pass.\n\n' \
       "$PASS_ID" "$CANARY_PREVIOUS_FEEDBACK"
-    python3 scripts/summarize-canary-feedback.py "$CANARY_PREVIOUS_FEEDBACK"
+    if [[ -z "${CANARY_PREVIOUS_FEEDBACK_SUMMARY:-}" || ! -f "$CANARY_PREVIOUS_FEEDBACK_SUMMARY" ]]; then
+      echo "distributed repair requires the native verified feedback summary" >&2
+      return 1
+    fi
+    cat "$CANARY_PREVIOUS_FEEDBACK_SUMMARY"
   fi
 }
 
@@ -776,11 +797,15 @@ run_early_metal_certification() {
   local workload_env=()
   # A cached executable is usable only when its recorded source tree (and
   # therefore pin), native stamp, and every handed-off binary still match.
+  repair_workload_controller_unchanged || return 1
+  verification_candidate_unchanged || return 1
   run_verification_logged "verify exact workload producer" "$CERTIFY_LOG" \
-    python3 scripts/check-skippy-workload-candidate.py \
-      --candidate-binary "${LLAMA_STAGE_BUILD_DIR:?}-workloads/cargo/debug/skippy" \
-      --native-build-dir "${LLAMA_STAGE_BUILD_DIR:?}-workloads/native" \
-      --producer-manifest "${LLAMA_STAGE_BUILD_DIR:?}-workloads/producer.json" || return 1
+    "${repair_workload_automation[@]}" automation canary-receipts workload-manifest verify \
+      "$ROOT" "${LLAMA_STAGE_BUILD_DIR:?}-workloads/cargo/debug/skippy" \
+      "${LLAMA_STAGE_BUILD_DIR:?}-workloads/native" \
+      "${LLAMA_STAGE_BUILD_DIR:?}-workloads/producer.json" || return 1
+  verification_candidate_unchanged || return 1
+  repair_workload_controller_unchanged || return 1
   workload_settings="$(bash scripts/skippy-workload-oracles-build.sh --print-env "${LLAMA_STAGE_BUILD_DIR:?}-workloads")" || return 1
   [[ -n "$workload_settings" ]] || return 1
   while IFS= read -r setting; do
@@ -816,13 +841,12 @@ run_candidate_gates() {
     # Independent verification uses the default read-only mode below.
     write_split_certification_roster || return 1
   fi
-  # The prepared pin supplies the exact GGML type table. Compare tensor
-  # descriptors with the manifest now, before the native and Rust builds.
-  run_verification_logged "validate pinned GGUF tensor bytes before compilation" "$CERTIFY_LOG" \
-    python3 scripts/plan-family-battery.py --shard-count 256 \
-      --check-cache --cache-root "$HF_CACHE" \
-      --gguf-constants "$ROOT/.deps/llama.cpp/gguf-py/gguf/constants.py" \
-      --output "$PLAN_PATH" || return 1
+  # The prepared pin supplies GGML layout data. Validate immutable cache and
+  # tensor descriptors before compilation; placement uses conservative file sizes.
+  repair_family_plan 256 "$CERTIFY_LOG" || return 1
+  repair_family_plan_step "$CERTIFY_LOG" "${repair_workload_automation[@]}" \
+    automation family-battery-policy --cache-descriptors "$ROOT" \
+    "$ROOT/ci/llama-canary/family-certified.json" "$PLAN_PATH" "${HF_CACHE:?}" || return 1
   validate_agent_manifest_changes || return 1
   if [[ "$HARNESS_MODE" == *-build ]]; then
     run_verification_logged "validate family plan before compilation" "$CERTIFY_LOG" \
@@ -1057,10 +1081,12 @@ if [[ "$HARNESS_MODE" == repair* ]]; then
     :
   else
     status=$?
-    # Run the helper from the trusted base commit: a failed agent may have
-    # edited its checkout's scripts. The result is diagnostic evidence only.
-    if ! python3 - "$ROOT" "$STATE_DIR/recovery" "$BASE_HEAD" \
-        < <(git show "$BASE_HEAD:scripts/llama-canary-recover-source.py"); then
+    # The admitted native controller remains independent of candidate edits.
+    # Recovery is diagnostic only and cannot replace the original failure.
+    if ! { repair_recovery_controller_unchanged \
+        && "$repair_recovery_controller" automation canary-receipts recover-source \
+          --root "$ROOT" --output "$STATE_DIR/recovery" --base "$BASE_HEAD" \
+        && repair_recovery_controller_unchanged; }; then
       echo "could not capture the unverified repair source" >&2
     fi
     echo "agent task failed or timed out; no canary branch or pull request was published" >&2

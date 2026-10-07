@@ -1,3 +1,6 @@
+#[path = "repo_consistency/product_documentation.rs"]
+mod product_documentation;
+
 use crate::command::{DynResult, ensure_eq, ensure_set_eq, run_command, trimmed_stderr_or_stdout};
 use crate::{ci_validation, publish_consistency, release_targets};
 use serde::Deserialize;
@@ -239,6 +242,7 @@ pub(crate) fn check_ci_crate_lists_command(repo_root: &Path) -> DynResult<()> {
     ci_validation::check_ci_crate_test_coverage_files(repo_root)?;
     check_attestation_default_version(repo_root)?;
     check_runtime_event_abi_mirror(repo_root)?;
+    product_documentation::check(repo_root)?;
     println!("repo consistency checks passed: ci-crate-lists");
     Ok(())
 }

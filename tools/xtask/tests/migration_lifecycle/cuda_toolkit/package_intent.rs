@@ -4,7 +4,8 @@ use std::{fs, path::Path};
 
 fn package_flavor_owner() -> String {
     let source = fs::read_to_string(
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scripts/package-native-runtime.sh"),
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../skippy/scripts/package-native-runtime.sh"),
     )
     .unwrap();
     let start = "backend_flavor() {";

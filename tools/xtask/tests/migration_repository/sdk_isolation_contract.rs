@@ -58,7 +58,7 @@ fn sdk_four_clients_keep_only_ecosystem_imports_and_isolated_actual_invocations(
     assert!(compat.contains("--timeout-secs \"$MAX_WAIT\""));
     assert!(!compat.contains("MODELS_JSON="));
     assert!(compat.contains("--max-time 5 --connect-timeout 5"));
-    let embeddings = read("scripts/skippy-workload-certify.sh");
+    let embeddings = read("skippy/scripts/skippy-workload-certify.sh");
     assert_eq!(
         embeddings
             .matches("--client embeddings --python \"$SDK_PYTHON\"")

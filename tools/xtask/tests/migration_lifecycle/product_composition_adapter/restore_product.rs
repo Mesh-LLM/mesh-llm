@@ -55,6 +55,14 @@ fn prepared() -> Fixture {
             .join("scripts/verify-native-runtime-package.sh"),
     )
     .unwrap();
+    fs::create_dir_all(fixture.root.join("skippy/scripts")).unwrap();
+    fs::copy(
+        repository().join("skippy/scripts/verify-native-runtime-package.sh"),
+        fixture
+            .root
+            .join("skippy/scripts/verify-native-runtime-package.sh"),
+    )
+    .unwrap();
     fs::create_dir(fixture.root.join("restore-input")).unwrap();
     fs::create_dir(fixture.root.join("restore-tmp")).unwrap();
     fs::write(

@@ -75,6 +75,7 @@ fn platforms(workflows: &BTreeMap<String, Node>) -> DynResult<()> {
     let linux = workflows
         .get("ci-linux-product-smoke-slice.yml")
         .ok_or("missing Linux Laya slice")?;
+    gpu_runner_gate(linux)?;
     for (name, backend, device, plan, smoke) in [
         ("laya_cpu", "cpu", "CPU", "linux-cpu", "core"),
         ("laya_cuda", "cuda", "CUDA0", "linux-cuda", "core-cuda"),
@@ -91,7 +92,7 @@ fn platforms(workflows: &BTreeMap<String, Node>) -> DynResult<()> {
             h::binding(
                 inputs,
                 "enable_vulkan_inference",
-                "${{ vars.MESH_VULKAN_INFERENCE_RUNNER_ENABLED == 'true' }}",
+                "${{ needs.gpu_runner_gate.outputs.vulkan_enabled }}",
             )?;
             h::binding(h::member(job, "env")?, "MESH_LLM_VULKAN_AVAILABLE", "1")?;
         }
@@ -129,6 +130,67 @@ fn platforms(workflows: &BTreeMap<String, Node>) -> DynResult<()> {
     }
     Ok(())
 }
+fn gpu_runner_gate(workflow: &Node) -> DynResult<()> {
+    let job = h::job(workflow, "gpu_runner_gate")?;
+    h::condition(
+        job,
+        "${{ contains(fromJson(inputs.smoke_matrix).*.id, 'core') && (contains(fromJson(inputs.runtime_matrix).*.id, 'linux-vulkan') || contains(fromJson(inputs.runtime_matrix).*.id, 'linux-rocm')) }}",
+    )?;
+    h::binding(job, "runs-on", "ubuntu-24.04")?;
+    let (_, step) = h::step(h::steps(job)?, "id", "check")?;
+    for backend in ["VULKAN", "ROCM"] {
+        h::binding(
+            h::member(step, "env")?,
+            &format!("MESH_{backend}_INFERENCE_RUNNER_ENABLED"),
+            &format!("${{{{ vars.MESH_{backend}_INFERENCE_RUNNER_ENABLED }}}}"),
+        )?;
+    }
+    for key in ["vulkan_enabled", "rocm_enabled"] {
+        h::binding(
+            h::member(job, "outputs")?,
+            key,
+            &format!("${{{{ steps.check.outputs.{key} }}}}"),
+        )?;
+    }
+    gpu_normalization(step)
+}
+
+fn gpu_normalization(step: &Node) -> DynResult<()> {
+    // A finite loop owns the policy decision. Additional shell commands could
+    // override the admitted value, so token presence alone is insufficient.
+    let source = super::field(step, "run").ok_or("GPU normalization command missing")?;
+    let source = source
+        .lines()
+        .filter(|line| !line.trim_start().starts_with('#'))
+        .collect::<Vec<_>>()
+        .join("\n")
+        .replace("\\\n", " ");
+    let actual = source
+        .lines()
+        .map(|line| line.split_whitespace().collect::<Vec<_>>().join(" "))
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>();
+    let expected = [
+        "set -euo pipefail",
+        "for pair in \"vulkan_enabled:MESH_VULKAN_INFERENCE_RUNNER_ENABLED\" \"rocm_enabled:MESH_ROCM_INFERENCE_RUNNER_ENABLED\"",
+        "do",
+        "output=\"${pair%%:*}\"",
+        "name=\"${pair#*:}\"",
+        "value=\"${!name:-}\"",
+        "enabled=false",
+        "if [[ \"$value\" == \"true\" ]]; then",
+        "enabled=true",
+        "fi",
+        "echo \"$output=$enabled\" >> \"$GITHUB_OUTPUT\"",
+        "done",
+    ];
+    if actual.iter().map(String::as_str).eq(expected) {
+        Ok(())
+    } else {
+        Err("GPU normalization must decide exact lowercase true inside the bounded backend loop without overrides".into())
+    }
+}
+
 fn laya_step(job: &Node) -> DynResult<&Node> {
     Ok(h::step(
         h::steps(job)?,
@@ -139,14 +201,17 @@ fn laya_step(job: &Node) -> DynResult<&Node> {
 }
 fn row(job: &Node, backend: &str, device: &str, plan: &str, smoke: &str) -> DynResult<()> {
     let qualification = match device {
-        "Vulkan0" => " && vars.MESH_VULKAN_INFERENCE_RUNNER_ENABLED == 'true'",
-        "ROCm0" => " && vars.MESH_ROCM_INFERENCE_RUNNER_ENABLED == 'true'",
+        "Vulkan0" => " && needs.gpu_runner_gate.outputs.vulkan_enabled == 'true'",
+        "ROCm0" => " && needs.gpu_runner_gate.outputs.rocm_enabled == 'true'",
         _ => "",
     };
     let gate = format!(
         "${{{{ contains(fromJson(inputs.runtime_matrix).*.id, '{plan}') && contains(fromJson(inputs.smoke_matrix).*.id, '{smoke}'){qualification} }}}}"
     );
     h::condition(job, &gate)?;
+    if matches!(device, "Vulkan0" | "ROCm0") {
+        h::needs(job, &["gpu_runner_gate"])?;
+    }
     h::binding(job, "timeout-minutes", "${{ inputs.timeout_minutes }}")?;
     let runner = h::member(job, "runs-on")?.list();
     let required = match device {
@@ -323,5 +388,40 @@ mod tests {
             .unwrap();
         h::replace(step, &["with", "device"], Node::Scalar("CPU".into()));
         assert!(platforms(&nodes).is_err());
+    }
+    #[test]
+    fn gpu_normalization_cannot_admit_case_insensitive_true_or_swap_backend() {
+        for (before, after) in [
+            (
+                "if [[ \"$value\" == \"true\" ]]; then",
+                "if [[ \"$value\" == \"True\" ]]; then",
+            ),
+            ("enabled=false", "enabled=true"),
+            ("fi\n", "fi\n  enabled=true\n"),
+            (
+                "vulkan_enabled:MESH_VULKAN_INFERENCE_RUNNER_ENABLED",
+                "vulkan_enabled:MESH_ROCM_INFERENCE_RUNNER_ENABLED",
+            ),
+        ] {
+            let mut workflows = workflows();
+            let document = workflows
+                .get_mut("ci-linux-product-smoke-slice.yml")
+                .unwrap();
+            let Node::Seq(steps) = h::mutable(
+                h::mutable(h::mutable(document, "jobs"), "gpu_runner_gate"),
+                "steps",
+            ) else {
+                unreachable!()
+            };
+            let command = steps
+                .iter_mut()
+                .find(|step| super::super::field(step, "id") == Some("check"))
+                .unwrap();
+            let source = super::super::field(command, "run").unwrap();
+            assert!(source.contains(before));
+            let replaced = source.replace(before, after);
+            h::replace(command, &["run"], Node::Scalar(replaced));
+            assert!(platforms(&workflows).is_err());
+        }
     }
 }

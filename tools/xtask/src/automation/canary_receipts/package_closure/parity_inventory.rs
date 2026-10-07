@@ -11,6 +11,9 @@ use std::{
     path::{Path, PathBuf},
 };
 
+#[path = "parity_inventory/boundary_selection.rs"]
+mod boundary_selection;
+
 const STATUSES: [&str; 12] = [
     "candidate",
     "candidate_stateful",
@@ -67,22 +70,24 @@ pub(super) fn admit(root: &Path, source_revision: &str) -> DynResult<Value> {
     let native = root.join(".deps/llama.cpp");
     let (sources, boundaries) = model_boundaries::inventory(&native)?;
     runtime_slice::verify(&native)?;
-    let parity = policy_document::json(root, "docs/skippy/llama-parity-candidates.json")?;
+    let parity = policy_document::json(root, source::parity_manifest_path(root)?)?;
     let family = policy_document::json(root, "ci/llama-canary/family-certified.json")?;
     validate(&parity, &family, &sources, &boundaries)?;
     let after = source::prepared(root)?;
     if before.head != after.head || before.markers != after.markers {
         return Err("prepared native identity changed during parity validation".into());
     }
-    if policy_document::json(root, "docs/skippy/llama-parity-candidates.json")? != parity
+    if policy_document::json(root, source::parity_manifest_path(root)?)? != parity
         || policy_document::json(root, "ci/llama-canary/family-certified.json")? != family
         || process::text(root, &["rev-parse", "HEAD"])? != source_revision
     {
         return Err("parity source/manifest changed during validation".into());
     }
     process::check()?;
+    let classifications = classifications(&parity, &sources, &boundaries)?;
+    let next_boundary_target = boundary_selection::next_target(&classifications, &native)?;
     Ok(
-        json!({"status":"parity_inventory_admitted","model_sources":sources.len(),"paired_boundaries":boundaries.len(),"classifications":classifications(&parity,&sources,&boundaries)?}),
+        json!({"status":"parity_inventory_admitted","model_sources":sources.len(),"paired_boundaries":boundaries.len(),"classifications":classifications,"next_boundary_target":next_boundary_target}),
     )
 }
 
@@ -176,7 +181,9 @@ fn validate(
                 .transpose()?
                 .unwrap_or("");
             if RUNNABLE.contains(&status) && (!reason.is_empty() || !boundaries.contains(name)) {
-                return Err(format!("runnable parity family {name} has unsupported reason or lacks paired boundary calls").into());
+                let pending =
+                    boundary_selection::pending_reclassification(rows, sources, boundaries);
+                return Err(format!("runnable parity family {name} has unsupported reason or lacks paired boundary calls; pending_reclassification: {}", serde_json::to_string(&pending)?).into());
             }
         }
         if !matched {

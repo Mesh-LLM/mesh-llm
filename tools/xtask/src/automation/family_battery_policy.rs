@@ -41,6 +41,16 @@ fn admit(root: &Path, manifest: &Path, plan: &Path, requested: &str) -> DynResul
 
 pub(crate) fn run(args: &[String]) -> DynResult<()> {
     if let [mode, root, manifest, plan, cache] = args
+        && mode == "--cache-descriptors"
+    {
+        return crate::automation::canary_source_plan::battery_cache::admit_descriptors(
+            Path::new(root),
+            Path::new(manifest),
+            Path::new(plan),
+            Path::new(cache),
+        );
+    }
+    if let [mode, root, manifest, plan, cache] = args
         && mode == "--cache"
     {
         return crate::automation::canary_source_plan::battery_cache::admit(

@@ -142,7 +142,7 @@ impl Fixture {
             "native/bin/llama-server",
             "native/bin/llama-completion",
             "native/bin/llama-tts",
-            "cargo/debug/deps/skippy_server-fixture",
+            "cargo/debug/deps/skippy_serving-fixture",
         ] {
             write(
                 &closure.join(name),
@@ -150,7 +150,7 @@ impl Fixture {
                 200,
             );
         }
-        let test = closure.join("cargo/debug/deps/skippy_server-fixture");
+        let test = closure.join("cargo/debug/deps/skippy_serving-fixture");
         let snapshot = closure.join("source.json");
         Self {
             temp,
@@ -290,7 +290,8 @@ fn actual_producer_and_certify_caller_commands_admit_without_executing_native_bu
     let f = Fixture::new();
     let repository = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let caller =
-        fs::read_to_string(repository.join("scripts/skippy-workload-oracles-build.sh")).unwrap();
+        fs::read_to_string(repository.join("skippy/scripts/skippy-workload-oracles-build.sh"))
+            .unwrap();
     let snapshot = caller
         .lines()
         .find(|line| line.contains("workload-manifest snapshot"))
@@ -300,7 +301,7 @@ fn actual_producer_and_certify_caller_commands_admit_without_executing_native_bu
         .nth(1)
         .unwrap();
     let certify =
-        fs::read_to_string(repository.join("scripts/skippy-workload-certify.sh")).unwrap();
+        fs::read_to_string(repository.join("skippy/scripts/skippy-workload-certify.sh")).unwrap();
     let commands = certify.lines().collect::<Vec<_>>();
     let mut admission = String::new();
     for mode in ["verify", "fresh"] {
@@ -444,7 +445,7 @@ fn legacy_repair_fixture() -> Fixture {
     fixture.closure = closure;
     fixture.test = fixture
         .closure
-        .join("cargo/debug/deps/skippy_server-fixture");
+        .join("cargo/debug/deps/skippy_serving-fixture");
     fixture.snapshot = fixture.closure.join("source.json");
     fs::write(
         fixture.root.join("source.rs"),
@@ -835,23 +836,34 @@ fn legacy_repair_changed_frozen_controller_is_rejected_before_admission_and_stag
 }
 
 #[test]
-fn legacy_repair_controller_initialization_is_not_applicable_to_three_build_modes() {
+fn native_build_modes_require_frozen_controller_before_skipping_legacy_snapshot() {
     for mode in ["repair-build", "verify-build", "pinned-build"] {
-        let fixture = legacy_repair_fixture();
-        let mut caller = RepairCaller::new(&fixture);
-        caller.harness_mode = mode;
-        // An unused empty configured selector must not impose a new admission
-        // requirement on the protected-receipt or selected-source paths.
-        let output = caller.invoke(&fixture, Some(""), false, &Cancellation::default());
-        assert!(output.success(), "{mode}: {output:?}");
-        assert!(
-            String::from_utf8_lossy(&output.stdout.bytes_retained)
-                .contains("repair-snapshot-not-applicable")
-        );
-        assert!(!caller.just_trace.exists());
-        assert!(!caller.trace.exists());
-        assert!(!caller.receipt.exists());
-        assert!(!fixture.temp.path().join("controller.marker").exists());
+        for configured in [Some(""), Some(env!("CARGO_BIN_EXE_xtask"))] {
+            let fixture = legacy_repair_fixture();
+            let mut caller = RepairCaller::new(&fixture);
+            caller.harness_mode = mode;
+            let output = caller.invoke(&fixture, configured, false, &Cancellation::default());
+            assert_eq!(
+                output.success(),
+                configured != Some(""),
+                "{mode}: {output:?}"
+            );
+            if configured == Some("") {
+                assert!(
+                    String::from_utf8_lossy(&output.stderr.bytes_retained)
+                        .contains("must be an absolute executable")
+                );
+            } else {
+                assert!(
+                    String::from_utf8_lossy(&output.stdout.bytes_retained)
+                        .contains("repair-snapshot-not-applicable")
+                );
+            }
+            assert!(!caller.just_trace.exists());
+            assert!(!caller.trace.exists());
+            assert!(!caller.receipt.exists());
+            assert!(!fixture.temp.path().join("controller.marker").exists());
+        }
     }
 }
 

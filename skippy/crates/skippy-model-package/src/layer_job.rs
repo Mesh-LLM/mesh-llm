@@ -26,7 +26,7 @@ mod verification_frontdoor;
 #[cfg(unix)]
 pub use cli::run;
 #[cfg(not(unix))]
-pub fn run() -> anyhow::Result<()> {
+pub fn run(_output: &mut dyn std::io::Write) -> anyhow::Result<()> {
     anyhow::bail!("layer job input custody requires Unix");
 }
 use anyhow::{Result, bail};

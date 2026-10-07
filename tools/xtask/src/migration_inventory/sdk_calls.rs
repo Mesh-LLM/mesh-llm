@@ -27,7 +27,11 @@ pub(super) fn target(
         "scripts/ci-compat-smoke.sh" => {
             "\"${automation[@]}\" automation smoke-observation sdk-client --client "
         }
-        "scripts/skippy-workload-certify.sh" if continuation => "--client ",
+        "scripts/skippy-workload-certify.sh" | "skippy/scripts/skippy-workload-certify.sh"
+            if continuation =>
+        {
+            "--client "
+        }
         _ => return Err("required SDK graph refuses unknown adapter caller".into()),
     };
     let rest = block
@@ -52,7 +56,10 @@ pub(super) fn target(
             "scripts/ci-langchain-openai-smoke.py",
             "ci/required-sdk-python/requirements.lock",
         ),
-        ("scripts/skippy-workload-certify.sh", "embeddings") => (
+        (
+            "scripts/skippy-workload-certify.sh" | "skippy/scripts/skippy-workload-certify.sh",
+            "embeddings",
+        ) => (
             "scripts/ci-openai-embeddings-smoke.py",
             "ci/canary-python/uv.lock",
         ),

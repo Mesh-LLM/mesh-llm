@@ -212,71 +212,141 @@ fn protected_controller_and_worker_credentials_refuse_permission_or_token_mutati
         Node::Scalar("${{ github.token }}".into());
     assert!(security(&controller, &token).is_err());
     let mut forwarded = controller.clone();
-    let Node::Map(candidate) = change(&mut forwarded, &["jobs", "candidate"]) else {
+    let Node::Map(candidate) = change(&mut forwarded, &["jobs", "repair_1"]) else {
         panic!("job");
     };
     candidate.push(("secrets".into(), Node::Scalar("inherit".into())));
     assert!(security(&forwarded, &worker).is_err());
 }
+fn current_attempt_inputs(jobs: &Node, index: u8) {
+    let repair_name = format!("repair_{index}");
+    let verify_name = format!("verify_{index}");
+    let repair = jobs.get(&repair_name).unwrap();
+    let verify = jobs.get(&verify_name).unwrap();
+    for job in [repair, verify] {
+        assert_eq!(
+            field(job, "uses"),
+            "./.github/workflows/llama-canary-family-pass.yml"
+        );
+        let with = job.get("with").unwrap();
+        for key in ["source", "upstream"] {
+            assert_eq!(
+                field(with, key),
+                format!("${{{{ needs.resolve.outputs.{key} }}}}")
+            );
+        }
+    }
+    assert_eq!(
+        needs(verify),
+        BTreeSet::from(["resolve", repair_name.as_str()])
+    );
+    let with = verify.get("with").unwrap();
+    assert_eq!(field(with, "mode"), "verify-build");
+    for key in ["package", "identity", "head"] {
+        assert_eq!(
+            field(with, &format!("previous_{key}")),
+            format!("${{{{ needs.{repair_name}.outputs.{key} }}}}")
+        );
+    }
+    if index == 1 {
+        assert_eq!(needs(repair), BTreeSet::from(["resolve", "preflight"]));
+        assert_eq!(
+            field(repair, "if"),
+            "${{ !cancelled() && needs.preflight.result == 'success' }}"
+        );
+        assert_eq!(
+            field(verify, "if"),
+            "${{ !cancelled() && needs.resolve.outputs.changed == 'true' && needs.repair_1.outputs.green == 'true' }}"
+        );
+    } else {
+        let previous = format!("attempt_{}", index - 1);
+        assert_eq!(
+            needs(repair),
+            BTreeSet::from(["resolve", previous.as_str()])
+        );
+        assert_eq!(
+            field(repair, "if"),
+            format!(
+                "${{{{ !cancelled() && needs.resolve.outputs.changed == 'true' && needs.{previous}.outputs.state == 'repairable' }}}}"
+            )
+        );
+        assert_eq!(
+            field(verify, "if"),
+            format!("${{{{ !cancelled() && needs.{repair_name}.outputs.green == 'true' }}}}")
+        );
+        let with = repair.get("with").unwrap();
+        assert_eq!(field(with, "mode"), "repair-build");
+        for key in ["package", "identity", "head", "feedback"] {
+            assert_eq!(
+                field(with, &format!("previous_{key}")),
+                format!("${{{{ needs.{previous}.outputs.resume_{key} }}}}")
+            );
+        }
+    }
+    current_selector_inputs(jobs, index, &repair_name, &verify_name);
+}
+fn current_selector_inputs(jobs: &Node, index: u8, repair_name: &str, verify_name: &str) {
+    let selector = jobs.get(&format!("attempt_{index}")).unwrap();
+    let mut dependencies = BTreeSet::from(["resolve", repair_name, verify_name]);
+    let previous = format!("attempt_{}", index - 1);
+    if index > 1 {
+        dependencies.insert(previous.as_str());
+    }
+    assert_eq!(needs(selector), dependencies);
+    let (_, select) = named(selector, "id", "select");
+    let env = select.get("env").unwrap();
+    assert_eq!(
+        field(env, "REPAIR_JSON"),
+        format!("${{{{ toJSON(needs.{repair_name}) }}}}")
+    );
+    assert_eq!(
+        field(env, "VERIFY_JSON"),
+        format!("${{{{ toJSON(needs.{verify_name}) }}}}")
+    );
+    assert!(field(select, "run").contains("automation canary-receipts select-attempt --changed \"$CHANGED\" --repair-json \"$REPAIR_JSON\" --verification-json \"$VERIFY_JSON\""));
+}
 #[test]
 fn changed_pin_graph_requires_preflight_candidate_independent_verification_and_publish_decision() {
     let controller = document(".github/workflows/llama-upstream-canary.yml");
     let jobs = controller.get("jobs").unwrap();
-    for (name, dependencies) in [
-        ("preflight", vec!["resolve"]),
-        ("candidate", vec!["resolve", "preflight"]),
-        ("verification", vec!["resolve", "candidate"]),
-        (
-            "result",
-            vec!["resolve", "preflight", "candidate", "verification"],
-        ),
-        ("publish-certified-canary", vec!["resolve", "result"]),
-    ] {
-        assert_eq!(
-            needs(jobs.get(name).unwrap()),
-            dependencies.into_iter().collect()
-        );
-    }
-    let candidate = jobs.get("candidate").unwrap();
-    let verification = jobs.get("verification").unwrap();
     assert_eq!(
-        field(candidate, "uses"),
-        "./.github/workflows/llama-canary-family-pass.yml"
+        needs(jobs.get("preflight").unwrap()),
+        BTreeSet::from(["resolve"])
     );
-    assert_eq!(field(verification, "uses"), field(candidate, "uses"));
-    assert_eq!(
-        field(candidate, "if"),
-        "${{ !cancelled() && needs.preflight.result == 'success' }}"
-    );
-    assert_eq!(
-        field(verification, "if"),
-        "${{ !cancelled() && needs.resolve.outputs.changed == 'true' && needs.candidate.outputs.green == 'true' }}"
-    );
-    let with = verification.get("with").unwrap();
-    assert_eq!(field(with, "mode"), "verify-build");
-    for (key, value) in [("source", "source"), ("upstream", "upstream")] {
-        assert_eq!(
-            field(with, key),
-            format!("${{{{ needs.resolve.outputs.{value} }}}}")
-        );
-    }
-    for key in ["package", "identity", "head"] {
-        assert_eq!(
-            field(with, &format!("previous_{key}")),
-            format!("${{{{ needs.candidate.outputs.{key} }}}}")
-        );
+    for index in 1..=3 {
+        current_attempt_inputs(jobs, index);
     }
     assert_eq!(
         jobs.entries()
             .iter()
-            .filter(
-                |(_, job)| job.get("uses").and_then(Node::text) == Some(field(candidate, "uses"))
-            )
+            .filter(|(_, job)| job.get("uses").and_then(Node::text)
+                == Some("./.github/workflows/llama-canary-family-pass.yml"))
             .map(|(name, _)| name.as_str())
             .collect::<BTreeSet<_>>(),
-        BTreeSet::from(["candidate", "verification"])
+        BTreeSet::from([
+            "repair_1", "verify_1", "repair_2", "verify_2", "repair_3", "verify_3"
+        ])
     );
+    let result = jobs.get("result").unwrap();
+    assert_eq!(
+        needs(result),
+        BTreeSet::from([
+            "resolve",
+            "preflight",
+            "attempt_1",
+            "attempt_2",
+            "attempt_3"
+        ])
+    );
+    assert_eq!(field(result, "if"), "${{ !cancelled() }}");
+    let (_, final_selection) = named(result, "id", "result");
+    assert_eq!(
+        field(final_selection.get("env").unwrap(), "ATTEMPTS_JSON"),
+        "${{ toJSON(needs) }}"
+    );
+    assert!(field(final_selection, "run").contains("automation canary-receipts select-final"));
     let publish = jobs.get("publish-certified-canary").unwrap();
+    assert_eq!(needs(publish), BTreeSet::from(["resolve", "result"]));
     assert_eq!(
         field(publish, "if"),
         "${{ needs.result.outputs.publish == 'true' }}"
@@ -666,7 +736,8 @@ fn inert_executable(path: &std::path::Path, body: &str) {
 fn actual_rewriter_preamble_and_cache_slice_reenter_native_arch_and_invalidate_only_mismatched_tool()
  {
     let source =
-        fs::read_to_string(root().join("scripts/check-skippy-generated-family-patch.sh")).unwrap();
+        fs::read_to_string(root().join("skippy/scripts/check-skippy-generated-family-patch.sh"))
+            .unwrap();
     let prefix = source.split_once("\nROOT=").unwrap().0;
     let temp = tempfile::tempdir().unwrap();
     let directory = temp.path().canonicalize().unwrap();

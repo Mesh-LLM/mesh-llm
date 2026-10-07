@@ -1,8 +1,7 @@
 use super::{archive, executable, process, source, workload};
 use crate::{
-    automation::{
-        canary_receipts::{Digest, PackageVerification, SourceFamilyPlan, verify_package},
-        canary_source_plan,
+    automation::canary_receipts::{
+        Digest, PackageVerification, SourceFamilyPlan, placement, verify_package,
     },
     command::DynResult,
 };
@@ -310,7 +309,7 @@ pub(super) fn admitted_bytes(
         return Err("package does not consume exact final admitted candidate plan and GGUF metadata receipt".into());
     }
     SourceFamilyPlan::parse(&plan)?;
-    canary_source_plan::placement::project(&plan)?;
+    placement::project(&plan)?;
     Ok((plan, identity_bytes, manifest))
 }
 

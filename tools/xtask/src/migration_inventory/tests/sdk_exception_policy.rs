@@ -84,7 +84,7 @@ fn sdk_policy_refuses_qualified_even_with_recorded_source_and_advisory_filename(
 fn sdk_policy_preserves_closed_reader_approval_and_metadata_refusals() -> DynResult<()> {
     with_ledgers(|mut paths, mut ledgers| {
         for reader in [
-            "evals/agentic-trajectory-manifest.py",
+            "mesh/evals/agentic-trajectory-manifest.py",
             "scripts/generate-bench-corpus.py",
         ] {
             ledgers.exceptions.exceptions = vec![entry(reader, "maintainer_retained")];
@@ -136,7 +136,7 @@ fn sdk_policy_preserves_closed_reader_approval_and_metadata_refusals() -> DynRes
 #[test]
 fn granite_reference_policy_is_exact_optional_status_and_recorded_source() -> DynResult<()> {
     with_ledgers(|mut paths, mut ledgers| {
-        let path = "evals/skippy-granite-tensor-equivalence.py";
+        let path = "skippy/evals/skippy-granite-tensor-equivalence.py";
         let mut candidate = entry(path, "isolated_model_reference");
         candidate.local_dependency_files = Some(vec![
             "evals/granite-reference/pyproject.toml".into(),
@@ -220,9 +220,9 @@ fn granite_reference_project_has_separate_finite_python_and_complete_hashed_lock
                     )))
         );
     }
-    let docs = fs::read_to_string(root.join("docs/skippy/COMPETITIVE_BENCHMARK.md"))?;
+    let docs = fs::read_to_string(root.join("skippy/docs/COMPETITIVE_BENCHMARK.md"))?;
     assert!(docs.contains(
-        "evals/granite-reference/.venv/bin/python -I evals/skippy-granite-tensor-equivalence.py"
+        "evals/granite-reference/.venv/bin/python -I skippy/evals/skippy-granite-tensor-equivalence.py"
     ));
     assert!(docs.contains("uv sync --locked --no-python-downloads --project evals/granite-reference --python python3.12"));
     Ok(())
@@ -240,7 +240,7 @@ fn granite_reference_is_absent_from_actual_required_and_default_execution_graph(
     for edge in &graph.edges {
         assert_ne!(
             edge.child.as_deref(),
-            Some("evals/skippy-granite-tensor-equivalence.py")
+            Some("skippy/evals/skippy-granite-tensor-equivalence.py")
         );
         assert!(
             !edge.source_block.contains("evals/granite-reference"),
@@ -272,22 +272,22 @@ fn research16_is_absent_from_actual_required_and_default_execution_graph() -> Dy
         .collect::<std::collections::BTreeSet<_>>();
     assert_eq!(forbidden.len(), 16);
     let expected = [
-        "crates/skippy-cache/src/cachegen/fixtures/generate_lmcache_compat.py",
-        "crates/skippy-quantize/scripts/compare-reference-quantization.py",
-        "evals/latency-benchmarking/latency-proxy.py",
-        "evals/latency-benchmarking/measure.py",
-        "evals/moa-openrouter/analyze_ablation.py",
-        "evals/moa-openrouter/lite_agent.py",
-        "evals/moa-openrouter/make_fixture.py",
-        "evals/moa-openrouter/orclient.py",
-        "evals/moa-openrouter/probe_tools.py",
-        "evals/moa-openrouter/record.py",
-        "evals/moa-openrouter/record_agentic.py",
-        "evals/scenarios/debug-session/buggy.py",
-        "evals/scenarios/edit-file/server.py",
-        "evals/scenarios/refactor/config.py",
-        "evals/test_injection_framing.py",
-        "evals/virtual_llm_eval.py",
+        "skippy/crates/skippy-cache/src/cachegen/fixtures/generate_lmcache_compat.py",
+        "skippy/crates/skippy-quantize/scripts/compare-reference-quantization.py",
+        "skippy/evals/latency-benchmarking/latency-proxy.py",
+        "skippy/evals/latency-benchmarking/measure.py",
+        "mesh/evals/moa-openrouter/analyze_ablation.py",
+        "mesh/evals/moa-openrouter/lite_agent.py",
+        "mesh/evals/moa-openrouter/make_fixture.py",
+        "mesh/evals/moa-openrouter/orclient.py",
+        "mesh/evals/moa-openrouter/probe_tools.py",
+        "mesh/evals/moa-openrouter/record.py",
+        "mesh/evals/moa-openrouter/record_agentic.py",
+        "mesh/evals/scenarios/debug-session/buggy.py",
+        "mesh/evals/scenarios/edit-file/server.py",
+        "mesh/evals/scenarios/refactor/config.py",
+        "mesh/evals/test_injection_framing.py",
+        "mesh/evals/virtual_llm_eval.py",
     ]
     .into_iter()
     .collect::<std::collections::BTreeSet<_>>();

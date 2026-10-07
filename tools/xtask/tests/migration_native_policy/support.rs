@@ -120,7 +120,8 @@ fn build(root: &Path, case: &Value) -> Result<PathBuf, Box<dyn Error>> {
         let os = text(&package["os"]);
         let arch = text(&package["arch"]);
         let mut manifest = serde_json::json!({
-            "runtime": {"id": id, "mesh_version": "0.75.0", "skippy_abi": "0.1.32", "platform": {"os":os,"arch":arch,"target":target}, "backend":{"kind":"cpu"}, "libraries":["lib/llama.bin"], "files":{"lib/llama.bin":checksum}},
+            "schema_version": 2,
+            "runtime": {"id": id, "release_version": "0.75.0", "skippy_abi": "0.1.32", "platform": {"os":os,"arch":arch,"target":target}, "backend":{"kind":"cpu"}, "libraries":["lib/llama.bin"], "files":{"lib/llama.bin":checksum}},
             "build":{"primary_library":"lib/llama.bin","library_sha256":checksum}
         });
         if let Some(floor) = package.get("min_glibc") {
@@ -223,7 +224,7 @@ pub(crate) struct Outcome {
     pub(crate) calls: String,
 }
 
-fn execute(tool: Tool, case: &Value) -> Result<Outcome, Box<dyn Error>> {
+pub(crate) fn execute(tool: Tool, case: &Value) -> Result<Outcome, Box<dyn Error>> {
     let scratch = Scratch::new(tool.command())?;
     let root = scratch.path();
     let bin = build(root, case)?;

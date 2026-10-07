@@ -208,7 +208,7 @@ mod tests {
 
     fn fixture() -> Inventory {
         toml::from_str(include_str!(
-            "../../../../../crates/mesh-llm-runtime-event-contracts/inventory/runtime_events.toml"
+            "../../../../../mesh/crates/mesh-llm-runtime-event-contracts/inventory/runtime_events.toml"
         ))
         .unwrap()
     }

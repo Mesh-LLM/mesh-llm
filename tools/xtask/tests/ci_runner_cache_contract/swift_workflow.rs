@@ -343,20 +343,20 @@ fn swift_workflow_executes_target_and_assembly_build_entrypoints_with_exact_cons
     let document = workflow();
     for target in TARGETS {
         let fixture = Fixture::new();
-        fs::create_dir_all(fixture.path().join("sdk/swift/scripts")).unwrap();
+        fs::create_dir_all(fixture.path().join("mesh/sdk/swift/scripts")).unwrap();
         fixture.executable("build-observer","[[ \"$#\" == 2 && \"$1\" == --target && \"$2\" == \"$EXPECTED_TARGET\" ]] || exit 97\nprintf 'target:%s\\n' \"$2\" > events");
         fs::copy(
             fixture.path().join("bin/build-observer"),
             fixture
                 .path()
-                .join("sdk/swift/scripts/build-xcframework.sh"),
+                .join("mesh/sdk/swift/scripts/build-xcframework.sh"),
         )
         .unwrap();
         let (_, build) = named(job(&document, "swift_sdk_target"), "Build Swift target");
         let result = run_step(
             &fixture,
             build,
-            &[("SDK_DIR", "sdk"), ("EXPECTED_TARGET", target)],
+            &[("SDK_DIR", "mesh/sdk"), ("EXPECTED_TARGET", target)],
             Some(target),
         );
         assert!(
@@ -370,20 +370,20 @@ fn swift_workflow_executes_target_and_assembly_build_entrypoints_with_exact_cons
         );
     }
     let fixture = Fixture::new();
-    fs::create_dir_all(fixture.path().join("sdk/swift/scripts")).unwrap();
+    fs::create_dir_all(fixture.path().join("mesh/sdk/swift/scripts")).unwrap();
     fixture.executable("build-observer","[[ \"$#\" == 2 && \"$1\" == --assemble-from && \"$2\" == dist/swift-targets ]] || exit 97\nprintf 'assembly\\n' > events");
     fs::copy(
         fixture.path().join("bin/build-observer"),
         fixture
             .path()
-            .join("sdk/swift/scripts/build-xcframework.sh"),
+            .join("mesh/sdk/swift/scripts/build-xcframework.sh"),
     )
     .unwrap();
     let (_, build) = named(
         job(&document, "swift_sdk_artifact"),
         "Build full Swift SDK input",
     );
-    let result = run_step(&fixture, build, &[("SDK_DIR", "sdk")], None);
+    let result = run_step(&fixture, build, &[("SDK_DIR", "mesh/sdk")], None);
     assert!(result.status.success());
     assert_eq!(
         fs::read_to_string(fixture.path().join("events")).unwrap(),
@@ -403,7 +403,7 @@ fn swift_workflow_checks_tracked_binding_changes_and_stages_exact_binding_bytes(
         Some("${{ !inputs.prepare_release_version }}")
     );
     assert!(stage.get("if").is_none());
-    let binding = "sdk/swift/Sources/MeshLLM/Generated/mesh_ffi.swift";
+    let binding = "mesh/sdk/swift/Sources/MeshLLM/Generated/mesh_ffi.swift";
     for mode in ["clean", "changed", "untracked"] {
         let fixture = Fixture::new();
         fs::create_dir_all(fixture.path().join(binding).parent().unwrap()).unwrap();
@@ -414,7 +414,11 @@ ls-files) [[ "$#" == 3 && "$2" == --error-unmatch && "$3" == "$BINDING" ]] || ex
 diff) [[ "$#" == 4 && "$2" == --exit-code && "$3" == -- && "$4" == "$BINDING" ]] || exit 97; printf 'diff\n' >> events; [[ "$MODE" != changed ]];;
 *) exit 97;; esac
 "#);
-        let env = [("SDK_DIR", "sdk"), ("BINDING", binding), ("MODE", mode)];
+        let env = [
+            ("SDK_DIR", "mesh/sdk"),
+            ("BINDING", binding),
+            ("MODE", mode),
+        ];
         let result = run_step(&fixture, verify, &env, None);
         assert_eq!(result.status.success(), mode == "clean");
         if mode == "clean" {

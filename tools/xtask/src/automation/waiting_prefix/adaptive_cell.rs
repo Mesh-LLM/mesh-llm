@@ -265,7 +265,7 @@ fn session(
             "SKIPPY_NATIVE_MTP_GREEDY_SAMPLING_FASTPATH".into(),
             Arg::Public("1".into()),
         );
-        let worker = Launch {
+        let mut worker = Launch {
             member: MemberId::WorkerTwo,
             spec: ProcessSpec {
                 executable: tool,
@@ -287,9 +287,32 @@ fn session(
             },
             readiness_deadline: execution,
         };
+        let mut downstream = launch(&arm, directory, 1, environment.clone(), execution);
+        let mut upstream = launch(&arm, directory, 0, environment, execution);
+        let dialect = crate::automation::skippy_cli_admission::prepare(
+            &mut upstream.spec,
+            &arm.binary_sha256,
+            crate::automation::skippy_cli_admission::Role::BinaryFrontend,
+            until,
+            cancel,
+            &directory.join("cli-admission.json"),
+        )?;
+        dialect.arguments(
+            crate::automation::skippy_cli_admission::Role::BinaryWorker,
+            &mut downstream.spec.arguments,
+        )?;
+        let execution = remaining(until, Duration::from_secs(9))?;
+        if Duration::from_secs(worker_budget) >= execution {
+            return Err(
+                "worker budget must fit retained pair execution after CLI admission".into(),
+            );
+        }
+        worker.readiness_deadline = execution;
+        downstream.readiness_deadline = execution;
+        upstream.readiness_deadline = execution;
         let mut owner = Owner {
-            downstream: Some(launch(&arm, directory, 1, environment.clone(), execution)),
-            upstream: Some(launch(&arm, directory, 0, environment, execution)),
+            downstream: Some(downstream),
+            upstream: Some(upstream),
             worker: Some(worker),
             policy: ExpectedExit::new(&[0, 1], execution)?,
             telemetry: Observation::default(),
@@ -305,7 +328,7 @@ fn session(
         };
         drop(reservations);
         let report = process::retained::run(&mut owner, &limits, cancel)?;
-        let lifecycle = json!({"outcome":format!("{:?}",report.outcome),"members":report.members.iter().map(|member|json!({"member":String::from_utf8_lossy(member.member.name()),
+        let lifecycle = json!({"outcome":format!("{:?}",report.outcome),"session_failure":report.failure.as_ref().map(|error|format!("{error:?}")),"members":report.members.iter().map(|member|json!({"member":String::from_utf8_lossy(member.member.name()),
             "disposition":member.disposition.label(),"status":member.process.status.as_ref().and_then(std::process::ExitStatus::code),
             "cleanup_complete":member.process.cleanup.complete,"forced":member.process.cleanup.forced,"graceful_signal_failed":member.process.cleanup.graceful_signal_failed,
             "cleanup_failure":member.process.cleanup.failure.as_ref().map(|e|format!("{e:?}")),"process_failure":member.process.failure.as_ref().map(|e|format!("{e:?}")),

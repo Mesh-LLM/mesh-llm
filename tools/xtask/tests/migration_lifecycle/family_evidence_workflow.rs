@@ -145,7 +145,7 @@ fn parsed_producer_bound_artifacts_select_prior_siblings_and_never_foreign_ident
     }
 }
 #[test]
-fn actual_family_and_aggregate_gates_refuse_failure_after_evidence_is_uploaded() {
+fn actual_family_gate_refuses_failure_and_aggregate_forwards_typed_owner_status() {
     let document = workflow();
     let jobs = document.get("jobs").unwrap();
     let family = jobs.get("family").unwrap();
@@ -175,7 +175,7 @@ fn actual_family_and_aggregate_gates_refuse_failure_after_evidence_is_uploaded()
     let recorder = root.path().join("automation");
     fs::write(
         &recorder,
-        "#!/bin/bash\nprintf '%s\\n' called >> \"$CALLS\"\n",
+        "#!/bin/bash\nprintf '%s\\n' \"$@\" > \"$CALLS\"\nexit \"$NATIVE_STATUS\"\n",
     )
     .unwrap();
     use std::os::unix::fs::PermissionsExt;
@@ -196,6 +196,10 @@ fn actual_family_and_aggregate_gates_refuse_failure_after_evidence_is_uploaded()
             root.path(),
             &[
                 ("FAMILY_RESULT", outcome),
+                (
+                    "NATIVE_STATUS",
+                    if outcome == "success" { "0" } else { "23" },
+                ),
                 ("MESH_LLM_AUTOMATION_BIN", recorder.to_str().unwrap()),
                 ("CALLS", calls.to_str().unwrap()),
                 ("RUNNER_TEMP", root.path().to_str().unwrap()),
@@ -210,14 +214,26 @@ fn actual_family_and_aggregate_gates_refuse_failure_after_evidence_is_uploaded()
             result.process.status.unwrap().success(),
             outcome == "success"
         );
-        assert_eq!(fs::read_to_string(&calls).unwrap(), "called\n");
+        assert_eq!(
+            result.process.status.unwrap().code(),
+            Some(if outcome == "success" { 0 } else { 23 })
+        );
+        assert_eq!(
+            fs::read_to_string(&calls).unwrap(),
+            format!(
+                "automation\ncanary-receipts\naggregate\n--package\n{0}/aggregate-input\n--identity\nfinite-identity\n--evidence\n{0}/aggregate-evidence\n--run-id\n123\n--run-attempt\n3\n--controller-revision\nfinite-controller\n--selected-source\n\n--family-result\n{1}\n--feedback-output\n{0}/canary-family-feedback\n",
+                root.path().display(),
+                outcome
+            )
+        );
     }
 }
 #[test]
 fn actual_battery_json_writers_emit_one_record_each_and_preserve_escaped_payload() {
-    let source =
-        fs::read_to_string(super::support::repository().join("scripts/skippy-family-battery.sh"))
-            .unwrap();
+    let source = fs::read_to_string(
+        super::support::repository().join("skippy/scripts/skippy-family-battery.sh"),
+    )
+    .unwrap();
     let root = tempfile::tempdir().unwrap();
     let results = root.path().join("results.jsonl");
     let manifest = root.path().join("manifest.json");

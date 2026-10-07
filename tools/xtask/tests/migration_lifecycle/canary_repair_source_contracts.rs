@@ -18,17 +18,16 @@ fn developer_contract(runbook: &str, wrapper: &str) -> Result<(), String> {
         "Leave the finished changes uncommitted",
         "Stay offline and\ndo not add Actions caching or download logic.",
         "Do not\nchange the target pin, create or switch branches, commit, push, use GitHub\ncredentials",
-        "It does not start another\ncandidate or agent session automatically",
-        "same named session for another coding turn",
-        "full, separately bounded trusted gate pass",
-        "both its complete family pass and the fresh independent build/family pass must\nbe green on the same commit",
+        "same named session within the coding admission window",
+        "Separate jobs certify every family using the exact producer binaries.",
+        "at most three distributed repair attempts",
+        "Runner/workflow failures and missing receipts\nare first rechecked only for the affected families on the same immutable\ncandidate without invoking this agent",
+        "Repeated infrastructure failure, corrupt/foreign evidence,\nand other contract failures stop without starting another session",
+        "Both the first full family pass and the fresh independent\nbuild/family pass must be green on the same commit",
     ] {
         if !runbook.contains(required) {
             return Err(format!("missing developer boundary: {required}"));
         }
-    }
-    if runbook.contains("at most three distributed repair attempts") {
-        return Err("obsolete distributed repair cycle".into());
     }
     for required in [
         "while remaining_repair_seconds >/dev/null; do",
@@ -78,20 +77,20 @@ fn repair_developer_runbook_preserves_inner_session_and_one_distributed_pass() {
     developer_contract(&runbook, &wrapper).unwrap();
     for (before, after) in [
         (
-            "same named session for another coding turn",
-            "a new session for another coding turn",
+            "same named session within the coding admission window",
+            "new session within the coding admission window",
         ),
         (
-            "full, separately bounded trusted gate pass",
-            "focused test pass",
+            "Separate jobs certify every family using the exact producer binaries.",
+            "Separate jobs certify a sample of families using arbitrary binaries.",
         ),
         (
             "Stay offline and\ndo not add Actions caching or download logic.",
             "Download fresh models during repair.",
         ),
         (
-            "It does not start another\ncandidate or agent session automatically",
-            "There are at most three distributed repair attempts",
+            "at most three distributed repair attempts",
+            "unbounded distributed repair attempts",
         ),
     ] {
         assert!(runbook.contains(before));

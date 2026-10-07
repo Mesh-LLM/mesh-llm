@@ -222,7 +222,7 @@ fn snapshot_component(source: &str, commands: &[&str]) -> DynResult<()> {
     }
     if body(source, "ci-snapshot-promotion-contracts")?
         != [
-            "just with-lld cargo test --locked -p model-package --lib --test snapshot_promotion_cli -- --test-threads=1",
+            "just with-lld cargo test --locked -p skippy-model-package --lib --test snapshot_promotion_cli -- --test-threads=1",
         ]
     {
         return Err(

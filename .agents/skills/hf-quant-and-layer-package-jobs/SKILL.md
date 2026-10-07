@@ -14,7 +14,7 @@ commands behind thin Just recipes. From the repository root,
 a quantization or packaging command. The combined native quant Jobs route uses
 the existing `model-package-generic-jobs` facade and
 `automation hf-certify quant-job-worker`.
-See [the operator contract](../../../docs/skippy/HF_QUANTIZATION_JOBS.md).
+See [the operator contract](../../../skippy/docs/HF_QUANTIZATION_JOBS.md).
 
 Use this skill when a workflow should produce both a quantized GGUF repo and a
 Skippy layer package from an existing BF16/FP16 GGUF repo. The quantization
@@ -123,7 +123,7 @@ The intended combined Job keeps the quantized GGUF repo as a durable boundary
 and retains the four-day allowance. The native combined submission, worker and
 collection owner uses workflow
 `quantization-and-package` with a 345600-second whole budget. Follow
-[HF quantization Jobs](../../../docs/skippy/HF_QUANTIZATION_JOBS.md) for the exact
+[HF quantization Jobs](../../../skippy/docs/HF_QUANTIZATION_JOBS.md) for the exact
 request and prepare/submit/collect commands. Submission requires explicit
 authorization and `--confirm-submission`; preparation makes no remote request.
 Tool/window fixtures do not qualify a model, memory profile, image or cloud run.

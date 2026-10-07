@@ -238,6 +238,13 @@ fn workflow_preserves_offline_cutover_and_repair_admission() {
     assert!(workflow.contains("git -c core.hooksPath=/dev/null am --no-verify"));
     assert!(workflow.contains("git diff --quiet HEAD^ HEAD -- .github .agents scripts evals ci"));
     let repair = include_str!("../../../scripts/agentic-replay-repair.sh");
+    assert!(repair.contains("--canonical skippy/evals/skippy-competitive-benchmark.json"));
+    assert!(!repair.contains("--canonical evals/skippy-competitive-benchmark.json"));
+    let canonical = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../skippy/evals/skippy-competitive-benchmark.json");
+    let canonical: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(canonical).unwrap()).unwrap();
+    assert!(!canonical["models"].as_array().unwrap().is_empty());
     assert!(repair.contains("unset CANARY_REPAIR_TOKEN GH_TOKEN GITHUB_TOKEN HF_TOKEN"));
     assert!(!repair.contains("git push"));
     assert!(!repair.contains("gh pr create"));

@@ -176,7 +176,7 @@ fn contextual(rows: &[Row], corpus: &Corpus, producer: bool) -> DynResult<String
         String::new(),
         matrix(&use_cases),
         String::new(),
-        if producer { "Prompt source metadata below comes from the owning plan's selected corpus, which may be supplied separately.".into() } else { "Prompt sources are checked in at `evals/skippy-usecase-corpus.json` with source".into() },
+        if producer { "Prompt source metadata below comes from the owning plan's selected corpus, which may be supplied separately.".into() } else { "Prompt sources are checked in at `skippy/evals/skippy-usecase-corpus.json` with source".into() },
         "dataset metadata:".into(),
         String::new(),
         sources(corpus),

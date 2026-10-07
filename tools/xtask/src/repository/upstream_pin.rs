@@ -14,7 +14,8 @@ use git::PinGuardError;
 use std::path::{Path, PathBuf};
 use upstream_mirror::UpstreamMirror;
 
-const PIN_PATH: &str = "third_party/llama.cpp/upstream.txt";
+const PIN_PATH: &str = "skippy/llama_cpp/upstream.txt";
+const LEGACY_PIN_PATH: &str = "third_party/llama.cpp/upstream.txt";
 const DEFAULT_UPSTREAM_URL: &str = "https://github.com/ggml-org/llama.cpp.git";
 
 const GRAMMAR: Grammar = Grammar {
@@ -152,7 +153,7 @@ fn compare_pins(upstream: &Path, base_pin: &str, proposed_pin: &str) -> Result<(
     };
     if is_ancestor(proposed_pin, base_pin)? {
         return Err(PinGuardError(format!(
-            "PR moves {PIN_PATH} backward: {proposed_pin} is an ancestor of the base pin {base_pin}"
+            "PR moves llama.cpp upstream pin backward: {proposed_pin} is an ancestor of the base pin {base_pin}"
         )));
     }
     if is_ancestor(base_pin, proposed_pin)? {
@@ -166,7 +167,18 @@ fn compare_pins(upstream: &Path, base_pin: &str, proposed_pin: &str) -> Result<(
 /// The pin must be one regular `100644` blob whose trimmed text is a SHA;
 /// symlinks are rejected before their target is ever read.
 fn read_pin(repository: &Path, revision: &str, label: &str) -> Result<String, PinGuardError> {
-    let tree = git::checked(repository, &["ls-tree", "-z", revision, "--", PIN_PATH])?;
+    let current = git::checked(repository, &["ls-tree", "-z", revision, "--", PIN_PATH])?;
+    let (pin_path, tree) = if current.stdout.is_empty() {
+        (
+            LEGACY_PIN_PATH,
+            git::checked(
+                repository,
+                &["ls-tree", "-z", revision, "--", LEGACY_PIN_PATH],
+            )?,
+        )
+    } else {
+        (PIN_PATH, current)
+    };
     let entries = tree
         .stdout
         .split('\0')
@@ -174,21 +186,21 @@ fn read_pin(repository: &Path, revision: &str, label: &str) -> Result<String, Pi
         .collect::<Vec<_>>();
     let [entry] = entries.as_slice() else {
         return Err(PinGuardError(format!(
-            "{label} commit {revision} must contain exactly one {PIN_PATH} entry"
+            "{label} commit {revision} must contain exactly one {pin_path} entry"
         )));
     };
     let (metadata, path) = entry.split_once('\t').unwrap_or((entry, ""));
     let parts = metadata.split_whitespace().collect::<Vec<_>>();
-    if path != PIN_PATH || !matches!(parts.as_slice(), ["100644", "blob", _]) {
+    if path != pin_path || !matches!(parts.as_slice(), ["100644", "blob", _]) {
         return Err(PinGuardError(format!(
-            "{label} commit {revision} {PIN_PATH} must be a regular 100644 blob"
+            "{label} commit {revision} {pin_path} must be a regular 100644 blob"
         )));
     }
-    let shown = git::checked(repository, &["show", &format!("{revision}:{PIN_PATH}")])?;
+    let shown = git::checked(repository, &["show", &format!("{revision}:{pin_path}")])?;
     let pin = strip(&shown.stdout);
     if !is_sha(pin) {
         return Err(PinGuardError(format!(
-            "{label} commit {revision} has an invalid {PIN_PATH} value: {}",
+            "{label} commit {revision} has an invalid {pin_path} value: {}",
             repr(pin)
         )));
     }

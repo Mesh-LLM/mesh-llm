@@ -37,10 +37,13 @@ impl Fixture {
         let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         for relative in [
             "scripts/package-native-sdk.sh",
+            "mesh/scripts/package-native-sdk.sh",
+            "skippy/scripts/build-llama.sh",
             "scripts/lib/cuda-toolkit.sh",
             "scripts/lib/macos-deployment-target.sh",
             "scripts/lib/macos-deployment-target.txt",
         ] {
+            fs::create_dir_all(root.join(relative).parent().unwrap()).unwrap();
             fs::copy(source.join(relative), root.join(relative)).unwrap();
         }
         fs::copy(

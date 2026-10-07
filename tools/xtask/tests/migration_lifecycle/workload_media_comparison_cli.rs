@@ -499,7 +499,8 @@ fn special_media_is_ordinary_failure_without_http() {
 
 fn candidate_server_helper() -> String {
     let source = fs::read_to_string(
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scripts/skippy-workload-certify.sh"),
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../skippy/scripts/skippy-workload-certify.sh"),
     )
     .unwrap();
     let start = source
@@ -567,7 +568,7 @@ fn actual_asr_server_caller_binds_admitted_config_backend_and_128_token_default(
         .prefix("asr caller space ")
         .tempdir()
         .unwrap();
-    let executable = root.path().join("skippy-server");
+    let executable = root.path().join("skippy");
     fs::write(&executable, "#!/bin/sh\nset -eu\nprintf '%s\\n' \"$@\" > \"$FIXTURE/argv\"\nprintf '%s\\n' \"$LLAMA_STAGE_BACKEND\" > \"$FIXTURE/backend\"\nprintf 'called\\n' >> \"$FIXTURE/calls\"\n").unwrap();
     fs::set_permissions(&executable, fs::Permissions::from_mode(0o755)).unwrap();
     let config = root.path().join("admitted config.json");
@@ -577,7 +578,7 @@ fn actual_asr_server_caller_binds_admitted_config_backend_and_128_token_default(
     assert_eq!(
         fs::read_to_string(root.path().join("argv")).unwrap(),
         format!(
-            "serve-openai\n--config\n{}\n--bind-addr\n127.0.0.1:43123\n--default-max-tokens\n128\n--telemetry-level\noff\n",
+            "serve\n--config\n{}\n--bind-addr\n127.0.0.1:43123\n--default-max-tokens\n128\n--telemetry-level\noff\n",
             config.display()
         )
     );

@@ -10,10 +10,11 @@ pub(super) fn fixture() -> DynResult<(std::path::PathBuf, Vec<scan::Candidate>, 
 {
     let root = crate::command::unique_temp_dir("migration-other-shard");
     fs::create_dir_all(root.join("evals"))?;
+    fs::create_dir_all(root.join("mesh/evals"))?;
     let source = "python3 evals/run.py\n";
     fs::write(root.join("evals/run.sh"), source)?;
     fs::write(
-        root.join("evals/README.md"),
+        root.join("mesh/evals/README.md"),
         "```bash\npython3 evals/run.py\n```\n",
     )?;
     let observed = scan::scan_source("evals/run.sh", source);
@@ -25,7 +26,7 @@ pub(super) fn fixture() -> DynResult<(std::path::PathBuf, Vec<scan::Candidate>, 
         ]}],
         "python_implementation_edges": [],
         "outside_scanner_source_calls": [{
-            "file": "evals/README.md", "line": 2,
+            "file": "mesh/evals/README.md", "line": 2,
             "source_block": "python3 evals/run.py", "target": "evals/run.py",
             "boundary": "optional command", "kind": "instruction"
         }]
@@ -86,7 +87,7 @@ fn other_shard_rejects_unresolved_execution_target() -> DynResult<()> {
 fn other_shard_rejects_new_manual_instruction() -> DynResult<()> {
     let (root, observed, ledger) = fixture()?;
     fs::write(
-        root.join("evals/README.md"),
+        root.join("mesh/evals/README.md"),
         "```bash\npython3 evals/run.py\npython3 evals/new.py\n```\n",
     )?;
     let error = check_other_shard(&root, &ledger.to_string(), &observed).unwrap_err();
@@ -109,7 +110,7 @@ fn other_shard_rejects_omitted_manual_instruction() -> DynResult<()> {
 fn other_shard_rejects_changed_manual_instruction() -> DynResult<()> {
     let (root, observed, ledger) = fixture()?;
     fs::write(
-        root.join("evals/README.md"),
+        root.join("mesh/evals/README.md"),
         "```bash\npython3 evals/changed.py\n```\n",
     )?;
     let error = check_other_shard(&root, &ledger.to_string(), &observed).unwrap_err();
@@ -165,7 +166,7 @@ fn other_shard_checks_live_source_without_claiming_completion() -> DynResult<()>
             !row.path.starts_with(".github/")
                 && row.path != "Justfile"
                 && !row.path.starts_with("just/")
-                && !row.path.starts_with("scripts/")
+                && !scan::is_script(&row.path)
                 && row.path != "tools/skippy-stage-rewriter/CMakeLists.txt"
         })
         .count();

@@ -71,7 +71,43 @@
       "unresolved": false
     },
     {
-      "path": "website/AGENTS.md",
+      "path": "mesh/AGENTS.md",
+      "classification": "actionable",
+      "owner": "Mesh product maintainers",
+      "old_commands": [
+
+      ],
+      "replacement_owner": "Mesh product build, packaging, runtime, SDK and documentation owners",
+      "cutover_task": 5,
+      "actionability": "actionable product-specific Just/Rust build, validation, runtime and deployment guidance",
+      "unresolved": false,
+      "current_source_binding": {
+        "path": "mesh/AGENTS.md",
+        "sha256": "47a5b520024ab016e0e3653ba20aa21955f4ec772d2e07d2defdf03e328ccd65",
+        "line_count": 422
+      },
+      "review_scope": "Instruction source ownership only; no Python exception, SDK qualification, remote execution or benchmark approval is granted."
+    },
+    {
+      "path": "skippy/AGENTS.md",
+      "classification": "actionable",
+      "owner": "Skippy product maintainers",
+      "old_commands": [
+
+      ],
+      "replacement_owner": "Skippy product native runtime, ABI, model packaging and serving owners",
+      "cutover_task": 5,
+      "actionability": "actionable product-specific Just/Rust build, ABI, patch queue and native API documentation guidance",
+      "unresolved": false,
+      "current_source_binding": {
+        "path": "skippy/AGENTS.md",
+        "sha256": "f34e80deef7ea641470deb0241b580b0c72fa309cdf1b5da9d112a90c84a9e15",
+        "line_count": 192
+      },
+      "review_scope": "Instruction source ownership only; no Python exception, SDK qualification, remote execution or benchmark approval is granted."
+    },
+    {
+      "path": "mesh/website/AGENTS.md",
       "classification": "prose_only",
       "owner": "website maintainers",
       "old_commands": [
@@ -83,7 +119,7 @@
       "unresolved": false
     },
     {
-      "path": "docs/AGENTS.md",
+      "path": "mesh/docs/AGENTS.md",
       "classification": "actionable",
       "owner": "agent integration maintainers",
       "old_commands": [
@@ -96,7 +132,7 @@
       "unresolved": true
     },
     {
-      "path": "crates/mesh-llm-ui/AGENTS.md",
+      "path": "mesh/crates/mesh-llm-ui/AGENTS.md",
       "classification": "prose_only",
       "owner": "console maintainers",
       "old_commands": [
@@ -108,7 +144,7 @@
       "unresolved": false
     },
     {
-      "path": "crates/skippy-protocol/AGENTS.md",
+      "path": "skippy/crates/skippy-protocol/AGENTS.md",
       "classification": "prose_only",
       "owner": "skippy-protocol maintainers",
       "old_commands": [
@@ -120,7 +156,7 @@
       "unresolved": false
     },
     {
-      "path": "crates/skippy-scheduler/AGENTS.md",
+      "path": "skippy/crates/skippy-scheduler/AGENTS.md",
       "classification": "actionable",
       "owner": "skippy-scheduler maintainers",
       "old_commands": [
@@ -137,7 +173,7 @@
       "source_sha256": "94857fe82a7932ca9891c45787bfc69e4246766b87e0dbcce5a29f61f12a24f5"
     },
     {
-      "path": "crates/skippy-cache/AGENTS.md",
+      "path": "skippy/crates/skippy-cache/AGENTS.md",
       "classification": "actionable",
       "owner": "skippy-cache maintainers",
       "old_commands": [

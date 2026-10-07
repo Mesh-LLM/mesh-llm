@@ -96,7 +96,7 @@ impl Publisher {
         let runner = temporary.path().join("runner temporary");
         for path in [
             root.join("scripts"),
-            root.join("third_party/llama.cpp"),
+            root.join("skippy/llama_cpp"),
             tools.clone(),
             runner.clone(),
         ] {
@@ -107,7 +107,7 @@ impl Publisher {
             root.join("scripts/llama-canary-publish.sh"),
         )
         .unwrap();
-        fs::write(root.join("third_party/llama.cpp/upstream.txt"), HEAD).unwrap();
+        fs::write(root.join("skippy/llama_cpp/upstream.txt"), HEAD).unwrap();
         fs::write(root.join("body.md"), b"public fixture body").unwrap();
         fs::write(root.join("candidate.bundle"), b"inert Git response fixture").unwrap();
         let owner = tools.join("source controller");

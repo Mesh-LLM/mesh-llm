@@ -35,7 +35,7 @@ fn request(root: &Path, sources: Vec<Source>) -> Request {
 fn config() -> Value {
     serde_json::from_str(include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../evals/skippy-competitive-benchmark.json"
+        "/../../skippy/evals/skippy-competitive-benchmark.json"
     )))
     .unwrap()
 }

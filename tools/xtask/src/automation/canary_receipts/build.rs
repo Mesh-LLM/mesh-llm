@@ -55,6 +55,14 @@ fn execute(input: &Input) -> DynResult<()> {
             return Err(error);
         }
     };
+    // Keep the descriptor-admitted feedback snapshot alive throughout the wrapper.
+    let feedback = match package::previous_feedback(input) {
+        Ok(feedback) => feedback,
+        Err(error) => {
+            failure("infrastructure", "previous-feedback")?;
+            return Err(error);
+        }
+    };
     let wrapper = input
         .controller_root
         .join("scripts/llama-canary-agent-repair.sh")
@@ -63,6 +71,10 @@ fn execute(input: &Input) -> DynResult<()> {
         return Err("repair wrapper escapes frozen controller checkout".into());
     }
     fs::create_dir(&input.evidence)?;
+    let feedback_summary = feedback
+        .as_ref()
+        .map(|feedback| write_feedback_summary(input, &feedback.summary()?))
+        .transpose()?;
     admit_selected_contract(input)?;
     let previous_identity = previous.as_ref().map(|(_, identity)| identity);
     let spec = ProcessSpec {
@@ -74,6 +86,8 @@ fn execute(input: &Input) -> DynResult<()> {
             previous
                 .as_ref()
                 .map(|(path, identity)| (path.as_path(), identity)),
+            feedback.as_ref().map(|feedback| feedback.directory()),
+            feedback_summary.as_deref(),
         ),
     };
     let interrupt = Interrupt::install()?;
@@ -131,6 +145,18 @@ fn execute(input: &Input) -> DynResult<()> {
             Err(error.into())
         }
     }
+}
+
+fn write_feedback_summary(input: &Input, summary: &str) -> DynResult<PathBuf> {
+    let path = input.evidence.join("previous-feedback-summary.txt");
+    let mut output = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)?;
+    output.write_all(summary.as_bytes())?;
+    output.flush()?;
+    output.sync_all()?;
+    Ok(path)
 }
 
 fn admit_selected_contract(input: &Input) -> DynResult<()> {

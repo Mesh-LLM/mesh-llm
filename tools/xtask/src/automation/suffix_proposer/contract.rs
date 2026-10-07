@@ -117,7 +117,7 @@ pub(super) fn workloads(input: &Input) -> DynResult<Vec<Workload>> {
     let mut rows=vec![Workload{name:"edit".into(),prompt:format!("Here is a Python function:\n\n```python\n{edit}\n```\n\nRe-emit the entire function verbatim, changing only the name `parse_config` to `load_config`. Output just the code.")},Workload{name:"chat".into(),prompt:"Explain, in two short paragraphs, why generating a token is more expensive than verifying one in speculative decoding.".into()}];
     let corpus = input.corpus.clone().or_else(|| {
         let p = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../evals/skippy-coding-agent-loop.jsonl");
+            .join("../../skippy/evals/skippy-coding-agent-loop.jsonl");
         p.exists().then_some(p)
     });
     if let Some(path) = corpus {

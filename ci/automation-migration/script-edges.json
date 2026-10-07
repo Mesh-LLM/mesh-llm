@@ -25,7 +25,7 @@
       "file": "just/skippy.just",
       "members": [
         [
-          93,
+          144,
           "5a1be13f22062393",
           1,
           "script",
@@ -35,7 +35,7 @@
       ]
     },
     {
-      "file": "scripts/materialize-competitive-inputs.sh",
+      "file": "skippy/scripts/materialize-competitive-inputs.sh",
       "members": [
         [
           63,
@@ -56,7 +56,7 @@
       ]
     },
     {
-      "file": "scripts/skippy-system-one-smoke.sh",
+      "file": "skippy/scripts/skippy-system-one-smoke.sh",
       "members": [
         [
           392,
@@ -69,10 +69,10 @@
       ]
     },
     {
-      "file": "scripts/skippy-openai-smoke.sh",
+      "file": "skippy/scripts/skippy-openai-smoke.sh",
       "members": [
         [
-          247,
+          248,
           "623345b42ee651de",
           1,
           "selection",
@@ -146,7 +146,7 @@
       "file": "scripts/llama-canary-agent-repair.sh",
       "members": [
         [
-          646,
+          719,
           "5af7e4058f86f917",
           1,
           "environment",
@@ -169,11 +169,11 @@
       ]
     },
     {
-      "file": "scripts/check-sdk-contract.sh",
+      "file": "mesh/scripts/check-sdk-contract.sh",
       "members": [
         [
           14,
-          "930d555ba4cc726d",
+          "5e110509c1e689b8",
           1,
           "data",
           "existing source-owned command or inert source reference retained from main",
@@ -181,14 +181,14 @@
         ],
         [
           15,
-          "ea55ee9ce21d9377",
+          "2ca32bb429ca2ef5",
           1,
           "data",
           "existing source-owned command or inert source reference retained from main",
           "Main bd5514dd8 retained source: PYTHON_TYPES=\"$ROOT/sdk/python/src/meshllm/types.py\"; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
         ],
         [
-          210,
+          161,
           "86fafd3f4d7afbd4",
           1,
           "script",
@@ -196,7 +196,7 @@
           "Main bd5514dd8 retained source: require \"$PYTHON_SDK\" \"$pattern\" \"python: $pattern\"; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
         ],
         [
-          222,
+          173,
           "3bdf1013e0717170",
           1,
           "script",
@@ -210,7 +210,7 @@
       "members": [
         [
           300,
-          "ef0612530a155d80",
+          "6ccdc748ad6445d1",
           1,
           "script",
           "existing source-owned command or inert source reference retained from main",
@@ -248,7 +248,7 @@
       ]
     },
     {
-      "file": "scripts/skippy-workload-certify.sh",
+      "file": "skippy/scripts/skippy-workload-certify.sh",
       "members": [
         [
           436,
@@ -273,7 +273,7 @@
         ],
         [
           36,
-          "074f092629834597",
+          "6b22f34487d584a8",
           1,
           "environment",
           "optional five approved trajectory-reader constructor fixtures",
@@ -399,7 +399,7 @@
   "python_implementation_sources": [
     [
       "scripts/generate-bench-corpus.py",
-      "f7adf4cd5c0852b8a1f75740c61d6d845cda5c8530ea924a596786360e0907c0",
+      "eb26f72dce7b935fd020ae8438dc96e679e65e570234a9de3cfed92aef459720",
       736
     ]
   ],

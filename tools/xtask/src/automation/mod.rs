@@ -56,6 +56,7 @@ pub(crate) mod tls_fixture;
 pub(crate) mod ui_build;
 pub(crate) mod waiting_prefix;
 pub(crate) mod wan_observation;
+pub(crate) mod wan_stage_deployment;
 pub(crate) mod workload_smoke_config;
 pub(crate) use crate::command_interrupt;
 pub(crate) mod daemon_readiness;
@@ -157,6 +158,7 @@ pub(crate) fn run_replay_matrix(args: &[String], root: Option<&std::path::Path>)
 
 pub(crate) mod system_one_cases;
 
+pub(crate) mod decisions_smoke;
 pub(crate) mod system_one_smoke;
 
 pub(crate) mod agent_recording_proxy;
@@ -172,3 +174,5 @@ pub(crate) mod cache_family_run;
 pub(crate) mod hf_certify;
 pub(crate) mod hf_mtp_compose;
 pub(crate) mod mtp_scheduler;
+
+pub(crate) mod skippy_cli_admission;

@@ -158,7 +158,7 @@ fn artifact_every_lane_parallelism_input_consumes_its_declared_budget() {
 #[test]
 fn artifact_cuda_probe_source_returns_before_benchmark_allocations() {
     let source = fs::read_to_string(
-        support::root().join("crates/mesh-llm-gpu-bench/native/cuda/membench-fingerprint.cu"),
+        support::root().join("skippy/crates/skippy-gpu-bench/native/cuda/membench-fingerprint.cu"),
     )
     .unwrap();
     let main = source

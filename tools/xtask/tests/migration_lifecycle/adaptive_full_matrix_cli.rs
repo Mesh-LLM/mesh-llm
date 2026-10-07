@@ -51,6 +51,14 @@ fn wrapper(path: &Path, mode: &str, marker: &Path) {
         quote(marker),
         quote(&test_binary)
     );
+    let current = path.file_name().is_some_and(|name| name == "arm-new");
+    let mut script = script;
+    if current {
+        script = script.replace("serve-binary", "serve").replace("--openai-", "--").replace("--config)", "--stage-transport) [[ \"$2\" == binary ]] || exit 64; transport=1; shift 2;;\n--worker-only) worker=1; shift;;\n--config)");
+        script = script.replace("target=''", "target=''\nworker=0\ntransport=0").replace("export ADAPTIVE_FIXTURE_CONFIG", "[[ \"$transport\" == 1 ]] || exit 64\n[[ ( -n \"$bind\" && \"$worker\" == 0 ) || ( -z \"$bind\" && \"$worker\" == 1 ) ]] || exit 64\nexport ADAPTIVE_FIXTURE_CONFIG");
+    }
+    let verb = if current { "serve" } else { "serve-binary" };
+    script = script.replace("set -eu\n", &format!("set -eu\nif [[ \"$#\" == 2 && \"$2\" == --help ]]; then [[ \"$1\" == {verb} ]] || exit 64; printf 'inert help\\n'; exit 0; fi\n"));
     std::fs::write(path, script).unwrap();
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).unwrap();
 }
@@ -164,6 +172,53 @@ fn unsupported_refusal(root: &Path) {
     assert_eq!(raw.process.status.as_ref().unwrap().code(), Some(64));
     assert!(raw.stdout.as_ref().unwrap().as_bytes().is_empty());
 }
+fn failure_evidence(root: &Path, raw: &process::RawProcessReport) -> String {
+    let mut evidence = format!(
+        "process={:?}\nstderr={}\n",
+        raw.process,
+        String::from_utf8_lossy(raw.stderr.as_ref().unwrap().as_bytes())
+    );
+    let mut pending = vec![root.to_path_buf()];
+    let mut inspected = 0;
+    while let Some(path) = pending.pop() {
+        if inspected >= 100 || evidence.len() >= 128 * 1024 {
+            break;
+        }
+        inspected += 1;
+        let Ok(metadata) = std::fs::symlink_metadata(&path) else {
+            continue;
+        };
+        if metadata.is_dir() {
+            if let Ok(entries) = std::fs::read_dir(&path) {
+                let mut paths = entries
+                    .flatten()
+                    .map(|entry| entry.path())
+                    .collect::<Vec<_>>();
+                paths.sort();
+                pending.extend(paths.into_iter().rev());
+            }
+        } else if metadata.is_file()
+            && matches!(
+                path.extension().and_then(|s| s.to_str()),
+                Some("json" | "log")
+            )
+        {
+            use std::io::Read as _;
+            if let Ok(file) = std::fs::File::open(&path) {
+                let mut bytes = Vec::new();
+                if file.take(8192).read_to_end(&mut bytes).is_ok() {
+                    evidence.push_str(&format!(
+                        "\n{}:\n{}\n",
+                        path.strip_prefix(root).unwrap().display(),
+                        String::from_utf8_lossy(&bytes)
+                    ));
+                }
+            }
+        }
+    }
+    evidence
+}
+
 fn read(root: &Path) -> Value {
     serde_json::from_slice(&std::fs::read(root.join("matrix/comparison.json")).unwrap()).unwrap()
 }
@@ -180,7 +235,9 @@ fn adaptive_full_matrix_cli_inert_success_and_later_arm_refusal_preserve_identit
         assert_eq!(raw.process.outcome, process::Outcome::Exited);
         assert_eq!(
             raw.process.status.unwrap().code(),
-            Some(if mode == "success" { 0 } else { 1 })
+            Some(if mode == "success" { 0 } else { 1 }),
+            "{}",
+            failure_evidence(root, &raw)
         );
         let output = read(root);
         let cells = output["cells"].as_array().unwrap();
@@ -202,6 +259,10 @@ fn adaptive_full_matrix_cli_inert_success_and_later_arm_refusal_preserve_identit
                     .contains("Paired 95% CI")
             );
             for cell in cells {
+                let session_failure = cell["lifecycle"]
+                    .get("session_failure")
+                    .expect("successful cell must retain supervisor failure metadata");
+                assert!(session_failure.is_null(), "{cell}");
                 let version = cell["version"].as_str().unwrap();
                 assert_eq!(
                     cell["identity"]["admitted"]["binary_sha256"],
@@ -285,7 +346,11 @@ fn adaptive_full_matrix_cli_inert_marker_driven_cancellation_retains_prior_cell_
             cancel.cancel();
             let raw = task.await.unwrap();
             cleanup(&raw);
-            assert!(marker.is_ok(), "owned third measured request marker absent");
+            assert!(
+                marker.is_ok(),
+                "owned third measured request marker absent: {}",
+                failure_evidence(root, &raw)
+            );
             assert_eq!(raw.process.outcome, process::Outcome::Cancelled);
             let output = read(root);
             assert!(output["error"].is_string());

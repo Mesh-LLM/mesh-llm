@@ -250,6 +250,7 @@ for key in GH_TOKEN GITHUB_TOKEN CANARY_REPAIR_TOKEN; do
   if [[ "${!key+set}" == set ]]; then printf forbidden > "$root/credential-leak"; exit 95; fi
 done
 [[ "$GOOSE_MODE" == auto && "$GOOSE_DISABLE_SESSION_NAMING" == true ]] || exit 96
+[[ "$CANARY_REPAIR_LOG_DIR" == "$root/command-logs" ]] || exit 96
 for ((attempt=0; attempt<200; attempt++)); do
   if [[ -f "$root/heartbeat-sleep.pids" ]]; then
     lines=$(wc -l < "$root/heartbeat-sleep.pids")
@@ -294,6 +295,8 @@ HARNESS_MODE=repair-build
 AGENT_PROVIDER=fixture_provider
 AGENT_MODEL=fixture_model
 AGENT_LOG="$ROOT/agent.log"
+AGENT_COMMAND_LOG_DIR="$ROOT/command-logs"
+mkdir -p "$AGENT_COMMAND_LOG_DIR"
 AGENT_SESSION_NAME=llama-canary-repair-fixture-1-local
 AGENT_SESSION_STARTED=false
 REPAIR_DEADLINE_AT="$(( $(date +%s) + 20 ))"

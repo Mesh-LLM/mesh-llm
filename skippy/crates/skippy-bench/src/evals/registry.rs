@@ -1,5 +1,9 @@
 use super::*;
 
+pub(super) const MCP_ATLAS_REF: &str = "b290e672645791fea0bcb23e2c0f4fec50715cca";
+pub(super) const SWE_BENCH_PRO_REF: &str = "66f92766bba642462d4bbe5479e83f91f9211862";
+pub(super) const SWE_AGENT_REF: &str = "402a7b8fdac8193f3f255bb53859ba274234f596";
+pub(super) const MCP_ATLAS_IMAGE: &str = "ghcr.io/scaleapi/mcp-atlas@sha256:415a532f1aeae911fbe2d337cde0657c345a937fab295989f6ef8c70c09c740f";
 pub(super) const HARBOR_REPO: &str = "https://github.com/harbor-framework/harbor.git";
 pub(super) const HARBOR_REF: &str = "ff69e554fac1c751aa608e03de027db9043a2eac";
 
@@ -102,11 +106,11 @@ pub(super) fn definition(id: EvalId) -> EvalDefinition {
             id,
             name: "SWE-Bench Pro",
             repo_url: "https://github.com/scaleapi/SWE-bench_Pro-os.git",
-            repo_ref: "main",
+            repo_ref: SWE_BENCH_PRO_REF,
             cache_name: "swe-bench-pro",
             description: "Long-horizon software-engineering patch benchmark.",
             disk_estimate: "10GB+ before task Docker images",
-            required_tools: &["git", "uv", "python3", "docker"],
+            required_tools: &["git", "docker"],
             sync_notes: &["Clones the official repo and initializes submodules."],
             run_notes: &[
                 "Generates SWE-agent instances from the full SWE-Bench Pro test split.",
@@ -117,13 +121,14 @@ pub(super) fn definition(id: EvalId) -> EvalDefinition {
             id,
             name: "MCP-Atlas",
             repo_url: "https://github.com/scaleapi/mcp-atlas.git",
-            repo_ref: "main",
+            repo_ref: MCP_ATLAS_REF,
             cache_name: "mcp-atlas",
             description: "Tool-use benchmark over real MCP servers and tasks.",
             disk_estimate: "10GB+ including Docker image",
-            required_tools: &["git", "uv", "python3", "docker", "make", "curl"],
+            required_tools: &["git", "docker", "make", "curl"],
             sync_notes: &["Clones repo and pulls the prebuilt MCP-Atlas Docker image."],
             run_notes: &[
+                "Requires explicit eval prepare-mcp --uv <absolute> --python <absolute CPython3.12>; regular run never installs SDK dependencies.",
                 "Starts the MCP environment and completion service when they are not already running.",
                 "Runs the MCP-Atlas completion and scoring scripts with --no-filter and without --num-tasks or tool_choice overrides.",
             ],

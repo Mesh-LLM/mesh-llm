@@ -3,7 +3,7 @@ use super::ledger::MigrationLedgers;
 use crate::command::DynResult;
 use std::collections::BTreeSet;
 
-const MODEL_REFERENCE: &str = "evals/skippy-granite-tensor-equivalence.py";
+const MODEL_REFERENCE: &str = "skippy/evals/skippy-granite-tensor-equivalence.py";
 
 const SDK_CANDIDATES: [&str; 4] = [
     "scripts/ci-openai-python-smoke.py",
@@ -16,7 +16,7 @@ pub(super) fn check_exceptions(paths: &[String], ledgers: &MigrationLedgers) -> 
     let mut exception_paths = BTreeSet::new();
     for entry in &ledgers.exceptions.exceptions {
         let retained_reader = [
-            "evals/agentic-trajectory-manifest.py",
+            "mesh/evals/agentic-trajectory-manifest.py",
             "scripts/generate-bench-corpus.py",
         ]
         .contains(&entry.path.as_str());

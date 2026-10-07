@@ -9,3 +9,6 @@ fn migration_native_policy_runtime_package_portable() -> TestResult {
 fn migration_native_policy_runtime_package_rejects_unsafe() -> TestResult {
     check(Tool::RuntimePackage, "rejected")
 }
+
+#[path = "runtime_package_expected.rs"]
+mod expected;

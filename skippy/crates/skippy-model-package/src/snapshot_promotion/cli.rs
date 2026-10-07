@@ -6,7 +6,7 @@ use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
 use std::{
     fs::File,
-    io::{Read, Write},
+    io::Read,
     path::{Path, PathBuf},
 };
 
@@ -63,7 +63,7 @@ fn manifest_bytes(path: &Path) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
-pub fn run() -> Result<()> {
+pub fn run(output: &mut dyn std::io::Write, diagnostics: &mut dyn std::io::Write) -> Result<()> {
     match Cli::parse().action {
         Action::Prepare {
             repo,
@@ -81,17 +81,13 @@ pub fn run() -> Result<()> {
             if confirm {
                 // Two lines are consumed by the existing embedded job caller.
                 writeln!(
-                    mesh_llm_events::machine_out(),
+                    output,
                     "{}\n{}",
                     plan.staging_revision(),
                     plan.parent_commit()
                 )?;
             } else {
-                writeln!(
-                    mesh_llm_events::machine_out(),
-                    "{}",
-                    serde_json::to_string_pretty(&plan)?
-                )?;
+                writeln!(output, "{}", serde_json::to_string_pretty(&plan)?)?;
             }
         }
         Action::Promote {
@@ -107,18 +103,16 @@ pub fn run() -> Result<()> {
                 let mut transport = HubTransport::new(repo)?;
                 if let Some(warning) = policy::promote_with(&mut transport, &plan)? {
                     let _ = writeln!(
-                        mesh_llm_events::console_err(),
+                        diagnostics,
                         "WARNING: promotion succeeded, staging cleanup failed: {warning}"
                     );
                 }
             } else {
-                writeln!(
-                    mesh_llm_events::machine_out(),
-                    "{}",
-                    serde_json::to_string_pretty(&plan)?
-                )?;
+                writeln!(output, "{}", serde_json::to_string_pretty(&plan)?)?;
             }
         }
     }
+    output.flush()?;
+    diagnostics.flush()?;
     Ok(())
 }

@@ -200,7 +200,7 @@ fn cleanup_failure_after_preparation_retains_deletion_receipt_and_prior_error() 
 fn actual_product_completion_fixture_stays_suppressed_and_shutdown_health_stays_typed() {
     // The events crate's existing unit target proves these exact bytes are actual serde output.
     let completion = include_str!(
-        "../../../../../crates/mesh-llm-events/tests/fixtures/event-benchmark-completed.json"
+        "../../../../../mesh/crates/mesh-llm-events/tests/fixtures/event-benchmark-completed.json"
     )
     .trim();
     let (directory, trial, report) = fixture(

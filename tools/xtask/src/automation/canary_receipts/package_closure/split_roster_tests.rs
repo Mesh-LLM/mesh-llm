@@ -49,7 +49,7 @@ fn roster_bytes_bind_independent_v2_patch_frames_pin_and_all_abi_components() {
     let expected = Digest::of_bytes(&framed);
     assert_eq!(queue(root).unwrap(), expected);
     fs::write(root.join("skippy/llama_cpp/upstream.txt"), "a".repeat(40)).unwrap();
-    fs::create_dir_all(root.join("crates/skippy-ffi/src")).unwrap();
+    fs::create_dir_all(root.join("skippy/crates/skippy-ffi/src")).unwrap();
     let ffi = root.join("skippy/crates/skippy-ffi/src/lib.rs");
     fs::write(&ffi,"pub const ABI_VERSION_MAJOR: u32 = 1;\npub const ABI_VERSION_MINOR: u32 = 2;\npub const ABI_VERSION_PATCH: u32 = 3;\n").unwrap();
     let bytes = render(root, &serde_json::to_vec(&manifest()).unwrap()).unwrap();

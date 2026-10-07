@@ -64,11 +64,14 @@ fn copied_battery(root: &std::path::Path) -> PathBuf {
     let scripts = root.join("scripts");
     fs::create_dir_all(&scripts).unwrap();
     let battery = scripts.join("skippy-family-battery.sh");
-    fs::copy(
-        repository.join("scripts/skippy-family-battery.sh"),
-        &battery,
-    )
-    .unwrap();
+    for relative in [
+        "scripts/skippy-family-battery.sh",
+        "skippy/scripts/skippy-family-battery.sh",
+    ] {
+        let destination = root.join(relative);
+        fs::create_dir_all(destination.parent().unwrap()).unwrap();
+        fs::copy(repository.join(relative), destination).unwrap();
+    }
     executable(
         &scripts.join("plan-family-battery.py"),
         "#!/bin/sh\necho forbidden-planner >&2\nexit 91\n",

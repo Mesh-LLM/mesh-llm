@@ -29,7 +29,7 @@ fn option(fixture: &Fixture, name: &str) -> String {
     args[index + 1].into()
 }
 #[test]
-fn actual_development_product_builds_host_then_one_adjacent_runtime() {
+fn actual_development_product_builds_skippy_runtime_cli_then_mesh_host() {
     let fixture = product_fixture();
     let result = fixture.invoke(
         "scripts/build-development-product.sh",
@@ -37,7 +37,11 @@ fn actual_development_product_builds_host_then_one_adjacent_runtime() {
         &[],
     );
     assert!(result.process.success(), "{result:?}");
-    assert_eq!(fixture.log("events"), "host\nruntime\n");
+    assert_eq!(fixture.log("events"), "runtime\ncli\nhost\n");
+    assert_eq!(
+        fixture.log("skippy-cargo.args"),
+        "build\n--locked\n-p\nskippy-cli\n--features\ndynamic-native-runtime\n"
+    );
     assert_eq!(fixture.log("host.args"), "--profile\ndev\n");
     assert!(
         fixture
@@ -69,7 +73,7 @@ fn actual_development_product_normalizes_documented_named_recipe_arch_arguments(
         assert!(result.process.success(), "{alias}: {result:?}");
         assert_eq!(option(&fixture, "--backend"), "cuda");
         assert_eq!(fixture.log("cuda.arch"), "89;90\n");
-        assert_eq!(fixture.log("events"), "host\nruntime\n");
+        assert_eq!(fixture.log("events"), "runtime\ncli\nhost\n");
     }
     for alias in ["rocm_arch", "rocm-arch", "amd_arch", "amd-arch"] {
         let fixture = product_fixture();
@@ -119,7 +123,7 @@ fn linux_detection(source: &str) -> bool {
 }
 #[test]
 fn linux_source_retains_gpu_precedence_and_vulkan_runtime_admission() {
-    let current = source("scripts/build-development-product.sh");
+    let current = source("skippy/scripts/build-development-product.sh");
     assert!(linux_detection(&current));
     let swapped = current
         .replace("BACKEND=cuda", "BACKEND=temporary")
@@ -133,25 +137,31 @@ fn linux_source_retains_gpu_precedence_and_vulkan_runtime_admission() {
 
 fn runtime_recipe(source: &str) -> bool {
     let source = active(source);
-    let Some((_, recipe)) =
-        source.split_once("build-runtime backend=\"\" cuda_arch=\"\" rocm_arch=\"\":")
+    let Some((_, recipe)) = source.split_once("release-runtime-build backend=\"\" target=\"\":")
     else {
         return false;
     };
     let body = recipe.split("\n\n").next().unwrap();
-    body.contains("backend=\"{{ backend }}\"")
-        && body.contains("[[ -n \"$backend\" ]] || backend=cpu")
-        && body.contains("--backend \"$backend\"")
-        && !body.contains("$$backend")
+    body.contains("selected_backend=\"{{ backend }}\"")
+        && body.contains("[[ -z \"$selected_backend\" ]]")
+        && body.contains("if [[ \"$(uname -s)\" == Darwin ]]; then selected_backend=metal; else selected_backend=cpu; fi")
+        && body.contains("--backend \"$selected_backend\"")
+        && body.contains("--target \"{{ target }}\"")
+        && !body.contains("$$selected_backend")
 }
 #[test]
-fn native_runtime_recipe_defaults_empty_argument_to_cpu_without_shell_pid() {
-    let current = source("just/build.just");
+fn native_release_runtime_recipe_selects_current_platform_default_without_shell_pid() {
+    let current = source("just/release-build.just");
     assert!(runtime_recipe(&current));
     assert!(!runtime_recipe(
-        &current.replace("[[ -n \"$backend\" ]] || backend=cpu", ":")
+        &current.replace("selected_backend=cpu", "selected_backend=foreign")
     ));
-    assert!(!runtime_recipe(&current.replace("$backend", "$$backend")));
+    assert!(!runtime_recipe(
+        &current.replace("$selected_backend", "$$selected_backend")
+    ));
+    assert!(!runtime_recipe(
+        &current.replace("--target \"{{ target }}\"", "")
+    ));
 }
 
 #[test]

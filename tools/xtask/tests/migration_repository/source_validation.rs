@@ -42,8 +42,19 @@ impl Source {
                 "publish":null,"description":"fixture package","license":"MIT","license_file":null,
                 "repository":"https://example.invalid/repository","readme":"README.md","dependencies":dependencies})
         }).collect();
-        let metadata =
-            serde_json::json!({"workspace_members":["provider","consumer"],"packages":packages});
+        let mut packages = packages;
+        for (name, directory) in [
+            ("mesh-llm-client", "mesh-client"),
+            ("mesh-llm-node", "mesh-llm-node"),
+        ] {
+            scratch.write(&format!("crates/{directory}/Cargo.toml"), "[package]\n")?;
+            packages.push(serde_json::json!({
+                "id": name, "name": name, "version": "0.76.1",
+                "manifest_path": root.join("crates").join(directory).join("Cargo.toml"),
+                "dependencies": []
+            }));
+        }
+        let metadata = serde_json::json!({"workspace_members":["provider","consumer","mesh-llm-client","mesh-llm-node"],"packages":packages});
         Ok(Self { scratch, metadata })
     }
 

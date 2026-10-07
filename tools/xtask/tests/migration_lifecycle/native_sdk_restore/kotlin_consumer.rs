@@ -17,25 +17,28 @@ pub(super) fn consumer_fixture() -> Fixture {
         "scripts/package-sdk-console-assets.sh",
         "scripts/verify-sdk-console-assets.sh",
         "scripts/check-sdk-contract.sh",
-        "docs/SDK.md",
-        "sdk/swift/Sources/MeshLLM/Node.swift",
-        "sdk/swift/Sources/MeshLLM/EventStream.swift",
-        "sdk/kotlin/src/main/kotlin/ai/meshllm/Node.kt",
-        "sdk/kotlin/build.gradle.kts",
-        "sdk/node/index.js",
-        "sdk/node/inference.js",
-        "sdk/node/index.d.ts",
-        "crates/mesh-llm-nodejs/src/lib.rs",
+        "mesh/scripts/package-sdk-console-assets.sh",
+        "mesh/scripts/verify-sdk-console-assets.sh",
+        "mesh/scripts/check-sdk-contract.sh",
+        "mesh/docs/SDK.md",
+        "mesh/sdk/swift/Sources/MeshLLM/Node.swift",
+        "mesh/sdk/swift/Sources/MeshLLM/EventStream.swift",
+        "mesh/sdk/kotlin/src/main/kotlin/ai/meshllm/Node.kt",
+        "mesh/sdk/kotlin/build.gradle.kts",
+        "mesh/sdk/node/index.js",
+        "mesh/sdk/node/inference.js",
+        "mesh/sdk/node/index.d.ts",
+        "mesh/crates/mesh-llm-nodejs/src/lib.rs",
         // Unchanged compatibility sources inspected by the existing shell contract.
         // Neither file is executed as an oracle or automation tool.
-        "sdk/python/src/meshllm/client.py",
-        "sdk/python/src/meshllm/types.py",
+        "mesh/sdk/python/src/meshllm/client.py",
+        "mesh/sdk/python/src/meshllm/types.py",
     ] {
         let destination = fixture.root.join(name);
         fs::create_dir_all(destination.parent().unwrap()).unwrap();
         fs::copy(repository.join(name), destination).unwrap();
     }
-    let dist = fixture.root.join("crates/mesh-llm-ui/dist");
+    let dist = fixture.root.join("mesh/crates/mesh-llm-ui/dist");
     fs::create_dir_all(dist.join("assets")).unwrap();
     fs::write(
         dist.join("index.html"),
@@ -98,10 +101,10 @@ fi
     );
     write_executable(
         &fixture.root,
-        "sdk/kotlin/example/example-jvm/gradlew",
+        "mesh/sdk/kotlin/example/example-jvm/gradlew",
         r#"#!/bin/bash
 set -euo pipefail
-[[ "$PWD" == "$GITHUB_WORKSPACE/sdk/kotlin/example/example-jvm" ]] || exit 92
+[[ "$PWD" == "$GITHUB_WORKSPACE/mesh/sdk/kotlin/example/example-jvm" ]] || exit 92
 [[ "$#" == 3 && "$1" == --no-daemon && "$2" == run && "$3" == --args=inert-invite ]] || exit 93
 [[ "$MESHLLM_NATIVE_RUNTIME_ARTIFACT_DIR" == "$GITHUB_WORKSPACE/observed-runtime" ]] || exit 94
 [[ "$MESH_LLM_NATIVE_RUNTIME_CACHE_DIR" == "$GITHUB_WORKSPACE/owned-cache" ]] || exit 95
@@ -179,7 +182,7 @@ fn kotlin_actual_consumer_uses_verified_sdk_library_and_selected_host_reuse() {
     }
     let console = fixture
         .root
-        .join("sdk/kotlin/src/main/resources/mesh-llm/console");
+        .join("mesh/sdk/kotlin/src/main/resources/mesh-llm/console");
     assert_eq!(
         fs::read(console.join("assets/app.js")).unwrap(),
         b"inert console fixture"
@@ -272,7 +275,7 @@ fn kotlin_actual_consumer_stops_before_client_on_console_build_or_argument_failu
         assert!(!fixture.root.join("client-observer").exists());
     }
     let fixture = consumer_fixture();
-    fs::remove_file(fixture.root.join("crates/mesh-llm-ui/dist/index.html")).unwrap();
+    fs::remove_file(fixture.root.join("mesh/crates/mesh-llm-ui/dist/index.html")).unwrap();
     let report = run_consumer(
         &fixture,
         "x86_64-unknown-linux-gnu",
@@ -293,7 +296,7 @@ fn kotlin_actual_handoff_body_keeps_spaces_quotes_and_dollar_in_repository_path_
         .join("SDK with 'quotes' and $literal");
     fs::rename(&fixture.root, &renamed).unwrap();
     fixture.root = renamed;
-    fs::create_dir_all(fixture.root.join("sdk/kotlin/example/example-jvm")).unwrap();
+    fs::create_dir_all(fixture.root.join("mesh/sdk/kotlin/example/example-jvm")).unwrap();
     fs::write(
         fixture.root.join("execute-nested-client"),
         b"bounded body execution",

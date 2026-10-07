@@ -136,3 +136,137 @@ fn migration_native_policy_tool_failures_exit_two() {
     );
     assert_eq!(report.code, 2);
 }
+
+#[test]
+fn bound_host_report_matches_actual_binary_bytes_and_preserves_failed_policy_report() {
+    use sha2::{Digest, Sha256};
+    let state = tempfile::tempdir().unwrap();
+    let binary = state.path().join("skippy");
+    let report_path = state.path().join("host-imports.json");
+    for (bytes, imports, expected_code) in [
+        (b"first actual binary bytes".as_slice(), "", 0),
+        (b"second actual binary bytes".as_slice(), READELF, 1),
+    ] {
+        std::fs::write(&binary, bytes).unwrap();
+        let tools = FakeToolchain::new(vec![("readelf", imports, 0)]);
+        let result = run(
+            &args(&[
+                binary.to_str().unwrap(),
+                "--format",
+                "elf",
+                "--bind-sha256",
+                "--report",
+                report_path.to_str().unwrap(),
+            ]),
+            &tools,
+            &mut no_floor,
+        );
+        assert_eq!(result.code, expected_code, "{}", result.stderr);
+        let stdout: serde_json::Value = serde_json::from_str(&result.stdout).unwrap();
+        let written: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&report_path).unwrap()).unwrap();
+        assert_eq!(stdout, written);
+        assert_eq!(stdout["binary_sha256"], hex::encode(Sha256::digest(bytes)));
+        assert_eq!(stdout["binary"], "skippy");
+        if expected_code == 1 {
+            assert_eq!(
+                stdout["rejected_imports"],
+                serde_json::json!(["libcuda.so.1"])
+            );
+            assert!(result.stderr.contains("host dependency policy rejected"));
+        }
+    }
+}
+
+#[test]
+fn bound_host_refuses_missing_nonregular_empty_and_oversized_input_before_inspection() {
+    let state = tempfile::tempdir().unwrap();
+    let empty = state.path().join("empty");
+    std::fs::write(&empty, []).unwrap();
+    let oversized = state.path().join("oversized");
+    std::fs::File::create(&oversized)
+        .unwrap()
+        .set_len(2 * 1024 * 1024 * 1024 + 1)
+        .unwrap();
+    for binary in [
+        state.path().join("missing"),
+        state.path().to_owned(),
+        empty,
+        oversized,
+    ] {
+        let tools = FakeToolchain::new(vec![("readelf", "", 0)]);
+        let result = run(
+            &args(&[binary.to_str().unwrap(), "--format", "elf", "--bind-sha256"]),
+            &tools,
+            &mut no_floor,
+        );
+        assert_eq!(result.code, 2);
+        assert!(result.stdout.is_empty());
+        assert!(tools.calls.borrow().is_empty());
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn bound_host_refuses_leaf_symlink_and_fifo_without_blocking_or_inspection() {
+    use std::{ffi::CString, os::unix::fs::symlink};
+    let state = tempfile::tempdir().unwrap();
+    let target = state.path().join("target");
+    std::fs::write(&target, b"actual binary").unwrap();
+    let link = state.path().join("link");
+    symlink(&target, &link).unwrap();
+    let fifo = state.path().join("fifo");
+    let name = CString::new(fifo.as_os_str().as_encoded_bytes()).unwrap();
+    // This finite FIFO is owned by the temporary fixture; no writer is created.
+    assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
+    for binary in [link, fifo] {
+        let tools = FakeToolchain::new(vec![("readelf", "", 0)]);
+        let result = run(
+            &args(&[binary.to_str().unwrap(), "--format", "elf", "--bind-sha256"]),
+            &tools,
+            &mut no_floor,
+        );
+        assert_eq!(result.code, 2);
+        assert!(tools.calls.borrow().is_empty());
+    }
+}
+
+#[test]
+fn bound_host_refuses_binary_changed_by_inspection_before_publishing_report() {
+    struct MutatingToolchain(PathBuf);
+    impl Toolchain for MutatingToolchain {
+        fn which(&self, _: &str) -> bool {
+            true
+        }
+        fn capture(&self, _: &[String]) -> std::io::Result<Captured> {
+            std::fs::write(&self.0, b"changed binary bytes")?;
+            Ok(Captured {
+                output: Vec::new(),
+                exit: Exit::Code(0),
+            })
+        }
+    }
+    let state = tempfile::tempdir().unwrap();
+    let binary = state.path().join("skippy");
+    std::fs::write(&binary, b"initial binary bytes").unwrap();
+    let report_path = state.path().join("report.json");
+    let result = run(
+        &args(&[
+            binary.to_str().unwrap(),
+            "--format",
+            "elf",
+            "--bind-sha256",
+            "--report",
+            report_path.to_str().unwrap(),
+        ]),
+        &MutatingToolchain(binary),
+        &mut no_floor,
+    );
+    assert_eq!(result.code, 2);
+    assert!(
+        result
+            .stderr
+            .contains("changed during dependency inspection")
+    );
+    assert!(!report_path.exists());
+}

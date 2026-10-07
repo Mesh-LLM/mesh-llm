@@ -17,11 +17,23 @@ fn gate(node: &Node, key: &str, clause: &str) -> Result<(), String> {
     }
     Ok(())
 }
-fn consumer(name: &str, step: &Node) -> Result<(), String> {
+fn consumer(name: &str, job_name: &str, step: &Node) -> Result<(), String> {
     let action = text(step, "uses");
     let empty = Node::Map(Vec::new());
     let inputs = step.get("with").unwrap_or(&empty);
-    if action == "./.github/actions/configure-sccache-gha" {
+    let cpu_lane = name == "ci-linux-runtime-slice.yml" && job_name == "linux_runtime";
+    if action == "./.github/actions/configure-sccache-gha" && cpu_lane {
+        binding(
+            inputs,
+            "allow_depot_remote_cache",
+            super::cpu_runtime_cache::DEPOT,
+        )?;
+        binding(
+            inputs,
+            "allow_native_github_cache",
+            super::cpu_runtime_cache::NATIVE,
+        )?;
+    } else if action == "./.github/actions/configure-sccache-gha" {
         for flag in ["allow_depot_remote_cache", "allow_native_github_cache"] {
             binding(
                 inputs,
@@ -31,7 +43,21 @@ fn consumer(name: &str, step: &Node) -> Result<(), String> {
         }
     }
     if action.starts_with("Swatinem/rust-cache@") || action.starts_with("actions/cache") {
-        gate(step, "if", NATIVE)?;
+        let cpu_operation = cpu_lane
+            && matches!(
+                text(step, "name"),
+                "Restore exact Linux CPU runtime"
+                    | "Save exact Linux CPU runtime from trusted main"
+            );
+        gate(
+            step,
+            "if",
+            if cpu_operation {
+                super::cpu_runtime_cache::AUTHORITY
+            } else {
+                NATIVE
+            },
+        )?;
     }
     if action.starts_with("Swatinem/rust-cache@") {
         gate(inputs, "save-if", "github.ref == 'refs/heads/main'")?;
@@ -162,7 +188,8 @@ pub(super) fn check(workflows: &BTreeMap<String, Node>) -> Result<(), String> {
             }
             if let Some(Node::Seq(steps)) = job.get("steps") {
                 for step in steps {
-                    consumer(name, step).map_err(|e| format!("{name}/{job_name}: {e}"))?;
+                    consumer(name, job_name, step)
+                        .map_err(|e| format!("{name}/{job_name}: {e}"))?;
                 }
             }
         }

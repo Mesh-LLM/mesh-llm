@@ -183,12 +183,12 @@ impl Fixture {
         let candidate = "if [ \"${FIXTURE_FAIL:-}\" = cancel ]; then /bin/sleep 30 & child=$!; trap 'kill \"$child\" 2>/dev/null; wait \"$child\" 2>/dev/null; exit 143' TERM INT; printf '%s\n' \"$child\" > \"$FIXTURE_ROOT/work/descendant.pid\"; wait \"$child\"; exit 0; fi\nprintf '%s\\n' \"$@\" > \"$FIXTURE_ROOT/work/candidate.argv\"\nprintf '%s\\n' \"$SKIPPY_TTS_ORACLE_PROMPT\" \"$SKIPPY_TTS_ORACLE_SEED\" \"$SKIPPY_TTS_ORACLE_TOP_K\" \"$SKIPPY_TTS_ORACLE_TOP_P\" \"$SKIPPY_TTS_ORACLE_MAX_FRAMES\" \"$LLAMA_STAGE_BACKEND\" > \"$FIXTURE_ROOT/work/candidate.env\"\nif [ \"${FIXTURE_FAIL:-}\" = candidate ]; then exit 7; fi\nif [ \"${FIXTURE_FAIL:-}\" = oversized ]; then exec /usr/bin/head -c 8388609 /dev/zero; fi\nif [ \"${FIXTURE_FAIL:-}\" != filtered ]; then /bin/cp \"$FIXTURE_ROOT/fixture.wav\" \"$SKIPPY_TTS_ORACLE_CANDIDATE_WAV\"; fi\nprintf '%s\\n' 'token authorization candidate raw'";
         executable(&root.join("bin/just"), candidate);
         executable(
-            &root.join("closure/cargo/debug/deps/skippy_server-fixture"),
+            &root.join("closure/cargo/debug/deps/skippy_serving-fixture"),
             candidate,
         );
         for name in [
-            "skippy-server",
-            "skippy-model-package",
+            "skippy",
+            "skippy-package-builder",
             "skippy-correctness",
             "skippy-topology-plan",
         ] {
@@ -207,15 +207,15 @@ impl Fixture {
         );
         fs::write(root.join("closure/native/.mesh-llm-build-stamp"), stamp).unwrap();
         let paths = [
-            ("candidate", "cargo/debug/skippy-server"),
-            ("model_package", "cargo/debug/skippy-model-package"),
+            ("candidate", "cargo/debug/skippy"),
+            ("model_package", "cargo/debug/skippy-package-builder"),
             ("correctness", "cargo/debug/skippy-correctness"),
             ("topology_plan", "cargo/debug/skippy-topology-plan"),
             ("native_stamp", "native/.mesh-llm-build-stamp"),
             ("llama-server", "native/bin/llama-server"),
             ("llama-completion", "native/bin/llama-completion"),
             ("llama-tts", "native/bin/llama-tts"),
-            ("test_binary", "cargo/debug/deps/skippy_server-fixture"),
+            ("test_binary", "cargo/debug/deps/skippy_serving-fixture"),
         ];
         let mut files = serde_json::Map::new();
         for (key, path) in paths {
@@ -372,6 +372,7 @@ fn deterministic_tts_cli_uses_verified_prebuilt_or_normal_just_and_binds_full_pc
         }
         assert_eq!(args.contains("cargo\ntest"), !prebuilt);
         if !prebuilt {
+            assert!(args.contains("-p\nskippy-serving\n--lib\n"), "{args}");
             assert!(args.starts_with(&format!(
                 "--justfile\n{}\nwith-lld\ncargo\ntest\n",
                 root.join("Justfile").display()
@@ -418,6 +419,7 @@ fn source_and_producer_mutations_fail_before_candidate_or_oracle_execution() {
     for attack in [
         "source",
         "candidate-digest",
+        "retired-candidate",
         "native-policy",
         "oracle-policy",
         "test-freshness",
@@ -426,9 +428,12 @@ fn source_and_producer_mutations_fail_before_candidate_or_oracle_execution() {
         let root = fixture.root();
         match attack {
             "source" => fs::write(root.join("Cargo.toml"), "changed source").unwrap(),
-            "candidate-digest" => fs::write(
+            "candidate-digest" => {
+                fs::write(root.join("closure/cargo/debug/skippy"), "changed candidate").unwrap()
+            }
+            "retired-candidate" => fs::rename(
+                root.join("closure/cargo/debug/skippy"),
                 root.join("closure/cargo/debug/skippy-server"),
-                "changed candidate",
             )
             .unwrap(),
             "native-policy" | "oracle-policy" => {
@@ -444,7 +449,7 @@ fn source_and_producer_mutations_fail_before_candidate_or_oracle_execution() {
             _ => {
                 fs::File::options()
                     .write(true)
-                    .open(root.join("closure/cargo/debug/deps/skippy_server-fixture"))
+                    .open(root.join("closure/cargo/debug/deps/skippy_serving-fixture"))
                     .unwrap()
                     .set_times(FileTimes::new().set_modified(UNIX_EPOCH + Duration::from_secs(100)))
                     .unwrap();

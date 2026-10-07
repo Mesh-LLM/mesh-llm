@@ -209,7 +209,8 @@ fn actual_dimension_projection_reads_selected_file_and_rejects_missing_metadata(
 fn actual_battery_prepare_uses_current_owner_and_preserves_supplied_plan_bytes() {
     let f = Fixture::new(16);
     let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let caller = fs::read_to_string(source.join("scripts/skippy-family-battery.sh")).unwrap();
+    let caller =
+        fs::read_to_string(source.join("skippy/scripts/skippy-family-battery.sh")).unwrap();
     let function = caller
         .split("prepare_policy_plan() {")
         .nth(1)
@@ -218,7 +219,7 @@ fn actual_battery_prepare_uses_current_owner_and_preserves_supplied_plan_bytes()
         .next()
         .unwrap();
     let shell = f.root().join("prepare.sh");
-    fs::write(&shell,format!("set -euo pipefail\nautomation=(\"$OWNER\")\nPOLICY_PLAN=\"$SUPPLIED\"\nPOLICY_PLAN_COPY=\"$COPY\"\nSHARD_INDEX=\"\"\nFAMILY_FILTER=llama\nprepare_policy_plan() {{{function}\nprepare_policy_plan\n")).unwrap();
+    fs::write(&shell,format!("set -euo pipefail\nautomation=(\"$OWNER\")\nPOLICY_PLAN=\"$SUPPLIED\"\nPOLICY_PLAN_COPY=\"$COPY\"\nSHARD_INDEX=\"\"\nFAMILY_FILTER=llama\nprepare_policy_plan() {{{function}\nprepare_policy_plan\nprintf admitted > \"$ROOT/downstream\"\n")).unwrap();
     fs::create_dir_all(f.root().join("scripts")).unwrap();
     fs::write(
         f.root().join("scripts/plan-family-battery.py"),
@@ -227,26 +228,40 @@ fn actual_battery_prepare_uses_current_owner_and_preserves_supplied_plan_bytes()
     .unwrap();
     let before = fs::read(&f.plan).unwrap();
     for supplied in ["", f.plan.to_str().unwrap()] {
-        let destination = f.root().join("caller-plan.json");
-        let spec = ProcessSpec {
-            executable: "/bin/bash".into(),
-            arguments: vec![Value::Public(shell.clone().into())],
-            cwd: f.root().into(),
-            environment: BTreeMap::from([
-                (
-                    "OWNER".into(),
-                    Value::Public(env!("CARGO_BIN_EXE_xtask").into()),
-                ),
-                ("ROOT".into(), Value::Public(f.root().into())),
-                ("MANIFEST".into(), Value::Public(f.manifest.clone().into())),
-                ("HF_CACHE".into(), Value::Public(f.hub.clone().into())),
-                ("SUPPLIED".into(), Value::Public(supplied.into())),
-                ("COPY".into(), Value::Public(destination.clone().into())),
-            ]),
-        };
-        let result = supervise(spec);
-        assert!(result.success(), "{result:?}");
-        assert_eq!(fs::read(&destination).unwrap(), before);
+        for admitted in [true, false] {
+            let destination = f.root().join("caller-plan.json");
+            for path in [&destination, &f.root().join("downstream")] {
+                if path.exists() {
+                    fs::remove_file(path).unwrap();
+                }
+            }
+            let cache = if admitted {
+                f.hub.clone()
+            } else {
+                f.root().join("wrong-cache")
+            };
+            let spec = ProcessSpec {
+                executable: "/bin/bash".into(),
+                arguments: vec![Value::Public(shell.clone().into())],
+                cwd: f.root().into(),
+                environment: BTreeMap::from([
+                    (
+                        "OWNER".into(),
+                        Value::Public(env!("CARGO_BIN_EXE_xtask").into()),
+                    ),
+                    ("ROOT".into(), Value::Public(f.root().into())),
+                    ("MANIFEST".into(), Value::Public(f.manifest.clone().into())),
+                    ("HF_CACHE".into(), Value::Public(cache.into())),
+                    ("SUPPLIED".into(), Value::Public(supplied.into())),
+                    ("COPY".into(), Value::Public(destination.clone().into())),
+                ]),
+            };
+            let result = supervise(spec);
+            assert_eq!(result.success(), admitted, "{result:?}");
+            assert_eq!(fs::read(&destination).unwrap(), before);
+            assert_eq!(f.root().join("downstream").exists(), admitted);
+            assert_eq!(fs::read(&f.plan).unwrap(), before);
+        }
     }
 }
 
@@ -262,4 +277,106 @@ fn actual_cache_requires_the_declared_file_in_the_exact_pinned_snapshot() {
     );
     assert!(!fixture.cache(&fixture.hub).success());
     assert_eq!(fs::read(&fixture.plan).expect("unchanged plan"), plan);
+}
+
+fn descriptor_fixture(dimensions: &[u64], kind: u32) -> Fixture {
+    let f = Fixture::new(16);
+    let mut bytes = gguf(16);
+    bytes[8..16].copy_from_slice(&1_u64.to_le_bytes());
+    bytes.extend(6_u64.to_le_bytes());
+    bytes.extend(b"weight");
+    bytes.extend((dimensions.len() as u32).to_le_bytes());
+    for dimension in dimensions {
+        bytes.extend(dimension.to_le_bytes());
+    }
+    bytes.extend(kind.to_le_bytes());
+    bytes.extend(0_u64.to_le_bytes());
+    let digest = hex::encode(Sha256::digest(&bytes));
+    let new_blob = f.blob.parent().unwrap().join(&digest);
+    fs::write(&new_blob, &bytes).unwrap();
+    fs::remove_file(&f.snapshot).unwrap();
+    std::os::unix::fs::symlink(&new_blob, &f.snapshot).unwrap();
+    let mut manifest: Json = serde_json::from_slice(&fs::read(&f.manifest).unwrap()).unwrap();
+    let model = manifest["models"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|model| model["family"] == "llama")
+        .unwrap();
+    model["artifact"]["file_integrity"]["nested/model.gguf"] =
+        json!({"size_bytes":bytes.len(),"blob_id":digest});
+    model["resources"]["estimated_model_bytes"] = json!(35);
+    fs::write(&f.manifest, serde_json::to_vec(&manifest).unwrap()).unwrap();
+    let constants = f.root().join(".deps/llama.cpp/gguf-py/gguf/constants.py");
+    fs::create_dir_all(constants.parent().unwrap()).unwrap();
+    fs::write(constants, "class GGMLQuantizationType(IntEnum):\n    Q4_0 = 2\n\nQK_K = 256\nGGML_QUANT_SIZES: dict[GGMLQuantizationType, tuple[int, int]] = {\n    GGMLQuantizationType.Q4_0: (32, 2 + 16),\n}\nraise RuntimeError('must never execute layout data')\n").unwrap();
+    f.plan();
+    f
+}
+fn descriptor_cache(f: &Fixture) -> process::ProcessReport {
+    run(
+        f.root(),
+        &[
+            "automation".into(),
+            "family-battery-policy".into(),
+            "--cache-descriptors".into(),
+            f.root().display().to_string(),
+            f.manifest.display().to_string(),
+            f.plan.display().to_string(),
+            f.hub.display().to_string(),
+        ],
+    )
+}
+#[test]
+fn actual_descriptor_admission_accepts_conservative_estimate_without_executing_constants() {
+    let f = descriptor_fixture(&[64], 2); // Two Q4_0 blocks = 36 bytes; estimate = 35.
+    let before = fs::read(&f.plan).unwrap();
+    let report = descriptor_cache(&f);
+    assert!(report.success(), "{report:?}");
+    assert_eq!(fs::read(&f.plan).unwrap(), before);
+    let plan: Json = serde_json::from_slice(&before).unwrap();
+    assert_eq!(
+        plan["selected_models"][0]["resources"]["estimated_model_bytes"],
+        35
+    );
+    assert!(
+        plan["selected_models"][0]["artifact"]["file_integrity"]["nested/model.gguf"]["size_bytes"]
+            .as_u64()
+            .unwrap()
+            > 36
+    );
+}
+#[test]
+fn actual_descriptor_admission_refuses_pinned_malformed_tensors_and_preserves_plan() {
+    for (dimensions, kind, diagnostic) in [
+        (vec![], 2, "rank"),
+        (vec![0], 2, "positive"),
+        (vec![33], 2, "unaligned"),
+        (vec![64], 999, "unknown GGML tensor type"),
+        (vec![64, u64::MAX], 2, "overflow"),
+    ] {
+        let f = descriptor_fixture(&dimensions, kind);
+        // Identity, size and trunk metadata pass: refusal must be caused by descriptors.
+        assert!(f.cache(&f.hub).success());
+        let before = fs::read(&f.plan).unwrap();
+        let report = descriptor_cache(&f);
+        assert!(!report.success(), "{report:?}");
+        let stderr = String::from_utf8_lossy(&report.stderr.bytes_retained);
+        assert!(
+            stderr.contains("weight") && stderr.contains(diagnostic),
+            "{report:?}"
+        );
+        assert_eq!(fs::read(&f.plan).unwrap(), before);
+    }
+}
+#[test]
+fn actual_descriptor_admission_refuses_missing_or_executable_layout_table() {
+    let f = descriptor_fixture(&[64], 2);
+    let constants = f.root().join(".deps/llama.cpp/gguf-py/gguf/constants.py");
+    let before = fs::read(&f.plan).unwrap();
+    fs::write(&constants, "class GGMLQuantizationType(IntEnum):\n    Q4_0 = 2\n\nQK_K = 256\nGGML_QUANT_SIZES: dict[GGMLQuantizationType, tuple[int, int]] = {\n    GGMLQuantizationType.Q4_0: (32, __import__('os').system('false')),\n}\n").unwrap();
+    assert!(!descriptor_cache(&f).success());
+    fs::remove_file(constants).unwrap();
+    assert!(!descriptor_cache(&f).success());
+    assert_eq!(fs::read(&f.plan).unwrap(), before);
 }

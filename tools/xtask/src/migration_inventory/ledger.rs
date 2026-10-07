@@ -6,6 +6,9 @@ use std::process::Command;
 
 const LEDGER_DIR: &str = "ci/automation-migration";
 
+#[cfg(test)]
+mod source_collection_tests;
+
 #[derive(Deserialize)]
 pub(super) struct PythonFile {
     pub(super) path: String,

@@ -67,7 +67,12 @@ impl Fixture {
             .canonicalize()
             .unwrap()
             .join("FFI boundary with spaces");
-        for name in ["skippy/crates/skippy-ffi", "scripts", "bin"] {
+        for name in [
+            "skippy/crates/skippy-ffi",
+            "skippy/scripts",
+            "scripts",
+            "bin",
+        ] {
             fs::create_dir_all(root.join(name)).unwrap();
         }
         let build = root.join("prepared").join(format!("static-{backend}"));
@@ -108,7 +113,7 @@ impl Fixture {
             if backend == "metal" { "ON" } else { "OFF" }).into_bytes();
         fs::write(build.join("CMakeCache.txt"), &cache).unwrap();
         executable(
-            &root.join("scripts/build-llama.sh"),
+            &root.join("skippy/scripts/build-llama.sh"),
             r#"#!/bin/bash
 set -euo pipefail
 [[ "$#" == 1 && "$1" == --print-build-dir && "$LLAMA_STAGE_LINK_MODE" == static ]] || { printf forbidden > "$FFI_FIXTURE_ROOT/native-called"; exit 93; }
@@ -118,7 +123,9 @@ printf '%s\n' "$FFI_FIXTURE_ROOT/prepared/static-$LLAMA_STAGE_BACKEND"
 "#,
         );
         let deny = "#!/bin/sh\nprintf forbidden > \"$FFI_FIXTURE_ROOT/native-called\"\nexit 94\n";
+        executable(&root.join("scripts/build-llama.sh"), deny);
         executable(&root.join("scripts/prepare-llama.sh"), deny);
+        executable(&root.join("skippy/scripts/prepare-llama.sh"), deny);
         for name in [
             "cargo", "rustc", "cmake", "make", "ninja", "nvcc", "sccache",
         ] {

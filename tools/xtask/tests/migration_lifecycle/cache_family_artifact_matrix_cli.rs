@@ -141,49 +141,77 @@ fn run(spec: ProcessSpec, cancel: Cancellation) -> process::ProcessReport {
 #[test]
 fn artifact_matrix_actual_cli_completes_minimax_serving_and_deepseek_package_report_without_baseline()
  {
-    for package in [false, true] {
-        let f = Fixture::new();
-        let input = setup(&f, package);
-        let r = run(spec(&f, input), Cancellation::default());
-        assert_eq!(r.outcome, process::Outcome::Exited);
-        assert_eq!(r.status.and_then(|s| s.code()), Some(0));
-        let summary: Value = serde_json::from_slice(
-            &fs::read(f.root.join("artifact-matrix/cache-family-matrix.json")).unwrap(),
-        )
-        .unwrap();
-        assert_eq!(summary["status"], "completed");
-        let row: Value = serde_json::from_slice(
-            &fs::read(f.root.join("artifact-matrix/cell-0000/row.json")).unwrap(),
-        )
-        .unwrap();
-        assert_eq!(row["status"], "completed");
-        let observed = row["observations"].as_array().unwrap();
-        if package {
-            assert_eq!(observed.len(), 1);
-            assert_eq!(observed[0]["status"], "unavailable");
-            assert!(!f.root.join("post-native").exists());
-            assert!(!f.root.join("post-old").exists());
-        } else {
-            assert_eq!(observed.len(), 5);
-            assert_eq!(observed[4]["parity"]["matches"], true);
-            assert!(f.root.join("post-native").exists());
-            assert!(f.root.join("post-new").exists());
-        }
-        let report: Value = serde_json::from_slice(
-            &fs::read(f.root.join("artifact-matrix/production-cache-bench.json")).unwrap(),
-        )
-        .unwrap();
-        assert_eq!(report[0]["skippy"]["status"], "pass");
-        if package {
-            assert_eq!(report[0]["llama_server"]["status"], "unavailable");
-        }
-        assert!(
-            f.root
-                .join("artifact-matrix/production-cache-bench.md")
-                .is_file()
+    complete_artifact_matrix(false);
+}
+#[test]
+fn artifact_matrix_actual_cli_completes_deepseek_package_only_report_without_baseline() {
+    complete_artifact_matrix(true);
+}
+fn complete_artifact_matrix(package: bool) {
+    let f = Fixture::new();
+    let input = setup(&f, package);
+    let r = run(spec(&f, input), Cancellation::default());
+    if r.outcome != process::Outcome::Exited
+        || r.status.as_ref().and_then(std::process::ExitStatus::code) != Some(0)
+    {
+        let row = fs::read_to_string(f.root.join("artifact-matrix/cell-0000/row.json"))
+            .unwrap_or_default();
+        let cells = [
+            "native-serial",
+            "sweep-native-concurrent",
+            "sweep-skippy-old",
+            "sweep-skippy-new",
+        ]
+        .map(|cohort| {
+            let path = f.root.join("artifact-matrix/cell-0000").join(cohort);
+            format!(
+                "{cohort}: {}; child stderr: {}",
+                fs::read_to_string(path.join("output/cell.json")).unwrap_or_default(),
+                fs::read_to_string(path.join("child.stderr.log")).unwrap_or_default()
+            )
+        });
+        let retained = f.directory.keep();
+        panic!(
+            "package={package}; retained evidence={}; report={r:?}; row={row}; cells={cells:?}",
+            retained.display()
         );
-        f.directory.close().unwrap();
     }
+    let summary: Value = serde_json::from_slice(
+        &fs::read(f.root.join("artifact-matrix/cache-family-matrix.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(summary["status"], "completed");
+    let row: Value = serde_json::from_slice(
+        &fs::read(f.root.join("artifact-matrix/cell-0000/row.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(row["status"], "completed");
+    let observed = row["observations"].as_array().unwrap();
+    if package {
+        assert_eq!(observed.len(), 1);
+        assert_eq!(observed[0]["status"], "unavailable");
+        assert!(!f.root.join("post-native").exists());
+        assert!(!f.root.join("post-old").exists());
+    } else {
+        assert_eq!(observed.len(), 5);
+        assert_eq!(observed[4]["parity"]["matches"], true);
+        assert!(f.root.join("post-native").exists());
+        assert!(f.root.join("post-new").exists());
+    }
+    let report: Value = serde_json::from_slice(
+        &fs::read(f.root.join("artifact-matrix/production-cache-bench.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(report[0]["skippy"]["status"], "pass");
+    if package {
+        assert_eq!(report[0]["llama_server"]["status"], "unavailable");
+    }
+    assert!(
+        f.root
+            .join("artifact-matrix/production-cache-bench.md")
+            .is_file()
+    );
+    f.directory.close().unwrap();
 }
 #[test]
 fn artifact_matrix_actual_cli_late_failure_preserves_old_measurement_and_refuses_parity() {

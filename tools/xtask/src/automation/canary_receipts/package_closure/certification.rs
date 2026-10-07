@@ -10,10 +10,7 @@ mod observation;
 mod tests;
 use super::{process, producer_receipt::Context, restoring};
 use crate::{
-    automation::{
-        canary_receipts::{Digest, PackageVerification, verify_package},
-        canary_source_plan,
-    },
+    automation::canary_receipts::{Digest, PackageVerification, placement, verify_package},
     command::DynResult,
     process::{OutputFiles, ProcessSpec, Value},
 };
@@ -95,7 +92,7 @@ fn execute_bound(
         },
     )?;
     let plan = fs::read(input.package.join("plan.json"))?;
-    let matrix = serde_json::to_value(canary_source_plan::placement::project(&plan)?)?;
+    let matrix = serde_json::to_value(placement::project(&plan)?)?;
     let rows = matrix["include"]
         .as_array()
         .ok_or("invalid certification scheduling matrix")?

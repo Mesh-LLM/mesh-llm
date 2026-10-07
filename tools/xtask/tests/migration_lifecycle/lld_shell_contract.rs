@@ -59,6 +59,7 @@ impl Fixture {
             "scripts/cargo-linker-linux-aarch64",
             "scripts/cargo-linker-linux-x86_64",
             "scripts/build-host.sh",
+            "mesh/scripts/build-host.sh",
             "scripts/lib/macos-deployment-target.sh",
             "scripts/lib/macos-deployment-target.txt",
         ] {

@@ -5,7 +5,7 @@ fn matrix_uses_complete_ladder_with_all_arm_alternation_and_pinned_exclusion() {
     let root = tempfile::tempdir().unwrap();
     let config: Value = serde_json::from_slice(include_bytes!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../evals/skippy-competitive-benchmark.json"
+        "/../../skippy/evals/skippy-competitive-benchmark.json"
     )))
     .unwrap();
     let artifact = json!({"path":root.path().join("inert"),"sha256":"a".repeat(64)});
@@ -94,7 +94,7 @@ fn optional_matrix_requires_linux_cuda_and_preserves_required_refusal() {
     let root = tempfile::tempdir().unwrap();
     let mut config: Value = serde_json::from_slice(include_bytes!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../evals/skippy-competitive-benchmark.json"
+        "/../../skippy/evals/skippy-competitive-benchmark.json"
     )))
     .unwrap();
     let artifact = json!({"path":root.path().join("inert"),"sha256":"a".repeat(64)});

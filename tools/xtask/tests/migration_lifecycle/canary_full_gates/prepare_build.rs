@@ -21,7 +21,7 @@ fn actual_prepare_admits_relative_script_in_all_five_modes_and_refuses_wrong_sta
             fixture.tool(
                 "scripts/update-llama-pin.sh",
                 "update",
-                r#"printf '%s\n' "$1" > "$INERT_ROOT/third_party/llama.cpp/upstream.txt""#,
+                r#"printf '%s\n' "$1" > "$INERT_ROOT/skippy/llama_cpp/upstream.txt""#,
             );
             fixture.tool("scripts/prepare-llama.sh", "prepare", r#"printf '%s\n' "$INERT_PREPARED_SHA" > "$INERT_ROOT/.deps/llama.cpp/.mesh-llm-upstream-sha""#);
             let mut names = COMMON.to_vec();
@@ -51,8 +51,7 @@ fn actual_prepare_admits_relative_script_in_all_five_modes_and_refuses_wrong_sta
                 assert_eq!(fixture.args("update"), ["a".repeat(40)]);
             }
             assert_eq!(
-                fs::read_to_string(fixture.root.join("third_party/llama.cpp/upstream.txt"))
-                    .unwrap(),
+                fs::read_to_string(fixture.root.join("skippy/llama_cpp/upstream.txt")).unwrap(),
                 format!("{}\n", "a".repeat(40))
             );
             if wrong {
@@ -93,7 +92,7 @@ if run_for 'builtin refusal' 3 printf forbidden; then exit 99; else status=$?; f
         fixture.finish();
     }
     let fixture = Fixture::new();
-    let pin = fixture.root.join("third_party/llama.cpp/upstream.txt");
+    let pin = fixture.root.join("skippy/llama_cpp/upstream.txt");
     fs::write(&pin, format!("{}\n", "b".repeat(40))).unwrap();
     let mut names = COMMON.to_vec();
     names.extend(["write_repair_pin", "verify_repair_pin", "run_prepare"]);
@@ -172,9 +171,9 @@ fn actual_full_build_preserves_arm64_generators_full_crates_and_both_oracle_envi
             "-p",
             "skippy-runtime",
             "-p",
-            "skippy-server",
+            "skippy-cli",
             "-p",
-            "skippy-model-package",
+            "skippy-package-builder",
             "-p",
             "skippy-correctness",
             "-p",
@@ -187,7 +186,7 @@ fn actual_full_build_preserves_arm64_generators_full_crates_and_both_oracle_envi
         [
             "test",
             "-p",
-            "skippy-server",
+            "skippy-serving",
             "--lib",
             "--no-run",
             "--message-format=json"

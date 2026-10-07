@@ -88,7 +88,7 @@ fn source_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
 fn source() -> String {
-    fs::read_to_string(source_root().join("scripts/skippy-ci-smoke.sh")).unwrap()
+    fs::read_to_string(source_root().join("skippy/scripts/skippy-ci-smoke.sh")).unwrap()
 }
 fn function(source: &str, name: &str) -> String {
     let start = source.find(&format!("{name}() {{")).unwrap();
@@ -223,7 +223,7 @@ fn actual_stage_config_helper_routes_driver_and_normal_http_settings() {
     }
 }
 #[test]
-fn actual_corpus_callers_preserve_repeat_append_quit_and_same_system_prefix() {
+fn actual_corpus_callers_preserve_current_paragraph_and_same_system_prefix() {
     let root = tempfile::tempdir().unwrap();
     let source = source();
     let input = root.path().join("prompt input.txt");
@@ -257,15 +257,21 @@ fn actual_corpus_callers_preserve_repeat_append_quit_and_same_system_prefix() {
     assert!(result.success(), "{result:?}");
     let prompt = fs::read_to_string(&input).unwrap();
     let lines: Vec<_> = prompt.lines().collect();
-    assert_eq!(lines.len(), 7);
-    assert_eq!(lines[0], ":noappend");
-    assert_eq!(lines[1], lines[2]);
-    assert!(lines[1].len() > 2000);
-    assert!(lines[1].contains("000. ") && lines[1].contains("011. "));
-    assert_eq!(lines[3], ":append");
-    assert!(lines[4].contains("single word OK"));
-    assert!(lines[5].contains("OK again"));
-    assert_eq!(lines[6], ":quit");
+    let asset = fs::read_to_string(source_root().join("ci/fixtures/skippy-cache-prompt-input.txt"))
+        .unwrap();
+    assert_eq!(prompt.as_bytes(), asset.as_bytes());
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0].len(), 2735);
+    assert!(prompt.ends_with('\n'));
+    for index in 0..12 {
+        assert_eq!(lines[0].matches(&format!("{index:03}. ")).count(), 1);
+    }
+    assert_eq!(
+        lines[0]
+            .matches("We are validating exact prefix cache reuse")
+            .count(),
+        12
+    );
     let requests = [
         read(&root.path().join("seed.json")),
         read(&root.path().join("hit.json")),
@@ -326,7 +332,7 @@ fn actual_corpus_callers_fail_when_required_static_assets_are_missing() {
 #[test]
 fn complete_production_smoke_script_parses_as_bash_without_executing_gate_code() {
     let root = tempfile::tempdir().unwrap();
-    let script = source_root().join("scripts/skippy-ci-smoke.sh");
+    let script = source_root().join("skippy/scripts/skippy-ci-smoke.sh");
     let report = invoke(
         root.path(),
         "/bin/bash",
@@ -335,4 +341,88 @@ fn complete_production_smoke_script_parses_as_bash_without_executing_gate_code()
     );
     assert!(report.success(), "{report:?}");
     assert!(report.stdout.bytes_retained.is_empty());
+}
+
+#[test]
+fn actual_staged_correctness_caller_preserves_prompt_argv_and_refuses_failure() {
+    let root = tempfile::tempdir().unwrap();
+    let source = source();
+    let start = source
+        .find("run_with_timeout \"staged cache reuse smoke\"")
+        .unwrap();
+    let start = source[..start]
+        .rfind("if ! LLAMA_STAGE_BUILD_DIR=")
+        .unwrap();
+    let end = source[start..].find("\ncleanup\nSERVER_PID=").unwrap() + start;
+    let caller = &source[start..end];
+    let prompt = root.path().join("prompt with spaces.txt");
+    let asset = fs::read(source_root().join("ci/fixtures/skippy-cache-prompt-input.txt")).unwrap();
+    fs::write(&prompt, &asset).unwrap();
+    let trace = root.path().join("caller argv");
+    for status in [0, 23] {
+        let script = format!(
+            "set -euo pipefail\nrun_with_timeout() {{ printf '%s\\0' \"$LLAMA_STAGE_BUILD_DIR\" \"$@\" > \"$TRACE\"; return \"$STATUS\"; }}\n{caller}\nprintf caller-complete\n"
+        );
+        let result = invoke(
+            root.path(),
+            "/bin/bash",
+            vec!["-c".into(), script],
+            vec![
+                (
+                    "LLAMA_BUILD_DIR",
+                    root.path().join("native build").display().to_string(),
+                ),
+                ("PROMPT_OPENAI_URL", "http://127.0.0.1:12345/v1".into()),
+                ("DENSE_MODEL_ID", "selected model with spaces".into()),
+                ("PROMPT_IN", prompt.display().to_string()),
+                ("PROMPT_MAX_NEW_TOKENS", "17".into()),
+                (
+                    "PROMPT_OUT",
+                    root.path().join("prompt output").display().to_string(),
+                ),
+                (
+                    "PROMPT_LOG",
+                    root.path().join("missing stage log").display().to_string(),
+                ),
+                ("TRACE", trace.display().to_string()),
+                ("STATUS", status.to_string()),
+            ],
+        );
+        let bytes = fs::read(&trace).unwrap();
+        let actual = bytes
+            .split(|byte| *byte == 0)
+            .filter(|part| !part.is_empty())
+            .map(|part| std::str::from_utf8(part).unwrap())
+            .collect::<Vec<_>>();
+        let build = root.path().join("native build").display().to_string();
+        let input = prompt.display().to_string();
+        assert_eq!(
+            actual,
+            [
+                build.as_str(),
+                "staged cache reuse smoke",
+                "target/debug/skippy-correctness",
+                "open-ai-cache-reuse",
+                "--base-url",
+                "http://127.0.0.1:12345/v1",
+                "--model",
+                "selected model with spaces",
+                "--prompt-file",
+                input.as_str(),
+                "--max-tokens",
+                "17"
+            ]
+        );
+        assert_eq!(fs::read(&prompt).unwrap(), asset);
+        assert_eq!(result.success(), status == 0, "{result:?}");
+        if status == 0 {
+            assert_eq!(result.stdout.bytes_retained, b"caller-complete");
+        } else {
+            assert!(result.stdout.bytes_retained.is_empty());
+            assert!(
+                String::from_utf8_lossy(&result.stderr.bytes_retained)
+                    .contains("staged cache reuse smoke failed")
+            );
+        }
+    }
 }

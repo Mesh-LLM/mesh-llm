@@ -10,9 +10,9 @@ if [[ "${MESH_LLM_AUTOMATION_BIN+set}" == set ]]; then
     echo "MESH_LLM_AUTOMATION_BIN must be an absolute executable" >&2
     exit 1
   fi
-# Frozen automation selection ends.
   automation=("$MESH_LLM_AUTOMATION_BIN")
 fi
+# Frozen automation selection ends.
 LLAMA_BUILD_DIR="${LLAMA_STAGE_BUILD_DIR:-.deps/llama-build/build-stage-abi-static}"
 MODEL_MANIFEST="${MODEL_MANIFEST:-$ROOT/ci/model-artifacts/manifests/openai-smoke.json}"
 MODEL_IDENTITY_OVERRIDDEN=0

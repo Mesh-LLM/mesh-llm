@@ -16,7 +16,7 @@ fn source(path: &str) -> String {
         .replace("\r\n", "\n")
 }
 fn script() -> String {
-    source("scripts/build-windows.ps1")
+    source("mesh/scripts/build-windows.ps1")
 }
 fn function(source: &str, name: &str) -> String {
     let anchor = format!("function {name} {{\n");
@@ -46,8 +46,10 @@ fn windows_ui_fallback_requires_an_index_file_even_when_other_assets_exist() {
 #[test]
 fn windows_build_preserves_dynamic_host_and_shared_runtime_ownership() {
     let script = script();
-    let features = function(&script, "Get-HostFeatureList");
-    assert!(features.contains("web-ui,dynamic-native-runtime,payments"));
+    assert!(script.contains(
+        "\"--no-default-features\", \"--features\", \"web-ui,dynamic-native-runtime,payments\""
+    ));
+    assert!(source("scripts/build-windows.ps1").contains("../mesh/scripts/build-windows.ps1"));
     assert!(script.contains("\"-DBUILD_SHARED_LIBS=ON\""));
     assert!(!script.contains("[switch]$AbiOnly"));
 }

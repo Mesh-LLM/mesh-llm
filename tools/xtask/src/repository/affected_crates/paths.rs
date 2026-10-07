@@ -61,8 +61,10 @@ pub(super) fn escalates(file: &str) -> bool {
     file == FORCE_ALL
         || file == "third_party/llama.cpp/upstream.txt"
         || file == "skippy/third_party/llama.cpp/upstream.txt"
+        || file == "skippy/llama_cpp/upstream.txt"
         || file.starts_with("third_party/llama.cpp/patches/")
         || file.starts_with("skippy/third_party/llama.cpp/patches/")
+        || file.starts_with("skippy/llama_cpp/patches/")
         || file == "Cargo.lock"
         || file == "Cargo.toml"
         || file == ".github/cache-version.txt"
@@ -101,6 +103,8 @@ mod tests {
         assert!(!escalates("scripts/build-llamax.sh"));
         assert!(!escalates("scripts/build-llama"));
         assert!(escalates("third_party/llama.cpp/patches/0001.patch"));
+        assert!(escalates("skippy/llama_cpp/upstream.txt"));
+        assert!(escalates("skippy/llama_cpp/patches/0001.patch"));
         assert!(!may_own_rust("crates/mesh-llm-ui/src/app.tsx"));
         assert!(may_own_rust("tools/xtask/src/main.rs"));
         assert!(may_own_rust("mesh/crates/relocated/src/lib.rs"));

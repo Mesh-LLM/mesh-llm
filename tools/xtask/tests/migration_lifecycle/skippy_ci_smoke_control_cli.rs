@@ -54,7 +54,7 @@ fn raw(spec: &ProcessSpec, token: &Cancellation) -> crate::process::RawProcessRe
 }
 fn source() -> String {
     fs::read_to_string(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../scripts/skippy-ci-smoke.sh"),
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../skippy/scripts/skippy-ci-smoke.sh"),
     )
     .unwrap()
 }

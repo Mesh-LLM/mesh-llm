@@ -4,6 +4,7 @@ mod cargo_projection;
 pub(crate) mod check_args;
 pub(crate) mod check_report;
 mod conventional_commit;
+mod docker_precheck;
 mod env_census;
 mod publish_order;
 pub(crate) mod publish_roster;
@@ -44,6 +45,7 @@ pub(crate) fn run_check(
         RepositoryCheck::EnvMutationCensus => env_census::run(args, default_root),
         RepositoryCheck::LlamaUpstreamPin => upstream_pin::run(args, default_root),
         RepositoryCheck::SelectedRef => selected_ref::run(args, default_root),
+        RepositoryCheck::DockerPrecheck => docker_precheck::run(args, default_root),
     }
 }
 

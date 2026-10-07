@@ -1,6 +1,6 @@
 # Optional Granite BF16 reference evaluation
 
-This project is solely for the existing `evals/skippy-granite-tensor-equivalence.py` model reference evaluator. It is not a prerequisite of normal build, packaging, required quality or benchmark execution. Python3.12 is deliberately selected, matching an existing repository optional compatibility project and an available local interpreter. The resolver lock is genuine; imports/API compatibility and supplied model values have not been tested.
+This project is solely for the existing `skippy/evals/skippy-granite-tensor-equivalence.py` model reference evaluator. It is not a prerequisite of normal build, packaging, required quality or benchmark execution. Python3.12 is deliberately selected, matching an existing repository optional compatibility project and an available local interpreter. The resolver lock is genuine; imports/API compatibility and supplied model values have not been tested.
 
 Prepare explicitly after policy review, from the repository root:
 
@@ -11,7 +11,7 @@ uv sync --locked --no-python-downloads --project evals/granite-reference --pytho
 Run using the isolated project interpreter, with no synchronization or implicit package installation:
 
 ```bash
-evals/granite-reference/.venv/bin/python -I evals/skippy-granite-tensor-equivalence.py \
+evals/granite-reference/.venv/bin/python -I skippy/evals/skippy-granite-tensor-equivalence.py \
   --gguf /path/to/granite-4.0-h-1b-bf16.gguf \
   --safetensors /path/to/model.safetensors
 ```

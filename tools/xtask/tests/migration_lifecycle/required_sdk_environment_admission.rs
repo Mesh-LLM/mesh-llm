@@ -41,7 +41,7 @@ fn missing_empty_relative_directory_and_nonexecutable_sdk_environments_fail_clos
     for (path, variable) in [
         ("scripts/ci-compat-smoke.sh", "MESH_REQUIRED_SDK_PYTHON"),
         (
-            "scripts/skippy-workload-certify.sh",
+            "skippy/scripts/skippy-workload-certify.sh",
             "SKIPPY_WORKLOAD_SDK_PYTHON",
         ),
     ] {
@@ -67,7 +67,7 @@ fn embedding_admission_defers_execution_to_supervised_client_and_nonembedding_ne
     fs::write(&interpreter, "#!/bin/bash\nexit 23\n").unwrap();
     fs::set_permissions(&interpreter, fs::Permissions::from_mode(0o700)).unwrap();
     let output = run(
-        "scripts/skippy-workload-certify.sh",
+        "skippy/scripts/skippy-workload-certify.sh",
         "SKIPPY_WORKLOAD_SDK_PYTHON",
         interpreter.to_str(),
         "embedding",
@@ -107,7 +107,7 @@ fn embedding_admission_defers_execution_to_supervised_client_and_nonembedding_ne
     assert_eq!(observed["process"]["exit_code"], 23);
     assert_eq!(observed["process"]["cleanup_complete"], true);
     let other = run(
-        "scripts/skippy-workload-certify.sh",
+        "skippy/scripts/skippy-workload-certify.sh",
         "SKIPPY_WORKLOAD_SDK_PYTHON",
         None,
         "ocr",

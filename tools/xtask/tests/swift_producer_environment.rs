@@ -38,7 +38,7 @@ impl Fixture {
         let fixture = Self {
             directory: tempfile::tempdir().unwrap(),
         };
-        for path in ["bin", "logs", "sdk/swift/scripts", "scripts"] {
+        for path in ["bin", "logs", "mesh/sdk/swift/scripts", "scripts"] {
             fs::create_dir_all(fixture.path().join(path)).unwrap();
         }
         let source = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -48,8 +48,8 @@ impl Fixture {
             .unwrap();
         for name in ["build-xcframework.sh", "build-host-macos-xcframework.sh"] {
             fs::copy(
-                source.join("sdk/swift/scripts").join(name),
-                fixture.path().join("sdk/swift/scripts").join(name),
+                source.join("mesh/sdk/swift/scripts").join(name),
+                fixture.path().join("mesh/sdk/swift/scripts").join(name),
             )
             .unwrap();
         }
@@ -108,13 +108,13 @@ record "native-$target" "$@"
 "#,
         );
         self.executable(
-            "sdk/swift/scripts/generate-swift-bindings.sh",
+            "mesh/sdk/swift/scripts/generate-swift-bindings.sh",
             r#"
 record bindings "$@"
-mkdir -p "$FIXTURE_ROOT/sdk/swift/Generated/FFI" "$FIXTURE_ROOT/sdk/swift/Sources/MeshLLM/Generated"
-printf 'fixture header\n' > "$FIXTURE_ROOT/sdk/swift/Generated/FFI/MeshLLMFFI.h"
-printf 'fixture module\n' > "$FIXTURE_ROOT/sdk/swift/Generated/FFI/MeshLLMFFI.modulemap"
-printf 'fixture guards\n' > "$FIXTURE_ROOT/sdk/swift/Sources/MeshLLM/Generated/mesh_ffi.swift"
+mkdir -p "$FIXTURE_ROOT/mesh/sdk/swift/Generated/FFI" "$FIXTURE_ROOT/mesh/sdk/swift/Sources/MeshLLM/Generated"
+printf 'fixture header\n' > "$FIXTURE_ROOT/mesh/sdk/swift/Generated/FFI/MeshLLMFFI.h"
+printf 'fixture module\n' > "$FIXTURE_ROOT/mesh/sdk/swift/Generated/FFI/MeshLLMFFI.modulemap"
+printf 'fixture guards\n' > "$FIXTURE_ROOT/mesh/sdk/swift/Sources/MeshLLM/Generated/mesh_ffi.swift"
 "#,
         );
         self.executable(
@@ -143,7 +143,7 @@ while (( $# )); do
 done
 [[ "$count" == 4 && -n "$output" ]] || exit 50
 mkdir -p "$output/fixture"
-cp "$FIXTURE_ROOT/sdk/swift/PrivacyInfo.xcprivacy" "$output/fixture/PrivacyInfo.xcprivacy"
+cp "$FIXTURE_ROOT/mesh/sdk/swift/PrivacyInfo.xcprivacy" "$output/fixture/PrivacyInfo.xcprivacy"
 "#,
         );
         // Linux's ln lacks macOS -h; preserve the symlink operation at this OS boundary.
@@ -153,7 +153,7 @@ cp "$FIXTURE_ROOT/sdk/swift/PrivacyInfo.xcprivacy" "$output/fixture/PrivacyInfo.
 exec /bin/ln "$@""#,
         );
         fs::write(
-            self.path().join("sdk/swift/PrivacyInfo.xcprivacy"),
+            self.path().join("mesh/sdk/swift/PrivacyInfo.xcprivacy"),
             "fixture privacy\n",
         )
         .unwrap();
@@ -163,7 +163,10 @@ exec /bin/ln "$@""#,
         let stdout = fs::File::create(self.path().join("stdout")).unwrap();
         let stderr = fs::File::create(self.path().join("stderr")).unwrap();
         let mut child = Command::new("/bin/bash")
-            .arg(self.path().join("sdk/swift/scripts/build-xcframework.sh"))
+            .arg(
+                self.path()
+                    .join("mesh/sdk/swift/scripts/build-xcframework.sh"),
+            )
             .args(args)
             .current_dir(self.path())
             .env_clear()

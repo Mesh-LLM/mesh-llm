@@ -49,7 +49,7 @@ fn input(root: &Path, workload: &str, arm: &str) -> PathBuf {
     std::fs::write(tokenizer.join("tokenizer.json"), b"{}").unwrap();
     let mut config: Value = serde_json::from_slice(include_bytes!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../evals/skippy-competitive-benchmark.json"
+        "/../../skippy/evals/skippy-competitive-benchmark.json"
     )))
     .unwrap();
     config["models"][0]["sha256"] = digest(b"inert model bytes").into();

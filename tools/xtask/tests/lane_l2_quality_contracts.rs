@@ -45,8 +45,8 @@ fn commit_validation_and_publication_keep_their_trust_and_approval_boundaries() 
     );
     assert!(script.contains("body.github.md"));
     for path in [
-        "scripts/build-development-product.sh",
-        "scripts/build-windows.ps1",
+        "mesh/scripts/build-development-product.sh",
+        "mesh/scripts/build-windows.ps1",
     ] {
         assert!(fs::read_to_string(root.join(path))?.contains("core.hooksPath scripts/hooks"));
     }

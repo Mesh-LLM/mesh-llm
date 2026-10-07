@@ -104,12 +104,16 @@ mod workload_provenance_cli;
 
 #[path = "migration_lifecycle/binary_stage_readiness_cli.rs"]
 mod binary_stage_readiness_cli;
+#[path = "migration_lifecycle/canary_source_recovery.rs"]
+mod canary_source_recovery;
 #[path = "migration_lifecycle/runtime_release_manifest_wrapper.rs"]
 mod runtime_release_manifest_wrapper;
 #[path = "migration_lifecycle/skippy_cache_smoke_config_cli.rs"]
 mod skippy_cache_smoke_config_cli;
 #[path = "migration_lifecycle/skippy_ci_smoke_control_cli.rs"]
 mod skippy_ci_smoke_control_cli;
+#[path = "migration_lifecycle/skippy_cli_release.rs"]
+mod skippy_cli_release;
 #[path = "migration_lifecycle/workload_media_comparison_cli.rs"]
 mod workload_media_comparison_cli;
 #[path = "migration_lifecycle/workload_monolithic_cli.rs"]
@@ -132,6 +136,8 @@ mod build_product;
 #[path = "migration_lifecycle/sdk_json_consumer/mod.rs"]
 mod sdk_json_consumer;
 
+#[path = "migration_lifecycle/decisions_smoke.rs"]
+mod decisions_smoke;
 #[path = "migration_lifecycle/system_one_cases/mod.rs"]
 mod system_one_cases;
 
@@ -427,3 +433,6 @@ mod cache_family_moe_cli;
 #[cfg(unix)]
 #[path = "migration_lifecycle/mtp_cli.rs"]
 mod mtp_cli;
+
+#[path = "migration_lifecycle/wan_stage_deployment.rs"]
+mod wan_stage_deployment;

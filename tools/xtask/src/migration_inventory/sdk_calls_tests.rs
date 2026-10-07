@@ -168,7 +168,7 @@ fn checked_in_sdk_callers_have_exact_required_children_and_process_contract()
     let validated = shards::check_shards(&root, &observed)?;
     let callers = [
         "scripts/ci-compat-smoke.sh",
-        "scripts/skippy-workload-certify.sh",
+        "skippy/scripts/skippy-workload-certify.sh",
     ];
     let graph = required_graph::report(&root, &paths, &observed, &validated, &callers)?;
     let children = [
@@ -236,4 +236,25 @@ fn checked_in_sdk_callers_have_exact_required_children_and_process_contract()
             .is_err()
     );
     Ok(())
+}
+
+#[test]
+fn sdk_closed_adapter_admits_current_product_caller_without_changing_sdk_child() {
+    let temp = tempfile::tempdir().unwrap();
+    let repo = crate::repo_consistency::repo_root().unwrap();
+    write(temp.path(), OWNER, fs::read(repo.join(OWNER)).unwrap());
+    let text = "\"${workload_automation[@]}\" automation smoke-observation sdk-client \\\n  --client embeddings --python \"$SDK_PYTHON\" \\\n";
+    let block = text.lines().nth(1).unwrap().trim();
+    assert_eq!(
+        target(
+            temp.path(),
+            "skippy/scripts/skippy-workload-certify.sh",
+            text,
+            2,
+            block
+        )
+        .unwrap(),
+        Some("scripts/ci-openai-embeddings-smoke.py")
+    );
+    assert!(target(temp.path(), "skippy/scripts/unreviewed.sh", text, 2, block).is_err());
 }

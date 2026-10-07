@@ -24,7 +24,7 @@ fn terms(text: &str, expected: &[&str]) {
 
 #[test]
 fn cli_website_build_and_dev_generate_inventory_and_keep_browser_tests() {
-    let package = json("website/package.json");
+    let package = json("mesh/website/package.json");
     let scripts = &package["scripts"];
     assert_eq!(
         scripts["generate:cli"],
@@ -48,12 +48,12 @@ fn cli_website_build_and_dev_generate_inventory_and_keep_browser_tests() {
 
 #[test]
 fn cli_website_d3_is_locked_local_and_script_json_is_escaped() {
-    let package = json("website/package.json");
-    let lock = json("website/package-lock.json");
+    let package = json("mesh/website/package.json");
+    let lock = json("mesh/website/package-lock.json");
     assert_eq!(package["dependencies"]["d3"], "^7.9.0");
     assert_eq!(lock["packages"][""]["dependencies"]["d3"], "^7.9.0");
     assert_eq!(lock["packages"]["node_modules/d3"]["version"], "7.9.0");
-    let config = source("website/.eleventy.js");
+    let config = source("mesh/website/.eleventy.js");
     terms(
         &config,
         &[
@@ -70,20 +70,20 @@ fn cli_website_d3_is_locked_local_and_script_json_is_escaped() {
 #[test]
 fn cli_website_generated_inventory_is_ignored_and_owned_by_cleaner() {
     assert!(
-        source("website/.gitignore")
+        source("mesh/website/.gitignore")
             .lines()
             .any(|line| line == "src/_data/cliInventory.json")
     );
     terms(
-        &source("website/scripts/clean-generated-site.mjs"),
-        &["\"website/src/_data/cliInventory.json\""],
+        &source("mesh/website/scripts/clean-generated-site.mjs"),
+        &["\"mesh/website/src/_data/cliInventory.json\""],
     );
 }
 
 #[test]
 fn cli_website_generator_uses_locked_exporter_and_validates_schema_and_paths() {
     terms(
-        &source("website/scripts/generate-cli-inventory.mjs"),
+        &source("mesh/website/scripts/generate-cli-inventory.mjs"),
         &[
             "\"run\"",
             "\"--locked\"",
@@ -129,7 +129,7 @@ fn affected_cli_documentation() -> Value {
         .args([
             "repository",
             "affected-crates",
-            "crates/mesh-llm-cli/src/parser/commands.rs",
+            "mesh/crates/mesh-llm-cli/src/parser/commands.rs",
         ])
         .env("CARGO_NET_OFFLINE", "true")
         .stdin(Stdio::null())

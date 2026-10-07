@@ -209,7 +209,9 @@ fn generation_fails_when_selector_is_not_explicitly_supported() {
 fn legacy_frontend_prefers_current_inference_owner_and_retains_historical_fallback() {
     let request =
         TranslationRequest::parse("[\"openai-frontend\"]", None, Generation::Legacy).unwrap();
-    let historical = available(EXTRACTED);
+    let mut historical = available(EXTRACTED);
+    historical.retain(|name| name.as_str() != "skippy-inference-api");
+    historical.insert(PackageName::try_from("skippy-openai-frontend".to_owned()).unwrap());
     assert_eq!(
         request.resolve(&historical).unwrap().names()[0].as_str(),
         "skippy-openai-frontend"

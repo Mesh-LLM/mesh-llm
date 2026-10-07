@@ -160,7 +160,10 @@ mod tests {
             std::fs::read(target.join("manifest.json")).unwrap(),
             std::fs::read(source.join("manifest.json")).unwrap()
         );
-        assert_eq!(target, cache.join("1.2.3/cpu-fixture"));
+        assert_eq!(
+            target,
+            cache.canonicalize().unwrap().join("1.2.3/cpu-fixture")
+        );
         assert!(!cache.join("legacy-ignored").exists());
         assert!(!target.join("stale").exists());
     }
@@ -225,7 +228,8 @@ mod tests {
             .remove("release_version");
         std::fs::write(path, serde_json::to_vec(&manifest).unwrap()).unwrap();
         let cache = root.path().join("cache");
-        assert_eq!(install(&source, &cache).unwrap(), cache.join("unknown/cpu"));
+        let installed = install(&source, &cache).unwrap();
+        assert_eq!(installed, cache.canonicalize().unwrap().join("unknown/cpu"));
         assert!(!cache.join("legacy-ignored").exists());
     }
 }

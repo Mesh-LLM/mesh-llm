@@ -260,8 +260,8 @@ pub(super) fn bytes(file: &mut File, member: &Member, limit: u64) -> DynResult<V
 
 pub(super) const BINARIES: [&str; 5] = [
     "skippy-correctness",
-    "skippy-server",
-    "skippy-model-package",
+    "skippy",
+    "skippy-package-builder",
     "skippy-topology-plan",
     "skippy-mm-test",
 ];

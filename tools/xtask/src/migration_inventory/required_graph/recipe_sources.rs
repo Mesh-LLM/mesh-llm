@@ -44,6 +44,9 @@ pub(super) fn expand(
                 }
                 continue;
             }
+            if super::product_forwarders::record(builder, &path, line, &block, trust)? {
+                continue;
+            }
             for child in tokens(&block) {
                 if child != path {
                     builder.push_edge(&path, line, &block, child, trust)?;

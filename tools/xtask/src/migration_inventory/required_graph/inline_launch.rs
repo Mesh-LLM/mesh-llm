@@ -11,7 +11,12 @@ const ROOTED: &str =
     "Python script path is built from a shell variable; no repository child edge is bound";
 
 pub(super) fn unresolved_reason(block: &str) -> &'static str {
-    if block.starts_with("require \"$PYTHON_") || block == "\"sdk/python/pyproject.toml\"" {
+    if block.starts_with("require \"$PYTHON_")
+        || matches!(
+            block,
+            "\"sdk/python/pyproject.toml\"" | "\"mesh/sdk/python/pyproject.toml\""
+        )
+    {
         "Python SDK path is shell validation or version data; its source-backed data boundary is recorded"
     } else if selected_interpreter_program(block) {
         SELECTED

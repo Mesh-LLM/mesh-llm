@@ -48,14 +48,14 @@ impl Fixture {
             "tools",
             "tmp",
             "scripts",
-            "third_party/llama.cpp",
+            "skippy/llama_cpp",
             ".deps/llama.cpp",
             "native/src",
         ] {
             fs::create_dir_all(root.join(directory)).unwrap();
         }
         fs::write(
-            root.join("third_party/llama.cpp/upstream.txt"),
+            root.join("skippy/llama_cpp/upstream.txt"),
             format!("{}\n", "a".repeat(40)),
         )
         .unwrap();
@@ -158,7 +158,7 @@ if [[ "$INERT_FAIL" == '{label}' ]]; then exit 17; fi
                 r#"set -euo pipefail
 ROOT="$PWD"
 TRUSTED_ROOT="$PWD"
-PIN_FILE="$ROOT/third_party/llama.cpp/upstream.txt"
+PIN_FILE="$ROOT/skippy/llama_cpp/upstream.txt"
 UPSTREAM_SHA={sha}
 LLAMA_STAGE_BUILD_DIR="$ROOT/native"
 STATE_DIR="$ROOT"

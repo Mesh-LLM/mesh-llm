@@ -2,6 +2,9 @@ use super::contract::{CacheAdmission, CachePolicy};
 use super::gguf::{self, Expected};
 use crate::automation::canary_receipts::Digest;
 use crate::automation::replay_matrix::model_preflight::dimensions::Dimensions;
+use crate::automation::replay_matrix::model_preflight::{
+    tensor_descriptors, tensor_layouts::Layouts,
+};
 use crate::command::DynResult;
 use serde::Deserialize;
 use std::{
@@ -64,6 +67,19 @@ enum CacheError {
 }
 
 pub(super) fn verify(bytes: &[u8], policy: &CachePolicy) -> DynResult<CacheAdmission> {
+    verify_with_layouts(bytes, policy, None)
+}
+
+pub(super) fn verify_descriptors(bytes: &[u8], root: PathBuf, layouts: &Layouts) -> DynResult<()> {
+    verify_with_layouts(bytes, &CachePolicy::GgufMetadata { root }, Some(layouts))?;
+    Ok(())
+}
+
+fn verify_with_layouts(
+    bytes: &[u8],
+    policy: &CachePolicy,
+    layouts: Option<&Layouts>,
+) -> DynResult<CacheAdmission> {
     match policy {
         CachePolicy::NotChecked => Ok(CacheAdmission::NotChecked),
         CachePolicy::BlobIdentity { root } | CachePolicy::GgufMetadata { root } => {
@@ -78,6 +94,11 @@ pub(super) fn verify(bytes: &[u8], policy: &CachePolicy) -> DynResult<CacheAdmis
             let plan: Plan = serde_json::from_slice(bytes)?;
             for model in plan.selected_models {
                 let target = verify_artifact(&hub, &model.artifact)?;
+                if let Some(layouts) = layouts {
+                    for path in &target {
+                        tensor_descriptors::inspect(path, layouts)?;
+                    }
+                }
                 let draft = model
                     .draft_artifact
                     .as_ref()

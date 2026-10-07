@@ -1,8 +1,8 @@
 //! Publication checks for immutable source data, independent of controller policy.
 use super::{
-    CargoMetadata, DynResult, check_publish_catalog_sync, check_publish_crate_dependencies,
-    check_publish_crate_metadata, check_publish_literal_includes, publish_order,
-    workspace_packages_by_dir, workspace_packages_by_name,
+    CargoMetadata, DynResult, check_publish_crate_dependencies, check_publish_crate_metadata,
+    check_publish_literal_includes, publish_order, workspace_packages_by_dir,
+    workspace_packages_by_name,
 };
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -30,6 +30,51 @@ pub(crate) fn check(root: &Path, input: &[u8], roster: &[String]) -> DynResult<(
     check_publish_crate_metadata(&root, roster, &packages)?;
     check_publish_crate_dependencies(&order, &packages, &directories)?;
     check_publish_literal_includes(roster, &packages)?;
-    check_publish_catalog_sync(&root)?;
+    check_selected_catalogs(&root, &packages)?;
     Ok(())
 }
+
+fn catalog_path(
+    root: &Path,
+    package: &super::CargoPackage,
+    leaf: &str,
+) -> DynResult<std::path::PathBuf> {
+    let manifest = package.manifest_path.canonicalize()?;
+    if !manifest.starts_with(root)
+        || manifest.file_name().is_none_or(|name| name != "Cargo.toml")
+        || !manifest.is_file()
+    {
+        return Err("catalog package manifest is outside selected source".into());
+    }
+    let directory = manifest
+        .parent()
+        .ok_or("catalog package directory missing")?;
+    let path = directory.join(leaf).canonicalize()?;
+    if !path.starts_with(directory) || !path.is_file() {
+        return Err("catalog is outside its admitted package directory".into());
+    }
+    Ok(path)
+}
+
+fn check_selected_catalogs(
+    root: &Path,
+    packages: &std::collections::BTreeMap<String, &super::CargoPackage>,
+) -> DynResult<()> {
+    let client = packages
+        .get("mesh-llm-client")
+        .ok_or("missing admitted catalog client package")?;
+    let node = packages
+        .get("mesh-llm-node")
+        .ok_or("missing admitted catalog node package")?;
+    let client = std::fs::read_to_string(catalog_path(root, client, "src/models/catalog.json")?)?;
+    let node = std::fs::read_to_string(catalog_path(root, node, "src/catalog.json")?)?;
+    crate::command::ensure_eq(
+        &client,
+        &node,
+        "selected mesh-llm-node packaged catalog copy",
+    )
+}
+
+#[cfg(test)]
+#[path = "release_source_tests.rs"]
+mod tests;

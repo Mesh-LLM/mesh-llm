@@ -80,7 +80,7 @@ fn run_family_uses_rust_execution_and_retains_reader_as_only_python_boundary()
         fixture
             .root
             .path()
-            .join("evals/agentic-trajectory-manifest.py")
+            .join("mesh/evals/agentic-trajectory-manifest.py")
             .canonicalize()?
             .to_str()
             .ok_or("reader path")?

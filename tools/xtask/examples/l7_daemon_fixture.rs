@@ -30,6 +30,19 @@ mod parity_fixture;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let arguments: Vec<_> = std::env::args().skip(1).collect();
+    if let [verb, help] = arguments.as_slice()
+        && help == "--help"
+        && ["serve", "serve-openai", "serve-binary"].contains(&verb.as_str())
+    {
+        let legacy = std::path::Path::new("cli-legacy").exists()
+            || std::env::var_os("LLAMA_STAGE_BUILD_DIR")
+                .is_some_and(|root| PathBuf::from(root).join("cli-legacy").exists());
+        if (verb == "serve") == legacy {
+            std::process::exit(64);
+        }
+        println!("inert Skippy fixture {verb} --stage-transport binary --worker-only");
+        return Ok(());
+    }
     if mtp_fixture::selected(&arguments) {
         return mtp_fixture::run(&arguments);
     }

@@ -14,7 +14,7 @@ source declaration does not establish execution on every interpreter version.
 
 Preserve the documented working directory for the MoA scripts because local
 imports and relative corpus/output paths are part of their existing behavior.
-For example, from `evals/moa-openrouter`, `python3 make_fixture.py` converts
+For example, from `mesh/evals/moa-openrouter`, `python3 make_fixture.py` converts
 existing captured JSONL files into the native test fixture. Recording commands
 require an explicit OpenRouter key and spend money; immutable Rust trace replay
 requires neither Python nor remote capture. Raw `tool_calls`, `finish_reason`,

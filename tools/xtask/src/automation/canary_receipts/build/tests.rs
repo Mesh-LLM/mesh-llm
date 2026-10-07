@@ -23,6 +23,7 @@ fn input(directory: &std::path::Path) -> Input {
         run_id: "100".into(),
         run_attempt: "2".into(),
         previous: None,
+        previous_feedback: None,
         evidence: directory.join("evidence"),
         export: directory.join("export"),
         agent_timeout_seconds: 41400,
@@ -55,6 +56,114 @@ fn independent_verification_and_budget_admission_fail_closed() {
         request.verification_timeout_seconds = verification;
         assert!(request.validate().is_err());
     }
+}
+
+#[test]
+fn continuation_requires_feedback_and_exact_pass_dependencies() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut request = input(directory.path());
+    previous(&mut request, &directory.path().join("package"));
+    request.mode = Mode::Repair;
+    request.pass_id = "repair-2".into();
+    assert!(request.validate().is_err());
+    request.previous_feedback = Some(directory.path().join("feedback"));
+    assert!(request.validate().is_ok());
+    assert!(package::previous(&request).is_ok());
+    request.pass_id = "repair-3".into();
+    assert!(package::previous(&request).is_err());
+    request.pass_id = "repair-1".into();
+    assert!(request.validate().is_err());
+    request.mode = Mode::Verify;
+    request.pass_id = "verify-1".into();
+    assert!(request.validate().is_err());
+    request.previous_feedback = None;
+    assert!(request.validate().is_ok());
+    request.mode = Mode::Pinned;
+    assert!(request.validate().is_err());
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[test]
+fn repair_continuation_admits_only_bound_candidate_feedback_and_keeps_snapshot() {
+    use crate::automation::canary_receipts::{
+        Family, PackageVerification, ReceiptContext, WorkerOutcome, WorkerResult,
+        feedback::{FamilyEvidence, FeedbackDraft, FeedbackState},
+        verify_package, write_receipt,
+    };
+    let directory = tempfile::tempdir().unwrap();
+    let mut request = input(directory.path());
+    previous(&mut request, &directory.path().join("package"));
+    request.mode = Mode::Repair;
+    request.pass_id = "repair-2".into();
+    let dependency = request.previous.as_ref().unwrap();
+    let context = ReceiptContext::from_verified_package(
+        verify_package(
+            &dependency.package,
+            PackageVerification {
+                expected_identity_sha256: Digest::try_from(dependency.identity.clone()).unwrap(),
+                current_run_id: request.run_id.clone(),
+                current_run_attempt: request.run_attempt.clone(),
+                controller_revision: Some(request.controller_revision.clone()),
+                selected_source: String::new(),
+            },
+        )
+        .unwrap(),
+    );
+    let family = Family::try_from("fixture".to_owned()).unwrap();
+    let evidence = directory.path().join("failed-family");
+    fs::create_dir(&evidence).unwrap();
+    fs::write(
+        evidence.join("results.jsonl"),
+        b"{\"family\":\"fixture\"}\n",
+    )
+    .unwrap();
+    write_receipt(
+        &context,
+        &evidence,
+        WorkerResult {
+            family: family.clone(),
+            outcome: WorkerOutcome::Failure,
+            runner: None,
+        },
+    )
+    .unwrap();
+    let feedback = directory.path().join("feedback");
+    FeedbackDraft::new(
+        &context,
+        FeedbackState::CandidateRepairable,
+        vec![FamilyEvidence::admit(&context, &family, &evidence).unwrap()],
+        Default::default(),
+        vec!["fixture failure".into()],
+    )
+    .unwrap()
+    .publish(&context, &feedback)
+    .unwrap();
+    request.previous_feedback = Some(feedback.clone());
+    assert!(request.validate().is_ok());
+    let admitted = package::previous_feedback(&request).unwrap().unwrap();
+    let summary = admitted.summary().unwrap();
+    fs::create_dir(&request.evidence).unwrap();
+    let summary_path = super::write_feedback_summary(&request, &summary).unwrap();
+    assert_eq!(fs::read_to_string(&summary_path).unwrap(), summary);
+    assert!(super::write_feedback_summary(&request, "replacement").is_err());
+    let environment = super::environment::wrapper(
+        &request,
+        None,
+        Some(admitted.directory()),
+        Some(&summary_path),
+    );
+    assert!(matches!(
+        environment.get(std::ffi::OsStr::new("CANARY_PREVIOUS_FEEDBACK_SUMMARY")),
+        Some(crate::process::Value::Public(path)) if path == summary_path.as_os_str()
+    ));
+    let pinned = fs::read(admitted.directory().join("feedback.json")).unwrap();
+    fs::write(feedback.join("feedback.json"), b"corrupted after admission").unwrap();
+    assert_eq!(
+        fs::read(admitted.directory().join("feedback.json")).unwrap(),
+        pinned
+    );
+    assert!(package::previous_feedback(&request).is_err());
+    assert_eq!(admitted.summary().unwrap(), summary);
 }
 
 #[test]
@@ -135,6 +244,26 @@ fn previous_package_requires_exact_dependency_head_base_controller_and_run_ident
 }
 
 #[test]
+fn independent_verification_refuses_skipped_attempts_and_verifier_producers() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut request = input(directory.path());
+    let package_path = directory.path().join("package");
+    previous(&mut request, &package_path);
+    assert!(package::previous(&request).is_ok());
+    request.pass_id = "verify-2".into();
+    assert!(package::previous(&request).is_err());
+
+    request.pass_id = "verify-1".into();
+    let path = package_path.join("identity.json");
+    let mut identity: serde_json::Value =
+        serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    identity["pass_id"] = json!("verify-1");
+    fs::write(&path, serde_json::to_vec(&identity).unwrap()).unwrap();
+    request.previous.as_mut().unwrap().identity = Digest::of_file(&path).unwrap().as_str().into();
+    assert!(package::previous(&request).is_err());
+}
+
+#[test]
 fn previous_artifact_corruption_and_newer_producer_attempt_cannot_start_verifier() {
     let directory = tempfile::tempdir().unwrap();
     let mut request = input(directory.path());
@@ -196,7 +325,8 @@ fn admitted_producer_branch_is_preserved_when_current_verifier_attempt_advances(
     previous(&mut request, &package_path);
     request.run_attempt = "3".into();
     let (_, identity) = package::previous(&request).unwrap().unwrap();
-    let environment = super::environment::wrapper(&request, Some((&package_path, &identity)));
+    let environment =
+        super::environment::wrapper(&request, Some((&package_path, &identity)), None, None);
     for (key, expected) in [
         ("CANARY_CANDIDATE_BRANCH", "llama-canary/repair-fixture"),
         ("CANARY_CANDIDATE_SHA", identity.candidate.as_str()),

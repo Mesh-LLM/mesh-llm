@@ -94,6 +94,20 @@ done
 "#);
                 body.push_str(&format!("exec {} --ignored --exact cache_family_full_matrix_cli::inert_cache_matrix_host --nocapture\n",quote(helper.to_str().unwrap())));
             }
+            if side == "new" {
+                body = body.replace("serve-openai", "serve").replace(
+                    "export CACHE_FIXTURE_NATIVE=0",
+                    "export CACHE_FIXTURE_CURRENT=1; export CACHE_FIXTURE_NATIVE=0",
+                );
+            }
+            if side == "old" || side == "new" {
+                let verb = if side == "new" {
+                    "serve"
+                } else {
+                    "serve-openai"
+                };
+                body = body.replace("#!/bin/sh\n", &format!("#!/bin/sh\nif [ \"$#\" = 2 ] && [ \"$2\" = --help ]; then [ \"$1\" = {verb} ] || exit 64; printf 'inert help\\n'; exit 0; fi\n"));
+            }
             fs::write(&binary, &body).unwrap();
             fs::set_permissions(&binary, fs::Permissions::from_mode(0o700)).unwrap();
             artifacts.insert(side, json!({"path":binary,"sha256":hash(body.as_bytes())}));
@@ -526,11 +540,13 @@ fn cache_operator_actual_wrapper_full_usecase_report_and_failure_dispatch() {
     use std::os::unix::fs::PermissionsExt as _;
     for fail in [false, true] {
         let fixture = Fixture::new();
-        let script = fixture.root.join("evals/skippy-cache-family-bench.sh");
-        fs::create_dir(script.parent().unwrap()).unwrap();
+        let script = fixture
+            .root
+            .join("skippy/evals/skippy-cache-family-bench.sh");
+        fs::create_dir_all(script.parent().unwrap()).unwrap();
         fs::write(
             &script,
-            include_str!("../../../../evals/skippy-cache-family-bench.sh"),
+            include_str!("../../../../skippy/evals/skippy-cache-family-bench.sh"),
         )
         .unwrap();
         let automation = fixture.root.join("automation");

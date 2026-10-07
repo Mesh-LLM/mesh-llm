@@ -104,3 +104,7 @@ fn require_hit(label: &str, completion: &Completion) -> Result<()> {
     );
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "openai_cache_reuse/tests.rs"]
+mod tests;

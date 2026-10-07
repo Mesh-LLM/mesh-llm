@@ -17,18 +17,18 @@ pub(super) fn validate(
     let candidates = observed
         .iter()
         .filter(|row| {
-            row.path.starts_with("scripts/")
+            super::scan::is_script(&row.path)
                 && row.path.ends_with(".py")
-                && !row.path.starts_with("scripts/tests/")
+                && !super::scan::is_script_test(&row.path)
         })
         .map(|row| (row.id.as_str(), row))
         .collect::<BTreeMap<_, _>>();
     let mut recorded = BTreeSet::new();
     let mut files = BTreeSet::new();
     for group in &shard.python_implementation_groups {
-        if !group.file.starts_with("scripts/")
+        if !super::scan::is_script(&group.file)
             || !group.file.ends_with(".py")
-            || group.file.starts_with("scripts/tests/")
+            || super::scan::is_script_test(&group.file)
             || group.file.split('/').any(|part| part == "..")
             || group.root.trim().is_empty()
             || group.boundary.trim().is_empty()
@@ -127,9 +127,9 @@ pub(super) fn validate(
     if let Some(root) = root {
         let mut roster = BTreeSet::new();
         for (path, digest, count) in &shard.python_implementation_sources {
-            if !path.starts_with("scripts/")
+            if !super::scan::is_script(path)
                 || !path.ends_with(".py")
-                || path.starts_with("scripts/tests/")
+                || super::scan::is_script_test(path)
                 || path.split('/').any(|part| part == "..")
                 || !roster.insert(path.as_str())
             {

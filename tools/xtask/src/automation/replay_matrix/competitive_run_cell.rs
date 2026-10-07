@@ -58,7 +58,7 @@ fn execute(input: Input, started: Instant) -> DynResult<()> {
     std::fs::create_dir(&input.output)?;
     let reservation = std::net::TcpListener::bind(("127.0.0.1", 0))?;
     let port = reservation.local_addr()?.port();
-    let prepared = super::competitive_launch::prepare(
+    let mut prepared = super::competitive_launch::prepare(
         &document,
         &input.cell,
         &input.backend,
@@ -66,6 +66,26 @@ fn execute(input: Input, started: Instant) -> DynResult<()> {
         port,
         &input.output,
     )?;
+    if matches!(input.cell["arm"].as_str(), Some("mesh" | "mesh-adaptive")) {
+        let interrupt = crate::automation::command_interrupt::Interrupt::install()?;
+        let admission = crate::automation::skippy_cli_admission::prepare(
+            &mut prepared.spec,
+            &input.backend.executable.sha256,
+            crate::automation::skippy_cli_admission::Role::Public,
+            deadline,
+            &interrupt.cancellation(),
+            &input.output.join("cli-admission.json"),
+        );
+        let restored = interrupt.finish();
+        admission?;
+        restored?;
+        prepared.command = std::iter::once(prepared.spec.executable.to_string_lossy().into_owned())
+            .chain(prepared.spec.arguments.iter().map(|value| match value {
+                Argument::Public(value) => value.to_string_lossy().into_owned(),
+                Argument::Secret(_) => "<redacted>".into(),
+            }))
+            .collect();
+    }
     version(&input, deadline)?;
     super::competitive_launch::file(&input.backend.executable)?;
     super::competitive_launch::file(&input.model)?;

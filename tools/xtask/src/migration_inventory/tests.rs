@@ -694,3 +694,23 @@ mod sdk_exception_policy;
 
 #[path = "tests/sdk_component_policy.rs"]
 mod sdk_component_policy;
+
+#[test]
+fn relocated_product_source_candidates_keep_actual_identity_and_execution_role() {
+    let source = "python3 scripts/fixed.py\n";
+    let mut identities = std::collections::BTreeSet::new();
+    for path in [
+        "scripts/fixture.sh",
+        "mesh/scripts/fixture.sh",
+        "skippy/scripts/fixture.sh",
+        "mesh/evals/fixture.sh",
+        "skippy/evals/fixture.sh",
+    ] {
+        let rows = scan::scan_source(path, source);
+        assert_eq!(rows.len(), 1, "{path}");
+        assert!(rows[0].executable);
+        assert!(rows[0].id.starts_with(&format!("{path}#candidate:")));
+        assert!(identities.insert(rows[0].id.clone()));
+    }
+    assert!(scan::scan_source("unowned/fixture.sh", source).is_empty());
+}

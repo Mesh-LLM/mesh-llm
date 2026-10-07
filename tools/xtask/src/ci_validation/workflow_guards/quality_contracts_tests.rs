@@ -189,8 +189,8 @@ fn snapshot_component_library_and_actual_cli_cannot_be_omitted_or_filtered() {
             "    just ci-snapshot-promotion-contracts || true\n",
         ),
         source.replace(
-            "-p model-package --lib --test snapshot_promotion_cli",
-            "-p model-package --test snapshot_promotion_cli",
+            "-p skippy-model-package --lib --test snapshot_promotion_cli",
+            "-p skippy-model-package --test snapshot_promotion_cli",
         ),
         source.replace(
             "--test snapshot_promotion_cli -- --test-threads=1",

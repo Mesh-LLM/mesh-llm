@@ -17,7 +17,7 @@ fn cargo_features(fixture: &Fixture, release: bool) -> BTreeSet<String> {
 }
 
 #[test]
-fn neutral_release_host_features_are_backend_independent_and_wallet_is_explicit() {
+fn neutral_release_host_features_are_backend_independent_of_legacy_wallet_selection() {
     for backend in ["cpu", "cuda", "rocm"] {
         for wallet in [false, true] {
             let fixture = Fixture::new();
@@ -30,13 +30,10 @@ fn neutral_release_host_features_are_backend_independent_and_wallet_is_explicit(
                 ],
             );
             assert!(result.process.success(), "{backend}: {result:?}");
-            let mut expected: BTreeSet<_> = ["web-ui", "dynamic-native-runtime", "payments"]
+            let expected: BTreeSet<_> = ["web-ui", "dynamic-native-runtime", "payments"]
                 .into_iter()
                 .map(str::to_owned)
                 .collect();
-            if wallet {
-                expected.insert("wallet-lexe".into());
-            }
             assert_eq!(cargo_features(&fixture, true), expected);
             assert_eq!(fixture.log("version"), "0.68.0\n");
             assert_eq!(fixture.log("events"), "ui\ncargo\n");
@@ -112,7 +109,7 @@ fn neutral_source(source: &str) -> bool {
 }
 #[test]
 fn host_source_cannot_add_backend_features_or_native_preparation() {
-    let current = source("scripts/build-host.sh");
+    let current = source("mesh/scripts/build-host.sh");
     assert!(neutral_source(&current));
     for addition in [
         "host_features=\"gpu-bench-cuda\"",

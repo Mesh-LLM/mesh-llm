@@ -110,11 +110,12 @@ fn eligible(workflows: &BTreeMap<String, Node>) -> Result<(), String> {
             .iter()
             .filter(|s| text(s, "uses") == "./.github/actions/select-ci-runners")
             .collect();
-        let expected_count = if *name == "ci-quality-slice.yml" {
-            2
-        } else {
-            1
-        };
+        let expected_count =
+            if matches!(*name, "ci-quality-slice.yml" | "ci-linux-runtime-slice.yml") {
+                2
+            } else {
+                1
+            };
         if selectors.len() != expected_count {
             return Err(format!("{name}: bounded policy selector census changed"));
         }
@@ -125,12 +126,19 @@ fn eligible(workflows: &BTreeMap<String, Node>) -> Result<(), String> {
             != 1
             || selectors
                 .iter()
-                .filter(|s| text(s, "id") == "sentinel_policy")
+                .filter(|s| {
+                    text(s, "id")
+                        == if *name == "ci-linux-runtime-slice.yml" {
+                            "cpu_policy"
+                        } else {
+                            "sentinel_policy"
+                        }
+                })
                 .count()
                 != expected_count - 1
         {
             return Err(format!(
-                "{name}: ordinary/sentinel selector identity changed"
+                "{name}: ordinary/dedicated selector identity changed"
             ));
         }
         for selector in selectors {
@@ -156,10 +164,19 @@ fn bounded_inputs(name: &str, selector: &Node) -> Result<(), String> {
             "${{ github.event.pull_request.head.sha || github.sha }}",
         ),
         ("ref", "${{ github.ref }}"),
-        ("force_hosted", "${{ inputs.force_hosted }}"),
     ] {
         expected(inputs, key, value)?;
     }
+    let cpu = name == "ci-linux-runtime-slice.yml" && text(selector, "id") == "cpu_policy";
+    expected(
+        inputs,
+        "force_hosted",
+        if cpu {
+            "true"
+        } else {
+            "${{ inputs.force_hosted }}"
+        },
+    )?;
     let sentinel = text(selector, "id") == "sentinel_policy";
     if sentinel {
         if name != "ci-quality-slice.yml" {
@@ -172,6 +189,20 @@ fn bounded_inputs(name: &str, selector: &Node) -> Result<(), String> {
             ("pr_approved_ref", ""),
             ("pr_approved_sha", ""),
             ("manual_use_depot", "false"),
+        ] {
+            expected(inputs, key, value)?;
+        }
+    } else if cpu {
+        for (key, value) in [
+            (
+                "depot_main_enabled",
+                "${{ vars.DEPOT_RUNNERS_ENABLED == 'true' }}",
+            ),
+            (
+                "depot_pr_enabled",
+                "${{ vars.DEPOT_PR_RUNNERS_ENABLED == 'true' }}",
+            ),
+            ("pr_canary_ref", "${{ vars.DEPOT_PR_CANARY_REF }}"),
         ] {
             expected(inputs, key, value)?;
         }

@@ -21,12 +21,22 @@ fn command(
         .output()
 }
 
+fn host_fixture(path: &Path, label: &str) -> TestResult {
+    use std::os::unix::fs::PermissionsExt;
+    let body = format!(
+        "#!/bin/sh\n# {label}\n[ \"$*\" = \"--log-format json --print-build-contract\" ] || exit 97\nprintf '%s\\n' '{{\"schema_version\":1,\"product_version\":\"1.0\",\"runtime_release\":\"0.9\",\"skippy_abi\":\"7\"}}'\nexit 0\n"
+    );
+    fs::write(path, body)?;
+    fs::set_permissions(path, fs::Permissions::from_mode(0o755))?;
+    Ok(())
+}
+
 fn composed(source: &Path, host: &str) -> TestResult {
     let runtime = source.join("native-runtimes/rt");
     fs::create_dir_all(&runtime)?;
     fs::write(
         runtime.join("manifest.json"),
-        b"{\"runtime\":{\"id\":\"rt\",\"mesh_version\":\"1.0\",\"backend\":{\"kind\":\"cpu\"}}}",
+        b"{\"schema_version\":2,\"runtime\":{\"id\":\"rt\",\"release_version\":\"9.0\",\"skippy_abi\":\"7\",\"backend\":{\"kind\":\"cpu\"}}}",
     )?;
     let output = Command::new(env!("CARGO_BIN_EXE_xtask"))
         .args(["product", "compose", "--bundle"])
@@ -50,7 +60,7 @@ fn migration_product_archive_preserves_composed_members_bytes_modes_and_checksum
     let scratch = Scratch::new()?;
     let source = scratch.path().join("mesh-bundle");
     fs::create_dir_all(&source)?;
-    fs::write(source.join("mesh-llm"), b"host")?;
+    host_fixture(&source.join("mesh-llm"), "host")?;
     composed(&source, "mesh-llm")?;
     #[cfg(unix)]
     {
@@ -145,9 +155,9 @@ fn migration_product_cuda_license_survives_both_release_tar_names() -> TestResul
     let license_path = source.join(license);
     fs::create_dir_all(license_path.parent().ok_or("license has no parent")?)?;
     fs::write(&license_path, b"cuda license fixture")?;
-    fs::write(source.join("mesh-llm"), b"host")?;
+    host_fixture(&source.join("mesh-llm"), "host")?;
     let runtime = source.join("native-runtimes/meshllm-native-runtime-linux-x86_64-cuda12");
-    fs::write(runtime.join("manifest.json"), b"{\"runtime\":{\"id\":\"meshllm-native-runtime-linux-x86_64-cuda12\",\"mesh_version\":\"1.0\",\"backend\":{\"kind\":\"cuda\"}}}")?;
+    fs::write(runtime.join("manifest.json"), b"{\"schema_version\":2,\"runtime\":{\"id\":\"meshllm-native-runtime-linux-x86_64-cuda12\",\"release_version\":\"9.0\",\"skippy_abi\":\"7\",\"backend\":{\"kind\":\"cuda\"}}}")?;
     let compose = Command::new(env!("CARGO_BIN_EXE_xtask"))
         .args(["product", "compose", "--bundle"])
         .arg(&source)
@@ -220,7 +230,7 @@ fn migration_product_archive_plan_when_bundle_contains_nested_files() -> TestRes
     let scratch = Scratch::new()?;
     let source = scratch.path().join("mesh-bundle");
     fs::create_dir_all(source.join("native-runtimes/rt/lib"))?;
-    fs::write(source.join("mesh-llm"), b"host")?;
+    host_fixture(&source.join("mesh-llm"), "host")?;
     fs::write(source.join("native-runtimes/rt/lib/runtime"), b"runtime")?;
     let target = scratch.path().join("result.tar.gz");
 
@@ -258,7 +268,7 @@ fn migration_product_tar_archive_when_bundle_contains_host_and_runtime() -> Test
     let scratch = Scratch::new()?;
     let source = scratch.path().join("mesh-bundle");
     fs::create_dir_all(source.join("native-runtimes"))?;
-    fs::write(source.join("mesh-llm"), b"original-host")?;
+    host_fixture(&source.join("mesh-llm"), "original-host")?;
     fs::write(source.join("native-runtimes/runtime"), b"original-runtime")?;
     composed(&source, "mesh-llm")?;
     let target = scratch.path().join("output.tar.gz");
@@ -290,7 +300,10 @@ fn migration_product_tar_archive_when_bundle_contains_host_and_runtime() -> Test
         ));
         offset += 512 + size.div_ceil(512) * 512;
     }
-    assert!(names.contains(&("mesh-bundle/mesh-llm".into(), b"original-host".to_vec())));
+    assert!(names.contains(&(
+        "mesh-bundle/mesh-llm".into(),
+        fs::read(source.join("mesh-llm"))?
+    )));
     assert!(names.contains(&(
         "mesh-bundle/native-runtimes/runtime".into(),
         b"original-runtime".to_vec()
@@ -303,7 +316,7 @@ fn migration_product_zip_archive_when_bundle_contains_host() -> TestResult {
     let scratch = Scratch::new()?;
     let source = scratch.path().join("mesh-bundle");
     fs::create_dir_all(&source)?;
-    fs::write(source.join("mesh-llm.exe"), b"portable-host")?;
+    host_fixture(&source.join("mesh-llm.exe"), "portable-host")?;
     composed(&source, "mesh-llm.exe")?;
     let target = scratch.path().join("output.zip");
 
@@ -330,7 +343,7 @@ fn migration_product_zip_archive_when_bundle_contains_host() -> TestResult {
     let mut body = Vec::new();
     DeflateDecoder::new(&zip[start..start + usize::try_from(compressed)?])
         .read_to_end(&mut body)?;
-    assert_eq!(body, b"portable-host");
+    assert_eq!(body, fs::read(source.join("mesh-llm.exe"))?);
     assert!(
         zip.windows(4)
             .any(|part| part == 0x0605_4b50_u32.to_le_bytes())
@@ -343,7 +356,7 @@ fn migration_product_archive_rejects_stale_host_and_missing_verifier() -> TestRe
     let scratch = Scratch::new()?;
     let source = scratch.path().join("mesh-bundle");
     fs::create_dir_all(&source)?;
-    fs::write(source.join("mesh-llm"), b"host")?;
+    host_fixture(&source.join("mesh-llm"), "host")?;
     fs::create_dir_all(source.join("native-runtimes/rt/bin"))?;
     fs::write(source.join("native-runtimes/rt/bin/verifier"), b"verifier")?;
     composed(&source, "mesh-llm")?;
@@ -352,7 +365,7 @@ fn migration_product_archive_rejects_stale_host_and_missing_verifier() -> TestRe
     let stale = command(scratch.path(), "archive-write", &source, &target, "tar.gz")?;
     assert!(!stale.status.success());
     assert!(!target.exists());
-    fs::write(source.join("mesh-llm"), b"host")?;
+    host_fixture(&source.join("mesh-llm"), "host")?;
     fs::remove_file(source.join("native-runtimes/rt/bin/verifier"))?;
     let missing = command(scratch.path(), "archive-write", &source, &target, "tar.gz")?;
     assert!(!missing.status.success());
@@ -365,14 +378,28 @@ fn migration_product_archive_rejects_same_size_digest_drift() -> TestResult {
     let scratch = Scratch::new()?;
     let source = scratch.path().join("mesh-bundle");
     fs::create_dir_all(&source)?;
-    fs::write(source.join("mesh-llm"), b"host")?;
+    host_fixture(&source.join("mesh-llm"), "host")?;
     composed(&source, "mesh-llm")?;
-    fs::write(source.join("mesh-llm"), b"HOST")?;
+    let host = source.join("mesh-llm");
+    let mut altered = fs::read(&host)?;
+    let comment = altered
+        .windows(b"# host\n".len())
+        .position(|bytes| bytes == b"# host\n")
+        .ok_or("fixture host comment missing")?;
+    altered[comment + 2] = b'H';
+    let original_len = fs::metadata(&host)?.len();
+    fs::write(&host, &altered)?;
+    assert_eq!(u64::try_from(altered.len())?, original_len);
 
     for kind in ["tar.gz", "zip"] {
         let target = scratch.path().join(format!("drift.{kind}"));
         let result = command(scratch.path(), "archive-write", &source, &target, kind)?;
         assert!(!result.status.success(), "{kind}");
+        assert!(
+            String::from_utf8_lossy(&result.stderr)
+                .contains("product manifest does not match composed bytes"),
+            "{kind}: {result:?}"
+        );
         assert!(!target.exists(), "{kind}");
         assert!(
             !target
@@ -389,7 +416,7 @@ fn migration_product_archive_rejects_self_inclusion_and_malformed_asset() -> Tes
     let scratch = Scratch::new()?;
     let source = scratch.path().join("mesh-bundle");
     fs::create_dir_all(&source)?;
-    fs::write(source.join("mesh-llm"), b"host")?;
+    host_fixture(&source.join("mesh-llm"), "host")?;
     composed(&source, "mesh-llm")?;
 
     let inside = source.join("release.tar.gz");
@@ -454,7 +481,7 @@ fn migration_product_portable_verifier_when_archive_is_moved_without_source() ->
     let runtime = source.join("native-runtimes/rt");
     fs::create_dir_all(&runtime)?;
     let host = source.join("mesh-llm");
-    fs::write(&host, b"host bytes for attestation")?;
+    host_fixture(&host, "host bytes for attestation")?;
     let private = scratch.path().join("private.json");
     let public = scratch.path().join("public.json");
     let keypair = Command::new(env!("CARGO_BIN_EXE_xtask"))

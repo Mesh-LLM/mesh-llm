@@ -41,8 +41,11 @@ impl Fixture {
             "scripts/restore-native-sdk-input.sh",
             "scripts/verify-native-sdk-package.sh",
             "scripts/verify-native-runtime-package.sh",
+            "mesh/scripts/verify-native-sdk-package.sh",
+            "skippy/scripts/verify-native-runtime-package.sh",
             "scripts/lib/automation.sh",
         ] {
+            fs::create_dir_all(root.join(name).parent().unwrap()).unwrap();
             fs::copy(repository.join(name), root.join(name)).unwrap();
         }
         let uname = root.join("bin/uname");
@@ -256,8 +259,8 @@ fn runtime(fixture: &Fixture) -> (PathBuf, serde_json::Value) {
         fs::Permissions::from_mode(0o755),
     )
     .unwrap();
-    let document = json!({"runtime":{
-        "id":"meshllm-native-runtime-darwin-x86_64-cpu","mesh_version":"0.75.0","skippy_abi":"0.1.32",
+    let document = json!({"schema_version":2,"runtime":{
+        "id":"meshllm-native-runtime-darwin-x86_64-cpu","release_version":"9.0.0","skippy_abi":"0.1.32",
         "platform":{"os":"macos","arch":"x86_64","target":"x86_64-apple-darwin"},"backend":{"kind":"cpu"},
         "libraries":["lib/llama.bin"],"files":{"lib/llama.bin":hex::encode(Sha256::digest(library))},
         "tools":{"tools/probe":hex::encode(Sha256::digest(tool))}},
@@ -287,6 +290,20 @@ fn admitted(report: process::RawProcessReport, expected: bool) {
 fn mutate(document: &mut serde_json::Value, case: &str) {
     let outside = hex::encode(Sha256::digest(b"keep"));
     match case {
+        "legacy schema" => {
+            document["schema_version"] = json!(1);
+            document["runtime"]["mesh_version"] = json!("0.75.0");
+            document["runtime"]
+                .as_object_mut()
+                .unwrap()
+                .remove("release_version");
+        }
+        "missing runtime release" => {
+            document["runtime"]
+                .as_object_mut()
+                .unwrap()
+                .remove("release_version");
+        }
         "library escape" => {
             document["runtime"]["libraries"] = json!(["../outside-sentinel"]);
             document["runtime"]["files"] = json!({"../outside-sentinel":outside});
@@ -344,6 +361,8 @@ fn native_runtime_verifier_manifest_consumption_preserves_control_and_refuses_mu
     let (artifact, valid) = runtime(&fixture);
     let mut cases = vec!["valid"];
     cases.extend([
+        "legacy schema",
+        "missing runtime release",
         "library escape",
         "file escape",
         "tool escape",
