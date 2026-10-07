@@ -54,3 +54,6 @@ mod phase_endpoints;
 mod resource_audit;
 #[path = "selector.rs"]
 mod selector;
+
+#[path = "package_resolver.rs"]
+mod package_resolver;
