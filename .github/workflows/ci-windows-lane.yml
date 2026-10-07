@@ -1,220 +1,194 @@
-name: CI · Windows
-run-name: CI · Windows · ${{ inputs.source_sha }}
-
+name: Diagnostic Windows migration CPU
+run-name: Diagnostic Windows CPU · ${{ inputs.source_sha }}
 on:
-  workflow_call:
-    inputs: &lane_inputs
-      lane_plan_json:
-        required: true
-        type: string
-      plan_digest:
-        required: true
-        type: string
-      source_sha:
-        required: true
-        type: string
-      original_event_name:
-        required: true
-        type: string
-      correlation_id:
-        required: false
-        default: ""
-        type: string
-      supersession_key:
-        required: false
-        default: ""
-        type: string
-      lane_check_id:
-        required: false
-        default: ""
-        type: string
-      overall_check_id:
-        required: false
-        default: ""
-        type: string
-      expected_lane_checks:
-        required: false
-        default: "[]"
-        type: string
   workflow_dispatch:
-    inputs: *lane_inputs
+    inputs:
+      source_sha:
+        description: Exact reviewed migration checkpoint
+        required: true
+        type: string
 permissions:
   contents: read
-  packages: read
-
 concurrency:
-  group: ci-windows-${{ inputs.supersession_key || inputs.source_sha }}
-  cancel-in-progress: ${{ inputs.original_event_name == 'pull_request' }}
-
+  group: diagnostic-windows-${{ github.ref }}-${{ inputs.source_sha }}
+  cancel-in-progress: false
 jobs:
-  authority_source:
-    name: Freeze protected automation source
-    if: ${{ (fromJson(inputs.lane_plan_json).matrices.hosts[0] != null) || (fromJson(inputs.lane_plan_json).matrices.hosts[0] != null || fromJson(inputs.lane_plan_json).matrices.runtime_products[0] != null || fromJson(inputs.lane_plan_json).matrices.platform_checks[0] != null) }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    permissions:
-      contents: read
+  windows_cpu:
+    if: ${{ github.repository == 'Mesh-LLM/mesh-llm' && github.ref == 'refs/heads/codex/xtask-migration-diagnostic-20261006' && inputs.source_sha == 'f0b80f29675fd22a515580d93ad2cd8fa17ea828' }}
+    runs-on: windows-2022
+    timeout-minutes: 120
     env:
       GIT_MASTER: '1'
       MESH_LLM_POSTHOG_KEY: ''
-    outputs:
-      source_sha: ${{ steps.freeze.outputs.source_sha }}
+      CARGO_INCREMENTAL: '0'
+      CARGO_BUILD_JOBS: '2'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
+      RUST_MIN_STACK: '8388608'
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: 'false'
+      SCCACHE_CACHE_SIZE: 1G
+      LLAMA_STAGE_BACKEND: cpu
+      LLAMA_STAGE_BUILD_DIR: .deps/llama-build/windows/build-stage-abi-cpu
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
-          ref: ${{ github.event.repository.default_branch }}
+          ref: ${{ inputs.source_sha }}
           persist-credentials: false
-      - name: Freeze the protected commit
-        id: freeze
-        shell: bash
-        run: |
-          set -euo pipefail
-          source_sha="$(git rev-parse HEAD)"
-          [[ "$source_sha" =~ ^[0-9a-f]{40}$ ]] || exit 1
-          printf 'source_sha=%s\n' "$source_sha" >> "$GITHUB_OUTPUT"
-
-  authority_linux_x64:
-    name: Protected linux x64 automation
-    needs: authority_source
-    if: ${{ needs.authority_source.result == 'success' && (fromJson(inputs.lane_plan_json).matrices.hosts[0] != null) }}
-    permissions:
-      contents: read
-    uses: ./.github/workflows/protected-automation-artifact.yml
-    with:
-      platform: linux-x64
-      lane: windows
-      protected_source_sha: ${{ needs.authority_source.outputs.source_sha }}
-
-  authority_windows_x64:
-    name: Protected windows x64 automation
-    needs: authority_source
-    if: ${{ needs.authority_source.result == 'success' && (fromJson(inputs.lane_plan_json).matrices.hosts[0] != null || fromJson(inputs.lane_plan_json).matrices.runtime_products[0] != null || fromJson(inputs.lane_plan_json).matrices.platform_checks[0] != null) }}
-    permissions:
-      contents: read
-    uses: ./.github/workflows/protected-automation-artifact.yml
-    with:
-      platform: windows-x64
-      lane: windows
-      protected_source_sha: ${{ needs.authority_source.outputs.source_sha }}
-
-  ui_artifact:
-    needs: [authority_linux_x64]
-    name: Console artifact
-    if: ${{ (fromJson(inputs.lane_plan_json).matrices.hosts[0] != null) && needs.authority_linux_x64.result == 'success' }}
-    uses: ./.github/workflows/ci-ui-artifact-slice.yml
-    with:
-      authority_linux_x64: ${{ needs.authority_linux_x64.outputs.identity_json }}
-      source_sha: ${{ inputs.source_sha }}
-      original_event_name: ${{ inputs.original_event_name }}
-      force_hosted: ${{ fromJson(inputs.lane_plan_json).signals.runner_contract_required }}
-      artifact_name: ci-ui-dist-windows-${{ github.run_id }}
-      retention_days: 1
-
-  hosts:
-    name: Neutral Windows host
-    needs: [ui_artifact, authority_windows_x64]
-    if: ${{ (!cancelled() && needs.ui_artifact.result == 'success' && fromJson(inputs.lane_plan_json).matrices.hosts[0] != null) && needs.authority_windows_x64.result == 'success' }}
-    uses: ./.github/workflows/ci-windows-host-slice.yml
-    with:
-      authority_windows_x64: ${{ needs.authority_windows_x64.outputs.identity_json }}
-      source_sha: ${{ inputs.source_sha }}
-      original_event_name: ${{ inputs.original_event_name }}
-      force_hosted: ${{ fromJson(inputs.lane_plan_json).signals.runner_contract_required }}
-      hosts_matrix: ${{ toJson(fromJson(inputs.lane_plan_json).matrices.hosts) }}
-      ui_artifact_name: ci-ui-dist-windows-${{ github.run_id }}
-      profile: release
-      max_parallel: ${{ fromJson(inputs.lane_plan_json).budgets.windows_max_parallel }}
-      fail_fast: ${{ inputs.original_event_name == 'pull_request' }}
-
-  native_runtimes:
-    needs: [authority_windows_x64]
-    name: Native Windows runtimes
-    if: ${{ (fromJson(inputs.lane_plan_json).matrices.runtime_products[0] != null) && needs.authority_windows_x64.result == 'success' }}
-    uses: ./.github/workflows/ci-windows-runtime-slice.yml
-    with:
-      authority_windows_x64: ${{ needs.authority_windows_x64.outputs.identity_json }}
-      source_sha: ${{ inputs.source_sha }}
-      original_event_name: ${{ inputs.original_event_name }}
-      force_hosted: ${{ fromJson(inputs.lane_plan_json).signals.runner_contract_required }}
-      runtime_matrix: ${{ toJson(fromJson(inputs.lane_plan_json).matrices.runtime_products) }}
-      max_parallel: ${{ fromJson(inputs.lane_plan_json).budgets.windows_max_parallel }}
-      fail_fast: ${{ inputs.original_event_name == 'pull_request' }}
-
-  runtime_product:
-    name: Windows products
-    needs: [hosts, native_runtimes, authority_windows_x64]
-    if: ${{ (!cancelled() && needs.hosts.result == 'success' && needs.native_runtimes.result == 'success') && needs.authority_windows_x64.result == 'success' }}
-    uses: ./.github/workflows/ci-windows-product-slice.yml
-    with:
-      authority_windows_x64: ${{ needs.authority_windows_x64.outputs.identity_json }}
-      source_sha: ${{ inputs.source_sha }}
-      original_event_name: ${{ inputs.original_event_name }}
-      force_hosted: ${{ fromJson(inputs.lane_plan_json).signals.runner_contract_required }}
-      runtime_matrix: ${{ toJson(fromJson(inputs.lane_plan_json).matrices.runtime_products) }}
-      max_parallel: ${{ fromJson(inputs.lane_plan_json).budgets.windows_max_parallel }}
-      fail_fast: ${{ inputs.original_event_name == 'pull_request' }}
-
-  platform_checks:
-    needs: [authority_windows_x64]
-    name: Windows checks
-    if: ${{ (fromJson(inputs.lane_plan_json).matrices.platform_checks[0] != null) && needs.authority_windows_x64.result == 'success' }}
-    uses: ./.github/workflows/ci-platform-checks-slice.yml
-    with:
-      authority_windows_x64: ${{ needs.authority_windows_x64.outputs.identity_json }}
-      source_sha: ${{ inputs.source_sha }}
-      original_event_name: ${{ inputs.original_event_name }}
-      force_hosted: ${{ fromJson(inputs.lane_plan_json).signals.runner_contract_required }}
-      platform_checks_matrix: ${{ toJson(fromJson(inputs.lane_plan_json).matrices.platform_checks) }}
-      profile: ${{ fromJson(inputs.lane_plan_json).profile }}
-      max_parallel: ${{ fromJson(inputs.lane_plan_json).budgets.windows_max_parallel }}
-      fail_fast: ${{ inputs.original_event_name == 'pull_request' }}
-
-  product_smoke:
-    name: Windows product smoke
-    needs: [runtime_product]
-    if: ${{ !cancelled() && needs.runtime_product.result == 'success' && fromJson(inputs.lane_plan_json).matrices.smoke[0] != null }}
-    uses: ./.github/workflows/ci-windows-product-smoke-slice.yml
-    with:
-      source_sha: ${{ inputs.source_sha }}
-      original_event_name: ${{ inputs.original_event_name }}
-      runtime_matrix: ${{ toJson(fromJson(inputs.lane_plan_json).matrices.runtime_products) }}
-      smoke_matrix: ${{ toJson(fromJson(inputs.lane_plan_json).matrices.smoke) }}
-      binary_target: target/release/mesh-llm.exe
-      timeout_minutes: 45
-
-  summary:
-    name: CI / Windows
-    needs: [ui_artifact, hosts, native_runtimes, runtime_product, platform_checks, product_smoke, authority_source, authority_linux_x64, authority_windows_x64]
-    if: ${{ !cancelled() }}
-    runs-on: ubuntu-24.04
-    permissions:
-      contents: read
-      checks: write
-    steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
-        with:
-          ref: ${{ github.event.repository.default_branch }}
-          persist-credentials: false
-      - uses: ./.github/actions/prepare-automation
-        with:
-          runner-profile: hosted-bare
-      - name: Validate planned Windows jobs
-        id: validate
-        continue-on-error: true
+      - name: Verify immutable source and fresh workspace
+        shell: pwsh
         env:
-          LANE_PLAN: ${{ inputs.lane_plan_json }}
-          NEEDS_RESULTS: ${{ toJson(needs) }}
-        run: '"$MESH_LLM_AUTOMATION_BIN" ci validate-lane --lane-plan "$LANE_PLAN" --needs "$NEEDS_RESULTS"'
-      - uses: ./.github/actions/report-ci-lane
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:SOURCE_SHA -cnotmatch '^[0-9a-f]{40}$') { throw 'malformed source' }
+          $actual = (& git rev-parse HEAD).Trim()
+          if ($LASTEXITCODE -ne 0 -or $actual -cne $env:SOURCE_SHA) { throw 'checkout source mismatch' }
+          if (Test-Path target) { throw 'diagnostic requires a fresh target directory' }
+          if (Test-Path .deps/llama-build/windows/build-stage-abi-cpu) { throw 'diagnostic requires a fresh native build directory' }
+          New-Item -ItemType Directory -Path diagnostic-evidence | Out-Null
+          @("source_sha=$actual", "workflow_ref=$env:GITHUB_WORKFLOW_REF", "run_id=$env:GITHUB_RUN_ID") | Set-Content diagnostic-evidence/source.txt
+          Get-PSDrive -PSProvider FileSystem | Format-Table
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
-          lane_name: CI / Windows
-          lane_result: ${{ steps.validate.outcome == 'success' && 'success' || 'failure' }}
-          lane_check_id: ${{ inputs.lane_check_id }}
-          overall_check_id: ${{ inputs.overall_check_id }}
-          expected_lane_checks: ${{ inputs.expected_lane_checks }}
-          source_sha: ${{ inputs.source_sha }}
-          correlation_id: ${{ inputs.correlation_id }}
-          plan_digest: ${{ inputs.plan_digest }}
-      - name: Enforce Windows result
-        if: ${{ steps.validate.outcome != 'success' }}
-        run: exit 1
+          node-version: 24.20.0
+          package-manager-cache: false
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86
+        with:
+          version: 10.34.5
+          run_install: false
+      - name: Prepare candidate-native Windows automation
+        uses: ./.github/actions/prepare-automation
+        with:
+          runner-profile: image
+          allow_depot_remote_cache: 'false'
+          allow_native_github_cache: 'false'
+      - name: Verify local compiler cache and tool metadata
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:SCCACHE_GHA_ENABLED -eq 'true' -or $env:SCCACHE_WEBDAV_ENDPOINT -or $env:SCCACHE_WEBDAV_TOKEN -or $env:DEPOT_CACHE_TOKEN) { throw 'remote cache not allowed' }
+          just --version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          rustc --version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $pnpmVersion = (& pnpm --version).Trim()
+          if ($LASTEXITCODE -ne 0 -or $pnpmVersion -cne "10.34.5") { throw "pinned pnpm prerequisite unavailable" }
+          cmake --version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Run exact required native Windows contracts
+        timeout-minutes: 25
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          if ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture -ne [System.Runtime.InteropServices.Architecture]::X64) { throw "native Windows x64 contracts require x64" }
+          Get-Command just -ErrorAction Stop | Out-Null
+          $justVersion = @(just --version)
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $justVersion | Write-Host
+          if ($justVersion.Count -ne 1 -or $justVersion[0] -notmatch '^just ([0-9]+\.[0-9]+\.[0-9]+)$') { throw "cannot determine installed Just version" }
+          if ([version]$Matches[1] -lt [version]'1.32.0') { throw "recipe-local script requires Just >=1.32" }
+          Get-Command sccache -ErrorAction Stop | Out-Null
+          just with-lld cargo build --locked -p xtask --bin xtask --example migration_generator_fixture
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $expected = @(
+            "ci_validation::windows_runtime::tests::native::native_windows_build_directory_tracks_prepared_pin_and_explicit_override",
+            "ci_validation::windows_runtime::tests::native::native_windows_bash_paths_preserve_repo_case_and_distinguish_git_bash_from_wsl",
+            "ci_validation::windows_runtime::tests::native::native_windows_relative_llama_override_is_bound_to_repo_not_process_directory",
+            "ci_validation::windows_runtime::tests::installer::native::native_windows_installer_interactive_runs_setup_and_warns_for_legacy_flavor",
+            "ci_validation::windows_runtime::tests::installer::native::native_windows_installer_noninteractive_prints_setup_and_installs_runtime",
+            "ci_validation::windows_runtime::tests::installer::native::native_windows_installer_no_setup_prints_command_without_executing_setup",
+            "ci_validation::windows_runtime::tests::installer::native::native_windows_installer_tampered_host_digest_preserves_existing_install",
+            "ci_validation::windows_runtime::tests::installer::native::native_windows_installer_removes_stale_host_imports_when_bundle_omits_it",
+            "ci_validation::windows_runtime::tests::installer::native::native_windows_installer_failed_runtime_replacement_restores_previous_product",
+            "ci_validation::windows_runtime::tests::installer::native::native_windows_installer_stale_cleanup_failure_keeps_committed_new_product",
+            "ci_validation::windows_runtime::tests::installer::consumer::native_windows_consumer_interactive_runs_setup_and_warns_for_legacy_flavor",
+            "ci_validation::windows_runtime::tests::installer::consumer::native_windows_consumer_noninteractive_prints_setup_and_installs_runtime",
+            "ci_validation::windows_runtime::tests::installer::consumer::native_windows_consumer_no_setup_prints_command_without_executing_setup",
+            "ci_validation::windows_runtime::tests::installer::consumer::native_windows_consumer_tampered_host_digest_preserves_existing_install",
+            "ci_validation::windows_runtime::tests::installer::consumer::native_windows_consumer_removes_stale_host_imports_when_bundle_omits_it",
+            "ci_validation::windows_runtime::tests::installer::consumer::native_windows_consumer_failed_runtime_replacement_restores_previous_product",
+            "ci_validation::windows_runtime::tests::installer::consumer::native_windows_consumer_stale_cleanup_failure_keeps_committed_new_product",
+            "ci_validation::windows_runtime::tests::installer::consumer::native_windows_consumer_help_and_missing_cli_value_avoid_download_and_mutation"
+          )
+          $listing = @(just with-lld cargo test --locked -p xtask --bin xtask native_windows_ -- --list)
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $actual = @($listing | Where-Object { $_ -match '^(.+): test$' } | ForEach-Object { $_ -replace ': test$', '' })
+          if ($actual.Count -ne $expected.Count -or @(Compare-Object $expected $actual).Count -ne 0) { throw "native Windows contract selection differs from the 18 required methods" }
+          $listing | Write-Host
+          $result = @(just with-lld cargo test --locked -p xtask --bin xtask native_windows_ -- --test-threads=1)
+          if ($LASTEXITCODE -ne 0) { $result | Write-Host; exit $LASTEXITCODE }
+          $result | Write-Host
+          if (@($result | Where-Object { $_ -match '^test result: ok\. 18 passed; 0 failed; 0 ignored;' }).Count -ne 1) { throw "all eighteen native Windows methods must pass without ignored tests" }
+          $wrapper = "ci_validation::windows_runtime::tests::with_lld::windows_with_lld_propagates_native_failure_and_success"
+          $wrapperListing = @(just with-lld cargo test --locked -p xtask --bin xtask $wrapper -- --exact --list)
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (@($wrapperListing | Where-Object { $_ -eq "$($wrapper): test" }).Count -ne 1) { throw "Windows wrapper regression method was not selected" }
+          $wrapperResult = @(just with-lld cargo test --locked -p xtask --bin xtask $wrapper -- --exact --test-threads=1)
+          if ($LASTEXITCODE -ne 0) { $wrapperResult | Write-Host; exit $LASTEXITCODE }
+          $wrapperResult | Write-Host
+          if (@($wrapperResult | Where-Object { $_ -match '^test result: ok\. 1 passed; 0 failed; 0 ignored;' }).Count -ne 1) { throw "native Windows wrapper regression must pass without an ignored test" }
+      - name: Build backend-neutral Windows release host with console
+        timeout-minutes: 35
+        id: host
+        uses: ./.github/actions/prepare-windows-host-input
+        with:
+          profile: release
+          skip_ui: 'false'
+          commit: ${{ inputs.source_sha }}
+      - name: Build and verify Windows CPU runtime
+        timeout-minutes: 45
+        id: runtime
+        uses: ./.github/actions/prepare-native-runtime-input
+        with:
+          backend: cpu
+          target: x86_64-pc-windows-msvc
+          output_dir: runtime-input
+      - name: Compose actual CPU product and check readiness
+        timeout-minutes: 10
+        id: product
+        uses: ./.github/actions/compose-product-input
+        with:
+          host_input_dir: host-input
+          runtime_input_dir: runtime-input
+          output_dir: product-input
+          backend: cpu
+          binary_name: mesh-llm.exe
+          readiness_smoke: 'true'
+      - name: Retain composed product for the existing consumer
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: diagnostic-product-windows-amd64-cpu
+          path: ${{ steps.product.outputs.archive_path }}
+          if-no-files-found: error
+          retention-days: 1
+      - name: Actual pinned Laya CPU startup and golden reads
+        timeout-minutes: 20
+        uses: ./.github/actions/run-laya-product-smoke
+        with:
+          artifact_name: diagnostic-product-windows-amd64-cpu
+          artifact_path: ci-artifacts/diagnostic-laya-windows-cpu
+          staged_binary_path: diagnostic-smoke/mesh-llm.exe
+          expected_backend: cpu
+          device: CPU
+          model_cadence: manual
+          save_model_cache: 'false'
+          startup_timeout_seconds: '300'
+          read_timeout_seconds: '300'
+      - name: Retain bounded diagnostic evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: diagnostic-windows-cpu-evidence
+          path: |
+            diagnostic-evidence/
+            host-input/*.json
+            host-input/*.sha256
+            runtime-input/*/manifest.json
+            runtime-input/*.sha256
+            product-input/**/manifest.json
+            product-input/**/host-imports.json
+            ${{ runner.temp }}/laya-parity.json
+          if-no-files-found: warn
+          retention-days: 1
