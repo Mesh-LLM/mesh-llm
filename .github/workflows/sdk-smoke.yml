@@ -24,7 +24,7 @@ jobs:
       SCCACHE_GHA_ENABLED: 'false'
       LLAMA_STAGE_USE_SCCACHE: '0'
       MESH_LLM_POSTHOG_KEY: ''
-    if: ${{ github.repository == 'Mesh-LLM/mesh-llm' && github.ref == 'refs/heads/codex/xtask-migration-diagnostic-20261006' && inputs.source_sha == '6415b13fe81e2cf56b6614aaaad5467294fa5f1f' }}
+    if: ${{ github.repository == 'Mesh-LLM/mesh-llm' && github.ref == 'refs/heads/codex/xtask-migration-diagnostic-20261006' && inputs.source_sha == '420c8a9c7cf689cdde8e3e1ae7a9e3f248fcec14' }}
     runs-on: windows-2022
     timeout-minutes: 30
     outputs:
@@ -115,7 +115,7 @@ jobs:
       LLAMA_STAGE_USE_SCCACHE: '0'
       MESH_LLM_POSTHOG_KEY: ''
     needs: producer_windows_x64
-    if: ${{ needs.producer_windows_x64.result == 'success' && github.repository == 'Mesh-LLM/mesh-llm' && github.ref == 'refs/heads/codex/xtask-migration-diagnostic-20261006' && inputs.source_sha == '6415b13fe81e2cf56b6614aaaad5467294fa5f1f' }}
+    if: ${{ needs.producer_windows_x64.result == 'success' && github.repository == 'Mesh-LLM/mesh-llm' && github.ref == 'refs/heads/codex/xtask-migration-diagnostic-20261006' && inputs.source_sha == '420c8a9c7cf689cdde8e3e1ae7a9e3f248fcec14' }}
     runs-on: windows-2022
     timeout-minutes: 10
     defaults:
@@ -137,7 +137,7 @@ jobs:
           printf 'source_sha=%s\nprotected_ancestry_qualified=false\npre_checkout=true\n' "$SOURCE_SHA" > "$RUNNER_TEMP/automation-diagnostic-evidence/context.txt"
       - name: Admit immutable native bytes and execute actual PR audit before checkout
         timeout-minutes: 5
-        uses: Mesh-LLM/mesh-llm/.github/actions/audit-pr-authority-verified@6415b13fe81e2cf56b6614aaaad5467294fa5f1f
+        uses: Mesh-LLM/mesh-llm/.github/actions/audit-pr-authority-verified@420c8a9c7cf689cdde8e3e1ae7a9e3f248fcec14
         with:
           source_sha: ${{ needs.producer_windows_x64.outputs.source_sha }}
           artifact_id: ${{ needs.producer_windows_x64.outputs.artifact_id }}
