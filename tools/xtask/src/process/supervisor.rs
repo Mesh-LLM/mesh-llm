@@ -50,7 +50,8 @@ pub(super) fn supervise_owned(
         limits,
         cancellation,
         (files, super::RawCaptureOptions::default()),
-        monitor,
+        None,
+        |child, output, started, _projection| monitor(child, output, started),
     )
     .map(|report| report.process)
 }
@@ -66,7 +67,8 @@ pub fn supervise_raw(
         limits,
         cancellation,
         (OutputFiles::default(), options),
-        |child, output, started| {
+        None,
+        |child, output, started, _projection| {
             let (outcome, ready, observation) =
                 monitor_readiness(child, output, (limits, cancellation, started));
             (outcome, ready, observation.map(StopObservation::Line))
@@ -90,7 +92,8 @@ pub fn supervise_raw_with_files(
         limits,
         cancellation,
         (files, options),
-        |child, output, started| {
+        None,
+        |child, output, started, _projection| {
             let (outcome, ready, observation) =
                 monitor_readiness(child, output, (limits, cancellation, started));
             (outcome, ready, observation.map(StopObservation::Line))
@@ -98,15 +101,17 @@ pub fn supervise_raw_with_files(
     )
 }
 
-fn supervise_configured(
+pub(super) fn supervise_configured(
     spec: &ProcessSpec,
     limits: &Limits,
     cancellation: &Cancellation,
     capture: (OutputFiles, super::RawCaptureOptions),
+    mut projection: super::projection::Callback<'_>,
     monitor: impl FnOnce(
         &mut platform::OwnedChild,
         &mut Output,
         Instant,
+        &mut super::projection::Callback<'_>,
     ) -> (Outcome, bool, Option<StopObservation>),
 ) -> Result<super::RawProcessReport, Failure> {
     let (files, raw) = capture;
@@ -145,9 +150,9 @@ fn supervise_configured(
     };
     output.stdout.enable_raw(raw.stdout);
     output.stderr.enable_raw(raw.stderr);
-    let (outcome, ready, observation) = monitor(&mut child, &mut output, started);
+    let (outcome, ready, observation) = monitor(&mut child, &mut output, started, &mut projection);
     let drain = || {
-        output.poll(&Readiness::None);
+        super::projection::poll(&mut output, &mut projection);
     };
     let (cleanup, status, readiness_stop) = match observation {
         Some(observation) => {
@@ -161,7 +166,7 @@ fn supervise_configured(
     };
     let until = Instant::now() + limits.forced_shutdown;
     while !output.stdout.eof() || !output.stderr.eof() {
-        output.poll(&Readiness::None);
+        super::projection::poll(&mut output, &mut projection);
         if output
             .failure
             .as_ref()

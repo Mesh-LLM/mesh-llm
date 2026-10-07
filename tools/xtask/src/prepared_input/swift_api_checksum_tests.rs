@@ -111,8 +111,8 @@ fn real_bounded_process_reads_disassembly_and_checks_actual_tool_arguments() {
         Duration::from_secs(2),
     )
     .unwrap();
-    assert_eq!(actual, ARM64);
-    assert_eq!(constants(&actual).unwrap().len(), 2);
+    assert_eq!(actual, constants(ARM64).unwrap());
+    assert_eq!(actual.len(), 2);
     let swift = dir.path().join("generated.swift");
     fs::write(&swift, SWIFT).unwrap();
     assert_eq!(
@@ -189,6 +189,126 @@ fn partial_native_map_and_malformed_body_never_publish_a_partial_update() {
             Duration::from_secs(2),
         );
         assert!(result.is_err());
+        assert_eq!(fs::read_to_string(&swift).unwrap(), SWIFT);
+        assert!(!fs::read_dir(dir.path()).unwrap().any(|entry| {
+            entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .ends_with(".tmp")
+        }));
+    }
+}
+
+#[test]
+fn typed_projection_keeps_bounded_facts_after_more_than_old_raw_capture_limit() {
+    let mut facts = disassembly::Constants::new();
+    let unrelated = vec![b'a'; 8190];
+    // Over128MiB processed, never assembled into a complete output buffer.
+    for _ in 0..17000 {
+        facts.observe(process::ObservedLine {
+            stream: process::Stream::Stdout,
+            bytes: &unrelated,
+            ending: process::LineEnding::Lf,
+        });
+    }
+    for line in ARM64.lines() {
+        facts.observe(process::ObservedLine {
+            stream: process::Stream::Stdout,
+            bytes: line.as_bytes(),
+            ending: process::LineEnding::Lf,
+        });
+    }
+    assert_eq!(facts.finish().unwrap(), constants(ARM64).unwrap());
+}
+
+#[test]
+fn bounded_fact_count_and_invalid_symbol_refuse_without_raw_diagnostics() {
+    let mut facts = disassembly::Constants::new();
+    for index in 0..4097 {
+        for line in [
+            format!("_{SYMBOL}func_{index}:"),
+            "0000 mov w0, #42".into(),
+            "0004 ret".into(),
+        ] {
+            facts.observe(process::ObservedLine {
+                stream: process::Stream::Stdout,
+                bytes: line.as_bytes(),
+                ending: process::LineEnding::Lf,
+            });
+        }
+    }
+    assert!(facts.finish().unwrap_err().to_string().contains("too many"));
+    let mut invalid = disassembly::Constants::new();
+    let private = format!("_{SYMBOL}credential-private-content!:");
+    invalid.observe(process::ObservedLine {
+        stream: process::Stream::Stdout,
+        bytes: private.as_bytes(),
+        ending: process::LineEnding::Lf,
+    });
+    let error = invalid.finish().unwrap_err().to_string();
+    assert_eq!(error, "invalid UniFFI checksum symbol");
+    assert!(!error.contains("credential-private"));
+}
+
+#[test]
+#[cfg(unix)]
+fn actual_streaming_tool_surpasses_old_cap_then_admits_final_constants() {
+    let dir = tempfile::tempdir().unwrap();
+    let library = dir.path().join("native.a");
+    let swift = dir.path().join("generated.swift");
+    fs::write(&library, b"archive").unwrap();
+    fs::write(&swift, SWIFT).unwrap();
+    let tool = fixture_tool(
+        dir.path(),
+        &format!(
+            "/usr/bin/awk 'BEGIN {{ for (i=0;i<17000;i++) printf \"%08190d\\n\", 0 }}'\ncat <<'ASSEMBLY'\n{ARM64}ASSEMBLY"
+        ),
+    );
+    assert_eq!(
+        synchronize(
+            &tool,
+            &library,
+            &swift,
+            &process::Cancellation::default(),
+            Duration::from_secs(30)
+        )
+        .unwrap(),
+        2
+    );
+    assert_eq!(
+        fs::read_to_string(&swift).unwrap(),
+        rewrite(SWIFT, &constants(ARM64).unwrap()).unwrap().0
+    );
+}
+
+#[test]
+#[cfg(unix)]
+fn successful_facts_do_not_override_late_failure_oversized_line_or_timeout() {
+    let dir = tempfile::tempdir().unwrap();
+    let library = dir.path().join("native.a");
+    let swift = dir.path().join("generated.swift");
+    fs::write(&library, b"archive").unwrap();
+    for suffix in [
+        "exit 7",
+        "/usr/bin/awk 'BEGIN { printf \"%09000d\\n\", 0 }'",
+        "sleep 10",
+    ] {
+        fs::write(&swift, SWIFT).unwrap();
+        let tool = fixture_tool(
+            dir.path(),
+            &format!("cat <<'ASSEMBLY'\n{ARM64}ASSEMBLY\n{suffix}"),
+        );
+        assert!(
+            synchronize(
+                &tool,
+                &library,
+                &swift,
+                &process::Cancellation::default(),
+                Duration::from_millis(150)
+            )
+            .is_err()
+        );
         assert_eq!(fs::read_to_string(&swift).unwrap(), SWIFT);
         assert!(!fs::read_dir(dir.path()).unwrap().any(|entry| {
             entry

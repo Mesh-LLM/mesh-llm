@@ -131,6 +131,15 @@ pub(super) fn environment(root: &Path) -> BTreeMap<std::ffi::OsString, Value> {
         "MESH_WINDOWS_INSTALL_FIXTURE_CALLS".into(),
         Value::Public(root.join("calls.txt").into_os_string()),
     );
+    let core_modules = system_powershell().parent().unwrap().join("Modules");
+    assert!(
+        core_modules.is_dir(),
+        "Windows PowerShell core modules required"
+    );
+    values.insert(
+        "PSModulePath".into(),
+        Value::Public(core_modules.into_os_string()),
+    );
     values
 }
 fn run(case: Case, prepare_existing: impl FnOnce(&Path)) -> Installed {

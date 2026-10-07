@@ -33,6 +33,7 @@ mod probe_tests;
 #[cfg(test)]
 #[path = "probe_tick_tests.rs"]
 mod probe_tick_tests;
+mod projection;
 mod raw;
 mod report;
 pub mod retained;
@@ -48,6 +49,7 @@ pub use line::{LineEnding, LineMatcher, ObservedLine};
 pub use probe::{
     Probe, ProbeContext, ProbeDecision, ProbeReport, ReadinessProbe, supervise_with_probe,
 };
+pub use projection::supervise_projected;
 pub use raw::{RawBytes, RawCaptureOptions, RawProcessReport};
 pub use report::{
     Cleanup, Failure, GracefulRequest, Outcome, ProcessReport, ReadinessObservation, ReadinessStop,

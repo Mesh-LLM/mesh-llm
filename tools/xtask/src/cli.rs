@@ -155,6 +155,8 @@ pub(crate) enum CliCommand<'a> {
     SplitProbe(&'a [String]),
     RuntimeCacheInstall(&'a [String]),
     SdkFixture(&'a [String]),
+    #[cfg(unix)]
+    SdkCompat(&'a [String]),
     LoggingConsole(&'a [String]),
     UiBuild(&'a [String]),
     StartupRecovery(&'a [String]),
@@ -456,6 +458,10 @@ impl<'a> Cli<'a> {
             }
             [domain, scope, rest @ ..] if domain == "automation" && scope == "logging-console" => {
                 CliCommand::LoggingConsole(rest)
+            }
+            #[cfg(unix)]
+            [domain, scope, rest @ ..] if domain == "automation" && scope == "sdk-compat" => {
+                CliCommand::SdkCompat(rest)
             }
             [domain, scope, rest @ ..] if domain == "automation" && scope == "sdk-fixture" => {
                 CliCommand::SdkFixture(rest)
