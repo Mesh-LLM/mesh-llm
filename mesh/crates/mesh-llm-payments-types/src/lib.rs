@@ -9,6 +9,7 @@ pub mod contract;
 pub mod control;
 #[cfg(feature = "engine")]
 pub mod engine;
+pub mod funding;
 pub mod intent;
 pub mod lifetimes;
 pub mod pricing;
