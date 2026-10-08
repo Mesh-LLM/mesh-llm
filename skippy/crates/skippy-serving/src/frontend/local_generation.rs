@@ -1,5 +1,6 @@
 mod cache_deadline;
 mod decode_step;
+mod dflash_decode;
 mod linear_decode;
 mod native_mtp_decode;
 mod receipt_lifecycle;
