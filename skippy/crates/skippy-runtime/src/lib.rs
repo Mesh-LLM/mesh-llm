@@ -25,6 +25,7 @@ mod runtime_events;
 mod session;
 mod stage_planning;
 mod types;
+mod vocabulary;
 
 pub use activation::{
     DecodeFrameBatchRequest, IterationBatchPhase, IterationBatchRequest, PartialBatchExecution,
