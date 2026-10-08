@@ -8,8 +8,14 @@ use mesh_llm_wallet::invoice::Invoice;
 
 use crate::{pricing::Pricing, terms::RequestTerms};
 
+/// Paid-stream upgrade, versioned in the path. Bump whenever any serde frame shape changes
+/// incompatibly: v2 dropped `Pricing::minimum_invoice_msat` (#2310), which v1
+/// peers require. Mismatched peers are refused explicitly instead of failing
+/// to parse a frame mid-exchange.
 pub const HTTP_UPGRADE: &[u8] =
-    b"POST /mesh/payment/v1 HTTP/1.1\r\nHost: mesh\r\nContent-Length: 0\r\n\r\n";
+    b"POST /mesh/payment/v2 HTTP/1.1\r\nHost: mesh\r\nContent-Length: 0\r\n\r\n";
+/// Request line used by v1 (<= v0.78.x) payers; refused with an upgrade hint.
+pub const LEGACY_V1_UPGRADE_PREFIX: &[u8] = b"POST /mesh/payment/v1 HTTP/1.1\r\n";
 pub const MAX_FRAME_BYTES: usize = 4 * 1024 * 1024;
 
 #[derive(Debug, Serialize, Deserialize)]
