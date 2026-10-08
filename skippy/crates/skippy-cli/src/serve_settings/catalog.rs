@@ -600,7 +600,7 @@ pub const OPTIONS: &[OptionSpec] = &[
         "speculative",
         "spec.requested_strategy",
         Kind::Text,
-        "Speculation: auto, disabled, draft-model, native-mtp, ngram, mtp-ngram",
+        "Speculation: auto, disabled, draft-model, native-mtp, ngram, mtp-ngram, dflash",
     ),
     option(
         "draft-device",
@@ -664,6 +664,13 @@ pub const OPTIONS: &[OptionSpec] = &[
         "spec.native_mtp.max_draft_tokens",
         Kind::Unsigned,
         "Maximum native MTP proposal length",
+    ),
+    option(
+        "dflash-max-tokens",
+        "speculative",
+        "spec.dflash.max_draft_tokens",
+        Kind::Unsigned,
+        "Maximum DFlash draft tokens per block; defaults to the trained block",
     ),
     option(
         "mtp-min-tokens",

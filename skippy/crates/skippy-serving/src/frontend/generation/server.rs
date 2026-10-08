@@ -13,6 +13,7 @@ use crate::frontend::generation::InferenceBackendMode;
 use crate::frontend::generation::PersistentStageLanePool;
 use crate::frontend::generation::PhaseTimer;
 use crate::frontend::generation::StageOpenAiBackend;
+use crate::frontend::generation::attach_dflash_draft;
 use crate::frontend::generation::attach_native_mtp_draft_model;
 use crate::frontend::generation::ensure_generation_concurrency_fits_lanes;
 use crate::frontend::generation::open_draft_runner;
@@ -254,6 +255,11 @@ fn embedded_openai_backend_with_scheduler(
     {
         bail!("embedded OpenAI serving is only supported on stage 0");
     }
+    if args.speculative.dflash.is_some()
+        && (args.native_mtp_enabled || args.draft_model_path.is_some())
+    {
+        bail!("a DFlash draft cannot be combined with native MTP or a separate draft model");
+    }
     attach_native_mtp_draft_model(
         args.native_mtp_draft_model_path.as_deref(),
         &args.runtime,
@@ -261,6 +267,27 @@ fn embedded_openai_backend_with_scheduler(
         args.draft_n_gpu_layers,
         &args.speculative,
     )?;
+    if let Some(info) = attach_dflash_draft(
+        &args.runtime,
+        &args.config,
+        args.draft_n_gpu_layers,
+        &args.speculative,
+    )? {
+        let mut attrs = lifecycle_attrs(&args.config);
+        attrs.insert(
+            "llama_stage.dflash.variant".to_string(),
+            serde_json::json!(info.variant.as_str()),
+        );
+        attrs.insert(
+            "llama_stage.dflash.block_size".to_string(),
+            serde_json::json!(info.block_size),
+        );
+        attrs.insert(
+            "llama_stage.dflash.max_draft_tokens".to_string(),
+            serde_json::json!(info.max_draft_tokens),
+        );
+        args.telemetry.emit("stage.openai_dflash_attached", attrs);
+    }
     let draft = open_draft_runner(
         args.draft_model_path.as_deref(),
         &args.config,

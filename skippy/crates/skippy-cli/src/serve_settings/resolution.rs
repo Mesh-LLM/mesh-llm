@@ -3,7 +3,11 @@
 use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
 use skippy_protocol::{StageConfig, StageKvCacheMode};
-use skippy_serving::{SpeculativeDecodeConfig, settings::ServingTuning};
+use std::path::Path;
+
+use skippy_serving::{
+    DFLASH_STRATEGY, DFlashProposalConfig, SpeculativeDecodeConfig, settings::ServingTuning,
+};
 
 use super::{
     ServeSettings,
@@ -161,7 +165,12 @@ impl ServeSettings {
         tuning.n_threads_batch = self.number("threads-batch")?;
         tuning.pipeline_decode_groups = self.number("pipeline-decode-groups")?;
         tuning.continuous_batching = self.boolean("continuous-batching")?;
-        if self.text("speculative-strategy") != Some("disabled") {
+        // A DFlash draft is carried by the speculative plan, not the
+        // separate draft-model runner.
+        if !matches!(
+            self.text("speculative-strategy"),
+            Some("disabled" | DFLASH_STRATEGY)
+        ) {
             tuning.draft_model_path = self.text("draft-model-path").map(Into::into);
             tuning.native_mtp_draft_model_path =
                 self.text("native-mtp-draft-model-path").map(Into::into);
@@ -176,9 +185,16 @@ impl ServeSettings {
 
     pub fn speculative(
         &self,
-        base: SpeculativeDecodeConfig,
-        has_draft: bool,
+        mut base: SpeculativeDecodeConfig,
+        draft_model_path: Option<&Path>,
     ) -> Result<SpeculativeDecodeConfig> {
+        // An explicit --draft-model-path overrides a loaded DFlash plan's draft,
+        // as individual flags override loaded plan fields. `draft_model_path`
+        // may instead be a discovered default, which must not replace it.
+        if let (Some(path), Some(dflash)) = (self.text("draft-model-path"), base.dflash.as_mut()) {
+            dflash.draft_model_path = path.into();
+        }
+        let has_draft = draft_model_path.is_some();
         if !self.has_speculative_overrides() {
             base.validate()?;
             return Ok(base);
@@ -192,6 +208,17 @@ impl ServeSettings {
                 if spec.target.starts_with("spec.ngram.") && value["ngram"].is_null() {
                     value["ngram"] = json!({"kind":"cache", "min_ngram":2, "max_ngram":4, "max_proposal_tokens":4});
                 }
+                if spec.target.starts_with("spec.dflash.") && value["dflash"].is_null() {
+                    // DFlash is opt-in: a tuning flag must not turn it on.
+                    anyhow::ensure!(
+                        self.text("speculative-strategy") == Some(DFLASH_STRATEGY),
+                        "--{} requires --speculative-strategy dflash",
+                        spec.name
+                    );
+                    let path =
+                        draft_model_path.context("DFlash settings require --draft-model-path")?;
+                    value["dflash"] = json!({"draft_model_path": path});
+                }
                 set(&mut value, &spec.target[5..], setting.clone());
             }
         }
@@ -200,7 +227,10 @@ impl ServeSettings {
         let strategy = self.text("speculative-strategy").unwrap_or("auto");
         let explicit_mtp = self.boolean("native-mtp")?;
         anyhow::ensure!(
-            !matches!(strategy, "disabled" | "draft-model" | "ngram") || explicit_mtp != Some(true),
+            !matches!(
+                strategy,
+                "disabled" | "draft-model" | "ngram" | DFLASH_STRATEGY
+            ) || explicit_mtp != Some(true),
             "--native-mtp=true conflicts with speculative strategy {strategy}"
         );
         anyhow::ensure!(
@@ -221,6 +251,7 @@ impl ServeSettings {
                     plan.native_mtp.enabled = false;
                     plan.ngram = None;
                     plan.extension = None;
+                    plan.dflash = None;
                 }
                 "draft-model" => {
                     anyhow::ensure!(
@@ -230,15 +261,18 @@ impl ServeSettings {
                     plan.native_mtp.enabled = false;
                     plan.ngram = None;
                     plan.extension = None;
+                    plan.dflash = None;
                 }
                 "native-mtp" => {
                     plan.native_mtp.enabled = true;
                     plan.ngram = None;
                     plan.extension = None;
+                    plan.dflash = None;
                 }
                 "ngram" => {
                     plan.native_mtp.enabled = false;
                     plan.extension = None;
+                    plan.dflash = None;
                     anyhow::ensure!(
                         plan.ngram.is_some(),
                         "ngram strategy requires N-gram bounds or --ngram-kind"
@@ -246,16 +280,35 @@ impl ServeSettings {
                 }
                 "mtp-ngram" => {
                     plan.native_mtp.enabled = true;
+                    plan.dflash = None;
                     anyhow::ensure!(
                         plan.ngram.is_some() && plan.extension.is_some(),
                         "mtp-ngram requires N-gram and extension settings"
                     );
+                }
+                DFLASH_STRATEGY => {
+                    plan.native_mtp.enabled = false;
+                    plan.ngram = None;
+                    plan.extension = None;
+                    // A loaded DFlash plan keeps its draft (an explicit
+                    // --draft-model-path was already applied to it); a
+                    // discovered default path must not replace it.
+                    if plan.dflash.is_none() {
+                        let path = draft_model_path
+                            .context("dflash strategy requires --draft-model-path")?;
+                        plan.dflash = Some(DFlashProposalConfig {
+                            draft_model_path: path.to_path_buf(),
+                            max_draft_tokens: None,
+                        });
+                    }
                 }
                 other => bail!("unsupported speculative strategy {other}"),
             }
         }
         plan.effective_strategy = if self.text("speculative-strategy") == Some("disabled") {
             "disabled"
+        } else if plan.dflash.is_some() {
+            DFLASH_STRATEGY
         } else if plan.extension.is_some() {
             "mtp-ngram"
         } else if plan.ngram.is_some() {
