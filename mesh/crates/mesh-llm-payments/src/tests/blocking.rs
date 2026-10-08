@@ -7,10 +7,7 @@ const PEER: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789ab
 const OTHER: &str = "0123456789abffffffffffffffffffffffffffffffffffffffffffffffffffff";
 
 fn pricing() -> Pricing {
-    Pricing {
-        input_msat_per_million: 1000,
-        output_msat_per_million: 1000,
-    }
+    Pricing::exact(1000, 1000)
 }
 
 async fn unblock(service: &PaymentService, peer: &str) -> Result<Forgiven> {

@@ -130,10 +130,10 @@ fn control_command(command: &WalletCommand) -> Result<ControlCommand> {
                     value: if *free {
                         None
                     } else {
-                        Some(Pricing {
-                            input_msat_per_million: input_msat_per_million.unwrap_or(500),
-                            output_msat_per_million: output_msat_per_million.unwrap_or(1500),
-                        })
+                        Some(Pricing::exact(
+                            input_msat_per_million.unwrap_or(500),
+                            output_msat_per_million.unwrap_or(1500),
+                        ))
                     },
                 }
             } else {

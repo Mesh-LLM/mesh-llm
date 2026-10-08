@@ -28,9 +28,12 @@ pub(super) fn decode(offers: &[LightningOffer]) -> Option<BTreeMap<String, Prici
         if offer.model.is_empty() || offer.model.len() > 1024 {
             return None;
         }
+        // Keep a legacy (v0.78.x) seller's advertised invoice quantum so the
+        // buyer's request frame and charges match what that seller enforces.
+        // Current sellers always advertise 1; an absent field reads as 0.
         let price = Pricing {
-            input_msat_per_million: offer.input_msat_per_million,
-            output_msat_per_million: offer.output_msat_per_million,
+            minimum_invoice_msat: offer.minimum_invoice_msat.max(1),
+            ..Pricing::exact(offer.input_msat_per_million, offer.output_msat_per_million)
         };
         price.validate().ok()?;
         if result.insert(offer.model.clone(), price).is_some() {
@@ -55,10 +58,16 @@ mod tests {
         let decoded = decode(std::slice::from_ref(&offer)).unwrap();
         assert_eq!(encode(&decoded), vec![offer.clone()]);
         assert!(decode(&[offer.clone(), offer.clone()]).is_none());
-        // The deprecated minimum is ignored on read, even a padded one.
+        // A legacy seller's minimum is kept on read so requests echo it,
+        // but this node never re-advertises anything but 1.
         let mut padded = offer.clone();
         padded.minimum_invoice_msat = 1000;
-        assert_eq!(decode(&[padded]).unwrap(), decoded);
+        let legacy = decode(std::slice::from_ref(&padded)).unwrap();
+        assert_eq!(legacy["model"].minimum_invoice_msat, 1000);
+        assert_eq!(encode(&legacy), vec![offer.clone()]);
+        let mut absent = offer.clone();
+        absent.minimum_invoice_msat = 0;
+        assert_eq!(decode(&[absent]).unwrap(), decoded);
         let mut invalid = offer;
         invalid.input_msat_per_million = 0;
         assert!(decode(&[invalid]).is_none());

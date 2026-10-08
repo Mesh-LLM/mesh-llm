@@ -48,10 +48,7 @@ async fn expired_exchange() -> Result<()> {
             network: network.clone(),
         }),
     )?);
-    let price = Pricing {
-        input_msat_per_million: 1_000_000,
-        output_msat_per_million: 1_000_000,
-    };
+    let price = Pricing::exact(1_000_000, 1_000_000);
     service.ledger.set_pricing("test", Some(&price))?;
     let provider = Node::new_for_tests(NodeRole::Host { http_port: 0 }).await?;
     provider

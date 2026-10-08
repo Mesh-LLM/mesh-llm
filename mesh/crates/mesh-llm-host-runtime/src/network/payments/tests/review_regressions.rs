@@ -54,10 +54,7 @@ async fn fragmented_exchange() -> Result<()> {
     let node = Node::new_for_tests(NodeRole::Client).await?;
     let peer = node.endpoint.id();
     let id = uuid::Uuid::new_v4().to_string();
-    let price = Pricing {
-        input_msat_per_million: 1_000_000,
-        output_msat_per_million: 1_000_000,
-    };
+    let price = Pricing::exact(1_000_000, 1_000_000);
     let invoice = seller.create_invoice(Some(40), 3600).await?;
     let input = Frame::InputInvoice {
         terms: mesh_llm_payments::ledger::RequestTerms {

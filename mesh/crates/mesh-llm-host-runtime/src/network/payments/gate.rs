@@ -384,10 +384,7 @@ mod tests {
             request_id: uuid::Uuid::new_v4().to_string(),
             peer: "peer".into(),
             model: "test".into(),
-            pricing: Pricing {
-                input_msat_per_million: 1,
-                output_msat_per_million: 1,
-            },
+            pricing: Pricing::exact(1, 1),
             max_tokens: Some(64),
             events,
             runtime: tokio::runtime::Handle::current(),

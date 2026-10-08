@@ -26,10 +26,7 @@ fn unpaid(request_id: &str, invoice: Invoice) -> Receivable {
 }
 
 fn pricing() -> Pricing {
-    Pricing {
-        input_msat_per_million: 1000,
-        output_msat_per_million: 1000,
-    }
+    Pricing::exact(1000, 1000)
 }
 
 #[tokio::test]

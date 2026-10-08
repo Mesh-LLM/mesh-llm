@@ -38,13 +38,9 @@ async fn remote_request(legacy: bool) -> Result<()> {
     provider.set_serving_models(vec!["test".into()]).await;
     let mut announcement =
         provider.build_local_announcement(provider.snapshot_local_announcement_data().await);
-    announcement.lightning_offers.insert(
-        "test".into(),
-        Pricing {
-            input_msat_per_million: 1_000_000,
-            output_msat_per_million: 1_000_000,
-        },
-    );
+    announcement
+        .lightning_offers
+        .insert("test".into(), Pricing::exact(1_000_000, 1_000_000));
     assert!(
         relay
             .add_peer_after_direct_requirements_validated(

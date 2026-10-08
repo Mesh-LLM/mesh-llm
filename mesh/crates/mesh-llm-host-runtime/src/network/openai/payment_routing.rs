@@ -228,13 +228,9 @@ mod tests {
             .map_err(|_| anyhow::anyhow!("already set"))?;
         let mut announcement =
             seller.build_local_announcement(seller.snapshot_local_announcement_data().await);
-        announcement.lightning_offers.insert(
-            "test".into(),
-            Pricing {
-                input_msat_per_million: 1,
-                output_msat_per_million: 1,
-            },
-        );
+        announcement
+            .lightning_offers
+            .insert("test".into(), Pricing::exact(1, 1));
         node.add_peer_after_direct_requirements_validated(
             seller.id(),
             seller.endpoint.addr(),
@@ -341,10 +337,7 @@ mod tests {
             strikes.record(&bad.to_string(), now);
         }
         strikes.save(&node.config_state.lock().await.payment_directory())?;
-        let price = Pricing {
-            input_msat_per_million: 1,
-            output_msat_per_million: 1,
-        };
+        let price = Pricing::exact(1, 1);
         let mut prices = std::collections::HashMap::from([(bad, price.clone()), (good, price)]);
         let mut candidates = RankedCandidates {
             ordered: vec![

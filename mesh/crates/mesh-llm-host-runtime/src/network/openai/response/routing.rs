@@ -991,10 +991,7 @@ mod tests {
         );
         let prices = std::collections::BTreeMap::from([(
             MODEL.to_string(),
-            mesh_llm_payments_types::pricing::Pricing {
-                input_msat_per_million: 1,
-                output_msat_per_million: 1,
-            },
+            mesh_llm_payments_types::pricing::Pricing::exact(1, 1),
         )]);
 
         assert!(priced_model_requires_payment(Some(MODEL), &prices));

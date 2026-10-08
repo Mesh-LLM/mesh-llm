@@ -182,10 +182,7 @@ async fn advertised_provider(payer: &Node) -> Result<(Node, Pricing)> {
     let provider = Node::new_for_tests(NodeRole::Client).await?;
     provider.set_models(vec!["test".into()]).await;
     provider.set_serving_models(vec!["test".into()]).await;
-    let price = Pricing {
-        input_msat_per_million: 1_000_000,
-        output_msat_per_million: 1_000_000,
-    };
+    let price = Pricing::exact(1_000_000, 1_000_000);
     let mut announcement =
         provider.build_local_announcement(provider.snapshot_local_announcement_data().await);
     announcement
@@ -246,13 +243,9 @@ async fn failing_provider(
     let first = Node::new_for_tests(NodeRole::Client).await?;
     let mut announcement =
         first.build_local_announcement(first.snapshot_local_announcement_data().await);
-    announcement.lightning_offers.insert(
-        "test".into(),
-        Pricing {
-            input_msat_per_million: 500_000,
-            output_msat_per_million: 500_000,
-        },
-    );
+    announcement
+        .lightning_offers
+        .insert("test".into(), Pricing::exact(500_000, 500_000));
     payer
         .add_peer_after_direct_requirements_validated(
             first.id(),

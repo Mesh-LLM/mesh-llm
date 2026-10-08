@@ -95,6 +95,8 @@ impl Ledger {
             "model must be 1..1024 bytes"
         );
         if let Some(pricing) = pricing {
+            // Sellers never adopt a legacy invoice minimum (#2310).
+            let pricing = &pricing.clone().without_legacy_minimum();
             pricing.validate()?;
             let existing = self.pricing()?;
             ensure!(
@@ -116,7 +118,9 @@ impl Ledger {
             statement.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
         rows.map(|row| {
             let (model, value) = row?;
-            Ok((model, serde_json::from_str(&value)?))
+            // Rows written before #2310 may still carry a minimum; ignore it.
+            let pricing: Pricing = serde_json::from_str(&value)?;
+            Ok((model, pricing.without_legacy_minimum()))
         })
         .collect()
     }

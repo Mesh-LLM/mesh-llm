@@ -400,13 +400,7 @@ mod tests {
         let fake = Arc::new(FakePayments::default());
         *fake.pricing.lock().unwrap() = AdvertisedPricing {
             configured: true,
-            prices: BTreeMap::from([(
-                "external-model".to_owned(),
-                Pricing {
-                    input_msat_per_million: 7,
-                    output_msat_per_million: 9,
-                },
-            )]),
+            prices: BTreeMap::from([("external-model".to_owned(), Pricing::exact(7, 9))]),
         };
         let node = Node::new_for_tests(crate::mesh::NodeRole::Client)
             .await

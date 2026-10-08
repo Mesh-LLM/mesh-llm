@@ -150,10 +150,7 @@ impl PaymentService {
             peer: "wallet-send".into(),
             payee: Some(invoice.payee.clone()),
             model: "wallet-send".into(),
-            pricing: Pricing {
-                input_msat_per_million: 1,
-                output_msat_per_million: 1,
-            },
+            pricing: Pricing::exact(1, 1),
             input_tokens: 0,
             max_output_tokens: 1,
             max_total_msat: cap,

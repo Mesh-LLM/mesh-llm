@@ -258,15 +258,9 @@ async fn recovery_lapses_an_unpaid_pending_invoice_after_the_grace() -> Result<(
                 settled_at_ms: None,
             },
         );
-        service.ledger.begin_serving(
-            id,
-            "peer",
-            &crate::pricing::Pricing {
-                input_msat_per_million: 1000,
-                output_msat_per_million: 1000,
-            },
-            8,
-        )?;
+        service
+            .ledger
+            .begin_serving(id, "peer", &crate::pricing::Pricing::exact(1000, 1000), 8)?;
         service.ledger.record_receivable(&Receivable {
             request_id: id.into(),
             peer: "peer".into(),

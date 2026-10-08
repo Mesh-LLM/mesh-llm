@@ -35,10 +35,7 @@ mod tests {
             max_output_msat_per_million: 200,
             max_total_msat: 8000,
         };
-        let price = Pricing {
-            input_msat_per_million: 10,
-            output_msat_per_million: 20,
-        };
+        let price = Pricing::exact(10, 20);
         assert!(profile.restrict(&broad).permits(&price, 4000));
         assert!(!profile.restrict(&broad).permits(&price, 4001));
         assert!(!PaymentIntent::FreeOnly.restrict(&broad).permits(&price, 1));
@@ -52,10 +49,7 @@ mod tests {
     #[test]
     fn intent_defaults_free_and_caps_rates_and_fees_across_restart() -> Result<()> {
         let directory = tempfile::tempdir()?;
-        let price = Pricing {
-            input_msat_per_million: 10,
-            output_msat_per_million: 20,
-        };
+        let price = Pricing::exact(10, 20);
         {
             let ledger = Ledger::open(directory.path())?;
             assert!(!ledger.payment_intent()?.permits(&price, 4000));

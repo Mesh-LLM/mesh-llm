@@ -12,10 +12,7 @@ async fn sequential_admission_waits_for_terminal_output_payment() -> Result<()> 
             network: network.clone(),
         }),
     )?;
-    let price = Pricing {
-        input_msat_per_million: 1,
-        output_msat_per_million: 1,
-    };
+    let price = Pricing::exact(1, 1);
     service.ledger.begin_serving("first", "peer", &price, 8)?;
     let invoice = service
         .wallet()
@@ -80,10 +77,7 @@ async fn admission_deadline_preserves_unpaid_debt() -> Result<()> {
         directory.path(),
         Arc::new(TestWallet { owner: 1, network }),
     )?;
-    let price = Pricing {
-        input_msat_per_million: 1,
-        output_msat_per_million: 1,
-    };
+    let price = Pricing::exact(1, 1);
     service.ledger.begin_serving("first", "peer", &price, 8)?;
     let invoice = service
         .wallet()
@@ -128,10 +122,7 @@ async fn recovery_reports_pending_until_input_settles() -> Result<()> {
     let node = crate::mesh::Node::new_for_tests(crate::mesh::NodeRole::Client).await?;
     let payments = super::super::client::Payments::attach_for_tests(&node, service.clone()).await?;
     let id = uuid::Uuid::new_v4().to_string();
-    let price = Pricing {
-        input_msat_per_million: 1,
-        output_msat_per_million: 1,
-    };
+    let price = Pricing::exact(1, 1);
     service.ledger.begin_serving(&id, "peer", &price, 8)?;
     let invoice = service
         .wallet()

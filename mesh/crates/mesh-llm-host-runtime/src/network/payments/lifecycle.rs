@@ -359,10 +359,7 @@ mod tests {
             peer: "private-peer".into(),
             payee: Some("payee".into()),
             model: "model".into(),
-            pricing: mesh_llm_payments_types::pricing::Pricing {
-                input_msat_per_million: 1000,
-                output_msat_per_million: 2000,
-            },
+            pricing: mesh_llm_payments_types::pricing::Pricing::exact(1000, 2000),
             input_tokens: 10,
             max_output_tokens: 20,
             max_total_msat: 100,

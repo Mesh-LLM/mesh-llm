@@ -635,10 +635,7 @@ mod tests {
                 &mut client,
                 node.endpoint.id(),
                 raw.as_bytes(),
-                Pricing {
-                    input_msat_per_million: 1,
-                    output_msat_per_million: 1,
-                },
+                Pricing::exact(1, 1),
                 RouteAttemptLoggingContext {
                     exchange_id: None,
                     request_id: Default::default(),

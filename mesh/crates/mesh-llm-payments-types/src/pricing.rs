@@ -38,6 +38,22 @@ pub fn payment_cap_msat(amount_msat: u64) -> Result<u64> {
 pub struct Pricing {
     pub input_msat_per_million: u64,
     pub output_msat_per_million: u64,
+    /// Legacy v0.78.x invoice quantum, kept only for mixed-version wire
+    /// compatibility. Sellers before #2310 require this field in serde payment
+    /// frames, compare it for exact pricing equality, and round each nonzero
+    /// charge up to a multiple of it. Current sellers never configure it: they
+    /// always store and send 1, which leaves charges exact. A buyer carries the
+    /// value a legacy seller advertised (gossip field 4) so its request,
+    /// terms, and charge checks match that seller. Not user configurable.
+    #[serde(default = "legacy_minimum_default")]
+    pub minimum_invoice_msat: u64,
+}
+
+/// Value meaning "no legacy rounding"; also what pre-#2310 readers require.
+pub const LEGACY_MINIMUM_NONE: u64 = 1;
+
+fn legacy_minimum_default() -> u64 {
+    LEGACY_MINIMUM_NONE
 }
 
 impl Pricing {
@@ -46,7 +62,27 @@ impl Pricing {
             self.input_msat_per_million > 0 && self.output_msat_per_million > 0,
             "paid serving requires positive input and output rates"
         );
+        ensure!(
+            self.minimum_invoice_msat > 0,
+            "legacy minimum invoice must be positive"
+        );
         Ok(())
+    }
+
+    /// Exact rates with no legacy rounding.
+    pub fn exact(input_msat_per_million: u64, output_msat_per_million: u64) -> Self {
+        Self {
+            input_msat_per_million,
+            output_msat_per_million,
+            minimum_invoice_msat: LEGACY_MINIMUM_NONE,
+        }
+    }
+
+    /// The same rates without any legacy quantum, for prices this node sets
+    /// and serves itself.
+    pub fn without_legacy_minimum(mut self) -> Self {
+        self.minimum_invoice_msat = LEGACY_MINIMUM_NONE;
+        self
     }
 
     pub fn input_charge(&self, tokens: u64) -> Result<u64> {
@@ -74,8 +110,9 @@ impl Pricing {
         if tokens == 0 {
             return Ok(0);
         }
-        (u128::from(rate) * u128::from(tokens))
-            .div_ceil(1_000_000)
+        let charge = (u128::from(rate) * u128::from(tokens)).div_ceil(1_000_000);
+        let minimum = u128::from(self.minimum_invoice_msat);
+        (charge.div_ceil(minimum) * minimum)
             .try_into()
             .context("inference charge overflow")
     }
@@ -87,10 +124,7 @@ mod tests {
 
     #[test]
     fn fractional_rates_round_once_at_the_invoice_boundary() {
-        let rates = Pricing {
-            input_msat_per_million: 500,
-            output_msat_per_million: 1500,
-        };
+        let rates = Pricing::exact(500, 1500);
         assert_eq!(rates.input_charge(1000).unwrap(), 1);
         assert_eq!(rates.output_charge(1000).unwrap(), 2);
         assert_eq!(rates.output_charge(0).unwrap(), 0);
@@ -116,10 +150,7 @@ mod tests {
         assert_eq!(fee_allowance_msat(1_000_001).unwrap(), 10_001);
         assert_eq!(payment_cap_msat(1_000_000).unwrap(), 1_010_000);
         assert!(payment_cap_msat(u64::MAX).is_err());
-        let rates = Pricing {
-            input_msat_per_million: 1000,
-            output_msat_per_million: 1000,
-        };
+        let rates = Pricing::exact(1000, 1000);
         // 100 msat input + 100 msat output, each with the floor allowance.
         assert_eq!(
             rates.request_cap_msat(100, 100_000).unwrap(),
@@ -139,12 +170,53 @@ mod tests {
 
     #[test]
     fn charges_round_up_to_the_msat_and_overflow_is_enforced() {
-        let mut rates = Pricing {
-            input_msat_per_million: 1_000_001,
-            output_msat_per_million: 1,
-        };
+        let mut rates = Pricing::exact(1_000_001, 1);
         assert_eq!(rates.input_charge(1000).unwrap(), 1001);
         rates.input_msat_per_million = u64::MAX;
         assert!(rates.input_charge(u64::MAX).is_err());
+    }
+
+    #[test]
+    fn legacy_minimum_rounds_like_v0781_and_defaults_to_exact() {
+        let mut rates = Pricing::exact(500, 1500);
+        assert_eq!(rates.output_charge(1000).unwrap(), 2);
+        rates.minimum_invoice_msat = 1000;
+        assert_eq!(rates.input_charge(1000).unwrap(), 1000);
+        assert_eq!(rates.output_charge(1_000_000).unwrap(), 2000);
+        assert_eq!(rates.output_charge(0).unwrap(), 0);
+        rates.minimum_invoice_msat = 0;
+        assert!(rates.validate().is_err());
+        assert_eq!(
+            rates.clone().without_legacy_minimum(),
+            Pricing::exact(500, 1500)
+        );
+    }
+
+    /// Exactly the v0.78.1 `Pricing` shape: every field required.
+    #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+    #[serde(deny_unknown_fields)]
+    struct PricingV0781 {
+        input_msat_per_million: u64,
+        output_msat_per_million: u64,
+        minimum_invoice_msat: u64,
+    }
+
+    #[test]
+    fn pricing_json_interoperates_with_v0781() {
+        for minimum in [1, 1000] {
+            let mut current = Pricing::exact(500, 1500);
+            current.minimum_invoice_msat = minimum;
+            let json = serde_json::to_string(&current).unwrap();
+            let old: PricingV0781 = serde_json::from_str(&json).unwrap();
+            assert_eq!(old.minimum_invoice_msat, minimum);
+            let back: Pricing =
+                serde_json::from_str(&serde_json::to_string(&old).unwrap()).unwrap();
+            assert_eq!(back, current);
+        }
+        // #2310-era JSON without the field reads as exact pricing.
+        let bare: Pricing =
+            serde_json::from_str(r#"{"input_msat_per_million":5,"output_msat_per_million":6}"#)
+                .unwrap();
+        assert_eq!(bare, Pricing::exact(5, 6));
     }
 }

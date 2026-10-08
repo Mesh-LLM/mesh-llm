@@ -295,10 +295,7 @@ fn transitive_prices_propagate_until_direct_admission() {
     apply(&mut state, &ann);
     ann.lightning_offers.insert(
         "model".into(),
-        mesh_llm_payments_types::pricing::Pricing {
-            input_msat_per_million: 500,
-            output_msat_per_million: 1500,
-        },
+        mesh_llm_payments_types::pricing::Pricing::exact(500, 1500),
     );
     apply(&mut state, &ann);
     assert_eq!(

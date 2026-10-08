@@ -402,10 +402,7 @@ async fn output_invoice_expiry_is_chosen_by_the_host_not_the_wallet() -> Result<
     let dir = tempfile::tempdir()?;
     let wallet = Arc::new(MockWallet::default());
     let service = PaymentService::with_provider(dir.path(), wallet.clone())?;
-    let pricing = Pricing {
-        input_msat_per_million: 1000,
-        output_msat_per_million: 1000,
-    };
+    let pricing = Pricing::exact(1000, 1000);
     service
         .ledger
         .begin_serving("served", "peer", &pricing, 1000)?;

@@ -96,10 +96,7 @@ mod tests {
             if charged {
                 announcement.lightning_offers.insert(
                     "test".into(),
-                    mesh_llm_payments_types::pricing::Pricing {
-                        input_msat_per_million: 10,
-                        output_msat_per_million: 20,
-                    },
+                    mesh_llm_payments_types::pricing::Pricing::exact(10, 20),
                 );
             }
             node.add_peer_after_direct_requirements_validated(
@@ -183,10 +180,7 @@ mod tests {
             paid.build_local_announcement(paid.snapshot_local_announcement_data().await);
         announcement.lightning_offers.insert(
             "falcon-runtime".into(),
-            mesh_llm_payments_types::pricing::Pricing {
-                input_msat_per_million: 10,
-                output_msat_per_million: 20,
-            },
+            mesh_llm_payments_types::pricing::Pricing::exact(10, 20),
         );
         node.add_peer_after_direct_requirements_validated(
             paid.id(),
@@ -214,10 +208,7 @@ mod tests {
 
     #[test]
     fn same_model_can_describe_free_and_paid_providers() {
-        let price = mesh_llm_payments_types::pricing::Pricing {
-            input_msat_per_million: 10,
-            output_msat_per_million: 20,
-        };
+        let price = mesh_llm_payments_types::pricing::Pricing::exact(10, 20);
         let free = offer("free", None, Some(3), false);
         let paid = offer("paid", Some(&price), Some(1), false);
         assert_eq!(free["paid"], false);

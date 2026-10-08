@@ -394,10 +394,7 @@ async fn paid_exchange_on(
         mode: ApprovalMode::Automatic,
         daily_budget_msat: Some(20_000),
     })?;
-    let price = Pricing {
-        input_msat_per_million: 1_000_000,
-        output_msat_per_million: 1_000_000,
-    };
+    let price = Pricing::exact(1_000_000, 1_000_000);
     provider_service.ledger.set_pricing("test", Some(&price))?;
     let provider = Node::new_for_tests(NodeRole::Host { http_port: 0 }).await?;
     provider

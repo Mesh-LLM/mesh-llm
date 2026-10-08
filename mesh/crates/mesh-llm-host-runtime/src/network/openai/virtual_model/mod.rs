@@ -864,10 +864,7 @@ mod tests {
 
     #[cfg(feature = "payments")]
     fn replica_price() -> mesh_llm_payments_types::pricing::Pricing {
-        mesh_llm_payments_types::pricing::Pricing {
-            input_msat_per_million: 1,
-            output_msat_per_million: 1,
-        }
+        mesh_llm_payments_types::pricing::Pricing::exact(1, 1)
     }
 
     /// Advertise `replica` to `node` as an HTTP host serving `model`, priced

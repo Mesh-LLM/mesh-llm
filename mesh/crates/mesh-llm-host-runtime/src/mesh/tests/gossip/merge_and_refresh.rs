@@ -536,10 +536,7 @@ pub(crate) async fn direct_paid_offer_survives_unpriced_transitive_announcement(
     direct.version = Some("0.78.1".into());
     direct.hosted_models = Some(vec![model.into()]);
     direct.serving_models = vec![model.into()];
-    direct.lightning_offers.insert(model.into(), mesh_llm_payments_types::pricing::Pricing {
-        input_msat_per_million: 500,
-        output_msat_per_million: 1500,
-    });
+    direct.lightning_offers.insert(model.into(), mesh_llm_payments_types::pricing::Pricing::exact(500, 1500));
     node.add_peer(seller, addr.clone(), &direct, None).await;
     assert!(node.peer_payment_offer(seller, model).await.is_some());
     let direct_seen = {

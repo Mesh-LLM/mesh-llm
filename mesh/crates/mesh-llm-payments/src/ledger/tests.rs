@@ -9,10 +9,7 @@ fn terms(id: &str, cap: u64) -> RequestTerms {
         peer: "peer".into(),
         payee: None,
         model: "model".into(),
-        pricing: Pricing {
-            input_msat_per_million: 1000,
-            output_msat_per_million: 1000,
-        },
+        pricing: Pricing::exact(1000, 1000),
         input_tokens: 10,
         max_output_tokens: 10,
         max_total_msat: cap,
