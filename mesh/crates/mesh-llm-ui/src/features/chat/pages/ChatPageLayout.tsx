@@ -7,6 +7,7 @@ import { ChatLiveLoadingGhost } from '@/features/chat/components/ChatLiveLoading
 import { ChatSidebar } from '@/features/chat/components/ChatSidebar'
 import { Composer } from '@/features/chat/components/Composer'
 import { ChatTargetNotice } from '@/features/chat/components/ChatTargetNotice'
+import { cn } from '@/lib/cn'
 import { ModelSelect } from '@/features/chat/components/ModelSelect'
 import { TransparencyPane } from '@/features/chat/components/transparency/TransparencyPane'
 import type {
@@ -68,6 +69,9 @@ type ChatPageLayoutProps = {
   modelOptions: ModelSelectOption[]
   selectedModelValue: string
   onModelChange: (value: string) => void
+  freeOnly?: boolean
+  onFreeOnlyChange?: (value: boolean) => void
+  modelUnavailable?: boolean
   composerConversationId: string
   composerDraft: ConversationComposerDraft
   onComposerPromptChange: (value: string) => void
@@ -154,6 +158,9 @@ export function ChatPageLayout({
   modelOptions,
   selectedModelValue,
   onModelChange,
+  freeOnly = false,
+  onFreeOnlyChange,
+  modelUnavailable = false,
   composerConversationId,
   composerDraft,
   onComposerPromptChange,
@@ -221,6 +228,29 @@ export function ChatPageLayout({
           {modelLabel}
         </span>
         <ModelSelect options={modelOptions} value={selectedModelValue} onChange={onModelChange} />
+        {onFreeOnlyChange ? (
+          <button
+            type="button"
+            aria-pressed={freeOnly}
+            title={
+              freeOnly
+                ? 'Only free hosts will serve this chat'
+                : 'Paid hosts may serve this chat, within your spending policy'
+            }
+            onClick={() => onFreeOnlyChange(!freeOnly)}
+            className={cn(
+              'ui-control shrink-0 whitespace-nowrap rounded-[var(--radius)] border px-2.5 py-[5px] font-mono text-[length:var(--density-type-control)]',
+              freeOnly ? 'border-accent text-accent' : 'text-fg-dim'
+            )}
+          >
+            {freeOnly ? 'Free only' : 'Free + paid'}
+          </button>
+        ) : null}
+        {modelUnavailable ? (
+          <span role="status" className="shrink-0 whitespace-nowrap text-[length:var(--density-type-caption)] text-bad">
+            Picked model unavailable
+          </span>
+        ) : null}
       </div>
     </>
   )

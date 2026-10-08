@@ -19,6 +19,11 @@ import { useBooleanFeatureFlag } from '@/lib/feature-flags'
 import { CHAT_HARNESS } from '@/features/app-tabs/data'
 import { liveChatActionMetrics } from '@/features/chat/lib/live-chat-metrics'
 import { statusBackedChatModels } from '@/features/chat/lib/live-chat-models'
+import {
+  loadChatRoutingPreferences,
+  saveChatRoutingPreferences,
+  type ChatRoutingPreferences
+} from '@/features/chat/lib/chat-preferences'
 import type { ChatHarnessData, Conversation, ModelSelectOption, TransparencyMessage } from '@/features/app-tabs/types'
 import {
   type AttachmentProcessingStatus,
@@ -91,14 +96,34 @@ export function ChatPageContent({ data = CHAT_HARNESS, target, onClearTarget }: 
   const [systemPromptDialogOpen, setSystemPromptDialogOpen] = useState(false)
   const [systemPromptDraft, setSystemPromptDraft] = useState('')
   const [composerDrafts, setComposerDrafts] = useState<Record<string, ConversationComposerDraft>>({})
-  const [model, setModel] = useState('')
+  // The user's pick is intent, not availability: it is persisted and never silently swapped for
+  // Auto. A pick that isn't currently selectable stays selected, is shown as unavailable, and
+  // blocks sending until it returns or the user picks something else.
+  const [routingPreferences, setRoutingPreferences] = useState(loadChatRoutingPreferences)
+  const model = routingPreferences.model === AUTO_MODEL_VALUE ? '' : routingPreferences.model
+  const freeOnly = routingPreferences.freeOnly
+  const updateRoutingPreferences = useCallback((patch: Partial<ChatRoutingPreferences>) => {
+    setRoutingPreferences((current) => {
+      const next = { ...current, ...patch }
+      saveChatRoutingPreferences(next)
+      return next
+    })
+  }, [])
+  const setModel = useCallback(
+    (value: string) => updateRoutingPreferences({ model: value === AUTO_MODEL_VALUE ? '' : value }),
+    [updateRoutingPreferences]
+  )
+  const setFreeOnly = useCallback(
+    (value: boolean) => updateRoutingPreferences({ freeOnly: value }),
+    [updateRoutingPreferences]
+  )
   const modelExists = selectableModels.some((item) => item.name === model)
-  // selectedModelValue is what the dropdown shows (always a value
-  // present in `options`, so Radix Select can highlight it).
-  // activeModelName is what we send on the wire — the "Auto" pick
-  // routes through the MoA gateway via the virtual `mesh` model.
-  const selectedModelValue = modelExists ? model : AUTO_MODEL_VALUE
-  const activeModelName = selectedModelValue === AUTO_MODEL_VALUE ? AUTO_BACKEND_MODEL : selectedModelValue
+  const modelListKnown = !liveMode || modelsQuery.data != null || statusQuery.data != null
+  const pickedModelUnavailable = model !== '' && !modelExists
+  // selectedModelValue is what the dropdown shows; activeModelName is what we send on the wire —
+  // the "Auto" pick routes through the MoA gateway via the virtual `mesh` model.
+  const selectedModelValue = model === '' ? AUTO_MODEL_VALUE : model
+  const activeModelName = model === '' ? AUTO_BACKEND_MODEL : model
   const [queuedSubmissions, setQueuedSubmissions] = useState<QueuedSubmission[]>([])
   const [attachmentProcessingStatus, setAttachmentProcessingStatus] = useState<AttachmentProcessingStatus | null>(null)
   const [submittedAttachmentsByMessageId, setSubmittedAttachmentsByMessageId] = useState<
@@ -135,6 +160,7 @@ export function ChatPageContent({ data = CHAT_HARNESS, target, onClearTarget }: 
     setMessageModels,
     setSessionModel,
     setSessionTarget,
+    setSessionFreeOnly,
     setSystemPrompt,
     streamingConversationIds,
     systemPrompt,
@@ -207,6 +233,17 @@ export function ChatPageContent({ data = CHAT_HARNESS, target, onClearTarget }: 
   const options = useMemo<ModelSelectOption[]>(
     () => [
       AUTO_MODEL_OPTION,
+      ...(pickedModelUnavailable
+        ? [
+            {
+              value: model,
+              label: displayModels.find((item) => item.name === model)?.displayName || model,
+              status: modelListKnown
+                ? { label: 'Unavailable', tone: 'bad' as const }
+                : { label: 'Checking', tone: 'warn' as const }
+            }
+          ]
+        : []),
       ...selectableModels.map((item) => ({
         value: item.name,
         label: item.displayName || item.name,
@@ -214,7 +251,7 @@ export function ChatPageContent({ data = CHAT_HARNESS, target, onClearTarget }: 
         status: modelStatusBadge(item)
       }))
     ],
-    [selectableModels]
+    [displayModels, model, modelListKnown, pickedModelUnavailable, selectableModels]
   )
   const canRetry = hasLastUserTurn(activeMessages.map((message) => ({ role: message.messageRole })))
 
@@ -331,6 +368,10 @@ export function ChatPageContent({ data = CHAT_HARNESS, target, onClearTarget }: 
   useEffect(() => {
     setSessionModel(activeModelName)
   }, [activeModelName, setSessionModel])
+
+  useEffect(() => {
+    setSessionFreeOnly(freeOnly)
+  }, [freeOnly, setSessionFreeOnly])
 
   useEffect(() => {
     setSessionTarget(target ?? '')
@@ -486,7 +527,8 @@ export function ChatPageContent({ data = CHAT_HARNESS, target, onClearTarget }: 
       conversationId = activeConversationKey || chatConversationId,
       // Taken at submit and carried with the request: attachment processing below can take
       // a while, and a target change during it must not reroute this prompt.
-      targetSnapshot = target ?? ''
+      targetSnapshot = target ?? '',
+      freeOnlySnapshot = freeOnly
     ) => {
       const promptSnapshot = submission.prompt
       const attachmentsSnapshot = [...submission.attachments]
@@ -531,7 +573,7 @@ export function ChatPageContent({ data = CHAT_HARNESS, target, onClearTarget }: 
           }
         })
         setAttachmentProcessingStatus((current) => (current?.conversationId === ensuredConversationId ? null : current))
-        await chat.sendMessage(content, { body: { target: targetSnapshot } })
+        await chat.sendMessage(content, { body: { target: targetSnapshot, freeOnly: freeOnlySnapshot } })
       } catch (error) {
         setAttachmentProcessingStatus((current) => (current?.conversationId === ensuredConversationId ? null : current))
         const pendingSend = pendingSendRef.current
@@ -566,6 +608,7 @@ export function ChatPageContent({ data = CHAT_HARNESS, target, onClearTarget }: 
       clearComposerDraft,
       clearStoppedConversation,
       ensureConversation,
+      freeOnly,
       setComposerDraft,
       target,
       updateThread
@@ -772,6 +815,9 @@ export function ChatPageContent({ data = CHAT_HARNESS, target, onClearTarget }: 
       modelOptions={options}
       selectedModelValue={selectedModelValue}
       onModelChange={setModel}
+      freeOnly={freeOnly}
+      onFreeOnlyChange={setFreeOnly}
+      modelUnavailable={pickedModelUnavailable}
       composerConversationId={composerConversationId}
       composerDraft={composerDraft}
       onComposerPromptChange={updateComposerPrompt}
@@ -782,7 +828,7 @@ export function ChatPageContent({ data = CHAT_HARNESS, target, onClearTarget }: 
         updateComposerAttachments((current) => [...current, ...files])
       }}
       composerAttachmentCount={composerDraft.attachments.length}
-      composerDisabled={composerIsPreparingAttachments || !canChat}
+      composerDisabled={composerIsPreparingAttachments || !canChat || pickedModelUnavailable}
       composerIsPreparingAttachments={composerIsPreparingAttachments}
       attachmentProcessingStage={attachmentProcessingStatus?.stage}
       attachmentProcessingCount={attachmentProcessingStatus?.attachmentCount ?? 0}
