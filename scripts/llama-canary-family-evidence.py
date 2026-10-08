@@ -675,8 +675,16 @@ def classify_family_failure(path: Path, family: str, identity: dict, identity_sh
     memory = path.parent / "memory-admission.json"
     if memory.is_file():
         try:
-            if read(memory).get("status") == "failed":
-                return "infrastructure" if receipt.get("outcome") == "failure" else "contract"
+            memory_report = read(memory)
+            if memory_report.get("status") == "failed":
+                if receipt.get("outcome") != "failure":
+                    return "contract"
+                # The guard also records `failed` when the certification child
+                # exits nonzero. Only admission or monitoring errors are runner
+                # failures; completed child results still need lane inspection.
+                if ("error" in memory_report or "exit_code" not in memory_report
+                        or not results.is_file()):
+                    return "infrastructure"
         except (ValueError, OSError, TypeError):
             return "infrastructure"
     if not results.is_file():

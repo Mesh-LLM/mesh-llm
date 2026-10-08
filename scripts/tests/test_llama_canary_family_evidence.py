@@ -338,6 +338,29 @@ class FamilyEvidenceTests(unittest.TestCase):
                                     expected_state='infrastructure_retryable')
         self.assertEqual(payload['infrastructure_failures'], ['dense'])
 
+    def test_failed_certification_child_is_candidate_failure(self):
+        directory = self.evidence / 'dense'
+        E.write(directory / 'memory-admission.json', {'status': 'failed', 'exit_code': 1})
+        self.make_receipt('dense', 'failure')
+        self.assertEqual(E.classify_family_failure(directory / 'receipt.json', 'dense',
+                                                   self.identity, self.digest), 'candidate')
+
+    def test_failed_child_without_results_is_retried(self):
+        directory = self.evidence / 'dense'
+        (directory / 'results.jsonl').unlink()
+        E.write(directory / 'memory-admission.json', {'status': 'failed', 'exit_code': 1})
+        self.make_receipt('dense', 'failure')
+        self.assertEqual(E.classify_family_failure(directory / 'receipt.json', 'dense',
+                                                   self.identity, self.digest), 'infrastructure')
+
+    def test_memory_monitor_error_with_results_is_infrastructure_failure(self):
+        directory = self.evidence / 'dense'
+        E.write(directory / 'memory-admission.json',
+                {'status': 'failed', 'error': 'host available memory crossed reserve'})
+        self.make_receipt('dense', 'failure')
+        self.assertEqual(E.classify_family_failure(directory / 'receipt.json', 'dense',
+                                                   self.identity, self.digest), 'infrastructure')
+
     def test_memory_admission_with_corrupt_results_remains_contract_failure(self):
         directory = self.evidence / 'dense'
         E.write(directory / 'memory-admission.json', {'status': 'failed'})
@@ -425,7 +448,8 @@ class FamilyEvidenceTests(unittest.TestCase):
             self.aggregate(feedback=previous, family_result='failure')
         retry = self.root / 'retry'
         shutil.copytree(self.evidence / 'hybrid', retry / 'hybrid')
-        E.write(retry / 'hybrid/memory-admission.json', {'status': 'failed'})
+        E.write(retry / 'hybrid/memory-admission.json',
+                {'status': 'failed', 'error': 'host available memory crossed reserve'})
         self.make_receipt_at(retry / 'hybrid', 'hybrid', 'failure')
         output = self.root / 'reconcile-output'
         with patch.dict(os.environ, GITHUB_OUTPUT=str(output)):
