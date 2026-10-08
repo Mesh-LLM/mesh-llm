@@ -1,4 +1,7 @@
-use std::{fs, time::Duration};
+use std::{
+    fs, thread,
+    time::{Duration, Instant},
+};
 
 use anyhow::{Context, Result, bail, ensure};
 use reqwest::blocking::Client;
@@ -24,8 +27,9 @@ pub fn run(args: OpenAiCacheReuseArgs) -> Result<()> {
     let url = format!("{}/chat/completions", args.base_url.trim_end_matches('/'));
     let first_turn = vec![json!({"role": "user", "content": prompt})];
     let seed = complete(&client, &url, &args.model, &first_turn, args.max_tokens)?;
-    let repeat = complete(&client, &url, &args.model, &first_turn, args.max_tokens)?;
-    require_hit("repeat", &repeat)?;
+    // Exact-state records are published by a background worker. The first
+    // repeat can race that publication even when the cache is healthy.
+    let repeat = complete_until_hit(&client, &url, &args.model, &first_turn, args.max_tokens)?;
 
     let mut growing_turn = first_turn;
     growing_turn.push(json!({"role": "assistant", "content": seed.content}));
@@ -103,4 +107,22 @@ fn require_hit(label: &str, completion: &Completion) -> Result<()> {
         completion.prompt_tokens
     );
     Ok(())
+}
+
+fn complete_until_hit(
+    client: &Client,
+    url: &str,
+    model: &str,
+    messages: &[Value],
+    max_tokens: u32,
+) -> Result<Completion> {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let completion = complete(client, url, model, messages, max_tokens)?;
+        if completion.cached_tokens > 0 || Instant::now() >= deadline {
+            require_hit("repeat", &completion)?;
+            return Ok(completion);
+        }
+        thread::sleep(Duration::from_millis(250));
+    }
 }
