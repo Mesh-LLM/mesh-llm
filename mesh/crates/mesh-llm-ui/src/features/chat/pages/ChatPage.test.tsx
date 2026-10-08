@@ -7,6 +7,7 @@ import {
   adaptModelsToSummary,
   chatLayout,
   loadChatState,
+  paidRoutingMock,
   renderChatPage,
   scrollIntoViewMock,
   setMessageListDimensions,
@@ -193,6 +194,7 @@ describe('ChatPage', () => {
   })
 
   it('keeps a persisted model pick that is unavailable instead of switching to auto', async () => {
+    paidRoutingMock.allowed = true
     window.localStorage.setItem(
       'mesh-llm.chat.routing-preferences',
       JSON.stringify({ model: 'gone-model', freeOnly: true })
@@ -208,8 +210,20 @@ describe('ChatPage', () => {
     window.localStorage.removeItem('mesh-llm.chat.routing-preferences')
   })
 
+  it('shows plain Free and no toggle when the node cannot pay', () => {
+    paidRoutingMock.allowed = false
+    window.localStorage.setItem('mesh-llm.chat.routing-preferences', JSON.stringify({ model: '', freeOnly: true }))
+
+    renderChatPage()
+
+    expect(screen.getByText('Free')).toBeVisible()
+    expect(screen.queryByRole('button', { name: /Free only|Free \+ paid/ })).not.toBeInTheDocument()
+    window.localStorage.removeItem('mesh-llm.chat.routing-preferences')
+  })
+
   it('persists the free-only toggle', async () => {
     const user = userEvent.setup()
+    paidRoutingMock.allowed = true
     window.localStorage.removeItem('mesh-llm.chat.routing-preferences')
 
     renderChatPage()

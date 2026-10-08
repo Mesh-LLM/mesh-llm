@@ -184,6 +184,13 @@ vi.mock('@/features/network/api/use-models-query', () => ({
   useModelsQuery: vi.fn()
 }))
 
+const paidRoutingMockState = vi.hoisted(() => ({ allowed: false }))
+export const paidRoutingMock = paidRoutingMockState
+
+vi.mock('@/features/chat/api/use-paid-routing-query', () => ({
+  usePaidRoutingQuery: () => ({ data: paidRoutingMockState.allowed })
+}))
+
 vi.mock('@/features/network/api/use-status-query', () => ({
   useStatusQuery: vi.fn()
 }))
@@ -508,6 +515,7 @@ beforeEach(() => {
   installPointerCaptureShim()
   installImageFallbackShim()
   installObjectUrlShim()
+  paidRoutingMock.allowed = false
   window.localStorage.removeItem(APP_STORAGE_KEYS.featureFlagOverrides)
   window.localStorage.removeItem(APP_STORAGE_KEYS.chatSystemPrompt)
   vi.mocked(loadChatState).mockResolvedValue(undefined)

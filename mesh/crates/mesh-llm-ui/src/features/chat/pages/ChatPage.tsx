@@ -11,6 +11,7 @@ import {
   extractPdfTextFromFile,
   isBrowserVisionModelLoaded
 } from '@/features/chat/api/attachment-preprocessing'
+import { usePaidRoutingQuery } from '@/features/chat/api/use-paid-routing-query'
 import { useModelsQuery } from '@/features/network/api/use-models-query'
 import { useStatusQuery } from '@/features/network/api/use-status-query'
 import { adaptModelsToSummary } from '@/features/network/api/models-adapter'
@@ -101,7 +102,10 @@ export function ChatPageContent({ data = CHAT_HARNESS, target, onClearTarget }: 
   // blocks sending until it returns or the user picks something else.
   const [routingPreferences, setRoutingPreferences] = useState(loadChatRoutingPreferences)
   const model = routingPreferences.model === AUTO_MODEL_VALUE ? '' : routingPreferences.model
-  const freeOnly = routingPreferences.freeOnly
+  // Without a wallet that may pay, everything is already free: no toggle, nothing extra sent.
+  const paidRoutingQuery = usePaidRoutingQuery({ enabled: liveMode })
+  const paidRoutingAllowed = paidRoutingQuery.data === true
+  const freeOnly = paidRoutingAllowed && routingPreferences.freeOnly
   const updateRoutingPreferences = useCallback((patch: Partial<ChatRoutingPreferences>) => {
     setRoutingPreferences((current) => {
       const next = { ...current, ...patch }
@@ -816,7 +820,7 @@ export function ChatPageContent({ data = CHAT_HARNESS, target, onClearTarget }: 
       selectedModelValue={selectedModelValue}
       onModelChange={setModel}
       freeOnly={freeOnly}
-      onFreeOnlyChange={setFreeOnly}
+      onFreeOnlyChange={paidRoutingAllowed ? setFreeOnly : undefined}
       modelUnavailable={pickedModelUnavailable}
       composerConversationId={composerConversationId}
       composerDraft={composerDraft}

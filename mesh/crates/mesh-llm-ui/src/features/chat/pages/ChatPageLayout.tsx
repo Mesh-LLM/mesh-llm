@@ -245,7 +245,11 @@ export function ChatPageLayout({
           >
             {freeOnly ? 'Free only' : 'Free + paid'}
           </button>
-        ) : null}
+        ) : (
+          <span className="shrink-0 whitespace-nowrap font-mono text-[length:var(--density-type-caption)] text-fg-dim">
+            Free
+          </span>
+        )}
         {modelUnavailable ? (
           <span role="status" className="shrink-0 whitespace-nowrap text-[length:var(--density-type-caption)] text-bad">
             Picked model unavailable
