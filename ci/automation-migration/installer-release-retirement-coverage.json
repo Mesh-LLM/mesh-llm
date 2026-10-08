@@ -1,0 +1,220 @@
+{
+  "schema_version": 1,
+  "status": "MODULE_ONLY_RETIRED_LOCAL_CONTRACTS_QUALIFIED_REQUIRED_INDEPENDENT_GATES_RETAINED",
+  "legacy_sources": [
+    {
+      "path": "scripts/tests/test_install_sccache.py",
+      "sha256": "a937d6a9b6b73fe722232cea6660797c6f0a4223e42e2160c330207bbf378654",
+      "mode": 420,
+      "preserved_preimage": "deletion-preimages/scripts/tests/test_install_sccache.py"
+    },
+    {
+      "path": "scripts/tests/test_release_script.py",
+      "sha256": "b504f7f20c7a29958c2af7225ae9095f510c1338f48ca3fe1739457163c68ebe",
+      "mode": 420,
+      "preserved_preimage": "deletion-preimages/scripts/tests/test_release_script.py"
+    }
+  ],
+  "original_method_count": 6,
+  "installer_methods": [
+    {
+      "original_method": "test_invalid_cache_is_replaced_before_atomic_promotion",
+      "lines": [
+        86,
+        107
+      ],
+      "original_body_sha256": "35cc8a655816b976b16436159486533d3e549316d5c2f0e3fefe98e500a97d58",
+      "owner": "tools/xtask/tests/migration_lifecycle/sccache_installer.rs",
+      "owning_group": "sccache_installer_corrupt_cache_recovers_then_valid_cache_is_offline",
+      "meaning": "Actual copied unchanged installer refreshes malformed/mismatched cached checksum using locally produced executable tar.gz; exact cache/checksum bytes, executable mode/version, no cache/extraction scratch; second run curl would fail but is never called",
+      "status": "ROOT_FOCUSED_PASS_RETIREMENT_POSTIMAGE_PENDING",
+      "previous_author_status": "AUTHORED_UNRUN",
+      "root_focused_log": ".omo/evidence/resume-20261002/installer-release-proof-installer.log"
+    },
+    {
+      "original_method": "test_failed_refresh_leaves_no_partial_cache_entry",
+      "lines": [
+        109,
+        123
+      ],
+      "original_body_sha256": "8631b91932a3511addc84c4f1de4ea3ed271b868d8d5268d943cbf20d2ff8b1a",
+      "owner": "tools/xtask/tests/migration_lifecycle/sccache_installer.rs",
+      "owning_group": "sccache_installer_failed_refresh_discards_corrupt_cache_preserves_unrelated_and_installed",
+      "meaning": "Actual partial archive failure, partial checksum failure and valid-format digest mismatch discard corrupt cache, preserve unrelated entry and old installed bytes, clean both download scratch files and do not run installed executable",
+      "status": "ROOT_FOCUSED_PASS_RETIREMENT_POSTIMAGE_PENDING",
+      "previous_author_status": "AUTHORED_UNRUN",
+      "root_focused_log": ".omo/evidence/resume-20261002/installer-release-proof-installer.log"
+    }
+  ],
+  "release_methods": [
+    {
+      "original_method": "test_workflow_run_id_is_extracted_from_dispatch_url",
+      "line": 23,
+      "body_sha256": "5f26cde76b0263c10aafd22735803d61b93849a19a8648e76ed01bf028791f7a",
+      "candidate_causal_owners": [
+        "release_script_url_extraction_and_unknown_output_use_actual_helper"
+      ],
+      "qualification": "ROOT_FOCUSED_PASS_RETIREMENT_POSTIMAGE_PENDING",
+      "meaning": "Actual unchanged sourced/called release policy; no source-substring proof is used as dispatch causality.",
+      "previous_author_qualification": "AUTHORED_UNRUN",
+      "root_focused_log": ".omo/evidence/resume-20261002/installer-release-proof-release.log"
+    },
+    {
+      "original_method": "test_unrecognized_dispatch_output_has_no_run_id",
+      "line": 33,
+      "body_sha256": "85c6d055b5d2056ba6952340c56d587946b4cde96ca22086f0b55a7dd751d983",
+      "candidate_causal_owners": [
+        "release_script_url_extraction_and_unknown_output_use_actual_helper"
+      ],
+      "qualification": "ROOT_FOCUSED_PASS_RETIREMENT_POSTIMAGE_PENDING",
+      "meaning": "Actual unchanged sourced/called release policy; no source-substring proof is used as dispatch causality.",
+      "previous_author_qualification": "AUTHORED_UNRUN",
+      "root_focused_log": ".omo/evidence/resume-20261002/installer-release-proof-release.log"
+    },
+    {
+      "original_method": "test_sha_correlated_lookup_is_the_fallback",
+      "line": 43,
+      "body_sha256": "29c0ea9de17a1dfb4d7051430623b3cb3d7132ef1e444bbe679e43ab904c7da7",
+      "candidate_causal_owners": [
+        "release_script_fallback_preserves_filter_arguments_and_selects_latest_returned_row",
+        "release_script_actual_main_routes_url_or_correlated_fallback_to_numeric_watch"
+      ],
+      "qualification": "ROOT_FOCUSED_PASS_RETIREMENT_POSTIMAGE_PENDING",
+      "meaning": "Actual unchanged sourced/called release policy; no source-substring proof is used as dispatch causality.",
+      "previous_author_qualification": "AUTHORED_UNRUN",
+      "root_focused_log": ".omo/evidence/resume-20261002/installer-release-proof-release.log"
+    },
+    {
+      "original_method": "test_main_keeps_run_url_and_numeric_id_separate",
+      "line": 72,
+      "body_sha256": "b3d6584bea7ba7d6041d147c428cd0dffe1573bae4581bd7d2e87dd335bca6cf",
+      "candidate_causal_owners": [
+        "release_script_actual_main_routes_url_or_correlated_fallback_to_numeric_watch",
+        "release_script_dispatch_lookup_and_watch_failure_never_report_release_success"
+      ],
+      "qualification": "ROOT_FOCUSED_PASS_RETIREMENT_POSTIMAGE_PENDING",
+      "meaning": "Actual unchanged sourced/called release policy; no source-substring proof is used as dispatch causality.",
+      "previous_author_qualification": "AUTHORED_UNRUN",
+      "root_focused_log": ".omo/evidence/resume-20261002/installer-release-proof-release.log"
+    }
+  ],
+  "source_witnesses": [
+    {
+      "path": "scripts/install-sccache.sh",
+      "sha256": "fee24f3c5d1b551d031a0ef16bf71ea1da6b888cb31dc468f89ab28075c224c0",
+      "mode": 493
+    },
+    {
+      "path": "scripts/release.sh",
+      "sha256": "9ad84a7ba163ac5500269c2dbdf9e79992eedeecd9328a71f43a6f2f69a62715",
+      "mode": 493
+    },
+    {
+      "path": "tools/xtask/tests/migration_lifecycle/sccache_installer.rs",
+      "sha256": "c70a2168334eb13240c235fbaaedcbc1ffe49223c569f476590a130ebd7ff823",
+      "mode": 420
+    },
+    {
+      "path": "tools/xtask/tests/migration_lifecycle/sccache_installer/curl.sh",
+      "sha256": "20a3ef4ce4b3348b00d5403bb6acb64a89a95375f6ac44d4ae94803811e6eb14",
+      "mode": 420
+    },
+    {
+      "path": "tools/xtask/tests/migration_lifecycle/release_script.rs",
+      "sha256": "892525cf69fbea40df16cf6bd814344ed3bd2f8f259fc42ece32a7267a5b3ece",
+      "mode": 420
+    },
+    {
+      "path": "tools/xtask/tests/migration_lifecycle/release_script/tool.sh",
+      "sha256": "02967194eef2ce90010922e4fb46473c4b2111ed2236072c650c02b638b18cfb",
+      "mode": 420
+    }
+  ],
+  "focused_receipts": {
+    "status": "PASS_FOCUSED",
+    "receipts": [
+      {
+        "name": "fmt",
+        "status": "PASS",
+        "exit_code": 0,
+        "log": ".omo/evidence/resume-20261002/installer-release-proof-fmt.log",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "name": "installer",
+        "status": "PASS",
+        "exit_code": 0,
+        "log": ".omo/evidence/resume-20261002/installer-release-proof-installer.log",
+        "sha256": "7131dcd2ad02b19c13f194c1ac09c52f1fa19d5c4c49e504f8cb1cce5cb538f4",
+        "passed": 2,
+        "expected": 2
+      },
+      {
+        "name": "release",
+        "status": "PASS",
+        "exit_code": 0,
+        "log": ".omo/evidence/resume-20261002/installer-release-proof-release.log",
+        "sha256": "c7222383da50687529268fd623af1ac37cec2a9931d28b7b31750e2faf605fa9",
+        "passed": 4,
+        "expected": 4
+      },
+      {
+        "name": "clippy",
+        "status": "PASS",
+        "exit_code": 0,
+        "log": ".omo/evidence/resume-20261002/installer-release-proof-clippy.log",
+        "sha256": "cf0099c543cc2b83d96db962c2696ac777caf646faf510e884f0e93512a2c712"
+      }
+    ],
+    "aggregate_pending": true
+  },
+  "required_rust_integration_target": "migration_lifecycle",
+  "required_rust_target_already_selected": true,
+  "current_quality_targets": 87,
+  "original_tests_retained_until_activation": false,
+  "production_helpers_retained": [
+    "scripts/install-sccache.sh",
+    "scripts/release.sh"
+  ],
+  "limits": "Copied unchanged Unix policies with finite inert commands and actual local archives; no Docker, installation outside scratch, GitHub provider, release, native/model/SDK/platform acceptance qualification.",
+  "previous_status": "SOURCE_AND_FOCUSED_INTENTS_QUALIFIED_RETIREMENT_NOT_APPLIED",
+  "activation_status": "APPLIED_AND_LOCAL_POSTIMAGE_QUALIFIED",
+  "predecessor_checkpoint": "6df48bea566f8969eebee1380551ef30ffeb3d5e",
+  "projected_counts": {
+    "python_paths_before": 156,
+    "python_paths_after": 154,
+    "core_modules_before": 83,
+    "core_modules_after": 81,
+    "current_quality_targets_unchanged": 87
+  },
+  "previous_postimage_status": "ROOT_PREPARED_RETIREMENT_POSTIMAGE_UNQUALIFIED",
+  "root_aggregate_qualification": {
+    "status": "PASS_LOCAL_POSTIMAGE",
+    "full": {
+      "receipt": ".omo/evidence/resume-20261002/installer-release-controller-six-module-aggregate-full-receipt.json",
+      "log_sha256": "cb008cdf72cbe792a9cb9a3e90a74c0bff97e907f23189c835ffbb317477f1da",
+      "targets": 109,
+      "passed": 4112,
+      "failed": 0,
+      "ignored": 2
+    },
+    "normal": {
+      "receipt": ".omo/evidence/resume-20261002/installer-release-controller-six-module-aggregate-normal-receipt.json",
+      "log_sha256": "053a99ce8f78c6689076ec550a37589926a4a776f73af583fa80a62f06ae492b",
+      "targets": 88,
+      "passed": 4026,
+      "failed": 0,
+      "ignored": 2
+    },
+    "legacy": {
+      "run": 1074,
+      "passed": 1060,
+      "failed": 0,
+      "skipped": 14,
+      "seconds": 367.695
+    },
+    "focused_receipts": ".omo/evidence/resume-20261002/installer-release-controller-six-module-selection-corrected-focused-receipts.json",
+    "limits": "Finite actual copied-script/controller scalar/parsed graph/native Just contracts. Production helpers and shared Just reader retained; real hosted/provider/platform/native/model/SDK gates remain independent and unverified."
+  },
+  "previous_activation_status": "NOT_APPLIED"
+}

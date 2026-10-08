@@ -1,0 +1,73 @@
+{
+  "schema": 1,
+  "status": "Exact single-method retirement integrated; restored retained import qualified by 2 passing legacy tests. Owning focused package and selected-battery proof preserved.",
+  "legacy_path": "scripts/tests/test_llama_canary_handoff_contract.py",
+  "legacy_class": "HandoffContractTests",
+  "legacy_method": "test_pack_restore_and_source_owned_workload_verification",
+  "legacy_preimage_sha256": "4dfe328aab46662ac1814cdf14625a458beb2f8d10a4793ff47650e8930becd3",
+  "payload_sha256": "ed4ffbb80783fc8c692fd9eac90ff10289697ddc046690c162bf292cb82e9fc1",
+  "owners": [
+    {
+      "path": "tools/xtask/src/automation/canary_receipts/package_closure/pipeline_tests.rs",
+      "sha256": "ff8c844f491e1b782a2d12263579fa372794e2cb0b9e68128c6e459bd6ec95a8"
+    },
+    {
+      "path": "tools/xtask/tests/migration_lifecycle/canary_controller_battery.rs",
+      "sha256": "e6af971e20e949234fc01cc22b5811f21617f5289d4186cafb2458ae00f1d530"
+    }
+  ],
+  "proof": [
+    {
+      "receipt": ".omo/evidence/resume-20261002/checkpoint-last-guards.log",
+      "line": 536,
+      "owner": "automation::canary_package_closure::pipeline_tests::full_pack_restore_consumes_immutable_plan_and_real_closure_bytes_without_execution",
+      "result": "recorded ok; owning unit1321passed0failed",
+      "intent": "Fresh cloned selected source restored from exact immutable admitted plan+identity, candidate revision/prepared source/executable closure/typed workload producer checks, no binary execution; repeated populated restore rejects."
+    },
+    {
+      "receipt": ".omo/evidence/resume-20261002/canary-controller-battery-corrected.log",
+      "line": 6,
+      "owner": "canary_controller_battery::nested_selected_battery_uses_frozen_controller_plan_and_ignores_historical_planner",
+      "result": "recorded1passed0failed",
+      "intent": "Current trusted compiled controller generates plan; actual nested selected battery consumes identical frozen bytes; deliberately forbidden historical planner remains unexecuted; omitted family rejects before scans/results."
+    }
+  ],
+  "retained_methods": [
+    "test_prepared_source_roundtrip_in_empty_worker_and_stale_pin_rejected",
+    "test_snapshot_rebinding_requires_sealed_manifest_exact_tree_and_files"
+  ],
+  "limits": "No fixture masking, production modification, current platform/native/model/SDK/transport/publication qualification or complete migration claim. Historical receipt retained as preimage; parent alone merges durable method map after accepted proof. Existing root bootstrap/frozen controller authority remains unchanged; typed fixture uses CARGO_BIN_EXE current qualified binary, not a fabricated Python/planner substitute.",
+  "current_qualification": [
+    {
+      "path": ".omo/evidence/resume-20261002/next-wave-pack-restore-tests.log",
+      "sha256": "c303e924cd371d95f6cdfe3584d3c473085ef35959e8927a0b80ad3533580b70",
+      "terminal": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1399 filtered out; finished in 1.79s"
+    },
+    {
+      "path": ".omo/evidence/resume-20261002/next-wave-selected-battery-tests.log",
+      "sha256": "80c314c9aee2c13e38d68ea4df34758e1d107da23ed5f480c48b45a495959433",
+      "terminal": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 503 filtered out; finished in 5.00s"
+    }
+  ],
+  "historical_supporting_proof_preserved": true,
+  "historical_proposal_payload_sha256": "85dd449a4e4ea61c5699611e57ba9a2971b239ce40a9ec17ab92d7aa7c476f74",
+  "retained_os_import_correction": {
+    "reason": "Restored import os required by retained patch.dict(os.environ) test. No production or retirement-scope change.",
+    "previous_proposal_source_sha256": "85dd449a4e4ea61c5699611e57ba9a2971b239ce40a9ec17ab92d7aa7c476f74",
+    "current_source_sha256": "ed4ffbb80783fc8c692fd9eac90ff10289697ddc046690c162bf292cb82e9fc1",
+    "previous_failed_receipt": {
+      "path": ".omo/evidence/resume-20261002/next-wave-retained-handoff-tests.log",
+      "sha256": "24f244fc893c006015f71e355202674d1b1fb58729cbb8b89c5df1205341caac"
+    },
+    "qualified_retained_tests": {
+      "path": ".omo/evidence/resume-20261002/next-wave-retained-handoff-corrected.log",
+      "sha256": "eceaf0b16c500a8e697831fa48a6455829593379d8cd46627b7a24e5fbf5a678",
+      "result": "2 passed, 0 failed; 0.851s"
+    },
+    "current_test_tree_sha256": "ac0bdec2061793cf2104e2f2b3d4f73d04077f7dd8f855ae1a5ae6c49252333c",
+    "counts": {
+      "python": 181,
+      "just_roster": 100
+    }
+  }
+}

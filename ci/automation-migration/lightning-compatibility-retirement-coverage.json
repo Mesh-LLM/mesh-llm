@@ -1,0 +1,2529 @@
+{
+  "schema_version": 1,
+  "status": "LOCAL_POSTIMAGE_QUALIFIED",
+  "head": "22a55680e3dd54ed25b562d324563a1035f8fa25",
+  "original": {
+    "path": "scripts/qa-lightning-compatibility.py",
+    "sha256": "729066935dc2a4d345e68b5554be825c3b3617d855e571e35e70d610213dd9aa",
+    "lines": 183
+  },
+  "methods": [
+    {
+      "method": "digest",
+      "start_line": 24,
+      "end_line": 26,
+      "body_sha256": "4cf0b64a8ab769a5c1db057788bedaa647a8d88b6f9ab500d43184a5a7002558",
+      "native_owner": "identity::worker/product::digest",
+      "assertion_owner": "lightning_compatibility_cli actual narrative/refusal/cancellation attrs plus source-correlated exact invoked paths",
+      "execution": [
+        {
+          "selector": "automation::lightning_compatibility::terminal::tests::terminal_success_preserves_complete_and_failed_observations",
+          "source": "tools/xtask/src/automation/lightning_compatibility/terminal.rs",
+          "source_sha256": "4de3594b698e047411a6d41d4708216df7d7158b759706c95432ecfcc6ac0879",
+          "log": ".omo/evidence/resume-20261002/lightning-quality-maintained-v1-lightning-unit.log",
+          "log_sha256": "dd081320079fc0f6b95d0e5614d4da339b778b47e613a1ccff90e06d0330aaa8",
+          "line": 8
+        },
+        {
+          "selector": "automation::lightning_compatibility::terminal::tests::terminal_finish_error_downgrades_success_without_losing_observations",
+          "source": "tools/xtask/src/automation/lightning_compatibility/terminal.rs",
+          "source_sha256": "4de3594b698e047411a6d41d4708216df7d7158b759706c95432ecfcc6ac0879",
+          "log": ".omo/evidence/resume-20261002/lightning-quality-maintained-v1-lightning-unit.log",
+          "log_sha256": "dd081320079fc0f6b95d0e5614d4da339b778b47e613a1ccff90e06d0330aaa8",
+          "line": 9
+        },
+        {
+          "selector": "automation::lightning_compatibility::terminal::tests::terminal_cancellation_downgrades_success_without_losing_observations",
+          "source": "tools/xtask/src/automation/lightning_compatibility/terminal.rs",
+          "source_sha256": "4de3594b698e047411a6d41d4708216df7d7158b759706c95432ecfcc6ac0879",
+          "log": ".omo/evidence/resume-20261002/lightning-quality-maintained-v1-lightning-unit.log",
+          "log_sha256": "dd081320079fc0f6b95d0e5614d4da339b778b47e613a1ccff90e06d0330aaa8",
+          "line": 6
+        },
+        {
+          "selector": "automation::lightning_compatibility::terminal::tests::terminal_deadline_downgrades_success_without_losing_observations",
+          "source": "tools/xtask/src/automation/lightning_compatibility/terminal.rs",
+          "source_sha256": "4de3594b698e047411a6d41d4708216df7d7158b759706c95432ecfcc6ac0879",
+          "log": ".omo/evidence/resume-20261002/lightning-quality-maintained-v1-lightning-unit.log",
+          "log_sha256": "dd081320079fc0f6b95d0e5614d4da339b778b47e613a1ccff90e06d0330aaa8",
+          "line": 7
+        },
+        {
+          "selector": "automation::lightning_compatibility::http_checks::tests::free_cases_require_content_and_usage_paid_case_requires_402",
+          "source": "tools/xtask/src/automation/lightning_compatibility/http_checks.rs",
+          "source_sha256": "8d774710f1dba8985befe7e94d091bd3e0fab6c4a1687bb7c46aa04de69b5d5b",
+          "log": ".omo/evidence/resume-20261002/lightning-quality-maintained-v1-lightning-unit.log",
+          "log_sha256": "dd081320079fc0f6b95d0e5614d4da339b778b47e613a1ccff90e06d0330aaa8",
+          "line": 10
+        },
+        {
+          "selector": "lightning_compatibility_cli::lightning_actual_cli_runs_three_cases_and_isolated_bundle_state",
+          "source": "tools/xtask/tests/migration_lifecycle/lightning_compatibility_cli.rs",
+          "source_sha256": "0c0feb51cd9513b7f7f4ad88055a5b2ec1a68bdd4c8184997998d90b214c8920",
+          "log": ".omo/evidence/resume-20261002/lightning-quality-maintained-v1-lightning-cli.log",
+          "log_sha256": "a83be6c56e1ae9a7b211806d9f90a184c7ea3f3756ae0bf27f8e4b071ae789db",
+          "line": 8
+        },
+        {
+          "selector": "lightning_compatibility_cli::lightning_actual_cli_refuses_paid_bypass_bad_usage_and_existing_output",
+          "source": "tools/xtask/tests/migration_lifecycle/lightning_compatibility_cli.rs",
+          "source_sha256": "0c0feb51cd9513b7f7f4ad88055a5b2ec1a68bdd4c8184997998d90b214c8920",
+          "log": ".omo/evidence/resume-20261002/lightning-quality-maintained-v1-lightning-cli.log",
+          "log_sha256": "a83be6c56e1ae9a7b211806d9f90a184c7ea3f3756ae0bf27f8e4b071ae789db",
+          "line": 7
+        },
+        {
+          "selector": "lightning_compatibility_cli::lightning_actual_cli_inflight_cancellation_preserves_failed_evidence_and_cleanup",
+          "source": "tools/xtask/tests/migration_lifecycle/lightning_compatibility_cli.rs",
+          "source_sha256": "0c0feb51cd9513b7f7f4ad88055a5b2ec1a68bdd4c8184997998d90b214c8920",
+          "log": ".omo/evidence/resume-20261002/lightning-quality-maintained-v1-lightning-cli.log",
+          "log_sha256": "a83be6c56e1ae9a7b211806d9f90a184c7ea3f3756ae0bf27f8e4b071ae789db",
+          "line": 6
+        }
+      ],
+      "intent_scope": "local orchestration only; real released/model/payment protocol acceptance separate",
+      "historical_named_proof": [
+        {
+          "name": "lightning_actual_cli_runs_three_cases_and_isolated_bundle_state",
+          "path": "tools/xtask/tests/migration_lifecycle/lightning_compatibility_cli.rs",
+          "test": "lightning_compatibility_cli::lightning_actual_cli_runs_three_cases_and_isolated_bundle_state",
+          "log": ".omo/evidence/resume-20261002/lightning-compatibility-maintained-v11-lightning-cli.log",
+          "sha256": "b7906c08d99475da339efc083f89a41c5fbadde8abfcb4c522c4249c371912d4",
+          "line": 8,
+          "source_sha256": "0c0feb51cd9513b7f7f4ad88055a5b2ec1a68bdd4c8184997998d90b214c8920"
+        },
+        {
+          "name": "lightning_actual_cli_refuses_paid_bypass_bad_usage_and_existing_output",
+          "path": "tools/xtask/tests/migration_lifecycle/lightning_compatibility_cli.rs",
+          "test": "lightning_compatibility_cli::lightning_actual_cli_refuses_paid_bypass_bad_usage_and_existing_output",
+          "log": ".omo/evidence/resume-20261002/lightning-compatibility-maintained-v11-lightning-cli.log",
+          "sha256": "b7906c08d99475da339efc083f89a41c5fbadde8abfcb4c522c4249c371912d4",
+          "line": 7,
+          "source_sha256": "0c0feb51cd9513b7f7f4ad88055a5b2ec1a68bdd4c8184997998d90b214c8920"
+        }
+      ],
+      "assertion_scope": "Input SHA fields, before/after identity equality, adjacent independent runtime roots; binary/model hashes supervised by identity-worker. Fixture bytes deliberately are not runtime/model validity proof. Terminal R1 now covered by four freshly passed actual production-admit fixtures.",
+      "current_native_sources": [
+        {
+          "path": "tools/xtask/src/automation/lightning_compatibility.rs",
+          "sha256": "eb83df27e25739e52120bb950b90d1100126900b2f80764d0ba230b657a5cd3a"
+        },
+        {
+          "path": "tools/xtask/src/automation/lightning_compatibility/http_checks.rs",
+          "sha256": "8d774710f1dba8985befe7e94d091bd3e0fab6c4a1687bb7c46aa04de69b5d5b"
+        },
+        {
+          "path": "tools/xtask/src/automation/lightning_compatibility/identity.rs",
+          "sha256": "0a9804d7a411dee677d27335da184f67670330b400cb3e395536f4f0fe7b3d60"
+        },
+        {
+          "path": "tools/xtask/src/automation/lightning_compatibility/setup.rs",
+          "sha256": "037231e46113a338802698e07e31605b30576292120d63ab45162a64f9aad831"
+        },
+        {
+          "path": "tools/xtask/src/automation/lightning_compatibility/owner.rs",
+          "sha256": "a6c1ab8e747c0f4b6ea466672de25a2fd506a9c97db072adef91e7005e158fbd"
+        },
+        {
+          "path": "tools/xtask/tests/migration_lifecycle/lightning_compatibility_cli.rs",
+          "sha256": "0c0feb51cd9513b7f7f4ad88055a5b2ec1a68bdd4c8184997998d90b214c8920"
+        },
+        {
+          "path": "tools/xtask/examples/l7_daemon_fixture/lightning_peer_fixture.rs",
+          "sha256": "97f2ef2f910093eddaf25bbc227d58707b74556cd75b45a4445b749ec50db8c0"
+        },
+        {
+          "path": "tools/xtask/src/automation/command_interrupt/mod.rs",
+          "sha256": "945652800581d9c067f180d99455a9e9ede234dc9e344acb15a654f4616e250a"
+        },
+        {
+          "path": "tools/xtask/src/automation/lightning_compatibility/terminal.rs",
+          "sha256": "4de3594b698e047411a6d41d4708216df7d7158b759706c95432ecfcc6ac0879"
+        }
+      ],
+      "gap": null
+    },
+    {
+      "method": "http",
+      "start_line": 29,
+      "end_line": 40,
+      "body_sha256": "7d0dc4f775c1066bf9d5756088c24c797924d59bdc29c4ecc7b84b05c059aa8e",
+      "native_owner": "http_checks::request/logging_console::http::transfer_cancelled",
+      "assertion_owner": "lightning_compatibility_cli actual narrative/refusal/cancellation attrs plus source-correlated exact invoked paths",
+      "execution": [
+        {
+          "selector": "automation::lightning_compatibility::terminal::tests::terminal_success_preserves_complete_and_failed_observations",
+          "source": "tools/xtask/src/automation/lightning_compatibility/terminal.rs",
+          "source_sha256": "4de3594b698e047411a6d41d4708216df7d7158b759706c95432ecfcc6ac0879",
+          "log": ".omo/evidence/resume-20261002/lightning-quality-maintained-v1-lightning-unit.log",
+          "log_sha256": "dd081320079fc0f6b95d0e5614d4da339b778b47e613a1ccff90e06d0330aaa8",
+          "line": 8
+        },
+        {
+          "selector": "automation::lightning_compatibility::terminal::tests::terminal_finish_error_downgrades_success_without_losing_observations",
+          "source": "tools/xtask/src/automation/lightning_compatibility/terminal.rs",
+          "source_sha256": "4de3594b698e047411a6d41d4708216df7d7158b759706c95432ecfcc6ac0879",
+          "log": ".omo/evidence/resume-20261002/lightning-quality-maintained-v1-lightning-unit.log",
+          "log_sha256": "dd081320079fc0f6b95d0e5614d4da339b778b47e613a1ccff90e06d0330aaa8",
+          "line": 9
+        },
+        {
+          "selector": "automation::lightning_compatibility::terminal::tests::terminal_cancellation_downgrades_success_without_losing_observations",
+          "source": "tools/xtask/src/automation/lightning_compatibility/terminal.rs",
+          "source_sha256": "4de3594b698e047411a6d41d4708216df7d7158b759706c95432ecfcc6ac0879",
+          "log": ".omo/evidence/resume-20261002/lightning-quality-maintained-v1-lightning-unit.log",
+          "log_sha256": "dd081320079fc0f6b95d0e5614d4da339b778b47e613a1ccff90e06d0330aaa8",
+          "line": 6
+        },
+        {
+          "selector": "automation::lightning_compatibility::terminal::tests::terminal_deadline_downgrades_success_without_losing_observations",
+          "source": "tools/xtask/src/automation/lightning_compatibility/terminal.rs",
+          "source_sha256": "4de3594b698e047411a6d41d4708216df7d7158b759706c95432ecfcc6ac0879",
+          "log": ".omo/evidence/resume-20261002/lightning-quality-maintained-v1-lightning-unit.log",
+          "log_sha256": "dd081320079fc0f6b95d0e5614d4da339b778b47e613a1ccff90e06d0330aaa8",
+          "line": 7
+        },
+        {
+          "selector": "automation::lightning_compatibility::http_checks::tests::free_cases_require_content_and_usage_paid_case_requires_402",
+          "source": "tools/xtask/src/automation/lightning_compatibility/http_checks.rs",
+          "source_sha256": "8d774710f1dba8985befe7e94d091bd3e0fab6c4a1687bb7c46aa04de69b5d5b",
+          "log": ".omo/evidence/resume-20261002/lightning-quality-maintained-v1-lightning-unit.log",
+          "log_sha256": "dd081320079fc0f6b95d0e5614d4da339b778b47e613a1ccff90e06d0330aaa8",
+          "line": 10
+        },
+        {
+          "selector": "lightning_compatibility_cli::lightning_actual_cli_runs_three_cases_and_isolated_bundle_state",
+          "source": "tools/xtask/tests/migration_lifecycle/lightning_compatibility_cli.rs",
+          "source_sha256": "0c0feb51cd9513b7f7f4ad88055a5b2ec1a68bdd4c8184997998d90b214c8920",
+          "log": ".omo/evidence/resume-20261002/lightning-quality-maintained-v1-lightning-cli.log",
+          "log_sha256": "a83be6c56e1ae9a7b211806d9f90a184c7ea3f3756ae0bf27f8e4b071ae789db",
+          "line": 8
+        },
+        {
+          "selector": "lightning_compatibility_cli::lightning_actual_cli_refuses_paid_bypass_bad_usage_and_existing_output",
+          "source": "tools/xtask/tests/migration_lifecycle/lightning_compatibility_cli.rs",
+          "source_sha256": "0c0feb51cd9513b7f7f4ad88055a5b2ec1a68bdd4c8184997998d90b214c8920",
+          "log": ".omo/evidence/resume-20261002/lightning-quality-maintained-v1-lightning-cli.log",
+          "log_sha256": "a83be6c56e1ae9a7b211806d9f90a184c7ea3f3756ae0bf27f8e4b071ae789db",
+          "line": 7
+        },
+        {
+          "selector": "lightning_compatibility_cli::lightning_actual_cli_inflight_cancellation_preserves_failed_evidence_and_cleanup",
+          "source": "tools/xtask/tests/migration_lifecycle/lightning_compatibility_cli.rs",
+          "source_sha256": "0c0feb51cd9513b7f7f4ad88055a5b2ec1a68bdd4c8184997998d90b214c8920",
+          "log": ".omo/evidence/resume-20261002/lightning-quality-maintained-v1-lightning-cli.log",
+          "log_sha256": "a83be6c56e1ae9a7b211806d9f90a184c7ea3f3756ae0bf27f8e4b071ae789db",
+          "line": 6
+        }
+      ],
+      "intent_scope": "local orchestration only; real released/model/payment protocol acceptance separate",
+      "historical_named_proof": [
+        {
+          "name": "lightning_actual_cli_runs_three_cases_and_isolated_bundle_state",
+          "path": "tools/xtask/tests/migration_lifecycle/lightning_compatibility_cli.rs",
+          "test": "lightning_compatibility_cli::lightning_actual_cli_runs_three_cases_and_isolated_bundle_state",
+          "log": ".omo/evidence/resume-20261002/lightning-compatibility-maintained-v11-lightning-cli.log",
+          "sha256": "b7906c08d99475da339efc083f89a41c5fbadde8abfcb4c522c4249c371912d4",
+          "line": 8,
+          "source_sha256": "0c0feb51cd9513b7f7f4ad88055a5b2ec1a68bdd4c8184997998d90b214c8920"
+        },
+        {
+          "name": "lightning_actual_cli_refuses_paid_bypass_bad_usage_and_existing_output",
+          "path": "tools/xtask/tests/migration_lifecycle/lightning_compatibility_cli.rs",
+          "test": "lightning_compatibility_cli::lightning_actual_cli_refuses_paid_bypass_bad_usage_and_existing_output",
+          "log": ".omo/evidence/resume-20261002/lightning-compatibility-maintained-v11-lightning-cli.log",
+          "sha256": "b7906c08d99475da339efc083f89a41c5fbadde8abfcb4c522c4249c371912d4",
+          "line": 7,
+          "source_sha256": "0c0feb51cd9513b7f7f4ad88055a5b2ec1a68bdd4c8184997998d90b214c8920"
+        },
+        {
+          "name": "lightning_actual_cli_inflight_cancellation_preserves_failed_evidence_and_cleanup",
+          "path": "tools/xtask/tests/migration_lifecycle/lightning_compatibility_cli.rs",
+          "test": "lightning_compatibility_cli::lightning_actual_cli_inflight_cancellation_preserves_failed_evidence_and_cleanup",
+          "log": ".omo/evidence/resume-20261002/lightning-compatibility-maintained-v11-lightning-cli.log",
+          "sha256": "b7906c08d99475da339efc083f89a41c5fbadde8abfcb4c522c4249c371912d4",
+          "line": 6,
+          "source_sha256": "0c0feb51cd9513b7f7f4ad88055a5b2ec1a68bdd4c8184997998d90b214c8920"
+        }
+      ],
+      "assertion_scope": "Actual local HTTP narrative, paid bypass and missing usage refusal, held response cancellation. Shared bounded HTTP owner; raw response replaced by typed status/content/usage plus SHA to avoid invite/response disclosure. Terminal R1 now covered by four freshly passed actual production-admit fixtures.",
+      "current_native_sources": [
+        {
+          "path": "tools/xtask/src/automation/lightning_compatibility.rs",
+          "sha256": "eb83df27e25739e52120bb950b90d1100126900b2f80764d0ba230b657a5cd3a"
+        },
+        {
+          "path": "tools/xtask/src/automation/lightning_compatibility/http_checks.rs",
+          "sha256": "8d774710f1dba8985befe7e94d091bd3e0fab6c4a1687bb7c46aa04de69b5d5b"
+        },
+        {
+          "path": "tools/xtask/src/automation/lightning_compatibility/identity.rs",
+          "sha256": "0a9804d7a411dee677d27335da184f67670330b400cb3e395536f4f0fe7b3d60"
+        },
+        {
+          "path": "tools/xtask/src/automation/lightning_compatibility/setup.rs",
+          "sha256": "037231e46113a338802698e07e31605b30576292120d63ab45162a64f9aad831"
+        },
+        {
+          "path": "tools/xtask/src/automation/lightning_compatibility/owner.rs",
+          "sha256": "a6c1ab8e747c0f4b6ea466672de25a2fd506a9c97db072adef91e7005e158fbd"
+        },
+        {
+          "path": "tools/xtask/tests/migration_lifecycle/lightning_compatibility_cli.rs",
+          "sha256": "0c0feb51cd9513b7f7f4ad88055a5b2ec1a68bdd4c8184997998d90b214c8920"
+        },
+        {
+          "path": "tools/xtask/examples/l7_daemon_fixture/lightning_peer_fixture.rs",
+          "sha256": "97f2ef2f910093eddaf25bbc227d58707b74556cd75b45a4445b749ec50db8c0"
+        },
+        {
+          "path": "tools/xtask/src/automation/command_interrupt/mod.rs",
+          "sha256": "945652800581d9c067f180d99455a9e9ede234dc9e344acb15a654f4616e250a"
+        },
+        {
+          "path": "tools/xtask/src/automation/lightning_compatibility/terminal.rs",
+          "sha256": "4de3594b698e047411a6d41d4708216df7d7158b759706c95432ecfcc6ac0879"
+        }
+      ],
+      "gap": null
+    },
+    {
+      "method": "unused_port",
+      "start_line": 43,
+      "end_line": 46,
+      "body_sha256": "b5ffaf668655ac815c3d378199e4e11039371b3d71fdac2503e0e9a31ea62941",
+      "native_owner": "setup::ports",
+      "assertion_owner": "lightning_compatibility_cli actual narrative/refusal/cancellation attrs plus source-correlated exact invoked paths",
+      "execution": [
+        {
+          "selector": "automation::lightning_compatibility::terminal::tests::terminal_success_preserves_complete_and_failed_observations",
+          "source": "tools/xtask/src/automation/lightning_compatibility/terminal.rs",
+          "source_sha256": "4de3594b698e047411a6d41d4708216df7d7158b759706c95432ecfcc6ac0879",
+          "log": ".omo/evidence/resume-20261002/lightning-quality-maintained-v1-lightning-unit.log",
+          "log_sha256": "dd081320079fc0f6b95d0e5614d4da339b778b47e613a1ccff90e06d0330aaa8",
+          "line": 8
+        },
+        {
+          "selector": "automation::lightning_compatibility::terminal::tests::terminal_finish_error_downgrades_success_without_losing_observations",
+          "source": "tools/xtask/src/automation/lightning_compatibility/terminal.rs",
+          "source_sha256": "4de3594b698e047411a6d41d4708216df7d7158b759706c95432ecfcc6ac0879",
+          "log": ".omo/evidence/resume-20261002/lightning-quality-maintained-v1-lightning-unit.log",
+          "log_sha256": "dd081320079fc0f6b95d0e5614d4da339b778b47e613a1ccff90e06d0330aaa8",
+          "line": 9
+        },
+        {
+          "selector": "automation::lightning_compatibility::terminal::tests::terminal_cancellation_downgrades_success_without_losing_observations",
+          "source": "tools/xtask/src/automation/lightning_compatibility/terminal.rs",
+          "source_sha256": "4de3594b698e047411a6d41d4708216df7d7158b759706c95432ecfcc6ac0879",
+          "log": ".omo/evidence/resume-20261002/lightning-quality-maintained-v1-lightning-unit.log",
+          "log_sha256": "dd081320079fc0f6b95d0e5614d4da339b778b47e613a1ccff90e06d0330aaa8",
+          "line": 6
+        },
+        {
+          "selector": "automation::lightning_compatibility::terminal::tests::terminal_deadline_downgrades_success_without_losing_observations",
+          "source": "tools/xtask/src/automation/lightning_compatibility/terminal.rs",
+          "source_sha256": "4de3594b698e047411a6d41d4708216df7d7158b759706c95432ecfcc6ac0879",
+          "log": ".omo/evidence/resume-20261002/lightning-quality-maintained-v1-lightning-unit.log",
+          "log_sha256": "dd081320079fc0f6b95d0e5614d4da339b778b47e613a1ccff90e06d0330aaa8",
+          "line": 7
+        },
+        {
+          "selector": "automation::lightning_compatibility::http_checks::tests::free_cases_require_content_and_usage_paid_case_requires_402",
+          "source": "tools/xtask/src/automation/lightning_compatibility/http_checks.rs",
+          "source_sha256": "8d774710f1dba8985befe7e94d091bd3e0fab6c4a1687bb7c46aa04de69b5d5b",
+          "log": ".omo/evidence/resume-20261002/lightning-quality-maintained-v1-lightning-unit.log",
+          "log_sha256": "dd081320079fc0f6b95d0e5614d4da339b778b47e613a1ccff90e06d0330aaa8",
+          "line": 10
+        },
+        {
+          "selector": "lightning_compatibility_cli::lightning_actual_cli_runs_three_cases_and_isolated_bundle_state",
+          "source": "tools/xtask/tests/migration_lifecycle/lightning_compatibility_cli.rs",
+          "source_sha256": "0c0feb51cd9513b7f7f4ad88055a5b2ec1a68bdd4c8184997998d90b214c8920",
+          "log": ".omo/evidence/resume-20261002/lightning-quality-maintained-v1-lightning-cli.log",
+          "log_sha256": "a83be6c56e1ae9a7b211806d9f90a184c7ea3f3756ae0bf27f8e4b071ae789db",
+          "line": 8
+        },
+        {
+          "selector": "lightning_compatibility_cli::lightning_actual_cli_refuses_paid_bypass_bad_usage_and_existing_output",
+          "source": "tools/xtask/tests/migration_lifecycle/lightning_compatibility_cli.rs",
+          "source_sha256": "0c0feb51cd9513b7f7f4ad88055a5b2ec1a68bdd4c8184997998d90b214c8920",
+          "log": ".omo/evidence/resume-20261002/lightning-quality-maintained-v1-lightning-cli.log",
+          "log_sha256": "a83be6c56e1ae9a7b211806d9f90a184c7ea3f3756ae0bf27f8e4b071ae789db",
+          "line": 7
+        },
+        {
+          "selector": "lightning_compatibility_cli::lightning_actual_cli_inflight_cancellation_preserves_failed_evidence_and_cleanup",
+          "source": "tools/xtask/tests/migration_lifecycle/lightning_compatibility_cli.rs",
+          "source_sha256": "0c0feb51cd9513b7f7f4ad88055a5b2ec1a68bdd4c8184997998d90b214c8920",
+          "log": ".omo/evidence/resume-20261002/lightning-quality-maintained-v1-lightning-cli.log",
+          "log_sha256": "a83be6c56e1ae9a7b211806d9f90a184c7ea3f3756ae0bf27f8e4b071ae789db",
+          "line": 6
+        }
+      ],
+      "intent_scope": "local orchestration only; real released/model/payment protocol acceptance separate",
+      "historical_named_proof": [
+        {
+          "name": "lightning_actual_cli_runs_three_cases_and_isolated_bundle_state",
+          "path": "tools/xtask/tests/migration_lifecycle/lightning_compatibility_cli.rs",
+          "test": "lightning_compatibility_cli::lightning_actual_cli_runs_three_cases_and_isolated_bundle_state",
+          "log": ".omo/evidence/resume-20261002/lightning-compatibility-maintained-v11-lightning-cli.log",
+          "sha256": "b7906c08d99475da339efc083f89a41c5fbadde8abfcb4c522c4249c371912d4",
+          "line": 8,
+          "source_sha256": "0c0feb51cd9513b7f7f4ad88055a5b2ec1a68bdd4c8184997998d90b214c8920"
+        }
+      ],
+      "assertion_scope": "Full actual five-peer CLI completes using distinct simultaneously admitted TCP/UDP port selection. Guards released before launches; not race-free port handoff. Terminal R1 now covered by four freshly passed actual production-admit fixtures.",
+      "current_native_sources": [
+        {
+          "path": "tools/xtask/src/automation/lightning_compatibility.rs",
+          "sha256": "eb83df27e25739e52120bb950b90d1100126900b2f80764d0ba230b657a5cd3a"
+        },
+        {
+          "path": "tools/xtask/src/automation/lightning_compatibility/http_checks.rs",
+          "sha256": "8d774710f1dba8985befe7e94d091bd3e0fab6c4a1687bb7c46aa04de69b5d5b"
+        },
+        {
+          "path": "tools/xtask/src/automation/lightning_compatibility/identity.rs",
+          "sha256": "0a9804d7a411dee677d27335da184f67670330b400cb3e395536f4f0fe7b3d60"
+        },
+        {
+          "path": "tools/xtask/src/automation/lightning_compatibility/setup.rs",
+          "sha256": "037231e46113a338802698e07e31605b30576292120d63ab45162a64f9aad831"
+        },
+        {
+          "path": "tools/xtask/src/automation/lightning_compatibility/owner.rs",
+          "sha256": "a6c1ab8e747c0f4b6ea466672de25a2fd506a9c97db072adef91e7005e158fbd"
+        },
+        {
+          "path": "tools/xtask/tests/migration_lifecycle/lightning_compatibility_cli.rs",
+          "sha256": "0c0feb51cd9513b7f7f4ad88055a5b2ec1a68bdd4c8184997998d90b214c8920"
+        },
+        {
+          "path": "tools/xtask/examples/l7_daemon_fixture/lightning_peer_fixture.rs",
+          "sha256": "97f2ef2f910093eddaf25bbc227d58707b74556cd75b45a4445b749ec50db8c0"
+        },
+        {
+          "path": "tools/xtask/src/automation/command_interrupt/mod.rs",
+          "sha256": "945652800581d9c067f180d99455a9e9ede234dc9e344acb15a654f4616e250a"
+        },
+        {
+          "path": "tools/xtask/src/automation/lightning_compatibility/terminal.rs",
+          "sha256": "4de3594b698e047411a6d41d4708216df7d7158b759706c95432ecfcc6ac0879"
+        }
+      ],
+      "gap": null
+    },
+    {
+      "method": "__init__",
+      "start_line": 50,
+      "end_line": 87,
+      "body_sha256": "540fa5d5bdf5d74a0d8a7bb8649957d7ce80a88c5e7ca24733db5ed1f0828752",
+      "native_owner": "setup::launch",
+      "assertion_owner": "lightning_compatibility_cli actual narrative/refusal/cancellation attrs plus source-correlated exact invoked paths",
+      "execution": [
+        {
+          "selector": "automation::lightning_compatibility::terminal::tests::terminal_success_preserves_complete_and_failed_observations",
+          "source": "tools/xtask/src/automation/lightning_compatibility/terminal.rs",
+          "source_sha256": "4de3594b698e047411a6d41d4708216df7d7158b759706c95432ecfcc6ac0879",
+          "log": ".omo/evidence/resume-20261002/lightning-quality-maintained-v1-lightning-unit.log",
+          "log_sha256": "dd081320079fc0f6b95d0e5614d4da339b778b47e613a1ccff90e06d0330aaa8",
+          "line": 8
+        },
+        {
+          "selector": "automation::lightning_compatibility::terminal::tests::terminal_finish_error_downgrades_success_without_losing_observations",
+          "source": "tools/xtask/src/automation/lightning_compatibility/terminal.rs",
+          "source_sha256": "4de3594b698e047411a6d41d4708216df7d7158b759706c95432ecfcc6ac0879",
+          "log": ".omo/evidence/resume-20261002/lightning-quality-maintained-v1-lightning-unit.log",
+          "log_sha256": "dd081320079fc0f6b95d0e5614d4da339b778b47e613a1ccff90e06d0330aaa8",
+          "line": 9
+        },
+        {
+          "selector": "automation::lightning_compatibility::terminal::tests::terminal_cancellation_downgrades_success_without_losing_observations",
+          "source": "tools/xtask/src/automation/lightning_compatibility/terminal.rs",
+          "source_sha256": "4de3594b698e047411a6d41d4708216df7d7158b759706c95432ecfcc6ac0879",
+          "log": ".omo/evidence/resume-20261002/lightning-quality-maintained-v1-lightning-unit.log",
+          "log_sha256": "dd081320079fc0f6b95d0e5614d4da339b778b47e613a1ccff90e06d0330aaa8",
+          "line": 6
+        },
+        {
+          "selector": "automation::lightning_compatibility::terminal::tests::terminal_deadline_downgrades_success_without_losing_observations",
+          "source": "tools/xtask/src/automation/lightning_compatibility/terminal.rs",
+          "source_sha256": "4de3594b698e047411a6d41d4708216df7d7158b759706c95432ecfcc6ac0879",
+          "log": ".omo/evidence/resume-20261002/lightning-quality-maintained-v1-lightning-unit.log",
+          "log_sha256": "dd081320079fc0f6b95d0e5614d4da339b778b47e613a1ccff90e06d0330aaa8",
+          "line": 7
+        },
+        {
+          "selector": "automation::lightning_compatibility::http_checks::tests::free_cases_require_content_and_usage_paid_case_requires_402",
+          "source": "tools/xtask/src/automation/lightning_compatibility/http_checks.rs",
+          "source_sha256": "8d774710f1dba8985befe7e94d091bd3e0fab6c4a1687bb7c46aa04de69b5d5b",
+          "log": ".omo/evidence/resume-20261002/lightning-quality-maintained-v1-lightning-unit.log",
+          "log_sha256": "dd081320079fc0f6b95d0e5614d4da339b778b47e613a1ccff90e06d0330aaa8",
+          "line": 10
+        },
+        {
+          "selector": "lightning_compatibility_cli::lightning_actual_cli_runs_three_cases_and_isolated_bundle_state",
+          "source": "tools/xtask/tests/migration_lifecycle/lightning_compatibility_cli.rs",
+          "source_sha256": "0c0feb51cd9513b7f7f4ad88055a5b2ec1a68bdd4c8184997998d90b214c8920",
+          "log": ".omo/evidence/resume-20261002/lightning-quality-maintained-v1-lightning-cli.log",
+          "log_sha256": "a83be6c56e1ae9a7b211806d9f90a184c7ea3f3756ae0bf27f8e4b071ae789db",
+          "line": 8
+        },
+        {
+          "selector": "lightning_compatibility_cli::lightning_actual_cli_refuses_paid_bypass_bad_usage_and_existing_output",
+          "source": "tools/xtask/tests/migration_lifecycle/lightning_compatibility_cli.rs",
+          "source_sha256": "0c0feb51cd9513b7f7f4ad88055a5b2ec1a68bdd4c8184997998d90b214c8920",
+          "log": ".omo/evidence/resume-20261002/lightning-quality-maintained-v1-lightning-cli.log",
+          "log_sha256": "a83be6c56e1ae9a7b211806d9f90a184c7ea3f3756ae0bf27f8e4b071ae789db",
+          "line": 7
+        },
+        {
+          "selector": "lightning_compatibility_cli::lightning_actual_cli_inflight_cancellation_preserves_failed_evidence_and_cleanup",
+          "source": "tools/xtask/tests/migration_lifecycle/lightning_compatibility_cli.rs",
+          "source_sha256": "0c0feb51cd9513b7f7f4ad88055a5b2ec1a68bdd4c8184997998d90b214c8920",
+          "log": ".omo/evidence/resume-20261002/lightning-quality-maintained-v1-lightning-cli.log",
+          "log_sha256": "a83be6c56e1ae9a7b211806d9f90a184c7ea3f3756ae0bf27f8e4b071ae789db",
+          "line": 6
+        }
+      ],
+      "intent_scope": "local orchestration only; real released/model/payment protocol acceptance separate",
+      "historical_named_proof": [
+        {
+          "name": "lightning_actual_cli_runs_three_cases_and_isolated_bundle_state",
+          "path": "tools/xtask/tests/migration_lifecycle/lightning_compatibility_cli.rs",
+          "test": "lightning_compatibility_cli::lightning_actual_cli_runs_three_cases_and_isolated_bundle_state",
+          "log": ".omo/evidence/resume-20261002/lightning-compatibility-maintained-v11-lightning-cli.log",
+          "sha256": "b7906c08d99475da339efc083f89a41c5fbadde8abfcb4c522c4249c371912d4",
+          "line": 8,
+          "source_sha256": "0c0feb51cd9513b7f7f4ad88055a5b2ec1a68bdd4c8184997998d90b214c8920"
+        }
+      ],
+      "assertion_scope": "Five owned config/logs and isolated profiles, client invite redaction and explicit --bind-port; matched bundle roots and CPU native selection. Setup source binds actual exact config/settings/launch environment. Terminal R1 now covered by four freshly passed actual production-admit fixtures.",
+      "current_native_sources": [
+        {
+          "path": "tools/xtask/src/automation/lightning_compatibility.rs",
+          "sha256": "eb83df27e25739e52120bb950b90d1100126900b2f80764d0ba230b657a5cd3a"
+        },
+        {
+          "path": "tools/xtask/src/automation/lightning_compatibility/http_checks.rs",
+          "sha256": "8d774710f1dba8985befe7e94d091bd3e0fab6c4a1687bb7c46aa04de69b5d5b"
+        },
+        {
+          "path": "tools/xtask/src/automation/lightning_compatibility/identity.rs",
+          "sha256": "0a9804d7a411dee677d27335da184f67670330b400cb3e395536f4f0fe7b3d60"
+        },
+        {
+          "path": "tools/xtask/src/automation/lightning_compatibility/setup.rs",
+          "sha256": "037231e46113a338802698e07e31605b30576292120d63ab45162a64f9aad831"
+        },
+        {
+          "path": "tools/xtask/src/automation/lightning_compatibility/owner.rs",
+          "sha256": "a6c1ab8e747c0f4b6ea466672de25a2fd506a9c97db072adef91e7005e158fbd"
+        },
+        {
+          "path": "tools/xtask/tests/migration_lifecycle/lightning_compatibility_cli.rs",
+          "sha256": "0c0feb51cd9513b7f7f4ad88055a5b2ec1a68bdd4c8184997998d90b214c8920"
+        },
+        {
+          "path": "tools/xtask/examples/l7_daemon_fixture/lightning_peer_fixture.rs",
+          "sha256": "97f2ef2f910093eddaf25bbc227d58707b74556cd75b45a4445b749ec50db8c0"
+        },
+        {
+          "path": "tools/xtask/src/automation/command_interrupt/mod.rs",
+          "sha256": "945652800581d9c067f180d99455a9e9ede234dc9e344acb15a654f4616e250a"
+        },
+        {
+          "path": "tools/xtask/src/automation/lightning_compatibility/terminal.rs",
+          "sha256": "4de3594b698e047411a6d41d4708216df7d7158b759706c95432ecfcc6ac0879"
+        }
+      ],
+      "gap": null
+    },
+    {
+      "method": "wait",
+      "start_line": 89,
+      "end_line": 101,
+      "body_sha256": "d6f8add374a219b411bdae5d6595ec5cdf92e8b7b25572db20cbc5bc3b3f9988",
+      "native_owner": "http_checks::wait",
+      "assertion_owner": "lightning_compatibility_cli actual narrative/refusal/cancellation attrs plus source-correlated exact invoked paths",
+      "execution": [
+        {
+          "selector": "automation::lightning_compatibility::terminal::tests::terminal_success_preserves_complete_and_failed_observations",
+          "source": "tools/xtask/src/automation/lightning_compatibility/terminal.rs",
+          "source_sha256": "4de3594b698e047411a6d41d4708216df7d7158b759706c95432ecfcc6ac0879",
+          "log": ".omo/evidence/resume-20261002/lightning-quality-maintained-v1-lightning-unit.log",
+          "log_sha256": "dd081320079fc0f6b95d0e5614d4da339b778b47e613a1ccff90e06d0330aaa8",
+          "line": 8
+        },
+        {
+          "selector": "automation::lightning_compatibility::terminal::tests::terminal_finish_error_downgrades_success_without_losing_observations",
+          "source": "tools/xtask/src/automation/lightning_compatibility/terminal.rs",
+          "source_sha256": "4de3594b698e047411a6d41d4708216df7d7158b759706c95432ecfcc6ac0879",
+          "log": ".omo/evidence/resume-20261002/lightning-quality-maintained-v1-lightning-unit.log",
+          "log_sha256": "dd081320079fc0f6b95d0e5614d4da339b778b47e613a1ccff90e06d0330aaa8",
+          "line": 9
+        },
+        {
+          "selector": "automation::lightning_compatibility::terminal::tests::terminal_cancellation_downgrades_success_without_losing_observations",
+          "source": "tools/xtask/src/automation/lightning_compatibility/terminal.rs",
+          "source_sha256": "4de3594b698e047411a6d41d4708216df7d7158b759706c95432ecfcc6ac0879",
+          "log": ".omo/evidence/resume-20261002/lightning-quality-maintained-v1-lightning-unit.log",
+          "log_sha256": "dd081320079fc0f6b95d0e5614d4da339b778b47e613a1ccff90e06d0330aaa8",
+          "line": 6
+        },
+        {
+          "selector": "automation::lightning_compatibility::terminal::tests::terminal_deadline_downgrades_success_without_losing_observations",
+          "source": "tools/xtask/src/automation/lightning_compatibility/terminal.rs",
+          "source_sha256": "4de3594b698e047411a6d41d4708216df7d7158b759706c95432ecfcc6ac0879",
+          "log": ".omo/evidence/resume-20261002/lightning-quality-maintained-v1-lightning-unit.log",
+          "log_sha256": "dd081320079fc0f6b95d0e5614d4da339b778b47e613a1ccff90e06d0330aaa8",
+          "line": 7
+        },
+        {
+          "selector": "automation::lightning_compatibility::http_checks::tests::free_cases_require_content_and_usage_paid_case_requires_402",
+          "source": "tools/xtask/src/automation/lightning_compatibility/http_checks.rs",
+          "source_sha256": "8d774710f1dba8985befe7e94d091bd3e0fab6c4a1687bb7c46aa04de69b5d5b",
+          "log": ".omo/evidence/resume-20261002/lightning-quality-maintained-v1-lightning-unit.log",
+          "log_sha256": "dd081320079fc0f6b95d0e5614d4da339b778b47e613a1ccff90e06d0330aaa8",
+          "line": 10
+        },
+        {
+          "selector": "lightning_compatibility_cli::lightning_actual_cli_runs_three_cases_and_isolated_bundle_state",
+          "source": "tools/xtask/tests/migration_lifecycle/lightning_compatibility_cli.rs",
+          "source_sha256": "0c0feb51cd9513b7f7f4ad88055a5b2ec1a68bdd4c8184997998d90b214c8920",
+          "log": ".omo/evidence/resume-20261002/lightning-quality-maintained-v1-lightning-cli.log",
+          "log_sha256": "a83be6c56e1ae9a7b211806d9f90a184c7ea3f3756ae0bf27f8e4b071ae789db",
+          "line": 8
+        },
+        {
+          "selector": "lightning_compatibility_cli::lightning_actual_cli_refuses_paid_bypass_bad_usage_and_existing_output",
+          "source": "tools/xtask/tests/migration_lifecycle/lightning_compatibility_cli.rs",
+          "source_sha256": "0c0feb51cd9513b7f7f4ad88055a5b2ec1a68bdd4c8184997998d90b214c8920",
+          "log": ".omo/evidence/resume-20261002/lightning-quality-maintained-v1-lightning-cli.log",
+          "log_sha256": "a83be6c56e1ae9a7b211806d9f90a184c7ea3f3756ae0bf27f8e4b071ae789db",
+          "line": 7
+        },
+        {
+          "selector": "lightning_compatibility_cli::lightning_actual_cli_inflight_cancellation_preserves_failed_evidence_and_cleanup",
+          "source": "tools/xtask/tests/migration_lifecycle/lightning_compatibility_cli.rs",
+          "source_sha256": "0c0feb51cd9513b7f7f4ad88055a5b2ec1a68bdd4c8184997998d90b214c8920",
+          "log": ".omo/evidence/resume-20261002/lightning-quality-maintained-v1-lightning-cli.log",
+          "log_sha256": "a83be6c56e1ae9a7b211806d9f90a184c7ea3f3756ae0bf27f8e4b071ae789db",
+          "line": 6
+        }
+      ],
+      "intent_scope": "local orchestration only; real released/model/payment protocol acceptance separate",
+      "historical_named_proof": [
+        {
+          "name": "lightning_actual_cli_runs_three_cases_and_isolated_bundle_state",
+          "path": "tools/xtask/tests/migration_lifecycle/lightning_compatibility_cli.rs",
+          "test": "lightning_compatibility_cli::lightning_actual_cli_runs_three_cases_and_isolated_bundle_state",
+          "log": ".omo/evidence/resume-20261002/lightning-compatibility-maintained-v11-lightning-cli.log",
+          "sha256": "b7906c08d99475da339efc083f89a41c5fbadde8abfcb4c522c4249c371912d4",
+          "line": 8,
+          "source_sha256": "0c0feb51cd9513b7f7f4ad88055a5b2ec1a68bdd4c8184997998d90b214c8920"
+        },
+        {
+          "name": "lightning_actual_cli_refuses_paid_bypass_bad_usage_and_existing_output",
+          "path": "tools/xtask/tests/migration_lifecycle/lightning_compatibility_cli.rs",
+          "test": "lightning_compatibility_cli::lightning_actual_cli_refuses_paid_bypass_bad_usage_and_existing_output",
+          "log": ".omo/evidence/resume-20261002/lightning-compatibility-maintained-v11-lightning-cli.log",
+          "sha256": "b7906c08d99475da339efc083f89a41c5fbadde8abfcb4c522c4249c371912d4",
+          "line": 7,
+          "source_sha256": "0c0feb51cd9513b7f7f4ad88055a5b2ec1a68bdd4c8184997998d90b214c8920"
+        },
+        {
+          "name": "lightning_actual_cli_inflight_cancellation_preserves_failed_evidence_and_cleanup",
+          "path": "tools/xtask/tests/migration_lifecycle/lightning_compatibility_cli.rs",
+          "test": "lightning_compatibility_cli::lightning_actual_cli_inflight_cancellation_preserves_failed_evidence_and_cleanup",
+          "log": ".omo/evidence/resume-20261002/lightning-compatibility-maintained-v11-lightning-cli.log",
+          "sha256": "b7906c08d99475da339efc083f89a41c5fbadde8abfcb4c522c4249c371912d4",
+          "line": 6,
+          "source_sha256": "0c0feb51cd9513b7f7f4ad88055a5b2ec1a68bdd4c8184997998d90b214c8920"
+        }
+      ],
+      "assertion_scope": "Actual successful readiness, held inference timeout/nonzero and cancellation. Inference hold is not a dedicated startup-readiness timeout fixture. Terminal R1 now covered by four freshly passed actual production-admit fixtures.",
+      "current_native_sources": [
+        {
+          "path": "tools/xtask/src/automation/lightning_compatibility.rs",
+          "sha256": "eb83df27e25739e52120bb950b90d1100126900b2f80764d0ba230b657a5cd3a"
+        },
+        {
+          "path": "tools/xtask/src/automation/lightning_compatibility/http_checks.rs",
+          "sha256": "8d774710f1dba8985befe7e94d091bd3e0fab6c4a1687bb7c46aa04de69b5d5b"
+        },
+        {
+          "path": "tools/xtask/src/automation/lightning_compatibility/identity.rs",
+          "sha256": "0a9804d7a411dee677d27335da184f67670330b400cb3e395536f4f0fe7b3d60"
+        },
+        {
+          "path": "tools/xtask/src/automation/lightning_compatibility/setup.rs",
+          "sha256": "037231e46113a338802698e07e31605b30576292120d63ab45162a64f9aad831"
+        },
+        {
+          "path": "tools/xtask/src/automation/lightning_compatibility/owner.rs",
+          "sha256": "a6c1ab8e747c0f4b6ea466672de25a2fd506a9c97db072adef91e7005e158fbd"
+        },
+        {
+          "path": "tools/xtask/tests/migration_lifecycle/lightning_compatibility_cli.rs",
+          "sha256": "0c0feb51cd9513b7f7f4ad88055a5b2ec1a68bdd4c8184997998d90b214c8920"
+        },
+        {
+          "path": "tools/xtask/examples/l7_daemon_fixture/lightning_peer_fixture.rs",
+          "sha256": "97f2ef2f910093eddaf25bbc227d58707b74556cd75b45a4445b749ec50db8c0"
+        },
+        {
+          "path": "tools/xtask/src/automation/command_interrupt/mod.rs",
+          "sha256": "945652800581d9c067f180d99455a9e9ede234dc9e344acb15a654f4616e250a"
+        },
+        {
+          "path": "tools/xtask/src/automation/lightning_compatibility/terminal.rs",
+          "sha256": "4de3594b698e047411a6d41d4708216df7d7158b759706c95432ecfcc6ac0879"
+        }
+      ],
+      "gap": null
+    },
+    {
+      "method": "status",
+      "start_line": 103,
+      "end_line": 104,
+      "body_sha256": "17af1d621d5d1f1c95e631e59c7f02541b407f9b5a7717f83d856e18d638ee6a",
+      "native_owner": "http_checks::execute Status",
+      "assertion_owner": "lightning_compatibility_cli actual narrative/refusal/cancellation attrs plus source-correlated exact invoked paths",
+      "execution": [
+        {
+          "selector": "automation::lightning_compatibility::terminal::tests::terminal_success_preserves_complete_and_failed_observations",
+          "source": "tools/xtask/src/automation/lightning_compatibility/terminal.rs",
+          "source_sha256": "4de3594b698e047411a6d41d4708216df7d7158b759706c95432ecfcc6ac0879",
+          "log": ".omo/evidence/resume-20261002/lightning-quality-maintained-v1-lightning-unit.log",
+          "log_sha256": "dd081320079fc0f6b95d0e5614d4da339b778b47e613a1ccff90e06d0330aaa8",
+          "line": 8
+        },
+        {
+          "selector": "automation::lightning_compatibility::terminal::tests::terminal_finish_error_downgrades_success_without_losing_observations",
+          "source": "tools/xtask/src/automation/lightning_compatibility/terminal.rs",
+          "source_sha256": "4de3594b698e047411a6d41d4708216df7d7158b759706c95432ecfcc6ac0879",
+          "log": ".omo/evidence/resume-20261002/lightning-quality-maintained-v1-lightning-unit.log",
+          "log_sha256": "dd081320079fc0f6b95d0e5614d4da339b778b47e613a1ccff90e06d0330aaa8",
+          "line": 9
+        },
+        {
+          "selector": "automation::lightning_compatibility::terminal::tests::terminal_cancellation_downgrades_success_without_losing_observations",
+          "source": "tools/xtask/src/automation/lightning_compatibility/terminal.rs",
+          "source_sha256": "4de3594b698e047411a6d41d4708216df7d7158b759706c95432ecfcc6ac0879",
+          "log": ".omo/evidence/resume-20261002/lightning-quality-maintained-v1-lightning-unit.log",
+          "log_sha256": "dd081320079fc0f6b95d0e5614d4da339b778b47e613a1ccff90e06d0330aaa8",
+          "line": 6
+        },
+        {
+          "selector": "automation::lightning_compatibility::terminal::tests::terminal_deadline_downgrades_success_without_losing_observations",
+          "source": "tools/xtask/src/automation/lightning_compatibility/terminal.rs",
+          "source_sha256": "4de3594b698e047411a6d41d4708216df7d7158b759706c95432ecfcc6ac0879",
+          "log": ".omo/evidence/resume-20261002/lightning-quality-maintained-v1-lightning-unit.log",
+          "log_sha256": "dd081320079fc0f6b95d0e5614d4da339b778b47e613a1ccff90e06d0330aaa8",
+          "line": 7
+        },
+        {
+          "selector": "automation::lightning_compatibility::http_checks::tests::free_cases_require_content_and_usage_paid_case_requires_402",
+          "source": "tools/xtask/src/automation/lightning_compatibility/http_checks.rs",
+          "source_sha256": "8d774710f1dba8985befe7e94d091bd3e0fab6c4a1687bb7c46aa04de69b5d5b",
+          "log": ".omo/evidence/resume-20261002/lightning-quality-maintained-v1-lightning-unit.log",
+          "log_sha256": "dd081320079fc0f6b95d0e5614d4da339b778b47e613a1ccff90e06d0330aaa8",
+          "line": 10
+        },
+        {
+          "selector": "lightning_compatibility_cli::lightning_actual_cli_runs_three_cases_and_isolated_bundle_state",
+          "source": "tools/xtask/tests/migration_lifecycle/lightning_compatibility_cli.rs",
+          "source_sha256": "0c0feb51cd9513b7f7f4ad88055a5b2ec1a68bdd4c8184997998d90b214c8920",
+          "log": ".omo/evidence/resume-20261002/lightning-quality-maintained-v1-lightning-cli.log",
+          "log_sha256": "a83be6c56e1ae9a7b211806d9f90a184c7ea3f3756ae0bf27f8e4b071ae789db",
+          "line": 8
+        },
+        {
+          "selector": "lightning_compatibility_cli::lightning_actual_cli_refuses_paid_bypass_bad_usage_and_existing_output",
+          "source": "tools/xtask/tests/migration_lifecycle/lightning_compatibility_cli.rs",
+          "source_sha256": "0c0feb51cd9513b7f7f4ad88055a5b2ec1a68bdd4c8184997998d90b214c8920",
+          "log": ".omo/evidence/resume-20261002/lightning-quality-maintained-v1-lightning-cli.log",
+          "log_sha256": "a83be6c56e1ae9a7b211806d9f90a184c7ea3f3756ae0bf27f8e4b071ae789db",
+          "line": 7
+        },
+        {
+          "selector": "lightning_compatibility_cli::lightning_actual_cli_inflight_cancellation_preserves_failed_evidence_and_cleanup",
+          "source": "tools/xtask/tests/migration_lifecycle/lightning_compatibility_cli.rs",
+          "source_sha256": "0c0feb51cd9513b7f7f4ad88055a5b2ec1a68bdd4c8184997998d90b214c8920",
+          "log": ".omo/evidence/resume-20261002/lightning-quality-maintained-v1-lightning-cli.log",
+          "log_sha256": "a83be6c56e1ae9a7b211806d9f90a184c7ea3f3756ae0bf27f8e4b071ae789db",
+          "line": 6
+        }
+      ],
+      "intent_scope": "local orchestration only; real released/model/payment protocol acceptance separate",
+      "historical_named_proof": [
+        {
+          "name": "lightning_actual_cli_runs_three_cases_and_isolated_bundle_state",
+          "path": "tools/xtask/tests/migration_lifecycle/lightning_compatibility_cli.rs",
+          "test": "lightning_compatibility_cli::lightning_actual_cli_runs_three_cases_and_isolated_bundle_state",
+          "log": ".omo/evidence/resume-20261002/lightning-compatibility-maintained-v11-lightning-cli.log",
+          "sha256": "b7906c08d99475da339efc083f89a41c5fbadde8abfcb4c522c4249c371912d4",
+          "line": 8,
+          "source_sha256": "0c0feb51cd9513b7f7f4ad88055a5b2ec1a68bdd4c8184997998d90b214c8920"
+        }
+      ],
+      "assertion_scope": "Actual invite fetched from provider and redacted delivery permits subsequent client inference; source selects /api/status and rejects absent/invalid token. Terminal R1 now covered by four freshly passed actual production-admit fixtures.",
+      "current_native_sources": [
+        {
+          "path": "tools/xtask/src/automation/lightning_compatibility.rs",
+          "sha256": "eb83df27e25739e52120bb950b90d1100126900b2f80764d0ba230b657a5cd3a"
+        },
+        {
+          "path": "tools/xtask/src/automation/lightning_compatibility/http_checks.rs",
+          "sha256": "8d774710f1dba8985befe7e94d091bd3e0fab6c4a1687bb7c46aa04de69b5d5b"
+        },
+        {
+          "path": "tools/xtask/src/automation/lightning_compatibility/identity.rs",
+          "sha256": "0a9804d7a411dee677d27335da184f67670330b400cb3e395536f4f0fe7b3d60"
+        },
+        {
+          "path": "tools/xtask/src/automation/lightning_compatibility/setup.rs",
+          "sha256": "037231e46113a338802698e07e31605b30576292120d63ab45162a64f9aad831"
+        },
+        {
+          "path": "tools/xtask/src/automation/lightning_compatibility/owner.rs",
+          "sha256": "a6c1ab8e747c0f4b6ea466672de25a2fd506a9c97db072adef91e7005e158fbd"
+        },
+        {
+          "path": "tools/xtask/tests/migration_lifecycle/lightning_compatibility_cli.rs",
+          "sha256": "0c0feb51cd9513b7f7f4ad88055a5b2ec1a68bdd4c8184997998d90b214c8920"
+        },
+        {
+          "path": "tools/xtask/examples/l7_daemon_fixture/lightning_peer_fixture.rs",
+          "sha256": "97f2ef2f910093eddaf25bbc227d58707b74556cd75b45a4445b749ec50db8c0"
+        },
+        {
+          "path": "tools/xtask/src/automation/command_interrupt/mod.rs",
+          "sha256": "945652800581d9c067f180d99455a9e9ede234dc9e344acb15a654f4616e250a"
+        },
+        {
+          "path": "tools/xtask/src/automation/lightning_compatibility/terminal.rs",
+          "sha256": "4de3594b698e047411a6d41d4708216df7d7158b759706c95432ecfcc6ac0879"
+        }
+      ],
+      "gap": null
+    },
+    {
+      "method": "model_ready",
+      "start_line": 106,
+      "end_line": 107,
+      "body_sha256": "3fad50f316a524283a459c4b1088b30c7fb79ba4cb1963964c6a2ef34d849eda",
+      "native_owner": "http_checks::execute Models",
+      "assertion_owner": "lightning_compatibility_cli actual narrative/refusal/cancellation attrs plus source-correlated exact invoked paths",
+      "execution": [
+        {
+          "selector": "automation::lightning_compatibility::terminal::tests::terminal_success_preserves_complete_and_failed_observations",
+          "source": "tools/xtask/src/automation/lightning_compatibility/terminal.rs",
+          "source_sha256": "4de3594b698e047411a6d41d4708216df7d7158b759706c95432ecfcc6ac0879",
+          "log": ".omo/evidence/resume-20261002/lightning-quality-maintained-v1-lightning-unit.log",
+          "log_sha256": "dd081320079fc0f6b95d0e5614d4da339b778b47e613a1ccff90e06d0330aaa8",
+          "line": 8
+        },
+        {
+          "selector": "automation::lightning_compatibility::terminal::tests::terminal_finish_error_downgrades_success_without_losing_observations",
+          "source": "tools/xtask/src/automation/lightning_compatibility/terminal.rs",
+          "source_sha256": "4de3594b698e047411a6d41d4708216df7d7158b759706c95432ecfcc6ac0879",
+          "log": ".omo/evidence/resume-20261002/lightning-quality-maintained-v1-lightning-unit.log",
+          "log_sha256": "dd081320079fc0f6b95d0e5614d4da339b778b47e613a1ccff90e06d0330aaa8",
+          "line": 9
+        },
+        {
+          "selector": "automation::lightning_compatibility::terminal::tests::terminal_cancellation_downgrades_success_without_losing_observations",
+          "source": "tools/xtask/src/automation/lightning_compatibility/terminal.rs",
+          "source_sha256": "4de3594b698e047411a6d41d4708216df7d7158b759706c95432ecfcc6ac0879",
+          "log": ".omo/evidence/resume-20261002/lightning-quality-maintained-v1-lightning-unit.log",
+          "log_sha256": "dd081320079fc0f6b95d0e5614d4da339b778b47e613a1ccff90e06d0330aaa8",
+          "line": 6
+        },
+        {
+          "selector": "automation::lightning_compatibility::terminal::tests::terminal_deadline_downgrades_success_without_losing_observations",
+          "source": "tools/xtask/src/automation/lightning_compatibility/terminal.rs",
+          "source_sha256": "4de3594b698e047411a6d41d4708216df7d7158b759706c95432ecfcc6ac0879",
+          "log": ".omo/evidence/resume-20261002/lightning-quality-maintained-v1-lightning-unit.log",
+          "log_sha256": "dd081320079fc0f6b95d0e5614d4da339b778b47e613a1ccff90e06d0330aaa8",
+          "line": 7
+        },
+        {
+          "selector": "automation::lightning_compatibility::http_checks::tests::free_cases_require_content_and_usage_paid_case_requires_402",
+          "source": "tools/xtask/src/automation/lightning_compatibility/http_checks.rs",
+          "source_sha256": "8d774710f1dba8985befe7e94d091bd3e0fab6c4a1687bb7c46aa04de69b5d5b",
+          "log": ".omo/evidence/resume-20261002/lightning-quality-maintained-v1-lightning-unit.log",
+          "log_sha256": "dd081320079fc0f6b95d0e5614d4da339b778b47e613a1ccff90e06d0330aaa8",
+          "line": 10
+        },
+        {
+          "selector": "lightning_compatibility_cli::lightning_actual_cli_runs_three_cases_and_isolated_bundle_state",
+          "source": "tools/xtask/tests/migration_lifecycle/lightning_compatibility_cli.rs",
+          "source_sha256": "0c0feb51cd9513b7f7f4ad88055a5b2ec1a68bdd4c8184997998d90b214c8920",
+          "log": ".omo/evidence/resume-20261002/lightning-quality-maintained-v1-lightning-cli.log",
+          "log_sha256": "a83be6c56e1ae9a7b211806d9f90a184c7ea3f3756ae0bf27f8e4b071ae789db",
+          "line": 8
+        },
+        {
+          "selector": "lightning_compatibility_cli::lightning_actual_cli_refuses_paid_bypass_bad_usage_and_existing_output",
+          "source": "tools/xtask/tests/migration_lifecycle/lightning_compatibility_cli.rs",
+          "source_sha256": "0c0feb51cd9513b7f7f4ad88055a5b2ec1a68bdd4c8184997998d90b214c8920",
+          "log": ".omo/evidence/resume-20261002/lightning-quality-maintained-v1-lightning-cli.log",
+          "log_sha256": "a83be6c56e1ae9a7b211806d9f90a184c7ea3f3756ae0bf27f8e4b071ae789db",
+          "line": 7
+        },
+        {
+          "selector": "lightning_compatibility_cli::lightning_actual_cli_inflight_cancellation_preserves_failed_evidence_and_cleanup",
+          "source": "tools/xtask/tests/migration_lifecycle/lightning_compatibility_cli.rs",
+          "source_sha256": "0c0feb51cd9513b7f7f4ad88055a5b2ec1a68bdd4c8184997998d90b214c8920",
+          "log": ".omo/evidence/resume-20261002/lightning-quality-maintained-v1-lightning-cli.log",
+          "log_sha256": "a83be6c56e1ae9a7b211806d9f90a184c7ea3f3756ae0bf27f8e4b071ae789db",
+          "line": 6
+        }
+      ],
+      "intent_scope": "local orchestration only; real released/model/payment protocol acceptance separate",
+      "historical_named_proof": [
+        {
+          "name": "lightning_actual_cli_runs_three_cases_and_isolated_bundle_state",
+          "path": "tools/xtask/tests/migration_lifecycle/lightning_compatibility_cli.rs",
+          "test": "lightning_compatibility_cli::lightning_actual_cli_runs_three_cases_and_isolated_bundle_state",
+          "log": ".omo/evidence/resume-20261002/lightning-compatibility-maintained-v11-lightning-cli.log",
+          "sha256": "b7906c08d99475da339efc083f89a41c5fbadde8abfcb4c522c4249c371912d4",
+          "line": 8,
+          "source_sha256": "0c0feb51cd9513b7f7f4ad88055a5b2ec1a68bdd4c8184997998d90b214c8920"
+        }
+      ],
+      "assertion_scope": "Actual fixture advertises required model at /v1/models before inference; source gates named-model rather than merely truthy data. Terminal R1 now covered by four freshly passed actual production-admit fixtures.",
+      "current_native_sources": [
+        {
+          "path": "tools/xtask/src/automation/lightning_compatibility.rs",
+          "sha256": "eb83df27e25739e52120bb950b90d1100126900b2f80764d0ba230b657a5cd3a"
+        },
+        {
+          "path": "tools/xtask/src/automation/lightning_compatibility/http_checks.rs",
+          "sha256": "8d774710f1dba8985befe7e94d091bd3e0fab6c4a1687bb7c46aa04de69b5d5b"
+        },
+        {
+          "path": "tools/xtask/src/automation/lightning_compatibility/identity.rs",
+          "sha256": "0a9804d7a411dee677d27335da184f67670330b400cb3e395536f4f0fe7b3d60"
+        },
+        {
+          "path": "tools/xtask/src/automation/lightning_compatibility/setup.rs",
+          "sha256": "037231e46113a338802698e07e31605b30576292120d63ab45162a64f9aad831"
+        },
+        {
+          "path": "tools/xtask/src/automation/lightning_compatibility/owner.rs",
+          "sha256": "a6c1ab8e747c0f4b6ea466672de25a2fd506a9c97db072adef91e7005e158fbd"
+        },
+        {
+          "path": "tools/xtask/tests/migration_lifecycle/lightning_compatibility_cli.rs",
+          "sha256": "0c0feb51cd9513b7f7f4ad88055a5b2ec1a68bdd4c8184997998d90b214c8920"
+        },
+        {
+          "path": "tools/xtask/examples/l7_daemon_fixture/lightning_peer_fixture.rs",
+          "sha256": "97f2ef2f910093eddaf25bbc227d58707b74556cd75b45a4445b749ec50db8c0"
+        },
+        {
+          "path": "tools/xtask/src/automation/command_interrupt/mod.rs",
+          "sha256": "945652800581d9c067f180d99455a9e9ede234dc9e344acb15a654f4616e250a"
+        },
+        {
+          "path": "tools/xtask/src/automation/lightning_compatibility/terminal.rs",
+          "sha256": "4de3594b698e047411a6d41d4708216df7d7158b759706c95432ecfcc6ac0879"
+        }
+      ],
+      "gap": null
+    },
+    {
+      "method": "stop",
+      "start_line": 109,
+      "end_line": 116,
+      "body_sha256": "23fad491b08e1d3fdfa66f3bb814067afaedd334c64c6486c86a2f36128b06b0",
+      "native_owner": "process::retained Stop/session cleanup",
+      "assertion_owner": "lightning_compatibility_cli actual narrative/refusal/cancellation attrs plus source-correlated exact invoked paths",
+      "execution": [
+        {
+          "selector": "automation::lightning_compatibility::terminal::tests::terminal_success_preserves_complete_and_failed_observations",
+          "source": "tools/xtask/src/automation/lightning_compatibility/terminal.rs",
+          "source_sha256": "4de3594b698e047411a6d41d4708216df7d7158b759706c95432ecfcc6ac0879",
+          "log": ".omo/evidence/resume-20261002/lightning-quality-maintained-v1-lightning-unit.log",
+          "log_sha256": "dd081320079fc0f6b95d0e5614d4da339b778b47e613a1ccff90e06d0330aaa8",
+          "line": 8
+        },
+        {
+          "selector": "automation::lightning_compatibility::terminal::tests::terminal_finish_error_downgrades_success_without_losing_observations",
+          "source": "tools/xtask/src/automation/lightning_compatibility/terminal.rs",
+          "source_sha256": "4de3594b698e047411a6d41d4708216df7d7158b759706c95432ecfcc6ac0879",
+          "log": ".omo/evidence/resume-20261002/lightning-quality-maintained-v1-lightning-unit.log",
+          "log_sha256": "dd081320079fc0f6b95d0e5614d4da339b778b47e613a1ccff90e06d0330aaa8",
+          "line": 9
+        },
+        {
+          "selector": "automation::lightning_compatibility::terminal::tests::terminal_cancellation_downgrades_success_without_losing_observations",
+          "source": "tools/xtask/src/automation/lightning_compatibility/terminal.rs",
+          "source_sha256": "4de3594b698e047411a6d41d4708216df7d7158b759706c95432ecfcc6ac0879",
+          "log": ".omo/evidence/resume-20261002/lightning-quality-maintained-v1-lightning-unit.log",
+          "log_sha256": "dd081320079fc0f6b95d0e5614d4da339b778b47e613a1ccff90e06d0330aaa8",
+          "line": 6
+        },
+        {
+          "selector": "automation::lightning_compatibility::terminal::tests::terminal_deadline_downgrades_success_without_losing_observations",
+          "source": "tools/xtask/src/automation/lightning_compatibility/terminal.rs",
+          "source_sha256": "4de3594b698e047411a6d41d4708216df7d7158b759706c95432ecfcc6ac0879",
+          "log": ".omo/evidence/resume-20261002/lightning-quality-maintained-v1-lightning-unit.log",
+          "log_sha256": "dd081320079fc0f6b95d0e5614d4da339b778b47e613a1ccff90e06d0330aaa8",
+          "line": 7
+        },
+        {
+          "selector": "automation::lightning_compatibility::http_checks::tests::free_cases_require_content_and_usage_paid_case_requires_402",
+          "source": "tools/xtask/src/automation/lightning_compatibility/http_checks.rs",
+          "source_sha256": "8d774710f1dba8985befe7e94d091bd3e0fab6c4a1687bb7c46aa04de69b5d5b",
+          "log": ".omo/evidence/resume-20261002/lightning-quality-maintained-v1-lightning-unit.log",
+          "log_sha256": "dd081320079fc0f6b95d0e5614d4da339b778b47e613a1ccff90e06d0330aaa8",
+          "line": 10
+        },
+        {
+          "selector": "lightning_compatibility_cli::lightning_actual_cli_runs_three_cases_and_isolated_bundle_state",
+          "source": "tools/xtask/tests/migration_lifecycle/lightning_compatibility_cli.rs",
+          "source_sha256": "0c0feb51cd9513b7f7f4ad88055a5b2ec1a68bdd4c8184997998d90b214c8920",
+          "log": ".omo/evidence/resume-20261002/lightning-quality-maintained-v1-lightning-cli.log",
+          "log_sha256": "a83be6c56e1ae9a7b211806d9f90a184c7ea3f3756ae0bf27f8e4b071ae789db",
+          "line": 8
+        },
+        {
+          "selector": "lightning_compatibility_cli::lightning_actual_cli_refuses_paid_bypass_bad_usage_and_existing_output",
+          "source": "tools/xtask/tests/migration_lifecycle/lightning_compatibility_cli.rs",
+          "source_sha256": "0c0feb51cd9513b7f7f4ad88055a5b2ec1a68bdd4c8184997998d90b214c8920",
+          "log": ".omo/evidence/resume-20261002/lightning-quality-maintained-v1-lightning-cli.log",
+          "log_sha256": "a83be6c56e1ae9a7b211806d9f90a184c7ea3f3756ae0bf27f8e4b071ae789db",
+          "line": 7
+        },
+        {
+          "selector": "lightning_compatibility_cli::lightning_actual_cli_inflight_cancellation_preserves_failed_evidence_and_cleanup",
+          "source": "tools/xtask/tests/migration_lifecycle/lightning_compatibility_cli.rs",
+          "source_sha256": "0c0feb51cd9513b7f7f4ad88055a5b2ec1a68bdd4c8184997998d90b214c8920",
+          "log": ".omo/evidence/resume-20261002/lightning-quality-maintained-v1-lightning-cli.log",
+          "log_sha256": "a83be6c56e1ae9a7b211806d9f90a184c7ea3f3756ae0bf27f8e4b071ae789db",
+          "line": 6
+        }
+      ],
+      "intent_scope": "local orchestration only; real released/model/payment protocol acceptance separate",
+      "historical_named_proof": [
+        {
+          "name": "lightning_actual_cli_runs_three_cases_and_isolated_bundle_state",
+          "path": "tools/xtask/tests/migration_lifecycle/lightning_compatibility_cli.rs",
+          "test": "lightning_compatibility_cli::lightning_actual_cli_runs_three_cases_and_isolated_bundle_state",
+          "log": ".omo/evidence/resume-20261002/lightning-compatibility-maintained-v11-lightning-cli.log",
+          "sha256": "b7906c08d99475da339efc083f89a41c5fbadde8abfcb4c522c4249c371912d4",
+          "line": 8,
+          "source_sha256": "0c0feb51cd9513b7f7f4ad88055a5b2ec1a68bdd4c8184997998d90b214c8920"
+        },
+        {
+          "name": "lightning_actual_cli_refuses_paid_bypass_bad_usage_and_existing_output",
+          "path": "tools/xtask/tests/migration_lifecycle/lightning_compatibility_cli.rs",
+          "test": "lightning_compatibility_cli::lightning_actual_cli_refuses_paid_bypass_bad_usage_and_existing_output",
+          "log": ".omo/evidence/resume-20261002/lightning-compatibility-maintained-v11-lightning-cli.log",
+          "sha256": "b7906c08d99475da339efc083f89a41c5fbadde8abfcb4c522c4249c371912d4",
+          "line": 7,
+          "source_sha256": "0c0feb51cd9513b7f7f4ad88055a5b2ec1a68bdd4c8184997998d90b214c8920"
+        },
+        {
+          "name": "lightning_actual_cli_inflight_cancellation_preserves_failed_evidence_and_cleanup",
+          "path": "tools/xtask/tests/migration_lifecycle/lightning_compatibility_cli.rs",
+          "test": "lightning_compatibility_cli::lightning_actual_cli_inflight_cancellation_preserves_failed_evidence_and_cleanup",
+          "log": ".omo/evidence/resume-20261002/lightning-compatibility-maintained-v11-lightning-cli.log",
+          "sha256": "b7906c08d99475da339efc083f89a41c5fbadde8abfcb4c522c4249c371912d4",
+          "line": 6,
+          "source_sha256": "0c0feb51cd9513b7f7f4ad88055a5b2ec1a68bdd4c8184997998d90b214c8920"
+        }
+      ],
+      "assertion_scope": "Actual all five owned member logs, complete unforced outer cleanup and closed temp roots across success/refusal/cancel. Process retained owner performs bounded node stop; fixture success does not establish actual product graceful shutdown. Terminal R1 now covered by four freshly passed actual production-admit fixtures.",
+      "current_native_sources": [
+        {
+          "path": "tools/xtask/src/automation/lightning_compatibility.rs",
+          "sha256": "eb83df27e25739e52120bb950b90d1100126900b2f80764d0ba230b657a5cd3a"
+        },
+        {
+          "path": "tools/xtask/src/automation/lightning_compatibility/http_checks.rs",
+          "sha256": "8d774710f1dba8985befe7e94d091bd3e0fab6c4a1687bb7c46aa04de69b5d5b"
+        },
+        {
+          "path": "tools/xtask/src/automation/lightning_compatibility/identity.rs",
+          "sha256": "0a9804d7a411dee677d27335da184f67670330b400cb3e395536f4f0fe7b3d60"
+        },
+        {
+          "path": "tools/xtask/src/automation/lightning_compatibility/setup.rs",
+          "sha256": "037231e46113a338802698e07e31605b30576292120d63ab45162a64f9aad831"
+        },
+        {
+          "path": "tools/xtask/src/automation/lightning_compatibility/owner.rs",
+          "sha256": "a6c1ab8e747c0f4b6ea466672de25a2fd506a9c97db072adef91e7005e158fbd"
+        },
+        {
+          "path": "tools/xtask/tests/migration_lifecycle/lightning_compatibility_cli.rs",
+          "sha256": "0c0feb51cd9513b7f7f4ad88055a5b2ec1a68bdd4c8184997998d90b214c8920"
+        },
+        {
+          "path": "tools/xtask/examples/l7_daemon_fixture/lightning_peer_fixture.rs",
+          "sha256": "97f2ef2f910093eddaf25bbc227d58707b74556cd75b45a4445b749ec50db8c0"
+        },
+        {
+          "path": "tools/xtask/src/automation/command_interrupt/mod.rs",
+          "sha256": "945652800581d9c067f180d99455a9e9ede234dc9e344acb15a654f4616e250a"
+        },
+        {
+          "path": "tools/xtask/src/automation/lightning_compatibility/terminal.rs",
+          "sha256": "4de3594b698e047411a6d41d4708216df7d7158b759706c95432ecfcc6ac0879"
+        }
+      ],
+      "gap": null
+    },
+    {
+      "method": "check_inference",
+      "start_line": 119,
+      "end_line": 131,
+      "body_sha256": "b0fa99c8bbc93a59985cf18a12351dc2aae6ee041bf21fd140a29d95a2773c7c",
+      "native_owner": "http_checks::observation",
+      "assertion_owner": "http_checks::tests::free_cases_require_content_and_usage_paid_case_requires_402",
+      "execution": [
+        {
+          "selector": "automation::lightning_compatibility::terminal::tests::terminal_success_preserves_complete_and_failed_observations",
+          "source": "tools/xtask/src/automation/lightning_compatibility/terminal.rs",
+          "source_sha256": "4de3594b698e047411a6d41d4708216df7d7158b759706c95432ecfcc6ac0879",
+          "log": ".omo/evidence/resume-20261002/lightning-quality-maintained-v1-lightning-unit.log",
+          "log_sha256": "dd081320079fc0f6b95d0e5614d4da339b778b47e613a1ccff90e06d0330aaa8",
+          "line": 8
+        },
+        {
+          "selector": "automation::lightning_compatibility::terminal::tests::terminal_finish_error_downgrades_success_without_losing_observations",
+          "source": "tools/xtask/src/automation/lightning_compatibility/terminal.rs",
+          "source_sha256": "4de3594b698e047411a6d41d4708216df7d7158b759706c95432ecfcc6ac0879",
+          "log": ".omo/evidence/resume-20261002/lightning-quality-maintained-v1-lightning-unit.log",
+          "log_sha256": "dd081320079fc0f6b95d0e5614d4da339b778b47e613a1ccff90e06d0330aaa8",
+          "line": 9
+        },
+        {
+          "selector": "automation::lightning_compatibility::terminal::tests::terminal_cancellation_downgrades_success_without_losing_observations",
+          "source": "tools/xtask/src/automation/lightning_compatibility/terminal.rs",
+          "source_sha256": "4de3594b698e047411a6d41d4708216df7d7158b759706c95432ecfcc6ac0879",
+          "log": ".omo/evidence/resume-20261002/lightning-quality-maintained-v1-lightning-unit.log",
+          "log_sha256": "dd081320079fc0f6b95d0e5614d4da339b778b47e613a1ccff90e06d0330aaa8",
+          "line": 6
+        },
+        {
+          "selector": "automation::lightning_compatibility::terminal::tests::terminal_deadline_downgrades_success_without_losing_observations",
+          "source": "tools/xtask/src/automation/lightning_compatibility/terminal.rs",
+          "source_sha256": "4de3594b698e047411a6d41d4708216df7d7158b759706c95432ecfcc6ac0879",
+          "log": ".omo/evidence/resume-20261002/lightning-quality-maintained-v1-lightning-unit.log",
+          "log_sha256": "dd081320079fc0f6b95d0e5614d4da339b778b47e613a1ccff90e06d0330aaa8",
+          "line": 7
+        },
+        {
+          "selector": "automation::lightning_compatibility::http_checks::tests::free_cases_require_content_and_usage_paid_case_requires_402",
+          "source": "tools/xtask/src/automation/lightning_compatibility/http_checks.rs",
+          "source_sha256": "8d774710f1dba8985befe7e94d091bd3e0fab6c4a1687bb7c46aa04de69b5d5b",
+          "log": ".omo/evidence/resume-20261002/lightning-quality-maintained-v1-lightning-unit.log",
+          "log_sha256": "dd081320079fc0f6b95d0e5614d4da339b778b47e613a1ccff90e06d0330aaa8",
+          "line": 10
+        },
+        {
+          "selector": "lightning_compatibility_cli::lightning_actual_cli_runs_three_cases_and_isolated_bundle_state",
+          "source": "tools/xtask/tests/migration_lifecycle/lightning_compatibility_cli.rs",
+          "source_sha256": "0c0feb51cd9513b7f7f4ad88055a5b2ec1a68bdd4c8184997998d90b214c8920",
+          "log": ".omo/evidence/resume-20261002/lightning-quality-maintained-v1-lightning-cli.log",
+          "log_sha256": "a83be6c56e1ae9a7b211806d9f90a184c7ea3f3756ae0bf27f8e4b071ae789db",
+          "line": 8
+        },
+        {
+          "selector": "lightning_compatibility_cli::lightning_actual_cli_refuses_paid_bypass_bad_usage_and_existing_output",
+          "source": "tools/xtask/tests/migration_lifecycle/lightning_compatibility_cli.rs",
+          "source_sha256": "0c0feb51cd9513b7f7f4ad88055a5b2ec1a68bdd4c8184997998d90b214c8920",
+          "log": ".omo/evidence/resume-20261002/lightning-quality-maintained-v1-lightning-cli.log",
+          "log_sha256": "a83be6c56e1ae9a7b211806d9f90a184c7ea3f3756ae0bf27f8e4b071ae789db",
+          "line": 7
+        },
+        {
+          "selector": "lightning_compatibility_cli::lightning_actual_cli_inflight_cancellation_preserves_failed_evidence_and_cleanup",
+          "source": "tools/xtask/tests/migration_lifecycle/lightning_compatibility_cli.rs",
+          "source_sha256": "0c0feb51cd9513b7f7f4ad88055a5b2ec1a68bdd4c8184997998d90b214c8920",
+          "log": ".omo/evidence/resume-20261002/lightning-quality-maintained-v1-lightning-cli.log",
+          "log_sha256": "a83be6c56e1ae9a7b211806d9f90a184c7ea3f3756ae0bf27f8e4b071ae789db",
+          "line": 6
+        }
+      ],
+      "intent_scope": "local orchestration only; real released/model/payment protocol acceptance separate",
+      "historical_named_proof": [
+        {
+          "name": "free_cases_require_content_and_usage_paid_case_requires_402",
+          "path": "tools/xtask/src/automation/lightning_compatibility/http_checks.rs",
+          "test": "automation::lightning_compatibility::http_checks::tests::free_cases_require_content_and_usage_paid_case_requires_402",
+          "log": ".omo/evidence/resume-20261002/lightning-compatibility-maintained-v11-lightning-unit.log",
+          "sha256": "bb59edd2d1fafe0d4181745eab098dc557c2ef12d5a37094f472bc801270e062",
+          "line": 6,
+          "source_sha256": "8d774710f1dba8985befe7e94d091bd3e0fab6c4a1687bb7c46aa04de69b5d5b"
+        },
+        {
+          "name": "lightning_actual_cli_runs_three_cases_and_isolated_bundle_state",
+          "path": "tools/xtask/tests/migration_lifecycle/lightning_compatibility_cli.rs",
+          "test": "lightning_compatibility_cli::lightning_actual_cli_runs_three_cases_and_isolated_bundle_state",
+          "log": ".omo/evidence/resume-20261002/lightning-compatibility-maintained-v11-lightning-cli.log",
+          "sha256": "b7906c08d99475da339efc083f89a41c5fbadde8abfcb4c522c4249c371912d4",
+          "line": 8,
+          "source_sha256": "0c0feb51cd9513b7f7f4ad88055a5b2ec1a68bdd4c8184997998d90b214c8920"
+        },
+        {
+          "name": "lightning_actual_cli_refuses_paid_bypass_bad_usage_and_existing_output",
+          "path": "tools/xtask/tests/migration_lifecycle/lightning_compatibility_cli.rs",
+          "test": "lightning_compatibility_cli::lightning_actual_cli_refuses_paid_bypass_bad_usage_and_existing_output",
+          "log": ".omo/evidence/resume-20261002/lightning-compatibility-maintained-v11-lightning-cli.log",
+          "sha256": "b7906c08d99475da339efc083f89a41c5fbadde8abfcb4c522c4249c371912d4",
+          "line": 7,
+          "source_sha256": "0c0feb51cd9513b7f7f4ad88055a5b2ec1a68bdd4c8184997998d90b214c8920"
+        }
+      ],
+      "assertion_scope": "Exact 200/402/200 rows; pure guard and actual missing usage/paid bypass produce failed recorded row and nonzero. No wallet funding/send. Terminal R1 now covered by four freshly passed actual production-admit fixtures.",
+      "current_native_sources": [
+        {
+          "path": "tools/xtask/src/automation/lightning_compatibility.rs",
+          "sha256": "eb83df27e25739e52120bb950b90d1100126900b2f80764d0ba230b657a5cd3a"
+        },
+        {
+          "path": "tools/xtask/src/automation/lightning_compatibility/http_checks.rs",
+          "sha256": "8d774710f1dba8985befe7e94d091bd3e0fab6c4a1687bb7c46aa04de69b5d5b"
+        },
+        {
+          "path": "tools/xtask/src/automation/lightning_compatibility/identity.rs",
+          "sha256": "0a9804d7a411dee677d27335da184f67670330b400cb3e395536f4f0fe7b3d60"
+        },
+        {
+          "path": "tools/xtask/src/automation/lightning_compatibility/setup.rs",
+          "sha256": "037231e46113a338802698e07e31605b30576292120d63ab45162a64f9aad831"
+        },
+        {
+          "path": "tools/xtask/src/automation/lightning_compatibility/owner.rs",
+          "sha256": "a6c1ab8e747c0f4b6ea466672de25a2fd506a9c97db072adef91e7005e158fbd"
+        },
+        {
+          "path": "tools/xtask/tests/migration_lifecycle/lightning_compatibility_cli.rs",
+          "sha256": "0c0feb51cd9513b7f7f4ad88055a5b2ec1a68bdd4c8184997998d90b214c8920"
+        },
+        {
+          "path": "tools/xtask/examples/l7_daemon_fixture/lightning_peer_fixture.rs",
+          "sha256": "97f2ef2f910093eddaf25bbc227d58707b74556cd75b45a4445b749ec50db8c0"
+        },
+        {
+          "path": "tools/xtask/src/automation/command_interrupt/mod.rs",
+          "sha256": "945652800581d9c067f180d99455a9e9ede234dc9e344acb15a654f4616e250a"
+        },
+        {
+          "path": "tools/xtask/src/automation/lightning_compatibility/terminal.rs",
+          "sha256": "4de3594b698e047411a6d41d4708216df7d7158b759706c95432ecfcc6ac0879"
+        }
+      ],
+      "gap": null
+    },
+    {
+      "method": "run",
+      "start_line": 134,
+      "end_line": 176,
+      "body_sha256": "16577c183c8adf8e22569f12d40667f3199494ac7d03c6a6464984135ac0a4f5",
+      "native_owner": "lightning_compatibility::execute/run",
+      "assertion_owner": "lightning_compatibility_cli actual narrative/refusal/cancellation attrs plus source-correlated exact invoked paths",
+      "execution": [
+        {
+          "selector": "automation::lightning_compatibility::terminal::tests::terminal_success_preserves_complete_and_failed_observations",
+          "source": "tools/xtask/src/automation/lightning_compatibility/terminal.rs",
+          "source_sha256": "4de3594b698e047411a6d41d4708216df7d7158b759706c95432ecfcc6ac0879",
+          "log": ".omo/evidence/resume-20261002/lightning-quality-maintained-v1-lightning-unit.log",
+          "log_sha256": "dd081320079fc0f6b95d0e5614d4da339b778b47e613a1ccff90e06d0330aaa8",
+          "line": 8
+        },
+        {
+          "selector": "automation::lightning_compatibility::terminal::tests::terminal_finish_error_downgrades_success_without_losing_observations",
+          "source": "tools/xtask/src/automation/lightning_compatibility/terminal.rs",
+          "source_sha256": "4de3594b698e047411a6d41d4708216df7d7158b759706c95432ecfcc6ac0879",
+          "log": ".omo/evidence/resume-20261002/lightning-quality-maintained-v1-lightning-unit.log",
+          "log_sha256": "dd081320079fc0f6b95d0e5614d4da339b778b47e613a1ccff90e06d0330aaa8",
+          "line": 9
+        },
+        {
+          "selector": "automation::lightning_compatibility::terminal::tests::terminal_cancellation_downgrades_success_without_losing_observations",
+          "source": "tools/xtask/src/automation/lightning_compatibility/terminal.rs",
+          "source_sha256": "4de3594b698e047411a6d41d4708216df7d7158b759706c95432ecfcc6ac0879",
+          "log": ".omo/evidence/resume-20261002/lightning-quality-maintained-v1-lightning-unit.log",
+          "log_sha256": "dd081320079fc0f6b95d0e5614d4da339b778b47e613a1ccff90e06d0330aaa8",
+          "line": 6
+        },
+        {
+          "selector": "automation::lightning_compatibility::terminal::tests::terminal_deadline_downgrades_success_without_losing_observations",
+          "source": "tools/xtask/src/automation/lightning_compatibility/terminal.rs",
+          "source_sha256": "4de3594b698e047411a6d41d4708216df7d7158b759706c95432ecfcc6ac0879",
+          "log": ".omo/evidence/resume-20261002/lightning-quality-maintained-v1-lightning-unit.log",
+          "log_sha256": "dd081320079fc0f6b95d0e5614d4da339b778b47e613a1ccff90e06d0330aaa8",
+          "line": 7
+        },
+        {
+          "selector": "automation::lightning_compatibility::http_checks::tests::free_cases_require_content_and_usage_paid_case_requires_402",
+          "source": "tools/xtask/src/automation/lightning_compatibility/http_checks.rs",
+          "source_sha256": "8d774710f1dba8985befe7e94d091bd3e0fab6c4a1687bb7c46aa04de69b5d5b",
+          "log": ".omo/evidence/resume-20261002/lightning-quality-maintained-v1-lightning-unit.log",
+          "log_sha256": "dd081320079fc0f6b95d0e5614d4da339b778b47e613a1ccff90e06d0330aaa8",
+          "line": 10
+        },
+        {
+          "selector": "lightning_compatibility_cli::lightning_actual_cli_runs_three_cases_and_isolated_bundle_state",
+          "source": "tools/xtask/tests/migration_lifecycle/lightning_compatibility_cli.rs",
+          "source_sha256": "0c0feb51cd9513b7f7f4ad88055a5b2ec1a68bdd4c8184997998d90b214c8920",
+          "log": ".omo/evidence/resume-20261002/lightning-quality-maintained-v1-lightning-cli.log",
+          "log_sha256": "a83be6c56e1ae9a7b211806d9f90a184c7ea3f3756ae0bf27f8e4b071ae789db",
+          "line": 8
+        },
+        {
+          "selector": "lightning_compatibility_cli::lightning_actual_cli_refuses_paid_bypass_bad_usage_and_existing_output",
+          "source": "tools/xtask/tests/migration_lifecycle/lightning_compatibility_cli.rs",
+          "source_sha256": "0c0feb51cd9513b7f7f4ad88055a5b2ec1a68bdd4c8184997998d90b214c8920",
+          "log": ".omo/evidence/resume-20261002/lightning-quality-maintained-v1-lightning-cli.log",
+          "log_sha256": "a83be6c56e1ae9a7b211806d9f90a184c7ea3f3756ae0bf27f8e4b071ae789db",
+          "line": 7
+        },
+        {
+          "selector": "lightning_compatibility_cli::lightning_actual_cli_inflight_cancellation_preserves_failed_evidence_and_cleanup",
+          "source": "tools/xtask/tests/migration_lifecycle/lightning_compatibility_cli.rs",
+          "source_sha256": "0c0feb51cd9513b7f7f4ad88055a5b2ec1a68bdd4c8184997998d90b214c8920",
+          "log": ".omo/evidence/resume-20261002/lightning-quality-maintained-v1-lightning-cli.log",
+          "log_sha256": "a83be6c56e1ae9a7b211806d9f90a184c7ea3f3756ae0bf27f8e4b071ae789db",
+          "line": 6
+        }
+      ],
+      "intent_scope": "local orchestration only; real released/model/payment protocol acceptance separate",
+      "historical_named_proof": [
+        {
+          "name": "lightning_actual_cli_runs_three_cases_and_isolated_bundle_state",
+          "path": "tools/xtask/tests/migration_lifecycle/lightning_compatibility_cli.rs",
+          "test": "lightning_compatibility_cli::lightning_actual_cli_runs_three_cases_and_isolated_bundle_state",
+          "log": ".omo/evidence/resume-20261002/lightning-compatibility-maintained-v11-lightning-cli.log",
+          "sha256": "b7906c08d99475da339efc083f89a41c5fbadde8abfcb4c522c4249c371912d4",
+          "line": 8,
+          "source_sha256": "0c0feb51cd9513b7f7f4ad88055a5b2ec1a68bdd4c8184997998d90b214c8920"
+        },
+        {
+          "name": "lightning_actual_cli_refuses_paid_bypass_bad_usage_and_existing_output",
+          "path": "tools/xtask/tests/migration_lifecycle/lightning_compatibility_cli.rs",
+          "test": "lightning_compatibility_cli::lightning_actual_cli_refuses_paid_bypass_bad_usage_and_existing_output",
+          "log": ".omo/evidence/resume-20261002/lightning-compatibility-maintained-v11-lightning-cli.log",
+          "sha256": "b7906c08d99475da339efc083f89a41c5fbadde8abfcb4c522c4249c371912d4",
+          "line": 7,
+          "source_sha256": "0c0feb51cd9513b7f7f4ad88055a5b2ec1a68bdd4c8184997998d90b214c8920"
+        },
+        {
+          "name": "lightning_actual_cli_inflight_cancellation_preserves_failed_evidence_and_cleanup",
+          "path": "tools/xtask/tests/migration_lifecycle/lightning_compatibility_cli.rs",
+          "test": "lightning_compatibility_cli::lightning_actual_cli_inflight_cancellation_preserves_failed_evidence_and_cleanup",
+          "log": ".omo/evidence/resume-20261002/lightning-compatibility-maintained-v11-lightning-cli.log",
+          "sha256": "b7906c08d99475da339efc083f89a41c5fbadde8abfcb4c522c4249c371912d4",
+          "line": 6,
+          "source_sha256": "0c0feb51cd9513b7f7f4ad88055a5b2ec1a68bdd4c8184997998d90b214c8920"
+        }
+      ],
+      "assertion_scope": "Complete three-case sequence, retained prior failed observations, new-output refusal, identity recheck and typed privacy. Terminal late-cancel/finish/deadline gap remains R1. Terminal R1 now covered by four freshly passed actual production-admit fixtures.",
+      "current_native_sources": [
+        {
+          "path": "tools/xtask/src/automation/lightning_compatibility.rs",
+          "sha256": "eb83df27e25739e52120bb950b90d1100126900b2f80764d0ba230b657a5cd3a"
+        },
+        {
+          "path": "tools/xtask/src/automation/lightning_compatibility/http_checks.rs",
+          "sha256": "8d774710f1dba8985befe7e94d091bd3e0fab6c4a1687bb7c46aa04de69b5d5b"
+        },
+        {
+          "path": "tools/xtask/src/automation/lightning_compatibility/identity.rs",
+          "sha256": "0a9804d7a411dee677d27335da184f67670330b400cb3e395536f4f0fe7b3d60"
+        },
+        {
+          "path": "tools/xtask/src/automation/lightning_compatibility/setup.rs",
+          "sha256": "037231e46113a338802698e07e31605b30576292120d63ab45162a64f9aad831"
+        },
+        {
+          "path": "tools/xtask/src/automation/lightning_compatibility/owner.rs",
+          "sha256": "a6c1ab8e747c0f4b6ea466672de25a2fd506a9c97db072adef91e7005e158fbd"
+        },
+        {
+          "path": "tools/xtask/tests/migration_lifecycle/lightning_compatibility_cli.rs",
+          "sha256": "0c0feb51cd9513b7f7f4ad88055a5b2ec1a68bdd4c8184997998d90b214c8920"
+        },
+        {
+          "path": "tools/xtask/examples/l7_daemon_fixture/lightning_peer_fixture.rs",
+          "sha256": "97f2ef2f910093eddaf25bbc227d58707b74556cd75b45a4445b749ec50db8c0"
+        },
+        {
+          "path": "tools/xtask/src/automation/command_interrupt/mod.rs",
+          "sha256": "945652800581d9c067f180d99455a9e9ede234dc9e344acb15a654f4616e250a"
+        },
+        {
+          "path": "tools/xtask/src/automation/lightning_compatibility/terminal.rs",
+          "sha256": "4de3594b698e047411a6d41d4708216df7d7158b759706c95432ecfcc6ac0879"
+        }
+      ],
+      "gap": null
+    },
+    {
+      "method": "start",
+      "start_line": 146,
+      "end_line": 149,
+      "body_sha256": "5903131671dbe295baaafc3a8d597904ed54eeacf295a40dd63a1f6862712a16",
+      "native_owner": "setup::append/owner::tick",
+      "assertion_owner": "lightning_compatibility_cli actual narrative/refusal/cancellation attrs plus source-correlated exact invoked paths",
+      "execution": [
+        {
+          "selector": "automation::lightning_compatibility::terminal::tests::terminal_success_preserves_complete_and_failed_observations",
+          "source": "tools/xtask/src/automation/lightning_compatibility/terminal.rs",
+          "source_sha256": "4de3594b698e047411a6d41d4708216df7d7158b759706c95432ecfcc6ac0879",
+          "log": ".omo/evidence/resume-20261002/lightning-quality-maintained-v1-lightning-unit.log",
+          "log_sha256": "dd081320079fc0f6b95d0e5614d4da339b778b47e613a1ccff90e06d0330aaa8",
+          "line": 8
+        },
+        {
+          "selector": "automation::lightning_compatibility::terminal::tests::terminal_finish_error_downgrades_success_without_losing_observations",
+          "source": "tools/xtask/src/automation/lightning_compatibility/terminal.rs",
+          "source_sha256": "4de3594b698e047411a6d41d4708216df7d7158b759706c95432ecfcc6ac0879",
+          "log": ".omo/evidence/resume-20261002/lightning-quality-maintained-v1-lightning-unit.log",
+          "log_sha256": "dd081320079fc0f6b95d0e5614d4da339b778b47e613a1ccff90e06d0330aaa8",
+          "line": 9
+        },
+        {
+          "selector": "automation::lightning_compatibility::terminal::tests::terminal_cancellation_downgrades_success_without_losing_observations",
+          "source": "tools/xtask/src/automation/lightning_compatibility/terminal.rs",
+          "source_sha256": "4de3594b698e047411a6d41d4708216df7d7158b759706c95432ecfcc6ac0879",
+          "log": ".omo/evidence/resume-20261002/lightning-quality-maintained-v1-lightning-unit.log",
+          "log_sha256": "dd081320079fc0f6b95d0e5614d4da339b778b47e613a1ccff90e06d0330aaa8",
+          "line": 6
+        },
+        {
+          "selector": "automation::lightning_compatibility::terminal::tests::terminal_deadline_downgrades_success_without_losing_observations",
+          "source": "tools/xtask/src/automation/lightning_compatibility/terminal.rs",
+          "source_sha256": "4de3594b698e047411a6d41d4708216df7d7158b759706c95432ecfcc6ac0879",
+          "log": ".omo/evidence/resume-20261002/lightning-quality-maintained-v1-lightning-unit.log",
+          "log_sha256": "dd081320079fc0f6b95d0e5614d4da339b778b47e613a1ccff90e06d0330aaa8",
+          "line": 7
+        },
+        {
+          "selector": "automation::lightning_compatibility::http_checks::tests::free_cases_require_content_and_usage_paid_case_requires_402",
+          "source": "tools/xtask/src/automation/lightning_compatibility/http_checks.rs",
+          "source_sha256": "8d774710f1dba8985befe7e94d091bd3e0fab6c4a1687bb7c46aa04de69b5d5b",
+          "log": ".omo/evidence/resume-20261002/lightning-quality-maintained-v1-lightning-unit.log",
+          "log_sha256": "dd081320079fc0f6b95d0e5614d4da339b778b47e613a1ccff90e06d0330aaa8",
+          "line": 10
+        },
+        {
+          "selector": "lightning_compatibility_cli::lightning_actual_cli_runs_three_cases_and_isolated_bundle_state",
+          "source": "tools/xtask/tests/migration_lifecycle/lightning_compatibility_cli.rs",
+          "source_sha256": "0c0feb51cd9513b7f7f4ad88055a5b2ec1a68bdd4c8184997998d90b214c8920",
+          "log": ".omo/evidence/resume-20261002/lightning-quality-maintained-v1-lightning-cli.log",
+          "log_sha256": "a83be6c56e1ae9a7b211806d9f90a184c7ea3f3756ae0bf27f8e4b071ae789db",
+          "line": 8
+        },
+        {
+          "selector": "lightning_compatibility_cli::lightning_actual_cli_refuses_paid_bypass_bad_usage_and_existing_output",
+          "source": "tools/xtask/tests/migration_lifecycle/lightning_compatibility_cli.rs",
+          "source_sha256": "0c0feb51cd9513b7f7f4ad88055a5b2ec1a68bdd4c8184997998d90b214c8920",
+          "log": ".omo/evidence/resume-20261002/lightning-quality-maintained-v1-lightning-cli.log",
+          "log_sha256": "a83be6c56e1ae9a7b211806d9f90a184c7ea3f3756ae0bf27f8e4b071ae789db",
+          "line": 7
+        },
+        {
+          "selector": "lightning_compatibility_cli::lightning_actual_cli_inflight_cancellation_preserves_failed_evidence_and_cleanup",
+          "source": "tools/xtask/tests/migration_lifecycle/lightning_compatibility_cli.rs",
+          "source_sha256": "0c0feb51cd9513b7f7f4ad88055a5b2ec1a68bdd4c8184997998d90b214c8920",
+          "log": ".omo/evidence/resume-20261002/lightning-quality-maintained-v1-lightning-cli.log",
+          "log_sha256": "a83be6c56e1ae9a7b211806d9f90a184c7ea3f3756ae0bf27f8e4b071ae789db",
+          "line": 6
+        }
+      ],
+      "intent_scope": "local orchestration only; real released/model/payment protocol acceptance separate",
+      "historical_named_proof": [
+        {
+          "name": "lightning_actual_cli_runs_three_cases_and_isolated_bundle_state",
+          "path": "tools/xtask/tests/migration_lifecycle/lightning_compatibility_cli.rs",
+          "test": "lightning_compatibility_cli::lightning_actual_cli_runs_three_cases_and_isolated_bundle_state",
+          "log": ".omo/evidence/resume-20261002/lightning-compatibility-maintained-v11-lightning-cli.log",
+          "sha256": "b7906c08d99475da339efc083f89a41c5fbadde8abfcb4c522c4249c371912d4",
+          "line": 8,
+          "source_sha256": "0c0feb51cd9513b7f7f4ad88055a5b2ec1a68bdd4c8184997998d90b214c8920"
+        }
+      ],
+      "assertion_scope": "Full five-node narrative; source queue launches selected current/released executable and substitutes invite as Secret before launch. Terminal R1 now covered by four freshly passed actual production-admit fixtures.",
+      "current_native_sources": [
+        {
+          "path": "tools/xtask/src/automation/lightning_compatibility.rs",
+          "sha256": "eb83df27e25739e52120bb950b90d1100126900b2f80764d0ba230b657a5cd3a"
+        },
+        {
+          "path": "tools/xtask/src/automation/lightning_compatibility/http_checks.rs",
+          "sha256": "8d774710f1dba8985befe7e94d091bd3e0fab6c4a1687bb7c46aa04de69b5d5b"
+        },
+        {
+          "path": "tools/xtask/src/automation/lightning_compatibility/identity.rs",
+          "sha256": "0a9804d7a411dee677d27335da184f67670330b400cb3e395536f4f0fe7b3d60"
+        },
+        {
+          "path": "tools/xtask/src/automation/lightning_compatibility/setup.rs",
+          "sha256": "037231e46113a338802698e07e31605b30576292120d63ab45162a64f9aad831"
+        },
+        {
+          "path": "tools/xtask/src/automation/lightning_compatibility/owner.rs",
+          "sha256": "a6c1ab8e747c0f4b6ea466672de25a2fd506a9c97db072adef91e7005e158fbd"
+        },
+        {
+          "path": "tools/xtask/tests/migration_lifecycle/lightning_compatibility_cli.rs",
+          "sha256": "0c0feb51cd9513b7f7f4ad88055a5b2ec1a68bdd4c8184997998d90b214c8920"
+        },
+        {
+          "path": "tools/xtask/examples/l7_daemon_fixture/lightning_peer_fixture.rs",
+          "sha256": "97f2ef2f910093eddaf25bbc227d58707b74556cd75b45a4445b749ec50db8c0"
+        },
+        {
+          "path": "tools/xtask/src/automation/command_interrupt/mod.rs",
+          "sha256": "945652800581d9c067f180d99455a9e9ede234dc9e344acb15a654f4616e250a"
+        },
+        {
+          "path": "tools/xtask/src/automation/lightning_compatibility/terminal.rs",
+          "sha256": "4de3594b698e047411a6d41d4708216df7d7158b759706c95432ecfcc6ac0879"
+        }
+      ],
+      "gap": null
+    }
+  ],
+  "original_function_regions": 11,
+  "native_sources": [
+    {
+      "path": "tools/xtask/src/automation/lightning_compatibility.rs",
+      "sha256": "eb83df27e25739e52120bb950b90d1100126900b2f80764d0ba230b657a5cd3a"
+    },
+    {
+      "path": "tools/xtask/src/automation/lightning_compatibility/http_checks.rs",
+      "sha256": "8d774710f1dba8985befe7e94d091bd3e0fab6c4a1687bb7c46aa04de69b5d5b"
+    },
+    {
+      "path": "tools/xtask/src/automation/lightning_compatibility/identity.rs",
+      "sha256": "0a9804d7a411dee677d27335da184f67670330b400cb3e395536f4f0fe7b3d60"
+    },
+    {
+      "path": "tools/xtask/src/automation/lightning_compatibility/setup.rs",
+      "sha256": "037231e46113a338802698e07e31605b30576292120d63ab45162a64f9aad831"
+    },
+    {
+      "path": "tools/xtask/src/automation/lightning_compatibility/owner.rs",
+      "sha256": "a6c1ab8e747c0f4b6ea466672de25a2fd506a9c97db072adef91e7005e158fbd"
+    },
+    {
+      "path": "tools/xtask/tests/migration_lifecycle/lightning_compatibility_cli.rs",
+      "sha256": "0c0feb51cd9513b7f7f4ad88055a5b2ec1a68bdd4c8184997998d90b214c8920"
+    },
+    {
+      "path": "tools/xtask/examples/l7_daemon_fixture/lightning_peer_fixture.rs",
+      "sha256": "97f2ef2f910093eddaf25bbc227d58707b74556cd75b45a4445b749ec50db8c0"
+    },
+    {
+      "path": "tools/xtask/src/automation/command_interrupt/mod.rs",
+      "sha256": "945652800581d9c067f180d99455a9e9ede234dc9e344acb15a654f4616e250a"
+    },
+    {
+      "path": "tools/xtask/src/automation/lightning_compatibility/terminal.rs",
+      "sha256": "4de3594b698e047411a6d41d4708216df7d7158b759706c95432ecfcc6ac0879"
+    }
+  ],
+  "caller": {
+    "path": "docs/specs/lightning-payments.md",
+    "sha256": "ef75958c03baee140d0813a3c8396f0854cd92270121d457102100e783b8c66c",
+    "native": "just with-lld cargo xtool automation lightning-compatibility"
+  },
+  "qualification": {
+    "checkpoint": {
+      "path": ".omo/evidence/resume-20261002/ci98-qualified-checkpoint-v1-exit.json",
+      "sha256": "a3dcf9e7b65d0dc6174b0f17955d7e25c7cf00a2ec5fd3450620d4a10269f713"
+    },
+    "focused_receipt": {
+      "path": ".omo/evidence/resume-20261002/lightning-quality-maintained-v1-exit.json",
+      "sha256": "af9b0f32f7986ed8293cc8e82fcb3e4212997cce0f931855f6786bb643733392"
+    },
+    "focused_freeze": {
+      "path": ".omo/evidence/resume-20261002/lightning-quality-maintained-v1-freeze-v1.json",
+      "sha256": "a1ece4a0003fee53eafded0ed05b0a52a742374695d40a9978e2211a9fce21f4"
+    },
+    "positive_tests": [
+      {
+        "selector": "automation::lightning_compatibility::terminal::tests::terminal_success_preserves_complete_and_failed_observations",
+        "source": "tools/xtask/src/automation/lightning_compatibility/terminal.rs",
+        "source_sha256": "4de3594b698e047411a6d41d4708216df7d7158b759706c95432ecfcc6ac0879",
+        "log": ".omo/evidence/resume-20261002/lightning-quality-maintained-v1-lightning-unit.log",
+        "log_sha256": "dd081320079fc0f6b95d0e5614d4da339b778b47e613a1ccff90e06d0330aaa8",
+        "line": 8
+      },
+      {
+        "selector": "automation::lightning_compatibility::terminal::tests::terminal_finish_error_downgrades_success_without_losing_observations",
+        "source": "tools/xtask/src/automation/lightning_compatibility/terminal.rs",
+        "source_sha256": "4de3594b698e047411a6d41d4708216df7d7158b759706c95432ecfcc6ac0879",
+        "log": ".omo/evidence/resume-20261002/lightning-quality-maintained-v1-lightning-unit.log",
+        "log_sha256": "dd081320079fc0f6b95d0e5614d4da339b778b47e613a1ccff90e06d0330aaa8",
+        "line": 9
+      },
+      {
+        "selector": "automation::lightning_compatibility::terminal::tests::terminal_cancellation_downgrades_success_without_losing_observations",
+        "source": "tools/xtask/src/automation/lightning_compatibility/terminal.rs",
+        "source_sha256": "4de3594b698e047411a6d41d4708216df7d7158b759706c95432ecfcc6ac0879",
+        "log": ".omo/evidence/resume-20261002/lightning-quality-maintained-v1-lightning-unit.log",
+        "log_sha256": "dd081320079fc0f6b95d0e5614d4da339b778b47e613a1ccff90e06d0330aaa8",
+        "line": 6
+      },
+      {
+        "selector": "automation::lightning_compatibility::terminal::tests::terminal_deadline_downgrades_success_without_losing_observations",
+        "source": "tools/xtask/src/automation/lightning_compatibility/terminal.rs",
+        "source_sha256": "4de3594b698e047411a6d41d4708216df7d7158b759706c95432ecfcc6ac0879",
+        "log": ".omo/evidence/resume-20261002/lightning-quality-maintained-v1-lightning-unit.log",
+        "log_sha256": "dd081320079fc0f6b95d0e5614d4da339b778b47e613a1ccff90e06d0330aaa8",
+        "line": 7
+      },
+      {
+        "selector": "automation::lightning_compatibility::http_checks::tests::free_cases_require_content_and_usage_paid_case_requires_402",
+        "source": "tools/xtask/src/automation/lightning_compatibility/http_checks.rs",
+        "source_sha256": "8d774710f1dba8985befe7e94d091bd3e0fab6c4a1687bb7c46aa04de69b5d5b",
+        "log": ".omo/evidence/resume-20261002/lightning-quality-maintained-v1-lightning-unit.log",
+        "log_sha256": "dd081320079fc0f6b95d0e5614d4da339b778b47e613a1ccff90e06d0330aaa8",
+        "line": 10
+      },
+      {
+        "selector": "lightning_compatibility_cli::lightning_actual_cli_runs_three_cases_and_isolated_bundle_state",
+        "source": "tools/xtask/tests/migration_lifecycle/lightning_compatibility_cli.rs",
+        "source_sha256": "0c0feb51cd9513b7f7f4ad88055a5b2ec1a68bdd4c8184997998d90b214c8920",
+        "log": ".omo/evidence/resume-20261002/lightning-quality-maintained-v1-lightning-cli.log",
+        "log_sha256": "a83be6c56e1ae9a7b211806d9f90a184c7ea3f3756ae0bf27f8e4b071ae789db",
+        "line": 8
+      },
+      {
+        "selector": "lightning_compatibility_cli::lightning_actual_cli_refuses_paid_bypass_bad_usage_and_existing_output",
+        "source": "tools/xtask/tests/migration_lifecycle/lightning_compatibility_cli.rs",
+        "source_sha256": "0c0feb51cd9513b7f7f4ad88055a5b2ec1a68bdd4c8184997998d90b214c8920",
+        "log": ".omo/evidence/resume-20261002/lightning-quality-maintained-v1-lightning-cli.log",
+        "log_sha256": "a83be6c56e1ae9a7b211806d9f90a184c7ea3f3756ae0bf27f8e4b071ae789db",
+        "line": 7
+      },
+      {
+        "selector": "lightning_compatibility_cli::lightning_actual_cli_inflight_cancellation_preserves_failed_evidence_and_cleanup",
+        "source": "tools/xtask/tests/migration_lifecycle/lightning_compatibility_cli.rs",
+        "source_sha256": "0c0feb51cd9513b7f7f4ad88055a5b2ec1a68bdd4c8184997998d90b214c8920",
+        "log": ".omo/evidence/resume-20261002/lightning-quality-maintained-v1-lightning-cli.log",
+        "log_sha256": "a83be6c56e1ae9a7b211806d9f90a184c7ea3f3756ae0bf27f8e4b071ae789db",
+        "line": 6
+      }
+    ],
+    "final_union_normal": {
+      "actual_normal": {
+        "path": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal-exit.json",
+        "sha256": "1667ad310ec605e462afa50f0622f4c7b2b0abeb220605bbfec44d4b791348f7"
+      },
+      "validated_freeze": {
+        "path": ".omo/evidence/resume-20261002/quality-just-recipe-owner-v1-freeze.json",
+        "sha256": "028b64a6fcb3fd0ab65e784bf19e3d8cc67c3178ca6c01fff3fd5ec2987347f7"
+      },
+      "log": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+      "sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd",
+      "rust_groups": 117,
+      "rust_passed": 5777,
+      "python_tests": 241,
+      "python_skips": 13,
+      "native_bindings": [
+        {
+          "selector": "artifact_action_sources::declared_consumers::epoch_consumers_declare_same_build_stamp_and_cache_identity",
+          "path": "tools/xtask/tests/ci_runner_cache_contract/artifact_action_sources/declared_consumers.rs",
+          "sha256": "8018dbe33dcc93607a5029fc16e866807f544fbbf2f97409ccde3c17ae40e337",
+          "log": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+          "log_sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd",
+          "line": 2388
+        },
+        {
+          "selector": "artifact_action_sources::declared_consumers::kotlin_smoke_declares_immutable_download_restore_and_compiler_free_consumer",
+          "path": "tools/xtask/tests/ci_runner_cache_contract/artifact_action_sources/declared_consumers.rs",
+          "sha256": "8018dbe33dcc93607a5029fc16e866807f544fbbf2f97409ccde3c17ae40e337",
+          "log": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+          "log_sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd",
+          "line": 2389
+        },
+        {
+          "selector": "artifact_action_sources::declared_consumers::quality_declares_noninteractive_dependency_install_and_refuses_unverified_actionlint_shims",
+          "path": "tools/xtask/tests/ci_runner_cache_contract/artifact_action_sources/declared_consumers.rs",
+          "sha256": "8018dbe33dcc93607a5029fc16e866807f544fbbf2f97409ccde3c17ae40e337",
+          "log": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+          "log_sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd",
+          "line": 2390
+        },
+        {
+          "selector": "artifact_action_sources::declared_consumers::release_recipe_declarations_include_all_three_product_primitives",
+          "path": "tools/xtask/tests/ci_runner_cache_contract/artifact_action_sources/declared_consumers.rs",
+          "sha256": "8018dbe33dcc93607a5029fc16e866807f544fbbf2f97409ccde3c17ae40e337",
+          "log": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+          "log_sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd",
+          "line": 2391
+        },
+        {
+          "selector": "artifact_action_sources::declared_consumers::selector_call_census_declares_exact_head_and_paired_approval_inputs",
+          "path": "tools/xtask/tests/ci_runner_cache_contract/artifact_action_sources/declared_consumers.rs",
+          "sha256": "8018dbe33dcc93607a5029fc16e866807f544fbbf2f97409ccde3c17ae40e337",
+          "log": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+          "log_sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd",
+          "line": 2392
+        },
+        {
+          "selector": "artifact_action_sources::declared_consumers::static_abi_restore_declares_typed_admission_and_exact_epoch_before_publication",
+          "path": "tools/xtask/tests/ci_runner_cache_contract/artifact_action_sources/declared_consumers.rs",
+          "sha256": "8018dbe33dcc93607a5029fc16e866807f544fbbf2f97409ccde3c17ae40e337",
+          "log": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+          "log_sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd",
+          "line": 2393
+        },
+        {
+          "selector": "artifact_action_sources::declared_consumers::swift_host_builder_declares_target_specific_cache_and_all_cmake_platform_arguments",
+          "path": "tools/xtask/tests/ci_runner_cache_contract/artifact_action_sources/declared_consumers.rs",
+          "sha256": "8018dbe33dcc93607a5029fc16e866807f544fbbf2f97409ccde3c17ae40e337",
+          "log": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+          "log_sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd",
+          "line": 2394
+        },
+        {
+          "selector": "artifact_action_sources::declared_consumers::swift_smoke_declares_immutable_binding_safe_destination_and_legacy_store_guard",
+          "path": "tools/xtask/tests/ci_runner_cache_contract/artifact_action_sources/declared_consumers.rs",
+          "sha256": "8018dbe33dcc93607a5029fc16e866807f544fbbf2f97409ccde3c17ae40e337",
+          "log": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+          "log_sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd",
+          "line": 2395
+        },
+        {
+          "selector": "artifact_action_sources::declared_consumers::windows_abi_cache_declares_exact_compatibility_identity_and_restore_outputs",
+          "path": "tools/xtask/tests/ci_runner_cache_contract/artifact_action_sources/declared_consumers.rs",
+          "sha256": "8018dbe33dcc93607a5029fc16e866807f544fbbf2f97409ccde3c17ae40e337",
+          "log": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+          "log_sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd",
+          "line": 2396
+        },
+        {
+          "selector": "artifact_action_sources::declared_consumers::windows_native_cache_callers_declare_fail_closed_defaults_and_exact_opt_in",
+          "path": "tools/xtask/tests/ci_runner_cache_contract/artifact_action_sources/declared_consumers.rs",
+          "sha256": "8018dbe33dcc93607a5029fc16e866807f544fbbf2f97409ccde3c17ae40e337",
+          "log": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+          "log_sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd",
+          "line": 2397
+        },
+        {
+          "selector": "artifact_action_sources::epoch_execution::artifact_epoch_pinned_identity_is_exact_and_conflicting_or_unsafe_modes_fail_closed",
+          "path": "tools/xtask/tests/ci_runner_cache_contract/artifact_action_sources/epoch_execution.rs",
+          "sha256": "3f62461ccc4924ed3038e814aa8b7f0b43d0ef6c9ded462a68753569806fd2b5",
+          "log": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+          "log_sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd",
+          "line": 2398
+        },
+        {
+          "selector": "artifact_action_sources::epoch_execution::artifact_epoch_without_image_variables_fingerprints_tools_and_matches_build_environment",
+          "path": "tools/xtask/tests/ci_runner_cache_contract/artifact_action_sources/epoch_execution.rs",
+          "sha256": "3f62461ccc4924ed3038e814aa8b7f0b43d0ef6c9ded462a68753569806fd2b5",
+          "log": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+          "log_sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd",
+          "line": 2399
+        },
+        {
+          "selector": "artifact_action_sources::epoch_sdk_intent::epoch_resolver_declares_one_selected_run_and_all_exact_input_projections",
+          "path": "tools/xtask/tests/ci_runner_cache_contract/artifact_action_sources/epoch_sdk_intent.rs",
+          "sha256": "b72dcfd5a5836e5da1ad7e16681bdc1ceba24faa40b435020157f90d346ad80a",
+          "log": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+          "log_sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd",
+          "line": 2400
+        },
+        {
+          "selector": "artifact_action_sources::epoch_sdk_intent::every_native_cache_binds_one_epoch_in_its_own_job_and_declares_build_directory",
+          "path": "tools/xtask/tests/ci_runner_cache_contract/artifact_action_sources/epoch_sdk_intent.rs",
+          "sha256": "b72dcfd5a5836e5da1ad7e16681bdc1ceba24faa40b435020157f90d346ad80a",
+          "log": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+          "log_sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd",
+          "line": 2401
+        },
+        {
+          "selector": "artifact_action_sources::epoch_sdk_intent::swift_host_architecture_branch_admits_apple_silicon_and_refuses_intel_before_native_build",
+          "path": "tools/xtask/tests/ci_runner_cache_contract/artifact_action_sources/epoch_sdk_intent.rs",
+          "sha256": "b72dcfd5a5836e5da1ad7e16681bdc1ceba24faa40b435020157f90d346ad80a",
+          "log": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+          "log_sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd",
+          "line": 2402
+        },
+        {
+          "selector": "artifact_action_sources::selector_intent::shared_selector_exact_canary_cannot_bypass_repository_event_or_hosted_controls",
+          "path": "tools/xtask/tests/ci_runner_cache_contract/artifact_action_sources/selector_intent.rs",
+          "sha256": "dff26da558ce08055eb05937732c381b5dff0817772acb15e6979da442a0664a",
+          "log": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+          "log_sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd",
+          "line": 2403
+        },
+        {
+          "selector": "artifact_action_sources::selector_intent::shared_selector_preserves_legacy_approval_independence_and_dispatch_branch_controls",
+          "path": "tools/xtask/tests/ci_runner_cache_contract/artifact_action_sources/selector_intent.rs",
+          "sha256": "dff26da558ce08055eb05937732c381b5dff0817772acb15e6979da442a0664a",
+          "log": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+          "log_sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd",
+          "line": 2404
+        },
+        {
+          "selector": "artifact_action_sources::source_contracts::artifact_native_attestation_verifier_dependencies_remain_abi_free",
+          "path": "tools/xtask/tests/ci_runner_cache_contract/artifact_action_sources/source_contracts.rs",
+          "sha256": "2c94908bc26236306cb8f6669044b7db203e29560381e8081175b4d32f6dd7e9",
+          "log": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+          "log_sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd",
+          "line": 2405
+        },
+        {
+          "selector": "artifact_action_sources::source_contracts::artifact_quality_job_keeps_tooling_release_targets_and_client_dependency_validation",
+          "path": "tools/xtask/tests/ci_runner_cache_contract/artifact_action_sources/source_contracts.rs",
+          "sha256": "2c94908bc26236306cb8f6669044b7db203e29560381e8081175b4d32f6dd7e9",
+          "log": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+          "log_sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd",
+          "line": 2406
+        },
+        {
+          "selector": "artifact_action_sources::source_contracts::artifact_release_stamps_every_signing_caller_with_immutable_metadata_commit",
+          "path": "tools/xtask/tests/ci_runner_cache_contract/artifact_action_sources/source_contracts.rs",
+          "sha256": "2c94908bc26236306cb8f6669044b7db203e29560381e8081175b4d32f6dd7e9",
+          "log": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+          "log_sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd",
+          "line": 2407
+        },
+        {
+          "selector": "artifact_action_sources::source_contracts::artifact_seed_hashes_bind_all_imported_just_sources_on_every_original_consumer",
+          "path": "tools/xtask/tests/ci_runner_cache_contract/artifact_action_sources/source_contracts.rs",
+          "sha256": "2c94908bc26236306cb8f6669044b7db203e29560381e8081175b4d32f6dd7e9",
+          "log": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+          "log_sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd",
+          "line": 2408
+        },
+        {
+          "selector": "artifact_action_sources::source_contracts::artifact_windows_host_source_preserves_neutral_integrity_and_explicit_commit_contracts",
+          "path": "tools/xtask/tests/ci_runner_cache_contract/artifact_action_sources/source_contracts.rs",
+          "sha256": "2c94908bc26236306cb8f6669044b7db203e29560381e8081175b4d32f6dd7e9",
+          "log": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+          "log_sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd",
+          "line": 2409
+        },
+        {
+          "selector": "artifact_workflows::graph::artifact_static_abi_epoch_flows_from_producer_to_both_rust_consumers",
+          "path": "tools/xtask/tests/ci_runner_cache_contract/artifact_workflows/graph.rs",
+          "sha256": "9e07fa0ceea7bb233a1ef909e59e3f7735700daedcfe65e896da0bf5edaf5274",
+          "log": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+          "log_sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd",
+          "line": 2436
+        },
+        {
+          "selector": "attestation::tests::release_stamps_reject_abbreviated_and_empty_commits",
+          "path": "tools/xtask/src/attestation.rs",
+          "sha256": "f806848a49a72f673ee56ab9b161dcf856e1a2649d5788daee0c0f359d7a2491",
+          "log": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+          "log_sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd",
+          "line": 91
+        },
+        {
+          "selector": "attestation::tests::release_stamps_reject_the_local_development_placeholder",
+          "path": "tools/xtask/src/attestation.rs",
+          "sha256": "f806848a49a72f673ee56ab9b161dcf856e1a2649d5788daee0c0f359d7a2491",
+          "log": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+          "log_sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd",
+          "line": 92
+        },
+        {
+          "selector": "authority::sentinel_exemption_has_no_checkout_no_permissions_and_attests_before_pinned_cache",
+          "path": "tools/xtask/tests/ci_runner_cache_contract/authority.rs",
+          "sha256": "41d3df00060970fdf280a8917ce3e42ad65696ce435c023e10d9e144026fb3dc",
+          "log": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+          "log_sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd",
+          "line": 2476
+        },
+        {
+          "selector": "authority::sentinel_mutations_cannot_expand_credentials_ref_scope_or_ordinary_cache_gates",
+          "path": "tools/xtask/tests/ci_runner_cache_contract/authority.rs",
+          "sha256": "41d3df00060970fdf280a8917ce3e42ad65696ce435c023e10d9e144026fb3dc",
+          "log": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+          "log_sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd",
+          "line": 2477
+        },
+        {
+          "selector": "authority_local::authority_delivery_and_reusable_sources_refuse_raw_runner_credentials_sdk_and_verifier_bypass",
+          "path": "tools/xtask/tests/ci_runner_cache_contract/authority_local.rs",
+          "sha256": "33422094c6f01e2f0aa528609d43b818e64456b9da991e176bb42e5cf57a0037",
+          "log": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+          "log_sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd",
+          "line": 2484
+        },
+        {
+          "selector": "authority_local::authority_documented_allowlist_and_future_executor_keep_local_least_privilege",
+          "path": "tools/xtask/tests/ci_runner_cache_contract/authority_local.rs",
+          "sha256": "33422094c6f01e2f0aa528609d43b818e64456b9da991e176bb42e5cf57a0037",
+          "log": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+          "log_sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd",
+          "line": 2485
+        },
+        {
+          "selector": "authority_remaining::resource_audit::authority_actual_trusted_image_body_checks_architecture_before_native_image_verifier",
+          "path": "tools/xtask/tests/ci_runner_cache_contract/authority_remaining/resource_audit.rs",
+          "sha256": "666f439cb82a37e3efa8ad9ab2e5951c95e99210be53a09b18ec475166d53594",
+          "log": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+          "log_sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd",
+          "line": 2495
+        },
+        {
+          "selector": "authority_remaining::selector::authority_all_eligible_selector_inputs_are_bounded_and_mutations_refused",
+          "path": "tools/xtask/tests/ci_runner_cache_contract/authority_remaining/selector.rs",
+          "sha256": "fc173f644c626cb75e79045bb374bc78a553a9b545ab34f8ab2d564eb2eb2511",
+          "log": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+          "log_sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd",
+          "line": 2496
+        },
+        {
+          "selector": "authority_remaining::selector::authority_protected_audit27_keep_exact_pin_and_central_runner_projection",
+          "path": "tools/xtask/tests/ci_runner_cache_contract/authority_remaining/selector.rs",
+          "sha256": "fc173f644c626cb75e79045bb374bc78a553a9b545ab34f8ab2d564eb2eb2511",
+          "log": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+          "log_sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd",
+          "line": 2498
+        },
+        {
+          "selector": "ci_validation::workflow_guards::quality_contracts::tests::current_quality_and_local_recipes_select_owning_portable_targets",
+          "path": "tools/xtask/src/ci_validation/workflow_guards/quality_contracts_tests.rs",
+          "sha256": "59b29a0a7c12caf03495e0beea0699b7e43d7c0d44c6ffbbd5fae16c9b6d6b7f",
+          "log": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+          "log_sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd",
+          "line": 1658
+        },
+        {
+          "selector": "compute_changes_justfiles::compute_changes_justfiles_backend_attributes_and_two_sided_recipe_hunks_are_backend_inputs",
+          "path": "tools/xtask/tests/migration_lifecycle/compute_changes_justfiles.rs",
+          "sha256": "8bb78c94796c2af7041fdc9e72f6837f4e3984b72ad5cb84b02ba1ba269b521c",
+          "log": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+          "log_sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd",
+          "line": 4030
+        },
+        {
+          "selector": "compute_changes_justfiles::compute_changes_justfiles_exported_backend_assignment_is_an_input",
+          "path": "tools/xtask/tests/migration_lifecycle/compute_changes_justfiles.rs",
+          "sha256": "8bb78c94796c2af7041fdc9e72f6837f4e3984b72ad5cb84b02ba1ba269b521c",
+          "log": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+          "log_sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd",
+          "line": 4031
+        },
+        {
+          "selector": "compute_changes_justfiles::compute_changes_justfiles_global_assignments_follow_cross_import_backend_use",
+          "path": "tools/xtask/tests/migration_lifecycle/compute_changes_justfiles.rs",
+          "sha256": "8bb78c94796c2af7041fdc9e72f6837f4e3984b72ad5cb84b02ba1ba269b521c",
+          "log": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+          "log_sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd",
+          "line": 4032
+        },
+        {
+          "selector": "compute_changes_justfiles::compute_changes_justfiles_light_assignment_after_backend_recipe_stays_light",
+          "path": "tools/xtask/tests/migration_lifecycle/compute_changes_justfiles.rs",
+          "sha256": "8bb78c94796c2af7041fdc9e72f6837f4e3984b72ad5cb84b02ba1ba269b521c",
+          "log": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+          "log_sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd",
+          "line": 4033
+        },
+        {
+          "selector": "compute_changes_justfiles::compute_changes_justfiles_nested_added_deleted_import_and_root_changes_preserve_policy",
+          "path": "tools/xtask/tests/migration_lifecycle/compute_changes_justfiles.rs",
+          "sha256": "8bb78c94796c2af7041fdc9e72f6837f4e3984b72ad5cb84b02ba1ba269b521c",
+          "log": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+          "log_sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd",
+          "line": 4034
+        },
+        {
+          "selector": "compute_changes_justfiles::compute_changes_justfiles_pr_old_side_uses_merge_base_after_base_branch_advances",
+          "path": "tools/xtask/tests/migration_lifecycle/compute_changes_justfiles.rs",
+          "sha256": "8bb78c94796c2af7041fdc9e72f6837f4e3984b72ad5cb84b02ba1ba269b521c",
+          "log": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+          "log_sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd",
+          "line": 4035
+        },
+        {
+          "selector": "compute_changes_justfiles::compute_changes_justfiles_standalone_quantize_build_and_release_select_backend",
+          "path": "tools/xtask/tests/migration_lifecycle/compute_changes_justfiles.rs",
+          "sha256": "8bb78c94796c2af7041fdc9e72f6837f4e3984b72ad5cb84b02ba1ba269b521c",
+          "log": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+          "log_sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd",
+          "line": 4037
+        },
+        {
+          "selector": "compute_changes_justfiles::compute_changes_justfiles_unreadable_revision_and_unknown_change_status_fail_open",
+          "path": "tools/xtask/tests/migration_lifecycle/compute_changes_justfiles.rs",
+          "sha256": "8bb78c94796c2af7041fdc9e72f6837f4e3984b72ad5cb84b02ba1ba269b521c",
+          "log": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+          "log_sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd",
+          "line": 4038
+        },
+        {
+          "selector": "compute_changes_justfiles::event_range::push_diff_includes_earlier_commits_and_uses_payload_head_not_checkout_head",
+          "path": "tools/xtask/tests/migration_lifecycle/compute_changes_event_range.rs",
+          "sha256": "2c8bacad1b9d3e8b70f2a4045afbacdbc1a894efe8ddc32fc7431765ed4112b8",
+          "log": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+          "log_sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd",
+          "line": 4039
+        },
+        {
+          "selector": "compute_changes_justfiles::event_range::push_unknown_or_zero_event_history_and_manual_dispatch_fail_open",
+          "path": "tools/xtask/tests/migration_lifecycle/compute_changes_event_range.rs",
+          "sha256": "2c8bacad1b9d3e8b70f2a4045afbacdbc1a894efe8ddc32fc7431765ed4112b8",
+          "log": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+          "log_sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd",
+          "line": 4040
+        },
+        {
+          "selector": "consumers::changed_cache_consumer_gate_or_either_policy_output_fails_closed",
+          "path": "tools/xtask/tests/ci_runner_cache_contract/consumers.rs",
+          "sha256": "6d6f7945be343ce3cbc29186468634747c3ed8618fdc930b836d9714c2ba0b1c",
+          "log": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+          "log_sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd",
+          "line": 2501
+        },
+        {
+          "selector": "consumers::current_consumers_require_central_authority_without_suppressing_workload_jobs",
+          "path": "tools/xtask/tests/ci_runner_cache_contract/consumers.rs",
+          "sha256": "6d6f7945be343ce3cbc29186468634747c3ed8618fdc930b836d9714c2ba0b1c",
+          "log": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+          "log_sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd",
+          "line": 2502
+        },
+        {
+          "selector": "consumers::native_sdk_resolver_preserves_provider_cache_outputs_and_explicit_hosted_macos_exception",
+          "path": "tools/xtask/tests/ci_runner_cache_contract/consumers.rs",
+          "sha256": "6d6f7945be343ce3cbc29186468634747c3ed8618fdc930b836d9714c2ba0b1c",
+          "log": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+          "log_sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd",
+          "line": 2503
+        },
+        {
+          "selector": "consumers::release_depot_exclusion_and_native_namespace_cannot_be_widened",
+          "path": "tools/xtask/tests/ci_runner_cache_contract/consumers.rs",
+          "sha256": "6d6f7945be343ce3cbc29186468634747c3ed8618fdc930b836d9714c2ba0b1c",
+          "log": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+          "log_sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd",
+          "line": 2504
+        },
+        {
+          "selector": "consumers::swift_package_cache_cannot_enable_on_a_policy_denied_branch",
+          "path": "tools/xtask/tests/ci_runner_cache_contract/consumers.rs",
+          "sha256": "6d6f7945be343ce3cbc29186468634747c3ed8618fdc930b836d9714c2ba0b1c",
+          "log": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+          "log_sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd",
+          "line": 2506
+        },
+        {
+          "selector": "evidence_contracts::direct_sccache_users_cannot_bypass_immediate_policy_or_omit_authority_inputs",
+          "path": "tools/xtask/tests/ci_runner_cache_contract/evidence_contracts.rs",
+          "sha256": "b3fe3b87a2de3d081ad6ed3a0ca604049a86b68ad1e274c21262caabcbef3cd9",
+          "log": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+          "log_sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd",
+          "line": 2517
+        },
+        {
+          "selector": "evidence_contracts::seed_identity_restore_save_and_runtime_opt_out_mutations_are_rejected",
+          "path": "tools/xtask/tests/ci_runner_cache_contract/evidence_contracts.rs",
+          "sha256": "b3fe3b87a2de3d081ad6ed3a0ca604049a86b68ad1e274c21262caabcbef3cd9",
+          "log": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+          "log_sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd",
+          "line": 2522
+        },
+        {
+          "selector": "evidence_runtime::direct_and_dispatched_pr_target_contexts_keep_compiler_credentials_isolated",
+          "path": "tools/xtask/tests/ci_runner_cache_contract/evidence_runtime.rs",
+          "sha256": "6571ff288ae630d0150630d18421221e66774aa2245caecb59369bd64221a756",
+          "log": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+          "log_sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd",
+          "line": 2528
+        },
+        {
+          "selector": "graph_failures::migration_ci_graph_pr_entrypoints_stay_native_and_unfiltered",
+          "path": "tools/xtask/tests/migration_ci_graph/graph_failures.rs",
+          "sha256": "d88e144cff112f88499eeb0fdc53c9d8a845c10377ccf15e4ee3fe73d1a5fdd8",
+          "log": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+          "log_sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd",
+          "line": 3211
+        },
+        {
+          "selector": "happy::migration_ci_graph_real_entrypoints_keep_five_native_lanes",
+          "path": "tools/xtask/tests/migration_ci_graph/happy.rs",
+          "sha256": "475bb061737ad766ab1198dc059995b0ebf50f3b4689467e42ee58f54d80c5bf",
+          "log": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+          "log_sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd",
+          "line": 3216
+        },
+        {
+          "selector": "installer::pinned_installer_verifies_each_platform_checksum_before_extracting_or_exporting",
+          "path": "tools/xtask/tests/ci_runner_cache_contract/installer.rs",
+          "sha256": "3159392d2a7175749b12c1b5042c959d3da343c186f19dfbb2d640ddb1d48460",
+          "log": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+          "log_sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd",
+          "line": 2530
+        },
+        {
+          "selector": "native_sdk_workflow::native_sdk_workflow_binds_immutable_source_preparation_and_uploads_on_both_platforms",
+          "path": "tools/xtask/tests/ci_runner_cache_contract/native_sdk_workflow.rs",
+          "sha256": "4a945077f92c9cc709063f3f0bd8d9ecb92c5bda4b694f7336ee7c3070d99830",
+          "log": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+          "log_sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd",
+          "line": 2531
+        },
+        {
+          "selector": "native_sdk_workflow::native_sdk_workflow_requires_matching_abi_producer_and_ordered_restore_without_rebuild",
+          "path": "tools/xtask/tests/ci_runner_cache_contract/native_sdk_workflow.rs",
+          "sha256": "4a945077f92c9cc709063f3f0bd8d9ecb92c5bda4b694f7336ee7c3070d99830",
+          "log": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+          "log_sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd",
+          "line": 2532
+        },
+        {
+          "selector": "product_composition_adapter::host_attestation::actual_host_attestation_producer_exports_checksum_bound_verifier_consumed_without_building",
+          "path": "tools/xtask/tests/migration_lifecycle/product_composition_adapter/host_attestation.rs",
+          "sha256": "2648727f32747c19fee2379421284714a3108475bbbdc03787b4097a1a83dc52",
+          "log": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+          "log_sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd",
+          "line": 4401
+        },
+        {
+          "selector": "publication::cache_publication_cooldown_precedes_retry_and_terminal_missing_fails",
+          "path": "tools/xtask/tests/ci_runner_cache_contract/publication.rs",
+          "sha256": "a864413b03826fbc3cfdbf15f582c2e205e4d8c9e10f6eaaee3eeea28109e33e",
+          "log": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+          "log_sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd",
+          "line": 2623
+        },
+        {
+          "selector": "publication::cache_publication_nonmatching_or_existing_entries_do_not_count",
+          "path": "tools/xtask/tests/ci_runner_cache_contract/publication.rs",
+          "sha256": "a864413b03826fbc3cfdbf15f582c2e205e4d8c9e10f6eaaee3eeea28109e33e",
+          "log": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+          "log_sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd",
+          "line": 2625
+        },
+        {
+          "selector": "publication::cache_publication_required_bindings_and_lookup_refusal_cannot_drift",
+          "path": "tools/xtask/tests/ci_runner_cache_contract/publication.rs",
+          "sha256": "a864413b03826fbc3cfdbf15f582c2e205e4d8c9e10f6eaaee3eeea28109e33e",
+          "log": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+          "log_sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd",
+          "line": 2626
+        },
+        {
+          "selector": "runner_contract::authority_actual_runner_plan_rejects_wrong_profile_budget_roles_and_trusted_pr_cache",
+          "path": "tools/xtask/tests/ci_runner_cache_contract/runner_contract.rs",
+          "sha256": "b4810a043f9a46cb00bf8ddc2f07cbae29889c9d1ff3dd39a0a6399cce273f9b",
+          "log": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+          "log_sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd",
+          "line": 2627
+        },
+        {
+          "selector": "runner_contract::authority_actual_runner_scan_excludes_pr_maintenance_but_scans_every_validation_entry",
+          "path": "tools/xtask/tests/ci_runner_cache_contract/runner_contract.rs",
+          "sha256": "b4810a043f9a46cb00bf8ddc2f07cbae29889c9d1ff3dd39a0a6399cce273f9b",
+          "log": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+          "log_sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd",
+          "line": 2628
+        },
+        {
+          "selector": "runner_contract::authority_actual_runner_scan_fails_closed_on_grep_io_error",
+          "path": "tools/xtask/tests/ci_runner_cache_contract/runner_contract.rs",
+          "sha256": "b4810a043f9a46cb00bf8ddc2f07cbae29889c9d1ff3dd39a0a6399cce273f9b",
+          "log": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+          "log_sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd",
+          "line": 2629
+        },
+        {
+          "selector": "runner_contract::authority_actual_runner_scan_refuses_missing_forbidden_sources_and_preserves_self_exclusion",
+          "path": "tools/xtask/tests/ci_runner_cache_contract/runner_contract.rs",
+          "sha256": "b4810a043f9a46cb00bf8ddc2f07cbae29889c9d1ff3dd39a0a6399cce273f9b",
+          "log": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+          "log_sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd",
+          "line": 2630
+        },
+        {
+          "selector": "runner_contract::authority_legacy_main_filename_is_reusable_only_without_event_authority",
+          "path": "tools/xtask/tests/ci_runner_cache_contract/runner_contract.rs",
+          "sha256": "b4810a043f9a46cb00bf8ddc2f07cbae29889c9d1ff3dd39a0a6399cce273f9b",
+          "log": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+          "log_sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd",
+          "line": 2631
+        },
+        {
+          "selector": "runner_contract::authority_platform_slice_policy_outputs_and_runner_jobs_bind_the_same_central_choice",
+          "path": "tools/xtask/tests/ci_runner_cache_contract/runner_contract.rs",
+          "sha256": "b4810a043f9a46cb00bf8ddc2f07cbae29889c9d1ff3dd39a0a6399cce273f9b",
+          "log": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+          "log_sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd",
+          "line": 2632
+        },
+        {
+          "selector": "runner_contract::authority_swift_main_remains_hosted_while_pr_placement_uses_bounded_selector",
+          "path": "tools/xtask/tests/ci_runner_cache_contract/runner_contract.rs",
+          "sha256": "b4810a043f9a46cb00bf8ddc2f07cbae29889c9d1ff3dd39a0a6399cce273f9b",
+          "log": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+          "log_sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd",
+          "line": 2633
+        },
+        {
+          "selector": "runtime::allowed_webdav_masks_token_and_native_remote_failures_fall_back_to_isolated_disk",
+          "path": "tools/xtask/tests/ci_runner_cache_contract/runtime.rs",
+          "sha256": "3e4a45ff6f22369f8af77ea704df8521b9253d6ea1b4f2aa88cb40a9029161f1",
+          "log": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+          "log_sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd",
+          "line": 2634
+        },
+        {
+          "selector": "runtime::denied_provider_and_dispatched_pr_use_disk_without_clearing_later_action_credentials",
+          "path": "tools/xtask/tests/ci_runner_cache_contract/runtime.rs",
+          "sha256": "3e4a45ff6f22369f8af77ea704df8521b9253d6ea1b4f2aa88cb40a9029161f1",
+          "log": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+          "log_sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd",
+          "line": 2635
+        },
+        {
+          "selector": "runtime::exact_runner_identity_events_deadline_and_forced_hosted_preserve_cache_boundaries",
+          "path": "tools/xtask/tests/ci_runner_cache_contract/runtime.rs",
+          "sha256": "3e4a45ff6f22369f8af77ea704df8521b9253d6ea1b4f2aa88cb40a9029161f1",
+          "log": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+          "log_sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd",
+          "line": 2636
+        },
+        {
+          "selector": "runtime::exact_sentinel_ref_does_not_authorize_other_prs_forks_dispatch_or_forced_hosted",
+          "path": "tools/xtask/tests/ci_runner_cache_contract/runtime.rs",
+          "sha256": "3e4a45ff6f22369f8af77ea704df8521b9253d6ea1b4f2aa88cb40a9029161f1",
+          "log": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+          "log_sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd",
+          "line": 2637
+        },
+        {
+          "selector": "runtime::invalid_canary_selector_cannot_emit_runner_outputs",
+          "path": "tools/xtask/tests/ci_runner_cache_contract/runtime.rs",
+          "sha256": "3e4a45ff6f22369f8af77ea704df8521b9253d6ea1b4f2aa88cb40a9029161f1",
+          "log": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+          "log_sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd",
+          "line": 2638
+        },
+        {
+          "selector": "runtime::invalid_flags_and_failed_local_start_or_stats_fail_the_action",
+          "path": "tools/xtask/tests/ci_runner_cache_contract/runtime.rs",
+          "sha256": "3e4a45ff6f22369f8af77ea704df8521b9253d6ea1b4f2aa88cb40a9029161f1",
+          "log": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+          "log_sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd",
+          "line": 2639
+        },
+        {
+          "selector": "runtime_action::runtime_action_packages_only_the_runtime_and_publishes_verified_absolute_outputs",
+          "path": "tools/xtask/tests/ci_runner_cache_contract/runtime_action.rs",
+          "sha256": "eb91474c9195aa33a1c3505374842abe66db61528a8d0c96a0d17220c1822278",
+          "log": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+          "log_sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd",
+          "line": 2640
+        },
+        {
+          "selector": "sdk_prepare::actual_native_sdk_action_preserves_package_arguments_verification_order_and_flat_upload_bytes",
+          "path": "tools/xtask/tests/ci_runner_cache_contract/sdk_prepare.rs",
+          "sha256": "1cb4b61942c5bf098f9ba46ef2eb1afe8fe19d4cf535f7bbbeadad4758174e76",
+          "log": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+          "log_sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd",
+          "line": 2649
+        },
+        {
+          "selector": "sdk_resolver::actual_native_sdk_macos_resolver_preserves_main_hosted_and_direct_pr_provider_policy",
+          "path": "tools/xtask/tests/ci_runner_cache_contract/sdk_resolver.rs",
+          "sha256": "a8c58d2c268c3a87045de4628c78c35953e12ddff7e277c644174d410ffc29b4",
+          "log": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+          "log_sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd",
+          "line": 2653
+        },
+        {
+          "selector": "sdk_resolver::actual_sdk_resolvers_admit_manual_depot_only_for_trusted_main_dispatch",
+          "path": "tools/xtask/tests/ci_runner_cache_contract/sdk_resolver.rs",
+          "sha256": "a8c58d2c268c3a87045de4628c78c35953e12ddff7e277c644174d410ffc29b4",
+          "log": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+          "log_sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd",
+          "line": 2654
+        },
+        {
+          "selector": "sdk_resolver::actual_sdk_resolvers_bind_direct_pr_exception_to_same_repository_and_preserve_cache_authority",
+          "path": "tools/xtask/tests/ci_runner_cache_contract/sdk_resolver.rs",
+          "sha256": "a8c58d2c268c3a87045de4628c78c35953e12ddff7e277c644174d410ffc29b4",
+          "log": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+          "log_sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd",
+          "line": 2655
+        },
+        {
+          "selector": "sdk_resolver::actual_sdk_resolvers_keep_untrusted_events_and_external_repositories_hosted",
+          "path": "tools/xtask/tests/ci_runner_cache_contract/sdk_resolver.rs",
+          "sha256": "a8c58d2c268c3a87045de4628c78c35953e12ddff7e277c644174d410ffc29b4",
+          "log": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+          "log_sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd",
+          "line": 2656
+        },
+        {
+          "selector": "sdk_resolver::actual_sdk_resolvers_preserve_expiry_and_distinguish_exact_canary_cache_authority",
+          "path": "tools/xtask/tests/ci_runner_cache_contract/sdk_resolver.rs",
+          "sha256": "a8c58d2c268c3a87045de4628c78c35953e12ddff7e277c644174d410ffc29b4",
+          "log": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+          "log_sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd",
+          "line": 2657
+        },
+        {
+          "selector": "sdk_resolver::actual_sdk_resolvers_reject_invalid_size_and_target_without_emitting_runner",
+          "path": "tools/xtask/tests/ci_runner_cache_contract/sdk_resolver.rs",
+          "sha256": "a8c58d2c268c3a87045de4628c78c35953e12ddff7e277c644174d410ffc29b4",
+          "log": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+          "log_sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd",
+          "line": 2658
+        },
+        {
+          "selector": "sdk_resolver::actual_sdk_resolvers_select_bounded_linux_sizes_and_architectures_from_trusted_policy",
+          "path": "tools/xtask/tests/ci_runner_cache_contract/sdk_resolver.rs",
+          "sha256": "a8c58d2c268c3a87045de4628c78c35953e12ddff7e277c644174d410ffc29b4",
+          "log": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+          "log_sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd",
+          "line": 2659
+        },
+        {
+          "selector": "source_layout_action::artifact_routing::direct_sdk_smoke_and_shared_contract_inputs_select_sdk_in_both_layouts",
+          "path": "tools/xtask/tests/migration_lifecycle/source_layout_action/artifact_routing.rs",
+          "sha256": "cf2334d26322aef25494bbdf00a92bcfec82800e1f38fdf5121e0a906f188c30",
+          "log": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+          "log_sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd",
+          "line": 4527
+        },
+        {
+          "selector": "source_layout_action::artifact_routing::parsed_sdk_workflow_run_blocks_select_each_sdk_smoke_and_route_every_visible_adapter",
+          "path": "tools/xtask/tests/migration_lifecycle/source_layout_action/artifact_routing.rs",
+          "sha256": "cf2334d26322aef25494bbdf00a92bcfec82800e1f38fdf5121e0a906f188c30",
+          "log": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+          "log_sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd",
+          "line": 4528
+        },
+        {
+          "selector": "source_layout_action::artifact_routing::producer_routes::immutable_sdk_producers_and_typed_archive_adapters_route_sdk_validation",
+          "path": "tools/xtask/tests/migration_lifecycle/source_layout_action/producer_routes.rs",
+          "sha256": "4dc0febfbf4dd70c9a176083c35bb55fdce93c8c652c64de8217cf3a4d407493",
+          "log": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+          "log_sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd",
+          "line": 4529
+        },
+        {
+          "selector": "source_layout_action::artifact_routing::runner_cache_evidence_routes_runner_contract_and_epoch_routes_consumers",
+          "path": "tools/xtask/tests/migration_lifecycle/source_layout_action/artifact_routing.rs",
+          "sha256": "cf2334d26322aef25494bbdf00a92bcfec82800e1f38fdf5121e0a906f188c30",
+          "log": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+          "log_sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd",
+          "line": 4530
+        },
+        {
+          "selector": "source_layout_action::artifact_routing::sdk_call_candidates::finite_sdk_calls_admit_bare_and_whitespace_retry_forms_inside_multiline_substitution",
+          "path": "tools/xtask/tests/migration_lifecycle/source_layout_action/sdk_call_candidates.rs",
+          "sha256": "3a8d5f2e3381cc5ddde2e31a4ae70ae31b9596c46620c9f28ea7a53460184d28",
+          "log": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+          "log_sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd",
+          "line": 4531
+        },
+        {
+          "selector": "source_layout_action::artifact_routing::sdk_call_candidates::one_unknown_sdk_candidate_refuses_the_census_even_when_other_calls_are_recognized",
+          "path": "tools/xtask/tests/migration_lifecycle/source_layout_action/sdk_call_candidates.rs",
+          "sha256": "3a8d5f2e3381cc5ddde2e31a4ae70ae31b9596c46620c9f28ea7a53460184d28",
+          "log": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+          "log_sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd",
+          "line": 4532
+        },
+        {
+          "selector": "source_layout_action::artifact_routing::source_visible_sdk_smoke_dependencies_refuse_unknown_forms_and_route_sdk_validation",
+          "path": "tools/xtask/tests/migration_lifecycle/source_layout_action/artifact_routing.rs",
+          "sha256": "cf2334d26322aef25494bbdf00a92bcfec82800e1f38fdf5121e0a906f188c30",
+          "log": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+          "log_sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd",
+          "line": 4533
+        },
+        {
+          "selector": "source_layout_action::artifact_routing::windows_footer_is_cpu_only_and_force_sentinel_selects_both_products",
+          "path": "tools/xtask/tests/migration_lifecycle/source_layout_action/artifact_routing.rs",
+          "sha256": "cf2334d26322aef25494bbdf00a92bcfec82800e1f38fdf5121e0a906f188c30",
+          "log": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+          "log_sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd",
+          "line": 4534
+        },
+        {
+          "selector": "source_layout_action::artifact_routing::windows_shared_product_primitives_route_both_products_in_supported_layouts",
+          "path": "tools/xtask/tests/migration_lifecycle/source_layout_action/artifact_routing.rs",
+          "sha256": "cf2334d26322aef25494bbdf00a92bcfec82800e1f38fdf5121e0a906f188c30",
+          "log": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+          "log_sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd",
+          "line": 4535
+        },
+        {
+          "selector": "source_layout_action::artifact_routing::workflow_sdk_census_cannot_replace_missing_entrypoints_with_run_key_data",
+          "path": "tools/xtask/tests/migration_lifecycle/source_layout_action/artifact_routing.rs",
+          "sha256": "cf2334d26322aef25494bbdf00a92bcfec82800e1f38fdf5121e0a906f188c30",
+          "log": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+          "log_sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd",
+          "line": 4536
+        },
+        {
+          "selector": "source_layout_action::artifact_routing::workflow_sdk_census_refuses_malformed_steps_and_unknown_actual_run_calls",
+          "path": "tools/xtask/tests/migration_lifecycle/source_layout_action/artifact_routing.rs",
+          "sha256": "cf2334d26322aef25494bbdf00a92bcfec82800e1f38fdf5121e0a906f188c30",
+          "log": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+          "log_sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd",
+          "line": 4537
+        },
+        {
+          "selector": "source_layout_action::artifact_routing::workflow_sdk_census_uses_only_direct_job_step_runs",
+          "path": "tools/xtask/tests/migration_lifecycle/source_layout_action/artifact_routing.rs",
+          "sha256": "cf2334d26322aef25494bbdf00a92bcfec82800e1f38fdf5121e0a906f188c30",
+          "log": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+          "log_sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd",
+          "line": 4538
+        },
+        {
+          "selector": "static_abi_action::static_abi_action_archives_exact_link_closure_with_native_stamp_manifest_filter_and_checksum",
+          "path": "tools/xtask/tests/ci_runner_cache_contract/static_abi_action.rs",
+          "sha256": "4f8d14ae8c58a4bef9b29338f8943c8295716d1612a386545e205316805a2301",
+          "log": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+          "log_sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd",
+          "line": 2661
+        },
+        {
+          "selector": "static_abi_workflow::static_abi_workflow_binds_portable_exact_cache_identity_prepare_restore_and_immutable_upload",
+          "path": "tools/xtask/tests/ci_runner_cache_contract/static_abi_workflow.rs",
+          "sha256": "2bb8078cc34649fd7516fd63e3ca345ae078bd31817c5f3c772c9e4d36841545",
+          "log": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+          "log_sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd",
+          "line": 2665
+        },
+        {
+          "selector": "swift_workflow::swift_workflow_cache_identity_is_target_specific_and_mode_independent",
+          "path": "tools/xtask/tests/ci_runner_cache_contract/swift_workflow.rs",
+          "sha256": "d450c953ab23ad1f8488a78f4186a335b91c8607383082eca80126e21b2dd5fe",
+          "log": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+          "log_sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd",
+          "line": 2667
+        },
+        {
+          "selector": "swift_workflow::swift_workflow_checks_tracked_binding_changes_and_stages_exact_binding_bytes",
+          "path": "tools/xtask/tests/ci_runner_cache_contract/swift_workflow.rs",
+          "sha256": "d450c953ab23ad1f8488a78f4186a335b91c8607383082eca80126e21b2dd5fe",
+          "log": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+          "log_sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd",
+          "line": 2668
+        },
+        {
+          "selector": "swift_workflow::swift_workflow_executes_target_and_assembly_build_entrypoints_with_exact_consumed_arguments",
+          "path": "tools/xtask/tests/ci_runner_cache_contract/swift_workflow.rs",
+          "sha256": "d450c953ab23ad1f8488a78f4186a335b91c8607383082eca80126e21b2dd5fe",
+          "log": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+          "log_sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd",
+          "line": 2669
+        },
+        {
+          "selector": "swift_workflow::swift_workflow_preserves_complete_attempt_aware_target_handoff",
+          "path": "tools/xtask/tests/ci_runner_cache_contract/swift_workflow.rs",
+          "sha256": "d450c953ab23ad1f8488a78f4186a335b91c8607383082eca80126e21b2dd5fe",
+          "log": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+          "log_sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd",
+          "line": 2670
+        },
+        {
+          "selector": "swift_workflow::swift_workflow_publishes_verified_zip_and_staged_binding_with_exact_consumed_arguments",
+          "path": "tools/xtask/tests/ci_runner_cache_contract/swift_workflow.rs",
+          "sha256": "d450c953ab23ad1f8488a78f4186a335b91c8607383082eca80126e21b2dd5fe",
+          "log": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+          "log_sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd",
+          "line": 2671
+        },
+        {
+          "selector": "automation::lightning_compatibility::terminal::tests::terminal_success_preserves_complete_and_failed_observations",
+          "path": "tools/xtask/src/automation/lightning_compatibility/terminal.rs",
+          "sha256": "4de3594b698e047411a6d41d4708216df7d7158b759706c95432ecfcc6ac0879",
+          "log": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+          "log_sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd",
+          "line": 735
+        },
+        {
+          "selector": "automation::lightning_compatibility::terminal::tests::terminal_finish_error_downgrades_success_without_losing_observations",
+          "path": "tools/xtask/src/automation/lightning_compatibility/terminal.rs",
+          "sha256": "4de3594b698e047411a6d41d4708216df7d7158b759706c95432ecfcc6ac0879",
+          "log": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+          "log_sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd",
+          "line": 734
+        },
+        {
+          "selector": "automation::lightning_compatibility::terminal::tests::terminal_cancellation_downgrades_success_without_losing_observations",
+          "path": "tools/xtask/src/automation/lightning_compatibility/terminal.rs",
+          "sha256": "4de3594b698e047411a6d41d4708216df7d7158b759706c95432ecfcc6ac0879",
+          "log": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+          "log_sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd",
+          "line": 732
+        },
+        {
+          "selector": "automation::lightning_compatibility::terminal::tests::terminal_deadline_downgrades_success_without_losing_observations",
+          "path": "tools/xtask/src/automation/lightning_compatibility/terminal.rs",
+          "sha256": "4de3594b698e047411a6d41d4708216df7d7158b759706c95432ecfcc6ac0879",
+          "log": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+          "log_sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd",
+          "line": 733
+        },
+        {
+          "selector": "automation::lightning_compatibility::http_checks::tests::free_cases_require_content_and_usage_paid_case_requires_402",
+          "path": "tools/xtask/src/automation/lightning_compatibility/http_checks.rs",
+          "sha256": "8d774710f1dba8985befe7e94d091bd3e0fab6c4a1687bb7c46aa04de69b5d5b",
+          "log": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+          "log_sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd",
+          "line": 731
+        },
+        {
+          "selector": "lightning_compatibility_cli::lightning_actual_cli_runs_three_cases_and_isolated_bundle_state",
+          "path": "tools/xtask/tests/migration_lifecycle/lightning_compatibility_cli.rs",
+          "sha256": "0c0feb51cd9513b7f7f4ad88055a5b2ec1a68bdd4c8184997998d90b214c8920",
+          "log": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+          "log_sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd",
+          "line": 4206
+        },
+        {
+          "selector": "lightning_compatibility_cli::lightning_actual_cli_refuses_paid_bypass_bad_usage_and_existing_output",
+          "path": "tools/xtask/tests/migration_lifecycle/lightning_compatibility_cli.rs",
+          "sha256": "0c0feb51cd9513b7f7f4ad88055a5b2ec1a68bdd4c8184997998d90b214c8920",
+          "log": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+          "log_sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd",
+          "line": 4205
+        },
+        {
+          "selector": "lightning_compatibility_cli::lightning_actual_cli_inflight_cancellation_preserves_failed_evidence_and_cleanup",
+          "path": "tools/xtask/tests/migration_lifecycle/lightning_compatibility_cli.rs",
+          "sha256": "0c0feb51cd9513b7f7f4ad88055a5b2ec1a68bdd4c8184997998d90b214c8920",
+          "log": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+          "log_sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd",
+          "line": 4204
+        },
+        {
+          "selector": "automation::agentic_prompt_manifest::tests::flattens_roles_content_and_tool_calls",
+          "path": "tools/xtask/src/automation/agentic_prompt_manifest/tests.rs",
+          "sha256": "7b859fd696cae761eaf403e366f6168595592a074b6d18de8e013794ffcdda71",
+          "log": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+          "log_sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd",
+          "line": 134
+        },
+        {
+          "selector": "automation::agentic_prompt_manifest::tests::interleaves_repeated_families_and_preserves_provenance",
+          "path": "tools/xtask/src/automation/agentic_prompt_manifest/tests.rs",
+          "sha256": "7b859fd696cae761eaf403e366f6168595592a074b6d18de8e013794ffcdda71",
+          "log": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+          "log_sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd",
+          "line": 136
+        }
+      ],
+      "limits": "Complete local current retirement normal only; no HF/native/model/Windows/hosted qualification."
+    }
+  },
+  "limits": "Local orchestration/terminal component and inert child proof only. Real current/released bundles/model/Lightning behavior remain unqualified. Final root union normal required after proposed deletion."
+}

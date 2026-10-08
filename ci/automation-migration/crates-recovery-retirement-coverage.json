@@ -1,0 +1,153 @@
+{
+  "status": "LOCAL_POSTIMAGE_QUALIFIED",
+  "source_head": "0563ab4e4c443adb2e7d706d84bd7c1f531f972f",
+  "original_intents": 3,
+  "method_maps": [
+    {
+      "method": "test_recovery_is_default_branch_only_and_exact_source_bound",
+      "owners": [
+        {
+          "path": "tools/xtask/src/ci_validation/workflow_guards/crates_recovery.rs",
+          "symbol": "crates_recovery_rejects_changed_source_checks_or_unverified_runtime"
+        },
+        {
+          "path": "tools/xtask/tests/migration_lifecycle/crates_recovery.rs",
+          "symbol": "actual_crates_recovery_source_admission_requires_stable_tag_and_both_exact_identities"
+        },
+        {
+          "path": "tools/xtask/tests/migration_lifecycle/publish_dry_run.rs",
+          "symbol": "actual_controller_resume_uses_historical_roster_version_and_cargo_directory"
+        }
+      ]
+    },
+    {
+      "method": "test_secret_is_scoped_to_publish_step",
+      "owners": [
+        {
+          "path": "tools/xtask/src/ci_validation/workflow_guards/crates_recovery.rs",
+          "symbol": "crates_recovery_rejects_credential_persistence_and_token_exposure_before_publish"
+        },
+        {
+          "path": "tools/xtask/tests/migration_lifecycle/publish_dry_run.rs",
+          "symbol": "actual_publish_fatal_cargo_output_redacts_token_and_does_not_continue"
+        }
+      ]
+    },
+    {
+      "method": "test_publisher_uses_checksummed_release_runtime_libraries",
+      "owners": [
+        {
+          "path": "tools/xtask/tests/migration_lifecycle/crates_recovery.rs",
+          "symbol": "actual_crates_recovery_runtime_restore_requires_checksum_and_every_library_before_output"
+        },
+        {
+          "path": "tools/xtask/tests/migration_lifecycle/publish_dry_run.rs",
+          "symbol": "actual_publish_native_verification_is_dynamic_and_honors_explicit_directory"
+        }
+      ]
+    }
+  ],
+  "retired_sources": [
+    {
+      "path": "scripts/tests/test_resume_crates_release_workflow.py",
+      "sha256": "193e82001188238597aa8a224112aa544e7dcb7148f67569ff3964660e953b81"
+    }
+  ],
+  "retired_inventory": [
+    {
+      "classification": "generic release workflow test",
+      "deletion_condition": "Resume workflow exact-tag/SHA checks migrated.",
+      "exception": null,
+      "path": "scripts/tests/test_resume_crates_release_workflow.py",
+      "phase": 2,
+      "replacement_owner": "tools/xtask ci_validation/release tests",
+      "required": true
+    }
+  ],
+  "retired_ownership": [
+    {
+      "case_ownership": "Per-case replacement must test behavior, including positive, negative, edge and identity-preserving cases; source-text-only assertions do not qualify.",
+      "deletion_condition": "Delete only after exact deterministic notes/version/preflight parity; fixtures cannot publish.",
+      "gate": "Legacy just ci-validate plus just check-release/just publish-crates",
+      "module": "scripts/tests/test_resume_crates_release_workflow.py",
+      "owner": "tools/xtask/src/release or release workflow owner",
+      "rust_or_ctest_gate": "Not yet ported; listed owner target is future migration ownership, not claimed execution.",
+      "sha256": "193e82001188238597aa8a224112aa544e7dcb7148f67569ff3964660e953b81",
+      "test_method_count": 3,
+      "test_methods": [
+        "test_publisher_uses_checksummed_release_runtime_libraries",
+        "test_recovery_is_default_branch_only_and_exact_source_bound",
+        "test_secret_is_scoped_to_publish_step"
+      ]
+    }
+  ],
+  "retired_test_groups": [],
+  "focused_receipts": [
+    {
+      "kind": "original",
+      "path": ".omo/evidence/resume-20261002/crates-recovery-caller-v2-original.log",
+      "sha256": "33060fd73862c5e1af97335504d5b45211fce6d229657f556d8deceeadc52ce4"
+    },
+    {
+      "kind": "publisher",
+      "path": ".omo/evidence/resume-20261002/crates-recovery-caller-v1-publisher.log",
+      "sha256": "4192fa44f20544d6f601db0fd19cb437458857b3090396be59d30a642e86d4ef"
+    },
+    {
+      "kind": "guards",
+      "path": ".omo/evidence/resume-20261002/crates-recovery-caller-v1-guards.log",
+      "sha256": "79d5337432ccc3b80b9e707ccc7096cd5aa83201bb06a2a7d0c68c9315a67101"
+    },
+    {
+      "kind": "steps",
+      "path": ".omo/evidence/resume-20261002/crates-recovery-caller-v4-steps.log",
+      "sha256": "e6b9fc45309e566cbba5782d3d66dca421965bbcacebf19e634f901cb5caef4d"
+    },
+    {
+      "kind": "clippy",
+      "path": ".omo/evidence/resume-20261002/crates-recovery-caller-v4-clippy.log",
+      "sha256": "48638d31b5b48ae5868fe791725eabb09c9d82bbb972fd70a7bcaedefabed784"
+    }
+  ],
+  "required_owner": {
+    "target": "migration_lifecycle",
+    "modules": [
+      "crates_recovery",
+      "publish_dry_run"
+    ],
+    "workflow_guard": "ci_validation::workflow_guards::crates_recovery",
+    "normal_recipe": "ci-automation-contracts"
+  },
+  "limits": [
+    "Finite local fake Git, registry and Cargo boundaries; actual AWK, checksum and archive tools execute against owned data.",
+    "Actual archived v0.76.1 metadata/source validation passed; no real publication, hosted recovery or supported product/platform acceptance."
+  ],
+  "previous_activation_status": "APPLIED_POSTIMAGE_UNQUALIFIED",
+  "qualification": {
+    "source_head": "0563ab4e4c443adb2e7d706d84bd7c1f531f972f",
+    "normal": {
+      "rust": {
+        "targets": 112,
+        "passed": 4492,
+        "failed": 0,
+        "ignored": 2
+      },
+      "legacy": {
+        "run": 798,
+        "passed": 784,
+        "failed": 0,
+        "skipped": 14,
+        "seconds": 469.836
+      },
+      "log": ".omo/evidence/resume-20261002/crates-recovery-retirement-v1-normal.log",
+      "sha256": "3f0c6553290ca7678a2e677d134fbcef1a8f06e49c3160c3a78c53491beb77cb",
+      "exit_code": 0,
+      "counting": "Last terminal Rust summary per Cargo Running heading; nested child summaries excluded."
+    },
+    "receipts": {
+      "path": ".omo/evidence/resume-20261002/crates-recovery-retirement-v1-receipts.json",
+      "sha256": "6d91476d822dee671174c36fc0e4eff9dd5a6a0523e1c22faa65546ce154c433"
+    },
+    "limits": "Local contract/fixture qualification and actual archived v0.76.1 metadata/source validation. No hosted recovery, publication, supported product/platform/backend/model/SDK or protected rollout acceptance."
+  }
+}

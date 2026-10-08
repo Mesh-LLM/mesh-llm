@@ -1,0 +1,362 @@
+{
+  "status": "LOCAL_POSTIMAGE_QUALIFIED",
+  "source_head": "677db8b7d8c15540268af85eb948dfa9afcfb356",
+  "current_original_intents": 17,
+  "method_maps": [
+    {
+      "method": "test_product_action_only_composes_verified_inputs",
+      "native_owners": [
+        "product_composition_adapter::restore_product::product_action_binds_verified_inputs_and_publishes_the_composer_receipt",
+        "product_composition_adapter::readiness::actual_composer_readiness_uses_composed_runtime_and_linux_sdk_reuse_before_archive",
+        "product_composition_adapter::readiness::actual_composer_readiness_failures_and_invalid_mode_preserve_prior_publication"
+      ]
+    },
+    {
+      "method": "test_product_composer_normalizes_windows_shell_boundaries",
+      "native_owners": [
+        "product_composition_adapter::windows_paths::product_composer_converts_crlf_canonical_inputs_and_publishes_workflow_paths"
+      ]
+    },
+    {
+      "method": "test_product_archive_preserves_verified_executable_modes",
+      "native_owners": [
+        "product_composition_adapter::product_composition_adapter_publishes_executable_host_and_tool_archive_modes"
+      ]
+    },
+    {
+      "method": "test_product_composer_rejects_host_version_drift",
+      "native_owners": [
+        "product_composition_adapter::product_composition_adapter_compares_release_version_without_discarding_drift"
+      ]
+    },
+    {
+      "method": "test_product_composer_accepts_host_build_metadata",
+      "native_owners": [
+        "product_composition_adapter::product_composition_adapter_compares_release_version_without_discarding_drift"
+      ]
+    },
+    {
+      "method": "test_product_composer_rejects_drift_despite_build_metadata",
+      "native_owners": [
+        "product_composition_adapter::product_composition_adapter_compares_release_version_without_discarding_drift"
+      ]
+    },
+    {
+      "method": "test_product_composer_accepts_one_checksums_runtime_archive",
+      "native_owners": [
+        "product_composition_adapter::product_composition_adapter_selects_exact_runtime_archive_and_sidecar_before_publication"
+      ]
+    },
+    {
+      "method": "test_product_composer_requires_exact_runtime_archive_sidecar",
+      "native_owners": [
+        "product_composition_adapter::product_composition_adapter_selects_exact_runtime_archive_and_sidecar_before_publication"
+      ]
+    },
+    {
+      "method": "test_product_composer_rejects_corrupt_runtime_archive_sidecar",
+      "native_owners": [
+        "product_composition_adapter::product_composition_adapter_selects_exact_runtime_archive_and_sidecar_before_publication"
+      ]
+    },
+    {
+      "method": "test_product_composer_rejects_noncanonical_host_sidecar",
+      "native_owners": [
+        "product_composition_adapter::product_composition_adapter_rejects_noncanonical_host_checksum_before_staging_mutation"
+      ]
+    },
+    {
+      "method": "test_product_composer_rejects_noncanonical_verifier_sidecar",
+      "native_owners": [
+        "product_composition_adapter::attestation::product_composer_verifier_sidecar_must_be_canonical_before_execution_or_staging"
+      ]
+    },
+    {
+      "method": "test_release_attestation_is_verified_without_compiling_in_composer",
+      "native_owners": [
+        "product_composition_adapter::attestation::product_composer_prebuilt_attestation_invocation_precedes_composition_and_refuses_failure",
+        "product_composition_adapter::attestation::product_composer_refuses_missing_key_verifier_or_sidecar_and_orphaned_verifier_configuration",
+        "product_composition_adapter::host_attestation::actual_host_attestation_producer_exports_checksum_bound_verifier_consumed_without_building",
+        "product_composition_adapter::host_attestation::actual_host_attestation_producer_failures_never_publish_success_receipts"
+      ]
+    },
+    {
+      "method": "test_smoke_restore_rechecks_the_archived_product",
+      "native_owners": [
+        "product_composition_adapter::restore_product::actual_smoke_consumer_reverifies_archive_before_publishing_exact_product",
+        "product_composition_adapter::restore_product::actual_smoke_consumer_refuses_ambiguous_corrupt_or_wrong_backend_before_publication"
+      ]
+    },
+    {
+      "method": "test_test_model_restore_is_optional_and_verified",
+      "native_owners": [
+        "product_composition_adapter::model_restore::model_action_selects_both_manifest_artifacts_downloads_and_verifies_same_bytes",
+        "product_composition_adapter::model_restore::model_action_rejects_corrupt_cache_and_failed_download_without_publishing_path",
+        "product_composition_adapter::model_restore::model_action_empty_request_keeps_cache_untouched_and_publishes_empty_path",
+        "product_composition_adapter::model_restore::model_action_cache_authority_and_failure_order_follow_resolved_integrity"
+      ]
+    },
+    {
+      "method": "test_test_model_restore_selects_one_artifact_from_a_multi_artifact_manifest",
+      "native_owners": [
+        "product_composition_adapter::model_restore::model_action_selects_both_manifest_artifacts_downloads_and_verifies_same_bytes",
+        "product_composition_adapter::model_restore::model_action_cache_authority_and_failure_order_follow_resolved_integrity"
+      ]
+    },
+    {
+      "method": "test_smoke_restore_delegates_model_restore_to_the_shared_action",
+      "native_owners": [
+        "product_composition_adapter::restore_product::smoke_model_handoff_forwards_every_shared_input_and_consumed_output"
+      ]
+    },
+    {
+      "method": "test_product_action_rejects_destructive_output_paths",
+      "native_owners": [
+        "product_composition_adapter::product_composition_adapter_refuses_destructive_and_escaped_destinations_before_mutation"
+      ]
+    }
+  ],
+  "retired_sources": [
+    {
+      "path": "scripts/tests/test_ci_product_composer.py",
+      "sha256": "fe9b44f155a2fa1c32c015311cc57dc34d4993111ede114dd99261c9c31f36ef"
+    }
+  ],
+  "retired_inventory": [
+    {
+      "classification": "generic product composition test",
+      "deletion_condition": "Exact composer parity fixtures pass in Rust.",
+      "exception": null,
+      "path": "scripts/tests/test_ci_product_composer.py",
+      "phase": 2,
+      "replacement_owner": "tools/xtask artifact tests",
+      "required": true
+    }
+  ],
+  "retired_historical_ownership": [
+    {
+      "case_ownership": "Per-case replacement must test behavior, including positive, negative, edge and identity-preserving cases; source-text-only assertions do not qualify.",
+      "deletion_condition": "Delete only after exact archive, manifest, checksum, mode, symlink, and OS parity.",
+      "gate": "Legacy just ci-validate plus artifact/platform qualification",
+      "module": "scripts/tests/test_ci_product_composer.py",
+      "owner": "tools/xtask/src/artifact or owning platform/native component",
+      "rust_or_ctest_gate": "Not yet ported; listed owner target is future migration ownership, not claimed execution.",
+      "sha256": "c3eeb207abad8cbe316c4f6833093682da38c81b2f7d88fb90dfafecbe5cc930",
+      "test_method_count": 17,
+      "test_methods": [
+        "test_product_action_only_composes_verified_inputs",
+        "test_product_action_rejects_destructive_output_paths",
+        "test_product_archive_preserves_verified_executable_modes",
+        "test_product_composer_accepts_host_build_metadata",
+        "test_product_composer_accepts_one_checksums_runtime_archive",
+        "test_product_composer_normalizes_windows_shell_boundaries",
+        "test_product_composer_rejects_corrupt_runtime_archive_sidecar",
+        "test_product_composer_rejects_drift_despite_build_metadata",
+        "test_product_composer_rejects_host_version_drift",
+        "test_product_composer_rejects_noncanonical_host_sidecar",
+        "test_product_composer_rejects_noncanonical_verifier_sidecar",
+        "test_product_composer_requires_exact_runtime_archive_sidecar",
+        "test_release_attestation_is_verified_without_compiling_in_composer",
+        "test_smoke_restore_delegates_model_restore_to_the_shared_action",
+        "test_smoke_restore_rechecks_the_archived_product",
+        "test_test_model_restore_is_optional_and_verified",
+        "test_test_model_restore_selects_one_artifact_from_a_multi_artifact_manifest"
+      ]
+    }
+  ],
+  "retired_process_edges": [
+    {
+      "file": "scripts/tests/test_ci_product_composer.py",
+      "members": [
+        [
+          179,
+          "13ca18bc3a83fc8c",
+          1,
+          "subprocess-or-interpreter",
+          "conditional",
+          "fixture-selected Rust automation or shell adapter argv",
+          "L3/L5/L8 retained mixed adapter tests run real Rust or fixture-owned shell commands; no deleted Python implementation is authorized by this binding"
+        ],
+        [
+          488,
+          "0bb8fafe2022eacf",
+          1,
+          "subprocess-or-interpreter",
+          "conditional",
+          "fixture-selected Rust automation or shell adapter argv",
+          "L3/L5/L8 retained mixed adapter tests run real Rust or fixture-owned shell commands; no deleted Python implementation is authorized by this binding"
+        ]
+      ]
+    }
+  ],
+  "historical_reconciliation": "Historical ownership and two process edges are archived unchanged. Current source and all seventeen executed methods are independently bound.",
+  "focused_receipts": {
+    "status": "PASS_NATIVE_AND_UNCHANGED_ORIGINAL",
+    "head": "677db8b7d8c15540268af85eb948dfa9afcfb356",
+    "native_groups": 21,
+    "new_groups": 16,
+    "original_methods": 17,
+    "clippy": "PASS_ALL_TARGETS_DENY_WARNINGS",
+    "logs": [
+      {
+        "kind": "integration",
+        "path": ".omo/evidence/resume-20261002/product-composer-v1-native.log",
+        "sha256": "b98a1dffe82182411770dc51e1772c7f6da1fca9ba87a0467ed4dbd5c80e9f08",
+        "exit_code": 0,
+        "session_id": 77953
+      },
+      {
+        "kind": "original",
+        "path": ".omo/evidence/resume-20261002/product-composer-v1-original.log",
+        "sha256": "55bde011c73ca71240a94b479958471370a49f9708f58c9861d59fb8a1fcfc70",
+        "exit_code": 0,
+        "session_id": 54882
+      },
+      {
+        "kind": "clippy",
+        "path": ".omo/evidence/resume-20261002/product-composer-v1-clippy.log",
+        "sha256": "18d6ad918193719509cfac8f443bcdacadf6bd6b7a5a5ea5c9600b7918fb721c",
+        "exit_code": 0,
+        "session_id": 75959
+      }
+    ],
+    "files": [
+      {
+        "path": "tools/xtask/tests/migration_lifecycle/product_composition_adapter.rs",
+        "sha256": "e84bc8def79886d8e3003f8a19ecb013f3e2c8fd9263656e6986a138c95a403f",
+        "mode": 420
+      },
+      {
+        "path": "tools/xtask/tests/migration_lifecycle/product_composition_adapter/attestation.rs",
+        "sha256": "c64c2a589027b0ac1d475fe83a234ca141c9bd48d5b87ba7b41cbfc5ebc03ee5",
+        "mode": 420
+      },
+      {
+        "path": "tools/xtask/tests/migration_lifecycle/product_composition_adapter/windows_paths.rs",
+        "sha256": "5e8be77c698f2414472a55d875621bdd794224cb40eaa9354808c8dde06051ea",
+        "mode": 420
+      },
+      {
+        "path": "tools/xtask/tests/migration_lifecycle/product_composition_adapter/restore_product.rs",
+        "sha256": "a9deae690c7c6b72a0ef06c0a2c9701d42a9d9773cf659dfca208b8deccb2bac",
+        "mode": 420
+      },
+      {
+        "path": "tools/xtask/tests/migration_lifecycle/product_composition_adapter/model_restore.rs",
+        "sha256": "0f7b0f7f6e9b9d560932333004ca21e455ebe5775a2af8d1c375ffe84551eeee",
+        "mode": 420
+      },
+      {
+        "path": "tools/xtask/tests/migration_lifecycle/product_composition_adapter/host_attestation.rs",
+        "sha256": "2648727f32747c19fee2379421284714a3108475bbbdc03787b4097a1a83dc52",
+        "mode": 420
+      },
+      {
+        "path": "tools/xtask/tests/migration_lifecycle/product_composition_adapter/readiness.rs",
+        "sha256": "08027c3ba614b3e7e0e393de4a29b50dab306bad04e8f4d634de93f553b7e144",
+        "mode": 420
+      }
+    ],
+    "witnesses": [
+      {
+        "path": "scripts/tests/test_ci_product_composer.py",
+        "sha256": "fe9b44f155a2fa1c32c015311cc57dc34d4993111ede114dd99261c9c31f36ef",
+        "mode": 420
+      },
+      {
+        "path": "scripts/ci-compose-product-input.sh",
+        "sha256": "54ae42be39b1a90a1306d94aa1465d6cf878aa1e9b59fea06bbc16998bb93715",
+        "mode": 493
+      },
+      {
+        "path": ".github/actions/compose-product-input/action.yml",
+        "sha256": "53a7a91fcd833b115b7c438e75933756ea111e05b84953ec5a875356bb049e55",
+        "mode": 420
+      },
+      {
+        "path": ".github/actions/restore-smoke-inputs/action.yml",
+        "sha256": "f3a6468c4a56a018745fe804a30b60c3679dd5a721b66468d417f4f29ac54c17",
+        "mode": 420
+      },
+      {
+        "path": ".github/actions/restore-test-model/action.yml",
+        "sha256": "99ae77310ff3d4f4abc7a0aeb2007c72049a5811b84467651ccf174bf4f7c54c",
+        "mode": 420
+      },
+      {
+        "path": "tools/xtask/tests/migration_lifecycle/runtime_events_gate/action.rs",
+        "sha256": "f7e95fae8f4abc319c47910c7b6e5fb541e3640383f5db186134b8521f50d364",
+        "mode": 420
+      },
+      {
+        "path": "tools/xtask/tests/migration_models/restore_inputs.rs",
+        "sha256": "148f8556916576c50d46bed67f8d773ac2d22a98492e62e3b6ee9d369101b311",
+        "mode": 420
+      },
+      {
+        "path": "scripts/verify-native-runtime-package.sh",
+        "sha256": "b19965c867128d81e7ad73b195d30e62bbaa769994f1d4bce07e8186446e3cf5",
+        "mode": 493
+      },
+      {
+        "path": "ci/model-artifacts/manifests/skippy-ci-smoke.json",
+        "sha256": "6273529c817393c7685da8367eb01d8d993d978863bbed7d14c1bbbb0d8ef02e",
+        "mode": 420
+      },
+      {
+        "path": "tools/xtask/src/model_registry/restore_inputs.rs",
+        "sha256": "1665cb99a9bfee28938aa5d9289c240a7327032ecdf78e1eb38dda13e2538a74",
+        "mode": 420
+      },
+      {
+        "path": "tools/xtask/src/model_registry/resolve.rs",
+        "sha256": "455cfc02b63b0752d672c0abb2828d3633a7c67d594fa04558db978fc2b3e012",
+        "mode": 420
+      }
+    ],
+    "current_method_map": {
+      "path": ".omo/evidence/resume-20261002/product-composer-proposal-v1/current-method-map.json",
+      "sha256": "417d66d620b2998f8b4c35d420294cd495babf0000e4905e92d4525817759950"
+    },
+    "limits": "Local contracts execute copied composite Bash and real native checksum, archive, product and model integrity owners against inert producer bytes. Finite build/import/attestation/curl/readiness observers bind arguments, order and failure retention. Simulated Windows and Linux/Darwin branches do not prove real platform products, native imports, cryptographic signatures, models, live readiness, hosted caches or protected CI rollout. No network, paid or publication action."
+  },
+  "required_owners": {
+    "integration_targets": [
+      "migration_lifecycle"
+    ],
+    "module": "product_composition_adapter",
+    "normal_recipe": "ci-automation-contracts"
+  },
+  "limits": [
+    "Local contracts execute copied composite Bash and real native checksum, archive, product and model integrity owners against inert producer bytes. Finite build/import/attestation/curl/readiness observers bind arguments, order and failure retention. Simulated Windows and Linux/Darwin branches do not prove real platform products, native imports, cryptographic signatures, models, live readiness, hosted caches or protected CI rollout. No network, paid or publication action.",
+    "Normal post-retirement CI still required. Real Windows, cryptographic signatures, native imports, models, hosted cache providers and protected rollout remain separate acceptance work."
+  ],
+  "previous_activation_status": "APPLIED_POSTIMAGE_UNQUALIFIED",
+  "qualification": {
+    "source_head": "677db8b7d8c15540268af85eb948dfa9afcfb356",
+    "normal": {
+      "rust": {
+        "targets": 112,
+        "passed": 4570,
+        "failed": 0,
+        "ignored": 2
+      },
+      "legacy": {
+        "run": 739,
+        "passed": 725,
+        "failed": 0,
+        "skipped": 14,
+        "seconds": 239.132
+      },
+      "log": ".omo/evidence/resume-20261002/product-composer-v1-normal-retry1.log",
+      "sha256": "0de0234cfaa75c0695fde8962c910df911a50e1252585cb10563c1bc30c7bb47",
+      "exit_code": 0,
+      "counting": "Last terminal Rust summary per Cargo Running heading; nested child summaries excluded."
+    },
+    "receipts": {
+      "path": ".omo/evidence/resume-20261002/product-composer-v1-receipts.json",
+      "sha256": "e3ed663556047e8356fe61c9383f4d48c17fad86d8ffa613f35c8541454c4ea7"
+    },
+    "limits": "Local contracts execute copied composite Bash and real native checksum, archive, product and model integrity owners against inert producer bytes. Finite build/import/attestation/curl/readiness observers bind arguments, order and failure retention. Simulated Windows and Linux/Darwin branches do not prove real platform products, native imports, cryptographic signatures, models, live readiness, hosted caches or protected CI rollout. No network, paid or publication action."
+  }
+}

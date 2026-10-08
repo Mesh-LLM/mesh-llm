@@ -1,0 +1,704 @@
+[
+  {
+    "function": "sha256",
+    "original": {
+      "path": "evals/skippy-scheduler-fixtures.py",
+      "source_sha256": "c1297cbf0135ed420612cca1a291e2770e7ac9f6489c27d0aba6c44771a58761",
+      "start_line": 34,
+      "end_line": 41,
+      "body": "def sha256(path: Path) -> str:\n    digest = hashlib.sha256()\n    with path.open(\"rb\") as handle:\n        for chunk in iter(lambda: handle.read(8 * 1024 * 1024), b\"\"):\n            digest.update(chunk)\n    return digest.hexdigest()\n\n\n",
+      "body_sha256": "8a64d4ef8844a44fa3ebc6f5c68b6b05a2d274172482a5adda53f4ebc896aafd"
+    },
+    "intent": "Exact publication bytes hash before replacement",
+    "native_owners": [
+      {
+        "path": "tools/xtask/src/automation/agentic_prompt_manifest/fixture_materialization.rs",
+        "sha256": "4f150ba5ec734ff5c8cea420b0a27fec8127624e7e4bdb7d635956b944f573e5"
+      },
+      {
+        "path": "tools/xtask/src/automation/agentic_prompt_manifest/publication.rs",
+        "sha256": "1083735b9fd3982b1f3b98ca091578c801a8d5abc4369433d0b5e6176d601bb7"
+      }
+    ],
+    "assertion_owners": [
+      {
+        "path": "tools/xtask/src/automation/agentic_prompt_manifest/fixture_tests.rs",
+        "source_sha256": "c51872650a7c344717380663c2512cfb8f9da5be02505d00fa708fc6596c8e60",
+        "function": "scheduler_materialization_verifies_pinned_rows_and_exact_manifest_before_publish",
+        "region": "fn scheduler_materialization_verifies_pinned_rows_and_exact_manifest_before_publish() {\n    let directory = tempfile::tempdir().unwrap();\n    let output = directory.path().join(\"manifest.json\");\n    let (catalog, row, expected) = canned();\n    let digest = fixture_materialization::publish_selected(\n        &catalog,\n        \"agentic-eviction-pressure\",\n        std::slice::from_ref(&row),\n        &output,\n    )\n    .unwrap();\n    assert_eq!(\n        digest,\n        catalog[\"profiles\"][\"agentic-eviction-pressure\"][\"corpus\"][\"prompt_manifest_sha256\"]\n            .as_str()\n            .unwrap()\n    );\n    assert_eq!(std::fs::read(&output).unwrap(), expected.as_bytes());\n}\n",
+        "region_sha256": "5cf61223905d007804f3450748c027b99cac85032a8abea165cc5d3bbff5c7e4",
+        "historical_positive": [
+          {
+            "log": {
+              "path": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+              "sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd"
+            },
+            "line": 130,
+            "text": "test automation::agentic_prompt_manifest::fixture_tests::scheduler_materialization_verifies_pinned_rows_and_exact_manifest_before_publish ... ok"
+          }
+        ],
+        "fresh_qualified_positive": null
+      },
+      {
+        "path": "tools/xtask/src/automation/agentic_prompt_manifest/fixture_tests.rs",
+        "source_sha256": "c51872650a7c344717380663c2512cfb8f9da5be02505d00fa708fc6596c8e60",
+        "function": "scheduler_row_or_hash_drift_preserves_existing_output_without_temporary_leaks",
+        "region": "fn scheduler_row_or_hash_drift_preserves_existing_output_without_temporary_leaks() {\n    let directory = tempfile::tempdir().unwrap();\n    let output = directory.path().join(\"manifest.json\");\n    let (catalog, row, _) = canned();\n    std::fs::write(&output, b\"keep-me\").unwrap();\n    for field in [\"row\", \"hash\"] {\n        let mut changed = catalog.clone();\n        let corpus = &mut changed[\"profiles\"][\"agentic-eviction-pressure\"][\"corpus\"];\n        if field == \"row\" {\n            corpus[\"rows\"][0][\"session_id\"] = \"unexpected\".into();\n        } else {\n            corpus[\"prompt_manifest_sha256\"] = \"0\".repeat(64).into();\n        }\n        let error = fixture_materialization::publish_selected(\n            &changed,\n            \"agentic-eviction-pressure\",\n            std::slice::from_ref(&row),\n            &output,\n        )\n        .unwrap_err()\n        .to_string();\n        assert!(error.contains(if field == \"row\" {\n            \"pinned fixture provenance\"\n        } else {\n            \"SHA-256 mismatch\"\n        }));\n        assert_eq!(std::fs::read(&output).unwrap(), b\"keep-me\");\n        assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 1);\n    }\n}\n",
+        "region_sha256": "bbb348ce56f99926149f78bff354eb7cde3b9ba3ea4d2b4146e9fc3bd47a0f39",
+        "historical_positive": [
+          {
+            "log": {
+              "path": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+              "sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd"
+            },
+            "line": 131,
+            "text": "test automation::agentic_prompt_manifest::fixture_tests::scheduler_row_or_hash_drift_preserves_existing_output_without_temporary_leaks ... ok"
+          }
+        ],
+        "fresh_qualified_positive": null
+      }
+    ],
+    "status": "CURRENT_SOURCE_OWNED_CONDITIONAL_RETIREMENT"
+  },
+  {
+    "function": "load_catalog",
+    "original": {
+      "path": "evals/skippy-scheduler-fixtures.py",
+      "source_sha256": "c1297cbf0135ed420612cca1a291e2770e7ac9f6489c27d0aba6c44771a58761",
+      "start_line": 42,
+      "end_line": 47,
+      "body": "def load_catalog(path: Path) -> dict[str, Any]:\n    document = json.loads(path.read_text(encoding=\"utf-8\"))\n    validate_catalog(document)\n    return document\n\n\n",
+      "body_sha256": "86116d133687e3644bfa30f3ba8e65a70940c5abfb1aefdf9b1e1debde347636"
+    },
+    "intent": "Parse JSON and validate all profiles before selection",
+    "native_owners": [
+      {
+        "path": "tools/xtask/src/automation/agentic_prompt_manifest/mod.rs",
+        "sha256": "6620e3fa054533cb7c65e3cded73c5208c9614a09ab5def6b4a068b11f4a2d3b"
+      },
+      {
+        "path": "tools/xtask/src/automation/agentic_prompt_manifest/fixture_catalog.rs",
+        "sha256": "7cd7ff243382619bfc36bfc4e55f62a6a22afce65200adce4396a0689b7a1c61"
+      }
+    ],
+    "assertion_owners": [
+      {
+        "path": "tools/xtask/tests/migration_lifecycle/scheduler_fixture_cli.rs",
+        "source_sha256": "09298f5d698bd2e48231c7c333893f943dbb631937659f80906d937f924ae868",
+        "function": "scheduler_fixture_actual_cli_preserves_catalog_profile_json_and_refuses_invalid_inputs",
+        "region": "fn scheduler_fixture_actual_cli_preserves_catalog_profile_json_and_refuses_invalid_inputs() {\n    let root = tempfile::tempdir().unwrap();\n    let input = catalog();\n    std::fs::write(\n        root.path().join(\"catalog.json\"),\n        serde_json::to_vec(&input).unwrap(),\n    )\n    .unwrap();\n    let (ok, stdout, stderr) = cli(root.path(), &[\"validate-fixtures\", \"catalog.json\"]);\n    assert!(ok, \"{stderr}\");\n    let validation: Value = serde_json::from_str(&stdout).unwrap();\n    assert_eq!(validation[\"status\"], \"valid\");\n    let expected: Vec<_> = input[\"profiles\"]\n        .as_object()\n        .unwrap()\n        .keys()\n        .cloned()\n        .collect();\n    assert_eq!(validation[\"profiles\"], json!(expected));\n    for name in input[\"profiles\"].as_object().unwrap().keys() {\n        let (ok, stdout, stderr) = cli(root.path(), &[\"show-fixture\", \"catalog.json\", name]);\n        assert!(ok, \"{stderr}\");\n        assert_eq!(\n            serde_json::from_str::<Value>(&stdout).unwrap(),\n            input[\"profiles\"][name]\n        );\n    }\n    let (ok, stdout, stderr) = cli(\n        root.path(),\n        &[\"show-fixture\", \"catalog.json\", \"missing-profile\"],\n    );\n    assert!(!ok);\n    assert!(stdout.is_empty() && stderr.contains(\"unknown\"));\n    let mut invalid = input.clone();\n    invalid[\"profiles\"][\"warm-affinity\"][\"model\"]\n        .as_object_mut()\n        .unwrap()\n        .remove(\"sha256\");\n    std::fs::write(\n        root.path().join(\"invalid.json\"),\n        serde_json::to_vec(&invalid).unwrap(),\n    )\n    .unwrap();\n    let (ok, stdout, stderr) = cli(root.path(), &[\"validate-fixtures\", \"invalid.json\"]);\n    assert!(!ok);\n    assert!(stdout.is_empty() && stderr.contains(\"sha256\"));\n    std::fs::write(root.path().join(\"existing.json\"), b\"preserve-existing\").unwrap();\n    for verb in [\"materialize-fixture\", \"prepare-fixture\"] {\n        let mut args = vec![\n            verb,\n            \"--catalog\",\n            \"catalog.json\",\n            \"--profile\",\n            \"warm-affinity\",\n            \"--output\",\n            \"existing.json\",\n        ];\n        if verb == \"materialize-fixture\" {\n            args.extend([\"--dataset-file\", \"missing.parquet\"]);\n        } else {\n            args.extend([\"--hf-bin\", \"/not-started-hf\"]);\n        }\n        let (ok, stdout, stderr) = cli(root.path(), &args);\n        assert!(!ok);\n        assert!(\n            stdout.is_empty()\n                && stderr.contains(if verb == \"materialize-fixture\" {\n                    \"Hugging Face corpus\"\n                } else {\n                    \"HF corpus\"\n                })\n        );\n        assert_eq!(\n            std::fs::read(root.path().join(\"existing.json\")).unwrap(),\n            b\"preserve-existing\"\n        );\n    }\n    root.close().unwrap();\n}\n#[cfg(unix)]\nfn quote(path: &Path) -> String {\n    format!(\"'{}'\", path.to_str().unwrap().replace('\\'', \"'\\\\''\"))\n}\n#[cfg(unix)]\nfn hf(root: &Path, fail: bool) -> std::path::PathBuf {\n    use std::os::unix::fs::PermissionsExt as _;\n    let binary = root.join(\"owned-hf\");\n    let script = format!(\n        \"#!/bin/sh\\nprintf '%s\\\\n' \\\"$@\\\" >> {}\\nprintf 'end\\\\n' >> {}\\nif [ \\\"$1\\\" = download ]; then printf '%s\\\\n' {}; elif [ {} = 1 ]; then printf 'owned verification refusal\\\\n' >&2; exit 23; fi\\n\",\n        quote(&root.join(\"calls\")),\n        quote(&root.join(\"calls\")),\n        quote(&root.join(\"snapshot\")),\n        if fail { \"1\" } else { \"0\" }\n    );\n    std::fs::write(&binary, script).unwrap();\n    std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o700)).unwrap();\n    binary\n}\n#[cfg(unix)]",
+        "region_sha256": "89349faacc225ee5397a505d075be642b5ed11058bc3928793838fdabcdac495",
+        "historical_positive": [
+          {
+            "log": {
+              "path": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+              "sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd"
+            },
+            "line": 4496,
+            "text": "test scheduler_fixture_cli::scheduler_fixture_actual_cli_preserves_catalog_profile_json_and_refuses_invalid_inputs ... ok"
+          }
+        ],
+        "fresh_qualified_positive": null
+      }
+    ],
+    "status": "CURRENT_SOURCE_OWNED_CONDITIONAL_RETIREMENT"
+  },
+  {
+    "function": "require_keys",
+    "original": {
+      "path": "evals/skippy-scheduler-fixtures.py",
+      "source_sha256": "c1297cbf0135ed420612cca1a291e2770e7ac9f6489c27d0aba6c44771a58761",
+      "start_line": 48,
+      "end_line": 53,
+      "body": "def require_keys(document: dict[str, Any], keys: Sequence[str], context: str) -> None:\n    missing = [key for key in keys if key not in document]\n    if missing:\n        raise ValueError(f\"{context} is missing: {', '.join(missing)}\")\n\n\n",
+      "body_sha256": "8350a77b11d54ccf3d7b2250f5ffc22214ca536d9bd780be6d5da7ddade4316c"
+    },
+    "intent": "Missing required fields refuse rather than partial profile admission",
+    "native_owners": [
+      {
+        "path": "tools/xtask/src/automation/agentic_prompt_manifest/fixture_catalog.rs",
+        "sha256": "7cd7ff243382619bfc36bfc4e55f62a6a22afce65200adce4396a0689b7a1c61"
+      }
+    ],
+    "assertion_owners": [
+      {
+        "path": "tools/xtask/src/automation/agentic_prompt_manifest/fixture_tests.rs",
+        "source_sha256": "c51872650a7c344717380663c2512cfb8f9da5be02505d00fa708fc6596c8e60",
+        "function": "scheduler_catalog_requires_complete_context_and_every_model_identity_field",
+        "region": "fn scheduler_catalog_requires_complete_context_and_every_model_identity_field() {\n    for context in [65536, 131071] {\n        let mut catalog = checked_in();\n        catalog[\"profiles\"][\"agentic-eviction-pressure\"][\"workload\"][\"ctx_size\"] = context.into();\n        let error = fixture_catalog::validate(&catalog).unwrap_err().to_string();\n        assert!(error.contains(\"pinned row totals\"), \"{error}\");\n        assert!(error.contains(\"131072\"), \"{error}\");\n    }\n    for field in [\"id\", \"repo\", \"filename\", \"revision\", \"sha256\"] {\n        let mut catalog = checked_in();\n        catalog[\"profiles\"][\"warm-affinity\"][\"model\"]\n            .as_object_mut()\n            .unwrap()\n            .remove(field)\n            .unwrap();\n        assert!(\n            fixture_catalog::validate(&catalog).is_err(),\n            \"field={field}\"\n        );\n    }\n}\n",
+        "region_sha256": "c3ac357aa2c80a3935da71d2c28d2c724f6957264d89228e562f27a8b1702d7f",
+        "historical_positive": [
+          {
+            "log": {
+              "path": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+              "sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd"
+            },
+            "line": 129,
+            "text": "test automation::agentic_prompt_manifest::fixture_tests::scheduler_catalog_requires_complete_context_and_every_model_identity_field ... ok"
+          }
+        ],
+        "fresh_qualified_positive": null
+      },
+      {
+        "path": "tools/xtask/tests/migration_lifecycle/scheduler_fixture_cli.rs",
+        "source_sha256": "09298f5d698bd2e48231c7c333893f943dbb631937659f80906d937f924ae868",
+        "function": "scheduler_fixture_actual_cli_preserves_catalog_profile_json_and_refuses_invalid_inputs",
+        "region": "fn scheduler_fixture_actual_cli_preserves_catalog_profile_json_and_refuses_invalid_inputs() {\n    let root = tempfile::tempdir().unwrap();\n    let input = catalog();\n    std::fs::write(\n        root.path().join(\"catalog.json\"),\n        serde_json::to_vec(&input).unwrap(),\n    )\n    .unwrap();\n    let (ok, stdout, stderr) = cli(root.path(), &[\"validate-fixtures\", \"catalog.json\"]);\n    assert!(ok, \"{stderr}\");\n    let validation: Value = serde_json::from_str(&stdout).unwrap();\n    assert_eq!(validation[\"status\"], \"valid\");\n    let expected: Vec<_> = input[\"profiles\"]\n        .as_object()\n        .unwrap()\n        .keys()\n        .cloned()\n        .collect();\n    assert_eq!(validation[\"profiles\"], json!(expected));\n    for name in input[\"profiles\"].as_object().unwrap().keys() {\n        let (ok, stdout, stderr) = cli(root.path(), &[\"show-fixture\", \"catalog.json\", name]);\n        assert!(ok, \"{stderr}\");\n        assert_eq!(\n            serde_json::from_str::<Value>(&stdout).unwrap(),\n            input[\"profiles\"][name]\n        );\n    }\n    let (ok, stdout, stderr) = cli(\n        root.path(),\n        &[\"show-fixture\", \"catalog.json\", \"missing-profile\"],\n    );\n    assert!(!ok);\n    assert!(stdout.is_empty() && stderr.contains(\"unknown\"));\n    let mut invalid = input.clone();\n    invalid[\"profiles\"][\"warm-affinity\"][\"model\"]\n        .as_object_mut()\n        .unwrap()\n        .remove(\"sha256\");\n    std::fs::write(\n        root.path().join(\"invalid.json\"),\n        serde_json::to_vec(&invalid).unwrap(),\n    )\n    .unwrap();\n    let (ok, stdout, stderr) = cli(root.path(), &[\"validate-fixtures\", \"invalid.json\"]);\n    assert!(!ok);\n    assert!(stdout.is_empty() && stderr.contains(\"sha256\"));\n    std::fs::write(root.path().join(\"existing.json\"), b\"preserve-existing\").unwrap();\n    for verb in [\"materialize-fixture\", \"prepare-fixture\"] {\n        let mut args = vec![\n            verb,\n            \"--catalog\",\n            \"catalog.json\",\n            \"--profile\",\n            \"warm-affinity\",\n            \"--output\",\n            \"existing.json\",\n        ];\n        if verb == \"materialize-fixture\" {\n            args.extend([\"--dataset-file\", \"missing.parquet\"]);\n        } else {\n            args.extend([\"--hf-bin\", \"/not-started-hf\"]);\n        }\n        let (ok, stdout, stderr) = cli(root.path(), &args);\n        assert!(!ok);\n        assert!(\n            stdout.is_empty()\n                && stderr.contains(if verb == \"materialize-fixture\" {\n                    \"Hugging Face corpus\"\n                } else {\n                    \"HF corpus\"\n                })\n        );\n        assert_eq!(\n            std::fs::read(root.path().join(\"existing.json\")).unwrap(),\n            b\"preserve-existing\"\n        );\n    }\n    root.close().unwrap();\n}\n#[cfg(unix)]\nfn quote(path: &Path) -> String {\n    format!(\"'{}'\", path.to_str().unwrap().replace('\\'', \"'\\\\''\"))\n}\n#[cfg(unix)]\nfn hf(root: &Path, fail: bool) -> std::path::PathBuf {\n    use std::os::unix::fs::PermissionsExt as _;\n    let binary = root.join(\"owned-hf\");\n    let script = format!(\n        \"#!/bin/sh\\nprintf '%s\\\\n' \\\"$@\\\" >> {}\\nprintf 'end\\\\n' >> {}\\nif [ \\\"$1\\\" = download ]; then printf '%s\\\\n' {}; elif [ {} = 1 ]; then printf 'owned verification refusal\\\\n' >&2; exit 23; fi\\n\",\n        quote(&root.join(\"calls\")),\n        quote(&root.join(\"calls\")),\n        quote(&root.join(\"snapshot\")),\n        if fail { \"1\" } else { \"0\" }\n    );\n    std::fs::write(&binary, script).unwrap();\n    std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o700)).unwrap();\n    binary\n}\n#[cfg(unix)]",
+        "region_sha256": "89349faacc225ee5397a505d075be642b5ed11058bc3928793838fdabcdac495",
+        "historical_positive": [
+          {
+            "log": {
+              "path": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+              "sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd"
+            },
+            "line": 4496,
+            "text": "test scheduler_fixture_cli::scheduler_fixture_actual_cli_preserves_catalog_profile_json_and_refuses_invalid_inputs ... ok"
+          }
+        ],
+        "fresh_qualified_positive": null
+      }
+    ],
+    "status": "CURRENT_SOURCE_OWNED_CONDITIONAL_RETIREMENT"
+  },
+  {
+    "function": "derived_context_size",
+    "original": {
+      "path": "evals/skippy-scheduler-fixtures.py",
+      "source_sha256": "c1297cbf0135ed420612cca1a291e2770e7ac9f6489c27d0aba6c44771a58761",
+      "start_line": 54,
+      "end_line": 68,
+      "body": "def derived_context_size(profile: dict[str, Any]) -> int | None:\n    \"\"\"Return the smallest power-of-two context that covers the pinned workload.\"\"\"\n    corpus = profile[\"corpus\"]\n    if corpus.get(\"kind\") != \"hf\":\n        return None\n    workload = profile[\"workload\"]\n    prompt_tokens = sum(int(row[\"total_tokens\"]) for row in corpus[\"rows\"])\n    prompt_tokens *= int(workload[\"requests_per_family\"])\n    output_tokens = int(workload[\"output_tokens\"]) * (\n        int(workload[\"families\"]) * int(workload[\"requests_per_family\"])\n    )\n    required_tokens = prompt_tokens + output_tokens\n    return 1 << max(required_tokens - 1, 0).bit_length()\n\n\n",
+      "body_sha256": "1e0a1d335153b2167e9ccc70f0b779f1ea58b7aefe5fbd7919657f3faf32b508"
+    },
+    "intent": "HF token sums, request/output multiplicity, power-of-two minimum; synthetic does not require HF totals",
+    "native_owners": [
+      {
+        "path": "tools/xtask/src/automation/agentic_prompt_manifest/fixture_catalog.rs",
+        "sha256": "7cd7ff243382619bfc36bfc4e55f62a6a22afce65200adce4396a0689b7a1c61"
+      }
+    ],
+    "assertion_owners": [
+      {
+        "path": "tools/xtask/src/automation/agentic_prompt_manifest/fixture_tests.rs",
+        "source_sha256": "c51872650a7c344717380663c2512cfb8f9da5be02505d00fa708fc6596c8e60",
+        "function": "scheduler_catalog_requires_complete_context_and_every_model_identity_field",
+        "region": "fn scheduler_catalog_requires_complete_context_and_every_model_identity_field() {\n    for context in [65536, 131071] {\n        let mut catalog = checked_in();\n        catalog[\"profiles\"][\"agentic-eviction-pressure\"][\"workload\"][\"ctx_size\"] = context.into();\n        let error = fixture_catalog::validate(&catalog).unwrap_err().to_string();\n        assert!(error.contains(\"pinned row totals\"), \"{error}\");\n        assert!(error.contains(\"131072\"), \"{error}\");\n    }\n    for field in [\"id\", \"repo\", \"filename\", \"revision\", \"sha256\"] {\n        let mut catalog = checked_in();\n        catalog[\"profiles\"][\"warm-affinity\"][\"model\"]\n            .as_object_mut()\n            .unwrap()\n            .remove(field)\n            .unwrap();\n        assert!(\n            fixture_catalog::validate(&catalog).is_err(),\n            \"field={field}\"\n        );\n    }\n}\n",
+        "region_sha256": "c3ac357aa2c80a3935da71d2c28d2c724f6957264d89228e562f27a8b1702d7f",
+        "historical_positive": [
+          {
+            "log": {
+              "path": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+              "sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd"
+            },
+            "line": 129,
+            "text": "test automation::agentic_prompt_manifest::fixture_tests::scheduler_catalog_requires_complete_context_and_every_model_identity_field ... ok"
+          }
+        ],
+        "fresh_qualified_positive": null
+      }
+    ],
+    "status": "CURRENT_SOURCE_OWNED_CONDITIONAL_RETIREMENT"
+  },
+  {
+    "function": "validate_catalog",
+    "original": {
+      "path": "evals/skippy-scheduler-fixtures.py",
+      "source_sha256": "c1297cbf0135ed420612cca1a291e2770e7ac9f6489c27d0aba6c44771a58761",
+      "start_line": 69,
+      "end_line": 183,
+      "body": "def validate_catalog(catalog: dict[str, Any]) -> None:\n    if catalog.get(\"schema_version\") != 1:\n        raise ValueError(\"scheduler fixture schema_version must be 1\")\n    datasets = catalog.get(\"datasets\")\n    profiles = catalog.get(\"profiles\")\n    if not isinstance(datasets, dict) or not isinstance(profiles, dict) or not profiles:\n        raise ValueError(\"scheduler fixture catalog needs datasets and profiles objects\")\n    for dataset_name, dataset in datasets.items():\n        if not isinstance(dataset, dict):\n            raise ValueError(f\"dataset {dataset_name} must be an object\")\n        require_keys(\n            dataset,\n            (\"repo_id\", \"repo_type\", \"revision\", \"files\", \"parquet_file\", \"provenance\"),\n            f\"dataset {dataset_name}\",\n        )\n        revision = dataset[\"revision\"]\n        if not isinstance(revision, str) or len(revision) != 40:\n            raise ValueError(f\"dataset {dataset_name} revision must be a 40-character commit\")\n        if dataset[\"repo_type\"] != \"dataset\":\n            raise ValueError(f\"dataset {dataset_name} repo_type must be dataset\")\n        files = dataset[\"files\"]\n        if not isinstance(files, list) or dataset[\"parquet_file\"] not in files:\n            raise ValueError(f\"dataset {dataset_name} files must include parquet_file\")\n    for profile_name, profile in profiles.items():\n        if not isinstance(profile, dict):\n            raise ValueError(f\"profile {profile_name} must be an object\")\n        require_keys(\n            profile,\n            (\n                \"description\",\n                \"model\",\n                \"corpus\",\n                \"workload\",\n                \"ci_trace\",\n                \"hardware_acceptance\",\n            ),\n            f\"profile {profile_name}\",\n        )\n        model = profile[\"model\"]\n        require_keys(\n            model,\n            (\"id\", \"repo\", \"revision\", \"filename\", \"sha256\"),\n            f\"profile {profile_name} model\",\n        )\n        if not isinstance(model[\"id\"], str) or not model[\"id\"]:\n            raise ValueError(f\"profile {profile_name} model id must be nonempty\")\n        if not isinstance(model[\"revision\"], str) or len(model[\"revision\"]) != 40:\n            raise ValueError(f\"profile {profile_name} model revision must be a commit\")\n        if not isinstance(model[\"sha256\"], str) or len(model[\"sha256\"]) != 64:\n            raise ValueError(f\"profile {profile_name} model needs a SHA-256\")\n        workload = profile[\"workload\"]\n        require_keys(workload, WORKLOAD_KEYS, f\"profile {profile_name} workload\")\n        if any(float(workload[key]) <= 0 for key in WORKLOAD_KEYS):\n            raise ValueError(f\"profile {profile_name} workload values must be positive\")\n        expected_requests = int(workload[\"families\"]) * int(workload[\"requests_per_family\"])\n        if int(workload[\"admission_concurrency\"]) != expected_requests:\n            raise ValueError(f\"profile {profile_name} must admit its complete workload\")\n        if int(workload[\"lanes\"]) < expected_requests:\n            raise ValueError(f\"profile {profile_name} needs at least one lane per request\")\n        trace = profile[\"ci_trace\"]\n        require_keys(\n            trace,\n            (\n                \"family_order\",\n                \"prompt_tokens\",\n                \"expected_fcfs_switches\",\n                \"expected_dfs_switches\",\n            ),\n            f\"profile {profile_name} ci_trace\",\n        )\n        family_order = trace[\"family_order\"]\n        if not isinstance(family_order, list) or len(family_order) != expected_requests:\n            raise ValueError(f\"profile {profile_name} ci_trace must cover every request\")\n        if set(family_order) != set(range(int(workload[\"families\"]))):\n            raise ValueError(f\"profile {profile_name} ci_trace families do not match workload\")\n        corpus = profile[\"corpus\"]\n        if corpus.get(\"kind\") == \"hf\":\n            dataset_name = corpus.get(\"dataset\")\n            if dataset_name not in datasets:\n                raise ValueError(f\"profile {profile_name} references an unknown dataset\")\n            selection = corpus.get(\"selection\")\n            rows = corpus.get(\"rows\")\n            if not isinstance(selection, dict) or not isinstance(rows, list):\n                raise ValueError(f\"profile {profile_name} needs selection and rows\")\n            if len(rows) != int(workload[\"families\"]):\n                raise ValueError(f\"profile {profile_name} must pin one row per family\")\n            for row_index, row in enumerate(rows):\n                if not isinstance(row, dict):\n                    raise ValueError(f\"profile {profile_name} row {row_index} must be an object\")\n                require_keys(\n                    row,\n                    (\"session_id\", \"source_dataset\", \"n_turns\", \"max_isl\", \"total_tokens\"),\n                    f\"profile {profile_name} row {row_index}\",\n                )\n                if int(row[\"total_tokens\"]) <= 0:\n                    raise ValueError(\n                        f\"profile {profile_name} row {row_index} total_tokens must be positive\"\n                    )\n            if selection.get(\"families\") != int(workload[\"families\"]):\n                raise ValueError(f\"profile {profile_name} selection family count drifted\")\n            if selection.get(\"order\") != \"md5(session_id)\":\n                raise ValueError(f\"profile {profile_name} selection order must be deterministic\")\n            manifest_hash = corpus.get(\"prompt_manifest_sha256\")\n            if not isinstance(manifest_hash, str) or len(manifest_hash) != 64:\n                raise ValueError(f\"profile {profile_name} needs a prompt manifest SHA-256\")\n            required_ctx_size = derived_context_size(profile)\n            if required_ctx_size is None or int(workload[\"ctx_size\"]) < required_ctx_size:\n                raise ValueError(\n                    f\"profile {profile_name} ctx_size must cover its pinned row totals; \"\n                    f\"need at least {required_ctx_size}\"\n                )\n        elif corpus.get(\"kind\") != \"synthetic\":\n            raise ValueError(f\"profile {profile_name} has an unsupported corpus kind\")\n\n\n",
+      "body_sha256": "2ae163772976674e27ca70c1db5fe134a622f13b8c2f968df1a9cd36a9eb9fc9"
+    },
+    "intent": "Schema, pins, positive complete workload, trace roster, deterministic selection and context",
+    "native_owners": [
+      {
+        "path": "tools/xtask/src/automation/agentic_prompt_manifest/fixture_catalog.rs",
+        "sha256": "7cd7ff243382619bfc36bfc4e55f62a6a22afce65200adce4396a0689b7a1c61"
+      }
+    ],
+    "assertion_owners": [
+      {
+        "path": "tools/xtask/src/automation/agentic_prompt_manifest/fixture_tests.rs",
+        "source_sha256": "c51872650a7c344717380663c2512cfb8f9da5be02505d00fa708fc6596c8e60",
+        "function": "scheduler_catalog_rejects_context_identity_and_incomplete_trace",
+        "region": "fn scheduler_catalog_rejects_context_identity_and_incomplete_trace() {\n    for change in [\"context\", \"identity\", \"trace\", \"source\", \"boolean\"] {\n        let mut catalog = checked_in();\n        let profile = &mut catalog[\"profiles\"][\"agentic-eviction-pressure\"];\n        match change {\n            \"context\" => profile[\"workload\"][\"ctx_size\"] = 1.into(),\n            \"identity\" => profile[\"model\"]\n                .as_object_mut()\n                .unwrap()\n                .remove(\"revision\")\n                .map(|_| ())\n                .unwrap(),\n            \"trace\" => profile[\"ci_trace\"][\"family_order\"] = json!([0]),\n            \"source\" => profile[\"corpus\"][\"selection\"][\"sources\"] = json!([]),\n            \"boolean\" => profile[\"workload\"][\"families\"] = true.into(),\n            _ => unreachable!(),\n        }\n        assert!(fixture_catalog::validate(&catalog).is_err(), \"{change}\");\n    }\n}\n",
+        "region_sha256": "b8c148eadba06de36d20fd1fd869d769bd9420cf9511a7bec1b00e7502f057f6",
+        "historical_positive": [
+          {
+            "log": {
+              "path": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+              "sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd"
+            },
+            "line": 128,
+            "text": "test automation::agentic_prompt_manifest::fixture_tests::scheduler_catalog_rejects_context_identity_and_incomplete_trace ... ok"
+          }
+        ],
+        "fresh_qualified_positive": null
+      },
+      {
+        "path": "tools/xtask/src/automation/agentic_prompt_manifest/fixture_tests.rs",
+        "source_sha256": "c51872650a7c344717380663c2512cfb8f9da5be02505d00fa708fc6596c8e60",
+        "function": "scheduler_catalog_preserves_measured_pressure_rows_and_immutable_inputs",
+        "region": "fn scheduler_catalog_preserves_measured_pressure_rows_and_immutable_inputs() {\n    let catalog = checked_in();\n    fixture_catalog::validate(&catalog).unwrap();\n    let profile = &catalog[\"profiles\"][\"agentic-eviction-pressure\"];\n    assert_eq!(profile[\"workload\"][\"families\"], 8);\n    assert_eq!(profile[\"workload\"][\"ctx_size\"], 131072);\n    assert_eq!(profile[\"corpus\"][\"rows\"].as_array().unwrap().len(), 8);\n    assert_eq!(\n        profile[\"model\"][\"sha256\"],\n        \"603bd3f8a0281d16571da7c08bd661ee17ff0d1be6fcbd1b42242da257ef0bb8\"\n    );\n    assert_eq!(\n        profile[\"corpus\"][\"prompt_manifest_sha256\"],\n        \"f1ddbe3d5974f3f4bd06f5d70fa45d0e10305bbafa4eb7399a0f972458d1beef\"\n    );\n    assert_eq!(\n        catalog[\"datasets\"][\"agentic-coding-trajectories\"][\"revision\"],\n        \"cef72d1f4d0caabf85937adf8337a14b7522c782\"\n    );\n}\n",
+        "region_sha256": "b88a7d58fe92c0b3dcfab4afc4d86e5b522f4f636a080d48205430f144ac8633",
+        "historical_positive": [
+          {
+            "log": {
+              "path": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+              "sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd"
+            },
+            "line": 127,
+            "text": "test automation::agentic_prompt_manifest::fixture_tests::scheduler_catalog_preserves_measured_pressure_rows_and_immutable_inputs ... ok"
+          }
+        ],
+        "fresh_qualified_positive": null
+      }
+    ],
+    "status": "CURRENT_SOURCE_OWNED_CONDITIONAL_RETIREMENT"
+  },
+  {
+    "function": "profile",
+    "original": {
+      "path": "evals/skippy-scheduler-fixtures.py",
+      "source_sha256": "c1297cbf0135ed420612cca1a291e2770e7ac9f6489c27d0aba6c44771a58761",
+      "start_line": 184,
+      "end_line": 191,
+      "body": "def profile(catalog: dict[str, Any], name: str) -> dict[str, Any]:\n    try:\n        return catalog[\"profiles\"][name]\n    except KeyError as error:\n        choices = \", \".join(sorted(catalog[\"profiles\"]))\n        raise ValueError(f\"unknown profile {name!r}; choose one of: {choices}\") from error\n\n\n",
+      "body_sha256": "f029aa8c078b3c173af3a70ce9c69647916d2c280397291803a51bf83361695a"
+    },
+    "intent": "Resolve named validated profile and refuse unknown names",
+    "native_owners": [
+      {
+        "path": "tools/xtask/src/automation/agentic_prompt_manifest/fixture_profile.rs",
+        "sha256": "904e9acb3bdb555b26797874a67370fbe115ed54eaabd7949093496582ab4c90"
+      }
+    ],
+    "assertion_owners": [
+      {
+        "path": "tools/xtask/src/automation/agentic_prompt_manifest/fixture_profile.rs",
+        "source_sha256": "904e9acb3bdb555b26797874a67370fbe115ed54eaabd7949093496582ab4c90",
+        "function": "resolved_fixture_profile_owns_workload_shape_and_refuses_unknown_or_invalid_catalogs",
+        "region": "fn resolved_fixture_profile_owns_workload_shape_and_refuses_unknown_or_invalid_catalogs() {\n        let mut input = checked_in();\n        let selected = resolve(&input, \"agentic-eviction-pressure\").unwrap();\n        assert_eq!(selected[\"workload\"][\"rounds\"], 4);\n        assert_eq!(selected[\"workload\"][\"families\"], 8);\n        assert_eq!(selected[\"workload\"][\"admission_concurrency\"], 16);\n        assert_eq!(selected[\"corpus\"][\"kind\"], \"hf\");\n        assert!(resolve(&input, \"unknown\").is_err());\n        input[\"profiles\"][\"agentic-eviction-pressure\"][\"workload\"][\"ctx_size\"] = 1.into();\n        assert!(resolve(&input, \"warm-affinity\").is_err());\n    }\n\n    #[test]\n    fn fixture_inputs_require_pinned_model_identity_and_matching_manifest_mode() {\n        let input = checked_in();\n        for (name, manifest) in [\n            (\"warm-affinity\", None),\n            (\n                \"agentic-eviction-pressure\",\n                Some(Path::new(\"prepared.json\")),\n            ),\n        ] {\n            let profile = resolve(&input, name).unwrap();\n            let model = &profile[\"model\"];\n            let id = catalog::text(model, \"id\").unwrap();\n            let hash = catalog::text(model, \"sha256\").unwrap();\n            validate_inputs(profile, id, hash, manifest).unwrap();\n            assert!(validate_inputs(profile, \"different\", hash, manifest).is_err());\n            assert!(validate_inputs(profile, id, &\"0\".repeat(64), manifest).is_err());\n            let incompatible = if manifest.is_some() {\n                None\n            } else {\n                Some(Path::new(\"external.json\"))\n            };\n            assert!(validate_inputs(profile, id, hash, incompatible).is_err());\n        }\n    }\n}\n",
+        "region_sha256": "a0d8f0eeb4e0ec031a226cd4b30bccd75e3ca3433dcfa56562bd23f519faf7f8",
+        "historical_positive": [
+          {
+            "log": {
+              "path": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+              "sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd"
+            },
+            "line": 125,
+            "text": "test automation::agentic_prompt_manifest::fixture_profile::tests::resolved_fixture_profile_owns_workload_shape_and_refuses_unknown_or_invalid_catalogs ... ok"
+          }
+        ],
+        "fresh_qualified_positive": null
+      },
+      {
+        "path": "tools/xtask/tests/migration_lifecycle/scheduler_fixture_cli.rs",
+        "source_sha256": "09298f5d698bd2e48231c7c333893f943dbb631937659f80906d937f924ae868",
+        "function": "scheduler_fixture_actual_cli_preserves_catalog_profile_json_and_refuses_invalid_inputs",
+        "region": "fn scheduler_fixture_actual_cli_preserves_catalog_profile_json_and_refuses_invalid_inputs() {\n    let root = tempfile::tempdir().unwrap();\n    let input = catalog();\n    std::fs::write(\n        root.path().join(\"catalog.json\"),\n        serde_json::to_vec(&input).unwrap(),\n    )\n    .unwrap();\n    let (ok, stdout, stderr) = cli(root.path(), &[\"validate-fixtures\", \"catalog.json\"]);\n    assert!(ok, \"{stderr}\");\n    let validation: Value = serde_json::from_str(&stdout).unwrap();\n    assert_eq!(validation[\"status\"], \"valid\");\n    let expected: Vec<_> = input[\"profiles\"]\n        .as_object()\n        .unwrap()\n        .keys()\n        .cloned()\n        .collect();\n    assert_eq!(validation[\"profiles\"], json!(expected));\n    for name in input[\"profiles\"].as_object().unwrap().keys() {\n        let (ok, stdout, stderr) = cli(root.path(), &[\"show-fixture\", \"catalog.json\", name]);\n        assert!(ok, \"{stderr}\");\n        assert_eq!(\n            serde_json::from_str::<Value>(&stdout).unwrap(),\n            input[\"profiles\"][name]\n        );\n    }\n    let (ok, stdout, stderr) = cli(\n        root.path(),\n        &[\"show-fixture\", \"catalog.json\", \"missing-profile\"],\n    );\n    assert!(!ok);\n    assert!(stdout.is_empty() && stderr.contains(\"unknown\"));\n    let mut invalid = input.clone();\n    invalid[\"profiles\"][\"warm-affinity\"][\"model\"]\n        .as_object_mut()\n        .unwrap()\n        .remove(\"sha256\");\n    std::fs::write(\n        root.path().join(\"invalid.json\"),\n        serde_json::to_vec(&invalid).unwrap(),\n    )\n    .unwrap();\n    let (ok, stdout, stderr) = cli(root.path(), &[\"validate-fixtures\", \"invalid.json\"]);\n    assert!(!ok);\n    assert!(stdout.is_empty() && stderr.contains(\"sha256\"));\n    std::fs::write(root.path().join(\"existing.json\"), b\"preserve-existing\").unwrap();\n    for verb in [\"materialize-fixture\", \"prepare-fixture\"] {\n        let mut args = vec![\n            verb,\n            \"--catalog\",\n            \"catalog.json\",\n            \"--profile\",\n            \"warm-affinity\",\n            \"--output\",\n            \"existing.json\",\n        ];\n        if verb == \"materialize-fixture\" {\n            args.extend([\"--dataset-file\", \"missing.parquet\"]);\n        } else {\n            args.extend([\"--hf-bin\", \"/not-started-hf\"]);\n        }\n        let (ok, stdout, stderr) = cli(root.path(), &args);\n        assert!(!ok);\n        assert!(\n            stdout.is_empty()\n                && stderr.contains(if verb == \"materialize-fixture\" {\n                    \"Hugging Face corpus\"\n                } else {\n                    \"HF corpus\"\n                })\n        );\n        assert_eq!(\n            std::fs::read(root.path().join(\"existing.json\")).unwrap(),\n            b\"preserve-existing\"\n        );\n    }\n    root.close().unwrap();\n}\n#[cfg(unix)]\nfn quote(path: &Path) -> String {\n    format!(\"'{}'\", path.to_str().unwrap().replace('\\'', \"'\\\\''\"))\n}\n#[cfg(unix)]\nfn hf(root: &Path, fail: bool) -> std::path::PathBuf {\n    use std::os::unix::fs::PermissionsExt as _;\n    let binary = root.join(\"owned-hf\");\n    let script = format!(\n        \"#!/bin/sh\\nprintf '%s\\\\n' \\\"$@\\\" >> {}\\nprintf 'end\\\\n' >> {}\\nif [ \\\"$1\\\" = download ]; then printf '%s\\\\n' {}; elif [ {} = 1 ]; then printf 'owned verification refusal\\\\n' >&2; exit 23; fi\\n\",\n        quote(&root.join(\"calls\")),\n        quote(&root.join(\"calls\")),\n        quote(&root.join(\"snapshot\")),\n        if fail { \"1\" } else { \"0\" }\n    );\n    std::fs::write(&binary, script).unwrap();\n    std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o700)).unwrap();\n    binary\n}\n#[cfg(unix)]",
+        "region_sha256": "89349faacc225ee5397a505d075be642b5ed11058bc3928793838fdabcdac495",
+        "historical_positive": [
+          {
+            "log": {
+              "path": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+              "sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd"
+            },
+            "line": 4496,
+            "text": "test scheduler_fixture_cli::scheduler_fixture_actual_cli_preserves_catalog_profile_json_and_refuses_invalid_inputs ... ok"
+          }
+        ],
+        "fresh_qualified_positive": null
+      }
+    ],
+    "status": "CURRENT_SOURCE_OWNED_CONDITIONAL_RETIREMENT"
+  },
+  {
+    "function": "dataset_for_profile",
+    "original": {
+      "path": "evals/skippy-scheduler-fixtures.py",
+      "source_sha256": "c1297cbf0135ed420612cca1a291e2770e7ac9f6489c27d0aba6c44771a58761",
+      "start_line": 192,
+      "end_line": 198,
+      "body": "def dataset_for_profile(catalog: dict[str, Any], selected: dict[str, Any]) -> dict[str, Any]:\n    corpus = selected[\"corpus\"]\n    if corpus[\"kind\"] != \"hf\":\n        raise ValueError(\"the selected profile does not use a Hugging Face corpus\")\n    return catalog[\"datasets\"][corpus[\"dataset\"]]\n\n\n",
+      "body_sha256": "41ff2ff18b0864f8fd7d3416e345f9d8a654b5d960c8783fcfbb7a26b9f5f42f"
+    },
+    "intent": "Only HF profiles select the catalog-pinned dataset",
+    "native_owners": [
+      {
+        "path": "tools/xtask/src/automation/agentic_prompt_manifest/fixture_materialization.rs",
+        "sha256": "4f150ba5ec734ff5c8cea420b0a27fec8127624e7e4bdb7d635956b944f573e5"
+      },
+      {
+        "path": "tools/xtask/src/automation/agentic_prompt_manifest/fixture_fetch_command.rs",
+        "sha256": "d4fe21e301cee2d7f57ac45f9474d8731a194143da37e05b1317d29dc3513951"
+      }
+    ],
+    "assertion_owners": [
+      {
+        "path": "tools/xtask/tests/migration_lifecycle/scheduler_fixture_cli.rs",
+        "source_sha256": "09298f5d698bd2e48231c7c333893f943dbb631937659f80906d937f924ae868",
+        "function": "scheduler_fixture_actual_cli_preserves_catalog_profile_json_and_refuses_invalid_inputs",
+        "region": "fn scheduler_fixture_actual_cli_preserves_catalog_profile_json_and_refuses_invalid_inputs() {\n    let root = tempfile::tempdir().unwrap();\n    let input = catalog();\n    std::fs::write(\n        root.path().join(\"catalog.json\"),\n        serde_json::to_vec(&input).unwrap(),\n    )\n    .unwrap();\n    let (ok, stdout, stderr) = cli(root.path(), &[\"validate-fixtures\", \"catalog.json\"]);\n    assert!(ok, \"{stderr}\");\n    let validation: Value = serde_json::from_str(&stdout).unwrap();\n    assert_eq!(validation[\"status\"], \"valid\");\n    let expected: Vec<_> = input[\"profiles\"]\n        .as_object()\n        .unwrap()\n        .keys()\n        .cloned()\n        .collect();\n    assert_eq!(validation[\"profiles\"], json!(expected));\n    for name in input[\"profiles\"].as_object().unwrap().keys() {\n        let (ok, stdout, stderr) = cli(root.path(), &[\"show-fixture\", \"catalog.json\", name]);\n        assert!(ok, \"{stderr}\");\n        assert_eq!(\n            serde_json::from_str::<Value>(&stdout).unwrap(),\n            input[\"profiles\"][name]\n        );\n    }\n    let (ok, stdout, stderr) = cli(\n        root.path(),\n        &[\"show-fixture\", \"catalog.json\", \"missing-profile\"],\n    );\n    assert!(!ok);\n    assert!(stdout.is_empty() && stderr.contains(\"unknown\"));\n    let mut invalid = input.clone();\n    invalid[\"profiles\"][\"warm-affinity\"][\"model\"]\n        .as_object_mut()\n        .unwrap()\n        .remove(\"sha256\");\n    std::fs::write(\n        root.path().join(\"invalid.json\"),\n        serde_json::to_vec(&invalid).unwrap(),\n    )\n    .unwrap();\n    let (ok, stdout, stderr) = cli(root.path(), &[\"validate-fixtures\", \"invalid.json\"]);\n    assert!(!ok);\n    assert!(stdout.is_empty() && stderr.contains(\"sha256\"));\n    std::fs::write(root.path().join(\"existing.json\"), b\"preserve-existing\").unwrap();\n    for verb in [\"materialize-fixture\", \"prepare-fixture\"] {\n        let mut args = vec![\n            verb,\n            \"--catalog\",\n            \"catalog.json\",\n            \"--profile\",\n            \"warm-affinity\",\n            \"--output\",\n            \"existing.json\",\n        ];\n        if verb == \"materialize-fixture\" {\n            args.extend([\"--dataset-file\", \"missing.parquet\"]);\n        } else {\n            args.extend([\"--hf-bin\", \"/not-started-hf\"]);\n        }\n        let (ok, stdout, stderr) = cli(root.path(), &args);\n        assert!(!ok);\n        assert!(\n            stdout.is_empty()\n                && stderr.contains(if verb == \"materialize-fixture\" {\n                    \"Hugging Face corpus\"\n                } else {\n                    \"HF corpus\"\n                })\n        );\n        assert_eq!(\n            std::fs::read(root.path().join(\"existing.json\")).unwrap(),\n            b\"preserve-existing\"\n        );\n    }\n    root.close().unwrap();\n}\n#[cfg(unix)]\nfn quote(path: &Path) -> String {\n    format!(\"'{}'\", path.to_str().unwrap().replace('\\'', \"'\\\\''\"))\n}\n#[cfg(unix)]\nfn hf(root: &Path, fail: bool) -> std::path::PathBuf {\n    use std::os::unix::fs::PermissionsExt as _;\n    let binary = root.join(\"owned-hf\");\n    let script = format!(\n        \"#!/bin/sh\\nprintf '%s\\\\n' \\\"$@\\\" >> {}\\nprintf 'end\\\\n' >> {}\\nif [ \\\"$1\\\" = download ]; then printf '%s\\\\n' {}; elif [ {} = 1 ]; then printf 'owned verification refusal\\\\n' >&2; exit 23; fi\\n\",\n        quote(&root.join(\"calls\")),\n        quote(&root.join(\"calls\")),\n        quote(&root.join(\"snapshot\")),\n        if fail { \"1\" } else { \"0\" }\n    );\n    std::fs::write(&binary, script).unwrap();\n    std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o700)).unwrap();\n    binary\n}\n#[cfg(unix)]",
+        "region_sha256": "89349faacc225ee5397a505d075be642b5ed11058bc3928793838fdabcdac495",
+        "historical_positive": [
+          {
+            "log": {
+              "path": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+              "sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd"
+            },
+            "line": 4496,
+            "text": "test scheduler_fixture_cli::scheduler_fixture_actual_cli_preserves_catalog_profile_json_and_refuses_invalid_inputs ... ok"
+          }
+        ],
+        "fresh_qualified_positive": null
+      },
+      {
+        "path": "tools/xtask/tests/migration_lifecycle/scheduler_fixture_cli.rs",
+        "source_sha256": "09298f5d698bd2e48231c7c333893f943dbb631937659f80906d937f924ae868",
+        "function": "scheduler_fixture_actual_cli_fetches_verified_path_and_preserves_output_on_prepare_refusal",
+        "region": "fn scheduler_fixture_actual_cli_fetches_verified_path_and_preserves_output_on_prepare_refusal() {\n    for fail in [false, true] {\n        let root = tempfile::tempdir().unwrap();\n        let input = catalog();\n        std::fs::write(\n            root.path().join(\"catalog.json\"),\n            serde_json::to_vec(&input).unwrap(),\n        )\n        .unwrap();\n        std::fs::create_dir(root.path().join(\"snapshot\")).unwrap();\n        std::fs::write(\n            root.path().join(\"snapshot/sessions.parquet\"),\n            b\"inert verified-path transport fixture, not parquet proof\",\n        )\n        .unwrap();\n        let binary = hf(root.path(), fail);\n        let cache = root.path().join(\"cache\");\n        let output = root.path().join(\"output.json\");\n        std::fs::write(&output, b\"preserve-existing\").unwrap();\n        let mut args = vec![\n            if fail {\n                \"prepare-fixture\"\n            } else {\n                \"fetch-fixture\"\n            },\n            \"--catalog\",\n            \"catalog.json\",\n            \"--profile\",\n            \"agentic-eviction-pressure\",\n            \"--hf-bin\",\n            binary.to_str().unwrap(),\n            \"--cache-dir\",\n            cache.to_str().unwrap(),\n            \"--timeout\",\n            \"3\",\n        ];\n        if fail {\n            args.extend([\"--output\", output.to_str().unwrap()]);\n        }\n        let (ok, stdout, stderr) = cli(root.path(), &args);\n        assert_eq!(ok, !fail, \"{stderr}\");\n        if fail {\n            assert!(stdout.is_empty() && stderr.contains(\"owned verification refusal\"));\n        } else {\n            assert_eq!(\n                stdout.trim(),\n                root.path()\n                    .join(\"snapshot/sessions.parquet\")\n                    .to_str()\n                    .unwrap()\n            );\n        }\n        let dataset = &input[\"datasets\"][\"agentic-coding-trajectories\"];\n        let mut download = vec![\n            \"download\".to_owned(),\n            dataset[\"repo_id\"].as_str().unwrap().into(),\n        ];\n        download.extend(\n            dataset[\"files\"]\n                .as_array()\n                .unwrap()\n                .iter()\n                .map(|v| v.as_str().unwrap().to_owned()),\n        );\n        download.extend([\n            \"--quiet\".into(),\n            \"--repo-type\".into(),\n            \"dataset\".into(),\n            \"--revision\".into(),\n            dataset[\"revision\"].as_str().unwrap().into(),\n            \"--cache-dir\".into(),\n            cache.to_str().unwrap().into(),\n            \"end\".into(),\n            \"cache\".into(),\n            \"verify\".into(),\n            dataset[\"repo_id\"].as_str().unwrap().into(),\n            \"--repo-type\".into(),\n            \"dataset\".into(),\n            \"--revision\".into(),\n            dataset[\"revision\"].as_str().unwrap().into(),\n            \"--fail-on-missing-files\".into(),\n            \"--cache-dir\".into(),\n            cache.to_str().unwrap().into(),\n            \"end\".into(),\n        ]);\n        assert_eq!(\n            std::fs::read_to_string(root.path().join(\"calls\")).unwrap(),\n            download.join(\"\\n\") + \"\\n\"\n        );\n        assert_eq!(std::fs::read(&output).unwrap(), b\"preserve-existing\");\n        root.close().unwrap();\n    }\n}\n",
+        "region_sha256": "38320adf8c2d72d4a297cb18a58dfcee2455534474dde19ef6ded4b6cab0ec49",
+        "historical_positive": [
+          {
+            "log": {
+              "path": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+              "sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd"
+            },
+            "line": 4495,
+            "text": "test scheduler_fixture_cli::scheduler_fixture_actual_cli_fetches_verified_path_and_preserves_output_on_prepare_refusal ... ok"
+          }
+        ],
+        "fresh_qualified_positive": null
+      }
+    ],
+    "status": "CURRENT_SOURCE_OWNED_CONDITIONAL_RETIREMENT"
+  },
+  {
+    "function": "run_checked",
+    "original": {
+      "path": "evals/skippy-scheduler-fixtures.py",
+      "source_sha256": "c1297cbf0135ed420612cca1a291e2770e7ac9f6489c27d0aba6c44771a58761",
+      "start_line": 199,
+      "end_line": 211,
+      "body": "def run_checked(\n    command: list[str],\n    runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,\n) -> subprocess.CompletedProcess[str]:\n    try:\n        return runner(command, check=True, text=True, capture_output=True)\n    except subprocess.CalledProcessError as error:\n        detail = (error.stderr or error.stdout or \"\").strip()\n        suffix = f\": {detail}\" if detail else \"\"\n        message = f\"command failed ({error.returncode}): {' '.join(command)}{suffix}\"\n        raise RuntimeError(message) from error\n\n\n",
+      "body_sha256": "1e00978e20d939a6844ed6a1aee1b20d8bda2e6664b90297c159185d3225da06"
+    },
+    "intent": "Own subprocess status and diagnostic failure propagation; no unsuccessful snapshot admission",
+    "native_owners": [
+      {
+        "path": "tools/xtask/src/automation/agentic_prompt_manifest/fixture_fetch.rs",
+        "sha256": "92368757c0a111c49e390a04dab44881c587689ad0fa57c59fd8c9ff7b8b9baf"
+      }
+    ],
+    "assertion_owners": [
+      {
+        "path": "tools/xtask/src/automation/agentic_prompt_manifest/fixture_fetch_tests.rs",
+        "source_sha256": "58b485a74caadf2b5ffd09845207347ce14ca14d5f751de5bada347d9c613d00",
+        "function": "actual_fixture_hf_verification_failure_refuses_an_existing_parquet",
+        "region": "fn actual_fixture_hf_verification_failure_refuses_an_existing_parquet() {\n        let directory = tempfile::tempdir().unwrap();\n        let adapter = fixture(directory.path(), true);\n        fs::create_dir(directory.path().join(\"snapshot\")).unwrap();\n        fs::write(\n            directory.path().join(\"snapshot/sessions.parquet\"),\n            b\"must not admit\",\n        )\n        .unwrap();\n        let error = fixture_fetch::fetch(&dataset(), &adapter, &Cancellation::default())\n            .unwrap_err()\n            .to_string();\n        assert!(error.contains(\"verification failed\"), \"{error}\");\n        let trace = fs::read_to_string(directory.path().join(\"calls\")).unwrap();\n        assert!(trace.contains(\"cache\\nverify\\n\"));\n        assert!(trace.contains(\"--fail-on-missing-files\\n\"));\n    }\n}\n",
+        "region_sha256": "65e869983f7ce7068e1dd649a5fefcb5aeb6d0075c6bb7e58a0c35a2fb970f47",
+        "historical_positive": [
+          {
+            "log": {
+              "path": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+              "sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd"
+            },
+            "line": 123,
+            "text": "test automation::agentic_prompt_manifest::fixture_fetch_tests::owned::actual_fixture_hf_verification_failure_refuses_an_existing_parquet ... ok"
+          }
+        ],
+        "fresh_qualified_positive": null
+      },
+      {
+        "path": "tools/xtask/tests/migration_lifecycle/scheduler_fixture_cli.rs",
+        "source_sha256": "09298f5d698bd2e48231c7c333893f943dbb631937659f80906d937f924ae868",
+        "function": "scheduler_fixture_actual_cli_fetches_verified_path_and_preserves_output_on_prepare_refusal",
+        "region": "fn scheduler_fixture_actual_cli_fetches_verified_path_and_preserves_output_on_prepare_refusal() {\n    for fail in [false, true] {\n        let root = tempfile::tempdir().unwrap();\n        let input = catalog();\n        std::fs::write(\n            root.path().join(\"catalog.json\"),\n            serde_json::to_vec(&input).unwrap(),\n        )\n        .unwrap();\n        std::fs::create_dir(root.path().join(\"snapshot\")).unwrap();\n        std::fs::write(\n            root.path().join(\"snapshot/sessions.parquet\"),\n            b\"inert verified-path transport fixture, not parquet proof\",\n        )\n        .unwrap();\n        let binary = hf(root.path(), fail);\n        let cache = root.path().join(\"cache\");\n        let output = root.path().join(\"output.json\");\n        std::fs::write(&output, b\"preserve-existing\").unwrap();\n        let mut args = vec![\n            if fail {\n                \"prepare-fixture\"\n            } else {\n                \"fetch-fixture\"\n            },\n            \"--catalog\",\n            \"catalog.json\",\n            \"--profile\",\n            \"agentic-eviction-pressure\",\n            \"--hf-bin\",\n            binary.to_str().unwrap(),\n            \"--cache-dir\",\n            cache.to_str().unwrap(),\n            \"--timeout\",\n            \"3\",\n        ];\n        if fail {\n            args.extend([\"--output\", output.to_str().unwrap()]);\n        }\n        let (ok, stdout, stderr) = cli(root.path(), &args);\n        assert_eq!(ok, !fail, \"{stderr}\");\n        if fail {\n            assert!(stdout.is_empty() && stderr.contains(\"owned verification refusal\"));\n        } else {\n            assert_eq!(\n                stdout.trim(),\n                root.path()\n                    .join(\"snapshot/sessions.parquet\")\n                    .to_str()\n                    .unwrap()\n            );\n        }\n        let dataset = &input[\"datasets\"][\"agentic-coding-trajectories\"];\n        let mut download = vec![\n            \"download\".to_owned(),\n            dataset[\"repo_id\"].as_str().unwrap().into(),\n        ];\n        download.extend(\n            dataset[\"files\"]\n                .as_array()\n                .unwrap()\n                .iter()\n                .map(|v| v.as_str().unwrap().to_owned()),\n        );\n        download.extend([\n            \"--quiet\".into(),\n            \"--repo-type\".into(),\n            \"dataset\".into(),\n            \"--revision\".into(),\n            dataset[\"revision\"].as_str().unwrap().into(),\n            \"--cache-dir\".into(),\n            cache.to_str().unwrap().into(),\n            \"end\".into(),\n            \"cache\".into(),\n            \"verify\".into(),\n            dataset[\"repo_id\"].as_str().unwrap().into(),\n            \"--repo-type\".into(),\n            \"dataset\".into(),\n            \"--revision\".into(),\n            dataset[\"revision\"].as_str().unwrap().into(),\n            \"--fail-on-missing-files\".into(),\n            \"--cache-dir\".into(),\n            cache.to_str().unwrap().into(),\n            \"end\".into(),\n        ]);\n        assert_eq!(\n            std::fs::read_to_string(root.path().join(\"calls\")).unwrap(),\n            download.join(\"\\n\") + \"\\n\"\n        );\n        assert_eq!(std::fs::read(&output).unwrap(), b\"preserve-existing\");\n        root.close().unwrap();\n    }\n}\n",
+        "region_sha256": "38320adf8c2d72d4a297cb18a58dfcee2455534474dde19ef6ded4b6cab0ec49",
+        "historical_positive": [
+          {
+            "log": {
+              "path": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+              "sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd"
+            },
+            "line": 4495,
+            "text": "test scheduler_fixture_cli::scheduler_fixture_actual_cli_fetches_verified_path_and_preserves_output_on_prepare_refusal ... ok"
+          }
+        ],
+        "fresh_qualified_positive": null
+      }
+    ],
+    "status": "CURRENT_SOURCE_OWNED_CONDITIONAL_RETIREMENT"
+  },
+  {
+    "function": "fetch_dataset",
+    "original": {
+      "path": "evals/skippy-scheduler-fixtures.py",
+      "source_sha256": "c1297cbf0135ed420612cca1a291e2770e7ac9f6489c27d0aba6c44771a58761",
+      "start_line": 212,
+      "end_line": 248,
+      "body": "def fetch_dataset(\n    dataset: dict[str, Any],\n    cache_dir: Path | None = None,\n    runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,\n) -> Path:\n    download = [\n        \"hf\",\n        \"download\",\n        dataset[\"repo_id\"],\n        *dataset[\"files\"],\n        \"--repo-type\",\n        dataset[\"repo_type\"],\n        \"--revision\",\n        dataset[\"revision\"],\n    ]\n    verify = [\n        \"hf\",\n        \"cache\",\n        \"verify\",\n        dataset[\"repo_id\"],\n        \"--repo-type\",\n        dataset[\"repo_type\"],\n        \"--revision\",\n        dataset[\"revision\"],\n        \"--fail-on-missing-files\",\n    ]\n    if cache_dir is not None:\n        download.extend((\"--cache-dir\", str(cache_dir)))\n        verify.extend((\"--cache-dir\", str(cache_dir)))\n    snapshot = Path(run_checked(download, runner).stdout.strip())\n    run_checked(verify, runner)\n    parquet = snapshot / dataset[\"parquet_file\"]\n    if not parquet.is_file():\n        raise RuntimeError(f\"verified snapshot is missing {dataset['parquet_file']}: {snapshot}\")\n    return parquet\n\n\n",
+      "body_sha256": "0d536552d95597ae70f37813229fdab7847d55c30f7deca1d9206826160ea995"
+    },
+    "intent": "Pinned download followed by fail-on-missing strict cache verification and existing parquet path",
+    "native_owners": [
+      {
+        "path": "tools/xtask/src/automation/agentic_prompt_manifest/fixture_fetch.rs",
+        "sha256": "92368757c0a111c49e390a04dab44881c587689ad0fa57c59fd8c9ff7b8b9baf"
+      },
+      {
+        "path": "tools/xtask/src/automation/agentic_prompt_manifest/fixture_fetch_command.rs",
+        "sha256": "d4fe21e301cee2d7f57ac45f9474d8731a194143da37e05b1317d29dc3513951"
+      }
+    ],
+    "assertion_owners": [
+      {
+        "path": "tools/xtask/src/automation/agentic_prompt_manifest/fixture_fetch_tests.rs",
+        "source_sha256": "58b485a74caadf2b5ffd09845207347ce14ca14d5f751de5bada347d9c613d00",
+        "function": "fixture_fetch_arguments_preserve_pins_strict_verification_and_path_boundaries",
+        "region": "fn fixture_fetch_arguments_preserve_pins_strict_verification_and_path_boundaries() {\n    let cache = std::path::Path::new(\"fixture-cache\");\n    let verify = fixture_fetch::arguments(&dataset(), Some(cache), true).unwrap();\n    let expected = [\n        \"cache\",\n        \"verify\",\n        \"thoughtworks/agentic-coding-trajectories\",\n        \"--repo-type\",\n        \"dataset\",\n        \"--revision\",\n        &\"a\".repeat(40),\n        \"--fail-on-missing-files\",\n        \"--cache-dir\",\n        \"fixture-cache\",\n    ]\n    .map(std::ffi::OsString::from);\n    assert_eq!(verify, expected);\n    let download = fixture_fetch::arguments(&dataset(), Some(cache), false).unwrap();\n    let expected_download = [\n        \"download\",\n        \"thoughtworks/agentic-coding-trajectories\",\n        \"README.md\",\n        \"sessions.parquet\",\n        \"--quiet\",\n        \"--repo-type\",\n        \"dataset\",\n        \"--revision\",\n        &\"a\".repeat(40),\n        \"--cache-dir\",\n        \"fixture-cache\",\n    ]\n    .map(std::ffi::OsString::from);\n    assert_eq!(download, expected_download);\n    for invalid in [\"../escape\", \"/absolute\", \"--revision\", \"dir\\\\escape\"] {\n        let mut changed = dataset();\n        changed[\"files\"] = json!([invalid]);\n        assert!(fixture_fetch::arguments(&changed, None, false).is_err());\n    }\n}\n\n#[cfg(unix)]\nmod owned {\n    use super::*;\n    use crate::process::{Cancellation, Value as ProcessValue};\n    use std::{fs, os::unix::fs::PermissionsExt, time::Duration};\n\n    fn fixture(directory: &std::path::Path, fail: bool) -> fixture_fetch::Adapter {\n        let executable = directory.join(\"hf-fixture\");\n        fs::write(&executable,b\"#!/bin/sh\\nprintf '%s\\\\n' \\\"$@\\\" >> \\\"$HF_TEST_LOG\\\"\\nprintf 'end\\\\n' >> \\\"$HF_TEST_LOG\\\"\\nif [ \\\"$1\\\" = download ]; then printf '%s\\\\n' \\\"$HF_TEST_SNAPSHOT\\\"; else if [ \\\"$HF_TEST_FAIL\\\" = 1 ]; then printf 'verification failed\\\\n' >&2; exit 23; fi; fi\\n\").unwrap();\n        fs::set_permissions(&executable, fs::Permissions::from_mode(0o755)).unwrap();\n        fixture_fetch::Adapter {\n            executable,\n            cwd: directory.to_path_buf(),\n            environment: [\n                (\"PATH\".into(), ProcessValue::Public(\"/usr/bin:/bin\".into())),\n                (\n                    \"HF_TEST_LOG\".into(),\n                    ProcessValue::Public(directory.join(\"calls\").into_os_string()),\n                ),\n                (\n                    \"HF_TEST_SNAPSHOT\".into(),\n                    ProcessValue::Public(directory.join(\"snapshot\").into_os_string()),\n                ),\n                (\n                    \"HF_TEST_FAIL\".into(),\n                    ProcessValue::Public(if fail { \"1\" } else { \"0\" }.into()),\n                ),\n            ]\n            .into_iter()\n            .collect(),\n            cache_dir: Some(directory.join(\"cache\")),\n            budget: Duration::from_secs(5),\n        }\n    }\n\n    #[test]\n    fn actual_fixture_hf_adapter_downloads_then_strictly_verifies_before_admitting_snapshot() {\n        let directory = tempfile::tempdir().unwrap();\n        let adapter = fixture(directory.path(), false);\n        fs::create_dir(directory.path().join(\"snapshot\")).unwrap();\n        fs::write(\n            directory.path().join(\"snapshot/sessions.parquet\"),\n            b\"cached fixture\",\n        )\n        .unwrap();\n        let selected =\n            fixture_fetch::fetch(&dataset(), &adapter, &Cancellation::default()).unwrap();\n        assert_eq!(selected, directory.path().join(\"snapshot/sessions.parquet\"));\n        let trace = fs::read_to_string(directory.path().join(\"calls\")).unwrap();\n        let cache = directory.path().join(\"cache\");\n        let revision = \"a\".repeat(40);\n        let expected = format!(\n            \"download\\nthoughtworks/agentic-coding-trajectories\\nREADME.md\\nsessions.parquet\\n--quiet\\n--repo-type\\ndataset\\n--revision\\n{revision}\\n--cache-dir\\n{}\\nend\\ncache\\nverify\\nthoughtworks/agentic-coding-trajectories\\n--repo-type\\ndataset\\n--revision\\n{revision}\\n--fail-on-missing-files\\n--cache-dir\\n{}\\nend\\n\",\n            cache.display(),\n            cache.display()\n        );\n        assert_eq!(trace, expected);\n    }\n\n    #[test]\n    fn actual_fixture_hf_verification_failure_refuses_an_existing_parquet() {\n        let directory = tempfile::tempdir().unwrap();\n        let adapter = fixture(directory.path(), true);\n        fs::create_dir(directory.path().join(\"snapshot\")).unwrap();\n        fs::write(\n            directory.path().join(\"snapshot/sessions.parquet\"),\n            b\"must not admit\",\n        )\n        .unwrap();\n        let error = fixture_fetch::fetch(&dataset(), &adapter, &Cancellation::default())\n            .unwrap_err()\n            .to_string();\n        assert!(error.contains(\"verification failed\"), \"{error}\");\n        let trace = fs::read_to_string(directory.path().join(\"calls\")).unwrap();\n        assert!(trace.contains(\"cache\\nverify\\n\"));\n        assert!(trace.contains(\"--fail-on-missing-files\\n\"));\n    }\n}\n",
+        "region_sha256": "fdf8975f98807992190e75ac4d928033363be632f81c195c792c8c4d1ad9794d",
+        "historical_positive": [
+          {
+            "log": {
+              "path": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+              "sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd"
+            },
+            "line": 121,
+            "text": "test automation::agentic_prompt_manifest::fixture_fetch_tests::fixture_fetch_arguments_preserve_pins_strict_verification_and_path_boundaries ... ok"
+          }
+        ],
+        "fresh_qualified_positive": null
+      },
+      {
+        "path": "tools/xtask/src/automation/agentic_prompt_manifest/fixture_fetch_tests.rs",
+        "source_sha256": "58b485a74caadf2b5ffd09845207347ce14ca14d5f751de5bada347d9c613d00",
+        "function": "actual_fixture_hf_adapter_downloads_then_strictly_verifies_before_admitting_snapshot",
+        "region": "fn actual_fixture_hf_adapter_downloads_then_strictly_verifies_before_admitting_snapshot() {\n        let directory = tempfile::tempdir().unwrap();\n        let adapter = fixture(directory.path(), false);\n        fs::create_dir(directory.path().join(\"snapshot\")).unwrap();\n        fs::write(\n            directory.path().join(\"snapshot/sessions.parquet\"),\n            b\"cached fixture\",\n        )\n        .unwrap();\n        let selected =\n            fixture_fetch::fetch(&dataset(), &adapter, &Cancellation::default()).unwrap();\n        assert_eq!(selected, directory.path().join(\"snapshot/sessions.parquet\"));\n        let trace = fs::read_to_string(directory.path().join(\"calls\")).unwrap();\n        let cache = directory.path().join(\"cache\");\n        let revision = \"a\".repeat(40);\n        let expected = format!(\n            \"download\\nthoughtworks/agentic-coding-trajectories\\nREADME.md\\nsessions.parquet\\n--quiet\\n--repo-type\\ndataset\\n--revision\\n{revision}\\n--cache-dir\\n{}\\nend\\ncache\\nverify\\nthoughtworks/agentic-coding-trajectories\\n--repo-type\\ndataset\\n--revision\\n{revision}\\n--fail-on-missing-files\\n--cache-dir\\n{}\\nend\\n\",\n            cache.display(),\n            cache.display()\n        );\n        assert_eq!(trace, expected);\n    }\n\n    #[test]\n    fn actual_fixture_hf_verification_failure_refuses_an_existing_parquet() {\n        let directory = tempfile::tempdir().unwrap();\n        let adapter = fixture(directory.path(), true);\n        fs::create_dir(directory.path().join(\"snapshot\")).unwrap();\n        fs::write(\n            directory.path().join(\"snapshot/sessions.parquet\"),\n            b\"must not admit\",\n        )\n        .unwrap();\n        let error = fixture_fetch::fetch(&dataset(), &adapter, &Cancellation::default())\n            .unwrap_err()\n            .to_string();\n        assert!(error.contains(\"verification failed\"), \"{error}\");\n        let trace = fs::read_to_string(directory.path().join(\"calls\")).unwrap();\n        assert!(trace.contains(\"cache\\nverify\\n\"));\n        assert!(trace.contains(\"--fail-on-missing-files\\n\"));\n    }\n}\n",
+        "region_sha256": "699f3308b818066f7ce9c1dcddc912c997f02bb39d312b8ff4558437b4a60324",
+        "historical_positive": [
+          {
+            "log": {
+              "path": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+              "sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd"
+            },
+            "line": 122,
+            "text": "test automation::agentic_prompt_manifest::fixture_fetch_tests::owned::actual_fixture_hf_adapter_downloads_then_strictly_verifies_before_admitting_snapshot ... ok"
+          }
+        ],
+        "fresh_qualified_positive": null
+      },
+      {
+        "path": "tools/xtask/tests/migration_lifecycle/scheduler_fixture_cli.rs",
+        "source_sha256": "09298f5d698bd2e48231c7c333893f943dbb631937659f80906d937f924ae868",
+        "function": "scheduler_fixture_actual_cli_fetches_verified_path_and_preserves_output_on_prepare_refusal",
+        "region": "fn scheduler_fixture_actual_cli_fetches_verified_path_and_preserves_output_on_prepare_refusal() {\n    for fail in [false, true] {\n        let root = tempfile::tempdir().unwrap();\n        let input = catalog();\n        std::fs::write(\n            root.path().join(\"catalog.json\"),\n            serde_json::to_vec(&input).unwrap(),\n        )\n        .unwrap();\n        std::fs::create_dir(root.path().join(\"snapshot\")).unwrap();\n        std::fs::write(\n            root.path().join(\"snapshot/sessions.parquet\"),\n            b\"inert verified-path transport fixture, not parquet proof\",\n        )\n        .unwrap();\n        let binary = hf(root.path(), fail);\n        let cache = root.path().join(\"cache\");\n        let output = root.path().join(\"output.json\");\n        std::fs::write(&output, b\"preserve-existing\").unwrap();\n        let mut args = vec![\n            if fail {\n                \"prepare-fixture\"\n            } else {\n                \"fetch-fixture\"\n            },\n            \"--catalog\",\n            \"catalog.json\",\n            \"--profile\",\n            \"agentic-eviction-pressure\",\n            \"--hf-bin\",\n            binary.to_str().unwrap(),\n            \"--cache-dir\",\n            cache.to_str().unwrap(),\n            \"--timeout\",\n            \"3\",\n        ];\n        if fail {\n            args.extend([\"--output\", output.to_str().unwrap()]);\n        }\n        let (ok, stdout, stderr) = cli(root.path(), &args);\n        assert_eq!(ok, !fail, \"{stderr}\");\n        if fail {\n            assert!(stdout.is_empty() && stderr.contains(\"owned verification refusal\"));\n        } else {\n            assert_eq!(\n                stdout.trim(),\n                root.path()\n                    .join(\"snapshot/sessions.parquet\")\n                    .to_str()\n                    .unwrap()\n            );\n        }\n        let dataset = &input[\"datasets\"][\"agentic-coding-trajectories\"];\n        let mut download = vec![\n            \"download\".to_owned(),\n            dataset[\"repo_id\"].as_str().unwrap().into(),\n        ];\n        download.extend(\n            dataset[\"files\"]\n                .as_array()\n                .unwrap()\n                .iter()\n                .map(|v| v.as_str().unwrap().to_owned()),\n        );\n        download.extend([\n            \"--quiet\".into(),\n            \"--repo-type\".into(),\n            \"dataset\".into(),\n            \"--revision\".into(),\n            dataset[\"revision\"].as_str().unwrap().into(),\n            \"--cache-dir\".into(),\n            cache.to_str().unwrap().into(),\n            \"end\".into(),\n            \"cache\".into(),\n            \"verify\".into(),\n            dataset[\"repo_id\"].as_str().unwrap().into(),\n            \"--repo-type\".into(),\n            \"dataset\".into(),\n            \"--revision\".into(),\n            dataset[\"revision\"].as_str().unwrap().into(),\n            \"--fail-on-missing-files\".into(),\n            \"--cache-dir\".into(),\n            cache.to_str().unwrap().into(),\n            \"end\".into(),\n        ]);\n        assert_eq!(\n            std::fs::read_to_string(root.path().join(\"calls\")).unwrap(),\n            download.join(\"\\n\") + \"\\n\"\n        );\n        assert_eq!(std::fs::read(&output).unwrap(), b\"preserve-existing\");\n        root.close().unwrap();\n    }\n}\n",
+        "region_sha256": "38320adf8c2d72d4a297cb18a58dfcee2455534474dde19ef6ded4b6cab0ec49",
+        "historical_positive": [
+          {
+            "log": {
+              "path": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+              "sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd"
+            },
+            "line": 4495,
+            "text": "test scheduler_fixture_cli::scheduler_fixture_actual_cli_fetches_verified_path_and_preserves_output_on_prepare_refusal ... ok"
+          }
+        ],
+        "fresh_qualified_positive": null
+      }
+    ],
+    "status": "CURRENT_SOURCE_OWNED_CONDITIONAL_RETIREMENT"
+  },
+  {
+    "function": "load_generator",
+    "original": {
+      "path": "evals/skippy-scheduler-fixtures.py",
+      "source_sha256": "c1297cbf0135ed420612cca1a291e2770e7ac9f6489c27d0aba6c44771a58761",
+      "start_line": 249,
+      "end_line": 258,
+      "body": "def load_generator() -> Any:\n    spec = importlib.util.spec_from_file_location(\"skippy_agentic_prompt_manifest\", GENERATOR)\n    if spec is None or spec.loader is None:\n        raise RuntimeError(f\"cannot import {GENERATOR}\")\n    module = importlib.util.module_from_spec(spec)\n    sys.modules[spec.name] = module\n    spec.loader.exec_module(module)\n    return module\n\n\n",
+      "body_sha256": "245d9c087c06ed672de83e0839e46386e1541526acfbf5027cc921b8e3bb9635"
+    },
+    "intent": "Implementation import retired; native selection/document/reader own the same finite prompt construction",
+    "native_owners": [
+      {
+        "path": "tools/xtask/src/automation/agentic_prompt_manifest/selection.rs",
+        "sha256": "1302eb3b0f7878b1d2c7fc4bd842a93f48c7bdfa6eb6b6d1e79f06ac3f79efe2"
+      },
+      {
+        "path": "tools/xtask/src/automation/agentic_prompt_manifest/document.rs",
+        "sha256": "f841df137b045f694c8cadff3f590ab413401a2f73b5fedcfef6a757a58bc4d5"
+      },
+      {
+        "path": "tools/xtask/src/automation/agentic_prompt_manifest/parquet_input.rs",
+        "sha256": "82d9505d353b886a329fa9d45d6be508ac9dfa130900448110f84271e9875094"
+      }
+    ],
+    "assertion_owners": [
+      {
+        "path": "tools/xtask/src/automation/agentic_prompt_manifest/tests.rs",
+        "source_sha256": "7b859fd696cae761eaf403e366f6168595592a074b6d18de8e013794ffcdda71",
+        "function": "selection_filters_boundaries_and_deduplicates_before_family_limit",
+        "region": "fn selection_filters_boundaries_and_deduplicates_before_family_limit() {\n    let policy = selection(1);\n    let mut selector = Selector::new(&policy).unwrap();\n    selector.observe(row(\"a\", 8191, 99999, \"below\"));\n    selector.observe(row(\"a\", 12000, 99999, \"above\"));\n    let mut excluded = row(\"a\", 11999, 99999, \"wrong source\");\n    excluded.source_dataset = \"other\".into();\n    selector.observe(excluded);\n    selector.observe(row(\"a\", 8192, 20000, \"eligible\"));\n    selector.observe(row(\"a\", 9000, 10000, \"higher ISL\"));\n    selector.observe(row(\"a\", 9000, 11000, \"higher tokens\"));\n    assert_eq!(\n        selector.finish().unwrap(),\n        [row(\"a\", 9000, 11000, \"higher tokens\")]\n    );\n}\n",
+        "region_sha256": "d319aca543fafe64abd8c40ac3cc43254c2b8df434cbe2ca99af82858eacc98f",
+        "historical_positive": [
+          {
+            "log": {
+              "path": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+              "sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd"
+            },
+            "line": 140,
+            "text": "test automation::agentic_prompt_manifest::tests::selection_filters_boundaries_and_deduplicates_before_family_limit ... ok"
+          }
+        ],
+        "fresh_qualified_positive": null
+      },
+      {
+        "path": "tools/xtask/src/automation/agentic_prompt_manifest/tests.rs",
+        "source_sha256": "7b859fd696cae761eaf403e366f6168595592a074b6d18de8e013794ffcdda71",
+        "function": "interleaves_repeated_families_and_preserves_provenance",
+        "region": "fn interleaves_repeated_families_and_preserves_provenance() {\n    let rows = [\n        row(\"session-0\", 9000, 9100, \"prefix-0\"),\n        row(\"session-1\", 9000, 9100, \"prefix-1\"),\n    ];\n    let policy = selection(2);\n    let document = build_manifest(&rows, 2, \"abc\", &policy).unwrap();\n    assert_eq!(\n        document\n            .prompts\n            .iter()\n            .map(|p| p.family.as_str())\n            .collect::<Vec<_>>(),\n        [\n            \"trajectory-0\",\n            \"trajectory-1\",\n            \"trajectory-0\",\n            \"trajectory-1\"\n        ]\n    );\n    assert_eq!(\n        document.prompts[2].prompt,\n        \"<user>\\nprefix-0\\n\\n<user>\\nBenchmark branch 1: summarize the latest repository state in one sentence.\"\n    );\n    assert_eq!(document.metadata.dataset_revision, \"abc\");\n    assert_eq!(document.metadata.rows[1].session_id, \"session-1\");\n    let metadata = serde_json::to_value(&document.metadata).unwrap();\n    assert!(metadata[\"rows\"][0].get(\"messages_json\").is_none());\n}\n",
+        "region_sha256": "0d95a220ce5ae46afcfe075b60eca6fabfaea57daae378b4a45258f2d8ebc3d5",
+        "historical_positive": [
+          {
+            "log": {
+              "path": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+              "sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd"
+            },
+            "line": 136,
+            "text": "test automation::agentic_prompt_manifest::tests::interleaves_repeated_families_and_preserves_provenance ... ok"
+          }
+        ],
+        "fresh_qualified_positive": null
+      }
+    ],
+    "status": "CURRENT_SOURCE_OWNED_CONDITIONAL_RETIREMENT"
+  },
+  {
+    "function": "materialize_prompt_manifest",
+    "original": {
+      "path": "evals/skippy-scheduler-fixtures.py",
+      "source_sha256": "c1297cbf0135ed420612cca1a291e2770e7ac9f6489c27d0aba6c44771a58761",
+      "start_line": 259,
+      "end_line": 314,
+      "body": "def materialize_prompt_manifest(\n    catalog: dict[str, Any],\n    selected: dict[str, Any],\n    dataset_file: Path,\n    output: Path,\n) -> str:\n    dataset = dataset_for_profile(catalog, selected)\n    corpus = selected[\"corpus\"]\n    selection = corpus[\"selection\"]\n    generator = load_generator()\n    rows = generator.select_trajectories(\n        dataset_file,\n        selection[\"sources\"],\n        selection[\"families\"],\n        selection[\"min_isl\"],\n        selection[\"max_isl_exclusive\"],\n        selection[\"min_turns\"],\n    )\n    pinned_rows = [\n        {\n            key: row[key]\n            for key in (\"session_id\", \"source_dataset\", \"n_turns\", \"max_isl\", \"total_tokens\")\n        }\n        for row in rows\n    ]\n    if pinned_rows != corpus[\"rows\"]:\n        raise RuntimeError(\"selected HF rows do not match the pinned fixture provenance\")\n    document = generator.build_manifest(\n        rows,\n        selected[\"workload\"][\"requests_per_family\"],\n        {\n            \"dataset\": dataset[\"repo_id\"],\n            \"dataset_revision\": dataset[\"revision\"],\n            \"selection\": selection,\n        },\n    )\n    output.parent.mkdir(parents=True, exist_ok=True)\n    with tempfile.NamedTemporaryFile(\n        mode=\"w\",\n        encoding=\"utf-8\",\n        dir=output.parent,\n        prefix=f\".{output.name}.\",\n        suffix=\".tmp\",\n        delete=False,\n    ) as handle:\n        handle.write(json.dumps(document, indent=2, ensure_ascii=False) + \"\\n\")\n        temporary = Path(handle.name)\n    actual = sha256(temporary)\n    expected = corpus[\"prompt_manifest_sha256\"]\n    if actual != expected:\n        temporary.unlink(missing_ok=True)\n        raise RuntimeError(f\"prompt manifest SHA-256 mismatch: expected {expected}, got {actual}\")\n    temporary.replace(output)\n    return actual\n\n\n",
+      "body_sha256": "feec73a9d2ff3d7c42fd0fbc1d9e0752cf8dd4249a1caa7871fe083a462c7a22"
+    },
+    "intent": "Selected row provenance equality; exact serialized manifest pin before atomic publication; preserve output on drift",
+    "native_owners": [
+      {
+        "path": "tools/xtask/src/automation/agentic_prompt_manifest/fixture_materialization.rs",
+        "sha256": "4f150ba5ec734ff5c8cea420b0a27fec8127624e7e4bdb7d635956b944f573e5"
+      },
+      {
+        "path": "tools/xtask/src/automation/agentic_prompt_manifest/publication.rs",
+        "sha256": "1083735b9fd3982b1f3b98ca091578c801a8d5abc4369433d0b5e6176d601bb7"
+      }
+    ],
+    "assertion_owners": [
+      {
+        "path": "tools/xtask/src/automation/agentic_prompt_manifest/fixture_tests.rs",
+        "source_sha256": "c51872650a7c344717380663c2512cfb8f9da5be02505d00fa708fc6596c8e60",
+        "function": "scheduler_materialization_verifies_pinned_rows_and_exact_manifest_before_publish",
+        "region": "fn scheduler_materialization_verifies_pinned_rows_and_exact_manifest_before_publish() {\n    let directory = tempfile::tempdir().unwrap();\n    let output = directory.path().join(\"manifest.json\");\n    let (catalog, row, expected) = canned();\n    let digest = fixture_materialization::publish_selected(\n        &catalog,\n        \"agentic-eviction-pressure\",\n        std::slice::from_ref(&row),\n        &output,\n    )\n    .unwrap();\n    assert_eq!(\n        digest,\n        catalog[\"profiles\"][\"agentic-eviction-pressure\"][\"corpus\"][\"prompt_manifest_sha256\"]\n            .as_str()\n            .unwrap()\n    );\n    assert_eq!(std::fs::read(&output).unwrap(), expected.as_bytes());\n}\n",
+        "region_sha256": "5cf61223905d007804f3450748c027b99cac85032a8abea165cc5d3bbff5c7e4",
+        "historical_positive": [
+          {
+            "log": {
+              "path": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+              "sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd"
+            },
+            "line": 130,
+            "text": "test automation::agentic_prompt_manifest::fixture_tests::scheduler_materialization_verifies_pinned_rows_and_exact_manifest_before_publish ... ok"
+          }
+        ],
+        "fresh_qualified_positive": null
+      },
+      {
+        "path": "tools/xtask/src/automation/agentic_prompt_manifest/fixture_tests.rs",
+        "source_sha256": "c51872650a7c344717380663c2512cfb8f9da5be02505d00fa708fc6596c8e60",
+        "function": "scheduler_row_or_hash_drift_preserves_existing_output_without_temporary_leaks",
+        "region": "fn scheduler_row_or_hash_drift_preserves_existing_output_without_temporary_leaks() {\n    let directory = tempfile::tempdir().unwrap();\n    let output = directory.path().join(\"manifest.json\");\n    let (catalog, row, _) = canned();\n    std::fs::write(&output, b\"keep-me\").unwrap();\n    for field in [\"row\", \"hash\"] {\n        let mut changed = catalog.clone();\n        let corpus = &mut changed[\"profiles\"][\"agentic-eviction-pressure\"][\"corpus\"];\n        if field == \"row\" {\n            corpus[\"rows\"][0][\"session_id\"] = \"unexpected\".into();\n        } else {\n            corpus[\"prompt_manifest_sha256\"] = \"0\".repeat(64).into();\n        }\n        let error = fixture_materialization::publish_selected(\n            &changed,\n            \"agentic-eviction-pressure\",\n            std::slice::from_ref(&row),\n            &output,\n        )\n        .unwrap_err()\n        .to_string();\n        assert!(error.contains(if field == \"row\" {\n            \"pinned fixture provenance\"\n        } else {\n            \"SHA-256 mismatch\"\n        }));\n        assert_eq!(std::fs::read(&output).unwrap(), b\"keep-me\");\n        assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 1);\n    }\n}\n",
+        "region_sha256": "bbb348ce56f99926149f78bff354eb7cde3b9ba3ea4d2b4146e9fc3bd47a0f39",
+        "historical_positive": [
+          {
+            "log": {
+              "path": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+              "sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd"
+            },
+            "line": 131,
+            "text": "test automation::agentic_prompt_manifest::fixture_tests::scheduler_row_or_hash_drift_preserves_existing_output_without_temporary_leaks ... ok"
+          }
+        ],
+        "fresh_qualified_positive": null
+      }
+    ],
+    "status": "CURRENT_SOURCE_OWNED_CONDITIONAL_RETIREMENT"
+  },
+  {
+    "function": "main",
+    "original": {
+      "path": "evals/skippy-scheduler-fixtures.py",
+      "source_sha256": "c1297cbf0135ed420612cca1a291e2770e7ac9f6489c27d0aba6c44771a58761",
+      "start_line": 315,
+      "end_line": 368,
+      "body": "def main() -> int:\n    parser = argparse.ArgumentParser(description=__doc__)\n    parser.add_argument(\"--catalog\", type=Path, default=DEFAULT_CATALOG)\n    subparsers = parser.add_subparsers(dest=\"command\", required=True)\n    subparsers.add_parser(\"validate\", help=\"validate the checked-in catalog without inference\")\n    show = subparsers.add_parser(\"show\", help=\"print one resolved profile\")\n    show.add_argument(\"--profile\", required=True)\n    fetch = subparsers.add_parser(\"fetch\", help=\"download and verify one pinned HF corpus\")\n    fetch.add_argument(\"--profile\", required=True)\n    fetch.add_argument(\"--cache-dir\", type=Path)\n    materialize = subparsers.add_parser(\n        \"materialize\", help=\"build and hash-check a prompt manifest from a verified parquet\"\n    )\n    materialize.add_argument(\"--profile\", required=True)\n    materialize.add_argument(\"--dataset-file\", type=Path, required=True)\n    materialize.add_argument(\"--output\", type=Path, required=True)\n    prepare = subparsers.add_parser(\"prepare\", help=\"fetch, verify, and materialize in one step\")\n    prepare.add_argument(\"--profile\", required=True)\n    prepare.add_argument(\"--cache-dir\", type=Path)\n    prepare.add_argument(\"--output\", type=Path, required=True)\n    args = parser.parse_args()\n    try:\n        catalog = load_catalog(args.catalog)\n        if args.command == \"validate\":\n            print(json.dumps({\"profiles\": sorted(catalog[\"profiles\"]), \"status\": \"valid\"}))\n            return 0\n        selected = profile(catalog, args.profile)\n        if args.command == \"show\":\n            print(json.dumps(selected, indent=2))\n            return 0\n        dataset = dataset_for_profile(catalog, selected)\n        if args.command == \"fetch\":\n            print(fetch_dataset(dataset, args.cache_dir))\n            return 0\n        dataset_file = (\n            args.dataset_file\n            if args.command == \"materialize\"\n            else fetch_dataset(dataset, args.cache_dir)\n        )\n        if not dataset_file.is_file():\n            raise ValueError(f\"dataset parquet not found: {dataset_file}\")\n        actual = materialize_prompt_manifest(catalog, selected, dataset_file, args.output)\n        print(json.dumps({\"output\": str(args.output), \"sha256\": actual}))\n        return 0\n    except (\n        json.JSONDecodeError,\n        OSError,\n        RuntimeError,\n        ValueError,\n        subprocess.CalledProcessError,\n    ) as error:\n        parser.error(str(error))\n\n\n",
+      "body_sha256": "86e5019c36d7fa5c8c454b0e2f5ebc02035ec43c4b061c8648635ffff5f0e6e3"
+    },
+    "intent": "All five operations remain native validate/show/fetch/materialize/prepare with nonzero errors and explicit ecosystem tool",
+    "native_owners": [
+      {
+        "path": "tools/xtask/src/automation/agentic_prompt_manifest/mod.rs",
+        "sha256": "6620e3fa054533cb7c65e3cded73c5208c9614a09ab5def6b4a068b11f4a2d3b"
+      },
+      {
+        "path": "tools/xtask/src/automation/agentic_prompt_manifest/fixture_fetch_command.rs",
+        "sha256": "d4fe21e301cee2d7f57ac45f9474d8731a194143da37e05b1317d29dc3513951"
+      },
+      {
+        "path": "tools/xtask/src/automation/agentic_prompt_manifest/fixture_materialization.rs",
+        "sha256": "4f150ba5ec734ff5c8cea420b0a27fec8127624e7e4bdb7d635956b944f573e5"
+      }
+    ],
+    "assertion_owners": [
+      {
+        "path": "tools/xtask/tests/migration_lifecycle/scheduler_fixture_cli.rs",
+        "source_sha256": "09298f5d698bd2e48231c7c333893f943dbb631937659f80906d937f924ae868",
+        "function": "scheduler_fixture_actual_cli_preserves_catalog_profile_json_and_refuses_invalid_inputs",
+        "region": "fn scheduler_fixture_actual_cli_preserves_catalog_profile_json_and_refuses_invalid_inputs() {\n    let root = tempfile::tempdir().unwrap();\n    let input = catalog();\n    std::fs::write(\n        root.path().join(\"catalog.json\"),\n        serde_json::to_vec(&input).unwrap(),\n    )\n    .unwrap();\n    let (ok, stdout, stderr) = cli(root.path(), &[\"validate-fixtures\", \"catalog.json\"]);\n    assert!(ok, \"{stderr}\");\n    let validation: Value = serde_json::from_str(&stdout).unwrap();\n    assert_eq!(validation[\"status\"], \"valid\");\n    let expected: Vec<_> = input[\"profiles\"]\n        .as_object()\n        .unwrap()\n        .keys()\n        .cloned()\n        .collect();\n    assert_eq!(validation[\"profiles\"], json!(expected));\n    for name in input[\"profiles\"].as_object().unwrap().keys() {\n        let (ok, stdout, stderr) = cli(root.path(), &[\"show-fixture\", \"catalog.json\", name]);\n        assert!(ok, \"{stderr}\");\n        assert_eq!(\n            serde_json::from_str::<Value>(&stdout).unwrap(),\n            input[\"profiles\"][name]\n        );\n    }\n    let (ok, stdout, stderr) = cli(\n        root.path(),\n        &[\"show-fixture\", \"catalog.json\", \"missing-profile\"],\n    );\n    assert!(!ok);\n    assert!(stdout.is_empty() && stderr.contains(\"unknown\"));\n    let mut invalid = input.clone();\n    invalid[\"profiles\"][\"warm-affinity\"][\"model\"]\n        .as_object_mut()\n        .unwrap()\n        .remove(\"sha256\");\n    std::fs::write(\n        root.path().join(\"invalid.json\"),\n        serde_json::to_vec(&invalid).unwrap(),\n    )\n    .unwrap();\n    let (ok, stdout, stderr) = cli(root.path(), &[\"validate-fixtures\", \"invalid.json\"]);\n    assert!(!ok);\n    assert!(stdout.is_empty() && stderr.contains(\"sha256\"));\n    std::fs::write(root.path().join(\"existing.json\"), b\"preserve-existing\").unwrap();\n    for verb in [\"materialize-fixture\", \"prepare-fixture\"] {\n        let mut args = vec![\n            verb,\n            \"--catalog\",\n            \"catalog.json\",\n            \"--profile\",\n            \"warm-affinity\",\n            \"--output\",\n            \"existing.json\",\n        ];\n        if verb == \"materialize-fixture\" {\n            args.extend([\"--dataset-file\", \"missing.parquet\"]);\n        } else {\n            args.extend([\"--hf-bin\", \"/not-started-hf\"]);\n        }\n        let (ok, stdout, stderr) = cli(root.path(), &args);\n        assert!(!ok);\n        assert!(\n            stdout.is_empty()\n                && stderr.contains(if verb == \"materialize-fixture\" {\n                    \"Hugging Face corpus\"\n                } else {\n                    \"HF corpus\"\n                })\n        );\n        assert_eq!(\n            std::fs::read(root.path().join(\"existing.json\")).unwrap(),\n            b\"preserve-existing\"\n        );\n    }\n    root.close().unwrap();\n}\n#[cfg(unix)]\nfn quote(path: &Path) -> String {\n    format!(\"'{}'\", path.to_str().unwrap().replace('\\'', \"'\\\\''\"))\n}\n#[cfg(unix)]\nfn hf(root: &Path, fail: bool) -> std::path::PathBuf {\n    use std::os::unix::fs::PermissionsExt as _;\n    let binary = root.join(\"owned-hf\");\n    let script = format!(\n        \"#!/bin/sh\\nprintf '%s\\\\n' \\\"$@\\\" >> {}\\nprintf 'end\\\\n' >> {}\\nif [ \\\"$1\\\" = download ]; then printf '%s\\\\n' {}; elif [ {} = 1 ]; then printf 'owned verification refusal\\\\n' >&2; exit 23; fi\\n\",\n        quote(&root.join(\"calls\")),\n        quote(&root.join(\"calls\")),\n        quote(&root.join(\"snapshot\")),\n        if fail { \"1\" } else { \"0\" }\n    );\n    std::fs::write(&binary, script).unwrap();\n    std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o700)).unwrap();\n    binary\n}\n#[cfg(unix)]",
+        "region_sha256": "89349faacc225ee5397a505d075be642b5ed11058bc3928793838fdabcdac495",
+        "historical_positive": [
+          {
+            "log": {
+              "path": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+              "sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd"
+            },
+            "line": 4496,
+            "text": "test scheduler_fixture_cli::scheduler_fixture_actual_cli_preserves_catalog_profile_json_and_refuses_invalid_inputs ... ok"
+          }
+        ],
+        "fresh_qualified_positive": null
+      },
+      {
+        "path": "tools/xtask/tests/migration_lifecycle/scheduler_fixture_cli.rs",
+        "source_sha256": "09298f5d698bd2e48231c7c333893f943dbb631937659f80906d937f924ae868",
+        "function": "scheduler_fixture_actual_cli_fetches_verified_path_and_preserves_output_on_prepare_refusal",
+        "region": "fn scheduler_fixture_actual_cli_fetches_verified_path_and_preserves_output_on_prepare_refusal() {\n    for fail in [false, true] {\n        let root = tempfile::tempdir().unwrap();\n        let input = catalog();\n        std::fs::write(\n            root.path().join(\"catalog.json\"),\n            serde_json::to_vec(&input).unwrap(),\n        )\n        .unwrap();\n        std::fs::create_dir(root.path().join(\"snapshot\")).unwrap();\n        std::fs::write(\n            root.path().join(\"snapshot/sessions.parquet\"),\n            b\"inert verified-path transport fixture, not parquet proof\",\n        )\n        .unwrap();\n        let binary = hf(root.path(), fail);\n        let cache = root.path().join(\"cache\");\n        let output = root.path().join(\"output.json\");\n        std::fs::write(&output, b\"preserve-existing\").unwrap();\n        let mut args = vec![\n            if fail {\n                \"prepare-fixture\"\n            } else {\n                \"fetch-fixture\"\n            },\n            \"--catalog\",\n            \"catalog.json\",\n            \"--profile\",\n            \"agentic-eviction-pressure\",\n            \"--hf-bin\",\n            binary.to_str().unwrap(),\n            \"--cache-dir\",\n            cache.to_str().unwrap(),\n            \"--timeout\",\n            \"3\",\n        ];\n        if fail {\n            args.extend([\"--output\", output.to_str().unwrap()]);\n        }\n        let (ok, stdout, stderr) = cli(root.path(), &args);\n        assert_eq!(ok, !fail, \"{stderr}\");\n        if fail {\n            assert!(stdout.is_empty() && stderr.contains(\"owned verification refusal\"));\n        } else {\n            assert_eq!(\n                stdout.trim(),\n                root.path()\n                    .join(\"snapshot/sessions.parquet\")\n                    .to_str()\n                    .unwrap()\n            );\n        }\n        let dataset = &input[\"datasets\"][\"agentic-coding-trajectories\"];\n        let mut download = vec![\n            \"download\".to_owned(),\n            dataset[\"repo_id\"].as_str().unwrap().into(),\n        ];\n        download.extend(\n            dataset[\"files\"]\n                .as_array()\n                .unwrap()\n                .iter()\n                .map(|v| v.as_str().unwrap().to_owned()),\n        );\n        download.extend([\n            \"--quiet\".into(),\n            \"--repo-type\".into(),\n            \"dataset\".into(),\n            \"--revision\".into(),\n            dataset[\"revision\"].as_str().unwrap().into(),\n            \"--cache-dir\".into(),\n            cache.to_str().unwrap().into(),\n            \"end\".into(),\n            \"cache\".into(),\n            \"verify\".into(),\n            dataset[\"repo_id\"].as_str().unwrap().into(),\n            \"--repo-type\".into(),\n            \"dataset\".into(),\n            \"--revision\".into(),\n            dataset[\"revision\"].as_str().unwrap().into(),\n            \"--fail-on-missing-files\".into(),\n            \"--cache-dir\".into(),\n            cache.to_str().unwrap().into(),\n            \"end\".into(),\n        ]);\n        assert_eq!(\n            std::fs::read_to_string(root.path().join(\"calls\")).unwrap(),\n            download.join(\"\\n\") + \"\\n\"\n        );\n        assert_eq!(std::fs::read(&output).unwrap(), b\"preserve-existing\");\n        root.close().unwrap();\n    }\n}\n",
+        "region_sha256": "38320adf8c2d72d4a297cb18a58dfcee2455534474dde19ef6ded4b6cab0ec49",
+        "historical_positive": [
+          {
+            "log": {
+              "path": ".omo/evidence/resume-20261002/ci67-lightning-quality-normal-v4-normal.log",
+              "sha256": "58cba371ce203413004fba103763d6271c1fbee38d7e02b82a3e0522f3884ffd"
+            },
+            "line": 4495,
+            "text": "test scheduler_fixture_cli::scheduler_fixture_actual_cli_fetches_verified_path_and_preserves_output_on_prepare_refusal ... ok"
+          }
+        ],
+        "fresh_qualified_positive": null
+      }
+    ],
+    "status": "CURRENT_SOURCE_OWNED_CONDITIONAL_RETIREMENT"
+  }
+]

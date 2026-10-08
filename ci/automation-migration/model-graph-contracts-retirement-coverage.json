@@ -1,0 +1,678 @@
+{
+  "status": "MODULE_ONLY_RETIRED_AND_LOCAL_POSTIMAGE_QUALIFIED",
+  "original_methods": 31,
+  "rust_tests": 20,
+  "intent_map": [
+    {
+      "path": "scripts/tests/test_synthetic_graph_registry.py",
+      "sha256": "19faff894a4bbc471427461147ce30676f8aef3ff376e85e8d0165bb1d7a622c",
+      "mode": 420,
+      "original": "scripts/tests/test_synthetic_graph_registry.py",
+      "intents": [
+        {
+          "original_method": "test_every_registry_family_has_an_executable_fixture",
+          "rust_test": "repo_consistency::synthetic_graph_contracts::synthetic_graph_every_registered_family_has_a_matching_fixture",
+          "status": "AUTHORED_UNRUN"
+        },
+        {
+          "original_method": "test_new_family_requires_fixture",
+          "rust_test": "repo_consistency::synthetic_graph_contracts::synthetic_graph_new_family_requires_a_fixture",
+          "status": "AUTHORED_UNRUN"
+        },
+        {
+          "original_method": "test_removed_fixture_fails",
+          "rust_test": "repo_consistency::synthetic_graph_contracts::synthetic_graph_removed_fixture_fails_coverage",
+          "status": "AUTHORED_UNRUN"
+        },
+        {
+          "original_method": "test_duplicate_fixture_fails",
+          "rust_test": "repo_consistency::synthetic_graph_contracts::synthetic_graph_duplicate_fixture_fails_coverage",
+          "status": "AUTHORED_UNRUN"
+        },
+        {
+          "original_method": "test_dimension_and_mtp_drift_fail",
+          "rust_test": "repo_consistency::synthetic_graph_contracts::synthetic_graph_dimension_and_mtp_drift_fail_coverage",
+          "status": "AUTHORED_UNRUN"
+        },
+        {
+          "original_method": "test_cases_are_consumed_by_ctest",
+          "rust_test": "repo_consistency::synthetic_graph_contracts::synthetic_graph_cases_remain_registered_with_required_ctest_fixtures",
+          "status": "AUTHORED_UNRUN"
+        },
+        {
+          "original_method": "test_fixture_generator_forwards_mtp_depth",
+          "rust_test": "repo_consistency::synthetic_graph_contracts::synthetic_graph_fixture_generator_forwards_declared_mtp_depth",
+          "status": "AUTHORED_UNRUN"
+        },
+        {
+          "original_method": "test_stateless_contract_rejects_mutable_state",
+          "rust_test": "repo_consistency::synthetic_graph_contracts::synthetic_graph_stateless_contract_rejects_mutable_state",
+          "status": "AUTHORED_UNRUN"
+        }
+      ]
+    },
+    {
+      "path": "scripts/tests/test_model_artifact_registry.py",
+      "sha256": "3b51a7f4217079e6f5eff47363c791e681ee5de52df053bb51ab5645508c13ce",
+      "mode": 420,
+      "original": "scripts/tests/test_model_artifact_registry.py",
+      "intents": [
+        {
+          "original_method": "test_generator_rejects_invalid_minimum_runner_memory",
+          "rust_owners": [
+            "generator::migration_models_generator_resource_memory_matches_python_boundary"
+          ],
+          "status": "MAPPED_NOT_QUALIFIED"
+        },
+        {
+          "original_method": "test_generator_rejects_incompatible_workload_class_and_profile",
+          "rust_owners": [
+            "current_contracts::model_registry_all_recognized_incompatible_workload_profile_pairs_refuse"
+          ],
+          "status": "MAPPED_NOT_QUALIFIED"
+        },
+        {
+          "original_method": "test_family_schema_covers_every_registered_class_and_profile",
+          "rust_owners": [
+            "repository_contracts::model_registry_published_schema_tracks_current_classes_profiles_and_evidence"
+          ],
+          "status": "MAPPED_NOT_QUALIFIED"
+        },
+        {
+          "original_method": "test_generated_manifests_are_current",
+          "rust_owners": [
+            "live::migration_models_checked_in_projection_is_current",
+            "live::migration_models_regenerated_real_registry_is_byte_identical"
+          ],
+          "status": "MAPPED_NOT_QUALIFIED"
+        },
+        {
+          "original_method": "test_suite_manifests_match_registry_membership",
+          "rust_owners": [
+            "repository_contracts::model_registry_every_current_suite_has_ordered_registry_membership_and_identity"
+          ],
+          "status": "MAPPED_NOT_QUALIFIED"
+        },
+        {
+          "original_method": "test_suite_manifests_allow_every_executable_cadence",
+          "rust_owners": [
+            "repository_contracts::model_registry_every_artifact_admits_its_executable_suite_cadences"
+          ],
+          "status": "MAPPED_NOT_QUALIFIED"
+        },
+        {
+          "original_method": "test_native_event_gate_model_allows_pr_and_main",
+          "rust_owners": [
+            "current_contracts::model_registry_current_native_event_gate_model_resolves_at_pr_and_main",
+            "ci_validation::workflow_guards::runtime_events::tests"
+          ],
+          "status": "MAPPED_NOT_QUALIFIED"
+        },
+        {
+          "original_method": "test_product_smoke_manifest_is_the_pinned_dense_recurrent_laya_set",
+          "rust_owners": [
+            "repository_contracts::model_registry_product_smoke_is_the_exact_pinned_dense_recurrent_laya_set",
+            "live::migration_models_required_smoke_identities_are_unchanged"
+          ],
+          "status": "MAPPED_NOT_QUALIFIED"
+        },
+        {
+          "original_method": "test_paired_smoke_manifests_default_to_the_dense_fixture",
+          "rust_owners": [
+            "repository_contracts::model_registry_product_smoke_is_the_exact_pinned_dense_recurrent_laya_set"
+          ],
+          "status": "MAPPED_NOT_QUALIFIED"
+        },
+        {
+          "original_method": "test_family_manifest_is_generated_from_registry",
+          "rust_owners": [
+            "repository_contracts::model_registry_current_family_order_policy_class_and_architecture_match_registry"
+          ],
+          "status": "MAPPED_NOT_QUALIFIED"
+        },
+        {
+          "original_method": "test_opt_in_suite_configs_reference_registered_variants",
+          "rust_owners": [
+            "repository_contracts::model_registry_optional_suite_configs_reference_registered_variants"
+          ],
+          "status": "MAPPED_NOT_QUALIFIED"
+        },
+        {
+          "original_method": "test_executable_manifest_consumers_declare_cadence",
+          "rust_owners": [
+            "repository_contracts::model_registry_actual_manifest_consumers_declare_authorized_cadence",
+            "restore_inputs::migration_models_restore_action_uses_typed_resolution"
+          ],
+          "status": "MAPPED_NOT_QUALIFIED"
+        },
+        {
+          "original_method": "test_resolver_prefixes_github_outputs_for_multi_fixture_consumers",
+          "rust_owners": [
+            "resolver::migration_models_resolver_edge_cases_match_legacy"
+          ],
+          "status": "MAPPED_NOT_QUALIFIED"
+        },
+        {
+          "original_method": "test_resolver_uses_declared_default_for_multi_artifact_manifest",
+          "rust_owners": [
+            "resolver::migration_models_resolver_edge_cases_match_legacy"
+          ],
+          "status": "MAPPED_NOT_QUALIFIED"
+        },
+        {
+          "original_method": "test_resolver_rejects_ambiguous_manifest_without_default",
+          "rust_owners": [
+            "resolver::migration_models_resolver_edge_cases_match_legacy"
+          ],
+          "status": "MAPPED_NOT_QUALIFIED"
+        },
+        {
+          "original_method": "test_smoke_identity_overrides_require_nonempty_values",
+          "rust_owners": [
+            "repository_contracts::model_registry_smoke_identity_overrides_use_nonempty_values"
+          ],
+          "status": "MAPPED_NOT_QUALIFIED"
+        },
+        {
+          "original_method": "test_hf_smoke_exports_selected_manifest_to_rust_tests",
+          "rust_owners": [
+            "repository_contracts::model_registry_hf_smoke_passes_selected_manifest_to_runtime_fixture"
+          ],
+          "status": "MAPPED_NOT_QUALIFIED"
+        },
+        {
+          "original_method": "test_resolver_verifies_size_and_digest",
+          "rust_owners": [
+            "resolver::migration_models_resolver_edge_cases_match_legacy"
+          ],
+          "status": "MAPPED_NOT_QUALIFIED"
+        },
+        {
+          "original_method": "test_resolver_rejects_undeclared_cadence",
+          "rust_owners": [
+            "resolver::migration_models_resolver_reuses_frozen_unauthorized_cadence_fixture",
+            "resolver::migration_models_resolver_edge_cases_match_legacy"
+          ],
+          "status": "MAPPED_NOT_QUALIFIED"
+        },
+        {
+          "original_method": "test_resolver_single_file_mode_rejects_multipart_artifact",
+          "rust_owners": [
+            "resolver::migration_models_resolver_edge_cases_match_legacy"
+          ],
+          "status": "MAPPED_NOT_QUALIFIED"
+        }
+      ]
+    },
+    {
+      "path": "scripts/tests/test_macos_deployment_target.py",
+      "sha256": "5eb30d82bef671d6d4de11bbb21b1e2ef496eb1d449f7e5b0b8433afc3ea9f9e",
+      "mode": 420,
+      "original": "scripts/tests/test_macos_deployment_target.py",
+      "intents": [
+        {
+          "original_method": "test_shell_default_override_and_non_macos_scope",
+          "rust_owners": [
+            "macos_deployment_target::actual_shell_helper_exports_default_override_and_retains_non_macos_scope"
+          ]
+        },
+        {
+          "original_method": "test_just_exports_default_and_preserves_override",
+          "rust_owners": [
+            "macos_deployment_target::actual_just_facade_exports_default_empty_and_explicit_override"
+          ]
+        },
+        {
+          "original_method": "test_both_canary_jobs_export_target_before_compilation",
+          "rust_owners": [
+            "macos_deployment_target::actual_canary_setup_exports_target_before_cache_and_build_and_consumer_does_not_compile"
+          ]
+        }
+      ]
+    }
+  ],
+  "source_witnesses": [
+    {
+      "path": "ci/llama-canary/family-certified.json",
+      "sha256": "bd4f1e44cda7c6012ffe21526011e57a3b1f485e4172e077b39d5a9339f0f948",
+      "mode": 420
+    },
+    {
+      "path": "third_party/llama.cpp/patches/0024-test-skippy-cover-the-complete-canary-graph-registry.patch",
+      "sha256": "cde7c5034daf1acd3d0bc69b9b14109c172128806b7cd6012a5fcf441126d65f",
+      "mode": 420
+    },
+    {
+      "path": ".github/actions/restore-test-model/action.yml",
+      "sha256": "99ae77310ff3d4f4abc7a0aeb2007c72049a5811b84467651ccf174bf4f7c54c",
+      "mode": 420
+    },
+    {
+      "path": ".github/workflows/ci-linux-runtime-slice.yml",
+      "sha256": "0494306c9f8dff24a8218d8fa0feb1ff301e6eef1bba4c9d8347cd43be5fbb36",
+      "mode": 420
+    },
+    {
+      "path": ".github/workflows/ci-rust-tests-slice.yml",
+      "sha256": "c3f1952925587203a5921ef38126fcdfeddf15d8cd0faf1de088033c4f45095b",
+      "mode": 420
+    },
+    {
+      "path": "ci/llama-canary/family-certified.json",
+      "sha256": "bd4f1e44cda7c6012ffe21526011e57a3b1f485e4172e077b39d5a9339f0f948",
+      "mode": 420
+    },
+    {
+      "path": "ci/llama-canary/family-certified.schema.json",
+      "sha256": "917615727a4918090a0aaf981f854d1219e5035a5ecd97d84e53eacf43443b08",
+      "mode": 420
+    },
+    {
+      "path": "ci/model-artifacts/manifests/competitive-benchmark.json",
+      "sha256": "bc1ec8b8d29da9e410f52208b9d635fe63edeab61fe36c3cfc072f757a8a14ca",
+      "mode": 420
+    },
+    {
+      "path": "ci/model-artifacts/manifests/hf-download-smoke.json",
+      "sha256": "9028f99b7ca01f74d0cc48b2e2f0183136d776808642adb5fb02781c3ea6058a",
+      "mode": 420
+    },
+    {
+      "path": "ci/model-artifacts/manifests/openai-smoke.json",
+      "sha256": "94153eb1fe4053716a551a4bdf14e1ea293cd66bf9863872047f38ce0d59b4a6",
+      "mode": 420
+    },
+    {
+      "path": "ci/model-artifacts/manifests/product-smoke.json",
+      "sha256": "8aecfe0173af47797c2775822f553bfc313282554a71b327147ee9682ccdaef1",
+      "mode": 420
+    },
+    {
+      "path": "ci/model-artifacts/manifests/radix-cache.json",
+      "sha256": "3cb2a784bc5d3c26f4a01277a9e053b57bdf41641233fea8057584d38e7d500d",
+      "mode": 420
+    },
+    {
+      "path": "ci/model-artifacts/manifests/safetensors-runtime-smoke.json",
+      "sha256": "2d3fb11c3abdec1d755a8f2a56f8784e05a83b4ebb206b32ef2d2b81aeee37c7",
+      "mode": 420
+    },
+    {
+      "path": "ci/model-artifacts/manifests/scripted-binary-smoke.json",
+      "sha256": "60592d9c7cab96c5721d47055f9b80f56fced30e4d9eac70c07023654cd0bef5",
+      "mode": 420
+    },
+    {
+      "path": "ci/model-artifacts/manifests/sdk-smoke.json",
+      "sha256": "6154b50c5ede26b701def7f7af126f05bf494ac55d05420cc9d0d25b6ed7ac45",
+      "mode": 420
+    },
+    {
+      "path": "ci/model-artifacts/manifests/skippy-ci-smoke.json",
+      "sha256": "6273529c817393c7685da8367eb01d8d993d978863bbed7d14c1bbbb0d8ef02e",
+      "mode": 420
+    },
+    {
+      "path": "ci/model-artifacts/manifests/skippy-correctness.json",
+      "sha256": "69810320b57be99e90fb5fe4ab7c07840b6beac892f7f9ed130b8d38e397d75b",
+      "mode": 420
+    },
+    {
+      "path": "ci/model-artifacts/manifests/skippy-parity.json",
+      "sha256": "5b40f91900bb0034087a0f6423257c2e0d3cfb92b34e260fabe7556c6f3079e6",
+      "mode": 420
+    },
+    {
+      "path": "ci/model-artifacts/manifests/skippy-system-one-smoke.json",
+      "sha256": "d115a51a0652038e6eb7d3f64125f02b30910f094ce7505c78636b83f0ae9c56",
+      "mode": 420
+    },
+    {
+      "path": "ci/model-artifacts/registry.json",
+      "sha256": "68fd45eb701e8688c3fd9659e5264781f9bd2a66e0886ac24b287a55cab8176d",
+      "mode": 420
+    },
+    {
+      "path": "crates/model-hf/tests/hf_download.rs",
+      "sha256": "290ccd09959e8463b8e598426d6f4c0b3d80ac4fdc2af958f10ee1deff4d4153",
+      "mode": 420
+    },
+    {
+      "path": "docs/skippy/llama-parity-candidates.json",
+      "sha256": "b08380f6934767281011653435a979c3c1f5e1e1ab72fbe988899bca84fa1acd",
+      "mode": 420
+    },
+    {
+      "path": "evals/skippy-competitive-benchmark.json",
+      "sha256": "e5641e1dc75ddcef236258286b85f1f1bcabcfbddb11635beecefea275e20c41",
+      "mode": 420
+    },
+    {
+      "path": "evals/skippy-radix-cache-models.json",
+      "sha256": "f9f88e20661f979c09d19d6ad474a6e28026622a910c57b6468dbe71a88baea3",
+      "mode": 420
+    },
+    {
+      "path": "scripts/ci-hf-download-smoke.sh",
+      "sha256": "f97daca48f3802cf64e1485ff9450b363edc6c039656507f450a9d4d82120572",
+      "mode": 493
+    },
+    {
+      "path": "scripts/download-skippy-parity-candidates.sh",
+      "sha256": "4441a1f8d0ae8ecc28e752703378b41e57730fb16b706401e533ace5b25ddcb1",
+      "mode": 493
+    },
+    {
+      "path": "scripts/materialize-competitive-inputs.sh",
+      "sha256": "de2298776c1b419e8d7dcd37425d778cd421f5ef345b2bd9b9d0ae020ed47d34",
+      "mode": 493
+    },
+    {
+      "path": "scripts/skippy-ci-smoke.sh",
+      "sha256": "ffcbb0a436c72eecf5d1374698b4dcdcc22e2c37e55cff5a67d0b9e11678da0c",
+      "mode": 493
+    },
+    {
+      "path": "scripts/skippy-openai-smoke.sh",
+      "sha256": "deff2d334c0aa7d1ded7858840e1fca5a1b82320f2a98fd5780fcb8fc85c472a",
+      "mode": 493
+    },
+    {
+      "path": "scripts/tests/test_model_artifact_registry.py",
+      "sha256": "3b51a7f4217079e6f5eff47363c791e681ee5de52df053bb51ab5645508c13ce",
+      "mode": 420
+    },
+    {
+      "path": "tools/xtask/src/ci_validation/workflow_guards/runtime_events.rs",
+      "sha256": "0a78f91180d3ceb4255ad7f771fad9b2385d17b7ce38949cdf33f96ddb159383",
+      "mode": 420
+    },
+    {
+      "path": "tools/xtask/src/ci_validation/workflow_guards/runtime_events_tests.rs",
+      "sha256": "ec88d3ad3121df31dc756ad213861ff138d3b4d39b1e5b89b22f0f1d01cc56fe",
+      "mode": 420
+    },
+    {
+      "path": "tools/xtask/tests/fixtures/models/generator-cases.json",
+      "sha256": "0d97d2170ff2c2d28fb5d5da3f78707496be0f474672189392c103a139431b4d",
+      "mode": 420
+    },
+    {
+      "path": "tools/xtask/tests/fixtures/models/resolver-cases.json",
+      "sha256": "fbd855977745bed6aebd117bb9766b3baf04e20b6c839448d6585a315f0bad57",
+      "mode": 420
+    },
+    {
+      "path": "tools/xtask/tests/fixtures/models/resolver-matrix.json",
+      "sha256": "7565f76e5a28c20e27479c460e3814784496138c5d5e98258088111345dead9e",
+      "mode": 420
+    },
+    {
+      "path": "tools/xtask/tests/fixtures/models/restore-step.json",
+      "sha256": "7dd64a3076498daf1540a9411f657f3094b130150324d688d7e143d44e7791a8",
+      "mode": 420
+    },
+    {
+      "path": "tools/xtask/tests/migration_models/generator.rs",
+      "sha256": "a47c5c61ed6bcd29ea267a4e6c94b674654336a70f74340640ceb37fe0b0b77b",
+      "mode": 420
+    },
+    {
+      "path": "tools/xtask/tests/migration_models/live.rs",
+      "sha256": "d2402af517836160a0443aa7a0037cae44a102b6e321318fdde64d0f5e2e57a2",
+      "mode": 420
+    },
+    {
+      "path": "tools/xtask/tests/migration_models/resolver.rs",
+      "sha256": "9ae2cf4aafad0b2037b1913500fc66ddf776c9eab8610f81312caf6d42b7c396",
+      "mode": 420
+    },
+    {
+      "path": "tools/xtask/tests/migration_models/resolver_matrix.rs",
+      "sha256": "61b2616856ca8285affe8c2fb3fe792f269a3202471d6d1ec698230ad016a57d",
+      "mode": 420
+    },
+    {
+      "path": "tools/xtask/tests/migration_models/restore_inputs.rs",
+      "sha256": "148f8556916576c50d46bed67f8d773ac2d22a98492e62e3b6ee9d369101b311",
+      "mode": 420
+    },
+    {
+      "path": "tools/xtask/tests/migration_models/support.rs",
+      "sha256": "75b33a833abd1b83570ab9a74e37332edf4fbc4e496b068dfd36cffc1a790e08",
+      "mode": 420
+    },
+    {
+      "path": "scripts/lib/macos-deployment-target.sh",
+      "sha256": "245a0692f63155776a6c4fd82ff9670f312341e4b17c4f1e2c0080ab0d1afe13",
+      "mode": 420
+    },
+    {
+      "path": "scripts/lib/macos-deployment-target.txt",
+      "sha256": "cc49a4a1ef024f2f2efffe285cb147395fc57a2f9ed4e9a128338e2cbff44d8b",
+      "mode": 420
+    },
+    {
+      "path": ".github/actions/setup-canary-runner/action.yml",
+      "sha256": "a95d361c5c08d661f24fb51d9c1a51ab16a1b54a1c89468c45b8cfa3502862d1",
+      "mode": 420
+    },
+    {
+      "path": ".github/workflows/llama-canary-family-pass.yml",
+      "sha256": "099365fe8525d47cc1228ce0dce848be61b8dd4ab5b14d1dda7cd08e4d1c0a0c",
+      "mode": 420
+    }
+  ],
+  "rust_owners": [
+    {
+      "path": "tools/xtask/src/repo_consistency.rs",
+      "sha256": "7141911a99700c7507e85d62799f6beeebae24ca16107777ee3e7723ea11a886",
+      "mode": 420
+    },
+    {
+      "path": "tools/xtask/src/repo_consistency/synthetic_graph_contracts.rs",
+      "sha256": "4518c6928bd236d9c642ad9756e2f42077231bd895eed4dd846d5aec906c4638",
+      "mode": 420
+    },
+    {
+      "path": "tools/xtask/tests/migration_models.rs",
+      "sha256": "35067b9748432679a9548731ed940216353e4fad3851086fd1a4b50dd9d1609c",
+      "mode": 420
+    },
+    {
+      "path": "tools/xtask/tests/migration_models/current_contracts.rs",
+      "sha256": "225980e2ca3aaf465311f7953d476c6f77abbe65f400d27f0d631c2cb95ac2a5",
+      "mode": 420
+    },
+    {
+      "path": "tools/xtask/tests/migration_models/repository_contracts.rs",
+      "sha256": "bb6db627b3f03afc349c0775fbfac9f73afd3350a56b8583ab0f796d008055b7",
+      "mode": 420
+    },
+    {
+      "path": "tools/xtask/tests/migration_lifecycle/macos_deployment_target.rs",
+      "sha256": "65101b4957af388f795dd1cea7a8b6477525313743e3bd23bcb350a429c2288c",
+      "mode": 420
+    }
+  ],
+  "qualified_sources": [
+    {
+      "path": "tools/xtask/src/repo_consistency.rs",
+      "sha256": "7141911a99700c7507e85d62799f6beeebae24ca16107777ee3e7723ea11a886",
+      "mode": 420
+    },
+    {
+      "path": "tools/xtask/src/repo_consistency/synthetic_graph_contracts.rs",
+      "sha256": "4518c6928bd236d9c642ad9756e2f42077231bd895eed4dd846d5aec906c4638",
+      "mode": 420
+    },
+    {
+      "path": "ci/ci.md",
+      "sha256": "9e7b69c376e9b00610a383911ddbd4f24b4585ce52b59e6dfb31691f5f0db293",
+      "mode": 420
+    },
+    {
+      "path": ".agents/skills/manage-ci/references/current-inventory.md",
+      "sha256": "fdda854bb0a47ea18a12e45ea5e5f6d5921fd40d07c3573d89189ccfc7c4356f",
+      "mode": 420
+    },
+    {
+      "path": "ci/llama-canary/SYNTHETIC_GRAPH_CONTRACTS.md",
+      "sha256": "1da5c2a94aa2314766f2c2a3c817ec1e5dc5436819a35022b1c5d1db8fb94322",
+      "mode": 420
+    },
+    {
+      "path": "tools/xtask/tests/migration_models.rs",
+      "sha256": "35067b9748432679a9548731ed940216353e4fad3851086fd1a4b50dd9d1609c",
+      "mode": 420
+    },
+    {
+      "path": "tools/xtask/tests/migration_models/current_contracts.rs",
+      "sha256": "225980e2ca3aaf465311f7953d476c6f77abbe65f400d27f0d631c2cb95ac2a5",
+      "mode": 420
+    },
+    {
+      "path": "tools/xtask/tests/migration_models/repository_contracts.rs",
+      "sha256": "bb6db627b3f03afc349c0775fbfac9f73afd3350a56b8583ab0f796d008055b7",
+      "mode": 420
+    },
+    {
+      "path": "tools/xtask/Cargo.toml",
+      "sha256": "8cc63ec9a2bbb288408b448958391e5a4e568068a62acd8c78709f734cfd3af3",
+      "mode": 420
+    },
+    {
+      "path": "Cargo.lock",
+      "sha256": "362b4b494098ee3576264262e9448735a5fbcef8ccae2f4a6bc99d0f533bf436",
+      "mode": 420
+    },
+    {
+      "path": "scripts/tests/test_ci_artifact_actions.py",
+      "sha256": "115fd728222f8d565f7c0f3a7611b289d96d7e0198d838d73dbe62c383b656a7",
+      "mode": 420
+    },
+    {
+      "path": "tools/xtask/tests/migration_lifecycle/macos_deployment_target.rs",
+      "sha256": "65101b4957af388f795dd1cea7a8b6477525313743e3bd23bcb350a429c2288c",
+      "mode": 420
+    }
+  ],
+  "focused_receipts": {
+    "status": "PASS_FOCUSED",
+    "receipts": [
+      {
+        "name": "format",
+        "status": "PASS",
+        "exit_code": 0,
+        "log": ".omo/evidence/resume-20261002/model-graph-contracts-focused-format.log",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "name": "graph",
+        "status": "PASS",
+        "exit_code": 0,
+        "passed": 9,
+        "failed": 0,
+        "ignored": 0,
+        "log": ".omo/evidence/resume-20261002/model-graph-contracts-focused-graph.log",
+        "sha256": "6ebdd20ccaef18351ff564325311caa238bdfc7cebec82a83321ca083471b6fb"
+      },
+      {
+        "name": "model-pairs",
+        "status": "PASS",
+        "exit_code": 0,
+        "passed": 2,
+        "failed": 0,
+        "ignored": 0,
+        "log": ".omo/evidence/resume-20261002/model-graph-contracts-focused-model-pairs.log",
+        "sha256": "ee646f4cb4113acf2a0efa97f3a6a78a1b30565d68b33cc4a8544c15aec793dc"
+      },
+      {
+        "name": "model-repository",
+        "status": "PASS",
+        "exit_code": 0,
+        "passed": 9,
+        "failed": 0,
+        "ignored": 0,
+        "log": ".omo/evidence/resume-20261002/model-graph-contracts-focused-model-repository.log",
+        "sha256": "5d396d4a04994abf921400d0f087aa98ca38303a8de3961718af0bab8585ca2b"
+      },
+      {
+        "name": "model-cohort",
+        "status": "PASS",
+        "exit_code": 0,
+        "passed": 26,
+        "failed": 0,
+        "ignored": 0,
+        "log": ".omo/evidence/resume-20261002/model-graph-contracts-focused-model-cohort.log",
+        "sha256": "3c71fe0f43d1b35b720ee3ecc499bc31a729a362382ef8e01e6d9cb2d478863e"
+      },
+      {
+        "name": "macos-target",
+        "status": "PASS",
+        "exit_code": 0,
+        "passed": 3,
+        "failed": 0,
+        "ignored": 0,
+        "log": ".omo/evidence/resume-20261002/model-graph-contracts-focused-macos-target.log",
+        "sha256": "bd50077a7d3c34f8633ca3d964fadbfceafab6e2fa0453e0890aaea6ad752832"
+      },
+      {
+        "name": "fmt-check",
+        "status": "PASS",
+        "exit_code": 0,
+        "log": ".omo/evidence/resume-20261002/model-graph-contracts-focused-fmt-check.log",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "name": "clippy",
+        "status": "PASS",
+        "exit_code": 0,
+        "log": ".omo/evidence/resume-20261002/model-graph-contracts-focused-clippy.log",
+        "sha256": "9863d138b1bd73d9b5b6647f91b4da9cd36fbcd498f33b11602142703f878858"
+      }
+    ],
+    "source_freeze": ".omo/evidence/resume-20261002/model-graph-contracts-focused-source-freeze.json"
+  },
+  "limits": {
+    "graph": {
+      "scope": "Typed current certification rows and current patch fixture dimensions/modes must match completely. Preserve missing/new family, duplicate, trunk/width/MTP drift, CTest registration and positive outcome, generator MTP forwarding and stateless state rejection checks. Additional negative cases reject malformed fixture shape/numbers, unregistered families and mode drift.",
+      "limits": "Source contract qualification only; no native patch edit, build, model conversion, CTest execution or live family certification. Prepared parent depends on the authored logging registration; apply only after that source is qualified and compare the exact future preimage before activation."
+    },
+    "models": "Independent current source/schema/membership/cadence/consumer tests plus actual recognized class/profile and current native gate admission. No native/model/SDK/browser/provider execution or retirement until locked compiler, focused11, owning26, Clippy and final postimage integration gates pass. Existing originals remain; current frozen suite is untouched.",
+    "macos": {
+      "scope": "Existing real Bash/Just default/empty/explicit override and non-macOS scope, parsed source/order/export/cache binding, producer setup precedes compile, family consumer cargo-free. Six mutations cover direct, Just, env, executable-path, semicolon and command-substitution compiler invocations.",
+      "limits": "Local source and shell environment contracts only. Actual native builds, canary runner execution and platform qualification remain independent."
+    }
+  },
+  "activation": "Original module retirement after owning Rust tests and Clippy passed; final full and normal postimage validation required before checkpoint.",
+  "previous_activation_status": "MODULE_ONLY_RETIRED_POSTIMAGE_UNQUALIFIED",
+  "root_postimage_qualification": {
+    "status": "PASS_LOCAL_POSTIMAGE",
+    "full": {
+      "receipt": ".omo/evidence/resume-20261002/composed-normal-model-graph-corrected-postimage-full-receipt.json",
+      "log_sha256": "e6743af46c983f076d7d240d45c06f6a8231656ad845d2881901cffd3106b6db",
+      "targets": 109,
+      "passed": 4157,
+      "failed": 0,
+      "ignored": 2
+    },
+    "normal": {
+      "receipt": ".omo/evidence/resume-20261002/composed-normal-model-graph-corrected-postimage-normal-receipt.json",
+      "log_sha256": "d4e3d9abba2b34b660b4bb851c13729611d5db707093192bc7240c860fa21d04",
+      "targets": 109,
+      "passed": 4157,
+      "failed": 0,
+      "ignored": 2
+    },
+    "legacy": {
+      "run": 1022,
+      "passed": 1008,
+      "failed": 0,
+      "skipped": 14,
+      "seconds": 394.421
+    },
+    "focused_receipts": ".omo/evidence/resume-20261002/model-graph-contracts-focused-receipts.json",
+    "limits": "Typed current model identity, schema, suite membership, cadence and consumer contracts, complete synthetic graph source coverage, and macOS deployment propagation/consumer compiler refusal. Native CTest and actual hosted/platform/model/SDK acceptance remain unverified."
+  }
+}

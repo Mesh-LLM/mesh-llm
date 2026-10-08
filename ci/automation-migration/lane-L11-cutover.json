@@ -1,0 +1,95 @@
+{
+  "schema_version": 1,
+  "lane": "L11",
+  "receipt": ".omo/evidence/lane-L11-optional-tooling.md",
+  "removed_implementations": [
+    "scripts/agentic-replay-params.py",
+    "scripts/write-workload-oracle-evidence.py",
+    "scripts/verify-workload-oracle-evidence.py",
+    "evals/agentic-replay.py",
+    "evals/agentic_replay_engines.py",
+    "evals/agentic_replay_evidence.py",
+    "scripts/tests/test_agentic_replay.py",
+    "scripts/tests/test_agentic_replay_engines.py",
+    "scripts/tests/test_agentic_replay_evidence.py",
+    "evals/test_agentic_replay_l3.py"
+  ],
+  "caller_switches": [
+    {
+      "caller": ".github/workflows/agentic-replay-nightly.yml",
+      "owner": "automation replay-matrix export/run-family/pins/verify-digest/publication-verify; ci-ops runner-cleanup"
+    },
+    {
+      "caller": "scripts/agentic-replay-repair.sh",
+      "owner": "automation replay-matrix export/run-family/pins"
+    },
+    {
+      "caller": "scripts/skippy-workload-certify.sh",
+      "owner": "automation workload-oracle-evidence write"
+    },
+    {
+      "caller": "scripts/skippy-family-battery.sh",
+      "owner": "automation workload-oracle-evidence verify"
+    },
+    {
+      "caller": "scripts/hf-skippy-convert-job.py",
+      "owner": "hf-converted-artifact preflight through required MESH_LLM_AUTOMATION_BIN"
+    },
+    {
+      "caller": "scripts/ci-agent-live-fixture-lib.sh::agent_smoke_pick_model",
+      "owner": "automation agent-pick-model"
+    },
+    {
+      "caller": ".github/actions/install-actionlint/action.yml",
+      "owner": "artifact verify-checksum with canonical sidecar for pinned expected digest"
+    },
+    {
+      "caller": "evals/README.md; just/ci.just legacy roster",
+      "owner": "automation replay-matrix plan/run/report/l3-plan/l3-run/l3-report; obsolete three test modules removed from surviving roster"
+    }
+  ],
+  "retained": [
+    {
+      "path": "evals/agentic-trajectory-manifest.py",
+      "reason": "Exact locked DuckDB dataset reader retained; typed Rust owns manual/run-family/L3 process, planning, HTTP, resume, evidence and reports"
+    },
+    {
+      "path": "scripts/generate-bench-corpus.py",
+      "reason": "Explicit user retention decision"
+    },
+    {
+      "path": "scripts/hf-skippy-convert-job.py",
+      "reason": "Remote HF API adapter remains transitional; duplicated artifact validator removed, remote submission and dependency isolation not qualified"
+    }
+  ],
+  "excluded": [
+    "L3 capture-sccache-stats",
+    "L8 reconcile-two-node-split-evidence",
+    "L3/L5/L7/L8 caller files"
+  ],
+  "unexecuted": [
+    "live replay",
+    "HF downloads/jobs/uploads",
+    "publication",
+    "external CI",
+    "model qualification"
+  ],
+  "remaining_generic": [
+    "local llama-canary-agent-repair run_for Python timeout remains; production wrappers and replay repair use typed Rust supervisor",
+    "agent coding fixture orchestration"
+  ],
+  "source_bound_shards": "Canonical source-bound github/script/test/instruction shard regeneration remains an L12 integration join; historical shards must not be treated as current caller proof.",
+  "manual_replay_retirement": {
+    "coverage": "ci/automation-migration/replay-retirement-coverage.json",
+    "removed_paths": [
+      "evals/agentic-replay.py",
+      "evals/agentic_replay_engines.py",
+      "evals/agentic_replay_evidence.py",
+      "scripts/tests/test_agentic_replay.py",
+      "scripts/tests/test_agentic_replay_engines.py",
+      "scripts/tests/test_agentic_replay_evidence.py",
+      "evals/test_agentic_replay_l3.py"
+    ],
+    "policy": "Exact seven-path retirement after parent validation; retained DuckDB reader and independent workflow/SDK/native gates remain. Source review is not live model or platform qualification."
+  }
+}

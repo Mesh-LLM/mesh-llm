@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "source_path": "scripts/tests/test_workload_lane_execution.py",
+  "source_preimage_sha256": "4bf9d20dfb7e8d54d1b6bc18f4ad640f5dbf26f6699ea4da68a3e8dd23ec3aef",
+  "source_current_sha256": "6d24be570d3a1daa1649bbcda909aa90b604bd792b932ab3dbdc4567f8f619a9",
+  "owner": "tools/xtask/tests/workload_start_retry.rs",
+  "owner_sha256": "73cfaeb6e880f2924ea9033fa592ab7bb6f5ce22501702df1e2f131eb3f39ebf",
+  "retired_paths": [
+
+  ],
+  "retired_methods": [
+    {
+      "legacy": "WorkloadLaneExecutionTests.test_candidate_start_retries_only_address_in_use_with_fresh_port",
+      "source_preimage_line": 157,
+      "owner": "tools/xtask/tests/workload_start_retry.rs::candidate_start_retries_only_address_in_use_with_fresh_port_and_retained_history",
+      "intent": "Address-in-use startup retries once with a fresh port, retains first-attempt history and successful current log, and preserves exact candidate argv and typed config identity."
+    },
+    {
+      "legacy": "WorkloadLaneExecutionTests.test_candidate_start_does_not_retry_other_startup_failures",
+      "source_preimage_line": 206,
+      "owner": "tools/xtask/tests/workload_start_retry.rs::candidate_start_does_not_retry_other_startup_failures",
+      "intent": "Other startup failures return failure after one allocation and one start, retain the owning current error log, and never retry."
+    }
+  ],
+  "validation": {
+    "receipt_path": ".omo/evidence/resume-20261002/workload-start-retry.log",
+    "receipt_sha256": "d8451c191385b470b66d79198e7d347474e2bc88c61f7015298fe43fc813563f",
+    "result": "2 passed; 0 failed",
+    "elapsed_seconds": 0.84,
+    "validated_by": "parent integrated owning Rust target on 2026-10-02"
+  },
+  "fixture_bounds": {
+    "process_group_deadline_seconds": 10,
+    "tools": "Actual extracted production selector/config invocation/address classifier/launcher; finite candidate children and port-allocation stub at automation local-ports; actual typed workload-smoke-config via the integrated xtask binary.",
+    "cleanup": "Dedicated process group; file-backed capture; finite candidate children reaped by wait adapter; timeout/panic SIGKILL and reap."
+  },
+  "retained_methods": [
+    "test_summary_preserves_preflight_classes_without_claiming_certification",
+    "test_dry_run_prints_both_certified_rows_without_oracles",
+    "test_missing_oracle_records_both_failures_and_continues",
+    "test_readiness_uses_deadline_for_each_server_and_rejects_dead_process",
+    "test_address_in_use_detection_is_narrow"
+  ],
+  "limits": "Only two method retirements. Other Python methods and all still-used imports remain. No HTTP, live model/native runtime, real port reservation or whole test-module retirement claim. The receipt proves focused integrated Rust fixtures, not whole-project qualification."
+}

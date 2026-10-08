@@ -1,0 +1,101 @@
+{
+  "schema": 1,
+  "legacy_path": "scripts/tests/test_llama_canary_handoff_contract.py",
+  "retired_class": "HandoffContractTests",
+  "retired_method_count": 1,
+  "legacy_preimage_sha256": "72aeb6d8cccdadd39c7da8a4c92e071f53afdf0afe9a97f11cdc86a2178bb8eb",
+  "current_source_sha256": "4dfe328aab46662ac1814cdf14625a458beb2f8d10a4793ff47650e8930becd3",
+  "status": "accepted_after_registered_owning_rust_pass",
+  "scope": "Only the historical planner/nested checkout method retired. All prepared-source, pack/restore/workload and snapshot-binding methods remain. No production gate changed.",
+  "methods": [
+    {
+      "legacy_method": "test_older_planner_and_nested_checkout_validate_with_real_battery",
+      "rust_owner": "tools/xtask/tests/migration_lifecycle/canary_controller_battery.rs",
+      "rust_owner_sha256": "e6af971e20e949234fc01cc22b5811f21617f5289d4186cafb2458ae00f1d530",
+      "rust_tests": [
+        "canary_controller_battery::nested_selected_battery_uses_frozen_controller_plan_and_ignores_historical_planner"
+      ],
+      "registered_target": "migration_lifecycle",
+      "registration_source": "tools/xtask/tests/migration_lifecycle.rs",
+      "registration_source_sha256": "b5fcd15fe5ce39827e466cc57fea9a23da77590b8cbf2535fd4fd4ab297a4e0b",
+      "registration_line": 47,
+      "intent": "Current frozen Rust controller owns 256-shard planning for a nested selected source using its manifest. Actual selected shell battery consumes immutable supplied bytes, ignores the historical planner, and rejects an omitted family before scan/result execution.",
+      "preserved_assertions": [
+        "source-relative selected manifest",
+        "nonempty roster",
+        "supplied bytes unchanged",
+        "copied bytes equal admitted plan",
+        "historical planner execution marker absent",
+        "actual selected dry-run resolves rows",
+        "omitted family rejects with canonical diagnostic",
+        "negative scan directory and result stream empty"
+      ],
+      "superseded_obligation": "Current controller planning replaces historical Python shard byte/order authority. No historical planner parity or Python differential oracle is claimed.",
+      "supporting_existing_owners": [
+        {
+          "path": "tools/xtask/src/automation/canary_receipts/source_plan/placement_tests.rs",
+          "test": "stable_projection_orders_equal_size_families_without_modifying_source_plan"
+        },
+        {
+          "path": "tools/xtask/tests/migration_lifecycle/family_battery_policy_cli.rs",
+          "test": "direct_default_one_shard_and_family_filter_survive_admission"
+        },
+        {
+          "path": "tools/xtask/tests/migration_lifecycle/family_battery_policy_cli.rs",
+          "test": "current_battery_propagates_rust_rejection_without_legacy_fallback"
+        },
+        {
+          "path": "tools/xtask/tests/migration_canary_receipts/inputs.rs",
+          "test": "migration_canary_receipts_accepts_historical_extra_fields_without_mutating_plan"
+        }
+      ]
+    }
+  ],
+  "validation": {
+    "receipt_path": ".omo/evidence/resume-20261002/canary-controller-battery-corrected.log",
+    "receipt_sha256": "c246c52253a8b2ff0cb17ce956a9f1d26cd086e370344b38ea0cabee1ed98c6e",
+    "result": "1 passed; 0 failed; 0 ignored; 405 filtered out",
+    "elapsed_seconds": 4.66,
+    "validated_by": "parent integrated registered owning fixture on 2026-10-02; worker read exact terminal log"
+  },
+  "fixture_bounds": {
+    "process_owner": "tools/xtask/src/process/mod.rs reused through registered migration_lifecycle",
+    "execution_seconds_per_command": 8,
+    "graceful_shutdown_seconds": 1,
+    "forced_shutdown_seconds": 1,
+    "configured_lifecycle_budget_seconds_per_command": 10,
+    "retained_bytes_per_stream": 1048576,
+    "reject_truncated_output": true,
+    "reject_incomplete_cleanup": true,
+    "inherited_environment": [
+      "PATH",
+      "HOME",
+      "TMPDIR",
+      "LANG",
+      "LC_ALL"
+    ],
+    "authority": "Frozen controller and private evidence identities explicit. No HF cache, workload producer or provider credential environment inherited.",
+    "cleanup": "Existing owned-process-group supervisor. Configured bounds do not promise immunity from kernel-stalled syscalls or scheduler starvation."
+  },
+  "discarded_attempt": {
+    "path": "tools/xtask/tests/canary_controller_battery.rs",
+    "source_sha256": "0909d98d16e95ec1b6b30b824be31602a3bdeab9229b0c01e7357ea9e06d704f",
+    "preserved_source_path": ".omo/evidence/resume-20261002/canary-historical-fixture-correction/preimages/failed-canary_controller_battery.rs",
+    "receipt_path": ".omo/evidence/resume-20261002/canary-controller-battery.log",
+    "receipt_sha256": "3e7823d98376b6d6383ecff2604bc18a042b6ba508b2be8009908af6429fcd34",
+    "result": "Failed before planning because unsupported global --root was supplied. Discarded target removed; historical failure retained without rewriting it as a pass."
+  },
+  "retained_methods": [
+    "test_prepared_source_roundtrip_in_empty_worker_and_stale_pin_rejected",
+    "test_pack_restore_and_source_owned_workload_verification",
+    "test_snapshot_rebinding_requires_sealed_manifest_exact_tree_and_files"
+  ],
+  "adjacent_assertion_correction": {
+    "path": "scripts/tests/test_llama_upstream_canary_contract.py",
+    "current_source_sha256": "741f7fd3bf034604fcd81057a0eb55814a9596040a0e0f607e8bb20498b4cc4e",
+    "method": "test_supplied_plan_cannot_omit_a_manifest_selected_family",
+    "intent": "Nonzero domain failure replaces Python exit2 expectation; canonical diagnostic and no-model-scans assertion remain.",
+    "proof": "New owning Rust fixture separately proves actual battery rejection before scans/results. This receipt claims no new whole legacy module result."
+  },
+  "limits": "Focused registered fixture only. Selected source uses the actual current shell battery and a forbidden historical planner fixture; this does not qualify every historical battery version. Dry-run and skip-build do not execute native/tensor/MTP/MM/workload/runtime gates. Those production gates remain preserved. No model, HTTP, SDK, native build/runtime, remote transport, protected publication or whole-project completion claim."
+}

@@ -1,0 +1,698 @@
+{
+  "status": "LOCAL_POSTIMAGE_QUALIFIED",
+  "source_head": "2c8acd66fdc237b32c52217a81679cbe48ba9a30",
+  "original_intents": 18,
+  "method_maps": [
+    {
+      "source": "scripts/tests/test_qa_kv_tool_loop_stability.py",
+      "method": "test_plan_declares_tool_loop_cache_and_log_scan",
+      "owners": [
+        {
+          "path": "tools/xtask/tests/migration_stability/kv_cases.rs",
+          "symbol": "stability_cli_kv_plan_and_scoped_help_do_not_create_evidence_or_contact_endpoint"
+        }
+      ]
+    },
+    {
+      "source": "scripts/tests/test_qa_kv_tool_loop_stability.py",
+      "method": "test_parse_native_logs_dedupes_env_and_cli_paths",
+      "owners": [
+        {
+          "path": "tools/xtask/src/automation/stability/kv_options.rs",
+          "symbol": "kv_options_preserve_environment_defaults_and_explicit_cohort_overrides"
+        }
+      ]
+    },
+    {
+      "source": "scripts/tests/test_qa_kv_tool_loop_stability.py",
+      "method": "test_tool_loop_requests_keep_stable_prefix_and_vary_tail",
+      "owners": [
+        {
+          "path": "tools/xtask/tests/migration_stability/kv_cases.rs",
+          "symbol": "stability_cli_kv_full_pressure_and_each_attempt_overlap_preserve_history_cache_and_fresh_transcripts"
+        }
+      ]
+    },
+    {
+      "source": "scripts/tests/test_qa_kv_tool_loop_stability.py",
+      "method": "test_overlap_requests_keep_same_prefix_and_distinct_tails",
+      "owners": [
+        {
+          "path": "tools/xtask/src/automation/stability/kv_requests.rs",
+          "symbol": "overlap_cohort_has_title_and_distinct_tool_histories_under_one_prefix"
+        }
+      ]
+    },
+    {
+      "source": "scripts/tests/test_qa_kv_tool_loop_stability.py",
+      "method": "test_overlap_tool_loop_probe_runs_parallel_requests_and_cache_check",
+      "owners": [
+        {
+          "path": "tools/xtask/tests/migration_stability/kv_cases.rs",
+          "symbol": "stability_cli_kv_full_pressure_and_each_attempt_overlap_preserve_history_cache_and_fresh_transcripts"
+        },
+        {
+          "path": "tools/xtask/src/automation/stability/kv_overlap_tests.rs",
+          "symbol": "kv_overlap_all_requests_reach_peer_before_any_reply_and_partial_failures_survive"
+        }
+      ]
+    },
+    {
+      "source": "scripts/tests/test_qa_kv_tool_loop_stability.py",
+      "method": "test_cache_metrics_extract_openai_usage_tokens",
+      "owners": [
+        {
+          "path": "tools/xtask/src/automation/stability/kv_cache.rs",
+          "symbol": "absent_and_malformed_usage_cannot_manufacture_a_positive_cache_count"
+        }
+      ]
+    },
+    {
+      "source": "scripts/tests/test_qa_kv_tool_loop_stability.py",
+      "method": "test_cache_threshold_reports_shortfall",
+      "owners": [
+        {
+          "path": "tools/xtask/src/automation/stability/kv_cache.rs",
+          "symbol": "measured_cache_thresholds_include_the_exact_boundary_and_retain_observations"
+        },
+        {
+          "path": "tools/xtask/tests/migration_stability/kv_cases.rs",
+          "symbol": "stability_cli_kv_cache_shortfall_fails_each_proof_with_measured_tokens_retained"
+        }
+      ]
+    },
+    {
+      "source": "scripts/tests/test_qa_kv_tool_loop_stability.py",
+      "method": "test_cache_probe_fails_wrong_completion_even_with_cached_tokens",
+      "owners": [
+        {
+          "path": "tools/xtask/tests/migration_stability/kv_cases.rs",
+          "symbol": "stability_cli_kv_wrong_pressure_or_cached_completion_fails_with_observations_retained"
+        }
+      ]
+    },
+    {
+      "source": "scripts/tests/test_qa_kv_tool_loop_stability.py",
+      "method": "test_log_scan_detects_memory_slot_and_eviction_errors",
+      "owners": [
+        {
+          "path": "tools/xtask/src/automation/stability/kv_native_logs.rs",
+          "symbol": "kv_log_checkpoint_reports_new_missing_rotated_truncated_and_rewritten_logs"
+        },
+        {
+          "path": "tools/xtask/src/automation/stability/kv_native_logs.rs",
+          "symbol": "kv_log_long_lines_and_many_findings_remain_bounded_without_hiding_failures"
+        }
+      ]
+    },
+    {
+      "source": "scripts/tests/test_qa_kv_tool_loop_stability.py",
+      "method": "test_native_log_scan_ignores_preexisting_failures_after_checkpoint",
+      "owners": [
+        {
+          "path": "tools/xtask/src/automation/stability/kv_native_logs.rs",
+          "symbol": "kv_log_checkpoint_ignores_old_failures_and_retains_appended_file_line_numbers"
+        }
+      ]
+    },
+    {
+      "source": "scripts/tests/test_qa_kv_tool_loop_stability.py",
+      "method": "test_native_log_scan_reports_failures_appended_after_checkpoint",
+      "owners": [
+        {
+          "path": "tools/xtask/src/automation/stability/kv_native_logs.rs",
+          "symbol": "kv_log_checkpoint_ignores_old_failures_and_retains_appended_file_line_numbers"
+        },
+        {
+          "path": "tools/xtask/tests/migration_stability/kv_cases.rs",
+          "symbol": "stability_cli_kv_native_logs_checkpoint_before_requests_and_detect_new_fatal_lines"
+        }
+      ]
+    },
+    {
+      "source": "scripts/tests/test_qa_kv_tool_loop_stability.py",
+      "method": "test_native_log_scan_preserves_file_line_number_after_checkpoint",
+      "owners": [
+        {
+          "path": "tools/xtask/src/automation/stability/kv_native_logs.rs",
+          "symbol": "kv_log_checkpoint_ignores_old_failures_and_retains_appended_file_line_numbers"
+        }
+      ]
+    },
+    {
+      "source": "scripts/tests/test_qa_kv_tool_loop_stability.py",
+      "method": "test_native_log_scan_reports_new_log_created_after_checkpoint",
+      "owners": [
+        {
+          "path": "tools/xtask/src/automation/stability/kv_native_logs.rs",
+          "symbol": "kv_log_checkpoint_reports_new_missing_rotated_truncated_and_rewritten_logs"
+        }
+      ]
+    },
+    {
+      "source": "scripts/tests/test_qa_kv_tool_loop_stability.py",
+      "method": "test_native_log_scan_rescans_truncated_log_after_checkpoint",
+      "owners": [
+        {
+          "path": "tools/xtask/src/automation/stability/kv_native_logs.rs",
+          "symbol": "kv_log_checkpoint_reports_new_missing_rotated_truncated_and_rewritten_logs"
+        }
+      ]
+    },
+    {
+      "source": "scripts/tests/test_qa_kv_tool_loop_stability.py",
+      "method": "test_prepare_transcript_dir_removes_stale_attempt_files",
+      "owners": [
+        {
+          "path": "tools/xtask/src/automation/stability/kv_transcripts.rs",
+          "symbol": "kv_transcripts_select_a_fresh_run_and_preserve_preexisting_evidence"
+        }
+      ]
+    },
+    {
+      "source": "scripts/tests/test_qa_kv_tool_loop_stability.py",
+      "method": "test_run_certification_resets_transcripts_before_writing",
+      "owners": [
+        {
+          "path": "tools/xtask/tests/migration_stability/kv_cases.rs",
+          "symbol": "stability_cli_kv_full_pressure_and_each_attempt_overlap_preserve_history_cache_and_fresh_transcripts"
+        }
+      ]
+    },
+    {
+      "source": "scripts/tests/test_qa_kv_tool_loop_stability.py",
+      "method": "test_record_transcript_appends_within_attempt",
+      "owners": [
+        {
+          "path": "tools/xtask/tests/migration_stability/kv_cases.rs",
+          "symbol": "stability_cli_kv_full_pressure_and_each_attempt_overlap_preserve_history_cache_and_fresh_transcripts"
+        }
+      ]
+    },
+    {
+      "source": "scripts/tests/test_qa_kv_tool_loop_stability.py",
+      "method": "test_write_evidence_outputs_manifest_results_and_summary",
+      "owners": [
+        {
+          "path": "tools/xtask/tests/migration_stability/kv_cases.rs",
+          "symbol": "stability_cli_kv_full_pressure_and_each_attempt_overlap_preserve_history_cache_and_fresh_transcripts"
+        },
+        {
+          "path": "tools/xtask/tests/migration_stability/kv_cases.rs",
+          "symbol": "stability_cli_kv_wrong_pressure_or_cached_completion_fails_with_observations_retained"
+        }
+      ]
+    }
+  ],
+  "semantic_changes": [
+    "Fresh manifest-selected run directories prevent stale attempts from entering current evidence while preserving preexisting files, replacing recursive transcript cleanup.",
+    "Concurrent successful siblings complete both tool facts even if a sibling fails; failed groups retain measured cache observations."
+  ],
+  "focused_qualification": {
+    "status": "PASS_FOCUSED",
+    "head": "2c8acd66fdc237b32c52217a81679cbe48ba9a30",
+    "receipts": [
+      {
+        "name": "fmt",
+        "status": "PASS",
+        "exit_code": 0,
+        "log": ".omo/evidence/resume-20261002/kv-native-owner-focused-v2-fmt.log",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "name": "native",
+        "status": "PASS",
+        "exit_code": 0,
+        "log": ".omo/evidence/resume-20261002/kv-native-owner-focused-v2-native.log",
+        "sha256": "a5c61094c2825dfe865a60b1a75370f8427cd78b0af3867d808933a3f1a83527"
+      },
+      {
+        "name": "clippy",
+        "status": "PASS",
+        "exit_code": 0,
+        "log": ".omo/evidence/resume-20261002/kv-native-owner-focused-v2-clippy.log",
+        "sha256": "19de89e40597b3d5d4581d1a4c9dc7fc4ba4323737bc1e45cbd8d13771cda109"
+      },
+      {
+        "name": "inventory",
+        "status": "PASS",
+        "exit_code": 0,
+        "log": ".omo/evidence/resume-20261002/kv-native-owner-focused-v2-inventory.log",
+        "sha256": "530b558f4693998a828baa7962e73f68b06b5b89c5c81bce5dcf80fc2ba676c4"
+      },
+      {
+        "name": "policy",
+        "status": "PASS",
+        "exit_code": 0,
+        "log": ".omo/evidence/resume-20261002/kv-native-owner-focused-v2-policy.log",
+        "sha256": "1653e92cb35e8b7386ca59ab0a496985ab2e796c1d7d4a319d994377ce00d747"
+      },
+      {
+        "name": "original",
+        "status": "PASS",
+        "exit_code": 0,
+        "log": ".omo/evidence/resume-20261002/kv-native-owner-focused-v2-original.log",
+        "sha256": "b759f2715285587e51315ef83d7dd16ce109f9a651098ef0eaafdc18efd87de5"
+      }
+    ]
+  },
+  "caller_qualification": {
+    "status": "PASS_FOCUSED_FULL_POSTIMAGE_REQUIRED",
+    "focused_checks": [
+      {
+        "name": "fmt",
+        "status": "PASS",
+        "exit_code": 0,
+        "log": ".omo/evidence/resume-20261002/kv-caller-cutover-v2-fmt.log",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "name": "native",
+        "status": "PASS",
+        "exit_code": 0,
+        "log": ".omo/evidence/resume-20261002/kv-caller-cutover-v2-native.log",
+        "sha256": "473ea6b085027746c149deabe1af5e9e2d9c71b68b642b4924675f546fb2f522"
+      },
+      {
+        "name": "clippy",
+        "status": "PASS",
+        "exit_code": 0,
+        "log": ".omo/evidence/resume-20261002/kv-caller-cutover-v2-clippy.log",
+        "sha256": "ea3e547d75bb335cae836045fe1e32f738d1fdf938be86d82103d105b9ccba9e"
+      },
+      {
+        "name": "inventory",
+        "status": "PASS",
+        "exit_code": 0,
+        "log": ".omo/evidence/resume-20261002/kv-caller-cutover-v2-inventory.log",
+        "sha256": "df06faf3c8b9151cbaa049d7184d7ff6a3230be0438dd86778f4a66440604bd3"
+      },
+      {
+        "name": "policy",
+        "status": "PASS",
+        "exit_code": 0,
+        "log": ".omo/evidence/resume-20261002/kv-caller-cutover-v2-policy.log",
+        "sha256": "abaa01ac78af288a834708fe3c637e631dc83e8a2565067e8b9ef6d4a8699cd6"
+      }
+    ],
+    "previous_normal_failure": {
+      "name": "normal",
+      "status": "FAILED",
+      "exit_code": 101,
+      "log": ".omo/evidence/resume-20261002/kv-caller-cutover-v2-normal.log",
+      "sha256": "19867e3e7a21f17272bac6b826c77694f6d03677492ba73aca9c865d853a40bd"
+    },
+    "process_failure_diagnostics": {
+      "status": "PASS_DIAGNOSTIC_ROOT_CAUSE_UNPROVEN",
+      "source": {
+        "path": "tools/xtask/src/process/inherited_tests.rs",
+        "sha256": "ac9b29e4e81ea9630f7582c2c4b35caf12e6c9d5aad0b481a80509bdb22a39ea"
+      },
+      "receipts": [
+        {
+          "iteration": 0,
+          "exit_code": 0,
+          "passed": 76,
+          "failed": 0,
+          "log": ".omo/evidence/resume-20261002/inherited-cleanup-diagnostic-v1-0.log",
+          "sha256": "3caa084e727803d76758b09d11037f510d014656e6dc799f408b929a6440ef52"
+        },
+        {
+          "iteration": 1,
+          "exit_code": 0,
+          "passed": 1,
+          "failed": 0,
+          "log": ".omo/evidence/resume-20261002/inherited-cleanup-diagnostic-v1-1.log",
+          "sha256": "25d56aa835e895fadb0fb04a702128e827b3beade9402d93898e172945e50e95"
+        },
+        {
+          "iteration": 2,
+          "exit_code": 0,
+          "passed": 1,
+          "failed": 0,
+          "log": ".omo/evidence/resume-20261002/inherited-cleanup-diagnostic-v1-2.log",
+          "sha256": "06f7d06e993542f320d55bbb5c0f38a5651cfc3f38ac48f9c9b72e1cd0b472cd"
+        },
+        {
+          "iteration": 3,
+          "exit_code": 0,
+          "passed": 1,
+          "failed": 0,
+          "log": ".omo/evidence/resume-20261002/inherited-cleanup-diagnostic-v1-3.log",
+          "sha256": "d18b2a1fa5b034a7b168f152b6a89aaae8228f9e49f978ce2028b867be22c2ae"
+        },
+        {
+          "iteration": 4,
+          "exit_code": 0,
+          "passed": 1,
+          "failed": 0,
+          "log": ".omo/evidence/resume-20261002/inherited-cleanup-diagnostic-v1-4.log",
+          "sha256": "06f7d06e993542f320d55bbb5c0f38a5651cfc3f38ac48f9c9b72e1cd0b472cd"
+        },
+        {
+          "iteration": 5,
+          "exit_code": 0,
+          "passed": 1,
+          "failed": 0,
+          "log": ".omo/evidence/resume-20261002/inherited-cleanup-diagnostic-v1-5.log",
+          "sha256": "8ea66737630dfa2aa3bed358dcbf98c062238c381d59f69c7def1c59ee8158a0"
+        },
+        {
+          "iteration": 6,
+          "exit_code": 0,
+          "passed": 1,
+          "failed": 0,
+          "log": ".omo/evidence/resume-20261002/inherited-cleanup-diagnostic-v1-6.log",
+          "sha256": "8ea66737630dfa2aa3bed358dcbf98c062238c381d59f69c7def1c59ee8158a0"
+        },
+        {
+          "iteration": 7,
+          "exit_code": 0,
+          "passed": 1,
+          "failed": 0,
+          "log": ".omo/evidence/resume-20261002/inherited-cleanup-diagnostic-v1-7.log",
+          "sha256": "06f7d06e993542f320d55bbb5c0f38a5651cfc3f38ac48f9c9b72e1cd0b472cd"
+        },
+        {
+          "iteration": 8,
+          "exit_code": 0,
+          "passed": 1,
+          "failed": 0,
+          "log": ".omo/evidence/resume-20261002/inherited-cleanup-diagnostic-v1-8.log",
+          "sha256": "d18b2a1fa5b034a7b168f152b6a89aaae8228f9e49f978ce2028b867be22c2ae"
+        },
+        {
+          "iteration": 9,
+          "exit_code": 0,
+          "passed": 1,
+          "failed": 0,
+          "log": ".omo/evidence/resume-20261002/inherited-cleanup-diagnostic-v1-9.log",
+          "sha256": "c50bcaefc5974f5e14d3c13a01891ac0f88bbf2304f83e4be4fac485c88790cd"
+        },
+        {
+          "iteration": 10,
+          "exit_code": 0,
+          "passed": 1,
+          "failed": 0,
+          "log": ".omo/evidence/resume-20261002/inherited-cleanup-diagnostic-v1-10.log",
+          "sha256": "d18b2a1fa5b034a7b168f152b6a89aaae8228f9e49f978ce2028b867be22c2ae"
+        }
+      ]
+    },
+    "root_cause": "Unproven; deadlines/assertions unchanged; complete postimage gate required."
+  },
+  "retired_sources": [
+    {
+      "path": "scripts/qa-kv-tool-loop-stability.py",
+      "sha256": "41ae3c301949a3a4a2993e17541b48e050968d82573b5b83a8ea1ca17013451d",
+      "mode": 493
+    },
+    {
+      "path": "scripts/tests/test_qa_kv_tool_loop_stability.py",
+      "sha256": "a0c3c4bfa70e4956cebb8bb0506d9cfe7f1a7584ca29ab39a482d21e4de1cd34",
+      "mode": 420
+    }
+  ],
+  "owner_sources": [
+    {
+      "path": "tools/xtask/src/automation/stability/kv_cache.rs",
+      "sha256": "0e554300ad9882e2285e7ea96a31c9b4c61beb3568cf15040a5b4d1aa555e50a"
+    },
+    {
+      "path": "tools/xtask/src/automation/stability/kv_cache_probe.rs",
+      "sha256": "8f20b8991d40103549829ce521aead9109500b72e24f7fa6c9d69dc2639f7603"
+    },
+    {
+      "path": "tools/xtask/src/automation/stability/kv_certification.rs",
+      "sha256": "95dc16f7afd53a1387897ec0d3040962ad7a45bb37de30cd60d24f578a5e4c2d"
+    },
+    {
+      "path": "tools/xtask/src/automation/stability/kv_conversation.rs",
+      "sha256": "d3f6404086a197c09005cbc5bad092ceeecb0bbbb5330bb262f724f71965a4a8"
+    },
+    {
+      "path": "tools/xtask/src/automation/stability/kv_mode.rs",
+      "sha256": "093ec9a4695f7b3408e52a51a27c2adef3bfe07ba6e221db2eb7d5e92fc12403"
+    },
+    {
+      "path": "tools/xtask/src/automation/stability/kv_native_logs.rs",
+      "sha256": "00657b658f6a7b7c47b6b9195de97f3b0904199b923de6439eb1cc0f8bc6e37c"
+    },
+    {
+      "path": "tools/xtask/src/automation/stability/kv_options.rs",
+      "sha256": "44dba86a5f949f7836dc086cfaa090838f050070543ffba3c479b7592d04f31f"
+    },
+    {
+      "path": "tools/xtask/src/automation/stability/kv_overlap.rs",
+      "sha256": "91ccc4ba91145dfa453d4dd796577f878814f249c1d1a407220a650bc7b96f4e"
+    },
+    {
+      "path": "tools/xtask/src/automation/stability/kv_overlap_tests.rs",
+      "sha256": "301329d30f9162696d2264c3a1f5ce03c9c9b3e9a78cad43cc1735745b843a56"
+    },
+    {
+      "path": "tools/xtask/src/automation/stability/kv_plans.rs",
+      "sha256": "92bcc4c6b3b962779d45a8aa5e75591b87e2b7af399e600f0d2f441ae1844481"
+    },
+    {
+      "path": "tools/xtask/src/automation/stability/kv_reports.rs",
+      "sha256": "c6d1f3ddca97073bb2366bd49c0854af12b66fc199c52098cea359d630827381"
+    },
+    {
+      "path": "tools/xtask/src/automation/stability/kv_requests.rs",
+      "sha256": "c293b003d60c94fe68e9e350afeda49a8afefbcb863268067ce0a3207f457700"
+    },
+    {
+      "path": "tools/xtask/src/automation/stability/kv_tool_calls.rs",
+      "sha256": "ec4cff75a55fde08ddae89912ca997d3d93e8a70e15f5b800aff9a796e48b879"
+    },
+    {
+      "path": "tools/xtask/src/automation/stability/kv_transcripts.rs",
+      "sha256": "5b4a419504aa6bbb61b286301082eef9f4ebd6bfad126bad256c7fe35c32dcb2"
+    },
+    {
+      "path": "tools/xtask/src/automation/stability/mod.rs",
+      "sha256": "83798467e5b37baae8c306fa98766cbe659077eee7631ceee3c7ae3f56c07ee9"
+    },
+    {
+      "path": "tools/xtask/src/ci_validation/workflow_guards/nightly_stability.rs",
+      "sha256": "930e18cc370e05d99d8335de47df6c808042516f55af92294ef688e7a1a18e6d"
+    },
+    {
+      "path": "tools/xtask/src/process/inherited_tests.rs",
+      "sha256": "ac9b29e4e81ea9630f7582c2c4b35caf12e6c9d5aad0b481a80509bdb22a39ea"
+    },
+    {
+      "path": "tools/xtask/tests/migration_stability.rs",
+      "sha256": "f9cee8a3deb53d6ce6591c01828fac1efa0f5d8050f3d8346c86dbe4c6e3de65"
+    },
+    {
+      "path": "tools/xtask/tests/migration_stability/kv_cases.rs",
+      "sha256": "e9f5e2afeafec6ecd0f6a2b49bcefb531d4ce4f08c479b578b0199c547c7b6e8"
+    },
+    {
+      "path": "tools/xtask/tests/migration_stability/kv_peer.rs",
+      "sha256": "c5a76456a657002042c9877060cdd32862e67893be3e8fa158ba0ea4025d3248"
+    }
+  ],
+  "retired_records": {
+    "inventory": [
+      {
+        "classification": "QA stability harness",
+        "deletion_condition": "Port generic orchestration; preserve exact recurrence/cache coverage and caller boundary.",
+        "exception": null,
+        "path": "scripts/qa-kv-tool-loop-stability.py",
+        "phase": 5,
+        "replacement_owner": "tools/xtask qa/process",
+        "required": false
+      },
+      {
+        "classification": "generic QA test",
+        "deletion_condition": "KV tool-loop contract tests remain required in replacement suite.",
+        "exception": null,
+        "path": "scripts/tests/test_qa_kv_tool_loop_stability.py",
+        "phase": 2,
+        "replacement_owner": "tools/xtask qa tests",
+        "required": true
+      }
+    ],
+    "test_ownership": [
+      {
+        "case_ownership": "Per-case replacement must test behavior, including positive, negative, edge and identity-preserving cases; source-text-only assertions do not qualify.",
+        "deletion_condition": "Delete only after deterministic cases and named live workflow coverage are retained.",
+        "gate": "Legacy just ci-validate; live behavior in its named optional/scheduled workflow",
+        "module": "scripts/tests/test_qa_kv_tool_loop_stability.py",
+        "owner": "Owning QA/benchmark component; generic orchestration in tools/xtask/src/process or automation",
+        "rust_or_ctest_gate": "Not yet ported; listed owner target is future migration ownership, not claimed execution.",
+        "sha256": "a0c3c4bfa70e4956cebb8bb0506d9cfe7f1a7584ca29ab39a482d21e4de1cd34",
+        "test_method_count": 18,
+        "test_methods": [
+          "test_cache_metrics_extract_openai_usage_tokens",
+          "test_cache_probe_fails_wrong_completion_even_with_cached_tokens",
+          "test_cache_threshold_reports_shortfall",
+          "test_log_scan_detects_memory_slot_and_eviction_errors",
+          "test_native_log_scan_ignores_preexisting_failures_after_checkpoint",
+          "test_native_log_scan_preserves_file_line_number_after_checkpoint",
+          "test_native_log_scan_reports_failures_appended_after_checkpoint",
+          "test_native_log_scan_reports_new_log_created_after_checkpoint",
+          "test_native_log_scan_rescans_truncated_log_after_checkpoint",
+          "test_overlap_requests_keep_same_prefix_and_distinct_tails",
+          "test_overlap_tool_loop_probe_runs_parallel_requests_and_cache_check",
+          "test_parse_native_logs_dedupes_env_and_cli_paths",
+          "test_plan_declares_tool_loop_cache_and_log_scan",
+          "test_prepare_transcript_dir_removes_stale_attempt_files",
+          "test_record_transcript_appends_within_attempt",
+          "test_run_certification_resets_transcripts_before_writing",
+          "test_tool_loop_requests_keep_stable_prefix_and_vary_tail",
+          "test_write_evidence_outputs_manifest_results_and_summary"
+        ]
+      }
+    ],
+    "test_groups": [
+      {
+        "file": "scripts/tests/test_qa_kv_tool_loop_stability.py",
+        "members": [
+          [
+            14,
+            "d02f77e6279e24a1",
+            1,
+            "dynamic-import",
+            "import",
+            "scripts/qa-kv-tool-loop-stability.py",
+            "fixed SCRIPT for cache tests"
+          ]
+        ]
+      }
+    ],
+    "additional_groups": [],
+    "python_implementation_groups": [],
+    "python_implementation_sources": [],
+    "python_implementation_edges": [],
+    "source_calls": []
+  },
+  "retired_callers": {
+    "github": {
+      "status": "APPLIED_CALLER_UNQUALIFIED",
+      "source": {
+        "path": ".github/workflows/nightly-stability-run.yml",
+        "sha256": "b476c0e179ee354cfb3c66dfff8dad9c6cd6861a630e51fe3e9e8530b49fc4f4"
+      },
+      "archived_python_callers": {
+        "file": ".github/workflows/nightly-stability-run.yml",
+        "members": [
+          [
+            181,
+            "cebac2970963c61a",
+            1,
+            "script",
+            "direct executable shebang scripts/qa-kv-tool-loop-stability.py --base-url $MESH_STABILITY_BASE_URL --models $MESH_KV_MODELS --attempts $MESH_KV_ATTEMPTS --pressure-turns $MESH_KV_PRESSURE_TURNS --overlap-requests $MESH_KV_OVERLAP_REQUESTS --timeout $MESH_STABILITY_TIMEOUT --min-cached-tokens $MESH_KV_MIN_CACHED_TOKENS --suffix-prefill-limit $MESH_KV_SUFFIX_PREFILL_LIMIT --output-dir $MESH_STABILITY_OUTPUT_DIR/kv-tool-loop; optional inputs.kv_tool_loop; later summary checks outcome"
+          ]
+        ]
+      },
+      "required_owner": {
+        "command": "automation stability kv-tool-loop",
+        "target": "migration_stability",
+        "workflow_guard": "ci_validation::workflow_guards::nightly_stability"
+      },
+      "legacy_owner_retained": true,
+      "limits": [
+        "Local focused implementation tests passed; caller cutover and full gate pending.",
+        "No live model or hosted nightly qualification."
+      ]
+    },
+    "skill": {
+      "status": "APPLIED_CALLER_UNQUALIFIED",
+      "source": {
+        "path": ".agents/skills/kv-tool-loop-stability/SKILL.md",
+        "sha256": "d652f8bc86ef64c7be7d02b42da77580cb1c38dc949de33c9639a42ca12cfc8e"
+      },
+      "archived_python_callers": {
+        "file": ".agents/skills/kv-tool-loop-stability/SKILL.md",
+        "members": [
+          [
+            40,
+            "cebac2970963c61a",
+            1,
+            "instruction",
+            "scripts/qa-kv-tool-loop-stability.py",
+            "Manual --print-plan preview --base-url/--models/--attempts/--pressure-turns/--timeout/--min-cached-tokens/--suffix-prefill-limit/--native-log/--output-dir; does not contact endpoint in preview"
+          ],
+          [
+            56,
+            "cebac2970963c61a",
+            2,
+            "instruction",
+            "scripts/qa-kv-tool-loop-stability.py",
+            "Same named Python shebang with live endpoint and output-dir, without --print-plan; produces certification summary and endpoint traffic"
+          ],
+          [
+            83,
+            "bc0ef86506b2d475",
+            1,
+            "instruction",
+            "python3 -m unittest scripts.tests.test_qa_kv_tool_loop_stability",
+            "Developer validation of Python harness; test module imports/subprocess closure owned by test shard, not a required CI call from this Markdown"
+          ],
+          [
+            84,
+            "899d5968614064d4",
+            1,
+            "instruction",
+            "python3 -m py_compile scripts/qa-kv-tool-loop-stability.py scripts/tests/test_qa_kv_tool_loop_stability.py",
+            "Developer syntax validation, can create __pycache__, status nonzero on syntax failure; no live endpoint"
+          ]
+        ]
+      },
+      "required_owner": {
+        "command": "automation stability kv-tool-loop",
+        "target": "migration_stability",
+        "workflow_guard": "ci_validation::workflow_guards::nightly_stability"
+      },
+      "legacy_owner_retained": true,
+      "limits": [
+        "Local focused implementation tests passed; caller cutover and full gate pending.",
+        "No live model or hosted nightly qualification."
+      ]
+    }
+  },
+  "required_owner": {
+    "target": "migration_stability",
+    "module": "kv_cases",
+    "normal_recipe": "ci-automation-contracts",
+    "workflow_guard": "ci_validation::workflow_guards::nightly_stability"
+  },
+  "limits": [
+    "Finite local fixtures only; no actual model cache or hosted qualification.",
+    "Windows and concurrent HTTPS KV cohorts remain unqualified."
+  ],
+  "previous_activation_status": "APPLIED_POSTIMAGE_UNQUALIFIED",
+  "qualification": {
+    "source_head": "2c8acd66fdc237b32c52217a81679cbe48ba9a30",
+    "receipts": {
+      "path": ".omo/evidence/resume-20261002/kv-retirement-postimage-v1-receipts.json",
+      "sha256": "8df1e27cc3e787c8d17ef3ac0ff6dd1170a46cc05dce6ffee9014ab6b0b71804"
+    },
+    "normal": {
+      "targets": 112,
+      "passed": 4474,
+      "failed": 0,
+      "ignored": 2,
+      "legacy": {
+        "run": 801,
+        "passed": 787,
+        "failed": 0,
+        "skipped": 14,
+        "seconds": 404.844
+      },
+      "log": ".omo/evidence/resume-20261002/kv-retirement-postimage-v1-normal.log",
+      "sha256": "078198d29f32ec79d549dffcd55fcd8d49752d8b36174d8efd407a7b7baf2698"
+    },
+    "focused": {
+      "units": 42,
+      "actual_cli": 28,
+      "log": ".omo/evidence/resume-20261002/kv-retirement-postimage-v1-native.log",
+      "sha256": "764fabfc459fe24c13ba18b7f5a2e381aa855e54c33d9b68584869090eca9ed4"
+    },
+    "limits": "Local macOS fixture and contract qualification. Hosted execution, Linux/Windows/GPU/model and SDK acceptance remain unverified. Optional OpenCode Python closure remains open. Prior inherited cleanup failure cause remains unproven; diagnostics preserve deadlines/assertions; full prepared_source and ten exact repeats passed before this full postimage gate."
+  }
+}

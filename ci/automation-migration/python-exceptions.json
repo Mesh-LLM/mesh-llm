@@ -1,0 +1,1003 @@
+{
+  "schema_version": 1,
+  "task": 3,
+  "policy": "Only exact existing paths with named callers, local dependency files, cadence, purpose, and isolation evidence qualify. Transitional generic automation is never an ecosystem exception.",
+  "exceptions": [
+
+  ],
+  "explicit_non_exceptions": [
+    {
+      "path": "scripts/ci-openai-workload-smoke.py",
+      "reason": "Generic stdlib HTTP/protocol smoke; replacement is Rust QA/protocol tests or tools/xtask, not an external ecosystem implementation."
+    },
+    {
+      "path": "scripts/reconcile-two-node-split-evidence.py",
+      "reason": "Generic evidence validation in required smoke closure; move to tools/xtask QA/evidence."
+    },
+    {
+      "path": "scripts/run-command-with-timeout.py",
+      "reason": "Generic process orchestration; no ecosystem behavior."
+    },
+    {
+      "path": "scripts/plan-ci.py",
+      "reason": "Required repository CI planner; migrate to tools/xtask, not retained as Python."
+    },
+    {
+      "path": "scripts/collect-ci-metrics.py",
+      "reason": "Generic read-only report/evidence processing; migrate to tools/xtask."
+    },
+    {
+      "path": ".agents/skills/release-validation/scripts/collect-release-inventory.py",
+      "reason": "Skill-local generic release inventory automation is not an ecosystem dependency; task-5 owner is tools/xtask."
+    }
+  ],
+  "instruction_examples": [
+    {
+      "path": ".agents/skills/skippy-cache-family-bench/SKILL.md",
+      "examples": [
+        "python3 evals/skippy-cache-production-bench.py ...",
+        "python3 evals/skippy-cache-family-report.py ..."
+      ],
+      "owner": "tools/xtask benchmark/evidence commands",
+      "cutover_task": 5,
+      "status": "native_caller_cutover_historical_examples_only",
+      "task5_negative_fixture": true,
+      "current_source_binding": {
+        "path": ".agents/skills/skippy-cache-family-bench/SKILL.md",
+        "sha256": "de4dd7d3803d24fb5a07b69a23d9c32c84f41d4b3e62e720ff2fb28791e47d25",
+        "line_count": 109
+      },
+      "latest_review": "Historical examples preserved as history; actual skill and wrapper use native owners. These three generic Python implementations are not retained ecosystem exceptions.",
+      "historical_source_binding": {
+        "path": ".agents/skills/skippy-cache-family-bench/SKILL.md",
+        "sha256": "754def93983ed96e422e2e512226808b407a92d7d1d49e692a1e09b07c5a4f5a",
+        "line_count": 82
+      }
+    },
+    {
+      "path": ".agents/skills/skippy-bench/SKILL.md",
+      "examples": [
+        "uv tool install --python 3.12 terminal-bench",
+        "upstream SWE-Agent Python instance generation",
+        "standalone Python/SWE-Rex Docker runtime",
+        "python:3.11.9-slim-bookworm builder"
+      ],
+      "owner": "tools/xtask owns repository planning/orchestration/evidence; upstream eval runtime may remain only as explicit external benchmark use",
+      "cutover_task": 5,
+      "status": "actionable_migration_and_external_runtime_reference"
+    },
+    {
+      "path": ".agents/skills/kv-tool-loop-stability/SKILL.md",
+      "examples": [
+        "python3 -m unittest scripts.tests.test_qa_kv_tool_loop_stability",
+        "python3 -m py_compile scripts/qa-kv-tool-loop-stability.py scripts/tests/test_qa_kv_tool_loop_stability.py"
+      ],
+      "owner": "tools/xtask test/QA command",
+      "cutover_task": 5,
+      "status": "actionable_migration_example"
+    },
+    {
+      "path": ".agents/skills/llama-stage-patch-changes/SKILL.md",
+      "examples": [
+        "python3 scripts/generate-skippy-api-doc.py",
+        "python3 scripts/generate-skippy-api-doc.py --check"
+      ],
+      "owner": "tools/xtask docs generation/check command",
+      "cutover_task": 5,
+      "status": "actionable_migration_example"
+    },
+    {
+      "path": ".agents/skills/release-notes/SKILL.md",
+      "examples": [
+        "python3 scripts/release-notes-regroup.py ...",
+        "python3 scripts/release-notes-classify.py ..."
+      ],
+      "owner": "tools/xtask release notes commands",
+      "cutover_task": 5,
+      "status": "actionable_migration_example"
+    },
+    {
+      "path": ".agents/skills/deploy-macos/SKILL.md",
+      "examples": [
+        "python3 -m json.tool"
+      ],
+      "owner": "jq or native mesh-llm JSON output",
+      "cutover_task": 5,
+      "status": "display_only_not_repository_automation",
+      "current_source_binding": {
+        "path": ".agents/skills/deploy-macos/SKILL.md",
+        "sha256": "232bc7b9ce43074e696c997a734f2ce6ec8f1be9b70b4a82c024f5d9d6efa416",
+        "line_count": 212
+      },
+      "latest_review": "Generic JSON display uses jq; family report uses typed owner. Historical example records retained; no live/platform benchmark qualification implied."
+    },
+    {
+      "path": ".agents/skills/deploy-linux-gpu/SKILL.md",
+      "examples": [
+        "python3 -m json.tool"
+      ],
+      "owner": "jq or native mesh-llm JSON output",
+      "cutover_task": 5,
+      "status": "display_only_not_repository_automation",
+      "current_source_binding": {
+        "path": ".agents/skills/deploy-linux-gpu/SKILL.md",
+        "sha256": "a19fabf8bad1535f738a267e52837a0e7d8f7e8d530f99bc856ca8a97570b8d1",
+        "line_count": 208
+      },
+      "latest_review": "Generic JSON display uses jq; family report uses typed owner. Historical example records retained; no live/platform benchmark qualification implied."
+    },
+    {
+      "path": ".agents/skills/mesh-join/SKILL.md",
+      "examples": [
+        "python3 -m json.tool"
+      ],
+      "owner": "jq or native mesh-llm JSON output",
+      "cutover_task": 5,
+      "status": "display_only_not_repository_automation",
+      "current_source_binding": {
+        "path": ".agents/skills/mesh-join/SKILL.md",
+        "sha256": "9e51f4bbfc2a5868ed6cb471574c33ce770f9b4b31e2958196a409b072982364",
+        "line_count": 142
+      },
+      "latest_review": "Generic JSON display uses jq; family report uses typed owner. Historical example records retained; no live/platform benchmark qualification implied."
+    },
+    {
+      "path": ".agents/skills/hf-bf16-gguf-conversion-jobs/SKILL.md",
+      "examples": [
+        "hf jobs uv run ..."
+      ],
+      "owner": "tools/xtask planning plus Hugging Face job SDK entrypoint",
+      "cutover_task": 5,
+      "status": "actionable_remote_job_example"
+    },
+    {
+      "path": ".agents/skills/hf-gguf-quant-jobs/SKILL.md",
+      "examples": [
+
+      ],
+      "owner": "Integrated native supplied-quantizer Jobs orchestration; not a retained Python exception",
+      "cutover_task": 5,
+      "status": "native_supplied_quantizer_jobs_integrated_unqualified",
+      "current_source_binding": {
+        "path": ".agents/skills/hf-gguf-quant-jobs/SKILL.md",
+        "sha256": "6f980a2b11fcc19eb138cc8ca277870e38cdd36338404926537190eaccfa3dbb",
+        "line_count": 186
+      },
+      "latest_review": "Native model-package-generic-jobs facade and automation hf-certify quant-job-worker route are integrated in current operator guidance. A supplied immutable supported quantizer remains required: the current source-built quant backend rejects the memory bound and partial split windows. Real-tool/model execution, peak RSS and hosted workflow qualification remain unproven; no execution, new Python exception or capability completion is recorded."
+    },
+    {
+      "path": ".agents/skills/hf-quant-and-layer-package-jobs/SKILL.md",
+      "examples": [
+
+      ],
+      "owner": "Integrated native supplied-quantizer Jobs orchestration; not a retained Python exception",
+      "cutover_task": 5,
+      "status": "native_supplied_quantizer_jobs_integrated_unqualified",
+      "current_source_binding": {
+        "path": ".agents/skills/hf-quant-and-layer-package-jobs/SKILL.md",
+        "sha256": "74e0fa643a0bfdbedb947120b129847f3cf5dc41f0c5ca57cf31973b66a3a142",
+        "line_count": 164
+      },
+      "latest_review": "Native model-package-generic-jobs facade and automation hf-certify quant-job-worker route are integrated in current operator guidance. A supplied immutable supported quantizer remains required: the current source-built quant backend rejects the memory bound and partial split windows. Real-tool/model execution, peak RSS and hosted workflow qualification remain unproven; no execution, new Python exception or capability completion is recorded."
+    },
+    {
+      "path": ".agents/skills/release-validation/references/evidence-and-gates.md",
+      "examples": [
+
+      ],
+      "owner": "retain human evidence matrix and decision criteria; machine evidence commands belong to tools/xtask",
+      "cutover_task": 5,
+      "status": "reviewed_no_interpreter_automation"
+    },
+    {
+      "path": ".agents/skills/release-validation/assets/release-validation-report-template.md",
+      "examples": [
+
+      ],
+      "owner": "retain human-authored report template populated using tools/xtask outputs",
+      "cutover_task": 5,
+      "status": "reviewed_no_executable_examples"
+    }
+  ],
+  "unresolved_qualification_count": 4,
+  "unresolved_note": "Local exceptions retired through native reader/corpus ownership and complete external project extraction; existing platform/model SDK qualification remains unverified.",
+  "current_wave_source_bindings": [
+    {
+      "path": "scripts/skippy-family-battery.sh",
+      "sha256": "bb92b9635fb12d345cd3c68cd3566901de46b9b3564b98a2c4f4fa7a67b3dcaf",
+      "line_count": 1015
+    },
+    {
+      "path": "scripts/ci-opencode-smoke.sh",
+      "sha256": "93e90cefb60a24f04e374319279a2013b9d8187e348b1d5061e733068e61b029",
+      "line_count": 525
+    },
+    {
+      "path": "scripts/ci-compat-smoke.sh",
+      "sha256": "b071d380556f12a7427b30ff1f5bb9960ea8ba932d3a738d5654daf09becd63d",
+      "line_count": 146,
+      "projected_source": ".omo/evidence/resume-20261002/sdk-native-supervision-http-draft-v3/files/ci-compat-smoke.sh"
+    },
+    {
+      "path": "scripts/skippy-workload-certify.sh",
+      "sha256": "c149de8b7aedc34b4d1f3d27f060840eba160318dde9fa1a755ee00964244fba",
+      "line_count": 459,
+      "projected_source": ".omo/evidence/resume-20261002/sdk-native-supervision-http-draft-v3/files/skippy-workload-certify.sh"
+    },
+    {
+      "path": ".github/actions/upload-automation/action.yml",
+      "sha256": "fcd8cbeb697b636551cd7183b9bc25507dbc2f5b62a4b6f045b489f70772cbd1",
+      "line_count": 116
+    },
+    {
+      "path": ".github/actions/restore-automation/action.yml",
+      "sha256": "8f189c95535696cce7164866f0e6d0412f13648dce84f2e4035bc7fb40c49309",
+      "line_count": 96
+    },
+    {
+      "path": ".github/workflows/ci-quality-slice.yml",
+      "sha256": "1df13a9910ce1a5a2bf57913fb32ddbb5fc12145870a664b24d286b0fc1dc3c9",
+      "line_count": 649
+    },
+    {
+      "path": ".github/actions/setup-canary-python/action.yml",
+      "sha256": "18ad9326a50180dee8f80b5b064b79b55af7fdf2d874ff0fe93e4f7131160a6f",
+      "line_count": 51
+    },
+    {
+      "path": ".github/workflows/smoke.yml",
+      "sha256": "9752ca1e1f0408d6fd8dc52aa46652aeaa5c44c4a195250c1302ffc92f7558fc",
+      "line_count": 454
+    },
+    {
+      "path": "ci/required-sdk-python/pyproject.toml",
+      "sha256": "50191adcecfd5e387d42d21b577cae76fa82d25c2627864021f8ada9c7de7cd7",
+      "line_count": 5
+    },
+    {
+      "path": "ci/required-sdk-python/uv.lock",
+      "sha256": "c83abb8b07ea1ab8f84267c87fd136182596c1bbb626321e1aff90783eeb00e6",
+      "line_count": 1236
+    },
+    {
+      "path": "ci/required-sdk-python/requirements.lock",
+      "sha256": "e60a887ad0e8f353d0df5fc764dd00b663c8f766a246b33282e041ebf3d31ec6",
+      "line_count": 720
+    }
+  ],
+  "current_wave_intent_proofs": {
+    "battery": "family_battery_policy_cli; family_model_identity_cli; family_battery_environment; family_battery_prepared_source; source_plan/battery_tests",
+    "opencode": "opencode_config_adapter; agent_client_config_cli; agent_fixture_inputs_cli; agent_fixture_evidence_cli",
+    "protected": "automation_restore_admission; automation_producer_admission",
+    "sdk": "required_sdk_environment_admission; actual required clients remain required; SDK dependency receipt is not runtime/model qualification",
+    "validation": "Parent validation pending; no retirement or aggregate counts changed"
+  },
+  "latest_wave_reconciliation": {
+    "source_snapshot": "Frozen source after provenance/package local qualification; pending full latest validation union",
+    "python_paths": 196,
+    "just_roster": 109,
+    "removed_edges": [
+
+    ],
+    "limits": "Surviving generic quality roster, native smoke/oracle/manual protected and real required SDK/model/platform qualifications remain open; no exception or gate demotion."
+  },
+  "next_wave_source_reconciliation": {
+    "python_paths": 193,
+    "just_roster": 106,
+    "source_snapshot": "Current maintained next-wave callers; parent owns pending aggregate validation.",
+    "source_bindings": [
+      {
+        "path": "scripts/skippy-ci-smoke.sh",
+        "sha256": "a5732e266792ee1ff34461e0101020cbeb40a6dddd0bc568cf122ea556efbb04",
+        "line_count": 675
+      },
+      {
+        "path": "scripts/skippy-workload-certify.sh",
+        "sha256": "607705da433c993e9fc22c7761b3cd4ddf2f0812ea1db47d5ea645c55bb059e0",
+        "line_count": 460
+      },
+      {
+        "path": "scripts/llama-canary-agent-repair.sh",
+        "sha256": "b7309c24cde4efd37565cb74f2050705995d1794175fd67502b13e578a8ad340",
+        "line_count": 1038,
+        "previous_projected_source_sha256": "e5b5a7edf0bbaaa5ad418e60a2a0d96d94aad08a727bd743a3340d82971eb9ac"
+      },
+      {
+        "path": ".github/workflows/ci-quality-slice.yml",
+        "sha256": "1df13a9910ce1a5a2bf57913fb32ddbb5fc12145870a664b24d286b0fc1dc3c9",
+        "line_count": 649
+      },
+      {
+        "path": "ci/requirements-ci-python.txt",
+        "sha256": "71749243f84428fee225bfaa796dca5ef6c1e83a98f6d2a407df615b0390d6fb",
+        "line_count": 1
+      },
+      {
+        "path": "ci/model-artifacts/registry.json",
+        "sha256": "68fd45eb701e8688c3fd9659e5264781f9bd2a66e0886ac24b287a55cab8176d",
+        "line_count": 5163
+      },
+      {
+        "path": "ci/llama-canary/family-certified.json",
+        "sha256": "bd4f1e44cda7c6012ffe21526011e57a3b1f485e4172e077b39d5a9339f0f948",
+        "line_count": 1009
+      },
+      {
+        "path": "ci/fixtures/ocr-mesh-42.png",
+        "sha256": "ff5f6c29aa9b06d1c577561c6cddcfce8b06f40a8c316542ec64fbc2fdd9c009",
+        "byte_count": 1171
+      },
+      {
+        "path": "ci/fixtures/skippy-cache-prompt-input.txt",
+        "sha256": "a3365eb075c947db63618e9794af77aaed7c1eac39c9be4f88e9d6c2a5e47055",
+        "line_count": 7
+      },
+      {
+        "path": "ci/model-artifacts/manifests/competitive-benchmark.json",
+        "sha256": "bc1ec8b8d29da9e410f52208b9d635fe63edeab61fe36c3cfc072f757a8a14ca",
+        "line_count": 166
+      },
+      {
+        "path": "ci/model-artifacts/manifests/hf-download-smoke.json",
+        "sha256": "9028f99b7ca01f74d0cc48b2e2f0183136d776808642adb5fb02781c3ea6058a",
+        "line_count": 90
+      },
+      {
+        "path": "ci/model-artifacts/manifests/openai-smoke.json",
+        "sha256": "94153eb1fe4053716a551a4bdf14e1ea293cd66bf9863872047f38ce0d59b4a6",
+        "line_count": 48
+      },
+      {
+        "path": "ci/model-artifacts/manifests/product-smoke.json",
+        "sha256": "8aecfe0173af47797c2775822f553bfc313282554a71b327147ee9682ccdaef1",
+        "line_count": 135
+      },
+      {
+        "path": "ci/model-artifacts/manifests/radix-cache.json",
+        "sha256": "3cb2a784bc5d3c26f4a01277a9e053b57bdf41641233fea8057584d38e7d500d",
+        "line_count": 166
+      },
+      {
+        "path": "ci/model-artifacts/manifests/safetensors-runtime-smoke.json",
+        "sha256": "2d3fb11c3abdec1d755a8f2a56f8784e05a83b4ebb206b32ef2d2b81aeee37c7",
+        "line_count": 98
+      },
+      {
+        "path": "ci/model-artifacts/manifests/scripted-binary-smoke.json",
+        "sha256": "60592d9c7cab96c5721d47055f9b80f56fced30e4d9eac70c07023654cd0bef5",
+        "line_count": 90
+      },
+      {
+        "path": "ci/model-artifacts/manifests/sdk-smoke.json",
+        "sha256": "6154b50c5ede26b701def7f7af126f05bf494ac55d05420cc9d0d25b6ed7ac45",
+        "line_count": 49
+      },
+      {
+        "path": "ci/model-artifacts/manifests/skippy-ci-smoke.json",
+        "sha256": "6273529c817393c7685da8367eb01d8d993d978863bbed7d14c1bbbb0d8ef02e",
+        "line_count": 92
+      },
+      {
+        "path": "ci/model-artifacts/manifests/skippy-correctness.json",
+        "sha256": "69810320b57be99e90fb5fe4ab7c07840b6beac892f7f9ed130b8d38e397d75b",
+        "line_count": 47
+      },
+      {
+        "path": "ci/model-artifacts/manifests/skippy-parity.json",
+        "sha256": "5b40f91900bb0034087a0f6423257c2e0d3cfb92b34e260fabe7556c6f3079e6",
+        "line_count": 202
+      },
+      {
+        "path": "ci/model-artifacts/manifests/skippy-system-one-smoke.json",
+        "sha256": "d115a51a0652038e6eb7d3f64125f02b30910f094ce7505c78636b83f0ae9c56",
+        "line_count": 135
+      }
+    ],
+    "generated_registry_bindings": [
+      {
+        "path": "ci/model-artifacts/manifests/competitive-benchmark.json",
+        "registry_sha256": "68fd45eb701e8688c3fd9659e5264781f9bd2a66e0886ac24b287a55cab8176d"
+      },
+      {
+        "path": "ci/model-artifacts/manifests/hf-download-smoke.json",
+        "registry_sha256": "68fd45eb701e8688c3fd9659e5264781f9bd2a66e0886ac24b287a55cab8176d"
+      },
+      {
+        "path": "ci/model-artifacts/manifests/openai-smoke.json",
+        "registry_sha256": "68fd45eb701e8688c3fd9659e5264781f9bd2a66e0886ac24b287a55cab8176d"
+      },
+      {
+        "path": "ci/model-artifacts/manifests/product-smoke.json",
+        "registry_sha256": "68fd45eb701e8688c3fd9659e5264781f9bd2a66e0886ac24b287a55cab8176d"
+      },
+      {
+        "path": "ci/model-artifacts/manifests/radix-cache.json",
+        "registry_sha256": "68fd45eb701e8688c3fd9659e5264781f9bd2a66e0886ac24b287a55cab8176d"
+      },
+      {
+        "path": "ci/model-artifacts/manifests/safetensors-runtime-smoke.json",
+        "registry_sha256": "68fd45eb701e8688c3fd9659e5264781f9bd2a66e0886ac24b287a55cab8176d"
+      },
+      {
+        "path": "ci/model-artifacts/manifests/scripted-binary-smoke.json",
+        "registry_sha256": "68fd45eb701e8688c3fd9659e5264781f9bd2a66e0886ac24b287a55cab8176d"
+      },
+      {
+        "path": "ci/model-artifacts/manifests/sdk-smoke.json",
+        "registry_sha256": "68fd45eb701e8688c3fd9659e5264781f9bd2a66e0886ac24b287a55cab8176d"
+      },
+      {
+        "path": "ci/model-artifacts/manifests/skippy-ci-smoke.json",
+        "registry_sha256": "68fd45eb701e8688c3fd9659e5264781f9bd2a66e0886ac24b287a55cab8176d"
+      },
+      {
+        "path": "ci/model-artifacts/manifests/skippy-correctness.json",
+        "registry_sha256": "68fd45eb701e8688c3fd9659e5264781f9bd2a66e0886ac24b287a55cab8176d"
+      },
+      {
+        "path": "ci/model-artifacts/manifests/skippy-parity.json",
+        "registry_sha256": "68fd45eb701e8688c3fd9659e5264781f9bd2a66e0886ac24b287a55cab8176d"
+      },
+      {
+        "path": "ci/model-artifacts/manifests/skippy-system-one-smoke.json",
+        "registry_sha256": "68fd45eb701e8688c3fd9659e5264781f9bd2a66e0886ac24b287a55cab8176d"
+      }
+    ],
+    "limits": "Source-bound caller reconciliation only. Generic Python implementations and unqualified test methods retained; required SDK, native, model, platform and protected gates unchanged. Literal typed command selection and continued argv are reviewed, but runtime dynamic expansion is not parser-complete reachability proof.",
+    "removed_edges": [
+
+    ],
+    "rebound_rows": [
+
+    ]
+  },
+  "next_wave_comparator_and_test_retirement": {
+    "coverage": "ci/automation-migration/next-wave-test-tts-retirement-coverage.json",
+    "removed_paths": [
+      "scripts/tests/test_publish_crates.py",
+      "scripts/tests/test_llama_oracle_source.py",
+      "scripts/tests/test_ci_cargo_packages.py",
+      "scripts/tests/test_skippy_tts_oracle.py",
+      "scripts/skippy-tts-oracle.py",
+      "scripts/tts_oracle_metrics.py",
+      "scripts/tests/test_workload_monolithic_oracle.py",
+      "scripts/ci-workload-monolithic-oracle.py",
+      "scripts/workload_fixtures.py",
+      "scripts/tests/test_skippy_ocr_asr_oracle.py",
+      "scripts/skippy-ocr-asr-oracle.py",
+      "scripts/generate-ocr-oracle-fixture.py"
+    ],
+    "legacy_methods": 53,
+    "python_paths": 181,
+    "just_roster": 100,
+    "proof_status": "Parent accepted current owning component targets; actual deletion/staging/full inventory and whole-wave validation belong to parent",
+    "helpers_retained": [
+      "scripts/llama-oracle-source.py",
+      "scripts/ci-cargo-packages.py",
+      "scripts/check-skippy-workload-candidate.py",
+      "all actual required SDK clients"
+    ],
+    "limits": "Finite local synthetic/native producer subprocess fixtures and typed owner unit/CLI proofs only. No live publication, native/model, required SDK runtime, platform or protected historical qualification. Preserve frozen history and every unrelated active gate.",
+    "projected_just_sha256": "da1d0bb5e107dda45a7b52f4f7153c83a34e4f2f56dd8f1907eaa208416af644",
+    "projected_just_launch_hash": "88eb6efa25e33eb3",
+    "retired_nonexception_records": [
+      {
+        "path": "scripts/skippy-ocr-asr-oracle.py",
+        "reason": "Model oracle path is not yet qualified. Its named callers, cadence, local dependencies and separation from generic process/evidence logic remain unresolved."
+      },
+      {
+        "path": "scripts/skippy-tts-oracle.py",
+        "reason": "Model oracle path is not yet qualified. Its named callers, cadence, local dependencies and separation from generic process/evidence logic remain unresolved."
+      }
+    ]
+  },
+  "current_quality_rust_coverage": {
+    "recipe": "just ci-automation-contracts",
+    "target_registry": "ci/automation-migration/quality-rust-contract-targets.json",
+    "integration_targets": 84,
+    "unit_target": "xtask",
+    "sources": {
+      "just/ci.just": {
+        "sha256": "74ef6a128266450bb05f03fc83ec16078836677498c701946844ae22019faf9b",
+        "line_count": 270
+      },
+      ".github/workflows/ci-quality-slice.yml": {
+        "sha256": "1df13a9910ce1a5a2bf57913fb32ddbb5fc12145870a664b24d286b0fc1dc3c9",
+        "line_count": 649
+      }
+    },
+    "status": "Authored wiring only; parent must integrate and qualify normal ci-validate. Legacy roster, PyYAML and all required SDK/native/model/protected gates retained.",
+    "scope": "No Python edges removed. All existing row identities/occurrences preserved; changed workflow line positions/source snapshots rebound.",
+    "current_admission_selection_extension": {
+      "added_targets": [
+        "automation_selector",
+        "canary_cache_configuration",
+        "canary_controller_plan",
+        "family_battery_environment",
+        "family_battery_prepared_source",
+        "openai_smoke_config"
+      ],
+      "previous_targets": 78,
+      "current_targets": 84,
+      "scope": "Six current mandatory caller/admission suites; no native/model/SDK/network execution. Existing78 selections preserved. Unix shell groups remain cfg-unix; no Windows qualification claim. Optional OpenCode/lane-only suites remain separate.",
+      "source_bindings": [
+        {
+          "path": "tools/xtask/tests/automation_selector.rs",
+          "sha256": "8d20ede45ec3e9657ff77a319457ee6e5d686ddb4625493e1cf03f400d41327c"
+        },
+        {
+          "path": "tools/xtask/tests/canary_cache_configuration.rs",
+          "sha256": "1d648c36f195cf3f6aa2858386fee8170816a5ea7cb55db3876e0430649cd155"
+        },
+        {
+          "path": "tools/xtask/tests/canary_controller_plan.rs",
+          "sha256": "f5891685f7c8fd026f2bf51815090e981982c2b60de172fd9d1a252c005bfa62"
+        },
+        {
+          "path": "tools/xtask/tests/family_battery_environment.rs",
+          "sha256": "bbc23fa6da3c9af1dbf5dd2a406a47f1a3a8470b5df84eb41eaa9fab64fcae14"
+        },
+        {
+          "path": "tools/xtask/tests/family_battery_prepared_source.rs",
+          "sha256": "0fab0ec7ae3a03b0de4fafa60293155f417ec94b6e437f2348a2d05b43e8dedd"
+        },
+        {
+          "path": "tools/xtask/tests/openai_smoke_config.rs",
+          "sha256": "d6bb4c5d9ae76421f04b3cf8e2154ba1189e712aa7372a2770fb460984f9df75"
+        }
+      ]
+    }
+  },
+  "repair_timeout_integration": {
+    "source": {
+      "path": "scripts/llama-canary-agent-repair.sh",
+      "preimage_sha256": "4c0a8a8cde5c90b7c24ce71811452dba6134e0fbaad2ad743b3144d5f7495891",
+      "sha256": "0e99dab4de639bd11b15f76078c9b7ec007c0d8f35a4ad8d25db3a2a501c0d10",
+      "line_count": 973,
+      "previous_projected_source_sha256": "e5b5a7edf0bbaaa5ad418e60a2a0d96d94aad08a727bd743a3340d82971eb9ac"
+    },
+    "qualification": "Authored, unrun; parent must qualify the transaction before any legacy retirement",
+    "retained": "All Python helpers and legacy tests remain. Normal verify timeout helper remains reachable; no inventory/roster reductions.",
+    "rebound_rows": [
+
+    ]
+  },
+  "projected_final_repair_caller_binding": {
+    "source": "scripts/llama-canary-agent-repair.sh",
+    "sha256": "0e99dab4de639bd11b15f76078c9b7ec007c0d8f35a4ad8d25db3a2a501c0d10",
+    "line_count": 973,
+    "inputs": {
+      ".omo/evidence/resume-20261002/just-layout-whitelist-ledger-refresh/manifest.json": "f77250464ed20b532d0a6674d974fedae622c53e28097acc49537f3f89050b7e",
+      ".omo/evidence/resume-20261002/next-wave-post-whitelist-rebase/combined/manifest.json": "7110ce7d6cd11a7fa99ad68d9b5437645e88656ac7f2888c483367fe038e2e08",
+      ".omo/evidence/resume-20261002/repair-family-plan-cache-candidate/manifest.json": "37a437bd5b856eda3e2856a4a34b1bb13af3851e9ab91342389dd5beaf9dd3cf",
+      ".omo/evidence/resume-20261002/local-repair-inspection-candidate/manifest.json": "46b5d4cd5484966a05e57e8a15b6fd85d7d6f3f718c49ed317e0f211d0d15910",
+      ".omo/evidence/resume-20261002/local-repair-inspection-candidate/layer-1/manifest.json": "e67cdcc84d92268c46d7570010d90fa6d3fe32bfad26382d65e1ac368c434339",
+      ".omo/evidence/resume-20261002/system-one-cases-candidate/manifest.json": "18d9bb1660613ab33cd7ab3eb8c34ab8ea7538b70c5310114a1b385936788626",
+      ".omo/evidence/resume-20261002/system-one-cases-candidate/layer-1/manifest.json": "11bff1ed60981379791c58fa84801428c3beec628a8efaa8923ba1519d9c6c97",
+      ".omo/evidence/resume-20261002/system-one-cases-candidate/layer-2/manifest.json": "0bc116416a93c402a81f588d6f335c34b0fec3c5d12aad0963a559658a837ca5",
+      ".omo/evidence/resume-20261002/next-wave-post-whitelist-rebase/system-one/manifest.json": "a1e00edc5234bf6fa0a2d62b9fcf4022bf963afd7731b8e2004114539b0153b4"
+    },
+    "qualification": "Authored/source-only; required scanner correction and parent tests/inventory pending",
+    "retained_python_fallback_lines": [
+      208,
+      266,
+      272,
+      464,
+      672,
+      679,
+      752,
+      762
+    ],
+    "retained_component_environment_line": 608,
+    "local_inspection_calls": [
+      461,
+      669,
+      750,
+      760
+    ],
+    "no_counts_or_roster_changes": true,
+    "workflow_trust_boundaries": "All workflow payloads/permissions/pins/platform records unchanged by this ledger transaction; normal repair local authority never becomes immutable workflow receipt."
+  },
+  "normal_verify_caller_cutover": {
+    "status": "authored_unqualified; source-bound integration, runtime qualification pending",
+    "source_bindings": [
+      {
+        "path": "scripts/llama-canary-agent-repair.sh",
+        "sha256": "b7309c24cde4efd37565cb74f2050705995d1794175fd67502b13e578a8ad340",
+        "line_count": 1038
+      },
+      {
+        "path": "tools/xtask/src/migration_inventory/selected_repair.rs",
+        "sha256": "c93ede840a5c275c32bb299a83b8e60e708e3943a9a30efd529764271dffa8fc",
+        "line_count": 358
+      },
+      {
+        "path": "tools/xtask/src/migration_inventory/selected_repair_tests.rs",
+        "sha256": "06fde27c3b66366403a529b3e8d6c92e2cb01e29c774525ea720d75b44313938",
+        "line_count": 195
+      },
+      {
+        "path": "tools/xtask/tests/migration_lifecycle/verification_source_cli.rs",
+        "sha256": "046f935948ce35ee70f81aa60f336ab1395e2ca587312ad4868e0dd27f40720f",
+        "line_count": 458
+      },
+      {
+        "path": "tools/xtask/tests/migration_lifecycle/verification_caller_wrapper.rs",
+        "sha256": "fcb7788cb5bf8b6c74b15989affd09e2c26bad977e54b5d21b7627727e03ba5f",
+        "line_count": 490
+      }
+    ],
+    "predecessor_manifest": {
+      "path": ".omo/evidence/resume-20261002/next-wave-reviewed-integration/manifest.json",
+      "sha256": "056fbfb6e8bfa782b56ff36c0b43adf9a698089b046fe76af4a509226b6ed08f"
+    },
+    "retained_syntactic_python_fallback_lines": [
+      212,
+      316,
+      322,
+      518,
+      728,
+      735,
+      811,
+      823
+    ],
+    "retained_component_environment_line": 662,
+    "normal_verify_source_reachability": "For admitted HARNESS_MODE=verify the frozen trusted controller is selected before candidate bundle loading. Typed timeout, bounded plan/cache forwarding, candidate/controller source admission, manifest policy, parity inventory and check-only roster routes precede or bypass every retained Python fallback. Roster-write dispatch refuses in verify mode. This is reviewed source reachability; runtime qualification remains pending.",
+    "authority_boundary": "Independent verification retains exact clean candidate root/base/commit/tree and separate trusted controller root/revision/executable digest. LocalRepairSource remains repair-only; protected *-build workflow Context paths remain unchanged.",
+    "retained_boundaries": "Eight Python fallback syntactic calls, their Python files/imports/test callers, family-evidence source_plan subprocesses and uv jinja2 native build component remain. No fallback is classified as an approved Python exception. No file/module/Just-roster/count reduction is made.",
+    "required_qualification": [
+      {
+        "target": "xtask bin",
+        "filter": "verification_source",
+        "source_declared_groups": 10
+      },
+      {
+        "target": "migration_lifecycle",
+        "filter": "verification_source_cli",
+        "source_declared_groups": 13
+      },
+      {
+        "target": "xtask bin",
+        "filter": "migration_inventory::selected_process::repair_tests",
+        "source_declared_groups": 3
+      },
+      {
+        "target": "migration inventory and normal policy checks",
+        "filter": "root established serial validation",
+        "source_declared_groups": null
+      }
+    ],
+    "runtime_receipt": null,
+    "qualification_limit": "No maintained execution or CI/workflow/model/native qualification by author. Root must qualify copied actual content/logging/deadline/cancellation wrappers, scanner and current inventory before any qualified cutover claim. Full verification/native/model gates remain separate."
+  },
+  "system_one_serializer_caller_cutover": {
+    "status": "authored_unqualified",
+    "qualification_receipts": null,
+    "shell": {
+      "path": "scripts/skippy-system-one-smoke.sh",
+      "sha256": "a2bd13659d84138450ba29fd14f5c1637d8a7adb0feaf084fffad341e286be29",
+      "line_count": 481,
+      "mode": "0755"
+    },
+    "scanner_bindings": [
+      {
+        "path": "tools/xtask/src/migration_inventory/selected_process.rs",
+        "sha256": "6cfccc44bdd5e87a510f294318a56d2d0210bb4ce3017832bb8645a1eeee63b7"
+      },
+      {
+        "path": "tools/xtask/src/migration_inventory/selected_system_one.rs",
+        "sha256": "23bf81ac60cfded9f21ccdb350e7ae860a0d22bc5ccf7b9bd2c6f7b2ccb1e875"
+      },
+      {
+        "path": "tools/xtask/src/migration_inventory/selected_system_one_tests.rs",
+        "sha256": "185f1519a1a5a9a5483ea6a6a520633f14f32fd945ccc7536c0b979685ca06d0"
+      }
+    ],
+    "selected_process_launches": 6,
+    "explicit_python_override": "retained runtime-selected boundary; unclassified, no approved exception",
+    "static_candidate_delta": {
+      "removed_inline_port_stage_report": 3,
+      "removed_prewarm_python_availability_selection": 1,
+      "remaining_python_candidates": 3
+    },
+    "pending": "Root actual syntax, ShellCheck, six-launch scanner ownership/mutations, serializer and copied wrapper fixtures, full inventory/required closures/Clippy/format/CI; no native/model qualification or deletion implied."
+  },
+  "current_native_sdk_supervision_reconciliation": {
+    "status": "source_only_projected_native_supervision_reconciliation",
+    "candidate": {
+      "path": ".omo/evidence/resume-20261002/sdk-native-supervision-http-draft-v3/manifest-v1.json",
+      "sha256": "98b864d83c22eb071cd21815f8d8210c4f6ebfd2aefc44ffa4171d13db7500e1"
+    },
+    "clients": [
+      {
+        "client": "openai",
+        "path": "scripts/ci-openai-python-smoke.py",
+        "status": "conditional_unqualified",
+        "required": true,
+        "caller": {
+          "path": "scripts/ci-compat-smoke.sh",
+          "line": 141,
+          "source_block": "\"${automation[@]}\" automation smoke-observation sdk-client --client openai --python \"$SDK_PYTHON\" --base-url \"$BASE_URL\" --timeout-secs \"${MESH_COMPAT_SDK_TIMEOUT_SECS:-240}\" --receipt \"$SDK_EVIDENCE_DIR/openai-sdk.json\"",
+          "normalized_sha256_16": "3e5d3dc47715dd08"
+        },
+        "native_owner": {
+          "path": "tools/xtask/src/automation/smoke_observation/sdk_supervision/child.rs",
+          "roster_line": 32,
+          "source_sha256": "94f7f96654d0433cb110e1a2d78ff55ee6b57c557570094358d6773dc5900df5"
+        },
+        "interpreter": "Validated explicit SDK_PYTHON passed from MESH_REQUIRED_SDK_PYTHON or SKIPPY_WORKLOAD_SDK_PYTHON; literal supplied venv spelling retained",
+        "argv": "-I closed repository SDK script --base-url canonical endpoint; --model for LiteLLM/LangChain/embeddings only",
+        "environment": "Existing supervisor env_clear, private HOME/TMPDIR, closed PATH and NO_PROXY; inherited credentials absent",
+        "cadence": "Existing required dense/recurrent compatibility workflow/release cadence unchanged",
+        "failure_contract": "Child nonzero/deadline/cancel/custody/capture/cleanup or terminal refusal fails caller; bounded sanitized observations preserved",
+        "receipt": "SDK_CHILD_OBSERVED; sdk_qualified:false; child observation is not SDK/model/platform qualification",
+        "deletion_condition": "Retained genuine ecosystem client; no removal or required/advisory demotion authorized",
+        "qualification": null
+      },
+      {
+        "client": "litellm",
+        "path": "scripts/ci-litellm-smoke.py",
+        "status": "conditional_unqualified",
+        "required": true,
+        "caller": {
+          "path": "scripts/ci-compat-smoke.sh",
+          "line": 142,
+          "source_block": "\"${automation[@]}\" automation smoke-observation sdk-client --client litellm --python \"$SDK_PYTHON\" --base-url \"$BASE_URL\" --model \"$MODEL_ID\" --timeout-secs \"${MESH_COMPAT_SDK_TIMEOUT_SECS:-240}\" --receipt \"$SDK_EVIDENCE_DIR/litellm-sdk.json\"",
+          "normalized_sha256_16": "06789805c4c77a0e"
+        },
+        "native_owner": {
+          "path": "tools/xtask/src/automation/smoke_observation/sdk_supervision/child.rs",
+          "roster_line": 40,
+          "source_sha256": "94f7f96654d0433cb110e1a2d78ff55ee6b57c557570094358d6773dc5900df5"
+        },
+        "interpreter": "Validated explicit SDK_PYTHON passed from MESH_REQUIRED_SDK_PYTHON or SKIPPY_WORKLOAD_SDK_PYTHON; literal supplied venv spelling retained",
+        "argv": "-I closed repository SDK script --base-url canonical endpoint; --model for LiteLLM/LangChain/embeddings only",
+        "environment": "Existing supervisor env_clear, private HOME/TMPDIR, closed PATH and NO_PROXY; inherited credentials absent",
+        "cadence": "Existing required dense/recurrent compatibility workflow/release cadence unchanged",
+        "failure_contract": "Child nonzero/deadline/cancel/custody/capture/cleanup or terminal refusal fails caller; bounded sanitized observations preserved",
+        "receipt": "SDK_CHILD_OBSERVED; sdk_qualified:false; child observation is not SDK/model/platform qualification",
+        "deletion_condition": "Retained genuine ecosystem client; no removal or required/advisory demotion authorized",
+        "qualification": null
+      },
+      {
+        "client": "langchain",
+        "path": "scripts/ci-langchain-openai-smoke.py",
+        "status": "conditional_unqualified",
+        "required": true,
+        "caller": {
+          "path": "scripts/ci-compat-smoke.sh",
+          "line": 143,
+          "source_block": "\"${automation[@]}\" automation smoke-observation sdk-client --client langchain --python \"$SDK_PYTHON\" --base-url \"$BASE_URL\" --model \"$MODEL_ID\" --timeout-secs \"${MESH_COMPAT_SDK_TIMEOUT_SECS:-240}\" --receipt \"$SDK_EVIDENCE_DIR/langchain-sdk.json\"",
+          "normalized_sha256_16": "55556d37dc56520c"
+        },
+        "native_owner": {
+          "path": "tools/xtask/src/automation/smoke_observation/sdk_supervision/child.rs",
+          "roster_line": 36,
+          "source_sha256": "94f7f96654d0433cb110e1a2d78ff55ee6b57c557570094358d6773dc5900df5"
+        },
+        "interpreter": "Validated explicit SDK_PYTHON passed from MESH_REQUIRED_SDK_PYTHON or SKIPPY_WORKLOAD_SDK_PYTHON; literal supplied venv spelling retained",
+        "argv": "-I closed repository SDK script --base-url canonical endpoint; --model for LiteLLM/LangChain/embeddings only",
+        "environment": "Existing supervisor env_clear, private HOME/TMPDIR, closed PATH and NO_PROXY; inherited credentials absent",
+        "cadence": "Existing required dense/recurrent compatibility workflow/release cadence unchanged",
+        "failure_contract": "Child nonzero/deadline/cancel/custody/capture/cleanup or terminal refusal fails caller; bounded sanitized observations preserved",
+        "receipt": "SDK_CHILD_OBSERVED; sdk_qualified:false; child observation is not SDK/model/platform qualification",
+        "deletion_condition": "Retained genuine ecosystem client; no removal or required/advisory demotion authorized",
+        "qualification": null
+      },
+      {
+        "client": "embeddings",
+        "path": "scripts/ci-openai-embeddings-smoke.py",
+        "status": "conditional_unqualified",
+        "required": false,
+        "caller": {
+          "path": "scripts/skippy-workload-certify.sh",
+          "line": 436,
+          "source_block": "--client embeddings --python \"$SDK_PYTHON\" \\",
+          "normalized_sha256_16": "de0b3268e7c84360"
+        },
+        "native_owner": {
+          "path": "tools/xtask/src/automation/smoke_observation/sdk_supervision/child.rs",
+          "roster_line": 43,
+          "source_sha256": "94f7f96654d0433cb110e1a2d78ff55ee6b57c557570094358d6773dc5900df5"
+        },
+        "interpreter": "Validated explicit SDK_PYTHON passed from MESH_REQUIRED_SDK_PYTHON or SKIPPY_WORKLOAD_SDK_PYTHON; literal supplied venv spelling retained",
+        "argv": "-I closed repository SDK script --base-url canonical endpoint; --model for LiteLLM/LangChain/embeddings only",
+        "environment": "Existing supervisor env_clear, private HOME/TMPDIR, closed PATH and NO_PROXY; inherited credentials absent",
+        "cadence": "Explicit embedding workload only; not smoke.yml",
+        "failure_contract": "Child nonzero/deadline/cancel/custody/capture/cleanup or terminal refusal fails caller; bounded sanitized observations preserved",
+        "receipt": "SDK_CHILD_OBSERVED; sdk_qualified:false; child observation is not SDK/model/platform qualification",
+        "deletion_condition": "Retained genuine ecosystem client; no removal or required/advisory demotion authorized",
+        "qualification": null
+      }
+    ],
+    "source_bindings": [
+      {
+        "path": "scripts/ci-compat-smoke.sh",
+        "projected_source": ".omo/evidence/resume-20261002/sdk-native-supervision-http-draft-v3/files/ci-compat-smoke.sh",
+        "sha256": "b071d380556f12a7427b30ff1f5bb9960ea8ba932d3a738d5654daf09becd63d",
+        "line_count": 146
+      },
+      {
+        "path": "scripts/skippy-workload-certify.sh",
+        "projected_source": ".omo/evidence/resume-20261002/sdk-native-supervision-http-draft-v3/files/skippy-workload-certify.sh",
+        "sha256": "c149de8b7aedc34b4d1f3d27f060840eba160318dde9fa1a755ee00964244fba",
+        "line_count": 459
+      },
+      {
+        "path": "tools/xtask/src/automation/smoke_observation/sdk_supervision/child.rs",
+        "projected_source": ".omo/evidence/resume-20261002/sdk-native-supervision-http-draft-v3/files/sdk_child.rs",
+        "sha256": "94f7f96654d0433cb110e1a2d78ff55ee6b57c557570094358d6773dc5900df5",
+        "line_count": 182
+      },
+      {
+        "path": "tools/xtask/src/automation/smoke_observation/sdk_supervision.rs",
+        "projected_source": ".omo/evidence/resume-20261002/sdk-native-supervision-http-draft-v3/files/sdk_supervision.rs",
+        "sha256": "17ec10c0ebe18f822505d4107e4a2de71b67863e8ac902c244ab8fb20425ec52",
+        "line_count": 99
+      },
+      {
+        "path": "scripts/ci-openai-python-smoke.py",
+        "projected_source": ".omo/evidence/resume-20261002/sdk-native-supervision-http-draft-v3/files/ci-openai-python-smoke.py",
+        "sha256": "ae2e2ce989257a83d88a51e8ba14345206af2aa5f5be62e21d28b574f36024e4",
+        "line_count": 81
+      },
+      {
+        "path": "scripts/ci-litellm-smoke.py",
+        "projected_source": ".omo/evidence/resume-20261002/sdk-native-supervision-http-draft-v3/files/ci-litellm-smoke.py",
+        "sha256": "c4df8c820a669beb227b16392402702079701bbdd538060824269ed703bb1cc8",
+        "line_count": 85
+      },
+      {
+        "path": "scripts/ci-langchain-openai-smoke.py",
+        "projected_source": ".omo/evidence/resume-20261002/sdk-native-supervision-http-draft-v3/files/ci-langchain-openai-smoke.py",
+        "sha256": "1215b0e6c77a234dd5294cd5a5e90fda3937a2056d842360410f9fb2fad522f4",
+        "line_count": 78
+      },
+      {
+        "path": "scripts/ci-openai-embeddings-smoke.py",
+        "projected_source": ".omo/evidence/resume-20261002/sdk-native-supervision-http-draft-v3/files/ci-openai-embeddings-smoke.py",
+        "sha256": "7640e3443baa7dfcef2e09fcf455d87543a29703dd7a394e16e160616d289ecc",
+        "line_count": 94
+      }
+    ],
+    "preserved_exception_status": "Four conditional_unqualified; no new exception, no installed SDK/platform/model execution claim",
+    "retirement": null,
+    "qualification": null
+  },
+  "cache_family_three_native_caller_retirement": {
+    "status": "conditional_retirement_pending_root_admission",
+    "coverage": "ci/automation-migration/cache-family-production-retirement-coverage.json",
+    "retired_paths": [
+      "evals/skippy-cache-production-bench.py",
+      "evals/skippy-cache-correctness-gate.py",
+      "evals/skippy-moe-expert-smoke.py"
+    ],
+    "proof": null,
+    "normal_ci": null,
+    "requires_absent_importers": [
+      "evals/skippy-radix-cache-ab.py",
+      "evals/skippy-waiting-prefix-ab.py",
+      "scripts/tests/test_skippy_radix_cache_ab.py"
+    ],
+    "external_model_qualification": "Separate unverified scope; no native/model/performance claim."
+  },
+  "native_hf_manual_protocol_last_caller_retirement": {
+    "status": "conditional_not_executed",
+    "coverage": "ci/automation-migration/native-hf-manual-protocol-retirement-coverage.json",
+    "removed_paths": [
+      "scripts/hf-skippy-convert-job.py",
+      "scripts/hf-skippy-mtp-certify-job.py",
+      "scripts/hf-skippy-mtp-compose-job.py",
+      "docs/skippy/manual-smoke/runtime_smoke.py",
+      "docs/skippy/manual-smoke/check_coverage.py",
+      "evals/skippy-openai-cache-matrix.py",
+      "evals/skippy-suffix-proposer-bench.py",
+      "scripts/run-openai-guardrail-corpus.py",
+      "evals/skippy-agentic-prompt-manifest.py"
+    ],
+    "required_selections": 83,
+    "actual_owning_positives": null,
+    "normal_ci": null,
+    "prior_source_history_preserved": true,
+    "current_guidance_source_bindings": [
+      {
+        "path": "docs/BENCHMARKS.md",
+        "sha256": "21866ca5955c5bbcd6ff62790e4e123d97f7e68299ceecd6b4fe557f25f8b14c",
+        "kind": "actual root-applied native caller guidance"
+      },
+      {
+        "path": "docs/design/TESTING.md",
+        "sha256": "d9a2c8af4f9b71b53cddd0be0027e7950cd9adc9694d76b2c0cd8f6d80b7ab51",
+        "kind": "actual root-applied native caller guidance"
+      },
+      {
+        "path": "docs/skippy/LLAMA_BENCHY.md",
+        "sha256": "8911096e9351021a60e09769caf329e54545e964ffdfa753be64cccdb206a02e",
+        "kind": "actual root-applied native caller guidance"
+      },
+      {
+        "path": "docs/design/OPENAI_GUARDRAILS.md",
+        "sha256": "2a165056321484f078aaf48bfed5d0b81b78402e7bf4b0b4461343f10668d016",
+        "kind": "actual root-applied native caller guidance"
+      },
+      {
+        "path": "docs/skippy/PROMPT_CACHE.md",
+        "sha256": "c2295b2f09f115a93c318f82be810eb2e2a258c2a114d0877793304abbf70fae",
+        "kind": "actual root-applied native caller guidance"
+      },
+      {
+        "path": "docs/skippy/HF_MTP_COMPOSE_NATIVE.md",
+        "sha256": "06b1a1f99de917bd7d9816ed28893c64fc1bb66b718bd6f92ddfe8e7f187ac1f",
+        "kind": "actual root-applied native caller guidance"
+      }
+    ],
+    "historical_removed_records": {
+      "explicit_non_exceptions": [
+        {
+          "path": "scripts/hf-skippy-convert-job.py",
+          "reason": "Remote job submission does not exempt generic planning, serialization, artifact or process logic; no exact isolated retained-path contract established."
+        },
+        {
+          "path": "scripts/hf-skippy-mtp-certify-job.py",
+          "reason": "Remote job adapter is not a blanket ecosystem exception; generic orchestration still migrates."
+        },
+        {
+          "path": "scripts/hf-skippy-mtp-compose-job.py",
+          "reason": "Remote job adapter is not a blanket ecosystem exception; generic artifact logic still migrates."
+        }
+      ]
+    }
+  },
+  "quant_jobs_template_guidance_history": {
+    "reason": "Removed unprovided external Python Job templates and unsupported current-tool memory/window examples. Supplied supported quantizer native Jobs orchestration remains pending; no execution, new exception or capability completion.",
+    "source_bindings": [
+      {
+        "path": ".agents/skills/hf-gguf-quant-jobs/SKILL.md",
+        "sha256": "6f980a2b11fcc19eb138cc8ca277870e38cdd36338404926537190eaccfa3dbb",
+        "line_count": 186
+      },
+      {
+        "path": ".agents/skills/hf-quant-and-layer-package-jobs/SKILL.md",
+        "sha256": "74e0fa643a0bfdbedb947120b129847f3cf5dc41f0c5ca57cf31973b66a3a142",
+        "line_count": 164
+      }
+    ],
+    "original_records": [
+      {
+        "path": ".agents/skills/hf-gguf-quant-jobs/SKILL.md",
+        "examples": [
+          "hf jobs uv run ..."
+        ],
+        "owner": "tools/xtask planning plus Hugging Face job SDK entrypoint",
+        "cutover_task": 5,
+        "status": "actionable_remote_job_example"
+      },
+      {
+        "path": ".agents/skills/hf-quant-and-layer-package-jobs/SKILL.md",
+        "examples": [
+          "hf jobs uv run ..."
+        ],
+        "owner": "tools/xtask planning plus Hugging Face job SDK entrypoint",
+        "cutover_task": 5,
+        "status": "actionable_remote_job_example"
+      }
+    ],
+    "qualification": null,
+    "native_jobs_complete": false
+  },
+  "existing_research16_isolation": {
+    "declaration": "evals/research-python/BOUNDARIES.json",
+    "policy": "Exact16 paths, exact class/status/dependencies/cadence; actual required graph must be complete before exclusion can qualify isolation. SDK candidates/reader/Granite statuses unchanged.",
+    "qualification": null,
+    "reference_runtime": null
+  },
+  "zero_python_owner_extraction": {
+    "status": "published external source extraction and native reader cutover; platform/model qualification remains bounded",
+    "sdk_repository": "Mesh-LLM/mesh-llm-python-sdk",
+    "sdk_commit": "d2a881612186b0626a153ee237dfa3df00ab6087",
+    "research_repository": "Mesh-LLM/mesh-llm-research",
+    "reader_owner": "tools/trajectory-reader",
+    "sampling_policy": "sha256-source-row-v1; intentionally new deterministic sampling, not DuckDB hash parity",
+    "limitations": "Zero local .py roster does not by itself prove no embedded Python; separate fullbody and converter queue evidence required. SDK dependencies remain externally Python. Historical records retain original commands."
+  }
+}

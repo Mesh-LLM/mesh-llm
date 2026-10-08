@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "lane": "L6",
+  "status": "caller_cutover_platform_evidence_pending",
+  "receipt": ".omo/evidence/lane-L6-sdk-swift.md",
+  "deleted_implementations": ["scripts/verify-swift-xcframework.py"],
+  "deleted_test_modules": ["scripts/tests/test_verify_swift_xcframework.py"],
+  "rust_test_gate": "cargo test -p xtask --test lane_l6_sdk_swift --test migration_prepared_inputs --test migration_xcframework_cli --test swift_privacy_adapter",
+  "callers": [
+    {"path": ".github/actions/prepare-native-sdk-input/action.yml", "owner": "prepared-input native-sdk-identity"},
+    {"path": "scripts/package-native-sdk-crate.sh", "owner": "prepared-input native-sdk-crate-field; artifact extract-tar"},
+    {"path": "scripts/verify-native-sdk-package.sh", "owner": "prepared-input native-sdk-manifest; artifact verify-checksum; artifact extract-tar"},
+    {"path": "scripts/restore-native-sdk-input.sh", "owner": "prepared-input native-sdk-identity; artifact extract-tar"},
+    {"path": "scripts/package-sdk-console-assets.sh", "owner": "prepared-input sdk-console-manifest"},
+    {"path": "scripts/verify-sdk-console-assets.sh", "owner": "prepared-input sdk-console-verify"},
+    {"path": "scripts/update-swift-package-manifest.sh", "owner": "release swift-manifest update"},
+    {"path": "scripts/verify-swift-package-manifest.sh", "owner": "release swift-manifest verify"},
+    {"path": "scripts/verify-swift-privacy-manifest.sh", "owner": "release swift-privacy"},
+    {"path": "scripts/verify-swift-release-artifact.sh", "owner": "release swift-xcframework; artifact extract-zip"},
+    {"path": "scripts/ci-kotlin-sdk-smoke.sh", "owner": "prepared-input native-sdk-library-dir"},
+    {"path": "scripts/ci-swift-sdk-smoke.sh", "owner": "artifact extract-zip"}
+  ],
+  "deleted_case_owners": {
+    "test_accepts_exact_full_architecture_matrix": "release::swift_xcframework::contract_tests::full_matrix_when_xml_and_binary_plists",
+    "test_accepts_exact_host_only_arm64_slice": "release::swift_xcframework::contract_tests::host_only_when_exact_arm64_declaration",
+    "test_mode_independent_verification_still_requires_macos": "release::swift_xcframework::contract_tests::macos_required_when_mode_is_absent",
+    "test_rejects_full_slice_missing_declared_x86_64": "tools/xtask/src/release/swift_xcframework/contract_tests.rs",
+    "test_rejects_lipo_slices_that_disagree_with_plist": "tools/xtask/src/release/swift_xcframework/native_tests.rs"
+  },
+  "unverified": ["native SDK builds", "Xcode/Swift consumer builds", "Gradle smoke", "SDK fixture lifecycle", "normal platform CI", "protected-main automation availability"]
+}
