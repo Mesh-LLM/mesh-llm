@@ -932,8 +932,9 @@ pub enum Command {
         /// Re-detect the best host backend flavor before selecting the release bundle.
         #[arg(long, conflicts_with = "flavor")]
         detect_flavor: bool,
-        /// Do not install or update the reviewed default plugins.
-        /// Same as MESH_LLM_NO_DEFAULT_PLUGINS=1.
+        /// Turn the default plugins off: the updated node does not install
+        /// them from its release, now or later, until `mesh-llm plugins
+        /// enable NAME`. Same as `mesh-llm plugins install-defaults --off`.
         #[arg(long)]
         no_default_plugins: bool,
     },
@@ -1316,8 +1317,14 @@ pub enum ConfigCommand {
 
 #[derive(Subcommand, Debug)]
 pub enum PluginCommand {
-    /// Provision the reviewed default plugins (used by installers and mesh-llm update).
-    InstallDefaults,
+    /// Install the default plugins from this release's bundled copy (no download).
+    /// A node also does this when it starts.
+    InstallDefaults {
+        /// Turn every default plugin off instead: none is installed, and an
+        /// installed one is disabled, until `mesh-llm plugins enable NAME`.
+        #[arg(long)]
+        off: bool,
+    },
     /// Install a native plugin from the catalog, GitHub, or a local release archive.
     Install {
         /// Plugin catalog name, GitHub owner/repo, or GitHub URL.

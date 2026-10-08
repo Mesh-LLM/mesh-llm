@@ -17,6 +17,10 @@ use release_integrity::{
 const DEFAULT_RELEASE_REPO: &str = "Mesh-LLM/mesh-llm";
 const PRODUCT_MANIFEST_NAME: &str = "product-manifest.json";
 const NATIVE_RUNTIMES_DIR_NAME: &str = "native-runtimes";
+/// The default plugins a release bundles (each plugin's release archive and
+/// `manifest.json`). An update installs the new release's copy in place of the
+/// old one; the node loads defaults only from here, never from a download.
+const BUNDLED_PLUGINS_DIR_NAME: &str = "plugins";
 const PATH_WRITE_PROBE_PREFIX: &str = ".mesh-llm-write-probe";
 #[cfg(not(windows))]
 pub(super) const INSTALL_SCRIPT_URL: &str =
@@ -37,17 +41,6 @@ pub(super) enum InstallOutcome {
 pub(super) enum PostInstallAction {
     RestartCurrentProcess,
     ExitAfterInstall,
-}
-
-/// What follows a bundle install: the restart or exit, and whether the new
-/// binary's default plugins are provisioned (`false` with
-/// `--no-default-plugins`). Only the Windows hand-off reads it; on Unix the
-/// install returns and its caller acts on both.
-#[derive(Clone, Copy)]
-#[cfg_attr(not(windows), allow(dead_code))]
-struct PostInstall {
-    action: PostInstallAction,
-    provision_defaults: bool,
 }
 
 pub(super) struct ReleaseInfo {
@@ -326,7 +319,6 @@ pub(super) async fn install_latest_bundle(
     asset_name: &str,
     expected_flavor: backend::BinaryFlavor,
     action: PostInstallAction,
-    provision_defaults: bool,
 ) -> Result<InstallOutcome> {
     let unique = format!(
         "{}-{}",
@@ -363,16 +355,9 @@ pub(super) async fn install_latest_bundle(
             &extracted,
             &backup,
             &staged_files,
-            PostInstall {
-                action,
-                provision_defaults,
-            },
+            action,
         )?;
         install_native_runtime_after_update(install_dir, release, &workspace).await;
-        #[cfg(not(windows))]
-        if provision_defaults {
-            provision_default_plugins_after_update(install_dir).await;
-        }
         Ok::<InstallOutcome, anyhow::Error>(install_outcome(action))
     }
     .await;
@@ -381,50 +366,6 @@ pub(super) async fn install_latest_bundle(
         let _ = std::fs::remove_dir_all(&workspace);
     }
     result
-}
-
-/// The longest an update waits for default plugin provisioning before it goes
-/// on without it (each plugin's own install is already bounded at 60 seconds).
-#[cfg(not(windows))]
-const PROVISION_DEADLINE: std::time::Duration = std::time::Duration::from_secs(180);
-
-/// Provision the new binary's default plugins. Both `mesh-llm update` and
-/// `--auto-update` do, before any restart: a node that only ever auto-updates
-/// gets new defaults and reviewed pin bumps too, and starts with them.
-#[cfg(not(windows))]
-async fn provision_default_plugins_after_update(install_dir: &Path) {
-    let mut command = tokio::process::Command::new(install_dir.join(mesh_binary_name()));
-    command.args(["plugins", "install-defaults"]);
-    match run_with_deadline(command, PROVISION_DEADLINE).await {
-        Ok(Some(status)) if status.success() => {}
-        Ok(Some(status)) => {
-            tracing::warn!(?status, "Default plugin provisioning after update failed")
-        }
-        Ok(None) => tracing::warn!(
-            deadline = ?PROVISION_DEADLINE,
-            "Default plugin provisioning after update did not finish in time; it was stopped"
-        ),
-        Err(error) => {
-            tracing::warn!(%error, "Could not start default plugin provisioning after update")
-        }
-    }
-}
-
-/// Run `command` to completion, or kill it at `deadline`: `Ok(None)` then.
-/// Waits without blocking the async runtime.
-#[cfg(not(windows))]
-async fn run_with_deadline(
-    mut command: tokio::process::Command,
-    deadline: std::time::Duration,
-) -> std::io::Result<Option<std::process::ExitStatus>> {
-    let mut child = command.kill_on_drop(true).spawn()?;
-    match tokio::time::timeout(deadline, child.wait()).await {
-        Ok(status) => status.map(Some),
-        Err(_) => {
-            let _ = child.kill().await;
-            Ok(None)
-        }
-    }
 }
 
 #[cfg(not(windows))]
@@ -729,6 +670,10 @@ fn collect_bundle_files(
     if dirs.contains(&NATIVE_RUNTIMES_DIR_NAME.to_string()) {
         staged.push(NATIVE_RUNTIMES_DIR_NAME.to_string());
     }
+    // The bundled default plugins install as a whole tree, like the runtime.
+    if dirs.contains(&BUNDLED_PLUGINS_DIR_NAME.to_string()) {
+        staged.push(BUNDLED_PLUGINS_DIR_NAME.to_string());
+    }
     // The mesh binary must install first so a mid-install failure can never
     // leave the new runtime tree beside an old host.
     staged.sort_by_key(|name| (name != &mesh_binary_name(), name.clone()));
@@ -795,6 +740,80 @@ mod composed_product_regression_tests {
         let path = std::env::temp_dir().join(unique);
         std::fs::create_dir_all(&path).unwrap();
         path
+    }
+
+    /// An update installs the release's bundled default plugins and replaces
+    /// the previous release's copy as a whole: the node loads defaults only
+    /// from this directory, so it must hold exactly the new release's.
+    #[test]
+    fn test_update_replaces_the_bundled_plugins_with_the_new_releases() {
+        use std::process::Command;
+        let base = temp_dir("self-update-bundled-plugins");
+        let bundle_root = base.join("mesh-bundle");
+        std::fs::create_dir_all(bundle_root.join("native-runtimes").join("runtime")).unwrap();
+        std::fs::create_dir_all(bundle_root.join(BUNDLED_PLUGINS_DIR_NAME)).unwrap();
+        std::fs::write(bundle_root.join(mesh_binary_name()), b"binary").unwrap();
+        std::fs::write(bundle_root.join(PRODUCT_MANIFEST_NAME), b"{}").unwrap();
+        std::fs::write(
+            bundle_root
+                .join("native-runtimes")
+                .join("runtime")
+                .join("lib"),
+            b"runtime",
+        )
+        .unwrap();
+        std::fs::write(
+            bundle_root
+                .join(BUNDLED_PLUGINS_DIR_NAME)
+                .join("example-1.1.0-x86_64-unknown-linux-gnu.tar.gz"),
+            b"new plugin",
+        )
+        .unwrap();
+        std::fs::write(
+            bundle_root
+                .join(BUNDLED_PLUGINS_DIR_NAME)
+                .join("manifest.json"),
+            b"{}",
+        )
+        .unwrap();
+        let archive = base.join("bundle.tar.gz");
+        assert!(
+            Command::new("tar")
+                .arg("-C")
+                .arg(&base)
+                .arg("-czf")
+                .arg(&archive)
+                .arg("mesh-bundle")
+                .status()
+                .unwrap()
+                .success()
+        );
+        let extracted = base.join("extracted");
+        std::fs::create_dir_all(&extracted).unwrap();
+        extract_bundle_archive(&archive, &extracted).unwrap();
+        let staged = collect_bundle_files(&extracted, backend::BinaryFlavor::Cpu).unwrap();
+        assert!(staged.contains(&BUNDLED_PLUGINS_DIR_NAME.to_string()));
+
+        let install_dir = base.join("install");
+        let old = install_dir.join(BUNDLED_PLUGINS_DIR_NAME);
+        std::fs::create_dir_all(&old).unwrap();
+        std::fs::write(
+            old.join("example-1.0.0-x86_64-unknown-linux-gnu.tar.gz"),
+            b"old",
+        )
+        .unwrap();
+        replace_bundle_files(&install_dir, &extracted, &base.join("backup"), &staged).unwrap();
+
+        assert_eq!(
+            std::fs::read(old.join("example-1.1.0-x86_64-unknown-linux-gnu.tar.gz")).unwrap(),
+            b"new plugin"
+        );
+        assert!(
+            !old.join("example-1.0.0-x86_64-unknown-linux-gnu.tar.gz")
+                .exists(),
+            "the old release's bundled plugin is gone"
+        );
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]
@@ -1035,7 +1054,7 @@ fn finish_bundle_install(
     extracted: &Path,
     backup: &Path,
     staged_files: &[String],
-    _post: PostInstall,
+    _action: PostInstallAction,
 ) -> Result<()> {
     replace_bundle_files(install_dir, extracted, backup, staged_files)
 }
@@ -1048,7 +1067,7 @@ fn finish_bundle_install(
     extracted: &Path,
     backup: &Path,
     staged_files: &[String],
-    post: PostInstall,
+    action: PostInstallAction,
 ) -> Result<()> {
     use std::process::Command;
 
@@ -1060,23 +1079,17 @@ fn finish_bundle_install(
         extracted,
         backup,
         staged_files,
-        post.action,
+        action,
     )?;
     std::fs::write(&script, script_body)
         .with_context(|| format!("Failed to write {}", script.display()))?;
 
-    let mut updater = Command::new("powershell");
-    updater
+    Command::new("powershell")
         .arg("-NoProfile")
         .arg("-ExecutionPolicy")
         .arg("Bypass")
         .arg("-File")
-        .arg(&script);
-    if !post.provision_defaults {
-        // The installed binary's `plugins install-defaults` honours this.
-        updater.env("MESH_LLM_NO_DEFAULT_PLUGINS", "1");
-    }
-    updater
+        .arg(&script)
         .spawn()
         .with_context(|| format!("Failed to launch Windows updater {}", script.display()))?;
 
@@ -1191,16 +1204,6 @@ try {{
         $installed.Add($name) | Out-Null
     }}
 
-    # Before any restart, so an auto-updated node also gets new defaults and
-    # reviewed pin bumps, and starts with them.
-    try {{
-        & $exePath plugins install-defaults
-        if ($LASTEXITCODE -ne 0) {{
-            Write-Warning 'Default plugins could not be fully installed; MeshLLM was updated.'
-        }}
-    }} catch {{
-        Write-Warning "Default plugins could not be fully installed; MeshLLM was updated: $_"
-    }}
     if ($restartAfterUpdate) {{
         $env:MESH_LLM_SELF_UPDATE_ATTEMPTED = '1'
         & $exePath @args
@@ -1302,58 +1305,6 @@ mod tests {
             name: name.into(),
             sha256: "a".repeat(64),
         }
-    }
-
-    #[cfg(not(windows))]
-    #[tokio::test(flavor = "current_thread")]
-    async fn provisioning_that_hangs_is_stopped_at_its_deadline() {
-        let mut slow = tokio::process::Command::new("sleep");
-        slow.arg("30");
-        let started = std::time::Instant::now();
-        // On a single-threaded runtime this other task only gets to run if the
-        // wait below yields instead of blocking the thread.
-        let ticked =
-            tokio::spawn(async { tokio::time::sleep(std::time::Duration::from_millis(50)).await });
-        let outcome = run_with_deadline(slow, std::time::Duration::from_millis(200))
-            .await
-            .unwrap();
-        assert!(outcome.is_none());
-        assert!(started.elapsed() < std::time::Duration::from_secs(10));
-        assert!(ticked.is_finished(), "the wait did not block the runtime");
-        let quick = tokio::process::Command::new("true");
-        assert!(
-            run_with_deadline(quick, std::time::Duration::from_secs(10))
-                .await
-                .unwrap()
-                .is_some_and(|status| status.success())
-        );
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn the_windows_updater_provisions_defaults_before_restarting() {
-        let dir = temp_dir("handoff-defaults");
-        let script = windows_update_script(
-            &dir.join("mesh-llm.exe"),
-            &dir,
-            &dir.join("ws"),
-            &dir.join("x"),
-            &dir.join("b"),
-            &[],
-            PostInstallAction::RestartCurrentProcess,
-        )
-        .unwrap();
-        let provision = script
-            .find("plugins install-defaults")
-            .expect("provisions defaults");
-        let restart = script
-            .find("$env:MESH_LLM_SELF_UPDATE_ATTEMPTED")
-            .expect("restarts");
-        assert!(
-            provision < restart,
-            "defaults are provisioned before the restart"
-        );
-        assert!(!script.contains("if (-not $restartAfterUpdate)"));
     }
 
     #[test]

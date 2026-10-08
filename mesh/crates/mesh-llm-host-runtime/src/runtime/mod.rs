@@ -6,6 +6,7 @@ mod context_planning;
 mod control_loop;
 mod daemon_startup;
 mod dashboard;
+mod default_plugins;
 mod discovery;
 mod failed_node_start;
 pub mod instance;

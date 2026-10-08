@@ -3,7 +3,7 @@ use std::io::Write;
 use anyhow::{Result, bail};
 use mesh_llm_plugin_manager::defaults::{
     DEFAULT_PLUGINS, DefaultPluginOutcome, default_plugin, default_plugins_opted_out,
-    install_default_plugins,
+    provision_bundled_defaults, turn_off_defaults,
 };
 use mesh_llm_plugin_manager::install::install_plugin_archive;
 use mesh_llm_plugin_manager::{
@@ -44,7 +44,8 @@ pub async fn run_plugin_command(
     runtime_rows: Option<&PluginListRows>,
 ) -> Result<bool> {
     match command {
-        PluginCommand::InstallDefaults => install_defaults().await?,
+        PluginCommand::InstallDefaults { off: false } => install_defaults()?,
+        PluginCommand::InstallDefaults { off: true } => turn_off_default_plugins()?,
         PluginCommand::Install {
             reference,
             archive,
@@ -88,7 +89,8 @@ fn operator_run_plugins(entries: &[mesh_llm_config::PluginConfigEntry]) -> BTree
         .collect()
 }
 
-async fn install_defaults() -> Result<()> {
+/// Install the defaults from this release's bundled copy; never downloads.
+fn install_defaults() -> Result<()> {
     if default_plugins_opted_out() || DEFAULT_PLUGINS.is_empty() {
         return Ok(());
     }
@@ -97,7 +99,7 @@ async fn install_defaults() -> Result<()> {
     let configured = operator_run_plugins(&config.plugins);
     let mut progress = CliPluginProgress::default();
     let outcomes =
-        install_default_plugins(DEFAULT_PLUGINS, &configured, &options, &mut progress).await;
+        provision_bundled_defaults(DEFAULT_PLUGINS, &configured, &options, &mut progress);
     progress.finish();
     let mut err = mesh_llm_events::console_err();
     let mut failed = false;
@@ -112,7 +114,8 @@ async fn install_defaults() -> Result<()> {
             other @ (DefaultPluginOutcome::OperatorManaged
             | DefaultPluginOutcome::Disabled
             | DefaultPluginOutcome::TurnedOff
-            | DefaultPluginOutcome::UnsupportedPlatform) => {
+            | DefaultPluginOutcome::UnsupportedPlatform
+            | DefaultPluginOutcome::NotBundled) => {
                 if let Some(line) = left_alone_line(name, &other) {
                     writeln!(err, "{line}")?;
                 }
@@ -125,6 +128,22 @@ async fn install_defaults() -> Result<()> {
     }
     if failed {
         bail!("one or more default plugins could not be provisioned");
+    }
+    Ok(())
+}
+
+/// `plugins install-defaults --off`, and `mesh-llm update --no-default-plugins`:
+/// turn every default off, so neither a node start nor `install-defaults`
+/// installs it from the bundled copy until `plugins enable NAME`.
+pub fn turn_off_default_plugins() -> Result<()> {
+    let store = PluginStore::new(default_store_root()?);
+    let mut err = mesh_llm_events::console_err();
+    for name in turn_off_defaults(DEFAULT_PLUGINS, &store)? {
+        writeln!(
+            err,
+            "⏸️  Default {name} turned off: it is not installed or loaded until \
+             `mesh-llm plugins enable {name}`"
+        )?;
     }
     Ok(())
 }
@@ -186,7 +205,7 @@ fn set_enabled_in(
     err: &mut impl Write,
 ) -> Result<()> {
     // A default that is not installed (for example right after a delete) is
-    // turned off, or back on, by a record the installers and update respect.
+    // turned off, or back on, by a record a node start respects.
     // Enabling a default always removes that record, installed or not, so a
     // stale one never outlives an install.
     let is_default = default_plugin(name).is_some();
@@ -197,13 +216,13 @@ fn set_enabled_in(
         if enabled {
             writeln!(
                 err,
-                "✅ Enabled {name}: the next installer or mesh-llm update run installs it"
+                "✅ Enabled {name}: the node installs it from its bundled copy when it next starts"
             )?;
         } else {
             store.set_default_turned_off(name, true)?;
             writeln!(
                 err,
-                "⏸️  Disabled {name}: the installers and mesh-llm update will not install it again"
+                "⏸️  Disabled {name}: the node will not install it from its bundled copy again"
             )?;
         }
         return Ok(());
@@ -243,8 +262,8 @@ fn delete_in(store: &PluginStore, name: &str, err: &mut impl Write) -> Result<()
     store.delete(name)?;
     writeln!(err, "🗑️  Deleted {name}")?;
     // A deleted default stays removed: delete leaves the record that `plugins
-    // disable` leaves for a default that is not installed, which the
-    // installers and `mesh-llm update` respect. `plugins enable` removes it.
+    // disable` leaves for a default that is not installed, which a node start
+    // and `plugins install-defaults` respect. `plugins enable` removes it.
     if default_plugin(name).is_some() {
         store.set_default_turned_off(name, true)?;
         writeln!(err, "{}", deleted_default_note(name))?;
@@ -255,8 +274,8 @@ fn delete_in(store: &PluginStore, name: &str, err: &mut impl Write) -> Result<()
 /// What a deleted default plugin's operator should know: it stays removed.
 fn deleted_default_note(name: &str) -> String {
     format!(
-        "{name} is a default plugin: it stays removed, and the installers and mesh-llm update \
-         will not install it again. To have it installed again, run mesh-llm plugins enable {name}."
+        "{name} is a default plugin: it stays removed, and the node will not install it from its \
+         bundled copy again. To have it installed again, run mesh-llm plugins enable {name}."
     )
 }
 
@@ -276,6 +295,10 @@ fn left_alone_line(name: &str, outcome: &DefaultPluginOutcome) -> Option<String>
         )),
         DefaultPluginOutcome::UnsupportedPlatform => Some(format!(
             "ℹ️  No reviewed {name} release for this platform; not installed"
+        )),
+        DefaultPluginOutcome::NotBundled => Some(format!(
+            "ℹ️  Default {name} not installed: this install carries no bundled copy of it, \
+             and a default plugin is never downloaded"
         )),
         _ => None,
     }
@@ -584,7 +607,7 @@ mod tests {
         let config: Config = toml::from_str(
             r#"
 [[plugin]]
-name = "capsule-emit-mesh"
+name = "capsules"
 [plugin.settings]
 share_history_segments = "off"
 
@@ -599,7 +622,7 @@ url = "unix:///run/remote.sock"
         )
         .unwrap();
         let configured = operator_run_plugins(&config.plugin);
-        assert!(!configured.contains("capsule-emit-mesh"));
+        assert!(!configured.contains("capsules"));
         assert!(configured.contains("operator-run"));
         assert!(configured.contains("remote"));
     }
@@ -607,12 +630,12 @@ url = "unix:///run/remote.sock"
     fn installed_default(store: &PluginStore, enabled: bool) {
         store
             .save(&mesh_llm_plugin_manager::InstalledPluginMetadata {
-                name: "capsule-emit-mesh".into(),
-                source_repository: "https://github.com/Mesh-LLM/capsule-emit-mesh-plugin".into(),
-                installed_version: "v0.1.2".into(),
+                name: "capsules".into(),
+                source_repository: "https://github.com/Mesh-LLM/capsules".into(),
+                installed_version: "v0.1.3".into(),
                 target_triple: "x86_64-unknown-linux-gnu".into(),
-                downloaded_asset_name: "capsule-emit-mesh.tar.gz".into(),
-                install_path: store.root().join("installed").join("capsule-emit-mesh"),
+                downloaded_asset_name: "capsules-0.1.3-x86_64-unknown-linux-gnu.tar.gz".into(),
+                install_path: store.root().join("installed").join("capsules"),
                 enabled,
                 default_managed: false,
                 manifest: None,
@@ -636,10 +659,10 @@ url = "unix:///run/remote.sock"
     fn disabling_an_uninstalled_default_records_it_and_enabling_removes_it() {
         let temp = tempfile::tempdir().unwrap();
         let store = PluginStore::new(temp.path());
-        set_enabled_in(&store, "capsule-emit-mesh", false, &mut Vec::new()).unwrap();
-        assert!(store.default_turned_off("capsule-emit-mesh"));
-        set_enabled_in(&store, "capsule-emit-mesh", true, &mut Vec::new()).unwrap();
-        assert!(!store.default_turned_off("capsule-emit-mesh"));
+        set_enabled_in(&store, "capsules", false, &mut Vec::new()).unwrap();
+        assert!(store.default_turned_off("capsules"));
+        set_enabled_in(&store, "capsules", true, &mut Vec::new()).unwrap();
+        assert!(!store.default_turned_off("capsules"));
     }
 
     #[test]
@@ -647,13 +670,11 @@ url = "unix:///run/remote.sock"
         let temp = tempfile::tempdir().unwrap();
         let store = PluginStore::new(temp.path());
         // Turned off while not installed, then installed explicitly anyway.
-        store
-            .set_default_turned_off("capsule-emit-mesh", true)
-            .unwrap();
+        store.set_default_turned_off("capsules", true).unwrap();
         installed_default(&store, false);
-        set_enabled_in(&store, "capsule-emit-mesh", true, &mut Vec::new()).unwrap();
-        assert!(!store.default_turned_off("capsule-emit-mesh"));
-        assert!(store.load("capsule-emit-mesh").unwrap().enabled);
+        set_enabled_in(&store, "capsules", true, &mut Vec::new()).unwrap();
+        assert!(!store.default_turned_off("capsules"));
+        assert!(store.load("capsules").unwrap().enabled);
     }
 
     #[test]
@@ -661,9 +682,9 @@ url = "unix:///run/remote.sock"
         let temp = tempfile::tempdir().unwrap();
         let store = PluginStore::new(temp.path());
         installed_default(&store, true);
-        set_enabled_in(&store, "capsule-emit-mesh", false, &mut Vec::new()).unwrap();
-        assert!(!store.load("capsule-emit-mesh").unwrap().enabled);
-        assert!(!store.default_turned_off("capsule-emit-mesh"));
+        set_enabled_in(&store, "capsules", false, &mut Vec::new()).unwrap();
+        assert!(!store.load("capsules").unwrap().enabled);
+        assert!(!store.default_turned_off("capsules"));
     }
 
     #[test]
@@ -672,21 +693,21 @@ url = "unix:///run/remote.sock"
         let store = PluginStore::new(temp.path());
         installed_default(&store, true);
         let mut err = Vec::new();
-        delete_in(&store, "capsule-emit-mesh", &mut err).unwrap();
-        assert!(store.load_optional("capsule-emit-mesh").unwrap().is_none());
+        delete_in(&store, "capsules", &mut err).unwrap();
+        assert!(store.load_optional("capsules").unwrap().is_none());
         assert!(
-            store.default_turned_off("capsule-emit-mesh"),
+            store.default_turned_off("capsules"),
             "a deleted default is recorded as turned off"
         );
         let err = String::from_utf8(err).unwrap();
         assert!(err.contains("it stays removed"), "{err}");
         assert!(
-            err.contains("run mesh-llm plugins enable capsule-emit-mesh"),
+            err.contains("run mesh-llm plugins enable capsules"),
             "{err}"
         );
 
-        set_enabled_in(&store, "capsule-emit-mesh", true, &mut Vec::new()).unwrap();
-        assert!(!store.default_turned_off("capsule-emit-mesh"));
+        set_enabled_in(&store, "capsules", true, &mut Vec::new()).unwrap();
+        assert!(!store.default_turned_off("capsules"));
     }
 
     #[test]

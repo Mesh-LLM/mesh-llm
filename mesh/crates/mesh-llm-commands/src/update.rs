@@ -17,12 +17,17 @@ pub async fn run_update(cli: &Cli) -> Result<()> {
         ),
         _ => (None, None, false, false),
     };
+    // A release carries its default plugins, and the updated node installs
+    // them from that bundled copy when it starts. Opting out is therefore a
+    // record the node keeps, made before the update, not a skipped step.
+    if no_default_plugins {
+        crate::plugin::turn_off_default_plugins()?;
+    }
     autoupdate::run_update_command(autoupdate::UpdateCommandOptions {
         flavor,
         detect_flavor,
         requested_version,
         current_version: mesh_llm_build_info::BUILD_VERSION,
-        provision_default_plugins: !no_default_plugins,
     })
     .await
 }

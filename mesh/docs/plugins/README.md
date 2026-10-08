@@ -540,40 +540,58 @@ the installed archive, extracted files, and local plugin metadata.
 ## Default Plugins
 
 The reviewed default list is `mesh_llm_plugin_manager::defaults::DEFAULT_PLUGINS`.
-Today it contains `capsule-emit-mesh` 0.1.2. Each entry pins a release version
-and an archive SHA-256 per supported platform. The catalog locates the plugin;
-if it also pins that platform, the pins must agree. GitHub's digest and the
-compiled digest must both match the download. Payment and wallet plugins are
-excluded from the default list.
+Today it contains `capsules` 0.1.3. Each entry pins a release version and an
+archive SHA-256 per supported platform, the same digests the release pipeline
+pins in `ci/bundled-plugins.json`. Payment and wallet plugins are excluded from
+the default list.
 
-`install.sh`, `install.ps1`, and `mesh-llm update` run the installed binary's
-`mesh-llm plugins install-defaults` command after installing the Mesh bundle.
-Plugin archives are downloaded separately; they are not inside the Mesh bundle.
-Node startup performs no plugin download. An unsupported platform or empty
-list is skipped. A download or verification failure warns without undoing the
-Mesh installation; rerunning the installer or update retries it.
-To skip default provisioning for one invocation, pass `--no-default-plugins`
-to `install.sh` or `mesh-llm update`, `-NoDefaultPlugins` to `install.ps1`, or
-set `MESH_LLM_NO_DEFAULT_PLUGINS=1`. Provisioning prints one line for a default
-it leaves alone: one you run from your own `[[plugin]]` entry or install, one
-left at its installed version because it is disabled, or a platform with no
-reviewed release.
+**A default plugin ships inside the Mesh release, never downloaded.** The
+release pipeline fetches each pinned plugin archive at its release tag,
+checks it against that release's `SHA256SUMS` and its build-provenance
+attestation, and places it, unchanged, in the release archive's `plugins/`
+directory with `plugins/manifest.json`. `install.sh` and `mesh-llm update`
+install that directory beside the `mesh-llm` binary; native packages keep it
+at `lib/mesh-llm/<version>/plugins` and the Homebrew formula under `libexec`.
+- **When it is installed:** when a node starts, and on `mesh-llm plugins
+  install-defaults`, the host installs each default from that bundled copy,
+  after checking the archive against the compiled pin. Both are local and
+  quick; neither makes a network call.
+- **No bundled copy:** a missing copy (a development build, say) is reported
+  ("this install carries no bundled copy"). Nothing is downloaded instead,
+  and there is no fallback. A digest mismatch is refused.
+- **Windows:** the release bundles no copy (the plugin has no Windows build
+  yet), so the default reports "no reviewed release for this platform".
+- **Updating Mesh** replaces the bundled copy, and the updated node installs
+  the new release's copy when it starts.
+- **One transition caveat:** an in-app update from a release before bundling
+  (0.78 or earlier) is performed by that older updater, which does not install
+  `plugins/`. The default then reports "no bundled copy" until the next update
+  or a reinstall with `install.sh`.
+
+To turn the defaults off, pass `--no-default-plugins` to `install.sh` or
+`mesh-llm update`, or `-NoDefaultPlugins` to `install.ps1`, or run `mesh-llm
+plugins install-defaults --off`. Each records the choice in the plugin store:
+an installed default is disabled, and one that is not installed is recorded as
+turned off, so no later start installs it. `MESH_LLM_NO_DEFAULT_PLUGINS=1`
+skips defaults for the processes that see it. Provisioning prints one line for
+a default it leaves alone: one you run from your own `[[plugin]]` entry or
+install, one disabled or turned off, a platform with no reviewed release, or
+an install with no bundled copy.
 
 `plugin-install.json` records whether an installation is default managed. A
-later installer or update moves enabled default-managed plugins to the newly
-reviewed pin. An operator-installed plugin with the same name is left alone;
-so is one the operator runs from a `[[plugin]]` entry that sets `command` or
-`url`. A `[[plugin]]` entry that only holds settings, as the console writes
-when an operator saves one, configures the installed default and leaves it
-default managed;
-`mesh-llm plugins update` also follows the compiled pin for default-managed
-plugins. Disabling a default preserves the installed record and prevents an
-automatic upgrade. Deleting a default removes it and records in the plugin
-store that it stays off, so the installers and `mesh-llm update` do not install
-it again; `mesh-llm plugins disable <name>` records the same for a default that
-is not installed. `mesh-llm plugins enable <name>` undoes that, and the next
-installer or update run installs it. There is no separate offered-defaults
-state file.
+new release's bundled copy replaces an enabled default-managed install when
+the node starts. An operator-installed plugin with the same name is left
+alone; so is one the operator runs from a `[[plugin]]` entry that sets
+`command` or `url`. A `[[plugin]]` entry that only holds settings, as the
+console writes when an operator saves one, configures the installed default
+and leaves it default managed. `mesh-llm plugins update` reinstalls a
+default-managed plugin from the bundled copy too. Disabling a default
+preserves the installed record and keeps it at its installed version.
+Deleting a default removes it and records in the plugin store that it stays
+off, so no later start installs it again; `mesh-llm plugins disable <name>`
+records the same for a default that is not installed. `mesh-llm plugins enable
+<name>` undoes that, and the next start installs it from the bundled copy.
+There is no separate offered-defaults state file.
 
 A default plugin that fails to start is optional: its failure is reported as
 an inactive plugin and does not abort node startup. A default-managed plugin
@@ -585,7 +603,7 @@ exchange hook, which sees every OpenAI exchange the node handles. A
 default-managed plugin that is no longer on this build's list keeps everything
 but serving models and the exchange hook until it is reviewed again.
 
-`capsule-emit-mesh` keeps a signed record of each request this node serves, on
+`capsules` keeps a signed record of each request this node serves, on
 the node's own disk. By default it keeps SHA-256 digests of the request and
 response, never their text; mesh-llm does not pass exchange text to plugins.
 It makes no network calls unless the operator configures a witness URL.

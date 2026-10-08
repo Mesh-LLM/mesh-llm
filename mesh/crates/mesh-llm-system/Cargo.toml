@@ -30,8 +30,6 @@ serde_json = "1"
 sha2 = "0.11"
 skippy-runtime = { path = "../../../skippy/crates/skippy-runtime", version = "0.78.0", optional = true  }
 tracing = "0.1"
-# The bounded wait for default plugin provisioning after an update.
-tokio = { version = "1", features = ["process", "time"] }
 zip = { version = "8.6", default-features = false, features = ["deflate"] }
 
 [features]
@@ -43,5 +41,4 @@ windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_
 
 [dev-dependencies]
 serial_test = "4"
-tokio = { version = "1", features = ["macros", "rt", "process", "time"] }
 tempfile = "3"

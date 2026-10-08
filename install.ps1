@@ -51,7 +51,7 @@ Options:
   -Flavor <FLAVOR>        Legacy compatibility flag. The installer installs the Windows x64 product bundle, including its packaged runtime; ``mesh-llm.exe setup`` may select another compatible runtime.
   -NoPathUpdate           Do not add the install directory to the user Path.
   -NoSetup                Do not run ``mesh-llm.exe setup``; print the exact command instead.
-  -NoDefaultPlugins       Do not install or update the reviewed default plugins.
+  -NoDefaultPlugins       Turn the default plugins off (mesh-llm plugins enable NAME undoes it).
   -Help                   Show this help text.
 
 Environment overrides:
@@ -712,15 +712,19 @@ try {
     Write-Host "Installed $asset to $InstallDir"
     & $meshBinary --version
 
-    if (-not $NoDefaultPlugins) {
-        try {
-            & $meshBinary plugins install-defaults
-            if ($LASTEXITCODE -ne 0) {
-                Write-Warning "Default plugins could not be fully installed; MeshLLM is installed."
-            }
-        } catch {
-            Write-Warning "Default plugins could not be fully installed; MeshLLM is installed: $_"
+    # Windows releases bundle no default plugin yet, so there is nothing to
+    # install; -NoDefaultPlugins still records the opt-out for a later release.
+    $defaultsArgs = @('plugins', 'install-defaults')
+    if ($NoDefaultPlugins) {
+        $defaultsArgs += '--off'
+    }
+    try {
+        & $meshBinary @defaultsArgs
+        if ($LASTEXITCODE -ne 0) {
+            Write-Warning "Default plugins could not be fully installed; MeshLLM is installed."
         }
+    } catch {
+        Write-Warning "Default plugins could not be fully installed; MeshLLM is installed: $_"
     }
 
     if ($NoPathUpdate -and -not $pathUpdated) {

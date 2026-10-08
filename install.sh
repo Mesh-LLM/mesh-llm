@@ -74,7 +74,8 @@ Options:
   --no-setup                 Do not run \
                              \
 mesh-llm setup automatically after install.
-  --no-default-plugins       Do not install or update the reviewed default plugins.
+  --no-default-plugins       Turn the default plugins off: they are not installed
+                             from the bundle, now or later (mesh-llm plugins enable NAME undoes it).
   --service                  Legacy compatibility flag. Passes --service through to \
                              \
 mesh-llm setup instead of installing services in shell.
@@ -861,11 +862,13 @@ main() {
     fi
 
     install_bundle "$tmp_dir/mesh-bundle"
-    # Provision from the pins compiled into the installed binary. Plugin
-    # download failures leave the Mesh installation usable and are retryable by
-    # running this installer or `mesh-llm update` again.
+    # The default plugins ship in the bundle (plugins/); install them from
+    # that copy, with no download. A node also does this when it starts, so
+    # --no-default-plugins records the opt-out rather than skipping a step.
     if ! bool_is_true "$DEFAULT_PLUGINS"; then
-        :
+        if ! "$INSTALL_DIR/mesh-llm" plugins install-defaults --off; then
+            warn "could not turn the default plugins off; run: mesh-llm plugins install-defaults --off"
+        fi
     elif ! "$INSTALL_DIR/mesh-llm" plugins install-defaults; then
         warn "default plugins could not be fully installed; mesh-llm is installed"
     fi

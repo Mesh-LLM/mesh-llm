@@ -134,6 +134,20 @@ class InstallPs1BehaviorTests(unittest.TestCase):
                 (tmp_path / "bin/native-runtimes/test-runtime/manifest.json").is_file()
             )
 
+    def test_no_default_plugins_turns_the_defaults_off(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            result, calls = self._run_install(
+                tmp_path,
+                interactive=False,
+                args=["-NoDefaultPlugins"],
+            )
+
+            self.assertEqual(result.returncode, 0, self._combined_output(result))
+            self.assertEqual(
+                self._read_calls(calls), ["--version", "plugins install-defaults --off"]
+            )
+
     def test_no_setup_prints_command_without_running_setup(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)

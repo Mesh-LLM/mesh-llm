@@ -662,14 +662,16 @@ class InstallScriptTests(unittest.TestCase):
             self.assertIn("Run this next:", result.stdout)
             self.assertIn("/mesh-llm setup", result.stdout)
 
-    def test_no_default_plugins_skips_provisioning(self) -> None:
+    def test_no_default_plugins_turns_the_defaults_off(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             result, calls, _tools = self._run_main(
                 tmp, interactive=False, args=["--no-setup", "--no-default-plugins"]
             )
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertTrue((Path(tmp) / "bin/mesh-llm").is_file())
-            self.assertFalse(calls.exists() and "install-defaults" in calls.read_text(encoding="utf-8"))
+            # A node installs its bundled defaults when it starts, so the
+            # opt-out is recorded, not just skipped.
+            self.assertEqual(calls.read_text(encoding="utf-8"), "plugins install-defaults --off\n")
 
     def test_default_plugin_failure_does_not_undo_mesh_install(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
