@@ -435,6 +435,20 @@ runner-contract update is active.
 | `sdk-smoke.yml` | Artifact-based SDK consumers; all SDK rows consume the lane's immutable console UI artifact, while Rust smoke restores the main-seeded, target/profile/image/toolchain/recipe-bound Cargo/target cache through `Swatinem/rust-cache` |
 | `hf-download-smoke.yml` | Hugging Face download smoke |
 
+The four source-compatible slices select real legacy Python contracts or their
+native Rust/Just owners from the admitted checkout. Native Quality runs both
+contract recipes and restores the pinned public SDK/research sources. Resolver
+arrays are initialized in each invoking step. Native runner-contract and the
+three accelerator Laya jobs admit a private, digest-bound cleanup executable
+before managed work; legacy checkouts retain their existing cleanup command.
+Quality's job/alternate contract bounds are 60/40 native (20 legacy) minutes;
+runner-contract is 45 minutes; accelerator Laya jobs have a 100-minute floor
+while preserving larger caller limits, with aggregate native restore/read work
+bounded to 70 minutes. These budget changes preserve authority, providers,
+cache policy, workload arguments and all existing immutable audit/resolver references.
+Hosted old/new-source compatibility remains unverified until its diagnostic
+runs finish; this accounting adds no model or SDK qualification claim.
+
 All workflow calls use typed, bounded semantic inputs. Credential-bearing smoke
 workflows remain fixed to GitHub-hosted runners; the PR entrypoints pass no
 repository secrets. The trusted main entrypoint may pass the optional

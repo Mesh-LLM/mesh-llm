@@ -599,6 +599,36 @@ select no build rows. Trust-derived placement, cache mode, artifact namespace
 and optional credentials may differ, along with row selection and bounded
 parallelism.
 
+## Source-compatible contract execution
+
+The reusable slices accept both the existing Python automation checkout and the
+native automation checkout. Quality selects actual Python unittest discovery
+for legacy source; native source selects both `just ci-automation-contracts` and
+`just ci-legacy-contracts`, with its pinned SDK and research source preparation.
+The native path never treats empty Python discovery as replacement coverage.
+Model-resolution steps initialize their source-specific resolver independently.
+
+Native managed work starts only after preparing and admitting a source-bound
+cleanup controller. A private, read-only executable copy under `RUNNER_TEMP`
+retains its digest even if later Cargo work replaces the build output. Cleanup
+requires the managed-work marker and rechecks source and controller digests;
+bootstrap failure refuses owned work and does not compile a cleanup fallback.
+Legacy source retains its existing Python cleanup command.
+
+These are explicit budget changes: Quality has a 60-minute job with an alternate
+40-minute native contract step or 20-minute legacy step; the runner-contract job
+has 45 minutes, including 20-minute native preparation and 5-minute cleanup.
+The three accelerator Laya jobs have a 100-minute floor, preserving larger
+caller limits: 20-minute preparation, 70-minute aggregate restore/read work,
+5-minute cleanup and 5-minute setup reserve. Legacy composite limits and all
+workload arguments remain unchanged. The aggregate Laya allowance does not
+create a separate internal acquisition deadline.
+
+The five normal PR/main authority boundaries and all existing audit and package
+resolver immutable references remain unchanged. These source branches still
+require hosted validation, including skipped local actions absent from a legacy
+checkout; local source review does not establish that hosted behavior.
+
 ## Slice catalog
 
 The five lane workflows organize the catalog without changing selected rows:

@@ -197,7 +197,16 @@ jobs:
         id: skippy_correctness_model
         if: ${{ contains(steps.resolve_batch_crates.outputs.crates, 'skippy-runtime') || (contains(steps.resolve_batch_crates.outputs.crates, 'skippy-model-package') || contains(steps.resolve_batch_crates.outputs.crates, 'skippy-package-builder')) }}
         run: |
-          python3 scripts/resolve-test-model-manifest.py \
+          set -euo pipefail
+          if [[ -f scripts/resolve-test-model-manifest.py ]]; then
+            model_resolver=(python3 scripts/resolve-test-model-manifest.py)
+          elif [[ -f tools/xtask/src/model_registry/resolve.rs ]]; then
+            model_resolver=(cargo xtool models resolve)
+          else
+            echo 'unsupported model manifest resolver source' >&2
+            exit 1
+          fi
+          "${model_resolver[@]}" \
             ci/model-artifacts/manifests/skippy-correctness.json \
             --cadence "${{ (inputs.original_event_name == 'pull_request' || inputs.original_event_name == 'pull_request_target') && 'pull-request' || inputs.original_event_name == 'push' && 'main' || 'manual' }}" \
             --github-output "$GITHUB_OUTPUT"
@@ -221,7 +230,15 @@ jobs:
         if: ${{ contains(steps.resolve_batch_crates.outputs.crates, 'skippy-runtime') || (contains(steps.resolve_batch_crates.outputs.crates, 'skippy-model-package') || contains(steps.resolve_batch_crates.outputs.crates, 'skippy-package-builder')) }}
         run: |
           set -euo pipefail
-          python3 scripts/resolve-test-model-manifest.py \
+          if [[ -f scripts/resolve-test-model-manifest.py ]]; then
+            model_resolver=(python3 scripts/resolve-test-model-manifest.py)
+          elif [[ -f tools/xtask/src/model_registry/resolve.rs ]]; then
+            model_resolver=(cargo xtool models resolve)
+          else
+            echo 'unsupported model manifest resolver source' >&2
+            exit 1
+          fi
+          "${model_resolver[@]}" \
             ci/model-artifacts/manifests/skippy-correctness.json \
             --cadence "${{ (inputs.original_event_name == 'pull_request' || inputs.original_event_name == 'pull_request_target') && 'pull-request' || inputs.original_event_name == 'push' && 'main' || 'manual' }}" \
             --verify-root "$RUNNER_TEMP/skippy-correctness-model"
@@ -238,6 +255,9 @@ jobs:
         run: |
           npm install --global @anthropic-ai/claude-code@2.1.273
           test "$(claude --version | awk '{print $1}')" = "2.1.273"
+      - name: Prepare immutable research source for native benchmark contracts
+        if: ${{ contains(fromJson(steps.resolve_batch_crates.outputs.crates), 'skippy-bench') && hashFiles('tools/xtask/src/automation/python_research_source.rs') != '' }}
+        uses: ./.github/actions/prepare-python-research-source
       - name: Run isolated Cargo tests for the batch
         env:
           TEST_CRATES: ${{ steps.resolve_batch_crates.outputs.crates }}
@@ -328,7 +348,16 @@ jobs:
       - name: Resolve SafeTensors checkpoint manifest
         id: safetensors_model
         run: |
-          python3 scripts/resolve-test-model-manifest.py \
+          set -euo pipefail
+          if [[ -f scripts/resolve-test-model-manifest.py ]]; then
+            model_resolver=(python3 scripts/resolve-test-model-manifest.py)
+          elif [[ -f tools/xtask/src/model_registry/resolve.rs ]]; then
+            model_resolver=(cargo xtool models resolve)
+          else
+            echo 'unsupported model manifest resolver source' >&2
+            exit 1
+          fi
+          "${model_resolver[@]}" \
             ci/model-artifacts/manifests/safetensors-runtime-smoke.json \
             --cadence pull-request \
             --github-output "$GITHUB_OUTPUT"
@@ -337,12 +366,20 @@ jobs:
           SAFETENSORS_FILES_JSON: ${{ steps.safetensors_model.outputs.files_json }}
         run: |
           set -euo pipefail
+          if [[ -f scripts/resolve-test-model-manifest.py ]]; then
+            model_resolver=(python3 scripts/resolve-test-model-manifest.py)
+          elif [[ -f tools/xtask/src/model_registry/resolve.rs ]]; then
+            model_resolver=(cargo xtool models resolve)
+          else
+            echo 'unsupported model manifest resolver source' >&2
+            exit 1
+          fi
           fixture_dir="$RUNNER_TEMP/safetensors-smollm2"
           mapfile -t files < <(jq -r '.[]' <<<"$SAFETENSORS_FILES_JSON")
           hf download "${{ steps.safetensors_model.outputs.repo }}" "${files[@]}" \
             --revision "${{ steps.safetensors_model.outputs.revision }}" \
             --local-dir "$fixture_dir"
-          python3 scripts/resolve-test-model-manifest.py \
+          "${model_resolver[@]}" \
             ci/model-artifacts/manifests/safetensors-runtime-smoke.json \
             --cadence pull-request \
             --verify-root "$fixture_dir"
