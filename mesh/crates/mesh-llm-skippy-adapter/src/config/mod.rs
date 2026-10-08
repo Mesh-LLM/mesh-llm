@@ -1,3 +1,4 @@
+mod dflash;
 mod request_defaults;
 mod resolution;
 mod speculative;

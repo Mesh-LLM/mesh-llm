@@ -406,12 +406,15 @@ impl ResolvedSkippyConfig {
             },
             speculative_window: self.speculative_window_for_embedded(mode),
             adaptive_speculative_window: mode == "draft",
-            draft_n_gpu_layers: if mode == "draft" || self.speculative.native_mtp_enabled {
+            draft_n_gpu_layers: if mode == "draft"
+                || self.speculative.native_mtp_enabled
+                || self.speculative.decode.dflash.is_some()
+            {
                 self.speculative.draft_n_gpu_layers
             } else {
                 None
             },
-            speculative: self.speculative_decode_config(),
+            speculative: self.speculative_decode_config(staged)?,
             native_mtp_enabled: self.speculative.native_mtp_enabled,
             native_mtp_draft_model_path: if self.speculative.native_mtp_enabled {
                 self.speculative.draft_model_path.clone()
@@ -531,7 +534,17 @@ impl ResolvedSkippyConfig {
 }
 
 impl ResolvedSkippyConfig {
-    fn speculative_decode_config(&self) -> SpeculativeDecodeConfig {
-        self.speculative.decode.clone()
+    /// A DFlash draft reads hidden states from every target layer it was
+    /// trained on, so it needs the complete target on this node. A split
+    /// target serves without it unless the pairing policy fails closed.
+    fn speculative_decode_config(&self, staged: bool) -> Result<SpeculativeDecodeConfig> {
+        let mut decode = self.speculative.decode.clone();
+        if staged && decode.dflash.take().is_some() {
+            if self.speculative.pairing_fault == "fail_closed" {
+                bail!("skippy DFlash drafts require the complete target model on one node");
+            }
+            decode.effective_strategy = "disabled".to_string();
+        }
+        Ok(decode)
     }
 }
