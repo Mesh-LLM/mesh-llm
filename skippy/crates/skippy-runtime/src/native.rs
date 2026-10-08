@@ -12,6 +12,7 @@ use crate::media::MediaProjector;
 use crate::path_cstring::path_to_cstring;
 use crate::runtime_events;
 use crate::session::StageSession;
+use crate::vocabulary::{ensure_in_vocabulary, vocabulary_size};
 use crate::{
     ActivationBoundaryDesc, ChatReasoningFormat, ChatTemplateJsonOptions, ChatTemplateJsonResult,
     ChatTemplateMessage, ChatTemplateOptions, LoadedModelCapability, ModelOpenEventQueue,
@@ -925,6 +926,7 @@ impl StageModelReader {
 }
 
 fn detokenize_bytes(raw: *mut RawModel, tokens: &[i32]) -> Result<Vec<u8>> {
+    ensure_in_vocabulary(tokens, vocabulary_size(raw)?)?;
     let mut bytes = 0usize;
     let mut error = ptr::null_mut();
     let status = unsafe {

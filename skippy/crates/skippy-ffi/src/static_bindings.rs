@@ -118,6 +118,12 @@ unsafe extern "C" {
 
     pub fn llama_model_is_recurrent(model: *const Opaque) -> bool;
 
+    /// Borrow the vocabulary of a llama model.
+    pub fn llama_model_get_vocab(model: *const Opaque) -> *const Opaque;
+
+    /// Number of tokens in a vocabulary; valid token ids are `0..n`.
+    pub fn llama_vocab_n_tokens(vocab: *const Opaque) -> i32;
+
     pub fn llama_model_is_hybrid(model: *const Opaque) -> bool;
 
     pub fn llama_model_is_diffusion(model: *const Opaque) -> bool;
