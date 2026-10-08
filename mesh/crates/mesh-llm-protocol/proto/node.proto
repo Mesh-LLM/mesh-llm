@@ -225,6 +225,7 @@ message LightningOffer {
   string model = 1;
   uint64 input_msat_per_million = 2;
   uint64 output_msat_per_million = 3;
+  // Deprecated and ignored on read; sellers send 1 for older buyers.
   uint64 minimum_invoice_msat = 4;
 }
 
