@@ -1,0 +1,36 @@
+[package]
+name = "trajectory-reader"
+version.workspace = true
+edition = "2024"
+publish = false
+autotests = false
+description = "Portable trajectory selection contracts and an optional Parquet reader"
+
+[features]
+default = []
+parquet-input = ["dep:parquet"]
+corpus-input = ["parquet-input", "dep:hf_hub"]
+
+[dependencies]
+md5 = "=0.8.1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.11"
+tempfile = "3"
+parquet = { version = "=60.0.0", optional = true, default-features = false, features = ["snap", "brotli", "flate2-rust_backend", "lz4", "zstd", "json"] }
+hf_hub = { package = "skippy-hf-hub", path = "../../skippy/crates/skippy-hf-hub", optional = true, features = ["blocking"] }
+
+[dev-dependencies]
+hyper = "=1.11.1"
+thiserror = "2"
+
+[[bin]]
+name = "trajectory-reader"
+path = "src/main.rs"
+required-features = ["parquet-input"]
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dev-dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_Storage_FileSystem", "Win32_System_Console", "Win32_System_Diagnostics_ToolHelp", "Win32_System_JobObjects", "Win32_System_Pipes", "Win32_System_Threading"] }
