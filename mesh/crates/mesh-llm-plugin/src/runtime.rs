@@ -682,6 +682,20 @@ struct RuntimeState<P> {
     fatal_tx: mpsc::Sender<anyhow::Error>,
 }
 
+fn panic_message(join_error: tokio::task::JoinError) -> String {
+    if !join_error.is_panic() {
+        return join_error.to_string();
+    }
+    let panic = join_error.into_panic();
+    if let Some(message) = panic.downcast_ref::<&str>() {
+        (*message).to_string()
+    } else if let Some(message) = panic.downcast_ref::<String>() {
+        message.clone()
+    } else {
+        "a non-string panic payload".to_string()
+    }
+}
+
 struct OrderedPayload {
     request_id: u64,
     payload: proto::envelope::Payload,
@@ -1052,14 +1066,24 @@ impl PluginRuntime {
         // `on_initialized` may wait for the host (to announce a plugin key, or
         // ask for a peer block), and the host's reply arrives on this read loop.
         // So it runs on its own task and the loop keeps reading. The task keeps
-        // the plugin locked, so no other handler runs before it finishes, and
-        // an error still ends the runtime.
+        // the plugin locked, so no other handler runs before it finishes. An
+        // error or a panic in it still ends the runtime.
         let task_state = state.clone();
-        tokio::spawn(async move {
+        let initialized = tokio::spawn(async move {
             let mut context = Self::context(&task_state);
-            if let Err(err) = plugin.on_initialized(&mut context).await {
-                let _ = task_state.fatal_tx.send(err).await;
-            }
+            plugin.on_initialized(&mut context).await
+        });
+        let fatal_state = state.clone();
+        tokio::spawn(async move {
+            let err = match initialized.await {
+                Ok(Ok(())) => return,
+                Ok(Err(err)) => err,
+                Err(join_error) => anyhow::anyhow!(
+                    "plugin on_initialized panicked: {}",
+                    panic_message(join_error)
+                ),
+            };
+            let _ = fatal_state.fatal_tx.send(err).await;
         });
         Ok(true)
     }
@@ -1935,6 +1959,33 @@ mod tests {
         assert_eq!(response.binding_signature, vec![9; 64]);
 
         runtime.abort();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_panic_in_on_initialized_ends_the_runtime_with_an_error() {
+        let plugin = SimplePlugin::new(PluginMetadata::new(
+            "demo",
+            "1.0.0",
+            plugin_server_info("demo", "1.0.0", "Demo", "Demo plugin", None::<String>),
+        ))
+        .on_initialized(|_context| Box::pin(async { panic!("startup panicked") }));
+
+        let (plugin_stream, host_stream) = tokio::net::UnixStream::pair().unwrap();
+        let runtime = tokio::spawn(PluginRuntime::run_with_stream(
+            plugin,
+            LocalStream::Unix(plugin_stream),
+        ));
+        let mut host_stream = LocalStream::Unix(host_stream);
+        initialize(&mut host_stream, Vec::new()).await;
+
+        let result = timeout(Duration::from_secs(1), runtime)
+            .await
+            .expect("the runtime should end")
+            .unwrap();
+        let err = result.expect_err("a panic in on_initialized should end the runtime");
+        assert!(err.to_string().contains("on_initialized panicked"), "{err}");
+        assert!(err.to_string().contains("startup panicked"), "{err}");
     }
 
     #[cfg(unix)]
