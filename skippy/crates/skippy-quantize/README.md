@@ -507,7 +507,7 @@ skippy-quantize validate-splits --root /mnt/target --prefix UD-Q3_K_S --json
 
 ### Reference parity smoke
 
-Use `scripts/compare-reference-quantization.py` when changing native
+Use the external `mesh-llm-research/quantizer-reference/compare-reference-quantization.py` when changing native
 conversion or quantization behavior. It compares the native Rust path against
 the pinned llama.cpp reference tools:
 
@@ -519,18 +519,18 @@ the pinned llama.cpp reference tools:
   `skippy-quantize quantize --backend skippy-abi` must emit byte-identical split
   GGUF outputs for every mode reported by `skippy-quantize list-quants --json`.
 
-Conversion-only smoke:
+The reference project is now owned by the local `mesh-llm-research` repository.
+Use its declared environment and independently supplied pinned tools. Its
+quantizer project has no resolver lock yet; review dependencies before treating
+the environment as an immutable reference. Do not use unpinned `uv --with`
+installation as qualification.
+
+Conversion-only smoke (after explicit environment preparation):
 
 ```bash
-uv run --python 3.12 \
-  --with torch \
-  --with transformers \
-  --with numpy \
-  --with sentencepiece \
-  --with protobuf \
-  --with gguf \
-  --no-project \
-  skippy/crates/skippy-quantize/scripts/compare-reference-quantization.py \
+MESH_RESEARCH_ROOT=/absolute/path/to/mesh-llm-research
+"$MESH_RESEARCH_ROOT/quantizer-reference/.venv/bin/python" -I \
+  "$MESH_RESEARCH_ROOT/quantizer-reference/compare-reference-quantization.py" \
   --work-dir /tmp/skippy-quantize-conversion-parity \
   --clean \
   --skippy-quantize ./target/debug/skippy-quantize \
@@ -543,11 +543,8 @@ uv run --python 3.12 \
 All advertised quant modes:
 
 ```bash
-uv run --python 3.12 \
-  --with gguf \
-  --with numpy \
-  --no-project \
-  skippy/crates/skippy-quantize/scripts/compare-reference-quantization.py \
+"$MESH_RESEARCH_ROOT/quantizer-reference/.venv/bin/python" -I \
+  "$MESH_RESEARCH_ROOT/quantizer-reference/compare-reference-quantization.py" \
   --work-dir /tmp/skippy-quantize-allmodes \
   --clean \
   --skippy-quantize ./target/debug/skippy-quantize \
@@ -559,3 +556,17 @@ uv run --python 3.12 \
 `--generate-imatrix` creates a deterministic all-ones legacy imatrix from the
 GGUF tensor metadata so very low-bit and IQ modes are tested instead of being
 accepted as matching failures.
+
+### Explicit run-quant resume range
+
+`run-quant --manifest FILE --first-split N --last-split M` admits an inclusive
+range against the manifest split count. Both flags are required together;
+splits start at1 and N must be <=M. Omitted flags preserve automatic local
+resume. A selected range skips missing earlier output shards, which is useful
+when a separately owned workflow has already verified/published/unlinked them.
+The tool itself does not establish remote upload or resume integrity.
+
+This only exposes the existing range-selection path. It does not restore
+partial-window or memory-chunked quantization support: the current native
+backend still refuses partial windows and `--max-memory`. Supply a tool with
+actual proven capabilities for the pending low-memory Jobs workflow.
