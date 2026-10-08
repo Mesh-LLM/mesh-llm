@@ -75,6 +75,9 @@ pub struct RuntimeOptions {
     pub draft_max: u16,
     pub no_draft: bool,
     pub speculative_overrides: Option<SpeculativeConfig>,
+    /// Serving intent, composed into the settings it implies before the
+    /// explicit overrides below are applied.
+    pub strategy: Option<crate::runtime::serving_strategy::ServingStrategy>,
     pub split: bool,
     pub allow_uncertified_split: bool,
     pub split_topology_lock: Option<PathBuf>,
@@ -162,6 +165,7 @@ impl Default for RuntimeOptions {
             draft_max: 8,
             no_draft: false,
             speculative_overrides: None,
+            strategy: None,
             split: false,
             allow_uncertified_split: false,
             split_topology_lock: None,

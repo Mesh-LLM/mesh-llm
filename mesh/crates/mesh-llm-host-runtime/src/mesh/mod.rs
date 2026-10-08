@@ -100,6 +100,7 @@ mod plugin_config;
 mod plugin_mesh;
 mod plugin_streams;
 pub mod requirements;
+mod signed_records;
 mod stage_artifacts;
 mod stage_proto;
 mod stage_transport;
@@ -210,4 +211,4 @@ pub(crate) mod tests;
 mod public_identity_tests;
 
 #[cfg(feature = "payments")]
-mod payments;
+pub(crate) mod payments;

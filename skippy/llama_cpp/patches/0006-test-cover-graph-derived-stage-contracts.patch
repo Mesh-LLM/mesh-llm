@@ -16,13 +16,13 @@ Subject: [PATCH] test: cover graph-derived stage contracts
  tests/test-chat-auto-parser.cpp               |   47 +
  tests/test-chat.cpp                           |  170 +-
  tests/test-deepseek4-mtp.h                    |   88 +
- tests/test-llama-archs.cpp                    |  185 +-
+ tests/test-llama-archs.cpp                    |  205 ++-
  tests/test-skippy-kv-cells-contiguous.cpp     |   20 +
  tests/test-skippy-kv-page-export.cpp          |  283 +++
  tests/test-skippy-model-loader-accounting.cpp |  326 ++++
  .../test-skippy-recurrent-state-roundtrip.cpp |  159 ++
  ...st-skippy-verify-checkpoint-retirement.cpp |   26 +
- 18 files changed, 6242 insertions(+), 23 deletions(-)
+ 18 files changed, 6274 insertions(+), 23 deletions(-)
  create mode 100644 src/skippy/tests/graph_build_inputs.cpp
  create mode 100644 src/skippy/tests/hardware_application_probe.cpp
  create mode 100644 src/skippy/tests/noalloc_graph_planning.cpp
@@ -5498,18 +5498,43 @@ index 000000000..87a499031
 +    return 0;
 +}
 diff --git a/tests/test-llama-archs.cpp b/tests/test-llama-archs.cpp
-index 5a8a196c1..d640cf5c9 100644
+index 5a8a196c1..8e7e3115f 100644
 --- a/tests/test-llama-archs.cpp
 +++ b/tests/test-llama-archs.cpp
-@@ -15,6 +15,7 @@
+@@ -15,8 +15,10 @@
  #include <cmath>
  #include <cstddef>
  #include <cstdio>
 +#include <cstdlib>
  #include <cstring>
  #include <cstdint>
++#include <filesystem>
  #include <random>
-@@ -113,10 +114,26 @@ static std::vector<llama_token> get_tokens(const uint32_t n_tokens, const uint32
+ #include <regex>
+ #include <stdexcept>
+@@ -24,6 +26,21 @@
+ #include <utility>
+ #include <vector>
+ 
++// llama_model_save_to_file() and llama_model_saver::save() do not report a
++// failed write, so a fixture whose directory is missing used to produce no
++// file and exit code 0. Drop any stale copy first, then check what was written.
++static void begin_fixture_write(const std::string & path) {
++    std::error_code ignored;
++    std::filesystem::remove(path, ignored);
++}
++
++static void require_fixture_written(const std::string & path) {
++    std::error_code error;
++    if (!std::filesystem::is_regular_file(path, error) || std::filesystem::file_size(path, error) == 0 || error) {
++        throw std::runtime_error("cannot write model fixture " + path);
++    }
++}
++
+ static bool arch_matches(const std::string & filter, llm_arch arch) {
+     if (filter.empty()) {
+         return true;
+@@ -113,10 +130,26 @@ static std::vector<llama_token> get_tokens(const uint32_t n_tokens, const uint32
      return ret;
  }
  
@@ -5538,7 +5563,7 @@ index 5a8a196c1..d640cf5c9 100644
  
      uint32_t n_vocab = 128;
      uint32_t n_embd  = 256;
-@@ -140,7 +157,7 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
+@@ -140,7 +173,7 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
          n_embd  = 512;
          n_head  = 8;
          n_ff    = 1024;
@@ -5547,7 +5572,7 @@ index 5a8a196c1..d640cf5c9 100644
      } else if (arch == LLM_ARCH_STEP35 || arch == LLM_ARCH_LAGUNA) {
          n_embd = 160; // exercise per-head tensor split granularity with head size 80
      } else if (arch == LLM_ARCH_QWEN3 || arch == LLM_ARCH_MUSE_GLIMMER || arch == LLM_ARCH_AFMOE) {
-@@ -329,10 +346,21 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
+@@ -329,10 +362,21 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
      // note: using a realistic top-k here makes the results unstable and hard to match between CPU and GPU
      //       a large value makes things deterministic since all data is selected by the indexer
      //ms.add_kv(LLM_KV_ATTENTION_INDEXER_TOP_K,        uint32_t(8));
@@ -5570,7 +5595,7 @@ index 5a8a196c1..d640cf5c9 100644
      // mrope sections count rope pairs; Ling 3.0 VL files carry [t, h, w] sections
      // summing to n_rot / 2 (n_rot is 64 in this fixture)
      if (arch == LLM_ARCH_BAILINGMOE3) {
-@@ -340,7 +368,6 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
+@@ -340,7 +384,6 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
      } else {
          ms.add_kv(LLM_KV_ROPE_DIMENSION_SECTIONS, std::vector<uint32_t>({n_embd_head/4, n_embd_head/4, n_embd_head/4, n_embd_head/4}));
      }
@@ -5578,7 +5603,7 @@ index 5a8a196c1..d640cf5c9 100644
      if (arch == LLM_ARCH_HY_V4) {
          ms.add_kv(LLM_KV_HYPER_CONNECTION_COUNT,     uint32_t(4));
          ms.add_kv(LLM_KV_HYPER_CONNECTION_EPSILON,   1.0e-6f);
-@@ -360,12 +387,11 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
+@@ -360,12 +403,11 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
      if (arch == LLM_ARCH_DEEPSEEK4) {
          ms.add_kv(LLM_KV_ATTENTION_OUTPUT_GROUP_COUNT,          uint32_t(8));
          ms.add_kv(LLM_KV_ATTENTION_OUTPUT_LORA_RANK,            uint32_t(32));
@@ -5593,7 +5618,7 @@ index 5a8a196c1..d640cf5c9 100644
          ms.add_kv(LLM_KV_SWIGLU_CLAMP_EXP,                      10.0f);
          ms.add_kv(LLM_KV_EXPERT_WEIGHTS_SCALE,                  1.0f);
          ms.add_kv(LLM_KV_EXPERT_WEIGHTS_NORM,                   true);
-@@ -452,6 +478,16 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
+@@ -452,6 +494,16 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
          ggml_format_name(&t, "convnext.%" PRIu32 ".dw.weight", il);
          gguf_add_tensor(ms.gguf_ctx, &t);
      }
@@ -5610,7 +5635,7 @@ index 5a8a196c1..d640cf5c9 100644
      return ret;
  }
  
-@@ -459,11 +495,67 @@ static bool silent_model_load_progress(float /*progress*/, void * /*user_data*/)
+@@ -459,11 +511,67 @@ static bool silent_model_load_progress(float /*progress*/, void * /*user_data*/)
      return true;
  }
  
@@ -5680,7 +5705,7 @@ index 5a8a196c1..d640cf5c9 100644
      llama_model_params model_params = llama_model_default_params();
      model_params.progress_callback = silent_model_load_progress;
      std::vector<ggml_backend_dev_t> devs_copy = devs;
-@@ -478,6 +570,9 @@ static std::pair<llama_model_ptr, llama_context_ptr> get_model_and_ctx(
+@@ -478,6 +586,9 @@ static std::pair<llama_model_ptr, llama_context_ptr> get_model_and_ctx(
      if (!encode) {
          ctx_params.n_ubatch = 64;
      }
@@ -5690,7 +5715,7 @@ index 5a8a196c1..d640cf5c9 100644
  
      tensor_data_params tensor_params = { seed, stdev };
      llama_model_ptr model(gguf_ctx != nullptr ?
-@@ -493,6 +588,20 @@ static std::pair<llama_model_ptr, llama_context_ptr> get_model_and_ctx(
+@@ -493,6 +604,20 @@ static std::pair<llama_model_ptr, llama_context_ptr> get_model_and_ctx(
      return std::make_pair(std::move(model), std::move(lctx));
  }
  
@@ -5711,7 +5736,7 @@ index 5a8a196c1..d640cf5c9 100644
  static std::vector<float> get_logits(
          llama_model * model, llama_context * lctx, const std::vector<llama_token> & tokens, bool encode = false) {
      const uint32_t n_vocab  = llama_vocab_n_tokens(llama_model_get_vocab(model));
-@@ -653,6 +762,20 @@ static bool arch_supported(const llm_arch arch) {
+@@ -653,6 +778,20 @@ static bool arch_supported(const llm_arch arch) {
      return true;
  }
  
@@ -5732,7 +5757,17 @@ index 5a8a196c1..d640cf5c9 100644
  static int save_models(const std::string & arch_filter, const size_t seed, const float stdev, const int verbosity, const std::string & dir) {
      struct user_data_t {
          struct {
-@@ -835,9 +958,14 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
+@@ -704,7 +843,9 @@ static int save_models(const std::string & arch_filter, const size_t seed, const
+             auto model_and_ctx = get_model_and_ctx(gguf_ctx.get(), nullptr, seed, stdev, {});
+             const std::string path = dir + "/" + llm_arch_name(arch) + (moe ? "-moe.gguf" : "-dense.gguf");
+             LOG_INF("%s: Saving %s model (%s) to %s...\n", __func__, llm_arch_name(arch), moe ? "MoE" : "dense", path.c_str());
++            begin_fixture_write(path);
+             llama_model_save_to_file(model_and_ctx.first.get(), path.c_str());
++            require_fixture_written(path);
+         }
+     }
+     llama_log_set(ud.log_old.callback, ud.log_old.user_data);
+@@ -835,9 +976,14 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
                  char nmse_str[12] = {0};
  
                  bool skip = !arch_supported(arch) || (dc.split_mode == LLAMA_SPLIT_MODE_TENSOR && dc.devs.empty());
@@ -5749,7 +5784,7 @@ index 5a8a196c1..d640cf5c9 100644
                      if (logits_cpu.empty()) {
                          model_and_ctx_cpu = get_model_and_ctx(gguf_ctx.get(), nullptr, seed, stdev, {}, LLAMA_SPLIT_MODE_LAYER, encode);
                          logits_cpu = get_logits(model_and_ctx_cpu.first.get(), model_and_ctx_cpu.second.get(), tokens, encode);
-@@ -908,6 +1036,8 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
+@@ -908,6 +1054,8 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
      return all_ok ? 0 : 1;
  }
  
@@ -5758,7 +5793,7 @@ index 5a8a196c1..d640cf5c9 100644
  int main(int argc, char ** argv) {
      // init the logger at max verbosity. filter with a custom callback respecting the user-configure verbosity
      common_log_set_verbosity_thold(LOG_LEVEL_DEBUG);
-@@ -920,10 +1050,18 @@ int main(int argc, char ** argv) {
+@@ -920,10 +1068,18 @@ int main(int argc, char ** argv) {
      float stdev = 0.1f;
      std::string out;
      const char * target_backend = nullptr;
@@ -5778,7 +5813,7 @@ index 5a8a196c1..d640cf5c9 100644
          if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
              usage(argv);
              return 0;
-@@ -1000,6 +1138,27 @@ int main(int argc, char ** argv) {
+@@ -1000,6 +1156,29 @@ int main(int argc, char ** argv) {
      LOG_INF("%s: using seed %zu, stdev %f\n", __func__, seed, stdev);
  
      try {
@@ -5800,7 +5835,9 @@ index 5a8a196c1..d640cf5c9 100644
 +                throw std::runtime_error("failed to generate wide DeepSeek4 MTP fixture");
 +            }
 +            const std::string path = out + "/deepseek4-mtp-moe.gguf";
++            begin_fixture_write(path);
 +            llama_model_save_to_file(model.get(), path.c_str());
++            require_fixture_written(path);
 +            return 0;
 +        }
          if (!out.empty()) {

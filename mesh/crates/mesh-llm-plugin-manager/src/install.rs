@@ -583,6 +583,7 @@ mod tests {
 
     fn packaged_manifest_fixture() -> Vec<u8> {
         serde_json::to_vec_pretty(&InstalledPluginManifestMetadata {
+            openai_exchange_hook: None,
             config_schema: Some(InstalledPluginConfigSchema {
                 plugin_name: "demo".to_string(),
                 schema_version: SUPPORTED_PLUGIN_SCHEMA_VERSION,

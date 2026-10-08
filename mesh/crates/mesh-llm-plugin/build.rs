@@ -30,6 +30,7 @@ fn compile_proto() {
     unsafe { std::env::set_var("PROTOC", protoc) };
 
     let mut config = prost_build::Config::new();
+    config.boxed(".meshllm.plugin.v1.PluginManifest.openai_exchange_hook");
     config.type_attribute(".", "#[derive(serde::Serialize, serde::Deserialize)]");
     config
         .compile_protos(&["proto/plugin.proto"], &["proto"])

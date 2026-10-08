@@ -59,6 +59,13 @@ pub struct ModelObject {
     pub object: &'static str,
     pub created: u64,
     pub owned_by: String,
+    /// Render-only observations of the reasoning controls the selected chat
+    /// template reacted to, when this model was probed.
+    ///
+    /// Absent for a model that was never probed: an unprobed control is unknown,
+    /// not off. See [`crate::thinking`] for what these observations can claim.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking: Option<crate::thinking::ThinkingControls>,
 }
 
 impl ModelObject {
@@ -73,7 +80,14 @@ impl ModelObject {
             object: "model",
             created: now_unix_secs(),
             owned_by: "skippy-runtime".to_string(),
+            thinking: None,
         })
+    }
+
+    /// Attaches render-only reasoning-control observations to this model object.
+    pub fn with_thinking(mut self, thinking: Option<crate::thinking::ThinkingControls>) -> Self {
+        self.thinking = thinking;
+        self
     }
 }
 
@@ -95,5 +109,22 @@ mod tests {
         assert!(ModelId::new("").is_err());
         assert!(ModelId::new("   ").is_err());
         assert!(ModelObject::try_new("").is_err());
+    }
+
+    #[test]
+    fn a_model_object_omits_thinking_until_the_probe_attaches_it() {
+        let bare = serde_json::to_value(ModelObject::new("org/model:Q4_K_M")).unwrap();
+        assert!(bare.get("thinking").is_none());
+
+        let controls = crate::thinking::ThinkingControls {
+            enabled: true,
+            efforts: vec!["low".to_string(), "medium".to_string()],
+        };
+        let probed = serde_json::to_value(
+            ModelObject::new("org/model:Q4_K_M").with_thinking(Some(controls)),
+        )
+        .unwrap();
+        assert_eq!(probed["thinking"]["enabled"], true);
+        assert_eq!(probed["thinking"]["efforts"][0], "low");
     }
 }

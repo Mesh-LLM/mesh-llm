@@ -313,6 +313,7 @@ fn stage_load_request() -> crate::inference::skippy::StageLoadRequest {
         ctx_size: 8192,
         lane_count: 2,
         continuous_batching: false,
+        last_stage_decode_batch: None,
         n_batch: Some(1024),
         n_ubatch: Some(512),
         n_gpu_layers: -1,

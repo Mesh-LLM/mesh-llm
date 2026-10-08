@@ -411,6 +411,35 @@ impl SpeculativeNgramProposerCli {
     }
 }
 
+/// Serving intent: what the deployment is optimising for.
+///
+/// Named for the workload rather than the mechanism, so an operator can pick
+/// one without knowing what a verify window is. Each value composes a set of
+/// settings that have been measured together; the individual mechanism flags
+/// stay available and override whatever the strategy chose.
+///
+/// Distinct from `--speculative-strategy`, which selects one mechanism *inside*
+/// a strategy.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+pub enum ServingStrategyCli {
+    /// Today's defaults. Never worse than not passing the flag.
+    Balanced,
+    /// Single-stream and agentic work: speculation carries the split hop.
+    Interactive,
+    /// Fleet tokens per second, accepting higher per-request latency.
+    Throughput,
+}
+
+impl ServingStrategyCli {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Balanced => "balanced",
+            Self::Interactive => "interactive",
+            Self::Throughput => "throughput",
+        }
+    }
+}
+
 /// What to propose from when the N-gram proposer has no candidates.
 ///
 /// `none` is spelled out rather than left implicit so a command line can switch
@@ -717,6 +746,12 @@ pub struct Cli {
     /// Disable automatic draft model detection.
     #[arg(long, hide = true)]
     pub no_draft: bool,
+
+    /// What to optimise serving for: `balanced` (default), `interactive`, or
+    /// `throughput`. Composes the settings each one needs; any explicit flag or
+    /// config value you set still wins.
+    #[arg(long, value_enum)]
+    pub strategy: Option<ServingStrategyCli>,
 
     /// Force tensor split even if the model fits on one node.
     #[arg(long, hide = true)]
@@ -1521,6 +1556,52 @@ mod tests {
         );
         assert_eq!(cli.speculative_ngram_min, Some(5));
         assert_eq!(cli.speculative_ngram_max, Some(32));
+    }
+
+    /// `--strategy` is visible and value-taking, so it has to survive the
+    /// pseudo-subcommand normalizer the way `--parallel` does.
+    #[test]
+    fn serve_parses_strategy_and_survives_the_normalizer() {
+        let normalized = crate::parser::normalize_runtime_surface_args([
+            "mesh-llm",
+            "--strategy",
+            "throughput",
+            "serve",
+            "--auto",
+        ]);
+        let cli = Cli::try_parse_from(normalized.normalized).expect("clap parse");
+
+        assert_eq!(cli.strategy, Some(ServingStrategyCli::Throughput));
+        assert_eq!(
+            cli.strategy.map(|strategy| strategy.as_str()),
+            Some("throughput")
+        );
+    }
+
+    #[test]
+    fn strategy_accepts_every_documented_value_and_rejects_others() {
+        for (value, expected) in [
+            ("balanced", ServingStrategyCli::Balanced),
+            ("interactive", ServingStrategyCli::Interactive),
+            ("throughput", ServingStrategyCli::Throughput),
+        ] {
+            let cli = Cli::parse_from(["mesh-llm", "--strategy", value, "--model", "x.gguf"]);
+            assert_eq!(cli.strategy, Some(expected), "{value}");
+        }
+
+        // `latency` was the earlier spelling; a stale script should fail loudly
+        // rather than silently serve the default.
+        Cli::try_parse_from(["mesh-llm", "--strategy", "latency", "--model", "x.gguf"])
+            .expect_err("latency is not a strategy");
+    }
+
+    /// Unlike --auto-balance, the intent is not split-only: lanes and
+    /// speculation apply to single-node serving too.
+    #[test]
+    fn strategy_does_not_require_split() {
+        let cli = Cli::parse_from(["mesh-llm", "--strategy", "interactive", "--model", "x.gguf"]);
+        assert_eq!(cli.strategy, Some(ServingStrategyCli::Interactive));
+        assert!(!cli.split);
     }
 
     #[test]

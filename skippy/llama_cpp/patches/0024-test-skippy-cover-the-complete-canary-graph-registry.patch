@@ -4,13 +4,13 @@ Date: Wed, 23 Sep 2026 09:51:50 +1000
 Subject: [PATCH] test(skippy): cover the complete canary graph registry
 
 ---
- src/CMakeLists.txt                          | 103 +-------------------
- src/skippy/tests/graph_contract_cases.cmake | 101 +++++++++++++++++++
- src/skippy/tests/graph_contract_checks.h    |  84 +++++++++++++++-
+ src/CMakeLists.txt                          | 103 +------------------
+ src/skippy/tests/graph_contract_cases.cmake | 107 ++++++++++++++++++++
+ src/skippy/tests/graph_contract_checks.h    |  84 ++++++++++++++-
  src/skippy/tests/graph_contract_models.cpp  |  52 ++++++++--
  tests/test-graph-contract-fixture.h         |  74 +++++++++++++-
- tests/test-llama-archs.cpp                  |  28 ++++--
- 6 files changed, 318 insertions(+), 124 deletions(-)
+ tests/test-llama-archs.cpp                  |  28 +++--
+ 6 files changed, 324 insertions(+), 124 deletions(-)
  create mode 100644 src/skippy/tests/graph_contract_cases.cmake
 
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
@@ -477,14 +477,19 @@ index bf5472dae..d22503d9e 100644
              std::fprintf(stderr, "split parameter closure differs from whole-model plan\n");
              return 1;
 diff --git a/tests/test-graph-contract-fixture.h b/tests/test-graph-contract-fixture.h
-index 61f936bbe..32ceaf95b 100644
+index 2b26c9694..cf6c8dc22 100644
 --- a/tests/test-graph-contract-fixture.h
 +++ b/tests/test-graph-contract-fixture.h
-@@ -1,14 +1,58 @@
+@@ -1,6 +1,7 @@
  #pragma once
+ #include <cstdio>
  #include <filesystem>
 +#include <set>
  #include "../src/llama-model.h"
+ 
+ #ifdef _WIN32
+@@ -33,12 +34,55 @@ static void mark_graph_contract_fixture_sparse(const std::filesystem::path & pat
+ }
  
  // Sparse GGUFs carry synthetic tensor shapes only; they must never run inference.
 -static int save_graph_contract_fixture(llm_arch arch, const std::string & out, uint32_t layers, uint32_t width) {
@@ -542,7 +547,7 @@ index 61f936bbe..32ceaf95b 100644
      if (arch == LLM_ARCH_ARWKV7 || arch == LLM_ARCH_RWKV7) {
          llama_model_saver kv(arch, metadata.get());
          kv.add_kv(LLM_KV_ATTENTION_DECAY_LORA_RANK, uint32_t(32));
-@@ -22,16 +66,40 @@ static int save_graph_contract_fixture(llm_arch arch, const std::string & out, u
+@@ -52,16 +96,40 @@ static int save_graph_contract_fixture(llm_arch arch, const std::string & out, u
      }
      auto params = llama_model_default_params();
      params.no_alloc = true;
@@ -584,10 +589,10 @@ index 61f936bbe..32ceaf95b 100644
      if (!gguf_write_to_file(output.get(), path.c_str(), true)) {
          throw std::runtime_error("cannot write graph contract fixture");
 diff --git a/tests/test-llama-archs.cpp b/tests/test-llama-archs.cpp
-index 90cf83e08..32d8c6af3 100644
+index f47bf8f02..b296b2d72 100644
 --- a/tests/test-llama-archs.cpp
 +++ b/tests/test-llama-archs.cpp
-@@ -130,7 +130,8 @@ static gguf_context_ptr get_gguf_ctx(
+@@ -146,7 +146,8 @@ static gguf_context_ptr get_gguf_ctx(
          const glm_dsa_indexshare_fixture glm_dsa_indexshare = glm_dsa_indexshare_fixture::DEFAULT,
          const uint32_t context_length = 256,
          const uint32_t glm_dsa_indexer_top_k = 8,
@@ -597,7 +602,7 @@ index 90cf83e08..32d8c6af3 100644
      (void) glm_dsa_indexshare;
      gguf_context_ptr ret(gguf_init_empty());
      llama_model_saver ms(arch, ret.get());
-@@ -186,6 +187,8 @@ static gguf_context_ptr get_gguf_ctx(
+@@ -202,6 +203,8 @@ static gguf_context_ptr get_gguf_ctx(
          n_layer = 8; // 1 layer per stack x 2 h-cycles x (3 l-cycles + 1) cache slots
      }
  
@@ -606,7 +611,7 @@ index 90cf83e08..32d8c6af3 100644
      uint32_t n_head_kv = n_head;
      if (arch == LLM_ARCH_QWEN3) {
          n_head_kv = 1; // MQA coverage
-@@ -1043,6 +1046,7 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
+@@ -1061,6 +1064,7 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
  }
  
  #include "test-deepseek4-mtp.h"
@@ -614,7 +619,7 @@ index 90cf83e08..32d8c6af3 100644
  
  int main(int argc, char ** argv) {
      // init the logger at max verbosity. filter with a custom callback respecting the user-configure verbosity
-@@ -1059,20 +1063,22 @@ int main(int argc, char ** argv) {
+@@ -1077,20 +1081,22 @@ int main(int argc, char ** argv) {
      bool deepseek4_mtp = false;
      bool text_only = false;
      std::string mtp_model;
@@ -645,7 +650,7 @@ index 90cf83e08..32d8c6af3 100644
              usage(argv);
              return 0;
          } else if (strcmp(argv[i], "-a") == 0 || strcmp(argv[i], "--arch") == 0) {
-@@ -1148,6 +1154,10 @@ int main(int argc, char ** argv) {
+@@ -1166,6 +1172,10 @@ int main(int argc, char ** argv) {
      LOG_INF("%s: using seed %zu, stdev %f\n", __func__, seed, stdev);
  
      try {

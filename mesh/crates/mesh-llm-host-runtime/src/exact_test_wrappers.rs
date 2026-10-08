@@ -28,23 +28,27 @@ fn mesh_requirements_policy_canonical_hash_is_stable() {
     mesh::requirements::tests::assert_mesh_requirements_policy_canonical_hash_is_stable();
 }
 
-#[test]
-fn client_mode_does_not_require_a_native_runtime() {
+#[tokio::test]
+#[serial_test::serial]
+async fn client_mode_does_not_require_a_native_runtime() {
+    let mut config = tempfile::NamedTempFile::new().expect("isolated client config");
+    std::io::Write::write_all(&mut config, b"[logging]\nenabled = false\n").unwrap();
     let client = RuntimeOptions {
         client: true,
+        config: Some(config.path().to_path_buf()),
         ..Default::default()
     };
-    assert!(!runtime_options_require_native_runtime(&client));
+    initialize_host_runtime_for_options(&client)
+        .await
+        .expect("client initializes without native libraries");
 
     let plugin = RuntimeOptions {
         plugin: Some("blobstore".to_string()),
         ..Default::default()
     };
-    assert!(!runtime_options_require_native_runtime(&plugin));
-
-    assert!(runtime_options_require_native_runtime(
-        &RuntimeOptions::default()
-    ));
+    initialize_host_runtime_for_options(&plugin)
+        .await
+        .expect("plugin worker initializes without native libraries");
 }
 
 #[tokio::test]

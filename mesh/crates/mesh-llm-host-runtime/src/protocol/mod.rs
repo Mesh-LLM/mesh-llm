@@ -8,6 +8,7 @@ use crate::mesh::PeerAnnouncement;
 
 pub(crate) mod config_diagnostic;
 pub(crate) mod convert;
+pub(crate) mod node_record;
 use anyhow::Result;
 pub(crate) use convert::*;
 use iroh::endpoint::Connection;
@@ -92,23 +93,41 @@ pub(crate) async fn read_len_prefixed(recv: &mut iroh::endpoint::RecvStream) -> 
     Ok(buf)
 }
 
+/// What this node sends in one gossip exchange: unsigned announcements for
+/// nodes that predate signed records, and the signed records themselves.
+pub(crate) struct OutboundGossip {
+    pub(crate) announcements: Vec<PeerAnnouncement>,
+    pub(crate) signed_records: Vec<crate::proto::node::SignedNodeRecord>,
+    pub(crate) signed_cache_affinity: Vec<crate::proto::node::SignedCacheAffinity>,
+}
+
+/// A decoded gossip frame before signed records are checked against the
+/// peer table.
+pub(crate) struct InboundGossip {
+    pub(crate) announcements: Vec<(EndpointAddr, PeerAnnouncement)>,
+    pub(crate) signed_records: Vec<crate::proto::node::SignedNodeRecord>,
+    pub(crate) signed_cache_affinity: Vec<crate::proto::node::SignedCacheAffinity>,
+}
+
 pub(crate) async fn write_gossip_payload(
     send: &mut iroh::endpoint::SendStream,
     protocol: ControlProtocol,
-    anns: &[PeerAnnouncement],
+    outbound: &OutboundGossip,
     sender_id: EndpointId,
 ) -> Result<()> {
     let _ = protocol;
-    let frame = build_gossip_frame(anns, sender_id);
+    let mut frame = build_gossip_frame(&outbound.announcements, sender_id);
+    frame.signed_records = outbound.signed_records.clone();
+    frame.signed_cache_affinity = outbound.signed_cache_affinity.clone();
     write_len_prefixed(send, &frame.encode_to_vec()).await?;
     Ok(())
 }
 
-pub(crate) fn decode_gossip_payload(
+pub(crate) fn decode_gossip_frame(
     protocol: ControlProtocol,
     remote: EndpointId,
     buf: &[u8],
-) -> Result<Vec<(EndpointAddr, PeerAnnouncement)>> {
+) -> Result<InboundGossip> {
     let _ = protocol;
     let frame = crate::proto::node::GossipFrame::decode(buf)
         .map_err(|e| anyhow::anyhow!("gossip decode from {}: {e}", remote.fmt_short()))?;
@@ -121,11 +140,24 @@ pub(crate) fn decode_gossip_payload(
             remote.fmt_short()
         );
     }
-    Ok(frame
-        .peers
-        .iter()
-        .filter_map(proto_ann_to_local)
-        .collect::<Vec<_>>())
+    Ok(InboundGossip {
+        announcements: frame
+            .peers
+            .iter()
+            .filter_map(proto_ann_to_local)
+            .collect::<Vec<_>>(),
+        signed_records: frame.signed_records,
+        signed_cache_affinity: frame.signed_cache_affinity,
+    })
+}
+
+#[cfg(test)]
+pub(crate) fn decode_gossip_payload(
+    protocol: ControlProtocol,
+    remote: EndpointId,
+    buf: &[u8],
+) -> Result<Vec<(EndpointAddr, PeerAnnouncement)>> {
+    decode_gossip_frame(protocol, remote, buf).map(|inbound| inbound.announcements)
 }
 
 #[cfg(test)]

@@ -185,6 +185,7 @@ fn installed_plugin_metadata(
         enabled: true,
         default_managed: false,
         manifest: Some(InstalledPluginManifestMetadata {
+            openai_exchange_hook: None,
             config_schema: schema,
             web_ui: None,
         }),

@@ -22,6 +22,7 @@ use skippy_protocol::binary::StageLogitBias as WireLogitBias;
 use skippy_protocol::binary::StageSamplingConfig as WireSamplingConfig;
 use skippy_protocol::binary::sampling_flags;
 use skippy_runtime::ChatReasoningFormat;
+use skippy_runtime::ChatTemplateJsonOptions;
 use skippy_runtime::ChatTemplateOptions;
 use skippy_runtime::DEFAULT_PENALTY_LAST_N;
 use skippy_runtime::DrySamplingConfig;
@@ -36,6 +37,17 @@ use skippy_runtime::penalty_window;
 use std::collections::BTreeMap;
 
 const MAX_NATIVE_PARSER_INPUT_BYTES: usize = 1024 * 1024;
+
+/// Built-in reasoning default when neither the request nor the deployment config
+/// asks for reasoning: off.
+///
+/// Without this the renderer control was left unset and the model's own chat
+/// template decided, which is "thinking on" for most reasoning model families —
+/// and a package's `request_defaults.selection.default` profile could turn it on
+/// for a request that never asked. A client that asks (any of the reasoning or
+/// thinking aliases, an effort, or a budget) still turns it on, and an explicit
+/// deployment setting still overrides this default.
+const DEFAULT_REASONING_ENABLED: bool = false;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct RequestDefaultsDiagnostics {
@@ -59,7 +71,8 @@ pub(super) fn resolve_chat_request_defaults(
     let resolved_reasoning = explicit_budget
         .map(reasoning_budget_enables_thinking)
         .or(template_reasoning)
-        .or_else(|| operator_reasoning_mode(configured));
+        .or_else(|| operator_reasoning_mode(configured))
+        .or(Some(DEFAULT_REASONING_ENABLED));
     let selected = configured
         .package_request_defaults
         .as_ref()
@@ -1055,10 +1068,7 @@ pub(super) fn chat_template_options(
             .get("prefill_assistant")
             .is_none_or(Value::is_null),
         reasoning_format: Some(request_reasoning_format(request, defaults)?),
-        enable_thinking: reasoning
-            .enable_thinking
-            .or_else(|| default_reasoning_enabled(defaults.reasoning_enabled))
-            .or_else(|| default_reasoning_budget_enabled(defaults.reasoning_budget)),
+        enable_thinking: resolved_enable_thinking(reasoning.enable_thinking, defaults),
         chat_template_kwargs: merged_chat_template_kwargs(
             defaults,
             &reasoning.chat_template_kwargs,
@@ -1072,6 +1082,58 @@ pub(super) fn chat_template_options(
         json_schema: structured_output_json(request, "json_schema")?,
         skip_chat_parsing: optional_bool_extra(&request.extra, "skip_chat_parsing")?
             .unwrap_or(false),
+    })
+}
+
+/// Resolves the thinking toggle a chat-template render sees: the request's own
+/// ask, then the deployment default, then the built-in default (off).
+fn resolved_enable_thinking(
+    request: Option<bool>,
+    defaults: &EmbeddedOpenAiRequestDefaults,
+) -> Option<bool> {
+    request
+        .or_else(|| default_reasoning_enabled(defaults.reasoning_enabled))
+        .or_else(|| default_reasoning_budget_enabled(defaults.reasoning_budget))
+        .or(Some(DEFAULT_REASONING_ENABLED))
+}
+
+/// Builds the renderer options for one thinking-probe render.
+///
+/// The load-time probe must exercise the *effective client request path*: the
+/// same normalization and default resolution serving applies, so the advertised
+/// `thinking` controls describe what a client can actually send. `reasoning` and
+/// `reasoning_effort` are the client-visible ask; `template_override` is the
+/// selected template the probe is keyed to.
+pub(crate) fn thinking_probe_options(
+    defaults: &EmbeddedOpenAiRequestDefaults,
+    reasoning: Option<&skippy_inference_api::ReasoningConfig>,
+    reasoning_effort: Option<skippy_inference_api::ReasoningEffort>,
+    template_override: Option<&str>,
+) -> OpenAiResult<ChatTemplateJsonOptions> {
+    let normalized = skippy_inference_api::normalize_reasoning_template_options(
+        reasoning,
+        reasoning_effort,
+        &BTreeMap::new(),
+    )?;
+    Ok(ChatTemplateJsonOptions {
+        add_assistant: true,
+        enable_thinking: resolved_enable_thinking(normalized.enable_thinking, defaults),
+        reasoning_format: Some(chat_reasoning_format(defaults.reasoning_format)),
+        chat_template_kwargs: merged_chat_template_kwargs(
+            defaults,
+            &normalized.chat_template_kwargs,
+        )?
+        .map(|kwargs| serialize_bounded_native_parser_json("chat_template_kwargs", &kwargs))
+        .transpose()
+        .map_err(|error| OpenAiError::invalid_request(error.to_string()))?,
+        tools_json: None,
+        tool_choice_json: None,
+        parallel_tool_calls: true,
+        chat_template: template_override.map(str::to_string),
+        use_jinja: defaults.jinja.unwrap_or(true),
+        grammar: None,
+        json_schema: None,
+        skip_chat_parsing: false,
     })
 }
 

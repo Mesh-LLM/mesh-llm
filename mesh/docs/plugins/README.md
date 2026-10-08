@@ -1,5 +1,10 @@
 # Plugins
 
+The [OpenAI exchange lifecycle contract v1](openai-exchange-lifecycle.md)
+defines permissioned observation, read-only admission, exact byte commitments,
+and scoped software identity for installed plugins. Its
+[acceptance matrix](openai-exchange-acceptance.md) records validation status.
+
 Use this architecture reference to build and review `mesh-llm` plugins.
 
 It describes the target architecture, not just the code as it exists today.

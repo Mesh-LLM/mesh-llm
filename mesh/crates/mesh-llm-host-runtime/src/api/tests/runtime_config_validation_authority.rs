@@ -206,6 +206,7 @@ fn install_blackboard_schema(plugin_dir: &std::path::Path) {
             enabled: true,
             default_managed: false,
             manifest: Some(InstalledPluginManifestMetadata {
+                openai_exchange_hook: None,
                 config_schema: Some(blackboard_schema()),
                 web_ui: None,
             }),

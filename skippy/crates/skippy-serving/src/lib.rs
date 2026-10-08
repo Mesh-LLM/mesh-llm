@@ -38,6 +38,7 @@ mod legacy_scheduler_absence_tests {
 pub mod serving_hooks;
 pub mod settings;
 pub mod telemetry;
+pub mod thinking_probe;
 pub mod tokenizer;
 
 // Re-export key types for consumers

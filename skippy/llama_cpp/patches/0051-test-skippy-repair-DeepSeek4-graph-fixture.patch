@@ -9,10 +9,10 @@ Subject: [PATCH] test(skippy): repair DeepSeek4 graph fixture
  2 files changed, 14 insertions(+), 9 deletions(-)
 
 diff --git a/tests/test-graph-contract-fixture.h b/tests/test-graph-contract-fixture.h
-index a59d9f212..4afe275a1 100644
+index 0ebe0b7e9..994f462df 100644
 --- a/tests/test-graph-contract-fixture.h
 +++ b/tests/test-graph-contract-fixture.h
-@@ -78,8 +78,10 @@ static int save_graph_contract_fixture(llm_arch arch, const std::string & out, u
+@@ -108,8 +108,10 @@ static int save_graph_contract_fixture(llm_arch arch, const std::string & out, u
      params.n_gpu_layers = 0;
      llama_model_ptr model(llama_model_init_from_user(metadata.get(), [](ggml_tensor *, void *) {}, nullptr, params));
      if (!model) { throw std::runtime_error("cannot construct synthetic graph contract model"); }
@@ -25,10 +25,10 @@ index a59d9f212..4afe275a1 100644
      }
      gguf_context_ptr output(gguf_init_empty());
 diff --git a/tests/test-llama-archs.cpp b/tests/test-llama-archs.cpp
-index e1c04709b..e095961bd 100644
+index 320822b16..5ed9c53c9 100644
 --- a/tests/test-llama-archs.cpp
 +++ b/tests/test-llama-archs.cpp
-@@ -252,7 +252,7 @@ static gguf_context_ptr get_gguf_ctx(
+@@ -268,7 +268,7 @@ static gguf_context_ptr get_gguf_ctx(
      if (arch == LLM_ARCH_DEEPSEEK4) {
          ms.add_kv(LLM_KV_ATTENTION_KEY_LENGTH,   n_embd_head);
          ms.add_kv(LLM_KV_ATTENTION_VALUE_LENGTH, n_embd_head);
@@ -37,7 +37,7 @@ index e1c04709b..e095961bd 100644
      } else if (arch == LLM_ARCH_DEEPSEEK2
              || arch == LLM_ARCH_DEEPSEEK32
              || arch == LLM_ARCH_GLM_DSA
-@@ -420,13 +420,16 @@ static gguf_context_ptr get_gguf_ctx(
+@@ -436,13 +436,16 @@ static gguf_context_ptr get_gguf_ctx(
      }
  
      if (arch == LLM_ARCH_DEEPSEEK4) {

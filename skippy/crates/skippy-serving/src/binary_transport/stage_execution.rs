@@ -746,13 +746,39 @@ fn stage_native_mtp_draft(draft: NativeMtpDraft) -> StageNativeMtpDraft {
 pub(in crate::binary_transport) const LAST_STAGE_DECODE_BATCH_ENV: &str =
     "SKIPPY_LAST_STAGE_DECODE_BATCH";
 
-pub(in crate::binary_transport) fn last_stage_decode_batch_enabled() -> bool {
-    std::env::var(LAST_STAGE_DECODE_BATCH_ENV).is_ok_and(|value| {
-        matches!(
-            value.trim().to_ascii_lowercase().as_str(),
-            "1" | "true" | "yes" | "on"
-        )
-    })
+fn truthy(value: &str) -> bool {
+    matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "1" | "true" | "yes" | "on"
+    )
+}
+
+/// Whether the final stage batches decode across lanes.
+///
+/// `planned` is `throughput.last_stage_decode_batch`, delivered on the stage
+/// load because the stage that owns the output layers is a different process -
+/// on a mesh split a different machine - from the one the operator configured,
+/// and `--auto-balance` can move which stage that is.
+///
+/// The environment variable stays a bench and incident-response override that
+/// needs no replan, the same shape as `SKIPPY_KV_CACHE`. It is read first and
+/// decides on its own: a set-but-unparseable value means unbatched rather than
+/// deferring to the plan, so an operator's typo cannot look like a policy.
+pub(in crate::binary_transport) fn resolve_last_stage_decode_batch(
+    env_value: Option<&str>,
+    planned: Option<bool>,
+) -> bool {
+    match env_value {
+        Some(value) => truthy(value),
+        None => planned.unwrap_or(false),
+    }
+}
+
+pub(in crate::binary_transport) fn last_stage_decode_batch_enabled(planned: Option<bool>) -> bool {
+    resolve_last_stage_decode_batch(
+        std::env::var(LAST_STAGE_DECODE_BATCH_ENV).ok().as_deref(),
+        planned,
+    )
 }
 
 pub(in crate::binary_transport) fn is_decode_frame_batch_candidate(
@@ -1369,5 +1395,40 @@ mod tests {
             !is_decode_frame_batch_candidate(&config, &message, &[104], true, true),
             "native MTP drafts only come from the unbatched final-stage path"
         );
+    }
+}
+
+#[cfg(test)]
+mod last_stage_decode_batch_tests {
+    use super::resolve_last_stage_decode_batch;
+
+    #[test]
+    fn the_planned_policy_applies_when_the_environment_is_unset() {
+        assert!(resolve_last_stage_decode_batch(None, Some(true)));
+        assert!(!resolve_last_stage_decode_batch(None, Some(false)));
+    }
+
+    /// An older peer leaves the field absent. Unbatched is the pre-existing
+    /// behaviour, so absent must never read as enabled.
+    #[test]
+    fn an_absent_plan_stays_unbatched() {
+        assert!(!resolve_last_stage_decode_batch(None, None));
+    }
+
+    #[test]
+    fn the_environment_override_wins_in_both_directions() {
+        assert!(resolve_last_stage_decode_batch(Some("1"), Some(false)));
+        assert!(resolve_last_stage_decode_batch(Some("on"), None));
+        assert!(!resolve_last_stage_decode_batch(Some("0"), Some(true)));
+        assert!(!resolve_last_stage_decode_batch(Some("false"), Some(true)));
+    }
+
+    /// Deliberately not a fall-through to the plan: the variable decides once
+    /// it is set at all, so a typo shows up as "batching did not happen"
+    /// rather than quietly honouring a different policy.
+    #[test]
+    fn an_unparseable_override_does_not_fall_back_to_the_plan() {
+        assert!(!resolve_last_stage_decode_batch(Some("yep"), Some(true)));
+        assert!(!resolve_last_stage_decode_batch(Some(""), Some(true)));
     }
 }

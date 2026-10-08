@@ -535,6 +535,7 @@ fn runtime_options_from_cli(cli: mesh_llm_cli::Cli) -> mesh_llm_host_runtime::Ru
         draft_max: cli.draft_max,
         no_draft: cli.no_draft,
         speculative_overrides,
+        strategy: cli.strategy.map(map_serving_strategy),
         split: cli.split,
         allow_uncertified_split: cli.allow_uncertified_split,
         split_topology_lock: cli.split_topology_lock,
@@ -601,7 +602,14 @@ fn speculative_overrides_from_cli(
     overrides.verify_window_min_tokens = cli.speculative_verify_window_min_tokens;
     overrides.verify_window_max_tokens = cli.speculative_verify_window_max_tokens;
     overrides.verify_window_pipeline_depth = cli.speculative_verify_window_pipeline_depth;
-    overrides.verify_window_runahead_tokens = cli.speculative_verify_window_runahead_tokens;
+    // The flag stays a number. It is a mechanism override — "use exactly this
+    // budget" — and the whole point of an override is to assert a value. `auto`
+    // is the absence of an assertion, so it is reachable through the config file
+    // and through `--strategy interactive`, which is what composes it.
+    overrides.verify_window_runahead_tokens =
+        cli.speculative_verify_window_runahead_tokens.map(|tokens| {
+            mesh_llm_host_runtime::sdk::config::IntegerOrString::Integer(i64::from(tokens))
+        });
     overrides.ngram_fallback = cli
         .speculative_ngram_fallback
         .map(|fallback| fallback.as_str().to_string());
@@ -670,6 +678,17 @@ fn map_binary_flavor(flavor: mesh_llm_cli::BinaryFlavor) -> mesh_llm_system::bac
         mesh_llm_cli::BinaryFlavor::Rocm => mesh_llm_system::backend::BinaryFlavor::Rocm,
         mesh_llm_cli::BinaryFlavor::Vulkan => mesh_llm_system::backend::BinaryFlavor::Vulkan,
         mesh_llm_cli::BinaryFlavor::Metal => mesh_llm_system::backend::BinaryFlavor::Metal,
+    }
+}
+
+fn map_serving_strategy(
+    strategy: mesh_llm_cli::ServingStrategyCli,
+) -> mesh_llm_host_runtime::ServingStrategy {
+    use mesh_llm_host_runtime::ServingStrategy;
+    match strategy {
+        mesh_llm_cli::ServingStrategyCli::Balanced => ServingStrategy::Balanced,
+        mesh_llm_cli::ServingStrategyCli::Interactive => ServingStrategy::Interactive,
+        mesh_llm_cli::ServingStrategyCli::Throughput => ServingStrategy::Throughput,
     }
 }
 

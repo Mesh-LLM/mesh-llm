@@ -97,6 +97,34 @@ pub enum ChatMediaKind {
 
 #[async_trait]
 pub trait OpenAiHookPolicy: Send + Sync + 'static {
+    /// Operator-authorized observation cannot be disabled by request mesh_hooks.
+    fn requires_exchange_lifecycle(&self) -> bool {
+        false
+    }
+
+    fn http_exchange_policy(&self) -> Option<Arc<dyn crate::http_exchange::HttpExchangePolicy>> {
+        None
+    }
+
+    /// Read-only admission after core transformations and before dispatch.
+    async fn admit_effective_chat_completion(
+        &self,
+        _request: &ChatCompletionRequest,
+        _route: &ChatExchangeRoute,
+    ) -> OpenAiResult<()> {
+        Ok(())
+    }
+    /// Observe the effective legacy completion request after defaults and before generation.
+    async fn admit_effective_completion(
+        &self,
+        _request: &CompletionRequest,
+        _exchange_id: &str,
+    ) -> OpenAiResult<()> {
+        Ok(())
+    }
+    /// Body-free outcome signal for one backend completion invocation.
+    async fn on_completion_terminal(&self, _exchange_id: &str, _outcome: &str) {}
+
     async fn before_chat_completion(
         &self,
         _request: &mut ChatCompletionRequest,
@@ -271,15 +299,14 @@ pub struct TerminalGuard {
 }
 
 /// A [`ChatCompletionOutcome`] with no borrowed fields, for the streaming
-/// terminal path: [`TerminalGuard::fire_detached`] hands the outcome to a
-/// spawned task that outlives the caller's stack frame, so it needs data it
-/// owns rather than a reference into a local that's about to go away.
+/// terminal path: [`TerminalGuard::into_terminal_future`] retains owned data while
+/// the stream polls a bounded callback before exposing EOF or error.
 /// Deliberately narrower than [`ChatCompletionOutcome`] — it omits
 /// [`ChatCompletionOutcome::Success`], which streaming never has a
 /// [`ChatCompletionResponse`] to report; [`ChatCompletionOutcome::Denied`],
 /// which is always fired inline (before any stream exists to detach from);
 /// and [`ChatCompletionOutcome::Cancelled`], which [`Drop`] below fires
-/// directly without going through `fire_detached` at all.
+/// directly without going through `into_terminal_future` at all.
 enum OwnedChatCompletionOutcome {
     Error { status: u16, message: String },
     StreamCompleted,
@@ -322,28 +349,23 @@ impl TerminalGuard {
         self.fired = true;
     }
 
-    /// Fire the terminal callback from a context that cannot `.await` — a
-    /// `Stream::poll_next` implementation, specifically — by handing it to a
-    /// detached task on the current Tokio runtime, exactly like [`Drop`]'s
-    /// own fallback below. Consumes `self` (after marking it fired) so the
-    /// guard's own `Drop` can never also fire once this returns.
-    fn fire_detached(mut self, outcome: OwnedChatCompletionOutcome) {
+    /// Retain a bounded callback future for stream polling. Taking the guard
+    /// prevents its cancellation fallback from producing a second terminal.
+    fn into_terminal_future(
+        mut self,
+        outcome: OwnedChatCompletionOutcome,
+    ) -> terminal_stream::TerminalFuture {
         self.fired = true;
-        let Ok(handle) = tokio::runtime::Handle::try_current() else {
-            tracing::debug!(
-                exchange_id = %self.exchange_id,
-                "TerminalGuard dropped outside a Tokio runtime; skipping terminal callback"
-            );
-            return;
-        };
         let hooks = self.hooks.clone();
         let request = std::mem::take(&mut self.request);
         let exchange_id = std::mem::take(&mut self.exchange_id);
-        handle.spawn(async move {
-            hooks
-                .on_chat_completion_terminal(&request, &exchange_id, &outcome.as_ref())
-                .await;
-        });
+        Box::pin(async move {
+            let _ = tokio::time::timeout(
+                std::time::Duration::from_secs(1),
+                hooks.on_chat_completion_terminal(&request, &exchange_id, &outcome.as_ref()),
+            )
+            .await;
+        })
     }
 }
 
@@ -376,69 +398,8 @@ impl Drop for TerminalGuard {
     }
 }
 
-/// Wraps a [`ChatCompletionStream`] so its admitted exchange still gets
-/// exactly one terminal callback, the same guarantee
-/// [`HookedOpenAiBackend::chat_completion_with_context`] gives a
-/// non-streaming exchange via [`TerminalGuard`] — just adapted for a type
-/// that can outlive the call that created it and whose `Stream::poll_next`
-/// cannot `.await`.
-///
-/// - The stream ending on its own (`poll_next` returns `Ready(None)`) fires
-///   [`ChatCompletionOutcome::StreamCompleted`].
-/// - A chunk carrying an error fires [`ChatCompletionOutcome::Error`]
-///   immediately — matching the non-streaming path, which never waits for a
-///   graceful end once the backend has already reported failure.
-/// - Both fire via `TerminalGuard::fire_detached`, since neither can
-///   `.await` inside `poll_next`.
-/// - Dropping this wrapper before either of the above happens — an outer
-///   timeout, or the client disconnecting mid-stream — drops the
-///   still-armed [`TerminalGuard`], whose own `Drop` fires
-///   [`ChatCompletionOutcome::Cancelled`]. Exactly one of
-///   {`StreamCompleted`, `Error`, `Cancelled`} can ever happen, because each
-///   path takes the guard out of `self.guard` (an `Option`) before firing,
-///   and a `None` guard fires nothing on drop.
-pub struct TerminalGuardedChatStream {
-    inner: ChatCompletionStream,
-    guard: Option<TerminalGuard>,
-}
-
-impl TerminalGuardedChatStream {
-    pub fn pinned(inner: ChatCompletionStream, guard: TerminalGuard) -> ChatCompletionStream {
-        Box::pin(Self {
-            inner,
-            guard: Some(guard),
-        })
-    }
-}
-
-impl futures_core::Stream for TerminalGuardedChatStream {
-    type Item = OpenAiResult<ChatCompletionChunk>;
-
-    fn poll_next(
-        self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Option<Self::Item>> {
-        let this = self.get_mut();
-        let poll = this.inner.as_mut().poll_next(cx);
-        match &poll {
-            std::task::Poll::Ready(Some(Err(error))) => {
-                if let Some(guard) = this.guard.take() {
-                    guard.fire_detached(OwnedChatCompletionOutcome::Error {
-                        status: error.status().as_u16(),
-                        message: error.to_string(),
-                    });
-                }
-            }
-            std::task::Poll::Ready(None) => {
-                if let Some(guard) = this.guard.take() {
-                    guard.fire_detached(OwnedChatCompletionOutcome::StreamCompleted);
-                }
-            }
-            std::task::Poll::Ready(Some(Ok(_))) | std::task::Poll::Pending => {}
-        }
-        poll
-    }
-}
+mod terminal_stream;
+pub use terminal_stream::TerminalGuardedChatStream;
 
 pub struct HookedOpenAiBackend {
     backend: Arc<dyn OpenAiBackend>,
@@ -453,6 +414,11 @@ impl HookedOpenAiBackend {
 
 #[async_trait]
 impl OpenAiBackend for HookedOpenAiBackend {
+    fn http_exchange_policy(&self) -> Option<Arc<dyn crate::http_exchange::HttpExchangePolicy>> {
+        self.hooks
+            .http_exchange_policy()
+            .or_else(|| self.backend.http_exchange_policy())
+    }
     async fn count_chat_tokens(&self, request: ChatCompletionRequest) -> OpenAiResult<u32> {
         self.backend.count_chat_tokens(request).await
     }
@@ -503,6 +469,20 @@ impl OpenAiBackend for HookedOpenAiBackend {
         };
         apply_chat_hook_outcome(&mut request, &outcome);
         let route = ChatExchangeRoute::for_request(&request, exchange_id.clone());
+        if let Err(error) = self
+            .hooks
+            .admit_effective_chat_completion(&request, &route)
+            .await
+        {
+            guard.set_request(request.clone());
+            guard
+                .fire(&ChatCompletionOutcome::Denied {
+                    status: error.status().as_u16(),
+                    reason: &error.to_string(),
+                })
+                .await;
+            return Err(error);
+        }
         self.hooks
             .on_effective_chat_completion(&request, &route)
             .await;
@@ -584,6 +564,20 @@ impl OpenAiBackend for HookedOpenAiBackend {
         };
         apply_chat_hook_outcome(&mut request, &outcome);
         let route = ChatExchangeRoute::for_request(&request, exchange_id.clone());
+        if let Err(error) = self
+            .hooks
+            .admit_effective_chat_completion(&request, &route)
+            .await
+        {
+            guard.set_request(request.clone());
+            guard
+                .fire(&ChatCompletionOutcome::Denied {
+                    status: error.status().as_u16(),
+                    reason: &error.to_string(),
+                })
+                .await;
+            return Err(error);
+        }
         self.hooks
             .on_effective_chat_completion(&request, &route)
             .await;

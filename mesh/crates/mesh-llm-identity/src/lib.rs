@@ -11,6 +11,7 @@ pub mod keystore;
 pub mod node_key;
 #[cfg(feature = "host-io")]
 pub mod ownership;
+pub mod plugin_delegation;
 pub mod provider;
 
 pub use envelope::{OpenedMessage, SignedEncryptedEnvelope, open_message, seal_message};
