@@ -102,10 +102,12 @@ export function ChatPageContent({ data = CHAT_HARNESS, target, onClearTarget }: 
   // blocks sending until it returns or the user picks something else.
   const [routingPreferences, setRoutingPreferences] = useState(loadChatRoutingPreferences)
   const model = routingPreferences.model === AUTO_MODEL_VALUE ? '' : routingPreferences.model
-  // Without a wallet that may pay, everything is already free: no toggle, nothing extra sent.
+  // The toggle is offered only when the wallet policy is confirmed able to pay. Otherwise (no
+  // wallet, loading, error, unreachable route) the UI says Free and every request is restricted
+  // to free hosts, so "Free" is enforced rather than assumed.
   const paidRoutingQuery = usePaidRoutingQuery({ enabled: liveMode })
   const paidRoutingAllowed = paidRoutingQuery.data === true
-  const freeOnly = paidRoutingAllowed && routingPreferences.freeOnly
+  const freeOnly = !paidRoutingAllowed || routingPreferences.freeOnly
   const updateRoutingPreferences = useCallback((patch: Partial<ChatRoutingPreferences>) => {
     setRoutingPreferences((current) => {
       const next = { ...current, ...patch }
@@ -632,7 +634,8 @@ export function ChatPageContent({ data = CHAT_HARNESS, target, onClearTarget }: 
         id: createQueuedSubmissionId(),
         timestamp: new Date().toISOString(),
         conversationId: composerConversationId,
-        target: target ?? ''
+        target: target ?? '',
+        freeOnly
       }
       setQueuedSubmissions((current) => {
         const next = [...current, queued]
@@ -652,6 +655,7 @@ export function ChatPageContent({ data = CHAT_HARNESS, target, onClearTarget }: 
     composerConversationId,
     composerDraft,
     composerShouldQueue,
+    freeOnly,
     requestJumpToLatest,
     submitPromptNow,
     target
@@ -678,7 +682,8 @@ export function ChatPageContent({ data = CHAT_HARNESS, target, onClearTarget }: 
         await submitPromptNow(
           { prompt: nextSubmission.prompt, attachments: [...nextSubmission.attachments] },
           nextSubmission.conversationId,
-          nextSubmission.target
+          nextSubmission.target,
+          nextSubmission.freeOnly
         )
       } finally {
         queueDrainInFlightRef.current = false

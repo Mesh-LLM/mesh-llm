@@ -8,6 +8,7 @@ import {
   FeatureFlagProvider,
   chatMock,
   expectPartialAssistantReply,
+  paidRoutingMock,
   renderChatPage,
   renderPersistentChatRoute,
   saveChatState,
@@ -530,6 +531,43 @@ describe('ChatPage', () => {
       expect(chatMock.sendCalls).toHaveLength(1)
       expect(chatMock.sendCalls[0]?.content).toBe('First live prompt')
     })
+  })
+
+  it('restricts sends to free hosts while paid routing is not confirmed', async () => {
+    const user = userEvent.setup()
+    paidRoutingMock.allowed = false
+
+    renderChatPage({ mode: 'live' })
+
+    expect(screen.getByText('Free')).toBeVisible()
+    await user.type(screen.getByLabelText('Prompt'), 'Free prompt')
+    await user.click(screen.getByRole('button', { name: 'Send' }))
+
+    await waitFor(() => expect(chatMock.sendCalls).toHaveLength(1))
+    expect(chatMock.sendCalls[0]?.freeOnly).toBe(true)
+  })
+
+  it('keeps the free-only setting a prompt was queued with', async () => {
+    const user = userEvent.setup()
+    paidRoutingMock.allowed = true
+    chatMock.sendAssistantText = ''
+
+    renderChatPage({ mode: 'live' })
+
+    await user.click(screen.getByRole('button', { name: 'Free + paid' }))
+    await user.type(screen.getByLabelText('Prompt'), 'First live prompt')
+    await user.click(screen.getByRole('button', { name: 'Send' }))
+    expect(await screen.findByText('Streaming response...')).toBeInTheDocument()
+
+    await user.type(screen.getByLabelText('Prompt'), 'Queued while free only')
+    await user.click(screen.getByRole('button', { name: 'Queue' }))
+    await user.click(screen.getByRole('button', { name: 'Free only' }))
+    await user.click(screen.getByRole('button', { name: 'Stop' }))
+
+    await waitFor(() => expect(chatMock.sendCalls).toHaveLength(2))
+    expect(chatMock.sendCalls[1]?.content).toBe('Queued while free only')
+    expect(chatMock.sendCalls[1]?.freeOnly).toBe(true)
+    window.localStorage.removeItem('mesh-llm.chat.routing-preferences')
   })
 
   it('keeps multiple queued prompts visible and removes only the selected queued item', async () => {

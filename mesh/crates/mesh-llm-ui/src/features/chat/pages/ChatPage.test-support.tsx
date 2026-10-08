@@ -109,6 +109,7 @@ const chatMock = vi.hoisted(() => {
       model: string
       systemPrompt: string
       target?: unknown
+      freeOnly?: unknown
     }>,
     reloadCalls: [] as string[],
     hookConversationIds: [] as string[],
@@ -290,7 +291,14 @@ vi.mock('@/features/chat/api/use-chat', async () => {
         return {
           messages,
           sendMessage: vi.fn(async (content: string | MultimodalContent, options?: SendOptions) => {
-            chatMock.sendCalls.push({ conversationId, content, model, systemPrompt, target: options?.body?.target })
+            chatMock.sendCalls.push({
+              conversationId,
+              content,
+              model,
+              systemPrompt,
+              target: options?.body?.target,
+              freeOnly: options?.body?.freeOnly
+            })
             const body =
               typeof content === 'string'
                 ? content
