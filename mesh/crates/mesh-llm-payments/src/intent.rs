@@ -38,6 +38,7 @@ mod tests {
         let price = Pricing {
             input_msat_per_million: 10,
             output_msat_per_million: 20,
+            minimum_invoice_msat: 1,
         };
         assert!(profile.restrict(&broad).permits(&price, 4000));
         assert!(!profile.restrict(&broad).permits(&price, 4001));
@@ -55,6 +56,7 @@ mod tests {
         let price = Pricing {
             input_msat_per_million: 10,
             output_msat_per_million: 20,
+            minimum_invoice_msat: 1000,
         };
         {
             let ledger = Ledger::open(directory.path())?;

@@ -360,8 +360,12 @@ payment without creating a new approval or debit.
 The seller explicitly configures per-model input/output msat per million tokens.
 Free serving is the default. Charges use wide integer arithmetic and ceiling
 division to the msat at the invoice boundary; there is no minimum invoice
-quantum (the deprecated `LightningOffer.minimum_invoice_msat` wire field is sent
-as 1 and ignored on read). Zero delivered output produces no output invoice.
+quantum for this node's own prices (it always advertises and serves
+`minimum_invoice_msat = 1`, and normalises older stored prices to 1). The field
+stays on the gossip offer and in payment request frames for v0.78.1 and older
+peers, which require it; a buyer carries an older seller's advertised value
+through unchanged so both sides compute the same terms. Zero delivered output
+produces no output invoice.
 
 Enabling `wallet pricing MODEL` without explicit rates uses 500 input and 1500
 output msat per million tokens;

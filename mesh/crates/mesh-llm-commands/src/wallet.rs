@@ -133,6 +133,7 @@ fn control_command(command: &WalletCommand) -> Result<ControlCommand> {
                         Some(Pricing {
                             input_msat_per_million: input_msat_per_million.unwrap_or(500),
                             output_msat_per_million: output_msat_per_million.unwrap_or(1500),
+                            minimum_invoice_msat: mesh_llm_payments::pricing::EXACT_INVOICE_MSAT,
                         })
                     },
                 }

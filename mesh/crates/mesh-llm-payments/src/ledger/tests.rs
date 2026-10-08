@@ -12,6 +12,7 @@ fn terms(id: &str, cap: u64) -> RequestTerms {
         pricing: Pricing {
             input_msat_per_million: 1000,
             output_msat_per_million: 1000,
+            minimum_invoice_msat: 1,
         },
         input_tokens: 10,
         max_output_tokens: 10,
@@ -174,4 +175,27 @@ fn single_policy_controls_eligibility_and_preserves_reservations() -> Result<()>
         Some("approved")
     );
     Ok(())
+}
+
+#[test]
+fn own_prices_are_always_exact_even_when_stored_padded() {
+    let directory = tempfile::tempdir().unwrap();
+    let ledger = Ledger::open(directory.path()).unwrap();
+    let padded = Pricing {
+        input_msat_per_million: 500,
+        output_msat_per_million: 1500,
+        minimum_invoice_msat: 1000,
+    };
+    ledger.set_pricing("m", Some(&padded)).unwrap();
+    assert_eq!(ledger.pricing().unwrap()["m"].minimum_invoice_msat, 1);
+    // Rows written before exact charging are normalised on read.
+    ledger
+        .lock()
+        .unwrap()
+        .execute(
+            "UPDATE pricing SET value=?1 WHERE model='m'",
+            [serde_json::to_string(&padded).unwrap()],
+        )
+        .unwrap();
+    assert_eq!(ledger.pricing().unwrap()["m"].minimum_invoice_msat, 1);
 }

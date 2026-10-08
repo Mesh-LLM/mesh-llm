@@ -38,10 +38,27 @@ pub fn payment_cap_msat(amount_msat: u64) -> Result<u64> {
 pub struct Pricing {
     pub input_msat_per_million: u64,
     pub output_msat_per_million: u64,
+    /// Legacy invoice granularity. New sellers always use 1 (exact charges);
+    /// it is kept on the wire because v0.78.1 and older require the field in
+    /// request frames and price their terms with it, so a buyer must carry an
+    /// old seller's advertised value through unchanged to interoperate.
+    #[serde(default = "exact_invoice_msat")]
+    pub minimum_invoice_msat: u64,
+}
+
+/// Invoice granularity for exact charges: no rounding beyond the msat.
+pub const EXACT_INVOICE_MSAT: u64 = 1;
+
+fn exact_invoice_msat() -> u64 {
+    EXACT_INVOICE_MSAT
 }
 
 impl Pricing {
     pub fn validate(&self) -> Result<()> {
+        ensure!(
+            self.minimum_invoice_msat > 0,
+            "minimum invoice must be positive"
+        );
         ensure!(
             self.input_msat_per_million > 0 && self.output_msat_per_million > 0,
             "paid serving requires positive input and output rates"
@@ -74,8 +91,9 @@ impl Pricing {
         if tokens == 0 {
             return Ok(0);
         }
-        (u128::from(rate) * u128::from(tokens))
-            .div_ceil(1_000_000)
+        let charge = (u128::from(rate) * u128::from(tokens)).div_ceil(1_000_000);
+        let minimum = u128::from(self.minimum_invoice_msat);
+        (charge.div_ceil(minimum) * minimum)
             .try_into()
             .context("inference charge overflow")
     }
@@ -90,6 +108,7 @@ mod tests {
         let rates = Pricing {
             input_msat_per_million: 500,
             output_msat_per_million: 1500,
+            minimum_invoice_msat: 1,
         };
         assert_eq!(rates.input_charge(1000).unwrap(), 1);
         assert_eq!(rates.output_charge(1000).unwrap(), 2);
@@ -119,6 +138,7 @@ mod tests {
         let rates = Pricing {
             input_msat_per_million: 1000,
             output_msat_per_million: 1000,
+            minimum_invoice_msat: 1,
         };
         // 100 msat input + 100 msat output, each with the floor allowance.
         assert_eq!(
@@ -138,12 +158,42 @@ mod tests {
     }
 
     #[test]
-    fn charges_round_up_to_the_msat_and_overflow_is_enforced() {
+    fn wire_pricing_stays_readable_by_and_from_older_peers() {
+        // v0.78.1 requires `minimum_invoice_msat` in request frames.
+        let exact = Pricing {
+            input_msat_per_million: 500,
+            output_msat_per_million: 1500,
+            minimum_invoice_msat: EXACT_INVOICE_MSAT,
+        };
+        let json = serde_json::to_value(&exact).unwrap();
+        assert_eq!(json["minimum_invoice_msat"], 1);
+        // Frames from builds that briefly omitted it read as exact.
+        let omitted: Pricing = serde_json::from_value(serde_json::json!({
+            "input_msat_per_million": 500, "output_msat_per_million": 1500
+        }))
+        .unwrap();
+        assert_eq!(omitted, exact);
+    }
+
+    #[test]
+    fn legacy_seller_minimum_is_honoured_so_terms_agree() {
+        let legacy = Pricing {
+            input_msat_per_million: 500,
+            output_msat_per_million: 1500,
+            minimum_invoice_msat: 1000,
+        };
+        // 2,261 input tokens is ~2 msat exact; a v0.78.1 seller bills 1000.
+        assert_eq!(legacy.input_charge(2261).unwrap(), 1000);
+    }
+
+    #[test]
+    fn provider_granularity_and_overflow_are_enforced() {
         let mut rates = Pricing {
             input_msat_per_million: 1_000_001,
             output_msat_per_million: 1,
+            minimum_invoice_msat: 1000,
         };
-        assert_eq!(rates.input_charge(1000).unwrap(), 1001);
+        assert_eq!(rates.input_charge(1000).unwrap(), 2000);
         rates.input_msat_per_million = u64::MAX;
         assert!(rates.input_charge(u64::MAX).is_err());
     }

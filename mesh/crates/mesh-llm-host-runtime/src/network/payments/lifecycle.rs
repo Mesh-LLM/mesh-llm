@@ -362,6 +362,7 @@ mod tests {
             pricing: mesh_llm_payments_types::pricing::Pricing {
                 input_msat_per_million: 1000,
                 output_msat_per_million: 2000,
+                minimum_invoice_msat: 1,
             },
             input_tokens: 10,
             max_output_tokens: 20,

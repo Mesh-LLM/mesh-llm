@@ -99,6 +99,7 @@ mod tests {
                     mesh_llm_payments_types::pricing::Pricing {
                         input_msat_per_million: 10,
                         output_msat_per_million: 20,
+                        minimum_invoice_msat: 1000,
                     },
                 );
             }
@@ -186,6 +187,7 @@ mod tests {
             mesh_llm_payments_types::pricing::Pricing {
                 input_msat_per_million: 10,
                 output_msat_per_million: 20,
+                minimum_invoice_msat: 1000,
             },
         );
         node.add_peer_after_direct_requirements_validated(
@@ -217,11 +219,13 @@ mod tests {
         let price = mesh_llm_payments_types::pricing::Pricing {
             input_msat_per_million: 10,
             output_msat_per_million: 20,
+            minimum_invoice_msat: 1000,
         };
         let free = offer("free", None, Some(3), false);
         let paid = offer("paid", Some(&price), Some(1), false);
         assert_eq!(free["paid"], false);
         assert_eq!(paid["paid"], true);
+        assert_eq!(paid["pricing"]["minimum_invoice_msat"], 1000);
         assert_eq!(paid["pricing"]["input_msat_per_million"], 10);
     }
 }

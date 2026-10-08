@@ -10,6 +10,7 @@ fn pricing() -> Pricing {
     Pricing {
         input_msat_per_million: 1000,
         output_msat_per_million: 1000,
+        minimum_invoice_msat: 1,
     }
 }
 

@@ -96,6 +96,12 @@ impl Ledger {
         );
         if let Some(pricing) = pricing {
             pricing.validate()?;
+            // This node never pads its own charges; only legacy peers' values
+            // are honoured, as received.
+            let pricing = &Pricing {
+                minimum_invoice_msat: crate::pricing::EXACT_INVOICE_MSAT,
+                ..pricing.clone()
+            };
             let existing = self.pricing()?;
             ensure!(
                 existing.contains_key(model) || existing.len() < 128,
@@ -116,7 +122,10 @@ impl Ledger {
             statement.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
         rows.map(|row| {
             let (model, value) = row?;
-            Ok((model, serde_json::from_str(&value)?))
+            let mut pricing: Pricing = serde_json::from_str(&value)?;
+            // Normalise prices stored before exact charging (#2310).
+            pricing.minimum_invoice_msat = crate::pricing::EXACT_INVOICE_MSAT;
+            Ok((model, pricing))
         })
         .collect()
     }

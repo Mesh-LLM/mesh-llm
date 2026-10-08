@@ -638,6 +638,7 @@ mod tests {
                 Pricing {
                     input_msat_per_million: 1,
                     output_msat_per_million: 1,
+                    minimum_invoice_msat: 1,
                 },
                 RouteAttemptLoggingContext {
                     exchange_id: None,

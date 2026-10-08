@@ -11,8 +11,7 @@ pub(super) fn encode(prices: &BTreeMap<String, Pricing>) -> Vec<LightningOffer> 
             model: model.clone(),
             input_msat_per_million: price.input_msat_per_million,
             output_msat_per_million: price.output_msat_per_million,
-            // Deprecated: always 1 so older buyers (which reject 0) still accept.
-            minimum_invoice_msat: 1,
+            minimum_invoice_msat: price.minimum_invoice_msat,
         })
         .collect()
 }
@@ -31,6 +30,7 @@ pub(super) fn decode(offers: &[LightningOffer]) -> Option<BTreeMap<String, Prici
         let price = Pricing {
             input_msat_per_million: offer.input_msat_per_million,
             output_msat_per_million: offer.output_msat_per_million,
+            minimum_invoice_msat: offer.minimum_invoice_msat,
         };
         price.validate().ok()?;
         if result.insert(offer.model.clone(), price).is_some() {
@@ -55,12 +55,8 @@ mod tests {
         let decoded = decode(std::slice::from_ref(&offer)).unwrap();
         assert_eq!(encode(&decoded), vec![offer.clone()]);
         assert!(decode(&[offer.clone(), offer.clone()]).is_none());
-        // The deprecated minimum is ignored on read, even a padded one.
-        let mut padded = offer.clone();
-        padded.minimum_invoice_msat = 1000;
-        assert_eq!(decode(&[padded]).unwrap(), decoded);
         let mut invalid = offer;
-        invalid.input_msat_per_million = 0;
+        invalid.minimum_invoice_msat = 0;
         assert!(decode(&[invalid]).is_none());
     }
 }

@@ -15,6 +15,7 @@ async fn sequential_admission_waits_for_terminal_output_payment() -> Result<()> 
     let price = Pricing {
         input_msat_per_million: 1,
         output_msat_per_million: 1,
+        minimum_invoice_msat: 1,
     };
     service.ledger.begin_serving("first", "peer", &price, 8)?;
     let invoice = service
@@ -83,6 +84,7 @@ async fn admission_deadline_preserves_unpaid_debt() -> Result<()> {
     let price = Pricing {
         input_msat_per_million: 1,
         output_msat_per_million: 1,
+        minimum_invoice_msat: 1,
     };
     service.ledger.begin_serving("first", "peer", &price, 8)?;
     let invoice = service
@@ -131,6 +133,7 @@ async fn recovery_reports_pending_until_input_settles() -> Result<()> {
     let price = Pricing {
         input_msat_per_million: 1,
         output_msat_per_million: 1,
+        minimum_invoice_msat: 1,
     };
     service.ledger.begin_serving(&id, "peer", &price, 8)?;
     let invoice = service
