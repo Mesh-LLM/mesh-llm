@@ -253,11 +253,7 @@ export function ChatPageLayout({
               </button>
             ))}
           </div>
-        ) : (
-          <span className="shrink-0 whitespace-nowrap font-mono text-[length:var(--density-type-caption)] text-fg-dim">
-            Free
-          </span>
-        )}
+        ) : null}
         {modelUnavailable ? (
           <span role="status" className="shrink-0 whitespace-nowrap text-[length:var(--density-type-caption)] text-bad">
             Picked model unavailable

@@ -44,7 +44,7 @@ describe('model prices', () => {
   })
 
   it('labels paid listings', () => {
-    expect(priceLabel(payments.get('paid-model'))).toBe('1.5k msat/M out')
+    expect(priceLabel(payments.get('paid-model'))).toBe('from 1.5k msat/M out')
     expect(priceLabel(payments.get('mixed-model'))).toBe('free · paid')
     expect(priceLabel(payments.get('free-model'))).toBeUndefined()
   })

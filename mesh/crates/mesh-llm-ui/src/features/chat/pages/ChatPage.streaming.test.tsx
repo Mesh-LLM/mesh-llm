@@ -539,7 +539,6 @@ describe('ChatPage', () => {
 
     renderChatPage({ mode: 'live' })
 
-    expect(screen.getByText('Free')).toBeVisible()
     await user.type(screen.getByLabelText('Prompt'), 'Free prompt')
     await user.click(screen.getByRole('button', { name: 'Send' }))
 
@@ -558,7 +557,6 @@ describe('ChatPage', () => {
     await user.type(screen.getByLabelText('Prompt'), 'x')
 
     expect(screen.queryByRole('button', { name: /^(Free|Paid)$/ })).not.toBeInTheDocument()
-    expect(screen.getByText('Free')).toBeVisible()
   })
 
   it('retries with the currently displayed free-only choice', async () => {

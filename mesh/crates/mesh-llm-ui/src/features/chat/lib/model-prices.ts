@@ -33,9 +33,9 @@ function formatMsat(value: number): string {
   return value >= 1000 ? `${Number((value / 1000).toFixed(1))}k` : String(value)
 }
 
-/** Short price label for paid-capable listings, e.g. `1.5k msat/M out` or `free · paid`. */
+/** Short price label for paid-capable listings, e.g. `from 1.5k msat/M out` or `free · paid`. */
 export function priceLabel(payment: ModelPayment | undefined): string | undefined {
   if (!payment?.paidAvailable) return undefined
   if (payment.freeAvailable) return 'free · paid'
-  return payment.outputMsatPerMillion != null ? `${formatMsat(payment.outputMsatPerMillion)} msat/M out` : 'paid'
+  return payment.outputMsatPerMillion != null ? `from ${formatMsat(payment.outputMsatPerMillion)} msat/M out` : 'paid'
 }

@@ -211,13 +211,12 @@ describe('ChatPage', () => {
     window.localStorage.removeItem('mesh-llm.chat.routing-preferences')
   })
 
-  it('shows plain Free and no toggle when the node cannot pay', () => {
+  it('shows no payment switch when the node cannot pay', () => {
     paidRoutingMock.allowed = false
     window.localStorage.setItem('mesh-llm.chat.routing-preferences', JSON.stringify({ model: '', freeOnly: true }))
 
     renderChatPage()
 
-    expect(screen.getByText('Free')).toBeVisible()
     expect(screen.queryByRole('button', { name: /^(Free|Paid)$/ })).not.toBeInTheDocument()
     window.localStorage.removeItem('mesh-llm.chat.routing-preferences')
   })
@@ -270,7 +269,7 @@ describe('ChatPage', () => {
 
     await user.click(screen.getByRole('button', { name: 'Paid' }))
     await user.click(screen.getByRole('combobox', { name: 'Select model' }))
-    expect(screen.getByRole('option', { name: /peer-model/ })).toHaveTextContent('1.5k msat/M out')
+    expect(screen.getByRole('option', { name: /peer-model/ })).toHaveTextContent('from 1.5k msat/M out')
     modelPaymentsMock.data = undefined
     window.localStorage.removeItem('mesh-llm.chat.routing-preferences')
   })
