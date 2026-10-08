@@ -42,6 +42,8 @@ pub(crate) use send::{
 };
 
 #[cfg(feature = "payments")]
+mod output_evidence;
+#[cfg(feature = "payments")]
 pub(crate) mod paid;
 
 #[cfg(feature = "payments")]

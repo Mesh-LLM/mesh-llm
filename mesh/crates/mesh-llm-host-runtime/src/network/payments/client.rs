@@ -174,7 +174,7 @@ impl Payments {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::collections::BTreeMap;
     use std::sync::Mutex;
 
@@ -191,7 +191,7 @@ mod tests {
     /// A scripted `payments.v1` provider. It records which plugin each operation
     /// was addressed to, and can be told never to answer one operation.
     #[derive(Default)]
-    struct FakePayments {
+    pub(crate) struct FakePayments {
         calls: Mutex<Vec<(String, String)>>,
         hang: Mutex<Vec<String>>,
         pricing: Mutex<AdvertisedPricing>,
@@ -202,7 +202,7 @@ mod tests {
             self.hang.lock().unwrap().push(operation.to_owned());
         }
 
-        fn calls(&self) -> Vec<(String, String)> {
+        pub(crate) fn calls(&self) -> Vec<(String, String)> {
             self.calls.lock().unwrap().clone()
         }
     }
@@ -268,7 +268,7 @@ mod tests {
     }
 
     /// A manager serving a scripted `payments.v1` provider per entry.
-    async fn manager(
+    pub(crate) async fn manager(
         entries: &[(&str, &[&str])],
         bridge: Arc<dyn PluginRpcBridge>,
     ) -> PluginManager {

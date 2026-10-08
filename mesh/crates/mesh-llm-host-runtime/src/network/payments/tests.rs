@@ -267,7 +267,8 @@ async fn simulated_backend(
         return Ok(());
     }
     let body = serde_json::to_vec(&serde_json::json!({
-        "choices": [{"text": "test output"}],
+        // Match simulated decode with delivered evidence for the client guard.
+        "choices": [{"text": format!("test output{}", "x".repeat(output_tokens as usize))}],
         "usage": {"prompt_tokens": 40, "completion_tokens": output_tokens, "total_tokens": 40 + output_tokens}
     }))?;
     stream.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",body.len()).as_bytes()).await?;
@@ -573,7 +574,7 @@ fn assert_seller_published_the_exchange(
     assert_eq!(terminal.request_digest.as_deref(), expected_request_digest);
     // The same construction the free relay uses on the body it delivered.
     let body = serde_json::json!({
-        "choices": [{"text": "test output"}],
+        "choices": [{"text": format!("test output{}", "x".repeat(output_tokens as usize))}],
         "usage": {"prompt_tokens": 40, "completion_tokens": output_tokens, "total_tokens": 40 + output_tokens}
     });
     let expected = OpenAiExchangeEnvelope::terminal(

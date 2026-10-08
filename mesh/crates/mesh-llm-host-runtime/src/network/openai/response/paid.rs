@@ -14,6 +14,7 @@ use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt, DuplexStream};
 
 use super::{
     common::{ResponseRetryPolicy, RouteAttemptLoggingContext, RouteAttemptResult},
+    output_evidence::OutputBound,
     routing::route_local_attempt_after_forward,
 };
 use crate::network::payments::{client::Payments, request::PaidRequest};
@@ -262,6 +263,7 @@ async fn validate_initial_invoice(
         terms.input_tokens > 0 && terms.input_tokens <= 131_072,
         "invalid input count"
     );
+    request.validate_input_count(terms.input_tokens)?;
     request.validate_output_allowance(terms.max_output_tokens)?;
     let input_amount = price.input_charge(terms.input_tokens)?;
     let total = price.request_cap_msat(input_amount, terms.max_output_tokens)?;
@@ -432,6 +434,7 @@ pub(crate) async fn exchange_tracked(
     let _ = ready.send(());
     let mut cancelled = false;
     let mut output_settled = false;
+    let mut output_bound = OutputBound::default();
     loop {
         let reading = wire::read(&mut recv);
         tokio::pin!(reading);
@@ -456,6 +459,7 @@ pub(crate) async fn exchange_tracked(
             Frame::Output { bytes } => {
                 ensure!(!output_settled, "output after final invoice");
                 progress.output_delivered |= !bytes.is_empty();
+                output_bound.observe(&bytes);
                 if !cancelled && output.write_all(&bytes).await.is_err() {
                     cancelled = true;
                     progress.cancelled = true;
@@ -472,6 +476,12 @@ pub(crate) async fn exchange_tracked(
                     "unexpected output invoice"
                 );
                 observations.invoice(1, &invoice);
+                if !input_settled && !output_bound.permits(tokens) {
+                    // Let a pending input payment land so CANCEL is not a no-op.
+                    let _ = (&mut input_payment).await;
+                    input_settled = true;
+                }
+                refuse_implausible_output(&payments, &id, &output_bound, tokens, &mut send).await?;
                 let payment = settle_output(&payments, &terms, tokens, invoice).await?;
                 accounted_msat = accounted_msat
                     .saturating_add(payment.amount_msat)
@@ -564,6 +574,26 @@ pub(crate) async fn settle_output(
         .await
 }
 
+/// Best-effort client guard: refuse (cancel, never settle) an output bill the
+/// delivered bytes cannot plausibly account for.
+async fn refuse_implausible_output(
+    payments: &Payments,
+    id: &str,
+    bound: &OutputBound,
+    tokens: u64,
+    send: &mut (impl AsyncWrite + Unpin),
+) -> Result<()> {
+    if bound.permits(tokens) {
+        return Ok(());
+    }
+    cancel(payments, id, CancelStage::Authorization).await;
+    let _ = wire::write(send, &Frame::Cancel).await;
+    bail!(
+        "provider billed {tokens} output tokens for {} delivered bytes",
+        bound.bytes()
+    );
+}
+
 /// Best-effort release of a request that never started paying.
 async fn cancel(payments: &Payments, id: &str, stage: CancelStage) {
     let _ = payments
@@ -591,6 +621,50 @@ pub(super) async fn effective_intent(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn an_inflated_output_bill_is_cancelled_and_never_settled() -> Result<()> {
+        use crate::network::payments::client::tests::{FakePayments, manager};
+        use std::sync::Arc;
+        let fake = Arc::new(FakePayments::default());
+        let payments = Payments::for_plugins(
+            manager(
+                &[(
+                    "payments-fake",
+                    &[mesh_llm_payments_types::contract::CAPABILITY],
+                )],
+                Arc::new(Arc::clone(&fake)),
+            )
+            .await,
+        )
+        .await;
+        let mut bound = OutputBound::default();
+        bound.observe(b"HTTP/1.1 200 OK\r\n\r\nhi");
+        let mut send = Vec::new();
+
+        refuse_implausible_output(&payments, "req", &bound, 10, &mut send).await?;
+        assert!(
+            send.is_empty() && fake.calls().is_empty(),
+            "plausible bill passes"
+        );
+
+        let error = refuse_implausible_output(&payments, "req", &bound, 100_000, &mut send)
+            .await
+            .expect_err("inflated bill must be refused");
+        assert!(
+            error.to_string().contains("100000 output tokens"),
+            "{error}"
+        );
+        let ops_called: Vec<_> = fake.calls().into_iter().map(|(_, op)| op).collect();
+        assert_eq!(
+            ops_called,
+            [ops::CANCEL.to_owned()],
+            "cancel, never SETTLE_OUTPUT"
+        );
+        let mut written = send.as_slice();
+        assert!(matches!(wire::read(&mut written).await?, Frame::Cancel));
+        Ok(())
+    }
 
     #[tokio::test]
     async fn initial_transport_drop_is_retryable_but_malformed_frame_is_terminal() -> Result<()> {

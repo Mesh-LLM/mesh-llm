@@ -74,6 +74,62 @@ impl PaidRequest {
         })
     }
 
+    /// Coarse overbilling guard, not a model tokenizer. One token per UTF-8
+    /// byte plus generous chat-template overhead accommodates code and Unicode.
+    /// Media and pre-tokenized prompts have no useful local text estimate.
+    pub fn validate_input_count(&self, tokens: u64) -> Result<()> {
+        let text = if self.path == "/v1/completions" {
+            match self.body.get("prompt") {
+                Some(Value::String(text)) => Some(text.len() as u64),
+                _ => None,
+            }
+        } else {
+            self.body
+                .get("messages")
+                .and_then(Value::as_array)
+                .and_then(|messages| {
+                    let mut bytes = 0u64;
+                    for message in messages {
+                        match message.get("content") {
+                            Some(Value::String(text)) => {
+                                bytes = bytes.saturating_add(text.len() as u64)
+                            }
+                            Some(Value::Array(parts)) => {
+                                for part in parts {
+                                    if part.get("type").and_then(Value::as_str) != Some("text") {
+                                        return None;
+                                    }
+                                    bytes = bytes
+                                        .saturating_add(part.get("text")?.as_str()?.len() as u64);
+                                }
+                            }
+                            None | Some(Value::Null) => {}
+                            _ => return None,
+                        }
+                        for key in ["tool_calls", "function_call", "name", "tool_call_id"] {
+                            if let Some(value) = message.get(key) {
+                                bytes = bytes.saturating_add(value.to_string().len() as u64);
+                            }
+                        }
+                        bytes = bytes.saturating_add(256);
+                    }
+                    Some(bytes)
+                })
+        };
+        if let Some(mut bound) = text {
+            for key in ["tools", "functions", "response_format"] {
+                if let Some(value) = self.body.get(key) {
+                    bound = bound.saturating_add(value.to_string().len() as u64);
+                }
+            }
+            ensure!(
+                tokens <= bound.saturating_add(1024),
+                "input token billing mismatch"
+            );
+        }
+        Ok(())
+    }
+
     pub fn validate_output_allowance(&self, tokens: u64) -> Result<()> {
         ensure!(
             tokens > 0 && tokens <= u64::from(self.max_tokens.unwrap_or(u32::MAX)),
@@ -134,6 +190,46 @@ pub(crate) fn strip_intent(raw: &[u8]) -> Result<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn input_billing_bound_is_generous_but_not_unlimited() {
+        for body in [
+            serde_json::json!({"model":"m", "prompt":"hello 世界 🦀"}),
+            serde_json::json!({"model":"m", "messages":[{"role":"user","content":"hello"}],
+                "tools":[{"type":"function","function":{"name":"lookup","parameters":{}}}]}),
+        ] {
+            let path = if body.get("prompt").is_some() {
+                "/v1/completions"
+            } else {
+                "/v1/chat/completions"
+            };
+            let request =
+                PaidRequest::parse(format!("POST {path} HTTP/1.1\r\n\r\n{body}").as_bytes())
+                    .unwrap();
+            request.validate_input_count(1024).unwrap();
+            assert!(request.validate_input_count(20_000).is_err());
+            request.validate_input_count(1).unwrap(); // Underbilling is harmless.
+        }
+    }
+
+    #[test]
+    fn input_billing_skips_media_and_token_ids() {
+        for (path, body) in [
+            (
+                "/v1/completions",
+                serde_json::json!({"model":"m","prompt":[1,2,3]}),
+            ),
+            (
+                "/v1/chat/completions",
+                serde_json::json!({"model":"m","messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"x"}}]}]}),
+            ),
+        ] {
+            let request =
+                PaidRequest::parse(format!("POST {path} HTTP/1.1\r\n\r\n{body}").as_bytes())
+                    .unwrap();
+            request.validate_input_count(100_000).unwrap();
+        }
+    }
 
     #[test]
     fn request_intent_is_validated_and_not_forwarded() {
