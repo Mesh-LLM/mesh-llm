@@ -62,12 +62,8 @@ generic automation into shell, PowerShell, or JavaScript to evade this rule;
 platform adapters may remain thin. Existing Python checks, Just recipes and
 workflow entrypoints remain operational during migration and are transitional,
 not templates for new tooling. Existing isolated compatibility or upstream
-fixtures may be retained only under the exception policy in
-`.omo/specs/xtask-automation-migration.md` sections 7.5 and 9; new Python
-tooling requires an explicit maintainer decision to change that policy. The
-four SDK ecosystem candidates in
-`ci/automation-migration/python-exceptions.json` are conditional, not approved
-exceptions, until task 22 proves isolation. Do not claim the required path is
+fixtures may be retained only with an explicit maintainer decision; new Python
+tooling requires an explicit maintainer decision to change that policy. Do not claim the required path is
 Python-free or remove legacy validation before its Rust replacement passes.
 
 ## Required procedure

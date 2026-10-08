@@ -284,21 +284,8 @@ mod competitive_cell_native;
 #[path = "migration_lifecycle/competitive_run_native.rs"]
 mod competitive_run_native;
 
-#[path = "migration_lifecycle/adaptive_cell_cli.rs"]
-mod adaptive_cell_cli;
-
-#[path = "migration_lifecycle/adaptive_full_matrix_cli.rs"]
-mod adaptive_full_matrix_cli;
-
-#[path = "migration_lifecycle/mixed_full_matrix_cli.rs"]
-mod mixed_full_matrix_cli;
-
 #[path = "migration_lifecycle/manual_smoke_cli.rs"]
 mod manual_smoke_cli;
-
-#[cfg(unix)]
-#[path = "migration_lifecycle/kv_restart_full_cli.rs"]
-mod kv_restart_full_cli;
 
 #[path = "migration_lifecycle/scheduler_fixture_cli.rs"]
 mod scheduler_fixture_cli;
@@ -352,10 +339,6 @@ mod hf_job_worker_cli;
 
 #[path = "migration_lifecycle/hf_raw_conversion.rs"]
 mod hf_raw_conversion;
-
-#[cfg(unix)]
-#[path = "migration_lifecycle/radix_full_cli.rs"]
-mod radix_full_cli;
 
 #[path = "migration_lifecycle/canary_repair_source_contracts.rs"]
 mod canary_repair_source_contracts;

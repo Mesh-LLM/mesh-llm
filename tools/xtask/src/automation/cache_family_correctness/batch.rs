@@ -225,15 +225,13 @@ fn collect(
 }
 pub(super) fn run(args: &[String]) -> DynResult<()> {
     let (path, output) = paths(args)?;
-    let request: Request = serde_json::from_slice(
-        &crate::automation::waiting_prefix::adaptive_identity::bounded(&path, 1024 * 1024)?,
-    )?;
+    let request: Request = serde_json::from_slice(&crate::automation::receipt_files::bounded(
+        &path,
+        1024 * 1024,
+    )?)?;
     request.validate()?;
     let prepared: crate::automation::cache_family_run::contract::Input = serde_json::from_slice(
-        &crate::automation::waiting_prefix::adaptive_identity::bounded(
-            &request.prepared_input,
-            4 * 1024 * 1024,
-        )?,
+        &crate::automation::receipt_files::bounded(&request.prepared_input, 4 * 1024 * 1024)?,
     )?;
     prepared.validate()?;
     let mut plan_input = prepared.plan.clone();
@@ -287,5 +285,5 @@ fn bounded_publish(path: &Path, value: &Value, limit: usize) -> DynResult<()> {
     if bytes.len() > limit {
         return Err("correctness batch projection exceeds bound".into());
     }
-    crate::automation::waiting_prefix::adaptive_identity::fresh(path, &bytes)
+    crate::automation::receipt_files::fresh(path, &bytes)
 }

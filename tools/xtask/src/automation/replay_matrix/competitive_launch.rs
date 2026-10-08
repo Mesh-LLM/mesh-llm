@@ -46,7 +46,7 @@ pub(super) fn file(artifact: &Artifact) -> DynResult<String> {
     Ok(actual)
 }
 pub(super) fn tree(artifact: &Artifact) -> DynResult<String> {
-    crate::automation::waiting_prefix::native_identity::verify(&artifact.path, &artifact.sha256)
+    crate::automation::native_artifact_identity::verify(&artifact.path, &artifact.sha256)
 }
 pub(super) fn environment(runtime: Option<&Artifact>, cache: bool) -> BTreeMap<OsString, Argument> {
     // Preserve login/user settings. Secret classification redacts values from diagnostics;

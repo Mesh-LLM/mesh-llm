@@ -32,7 +32,7 @@ pub(in crate::automation) fn run(
     let request = directory.join("input.json");
     let output = directory.join("output");
     let bytes = serde_json::to_vec(input)?;
-    crate::automation::waiting_prefix::adaptive_identity::fresh(&request, &bytes)?;
+    crate::automation::receipt_files::fresh(&request, &bytes)?;
     let environment = ["PATH", "SYSTEMROOT", "WINDIR"]
         .into_iter()
         .filter_map(|k| std::env::var_os(k).map(|v| (k.into(), Arg::Public(v))))
@@ -84,10 +84,9 @@ pub(in crate::automation) fn run(
         "cache-family-cell" => output.join("cell.json"),
         _ => return Err("unsupported cache matrix child".into()),
     };
-    let receipt =
-        crate::automation::waiting_prefix::adaptive_identity::bounded(&leaf, 64 * 1024 * 1024)
-            .ok()
-            .and_then(|b| serde_json::from_slice::<Value>(&b).ok());
+    let receipt = crate::automation::receipt_files::bounded(&leaf, 64 * 1024 * 1024)
+        .ok()
+        .and_then(|b| serde_json::from_slice::<Value>(&b).ok());
     let correlation = !matches!(route, "cache-family-cell" | "cache-family-cell-admission")
         || receipt
             .as_ref()

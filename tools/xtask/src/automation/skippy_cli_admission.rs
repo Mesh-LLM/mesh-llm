@@ -7,7 +7,6 @@ use crate::{
     },
 };
 use std::{
-    ffi::OsString,
     num::NonZeroUsize,
     path::Path,
     time::{Duration, Instant},
@@ -15,7 +14,6 @@ use std::{
 #[derive(Clone, Copy, Debug, serde::Serialize)]
 pub(crate) enum Role {
     Public,
-    BinaryFrontend,
     BinaryWorker,
 }
 #[derive(Clone, Copy, Debug, serde::Serialize)]
@@ -27,7 +25,7 @@ impl Role {
     fn legacy(self) -> &'static str {
         match self {
             Self::Public => "serve-openai",
-            Self::BinaryFrontend | Self::BinaryWorker => "serve-binary",
+            Self::BinaryWorker => "serve-binary",
         }
     }
 }
@@ -140,29 +138,6 @@ impl Dialect {
             prefix.push(Value::Public("--worker-only".into()));
         }
         args.splice(1..1, prefix);
-        if matches!(role, Role::BinaryFrontend) {
-            for argument in args {
-                if let Value::Public(value) = argument
-                    && let Some(flag) = value
-                        .to_str()
-                        .and_then(|value| value.strip_prefix("--openai-"))
-                    && [
-                        "bind-addr",
-                        "generation-concurrency",
-                        "default-max-tokens",
-                        "prefill-chunk-policy",
-                        "prefill-chunk-size",
-                        "prefill-adaptive-start",
-                        "prefill-adaptive-step",
-                        "prefill-adaptive-max",
-                        "prefill-adaptive-target-ms",
-                    ]
-                    .contains(&flag)
-                {
-                    *value = OsString::from(format!("--{flag}"));
-                }
-            }
-        }
         Ok(())
     }
 }

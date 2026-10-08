@@ -66,7 +66,7 @@ pub(crate) fn print_usage() {
     println!("  cargo xtool automation split-probe <verb> ...");
     println!("  cargo xtool models projector-download --url HTTPS_URL --output FILE");
     println!(
-        "{USAGE}\n  {HF_CONVERTED_ARTIFACT_USAGE}\n  {}\n  {}\n  {}\n  {}\n  {}\n  {}\n  {}\n  {}\n  {}\n  {}\n  {}\n  {}\n  cargo xtool ci family-plan ...",
+        "{USAGE}\n  {HF_CONVERTED_ARTIFACT_USAGE}\n  {}\n  {}\n  {}\n  {}\n  {}\n  {}\n  {}\n  {}\n  {}\n  {}\n  {}\n  cargo xtool ci family-plan ...",
         crate::automation::client_readiness::USAGE,
         crate::automation::stability::USAGE,
         crate::automation::daemon_readiness::USAGE,
@@ -76,7 +76,6 @@ pub(crate) fn print_usage() {
         crate::automation::rollout::USAGE,
         crate::automation::WORKLOAD_ORACLE_EVIDENCE_USAGE,
         crate::automation::canary_aggregate_command::USAGE,
-        crate::automation::qualification::USAGE,
         crate::automation::required_smoke::USAGE,
         crate::automation::native_generator::USAGE
     );
@@ -125,7 +124,6 @@ pub(crate) enum CliCommand<'a> {
     AgentFixtureInputs(&'a [String]),
     AgentRecordingProxy(&'a [String]),
     AgenticPromptManifest(&'a [String]),
-    WaitingPrefix(&'a [String]),
     EventBenchmarkComparison(&'a [String]),
     EventBenchmarkRun(&'a [String]),
     EndpointModelDiscovery(&'a [String]),
@@ -179,7 +177,6 @@ pub(crate) enum CliCommand<'a> {
     NativeGenerator(&'a [String]),
     SplitEvidence(&'a [String]),
     CiValidate(&'a str, &'a [String]),
-    Qualification(&'a str, &'a [String]),
     ReplayMatrix(&'a [String]),
     Laya(&'a [String]),
     AgentPickModel(&'a [String]),
@@ -217,7 +214,6 @@ pub(crate) enum RepositoryCommand<'a> {
     ClientReadiness(&'a [String]),
     DaemonReadiness(&'a [String]),
     RequiredSmoke(&'a [String]),
-    Automation(&'a [String]),
     AutomationBootstrap(&'a [String]),
     ReleaseTargets,
     CiCrateLists,
@@ -280,9 +276,6 @@ impl<'a> Cli<'a> {
                 if domain == "automation" && scope == "event-benchmark-compare" =>
             {
                 CliCommand::EventBenchmarkComparison(rest)
-            }
-            [domain, scope, rest @ ..] if domain == "automation" && scope == "waiting-prefix" => {
-                CliCommand::WaitingPrefix(rest)
             }
             [domain, scope, rest @ ..]
                 if domain == "automation" && scope == "agentic-prompt-manifest" =>
@@ -525,17 +518,8 @@ impl<'a> Cli<'a> {
             [domain, scope, rest @ ..] if domain == "automation" && scope == "rollout" => {
                 CliCommand::Rollout(rest)
             }
-            [domain, verb, rest @ ..]
-                if domain == "automation"
-                    && matches!(verb.as_str(), "qualify" | "qualify-replay") =>
-            {
-                CliCommand::Qualification(verb, rest)
-            }
             [domain, scope, rest @ ..] if domain == "automation" && scope == "split-evidence" => {
                 CliCommand::SplitEvidence(rest)
-            }
-            [domain, rest @ ..] if domain == "automation" => {
-                CliCommand::Repository(RepositoryCommand::Automation(rest))
             }
             [domain, scope] if domain == "repo-consistency" && scope == "release-targets" => {
                 CliCommand::Repository(RepositoryCommand::ReleaseTargets)

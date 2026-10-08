@@ -54,11 +54,11 @@ pub(super) fn publish_report(rows: &[Value], cells: &[Value], directory: &Path) 
     if text.len() > 16 * 1024 * 1024 {
         return Err("cache producer report text exceeds16MiB".into());
     }
-    crate::automation::waiting_prefix::adaptive_identity::fresh(
+    crate::automation::receipt_files::fresh(
         &directory.join("production-cache-bench.json"),
         &bytes,
     )?;
-    crate::automation::waiting_prefix::adaptive_identity::fresh(
+    crate::automation::receipt_files::fresh(
         &directory.join("production-cache-bench.md"),
         text.as_bytes(),
     )

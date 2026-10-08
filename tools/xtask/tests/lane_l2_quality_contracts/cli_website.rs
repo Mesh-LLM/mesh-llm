@@ -188,7 +188,7 @@ fn cli_website_nested_cli_inputs_select_cli_validation_without_website_build() {
 
 #[test]
 fn cli_website_ci_keeps_inventory_and_browser_contracts_in_normal_workflows() {
-    let targets = json("ci/automation-migration/quality-rust-contract-targets.json");
+    let targets = json("ci/quality-rust-contract-targets.json");
     assert_eq!(
         targets
             .as_array()

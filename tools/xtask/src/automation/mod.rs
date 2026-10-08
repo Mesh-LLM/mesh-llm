@@ -42,8 +42,10 @@ pub(crate) mod local_ports;
 pub(crate) mod logging_console;
 pub(crate) mod logging_recovery;
 pub(crate) mod manual_smoke;
+pub(crate) mod native_artifact_identity;
 mod openai_exchange;
 pub(crate) mod openai_smoke_config;
+pub(crate) mod receipt_files;
 pub(crate) mod runtime_install;
 #[cfg(unix)]
 pub(crate) mod sdk_compat;
@@ -56,7 +58,6 @@ pub(crate) mod suffix_proposer;
 #[path = "../../tests/migration_stability/tls_fixture.rs"]
 pub(crate) mod tls_fixture;
 pub(crate) mod ui_build;
-pub(crate) mod waiting_prefix;
 pub(crate) mod wan_observation;
 pub(crate) mod wan_stage_deployment;
 pub(crate) mod workload_smoke_config;
@@ -70,7 +71,6 @@ pub(crate) mod native_generator;
 mod private_state;
 pub(crate) mod python_research_source;
 pub(crate) mod python_sdk_source;
-pub(crate) mod qualification;
 mod replay_matrix;
 pub(crate) mod required_smoke;
 #[expect(

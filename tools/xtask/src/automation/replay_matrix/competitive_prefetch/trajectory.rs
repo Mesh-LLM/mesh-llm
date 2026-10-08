@@ -1,6 +1,6 @@
 //! Existing approved native trajectory owner; no tokenizer/parser substitution.
 use crate::{
-    automation::{hf_certify::execution, waiting_prefix::adaptive_identity},
+    automation::{hf_certify::execution, receipt_files},
     command::DynResult,
     process::{
         self, Cancellation, Completion, Limits, OutputFiles, ProcessSpec, RawCaptureOptions,
@@ -101,12 +101,12 @@ impl Context<'_> {
         let expected = input["model_manifest_sha256"]
             .as_str()
             .ok_or("manifest SHA required")?;
-        let bytes = adaptive_identity::bounded(manifest, 8 * 1024 * 1024)?;
+        let bytes = receipt_files::bounded(manifest, 8 * 1024 * 1024)?;
         if hex::encode(Sha256::digest(&bytes)) != expected {
             return Err("model manifest pin refused".into());
         }
         let config = Path::new(input["config"].as_str().ok_or("config required")?);
-        let raw = adaptive_identity::bounded(config, 1024 * 1024)?;
+        let raw = receipt_files::bounded(config, 1024 * 1024)?;
         if json!(hex::encode(Sha256::digest(&raw))) != input["config_sha256"] {
             return Err("config pin refused".into());
         }
@@ -159,11 +159,9 @@ impl Context<'_> {
         if admitted.is_empty() {
             return Err("empty native model authority roster".into());
         }
-        if adaptive_identity::bounded(manifest, 8 * 1024 * 1024)? != bytes
-            || adaptive_identity::bounded(
-                Path::new(input["config"].as_str().unwrap()),
-                1024 * 1024,
-            )? != raw
+        if receipt_files::bounded(manifest, 8 * 1024 * 1024)? != bytes
+            || receipt_files::bounded(Path::new(input["config"].as_str().unwrap()), 1024 * 1024)?
+                != raw
         {
             return Err("model authority source changed".into());
         }
@@ -172,7 +170,7 @@ impl Context<'_> {
     }
     pub(super) fn materialize(&self, input: &Json, evidence: &mut Json) -> DynResult<()> {
         let config_path = Path::new(input["config"].as_str().ok_or("config required")?);
-        let bytes = adaptive_identity::bounded(config_path, 1024 * 1024)?;
+        let bytes = receipt_files::bounded(config_path, 1024 * 1024)?;
         if json!(hex::encode(Sha256::digest(&bytes))) != input["config_sha256"] {
             return Err("reader config pin mismatch".into());
         }
@@ -193,7 +191,7 @@ impl Context<'_> {
             return Err("native deterministic manifest producer failed".into());
         }
         let path = output.join("thoughtworks/manifest.json");
-        let produced = adaptive_identity::bounded(&path, 8 * 1024 * 1024)?;
+        let produced = receipt_files::bounded(&path, 8 * 1024 * 1024)?;
         let pin = hex::encode(Sha256::digest(&produced));
         evidence["manifest_sha256"] = json!(&pin);
         if json!(&pin) != config["thoughtworks"]["selection"]["manifest_sha256"] {
@@ -207,7 +205,7 @@ impl Context<'_> {
             self.deadline,
             self.cancel,
         )?;
-        if adaptive_identity::bounded(config_path, 1024 * 1024)? != bytes {
+        if receipt_files::bounded(config_path, 1024 * 1024)? != bytes {
             return Err("manifest config changed".into());
         }
         super::check(self.deadline, self.cancel)

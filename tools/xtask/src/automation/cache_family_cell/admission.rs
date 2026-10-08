@@ -16,7 +16,7 @@ pub(super) fn hash(bytes: &[u8]) -> String {
     hex::encode(Sha256::digest(bytes))
 }
 pub(super) fn run(input: &Path, output: &Path) -> DynResult<()> {
-    let bytes = crate::automation::waiting_prefix::adaptive_identity::bounded(input, 1024 * 1024)?;
+    let bytes = crate::automation::receipt_files::bounded(input, 1024 * 1024)?;
     let mut admitted: Input = serde_json::from_slice(&bytes)?;
     admitted.validate()?;
     admitted.binary = admitted.binary.canonicalize()?;
@@ -29,7 +29,7 @@ pub(super) fn run(input: &Path, output: &Path) -> DynResult<()> {
         return Err("cache cell binary SHA mismatch".into());
     }
     admitted.native_build = admitted.native_build.canonicalize()?;
-    crate::automation::waiting_prefix::native_identity::verify(
+    crate::automation::native_artifact_identity::verify(
         &admitted.native_build,
         &admitted.native_build_sha256,
     )?;
@@ -83,8 +83,5 @@ pub(super) fn run(input: &Path, output: &Path) -> DynResult<()> {
         admitted,
         model_identity: model,
     };
-    crate::automation::waiting_prefix::adaptive_identity::fresh(
-        output,
-        &serde_json::to_vec(&receipt)?,
-    )
+    crate::automation::receipt_files::fresh(output, &serde_json::to_vec(&receipt)?)
 }

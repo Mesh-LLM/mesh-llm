@@ -91,7 +91,7 @@ pub(super) fn validate(
 pub(super) fn observe(toolkits: &mut BTreeMap<String, Toolkit>) -> DynResult<()> {
     for toolkit in toolkits.values_mut() {
         toolkit.path = toolkit.path.canonicalize()?;
-        crate::automation::waiting_prefix::native_identity::verify(&toolkit.path, &toolkit.sha256)?;
+        crate::automation::native_artifact_identity::verify(&toolkit.path, &toolkit.sha256)?;
     }
     Ok(())
 }

@@ -72,7 +72,7 @@ fn head(root: &Path, deadline: Instant) -> DynResult<String> {
     if !root.is_absolute() {
         return Err("prepared checkout root must be absolute".into());
     }
-    let head = crate::automation::qualification::source::head_with_budget(
+    let head = super::git_head::git_head_with_budget(
         root,
         deadline
             .saturating_duration_since(Instant::now())

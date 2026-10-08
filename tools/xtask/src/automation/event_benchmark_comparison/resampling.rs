@@ -120,37 +120,3 @@ pub(super) fn bootstrap(
 #[cfg(test)]
 #[path = "resampling_tests.rs"]
 mod tests;
-
-/// Deterministic paired median interval for adaptive eval reports; comparator means stay unchanged.
-pub(in crate::automation) fn median_interval(
-    values: &[f64],
-    resamples: usize,
-    root: u64,
-    group: &str,
-    metric: &str,
-) -> DynResult<[f64; 3]> {
-    admit(values, resamples)?;
-    let median = |sample: &mut [f64]| {
-        sample.sort_by(f64::total_cmp);
-        let n = sample.len();
-        if n.is_multiple_of(2) {
-            sample[n / 2 - 1] / 2.0 + sample[n / 2] / 2.0
-        } else {
-            sample[n / 2]
-        }
-    };
-    let center = median(&mut values.to_vec());
-    let mut stream = Stream::new(root, group, metric)?;
-    let mut samples = Vec::with_capacity(resamples);
-    for _ in 0..resamples {
-        let mut sample = Vec::with_capacity(values.len());
-        for _ in 0..values.len() {
-            sample.push(values[stream.index(values.len() as u64)?]);
-        }
-        samples.push(median(&mut sample));
-    }
-    samples.sort_by(f64::total_cmp);
-    let at =
-        |fraction: f64| samples[(fraction * (samples.len() - 1) as f64).round_ties_even() as usize];
-    Ok([center, at(0.025), at(0.975)])
-}

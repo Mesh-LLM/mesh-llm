@@ -45,7 +45,7 @@ canary coverage still require their existing environments. This is not a claim
 that the required graph has no interpreter dependency.
 
 The CLI/website contract owner `lane_l2_quality_contracts` is selected by the
-required normal Rust roster in `ci/automation-migration/quality-rust-contract-targets.json`
+required normal Rust roster in `ci/quality-rust-contract-targets.json`
 and `just ci-automation-contracts`; the full Rust suite alone does not satisfy
 this normal-path replacement obligation.
 
@@ -724,9 +724,7 @@ The five protected package resolver callers retain their published immutable
 legacy action pin. Native resolver fixtures bind all five package/generation
 inputs, platform conditions, batch correlation and admitted executable identity;
 they do not establish a published protected caller cutover. The separate 27
-pre-checkout audit callers retain the same rollout boundary. Exact retained SDK
-compatibility and isolated upstream interfaces remain governed by
-`ci/automation-migration/python-exceptions.json`; native source fixtures do not
+pre-checkout audit callers retain the same rollout boundary. Native source fixtures do not
 qualify their environments, datasets, or live model behavior.
 
 `tools/xtask/src/ci_plan` is the production source of slice eligibility. It reads the
@@ -1791,9 +1789,7 @@ cutover.
 The normal automation contract gate bootstraps a native-library-free xtask,
 then builds the separate `trajectory-reader` utility with `parquet-input`.
 It runs compressed-Parquet library cases and frontend/reader command tests
-against the bootstrap-reported executable. `waiting_prefix_acceptance` is in
-the normal xtask integration roster and checks offline measured comparisons,
-failure evidence and publication refusal. These additions qualify local
+against the bootstrap-reported executable. These additions qualify local
 automation behavior; model-backed workloads and platform/hosted evidence retain
 their existing gates.
 

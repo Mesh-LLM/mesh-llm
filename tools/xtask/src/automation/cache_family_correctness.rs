@@ -68,7 +68,7 @@ pub(crate) fn run(args: &[String]) -> DynResult<()> {
         return batch::run(rest);
     }
     let (path, output) = paths(args)?;
-    let bytes = crate::automation::waiting_prefix::adaptive_identity::bounded(&path, 1024 * 1024)?;
+    let bytes = crate::automation::receipt_files::bounded(&path, 1024 * 1024)?;
     let input: Input = serde_json::from_slice(&bytes)?;
     input.validate()?;
     let parent = output.parent().ok_or("cache output parent")?;
@@ -103,10 +103,7 @@ pub(crate) fn run(args: &[String]) -> DynResult<()> {
     Ok(())
 }
 fn publish(path: &Path, value: &Value) -> DynResult<()> {
-    crate::automation::waiting_prefix::adaptive_identity::fresh(
-        path,
-        &serde_json::to_vec_pretty(value)?,
-    )
+    crate::automation::receipt_files::fresh(path, &serde_json::to_vec_pretty(value)?)
 }
 fn complete(r: &process::ProcessReport) -> bool {
     r.success()
@@ -163,7 +160,7 @@ fn admit(
     let request = directory.join(format!("{name}-request.json"));
     let output = directory.join(format!("{name}-receipt.json"));
     let bytes = serde_json::to_vec(input)?;
-    crate::automation::waiting_prefix::adaptive_identity::fresh(&request, &bytes)?;
+    crate::automation::receipt_files::fresh(&request, &bytes)?;
     let args = vec![
         "automation".into(),
         "cache-family-correctness".into(),
@@ -193,7 +190,7 @@ fn admit(
         return Err("cache identity worker did not complete cleanly".into());
     }
     let receipt: admission::Receipt = serde_json::from_slice(
-        &crate::automation::waiting_prefix::adaptive_identity::bounded(&output, 1024 * 1024)?,
+        &crate::automation::receipt_files::bounded(&output, 1024 * 1024)?,
     )?;
     if receipt.request_sha256 != admission::hash(&bytes) {
         return Err("cache admission receipt request mismatch".into());
@@ -306,9 +303,10 @@ fn one(
     if !complete(&process) {
         return Ok(json!({"status":"failed-process","lifecycle":observed}));
     }
-    let value: Value = serde_json::from_slice(
-        &crate::automation::waiting_prefix::adaptive_identity::bounded(&output, 1024 * 1024)?,
-    )?;
+    let value: Value = serde_json::from_slice(&crate::automation::receipt_files::bounded(
+        &output,
+        1024 * 1024,
+    )?)?;
     report::accept(&value, &receipt, topology)?;
     let after = admit(&receipt.admitted, directory, "after", execution)?;
     if serde_json::to_value(&after.admitted)? != serde_json::to_value(&receipt.admitted)?

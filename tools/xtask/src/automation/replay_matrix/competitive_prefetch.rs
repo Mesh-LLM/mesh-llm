@@ -2,9 +2,7 @@
 #[path = "competitive_prefetch/trajectory.rs"]
 mod trajectory;
 use crate::{
-    automation::{
-        command_interrupt::Interrupt, hf_certify::execution, waiting_prefix::adaptive_identity,
-    },
+    automation::{command_interrupt::Interrupt, hf_certify::execution, receipt_files},
     command::DynResult,
     process::Cancellation,
 };
@@ -106,7 +104,7 @@ pub(in crate::automation) fn run(args: &[String]) -> DynResult<()> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => (),
         _ => return Err("fresh evidence directory required".into()),
     };
-    let bytes = adaptive_identity::bounded(request, 1024 * 1024)?;
+    let bytes = receipt_files::bounded(request, 1024 * 1024)?;
     let mut input: Value = serde_json::from_slice(&bytes)?;
     let requested = input["timeout_seconds"]
         .as_u64()
@@ -126,7 +124,7 @@ pub(in crate::automation) fn run(args: &[String]) -> DynResult<()> {
     let hash = hex::encode(Sha256::digest(&effective));
     std::fs::create_dir(root)?;
     let path = root.join("request.json");
-    adaptive_identity::fresh(&path, &effective)?;
+    receipt_files::fresh(&path, &effective)?;
     let output = input["output_directory"]
         .as_str()
         .ok_or("helper output path")?;
@@ -165,7 +163,7 @@ pub(in crate::automation) fn run(args: &[String]) -> DynResult<()> {
                 Err(e) => return Err(e.into()),
                 Ok(_) => {
                     let value: Value =
-                        serde_json::from_slice(&adaptive_identity::bounded(&p, 8 * 1024 * 1024)?)?;
+                        serde_json::from_slice(&receipt_files::bounded(&p, 8 * 1024 * 1024)?)?;
                     if value["request_transport_sha256"] != json!(hash) {
                         return Err("helper receipt transport correlation refused".into());
                     }
@@ -194,7 +192,7 @@ pub(in crate::automation) fn run(args: &[String]) -> DynResult<()> {
             owner.materialize(&input, &mut receipt)?;
         }
         verify_phase(&verification, "after-manifest", &mut receipt)?;
-        if adaptive_identity::bounded(request, 1024 * 1024)? != bytes {
+        if receipt_files::bounded(request, 1024 * 1024)? != bytes {
             return Err("caller request changed".into());
         }
         check(deadline, &cancel)
@@ -217,7 +215,7 @@ pub(in crate::automation) fn run(args: &[String]) -> DynResult<()> {
         .as_ref()
         .err()
         .map_or(Value::Null, |e| json!(e.to_string()));
-    adaptive_identity::fresh(
+    receipt_files::fresh(
         &root.join("prefetch.json"),
         &serde_json::to_vec_pretty(&receipt)?,
     )?;
@@ -253,7 +251,7 @@ fn verify_phase(context: &Verification<'_>, phase: &str, evidence: &mut Value) -
     if !execution::clean(&report) {
         return Err("acquired artifact custody process refused".into());
     }
-    let receipt: Value = serde_json::from_slice(&adaptive_identity::bounded(
+    let receipt: Value = serde_json::from_slice(&receipt_files::bounded(
         &context.output.join(format!("custody-{phase}.json")),
         1024 * 1024,
     )?)?;

@@ -1,7 +1,7 @@
 use super::*;
 #[test]
 fn current_roles_and_historical_flags_remain_distinct() {
-    for role in [Role::Public, Role::BinaryFrontend, Role::BinaryWorker] {
+    for role in [Role::Public, Role::BinaryWorker] {
         let original = vec![
             Value::Public(role.legacy().into()),
             Value::Public("--openai-bind-addr".into()),

@@ -1504,7 +1504,7 @@ contract changed. The shared runtime-reuse adapter honors the prepared automatio
 executable, so copied SDK consumers do not depend on local Cargo aliases.
 
 The CLI/website contract owner `lane_l2_quality_contracts` is selected by the
-required normal Rust roster in `ci/automation-migration/quality-rust-contract-targets.json`
+required normal Rust roster in `ci/quality-rust-contract-targets.json`
 and `just ci-automation-contracts`; the full Rust suite alone does not satisfy
 this normal-path replacement obligation.
 
@@ -1581,8 +1581,7 @@ boundary, then explicitly builds/tests the feature-gated `trajectory-reader`
 codec utility. Bootstrap permits only its portable library; native links remain
 rejected in the default graph. Reader command tests use the actual bootstrap
 executable and include large trajectory data, exact manifest bytes and refusal
-cleanup. `waiting_prefix_acceptance` is selected by the normal integration roster
-for offline request/telemetry summary, round aggregation, acceptance and reports.
+cleanup.
 No runner placement, cache authority, permissions or external dataset/model
 operations change. Existing model-backed and platform gates remain required.
 

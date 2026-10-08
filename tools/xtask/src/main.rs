@@ -11,7 +11,6 @@ mod command;
 #[path = "automation/command_interrupt/mod.rs"]
 pub(crate) mod command_interrupt;
 mod installer_fixtures;
-mod migration_inventory;
 mod model_registry;
 mod native_policy;
 mod no_console_print;
@@ -70,7 +69,6 @@ fn run() -> DynResult<()> {
         }
         cli::CliCommand::AgentFixtureInputs(rest) => automation::agent_fixture_inputs::run(rest),
         cli::CliCommand::AgentRecordingProxy(rest) => automation::agent_recording_proxy::run(rest),
-        cli::CliCommand::WaitingPrefix(rest) => automation::waiting_prefix::run(rest),
         cli::CliCommand::EventBenchmarkComparison(rest) => {
             automation::event_benchmark_comparison::run(rest)
         }
@@ -182,13 +180,6 @@ fn run() -> DynResult<()> {
         }
         cli::CliCommand::NativeGenerator(rest) => automation::native_generator::run(rest),
         cli::CliCommand::SplitEvidence(rest) => automation::split_evidence::run(rest),
-        cli::CliCommand::Qualification(verb, rest) => automation::qualification::run(
-            verb,
-            rest,
-            explicit_root
-                .as_ref()
-                .map(repository::RepositoryRoot::as_path),
-        ),
         cli::CliCommand::ReplayMatrix(rest) => automation::run_replay_matrix(
             rest,
             explicit_root
@@ -254,10 +245,6 @@ fn run() -> DynResult<()> {
                 }
                 cli::RepositoryCommand::DaemonReadiness(rest) => {
                     Ok(automation::daemon_readiness::run(root, rest)?)
-                }
-                cli::RepositoryCommand::Automation(rest) => {
-                    std::env::set_current_dir(root)?;
-                    migration_inventory::run(rest)
                 }
                 cli::RepositoryCommand::AutomationBootstrap(rest) => {
                     automation_bootstrap::run(root, rest)

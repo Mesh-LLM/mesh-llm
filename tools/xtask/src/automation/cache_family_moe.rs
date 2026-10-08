@@ -26,7 +26,7 @@ fn publish(path: &Path, value: &Value) -> DynResult<()> {
     if bytes.len() > 32 * 1024 * 1024 {
         return Err("MoE evidence exceeds32MiB".into());
     }
-    crate::automation::waiting_prefix::adaptive_identity::fresh(path, &bytes)
+    crate::automation::receipt_files::fresh(path, &bytes)
 }
 pub(crate) fn run(args: &[String]) -> DynResult<()> {
     if args == ["--help"] {
@@ -46,10 +46,7 @@ pub(crate) fn run(args: &[String]) -> DynResult<()> {
     {
         return Err("MoE paths must be absolute".into());
     }
-    let bytes = crate::automation::waiting_prefix::adaptive_identity::bounded(
-        Path::new(path),
-        1024 * 1024,
-    )?;
+    let bytes = crate::automation::receipt_files::bounded(Path::new(path), 1024 * 1024)?;
     let input: contract::Input = serde_json::from_slice(&bytes)?;
     input.validate()?;
     if !std::fs::symlink_metadata(Path::new(output).parent().ok_or("MoE output parent")?)?.is_dir()

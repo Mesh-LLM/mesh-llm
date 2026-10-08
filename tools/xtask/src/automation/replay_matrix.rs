@@ -29,6 +29,7 @@ mod executable_resolution;
 pub(super) mod export;
 mod family_model;
 mod family_workload;
+mod git_head;
 pub(super) mod hardware;
 mod input;
 mod integer;

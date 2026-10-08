@@ -47,7 +47,7 @@ async fn wait(input: &Input, cancel: &Cancellation) -> bool {
     false
 }
 pub(super) fn run(input: &Path, output: &Path) -> DynResult<()> {
-    let bytes = crate::automation::waiting_prefix::adaptive_identity::bounded(input, 1024 * 1024)?;
+    let bytes = crate::automation::receipt_files::bounded(input, 1024 * 1024)?;
     let input: Input = serde_json::from_slice(&bytes)?;
     input.validate()?;
     let interrupt = crate::automation::command_interrupt::Interrupt::install()?;
@@ -58,7 +58,7 @@ pub(super) fn run(input: &Path, output: &Path) -> DynResult<()> {
     let started = Instant::now();
     let ready = runtime.block_on(wait(&input, &cancel));
     let finish = interrupt.finish();
-    crate::automation::waiting_prefix::adaptive_identity::fresh(
+    crate::automation::receipt_files::fresh(
         output,
         &serde_json::to_vec(
             &json!({"schema_version":1,"request_sha256":hash(&bytes),"ready":ready,

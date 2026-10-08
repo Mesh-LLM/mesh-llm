@@ -115,9 +115,7 @@ JavaScript. Existing Python validation and workflow entrypoints below remain
 transitional until Rust or component-owned tests cover their shape and intent.
 Do not commit Python emulation or differential tests that invoke Python; delete
 each legacy implementation with its last caller switch and validate in normal
-CI. Preserve real consumed outputs and failure semantics. The SDK Python
-ecosystem candidates in `ci/automation-migration/python-exceptions.json` are
-conditional, not approved, until task 22 proves their isolation.
+CI. Preserve real consumed outputs and failure semantics.
 
 ## Pre-Commit Checklist
 

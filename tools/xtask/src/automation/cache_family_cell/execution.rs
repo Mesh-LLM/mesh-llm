@@ -88,7 +88,7 @@ fn admit(
     let bytes = serde_json::to_vec(input)?;
     let request = directory.join(format!("{name}-input.json"));
     let output = directory.join(format!("{name}-receipt.json"));
-    crate::automation::waiting_prefix::adaptive_identity::fresh(&request, &bytes)?;
+    crate::automation::receipt_files::fresh(&request, &bytes)?;
     let grace = if input.artifact.is_some() { 6 } else { 1 };
     let mut admission_limits = limits(remaining(deadline, Duration::from_secs(grace + 2))?);
     admission_limits.graceful_shutdown = Duration::from_secs(grace);
@@ -104,9 +104,10 @@ fn admit(
     if !report.success() || !clean(&report) {
         return Err("cache cell supervised identity failed".into());
     }
-    let receipt: Receipt = serde_json::from_slice(
-        &crate::automation::waiting_prefix::adaptive_identity::bounded(&output, 1024 * 1024)?,
-    )?;
+    let receipt: Receipt = serde_json::from_slice(&crate::automation::receipt_files::bounded(
+        &output,
+        1024 * 1024,
+    )?)?;
     if receipt.schema_version != 1 || receipt.request_sha256 != hash(&bytes) {
         return Err("cache cell identity receipt correlation refused".into());
     }
@@ -209,7 +210,7 @@ pub(super) fn execute(input: &Input, directory: &Path, cancel: &Cancellation) ->
     let tool = std::env::current_exe()?;
     let before = admit(&tool, input, directory, "before", until, cancel)?;
     let input = before.admitted.clone();
-    crate::automation::waiting_prefix::adaptive_identity::fresh(
+    crate::automation::receipt_files::fresh(
         &directory.join("stage.json"),
         &serde_json::to_vec_pretty(&input.config())?,
     )?;
@@ -258,10 +259,7 @@ pub(super) fn execute(input: &Input, directory: &Path, cancel: &Cancellation) ->
         let admitted = bound_measurement(&input, execution)?;
         let readiness_request = directory.join("readiness-input.json");
         let readiness_bytes = serde_json::to_vec(&admitted)?;
-        crate::automation::waiting_prefix::adaptive_identity::fresh(
-            &readiness_request,
-            &readiness_bytes,
-        )?;
+        crate::automation::receipt_files::fresh(&readiness_request, &readiness_bytes)?;
         let measurement_request = directory.join("measurement-input.json");
         let measurement_bytes = if admitted.worker_sweep.is_empty() {
             serde_json::to_vec(&admitted.worker)?
@@ -270,10 +268,7 @@ pub(super) fn execute(input: &Input, directory: &Path, cancel: &Cancellation) ->
                 &json!({"schema_version":1,"stages":admitted.worker_sweep,"execution_timeout_ms":admitted.worker.execution_timeout_ms}),
             )?
         };
-        crate::automation::waiting_prefix::adaptive_identity::fresh(
-            &measurement_request,
-            &measurement_bytes,
-        )?;
+        crate::automation::receipt_files::fresh(&measurement_request, &measurement_bytes)?;
         let mut owner = Owner {
             server: Some(launch(
                 MemberId::Seed,
@@ -336,7 +331,7 @@ pub(super) fn execute(input: &Input, directory: &Path, cancel: &Cancellation) ->
         drop(reservation);
         let report = process::retained::run(&mut owner, &limits(execution), cancel)?;
         let lifecycle = projection(&report);
-        crate::automation::waiting_prefix::adaptive_identity::fresh(
+        crate::automation::receipt_files::fresh(
             &directory.join("lifecycle.json"),
             &serde_json::to_vec_pretty(&lifecycle)?,
         )?;
@@ -350,10 +345,9 @@ pub(super) fn execute(input: &Input, directory: &Path, cancel: &Cancellation) ->
             ),
             ("readiness.json", hash(&readiness_bytes), &mut readiness),
         ] {
-            if let Ok(bytes) = crate::automation::waiting_prefix::adaptive_identity::bounded(
-                &directory.join(name),
-                64 * 1024 * 1024,
-            ) && let Ok(value) = serde_json::from_slice::<Value>(&bytes)
+            if let Ok(bytes) =
+                crate::automation::receipt_files::bounded(&directory.join(name), 64 * 1024 * 1024)
+                && let Ok(value) = serde_json::from_slice::<Value>(&bytes)
                 && value["schema_version"] == 1
                 && value["request_sha256"] == expected
             {

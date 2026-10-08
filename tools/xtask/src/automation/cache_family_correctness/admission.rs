@@ -24,7 +24,7 @@ pub(super) fn run(input: &Path, output: &Path) -> DynResult<()> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
         _ => return Err("cache admission output must be fresh".into()),
     }
-    let bytes = crate::automation::waiting_prefix::adaptive_identity::bounded(input, 1024 * 1024)?;
+    let bytes = crate::automation::receipt_files::bounded(input, 1024 * 1024)?;
     let mut admitted: Input = serde_json::from_slice(&bytes)?;
     admitted.validate()?;
     for (path, expected) in [
@@ -40,7 +40,7 @@ pub(super) fn run(input: &Path, output: &Path) -> DynResult<()> {
         }
     }
     admitted.native_build = admitted.native_build.canonicalize()?;
-    crate::automation::waiting_prefix::native_identity::verify(
+    crate::automation::native_artifact_identity::verify(
         &admitted.native_build,
         &admitted.native_build_sha256,
     )?;
@@ -97,8 +97,5 @@ pub(super) fn run(input: &Path, output: &Path) -> DynResult<()> {
     if receipt.layers < 3 || receipt.activation_width == 0 {
         return Err("invalid cache model dimensions".into());
     }
-    crate::automation::waiting_prefix::adaptive_identity::fresh(
-        output,
-        &serde_json::to_vec(&receipt)?,
-    )
+    crate::automation::receipt_files::fresh(output, &serde_json::to_vec(&receipt)?)
 }

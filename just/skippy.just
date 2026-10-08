@@ -200,22 +200,6 @@ hf-skippy-mtp-compose-default input output:
 generic-conversion-jobs-release-build:
     just with-lld cargo build --release --locked -p skippy-model-package --bin model-package-generic-jobs
 
-# Native durable-KV lifecycle runner; INPUT carries explicit workload and budgets.
-kv-restart-replay input output:
-    cargo xtool automation waiting-prefix kv-restart-run --input "{{input}}" --output-directory "{{output}}"
-
-# Matched old/new mixed prefill/decode matrix; INPUT carries identities, shape and budgets.
-mixed-prefill-decode-ab input output:
-    cargo xtool automation waiting-prefix mixed-run --input "{{input}}" --output-directory "{{output}}"
-
-# Native matched standalone static adaptive-prefill evaluation; supplied artifacts only.
-skippy-adaptive-prefill-ab input output:
-    just with-lld cargo xtool automation waiting-prefix adaptive-run --input "{{input}}" --output-directory "{{output}}"
-
-# Native cold/warm radix-prefix evaluation; supplied artifacts only.
-skippy-radix-cache-ab input output:
-    just with-lld cargo xtool automation waiting-prefix radix-run --input "{{input}}" --output-directory "{{output}}"
-
 # Read a local legacy package cache through the native product owner, with no ABI calls.
 [private]
 [unix]

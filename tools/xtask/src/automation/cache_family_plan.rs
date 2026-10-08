@@ -29,17 +29,14 @@ pub(crate) fn run(args: &[String]) -> DynResult<()> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
         _ => return Err("cache-family-plan output must be fresh".into()),
     }
-    let bytes = crate::automation::waiting_prefix::adaptive_identity::bounded(
-        Path::new(input),
-        1024 * 1024,
-    )?;
+    let bytes = crate::automation::receipt_files::bounded(Path::new(input), 1024 * 1024)?;
     let input: contract::Input = serde_json::from_slice(&bytes)?;
     let plan = planning::plan(&input)?;
     let bytes = serde_json::to_vec_pretty(&plan)?;
     if bytes.len() > 32 * 1024 * 1024 {
         return Err("cache plan output exceeds32MiB".into());
     }
-    crate::automation::waiting_prefix::adaptive_identity::fresh(Path::new(output), &bytes)?;
+    crate::automation::receipt_files::fresh(Path::new(output), &bytes)?;
     Ok(())
 }
 

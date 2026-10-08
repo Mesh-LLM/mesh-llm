@@ -33,7 +33,7 @@ pub(in crate::automation) fn run(args: &[String]) -> DynResult<()> {
     if !flags.positionals.is_empty() {
         return GRAMMAR.error("unexpected positional arguments").emit();
     }
-    let bytes = crate::automation::waiting_prefix::adaptive_identity::bounded(
+    let bytes = crate::automation::receipt_files::bounded(
         Path::new(flags.last("--input").ok_or("input required")?),
         1024 * 1024,
     )?;
@@ -89,8 +89,7 @@ fn publish(path: &Path, value: &Value) -> DynResult<()> {
 }
 fn execute(input: &Request, budget: &Budget<'_>, receipt: &mut Value) -> DynResult<()> {
     budget.check()?;
-    let config_bytes =
-        crate::automation::waiting_prefix::adaptive_identity::bounded(&input.config, 1024 * 1024)?;
+    let config_bytes = crate::automation::receipt_files::bounded(&input.config, 1024 * 1024)?;
     if schema::digest(&config_bytes) != input.config_sha256 {
         return Err("config pin mismatch".into());
     }
@@ -124,8 +123,7 @@ fn execute(input: &Request, budget: &Budget<'_>, receipt: &mut Value) -> DynResu
             .push(row);
     }
     budget.check()?;
-    let after =
-        crate::automation::waiting_prefix::adaptive_identity::bounded(&input.config, 1024 * 1024)?;
+    let after = crate::automation::receipt_files::bounded(&input.config, 1024 * 1024)?;
     if after != config_bytes {
         return Err("config custody changed".into());
     }

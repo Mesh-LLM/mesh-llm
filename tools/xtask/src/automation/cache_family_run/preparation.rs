@@ -161,7 +161,7 @@ fn tools(operator: &mut Operator, budget: &Budget<'_>) -> DynResult<Tools> {
     budget.guard()?;
     let build_pin = crate::product::digest::tree_sha256(&build).map_err(|e| e.error)?;
     budget.guard()?;
-    crate::automation::waiting_prefix::native_identity::verify(&build, &build_pin)?;
+    crate::automation::native_artifact_identity::verify(&build, &build_pin)?;
     crate::automation::cache_family_profile::observe(&mut operator.toolkit_directories)?;
     Ok(Tools {
         correctness: json!({"path":correctness,"sha256":pin}),
@@ -311,8 +311,7 @@ fn materialize(
     Ok(result)
 }
 pub(super) fn worker(path: &Path, output: &Path) -> DynResult<()> {
-    let bytes =
-        crate::automation::waiting_prefix::adaptive_identity::bounded(path, 2 * 1024 * 1024)?;
+    let bytes = crate::automation::receipt_files::bounded(path, 2 * 1024 * 1024)?;
     let mut request: Request = serde_json::from_slice(&bytes)?;
     request.operator.validate()?;
     let directory = output.parent().ok_or("cache preparation worker parent")?;
@@ -346,10 +345,7 @@ pub(super) fn run(args: &[String], use_cases: bool) -> DynResult<()> {
     {
         return Err("cache preparation requires absolute input/output".into());
     }
-    let bytes = crate::automation::waiting_prefix::adaptive_identity::bounded(
-        Path::new(input),
-        1024 * 1024,
-    )?;
+    let bytes = crate::automation::receipt_files::bounded(Path::new(input), 1024 * 1024)?;
     let mut operator: Operator = serde_json::from_slice(&bytes)?;
     override_plan(&mut operator, overrides)?;
     operator.validate()?;
@@ -360,7 +356,7 @@ pub(super) fn run(args: &[String], use_cases: bool) -> DynResult<()> {
         use_cases,
     })?;
     let path = Path::new(output).join("request.json");
-    crate::automation::waiting_prefix::adaptive_identity::fresh(&path, &request)?;
+    crate::automation::receipt_files::fresh(&path, &request)?;
     let receipt = Path::new(output).join("observations.json");
     let interrupt = crate::automation::command_interrupt::Interrupt::install()?;
     let cancel = interrupt.cancellation();
@@ -388,9 +384,10 @@ pub(super) fn run(args: &[String], use_cases: bool) -> DynResult<()> {
     {
         return Err("cache preparation child refused; observations retained".into());
     }
-    let observed: Value = serde_json::from_slice(
-        &crate::automation::waiting_prefix::adaptive_identity::bounded(&receipt, 4 * 1024 * 1024)?,
-    )?;
+    let observed: Value = serde_json::from_slice(&crate::automation::receipt_files::bounded(
+        &receipt,
+        4 * 1024 * 1024,
+    )?)?;
     if observed["request_sha256"] != hash(&request) {
         return Err("cache preparation request correlation mismatch".into());
     }
@@ -420,10 +417,7 @@ fn override_plan(operator: &mut Operator, args: &[String]) -> DynResult<()> {
             if !path.is_absolute() {
                 return Err("corpus override must be absolute".into());
             }
-            let bytes = crate::automation::waiting_prefix::adaptive_identity::bounded(
-                path,
-                4 * 1024 * 1024,
-            )?;
+            let bytes = crate::automation::receipt_files::bounded(path, 4 * 1024 * 1024)?;
             operator.plan["corpus"] = json!({"path":path,"sha256":hash(&bytes)});
             continue;
         }

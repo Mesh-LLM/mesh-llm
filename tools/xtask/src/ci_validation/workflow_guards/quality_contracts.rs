@@ -5,7 +5,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     path::Path,
 };
-const REGISTRY: &str = "ci/automation-migration/quality-rust-contract-targets.json";
+const REGISTRY: &str = "ci/quality-rust-contract-targets.json";
 
 pub(super) fn check(root: &Path, workflows: &BTreeMap<String, Node>) -> DynResult<()> {
     let targets: Vec<String> = serde_json::from_slice(&std::fs::read(root.join(REGISTRY))?)?;

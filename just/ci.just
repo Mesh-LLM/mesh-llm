@@ -273,7 +273,6 @@ ci-automation-contracts:
         --test migration_prepared_inputs \
         --test migration_process \
         --test migration_product \
-        --test migration_qualification_cli \
         --test migration_release \
         --test migration_report_contract \
         --test migration_report_safety \
@@ -312,7 +311,6 @@ ci-automation-contracts:
         --test replay_server_cell \
         --test replay_session_evidence \
         --test replay_trajectory_execution \
-        --test waiting_prefix_acceptance \
         --test swift_api_checksum \
         --test swift_privacy_adapter \
         --test swift_producer_environment \

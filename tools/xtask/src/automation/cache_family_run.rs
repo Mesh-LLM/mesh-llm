@@ -30,7 +30,7 @@ fn publish(path: &Path, value: &Value) -> DynResult<()> {
     if bytes.len() > 64 * 1024 * 1024 {
         return Err("cache matrix projection exceeds64MiB".into());
     }
-    crate::automation::waiting_prefix::adaptive_identity::fresh(path, &bytes)
+    crate::automation::receipt_files::fresh(path, &bytes)
 }
 pub(crate) fn run(args: &[String]) -> DynResult<()> {
     if let [verb, rest @ ..] = args {
@@ -70,10 +70,7 @@ pub(crate) fn run(args: &[String]) -> DynResult<()> {
     {
         return Err("cache-family-run requires absolute input/output".into());
     }
-    let bytes = crate::automation::waiting_prefix::adaptive_identity::bounded(
-        Path::new(path),
-        1024 * 1024,
-    )?;
+    let bytes = crate::automation::receipt_files::bounded(Path::new(path), 1024 * 1024)?;
     let input: contract::Input = serde_json::from_slice(&bytes)?;
     input.validate()?;
     if !std::fs::symlink_metadata(Path::new(output).parent().ok_or("cache matrix parent")?)?

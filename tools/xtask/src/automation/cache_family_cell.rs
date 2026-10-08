@@ -46,7 +46,7 @@ pub(crate) fn run(args: &[String]) -> DynResult<()> {
         };
     }
     let (path, directory) = paths(args)?;
-    let bytes = crate::automation::waiting_prefix::adaptive_identity::bounded(&path, 1024 * 1024)?;
+    let bytes = crate::automation::receipt_files::bounded(&path, 1024 * 1024)?;
     let input: contract::Input = serde_json::from_slice(&bytes)?;
     input.validate()?;
     if !std::fs::symlink_metadata(directory.parent().ok_or("cell output parent")?)?.is_dir() {
@@ -72,7 +72,7 @@ pub(crate) fn run(args: &[String]) -> DynResult<()> {
         std::time::Instant::now() >= terminal_deadline,
         finish.is_ok(),
     );
-    crate::automation::waiting_prefix::adaptive_identity::fresh(
+    crate::automation::receipt_files::fresh(
         &directory.join("cell.json"),
         &serde_json::to_vec_pretty(&receipt)?,
     )?;

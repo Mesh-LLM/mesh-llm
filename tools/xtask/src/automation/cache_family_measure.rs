@@ -43,10 +43,7 @@ pub(crate) fn run(args: &[String]) -> DynResult<()> {
     if !std::fs::symlink_metadata(parent)?.is_dir() {
         return Err("measurement output parent must be a regular directory".into());
     }
-    let bytes = crate::automation::waiting_prefix::adaptive_identity::bounded(
-        Path::new(input),
-        2 * 1024 * 1024,
-    )?;
+    let bytes = crate::automation::receipt_files::bounded(Path::new(input), 2 * 1024 * 1024)?;
     let input: serde_json::Value = serde_json::from_slice(&bytes)?;
     if input.get("stages").is_some() {
         let value: sweep::InputSweep = serde_json::from_value(input.clone())?;
@@ -84,7 +81,7 @@ pub(crate) fn run(args: &[String]) -> DynResult<()> {
     if encoded.len() > 64 * 1024 * 1024 {
         return Err("cache measurement receipt exceeds 64 MiB".into());
     }
-    crate::automation::waiting_prefix::adaptive_identity::fresh(Path::new(output), &encoded)?;
+    crate::automation::receipt_files::fresh(Path::new(output), &encoded)?;
     finish?;
     if receipt["status"] != "completed" {
         return Err("cache measurement incomplete; partial receipt retained".into());

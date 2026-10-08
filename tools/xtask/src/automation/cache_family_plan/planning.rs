@@ -13,8 +13,7 @@ fn use_cases(input: &Input) -> DynResult<Vec<Option<UseCase>>> {
     let Some(pin) = &input.corpus else {
         return Ok(vec![None]);
     };
-    let bytes =
-        crate::automation::waiting_prefix::adaptive_identity::bounded(&pin.path, 4 * 1024 * 1024)?;
+    let bytes = crate::automation::receipt_files::bounded(&pin.path, 4 * 1024 * 1024)?;
     if hash(&bytes) != pin.sha256 {
         return Err("use-case corpus byte pin mismatch".into());
     }
