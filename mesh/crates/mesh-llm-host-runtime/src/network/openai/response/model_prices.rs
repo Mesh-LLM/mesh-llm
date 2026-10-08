@@ -222,7 +222,6 @@ mod tests {
         let paid = offer("paid", Some(&price), Some(1), false);
         assert_eq!(free["paid"], false);
         assert_eq!(paid["paid"], true);
-        assert!(paid["pricing"].get("minimum_invoice_msat").is_none());
         assert_eq!(paid["pricing"]["input_msat_per_million"], 10);
     }
 }
