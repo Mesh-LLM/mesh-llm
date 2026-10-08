@@ -547,6 +547,39 @@ describe('ChatPage', () => {
     expect(chatMock.sendCalls[0]?.freeOnly).toBe(true)
   })
 
+  it('falls back to Free when a later policy refetch fails after paid routing was allowed', async () => {
+    const user = userEvent.setup()
+    paidRoutingMock.allowed = true
+    renderChatPage({ mode: 'live' })
+    expect(screen.getByRole('button', { name: 'Free + paid' })).toBeVisible()
+
+    // React Query keeps the earlier `data: true` alongside the refetch error; any re-render picks it up.
+    paidRoutingMock.isError = true
+    await user.type(screen.getByLabelText('Prompt'), 'x')
+
+    expect(screen.queryByRole('button', { name: /Free \+ paid|Free only/ })).not.toBeInTheDocument()
+    expect(screen.getByText('Free')).toBeVisible()
+  })
+
+  it('retries with the currently displayed free-only choice', async () => {
+    const user = userEvent.setup()
+    paidRoutingMock.allowed = true
+
+    renderChatPage({ mode: 'live' })
+
+    await user.type(screen.getByLabelText('Prompt'), 'Paid allowed prompt')
+    await user.click(screen.getByRole('button', { name: 'Send' }))
+    await waitFor(() => expect(chatMock.sendCalls).toHaveLength(1))
+    expect(chatMock.sendCalls[0]?.freeOnly).toBe(false)
+
+    await user.click(screen.getByRole('button', { name: 'Free + paid' }))
+    await user.click(screen.getByRole('button', { name: 'Retry last' }))
+
+    await waitFor(() => expect(chatMock.reloadFreeOnly).toHaveLength(1))
+    expect(chatMock.reloadFreeOnly[0]).toBe(true)
+    window.localStorage.removeItem('mesh-llm.chat.routing-preferences')
+  })
+
   it('keeps the free-only setting a prompt was queued with', async () => {
     const user = userEvent.setup()
     paidRoutingMock.allowed = true

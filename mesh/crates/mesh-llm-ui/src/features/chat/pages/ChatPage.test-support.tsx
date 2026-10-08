@@ -112,6 +112,7 @@ const chatMock = vi.hoisted(() => {
       freeOnly?: unknown
     }>,
     reloadCalls: [] as string[],
+    reloadFreeOnly: [] as unknown[],
     hookConversationIds: [] as string[],
     hookSystemPrompts: [] as Array<{ conversationId: string; systemPrompt: string }>,
     hookUnmounts: [] as string[],
@@ -133,6 +134,7 @@ const chatMock = vi.hoisted(() => {
       state.stopCalls = []
       state.sendCalls = []
       state.reloadCalls = []
+      state.reloadFreeOnly = []
       state.hookConversationIds = []
       state.hookSystemPrompts = []
       state.hookUnmounts = []
@@ -185,11 +187,11 @@ vi.mock('@/features/network/api/use-models-query', () => ({
   useModelsQuery: vi.fn()
 }))
 
-const paidRoutingMockState = vi.hoisted(() => ({ allowed: false }))
+const paidRoutingMockState = vi.hoisted(() => ({ allowed: false, isError: false }))
 export const paidRoutingMock = paidRoutingMockState
 
 vi.mock('@/features/chat/api/use-paid-routing-query', () => ({
-  usePaidRoutingQuery: () => ({ data: paidRoutingMockState.allowed })
+  usePaidRoutingQuery: () => ({ data: paidRoutingMockState.allowed, isError: paidRoutingMockState.isError })
 }))
 
 vi.mock('@/features/network/api/use-status-query', () => ({
@@ -230,12 +232,14 @@ vi.mock('@/features/chat/api/use-chat', async () => {
         conversationId,
         model,
         systemPrompt,
+        freeOnly,
         initialMessages,
         onResponseMetadata
       }: {
         conversationId: string
         model: string
         systemPrompt: string
+        freeOnly?: boolean
         initialMessages: Array<{ id: string; messageRole: 'user' | 'assistant'; timestamp: string; body: string }>
         onResponseMetadata?: (metadata: {
           messageId: string
@@ -357,6 +361,7 @@ vi.mock('@/features/chat/api/use-chat', async () => {
           }),
           reload: vi.fn(async () => {
             chatMock.reloadCalls.push(conversationId)
+            chatMock.reloadFreeOnly.push(freeOnly)
             const currentMessages = messagesRef.current
             let lastUserIndex = -1
             for (let index = currentMessages.length - 1; index >= 0; index -= 1) {
@@ -524,6 +529,7 @@ beforeEach(() => {
   installImageFallbackShim()
   installObjectUrlShim()
   paidRoutingMock.allowed = false
+  paidRoutingMock.isError = false
   window.localStorage.removeItem(APP_STORAGE_KEYS.featureFlagOverrides)
   window.localStorage.removeItem(APP_STORAGE_KEYS.chatSystemPrompt)
   vi.mocked(loadChatState).mockResolvedValue(undefined)

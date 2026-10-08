@@ -106,7 +106,7 @@ export function ChatPageContent({ data = CHAT_HARNESS, target, onClearTarget }: 
   // wallet, loading, error, unreachable route) the UI says Free and every request is restricted
   // to free hosts, so "Free" is enforced rather than assumed.
   const paidRoutingQuery = usePaidRoutingQuery({ enabled: liveMode })
-  const paidRoutingAllowed = paidRoutingQuery.data === true
+  const paidRoutingAllowed = paidRoutingQuery.data === true && !paidRoutingQuery.isError
   const freeOnly = !paidRoutingAllowed || routingPreferences.freeOnly
   const updateRoutingPreferences = useCallback((patch: Partial<ChatRoutingPreferences>) => {
     setRoutingPreferences((current) => {
