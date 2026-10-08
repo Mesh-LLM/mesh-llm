@@ -4,7 +4,7 @@ use super::envelope::{
     CanonicalEnvelope, CanonicalEnvelopeParseError, CanonicalPresentationContext, SCHEMA_VERSION,
     UnsupportedSchemaVersion,
 };
-use super::events::LifecycleEvent;
+use super::events::{LifecycleEvent, TokenUsage};
 use super::identifiers::{AttemptId, EventId, RequestId};
 use super::lifecycle::{LifecycleGuard, LifecycleState, LifecycleTransitionError};
 use super::replay::ReplayChannel;
