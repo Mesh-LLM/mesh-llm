@@ -160,7 +160,7 @@ index bbb08c132..134a9de63 100644
                  cb(top_k, "top_k", il);
              } else {
 diff --git a/src/skippy/stage_program.cpp b/src/skippy/stage_program.cpp
-index 7b1a3ba03..b61f47aeb 100644
+index ad6207fe0..13376ef75 100644
 --- a/src/skippy/stage_program.cpp
 +++ b/src/skippy/stage_program.cpp
 @@ -244,7 +244,6 @@ bool skippy_stage_program::instantiate(
