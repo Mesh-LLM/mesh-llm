@@ -14,6 +14,10 @@ ATTESTATION_SIGNING_KEY_FILE="${MESH_RELEASE_ATTESTATION_SIGNING_KEY_FILE:-}"
 ATTESTATION_PUBLIC_KEY_FILE="${MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE:-}"
 PRECOMPOSED_PRODUCT_DIR="${MESH_LLM_PRECOMPOSED_PRODUCT_DIR:-}"
 ATTESTATION_PREVERIFIED="${MESH_RELEASE_ATTESTATION_PREVERIFIED:-0}"
+# The verified plugin archives (bundled-plugins.py fetch) to put in plugins/.
+# A release sets it; a local build without it bundles no plugin.
+BUNDLED_PLUGINS_DIR="${MESH_LLM_BUNDLED_PLUGINS_DIR:-}"
+BUNDLED_PLUGINS_PINS="${MESH_LLM_BUNDLED_PLUGINS_PINS:-$REPO_ROOT/ci/bundled-plugins.json}"
 
 python_bin() {
     if command -v python3 >/dev/null 2>&1; then
@@ -444,6 +448,7 @@ resolve_release_target() {
     esac
 
     STABLE_ASSET="$(printf 'mesh-llm-%s%s.%s\n' "$TARGET_TRIPLE" "$(flavor_suffix "$effective_flavor")" "$ARCHIVE_EXT")"
+    BASE_TARGET_TRIPLE="$TARGET_TRIPLE"
     TARGET_TRIPLE="${TARGET_TRIPLE}$(flavor_suffix "$effective_flavor")"
 
     return 0
@@ -537,6 +542,21 @@ copy_and_verify_precomposed_product() {
         --check
 }
 
+# bundle_plugins puts the pinned plugin archives for this target into the
+# bundle's plugins/ (ci/bundled-plugins.json; every GPU flavour of a target
+# carries the same plugin). It refuses an archive that is missing or not at
+# its pinned digest.
+bundle_plugins() {
+    local bundle_dir="$1"
+    if [[ -z "$BUNDLED_PLUGINS_DIR" ]]; then
+        return 0
+    fi
+    "$(python_bin)" "$SCRIPT_DIR/bundled-plugins.py" --pins "$BUNDLED_PLUGINS_PINS" place \
+        --from "$BUNDLED_PLUGINS_DIR" \
+        --target "$BASE_TARGET_TRIPLE" \
+        --bundle "$bundle_dir"
+}
+
 main() {
     if [[ $# -lt 1 || -z "${1:-}" ]]; then
         usage
@@ -599,6 +619,8 @@ main() {
             "$version" \
             "$(effective_release_flavor)"
     fi
+
+    bundle_plugins "$bundle_dir"
 
     create_archive "$bundle_dir" "$output_dir/$versioned_asset" "$ARCHIVE_EXT"
     write_checksum_sidecar "$output_dir/$versioned_asset"

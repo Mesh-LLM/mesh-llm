@@ -347,9 +347,35 @@ jobs:
           path: host-input/*
           if-no-files-found: error
 
+  bundled_plugins:
+    name: Fetch and verify bundled plugins
+    needs: metadata
+    # A default-enabled plugin ships inside each release archive, so a node
+    # never downloads it. ci/bundled-plugins.json pins each plugin's release
+    # tag and every archive's digest; the fetch checks the plugin release's
+    # SHA256SUMS, the pin and the build-provenance attestation.
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      attestations: read
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - name: Fetch the pinned plugins and verify them
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/bundled-plugins.py fetch --out bundled-plugins
+      - name: Upload the verified plugin archives
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: bundled-plugins
+          path: bundled-plugins
+          if-no-files-found: error
+
   compose_cpu_products:
     name: Compose CPU product ${{ matrix.name }}
-    needs: [metadata, build, build_native_runtime]
+    needs: [metadata, build, build_native_runtime, bundled_plugins]
     runs-on: ${{ matrix.host_target == 'linux-x86_64' && needs.metadata.outputs.runner_4 || matrix.os }}
     strategy:
       fail-fast: false
@@ -404,8 +430,14 @@ jobs:
           readiness_smoke: "true"
           attestation_public_key_file: ${{ runner.temp }}/mesh-release-attestation-public-key.json
 
+      - name: Download verified bundled plugins
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: bundled-plugins
+          path: bundled-plugins
       - name: Package verified product
         env:
+          MESH_LLM_BUNDLED_PLUGINS_DIR: ${{ github.workspace }}/bundled-plugins
           RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
           MESH_RELEASE_OS: ${{ matrix.release_os }}
           MESH_RELEASE_ARCH: ${{ matrix.release_arch }}
@@ -963,7 +995,7 @@ jobs:
 
   compose_linux_arm64_cpu:
     name: Compose Linux ARM64 CPU product
-    needs: [metadata, build_linux_arm64, build_native_runtime]
+    needs: [metadata, build_linux_arm64, build_native_runtime, bundled_plugins]
     runs-on: ${{ needs.metadata.outputs.runner_arm_4 }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
@@ -996,8 +1028,14 @@ jobs:
           readiness_smoke: "true"
           attestation_public_key_file: ${{ runner.temp }}/mesh-release-attestation-public-key.json
 
+      - name: Download verified bundled plugins
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: bundled-plugins
+          path: bundled-plugins
       - name: Package verified ARM64 CPU product
         env:
+          MESH_LLM_BUNDLED_PLUGINS_DIR: ${{ github.workspace }}/bundled-plugins
           RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
           MESH_RELEASE_OS: Linux
           MESH_RELEASE_ARCH: aarch64
@@ -1058,7 +1096,7 @@ jobs:
 
   compose_linux_aarch64_cuda:
     name: Compose Linux aarch64 CUDA (${{ matrix.cuda_version }})
-    needs: [metadata, build_linux_arm64, build_native_runtime_linux_aarch64_cuda]
+    needs: [metadata, build_linux_arm64, build_native_runtime_linux_aarch64_cuda, bundled_plugins]
     if: ${{ needs.metadata.outputs.skip_gpu_bundles != 'true' }}
     runs-on: ubuntu-24.04-arm
     strategy:
@@ -1110,8 +1148,14 @@ jobs:
           readiness_smoke: "true"
           attestation_public_key_file: ${{ runner.temp }}/mesh-release-attestation-public-key.json
 
+      - name: Download verified bundled plugins
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: bundled-plugins
+          path: bundled-plugins
       - name: Package verified aarch64 CUDA product
         env:
+          MESH_LLM_BUNDLED_PLUGINS_DIR: ${{ github.workspace }}/bundled-plugins
           RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
           MESH_RELEASE_OS: Linux
           MESH_RELEASE_ARCH: aarch64
@@ -1132,7 +1176,7 @@ jobs:
 
   compose_linux_cuda:
     name: Compose Linux CUDA (${{ matrix.cuda_version }})
-    needs: [metadata, build, build_native_runtime_linux_x86_64_cuda]
+    needs: [metadata, build, build_native_runtime_linux_x86_64_cuda, bundled_plugins]
     if: ${{ needs.metadata.outputs.skip_gpu_bundles != 'true' }}
     runs-on: ${{ needs.metadata.outputs.runner_4 }}
     strategy:
@@ -1186,8 +1230,14 @@ jobs:
           readiness_smoke: "true"
           attestation_public_key_file: ${{ runner.temp }}/mesh-release-attestation-public-key.json
 
+      - name: Download verified bundled plugins
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: bundled-plugins
+          path: bundled-plugins
       - name: Package verified CUDA product
         env:
+          MESH_LLM_BUNDLED_PLUGINS_DIR: ${{ github.workspace }}/bundled-plugins
           RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
           MESH_RELEASE_OS: Linux
           MESH_RELEASE_ARCH: x86_64
@@ -1210,7 +1260,7 @@ jobs:
 
   compose_linux_rocm:
     name: Compose Linux ROCm
-    needs: [metadata, build, build_native_runtime_linux_x86_64_rocm]
+    needs: [metadata, build, build_native_runtime_linux_x86_64_rocm, bundled_plugins]
     if: ${{ needs.metadata.outputs.skip_gpu_bundles != 'true' }}
     runs-on: ${{ needs.metadata.outputs.runner_4 }}
     container:
@@ -1254,8 +1304,14 @@ jobs:
           readiness_smoke: "true"
           attestation_public_key_file: ${{ runner.temp }}/mesh-release-attestation-public-key.json
 
+      - name: Download verified bundled plugins
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: bundled-plugins
+          path: bundled-plugins
       - name: Package verified ROCm product
         env:
+          MESH_LLM_BUNDLED_PLUGINS_DIR: ${{ github.workspace }}/bundled-plugins
           RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
           MESH_RELEASE_OS: Linux
           MESH_RELEASE_ARCH: x86_64
@@ -1276,7 +1332,7 @@ jobs:
 
   compose_linux_vulkan:
     name: Compose Linux Vulkan
-    needs: [metadata, build, build_native_runtime_linux_x86_64_vulkan]
+    needs: [metadata, build, build_native_runtime_linux_x86_64_vulkan, bundled_plugins]
     if: ${{ needs.metadata.outputs.skip_gpu_bundles != 'true' }}
     runs-on: ${{ needs.metadata.outputs.runner_4 }}
     container:
@@ -1320,8 +1376,14 @@ jobs:
           readiness_smoke: "true"
           attestation_public_key_file: ${{ runner.temp }}/mesh-release-attestation-public-key.json
 
+      - name: Download verified bundled plugins
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: bundled-plugins
+          path: bundled-plugins
       - name: Package verified Vulkan product
         env:
+          MESH_LLM_BUNDLED_PLUGINS_DIR: ${{ github.workspace }}/bundled-plugins
           RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
           MESH_RELEASE_OS: Linux
           MESH_RELEASE_ARCH: x86_64
@@ -1810,6 +1872,9 @@ jobs:
 
       - name: Remove smoke-only binary
         run: rm -f release-artifacts/mesh-llm
+
+      - name: Verify the bundled plugins in every release archive
+        run: python3 scripts/bundled-plugins.py verify release-artifacts
 
       - name: Verify standalone Skippy CLI release assets
         env:

@@ -220,6 +220,30 @@ Windows release artifacts use the `x86_64-pc-windows-msvc` target triple and
 
 On native Windows, `just check-release` still runs the Rust/docs/workflow invariant checks, but it skips the Bash-only `install.sh` and `scripts/package-release.sh` parity checks.
 
+### Bundled plugins
+
+A default-enabled plugin ships inside the release archive; a node never
+downloads it. `ci/bundled-plugins.json` pins each one: its repository, release
+tag, signer workflow, and the SHA-256 of its archive for every target.
+- **Fetch:** the release workflow's `bundled_plugins` job downloads those
+  archives at the pinned tag. It checks each against the plugin release's
+  `SHA256SUMS` and the pin, and verifies its build-provenance attestation
+  (`gh attestation verify --signer-workflow`).
+- **Place:** each Unix product archive (every flavour of a target) carries the
+  plugin archive unchanged, under `mesh-bundle/plugins/`, beside
+  `plugins/manifest.json`.
+- **Verify:** before the GitHub release is created, `scripts/bundled-plugins.py
+  verify` checks every product archive. A missing or changed plugin archive
+  fails the release.
+- **Absent targets:** a target with no plugin build is listed under `absent`
+  with the reason; today that is Windows. Its archives carry no `plugins/`.
+
+To bump a plugin, update its `tag`, `version` and digests in
+`ci/bundled-plugins.json` from that release's `SHA256SUMS`. A local
+`scripts/package-release.sh` run bundles plugins only when
+`MESH_LLM_BUNDLED_PLUGINS_DIR` names a directory that
+`scripts/bundled-plugins.py fetch --out DIR` filled.
+
 ## Smoke Test
 
 ```bash
