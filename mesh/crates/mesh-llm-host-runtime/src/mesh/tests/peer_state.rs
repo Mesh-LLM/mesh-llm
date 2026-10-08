@@ -1921,6 +1921,116 @@ fn a_gossip_frame_with_plugin_keys_decodes_to_the_same_announcements() {
     assert_eq!(keys, vec![key]);
 }
 
+/// A test node with a fixed node key, so a "restarted" node keeps its identity.
+async fn node_with_key(secret: SecretKey) -> super::Node {
+    let transport_config = iroh::endpoint::QuicTransportConfig::builder()
+        .max_concurrent_bidi_streams(128u32.into())
+        .build();
+    let endpoint = iroh::Endpoint::builder(iroh::endpoint::presets::Minimal)
+        .secret_key(secret.clone())
+        .alpns(vec![
+            crate::protocol::ALPN.to_vec(),
+            skippy_protocol::STAGE_ALPN_V2.to_vec(),
+        ])
+        .transport_config(transport_config)
+        .bind_addr(std::net::SocketAddr::from(([127, 0, 0, 1], 0)))
+        .expect("loopback address")
+        .bind()
+        .await
+        .expect("endpoint binds");
+    let node = super::Node::new_test_node_from_endpoint(super::NodeRole::Worker, endpoint, secret);
+    let accept_node = node.clone();
+    tokio::spawn(async move {
+        accept_node.accept_loop().await;
+    });
+    node
+}
+
+/// One real gossip exchange, `from` dialling `to`; `step` names it in a failure.
+async fn gossip_once(from: &super::Node, to: &super::Node, step: &str) {
+    let conn = crate::protocol::connect_mesh(&from.endpoint, to.endpoint_addr_for_advertisement())
+        .await
+        .unwrap_or_else(|error| panic!("{step}: connect: {error:#}"));
+    from.initiate_gossip(conn, to.id())
+        .await
+        .unwrap_or_else(|error| panic!("{step}: gossip: {error:#}"));
+}
+
+/// The life of one plugin key, as a peer sees it over real gossip: announced,
+/// re-announced after a plugin restart, rotated, withdrawn, dropped with the
+/// peer, and announced again after the node restarts.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_plugin_key_through_its_lifecycle_as_a_peer_sees_it() {
+    use crate::mesh::plugin_keys::bind;
+    use crate::plugin::proto::PluginKeyRequest;
+
+    let key = |seed: u8| {
+        ed25519_dalek::SigningKey::from_bytes(&[seed; 32])
+            .verifying_key()
+            .to_bytes()
+    };
+    let announce = |node: &super::Node, public_key: Vec<u8>| {
+        node.apply_plugin_key_request("capsules", PluginKeyRequest { public_key })
+            .expect("the key request is accepted");
+    };
+    let listed = |viewer: &super::Node, peer: EndpointId| {
+        viewer.plugin_keys.peers().get(&peer).cloned().unwrap_or_default()
+    };
+
+    let a_secret = SecretKey::from_bytes(&[0x31; 32]);
+    let a = node_with_key(a_secret.clone()).await;
+    let b = make_test_node(super::NodeRole::Worker)
+        .await
+        .expect("test node must start");
+    a.start_accepting();
+    b.start_accepting();
+    let a_id = a.id();
+
+    // Announced: the peer lists the key, bound to the announcing node.
+    announce(&a, key(1).to_vec());
+    gossip_once(&b, &a, "announced").await;
+    assert_eq!(listed(&b, a_id), vec![bind(&a_secret, "capsules", key(1))]);
+
+    // A plugin restart re-announces the same key: one key, the same binding.
+    announce(&a, key(1).to_vec());
+    assert_eq!(a.plugin_keys.own().len(), 1);
+    gossip_once(&b, &a, "plugin restart").await;
+    assert_eq!(listed(&b, a_id), vec![bind(&a_secret, "capsules", key(1))]);
+
+    // Rotation: the new key replaces the old one, here and at the peer.
+    announce(&a, key(2).to_vec());
+    assert_eq!(a.plugin_keys.own(), vec![bind(&a_secret, "capsules", key(2))]);
+    gossip_once(&b, &a, "rotation").await;
+    assert_eq!(listed(&b, a_id), vec![bind(&a_secret, "capsules", key(2))]);
+
+    // Withdrawn: the peer forgets it at the next exchange.
+    announce(&a, Vec::new());
+    gossip_once(&b, &a, "withdrawn").await;
+    assert!(listed(&b, a_id).is_empty(), "a withdrawn key is forgotten");
+
+    // Removed with the peer: a node that leaves is no longer listed.
+    announce(&a, key(3).to_vec());
+    gossip_once(&b, &a, "re-announced").await;
+    assert_eq!(listed(&b, a_id).len(), 1);
+    b.remove_peer(a_id, super::MeshPeerRemovalReason::CleanShutdown)
+        .await;
+    assert!(listed(&b, a_id).is_empty(), "a removed peer is not listed");
+
+    // Node restart: keys live in memory only, so the restarted node announces
+    // nothing until its plugin registers again; the binding it then makes is
+    // the same one, because the node key is the same.
+    a.endpoint.close().await;
+    drop(a);
+    let restarted = node_with_key(a_secret.clone()).await;
+    restarted.start_accepting();
+    assert!(restarted.plugin_keys.own().is_empty(), "keys are not persisted");
+    gossip_once(&b, &restarted, "restarted, no keys").await;
+    assert!(listed(&b, a_id).is_empty());
+    announce(&restarted, key(3).to_vec());
+    gossip_once(&b, &restarted, "restarted, re-announced").await;
+    assert_eq!(listed(&b, a_id), vec![bind(&a_secret, "capsules", key(3))]);
+}
+
 #[tokio::test]
 async fn a_plugin_sets_replaces_and_withdraws_only_its_own_key() {
     use crate::plugin::proto::PluginKeyRequest;
