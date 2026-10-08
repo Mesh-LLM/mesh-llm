@@ -133,15 +133,14 @@ export function ChatSidebar({
   // re-attach the anchor on each commit, which sets state. While a reply streams the sidebar
   // re-renders on every token, so those commits chain until React aborts the whole chat view
   // with "Maximum update depth exceeded" (minified error #185).
-  const registerActionTrigger = useCallback((node: HTMLButtonElement | null) => {
+  const registerActionTrigger = useCallback((node: HTMLButtonElement) => {
     const triggers = actionTriggerRefs.current
-    if (node) {
-      const conversationId = node.dataset.conversationId
-      if (conversationId) triggers.set(conversationId, node)
-      return
-    }
-    for (const [conversationId, trigger] of triggers) {
-      if (!trigger.isConnected) triggers.delete(conversationId)
+    const conversationId = node.dataset.conversationId
+    if (!conversationId) return
+    triggers.set(conversationId, node)
+    // React 19 ref cleanup: drop this row's entry when its button detaches.
+    return () => {
+      if (triggers.get(conversationId) === node) triggers.delete(conversationId)
     }
   }, [])
 
