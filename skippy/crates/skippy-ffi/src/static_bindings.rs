@@ -1,5 +1,6 @@
 use std::ffi::{c_char, c_int, c_void};
 
+use crate::llama_draft::{LlamaBatch, LlamaContextParams, LlamaModelParams};
 use crate::{
     ActivationBoundaryDesc, ActivationDesc, BackendDevice, Error, GenerationSignalWindow,
     IterationRequest, KvPageDesc, LayaInfoV1, LayaMemoryV1, LayaModel, LayaSequence,
@@ -973,4 +974,51 @@ unsafe extern "C" {
         callback: Option<unsafe extern "C" fn(i32, *mut c_void) -> c_int>,
         user_data: *mut c_void,
     ) -> c_int;
+}
+
+// Upstream llama.cpp entry points for external draft contexts; see
+// `llama_draft.rs`.
+unsafe extern "C" {
+    pub fn llama_model_default_params() -> LlamaModelParams;
+    pub fn llama_context_default_params() -> LlamaContextParams;
+    pub fn llama_model_load_from_file(path: *const c_char, params: LlamaModelParams)
+    -> *mut Opaque;
+    pub fn llama_model_free(model: *mut Opaque);
+    pub fn llama_init_from_model(model: *mut Opaque, params: LlamaContextParams) -> *mut Opaque;
+    pub fn llama_free(ctx: *mut Opaque);
+    pub fn llama_decode(ctx: *mut Opaque, batch: LlamaBatch) -> i32;
+    pub fn llama_get_model(ctx: *const Opaque) -> *const Opaque;
+    pub fn llama_get_memory(ctx: *const Opaque) -> *mut Opaque;
+    pub fn llama_memory_seq_rm(mem: *mut Opaque, seq_id: i32, p0: i32, p1: i32) -> bool;
+    pub fn llama_get_logits_ith(ctx: *mut Opaque, i: i32) -> *mut f32;
+    pub fn llama_n_ctx(ctx: *const Opaque) -> u32;
+    pub fn llama_n_batch(ctx: *const Opaque) -> u32;
+    pub fn llama_n_ubatch(ctx: *const Opaque) -> u32;
+    pub fn llama_model_n_embd(model: *const Opaque) -> i32;
+    pub fn llama_model_n_layer(model: *const Opaque) -> i32;
+    pub fn llama_model_rope_type(model: *const Opaque) -> i32;
+    pub fn llama_vocab_mask(vocab: *const Opaque) -> i32;
+    pub fn llama_set_causal_attn(ctx: *mut Opaque, causal_attn: bool);
+    pub fn ggml_backend_dev_by_name(name: *const c_char) -> *mut Opaque;
+}
+
+// `src/llama-ext.h` is a C++ staging header, so these keep C++ linkage and are
+// bound by their Itanium-mangled names. The mangling encodes the parameter
+// types, so an upstream signature change fails to link instead of miscalling.
+#[cfg(not(windows))]
+unsafe extern "C" {
+    #[link_name = "_Z26llama_set_embeddings_nextnP13llama_contextbb"]
+    pub fn llama_set_embeddings_nextn(ctx: *mut Opaque, value: bool, masked: bool);
+    #[link_name = "_Z26llama_get_embeddings_nextnP13llama_context"]
+    pub fn llama_get_embeddings_nextn(ctx: *mut Opaque) -> *mut f32;
+    #[link_name = "_Z30llama_set_embeddings_layer_inpP13llama_contextjb"]
+    pub fn llama_set_embeddings_layer_inp(ctx: *mut Opaque, lid: u32, value: bool);
+    #[link_name = "_Z30llama_get_embeddings_layer_inpP13llama_contextj"]
+    pub fn llama_get_embeddings_layer_inp(ctx: *mut Opaque, lid: u32) -> *mut f32;
+    #[link_name = "_Z28llama_model_target_layer_idsPK11llama_model"]
+    pub fn llama_model_target_layer_ids(model: *const Opaque) -> *const i32;
+    #[link_name = "_Z30llama_model_target_layer_ids_nPK11llama_model"]
+    pub fn llama_model_target_layer_ids_n(model: *const Opaque) -> u32;
+    #[link_name = "_Z33llama_model_dflash_selector_top_kPK11llama_model"]
+    pub fn llama_model_dflash_selector_top_k(model: *const Opaque) -> i32;
 }

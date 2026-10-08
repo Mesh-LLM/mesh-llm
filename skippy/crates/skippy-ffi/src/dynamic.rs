@@ -4,6 +4,7 @@ use std::{
     sync::OnceLock,
 };
 
+use crate::llama_draft::LlamaDraftApi;
 use crate::{
     ABI_VERSION_MAJOR, ABI_VERSION_MINOR, ABI_VERSION_PATCH, AbiVersion, ActivationBoundaryDesc,
     ActivationDesc, BackendDevice, CacheGenRecordV1, Error, GenerationSignalWindow,
@@ -464,6 +465,73 @@ pub(crate) fn llama_model_meta_val_str_fn() -> Option<LlamaModelMetaValStrFn> {
     *CACHE.get_or_init(|| {
         symbols().lookup_optional::<LlamaModelMetaValStrFn>(b"llama_model_meta_val_str\0")
     })
+}
+
+/// Upstream draft-context entry points. Optional as a set: a runtime that does
+/// not export every one of them cannot host an external draft context.
+///
+/// The `src/llama-ext.h` entry points keep C++ linkage, so they resolve by
+/// their Itanium-mangled names; the mangling encodes the parameter types, so
+/// an upstream signature change fails lookup instead of miscalling. MSVC
+/// mangles differently, so Windows runtimes report the API as unavailable.
+#[cfg(windows)]
+pub(crate) fn llama_draft_api() -> Option<&'static LlamaDraftApi> {
+    None
+}
+
+/// Upstream draft-context entry points. Optional as a set: a runtime that does
+/// not export every one of them cannot host an external draft context.
+///
+/// The `src/llama-ext.h` entry points keep C++ linkage, so they resolve by
+/// their Itanium-mangled names; the mangling encodes the parameter types, so
+/// an upstream signature change fails lookup instead of miscalling.
+#[cfg(not(windows))]
+pub(crate) fn llama_draft_api() -> Option<&'static LlamaDraftApi> {
+    static CACHE: OnceLock<Option<LlamaDraftApi>> = OnceLock::new();
+    CACHE
+        .get_or_init(|| {
+            let symbols = symbols();
+            Some(LlamaDraftApi {
+                model_default_params: symbols.lookup_optional(b"llama_model_default_params\0")?,
+                context_default_params: symbols
+                    .lookup_optional(b"llama_context_default_params\0")?,
+                model_load_from_file: symbols.lookup_optional(b"llama_model_load_from_file\0")?,
+                model_free: symbols.lookup_optional(b"llama_model_free\0")?,
+                init_from_model: symbols.lookup_optional(b"llama_init_from_model\0")?,
+                free: symbols.lookup_optional(b"llama_free\0")?,
+                decode: symbols.lookup_optional(b"llama_decode\0")?,
+                get_model: symbols.lookup_optional(b"llama_get_model\0")?,
+                get_memory: symbols.lookup_optional(b"llama_get_memory\0")?,
+                memory_seq_rm: symbols.lookup_optional(b"llama_memory_seq_rm\0")?,
+                get_logits_ith: symbols.lookup_optional(b"llama_get_logits_ith\0")?,
+                n_ctx: symbols.lookup_optional(b"llama_n_ctx\0")?,
+                n_batch: symbols.lookup_optional(b"llama_n_batch\0")?,
+                n_ubatch: symbols.lookup_optional(b"llama_n_ubatch\0")?,
+                model_n_embd: symbols.lookup_optional(b"llama_model_n_embd\0")?,
+                model_n_layer: symbols.lookup_optional(b"llama_model_n_layer\0")?,
+                model_rope_type: symbols.lookup_optional(b"llama_model_rope_type\0")?,
+                model_get_vocab: symbols.lookup_optional(b"llama_model_get_vocab\0")?,
+                vocab_n_tokens: symbols.lookup_optional(b"llama_vocab_n_tokens\0")?,
+                vocab_mask: symbols.lookup_optional(b"llama_vocab_mask\0")?,
+                set_causal_attn: symbols.lookup_optional(b"llama_set_causal_attn\0")?,
+                set_embeddings_nextn: symbols
+                    .lookup_optional(b"_Z26llama_set_embeddings_nextnP13llama_contextbb\0")?,
+                get_embeddings_nextn: symbols
+                    .lookup_optional(b"_Z26llama_get_embeddings_nextnP13llama_context\0")?,
+                set_embeddings_layer_inp: symbols
+                    .lookup_optional(b"_Z30llama_set_embeddings_layer_inpP13llama_contextjb\0")?,
+                get_embeddings_layer_inp: symbols
+                    .lookup_optional(b"_Z30llama_get_embeddings_layer_inpP13llama_contextj\0")?,
+                model_target_layer_ids: symbols
+                    .lookup_optional(b"_Z28llama_model_target_layer_idsPK11llama_model\0")?,
+                model_target_layer_ids_n: symbols
+                    .lookup_optional(b"_Z30llama_model_target_layer_ids_nPK11llama_model\0")?,
+                model_dflash_selector_top_k: symbols
+                    .lookup_optional(b"_Z33llama_model_dflash_selector_top_kPK11llama_model\0")?,
+                backend_dev_by_name: symbols.lookup_optional(b"ggml_backend_dev_by_name\0")?,
+            })
+        })
+        .as_ref()
 }
 
 pub fn skippy_model_open_with_events_fn() -> Option<SkippyModelOpenWithEventsFn> {
