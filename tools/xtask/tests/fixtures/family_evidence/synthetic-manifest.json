@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "policy": {
+    "profiles": {
+      "full": {"status": "certified", "oracle": "local-monolithic", "required_lanes": ["single-step", "chain", "state-handoff"]},
+      "package-oracle": {"status": "certified", "oracle": "independent-trace", "required_lanes": ["single-step", "chain", "state-handoff"]},
+      "graph-only": {"status": "provisional", "oracle": "none", "required_lanes": ["graph-parse", "tensor-ownership", "stage-load"]},
+      "workload-smoke": {"status": "provisional", "oracle": "none", "required_lanes": ["class-specific-smoke"]},
+      "workload-oracle": {"status": "certified", "oracle": "local-monolithic", "required_lanes": ["class-specific-smoke", "class-specific-oracle"]}
+    }
+  },
+  "models": [
+    {
+      "family": "zeta", "class": "causal_generation", "architecture": "qwen3", "profile": "full",
+      "artifact": {"repo": "fixture/zeta", "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "files": ["zeta.gguf"], "file_integrity": {"zeta.gguf": {"size_bytes": 1, "blob_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}, "selector": "fixture"},
+      "execution": {"trunk_layers": 1, "mtp_layers": 0, "activation_width": 1, "speculative_policy": "disabled"},
+      "resources": {"runner_role": "family-certify", "cache_policy": "immutable-local", "estimated_model_bytes": 9}, "notes": "synthetic parity only"
+    },
+    {
+      "family": "beta", "class": "causal_generation", "architecture": "qwen3", "profile": "full",
+      "artifact": {"repo": "fixture/beta", "revision": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "files": ["beta.gguf"], "file_integrity": {"beta.gguf": {"size_bytes": 1, "blob_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}}, "selector": "fixture"},
+      "execution": {"trunk_layers": 1, "mtp_layers": 0, "activation_width": 1, "speculative_policy": "disabled"},
+      "resources": {"runner_role": "family-certify", "cache_policy": "immutable-local", "estimated_model_bytes": 9}, "notes": "synthetic parity only"
+    },
+    {
+      "family": "alpha", "class": "causal_generation", "architecture": "qwen3", "profile": "full",
+      "artifact": {"repo": "fixture/alpha", "revision": "cccccccccccccccccccccccccccccccccccccccc", "files": ["alpha.gguf"], "file_integrity": {"alpha.gguf": {"size_bytes": 1, "blob_id": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"}}, "selector": "fixture"},
+      "execution": {"trunk_layers": 1, "mtp_layers": 0, "activation_width": 1, "speculative_policy": "disabled"},
+      "resources": {"runner_role": "family-certify", "cache_policy": "immutable-local", "estimated_model_bytes": 5}, "notes": "synthetic parity only"
+    },
+    {
+      "family": "gamma", "class": "causal_generation", "architecture": "qwen3", "profile": "full",
+      "artifact": {"repo": "fixture/gamma", "revision": "dddddddddddddddddddddddddddddddddddddddd", "files": ["gamma.gguf"], "file_integrity": {"gamma.gguf": {"size_bytes": 1, "blob_id": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"}}, "selector": "fixture"},
+      "execution": {"trunk_layers": 1, "mtp_layers": 0, "activation_width": 1, "speculative_policy": "disabled"},
+      "resources": {"runner_role": "family-certify", "cache_policy": "immutable-local", "estimated_model_bytes": 4}, "notes": "synthetic parity only"
+    },
+    {
+      "family": "delta", "class": "causal_generation", "architecture": "qwen3", "profile": "full",
+      "artifact": {"repo": "fixture/delta", "revision": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", "files": ["delta.gguf"], "file_integrity": {"delta.gguf": {"size_bytes": 1, "blob_id": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"}}, "selector": "fixture"},
+      "execution": {"trunk_layers": 1, "mtp_layers": 0, "activation_width": 1, "speculative_policy": "disabled"},
+      "resources": {"runner_role": "family-certify", "cache_policy": "immutable-local", "estimated_model_bytes": 4}, "notes": "synthetic parity only"
+    }
+  ]
+}

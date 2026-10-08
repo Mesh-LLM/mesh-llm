@@ -1,0 +1,283 @@
+use super::report;
+use crate::command::DynResult;
+use crate::migration_inventory::{ledger, required_closure, scan, shards};
+use std::collections::BTreeSet;
+use std::fs;
+
+const GENERIC: &str = "inline interpreter/installer or Python dynamic process candidate requires source-backed caller contract";
+const SELECTED: &str = "inline Python program launched through a runtime-selected interpreter binding; selector output and launch are not source-joined";
+const VARIABLE: &str = "Python script target is a shell variable; its bound path and branch are not joined as a child edge";
+const ROOTED: &str =
+    "Python script path is built from a shell variable; no repository child edge is bound";
+
+#[test]
+fn variable_script_classifier_requires_an_interpreter_word_boundary() {
+    for source in [
+        "python3 \"$HELPER\" check",
+        "if python \"$HELPER\" check; then",
+        "env NAME=value python3 \"$HELPER\" check",
+        "/usr/bin/python3 \"$HELPER\" check",
+    ] {
+        assert!(
+            super::inline_launch::variable_script_target(source),
+            "{source}"
+        );
+    }
+    for source in [
+        "uv sync --python \"$host_python\"",
+        "tool --python3 \"$HELPER\"",
+        "notpython \"$HELPER\"",
+        "prefix_python3 \"$HELPER\"",
+    ] {
+        assert!(
+            !super::inline_launch::variable_script_target(source),
+            "{source}"
+        );
+    }
+}
+
+#[test]
+fn actual_graph_keeps_uv_interpreter_option_as_dependency_operation() -> DynResult<()> {
+    let root = crate::command::unique_temp_dir("graph-uv-option");
+    let path = "scripts/sdk-environment.sh";
+    super::super::required_graph_tests::source(
+        &root,
+        path,
+        "uv sync --locked --project ci/canary-python --python \"$host_python\"\npython3 \"$HELPER\" check\n",
+    )?;
+    let files = [path.to_owned()];
+    let observed = scan::scan_paths(&root, &files)?;
+    let graph = report(&root, &files, &observed, &BTreeSet::new(), &[path])?;
+    assert_eq!(reason_at(&graph, 1), Some(GENERIC));
+    assert_eq!(reason_at(&graph, 2), Some(VARIABLE));
+    fs::remove_dir_all(root)?;
+    Ok(())
+}
+
+fn reason_at(graph: &super::Graph, line: usize) -> Option<&str> {
+    graph
+        .edges
+        .iter()
+        .find(|edge| edge.line == line)
+        .and_then(|edge| edge.unresolved_reason.as_deref())
+}
+
+#[test]
+fn selected_interpreter_inline_program_names_selection_boundary() -> DynResult<()> {
+    // Given reached shell launches whose interpreter comes from a selector.
+    let root = crate::command::unique_temp_dir("graph-inline-selected");
+    let path = "scripts/selected.sh";
+    super::super::required_graph_tests::source(
+        &root,
+        path,
+        concat!(
+            "\"$(python_bin)\" - \"$manifest\" <<'PY'\n",
+            "print(1)\n",
+            "PY\n",
+            "done < <(\"$py\" - \"$dir\" <<'PY'\n",
+            "print(2)\n",
+            "PY\n",
+            "\"$python\" -c 'print(3)' \"$1\"\n",
+            "\"$python_bin\" - \\\n",
+        ),
+    )?;
+    let files = [path.to_owned()];
+    let observed = scan::scan_paths(&root, &files)?;
+
+    // When the graph walks the source without contracts.
+    let graph = report(&root, &files, &observed, &BTreeSet::new(), &[path])?;
+
+    // Then each launch is unresolved as a selected interpreter, never generic.
+    for line in [1, 4, 7, 8] {
+        assert_eq!(reason_at(&graph, line), Some(SELECTED), "{path}:{line}");
+    }
+    fs::remove_dir_all(root)?;
+    Ok(())
+}
+
+#[test]
+fn variable_script_target_is_named_and_fixed_inline_stays_generic() -> DynResult<()> {
+    // Given a variable-selected script target and a new fixed inline launch.
+    let root = crate::command::unique_temp_dir("graph-inline-variable");
+    let path = "scripts/variable.sh";
+    super::super::required_graph_tests::source(
+        &root,
+        path,
+        concat!(
+            "python3 \"$WINDOWS_PROCESS_HELPER\" force-stop --pid \"$pid\" || true\n",
+            "python3 -c 'import sys; print(sys.argv)'\n",
+            "if python3 - \"$LOG\" <<'PY'\n",
+            "raise SystemExit(0)\n",
+            "PY\n",
+        ),
+    )?;
+    let files = [path.to_owned()];
+    let observed = scan::scan_paths(&root, &files)?;
+
+    // When the graph walks the source without contracts.
+    let graph = report(&root, &files, &observed, &BTreeSet::new(), &[path])?;
+
+    // Then the variable target is named while an unreviewed fixed python3
+    // launch remains the generic unresolved execution candidate.
+    assert_eq!(reason_at(&graph, 1), Some(VARIABLE));
+    assert_eq!(reason_at(&graph, 2), Some(GENERIC));
+    assert_eq!(reason_at(&graph, 3), Some(GENERIC));
+    assert!(
+        graph
+            .edges
+            .iter()
+            .all(|edge| edge.status == "unknown_selection")
+    );
+    fs::remove_dir_all(root)?;
+    Ok(())
+}
+
+#[test]
+fn checked_in_required_graph_has_no_generic_inline_reason() -> DynResult<()> {
+    // Given the checked-in required roots, ledgers and validated candidates.
+    let root = crate::repository::RepositoryRoot::resolve(None)?;
+    let paths = ledger::tracked_paths(root.as_path())?;
+    let observed = scan::scan_paths(root.as_path(), &paths)?;
+    let validated = shards::check_shards(root.as_path(), &observed)?;
+    let roots = required_closure::required_roots(root.as_path(), &paths)?;
+    let refs = roots.iter().map(String::as_str).collect::<Vec<_>>();
+
+    // When the full graph is built.
+    let graph = report(root.as_path(), &paths, &observed, &validated, &refs)?;
+    let count = |reason: &str| {
+        graph
+            .edges
+            .iter()
+            .filter(|edge| edge.unresolved_reason.as_deref() == Some(reason))
+            .count()
+    };
+
+    // The remaining SDK dependency/source selections have exact source-backed
+    // boundaries. A new generic execution still fails this closed roster.
+    let expected = [
+        (
+            ".github/actions/prepare-python-sdk-source/action.yml",
+            "export MESH_PYTHON_SDK_SOURCE=\"$PWD/.sdk-source/python\"",
+            GENERIC,
+        ),
+        (
+            ".github/actions/setup-canary-python/action.yml",
+            "export MESH_PYTHON_SDK_SOURCE=\"$PWD/.sdk-source/python\"",
+            GENERIC,
+        ),
+        (
+            ".github/actions/setup-canary-python/action.yml",
+            "uv sync --locked --project \"$sdk_project\" --python \"$host_python\"",
+            GENERIC,
+        ),
+        (
+            ".github/actions/setup-canary-python/action.yml",
+            "\"$sdk_python\" -I \"$sdk_root/scripts/import-embedding.py\"",
+            ROOTED,
+        ),
+        (
+            ".github/actions/setup-canary-python/action.yml",
+            "\"$sdk_python\" -I \"$sdk_root/scripts/import-compatibility.py\"",
+            ROOTED,
+        ),
+    ];
+    for edge in &graph.edges {
+        if matches!(
+            edge.unresolved_reason.as_deref(),
+            Some(GENERIC | SELECTED | VARIABLE | ROOTED)
+        ) {
+            assert!(
+                expected
+                    .iter()
+                    .any(|(path, block, reason)| edge.parent == *path
+                        && edge.source_block == *block
+                        && edge.unresolved_reason.as_deref() == Some(*reason)),
+                "new unbound interpreter selection: {edge:?}"
+            );
+            assert_eq!(
+                edge.disposition,
+                super::boundaries::EdgeDisposition::BoundedSelector
+            );
+            let boundary = edge
+                .boundary
+                .as_ref()
+                .expect("exact source evidence boundary");
+            assert!(!boundary.evidence.is_empty());
+            assert!(
+                edge.candidate_id
+                    .as_ref()
+                    .is_some_and(|id| validated.contains(id))
+            );
+        }
+    }
+    for (path, block, reason) in expected {
+        assert_eq!(
+            graph
+                .edges
+                .iter()
+                .filter(|edge| edge.parent == path
+                    && edge.source_block == block
+                    && edge.unresolved_reason.as_deref() == Some(reason))
+                .count(),
+            1,
+            "source-backed SDK boundary missing or duplicated: {path}/{block}"
+        );
+    }
+    assert_eq!(count(GENERIC), 3);
+    assert_eq!(count(SELECTED), 0);
+    assert_eq!(count(VARIABLE), 0);
+    assert_eq!(count(ROOTED), 2);
+    Ok(())
+}
+
+#[test]
+fn sdk_version_manifest_data_reason_is_exact_and_does_not_admit_interpreter_launches() {
+    let reason = super::inline_launch::unresolved_reason;
+    let data = "Python SDK path is shell validation or version data; its source-backed data boundary is recorded";
+    for literal in [
+        "\"sdk/python/pyproject.toml\"",
+        "\"mesh/sdk/python/pyproject.toml\"",
+    ] {
+        assert_eq!(reason(literal), data);
+    }
+    for unbound in [
+        "\"foreign/sdk/python/pyproject.toml\"",
+        "python3 \"mesh/sdk/python/pyproject.toml\"",
+        "exec \"mesh/sdk/python/pyproject.toml\"",
+        "uv sync --python \"mesh/sdk/python/pyproject.toml\"",
+        "\"mesh/sdk/python/pyproject.toml\" extra",
+    ] {
+        assert_eq!(reason(unbound), GENERIC, "{unbound}");
+    }
+    assert_eq!(reason("\"$python\" -c 'print(1)'"), SELECTED);
+    let root = crate::repo_consistency::repo_root().unwrap();
+    let source = fs::read_to_string(root.join("scripts/release-version.sh")).unwrap();
+    let literals = source
+        .split_once("literal_version_files=(\n")
+        .unwrap()
+        .1
+        .split_once("\n)\n")
+        .unwrap()
+        .0;
+    assert!(
+        !literals.contains("sdk/python/"),
+        "Mesh release must not version the extracted Python package"
+    );
+    for retained in [
+        "\"mesh/sdk/node/package.json\"",
+        "\"mesh/docs/SDK.md\"",
+        "\"mesh/sdk/swift/README.md\"",
+    ] {
+        assert!(
+            literals.lines().any(|line| line.trim() == retained),
+            "retained SDK release input absent: {retained}"
+        );
+    }
+    assert!(
+        root.join("ci/required-sdk-python/sdk-source.json")
+            .is_file()
+    );
+    let sdk_contract = fs::read_to_string(root.join("mesh/scripts/check-sdk-contract.sh")).unwrap();
+    assert!(sdk_contract.contains("automation smoke-observation sdk-source --kind root"));
+    assert!(source.contains("for logical_file in \"${literal_version_files[@]}\"; do"));
+}

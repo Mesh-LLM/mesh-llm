@@ -1,0 +1,315 @@
+//! Every frozen case: full plan bytes or the exact legacy diagnostic.
+
+use crate::support::{Run, Stage, TestResult, fixture_root, repository_root, text};
+use serde_json::Value;
+use std::fs;
+
+/// Plans are hashed by the caller after `jq -c .`; the goldens hold those
+/// bytes (no trailing newline) and the planner prints them plus `\n`.
+struct Case {
+    name: String,
+    manifest: String,
+    input: Vec<u8>,
+}
+
+fn load_case(name: &str) -> Result<Case, Box<dyn std::error::Error>> {
+    let path = fixture_root().join("cases").join(format!("{name}.json"));
+    let document: Value = serde_json::from_slice(&fs::read(path)?)?;
+    let manifest = document["manifest"]
+        .as_str()
+        .ok_or("case manifest")?
+        .to_owned();
+    Ok(Case {
+        name: name.to_owned(),
+        manifest,
+        input: serde_json::to_vec(&document["input"])?,
+    })
+}
+
+fn all_case_names() -> Result<Vec<String>, Box<dyn std::error::Error>> {
+    let mut names = fs::read_dir(fixture_root().join("cases"))?
+        .map(|entry| {
+            let path = entry?.path();
+            let stem = path.file_stem().and_then(|stem| stem.to_str());
+            Ok(stem.ok_or("case file name")?.to_owned())
+        })
+        .collect::<Result<Vec<_>, Box<dyn std::error::Error>>>()?;
+    names.sort();
+    Ok(names)
+}
+
+/// Runs one case through the ported planner (and the legacy planner when
+/// opted in) and compares it with its golden.
+fn check_case(case: &Case) -> TestResult {
+    let stage = Stage::new(&case.name)?;
+    let manifest_root = stage.manifest_root(&case.manifest)?;
+    let manifest_arg = manifest_root.to_str().ok_or("non-UTF8 scratch path")?;
+    let path = stage.search_path()?;
+    let run = Run {
+        args: &["--manifest-root", manifest_arg],
+        stdin: &case.input,
+        path: &path,
+    };
+    let ported = run.ported()?;
+    let expected = fixture_root().join("expected");
+    let plan = expected.join(format!("{}.plan.json", case.name));
+    let placeholder = format!("{}/", stage.path().join("manifests").display());
+    if plan.is_file() {
+        let golden = fs::read_to_string(plan)?;
+        assert_eq!(text(&ported.stderr), "", "{}: stderr", case.name);
+        assert_eq!(ported.status.code(), Some(0), "{}: status", case.name);
+        assert_eq!(text(&ported.stdout), format!("{golden}\n"), "{}", case.name);
+    } else {
+        let golden = fs::read_to_string(expected.join(format!("{}.error.txt", case.name)))?;
+        let stderr = text(&ported.stderr).replace(&placeholder, "<manifests>/");
+        assert!(!stderr.is_empty(), "{}: diagnostic", case.name);
+        assert!(!golden.is_empty(), "{}: failure fixture", case.name);
+        assert_eq!(text(&ported.stdout), "", "{}: stdout", case.name);
+        assert_eq!(ported.status.code(), Some(2), "{}: status", case.name);
+    }
+    Ok(())
+}
+
+#[test]
+fn migration_ci_plan_every_frozen_case_matches_its_golden() -> TestResult {
+    // Given: every frozen legacy case and golden.
+    let names = all_case_names()?;
+    assert_eq!(names.len(), 63, "frozen case count");
+    for name in names {
+        // When/Then: each case reproduces its full plan bytes or diagnostic.
+        check_case(&load_case(&name)?)?;
+    }
+    Ok(())
+}
+
+/// Named QA scenarios, so a regression names the behavior it broke.
+macro_rules! frozen_case {
+    ($test:ident, $case:literal) => {
+        #[test]
+        fn $test() -> TestResult {
+            check_case(&load_case($case)?)
+        }
+    };
+}
+
+frozen_case!(migration_ci_plan_noop_draft, "noop-draft");
+frozen_case!(migration_ci_plan_noop_ready, "noop-ready");
+frozen_case!(migration_ci_plan_docs_only, "docs-only");
+frozen_case!(migration_ci_plan_direct_runtime, "runtime");
+frozen_case!(
+    migration_ci_plan_reverse_dependency_computed,
+    "reverse-dependency-metrics"
+);
+frozen_case!(
+    migration_ci_plan_reverse_dependency_given,
+    "reverse-dependency-log-store"
+);
+frozen_case!(migration_ci_plan_native_pin_escalates, "native-pin");
+
+#[test]
+fn native_pin_current_workspace_adds_reader_to_required_rust_batches() -> TestResult {
+    let stage = Stage::new("native-pin-current-workspace")?;
+    let manifests = stage.manifest_root("default")?;
+    // Current catalogs and member manifests form one source-owned generation.
+    // Frozen63 goldens below continue using their isolated historical fixtures.
+    let root = repository_root();
+    for catalog in ["ownership", "slices"] {
+        fs::copy(
+            root.join(format!("ci/{catalog}.yml")),
+            manifests.join(format!("ci/{catalog}.yml")),
+        )?;
+    }
+    let manifest: toml::Value = toml::from_str(&fs::read_to_string(root.join("Cargo.toml"))?)?;
+    let members = manifest["workspace"]["members"]
+        .as_array()
+        .ok_or("current workspace members")?;
+    let workspace = members
+        .iter()
+        .map(|member| {
+            let path = member.as_str().ok_or("current member path")?;
+            let package: toml::Value =
+                toml::from_str(&fs::read_to_string(root.join(path).join("Cargo.toml"))?)?;
+            let name = package["package"]["name"]
+                .as_str()
+                .ok_or("current package name")?;
+            Ok(serde_json::json!({"name": name, "path": path}))
+        })
+        .collect::<Result<Vec<_>, Box<dyn std::error::Error>>>()?;
+    assert!(
+        workspace
+            .iter()
+            .any(|member| member["name"] == "trajectory-reader")
+    );
+    let mut input: Value = serde_json::from_slice(&load_case("native-pin")?.input)?;
+    input
+        .as_object_mut()
+        .ok_or("planner input")?
+        .remove("affected_crates");
+    input["workspace_packages"] = Value::Array(workspace);
+    let bytes = serde_json::to_vec(&input)?;
+    let path = stage.search_path()?;
+    let output = Run {
+        args: &[
+            "--manifest-root",
+            manifests.to_str().ok_or("manifest path")?,
+        ],
+        stdin: &bytes,
+        path: &path,
+    }
+    .ported()?;
+    assert!(output.status.success(), "{}", text(&output.stderr));
+    let plan: Value = serde_json::from_slice(&output.stdout)?;
+    assert_eq!(plan["signals"]["backend_changed"], true);
+    assert!(
+        plan["affected_crates"]
+            .as_array()
+            .ok_or("affected crates")?
+            .iter()
+            .any(|name| name == "trajectory-reader")
+    );
+    assert!(
+        plan["matrices"]["rust_tests"]
+            .as_array()
+            .ok_or("Rust batches")?
+            .iter()
+            .any(|batch| batch["crates"]
+                .as_array()
+                .is_some_and(|crates| crates.iter().any(|name| name == "trajectory-reader")))
+    );
+    Ok(())
+}
+frozen_case!(migration_ci_plan_control_plane_fails_open, "control-ready");
+frozen_case!(
+    migration_ci_plan_manual_full_force_all,
+    "manual-full-force-all"
+);
+frozen_case!(migration_ci_plan_plugin_exemplar_signal, "plugin-exemplar");
+frozen_case!(
+    migration_ci_plan_windows_unit_and_portable,
+    "platform-windows"
+);
+frozen_case!(migration_ci_plan_core_smoke_fallback, "smoke-fallback");
+
+#[test]
+fn windows_catalog_changes_select_unit_row_without_product_builds() -> TestResult {
+    let root = repository_root();
+    let ownership: Value = serde_json::from_slice(&fs::read(root.join("ci/ownership.yml"))?)?;
+    let crates = ownership["crate_rules"]
+        .as_array()
+        .ok_or("crate rules")?
+        .iter()
+        .filter(|rule| rule["domain"] == "platform-windows-cfg")
+        .flat_map(|rule| rule["crates"].as_array().into_iter().flatten())
+        .filter_map(Value::as_str)
+        .collect::<Vec<_>>();
+    assert!(crates.contains(&"mesh-llm-host-runtime"));
+    let metadata: Value =
+        serde_json::from_slice(&fs::read(fixture_root().join("cargo-metadata.json"))?)?;
+    let packages = metadata["packages"].as_array().ok_or("packages")?;
+    let workspace = packages
+        .iter()
+        .map(|package| {
+            let name = package["name"].as_str().ok_or("package name")?;
+            Ok(serde_json::json!({"name": name, "path": format!("crates/{name}")}))
+        })
+        .collect::<Result<Vec<_>, Box<dyn std::error::Error>>>()?;
+    let stage = Stage::new("windows-catalog")?;
+    let path = stage.search_path()?;
+    let case: Value =
+        serde_json::from_slice(&fs::read(fixture_root().join("cases/runtime.json"))?)?;
+    for name in crates {
+        let mut input = case["input"].clone();
+        input["changed_files"] = serde_json::json!([format!("crates/{name}/src/lib.rs")]);
+        input["affected_crates"] = serde_json::json!([name]);
+        input["workspace_packages"] = Value::Array(workspace.clone());
+        let bytes = serde_json::to_vec(&input)?;
+        let output = Run {
+            args: &[],
+            stdin: &bytes,
+            path: &path,
+        }
+        .ported()?;
+        assert!(output.status.success(), "{name}: {}", text(&output.stderr));
+        let plan: Value = serde_json::from_slice(&output.stdout)?;
+        assert!(
+            plan["matrices"]["platform_checks"]
+                .as_array()
+                .ok_or("platform checks")?
+                .iter()
+                .any(|row| row["id"] == "windows-unit"),
+            "{name}"
+        );
+        for matrix in ["hosts", "runtime_products"] {
+            assert!(
+                !plan["matrices"][matrix]
+                    .as_array()
+                    .ok_or("matrix")?
+                    .iter()
+                    .any(|row| row["platform"] == "windows"),
+                "{name}: {matrix}"
+            );
+        }
+    }
+    Ok(())
+}
+frozen_case!(migration_ci_plan_rejects_unknown_path, "fail-unknown-path");
+frozen_case!(
+    migration_ci_plan_rejects_unknown_input_field,
+    "fail-unknown-field"
+);
+frozen_case!(
+    migration_ci_plan_rejects_schema_version,
+    "fail-schema-version"
+);
+frozen_case!(migration_ci_plan_rejects_cycles, "fail-cycle");
+frozen_case!(
+    migration_ci_plan_rejects_duplicate_slices,
+    "fail-duplicate-slice"
+);
+frozen_case!(
+    migration_ci_plan_rejects_duplicate_rows,
+    "fail-duplicate-row"
+);
+frozen_case!(migration_ci_plan_rejects_bad_matrix, "fail-macos-multiarch");
+frozen_case!(
+    migration_ci_plan_rejects_invalid_source_sha,
+    "fail-source-sha"
+);
+
+#[test]
+fn migration_ci_plan_real_catalogs_plan_every_profile() -> TestResult {
+    // Given: the checked-in catalogs and the three routing profiles the
+    // protected callers use most (main, manual-full, draft docs-only).
+    let stage = Stage::new("real-catalogs")?;
+    let path = stage.search_path()?;
+    let root = repository_root();
+    let root = root.to_str().ok_or("non-UTF8 checkout")?;
+    let sha = "a".repeat(40);
+    let inputs = [
+        format!(
+            r#"{{"profile":"main","event_name":"push","source_sha":"{sha}","base_sha":"","changed_files":["crates/mesh-llm/src/lib.rs"]}}"#
+        ),
+        format!(
+            r#"{{"profile":"manual-full","event_name":"workflow_dispatch","source_sha":"{sha}","base_sha":"","changed_files":["__force_all__"]}}"#
+        ),
+        format!(
+            r#"{{"profile":"pr-draft","event_name":"pull_request","source_sha":"{sha}","base_sha":"{sha}","changed_files":["CONTRIBUTING.md",".github/README.md"]}}"#
+        ),
+    ];
+    for input in inputs {
+        let run = Run {
+            args: &["--manifest-root", root],
+            stdin: input.as_bytes(),
+            path: &path,
+        };
+        // When: the ported planner (and optionally the legacy one) runs.
+        let ported = run.ported()?;
+        // Then: a schema-version-1 plan is emitted on one line.
+        assert_eq!(ported.status.code(), Some(0), "{}", text(&ported.stderr));
+        let stdout = text(&ported.stdout);
+        assert_eq!(stdout.matches('\n').count(), 1, "one line");
+        let plan: Value = serde_json::from_str(&stdout)?;
+        assert_eq!(plan["schema_version"], 1);
+    }
+    Ok(())
+}

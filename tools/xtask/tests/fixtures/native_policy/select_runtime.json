@@ -1,0 +1,170 @@
+{
+  "description": "native select-runtime cases; stdout/stderr/code are observed scripts/select-native-runtime.py (python3.13) output. An uncaught exception is recorded as its traceback's last line.",
+  "cases": [
+    {
+      "group": "happy",
+      "name": "cpu",
+      "args": ["--root", "rt", "--os", "linux", "--arch", "x86_64", "--backend", "cpu"],
+      "files": {
+        "rt/cpu/manifest.json": "{\"runtime\": {\"platform\": {\"os\": \"linux\", \"arch\": \"x86_64\"}, \"backend\": {\"kind\": \"cpu\"}}}",
+        "rt/metal/manifest.json": "{\"runtime\": {\"platform\": {\"os\": \"macos\", \"arch\": \"aarch64\"}, \"backend\": {\"kind\": \"metal\"}}}",
+        "rt/notes.txt": "not a runtime"
+      },
+      "code": 0,
+      "stdout": "rt/cpu\n",
+      "stderr": ""
+    },
+    {
+      "group": "happy",
+      "name": "hip alias selects rocm, trailing slash and dot root",
+      "args": ["--root", "./rt/", "--os", "linux", "--arch", "x86_64", "--backend", "hip"],
+      "files": {
+        "rt/rocm/manifest.json": "{\"runtime\": {\"platform\": {\"os\": \"linux\", \"arch\": \"x86_64\"}, \"backend\": {\"kind\": \"rocm\"}}}",
+        "rt/cpu/manifest.json": "{\"runtime\": {\"platform\": {\"os\": \"linux\", \"arch\": \"x86_64\"}, \"backend\": {\"kind\": \"cpu\"}}}"
+      },
+      "code": 0,
+      "stdout": "rt/rocm\n",
+      "stderr": ""
+    },
+    {
+      "group": "happy",
+      "name": "cuda-blackwell alias with integer cuda major",
+      "args": ["--root", "rt", "--os", "linux", "--arch", "x86_64", "--backend", "cuda-blackwell", "--cuda-major", "12"],
+      "files": {
+        "rt/cuda12/manifest.json": "{\"runtime\": {\"platform\": {\"os\": \"linux\", \"arch\": \"x86_64\"}, \"backend\": {\"kind\": \"cuda\", \"cuda\": {\"toolkit_major\": 12}}}}",
+        "rt/cuda13/manifest.json": "{\"runtime\": {\"platform\": {\"os\": \"linux\", \"arch\": \"x86_64\"}, \"backend\": {\"kind\": \"cuda\", \"cuda\": {\"toolkit_major\": \"13\"}}}}"
+      },
+      "code": 0,
+      "stdout": "rt/cuda12\n",
+      "stderr": ""
+    },
+    {
+      "group": "happy",
+      "name": "string cuda major and abbreviated options",
+      "args": ["--root=rt", "--os", "linux", "--arch", "x86_64", "--backend", "cuda", "--cuda-major", "13"],
+      "files": {
+        "rt/cuda12/manifest.json": "{\"runtime\": {\"platform\": {\"os\": \"linux\", \"arch\": \"x86_64\"}, \"backend\": {\"kind\": \"cuda\", \"cuda\": {\"toolkit_major\": 12}}}}",
+        "rt/cuda13/manifest.json": "{\"runtime\": {\"platform\": {\"os\": \"linux\", \"arch\": \"x86_64\"}, \"backend\": {\"kind\": \"cuda\", \"cuda\": {\"toolkit_major\": \"13\"}}}}"
+      },
+      "code": 0,
+      "stdout": "rt/cuda13\n",
+      "stderr": ""
+    },
+    {
+      "group": "happy",
+      "name": "help",
+      "args": ["-h"],
+      "code": 0,
+      "stdout": "usage: select-native-runtime.py [-h] --root ROOT --os OS --arch ARCH\n                                --backend BACKEND [--cuda-major CUDA_MAJOR]\n\noptions:\n  -h, --help            show this help message and exit\n  --root ROOT\n  --os OS\n  --arch ARCH\n  --backend BACKEND\n  --cuda-major CUDA_MAJOR\n",
+      "stderr": ""
+    },
+    {
+      "group": "failure",
+      "name": "ambiguous cuda runtime without a major",
+      "args": ["--root", "rt", "--os", "linux", "--arch", "x86_64", "--backend", "cuda"],
+      "files": {
+        "rt/cuda12/manifest.json": "{\"runtime\": {\"platform\": {\"os\": \"linux\", \"arch\": \"x86_64\"}, \"backend\": {\"kind\": \"cuda\", \"cuda\": {\"toolkit_major\": 12}}}}",
+        "rt/cuda13/manifest.json": "{\"runtime\": {\"platform\": {\"os\": \"linux\", \"arch\": \"x86_64\"}, \"backend\": {\"kind\": \"cuda\", \"cuda\": {\"toolkit_major\": \"13\"}}}}"
+      },
+      "code": 1,
+      "stdout": "",
+      "stderr": "ValueError: expected exactly one native runtime for linux/x86_64/cuda; found rt/cuda12, rt/cuda13 under rt\n"
+    },
+    {
+      "group": "failure",
+      "name": "wrong cuda major",
+      "args": ["--root", "rt", "--os", "linux", "--arch", "x86_64", "--backend", "cuda", "--cuda-major", "11"],
+      "files": {
+        "rt/cuda12/manifest.json": "{\"runtime\": {\"platform\": {\"os\": \"linux\", \"arch\": \"x86_64\"}, \"backend\": {\"kind\": \"cuda\", \"cuda\": {\"toolkit_major\": 12}}}}",
+        "rt/nocuda/manifest.json": "{\"runtime\": {\"platform\": {\"os\": \"linux\", \"arch\": \"x86_64\"}, \"backend\": {\"kind\": \"cuda\"}}}"
+      },
+      "code": 1,
+      "stdout": "",
+      "stderr": "ValueError: expected exactly one native runtime for linux/x86_64/cuda; found none under rt\n"
+    },
+    {
+      "group": "failure",
+      "name": "wrong arch",
+      "args": ["--root", "rt", "--os", "linux", "--arch", "aarch64", "--backend", "cpu"],
+      "files": {
+        "rt/cpu/manifest.json": "{\"runtime\": {\"platform\": {\"os\": \"linux\", \"arch\": \"x86_64\"}, \"backend\": {\"kind\": \"cpu\"}}}"
+      },
+      "code": 1,
+      "stdout": "",
+      "stderr": "ValueError: expected exactly one native runtime for linux/aarch64/cpu; found none under rt\n"
+    },
+    {
+      "group": "failure",
+      "name": "missing root",
+      "args": ["--root", "missing", "--os", "linux", "--arch", "x86_64", "--backend", "cpu"],
+      "code": 1,
+      "stdout": "",
+      "stderr": "ValueError: expected exactly one native runtime for linux/x86_64/cpu; found none under missing\n"
+    },
+    {
+      "group": "failure",
+      "name": "manifest without runtime key",
+      "args": ["--root", "rt", "--os", "linux", "--arch", "x86_64", "--backend", "cpu"],
+      "files": {
+        "rt/cpu/manifest.json": "{\"schema\": 1}"
+      },
+      "code": 1,
+      "stdout": "",
+      "stderr": "KeyError: 'runtime'\n"
+    },
+    {
+      "group": "failure",
+      "name": "malformed manifest",
+      "args": ["--root", "rt", "--os", "linux", "--arch", "x86_64", "--backend", "cpu"],
+      "files": {
+        "rt/cpu/manifest.json": "{\"runtime\": \n}"
+      },
+      "code": 1,
+      "stdout": "",
+      "stderr": "json.decoder.JSONDecodeError: Expecting value: line 2 column 1 (char 13)\n"
+    },
+    {
+      "group": "failure",
+      "name": "cuda block that is not an object",
+      "args": ["--root", "rt", "--os", "linux", "--arch", "x86_64", "--backend", "cuda", "--cuda-major", "12"],
+      "files": {
+        "rt/cuda/manifest.json": "{\"runtime\": {\"platform\": {\"os\": \"linux\", \"arch\": \"x86_64\"}, \"backend\": {\"kind\": \"cuda\", \"cuda\": [12]}}}"
+      },
+      "code": 1,
+      "stdout": "",
+      "stderr": "AttributeError: 'list' object has no attribute 'get'\n"
+    },
+    {
+      "group": "usage",
+      "name": "no arguments",
+      "args": [],
+      "code": 2,
+      "stdout": "",
+      "stderr": "usage: select-native-runtime.py [-h] --root ROOT --os OS --arch ARCH\n                                --backend BACKEND [--cuda-major CUDA_MAJOR]\nselect-native-runtime.py: error: the following arguments are required: --root, --os, --arch, --backend\n"
+    },
+    {
+      "group": "usage",
+      "name": "missing option value",
+      "args": ["--root", "rt", "--os", "linux", "--arch", "x86_64", "--backend"],
+      "code": 2,
+      "stdout": "",
+      "stderr": "usage: select-native-runtime.py [-h] --root ROOT --os OS --arch ARCH\n                                --backend BACKEND [--cuda-major CUDA_MAJOR]\nselect-native-runtime.py: error: argument --backend: expected one argument\n"
+    },
+    {
+      "group": "usage",
+      "name": "unrecognized arguments after separator",
+      "args": ["--root", "rt", "--os", "linux", "--arch", "x86_64", "--backend", "cpu", "extra", "--", "x"],
+      "code": 2,
+      "stdout": "",
+      "stderr": "usage: select-native-runtime.py [-h] --root ROOT --os OS --arch ARCH\n                                --backend BACKEND [--cuda-major CUDA_MAJOR]\nselect-native-runtime.py: error: unrecognized arguments: extra -- x\n"
+    },
+    {
+      "group": "usage",
+      "name": "help with explicit argument",
+      "args": ["--help=x"],
+      "code": 2,
+      "stdout": "",
+      "stderr": "usage: select-native-runtime.py [-h] --root ROOT --os OS --arch ARCH\n                                --backend BACKEND [--cuda-major CUDA_MAJOR]\nselect-native-runtime.py: error: argument -h/--help: ignored explicit argument 'x'\n"
+    }
+  ]
+}

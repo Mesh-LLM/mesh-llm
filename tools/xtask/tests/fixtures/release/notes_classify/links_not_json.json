@@ -1,0 +1,31 @@
+{
+  "args": [
+    "--body",
+    "body.md",
+    "--range",
+    "v1.0.0..v1.0.1",
+    "--version",
+    "1.0.0",
+    "--date",
+    "2026-01-01",
+    "--out",
+    "plan.json",
+    "--links",
+    "links.json"
+  ],
+  "code": 1,
+  "gh_argv": [],
+  "git_argv": [
+    [
+      "cwd={root}",
+      "log",
+      "--format=%s%x1f%b%x1e",
+      "v1.0.0..v1.0.1"
+    ]
+  ],
+  "outputs": {
+    "plan.json": null
+  },
+  "stderr": "Traceback (most recent call last):\njson.decoder.JSONDecodeError: Expecting value: line 2 column 1 (char 7)\n",
+  "stdout": ""
+}

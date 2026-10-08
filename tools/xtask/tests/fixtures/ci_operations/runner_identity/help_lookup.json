@@ -1,0 +1,5 @@
+{
+  "code": 0,
+  "stderr": "",
+  "stdout": "usage: runner-image-identity.py lookup [-h]\n                                       [--field {reference,native_toolchain_epoch,receipt,provenance}]\n                                       role\n\npositional arguments:\n  role\n\noptions:\n  -h, --help            show this help message and exit\n  --field {reference,native_toolchain_epoch,receipt,provenance}\n"
+}

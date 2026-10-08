@@ -1,0 +1,15 @@
+{
+  "args": [
+    "--input",
+    "bad_utf8.json",
+    "--json-out",
+    "out/nested/metrics.json",
+    "--raw-out",
+    "raw/runs.json"
+  ],
+  "code": 2,
+  "output": null,
+  "raw_output": null,
+  "stderr": "ci metrics error: 'utf-8' codec can't decode byte 0xff in position 19: invalid start byte\n",
+  "stdout": ""
+}

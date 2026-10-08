@@ -1,0 +1,26 @@
+//! `ci validate-lane` parity with `scripts/validate-ci-lane-results.py`,
+//! plus the parsed lane/entrypoint workflow graph contracts it enforces when
+//! given `--workflow`.
+//!
+//! Plans come from the frozen planner goldens under `fixtures/ci_plan`, and
+//! the expected planned jobs per case and lane come from
+//! `fixtures/ci_graph/lane_jobs.json`, which jq derived from the legacy
+//! script's rules. Workflow mutations run on temporary copies of the checked-in
+//! workflows.
+
+#[path = "migration_ci_graph/support.rs"]
+mod support;
+
+#[path = "migration_ci_graph/graph_failures.rs"]
+mod graph_failures;
+#[path = "migration_ci_graph/happy.rs"]
+mod happy;
+#[path = "migration_ci_graph/result_failures.rs"]
+mod result_failures;
+
+#[path = "migration_ci_graph/native_check_authority.rs"]
+mod native_check_authority;
+#[path = "../src/process/mod.rs"]
+pub mod process;
+#[path = "migration_ci_graph/workflow_uniqueness.rs"]
+mod workflow_uniqueness;

@@ -1,3 +1,4 @@
+use crate::ci_validation::{check_ci_script_workspace_members, check_docs_and_workflow_invariants};
 use crate::command::{
     DynResult, display_relative, ensure_eq, ensure_eq_option, ensure_status, manifest_section,
     package_section_uses_workspace_version, run_command, sourced_script_stdout,
@@ -8,37 +9,32 @@ use crate::installer_fixtures::{
 };
 use crate::publish_consistency::check_publish_crates_consistency;
 use crate::repo_consistency::{
-    check_attestation_default_version, host_supports_shell_parity_checks, repo_root,
-    workspace_metadata,
-};
-use crate::workflow_checks::{
-    check_ci_script_workspace_members, check_docs_and_workflow_invariants,
+    check_attestation_default_version, host_supports_shell_parity_checks, workspace_metadata,
 };
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::Path;
 use std::process::Command;
 
-pub(crate) fn check_release_targets() -> DynResult<()> {
-    let repo_root = repo_root()?;
-    let fixture_rows = fixture_rows(&repo_root)?;
+pub(crate) fn check_release_targets(repo_root: &Path) -> DynResult<()> {
+    let fixture_rows = fixture_rows(repo_root)?;
     let fixture_version = fixture_release_tag(&fixture_rows)?;
 
     if host_supports_shell_parity_checks() {
-        check_installer_outcomes(&repo_root, &fixture_rows)?;
-        check_package_release_assets(&repo_root, &fixture_rows, &fixture_version)?;
+        check_installer_outcomes(repo_root, &fixture_rows)?;
+        check_package_release_assets(repo_root, &fixture_rows, &fixture_version)?;
     } else {
         println!(
             "note: skipping bash-dependent release parity checks on native Windows; run `just check-release` on macOS/Linux for install.sh and package-release.sh parity"
         );
     }
     check_windows_name_invariance(&fixture_rows, &fixture_version)?;
-    check_ci_script_workspace_members(&repo_root)?;
-    check_workspace_package_versions(&repo_root)?;
-    check_workspace_internal_dependency_versions(&repo_root)?;
-    check_attestation_default_version(&repo_root)?;
-    check_publish_crates_consistency(&repo_root)?;
-    check_docs_and_workflow_invariants(&repo_root)?;
+    check_ci_script_workspace_members(repo_root)?;
+    check_workspace_package_versions(repo_root)?;
+    check_workspace_internal_dependency_versions(repo_root)?;
+    check_attestation_default_version(repo_root)?;
+    check_publish_crates_consistency(repo_root)?;
+    check_docs_and_workflow_invariants(repo_root)?;
 
     println!("repo consistency checks passed: release-targets");
     Ok(())

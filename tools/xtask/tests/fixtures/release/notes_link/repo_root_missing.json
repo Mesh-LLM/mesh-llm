@@ -1,0 +1,25 @@
+{
+  "args": [
+    "--body",
+    "body.md",
+    "--range",
+    "v1.0.0..v1.0.1",
+    "--repo",
+    "o/r",
+    "--out-body",
+    "body.linked.md",
+    "--out-links",
+    "links.json",
+    "--repo-root",
+    "missing-dir"
+  ],
+  "code": 1,
+  "gh_argv": [],
+  "git_argv": [],
+  "outputs": {
+    "body.linked.md": null,
+    "links.json": null
+  },
+  "stderr": "Traceback (most recent call last):\nFileNotFoundError: [Errno 2] No such file or directory: 'missing-dir'\n",
+  "stdout": ""
+}

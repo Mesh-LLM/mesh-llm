@@ -1,0 +1,5 @@
+{
+  "code": 1,
+  "stderr": "runner image identity: public-cpu: image must be an immutable runner digest\n",
+  "stdout": ""
+}

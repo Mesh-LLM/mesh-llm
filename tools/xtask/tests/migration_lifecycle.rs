@@ -1,0 +1,438 @@
+#![cfg(unix)]
+
+#[path = "migration_lifecycle/two_node_split/mod.rs"]
+mod two_node_split;
+
+#[path = "migration_lifecycle/ci_batch_filter/mod.rs"]
+mod ci_batch_filter;
+#[path = "migration_lifecycle/crates_recovery.rs"]
+mod crates_recovery;
+#[path = "migration_lifecycle/macos_deployment_target.rs"]
+mod macos_deployment_target;
+#[path = "migration_lifecycle/package_release_adapter.rs"]
+mod package_release_adapter;
+#[path = "migration_lifecycle/pr_canary_catalog.rs"]
+mod pr_canary_catalog;
+#[path = "migration_lifecycle/precheckout_docker_audit.rs"]
+mod precheckout_docker_audit;
+#[path = "migration_lifecycle/registry_canary_steps.rs"]
+mod registry_canary_steps;
+#[path = "migration_lifecycle/replay_repair_step.rs"]
+mod replay_repair_step;
+#[path = "migration_lifecycle/replay_runner_guard.rs"]
+mod replay_runner_guard;
+#[path = "migration_lifecycle/runtime_events_gate/mod.rs"]
+mod runtime_events_gate;
+
+#[path = "migration_lifecycle/just_automation_argv.rs"]
+mod just_automation_argv;
+
+#[path = "../src/automation/command_interrupt/mod.rs"]
+pub(crate) mod command_interrupt;
+
+#[path = "../src/automation"]
+mod automation {
+    pub(crate) mod client_readiness;
+    pub(crate) use crate::command_interrupt;
+    pub(crate) mod daemon_readiness;
+    mod private_state;
+    pub(crate) mod retained_session;
+    #[cfg(test)]
+    #[path = "../../tests/migration_lifecycle/shared_owners.rs"]
+    pub(crate) mod shared_owner_tests;
+}
+#[path = "migration_lifecycle/blocked_signals.rs"]
+mod blocked_signals;
+#[path = "migration_lifecycle/cleanup_owner.rs"]
+mod cleanup_owner;
+#[cfg(unix)]
+#[path = "migration_lifecycle/cli.rs"]
+mod cli;
+#[path = "migration_lifecycle/daemon/mod.rs"]
+mod daemon;
+#[path = "migration_lifecycle/daemon/header_bound.rs"]
+mod daemon_header_bound;
+#[path = "migration_lifecycle/interruption.rs"]
+mod interruption;
+#[path = "migration_lifecycle/observation.rs"]
+mod observation;
+#[path = "../src/process/mod.rs"]
+pub mod process;
+#[path = "migration_lifecycle/protocol.rs"]
+mod protocol;
+#[path = "migration_lifecycle/pty.rs"]
+mod pty;
+#[path = "migration_lifecycle/runner_cleanup.rs"]
+mod runner_cleanup;
+#[path = "migration_lifecycle/runner_cleanup_contracts.rs"]
+mod runner_cleanup_contracts;
+#[path = "migration_lifecycle/selected_ref.rs"]
+mod selected_ref;
+#[path = "migration_lifecycle/support.rs"]
+mod support;
+
+#[path = "migration_lifecycle/agent_client_config_cli.rs"]
+mod agent_client_config_cli;
+#[path = "migration_lifecycle/agent_fixture_evidence_cli.rs"]
+mod agent_fixture_evidence_cli;
+#[path = "migration_lifecycle/agent_fixture_inputs_cli.rs"]
+mod agent_fixture_inputs_cli;
+#[path = "migration_lifecycle/automation_producer_admission.rs"]
+mod automation_producer_admission;
+#[path = "migration_lifecycle/automation_restore_admission.rs"]
+mod automation_restore_admission;
+#[path = "migration_lifecycle/battery_cache_cli.rs"]
+mod battery_cache_cli;
+#[path = "migration_lifecycle/battery_timeout_cli.rs"]
+mod battery_timeout_cli;
+#[path = "migration_lifecycle/cache_family_report_cli.rs"]
+mod cache_family_report_cli;
+#[path = "migration_lifecycle/canary_controller_battery.rs"]
+mod canary_controller_battery;
+#[path = "migration_lifecycle/canary_timeout_cli.rs"]
+mod canary_timeout_cli;
+#[path = "migration_lifecycle/family_battery_policy_cli.rs"]
+mod family_battery_policy_cli;
+#[path = "migration_lifecycle/family_model_identity_cli.rs"]
+mod family_model_identity_cli;
+#[path = "migration_lifecycle/frozen_selector_integration.rs"]
+mod frozen_selector_integration;
+#[path = "migration_lifecycle/required_sdk_environment_admission.rs"]
+mod required_sdk_environment_admission;
+#[path = "migration_lifecycle/workload_provenance_cli.rs"]
+mod workload_provenance_cli;
+
+#[path = "migration_lifecycle/binary_stage_readiness_cli.rs"]
+mod binary_stage_readiness_cli;
+#[path = "migration_lifecycle/canary_source_recovery.rs"]
+mod canary_source_recovery;
+#[path = "migration_lifecycle/runtime_release_manifest_wrapper.rs"]
+mod runtime_release_manifest_wrapper;
+#[path = "migration_lifecycle/skippy_cache_smoke_config_cli.rs"]
+mod skippy_cache_smoke_config_cli;
+#[path = "migration_lifecycle/skippy_ci_smoke_control_cli.rs"]
+mod skippy_ci_smoke_control_cli;
+#[path = "migration_lifecycle/skippy_cli_release.rs"]
+mod skippy_cli_release;
+#[path = "migration_lifecycle/workload_media_comparison_cli.rs"]
+mod workload_media_comparison_cli;
+#[path = "migration_lifecycle/workload_monolithic_cli.rs"]
+mod workload_monolithic_cli;
+#[path = "migration_lifecycle/workload_tts_cli.rs"]
+mod workload_tts_cli;
+
+#[path = "migration_lifecycle/safetensors_workflow.rs"]
+mod safetensors_workflow;
+
+#[path = "migration_lifecycle/publish_dry_run.rs"]
+mod publish_dry_run;
+
+#[path = "migration_lifecycle/repair_timeout_adapter.rs"]
+mod repair_timeout_adapter;
+
+#[path = "migration_lifecycle/build_product/mod.rs"]
+mod build_product;
+
+#[path = "migration_lifecycle/sdk_json_consumer/mod.rs"]
+mod sdk_json_consumer;
+
+#[path = "migration_lifecycle/decisions_smoke.rs"]
+mod decisions_smoke;
+#[path = "migration_lifecycle/system_one_cases/mod.rs"]
+mod system_one_cases;
+
+#[path = "migration_lifecycle/repair_family_plan.rs"]
+mod repair_family_plan;
+
+#[path = "migration_lifecycle/local_repair_inspection.rs"]
+mod local_repair_inspection;
+
+#[path = "migration_lifecycle/package_input_admission.rs"]
+mod package_input_admission;
+
+#[path = "../src/ci_validation/lane_results/workflow_yaml.rs"]
+mod workflow_yaml;
+
+#[path = "migration_lifecycle/verification_source_cli.rs"]
+mod verification_source_cli;
+
+#[path = "migration_lifecycle/certification_producer_admission.rs"]
+mod certification_producer_admission;
+
+#[path = "migration_lifecycle/affected_crates_relocated_cli.rs"]
+mod affected_crates_relocated_cli;
+
+#[path = "migration_lifecycle/compute_changes_justfiles.rs"]
+mod compute_changes_justfiles;
+
+#[path = "migration_lifecycle/family_evidence_workflow.rs"]
+mod family_evidence_workflow;
+
+#[path = "migration_lifecycle/family_build_dispatch.rs"]
+mod family_build_dispatch;
+
+#[path = "migration_lifecycle/family_battery_no_python.rs"]
+mod family_battery_no_python;
+
+#[path = "migration_lifecycle/canary_mode_dispatch.rs"]
+mod canary_mode_dispatch;
+
+#[cfg(unix)]
+#[path = "migration_lifecycle/native_sdk_restore.rs"]
+mod native_sdk_restore;
+
+#[path = "migration_lifecycle/static_abi_sdk_prebuilt.rs"]
+mod static_abi_sdk_prebuilt;
+
+#[path = "migration_lifecycle/static_abi_dynamic_outputs.rs"]
+mod static_abi_dynamic_outputs;
+
+#[path = "migration_lifecycle/static_abi_ffi_boundary.rs"]
+mod static_abi_ffi_boundary;
+
+#[path = "migration_lifecycle/native_release_recipes.rs"]
+mod native_release_recipes;
+
+#[path = "migration_lifecycle/lld_shell_contract.rs"]
+mod lld_shell_contract;
+
+#[path = "migration_lifecycle/static_abi_build_policy.rs"]
+mod static_abi_build_policy;
+
+#[path = "migration_lifecycle/product_composition_adapter.rs"]
+mod product_composition_adapter;
+
+#[path = "migration_lifecycle/sccache_installer.rs"]
+mod sccache_installer;
+
+#[path = "migration_lifecycle/release_script.rs"]
+mod release_script;
+
+#[path = "migration_lifecycle/publication_diagnostics.rs"]
+mod publication_diagnostics;
+
+#[path = "migration_lifecycle/parity_download_owner.rs"]
+mod parity_download_owner;
+
+#[path = "migration_lifecycle/pr_sibling_cancellation.rs"]
+mod pr_sibling_cancellation;
+
+#[path = "migration_lifecycle/ui_package_contracts.rs"]
+mod ui_package_contracts;
+
+#[path = "migration_lifecycle/just_layout_contracts.rs"]
+mod just_layout_contracts;
+
+#[path = "migration_lifecycle/canary_agent_control.rs"]
+mod canary_agent_control;
+
+#[path = "migration_lifecycle/hf_xet_adapter.rs"]
+mod hf_xet_adapter;
+
+#[path = "migration_lifecycle/source_layout_action.rs"]
+mod source_layout_action;
+
+#[path = "migration_lifecycle/release_version_script.rs"]
+mod release_version_script;
+
+#[path = "migration_lifecycle/cuda_toolkit.rs"]
+mod cuda_toolkit;
+
+#[path = "migration_lifecycle/opencode_model_selection.rs"]
+mod opencode_model_selection;
+
+#[path = "migration_lifecycle/agent_surface_capture_bound.rs"]
+mod agent_surface_capture_bound;
+#[path = "migration_lifecycle/opencode_coding_fixture.rs"]
+mod opencode_coding_fixture;
+
+#[path = "migration_lifecycle/opencode_recording_proxy.rs"]
+mod opencode_recording_proxy;
+
+#[path = "migration_lifecycle/agent_live_coding_fixture.rs"]
+mod agent_live_coding_fixture;
+
+#[path = "migration_lifecycle/workload_lane_contract.rs"]
+mod workload_lane_contract;
+
+#[path = "migration_lifecycle/installer_unix/mod.rs"]
+mod installer_unix;
+
+#[cfg(unix)]
+#[path = "migration_lifecycle/event_benchmark_worker.rs"]
+mod event_benchmark_worker;
+
+#[path = "migration_lifecycle/canary_workflow_contract.rs"]
+mod canary_workflow_contract;
+#[path = "migration_lifecycle/family_terminal_outcomes.rs"]
+mod family_terminal_outcomes;
+#[path = "migration_lifecycle/repair_candidate_gates.rs"]
+mod repair_candidate_gates;
+
+#[path = "migration_lifecycle/runtime_package_producer.rs"]
+mod runtime_package_producer;
+
+#[path = "migration_lifecycle/hf_projector_resolver_input.rs"]
+mod hf_projector_resolver_input;
+
+#[path = "migration_lifecycle/competitive_materialization.rs"]
+mod competitive_materialization;
+
+#[path = "migration_lifecycle/competitive_cell_native.rs"]
+mod competitive_cell_native;
+
+#[path = "migration_lifecycle/competitive_run_native.rs"]
+mod competitive_run_native;
+
+#[path = "migration_lifecycle/adaptive_cell_cli.rs"]
+mod adaptive_cell_cli;
+
+#[path = "migration_lifecycle/adaptive_full_matrix_cli.rs"]
+mod adaptive_full_matrix_cli;
+
+#[path = "migration_lifecycle/mixed_full_matrix_cli.rs"]
+mod mixed_full_matrix_cli;
+
+#[path = "migration_lifecycle/manual_smoke_cli.rs"]
+mod manual_smoke_cli;
+
+#[cfg(unix)]
+#[path = "migration_lifecycle/kv_restart_full_cli.rs"]
+mod kv_restart_full_cli;
+
+#[path = "migration_lifecycle/scheduler_fixture_cli.rs"]
+mod scheduler_fixture_cli;
+
+#[path = "migration_lifecycle/cache_family_cli.rs"]
+mod cache_family_cli;
+
+#[path = "migration_lifecycle/cache_family_plan_cli.rs"]
+mod cache_family_plan_cli;
+
+#[path = "migration_lifecycle/cache_family_measure_cli.rs"]
+mod cache_family_measure_cli;
+
+#[path = "migration_lifecycle/lightning_compatibility_cli.rs"]
+mod lightning_compatibility_cli;
+
+#[path = "migration_lifecycle/cache_family_cell_cli.rs"]
+mod cache_family_cell_cli;
+
+#[path = "migration_lifecycle/hf_certification.rs"]
+mod hf_certification;
+
+#[cfg(unix)]
+#[path = "migration_lifecycle/hf_mtp_compose.rs"]
+mod hf_mtp_compose;
+
+#[path = "migration_lifecycle/guardrail_corpus_cli.rs"]
+mod guardrail_corpus_cli;
+
+#[cfg(unix)]
+#[path = "migration_lifecycle/guardrail_corpus_curl_cli.rs"]
+mod guardrail_corpus_curl_cli;
+
+#[cfg(unix)]
+#[path = "migration_lifecycle/suffix_proposer.rs"]
+mod suffix_proposer;
+
+#[path = "migration_lifecycle/cache_matrix_cli.rs"]
+mod cache_matrix_cli;
+
+#[path = "migration_lifecycle/hf_acquisition_cli.rs"]
+mod hf_acquisition_cli;
+
+#[cfg(target_os = "linux")]
+#[path = "migration_lifecycle/hf_bootstrap_cli.rs"]
+mod hf_bootstrap_cli;
+
+#[cfg(target_os = "linux")]
+#[path = "migration_lifecycle/hf_job_worker_cli.rs"]
+mod hf_job_worker_cli;
+
+#[path = "migration_lifecycle/hf_raw_conversion.rs"]
+mod hf_raw_conversion;
+
+#[cfg(unix)]
+#[path = "migration_lifecycle/radix_full_cli.rs"]
+mod radix_full_cli;
+
+#[path = "migration_lifecycle/canary_repair_source_contracts.rs"]
+mod canary_repair_source_contracts;
+
+#[path = "migration_lifecycle/canary_preamble_inert_goose.rs"]
+mod canary_preamble_inert_goose;
+
+#[path = "migration_lifecycle/canary_full_gates/mod.rs"]
+mod canary_full_gates;
+
+#[path = "migration_lifecycle/endpoint_model_discovery.rs"]
+mod endpoint_model_discovery;
+
+#[path = "migration_lifecycle/wan_observation.rs"]
+mod wan_observation;
+
+#[path = "migration_lifecycle/canary_failure_publisher.rs"]
+mod canary_failure_publisher;
+
+#[path = "migration_lifecycle/remote_handoff_summary.rs"]
+mod remote_handoff_summary;
+
+#[cfg(unix)]
+#[path = "migration_lifecycle/parity_local_plan_cli.rs"]
+mod parity_local_plan_cli;
+
+#[path = "migration_lifecycle/competitive_inputs_local_cli.rs"]
+mod competitive_inputs_local_cli;
+
+#[path = "migration_lifecycle/competitive_prefetch.rs"]
+mod competitive_prefetch;
+
+#[path = "migration_lifecycle/hf_generic_conversion.rs"]
+mod hf_generic_conversion;
+
+#[cfg(target_os = "linux")]
+#[path = "migration_lifecycle/hf_mtp_default_cli.rs"]
+mod hf_mtp_default_cli;
+#[cfg(target_os = "linux")]
+#[path = "migration_lifecycle/hf_mtp_default_fixture.rs"]
+mod hf_mtp_default_fixture;
+
+#[cfg(target_os = "linux")]
+#[path = "migration_lifecycle/hf_generic_operator.rs"]
+mod hf_generic_operator;
+
+#[cfg(target_os = "linux")]
+#[path = "migration_lifecycle/hf_generic_jobs.rs"]
+mod hf_generic_jobs;
+
+#[cfg(target_os = "linux")]
+#[path = "lifecycle/hf_artifact_workspace.rs"]
+mod hf_artifact_workspace;
+
+#[cfg(target_os = "linux")]
+#[path = "migration_lifecycle/hf_mtp_composition_jobs.rs"]
+mod hf_mtp_composition_jobs;
+
+#[path = "migration_lifecycle/cache_family_matrix_cli.rs"]
+mod cache_family_matrix_cli;
+
+#[path = "migration_lifecycle/cache_family_full_matrix_cli.rs"]
+mod cache_family_full_matrix_cli;
+
+#[path = "migration_lifecycle/cache_family_artifact_cli.rs"]
+mod cache_family_artifact_cli;
+
+#[cfg(unix)]
+#[path = "migration_lifecycle/cache_family_artifact_matrix_cli.rs"]
+mod cache_family_artifact_matrix_cli;
+
+#[path = "migration_lifecycle/cache_family_moe_cli.rs"]
+mod cache_family_moe_cli;
+
+#[cfg(unix)]
+#[path = "migration_lifecycle/mtp_cli.rs"]
+mod mtp_cli;
+
+#[path = "migration_lifecycle/wan_stage_deployment.rs"]
+mod wan_stage_deployment;

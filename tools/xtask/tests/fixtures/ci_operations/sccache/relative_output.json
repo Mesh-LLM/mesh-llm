@@ -1,0 +1,7 @@
+{
+  "code": 0,
+  "github_output": null,
+  "stats": "{\n  \"assessment\": {\n    \"cache_requests\": 10,\n    \"classification\": \"opportunistic\",\n    \"expectation\": \"opportunistic\",\n    \"hit_rate\": 0.6,\n    \"minimum_hit_rate\": 0.0,\n    \"passed\": true\n  },\n  \"schema\": \"mesh-llm.sccache-stats\",\n  \"schema_version\": 2,\n  \"stats\": {\n    \"cache_errors\": {\n      \"counts\": {\n        \"total\": 0\n      }\n    },\n    \"cache_hits\": {\n      \"counts\": {\n        \"total\": 6\n      }\n    },\n    \"cache_misses\": {\n      \"counts\": {\n        \"total\": 4\n      }\n    },\n    \"cache_read_errors\": 0,\n    \"cache_write_errors\": 0,\n    \"cache_writes\": 3,\n    \"compilations\": 4,\n    \"compile_requests\": 12,\n    \"requests_executed\": 10\n  }\n}\n",
+  "stderr": "",
+  "stdout": "sccache evidence: requests=12 executed=10 hits=6 misses=4 writes=3\nsccache assessment: expectation=opportunistic classification=opportunistic hit_rate=0.6\n"
+}

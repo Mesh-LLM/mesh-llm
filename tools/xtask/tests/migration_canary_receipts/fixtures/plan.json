@@ -1,0 +1,10 @@
+{
+  "required_certification_lanes": ["chain", "single-step", "state-handoff"],
+  "selected_models": [
+    {"family": "dense", "class": "causal_generation", "certification_lanes": ["chain", "single-step", "state-handoff"], "mmproj_artifact": null},
+    {"family": "hybrid", "class": "causal_generation", "certification_lanes": ["chain", "single-step", "state-handoff"], "mmproj_artifact": null}
+  ],
+  "shards": [{"shard_index": 0, "families": ["dense"]}, {"shard_index": 1, "families": ["hybrid"]}],
+  "github_matrix": {"include": [{"shard_index": 1, "families": "hybrid"}, {"shard_index": 0, "families": "dense"}]},
+  "historical_source_field": "retain source bytes, do not regenerate"
+}

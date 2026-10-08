@@ -1,0 +1,9 @@
+{
+  "args": [],
+  "code": 2,
+  "gh_argv": [],
+  "git_argv": [],
+  "outputs": {},
+  "stderr": "usage: select-release-notes-base.py <target-tag>\n",
+  "stdout": ""
+}
