@@ -625,9 +625,19 @@ workload arguments remain unchanged. The aggregate Laya allowance does not
 create a separate internal acquisition deadline.
 
 The five normal PR/main authority boundaries and all existing audit and package
-resolver immutable references remain unchanged. These source branches still
-require hosted validation, including skipped local actions absent from a legacy
-checkout; local source review does not establish that hosted behavior.
+resolver immutable references remain unchanged. Hosted two-source diagnostic
+[37725709469](https://github.com/Mesh-LLM/mesh-llm/actions/runs/37725709469)
+passed legacy `d18311f1` and native `db506f7f` contract execution, including
+skipped local actions absent from the legacy checkout. Those results are
+separate from normal five-lane and product qualification.
+
+Windows product readiness waits on the Bash-owned launcher, which preserves
+the native child's exit status. The native PID is used for CTRL_BREAK delivery
+and forced cleanup, not a Python `os.kill(pid, 0)` liveness probe. Signal-delivery
+errors and nonzero child exits fail the smoke; its 15-second graceful-shutdown
+window remains unchanged. Rust behavior fixtures cover clean exit, nonzero
+exit, timeout, and signal-delivery failure; actual Windows product checks
+provide the platform evidence.
 
 ## Slice catalog
 

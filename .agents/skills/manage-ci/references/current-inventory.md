@@ -446,8 +446,16 @@ runner-contract is 45 minutes; accelerator Laya jobs have a 100-minute floor
 while preserving larger caller limits, with aggregate native restore/read work
 bounded to 70 minutes. These budget changes preserve authority, providers,
 cache policy, workload arguments and all existing immutable audit/resolver references.
-Hosted old/new-source compatibility remains unverified until its diagnostic
-runs finish; this accounting adds no model or SDK qualification claim.
+Hosted two-source diagnostic
+[37725709469](https://github.com/Mesh-LLM/mesh-llm/actions/runs/37725709469)
+passed legacy `d18311f1` and native `db506f7f` contracts; this adds no normal
+five-lane, model or SDK qualification claim.
+
+Windows product readiness observes the owning launcher and its native child
+exit status, retaining the 15-second graceful-shutdown window. CTRL_BREAK
+delivery errors remain visible and fail the smoke. Clean/nonzero exits,
+timeout cleanup and failed signal delivery have Rust behavior fixtures;
+Windows product runs provide actual platform evidence.
 
 All workflow calls use typed, bounded semantic inputs. Credential-bearing smoke
 workflows remain fixed to GitHub-hosted runners; the PR entrypoints pass no
