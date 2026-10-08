@@ -1,11 +1,13 @@
 use anyhow::{Context, Result};
+use std::collections::BTreeSet;
 use std::io;
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 
+use super::platform_probe::is_blackwell_compute_capability;
 use crate::backend;
-use crate::release_target::ReleaseTarget;
+use crate::release_target::{CanonicalOs, ReleaseTarget};
 
 #[path = "release_integrity.rs"]
 mod release_integrity;
@@ -49,6 +51,52 @@ pub(super) struct ReleaseInfo {
 pub(super) enum ReleaseAssetPreference {
     StableFirst,
     VersionedFirst,
+}
+
+/// Which bundle an update tries first when a release splits its CUDA bundles
+/// by toolkit major.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum CudaBundleOrder {
+    Cuda12First,
+    Cuda13First,
+}
+
+/// Only Windows needs the host GPU here: a Windows update keeps the runtime
+/// packaged in the bundle, while other platforms resolve the runtime for the
+/// host again after updating. The Windows CUDA 12 bundle stops at SM 90, so a
+/// Blackwell GPU (SM 100 and later) needs the CUDA 13 bundle.
+fn cuda_bundle_order(target: ReleaseTarget, host_gpu_arches: &BTreeSet<String>) -> CudaBundleOrder {
+    if target.os() == CanonicalOs::Windows
+        && host_gpu_arches
+            .iter()
+            .any(|arch| is_blackwell_compute_capability(arch))
+    {
+        CudaBundleOrder::Cuda13First
+    } else {
+        CudaBundleOrder::Cuda12First
+    }
+}
+
+/// Probes the host GPU only for a Windows CUDA bundle, the one case where the
+/// answer can change the choice.
+pub(super) fn host_cuda_bundle_order(target: ReleaseTarget) -> CudaBundleOrder {
+    if target.os() != CanonicalOs::Windows || target.stable_cuda_versioned_names().is_empty() {
+        return CudaBundleOrder::Cuda12First;
+    }
+    let gpu_arches = crate::native_runtime_install::host_runtime_profile()
+        .cuda
+        .map(|cuda| cuda.gpu_arches)
+        .unwrap_or_default();
+    cuda_bundle_order(target, &gpu_arches)
+}
+
+fn cuda_bundle_names(target: ReleaseTarget, cuda_order: CudaBundleOrder) -> Vec<String> {
+    // Listed as CUDA 12, then CUDA 13.
+    let mut names = target.stable_cuda_versioned_names();
+    if cuda_order == CudaBundleOrder::Cuda13First {
+        names.reverse();
+    }
+    names
 }
 
 pub(super) fn platform_has_release_assets() -> bool {
@@ -138,19 +186,20 @@ pub(super) fn release_asset_candidates(
     target: ReleaseTarget,
     release_tag: &str,
     preference: ReleaseAssetPreference,
+    cuda_order: CudaBundleOrder,
 ) -> Vec<String> {
     let mut candidates = Vec::new();
     match preference {
         ReleaseAssetPreference::StableFirst => {
             push_release_asset_candidate(&mut candidates, target.stable_asset_name());
-            for name in target.stable_cuda_versioned_names() {
+            for name in cuda_bundle_names(target, cuda_order) {
                 push_release_asset_candidate(&mut candidates, Some(name));
             }
             push_release_asset_candidate(&mut candidates, target.versioned_asset_name(release_tag));
         }
         ReleaseAssetPreference::VersionedFirst => {
             push_release_asset_candidate(&mut candidates, target.versioned_asset_name(release_tag));
-            for name in target.stable_cuda_versioned_names() {
+            for name in cuda_bundle_names(target, cuda_order) {
                 push_release_asset_candidate(&mut candidates, Some(name));
             }
             push_release_asset_candidate(&mut candidates, target.stable_asset_name());
@@ -163,8 +212,9 @@ pub(super) fn resolve_release_asset_name(
     release: &ReleaseInfo,
     target: ReleaseTarget,
     preference: ReleaseAssetPreference,
+    cuda_order: CudaBundleOrder,
 ) -> Option<String> {
-    release_asset_candidates(target, &release.tag, preference)
+    release_asset_candidates(target, &release.tag, preference, cuda_order)
         .into_iter()
         .find(|asset_name| {
             release
@@ -179,7 +229,13 @@ pub(super) fn release_has_any_platform_asset(release: &ReleaseInfo, os: &str, ar
         ReleaseTarget::from_raw(os, arch, flavor)
             .ok()
             .and_then(|target| {
-                resolve_release_asset_name(release, target, ReleaseAssetPreference::StableFirst)
+                // Presence only: the CUDA bundle order cannot change the answer.
+                resolve_release_asset_name(
+                    release,
+                    target,
+                    ReleaseAssetPreference::StableFirst,
+                    CudaBundleOrder::Cuda12First,
+                )
             })
             .is_some()
     })
@@ -1449,6 +1505,7 @@ mod tests {
                 &release,
                 ReleaseTarget::from_raw("linux", "arm64", backend::BinaryFlavor::Cpu).unwrap(),
                 ReleaseAssetPreference::StableFirst,
+                CudaBundleOrder::Cuda12First,
             ),
             Some("mesh-llm-aarch64-unknown-linux-gnu.tar.gz".to_string())
         );
@@ -1469,15 +1526,16 @@ mod tests {
                 &release,
                 ReleaseTarget::from_raw("linux", "aarch64", backend::BinaryFlavor::Cpu).unwrap(),
                 ReleaseAssetPreference::StableFirst,
+                CudaBundleOrder::Cuda12First,
             ),
             Some("mesh-llm-v0.60.0-aarch64-unknown-linux-gnu.tar.gz".to_string())
         );
     }
 
-    /// Windows CUDA archives are split by toolkit major like the Linux ones;
-    /// the update path keeps resolving to the CUDA 12 archive.
+    /// A Windows update keeps the runtime packaged in the bundle, and the CUDA
+    /// 12 bundle stops at SM 90, so a Blackwell host updates to CUDA 13.
     #[test]
-    fn test_resolve_release_asset_name_picks_cuda12_for_split_windows_cuda_assets() {
+    fn test_resolve_release_asset_name_follows_the_gpu_for_split_windows_cuda_assets() {
         let release = ReleaseInfo {
             tag: "v0.79.0".to_string(),
             version: "0.79.0".to_string(),
@@ -1491,13 +1549,40 @@ mod tests {
         let target =
             ReleaseTarget::from_raw("windows", "x86_64", backend::BinaryFlavor::Cuda).unwrap();
 
-        for preference in [
-            ReleaseAssetPreference::StableFirst,
-            ReleaseAssetPreference::VersionedFirst,
+        for (gpu_arches, expected) in [
+            (&["120"][..], "mesh-llm-x86_64-pc-windows-msvc-cuda-13.zip"),
+            (
+                &["86", "120"][..],
+                "mesh-llm-x86_64-pc-windows-msvc-cuda-13.zip",
+            ),
+            (&["89"][..], "mesh-llm-x86_64-pc-windows-msvc-cuda-12.zip"),
+            (&[][..], "mesh-llm-x86_64-pc-windows-msvc-cuda-12.zip"),
         ] {
+            let gpu_arches = gpu_arches.iter().map(|arch| arch.to_string()).collect();
+            let cuda_order = cuda_bundle_order(target, &gpu_arches);
+            for preference in [
+                ReleaseAssetPreference::StableFirst,
+                ReleaseAssetPreference::VersionedFirst,
+            ] {
+                assert_eq!(
+                    resolve_release_asset_name(&release, target, preference, cuda_order),
+                    Some(expected.to_string()),
+                    "{gpu_arches:?}"
+                );
+            }
+        }
+    }
+
+    /// Other platforms install the runtime for the host after updating, so the
+    /// GPU does not change which bundle they download.
+    #[test]
+    fn test_cuda_bundle_order_ignores_the_gpu_outside_windows() {
+        let gpu_arches = BTreeSet::from(["120".to_string()]);
+        for (os, arch) in [("linux", "x86_64"), ("linux", "aarch64")] {
+            let target = ReleaseTarget::from_raw(os, arch, backend::BinaryFlavor::Cuda).unwrap();
             assert_eq!(
-                resolve_release_asset_name(&release, target, preference),
-                Some("mesh-llm-x86_64-pc-windows-msvc-cuda-12.zip".to_string())
+                cuda_bundle_order(target, &gpu_arches),
+                CudaBundleOrder::Cuda12First
             );
         }
     }
@@ -1518,6 +1603,7 @@ mod tests {
                 &release,
                 ReleaseTarget::from_raw("linux", "aarch64", backend::BinaryFlavor::Cpu).unwrap(),
                 ReleaseAssetPreference::VersionedFirst,
+                CudaBundleOrder::Cuda12First,
             ),
             Some("mesh-llm-v0.60.0-aarch64-unknown-linux-gnu.tar.gz".to_string())
         );
@@ -1538,6 +1624,7 @@ mod tests {
                 &release,
                 ReleaseTarget::from_raw("linux", "arm64", backend::BinaryFlavor::Cpu).unwrap(),
                 ReleaseAssetPreference::VersionedFirst,
+                CudaBundleOrder::Cuda12First,
             ),
             Some("mesh-llm-aarch64-unknown-linux-gnu.tar.gz".to_string())
         );
