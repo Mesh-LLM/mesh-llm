@@ -99,7 +99,7 @@ fn actual_wan_functions_stop_acquisition_on_parse_failure() {
             let scratch = tempfile::tempdir().unwrap();
             let marker = scratch.path().join("acquisition");
             let just = scratch.path().join("just");
-            std::fs::write(&just, "#!/usr/bin/env bash\nset -euo pipefail\n[[ $1 == --justfile && $3 == skippy-package-reference && $# == 4 ]]\nexec \"$REAL_BUILDER\" parse-package-reference \"$4\"\n").unwrap();
+            std::fs::write(&just, "#!/usr/bin/env bash\nset -euo pipefail\n[[ $1 == --justfile ]]\ncase $3 in\n  skippy-package-reference) [[ $# == 4 ]]; exec \"$REAL_BUILDER\" parse-package-reference \"$4\" ;;\n  skippy-layer-package-cache) exit 1 ;;\n  skippy-layer-package-fetch) printf '%s\\n' \"$*\" > \"$MARKER\"; printf '{\"commit\":\"0123abc\",\"snapshot_path\":\"%s\"}\\n' \"$SCRATCH\" ;;\n  *) exit 64 ;;\nesac\n").unwrap();
             std::fs::set_permissions(&just, std::fs::Permissions::from_mode(0o755)).unwrap();
             let invoke = if host {
                 "MODEL_PACKAGE_REF=\"$REFERENCE\"; ensure_hf_package"
