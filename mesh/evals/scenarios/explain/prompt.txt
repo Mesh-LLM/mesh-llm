@@ -1,1 +1,0 @@
-Explain how a B-tree works and why databases use them instead of binary search trees. Include the key differences in terms of disk I/O, node fan-out, and cache behavior. Keep it under 500 words.

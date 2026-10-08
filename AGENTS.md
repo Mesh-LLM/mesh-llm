@@ -19,6 +19,8 @@ Root `Cargo.toml`, `Cargo.lock`, `.cargo/`, `just/`, CI, and cross-workspace too
 
 The canonical repo-local skills live under `.agents/skills/`; the selectable release-validation specialist is defined in `.agents/agents/release-validation.md`.
 
+Generate and check the public Skippy native API documentation through `cargo xtool automation native-generator contracts api-doc` and `cargo xtool automation native-generator contracts api-doc --check`; follow `skippy/AGENTS.md` for the owning native preparation and documentation paths.
+
 ## Building
 
 Always use `just`. Never build manually. Bare `just` (or `just build`) builds Skippy first, then MeshLLM. Use `just skippy` or `just mesh` for one product; `just release-build` builds both release products in the same order. The products share a workspace version and release tag but have distinct deliverables.
@@ -103,6 +105,20 @@ Run Cargo commands serially. Do not run multiple Cargo commands in parallel: thi
 - For broad refactors, fall back to `cargo check --workspace` (serially).
 - Follow the owning product's additional test and compatibility guidance.
 
+For new repository automation, follow the Rust ownership rule in
+`.agents/skills/manage-ci/SKILL.md` and spec section 7.5: do not write new
+Python tooling, including temporary, inline, or skill-local helpers. Reuse or
+extend typed `tools/xtask` commands and call them from thin Just recipes;
+`cargo xtool repo-consistency ci-crate-lists` is an existing command from the
+repository root. Do not move generic policy into shell, PowerShell, or
+JavaScript. Existing Python validation and workflow entrypoints below remain
+transitional until Rust or component-owned tests cover their shape and intent.
+Do not commit Python emulation or differential tests that invoke Python; delete
+each legacy implementation with its last caller switch and validate in normal
+CI. Preserve real consumed outputs and failure semantics. The SDK Python
+ecosystem candidates in `ci/automation-migration/python-exceptions.json` are
+conditional, not approved, until task 22 proves their isolation.
+
 ## Pre-Commit Checklist
 
 Before committing, run the local checks most likely to fail in CI for the files you touched. Do not rely on CI to catch basic formatting, compile, or stale UI build issues.
@@ -114,7 +130,7 @@ Run `just hooks-install` once per clone before your first commit; git cannot act
 Choose validation from the changed surface, not merely from the directory that contains the changed file. A non-Rust file under a Rust crate does not require Cargo validation only when it cannot affect Cargo metadata, build scripts, generated Rust, or the shipped binary. Treat Cargo and build configuration changes as Rust-impacting.
 
 - Rust change — format changed Rust files and run `cargo check -p <touched-crate>` plus `cargo clippy -p <touched-crate> --all-targets -- -D warnings`. Follow the owning product's additional validation rules.
-- Python-only change — pass every changed module explicitly to `python3 -m py_compile <changed-module.py>...` and run `python3 -m unittest <nearest-test-module>...` for the nearest relevant tests. Run the full `scripts/tests` suite only for shared script infrastructure, CI planning, or broad cross-script changes.
+- External Python SDK or research interface change — use the owning external component's declared interpreter, source pin and locked dependencies. The SDK component command is `"$SDK_PYTHON" -I -B "$MESH_PYTHON_SDK_SOURCE/sdk/tests/test_client.py"`; its mock FFI coverage is separate from the four genuine SDK clients and their preserved required compatibility or embedding-workload cadence. Set `MESH_PYTHON_SDK_SOURCE` to the admitted external checkout before local source contract gates. Binding generation belongs to that external SDK, with explicit Mesh source and existing UniFFI 0.32.0 generator inputs; native bridge staging requires an already built target library and has no consumer compiler fallback. Reader constructor fixtures use native `just agentic-trajectory-reader-contracts`. Generic repository policy and CI planning use `just ci-validate`, including `ci-automation-contracts` and the native `ci-legacy-contracts`; do not restore the retired generic Python unittest gate.
 - UI-only change — follow `mesh/AGENTS.md` and run `just build`.
 - CI workflow, planner fixture, or CI script change — run `just ci-validate` plus any additional checks required by the CI section below.
 - Documentation, non-build configuration, or non-CI shell-only change — run the targeted formatter, generator check, contract test, or syntax check for the changed surface.

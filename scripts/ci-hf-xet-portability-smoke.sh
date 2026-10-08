@@ -86,49 +86,8 @@ if [[ $download_succeeded != true ]]; then
   exit 0
 fi
 
-python3 - "$output_file" "$smoke_root" <<'PY'
-import json
-import os
-from pathlib import Path
-import sys
-
-output_path = Path(sys.argv[1])
-smoke_root = Path(sys.argv[2]).resolve()
-output = output_path.read_text(encoding="utf-8")
-
-# --log-format json emits lifecycle records before the command payload. Find
-# the payload by its stable path field instead of relying on line ordering.
-payload = None
-decoder = json.JSONDecoder()
-for index, character in enumerate(output):
-    if character != "{":
-        continue
-    try:
-        candidate, _ = decoder.raw_decode(output[index:])
-    except json.JSONDecodeError:
-        continue
-    if isinstance(candidate, dict) and isinstance(candidate.get("path"), str):
-        payload = candidate
-        break
-
-if payload is None:
-    raise SystemExit(f"download output did not contain a JSON path payload:\n{output}")
-
-downloaded = Path(payload["path"]).resolve()
-try:
-    downloaded.relative_to(smoke_root)
-except ValueError as error:
-    raise SystemExit(
-        f"download escaped the isolated smoke cache: {downloaded} (root {smoke_root})"
-    ) from error
-
-if not downloaded.is_file():
-    raise SystemExit(f"downloaded path is not a file: {downloaded}")
-
-size = downloaded.stat().st_size
-max_size = 64 * 1024 * 1024
-if not 0 < size <= max_size:
-    raise SystemExit(f"fixture size {size} is outside the 1..{max_size} byte bound")
-
-print(f"Xet portability smoke passed: {downloaded} ({size} bytes)")
-PY
+automation=(cargo xtool)
+if [[ -n "${MESH_LLM_AUTOMATION_BIN:-}" ]]; then
+  automation=("$MESH_LLM_AUTOMATION_BIN")
+fi
+"${automation[@]}" automation hf-xet-smoke "$output_file" "$smoke_root"

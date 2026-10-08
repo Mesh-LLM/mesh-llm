@@ -254,12 +254,14 @@ over its tokens, so:
 
 ### Convert a checkpoint
 
-The upstream converter supports the `laya-multilingual` checkpoint. From a
-prepared llama.cpp checkout (`just llama-prepare`):
+The pinned converter project in the external research checkout supports the
+`laya-multilingual` checkpoint. Set `MESH_RESEARCH_ROOT` to that admitted checkout:
 
 ```bash
+cd "${MESH_RESEARCH_ROOT:?}/model-converters"
+just prepare
 hf download convaiinnovations/laya-multilingual --local-dir /tmp/laya-multilingual
-python3 .deps/llama.cpp/convert_hf_to_gguf.py /tmp/laya-multilingual \
+uv run --locked --no-sync python convert_hf_to_gguf.py /tmp/laya-multilingual \
   --outtype f16 --outfile /tmp/laya-multilingual-F16.gguf
 ```
 
@@ -302,8 +304,8 @@ The upstream PyTorch golden fixtures are vendored in
 `llama-laya-cli` build, against them:
 
 ```bash
-python3 scripts/skippy-laya-parity.py --base-url http://127.0.0.1:9337 --model laya-multilingual-F16
-python3 scripts/skippy-laya-parity.py --cli path/to/llama-laya-cli --gguf /tmp/laya-multilingual-F16.gguf
+cargo xtool automation laya parity --base-url http://127.0.0.1:9337 --model laya-multilingual-F16
+cargo xtool automation laya parity --cli path/to/llama-laya-cli --gguf /tmp/laya-multilingual-F16.gguf
 ```
 
 Each fixture may differ from its golden by upstream's own CPU error on it plus

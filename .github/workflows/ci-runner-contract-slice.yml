@@ -87,7 +87,16 @@ jobs:
               workflow_scan_targets+=("$workflow")
             fi
           done
-          ! grep -nE '^[[:space:]]+pull_request_target:' "${workflow_scan_targets[@]}"
+          if grep -nE '^[[:space:]]+pull_request_target:' "${workflow_scan_targets[@]}"; then
+            echo "Forbidden PR authority trigger" >&2
+            exit 1
+          else
+            scan_status=$?
+            if [[ "$scan_status" != 1 ]]; then
+              echo "Unable to read required CI workflow sources" >&2
+              exit "$scan_status"
+            fi
+          fi
 
   trusted_runner_image:
     name: Trusted runner image (${{ matrix.architecture }})
@@ -119,8 +128,6 @@ jobs:
           test "$(uname -m)" = "$EXPECTED_MACHINE"
           verify-runner-image self-hosted
       - name: Prepare source-bound native cleanup before managed work
-        id: native_cleanup
-        if: ${{ hashFiles('tools/xtask/src/ci_operations/runner_cleanup/mod.rs') != '' && hashFiles('scripts/cleanup-self-hosted.py') == '' }}
         timeout-minutes: 20
         env:
           SOURCE_SHA: ${{ inputs.source_sha || github.sha }}
@@ -143,14 +150,9 @@ jobs:
             printf 'MESH_NATIVE_CLEANUP_SHA=%s\n' "$sha"
             printf 'MESH_NATIVE_CLEANUP_SOURCE=%s\n' "$SOURCE_SHA"
           } >> "$GITHUB_ENV"
-
       - name: Admit cleanup controller before managed work
         run: |
           set -euo pipefail
-          if [[ -f scripts/cleanup-self-hosted.py ]]; then
-            exit 0
-          fi
-          test -f tools/xtask/src/ci_operations/runner_cleanup/mod.rs
           test "$(GIT_MASTER=1 git rev-parse HEAD)" = "$MESH_NATIVE_CLEANUP_SOURCE"
           test "$(sha256sum "$MESH_LLM_AUTOMATION_BIN" | awk '{print $1}')" = "$MESH_NATIVE_CLEANUP_SHA"
           printf 'MESH_NATIVE_MANAGED_WORK_STARTED=true\n' >> "$GITHUB_ENV"
@@ -162,17 +164,10 @@ jobs:
         timeout-minutes: 5
         run: |
           set -euo pipefail
-          if [[ -f scripts/cleanup-self-hosted.py ]]; then
-            python3 scripts/cleanup-self-hosted.py --job runner-contract --evidence-uploaded false
-          elif [[ -f tools/xtask/src/ci_operations/runner_cleanup/mod.rs ]]; then
-            if [[ "${MESH_NATIVE_MANAGED_WORK_STARTED:-}" != true ]]; then
-              echo 'native cleanup refused: managed work never started; no owned workload cleanup attempted' >&2
-              exit 1
-            fi
-            test "$(GIT_MASTER=1 git rev-parse HEAD)" = "$MESH_NATIVE_CLEANUP_SOURCE"
-            test "$(sha256sum "$MESH_LLM_AUTOMATION_BIN" | awk '{print $1}')" = "$MESH_NATIVE_CLEANUP_SHA"
-            "$MESH_LLM_AUTOMATION_BIN" ci-ops runner-cleanup --job runner-contract --evidence-uploaded false
-          else
-            echo 'unsupported cleanup source' >&2
+          if [[ "${MESH_NATIVE_MANAGED_WORK_STARTED:-}" != true ]]; then
+            echo 'native cleanup refused: managed work never started; no owned workload cleanup attempted' >&2
             exit 1
           fi
+          test "$(GIT_MASTER=1 git rev-parse HEAD)" = "$MESH_NATIVE_CLEANUP_SOURCE"
+          test "$(sha256sum "$MESH_LLM_AUTOMATION_BIN" | awk '{print $1}')" = "$MESH_NATIVE_CLEANUP_SHA"
+          "$MESH_LLM_AUTOMATION_BIN" ci-ops runner-cleanup --job runner-contract --evidence-uploaded false

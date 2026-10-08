@@ -52,6 +52,69 @@ env:
   SCCACHE_MULTILEVEL_WRITE_ERROR_POLICY: ignore
 
 jobs:
+  authority_source:
+    name: Freeze protected automation source
+    needs: metadata
+    if: ${{ needs.metadata.result == 'success' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    env:
+      GIT_MASTER: '1'
+      MESH_LLM_POSTHOG_KEY: ''
+    outputs:
+      source_sha: ${{ steps.freeze.outputs.source_sha }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - name: Freeze the protected commit
+        id: freeze
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_sha="$(git rev-parse HEAD)"
+          [[ "$source_sha" =~ ^[0-9a-f]{40}$ ]] || exit 1
+          printf 'source_sha=%s\n' "$source_sha" >> "$GITHUB_OUTPUT"
+
+  authority_linux_x64:
+    name: Protected linux x64 automation
+    needs: authority_source
+    if: ${{ needs.authority_source.result == 'success' && (true) }}
+    permissions:
+      contents: read
+    uses: ./.github/workflows/protected-automation-artifact.yml
+    with:
+      platform: linux-x64
+      lane: linux
+      protected_source_sha: ${{ needs.authority_source.outputs.source_sha }}
+
+  authority_linux_arm64:
+    name: Protected linux arm64 automation
+    needs: authority_source
+    if: ${{ needs.authority_source.result == 'success' && (true) }}
+    permissions:
+      contents: read
+    uses: ./.github/workflows/protected-automation-artifact.yml
+    with:
+      platform: linux-arm64
+      lane: linux
+      protected_source_sha: ${{ needs.authority_source.outputs.source_sha }}
+
+  authority_macos_arm64:
+    name: Protected macos arm64 automation
+    needs: authority_source
+    if: ${{ needs.authority_source.result == 'success' && (true) }}
+    permissions:
+      contents: read
+    uses: ./.github/workflows/protected-automation-artifact.yml
+    with:
+      platform: macos-arm64
+      lane: macos
+      protected_source_sha: ${{ needs.authority_source.outputs.source_sha }}
+
   metadata:
     name: Resolve release metadata
     runs-on: ubuntu-24.04
@@ -205,7 +268,7 @@ jobs:
 
           release_notes_base="$(
             git tag --list 'v*' |
-              python3 scripts/select-release-notes-base.py "$RELEASE_TAG"
+              cargo xtool release notes-base "$RELEASE_TAG"
           )"
           if [[ -n "$release_notes_base" ]]; then
             echo "GitHub release notes will compare $release_notes_base...$RELEASE_TAG."
@@ -231,10 +294,12 @@ jobs:
           manual_use_depot: ${{ inputs.use_depot == true }}
 
   release_ui:
+    if: ${{ needs.authority_linux_x64.result == 'success' }}
     name: Prepare shared release console
-    needs: metadata
+    needs: [metadata, authority_linux_x64]
     uses: ./.github/workflows/ci-ui-artifact-slice.yml
     with:
+      authority_linux_x64: ${{ needs.authority_linux_x64.outputs.identity_json }}
       source_sha: ${{ needs.metadata.outputs.source_sha }}
       original_event_name: ${{ github.event_name }}
       force_hosted: true
@@ -340,6 +405,9 @@ jobs:
           attestation_public_key_file: ${{ runner.temp }}/mesh-release-attestation-public-key.json
           commit: ${{ needs.metadata.outputs.source_sha }}
 
+      - uses: ./.github/actions/upload-automation
+        with:
+          source_sha: ${{ needs.metadata.outputs.source_sha }}
       - name: Upload immutable host input
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
@@ -375,7 +443,9 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable 2026-08-20
+      - uses: ./.github/actions/restore-automation
+        with:
+          source_sha: ${{ needs.metadata.outputs.source_sha }}
       - name: Download immutable host input
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -444,8 +514,9 @@ jobs:
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
 
   build_native_sdk_runtime:
+    if: ${{ !cancelled() && needs.metadata.result == 'success' && needs.authority_source.result == 'success' }}
     name: Build native SDK runtime ${{ matrix.name }}
-    needs: metadata
+    needs: [metadata, authority_linux_x64, authority_linux_arm64, authority_macos_arm64, authority_source]
     permissions:
       contents: read
       packages: read
@@ -470,6 +541,9 @@ jobs:
             artifact_suffix: linux-aarch64-cpu
     uses: ./.github/workflows/native-sdk-artifact.yml
     with:
+      authority_linux_x64: ${{ needs.authority_linux_x64.outputs.identity_json }}
+      authority_linux_arm64: ${{ needs.authority_linux_arm64.outputs.identity_json }}
+      authority_macos_arm64: ${{ needs.authority_macos_arm64.outputs.identity_json }}
       original_event_name: ${{ github.event_name }}
       force_hosted: false
       backend: ${{ matrix.backend }}
@@ -703,6 +777,7 @@ jobs:
         with:
           pinned_epoch: ${{ matrix.toolchain_epoch }}
       - uses: ./.github/actions/configure-sccache-gha
+        if: ${{ success() || failure() || cancelled() }}
         with:
           allow_depot_remote_cache: ${{ needs.metadata.outputs.allow_depot_remote_cache }}
           allow_native_github_cache: "true"
@@ -744,7 +819,7 @@ jobs:
         timeout-minutes: 5
         env:
           EVIDENCE_UPLOADED: ${{ steps.upload_runtime.outcome == 'success' }}
-        run: python3 scripts/cleanup-self-hosted.py --job cuda-release --evidence-uploaded "$EVIDENCE_UPLOADED"
+        run: cargo xtool ci-ops runner-cleanup --job cuda-release --evidence-uploaded "$EVIDENCE_UPLOADED"
 
   build_native_runtime_linux_x86_64_rocm:
     name: Build native runtime Linux x86_64 ROCm
@@ -864,12 +939,14 @@ jobs:
           if-no-files-found: error
 
   build_swift_sdk_artifact:
+    if: ${{ needs.authority_macos_arm64.result == 'success' }}
     name: Build Swift SDK XCFramework
-    needs: [metadata, release_ui]
+    needs: [metadata, release_ui, authority_macos_arm64]
     permissions:
       contents: read
     uses: ./.github/workflows/swift-sdk-artifact.yml
     with:
+      authority_macos_arm64: ${{ needs.authority_macos_arm64.outputs.identity_json }}
       source_sha: ${{ needs.metadata.outputs.source_sha }}
       ui_artifact_name: prepared-release-ui-${{ needs.metadata.outputs.tag }}-${{ needs.metadata.outputs.source_sha }}
       original_event_name: ${{ github.event_name }}
@@ -955,6 +1032,9 @@ jobs:
           attestation_public_key_file: ${{ runner.temp }}/mesh-release-attestation-public-key.json
           commit: ${{ needs.metadata.outputs.source_sha }}
 
+      - uses: ./.github/actions/upload-automation
+        with:
+          source_sha: ${{ needs.metadata.outputs.source_sha }}
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: host-input-linux-aarch64
@@ -969,7 +1049,9 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable 2026-08-20
+      - uses: ./.github/actions/restore-automation
+        with:
+          source_sha: ${{ needs.metadata.outputs.source_sha }}
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: host-input-linux-aarch64
@@ -1025,6 +1107,8 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           persist-credentials: false
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable 2026-08-20
+      - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: release-linux-arm64
@@ -1041,9 +1125,9 @@ jobs:
             find "$artifact_dir" -maxdepth 1 -type f -print | sort >&2
             exit 1
           fi
-          python3 scripts/verify-checksum-sidecar.py "$tarball"
+          cargo xtool artifact verify-checksum "$tarball"
           mkdir -p smoke
-          python3 scripts/safe-extract-tar.py "$tarball" smoke
+          cargo xtool artifact extract-tar "$tarball" smoke
           binary="smoke/mesh-bundle/mesh-llm"
           version_output="$("$binary" --version)"
           actual_version="$(awk '{print $NF}' <<<"$version_output")"
@@ -1078,6 +1162,9 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           persist-credentials: false
+      - uses: ./.github/actions/restore-automation
+        with:
+          source_sha: ${{ needs.metadata.outputs.source_sha }}
       - name: Trust checkout directory
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
       - name: Verify prebuilt backend environment
@@ -1154,6 +1241,9 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           persist-credentials: false
+      - uses: ./.github/actions/restore-automation
+        with:
+          source_sha: ${{ needs.metadata.outputs.source_sha }}
       - name: Trust checkout directory
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
       - name: Verify prebuilt backend environment
@@ -1222,6 +1312,9 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           persist-credentials: false
+      - uses: ./.github/actions/restore-automation
+        with:
+          source_sha: ${{ needs.metadata.outputs.source_sha }}
       - name: Trust checkout directory
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
       - name: Verify prebuilt backend environment
@@ -1288,6 +1381,9 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           persist-credentials: false
+      - uses: ./.github/actions/restore-automation
+        with:
+          source_sha: ${{ needs.metadata.outputs.source_sha }}
       - name: Trust checkout directory
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
       - name: Verify prebuilt backend environment
@@ -1358,9 +1454,6 @@ jobs:
           node-version: 24.20.0
           package-manager-cache: false
       - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable 2026-08-20
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
-        with:
-          python-version: '3.x'
       - uses: taiki-e/install-action@3d23c1bbdafe696dfccad2664945a04f47d03dc3 # just
       - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
       - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
@@ -1412,6 +1505,9 @@ jobs:
           attestation_signing_key_file: ${{ runner.temp }}/mesh-release-attestation-private-key.json
           attestation_public_key_file: ${{ runner.temp }}/mesh-release-attestation-public-key.json
           commit: ${{ needs.metadata.outputs.source_sha }}
+      - uses: ./.github/actions/upload-automation
+        with:
+          source_sha: ${{ needs.metadata.outputs.source_sha }}
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: host-input-windows-x86_64
@@ -1443,9 +1539,9 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           persist-credentials: false
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+      - uses: ./.github/actions/restore-automation
         with:
-          python-version: '3.x'
+          source_sha: ${{ needs.metadata.outputs.source_sha }}
       - name: Download immutable host input
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -1498,9 +1594,9 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           persist-credentials: false
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+      - uses: ./.github/actions/restore-automation
         with:
-          python-version: '3.x'
+          source_sha: ${{ needs.metadata.outputs.source_sha }}
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: host-input-windows-x86_64
@@ -1556,9 +1652,6 @@ jobs:
         with:
           persist-credentials: false
       - uses: ./.github/actions/setup-windows-short-paths
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
-        with:
-          python-version: '3.x'
       - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable 2026-08-20
       - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
       - name: Resolve Windows native toolchain epoch
@@ -1629,9 +1722,6 @@ jobs:
         with:
           persist-credentials: false
       - uses: ./.github/actions/setup-windows-short-paths
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
-        with:
-          python-version: '3.x'
       - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable 2026-08-20
       - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
       - name: Resolve Windows native toolchain epoch
@@ -1780,17 +1870,20 @@ jobs:
       - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable 2026-08-20
         if: github.event_name == 'workflow_dispatch'
 
-      # The dispatched tag path is the only path here that calls cargo
-      # (`release-version.sh` in `Prepare dispatched release tag`), and it is
-      # skipped by canaries. Initialize the wrapper on that same condition so
-      # the last job of the release cannot fail on an unconfigured sccache.
+      # Release version rewriting retains its job-local compiler policy.
+      # Artifact verification prepares its own uncached automation below.
       - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
-        if: github.event_name == 'workflow_dispatch'
       - uses: ./.github/actions/configure-sccache-gha
-        if: github.event_name == 'workflow_dispatch'
         with:
-          # This job only rewrites release metadata. Keep the credential-bearing
-          # publisher on its job-local cache, matching `metadata`.
+          # Keep the credential-bearing publisher on its job-local cache,
+          # matching `metadata`.
+          allow_depot_remote_cache: "false"
+          allow_native_github_cache: "false"
+
+      - name: Prepare release artifact verification
+        uses: ./.github/actions/prepare-automation
+        with:
+          runner-profile: hosted-bare
           allow_depot_remote_cache: "false"
           allow_native_github_cache: "false"
 
@@ -1820,7 +1913,7 @@ jobs:
             archive="skippy-${RELEASE_TAG}-${target}-cli.tar.gz"
             test -s "release-artifacts/$archive"
             test -s "release-artifacts/$archive.sha256"
-            (cd release-artifacts && shasum -a 256 --check "$archive.sha256")
+            "${MESH_LLM_AUTOMATION_BIN:?}" artifact verify-checksum "release-artifacts/$archive"
           done
 
       - name: Verify complete Node SDK addon release matrix
@@ -1841,11 +1934,7 @@ jobs:
               echo "Missing Node SDK addon checksum: $sidecar" >&2
               exit 1
             }
-            grep -Eq "^[0-9a-f]{64}  $archive$" "release-artifacts/$sidecar" || {
-              echo "Invalid Node SDK addon checksum: $sidecar" >&2
-              exit 1
-            }
-            (cd release-artifacts && shasum -a 256 -c "$sidecar")
+            "${MESH_LLM_AUTOMATION_BIN:?}" artifact verify-checksum "release-artifacts/$archive"
           done
 
       - name: Generate native runtime release manifest
@@ -1881,7 +1970,7 @@ jobs:
           for target in "${required_native_targets[@]}"; do
             validator_args+=(--required-target "$target")
           done
-          scripts/validate-release-native-runtime-matrix.py \
+          cargo xtool native release-matrix \
             "${validator_args[@]}" \
             release-artifacts/*
           shasum -a 256 release-artifacts/native-runtimes.json | awk '{print $1 "  native-runtimes.json"}' > release-artifacts/native-runtimes.json.sha256

@@ -7,4 +7,4 @@
 set -euo pipefail
 
 repo_root="$(git rev-parse --show-toplevel)"
-exec python3 "$repo_root/scripts/check-conventional-commit.py" "$1"
+exec cargo xtool --repo-root "$repo_root" repository conventional-commits "$1"

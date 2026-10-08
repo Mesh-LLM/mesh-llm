@@ -1,5 +1,5 @@
 name: Set up canary certification runner
-description: Verify preinstalled arm64 Metal tooling and read-only model cache; never install tools.
+description: Verify preinstalled arm64 Metal tooling; never install tools.
 inputs:
   require-agent:
     description: Verify the Goose executable for a changed-pin candidate build.
@@ -8,7 +8,6 @@ inputs:
 runs:
   using: composite
   steps:
-  - uses: ./.github/actions/use-canary-cache
   - name: Configure canary Git identity
     run: |
       git config --local user.name "mesh-llama-canary-bot"

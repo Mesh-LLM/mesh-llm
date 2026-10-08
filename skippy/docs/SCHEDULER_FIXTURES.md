@@ -14,7 +14,7 @@ waiting-prefix policy boundary:
   tail latency.
 
 The source of truth is
-[`skippy/evals/skippy-scheduler-fixtures.json`](../evals/skippy-scheduler-fixtures.json).
+[`skippy/skippy/evals/skippy-scheduler-fixtures.json`](../skippy/evals/skippy-scheduler-fixtures.json).
 It pins the Hugging Face commit, selected source, eight session IDs, selection
 rules, runtime shape, generated prompt-manifest hash, exact GGUF repository
 revision and content hash (including its embedded tokenizer), and acceptance
@@ -26,7 +26,8 @@ Validate the catalog and run the actual Rust scheduler against both compact
 traces:
 
 ```bash
-python3 skippy/evals/skippy-scheduler-fixtures.py validate
+just with-lld cargo xtool automation agentic-prompt-manifest validate-fixtures \
+  skippy/evals/skippy-scheduler-fixtures.json
 just with-lld cargo test -p skippy-scheduler
 ```
 
@@ -37,22 +38,55 @@ trace remains at one switch while the eviction-pressure trace collapses to
 seven. This gate is deterministic and performs no model inference or network
 access.
 
-The normal Python script-test lane also validates the catalog, derives the
-minimum context from the checked-in rows, exercises the real prompt generator
-with canned rows, verifies the strict HF command shape and row-provenance
-rejection, and covers profile application in the A/B runner.
+The native prompt-manifest tests validate the catalog, derive the minimum
+context from the checked-in rows,
+check strict HF command arguments and reject row or manifest hash drift before
+publication. Run these portable contracts locally with:
+
+```bash
+just with-lld cargo test --locked -p xtask --bin xtask agentic_prompt_manifest \
+  -- --test-threads=1
+```
+
+The A/B runner also checks profile application. Synthetic fixtures do not prove
+the generated manifest hash against the pinned corpus; that requires the exact
+verified dataset revision.
+
+## Optional Parquet reader
+
+The default automation bootstrap compiles portable selection contracts only.
+Build the optional reader separately when materializing Parquet inputs:
+
+```bash
+just with-lld cargo build --locked -p trajectory-reader --features parquet-input \
+  --bin trajectory-reader
+```
+
+The reader includes the Parquet compression codecs. The main automation tool
+finds it next to its executable, or uses an explicit absolute
+`MESH_LLM_TRAJECTORY_READER_BIN` path. The tool supervises the reader with a
+120-second deadline and validates its versioned response file before publication.
+Selected trajectory data uses a private temporary file, independently of the
+bounded diagnostic capture. The normal `just ci-automation-contracts` gate also
+builds the reader, tests actual compressed Parquet inputs, and executes the
+frontend and reader together to check exact manifest bytes and refusal cleanup.
+Catalog validation and profile display require neither the reader nor HF.
 
 ## Pinned corpus cache
 
 Prepare the model-backed eviction-pressure prompts with:
 
 ```bash
-python3 skippy/evals/skippy-scheduler-fixtures.py prepare \
+just with-lld cargo xtool automation agentic-prompt-manifest prepare-fixture \
+  --catalog skippy/evals/skippy-scheduler-fixtures.json \
   --profile agentic-eviction-pressure \
+  --hf-bin "$(command -v hf)" \
   --output /tmp/skippy-agentic-eviction-pressure.json
 ```
 
-`prepare` performs both operations required by the fixture contract:
+`prepare-fixture` requires an installed Hugging Face CLI at the explicit
+absolute `--hf-bin` path. It performs both operations required by the fixture
+contract:
 
 1. `hf download thoughtworks/agentic-coding-trajectories ... --repo-type dataset --revision cef72d1f4d0caabf85937adf8337a14b7522c782`
 2. `hf cache verify ... --fail-on-missing-files` at the same revision
@@ -60,7 +94,18 @@ python3 skippy/evals/skippy-scheduler-fixtures.py prepare \
 It then selects the pinned rows from `sessions.parquet`, rebuilds the prompt
 manifest, and rejects either row drift or a SHA-256 other than
 `f1ddbe3d5974f3f4bd06f5d70fa45d0e10305bbafa4eb7399a0f972458d1beef`.
-Use `--cache-dir` when a benchmark host owns a dedicated shared cache.
+Use `--cache-dir` when a benchmark host owns a dedicated shared cache. The download
+and verification share a 600-second timeout, configurable with `--timeout`.
+Catalog validation and local materialization do not start HF or install Python
+packages. To regenerate from an already verified local Parquet file:
+
+```bash
+just with-lld cargo xtool automation agentic-prompt-manifest materialize-fixture \
+  --catalog skippy/evals/skippy-scheduler-fixtures.json \
+  --profile agentic-eviction-pressure \
+  --dataset-file /path/to/verified/sessions.parquet \
+  --output /tmp/skippy-agentic-eviction-pressure.json
+```
 
 Never copy `sessions.parquet` or the generated prompt manifest into the
 repository. The corpus is a derivative multi-source dataset; this fixture uses
@@ -68,28 +113,52 @@ only the `swe-smith-claude-3-7-sonnet` rows, whose upstream is
 `SWE-bench/SWE-smith-trajectories` (MIT). The checked-in catalog retains row
 provenance without redistributing the text.
 
+The native fixture commands own catalog validation, profile resolution, pinned HF
+fetch/verification, and prompt-manifest publication. The native A/B caller below
+uses the same pinned catalog/profile owner. Native fixture tests do not qualify
+hardware replay, corpus acquisition, or its acceptance metrics.
+
 ## Periodic hardware replay
 
 Use exact OLD and NEW release binaries built against the same native ABI, then
 run the A/B harness with the named profile:
 
+Prepare a JSON input matching the native round runner, then use its source-bound
+preparation receipt for the actual comparison. Preparation atomically replaces
+its output after valid admission; execution refuses an existing output directory.
+Use fresh paths. Supply actual binary/model SHA-256 pins, full commit
+labels, a native artifact tree digest and a separately running metrics collector.
+Do not copy placeholder pins into a qualification run.
+
 ```bash
-python3 skippy/evals/skippy-waiting-prefix-ab.py \
-  --fixture-profile agentic-eviction-pressure \
-  --acceptance-contract skippy/evals/skippy-capacity-acceptance.json \
-  --prompt-manifest /tmp/skippy-agentic-eviction-pressure.json \
-  --case-file /path/to/one-model-case.json \
-  --old-bin /path/to/old/skippy-serving \
-  --new-bin /path/to/new/skippy-serving \
-  --old-commit <old-commit> \
-  --new-commit <new-commit> \
-  --native-build /path/to/matched/native-build \
-  --output-dir /path/to/artifacts
+just with-lld cargo xtool automation waiting-prefix prepare-run \
+  --input /path/to/waiting-prefix-input.json \
+  --output /path/to/prepared-waiting-prefix.json
+just with-lld cargo xtool automation waiting-prefix run \
+  --input /path/to/prepared-waiting-prefix.json \
+  --output-directory /path/to/fresh-artifacts
 ```
+
+The schema version 1 input has `prepared_plan_sha256:null`; `old` and `new` each
+contain absolute `path`, `sha256` and `supplied_commit`. It supplies
+`model_id`, absolute `model_path`, `model_sha256`, absolute `catalog`
+(`evals/skippy-scheduler-fixtures.json`), `profile`
+(`agentic-eviction-pressure`), `manual_workload:null`, absolute `contract`
+(`evals/skippy-capacity-acceptance.json`), and absolute `prompt_manifest`.
+It also supplies absolute `native_runtime_root`, its `native_runtime_sha256`,
+`payload` (`resident-kv`), `n_gpu_layers` (historically 999), and positive
+`request_timeout_secs`, `startup_timeout_secs`, `telemetry_timeout_secs`,
+`cell_timeout_secs`, `metrics_timeout_secs`, plus explicit loopback
+`metrics_http` and `metrics_otlp_grpc` URLs. These bounds must cover actual
+startup/requests/telemetry and fit the admitted whole-comparison budget.
+Preparation fills the plan digest; execution re-admits all pins/shape before
+launch. `native_runtime_root` names the supplied artifact tree and does not
+prove that a runtime was loaded.
+
 
 The named profile owns rounds, lanes, admission concurrency, cache entries,
 output length, and arrival stagger; ad hoc workload flags do not override it.
-The case file must also match the profile's pinned model ID and GGUF SHA-256.
+The input must also match the profile's pinned model ID and GGUF SHA-256.
 HF profiles require their exact generated prompt manifest, while synthetic
 profiles reject external manifests. The result records the profile name and
 catalog SHA alongside binary, model, and prompt-manifest hashes.
@@ -122,3 +191,130 @@ movement inside ±5%. A zero baseline is neutral only when both binaries remain
 at zero; any nonzero candidate value fails closed. Alternate binary order
 across all four rounds and retain raw requests, telemetry, configs, logs,
 `comparison.json`, and `report.md`.
+
+## Offline A/B acceptance
+
+Check measured A/B aggregates with the native acceptance command:
+
+```bash
+just with-lld cargo xtool automation waiting-prefix evaluate \
+  --comparison comparison.json \
+  --catalog skippy/evals/skippy-scheduler-fixtures.json --profile warm-affinity \
+  --output acceptance.json --report report.md
+```
+
+For the capacity bounds, replace the catalog/profile pair with
+`--contract skippy/evals/skippy-capacity-acceptance.json`. The command checks complete
+request success, available measurements, baseline pressure and the selected
+regression or gain bounds. A failed measurement comparison writes its check
+evidence and report, then exits unsuccessfully. Invalid inputs fail before
+publication. The model-backed workload runner still supplies the measured
+aggregates.
+
+The native `waiting-prefix summarize --input FILE --output FILE` command
+combines request outcomes, generation events, capacity decisions and proactive
+eviction decisions into one round. `waiting-prefix aggregate --input FILE
+--output FILE` accepts a document with a `cells` list and computes per-binary
+round medians. Missing numeric telemetry remains null. Repeated request or
+round identities are rejected. These commands support offline evidence analysis;
+the model-backed A/B workload runner remains in Python during its cutover.
+
+
+The native workload plan resolves the entire selected profile before execution:
+
+```bash
+just with-lld cargo xtool automation waiting-prefix plan \
+  --catalog evals/skippy-scheduler-fixtures.json --profile warm-affinity \
+  --model-id "$MODEL_ID" --model-sha256 "$MODEL_SHA256" --output plan.json
+```
+
+Use the model identity pinned in the selected catalog profile. For an HF profile,
+pass `--prompt-manifest FILE`; its exact bytes must match the catalog SHA-256
+and cover every family and request. Synthetic profiles omit that option.
+`--contract FILE` applies only the documented cache-entry override and records
+cache seeding separately from the measured request count. The plan records the
+catalog, contract and manifest hashes. Resolving a plan does not verify a model
+file or run inference.
+
+The native `waiting-prefix execute-requests --input FILE --output FILE` command
+runs a staggered request phase against an already-running local server. Its
+schema-1 input requires `round`, `version` as `old` or `new`, `base_url` as
+`http://127.0.0.1:<port>/v1`, `model`, `output_tokens`,
+`request_timeout_secs`, `stagger_ms`, and a nonempty `prompts` list of
+`family` and `prompt` strings. Results retain request identities in order,
+streaming usage, timing and content hashes. HTTP failures, timeouts and
+interruption retain failed request evidence and exit unsuccessfully; invalid
+input preserves any previous output. The command requires complete streaming
+usage and the terminal marker. The native server-cell and round commands own startup, seeding, telemetry
+capture, and complete comparisons. Real corpus/runtime acceptance remains separately qualified; local executable
+fixtures establish orchestration and refusal behavior.
+
+
+For synthetic profiles, `waiting-prefix synthetic-prompts --families N
+--requests-per-family N --prefix-blocks N --output FILE` generates the
+`stable-prefix-v1` repository contexts in interleaved family order. Using one
+request per family generates the same initial tasks for cache seeding. Counts
+must be positive and fit the request phase's 10,000-request limit; a conservative
+256 MiB allocation budget rejects oversized repeated contexts before generation.
+
+`waiting-prefix stage-config --input FILE --output FILE` emits a single-stage
+`runtime-slice` config with `lookup-record` cache mode and one shared-prefix
+record. Input contains `model_id`, an absolute `model_path`,
+`source_model_sha256`, `layer_end`, `ctx_size`, `lane_count`,
+`n_gpu_layers`, `payload` and `cache_entries`. Payload is `resident-kv`,
+`kv-recurrent` or the `full-state` correctness diagnostic. The command checks
+positive layer/context/lane/cache sizes and the actual model file SHA-256 before
+publishing; a changed model preserves any previous config. This prepares
+configuration only. It does not inspect GGUF dimensions or start a runtime.
+
+
+The native `waiting-prefix telemetry-log snapshot --log FILE --output FILE`
+command records the seed boundary for generation, capacity and record events.
+`telemetry-log collect --log FILE --cursor FILE --expected-generations N --output FILE`
+retains only events after that boundary and requires exactly N generation
+summaries. The cursor binds the canonical log path, its byte prefix SHA-256,
+and recomputed event counts. Appends are accepted; rewrites, truncation,
+cross-log cursors, altered counts, and malformed recognized attributes are
+rejected before publication. Parsing is bounded to 1 MiB per line and 128 MiB
+per snapshot. This collects existing debug telemetry and emits no runtime metrics.
+
+
+The native `waiting-prefix cell-worker --input FILE --output FILE` waits for the exact local model, optionally seeds its cache, waits for seed telemetry, and measures requests using a verified telemetry-log boundary. It retains completed request evidence when measurement or telemetry fails. The parent must own the server process and projected telemetry log. This worker does not yet replace the complete Python A/B round runner or establish model-backed acceptance.
+
+
+The native `waiting-prefix server-cell --input FILE --output-directory DIR` owns a pinned Skippy server and its measurement worker under one retained process session. It checks actual binary/model hashes, GGUF context and full layer dimensions, stage/request identity and admission capacity before creating a fresh output directory. It reserves its own loopback endpoint, keeps filtered diagnostic stderr in `server.stderr.log`, and projects recognized numeric KV facts and decimal request IDs into `server.log`. Unknown fields and prompt text are excluded from that measurement log. It stops its owned server after the worker finishes and writes `lifecycle.json` after cleanup. Local executable fixtures cover process ownership; native-runtime bundle identity and full old/new round qualification still require the complete runner before caller cutover.
+
+
+The native `waiting-prefix run --input FILE --output-directory DIR` resolves pinned catalog/contract workload and prompts, checks binary/model and provided native artifact bytes, alternates every old/new round, retains attempted cells and failed evidence, and requires the exact complete cell census before aggregation and hardware acceptance. It supervises each retained server-cell under one outer cancellation scope, bounds total process/evidence budgets, and preserves an existing output directory. The supplied commit labels and provided runtime artifact pins describe their respective inputs; they do not alone prove a loaded runtime or model performance. Native executable fixtures and live model/corpus qualification remain distinct. The native command is the maintained operator frontdoor; legacy Python deletion remains separately gated by its full source/intent and caller census.
+
+
+## Collector-backed native comparisons
+
+Start metrics-server before using the native complete-round command. The input
+must include explicit loopback HTTP roots `metrics_http` and
+`metrics_otlp_grpc`, plus `metrics_timeout_secs`. Use a release Skippy server
+for model-backed comparisons. The native periodic command above requires that collector. Corpus and real
+runtime qualification remain separate from local orchestration evidence.
+
+The native runner creates a fresh collector run for each old/new cell before
+server startup, passes its run ID through the stage config, and adds
+`--metrics-otlp-grpc` to the server command. It waits for collector delivery
+while the owned server is alive, finalizes through the collector API, and retains
+`metrics-report.json` and `metrics-timing.json` in each cell directory. Only
+request IDs observed in generation summaries after the verified seed boundary
+contribute to timing. Missing spans, telemetry loss, mismatched run IDs, failed
+finalization, and collection deadlines fail the cell while retaining completed
+request evidence and the last available report. Cancellation stops collection
+and reaps owned children before the lifecycle receipt is written.
+
+`comparison.json` retains per-cell collector evidence and old/new timing
+summaries. The Markdown report separates client TTFT from server TTFT and server
+request latency. Collector percentiles pool all measured requests across rounds;
+client acceptance keeps the existing median-of-round statistics and thresholds.
+Server TTFT measures the earliest matched span to the first decode-token span
+start, matching the Skippy benchmark reporter. It does not include client network
+latency or imply first text delivery to the client.
+
+Local HTTP and native executable fixtures prove orchestration and failure
+handling. They do not prove real OTLP ingestion, loaded runtime identity, corpus
+parity, or model-backed performance. Keep those qualification gates separate.

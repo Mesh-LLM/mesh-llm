@@ -15,16 +15,7 @@ ATTESTATION_PUBLIC_KEY_FILE="${MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE:-}"
 PRECOMPOSED_PRODUCT_DIR="${MESH_LLM_PRECOMPOSED_PRODUCT_DIR:-}"
 ATTESTATION_PREVERIFIED="${MESH_RELEASE_ATTESTATION_PREVERIFIED:-0}"
 
-python_bin() {
-    if command -v python3 >/dev/null 2>&1; then
-        echo python3
-    elif command -v python >/dev/null 2>&1; then
-        echo python
-    else
-        echo "python3 or python is required for packaging" >&2
-        exit 1
-    fi
-}
+source "$SCRIPT_DIR/lib/automation.sh"
 
 release_os_name() {
     if [[ -n "${MESH_RELEASE_OS:-}" ]]; then
@@ -112,40 +103,10 @@ create_archive() {
     local source_dir="$1"
     local archive_path="$2"
     local archive_kind="$3"
-    local py
-    py="$(python_bin)"
-
-    rm -f "$archive_path"
-    mkdir -p "$(dirname "$archive_path")"
-
-    "$py" - "$source_dir" "$archive_path" "$archive_kind" <<'PY'
-import os
-import sys
-import tarfile
-import zipfile
-
-source_dir, archive_path, archive_kind = sys.argv[1:4]
-base = os.path.basename(os.path.normpath(source_dir))
-root = os.path.dirname(os.path.normpath(source_dir))
-
-if archive_kind == "tar.gz":
-    with tarfile.open(archive_path, "w:gz") as tf:
-        tf.add(source_dir, arcname=base)
-elif archive_kind == "zip":
-    with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-        for current_root, dirs, files in os.walk(source_dir):
-            dirs.sort()
-            files.sort()
-            rel_root = os.path.relpath(current_root, root)
-            if rel_root != ".":
-                zf.write(current_root, rel_root)
-            for filename in files:
-                path = os.path.join(current_root, filename)
-                rel = os.path.relpath(path, root)
-                zf.write(path, rel)
-else:
-    raise SystemExit(f"unsupported archive kind: {archive_kind}")
-PY
+    if [[ "$archive_path" != /* ]]; then
+        archive_path="$PWD/$archive_path"
+    fi
+    mesh_automation product archive-write "$source_dir" "$archive_path" "$archive_kind"
 }
 
 write_checksum_sidecar() {
@@ -172,7 +133,7 @@ select_native_runtime_dir() {
     cuda_version="${MESH_CUDA_VERSION:-}"
     cuda_major="${MESH_LLM_CUDA_TOOLKIT_MAJOR:-${cuda_version%%.*}}"
 
-    "$(python_bin)" "$SCRIPT_DIR/select-native-runtime.py" \
+    mesh_automation native select-runtime \
         --root "$NATIVE_RUNTIME_ROOT" \
         --os "${platform%%/*}" \
         --arch "${platform#*/}" \
@@ -187,7 +148,7 @@ write_product_manifest() {
     local version="$4"
     local flavor="$5"
 
-    "$(python_bin)" "$SCRIPT_DIR/compose-product-bundle.py" \
+    mesh_automation product compose \
         --bundle "$bundle_dir" \
         --host "$host_path" \
         --runtime "$runtime_path" \
@@ -226,7 +187,6 @@ stamp_bundle_binary() {
     local binary_path="$1"
     local inspect_json
     local inspect_status
-    local py
 
     if [[ "${MESH_RELEASE_HOST_PRESTAMPED:-0}" == "1" ]]; then
         if [[ -z "$ATTESTATION_PUBLIC_KEY_FILE" || ! -s "$ATTESTATION_PUBLIC_KEY_FILE" ]]; then
@@ -239,12 +199,12 @@ stamp_bundle_binary() {
         fi
         inspect_json="$(
             cd "$REPO_ROOT"
-            cargo run -q -p xtask -- release-attestation inspect \
+            mesh_automation release-attestation inspect \
                 --binary "$binary_path" \
                 --public-key-file "$ATTESTATION_PUBLIC_KEY_FILE" \
                 --json
         )"
-        inspect_status="$(printf '%s' "$inspect_json" | "$(python_bin)" -c 'import json,sys; print(json.load(sys.stdin)["status"])')"
+        inspect_status="$(printf '%s' "$inspect_json" | mesh_automation product attestation-status)"
         if [[ "$inspect_status" != "valid" ]]; then
             echo "pre-stamped release host is not valid: $binary_path ($inspect_status)" >&2
             exit 1
@@ -268,21 +228,19 @@ stamp_bundle_binary() {
         return 0
     fi
 
-    py="$(python_bin)"
-
     inspect_json="$(
         cd "$REPO_ROOT"
-        cargo run -q -p xtask -- release-attestation stamp \
+        mesh_automation release-attestation stamp \
             --binary "$binary_path" \
             --signing-key-file "$ATTESTATION_SIGNING_KEY_FILE" \
             >/dev/null
-        cargo run -q -p xtask -- release-attestation inspect \
+        mesh_automation release-attestation inspect \
             --binary "$binary_path" \
             --public-key-file "$ATTESTATION_PUBLIC_KEY_FILE" \
             --json
     )"
     printf '%s\n' "$inspect_json"
-    inspect_status="$(printf '%s' "$inspect_json" | "$py" -c 'import json,sys; print(json.load(sys.stdin)["status"])')"
+    inspect_status="$(printf '%s' "$inspect_json" | mesh_automation product attestation-status)"
     if [[ "$inspect_status" != "valid" ]]; then
         echo "release-attestation inspect reported status '$inspect_status' for $binary_path" >&2
         exit 1
@@ -508,7 +466,7 @@ copy_and_verify_precomposed_product() {
 
     stamp_bundle_binary "$bundle_binary"
     verify_mesh_binary_version "$bundle_binary" "$version"
-    "$(python_bin)" "$SCRIPT_DIR/verify-host-dependencies.py" \
+    mesh_automation native verify-host-dependencies \
         "$bundle_binary" \
         --report "$verification_report"
 
@@ -528,7 +486,7 @@ copy_and_verify_precomposed_product() {
         exit 1
     fi
     "$SCRIPT_DIR/verify-native-runtime-package.sh" "$runtime_dir"
-    "$(python_bin)" "$SCRIPT_DIR/compose-product-bundle.py" \
+    mesh_automation product compose \
         --bundle "$bundle_dir" \
         --host "$bundle_binary" \
         --runtime "$runtime_dir" \
@@ -584,7 +542,7 @@ main() {
 
         stamp_bundle_binary "$bundle_binary"
         verify_mesh_binary_version "$bundle_binary" "$version"
-        "$(python_bin)" "$SCRIPT_DIR/verify-host-dependencies.py" \
+        mesh_automation native verify-host-dependencies \
             "$bundle_binary" \
             --report "$bundle_dir/host-imports.json"
 
@@ -601,9 +559,7 @@ main() {
     fi
 
     create_archive "$bundle_dir" "$output_dir/$versioned_asset" "$ARCHIVE_EXT"
-    write_checksum_sidecar "$output_dir/$versioned_asset"
     create_archive "$bundle_dir" "$output_dir/$STABLE_ASSET" "$ARCHIVE_EXT"
-    write_checksum_sidecar "$output_dir/$STABLE_ASSET"
 
     echo "Created release archives:"
     find "$output_dir" -maxdepth 1 -type f -print | sort

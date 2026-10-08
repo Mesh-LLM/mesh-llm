@@ -35,6 +35,43 @@ skippy-release backend="" target="":
 skippy-release backend="":
     @powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-windows.ps1 -Backend "{{ backend }}" -BuildProfile release -SkippyOnly
 
+# Build the native rewriter fixture with an explicitly selected pinned LLVM.
+[unix]
+skippy-rewriter-build:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    prefix="${SKIPPY_REWRITER_LLVM_PREFIX:-}"
+    build_dir="${SKIPPY_REWRITER_BUILD_DIR:-.scratch/skippy-stage-rewriter-build}"
+    if [[ -z "$prefix" || ! -x "$prefix/bin/clang" || ! -f "$prefix/lib/cmake/llvm/LLVMConfig.cmake" || ! -f "$prefix/lib/cmake/clang/ClangConfig.cmake" ]]; then
+      printf '%s\n' 'SKIPPY_REWRITER_LLVM_PREFIX must name an existing pinned LLVM with clang and LLVM/Clang CMake packages' >&2
+      exit 1
+    fi
+    if ! command -v ninja >/dev/null 2>&1; then
+      printf '%s\n' 'Ninja is required for skippy-rewriter-build' >&2
+      exit 1
+    fi
+    arch_args=()
+    if [[ "$(uname -s)" == Darwin ]]; then
+      native_arch="$(uname -m)"
+      if [[ "$native_arch" == x86_64 && "$(sysctl -n hw.optional.arm64 2>/dev/null || true)" == 1 ]]; then
+        exec arch -arm64 just skippy-rewriter-build
+      fi
+      arch_args=(-DCMAKE_OSX_ARCHITECTURES="$native_arch")
+    fi
+    cmake -S skippy/scripts/tools/skippy-stage-rewriter -B "$build_dir" -G Ninja \
+      -DBUILD_TESTING=ON "${arch_args[@]}" \
+      -DLLVM_DIR="$prefix/lib/cmake/llvm" -DClang_DIR="$prefix/lib/cmake/clang"
+    cmake --build "$build_dir"
+
+# Run the native C++ fixture against the same explicitly selected build directory.
+[unix]
+skippy-rewriter-test: skippy-rewriter-build
+    #!/usr/bin/env bash
+    set -euo pipefail
+    build_dir="${SKIPPY_REWRITER_BUILD_DIR:-.scratch/skippy-stage-rewriter-build}"
+    ctest --test-dir "$build_dir" --output-on-failure --no-tests=error \
+      -R '^skippy-stage-rewriter-fixture-native$' --timeout 120
+
 # Build the skippy benchmark/debug telemetry collector.
 [unix]
 metrics-server-build:
@@ -49,8 +86,9 @@ metrics-server-build:
 skippy-wan-lab-build-bins:
     just release-runtime-build cpu
     just skippy-cli-release-build
-    python3 scripts/verify-host-dependencies.py target/release/skippy --report dist/skippy-host-imports.json
+    cargo xtool native verify-host-dependencies target/release/skippy --report dist/skippy-host-imports.json
     just with-lld cargo build --release --locked -p metrics-server
+    just with-lld cargo build --release --locked -p xtask --bin xtask
 
 # Build the resumable GGUF conversion/quantization replacement CLI.
 [unix]
@@ -101,9 +139,9 @@ skippy-native-full-replay backend="cpu":
     scripts/prepare-llama.sh pinned
     LLAMA_STAGE_BACKEND="{{ backend }}" LLAMA_STAGE_LINK_MODE=static LLAMA_STAGE_BUILD_DIR="$PWD/.deps/llama-build/build-stage-full-replay-static-{{ backend }}" LLAMA_STAGE_FULL_REPLAY=ON LLAMA_STAGE_FORCE_BUILD=1 scripts/build-llama.sh
 
-# Generate a reproducible benchmark corpus for skippy bench tooling.
+# Generate a pinned native corpus; use a fresh --out-root to regenerate an existing tier.
 bench-corpus tier="smoke" *ARGS="":
-    scripts/generate-bench-corpus.py "{{ tier }}" {{ ARGS }}
+    just with-lld cargo run --locked -p trajectory-reader --features corpus-input --bin trajectory-reader -- corpus "{{ tier }}" {{ ARGS }}
 
 # Run skippy family certification checks.
 family-certify *ARGS:
@@ -126,3 +164,100 @@ competitive-benchmark-build:
 # Run the skippy benchmark/debug telemetry collector.
 metrics-server db="/tmp/mesh-metrics.duckdb" http_addr="127.0.0.1:18080" otlp_addr="127.0.0.1:14317" *ARGS="": metrics-server-build
     target/debug/metrics-server serve --db "{{ db }}" --http-addr "{{ http_addr }}" --otlp-grpc-addr "{{ otlp_addr }}" {{ ARGS }}
+
+# Native publisher helper for the isolated layer-package job.
+snapshot-promoter-release-build:
+    just with-lld cargo build --release --locked -p skippy-model-package --bin promote-layer-package-snapshot
+
+# Isolated supplied-artifact HF publisher; never linked into xtask.
+model-publisher-release-build:
+    just with-lld cargo build --release --locked -p skippy-model-package --bin model-package-publish
+
+# Read-only HF source metadata/package-root helper for the isolated job.
+layer-job-helper-release-build:
+    just with-lld cargo build --release --locked -p skippy-model-package --bin model-package-layer-job
+
+# Native immutable acquisition/export; supplied semantic references and derived pins required.
+competitive-inputs-helper-build:
+    just with-lld cargo build --locked -p skippy-model-package --bin model-package-competitive-inputs
+
+competitive-inputs-prefetch request helper helper_sha256 reader reader_sha256 evidence timeout="3600":
+    cargo xtool automation replay-matrix competitive-inputs-prefetch --request "{{ request }}" --helper "{{ helper }}" --helper-sha256 "{{ helper_sha256 }}" --evidence-directory "{{ evidence }}" --timeout-seconds "{{ timeout }}" --reader "{{ reader }}" --reader-sha256 "{{ reader_sha256 }}"
+
+# Private finite full-chain positive; xtask must be freshly built from this same source.
+competitive-inputs-prefetch-fixture xtask:
+    COMPETITIVE_FIXTURE_XTASK_BIN="{{ xtask }}" just with-lld cargo test --locked -p skippy-model-package --lib competitive_acquisition::full_frontend::actual_full_native_prefetch_acquires_four_families_exports_and_generates_manifest_and_readerless_skips -- --exact --ignored --nocapture
+
+# Native pinned checkpoint staging helper; no model/native build is included.
+mtp-checkpoint-helper-build:
+    just with-lld cargo build --locked -p skippy-model-package --bin model-package-mtp-checkpoint
+
+# Typed immutable checkpoint/bootstrap/native composition/publication owner.
+hf-skippy-mtp-compose-default input output:
+    cargo xtool automation hf-certify compose-default --input {{input}} --output-directory {{output}}
+
+# Isolated native generic conversion Jobs facade; explicit submit authority remains required.
+generic-conversion-jobs-release-build:
+    just with-lld cargo build --release --locked -p skippy-model-package --bin model-package-generic-jobs
+
+# Native durable-KV lifecycle runner; INPUT carries explicit workload and budgets.
+kv-restart-replay input output:
+    cargo xtool automation waiting-prefix kv-restart-run --input "{{input}}" --output-directory "{{output}}"
+
+# Matched old/new mixed prefill/decode matrix; INPUT carries identities, shape and budgets.
+mixed-prefill-decode-ab input output:
+    cargo xtool automation waiting-prefix mixed-run --input "{{input}}" --output-directory "{{output}}"
+
+# Native matched standalone static adaptive-prefill evaluation; supplied artifacts only.
+skippy-adaptive-prefill-ab input output:
+    just with-lld cargo xtool automation waiting-prefix adaptive-run --input "{{input}}" --output-directory "{{output}}"
+
+# Native cold/warm radix-prefix evaluation; supplied artifacts only.
+skippy-radix-cache-ab input output:
+    just with-lld cargo xtool automation waiting-prefix radix-run --input "{{input}}" --output-directory "{{output}}"
+
+# Read a local legacy package cache through the native product owner, with no ABI calls.
+[private]
+[unix]
+[positional-arguments]
+skippy-layer-package-inspect *ARGS:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    just with-lld cargo build --quiet --locked -p skippy-package-builder --features skippy-runtime/dynamic-native-runtime
+    exec cargo run --quiet --locked -p skippy-package-builder --features skippy-runtime/dynamic-native-runtime -- inspect-layer-package "$@"
+
+# Parse package references through the source-built product owner.
+[private]
+[unix]
+[positional-arguments]
+skippy-package-reference REFERENCE:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    just with-lld cargo build --quiet --locked -p skippy-package-builder --features skippy-runtime/dynamic-native-runtime
+    exec cargo run --quiet --locked -p skippy-package-builder --features skippy-runtime/dynamic-native-runtime -- parse-package-reference "$1"
+
+# Resolve exact existing package cache custody without downloading.
+[private]
+[unix]
+[positional-arguments]
+skippy-layer-package-cache *ARGS:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    just with-lld cargo build --quiet --locked -p skippy-package-builder --features skippy-runtime/dynamic-native-runtime
+    exec cargo run --quiet --locked -p skippy-package-builder --features skippy-runtime/dynamic-native-runtime -- resolve-layer-package-cache "$@"
+
+# Explicit native package acquisition, using the same source-built product owner.
+[private]
+[unix]
+[positional-arguments]
+skippy-layer-package-fetch *ARGS:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    just with-lld cargo build --quiet --locked -p skippy-package-builder --features skippy-runtime/dynamic-native-runtime
+    exec cargo run --quiet --locked -p skippy-package-builder --features skippy-runtime/dynamic-native-runtime -- fetch-layer-package "$@"
+
+# Qualify Decisions HTTP responses from an already running System One model.
+[unix]
+[positional-arguments]
+decisions-smoke *ARGS:
+    @just automation-run automation decisions-smoke "$@"

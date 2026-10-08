@@ -12,16 +12,22 @@ release-bundle version output="dist" flavor="":
 # Run repo-level release-target consistency checks.
 [unix]
 check-release:
-    just with-lld cargo run -p xtask -- repo-consistency release-targets
+    just with-lld cargo xtool repo-consistency release-targets
 
 [windows]
 check-release:
-    @just with-lld cargo run -p xtask -- repo-consistency release-targets
+    @just with-lld cargo xtool repo-consistency release-targets
 
 # Check the Rust process-environment mutation census and contract annotations.
 check-env-mutation-contract:
-    @python3 scripts/check-env-mutation-contract.py
+    @just with-lld cargo xtool repository env-mutation-census
 
 # Run one release-attestation xtask action through the repository toolchain.
 release-attestation *ARGS:
     @just with-lld cargo run -q -p xtask -- release-attestation {{ ARGS }}
+
+# Collect raw release evidence; Unix positional forwarding preserves every argument.
+[unix]
+[positional-arguments]
+release-inventory *ARGS:
+    @just automation-run release inventory "$@"

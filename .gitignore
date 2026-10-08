@@ -3,6 +3,8 @@
 /llama.cpp
 llama.cpp-rpc-b2b/
 .deps/
+# Immutable external SDK/research checkouts restored by CI and admitted separately.
+/.sdk-source/
 target/
 .build/
 llama.cpp.bak/
@@ -13,10 +15,8 @@ mesh-bundle.tar.gz
 mesh/crates/mesh-llm-ui/dist/
 evals/results/
 .sisyphus/
+.omo
 .omo/*
-!.omo/specs/
-.omo/specs/*
-!.omo/specs/pr-ci-optimization.md
 .impeccable
 .playwright-mcp/
 .envrc
@@ -62,3 +62,10 @@ mesh/sdk/swift/Generated/MeshLLMFFI.xcframework/
 /docs/crates/
 /docs/pagefind/
 /dist/openai-exchange-observer.tar.gz
+
+# Local UI build coordination and retained process logs.
+/mesh/crates/mesh-llm-ui/.mesh-llm-ui-build.lock
+/mesh/crates/mesh-llm-ui/.mesh-llm-ui-build-logs/
+
+# Generated UI dependencies left at their pre-split location.
+/crates/mesh-llm-ui/node_modules/

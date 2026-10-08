@@ -115,12 +115,14 @@ cmake -S "$tool_source" -B "$TOOL_BUILD" -G Ninja \
 cmake --build "$TOOL_BUILD"
 ctest --test-dir "$TOOL_BUILD" --output-on-failure
 
-EXTRA_ARGS=(--extra-arg=-resource-dir --extra-arg="$("$LLVM_PREFIX"/bin/clang -print-resource-dir)")
+EXTRA_ARGS=(--extra-arg -resource-dir --extra-arg "$("$LLVM_PREFIX"/bin/clang -print-resource-dir)")
 if command -v xcrun >/dev/null 2>&1; then
-  EXTRA_ARGS+=(--extra-arg=-isysroot --extra-arg="$(xcrun --show-sdk-path)")
+  EXTRA_ARGS+=(--extra-arg -isysroot --extra-arg "$(xcrun --show-sdk-path)")
 fi
 
-python3 "$ROOT/scripts/generate-skippy-family-patch.py" \
+cargo xtool automation native-generator generate \
+  --git "$(command -v git)" \
+  --max-diff-bytes 16777216 \
   --source-root "$SOURCE_ROOT" \
   --build-dir "$LLAMA_BUILD_DIR" \
   --rewriter "$TOOL_BUILD/skippy-stage-rewriter" \
@@ -132,7 +134,7 @@ python3 "$ROOT/scripts/generate-skippy-family-patch.py" \
   --family-manifest "$FAMILY_MANIFEST" \
   "${EXTRA_ARGS[@]}"
 
-python3 "$ROOT/scripts/verify-skippy-family-generator-coverage.py" \
+cargo xtool automation native-generator contracts coverage \
   --manifest "$FAMILY_MANIFEST" \
   --family-map "$FAMILY_SOURCE_MAP" \
   --report "$FIRST_REPORT"
@@ -188,20 +190,20 @@ if diff -qr "$CHECKED_PATCH_DIR" "$GENERATED_PATCH_DIR" >/dev/null; then
 else
   patch_result=fail
   diff -ru "$CHECKED_PATCH_DIR" "$GENERATED_PATCH_DIR" > "$ARTIFACT_ROOT/patch-drift.diff" || true
-  python3 "$ROOT/scripts/select-skippy-family-shards.py" \
+  cargo xtool automation native-generator contracts select-shards \
     --base "$CHECKED_PATCH_DIR/series.json" \
     --current "$GENERATED_PATCH_DIR/series.json" \
     --output "$ARTIFACT_ROOT/changed-family-selection.json"
 fi
 
-python3 "$ROOT/scripts/skippy-rewriter-harness.py" \
+cargo xtool automation rewriter-report \
   --report "$FIRST_REPORT" \
   --mode validate \
   --patch-check "$patch_result" \
   --patch-drift-gate fail \
   --compile-result "$compile_result" \
   --graph-verify-result "$graph_verify_result"
-python3 "$ROOT/scripts/skippy-rewriter-harness.py" \
+cargo xtool automation rewriter-report \
   --report "$SECOND_REPORT" \
   --mode idempotence
 

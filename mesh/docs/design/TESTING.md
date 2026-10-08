@@ -202,7 +202,7 @@ agent integrations, MoA reducer behavior, or anything that may affect
 `tools` / `tool_calls` / tool-result continuation:
 
 ```bash
-scripts/qa-agent-tool-call-reliability.py \
+cargo xtool automation stability tool-call \
   --base-url http://127.0.0.1:9337/v1 \
   --models auto,mesh \
   --attempts 3 \
@@ -224,7 +224,7 @@ live mesh endpoint stays usable across repeated chat, streaming, tool-call, and
 optional agent-client checks:
 
 ```bash
-scripts/qa-nightly-stability.py \
+cargo xtool automation stability nightly \
   --base-url http://127.0.0.1:9337/v1 \
   --models auto,mesh \
   --attempts 5 \
@@ -261,7 +261,7 @@ repository content. It is intentionally evidence-producing and non-required:
 failed nightlies should guide stabilization work, not block unrelated pull
 requests.
 
-The reusable run also invokes `qa-kv-tool-loop-stability.py` by default. Use
+The reusable run also invokes `cargo xtool automation stability kv-tool-loop` by default. Use
 `MESH_NIGHTLY_KV_MODELS` to select the direct model IDs and the bounded
 `MESH_NIGHTLY_KV_{ATTEMPTS,PRESSURE_TURNS,OVERLAP_REQUESTS,MIN_CACHED_TOKENS,SUFFIX_PREFILL_LIMIT}`
 variables to tune the live probe. A manual run may set `skip_kv_tool_loop` for
@@ -277,7 +277,7 @@ issues where repeated tool calls eventually hit `llama_decode failed` or low
 same-prefix cache reuse.
 
 ```bash
-scripts/qa-kv-tool-loop-stability.py \
+cargo xtool automation stability kv-tool-loop \
   --base-url http://127.0.0.1:9337/v1 \
   --models Qwen/Qwen2.5-3B-Instruct-GGUF:q4_k_m \
   --attempts 5 \
@@ -808,7 +808,7 @@ curl -s localhost:3131/api/status | jq '.runtime.openai_guardrails'
 ```
 
 ```bash
-python3 scripts/run-openai-guardrail-corpus.py \
+just automation-run automation guardrail-corpus \
   --base-url http://127.0.0.1:9337/v1 \
   --model MiniMax-M2.5-Q4_K_M \
   --guardrail-mode metrics \
@@ -821,8 +821,9 @@ python3 scripts/run-openai-guardrail-corpus.py \
   `mesh_guardrails` request override. It does not reconfigure the server; use
   `--mesh-guardrails`, `mesh-llm runtime guardrails`, or the management API
   for server-side activation.
-- If the runtime is unavailable, the script falls back to deterministic
-  fake-backend mode and still writes the expected JSON artifact.
+- Endpoint failure leaves incomplete live evidence and returns nonzero. For
+  a deliberate synthetic corpus check, use `--base-url fake://local`; its
+  report labels every row as fake evidence and does not qualify the runtime.
 - The corpus covers streaming pass-through, native tool-call validation,
   structured `_mesh_respond` output, strict structured output, and the
   unsupported real tools plus strict structured combination.
@@ -1175,7 +1176,12 @@ scripts/qa-control-plane-mixed-version.sh \
   --released-binary ./target/qa/released/mesh-llm \
   --current-binary ./target/debug/mesh-llm \
   --local-only \
-  --print-plan | python3 -c "import json,sys; d=json.load(sys.stdin); [print(c) for c in d['checks'] if 'lifecycle' in c]"
+--print-plan | jq -sr '
+  if length != 1 then error("expected exactly one plan") else .[0] end
+  | if type == "object" and (.checks | type) == "array"
+     and all(.checks[]; type == "string")
+  then .checks[] | select(contains("lifecycle"))
+  else error("plan requires checks array of strings") end'
 ```
 
 ### New lifecycle probes (local mode only)
@@ -1206,22 +1212,50 @@ four current-host lifecycle command probes still run and only
 
 The local-only run produces PASS for owner-control/scan compatibility and typed unsupported for new lifecycle commands on released hosts. The `--require-public` run produces PASS for existing public mesh probes. Both mixed-version `summary.json` files must contain zero FAIL records when prerequisites are satisfied (PREREQ is acceptable for optional checks).
 
-### Failure mode: prerequisite verification
+### Failure mode: missing required binary
 
-Run each harness with a nonexistent required binary or documented missing prerequisite:
+A nonexistent required binary fails native path canonicalization before the
+harness prepares its evidence directory or starts a child. It exits nonzero
+with a filesystem error; this invocation produces no `summary.json` and does
+not report `PREREQ` rows. Use a fresh temporary evidence root to avoid confusing
+an earlier run's summary with this failure:
 
 ```bash
-# Missing released binary — exits nonzero with PREREQ in summary.json
-scripts/qa-control-plane-mixed-version.sh \
+evidence_dir="$(mktemp -d "${TMPDIR:-/tmp}/mesh-missing-binary.XXXXXX")"
+if scripts/qa-control-plane-mixed-version.sh \
   --released-binary /nonexistent/mesh-llm \
   --current-binary ./target/debug/mesh-llm \
   --local-only \
-  --evidence-dir .sisyphus/evidence/prereq-test
+  --evidence-dir "$evidence_dir"; then
+  echo "Expected the nonexistent binary to fail" >&2
+  exit 1
+fi
+# An empty directory can be removed: no evidence or summary was published.
+rmdir "$evidence_dir"
+```
 
-# Verify summary shows prereq status, not pass
-cat .sisyphus/evidence/control-plane-mixed-version-*/*/summary.json | python3 -c "import json,sys; d=json.load(sys.stdin); print(f'overall={d[\"overall\"]}, counts={d[\"counts\"]}')"
+For a run that reaches execution and writes a summary, inspect the actual
+`PASS`, `FAIL`, and `PREREQ` result counts separately. This example selects the
+local evidence root from the earlier invocation and rejects multiple matched
+runs; select one run's `summary.json` path if that root contains older evidence.
 
-# No leaked processes after failure
+```bash
+jq -sr '
+  if length != 1 then error("expected exactly one summary") else .[0] end
+  | if type == "object" and (.overall | type) == "string"
+       and (.overall == "pass" or .overall == "fail")
+       and (.results | type) == "array"
+       and all(.results[]; type == "object" and
+         (.status == "PASS" or .status == "FAIL" or .status == "PREREQ"))
+    then . as $summary
+      | reduce .results[] as $row
+          ({PASS: 0, FAIL: 0, PREREQ: 0}; .[$row.status] += 1)
+      | "overall=\($summary.overall), counts=\(tojson)"
+    else error("summary requires overall and typed PASS/FAIL/PREREQ results") end
+' .sisyphus/evidence/task-15-mixed-local/control-plane-mixed-version-*/summary.json
+
+
+# No leaked processes after an executed run
 pgrep -f 'mesh-control-plane-mixed-version|task-15-' || echo "no leaks"
 ```
 
@@ -1329,7 +1363,7 @@ just release-bundle "v$(./target/release/mesh-llm --version | awk '{print $NF}')
 
 Required evidence:
 
-- `scripts/verify-host-dependencies.py target/release/mesh-llm` reports no
+- `cargo xtool native verify-host-dependencies target/release/mesh-llm` reports no
   rejected backend imports.
 - Extracting the product archive yields one host, one runtime tree,
   `product-manifest.json`, and `host-imports.json`; all recorded digests match.
