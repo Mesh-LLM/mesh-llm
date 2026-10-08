@@ -202,15 +202,7 @@ pub async fn initialize_host_runtime_for_options(options: &RuntimeOptions) -> Re
     if options.plugin.is_some() {
         return Ok(());
     }
-    if !runtime_options_require_native_runtime(options) {
-        return initialize_logging_for_cli(options.config.as_deref()).await;
-    }
-    initialize_host_runtime_with_config_and_flavor(options.config.as_deref(), options.llama_flavor)
-        .await
-}
-
-fn runtime_options_require_native_runtime(options: &RuntimeOptions) -> bool {
-    !options.client && options.plugin.is_none()
+    system::native_runtime_requirement::initialize(options).await
 }
 
 pub async fn initialize_host_runtime_with_config(config_path: Option<&Path>) -> Result<()> {

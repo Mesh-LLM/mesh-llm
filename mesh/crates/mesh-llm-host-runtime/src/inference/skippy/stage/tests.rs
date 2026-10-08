@@ -513,7 +513,10 @@ async fn content_addressed_inventory_proves_local_bytes_without_leaking_path() {
         Some(package.source_model_sha256.as_str())
     );
     assert_eq!(inventory.content_addressed_local_source, Some(true));
-    assert_eq!(inventory.available_ranges.len(), 1);
+    assert_eq!(
+        inventory.available_ranges.len(),
+        usize::from(skippy_runtime::native_runtime_loaded())
+    );
 
     std::thread::sleep(Duration::from_millis(50));
     write_metadata_only_gguf(&path, 62);
@@ -601,4 +604,31 @@ fn stage_load_timeout_scales_with_size_hints_for_all_load_modes() {
 
     request.source_model_bytes = Some(u64::MAX);
     assert_eq!(stage_load_timeout(&request), Duration::from_secs(14400));
+}
+
+#[cfg(feature = "dynamic-native-runtime")]
+#[tokio::test]
+async fn unavailable_native_runtime_rejects_remote_and_local_stage_loads() {
+    if skippy_runtime::native_runtime_loaded() {
+        return;
+    }
+    let mut state = StageControlState::default();
+    for request in [
+        StageControlRequest::Load(load_request()),
+        StageControlRequest::LoadLocal(load_request()),
+    ] {
+        let response = state.handle(request).await.unwrap();
+        let StageControlResponse::Ready(response) = response else {
+            panic!("load must return a readiness response");
+        };
+        assert!(!response.accepted);
+        assert_eq!(response.status.state, StageRuntimeState::Failed);
+        assert!(
+            response
+                .error
+                .unwrap()
+                .contains("require a MeshLLM native runtime")
+        );
+        assert!(state.stages.is_empty());
+    }
 }

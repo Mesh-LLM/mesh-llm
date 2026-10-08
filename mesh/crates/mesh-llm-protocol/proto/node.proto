@@ -6,6 +6,88 @@ message GossipFrame {
   uint32 gen = 1;
   repeated PeerAnnouncement peers = 2;
   bytes sender_id = 3;          // must be exactly 32 bytes; must match QUIC peer identity
+  // Node records signed by the node they describe and relayed byte-for-byte.
+  // Additive: older nodes ignore this field and keep reading `peers`, which
+  // newer nodes still populate for them.
+  repeated SignedNodeRecord signed_records = 4;
+  // Cache-affinity evidence signed by the node it describes, relayed
+  // byte-for-byte alongside its node record. Additive: older nodes keep
+  // reading PeerAnnouncement.cache_affinity, which newer nodes still send.
+  repeated SignedCacheAffinity signed_cache_affinity = 5;
+}
+
+// A node's self-description, signed with its endpoint key. Relays store and
+// forward `signed` and `signature` unchanged; they never re-encode them.
+//
+//   signed    = endpoint_id[32] || seq[8, u64 BE] || issued_at_unix_ms[8, u64 BE]
+//               || NodeRecord protobuf bytes
+//   signature = Ed25519(endpoint key, "mesh-llm-node-record-v1\0" || signed)
+//
+// Every header field has a fixed width and the record is the only
+// variable-length part, so the layout needs no length prefixes. A new layout
+// gets a new domain tag. The highest `seq` per node wins; `issued_at_unix_ms`
+// bounds how long relays keep forwarding a record.
+message SignedNodeRecord {
+  bytes signed = 1;
+  bytes signature = 2;            // exactly 64 bytes
+  // Unsigned. What the sending hop observed about the node; replaced at
+  // every hop because each relay measures its own view.
+  optional HopObservation hop = 3;
+}
+
+// The same envelope as SignedNodeRecord, signed under
+// "mesh-llm-cache-affinity-record-v1\0" with a CacheAffinityAdvertisement as
+// the body. Relays drop it once it is older than the advertisement TTL.
+message SignedCacheAffinity {
+  bytes signed = 1;
+  bytes signature = 2;            // exactly 64 bytes
+}
+
+message HopObservation {
+  optional uint32 latency_ms = 1;
+  optional LatencySource latency_source = 2;
+  optional uint32 latency_age_ms = 3;
+  bytes latency_observer_id = 4;  // 32 bytes when set
+}
+
+// Only facts the node asserts about itself. Fields a hop measures, fields
+// derived from other fields, and deprecated compatibility fields stay on the
+// legacy PeerAnnouncement. Cache affinity travels as its own signed record
+// (SignedCacheAffinity), and direct-only data (demand, log heads,
+// per-connection proofs) is not part of the record either.
+message NodeRecord {
+  NodeRole role = 1;
+  optional uint32 http_port = 2;
+  string version = 3;
+  repeated TransportAddr addrs = 4;
+  optional HardwareInfo hardware = 5;
+  uint64 vram_bytes = 6;
+  string mesh_id = 7;
+  string mesh_policy_hash = 8;
+  repeated string serving_models = 9;
+  repeated string hosted_models = 10;
+  repeated ServedModelDescriptor served_models = 11;
+  repeated ModelRuntimeDescriptor served_runtime = 12;
+  repeated string requested_models = 13;
+  repeated string explicit_model_interests = 14;
+  repeated string catalog_models = 15;
+  string model_source = 16;
+  optional ExpertsSummary experts_summary = 17;
+  optional uint64 first_joined_mesh_ts = 18;
+  repeated MeshSubprotocol subprotocols = 19;
+  InferenceAdmissionState admission_state = 20;
+  repeated AdvertisedModelThroughput throughput = 21;
+  repeated LightningOffer lightning_offers = 22;
+  optional SignedNodeOwnership owner_attestation = 23;
+  optional SignedMeshGenesisPolicy genesis_policy = 24;
+  optional ReleaseBuildAttestation release_attestation = 25;
+}
+
+message TransportAddr {
+  oneof addr {
+    string relay_url = 1;
+    string ip = 2;                // socket address, e.g. "203.0.113.5:4433"
+  }
 }
 
 message PeerAnnouncement {
@@ -143,6 +225,7 @@ message LightningOffer {
   string model = 1;
   uint64 input_msat_per_million = 2;
   uint64 output_msat_per_million = 3;
+  // Deprecated and ignored on read; sellers send 1 for older buyers.
   uint64 minimum_invoice_msat = 4;
 }
 

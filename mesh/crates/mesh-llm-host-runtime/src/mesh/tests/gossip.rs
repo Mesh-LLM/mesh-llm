@@ -60,6 +60,7 @@ pub(crate) fn test_announcement(ts: Option<u64>) -> PeerAnnouncement {
         stage_protocol_generation_supported: true,
         stage_status_list_supported: true,
         local_gguf_content_id_supported: true,
+        decode_batch_policy_supported: true,
         advertised_model_throughput: vec![],
         #[cfg(feature = "payments")]
         lightning_offers: Default::default(),
@@ -98,4 +99,10 @@ mod discovery {
     use super::*;
 
     include!("gossip/discovery.rs");
+}
+
+mod signed_records {
+    use super::*;
+
+    include!("gossip/signed_records.rs");
 }

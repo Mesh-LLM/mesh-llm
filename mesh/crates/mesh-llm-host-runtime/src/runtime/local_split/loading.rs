@@ -290,7 +290,9 @@ pub(super) async fn load_split_runtime_generation_inner(
         skippy::SkippyModelHandle::load_stage0_runtime_options_with_openai_args_and_open_events(
             runtime_options,
             settings.embedded_openai.clone(),
-            Some(skippy::MeshAutoHookPolicy::new(node_for_hook)),
+            Some(crate::plugin::exchange_policy::compose_node_hooks(
+                node_for_hook,
+            )),
             skippy_telemetry,
             // Split downstream loads have no `LoadOperation` reservation of
             // their own (event-system-fixes deferral D2 scopes
@@ -361,6 +363,7 @@ pub(super) async fn load_split_runtime_generation_inner(
             slots: spec.slots,
             capabilities,
             workload_class: mesh::ModelWorkloadClass::CausalGeneration,
+            thinking: handle.thinking().cloned(),
             inner: LocalRuntimeBackendHandle::Skippy {
                 model: Box::new(handle),
                 http,
@@ -383,6 +386,12 @@ pub(super) async fn stage0_runtime_options(
     downstream_endpoint: &str,
     stage0_return_endpoint: &str,
 ) -> Result<skippy_serving::EmbeddedRuntimeOptions> {
+    crate::runtime::split_planning::warn_if_decode_batch_policy_unsupported(
+        spec.model_ref,
+        settings.last_stage_decode_batch,
+        &spec.generation.stages,
+        &spec.generation.participants,
+    );
     let mut runtime_options = settings.runtime_options.clone();
     runtime_options.config.run_id = spec.generation.run_id.clone();
     runtime_options.config.topology_id = spec.generation.topology_id.clone();

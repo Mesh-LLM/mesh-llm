@@ -205,6 +205,7 @@ fn install_blackboard_schema(plugin_dir: &std::path::Path) {
             install_path: std::env::temp_dir().join("mesh-llm-plugin-blackboard-api-tests"),
             enabled: true,
             manifest: Some(InstalledPluginManifestMetadata {
+                openai_exchange_hook: None,
                 config_schema: Some(blackboard_schema()),
                 web_ui: None,
             }),

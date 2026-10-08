@@ -40,7 +40,7 @@ fn install_systemd_service(
     runner: &mut dyn ServiceCommandRunner,
 ) -> Result<ServiceInstallReport> {
     let paths = ServicePaths::from_context(context);
-    fs::create_dir_all(&paths.service_config_dir)?;
+    // ensure_service_env_file creates the service config directory owner-only.
     fs::create_dir_all(&paths.systemd_unit_dir)?;
     ensure_service_env_file(&paths.service_env_file)?;
     fs::write(
@@ -140,7 +140,7 @@ fn install_launchd_service(
     runner: &mut dyn ServiceCommandRunner,
 ) -> Result<ServiceInstallReport> {
     let paths = ServicePaths::from_context(context);
-    fs::create_dir_all(&paths.service_config_dir)?;
+    // ensure_service_env_file creates the service config directory owner-only.
     fs::create_dir_all(&paths.launchd_agent_dir)?;
     fs::create_dir_all(&paths.launchd_log_dir)?;
     ensure_service_env_file(&paths.service_env_file)?;

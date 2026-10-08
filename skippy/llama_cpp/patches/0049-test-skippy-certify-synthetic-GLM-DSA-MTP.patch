@@ -67,10 +67,10 @@ index 13376ef75..d69d380ca 100644
          if (!input.values[base + 4].empty()) recipe.self_k_rot_lid = lid->build_input_k_rot(context);
          bind(input.values[base + 0], recipe.self_k_idxs_mla);
 diff --git a/tests/test-llama-archs.cpp b/tests/test-llama-archs.cpp
-index bde52d933..e1c04709b 100644
+index a1e38304b..320822b16 100644
 --- a/tests/test-llama-archs.cpp
 +++ b/tests/test-llama-archs.cpp
-@@ -1215,11 +1215,17 @@ int main(int argc, char ** argv) {
+@@ -1240,11 +1240,17 @@ int main(int argc, char ** argv) {
              if (out.empty() || arch == LLM_ARCH_UNKNOWN) throw std::runtime_error("--dense-mtp requires architecture and output");
              if (dense_mtp_depth == 0) throw std::runtime_error("--dense-mtp-depth must be positive");
              auto gguf = get_gguf_ctx(arch,

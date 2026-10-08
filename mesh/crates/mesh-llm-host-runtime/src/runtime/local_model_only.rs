@@ -192,15 +192,6 @@ async fn run_local_model_only_inner(
             auto_balance_requested: options.auto_balance,
         },
     );
-    if crate::runtime::serving_strategy::strategy_requests_auto_balance(
-        options.strategy,
-        crate::runtime::serving_strategy::StrategyContext {
-            split: options.split,
-            auto_balance_requested: options.auto_balance,
-        },
-    ) {
-        options.auto_balance = true;
-    }
     crate::runtime::serving_strategy::log_strategy_plan(&strategy_plan);
     apply_runtime_cli_speculative_overrides(&mut config, options.speculative_overrides.as_ref());
     super::run_auto::apply_runtime_cli_parallel_override(&mut config, options.parallel);

@@ -10,6 +10,7 @@ mod helpers;
 mod internal_rpc;
 mod io;
 mod manifest;
+pub mod openai_exchange;
 mod runtime;
 mod simple_plugin;
 mod virtual_model;
@@ -99,6 +100,8 @@ pub const PROTOCOL_VERSION: u32 = 3;
 /// Additive protobuf messages alone do not tell a plugin whether its host
 /// handles them; these do.
 pub mod host_capabilities {
+    /// The host supports permissioned OpenAI exchange lifecycle services.
+    pub const OPENAI_EXCHANGE: &str = crate::openai_exchange::OPENAI_EXCHANGE_CAPABILITY;
     /// The host accepts `PeerBlockRequest`.
     pub const PEER_BLOCKS: &str = "peer_blocks.v1";
 }

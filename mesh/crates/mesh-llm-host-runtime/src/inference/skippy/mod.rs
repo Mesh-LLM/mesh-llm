@@ -13,6 +13,8 @@ mod materialization;
 pub(crate) mod metal_pipeline_cache;
 mod model_capabilities;
 mod model_open_drain;
+#[cfg(all(test, feature = "dynamic-native-runtime"))]
+mod native_unavailable_tests;
 mod package;
 mod projector;
 #[cfg(test)]
@@ -41,6 +43,7 @@ use skippy_serving::OpenAiGuardrailsTarget;
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
+use skippy_inference_api::thinking::ThinkingControls;
 use skippy_inference_api::{
     AudioResponse, AudioSpeechRequest, AudioTranscriptionRequest, AudioTranscriptionResponse,
     ChatCompletionRequest, ChatCompletionResponse, ChatCompletionStream, CompletionRequest,
@@ -236,6 +239,11 @@ pub(crate) struct SkippyModelHandle {
     backend: Arc<dyn OpenAiBackend>,
     openai_guardrails: Option<OpenAiGuardrailsConfig>,
     config: StageConfig,
+    /// Render-only reasoning-control observations Skippy produced for this model.
+    ///
+    /// Skippy owns both the shape (see `skippy_inference_api::thinking`) and the
+    /// probe; the host only carries the value to `/v1/models`.
+    thinking: Option<ThinkingControls>,
     started_at_unix_nanos: i64,
     status: Arc<Mutex<HandleState>>,
     _prediction_return_listener: Option<PredictionReturnListener>,
@@ -269,6 +277,7 @@ pub(crate) fn load_laya_model(
     path: &Path,
     device: Option<&str>,
 ) -> Result<Arc<skippy_runtime::LayaModel>> {
+    crate::system::native_runtime_requirement::ensure_native_runtime_available()?;
     let threads = std::thread::available_parallelism()
         .map(usize::from)
         .unwrap_or(4);
@@ -490,6 +499,7 @@ impl OpenAiBackend for SkippyModelHandle {
 }
 
 pub(crate) fn infer_layer_count(path: &Path) -> Result<u32> {
+    crate::system::native_runtime_requirement::ensure_native_runtime_available()?;
     let info =
         ModelInfo::open(path).with_context(|| format!("open model metadata {}", path.display()))?;
     let layer_count = info
@@ -616,6 +626,43 @@ pub(crate) fn forget_stage0_compute_meter(run_id: &str) {
     }
 }
 
+/// Render-only reasoning-control observations for the models this process serves.
+///
+/// Keyed by the mesh model name so `/v1/models` can attach them to the entry it
+/// publishes. The value is the serialized Skippy report: the host never inspects
+/// or reshapes it. Local-only state — it is never gossiped, because a peer cannot
+/// see this node's selected template.
+static LOCAL_THINKING: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashMap<String, serde_json::Value>>,
+> = std::sync::LazyLock::new(Default::default);
+
+pub(crate) fn register_local_thinking(model_name: &str, thinking: Option<&ThinkingControls>) {
+    let value = thinking.and_then(|thinking| serde_json::to_value(thinking).ok());
+    let Ok(mut registry) = LOCAL_THINKING.lock() else {
+        return;
+    };
+    match value {
+        Some(value) => {
+            registry.insert(model_name.to_string(), value);
+        }
+        // A reload that produced no observations must not leave the previous
+        // load's report behind.
+        None => {
+            registry.remove(model_name);
+        }
+    }
+}
+
+pub(crate) fn forget_local_thinking(model_name: &str) {
+    if let Ok(mut registry) = LOCAL_THINKING.lock() {
+        registry.remove(model_name);
+    }
+}
+
+pub(crate) fn local_thinking(model_name: &str) -> Option<serde_json::Value> {
+    LOCAL_THINKING.lock().ok()?.get(model_name).cloned()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -623,6 +670,30 @@ mod tests {
     use skippy_inference_api::{MESH_COMPACT_FIELD, OpenAiError};
     use skippy_serving::runtime_state::RuntimeSessionStats;
     use skippy_serving::telemetry::TelemetryStats;
+
+    fn thinking_fixture() -> ThinkingControls {
+        ThinkingControls {
+            enabled: true,
+            efforts: vec!["low".to_string(), "medium".to_string(), "high".to_string()],
+        }
+    }
+
+    #[test]
+    fn local_thinking_registry_round_trips_and_clears_on_an_unprobed_reload() {
+        let model = "registry-unit-test-model";
+        forget_local_thinking(model);
+        assert!(local_thinking(model).is_none());
+
+        register_local_thinking(model, Some(&thinking_fixture()));
+        let value = local_thinking(model).expect("registered thinking");
+        assert_eq!(value["enabled"], true);
+        assert_eq!(value["efforts"][2], "high");
+
+        // A reload that produced no observations must not leave the previous
+        // load's report behind.
+        register_local_thinking(model, None);
+        assert!(local_thinking(model).is_none());
+    }
 
     #[test]
     fn lifecycle_only_hooks_leave_exact_receipts_unset() {

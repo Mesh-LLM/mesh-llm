@@ -4,7 +4,7 @@ mod locked;
 mod performance;
 
 pub use locked::{LockedTopologyStage, plan_locked_topology};
-pub use performance::{StageDecodeEstimate, ThroughputEstimate};
+pub use performance::{PlacementObjective, StageDecodeEstimate, ThroughputEstimate};
 
 const MINIMUM_AUTO_CONTEXT_LENGTH: u32 = 65_536;
 const CONTEXT_STEPS: &[u32] = &[512, 1024, 2048, 4096, 8192, 16_384, 32_768, 65_536, 131_072];
@@ -54,6 +54,10 @@ pub struct TopologyPlanningInput {
     /// `decode_bytes_per_second` on every placed node; otherwise the
     /// memory-only placement stands.
     pub auto_balance: bool,
+    /// What the re-cut optimises for. Only consulted when `auto_balance` is
+    /// set; defaults to `Throughput`, which is the behaviour `--auto-balance`
+    /// has always had.
+    pub placement_objective: PlacementObjective,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -172,8 +176,13 @@ pub fn rebalance_topology(
         current.context_length,
         current.parallel_lanes,
     )?;
-    let stages =
-        performance::balance_stages(&current.stages, &nodes, &layer_weights, &layer_required)?;
+    let stages = performance::balance_stages(
+        &current.stages,
+        &nodes,
+        &layer_weights,
+        &layer_required,
+        input.placement_objective,
+    )?;
     if stages
         .iter()
         .zip(&current.stages)
@@ -770,6 +779,7 @@ mod tests {
             parallel_lanes_override: None,
             target_decode_tpot_ms: None,
             auto_balance: false,
+            placement_objective: Default::default(),
         }
     }
 
@@ -788,6 +798,7 @@ mod tests {
             parallel_lanes_override: None,
             target_decode_tpot_ms: None,
             auto_balance: false,
+            placement_objective: Default::default(),
         }
     }
 
@@ -834,6 +845,7 @@ mod tests {
             parallel_lanes_override: Some(LANES),
             target_decode_tpot_ms: None,
             auto_balance: false,
+            placement_objective: Default::default(),
         };
         let layer_weights = layer_weight_bytes(&request);
         let kv_per_layer = request.kv_bytes_per_token.div_ceil(u64::from(LAYERS));

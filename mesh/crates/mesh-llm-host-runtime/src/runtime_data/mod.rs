@@ -14,6 +14,7 @@ mod plugin_tests;
 mod plugins;
 mod processes;
 mod producers;
+mod runtime_status;
 mod snapshots;
 mod subscriptions;
 
@@ -391,6 +392,7 @@ pub(crate) mod tests {
             is_host: false,
             is_client: false,
             llama_ready: false,
+            external_inference_ready: false,
             model_name: "Qwen-Test".into(),
             models: vec!["Qwen-Test".into()],
             available_models: vec!["Qwen-Test".into()],
@@ -444,6 +446,7 @@ pub(crate) mod tests {
                 lifecycle_instances: vec![],
                 intent_summary: None,
                 runtime_events: None,
+                serving_strategy: None,
             },
             model_name: "Qwen-Test".into(),
             models: vec!["Qwen-Test".into()],
@@ -553,6 +556,7 @@ pub(crate) mod tests {
             stage_protocol_generation_supported: false,
             stage_status_list_supported: false,
             local_gguf_content_id_supported: false,
+            decode_batch_policy_supported: false,
             advertised_model_throughput: vec![],
             #[cfg(feature = "payments")]
             lightning_offers: Default::default(),
@@ -587,6 +591,7 @@ pub(crate) mod tests {
             is_host: true,
             is_client: false,
             llama_ready: true,
+            external_inference_ready: false,
             model_name: "Self-Model".into(),
             models: vec!["Self-Model".into()],
             available_models: vec!["Self-Model".into()],
@@ -692,6 +697,7 @@ pub(crate) mod tests {
             stage_protocol_generation_supported: false,
             stage_status_list_supported: false,
             local_gguf_content_id_supported: false,
+            decode_batch_policy_supported: false,
             advertised_model_throughput: vec![],
             #[cfg(feature = "payments")]
             lightning_offers: Default::default(),
@@ -732,6 +738,7 @@ pub(crate) mod tests {
             is_host: true,
             is_client: false,
             llama_ready: true,
+            external_inference_ready: false,
             model_name: "Self-Model".into(),
             models: vec!["Self-Model".into()],
             available_models: vec!["Self-Model".into()],
@@ -835,6 +842,7 @@ pub(crate) mod tests {
             stage_protocol_generation_supported: false,
             stage_status_list_supported: false,
             local_gguf_content_id_supported: false,
+            decode_batch_policy_supported: false,
             advertised_model_throughput: vec![crate::network::metrics::ModelThroughputHint {
                 model_name: "Qwen/Qwen3-Coder".into(),
                 avg_tokens_per_second_milli: 13_400,
@@ -873,6 +881,7 @@ pub(crate) mod tests {
             is_host: true,
             is_client: false,
             llama_ready: true,
+            external_inference_ready: false,
             model_name: "Self-Model".into(),
             models: vec!["Self-Model".into()],
             available_models: vec!["Self-Model".into()],

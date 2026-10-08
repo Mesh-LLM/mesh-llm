@@ -138,6 +138,8 @@ multimodal library-test executable, and the run-scoped CPU workload oracle
 closure. Static Metal resources are embedded; an unpackaged non-system dylib
 makes the handoff fail. SHA-256 digests bind all handoff bytes to the candidate,
 main base, run/attempt, and pass identity.
+The build job sets `CTEST_PARALLEL_LEVEL=16` for complete upstream CTest runs
+in the repair session and trusted build; the per-case timeout remains 900 seconds.
 
 Before compilation, the controller runs the selected battery in cache-free
 `--dry-run --skip-build` mode against its own planner output. This checks the
@@ -224,6 +226,9 @@ repeated infrastructure failure or invalid aggregate evidence stops. Only
 complete independent success permits publication.
 Full worker/build logs remain for 14 days; executable handoffs remain for seven
 days so a single-machine queue can complete later passes.
+Agent-run build and test commands stream to the live job and save individual
+logs and exit statuses under `agent-commands/` in the build evidence artifact.
+The command wrapper also snapshots available CTest result files after each run.
 
 Within each candidate build job, Goose resumes the same session for
 prepare/build failures under the existing 11.5-hour coding-admission and
@@ -1144,6 +1149,13 @@ complete
 [manage-ci validation contract](../.agents/skills/manage-ci/SKILL.md#validation-contract)
 for scope-specific checks, and run the canonical `just test-all` target when
 full repository validation is required.
+Its plugin-author gate rebuilds the OpenAI exchange observer package and runs
+the installed lifecycle conformance tests with controlled inference backends.
+`just test-openai-exchange-conformance` runs that gate independently.
+The exemplar lives under
+`mesh/crates/mesh-llm-plugin/examples/openai-exchange-observer.rs` and remains
+a Cargo example of the plugin SDK. The package archive is written to the
+workspace-root `dist/openai-exchange-observer.tar.gz`.
 
 ### Offline runner identity qualification
 
@@ -1427,7 +1439,8 @@ both owner and permissions and never create the path themselves.
 
 The shared `setup-canary-python` action restores `ci/canary-python/uv.lock` into
 a controller-owned virtual environment and exports `SKIPPY_WORKLOAD_SDK_PYTHON`.
-Historical source workers consume that exact SDK interpreter. This is managed
+The producer build uses it for the early embedding battery, and historical
+source workers consume that exact SDK interpreter. This is managed
 project dependency restoration, not an installation into system Python or the
 read-only model cache. The runner still requires preinstalled `uv`.
 
