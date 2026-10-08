@@ -5,6 +5,7 @@ use std::{
     os::unix::{fs::PermissionsExt, process::CommandExt},
     path::{Path, PathBuf},
     process::{Command, Output, Stdio},
+    sync::atomic::{AtomicUsize, Ordering},
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -15,9 +16,11 @@ const OLD: &str = r#"f"RUN /root/python3.11/bin/pip3 install --no-cache-dir {PAC
 struct Fixture(PathBuf);
 impl Fixture {
     fn new() -> Self {
+        static NEXT: AtomicUsize = AtomicUsize::new(0);
         let root = std::env::temp_dir().join(format!(
-            "swerex-cli-{}-{}",
+            "swerex-cli-{}-{}-{}",
             std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed),
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap()
