@@ -454,8 +454,10 @@ five-lane, model or SDK qualification claim.
 Windows product readiness observes the owning launcher and its native child
 exit status, retaining the 15-second graceful-shutdown window. CTRL_BREAK
 delivery errors remain visible and fail the smoke. Clean/nonzero exits,
-timeout cleanup and failed signal delivery have Rust behavior fixtures;
-Windows product runs provide actual platform evidence.
+timeout cleanup and failed signal delivery have Rust behavior fixtures.
+After shutdown, Windows log removal allows five attempts separated by one-second
+waits; persistent locks fail cleanup and retain the log. Rust fixtures cover both
+transient and persistent locks; Windows product runs provide actual platform evidence.
 
 All workflow calls use typed, bounded semantic inputs. Credential-bearing smoke
 workflows remain fixed to GitHub-hosted runners; the PR entrypoints pass no

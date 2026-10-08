@@ -154,6 +154,30 @@ shutdown_client() {
     fi
 }
 
+# shellcheck disable=SC2329 # Invoked by the EXIT cleanup trap.
+remove_client_log() {
+    local attempt
+    local removal_error=""
+    if [[ "$is_windows" != "1" ]]; then
+        rm -f "$LOG"
+        return
+    fi
+
+    # Windows may retain a log handle briefly after the owning child exits.
+    # Retry only this smoke's file, after shutdown, with a finite cleanup budget.
+    for ((attempt = 1; attempt <= 5; attempt++)); do
+        if removal_error="$(rm -f "$LOG" 2>&1)"; then
+            return 0
+        fi
+        if [[ "$attempt" -lt 5 ]]; then
+            sleep 1
+        fi
+    done
+    printf '%s\n' "$removal_error" >&2
+    echo "client log cleanup failed after 5 attempts; retained at $LOG" >&2
+    return 1
+}
+
 # shellcheck disable=SC2329 # Invoked by the EXIT trap.
 cleanup() {
     local original_status=$?
@@ -166,7 +190,7 @@ cleanup() {
         cat "$LOG" >&2
     fi
     rm -rf "$STATE_DIR" || cleanup_status=1
-    rm -f "$LOG" || cleanup_status=1
+    remove_client_log || cleanup_status=1
 
     if [[ "$cleanup_status" -ne 0 ]]; then
         exit "$cleanup_status"

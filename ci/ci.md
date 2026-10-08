@@ -636,8 +636,10 @@ the native child's exit status. The native PID is used for CTRL_BREAK delivery
 and forced cleanup, not a Python `os.kill(pid, 0)` liveness probe. Signal-delivery
 errors and nonzero child exits fail the smoke; its 15-second graceful-shutdown
 window remains unchanged. Rust behavior fixtures cover clean exit, nonzero
-exit, timeout, and signal-delivery failure; actual Windows product checks
-provide the platform evidence.
+exit, timeout, and signal-delivery failure. After shutdown, Windows log removal
+allows five attempts with one-second waits between them; a persistent lock
+fails cleanup and retains the log. Rust fixtures cover transient and persistent
+locks; actual Windows product checks provide the platform evidence.
 
 ## Slice catalog
 

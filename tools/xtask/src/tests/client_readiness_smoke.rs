@@ -56,6 +56,25 @@ case "$operation" in
 esac
 "#;
 
+const LOG_REMOVAL_ADAPTER: &str = r#"#!/usr/bin/env bash
+if [[ "$#" == 2 && "$1" == -f && "$2" == */mlc-ready.*.log ]]; then
+    case "$SMOKE_FIXTURE" in
+        cleanup-transient|cleanup-locked)
+            attempts=0
+            [[ ! -f "$SMOKE_RM_ATTEMPTS" ]] || attempts=$(<"$SMOKE_RM_ATTEMPTS")
+            attempts=$((attempts + 1))
+            printf '%s\n' "$attempts" > "$SMOKE_RM_ATTEMPTS"
+            printf '%s\n' "$2" > "$SMOKE_LOG_PATH"
+            if [[ "$SMOKE_FIXTURE" == cleanup-locked || "$attempts" -lt 3 ]]; then
+                echo "rm: cannot remove '$2': Device or resource busy" >&2
+                exit 1
+            fi
+            ;;
+    esac
+fi
+exec "$SMOKE_REAL_RM" "$@"
+"#;
+
 struct Fixture {
     root: PathBuf,
     process: RefCell<Option<Child>>,
@@ -70,6 +89,7 @@ impl Fixture {
         for (relative, body) in [
             ("client", CLIENT),
             ("bin/python3", PROCESS_ADAPTER),
+            ("bin/rm", LOG_REMOVAL_ADAPTER),
             ("bin/uname", "#!/usr/bin/env bash\necho MSYS_NT-10.0\n"),
         ] {
             let path = root.join(relative);
@@ -91,6 +111,8 @@ impl Fixture {
             "existing Python fixture prerequisite"
         );
         let path = std::env::var("PATH")?;
+        let rm = Command::new("sh").args(["-c", "command -v rm"]).output()?;
+        assert!(rm.status.success(), "existing rm fixture prerequisite");
         let script = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../scripts/ci-client-readiness-smoke.sh");
         let stdout_path = self.root.join("stdout.log");
@@ -109,6 +131,9 @@ impl Fixture {
                 String::from_utf8(python.stdout)?.trim(),
             )
             .env("SMOKE_FIXTURE", mode)
+            .env("SMOKE_REAL_RM", String::from_utf8(rm.stdout)?.trim())
+            .env("SMOKE_RM_ATTEMPTS", self.root.join("rm-attempts"))
+            .env("SMOKE_LOG_PATH", self.root.join("log-path"))
             .env("SMOKE_CHILD_PID", self.root.join("child.pid"))
             .env("MESH_LLM_CLIENT_READY_MAX_WAIT", "3")
             .env("MESH_LLM_CLIENT_SHUTDOWN_MAX_WAIT", "1")
@@ -142,13 +167,18 @@ impl Fixture {
         }
     }
 
-    fn assert_reaped(&self) -> DynResult<()> {
+    fn assert_child_reaped(&self) -> DynResult<()> {
         let pid = fs::read_to_string(self.root.join("child.pid"))?;
         let result = Command::new("kill").args(["-0", pid.trim()]).output()?;
         assert!(
             !result.status.success(),
             "fixture native child remains alive"
         );
+        Ok(())
+    }
+
+    fn assert_reaped(&self) -> DynResult<()> {
+        self.assert_child_reaped()?;
         assert!(fs::read_dir(self.root.join("state"))?.next().is_none());
         Ok(())
     }
@@ -215,4 +245,35 @@ fn windows_adapter_reports_signal_failure_and_still_reaps_owned_child() -> DynRe
     assert!(messages(&output).contains("fixture: console signal delivery failed"));
     assert!(messages(&output).contains("failed to send CTRL_BREAK_EVENT"));
     fixture.assert_reaped()
+}
+
+#[test]
+fn windows_adapter_removes_log_after_transient_windows_lock() -> DynResult<()> {
+    let fixture = Fixture::new()?;
+    let output = fixture.run("cleanup-transient")?;
+    assert!(output.status.success(), "{}", messages(&output));
+    assert_eq!(
+        fs::read_to_string(fixture.root.join("rm-attempts"))?.trim(),
+        "3"
+    );
+    fixture.assert_reaped()
+}
+
+#[test]
+fn windows_adapter_fails_bounded_cleanup_and_retains_locked_log() -> DynResult<()> {
+    let fixture = Fixture::new()?;
+    let output = fixture.run("cleanup-locked")?;
+    assert!(!output.status.success(), "{}", messages(&output));
+    assert!(messages(&output).contains("client log cleanup failed after 5 attempts"));
+    assert!(messages(&output).contains("Device or resource busy"));
+    assert_eq!(
+        fs::read_to_string(fixture.root.join("rm-attempts"))?.trim(),
+        "5"
+    );
+    let log_path = fs::read_to_string(fixture.root.join("log-path"))?;
+    assert!(
+        Path::new(log_path.trim()).is_file(),
+        "locked log was discarded"
+    );
+    fixture.assert_child_reaped()
 }
