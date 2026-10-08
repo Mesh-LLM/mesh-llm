@@ -112,6 +112,15 @@ pub(super) fn openai_backend_error(error: anyhow::Error) -> InferenceError {
     InferenceError::backend(error.to_string())
 }
 
+/// Maps a media prefill failure: media the request was not allowed to send
+/// is the client's error, anything else is the backend's.
+pub(super) fn openai_media_error(error: anyhow::Error) -> InferenceError {
+    match error.downcast_ref::<skippy_runtime::MediaRejected>() {
+        Some(rejected) => InferenceError::invalid_request(rejected.to_string()),
+        None => openai_backend_error(error),
+    }
+}
+
 pub(super) fn openai_io_error(error: std::io::Error) -> InferenceError {
     InferenceError::backend(error.to_string())
 }
@@ -159,4 +168,21 @@ pub(super) fn context_budget_completion_tokens(
     Ok(ctx_size
         .saturating_sub(prompt_token_count)
         .min(u32::MAX as usize) as u32)
+}
+
+#[cfg(test)]
+mod media_error_tests {
+    use super::*;
+
+    #[test]
+    fn rejected_media_is_an_invalid_request() {
+        let rejected = anyhow::Error::new(skippy_runtime::MediaRejected::new("image too large"))
+            .context("prefill media");
+        let error = openai_media_error(rejected);
+        assert_eq!(error.status(), axum::http::StatusCode::BAD_REQUEST);
+        assert!(error.to_string().contains("image too large"), "{error}");
+
+        let failed = openai_media_error(anyhow::anyhow!("native decode failed"));
+        assert_eq!(failed.status(), axum::http::StatusCode::BAD_GATEWAY);
+    }
 }
