@@ -1957,8 +1957,9 @@ async fn gossip_once(from: &super::Node, to: &super::Node, step: &str) {
 }
 
 /// The life of one plugin key, as a peer sees it over real gossip: announced,
-/// re-announced after a plugin restart, rotated, withdrawn, dropped with the
-/// peer, and announced again after the node restarts.
+/// re-announced after a plugin restart, rotated, withdrawn, withdrawn by the
+/// host when the plugin stops for good, dropped with the peer, and announced
+/// again after the node restarts.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_plugin_key_through_its_lifecycle_as_a_peer_sees_it() {
     use crate::mesh::plugin_keys::bind;
@@ -2007,6 +2008,34 @@ async fn a_plugin_key_through_its_lifecycle_as_a_peer_sees_it() {
     announce(&a, Vec::new());
     gossip_once(&b, &a, "withdrawn").await;
     assert!(listed(&b, a_id).is_empty(), "a withdrawn key is forgotten");
+
+    // The plugin is disabled or removed: the node withdraws its key, peers
+    // forget it at the next exchange, and another plugin's key stays.
+    announce(&a, key(3).to_vec());
+    a.apply_plugin_key_request(
+        "other",
+        PluginKeyRequest {
+            public_key: key(4).to_vec(),
+        },
+    )
+    .expect("the key request is accepted");
+    gossip_once(&b, &a, "two plugins").await;
+    assert_eq!(listed(&b, a_id).len(), 2);
+    a.forward_plugin_event(crate::plugin::PluginMeshEvent::PluginStopped {
+        plugin_id: "capsules".into(),
+    })
+    .await
+    .expect("the event is handled");
+    assert_eq!(a.plugin_keys.own(), vec![bind(&a_secret, "other", key(4))]);
+    gossip_once(&b, &a, "plugin stopped").await;
+    assert_eq!(listed(&b, a_id), vec![bind(&a_secret, "other", key(4))]);
+    a.apply_plugin_key_request(
+        "other",
+        PluginKeyRequest {
+            public_key: Vec::new(),
+        },
+    )
+    .expect("the withdrawal is accepted");
 
     // Removed with the peer: a node that leaves is no longer listed.
     announce(&a, key(3).to_vec());

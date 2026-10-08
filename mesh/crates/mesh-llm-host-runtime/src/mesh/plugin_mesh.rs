@@ -246,6 +246,12 @@ impl Node {
                 let _ = response_tx.send(self.apply_plugin_key_request(&plugin_id, request));
                 Ok(())
             }
+            crate::plugin::PluginMeshEvent::PluginStopped { plugin_id } => {
+                // A disabled or removed plugin no longer runs here, so this
+                // node stops vouching for its key.
+                self.plugin_keys.remove_own(&plugin_id);
+                Ok(())
+            }
         }
     }
 
