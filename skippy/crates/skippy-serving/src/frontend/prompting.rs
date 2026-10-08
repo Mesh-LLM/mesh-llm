@@ -198,6 +198,8 @@ impl StageOpenAiBackend {
                 },
             )
             .map_err(openai_backend_error)?;
+        crate::grammar_bounds::check_chat_metadata_grammar(&result.metadata_json)
+            .map_err(InferenceError::invalid_request)?;
         Ok(RenderedChatPrompt {
             prompt: result.prompt,
             media,
