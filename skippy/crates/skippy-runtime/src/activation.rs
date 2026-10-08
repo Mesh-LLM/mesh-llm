@@ -11,6 +11,7 @@ use skippy_ffi::{
     NativeMtpDraft as RawNativeMtpDraft, SamplingConfig as RawSamplingConfig,
 };
 
+use crate::dflash::DecodedRows;
 use crate::error::{ensure_ok, free_error};
 use crate::session::StageSession;
 use crate::types::empty_raw_activation_desc;
@@ -151,6 +152,7 @@ impl StageSession {
             .token_count
             .checked_add(u64::try_from(token_ids.len()).context("token count exceeds u64")?)
             .context("session token count overflow")?;
+        self.dflash_after_decode(DecodedRows::for_prefill(token_ids.len(), positions));
         Ok((output_desc, output_payload))
     }
 
@@ -267,6 +269,7 @@ impl StageSession {
             .token_count
             .checked_add(u64::try_from(token_ids.len()).context("token count exceeds u64")?)
             .context("session token count overflow")?;
+        self.dflash_after_decode(DecodedRows::for_prefill(token_ids.len(), positions));
         Ok((predicted_token, output_desc, output_payload))
     }
 
@@ -367,6 +370,7 @@ impl StageSession {
             .token_count
             .checked_add(1)
             .context("session token count overflow")?;
+        self.dflash_after_decode(DecodedRows::trailing(0, 1));
         Ok((predicted_token, output_desc, output_payload))
     }
 
@@ -424,6 +428,7 @@ impl StageSession {
             .token_count
             .checked_add(1)
             .context("session token count overflow")?;
+        self.dflash_after_decode(DecodedRows::trailing(0, 1));
         Ok((
             predicted_token,
             NativeMtpDraft::from_raw(mtp_draft),
@@ -535,8 +540,11 @@ impl StageSession {
                     .context("session token count overflow")
             })
             .collect::<Result<Vec<_>>>()?;
-        for (request, updated) in requests.iter_mut().zip(updated_counts) {
+        for (row, (request, updated)) in requests.iter_mut().zip(updated_counts).enumerate() {
             request.session.token_count = updated;
+            request
+                .session
+                .dflash_after_decode(DecodedRows::trailing(row, 1));
         }
         Ok(output_payloads
             .into_iter()
@@ -713,6 +721,7 @@ impl StageSession {
             .token_count
             .checked_add(u64::try_from(token_ids.len()).context("token count exceeds u64")?)
             .context("session token count overflow")?;
+        self.dflash_after_decode(DecodedRows::trailing(0, token_ids.len()));
         Ok(RawVerifyFrameOutput {
             predicted_tokens: predicted,
             draft: NativeMtpDraft::from_raw(output_draft),
