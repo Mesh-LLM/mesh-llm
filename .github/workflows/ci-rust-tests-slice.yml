@@ -366,6 +366,11 @@ jobs:
           SAFETENSORS_FILES_JSON: ${{ steps.safetensors_model.outputs.files_json }}
         run: |
           set -euo pipefail
+          fixture_dir="$RUNNER_TEMP/safetensors-smollm2"
+          mapfile -t files < <(jq -r '.[]' <<<"$SAFETENSORS_FILES_JSON")
+          hf download "${{ steps.safetensors_model.outputs.repo }}" "${files[@]}" \
+            --revision "${{ steps.safetensors_model.outputs.revision }}" \
+            --local-dir "$fixture_dir"
           if [[ -f scripts/resolve-test-model-manifest.py ]]; then
             model_resolver=(python3 scripts/resolve-test-model-manifest.py)
           elif [[ -f tools/xtask/src/model_registry/resolve.rs ]]; then
@@ -374,11 +379,6 @@ jobs:
             echo 'unsupported model manifest resolver source' >&2
             exit 1
           fi
-          fixture_dir="$RUNNER_TEMP/safetensors-smollm2"
-          mapfile -t files < <(jq -r '.[]' <<<"$SAFETENSORS_FILES_JSON")
-          hf download "${{ steps.safetensors_model.outputs.repo }}" "${files[@]}" \
-            --revision "${{ steps.safetensors_model.outputs.revision }}" \
-            --local-dir "$fixture_dir"
           "${model_resolver[@]}" \
             ci/model-artifacts/manifests/safetensors-runtime-smoke.json \
             --cadence pull-request \
