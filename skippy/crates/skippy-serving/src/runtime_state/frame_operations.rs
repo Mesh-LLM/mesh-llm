@@ -484,6 +484,18 @@ impl RuntimeState {
         Ok(predicted)
     }
 
+    /// Drafts a DFlash block that follows `anchor`, the token this session
+    /// consumes next. `None` when the model has no DFlash draft attached.
+    pub(crate) fn dflash_propose(
+        &mut self,
+        session_id: &str,
+        anchor: i32,
+        max_tokens: usize,
+    ) -> Result<Option<skippy_runtime::DFlashProposal>> {
+        self.active_session(session_id)?
+            .dflash_propose(anchor, max_tokens)
+    }
+
     /// Verifies a speculative span in one batched forward, returning the target
     /// predictions plus the MTP draft for the branch that was verified.
     pub(crate) fn verify_tokens_sampled_mtp(
