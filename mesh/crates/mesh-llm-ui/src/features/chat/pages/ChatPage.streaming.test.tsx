@@ -551,13 +551,13 @@ describe('ChatPage', () => {
     const user = userEvent.setup()
     paidRoutingMock.allowed = true
     renderChatPage({ mode: 'live' })
-    expect(screen.getByRole('button', { name: 'Free + paid' })).toBeVisible()
+    expect(screen.getByRole('button', { name: 'Paid' })).toBeVisible()
 
     // React Query keeps the earlier `data: true` alongside the refetch error; any re-render picks it up.
     paidRoutingMock.isError = true
     await user.type(screen.getByLabelText('Prompt'), 'x')
 
-    expect(screen.queryByRole('button', { name: /Free \+ paid|Free only/ })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /^(Free|Paid)$/ })).not.toBeInTheDocument()
     expect(screen.getByText('Free')).toBeVisible()
   })
 
@@ -572,7 +572,7 @@ describe('ChatPage', () => {
     await waitFor(() => expect(chatMock.sendCalls).toHaveLength(1))
     expect(chatMock.sendCalls[0]?.freeOnly).toBe(false)
 
-    await user.click(screen.getByRole('button', { name: 'Free + paid' }))
+    await user.click(screen.getByRole('button', { name: 'Free' }))
     await user.click(screen.getByRole('button', { name: 'Retry last' }))
 
     await waitFor(() => expect(chatMock.reloadFreeOnly).toHaveLength(1))
@@ -587,14 +587,14 @@ describe('ChatPage', () => {
 
     renderChatPage({ mode: 'live' })
 
-    await user.click(screen.getByRole('button', { name: 'Free + paid' }))
+    await user.click(screen.getByRole('button', { name: 'Free' }))
     await user.type(screen.getByLabelText('Prompt'), 'First live prompt')
     await user.click(screen.getByRole('button', { name: 'Send' }))
     expect(await screen.findByText('Streaming response...')).toBeInTheDocument()
 
     await user.type(screen.getByLabelText('Prompt'), 'Queued while free only')
     await user.click(screen.getByRole('button', { name: 'Queue' }))
-    await user.click(screen.getByRole('button', { name: 'Free only' }))
+    await user.click(screen.getByRole('button', { name: 'Paid' }))
     await user.click(screen.getByRole('button', { name: 'Stop' }))
 
     await waitFor(() => expect(chatMock.sendCalls).toHaveLength(2))

@@ -12,6 +12,8 @@ import {
   isBrowserVisionModelLoaded
 } from '@/features/chat/api/attachment-preprocessing'
 import { usePaidRoutingQuery } from '@/features/chat/api/use-paid-routing-query'
+import { useModelPaymentsQuery } from '@/features/chat/api/use-model-payments-query'
+import { isOfferedForMode, priceLabel } from '@/features/chat/lib/model-prices'
 import { useModelsQuery } from '@/features/network/api/use-models-query'
 import { useStatusQuery } from '@/features/network/api/use-status-query'
 import { adaptModelsToSummary } from '@/features/network/api/models-adapter'
@@ -123,7 +125,13 @@ export function ChatPageContent({ data = CHAT_HARNESS, target, onClearTarget }: 
     (value: boolean) => updateRoutingPreferences({ freeOnly: value }),
     [updateRoutingPreferences]
   )
-  const modelExists = selectableModels.some((item) => item.name === model)
+  // Prices come from /v1/models. Free mode hides paid-only models; paid mode labels them with price.
+  const modelPayments = useModelPaymentsQuery({ enabled: liveMode }).data
+  const offeredModels = useMemo(
+    () => selectableModels.filter((item) => isOfferedForMode(modelPayments?.get(item.name), freeOnly)),
+    [freeOnly, modelPayments, selectableModels]
+  )
+  const modelExists = offeredModels.some((item) => item.name === model)
   const modelListKnown = !liveMode || modelsQuery.data != null || statusQuery.data != null
   const pickedModelUnavailable = model !== '' && !modelExists
   // selectedModelValue is what the dropdown shows; activeModelName is what we send on the wire —
@@ -250,14 +258,14 @@ export function ChatPageContent({ data = CHAT_HARNESS, target, onClearTarget }: 
             }
           ]
         : []),
-      ...selectableModels.map((item) => ({
+      ...offeredModels.map((item) => ({
         value: item.name,
         label: item.displayName || item.name,
-        meta: `${item.family} · ${item.context}`,
+        meta: freeOnly ? undefined : priceLabel(modelPayments?.get(item.name)),
         status: modelStatusBadge(item)
       }))
     ],
-    [displayModels, model, modelListKnown, pickedModelUnavailable, selectableModels]
+    [displayModels, freeOnly, model, modelListKnown, modelPayments, offeredModels, pickedModelUnavailable]
   )
   const canRetry = hasLastUserTurn(activeMessages.map((message) => ({ role: message.messageRole })))
 

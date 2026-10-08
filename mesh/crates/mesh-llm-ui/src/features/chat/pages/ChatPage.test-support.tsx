@@ -194,6 +194,13 @@ vi.mock('@/features/chat/api/use-paid-routing-query', () => ({
   usePaidRoutingQuery: () => ({ data: paidRoutingMockState.allowed, isError: paidRoutingMockState.isError })
 }))
 
+const modelPaymentsMockState = vi.hoisted(() => ({ data: undefined as Map<string, unknown> | undefined }))
+export const modelPaymentsMock = modelPaymentsMockState
+
+vi.mock('@/features/chat/api/use-model-payments-query', () => ({
+  useModelPaymentsQuery: () => ({ data: modelPaymentsMockState.data })
+}))
+
 vi.mock('@/features/network/api/use-status-query', () => ({
   useStatusQuery: vi.fn()
 }))

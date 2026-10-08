@@ -229,22 +229,30 @@ export function ChatPageLayout({
         </span>
         <ModelSelect options={modelOptions} value={selectedModelValue} onChange={onModelChange} />
         {onFreeOnlyChange ? (
-          <button
-            type="button"
-            aria-pressed={freeOnly}
-            title={
-              freeOnly
-                ? 'Only free hosts will serve this chat'
-                : 'Paid hosts may serve this chat, within your spending policy'
-            }
-            onClick={() => onFreeOnlyChange(!freeOnly)}
-            className={cn(
-              'ui-control shrink-0 whitespace-nowrap rounded-[var(--radius)] border px-2.5 py-[5px] font-mono text-[length:var(--density-type-control)]',
-              freeOnly ? 'border-accent text-accent' : 'text-fg-dim'
-            )}
+          <div
+            role="group"
+            aria-label="Hosts"
+            className="ui-control flex shrink-0 overflow-hidden rounded-[var(--radius)] border font-mono text-[length:var(--density-type-control)]"
           >
-            {freeOnly ? 'Free only' : 'Free + paid'}
-          </button>
+            {[
+              { label: 'Free', value: true, title: 'Only free hosts will serve this chat' },
+              { label: 'Paid', value: false, title: 'Paid hosts may serve this chat, within your spending policy' }
+            ].map((option) => (
+              <button
+                key={option.label}
+                type="button"
+                aria-pressed={freeOnly === option.value}
+                title={option.title}
+                onClick={() => onFreeOnlyChange(option.value)}
+                className={cn(
+                  'px-2.5 py-[5px] whitespace-nowrap',
+                  freeOnly === option.value ? 'bg-accent/10 text-accent' : 'text-fg-dim hover:text-fg'
+                )}
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
         ) : (
           <span className="shrink-0 whitespace-nowrap font-mono text-[length:var(--density-type-caption)] text-fg-dim">
             Free
