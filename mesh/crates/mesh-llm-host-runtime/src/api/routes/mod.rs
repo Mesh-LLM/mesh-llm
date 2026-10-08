@@ -12,6 +12,7 @@ mod model_targets;
 mod objects;
 mod path_picker;
 mod peer_blocks;
+mod plugin_keys;
 mod plugins;
 pub(crate) mod runtime;
 mod runtime_activity;
@@ -137,6 +138,10 @@ pub(super) const DISPATCH_REQUEST: DispatchRequestFn =
                 }
                 ("GET", "/api/model-interests") | ("POST", "/api/model-interests") => {
                     model_interests::handle(stream, state, method, path_only, body).await?;
+                    Ok(true)
+                }
+                ("GET", plugin_keys::ROUTE) => {
+                    plugin_keys::handle(stream, state).await?;
                     Ok(true)
                 }
                 (_, route_path) if peer_blocks::is_route(route_path) => {
