@@ -405,7 +405,6 @@ async fn output_invoice_expiry_is_chosen_by_the_host_not_the_wallet() -> Result<
     let pricing = Pricing {
         input_msat_per_million: 1000,
         output_msat_per_million: 1000,
-        minimum_invoice_msat: 1,
     };
     service
         .ledger

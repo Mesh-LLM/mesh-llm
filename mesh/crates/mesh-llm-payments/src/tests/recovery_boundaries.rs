@@ -264,7 +264,6 @@ async fn recovery_lapses_an_unpaid_pending_invoice_after_the_grace() -> Result<(
             &crate::pricing::Pricing {
                 input_msat_per_million: 1000,
                 output_msat_per_million: 1000,
-                minimum_invoice_msat: 1,
             },
             8,
         )?;

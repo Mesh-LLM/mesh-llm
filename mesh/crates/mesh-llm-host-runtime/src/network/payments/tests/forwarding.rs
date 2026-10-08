@@ -43,7 +43,6 @@ async fn remote_request(legacy: bool) -> Result<()> {
         Pricing {
             input_msat_per_million: 1_000_000,
             output_msat_per_million: 1_000_000,
-            minimum_invoice_msat: 1,
         },
     );
     assert!(
