@@ -843,7 +843,8 @@ Subcommands:
 - `plugins disable <NAME>`: keep an installed plugin on disk but prevent host
   startup from launching it.
 - `plugins delete <NAME>`: remove the installed archive contents and local
-  metadata.
+  metadata. A deleted default plugin stays removed: the installers and
+  `mesh-llm update` do not install it again until `plugins enable <NAME>`.
 - `plugins info <NAME>`: show source, version, target, path, and latest known
   status for an installed or configured plugin.
 - `plugins search [QUERY]`: search the configured plugin catalog.

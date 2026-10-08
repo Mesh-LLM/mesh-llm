@@ -416,8 +416,8 @@ impl PluginStore {
 
     /// Record whether a default plugin is turned off: while it is, the
     /// installers and `mesh-llm update` do not install it. This works when
-    /// the plugin is not installed, for example right after `plugins
-    /// delete`; deleting the plugin later removes the record with the rest.
+    /// the plugin is not installed: `plugins delete` leaves this record for a
+    /// default, and `plugins disable` leaves it for a default not installed.
     pub fn set_default_turned_off(&self, name: &str, off: bool) -> Result<()> {
         validate_plugin_name(name)?;
         let marker = self.plugin_dir(name).join(DEFAULT_OFF_FILE);

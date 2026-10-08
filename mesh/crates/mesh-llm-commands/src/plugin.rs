@@ -217,29 +217,28 @@ fn set_enabled_in(
 
 fn delete(name: &str) -> Result<()> {
     let store = PluginStore::new(default_store_root()?);
-    // A record that cannot be read still deletes; it just gets no note.
-    let default_managed = store
-        .load_optional(name)
-        .ok()
-        .flatten()
-        .is_some_and(|metadata| metadata.default_managed);
+    delete_in(&store, name, &mut mesh_llm_events::console_err())
+}
+
+fn delete_in(store: &PluginStore, name: &str, err: &mut impl Write) -> Result<()> {
     store.delete(name)?;
-    let mut err = mesh_llm_events::console_err();
     writeln!(err, "🗑️  Deleted {name}")?;
-    if let Some(note) = deleted_default_note(name, default_managed) {
-        writeln!(err, "{note}")?;
+    // A deleted default stays removed: delete leaves the record that `plugins
+    // disable` leaves for a default that is not installed, which the
+    // installers and `mesh-llm update` respect. `plugins enable` removes it.
+    if default_plugin(name).is_some() {
+        store.set_default_turned_off(name, true)?;
+        writeln!(err, "{}", deleted_default_note(name))?;
     }
     Ok(())
 }
 
-/// What a deleted default plugin's operator should know: it comes back.
-fn deleted_default_note(name: &str, default_managed: bool) -> Option<String> {
-    default_managed.then(|| {
-        format!(
-            "{name} is a default plugin: the next installer or mesh-llm update run installs it again. \
-             To keep it off, run mesh-llm plugins disable {name}."
-        )
-    })
+/// What a deleted default plugin's operator should know: it stays removed.
+fn deleted_default_note(name: &str) -> String {
+    format!(
+        "{name} is a default plugin: it stays removed, and the installers and mesh-llm update \
+         will not install it again. To have it installed again, run mesh-llm plugins enable {name}."
+    )
 }
 
 /// One line for a default that provisioning left alone; none for one already current.
@@ -648,15 +647,36 @@ url = "unix:///run/remote.sock"
     }
 
     #[test]
-    fn deleting_a_default_says_it_comes_back_and_how_to_keep_it_off() {
-        assert_eq!(
-            deleted_default_note("capsules", true).as_deref(),
-            Some(
-                "capsules is a default plugin: the next installer or mesh-llm update run \
-                 installs it again. To keep it off, run mesh-llm plugins disable capsules."
-            )
+    fn deleting_a_default_keeps_it_removed_until_it_is_enabled() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = PluginStore::new(temp.path());
+        installed_default(&store, true);
+        let mut err = Vec::new();
+        delete_in(&store, "capsule-emit-mesh", &mut err).unwrap();
+        assert!(store.load_optional("capsule-emit-mesh").unwrap().is_none());
+        assert!(
+            store.default_turned_off("capsule-emit-mesh"),
+            "a deleted default is recorded as turned off"
         );
-        assert!(deleted_default_note("mine", false).is_none());
+        let err = String::from_utf8(err).unwrap();
+        assert!(err.contains("it stays removed"), "{err}");
+        assert!(
+            err.contains("run mesh-llm plugins enable capsule-emit-mesh"),
+            "{err}"
+        );
+
+        set_enabled_in(&store, "capsule-emit-mesh", true, &mut Vec::new()).unwrap();
+        assert!(!store.default_turned_off("capsule-emit-mesh"));
+    }
+
+    #[test]
+    fn deleting_a_plugin_that_is_not_a_default_records_nothing() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = PluginStore::new(temp.path());
+        let mut err = Vec::new();
+        delete_in(&store, "mine", &mut err).unwrap();
+        assert!(!store.default_turned_off("mine"));
+        assert!(!String::from_utf8(err).unwrap().contains("default plugin"));
     }
 
     #[test]
