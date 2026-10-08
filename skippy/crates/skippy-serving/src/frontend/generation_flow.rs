@@ -24,6 +24,7 @@ use crate::frontend::request::wire_sampling_config;
 use crate::frontend::util::generation_stop_values;
 use crate::frontend::util::openai_backend_error;
 use crate::frontend::util::openai_io_error;
+use crate::frontend::util::openai_media_error;
 use crate::frontend::wire_messages::MultimodalPrefillArgs;
 use crate::frontend::wire_messages::ReusableDecodeMessage;
 use crate::frontend::wire_messages::ReusableDecodeMessageArgs;
@@ -312,7 +313,7 @@ impl StageOpenAiBackend {
                                     &scheduler_prompt.media,
                                     scheduler_sampling.enabled.then_some(&scheduler_sampling),
                                 )
-                                .map_err(openai_backend_error)?;
+                                .map_err(openai_media_error)?;
                             let token_signal =
                                 runtime.last_token_signal(&scheduler_session_id).ok();
                             let signal_window = runtime
@@ -747,7 +748,7 @@ impl StageOpenAiBackend {
                                 &scheduler_prompt.text,
                                 &scheduler_prompt.media,
                             )
-                            .map_err(openai_backend_error)?;
+                            .map_err(openai_media_error)?;
                         let runtime_sessions_after = runtime.session_stats();
                         Ok((prefill, runtime_sessions_before, runtime_sessions_after))
                     },
