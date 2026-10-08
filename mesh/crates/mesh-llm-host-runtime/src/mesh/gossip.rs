@@ -15,7 +15,7 @@ use crate::mesh::requirements::current_time_unix_ms;
 use crate::mesh::stage_transport::PeerLifecycleCaptureEvent;
 use crate::protocol::{
     ControlProtocol, GossipWithPluginKeys, NODE_PROTOCOL_GENERATION, STREAM_GOSSIP,
-    connection_protocol, decode_gossip_payload_and_plugin_keys, read_len_prefixed,
+    connection_protocol, decode_gossip_frame_and_plugin_keys, read_len_prefixed,
     write_gossip_payload,
 };
 use anyhow::Result;
@@ -918,11 +918,11 @@ impl Node {
         let (mut send, mut recv) = conn.open_bi().await?;
         send.write_all(&[STREAM_GOSSIP]).await?;
 
-        let our_announcements = self.collect_announcements().await;
+        let outbound = self.collect_outbound_gossip().await;
         write_gossip_payload(
             &mut send,
             protocol,
-            &our_announcements,
+            &outbound,
             self.endpoint.id(),
             &crate::mesh::plugin_keys::to_proto(&self.plugin_keys.own()),
         )
@@ -931,11 +931,13 @@ impl Node {
 
         let buf = read_len_prefixed(&mut recv).await?;
         let rtt_ms = t0.elapsed().as_millis() as u32;
-        let decoded = decode_gossip_payload_and_plugin_keys(protocol, remote, &buf)?;
+        let (inbound, their_plugin_keys) =
+            decode_gossip_frame_and_plugin_keys(protocol, remote, &buf)?;
+        let their_announcements = self.resolve_inbound_gossip(remote, inbound).await;
 
         let _ = recv.read_to_end(0).await;
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        Ok((decoded, rtt_ms))
+        Ok(((their_announcements, their_plugin_keys), rtt_ms))
     }
 
     pub(crate) async fn apply_gossip_announcements(
@@ -976,8 +978,9 @@ impl Node {
         tracing::info!("Inbound gossip from {}", remote.fmt_short());
 
         let buf = read_len_prefixed(&mut recv).await?;
-        let (their_announcements, their_plugin_keys) =
-            decode_gossip_payload_and_plugin_keys(protocol, remote, &buf)?;
+        let (inbound, their_plugin_keys) =
+            decode_gossip_frame_and_plugin_keys(protocol, remote, &buf)?;
+        let their_announcements = self.resolve_inbound_gossip(remote, inbound).await;
         let negotiated_protocol_generation = match protocol {
             ControlProtocol::ProtoV1 => Some(NODE_PROTOCOL_GENERATION),
         };
@@ -985,11 +988,11 @@ impl Node {
         self.validate_and_capture_inbound_gossip(protocol, &their_announcements, context)
             .await?;
 
-        let our_announcements = self.collect_announcements().await;
+        let outbound = self.collect_outbound_gossip().await;
         write_gossip_payload(
             &mut send,
             protocol,
-            &our_announcements,
+            &outbound,
             self.endpoint.id(),
             &crate::mesh::plugin_keys::to_proto(&self.plugin_keys.own()),
         )

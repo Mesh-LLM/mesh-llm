@@ -272,6 +272,8 @@ async fn incoming_peer_rejected_on_legacy_or_malformed_gossip() {
     );
 
     let bad_gen_frame = GossipFrame {
+        signed_records: Vec::new(),
+        signed_cache_affinity: Vec::new(),
         r#gen: 0,
         sender_id: vec![],
         peers: vec![PeerAnnouncement {
@@ -416,6 +418,8 @@ fn control_frame_rejects_oversize_or_bad_generation() {
     );
 
     let bad_gen = GossipFrame {
+        signed_records: Vec::new(),
+        signed_cache_affinity: Vec::new(),
         r#gen: 99,
         sender_id: vec![],
         peers: vec![PeerAnnouncement {
@@ -434,6 +438,8 @@ fn control_frame_rejects_oversize_or_bad_generation() {
     );
 
     let bad_id = GossipFrame {
+        signed_records: Vec::new(),
+        signed_cache_affinity: Vec::new(),
         r#gen: NODE_PROTOCOL_GENERATION,
         sender_id: vec![0u8; 32],
         peers: vec![PeerAnnouncement {
@@ -806,6 +812,8 @@ fn gossip_rejects_sender_id_mismatch_or_invalid_endpoint_len() {
     let peer_id_bytes = peer_id.as_bytes().to_vec();
 
     let invalid_sender_frame = GossipFrame {
+        signed_records: Vec::new(),
+        signed_cache_affinity: Vec::new(),
         r#gen: NODE_PROTOCOL_GENERATION,
         sender_id: vec![0u8; 16],
         peers: vec![PeerAnnouncement {
@@ -825,6 +833,8 @@ fn gossip_rejects_sender_id_mismatch_or_invalid_endpoint_len() {
 
     let impersonator_id = EndpointId::from(SecretKey::from_bytes(&[0xbb; 32]).public());
     let mismatch_frame = GossipFrame {
+        signed_records: Vec::new(),
+        signed_cache_affinity: Vec::new(),
         r#gen: NODE_PROTOCOL_GENERATION,
         sender_id: impersonator_id.as_bytes().to_vec(),
         peers: vec![PeerAnnouncement {
@@ -842,6 +852,8 @@ fn gossip_rejects_sender_id_mismatch_or_invalid_endpoint_len() {
     assert!(err.to_string().contains("sender_id mismatch"));
 
     let bad_endpoint_frame = GossipFrame {
+        signed_records: Vec::new(),
+        signed_cache_affinity: Vec::new(),
         r#gen: NODE_PROTOCOL_GENERATION,
         sender_id: peer_id_bytes.clone(),
         peers: vec![PeerAnnouncement {
@@ -1660,10 +1672,21 @@ fn weights_digest_does_not_cross_the_gossip_wire() {
     );
 }
 
+/// A gossip frame's announcements and its sender's verified plugin keys, as a
+/// receiving node reads them.
+fn decode_gossip_payload_and_plugin_keys(
+    protocol: ControlProtocol,
+    remote: EndpointId,
+    buf: &[u8],
+) -> anyhow::Result<crate::protocol::GossipWithPluginKeys> {
+    crate::protocol::decode_gossip_frame_and_plugin_keys(protocol, remote, buf)
+        .map(|(inbound, keys)| (inbound.announcements, keys))
+}
+
 #[test]
 fn plugin_keys_ride_only_the_senders_own_entry_and_are_verified() {
     use crate::mesh::plugin_keys::{bind, to_proto};
-    use crate::protocol::{attach_own_plugin_keys, decode_gossip_payload_and_plugin_keys};
+    use crate::protocol::attach_own_plugin_keys;
     use prost::Message as _;
 
     let sender = SecretKey::from_bytes(&[0xab; 32]);
@@ -1822,7 +1845,6 @@ async fn plugin_keys_are_listed_only_for_an_admitted_peer() {
 
 #[test]
 fn a_gossip_frame_without_plugin_keys_decodes_with_no_sender_keys() {
-    use crate::protocol::decode_gossip_payload_and_plugin_keys;
     use prost::Message as _;
 
     // A frame as a node without plugin keys writes it: field 53 is never set,
@@ -1859,7 +1881,7 @@ fn a_gossip_frame_without_plugin_keys_decodes_with_no_sender_keys() {
 #[test]
 fn a_gossip_frame_with_plugin_keys_decodes_to_the_same_announcements() {
     use crate::mesh::plugin_keys::{bind, to_proto};
-    use crate::protocol::{attach_own_plugin_keys, decode_gossip_payload_and_plugin_keys};
+    use crate::protocol::attach_own_plugin_keys;
     use prost::Message as _;
 
     let sender = SecretKey::from_bytes(&[0xab; 32]);

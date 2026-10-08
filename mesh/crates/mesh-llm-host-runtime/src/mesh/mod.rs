@@ -101,6 +101,7 @@ pub(crate) mod plugin_keys;
 mod plugin_mesh;
 mod plugin_streams;
 pub mod requirements;
+mod signed_records;
 mod stage_artifacts;
 mod stage_proto;
 mod stage_transport;
