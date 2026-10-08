@@ -72,6 +72,22 @@ llama-spec-bench \
 Use `--allow-mismatch` only while investigating failures; by default, any
 speculative output mismatch makes the command fail.
 
+`--dflash` treats the draft as a DFlash or DFlash2 block drafter. The draft is
+attached to the target model instead of running its own session: it reads
+target hidden states, drafts up to `--speculative-window` tokens per block, and
+the target verifies each block in one batched decode.
+
+```bash
+llama-spec-bench \
+  --target-model-path Qwen3-4B-Q4_K_M.gguf \
+  --draft-model-path Qwen3-4B-DFlash.Q8_0.gguf \
+  --dflash \
+  --speculative-window 15
+```
+
+Batched verification can round differently from single-token decode, so a long
+generation may legitimately diverge from the baseline at a near-tie token.
+
 ## Report Contents
 
 - prompt/token counts
