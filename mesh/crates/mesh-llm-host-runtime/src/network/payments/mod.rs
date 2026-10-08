@@ -18,7 +18,29 @@ pub(crate) use node_ext::{
 pub(crate) use server::serve;
 
 pub(crate) fn is_payment_upgrade(prefix: &[u8]) -> bool {
-    prefix.starts_with(b"POST /mesh/payment/v1 HTTP/1.1\r\n")
+    prefix.starts_with(b"POST /mesh/payment/v2 HTTP/1.1\r\n")
+}
+
+pub(crate) fn is_legacy_payment_upgrade(prefix: &[u8]) -> bool {
+    prefix.starts_with(mesh_llm_payments_types::wire::LEGACY_V1_UPGRADE_PREFIX)
+}
+
+#[cfg(test)]
+mod upgrade_tests {
+    use super::*;
+
+    #[test]
+    fn payment_upgrade_matches_only_the_current_protocol() {
+        let current = mesh_llm_payments_types::wire::HTTP_UPGRADE;
+        assert!(is_payment_upgrade(current));
+        assert!(!is_legacy_payment_upgrade(current));
+        let v1 = b"POST /mesh/payment/v1 HTTP/1.1\r\nHost: mesh\r\nContent-Length: 0\r\n\r\n";
+        assert!(!is_payment_upgrade(v1));
+        assert!(is_legacy_payment_upgrade(v1));
+        assert!(!is_payment_upgrade(
+            b"POST /v1/chat/completions HTTP/1.1\r\n"
+        ));
+    }
 }
 
 /// What the tunnel should do after payments has looked at the request head.
@@ -64,6 +86,22 @@ pub(crate) async fn intercept_inbound(
             targets,
         )
         .await?;
+        return Ok(Inbound::Handled);
+    }
+    if is_legacy_payment_upgrade(&prefix) {
+        // v1 payers (<= v0.78.x) speak an incompatible frame format. Refuse in
+        // the frame format they still parse, before any payment state exists.
+        let mut send = quic_send;
+        let _ = mesh_llm_payments_types::wire::write(
+            &mut send,
+            &mesh_llm_payments_types::wire::Frame::Error {
+                message: "payment protocol v1 is not supported by this seller; upgrade mesh-llm"
+                    .into(),
+            },
+        )
+        .await;
+        let _ = send.finish();
+        drop(quic_recv);
         return Ok(Inbound::Handled);
     }
     // Legacy bridge callers cannot bypass seller payment enforcement.
