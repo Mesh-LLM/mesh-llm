@@ -52,6 +52,9 @@ pub enum Surface {
     /// Any endpoint that is not an inference endpoint.
     OtherEndpoints,
     VirtualModels,
+    /// The OpenAI exchange lifecycle hook: it sees every OpenAI exchange the
+    /// node handles, prompts and answers included.
+    OpenAiExchangeHook,
 }
 
 impl Surface {
@@ -66,6 +69,7 @@ impl Surface {
             Self::InferenceEndpoints => "inference endpoints",
             Self::OtherEndpoints => "other endpoints",
             Self::VirtualModels => "virtual models",
+            Self::OpenAiExchangeHook => "OpenAI exchange hook",
         }
     }
 }

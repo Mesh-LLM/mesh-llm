@@ -142,6 +142,9 @@ fn restrict_default_plugin(
             manifest.virtual_models.clear();
             removed.push(Surface::VirtualModels.name());
         }
+        if !may(Surface::OpenAiExchangeHook) && manifest.openai_exchange_hook.take().is_some() {
+            removed.push(Surface::OpenAiExchangeHook.name());
+        }
     }
     if capabilities_removed {
         removed.push("capabilities");
@@ -1158,6 +1161,34 @@ pub(crate) mod tests {
         );
         assert_eq!(manifest.mesh_channels.len(), 1);
         assert!(manifest.web_ui.is_some());
+    }
+
+    #[test]
+    fn a_default_keeps_the_openai_exchange_hook_only_when_its_entry_allows_it() {
+        let with_hook = || proto::InitializeResponse {
+            manifest: Some(proto::PluginManifest {
+                openai_exchange_hook: Some(
+                    mesh_llm_plugin::openai_exchange::openai_exchange_hook("observe").into(),
+                ),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let mut init = with_hook();
+        let removed = restrict_default_plugin(&mut init, &[Surface::WebUi], &[]);
+        assert_eq!(removed, ["OpenAI exchange hook"]);
+        assert!(init.manifest.unwrap().openai_exchange_hook.is_none());
+
+        let mut init = with_hook();
+        let removed = restrict_default_plugin(&mut init, &[Surface::OpenAiExchangeHook], &[]);
+        assert!(removed.is_empty());
+        assert!(init.manifest.unwrap().openai_exchange_hook.is_some());
+
+        // A default no longer on this build's list does not keep it either.
+        let mut init = with_hook();
+        let removed = restrict_default_plugin(&mut init, UNLISTED_DEFAULT_ALLOWS, &[]);
+        assert_eq!(removed, ["OpenAI exchange hook"]);
     }
 
     #[test]
