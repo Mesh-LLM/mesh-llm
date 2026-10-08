@@ -50,12 +50,16 @@ class MeshRefTests(unittest.TestCase):
         self.assertEqual(latest['upstream'], 'b'*40)
         self.assertEqual(R.resolve(self.checkout, self.initial)['mesh_source'], self.initial)
 
-    def test_invalid_or_external_refs_and_upstream_override_fail(self):
+    def test_matching_upstream_assertion_and_override_rejection(self):
+        self.assertEqual(R.resolve(self.checkout, 'candidate', 'a'*40)['upstream'], 'a'*40)
+        for upstream in ('latest', 'b'*40):
+            with self.subTest(upstream=upstream), self.assertRaisesRegex(ValueError, 'must match'):
+                R.resolve(self.checkout, 'candidate', upstream)
+
+    def test_invalid_or_external_refs_fail(self):
         for ref in ('', ' candidate', 'refs/pull/1977/head', 'refs/tags/v1', 'main~1', '--upload-pack=evil'):
             with self.subTest(ref=ref), self.assertRaises((ValueError, subprocess.CalledProcessError)):
                 R.resolve(self.checkout, ref)
-        with self.assertRaisesRegex(ValueError, 'cannot be combined'):
-            R.resolve(self.checkout, 'candidate', 'latest')
         with self.assertRaises(subprocess.CalledProcessError):
             R.resolve(self.checkout, 'c'*40)
 

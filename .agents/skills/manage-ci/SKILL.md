@@ -514,6 +514,8 @@ selected source independently in every handoff. Certify the selected revision's
 existing pin and patches without repair or publication. Selected build scripts
 and battery code execute on persistent lab runners, so operators must choose
 trusted revisions; a main controller does not sandbox that source.
+When supplied with `mesh_ref`, `upstream_sha` asserts the selected revision's
+existing pin; a mismatch fails resolution before any persistent runner starts.
 
 Changed pins use up to three distributed repair attempts. Each attempt consists
 of one candidate pass followed by one independent verification pass when the

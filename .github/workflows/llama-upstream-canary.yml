@@ -9,7 +9,7 @@ on:
         type: string
         default: ''
       upstream_sha:
-        description: Optional exact upstream commit (defaults to upstream master)
+        description: Optional exact upstream commit; with mesh_ref, must equal its existing pin
         type: string
         default: ''
       force_certify:

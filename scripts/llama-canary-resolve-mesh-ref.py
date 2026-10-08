@@ -13,8 +13,6 @@ def git(root: Path, *args: str) -> str:
 
 
 def resolve(root: Path, ref: str, upstream: str = "") -> dict[str, str]:
-    if upstream:
-        raise ValueError("mesh_ref cannot be combined with upstream_sha; its existing pin is certified")
     if not ref or ref != ref.strip():
         raise ValueError("mesh_ref must be a branch name or full commit SHA")
     is_sha = re.fullmatch(r"[0-9a-f]{40}", ref) is not None
@@ -39,6 +37,8 @@ def resolve(root: Path, ref: str, upstream: str = "") -> dict[str, str]:
     pin = git(root, "show", source + ":" + present[0])
     if not re.fullmatch(r"[0-9a-f]{40}", pin):
         raise ValueError("selected MeshLLM revision has an invalid llama.cpp pin")
+    if upstream and upstream != pin:
+        raise ValueError("upstream_sha must match the selected MeshLLM revision's llama.cpp pin")
     return {"mesh_source": source, "upstream": pin, "changed": "false",
             "mode": "pinned-build", "certify": "true"}
 

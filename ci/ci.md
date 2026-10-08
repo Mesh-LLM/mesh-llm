@@ -101,8 +101,9 @@ stops without invoking Goose and denies publication.
 
 Manual `mesh_ref` dispatches accept an explicitly trusted same-repository branch
 or full commit SHA. Resolution freezes the SHA once, requires it to be reachable
-from a repository branch, and reads its existing llama.cpp pin. `upstream_sha`
-cannot be combined with this input. Keep the Actions workflow ref on `main`;
+from a repository branch, and reads its existing llama.cpp pin. With `mesh_ref`,
+`upstream_sha` is optional and, if supplied, must equal that frozen pin; it never
+overrides the candidate's pin. Keep the Actions workflow ref on `main`;
 selecting `mesh_ref` always runs a complete certify-only pass, without Goose,
 source repair, an independent upgrade-verification pass, or PR publication.
 The main controller, handoff validation, and aggregation remain at the workflow
