@@ -121,6 +121,7 @@ pub(crate) fn run_direct_quantize(args: DirectQuantizeArgs) -> Result<()> {
                 json: args.json,
             },
             window_override,
+            requested_range: Default::default(),
             max_windows: args.max_windows,
         })?;
         print_verify_on_complete(

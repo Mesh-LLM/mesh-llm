@@ -20,4 +20,8 @@ skippy-model-hf = { path = "../skippy-model-hf" }
 skippy-model-ref = { path = "../skippy-model-ref" }
 reqwest = { version = "0.13", default-features = false, features = ["blocking", "json", "rustls"] }
 serde.workspace = true
+sha2.workspace = true
 serde_json.workspace = true
+
+[dev-dependencies]
+tempfile = "3"

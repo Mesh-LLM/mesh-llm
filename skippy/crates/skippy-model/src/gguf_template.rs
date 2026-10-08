@@ -8,6 +8,8 @@ use serde_json::Value;
 
 use crate::gguf_writer::GgufKv;
 use crate::inkling_metadata;
+
+pub mod nemotron_mtp;
 use crate::tokenizer_metadata::push_tokenizer_metadata;
 
 #[derive(Debug, Clone, Copy)]

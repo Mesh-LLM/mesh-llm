@@ -250,3 +250,30 @@ fn test_no_raw_invite_token_in_serialized_events() {
     assert!(!obj.contains_key("token"));
     assert!(!obj.contains_key("invite_token"));
 }
+
+#[test]
+fn actual_serialized_completion_matches_shared_sanitization_fixture() {
+    let event = LifecycleEvent::StreamCompleted {
+        tokens: Some(2),
+        usage: Some(TokenUsage {
+            prompt_tokens: Some(3),
+            cached_prompt_tokens: None,
+            completion_tokens: Some(2),
+            total_tokens: Some(5),
+        }),
+    };
+    let serialized = serde_json::to_string(&event).unwrap();
+    assert_eq!(
+        serialized,
+        include_str!("../../tests/fixtures/event-benchmark-completed.json").trim()
+    );
+    let envelope = CanonicalEnvelope::new(
+        EventId::new(),
+        RequestId::new(),
+        ReplayChannel::Requests,
+        1,
+        "2026-10-05T00:00:00Z".into(),
+        event,
+    );
+    assert!(envelope.presentation_local_summary().contains("tokens=2"));
+}
