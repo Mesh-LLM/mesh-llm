@@ -20,6 +20,7 @@ type ComposerProps = {
   errorMessage?: string
   placeholder?: string
   disabled?: boolean
+  requestDisabled?: boolean
   isPreparingAttachments?: boolean
   preparingStage?: ComposerProcessingStage
   preparingAttachmentCount?: number
@@ -49,6 +50,7 @@ export function Composer({
   errorMessage,
   placeholder = 'Ask me anything...',
   disabled = false,
+  requestDisabled = false,
   isPreparingAttachments = false,
   preparingStage,
   preparingAttachmentCount = 0,
@@ -58,11 +60,11 @@ export function Composer({
 }: ComposerProps) {
   const attachmentInputRef = useRef<HTMLInputElement | null>(null)
   const handleSend = useCallback(() => {
-    if (!disabled && (value.trim() || attachmentCount > 0)) onSend()
-  }, [attachmentCount, disabled, value, onSend])
+    if (!disabled && !requestDisabled && (value.trim() || attachmentCount > 0)) onSend()
+  }, [attachmentCount, disabled, requestDisabled, value, onSend])
 
-  const sendDisabled = disabled || (!value.trim() && attachmentCount === 0)
-  const retryDisabled = disabled || !canRetry
+  const sendDisabled = disabled || requestDisabled || (!value.trim() && attachmentCount === 0)
+  const retryDisabled = disabled || requestDisabled || !canRetry
   const stopDisabled = disabled || !isStreaming || !onStop
   const submitQueuesPrompt = sendMode === 'queue' || isStreaming
   const preparingLabel = getPreparingLabel(preparingStage)

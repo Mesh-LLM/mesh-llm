@@ -529,6 +529,8 @@ afterEach(() => {
 })
 
 beforeEach(() => {
+  modelPaymentsMock.data = undefined
+  window.localStorage.removeItem('mesh-llm.chat.routing-preferences')
   scrollIntoViewMock.mockClear()
   createObjectUrlMock.mockClear()
   revokeObjectUrlMock.mockClear()

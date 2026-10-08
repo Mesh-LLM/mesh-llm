@@ -43,6 +43,34 @@ describe('model prices', () => {
     expect(isOfferedForMode(undefined, true)).toBe(true)
   })
 
+  it('keeps locally hosted priced offers free for this node', () => {
+    const local = parseModelPayments({
+      data: [
+        { id: 'local', payment: { free_available: false, paid_available: true, offers: [{ local: true, paid: true }] } }
+      ]
+    }).get('local')
+    expect(isOfferedForMode(local, true)).toBe(true)
+  })
+
+  it('joins public IDs to exact catalog/request identities without guessing labels', () => {
+    const payments = parseModelPayments({
+      data: [
+        {
+          id: 'org/repo:Q4',
+          payment: {
+            model: 'runtime-name',
+            free_available: false,
+            paid_available: true,
+            offers: [{ paid: true, pricing: { output_msat_per_million: 1500 } }]
+          }
+        }
+      ]
+    })
+    expect(payments.get('runtime-name')).toEqual(payments.get('org/repo:Q4'))
+    expect(isOfferedForMode(payments.get('runtime-name'), true)).toBe(false)
+    expect(priceLabel(payments.get('runtime-name'))).toBe('from 1.5k msat/M out')
+  })
+
   it('labels paid listings', () => {
     expect(priceLabel(payments.get('paid-model'))).toBe('from 1.5k msat/M out')
     expect(priceLabel(payments.get('mixed-model'))).toBe('free · paid')

@@ -13,6 +13,7 @@ export function useModelPaymentsQuery(options?: { enabled?: boolean }) {
     queryKey: ['chat', 'model-payments'],
     queryFn: fetchModelPayments,
     staleTime: 30_000,
+    refetchInterval: 60_000,
     retry: false,
     enabled: options?.enabled ?? true
   })

@@ -1,8 +1,11 @@
 /** Per-model payment summary from the OpenAI `/v1/models` listing (`payment` block). Descriptive only. */
 export type ModelPayment = { freeAvailable: boolean; paidAvailable: boolean; outputMsatPerMillion?: number }
 
-type RawOffer = { paid?: unknown; pricing?: { output_msat_per_million?: unknown } | null }
-type RawModel = { id?: unknown; payment?: { free_available?: unknown; paid_available?: unknown; offers?: unknown } }
+type RawOffer = { local?: unknown; paid?: unknown; pricing?: { output_msat_per_million?: unknown } | null }
+type RawModel = {
+  id?: unknown
+  payment?: { model?: unknown; free_available?: unknown; paid_available?: unknown; offers?: unknown }
+}
 
 export function parseModelPayments(body: unknown): Map<string, ModelPayment> {
   const result = new Map<string, ModelPayment>()
@@ -15,11 +18,14 @@ export function parseModelPayments(body: unknown): Map<string, ModelPayment> {
       .filter((offer) => offer.paid === true)
       .map((offer) => offer.pricing?.output_msat_per_million)
       .filter((rate): rate is number => typeof rate === 'number')
-    result.set(item.id, {
-      freeAvailable: item.payment.free_available === true,
+    const payment = {
+      freeAvailable: item.payment.free_available === true || offers.some((offer) => offer.local === true),
       paidAvailable: item.payment.paid_available === true,
       outputMsatPerMillion: rates.length > 0 ? Math.min(...rates) : undefined
-    })
+    }
+    result.set(item.id, payment)
+    // The backend supplies the exact request/catalog identity, including any profile.
+    if (typeof item.payment.model === 'string') result.set(item.payment.model, payment)
   }
   return result
 }

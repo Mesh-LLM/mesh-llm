@@ -19,6 +19,7 @@ export function usePaidRoutingQuery(options?: { enabled?: boolean }) {
     queryKey: ['chat', 'paid-routing-allowed'],
     queryFn: fetchPaidRoutingAllowed,
     staleTime: 30_000,
+    refetchInterval: 60_000,
     retry: false,
     enabled: options?.enabled ?? true
   })

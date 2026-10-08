@@ -678,6 +678,13 @@ export function ChatPageContent({ data = CHAT_HARNESS, target, onClearTarget }: 
 
     const nextSubmission = queuedSubmissions.find((submission) => submission.conversationId === chatConversationId)
     if (!nextSubmission) return
+    if (
+      model !== '' &&
+      !selectableModels.some(
+        (item) => item.name === model && isOfferedForMode(modelPayments?.get(item.name), nextSubmission.freeOnly)
+      )
+    )
+      return
 
     queueDrainInFlightRef.current = true
     setQueuedSubmissions((current) => {
@@ -697,7 +704,7 @@ export function ChatPageContent({ data = CHAT_HARNESS, target, onClearTarget }: 
         queueDrainInFlightRef.current = false
       }
     })()
-  }, [chatConversationId, isStreaming, queuedSubmissions, submitPromptNow])
+  }, [chatConversationId, isStreaming, model, modelPayments, queuedSubmissions, selectableModels, submitPromptNow])
 
   const removeQueuedSubmission = useCallback(
     (submissionId: string) => {
@@ -712,7 +719,7 @@ export function ChatPageContent({ data = CHAT_HARNESS, target, onClearTarget }: 
   )
 
   const retryLastResponse = useCallback(async () => {
-    if (!canRetry) return
+    if (!canRetry || pickedModelUnavailable) return
     requestJumpToLatest()
     const ensuredConversationId = ensureConversation()
     clearStoppedConversation(ensuredConversationId)
@@ -726,7 +733,15 @@ export function ChatPageContent({ data = CHAT_HARNESS, target, onClearTarget }: 
       )
     }
     await chat.reload()
-  }, [activeModelName, canRetry, chat, clearStoppedConversation, ensureConversation, requestJumpToLatest])
+  }, [
+    activeModelName,
+    canRetry,
+    chat,
+    clearStoppedConversation,
+    ensureConversation,
+    pickedModelUnavailable,
+    requestJumpToLatest
+  ])
 
   const stopStreamingResponse = useCallback(() => {
     const latestLiveMessage = liveMessagesWithModels.at(-1)
@@ -845,7 +860,8 @@ export function ChatPageContent({ data = CHAT_HARNESS, target, onClearTarget }: 
         updateComposerAttachments((current) => [...current, ...files])
       }}
       composerAttachmentCount={composerDraft.attachments.length}
-      composerDisabled={composerIsPreparingAttachments || !canChat || pickedModelUnavailable}
+      composerDisabled={(composerIsPreparingAttachments || !canChat) && !composerIsStreaming}
+      composerRequestDisabled={composerIsPreparingAttachments || !canChat || pickedModelUnavailable}
       composerIsPreparingAttachments={composerIsPreparingAttachments}
       attachmentProcessingStage={attachmentProcessingStatus?.stage}
       attachmentProcessingCount={attachmentProcessingStatus?.attachmentCount ?? 0}
