@@ -182,6 +182,8 @@ impl RuntimeState {
         prompt_token_count: u64,
         sampling: Option<&SamplingConfig>,
     ) -> Result<()> {
+        crate::grammar_bounds::check_chat_metadata_grammar(metadata_json)
+            .map_err(anyhow::Error::msg)?;
         self.session(session_id)?.configure_chat_sampling(
             metadata_json,
             prompt_token_count,
@@ -673,6 +675,18 @@ mod tests {
         assert_eq!(final_sampled_chunk_start(512, 512), 0);
         assert_eq!(final_sampled_chunk_start(513, 512), 512);
         assert_eq!(final_sampled_chunk_start(6603, 2048), 6144);
+    }
+
+    #[test]
+    fn chat_sampling_rejects_metadata_grammars_that_expand_too_far() {
+        // A JSON schema with minItems above maxItems renders to an inverted
+        // repetition like this one, and a peer stage can send any grammar.
+        let mut runtime = crate::runtime_state::RuntimeState::new_modelless_for_test(0);
+        let metadata = serde_json::json!({ "grammar": "root ::= \"a\"{5,3}" }).to_string();
+        let error = runtime
+            .configure_chat_sampling("session", &metadata, 0, None)
+            .unwrap_err();
+        assert!(error.to_string().contains("rules"), "{error:#}");
     }
 }
 

@@ -1199,6 +1199,26 @@ fn deeply_nested_grammar_is_rejected_before_native_parsing() {
 }
 
 #[test]
+fn grammars_that_expand_too_far_are_rejected_before_native_parsing() {
+    let mut chain = String::from("root ::= r0\n");
+    for rule in 0..10_000 {
+        chain.push_str(&format!("r{rule} ::= r{}\n", rule + 1));
+    }
+    chain.push_str("r10000 ::= \"a\"\n");
+    for grammar in [chain, "root ::= \"a\"{5,3}\n".to_string()] {
+        let request: ChatCompletionRequest = serde_json::from_value(json!({
+            "model": "test",
+            "messages": [{"role": "user", "content": "hello"}],
+            "grammar": grammar
+        }))
+        .unwrap();
+        assert!(
+            chat_template_options(&request, &EmbeddedOpenAiRequestDefaults::default()).is_err()
+        );
+    }
+}
+
+#[test]
 fn oversized_stop_lists_are_rejected_before_generation() {
     let stops = vec!["x"; 65];
     let chat: ChatCompletionRequest = serde_json::from_value(json!({

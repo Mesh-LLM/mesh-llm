@@ -2,7 +2,6 @@ use crate::frontend::EmbeddedOpenAiRequestDefaults;
 use crate::frontend::EmbeddedReasoningBudget;
 use crate::frontend::EmbeddedReasoningEnabled;
 use crate::frontend::EmbeddedReasoningFormat;
-use crate::frontend::grammar_nesting::check_grammar_group_depth;
 use crate::frontend::stop_sequences::validate_stop_sequences;
 use base64::Engine;
 use serde_json::Value;
@@ -1370,7 +1369,7 @@ fn structured_output_string(
         ));
     }
     if let Some(grammar) = value.as_deref() {
-        check_grammar_group_depth(grammar).map_err(InferenceError::invalid_request)?;
+        crate::grammar_bounds::check_grammar(grammar).map_err(InferenceError::invalid_request)?;
     }
     Ok(value)
 }

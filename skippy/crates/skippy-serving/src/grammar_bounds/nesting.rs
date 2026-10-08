@@ -1,11 +1,11 @@
-//! Request-side bound on GBNF group nesting.
+//! Bound on GBNF group nesting.
 //!
 //! The native grammar parser recurses once per nested `(` group with no depth
 //! limit, so a grammar of about 100,000 nested groups overflowed the stack.
-//! Request grammars that nest groups more than [`MAX_GRAMMAR_GROUP_DEPTH`]
-//! levels deep are rejected here, before they reach native code.
+//! Grammars that nest groups more than [`MAX_GRAMMAR_GROUP_DEPTH`] levels deep
+//! are rejected here, before they reach native code.
 
-/// Deepest group nesting a request grammar may use.
+/// Deepest group nesting a grammar may use.
 pub(super) const MAX_GRAMMAR_GROUP_DEPTH: usize = 256;
 
 /// Returns an error when `grammar` nests `(` groups deeper than
