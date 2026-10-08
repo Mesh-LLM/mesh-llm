@@ -595,7 +595,7 @@ pub(crate) fn sanitize_gossip_announcement_for_wire(ann: &PeerAnnouncement) -> P
     sanitized
 }
 
-fn sanitize_cache_affinity_for_ann(
+pub(crate) fn sanitize_cache_affinity_for_ann(
     ann: &PeerAnnouncement,
 ) -> Option<mesh_llm_routing::cache_inventory::CacheAffinityAdvertisement> {
     let routable = routable_model_names(ann);
@@ -728,7 +728,7 @@ fn local_cache_affinity_to_proto(
     }
 }
 
-fn proto_cache_affinity_to_local(
+pub(crate) fn proto_cache_affinity_to_local(
     advertisement: &crate::proto::node::CacheAffinityAdvertisement,
 ) -> Option<mesh_llm_routing::cache_inventory::CacheAffinityAdvertisement> {
     use mesh_llm_routing::cache_inventory::{
@@ -908,10 +908,7 @@ pub(crate) fn local_ann_to_proto_ann(
         hardware,
         first_joined_mesh_ts: ann.first_joined_mesh_ts,
         latency_ms: ann.latency_ms,
-        latency_source: match ann.latency_source {
-            Some(s) => s as i32,
-            None => 0i32,
-        },
+        latency_source: ann.latency_source.map(|source| source as i32),
         latency_age_ms: ann.latency_age_ms.map(|v| v as u32),
         latency_observer_id: ann
             .latency_observer_id
@@ -996,6 +993,8 @@ pub(crate) fn build_gossip_frame(
     let peers: Vec<crate::proto::node::PeerAnnouncement> =
         anns.iter().map(local_ann_to_proto_ann).collect();
     crate::proto::node::GossipFrame {
+        signed_records: Vec::new(),
+        signed_cache_affinity: Vec::new(),
         r#gen: NODE_PROTOCOL_GENERATION,
         sender_id: sender_id.as_bytes().to_vec(),
         peers,
@@ -1089,6 +1088,11 @@ pub(crate) fn proto_ann_to_local(
             addrs: Default::default(),
         }
     };
+    // Gossip keys peers by the address id. An announcement whose address
+    // names a different node than its endpoint id is self-contradictory.
+    if addr.id != peer_id {
+        return None;
+    }
     let role = proto_role_to_local(pa.role, pa.http_port);
     let model_demand: HashMap<String, ModelDemand> = pa
         .demand
@@ -1190,7 +1194,9 @@ pub(crate) fn proto_ann_to_local(
             .map(proto_throughput_hint_to_local)
             .collect(),
         latency_ms: pa.latency_ms,
-        latency_source: crate::proto::node::LatencySource::try_from(pa.latency_source).ok(),
+        latency_source: pa
+            .latency_source
+            .and_then(|source| crate::proto::node::LatencySource::try_from(source).ok()),
         latency_age_ms: pa.latency_age_ms.map(|v| v as u64),
         latency_observer_id: pa.latency_observer_id.as_ref().and_then(|bytes| {
             let arr: [u8; 32] = bytes.as_slice().try_into().ok()?;

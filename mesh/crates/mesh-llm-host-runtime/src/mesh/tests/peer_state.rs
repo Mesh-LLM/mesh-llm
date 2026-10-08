@@ -272,6 +272,8 @@ async fn incoming_peer_rejected_on_legacy_or_malformed_gossip() {
     );
 
     let bad_gen_frame = GossipFrame {
+        signed_records: Vec::new(),
+        signed_cache_affinity: Vec::new(),
         r#gen: 0,
         sender_id: vec![],
         peers: vec![PeerAnnouncement {
@@ -416,6 +418,8 @@ fn control_frame_rejects_oversize_or_bad_generation() {
     );
 
     let bad_gen = GossipFrame {
+        signed_records: Vec::new(),
+        signed_cache_affinity: Vec::new(),
         r#gen: 99,
         sender_id: vec![],
         peers: vec![PeerAnnouncement {
@@ -434,6 +438,8 @@ fn control_frame_rejects_oversize_or_bad_generation() {
     );
 
     let bad_id = GossipFrame {
+        signed_records: Vec::new(),
+        signed_cache_affinity: Vec::new(),
         r#gen: NODE_PROTOCOL_GENERATION,
         sender_id: vec![0u8; 32],
         peers: vec![PeerAnnouncement {
@@ -806,6 +812,8 @@ fn gossip_rejects_sender_id_mismatch_or_invalid_endpoint_len() {
     let peer_id_bytes = peer_id.as_bytes().to_vec();
 
     let invalid_sender_frame = GossipFrame {
+        signed_records: Vec::new(),
+        signed_cache_affinity: Vec::new(),
         r#gen: NODE_PROTOCOL_GENERATION,
         sender_id: vec![0u8; 16],
         peers: vec![PeerAnnouncement {
@@ -825,6 +833,8 @@ fn gossip_rejects_sender_id_mismatch_or_invalid_endpoint_len() {
 
     let impersonator_id = EndpointId::from(SecretKey::from_bytes(&[0xbb; 32]).public());
     let mismatch_frame = GossipFrame {
+        signed_records: Vec::new(),
+        signed_cache_affinity: Vec::new(),
         r#gen: NODE_PROTOCOL_GENERATION,
         sender_id: impersonator_id.as_bytes().to_vec(),
         peers: vec![PeerAnnouncement {
@@ -842,6 +852,8 @@ fn gossip_rejects_sender_id_mismatch_or_invalid_endpoint_len() {
     assert!(err.to_string().contains("sender_id mismatch"));
 
     let bad_endpoint_frame = GossipFrame {
+        signed_records: Vec::new(),
+        signed_cache_affinity: Vec::new(),
         r#gen: NODE_PROTOCOL_GENERATION,
         sender_id: peer_id_bytes.clone(),
         peers: vec![PeerAnnouncement {

@@ -4852,6 +4852,7 @@ dependencies = [
  "mesh-llm-protocol",
  "mesh-llm-routing",
  "mesh-llm-types",
+ "prost",
  "rand 0.10.2",
  "semver",
  "serde",
