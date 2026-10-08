@@ -294,10 +294,10 @@ As of v0.76.0-rc8, three distribution/loading bugs still block the out-of-the-bo
    mesh-llm runtime install --bundle-dir "<extracted>\mesh-bundle" cuda
    ```
 
-3. **Put the runtime's `lib` directory on `PATH` before serving** — runtime DLLs currently fail to load with `LoadLibraryExW` error 126 ([#1512](https://github.com/Mesh-LLM/mesh-llm/issues/1512)):
+3. **Put the runtime's `lib` directory on `PATH` before serving** — runtime DLLs currently fail to load with `LoadLibraryExW` error 126 ([#1512](https://github.com/Mesh-LLM/mesh-llm/issues/1512)). Replace `<cuda>` with `cuda12` or `cuda13`, matching the bundle from step 2:
 
    ```powershell
-   $env:PATH = "$env:LOCALAPPDATA\mesh-llm\native-runtimes\<version>\meshllm-native-runtime-windows-x86_64-cuda12\lib;" + $env:PATH
+   $env:PATH = "$env:LOCALAPPDATA\mesh-llm\native-runtimes\<version>\meshllm-native-runtime-windows-x86_64-<cuda>\lib;" + $env:PATH
    mesh-llm serve --local-model-only --model "C:\path\to\model.gguf"
    ```
 

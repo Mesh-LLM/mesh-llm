@@ -15,11 +15,11 @@ use platform_probe::{installed_bundle_flavor, preferred_bundle_flavor_for_curren
 #[cfg(not(windows))]
 use release_fetch::INSTALL_SCRIPT_URL;
 use release_fetch::{
-    InstallOutcome, PostInstallAction, RELEASES_URL, ReleaseAssetPreference,
-    current_release_target, describe_requested_update, exec_current_binary, install_latest_bundle,
-    latest_release_info, mesh_binary_name, path_is_writable, platform_has_release_assets,
-    release_asset_candidates, release_has_any_platform_asset, resolve_release_asset_name,
-    resolve_release_info,
+    CudaBundleOrder, InstallOutcome, PostInstallAction, RELEASES_URL, ReleaseAssetPreference,
+    current_release_target, describe_requested_update, exec_current_binary, host_cuda_bundle_order,
+    install_latest_bundle, latest_release_info, mesh_binary_name, path_is_writable,
+    platform_has_release_assets, release_asset_candidates, release_has_any_platform_asset,
+    resolve_release_asset_name, resolve_release_info,
 };
 
 /// Set on the binary the self-updater `exec`s, so the restarted process knows
@@ -120,7 +120,13 @@ pub async fn check_for_update(current_version: &str) -> Option<UpdateNotice> {
     let bundle_asset = std::env::current_exe().ok().and_then(|exe| {
         let (_, flavor) = bundle_install_dir(&exe, None)?;
         current_release_target(flavor).and_then(|target| {
-            resolve_release_asset_name(&release, target, ReleaseAssetPreference::StableFirst)
+            // Presence only: the CUDA bundle order cannot change the answer.
+            resolve_release_asset_name(
+                &release,
+                target,
+                ReleaseAssetPreference::StableFirst,
+                CudaBundleOrder::Cuda12First,
+            )
         })
     });
     let has_matching_bundle_asset = bundle_asset
@@ -183,14 +189,23 @@ pub async fn run_update_command(options: UpdateCommandOptions<'_>) -> Result<()>
     } else {
         ReleaseAssetPreference::StableFirst
     };
-    let Some(asset_name) =
-        resolve_release_asset_name(&release, target.release_target, asset_preference)
-    else {
+    let cuda_order = host_cuda_bundle_order(target.release_target);
+    let Some(asset_name) = resolve_release_asset_name(
+        &release,
+        target.release_target,
+        asset_preference,
+        cuda_order,
+    ) else {
         bail!(
             "Release v{} does not include a bundle for this install (tried: {}).",
             release.version,
-            release_asset_candidates(target.release_target, &release.tag, asset_preference)
-                .join(", ")
+            release_asset_candidates(
+                target.release_target,
+                &release.tag,
+                asset_preference,
+                cuda_order
+            )
+            .join(", ")
         );
     };
     if !path_is_writable(&target.exe) {
@@ -317,6 +332,7 @@ async fn apply_update_if_available(
         &release,
         target.release_target,
         ReleaseAssetPreference::StableFirst,
+        host_cuda_bundle_order(target.release_target),
     ) else {
         return Ok(false);
     };

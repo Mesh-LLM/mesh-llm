@@ -625,6 +625,11 @@ fn evaluate_cuda_toolkit_major(
 /// Requires the complete set the runtime loads (`cudart`, `cublas`,
 /// `cublasLt`). A single bundled library does not make an artifact self
 /// contained: shipping `cudart` alone still leaves `cublas` to the host.
+///
+/// Windows runtimes built with CUDA 13 or later are the one exception: they
+/// only need `cublas` and `cublasLt`, because their `cudart` is linked
+/// statically and takes the runtime from the NVIDIA driver, so they ship no
+/// `cudart` DLL.
 fn artifact_bundles_cuda_runtime(artifact: &NativeRuntimeArtifact, required: u32) -> bool {
     let mut cudart = false;
     let mut cublas = false;
