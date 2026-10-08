@@ -477,9 +477,8 @@ pub(crate) async fn exchange_tracked(
                 );
                 observations.invoice(1, &invoice);
                 if !input_settled && !output_bound.permits(tokens) {
-                    // Let a pending input payment land so CANCEL is not a no-op.
-                    let _ = (&mut input_payment).await;
-                    input_settled = true;
+                    return refuse_with_pending_input(&payments, &id, input_payment, &mut send)
+                        .await;
                 }
                 refuse_implausible_output(&payments, &id, &output_bound, tokens, &mut send).await?;
                 let payment = settle_output(&payments, &terms, tokens, invoice).await?;
@@ -594,6 +593,25 @@ async fn refuse_implausible_output(
     );
 }
 
+/// Refuse an implausible output bill while the input payment is still in
+/// flight: tell the provider now, and cancel the ledger request only after the
+/// input payment resolves (ledger cancellation is a no-op while it is pending).
+async fn refuse_with_pending_input<T: Send + 'static>(
+    payments: &Payments,
+    id: &str,
+    input_payment: impl std::future::Future<Output = T> + Send + 'static,
+    send: &mut (impl AsyncWrite + Unpin),
+) -> Result<()> {
+    let payment_client = payments.clone();
+    let request_id = id.to_owned();
+    tokio::spawn(async move {
+        let _ = input_payment.await;
+        cancel(&payment_client, &request_id, CancelStage::Authorization).await;
+    });
+    let _ = wire::write(send, &Frame::Cancel).await;
+    bail!("output token billing mismatch; input settlement pending");
+}
+
 /// Best-effort release of a request that never started paying.
 async fn cancel(payments: &Payments, id: &str, stage: CancelStage) {
     let _ = payments
@@ -621,6 +639,52 @@ pub(super) async fn effective_intent(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn a_pending_input_payment_does_not_delay_refusal() -> Result<()> {
+        use crate::network::payments::client::tests::{FakePayments, manager};
+        use std::sync::Arc;
+        let fake = Arc::new(FakePayments::default());
+        let payments = Payments::for_plugins(
+            manager(
+                &[(
+                    "payments-fake",
+                    &[mesh_llm_payments_types::contract::CAPABILITY],
+                )],
+                Arc::new(Arc::clone(&fake)),
+            )
+            .await,
+        )
+        .await;
+        let (release, held) = tokio::sync::oneshot::channel::<()>();
+        let mut send = Vec::new();
+
+        refuse_with_pending_input(&payments, "req", held, &mut send)
+            .await
+            .expect_err("refusal returns while input is still pending");
+        let mut written = send.as_slice();
+        assert!(matches!(wire::read(&mut written).await?, Frame::Cancel));
+        tokio::task::yield_now().await;
+        assert!(
+            fake.calls().is_empty(),
+            "ledger cancel waits for input payment"
+        );
+
+        release.send(()).unwrap();
+        for _ in 0..100 {
+            if !fake.calls().is_empty() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        let ops_called: Vec<_> = fake.calls().into_iter().map(|(_, op)| op).collect();
+        assert_eq!(
+            ops_called,
+            [ops::CANCEL.to_owned()],
+            "cancel, never SETTLE_OUTPUT"
+        );
+        Ok(())
+    }
 
     #[tokio::test]
     async fn an_inflated_output_bill_is_cancelled_and_never_settled() -> Result<()> {

@@ -81,6 +81,9 @@ impl PaidRequest {
         let text = if self.path == "/v1/completions" {
             match self.body.get("prompt") {
                 Some(Value::String(text)) => Some(text.len() as u64),
+                Some(Value::Array(prompts)) => prompts.iter().try_fold(0u64, |bytes, prompt| {
+                    Some(bytes.saturating_add(prompt.as_str()?.len() as u64))
+                }),
                 _ => None,
             }
         } else {
@@ -210,6 +213,27 @@ mod tests {
             assert!(request.validate_input_count(20_000).is_err());
             request.validate_input_count(1).unwrap(); // Underbilling is harmless.
         }
+    }
+
+    #[test]
+    fn input_billing_counts_string_arrays_but_skips_mixed_arrays() {
+        let parse = |prompt: Value| {
+            let body = serde_json::json!({"model":"m", "prompt":prompt});
+            PaidRequest::parse(format!("POST /v1/completions HTTP/1.1\r\n\r\n{body}").as_bytes())
+                .unwrap()
+        };
+        let request = parse(serde_json::json!(["hello", "世界"]));
+        request.validate_input_count(1035).unwrap();
+        assert!(request.validate_input_count(1036).is_err());
+        assert!(request.validate_input_count(100_000).is_err());
+        parse(serde_json::json!(["hello", 3]))
+            .validate_input_count(100_000)
+            .unwrap();
+        assert!(
+            parse(serde_json::json!([]))
+                .validate_input_count(1025)
+                .is_err()
+        );
     }
 
     #[test]
