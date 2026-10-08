@@ -520,3 +520,49 @@ fn cache_advertisement(
         entries: Vec::new(),
     }
 }
+
+/// A relay must not override economics learned directly from an admitted seller.
+#[cfg(feature = "payments")]
+#[tokio::test]
+pub(crate) async fn direct_paid_offer_survives_unpriced_transitive_announcement() {
+    let node = Node::new_for_tests(NodeRole::Worker).await.unwrap();
+    let seller = test_endpoint_id(0x4b);
+    let addr = test_addr(0x4b);
+    let bridge = test_endpoint_id(0xec);
+    let model = "unsloth/Qwen3.8-Flash-Next-GGUF@766911a6b7369840a91dbcd95f9f997acaab6cd6:UD-Q4_K_XL";
+    let mut direct = test_announcement(Some(100));
+    direct.addr = addr.clone();
+    direct.role = NodeRole::Host { http_port: 9337 };
+    direct.version = Some("0.78.1".into());
+    direct.hosted_models = Some(vec![model.into()]);
+    direct.serving_models = vec![model.into()];
+    direct.lightning_offers.insert(model.into(), mesh_llm_payments_types::pricing::Pricing {
+        input_msat_per_million: 500,
+        output_msat_per_million: 1500,
+        minimum_invoice_msat: 1000,
+    });
+    node.add_peer(seller, addr.clone(), &direct, None).await;
+    assert!(node.peer_payment_offer(seller, model).await.is_some());
+    let direct_seen = {
+        let state = node.state.lock().await;
+        let peer = state.peers.get(&seller).unwrap();
+        assert!(peer.is_admitted());
+        assert!(crate::mesh::peer_state::routes_http_model(peer, model));
+        peer.last_seen
+    };
+    let mut relayed = direct.clone();
+    relayed.lightning_offers.clear();
+    node.update_transitive_peer(seller, &addr, &relayed, bridge).await;
+    assert!(node.peer_payment_offer(seller, model).await.is_some());
+    {
+        let state = node.state.lock().await;
+        let peer = state.peers.get(&seller).unwrap();
+        assert!(peer.is_admitted());
+        assert!(crate::mesh::peer_state::routes_http_model(peer, model));
+        assert_eq!(peer.last_seen, direct_seen);
+    }
+    direct.lightning_offers.clear();
+    node.add_peer(seller, addr, &direct, None).await;
+    assert!(node.peer_payment_offer(seller, model).await.is_none());
+    node.endpoint.close().await;
+}

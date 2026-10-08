@@ -595,3 +595,72 @@ async fn configured_wallet_that_is_not_running_is_not_replaced_by_another() {
     assert!(error.contains("wallet-other"), "{error}");
     assert_eq!(plugin.opens.load(Ordering::SeqCst), 0);
 }
+
+/// Loupe #3086: `wallet_open` installs the replacement wallet in the plugin
+/// before the host sees its identity, so after one rejected re-open the plugin
+/// answers ordinary calls without `not_open`. The cached provider must keep
+/// failing closed rather than move money through the unpinned wallet.
+#[tokio::test]
+async fn rejected_reopen_blocks_later_operations_until_the_pinned_wallet_returns() {
+    let plugin = FakeWalletPlugin::new("w1");
+    let manager = manager_for(&plugin).await;
+    let dir = tempfile::tempdir().unwrap();
+    let wallet = factory(manager).open(dir.path()).await.unwrap();
+
+    // Restart with replacement wallet state, leaving the host's pin intact.
+    plugin.crash();
+    *plugin.identity.lock().unwrap() = identity("replacement-wallet");
+    let error = wallet
+        .balance()
+        .await
+        .expect_err("the pin must reject the replacement");
+    assert!(
+        error.to_string().contains("wallet identity mismatch"),
+        "{error}"
+    );
+    assert_eq!(
+        WalletPin::load(dir.path()).unwrap().unwrap().wallet_id,
+        "w1"
+    );
+    // The plugin now holds the rejected wallet open and would answer queries.
+    assert!(plugin.open.load(Ordering::SeqCst));
+
+    // Queries: re-check the pin, fail again, never reach the wallet.
+    let count = |op: &str| plugin.calls().iter().filter(|call| *call == op).count();
+    let balances_before = count(ops::BALANCE);
+    let error = wallet.balance().await.unwrap_err();
+    assert!(
+        error.to_string().contains("wallet identity mismatch"),
+        "{error}"
+    );
+    assert_eq!(count(ops::BALANCE), balances_before);
+
+    // Money movement: fails as not-submitted without a `pay` on the wire.
+    let invoice = sample_invoice();
+    plugin.script(
+        ops::PAY,
+        vec![Script::Ok(
+            serde_json::to_value(transaction(&invoice.payment_hash, PaymentStatus::Succeeded))
+                .unwrap(),
+        )],
+    );
+    let error = wallet.pay(&invoice, 1000, 2000).await.unwrap_err();
+    assert!(matches!(error, PayError::NotSubmitted(_)), "{error}");
+    assert_eq!(
+        count(ops::PAY),
+        0,
+        "a rejected wallet must not receive money-moving requests"
+    );
+
+    // Recovery: the plugin opens the pinned wallet again, the next call
+    // re-verifies and proceeds with no further operator action.
+    *plugin.identity.lock().unwrap() = identity("w1");
+    let balance = wallet.balance().await.unwrap();
+    assert_eq!(balance.spendable_msat, 7);
+    let tx = wallet.pay(&invoice, 1000, 2000).await.unwrap();
+    assert_eq!(tx.status, PaymentStatus::Succeeded);
+    assert_eq!(
+        WalletPin::load(dir.path()).unwrap().unwrap().wallet_id,
+        "w1"
+    );
+}

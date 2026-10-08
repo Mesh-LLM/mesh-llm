@@ -270,6 +270,7 @@ pub(super) fn stage_load_to_proto(
         ctx_size: load.ctx_size,
         lane_count: load.lane_count,
         continuous_batching: load.continuous_batching,
+        last_stage_decode_batch: load.last_stage_decode_batch,
         n_batch: load.n_batch,
         n_ubatch: load.n_ubatch,
         n_gpu_layers: load.n_gpu_layers,
@@ -514,6 +515,7 @@ pub(super) fn stage_load_from_proto(
             load.lane_count
         },
         continuous_batching: load.continuous_batching,
+        last_stage_decode_batch: load.last_stage_decode_batch,
         n_batch: load.n_batch,
         n_ubatch: load.n_ubatch,
         n_gpu_layers: load.n_gpu_layers,

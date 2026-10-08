@@ -38,6 +38,7 @@ fn peer_state_test_announcement(addr: EndpointAddr) -> super::PeerAnnouncement {
         stage_protocol_generation_supported: true,
         stage_status_list_supported: true,
         local_gguf_content_id_supported: true,
+        decode_batch_policy_supported: true,
         advertised_model_throughput: vec![],
         #[cfg(feature = "payments")]
         lightning_offers: Default::default(),
@@ -271,6 +272,8 @@ async fn incoming_peer_rejected_on_legacy_or_malformed_gossip() {
     );
 
     let bad_gen_frame = GossipFrame {
+        signed_records: Vec::new(),
+        signed_cache_affinity: Vec::new(),
         r#gen: 0,
         sender_id: vec![],
         peers: vec![PeerAnnouncement {
@@ -415,6 +418,8 @@ fn control_frame_rejects_oversize_or_bad_generation() {
     );
 
     let bad_gen = GossipFrame {
+        signed_records: Vec::new(),
+        signed_cache_affinity: Vec::new(),
         r#gen: 99,
         sender_id: vec![],
         peers: vec![PeerAnnouncement {
@@ -433,6 +438,8 @@ fn control_frame_rejects_oversize_or_bad_generation() {
     );
 
     let bad_id = GossipFrame {
+        signed_records: Vec::new(),
+        signed_cache_affinity: Vec::new(),
         r#gen: NODE_PROTOCOL_GENERATION,
         sender_id: vec![0u8; 32],
         peers: vec![PeerAnnouncement {
@@ -571,6 +578,7 @@ fn gossip_frame_roundtrip_preserves_scanned_model_metadata() {
         stage_protocol_generation_supported: false,
         stage_status_list_supported: false,
         local_gguf_content_id_supported: false,
+        decode_batch_policy_supported: false,
         advertised_model_throughput: vec![],
         #[cfg(feature = "payments")]
         lightning_offers: Default::default(),
@@ -804,6 +812,8 @@ fn gossip_rejects_sender_id_mismatch_or_invalid_endpoint_len() {
     let peer_id_bytes = peer_id.as_bytes().to_vec();
 
     let invalid_sender_frame = GossipFrame {
+        signed_records: Vec::new(),
+        signed_cache_affinity: Vec::new(),
         r#gen: NODE_PROTOCOL_GENERATION,
         sender_id: vec![0u8; 16],
         peers: vec![PeerAnnouncement {
@@ -823,6 +833,8 @@ fn gossip_rejects_sender_id_mismatch_or_invalid_endpoint_len() {
 
     let impersonator_id = EndpointId::from(SecretKey::from_bytes(&[0xbb; 32]).public());
     let mismatch_frame = GossipFrame {
+        signed_records: Vec::new(),
+        signed_cache_affinity: Vec::new(),
         r#gen: NODE_PROTOCOL_GENERATION,
         sender_id: impersonator_id.as_bytes().to_vec(),
         peers: vec![PeerAnnouncement {
@@ -840,6 +852,8 @@ fn gossip_rejects_sender_id_mismatch_or_invalid_endpoint_len() {
     assert!(err.to_string().contains("sender_id mismatch"));
 
     let bad_endpoint_frame = GossipFrame {
+        signed_records: Vec::new(),
+        signed_cache_affinity: Vec::new(),
         r#gen: NODE_PROTOCOL_GENERATION,
         sender_id: peer_id_bytes.clone(),
         peers: vec![PeerAnnouncement {
@@ -938,6 +952,7 @@ fn transitive_peer_update_refreshes_metadata_fields() {
         stage_protocol_generation_supported: true,
         stage_status_list_supported: true,
         local_gguf_content_id_supported: true,
+        decode_batch_policy_supported: true,
         advertised_model_throughput: vec![],
         #[cfg(feature = "payments")]
         lightning_offers: Default::default(),
@@ -1037,6 +1052,7 @@ fn transitive_peer_merge_preserves_richer_direct_address() {
         stage_protocol_generation_supported: true,
         stage_status_list_supported: true,
         local_gguf_content_id_supported: true,
+        decode_batch_policy_supported: true,
         advertised_model_throughput: vec![],
         #[cfg(feature = "payments")]
         lightning_offers: Default::default(),
@@ -1108,6 +1124,7 @@ fn transitive_peer_merge_preserves_richer_direct_address() {
         stage_protocol_generation_supported: true,
         stage_status_list_supported: true,
         local_gguf_content_id_supported: true,
+        decode_batch_policy_supported: true,
         advertised_model_throughput: vec![],
         #[cfg(feature = "payments")]
         lightning_offers: Default::default(),

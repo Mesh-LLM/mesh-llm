@@ -253,10 +253,10 @@ index 000000000..a87425e96
 +    return 0;
 +}
 diff --git a/tests/test-llama-archs.cpp b/tests/test-llama-archs.cpp
-index d640cf5c9..90cf83e08 100644
+index 8e7e3115f..f47bf8f02 100644
 --- a/tests/test-llama-archs.cpp
 +++ b/tests/test-llama-archs.cpp
-@@ -95,6 +95,7 @@ static void usage(char ** argv) {
+@@ -111,6 +111,7 @@ static void usage(char ** argv) {
      LOG("  -o, --out <dir>          Save generated test models to <dir> instead of running backend tests\n");
      LOG("  -v <N>                   Set log verbosity level\n");
      LOG("  -b, --backend <backend>  Run only on the given backend device\n");
@@ -264,7 +264,7 @@ index d640cf5c9..90cf83e08 100644
      LOG("  -h, --help               Show this help message\n\n");
      LOG("Examples:\n");
      LOG("  %s\n", argv[0]);
-@@ -776,7 +777,7 @@ static bool glm_dsa_backend_config_supported(const std::vector<ggml_backend_dev_
+@@ -792,7 +793,7 @@ static bool glm_dsa_backend_config_supported(const std::vector<ggml_backend_dev_
      return true;
  }
  
@@ -273,7 +273,7 @@ index d640cf5c9..90cf83e08 100644
      struct user_data_t {
          struct {
              ggml_log_callback callback;
-@@ -824,6 +825,11 @@ static int save_models(const std::string & arch_filter, const size_t seed, const
+@@ -840,6 +841,11 @@ static int save_models(const std::string & arch_filter, const size_t seed, const
                  continue;
              }
              gguf_context_ptr gguf_ctx = get_gguf_ctx(arch, moe);
@@ -285,7 +285,7 @@ index d640cf5c9..90cf83e08 100644
              auto model_and_ctx = get_model_and_ctx(gguf_ctx.get(), nullptr, seed, stdev, {});
              const std::string path = dir + "/" + llm_arch_name(arch) + (moe ? "-moe.gguf" : "-dense.gguf");
              LOG_INF("%s: Saving %s model (%s) to %s...\n", __func__, llm_arch_name(arch), moe ? "MoE" : "dense", path.c_str());
-@@ -1051,10 +1057,14 @@ int main(int argc, char ** argv) {
+@@ -1069,10 +1075,14 @@ int main(int argc, char ** argv) {
      std::string out;
      const char * target_backend = nullptr;
      bool deepseek4_mtp = false;
@@ -300,7 +300,7 @@ index d640cf5c9..90cf83e08 100644
          if (strcmp(argv[i], "--deepseek4-mtp") == 0) {
              deepseek4_mtp = true;
          }
-@@ -1160,7 +1170,7 @@ int main(int argc, char ** argv) {
+@@ -1180,7 +1190,7 @@ int main(int argc, char ** argv) {
              return 0;
          }
          if (!out.empty()) {

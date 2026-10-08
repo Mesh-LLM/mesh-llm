@@ -46,6 +46,12 @@ libraries. The only durable llama.cpp patch queue is
   numbers. A source-layout change must be folded into the patches that own the
   affected capabilities; do not append a terminal "split", "move", or
   "cleanup" patch that reorganizes code introduced by earlier patches.
+- Before adding a patch, find the existing patch that introduces or owns the
+  affected source, test, or fixture. Prefer updating that patch for fixes and
+  extensions of its capability, including test-only changes. Rework any later
+  patches that depend on it, update queue metadata, and validate a cold replay
+  from the pinned upstream. Add a new patch only for a genuinely separate
+  capability without an existing owner; explain that boundary in the change.
 - Apply the queue in three lanes: numbered core patches directly under
   `patches/`, numbered family-enablement patches listed by
   `patches/model_support/series`, then generated graph-semantics shards listed
@@ -54,9 +60,9 @@ libraries. The only durable llama.cpp patch queue is
   template, multimodal, runtime, and tests belong in one focused
   `model_support/` patch. Keep reusable Skippy machinery in the core lane and
   mechanically generated graph annotations in the generated lane.
-- Ordinary capability changes may append one focused patch. When deliberately
-  changing queue boundaries, recreate the affected series from the pinned
-  upstream and prove that the rebuilt series produces the intended final tree.
+- When deliberately changing queue boundaries, recreate the affected series
+  from the pinned upstream and prove that the rebuilt series produces the
+  intended final tree.
   Once a capability has an owning module, every patch in the recreated series
   must edit that module directly rather than introducing code in an obsolete
   monolith and moving it later.

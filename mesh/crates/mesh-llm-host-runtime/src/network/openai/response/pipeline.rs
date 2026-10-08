@@ -2,10 +2,14 @@ use crate::mesh;
 use crate::network::openai::client_stream::ClientStream;
 use tokio::io::AsyncWriteExt;
 
+use super::prepared_dispatch::admit_pipeline_body;
 use super::probe::append_capsule_nonce_headers;
 use crate::network::openai::request_parse::pipeline_request_supported;
 use crate::network::openai::response::common::parse_token_usage_from_json_body;
 use mesh_llm_events::logging::events::TokenUsage;
+#[path = "pipeline_stream_evidence.rs"]
+mod pipeline_stream_evidence;
+use pipeline_stream_evidence::SseUsageParser;
 
 /// Read the capsule client nonce and origin-marker headers off a reqwest
 /// response, so the hand-built responses below (which otherwise carry over
@@ -24,6 +28,8 @@ fn capsule_nonce_headers(headers: &reqwest::header::HeaderMap) -> (Option<String
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PipelineProxyResult {
+    PolicyDenied,
+    RequiredHookFailed,
     Responded(u16),
     RespondedWithUsage { status_code: u16, usage: TokenUsage },
     Dropped,
@@ -39,6 +45,8 @@ pub enum PipelineProxyResult {
 pub struct PipelineCapsuleNonce {
     pub client_nonce: Option<String>,
     pub nonce_origin: Option<String>,
+    pub observation_id: Option<String>,
+    pub exchange_id: Option<String>,
 }
 
 /// Pipeline-aware HTTP proxy for local targets.
@@ -71,11 +79,37 @@ pub(crate) async fn pipeline_proxy_local(
 
     let http_client = reqwest::Client::new();
     let planner_url = format!("http://127.0.0.1:{planner_port}");
-    if !pipeline_preplan_request(&http_client, &planner_url, planner_model, &mut body).await {
-        return PipelineProxyResult::FallbackToDirect;
+    match pipeline_preplan_request(
+        &http_client,
+        &planner_url,
+        planner_model,
+        &mut body,
+        node,
+        capsule_nonce,
+        client_stream,
+    )
+    .await
+    {
+        Ok(true) => {}
+        Ok(false) => return PipelineProxyResult::FallbackToDirect,
+        Err(denied) => return denied,
     }
 
     let strong_url = format!("http://127.0.0.1:{strong_port}/v1/chat/completions");
+    let model = body["model"].as_str().unwrap_or_default();
+    if let Some(denied) = admit_pipeline_body(
+        node,
+        client_stream,
+        &body,
+        capsule_nonce,
+        model,
+        &strong_url,
+        2,
+    )
+    .await
+    {
+        return denied;
+    }
     let _inflight = node.begin_inflight_request();
     if matches!(
         logging.response_adapter,
@@ -150,14 +184,39 @@ async fn pipeline_preplan_request(
     planner_url: &str,
     planner_model: &str,
     body: &mut serde_json::Value,
-) -> bool {
+    node: &mesh::Node,
+    nonce: &PipelineCapsuleNonce,
+    stream: &mut ClientStream,
+) -> Result<bool, PipelineProxyResult> {
     let messages = body
         .get("messages")
         .and_then(|messages| messages.as_array())
         .cloned()
         .unwrap_or_default();
-    match crate::inference::pipeline::pre_plan(http_client, planner_url, planner_model, &messages)
-        .await
+    let Ok(prepared) = crate::inference::pipeline::prepare_plan_request(planner_model, &messages)
+    else {
+        return Ok(false);
+    };
+    if let Some(denied) = admit_pipeline_body(
+        node,
+        stream,
+        &prepared,
+        nonce,
+        planner_model,
+        planner_url,
+        1,
+    )
+    .await
+    {
+        return Err(denied);
+    }
+    match crate::inference::pipeline::pre_plan_prepared(
+        http_client,
+        planner_url,
+        planner_model,
+        &prepared,
+    )
+    .await
     {
         Ok(plan) => {
             tracing::info!(
@@ -167,11 +226,11 @@ async fn pipeline_preplan_request(
                 plan.plan_text.chars().take(200).collect::<String>()
             );
             crate::inference::pipeline::inject_plan(body, &plan);
-            true
+            Ok(true)
         }
         Err(err) => {
             tracing::warn!("pipeline: pre-plan failed ({err}), falling back to direct proxy");
-            false
+            Ok(false)
         }
     }
 }
@@ -247,9 +306,23 @@ async fn relay_pipeline_streaming_response(
             }
             Ok(bytes) => usage_parser.push(&bytes),
             Err(err) => {
+                client_stream.record_exchange_outcome("transport_error");
+                client_stream.finish_wire_bytes(
+                    skippy_inference_api::wire_bytes::WireBytesIncomplete::TransportError,
+                );
                 tracing::debug!("pipeline: stream error: {err}");
                 return PipelineProxyResult::Dropped;
             }
+        }
+    }
+    if status.is_success()
+        && let Some(outcome) = usage_parser.outcome()
+    {
+        client_stream.record_exchange_outcome(outcome);
+        if outcome == "transport_error" {
+            client_stream.finish_wire_bytes(
+                skippy_inference_api::wire_bytes::WireBytesIncomplete::TransportError,
+            );
         }
     }
     if client_stream.write_all(b"0\r\n\r\n").await.is_err()
@@ -258,38 +331,6 @@ async fn relay_pipeline_streaming_response(
         return PipelineProxyResult::Dropped;
     }
     completed_pipeline_response(status, usage_parser.usage)
-}
-
-#[derive(Default)]
-struct SseUsageParser {
-    carry: Vec<u8>,
-    usage: Option<TokenUsage>,
-}
-
-impl SseUsageParser {
-    fn push(&mut self, bytes: &[u8]) {
-        self.carry.extend_from_slice(bytes);
-        while let Some(end) = self
-            .carry
-            .windows(2)
-            .position(|window| matches!(window, b"\n\n" | b"\r\n"))
-        {
-            let frame = self.carry.drain(..end + 2).collect::<Vec<_>>();
-            for line in frame.split(|byte| *byte == b'\n') {
-                let line = line.strip_suffix(b"\r").unwrap_or(line);
-                let Some(data) = line.strip_prefix(b"data:") else {
-                    continue;
-                };
-                let data = data.strip_prefix(b" ").unwrap_or(data);
-                if let Some(usage) = parse_token_usage_from_json_body(data) {
-                    self.usage = Some(usage);
-                }
-            }
-        }
-        if self.carry.len() > 64 * 1024 {
-            self.carry.clear();
-        }
-    }
 }
 
 async fn write_pipeline_chunk(
@@ -397,6 +438,7 @@ mod tests {
         let capsule_nonce = PipelineCapsuleNonce {
             client_nonce: Some("11111111-2222-4333-8444-555555555555".to_string()),
             nonce_origin: Some("frontend".to_string()),
+            ..Default::default()
         };
         let request = attach_capsule_nonce_headers(
             http_client.post("http://127.0.0.1:1/v1/chat/completions"),

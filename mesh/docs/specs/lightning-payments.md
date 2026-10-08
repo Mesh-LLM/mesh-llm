@@ -203,8 +203,12 @@ waits for completion, which the contract permits.
 `not_open`, `invalid_request`, `not_submitted`, `uncertain`, `failed`. The
 host adapter (`network/payments/wallet_plugin.rs`) maps these back onto
 `PayError`: only `not_submitted` and `invalid_request` become `NotSubmitted`;
-IPC loss, timeouts, `failed` and unstructured errors are `Uncertain` and are
-never re-sent. A `not_open` (plugin restarted and lost its open wallet) is
+IPC loss, timeouts, `failed` and unstructured errors are `Uncertain`. The
+plugin transport never automatically replays `wallet_pay` after a lost reply,
+including across a plugin restart; the ledger owns subsequent hash-based
+reconciliation and any deliberate idempotent resubmission described below.
+Other operations retain their existing transport retry behavior.
+A `not_open` (plugin restarted and lost its open wallet) is
 answered with exactly one re-open and one retry. `pay` and the `wait_for_*`
 long-polls carry no IPC deadline; the caller owns cancellation by dropping the
 future.

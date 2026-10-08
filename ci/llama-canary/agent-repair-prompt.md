@@ -33,6 +33,15 @@ Own the repair end to end:
 5. Run prepare, the complete patched llama.cpp build with upstream tests, the
    generated-family check, affected Rust package checks, and focused smoke or
    real-model reproductions for your repairs. Inspect failures and fix them.
+   Run every build and test command through
+   `scripts/llama-canary-log-command.sh <short-label> <command> [args...]`.
+   For build or test commands containing pipelines, use `bash -o pipefail -c`
+   as the command argument so failures in earlier pipeline stages are reported.
+   For commands requiring shell syntax without pipelines, use `bash -c`.
+   The wrapper streams output, preserves the command's exit status, and saves a
+   separate full log for each invocation in the canary's 14-day build evidence
+   artifact. Use it on failed reproductions and retries too. Do not put secrets
+   in command output or labels.
    Keep build and test commands in the foreground. If you start any background
    command, record its PID, wait for it to exit, and check its exit status before
    returning. Do not leave `nohup`, detached, or still-running build and test
