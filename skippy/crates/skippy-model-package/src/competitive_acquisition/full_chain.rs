@@ -209,6 +209,9 @@ pub(super) fn fixture(root: &Path) -> Fixture {
 }
 #[test]
 fn native_full_four_family_acquisition_export_dataset_and_skip_groups_preserve_exact_bytes() {
+    let _signals = crate::snapshot_promotion::local_publisher::PROCESS_SIGNAL_TEST_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     for skip in [false, true] {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path().canonicalize().unwrap();

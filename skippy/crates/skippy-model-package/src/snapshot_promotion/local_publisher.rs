@@ -342,6 +342,11 @@ impl Drop for SignalLatch {
     }
 }
 
+// Serializes tests that raise process-directed signals with tests whose run path
+// listens for SIGTERM/SIGINT, so one test cannot cancel another.
+#[cfg(all(test, unix))]
+pub(crate) static PROCESS_SIGNAL_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[cfg(all(test, unix))]
 #[path = "local_publisher/tests.rs"]
 mod tests;

@@ -60,6 +60,9 @@ fn publisher_terminal_cancel_deadline_or_input_drift_retains_failed_commit_obser
 
 #[test]
 fn publisher_terminal_self_signal_without_tokio_driver_retains_failed_commit_observations() {
+    let _signals = super::PROCESS_SIGNAL_TEST_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     for signal in [libc::SIGTERM, libc::SIGINT] {
         let root = tempfile::tempdir().unwrap();
         let base = root.path().canonicalize().unwrap();
