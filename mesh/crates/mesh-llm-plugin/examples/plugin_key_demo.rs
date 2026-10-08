@@ -37,6 +37,15 @@ async fn main() -> anyhow::Result<()> {
             ),
         ),
         on_initialized: |context| Box::pin(async move {
+            // An older host does not list the capability: say so, announce
+            // nothing, and keep running.
+            if !context.host_supports(mesh_llm_plugin::host_capabilities::PLUGIN_KEYS) {
+                eprintln!(
+                    "key-demo: plugin keys are not supported by this host (it does not list `{}`); nothing announced",
+                    mesh_llm_plugin::host_capabilities::PLUGIN_KEYS
+                );
+                return Ok(());
+            }
             let response = context.announce_plugin_key(DEMO_PUBLIC_KEY.to_vec()).await?;
             eprintln!(
                 "key-demo: announced on node {} ({} signature bytes)",
