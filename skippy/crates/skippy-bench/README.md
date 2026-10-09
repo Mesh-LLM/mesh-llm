@@ -229,7 +229,9 @@ choice. Deployment and index selection must match explicit preparation.
 MCP-Atlas and SWE-Bench Pro use pinned source checkouts and explicitly prepared
 SDK environments. `sync` acquires source and MCP's pinned agent image; it
 does not prepare these SDKs. Preparation is opt-in on Unix and takes existing
-absolute `uv` and Python executable paths. It never downloads an interpreter. Use one explicit cache root for sync,
+absolute `uv` and Python executable paths. It never downloads an interpreter.
+Before preparing or running these evals, set `MESH_PYTHON_RESEARCH_SOURCE` to
+the restored pinned research checkout. Use one explicit cache root for sync,
 prepare, doctor, and run:
 
 ```bash

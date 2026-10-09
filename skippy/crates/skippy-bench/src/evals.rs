@@ -458,6 +458,9 @@ mod tests {
 
     #[test]
     fn speed_bench_command_points_at_openai_endpoint() {
+        if !crate::evals::external_sdk_source::configured() {
+            return;
+        }
         let args = EvalRunArgs {
             eval: EvalId::SpeedBench,
             base_url: "http://127.0.0.1:9337/v1".to_string(),
@@ -492,7 +495,7 @@ mod tests {
                 .contains(&"http://127.0.0.1:9337/v1".to_string())
         );
         assert!(command.args.contains(&"tiny-local".to_string()));
-        let launcher = external_sdk_source::leaf("speed-bench-auth.py").unwrap();
+        let launcher = external_sdk_source::command_leaf("speed-bench-auth.py", true).unwrap();
         assert_eq!(
             command.program,
             speed_environment::runtime_python(&root)

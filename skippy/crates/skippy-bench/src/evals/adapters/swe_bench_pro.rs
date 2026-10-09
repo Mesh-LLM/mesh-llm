@@ -49,17 +49,23 @@ fn write_swe_bench_pro_run_script(
     let script = format!(
         include_str!("templates/swe_bench_pro_run.sh"),
         sdk_generate = shell_quote(
-            &super::super::external_sdk_source::leaf("swe-generate-instances.py")?
-                .display()
-                .to_string()
+            &super::super::external_sdk_source::command_leaf(
+                "swe-generate-instances.py",
+                args.dry_run
+            )?
+            .display()
+            .to_string()
         ),
         sdk_expert = shell_quote(
-            &super::super::external_sdk_source::leaf("swe-expert-instances.py")?
-                .display()
-                .to_string()
+            &super::super::external_sdk_source::command_leaf(
+                "swe-expert-instances.py",
+                args.dry_run
+            )?
+            .display()
+            .to_string()
         ),
         sdk_evaluate = shell_quote(
-            &super::super::external_sdk_source::leaf("swe-evaluate.py")?
+            &super::super::external_sdk_source::command_leaf("swe-evaluate.py", args.dry_run)?
                 .display()
                 .to_string()
         ),

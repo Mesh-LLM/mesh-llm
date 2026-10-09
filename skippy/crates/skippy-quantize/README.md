@@ -561,7 +561,7 @@ accepted as matching failures.
 
 `run-quant --manifest FILE --first-split N --last-split M` admits an inclusive
 range against the manifest split count. Both flags are required together;
-splits start at1 and N must be <=M. Omitted flags preserve automatic local
+splits start at 1, and N must be <= M. Omitted flags preserve automatic local
 resume. A selected range skips missing earlier output shards, which is useful
 when a separately owned workflow has already verified/published/unlinked them.
 The tool itself does not establish remote upload or resume integrity.

@@ -247,10 +247,10 @@ fn embedded_prepare_stops_on_failed_child_even_with_two_plausible_state_lines() 
         "set -euo pipefail\n{}\nprintf 'CALLER_CONTINUED\\n'\n",
         &source[start..end]
     );
-    let bash = if cfg!(target_os = "macos") {
+    let bash = if std::path::Path::new("/opt/homebrew/bin/bash").exists() {
         "/opt/homebrew/bin/bash"
     } else {
-        "/bin/bash"
+        "bash"
     };
     let child = Command::new(bash)
         .env_clear()

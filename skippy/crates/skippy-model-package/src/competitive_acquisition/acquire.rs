@@ -12,7 +12,8 @@ pub(crate) fn client(token: String, cache: &Path) -> Result<HFClient> {
     let http = reqwest::Client::builder()
         .no_proxy()
         .https_only(true)
-        .timeout(std::time::Duration::from_secs(30))
+        .connect_timeout(std::time::Duration::from_secs(30))
+        .read_timeout(std::time::Duration::from_secs(30))
         .build()
         .map_err(|_| anyhow::anyhow!("HF client refused"))?;
     let mut builder = HFClient::builder().endpoint("https://huggingface.co");

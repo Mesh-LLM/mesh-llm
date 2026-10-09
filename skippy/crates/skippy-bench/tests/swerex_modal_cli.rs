@@ -120,6 +120,9 @@ fn patch_command(fixture: &Fixture, locator: &std::path::Path) -> Command {
 #[test]
 fn actual_cli_preserves_official_interfaces_and_backups_and_is_idempotent_without_model_preparation()
  {
+    if std::env::var_os("MESH_PYTHON_RESEARCH_SOURCE").is_none() {
+        return;
+    }
     let fixture = Fixture::new();
     let locator = populate(&fixture);
     for _ in 0..2 {

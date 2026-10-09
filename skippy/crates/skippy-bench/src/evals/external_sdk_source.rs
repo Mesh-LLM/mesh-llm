@@ -85,6 +85,22 @@ pub(super) fn leaf(name: &str) -> Result<PathBuf> {
     admit(&root.canonicalize()?.join("benchmark-adapters"), name, pin)
 }
 
+/// Resolves an external SDK leaf for a rendered command. Dry runs render a
+/// deterministic placeholder so they do not require the research checkout;
+/// real runs admit the pinned leaf.
+pub(super) fn command_leaf(name: &str, dry_run: bool) -> Result<PathBuf> {
+    if dry_run {
+        return Ok(Path::new("$MESH_PYTHON_RESEARCH_SOURCE/benchmark-adapters").join(name));
+    }
+    leaf(name)
+}
+
+/// Whether tests that read pinned external SDK bytes can run.
+#[cfg(test)]
+pub(super) fn configured() -> bool {
+    env::var_os("MESH_PYTHON_RESEARCH_SOURCE").is_some()
+}
+
 fn admit(root: &Path, name: &str, pin: &str) -> Result<PathBuf> {
     if !Path::new(name)
         .components()

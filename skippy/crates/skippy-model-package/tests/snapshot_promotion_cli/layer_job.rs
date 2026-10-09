@@ -113,10 +113,10 @@ fn layer_job_actual_embedded_projection_block_forwards_source_and_experimental_p
     let start = script.find("# The root/card projection").unwrap();
     let end = script[start..].find("SOURCE_IDENTITY=").unwrap() + start;
     let block = &script[start..end];
-    let bash = if cfg!(target_os = "macos") {
+    let bash = if std::path::Path::new("/opt/homebrew/bin/bash").exists() {
         "/opt/homebrew/bin/bash"
     } else {
-        "/bin/bash"
+        "bash"
     };
     let report = finish(
         Command::new(bash)
