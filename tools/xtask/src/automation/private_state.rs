@@ -217,6 +217,8 @@ fn host_environment() -> impl Iterator<Item = (OsString, Value)> {
         "NUMBER_OF_PROCESSORS",
         "PROCESSOR_ARCHITECTURE",
         "OS",
+        "PSMODULEPATH",
+        "PSMODULEANALYSISCACHEPATH",
     ]
     .into_iter()
     .filter_map(|key| {
@@ -236,4 +238,24 @@ fn host_environment() -> impl Iterator<Item = (OsString, Value)> {
                 (key.into(), value)
             })
     })
+    .chain(powershell_analysis_cache())
+}
+
+/// Child app-data directories are private and empty, so PowerShell would
+/// rebuild its module analysis cache on every hardware probe (over a minute on
+/// hosted Windows runners). Reuse the host cache unless one is already set.
+fn powershell_analysis_cache() -> Option<(OsString, Value)> {
+    if !cfg!(windows) || std::env::var_os("PSMODULEANALYSISCACHEPATH").is_some() {
+        return None;
+    }
+    let local = std::env::var_os("LOCALAPPDATA").filter(|value| !value.is_empty())?;
+    let path = std::path::Path::new(&local)
+        .join("Microsoft")
+        .join("Windows")
+        .join("PowerShell")
+        .join("ModuleAnalysisCache");
+    Some((
+        "PSMODULEANALYSISCACHEPATH".into(),
+        Value::Public(path.into()),
+    ))
 }
