@@ -4921,6 +4921,7 @@ dependencies = [
  "sha2 0.11.0",
  "skippy-api",
  "skippy-cache",
+ "skippy-commands",
  "skippy-coordinator",
  "skippy-events",
  "skippy-ffi",
