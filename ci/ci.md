@@ -14,10 +14,10 @@ For a selected Linux, macOS, or Windows runtime row, the lane now builds the
 backend-neutral Skippy CLI independently of the console UI, composes it with
 the exact native runtime archive, and verifies source, target, backend,
 release, ABI, import policy, checksums, and no-driver runtime discovery before the Mesh host starts. The
-standalone product is an immutable run artifact. The Linux CPU product job
-also restores pinned SmolLM2 dense and Granite hybrid fixtures and requires
+standalone product is an immutable run artifact. The Linux and Windows CPU product jobs
+also restore pinned SmolLM2 dense and Granite hybrid fixtures and require
 real prefill and decode through that composed CLI/runtime pair before uploading
-the product. It uploads digest-bound pilot evidence files. These pilots cover
+the product. They upload digest-bound pilot evidence files. These pilots cover
 only load and prefill/decode; the full six-suite, nine-row model and hardware qualification
 gate remains pending in the audit's acceptance checklist.
 
@@ -1011,6 +1011,10 @@ of its UI-dependent Mesh host and uploads
 contract, and `host-imports.json` after verifying host imports.
 The standalone slice passes the selected source SHA into CLI preparation;
 protected pre-migration host slices derive it from their checked-out source.
+Linux and Windows CPU standalone product jobs execute pinned dense and hybrid
+models through the composed CLI and runtime, require positive prefill and decode,
+and upload digest-bound pilot evidence. These pilots do not constitute the full
+six-suite, nine-row qualification receipt.
 Native-runtime slices build or restore one Skippy llama.cpp
 runtime per selected backend and upload a source-bound `ci-source.json` beside
 the archive. The Linux CPU package cache uses the exact source revision in its

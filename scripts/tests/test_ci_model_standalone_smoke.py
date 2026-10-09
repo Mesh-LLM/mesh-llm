@@ -1,4 +1,4 @@
-"""Contract checks for executable standalone dense pilot results."""
+"""Contract checks for executable standalone model pilot results."""
 
 import importlib.util
 from pathlib import Path
@@ -26,6 +26,17 @@ class CompletionEvidenceTests(unittest.TestCase):
         response["usage"]["completion_tokens"] = 2
         with self.assertRaisesRegex(ValueError, "model differs"):
             MODULE.completion_evidence(response, "other")
+
+    def test_windows_cpu_pilots_use_pinned_models_and_composed_product(self):
+        workflow = (SCRIPT.parents[2] / ".github/workflows/ci-skippy-product-slice.yml").read_text()
+        windows = workflow.split("  windows_product:\n", 1)[1]
+        self.assertIn("--product-dir skippy-product-input", windows)
+        self.assertIn("model_artifact_id: smollm2-q8-inference", windows)
+        self.assertIn("model_artifact_id: family-granite-hybrid", windows)
+        self.assertIn("--suite dense-pilot", windows)
+        self.assertIn("--suite recurrent-pilot", windows)
+        self.assertIn("name: ci-skippy-model-pilot-windows-${{ matrix.runtime.architecture }}", windows)
+        self.assertEqual(windows.count("if: ${{ matrix.runtime.backend == 'cpu' }}"), 5)
 
 
 if __name__ == "__main__":

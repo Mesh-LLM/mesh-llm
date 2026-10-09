@@ -228,7 +228,7 @@ jobs:
     needs: runner_policy
     if: ${{ needs.runner_policy.result == 'success' && inputs.platform == 'windows' }}
     runs-on: ${{ needs.runner_policy.outputs.windows }}
-    timeout-minutes: 20
+    timeout-minutes: 35
     strategy:
       fail-fast: ${{ inputs.fail_fast }}
       max-parallel: ${{ inputs.max_parallel }}
@@ -261,6 +261,60 @@ jobs:
           python skippy/scripts/compose-ci-product.py --cli-input skippy-cli-input \
             --runtime-input runtime-input --output skippy-product-input \
             --source-sha "$SOURCE_SHA" --target "$TARGET" --backend "$BACKEND"
+      - name: Restore pinned dense model for standalone Windows CPU pilot
+        if: ${{ matrix.runtime.backend == 'cpu' }}
+        id: dense_model
+        uses: ./.github/actions/restore-test-model
+        with:
+          model_manifest: ci/model-artifacts/manifests/product-smoke.json
+          model_artifact_id: smollm2-q8-inference
+          model_cadence: ${{ inputs.original_event_name == 'pull_request' && 'pull-request' || 'main' }}
+          model_cache_scope: standalone-dense-smoke
+      - name: Execute composed Skippy dense Windows CPU pilot
+        if: ${{ matrix.runtime.backend == 'cpu' }}
+        shell: bash
+        env:
+          MODEL_PATH: ${{ steps.dense_model.outputs.model_path }}
+          MODEL_SHA256: ${{ steps.dense_model.outputs.model_sha256 }}
+        run: |
+          python skippy/scripts/ci-model-standalone-smoke.py \
+            --product-dir skippy-product-input --model "$MODEL_PATH" \
+            --model-sha256 "$MODEL_SHA256" \
+            --model-id 'unsloth/SmolLM2-135M-Instruct-GGUF:Q8_0' \
+            --suite dense-pilot \
+            --evidence skippy-dense-pilot.json
+      - name: Restore pinned recurrent model for standalone Windows CPU pilot
+        if: ${{ matrix.runtime.backend == 'cpu' }}
+        id: recurrent_model
+        uses: ./.github/actions/restore-test-model
+        with:
+          model_manifest: ci/model-artifacts/manifests/product-smoke.json
+          model_artifact_id: family-granite-hybrid
+          model_cadence: ${{ inputs.original_event_name == 'pull_request' && 'pull-request' || 'main' }}
+          model_cache_scope: standalone-recurrent-smoke
+      - name: Execute composed Skippy recurrent Windows CPU pilot
+        if: ${{ matrix.runtime.backend == 'cpu' }}
+        shell: bash
+        env:
+          MODEL_PATH: ${{ steps.recurrent_model.outputs.model_path }}
+          MODEL_SHA256: ${{ steps.recurrent_model.outputs.model_sha256 }}
+        run: |
+          python skippy/scripts/ci-model-standalone-smoke.py \
+            --product-dir skippy-product-input --model "$MODEL_PATH" \
+            --model-sha256 "$MODEL_SHA256" \
+            --model-id 'ibm-granite/granite-4.0-h-350m-GGUF:Q4_K_M' \
+            --suite recurrent-pilot \
+            --evidence skippy-recurrent-pilot.json
+      - name: Upload standalone Windows CPU pilot evidence
+        if: ${{ matrix.runtime.backend == 'cpu' }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: ci-skippy-model-pilot-windows-${{ matrix.runtime.architecture }}
+          path: |
+            skippy-dense-pilot.json
+            skippy-recurrent-pilot.json
+          if-no-files-found: error
+          retention-days: 1
       - name: Upload immutable standalone product
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
