@@ -162,6 +162,27 @@ jobs:
             --model-id 'ibm-granite/granite-4.0-h-350m-GGUF:Q4_K_M' \
             --suite recurrent-pilot \
             --evidence skippy-recurrent-pilot.json
+      - name: Restore pinned MoE model for standalone CPU pilot
+        if: ${{ matrix.runtime.backend == 'cpu' }}
+        id: moe_model
+        uses: ./.github/actions/restore-test-model
+        with:
+          model_manifest: ci/model-artifacts/manifests/product-smoke.json
+          model_artifact_id: family-granite-moe
+          model_cadence: ${{ inputs.original_event_name == 'pull_request' && 'pull-request' || 'main' }}
+          model_cache_scope: standalone-moe-smoke
+      - name: Execute composed Skippy MoE CPU pilot
+        if: ${{ matrix.runtime.backend == 'cpu' }}
+        env:
+          MODEL_PATH: ${{ steps.moe_model.outputs.model_path }}
+          MODEL_SHA256: ${{ steps.moe_model.outputs.model_sha256 }}
+        run: |
+          python3 skippy/scripts/ci-model-standalone-smoke.py \
+            --product-dir skippy-product-input --model "$MODEL_PATH" \
+            --model-sha256 "$MODEL_SHA256" \
+            --model-id 'sinatras/granite-moe-1b-split:Q4_K_M' \
+            --suite moe-pilot \
+            --evidence skippy-moe-pilot.json
       - name: Upload standalone CPU pilot evidence
         if: ${{ matrix.runtime.backend == 'cpu' }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
@@ -170,6 +191,7 @@ jobs:
           path: |
             skippy-dense-pilot.json
             skippy-recurrent-pilot.json
+            skippy-moe-pilot.json
           if-no-files-found: error
           retention-days: 1
       - name: Upload immutable standalone product
@@ -305,6 +327,28 @@ jobs:
             --model-id 'ibm-granite/granite-4.0-h-350m-GGUF:Q4_K_M' \
             --suite recurrent-pilot \
             --evidence skippy-recurrent-pilot.json
+      - name: Restore pinned MoE model for standalone Windows CPU pilot
+        if: ${{ matrix.runtime.backend == 'cpu' }}
+        id: moe_model
+        uses: ./.github/actions/restore-test-model
+        with:
+          model_manifest: ci/model-artifacts/manifests/product-smoke.json
+          model_artifact_id: family-granite-moe
+          model_cadence: ${{ inputs.original_event_name == 'pull_request' && 'pull-request' || 'main' }}
+          model_cache_scope: standalone-moe-smoke
+      - name: Execute composed Skippy MoE Windows CPU pilot
+        if: ${{ matrix.runtime.backend == 'cpu' }}
+        shell: bash
+        env:
+          MODEL_PATH: ${{ steps.moe_model.outputs.model_path }}
+          MODEL_SHA256: ${{ steps.moe_model.outputs.model_sha256 }}
+        run: |
+          python skippy/scripts/ci-model-standalone-smoke.py \
+            --product-dir skippy-product-input --model "$MODEL_PATH" \
+            --model-sha256 "$MODEL_SHA256" \
+            --model-id 'sinatras/granite-moe-1b-split:Q4_K_M' \
+            --suite moe-pilot \
+            --evidence skippy-moe-pilot.json
       - name: Upload standalone Windows CPU pilot evidence
         if: ${{ matrix.runtime.backend == 'cpu' }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
@@ -313,6 +357,7 @@ jobs:
           path: |
             skippy-dense-pilot.json
             skippy-recurrent-pilot.json
+            skippy-moe-pilot.json
           if-no-files-found: error
           retention-days: 1
       - name: Upload immutable standalone product

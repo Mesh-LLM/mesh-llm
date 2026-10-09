@@ -2,7 +2,7 @@
   "schema_version": 1,
   "manifest_kind": "test-model-artifacts",
   "suite": "product-smoke",
-  "registry_sha256": "32301e8764f89d26308679918565e3bb3c9fcae56ac819083731777ae2249b45",
+  "registry_sha256": "adc196473b245989a68ae2d684b72aae766e1b2ba1de414f6ed35cb5c6739e40",
   "artifacts": [
     {
       "id": "family-granite-hybrid",
@@ -43,6 +43,45 @@
       "size_bytes": 222662560,
       "sha256": "0a8d6a7373602fadfba274a640ba784b86cc6847f1c67f1b0a90fa2ec266b7fb",
       "url": "https://huggingface.co/ibm-granite/granite-4.0-h-350m-GGUF/resolve/a864f823cce6e6048b5752e2816fe7a23987d790/granite-4.0-h-350m-Q4_K_M.gguf"
+    },
+    {
+      "id": "family-granite-moe",
+      "family": "granite-moe",
+      "capability_tags": [
+        "gguf",
+        "moe"
+      ],
+      "suites": [
+        "llama-family-certification",
+        "product-smoke"
+      ],
+      "cadences": [
+        "llama-bump",
+        "manual-full",
+        "pull-request",
+        "main",
+        "release"
+      ],
+      "repo": "sinatras/granite-moe-1b-split",
+      "revision": "3beccd31cf6d51f94c93007e56a21e0df41a101a",
+      "selector": "Q4_K_M",
+      "files": [
+        "Q4_K_M/granite-3.1-1b-a400m-instruct-Q4_K_M.gguf"
+      ],
+      "file_integrity": {
+        "Q4_K_M/granite-3.1-1b-a400m-instruct-Q4_K_M.gguf": {
+          "size_bytes": 821847360,
+          "blob_id": "3a2ec1c2a78cb29d901e29bbf5162dcd03381e13803d2cbdcff838d4d08142eb"
+        }
+      },
+      "model_ref": "sinatras/granite-moe-1b-split:Q4_K_M",
+      "urls": [
+        "https://huggingface.co/sinatras/granite-moe-1b-split/resolve/3beccd31cf6d51f94c93007e56a21e0df41a101a/Q4_K_M/granite-3.1-1b-a400m-instruct-Q4_K_M.gguf"
+      ],
+      "file": "Q4_K_M/granite-3.1-1b-a400m-instruct-Q4_K_M.gguf",
+      "size_bytes": 821847360,
+      "sha256": "3a2ec1c2a78cb29d901e29bbf5162dcd03381e13803d2cbdcff838d4d08142eb",
+      "url": "https://huggingface.co/sinatras/granite-moe-1b-split/resolve/3beccd31cf6d51f94c93007e56a21e0df41a101a/Q4_K_M/granite-3.1-1b-a400m-instruct-Q4_K_M.gguf"
     },
     {
       "id": "smollm2-q8-inference",

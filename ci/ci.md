@@ -1011,7 +1011,7 @@ of its UI-dependent Mesh host and uploads
 contract, and `host-imports.json` after verifying host imports.
 The standalone slice passes the selected source SHA into CLI preparation;
 protected pre-migration host slices derive it from their checked-out source.
-Linux and Windows CPU standalone product jobs execute pinned dense and hybrid
+Linux and Windows CPU standalone product jobs execute pinned dense, hybrid, and MoE
 models through the composed CLI and runtime, require positive prefill and decode,
 and upload digest-bound pilot evidence. These pilots do not constitute the full
 six-suite, nine-row qualification receipt.

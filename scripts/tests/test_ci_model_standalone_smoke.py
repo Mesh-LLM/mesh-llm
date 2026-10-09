@@ -33,10 +33,12 @@ class CompletionEvidenceTests(unittest.TestCase):
         self.assertIn("--product-dir skippy-product-input", windows)
         self.assertIn("model_artifact_id: smollm2-q8-inference", windows)
         self.assertIn("model_artifact_id: family-granite-hybrid", windows)
+        self.assertIn("model_artifact_id: family-granite-moe", windows)
         self.assertIn("--suite dense-pilot", windows)
         self.assertIn("--suite recurrent-pilot", windows)
+        self.assertIn("--suite moe-pilot", windows)
         self.assertIn("name: ci-skippy-model-pilot-windows-${{ matrix.runtime.architecture }}", windows)
-        self.assertEqual(windows.count("if: ${{ matrix.runtime.backend == 'cpu' }}"), 5)
+        self.assertEqual(windows.count("if: ${{ matrix.runtime.backend == 'cpu' }}"), 7)
 
 
 if __name__ == "__main__":

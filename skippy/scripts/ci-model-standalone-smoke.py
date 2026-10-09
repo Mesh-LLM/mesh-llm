@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run a pinned dense or recurrent model through a composed standalone product."""
+"""Run a pinned model through a composed standalone CPU product."""
 
 from __future__ import annotations
 
@@ -114,7 +114,7 @@ def main() -> int:
     parser.add_argument("--model", type=Path, required=True)
     parser.add_argument("--model-sha256", required=True)
     parser.add_argument("--model-id", required=True)
-    parser.add_argument("--suite", choices=("dense-pilot", "recurrent-pilot"), required=True)
+    parser.add_argument("--suite", choices=("dense-pilot", "recurrent-pilot", "moe-pilot"), required=True)
     parser.add_argument("--evidence", type=Path, required=True)
     args = parser.parse_args()
     try:
