@@ -59,6 +59,7 @@ fn owner_fields_roundtrip_through_proto_announcement() {
         stage_protocol_generation_supported: true,
         stage_status_list_supported: true,
         local_gguf_content_id_supported: true,
+        decode_batch_policy_supported: true,
         advertised_model_throughput: vec![],
         #[cfg(feature = "payments")]
         lightning_offers: Default::default(),
@@ -192,6 +193,7 @@ fn advertised_model_throughput_roundtrips_through_proto_announcement() {
         stage_protocol_generation_supported: false,
         stage_status_list_supported: false,
         local_gguf_content_id_supported: false,
+        decode_batch_policy_supported: false,
         advertised_model_throughput: vec![
             expected_hints[0].clone(),
             crate::network::metrics::ModelThroughputHint {
@@ -406,6 +408,7 @@ fn inference_admission_state_roundtrips_through_proto_announcement() {
         stage_protocol_generation_supported: false,
         stage_status_list_supported: false,
         local_gguf_content_id_supported: false,
+        decode_batch_policy_supported: false,
         advertised_model_throughput: vec![],
         #[cfg(feature = "payments")]
         lightning_offers: Default::default(),
@@ -666,6 +669,7 @@ fn test_proto_round_trip_with_bandwidth_and_tflops() {
         stage_protocol_generation_supported: true,
         stage_status_list_supported: true,
         local_gguf_content_id_supported: true,
+        decode_batch_policy_supported: true,
         advertised_model_throughput: vec![],
         #[cfg(feature = "payments")]
         lightning_offers: Default::default(),
@@ -1074,6 +1078,7 @@ fn claimed_log_head_test_announcement(
         stage_protocol_generation_supported: false,
         stage_status_list_supported: false,
         local_gguf_content_id_supported: false,
+        decode_batch_policy_supported: false,
         advertised_model_throughput: vec![],
         cache_affinity: None,
         latency_ms: None,
@@ -1188,6 +1193,7 @@ fn proto_announcement_without_claimed_log_head_decodes_as_absent() {
         stage_protocol_generation_supported: false,
         stage_status_list_supported: false,
         local_gguf_content_id_supported: false,
+        decode_batch_policy_supported: false,
         advertised_model_throughput: vec![],
         cache_affinity: None,
         latency_ms: None,
@@ -1409,4 +1415,26 @@ fn claimed_log_head_empty_signature_algorithm_roundtrips_as_empty() {
         .claimed_log_head
         .expect("empty signature_algorithm must not cause the whole head to be dropped");
     assert_eq!(roundtripped_head.signature_algorithm, "");
+}
+
+/// Gossip keys peers by the id inside `serialized_addr`, so an entry whose
+/// address names a different node than its `endpoint_id` must be dropped.
+#[test]
+fn announcement_whose_address_names_another_node_is_rejected() {
+    let endpoint_id = |seed: u8| EndpointId::from(SecretKey::from_bytes(&[seed; 32]).public());
+    let addr = |seed: u8| iroh::EndpointAddr {
+        id: endpoint_id(seed),
+        addrs: Default::default(),
+    };
+    let mut wire_ann = crate::proto::node::PeerAnnouncement {
+        endpoint_id: endpoint_id(0x01).as_bytes().to_vec(),
+        role: crate::proto::node::NodeRole::Worker as i32,
+        serialized_addr: serde_json::to_vec(&addr(0x02)).unwrap(),
+        ..Default::default()
+    };
+
+    assert!(proto_ann_to_local(&wire_ann).is_none());
+
+    wire_ann.serialized_addr = serde_json::to_vec(&addr(0x01)).unwrap();
+    assert!(proto_ann_to_local(&wire_ann).is_some());
 }

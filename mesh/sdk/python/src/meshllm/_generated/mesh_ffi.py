@@ -555,21 +555,11 @@ def _uniffi_check_contract_api_version(lib):
         raise InternalError("UniFFI contract version mismatch: try cleaning and rebuilding your project")
 
 def _uniffi_check_api_checksums(lib):
-    if lib.uniffi_meshllm_ffi_checksum_func_create_auto_client() != 12117:
-        raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
-    if lib.uniffi_meshllm_ffi_checksum_func_create_auto_node() != 62467:
-        raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
-    if lib.uniffi_meshllm_ffi_checksum_func_create_client() != 14950:
-        raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
-    if lib.uniffi_meshllm_ffi_checksum_func_create_node() != 577:
+    if lib.uniffi_meshllm_ffi_checksum_func_create_node() != 63700:
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     if lib.uniffi_meshllm_ffi_checksum_func_current_mesh_version() != 41756:
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     if lib.uniffi_meshllm_ffi_checksum_func_current_skippy_abi_version() != 53670:
-        raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
-    if lib.uniffi_meshllm_ffi_checksum_func_discover_public_meshes() != 64489:
-        raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
-    if lib.uniffi_meshllm_ffi_checksum_func_generate_owner_keypair_hex() != 15846:
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     if lib.uniffi_meshllm_ffi_checksum_func_install_native_runtime() != 48746:
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
@@ -579,83 +569,21 @@ def _uniffi_check_api_checksums(lib):
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     if lib.uniffi_meshllm_ffi_checksum_func_remove_native_runtime() != 54339:
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
-    if lib.uniffi_meshllm_ffi_checksum_method_consolehandle_stop() != 39251:
-        raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
-    if lib.uniffi_meshllm_ffi_checksum_method_consolehandle_url() != 61491:
-        raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
-    if lib.uniffi_meshllm_ffi_checksum_method_meshclienthandle_cancel() != 32002:
-        raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
-    if lib.uniffi_meshllm_ffi_checksum_method_meshclienthandle_chat() != 2872:
-        raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
-    if lib.uniffi_meshllm_ffi_checksum_method_meshclienthandle_inference_list_models() != 39744:
-        raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
-    if lib.uniffi_meshllm_ffi_checksum_method_meshclienthandle_openai_request() != 11900:
-        raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
-    if lib.uniffi_meshllm_ffi_checksum_method_meshclienthandle_openai_stream() != 63190:
-        raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
-    if lib.uniffi_meshllm_ffi_checksum_method_meshclienthandle_reconnect() != 33566:
-        raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
-    if lib.uniffi_meshllm_ffi_checksum_method_meshclienthandle_responses() != 1844:
-        raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
-    if lib.uniffi_meshllm_ffi_checksum_method_meshclienthandle_start() != 48685:
-        raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
-    if lib.uniffi_meshllm_ffi_checksum_method_meshclienthandle_status() != 33476:
-        raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
-    if lib.uniffi_meshllm_ffi_checksum_method_meshclienthandle_stop() != 3388:
-        raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
-    if lib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_cancel() != 32259:
-        raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
-    if lib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_chat() != 34892:
-        raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
-    if lib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_cleanup_models() != 1157:
-        raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
-    if lib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_delete_model() != 2627:
-        raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
-    if lib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_download_model() != 20595:
+    if lib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_cancel() != 47545:
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     if lib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_inference_list_models() != 41613:
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
-    if lib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_installed_models() != 9575:
-        raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
-    if lib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_load_serving_model() != 31620:
-        raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
-    if lib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_model_cache_status() != 61505:
+    if lib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_join_token() != 57356:
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     if lib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_openai_request() != 19585:
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     if lib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_openai_stream() != 40368:
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
-    if lib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_prune_derived_cache() != 24829:
-        raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
-    if lib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_recommended_models() != 11606:
-        raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
-    if lib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_reconnect() != 60843:
-        raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
-    if lib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_responses() != 29255:
-        raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
-    if lib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_search_models() != 40369:
-        raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
-    if lib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_served_models() != 26496:
-        raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
-    if lib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_serving_status() != 49590:
-        raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
-    if lib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_set_device_policy() != 8567:
-        raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
-    if lib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_show_model() != 35584:
-        raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     if lib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_start() != 46124:
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
-    if lib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_start_console() != 34773:
-        raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
-    if lib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_status() != 48531:
+    if lib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_status() != 42366:
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     if lib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_stop() != 10537:
-        raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
-    if lib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_unload_serving_instance() != 1091:
-        raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
-    if lib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_unload_serving_model() != 45229:
-        raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
-    if lib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_unload_serving_model_by_id() != 9451:
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
 
 # A ctypes library to expose the extern-C FFI definitions.
@@ -686,15 +614,6 @@ _UniffiLib.ffi_meshllm_ffi_rustbuffer_reserve.restype = _UniffiRustBuffer
 _UniffiLib.ffi_meshllm_ffi_uniffi_contract_version.argtypes = (
 )
 _UniffiLib.ffi_meshllm_ffi_uniffi_contract_version.restype = ctypes.c_uint32
-_UniffiLib.uniffi_meshllm_ffi_checksum_func_create_auto_client.argtypes = (
-)
-_UniffiLib.uniffi_meshllm_ffi_checksum_func_create_auto_client.restype = ctypes.c_uint16
-_UniffiLib.uniffi_meshllm_ffi_checksum_func_create_auto_node.argtypes = (
-)
-_UniffiLib.uniffi_meshllm_ffi_checksum_func_create_auto_node.restype = ctypes.c_uint16
-_UniffiLib.uniffi_meshllm_ffi_checksum_func_create_client.argtypes = (
-)
-_UniffiLib.uniffi_meshllm_ffi_checksum_func_create_client.restype = ctypes.c_uint16
 _UniffiLib.uniffi_meshllm_ffi_checksum_func_create_node.argtypes = (
 )
 _UniffiLib.uniffi_meshllm_ffi_checksum_func_create_node.restype = ctypes.c_uint16
@@ -704,12 +623,6 @@ _UniffiLib.uniffi_meshllm_ffi_checksum_func_current_mesh_version.restype = ctype
 _UniffiLib.uniffi_meshllm_ffi_checksum_func_current_skippy_abi_version.argtypes = (
 )
 _UniffiLib.uniffi_meshllm_ffi_checksum_func_current_skippy_abi_version.restype = ctypes.c_uint16
-_UniffiLib.uniffi_meshllm_ffi_checksum_func_discover_public_meshes.argtypes = (
-)
-_UniffiLib.uniffi_meshllm_ffi_checksum_func_discover_public_meshes.restype = ctypes.c_uint16
-_UniffiLib.uniffi_meshllm_ffi_checksum_func_generate_owner_keypair_hex.argtypes = (
-)
-_UniffiLib.uniffi_meshllm_ffi_checksum_func_generate_owner_keypair_hex.restype = ctypes.c_uint16
 _UniffiLib.uniffi_meshllm_ffi_checksum_func_install_native_runtime.argtypes = (
 )
 _UniffiLib.uniffi_meshllm_ffi_checksum_func_install_native_runtime.restype = ctypes.c_uint16
@@ -722,147 +635,38 @@ _UniffiLib.uniffi_meshllm_ffi_checksum_func_prune_native_runtimes.restype = ctyp
 _UniffiLib.uniffi_meshllm_ffi_checksum_func_remove_native_runtime.argtypes = (
 )
 _UniffiLib.uniffi_meshllm_ffi_checksum_func_remove_native_runtime.restype = ctypes.c_uint16
-_UniffiLib.uniffi_meshllm_ffi_checksum_method_consolehandle_stop.argtypes = (
-)
-_UniffiLib.uniffi_meshllm_ffi_checksum_method_consolehandle_stop.restype = ctypes.c_uint16
-_UniffiLib.uniffi_meshllm_ffi_checksum_method_consolehandle_url.argtypes = (
-)
-_UniffiLib.uniffi_meshllm_ffi_checksum_method_consolehandle_url.restype = ctypes.c_uint16
-_UniffiLib.uniffi_meshllm_ffi_checksum_method_meshclienthandle_cancel.argtypes = (
-)
-_UniffiLib.uniffi_meshllm_ffi_checksum_method_meshclienthandle_cancel.restype = ctypes.c_uint16
-_UniffiLib.uniffi_meshllm_ffi_checksum_method_meshclienthandle_chat.argtypes = (
-)
-_UniffiLib.uniffi_meshllm_ffi_checksum_method_meshclienthandle_chat.restype = ctypes.c_uint16
-_UniffiLib.uniffi_meshllm_ffi_checksum_method_meshclienthandle_inference_list_models.argtypes = (
-)
-_UniffiLib.uniffi_meshllm_ffi_checksum_method_meshclienthandle_inference_list_models.restype = ctypes.c_uint16
-_UniffiLib.uniffi_meshllm_ffi_checksum_method_meshclienthandle_openai_request.argtypes = (
-)
-_UniffiLib.uniffi_meshllm_ffi_checksum_method_meshclienthandle_openai_request.restype = ctypes.c_uint16
-_UniffiLib.uniffi_meshllm_ffi_checksum_method_meshclienthandle_openai_stream.argtypes = (
-)
-_UniffiLib.uniffi_meshllm_ffi_checksum_method_meshclienthandle_openai_stream.restype = ctypes.c_uint16
-_UniffiLib.uniffi_meshllm_ffi_checksum_method_meshclienthandle_reconnect.argtypes = (
-)
-_UniffiLib.uniffi_meshllm_ffi_checksum_method_meshclienthandle_reconnect.restype = ctypes.c_uint16
-_UniffiLib.uniffi_meshllm_ffi_checksum_method_meshclienthandle_responses.argtypes = (
-)
-_UniffiLib.uniffi_meshllm_ffi_checksum_method_meshclienthandle_responses.restype = ctypes.c_uint16
-_UniffiLib.uniffi_meshllm_ffi_checksum_method_meshclienthandle_start.argtypes = (
-)
-_UniffiLib.uniffi_meshllm_ffi_checksum_method_meshclienthandle_start.restype = ctypes.c_uint16
-_UniffiLib.uniffi_meshllm_ffi_checksum_method_meshclienthandle_status.argtypes = (
-)
-_UniffiLib.uniffi_meshllm_ffi_checksum_method_meshclienthandle_status.restype = ctypes.c_uint16
-_UniffiLib.uniffi_meshllm_ffi_checksum_method_meshclienthandle_stop.argtypes = (
-)
-_UniffiLib.uniffi_meshllm_ffi_checksum_method_meshclienthandle_stop.restype = ctypes.c_uint16
 _UniffiLib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_cancel.argtypes = (
 )
 _UniffiLib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_cancel.restype = ctypes.c_uint16
-_UniffiLib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_chat.argtypes = (
-)
-_UniffiLib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_chat.restype = ctypes.c_uint16
-_UniffiLib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_cleanup_models.argtypes = (
-)
-_UniffiLib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_cleanup_models.restype = ctypes.c_uint16
-_UniffiLib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_delete_model.argtypes = (
-)
-_UniffiLib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_delete_model.restype = ctypes.c_uint16
-_UniffiLib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_download_model.argtypes = (
-)
-_UniffiLib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_download_model.restype = ctypes.c_uint16
 _UniffiLib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_inference_list_models.argtypes = (
 )
 _UniffiLib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_inference_list_models.restype = ctypes.c_uint16
-_UniffiLib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_installed_models.argtypes = (
+_UniffiLib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_join_token.argtypes = (
 )
-_UniffiLib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_installed_models.restype = ctypes.c_uint16
-_UniffiLib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_load_serving_model.argtypes = (
-)
-_UniffiLib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_load_serving_model.restype = ctypes.c_uint16
-_UniffiLib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_model_cache_status.argtypes = (
-)
-_UniffiLib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_model_cache_status.restype = ctypes.c_uint16
+_UniffiLib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_join_token.restype = ctypes.c_uint16
 _UniffiLib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_openai_request.argtypes = (
 )
 _UniffiLib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_openai_request.restype = ctypes.c_uint16
 _UniffiLib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_openai_stream.argtypes = (
 )
 _UniffiLib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_openai_stream.restype = ctypes.c_uint16
-_UniffiLib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_prune_derived_cache.argtypes = (
-)
-_UniffiLib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_prune_derived_cache.restype = ctypes.c_uint16
-_UniffiLib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_recommended_models.argtypes = (
-)
-_UniffiLib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_recommended_models.restype = ctypes.c_uint16
-_UniffiLib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_reconnect.argtypes = (
-)
-_UniffiLib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_reconnect.restype = ctypes.c_uint16
-_UniffiLib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_responses.argtypes = (
-)
-_UniffiLib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_responses.restype = ctypes.c_uint16
-_UniffiLib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_search_models.argtypes = (
-)
-_UniffiLib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_search_models.restype = ctypes.c_uint16
-_UniffiLib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_served_models.argtypes = (
-)
-_UniffiLib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_served_models.restype = ctypes.c_uint16
-_UniffiLib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_serving_status.argtypes = (
-)
-_UniffiLib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_serving_status.restype = ctypes.c_uint16
-_UniffiLib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_set_device_policy.argtypes = (
-)
-_UniffiLib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_set_device_policy.restype = ctypes.c_uint16
-_UniffiLib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_show_model.argtypes = (
-)
-_UniffiLib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_show_model.restype = ctypes.c_uint16
 _UniffiLib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_start.argtypes = (
 )
 _UniffiLib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_start.restype = ctypes.c_uint16
-_UniffiLib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_start_console.argtypes = (
-)
-_UniffiLib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_start_console.restype = ctypes.c_uint16
 _UniffiLib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_status.argtypes = (
 )
 _UniffiLib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_status.restype = ctypes.c_uint16
 _UniffiLib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_stop.argtypes = (
 )
 _UniffiLib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_stop.restype = ctypes.c_uint16
-_UniffiLib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_unload_serving_instance.argtypes = (
-)
-_UniffiLib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_unload_serving_instance.restype = ctypes.c_uint16
-_UniffiLib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_unload_serving_model.argtypes = (
-)
-_UniffiLib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_unload_serving_model.restype = ctypes.c_uint16
-_UniffiLib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_unload_serving_model_by_id.argtypes = (
-)
-_UniffiLib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_unload_serving_model_by_id.restype = ctypes.c_uint16
-_UniffiLib.uniffi_meshllm_ffi_fn_func_create_auto_client.argtypes = (
-    _UniffiRustBuffer,
-    _UniffiRustBuffer,
-    ctypes.POINTER(_UniffiRustCallStatus),
-)
-_UniffiLib.uniffi_meshllm_ffi_fn_func_create_auto_client.restype = ctypes.c_uint64
-_UniffiLib.uniffi_meshllm_ffi_fn_func_create_auto_node.argtypes = (
-    _UniffiRustBuffer,
-    _UniffiRustBuffer,
-    ctypes.POINTER(_UniffiRustCallStatus),
-)
-_UniffiLib.uniffi_meshllm_ffi_fn_func_create_auto_node.restype = ctypes.c_uint64
-_UniffiLib.uniffi_meshllm_ffi_fn_func_create_client.argtypes = (
-    _UniffiRustBuffer,
-    _UniffiRustBuffer,
-    ctypes.POINTER(_UniffiRustCallStatus),
-)
-_UniffiLib.uniffi_meshllm_ffi_fn_func_create_client.restype = ctypes.c_uint64
 _UniffiLib.uniffi_meshllm_ffi_fn_func_create_node.argtypes = (
     _UniffiRustBuffer,
     _UniffiRustBuffer,
     _UniffiRustBuffer,
-    _UniffiRustBuffer,
     ctypes.c_int8,
+    _UniffiRustBuffer,
+    ctypes.c_uint16,
+    ctypes.c_uint16,
     ctypes.POINTER(_UniffiRustCallStatus),
 )
 _UniffiLib.uniffi_meshllm_ffi_fn_func_create_node.restype = ctypes.c_uint64
@@ -874,15 +678,6 @@ _UniffiLib.uniffi_meshllm_ffi_fn_func_current_skippy_abi_version.argtypes = (
     ctypes.POINTER(_UniffiRustCallStatus),
 )
 _UniffiLib.uniffi_meshllm_ffi_fn_func_current_skippy_abi_version.restype = _UniffiRustBuffer
-_UniffiLib.uniffi_meshllm_ffi_fn_func_discover_public_meshes.argtypes = (
-    _UniffiRustBuffer,
-    ctypes.POINTER(_UniffiRustCallStatus),
-)
-_UniffiLib.uniffi_meshllm_ffi_fn_func_discover_public_meshes.restype = _UniffiRustBuffer
-_UniffiLib.uniffi_meshllm_ffi_fn_func_generate_owner_keypair_hex.argtypes = (
-    ctypes.POINTER(_UniffiRustCallStatus),
-)
-_UniffiLib.uniffi_meshllm_ffi_fn_func_generate_owner_keypair_hex.restype = _UniffiRustBuffer
 _UniffiLib.uniffi_meshllm_ffi_fn_func_install_native_runtime.argtypes = (
     _UniffiRustBuffer,
     _UniffiRustBuffer,
@@ -908,130 +703,23 @@ _UniffiLib.uniffi_meshllm_ffi_fn_func_remove_native_runtime.argtypes = (
     ctypes.POINTER(_UniffiRustCallStatus),
 )
 _UniffiLib.uniffi_meshllm_ffi_fn_func_remove_native_runtime.restype = ctypes.c_int8
-_UniffiLib.uniffi_meshllm_ffi_fn_method_consolehandle_stop.argtypes = (
-    ctypes.c_uint64,
-    ctypes.POINTER(_UniffiRustCallStatus),
-)
-_UniffiLib.uniffi_meshllm_ffi_fn_method_consolehandle_stop.restype = None
-_UniffiLib.uniffi_meshllm_ffi_fn_method_consolehandle_url.argtypes = (
-    ctypes.c_uint64,
-    ctypes.POINTER(_UniffiRustCallStatus),
-)
-_UniffiLib.uniffi_meshllm_ffi_fn_method_consolehandle_url.restype = _UniffiRustBuffer
-_UniffiLib.uniffi_meshllm_ffi_fn_method_meshclienthandle_cancel.argtypes = (
-    ctypes.c_uint64,
-    _UniffiRustBuffer,
-    ctypes.POINTER(_UniffiRustCallStatus),
-)
-_UniffiLib.uniffi_meshllm_ffi_fn_method_meshclienthandle_cancel.restype = None
-_UniffiLib.uniffi_meshllm_ffi_fn_method_meshclienthandle_chat.argtypes = (
-    ctypes.c_uint64,
-    _UniffiRustBuffer,
-    ctypes.c_uint64,
-    ctypes.POINTER(_UniffiRustCallStatus),
-)
-_UniffiLib.uniffi_meshllm_ffi_fn_method_meshclienthandle_chat.restype = _UniffiRustBuffer
-_UniffiLib.uniffi_meshllm_ffi_fn_method_meshclienthandle_inference_list_models.argtypes = (
-    ctypes.c_uint64,
-    ctypes.POINTER(_UniffiRustCallStatus),
-)
-_UniffiLib.uniffi_meshllm_ffi_fn_method_meshclienthandle_inference_list_models.restype = _UniffiRustBuffer
-_UniffiLib.uniffi_meshllm_ffi_fn_method_meshclienthandle_openai_request.argtypes = (
-    ctypes.c_uint64,
-    _UniffiRustBuffer,
-    _UniffiRustBuffer,
-    ctypes.POINTER(_UniffiRustCallStatus),
-)
-_UniffiLib.uniffi_meshllm_ffi_fn_method_meshclienthandle_openai_request.restype = _UniffiRustBuffer
-_UniffiLib.uniffi_meshllm_ffi_fn_method_meshclienthandle_openai_stream.argtypes = (
-    ctypes.c_uint64,
-    _UniffiRustBuffer,
-    _UniffiRustBuffer,
-    ctypes.c_uint64,
-    ctypes.POINTER(_UniffiRustCallStatus),
-)
-_UniffiLib.uniffi_meshllm_ffi_fn_method_meshclienthandle_openai_stream.restype = _UniffiRustBuffer
-_UniffiLib.uniffi_meshllm_ffi_fn_method_meshclienthandle_reconnect.argtypes = (
-    ctypes.c_uint64,
-    ctypes.POINTER(_UniffiRustCallStatus),
-)
-_UniffiLib.uniffi_meshllm_ffi_fn_method_meshclienthandle_reconnect.restype = None
-_UniffiLib.uniffi_meshllm_ffi_fn_method_meshclienthandle_responses.argtypes = (
-    ctypes.c_uint64,
-    _UniffiRustBuffer,
-    ctypes.c_uint64,
-    ctypes.POINTER(_UniffiRustCallStatus),
-)
-_UniffiLib.uniffi_meshllm_ffi_fn_method_meshclienthandle_responses.restype = _UniffiRustBuffer
-_UniffiLib.uniffi_meshllm_ffi_fn_method_meshclienthandle_start.argtypes = (
-    ctypes.c_uint64,
-    ctypes.POINTER(_UniffiRustCallStatus),
-)
-_UniffiLib.uniffi_meshllm_ffi_fn_method_meshclienthandle_start.restype = None
-_UniffiLib.uniffi_meshllm_ffi_fn_method_meshclienthandle_status.argtypes = (
-    ctypes.c_uint64,
-    ctypes.POINTER(_UniffiRustCallStatus),
-)
-_UniffiLib.uniffi_meshllm_ffi_fn_method_meshclienthandle_status.restype = _UniffiRustBuffer
-_UniffiLib.uniffi_meshllm_ffi_fn_method_meshclienthandle_stop.argtypes = (
-    ctypes.c_uint64,
-    ctypes.POINTER(_UniffiRustCallStatus),
-)
-_UniffiLib.uniffi_meshllm_ffi_fn_method_meshclienthandle_stop.restype = None
 _UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_cancel.argtypes = (
     ctypes.c_uint64,
     _UniffiRustBuffer,
     ctypes.POINTER(_UniffiRustCallStatus),
 )
 _UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_cancel.restype = None
-_UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_chat.argtypes = (
-    ctypes.c_uint64,
-    _UniffiRustBuffer,
-    ctypes.c_uint64,
-    ctypes.POINTER(_UniffiRustCallStatus),
-)
-_UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_chat.restype = _UniffiRustBuffer
-_UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_cleanup_models.argtypes = (
-    ctypes.c_uint64,
-    _UniffiRustBuffer,
-    ctypes.POINTER(_UniffiRustCallStatus),
-)
-_UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_cleanup_models.restype = _UniffiRustBuffer
-_UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_delete_model.argtypes = (
-    ctypes.c_uint64,
-    _UniffiRustBuffer,
-    _UniffiRustBuffer,
-    ctypes.POINTER(_UniffiRustCallStatus),
-)
-_UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_delete_model.restype = _UniffiRustBuffer
-_UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_download_model.argtypes = (
-    ctypes.c_uint64,
-    _UniffiRustBuffer,
-    ctypes.POINTER(_UniffiRustCallStatus),
-)
-_UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_download_model.restype = _UniffiRustBuffer
 _UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_inference_list_models.argtypes = (
     ctypes.c_uint64,
     ctypes.POINTER(_UniffiRustCallStatus),
 )
 _UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_inference_list_models.restype = _UniffiRustBuffer
-_UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_installed_models.argtypes = (
-    ctypes.c_uint64,
-    ctypes.POINTER(_UniffiRustCallStatus),
-)
-_UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_installed_models.restype = _UniffiRustBuffer
-_UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_load_serving_model.argtypes = (
+_UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_join_token.argtypes = (
     ctypes.c_uint64,
     _UniffiRustBuffer,
-    _UniffiRustBuffer,
     ctypes.POINTER(_UniffiRustCallStatus),
 )
-_UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_load_serving_model.restype = _UniffiRustBuffer
-_UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_model_cache_status.argtypes = (
-    ctypes.c_uint64,
-    ctypes.POINTER(_UniffiRustCallStatus),
-)
-_UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_model_cache_status.restype = _UniffiRustBuffer
+_UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_join_token.restype = None
 _UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_openai_request.argtypes = (
     ctypes.c_uint64,
     _UniffiRustBuffer,
@@ -1047,68 +735,11 @@ _UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_openai_stream.argtypes = 
     ctypes.POINTER(_UniffiRustCallStatus),
 )
 _UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_openai_stream.restype = _UniffiRustBuffer
-_UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_prune_derived_cache.argtypes = (
-    ctypes.c_uint64,
-    _UniffiRustBuffer,
-    ctypes.POINTER(_UniffiRustCallStatus),
-)
-_UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_prune_derived_cache.restype = _UniffiRustBuffer
-_UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_recommended_models.argtypes = (
-    ctypes.c_uint64,
-    ctypes.POINTER(_UniffiRustCallStatus),
-)
-_UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_recommended_models.restype = _UniffiRustBuffer
-_UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_reconnect.argtypes = (
-    ctypes.c_uint64,
-    ctypes.POINTER(_UniffiRustCallStatus),
-)
-_UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_reconnect.restype = None
-_UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_responses.argtypes = (
-    ctypes.c_uint64,
-    _UniffiRustBuffer,
-    ctypes.c_uint64,
-    ctypes.POINTER(_UniffiRustCallStatus),
-)
-_UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_responses.restype = _UniffiRustBuffer
-_UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_search_models.argtypes = (
-    ctypes.c_uint64,
-    _UniffiRustBuffer,
-    ctypes.POINTER(_UniffiRustCallStatus),
-)
-_UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_search_models.restype = _UniffiRustBuffer
-_UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_served_models.argtypes = (
-    ctypes.c_uint64,
-    ctypes.POINTER(_UniffiRustCallStatus),
-)
-_UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_served_models.restype = _UniffiRustBuffer
-_UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_serving_status.argtypes = (
-    ctypes.c_uint64,
-    ctypes.POINTER(_UniffiRustCallStatus),
-)
-_UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_serving_status.restype = _UniffiRustBuffer
-_UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_set_device_policy.argtypes = (
-    ctypes.c_uint64,
-    _UniffiRustBuffer,
-    ctypes.POINTER(_UniffiRustCallStatus),
-)
-_UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_set_device_policy.restype = None
-_UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_show_model.argtypes = (
-    ctypes.c_uint64,
-    _UniffiRustBuffer,
-    ctypes.POINTER(_UniffiRustCallStatus),
-)
-_UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_show_model.restype = _UniffiRustBuffer
 _UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_start.argtypes = (
     ctypes.c_uint64,
     ctypes.POINTER(_UniffiRustCallStatus),
 )
 _UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_start.restype = None
-_UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_start_console.argtypes = (
-    ctypes.c_uint64,
-    _UniffiRustBuffer,
-    ctypes.POINTER(_UniffiRustCallStatus),
-)
-_UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_start_console.restype = ctypes.c_uint64
 _UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_status.argtypes = (
     ctypes.c_uint64,
     ctypes.POINTER(_UniffiRustCallStatus),
@@ -1119,47 +750,6 @@ _UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_stop.argtypes = (
     ctypes.POINTER(_UniffiRustCallStatus),
 )
 _UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_stop.restype = None
-_UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_unload_serving_instance.argtypes = (
-    ctypes.c_uint64,
-    _UniffiRustBuffer,
-    _UniffiRustBuffer,
-    ctypes.POINTER(_UniffiRustCallStatus),
-)
-_UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_unload_serving_instance.restype = None
-_UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_unload_serving_model.argtypes = (
-    ctypes.c_uint64,
-    _UniffiRustBuffer,
-    _UniffiRustBuffer,
-    ctypes.POINTER(_UniffiRustCallStatus),
-)
-_UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_unload_serving_model.restype = None
-_UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_unload_serving_model_by_id.argtypes = (
-    ctypes.c_uint64,
-    _UniffiRustBuffer,
-    _UniffiRustBuffer,
-    ctypes.POINTER(_UniffiRustCallStatus),
-)
-_UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_unload_serving_model_by_id.restype = None
-_UniffiLib.uniffi_meshllm_ffi_fn_clone_consolehandle.argtypes = (
-    ctypes.c_uint64,
-    ctypes.POINTER(_UniffiRustCallStatus),
-)
-_UniffiLib.uniffi_meshllm_ffi_fn_clone_consolehandle.restype = ctypes.c_uint64
-_UniffiLib.uniffi_meshllm_ffi_fn_free_consolehandle.argtypes = (
-    ctypes.c_uint64,
-    ctypes.POINTER(_UniffiRustCallStatus),
-)
-_UniffiLib.uniffi_meshllm_ffi_fn_free_consolehandle.restype = None
-_UniffiLib.uniffi_meshllm_ffi_fn_clone_meshclienthandle.argtypes = (
-    ctypes.c_uint64,
-    ctypes.POINTER(_UniffiRustCallStatus),
-)
-_UniffiLib.uniffi_meshllm_ffi_fn_clone_meshclienthandle.restype = ctypes.c_uint64
-_UniffiLib.uniffi_meshllm_ffi_fn_free_meshclienthandle.argtypes = (
-    ctypes.c_uint64,
-    ctypes.POINTER(_UniffiRustCallStatus),
-)
-_UniffiLib.uniffi_meshllm_ffi_fn_free_meshclienthandle.restype = None
 _UniffiLib.uniffi_meshllm_ffi_fn_clone_meshnodehandle.argtypes = (
     ctypes.c_uint64,
     ctypes.POINTER(_UniffiRustCallStatus),
@@ -1170,23 +760,6 @@ _UniffiLib.uniffi_meshllm_ffi_fn_free_meshnodehandle.argtypes = (
     ctypes.POINTER(_UniffiRustCallStatus),
 )
 _UniffiLib.uniffi_meshllm_ffi_fn_free_meshnodehandle.restype = None
-_UNIFFI_CALLBACK_INTERFACE_MESH_FFI_EVENT_LISTENER_METHOD0 = ctypes.CFUNCTYPE(None,ctypes.c_uint64,_UniffiRustBuffer,ctypes.c_void_p,
-    ctypes.POINTER(_UniffiRustCallStatus),
-)
-_UNIFFI_CALLBACK_INTERFACE_CLONE_MESH_FFI_EVENT_LISTENER = ctypes.CFUNCTYPE(ctypes.c_uint64,ctypes.c_uint64,
-)
-_UNIFFI_CALLBACK_INTERFACE_FREE_MESH_FFI_EVENT_LISTENER = ctypes.CFUNCTYPE(None,ctypes.c_uint64,
-)
-class _UniffiVTableCallbackInterfaceMeshFfiEventListener(ctypes.Structure):
-    _fields_ = [
-        ("uniffi_free", _UNIFFI_CALLBACK_INTERFACE_FREE_MESH_FFI_EVENT_LISTENER),
-        ("uniffi_clone", _UNIFFI_CALLBACK_INTERFACE_CLONE_MESH_FFI_EVENT_LISTENER),
-        ("on_event", _UNIFFI_CALLBACK_INTERFACE_MESH_FFI_EVENT_LISTENER_METHOD0),
-    ]
-_UniffiLib.uniffi_meshllm_ffi_fn_init_callback_vtable_eventlistener.argtypes = (
-    ctypes.POINTER(_UniffiVTableCallbackInterfaceMeshFfiEventListener),
-)
-_UniffiLib.uniffi_meshllm_ffi_fn_init_callback_vtable_eventlistener.restype = None
 _UNIFFI_CALLBACK_INTERFACE_MESH_FFI_NATIVE_RUNTIME_PROGRESS_LISTENER_METHOD0 = ctypes.CFUNCTYPE(None,ctypes.c_uint64,_UniffiRustBuffer,ctypes.c_void_p,
     ctypes.POINTER(_UniffiRustCallStatus),
 )
@@ -1262,412 +835,6 @@ class _UniffiFfiConverterString:
             builder.write(value.encode("utf-8"))
             return builder.finalize()
 
-@dataclass
-class ChatMessageNative:
-    def __init__(self, *, role:str, content:str):
-        self.role = role
-        self.content = content
-
-
-
-
-    def __str__(self):
-        return "ChatMessageNative(role={}, content={})".format(self.role, self.content)
-    def __eq__(self, other):
-        if self.role != other.role:
-            return False
-        if self.content != other.content:
-            return False
-        return True
-
-class _UniffiFfiConverterTypeChatMessageNative(_UniffiConverterRustBuffer):
-    @staticmethod
-    def read(buf):
-        return ChatMessageNative(
-            role=_UniffiFfiConverterString.read(buf),
-            content=_UniffiFfiConverterString.read(buf),
-        )
-
-    @staticmethod
-    def check_lower(value):
-        _UniffiFfiConverterString.check_lower(value.role)
-        _UniffiFfiConverterString.check_lower(value.content)
-
-    @staticmethod
-    def write(value, buf):
-        _UniffiFfiConverterString.write(value.role, buf)
-        _UniffiFfiConverterString.write(value.content, buf)
-
-class _UniffiFfiConverterSequenceTypeChatMessageNative(_UniffiConverterRustBuffer):
-    @classmethod
-    def check_lower(cls, value):
-        for item in value:
-            _UniffiFfiConverterTypeChatMessageNative.check_lower(item)
-
-    @classmethod
-    def write(cls, value, buf):
-        items = len(value)
-        buf.write_i32(items)
-        for item in value:
-            _UniffiFfiConverterTypeChatMessageNative.write(item, buf)
-
-    @classmethod
-    def read(cls, buf):
-        count = buf.read_i32()
-        if count < 0:
-            raise InternalError("Unexpected negative sequence length")
-
-        return [
-            _UniffiFfiConverterTypeChatMessageNative.read(buf) for i in range(count)
-        ]
-
-@dataclass
-class ChatRequestNative:
-    def __init__(self, *, model:str, messages:typing.List[ChatMessageNative]):
-        self.model = model
-        self.messages = messages
-
-
-
-
-    def __str__(self):
-        return "ChatRequestNative(model={}, messages={})".format(self.model, self.messages)
-    def __eq__(self, other):
-        if self.model != other.model:
-            return False
-        if self.messages != other.messages:
-            return False
-        return True
-
-class _UniffiFfiConverterTypeChatRequestNative(_UniffiConverterRustBuffer):
-    @staticmethod
-    def read(buf):
-        return ChatRequestNative(
-            model=_UniffiFfiConverterString.read(buf),
-            messages=_UniffiFfiConverterSequenceTypeChatMessageNative.read(buf),
-        )
-
-    @staticmethod
-    def check_lower(value):
-        _UniffiFfiConverterString.check_lower(value.model)
-        _UniffiFfiConverterSequenceTypeChatMessageNative.check_lower(value.messages)
-
-    @staticmethod
-    def write(value, buf):
-        _UniffiFfiConverterString.write(value.model, buf)
-        _UniffiFfiConverterSequenceTypeChatMessageNative.write(value.messages, buf)
-
-class _UniffiFfiConverterBoolean:
-    @classmethod
-    def check_lower(cls, value):
-        return not not value
-
-    @classmethod
-    def lower(cls, value):
-        return 1 if value else 0
-
-    @staticmethod
-    def lift(value):
-        return value != 0
-
-    @classmethod
-    def read(cls, buf):
-        return cls.lift(buf.read_u8())
-
-    @classmethod
-    def write(cls, value, buf):
-        buf.write_u8(value)
-
-@dataclass
-class CleanupPolicy:
-    def __init__(self, *, remove_all:bool):
-        self.remove_all = remove_all
-
-
-
-
-    def __str__(self):
-        return "CleanupPolicy(remove_all={})".format(self.remove_all)
-    def __eq__(self, other):
-        if self.remove_all != other.remove_all:
-            return False
-        return True
-
-class _UniffiFfiConverterTypeCleanupPolicy(_UniffiConverterRustBuffer):
-    @staticmethod
-    def read(buf):
-        return CleanupPolicy(
-            remove_all=_UniffiFfiConverterBoolean.read(buf),
-        )
-
-    @staticmethod
-    def check_lower(value):
-        _UniffiFfiConverterBoolean.check_lower(value.remove_all)
-
-    @staticmethod
-    def write(value, buf):
-        _UniffiFfiConverterBoolean.write(value.remove_all, buf)
-
-class _UniffiFfiConverterSequenceString(_UniffiConverterRustBuffer):
-    @classmethod
-    def check_lower(cls, value):
-        for item in value:
-            _UniffiFfiConverterString.check_lower(item)
-
-    @classmethod
-    def write(cls, value, buf):
-        items = len(value)
-        buf.write_i32(items)
-        for item in value:
-            _UniffiFfiConverterString.write(item, buf)
-
-    @classmethod
-    def read(cls, buf):
-        count = buf.read_i32()
-        if count < 0:
-            raise InternalError("Unexpected negative sequence length")
-
-        return [
-            _UniffiFfiConverterString.read(buf) for i in range(count)
-        ]
-
-class _UniffiFfiConverterUInt64(_UniffiConverterPrimitiveInt):
-    CLASS_NAME = "u64"
-    VALUE_MIN = 0
-    VALUE_MAX = 2**64
-
-    @staticmethod
-    def read(buf):
-        return buf.read_u64()
-
-    @staticmethod
-    def write(value, buf):
-        buf.write_u64(value)
-
-@dataclass
-class CleanupResult:
-    def __init__(self, *, deleted_paths:typing.List[str], reclaimed_bytes:int, skipped_paths:typing.List[str]):
-        self.deleted_paths = deleted_paths
-        self.reclaimed_bytes = reclaimed_bytes
-        self.skipped_paths = skipped_paths
-
-
-
-
-    def __str__(self):
-        return "CleanupResult(deleted_paths={}, reclaimed_bytes={}, skipped_paths={})".format(self.deleted_paths, self.reclaimed_bytes, self.skipped_paths)
-    def __eq__(self, other):
-        if self.deleted_paths != other.deleted_paths:
-            return False
-        if self.reclaimed_bytes != other.reclaimed_bytes:
-            return False
-        if self.skipped_paths != other.skipped_paths:
-            return False
-        return True
-
-class _UniffiFfiConverterTypeCleanupResult(_UniffiConverterRustBuffer):
-    @staticmethod
-    def read(buf):
-        return CleanupResult(
-            deleted_paths=_UniffiFfiConverterSequenceString.read(buf),
-            reclaimed_bytes=_UniffiFfiConverterUInt64.read(buf),
-            skipped_paths=_UniffiFfiConverterSequenceString.read(buf),
-        )
-
-    @staticmethod
-    def check_lower(value):
-        _UniffiFfiConverterSequenceString.check_lower(value.deleted_paths)
-        _UniffiFfiConverterUInt64.check_lower(value.reclaimed_bytes)
-        _UniffiFfiConverterSequenceString.check_lower(value.skipped_paths)
-
-    @staticmethod
-    def write(value, buf):
-        _UniffiFfiConverterSequenceString.write(value.deleted_paths, buf)
-        _UniffiFfiConverterUInt64.write(value.reclaimed_bytes, buf)
-        _UniffiFfiConverterSequenceString.write(value.skipped_paths, buf)
-
-@dataclass
-class ClientStatus:
-    def __init__(self, *, connected:bool, peer_count:int):
-        self.connected = connected
-        self.peer_count = peer_count
-
-
-
-
-    def __str__(self):
-        return "ClientStatus(connected={}, peer_count={})".format(self.connected, self.peer_count)
-    def __eq__(self, other):
-        if self.connected != other.connected:
-            return False
-        if self.peer_count != other.peer_count:
-            return False
-        return True
-
-class _UniffiFfiConverterTypeClientStatus(_UniffiConverterRustBuffer):
-    @staticmethod
-    def read(buf):
-        return ClientStatus(
-            connected=_UniffiFfiConverterBoolean.read(buf),
-            peer_count=_UniffiFfiConverterUInt64.read(buf),
-        )
-
-    @staticmethod
-    def check_lower(value):
-        _UniffiFfiConverterBoolean.check_lower(value.connected)
-        _UniffiFfiConverterUInt64.check_lower(value.peer_count)
-
-    @staticmethod
-    def write(value, buf):
-        _UniffiFfiConverterBoolean.write(value.connected, buf)
-        _UniffiFfiConverterUInt64.write(value.peer_count, buf)
-
-class _UniffiFfiConverterUInt16(_UniffiConverterPrimitiveInt):
-    CLASS_NAME = "u16"
-    VALUE_MIN = 0
-    VALUE_MAX = 2**16
-
-    @staticmethod
-    def read(buf):
-        return buf.read_u16()
-
-    @staticmethod
-    def write(value, buf):
-        buf.write_u16(value)
-
-class _UniffiFfiConverterOptionalUInt16(_UniffiConverterRustBuffer):
-    @classmethod
-    def check_lower(cls, value):
-        if value is not None:
-            _UniffiFfiConverterUInt16.check_lower(value)
-
-    @classmethod
-    def write(cls, value, buf):
-        if value is None:
-            buf.write_u8(0)
-            return
-
-        buf.write_u8(1)
-        _UniffiFfiConverterUInt16.write(value, buf)
-
-    @classmethod
-    def read(cls, buf):
-        flag = buf.read_u8()
-        if flag == 0:
-            return None
-        elif flag == 1:
-            return _UniffiFfiConverterUInt16.read(buf)
-        else:
-            raise InternalError("Unexpected flag byte for optional type")
-
-@dataclass
-class ConsoleOptionsNative:
-    def __init__(self, *, asset_dir:str, port:typing.Optional[int], listen_all:bool):
-        self.asset_dir = asset_dir
-        self.port = port
-        self.listen_all = listen_all
-
-
-
-
-    def __str__(self):
-        return "ConsoleOptionsNative(asset_dir={}, port={}, listen_all={})".format(self.asset_dir, self.port, self.listen_all)
-    def __eq__(self, other):
-        if self.asset_dir != other.asset_dir:
-            return False
-        if self.port != other.port:
-            return False
-        if self.listen_all != other.listen_all:
-            return False
-        return True
-
-class _UniffiFfiConverterTypeConsoleOptionsNative(_UniffiConverterRustBuffer):
-    @staticmethod
-    def read(buf):
-        return ConsoleOptionsNative(
-            asset_dir=_UniffiFfiConverterString.read(buf),
-            port=_UniffiFfiConverterOptionalUInt16.read(buf),
-            listen_all=_UniffiFfiConverterBoolean.read(buf),
-        )
-
-    @staticmethod
-    def check_lower(value):
-        _UniffiFfiConverterString.check_lower(value.asset_dir)
-        _UniffiFfiConverterOptionalUInt16.check_lower(value.port)
-        _UniffiFfiConverterBoolean.check_lower(value.listen_all)
-
-    @staticmethod
-    def write(value, buf):
-        _UniffiFfiConverterString.write(value.asset_dir, buf)
-        _UniffiFfiConverterOptionalUInt16.write(value.port, buf)
-        _UniffiFfiConverterBoolean.write(value.listen_all, buf)
-
-@dataclass
-class DeleteModelOptions:
-    def __init__(self, *, force:bool):
-        self.force = force
-
-
-
-
-    def __str__(self):
-        return "DeleteModelOptions(force={})".format(self.force)
-    def __eq__(self, other):
-        if self.force != other.force:
-            return False
-        return True
-
-class _UniffiFfiConverterTypeDeleteModelOptions(_UniffiConverterRustBuffer):
-    @staticmethod
-    def read(buf):
-        return DeleteModelOptions(
-            force=_UniffiFfiConverterBoolean.read(buf),
-        )
-
-    @staticmethod
-    def check_lower(value):
-        _UniffiFfiConverterBoolean.check_lower(value.force)
-
-    @staticmethod
-    def write(value, buf):
-        _UniffiFfiConverterBoolean.write(value.force, buf)
-
-@dataclass
-class DeleteModelResult:
-    def __init__(self, *, deleted_paths:typing.List[str], reclaimed_bytes:int):
-        self.deleted_paths = deleted_paths
-        self.reclaimed_bytes = reclaimed_bytes
-
-
-
-
-    def __str__(self):
-        return "DeleteModelResult(deleted_paths={}, reclaimed_bytes={})".format(self.deleted_paths, self.reclaimed_bytes)
-    def __eq__(self, other):
-        if self.deleted_paths != other.deleted_paths:
-            return False
-        if self.reclaimed_bytes != other.reclaimed_bytes:
-            return False
-        return True
-
-class _UniffiFfiConverterTypeDeleteModelResult(_UniffiConverterRustBuffer):
-    @staticmethod
-    def read(buf):
-        return DeleteModelResult(
-            deleted_paths=_UniffiFfiConverterSequenceString.read(buf),
-            reclaimed_bytes=_UniffiFfiConverterUInt64.read(buf),
-        )
-
-    @staticmethod
-    def check_lower(value):
-        _UniffiFfiConverterSequenceString.check_lower(value.deleted_paths)
-        _UniffiFfiConverterUInt64.check_lower(value.reclaimed_bytes)
-
-    @staticmethod
-    def write(value, buf):
-        _UniffiFfiConverterSequenceString.write(value.deleted_paths, buf)
-        _UniffiFfiConverterUInt64.write(value.reclaimed_bytes, buf)
-
 class _UniffiFfiConverterOptionalString(_UniffiConverterRustBuffer):
     @classmethod
     def check_lower(cls, value):
@@ -1692,466 +859,6 @@ class _UniffiFfiConverterOptionalString(_UniffiConverterRustBuffer):
             return _UniffiFfiConverterString.read(buf)
         else:
             raise InternalError("Unexpected flag byte for optional type")
-
-
-
-
-
-
-class ModelSource(enum.Enum):
-
-    CATALOG = 0
-
-    HUGGING_FACE = 1
-
-    LOCAL = 2
-
-
-
-class _UniffiFfiConverterTypeModelSource(_UniffiConverterRustBuffer):
-    @staticmethod
-    def read(buf):
-        variant = buf.read_i32()
-        if variant == 1:
-            return ModelSource.CATALOG
-        if variant == 2:
-            return ModelSource.HUGGING_FACE
-        if variant == 3:
-            return ModelSource.LOCAL
-        raise InternalError("Raw enum value doesn't match any cases")
-
-    @staticmethod
-    def check_lower(value):
-        if value == ModelSource.CATALOG:
-            return
-        if value == ModelSource.HUGGING_FACE:
-            return
-        if value == ModelSource.LOCAL:
-            return
-        raise ValueError(value)
-
-    @staticmethod
-    def write(value, buf):
-        if value == ModelSource.CATALOG:
-            buf.write_i32(1)
-        if value == ModelSource.HUGGING_FACE:
-            buf.write_i32(2)
-        if value == ModelSource.LOCAL:
-            buf.write_i32(3)
-
-
-
-
-
-
-
-
-class ModelKind(enum.Enum):
-
-    GGUF = 0
-
-    SAFETENSORS = 1
-
-    LAYER_PACKAGE = 2
-
-    UNKNOWN = 3
-
-
-
-class _UniffiFfiConverterTypeModelKind(_UniffiConverterRustBuffer):
-    @staticmethod
-    def read(buf):
-        variant = buf.read_i32()
-        if variant == 1:
-            return ModelKind.GGUF
-        if variant == 2:
-            return ModelKind.SAFETENSORS
-        if variant == 3:
-            return ModelKind.LAYER_PACKAGE
-        if variant == 4:
-            return ModelKind.UNKNOWN
-        raise InternalError("Raw enum value doesn't match any cases")
-
-    @staticmethod
-    def check_lower(value):
-        if value == ModelKind.GGUF:
-            return
-        if value == ModelKind.SAFETENSORS:
-            return
-        if value == ModelKind.LAYER_PACKAGE:
-            return
-        if value == ModelKind.UNKNOWN:
-            return
-        raise ValueError(value)
-
-    @staticmethod
-    def write(value, buf):
-        if value == ModelKind.GGUF:
-            buf.write_i32(1)
-        if value == ModelKind.SAFETENSORS:
-            buf.write_i32(2)
-        if value == ModelKind.LAYER_PACKAGE:
-            buf.write_i32(3)
-        if value == ModelKind.UNKNOWN:
-            buf.write_i32(4)
-
-
-
-class _UniffiFfiConverterOptionalUInt64(_UniffiConverterRustBuffer):
-    @classmethod
-    def check_lower(cls, value):
-        if value is not None:
-            _UniffiFfiConverterUInt64.check_lower(value)
-
-    @classmethod
-    def write(cls, value, buf):
-        if value is None:
-            buf.write_u8(0)
-            return
-
-        buf.write_u8(1)
-        _UniffiFfiConverterUInt64.write(value, buf)
-
-    @classmethod
-    def read(cls, buf):
-        flag = buf.read_u8()
-        if flag == 0:
-            return None
-        elif flag == 1:
-            return _UniffiFfiConverterUInt64.read(buf)
-        else:
-            raise InternalError("Unexpected flag byte for optional type")
-
-
-
-
-
-
-class CapabilityLevel(enum.Enum):
-
-    NONE = 0
-
-    LIKELY = 1
-
-    SUPPORTED = 2
-
-
-
-class _UniffiFfiConverterTypeCapabilityLevel(_UniffiConverterRustBuffer):
-    @staticmethod
-    def read(buf):
-        variant = buf.read_i32()
-        if variant == 1:
-            return CapabilityLevel.NONE
-        if variant == 2:
-            return CapabilityLevel.LIKELY
-        if variant == 3:
-            return CapabilityLevel.SUPPORTED
-        raise InternalError("Raw enum value doesn't match any cases")
-
-    @staticmethod
-    def check_lower(value):
-        if value == CapabilityLevel.NONE:
-            return
-        if value == CapabilityLevel.LIKELY:
-            return
-        if value == CapabilityLevel.SUPPORTED:
-            return
-        raise ValueError(value)
-
-    @staticmethod
-    def write(value, buf):
-        if value == CapabilityLevel.NONE:
-            buf.write_i32(1)
-        if value == CapabilityLevel.LIKELY:
-            buf.write_i32(2)
-        if value == CapabilityLevel.SUPPORTED:
-            buf.write_i32(3)
-
-
-
-@dataclass
-class ModelCapabilities:
-    def __init__(self, *, multimodal:bool, vision:CapabilityLevel, audio:CapabilityLevel, reasoning:CapabilityLevel, tool_use:CapabilityLevel, moe:bool):
-        self.multimodal = multimodal
-        self.vision = vision
-        self.audio = audio
-        self.reasoning = reasoning
-        self.tool_use = tool_use
-        self.moe = moe
-
-
-
-
-    def __str__(self):
-        return "ModelCapabilities(multimodal={}, vision={}, audio={}, reasoning={}, tool_use={}, moe={})".format(self.multimodal, self.vision, self.audio, self.reasoning, self.tool_use, self.moe)
-    def __eq__(self, other):
-        if self.multimodal != other.multimodal:
-            return False
-        if self.vision != other.vision:
-            return False
-        if self.audio != other.audio:
-            return False
-        if self.reasoning != other.reasoning:
-            return False
-        if self.tool_use != other.tool_use:
-            return False
-        if self.moe != other.moe:
-            return False
-        return True
-
-class _UniffiFfiConverterTypeModelCapabilities(_UniffiConverterRustBuffer):
-    @staticmethod
-    def read(buf):
-        return ModelCapabilities(
-            multimodal=_UniffiFfiConverterBoolean.read(buf),
-            vision=_UniffiFfiConverterTypeCapabilityLevel.read(buf),
-            audio=_UniffiFfiConverterTypeCapabilityLevel.read(buf),
-            reasoning=_UniffiFfiConverterTypeCapabilityLevel.read(buf),
-            tool_use=_UniffiFfiConverterTypeCapabilityLevel.read(buf),
-            moe=_UniffiFfiConverterBoolean.read(buf),
-        )
-
-    @staticmethod
-    def check_lower(value):
-        _UniffiFfiConverterBoolean.check_lower(value.multimodal)
-        _UniffiFfiConverterTypeCapabilityLevel.check_lower(value.vision)
-        _UniffiFfiConverterTypeCapabilityLevel.check_lower(value.audio)
-        _UniffiFfiConverterTypeCapabilityLevel.check_lower(value.reasoning)
-        _UniffiFfiConverterTypeCapabilityLevel.check_lower(value.tool_use)
-        _UniffiFfiConverterBoolean.check_lower(value.moe)
-
-    @staticmethod
-    def write(value, buf):
-        _UniffiFfiConverterBoolean.write(value.multimodal, buf)
-        _UniffiFfiConverterTypeCapabilityLevel.write(value.vision, buf)
-        _UniffiFfiConverterTypeCapabilityLevel.write(value.audio, buf)
-        _UniffiFfiConverterTypeCapabilityLevel.write(value.reasoning, buf)
-        _UniffiFfiConverterTypeCapabilityLevel.write(value.tool_use, buf)
-        _UniffiFfiConverterBoolean.write(value.moe, buf)
-
-@dataclass
-class ModelDetails:
-    def __init__(self, *, id:str, name:str, source:ModelSource, kind:ModelKind, model_ref:str, download_ref:str, path:typing.Optional[str], size_bytes:typing.Optional[int], size_label:typing.Optional[str], description:typing.Optional[str], draft:typing.Optional[str], installed:bool, capabilities:ModelCapabilities):
-        self.id = id
-        self.name = name
-        self.source = source
-        self.kind = kind
-        self.model_ref = model_ref
-        self.download_ref = download_ref
-        self.path = path
-        self.size_bytes = size_bytes
-        self.size_label = size_label
-        self.description = description
-        self.draft = draft
-        self.installed = installed
-        self.capabilities = capabilities
-
-
-
-
-    def __str__(self):
-        return "ModelDetails(id={}, name={}, source={}, kind={}, model_ref={}, download_ref={}, path={}, size_bytes={}, size_label={}, description={}, draft={}, installed={}, capabilities={})".format(self.id, self.name, self.source, self.kind, self.model_ref, self.download_ref, self.path, self.size_bytes, self.size_label, self.description, self.draft, self.installed, self.capabilities)
-    def __eq__(self, other):
-        if self.id != other.id:
-            return False
-        if self.name != other.name:
-            return False
-        if self.source != other.source:
-            return False
-        if self.kind != other.kind:
-            return False
-        if self.model_ref != other.model_ref:
-            return False
-        if self.download_ref != other.download_ref:
-            return False
-        if self.path != other.path:
-            return False
-        if self.size_bytes != other.size_bytes:
-            return False
-        if self.size_label != other.size_label:
-            return False
-        if self.description != other.description:
-            return False
-        if self.draft != other.draft:
-            return False
-        if self.installed != other.installed:
-            return False
-        if self.capabilities != other.capabilities:
-            return False
-        return True
-
-class _UniffiFfiConverterTypeModelDetails(_UniffiConverterRustBuffer):
-    @staticmethod
-    def read(buf):
-        return ModelDetails(
-            id=_UniffiFfiConverterString.read(buf),
-            name=_UniffiFfiConverterString.read(buf),
-            source=_UniffiFfiConverterTypeModelSource.read(buf),
-            kind=_UniffiFfiConverterTypeModelKind.read(buf),
-            model_ref=_UniffiFfiConverterString.read(buf),
-            download_ref=_UniffiFfiConverterString.read(buf),
-            path=_UniffiFfiConverterOptionalString.read(buf),
-            size_bytes=_UniffiFfiConverterOptionalUInt64.read(buf),
-            size_label=_UniffiFfiConverterOptionalString.read(buf),
-            description=_UniffiFfiConverterOptionalString.read(buf),
-            draft=_UniffiFfiConverterOptionalString.read(buf),
-            installed=_UniffiFfiConverterBoolean.read(buf),
-            capabilities=_UniffiFfiConverterTypeModelCapabilities.read(buf),
-        )
-
-    @staticmethod
-    def check_lower(value):
-        _UniffiFfiConverterString.check_lower(value.id)
-        _UniffiFfiConverterString.check_lower(value.name)
-        _UniffiFfiConverterTypeModelSource.check_lower(value.source)
-        _UniffiFfiConverterTypeModelKind.check_lower(value.kind)
-        _UniffiFfiConverterString.check_lower(value.model_ref)
-        _UniffiFfiConverterString.check_lower(value.download_ref)
-        _UniffiFfiConverterOptionalString.check_lower(value.path)
-        _UniffiFfiConverterOptionalUInt64.check_lower(value.size_bytes)
-        _UniffiFfiConverterOptionalString.check_lower(value.size_label)
-        _UniffiFfiConverterOptionalString.check_lower(value.description)
-        _UniffiFfiConverterOptionalString.check_lower(value.draft)
-        _UniffiFfiConverterBoolean.check_lower(value.installed)
-        _UniffiFfiConverterTypeModelCapabilities.check_lower(value.capabilities)
-
-    @staticmethod
-    def write(value, buf):
-        _UniffiFfiConverterString.write(value.id, buf)
-        _UniffiFfiConverterString.write(value.name, buf)
-        _UniffiFfiConverterTypeModelSource.write(value.source, buf)
-        _UniffiFfiConverterTypeModelKind.write(value.kind, buf)
-        _UniffiFfiConverterString.write(value.model_ref, buf)
-        _UniffiFfiConverterString.write(value.download_ref, buf)
-        _UniffiFfiConverterOptionalString.write(value.path, buf)
-        _UniffiFfiConverterOptionalUInt64.write(value.size_bytes, buf)
-        _UniffiFfiConverterOptionalString.write(value.size_label, buf)
-        _UniffiFfiConverterOptionalString.write(value.description, buf)
-        _UniffiFfiConverterOptionalString.write(value.draft, buf)
-        _UniffiFfiConverterBoolean.write(value.installed, buf)
-        _UniffiFfiConverterTypeModelCapabilities.write(value.capabilities, buf)
-
-class _UniffiFfiConverterOptionalTypeModelDetails(_UniffiConverterRustBuffer):
-    @classmethod
-    def check_lower(cls, value):
-        if value is not None:
-            _UniffiFfiConverterTypeModelDetails.check_lower(value)
-
-    @classmethod
-    def write(cls, value, buf):
-        if value is None:
-            buf.write_u8(0)
-            return
-
-        buf.write_u8(1)
-        _UniffiFfiConverterTypeModelDetails.write(value, buf)
-
-    @classmethod
-    def read(cls, buf):
-        flag = buf.read_u8()
-        if flag == 0:
-            return None
-        elif flag == 1:
-            return _UniffiFfiConverterTypeModelDetails.read(buf)
-        else:
-            raise InternalError("Unexpected flag byte for optional type")
-
-@dataclass
-class DownloadedModel:
-    def __init__(self, *, model_ref:str, paths:typing.List[str], primary_path:typing.Optional[str], details:typing.Optional[ModelDetails]):
-        self.model_ref = model_ref
-        self.paths = paths
-        self.primary_path = primary_path
-        self.details = details
-
-
-
-
-    def __str__(self):
-        return "DownloadedModel(model_ref={}, paths={}, primary_path={}, details={})".format(self.model_ref, self.paths, self.primary_path, self.details)
-    def __eq__(self, other):
-        if self.model_ref != other.model_ref:
-            return False
-        if self.paths != other.paths:
-            return False
-        if self.primary_path != other.primary_path:
-            return False
-        if self.details != other.details:
-            return False
-        return True
-
-class _UniffiFfiConverterTypeDownloadedModel(_UniffiConverterRustBuffer):
-    @staticmethod
-    def read(buf):
-        return DownloadedModel(
-            model_ref=_UniffiFfiConverterString.read(buf),
-            paths=_UniffiFfiConverterSequenceString.read(buf),
-            primary_path=_UniffiFfiConverterOptionalString.read(buf),
-            details=_UniffiFfiConverterOptionalTypeModelDetails.read(buf),
-        )
-
-    @staticmethod
-    def check_lower(value):
-        _UniffiFfiConverterString.check_lower(value.model_ref)
-        _UniffiFfiConverterSequenceString.check_lower(value.paths)
-        _UniffiFfiConverterOptionalString.check_lower(value.primary_path)
-        _UniffiFfiConverterOptionalTypeModelDetails.check_lower(value.details)
-
-    @staticmethod
-    def write(value, buf):
-        _UniffiFfiConverterString.write(value.model_ref, buf)
-        _UniffiFfiConverterSequenceString.write(value.paths, buf)
-        _UniffiFfiConverterOptionalString.write(value.primary_path, buf)
-        _UniffiFfiConverterOptionalTypeModelDetails.write(value.details, buf)
-
-@dataclass
-class InstalledModel:
-    def __init__(self, *, model_ref:str, path:str, size_bytes:typing.Optional[int], capabilities:ModelCapabilities):
-        self.model_ref = model_ref
-        self.path = path
-        self.size_bytes = size_bytes
-        self.capabilities = capabilities
-
-
-
-
-    def __str__(self):
-        return "InstalledModel(model_ref={}, path={}, size_bytes={}, capabilities={})".format(self.model_ref, self.path, self.size_bytes, self.capabilities)
-    def __eq__(self, other):
-        if self.model_ref != other.model_ref:
-            return False
-        if self.path != other.path:
-            return False
-        if self.size_bytes != other.size_bytes:
-            return False
-        if self.capabilities != other.capabilities:
-            return False
-        return True
-
-class _UniffiFfiConverterTypeInstalledModel(_UniffiConverterRustBuffer):
-    @staticmethod
-    def read(buf):
-        return InstalledModel(
-            model_ref=_UniffiFfiConverterString.read(buf),
-            path=_UniffiFfiConverterString.read(buf),
-            size_bytes=_UniffiFfiConverterOptionalUInt64.read(buf),
-            capabilities=_UniffiFfiConverterTypeModelCapabilities.read(buf),
-        )
-
-    @staticmethod
-    def check_lower(value):
-        _UniffiFfiConverterString.check_lower(value.model_ref)
-        _UniffiFfiConverterString.check_lower(value.path)
-        _UniffiFfiConverterOptionalUInt64.check_lower(value.size_bytes)
-        _UniffiFfiConverterTypeModelCapabilities.check_lower(value.capabilities)
-
-    @staticmethod
-    def write(value, buf):
-        _UniffiFfiConverterString.write(value.model_ref, buf)
-        _UniffiFfiConverterString.write(value.path, buf)
-        _UniffiFfiConverterOptionalUInt64.write(value.size_bytes, buf)
-        _UniffiFfiConverterTypeModelCapabilities.write(value.capabilities, buf)
 
 @dataclass
 class InstalledNativeRuntimeNative:
@@ -2206,205 +913,6 @@ class _UniffiFfiConverterTypeInstalledNativeRuntimeNative(_UniffiConverterRustBu
         _UniffiFfiConverterString.write(value.flavor, buf)
         _UniffiFfiConverterString.write(value.path, buf)
         _UniffiFfiConverterOptionalString.write(value.skippy_abi_version, buf)
-
-
-
-
-
-
-class DevicePolicy:
-    def __init__(self):
-        raise RuntimeError("DevicePolicy cannot be instantiated directly")
-
-    # Each enum variant is a nested class of the enum itself.
-    @dataclass
-    class AUTO:
-
-        def __init__(self, ):
-            pass
-
-
-
-
-
-        def __str__(self):
-            return "DevicePolicy.AUTO()".format()
-        def __eq__(self, other):
-            if not isinstance(other, DevicePolicy):
-                return NotImplemented
-            if not other.is_AUTO():
-                return False
-            return True
-
-    @dataclass
-    class CPU:
-
-        def __init__(self, ):
-            pass
-
-
-
-
-
-        def __str__(self):
-            return "DevicePolicy.CPU()".format()
-        def __eq__(self, other):
-            if not isinstance(other, DevicePolicy):
-                return NotImplemented
-            if not other.is_CPU():
-                return False
-            return True
-
-    @dataclass
-    class GPU:
-
-        def __init__(self, device_ids:typing.List[str]):
-            self.device_ids = device_ids
-
-
-            pass
-
-
-
-
-
-        def __str__(self):
-            return "DevicePolicy.GPU(device_ids={})".format(self.device_ids)
-        def __eq__(self, other):
-            if not isinstance(other, DevicePolicy):
-                return NotImplemented
-            if not other.is_GPU():
-                return False
-            if self.device_ids != other.device_ids:
-                return False
-            return True
-
-
-
-    # For each variant, we have `is_NAME` and `is_name` methods for easily checking
-    # whether an instance is that variant.
-    def is_AUTO(self) -> bool:
-        return isinstance(self, DevicePolicy.AUTO)
-    def is_auto(self) -> bool:
-        return isinstance(self, DevicePolicy.AUTO)
-    def is_CPU(self) -> bool:
-        return isinstance(self, DevicePolicy.CPU)
-    def is_cpu(self) -> bool:
-        return isinstance(self, DevicePolicy.CPU)
-    def is_GPU(self) -> bool:
-        return isinstance(self, DevicePolicy.GPU)
-    def is_gpu(self) -> bool:
-        return isinstance(self, DevicePolicy.GPU)
-
-
-# Now, a little trick - we make each nested variant class be a subclass of the main
-# enum class, so that method calls and instance checks etc will work intuitively.
-# We might be able to do this a little more neatly with a metaclass, but this'll do.
-DevicePolicy.AUTO = type("DevicePolicy.AUTO", (DevicePolicy.AUTO, DevicePolicy,), {})  # type: ignore
-DevicePolicy.CPU = type("DevicePolicy.CPU", (DevicePolicy.CPU, DevicePolicy,), {})  # type: ignore
-DevicePolicy.GPU = type("DevicePolicy.GPU", (DevicePolicy.GPU, DevicePolicy,), {})  # type: ignore
-
-
-
-
-class _UniffiFfiConverterTypeDevicePolicy(_UniffiConverterRustBuffer):
-    @staticmethod
-    def read(buf):
-        variant = buf.read_i32()
-        if variant == 1:
-            return DevicePolicy.AUTO(
-            )
-        if variant == 2:
-            return DevicePolicy.CPU(
-            )
-        if variant == 3:
-            return DevicePolicy.GPU(
-                _UniffiFfiConverterSequenceString.read(buf),
-            )
-        raise InternalError("Raw enum value doesn't match any cases")
-
-    @staticmethod
-    def check_lower(value):
-        if value.is_AUTO():
-            return
-        if value.is_CPU():
-            return
-        if value.is_GPU():
-            _UniffiFfiConverterSequenceString.check_lower(value.device_ids)
-            return
-        raise ValueError(value)
-
-    @staticmethod
-    def write(value, buf):
-        if value.is_AUTO():
-            buf.write_i32(1)
-        if value.is_CPU():
-            buf.write_i32(2)
-        if value.is_GPU():
-            buf.write_i32(3)
-            _UniffiFfiConverterSequenceString.write(value.device_ids, buf)
-
-
-
-@dataclass
-class LoadModelOptions:
-    def __init__(self, *, device_policy:DevicePolicy):
-        self.device_policy = device_policy
-
-
-
-
-    def __str__(self):
-        return "LoadModelOptions(device_policy={})".format(self.device_policy)
-    def __eq__(self, other):
-        if self.device_policy != other.device_policy:
-            return False
-        return True
-
-class _UniffiFfiConverterTypeLoadModelOptions(_UniffiConverterRustBuffer):
-    @staticmethod
-    def read(buf):
-        return LoadModelOptions(
-            device_policy=_UniffiFfiConverterTypeDevicePolicy.read(buf),
-        )
-
-    @staticmethod
-    def check_lower(value):
-        _UniffiFfiConverterTypeDevicePolicy.check_lower(value.device_policy)
-
-    @staticmethod
-    def write(value, buf):
-        _UniffiFfiConverterTypeDevicePolicy.write(value.device_policy, buf)
-
-@dataclass
-class ModelCacheStatus:
-    def __init__(self, *, cache_dir:typing.Optional[str]):
-        self.cache_dir = cache_dir
-
-
-
-
-    def __str__(self):
-        return "ModelCacheStatus(cache_dir={})".format(self.cache_dir)
-    def __eq__(self, other):
-        if self.cache_dir != other.cache_dir:
-            return False
-        return True
-
-class _UniffiFfiConverterTypeModelCacheStatus(_UniffiConverterRustBuffer):
-    @staticmethod
-    def read(buf):
-        return ModelCacheStatus(
-            cache_dir=_UniffiFfiConverterOptionalString.read(buf),
-        )
-
-    @staticmethod
-    def check_lower(value):
-        _UniffiFfiConverterOptionalString.check_lower(value.cache_dir)
-
-    @staticmethod
-    def write(value, buf):
-        _UniffiFfiConverterOptionalString.write(value.cache_dir, buf)
 
 class _UniffiFfiConverterUInt32(_UniffiConverterPrimitiveInt):
     CLASS_NAME = "u32"
@@ -2486,95 +994,64 @@ class _UniffiFfiConverterTypeModelNative(_UniffiConverterRustBuffer):
         _UniffiFfiConverterString.write(value.name, buf)
         _UniffiFfiConverterOptionalUInt32.write(value.context_length, buf)
 
-@dataclass
-class ModelSearchQuery:
-    def __init__(self, *, query:str, limit:typing.Optional[int]):
-        self.query = query
-        self.limit = limit
+class _UniffiFfiConverterUInt64(_UniffiConverterPrimitiveInt):
+    CLASS_NAME = "u64"
+    VALUE_MIN = 0
+    VALUE_MAX = 2**64
 
-
-
-
-    def __str__(self):
-        return "ModelSearchQuery(query={}, limit={})".format(self.query, self.limit)
-    def __eq__(self, other):
-        if self.query != other.query:
-            return False
-        if self.limit != other.limit:
-            return False
-        return True
-
-class _UniffiFfiConverterTypeModelSearchQuery(_UniffiConverterRustBuffer):
     @staticmethod
     def read(buf):
-        return ModelSearchQuery(
-            query=_UniffiFfiConverterString.read(buf),
-            limit=_UniffiFfiConverterOptionalUInt64.read(buf),
-        )
-
-    @staticmethod
-    def check_lower(value):
-        _UniffiFfiConverterString.check_lower(value.query)
-        _UniffiFfiConverterOptionalUInt64.check_lower(value.limit)
+        return buf.read_u64()
 
     @staticmethod
     def write(value, buf):
-        _UniffiFfiConverterString.write(value.query, buf)
-        _UniffiFfiConverterOptionalUInt64.write(value.limit, buf)
+        buf.write_u64(value)
 
-@dataclass
-class ModelSummary:
-    def __init__(self, *, id:str, name:str, size_label:typing.Optional[str], description:typing.Optional[str], capabilities:ModelCapabilities):
-        self.id = id
-        self.name = name
-        self.size_label = size_label
-        self.description = description
-        self.capabilities = capabilities
+class _UniffiFfiConverterOptionalUInt64(_UniffiConverterRustBuffer):
+    @classmethod
+    def check_lower(cls, value):
+        if value is not None:
+            _UniffiFfiConverterUInt64.check_lower(value)
 
+    @classmethod
+    def write(cls, value, buf):
+        if value is None:
+            buf.write_u8(0)
+            return
 
+        buf.write_u8(1)
+        _UniffiFfiConverterUInt64.write(value, buf)
 
+    @classmethod
+    def read(cls, buf):
+        flag = buf.read_u8()
+        if flag == 0:
+            return None
+        elif flag == 1:
+            return _UniffiFfiConverterUInt64.read(buf)
+        else:
+            raise InternalError("Unexpected flag byte for optional type")
 
-    def __str__(self):
-        return "ModelSummary(id={}, name={}, size_label={}, description={}, capabilities={})".format(self.id, self.name, self.size_label, self.description, self.capabilities)
-    def __eq__(self, other):
-        if self.id != other.id:
-            return False
-        if self.name != other.name:
-            return False
-        if self.size_label != other.size_label:
-            return False
-        if self.description != other.description:
-            return False
-        if self.capabilities != other.capabilities:
-            return False
-        return True
+class _UniffiFfiConverterBoolean:
+    @classmethod
+    def check_lower(cls, value):
+        return not not value
 
-class _UniffiFfiConverterTypeModelSummary(_UniffiConverterRustBuffer):
-    @staticmethod
-    def read(buf):
-        return ModelSummary(
-            id=_UniffiFfiConverterString.read(buf),
-            name=_UniffiFfiConverterString.read(buf),
-            size_label=_UniffiFfiConverterOptionalString.read(buf),
-            description=_UniffiFfiConverterOptionalString.read(buf),
-            capabilities=_UniffiFfiConverterTypeModelCapabilities.read(buf),
-        )
+    @classmethod
+    def lower(cls, value):
+        return 1 if value else 0
 
     @staticmethod
-    def check_lower(value):
-        _UniffiFfiConverterString.check_lower(value.id)
-        _UniffiFfiConverterString.check_lower(value.name)
-        _UniffiFfiConverterOptionalString.check_lower(value.size_label)
-        _UniffiFfiConverterOptionalString.check_lower(value.description)
-        _UniffiFfiConverterTypeModelCapabilities.check_lower(value.capabilities)
+    def lift(value):
+        return value != 0
 
-    @staticmethod
-    def write(value, buf):
-        _UniffiFfiConverterString.write(value.id, buf)
-        _UniffiFfiConverterString.write(value.name, buf)
-        _UniffiFfiConverterOptionalString.write(value.size_label, buf)
-        _UniffiFfiConverterOptionalString.write(value.description, buf)
-        _UniffiFfiConverterTypeModelCapabilities.write(value.capabilities, buf)
+    @classmethod
+    def read(cls, buf):
+        return cls.lift(buf.read_u8())
+
+    @classmethod
+    def write(cls, value, buf):
+        buf.write_u8(value)
 
 @dataclass
 class NativeRuntimeDownloadProgressNative:
@@ -2629,6 +1106,29 @@ class _UniffiFfiConverterTypeNativeRuntimeDownloadProgressNative(_UniffiConverte
         _UniffiFfiConverterUInt64.write(value.downloaded_bytes, buf)
         _UniffiFfiConverterOptionalUInt64.write(value.total_bytes, buf)
         _UniffiFfiConverterBoolean.write(value.finished, buf)
+
+class _UniffiFfiConverterSequenceString(_UniffiConverterRustBuffer):
+    @classmethod
+    def check_lower(cls, value):
+        for item in value:
+            _UniffiFfiConverterString.check_lower(item)
+
+    @classmethod
+    def write(cls, value, buf):
+        items = len(value)
+        buf.write_i32(items)
+        for item in value:
+            _UniffiFfiConverterString.write(item, buf)
+
+    @classmethod
+    def read(cls, buf):
+        count = buf.read_i32()
+        if count < 0:
+            raise InternalError("Unexpected negative sequence length")
+
+        return [
+            _UniffiFfiConverterString.read(buf) for i in range(count)
+        ]
 
 
 
@@ -2827,6 +1327,73 @@ class _UniffiFfiConverterTypeNativeRuntimePruneResultNative(_UniffiConverterRust
         _UniffiFfiConverterSequenceString.write(value.removed_dirs, buf)
 
 @dataclass
+class NodeStatusNative:
+    def __init__(self, *, running:bool, mode:str, api_base_url:str, console_url:str, payload_json:str):
+        self.running = running
+        self.mode = mode
+        self.api_base_url = api_base_url
+        self.console_url = console_url
+        self.payload_json = payload_json
+
+
+
+
+    def __str__(self):
+        return "NodeStatusNative(running={}, mode={}, api_base_url={}, console_url={}, payload_json={})".format(self.running, self.mode, self.api_base_url, self.console_url, self.payload_json)
+    def __eq__(self, other):
+        if self.running != other.running:
+            return False
+        if self.mode != other.mode:
+            return False
+        if self.api_base_url != other.api_base_url:
+            return False
+        if self.console_url != other.console_url:
+            return False
+        if self.payload_json != other.payload_json:
+            return False
+        return True
+
+class _UniffiFfiConverterTypeNodeStatusNative(_UniffiConverterRustBuffer):
+    @staticmethod
+    def read(buf):
+        return NodeStatusNative(
+            running=_UniffiFfiConverterBoolean.read(buf),
+            mode=_UniffiFfiConverterString.read(buf),
+            api_base_url=_UniffiFfiConverterString.read(buf),
+            console_url=_UniffiFfiConverterString.read(buf),
+            payload_json=_UniffiFfiConverterString.read(buf),
+        )
+
+    @staticmethod
+    def check_lower(value):
+        _UniffiFfiConverterBoolean.check_lower(value.running)
+        _UniffiFfiConverterString.check_lower(value.mode)
+        _UniffiFfiConverterString.check_lower(value.api_base_url)
+        _UniffiFfiConverterString.check_lower(value.console_url)
+        _UniffiFfiConverterString.check_lower(value.payload_json)
+
+    @staticmethod
+    def write(value, buf):
+        _UniffiFfiConverterBoolean.write(value.running, buf)
+        _UniffiFfiConverterString.write(value.mode, buf)
+        _UniffiFfiConverterString.write(value.api_base_url, buf)
+        _UniffiFfiConverterString.write(value.console_url, buf)
+        _UniffiFfiConverterString.write(value.payload_json, buf)
+
+class _UniffiFfiConverterUInt16(_UniffiConverterPrimitiveInt):
+    CLASS_NAME = "u16"
+    VALUE_MIN = 0
+    VALUE_MAX = 2**16
+
+    @staticmethod
+    def read(buf):
+        return buf.read_u16()
+
+    @staticmethod
+    def write(value, buf):
+        buf.write_u16(value)
+
+@dataclass
 class OpenAiResponseNative:
     def __init__(self, *, status_code:int, content_type:typing.Optional[str], body:str):
         self.status_code = status_code
@@ -2868,1045 +1435,6 @@ class _UniffiFfiConverterTypeOpenAiResponseNative(_UniffiConverterRustBuffer):
         _UniffiFfiConverterOptionalString.write(value.content_type, buf)
         _UniffiFfiConverterString.write(value.body, buf)
 
-@dataclass
-class PrunePolicy:
-    def __init__(self, *, remove_all:bool):
-        self.remove_all = remove_all
-
-
-
-
-    def __str__(self):
-        return "PrunePolicy(remove_all={})".format(self.remove_all)
-    def __eq__(self, other):
-        if self.remove_all != other.remove_all:
-            return False
-        return True
-
-class _UniffiFfiConverterTypePrunePolicy(_UniffiConverterRustBuffer):
-    @staticmethod
-    def read(buf):
-        return PrunePolicy(
-            remove_all=_UniffiFfiConverterBoolean.read(buf),
-        )
-
-    @staticmethod
-    def check_lower(value):
-        _UniffiFfiConverterBoolean.check_lower(value.remove_all)
-
-    @staticmethod
-    def write(value, buf):
-        _UniffiFfiConverterBoolean.write(value.remove_all, buf)
-
-@dataclass
-class PruneResult:
-    def __init__(self, *, deleted_paths:typing.List[str], reclaimed_bytes:int):
-        self.deleted_paths = deleted_paths
-        self.reclaimed_bytes = reclaimed_bytes
-
-
-
-
-    def __str__(self):
-        return "PruneResult(deleted_paths={}, reclaimed_bytes={})".format(self.deleted_paths, self.reclaimed_bytes)
-    def __eq__(self, other):
-        if self.deleted_paths != other.deleted_paths:
-            return False
-        if self.reclaimed_bytes != other.reclaimed_bytes:
-            return False
-        return True
-
-class _UniffiFfiConverterTypePruneResult(_UniffiConverterRustBuffer):
-    @staticmethod
-    def read(buf):
-        return PruneResult(
-            deleted_paths=_UniffiFfiConverterSequenceString.read(buf),
-            reclaimed_bytes=_UniffiFfiConverterUInt64.read(buf),
-        )
-
-    @staticmethod
-    def check_lower(value):
-        _UniffiFfiConverterSequenceString.check_lower(value.deleted_paths)
-        _UniffiFfiConverterUInt64.check_lower(value.reclaimed_bytes)
-
-    @staticmethod
-    def write(value, buf):
-        _UniffiFfiConverterSequenceString.write(value.deleted_paths, buf)
-        _UniffiFfiConverterUInt64.write(value.reclaimed_bytes, buf)
-
-@dataclass
-class PublicMesh:
-    def __init__(self, *, invite_token:str, serving:typing.List[str], wanted:typing.List[str], on_disk:typing.List[str], total_vram_bytes:int, node_count:int, client_count:int, max_clients:int, name:typing.Optional[str], region:typing.Optional[str], mesh_id:typing.Optional[str], publisher_npub:str, published_at:int, expires_at:typing.Optional[int]):
-        self.invite_token = invite_token
-        self.serving = serving
-        self.wanted = wanted
-        self.on_disk = on_disk
-        self.total_vram_bytes = total_vram_bytes
-        self.node_count = node_count
-        self.client_count = client_count
-        self.max_clients = max_clients
-        self.name = name
-        self.region = region
-        self.mesh_id = mesh_id
-        self.publisher_npub = publisher_npub
-        self.published_at = published_at
-        self.expires_at = expires_at
-
-
-
-
-    def __str__(self):
-        return "PublicMesh(invite_token={}, serving={}, wanted={}, on_disk={}, total_vram_bytes={}, node_count={}, client_count={}, max_clients={}, name={}, region={}, mesh_id={}, publisher_npub={}, published_at={}, expires_at={})".format(self.invite_token, self.serving, self.wanted, self.on_disk, self.total_vram_bytes, self.node_count, self.client_count, self.max_clients, self.name, self.region, self.mesh_id, self.publisher_npub, self.published_at, self.expires_at)
-    def __eq__(self, other):
-        if self.invite_token != other.invite_token:
-            return False
-        if self.serving != other.serving:
-            return False
-        if self.wanted != other.wanted:
-            return False
-        if self.on_disk != other.on_disk:
-            return False
-        if self.total_vram_bytes != other.total_vram_bytes:
-            return False
-        if self.node_count != other.node_count:
-            return False
-        if self.client_count != other.client_count:
-            return False
-        if self.max_clients != other.max_clients:
-            return False
-        if self.name != other.name:
-            return False
-        if self.region != other.region:
-            return False
-        if self.mesh_id != other.mesh_id:
-            return False
-        if self.publisher_npub != other.publisher_npub:
-            return False
-        if self.published_at != other.published_at:
-            return False
-        if self.expires_at != other.expires_at:
-            return False
-        return True
-
-class _UniffiFfiConverterTypePublicMesh(_UniffiConverterRustBuffer):
-    @staticmethod
-    def read(buf):
-        return PublicMesh(
-            invite_token=_UniffiFfiConverterString.read(buf),
-            serving=_UniffiFfiConverterSequenceString.read(buf),
-            wanted=_UniffiFfiConverterSequenceString.read(buf),
-            on_disk=_UniffiFfiConverterSequenceString.read(buf),
-            total_vram_bytes=_UniffiFfiConverterUInt64.read(buf),
-            node_count=_UniffiFfiConverterUInt64.read(buf),
-            client_count=_UniffiFfiConverterUInt64.read(buf),
-            max_clients=_UniffiFfiConverterUInt64.read(buf),
-            name=_UniffiFfiConverterOptionalString.read(buf),
-            region=_UniffiFfiConverterOptionalString.read(buf),
-            mesh_id=_UniffiFfiConverterOptionalString.read(buf),
-            publisher_npub=_UniffiFfiConverterString.read(buf),
-            published_at=_UniffiFfiConverterUInt64.read(buf),
-            expires_at=_UniffiFfiConverterOptionalUInt64.read(buf),
-        )
-
-    @staticmethod
-    def check_lower(value):
-        _UniffiFfiConverterString.check_lower(value.invite_token)
-        _UniffiFfiConverterSequenceString.check_lower(value.serving)
-        _UniffiFfiConverterSequenceString.check_lower(value.wanted)
-        _UniffiFfiConverterSequenceString.check_lower(value.on_disk)
-        _UniffiFfiConverterUInt64.check_lower(value.total_vram_bytes)
-        _UniffiFfiConverterUInt64.check_lower(value.node_count)
-        _UniffiFfiConverterUInt64.check_lower(value.client_count)
-        _UniffiFfiConverterUInt64.check_lower(value.max_clients)
-        _UniffiFfiConverterOptionalString.check_lower(value.name)
-        _UniffiFfiConverterOptionalString.check_lower(value.region)
-        _UniffiFfiConverterOptionalString.check_lower(value.mesh_id)
-        _UniffiFfiConverterString.check_lower(value.publisher_npub)
-        _UniffiFfiConverterUInt64.check_lower(value.published_at)
-        _UniffiFfiConverterOptionalUInt64.check_lower(value.expires_at)
-
-    @staticmethod
-    def write(value, buf):
-        _UniffiFfiConverterString.write(value.invite_token, buf)
-        _UniffiFfiConverterSequenceString.write(value.serving, buf)
-        _UniffiFfiConverterSequenceString.write(value.wanted, buf)
-        _UniffiFfiConverterSequenceString.write(value.on_disk, buf)
-        _UniffiFfiConverterUInt64.write(value.total_vram_bytes, buf)
-        _UniffiFfiConverterUInt64.write(value.node_count, buf)
-        _UniffiFfiConverterUInt64.write(value.client_count, buf)
-        _UniffiFfiConverterUInt64.write(value.max_clients, buf)
-        _UniffiFfiConverterOptionalString.write(value.name, buf)
-        _UniffiFfiConverterOptionalString.write(value.region, buf)
-        _UniffiFfiConverterOptionalString.write(value.mesh_id, buf)
-        _UniffiFfiConverterString.write(value.publisher_npub, buf)
-        _UniffiFfiConverterUInt64.write(value.published_at, buf)
-        _UniffiFfiConverterOptionalUInt64.write(value.expires_at, buf)
-
-class _UniffiFfiConverterFloat64(_UniffiConverterPrimitiveFloat):
-    @staticmethod
-    def read(buf):
-        return buf.read_double()
-
-    @staticmethod
-    def write(value, buf):
-        buf.write_double(value)
-
-class _UniffiFfiConverterOptionalFloat64(_UniffiConverterRustBuffer):
-    @classmethod
-    def check_lower(cls, value):
-        if value is not None:
-            _UniffiFfiConverterFloat64.check_lower(value)
-
-    @classmethod
-    def write(cls, value, buf):
-        if value is None:
-            buf.write_u8(0)
-            return
-
-        buf.write_u8(1)
-        _UniffiFfiConverterFloat64.write(value, buf)
-
-    @classmethod
-    def read(cls, buf):
-        flag = buf.read_u8()
-        if flag == 0:
-            return None
-        elif flag == 1:
-            return _UniffiFfiConverterFloat64.read(buf)
-        else:
-            raise InternalError("Unexpected flag byte for optional type")
-
-@dataclass
-class PublicMeshQuery:
-    def __init__(self, *, model:typing.Optional[str], min_vram_gb:typing.Optional[float], region:typing.Optional[str], target_name:typing.Optional[str], relays:typing.List[str]):
-        self.model = model
-        self.min_vram_gb = min_vram_gb
-        self.region = region
-        self.target_name = target_name
-        self.relays = relays
-
-
-
-
-    def __str__(self):
-        return "PublicMeshQuery(model={}, min_vram_gb={}, region={}, target_name={}, relays={})".format(self.model, self.min_vram_gb, self.region, self.target_name, self.relays)
-    def __eq__(self, other):
-        if self.model != other.model:
-            return False
-        if self.min_vram_gb != other.min_vram_gb:
-            return False
-        if self.region != other.region:
-            return False
-        if self.target_name != other.target_name:
-            return False
-        if self.relays != other.relays:
-            return False
-        return True
-
-class _UniffiFfiConverterTypePublicMeshQuery(_UniffiConverterRustBuffer):
-    @staticmethod
-    def read(buf):
-        return PublicMeshQuery(
-            model=_UniffiFfiConverterOptionalString.read(buf),
-            min_vram_gb=_UniffiFfiConverterOptionalFloat64.read(buf),
-            region=_UniffiFfiConverterOptionalString.read(buf),
-            target_name=_UniffiFfiConverterOptionalString.read(buf),
-            relays=_UniffiFfiConverterSequenceString.read(buf),
-        )
-
-    @staticmethod
-    def check_lower(value):
-        _UniffiFfiConverterOptionalString.check_lower(value.model)
-        _UniffiFfiConverterOptionalFloat64.check_lower(value.min_vram_gb)
-        _UniffiFfiConverterOptionalString.check_lower(value.region)
-        _UniffiFfiConverterOptionalString.check_lower(value.target_name)
-        _UniffiFfiConverterSequenceString.check_lower(value.relays)
-
-    @staticmethod
-    def write(value, buf):
-        _UniffiFfiConverterOptionalString.write(value.model, buf)
-        _UniffiFfiConverterOptionalFloat64.write(value.min_vram_gb, buf)
-        _UniffiFfiConverterOptionalString.write(value.region, buf)
-        _UniffiFfiConverterOptionalString.write(value.target_name, buf)
-        _UniffiFfiConverterSequenceString.write(value.relays, buf)
-
-@dataclass
-class ResponsesRequestNative:
-    def __init__(self, *, model:str, input:str):
-        self.model = model
-        self.input = input
-
-
-
-
-    def __str__(self):
-        return "ResponsesRequestNative(model={}, input={})".format(self.model, self.input)
-    def __eq__(self, other):
-        if self.model != other.model:
-            return False
-        if self.input != other.input:
-            return False
-        return True
-
-class _UniffiFfiConverterTypeResponsesRequestNative(_UniffiConverterRustBuffer):
-    @staticmethod
-    def read(buf):
-        return ResponsesRequestNative(
-            model=_UniffiFfiConverterString.read(buf),
-            input=_UniffiFfiConverterString.read(buf),
-        )
-
-    @staticmethod
-    def check_lower(value):
-        _UniffiFfiConverterString.check_lower(value.model)
-        _UniffiFfiConverterString.check_lower(value.input)
-
-    @staticmethod
-    def write(value, buf):
-        _UniffiFfiConverterString.write(value.model, buf)
-        _UniffiFfiConverterString.write(value.input, buf)
-
-
-
-
-
-
-class ServingModelState:
-    def __init__(self):
-        raise RuntimeError("ServingModelState cannot be instantiated directly")
-
-    # Each enum variant is a nested class of the enum itself.
-    @dataclass
-    class LOADING:
-
-        def __init__(self, ):
-            pass
-
-
-
-
-
-        def __str__(self):
-            return "ServingModelState.LOADING()".format()
-        def __eq__(self, other):
-            if not isinstance(other, ServingModelState):
-                return NotImplemented
-            if not other.is_LOADING():
-                return False
-            return True
-
-    @dataclass
-    class READY:
-
-        def __init__(self, ):
-            pass
-
-
-
-
-
-        def __str__(self):
-            return "ServingModelState.READY()".format()
-        def __eq__(self, other):
-            if not isinstance(other, ServingModelState):
-                return NotImplemented
-            if not other.is_READY():
-                return False
-            return True
-
-    @dataclass
-    class FAILED:
-
-        def __init__(self, ):
-            pass
-
-
-
-
-
-        def __str__(self):
-            return "ServingModelState.FAILED()".format()
-        def __eq__(self, other):
-            if not isinstance(other, ServingModelState):
-                return NotImplemented
-            if not other.is_FAILED():
-                return False
-            return True
-
-    @dataclass
-    class UNLOADING:
-
-        def __init__(self, ):
-            pass
-
-
-
-
-
-        def __str__(self):
-            return "ServingModelState.UNLOADING()".format()
-        def __eq__(self, other):
-            if not isinstance(other, ServingModelState):
-                return NotImplemented
-            if not other.is_UNLOADING():
-                return False
-            return True
-
-    @dataclass
-    class STOPPED:
-
-        def __init__(self, ):
-            pass
-
-
-
-
-
-        def __str__(self):
-            return "ServingModelState.STOPPED()".format()
-        def __eq__(self, other):
-            if not isinstance(other, ServingModelState):
-                return NotImplemented
-            if not other.is_STOPPED():
-                return False
-            return True
-
-    @dataclass
-    class UNKNOWN:
-
-        def __init__(self, value:str):
-            self.value = value
-
-
-            pass
-
-
-
-
-
-        def __str__(self):
-            return "ServingModelState.UNKNOWN(value={})".format(self.value)
-        def __eq__(self, other):
-            if not isinstance(other, ServingModelState):
-                return NotImplemented
-            if not other.is_UNKNOWN():
-                return False
-            if self.value != other.value:
-                return False
-            return True
-
-
-
-    # For each variant, we have `is_NAME` and `is_name` methods for easily checking
-    # whether an instance is that variant.
-    def is_LOADING(self) -> bool:
-        return isinstance(self, ServingModelState.LOADING)
-    def is_loading(self) -> bool:
-        return isinstance(self, ServingModelState.LOADING)
-    def is_READY(self) -> bool:
-        return isinstance(self, ServingModelState.READY)
-    def is_ready(self) -> bool:
-        return isinstance(self, ServingModelState.READY)
-    def is_FAILED(self) -> bool:
-        return isinstance(self, ServingModelState.FAILED)
-    def is_failed(self) -> bool:
-        return isinstance(self, ServingModelState.FAILED)
-    def is_UNLOADING(self) -> bool:
-        return isinstance(self, ServingModelState.UNLOADING)
-    def is_unloading(self) -> bool:
-        return isinstance(self, ServingModelState.UNLOADING)
-    def is_STOPPED(self) -> bool:
-        return isinstance(self, ServingModelState.STOPPED)
-    def is_stopped(self) -> bool:
-        return isinstance(self, ServingModelState.STOPPED)
-    def is_UNKNOWN(self) -> bool:
-        return isinstance(self, ServingModelState.UNKNOWN)
-    def is_unknown(self) -> bool:
-        return isinstance(self, ServingModelState.UNKNOWN)
-
-
-# Now, a little trick - we make each nested variant class be a subclass of the main
-# enum class, so that method calls and instance checks etc will work intuitively.
-# We might be able to do this a little more neatly with a metaclass, but this'll do.
-ServingModelState.LOADING = type("ServingModelState.LOADING", (ServingModelState.LOADING, ServingModelState,), {})  # type: ignore
-ServingModelState.READY = type("ServingModelState.READY", (ServingModelState.READY, ServingModelState,), {})  # type: ignore
-ServingModelState.FAILED = type("ServingModelState.FAILED", (ServingModelState.FAILED, ServingModelState,), {})  # type: ignore
-ServingModelState.UNLOADING = type("ServingModelState.UNLOADING", (ServingModelState.UNLOADING, ServingModelState,), {})  # type: ignore
-ServingModelState.STOPPED = type("ServingModelState.STOPPED", (ServingModelState.STOPPED, ServingModelState,), {})  # type: ignore
-ServingModelState.UNKNOWN = type("ServingModelState.UNKNOWN", (ServingModelState.UNKNOWN, ServingModelState,), {})  # type: ignore
-
-
-
-
-class _UniffiFfiConverterTypeServingModelState(_UniffiConverterRustBuffer):
-    @staticmethod
-    def read(buf):
-        variant = buf.read_i32()
-        if variant == 1:
-            return ServingModelState.LOADING(
-            )
-        if variant == 2:
-            return ServingModelState.READY(
-            )
-        if variant == 3:
-            return ServingModelState.FAILED(
-            )
-        if variant == 4:
-            return ServingModelState.UNLOADING(
-            )
-        if variant == 5:
-            return ServingModelState.STOPPED(
-            )
-        if variant == 6:
-            return ServingModelState.UNKNOWN(
-                _UniffiFfiConverterString.read(buf),
-            )
-        raise InternalError("Raw enum value doesn't match any cases")
-
-    @staticmethod
-    def check_lower(value):
-        if value.is_LOADING():
-            return
-        if value.is_READY():
-            return
-        if value.is_FAILED():
-            return
-        if value.is_UNLOADING():
-            return
-        if value.is_STOPPED():
-            return
-        if value.is_UNKNOWN():
-            _UniffiFfiConverterString.check_lower(value.value)
-            return
-        raise ValueError(value)
-
-    @staticmethod
-    def write(value, buf):
-        if value.is_LOADING():
-            buf.write_i32(1)
-        if value.is_READY():
-            buf.write_i32(2)
-        if value.is_FAILED():
-            buf.write_i32(3)
-        if value.is_UNLOADING():
-            buf.write_i32(4)
-        if value.is_STOPPED():
-            buf.write_i32(5)
-        if value.is_UNKNOWN():
-            buf.write_i32(6)
-            _UniffiFfiConverterString.write(value.value, buf)
-
-
-
-@dataclass
-class ServedModel:
-    def __init__(self, *, model_ref:str, model_id:str, instance_id:typing.Optional[str], state:ServingModelState, backend:typing.Optional[str], capabilities:ModelCapabilities, context_length:typing.Optional[int], error:typing.Optional[str]):
-        self.model_ref = model_ref
-        self.model_id = model_id
-        self.instance_id = instance_id
-        self.state = state
-        self.backend = backend
-        self.capabilities = capabilities
-        self.context_length = context_length
-        self.error = error
-
-
-
-
-    def __str__(self):
-        return "ServedModel(model_ref={}, model_id={}, instance_id={}, state={}, backend={}, capabilities={}, context_length={}, error={})".format(self.model_ref, self.model_id, self.instance_id, self.state, self.backend, self.capabilities, self.context_length, self.error)
-    def __eq__(self, other):
-        if self.model_ref != other.model_ref:
-            return False
-        if self.model_id != other.model_id:
-            return False
-        if self.instance_id != other.instance_id:
-            return False
-        if self.state != other.state:
-            return False
-        if self.backend != other.backend:
-            return False
-        if self.capabilities != other.capabilities:
-            return False
-        if self.context_length != other.context_length:
-            return False
-        if self.error != other.error:
-            return False
-        return True
-
-class _UniffiFfiConverterTypeServedModel(_UniffiConverterRustBuffer):
-    @staticmethod
-    def read(buf):
-        return ServedModel(
-            model_ref=_UniffiFfiConverterString.read(buf),
-            model_id=_UniffiFfiConverterString.read(buf),
-            instance_id=_UniffiFfiConverterOptionalString.read(buf),
-            state=_UniffiFfiConverterTypeServingModelState.read(buf),
-            backend=_UniffiFfiConverterOptionalString.read(buf),
-            capabilities=_UniffiFfiConverterTypeModelCapabilities.read(buf),
-            context_length=_UniffiFfiConverterOptionalUInt32.read(buf),
-            error=_UniffiFfiConverterOptionalString.read(buf),
-        )
-
-    @staticmethod
-    def check_lower(value):
-        _UniffiFfiConverterString.check_lower(value.model_ref)
-        _UniffiFfiConverterString.check_lower(value.model_id)
-        _UniffiFfiConverterOptionalString.check_lower(value.instance_id)
-        _UniffiFfiConverterTypeServingModelState.check_lower(value.state)
-        _UniffiFfiConverterOptionalString.check_lower(value.backend)
-        _UniffiFfiConverterTypeModelCapabilities.check_lower(value.capabilities)
-        _UniffiFfiConverterOptionalUInt32.check_lower(value.context_length)
-        _UniffiFfiConverterOptionalString.check_lower(value.error)
-
-    @staticmethod
-    def write(value, buf):
-        _UniffiFfiConverterString.write(value.model_ref, buf)
-        _UniffiFfiConverterString.write(value.model_id, buf)
-        _UniffiFfiConverterOptionalString.write(value.instance_id, buf)
-        _UniffiFfiConverterTypeServingModelState.write(value.state, buf)
-        _UniffiFfiConverterOptionalString.write(value.backend, buf)
-        _UniffiFfiConverterTypeModelCapabilities.write(value.capabilities, buf)
-        _UniffiFfiConverterOptionalUInt32.write(value.context_length, buf)
-        _UniffiFfiConverterOptionalString.write(value.error, buf)
-
-class _UniffiFfiConverterSequenceTypeServedModel(_UniffiConverterRustBuffer):
-    @classmethod
-    def check_lower(cls, value):
-        for item in value:
-            _UniffiFfiConverterTypeServedModel.check_lower(item)
-
-    @classmethod
-    def write(cls, value, buf):
-        items = len(value)
-        buf.write_i32(items)
-        for item in value:
-            _UniffiFfiConverterTypeServedModel.write(item, buf)
-
-    @classmethod
-    def read(cls, buf):
-        count = buf.read_i32()
-        if count < 0:
-            raise InternalError("Unexpected negative sequence length")
-
-        return [
-            _UniffiFfiConverterTypeServedModel.read(buf) for i in range(count)
-        ]
-
-@dataclass
-class ServingStatus:
-    def __init__(self, *, enabled:bool, models:typing.List[ServedModel]):
-        self.enabled = enabled
-        self.models = models
-
-
-
-
-    def __str__(self):
-        return "ServingStatus(enabled={}, models={})".format(self.enabled, self.models)
-    def __eq__(self, other):
-        if self.enabled != other.enabled:
-            return False
-        if self.models != other.models:
-            return False
-        return True
-
-class _UniffiFfiConverterTypeServingStatus(_UniffiConverterRustBuffer):
-    @staticmethod
-    def read(buf):
-        return ServingStatus(
-            enabled=_UniffiFfiConverterBoolean.read(buf),
-            models=_UniffiFfiConverterSequenceTypeServedModel.read(buf),
-        )
-
-    @staticmethod
-    def check_lower(value):
-        _UniffiFfiConverterBoolean.check_lower(value.enabled)
-        _UniffiFfiConverterSequenceTypeServedModel.check_lower(value.models)
-
-    @staticmethod
-    def write(value, buf):
-        _UniffiFfiConverterBoolean.write(value.enabled, buf)
-        _UniffiFfiConverterSequenceTypeServedModel.write(value.models, buf)
-
-@dataclass
-class UnloadModelOptions:
-    def __init__(self, *, drain_timeout_ms:int, force:bool):
-        self.drain_timeout_ms = drain_timeout_ms
-        self.force = force
-
-
-
-
-    def __str__(self):
-        return "UnloadModelOptions(drain_timeout_ms={}, force={})".format(self.drain_timeout_ms, self.force)
-    def __eq__(self, other):
-        if self.drain_timeout_ms != other.drain_timeout_ms:
-            return False
-        if self.force != other.force:
-            return False
-        return True
-
-class _UniffiFfiConverterTypeUnloadModelOptions(_UniffiConverterRustBuffer):
-    @staticmethod
-    def read(buf):
-        return UnloadModelOptions(
-            drain_timeout_ms=_UniffiFfiConverterUInt64.read(buf),
-            force=_UniffiFfiConverterBoolean.read(buf),
-        )
-
-    @staticmethod
-    def check_lower(value):
-        _UniffiFfiConverterUInt64.check_lower(value.drain_timeout_ms)
-        _UniffiFfiConverterBoolean.check_lower(value.force)
-
-    @staticmethod
-    def write(value, buf):
-        _UniffiFfiConverterUInt64.write(value.drain_timeout_ms, buf)
-        _UniffiFfiConverterBoolean.write(value.force, buf)
-
-class _UniffiFfiConverterSequenceTypeModelNative(_UniffiConverterRustBuffer):
-    @classmethod
-    def check_lower(cls, value):
-        for item in value:
-            _UniffiFfiConverterTypeModelNative.check_lower(item)
-
-    @classmethod
-    def write(cls, value, buf):
-        items = len(value)
-        buf.write_i32(items)
-        for item in value:
-            _UniffiFfiConverterTypeModelNative.write(item, buf)
-
-    @classmethod
-    def read(cls, buf):
-        count = buf.read_i32()
-        if count < 0:
-            raise InternalError("Unexpected negative sequence length")
-
-        return [
-            _UniffiFfiConverterTypeModelNative.read(buf) for i in range(count)
-        ]
-
-
-
-
-
-
-class ClientEvent:
-    def __init__(self):
-        raise RuntimeError("ClientEvent cannot be instantiated directly")
-
-    # Each enum variant is a nested class of the enum itself.
-    @dataclass
-    class CONNECTING:
-
-        def __init__(self, ):
-            pass
-
-
-
-
-
-        def __str__(self):
-            return "ClientEvent.CONNECTING()".format()
-        def __eq__(self, other):
-            if not isinstance(other, ClientEvent):
-                return NotImplemented
-            if not other.is_CONNECTING():
-                return False
-            return True
-
-    @dataclass
-    class JOINED:
-
-        def __init__(self, node_id:str):
-            self.node_id = node_id
-
-
-            pass
-
-
-
-
-
-        def __str__(self):
-            return "ClientEvent.JOINED(node_id={})".format(self.node_id)
-        def __eq__(self, other):
-            if not isinstance(other, ClientEvent):
-                return NotImplemented
-            if not other.is_JOINED():
-                return False
-            if self.node_id != other.node_id:
-                return False
-            return True
-
-    @dataclass
-    class MODELS_UPDATED:
-
-        def __init__(self, models:typing.List[ModelNative]):
-            self.models = models
-
-
-            pass
-
-
-
-
-
-        def __str__(self):
-            return "ClientEvent.MODELS_UPDATED(models={})".format(self.models)
-        def __eq__(self, other):
-            if not isinstance(other, ClientEvent):
-                return NotImplemented
-            if not other.is_MODELS_UPDATED():
-                return False
-            if self.models != other.models:
-                return False
-            return True
-
-    @dataclass
-    class TOKEN_DELTA:
-
-        def __init__(self, request_id:str, delta:str):
-            self.request_id = request_id
-
-
-            self.delta = delta
-
-
-            pass
-
-
-
-
-
-        def __str__(self):
-            return "ClientEvent.TOKEN_DELTA(request_id={}, delta={})".format(self.request_id, self.delta)
-        def __eq__(self, other):
-            if not isinstance(other, ClientEvent):
-                return NotImplemented
-            if not other.is_TOKEN_DELTA():
-                return False
-            if self.request_id != other.request_id:
-                return False
-            if self.delta != other.delta:
-                return False
-            return True
-
-    @dataclass
-    class COMPLETED:
-
-        def __init__(self, request_id:str):
-            self.request_id = request_id
-
-
-            pass
-
-
-
-
-
-        def __str__(self):
-            return "ClientEvent.COMPLETED(request_id={})".format(self.request_id)
-        def __eq__(self, other):
-            if not isinstance(other, ClientEvent):
-                return NotImplemented
-            if not other.is_COMPLETED():
-                return False
-            if self.request_id != other.request_id:
-                return False
-            return True
-
-    @dataclass
-    class FAILED:
-
-        def __init__(self, request_id:str, error:str):
-            self.request_id = request_id
-
-
-            self.error = error
-
-
-            pass
-
-
-
-
-
-        def __str__(self):
-            return "ClientEvent.FAILED(request_id={}, error={})".format(self.request_id, self.error)
-        def __eq__(self, other):
-            if not isinstance(other, ClientEvent):
-                return NotImplemented
-            if not other.is_FAILED():
-                return False
-            if self.request_id != other.request_id:
-                return False
-            if self.error != other.error:
-                return False
-            return True
-
-    @dataclass
-    class DISCONNECTED:
-
-        def __init__(self, reason:str):
-            self.reason = reason
-
-
-            pass
-
-
-
-
-
-        def __str__(self):
-            return "ClientEvent.DISCONNECTED(reason={})".format(self.reason)
-        def __eq__(self, other):
-            if not isinstance(other, ClientEvent):
-                return NotImplemented
-            if not other.is_DISCONNECTED():
-                return False
-            if self.reason != other.reason:
-                return False
-            return True
-
-
-
-    # For each variant, we have `is_NAME` and `is_name` methods for easily checking
-    # whether an instance is that variant.
-    def is_CONNECTING(self) -> bool:
-        return isinstance(self, ClientEvent.CONNECTING)
-    def is_connecting(self) -> bool:
-        return isinstance(self, ClientEvent.CONNECTING)
-    def is_JOINED(self) -> bool:
-        return isinstance(self, ClientEvent.JOINED)
-    def is_joined(self) -> bool:
-        return isinstance(self, ClientEvent.JOINED)
-    def is_MODELS_UPDATED(self) -> bool:
-        return isinstance(self, ClientEvent.MODELS_UPDATED)
-    def is_models_updated(self) -> bool:
-        return isinstance(self, ClientEvent.MODELS_UPDATED)
-    def is_TOKEN_DELTA(self) -> bool:
-        return isinstance(self, ClientEvent.TOKEN_DELTA)
-    def is_token_delta(self) -> bool:
-        return isinstance(self, ClientEvent.TOKEN_DELTA)
-    def is_COMPLETED(self) -> bool:
-        return isinstance(self, ClientEvent.COMPLETED)
-    def is_completed(self) -> bool:
-        return isinstance(self, ClientEvent.COMPLETED)
-    def is_FAILED(self) -> bool:
-        return isinstance(self, ClientEvent.FAILED)
-    def is_failed(self) -> bool:
-        return isinstance(self, ClientEvent.FAILED)
-    def is_DISCONNECTED(self) -> bool:
-        return isinstance(self, ClientEvent.DISCONNECTED)
-    def is_disconnected(self) -> bool:
-        return isinstance(self, ClientEvent.DISCONNECTED)
-
-
-# Now, a little trick - we make each nested variant class be a subclass of the main
-# enum class, so that method calls and instance checks etc will work intuitively.
-# We might be able to do this a little more neatly with a metaclass, but this'll do.
-ClientEvent.CONNECTING = type("ClientEvent.CONNECTING", (ClientEvent.CONNECTING, ClientEvent,), {})  # type: ignore
-ClientEvent.JOINED = type("ClientEvent.JOINED", (ClientEvent.JOINED, ClientEvent,), {})  # type: ignore
-ClientEvent.MODELS_UPDATED = type("ClientEvent.MODELS_UPDATED", (ClientEvent.MODELS_UPDATED, ClientEvent,), {})  # type: ignore
-ClientEvent.TOKEN_DELTA = type("ClientEvent.TOKEN_DELTA", (ClientEvent.TOKEN_DELTA, ClientEvent,), {})  # type: ignore
-ClientEvent.COMPLETED = type("ClientEvent.COMPLETED", (ClientEvent.COMPLETED, ClientEvent,), {})  # type: ignore
-ClientEvent.FAILED = type("ClientEvent.FAILED", (ClientEvent.FAILED, ClientEvent,), {})  # type: ignore
-ClientEvent.DISCONNECTED = type("ClientEvent.DISCONNECTED", (ClientEvent.DISCONNECTED, ClientEvent,), {})  # type: ignore
-
-
-
-
-class _UniffiFfiConverterTypeClientEvent(_UniffiConverterRustBuffer):
-    @staticmethod
-    def read(buf):
-        variant = buf.read_i32()
-        if variant == 1:
-            return ClientEvent.CONNECTING(
-            )
-        if variant == 2:
-            return ClientEvent.JOINED(
-                _UniffiFfiConverterString.read(buf),
-            )
-        if variant == 3:
-            return ClientEvent.MODELS_UPDATED(
-                _UniffiFfiConverterSequenceTypeModelNative.read(buf),
-            )
-        if variant == 4:
-            return ClientEvent.TOKEN_DELTA(
-                _UniffiFfiConverterString.read(buf),
-                _UniffiFfiConverterString.read(buf),
-            )
-        if variant == 5:
-            return ClientEvent.COMPLETED(
-                _UniffiFfiConverterString.read(buf),
-            )
-        if variant == 6:
-            return ClientEvent.FAILED(
-                _UniffiFfiConverterString.read(buf),
-                _UniffiFfiConverterString.read(buf),
-            )
-        if variant == 7:
-            return ClientEvent.DISCONNECTED(
-                _UniffiFfiConverterString.read(buf),
-            )
-        raise InternalError("Raw enum value doesn't match any cases")
-
-    @staticmethod
-    def check_lower(value):
-        if value.is_CONNECTING():
-            return
-        if value.is_JOINED():
-            _UniffiFfiConverterString.check_lower(value.node_id)
-            return
-        if value.is_MODELS_UPDATED():
-            _UniffiFfiConverterSequenceTypeModelNative.check_lower(value.models)
-            return
-        if value.is_TOKEN_DELTA():
-            _UniffiFfiConverterString.check_lower(value.request_id)
-            _UniffiFfiConverterString.check_lower(value.delta)
-            return
-        if value.is_COMPLETED():
-            _UniffiFfiConverterString.check_lower(value.request_id)
-            return
-        if value.is_FAILED():
-            _UniffiFfiConverterString.check_lower(value.request_id)
-            _UniffiFfiConverterString.check_lower(value.error)
-            return
-        if value.is_DISCONNECTED():
-            _UniffiFfiConverterString.check_lower(value.reason)
-            return
-        raise ValueError(value)
-
-    @staticmethod
-    def write(value, buf):
-        if value.is_CONNECTING():
-            buf.write_i32(1)
-        if value.is_JOINED():
-            buf.write_i32(2)
-            _UniffiFfiConverterString.write(value.node_id, buf)
-        if value.is_MODELS_UPDATED():
-            buf.write_i32(3)
-            _UniffiFfiConverterSequenceTypeModelNative.write(value.models, buf)
-        if value.is_TOKEN_DELTA():
-            buf.write_i32(4)
-            _UniffiFfiConverterString.write(value.request_id, buf)
-            _UniffiFfiConverterString.write(value.delta, buf)
-        if value.is_COMPLETED():
-            buf.write_i32(5)
-            _UniffiFfiConverterString.write(value.request_id, buf)
-        if value.is_FAILED():
-            buf.write_i32(6)
-            _UniffiFfiConverterString.write(value.request_id, buf)
-            _UniffiFfiConverterString.write(value.error, buf)
-        if value.is_DISCONNECTED():
-            buf.write_i32(7)
-            _UniffiFfiConverterString.write(value.reason, buf)
-
-
-
 
 
 # FfiError
@@ -3922,14 +1450,6 @@ _UniffiTempFfiError = FfiError
 
 class FfiError:  # type: ignore
 
-    class InvalidInviteToken(_UniffiTempFfiError):
-        def __repr__(self):
-            return "FfiError.InvalidInviteToken({})".format(repr(str(self)))
-    _UniffiTempFfiError.InvalidInviteToken = InvalidInviteToken # type: ignore
-    class InvalidOwnerKeypair(_UniffiTempFfiError):
-        def __repr__(self):
-            return "FfiError.InvalidOwnerKeypair({})".format(repr(str(self)))
-    _UniffiTempFfiError.InvalidOwnerKeypair = InvalidOwnerKeypair # type: ignore
     class BuildFailed(_UniffiTempFfiError):
         def __repr__(self):
             return "FfiError.BuildFailed({})".format(repr(str(self)))
@@ -3946,34 +1466,14 @@ class FfiError:  # type: ignore
         def __repr__(self):
             return "FfiError.StreamFailed({})".format(repr(str(self)))
     _UniffiTempFfiError.StreamFailed = StreamFailed # type: ignore
-    class Cancelled(_UniffiTempFfiError):
-        def __repr__(self):
-            return "FfiError.Cancelled({})".format(repr(str(self)))
-    _UniffiTempFfiError.Cancelled = Cancelled # type: ignore
-    class ReconnectFailed(_UniffiTempFfiError):
-        def __repr__(self):
-            return "FfiError.ReconnectFailed({})".format(repr(str(self)))
-    _UniffiTempFfiError.ReconnectFailed = ReconnectFailed # type: ignore
     class HostUnavailable(_UniffiTempFfiError):
         def __repr__(self):
             return "FfiError.HostUnavailable({})".format(repr(str(self)))
     _UniffiTempFfiError.HostUnavailable = HostUnavailable # type: ignore
-    class ModelManagementFailed(_UniffiTempFfiError):
-        def __repr__(self):
-            return "FfiError.ModelManagementFailed({})".format(repr(str(self)))
-    _UniffiTempFfiError.ModelManagementFailed = ModelManagementFailed # type: ignore
-    class ServingFailed(_UniffiTempFfiError):
-        def __repr__(self):
-            return "FfiError.ServingFailed({})".format(repr(str(self)))
-    _UniffiTempFfiError.ServingFailed = ServingFailed # type: ignore
     class ServingUnsupported(_UniffiTempFfiError):
         def __repr__(self):
             return "FfiError.ServingUnsupported({})".format(repr(str(self)))
     _UniffiTempFfiError.ServingUnsupported = ServingUnsupported # type: ignore
-    class ConsoleFailed(_UniffiTempFfiError):
-        def __repr__(self):
-            return "FfiError.ConsoleFailed({})".format(repr(str(self)))
-    _UniffiTempFfiError.ConsoleFailed = ConsoleFailed # type: ignore
     class NativeRuntimeFailed(_UniffiTempFfiError):
         def __repr__(self):
             return "FfiError.NativeRuntimeFailed({})".format(repr(str(self)))
@@ -3992,62 +1492,34 @@ class _UniffiFfiConverterTypeFfiError(_UniffiConverterRustBuffer):
     def read(buf):
         variant = buf.read_i32()
         if variant == 1:
-            return FfiError.InvalidInviteToken(
-                _UniffiFfiConverterString.read(buf),
-            )
-        if variant == 2:
-            return FfiError.InvalidOwnerKeypair(
-                _UniffiFfiConverterString.read(buf),
-            )
-        if variant == 3:
             return FfiError.BuildFailed(
                 _UniffiFfiConverterString.read(buf),
             )
-        if variant == 4:
+        if variant == 2:
             return FfiError.JoinFailed(
                 _UniffiFfiConverterString.read(buf),
             )
-        if variant == 5:
+        if variant == 3:
             return FfiError.DiscoveryFailed(
                 _UniffiFfiConverterString.read(buf),
             )
-        if variant == 6:
+        if variant == 4:
             return FfiError.StreamFailed(
                 _UniffiFfiConverterString.read(buf),
             )
-        if variant == 7:
-            return FfiError.Cancelled(
-                _UniffiFfiConverterString.read(buf),
-            )
-        if variant == 8:
-            return FfiError.ReconnectFailed(
-                _UniffiFfiConverterString.read(buf),
-            )
-        if variant == 9:
+        if variant == 5:
             return FfiError.HostUnavailable(
                 _UniffiFfiConverterString.read(buf),
             )
-        if variant == 10:
-            return FfiError.ModelManagementFailed(
-                _UniffiFfiConverterString.read(buf),
-            )
-        if variant == 11:
-            return FfiError.ServingFailed(
-                _UniffiFfiConverterString.read(buf),
-            )
-        if variant == 12:
+        if variant == 6:
             return FfiError.ServingUnsupported(
                 _UniffiFfiConverterString.read(buf),
             )
-        if variant == 13:
-            return FfiError.ConsoleFailed(
-                _UniffiFfiConverterString.read(buf),
-            )
-        if variant == 14:
+        if variant == 7:
             return FfiError.NativeRuntimeFailed(
                 _UniffiFfiConverterString.read(buf),
             )
-        if variant == 15:
+        if variant == 8:
             return FfiError.OpenAiRequestFailed(
                 _UniffiFfiConverterString.read(buf),
             )
@@ -4055,10 +1527,6 @@ class _UniffiFfiConverterTypeFfiError(_UniffiConverterRustBuffer):
 
     @staticmethod
     def check_lower(value):
-        if isinstance(value, FfiError.InvalidInviteToken):
-            return
-        if isinstance(value, FfiError.InvalidOwnerKeypair):
-            return
         if isinstance(value, FfiError.BuildFailed):
             return
         if isinstance(value, FfiError.JoinFailed):
@@ -4067,19 +1535,9 @@ class _UniffiFfiConverterTypeFfiError(_UniffiConverterRustBuffer):
             return
         if isinstance(value, FfiError.StreamFailed):
             return
-        if isinstance(value, FfiError.Cancelled):
-            return
-        if isinstance(value, FfiError.ReconnectFailed):
-            return
         if isinstance(value, FfiError.HostUnavailable):
             return
-        if isinstance(value, FfiError.ModelManagementFailed):
-            return
-        if isinstance(value, FfiError.ServingFailed):
-            return
         if isinstance(value, FfiError.ServingUnsupported):
-            return
-        if isinstance(value, FfiError.ConsoleFailed):
             return
         if isinstance(value, FfiError.NativeRuntimeFailed):
             return
@@ -4088,36 +1546,22 @@ class _UniffiFfiConverterTypeFfiError(_UniffiConverterRustBuffer):
 
     @staticmethod
     def write(value, buf):
-        if isinstance(value, FfiError.InvalidInviteToken):
-            buf.write_i32(1)
-        if isinstance(value, FfiError.InvalidOwnerKeypair):
-            buf.write_i32(2)
         if isinstance(value, FfiError.BuildFailed):
-            buf.write_i32(3)
+            buf.write_i32(1)
         if isinstance(value, FfiError.JoinFailed):
-            buf.write_i32(4)
+            buf.write_i32(2)
         if isinstance(value, FfiError.DiscoveryFailed):
-            buf.write_i32(5)
+            buf.write_i32(3)
         if isinstance(value, FfiError.StreamFailed):
-            buf.write_i32(6)
-        if isinstance(value, FfiError.Cancelled):
-            buf.write_i32(7)
-        if isinstance(value, FfiError.ReconnectFailed):
-            buf.write_i32(8)
+            buf.write_i32(4)
         if isinstance(value, FfiError.HostUnavailable):
-            buf.write_i32(9)
-        if isinstance(value, FfiError.ModelManagementFailed):
-            buf.write_i32(10)
-        if isinstance(value, FfiError.ServingFailed):
-            buf.write_i32(11)
+            buf.write_i32(5)
         if isinstance(value, FfiError.ServingUnsupported):
-            buf.write_i32(12)
-        if isinstance(value, FfiError.ConsoleFailed):
-            buf.write_i32(13)
+            buf.write_i32(6)
         if isinstance(value, FfiError.NativeRuntimeFailed):
-            buf.write_i32(14)
+            buf.write_i32(7)
         if isinstance(value, FfiError.OpenAiRequestFailed):
-            buf.write_i32(15)
+            buf.write_i32(8)
 
 
 
@@ -4158,6 +1602,31 @@ class _UniffiFfiConverterTypeNativeRuntimePruneModeNative(_UniffiConverterRustBu
             buf.write_i32(2)
 
 
+
+class _UniffiFfiConverterOptionalUInt16(_UniffiConverterRustBuffer):
+    @classmethod
+    def check_lower(cls, value):
+        if value is not None:
+            _UniffiFfiConverterUInt16.check_lower(value)
+
+    @classmethod
+    def write(cls, value, buf):
+        if value is None:
+            buf.write_u8(0)
+            return
+
+        buf.write_u8(1)
+        _UniffiFfiConverterUInt16.write(value, buf)
+
+    @classmethod
+    def read(cls, buf):
+        flag = buf.read_u8()
+        if flag == 0:
+            return None
+        elif flag == 1:
+            return _UniffiFfiConverterUInt16.read(buf)
+        else:
+            raise InternalError("Unexpected flag byte for optional type")
 
 
 
@@ -4417,258 +1886,28 @@ class _UniffiFfiConverterTypeOpenAiStreamEventNative(_UniffiConverterRustBuffer)
 
 
 
-
-
-
-
-
-class UnloadTarget:
-    def __init__(self):
-        raise RuntimeError("UnloadTarget cannot be instantiated directly")
-
-    # Each enum variant is a nested class of the enum itself.
-    @dataclass
-    class MODEL:
-
-        def __init__(self, model_id:str):
-            self.model_id = model_id
-
-
-            pass
-
-
-
-
-
-        def __str__(self):
-            return "UnloadTarget.MODEL(model_id={})".format(self.model_id)
-        def __eq__(self, other):
-            if not isinstance(other, UnloadTarget):
-                return NotImplemented
-            if not other.is_MODEL():
-                return False
-            if self.model_id != other.model_id:
-                return False
-            return True
-
-    @dataclass
-    class INSTANCE:
-
-        def __init__(self, instance_id:str):
-            self.instance_id = instance_id
-
-
-            pass
-
-
-
-
-
-        def __str__(self):
-            return "UnloadTarget.INSTANCE(instance_id={})".format(self.instance_id)
-        def __eq__(self, other):
-            if not isinstance(other, UnloadTarget):
-                return NotImplemented
-            if not other.is_INSTANCE():
-                return False
-            if self.instance_id != other.instance_id:
-                return False
-            return True
-
-
-
-    # For each variant, we have `is_NAME` and `is_name` methods for easily checking
-    # whether an instance is that variant.
-    def is_MODEL(self) -> bool:
-        return isinstance(self, UnloadTarget.MODEL)
-    def is_model(self) -> bool:
-        return isinstance(self, UnloadTarget.MODEL)
-    def is_INSTANCE(self) -> bool:
-        return isinstance(self, UnloadTarget.INSTANCE)
-    def is_instance(self) -> bool:
-        return isinstance(self, UnloadTarget.INSTANCE)
-
-
-# Now, a little trick - we make each nested variant class be a subclass of the main
-# enum class, so that method calls and instance checks etc will work intuitively.
-# We might be able to do this a little more neatly with a metaclass, but this'll do.
-UnloadTarget.MODEL = type("UnloadTarget.MODEL", (UnloadTarget.MODEL, UnloadTarget,), {})  # type: ignore
-UnloadTarget.INSTANCE = type("UnloadTarget.INSTANCE", (UnloadTarget.INSTANCE, UnloadTarget,), {})  # type: ignore
-
-
-
-
-class _UniffiFfiConverterTypeUnloadTarget(_UniffiConverterRustBuffer):
-    @staticmethod
-    def read(buf):
-        variant = buf.read_i32()
-        if variant == 1:
-            return UnloadTarget.MODEL(
-                _UniffiFfiConverterString.read(buf),
-            )
-        if variant == 2:
-            return UnloadTarget.INSTANCE(
-                _UniffiFfiConverterString.read(buf),
-            )
-        raise InternalError("Raw enum value doesn't match any cases")
-
-    @staticmethod
-    def check_lower(value):
-        if value.is_MODEL():
-            _UniffiFfiConverterString.check_lower(value.model_id)
-            return
-        if value.is_INSTANCE():
-            _UniffiFfiConverterString.check_lower(value.instance_id)
-            return
-        raise ValueError(value)
-
-    @staticmethod
-    def write(value, buf):
-        if value.is_MODEL():
-            buf.write_i32(1)
-            _UniffiFfiConverterString.write(value.model_id, buf)
-        if value.is_INSTANCE():
-            buf.write_i32(2)
-            _UniffiFfiConverterString.write(value.instance_id, buf)
-
-
-
-
-class ConsoleHandleProtocol(typing.Protocol):
-
-    def stop(self, ) -> None:
-        raise NotImplementedError
-    def url(self, ) -> str:
-        raise NotImplementedError
-
-class ConsoleHandle(ConsoleHandleProtocol):
-
-    _handle: ctypes.c_uint64
-
-    def __init__(self, *args, **kwargs):
-        raise ValueError("This class has no default constructor")
-
-    def __del__(self):
-        # In case of partial initialization of instances.
-        handle = getattr(self, "_handle", None)
-        if handle is not None:
-            _uniffi_rust_call(_UniffiLib.uniffi_meshllm_ffi_fn_free_consolehandle, handle)
-
-    def _uniffi_clone_handle(self):
-        return _uniffi_rust_call(_UniffiLib.uniffi_meshllm_ffi_fn_clone_consolehandle, self._handle)
-
-    # Used by alternative constructors or any methods which return this type.
+class _UniffiFfiConverterSequenceTypeModelNative(_UniffiConverterRustBuffer):
     @classmethod
-    def _uniffi_make_instance(cls, handle):
-        # Lightly yucky way to bypass the usual __init__ logic
-        # and just create a new instance with the required handle.
-        inst = cls.__new__(cls)
-        inst._handle = handle
-        return inst
-    def stop(self, ) -> None:
-        _uniffi_lowered_args = (
-            self._uniffi_clone_handle(),
-        )
-        _uniffi_lift_return = lambda val: None
-        _uniffi_error_converter = _UniffiFfiConverterTypeFfiError
-        _uniffi_ffi_result = _uniffi_rust_call_with_error(
-            _uniffi_error_converter,
-            _UniffiLib.uniffi_meshllm_ffi_fn_method_consolehandle_stop,
-            *_uniffi_lowered_args,
-        )
-        return _uniffi_lift_return(_uniffi_ffi_result)
-    def url(self, ) -> str:
-        _uniffi_lowered_args = (
-            self._uniffi_clone_handle(),
-        )
-        _uniffi_lift_return = _UniffiFfiConverterString.lift
-        _uniffi_error_converter = None
-        _uniffi_ffi_result = _uniffi_rust_call_with_error(
-            _uniffi_error_converter,
-            _UniffiLib.uniffi_meshllm_ffi_fn_method_consolehandle_url,
-            *_uniffi_lowered_args,
-        )
-        return _uniffi_lift_return(_uniffi_ffi_result)
-
-
-
-
-
-class _UniffiFfiConverterTypeConsoleHandle:
-    @staticmethod
-    def lift(value: int) -> ConsoleHandle:
-        return ConsoleHandle._uniffi_make_instance(value)
-
-    @staticmethod
-    def check_lower(value: ConsoleHandle):
-        if not isinstance(value, ConsoleHandle):
-            raise TypeError("Expected ConsoleHandle instance, {} found".format(type(value).__name__))
-
-    @staticmethod
-    def lower(value: ConsoleHandle) -> ctypes.c_uint64:
-        return value._uniffi_clone_handle()
+    def check_lower(cls, value):
+        for item in value:
+            _UniffiFfiConverterTypeModelNative.check_lower(item)
 
     @classmethod
-    def read(cls, buf: _UniffiRustBuffer) -> ConsoleHandle:
-        ptr = buf.read_u64()
-        if ptr == 0:
-            raise InternalError("Raw handle value was null")
-        return cls.lift(ptr)
+    def write(cls, value, buf):
+        items = len(value)
+        buf.write_i32(items)
+        for item in value:
+            _UniffiFfiConverterTypeModelNative.write(item, buf)
 
     @classmethod
-    def write(cls, value: ConsoleHandle, buf: _UniffiRustBuffer):
-        buf.write_u64(cls.lower(value))
+    def read(cls, buf):
+        count = buf.read_i32()
+        if count < 0:
+            raise InternalError("Unexpected negative sequence length")
 
-
-
-
-class EventListener(typing.Protocol):
-
-    def on_event(self, event: ClientEvent) -> None:
-        raise NotImplementedError
-# Put all the bits inside a class to keep the top-level namespace clean
-class _UniffiTraitImplEventListenerImpl:
-    # For each method, generate a callback function to pass to Rust
-
-    @_UNIFFI_CALLBACK_INTERFACE_MESH_FFI_EVENT_LISTENER_METHOD0
-    def on_event(
-            uniffi_handle,
-            event,
-            uniffi_out_return,
-            uniffi_call_status_ptr,
-        ):
-        uniffi_obj = _UniffiFfiConverterTypeEventListener._handle_map.get(uniffi_handle)
-        def make_call():
-            uniffi_args = (_UniffiFfiConverterTypeClientEvent.lift(event), )
-            uniffi_method = uniffi_obj.on_event
-            return uniffi_method(*uniffi_args)
-        write_return_value = lambda v: None
-        _uniffi_trait_interface_call(
-                uniffi_call_status_ptr.contents,
-                make_call,
-                write_return_value,
-        )
-
-    @_UNIFFI_CALLBACK_INTERFACE_FREE_MESH_FFI_EVENT_LISTENER
-    def _uniffi_free(uniffi_handle):
-        _UniffiFfiConverterTypeEventListener._handle_map.remove(uniffi_handle)
-
-    @_UNIFFI_CALLBACK_INTERFACE_CLONE_MESH_FFI_EVENT_LISTENER
-    def _uniffi_clone(uniffi_handle):
-        return _UniffiFfiConverterTypeEventListener._handle_map.clone(uniffi_handle)
-
-    # Generate the FFI VTable.  This has a field for each callback interface method.
-    _uniffi_vtable = _UniffiVTableCallbackInterfaceMeshFfiEventListener(
-        _uniffi_free,
-        _uniffi_clone,
-        on_event,
-    )
-    # Send Rust a pointer to the VTable.  Note: this means we need to keep the struct alive forever,
-    # or else bad things will happen when Rust tries to access it.
-    _UniffiLib.uniffi_meshllm_ffi_fn_init_callback_vtable_eventlistener(ctypes.byref(_uniffi_vtable))
-
-# The _UniffiConverter which transforms the Callbacks in to Handles to pass to Rust.
-_UniffiFfiConverterTypeEventListener = _UniffiCallbackInterfaceFfiConverter()
+        return [
+            _UniffiFfiConverterTypeModelNative.read(buf) for i in range(count)
+        ]
 
 
 
@@ -4722,335 +1961,23 @@ class _UniffiTraitImplOpenAiStreamListenerImpl:
 _UniffiFfiConverterTypeOpenAiStreamListener = _UniffiCallbackInterfaceFfiConverter()
 
 
-class MeshClientHandleProtocol(typing.Protocol):
-
-    def cancel(self, request_id: str) -> None:
-        raise NotImplementedError
-    def chat(self, request: ChatRequestNative,listener: EventListener) -> str:
-        raise NotImplementedError
-    def inference_list_models(self, ) -> typing.List[ModelNative]:
-        raise NotImplementedError
-    def openai_request(self, path: str,body_json: str) -> OpenAiResponseNative:
-        raise NotImplementedError
-    def openai_stream(self, path: str,body_json: str,listener: OpenAiStreamListener) -> str:
-        raise NotImplementedError
-    def reconnect(self, ) -> None:
-        raise NotImplementedError
-    def responses(self, request: ResponsesRequestNative,listener: EventListener) -> str:
-        raise NotImplementedError
-    def start(self, ) -> None:
-        raise NotImplementedError
-    def status(self, ) -> ClientStatus:
-        raise NotImplementedError
-    def stop(self, ) -> None:
-        raise NotImplementedError
-
-class MeshClientHandle(MeshClientHandleProtocol):
-
-    _handle: ctypes.c_uint64
-
-    def __init__(self, *args, **kwargs):
-        raise ValueError("This class has no default constructor")
-
-    def __del__(self):
-        # In case of partial initialization of instances.
-        handle = getattr(self, "_handle", None)
-        if handle is not None:
-            _uniffi_rust_call(_UniffiLib.uniffi_meshllm_ffi_fn_free_meshclienthandle, handle)
-
-    def _uniffi_clone_handle(self):
-        return _uniffi_rust_call(_UniffiLib.uniffi_meshllm_ffi_fn_clone_meshclienthandle, self._handle)
-
-    # Used by alternative constructors or any methods which return this type.
-    @classmethod
-    def _uniffi_make_instance(cls, handle):
-        # Lightly yucky way to bypass the usual __init__ logic
-        # and just create a new instance with the required handle.
-        inst = cls.__new__(cls)
-        inst._handle = handle
-        return inst
-    def cancel(self, request_id: str) -> None:
-
-        _UniffiFfiConverterString.check_lower(request_id)
-        _uniffi_lowered_args = (
-            self._uniffi_clone_handle(),
-            _UniffiFfiConverterString.lower(request_id),
-        )
-        _uniffi_lift_return = lambda val: None
-        _uniffi_error_converter = None
-        _uniffi_ffi_result = _uniffi_rust_call_with_error(
-            _uniffi_error_converter,
-            _UniffiLib.uniffi_meshllm_ffi_fn_method_meshclienthandle_cancel,
-            *_uniffi_lowered_args,
-        )
-        return _uniffi_lift_return(_uniffi_ffi_result)
-    def chat(self, request: ChatRequestNative,listener: EventListener) -> str:
-
-        _UniffiFfiConverterTypeChatRequestNative.check_lower(request)
-
-        _UniffiFfiConverterTypeEventListener.check_lower(listener)
-        _uniffi_lowered_args = (
-            self._uniffi_clone_handle(),
-            _UniffiFfiConverterTypeChatRequestNative.lower(request),
-            _UniffiFfiConverterTypeEventListener.lower(listener),
-        )
-        _uniffi_lift_return = _UniffiFfiConverterString.lift
-        _uniffi_error_converter = _UniffiFfiConverterTypeFfiError
-        _uniffi_ffi_result = _uniffi_rust_call_with_error(
-            _uniffi_error_converter,
-            _UniffiLib.uniffi_meshllm_ffi_fn_method_meshclienthandle_chat,
-            *_uniffi_lowered_args,
-        )
-        return _uniffi_lift_return(_uniffi_ffi_result)
-    def inference_list_models(self, ) -> typing.List[ModelNative]:
-        _uniffi_lowered_args = (
-            self._uniffi_clone_handle(),
-        )
-        _uniffi_lift_return = _UniffiFfiConverterSequenceTypeModelNative.lift
-        _uniffi_error_converter = _UniffiFfiConverterTypeFfiError
-        _uniffi_ffi_result = _uniffi_rust_call_with_error(
-            _uniffi_error_converter,
-            _UniffiLib.uniffi_meshllm_ffi_fn_method_meshclienthandle_inference_list_models,
-            *_uniffi_lowered_args,
-        )
-        return _uniffi_lift_return(_uniffi_ffi_result)
-    def openai_request(self, path: str,body_json: str) -> OpenAiResponseNative:
-
-        _UniffiFfiConverterString.check_lower(path)
-
-        _UniffiFfiConverterString.check_lower(body_json)
-        _uniffi_lowered_args = (
-            self._uniffi_clone_handle(),
-            _UniffiFfiConverterString.lower(path),
-            _UniffiFfiConverterString.lower(body_json),
-        )
-        _uniffi_lift_return = _UniffiFfiConverterTypeOpenAiResponseNative.lift
-        _uniffi_error_converter = _UniffiFfiConverterTypeFfiError
-        _uniffi_ffi_result = _uniffi_rust_call_with_error(
-            _uniffi_error_converter,
-            _UniffiLib.uniffi_meshllm_ffi_fn_method_meshclienthandle_openai_request,
-            *_uniffi_lowered_args,
-        )
-        return _uniffi_lift_return(_uniffi_ffi_result)
-    def openai_stream(self, path: str,body_json: str,listener: OpenAiStreamListener) -> str:
-
-        _UniffiFfiConverterString.check_lower(path)
-
-        _UniffiFfiConverterString.check_lower(body_json)
-
-        _UniffiFfiConverterTypeOpenAiStreamListener.check_lower(listener)
-        _uniffi_lowered_args = (
-            self._uniffi_clone_handle(),
-            _UniffiFfiConverterString.lower(path),
-            _UniffiFfiConverterString.lower(body_json),
-            _UniffiFfiConverterTypeOpenAiStreamListener.lower(listener),
-        )
-        _uniffi_lift_return = _UniffiFfiConverterString.lift
-        _uniffi_error_converter = _UniffiFfiConverterTypeFfiError
-        _uniffi_ffi_result = _uniffi_rust_call_with_error(
-            _uniffi_error_converter,
-            _UniffiLib.uniffi_meshllm_ffi_fn_method_meshclienthandle_openai_stream,
-            *_uniffi_lowered_args,
-        )
-        return _uniffi_lift_return(_uniffi_ffi_result)
-    def reconnect(self, ) -> None:
-        _uniffi_lowered_args = (
-            self._uniffi_clone_handle(),
-        )
-        _uniffi_lift_return = lambda val: None
-        _uniffi_error_converter = _UniffiFfiConverterTypeFfiError
-        _uniffi_ffi_result = _uniffi_rust_call_with_error(
-            _uniffi_error_converter,
-            _UniffiLib.uniffi_meshllm_ffi_fn_method_meshclienthandle_reconnect,
-            *_uniffi_lowered_args,
-        )
-        return _uniffi_lift_return(_uniffi_ffi_result)
-    def responses(self, request: ResponsesRequestNative,listener: EventListener) -> str:
-
-        _UniffiFfiConverterTypeResponsesRequestNative.check_lower(request)
-
-        _UniffiFfiConverterTypeEventListener.check_lower(listener)
-        _uniffi_lowered_args = (
-            self._uniffi_clone_handle(),
-            _UniffiFfiConverterTypeResponsesRequestNative.lower(request),
-            _UniffiFfiConverterTypeEventListener.lower(listener),
-        )
-        _uniffi_lift_return = _UniffiFfiConverterString.lift
-        _uniffi_error_converter = _UniffiFfiConverterTypeFfiError
-        _uniffi_ffi_result = _uniffi_rust_call_with_error(
-            _uniffi_error_converter,
-            _UniffiLib.uniffi_meshllm_ffi_fn_method_meshclienthandle_responses,
-            *_uniffi_lowered_args,
-        )
-        return _uniffi_lift_return(_uniffi_ffi_result)
-    def start(self, ) -> None:
-        _uniffi_lowered_args = (
-            self._uniffi_clone_handle(),
-        )
-        _uniffi_lift_return = lambda val: None
-        _uniffi_error_converter = _UniffiFfiConverterTypeFfiError
-        _uniffi_ffi_result = _uniffi_rust_call_with_error(
-            _uniffi_error_converter,
-            _UniffiLib.uniffi_meshllm_ffi_fn_method_meshclienthandle_start,
-            *_uniffi_lowered_args,
-        )
-        return _uniffi_lift_return(_uniffi_ffi_result)
-    def status(self, ) -> ClientStatus:
-        _uniffi_lowered_args = (
-            self._uniffi_clone_handle(),
-        )
-        _uniffi_lift_return = _UniffiFfiConverterTypeClientStatus.lift
-        _uniffi_error_converter = None
-        _uniffi_ffi_result = _uniffi_rust_call_with_error(
-            _uniffi_error_converter,
-            _UniffiLib.uniffi_meshllm_ffi_fn_method_meshclienthandle_status,
-            *_uniffi_lowered_args,
-        )
-        return _uniffi_lift_return(_uniffi_ffi_result)
-    def stop(self, ) -> None:
-        _uniffi_lowered_args = (
-            self._uniffi_clone_handle(),
-        )
-        _uniffi_lift_return = lambda val: None
-        _uniffi_error_converter = None
-        _uniffi_ffi_result = _uniffi_rust_call_with_error(
-            _uniffi_error_converter,
-            _UniffiLib.uniffi_meshllm_ffi_fn_method_meshclienthandle_stop,
-            *_uniffi_lowered_args,
-        )
-        return _uniffi_lift_return(_uniffi_ffi_result)
-
-
-
-
-
-class _UniffiFfiConverterTypeMeshClientHandle:
-    @staticmethod
-    def lift(value: int) -> MeshClientHandle:
-        return MeshClientHandle._uniffi_make_instance(value)
-
-    @staticmethod
-    def check_lower(value: MeshClientHandle):
-        if not isinstance(value, MeshClientHandle):
-            raise TypeError("Expected MeshClientHandle instance, {} found".format(type(value).__name__))
-
-    @staticmethod
-    def lower(value: MeshClientHandle) -> ctypes.c_uint64:
-        return value._uniffi_clone_handle()
-
-    @classmethod
-    def read(cls, buf: _UniffiRustBuffer) -> MeshClientHandle:
-        ptr = buf.read_u64()
-        if ptr == 0:
-            raise InternalError("Raw handle value was null")
-        return cls.lift(ptr)
-
-    @classmethod
-    def write(cls, value: MeshClientHandle, buf: _UniffiRustBuffer):
-        buf.write_u64(cls.lower(value))
-
-class _UniffiFfiConverterSequenceTypeInstalledModel(_UniffiConverterRustBuffer):
-    @classmethod
-    def check_lower(cls, value):
-        for item in value:
-            _UniffiFfiConverterTypeInstalledModel.check_lower(item)
-
-    @classmethod
-    def write(cls, value, buf):
-        items = len(value)
-        buf.write_i32(items)
-        for item in value:
-            _UniffiFfiConverterTypeInstalledModel.write(item, buf)
-
-    @classmethod
-    def read(cls, buf):
-        count = buf.read_i32()
-        if count < 0:
-            raise InternalError("Unexpected negative sequence length")
-
-        return [
-            _UniffiFfiConverterTypeInstalledModel.read(buf) for i in range(count)
-        ]
-
-class _UniffiFfiConverterSequenceTypeModelSummary(_UniffiConverterRustBuffer):
-    @classmethod
-    def check_lower(cls, value):
-        for item in value:
-            _UniffiFfiConverterTypeModelSummary.check_lower(item)
-
-    @classmethod
-    def write(cls, value, buf):
-        items = len(value)
-        buf.write_i32(items)
-        for item in value:
-            _UniffiFfiConverterTypeModelSummary.write(item, buf)
-
-    @classmethod
-    def read(cls, buf):
-        count = buf.read_i32()
-        if count < 0:
-            raise InternalError("Unexpected negative sequence length")
-
-        return [
-            _UniffiFfiConverterTypeModelSummary.read(buf) for i in range(count)
-        ]
-
-
 class MeshNodeHandleProtocol(typing.Protocol):
 
     def cancel(self, request_id: str) -> None:
         raise NotImplementedError
-    def chat(self, request: ChatRequestNative,listener: EventListener) -> str:
-        raise NotImplementedError
-    def cleanup_models(self, policy: CleanupPolicy) -> CleanupResult:
-        raise NotImplementedError
-    def delete_model(self, model_ref: str,options: DeleteModelOptions) -> DeleteModelResult:
-        raise NotImplementedError
-    def download_model(self, model_ref: str) -> DownloadedModel:
-        raise NotImplementedError
     def inference_list_models(self, ) -> typing.List[ModelNative]:
         raise NotImplementedError
-    def installed_models(self, ) -> typing.List[InstalledModel]:
-        raise NotImplementedError
-    def load_serving_model(self, model_ref: str,options: LoadModelOptions) -> ServedModel:
-        raise NotImplementedError
-    def model_cache_status(self, ) -> ModelCacheStatus:
+    def join_token(self, token: str) -> None:
         raise NotImplementedError
     def openai_request(self, path: str,body_json: str) -> OpenAiResponseNative:
         raise NotImplementedError
     def openai_stream(self, path: str,body_json: str,listener: OpenAiStreamListener) -> str:
         raise NotImplementedError
-    def prune_derived_cache(self, policy: PrunePolicy) -> PruneResult:
-        raise NotImplementedError
-    def recommended_models(self, ) -> typing.List[ModelSummary]:
-        raise NotImplementedError
-    def reconnect(self, ) -> None:
-        raise NotImplementedError
-    def responses(self, request: ResponsesRequestNative,listener: EventListener) -> str:
-        raise NotImplementedError
-    def search_models(self, query: ModelSearchQuery) -> typing.List[ModelSummary]:
-        raise NotImplementedError
-    def served_models(self, ) -> typing.List[ServedModel]:
-        raise NotImplementedError
-    def serving_status(self, ) -> ServingStatus:
-        raise NotImplementedError
-    def set_device_policy(self, policy: DevicePolicy) -> None:
-        raise NotImplementedError
-    def show_model(self, model_ref: str) -> ModelDetails:
-        raise NotImplementedError
     def start(self, ) -> None:
         raise NotImplementedError
-    def start_console(self, options: ConsoleOptionsNative) -> ConsoleHandle:
-        raise NotImplementedError
-    def status(self, ) -> ClientStatus:
+    def status(self, ) -> NodeStatusNative:
         raise NotImplementedError
     def stop(self, ) -> None:
-        raise NotImplementedError
-    def unload_serving_instance(self, instance_id: str,options: UnloadModelOptions) -> None:
-        raise NotImplementedError
-    def unload_serving_model(self, target: UnloadTarget,options: UnloadModelOptions) -> None:
-        raise NotImplementedError
-    def unload_serving_model_by_id(self, model_id: str,options: UnloadModelOptions) -> None:
         raise NotImplementedError
 
 class MeshNodeHandle(MeshNodeHandleProtocol):
@@ -5085,76 +2012,10 @@ class MeshNodeHandle(MeshNodeHandleProtocol):
             _UniffiFfiConverterString.lower(request_id),
         )
         _uniffi_lift_return = lambda val: None
-        _uniffi_error_converter = _UniffiFfiConverterTypeFfiError
+        _uniffi_error_converter = None
         _uniffi_ffi_result = _uniffi_rust_call_with_error(
             _uniffi_error_converter,
             _UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_cancel,
-            *_uniffi_lowered_args,
-        )
-        return _uniffi_lift_return(_uniffi_ffi_result)
-    def chat(self, request: ChatRequestNative,listener: EventListener) -> str:
-
-        _UniffiFfiConverterTypeChatRequestNative.check_lower(request)
-
-        _UniffiFfiConverterTypeEventListener.check_lower(listener)
-        _uniffi_lowered_args = (
-            self._uniffi_clone_handle(),
-            _UniffiFfiConverterTypeChatRequestNative.lower(request),
-            _UniffiFfiConverterTypeEventListener.lower(listener),
-        )
-        _uniffi_lift_return = _UniffiFfiConverterString.lift
-        _uniffi_error_converter = _UniffiFfiConverterTypeFfiError
-        _uniffi_ffi_result = _uniffi_rust_call_with_error(
-            _uniffi_error_converter,
-            _UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_chat,
-            *_uniffi_lowered_args,
-        )
-        return _uniffi_lift_return(_uniffi_ffi_result)
-    def cleanup_models(self, policy: CleanupPolicy) -> CleanupResult:
-
-        _UniffiFfiConverterTypeCleanupPolicy.check_lower(policy)
-        _uniffi_lowered_args = (
-            self._uniffi_clone_handle(),
-            _UniffiFfiConverterTypeCleanupPolicy.lower(policy),
-        )
-        _uniffi_lift_return = _UniffiFfiConverterTypeCleanupResult.lift
-        _uniffi_error_converter = _UniffiFfiConverterTypeFfiError
-        _uniffi_ffi_result = _uniffi_rust_call_with_error(
-            _uniffi_error_converter,
-            _UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_cleanup_models,
-            *_uniffi_lowered_args,
-        )
-        return _uniffi_lift_return(_uniffi_ffi_result)
-    def delete_model(self, model_ref: str,options: DeleteModelOptions) -> DeleteModelResult:
-
-        _UniffiFfiConverterString.check_lower(model_ref)
-
-        _UniffiFfiConverterTypeDeleteModelOptions.check_lower(options)
-        _uniffi_lowered_args = (
-            self._uniffi_clone_handle(),
-            _UniffiFfiConverterString.lower(model_ref),
-            _UniffiFfiConverterTypeDeleteModelOptions.lower(options),
-        )
-        _uniffi_lift_return = _UniffiFfiConverterTypeDeleteModelResult.lift
-        _uniffi_error_converter = _UniffiFfiConverterTypeFfiError
-        _uniffi_ffi_result = _uniffi_rust_call_with_error(
-            _uniffi_error_converter,
-            _UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_delete_model,
-            *_uniffi_lowered_args,
-        )
-        return _uniffi_lift_return(_uniffi_ffi_result)
-    def download_model(self, model_ref: str) -> DownloadedModel:
-
-        _UniffiFfiConverterString.check_lower(model_ref)
-        _uniffi_lowered_args = (
-            self._uniffi_clone_handle(),
-            _UniffiFfiConverterString.lower(model_ref),
-        )
-        _uniffi_lift_return = _UniffiFfiConverterTypeDownloadedModel.lift
-        _uniffi_error_converter = _UniffiFfiConverterTypeFfiError
-        _uniffi_ffi_result = _uniffi_rust_call_with_error(
-            _uniffi_error_converter,
-            _UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_download_model,
             *_uniffi_lowered_args,
         )
         return _uniffi_lift_return(_uniffi_ffi_result)
@@ -5170,45 +2031,18 @@ class MeshNodeHandle(MeshNodeHandleProtocol):
             *_uniffi_lowered_args,
         )
         return _uniffi_lift_return(_uniffi_ffi_result)
-    def installed_models(self, ) -> typing.List[InstalledModel]:
-        _uniffi_lowered_args = (
-            self._uniffi_clone_handle(),
-        )
-        _uniffi_lift_return = _UniffiFfiConverterSequenceTypeInstalledModel.lift
-        _uniffi_error_converter = _UniffiFfiConverterTypeFfiError
-        _uniffi_ffi_result = _uniffi_rust_call_with_error(
-            _uniffi_error_converter,
-            _UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_installed_models,
-            *_uniffi_lowered_args,
-        )
-        return _uniffi_lift_return(_uniffi_ffi_result)
-    def load_serving_model(self, model_ref: str,options: LoadModelOptions) -> ServedModel:
+    def join_token(self, token: str) -> None:
 
-        _UniffiFfiConverterString.check_lower(model_ref)
-
-        _UniffiFfiConverterTypeLoadModelOptions.check_lower(options)
+        _UniffiFfiConverterString.check_lower(token)
         _uniffi_lowered_args = (
             self._uniffi_clone_handle(),
-            _UniffiFfiConverterString.lower(model_ref),
-            _UniffiFfiConverterTypeLoadModelOptions.lower(options),
+            _UniffiFfiConverterString.lower(token),
         )
-        _uniffi_lift_return = _UniffiFfiConverterTypeServedModel.lift
+        _uniffi_lift_return = lambda val: None
         _uniffi_error_converter = _UniffiFfiConverterTypeFfiError
         _uniffi_ffi_result = _uniffi_rust_call_with_error(
             _uniffi_error_converter,
-            _UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_load_serving_model,
-            *_uniffi_lowered_args,
-        )
-        return _uniffi_lift_return(_uniffi_ffi_result)
-    def model_cache_status(self, ) -> ModelCacheStatus:
-        _uniffi_lowered_args = (
-            self._uniffi_clone_handle(),
-        )
-        _uniffi_lift_return = _UniffiFfiConverterTypeModelCacheStatus.lift
-        _uniffi_error_converter = _UniffiFfiConverterTypeFfiError
-        _uniffi_ffi_result = _uniffi_rust_call_with_error(
-            _uniffi_error_converter,
-            _UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_model_cache_status,
+            _UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_join_token,
             *_uniffi_lowered_args,
         )
         return _uniffi_lift_return(_uniffi_ffi_result)
@@ -5251,132 +2085,6 @@ class MeshNodeHandle(MeshNodeHandleProtocol):
             *_uniffi_lowered_args,
         )
         return _uniffi_lift_return(_uniffi_ffi_result)
-    def prune_derived_cache(self, policy: PrunePolicy) -> PruneResult:
-
-        _UniffiFfiConverterTypePrunePolicy.check_lower(policy)
-        _uniffi_lowered_args = (
-            self._uniffi_clone_handle(),
-            _UniffiFfiConverterTypePrunePolicy.lower(policy),
-        )
-        _uniffi_lift_return = _UniffiFfiConverterTypePruneResult.lift
-        _uniffi_error_converter = _UniffiFfiConverterTypeFfiError
-        _uniffi_ffi_result = _uniffi_rust_call_with_error(
-            _uniffi_error_converter,
-            _UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_prune_derived_cache,
-            *_uniffi_lowered_args,
-        )
-        return _uniffi_lift_return(_uniffi_ffi_result)
-    def recommended_models(self, ) -> typing.List[ModelSummary]:
-        _uniffi_lowered_args = (
-            self._uniffi_clone_handle(),
-        )
-        _uniffi_lift_return = _UniffiFfiConverterSequenceTypeModelSummary.lift
-        _uniffi_error_converter = _UniffiFfiConverterTypeFfiError
-        _uniffi_ffi_result = _uniffi_rust_call_with_error(
-            _uniffi_error_converter,
-            _UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_recommended_models,
-            *_uniffi_lowered_args,
-        )
-        return _uniffi_lift_return(_uniffi_ffi_result)
-    def reconnect(self, ) -> None:
-        _uniffi_lowered_args = (
-            self._uniffi_clone_handle(),
-        )
-        _uniffi_lift_return = lambda val: None
-        _uniffi_error_converter = _UniffiFfiConverterTypeFfiError
-        _uniffi_ffi_result = _uniffi_rust_call_with_error(
-            _uniffi_error_converter,
-            _UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_reconnect,
-            *_uniffi_lowered_args,
-        )
-        return _uniffi_lift_return(_uniffi_ffi_result)
-    def responses(self, request: ResponsesRequestNative,listener: EventListener) -> str:
-
-        _UniffiFfiConverterTypeResponsesRequestNative.check_lower(request)
-
-        _UniffiFfiConverterTypeEventListener.check_lower(listener)
-        _uniffi_lowered_args = (
-            self._uniffi_clone_handle(),
-            _UniffiFfiConverterTypeResponsesRequestNative.lower(request),
-            _UniffiFfiConverterTypeEventListener.lower(listener),
-        )
-        _uniffi_lift_return = _UniffiFfiConverterString.lift
-        _uniffi_error_converter = _UniffiFfiConverterTypeFfiError
-        _uniffi_ffi_result = _uniffi_rust_call_with_error(
-            _uniffi_error_converter,
-            _UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_responses,
-            *_uniffi_lowered_args,
-        )
-        return _uniffi_lift_return(_uniffi_ffi_result)
-    def search_models(self, query: ModelSearchQuery) -> typing.List[ModelSummary]:
-
-        _UniffiFfiConverterTypeModelSearchQuery.check_lower(query)
-        _uniffi_lowered_args = (
-            self._uniffi_clone_handle(),
-            _UniffiFfiConverterTypeModelSearchQuery.lower(query),
-        )
-        _uniffi_lift_return = _UniffiFfiConverterSequenceTypeModelSummary.lift
-        _uniffi_error_converter = _UniffiFfiConverterTypeFfiError
-        _uniffi_ffi_result = _uniffi_rust_call_with_error(
-            _uniffi_error_converter,
-            _UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_search_models,
-            *_uniffi_lowered_args,
-        )
-        return _uniffi_lift_return(_uniffi_ffi_result)
-    def served_models(self, ) -> typing.List[ServedModel]:
-        _uniffi_lowered_args = (
-            self._uniffi_clone_handle(),
-        )
-        _uniffi_lift_return = _UniffiFfiConverterSequenceTypeServedModel.lift
-        _uniffi_error_converter = _UniffiFfiConverterTypeFfiError
-        _uniffi_ffi_result = _uniffi_rust_call_with_error(
-            _uniffi_error_converter,
-            _UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_served_models,
-            *_uniffi_lowered_args,
-        )
-        return _uniffi_lift_return(_uniffi_ffi_result)
-    def serving_status(self, ) -> ServingStatus:
-        _uniffi_lowered_args = (
-            self._uniffi_clone_handle(),
-        )
-        _uniffi_lift_return = _UniffiFfiConverterTypeServingStatus.lift
-        _uniffi_error_converter = _UniffiFfiConverterTypeFfiError
-        _uniffi_ffi_result = _uniffi_rust_call_with_error(
-            _uniffi_error_converter,
-            _UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_serving_status,
-            *_uniffi_lowered_args,
-        )
-        return _uniffi_lift_return(_uniffi_ffi_result)
-    def set_device_policy(self, policy: DevicePolicy) -> None:
-
-        _UniffiFfiConverterTypeDevicePolicy.check_lower(policy)
-        _uniffi_lowered_args = (
-            self._uniffi_clone_handle(),
-            _UniffiFfiConverterTypeDevicePolicy.lower(policy),
-        )
-        _uniffi_lift_return = lambda val: None
-        _uniffi_error_converter = _UniffiFfiConverterTypeFfiError
-        _uniffi_ffi_result = _uniffi_rust_call_with_error(
-            _uniffi_error_converter,
-            _UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_set_device_policy,
-            *_uniffi_lowered_args,
-        )
-        return _uniffi_lift_return(_uniffi_ffi_result)
-    def show_model(self, model_ref: str) -> ModelDetails:
-
-        _UniffiFfiConverterString.check_lower(model_ref)
-        _uniffi_lowered_args = (
-            self._uniffi_clone_handle(),
-            _UniffiFfiConverterString.lower(model_ref),
-        )
-        _uniffi_lift_return = _UniffiFfiConverterTypeModelDetails.lift
-        _uniffi_error_converter = _UniffiFfiConverterTypeFfiError
-        _uniffi_ffi_result = _uniffi_rust_call_with_error(
-            _uniffi_error_converter,
-            _UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_show_model,
-            *_uniffi_lowered_args,
-        )
-        return _uniffi_lift_return(_uniffi_ffi_result)
     def start(self, ) -> None:
         _uniffi_lowered_args = (
             self._uniffi_clone_handle(),
@@ -5389,27 +2097,12 @@ class MeshNodeHandle(MeshNodeHandleProtocol):
             *_uniffi_lowered_args,
         )
         return _uniffi_lift_return(_uniffi_ffi_result)
-    def start_console(self, options: ConsoleOptionsNative) -> ConsoleHandle:
-
-        _UniffiFfiConverterTypeConsoleOptionsNative.check_lower(options)
+    def status(self, ) -> NodeStatusNative:
         _uniffi_lowered_args = (
             self._uniffi_clone_handle(),
-            _UniffiFfiConverterTypeConsoleOptionsNative.lower(options),
         )
-        _uniffi_lift_return = _UniffiFfiConverterTypeConsoleHandle.lift
+        _uniffi_lift_return = _UniffiFfiConverterTypeNodeStatusNative.lift
         _uniffi_error_converter = _UniffiFfiConverterTypeFfiError
-        _uniffi_ffi_result = _uniffi_rust_call_with_error(
-            _uniffi_error_converter,
-            _UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_start_console,
-            *_uniffi_lowered_args,
-        )
-        return _uniffi_lift_return(_uniffi_ffi_result)
-    def status(self, ) -> ClientStatus:
-        _uniffi_lowered_args = (
-            self._uniffi_clone_handle(),
-        )
-        _uniffi_lift_return = _UniffiFfiConverterTypeClientStatus.lift
-        _uniffi_error_converter = None
         _uniffi_ffi_result = _uniffi_rust_call_with_error(
             _uniffi_error_converter,
             _UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_status,
@@ -5425,60 +2118,6 @@ class MeshNodeHandle(MeshNodeHandleProtocol):
         _uniffi_ffi_result = _uniffi_rust_call_with_error(
             _uniffi_error_converter,
             _UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_stop,
-            *_uniffi_lowered_args,
-        )
-        return _uniffi_lift_return(_uniffi_ffi_result)
-    def unload_serving_instance(self, instance_id: str,options: UnloadModelOptions) -> None:
-
-        _UniffiFfiConverterString.check_lower(instance_id)
-
-        _UniffiFfiConverterTypeUnloadModelOptions.check_lower(options)
-        _uniffi_lowered_args = (
-            self._uniffi_clone_handle(),
-            _UniffiFfiConverterString.lower(instance_id),
-            _UniffiFfiConverterTypeUnloadModelOptions.lower(options),
-        )
-        _uniffi_lift_return = lambda val: None
-        _uniffi_error_converter = _UniffiFfiConverterTypeFfiError
-        _uniffi_ffi_result = _uniffi_rust_call_with_error(
-            _uniffi_error_converter,
-            _UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_unload_serving_instance,
-            *_uniffi_lowered_args,
-        )
-        return _uniffi_lift_return(_uniffi_ffi_result)
-    def unload_serving_model(self, target: UnloadTarget,options: UnloadModelOptions) -> None:
-
-        _UniffiFfiConverterTypeUnloadTarget.check_lower(target)
-
-        _UniffiFfiConverterTypeUnloadModelOptions.check_lower(options)
-        _uniffi_lowered_args = (
-            self._uniffi_clone_handle(),
-            _UniffiFfiConverterTypeUnloadTarget.lower(target),
-            _UniffiFfiConverterTypeUnloadModelOptions.lower(options),
-        )
-        _uniffi_lift_return = lambda val: None
-        _uniffi_error_converter = _UniffiFfiConverterTypeFfiError
-        _uniffi_ffi_result = _uniffi_rust_call_with_error(
-            _uniffi_error_converter,
-            _UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_unload_serving_model,
-            *_uniffi_lowered_args,
-        )
-        return _uniffi_lift_return(_uniffi_ffi_result)
-    def unload_serving_model_by_id(self, model_id: str,options: UnloadModelOptions) -> None:
-
-        _UniffiFfiConverterString.check_lower(model_id)
-
-        _UniffiFfiConverterTypeUnloadModelOptions.check_lower(options)
-        _uniffi_lowered_args = (
-            self._uniffi_clone_handle(),
-            _UniffiFfiConverterString.lower(model_id),
-            _UniffiFfiConverterTypeUnloadModelOptions.lower(options),
-        )
-        _uniffi_lift_return = lambda val: None
-        _uniffi_error_converter = _UniffiFfiConverterTypeFfiError
-        _uniffi_ffi_result = _uniffi_rust_call_with_error(
-            _uniffi_error_converter,
-            _UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_unload_serving_model_by_id,
             *_uniffi_lowered_args,
         )
         return _uniffi_lift_return(_uniffi_ffi_result)
@@ -5563,29 +2202,6 @@ class _UniffiTraitImplNativeRuntimeProgressListenerImpl:
 # The _UniffiConverter which transforms the Callbacks in to Handles to pass to Rust.
 _UniffiFfiConverterTypeNativeRuntimeProgressListener = _UniffiCallbackInterfaceFfiConverter()
 
-class _UniffiFfiConverterSequenceTypePublicMesh(_UniffiConverterRustBuffer):
-    @classmethod
-    def check_lower(cls, value):
-        for item in value:
-            _UniffiFfiConverterTypePublicMesh.check_lower(item)
-
-    @classmethod
-    def write(cls, value, buf):
-        items = len(value)
-        buf.write_i32(items)
-        for item in value:
-            _UniffiFfiConverterTypePublicMesh.write(item, buf)
-
-    @classmethod
-    def read(cls, buf):
-        count = buf.read_i32()
-        if count < 0:
-            raise InternalError("Unexpected negative sequence length")
-
-        return [
-            _UniffiFfiConverterTypePublicMesh.read(buf) for i in range(count)
-        ]
-
 class _UniffiFfiConverterOptionalTypeNativeRuntimeProgressListener(_UniffiConverterRustBuffer):
     @classmethod
     def check_lower(cls, value):
@@ -5633,74 +2249,29 @@ class _UniffiFfiConverterSequenceTypeInstalledNativeRuntimeNative(_UniffiConvert
         return [
             _UniffiFfiConverterTypeInstalledNativeRuntimeNative.read(buf) for i in range(count)
         ]
-def create_auto_client(owner_keypair_bytes_hex: str,query: PublicMeshQuery) -> MeshClientHandle:
+def create_node(mode: str,join_tokens: typing.List[str],models: typing.List[str],auto_join: bool,owner_key_path: typing.Optional[str],api_port: int,console_port: int) -> MeshNodeHandle:
 
-    _UniffiFfiConverterString.check_lower(owner_keypair_bytes_hex)
+    _UniffiFfiConverterString.check_lower(mode)
 
-    _UniffiFfiConverterTypePublicMeshQuery.check_lower(query)
+    _UniffiFfiConverterSequenceString.check_lower(join_tokens)
+
+    _UniffiFfiConverterSequenceString.check_lower(models)
+
+    _UniffiFfiConverterBoolean.check_lower(auto_join)
+
+    _UniffiFfiConverterOptionalString.check_lower(owner_key_path)
+
+    _UniffiFfiConverterUInt16.check_lower(api_port)
+
+    _UniffiFfiConverterUInt16.check_lower(console_port)
     _uniffi_lowered_args = (
-        _UniffiFfiConverterString.lower(owner_keypair_bytes_hex),
-        _UniffiFfiConverterTypePublicMeshQuery.lower(query),
-    )
-    _uniffi_lift_return = _UniffiFfiConverterTypeMeshClientHandle.lift
-    _uniffi_error_converter = _UniffiFfiConverterTypeFfiError
-    _uniffi_ffi_result = _uniffi_rust_call_with_error(
-        _uniffi_error_converter,
-        _UniffiLib.uniffi_meshllm_ffi_fn_func_create_auto_client,
-        *_uniffi_lowered_args,
-    )
-    return _uniffi_lift_return(_uniffi_ffi_result)
-def create_auto_node(owner_keypair_bytes_hex: str,query: PublicMeshQuery) -> MeshNodeHandle:
-
-    _UniffiFfiConverterString.check_lower(owner_keypair_bytes_hex)
-
-    _UniffiFfiConverterTypePublicMeshQuery.check_lower(query)
-    _uniffi_lowered_args = (
-        _UniffiFfiConverterString.lower(owner_keypair_bytes_hex),
-        _UniffiFfiConverterTypePublicMeshQuery.lower(query),
-    )
-    _uniffi_lift_return = _UniffiFfiConverterTypeMeshNodeHandle.lift
-    _uniffi_error_converter = _UniffiFfiConverterTypeFfiError
-    _uniffi_ffi_result = _uniffi_rust_call_with_error(
-        _uniffi_error_converter,
-        _UniffiLib.uniffi_meshllm_ffi_fn_func_create_auto_node,
-        *_uniffi_lowered_args,
-    )
-    return _uniffi_lift_return(_uniffi_ffi_result)
-def create_client(owner_keypair_bytes_hex: str,invite_token: str) -> MeshClientHandle:
-
-    _UniffiFfiConverterString.check_lower(owner_keypair_bytes_hex)
-
-    _UniffiFfiConverterString.check_lower(invite_token)
-    _uniffi_lowered_args = (
-        _UniffiFfiConverterString.lower(owner_keypair_bytes_hex),
-        _UniffiFfiConverterString.lower(invite_token),
-    )
-    _uniffi_lift_return = _UniffiFfiConverterTypeMeshClientHandle.lift
-    _uniffi_error_converter = _UniffiFfiConverterTypeFfiError
-    _uniffi_ffi_result = _uniffi_rust_call_with_error(
-        _uniffi_error_converter,
-        _UniffiLib.uniffi_meshllm_ffi_fn_func_create_client,
-        *_uniffi_lowered_args,
-    )
-    return _uniffi_lift_return(_uniffi_ffi_result)
-def create_node(owner_keypair_bytes_hex: str,invite_token: str,cache_dir: typing.Optional[str],runtime_dir: typing.Optional[str],serving_enabled: bool) -> MeshNodeHandle:
-
-    _UniffiFfiConverterString.check_lower(owner_keypair_bytes_hex)
-
-    _UniffiFfiConverterString.check_lower(invite_token)
-
-    _UniffiFfiConverterOptionalString.check_lower(cache_dir)
-
-    _UniffiFfiConverterOptionalString.check_lower(runtime_dir)
-
-    _UniffiFfiConverterBoolean.check_lower(serving_enabled)
-    _uniffi_lowered_args = (
-        _UniffiFfiConverterString.lower(owner_keypair_bytes_hex),
-        _UniffiFfiConverterString.lower(invite_token),
-        _UniffiFfiConverterOptionalString.lower(cache_dir),
-        _UniffiFfiConverterOptionalString.lower(runtime_dir),
-        _UniffiFfiConverterBoolean.lower(serving_enabled),
+        _UniffiFfiConverterString.lower(mode),
+        _UniffiFfiConverterSequenceString.lower(join_tokens),
+        _UniffiFfiConverterSequenceString.lower(models),
+        _UniffiFfiConverterBoolean.lower(auto_join),
+        _UniffiFfiConverterOptionalString.lower(owner_key_path),
+        _UniffiFfiConverterUInt16.lower(api_port),
+        _UniffiFfiConverterUInt16.lower(console_port),
     )
     _uniffi_lift_return = _UniffiFfiConverterTypeMeshNodeHandle.lift
     _uniffi_error_converter = _UniffiFfiConverterTypeFfiError
@@ -5729,31 +2300,6 @@ def current_skippy_abi_version() -> str:
     _uniffi_ffi_result = _uniffi_rust_call_with_error(
         _uniffi_error_converter,
         _UniffiLib.uniffi_meshllm_ffi_fn_func_current_skippy_abi_version,
-        *_uniffi_lowered_args,
-    )
-    return _uniffi_lift_return(_uniffi_ffi_result)
-def discover_public_meshes(query: PublicMeshQuery) -> typing.List[PublicMesh]:
-
-    _UniffiFfiConverterTypePublicMeshQuery.check_lower(query)
-    _uniffi_lowered_args = (
-        _UniffiFfiConverterTypePublicMeshQuery.lower(query),
-    )
-    _uniffi_lift_return = _UniffiFfiConverterSequenceTypePublicMesh.lift
-    _uniffi_error_converter = _UniffiFfiConverterTypeFfiError
-    _uniffi_ffi_result = _uniffi_rust_call_with_error(
-        _uniffi_error_converter,
-        _UniffiLib.uniffi_meshllm_ffi_fn_func_discover_public_meshes,
-        *_uniffi_lowered_args,
-    )
-    return _uniffi_lift_return(_uniffi_ffi_result)
-def generate_owner_keypair_hex() -> str:
-    _uniffi_lowered_args = (
-    )
-    _uniffi_lift_return = _UniffiFfiConverterString.lift
-    _uniffi_error_converter = None
-    _uniffi_ffi_result = _uniffi_rust_call_with_error(
-        _uniffi_error_converter,
-        _UniffiLib.uniffi_meshllm_ffi_fn_func_generate_owner_keypair_hex,
         *_uniffi_lowered_args,
     )
     return _uniffi_lift_return(_uniffi_ffi_result)
@@ -5831,67 +2377,27 @@ def remove_native_runtime(cache_dir: typing.Optional[str],mesh_version: str,nati
 
 __all__ = [
     "InternalError",
-    "ModelSource",
-    "ModelKind",
-    "CapabilityLevel",
-    "DevicePolicy",
     "NativeRuntimeVerificationPolicyNative",
-    "ServingModelState",
-    "ClientEvent",
     "FfiError",
     "NativeRuntimePruneModeNative",
     "OpenAiStreamEventNative",
-    "UnloadTarget",
-    "ChatMessageNative",
-    "ChatRequestNative",
-    "CleanupPolicy",
-    "CleanupResult",
-    "ClientStatus",
-    "ConsoleOptionsNative",
-    "DeleteModelOptions",
-    "DeleteModelResult",
-    "ModelCapabilities",
-    "ModelDetails",
-    "DownloadedModel",
-    "InstalledModel",
     "InstalledNativeRuntimeNative",
-    "LoadModelOptions",
-    "ModelCacheStatus",
     "ModelNative",
-    "ModelSearchQuery",
-    "ModelSummary",
     "NativeRuntimeDownloadProgressNative",
     "NativeRuntimeInstallOptionsNative",
     "NativeRuntimeInstallOutcomeNative",
     "NativeRuntimePruneResultNative",
+    "NodeStatusNative",
     "OpenAiResponseNative",
-    "PrunePolicy",
-    "PruneResult",
-    "PublicMesh",
-    "PublicMeshQuery",
-    "ResponsesRequestNative",
-    "ServedModel",
-    "ServingStatus",
-    "UnloadModelOptions",
-    "create_auto_client",
-    "create_auto_node",
-    "create_client",
     "create_node",
     "current_mesh_version",
     "current_skippy_abi_version",
-    "discover_public_meshes",
-    "generate_owner_keypair_hex",
     "install_native_runtime",
     "installed_native_runtimes",
     "prune_native_runtimes",
     "remove_native_runtime",
-    "ConsoleHandle",
-    "ConsoleHandleProtocol",
-    "MeshClientHandle",
-    "MeshClientHandleProtocol",
     "MeshNodeHandle",
     "MeshNodeHandleProtocol",
-    "EventListener",
     "OpenAiStreamListener",
     "NativeRuntimeProgressListener",
 ]

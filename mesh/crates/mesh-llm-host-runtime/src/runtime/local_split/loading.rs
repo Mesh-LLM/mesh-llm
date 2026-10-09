@@ -102,6 +102,9 @@ pub(super) struct SplitGenerationLoadSettings<'a> {
     pub(super) stage0: &'a RuntimeSliceStagePlan,
     pub(super) runtime_options: skippy_serving::EmbeddedRuntimeOptions,
     pub(super) embedded_openai: skippy::ResolvedEmbeddedOpenAiArgs,
+    /// Planned final-stage decode batching. A stage policy rather than a
+    /// frontend one, so it rides here instead of on the OpenAI args.
+    pub(super) last_stage_decode_batch: Option<bool>,
     pub(super) load_mode: LoadMode,
     pub(super) startup_timeout: Duration,
 }
@@ -287,7 +290,9 @@ pub(super) async fn load_split_runtime_generation_inner(
         skippy::SkippyModelHandle::load_stage0_runtime_options_with_openai_args_and_open_events(
             runtime_options,
             settings.embedded_openai.clone(),
-            Some(skippy::MeshAutoHookPolicy::new(node_for_hook)),
+            Some(crate::plugin::exchange_policy::compose_node_hooks(
+                node_for_hook,
+            )),
             skippy_telemetry,
             // Split downstream loads have no `LoadOperation` reservation of
             // their own (event-system-fixes deferral D2 scopes
@@ -358,6 +363,7 @@ pub(super) async fn load_split_runtime_generation_inner(
             slots: spec.slots,
             capabilities,
             workload_class: mesh::ModelWorkloadClass::CausalGeneration,
+            thinking: handle.thinking().cloned(),
             inner: LocalRuntimeBackendHandle::Skippy {
                 model: Box::new(handle),
                 http,
@@ -380,6 +386,12 @@ pub(super) async fn stage0_runtime_options(
     downstream_endpoint: &str,
     stage0_return_endpoint: &str,
 ) -> Result<skippy_serving::EmbeddedRuntimeOptions> {
+    crate::runtime::split_planning::warn_if_decode_batch_policy_unsupported(
+        spec.model_ref,
+        settings.last_stage_decode_batch,
+        &spec.generation.stages,
+        &spec.generation.participants,
+    );
     let mut runtime_options = settings.runtime_options.clone();
     runtime_options.config.run_id = spec.generation.run_id.clone();
     runtime_options.config.topology_id = spec.generation.topology_id.clone();
@@ -781,6 +793,7 @@ pub(super) fn split_runtime_stage_load_request(
         ctx_size: spec.ctx_size,
         lane_count: spec.slots as u32,
         continuous_batching: settings.embedded_openai.continuous_batching,
+        last_stage_decode_batch: settings.last_stage_decode_batch,
         n_batch: resolved_config.n_batch,
         n_ubatch: resolved_config.n_ubatch,
         n_gpu_layers: resolved_config.n_gpu_layers,
@@ -899,6 +912,7 @@ pub(super) async fn split_generation_load_settings<'a>(
         stage0,
         runtime_options,
         embedded_openai,
+        last_stage_decode_batch: resolved.throughput.last_stage_decode_batch,
         load_mode,
         startup_timeout: lifecycle.startup_timeout,
     })

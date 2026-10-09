@@ -325,7 +325,7 @@ pub(super) async fn start_runtime_split_model(
                 .recurrent_bytes_per_configured_lane_by_layer(),
             ctx_size_override: spec.ctx_size_override,
             parallel_override: spec.parallel_override,
-            auto_balance: spec.auto_balance,
+            placement: spec.placement,
         },
         cache_type_k_override: spec.cache_type_k_override.map(str::to_string),
         cache_type_v_override: spec.cache_type_v_override.map(str::to_string),
@@ -342,7 +342,7 @@ pub(super) async fn start_runtime_split_model(
         event_tx: coordinator_tx,
         stage_loss_first_seen: None,
         previously_unavailable_stage_nodes: Vec::new(),
-        auto_balance: (spec.auto_balance && !topology_locked).then(|| {
+        auto_balance: (spec.placement.closed_loop && !topology_locked).then(|| {
             auto_balance::AutoBalanceController::new(
                 auto_balance::AutoBalanceControllerConfig::from_env(),
             )
@@ -414,7 +414,7 @@ async fn prepare_split_runtime_start(
             .recurrent_bytes_per_configured_lane_by_layer(),
         ctx_size_override: spec.ctx_size_override,
         parallel_override: spec.parallel_override,
-        auto_balance: spec.auto_balance,
+        placement: spec.placement,
     };
     let configured_locked_stages = load_configured_split_assignments(
         spec.mesh_config,

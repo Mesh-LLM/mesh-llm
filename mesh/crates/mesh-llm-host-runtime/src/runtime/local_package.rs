@@ -282,6 +282,11 @@ pub(super) struct SplitParticipant {
     pub(super) missing_artifact_bytes: u64,
     pub(super) rtt_ms: Option<u32>,
     pub(super) artifact_transfer_supported: bool,
+    /// Whether this peer honours `StageLoad.last_stage_decode_batch`. A peer
+    /// predating the field ignores it and serves unbatched, which looks like
+    /// nothing but lower throughput, so placement warns rather than leaving it
+    /// to be inferred.
+    pub(super) decode_batch_policy_supported: bool,
     availability_score: u32,
     /// Weight bytes per second this node streams during decode, from its GPU
     /// memory-bandwidth benchmark. Used by `--auto-balance` placement.
@@ -302,6 +307,7 @@ impl SplitParticipant {
             missing_artifact_bytes: 0,
             rtt_ms: None,
             artifact_transfer_supported: false,
+            decode_batch_policy_supported: false,
             availability_score: 0,
             decode_bytes_per_second: None,
         }
@@ -321,6 +327,8 @@ impl SplitParticipant {
         let mut participant = Self::new(node_id, vram_bytes, first_joined_mesh_ts);
         participant.cached_slice_bytes = package.source_model_bytes;
         participant.artifact_transfer_supported = true;
+        // Ourselves: this build honours the field by construction.
+        participant.decode_batch_policy_supported = true;
         participant.availability_score = package.layer_count;
         participant
     }
@@ -336,6 +344,14 @@ impl SplitParticipant {
         self.availability_score = signal.availability_score;
         self.rtt_ms = rtt_ms;
         self.artifact_transfer_supported = artifact_transfer_supported;
+        self
+    }
+
+    /// Its own builder rather than another positional argument on
+    /// `with_package_signals`, which has a dozen call sites that have nothing
+    /// to say about this capability. Mirrors `with_decode_speed`.
+    pub(super) fn with_decode_batch_policy(mut self, supported: bool) -> Self {
+        self.decode_batch_policy_supported = supported;
         self
     }
 
@@ -618,6 +634,7 @@ pub(super) async fn collect_split_participants(
                             peer.rtt_ms,
                             artifact_transfer_allowed,
                         )
+                        .with_decode_batch_policy(peer.decode_batch_policy_supported)
                         .with_decode_speed(decode_bytes_per_second_from_gossip(
                             peer.gpu_mem_bandwidth_gbps.as_deref(),
                         )),

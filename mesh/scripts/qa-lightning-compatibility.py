@@ -157,7 +157,7 @@ def run(args):
         code, _ = http(provider.console, "/api/wallet", {
             "command": "set_pricing", "model": MODEL,
             "value": {"input_msat_per_million": 10000000,
-                      "output_msat_per_million": 30000000, "minimum_invoice_msat": 1000},
+                      "output_msat_per_million": 30000000},
         })
         assert code == 200
         # A fresh join observes the updated offer without waiting for heartbeat.

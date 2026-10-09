@@ -2,6 +2,7 @@
 use std::sync::Arc;
 
 use anyhow::{Context, Result, ensure};
+use skippy_inference_api::thinking::ThinkingControls;
 use skippy_inference_api::{GuardrailTelemetrySink, OpenAiBackend, OpenAiHookPolicy};
 use skippy_protocol::{LoadMode, StageConfig};
 use skippy_serving::{
@@ -44,6 +45,11 @@ pub struct LoadedModelBackend {
     pub backend: Arc<dyn OpenAiBackend>,
     pub config: StageConfig,
     pub prediction_return_listener: Option<PredictionReturnListener>,
+    /// Render-only observations of the reasoning controls the selected template
+    /// reacts to, keyed by artifact/template/renderer. Skippy names and produces
+    /// these; the host only carries them to `/v1/models`. See
+    /// [`skippy_serving::thinking_probe`] for what they can and cannot claim.
+    pub thinking: Option<ThinkingControls>,
     telemetry: Telemetry,
 }
 
@@ -118,6 +124,8 @@ impl ModelLoadRequest {
         args.kv_lifecycle_observer = hooks.kv_lifecycle_observer();
         args.l3_manager = self.l3_manager;
         let binding = embedded_openai_backend(args).context("construct Skippy OpenAI backend")?;
+        // Skippy owns the probe; the host only carries the observation through.
+        let thinking = binding.thinking.clone();
         let backend = match self.guardrails {
             Some(guardrails) => guardrails.wrap_backend_with_telemetry(
                 binding.backend,
@@ -131,6 +139,7 @@ impl ModelLoadRequest {
             backend,
             config,
             prediction_return_listener,
+            thinking,
             telemetry,
         })
     }

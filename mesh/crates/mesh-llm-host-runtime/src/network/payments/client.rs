@@ -405,7 +405,6 @@ mod tests {
                 Pricing {
                     input_msat_per_million: 7,
                     output_msat_per_million: 9,
-                    minimum_invoice_msat: 1,
                 },
             )]),
         };

@@ -1,5 +1,8 @@
 use super::*;
 mod logging;
+mod native_runtime;
+
+use self::native_runtime::native_runtime_presentation;
 
 use self::logging::{is_advanced_logging_category, logging_presentation};
 
@@ -427,45 +430,6 @@ fn payments_presentation(rendered: &str) -> Option<SettingPresentation> {
     }
 }
 
-fn native_runtime_presentation(rendered: &str) -> Option<SettingPresentation> {
-    match rendered {
-        "runtime.native_runtime.selection" => Some(
-            sp(
-                "Native runtime backend",
-                "Pin the native runtime backend loaded on startup. Recommended auto-detects from host hardware; cpu, metal, cuda (or cudaNN), rocm, and vulkan force a backend, and exact:<id> or meshllm-<id> pin a specific installed runtime.",
-                MESHLLM_CATEGORY,
-                40,
-            )
-            .hint("select")
-            .choices(&[(
-                "recommended",
-                "Recommended (auto-detect)",
-                "Auto-detect the best backend for this host.",
-            )]),
-        ),
-        "runtime.native_runtime.mesh_version" => Some(
-            sp(
-                "Native runtime Mesh version",
-                "Pin the Mesh release whose native runtime bundle is loaded. Leave unset to track the current release.",
-                MESHLLM_CATEGORY,
-                50,
-            )
-            .placeholder("track current release")
-            .hint("text"),
-        ),
-        "runtime.native_runtime.skippy_abi" => Some(
-            sp(
-                "Native runtime Skippy ABI",
-                "Pin the Skippy ABI string of the native runtime bundle. Only meaningful alongside a pinned Mesh version.",
-                MESHLLM_CATEGORY,
-                60,
-            )
-            .hint("text"),
-        ),
-        _ => None,
-    }
-}
-
 fn runtime_defaults_presentation(rendered: &str) -> Option<SettingPresentation> {
     match rendered {
         "defaults.throughput.threads" => Some(sp(
@@ -500,6 +464,15 @@ fn runtime_defaults_presentation(rendered: &str) -> Option<SettingPresentation> 
         )
         .unit("groups")
         .hint("range")),
+        "defaults.throughput.last_stage_decode_batch" => Some(sp(
+            "Batch decode on the final split stage",
+            "Let the last stage of a split decode every lane in one batch. Raises split \
+             throughput under concurrency, and cannot be combined with native multi-token \
+             prediction.",
+            RUNTIME_CATEGORY,
+            33,
+        )
+        .hint("segmented")),
         "defaults.hardware.gpu_layers" => Some(sp(
             "GPU layers",
             "Set the GPU layer count, or use auto. The backend also accepts -1 to mean all layers.",
@@ -1135,6 +1108,9 @@ fn fallback_category_for_path(rendered: &str) -> Option<CategoryPresentation> {
     }
     if rendered.starts_with("telemetry.") {
         return Some(TELEMETRY_CATEGORY);
+    }
+    if rendered.starts_with("runtime.native_runtime.") {
+        return Some(RUNTIME_CATEGORY);
     }
     if rendered.starts_with("runtime.") {
         return Some(RUNTIME_POLICY_CATEGORY);

@@ -9,9 +9,9 @@ fn connections() -> &'static Mutex<HashSet<SocketAddr>> {
     CONNECTIONS.get_or_init(Mutex::default)
 }
 
-pub(super) struct RemoteBridge(SocketAddr);
+pub(crate) struct RemoteBridge(SocketAddr);
 impl RemoteBridge {
-    pub(super) fn register(address: SocketAddr) -> anyhow::Result<Self> {
+    pub(crate) fn register(address: SocketAddr) -> anyhow::Result<Self> {
         connections()
             .lock()
             .map_err(|_| anyhow::anyhow!("remote origin registry unavailable"))?

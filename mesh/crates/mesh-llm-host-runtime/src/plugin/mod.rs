@@ -1,11 +1,23 @@
 mod capability_registration;
 mod channel_broadcast;
 mod config;
+mod exchange_grants;
+mod exchange_lifecycle;
+mod exchange_permissions;
+pub(crate) mod exchange_policy;
+mod exchange_status;
+mod exchange_streams;
 mod health;
+mod identity_registration;
+mod identity_registry;
+mod identity_transport;
+pub(crate) use exchange_lifecycle::{ExchangeSession, PhaseResult, request_event};
+pub(crate) mod identity_services;
 mod in_process;
 mod installed;
 pub(crate) mod mcp;
 pub mod openai_exchange;
+pub(crate) mod operations;
 mod runtime;
 mod schema_validation;
 pub(crate) mod stapler;
@@ -120,6 +132,11 @@ pub struct PluginManager {
 
 pub(in crate::plugin) struct PluginManagerInner {
     capability_registration: capability_registration::CapabilityRegistration,
+    pub(in crate::plugin) identity_registry: Arc<Mutex<identity_registry::PluginIdentityRegistry>>,
+    pub(in crate::plugin) exchange_grants: exchange_grants::ExchangeGrantRegistry,
+    pub(in crate::plugin) exchange_observations: Arc<exchange_lifecycle::ObservationRegistry>,
+    pub(in crate::plugin) exchange_health:
+        Arc<std::sync::Mutex<BTreeMap<String, exchange_lifecycle::ExchangeHealth>>>,
     pub(in crate::plugin) plugins: BTreeMap<String, ExternalPlugin>,
     pub(in crate::plugin) inactive: BTreeMap<String, PluginSummary>,
     pub(in crate::plugin) endpoint_health: Arc<Mutex<BTreeMap<String, EndpointHealthState>>>,
@@ -198,6 +215,7 @@ impl PluginManager {
         let rpc_bridge = Arc::new(Mutex::new(None));
         let runtime_data = RuntimeDataCollector::new();
         let instance_id = make_instance_id();
+        let exchange_grants = exchange_grants::ExchangeGrantRegistry::from_specs(&specs.externals);
         let (plugins, failed_plugins) = Self::load_external_plugins(
             specs,
             host_mode,
@@ -211,6 +229,10 @@ impl PluginManager {
         let manager = Self {
             inner: Arc::new(PluginManagerInner {
                 capability_registration: Default::default(),
+                identity_registry: Arc::default(),
+                exchange_grants,
+                exchange_observations: Arc::default(),
+                exchange_health: Arc::default(),
                 plugins,
                 inactive: Self::inactive_plugins(specs, failed_plugins),
                 endpoint_health: Arc::new(Mutex::new(BTreeMap::new())),
@@ -434,6 +456,10 @@ impl PluginManager {
         Self {
             inner: Arc::new(PluginManagerInner {
                 capability_registration: Default::default(),
+                identity_registry: Arc::default(),
+                exchange_grants: Default::default(),
+                exchange_observations: Arc::default(),
+                exchange_health: Arc::default(),
                 plugins: BTreeMap::new(),
                 inactive: BTreeMap::new(),
                 endpoint_health: Arc::new(Mutex::new(BTreeMap::new())),
@@ -457,6 +483,10 @@ impl PluginManager {
         Self {
             inner: Arc::new(PluginManagerInner {
                 capability_registration: Default::default(),
+                identity_registry: Arc::default(),
+                exchange_grants: Default::default(),
+                exchange_observations: Arc::default(),
+                exchange_health: Arc::default(),
                 plugins: BTreeMap::new(),
                 inactive: summaries
                     .into_iter()
@@ -568,6 +598,7 @@ impl PluginManager {
         }
         let mut summaries = self.inner.runtime_data.plugins_snapshot().plugins;
         if !summaries.is_empty() {
+            self.project_exchange_status(&mut summaries).await;
             summaries.sort_by(|a, b| a.name.cmp(&b.name));
             return summaries;
         }
@@ -577,6 +608,7 @@ impl PluginManager {
             summaries.push(plugin.summary().await);
         }
         summaries.extend(self.inner.inactive.values().cloned());
+        self.project_exchange_status(&mut summaries).await;
         summaries.sort_by(|a, b| a.name.cmp(&b.name));
         summaries
     }
@@ -881,35 +913,6 @@ impl PluginManager {
             .await
     }
 
-    /// Invoke an operation with an explicit deadline. `None` waits until the
-    /// plugin answers or its connection drops; the caller owns cancellation.
-    pub async fn call_tool_with_timeout(
-        &self,
-        plugin_name: &str,
-        tool_name: &str,
-        arguments_json: &str,
-        timeout: Option<std::time::Duration>,
-    ) -> Result<ToolCallResult> {
-        if self.is_test_bridge_enabled(plugin_name) {
-            return self.call_tool(plugin_name, tool_name, arguments_json).await;
-        }
-        if let Some(summary) = self.inner.inactive.get(plugin_name) {
-            bail!(
-                "Plugin '{}' is disabled: {}",
-                plugin_name,
-                summary.error.as_deref().unwrap_or("unavailable")
-            );
-        }
-        let plugin = self
-            .inner
-            .plugins
-            .get(plugin_name)
-            .with_context(|| format!("Unknown plugin '{plugin_name}'"))?;
-        plugin
-            .call_tool_with_timeout(tool_name, arguments_json, timeout)
-            .await
-    }
-
     pub async fn invoke_operation(
         &self,
         plugin_name: &str,
@@ -927,17 +930,6 @@ impl PluginManager {
         input_json: &str,
     ) -> Result<ToolCallResult> {
         self.call_tool_without_timeout(plugin_name, operation_name, input_json)
-            .await
-    }
-
-    pub async fn invoke_operation_with_timeout(
-        &self,
-        plugin_name: &str,
-        operation_name: &str,
-        input_json: &str,
-        timeout: Option<std::time::Duration>,
-    ) -> Result<ToolCallResult> {
-        self.call_tool_with_timeout(plugin_name, operation_name, input_json, timeout)
             .await
     }
 
@@ -1261,6 +1253,9 @@ impl PluginManager {
                 proto::ServiceKind::Resource => "resources/read",
                 proto::ServiceKind::Completion => "completion/complete",
                 proto::ServiceKind::VirtualModel => "virtual_model/invoke",
+                proto::ServiceKind::OpenaiExchange => {
+                    bail!("OpenAI lifecycle services have no MCP projection")
+                }
                 proto::ServiceKind::Unspecified => {
                     bail!("Service kind is required for test plugin '{plugin_name}'")
                 }
@@ -1584,6 +1579,11 @@ pub(crate) async fn connect_test_side_stream(
 pub(crate) fn plugin_manifest_overview(manifest: &proto::PluginManifest) -> PluginManifestOverview {
     let web_ui = plugin_web_ui_manifest_overview_from_proto(manifest.web_ui.as_ref());
     PluginManifestOverview {
+        openai_exchange_status: None,
+        openai_exchange_body_access_requested: manifest
+            .openai_exchange_hook
+            .as_ref()
+            .map(|hook| hook.request_body || hook.effective_request_body || hook.response_body),
         operations: manifest.operations.len(),
         resources: manifest.resources.len(),
         resource_templates: manifest.resource_templates.len(),

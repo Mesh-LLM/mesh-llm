@@ -1,5 +1,10 @@
 # Design note: exposing OpenAI-exchange lifecycle to an out-of-process plugin (#1331)
 
+This document preserves the earlier prototype discussion. The maintained
+[lifecycle contract v1](openai-exchange-lifecycle.md) defines the current generic
+protocol; the [acceptance matrix](openai-exchange-acceptance.md) separates
+implemented behavior from validation still pending.
+
 ## Status
 
 Reference implementation of the narrowest real slice, staged on this branch only

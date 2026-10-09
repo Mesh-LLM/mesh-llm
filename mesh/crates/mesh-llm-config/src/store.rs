@@ -88,7 +88,7 @@ impl ConfigStore {
 
     pub fn save(&self, config: &MeshConfig) -> Result<()> {
         let toml_str = config_to_toml(config)?;
-        atomic_write(&self.path, toml_str.as_bytes())
+        crate::private_file::write_private_file(&self.path, toml_str.as_bytes())
             .with_context(|| format!("failed to write config {}", self.path.display()))
     }
 
@@ -173,7 +173,7 @@ impl ConfigStore {
     }
 
     fn write_document(&self, doc: &DocumentMut) -> Result<()> {
-        atomic_write(&self.path, doc.to_string().as_bytes())
+        crate::private_file::write_private_file(&self.path, doc.to_string().as_bytes())
             .with_context(|| format!("failed to write config {}", self.path.display()))
     }
 }
@@ -202,41 +202,6 @@ fn normalize_model_ref(model_ref: &str) -> Result<&str> {
         bail!("model ref cannot be empty");
     }
     Ok(model_ref)
-}
-
-fn atomic_write(target: &Path, contents: &[u8]) -> std::io::Result<()> {
-    use std::io::Write;
-    if let Some(parent) = target.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let file_name = target
-        .file_name()
-        .unwrap_or(target.as_os_str())
-        .to_string_lossy();
-    let parent = target.parent().unwrap_or(Path::new("."));
-    let pid = std::process::id();
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .subsec_nanos();
-    let tmp = parent.join(format!(".{}.{}.{}.tmp", file_name, pid, nanos));
-    let mut file = std::fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .open(&tmp)?;
-    file.write_all(contents)?;
-    file.sync_all()?;
-    drop(file);
-    #[cfg(windows)]
-    if target.exists() {
-        std::fs::remove_file(target)?;
-    }
-    if let Err(e) = std::fs::rename(&tmp, target) {
-        let _ = std::fs::remove_file(&tmp);
-        return Err(e);
-    }
-    Ok(())
 }
 
 #[cfg(test)]

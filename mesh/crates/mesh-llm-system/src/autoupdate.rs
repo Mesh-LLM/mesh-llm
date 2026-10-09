@@ -52,6 +52,17 @@ struct UpdateTarget {
     bundle_flavor: backend::BinaryFlavor,
 }
 
+impl UpdateTarget {
+    /// Whether an update can write here. The update stages the new bundle
+    /// files into the install directory and renames them over the old ones,
+    /// so the directory is what must be writable. `path_is_writable` probes
+    /// by creating a file inside the path it is given, so it must not be
+    /// given the binary itself: that probe always fails.
+    fn install_dir_is_writable(&self) -> bool {
+        path_is_writable(&self.install_dir)
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct AutoUpdateOptions {
     pub auto_update: bool,
@@ -193,8 +204,8 @@ pub async fn run_update_command(options: UpdateCommandOptions<'_>) -> Result<()>
                 .join(", ")
         );
     };
-    if !path_is_writable(&target.exe) {
-        bail!("{} is not writable.", target.exe.display());
+    if !target.install_dir_is_writable() {
+        bail!("{} is not writable.", target.install_dir.display());
     }
 
     writeln!(
@@ -320,11 +331,11 @@ async fn apply_update_if_available(
     ) else {
         return Ok(false);
     };
-    if !path_is_writable(&target.exe) {
+    if !target.install_dir_is_writable() {
         let _ = emit_event(OutputEvent::AutoUpdate {
             message: format!(
                 "⚠️  Auto-update skipped: {} is not writable",
-                target.exe.display()
+                target.install_dir.display()
             ),
             version: None,
         });
@@ -484,6 +495,29 @@ mod tests {
             err.to_string().contains("cannot be combined"),
             "unexpected error: {err:#}"
         );
+    }
+
+    fn update_target_in(dir: &Path) -> UpdateTarget {
+        let exe = dir.join(mesh_binary_name());
+        std::fs::write(&exe, b"binary").unwrap();
+        UpdateTarget {
+            exe,
+            install_dir: dir.to_path_buf(),
+            release_target: ReleaseTarget::from_raw("linux", "x86_64", backend::BinaryFlavor::Cpu)
+                .unwrap(),
+            bundle_flavor: backend::BinaryFlavor::Cpu,
+        }
+    }
+
+    #[test]
+    fn test_an_update_checks_the_install_dir_not_the_binary() {
+        let dir = temp_dir("update-target-writable");
+        let target = update_target_in(&dir);
+        // The probe creates a file inside the path it is given, so the
+        // binary's own path never passes; checking it refused every update.
+        assert!(!path_is_writable(&target.exe));
+        assert!(target.install_dir_is_writable());
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

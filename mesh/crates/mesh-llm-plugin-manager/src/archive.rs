@@ -592,6 +592,7 @@ mod tests {
         let archive_path = temp.path().join("demo.tar.gz");
         let executable_name = format!("demo{}", std::env::consts::EXE_SUFFIX);
         let manifest = serde_json::to_vec_pretty(&InstalledPluginManifestMetadata {
+            openai_exchange_hook: None,
             config_schema: Some(InstalledPluginConfigSchema {
                 plugin_name: "demo".to_string(),
                 schema_version: SUPPORTED_PLUGIN_SCHEMA_VERSION + 1,
@@ -645,6 +646,7 @@ mod tests {
         let archive_path = temp.path().join("demo.tar.gz");
         let executable_name = format!("demo{}", std::env::consts::EXE_SUFFIX);
         let manifest = serde_json::to_vec_pretty(&InstalledPluginManifestMetadata {
+            openai_exchange_hook: None,
             config_schema: Some(InstalledPluginConfigSchema {
                 plugin_name: "demo".to_string(),
                 schema_version: SUPPORTED_PLUGIN_SCHEMA_VERSION,

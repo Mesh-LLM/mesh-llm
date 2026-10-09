@@ -127,6 +127,7 @@ fn request_with_body(model: Option<&str>, body: &serde_json::Value) -> proxy::Bu
         request_object_request_ids: Vec::new(),
         response_adapter: proxy::ResponseAdapter::OpenAiChatCompletionsJson,
         correlation_id: None,
+        exchange_observation_id: None,
     }
 }
 
@@ -715,6 +716,7 @@ fn peer_serving(peer_id: iroh::EndpointId, model: &str, vision: bool) -> mesh::P
         stage_protocol_generation_supported: false,
         stage_status_list_supported: false,
         local_gguf_content_id_supported: false,
+        decode_batch_policy_supported: false,
         advertised_model_throughput: vec![],
         #[cfg(feature = "payments")]
         lightning_offers: Default::default(),

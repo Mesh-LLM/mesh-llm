@@ -120,6 +120,7 @@ fn request(path: &str, model: &str) -> BufferedHttpRequest {
         request_object_request_ids: vec![],
         response_adapter: ResponseAdapter::None,
         correlation_id: None,
+        exchange_observation_id: None,
     }
 }
 

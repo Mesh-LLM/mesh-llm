@@ -989,6 +989,58 @@ Config precedence:
   process launch until direct plugin use. This is useful for very slow legacy
   hosts or emulator-assisted startup paths.
 
+## Choosing a serving strategy
+
+`--strategy` names what the deployment is optimising for, and composes the
+settings that intent needs. It exists because the performance work for splits
+shipped as a dozen separate flags, and reaching a measured operating point meant
+knowing which ones to set together.
+
+```bash
+mesh-llm serve --model meshllm/Qwen3-8B-Q4_K_M-layers --split --strategy throughput
+```
+
+| Strategy | For | Composes |
+| --- | --- | --- |
+| `balanced` | the default; unchanged behaviour | nothing |
+| `interactive` | single-stream and agentic coding | `ngram-suffix` speculation, a run-ahead admission budget, final-stage batching off, layers packed onto the fastest node |
+| `throughput` | fleet tokens per second | final-stage decode batching, decode-wave grouping, speculation off, and closed-loop rebalancing when `--split` is set |
+
+**It only fills in values nobody has stated.** An explicit `[defaults.*]` or
+`[models.*]` value survives, and an explicit flag such as
+`--speculative-strategy` or `--parallel` overrides whatever the strategy chose.
+Adopting a strategy therefore cannot change an existing deployment. Startup logs
+every axis it set and every one it deferred on, so a hand-set value is visibly
+kept rather than silently replaced.
+
+Everything a strategy sets lands in `[defaults]`, never on an individual model,
+so a `[models.*]` block still wins. The log names the full path it wrote —
+`defaults.speculative.strategy`, not `speculative.strategy` — because a model
+that overrides the same key keeps its own value while the global default is
+still written for the models that do not.
+
+On a split, the two strategies also want different layer boundaries. Aggregate
+throughput is paced by the slowest stage, so `throughput` levels the stages and
+keeps them level as measurement drifts — the same cut `--auto-balance` makes. A
+single request is not paced by the bottleneck: its stages run serialised per
+token, so it pays the *sum* of `bytes / rate` across them. `interactive`
+therefore packs the fastest node to its memory limit and leaves the cut alone,
+because one stream's busy-time signal is too noisy to rebalance on.
+
+`--auto-balance` always wins over either. It is an explicit request, so a
+strategy only chooses placement when you have not.
+
+`throughput` and `interactive` are opposed on purpose. A batched final stage
+produces no native multi-token-prediction drafts, so last-stage batching and
+speculation cannot both be active — that is enforced in the engine, not a
+preference. `throughput` takes the batching; `interactive` takes the drafts.
+
+Two honest limits. `throughput` buys fleet throughput and spends per-request
+latency: on the two-node lab it reached 0.84x the unsplit pair's aggregate while
+a request took about 25% longer. And `interactive` picks the N-gram proposers
+because they suit input-grounded output; on freeform prose they can be a net
+loss, so measure the real workload rather than assuming an uplift.
+
 ## Speculative decode configuration
 
 Configure speculative decoding under `[defaults.speculative]` for all staged
@@ -1175,9 +1227,16 @@ Start mesh-llm normally:
 mesh-llm serve
 ```
 
-No `[[models]]` entry or placeholder local model is required. `on_demand`
-prevents any configured local models from loading eagerly while preserving the
-ability to load one later.
+No `[[models]]` entry or placeholder local model is required. With an installed,
+enabled inference adapter and no local model startup request, this flow can start
+without an available native runtime. Mesh prints a startup warning, advertises no
+native model capacity, and rejects local-model and split-stage loads until a
+compatible runtime is installed and Mesh restarts. Explicit local model arguments
+and configured `[[models]]` entries retain the native runtime requirement.
+
+Use a host-compatible adapter release. Adapter 0.2.0 uses plugin protocol 3;
+0.1.2 uses protocol 2 and cannot initialize on a protocol-3 host. A missing or
+disabled plugin, blank URL, or non-inference plugin does not enable this flow.
 
 After startup, mesh-llm should include Lemonade-hosted models in its own model list:
 

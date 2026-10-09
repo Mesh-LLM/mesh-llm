@@ -13,7 +13,7 @@ use skippy_serving::{
     SpeculativeDecodeConfig, VerifyWindowConfig,
 };
 
-use super::support::{pick_owned, pick_string, pick_string_owned};
+use super::support::{pick_owned, pick_string, pick_string_owned, resolve_bool_or_auto};
 use super::types::ResolvedSpeculativeConfig;
 use mesh_llm_config::{BoolOrAuto, SpeculativeConfig};
 
@@ -476,19 +476,100 @@ fn resolve_decode_config(input: DecodeResolutionInput<'_>) -> Result<Speculative
             .and_then(|config| config.verify_window_pipeline_depth),
     )
     .map_or(config.verify_window.pipeline_depth, |value| value as usize);
-    config.verify_window.runahead_max_tokens = pick_optional_u32(
-        input
-            .model_config
-            .and_then(|config| config.verify_window_runahead_tokens),
-        input
-            .global_config
-            .and_then(|config| config.verify_window_runahead_tokens),
-    )
-    .map_or(config.verify_window.runahead_max_tokens, |value| {
-        value as usize
-    });
+    // A number, or "auto" to let the per-deployment search decide. `auto` is
+    // not a value the engine can use, so it sets a flag instead and leaves the
+    // token figure at fixed-depth admission until the search moves it — the
+    // measured cost of guessing a shallow budget is a 10% loss, so an unsearched
+    // "auto" must not guess.
+    match input
+        .model_config
+        .and_then(|config| config.verify_window_runahead_tokens.as_ref())
+        .or_else(|| {
+            input
+                .global_config
+                .and_then(|config| config.verify_window_runahead_tokens.as_ref())
+        }) {
+        None => {}
+        Some(mesh_llm_config::IntegerOrString::String(value))
+            if value.eq_ignore_ascii_case("auto") =>
+        {
+            config.verify_window.runahead_auto = true;
+        }
+        Some(mesh_llm_config::IntegerOrString::String(_)) => {
+            bail!(
+                "skippy speculative verify_window_runahead_tokens must be an integer or \"auto\""
+            );
+        }
+        Some(mesh_llm_config::IntegerOrString::Integer(value)) => {
+            config.verify_window.runahead_max_tokens = usize::try_from(*value).map_err(|_| {
+                anyhow::anyhow!(
+                    "skippy speculative verify_window_runahead_tokens must not be negative"
+                )
+            })?;
+        }
+    }
     if config.verify_window.min_tokens > config.verify_window.max_tokens {
         bail!("skippy speculative verify window requires min_tokens <= max_tokens");
+    }
+    // The gate's settings, promoted out of SKIPPY_SPECULATION_GATE so a strategy
+    // can compose them (#2112 workstream 5 puts the gate under `balanced`). The
+    // environment variable stays an override and is resolved inside
+    // skippy-serving, so nothing here needs to read it.
+    // `auto` means "let the built-in default decide", so it is not an answer.
+    if let Some(enabled) = resolve_bool_or_auto(
+        input
+            .model_config
+            .and_then(|config| config.gate.as_ref())
+            .or_else(|| input.global_config.and_then(|config| config.gate.as_ref())),
+        "speculative.gate",
+    )? {
+        config.gate.enabled = enabled;
+    }
+    if let Some(value) = pick_optional_u64(
+        input
+            .model_config
+            .and_then(|config| config.gate_min_window_s),
+        input
+            .global_config
+            .and_then(|config| config.gate_min_window_s),
+    ) {
+        config.gate.min_window_s = value;
+    }
+    if let Some(value) = pick_optional_u64(
+        input
+            .model_config
+            .and_then(|config| config.gate_min_requests),
+        input
+            .global_config
+            .and_then(|config| config.gate_min_requests),
+    ) {
+        config.gate.min_requests = value;
+    }
+    if let Some(value) = input
+        .model_config
+        .and_then(|config| config.gate_decisive_margin)
+        .or_else(|| {
+            input
+                .global_config
+                .and_then(|config| config.gate_decisive_margin)
+        })
+    {
+        if !(value > 0.0 && value < 1.0) {
+            bail!(
+                "skippy speculative gate_decisive_margin must sit in (0, 1); got {value}. It is a \
+                 fractional change in decode rate, and a margin of 0 or 1 makes every trial \
+                 decisive or none of them"
+            );
+        }
+        config.gate.decisive_margin = value;
+    }
+    if let Some(value) = pick_optional_u64(
+        input.model_config.and_then(|config| config.gate_cooldown_s),
+        input
+            .global_config
+            .and_then(|config| config.gate_cooldown_s),
+    ) {
+        config.gate.cooldown_s = value;
     }
     let ngram_fallback = pick_string(
         input
@@ -603,6 +684,7 @@ fn package_decode_config(
             max_tokens: 4,
             pipeline_depth: 1,
             runahead_max_tokens: 0,
+            runahead_auto: false,
         });
     let effective_strategy = match (native_mtp.enabled, ngram.as_ref().map(|value| value.kind)) {
         (true, Some(NgramProposerKind::Cache)) => "native-mtp+ngram-cache",
@@ -691,6 +773,7 @@ fn verify_window_config(policy: &PackageWindowPolicyInfo) -> VerifyWindowConfig 
         max_tokens: policy.max_window as usize,
         pipeline_depth: policy.pipeline_depth.unwrap_or(1) as usize,
         runahead_max_tokens: 0,
+        runahead_auto: false,
     }
 }
 
@@ -703,6 +786,10 @@ fn ngram_effective_strategy(kind: NgramProposerKind) -> &'static str {
 
 fn nonzero_or(value: u32, default: u32) -> u32 {
     if value == 0 { default } else { value }
+}
+
+fn pick_optional_u64(model: Option<u64>, global: Option<u64>) -> Option<u64> {
+    model.or(global)
 }
 
 fn pick_optional_u32(model: Option<u32>, global: Option<u32>) -> Option<u32> {

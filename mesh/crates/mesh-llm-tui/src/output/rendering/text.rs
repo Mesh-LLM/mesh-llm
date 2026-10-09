@@ -22,6 +22,23 @@ pub(in crate::output) fn render_dashboard_text(state: &DashboardState) -> String
     if let Some(mesh_id) = &state.mesh_id {
         header.push_str(&format!("  mesh={mesh_id}"));
     }
+    // Always, including when nothing was named. "Is a strategy even in force"
+    // is the first thing to establish when a split is slower than expected,
+    // and an omitted field answers it with silence.
+    match &state.serving_strategy {
+        Some(summary) => {
+            header.push_str(&format!("  strategy={}", summary.strategy));
+            if summary.declined > 0 {
+                header.push_str(&format!(
+                    " ({} set, {} yours)",
+                    summary.applied, summary.declined
+                ));
+            } else {
+                header.push_str(&format!(" ({} set)", summary.applied));
+            }
+        }
+        None => header.push_str("  strategy=none"),
+    }
     let _ = writeln!(&mut output, "{header}");
     let _ = writeln!(&mut output);
 

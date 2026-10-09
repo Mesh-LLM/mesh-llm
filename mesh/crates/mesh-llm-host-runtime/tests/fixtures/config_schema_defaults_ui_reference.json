@@ -687,6 +687,41 @@
       }
     },
     {
+      "canonical_path": "defaults.speculative.gate",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.speculative.gate_cooldown_s",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.speculative.gate_decisive_margin",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.speculative.gate_min_requests",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.speculative.gate_min_window_s",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
       "canonical_path": "defaults.speculative.mode",
       "support": "supported",
       "source": {
@@ -800,6 +835,13 @@
     },
     {
       "canonical_path": "defaults.throughput.continuous_batching",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.throughput.last_stage_decode_batch",
       "support": "supported",
       "source": {
         "kind": "built_in"

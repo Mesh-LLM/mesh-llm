@@ -11,12 +11,9 @@ keywords = ["llm", "mesh", "sdk", "inference"]
 categories = ["api-bindings", "network-programming"]
 
 [features]
-default = ["client"]
-client = ["dep:mesh-llm-api-client"]
+default = ["serving"]
 console = ["dep:mesh-llm-console-server", "mesh-llm-embedded-runtime?/web-ui"]
-node = ["client", "dep:mesh-llm-api-server"]
 serving = [
-    "node",
     "dep:anyhow",
     "dep:mesh-llm-embedded-runtime",
     "dep:skippy-runtime-install",
@@ -24,6 +21,7 @@ serving = [
     "dep:reqwest",
     "dep:serde",
     "dep:serde_json",
+    "dep:tokio",
 ]
 # Opt-in paid inference on top of the serving path: ledger, gates and the
 # `wallet.v1` plugin adapter. Off by default: an embedding consumer (e.g. Buzz)
@@ -38,11 +36,10 @@ workspace = true
 
 [dependencies]
 anyhow = { workspace = true, optional = true }
-mesh-llm-api-client = { path = "../mesh-llm-api-client", version = "0.78.0", optional = true }
-mesh-llm-api-server = { path = "../mesh-llm-api-server", version = "0.78.0", optional = true }
 mesh-llm-console-server = { path = "../mesh-llm-console-server", version = "0.78.0", optional = true }
 mesh-llm-embedded-runtime = { path = "../mesh-llm-embedded-runtime", version = "0.78.0", optional = true }
 skippy-runtime-install = { path = "../../../skippy/crates/skippy-runtime-install", version = "0.78.0", optional = true }
 reqwest = { version = "0.13", features = ["json"], optional = true }
 serde = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
+tokio = { version = "1", optional = true, features = ["time"] }
