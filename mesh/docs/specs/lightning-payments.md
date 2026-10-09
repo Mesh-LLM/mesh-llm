@@ -357,10 +357,11 @@ payment without creating a new approval or debit.
 
 ## Prices, fees, and token accounting
 
-The seller explicitly configures per-model input/output msat per million tokens
-and a minimum invoice quantum. Free serving is the default. Charges use wide
-integer arithmetic, ceiling division and quantum rounding at the invoice
-boundary. Zero delivered output produces no output invoice.
+The seller explicitly configures per-model input/output msat per million tokens.
+Free serving is the default. Charges use wide integer arithmetic and ceiling
+division to the msat at the invoice boundary; there is no minimum invoice
+quantum (the deprecated `LightningOffer.minimum_invoice_msat` wire field is sent
+as 1 and ignored on read). Zero delivered output produces no output invoice.
 
 Enabling `wallet pricing MODEL` without explicit rates uses 500 input and 1500
 output msat per million tokens;
@@ -729,7 +730,7 @@ Proof of prefill remains an open [TODO](../../crates/mesh-llm/TODO.md).
 `GET /v1/models` includes an additive `payment` object for concrete model IDs:
 `free_available`, `paid_available`, `binding_quote: false`, and `offers` keyed by
 `provider_id`. Each offer includes `paid`, nullable `pricing` (input/output
-msat-per-million rates and minimum invoice msat), and peer last-seen age. The
+msat-per-million rates), and peer last-seen age. The
 age describes peer contact, not a guaranteed quote timestamp. Mixed free/paid
 providers remain separate offers. Local advertised seller prices describe remote
 service; ordinary local inference does not pay itself. Unknown external-plugin

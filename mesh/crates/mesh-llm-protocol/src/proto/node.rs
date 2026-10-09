@@ -9,6 +9,136 @@ pub struct GossipFrame {
     /// must be exactly 32 bytes; must match QUIC peer identity
     #[prost(bytes = "vec", tag = "3")]
     pub sender_id: ::prost::alloc::vec::Vec<u8>,
+    /// Node records signed by the node they describe and relayed byte-for-byte.
+    /// Additive: older nodes ignore this field and keep reading `peers`, which
+    /// newer nodes still populate for them.
+    #[prost(message, repeated, tag = "4")]
+    pub signed_records: ::prost::alloc::vec::Vec<SignedNodeRecord>,
+    /// Cache-affinity evidence signed by the node it describes, relayed
+    /// byte-for-byte alongside its node record. Additive: older nodes keep
+    /// reading PeerAnnouncement.cache_affinity, which newer nodes still send.
+    #[prost(message, repeated, tag = "5")]
+    pub signed_cache_affinity: ::prost::alloc::vec::Vec<SignedCacheAffinity>,
+}
+/// A node's self-description, signed with its endpoint key. Relays store and
+/// forward `signed` and `signature` unchanged; they never re-encode them.
+///
+///    signed    = endpoint_id\[32\] || seq\[8, u64 BE\] || issued_at_unix_ms\[8, u64 BE\]
+///                || NodeRecord protobuf bytes
+///    signature = Ed25519(endpoint key, "mesh-llm-node-record-v1\0" || signed)
+///
+/// Every header field has a fixed width and the record is the only
+/// variable-length part, so the layout needs no length prefixes. A new layout
+/// gets a new domain tag. The highest `seq` per node wins; `issued_at_unix_ms`
+/// bounds how long relays keep forwarding a record.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct SignedNodeRecord {
+    #[prost(bytes = "vec", tag = "1")]
+    pub signed: ::prost::alloc::vec::Vec<u8>,
+    /// exactly 64 bytes
+    #[prost(bytes = "vec", tag = "2")]
+    pub signature: ::prost::alloc::vec::Vec<u8>,
+    /// Unsigned. What the sending hop observed about the node; replaced at
+    /// every hop because each relay measures its own view.
+    #[prost(message, optional, tag = "3")]
+    pub hop: ::core::option::Option<HopObservation>,
+}
+/// The same envelope as SignedNodeRecord, signed under
+/// "mesh-llm-cache-affinity-record-v1\0" with a CacheAffinityAdvertisement as
+/// the body. Relays drop it once it is older than the advertisement TTL.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct SignedCacheAffinity {
+    #[prost(bytes = "vec", tag = "1")]
+    pub signed: ::prost::alloc::vec::Vec<u8>,
+    /// exactly 64 bytes
+    #[prost(bytes = "vec", tag = "2")]
+    pub signature: ::prost::alloc::vec::Vec<u8>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct HopObservation {
+    #[prost(uint32, optional, tag = "1")]
+    pub latency_ms: ::core::option::Option<u32>,
+    #[prost(enumeration = "LatencySource", optional, tag = "2")]
+    pub latency_source: ::core::option::Option<i32>,
+    #[prost(uint32, optional, tag = "3")]
+    pub latency_age_ms: ::core::option::Option<u32>,
+    /// 32 bytes when set
+    #[prost(bytes = "vec", tag = "4")]
+    pub latency_observer_id: ::prost::alloc::vec::Vec<u8>,
+}
+/// Only facts the node asserts about itself. Fields a hop measures, fields
+/// derived from other fields, and deprecated compatibility fields stay on the
+/// legacy PeerAnnouncement. Cache affinity travels as its own signed record
+/// (SignedCacheAffinity), and direct-only data (demand, log heads,
+/// per-connection proofs) is not part of the record either.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct NodeRecord {
+    #[prost(enumeration = "NodeRole", tag = "1")]
+    pub role: i32,
+    #[prost(uint32, optional, tag = "2")]
+    pub http_port: ::core::option::Option<u32>,
+    #[prost(string, tag = "3")]
+    pub version: ::prost::alloc::string::String,
+    #[prost(message, repeated, tag = "4")]
+    pub addrs: ::prost::alloc::vec::Vec<TransportAddr>,
+    #[prost(message, optional, tag = "5")]
+    pub hardware: ::core::option::Option<HardwareInfo>,
+    #[prost(uint64, tag = "6")]
+    pub vram_bytes: u64,
+    #[prost(string, tag = "7")]
+    pub mesh_id: ::prost::alloc::string::String,
+    #[prost(string, tag = "8")]
+    pub mesh_policy_hash: ::prost::alloc::string::String,
+    #[prost(string, repeated, tag = "9")]
+    pub serving_models: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    #[prost(string, repeated, tag = "10")]
+    pub hosted_models: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    #[prost(message, repeated, tag = "11")]
+    pub served_models: ::prost::alloc::vec::Vec<ServedModelDescriptor>,
+    #[prost(message, repeated, tag = "12")]
+    pub served_runtime: ::prost::alloc::vec::Vec<ModelRuntimeDescriptor>,
+    #[prost(string, repeated, tag = "13")]
+    pub requested_models: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    #[prost(string, repeated, tag = "14")]
+    pub explicit_model_interests: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    #[prost(string, repeated, tag = "15")]
+    pub catalog_models: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    #[prost(string, tag = "16")]
+    pub model_source: ::prost::alloc::string::String,
+    #[prost(message, optional, tag = "17")]
+    pub experts_summary: ::core::option::Option<ExpertsSummary>,
+    #[prost(uint64, optional, tag = "18")]
+    pub first_joined_mesh_ts: ::core::option::Option<u64>,
+    #[prost(message, repeated, tag = "19")]
+    pub subprotocols: ::prost::alloc::vec::Vec<MeshSubprotocol>,
+    #[prost(enumeration = "InferenceAdmissionState", tag = "20")]
+    pub admission_state: i32,
+    #[prost(message, repeated, tag = "21")]
+    pub throughput: ::prost::alloc::vec::Vec<AdvertisedModelThroughput>,
+    #[prost(message, repeated, tag = "22")]
+    pub lightning_offers: ::prost::alloc::vec::Vec<LightningOffer>,
+    #[prost(message, optional, tag = "23")]
+    pub owner_attestation: ::core::option::Option<SignedNodeOwnership>,
+    #[prost(message, optional, tag = "24")]
+    pub genesis_policy: ::core::option::Option<SignedMeshGenesisPolicy>,
+    #[prost(message, optional, tag = "25")]
+    pub release_attestation: ::core::option::Option<ReleaseBuildAttestation>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct TransportAddr {
+    #[prost(oneof = "transport_addr::Addr", tags = "1, 2")]
+    pub addr: ::core::option::Option<transport_addr::Addr>,
+}
+/// Nested message and enum types in `TransportAddr`.
+pub mod transport_addr {
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
+    pub enum Addr {
+        #[prost(string, tag = "1")]
+        RelayUrl(::prost::alloc::string::String),
+        /// socket address, e.g. "203.0.113.5:4433"
+        #[prost(string, tag = "2")]
+        Ip(::prost::alloc::string::String),
+    }
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PeerAnnouncement {
@@ -110,8 +240,8 @@ pub struct PeerAnnouncement {
     pub subprotocols: ::prost::alloc::vec::Vec<MeshSubprotocol>,
     #[prost(uint32, optional, tag = "40")]
     pub latency_ms: ::core::option::Option<u32>,
-    #[prost(enumeration = "LatencySource", tag = "41")]
-    pub latency_source: i32,
+    #[prost(enumeration = "LatencySource", optional, tag = "41")]
+    pub latency_source: ::core::option::Option<i32>,
     #[prost(uint32, optional, tag = "42")]
     pub latency_age_ms: ::core::option::Option<u32>,
     #[prost(bytes = "vec", optional, tag = "43")]
@@ -126,7 +256,8 @@ pub struct PeerAnnouncement {
     pub release_attestation: ::core::option::Option<ReleaseBuildAttestation>,
     #[prost(message, optional, tag = "48")]
     pub direct_admission_proof: ::core::option::Option<DirectNodeAdmissionProof>,
-    /// Inference admission state advertised by this peer (additive; older nodes ignore)
+    /// Inference admission state advertised by this peer (additive; older nodes ignore).
+    /// Missing/unset means unspecified/legacy behavior.
     #[prost(enumeration = "InferenceAdmissionState", optional, tag = "49")]
     pub inference_admission_state: ::core::option::Option<i32>,
     /// Positive, short-lived cache evidence. Digests are salted and contain no tokens.
@@ -147,6 +278,41 @@ pub struct PeerAnnouncement {
     pub claimed_log_head: ::core::option::Option<ClaimedLogHead>,
     #[prost(message, repeated, tag = "52")]
     pub lightning_offers: ::prost::alloc::vec::Vec<LightningOffer>,
+    /// Public keys plugins on this node sign with, each bound to this node's key;
+    /// see `PluginKey`. At most 16, one per plugin.
+    #[prost(message, repeated, tag = "53")]
+    pub plugin_keys: ::prost::alloc::vec::Vec<PluginKey>,
+}
+/// A public key a plugin on this node signs with, bound to this node by the
+/// node's own key, so a peer's plugin can check what that plugin signed without
+/// an operator configuring keys by hand. Set by a plugin through the plugin
+/// protocol (`PluginKeyRequest`); opt-in per plugin; never carried for a plugin
+/// that did not ask. A receiver verifies `binding_signature` with the
+/// announcing node's key (its `endpoint_id`) over:
+///
+///   sig_input = b"mesh-llm-plugin-key-v1:"
+///             || u64le(len(endpoint_id))          || endpoint_id
+///             || u64le(len(plugin))               || plugin
+///             || u64le(len(public_key))           || public_key
+///             || u64le(len(signature_algorithm))  || signature_algorithm
+///
+/// with the same conventions as `ClaimedLogHead`. A key whose binding does not
+/// verify is dropped on receipt. Like `claimed_log_head`, plugin keys are not
+/// relayed transitively: a receiver sees those of directly-connected peers.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PluginKey {
+    /// the plugin's name on this node
+    #[prost(string, tag = "1")]
+    pub plugin: ::prost::alloc::string::String,
+    /// exactly 32 bytes (Ed25519)
+    #[prost(bytes = "vec", tag = "2")]
+    pub public_key: ::prost::alloc::vec::Vec<u8>,
+    /// by this node's key over sig_input above
+    #[prost(bytes = "vec", tag = "3")]
+    pub binding_signature: ::prost::alloc::vec::Vec<u8>,
+    /// "ed25519"
+    #[prost(string, tag = "4")]
+    pub signature_algorithm: ::prost::alloc::string::String,
 }
 /// A minimal, self-contained claim about the current head of a peer's
 /// append-only log. `claimed_signature` is claimed by the announcing peer to
@@ -158,12 +324,12 @@ pub struct PeerAnnouncement {
 /// using this crate's `write_string`/`write_bytes` conventions (see
 /// `mesh-llm-host-runtime/src/mesh/requirements.rs`):
 ///
-///   sig_input = b"mesh-llm-claimed-log-head-v1:"
-///             || u64le(len(log_id))               || log_id
-///             || u64le(size)
-///             || u64le(len(root))                  || root
-///             || u64le(timestamp_unix_ms)
-///             || u64le(len(signature_algorithm))   || signature_algorithm
+///    sig_input = b"mesh-llm-claimed-log-head-v1:"
+///              || u64le(len(log_id))               || log_id
+///              || u64le(size)
+///              || u64le(len(root))                  || root
+///              || u64le(timestamp_unix_ms)
+///              || u64le(len(signature_algorithm))   || signature_algorithm
 ///
 /// All integers are little-endian, fixed 8 bytes (u64le) — matching this
 /// crate's existing canonical-bytes convention, the same one used for
@@ -216,7 +382,146 @@ pub struct ClaimedLogHead {
     #[prost(string, tag = "6")]
     pub signature_algorithm: ::prost::alloc::string::String,
 }
-#[derive(Clone, PartialEq, ::prost::Message)]
+/// Presence means payment is required for this exact model, protocol v1.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct LightningOffer {
+    #[prost(string, tag = "1")]
+    pub model: ::prost::alloc::string::String,
+    #[prost(uint64, tag = "2")]
+    pub input_msat_per_million: u64,
+    #[prost(uint64, tag = "3")]
+    pub output_msat_per_million: u64,
+    #[prost(uint64, tag = "4")]
+    pub minimum_invoice_msat: u64,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct SignedMeshGenesisPolicy {
+    #[prost(uint32, tag = "1")]
+    pub version: u32,
+    #[prost(message, optional, tag = "2")]
+    pub policy: ::core::option::Option<MeshGenesisPolicy>,
+    /// 32 bytes
+    #[prost(bytes = "vec", tag = "3")]
+    pub origin_sign_public_key: ::prost::alloc::vec::Vec<u8>,
+    #[prost(string, tag = "4")]
+    pub signature_algorithm: ::prost::alloc::string::String,
+    /// Ed25519 signature over canonical proof bytes
+    #[prost(bytes = "vec", tag = "5")]
+    pub signature: ::prost::alloc::vec::Vec<u8>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct MeshGenesisPolicy {
+    #[prost(uint32, tag = "1")]
+    pub version: u32,
+    #[prost(string, tag = "2")]
+    pub origin_owner_id: ::prost::alloc::string::String,
+    #[prost(uint64, tag = "3")]
+    pub created_at_unix_ms: u64,
+    #[prost(message, optional, tag = "4")]
+    pub requirements: ::core::option::Option<MeshRequirements>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct MeshRequirements {
+    #[prost(message, optional, tag = "1")]
+    pub node_version: ::core::option::Option<NodeVersionBounds>,
+    #[prost(message, optional, tag = "2")]
+    pub protocol_generation: ::core::option::Option<ProtocolGenerationBounds>,
+    #[prost(message, optional, tag = "3")]
+    pub release_attestation: ::core::option::Option<ReleaseAttestationRequirement>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct NodeVersionBounds {
+    #[prost(string, optional, tag = "1")]
+    pub min: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(string, optional, tag = "2")]
+    pub max: ::core::option::Option<::prost::alloc::string::String>,
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ProtocolGenerationBounds {
+    #[prost(uint32, optional, tag = "1")]
+    pub min: ::core::option::Option<u32>,
+    #[prost(uint32, optional, tag = "2")]
+    pub max: ::core::option::Option<u32>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ReleaseAttestationRequirement {
+    #[prost(bool, optional, tag = "1")]
+    pub required: ::core::option::Option<bool>,
+    #[prost(string, repeated, tag = "2")]
+    pub allowed_signer_keys: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct SignedBootstrapToken {
+    #[prost(uint32, tag = "1")]
+    pub version: u32,
+    /// JSON-serialized EndpointAddr entries
+    #[prost(bytes = "vec", repeated, tag = "2")]
+    pub serialized_addrs: ::prost::alloc::vec::Vec<::prost::alloc::vec::Vec<u8>>,
+    #[prost(string, tag = "3")]
+    pub mesh_id: ::prost::alloc::string::String,
+    #[prost(string, tag = "4")]
+    pub policy_hash: ::prost::alloc::string::String,
+    #[prost(message, optional, tag = "5")]
+    pub genesis_policy: ::core::option::Option<MeshGenesisPolicy>,
+    #[prost(uint64, optional, tag = "6")]
+    pub expires_at_unix_ms: ::core::option::Option<u64>,
+    /// 32 bytes
+    #[prost(bytes = "vec", tag = "7")]
+    pub origin_sign_public_key: ::prost::alloc::vec::Vec<u8>,
+    #[prost(string, tag = "8")]
+    pub signature_algorithm: ::prost::alloc::string::String,
+    /// Ed25519 signature over canonical token bytes
+    #[prost(bytes = "vec", tag = "9")]
+    pub signature: ::prost::alloc::vec::Vec<u8>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ReleaseBuildAttestation {
+    #[prost(uint32, tag = "1")]
+    pub version: u32,
+    #[prost(string, tag = "2")]
+    pub node_version: ::prost::alloc::string::String,
+    #[prost(string, tag = "3")]
+    pub build_id: ::prost::alloc::string::String,
+    #[prost(string, tag = "4")]
+    pub commit: ::prost::alloc::string::String,
+    #[prost(string, tag = "5")]
+    pub target_triple: ::prost::alloc::string::String,
+    #[prost(uint32, optional, tag = "6")]
+    pub supported_protocol_generation_min: ::core::option::Option<u32>,
+    #[prost(uint32, optional, tag = "7")]
+    pub supported_protocol_generation_max: ::core::option::Option<u32>,
+    #[prost(string, optional, tag = "8")]
+    pub artifact_digest: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(string, tag = "9")]
+    pub signer_key_id: ::prost::alloc::string::String,
+    #[prost(string, tag = "10")]
+    pub signature_algorithm: ::prost::alloc::string::String,
+    /// Detached release signature over canonical attestation bytes
+    #[prost(bytes = "vec", tag = "11")]
+    pub signature: ::prost::alloc::vec::Vec<u8>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct DirectNodeAdmissionProof {
+    #[prost(uint32, tag = "1")]
+    pub version: u32,
+    /// exactly 32 bytes; must match the live direct sender identity
+    #[prost(bytes = "vec", tag = "2")]
+    pub sender_id: ::prost::alloc::vec::Vec<u8>,
+    #[prost(string, tag = "3")]
+    pub mesh_id: ::prost::alloc::string::String,
+    #[prost(string, tag = "4")]
+    pub policy_hash: ::prost::alloc::string::String,
+    #[prost(string, tag = "5")]
+    pub attestation_hash: ::prost::alloc::string::String,
+    #[prost(uint64, tag = "6")]
+    pub timestamp_unix_ms: u64,
+    #[prost(string, tag = "7")]
+    pub signature_algorithm: ::prost::alloc::string::String,
+    /// Ed25519 signature over sender_id + mesh_id + policy_hash + attestation_hash + timestamp
+    #[prost(bytes = "vec", tag = "8")]
+    pub signature: ::prost::alloc::vec::Vec<u8>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct AdvertisedModelThroughput {
     #[prost(string, tag = "1")]
     pub model_name: ::prost::alloc::string::String,
@@ -260,7 +565,7 @@ pub struct CacheAffinityEntry {
     #[prost(uint64, tag = "8")]
     pub prefill_micros_per_token: u64,
 }
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct MeshSubprotocol {
     /// e.g. "skippy-stage"
     #[prost(string, tag = "1")]
@@ -272,7 +577,10 @@ pub struct MeshSubprotocol {
     #[prost(string, repeated, tag = "3")]
     pub features: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
 }
-#[derive(Clone, PartialEq, ::prost::Message)]
+/// Stream 0x0d — generic admitted subsystem stream.
+/// Mesh owns this open frame. The remaining bytes on the stream are opaque to
+/// mesh and are owned by the selected subsystem protocol.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct MeshSubprotocolOpen {
     #[prost(uint32, tag = "1")]
     pub r#gen: u32,
@@ -697,6 +1005,25 @@ pub struct NodePluginEntry {
     #[prost(string, repeated, tag = "4")]
     pub args: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
 }
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ConfigDiagnostic {
+    #[prost(enumeration = "ConfigDiagnosticCode", tag = "1")]
+    pub code: i32,
+    #[prost(enumeration = "ConfigDiagnosticSeverity", tag = "2")]
+    pub severity: i32,
+    #[prost(enumeration = "ConfigDiagnosticSource", tag = "3")]
+    pub source: i32,
+    #[prost(enumeration = "ConfigDiagnosticSchemaSource", optional, tag = "4")]
+    pub schema_source: ::core::option::Option<i32>,
+    #[prost(string, optional, tag = "5")]
+    pub path: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(string, optional, tag = "6")]
+    pub canonical_path: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(string, tag = "7")]
+    pub message: ::prost::alloc::string::String,
+    #[prost(string, optional, tag = "8")]
+    pub help: ::core::option::Option<::prost::alloc::string::String>,
+}
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct OwnerControlEnvelope {
     /// must equal NODE_PROTOCOL_GENERATION
@@ -711,7 +1038,7 @@ pub struct OwnerControlEnvelope {
     #[prost(message, optional, tag = "5")]
     pub error: ::core::option::Option<OwnerControlError>,
 }
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct OwnerControlHandshake {
     #[prost(message, optional, tag = "1")]
     pub ownership: ::core::option::Option<SignedNodeOwnership>,
@@ -762,7 +1089,7 @@ pub struct OwnerControlResponse {
     #[prost(message, optional, tag = "10")]
     pub kv_cache: ::core::option::Option<OwnerControlKvCacheResponse>,
 }
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct OwnerControlError {
     #[prost(enumeration = "OwnerControlErrorCode", tag = "1")]
     pub code: i32,
@@ -773,7 +1100,7 @@ pub struct OwnerControlError {
     #[prost(uint64, optional, tag = "4")]
     pub current_revision: ::core::option::Option<u64>,
 }
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct OwnerControlGetConfigRequest {
     /// exactly 32 bytes
     #[prost(bytes = "vec", tag = "1")]
@@ -787,7 +1114,7 @@ pub struct OwnerControlGetConfigResponse {
     #[prost(message, optional, tag = "1")]
     pub snapshot: ::core::option::Option<OwnerControlConfigSnapshot>,
 }
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct OwnerControlWatchConfigRequest {
     /// exactly 32 bytes
     #[prost(bytes = "vec", tag = "1")]
@@ -807,7 +1134,7 @@ pub struct OwnerControlWatchConfigResponse {
     #[prost(message, optional, tag = "3")]
     pub update: ::core::option::Option<OwnerControlConfigUpdate>,
 }
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct OwnerControlWatchAccepted {
     /// exactly 32 bytes
     #[prost(bytes = "vec", tag = "1")]
@@ -842,25 +1169,6 @@ pub struct OwnerControlApplyConfigResponse {
     pub diagnostics: ::prost::alloc::vec::Vec<ConfigDiagnostic>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct ConfigDiagnostic {
-    #[prost(enumeration = "ConfigDiagnosticCode", tag = "1")]
-    pub code: i32,
-    #[prost(enumeration = "ConfigDiagnosticSeverity", tag = "2")]
-    pub severity: i32,
-    #[prost(enumeration = "ConfigDiagnosticSource", tag = "3")]
-    pub source: i32,
-    #[prost(enumeration = "ConfigDiagnosticSchemaSource", optional, tag = "4")]
-    pub schema_source: ::core::option::Option<i32>,
-    #[prost(string, optional, tag = "5")]
-    pub path: ::core::option::Option<::prost::alloc::string::String>,
-    #[prost(string, optional, tag = "6")]
-    pub canonical_path: ::core::option::Option<::prost::alloc::string::String>,
-    #[prost(string, tag = "7")]
-    pub message: ::prost::alloc::string::String,
-    #[prost(string, optional, tag = "8")]
-    pub help: ::core::option::Option<::prost::alloc::string::String>,
-}
-#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct OwnerControlRefreshInventoryRequest {
     /// exactly 32 bytes
     #[prost(bytes = "vec", tag = "1")]
@@ -869,21 +1177,14 @@ pub struct OwnerControlRefreshInventoryRequest {
     #[prost(bytes = "vec", tag = "2")]
     pub target_node_id: ::prost::alloc::vec::Vec<u8>,
 }
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct OwnerControlRefreshInventoryResponse {
-    #[prost(message, optional, tag = "1")]
-    pub snapshot: ::core::option::Option<OwnerControlConfigSnapshot>,
-    #[prost(message, optional, tag = "2")]
-    pub inventory: ::core::option::Option<OwnerControlRefreshInventory>,
-}
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct OwnerControlModelRef {
     #[prost(string, tag = "1")]
     pub canonical_model_ref: ::prost::alloc::string::String,
     #[prost(string, optional, tag = "2")]
     pub instance_id: ::core::option::Option<::prost::alloc::string::String>,
 }
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct OwnerControlLoadModelRequest {
     #[prost(bytes = "vec", tag = "1")]
     pub requester_node_id: ::prost::alloc::vec::Vec<u8>,
@@ -894,7 +1195,7 @@ pub struct OwnerControlLoadModelRequest {
     #[prost(string, optional, tag = "4")]
     pub profile: ::core::option::Option<::prost::alloc::string::String>,
 }
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct OwnerControlUnloadModelRequest {
     #[prost(bytes = "vec", tag = "1")]
     pub requester_node_id: ::prost::alloc::vec::Vec<u8>,
@@ -903,7 +1204,7 @@ pub struct OwnerControlUnloadModelRequest {
     #[prost(message, optional, tag = "3")]
     pub model: ::core::option::Option<OwnerControlModelRef>,
 }
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct OwnerControlEnsureModelRequest {
     #[prost(bytes = "vec", tag = "1")]
     pub requester_node_id: ::prost::alloc::vec::Vec<u8>,
@@ -914,7 +1215,7 @@ pub struct OwnerControlEnsureModelRequest {
     #[prost(string, optional, tag = "4")]
     pub profile: ::core::option::Option<::prost::alloc::string::String>,
 }
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct OwnerControlDrainModelRequest {
     #[prost(bytes = "vec", tag = "1")]
     pub requester_node_id: ::prost::alloc::vec::Vec<u8>,
@@ -925,7 +1226,7 @@ pub struct OwnerControlDrainModelRequest {
     #[prost(uint64, optional, tag = "4")]
     pub drain_timeout_secs: ::core::option::Option<u64>,
 }
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct OwnerControlKvCacheRequest {
     /// exactly 32 bytes
     #[prost(bytes = "vec", tag = "1")]
@@ -942,7 +1243,7 @@ pub struct OwnerControlKvCacheRequest {
     #[prost(string, optional, tag = "5")]
     pub model_identity: ::core::option::Option<::prost::alloc::string::String>,
 }
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct OwnerControlLoadModelResponse {
     #[prost(string, tag = "1")]
     pub intent_id: ::prost::alloc::string::String,
@@ -951,7 +1252,7 @@ pub struct OwnerControlLoadModelResponse {
     #[prost(message, optional, tag = "3")]
     pub target: ::core::option::Option<OwnerControlModelRef>,
 }
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct OwnerControlUnloadModelResponse {
     #[prost(string, tag = "1")]
     pub intent_id: ::prost::alloc::string::String,
@@ -960,7 +1261,7 @@ pub struct OwnerControlUnloadModelResponse {
     #[prost(message, optional, tag = "3")]
     pub target: ::core::option::Option<OwnerControlModelRef>,
 }
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct OwnerControlEnsureModelResponse {
     #[prost(string, tag = "1")]
     pub intent_id: ::prost::alloc::string::String,
@@ -969,7 +1270,7 @@ pub struct OwnerControlEnsureModelResponse {
     #[prost(message, optional, tag = "3")]
     pub target: ::core::option::Option<OwnerControlModelRef>,
 }
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct OwnerControlDrainModelResponse {
     #[prost(string, tag = "1")]
     pub intent_id: ::prost::alloc::string::String,
@@ -978,7 +1279,7 @@ pub struct OwnerControlDrainModelResponse {
     #[prost(message, optional, tag = "3")]
     pub target: ::core::option::Option<OwnerControlModelRef>,
 }
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct OwnerControlKvCacheResponse {
     /// versioned KvCacheStatusPayload JSON
     #[prost(bytes = "vec", tag = "1")]
@@ -986,6 +1287,13 @@ pub struct OwnerControlKvCacheResponse {
     /// present for prune and clear
     #[prost(uint64, optional, tag = "2")]
     pub freed_bytes: ::core::option::Option<u64>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct OwnerControlRefreshInventoryResponse {
+    #[prost(message, optional, tag = "1")]
+    pub snapshot: ::core::option::Option<OwnerControlConfigSnapshot>,
+    #[prost(message, optional, tag = "2")]
+    pub inventory: ::core::option::Option<OwnerControlRefreshInventory>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct OwnerControlRefreshInventory {
@@ -1032,6 +1340,148 @@ pub struct OwnerControlConfigUpdate {
     pub config_hash: ::prost::alloc::vec::Vec<u8>,
     #[prost(message, optional, tag = "4")]
     pub config: ::core::option::Option<NodeConfigSnapshot>,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum InferenceAdmissionState {
+    Unspecified = 0,
+    Accepting = 1,
+    AcceptingDeprioritized = 2,
+    RemotePaused = 3,
+    AllPaused = 4,
+}
+impl InferenceAdmissionState {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "INFERENCE_ADMISSION_STATE_UNSPECIFIED",
+            Self::Accepting => "INFERENCE_ADMISSION_STATE_ACCEPTING",
+            Self::AcceptingDeprioritized => "INFERENCE_ADMISSION_STATE_ACCEPTING_DEPRIORITIZED",
+            Self::RemotePaused => "INFERENCE_ADMISSION_STATE_REMOTE_PAUSED",
+            Self::AllPaused => "INFERENCE_ADMISSION_STATE_ALL_PAUSED",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "INFERENCE_ADMISSION_STATE_UNSPECIFIED" => Some(Self::Unspecified),
+            "INFERENCE_ADMISSION_STATE_ACCEPTING" => Some(Self::Accepting),
+            "INFERENCE_ADMISSION_STATE_ACCEPTING_DEPRIORITIZED" => {
+                Some(Self::AcceptingDeprioritized)
+            }
+            "INFERENCE_ADMISSION_STATE_REMOTE_PAUSED" => Some(Self::RemotePaused),
+            "INFERENCE_ADMISSION_STATE_ALL_PAUSED" => Some(Self::AllPaused),
+            _ => None,
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum LatencySource {
+    Unspecified = 0,
+    /// Measured directly by this node
+    Direct = 1,
+    /// Estimated via transitive gossip
+    Estimated = 2,
+    /// Unknown source (e.g. propagated with no origin)
+    Unknown = 3,
+}
+impl LatencySource {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "LATENCY_SOURCE_UNSPECIFIED",
+            Self::Direct => "LATENCY_SOURCE_DIRECT",
+            Self::Estimated => "LATENCY_SOURCE_ESTIMATED",
+            Self::Unknown => "LATENCY_SOURCE_UNKNOWN",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "LATENCY_SOURCE_UNSPECIFIED" => Some(Self::Unspecified),
+            "LATENCY_SOURCE_DIRECT" => Some(Self::Direct),
+            "LATENCY_SOURCE_ESTIMATED" => Some(Self::Estimated),
+            "LATENCY_SOURCE_UNKNOWN" => Some(Self::Unknown),
+            _ => None,
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum CacheTier {
+    Unspecified = 0,
+    L1 = 1,
+    L3 = 2,
+}
+impl CacheTier {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "CACHE_TIER_UNSPECIFIED",
+            Self::L1 => "CACHE_TIER_L1",
+            Self::L3 => "CACHE_TIER_L3",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "CACHE_TIER_UNSPECIFIED" => Some(Self::Unspecified),
+            "CACHE_TIER_L1" => Some(Self::L1),
+            "CACHE_TIER_L3" => Some(Self::L3),
+            _ => None,
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum ModelWorkloadClass {
+    Unspecified = 0,
+    CausalGeneration = 1,
+    Embedding = 2,
+    Rerank = 3,
+    EncoderDecoder = 4,
+    SpeechSynthesis = 5,
+    Decision = 6,
+}
+impl ModelWorkloadClass {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "MODEL_WORKLOAD_CLASS_UNSPECIFIED",
+            Self::CausalGeneration => "MODEL_WORKLOAD_CLASS_CAUSAL_GENERATION",
+            Self::Embedding => "MODEL_WORKLOAD_CLASS_EMBEDDING",
+            Self::Rerank => "MODEL_WORKLOAD_CLASS_RERANK",
+            Self::EncoderDecoder => "MODEL_WORKLOAD_CLASS_ENCODER_DECODER",
+            Self::SpeechSynthesis => "MODEL_WORKLOAD_CLASS_SPEECH_SYNTHESIS",
+            Self::Decision => "MODEL_WORKLOAD_CLASS_DECISION",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "MODEL_WORKLOAD_CLASS_UNSPECIFIED" => Some(Self::Unspecified),
+            "MODEL_WORKLOAD_CLASS_CAUSAL_GENERATION" => Some(Self::CausalGeneration),
+            "MODEL_WORKLOAD_CLASS_EMBEDDING" => Some(Self::Embedding),
+            "MODEL_WORKLOAD_CLASS_RERANK" => Some(Self::Rerank),
+            "MODEL_WORKLOAD_CLASS_ENCODER_DECODER" => Some(Self::EncoderDecoder),
+            "MODEL_WORKLOAD_CLASS_SPEECH_SYNTHESIS" => Some(Self::SpeechSynthesis),
+            "MODEL_WORKLOAD_CLASS_DECISION" => Some(Self::Decision),
+            _ => None,
+        }
+    }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
@@ -1103,47 +1553,6 @@ impl ModelSourceKind {
         }
     }
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
-#[repr(i32)]
-pub enum ModelWorkloadClass {
-    Unspecified = 0,
-    CausalGeneration = 1,
-    Embedding = 2,
-    Rerank = 3,
-    EncoderDecoder = 4,
-    SpeechSynthesis = 5,
-    Decision = 6,
-}
-impl ModelWorkloadClass {
-    /// String value of the enum field names used in the ProtoBuf definition.
-    ///
-    /// The values are not transformed in any way and thus are considered stable
-    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
-    pub fn as_str_name(&self) -> &'static str {
-        match self {
-            Self::Unspecified => "MODEL_WORKLOAD_CLASS_UNSPECIFIED",
-            Self::CausalGeneration => "MODEL_WORKLOAD_CLASS_CAUSAL_GENERATION",
-            Self::Embedding => "MODEL_WORKLOAD_CLASS_EMBEDDING",
-            Self::Rerank => "MODEL_WORKLOAD_CLASS_RERANK",
-            Self::EncoderDecoder => "MODEL_WORKLOAD_CLASS_ENCODER_DECODER",
-            Self::SpeechSynthesis => "MODEL_WORKLOAD_CLASS_SPEECH_SYNTHESIS",
-            Self::Decision => "MODEL_WORKLOAD_CLASS_DECISION",
-        }
-    }
-    /// Creates an enum from field names used in the ProtoBuf definition.
-    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
-        match value {
-            "MODEL_WORKLOAD_CLASS_UNSPECIFIED" => Some(Self::Unspecified),
-            "MODEL_WORKLOAD_CLASS_CAUSAL_GENERATION" => Some(Self::CausalGeneration),
-            "MODEL_WORKLOAD_CLASS_EMBEDDING" => Some(Self::Embedding),
-            "MODEL_WORKLOAD_CLASS_RERANK" => Some(Self::Rerank),
-            "MODEL_WORKLOAD_CLASS_ENCODER_DECODER" => Some(Self::EncoderDecoder),
-            "MODEL_WORKLOAD_CLASS_SPEECH_SYNTHESIS" => Some(Self::SpeechSynthesis),
-            "MODEL_WORKLOAD_CLASS_DECISION" => Some(Self::Decision),
-            _ => None,
-        }
-    }
-}
 /// Shared enum
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
@@ -1173,153 +1582,6 @@ impl NodeRole {
             "WORKER" => Some(Self::Worker),
             "HOST" => Some(Self::Host),
             "CLIENT" => Some(Self::Client),
-            _ => None,
-        }
-    }
-}
-/// Latency source type for peer latency data
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
-#[repr(i32)]
-pub enum LatencySource {
-    Unspecified = 0,
-    Direct = 1,
-    Estimated = 2,
-    Unknown = 3,
-}
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct SignedMeshGenesisPolicy {
-    #[prost(uint32, tag = "1")]
-    pub version: u32,
-    #[prost(message, optional, tag = "2")]
-    pub policy: ::core::option::Option<MeshGenesisPolicy>,
-    #[prost(bytes = "vec", tag = "3")]
-    pub origin_sign_public_key: ::prost::alloc::vec::Vec<u8>,
-    #[prost(string, tag = "4")]
-    pub signature_algorithm: ::prost::alloc::string::String,
-    #[prost(bytes = "vec", tag = "5")]
-    pub signature: ::prost::alloc::vec::Vec<u8>,
-}
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct MeshGenesisPolicy {
-    #[prost(uint32, tag = "1")]
-    pub version: u32,
-    #[prost(string, tag = "2")]
-    pub origin_owner_id: ::prost::alloc::string::String,
-    #[prost(uint64, tag = "3")]
-    pub created_at_unix_ms: u64,
-    #[prost(message, optional, tag = "4")]
-    pub requirements: ::core::option::Option<MeshRequirements>,
-}
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct MeshRequirements {
-    #[prost(message, optional, tag = "1")]
-    pub node_version: ::core::option::Option<NodeVersionBounds>,
-    #[prost(message, optional, tag = "2")]
-    pub protocol_generation: ::core::option::Option<ProtocolGenerationBounds>,
-    #[prost(message, optional, tag = "3")]
-    pub release_attestation: ::core::option::Option<ReleaseAttestationRequirement>,
-}
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct NodeVersionBounds {
-    #[prost(string, optional, tag = "1")]
-    pub min: ::core::option::Option<::prost::alloc::string::String>,
-    #[prost(string, optional, tag = "2")]
-    pub max: ::core::option::Option<::prost::alloc::string::String>,
-}
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct ProtocolGenerationBounds {
-    #[prost(uint32, optional, tag = "1")]
-    pub min: ::core::option::Option<u32>,
-    #[prost(uint32, optional, tag = "2")]
-    pub max: ::core::option::Option<u32>,
-}
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct ReleaseAttestationRequirement {
-    #[prost(bool, optional, tag = "1")]
-    pub required: ::core::option::Option<bool>,
-    #[prost(string, repeated, tag = "2")]
-    pub allowed_signer_keys: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
-}
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct SignedBootstrapToken {
-    #[prost(uint32, tag = "1")]
-    pub version: u32,
-    #[prost(bytes = "vec", repeated, tag = "2")]
-    pub serialized_addrs: ::prost::alloc::vec::Vec<::prost::alloc::vec::Vec<u8>>,
-    #[prost(string, tag = "3")]
-    pub mesh_id: ::prost::alloc::string::String,
-    #[prost(string, tag = "4")]
-    pub policy_hash: ::prost::alloc::string::String,
-    #[prost(message, optional, tag = "5")]
-    pub genesis_policy: ::core::option::Option<MeshGenesisPolicy>,
-    #[prost(uint64, optional, tag = "6")]
-    pub expires_at_unix_ms: ::core::option::Option<u64>,
-    #[prost(bytes = "vec", tag = "7")]
-    pub origin_sign_public_key: ::prost::alloc::vec::Vec<u8>,
-    #[prost(string, tag = "8")]
-    pub signature_algorithm: ::prost::alloc::string::String,
-    #[prost(bytes = "vec", tag = "9")]
-    pub signature: ::prost::alloc::vec::Vec<u8>,
-}
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct ReleaseBuildAttestation {
-    #[prost(uint32, tag = "1")]
-    pub version: u32,
-    #[prost(string, tag = "2")]
-    pub node_version: ::prost::alloc::string::String,
-    #[prost(string, tag = "3")]
-    pub build_id: ::prost::alloc::string::String,
-    #[prost(string, tag = "4")]
-    pub commit: ::prost::alloc::string::String,
-    #[prost(string, tag = "5")]
-    pub target_triple: ::prost::alloc::string::String,
-    #[prost(uint32, optional, tag = "6")]
-    pub supported_protocol_generation_min: ::core::option::Option<u32>,
-    #[prost(uint32, optional, tag = "7")]
-    pub supported_protocol_generation_max: ::core::option::Option<u32>,
-    #[prost(string, optional, tag = "8")]
-    pub artifact_digest: ::core::option::Option<::prost::alloc::string::String>,
-    #[prost(string, tag = "9")]
-    pub signer_key_id: ::prost::alloc::string::String,
-    #[prost(string, tag = "10")]
-    pub signature_algorithm: ::prost::alloc::string::String,
-    #[prost(bytes = "vec", tag = "11")]
-    pub signature: ::prost::alloc::vec::Vec<u8>,
-}
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct DirectNodeAdmissionProof {
-    #[prost(uint32, tag = "1")]
-    pub version: u32,
-    #[prost(bytes = "vec", tag = "2")]
-    pub sender_id: ::prost::alloc::vec::Vec<u8>,
-    #[prost(string, tag = "3")]
-    pub mesh_id: ::prost::alloc::string::String,
-    #[prost(string, tag = "4")]
-    pub policy_hash: ::prost::alloc::string::String,
-    #[prost(string, tag = "5")]
-    pub attestation_hash: ::prost::alloc::string::String,
-    #[prost(uint64, tag = "6")]
-    pub timestamp_unix_ms: u64,
-    #[prost(string, tag = "7")]
-    pub signature_algorithm: ::prost::alloc::string::String,
-    #[prost(bytes = "vec", tag = "8")]
-    pub signature: ::prost::alloc::vec::Vec<u8>,
-}
-impl LatencySource {
-    pub fn as_str_name(&self) -> &'static str {
-        match self {
-            Self::Unspecified => "LATENCY_SOURCE_UNSPECIFIED",
-            Self::Direct => "DIRECT",
-            Self::Estimated => "ESTIMATED",
-            Self::Unknown => "UNKNOWN",
-        }
-    }
-    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
-        match value {
-            "LATENCY_SOURCE_UNSPECIFIED" => Some(Self::Unspecified),
-            "DIRECT" => Some(Self::Direct),
-            "ESTIMATED" => Some(Self::Estimated),
-            "UNKNOWN" => Some(Self::Unknown),
             _ => None,
         }
     }
@@ -1394,6 +1656,10 @@ pub enum ConfigDiagnosticSeverity {
     Info = 3,
 }
 impl ConfigDiagnosticSeverity {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
     pub fn as_str_name(&self) -> &'static str {
         match self {
             Self::Unspecified => "CONFIG_DIAGNOSTIC_SEVERITY_UNSPECIFIED",
@@ -1402,6 +1668,7 @@ impl ConfigDiagnosticSeverity {
             Self::Info => "CONFIG_DIAGNOSTIC_SEVERITY_INFO",
         }
     }
+    /// Creates an enum from field names used in the ProtoBuf definition.
     pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
         match value {
             "CONFIG_DIAGNOSTIC_SEVERITY_UNSPECIFIED" => Some(Self::Unspecified),
@@ -1422,6 +1689,10 @@ pub enum ConfigDiagnosticSource {
     Compatibility = 4,
 }
 impl ConfigDiagnosticSource {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
     pub fn as_str_name(&self) -> &'static str {
         match self {
             Self::Unspecified => "CONFIG_DIAGNOSTIC_SOURCE_UNSPECIFIED",
@@ -1431,6 +1702,7 @@ impl ConfigDiagnosticSource {
             Self::Compatibility => "CONFIG_DIAGNOSTIC_SOURCE_COMPATIBILITY",
         }
     }
+    /// Creates an enum from field names used in the ProtoBuf definition.
     pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
         match value {
             "CONFIG_DIAGNOSTIC_SOURCE_UNSPECIFIED" => Some(Self::Unspecified),
@@ -1451,6 +1723,10 @@ pub enum ConfigDiagnosticSchemaSource {
     Plugin = 3,
 }
 impl ConfigDiagnosticSchemaSource {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
     pub fn as_str_name(&self) -> &'static str {
         match self {
             Self::Unspecified => "CONFIG_DIAGNOSTIC_SCHEMA_SOURCE_UNSPECIFIED",
@@ -1459,6 +1735,7 @@ impl ConfigDiagnosticSchemaSource {
             Self::Plugin => "CONFIG_DIAGNOSTIC_SCHEMA_SOURCE_PLUGIN",
         }
     }
+    /// Creates an enum from field names used in the ProtoBuf definition.
     pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
         match value {
             "CONFIG_DIAGNOSTIC_SCHEMA_SOURCE_UNSPECIFIED" => Some(Self::Unspecified),
@@ -1485,6 +1762,10 @@ pub enum ConfigDiagnosticCode {
     UnsupportedSchemaVersion = 10,
 }
 impl ConfigDiagnosticCode {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
     pub fn as_str_name(&self) -> &'static str {
         match self {
             Self::Unspecified => "CONFIG_DIAGNOSTIC_CODE_UNSPECIFIED",
@@ -1500,6 +1781,7 @@ impl ConfigDiagnosticCode {
             Self::UnsupportedSchemaVersion => "CONFIG_DIAGNOSTIC_CODE_UNSUPPORTED_SCHEMA_VERSION",
         }
     }
+    /// Creates an enum from field names used in the ProtoBuf definition.
     pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
         match value {
             "CONFIG_DIAGNOSTIC_CODE_UNSPECIFIED" => Some(Self::Unspecified),
@@ -1537,6 +1819,10 @@ pub enum OwnerControlErrorCode {
     TargetNodeMismatch = 10,
 }
 impl OwnerControlErrorCode {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
     pub fn as_str_name(&self) -> &'static str {
         match self {
             Self::Unspecified => "OWNER_CONTROL_ERROR_CODE_UNSPECIFIED",
@@ -1552,6 +1838,7 @@ impl OwnerControlErrorCode {
             Self::TargetNodeMismatch => "OWNER_CONTROL_ERROR_CODE_TARGET_NODE_MISMATCH",
         }
     }
+    /// Creates an enum from field names used in the ProtoBuf definition.
     pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
         match value {
             "OWNER_CONTROL_ERROR_CODE_UNSPECIFIED" => Some(Self::Unspecified),
@@ -1581,6 +1868,9 @@ pub enum OwnerControlKvCacheOperation {
 }
 impl OwnerControlKvCacheOperation {
     /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
     pub fn as_str_name(&self) -> &'static str {
         match self {
             Self::Unspecified => "OWNER_CONTROL_KV_CACHE_OPERATION_UNSPECIFIED",
@@ -1589,7 +1879,7 @@ impl OwnerControlKvCacheOperation {
             Self::Clear => "OWNER_CONTROL_KV_CACHE_OPERATION_CLEAR",
         }
     }
-
+    /// Creates an enum from field names used in the ProtoBuf definition.
     pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
         match value {
             "OWNER_CONTROL_KV_CACHE_OPERATION_UNSPECIFIED" => Some(Self::Unspecified),
@@ -1628,78 +1918,4 @@ impl OwnerControlRefreshInventoryDisposition {
             _ => None,
         }
     }
-}
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
-#[repr(i32)]
-pub enum CacheTier {
-    Unspecified = 0,
-    L1 = 1,
-    L3 = 2,
-}
-impl CacheTier {
-    pub fn as_str_name(&self) -> &'static str {
-        match self {
-            Self::Unspecified => "CACHE_TIER_UNSPECIFIED",
-            Self::L1 => "CACHE_TIER_L1",
-            Self::L3 => "CACHE_TIER_L3",
-        }
-    }
-    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
-        match value {
-            "CACHE_TIER_UNSPECIFIED" => Some(Self::Unspecified),
-            "CACHE_TIER_L1" => Some(Self::L1),
-            "CACHE_TIER_L3" => Some(Self::L3),
-            _ => None,
-        }
-    }
-}
-/// Inference admission state for a peer (additive; older nodes ignore).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
-#[repr(i32)]
-pub enum InferenceAdmissionState {
-    Unspecified = 0,
-    Accepting = 1,
-    AcceptingDeprioritized = 2,
-    RemotePaused = 3,
-    AllPaused = 4,
-}
-impl InferenceAdmissionState {
-    /// String value of the enum field names used in the ProtoBuf definition.
-    ///
-    /// The values are not transformed in any way and thus are considered stable
-    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
-    pub fn as_str_name(&self) -> &'static str {
-        match self {
-            Self::Unspecified => "INFERENCE_ADMISSION_STATE_UNSPECIFIED",
-            Self::Accepting => "INFERENCE_ADMISSION_STATE_ACCEPTING",
-            Self::AcceptingDeprioritized => "INFERENCE_ADMISSION_STATE_ACCEPTING_DEPRIORITIZED",
-            Self::RemotePaused => "INFERENCE_ADMISSION_STATE_REMOTE_PAUSED",
-            Self::AllPaused => "INFERENCE_ADMISSION_STATE_ALL_PAUSED",
-        }
-    }
-    /// Creates an enum from field names used in the ProtoBuf definition.
-    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
-        match value {
-            "INFERENCE_ADMISSION_STATE_UNSPECIFIED" => Some(Self::Unspecified),
-            "INFERENCE_ADMISSION_STATE_ACCEPTING" => Some(Self::Accepting),
-            "INFERENCE_ADMISSION_STATE_ACCEPTING_DEPRIORITIZED" => {
-                Some(Self::AcceptingDeprioritized)
-            }
-            "INFERENCE_ADMISSION_STATE_REMOTE_PAUSED" => Some(Self::RemotePaused),
-            "INFERENCE_ADMISSION_STATE_ALL_PAUSED" => Some(Self::AllPaused),
-            _ => None,
-        }
-    }
-}
-
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct LightningOffer {
-    #[prost(string, tag = "1")]
-    pub model: ::prost::alloc::string::String,
-    #[prost(uint64, tag = "2")]
-    pub input_msat_per_million: u64,
-    #[prost(uint64, tag = "3")]
-    pub output_msat_per_million: u64,
-    #[prost(uint64, tag = "4")]
-    pub minimum_invoice_msat: u64,
 }

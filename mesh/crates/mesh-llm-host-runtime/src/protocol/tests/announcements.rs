@@ -1416,3 +1416,25 @@ fn claimed_log_head_empty_signature_algorithm_roundtrips_as_empty() {
         .expect("empty signature_algorithm must not cause the whole head to be dropped");
     assert_eq!(roundtripped_head.signature_algorithm, "");
 }
+
+/// Gossip keys peers by the id inside `serialized_addr`, so an entry whose
+/// address names a different node than its `endpoint_id` must be dropped.
+#[test]
+fn announcement_whose_address_names_another_node_is_rejected() {
+    let endpoint_id = |seed: u8| EndpointId::from(SecretKey::from_bytes(&[seed; 32]).public());
+    let addr = |seed: u8| iroh::EndpointAddr {
+        id: endpoint_id(seed),
+        addrs: Default::default(),
+    };
+    let mut wire_ann = crate::proto::node::PeerAnnouncement {
+        endpoint_id: endpoint_id(0x01).as_bytes().to_vec(),
+        role: crate::proto::node::NodeRole::Worker as i32,
+        serialized_addr: serde_json::to_vec(&addr(0x02)).unwrap(),
+        ..Default::default()
+    };
+
+    assert!(proto_ann_to_local(&wire_ann).is_none());
+
+    wire_ann.serialized_addr = serde_json::to_vec(&addr(0x01)).unwrap();
+    assert!(proto_ann_to_local(&wire_ann).is_some());
+}

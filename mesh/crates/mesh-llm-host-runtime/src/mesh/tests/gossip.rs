@@ -100,3 +100,9 @@ mod discovery {
 
     include!("gossip/discovery.rs");
 }
+
+mod signed_records {
+    use super::*;
+
+    include!("gossip/signed_records.rs");
+}
