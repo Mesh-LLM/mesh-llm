@@ -67,6 +67,11 @@ pub(super) fn admit(
         environment.insert(OsString::from(key), Value::Public(value.into()));
     }
     environment.insert("PATH".into(), Value::Public("/usr/bin:/bin".into()));
+    // A setup-python interpreter links its own libpython through this path;
+    // without it the loader picks the system libpython and extensions fail.
+    if let Some(path) = std::env::var_os("LD_LIBRARY_PATH").filter(|path| !path.is_empty()) {
+        environment.insert("LD_LIBRARY_PATH".into(), Value::Public(path));
+    }
     environment.insert(
         "NO_PROXY".into(),
         Value::Public("127.0.0.1,localhost".into()),
