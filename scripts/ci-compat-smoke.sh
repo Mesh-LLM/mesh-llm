@@ -108,6 +108,7 @@ env MESH_LLM_CONFIG="$SMOKE_CONFIG_PATH" MESH_LLM_RUNTIME_ROOT="$SMOKE_RUNTIME_R
 MESH_PID=$!
 
 cleanup() {
+    local status=$?
     kill "$MESH_PID" 2>/dev/null || true
     pkill -P "$MESH_PID" 2>/dev/null || true
     sleep 1
@@ -117,6 +118,14 @@ cleanup() {
     tail -100 "$LOG" 2>/dev/null || true
     echo "--- end log ---"
     echo "SDK evidence retained: $SDK_EVIDENCE_DIR"
+    if [ "$status" -ne 0 ]; then
+        # SDK child output is only retained on disk; surface it so CI failures are diagnosable.
+        for capture in "$SDK_EVIDENCE_DIR"/*.json "$SDK_EVIDENCE_DIR"/sdk-capture-*/*.log; do
+            [ -f "$capture" ] || continue
+            echo "--- $capture ---"
+            tail -c 8192 "$capture" || true
+        done
+    fi
     rm -rf "$SMOKE_STATE_DIR"
 }
 trap cleanup EXIT
