@@ -51,7 +51,7 @@ class _EventSink:
 
 
 class Inference:
-    """Inference APIs shared by :class:`Client` and :class:`Node`."""
+    """OpenAI-compatible inference through a running embedded node."""
 
     def __init__(self, handle: object) -> None:
         self._handle = handle
@@ -183,10 +183,35 @@ class Inference:
             await stream.aclose()
 
 
-class _Lifecycle:
+class Node:
+    """An embedded mesh node in client, serve, or combined mode."""
+
     def __init__(self, handle: object) -> None:
         self._handle = handle
         self.inference = Inference(handle)
+
+    @classmethod
+    def create(
+        cls,
+        *,
+        mode: str = "client",
+        join_tokens: tuple[str, ...] = (),
+        models: tuple[str, ...] = (),
+        auto_join: bool = False,
+        owner_key_path: str | None = None,
+        api_port: int = 9337,
+        console_port: int = 3131,
+    ) -> Node:
+        handle = native().create_node(
+            mode,
+            list(join_tokens),
+            list(models),
+            auto_join,
+            owner_key_path,
+            api_port,
+            console_port,
+        )
+        return cls(handle)
 
     async def start(self) -> None:
         await asyncio.to_thread(self._handle.start)
@@ -194,75 +219,22 @@ class _Lifecycle:
     async def stop(self) -> None:
         await asyncio.to_thread(self._handle.stop)
 
-    async def reconnect(self) -> None:
-        await asyncio.to_thread(self._handle.reconnect)
-
     async def status(self) -> Status:
-        status = await asyncio.to_thread(self._handle.status)
-        return Status(connected=status.connected, peer_count=status.peer_count)
+        value = await asyncio.to_thread(self._handle.status)
+        return Status(
+            running=value.running,
+            mode=value.mode,
+            api_base_url=value.api_base_url,
+            console_url=value.console_url,
+            payload=json.loads(value.payload_json),
+        )
 
-    async def __aenter__(self) -> _Lifecycle:
+    async def join_token(self, token: str) -> None:
+        await asyncio.to_thread(self._handle.join_token, token)
+
+    async def __aenter__(self) -> Node:
         await self.start()
         return self
 
     async def __aexit__(self, exc_type: object, exc: object, traceback: object) -> None:
         await self.stop()
-
-
-class Client(_Lifecycle):
-    """Client-only connection to an existing public or private mesh."""
-
-    @classmethod
-    async def connect_public(
-        cls,
-        *,
-        owner_keypair_hex: str,
-        model: str | None = None,
-        min_vram_gb: float | None = None,
-        region: str | None = None,
-        target_name: str | None = None,
-        relays: tuple[str, ...] = (),
-    ) -> Client:
-        """Discover and connect to the best matching published mesh."""
-        binding = native()
-        query = binding.PublicMeshQuery(
-            model=model,
-            min_vram_gb=min_vram_gb,
-            region=region,
-            target_name=target_name,
-            relays=list(relays),
-        )
-        handle = await asyncio.to_thread(
-            binding.create_auto_client,
-            owner_keypair_hex,
-            query,
-        )
-        return cls(handle)
-
-    @classmethod
-    def create(cls, *, owner_keypair_hex: str, invite_token: str) -> Client:
-        handle = native().create_client(owner_keypair_hex, invite_token)
-        return cls(handle)
-
-
-class Node(_Lifecycle):
-    """A mesh client that can also manage and serve local models."""
-
-    @classmethod
-    def create(
-        cls,
-        *,
-        owner_keypair_hex: str,
-        invite_token: str,
-        cache_dir: str | None = None,
-        runtime_dir: str | None = None,
-        serving_enabled: bool = False,
-    ) -> Node:
-        handle = native().create_node(
-            owner_keypair_hex,
-            invite_token,
-            cache_dir,
-            runtime_dir,
-            serving_enabled,
-        )
-        return cls(handle)

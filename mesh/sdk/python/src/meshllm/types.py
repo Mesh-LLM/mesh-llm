@@ -36,8 +36,11 @@ class Model:
 
 @dataclass(frozen=True, slots=True)
 class Status:
-    connected: bool
-    peer_count: int
+    running: bool
+    mode: str
+    api_base_url: str
+    console_url: str
+    payload: dict[str, Any] | None
 
 
 @dataclass(frozen=True, slots=True)

@@ -1136,6 +1136,76 @@ continuous_batching = false
     assert!(automatic_debug.contains("continuous_batching: true"));
 }
 
+/// `auto` and absence must both stay `None`, so the stage keeps its unbatched
+/// default and a later `--strategy` can fill the value without having to tell
+/// its own choice apart from an operator's.
+#[test]
+fn last_stage_decode_batch_resolves_only_an_explicit_boolean() {
+    let on = parse_config(
+        r#"
+[defaults.throughput]
+last_stage_decode_batch = true
+"#,
+    );
+    let off = parse_config(
+        r#"
+[defaults.throughput]
+last_stage_decode_batch = false
+"#,
+    );
+    let automatic = parse_config(
+        r#"
+[defaults.throughput]
+last_stage_decode_batch = "auto"
+"#,
+    );
+
+    assert_eq!(
+        resolve_with_config(&on).throughput.last_stage_decode_batch,
+        Some(true)
+    );
+    assert_eq!(
+        resolve_with_config(&off).throughput.last_stage_decode_batch,
+        Some(false)
+    );
+    assert_eq!(
+        resolve_with_config(&automatic)
+            .throughput
+            .last_stage_decode_batch,
+        None
+    );
+    assert_eq!(
+        resolve_with_config(&parse_config(""))
+            .throughput
+            .last_stage_decode_batch,
+        None
+    );
+}
+
+/// Model block over global default, the precedence every throughput key shares.
+#[test]
+fn a_model_last_stage_decode_batch_beats_the_global_default() {
+    let config = parse_config(
+        r#"
+[defaults.throughput]
+last_stage_decode_batch = false
+
+[[models]]
+model = "Qwen/Qwen3-0.6B:Q4_K_M"
+
+[models.throughput]
+last_stage_decode_batch = true
+"#,
+    );
+
+    assert_eq!(
+        resolve_with_config(&config)
+            .throughput
+            .last_stage_decode_batch,
+        Some(true)
+    );
+}
+
 /// The setting only pays off when it reaches the dispatcher, and the dispatcher
 /// is the embedded frontend — so the boundary the value has to cross is
 /// `to_embedded_openai_args`, exactly like `continuous_batching` above.

@@ -86,7 +86,8 @@ class ReleaseNativeRuntimeMatrixTests(unittest.TestCase):
             "mesh-llm-v0.72.0-rc5-aarch64-unknown-linux-gnu-cuda-12.tar.gz",
             "mesh-llm-v0.72.0-rc5-aarch64-unknown-linux-gnu-cuda-13.tar.gz",
             "mesh-llm-v0.72.0-rc5-x86_64-pc-windows-msvc.zip",
-            "mesh-llm-v0.72.0-rc5-x86_64-pc-windows-msvc-cuda.zip",
+            "mesh-llm-v0.72.0-rc5-x86_64-pc-windows-msvc-cuda-12.zip",
+            "mesh-llm-v0.72.0-rc5-x86_64-pc-windows-msvc-cuda-13.zip",
             "mesh-llm-v0.72.0-rc5-x86_64-pc-windows-msvc-rocm.zip",
             "mesh-llm-v0.72.0-rc5-x86_64-pc-windows-msvc-vulkan.zip",
         ]
@@ -163,6 +164,14 @@ class ReleaseNativeRuntimeMatrixTests(unittest.TestCase):
                     },
                 },
                 {
+                    "id": "meshllm-native-runtime-windows-x86_64-cuda13",
+                    "platform": {"os": "windows", "arch": "x86_64"},
+                    "backend": {
+                        "kind": "cuda",
+                        "cuda": {"toolkit_major": 13, "gpu_arches": ["120"]},
+                    },
+                },
+                {
                     "id": "meshllm-native-runtime-windows-x86_64-rocm",
                     "platform": {"os": "windows", "arch": "x86_64"},
                     "backend": {"kind": "rocm"},
@@ -186,6 +195,7 @@ class ReleaseNativeRuntimeMatrixTests(unittest.TestCase):
             validator.target_from_label("linux/x86_64/vulkan"),
             validator.target_from_label("windows/x86_64/cpu"),
             validator.target_from_label("windows/x86_64/cuda12"),
+            validator.target_from_label("windows/x86_64/cuda13"),
             validator.target_from_label("windows/x86_64/rocm"),
             validator.target_from_label("windows/x86_64/vulkan"),
         }
@@ -197,6 +207,77 @@ class ReleaseNativeRuntimeMatrixTests(unittest.TestCase):
         )
 
         self.assertEqual(violations, [])
+
+    def test_windows_cuda13_bundle_requires_a_windows_cuda13_runtime(self):
+        validator = load_validator()
+        assets = [
+            "mesh-llm-v0.79.0-x86_64-pc-windows-msvc-cuda-12.zip",
+            "mesh-llm-v0.79.0-x86_64-pc-windows-msvc-cuda-13.zip",
+        ]
+        manifest = {
+            "artifacts": [
+                {
+                    "id": "meshllm-native-runtime-windows-x86_64-cuda12",
+                    "platform": {"os": "windows", "arch": "x86_64"},
+                    "backend": {
+                        "kind": "cuda",
+                        "cuda": {"toolkit_major": 12, "gpu_arches": []},
+                    },
+                },
+                {
+                    "id": "meshllm-native-runtime-linux-x86_64-cuda13",
+                    "platform": {"os": "linux", "arch": "x86_64"},
+                    "backend": {
+                        "kind": "cuda",
+                        "cuda": {"toolkit_major": 13, "gpu_arches": []},
+                    },
+                },
+            ]
+        }
+
+        violations = validator.find_matrix_violations(assets, manifest)
+
+        self.assertEqual(
+            violations,
+            ["missing native runtime for binary target windows/x86_64/cuda13"],
+        )
+
+    def test_windows_cuda13_runtime_must_declare_sm_120(self):
+        validator = load_validator()
+        required_targets = {validator.target_from_label("windows/x86_64/cuda13")}
+
+        def manifest_with(gpu_arches):
+            return {
+                "artifacts": [
+                    {
+                        "id": "meshllm-native-runtime-windows-x86_64-cuda13",
+                        "platform": {"os": "windows", "arch": "x86_64"},
+                        "backend": {
+                            "kind": "cuda",
+                            "cuda": {"toolkit_major": 13, "gpu_arches": gpu_arches},
+                        },
+                    }
+                ]
+            }
+
+        lane_arches = ["75", "80", "86", "87", "89", "90", "100", "103", "120", "121"]
+        without_sm_120 = [arch for arch in lane_arches if arch != "120"]
+
+        self.assertEqual(
+            validator.find_matrix_violations(
+                [], manifest_with(lane_arches), required_targets
+            ),
+            [],
+        )
+        self.assertEqual(
+            validator.find_matrix_violations(
+                [], manifest_with(without_sm_120), required_targets
+            ),
+            [
+                "native runtime for binary target windows/x86_64/cuda13 does not "
+                "declare required GPU arches 120"
+            ],
+        )
 
     def test_explicit_release_native_targets_still_require_configured_entries(self):
         validator = load_validator()

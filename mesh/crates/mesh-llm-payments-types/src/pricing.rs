@@ -38,15 +38,10 @@ pub fn payment_cap_msat(amount_msat: u64) -> Result<u64> {
 pub struct Pricing {
     pub input_msat_per_million: u64,
     pub output_msat_per_million: u64,
-    pub minimum_invoice_msat: u64,
 }
 
 impl Pricing {
     pub fn validate(&self) -> Result<()> {
-        ensure!(
-            self.minimum_invoice_msat > 0,
-            "minimum invoice must be positive"
-        );
         ensure!(
             self.input_msat_per_million > 0 && self.output_msat_per_million > 0,
             "paid serving requires positive input and output rates"
@@ -79,9 +74,8 @@ impl Pricing {
         if tokens == 0 {
             return Ok(0);
         }
-        let charge = (u128::from(rate) * u128::from(tokens)).div_ceil(1_000_000);
-        let minimum = u128::from(self.minimum_invoice_msat);
-        (charge.div_ceil(minimum) * minimum)
+        (u128::from(rate) * u128::from(tokens))
+            .div_ceil(1_000_000)
             .try_into()
             .context("inference charge overflow")
     }
@@ -96,7 +90,6 @@ mod tests {
         let rates = Pricing {
             input_msat_per_million: 500,
             output_msat_per_million: 1500,
-            minimum_invoice_msat: 1,
         };
         assert_eq!(rates.input_charge(1000).unwrap(), 1);
         assert_eq!(rates.output_charge(1000).unwrap(), 2);
@@ -126,7 +119,6 @@ mod tests {
         let rates = Pricing {
             input_msat_per_million: 1000,
             output_msat_per_million: 1000,
-            minimum_invoice_msat: 1,
         };
         // 100 msat input + 100 msat output, each with the floor allowance.
         assert_eq!(
@@ -146,13 +138,12 @@ mod tests {
     }
 
     #[test]
-    fn provider_granularity_and_overflow_are_enforced() {
+    fn charges_round_up_to_the_msat_and_overflow_is_enforced() {
         let mut rates = Pricing {
             input_msat_per_million: 1_000_001,
             output_msat_per_million: 1,
-            minimum_invoice_msat: 1000,
         };
-        assert_eq!(rates.input_charge(1000).unwrap(), 2000);
+        assert_eq!(rates.input_charge(1000).unwrap(), 1001);
         rates.input_msat_per_million = u64::MAX;
         assert!(rates.input_charge(u64::MAX).is_err());
     }

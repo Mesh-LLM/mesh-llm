@@ -4577,6 +4577,7 @@ dependencies = [
  "hex",
  "iroh",
  "json5",
+ "libc",
  "mesh-llm-analytics",
  "mesh-llm-build-info",
  "mesh-llm-cli",
@@ -4629,6 +4630,7 @@ dependencies = [
  "toml 1.1.6+spec-1.1.0",
  "toml_edit",
  "url",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4686,9 +4688,12 @@ name = "mesh-llm-ffi"
 version = "0.78.0"
 dependencies = [
  "mesh-llm-sdk",
+ "reqwest 0.13.5",
+ "serde_json",
  "thiserror 2.0.21",
  "tokio",
  "uniffi",
+ "uuid",
 ]
 
 [[package]]
@@ -4848,6 +4853,7 @@ dependencies = [
  "mesh-llm-protocol",
  "mesh-llm-routing",
  "mesh-llm-types",
+ "prost",
  "rand 0.10.2",
  "semver",
  "serde",
@@ -4893,8 +4899,10 @@ dependencies = [
  "napi",
  "napi-build",
  "napi-derive",
+ "reqwest 0.13.5",
  "serde_json",
  "tokio",
+ "uuid",
 ]
 
 [[package]]
@@ -4935,6 +4943,9 @@ version = "0.78.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "hex",
+ "mesh-llm-config",
+ "mesh-llm-identity",
  "prost",
  "prost-build",
  "protoc-bin-vendored",
@@ -4942,7 +4953,9 @@ dependencies = [
  "schemars",
  "serde",
  "serde_json",
+ "sha2 0.11.0",
  "tokio",
+ "uuid",
 ]
 
 [[package]]
@@ -5012,14 +5025,13 @@ name = "mesh-llm-sdk"
 version = "0.78.0"
 dependencies = [
  "anyhow",
- "mesh-llm-api-client",
- "mesh-llm-api-server",
  "mesh-llm-console-server",
  "mesh-llm-embedded-runtime",
  "reqwest 0.13.5",
  "serde",
  "serde_json",
  "skippy-runtime-install",
+ "tokio",
 ]
 
 [[package]]
@@ -8627,9 +8639,11 @@ dependencies = [
  "base64 0.22.1",
  "futures-core",
  "futures-util",
+ "http-body",
  "http-body-util",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "skippy-events",
  "skippy-guardrails",
  "tokio",

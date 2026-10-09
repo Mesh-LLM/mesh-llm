@@ -9,6 +9,8 @@ use serde::{Deserialize, Serialize};
 use crate::source_ref::is_valid_name;
 
 mod control_behavior;
+mod exchange_access;
+pub use exchange_access::InstalledOpenAiExchangeAccess;
 
 pub use control_behavior::{
     InstalledPluginConditionOperator, InstalledPluginConditionValue,
@@ -24,6 +26,8 @@ pub const SUPPORTED_PLUGIN_SCHEMA_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct InstalledPluginManifestMetadata {
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub openai_exchange_hook: Option<InstalledOpenAiExchangeAccess>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub config_schema: Option<InstalledPluginConfigSchema>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
@@ -451,6 +455,7 @@ mod tests {
             install_path: PathBuf::from("/tmp/plugins/blackboard"),
             enabled: true,
             manifest: Some(InstalledPluginManifestMetadata {
+                openai_exchange_hook: None,
                 config_schema: Some(InstalledPluginConfigSchema {
                     plugin_name: name.to_string(),
                     schema_version: SUPPORTED_PLUGIN_SCHEMA_VERSION,

@@ -56,6 +56,8 @@ pub(in crate::frontend) struct StageOpenAiBackend {
     pub(in crate::frontend) model_id: String,
     pub(in crate::frontend) default_max_tokens: u32,
     pub(in crate::frontend) request_defaults: EmbeddedOpenAiRequestDefaults,
+    /// Render-only reasoning-control observations for this loaded model.
+    pub(in crate::frontend) thinking: Option<skippy_inference_api::thinking::ThinkingControls>,
     pub(in crate::frontend) ctx_size: usize,
     pub(in crate::frontend) mode: OpenAiBackendMode,
     pub(in crate::frontend) draft: Option<Arc<Mutex<DraftRunner>>>,
@@ -63,6 +65,14 @@ pub(in crate::frontend) struct StageOpenAiBackend {
     pub(in crate::frontend) adaptive_speculative_window: bool,
     pub(in crate::frontend) ngram_max: usize,
     pub(in crate::frontend) speculative: SpeculativeDecodeConfig,
+    /// Decides from measured throughput whether speculation is earning its
+    /// keep. `None` leaves the resolved plan's setting in force unconditionally.
+    pub(in crate::frontend) speculation_governor:
+        Option<std::sync::Arc<crate::frontend::speculation_gate::SpeculationGovernor>>,
+    /// Searches for the run-ahead budget when the plan states `auto` instead of
+    /// a number. `None` leaves the plan's own figure in force.
+    pub(in crate::frontend) runahead_governor:
+        Option<std::sync::Arc<crate::frontend::runahead_search::RunaheadGovernor>>,
     pub(in crate::frontend) generation_limit: Arc<GenerationConcurrencyController>,
     pub(in crate::frontend) generation_queue_depth: Arc<AtomicUsize>,
     pub(in crate::frontend) generation_queue_limit: usize,

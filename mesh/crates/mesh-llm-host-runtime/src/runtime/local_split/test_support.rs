@@ -78,6 +78,7 @@ pub(super) fn stage_load_request(load_mode: LoadMode) -> skippy::StageLoadReques
         ctx_size: 8192,
         lane_count: 4,
         continuous_batching: true,
+        last_stage_decode_batch: None,
         n_batch: Some(2048),
         n_ubatch: Some(512),
         n_gpu_layers: -1,
@@ -179,6 +180,7 @@ pub(super) fn split_test_peer(
         stage_protocol_generation_supported,
         stage_status_list_supported: false,
         local_gguf_content_id_supported: stage_protocol_generation_supported,
+        decode_batch_policy_supported: stage_protocol_generation_supported,
         advertised_model_throughput: vec![],
         #[cfg(feature = "payments")]
         lightning_offers: Default::default(),
