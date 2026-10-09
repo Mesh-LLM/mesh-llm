@@ -259,6 +259,8 @@ fn multimodal_chat_request_with_max_tokens(
         _ => "image/png",
     };
     let encoded = base64::engine::general_purpose::STANDARD.encode(image);
+    // The smoke checks answer content within a small token budget.
+    // Reasoning tokens would consume that budget before the answer starts.
     serde_json::from_value(json!({
             "model": "mm-smoke",
             "messages": [{
@@ -269,6 +271,7 @@ fn multimodal_chat_request_with_max_tokens(
                 ]
             }],
             "max_tokens": max_tokens,
+            "reasoning_effort": "none",
             "temperature": 0.0
         }))
         .context("build multimodal smoke request")
