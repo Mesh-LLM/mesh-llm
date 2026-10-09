@@ -34,6 +34,14 @@ class RuntimeTarget:
         return f"{self.os}/{self.arch}/{self.backend}"
 
 
+# GPU arches a release target exists for. The resolver rejects a runtime whose
+# declared arches leave out the host GPU, so a runtime missing one of these
+# would be unusable on exactly the hardware its lane was added for.
+REQUIRED_GPU_ARCHES = {
+    RuntimeTarget("windows", "x86_64", "cuda", 13): frozenset({"120"}),
+}
+
+
 def default_backend(os_name: str, arch: str) -> str:
     if os_name == "macos" and arch == "aarch64":
         return "metal"
@@ -89,6 +97,16 @@ def native_target_from_artifact(artifact: dict[str, Any]) -> RuntimeTarget | Non
     return RuntimeTarget(os_name, arch, kind, cuda_major)
 
 
+def native_gpu_arches(artifact: dict[str, Any]) -> set[str]:
+    backend = artifact.get("backend")
+    if not isinstance(backend, dict) or not isinstance(backend.get("kind"), str):
+        return set()
+    details = backend.get(backend["kind"])
+    if not isinstance(details, dict) or not isinstance(details.get("gpu_arches"), list):
+        return set()
+    return {arch for arch in details["gpu_arches"] if isinstance(arch, str)}
+
+
 def native_target_matches(required: RuntimeTarget, candidate: RuntimeTarget) -> bool:
     if (required.os, required.arch, required.backend) != (
         candidate.os,
@@ -127,17 +145,29 @@ def find_matrix_violations(
 ) -> list[str]:
     if required_targets is None:
         required_targets = required_targets_from_assets(asset_names)
-    native_targets = [
-        target
+    native_runtimes = [
+        (target, artifact)
         for artifact in manifest.get("artifacts", [])
         if isinstance(artifact, dict)
         if (target := native_target_from_artifact(artifact)) is not None
     ]
     violations = []
     for required in sorted(required_targets):
-        if not any(native_target_matches(required, candidate) for candidate in native_targets):
+        matches = [
+            artifact
+            for candidate, artifact in native_runtimes
+            if native_target_matches(required, candidate)
+        ]
+        if not matches:
             violations.append(
                 f"missing native runtime for binary target {required.label()}"
+            )
+            continue
+        required_arches = REQUIRED_GPU_ARCHES.get(required, frozenset())
+        if not any(required_arches <= native_gpu_arches(artifact) for artifact in matches):
+            violations.append(
+                f"native runtime for binary target {required.label()} does not "
+                f"declare required GPU arches {', '.join(sorted(required_arches))}"
             )
     return violations
 

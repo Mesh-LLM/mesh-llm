@@ -429,6 +429,66 @@ impl InferenceBackend for FakeBackend {
     }
 
     async fn system_one(&self, request: SystemOneRequest) -> InferenceResult<SystemOneResponse> {
+        if request.questions.contains_key("question_0") {
+            let answers = request
+                .questions
+                .iter()
+                .map(|(key, question)| {
+                    let answer = match question {
+                        crate::SystemOneQuestion::Noul { .. } => {
+                            crate::SystemOneAnswer::Noul { noul: 0.875 }
+                        }
+                        crate::SystemOneQuestion::Choice { criteria, .. } => {
+                            let options = criteria
+                                .iter()
+                                .map(|(key, _)| key.to_string())
+                                .collect::<Vec<_>>();
+                            crate::SystemOneAnswer::Choice {
+                                choice: options[0].clone(),
+                                probabilities: options
+                                    .iter()
+                                    .enumerate()
+                                    .map(|(index, key)| {
+                                        (
+                                            key.clone(),
+                                            if index == 0 {
+                                                0.75
+                                            } else {
+                                                0.25 / (options.len() - 1) as f32
+                                            },
+                                        )
+                                    })
+                                    .collect(),
+                                confidence: 0.6,
+                            }
+                        }
+                        crate::SystemOneQuestion::Score { criteria, .. } => {
+                            crate::SystemOneAnswer::Score {
+                                score: 1.25,
+                                legend: Default::default(),
+                                probabilities: criteria
+                                    .iter()
+                                    .enumerate()
+                                    .map(|(index, _)| {
+                                        (index.to_string(), if index == 2 { 0.5 } else { 0.25 })
+                                    })
+                                    .collect(),
+                                confidence: 0.4,
+                            }
+                        }
+                    };
+                    (key.clone(), answer)
+                })
+                .collect();
+            return Ok(SystemOneResponse {
+                model: request.model,
+                answers,
+                usage: crate::SystemOneUsage {
+                    input_tokens: 12,
+                    output_tokens: 0,
+                },
+            });
+        }
         if request.questions.contains_key("urgent") {
             return Ok(SystemOneResponse {
                 model: request.model,
