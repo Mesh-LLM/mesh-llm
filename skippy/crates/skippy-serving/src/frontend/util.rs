@@ -2,8 +2,8 @@ use crate::runtime_state::RuntimeState;
 use sha2::Digest;
 use sha2::Sha256;
 use skippy_inference_api::FinishReason;
-use skippy_inference_api::OpenAiError;
-use skippy_inference_api::OpenAiResult;
+use skippy_inference_api::InferenceError;
+use skippy_inference_api::InferenceResult;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::SystemTime;
@@ -91,10 +91,10 @@ pub(super) fn stable_wire_id(parts: &[&[u8]]) -> u64 {
 pub(super) fn token_is_eog_with_runtime(
     runtime: &Arc<Mutex<RuntimeState>>,
     token_id: i32,
-) -> OpenAiResult<bool> {
+) -> InferenceResult<bool> {
     let runtime = runtime
         .lock()
-        .map_err(|_| OpenAiError::backend("runtime lock poisoned"))?;
+        .map_err(|_| InferenceError::backend("runtime lock poisoned"))?;
     runtime
         .model
         .token_is_eog(token_id)
@@ -109,12 +109,12 @@ pub(super) fn us_to_ms(us: i64) -> f64 {
     us as f64 / 1000.0
 }
 
-pub(super) fn openai_backend_error(error: anyhow::Error) -> OpenAiError {
-    OpenAiError::backend(error.to_string())
+pub(super) fn openai_backend_error(error: anyhow::Error) -> InferenceError {
+    InferenceError::backend(error.to_string())
 }
 
-pub(super) fn openai_io_error(error: std::io::Error) -> OpenAiError {
-    OpenAiError::backend(error.to_string())
+pub(super) fn openai_io_error(error: std::io::Error) -> InferenceError {
+    InferenceError::backend(error.to_string())
 }
 
 #[cfg(test)]
@@ -151,9 +151,9 @@ pub(super) fn finish_reason_for_generation(exhausted_max_tokens: bool) -> Finish
 pub(super) fn context_budget_completion_tokens(
     prompt_token_count: usize,
     ctx_size: usize,
-) -> OpenAiResult<u32> {
+) -> InferenceResult<u32> {
     if prompt_token_count > ctx_size {
-        return Err(OpenAiError::context_length_exceeded(format!(
+        return Err(InferenceError::context_length_exceeded(format!(
             "requested prompt tokens ({prompt_token_count}) exceed context window ({ctx_size})"
         )));
     }

@@ -1,7 +1,7 @@
 use base64::{Engine, engine::general_purpose::STANDARD};
 use serde::{Deserialize, Serialize};
 
-use crate::{OpenAiError, OpenAiResult, Usage};
+use crate::{InferenceError, InferenceResult, Usage};
 
 const DEFAULT_ENCODING_FORMAT: &str = "float";
 
@@ -65,27 +65,27 @@ fn default_encoding_format() -> String {
 
 impl EmbeddingsRequest {
     /// Validate batch content, output encoding, and optional positive dimensions.
-    pub fn validate(&self) -> OpenAiResult<()> {
+    pub fn validate(&self) -> InferenceResult<()> {
         if self.model.trim().is_empty() {
-            return Err(OpenAiError::invalid_request("model must not be empty"));
+            return Err(InferenceError::invalid_request("model must not be empty"));
         }
         if self.input.is_empty() {
-            return Err(OpenAiError::invalid_request(
+            return Err(InferenceError::invalid_request(
                 "embedding input must contain at least one non-empty item",
             ));
         }
         if self.input.contains_invalid_token() {
-            return Err(OpenAiError::invalid_request(
+            return Err(InferenceError::invalid_request(
                 "embedding token IDs must be non-negative",
             ));
         }
         if !matches!(self.encoding_format.as_str(), "float" | "base64") {
-            return Err(OpenAiError::invalid_request(
+            return Err(InferenceError::invalid_request(
                 "encoding_format must be 'float' or 'base64'",
             ));
         }
         if self.dimensions == Some(0) {
-            return Err(OpenAiError::invalid_request(
+            return Err(InferenceError::invalid_request(
                 "dimensions must be greater than zero",
             ));
         }

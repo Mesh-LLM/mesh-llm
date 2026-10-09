@@ -365,7 +365,7 @@ fn stage_file_with_discoverable_sibling_draft(dir: &Path, native_mtp: bool) -> s
     let draft = dir.join("sibling-draft.gguf");
     std::fs::write(&target, &metadata).unwrap();
     std::fs::write(&draft, &metadata).unwrap();
-    let mut automatic = skippy_api::serving::OpenAiOptions::direct_single_stage_defaults(
+    let mut automatic = skippy_api::serving::InferenceOptions::direct_single_stage_defaults(
         "test-model".into(),
         32,
         1,

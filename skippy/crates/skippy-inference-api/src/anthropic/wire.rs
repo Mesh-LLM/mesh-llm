@@ -6,7 +6,7 @@ use super::translate::{
 };
 use crate::{
     ChatCompletionChunk, ChatCompletionChunkChoice, ChatCompletionDelta, ChatCompletionResponse,
-    FinishReason, OpenAiError, Usage,
+    FinishReason, InferenceError, Usage,
 };
 use serde_json::{Value, json};
 
@@ -19,18 +19,18 @@ fn usage(value: &Value) -> Usage {
     usage
 }
 
-pub fn translate_chat_value(value: &Value) -> Result<Value, OpenAiError> {
+pub fn translate_chat_value(value: &Value) -> Result<Value, InferenceError> {
     if value.get("error").is_some() {
         let event = translate_stream_error_body(value);
         return serde_json::to_value(event)
-            .map_err(|error| OpenAiError::internal(error.to_string()));
+            .map_err(|error| InferenceError::internal(error.to_string()));
     }
     let choice = value["choices"]
         .as_array()
         .and_then(|choices| choices.first())
-        .ok_or_else(|| OpenAiError::internal("upstream completion has no choices"))?;
+        .ok_or_else(|| InferenceError::internal("upstream completion has no choices"))?;
     let finish: Option<FinishReason> = serde_json::from_value(choice["finish_reason"].clone())
-        .map_err(|error| OpenAiError::internal(error.to_string()))?;
+        .map_err(|error| InferenceError::internal(error.to_string()))?;
     let mut response = ChatCompletionResponse::new(
         value["model"].as_str().unwrap_or_default(),
         choice["message"]["content"].as_str().unwrap_or_default(),
@@ -40,7 +40,7 @@ pub fn translate_chat_value(value: &Value) -> Result<Value, OpenAiError> {
     response.choices[0].finish_reason = finish;
     response.choices[0].message.tool_calls = choice["message"].get("tool_calls").cloned();
     serde_json::to_value(messages_response_from_chat_response(&response)?)
-        .map_err(|error| OpenAiError::internal(error.to_string()))
+        .map_err(|error| InferenceError::internal(error.to_string()))
 }
 
 #[derive(Default)]
@@ -54,7 +54,10 @@ impl MessagesWireStream {
     pub fn new() -> Self {
         Self::default()
     }
-    pub fn push(&mut self, data: &str) -> Result<Vec<AnthropicMessagesStreamEvent>, OpenAiError> {
+    pub fn push(
+        &mut self,
+        data: &str,
+    ) -> Result<Vec<AnthropicMessagesStreamEvent>, InferenceError> {
         if self.ended {
             return Ok(Vec::new());
         }
@@ -68,8 +71,8 @@ impl MessagesWireStream {
             events.extend(self.assembler.finish(None));
             return Ok(events);
         }
-        let value: Value =
-            serde_json::from_str(data).map_err(|error| OpenAiError::internal(error.to_string()))?;
+        let value: Value = serde_json::from_str(data)
+            .map_err(|error| InferenceError::internal(error.to_string()))?;
         if value.get("error").is_some() {
             self.assembler.fail();
             self.ended = true;
@@ -97,7 +100,7 @@ impl MessagesWireStream {
                         tool_calls: choice["delta"].get("tool_calls").cloned(),
                     },
                     finish_reason: serde_json::from_value(choice["finish_reason"].clone())
-                        .map_err(|error| OpenAiError::internal(error.to_string()))?,
+                        .map_err(|error| InferenceError::internal(error.to_string()))?,
                     logprobs: None,
                 });
             }
@@ -121,7 +124,9 @@ impl MessagesWireStream {
 }
 
 /// Adapt a completed chat response using the same stream state as live chunks.
-pub fn completion_events(value: &Value) -> Result<Vec<AnthropicMessagesStreamEvent>, OpenAiError> {
+pub fn completion_events(
+    value: &Value,
+) -> Result<Vec<AnthropicMessagesStreamEvent>, InferenceError> {
     let mut stream = MessagesWireStream::new();
     if value.get("error").is_some() {
         return stream.push(&value.to_string());

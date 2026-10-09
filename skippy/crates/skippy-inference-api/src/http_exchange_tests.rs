@@ -12,8 +12,8 @@ use tower::ServiceExt;
 
 use crate::{
     ChatCompletionChunk, ChatCompletionRequest, ChatCompletionResponse, ChatCompletionStream,
-    CompletionChunk, CompletionRequest, CompletionResponse, CompletionStream, ModelObject,
-    OpenAiBackend, OpenAiError, OpenAiRequestContext, OpenAiResult, RequestId, Usage,
+    CompletionChunk, CompletionRequest, CompletionResponse, CompletionStream, InferenceBackend,
+    InferenceError, InferenceRequestContext, InferenceResult, ModelObject, RequestId, Usage,
     http_exchange::{HttpExchangeAdmission, HttpExchangePolicy},
     wire_bytes::{WireBytesCommitment, WireBytesIncomplete, WireBytesObserver, commit_wire_bytes},
 };
@@ -43,9 +43,9 @@ impl HttpExchangePolicy for Arc<Recorder> {
             observer: Some(self.clone()),
             response_headers: self.response_headers.clone(),
             denial: self.deny.then(|| {
-                OpenAiError::from_kind(
+                InferenceError::from_kind(
                     StatusCode::FORBIDDEN,
-                    crate::OpenAiErrorKind::Permission,
+                    crate::InferenceErrorKind::Permission,
                     "denied by observer",
                 )
             }),
@@ -71,28 +71,28 @@ struct Backend {
 }
 
 impl Backend {
-    fn count_call(&self, model: &str) -> OpenAiResult<()> {
+    fn count_call(&self, model: &str) -> InferenceResult<()> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         match model {
-            "error" => Err(OpenAiError::backend("failed backend")),
-            "timeout" => Err(OpenAiError::timeout("backend deadline")),
+            "error" => Err(InferenceError::backend("failed backend")),
+            "timeout" => Err(InferenceError::timeout("backend deadline")),
             _ => Ok(()),
         }
     }
 }
 
 #[async_trait]
-impl OpenAiBackend for Backend {
+impl InferenceBackend for Backend {
     fn http_exchange_policy(&self) -> Option<Arc<dyn HttpExchangePolicy>> {
         Some(Arc::new(self.recorder.clone()))
     }
-    async fn models(&self) -> OpenAiResult<Vec<ModelObject>> {
+    async fn models(&self) -> InferenceResult<Vec<ModelObject>> {
         Ok(Vec::new())
     }
     async fn chat_completion(
         &self,
         request: ChatCompletionRequest,
-    ) -> OpenAiResult<ChatCompletionResponse> {
+    ) -> InferenceResult<ChatCompletionResponse> {
         self.count_call(&request.model)?;
         let mut response = ChatCompletionResponse::new(request.model, "hello", Usage::new(2, 1));
         response.id = "fixed".into();
@@ -102,8 +102,8 @@ impl OpenAiBackend for Backend {
     async fn chat_completion_stream(
         &self,
         request: ChatCompletionRequest,
-        _context: OpenAiRequestContext,
-    ) -> OpenAiResult<ChatCompletionStream> {
+        _context: InferenceRequestContext,
+    ) -> InferenceResult<ChatCompletionStream> {
         self.count_call(&request.model)?;
         if request.model == "pending" {
             return Ok(Box::pin(futures_util::stream::pending()));
@@ -113,7 +113,7 @@ impl OpenAiBackend for Backend {
         chunk.created = 1;
         Ok(Box::pin(futures_util::stream::iter(vec![Ok(chunk)])))
     }
-    async fn completion(&self, request: CompletionRequest) -> OpenAiResult<CompletionResponse> {
+    async fn completion(&self, request: CompletionRequest) -> InferenceResult<CompletionResponse> {
         self.count_call(&request.model)?;
         let mut response = CompletionResponse::new(request.model, "hello", Usage::new(2, 1));
         response.id = "fixed".into();
@@ -123,8 +123,8 @@ impl OpenAiBackend for Backend {
     async fn completion_stream(
         &self,
         request: CompletionRequest,
-        _context: OpenAiRequestContext,
-    ) -> OpenAiResult<CompletionStream> {
+        _context: InferenceRequestContext,
+    ) -> InferenceResult<CompletionStream> {
         self.count_call(&request.model)?;
         let mut chunk = CompletionChunk::done(request.model);
         chunk.id = "fixed".into();

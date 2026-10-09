@@ -154,7 +154,7 @@ pub(super) fn handle_binary_restore_prefill_decode_control(
                 scheduler_decode_message.token_count,
                 runtime.output_activation_boundary(),
             )
-            .map_err(|error| skippy_inference_api::OpenAiError::backend(format!("{error:#}")))?;
+            .map_err(|error| skippy_inference_api::InferenceError::backend(format!("{error:#}")))?;
             if let Some(metadata) = scheduler_message.chat_sampling_metadata.as_deref() {
                 let sampling = runtime_sampling_config(scheduler_message.sampling.as_ref());
                 runtime
@@ -165,7 +165,7 @@ pub(super) fn handle_binary_restore_prefill_decode_control(
                         sampling.as_ref(),
                     )
                     .map_err(|error| {
-                        skippy_inference_api::OpenAiError::backend(format!("{error:#}"))
+                        skippy_inference_api::InferenceError::backend(format!("{error:#}"))
                     })?;
             }
             let proactive_eviction = evict_binary_resident_prefix_for_decode(
@@ -178,7 +178,7 @@ pub(super) fn handle_binary_restore_prefill_decode_control(
                     target_tokens: None,
                 },
             )
-            .map_err(|error| skippy_inference_api::OpenAiError::backend(format!("{error:#}")))?;
+            .map_err(|error| skippy_inference_api::InferenceError::backend(format!("{error:#}")))?;
             let (predicted, _, output, _) = run_binary_stage_message(
                 runtime,
                 &scheduler_session_id,
@@ -187,7 +187,7 @@ pub(super) fn handle_binary_restore_prefill_decode_control(
                 input.as_ref(),
                 BinaryStageExecutionOptions::new(sample, output_capacity, native_mtp_enabled),
             )
-            .map_err(|error| skippy_inference_api::OpenAiError::backend(format!("{error:#}")))?;
+            .map_err(|error| skippy_inference_api::InferenceError::backend(format!("{error:#}")))?;
             Ok((predicted, output, proactive_eviction))
         })
         .map_err(|error| anyhow::anyhow!(format!("{error:#}")))

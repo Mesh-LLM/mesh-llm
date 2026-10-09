@@ -4,7 +4,7 @@ use std::sync::mpsc::{SyncSender, TrySendError, sync_channel};
 use std::time::Duration;
 
 use anyhow::Result;
-use skippy_inference_api::{OpenAiError, OpenAiResult};
+use skippy_inference_api::{InferenceError, InferenceResult};
 
 use crate::frontend::{StageOpenAiBackend, openai_backend_error};
 use crate::runtime_state::RuntimeState;
@@ -124,7 +124,7 @@ pub struct GenerationStart {
     pub agent_session_id: Option<Box<str>>,
     pub prompt_token_ids: Arc<[i32]>,
     /// Byte-equal to the OpenAI request root `OperationId`
-    /// (`OpenAiLifecycleContext.request_id`'s raw UUID bytes) when this
+    /// (`InferenceLifecycleContext.request_id`'s raw UUID bytes) when this
     /// generation was admitted through the OpenAI boundary. `None` for
     /// non-frontend callers. Never projected across the native plugin ABI.
     pub frontend_request_id: Option<[u8; 16]>,
@@ -747,9 +747,9 @@ impl GenerationReceiptObservation {
         self.model_generation_elapsed = Some(elapsed);
     }
 
-    fn finish(self) -> OpenAiResult<FinishedGenerationObservation> {
+    fn finish(self) -> InferenceResult<FinishedGenerationObservation> {
         let model_generation_elapsed = self.model_generation_elapsed.ok_or_else(|| {
-            OpenAiError::backend("generation receipt is missing model-generation timing")
+            InferenceError::backend("generation receipt is missing model-generation timing")
         })?;
         let request_to_token_emission_us = self
             .token_emission_elapsed
@@ -779,7 +779,7 @@ impl StageOpenAiBackend {
     pub(crate) fn deliver_local_generation_receipt(
         &self,
         delivery: LocalGenerationReceiptDelivery<'_>,
-    ) -> OpenAiResult<()> {
+    ) -> InferenceResult<()> {
         let config = delivery.config;
         let request_id = delivery.request_id;
         let session_id = delivery.session_id;
@@ -787,7 +787,7 @@ impl StageOpenAiBackend {
             let mut runtime = self
                 .runtime
                 .lock()
-                .map_err(|_| OpenAiError::backend("runtime lock poisoned"))?;
+                .map_err(|_| InferenceError::backend("runtime lock poisoned"))?;
             build_generation_receipt(&mut *runtime, delivery)
         };
         deliver_generation_receipt_outcome(config, request_id, session_id, receipt)
@@ -805,8 +805,8 @@ pub(crate) fn deliver_generation_receipt_outcome(
     config: &GenerationReceiptConfig,
     request_id: u64,
     session_id: u64,
-    receipt: OpenAiResult<GenerationReceipt>,
-) -> OpenAiResult<()> {
+    receipt: InferenceResult<GenerationReceipt>,
+) -> InferenceResult<()> {
     match receipt {
         Ok(receipt) => record_generation_receipt(config, receipt),
         Err(_build_failure) => {
@@ -819,7 +819,7 @@ pub(crate) fn deliver_generation_receipt_outcome(
 fn build_generation_receipt(
     runtime: &mut dyn GenerationReceiptRuntime,
     delivery: LocalGenerationReceiptDelivery<'_>,
-) -> OpenAiResult<GenerationReceipt> {
+) -> InferenceResult<GenerationReceipt> {
     let observation = delivery.observation.finish()?;
     let final_session_position = runtime
         .canonical_session_position(delivery.session_label)
@@ -853,16 +853,16 @@ fn build_generation_receipt(
 fn record_generation_receipt(
     config: &GenerationReceiptConfig,
     receipt: GenerationReceipt,
-) -> OpenAiResult<()> {
+) -> InferenceResult<()> {
     config.record(receipt);
     Ok(())
 }
 
 pub(crate) fn complete_generation_before_cleanup<T>(
-    generation_result: OpenAiResult<T>,
-    deliver_receipt: impl FnOnce() -> OpenAiResult<()>,
+    generation_result: InferenceResult<T>,
+    deliver_receipt: impl FnOnce() -> InferenceResult<()>,
     cleanup: impl FnOnce(),
-) -> OpenAiResult<T> {
+) -> InferenceResult<T> {
     let receipt_result = deliver_receipt();
     cleanup();
     match generation_result {
@@ -874,9 +874,9 @@ pub(crate) fn complete_generation_before_cleanup<T>(
     }
 }
 
-fn state_digest(bytes: &[u8]) -> OpenAiResult<GenerationStateDigest> {
+fn state_digest(bytes: &[u8]) -> InferenceResult<GenerationStateDigest> {
     let byte_length = u64::try_from(bytes.len())
-        .map_err(|_| OpenAiError::backend("full-state byte length exceeds u64"))?;
+        .map_err(|_| InferenceError::backend("full-state byte length exceeds u64"))?;
     Ok(GenerationStateDigest {
         byte_length,
         blake3_digest: *blake3::hash(bytes).as_bytes(),
@@ -1429,7 +1429,7 @@ mod tests {
             Ok(()),
             || {
                 events.lock().unwrap().push("receipt");
-                Err(OpenAiError::backend("sink failed"))
+                Err(InferenceError::backend("sink failed"))
             },
             || events.lock().unwrap().push("cleanup"),
         )
@@ -1439,7 +1439,7 @@ mod tests {
 
         let events = Mutex::new(Vec::new());
         let generation_error = complete_generation_before_cleanup::<()>(
-            Err(OpenAiError::backend("generation failed")),
+            Err(InferenceError::backend("generation failed")),
             || {
                 events.lock().unwrap().push("abort");
                 Ok(())

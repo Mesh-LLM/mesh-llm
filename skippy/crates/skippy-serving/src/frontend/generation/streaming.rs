@@ -20,8 +20,8 @@ use skippy_inference_api::ChatCompletionChunk;
 use skippy_inference_api::ChatCompletionRequest;
 use skippy_inference_api::CompletionChunk;
 use skippy_inference_api::FinishReason;
-use skippy_inference_api::OpenAiError;
-use skippy_inference_api::OpenAiResult;
+use skippy_inference_api::InferenceError;
+use skippy_inference_api::InferenceResult;
 use skippy_inference_api::Usage;
 use skippy_runtime::StageModelReader;
 use std::collections::BTreeMap;
@@ -29,8 +29,9 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Instant;
 
-pub(in crate::frontend) type GenerationStream =
-    std::pin::Pin<Box<dyn futures_util::Stream<Item = OpenAiResult<GenerationStreamEvent>> + Send>>;
+pub(in crate::frontend) type GenerationStream = std::pin::Pin<
+    Box<dyn futures_util::Stream<Item = InferenceResult<GenerationStreamEvent>> + Send>,
+>;
 
 pub(in crate::frontend) enum GenerationStreamEvent {
     Delta(String),
@@ -168,13 +169,13 @@ impl ChatOutputStreamParser {
         request: ChatCompletionRequest,
         metadata: String,
         emit_reasoning: bool,
-    ) -> OpenAiResult<Self> {
+    ) -> InferenceResult<Self> {
         let passthrough_content =
             chat_stream_can_passthrough_content(&request, &metadata, emit_reasoning);
         let model = backend
             .runtime
             .lock()
-            .map_err(|_| OpenAiError::backend("runtime lock poisoned"))?
+            .map_err(|_| InferenceError::backend("runtime lock poisoned"))?
             .model
             .reader();
         Ok(Self {
@@ -191,7 +192,7 @@ impl ChatOutputStreamParser {
     pub(in crate::frontend) fn push_delta(
         &mut self,
         delta: &str,
-    ) -> OpenAiResult<Vec<GenerationStreamEvent>> {
+    ) -> InferenceResult<Vec<GenerationStreamEvent>> {
         self.text.push_str(delta);
         if self.passthrough_content {
             self.deltas.emitted_content.push_str(delta);
@@ -203,7 +204,7 @@ impl ChatOutputStreamParser {
     pub(in crate::frontend) fn finish(
         &mut self,
         text: &str,
-    ) -> OpenAiResult<Vec<GenerationStreamEvent>> {
+    ) -> InferenceResult<Vec<GenerationStreamEvent>> {
         if self.text != text {
             self.text = text.to_string();
         }
@@ -213,7 +214,7 @@ impl ChatOutputStreamParser {
     pub(in crate::frontend) fn events_for_text(
         &mut self,
         is_partial: bool,
-    ) -> OpenAiResult<Vec<GenerationStreamEvent>> {
+    ) -> InferenceResult<Vec<GenerationStreamEvent>> {
         let Some(parsed) = self.backend.parse_chat_output_with_reader(
             &self.model,
             &self.text,
@@ -233,9 +234,9 @@ impl ChatOutputStreamParser {
 }
 
 pub(in crate::frontend) fn generation_event_to_chat_chunk(
-    event: OpenAiResult<GenerationStreamEvent>,
+    event: InferenceResult<GenerationStreamEvent>,
     model: &str,
-) -> OpenAiResult<ChatCompletionChunk> {
+) -> InferenceResult<ChatCompletionChunk> {
     match event? {
         GenerationStreamEvent::Delta(delta) => {
             Ok(ChatCompletionChunk::delta(model.to_string(), delta))
@@ -289,9 +290,9 @@ pub(in crate::frontend) fn generation_event_to_chat_chunk(
 }
 
 pub(in crate::frontend) fn generation_event_to_completion_chunk(
-    event: OpenAiResult<GenerationStreamEvent>,
+    event: InferenceResult<GenerationStreamEvent>,
     model: &str,
-) -> OpenAiResult<CompletionChunk> {
+) -> InferenceResult<CompletionChunk> {
     match event? {
         GenerationStreamEvent::Delta(delta) => Ok(CompletionChunk::delta(model.to_string(), delta)),
         GenerationStreamEvent::ReasoningDelta(_) => {
@@ -338,7 +339,7 @@ pub(in crate::frontend) fn emulation_generation_active(
 
 pub(in crate::frontend) struct TextGenerationCollector<'a, F>
 where
-    F: FnMut(&str) -> OpenAiResult<()>,
+    F: FnMut(&str) -> InferenceResult<()>,
 {
     model: StageModelReader,
     stop_values: Vec<&'a str>,
@@ -357,13 +358,13 @@ where
 
 impl<'a, F> TextGenerationCollector<'a, F>
 where
-    F: FnMut(&str) -> OpenAiResult<()>,
+    F: FnMut(&str) -> InferenceResult<()>,
 {
     pub(in crate::frontend) fn new(
         runtime: Arc<Mutex<RuntimeState>>,
         stop_values: Vec<&'a str>,
         on_text_chunk: F,
-    ) -> OpenAiResult<Self> {
+    ) -> InferenceResult<Self> {
         let max_stop_bytes = stop_values
             .iter()
             .map(|value| value.len())
@@ -371,7 +372,7 @@ where
             .unwrap_or(0);
         let model = runtime
             .lock()
-            .map_err(|_| OpenAiError::backend("runtime lock poisoned"))?
+            .map_err(|_| InferenceError::backend("runtime lock poisoned"))?
             .model
             .reader();
         Ok(Self {
@@ -413,7 +414,7 @@ where
         self
     }
 
-    pub(in crate::frontend) fn push_token(&mut self, token: i32) -> OpenAiResult<TokenControl> {
+    pub(in crate::frontend) fn push_token(&mut self, token: i32) -> InferenceResult<TokenControl> {
         let eog_timer = Instant::now();
         if !self.ignore_eos
             && self
@@ -440,7 +441,7 @@ where
         let valid_len = valid_utf8_prefix_len(&self.generated_text_bytes);
         if valid_len > 0 {
             let candidate = std::str::from_utf8(&self.generated_text_bytes[..valid_len])
-                .map_err(|error| OpenAiError::backend(error.to_string()))?;
+                .map_err(|error| InferenceError::backend(error.to_string()))?;
             if let Some(delta) = candidate.strip_prefix(&self.text) {
                 if !delta.is_empty() {
                     self.text = candidate.to_string();
@@ -468,7 +469,7 @@ where
         Ok(TokenControl::Continue)
     }
 
-    pub(in crate::frontend) fn emit_safe_delta(&mut self, flush_all: bool) -> OpenAiResult<()> {
+    pub(in crate::frontend) fn emit_safe_delta(&mut self, flush_all: bool) -> InferenceResult<()> {
         let mut target_len = if flush_all || self.max_stop_bytes == 0 {
             self.text.len()
         } else {
@@ -497,7 +498,7 @@ where
         mut self,
         prompt_token_count: usize,
         cache_stats: GenerationCacheStats,
-    ) -> OpenAiResult<GeneratedText> {
+    ) -> InferenceResult<GeneratedText> {
         self.emit_safe_delta(true)?;
         Ok(GeneratedText {
             prompt_tokens: saturating_u32(prompt_token_count),

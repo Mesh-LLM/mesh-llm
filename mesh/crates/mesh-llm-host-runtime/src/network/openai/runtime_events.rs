@@ -1,7 +1,7 @@
 //! Runtime-event producer wiring for OpenAI request/admission/stream
 //! outcomes (plan task 11, `.omo/plans/event-system.md` line 286).
 //!
-//! Adapts `skippy-inference-api`'s dependency-safe [`OpenAiLifecycleObserver`]
+//! Adapts `skippy-inference-api`'s dependency-safe [`InferenceLifecycleObserver`]
 //! events into root/child `RuntimeFact::Request` facts through the host
 //! runtime-event engine. The request root [`OperationId`] is minted
 //! byte-equal to the logging `RequestId` (task 2's byte-equality rule) at
@@ -37,8 +37,8 @@ use mesh_llm_runtime_event_contracts::{
     RequestId, RuntimeEventIngress, RuntimeFact, ScopeIdentities,
 };
 use skippy_inference_api::{
-    OpenAiFailure, OpenAiLifecycleContext, OpenAiLifecycleEvent, OpenAiLifecycleObserver,
-    OpenAiRejection, OpenAiTerminalResult,
+    InferenceFailure, InferenceLifecycleContext, InferenceLifecycleEvent,
+    InferenceLifecycleObserver, InferenceRejection, InferenceTerminalResult,
 };
 
 use crate::logging::MAX_TRACKED_REQUESTS;
@@ -96,21 +96,23 @@ fn synthetic_request_terminal() -> RuntimeFact {
     )
 }
 
-fn rejection_reason(rejection: OpenAiRejection) -> ReasonCode {
+fn rejection_reason(rejection: InferenceRejection) -> ReasonCode {
     match rejection {
-        OpenAiRejection::NotFound => ReasonCode::MissingArtifact,
-        OpenAiRejection::InvalidRequest
-        | OpenAiRejection::PayloadTooLarge
-        | OpenAiRejection::MethodNotAllowed
-        | OpenAiRejection::AdmissionDenied => ReasonCode::InvalidConfiguration,
+        InferenceRejection::NotFound => ReasonCode::MissingArtifact,
+        InferenceRejection::InvalidRequest
+        | InferenceRejection::PayloadTooLarge
+        | InferenceRejection::MethodNotAllowed
+        | InferenceRejection::AdmissionDenied => ReasonCode::InvalidConfiguration,
     }
 }
 
-fn failure_reason(failure: OpenAiFailure) -> ReasonCode {
+fn failure_reason(failure: InferenceFailure) -> ReasonCode {
     match failure {
-        OpenAiFailure::Timeout => ReasonCode::Timeout,
-        OpenAiFailure::Cancelled => ReasonCode::Cancellation,
-        OpenAiFailure::Backend | OpenAiFailure::Internal => ReasonCode::InternalRuntimeFailure,
+        InferenceFailure::Timeout => ReasonCode::Timeout,
+        InferenceFailure::Cancelled => ReasonCode::Cancellation,
+        InferenceFailure::Backend | InferenceFailure::Internal => {
+            ReasonCode::InternalRuntimeFailure
+        }
     }
 }
 
@@ -120,19 +122,19 @@ fn failure_reason(failure: OpenAiFailure) -> ReasonCode {
 /// every remaining failure -> `RequestFailed`.
 fn terminal_fact_for_result(
     request_id: LoggingRequestId,
-    result: OpenAiTerminalResult,
+    result: InferenceTerminalResult,
 ) -> RuntimeFact {
     match result {
-        OpenAiTerminalResult::Completed { .. }
-        | OpenAiTerminalResult::CompletedWithUsage { .. } => request_fact(
+        InferenceTerminalResult::Completed { .. }
+        | InferenceTerminalResult::CompletedWithUsage { .. } => request_fact(
             RequestEventKind::RequestCompleted,
             FactData {
                 outcome: Some(Outcome::Success),
                 ..data_with_scope(request_id)
             },
         ),
-        OpenAiTerminalResult::Failed {
-            failure: OpenAiFailure::Cancelled,
+        InferenceTerminalResult::Failed {
+            failure: InferenceFailure::Cancelled,
             ..
         } => request_fact(
             RequestEventKind::RequestCancelled,
@@ -142,8 +144,8 @@ fn terminal_fact_for_result(
                 ..data_with_scope(request_id)
             },
         ),
-        OpenAiTerminalResult::Failed {
-            failure: OpenAiFailure::Timeout,
+        InferenceTerminalResult::Failed {
+            failure: InferenceFailure::Timeout,
             ..
         } => request_fact(
             RequestEventKind::RequestTimedOut,
@@ -153,7 +155,7 @@ fn terminal_fact_for_result(
                 ..data_with_scope(request_id)
             },
         ),
-        OpenAiTerminalResult::Failed { failure, .. } => request_fact(
+        InferenceTerminalResult::Failed { failure, .. } => request_fact(
             RequestEventKind::RequestFailed,
             FactData {
                 outcome: Some(Outcome::Failure),
@@ -212,7 +214,7 @@ impl TrackedRequests {
 /// Metadata-only OpenAI frontend lifecycle observer that adapts frontend
 /// boundaries onto root/child runtime-event facts. Owned independently from
 /// [`crate::logging::OpenAiLifecycleLoggingAdapter`] -- both are fanned out
-/// to by [`compose_lifecycle_observer`] since `OpenAiFrontendConfig` accepts
+/// to by [`compose_lifecycle_observer`] since `InferenceFrontendConfig` accepts
 /// only one observer slot.
 pub(crate) struct OpenAiRuntimeEventObserver {
     tracked: Mutex<TrackedRequests>,
@@ -231,7 +233,7 @@ impl OpenAiRuntimeEventObserver {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
-    fn admit(&self, context: &OpenAiLifecycleContext) {
+    fn admit(&self, context: &InferenceLifecycleContext) {
         let Some(engine) = runtime_event_engine() else {
             return;
         };
@@ -304,7 +306,7 @@ impl OpenAiRuntimeEventObserver {
         tracking.backend = Some(child);
     }
 
-    fn backend_terminal(&self, request_id: LoggingRequestId, result: OpenAiTerminalResult) {
+    fn backend_terminal(&self, request_id: LoggingRequestId, result: InferenceTerminalResult) {
         let backend = {
             let mut tracked = self.lock();
             let Some(tracking) = tracked.requests.get_mut(&request_id) else {
@@ -328,11 +330,11 @@ impl Default for OpenAiRuntimeEventObserver {
     }
 }
 
-impl OpenAiLifecycleObserver for OpenAiRuntimeEventObserver {
-    fn observe(&self, event: &OpenAiLifecycleEvent) {
+impl InferenceLifecycleObserver for OpenAiRuntimeEventObserver {
+    fn observe(&self, event: &InferenceLifecycleEvent) {
         match event {
-            OpenAiLifecycleEvent::Admitted { context } => self.admit(context),
-            OpenAiLifecycleEvent::Rejected {
+            InferenceLifecycleEvent::Admitted { context } => self.admit(context),
+            InferenceLifecycleEvent::Rejected {
                 context, rejection, ..
             } => self.resolve_root(
                 context.request_id,
@@ -345,23 +347,23 @@ impl OpenAiLifecycleObserver for OpenAiRuntimeEventObserver {
                     },
                 ),
             ),
-            OpenAiLifecycleEvent::BackendDispatched { context, .. } => {
+            InferenceLifecycleEvent::BackendDispatched { context, .. } => {
                 self.backend_dispatched(context.request_id);
             }
-            OpenAiLifecycleEvent::BackendTerminal {
+            InferenceLifecycleEvent::BackendTerminal {
                 context, result, ..
             } => self.backend_terminal(context.request_id, *result),
-            OpenAiLifecycleEvent::NonStreamTerminal {
+            InferenceLifecycleEvent::NonStreamTerminal {
                 context, result, ..
             }
-            | OpenAiLifecycleEvent::StreamTerminal { context, result } => {
+            | InferenceLifecycleEvent::StreamTerminal { context, result } => {
                 self.resolve_root(
                     context.request_id,
                     terminal_fact_for_result(context.request_id, *result),
                 );
             }
-            OpenAiLifecycleEvent::StreamCancelled { context }
-            | OpenAiLifecycleEvent::RequestCancelled { context } => self.resolve_root(
+            InferenceLifecycleEvent::StreamCancelled { context }
+            | InferenceLifecycleEvent::RequestCancelled { context } => self.resolve_root(
                 context.request_id,
                 request_fact(
                     RequestEventKind::RequestCancelled,
@@ -372,7 +374,7 @@ impl OpenAiLifecycleObserver for OpenAiRuntimeEventObserver {
                     },
                 ),
             ),
-            OpenAiLifecycleEvent::StreamDropped { context } => self.resolve_root(
+            InferenceLifecycleEvent::StreamDropped { context } => self.resolve_root(
                 context.request_id,
                 request_fact(
                     RequestEventKind::RequestFailed,
@@ -388,25 +390,25 @@ impl OpenAiLifecycleObserver for OpenAiRuntimeEventObserver {
             // progress and prompt/completion usage are out of §8's Request
             // family, and adapting them would require inventing a kind that
             // does not exist in the inventory. Intentionally unmapped.
-            OpenAiLifecycleEvent::ExchangeIdentified { .. }
-            | OpenAiLifecycleEvent::StreamFirstItem { .. }
-            | OpenAiLifecycleEvent::ResponseCompleted { .. } => {}
+            InferenceLifecycleEvent::ExchangeIdentified { .. }
+            | InferenceLifecycleEvent::StreamFirstItem { .. }
+            | InferenceLifecycleEvent::ResponseCompleted { .. } => {}
         }
     }
 }
 
 /// Composite observer that fans a frontend lifecycle event out to every
-/// installed sink. `OpenAiFrontendConfig` has exactly one observer slot
+/// installed sink. `InferenceFrontendConfig` has exactly one observer slot
 /// (`serving_hooks`-style single occupancy), so this is the fan-out point
 /// combining the existing logging adapter with this task's runtime-event
 /// adapter -- mirroring task 12's planned `GenerationLifecycleIngress`
 /// composite for the same single-slot reason.
 struct CompositeOpenAiLifecycleObserver {
-    sinks: Vec<Arc<dyn OpenAiLifecycleObserver>>,
+    sinks: Vec<Arc<dyn InferenceLifecycleObserver>>,
 }
 
-impl OpenAiLifecycleObserver for CompositeOpenAiLifecycleObserver {
-    fn observe(&self, event: &OpenAiLifecycleEvent) {
+impl InferenceLifecycleObserver for CompositeOpenAiLifecycleObserver {
+    fn observe(&self, event: &InferenceLifecycleEvent) {
         for sink in &self.sinks {
             sink.observe(event);
         }
@@ -419,9 +421,9 @@ impl OpenAiLifecycleObserver for CompositeOpenAiLifecycleObserver {
 /// when no engine is installed, so composing it in is unconditional and
 /// never removes the base observer's behavior when `base` is `Some`.
 pub(crate) fn compose_lifecycle_observer(
-    base: Option<Arc<dyn OpenAiLifecycleObserver>>,
-) -> Option<Arc<dyn OpenAiLifecycleObserver>> {
-    let mut sinks: Vec<Arc<dyn OpenAiLifecycleObserver>> = Vec::with_capacity(2);
+    base: Option<Arc<dyn InferenceLifecycleObserver>>,
+) -> Option<Arc<dyn InferenceLifecycleObserver>> {
+    let mut sinks: Vec<Arc<dyn InferenceLifecycleObserver>> = Vec::with_capacity(2);
     if let Some(base) = base {
         sinks.push(base);
     }
@@ -435,7 +437,7 @@ mod tests {
     use crate::runtime_events::engine::RuntimeEventEngine;
     use crate::runtime_events::{clear_runtime_event_engine, install_runtime_event_engine};
     use mesh_llm_runtime_event_contracts::RuntimeFact;
-    use skippy_inference_api::{OpenAiFrontendRoute, OpenAiRequestMethod, parse_request_id};
+    use skippy_inference_api::{InferenceFrontendRoute, InferenceRequestMethod, parse_request_id};
 
     const REQUEST_ID: &str = "c0a801ef-2a39-4f52-99f5-bdc849127cde";
 
@@ -446,11 +448,11 @@ mod tests {
         engine
     }
 
-    fn context() -> OpenAiLifecycleContext {
-        OpenAiLifecycleContext::new(
+    fn context() -> InferenceLifecycleContext {
+        InferenceLifecycleContext::new(
             parse_request_id(REQUEST_ID).expect("test UUID should parse"),
-            OpenAiRequestMethod::Post,
-            OpenAiFrontendRoute::ChatCompletions,
+            InferenceRequestMethod::Post,
+            InferenceFrontendRoute::ChatCompletions,
         )
     }
 
@@ -482,13 +484,13 @@ mod tests {
         let observer = OpenAiRuntimeEventObserver::new();
         let context = context();
 
-        observer.observe(&OpenAiLifecycleEvent::Admitted {
+        observer.observe(&InferenceLifecycleEvent::Admitted {
             context: context.clone(),
         });
         assert_eq!(engine.occupied_count(), 1);
-        observer.observe(&OpenAiLifecycleEvent::NonStreamTerminal {
+        observer.observe(&InferenceLifecycleEvent::NonStreamTerminal {
             context,
-            result: OpenAiTerminalResult::Completed { status_code: 200 },
+            result: InferenceTerminalResult::Completed { status_code: 200 },
             exchange_id: None,
         });
         engine.drain();
@@ -512,13 +514,13 @@ mod tests {
         let observer = OpenAiRuntimeEventObserver::new();
         let context = context();
 
-        observer.observe(&OpenAiLifecycleEvent::Admitted {
+        observer.observe(&InferenceLifecycleEvent::Admitted {
             context: context.clone(),
         });
-        observer.observe(&OpenAiLifecycleEvent::Rejected {
+        observer.observe(&InferenceLifecycleEvent::Rejected {
             context,
             status_code: 400,
-            rejection: OpenAiRejection::InvalidRequest,
+            rejection: InferenceRejection::InvalidRequest,
         });
         engine.drain();
 
@@ -537,18 +539,18 @@ mod tests {
         let observer = OpenAiRuntimeEventObserver::new();
         let context = context();
 
-        observer.observe(&OpenAiLifecycleEvent::Admitted {
+        observer.observe(&InferenceLifecycleEvent::Admitted {
             context: context.clone(),
         });
-        observer.observe(&OpenAiLifecycleEvent::BackendDispatched {
+        observer.observe(&InferenceLifecycleEvent::BackendDispatched {
             context: context.clone(),
-            operation: skippy_inference_api::OpenAiBackendOperation::ChatCompletion,
+            operation: skippy_inference_api::InferenceBackendOperation::ChatCompletion,
         });
         assert_eq!(engine.occupied_count(), 2, "root + backend child");
-        observer.observe(&OpenAiLifecycleEvent::BackendTerminal {
+        observer.observe(&InferenceLifecycleEvent::BackendTerminal {
             context: context.clone(),
-            operation: skippy_inference_api::OpenAiBackendOperation::ChatCompletion,
-            result: OpenAiTerminalResult::Completed { status_code: 200 },
+            operation: skippy_inference_api::InferenceBackendOperation::ChatCompletion,
+            result: InferenceTerminalResult::Completed { status_code: 200 },
         });
         engine.drain();
         assert_eq!(
@@ -556,9 +558,9 @@ mod tests {
             1,
             "root still owns the request terminal"
         );
-        observer.observe(&OpenAiLifecycleEvent::NonStreamTerminal {
+        observer.observe(&InferenceLifecycleEvent::NonStreamTerminal {
             context,
-            result: OpenAiTerminalResult::Completed { status_code: 200 },
+            result: InferenceTerminalResult::Completed { status_code: 200 },
             exchange_id: None,
         });
         engine.drain();
@@ -574,17 +576,17 @@ mod tests {
         let context = context();
         let request_id = context.request_id;
 
-        observer.observe(&OpenAiLifecycleEvent::Admitted {
+        observer.observe(&InferenceLifecycleEvent::Admitted {
             context: context.clone(),
         });
-        observer.observe(&OpenAiLifecycleEvent::BackendDispatched {
+        observer.observe(&InferenceLifecycleEvent::BackendDispatched {
             context: context.clone(),
-            operation: skippy_inference_api::OpenAiBackendOperation::ChatCompletion,
+            operation: skippy_inference_api::InferenceBackendOperation::ChatCompletion,
         });
 
-        observer.observe(&OpenAiLifecycleEvent::NonStreamTerminal {
+        observer.observe(&InferenceLifecycleEvent::NonStreamTerminal {
             context: context.clone(),
-            result: OpenAiTerminalResult::Completed { status_code: 200 },
+            result: InferenceTerminalResult::Completed { status_code: 200 },
             exchange_id: None,
         });
         {
@@ -601,10 +603,10 @@ mod tests {
             );
         }
 
-        observer.observe(&OpenAiLifecycleEvent::BackendTerminal {
+        observer.observe(&InferenceLifecycleEvent::BackendTerminal {
             context,
-            operation: skippy_inference_api::OpenAiBackendOperation::ChatCompletion,
-            result: OpenAiTerminalResult::Completed { status_code: 200 },
+            operation: skippy_inference_api::InferenceBackendOperation::ChatCompletion,
+            result: InferenceTerminalResult::Completed { status_code: 200 },
         });
         let tracked = observer.lock();
         assert!(tracked.requests.is_empty());
@@ -622,18 +624,18 @@ mod tests {
         let context = context();
         let request_id = context.request_id;
 
-        observer.observe(&OpenAiLifecycleEvent::Admitted {
+        observer.observe(&InferenceLifecycleEvent::Admitted {
             context: context.clone(),
         });
-        observer.observe(&OpenAiLifecycleEvent::BackendDispatched {
+        observer.observe(&InferenceLifecycleEvent::BackendDispatched {
             context: context.clone(),
-            operation: skippy_inference_api::OpenAiBackendOperation::ChatCompletion,
+            operation: skippy_inference_api::InferenceBackendOperation::ChatCompletion,
         });
 
-        observer.observe(&OpenAiLifecycleEvent::BackendTerminal {
+        observer.observe(&InferenceLifecycleEvent::BackendTerminal {
             context: context.clone(),
-            operation: skippy_inference_api::OpenAiBackendOperation::ChatCompletion,
-            result: OpenAiTerminalResult::Completed { status_code: 200 },
+            operation: skippy_inference_api::InferenceBackendOperation::ChatCompletion,
+            result: InferenceTerminalResult::Completed { status_code: 200 },
         });
         {
             let tracked = observer.lock();
@@ -649,9 +651,9 @@ mod tests {
             );
         }
 
-        observer.observe(&OpenAiLifecycleEvent::NonStreamTerminal {
+        observer.observe(&InferenceLifecycleEvent::NonStreamTerminal {
             context,
-            result: OpenAiTerminalResult::Completed { status_code: 200 },
+            result: InferenceTerminalResult::Completed { status_code: 200 },
             exchange_id: None,
         });
         let tracked = observer.lock();
@@ -669,10 +671,10 @@ mod tests {
         let observer = OpenAiRuntimeEventObserver::new();
         let context = context();
 
-        observer.observe(&OpenAiLifecycleEvent::Admitted {
+        observer.observe(&InferenceLifecycleEvent::Admitted {
             context: context.clone(),
         });
-        observer.observe(&OpenAiLifecycleEvent::StreamCancelled { context });
+        observer.observe(&InferenceLifecycleEvent::StreamCancelled { context });
         engine.drain();
 
         assert_eq!(engine.occupied_count(), 0);
@@ -687,14 +689,14 @@ mod tests {
         let observer = OpenAiRuntimeEventObserver::new();
 
         let timeout_context = context();
-        observer.observe(&OpenAiLifecycleEvent::Admitted {
+        observer.observe(&InferenceLifecycleEvent::Admitted {
             context: timeout_context.clone(),
         });
-        observer.observe(&OpenAiLifecycleEvent::StreamTerminal {
+        observer.observe(&InferenceLifecycleEvent::StreamTerminal {
             context: timeout_context,
-            result: OpenAiTerminalResult::Failed {
+            result: InferenceTerminalResult::Failed {
                 status_code: 504,
-                failure: OpenAiFailure::Timeout,
+                failure: InferenceFailure::Timeout,
             },
         });
         engine.drain();
@@ -704,14 +706,14 @@ mod tests {
         let engine = install_test_engine();
         let observer = OpenAiRuntimeEventObserver::new();
         let cancel_context = context();
-        observer.observe(&OpenAiLifecycleEvent::Admitted {
+        observer.observe(&InferenceLifecycleEvent::Admitted {
             context: cancel_context.clone(),
         });
-        observer.observe(&OpenAiLifecycleEvent::StreamTerminal {
+        observer.observe(&InferenceLifecycleEvent::StreamTerminal {
             context: cancel_context,
-            result: OpenAiTerminalResult::Failed {
+            result: InferenceTerminalResult::Failed {
                 status_code: 499,
-                failure: OpenAiFailure::Cancelled,
+                failure: InferenceFailure::Cancelled,
             },
         });
         engine.drain();
@@ -726,10 +728,10 @@ mod tests {
         let observer = OpenAiRuntimeEventObserver::new();
         let context = context();
 
-        observer.observe(&OpenAiLifecycleEvent::Admitted {
+        observer.observe(&InferenceLifecycleEvent::Admitted {
             context: context.clone(),
         });
-        observer.observe(&OpenAiLifecycleEvent::StreamDropped { context });
+        observer.observe(&InferenceLifecycleEvent::StreamDropped { context });
         engine.drain();
 
         assert_eq!(engine.occupied_count(), 0);
@@ -743,21 +745,21 @@ mod tests {
         clear_runtime_event_engine();
         let observer = OpenAiRuntimeEventObserver::new();
         let context = context();
-        observer.observe(&OpenAiLifecycleEvent::Admitted {
+        observer.observe(&InferenceLifecycleEvent::Admitted {
             context: context.clone(),
         });
-        observer.observe(&OpenAiLifecycleEvent::BackendDispatched {
+        observer.observe(&InferenceLifecycleEvent::BackendDispatched {
             context: context.clone(),
-            operation: skippy_inference_api::OpenAiBackendOperation::ChatCompletion,
+            operation: skippy_inference_api::InferenceBackendOperation::ChatCompletion,
         });
-        observer.observe(&OpenAiLifecycleEvent::BackendTerminal {
+        observer.observe(&InferenceLifecycleEvent::BackendTerminal {
             context: context.clone(),
-            operation: skippy_inference_api::OpenAiBackendOperation::ChatCompletion,
-            result: OpenAiTerminalResult::Completed { status_code: 200 },
+            operation: skippy_inference_api::InferenceBackendOperation::ChatCompletion,
+            result: InferenceTerminalResult::Completed { status_code: 200 },
         });
-        observer.observe(&OpenAiLifecycleEvent::NonStreamTerminal {
+        observer.observe(&InferenceLifecycleEvent::NonStreamTerminal {
             context,
-            result: OpenAiTerminalResult::Completed { status_code: 200 },
+            result: InferenceTerminalResult::Completed { status_code: 200 },
             exchange_id: None,
         });
         // No assertions beyond "did not panic": there is no engine to
@@ -773,16 +775,16 @@ mod tests {
         let observer = OpenAiRuntimeEventObserver::new();
         let context = context();
 
-        observer.observe(&OpenAiLifecycleEvent::Admitted {
+        observer.observe(&InferenceLifecycleEvent::Admitted {
             context: context.clone(),
         });
-        observer.observe(&OpenAiLifecycleEvent::BackendDispatched {
+        observer.observe(&InferenceLifecycleEvent::BackendDispatched {
             context: context.clone(),
-            operation: skippy_inference_api::OpenAiBackendOperation::ChatCompletion,
+            operation: skippy_inference_api::InferenceBackendOperation::ChatCompletion,
         });
-        observer.observe(&OpenAiLifecycleEvent::NonStreamTerminal {
+        observer.observe(&InferenceLifecycleEvent::NonStreamTerminal {
             context,
-            result: OpenAiTerminalResult::Completed { status_code: 200 },
+            result: InferenceTerminalResult::Completed { status_code: 200 },
             exchange_id: None,
         });
 
@@ -797,17 +799,17 @@ mod tests {
         use std::sync::Mutex as StdMutex;
 
         struct Probe(StdMutex<usize>);
-        impl OpenAiLifecycleObserver for Probe {
-            fn observe(&self, _event: &OpenAiLifecycleEvent) {
+        impl InferenceLifecycleObserver for Probe {
+            fn observe(&self, _event: &InferenceLifecycleEvent) {
                 *self.0.lock().unwrap() += 1;
             }
         }
 
         let probe = Arc::new(Probe(StdMutex::new(0)));
         let composite =
-            compose_lifecycle_observer(Some(probe.clone() as Arc<dyn OpenAiLifecycleObserver>))
+            compose_lifecycle_observer(Some(probe.clone() as Arc<dyn InferenceLifecycleObserver>))
                 .expect("composite is always Some");
-        composite.observe(&OpenAiLifecycleEvent::Admitted { context: context() });
+        composite.observe(&InferenceLifecycleEvent::Admitted { context: context() });
 
         assert_eq!(*probe.0.lock().unwrap(), 1, "base observer must be reached");
     }
@@ -826,7 +828,7 @@ mod tests {
         let request_id = parse_request_id(REQUEST_ID).expect("test UUID should parse");
         let fact = terminal_fact_for_result(
             request_id,
-            OpenAiTerminalResult::Completed { status_code: 200 },
+            InferenceTerminalResult::Completed { status_code: 200 },
         );
         let RuntimeFact::Request(fact) = fact else {
             panic!("expected a Request fact");
@@ -851,12 +853,12 @@ mod tests {
         let context = context();
         let expected = operation_id_for_request(context.request_id).to_string();
 
-        observer.observe(&OpenAiLifecycleEvent::Admitted {
+        observer.observe(&InferenceLifecycleEvent::Admitted {
             context: context.clone(),
         });
-        observer.observe(&OpenAiLifecycleEvent::NonStreamTerminal {
+        observer.observe(&InferenceLifecycleEvent::NonStreamTerminal {
             context,
-            result: OpenAiTerminalResult::Completed { status_code: 200 },
+            result: InferenceTerminalResult::Completed { status_code: 200 },
             exchange_id: None,
         });
         engine.drain();

@@ -17,7 +17,7 @@ use crate::{
     chat::{ChatCompletionChunk, ChatCompletionRequest, ChatCompletionResponse},
     completions::{CompletionChunk, CompletionRequest, CompletionResponse},
     embeddings::{EmbeddingResponse, EmbeddingsRequest},
-    errors::OpenAiError,
+    errors::InferenceError,
     lifecycle::RequestId,
     models::ModelObject,
     rerank::{RerankRequest, RerankResponse},
@@ -25,11 +25,11 @@ use crate::{
 };
 
 pub type ChatCompletionStream =
-    Pin<Box<dyn Stream<Item = OpenAiResult<ChatCompletionChunk>> + Send + 'static>>;
+    Pin<Box<dyn Stream<Item = InferenceResult<ChatCompletionChunk>> + Send + 'static>>;
 pub type CompletionStream =
-    Pin<Box<dyn Stream<Item = OpenAiResult<CompletionChunk>> + Send + 'static>>;
+    Pin<Box<dyn Stream<Item = InferenceResult<CompletionChunk>> + Send + 'static>>;
 
-pub type OpenAiResult<T> = Result<T, OpenAiError>;
+pub type InferenceResult<T> = Result<T, InferenceError>;
 
 #[derive(Debug, Default)]
 struct CancellationState {
@@ -69,7 +69,7 @@ impl CancellationToken {
 }
 
 #[derive(Debug, Clone)]
-pub struct OpenAiRequestContext {
+pub struct InferenceRequestContext {
     cancellation: CancellationToken,
     request_id: Option<RequestId>,
     exchange_id: Arc<OnceLock<String>>,
@@ -77,7 +77,7 @@ pub struct OpenAiRequestContext {
     trusted_agent_session: bool,
 }
 
-impl OpenAiRequestContext {
+impl InferenceRequestContext {
     pub fn new() -> Self {
         Self::default()
     }
@@ -144,7 +144,7 @@ impl OpenAiRequestContext {
     }
 }
 
-impl Default for OpenAiRequestContext {
+impl Default for InferenceRequestContext {
     fn default() -> Self {
         Self {
             cancellation: CancellationToken::new(),
@@ -157,16 +157,16 @@ impl Default for OpenAiRequestContext {
 }
 
 #[async_trait]
-pub trait OpenAiBackend: Send + Sync + 'static {
+pub trait InferenceBackend: Send + Sync + 'static {
     /// HTTP lifecycle contract inherited by routers and transparent wrappers.
     fn http_exchange_policy(&self) -> Option<Arc<dyn crate::http_exchange::HttpExchangePolicy>> {
         None
     }
-    async fn models(&self) -> OpenAiResult<Vec<ModelObject>>;
+    async fn models(&self) -> InferenceResult<Vec<ModelObject>>;
 
     /// Count the model-rendered chat prompt without generating or running hooks.
-    async fn count_chat_tokens(&self, _request: ChatCompletionRequest) -> OpenAiResult<u32> {
-        Err(OpenAiError::unsupported(
+    async fn count_chat_tokens(&self, _request: ChatCompletionRequest) -> InferenceResult<u32> {
+        Err(InferenceError::unsupported(
             "token counting is unavailable for this backend",
         ))
     }
@@ -174,24 +174,24 @@ pub trait OpenAiBackend: Send + Sync + 'static {
     async fn chat_completion(
         &self,
         request: ChatCompletionRequest,
-    ) -> OpenAiResult<ChatCompletionResponse>;
+    ) -> InferenceResult<ChatCompletionResponse>;
 
     async fn chat_completion_with_context(
         &self,
         request: ChatCompletionRequest,
-        _context: OpenAiRequestContext,
-    ) -> OpenAiResult<ChatCompletionResponse> {
+        _context: InferenceRequestContext,
+    ) -> InferenceResult<ChatCompletionResponse> {
         self.chat_completion(request).await
     }
 
     async fn chat_completion_stream(
         &self,
         request: ChatCompletionRequest,
-        context: OpenAiRequestContext,
-    ) -> OpenAiResult<ChatCompletionStream>;
+        context: InferenceRequestContext,
+    ) -> InferenceResult<ChatCompletionStream>;
 
-    async fn completion(&self, _request: CompletionRequest) -> OpenAiResult<CompletionResponse> {
-        Err(OpenAiError::unsupported(
+    async fn completion(&self, _request: CompletionRequest) -> InferenceResult<CompletionResponse> {
+        Err(InferenceError::unsupported(
             "/v1/completions is not supported by this backend",
         ))
     }
@@ -199,23 +199,23 @@ pub trait OpenAiBackend: Send + Sync + 'static {
     async fn completion_with_context(
         &self,
         request: CompletionRequest,
-        _context: OpenAiRequestContext,
-    ) -> OpenAiResult<CompletionResponse> {
+        _context: InferenceRequestContext,
+    ) -> InferenceResult<CompletionResponse> {
         self.completion(request).await
     }
 
     async fn completion_stream(
         &self,
         _request: CompletionRequest,
-        _context: OpenAiRequestContext,
-    ) -> OpenAiResult<CompletionStream> {
-        Err(OpenAiError::unsupported(
+        _context: InferenceRequestContext,
+    ) -> InferenceResult<CompletionStream> {
+        Err(InferenceError::unsupported(
             "/v1/completions streaming is not supported by this backend",
         ))
     }
 
-    async fn system_one(&self, _request: SystemOneRequest) -> OpenAiResult<SystemOneResponse> {
-        Err(OpenAiError::unsupported(
+    async fn system_one(&self, _request: SystemOneRequest) -> InferenceResult<SystemOneResponse> {
+        Err(InferenceError::unsupported(
             "/systemone is not supported by this backend",
         ))
     }
@@ -224,9 +224,9 @@ pub trait OpenAiBackend: Send + Sync + 'static {
     async fn embeddings(
         &self,
         _request: EmbeddingsRequest,
-        _context: OpenAiRequestContext,
-    ) -> OpenAiResult<EmbeddingResponse> {
-        Err(OpenAiError::unsupported(
+        _context: InferenceRequestContext,
+    ) -> InferenceResult<EmbeddingResponse> {
+        Err(InferenceError::unsupported(
             "/v1/embeddings is not supported by this backend",
         ))
     }
@@ -235,9 +235,9 @@ pub trait OpenAiBackend: Send + Sync + 'static {
     async fn rerank(
         &self,
         _request: RerankRequest,
-        _context: OpenAiRequestContext,
-    ) -> OpenAiResult<RerankResponse> {
-        Err(OpenAiError::unsupported(
+        _context: InferenceRequestContext,
+    ) -> InferenceResult<RerankResponse> {
+        Err(InferenceError::unsupported(
             "/v1/rerank is not supported by this backend",
         ))
     }
@@ -246,9 +246,9 @@ pub trait OpenAiBackend: Send + Sync + 'static {
     async fn audio_speech(
         &self,
         _request: AudioSpeechRequest,
-        _context: OpenAiRequestContext,
-    ) -> OpenAiResult<AudioResponse> {
-        Err(OpenAiError::unsupported(
+        _context: InferenceRequestContext,
+    ) -> InferenceResult<AudioResponse> {
+        Err(InferenceError::unsupported(
             "/v1/audio/speech is not supported by this backend",
         ))
     }
@@ -257,9 +257,9 @@ pub trait OpenAiBackend: Send + Sync + 'static {
     async fn audio_transcription(
         &self,
         _request: AudioTranscriptionRequest,
-        _context: OpenAiRequestContext,
-    ) -> OpenAiResult<AudioTranscriptionResponse> {
-        Err(OpenAiError::unsupported(
+        _context: InferenceRequestContext,
+    ) -> InferenceResult<AudioTranscriptionResponse> {
+        Err(InferenceError::unsupported(
             "/v1/audio/transcriptions is not supported by this backend",
         ))
     }
@@ -268,12 +268,12 @@ pub trait OpenAiBackend: Send + Sync + 'static {
     async fn audio_translation(
         &self,
         _request: AudioTranscriptionRequest,
-        _context: OpenAiRequestContext,
-    ) -> OpenAiResult<AudioTranscriptionResponse> {
-        Err(OpenAiError::unsupported(
+        _context: InferenceRequestContext,
+    ) -> InferenceResult<AudioTranscriptionResponse> {
+        Err(InferenceError::unsupported(
             "/v1/audio/translations is not supported by this backend",
         ))
     }
 }
 
-pub(crate) type SharedBackend = Arc<dyn OpenAiBackend>;
+pub(crate) type SharedBackend = Arc<dyn InferenceBackend>;

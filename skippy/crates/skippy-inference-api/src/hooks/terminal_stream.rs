@@ -1,6 +1,6 @@
 //! Await bounded terminal observation before exposing stream EOF or error.
 use super::*;
-use crate::OpenAiError;
+use crate::InferenceError;
 use std::{
     future::Future,
     pin::Pin,
@@ -9,7 +9,7 @@ use std::{
 
 pub(super) type TerminalFuture = Pin<Box<dyn Future<Output = ()> + Send>>;
 enum PendingEmission {
-    Error(OpenAiError),
+    Error(InferenceError),
     End,
 }
 pub struct TerminalGuardedChatStream {
@@ -38,7 +38,7 @@ impl Drop for TerminalGuardedChatStream {
     }
 }
 impl futures_core::Stream for TerminalGuardedChatStream {
-    type Item = OpenAiResult<ChatCompletionChunk>;
+    type Item = InferenceResult<ChatCompletionChunk>;
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         if let Some(terminal) = self.terminal.as_mut() {
             if terminal.as_mut().poll(cx).is_pending() {
@@ -76,7 +76,7 @@ impl futures_core::Stream for TerminalGuardedChatStream {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::OpenAiError;
+    use crate::InferenceError;
     use async_trait::async_trait;
     use futures_util::StreamExt;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -90,7 +90,7 @@ mod tests {
         expected_error: bool,
     }
     #[async_trait]
-    impl OpenAiHookPolicy for BlockingTerminal {
+    impl InferenceHookPolicy for BlockingTerminal {
         async fn on_chat_completion_terminal(
             &self,
             _request: &ChatCompletionRequest,
@@ -123,7 +123,7 @@ mod tests {
             });
             let inner: ChatCompletionStream = if error {
                 Box::pin(futures_util::stream::once(async {
-                    Err(OpenAiError::backend("failure"))
+                    Err(InferenceError::backend("failure"))
                 }))
             } else {
                 Box::pin(futures_util::stream::empty())
@@ -155,7 +155,7 @@ mod tests {
             });
             let inner: ChatCompletionStream = if error {
                 Box::pin(futures_util::stream::once(async {
-                    Err(OpenAiError::backend("failure"))
+                    Err(InferenceError::backend("failure"))
                 }))
             } else {
                 Box::pin(futures_util::stream::empty())

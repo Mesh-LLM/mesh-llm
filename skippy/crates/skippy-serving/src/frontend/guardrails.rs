@@ -1,30 +1,30 @@
 /// Compatibility behavior selected by the embedding application.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub enum OpenAiGuardrailsMode {
+pub enum InferenceGuardrailsMode {
     #[default]
     Disabled,
     Metrics,
     Enforce,
 }
 use serde::Serialize;
-use skippy_inference_api::CompactingOpenAiBackend;
+use skippy_inference_api::CompactingInferenceBackend;
 use skippy_inference_api::CompactionConfig;
-use skippy_inference_api::GuardedOpenAiBackend;
+use skippy_inference_api::GuardedInferenceBackend;
 use skippy_inference_api::GuardrailMode;
 use skippy_inference_api::GuardrailPolicy;
 use skippy_inference_api::GuardrailPolicyHandle;
 use skippy_inference_api::GuardrailTelemetrySink;
-use skippy_inference_api::OpenAiBackend;
+use skippy_inference_api::InferenceBackend;
 use skippy_inference_api::RetryExhaustionMode;
 use skippy_inference_api::StreamingGuardrailMode;
 use std::sync::Arc;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum OpenAiGuardrailsTarget {
+pub enum InferenceGuardrailsTarget {
     Skippy,
 }
 
-impl OpenAiGuardrailsTarget {
+impl InferenceGuardrailsTarget {
     const fn as_status_label(self) -> &'static str {
         match self {
             Self::Skippy => "skippy",
@@ -33,17 +33,17 @@ impl OpenAiGuardrailsTarget {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct OpenAiGuardrailsConfig {
-    pub target: OpenAiGuardrailsTarget,
+pub struct InferenceGuardrailsConfig {
+    pub target: InferenceGuardrailsTarget,
     pub policy: GuardrailPolicyHandle,
     pub compaction: Option<CompactionConfig>,
 }
 
-impl OpenAiGuardrailsConfig {
+impl InferenceGuardrailsConfig {
     /// Shared serving policy: automatic chat compaction and operator-selected guardrails.
     pub fn with_policy(policy: GuardrailPolicyHandle) -> Self {
         Self {
-            target: OpenAiGuardrailsTarget::Skippy,
+            target: InferenceGuardrailsTarget::Skippy,
             policy,
             compaction: Some(CompactionConfig {
                 enabled: true,
@@ -68,11 +68,11 @@ impl OpenAiGuardrailsConfig {
         )
     }
 
-    pub fn for_standalone_mode(mode: OpenAiGuardrailsMode) -> Self {
+    pub fn for_standalone_mode(mode: InferenceGuardrailsMode) -> Self {
         match mode {
-            OpenAiGuardrailsMode::Disabled => Self::disabled_for_skippy(),
-            OpenAiGuardrailsMode::Metrics => Self::compatibility_for_skippy(),
-            OpenAiGuardrailsMode::Enforce => Self::with_policy(
+            InferenceGuardrailsMode::Disabled => Self::disabled_for_skippy(),
+            InferenceGuardrailsMode::Metrics => Self::compatibility_for_skippy(),
+            InferenceGuardrailsMode::Enforce => Self::with_policy(
                 GuardrailPolicy {
                     mode: GuardrailMode::Enforce,
                     apply_to_all_models: true,
@@ -83,9 +83,9 @@ impl OpenAiGuardrailsConfig {
         }
     }
 
-    pub fn status(&self) -> OpenAiGuardrailsStatus {
+    pub fn status(&self) -> InferenceGuardrailsStatus {
         let policy = self.policy.snapshot();
-        OpenAiGuardrailsStatus {
+        InferenceGuardrailsStatus {
             mode: guardrail_mode_label(policy.mode),
             target: self.target.as_status_label(),
             streaming: streaming_mode_label(policy.streaming_mode),
@@ -98,34 +98,37 @@ impl OpenAiGuardrailsConfig {
     }
 
     fn should_wrap_guardrail_backend(&self) -> bool {
-        matches!(self.target, OpenAiGuardrailsTarget::Skippy)
+        matches!(self.target, InferenceGuardrailsTarget::Skippy)
     }
 
     #[cfg(test)]
-    pub(super) fn wrap_backend(&self, backend: Arc<dyn OpenAiBackend>) -> Arc<dyn OpenAiBackend> {
+    pub(super) fn wrap_backend(
+        &self,
+        backend: Arc<dyn InferenceBackend>,
+    ) -> Arc<dyn InferenceBackend> {
         self.wrap_backend_with_context_limit(backend, None)
     }
 
     pub(super) fn wrap_backend_with_context_limit(
         &self,
-        backend: Arc<dyn OpenAiBackend>,
+        backend: Arc<dyn InferenceBackend>,
         context_limit_tokens: Option<usize>,
-    ) -> Arc<dyn OpenAiBackend> {
+    ) -> Arc<dyn InferenceBackend> {
         self.wrap_backend_with_telemetry(backend, context_limit_tokens, None)
     }
 
     /// Apply common compaction and guardrails with an optional caller-owned observer.
     pub fn wrap_backend_with_telemetry(
         &self,
-        backend: Arc<dyn OpenAiBackend>,
+        backend: Arc<dyn InferenceBackend>,
         context_limit_tokens: Option<usize>,
         telemetry: Option<Arc<dyn GuardrailTelemetrySink>>,
-    ) -> Arc<dyn OpenAiBackend> {
+    ) -> Arc<dyn InferenceBackend> {
         let backend = self.wrap_compacting_backend(backend, context_limit_tokens);
         if !self.should_wrap_guardrail_backend() {
             return backend;
         }
-        let guarded = GuardedOpenAiBackend::with_policy_handle(backend, self.policy.clone());
+        let guarded = GuardedInferenceBackend::with_policy_handle(backend, self.policy.clone());
         match telemetry {
             Some(telemetry) => Arc::new(guarded.with_telemetry(telemetry)),
             None => Arc::new(guarded),
@@ -134,21 +137,21 @@ impl OpenAiGuardrailsConfig {
 
     fn wrap_compacting_backend(
         &self,
-        backend: Arc<dyn OpenAiBackend>,
+        backend: Arc<dyn InferenceBackend>,
         context_limit_tokens: Option<usize>,
-    ) -> Arc<dyn OpenAiBackend> {
+    ) -> Arc<dyn InferenceBackend> {
         let Some(mut compaction) = self.compaction else {
             return backend;
         };
         if compaction.context_limit_tokens.is_none() {
             compaction.context_limit_tokens = context_limit_tokens;
         }
-        Arc::new(CompactingOpenAiBackend::new(backend, compaction))
+        Arc::new(CompactingInferenceBackend::new(backend, compaction))
     }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
-pub struct OpenAiGuardrailsStatus {
+pub struct InferenceGuardrailsStatus {
     pub mode: &'static str,
     pub target: &'static str,
     pub streaming: &'static str,

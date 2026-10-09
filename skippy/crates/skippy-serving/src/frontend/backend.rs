@@ -21,9 +21,9 @@ use crate::frontend::generation::GenerationSessionLockEntry;
 use crate::frontend::generation::GenerationStream;
 use crate::frontend::generation::GenerationStreamEvent;
 use crate::frontend::generation::GenerationTokenLimit;
-use crate::frontend::generation::OpenAiBackendMode;
-use crate::frontend::generation::OpenAiCacheHints;
-use crate::frontend::generation::OpenAiGenerationIds;
+use crate::frontend::generation::InferenceBackendMode;
+use crate::frontend::generation::InferenceCacheHints;
+use crate::frontend::generation::InferenceGenerationIds;
 use crate::frontend::generation::PhaseTimer;
 use crate::frontend::generation::PreparedGenerationPrompt;
 use crate::frontend::generation::PreparedTextPrompt;
@@ -71,11 +71,11 @@ use skippy_inference_api::Embedding;
 use skippy_inference_api::EmbeddingInput;
 use skippy_inference_api::EmbeddingResponse;
 use skippy_inference_api::EmbeddingsRequest;
+use skippy_inference_api::InferenceBackend;
+use skippy_inference_api::InferenceError;
+use skippy_inference_api::InferenceRequestContext;
+use skippy_inference_api::InferenceResult;
 use skippy_inference_api::ModelObject;
-use skippy_inference_api::OpenAiBackend;
-use skippy_inference_api::OpenAiError;
-use skippy_inference_api::OpenAiRequestContext;
-use skippy_inference_api::OpenAiResult;
 use skippy_inference_api::RerankRequest;
 use skippy_inference_api::RerankResponse;
 use skippy_inference_api::RerankResult;
@@ -110,8 +110,8 @@ use tokio::task;
 
 mod non_chat;
 
-fn request_cancelled_error() -> OpenAiError {
-    OpenAiError::cancelled("request cancelled")
+fn request_cancelled_error() -> InferenceError {
+    InferenceError::cancelled("request cancelled")
 }
 
 /// How long a full SSE event channel is treated as merely backed up before
@@ -137,7 +137,7 @@ const STREAM_SEND_STALL_TIMEOUT: Duration = Duration::from_secs(10);
 /// consumer draining normally is woken the instant space appears rather than
 /// after up to a 20 ms poll tick.
 struct StreamEventSender {
-    tx: mpsc::Sender<OpenAiResult<GenerationStreamEvent>>,
+    tx: mpsc::Sender<InferenceResult<GenerationStreamEvent>>,
     runtime: tokio::runtime::Handle,
     stall_timeout: Duration,
     /// Request identifier carried for diagnostics so a stalled or dropped
@@ -158,7 +158,7 @@ struct StreamEventSender {
 
 impl StreamEventSender {
     fn new(
-        tx: mpsc::Sender<OpenAiResult<GenerationStreamEvent>>,
+        tx: mpsc::Sender<InferenceResult<GenerationStreamEvent>>,
         runtime: tokio::runtime::Handle,
         stall_timeout: Duration,
         request_id: String,
@@ -195,7 +195,7 @@ impl StreamEventSender {
     /// Called once nothing further sent on this channel could possibly reach
     /// the client: the receiver dropped, or it stayed full past
     /// `stall_timeout`.
-    fn mark_receiver_unreachable(&self, context: &OpenAiRequestContext) {
+    fn mark_receiver_unreachable(&self, context: &InferenceRequestContext) {
         self.receiver_unreachable.store(true, Ordering::Release);
         context.cancel();
     }
@@ -206,11 +206,11 @@ impl StreamEventSender {
     /// early-return semantics.
     fn send(
         &self,
-        event: OpenAiResult<GenerationStreamEvent>,
-        context: &OpenAiRequestContext,
-    ) -> Result<(), OpenAiError> {
+        event: InferenceResult<GenerationStreamEvent>,
+        context: &InferenceRequestContext,
+    ) -> Result<(), InferenceError> {
         if self.receiver_unreachable.load(Ordering::Acquire) {
-            return Err(OpenAiError::backend("stream receiver unreachable"));
+            return Err(InferenceError::backend("stream receiver unreachable"));
         }
         if context.is_cancelled() {
             return Err(request_cancelled_error());
@@ -221,7 +221,7 @@ impl StreamEventSender {
             Err(TrySendError::Closed(_)) => {
                 self.emit_lane_freed("receiver_dropped", "in_flight");
                 self.mark_receiver_unreachable(context);
-                return Err(OpenAiError::backend("stream receiver dropped"));
+                return Err(InferenceError::backend("stream receiver dropped"));
             }
         };
         let cancellation = context.cancellation_token();
@@ -239,13 +239,13 @@ impl StreamEventSender {
                     Err(_) => {
                         self.emit_lane_freed("receiver_dropped", "in_flight");
                         self.mark_receiver_unreachable(context);
-                        Err(OpenAiError::backend("stream receiver dropped"))
+                        Err(InferenceError::backend("stream receiver dropped"))
                     }
                 },
                 () = sleep => {
                     self.emit_lane_freed("receiver_stalled", "in_flight");
                     self.mark_receiver_unreachable(context);
-                    Err(OpenAiError::backend(
+                    Err(InferenceError::backend(
                         "stream receiver stalled without draining",
                     ))
                 }
@@ -271,9 +271,12 @@ impl StreamEventSender {
     /// unreachable: the in-flight send that got us here may already have
     /// waited out `stall_timeout` once, and waiting again would double the
     /// execution lane's hold to `2 * stall_timeout`.
-    fn send_terminal(&self, event: OpenAiResult<GenerationStreamEvent>) -> Result<(), OpenAiError> {
+    fn send_terminal(
+        &self,
+        event: InferenceResult<GenerationStreamEvent>,
+    ) -> Result<(), InferenceError> {
         if self.receiver_unreachable.load(Ordering::Acquire) {
-            return Err(OpenAiError::backend("stream receiver unreachable"));
+            return Err(InferenceError::backend("stream receiver unreachable"));
         }
         // See the matching comment in `send`: the sleep future must be
         // constructed inside the entered runtime `block_on` provides.
@@ -286,13 +289,13 @@ impl StreamEventSender {
                     Err(_) => {
                         self.emit_lane_freed("receiver_dropped", "terminal");
                         self.receiver_unreachable.store(true, Ordering::Release);
-                        Err(OpenAiError::backend("stream receiver dropped"))
+                        Err(InferenceError::backend("stream receiver dropped"))
                     }
                 },
                 () = sleep => {
                     self.emit_lane_freed("receiver_stalled", "terminal");
                     self.receiver_unreachable.store(true, Ordering::Release);
-                    Err(OpenAiError::backend(
+                    Err(InferenceError::backend(
                         "stream receiver stalled without draining",
                     ))
                 }
@@ -301,7 +304,10 @@ impl StreamEventSender {
     }
 }
 
-fn should_emit_stream_usage(request_include_usage: bool, context: &OpenAiRequestContext) -> bool {
+fn should_emit_stream_usage(
+    request_include_usage: bool,
+    context: &InferenceRequestContext,
+) -> bool {
     request_include_usage || context.observes_stream_usage()
 }
 
@@ -316,11 +322,11 @@ impl GenerationSessionPermit {
     fn new(
         registry: Arc<Mutex<BTreeMap<String, Arc<GenerationSessionLockEntry>>>>,
         key: String,
-    ) -> OpenAiResult<Self> {
+    ) -> InferenceResult<Self> {
         let entry = {
             let mut locks = registry
                 .lock()
-                .map_err(|_| OpenAiError::backend("generation session lock map poisoned"))?;
+                .map_err(|_| InferenceError::backend("generation session lock map poisoned"))?;
             let entry = locks
                 .entry(key.clone())
                 .or_insert_with(|| {
@@ -344,7 +350,7 @@ impl GenerationSessionPermit {
         })
     }
 
-    fn try_acquire(&mut self) -> OpenAiResult<bool> {
+    fn try_acquire(&mut self) -> InferenceResult<bool> {
         match self.entry.semaphore.clone().try_acquire_owned() {
             Ok(permit) => {
                 self.permit = Some(permit);
@@ -352,7 +358,7 @@ impl GenerationSessionPermit {
             }
             Err(TryAcquireError::NoPermits) => Ok(false),
             Err(TryAcquireError::Closed) => {
-                Err(OpenAiError::backend("generation session lock closed"))
+                Err(InferenceError::backend("generation session lock closed"))
             }
         }
     }
@@ -362,7 +368,7 @@ impl GenerationSessionPermit {
         deadline: Option<Instant>,
         admission_timeout: Duration,
         cancellation: &skippy_inference_api::CancellationToken,
-    ) -> OpenAiResult<Self> {
+    ) -> InferenceResult<Self> {
         let permit = if let Some(deadline) = deadline {
             let acquire = tokio::time::timeout_at(
                 tokio::time::Instant::from_std(deadline),
@@ -371,13 +377,13 @@ impl GenerationSessionPermit {
             tokio::select! {
                 result = acquire => result
                     .map_err(|_| generation_queue_timeout_error(admission_timeout))?
-                    .map_err(|_| OpenAiError::backend("generation session lock closed"))?,
+                    .map_err(|_| InferenceError::backend("generation session lock closed"))?,
                 () = cancellation.cancelled() => return Err(request_cancelled_error()),
             }
         } else {
             tokio::select! {
                 result = self.entry.semaphore.clone().acquire_owned() => result
-                    .map_err(|_| OpenAiError::backend("generation session lock closed"))?,
+                    .map_err(|_| InferenceError::backend("generation session lock closed"))?,
                 () = cancellation.cancelled() => return Err(request_cancelled_error()),
             }
         };
@@ -405,7 +411,7 @@ impl Drop for GenerationSessionPermit {
     }
 }
 
-fn trusted_generation_session_key(ids: &OpenAiGenerationIds) -> Option<String> {
+fn trusted_generation_session_key(ids: &InferenceGenerationIds) -> Option<String> {
     ids.agent_session_trusted.then(|| ids.session_id_string())
 }
 
@@ -434,10 +440,10 @@ impl GenerationAdmissionController {
     #[cfg(test)]
     async fn acquire(
         &self,
-        ids: &OpenAiGenerationIds,
+        ids: &InferenceGenerationIds,
         cancellation: &skippy_inference_api::CancellationToken,
         admission_timeout: Duration,
-    ) -> OpenAiResult<(GenerationAdmissionPermit, Option<GenerationSessionPermit>)> {
+    ) -> InferenceResult<(GenerationAdmissionPermit, Option<GenerationSessionPermit>)> {
         self.acquire_work(
             ids,
             cancellation,
@@ -450,11 +456,11 @@ impl GenerationAdmissionController {
     #[cfg(test)]
     async fn acquire_work(
         &self,
-        ids: &OpenAiGenerationIds,
+        ids: &InferenceGenerationIds,
         cancellation: &skippy_inference_api::CancellationToken,
         admission_timeout: Duration,
         work: GenerationAdmissionWork,
-    ) -> OpenAiResult<(GenerationAdmissionPermit, Option<GenerationSessionPermit>)> {
+    ) -> InferenceResult<(GenerationAdmissionPermit, Option<GenerationSessionPermit>)> {
         self.acquire_scheduled_work(
             ids,
             cancellation,
@@ -467,12 +473,12 @@ impl GenerationAdmissionController {
 
     async fn acquire_scheduled_work(
         &self,
-        ids: &OpenAiGenerationIds,
+        ids: &InferenceGenerationIds,
         cancellation: &skippy_inference_api::CancellationToken,
         admission_timeout: Duration,
         work: GenerationAdmissionWork,
         scheduling: GenerationAdmissionScheduling,
-    ) -> OpenAiResult<(GenerationAdmissionPermit, Option<GenerationSessionPermit>)> {
+    ) -> InferenceResult<(GenerationAdmissionPermit, Option<GenerationSessionPermit>)> {
         let deadline = if admission_timeout.is_zero() {
             None
         } else {
@@ -480,7 +486,7 @@ impl GenerationAdmissionController {
                 Instant::now()
                     .checked_add(admission_timeout)
                     .ok_or_else(|| {
-                        OpenAiError::backend("generation admission deadline overflow")
+                        InferenceError::backend("generation admission deadline overflow")
                     })?,
             )
         };
@@ -508,11 +514,11 @@ impl GenerationAdmissionController {
 
     async fn acquire_session_until(
         &self,
-        ids: &OpenAiGenerationIds,
+        ids: &InferenceGenerationIds,
         deadline: Option<Instant>,
         admission_timeout: Duration,
         cancellation: &skippy_inference_api::CancellationToken,
-    ) -> OpenAiResult<Option<GenerationSessionPermit>> {
+    ) -> InferenceResult<Option<GenerationSessionPermit>> {
         let Some(session_key) = trusted_generation_session_key(ids) else {
             return Ok(None);
         };
@@ -537,7 +543,7 @@ impl GenerationAdmissionController {
         cancellation: &skippy_inference_api::CancellationToken,
         work: GenerationAdmissionWork,
         scheduling: GenerationAdmissionScheduling,
-    ) -> OpenAiResult<GenerationAdmissionPermit> {
+    ) -> InferenceResult<GenerationAdmissionPermit> {
         if cancellation.is_cancelled() {
             return Err(request_cancelled_error());
         }
@@ -800,7 +806,7 @@ fn insert_generation_admission_attrs(
 fn openai_identity_attrs(
     config: &StageConfig,
     backend_label: &str,
-    ids: &OpenAiGenerationIds,
+    ids: &InferenceGenerationIds,
 ) -> BTreeMap<String, Value> {
     let mut attrs = lifecycle_attrs(config);
     attrs.insert(
@@ -838,11 +844,11 @@ fn openai_identity_attrs(
 /// wire ids, plus the same intended-downstream identity and error chain.
 pub(super) fn openai_downstream_error_attrs(
     config: &StageConfig,
-    ids: &OpenAiGenerationIds,
+    ids: &InferenceGenerationIds,
     error: &str,
 ) -> BTreeMap<String, Value> {
     let mut attrs =
-        openai_identity_attrs(config, OpenAiBackendMode::EMBEDDED_STAGE_ZERO_LABEL, ids);
+        openai_identity_attrs(config, InferenceBackendMode::EMBEDDED_STAGE_ZERO_LABEL, ids);
     if let Some(downstream) = &config.downstream {
         crate::binary_transport::binary_messaging::insert_downstream_identity(
             &mut attrs, downstream,
@@ -861,7 +867,7 @@ pub(super) fn openai_downstream_error_attrs(
 pub(super) fn write_downstream_or_emit_forward_error(
     telemetry: &Telemetry,
     config: &StageConfig,
-    ids: &OpenAiGenerationIds,
+    ids: &InferenceGenerationIds,
     write_start_unix_nanos: u64,
     write: impl FnOnce() -> io::Result<()>,
 ) -> io::Result<()> {
@@ -876,14 +882,14 @@ pub(super) fn write_downstream_or_emit_forward_error(
 }
 
 fn generation_ids(
-    cache: OpenAiCacheHints,
+    cache: InferenceCacheHints,
     agent_session_id: Option<&str>,
-    context: &OpenAiRequestContext,
-) -> OpenAiGenerationIds {
+    context: &InferenceRequestContext,
+) -> InferenceGenerationIds {
     let frontend_request_id = context
         .request_id()
         .map(|request_id| request_id.as_uuid().into_bytes());
-    OpenAiGenerationIds::new_with_trust(
+    InferenceGenerationIds::new_with_trust(
         cache,
         agent_session_id,
         context.has_trusted_agent_session(),
@@ -893,7 +899,7 @@ fn generation_ids(
 
 pub(in crate::frontend) async fn run_blocking_generation_worker<T, F, P>(
     permit: P,
-    context: OpenAiRequestContext,
+    context: InferenceRequestContext,
     work: F,
 ) -> Result<T, task::JoinError>
 where
@@ -909,7 +915,7 @@ where
 }
 
 #[async_trait]
-impl OpenAiBackend for StageOpenAiBackend {
+impl InferenceBackend for StageOpenAiBackend {
     fn http_exchange_policy(
         &self,
     ) -> Option<Arc<dyn skippy_inference_api::http_exchange::HttpExchangePolicy>> {
@@ -917,40 +923,40 @@ impl OpenAiBackend for StageOpenAiBackend {
             .as_ref()
             .and_then(|hooks| hooks.http_exchange_policy())
     }
-    async fn count_chat_tokens(&self, request: ChatCompletionRequest) -> OpenAiResult<u32> {
+    async fn count_chat_tokens(&self, request: ChatCompletionRequest) -> InferenceResult<u32> {
         self.count_prompt_tokens(request).await
     }
 
-    async fn models(&self) -> OpenAiResult<Vec<ModelObject>> {
+    async fn models(&self) -> InferenceResult<Vec<ModelObject>> {
         Ok(vec![
             ModelObject::new(self.model_id.clone()).with_thinking(self.thinking.clone()),
         ])
     }
 
-    async fn system_one(&self, request: SystemOneRequest) -> OpenAiResult<SystemOneResponse> {
+    async fn system_one(&self, request: SystemOneRequest) -> InferenceResult<SystemOneResponse> {
         let backend = self.clone();
         task::spawn_blocking(move || backend.run_system_one(request))
             .await
             .map_err(|error| {
-                OpenAiError::backend(format!("System One execution task failed: {error}"))
+                InferenceError::backend(format!("System One execution task failed: {error}"))
             })?
     }
 
     async fn chat_completion(
         &self,
         request: ChatCompletionRequest,
-    ) -> OpenAiResult<ChatCompletionResponse> {
-        self.chat_completion_with_context(request, OpenAiRequestContext::new())
+    ) -> InferenceResult<ChatCompletionResponse> {
+        self.chat_completion_with_context(request, InferenceRequestContext::new())
             .await
     }
 
     async fn chat_completion_with_context(
         &self,
         request: ChatCompletionRequest,
-        context: OpenAiRequestContext,
-    ) -> OpenAiResult<ChatCompletionResponse> {
+        context: InferenceRequestContext,
+    ) -> InferenceResult<ChatCompletionResponse> {
         let ids = generation_ids(
-            OpenAiCacheHints::from_chat_request(&request),
+            InferenceCacheHints::from_chat_request(&request),
             request.agent_session(),
             &context,
         );
@@ -1089,10 +1095,10 @@ impl OpenAiBackend for StageOpenAiBackend {
     async fn chat_completion_stream(
         &self,
         request: ChatCompletionRequest,
-        context: OpenAiRequestContext,
-    ) -> OpenAiResult<ChatCompletionStream> {
+        context: InferenceRequestContext,
+    ) -> InferenceResult<ChatCompletionStream> {
         let ids = generation_ids(
-            OpenAiCacheHints::from_chat_request(&request),
+            InferenceCacheHints::from_chat_request(&request),
             request.agent_session(),
             &context,
         );
@@ -1182,18 +1188,18 @@ impl OpenAiBackend for StageOpenAiBackend {
         .await
     }
 
-    async fn completion(&self, request: CompletionRequest) -> OpenAiResult<CompletionResponse> {
-        self.completion_with_context(request, OpenAiRequestContext::new())
+    async fn completion(&self, request: CompletionRequest) -> InferenceResult<CompletionResponse> {
+        self.completion_with_context(request, InferenceRequestContext::new())
             .await
     }
 
     async fn completion_with_context(
         &self,
         mut request: CompletionRequest,
-        context: OpenAiRequestContext,
-    ) -> OpenAiResult<CompletionResponse> {
+        context: InferenceRequestContext,
+    ) -> InferenceResult<CompletionResponse> {
         let ids = generation_ids(
-            OpenAiCacheHints::from_completion_request(&request),
+            InferenceCacheHints::from_completion_request(&request),
             request.agent_session(),
             &context,
         );
@@ -1291,10 +1297,10 @@ impl OpenAiBackend for StageOpenAiBackend {
     async fn completion_stream(
         &self,
         mut request: CompletionRequest,
-        context: OpenAiRequestContext,
-    ) -> OpenAiResult<CompletionStream> {
+        context: InferenceRequestContext,
+    ) -> InferenceResult<CompletionStream> {
         let ids = generation_ids(
-            OpenAiCacheHints::from_completion_request(&request),
+            InferenceCacheHints::from_completion_request(&request),
             request.agent_session(),
             &context,
         );
@@ -1362,8 +1368,8 @@ impl OpenAiBackend for StageOpenAiBackend {
     async fn embeddings(
         &self,
         request: EmbeddingsRequest,
-        context: OpenAiRequestContext,
-    ) -> OpenAiResult<EmbeddingResponse> {
+        context: InferenceRequestContext,
+    ) -> InferenceResult<EmbeddingResponse> {
         self.ensure_model(&request.model)?;
         let info = self.ensure_local_workload(ModelWorkload::Embedding)?;
         let expected_dimensions = non_chat::embedding_output_dimensions(info.output_dimensions)?;
@@ -1371,7 +1377,7 @@ impl OpenAiBackend for StageOpenAiBackend {
             .dimensions
             .is_some_and(|requested| requested != expected_dimensions)
         {
-            return Err(OpenAiError::unsupported(format!(
+            return Err(InferenceError::unsupported(format!(
                 "model exposes {expected_dimensions} embedding dimensions; dimensionality reduction is not supported"
             )));
         }
@@ -1382,11 +1388,11 @@ impl OpenAiBackend for StageOpenAiBackend {
         let token_inputs = task::spawn_blocking(move || backend.prepare_embedding_inputs(request))
             .await
             .map_err(|error| {
-                OpenAiError::backend(format!("embedding tokenization task failed: {error}"))
+                InferenceError::backend(format!("embedding tokenization task failed: {error}"))
             })??;
         let prompt_tokens = token_inputs.iter().map(Vec::len).sum::<usize>();
         let max_input_tokens = token_inputs.iter().map(Vec::len).max().unwrap_or_default();
-        let ids = generation_ids(OpenAiCacheHints::default(), None, &context);
+        let ids = generation_ids(InferenceCacheHints::default(), None, &context);
         let cancellation = context.cancellation_token();
         let embeddings = self
             .run_local_workload(
@@ -1418,12 +1424,12 @@ impl OpenAiBackend for StageOpenAiBackend {
     async fn rerank(
         &self,
         request: RerankRequest,
-        context: OpenAiRequestContext,
-    ) -> OpenAiResult<RerankResponse> {
+        context: InferenceRequestContext,
+    ) -> InferenceResult<RerankResponse> {
         self.ensure_model(&request.model)?;
         self.ensure_local_workload(ModelWorkload::Rerank)?;
         let prompt_tokens_estimate = non_chat::rerank_prompt_tokens_estimate(&request)?;
-        let ids = generation_ids(OpenAiCacheHints::default(), None, &context);
+        let ids = generation_ids(InferenceCacheHints::default(), None, &context);
         let cancellation = context.cancellation_token();
         let query = request.query.clone();
         let documents = request.documents.clone();
@@ -1474,16 +1480,16 @@ impl OpenAiBackend for StageOpenAiBackend {
     async fn audio_speech(
         &self,
         request: AudioSpeechRequest,
-        context: OpenAiRequestContext,
-    ) -> OpenAiResult<AudioResponse> {
+        context: InferenceRequestContext,
+    ) -> InferenceResult<AudioResponse> {
         self.ensure_model(&request.model)?;
         if !self.has_unsplit_full_model_topology() {
-            return Err(OpenAiError::unsupported(
+            return Err(InferenceError::unsupported(
                 "speech synthesis currently requires an unsplit local runtime",
             ));
         }
         if (request.speed - 1.0).abs() > f32::EPSILON {
-            return Err(OpenAiError::unsupported(
+            return Err(InferenceError::unsupported(
                 "speech speed control is not supported by the native model",
             ));
         }
@@ -1492,7 +1498,7 @@ impl OpenAiBackend for StageOpenAiBackend {
             AudioFormat::Wav => SpeechOutputFormat::Wav,
             AudioFormat::Pcm => SpeechOutputFormat::PcmS16Le,
             _ => {
-                return Err(OpenAiError::unsupported(
+                return Err(InferenceError::unsupported(
                     "native speech synthesis currently supports wav and pcm output",
                 ));
             }
@@ -1501,19 +1507,19 @@ impl OpenAiBackend for StageOpenAiBackend {
             let runtime = self
                 .runtime
                 .lock()
-                .map_err(|_| OpenAiError::backend("runtime lock poisoned"))?;
+                .map_err(|_| InferenceError::backend("runtime lock poisoned"))?;
             if runtime.input_activation_boundary().is_some()
                 || runtime.output_activation_boundary().is_some()
                 || !runtime.supports_speech_synthesis()
             {
-                return Err(OpenAiError::unsupported(
+                return Err(InferenceError::unsupported(
                     "model does not expose full-model speech synthesis",
                 ));
             }
         }
         let content_type = request.response_format.content_type().to_string();
         let prompt_tokens_estimate = request.input.len().div_ceil(3).max(1);
-        let ids = generation_ids(OpenAiCacheHints::default(), None, &context);
+        let ids = generation_ids(InferenceCacheHints::default(), None, &context);
         let cancellation = context.clone();
         let config = SpeechSynthesisConfig {
             prompt: request.input,
@@ -1541,8 +1547,8 @@ impl OpenAiBackend for StageOpenAiBackend {
     async fn audio_transcription(
         &self,
         request: AudioTranscriptionRequest,
-        context: OpenAiRequestContext,
-    ) -> OpenAiResult<AudioTranscriptionResponse> {
+        context: InferenceRequestContext,
+    ) -> InferenceResult<AudioTranscriptionResponse> {
         self.audio_to_text(request, false, context).await
     }
 
@@ -1550,8 +1556,8 @@ impl OpenAiBackend for StageOpenAiBackend {
     async fn audio_translation(
         &self,
         request: AudioTranscriptionRequest,
-        context: OpenAiRequestContext,
-    ) -> OpenAiResult<AudioTranscriptionResponse> {
+        context: InferenceRequestContext,
+    ) -> InferenceResult<AudioTranscriptionResponse> {
         self.audio_to_text(request, true, context).await
     }
 }
@@ -1559,11 +1565,11 @@ impl OpenAiBackend for StageOpenAiBackend {
 impl StageOpenAiBackend {
     async fn acquire_generation_admission(
         &self,
-        ids: &OpenAiGenerationIds,
+        ids: &InferenceGenerationIds,
         cancellation: &skippy_inference_api::CancellationToken,
         work: GenerationAdmissionWork,
         scheduling: GenerationAdmissionScheduling,
-    ) -> OpenAiResult<(GenerationAdmissionPermit, Option<GenerationSessionPermit>)> {
+    ) -> InferenceResult<(GenerationAdmissionPermit, Option<GenerationSessionPermit>)> {
         let result = GenerationAdmissionController::for_backend(self)
             .acquire_scheduled_work(
                 ids,
@@ -1606,7 +1612,7 @@ impl StageOpenAiBackend {
     fn generation_admission_scheduling(
         &self,
         prepared_text: Option<&PreparedTextPrompt>,
-        ids: &OpenAiGenerationIds,
+        ids: &InferenceGenerationIds,
     ) -> GenerationAdmissionScheduling {
         let Some(prepared) = prepared_text else {
             return GenerationAdmissionScheduling::default();
@@ -1643,7 +1649,7 @@ impl StageOpenAiBackend {
         prompt: &PreparedGenerationPrompt,
         max_tokens: GenerationTokenLimit,
         prepared_text: Option<&PreparedTextPrompt>,
-    ) -> OpenAiResult<GenerationAdmissionWork> {
+    ) -> InferenceResult<GenerationAdmissionWork> {
         if let Some(prepared) = prepared_text {
             return Ok(GenerationAdmissionWork::new(
                 prepared.token_ids.len(),
@@ -1658,7 +1664,7 @@ impl StageOpenAiBackend {
         ))
     }
 
-    pub(super) fn openai_attrs(&self, ids: &OpenAiGenerationIds) -> BTreeMap<String, Value> {
+    pub(super) fn openai_attrs(&self, ids: &InferenceGenerationIds) -> BTreeMap<String, Value> {
         openai_identity_attrs(&self.config, self.mode.label(), ids)
     }
 
@@ -1713,7 +1719,7 @@ impl StageOpenAiBackend {
         elapsed_ms
     }
 
-    pub(super) fn ensure_model(&self, requested: &str) -> OpenAiResult<()> {
+    pub(super) fn ensure_model(&self, requested: &str) -> InferenceResult<()> {
         ensure_requested_model(&self.model_id, requested)
     }
 
@@ -1725,9 +1731,9 @@ impl StageOpenAiBackend {
         stop: Option<skippy_inference_api::StopSequence>,
         sampling: SamplingConfig,
         hook_request: Option<ChatCompletionRequest>,
-        context: OpenAiRequestContext,
-        ids: OpenAiGenerationIds,
-    ) -> OpenAiResult<GeneratedText> {
+        context: InferenceRequestContext,
+        ids: InferenceGenerationIds,
+    ) -> InferenceResult<GeneratedText> {
         let (prompt, prepared_text) = if prompt.has_media() {
             (prompt, None)
         } else {
@@ -1736,11 +1742,11 @@ impl StageOpenAiBackend {
             task::spawn_blocking(move || {
                 let prepared =
                     backend.prepare_text_prompt(&prompt, max_tokens, &ids_for_tokenize)?;
-                Ok::<_, OpenAiError>((prompt, Some(prepared)))
+                Ok::<_, InferenceError>((prompt, Some(prepared)))
             })
             .await
             .map_err(|error| {
-                OpenAiError::backend(format!("prompt tokenization task failed: {error}"))
+                InferenceError::backend(format!("prompt tokenization task failed: {error}"))
             })??
         };
         let admission_work =
@@ -1793,7 +1799,7 @@ impl StageOpenAiBackend {
                 }
             })
             .await
-            .map_err(|error| OpenAiError::backend(format!("generation task failed: {error}")))?;
+            .map_err(|error| InferenceError::backend(format!("generation task failed: {error}")))?;
         if let Ok(output) = &mut result {
             output.queue_wait_ms = admission_wait_ms;
         }
@@ -1820,9 +1826,9 @@ impl StageOpenAiBackend {
         hook_request: Option<ChatCompletionRequest>,
         parse_chat_output: bool,
         emit_reasoning: bool,
-        context: OpenAiRequestContext,
-        ids: OpenAiGenerationIds,
-    ) -> OpenAiResult<GenerationStream> {
+        context: InferenceRequestContext,
+        ids: InferenceGenerationIds,
+    ) -> InferenceResult<GenerationStream> {
         let (prompt, prepared_text) = if prompt.has_media() {
             (prompt, None)
         } else {
@@ -1831,11 +1837,11 @@ impl StageOpenAiBackend {
             task::spawn_blocking(move || {
                 let prepared =
                     backend.prepare_text_prompt(&prompt, max_tokens, &ids_for_tokenize)?;
-                Ok::<_, OpenAiError>((prompt, Some(prepared)))
+                Ok::<_, InferenceError>((prompt, Some(prepared)))
             })
             .await
             .map_err(|error| {
-                OpenAiError::backend(format!("prompt tokenization task failed: {error}"))
+                InferenceError::backend(format!("prompt tokenization task failed: {error}"))
             })??
         };
         let admit_timer = PhaseTimer::start();
@@ -1915,7 +1921,7 @@ impl StageOpenAiBackend {
                 ids,
                 |chunk| {
                     if context.is_cancelled() {
-                        return Err(OpenAiError::backend("stream receiver cancelled"));
+                        return Err(InferenceError::backend("stream receiver cancelled"));
                     }
                     let events = if let Some(parser) = chat_stream_parser.as_mut() {
                         parser.push_delta(chunk)?

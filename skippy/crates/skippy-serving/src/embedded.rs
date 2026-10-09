@@ -7,7 +7,7 @@ use std::{
 use anyhow::{Context, Result};
 use axum::Router;
 use skippy_config::validate_config;
-use skippy_inference_api::{OpenAiBackend, OpenAiFrontendConfig, OpenAiLifecycleObserver};
+use skippy_inference_api::{InferenceBackend, InferenceFrontendConfig, InferenceLifecycleObserver};
 use skippy_protocol::{StageConfig, StageTopology};
 use skippy_runtime::{ActivationBoundaryDesc, MtpSource, WorkloadInfo};
 use tokio::{sync::oneshot, task::JoinHandle};
@@ -429,14 +429,14 @@ pub fn start_embedded_openai(args: EmbeddedOpenAiArgs) -> EmbeddedServerHandle {
 
 pub fn start_openai_backend(
     bind_addr: SocketAddr,
-    backend: Arc<dyn OpenAiBackend>,
+    backend: Arc<dyn InferenceBackend>,
 ) -> EmbeddedServerHandle {
     spawn_openai_backend(bind_addr, skippy_inference_api::router_for(backend))
 }
 
 pub fn start_openai_backend_with_tokenizer(
     bind_addr: SocketAddr,
-    backend: Arc<dyn OpenAiBackend>,
+    backend: Arc<dyn InferenceBackend>,
     tokenizer: TokenizerCapability,
 ) -> EmbeddedServerHandle {
     spawn_openai_backend(bind_addr, openai_backend_router(backend, tokenizer))
@@ -481,7 +481,7 @@ fn spawn_openai_backend(bind_addr: SocketAddr, router: Router) -> EmbeddedServer
 }
 
 pub(crate) fn openai_backend_router(
-    backend: Arc<dyn OpenAiBackend>,
+    backend: Arc<dyn InferenceBackend>,
     tokenizer: TokenizerCapability,
 ) -> Router {
     skippy_inference_api::router_for(backend).merge(tokenizer_http_router(tokenizer))
@@ -493,8 +493,8 @@ pub(crate) fn openai_backend_router(
 /// behavior for embedders that do not own a logging runtime.
 pub fn start_openai_backend_with_lifecycle_observer(
     bind_addr: SocketAddr,
-    backend: Arc<dyn OpenAiBackend>,
-    lifecycle_observer: Option<Arc<dyn OpenAiLifecycleObserver>>,
+    backend: Arc<dyn InferenceBackend>,
+    lifecycle_observer: Option<Arc<dyn InferenceLifecycleObserver>>,
 ) -> EmbeddedServerHandle {
     spawn_openai_backend(
         bind_addr,
@@ -506,9 +506,9 @@ pub fn start_openai_backend_with_lifecycle_observer(
 /// lifecycle observer.
 pub fn start_openai_backend_with_tokenizer_and_lifecycle_observer(
     bind_addr: SocketAddr,
-    backend: Arc<dyn OpenAiBackend>,
+    backend: Arc<dyn InferenceBackend>,
     tokenizer: TokenizerCapability,
-    lifecycle_observer: Option<Arc<dyn OpenAiLifecycleObserver>>,
+    lifecycle_observer: Option<Arc<dyn InferenceLifecycleObserver>>,
 ) -> EmbeddedServerHandle {
     let router = openai_backend_router_with_lifecycle_observer(backend, lifecycle_observer)
         .merge(tokenizer_http_router(tokenizer));
@@ -516,11 +516,11 @@ pub fn start_openai_backend_with_tokenizer_and_lifecycle_observer(
 }
 
 fn openai_backend_router_with_lifecycle_observer(
-    backend: Arc<dyn OpenAiBackend>,
-    lifecycle_observer: Option<Arc<dyn OpenAiLifecycleObserver>>,
+    backend: Arc<dyn InferenceBackend>,
+    lifecycle_observer: Option<Arc<dyn InferenceLifecycleObserver>>,
 ) -> Router {
-    let config = lifecycle_observer.map_or_else(OpenAiFrontendConfig::default, |observer| {
-        OpenAiFrontendConfig::default().with_lifecycle_observer(observer)
+    let config = lifecycle_observer.map_or_else(InferenceFrontendConfig::default, |observer| {
+        InferenceFrontendConfig::default().with_lifecycle_observer(observer)
     });
     skippy_inference_api::router_for_with_config(backend, config)
 }
@@ -965,9 +965,9 @@ mod lifecycle_tests {
         http::{Request, StatusCode},
     };
     use skippy_inference_api::{
-        ChatCompletionRequest, ChatCompletionResponse, ChatCompletionStream, ModelObject,
-        OpenAiFrontendRoute, OpenAiLifecycleEvent, OpenAiLifecycleObserver, OpenAiRequestContext,
-        OpenAiResult,
+        ChatCompletionRequest, ChatCompletionResponse, ChatCompletionStream,
+        InferenceFrontendRoute, InferenceLifecycleEvent, InferenceLifecycleObserver,
+        InferenceRequestContext, InferenceResult, ModelObject,
     };
     use tower::ServiceExt;
 
@@ -976,16 +976,16 @@ mod lifecycle_tests {
     struct ModelsBackend;
 
     #[async_trait]
-    impl OpenAiBackend for ModelsBackend {
-        async fn models(&self) -> OpenAiResult<Vec<ModelObject>> {
+    impl InferenceBackend for ModelsBackend {
+        async fn models(&self) -> InferenceResult<Vec<ModelObject>> {
             Ok(vec![ModelObject::new("embedded-model")])
         }
 
         async fn chat_completion(
             &self,
             _request: ChatCompletionRequest,
-        ) -> OpenAiResult<ChatCompletionResponse> {
-            Err(skippy_inference_api::OpenAiError::unsupported(
+        ) -> InferenceResult<ChatCompletionResponse> {
+            Err(skippy_inference_api::InferenceError::unsupported(
                 "not used by this test",
             ))
         }
@@ -993,19 +993,19 @@ mod lifecycle_tests {
         async fn chat_completion_stream(
             &self,
             _request: ChatCompletionRequest,
-            _context: OpenAiRequestContext,
-        ) -> OpenAiResult<ChatCompletionStream> {
-            Err(skippy_inference_api::OpenAiError::unsupported(
+            _context: InferenceRequestContext,
+        ) -> InferenceResult<ChatCompletionStream> {
+            Err(skippy_inference_api::InferenceError::unsupported(
                 "not used by this test",
             ))
         }
     }
 
     #[derive(Default)]
-    struct RecordingObserver(Mutex<Vec<OpenAiLifecycleEvent>>);
+    struct RecordingObserver(Mutex<Vec<InferenceLifecycleEvent>>);
 
-    impl OpenAiLifecycleObserver for RecordingObserver {
-        fn observe(&self, event: &OpenAiLifecycleEvent) {
+    impl InferenceLifecycleObserver for RecordingObserver {
+        fn observe(&self, event: &InferenceLifecycleEvent) {
             self.0
                 .lock()
                 .expect("recording observer lock poisoned")
@@ -1018,7 +1018,7 @@ mod lifecycle_tests {
         let observer = Arc::new(RecordingObserver::default());
         let observed_response = openai_backend_router_with_lifecycle_observer(
             Arc::new(ModelsBackend),
-            Some(Arc::clone(&observer) as Arc<dyn OpenAiLifecycleObserver>),
+            Some(Arc::clone(&observer) as Arc<dyn InferenceLifecycleObserver>),
         )
         .oneshot(
             Request::builder()
@@ -1037,9 +1037,9 @@ mod lifecycle_tests {
                 .iter()
                 .any(|event| matches!(
                     event,
-                    OpenAiLifecycleEvent::Admitted {
-                        context: skippy_inference_api::OpenAiLifecycleContext {
-                            route: OpenAiFrontendRoute::Models,
+                    InferenceLifecycleEvent::Admitted {
+                        context: skippy_inference_api::InferenceLifecycleContext {
+                            route: InferenceFrontendRoute::Models,
                             ..
                         }
                     }

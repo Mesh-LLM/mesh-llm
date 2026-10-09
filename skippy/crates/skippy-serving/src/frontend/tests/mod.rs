@@ -24,8 +24,8 @@ pub(super) use skippy_inference_api::{
     AssistantMessage, ChatCompletionChoice, ChatCompletionRequest, ChatCompletionResponse,
     ChatCompletionStream, ChatHookAction, ChatHookOutcome, CompactionConfig, CompletionRequest,
     CompletionResponse, CompletionStream, FinishReason, GuardrailMode, GuardrailPolicy,
-    MessageContent, ModelObject, OpenAiBackend, OpenAiError, OpenAiRequestContext, OpenAiResult,
-    Usage, apply_chat_hook_outcome,
+    InferenceBackend, InferenceError, InferenceRequestContext, InferenceResult, MessageContent,
+    ModelObject, Usage, apply_chat_hook_outcome,
 };
 pub(super) use skippy_metrics::attr as attr_key;
 pub(super) use skippy_protocol::{
