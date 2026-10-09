@@ -298,7 +298,7 @@ cuda_gencode_args() {
     raw="${raw//;/ }"
     raw="${raw//,/ }"
     read -r -a arches <<< "$raw"
-    for arch in "${arches[@]}"; do
+    for arch in ${arches[@]+"${arches[@]}"}; do
         arch="${arch#sm_}"
         case "$arch" in
             "") ;;
@@ -340,10 +340,10 @@ build_gpu_benchmark_tool() {
                 cuda_arch_args+=("$arch_arg")
             done < <(cuda_gencode_args)
             if [[ "$runtime_os" == "linux" ]]; then
-                "$compiler" -O3 -std=c++17 -cudart shared "${cuda_arch_args[@]}" \
+                "$compiler" -O3 -std=c++17 -cudart shared ${cuda_arch_args[@]+"${cuda_arch_args[@]}"} \
                     "$source_root/cuda/membench-fingerprint.cu" -o "$tool_path"
             else
-                "$compiler" -O3 -std=c++17 "${cuda_arch_args[@]}" \
+                "$compiler" -O3 -std=c++17 ${cuda_arch_args[@]+"${cuda_arch_args[@]}"} \
                     "$source_root/cuda/membench-fingerprint.cu" -o "$tool_path"
             fi
             ;;
