@@ -253,7 +253,11 @@ pub async fn dispatch_model_package(args: ModelPrepareArgs<'_>) -> Result<()> {
         writeln!(err)?;
         writeln!(err, "📜 Following logs...")?;
         writeln!(err)?;
-        follow_until_done(jobs_client, &job.namespace, &info.id, follow_deadline).await?;
+        // Allow for time spent queued before the job starts running.
+        let observe_deadline = follow_deadline
+            .checked_add(std::time::Duration::from_secs(3600))
+            .context("job observation deadline overflow")?;
+        follow_until_done(jobs_client, &job.namespace, &info.id, observe_deadline).await?;
     }
 
     Ok(())
@@ -614,6 +618,13 @@ async fn follow_until_done(
     )?;
     match receipt.end {
         MonitorEnd::Completed => Ok(()),
+        MonitorEnd::Deadline | MonitorEnd::LimitFailure => {
+            writeln!(
+                err,
+                "Stopped observing job {job_id}; it may still be running. Check it with --status."
+            )?;
+            Ok(())
+        }
         _ => bail!(
             "Job observation did not complete successfully; remote job cancellation was not requested"
         ),

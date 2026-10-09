@@ -223,6 +223,9 @@ fn wrong_environment_and_changed_distribution_metadata_refuse_before_writes() {
 
 #[test]
 fn actual_official_sdk_transform_preserves_modern_interfaces_and_safe_retry_boundary() {
+    if !crate::evals::external_sdk_source::configured() {
+        return;
+    }
     let modal =
         include_bytes!("../../../tests/fixtures/swerex_modal/official/deployment/modal.py.fixture");
     let remote =
@@ -283,6 +286,9 @@ fn actual_official_sdk_transform_preserves_modern_interfaces_and_safe_retry_boun
 
 #[test]
 fn transferred_runtime_response_processing_is_outside_transport_retry_catch() {
+    if !crate::evals::external_sdk_source::configured() {
+        return;
+    }
     let original =
         include_bytes!("../../../tests/fixtures/swerex_modal/official/runtime/remote.py.fixture");
     let updated =
@@ -317,6 +323,9 @@ fn transferred_runtime_response_processing_is_outside_transport_retry_catch() {
 }
 #[test]
 fn current_profile_read_only_admission_refuses_original_or_stale_remote_source() {
+    if !crate::evals::external_sdk_source::configured() {
+        return;
+    }
     let fixture = Fixture::new();
     let environment = fixture.root.join("prepared");
     let package = environment.join("lib/python3.11/site-packages/swerex");

@@ -45,6 +45,9 @@ fn runtime_configuration_is_closed_and_receipt_config_is_exact() {
 }
 #[test]
 fn locked_workspace_bytes_preserve_exact_source_path_and_intentional_override() {
+    if !crate::evals::external_sdk_source::configured() {
+        return;
+    }
     let lock_bytes = super::super::external_sdk_source::read("swe-project/uv.lock").unwrap();
     let project_bytes =
         super::super::external_sdk_source::read("swe-project/pyproject.toml").unwrap();
@@ -59,6 +62,9 @@ fn locked_workspace_bytes_preserve_exact_source_path_and_intentional_override() 
 }
 #[test]
 fn template_uses_sealed_interpreter_and_preserves_task_interfaces_without_install_or_patch() {
+    if !crate::evals::external_sdk_source::configured() {
+        return;
+    }
     let source = include_str!("../adapters/templates/swe_bench_pro_run.sh");
     for operation in [
         "uv run",

@@ -90,7 +90,11 @@ pub fn declared_stage_parts(
     let manifest = load_manifest(Path::new("model-package.json"), contents)?;
     validate_manifest_identity(&manifest)?;
     let layers = validate_layer_manifest(&manifest)?;
-    even_stage_range(index, count, manifest.layer_count)?;
+    let (expected_start, expected_end) = even_stage_range(index, count, manifest.layer_count)?;
+    ensure!(
+        (start, end) == (expected_start, expected_end),
+        "stage layer range {start}..{end} does not match even stage range {expected_start}..{expected_end}"
+    );
     validate_layer_range(&manifest, &layers, start, end)?;
     validate_declared_paths(&manifest)?;
     selected_declarations(&manifest, index, count, start, end)

@@ -35,7 +35,9 @@ pub fn run(args: &[String]) -> DynResult<()> {
         let limit = quota
             .checked_mul(options.multiplier)
             .ok_or("sample size overflow")?
-            .max(quota.checked_add(25).ok_or("sample size overflow")?);
+            .max(quota.checked_add(25).ok_or("sample size overflow")?)
+            .min(100_000)
+            .max(quota);
         let candidates = sampling::sample(&acquired.artifacts, source, seed, limit)?;
         let mut accepted = 0;
         let mut generated = 0;
