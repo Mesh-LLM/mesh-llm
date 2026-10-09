@@ -691,14 +691,35 @@ fn validate_verify_window_controls(
         1,
         u32::try_from(MAX_VERIFY_WINDOW_PIPELINE_DEPTH).expect("verify depth limit fits u32"),
     )?;
-    validate_optional_u32_range(
-        config.verify_window_runahead_tokens,
-        &format!("{base_path}.verify_window_runahead_tokens"),
-        // Zero is the documented fixed-depth sentinel, so a model-level block
-        // can switch run-ahead back off when the global defaults enable it.
-        0,
-        u32::try_from(MAX_VERIFY_WINDOW_RUNAHEAD_TOKENS).expect("runahead limit fits u32"),
-    )?;
+    // A number or "auto". `auto` defers the budget to the per-deployment search
+    // rather than asserting one, which is what a strategy composes — it is
+    // applied at startup, and the right budget depends on the link.
+    match config.verify_window_runahead_tokens.as_ref() {
+        None => {}
+        Some(IntegerOrString::String(value)) if value.eq_ignore_ascii_case("auto") => {}
+        Some(IntegerOrString::String(_)) => {
+            let path = format!("{base_path}.verify_window_runahead_tokens");
+            return Err(validation_diagnostic(
+                &path,
+                format!("{path} must be an integer or \"auto\""),
+            ));
+        }
+        Some(IntegerOrString::Integer(value)) => validate_optional_u32_range(
+            Some(u32::try_from(*value).map_err(|_| {
+                let path = format!("{base_path}.verify_window_runahead_tokens");
+                validation_diagnostic(
+                    &path,
+                    format!("{path} must fit in a 32-bit unsigned integer, got {value}"),
+                )
+            })?),
+            &format!("{base_path}.verify_window_runahead_tokens"),
+            // Zero is the documented fixed-depth sentinel, so a model-level
+            // block can switch run-ahead back off when the global defaults
+            // enable it.
+            0,
+            u32::try_from(MAX_VERIFY_WINDOW_RUNAHEAD_TOKENS).expect("runahead limit fits u32"),
+        )?,
+    }
     if let Some(fallback) = config.ngram_fallback.as_deref() {
         validate_allowed(
             fallback,

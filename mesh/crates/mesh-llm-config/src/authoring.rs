@@ -496,6 +496,7 @@ impl ConfigEditor {
                     web_ui_enabled: None,
                     web_ui_primary_tab: None,
                     allow_peer_blocks: None,
+                    openai_exchange_grant: None,
                     command: None,
                     args: Vec::new(),
                     url: None,
@@ -702,6 +703,14 @@ impl PluginConfigEditor<'_> {
 
     pub fn web_ui_primary_tab(&mut self, enabled: Option<bool>) -> &mut Self {
         self.plugin.web_ui_primary_tab = enabled;
+        self
+    }
+
+    pub fn openai_exchange_grant(
+        &mut self,
+        grant: Option<crate::OpenAiExchangeGrant>,
+    ) -> &mut Self {
+        self.plugin.openai_exchange_grant = grant;
         self
     }
 

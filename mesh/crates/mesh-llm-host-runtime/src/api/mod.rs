@@ -991,6 +991,7 @@ impl MeshApi {
                 is_host: runtime_status.is_host,
                 is_client,
                 llama_ready: runtime_status.llama_ready,
+                external_inference_ready: !plugin_models.is_empty(),
                 model_name,
                 models: advertised_models,
                 available_models: node.available_models().await,

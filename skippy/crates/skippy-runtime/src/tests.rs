@@ -420,6 +420,7 @@ mod tests {
         let err = format_skippy_error(Status::Unsupported, "");
         assert!(!err.contains("skippy ABI call failed"));
         assert!(err.contains("Unsupported"));
+        assert!(err.contains("native runtime returned no error detail"));
     }
 
     #[test]

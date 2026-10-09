@@ -11,6 +11,7 @@ mod model_prices;
 mod models;
 mod pipeline;
 mod pipeline_adapter;
+pub(crate) mod prepared_dispatch;
 mod probe;
 mod relay;
 #[cfg(feature = "payments")]
@@ -45,3 +46,6 @@ pub(crate) mod paid;
 
 #[cfg(feature = "payments")]
 pub(crate) mod payment_recovery;
+
+#[cfg(test)]
+pub(crate) use probe::TEST_RESPONSE_FIRST_BYTE_TIMEOUT;

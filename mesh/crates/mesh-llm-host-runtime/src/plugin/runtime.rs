@@ -1,3 +1,5 @@
+mod request;
+
 use super::config::{ExternalPluginSpec, PluginHostMode};
 use super::plugin_manifest_overview;
 use super::support::{plugin_error, serialize_params, summarize_capabilities};
@@ -17,12 +19,24 @@ use serde::Serialize;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use tokio::process::{Child, Command};
 use tokio::sync::{Mutex, mpsc, oneshot};
 
+mod exchange_request;
+#[cfg(test)]
+mod exchange_request_tests;
+mod identity_artifact;
+mod lifecycle_readiness;
+mod socket_auth;
+
+/// How long a stopping plugin waits to tell the node to withdraw its key.
+const PLUGIN_STOPPED_SEND_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
+
 pub(crate) struct ExternalPlugin {
     spec: ExternalPluginSpec,
+    installed_artifact_sha256: Option<String>,
+    authenticated_peer: Arc<AtomicBool>,
     web_ui_enabled: Arc<Mutex<Option<bool>>>,
     web_ui_primary_tab: Arc<Mutex<Option<bool>>>,
     instance_id: String,
@@ -43,6 +57,8 @@ pub(crate) struct ExternalPlugin {
 
 pub(crate) struct PluginRuntime {
     pub(crate) generation: u64,
+    pub(crate) authenticated_peer: bool,
+    pub(crate) initialized_lifecycle: Option<Box<proto::OpenAiExchangeHookManifest>>,
     pub(crate) _child: Option<Child>,
     connection_task: tokio::task::JoinHandle<()>,
     pub(crate) outbound_tx: mpsc::Sender<proto::Envelope>,
@@ -61,6 +77,22 @@ async fn stop_runtime(runtime: PluginRuntime, reason: &str) {
 }
 
 impl ExternalPlugin {
+    pub(crate) fn installed_identity_executable(&self) -> Option<PathBuf> {
+        identity_artifact::installed_executable(&self.spec)
+    }
+    pub(crate) fn installed_artifact_sha256(&self) -> Option<&str> {
+        self.installed_artifact_sha256.as_deref()
+    }
+    pub fn exchange_grant(&self) -> Option<&mesh_llm_config::OpenAiExchangeGrant> {
+        self.spec.openai_exchange_grant.as_deref()
+    }
+
+    pub(crate) fn installed_metadata(
+        &self,
+    ) -> Option<&mesh_llm_plugin_manager::InstalledPluginMetadata> {
+        self.spec.installed_metadata.as_ref()
+    }
+
     pub(crate) async fn spawn(
         spec: &ExternalPluginSpec,
         instance_id: String,
@@ -71,8 +103,11 @@ impl ExternalPlugin {
         in_process: Option<super::InProcessPluginRunner>,
     ) -> Result<Self> {
         let in_process = in_process.filter(|_| spec.command.is_empty());
+        let installed_artifact_sha256 = identity_artifact::capture_startup_digest(spec).await?;
         let plugin = Self {
             spec: spec.clone(),
+            installed_artifact_sha256,
+            authenticated_peer: Arc::new(AtomicBool::new(false)),
             web_ui_enabled: Arc::new(Mutex::new(spec.web_ui_enabled)),
             web_ui_primary_tab: Arc::new(Mutex::new(spec.web_ui_primary_tab)),
             instance_id,
@@ -228,10 +263,18 @@ impl ExternalPlugin {
             })
     }
 
-    async fn await_plugin_connection(&self, listener: LocalListener) -> Result<LocalStream> {
-        tokio::time::timeout(self.spec.startup.connect_timeout(), listener.accept())
+    async fn await_plugin_connection(
+        &self,
+        listener: LocalListener,
+        child_pid: Option<u32>,
+    ) -> Result<LocalStream> {
+        let stream = tokio::time::timeout(self.spec.startup.connect_timeout(), listener.accept())
             .await
-            .with_context(|| format!("Timed out waiting for plugin '{}'", self.spec.name))?
+            .with_context(|| format!("Timed out waiting for plugin '{}'", self.spec.name))??;
+        if self.spec.openai_exchange_grant.is_some() {
+            socket_auth::authenticate(&stream, child_pid)?;
+        }
+        Ok(stream)
     }
 
     async fn install_runtime(
@@ -239,6 +282,13 @@ impl ExternalPlugin {
         child: Option<Child>,
         stream: LocalStream,
     ) -> (u64, mpsc::Sender<proto::Envelope>, PendingResponses) {
+        let authenticated_peer = socket_auth::is_authenticated(
+            &stream,
+            child.as_ref().and_then(Child::id),
+            self.in_process.is_some(),
+        );
+        self.authenticated_peer
+            .store(authenticated_peer, Ordering::Release);
         let (outbound_tx, outbound_rx) = mpsc::channel(256);
         let pending = Arc::new(Mutex::new(HashMap::new()));
         let generation = self.next_generation.fetch_add(1, Ordering::Relaxed);
@@ -255,9 +305,12 @@ impl ExternalPlugin {
             self.runtime.clone(),
             outbound_tx_for_runtime,
             generation,
+            self.authenticated_peer.clone(),
         ));
         *self.runtime.lock().await = Some(PluginRuntime {
             generation,
+            authenticated_peer,
+            initialized_lifecycle: None,
             _child: child,
             connection_task,
             outbound_tx,
@@ -285,6 +338,8 @@ impl ExternalPlugin {
                     mesh_visibility: proto_mesh_visibility(self.host_mode.mesh_visibility),
                     host_capabilities: vec![
                         mesh_llm_plugin::host_capabilities::PEER_BLOCKS.to_string(),
+                        mesh_llm_plugin::host_capabilities::OPENAI_EXCHANGE.to_string(),
+                        mesh_llm_plugin::host_capabilities::PLUGIN_KEYS.to_string(),
                     ],
                 }),
                 Some(self.spec.startup.init_timeout()),
@@ -337,6 +392,22 @@ impl ExternalPlugin {
                 init.plugin_protocol_version,
                 PROTOCOL_VERSION
             );
+        }
+        if let Some(manifest) = &init.manifest {
+            socket_auth::validate_lifecycle_declaration(
+                manifest.openai_exchange_hook.is_some(),
+                self.authenticated_peer.load(Ordering::Acquire),
+            )?;
+            if manifest.openai_exchange_hook.as_ref().is_some_and(|hook| {
+                hook.request_body || hook.effective_request_body || hook.response_body
+            }) {
+                tracing::warn!(plugin = %self.spec.name,
+                    "plugin requests OpenAI prompt or response body access; only explicit host grants authorize observation");
+            }
+            mesh_llm_plugin::openai_exchange::negotiate_openai_exchange(
+                manifest.openai_exchange_hook.as_deref(),
+                self.spec.openai_exchange_grant.as_deref(),
+            )?;
         }
         Ok(())
     }
@@ -425,6 +496,7 @@ impl ExternalPlugin {
             return Ok(());
         }
 
+        self.authenticated_peer.store(false, Ordering::Release);
         self.publish_starting_summary().await;
 
         #[cfg(test)]
@@ -461,7 +533,7 @@ impl ExternalPlugin {
         let pid = child.id();
         self.summary.lock().await.pid = pid;
 
-        let stream = self.await_plugin_connection(listener).await?;
+        let stream = self.await_plugin_connection(listener, pid).await?;
         let (generation, outbound_tx, pending) = self.install_runtime(Some(child), stream).await;
         self.finish_startup(generation, outbound_tx, pending).await
     }
@@ -508,8 +580,8 @@ impl ExternalPlugin {
                     self.spec.name
                 )
             })?;
-        *self.server_info.lock().await = Some(server_info.clone());
-        *self.manifest.lock().await = init.manifest.clone();
+        self.publish_initialized_state(generation, &init, server_info.clone())
+            .await?;
 
         let tools = init
             .manifest
@@ -549,25 +621,6 @@ impl ExternalPlugin {
         self.manifest.lock().await.clone()
     }
 
-    pub(crate) async fn open_stream(
-        &self,
-        request: proto::OpenStreamRequest,
-    ) -> Result<proto::OpenStreamResponse> {
-        let response = self
-            .request(proto::envelope::Payload::OpenStreamRequest(request))
-            .await?;
-        match response.payload {
-            Some(proto::envelope::Payload::OpenStreamResponse(resp)) => Ok(resp),
-            Some(proto::envelope::Payload::ErrorResponse(err)) => {
-                Err(plugin_error(&self.spec.name, "open_stream", &err))
-            }
-            _ => bail!(
-                "Plugin '{}' returned an unexpected payload for 'open_stream'",
-                self.spec.name
-            ),
-        }
-    }
-
     pub(crate) async fn list_tools(&self) -> Result<Vec<ToolSummary>> {
         Ok(self
             .manifest
@@ -579,6 +632,7 @@ impl ExternalPlugin {
     }
 
     pub(crate) async fn shutdown(&self) {
+        self.authenticated_peer.store(false, Ordering::Release);
         {
             let mut summary = self.summary.lock().await;
             summary.status = "shutting down".into();
@@ -602,6 +656,7 @@ impl ExternalPlugin {
         summary.error = None;
         drop(summary);
         self.publish_summary().await;
+        self.announce_stopped().await;
     }
 
     pub(crate) async fn call_tool(
@@ -621,56 +676,6 @@ impl ExternalPlugin {
             content_json: response.output_json,
             is_error: response.is_error,
         })
-    }
-
-    /// `None` waits indefinitely; the caller owns cancellation.
-    pub(crate) async fn call_tool_with_timeout(
-        &self,
-        tool_name: &str,
-        arguments_json: &str,
-        timeout: Option<std::time::Duration>,
-    ) -> Result<ToolCallResult> {
-        let response = self
-            .invoke_service(
-                proto::ServiceKind::Operation,
-                tool_name,
-                arguments_json,
-                timeout,
-            )
-            .await?;
-        Ok(ToolCallResult {
-            content_json: response.output_json,
-            is_error: response.is_error,
-        })
-    }
-
-    pub(crate) async fn invoke_service(
-        &self,
-        kind: proto::ServiceKind,
-        service_name: &str,
-        input_json: &str,
-        timeout: Option<std::time::Duration>,
-    ) -> Result<proto::InvokeServiceResponse> {
-        let response = self
-            .request_with_timeout(
-                proto::envelope::Payload::InvokeServiceRequest(proto::InvokeServiceRequest {
-                    kind: kind as i32,
-                    service_name: service_name.to_string(),
-                    input_json: input_json.to_string(),
-                }),
-                timeout,
-            )
-            .await?;
-        match response.payload {
-            Some(proto::envelope::Payload::InvokeServiceResponse(resp)) => Ok(resp),
-            Some(proto::envelope::Payload::ErrorResponse(err)) => {
-                Err(plugin_error(&self.spec.name, "invoke_service", &err))
-            }
-            _ => bail!(
-                "Plugin '{}' returned an unexpected payload for 'invoke_service'",
-                self.spec.name
-            ),
-        }
     }
 
     pub(crate) async fn mcp_request<T, P>(&self, method: &str, params: P) -> Result<T>
@@ -781,32 +786,6 @@ impl ExternalPlugin {
             Some(std::time::Duration::from_secs(REQUEST_TIMEOUT_SECS)),
         )
         .await
-    }
-
-    async fn request_with_timeout(
-        &self,
-        payload: proto::envelope::Payload,
-        timeout: Option<std::time::Duration>,
-    ) -> Result<proto::Envelope> {
-        for attempt in 0..2 {
-            self.ensure_running().await?;
-            let (generation, outbound_tx, pending) = self.runtime_handles().await?;
-            match self
-                .request_once(generation, outbound_tx, pending, payload.clone(), timeout)
-                .await
-            {
-                Ok(response) => return Ok(response),
-                Err(err) if attempt == 0 => {
-                    tracing::debug!(
-                        plugin = %self.spec.name,
-                        error = %err,
-                        "Retrying plugin request after restart"
-                    );
-                }
-                Err(err) => return Err(err),
-            }
-        }
-        bail!("Plugin '{}' request failed after restart", self.spec.name)
     }
 
     async fn send_unsolicited(&self, payload: proto::envelope::Payload, kind: &str) -> Result<()> {
@@ -921,6 +900,8 @@ impl ExternalPlugin {
                 return;
             }
 
+            self.authenticated_peer.store(false, Ordering::Release);
+
             let failed_runtime = runtime.take();
             *self.server_info.lock().await = None;
             *self.manifest.lock().await = None;
@@ -972,12 +953,29 @@ impl ExternalPlugin {
         matches!(summary.status.as_str(), "shutting down" | "stopped")
     }
 
+    /// Tell the node this plugin stopped for good, so it withdraws the key it
+    /// announced for it. Bounded: a node that is itself stopping may not read it.
+    async fn announce_stopped(&self) {
+        let _ = self
+            .mesh_tx
+            .send_timeout(
+                PluginMeshEvent::PluginStopped {
+                    plugin_id: self.spec.name.clone(),
+                },
+                PLUGIN_STOPPED_SEND_TIMEOUT,
+            )
+            .await;
+    }
+
     async fn mark_disabled(&self, generation: u64, reason: String) {
         let mut runtime = self.runtime.lock().await;
         let disabled_runtime = (runtime.as_ref().map(|runtime| runtime.generation)
             == Some(generation))
         .then(|| runtime.take())
         .flatten();
+        if disabled_runtime.is_some() {
+            self.authenticated_peer.store(false, Ordering::Release);
+        }
         drop(runtime);
         if let Some(runtime) = disabled_runtime {
             stop_runtime(runtime, "plugin disabled").await;
@@ -1001,6 +999,7 @@ impl ExternalPlugin {
         summary.error = Some(crate::logging::policy::redact_urls_in_text(&reason));
         drop(summary);
         self.publish_summary().await;
+        self.announce_stopped().await;
     }
 }
 
@@ -1075,6 +1074,7 @@ pub(crate) mod tests {
             install_path,
             enabled: true,
             manifest: Some(InstalledPluginManifestMetadata {
+                openai_exchange_hook: None,
                 config_schema: None,
                 web_ui: Some(InstalledPluginWebUiMetadata {
                     pages: vec![InstalledPluginWebUiPageMetadata {
@@ -1119,6 +1119,7 @@ pub(crate) mod tests {
         asset_root: Option<&str>,
     ) -> ExternalPluginSpec {
         ExternalPluginSpec {
+            openai_exchange_grant: None,
             name: "demo".into(),
             command: "mesh-llm-plugin-demo".into(),
             args: Vec::new(),
@@ -1135,12 +1136,52 @@ pub(crate) mod tests {
         }
     }
 
+    fn stopped_events(rx: &mut mpsc::Receiver<PluginMeshEvent>) -> Vec<String> {
+        let mut out = Vec::new();
+        while let Ok(event) = rx.try_recv() {
+            if let PluginMeshEvent::PluginStopped { plugin_id } = event {
+                out.push(plugin_id);
+            }
+        }
+        out
+    }
+
+    #[tokio::test]
+    async fn a_plugin_that_is_disabled_or_shut_down_asks_the_node_to_withdraw_its_key() {
+        let temp = tempfile::tempdir().unwrap();
+        let (mesh_tx, mut mesh_rx) = mpsc::channel(8);
+        let (plugin, _runtime_data) = plugin_for_spec_with_mesh_tx(
+            plugin_spec(
+                &temp,
+                None,
+                InstalledPluginWebUiValidationStatus::Valid,
+                None,
+            ),
+            mesh_tx,
+        );
+
+        // A failure restarts the plugin: its key stays announced.
+        plugin
+            .handle_runtime_failure(None, "plugin exited".into())
+            .await;
+        assert!(stopped_events(&mut mesh_rx).is_empty());
+
+        // Disabled: withdrawn.
+        plugin.mark_disabled(0, "turned off".into()).await;
+        assert_eq!(stopped_events(&mut mesh_rx), vec!["demo".to_string()]);
+
+        // Shut down (removed, or the host stopping): withdrawn.
+        plugin.shutdown().await;
+        assert_eq!(stopped_events(&mut mesh_rx), vec!["demo".to_string()]);
+    }
+
     /// A builtin spec with no command, as resolved for an in-process plugin.
     pub(crate) fn in_process_plugin(
         name: &str,
         runner: crate::plugin::InProcessPluginRunner,
     ) -> ExternalPlugin {
         let mut plugin = plugin_for_spec(ExternalPluginSpec {
+            openai_exchange_grant: None,
             name: name.into(),
             command: String::new(),
             args: Vec::new(),
@@ -1155,7 +1196,7 @@ pub(crate) mod tests {
         plugin
     }
 
-    fn plugin_for_spec(spec: ExternalPluginSpec) -> ExternalPlugin {
+    pub(super) fn plugin_for_spec(spec: ExternalPluginSpec) -> ExternalPlugin {
         plugin_for_spec_with_runtime_data(spec).0
     }
 
@@ -1163,10 +1204,20 @@ pub(crate) mod tests {
         spec: ExternalPluginSpec,
     ) -> (ExternalPlugin, RuntimeDataCollector) {
         let (mesh_tx, _mesh_rx) = mpsc::channel(1);
+        plugin_for_spec_with_mesh_tx(spec, mesh_tx)
+    }
+
+    fn plugin_for_spec_with_mesh_tx(
+        spec: ExternalPluginSpec,
+        mesh_tx: mpsc::Sender<PluginMeshEvent>,
+    ) -> (ExternalPlugin, RuntimeDataCollector) {
         let runtime_data = RuntimeDataCollector::new();
         let plugin_name = spec.name.clone();
         let web_ui_enabled = spec.web_ui_enabled;
         let plugin = ExternalPlugin {
+            installed_artifact_sha256: None,
+            // These helpers construct trusted in-memory/mock test hosts.
+            authenticated_peer: Arc::new(AtomicBool::new(true)),
             summary: Arc::new(Mutex::new(PluginSummary {
                 name: spec.name.clone(),
                 kind: "external".into(),
@@ -1247,6 +1298,8 @@ pub(crate) mod tests {
         let (outbound_tx, _outbound_rx) = mpsc::channel(1);
         *plugin.runtime.lock().await = Some(PluginRuntime {
             generation,
+            authenticated_peer: true,
+            initialized_lifecycle: None,
             _child: Some(child),
             connection_task: tokio::spawn(std::future::pending::<()>()),
             outbound_tx,
@@ -1368,6 +1421,7 @@ pub(crate) mod tests {
             Some(42)
         );
         assert_eq!(*plugin.server_info.lock().await, replacement_server_info);
+        assert!(plugin.authenticated_peer.load(Ordering::Acquire));
         assert_eq!(*plugin.manifest.lock().await, replacement_manifest);
         assert_eq!(plugin.summary().await, replacement_summary);
         assert_eq!(
@@ -1376,6 +1430,7 @@ pub(crate) mod tests {
         );
 
         plugin.shutdown().await;
+        assert!(!plugin.authenticated_peer.load(Ordering::Acquire));
     }
 
     #[tokio::test]
@@ -1441,6 +1496,7 @@ pub(crate) mod tests {
                 web_ui_enabled: None,
                 web_ui_primary_tab: None,
                 allow_peer_blocks: None,
+                openai_exchange_grant: None,
                 command: Some("mesh-llm-plugin-demo".into()),
                 args: Vec::new(),
                 url: Some("\u{2003}https://plugin.example.test/v1\u{2003}".into()),
@@ -1810,6 +1866,8 @@ pub(crate) mod tests {
         let (outbound_tx, outbound_rx) = mpsc::channel(1);
         *plugin.runtime.lock().await = Some(PluginRuntime {
             generation: 1,
+            authenticated_peer: true,
+            initialized_lifecycle: None,
             _child: Some(child),
             connection_task: tokio::spawn(std::future::pending::<()>()),
             outbound_tx: outbound_tx.clone(),
@@ -1865,3 +1923,7 @@ pub(crate) mod tests {
         drop(outbound_rx);
     }
 }
+
+#[cfg(all(test, feature = "payments"))]
+#[path = "runtime/payment_failure_tests.rs"]
+mod payment_failure_tests;

@@ -51,7 +51,7 @@ AUDITED_FILES = (
     "mesh/crates/mesh-llm-host-runtime/src/inference/skippy/materialization/cache_management.rs",
     "skippy/crates/skippy-model-hf/src/store/local.rs",
     "mesh/crates/mesh-llm-system/src/autoupdate.rs",
-    "mesh/crates/mesh-llm-system/src/autoupdate/release_fetch.rs",
+    "mesh/crates/mesh-llm-system/src/autoupdate/release_fetch/tests.rs",
     "mesh/crates/mesh-llm-system/src/benchmark/tests.rs",
     "skippy/crates/skippy-runtime/src/logging.rs",
     "mesh/crates/mesh-llm-host-runtime/src/runtime/run_auto.rs",

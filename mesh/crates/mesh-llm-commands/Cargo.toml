@@ -53,6 +53,9 @@ toml_edit = "0.25"
 url = "2"
 zeroize = { version = "1", features = ["derive"] }
 
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [dev-dependencies]
 clap.workspace = true
 rand = "0.10"

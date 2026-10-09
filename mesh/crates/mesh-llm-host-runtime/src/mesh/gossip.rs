@@ -10,11 +10,13 @@ use super::{
 };
 use crate::crypto::{OwnershipSummary, verify_node_ownership};
 use crate::mesh::peer_state::policy_accepts_peer;
+use crate::mesh::plugin_keys::BoundPluginKey;
 use crate::mesh::requirements::current_time_unix_ms;
 use crate::mesh::stage_transport::PeerLifecycleCaptureEvent;
 use crate::protocol::{
-    ControlProtocol, NODE_PROTOCOL_GENERATION, STREAM_GOSSIP, connection_protocol,
-    decode_gossip_payload, read_len_prefixed, write_gossip_payload,
+    ControlProtocol, GossipWithPluginKeys, NODE_PROTOCOL_GENERATION, STREAM_GOSSIP,
+    connection_protocol, decode_gossip_frame_and_plugin_keys, read_len_prefixed,
+    write_gossip_payload,
 };
 use anyhow::Result;
 use iroh::{EndpointAddr, EndpointId, endpoint::Connection};
@@ -23,6 +25,8 @@ use mesh_llm_membership::announcements::{
 };
 
 use mesh_llm_membership::transitions::TransitivePeerUpdate;
+
+mod admission;
 
 /// Minimum peer version we accept into the local mesh table and re-broadcast.
 ///
@@ -73,6 +77,8 @@ pub(crate) struct JoinProbeSuccess {
     candidate: JoinProbeCandidate,
     conn: Connection,
     announcements: Vec<(EndpointAddr, PeerAnnouncement)>,
+    /// The candidate's verified plugin keys, stored only once it is admitted.
+    plugin_keys: Vec<BoundPluginKey>,
     rtt_ms: u32,
     elapsed: std::time::Duration,
 }
@@ -97,9 +103,16 @@ impl JoinProbeSuccess {
             },
             conn,
             announcements,
+            plugin_keys: Vec::new(),
             rtt_ms,
             elapsed: std::time::Duration::from_millis(0),
         }
+    }
+
+    /// The plugin keys the candidate announced in its gossip.
+    pub(super) fn with_plugin_keys(mut self, plugin_keys: Vec<BoundPluginKey>) -> Self {
+        self.plugin_keys = plugin_keys;
+        self
     }
 }
 
@@ -126,48 +139,6 @@ pub(crate) fn emit_join_probe_fallback(last_error: Option<&anyhow::Error>) {
 }
 
 impl Node {
-    async fn validate_direct_announcement_before_payload_apply(
-        &self,
-        their_announcements: &[(EndpointAddr, PeerAnnouncement)],
-        context: AnnouncedPeerContext,
-    ) -> Result<()> {
-        let direct_announcement = their_announcements
-            .iter()
-            .find_map(|(addr, ann)| (addr.id == context.remote).then_some(ann))
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "gossip payload from {} omitted its direct announcement",
-                    context.remote.fmt_short()
-                )
-            })?;
-        if let Err(reason) = self
-            .validate_direct_peer_requirements(
-                context.remote,
-                direct_announcement,
-                context.negotiated_protocol_generation,
-            )
-            .await
-        {
-            self.record_mesh_requirement_rejection(
-                super::requirements::MeshRequirementRejectionSource::Gossip,
-                Some(context.remote),
-                reason.clone(),
-            )
-            .await;
-            self.state
-                .lock()
-                .await
-                .requirement_rejected_peers
-                .insert(context.remote);
-            anyhow::bail!(
-                "peer {} rejected by mesh requirements: {}",
-                context.remote.fmt_short(),
-                reason.code()
-            );
-        }
-        Ok(())
-    }
-
     async fn validate_and_capture_inbound_gossip(
         &self,
         protocol: ControlProtocol,
@@ -305,6 +276,10 @@ impl Node {
         };
         if !direct_peer_requirements_validated {
             self.validate_direct_announcement_before_payload_apply(their_announcements, context)
+                .await?;
+        } else {
+            // Requirement validation is not an ownership admission proof.
+            self.validate_direct_owner_before_payload_apply(their_announcements, context)
                 .await?;
         }
         let context = AnnouncedPeerContext {
@@ -480,6 +455,7 @@ impl Node {
 
     pub(crate) async fn remove_disallowed_peer(&self, id: EndpointId) {
         let mut state = self.state.lock().await;
+        self.plugin_keys.set_peer(id, Vec::new());
         if let Some(admitted_count) = state.remove_disallowed_peer(id) {
             let _ = self.peer_change_tx.send(admitted_count);
         }
@@ -522,6 +498,7 @@ impl Node {
                 .policy_rejected_peers
                 .insert(id, owner_summary.status.clone());
         }
+        self.plugin_keys.set_peer(id, Vec::new());
         if let Some(admitted_count) = state.remove_disallowed_peer(id) {
             let _ = self.peer_change_tx.send(admitted_count);
         }
@@ -634,9 +611,11 @@ impl Node {
         )
         .await
         {
-            Ok(Ok((their_announcements, rtt_ms))) => {
+            Ok(Ok(((their_announcements, their_plugin_keys), rtt_ms))) => {
                 self.apply_gossip_announcements(remote, rtt_ms, &their_announcements, true)
                     .await?;
+                self.store_plugin_keys_if_admitted(remote, their_plugin_keys)
+                    .await;
                 if !self.state.lock().await.connections.contains_key(&remote) {
                     self.refresh_gossip_path_rtt_for_connection(remote, &conn, Some(rtt_ms))
                         .await;
@@ -781,8 +760,9 @@ impl Node {
         let started = std::time::Instant::now();
         let result = tokio::time::timeout(CLIENT_AUTO_JOIN_PROBE_TIMEOUT, async {
             let conn = connect_mesh(&self.endpoint, candidate.addr.clone()).await?;
-            let (announcements, rtt_ms) = self.gossip_round_trip(&conn, peer_id).await?;
-            Ok::<_, anyhow::Error>((conn, announcements, rtt_ms))
+            let ((announcements, plugin_keys), rtt_ms) =
+                self.gossip_round_trip(&conn, peer_id).await?;
+            Ok::<_, anyhow::Error>((conn, announcements, plugin_keys, rtt_ms))
         })
         .await
         .map_err(|_| {
@@ -797,7 +777,8 @@ impl Node {
             candidate,
             conn: result.0,
             announcements: result.1,
-            rtt_ms: result.2,
+            plugin_keys: result.2,
+            rtt_ms: result.3,
             elapsed: started.elapsed(),
         })
     }
@@ -810,6 +791,7 @@ impl Node {
             candidate,
             conn,
             announcements,
+            plugin_keys,
             rtt_ms,
             elapsed,
         } = success;
@@ -844,6 +826,8 @@ impl Node {
             record_mesh_operational_event(MeshOperationalEvent::AutoJoinFailed);
             return Err(error);
         }
+        self.store_plugin_keys_if_admitted(peer_id, plugin_keys)
+            .await;
 
         // Match `connect_to_peer`: the probe gossip RTT above likely reflects
         // relay latency, so refresh the selected-path/RTT after holepunch.
@@ -872,9 +856,12 @@ impl Node {
         remote: EndpointId,
         discover_peers: bool,
     ) -> Result<()> {
-        let (their_announcements, rtt_ms) = self.gossip_round_trip(&conn, remote).await?;
+        let ((their_announcements, their_plugin_keys), rtt_ms) =
+            self.gossip_round_trip(&conn, remote).await?;
         self.apply_gossip_announcements(remote, rtt_ms, &their_announcements, discover_peers)
             .await?;
+        self.store_plugin_keys_if_admitted(remote, their_plugin_keys)
+            .await;
         if !self.state.lock().await.connections.contains_key(&remote) {
             self.refresh_gossip_path_rtt_for_connection(remote, &conn, Some(rtt_ms))
                 .await;
@@ -882,27 +869,39 @@ impl Node {
         Ok(())
     }
 
+    /// One gossip exchange: the remote's announcements and verified plugin
+    /// keys, and the round-trip time. Stores nothing: the caller stores the
+    /// keys once the remote is admitted (`store_plugin_keys_if_admitted`).
     pub(crate) async fn gossip_round_trip(
         &self,
         conn: &Connection,
         remote: EndpointId,
-    ) -> Result<(Vec<(EndpointAddr, PeerAnnouncement)>, u32)> {
+    ) -> Result<(GossipWithPluginKeys, u32)> {
         let protocol = connection_protocol(conn);
         let t0 = std::time::Instant::now();
         let (mut send, mut recv) = conn.open_bi().await?;
         send.write_all(&[STREAM_GOSSIP]).await?;
 
-        let our_announcements = self.collect_announcements().await;
-        write_gossip_payload(&mut send, protocol, &our_announcements, self.endpoint.id()).await?;
+        let outbound = self.collect_outbound_gossip().await;
+        write_gossip_payload(
+            &mut send,
+            protocol,
+            &outbound,
+            self.endpoint.id(),
+            &crate::mesh::plugin_keys::to_proto(&self.plugin_keys.own()),
+        )
+        .await?;
         send.finish()?;
 
         let buf = read_len_prefixed(&mut recv).await?;
         let rtt_ms = t0.elapsed().as_millis() as u32;
-        let their_announcements = decode_gossip_payload(protocol, remote, &buf)?;
+        let (inbound, their_plugin_keys) =
+            decode_gossip_frame_and_plugin_keys(protocol, remote, &buf)?;
+        let their_announcements = self.resolve_inbound_gossip(remote, inbound).await;
 
         let _ = recv.read_to_end(0).await;
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        Ok((their_announcements, rtt_ms))
+        Ok(((their_announcements, their_plugin_keys), rtt_ms))
     }
 
     pub(crate) async fn apply_gossip_announcements(
@@ -943,7 +942,9 @@ impl Node {
         tracing::info!("Inbound gossip from {}", remote.fmt_short());
 
         let buf = read_len_prefixed(&mut recv).await?;
-        let their_announcements = decode_gossip_payload(protocol, remote, &buf)?;
+        let (inbound, their_plugin_keys) =
+            decode_gossip_frame_and_plugin_keys(protocol, remote, &buf)?;
+        let their_announcements = self.resolve_inbound_gossip(remote, inbound).await;
         let negotiated_protocol_generation = match protocol {
             ControlProtocol::ProtoV1 => Some(NODE_PROTOCOL_GENERATION),
         };
@@ -951,8 +952,15 @@ impl Node {
         self.validate_and_capture_inbound_gossip(protocol, &their_announcements, context)
             .await?;
 
-        let our_announcements = self.collect_announcements().await;
-        write_gossip_payload(&mut send, protocol, &our_announcements, self.endpoint.id()).await?;
+        let outbound = self.collect_outbound_gossip().await;
+        write_gossip_payload(
+            &mut send,
+            protocol,
+            &outbound,
+            self.endpoint.id(),
+            &crate::mesh::plugin_keys::to_proto(&self.plugin_keys.own()),
+        )
+        .await?;
         send.finish()?;
 
         let _ = recv.read_to_end(0).await;
@@ -965,6 +973,8 @@ impl Node {
             true,
         )
         .await?;
+        self.store_plugin_keys_if_admitted(remote, their_plugin_keys)
+            .await;
         self.refresh_gossip_path_rtt(remote, None).await;
 
         self.connect_discovered_peers(&their_announcements, false, true)
@@ -972,8 +982,24 @@ impl Node {
 
         Ok(())
     }
+    /// Lists a peer's plugin keys only while it is an admitted member. Checked
+    /// and written under the state lock, as every removal clears them, so a
+    /// peer rejected or removed in between is never listed again.
+    pub(crate) async fn store_plugin_keys_if_admitted(
+        &self,
+        id: EndpointId,
+        keys: Vec<BoundPluginKey>,
+    ) {
+        let state = self.state.lock().await;
+        if state.peers.get(&id).is_some_and(|peer| peer.is_admitted()) {
+            self.plugin_keys.set_peer(id, keys);
+        }
+    }
+
     pub(super) async fn remove_peer(&self, id: EndpointId, reason: MeshPeerRemovalReason) {
         let mut state = self.state.lock().await;
+        // A peer that leaves stops being listed with plugin keys.
+        self.plugin_keys.set_peer(id, Vec::new());
         if let Some(removed) = state.remove_peer(id) {
             let peer = removed.peer;
             let had_connection = removed.had_connection;
@@ -1040,6 +1066,7 @@ impl Node {
             );
             let mut state = self.state.lock().await;
             state.requirement_rejected_peers.insert(id);
+            self.plugin_keys.set_peer(id, Vec::new());
             if let Some(admitted_count) = state.remove_disallowed_peer(id) {
                 let _ = self.peer_change_tx.send(admitted_count);
             }
@@ -1133,6 +1160,7 @@ impl Node {
         // /api/status, the UI, and routing all stop seeing them.
         if !version_allowed_for_rebroadcast(ann.version.as_deref()) {
             let mut state = self.state.lock().await;
+            self.plugin_keys.set_peer(id, Vec::new());
             if let Some(admitted_count) = state.remove_disallowed_peer(id) {
                 let _ = self.peer_change_tx.send(admitted_count);
             }
@@ -1151,6 +1179,7 @@ impl Node {
         // gets in.
         if peer_is_idle_transitive_client(ann) {
             let mut state = self.state.lock().await;
+            self.plugin_keys.set_peer(id, Vec::new());
             if let Some(admitted_count) = state.remove_disallowed_peer(id) {
                 let _ = self.peer_change_tx.send(admitted_count);
             }
@@ -1166,6 +1195,7 @@ impl Node {
         );
         if !policy_accepts_peer(self.trust_policy, &owner_summary) {
             let mut state = self.state.lock().await;
+            self.plugin_keys.set_peer(id, Vec::new());
             if let Some(admitted_count) = state.remove_disallowed_peer(id) {
                 let _ = self.peer_change_tx.send(admitted_count);
             }

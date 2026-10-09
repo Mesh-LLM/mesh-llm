@@ -85,6 +85,7 @@ async fn install(
         _ => bail!("provide either a plugin reference or --archive with --name"),
     };
     progress.finish();
+    report_exchange_access(&outcome.metadata)?;
     if outcome.changed {
         let mut err = mesh_llm_events::console_err();
         writeln!(
@@ -101,6 +102,7 @@ async fn update(name: &str) -> Result<()> {
     let mut progress = CliPluginProgress::default();
     let outcome = update_plugin(name, &options, &mut progress).await?;
     progress.finish();
+    report_exchange_access(&outcome.metadata)?;
     if outcome.changed {
         let mut err = mesh_llm_events::console_err();
         writeln!(
@@ -124,6 +126,23 @@ fn set_enabled(name: &str, enabled: bool) -> Result<()> {
     Ok(())
 }
 
+fn report_exchange_access(
+    metadata: &mesh_llm_plugin_manager::InstalledPluginMetadata,
+) -> Result<()> {
+    if let Some(access) = metadata
+        .manifest
+        .as_ref()
+        .and_then(|m| m.openai_exchange_hook.as_ref())
+    {
+        writeln!(
+            mesh_llm_events::console_err(),
+            "{}",
+            access.access_summary()
+        )?;
+    }
+    Ok(())
+}
+
 fn delete(name: &str) -> Result<()> {
     let store = PluginStore::new(default_store_root()?);
     store.delete(name)?;
@@ -136,6 +155,7 @@ fn info(name: &str, runtime_rows: Option<&PluginListRows>) -> Result<bool> {
     let store = PluginStore::new(default_store_root()?);
     let mut out = mesh_llm_events::console_out();
     if let Some(metadata) = store.load_optional(name)? {
+        report_exchange_access(&metadata)?;
         writeln!(out, "name\t{}", metadata.name)?;
         writeln!(out, "version\t{}", metadata.installed_version)?;
         writeln!(out, "enabled\t{}", metadata.enabled)?;

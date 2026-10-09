@@ -8,9 +8,17 @@ The affected-crate fallback roster in `scripts/affected-crates.sh` includes
 `mesh-llm-moa-plugin` and `mesh-llm-wallet` alongside their related workspace
 crates; `just ci-crate-lists` checks it against workspace membership. The
 publish chain orders `mesh-llm-plugin` before `mesh-llm-wallet` and
-`mesh-llm-payments`, including optional dependencies. It also publishes
+`mesh-llm-payments`, including optional dependencies. It publishes
+`mesh-llm-config` before the plugin SDK, whose lifecycle grant negotiation
+uses the operator configuration types. It also publishes
 `mesh-mixture-of-agents` before `mesh-llm-moa-plugin`, and both before
 `mesh-llm-host-runtime`.
+The local `just test-all` author exemplar gate includes the packaged OpenAI
+exchange conformance suite.
+Its source remains the `mesh-llm-plugin` Cargo example at
+`mesh/crates/mesh-llm-plugin/examples/openai-exchange-observer.rs`; the recipes
+build `target/debug/examples/openai-exchange-observer` and package it as
+`dist/openai-exchange-observer.tar.gz` from the workspace root.
 
 The protected catalogs include `platform-windows-cfg`: ownership of any crate
 it lists selects `platform-checks` and its existing `windows-unit` row, and
@@ -154,6 +162,13 @@ closure built by `just skippy-workload-oracles-build`. Static Metal resources
 are embedded; an unpackaged non-system dylib makes the handoff fail. SHA-256
 digests bind all handoff bytes to the candidate, main base, run/attempt, and
 pass identity.
+The build job sets `CTEST_PARALLEL_LEVEL=16` for complete upstream CTest runs
+in the repair session and trusted build; the per-case timeout remains 900 seconds.
+The build job prepares the locked canary Python SDK before its early Metal
+battery, so Nomic embedding uses the same interpreter as family workers.
+Goose's build and test commands use `scripts/llama-canary-log-command.sh` to
+stream output and retain separate invocation logs, exit statuses, and available
+CTest result files under the build job's 14-day repair evidence artifact.
 
 Before compilation, the controller runs the selected battery in cache-free
 `--dry-run --skip-build` mode against its own planner output. This checks the
@@ -428,6 +443,30 @@ receipt after every selected Cargo invocation succeeds. The receipt binds the
 resolved selected and actually executed package names, batch ID, kind and source
 SHA; a mismatch fails the batch. This is per-batch execution evidence; the
 planner and `ci-crate-lists` still own exhaustive main workspace allocation.
+
+The four source-compatible slices select real legacy Python contracts or their
+native Rust/Just owners from the admitted checkout. Native Quality runs both
+contract recipes and restores the pinned public SDK/research sources. Resolver
+arrays are initialized in each invoking step. Native runner-contract and the
+three accelerator Laya jobs admit a private, digest-bound cleanup executable
+before managed work; legacy checkouts retain their existing cleanup command.
+Quality's job/alternate contract bounds are 60/40 native (20 legacy) minutes;
+runner-contract is 45 minutes; accelerator Laya jobs have a 100-minute floor
+while preserving larger caller limits, with aggregate native restore/read work
+bounded to 70 minutes. These budget changes preserve authority, providers,
+cache policy, workload arguments and all existing immutable audit/resolver references.
+Hosted two-source diagnostic
+[37725709469](https://github.com/Mesh-LLM/mesh-llm/actions/runs/37725709469)
+passed legacy `d18311f1` and native `db506f7f` contracts; this adds no normal
+five-lane, model or SDK qualification claim.
+
+Windows product readiness observes the owning launcher and its native child
+exit status, retaining the 15-second graceful-shutdown window. CTRL_BREAK
+delivery errors remain visible and fail the smoke. Clean/nonzero exits,
+timeout cleanup and failed signal delivery have Rust behavior fixtures.
+After shutdown, Windows log removal allows five attempts separated by one-second
+waits; persistent locks fail cleanup and retain the log. Rust fixtures cover both
+transient and persistent locks; Windows product runs provide actual platform evidence.
 
 All workflow calls use typed, bounded semantic inputs. Credential-bearing smoke
 workflows remain fixed to GitHub-hosted runners; the PR entrypoints pass no

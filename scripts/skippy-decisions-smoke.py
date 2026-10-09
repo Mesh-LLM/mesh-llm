@@ -92,7 +92,27 @@ def main():
     usage = body.get("usage", {})
     if any(type(usage.get(key)) is not int or usage[key] < 0 for key in ("input_tokens", "output_tokens", "total_tokens")):
         raise RuntimeError(f"invalid usage: {usage}")
-    print(f"Decisions live smoke passed: model={model}, questions=predicate,choice,score")
+    if usage.get("input_tokens_details") != {"cached_tokens": 0, "cache_write_tokens": 0} or usage.get("output_tokens_details") != {"reasoning_tokens": 0}:
+        raise RuntimeError(f"invalid detailed usage: {usage}")
+
+    typed = get_json(
+        f"{base}/v1/decisions",
+        {
+            "model": model,
+            "input": [{"role": "user", "content": [{"type": "input_text", "text": "Please review this request."}]}],
+            "questions": [{"type": "choice", "instructions": "Is this a request?", "choices": [
+                {"value": True, "description": "A request"},
+                {"value": False, "description": "Not a request"},
+            ]}],
+        },
+        timeout=args.timeout,
+    )
+    answer = typed.get("answers", [{}])[0]
+    if answer.get("type") != "choice" or answer.get("name", "missing") is not None or type(answer.get("choice")) is not bool:
+        raise RuntimeError(f"invalid unnamed boolean choice: {typed}")
+    if [item.get("value") for item in answer.get("probabilities", [])] != [True, False]:
+        raise RuntimeError(f"invalid boolean probabilities: {typed}")
+    print(f"Decisions live smoke passed: model={model}, questions=predicate,choice,score,boolean-choice")
 
 
 if __name__ == "__main__":

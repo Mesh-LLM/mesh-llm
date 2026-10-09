@@ -1430,10 +1430,16 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: CUDA
+          - name: CUDA 12
             backend: cuda
+            cuda_major: '12'
             runtime_artifact: release-native-runtime-windows-x86_64-cuda12
-            artifact_name: release-windows-cuda
+            artifact_name: release-windows-cuda-12
+          - name: CUDA 13
+            backend: cuda
+            cuda_major: '13'
+            runtime_artifact: release-native-runtime-windows-x86_64-cuda13
+            artifact_name: release-windows-cuda-13
           - name: ROCm
             backend: rocm
             runtime_artifact: release-native-runtime-windows-x86_64-rocm
@@ -1486,6 +1492,8 @@ jobs:
           MESH_RELEASE_HOST_PRESTAMPED: "1"
           MESH_RELEASE_ATTESTATION_PREVERIFIED: "1"
           MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE: ${{ runner.temp }}/mesh-release-attestation-public-key.json
+          # Names CUDA archives -cuda-12 / -cuda-13, as on Linux.
+          MESH_CUDA_VERSION: ${{ matrix.cuda_major }}
         run: .\scripts\package-release.ps1 -Version $env:RELEASE_TAG -OutputDir dist -Flavor "${{ matrix.backend }}"
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
@@ -1606,8 +1614,8 @@ jobs:
     runs-on: windows-2022
     env:
       ROCM_HIP_SDK_FILENAME: AMD-Software-PRO-Edition-25.Q3-WinSvr2022-For-HIP.exe
-      WINDOWS_CUDA_VERSION: ${{ vars.CUDA_VERSION || '12.9.2' }}
-      MESH_CUDA_VERSION: ${{ vars.CUDA_VERSION || '12.9.2' }}
+      WINDOWS_CUDA_VERSION: ${{ matrix.cuda_version || vars.CUDA_VERSION || '12.9.2' }}
+      MESH_CUDA_VERSION: ${{ matrix.cuda_version || vars.CUDA_VERSION || '12.9.2' }}
       WINDOWS_VULKAN_SDK_VERSION: ${{ vars.VULKAN_SDK_VERSION || '1.4.328.1' }}
       LLAMA_STAGE_BUILD_DIR: .deps/llama-build/windows/build-stage-abi-${{ matrix.backend }}
       MESH_NATIVE_RUNTIME_TARGET: x86_64-pc-windows-msvc
@@ -1616,10 +1624,22 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: CUDA
+          - name: CUDA 12
             backend: cuda
+            cuda_major: '12'
             cuda_architectures: '61;75;80;86;87;89;90'
+            cuda_sub_packages: '["nvcc", "cudart", "cublas", "cublas_dev", "visual_studio_integration"]'
             artifact_name: release-native-runtime-windows-x86_64-cuda12
+          # Same toolkit and architecture list as the Linux CUDA 13 lane, so
+          # Blackwell GPUs (SM 100/120) get a Windows runtime too. From CUDA 13
+          # the crt headers and nvvm (cicc) are separate installer packages.
+          - name: CUDA 13
+            backend: cuda
+            cuda_major: '13'
+            cuda_version: '13.1.2'
+            cuda_architectures: '75;80;86;87;89;90;100;103;120;121'
+            cuda_sub_packages: '["nvcc", "crt", "nvvm", "cudart", "cublas", "cublas_dev", "visual_studio_integration"]'
+            artifact_name: release-native-runtime-windows-x86_64-cuda13
           - name: ROCm
             backend: rocm
             rocm_architectures: gfx90a;gfx942;gfx1100;gfx1101;gfx1102;gfx1103;gfx1151;gfx1200;gfx1201
@@ -1657,22 +1677,24 @@ jobs:
         env:
           RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
         run: scripts/release-version.sh "$RELEASE_TAG"
-      - name: Validate CUDA 12 artifact contract
+      - name: Validate CUDA artifact contract
         if: ${{ matrix.backend == 'cuda' }}
         shell: pwsh
+        env:
+          EXPECTED_CUDA_MAJOR: ${{ matrix.cuda_major }}
         run: |
           $cudaVersion = "$env:WINDOWS_CUDA_VERSION".Trim()
           $cudaMajor = ($cudaVersion -split '\.', 2)[0]
-          if ($cudaMajor -ne '12') {
-            throw "CUDA_VERSION must select CUDA 12.x because this release lane publishes cuda12-labelled artifacts; got '$cudaVersion'."
+          if ($cudaMajor -ne $env:EXPECTED_CUDA_MAJOR) {
+            throw "This release lane publishes cuda$env:EXPECTED_CUDA_MAJOR-labelled artifacts, so the CUDA toolkit must be $env:EXPECTED_CUDA_MAJOR.x; got '$cudaVersion'."
           }
       - name: Install CUDA toolkit
         if: ${{ matrix.backend == 'cuda' }}
-        uses: Jimver/cuda-toolkit@3d45d157f327c09c04b50ee6ccdea2d9d017ec76 # v0.2.35
+        uses: Jimver/cuda-toolkit@b8bf9c6c28f8a92fbb04dcfcaee872e60c57462d # v0.2.36
         with:
           cuda: ${{ env.WINDOWS_CUDA_VERSION }}
           method: network
-          sub-packages: '["nvcc", "cudart", "cublas", "cublas_dev", "visual_studio_integration"]'
+          sub-packages: ${{ matrix.cuda_sub_packages }}
           use-github-cache: true
           use-local-cache: true
           log-file-suffix: windows-cuda-native-runtime
@@ -1718,7 +1740,7 @@ jobs:
           LLAMA_STAGE_BACKEND: ${{ matrix.backend }}
           LLAMA_STAGE_CUDA_ARCHITECTURES: ${{ matrix.cuda_architectures }}
           LLAMA_STAGE_AMDGPU_TARGETS: ${{ matrix.rocm_architectures }}
-          MESH_LLM_CUDA_TOOLKIT_MAJOR: '12'
+          MESH_LLM_CUDA_TOOLKIT_MAJOR: ${{ matrix.cuda_major || '12' }}
         uses: ./.github/actions/prepare-native-runtime-input
         with:
           backend: ${{ matrix.backend }}
@@ -1877,6 +1899,7 @@ jobs:
               "linux/x86_64/rocm"
               "linux/x86_64/vulkan"
               "windows/x86_64/cuda12"
+              "windows/x86_64/cuda13"
               "windows/x86_64/rocm"
               "windows/x86_64/vulkan"
             )

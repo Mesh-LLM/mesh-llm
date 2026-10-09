@@ -80,9 +80,18 @@ url = "http://127.0.0.1:11434/v1"
 For vLLM or LM Studio, change **only the URL** to the value in the table.
 Merge into an existing `[runtime]` section and existing `openai-endpoint` entry;
 do not append duplicate tables. No `[[models]]` entry is needed for the provider.
-`on_demand` avoids eagerly loading configured native models; it does not disable
-native-runtime initialization or future native serving. Explicit `--model` or
-`--gguf` arguments still request loading, so omit them here.
+With an enabled, installed, host-compatible inference adapter and no local model
+startup request, `serve` can run when a native runtime is unavailable. Mesh reports
+that native inference is unavailable and continues serving the external endpoint.
+It advertises no native model capacity and rejects later local-model or split-stage
+loads until you install a compatible runtime and restart.
+
+`on_demand` avoids eager local-model loading. Explicit `--model`, `--gguf`, or
+layer-package startup arguments still require a native runtime. Configured local
+models also require one. Omit those arguments and `[[models]]` entries for this
+endpoint-only recipe. A disabled adapter, missing executable, blank URL, or plugin
+without inference capability cannot make native startup optional. Invalid config,
+incompatible runtime pins, and damaged runtime artifacts still fail with diagnostics.
 
 ### 4. Serve and check
 
@@ -200,10 +209,21 @@ into Mesh layer packages or distribute their weights.
 ### Are streaming, tools, vision and every provider certified?
 
 No blanket guarantee. Features depend on the provider/model and Mesh's routing
-path. The compatibility repair was validated on Mesh 0.76.0 with local archive
-installation and non-streaming HTTP-fixture requests through two processes on
-one Mac. The recipes are based on provider documentation, not a claim of live
-certification for every named provider, platform, streaming or authentication mode.
+path. The bounded endpoint fixture exercises the real protocol-3 adapter against a
+local OpenAI stub. It checks model discovery and streaming and non-streaming chat
+through a serving node and a joined client with empty native runtime directories.
+Run it against a release host built from the branch you are qualifying:
+
+```bash
+just release-host-build
+node scripts/plugin-only-endpoint-smoke.cjs "$PWD/target/release/mesh-llm"
+```
+
+The fixture installs adapter 0.2.0 in temporary directories. Pass a local adapter
+release archive as its second argument to avoid downloading it during the run.
+It retains process logs, status JSON, and upstream request records at the printed
+path. These checks do not certify every provider, platform, tool, vision, or
+authentication mode.
 
 ## Provider references
 

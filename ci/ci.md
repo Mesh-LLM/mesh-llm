@@ -154,6 +154,8 @@ multimodal library-test executable, and the run-scoped CPU workload oracle
 closure. Static Metal resources are embedded; an unpackaged non-system dylib
 makes the handoff fail. SHA-256 digests bind all handoff bytes to the candidate,
 main base, run/attempt, and pass identity.
+The build job sets `CTEST_PARALLEL_LEVEL=16` for complete upstream CTest runs
+in the repair session and trusted build; the per-case timeout remains 900 seconds.
 
 Before compilation, the controller runs the selected battery in cache-free
 `--dry-run --skip-build` mode against its own planner output. This checks the
@@ -240,6 +242,9 @@ repeated infrastructure failure or invalid aggregate evidence stops. Only
 complete independent success permits publication.
 Full worker/build logs remain for 14 days; executable handoffs remain for seven
 days so a single-machine queue can complete later passes.
+Agent-run build and test commands stream to the live job and save individual
+logs and exit statuses under `agent-commands/` in the build evidence artifact.
+The command wrapper also snapshots available CTest result files after each run.
 
 Within each candidate build job, Goose resumes the same session for
 prepare/build failures under the existing 11.5-hour coding-admission and
@@ -628,6 +633,48 @@ artifact contract and verification as the corresponding main row. Draft PRs
 select no build rows. Trust-derived placement, cache mode, artifact namespace
 and optional credentials may differ, along with row selection and bounded
 parallelism.
+
+## Source-compatible contract execution
+
+The reusable slices accept both the existing Python automation checkout and the
+native automation checkout. Quality selects actual Python unittest discovery
+for legacy source; native source selects both `just ci-automation-contracts` and
+`just ci-legacy-contracts`, with its pinned SDK and research source preparation.
+The native path never treats empty Python discovery as replacement coverage.
+Model-resolution steps initialize their source-specific resolver independently.
+
+Native managed work starts only after preparing and admitting a source-bound
+cleanup controller. A private, read-only executable copy under `RUNNER_TEMP`
+retains its digest even if later Cargo work replaces the build output. Cleanup
+requires the managed-work marker and rechecks source and controller digests;
+bootstrap failure refuses owned work and does not compile a cleanup fallback.
+Legacy source retains its existing Python cleanup command.
+
+These are explicit budget changes: Quality has a 60-minute job with an alternate
+40-minute native contract step or 20-minute legacy step; the runner-contract job
+has 45 minutes, including 20-minute native preparation and 5-minute cleanup.
+The three accelerator Laya jobs have a 100-minute floor, preserving larger
+caller limits: 20-minute preparation, 70-minute aggregate restore/read work,
+5-minute cleanup and 5-minute setup reserve. Legacy composite limits and all
+workload arguments remain unchanged. The aggregate Laya allowance does not
+create a separate internal acquisition deadline.
+
+The five normal PR/main authority boundaries and all existing audit and package
+resolver immutable references remain unchanged. Hosted two-source diagnostic
+[37725709469](https://github.com/Mesh-LLM/mesh-llm/actions/runs/37725709469)
+passed legacy `d18311f1` and native `db506f7f` contract execution, including
+skipped local actions absent from the legacy checkout. Those results are
+separate from normal five-lane and product qualification.
+
+Windows product readiness waits on the Bash-owned launcher, which preserves
+the native child's exit status. The native PID is used for CTRL_BREAK delivery
+and forced cleanup, not a Python `os.kill(pid, 0)` liveness probe. Signal-delivery
+errors and nonzero child exits fail the smoke; its 15-second graceful-shutdown
+window remains unchanged. Rust behavior fixtures cover clean exit, nonzero
+exit, timeout, and signal-delivery failure. After shutdown, Windows log removal
+allows five attempts with one-second waits between them; a persistent lock
+fails cleanup and retains the log. Rust fixtures cover transient and persistent
+locks; actual Windows product checks provide the platform evidence.
 
 ## Slice catalog
 
@@ -1186,6 +1233,13 @@ complete
 [manage-ci validation contract](../.agents/skills/manage-ci/SKILL.md#validation-contract)
 for scope-specific checks, and run the canonical `just test-all` target when
 full repository validation is required.
+Its plugin-author gate rebuilds the OpenAI exchange observer package and runs
+the installed lifecycle conformance tests with controlled inference backends.
+`just test-openai-exchange-conformance` runs that gate independently.
+The exemplar lives under
+`mesh/crates/mesh-llm-plugin/examples/openai-exchange-observer.rs` and remains
+a Cargo example of the plugin SDK. The package archive is written to the
+workspace-root `dist/openai-exchange-observer.tar.gz`.
 
 ### Offline runner identity qualification
 
@@ -1469,7 +1523,8 @@ both owner and permissions and never create the path themselves.
 
 The shared `setup-canary-python` action restores `ci/canary-python/uv.lock` into
 a controller-owned virtual environment and exports `SKIPPY_WORKLOAD_SDK_PYTHON`.
-Historical source workers consume that exact SDK interpreter. This is managed
+The producer build uses it for the early embedding battery, and historical
+source workers consume that exact SDK interpreter. This is managed
 project dependency restoration, not an installation into system Python or the
 read-only model cache. The runner still requires preinstalled `uv`.
 

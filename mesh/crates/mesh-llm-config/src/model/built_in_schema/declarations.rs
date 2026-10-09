@@ -294,7 +294,7 @@ fn topology_settings(prefix: &str) -> Vec<ConfigSettingSchema> {
 
 fn plugin_entry_settings() -> Vec<ConfigSettingSchema> {
     let plugin_prefix = format!("plugin.{CANONICAL_PLUGIN_NAME_SEGMENT}");
-    vec![
+    let mut settings = vec![
         plugin_setting(&format!("{plugin_prefix}.name"), ConfigValueSchema::String),
         plugin_setting(
             &format!("{plugin_prefix}.enabled"),
@@ -346,7 +346,9 @@ fn plugin_entry_settings() -> Vec<ConfigSettingSchema> {
             &format!("{plugin_prefix}.startup.lazy_start"),
             ConfigValueSchema::Boolean,
         ),
-    ]
+    ];
+    settings.extend(exchange_grants::exchange_grant_settings(&plugin_prefix));
+    settings
 }
 
 fn model_fit_settings(
@@ -807,9 +809,26 @@ fn speculative_settings(prefix: &str) -> Vec<ConfigSettingSchema> {
         ),
         basic_setting(
             &format!("{prefix}.verify_window_runahead_tokens"),
-            ConfigValueSchema::Integer,
+            integer_or_auto_schema(),
         ),
         basic_setting(&format!("{prefix}.ngram_fallback"), ConfigValueSchema::String),
+        basic_setting(&format!("{prefix}.gate"), bool_or_auto_schema()),
+        basic_setting(
+            &format!("{prefix}.gate_min_window_s"),
+            ConfigValueSchema::Integer,
+        ),
+        basic_setting(
+            &format!("{prefix}.gate_min_requests"),
+            ConfigValueSchema::Integer,
+        ),
+        basic_setting(
+            &format!("{prefix}.gate_decisive_margin"),
+            ConfigValueSchema::Float,
+        ),
+        basic_setting(
+            &format!("{prefix}.gate_cooldown_s"),
+            ConfigValueSchema::Integer,
+        ),
         basic_setting(&format!("{prefix}.spec_default"), bool_or_auto_schema()),
     ]
 }

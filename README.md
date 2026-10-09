@@ -288,16 +288,16 @@ As of v0.76.0-rc8, three distribution/loading bugs still block the out-of-the-bo
    .\install.ps1 -PreRelease
    ```
 
-2. **Install the CUDA runtime from the product bundle** — `mesh-llm runtime install cuda` finds no windows/x86_64 runtimes in the release manifest ([#1511](https://github.com/Mesh-LLM/mesh-llm/issues/1511)). Download `mesh-llm-x86_64-pc-windows-msvc-cuda.zip` for your installed version from the [releases page](https://github.com/Mesh-LLM/mesh-llm/releases), extract it, then:
+2. **Install the CUDA runtime from the product bundle** — `mesh-llm runtime install cuda` finds no windows/x86_64 runtimes in the release manifest ([#1511](https://github.com/Mesh-LLM/mesh-llm/issues/1511)). Download `mesh-llm-x86_64-pc-windows-msvc-cuda-12.zip` (or `-cuda-13.zip` for RTX 50-series and other Blackwell GPUs, which needs a CUDA 13 driver) for your installed version from the [releases page](https://github.com/Mesh-LLM/mesh-llm/releases), extract it, then:
 
    ```powershell
    mesh-llm runtime install --bundle-dir "<extracted>\mesh-bundle" cuda
    ```
 
-3. **Put the runtime's `lib` directory on `PATH` before serving** — runtime DLLs currently fail to load with `LoadLibraryExW` error 126 ([#1512](https://github.com/Mesh-LLM/mesh-llm/issues/1512)):
+3. **Put the runtime's `lib` directory on `PATH` before serving** — runtime DLLs currently fail to load with `LoadLibraryExW` error 126 ([#1512](https://github.com/Mesh-LLM/mesh-llm/issues/1512)). Replace `<cuda>` with `cuda12` or `cuda13`, matching the bundle from step 2:
 
    ```powershell
-   $env:PATH = "$env:LOCALAPPDATA\mesh-llm\native-runtimes\<version>\meshllm-native-runtime-windows-x86_64-cuda12\lib;" + $env:PATH
+   $env:PATH = "$env:LOCALAPPDATA\mesh-llm\native-runtimes\<version>\meshllm-native-runtime-windows-x86_64-<cuda>\lib;" + $env:PATH
    mesh-llm serve --local-model-only --model "C:\path\to\model.gguf"
    ```
 
