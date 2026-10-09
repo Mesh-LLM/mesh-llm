@@ -1,3 +1,4 @@
+mod capability_registration;
 mod channel_broadcast;
 mod config;
 mod exchange_grants;
@@ -130,6 +131,7 @@ pub struct PluginManager {
 }
 
 pub(in crate::plugin) struct PluginManagerInner {
+    capability_registration: capability_registration::CapabilityRegistration,
     pub(in crate::plugin) identity_registry: Arc<Mutex<identity_registry::PluginIdentityRegistry>>,
     pub(in crate::plugin) exchange_grants: exchange_grants::ExchangeGrantRegistry,
     pub(in crate::plugin) exchange_observations: Arc<exchange_lifecycle::ObservationRegistry>,
@@ -226,6 +228,7 @@ impl PluginManager {
         .await?;
         let manager = Self {
             inner: Arc::new(PluginManagerInner {
+                capability_registration: Default::default(),
                 identity_registry: Arc::default(),
                 exchange_grants,
                 exchange_observations: Arc::default(),
@@ -452,6 +455,7 @@ impl PluginManager {
     pub fn for_test_bridge(plugin_names: &[&str], bridge: Arc<dyn PluginRpcBridge>) -> Self {
         Self {
             inner: Arc::new(PluginManagerInner {
+                capability_registration: Default::default(),
                 identity_registry: Arc::default(),
                 exchange_grants: Default::default(),
                 exchange_observations: Arc::default(),
@@ -478,6 +482,7 @@ impl PluginManager {
     pub(crate) fn for_test_summaries(summaries: Vec<PluginSummary>) -> Self {
         Self {
             inner: Arc::new(PluginManagerInner {
+                capability_registration: Default::default(),
                 identity_registry: Arc::default(),
                 exchange_grants: Default::default(),
                 exchange_observations: Arc::default(),
@@ -550,6 +555,7 @@ impl PluginManager {
         plugin_name: &str,
         providers: Vec<PluginCapabilityProvider>,
     ) {
+        self.inner.capability_registration.record(&providers);
         self.plugin_summary_producer(plugin_name)
             .publish_plugin_providers(providers);
     }

@@ -177,7 +177,7 @@ runs:
             $version = Normalize-KeySegment `
               -Value "$env:INPUT_CUDA_TOOLCHAIN_VERSION" `
               -Name "cuda_toolchain_version"
-            "cuda-$version-Jimver-v0.2.35"
+            "cuda-$version-Jimver-v0.2.36"
           }
           "vulkan" {
             $version = Normalize-KeySegment `

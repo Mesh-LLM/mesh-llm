@@ -109,6 +109,10 @@ impl ReleaseTarget {
         Ok(Self::new(os, arch, flavor))
     }
 
+    pub fn os(self) -> CanonicalOs {
+        self.os
+    }
+
     pub fn support_status(self) -> SupportStatus {
         match (self.os, self.arch, self.flavor) {
             (CanonicalOs::Macos, CanonicalArch::Aarch64, BinaryFlavor::Metal)
