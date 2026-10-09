@@ -80,13 +80,14 @@ impl Options {
 pub(super) fn resolve(command: &str) -> DynResult<PathBuf> {
     let path = PathBuf::from(command);
     if path.components().count() > 1 || path.is_absolute() {
-        return Ok(path.canonicalize()?);
+        return Ok(std::path::absolute(path)?);
     }
+    // Keep the PATH entry: rustup proxies are symlinks whose target dispatches on argv0.
     for directory in std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()) {
         for suffix in ["", std::env::consts::EXE_SUFFIX] {
             let path = directory.join(format!("{command}{suffix}"));
             if path.is_file() {
-                return Ok(path.canonicalize()?);
+                return Ok(path);
             }
         }
     }
