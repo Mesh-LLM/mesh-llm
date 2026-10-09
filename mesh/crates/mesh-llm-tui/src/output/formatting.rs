@@ -25,6 +25,20 @@ use std::sync::{
 };
 use tokio::time::{self, Instant, MissedTickBehavior};
 
+/// A free function rather than an inline match arm: `json_fields` sits one line
+/// under clippy's `too_many_lines` bound, so any arm with a body pushes it over.
+fn serving_strategy_json_fields(event: &OutputEvent) -> Value {
+    let OutputEvent::ServingStrategyResolved {
+        strategy,
+        applied,
+        declined,
+    } = event
+    else {
+        return Value::Null;
+    };
+    json!({ "strategy": strategy, "applied": applied, "declined": declined })
+}
+
 pub(in crate::output) trait OutputEventPresentation {
     fn pretty_text(&self) -> String;
     fn summary_line(&self) -> String;
@@ -268,6 +282,7 @@ impl OutputEventPresentation for OutputEvent {
             OutputEvent::CliCommandLifecycle { family, outcome } => {
                 json!({ "command_family": family.as_str(), "code": outcome.code(), "outcome": outcome.as_str() })
             }
+            OutputEvent::ServingStrategyResolved { .. } => serving_strategy_json_fields(self),
             OutputEvent::Info { message, context } => {
                 json!({ "message": message, "context": context })
             }

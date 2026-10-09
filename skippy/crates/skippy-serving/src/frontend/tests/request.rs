@@ -199,6 +199,56 @@ fn resolved_reasoning_mode_selects_direct_package_profile() {
 }
 
 #[test]
+fn package_thinking_profile_requires_a_client_request() {
+    // `package_generation_defaults()` names "thinking" as the package default, so
+    // before the built-in default changed, a plain chat request selected it.
+    let configured = EmbeddedOpenAiRequestDefaults {
+        package_request_defaults: Some(package_generation_defaults()),
+        ..EmbeddedOpenAiRequestDefaults::default()
+    };
+    let request: ChatCompletionRequest = serde_json::from_value(json!({
+        "model": "test",
+        "messages": [{"role": "user", "content": "hello"}]
+    }))
+    .unwrap();
+
+    let (resolved, diagnostics) = resolve_chat_request_defaults(&request, &configured).unwrap();
+    assert_eq!(
+        diagnostics.selected_package_profile.as_deref(),
+        Some("direct")
+    );
+    assert_eq!(
+        resolved.reasoning_enabled,
+        Some(EmbeddedReasoningEnabled::Disabled)
+    );
+    assert_eq!(
+        chat_template_options(&request, &resolved)
+            .expect("template options")
+            .enable_thinking,
+        Some(false)
+    );
+
+    // The same request with an explicit reasoning ask selects the thinking profile.
+    let request: ChatCompletionRequest = serde_json::from_value(json!({
+        "model": "test",
+        "messages": [{"role": "user", "content": "hello"}],
+        "reasoning_effort": "high"
+    }))
+    .unwrap();
+    let (resolved, diagnostics) = resolve_chat_request_defaults(&request, &configured).unwrap();
+    assert_eq!(
+        diagnostics.selected_package_profile.as_deref(),
+        Some("thinking")
+    );
+    assert_eq!(
+        chat_template_options(&request, &resolved)
+            .expect("template options")
+            .enable_thinking,
+        Some(true)
+    );
+}
+
+#[test]
 fn legacy_completion_uses_direct_package_profile() {
     let request: CompletionRequest = serde_json::from_value(json!({
         "model": "test",
@@ -615,7 +665,7 @@ fn canonical_reasoning_overrides_chat_template_thinking() {
 }
 
 #[test]
-fn chat_template_options_default_to_auto_reasoning_parser() {
+fn chat_template_options_default_to_auto_reasoning_parser_with_thinking_off() {
     let request: ChatCompletionRequest = serde_json::from_value(json!({
         "model": "jc-builds/SmolLM2-135M-Instruct-Q4_K_M-GGUF:Q4_K_M",
         "messages": [{"role": "user", "content": "hello"}]
@@ -625,7 +675,9 @@ fn chat_template_options_default_to_auto_reasoning_parser() {
     let options = chat_template_options(&request, &EmbeddedOpenAiRequestDefaults::default())
         .expect("template options");
 
-    assert_eq!(options.enable_thinking, None);
+    // A request that never asks for reasoning does not get the template's own
+    // default: thinking is off unless a client asks for it.
+    assert_eq!(options.enable_thinking, Some(false));
     assert_eq!(options.reasoning_format, Some(ChatReasoningFormat::Auto));
     assert!(template_exposes_reasoning(&options));
 }
@@ -641,7 +693,8 @@ fn request_default_reasoning_enabled_controls_chat_template() {
     for (configured, expected) in [
         (EmbeddedReasoningEnabled::Disabled, Some(false)),
         (EmbeddedReasoningEnabled::Enabled, Some(true)),
-        (EmbeddedReasoningEnabled::Auto, None),
+        // Auto leaves the decision to the built-in default, which is off.
+        (EmbeddedReasoningEnabled::Auto, Some(false)),
     ] {
         let defaults = EmbeddedOpenAiRequestDefaults {
             reasoning_enabled: Some(configured),
@@ -689,7 +742,8 @@ fn request_default_reasoning_budget_controls_chat_template() {
             EmbeddedReasoningBudget::Effort(skippy_inference_api::ReasoningEffort::Low),
             Some(true),
         ),
-        (EmbeddedReasoningBudget::Auto, None),
+        // Auto leaves the decision to the built-in default, which is off.
+        (EmbeddedReasoningBudget::Auto, Some(false)),
     ] {
         let defaults = EmbeddedOpenAiRequestDefaults {
             reasoning_budget: Some(configured),

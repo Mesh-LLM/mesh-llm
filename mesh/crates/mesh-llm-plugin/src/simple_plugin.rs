@@ -35,6 +35,7 @@ use crate::{
 pub struct SimplePlugin {
     metadata: PluginMetadata,
     operation_router: Option<ToolRouter>,
+    openai_exchange_handler: Option<crate::openai_exchange::OpenAiExchangeHandler>,
     virtual_model_router: Option<VirtualModelRouter>,
     prompt_router: Option<PromptRouter>,
     resource_router: Option<ResourceRouter>,
@@ -60,6 +61,7 @@ impl SimplePlugin {
         Self {
             metadata,
             operation_router: None,
+            openai_exchange_handler: None,
             virtual_model_router: None,
             prompt_router: None,
             resource_router: None,
@@ -93,6 +95,21 @@ impl SimplePlugin {
 
     pub fn with_startup_policy(mut self, startup_policy: PluginStartupPolicy) -> Self {
         self.metadata = self.metadata.with_startup_policy(startup_policy);
+        self
+    }
+
+    pub fn with_openai_exchange_handler<F>(mut self, handler: F) -> Self
+    where
+        F: for<'a, 'ctx> Fn(
+                String,
+                serde_json::Value,
+                &'a mut PluginContext<'ctx>,
+            ) -> crate::openai_exchange::OpenAiExchangeFuture<'a>
+            + Send
+            + Sync
+            + 'static,
+    {
+        self.openai_exchange_handler = Some(Arc::new(handler));
         self
     }
 
@@ -385,6 +402,23 @@ impl Plugin for SimplePlugin {
             Some(router) => Ok(Some(router.call(request, context).await?)),
             None => Ok(None),
         }
+    }
+
+    async fn observe_openai_exchange(
+        &mut self,
+        name: &str,
+        input: serde_json::Value,
+        context: &mut PluginContext<'_>,
+    ) -> PluginResult<Option<proto::InvokeServiceResponse>> {
+        let Some(handler) = &self.openai_exchange_handler else {
+            return Ok(None);
+        };
+        let decision = handler(name.into(), input, context).await?;
+        Ok(Some(proto::InvokeServiceResponse {
+            output_json: serde_json::to_string(&decision)
+                .map_err(|e| PluginError::invalid_request(e.to_string()))?,
+            is_error: false,
+        }))
     }
 
     async fn invoke_virtual_model(

@@ -51,14 +51,6 @@ class Inference {
     return parse(await this._handle.listModelsJson())
   }
 
-  async chat(request, options = {}) {
-    return parse(await this._handle.chatJson(JSON.stringify(request), options.timeoutMs || null))
-  }
-
-  async responsesText(request, options = {}) {
-    return parse(await this._handle.responsesJson(JSON.stringify(request), options.timeoutMs || null))
-  }
-
   async request(path, body, options = {}) {
     const response = parse(await this._handle.openaiRequestJson(path, JSON.stringify(body)))
     const result = {

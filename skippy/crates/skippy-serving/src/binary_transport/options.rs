@@ -22,6 +22,12 @@ pub struct BinaryStageOptions {
     pub downstream_wire_condition: WireCondition,
     pub downstream_connect_timeout_secs: u64,
     pub native_mtp_enabled: bool,
+    /// Planned `throughput.last_stage_decode_batch`, delivered on the stage
+    /// load. `None` means the coordinator said nothing, which stays unbatched.
+    ///
+    /// Only the final stage acts on it, and only without native MTP: the
+    /// batched path produces no MTP drafts.
+    pub last_stage_decode_batch: Option<bool>,
     /// Whether the iteration scheduler may serve multiple active lanes.
     ///
     /// Binary stages launched by the standalone CLI retain the historical

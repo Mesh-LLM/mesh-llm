@@ -17,7 +17,12 @@ fn skippy_stage_subprotocols(
     status_list_supported: bool,
     local_gguf_content_id_supported: bool,
 ) -> Vec<crate::proto::node::MeshSubprotocol> {
-    let mut features = vec![skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_CONTROL.to_string()];
+    let mut features = vec![
+        skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_CONTROL.to_string(),
+        // No build-time variability to gate on, unlike artifact transfer: any
+        // node running this code honours `StageLoad.last_stage_decode_batch`.
+        skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_DECODE_BATCH_POLICY_V1.to_string(),
+    ];
     if local_gguf_content_id_supported {
         features
             .push(skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_LOCAL_GGUF_CONTENT_ID_V1.to_string());
@@ -58,6 +63,20 @@ fn supports_local_gguf_content_id(subprotocols: &[crate::proto::node::MeshSubpro
     supports_skippy_stage_feature(
         subprotocols,
         skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_LOCAL_GGUF_CONTENT_ID_V1,
+    )
+}
+
+/// Whether a peer can act on a planned last-stage decode batching policy.
+///
+/// A peer predating the feature ignores `StageLoad.last_stage_decode_batch`
+/// and serves correctly, just unbatched — so the operator asks for batching,
+/// gets none, and sees only lower throughput with no diagnostic. That is the
+/// silently-ignored-setting failure #2112 is about, which is why the
+/// coordinator warns rather than leaving it to be inferred from a number.
+fn supports_decode_batch_policy(subprotocols: &[crate::proto::node::MeshSubprotocol]) -> bool {
+    supports_skippy_stage_feature(
+        subprotocols,
+        skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_DECODE_BATCH_POLICY_V1,
     )
 }
 
@@ -576,7 +595,7 @@ pub(crate) fn sanitize_gossip_announcement_for_wire(ann: &PeerAnnouncement) -> P
     sanitized
 }
 
-fn sanitize_cache_affinity_for_ann(
+pub(crate) fn sanitize_cache_affinity_for_ann(
     ann: &PeerAnnouncement,
 ) -> Option<mesh_llm_routing::cache_inventory::CacheAffinityAdvertisement> {
     let routable = routable_model_names(ann);
@@ -709,7 +728,7 @@ fn local_cache_affinity_to_proto(
     }
 }
 
-fn proto_cache_affinity_to_local(
+pub(crate) fn proto_cache_affinity_to_local(
     advertisement: &crate::proto::node::CacheAffinityAdvertisement,
 ) -> Option<mesh_llm_routing::cache_inventory::CacheAffinityAdvertisement> {
     use mesh_llm_routing::cache_inventory::{
@@ -889,10 +908,7 @@ pub(crate) fn local_ann_to_proto_ann(
         hardware,
         first_joined_mesh_ts: ann.first_joined_mesh_ts,
         latency_ms: ann.latency_ms,
-        latency_source: match ann.latency_source {
-            Some(s) => s as i32,
-            None => 0i32,
-        },
+        latency_source: ann.latency_source.map(|source| source as i32),
         latency_age_ms: ann.latency_age_ms.map(|v| v as u32),
         latency_observer_id: ann
             .latency_observer_id
@@ -927,6 +943,9 @@ pub(crate) fn local_ann_to_proto_ann(
             .claimed_log_head
             .as_ref()
             .map(local_claimed_log_head_to_proto),
+        // Set only on this node's own entry, when the frame is written
+        // (`attach_own_plugin_keys`); never relayed.
+        plugin_keys: Vec::new(),
     }
 }
 
@@ -977,6 +996,8 @@ pub(crate) fn build_gossip_frame(
     let peers: Vec<crate::proto::node::PeerAnnouncement> =
         anns.iter().map(local_ann_to_proto_ann).collect();
     crate::proto::node::GossipFrame {
+        signed_records: Vec::new(),
+        signed_cache_affinity: Vec::new(),
         r#gen: NODE_PROTOCOL_GENERATION,
         sender_id: sender_id.as_bytes().to_vec(),
         peers,
@@ -1070,6 +1091,11 @@ pub(crate) fn proto_ann_to_local(
             addrs: Default::default(),
         }
     };
+    // Gossip keys peers by the address id. An announcement whose address
+    // names a different node than its endpoint id is self-contradictory.
+    if addr.id != peer_id {
+        return None;
+    }
     let role = proto_role_to_local(pa.role, pa.http_port);
     let model_demand: HashMap<String, ModelDemand> = pa
         .demand
@@ -1164,13 +1190,16 @@ pub(crate) fn proto_ann_to_local(
         stage_protocol_generation_supported: supports_skippy_stage_generation(&pa.subprotocols),
         stage_status_list_supported: supports_skippy_status_list(&pa.subprotocols),
         local_gguf_content_id_supported: supports_local_gguf_content_id(&pa.subprotocols),
+        decode_batch_policy_supported: supports_decode_batch_policy(&pa.subprotocols),
         advertised_model_throughput: pa
             .advertised_model_throughput
             .iter()
             .map(proto_throughput_hint_to_local)
             .collect(),
         latency_ms: pa.latency_ms,
-        latency_source: crate::proto::node::LatencySource::try_from(pa.latency_source).ok(),
+        latency_source: pa
+            .latency_source
+            .and_then(|source| crate::proto::node::LatencySource::try_from(source).ok()),
         latency_age_ms: pa.latency_age_ms.map(|v| v as u64),
         latency_observer_id: pa.latency_observer_id.as_ref().and_then(|bytes| {
             let arr: [u8; 32] = bytes.as_slice().try_into().ok()?;
@@ -1355,6 +1384,7 @@ fn legacy_proto_config_to_mesh(
             web_ui_enabled: None,
             web_ui_primary_tab: None,
             allow_peer_blocks: None,
+            openai_exchange_grant: None,
             command: p.command.clone(),
             args: p.args.clone(),
             url: None,

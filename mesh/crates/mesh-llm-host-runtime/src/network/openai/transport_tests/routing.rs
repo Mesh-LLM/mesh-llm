@@ -112,6 +112,7 @@ pub(super) fn test_peer_serving_model(peer_id: iroh::EndpointId, model: &str) ->
         stage_protocol_generation_supported: false,
         stage_status_list_supported: false,
         local_gguf_content_id_supported: false,
+        decode_batch_policy_supported: false,
         advertised_model_throughput: vec![],
         #[cfg(feature = "payments")]
         lightning_offers: Default::default(),
@@ -156,6 +157,7 @@ fn text_auto_request() -> BufferedHttpRequest {
         request_object_request_ids: Vec::new(),
         response_adapter: ResponseAdapter::None,
         correlation_id: None,
+        exchange_observation_id: None,
     }
 }
 fn unparsed_chat_request(model: &str) -> BufferedHttpRequest {
@@ -183,6 +185,7 @@ fn unparsed_chat_request(model: &str) -> BufferedHttpRequest {
         request_object_request_ids: Vec::new(),
         response_adapter: ResponseAdapter::None,
         correlation_id: None,
+        exchange_observation_id: None,
     }
 }
 fn large_tokenize_request(model: &str) -> BufferedHttpRequest {
@@ -202,6 +205,7 @@ fn large_tokenize_request(model: &str) -> BufferedHttpRequest {
         request_object_request_ids: Vec::new(),
         response_adapter: ResponseAdapter::None,
         correlation_id: None,
+        exchange_observation_id: None,
     }
 }
 fn local_gguf_descriptor(model_name: &str) -> mesh::ServedModelDescriptor {
@@ -601,6 +605,7 @@ fn test_capture_path_for_request_uses_client_path() {
         request_object_request_ids: Vec::new(),
         response_adapter: ResponseAdapter::OpenAiResponsesStream,
         correlation_id: None,
+        exchange_observation_id: None,
     };
 
     assert_eq!(capture_path_for_request(&request), "/v1/responses?foo=1");

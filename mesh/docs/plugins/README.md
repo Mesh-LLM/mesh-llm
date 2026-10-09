@@ -1,5 +1,10 @@
 # Plugins
 
+The [OpenAI exchange lifecycle contract v1](openai-exchange-lifecycle.md)
+defines permissioned observation, read-only admission, exact byte commitments,
+and scoped software identity for installed plugins. Its
+[acceptance matrix](openai-exchange-acceptance.md) records validation status.
+
 Use this architecture reference to build and review `mesh-llm` plugins.
 
 It describes the target architecture, not just the code as it exists today.
@@ -1267,6 +1272,32 @@ Plugins may declare mesh channels for plugin-specific peer-to-peer coordination.
 These should use the generic plugin mesh transport rather than dedicated core stream types for individual plugins.
 
 Core should not embed plugin-specific wire protocols in the main mesh transport when the behavior can live behind the generic plugin channel mechanism.
+
+## Plugin Keys
+
+A plugin that signs records can have its host announce the public key it signs
+with, so peers' plugins can check what it signed without operators exchanging
+keys by hand. The plugin sends a `PluginKeyRequest`
+(`PluginContext::announce_plugin_key`) with a 32-byte Ed25519 public key; an
+empty key withdraws it, and a later request replaces it. The host announces the
+key under its own name for the plugin connection, never a name the plugin
+claims, so one plugin cannot set another's key. Nothing is announced for a
+plugin that does not ask.
+
+The host binds the key to itself with its node key (an Ed25519 signature over a
+domain-separated encoding of the node id, the plugin name and the key; see
+`PluginKey` in `node.proto`) and carries it on its own gossip entry
+(`PeerAnnouncement.plugin_keys`, at most 16). A node keeps a peer's plugin keys
+only from that directly-connected peer's own entry, and only when the binding
+verifies against that peer's node key, and drops them when that peer leaves;
+plugin keys are not relayed. `GET
+/api/plugin-keys` lists this node's announced keys and its peers' verified
+ones, hex-encoded, by plugin name and full 64-hex endpoint id.
+
+A published key tells peers that this node runs that plugin. The host
+advertises the `plugin_keys.v1` host capability in its `InitializeRequest`;
+against a host without it, `announce_plugin_key` fails at once. The example
+`mesh/crates/mesh-llm-plugin/examples/plugin_key_demo.rs` announces a key on start.
 
 ## Peer Routing Blocks
 

@@ -494,6 +494,7 @@ fn client_excluded_arg(id: &str) -> bool {
             | "auto_balance"
             | "ctx_size"
             | "parallel"
+            | "strategy"
     ) || id.starts_with("speculative_")
 }
 

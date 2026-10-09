@@ -18,11 +18,12 @@ use super::plugins::{
 use super::plugins::{PluginScopedSnapshot, plugin_endpoint_snapshot, plugin_snapshot};
 use super::processes::RuntimeProcessSnapshot;
 use super::producers::{RuntimeDataProducer, RuntimeDataSource};
+use super::runtime_status::{RuntimeStatusDerivationInput, derive_runtime_status};
 use super::snapshots::{
     HardwareViewInput, HardwareViewSnapshot, LocalInstancesSnapshot, ModelRouteStats,
     ModelViewInput, ModelViewSnapshot, PluginDataKey, PluginDataSnapshot, PluginEndpointKey,
-    PluginEndpointsSnapshot, RuntimeDataSnapshots, RuntimeStatusDerivation, RuntimeStatusSnapshot,
-    StatusViewInput, StatusViewSnapshot,
+    PluginEndpointsSnapshot, RuntimeDataSnapshots, RuntimeStatusSnapshot, StatusViewInput,
+    StatusViewSnapshot,
 };
 use super::subscriptions::{
     RuntimeDataDirty, RuntimeDataSubscriptionState, RuntimeDataSubscriptions,
@@ -410,6 +411,7 @@ impl RuntimeDataCollector {
             is_client: input.is_client,
             is_host: input.is_host,
             llama_ready: input.llama_ready,
+            external_inference_ready: input.external_inference_ready,
             local_processes: &input.local_processes,
             hosted_models: &input.hosted_models,
             serving_models: &input.serving_models,
@@ -1093,90 +1095,6 @@ fn select_runtime_llama_projection(
         .next()
         .map(|(_, snapshot)| snapshot.clone())
         .unwrap_or_else(|| runtime_status.llama_runtime.clone())
-}
-
-struct RuntimeStatusDerivationInput<'a> {
-    is_client: bool,
-    is_host: bool,
-    llama_ready: bool,
-    local_processes: &'a [crate::api::RuntimeProcessPayload],
-    hosted_models: &'a [String],
-    serving_models: &'a [String],
-    model_name: &'a str,
-    api_port: u16,
-}
-
-fn derive_runtime_status(input: RuntimeStatusDerivationInput<'_>) -> RuntimeStatusDerivation {
-    let has_local_processes = !input.local_processes.is_empty();
-    let effective_llama_ready = input.llama_ready || has_local_processes;
-    let effective_is_host = input.is_host || has_local_processes;
-    let display_model_name = input
-        .local_processes
-        .first()
-        .map(|process| process.name.clone())
-        .or_else(|| input.hosted_models.first().cloned())
-        .or_else(|| input.serving_models.first().cloned())
-        .unwrap_or_else(|| input.model_name.to_string());
-    let has_local_worker_activity = has_local_processes || !input.hosted_models.is_empty();
-    let node_state = derive_local_node_state(
-        input.is_client,
-        effective_is_host,
-        effective_llama_ready,
-        has_local_worker_activity,
-        &display_model_name,
-    );
-    let launch_pi = if effective_llama_ready {
-        Some(format!(
-            "mesh-llm pi --host 127.0.0.1:{} --model {}",
-            input.api_port,
-            single_quote_shell_arg(&display_model_name)
-        ))
-    } else {
-        None
-    };
-    let launch_goose = if effective_llama_ready {
-        let api_port = input.api_port;
-        Some(format!(
-            "GOOSE_PROVIDER=openai OPENAI_HOST=http://localhost:{api_port} OPENAI_API_KEY=mesh GOOSE_MODEL={display_model_name} goose session"
-        ))
-    } else {
-        None
-    };
-
-    RuntimeStatusDerivation {
-        effective_is_host,
-        effective_llama_ready,
-        display_model_name,
-        node_state,
-        node_status: node_state.node_status_alias().to_string(),
-        launch_pi,
-        launch_goose,
-    }
-}
-
-fn single_quote_shell_arg(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "'\\''"))
-}
-
-fn derive_local_node_state(
-    is_client: bool,
-    effective_is_host: bool,
-    effective_llama_ready: bool,
-    has_local_worker_activity: bool,
-    display_model_name: &str,
-) -> NodeState {
-    let has_declared_local_serving_work =
-        (effective_is_host || has_local_worker_activity) && !display_model_name.trim().is_empty();
-
-    if is_client {
-        NodeState::Client
-    } else if effective_llama_ready && has_declared_local_serving_work {
-        NodeState::Serving
-    } else if has_declared_local_serving_work {
-        NodeState::Loading
-    } else {
-        NodeState::Standby
-    }
 }
 
 fn derive_peer_state(peer: &mesh::PeerInfo, has_connection: bool) -> NodeState {

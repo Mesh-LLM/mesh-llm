@@ -239,7 +239,6 @@ async fn prepared_wallet_send_survives_reopen() -> Result<()> {
             pricing: Pricing {
                 input_msat_per_million: 1,
                 output_msat_per_million: 1,
-                minimum_invoice_msat: 1,
             },
             input_tokens: 0,
             max_output_tokens: 1,
