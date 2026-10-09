@@ -11,6 +11,7 @@ mod formatters_console;
 mod formatters_json;
 mod handlers;
 mod installed;
+pub mod lifecycle;
 mod output;
 pub mod package;
 mod progress;
