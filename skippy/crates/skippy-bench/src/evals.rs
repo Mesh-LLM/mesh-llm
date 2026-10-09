@@ -458,9 +458,6 @@ mod tests {
 
     #[test]
     fn speed_bench_command_points_at_openai_endpoint() {
-        if !crate::evals::external_sdk_source::configured() {
-            return;
-        }
         let args = EvalRunArgs {
             eval: EvalId::SpeedBench,
             base_url: "http://127.0.0.1:9337/v1".to_string(),
@@ -543,6 +540,10 @@ mod tests {
                 .display()
                 .contains("SKIPPY_BENCH_API_KEY=<redacted>")
         );
+        if !external_sdk_source::configured() {
+            let _ = fs::remove_dir_all(run_dir);
+            return;
+        }
         let launcher =
             String::from_utf8(external_sdk_source::read("speed-bench-auth.py").unwrap()).unwrap();
         assert!(launcher.contains("request_origin(url) == benchmark_origin"));
