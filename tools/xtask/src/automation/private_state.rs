@@ -204,6 +204,19 @@ fn host_environment() -> impl Iterator<Item = (OsString, Value)> {
         "DYLD_LIBRARY_PATH",
         "DYLD_FALLBACK_LIBRARY_PATH",
         "CUDA_VISIBLE_DEVICES",
+        // Standard Windows system variables the runtime and networking stack
+        // read; none of them carry credentials.
+        "SYSTEMDRIVE",
+        "PROGRAMDATA",
+        "PROGRAMFILES",
+        "COMSPEC",
+        "PATHEXT",
+        "COMPUTERNAME",
+        "USERNAME",
+        "USERDOMAIN",
+        "NUMBER_OF_PROCESSORS",
+        "PROCESSOR_ARCHITECTURE",
+        "OS",
     ]
     .into_iter()
     .filter_map(|key| {
