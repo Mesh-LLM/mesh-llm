@@ -76,6 +76,24 @@ runs:
       if: runner.os != 'Linux' || job.container.id != ''
       uses: ./.github/actions/prepare-automation
 
+    # Hosted Linux has no sccache, so `cargo xtool` cannot run there.
+    - name: Prepare hosted smoke automation
+      if: runner.os == 'Linux' && job.container.id == '' && runner.environment == 'github-hosted' && env.MESH_LLM_AUTOMATION_BIN == ''
+      uses: ./.github/actions/prepare-automation
+      with:
+        runner-profile: hosted-bare
+
+    # Callers that predate the external SDK split do not prepare it themselves.
+    - name: Prepare required SDK clients
+      if: runner.os != 'Windows' && inputs.model_artifact_id == 'smollm2-q8-inference' && env.MESH_REQUIRED_SDK_PYTHON == ''
+      uses: ./.github/actions/setup-canary-python
+      with:
+        sdk-kind: compatibility
+
+    - name: Prepare external Python SDK source
+      if: runner.os != 'Windows' && env.MESH_PYTHON_SDK_SOURCE == ''
+      uses: ./.github/actions/prepare-python-sdk-source
+
     - name: Download built mesh-llm artifact
       uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
       with:
