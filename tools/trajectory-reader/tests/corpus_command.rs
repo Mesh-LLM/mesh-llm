@@ -97,9 +97,12 @@ fn native_prompt_command_corpus_publishes_repeatable_digest_bound_documents() {
         corpus
     );
     fs::write(root.path().join("input.jsonl"), "{}\n").unwrap();
-    let report = run(root.path(), args);
+    let mut stale = args;
+    *stale.last_mut().unwrap() = "output-three".into();
+    let report = run(root.path(), stale);
     assert!(!success(&report));
     assert!(report.cleanup.complete);
+    assert!(!root.path().join("output-three").exists());
     assert_eq!(
         fs::read(root.path().join("output/smoke/manifest.json")).unwrap(),
         metadata

@@ -249,7 +249,10 @@ fn local_command_publishes_bound_provenance_and_refuses_quota_or_corruption() {
     assert!(super::cli::run(&args).is_err());
     assert_eq!(fs::read(output.join("corpus.jsonl")).unwrap(), bytes);
     fs::write(root.path().join("input.jsonl"), "{}\n").unwrap();
-    assert!(super::cli::run(&args).is_err());
+    let mut fresh = args.clone();
+    *fresh.last_mut().unwrap() = root.path().join("output-two").display().to_string();
+    assert!(super::cli::run(&fresh).is_err());
+    assert!(!root.path().join("output-two").exists());
     assert_eq!(fs::read(output.join("corpus.jsonl")).unwrap(), bytes);
     let root = tempfile::tempdir().unwrap();
     let args = local_command(root.path(), 3);

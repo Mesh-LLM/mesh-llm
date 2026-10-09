@@ -45,8 +45,11 @@ fn prompt_budget(prompt: &str, max: usize, target: Option<usize>) -> DynResult<S
         let excerpt = prompt.clone();
         prompt = "Long-context stress packet built from HF-sourced text. Use this tier for context-capacity and transport stress, not quality scoring.".to_owned();
         let mut index = 1;
-        while prompt.chars().count() < target {
-            prompt.push_str(&format!("\n\nSource excerpt repeat {index}:\n{excerpt}"));
+        let mut count = prompt.chars().count();
+        while count < target {
+            let chunk = format!("\n\nSource excerpt repeat {index}:\n{excerpt}");
+            count += chunk.chars().count();
+            prompt.push_str(&chunk);
             index += 1;
         }
     }

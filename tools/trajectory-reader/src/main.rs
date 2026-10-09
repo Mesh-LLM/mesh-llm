@@ -48,12 +48,14 @@ fn run() -> DynResult<()> {
         schema_version: SCHEMA_VERSION,
         rows: rows.into_iter().map(Into::into).collect(),
     };
-    let mut output = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(response_file)?;
+    let response_path = std::path::Path::new(response_file);
+    let parent = response_path
+        .parent()
+        .ok_or("reader response requires a parent directory")?;
+    let mut output = tempfile::NamedTempFile::new_in(parent)?;
     serde_json::to_writer(&mut output, &response)?;
     output.write_all(b"\n")?;
-    output.sync_all()?;
+    output.as_file().sync_all()?;
+    output.persist_noclobber(response_path)?;
     Ok(())
 }
