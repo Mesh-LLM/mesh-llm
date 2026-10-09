@@ -1,5 +1,5 @@
 {
-  "full_patch_sha256": "23b33d23537ba7d4c0b56873db4bd4e8da07056eb910dbe045f2e6a13568ca9e",
+  "full_patch_sha256": "88a893165332df28b1513b44898a752f0ddb70b1dcefe423015635208cc5a852",
   "generator_version": "0.5.0",
   "schema_version": 1,
   "shards": [
@@ -741,7 +741,7 @@
         "qwen4exp"
       ],
       "file": "0073-family-qwen4exp.patch",
-      "sha256": "a87cf230c4c2715c1c0cec04e9cb138f84e5901f501a9ad2811af8a9917d5b34",
+      "sha256": "2acc8897a51b1942923b13f007abc842dd352c9aa653df48879f12eeec935fcd",
       "sources": [
         "src/models/qwen4exp.cpp"
       ]
