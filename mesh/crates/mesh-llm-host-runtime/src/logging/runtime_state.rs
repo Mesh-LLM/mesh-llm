@@ -671,7 +671,7 @@ impl LoggingRuntimeState {
     /// absent so request serving continues without logging.
     pub(crate) fn openai_lifecycle_observer(
         &self,
-    ) -> Option<Arc<dyn skippy_inference_api::OpenAiLifecycleObserver>> {
+    ) -> Option<Arc<dyn skippy_inference_api::InferenceLifecycleObserver>> {
         if self.retired.load(Ordering::Acquire) {
             return None;
         }

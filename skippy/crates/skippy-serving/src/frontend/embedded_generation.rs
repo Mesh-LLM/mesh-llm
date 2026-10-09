@@ -21,8 +21,9 @@ use crate::binary_transport::{
 use crate::frontend::embedded_execution::{StaleWindowDiscard, VerifyRetirement};
 use crate::frontend::request::wire_sampling_config;
 use crate::frontend::speculative::{
-    OpenAiSpeculativeStats, classify_verify_window_with_threshold, propose_configured_ngram_tokens,
-    verify_checkpoint_no_longer_needed, verify_inputs_for_proposals,
+    InferenceSpeculativeStats, classify_verify_window_with_threshold,
+    propose_configured_ngram_tokens, verify_checkpoint_no_longer_needed,
+    verify_inputs_for_proposals,
 };
 use crate::frontend::util::{ms_to_us, openai_backend_error, openai_io_error, saturating_u32};
 use crate::frontend::wire_messages::{
@@ -52,7 +53,7 @@ use lifecycle::{
 };
 use prefix_restore::EmbeddedPrefixRestore;
 use serde_json::json;
-use skippy_inference_api::{OpenAiError, OpenAiResult};
+use skippy_inference_api::{InferenceError, InferenceResult};
 use skippy_protocol::binary::{StageReplyStats, WireReplyKind, recv_reply};
 
 fn draft_fallback_budget(
@@ -71,8 +72,8 @@ impl StageOpenAiBackend {
     pub(super) fn generate_embedded_stage_zero_tokens(
         &self,
         request: EmbeddedStageZeroGeneration<'_>,
-        on_token: impl FnMut(i32) -> OpenAiResult<TokenControl>,
-    ) -> OpenAiResult<GenerationCacheStats> {
+        on_token: impl FnMut(i32) -> InferenceResult<TokenControl>,
+    ) -> InferenceResult<GenerationCacheStats> {
         if request.config.downstream.is_none() {
             return self.generate_embedded_request_locally(request, on_token);
         }
@@ -81,10 +82,9 @@ impl StageOpenAiBackend {
         let session_id = request.ids.session_id;
         let request_id = request.ids.request_id;
         let session_key = session_id.to_string();
-        let lane_pool = request
-            .lane_pool
-            .as_ref()
-            .ok_or_else(|| OpenAiError::backend("embedded stage 0 has no downstream lane pool"))?;
+        let lane_pool = request.lane_pool.as_ref().ok_or_else(|| {
+            InferenceError::backend("embedded stage 0 has no downstream lane pool")
+        })?;
         let mut lane = lane_pool.checkout(request.ids)?;
         let direct_prediction_return_opened = open_upstream_prediction_return(&request);
         let mut cache_stats = GenerationCacheStats::default();
@@ -361,7 +361,7 @@ impl StageOpenAiBackend {
                         let reply = recv_reply(&mut *downstream).map_err(openai_io_error)?;
                         chunk_downstream_wait_ms = wait_timer.elapsed_ms();
                         if reply.kind != WireReplyKind::Ack {
-                            return Err(OpenAiError::backend(format!(
+                            return Err(InferenceError::backend(format!(
                                 "expected prefill ACK from downstream, got {:?}",
                                 reply.kind
                             )));
@@ -686,7 +686,7 @@ impl StageOpenAiBackend {
             .map_err(openai_io_error)?;
             let reply = recv_reply(&mut *downstream).map_err(openai_io_error)?;
             if reply.kind != WireReplyKind::Ack {
-                return Err(OpenAiError::backend(format!(
+                return Err(InferenceError::backend(format!(
                     "expected generation config ACK from downstream, got {:?}",
                     reply.kind
                 )));
@@ -815,7 +815,7 @@ impl StageOpenAiBackend {
             } else {
                 max_speculative_window
             };
-            let mut speculative_stats = OpenAiSpeculativeStats {
+            let mut speculative_stats = InferenceSpeculativeStats {
                 adaptive_window_start: adaptive_window,
                 adaptive_window_final: adaptive_window,
                 adaptive_window_max: max_speculative_window,
@@ -828,14 +828,14 @@ impl StageOpenAiBackend {
                 },
                 adaptive_window_max_seen: adaptive_window,
                 adaptive_window_enabled: request.adaptive_speculative_window,
-                ..OpenAiSpeculativeStats::default()
+                ..InferenceSpeculativeStats::default()
             };
             let mut draft_guard = match request.draft.as_ref() {
                 Some(draft) if request.speculative_window > 0 => {
                     let draft_reset_timer = PhaseTimer::start();
                     let mut draft = draft
                         .lock()
-                        .map_err(|_| OpenAiError::backend("draft model lock poisoned"))?;
+                        .map_err(|_| InferenceError::backend("draft model lock poisoned"))?;
                     draft
                         .reset_to_context(&context_tokens)
                         .map_err(openai_backend_error)?;
@@ -1108,7 +1108,7 @@ impl StageOpenAiBackend {
                             );
                         }
                         pipeline_epoch = pipeline_epoch.checked_add(1).ok_or_else(|| {
-                            OpenAiError::backend("verify window pipeline epoch overflow")
+                            InferenceError::backend("verify window pipeline epoch overflow")
                         })?;
                         pipelined_boundary_prediction = None;
                         pipelined = Some(CompositeProposalPipeline::new(proposal, origin));
@@ -1261,7 +1261,7 @@ impl StageOpenAiBackend {
                         let completed =
                             verify_window_scheduler.complete_next(verify.reply.window.window_id)?;
                         if completed != window.window {
-                            return Err(OpenAiError::backend(
+                            return Err(InferenceError::backend(
                                 "verify window scheduler lost FIFO state",
                             ));
                         }
@@ -1292,7 +1292,7 @@ impl StageOpenAiBackend {
                             continue;
                         }
                         if window.epoch != pipeline_epoch || pipelined.is_none() {
-                            return Err(OpenAiError::backend(
+                            return Err(InferenceError::backend(
                                 "active verify window has no matching proposal epoch",
                             ));
                         }
@@ -1614,7 +1614,7 @@ impl StageOpenAiBackend {
                         let verify_inputs = verify_inputs_for_proposals(current, &draft_tokens);
                         let message = embedded_verify_window_message(VerifyWindowMessageArgs {
                             window_id: i32::try_from(decoded_tokens)
-                                .map_err(|_| OpenAiError::backend("decode step exceeds i32"))?,
+                                .map_err(|_| InferenceError::backend("decode step exceeds i32"))?,
                             request_id,
                             session_id,
                             prompt_token_count: request.prompt_token_ids.len(),
@@ -1826,7 +1826,7 @@ impl StageOpenAiBackend {
                     && uses_context_sideband
                     && context_tokens.len() == request.prompt_token_ids.len();
                 let decode_step_index = usize::try_from(decode_step)
-                    .map_err(|_| OpenAiError::backend("decode step exceeds usize"))?;
+                    .map_err(|_| InferenceError::backend("decode step exceeds usize"))?;
                 let message = if uses_context_sideband {
                     decode_message.update_with_tokens(
                         decode_step_index,
@@ -1840,7 +1840,7 @@ impl StageOpenAiBackend {
                 let batch_outcome = self.iteration_scheduler.execute_frame_iteration(
                     &session_key,
                     u64::try_from(message.pos_start).map_err(|_| {
-                        OpenAiError::backend("negative authoritative decode position")
+                        InferenceError::backend("negative authoritative decode position")
                     })?,
                     &[current],
                     &[],

@@ -121,6 +121,29 @@ class SnapshotHandler(BaseHTTPRequestHandler):
 
 
 class TwoNodeSplitSmokeTests(unittest.TestCase):
+    def test_auto_payload_certification_reads_checkout_with_different_owner(self):
+        expected_head = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True
+        ).strip()
+        harness = (
+            "set -euo pipefail\n"
+            "MODEL_LABEL=dense\nDENSE_ARTIFACT_ID=dense-artifact\n"
+            "DENSE_MODEL_SHA256=model-sha\nMESH_TWO_NODE_SPLIT_SOURCE_SHA=\n"
+            "SPLIT_EVIDENCE_PATH=evidence\nRUNTIME_BUNDLE=runtime\n"
+            "SEED_LOG=seed\nWORKER_LOG=worker\nresponse_dir=responses\n"
+            "WORK_DIR=work\n"
+            "cargo() { printf '%s\\n' \"$*\"; }\n"
+            + shell_function_block("assert_expected_stage_payload", "capture_kv_cache_statuses")
+            + "assert_expected_stage_payload\n"
+        )
+        result = subprocess.run(
+            ["bash", "-s"], input=harness, cwd=ROOT, text=True,
+            capture_output=True, check=False,
+            env={**os.environ, "GIT_TEST_ASSUME_DIFFERENT_OWNER": "1"},
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(f"--tested-commit {expected_head}", result.stdout)
+
     def test_auto_payload_pin_resolves_without_workflow_only_environment(self):
         harness = (
             "set -euo pipefail\n"

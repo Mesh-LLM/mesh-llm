@@ -66,6 +66,7 @@ mesh-llm-ui = { path = "../mesh-llm-ui", version = "0.78.0", default-features = 
 mesh-llm-node = { path = "../mesh-llm-node", version = "0.78.0"  }
 mesh-client = { package = "mesh-llm-client", path = "../mesh-client", version = "0.78.0", features = ["host-io"]  }
 skippy-model-artifact = { path = "../../../skippy/crates/skippy-model-artifact", version = "0.78.0"  }
+skippy-commands = { path = "../../../skippy/crates/skippy-commands", version = "0.78.0" }
 skippy-model-hf = { path = "../../../skippy/crates/skippy-model-hf", version = "0.78.0"  }
 skippy-model-ref = { path = "../../../skippy/crates/skippy-model-ref", version = "0.78.0"  }
 skippy-model-resolver = { path = "../../../skippy/crates/skippy-model-resolver", version = "0.78.0"  }

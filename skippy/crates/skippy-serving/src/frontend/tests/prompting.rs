@@ -250,12 +250,12 @@ fn generated_text_timings_report_standalone_speculative_totals() {
         native_mtp_stats: NativeMtpStats::default(),
         native_mtp_decode_telemetry: None,
         verify_window_pipeline_stats: None,
-        speculative_stats: Some(OpenAiSpeculativeStats {
+        speculative_stats: Some(InferenceSpeculativeStats {
             windows: 3,
             draft_tokens: 12,
             accepted_tokens: 9,
             rejected_tokens: 3,
-            ..OpenAiSpeculativeStats::default()
+            ..InferenceSpeculativeStats::default()
         }),
         prompt_ms: 20.0,
         predicted_ms: 100.0,

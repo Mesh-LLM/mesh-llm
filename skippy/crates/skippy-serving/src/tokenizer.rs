@@ -567,17 +567,17 @@ mod tests {
     struct UnreachableOpenAiBackend;
 
     #[async_trait::async_trait]
-    impl skippy_inference_api::OpenAiBackend for UnreachableOpenAiBackend {
+    impl skippy_inference_api::InferenceBackend for UnreachableOpenAiBackend {
         async fn models(
             &self,
-        ) -> skippy_inference_api::OpenAiResult<Vec<skippy_inference_api::ModelObject>> {
+        ) -> skippy_inference_api::InferenceResult<Vec<skippy_inference_api::ModelObject>> {
             unreachable!("tokenizer requests must not enter the generic OpenAI backend")
         }
 
         async fn chat_completion(
             &self,
             _request: skippy_inference_api::ChatCompletionRequest,
-        ) -> skippy_inference_api::OpenAiResult<skippy_inference_api::ChatCompletionResponse>
+        ) -> skippy_inference_api::InferenceResult<skippy_inference_api::ChatCompletionResponse>
         {
             unreachable!("tokenizer requests must not enter the generic OpenAI backend")
         }
@@ -585,8 +585,8 @@ mod tests {
         async fn chat_completion_stream(
             &self,
             _request: skippy_inference_api::ChatCompletionRequest,
-            _context: skippy_inference_api::OpenAiRequestContext,
-        ) -> skippy_inference_api::OpenAiResult<skippy_inference_api::ChatCompletionStream>
+            _context: skippy_inference_api::InferenceRequestContext,
+        ) -> skippy_inference_api::InferenceResult<skippy_inference_api::ChatCompletionStream>
         {
             unreachable!("tokenizer requests must not enter the generic OpenAI backend")
         }

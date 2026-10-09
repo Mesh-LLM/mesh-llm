@@ -101,7 +101,7 @@ pub(super) fn handle_stop(
                 runtime
                     .drop_session_timed(&scheduler_session_key)
                     .map_err(|error| {
-                        skippy_inference_api::OpenAiError::backend(format!("{error:#}"))
+                        skippy_inference_api::InferenceError::backend(format!("{error:#}"))
                     })?;
             Ok((record, drop_stats))
         })
@@ -182,7 +182,9 @@ pub(super) fn handle_verify_retirement(
         .execute_runtime("binary-verify-retire", move |runtime| {
             runtime
                 .retire_verify_checkpoint(&scheduler_session_key, token_start, token_count)
-                .map_err(|error| skippy_inference_api::OpenAiError::backend(format!("{error:#}")))
+                .map_err(|error| {
+                    skippy_inference_api::InferenceError::backend(format!("{error:#}"))
+                })
         })
         .map_err(|error| anyhow::anyhow!(format!("{error:#}")))
         .context("retire binary stage verify checkpoint")?;
@@ -226,7 +228,7 @@ pub(super) fn handle_session_control(
                     runtime
                         .trim_session(&scheduler_session_key, token_count)
                         .map_err(|error| {
-                            skippy_inference_api::OpenAiError::backend(format!("{error:#}"))
+                            skippy_inference_api::InferenceError::backend(format!("{error:#}"))
                         })
                 })
                 .map_err(|error| anyhow::anyhow!(format!("{error:#}")))
@@ -299,7 +301,7 @@ pub(super) fn handle_generation_control(
                             sampling.as_ref(),
                         )
                         .map_err(|error| {
-                            skippy_inference_api::OpenAiError::backend(format!("{error:#}"))
+                            skippy_inference_api::InferenceError::backend(format!("{error:#}"))
                         })
                 })
                 .map_err(|error| anyhow::anyhow!(format!("{error:#}")))
@@ -418,7 +420,7 @@ pub(super) fn handle_prefix_cache_control(
                     .drop_session_timed(&scheduler_session_key)
                     .map(|_| ())
                     .map_err(|error| {
-                        skippy_inference_api::OpenAiError::backend(format!("{error:#}"))
+                        skippy_inference_api::InferenceError::backend(format!("{error:#}"))
                     })
             });
         }

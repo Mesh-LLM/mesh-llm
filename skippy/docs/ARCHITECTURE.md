@@ -12,7 +12,7 @@ by both products.
 | Surface | Owner | Intended caller and contract |
 |---|---|---|
 | `skippy` CLI | `skippy-cli`, `skippy-commands` | Operators running model management, local OpenAI serving, or explicit stage workers. |
-| HTTP `/v1` frontend | `skippy-inference-api` | OpenAI-compatible request/response and backend contract shared by standalone Skippy and Mesh. Mesh adds discovery, routing, and proxy policy around it. |
+| HTTP inference frontend | `skippy-inference-api` | OpenAI-compatible, Anthropic Messages, and SystemOne routes share a backend and lifecycle contract between standalone Skippy and Mesh. Mesh adds discovery, routing, and proxy policy around it. |
 | Rust model lifecycle | `skippy-api::serving` | Embedding hosts load a model with `ModelLoadRequest` and retain `LoadedModelBackend` while serving. The options are currently a low-level integration contract, not a small stable SDK facade. |
 | Native runtime selection | `skippy-api::native_runtime` | The caller supplies bundle and cache locations. The API neither chooses a product home directory nor downloads implicitly. |
 | Package-v2 format | `skippy-package-format` | Producers and consumers share validated manifests and content identities. Format compatibility is separate from the native ABI. |
@@ -31,7 +31,7 @@ callers; do not duplicate the execution engine or add a crate merely to hide it.
 
 ```text
 operator/client -> Skippy CLI or Mesh ingress
-                -> shared OpenAI frontend / Skippy lifecycle API
+                -> shared inference frontend / Skippy lifecycle API
                 -> serving + scheduler + cache
                 -> Rust runtime -> Skippy C ABI -> patched llama.cpp
 
@@ -39,7 +39,7 @@ model reference -> artifact/HF adapter -> package format and admission
                 -> runtime load
 ```
 
-Mesh owns its peer discovery, placement, identity, routing, plugins, console,
+Mesh owns its peer discovery, eligibility, identity, routing, plugins, console,
 and management APIs. It translates those decisions into Skippy lifecycle,
 protocol, and serving inputs. The lifecycle API takes explicit locations rather
 than reading Mesh product configuration. Both CLIs use the same HF cache
@@ -47,6 +47,11 @@ preflight and fallback data roots, with `MESH_LLM_DATA_DIR` as the optional
 fallback override. `HF_HUB_CACHE`,
 `HUGGINGFACE_HUB_CACHE`, `HF_HOME`, `HF_XET_CACHE`, and `XDG_CACHE_HOME` still
 take precedence where applicable.
+
+For split execution, Mesh supplies admitted peers, measured capacity and
+transport latency. `skippy-coordinator::topology` owns placement, runtime
+headroom, KV and compute reserve, and the capacity recheck after a cut moves.
+Mesh maps the chosen stages to peer identities and reports diagnostic labels.
 
 `skippy-model-hf::store` uses the same application cache root for both CLIs.
 Its `_in` operations take an explicit application cache root for tests and

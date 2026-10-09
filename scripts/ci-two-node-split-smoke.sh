@@ -1039,9 +1039,10 @@ assert_expected_stage_payload() {
     # Manual package-v2 probes may not carry a pinned model artifact. CI does.
     [[ "$artifact_id" != unspecified ]] || return 0
     # The protected reusable workflow may predate this branch's source-SHA
-    # handoff. Its checkout is still pinned to source_sha; read that checkout
-    # through the runner's Git wrapper until the workflow change lands.
-    tested_commit="${MESH_TWO_NODE_SPLIT_SOURCE_SHA:-$(GIT_MASTER=1 git rev-parse HEAD)}"
+    # handoff. Its checkout is still pinned to source_sha. Container checkout
+    # ownership can differ from the running user, so trust only this checkout
+    # when reading its HEAD as the fallback.
+    tested_commit="${MESH_TWO_NODE_SPLIT_SOURCE_SHA:-$(git -c safe.directory="$PWD" rev-parse HEAD)}"
     cargo run -q -p xtask -- split-payloads certify \
         --evidence "$SPLIT_EVIDENCE_PATH" \
         --expectations ci/model-artifacts/kv-auto-smoke-expectations.json \

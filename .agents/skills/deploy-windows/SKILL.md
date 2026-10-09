@@ -139,7 +139,7 @@ poll `/v1/models` before concluding failure.
 | `irm \| iex` dies before any output | Old script / `[ValidateSet]`-style param bug | Update; or download script to a file and run it |
 | "could not download checksum sidecar" hard failure | Old installer + release without `.sha256` | Update installer; missing sidecar should warn-and-continue |
 | `mesh-llm` not found after install | New `Path` not in current shell | Open a new terminal or use `%LOCALAPPDATA%\mesh-llm\bin\mesh-llm.exe` |
-| CUDA flavor won't start on new GPUs | Blackwell needs its own bundle | Install `cuda-blackwell` flavor (or let detection pick it) |
+| CUDA flavor won't start on new GPUs | Blackwell (SM 100/120) is only in the CUDA 13 runtime | Use the `-cuda-13.zip` bundle / `cuda13` runtime, with a driver that supports CUDA 13 |
 | GPU not used | Wrong flavor or device | `mesh-llm gpus`; reinstall correct flavor; `--device <id>` |
 | curl JSON errors in PowerShell | `curl` is an IWR alias | Use `curl.exe`, or `Invoke-RestMethod` |
 | Empty `/v1/models` | Model still downloading/loading | Wait; check `skippy-native.log` |
