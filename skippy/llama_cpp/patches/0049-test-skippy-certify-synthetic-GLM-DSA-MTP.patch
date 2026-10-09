@@ -29,7 +29,7 @@ index 436d6718d..568b73a0e 100644
      file(MAKE_DIRECTORY "${MULTIDEPTH_MTP_FIXTURE_DIR}")
      add_test(NAME skippy_generate_multidepth_mtp COMMAND skippy-model-fixture-generator
 diff --git a/src/skippy/stage_program.cpp b/src/skippy/stage_program.cpp
-index b61f47aeb..c734a094d 100644
+index 13376ef75..d69d380ca 100644
 --- a/src/skippy/stage_program.cpp
 +++ b/src/skippy/stage_program.cpp
 @@ -296,16 +296,20 @@ bool skippy_stage_program::instantiate(
@@ -55,8 +55,8 @@ index b61f47aeb..c734a094d 100644
 +    };
      const auto make_recurrent_input = [&](const input & recipe, size_t slot) {
          auto recurrent = std::make_unique<llm_graph_input_rs>(memory_recurrent);
-         if (!recipe.values[slot].empty()) {
-@@ -375,7 +379,8 @@ bool skippy_stage_program::instantiate(
+         recurrent->s_copy = nullptr;
+@@ -380,7 +384,8 @@ bool skippy_stage_program::instantiate(
          if (!input.values[base + 1].empty()) recipe.self_k_idxs_lid = lid->build_input_k_idxs(context, params.ubatch);
          recipe.self_kq_mask_mla = make_kq_mask(mla, input.values[base + 2]);
          recipe.self_kq_mask_mla_cnv = recipe.self_kq_mask_mla;
