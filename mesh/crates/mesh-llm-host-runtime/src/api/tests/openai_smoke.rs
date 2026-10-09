@@ -347,3 +347,92 @@ async fn test_api_plugin_tools_allows_published_operation() {
     handle.abort();
     let _ = std::fs::remove_dir_all(blobstore_root);
 }
+
+/// Upstream that reports whether the console's forwarded socket is registered
+/// as a remote bridge while the connection is still alive, and whether the
+/// relayed response reaches the client with the sandboxing headers.
+#[cfg(feature = "payments")]
+async fn spawn_bridge_probing_upstream() -> (u16, tokio::sync::oneshot::Receiver<bool>) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    tokio::spawn(async move {
+        let (mut stream, peer) = listener.accept().await.unwrap();
+        let _ = proxy::read_http_request(&mut stream).await.unwrap();
+        let _ = tx.send(crate::network::tunnel::is_remote_bridge(peer));
+        let body = "<script>alert(1)</script>";
+        let resp = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        stream.write_all(resp.as_bytes()).await.unwrap();
+        let _ = stream.shutdown().await;
+    });
+    (port, rx)
+}
+
+#[cfg(feature = "payments")]
+async fn forward_chat_through_console(host_header: &str) -> (bool, String) {
+    let (upstream_port, bridged_rx) = spawn_bridge_probing_upstream().await;
+    let state = build_test_mesh_api_with_api_port(upstream_port).await;
+    state.update(true, true).await;
+    let (addr, handle) = spawn_management_test_server(state).await;
+    let body = r#"{"model":"test-model","messages":[]}"#;
+    let request = format!(
+        "POST /v1/chat/completions HTTP/1.1\r\nHost: {host_header}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+        body.len()
+    );
+    let response = send_management_request(addr, request).await;
+    handle.abort();
+    (bridged_rx.await.unwrap(), response)
+}
+
+#[cfg(feature = "payments")]
+#[tokio::test]
+async fn console_forwarding_keeps_untrusted_callers_remote_for_the_payment_gate() {
+    // A loopback peer with a non-local Host header is not a trusted local
+    // caller, so the forwarded loopback socket must be marked as a remote
+    // bridge for `is_local_origin` to reject it.
+    let (bridged, response) = forward_chat_through_console("attacker.example").await;
+    assert!(bridged, "forwarded socket was not registered as remote: {response}");
+    assert!(response.starts_with("HTTP/1.1 200 OK"), "{response}");
+}
+
+#[cfg(feature = "payments")]
+#[tokio::test]
+async fn console_forwarding_keeps_trusted_local_callers_local() {
+    let (bridged, response) = forward_chat_through_console("localhost").await;
+    assert!(!bridged, "trusted local caller was marked remote: {response}");
+    assert!(response.starts_with("HTTP/1.1 200 OK"), "{response}");
+}
+
+#[tokio::test]
+async fn console_relay_sandboxes_upstream_responses_and_rejects_arbitrary_get() {
+    let (upstream_port, _upstream_rx, upstream_handle) =
+        spawn_capturing_upstream(r#"{"ok":true}"#).await;
+    let state = build_test_mesh_api_with_api_port(upstream_port).await;
+    state.update(true, true).await;
+    let (addr, handle) = spawn_management_test_server(state).await;
+    let response = send_management_request(
+        addr,
+        "GET /v1/models HTTP/1.1\r\nHost: localhost\r\n\r\n".to_string(),
+    )
+    .await;
+    assert!(response.starts_with("HTTP/1.1 200 OK"), "{response}");
+    assert!(response.contains("X-Content-Type-Options: nosniff\r\n"), "{response}");
+    assert!(response.contains("Content-Security-Policy: sandbox\r\n"), "{response}");
+    handle.abort();
+    upstream_handle.abort();
+
+    // Arbitrary GET paths are no longer forwarded to the inference port.
+    let state = build_test_mesh_api_with_api_port(1).await;
+    state.update(true, true).await;
+    let (addr, handle) = spawn_management_test_server(state).await;
+    let response = send_management_request(
+        addr,
+        "GET /v1/browser-poc HTTP/1.1\r\nHost: localhost\r\n\r\n".to_string(),
+    )
+    .await;
+    assert!(response.starts_with("HTTP/1.1 405"), "{response}");
+    handle.abort();
+}

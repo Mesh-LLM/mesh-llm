@@ -87,6 +87,10 @@ pub use stage_planning::{
 // KV page descriptor flags. Re-exported so callers can read a page's layout
 // without taking a direct dependency on the raw ABI crate.
 pub use skippy_ffi::{KV_PAGE_FLAG_HAS_K_IDX, KV_PAGE_FLAG_V_TRANSPOSED};
+// Native renderer identity. Re-exported so callers can fingerprint a chat-template
+// render (for example a rendered-prompt probe) without taking a direct dependency
+// on the raw ABI crate.
+pub use skippy_ffi::{ABI_VERSION_MAJOR, ABI_VERSION_MINOR, ABI_VERSION_PATCH};
 pub use types::{
     ACTIVATION_BOUNDARY_DESC_VERSION, ActivationBoundaryDesc, ActivationDesc, ActivationFrame,
     ActivationPartDesc, ChatReasoningFormat, ChatTemplateJsonOptions, ChatTemplateJsonResult,

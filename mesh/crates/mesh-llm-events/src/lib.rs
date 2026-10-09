@@ -551,6 +551,18 @@ pub enum OutputEvent {
     ApiReady {
         url: String,
     },
+    /// What `--strategy` composed, for the dashboard header.
+    ///
+    /// Counts rather than the axis list: the header has one line, and the full
+    /// report with a reason per axis is in `mesh-llm doctor split` and in
+    /// `/api/status`. What belongs here is the answer to "is a strategy even
+    /// in force", which is the first thing to establish when a split is slower
+    /// than expected.
+    ServingStrategyResolved {
+        strategy: String,
+        applied: usize,
+        declined: usize,
+    },
     RuntimeReady {
         api_url: String,
         console_url: Option<String>,
@@ -640,6 +652,7 @@ impl OutputEvent {
             OutputEvent::WebserverReady { .. } => "webserver_ready",
             OutputEvent::ApiStarting { .. } => "api_starting",
             OutputEvent::ApiReady { .. } => "api_ready",
+            OutputEvent::ServingStrategyResolved { .. } => "serving_strategy",
             OutputEvent::RuntimeReady { .. } => "ready",
             OutputEvent::ModelDownloadProgress { .. } => "model_download_progress",
             OutputEvent::RequestRouted { .. } => "request_routed",
@@ -676,6 +689,19 @@ impl OutputEvent {
         match self {
             OutputEvent::CliCommandLifecycle { family, outcome } => {
                 format!("CLI command {} ({})", outcome.as_str(), family.as_str())
+            }
+            OutputEvent::ServingStrategyResolved {
+                strategy,
+                applied,
+                declined,
+            } => {
+                let mut message = format!("serving strategy {strategy}: {applied} default(s) set");
+                if *declined > 0 {
+                    // Named explicitly: an operator who set a flag by hand
+                    // should see it survived rather than wonder.
+                    message.push_str(&format!(", {declined} left to your settings"));
+                }
+                message
             }
             OutputEvent::Info { message, .. } => message.clone(),
             OutputEvent::Startup { message, .. } => message

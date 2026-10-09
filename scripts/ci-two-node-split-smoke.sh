@@ -155,15 +155,9 @@ sha256_file() {
 }
 
 auto_payload_artifact_for_sha256() {
-    python3 - "$1" <<'PY'
-import json
-import sys
-
-with open("ci/model-artifacts/kv-auto-smoke-expectations.json", encoding="utf-8") as handle:
-    models = json.load(handle)["models"]
-matches = [artifact_id for artifact_id, row in models.items() if row["sha256"] == sys.argv[1]]
-print(matches[0] if len(matches) == 1 else "unspecified")
-PY
+    cargo run -q -p xtask -- split-payloads artifact-for-sha256 \
+        --expectations ci/model-artifacts/kv-auto-smoke-expectations.json \
+        --sha256 "$1"
 }
 
 quant_selector_from_gguf_file() {
@@ -1031,7 +1025,7 @@ PY
 }
 
 assert_expected_stage_payload() {
-    local artifact_id model_sha256
+    local artifact_id model_sha256 tested_commit
     case "$MODEL_LABEL" in
         recurrent)
             artifact_id="$RECURRENT_ARTIFACT_ID"
@@ -1044,13 +1038,17 @@ assert_expected_stage_payload() {
     esac
     # Manual package-v2 probes may not carry a pinned model artifact. CI does.
     [[ "$artifact_id" != unspecified ]] || return 0
-    python3 scripts/assert-split-stage-payloads.py \
+    # The protected reusable workflow may predate this branch's source-SHA
+    # handoff. Its checkout is still pinned to source_sha; read that checkout
+    # through the runner's Git wrapper until the workflow change lands.
+    tested_commit="${MESH_TWO_NODE_SPLIT_SOURCE_SHA:-$(GIT_MASTER=1 git rev-parse HEAD)}"
+    cargo run -q -p xtask -- split-payloads certify \
         --evidence "$SPLIT_EVIDENCE_PATH" \
         --expectations ci/model-artifacts/kv-auto-smoke-expectations.json \
         --model-manifest ci/model-artifacts/manifests/scripted-binary-smoke.json \
         --roster skippy/crates/skippy-api/src/split-certified.json \
         --runtime-bundle "$RUNTIME_BUNDLE" \
-        --tested-commit "$(git rev-parse HEAD)" \
+        --tested-commit "$tested_commit" \
         --artifact-id "$artifact_id" --model-sha256 "$model_sha256" \
         --seed-log "$SEED_LOG" --worker-log "$WORKER_LOG" \
         --responses-dir "$response_dir" \

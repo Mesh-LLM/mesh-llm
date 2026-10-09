@@ -363,6 +363,7 @@ pub(super) async fn load_split_runtime_generation_inner(
             slots: spec.slots,
             capabilities,
             workload_class: mesh::ModelWorkloadClass::CausalGeneration,
+            thinking: handle.thinking().cloned(),
             inner: LocalRuntimeBackendHandle::Skippy {
                 model: Box::new(handle),
                 http,
@@ -385,6 +386,12 @@ pub(super) async fn stage0_runtime_options(
     downstream_endpoint: &str,
     stage0_return_endpoint: &str,
 ) -> Result<skippy_serving::EmbeddedRuntimeOptions> {
+    crate::runtime::split_planning::warn_if_decode_batch_policy_unsupported(
+        spec.model_ref,
+        settings.last_stage_decode_batch,
+        &spec.generation.stages,
+        &spec.generation.participants,
+    );
     let mut runtime_options = settings.runtime_options.clone();
     runtime_options.config.run_id = spec.generation.run_id.clone();
     runtime_options.config.topology_id = spec.generation.topology_id.clone();

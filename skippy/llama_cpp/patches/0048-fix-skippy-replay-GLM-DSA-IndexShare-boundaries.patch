@@ -160,7 +160,7 @@ index bbb08c132..134a9de63 100644
                  cb(top_k, "top_k", il);
              } else {
 diff --git a/src/skippy/stage_program.cpp b/src/skippy/stage_program.cpp
-index 7b1a3ba03..b61f47aeb 100644
+index ad6207fe0..13376ef75 100644
 --- a/src/skippy/stage_program.cpp
 +++ b/src/skippy/stage_program.cpp
 @@ -244,7 +244,6 @@ bool skippy_stage_program::instantiate(
@@ -271,10 +271,10 @@ index 1b7019de7..0f9beb355 100644
      if (admitted_axis >= GGML_MAX_DIMS || tensor->ne[admitted_axis] != static_cast<int64_t>(n_tokens)) {
          throw std::runtime_error("live stage frontier does not match its prepared token axis");
 diff --git a/tests/test-llama-archs.cpp b/tests/test-llama-archs.cpp
-index ad6ddc8c1..bde52d933 100644
+index c3461eedf..a1e38304b 100644
 --- a/tests/test-llama-archs.cpp
 +++ b/tests/test-llama-archs.cpp
-@@ -210,7 +210,10 @@ static gguf_context_ptr get_gguf_ctx(
+@@ -226,7 +226,10 @@ static gguf_context_ptr get_gguf_ctx(
      ms.add_kv(LLM_KV_EMBEDDING_LENGTH,          n_embd);
      ms.add_kv(LLM_KV_FEATURES_LENGTH,           n_embd);
      ms.add_kv(LLM_KV_BLOCK_COUNT,               n_layer);

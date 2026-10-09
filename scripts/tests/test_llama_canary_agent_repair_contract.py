@@ -13,6 +13,7 @@ WRAPPER = ROOT / "scripts" / "llama-canary-agent-repair.sh"
 PUBLISHER = ROOT / "scripts" / "llama-canary-publish.sh"
 RUNBOOK = ROOT / "ci" / "llama-canary" / "agent-repair-prompt.md"
 MANIFEST_POLICY = ROOT / "scripts" / "validate-llama-canary-agent-manifests.py"
+COMMAND_LOGGER = ROOT / "scripts" / "llama-canary-log-command.sh"
 
 
 class LlamaCanaryDeveloperHarnessContractTests(unittest.TestCase):
@@ -275,6 +276,28 @@ run_candidate_gates() {
         ]
         self.assertIn("agent developer task exited with status %s", agent)
         self.assertIn('tee -a "$AGENT_LOG"', agent)
+
+    def test_repair_command_logs_keep_output_and_failure_status(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            ctest_dir = Path(directory) / "build" / "Testing" / "Temporary"
+            ctest_dir.mkdir(parents=True)
+            (ctest_dir / "LastTest.log").write_text("ctest failure details\n", encoding="utf-8")
+            env = {**os.environ, "CANARY_REPAIR_LOG_DIR": directory,
+                   "LLAMA_BUILD_DIR": str(Path(directory) / "build")}
+            for status in (0, 7):
+                result = subprocess.run(
+                    ["bash", str(COMMAND_LOGGER), "focused-test", "bash", "-c",
+                     f"printf 'case {status}\\n'; exit {status}"],
+                    env=env, text=True, capture_output=True, check=False,
+                )
+                self.assertEqual(status, result.returncode)
+                self.assertIn(f"case {status}", result.stdout)
+            logs = list(Path(directory).glob("focused-test.*/output.log"))
+            self.assertEqual(2, len(logs))
+            contents = [log.read_text(encoding="utf-8") for log in logs]
+            self.assertTrue(any("case 0\n" in log and "exit_status: 0\n" in log for log in contents))
+            self.assertTrue(any("case 7\n" in log and "exit_status: 7\n" in log for log in contents))
+            self.assertEqual(2, len(list(Path(directory).glob("focused-test.*/ctest/LastTest.log"))))
 
     def test_distributed_repair_restores_exact_candidate_and_reads_feedback(self) -> None:
         restore = self.wrapper[

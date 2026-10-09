@@ -300,8 +300,14 @@ impl StageModel {
                 false,
             )
         };
-        write_native_log_note(format!("{end_label} status={status:?}"));
-        ensure_ok(status, error)?;
+        let open_result = ensure_ok(status, error);
+        match &open_result {
+            Ok(()) => write_native_log_note(format!("{end_label} status={status:?}")),
+            Err(cause) => {
+                write_native_log_note(format!("{end_label} status={status:?} error={cause:#}"))
+            }
+        }
+        open_result?;
         Self::from_opened_raw(raw, config, null_handle_message)
     }
 
@@ -394,8 +400,14 @@ impl StageModel {
                 false,
             )
         };
-        write_native_log_note(format!("{end_label} status={status:?}"));
-        ensure_ok(status, error)?;
+        let open_result = ensure_ok(status, error);
+        match &open_result {
+            Ok(()) => write_native_log_note(format!("{end_label} status={status:?}")),
+            Err(cause) => {
+                write_native_log_note(format!("{end_label} status={status:?} error={cause:#}"))
+            }
+        }
+        open_result?;
         Self::from_opened_raw(raw, config, null_handle_message)
     }
 

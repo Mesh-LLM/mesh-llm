@@ -155,10 +155,10 @@ index cf6c8dc22..0ebe0b7e9 100644
          llama_model_saver kv(arch, metadata.get());
          kv.add_kv(LLM_KV_ATTENTION_DECAY_LORA_RANK, uint32_t(32));
 diff --git a/tests/test-llama-archs.cpp b/tests/test-llama-archs.cpp
-index ff859916a..9c0a941f3 100644
+index e0122c9ed..c3461eedf 100644
 --- a/tests/test-llama-archs.cpp
 +++ b/tests/test-llama-archs.cpp
-@@ -132,7 +132,6 @@ static gguf_context_ptr get_gguf_ctx(
+@@ -148,7 +148,6 @@ static gguf_context_ptr get_gguf_ctx(
          const uint32_t glm_dsa_indexer_top_k = 8,
          const bool deepseek4_mtp = false,
          const uint32_t contract_layers = 0, const uint32_t contract_width = 0) {
@@ -166,7 +166,7 @@ index ff859916a..9c0a941f3 100644
      gguf_context_ptr ret(gguf_init_empty());
      llama_model_saver ms(arch, ret.get());
      const uint32_t n_ctx = context_length;
-@@ -187,6 +186,14 @@ static gguf_context_ptr get_gguf_ctx(
+@@ -203,6 +202,14 @@ static gguf_context_ptr get_gguf_ctx(
          n_layer = 8; // 1 layer per stack x 2 h-cycles x (3 l-cycles + 1) cache slots
      }
  
@@ -181,7 +181,7 @@ index ff859916a..9c0a941f3 100644
      if (contract_layers) { n_layer = contract_layers; n_embd = contract_width; }
  
      uint32_t n_head_kv = n_head;
-@@ -356,13 +369,34 @@ static gguf_context_ptr get_gguf_ctx(
+@@ -372,13 +379,34 @@ static gguf_context_ptr get_gguf_ctx(
      ms.add_kv(LLM_KV_ATTENTION_INDEXER_BLOCK_SIZE,   uint32_t(4));
      ms.add_kv(LLM_KV_ATTENTION_INDEXER_LOCAL_BLOCKS, uint32_t(1));
      if (arch == LLM_ARCH_GLM_DSA) {
@@ -219,7 +219,7 @@ index ff859916a..9c0a941f3 100644
          ms.add_kv(LLM_KV_ATTENTION_INDEXER_TYPES, indexer_types);
      }
      // mrope sections count rope pairs; Ling 3.0 VL files carry [t, h, w] sections
-@@ -780,7 +832,7 @@ static bool glm_dsa_backend_config_supported(const std::vector<ggml_backend_dev_
+@@ -796,7 +824,7 @@ static bool glm_dsa_backend_config_supported(const std::vector<ggml_backend_dev_
      return true;
  }
  
@@ -228,7 +228,7 @@ index ff859916a..9c0a941f3 100644
      struct user_data_t {
          struct {
              ggml_log_callback callback;
-@@ -827,7 +879,7 @@ static int save_models(const std::string & arch_filter, const size_t seed, const
+@@ -843,7 +871,7 @@ static int save_models(const std::string & arch_filter, const size_t seed, const
                  LOG_INF("%s: %s model (%s) is unsupported, skipping\n", __func__, llm_arch_name(arch), moe ? "MoE" : "dense");
                  continue;
              }
@@ -237,7 +237,7 @@ index ff859916a..9c0a941f3 100644
              if (text_only) {
                  const uint32_t sections[4] = {};
                  const std::string key = std::string(llm_arch_name(arch)) + ".rope.dimension_sections";
-@@ -1064,6 +1119,8 @@ int main(int argc, char ** argv) {
+@@ -1082,6 +1110,8 @@ int main(int argc, char ** argv) {
      bool dense_mtp = false;
      uint32_t dense_mtp_depth = 1;
      bool text_only = false;
@@ -246,7 +246,7 @@ index ff859916a..9c0a941f3 100644
      std::string mtp_model;
      uint32_t contract_layers = 0, contract_width = 0, contract_mtp_layers = 0;
      int verbosity = LOG_LEVEL_ERROR;
-@@ -1076,6 +1133,23 @@ int main(int argc, char ** argv) {
+@@ -1094,6 +1124,23 @@ int main(int argc, char ** argv) {
              contract_mtp_layers = std::stoul(argv[++i]);
          } else if (strcmp(argv[i], "--text-only") == 0 || strcmp(argv[i], "-t") == 0) {
              text_only = true;
@@ -270,7 +270,7 @@ index ff859916a..9c0a941f3 100644
          } else if (strcmp(argv[i], "--dense-mtp") == 0) {
              dense_mtp = true;
          } else if (strcmp(argv[i], "--dense-mtp-depth") == 0 && i + 1 < argc) {
-@@ -1219,7 +1299,15 @@ int main(int argc, char ** argv) {
+@@ -1241,7 +1288,15 @@ int main(int argc, char ** argv) {
              return 0;
          }
          if (!out.empty()) {

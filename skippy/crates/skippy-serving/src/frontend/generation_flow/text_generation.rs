@@ -205,6 +205,13 @@ impl StageOpenAiBackend {
         // since speculation is a throughput choice and never a correctness one.
         let speculating = self.gate_allows_speculation();
         let gated_speculative = self.gated_speculative();
+        // Depth after the on/off verdict, and in that order: searching a budget
+        // for a request the gate has just stood down would attribute the gate's
+        // effect to the budget.
+        let gated_speculative = crate::frontend::runahead_search::runahead_after_search(
+            &gated_speculative,
+            self.runahead_governor.as_deref(),
+        );
 
         let cache_stats = match self.mode.clone() {
             OpenAiBackendMode::LocalRuntime => self.generate_local_tokens(

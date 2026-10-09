@@ -43,6 +43,10 @@ pub struct SpeculativeDecodeConfig {
     pub draft_cache_type_k: String,
     #[serde(default = "default_draft_cache_type")]
     pub draft_cache_type_v: String,
+    /// Closed-loop gating: measure whether speculation pays and stand it down
+    /// when it does not. Off unless stated.
+    #[serde(default)]
+    pub gate: crate::frontend::SpeculationGateSettings,
 }
 
 fn default_draft_cache_type() -> String {
@@ -117,6 +121,15 @@ pub struct VerifyWindowConfig {
     /// checkpoint-retention bound).
     #[serde(default)]
     pub runahead_max_tokens: usize,
+    /// Let the budget be searched per deployment instead of stated.
+    ///
+    /// Distinct from `runahead_max_tokens == 0`, which is a positive statement
+    /// that fixed-depth admission is wanted. This says "no number is being
+    /// asserted" — the value a strategy composes, since a strategy is applied
+    /// at startup and the right budget depends on the link. See
+    /// `super::runahead_search` for why it is searched and not computed.
+    #[serde(default)]
+    pub runahead_auto: bool,
 }
 
 impl Default for SpeculativeDecodeConfig {
@@ -139,6 +152,7 @@ impl Default for SpeculativeDecodeConfig {
                 max_tokens: 4,
                 pipeline_depth: 1,
                 runahead_max_tokens: 0,
+                runahead_auto: false,
             },
             ngram_fallback_draft: false,
             draft_acceptance_threshold: 0.0,
@@ -147,6 +161,7 @@ impl Default for SpeculativeDecodeConfig {
             draft_threads: None,
             draft_cache_type_k: default_draft_cache_type(),
             draft_cache_type_v: default_draft_cache_type(),
+            gate: crate::frontend::SpeculationGateSettings::default(),
         }
     }
 }

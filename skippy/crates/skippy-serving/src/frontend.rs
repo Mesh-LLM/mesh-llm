@@ -23,6 +23,7 @@ mod prefill;
 mod prefix_cache;
 mod prompting;
 mod request;
+pub mod runahead_search;
 mod sampling_cache_key;
 mod speculation_gate;
 mod speculative;
@@ -68,6 +69,8 @@ pub use self::linear_proposal::{
     LinearProposalSourceOutcome, LinearProposalSourceResponse, LinearProposalSourceTelemetry,
     OpaqueProposalDecisionId,
 };
+pub(crate) use self::request::thinking_probe_options;
+pub use self::speculation_gate::SpeculationGateSettings;
 pub use self::speculative::{
     NativeMtpProposalConfig, NgramExtensionConfig, NgramProposalConfig, NgramProposerKind,
     SpeculativeDecodeConfig, VerifyWindowConfig,

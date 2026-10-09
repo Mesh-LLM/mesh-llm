@@ -239,7 +239,10 @@ impl KvStageIntegration {
             });
         // FullState is architecture-neutral: the native runtime serializes the
         // complete session state for both dense and recurrent model families.
-        if matches!(model_capability, ModelKvCapability::KnownRecurrent) {
+        if matches!(
+            model_state_kind,
+            Some(ModelStateKind::Recurrent | ModelStateKind::Hybrid)
+        ) {
             cache_config.max_entries = cache_config.max_entries.min(RECURRENT_CACHE_MAX_ENTRIES);
         }
         let mut checkpoint_policy = SparseCheckpointPolicy::from_cache(&cache_config);
@@ -1851,23 +1854,34 @@ mod tests {
 
     #[test]
     fn recurrent_cache_cardinality_is_capped_after_load() {
-        let mut config = enabled_auto_config("future/model");
-        config.kv_graph_state = "recurrent".into();
-        config.ctx_size = 65_536;
-        let kv = KvStageIntegration::from_loaded_model(
-            &config,
-            Some(ModelStateKind::Recurrent),
-            Some(skippy_runtime::MemoryCacheCapabilities {
-                resident: false,
-                kv_recurrent: true,
-            }),
-            None,
-        )
-        .unwrap()
-        .expect("recurrent loaded model should enable exact-state caching");
+        for loaded in [ModelStateKind::Recurrent, ModelStateKind::Hybrid] {
+            for graph_state in ["recurrent", "", "full-state"] {
+                let mut config = enabled_auto_config("future/model");
+                config.kv_graph_state = graph_state.into();
+                config.ctx_size = 65_536;
+                let kv = KvStageIntegration::from_loaded_model(
+                    &config,
+                    Some(loaded),
+                    Some(skippy_runtime::MemoryCacheCapabilities {
+                        resident: false,
+                        kv_recurrent: true,
+                    }),
+                    None,
+                )
+                .unwrap()
+                .expect("loaded recurrent state should enable exact-state caching");
 
-        assert_eq!(kv.payload, StagePrefixCachePayload::KvRecurrent);
-        assert_eq!(kv.exact_max_entries, RECURRENT_CACHE_MAX_ENTRIES);
+                assert_eq!(
+                    kv.payload,
+                    if graph_state == "recurrent" {
+                        StagePrefixCachePayload::KvRecurrent
+                    } else {
+                        StagePrefixCachePayload::FullState
+                    }
+                );
+                assert_eq!(kv.exact_max_entries, RECURRENT_CACHE_MAX_ENTRIES);
+            }
+        }
     }
 
     #[test]

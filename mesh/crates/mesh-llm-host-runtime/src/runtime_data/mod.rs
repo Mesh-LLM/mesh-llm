@@ -446,6 +446,7 @@ pub(crate) mod tests {
                 lifecycle_instances: vec![],
                 intent_summary: None,
                 runtime_events: None,
+                serving_strategy: None,
             },
             model_name: "Qwen-Test".into(),
             models: vec!["Qwen-Test".into()],
@@ -555,6 +556,7 @@ pub(crate) mod tests {
             stage_protocol_generation_supported: false,
             stage_status_list_supported: false,
             local_gguf_content_id_supported: false,
+            decode_batch_policy_supported: false,
             advertised_model_throughput: vec![],
             #[cfg(feature = "payments")]
             lightning_offers: Default::default(),
@@ -695,6 +697,7 @@ pub(crate) mod tests {
             stage_protocol_generation_supported: false,
             stage_status_list_supported: false,
             local_gguf_content_id_supported: false,
+            decode_batch_policy_supported: false,
             advertised_model_throughput: vec![],
             #[cfg(feature = "payments")]
             lightning_offers: Default::default(),
@@ -839,6 +842,7 @@ pub(crate) mod tests {
             stage_protocol_generation_supported: false,
             stage_status_list_supported: false,
             local_gguf_content_id_supported: false,
+            decode_batch_policy_supported: false,
             advertised_model_throughput: vec![crate::network::metrics::ModelThroughputHint {
                 model_name: "Qwen/Qwen3-Coder".into(),
                 avg_tokens_per_second_milli: 13_400,

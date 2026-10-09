@@ -29,7 +29,7 @@ index 436d6718d..568b73a0e 100644
      file(MAKE_DIRECTORY "${MULTIDEPTH_MTP_FIXTURE_DIR}")
      add_test(NAME skippy_generate_multidepth_mtp COMMAND skippy-model-fixture-generator
 diff --git a/src/skippy/stage_program.cpp b/src/skippy/stage_program.cpp
-index b61f47aeb..c734a094d 100644
+index 13376ef75..d69d380ca 100644
 --- a/src/skippy/stage_program.cpp
 +++ b/src/skippy/stage_program.cpp
 @@ -296,16 +296,20 @@ bool skippy_stage_program::instantiate(
@@ -55,8 +55,8 @@ index b61f47aeb..c734a094d 100644
 +    };
      const auto make_recurrent_input = [&](const input & recipe, size_t slot) {
          auto recurrent = std::make_unique<llm_graph_input_rs>(memory_recurrent);
-         if (!recipe.values[slot].empty()) {
-@@ -375,7 +379,8 @@ bool skippy_stage_program::instantiate(
+         recurrent->s_copy = nullptr;
+@@ -380,7 +384,8 @@ bool skippy_stage_program::instantiate(
          if (!input.values[base + 1].empty()) recipe.self_k_idxs_lid = lid->build_input_k_idxs(context, params.ubatch);
          recipe.self_kq_mask_mla = make_kq_mask(mla, input.values[base + 2]);
          recipe.self_kq_mask_mla_cnv = recipe.self_kq_mask_mla;
@@ -67,10 +67,10 @@ index b61f47aeb..c734a094d 100644
          if (!input.values[base + 4].empty()) recipe.self_k_rot_lid = lid->build_input_k_rot(context);
          bind(input.values[base + 0], recipe.self_k_idxs_mla);
 diff --git a/tests/test-llama-archs.cpp b/tests/test-llama-archs.cpp
-index bde52d933..e1c04709b 100644
+index a1e38304b..320822b16 100644
 --- a/tests/test-llama-archs.cpp
 +++ b/tests/test-llama-archs.cpp
-@@ -1215,11 +1215,17 @@ int main(int argc, char ** argv) {
+@@ -1240,11 +1240,17 @@ int main(int argc, char ** argv) {
              if (out.empty() || arch == LLM_ARCH_UNKNOWN) throw std::runtime_error("--dense-mtp requires architecture and output");
              if (dense_mtp_depth == 0) throw std::runtime_error("--dense-mtp-depth must be positive");
              auto gguf = get_gguf_ctx(arch,
