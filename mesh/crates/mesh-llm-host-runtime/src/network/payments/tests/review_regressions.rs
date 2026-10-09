@@ -57,7 +57,6 @@ async fn fragmented_exchange() -> Result<()> {
     let price = Pricing {
         input_msat_per_million: 1_000_000,
         output_msat_per_million: 1_000_000,
-        minimum_invoice_msat: 1,
     };
     let invoice = seller.create_invoice(Some(40), 3600).await?;
     let input = Frame::InputInvoice {

@@ -48,7 +48,7 @@ pub(crate) async fn call_node<Req: Serialize, Res: DeserializeOwned>(
 /// Callers that only need "is this node a seller?" ask here, then let `call`
 /// report the provider's own health.
 pub(crate) async fn has_provider(plugins: &PluginManager) -> Result<bool> {
-    Ok(plugins.provider_for_capability(CAPABILITY).await?.is_some())
+    plugins.has_registered_capability(CAPABILITY)
 }
 
 /// Invokes `operation` on the named provider, applying the operation's bound.
@@ -405,7 +405,6 @@ mod tests {
                 Pricing {
                     input_msat_per_million: 7,
                     output_msat_per_million: 9,
-                    minimum_invoice_msat: 1,
                 },
             )]),
         };

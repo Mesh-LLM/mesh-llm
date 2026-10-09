@@ -435,6 +435,85 @@ pub(crate) async fn rejected_direct_peer_does_not_apply_mesh_state_or_demand() {
     assert!(!node.state.lock().await.peers.contains_key(&addr.id));
 }
 
+#[tokio::test]
+pub(crate) async fn duplicate_direct_announcements_are_rejected_before_apply() {
+    // A frame is authenticated to a single QUIC remote, and the admission path
+    // validates that peer's own announcement exactly once before applying every
+    // entry as already validated. A second self-entry would therefore skip
+    // `validate_direct_peer_requirements` and overwrite the validated entry's
+    // metadata, so the frame must be rejected before any entry is applied.
+    for direct_peer_requirements_validated in [false, true] {
+        let node = Node::new_for_tests(NodeRole::Worker).await.unwrap();
+        let sender_addr = test_addr(0x6A);
+        let sender_id = sender_addr.id;
+
+        let mut validated = test_announcement(None);
+        validated.addr = sender_addr.clone();
+        validated.version = Some(crate::VERSION.to_string());
+        validated.serving_models = vec!["validated-model".to_string()];
+
+        // The duplicate carries metadata that was never validated: a payload
+        // that admitted it would be applied without re-checking the sender.
+        let mut duplicate = validated.clone();
+        duplicate.role = NodeRole::Host { http_port: 9337 };
+        duplicate.serving_models = vec!["forged-model".to_string()];
+
+        let result = node
+            .apply_announced_peers(
+                sender_id,
+                &[
+                    (validated.addr.clone(), validated),
+                    (duplicate.addr.clone(), duplicate),
+                ],
+                None,
+                Some(NODE_PROTOCOL_GENERATION),
+                direct_peer_requirements_validated,
+            )
+            .await;
+
+        assert!(
+            result.is_err(),
+            "duplicate direct announcements must fail the frame \
+             (requirements_validated={direct_peer_requirements_validated})"
+        );
+        assert!(
+            !node.state.lock().await.peers.contains_key(&sender_id),
+            "no entry may be applied when the direct sender is duplicated"
+        );
+    }
+}
+
+#[tokio::test]
+pub(crate) async fn single_direct_announcement_still_admits() {
+    // Control for `duplicate_direct_announcements_are_rejected_before_apply`:
+    // the uniqueness check must not reject an ordinary one-entry frame.
+    let node = Node::new_for_tests(NodeRole::Worker).await.unwrap();
+    let sender_addr = test_addr(0x6B);
+    let sender_id = sender_addr.id;
+
+    let mut announcement = test_announcement(None);
+    announcement.addr = sender_addr.clone();
+    announcement.version = Some(crate::VERSION.to_string());
+    announcement.serving_models = vec!["validated-model".to_string()];
+
+    node.apply_announced_peers(
+        sender_id,
+        &[(sender_addr, announcement)],
+        None,
+        Some(NODE_PROTOCOL_GENERATION),
+        false,
+    )
+    .await
+    .expect("a single direct announcement must be admitted");
+
+    let state = node.state.lock().await;
+    let peer = state
+        .peers
+        .get(&sender_id)
+        .expect("single direct announcement should be admitted");
+    assert!(peer.is_admitted());
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 pub(crate) async fn inbound_gossip_rejection_preserves_dead_peer_state() -> Result<()> {
     // Given: a host that still considers the direct sender dead, and a direct

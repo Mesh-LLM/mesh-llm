@@ -829,7 +829,7 @@ class CiArtifactActionTests(unittest.TestCase):
             action,
         )
         for toolchain_boundary in (
-            "cuda-$version-Jimver-v0.2.35",
+            "cuda-$version-Jimver-v0.2.36",
             "vulkan-$version-jakoch-v1.5.2",
             "rocm-$version",
         ):

@@ -435,6 +435,30 @@ runner-contract update is active.
 | `sdk-smoke.yml` | Artifact-based SDK consumers; all SDK rows consume the lane's immutable console UI artifact, while Rust smoke restores the main-seeded, target/profile/image/toolchain/recipe-bound Cargo/target cache through `Swatinem/rust-cache` |
 | `hf-download-smoke.yml` | Hugging Face download smoke |
 
+The four source-compatible slices select real legacy Python contracts or their
+native Rust/Just owners from the admitted checkout. Native Quality runs both
+contract recipes and restores the pinned public SDK/research sources. Resolver
+arrays are initialized in each invoking step. Native runner-contract and the
+three accelerator Laya jobs admit a private, digest-bound cleanup executable
+before managed work; legacy checkouts retain their existing cleanup command.
+Quality's job/alternate contract bounds are 60/40 native (20 legacy) minutes;
+runner-contract is 45 minutes; accelerator Laya jobs have a 100-minute floor
+while preserving larger caller limits, with aggregate native restore/read work
+bounded to 70 minutes. These budget changes preserve authority, providers,
+cache policy, workload arguments and all existing immutable audit/resolver references.
+Hosted two-source diagnostic
+[37725709469](https://github.com/Mesh-LLM/mesh-llm/actions/runs/37725709469)
+passed legacy `d18311f1` and native `db506f7f` contracts; this adds no normal
+five-lane, model or SDK qualification claim.
+
+Windows product readiness observes the owning launcher and its native child
+exit status, retaining the 15-second graceful-shutdown window. CTRL_BREAK
+delivery errors remain visible and fail the smoke. Clean/nonzero exits,
+timeout cleanup and failed signal delivery have Rust behavior fixtures.
+After shutdown, Windows log removal allows five attempts separated by one-second
+waits; persistent locks fail cleanup and retain the log. Rust fixtures cover both
+transient and persistent locks; Windows product runs provide actual platform evidence.
+
 All workflow calls use typed, bounded semantic inputs. Credential-bearing smoke
 workflows remain fixed to GitHub-hosted runners; the PR entrypoints pass no
 repository secrets. The trusted main entrypoint may pass the optional

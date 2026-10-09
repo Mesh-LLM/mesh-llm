@@ -298,7 +298,6 @@ fn transitive_prices_propagate_until_direct_admission() {
         mesh_llm_payments_types::pricing::Pricing {
             input_msat_per_million: 500,
             output_msat_per_million: 1500,
-            minimum_invoice_msat: 1000,
         },
     );
     apply(&mut state, &ann);

@@ -372,7 +372,12 @@ pub(crate) fn assert_fast_join_apply_failure_closes_connection_and_propagates_er
             conn.clone(),
             announcements,
             42,
-        );
+        )
+        .with_plugin_keys(vec![crate::mesh::plugin_keys::bind(
+            &iroh::SecretKey::from_bytes(&[0x42; 32]),
+            "capsules",
+            [5; 32],
+        )]);
 
         let result = joiner.commit_join_probe_success(success).await;
         assert!(
@@ -398,6 +403,12 @@ pub(crate) fn assert_fast_join_apply_failure_closes_connection_and_propagates_er
         assert!(
             closed.is_ok(),
             "QUIC connection must be closed on apply failure, not left orphaned"
+        );
+
+        // The rejected candidate's plugin keys are never listed.
+        assert!(
+            !joiner.plugin_keys.peers().contains_key(&bootstrap_id),
+            "a rejected candidate is not listed with plugin keys"
         );
     });
 }

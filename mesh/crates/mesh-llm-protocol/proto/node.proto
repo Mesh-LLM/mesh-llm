@@ -156,6 +156,32 @@ message PeerAnnouncement {
   // verify independently.
   optional ClaimedLogHead claimed_log_head = 51;
   repeated LightningOffer lightning_offers = 52;
+  // Public keys plugins on this node sign with, each bound to this node's key;
+  // see `PluginKey`. At most 16, one per plugin.
+  repeated PluginKey plugin_keys = 53;
+}
+
+// A public key a plugin on this node signs with, bound to this node by the
+// node's own key, so a peer's plugin can check what that plugin signed without
+// an operator configuring keys by hand. Set by a plugin through the plugin
+// protocol (`PluginKeyRequest`); opt-in per plugin; never carried for a plugin
+// that did not ask. A receiver verifies `binding_signature` with the
+// announcing node's key (its `endpoint_id`) over:
+//
+//   sig_input = b"mesh-llm-plugin-key-v1:"
+//             || u64le(len(endpoint_id))          || endpoint_id
+//             || u64le(len(plugin))               || plugin
+//             || u64le(len(public_key))           || public_key
+//             || u64le(len(signature_algorithm))  || signature_algorithm
+//
+// with the same conventions as `ClaimedLogHead`. A key whose binding does not
+// verify is dropped on receipt. Like `claimed_log_head`, plugin keys are not
+// relayed transitively: a receiver sees those of directly-connected peers.
+message PluginKey {
+  string plugin = 1;                 // the plugin's name on this node
+  bytes public_key = 2;              // exactly 32 bytes (Ed25519)
+  bytes binding_signature = 3;       // by this node's key over sig_input above
+  string signature_algorithm = 4;    // "ed25519"
 }
 
 // A minimal, self-contained claim about the current head of a peer's
@@ -225,6 +251,7 @@ message LightningOffer {
   string model = 1;
   uint64 input_msat_per_million = 2;
   uint64 output_msat_per_million = 3;
+  // Deprecated and ignored on read; sellers send 1 for older buyers.
   uint64 minimum_invoice_msat = 4;
 }
 

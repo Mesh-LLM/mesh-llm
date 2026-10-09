@@ -185,7 +185,6 @@ async fn advertised_provider(payer: &Node) -> Result<(Node, Pricing)> {
     let price = Pricing {
         input_msat_per_million: 1_000_000,
         output_msat_per_million: 1_000_000,
-        minimum_invoice_msat: 1,
     };
     let mut announcement =
         provider.build_local_announcement(provider.snapshot_local_announcement_data().await);
@@ -252,7 +251,6 @@ async fn failing_provider(
         Pricing {
             input_msat_per_million: 500_000,
             output_msat_per_million: 500_000,
-            minimum_invoice_msat: 1,
         },
     );
     payer
