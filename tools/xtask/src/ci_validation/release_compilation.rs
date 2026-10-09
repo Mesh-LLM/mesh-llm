@@ -170,6 +170,13 @@ fn check_action(
         return Err(format!("composition-only job reaches Cargo through {action}").into());
     }
     for nested in steps(runs) {
+        // Composer jobs restore automation first, so fallback preparation gated
+        // on a missing automation binary cannot run there.
+        if field(nested, "if")
+            .is_some_and(|condition| condition.contains("env.MESH_LLM_AUTOMATION_BIN == ''"))
+        {
+            continue;
+        }
         check_action(root, job, nested, visited)?;
     }
     Ok(())
