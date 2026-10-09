@@ -36,14 +36,14 @@ pub(in crate::frontend) const GENERATION_RETRY_AFTER_SECS: u64 = 1;
 pub(in crate::frontend) const MAX_EXACT_REPLAY_TOKENS: usize = 8;
 
 #[derive(Clone)]
-pub(in crate::frontend) struct OpenAiGenerationIds {
+pub(in crate::frontend) struct InferenceGenerationIds {
     pub(in crate::frontend) session_label: String,
     pub(in crate::frontend) session_id: u64,
     pub(in crate::frontend) request_id: u64,
     pub(in crate::frontend) request_started_at: Instant,
     pub(in crate::frontend) agent_session_id: Option<Box<str>>,
     pub(in crate::frontend) agent_session_trusted: bool,
-    pub(in crate::frontend) cache: OpenAiCacheHints,
+    pub(in crate::frontend) cache: InferenceCacheHints,
     /// Raw UUID bytes of the OpenAI frontend's `x-request-id`, when this
     /// generation was admitted through the OpenAI HTTP boundary. `None` for
     /// non-frontend callers (tests, direct embedding without a frontend
@@ -53,9 +53,9 @@ pub(in crate::frontend) struct OpenAiGenerationIds {
     pub(in crate::frontend) frontend_request_id: Option<[u8; 16]>,
 }
 
-impl OpenAiGenerationIds {
+impl InferenceGenerationIds {
     pub(in crate::frontend) fn new_with_trust(
-        cache: OpenAiCacheHints,
+        cache: InferenceCacheHints,
         agent_session_id: Option<&str>,
         agent_session_trusted: bool,
         frontend_request_id: Option<[u8; 16]>,
@@ -119,14 +119,14 @@ mod tests {
 
     #[test]
     fn trusted_agent_session_reuses_native_session_but_not_request_id() {
-        let first = OpenAiGenerationIds::new_with_trust(
-            OpenAiCacheHints::default(),
+        let first = InferenceGenerationIds::new_with_trust(
+            InferenceCacheHints::default(),
             Some("agent-42"),
             true,
             None,
         );
-        let second = OpenAiGenerationIds::new_with_trust(
-            OpenAiCacheHints::default(),
+        let second = InferenceGenerationIds::new_with_trust(
+            InferenceCacheHints::default(),
             Some("agent-42"),
             true,
             None,
@@ -141,10 +141,18 @@ mod tests {
 
     #[test]
     fn requests_without_agent_session_get_fresh_native_sessions() {
-        let first =
-            OpenAiGenerationIds::new_with_trust(OpenAiCacheHints::default(), None, false, None);
-        let second =
-            OpenAiGenerationIds::new_with_trust(OpenAiCacheHints::default(), None, false, None);
+        let first = InferenceGenerationIds::new_with_trust(
+            InferenceCacheHints::default(),
+            None,
+            false,
+            None,
+        );
+        let second = InferenceGenerationIds::new_with_trust(
+            InferenceCacheHints::default(),
+            None,
+            false,
+            None,
+        );
 
         assert!(first.session_label.contains(process_nonce()));
         assert_ne!(first.session_id, second.session_id);
@@ -153,14 +161,14 @@ mod tests {
 
     #[test]
     fn repeated_untrusted_agent_sessions_get_fresh_native_sessions() {
-        let first = OpenAiGenerationIds::new_with_trust(
-            OpenAiCacheHints::default(),
+        let first = InferenceGenerationIds::new_with_trust(
+            InferenceCacheHints::default(),
             Some("conversation-7"),
             false,
             None,
         );
-        let second = OpenAiGenerationIds::new_with_trust(
-            OpenAiCacheHints::default(),
+        let second = InferenceGenerationIds::new_with_trust(
+            InferenceCacheHints::default(),
             Some("conversation-7"),
             false,
             None,
@@ -185,12 +193,12 @@ mod tests {
 }
 
 #[derive(Clone, Default)]
-pub(in crate::frontend) struct OpenAiCacheHints {
+pub(in crate::frontend) struct InferenceCacheHints {
     pub(in crate::frontend) prompt_cache_key: Option<String>,
     pub(in crate::frontend) prompt_cache_retention: Option<String>,
 }
 
-impl OpenAiCacheHints {
+impl InferenceCacheHints {
     pub(in crate::frontend) fn from_chat_request(request: &ChatCompletionRequest) -> Self {
         Self {
             prompt_cache_key: request
@@ -249,7 +257,7 @@ pub(in crate::frontend) struct GenerationCacheStats {
     pub(in crate::frontend) verify_window_pipeline_stats:
         Option<crate::frontend::decode_scheduler::VerifyWindowPipelineStats>,
     pub(in crate::frontend) speculative_stats:
-        Option<crate::frontend::speculative::OpenAiSpeculativeStats>,
+        Option<crate::frontend::speculative::InferenceSpeculativeStats>,
     pub(in crate::frontend) prompt_ms: f64,
     pub(in crate::frontend) predicted_ms: f64,
     pub(in crate::frontend) queue_wait_ms: f64,

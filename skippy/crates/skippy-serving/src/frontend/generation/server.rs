@@ -3,13 +3,13 @@ use crate::binary_transport::PredictionReturnHub;
 use crate::binary_transport::WireCondition;
 use crate::frontend::GenerationLifecycleConfig;
 use crate::frontend::GenerationReceiptConfig;
+use crate::frontend::InferenceGuardrailsConfig;
+use crate::frontend::InferenceGuardrailsStatus;
 use crate::frontend::LinearProposalIngressConfig;
-use crate::frontend::OpenAiGuardrailsConfig;
-use crate::frontend::OpenAiGuardrailsStatus;
 use crate::frontend::admission::GenerationTokenBudget;
 use crate::frontend::generation::GenerationConcurrencyController;
 use crate::frontend::generation::GenerationServiceEstimator;
-use crate::frontend::generation::OpenAiBackendMode;
+use crate::frontend::generation::InferenceBackendMode;
 use crate::frontend::generation::PersistentStageLanePool;
 use crate::frontend::generation::PhaseTimer;
 use crate::frontend::generation::StageOpenAiBackend;
@@ -46,9 +46,9 @@ use axum::middleware::Next;
 use axum::response::Response;
 use serde_json::Value;
 use serde_json::json;
+use skippy_inference_api::InferenceBackend;
+use skippy_inference_api::InferenceHookPolicy;
 use skippy_inference_api::ModelId;
-use skippy_inference_api::OpenAiBackend;
-use skippy_inference_api::OpenAiHookPolicy;
 use skippy_inference_api::thinking::ThinkingControls;
 use skippy_protocol::StageConfig;
 use std::collections::BTreeMap;
@@ -63,7 +63,7 @@ use std::time::Duration;
 /// Serve a caller-owned backend and tokenizer, awaiting all accepted HTTP work on shutdown.
 pub async fn serve_openai_backend_with_shutdown(
     bind_addr: SocketAddr,
-    backend: Arc<dyn OpenAiBackend>,
+    backend: Arc<dyn InferenceBackend>,
     tokenizer: TokenizerCapability,
     telemetry: Telemetry,
     shutdown: impl Future<Output = ()> + Send + 'static,
@@ -117,11 +117,11 @@ pub struct EmbeddedOpenAiArgs {
     pub downstream_wire_condition: WireCondition,
     pub prediction_returns: Option<Arc<PredictionReturnHub>>,
     pub telemetry: Telemetry,
-    pub hook_policy: Option<Arc<dyn OpenAiHookPolicy>>,
+    pub hook_policy: Option<Arc<dyn InferenceHookPolicy>>,
     pub generation_receipt: Option<GenerationReceiptConfig>,
     pub generation_lifecycle: Option<GenerationLifecycleConfig>,
     pub linear_proposal_ingress: Option<LinearProposalIngressConfig>,
-    pub openai_guardrails: Option<OpenAiGuardrailsConfig>,
+    pub openai_guardrails: Option<InferenceGuardrailsConfig>,
     pub kv_lifecycle_observer: Option<Arc<dyn crate::kv_integration::KvLifecycleObserver>>,
     /// Node-scoped durable disk-cache owner supplied by the embedding host.
     /// `None` keeps standalone and cache-disabled launches in-memory only.
@@ -183,13 +183,13 @@ pub struct EmbeddedOpenAiRouter {
 }
 
 pub struct EmbeddedOpenAiBackend {
-    pub backend: Arc<dyn OpenAiBackend>,
+    pub backend: Arc<dyn InferenceBackend>,
     pub model_id: String,
     pub thinking: Option<ThinkingControls>,
     pub generation_concurrency: usize,
     pub generation_queue_capacity: usize,
     pub generation_admission_timeout_secs: u64,
-    pub openai_guardrails: Option<OpenAiGuardrailsStatus>,
+    pub openai_guardrails: Option<InferenceGuardrailsStatus>,
 }
 
 pub fn embedded_openai_router(args: EmbeddedOpenAiArgs) -> Result<EmbeddedOpenAiRouter> {
@@ -290,7 +290,7 @@ fn embedded_openai_backend_with_scheduler(
         policy_arg: "--prefill-chunk-policy",
     })?;
     let mode = if args.config.downstream.is_none() {
-        OpenAiBackendMode::LocalRuntime
+        InferenceBackendMode::LocalRuntime
     } else {
         let lane_pool = PersistentStageLanePool::new(
             &args.config,
@@ -300,7 +300,7 @@ fn embedded_openai_backend_with_scheduler(
         )
         .context("create embedded OpenAI persistent downstream lanes")?;
         let prefill_reply_credit_limit = args.reply_credit_limit.unwrap_or(3);
-        OpenAiBackendMode::EmbeddedStageZero {
+        InferenceBackendMode::EmbeddedStageZero {
             config: args.config.clone(),
             prefill_chunk_policy,
             activation_width: args.activation_width,
@@ -348,7 +348,7 @@ fn embedded_openai_backend_with_scheduler(
             args.telemetry.clone(),
         )?,
     };
-    let backend: Arc<dyn OpenAiBackend> = Arc::new(StageOpenAiBackend {
+    let backend: Arc<dyn InferenceBackend> = Arc::new(StageOpenAiBackend {
         runtime: args.runtime,
         workload: Default::default(),
         config: args.config.clone(),
@@ -378,6 +378,13 @@ fn embedded_openai_backend_with_scheduler(
                 true,
             ))
         }),
+        // Only when the plan declines to state a number. A stated budget,
+        // including a stated zero, is the operator's and is not searched.
+        runahead_governor: args.speculative.verify_window.runahead_auto.then(|| {
+            std::sync::Arc::new(crate::frontend::runahead_search::RunaheadGovernor::new(
+                crate::frontend::runahead_search::RunaheadSearchConfig::default(),
+            ))
+        }),
         speculative: args.speculative,
         generation_limit: Arc::new(match args.adaptive_generation_min_concurrency {
             Some(initial_limit) => GenerationConcurrencyController::adaptive(
@@ -404,7 +411,7 @@ fn embedded_openai_backend_with_scheduler(
     let openai_guardrails = args
         .openai_guardrails
         .as_ref()
-        .map(OpenAiGuardrailsConfig::status);
+        .map(InferenceGuardrailsConfig::status);
     let backend = args
         .openai_guardrails
         .as_ref()
@@ -513,7 +520,7 @@ fn insert_generation_admission_config_attrs(
 }
 
 pub(in crate::frontend) fn instrumented_openai_router(
-    backend: Arc<dyn OpenAiBackend>,
+    backend: Arc<dyn InferenceBackend>,
     tokenizer: TokenizerCapability,
     telemetry: Telemetry,
 ) -> Router {

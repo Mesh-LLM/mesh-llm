@@ -4,8 +4,8 @@ use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
 use anyhow::bail;
-use skippy_inference_api::OpenAiError;
-use skippy_inference_api::OpenAiResult;
+use skippy_inference_api::InferenceError;
+use skippy_inference_api::InferenceResult;
 use skippy_protocol::binary::StageReplyStats;
 use skippy_protocol::binary::WireReplyKind;
 use skippy_protocol::binary::recv_reply;
@@ -349,7 +349,7 @@ pub(super) fn drain_one_embedded_prefill_reply(
     downstream: &mut TcpStream,
     pending_prefill_replies: &mut usize,
     stats: &mut StageReplyStats,
-) -> OpenAiResult<EmbeddedPrefillDrain> {
+) -> InferenceResult<EmbeddedPrefillDrain> {
     if *pending_prefill_replies == 0 {
         return Ok(EmbeddedPrefillDrain::default());
     }
@@ -357,7 +357,7 @@ pub(super) fn drain_one_embedded_prefill_reply(
     let reply = recv_reply(&mut *downstream).map_err(openai_io_error)?;
     let downstream_wait_ms = wait_timer.elapsed_ms();
     if reply.kind != WireReplyKind::Ack {
-        return Err(OpenAiError::backend(format!(
+        return Err(InferenceError::backend(format!(
             "expected deferred prefill ACK from downstream, got {:?}",
             reply.kind
         )));
@@ -375,7 +375,7 @@ pub(super) fn drain_embedded_prefill_replies(
     downstream: &mut TcpStream,
     pending_prefill_replies: &mut usize,
     stats: &mut StageReplyStats,
-) -> OpenAiResult<EmbeddedPrefillDrain> {
+) -> InferenceResult<EmbeddedPrefillDrain> {
     let mut drained = EmbeddedPrefillDrain::default();
     while *pending_prefill_replies > 0 {
         let current = drain_one_embedded_prefill_reply(downstream, pending_prefill_replies, stats)?;

@@ -10,7 +10,7 @@ use mesh_llm_node::serving::{
 use mesh_llm_system::hardware::{self, Metric};
 #[cfg(test)]
 use mesh_llm_types::models::capabilities::ModelCapabilities;
-use skippy_inference_api::{ChatCompletionRequest, ChatMessage, MessageContent, OpenAiBackend};
+use skippy_inference_api::{ChatCompletionRequest, ChatMessage, InferenceBackend, MessageContent};
 use std::collections::{BTreeMap, HashMap};
 use std::io::Write;
 use std::path::Path;
@@ -216,7 +216,9 @@ fn embedded_runtime_options(
 ) -> crate::runtime::EmbeddedRuntimeOptions {
     crate::runtime::EmbeddedRuntimeOptions {
         mode: match config.mode {
-            EmbeddedMeshNodeMode::Serve => crate::runtime::EmbeddedRuntimeMode::Serve,
+            EmbeddedMeshNodeMode::Serve | EmbeddedMeshNodeMode::ServeOnly => {
+                crate::runtime::EmbeddedRuntimeMode::Serve
+            }
             EmbeddedMeshNodeMode::Client => crate::runtime::EmbeddedRuntimeMode::Client,
         },
         models: config.serving.models.clone(),
@@ -912,6 +914,18 @@ mod tests {
         assert!(options.listen_all);
         assert!(!options.enumerate_host);
         assert!(!options.headless);
+    }
+
+    #[test]
+    fn embedded_serve_only_config_retains_serving_runtime() {
+        let config = EmbeddedMeshNodeConfig::builder()
+            .serve_only()
+            .model("Qwen3-8B-Q4_K_M")
+            .build();
+        let options = embedded_runtime_options(&config, None);
+
+        assert_eq!(options.mode, crate::runtime::EmbeddedRuntimeMode::Serve);
+        assert_eq!(options.models, vec!["Qwen3-8B-Q4_K_M".to_string()]);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

@@ -12,7 +12,6 @@ fn terms(id: &str, cap: u64) -> RequestTerms {
         pricing: Pricing {
             input_msat_per_million: 1000,
             output_msat_per_million: 1000,
-            minimum_invoice_msat: 1,
         },
         input_tokens: 10,
         max_output_tokens: 10,

@@ -1,6 +1,6 @@
 import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { MessageRow } from '@/features/chat/components/MessageRow'
 
 describe('MessageRow', () => {
@@ -22,7 +22,7 @@ describe('MessageRow', () => {
     expect(article).toHaveClass('relative', '-mx-2', 'mb-5', 'block', 'w-[calc(100%+16px)]', 'select-none')
     expect(article).not.toHaveClass('focus-visible:outline-accent')
     expect(article).toHaveTextContent('Static response from the mesh')
-    expect(container.querySelector('button')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /inspect/i })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /static response from the mesh/i })).not.toBeInTheDocument()
   })
 
@@ -527,5 +527,87 @@ describe('MessageRow', () => {
 
     expect(screen.queryByText(/sent to/i)).not.toBeInTheDocument()
     expect(screen.queryByText(/routed via/i)).not.toBeInTheDocument()
+  })
+})
+
+describe('MessageRow copy button', () => {
+  function installClipboard(writeText: (text: string) => Promise<void>) {
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText }
+    })
+  }
+
+  afterEach(() => {
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: undefined })
+  })
+
+  it('copies a user message body to the clipboard', async () => {
+    const user = userEvent.setup()
+    const writeText = vi.fn<(text: string) => Promise<void>>().mockResolvedValue(undefined)
+    installClipboard(writeText)
+
+    render(<MessageRow messageRole="user" body="Summarize this mesh status" timestamp="12:10" />)
+
+    await user.click(screen.getByRole('button', { name: 'Copy message' }))
+
+    expect(writeText).toHaveBeenCalledWith('Summarize this mesh status')
+    expect(await screen.findByRole('button', { name: 'Copied message' })).toBeInTheDocument()
+  })
+
+  it('copies only the response segments of an assistant message, excluding thinking', async () => {
+    const user = userEvent.setup()
+    const writeText = vi.fn<(text: string) => Promise<void>>().mockResolvedValue(undefined)
+    installClipboard(writeText)
+
+    render(
+      <MessageRow
+        messageRole="assistant"
+        body={'<think>reasoning about the nodes</think>The mesh has 3 nodes online.'}
+        timestamp="12:11"
+      />
+    )
+
+    await user.click(screen.getByRole('button', { name: 'Copy message' }))
+
+    expect(writeText).toHaveBeenCalledWith('The mesh has 3 nodes online.')
+  })
+
+  it('preserves leading indentation when copying assistant code blocks', async () => {
+    const user = userEvent.setup()
+    const writeText = vi.fn<(text: string) => Promise<void>>().mockResolvedValue(undefined)
+    installClipboard(writeText)
+
+    render(
+      <MessageRow
+        messageRole="assistant"
+        body={'<think>reasoning</think>\n\n    first()\n    second()'}
+        timestamp="12:11"
+      />
+    )
+
+    await user.click(screen.getByRole('button', { name: 'Copy message' }))
+
+    expect(writeText).toHaveBeenCalledWith('    first()\n    second()')
+  })
+
+  it('hides the copy button while the response is streaming', () => {
+    render(<MessageRow messageRole="assistant" body="Partial response" timestamp="12:12" state="streaming" />)
+
+    expect(screen.queryByRole('button', { name: /copy message/i })).not.toBeInTheDocument()
+  })
+
+  it('reports a failed clipboard write in the button label', async () => {
+    const user = userEvent.setup()
+    const writeText = vi
+      .fn<(text: string) => Promise<void>>()
+      .mockRejectedValue(new DOMException('Blocked', 'NotAllowedError'))
+    installClipboard(writeText)
+
+    render(<MessageRow messageRole="assistant" body="Response that cannot be copied" timestamp="12:13" />)
+
+    await user.click(screen.getByRole('button', { name: 'Copy message' }))
+
+    expect(await screen.findByRole('button', { name: 'Copy message failed' })).toBeInTheDocument()
   })
 })

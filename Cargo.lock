@@ -4688,9 +4688,12 @@ name = "mesh-llm-ffi"
 version = "0.78.0"
 dependencies = [
  "mesh-llm-sdk",
+ "reqwest 0.13.5",
+ "serde_json",
  "thiserror 2.0.21",
  "tokio",
  "uniffi",
+ "uuid",
 ]
 
 [[package]]
@@ -4762,6 +4765,7 @@ dependencies = [
  "sha2 0.11.0",
  "skippy-api",
  "skippy-cache",
+ "skippy-commands",
  "skippy-coordinator",
  "skippy-events",
  "skippy-ffi",
@@ -4849,6 +4853,7 @@ dependencies = [
  "mesh-llm-protocol",
  "mesh-llm-routing",
  "mesh-llm-types",
+ "prost",
  "rand 0.10.2",
  "semver",
  "serde",
@@ -4894,8 +4899,10 @@ dependencies = [
  "napi",
  "napi-build",
  "napi-derive",
+ "reqwest 0.13.5",
  "serde_json",
  "tokio",
+ "uuid",
 ]
 
 [[package]]
@@ -5018,14 +5025,13 @@ name = "mesh-llm-sdk"
 version = "0.78.0"
 dependencies = [
  "anyhow",
- "mesh-llm-api-client",
- "mesh-llm-api-server",
  "mesh-llm-console-server",
  "mesh-llm-embedded-runtime",
  "reqwest 0.13.5",
  "serde",
  "serde_json",
  "skippy-runtime-install",
+ "tokio",
 ]
 
 [[package]]

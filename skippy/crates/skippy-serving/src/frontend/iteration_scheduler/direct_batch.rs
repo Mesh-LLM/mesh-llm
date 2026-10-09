@@ -1,5 +1,5 @@
 use super::{DirectIteration, MAX_NATIVE_ITERATION_TOKENS};
-use skippy_inference_api::{OpenAiError, OpenAiResult};
+use skippy_inference_api::{InferenceError, InferenceResult};
 use std::collections::{BTreeSet, VecDeque};
 
 pub(super) fn should_serve_direct(
@@ -130,20 +130,20 @@ pub(super) fn validate_direct_iteration(
     token_ids: &[i32],
     positions: &[i32],
     max_iteration_tokens: usize,
-) -> OpenAiResult<()> {
+) -> InferenceResult<()> {
     if token_ids.is_empty() {
-        return Err(OpenAiError::invalid_request(
+        return Err(InferenceError::invalid_request(
             "scheduler iteration requires at least one token",
         ));
     }
     let token_limit = max_iteration_tokens.min(MAX_NATIVE_ITERATION_TOKENS);
     if token_ids.len() > token_limit {
-        return Err(OpenAiError::invalid_request(format!(
+        return Err(InferenceError::invalid_request(format!(
             "scheduler iteration exceeds the {token_limit}-token configured iteration limit"
         )));
     }
     if !positions.is_empty() && !positions.len().is_multiple_of(token_ids.len()) {
-        return Err(OpenAiError::invalid_request(
+        return Err(InferenceError::invalid_request(
             "scheduler iteration positions must be empty or token-major",
         ));
     }

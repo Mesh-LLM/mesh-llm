@@ -1,6 +1,6 @@
 use std::net::TcpStream;
 
-use skippy_inference_api::{OpenAiError, OpenAiResult};
+use skippy_inference_api::{InferenceError, InferenceResult};
 use skippy_protocol::binary::{StageNativeMtpDraft, WireReplyKind};
 
 use crate::frontend::embedded_execution::VerifyRetirement;
@@ -66,8 +66,8 @@ impl StageOpenAiBackend {
         decode_forward_write_ms: &mut f64,
         decode_downstream_wait_ms: &mut f64,
         // Token emission callback
-        on_token: &mut impl FnMut(i32) -> OpenAiResult<TokenControl>,
-    ) -> OpenAiResult<NativeMtpVerifyWindowControl> {
+        on_token: &mut impl FnMut(i32) -> InferenceResult<TokenControl>,
+    ) -> InferenceResult<NativeMtpVerifyWindowControl> {
         let verify_window_timer = self.telemetry.is_debug_enabled().then(PhaseTimer::start);
         let native_mtp_remaining = (request.max_tokens as usize).saturating_sub(*decoded_tokens);
         let native_mtp_draft_origin = pending_native_mtp_draft.as_ref().map(|draft| draft.origin);
@@ -150,7 +150,7 @@ impl StageOpenAiBackend {
         )?;
         let completed = verify_window_scheduler.complete_next(verify.reply.window.window_id)?;
         if completed != window {
-            return Err(OpenAiError::backend(
+            return Err(InferenceError::backend(
                 "verify window scheduler lost FIFO state",
             ));
         }

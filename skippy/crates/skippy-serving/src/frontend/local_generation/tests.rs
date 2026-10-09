@@ -8,8 +8,8 @@ use super::token_generation::capture_trace;
 use crate::frontend::SpeculativeDecodeConfig;
 use crate::frontend::admission::GenerationTokenBudget;
 use crate::frontend::generation::{
-    GenerationConcurrencyController, LocalGeneration, OpenAiBackendMode, OpenAiCacheHints,
-    OpenAiGenerationIds, StageOpenAiBackend, TokenControl,
+    GenerationConcurrencyController, InferenceBackendMode, InferenceCacheHints,
+    InferenceGenerationIds, LocalGeneration, StageOpenAiBackend, TokenControl,
 };
 use crate::frontend::iteration_scheduler::IterationScheduler;
 use crate::frontend::local_generation::{
@@ -24,7 +24,7 @@ use crate::kv_integration::KvStageIntegration;
 use crate::runtime_state::{RuntimeState, load_runtime};
 use crate::telemetry::{Telemetry, TelemetryLevel};
 use anyhow::{Result, bail};
-use skippy_inference_api::{ChatCompletionRequest, OpenAiBackend};
+use skippy_inference_api::{ChatCompletionRequest, InferenceBackend};
 use skippy_protocol::{
     LoadMode, StageConfig, StageKvCacheConfig, StageKvCacheMode, StageKvCachePayload,
 };
@@ -264,13 +264,14 @@ fn recurrent_test_backend(
         request_defaults: EmbeddedOpenAiRequestDefaults::default(),
         thinking: None,
         ctx_size,
-        mode: OpenAiBackendMode::LocalRuntime,
+        mode: InferenceBackendMode::LocalRuntime,
         draft: None,
         speculative_window: 0,
         adaptive_speculative_window: false,
         ngram_max: 0,
         speculative: speculative.clone(),
         speculation_governor: None,
+        runahead_governor: None,
         generation_limit: Arc::new(GenerationConcurrencyController::fixed(1)),
         generation_queue_depth: Arc::new(AtomicUsize::new(0)),
         generation_queue_limit: 1,
@@ -320,13 +321,14 @@ fn local_generation_signal_window_uses_configured_value() {
         request_defaults: EmbeddedOpenAiRequestDefaults::default(),
         thinking: None,
         ctx_size: 4096,
-        mode: OpenAiBackendMode::LocalRuntime,
+        mode: InferenceBackendMode::LocalRuntime,
         draft: None,
         speculative_window: 0,
         adaptive_speculative_window: false,
         ngram_max: 0,
         speculative: SpeculativeDecodeConfig::default(),
         speculation_governor: None,
+        runahead_governor: None,
         generation_limit: Arc::new(GenerationConcurrencyController::fixed(1)),
         generation_queue_depth: Arc::new(AtomicUsize::new(0)),
         generation_queue_limit: 1,
@@ -397,8 +399,8 @@ fn recurrent_post_decode_checkpoint_reuses_a_growing_prompt() -> Result<()> {
     )?;
     let sampling = SamplingConfig::default();
     let first_prompt = [1, 2, 3];
-    let first_ids = OpenAiGenerationIds::new_with_trust(
-        OpenAiCacheHints::default(),
+    let first_ids = InferenceGenerationIds::new_with_trust(
+        InferenceCacheHints::default(),
         Some("recurrent-cache-test"),
         true,
         None,
@@ -462,8 +464,8 @@ fn recurrent_post_decode_checkpoint_reuses_a_growing_prompt() -> Result<()> {
         first_output[0],
         4,
     ];
-    let second_ids = OpenAiGenerationIds::new_with_trust(
-        OpenAiCacheHints::default(),
+    let second_ids = InferenceGenerationIds::new_with_trust(
+        InferenceCacheHints::default(),
         Some("recurrent-cache-test"),
         true,
         None,
@@ -803,13 +805,14 @@ fn local_generation_eventually_delivers_receipts_and_cleanup_survives_sink_error
         request_defaults: EmbeddedOpenAiRequestDefaults::default(),
         thinking: None,
         ctx_size: 128,
-        mode: OpenAiBackendMode::LocalRuntime,
+        mode: InferenceBackendMode::LocalRuntime,
         draft: None,
         speculative_window: 0,
         adaptive_speculative_window: false,
         ngram_max: 0,
         speculative: speculative.clone(),
         speculation_governor: None,
+        runahead_governor: None,
         generation_limit: Arc::new(GenerationConcurrencyController::fixed(1)),
         generation_queue_depth: Arc::new(AtomicUsize::new(0)),
         generation_queue_limit: 1,
@@ -829,7 +832,8 @@ fn local_generation_eventually_delivers_receipts_and_cleanup_survives_sink_error
     // above one token so the test exercises a fresh runtime session before
     // its batch size is queried.
     let prompt_token_ids = [1, 2];
-    let ids = OpenAiGenerationIds::new_with_trust(OpenAiCacheHints::default(), None, false, None);
+    let ids =
+        InferenceGenerationIds::new_with_trust(InferenceCacheHints::default(), None, false, None);
     let mut emitted = Vec::new();
     backend.generate_local_tokens(
         LocalGeneration {
@@ -885,7 +889,7 @@ fn local_generation_eventually_delivers_receipts_and_cleanup_survives_sink_error
 
     sink.fail.store(true, Ordering::Relaxed);
     let failing_ids =
-        OpenAiGenerationIds::new_with_trust(OpenAiCacheHints::default(), None, false, None);
+        InferenceGenerationIds::new_with_trust(InferenceCacheHints::default(), None, false, None);
     backend.generate_local_tokens(
         LocalGeneration {
             prompt_token_ids: &prompt_token_ids,

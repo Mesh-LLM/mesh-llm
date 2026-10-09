@@ -25,10 +25,10 @@ index 0ebe0b7e9..994f462df 100644
      }
      gguf_context_ptr output(gguf_init_empty());
 diff --git a/tests/test-llama-archs.cpp b/tests/test-llama-archs.cpp
-index e1c04709b..e095961bd 100644
+index 320822b16..5ed9c53c9 100644
 --- a/tests/test-llama-archs.cpp
 +++ b/tests/test-llama-archs.cpp
-@@ -252,7 +252,7 @@ static gguf_context_ptr get_gguf_ctx(
+@@ -268,7 +268,7 @@ static gguf_context_ptr get_gguf_ctx(
      if (arch == LLM_ARCH_DEEPSEEK4) {
          ms.add_kv(LLM_KV_ATTENTION_KEY_LENGTH,   n_embd_head);
          ms.add_kv(LLM_KV_ATTENTION_VALUE_LENGTH, n_embd_head);
@@ -37,7 +37,7 @@ index e1c04709b..e095961bd 100644
      } else if (arch == LLM_ARCH_DEEPSEEK2
              || arch == LLM_ARCH_DEEPSEEK32
              || arch == LLM_ARCH_GLM_DSA
-@@ -420,13 +420,16 @@ static gguf_context_ptr get_gguf_ctx(
+@@ -436,13 +436,16 @@ static gguf_context_ptr get_gguf_ctx(
      }
  
      if (arch == LLM_ARCH_DEEPSEEK4) {

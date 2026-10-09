@@ -23,8 +23,9 @@ mod prefill;
 mod prefix_cache;
 mod prompting;
 mod request;
+pub mod runahead_search;
 mod sampling_cache_key;
-pub mod speculation_gate;
+mod speculation_gate;
 mod speculative;
 mod system_one;
 mod token_counting;
@@ -60,7 +61,8 @@ pub use self::generation_receipt::{
     GenerationStateDigest, GenerationTermination, generation_token_id_digest,
 };
 pub use self::guardrails::{
-    OpenAiGuardrailsConfig, OpenAiGuardrailsMode, OpenAiGuardrailsStatus, OpenAiGuardrailsTarget,
+    InferenceGuardrailsConfig, InferenceGuardrailsMode, InferenceGuardrailsStatus,
+    InferenceGuardrailsTarget,
 };
 pub use self::linear_proposal::{
     LinearProposal, LinearProposalDiscardReason, LinearProposalDisposition, LinearProposalIngress,

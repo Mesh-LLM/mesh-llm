@@ -433,7 +433,7 @@ fn handle_binary_connection_messages(
                         align_target,
                     )
                     .map_err(|error| {
-                        skippy_inference_api::OpenAiError::backend(format!("{error:#}"))
+                        skippy_inference_api::InferenceError::backend(format!("{error:#}"))
                     })?;
                     let lookup_result = maybe_lookup_binary_prefill(
                         &lookup_config,
@@ -601,7 +601,7 @@ fn handle_binary_connection_messages(
                                 runtime.output_activation_boundary(),
                             )
                             .map_err(|error| {
-                                skippy_inference_api::OpenAiError::backend(format!("{error:#}"))
+                                skippy_inference_api::InferenceError::backend(format!("{error:#}"))
                             })?;
                             let auto_align = if align_in_compute {
                                 align_session_to_target(
@@ -611,7 +611,9 @@ fn handle_binary_connection_messages(
                                     align_target,
                                 )
                                 .map_err(|error| {
-                                    skippy_inference_api::OpenAiError::backend(format!("{error:#}"))
+                                    skippy_inference_api::InferenceError::backend(format!(
+                                        "{error:#}"
+                                    ))
                                 })?
                             } else {
                                 Default::default()
@@ -627,7 +629,7 @@ fn handle_binary_connection_messages(
                                         eviction_plan,
                                     )
                                     .map_err(|error| {
-                                        skippy_inference_api::OpenAiError::backend(format!(
+                                        skippy_inference_api::InferenceError::backend(format!(
                                             "{error:#}"
                                         ))
                                     })?,
@@ -648,7 +650,7 @@ fn handle_binary_connection_messages(
                                 ),
                             )
                             .map_err(|error| {
-                                skippy_inference_api::OpenAiError::backend(format!("{error:#}"))
+                                skippy_inference_api::InferenceError::backend(format!("{error:#}"))
                             })?;
                             let sessions_after =
                                 collect_session_stats.then(|| runtime.session_stats());

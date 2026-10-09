@@ -76,6 +76,14 @@ pub(crate) struct SplitReadinessReport {
     pub(crate) exclusions: Vec<SplitReadinessExclusion>,
     pub(crate) blockers: Vec<SplitReadinessBlocker>,
     pub(crate) recommendations: Vec<String>,
+    /// What `--strategy` composed on this node, and what it deferred on.
+    ///
+    /// #2112 scoped a resolved-plan report "at startup and in `mesh-llm doctor
+    /// split`" and only the startup half was built, which left the composition
+    /// visible solely in a `tracing::info!` nobody looking at a slow split
+    /// would think to read. Absent when no strategy was named.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) serving_strategy: Option<crate::api::status::ServingStrategyPayload>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -198,6 +206,7 @@ pub(crate) fn build_split_readiness_report(input: SplitReadinessInput) -> SplitR
         exclusions,
         blockers,
         recommendations,
+        serving_strategy: crate::api::status::build_serving_strategy_payload(),
     }
 }
 

@@ -1,6 +1,6 @@
 use std::collections::VecDeque;
 
-use skippy_inference_api::{OpenAiError, OpenAiResult};
+use skippy_inference_api::{InferenceError, InferenceResult};
 
 use super::NativeMtpDecodeOptions;
 use crate::frontend::speculative::HistoryNgramProposer;
@@ -33,7 +33,7 @@ impl CompositeProposalProvider {
         max_proposal_tokens: usize,
         max_ngram_tokens: usize,
         cached_ngram_proposer: Option<&mut HistoryNgramProposer>,
-    ) -> OpenAiResult<NativeMtpHybridProposal> {
+    ) -> InferenceResult<NativeMtpHybridProposal> {
         let native_mtp_tokens =
             &native_mtp_tokens[..native_mtp_tokens.len().min(max_proposal_tokens)];
         if !self.enabled || self.max_proposal_tokens == 0 || max_ngram_tokens == 0 {
@@ -338,15 +338,15 @@ pub(in crate::frontend) fn classify_native_mtp_verify_window<F>(
     generated_len: usize,
     max_new_tokens: usize,
     mut token_is_eog: F,
-) -> OpenAiResult<NativeMtpVerifyWindowDecision>
+) -> InferenceResult<NativeMtpVerifyWindowDecision>
 where
-    F: FnMut(i32) -> OpenAiResult<bool>,
+    F: FnMut(i32) -> InferenceResult<bool>,
 {
     let required_predictions = proposal_tokens.len().saturating_add(1);
     let mut accepted_proposal_tokens = 0usize;
     for (index, proposal_token) in proposal_tokens.iter().enumerate() {
         let Some(&predicted) = predicted_tokens.get(index) else {
-            return Err(OpenAiError::backend(format!(
+            return Err(InferenceError::backend(format!(
                 "native MTP verify window ended before a decision: got {} predictions after accepting {accepted_proposal_tokens} proposal tokens",
                 predicted_tokens.len()
             )));
@@ -371,7 +371,7 @@ where
     }
 
     if predicted_tokens.len() < required_predictions {
-        return Err(OpenAiError::backend(format!(
+        return Err(InferenceError::backend(format!(
             "native MTP verify window omitted the boundary token after accepting every proposal token: got {} expected {required_predictions}",
             predicted_tokens.len()
         )));

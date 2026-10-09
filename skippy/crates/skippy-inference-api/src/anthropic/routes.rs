@@ -21,16 +21,16 @@ use crate::anthropic::translate::{
     messages_response_from_chat_response, translate_stream_error_body,
 };
 use crate::backend_lifecycle::call_backend_with_context;
-use crate::errors::OpenAiError;
-use crate::lifecycle::{OpenAiBackendOperation, OpenAiLifecycleContext, RequestId};
+use crate::errors::InferenceError;
+use crate::lifecycle::{InferenceBackendOperation, InferenceLifecycleContext, RequestId};
 use crate::router::{FrontendState, agent_session_from_header, json_payload, request_context};
 use crate::stream_lifecycle::{observe_backend_stream, sse_response};
 
 /// Renders backend/lifecycle failures in the Anthropic error envelope.
-pub(crate) struct AnthropicRejection(OpenAiError);
+pub(crate) struct AnthropicRejection(InferenceError);
 
-impl From<OpenAiError> for AnthropicRejection {
-    fn from(error: OpenAiError) -> Self {
+impl From<InferenceError> for AnthropicRejection {
+    fn from(error: InferenceError) -> Self {
         Self(error)
     }
 }
@@ -54,7 +54,7 @@ impl IntoResponse for AnthropicRejection {
 /// `POST /v1/messages` — non-streaming JSON or Anthropic SSE stream.
 pub(crate) async fn messages(
     State(state): State<FrontendState>,
-    Extension(context): Extension<OpenAiLifecycleContext>,
+    Extension(context): Extension<InferenceLifecycleContext>,
     headers: HeaderMap,
     payload: Result<
         Json<crate::anthropic::protocol::AnthropicMessagesRequest>,
@@ -77,7 +77,7 @@ pub(crate) async fn messages(
 
 async fn non_streaming_messages(
     state: &FrontendState,
-    context: OpenAiLifecycleContext,
+    context: InferenceLifecycleContext,
     request: crate::chat::ChatCompletionRequest,
     trusted_agent_session: bool,
 ) -> Result<Response, AnthropicRejection> {
@@ -85,7 +85,7 @@ async fn non_streaming_messages(
     let response = call_backend_with_context(
         state.config.lifecycle_observer.clone(),
         &context,
-        OpenAiBackendOperation::Messages,
+        InferenceBackendOperation::Messages,
         "messages",
         state.config.backend_timeout,
         &backend_context,
@@ -94,7 +94,11 @@ async fn non_streaming_messages(
             .chat_completion_with_context(request, backend_context.clone()),
     )
     .await?;
-    state.response_completed(&context, OpenAiBackendOperation::Messages, &response.usage);
+    state.response_completed(
+        &context,
+        InferenceBackendOperation::Messages,
+        &response.usage,
+    );
     let translated = messages_response_from_chat_response(&response)?;
     let mut http_response = crate::router::json_response_with_usage(translated, &response.usage);
     if let Some(marker) = response.capsule_marker {
@@ -107,7 +111,7 @@ async fn non_streaming_messages(
 
 async fn streaming_messages(
     state: &FrontendState,
-    context: OpenAiLifecycleContext,
+    context: InferenceLifecycleContext,
     request: crate::chat::ChatCompletionRequest,
     trusted_agent_session: bool,
 ) -> Result<Response, AnthropicRejection> {
@@ -118,7 +122,7 @@ async fn streaming_messages(
     let stream = call_backend_with_context(
         state.config.lifecycle_observer.clone(),
         &context,
-        OpenAiBackendOperation::MessagesStream,
+        InferenceBackendOperation::MessagesStream,
         "messages_stream",
         state.config.backend_timeout,
         &backend_context,
@@ -127,7 +131,7 @@ async fn streaming_messages(
             .chat_completion_stream(request, backend_context.clone()),
     )
     .await?;
-    let lifecycle = state.stream_lifecycle(context, OpenAiBackendOperation::MessagesStream);
+    let lifecycle = state.stream_lifecycle(context, InferenceBackendOperation::MessagesStream);
     let stream = observe_backend_stream(stream, lifecycle.clone());
 
     let prelude = stream::once(async move {
@@ -239,7 +243,7 @@ impl AnthropicMessagesStreamEvent {
 /// Count with the selected backend tokenizer and its generation chat template.
 pub(crate) async fn messages_count_tokens(
     State(state): State<FrontendState>,
-    Extension(context): Extension<OpenAiLifecycleContext>,
+    Extension(context): Extension<InferenceLifecycleContext>,
     headers: HeaderMap,
     payload: Result<
         Json<super::protocol::AnthropicCountTokensRequest>,
@@ -255,7 +259,7 @@ pub(crate) async fn messages_count_tokens(
     let count = call_backend_with_context(
         state.config.lifecycle_observer.clone(),
         &context,
-        OpenAiBackendOperation::MessagesCountTokens,
+        InferenceBackendOperation::MessagesCountTokens,
         "messages_count_tokens",
         state.config.backend_timeout,
         &backend_context,

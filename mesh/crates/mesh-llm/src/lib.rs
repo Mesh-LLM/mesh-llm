@@ -603,7 +603,14 @@ fn speculative_overrides_from_cli(
     overrides.verify_window_min_tokens = cli.speculative_verify_window_min_tokens;
     overrides.verify_window_max_tokens = cli.speculative_verify_window_max_tokens;
     overrides.verify_window_pipeline_depth = cli.speculative_verify_window_pipeline_depth;
-    overrides.verify_window_runahead_tokens = cli.speculative_verify_window_runahead_tokens;
+    // The flag stays a number. It is a mechanism override — "use exactly this
+    // budget" — and the whole point of an override is to assert a value. `auto`
+    // is the absence of an assertion, so it is reachable through the config file
+    // and through `--strategy interactive`, which is what composes it.
+    overrides.verify_window_runahead_tokens =
+        cli.speculative_verify_window_runahead_tokens.map(|tokens| {
+            mesh_llm_host_runtime::sdk::config::IntegerOrString::Integer(i64::from(tokens))
+        });
     overrides.ngram_fallback = cli
         .speculative_ngram_fallback
         .map(|fallback| fallback.as_str().to_string());

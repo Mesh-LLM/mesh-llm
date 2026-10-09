@@ -701,7 +701,7 @@ pub struct SpeculativeConfig {
     pub verify_window_min_tokens: Option<u32>,
     pub verify_window_max_tokens: Option<u32>,
     pub verify_window_pipeline_depth: Option<u32>,
-    pub verify_window_runahead_tokens: Option<u32>,
+    pub verify_window_runahead_tokens: Option<IntegerOrString>,
     pub ngram_fallback: Option<String>,
     /// Closed-loop speculation gating: measure whether speculation pays and
     /// stand it down when it does not. See #2112 workstream 5.
@@ -841,7 +841,7 @@ struct SpeculativeConfigRaw {
     #[serde(default)]
     verify_window_pipeline_depth: Option<u32>,
     #[serde(default)]
-    verify_window_runahead_tokens: Option<u32>,
+    verify_window_runahead_tokens: Option<IntegerOrString>,
     #[serde(default)]
     ngram_fallback: Option<String>,
     #[serde(default)]

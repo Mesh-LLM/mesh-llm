@@ -33,7 +33,7 @@ pub(super) async fn attach_prices(
             if mesh::routes_http_model(peer, base) {
                 offers.push(offer(
                     &peer.id.to_string(),
-                    peer.lightning_offers.get(base),
+                    mesh::payments::peer_offer_for_model(peer, base),
                     Some(peer.last_seen.elapsed().as_secs()),
                     false,
                 ));
@@ -99,7 +99,6 @@ mod tests {
                     mesh_llm_payments_types::pricing::Pricing {
                         input_msat_per_million: 10,
                         output_msat_per_million: 20,
-                        minimum_invoice_msat: 1000,
                     },
                 );
             }
@@ -159,18 +158,70 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn listing_finds_offers_priced_under_the_runtime_name() -> anyhow::Result<()> {
+        let node = mesh::Node::new_for_tests(mesh::NodeRole::Client).await?;
+        let paid = mesh::Node::new_for_tests(mesh::NodeRole::Host { http_port: 0 }).await?;
+        let descriptor = mesh::ServedModelDescriptor {
+            identity: mesh::ServedModelIdentity {
+                model_name: "falcon-runtime".to_string(),
+                source_kind: mesh::ModelSourceKind::HuggingFace,
+                repository: Some("tiiuae/Falcon-H1-1.5B-Instruct-GGUF".to_string()),
+                artifact: Some("Falcon-H1-1.5B-Instruct-Q4_K_M.gguf".to_string()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let public_id = mesh::public_model_id_from_identity(&descriptor.identity)
+            .expect("a Hugging Face descriptor has a public ID");
+        assert_ne!(public_id, "falcon-runtime");
+        paid.set_models(vec!["falcon-runtime".into()]).await;
+        paid.set_hosted_models(vec!["falcon-runtime".into()]).await;
+        paid.set_serving_models(vec!["falcon-runtime".into()]).await;
+        paid.set_served_model_descriptors(vec![descriptor]).await;
+        let mut announcement =
+            paid.build_local_announcement(paid.snapshot_local_announcement_data().await);
+        announcement.lightning_offers.insert(
+            "falcon-runtime".into(),
+            mesh_llm_payments_types::pricing::Pricing {
+                input_msat_per_million: 10,
+                output_msat_per_million: 20,
+            },
+        );
+        node.add_peer_after_direct_requirements_validated(
+            paid.id(),
+            paid.endpoint.addr(),
+            &announcement,
+            Some(1),
+        )
+        .await;
+        node.update_peer_rtt(paid.id(), 1).await;
+
+        let mut body = json!({"data":[{"id": public_id}]});
+        attach_prices(&mut body, std::slice::from_ref(&public_id), &[], &node).await;
+        assert_eq!(body["data"][0]["payment"]["paid_available"], true);
+        assert_eq!(body["data"][0]["payment"]["free_available"], false);
+        assert!(
+            node.peer_payment_offer(paid.id(), &public_id)
+                .await
+                .is_some()
+        );
+
+        node.endpoint.close().await;
+        paid.endpoint.close().await;
+        Ok(())
+    }
+
     #[test]
     fn same_model_can_describe_free_and_paid_providers() {
         let price = mesh_llm_payments_types::pricing::Pricing {
             input_msat_per_million: 10,
             output_msat_per_million: 20,
-            minimum_invoice_msat: 1000,
         };
         let free = offer("free", None, Some(3), false);
         let paid = offer("paid", Some(&price), Some(1), false);
         assert_eq!(free["paid"], false);
         assert_eq!(paid["paid"], true);
-        assert_eq!(paid["pricing"]["minimum_invoice_msat"], 1000);
         assert_eq!(paid["pricing"]["input_msat_per_million"], 10);
     }
 }

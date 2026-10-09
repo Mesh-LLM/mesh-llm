@@ -9,9 +9,9 @@ use skippy_inference_api::ChatCompletionResponse;
 use skippy_inference_api::ChatHookAction;
 use skippy_inference_api::ChatHookOutcome;
 use skippy_inference_api::FinishReason;
+use skippy_inference_api::InferenceError;
+use skippy_inference_api::InferenceResult;
 use skippy_inference_api::MessageContent;
-use skippy_inference_api::OpenAiError;
-use skippy_inference_api::OpenAiResult;
 use skippy_runtime::ChatReasoningFormat;
 use skippy_runtime::ChatTemplateOptions;
 use skippy_runtime::GenerationSignalWindow;
@@ -21,13 +21,13 @@ use std::collections::BTreeMap;
 pub(in crate::frontend) fn ensure_requested_model(
     advertised_model_id: &str,
     requested: &str,
-) -> OpenAiResult<()> {
+) -> InferenceResult<()> {
     if requested == advertised_model_id
         || strip_default_revision(requested) == strip_default_revision(advertised_model_id)
     {
         Ok(())
     } else {
-        Err(OpenAiError::model_not_found(requested))
+        Err(InferenceError::model_not_found(requested))
     }
 }
 
@@ -410,9 +410,9 @@ pub(in crate::frontend) fn chat_message_generation_value(
     message: &skippy_inference_api::ChatMessage,
     marker: &str,
     media: &mut Vec<MediaInput>,
-) -> OpenAiResult<Value> {
+) -> InferenceResult<Value> {
     let mut value = serde_json::to_value(message)
-        .map_err(|error| OpenAiError::invalid_request(format!("serialize message: {error}")))?;
+        .map_err(|error| InferenceError::invalid_request(format!("serialize message: {error}")))?;
     let content = match message.content.as_ref() {
         Some(MessageContent::Other(Value::Null)) | None => None,
         Some(content) => Some(message_content_to_generation_text(content, marker, media)?),

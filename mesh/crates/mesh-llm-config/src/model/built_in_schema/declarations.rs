@@ -365,7 +365,7 @@ fn model_fit_settings(
         hidden_setting(
             &format!("{prefix}.kv_unified"),
             bool_or_auto_schema(),
-            "Legacy setting: Skippy always uses unified KV; false is rejected",
+            "Unified KV selection: auto derives from lane count; false requests separate per-sequence KV",
         ),
         basic_setting(
             &format!("{prefix}.cache_ram_mib"),
@@ -809,7 +809,7 @@ fn speculative_settings(prefix: &str) -> Vec<ConfigSettingSchema> {
         ),
         basic_setting(
             &format!("{prefix}.verify_window_runahead_tokens"),
-            ConfigValueSchema::Integer,
+            integer_or_auto_schema(),
         ),
         basic_setting(&format!("{prefix}.ngram_fallback"), ConfigValueSchema::String),
         basic_setting(&format!("{prefix}.gate"), bool_or_auto_schema()),

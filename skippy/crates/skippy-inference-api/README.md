@@ -1,14 +1,16 @@
 # skippy-inference-api
 
-Reusable OpenAI-compatible HTTP frontend primitives for mesh and staged runtime
-entry points.
+Reusable inference HTTP frontend primitives for mesh and staged runtime entry
+points. The router serves OpenAI-compatible routes, Anthropic Messages, and
+SystemOne through one backend and lifecycle contract.
 
 This crate owns the public API shapes and route machinery that should not be
 duplicated inside `skippy-serving`. Stage server code should provide a thin
 backend adapter that implements the frontend trait, while this crate handles
 request/response JSON, OpenAI-style errors, model discovery, generation,
-embedding, rerank, audio, and streaming Server-Sent Events framing. Mesh uses this as the single OpenAI
-surface for embedded single-stage and stage-split serving.
+embedding, rerank, audio, and streaming Server-Sent Events framing. Mesh uses
+this as the shared inference frontend for embedded single-stage and stage-split
+serving.
 
 Mesh-local compatibility wrappers should stay thin. Request normalization,
 Responses API translation, stream-chunk parsing, stream usage conversion, and
@@ -31,13 +33,16 @@ For the concrete benchy command and contract, see
 | `POST /v1/chat/completions` | Supported | Handles streaming and non-streaming response shapes. |
 | `POST /v1/completions` | Supported | Handles streaming and non-streaming response shapes. |
 | `POST /v1/responses` | Supported | Adapts OpenAI responses requests onto chat/completion backend calls and preserves response metadata where possible. |
+| `POST /v1/messages` | Supported | Translates Anthropic Messages requests through the shared chat backend and returns Anthropic JSON or SSE. |
+| `POST /v1/messages/count_tokens` | Supported | Uses the shared backend token counting operation. |
+| `POST /systemone` | Backend-gated | Dispatches to the backend's `system_one` operation; the default implementation reports unsupported. |
 | `POST /v1/embeddings` | Supported | String and token inputs, float or base64 vectors, usage accounting. Runtime support is model-gated. |
 | `POST /v1/rerank` | Supported | Cross-encoder query/document scoring with optional document return. Runtime support is model-gated. |
 | `POST /v1/audio/speech` | Supported | Binary response with format-specific content type. The native backend currently produces WAV or PCM and accepts only `voice: "default"`; speaker selection fails with a structured unsupported error. |
 | `POST /v1/audio/transcriptions` | Supported | Bounded multipart audio upload with JSON or text response. Runtime support is model-gated. |
 | `POST /v1/audio/translations` | Supported | Bounded multipart audio upload translated to English, with JSON or text response. Runtime support is model-gated. |
 | `GET /health` / `GET /healthz` | Supported | Lightweight liveness probes for hosts and CI smoke tests. |
-| `GET /readyz` | Supported | Backend readiness probe that verifies model discovery through `OpenAiBackend::models`. |
+| `GET /readyz` | Supported | Backend readiness probe that verifies model discovery through `InferenceBackend::models`. |
 | Server-Sent Events | Supported | Emits OpenAI-style JSON chunks and `[DONE]`. |
 | `model` | Supported | Opaque exact-match id; Mesh-style refs such as `org/repo:Q4_K_M` pass through without frontend parsing. |
 | `messages` | Supported | String and text-part content are parsed; stage backend applies the model chat template through llama.cpp `llama-common`. |
@@ -52,10 +57,10 @@ For the concrete benchy command and contract, see
 | `response_format` | Frontend-compatible | Text and structured-output shapes are parsed and preserved. Backend decides whether constrained decoding is available. |
 | OpenAI-style error envelope | Supported | Includes strict `type`, `param`, and `code` fields. |
 | OpenAI-style HTTP fallbacks | Supported | Unknown routes, unsupported methods, invalid JSON, and oversized JSON return the shared error envelope. |
-| Request body limit | Supported | Configurable via `OpenAiFrontendConfig`; defaults to 4 MiB. |
+| Request body limit | Supported | Configurable via `InferenceFrontendConfig`; defaults to 4 MiB. |
 | Request IDs | Supported | Reuses only a valid UUID `x-request-id`; missing or invalid values are replaced with a generated UUID. Every response returns the canonical hyphenated UUID and the frontend emits a tracing event with method, URI, status, and request ID. |
 | Client nonce | Supported | Accepts `x-capsule-client-nonce` only when it is exactly one valid UUIDv4; a missing, invalid, non-UUIDv4, or duplicated value is replaced with a freshly minted UUIDv4. When this frontend mints the value it stamps `x-capsule-nonce-origin: frontend`; a forwarded (client-supplied) nonce carries no origin marker, and any inbound `x-capsule-nonce-origin` is always stripped so a caller cannot forge it. Both headers are echoed on covered responses: the axum router and, via the host runtime's forwarding rebuild, the public `:9337` proxy JSON/SSE paths (including the pipeline/MoA strong-model path and remapped upstream error responses). Locally synthesized error responses (e.g. no-target `503`s and `/v1/models` listings) do not yet carry the headers; threading the request nonce onto those senders is a cross-cutting signature change tracked as a follow-up. The origin marker asserts only that *this* frontend minted the value, not that it is the original ingress for a remote-routed request. |
-| Backend timeout | Supported | Configurable via `OpenAiFrontendConfig` or the `MESH_OPENAI_BACKEND_TIMEOUT_SECS` environment variable; defaults to 600 seconds (`0` disables it) and maps timeouts to OpenAI-shaped 504 errors. |
+| Backend timeout | Supported | Configurable via `InferenceFrontendConfig` or the `MESH_OPENAI_BACKEND_TIMEOUT_SECS` environment variable; defaults to 600 seconds (`0` disables it) and maps timeouts to OpenAI-shaped 504 errors. |
 | Agent session header | Supported | Set `MESH_AGENT_SESSION_HEADER` to accept a trusted upstream header as the stable agent-session identity. |
 | Vision input | Supported | Preserved through chat/Responses content parts and executed by projector-backed runtimes. |
 | Non-chat staging | Fail closed | Embedding, rerank, encoder-decoder, and speech-synthesis models currently require an unsplit full-model runtime. |
@@ -65,19 +70,19 @@ For the concrete benchy command and contract, see
 
 ```mermaid
 flowchart TB
-    C["OpenAI-compatible client<br/>generation, embeddings, audio"] --> R["skippy-inference-api<br/>Axum routes"]
-    R --> Parse["request parsing<br/>validation<br/>normalization<br/>OpenAI errors"]
-    Parse --> B["OpenAiBackend implementation"]
+    C["OpenAI-compatible, Anthropic, and SystemOne clients"] --> R["skippy-inference-api<br/>Axum routes"]
+    R --> Parse["request parsing<br/>validation<br/>protocol translation"]
+    Parse --> B["InferenceBackend implementation"]
     B --> Local["embedded single-stage<br/>skippy runtime"]
     B --> Chain["mesh stage-0 route<br/>skippy-stage/2 chain"]
-    Local --> Resp["OpenAI response JSON"]
+    Local --> Resp["protocol response JSON or SSE"]
     Chain --> Resp
     Resp --> R
     R --> C
 ```
 
 The backend boundary below is a partial generation example. The complete
-[`OpenAiBackend` trait](src/backend.rs) also defines `embeddings`, `rerank`,
+[`InferenceBackend` trait](src/backend.rs) also defines `embeddings`, `rerank`,
 `audio_speech`, `audio_transcription`, and `audio_translation`; override their
 default unsupported responses to serve the corresponding non-chat endpoints.
 Non-streaming generation also has context-aware variants; their default
@@ -85,36 +90,36 @@ implementations delegate to the corresponding request-only methods.
 
 ```rust
 #[async_trait]
-pub trait OpenAiBackend: Send + Sync + 'static {
-    async fn models(&self) -> OpenAiResult<Vec<ModelObject>>;
+pub trait InferenceBackend: Send + Sync + 'static {
+    async fn models(&self) -> InferenceResult<Vec<ModelObject>>;
     async fn chat_completion(
         &self,
         request: ChatCompletionRequest,
-    ) -> OpenAiResult<ChatCompletionResponse>;
+    ) -> InferenceResult<ChatCompletionResponse>;
     async fn chat_completion_with_context(
         &self,
         request: ChatCompletionRequest,
-        context: OpenAiRequestContext,
-    ) -> OpenAiResult<ChatCompletionResponse>;
+        context: InferenceRequestContext,
+    ) -> InferenceResult<ChatCompletionResponse>;
     async fn chat_completion_stream(
         &self,
         request: ChatCompletionRequest,
-        context: OpenAiRequestContext,
-    ) -> OpenAiResult<ChatCompletionStream>;
+        context: InferenceRequestContext,
+    ) -> InferenceResult<ChatCompletionStream>;
     async fn completion(
         &self,
         request: CompletionRequest,
-    ) -> OpenAiResult<CompletionResponse>;
+    ) -> InferenceResult<CompletionResponse>;
     async fn completion_with_context(
         &self,
         request: CompletionRequest,
-        context: OpenAiRequestContext,
-    ) -> OpenAiResult<CompletionResponse>;
+        context: InferenceRequestContext,
+    ) -> InferenceResult<CompletionResponse>;
     async fn completion_stream(
         &self,
         request: CompletionRequest,
-        context: OpenAiRequestContext,
-    ) -> OpenAiResult<CompletionStream>;
+        context: InferenceRequestContext,
+    ) -> InferenceResult<CompletionStream>;
 }
 ```
 
@@ -160,7 +165,7 @@ chain remains backend-owned.
 
 ## Stage-Server Integration
 
-`skippy-serving` and mesh use this crate by implementing `OpenAiBackend` for a
+`skippy-serving` and mesh use this crate by implementing `InferenceBackend` for a
 small adapter:
 
 - local text/runtime backend for single-stage smoke tests

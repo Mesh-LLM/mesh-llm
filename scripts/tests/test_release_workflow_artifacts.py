@@ -917,7 +917,7 @@ class ReleaseWorkflowArtifactTests(unittest.TestCase):
                 self.assertNotIn("dtolnay/rust-toolchain", job)
                 self.assertNotIn("sccache-action", job)
 
-    def test_windows_cuda12_label_rejects_other_toolkit_majors(self) -> None:
+    def test_windows_cuda_labels_reject_other_toolkit_majors(self) -> None:
         workflow = RELEASE_WORKFLOW.read_text(encoding="utf-8")
         producer = job_block(
             workflow,
@@ -925,14 +925,56 @@ class ReleaseWorkflowArtifactTests(unittest.TestCase):
             "publish",
         )
 
-        validation = producer.index("- name: Validate CUDA 12 artifact contract")
+        validation = producer.index("- name: Validate CUDA artifact contract")
         installation = producer.index("- name: Install CUDA toolkit")
         self.assertLess(validation, installation)
-        self.assertIn("$cudaMajor -ne '12'", producer)
+        self.assertIn("EXPECTED_CUDA_MAJOR: ${{ matrix.cuda_major }}", producer)
+        self.assertIn("$cudaMajor -ne $env:EXPECTED_CUDA_MAJOR", producer)
         self.assertIn(
             "release-native-runtime-windows-x86_64-cuda12",
             producer,
         )
+        self.assertIn(
+            "release-native-runtime-windows-x86_64-cuda13",
+            producer,
+        )
+
+    def test_windows_cuda13_lane_matches_the_linux_cuda13_lane(self) -> None:
+        workflow = RELEASE_WORKFLOW.read_text(encoding="utf-8")
+        producer = job_block(
+            workflow,
+            "build_native_runtime_windows_gpu",
+            "publish",
+        )
+        composer = job_block(
+            workflow,
+            "compose_windows_gpu",
+            "compose_windows_cpu",
+        )
+        publish = job_block(workflow, "publish", "release_notes")
+
+        self.assertIn("cuda_version: '13.1.2'", producer)
+        self.assertIn(
+            "cuda_architectures: '75;80;86;87;89;90;100;103;120;121'",
+            producer,
+        )
+        # CUDA 13 ships the crt headers and nvvm (cicc) as separate installer
+        # packages; nvcc cannot compile without them.
+        self.assertIn(
+            "cuda_sub_packages: '[\"nvcc\", \"crt\", \"nvvm\", \"cudart\", \"cublas\", \"cublas_dev\", \"visual_studio_integration\"]'",
+            producer,
+        )
+        self.assertIn("sub-packages: ${{ matrix.cuda_sub_packages }}", producer)
+        # v0.2.35 has no 13.1.2 in its Windows tables.
+        self.assertIn(
+            "Jimver/cuda-toolkit@b8bf9c6c28f8a92fbb04dcfcaee872e60c57462d # v0.2.36",
+            producer,
+        )
+        self.assertIn("runtime_artifact: release-native-runtime-windows-x86_64-cuda13", composer)
+        self.assertIn("artifact_name: release-windows-cuda-12", composer)
+        self.assertIn("artifact_name: release-windows-cuda-13", composer)
+        self.assertIn("MESH_CUDA_VERSION: ${{ matrix.cuda_major }}", composer)
+        self.assertIn('"windows/x86_64/cuda13"', publish)
 
     def test_cuda_runtime_producers_validate_matrix_version_against_compiler(self) -> None:
         workflow = RELEASE_WORKFLOW.read_text(encoding="utf-8")
@@ -962,10 +1004,10 @@ class ReleaseWorkflowArtifactTests(unittest.TestCase):
                 producer,
             )
         self.assertIn(
-            "MESH_CUDA_VERSION: ${{ vars.CUDA_VERSION || '12.9.2' }}",
+            "MESH_CUDA_VERSION: ${{ matrix.cuda_version || vars.CUDA_VERSION || '12.9.2' }}",
             windows,
         )
-        self.assertIn("MESH_LLM_CUDA_TOOLKIT_MAJOR: '12'", windows)
+        self.assertIn("MESH_LLM_CUDA_TOOLKIT_MAJOR: ${{ matrix.cuda_major || '12' }}", windows)
 
     def test_cuda12_release_runtime_includes_pascal_sm61(self) -> None:
         workflow = RELEASE_WORKFLOW.read_text(encoding="utf-8")

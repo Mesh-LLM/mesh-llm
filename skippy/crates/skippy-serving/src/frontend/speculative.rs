@@ -2,8 +2,8 @@ use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use serde_json::json;
-use skippy_inference_api::OpenAiError;
-use skippy_inference_api::OpenAiResult;
+use skippy_inference_api::InferenceError;
+use skippy_inference_api::InferenceResult;
 use skippy_protocol::{MAX_VERIFY_WINDOW_PIPELINE_DEPTH, MAX_VERIFY_WINDOW_RUNAHEAD_TOKENS};
 use std::collections::BTreeMap;
 use std::time::Instant;
@@ -121,6 +121,15 @@ pub struct VerifyWindowConfig {
     /// checkpoint-retention bound).
     #[serde(default)]
     pub runahead_max_tokens: usize,
+    /// Let the budget be searched per deployment instead of stated.
+    ///
+    /// Distinct from `runahead_max_tokens == 0`, which is a positive statement
+    /// that fixed-depth admission is wanted. This says "no number is being
+    /// asserted" — the value a strategy composes, since a strategy is applied
+    /// at startup and the right budget depends on the link. See
+    /// `super::runahead_search` for why it is searched and not computed.
+    #[serde(default)]
+    pub runahead_auto: bool,
 }
 
 impl Default for SpeculativeDecodeConfig {
@@ -143,6 +152,7 @@ impl Default for SpeculativeDecodeConfig {
                 max_tokens: 4,
                 pipeline_depth: 1,
                 runahead_max_tokens: 0,
+                runahead_auto: false,
             },
             ngram_fallback_draft: false,
             draft_acceptance_threshold: 0.0,
@@ -614,7 +624,7 @@ mod standalone_speculative_config_tests {
 }
 
 #[derive(Clone, Default)]
-pub(super) struct OpenAiSpeculativeStats {
+pub(super) struct InferenceSpeculativeStats {
     pub(super) windows: usize,
     pub(super) draft_tokens: usize,
     pub(super) fallback_draft_proposals: usize,
@@ -664,12 +674,12 @@ pub(super) struct CachedNgramProposer {
 
 impl CachedNgramProposer {
     /// Creates a cache-backed proposer with the given match bounds.
-    pub(super) fn new(ngram_min: usize, ngram_max: usize) -> OpenAiResult<Self> {
+    pub(super) fn new(ngram_min: usize, ngram_max: usize) -> InferenceResult<Self> {
         if ngram_min == 0
             || ngram_min > ngram_max
             || ngram_max > skippy_runtime::NGRAM_CACHE_MAX_NGRAM
         {
-            return Err(OpenAiError::backend(format!(
+            return Err(InferenceError::backend(format!(
                 "cache N-gram proposer requires 0 < ngram_min <= ngram_max <= {}",
                 skippy_runtime::NGRAM_CACHE_MAX_NGRAM
             )));
@@ -688,7 +698,7 @@ impl CachedNgramProposer {
         committed_history: &[i32],
         continuation_prefix: &[i32],
         max_proposed_tokens: usize,
-    ) -> OpenAiResult<Vec<i32>> {
+    ) -> InferenceResult<Vec<i32>> {
         self.sync(committed_history)?;
         self.cache
             .as_mut()
@@ -698,7 +708,7 @@ impl CachedNgramProposer {
     }
 
     /// Mirrors committed history into native cache state (append or reset).
-    fn sync(&mut self, committed_history: &[i32]) -> OpenAiResult<()> {
+    fn sync(&mut self, committed_history: &[i32]) -> InferenceResult<()> {
         if self.cache.is_none() {
             self.cache = Some(
                 skippy_runtime::NgramCache::new(self.ngram_min, self.ngram_max)
@@ -753,7 +763,7 @@ pub(super) struct HistoryNgramProposer {
 
 impl HistoryNgramProposer {
     /// Builds the configured history proposer, or `None` for simple/no proposer.
-    pub(super) fn from_config(config: &SpeculativeDecodeConfig) -> OpenAiResult<Option<Self>> {
+    pub(super) fn from_config(config: &SpeculativeDecodeConfig) -> InferenceResult<Option<Self>> {
         let Some(ngram) = config.ngram.as_ref() else {
             return Ok(None);
         };
@@ -767,7 +777,7 @@ impl HistoryNgramProposer {
                 ngram.max_ngram,
                 ngram.max_proposal_tokens,
             )
-            .map_err(OpenAiError::backend)
+            .map_err(InferenceError::backend)
             .map(HistoryNgramProposerImpl::Suffix)
             .map(Self::new)
             .map(Some),
@@ -788,7 +798,7 @@ impl HistoryNgramProposer {
         committed_history: &[i32],
         continuation_prefix: &[i32],
         max_proposed_tokens: usize,
-    ) -> OpenAiResult<Vec<i32>> {
+    ) -> InferenceResult<Vec<i32>> {
         self.stats.attempts += 1;
         let tokens = match &mut self.proposer {
             HistoryNgramProposerImpl::Cache(cache) => {
@@ -836,7 +846,7 @@ impl HistoryNgramProposer {
 
     /// Test-only constructor for the cache variant.
     #[cfg(test)]
-    pub(super) fn new_cache(ngram_min: usize, ngram_max: usize) -> OpenAiResult<Self> {
+    pub(super) fn new_cache(ngram_min: usize, ngram_max: usize) -> InferenceResult<Self> {
         CachedNgramProposer::new(ngram_min, ngram_max)
             .map(HistoryNgramProposerImpl::Cache)
             .map(Self::new)
@@ -848,7 +858,7 @@ fn elapsed_us(started: Instant) -> u64 {
     u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX)
 }
 
-impl OpenAiSpeculativeStats {
+impl InferenceSpeculativeStats {
     pub(super) fn insert_response_timings(&self, timings: &mut BTreeMap<String, Value>) {
         timings.insert("speculative_windows".to_string(), json!(self.windows));
         timings.insert(
@@ -1177,12 +1187,12 @@ pub(super) fn classify_verify_window<F>(
     generated_len: usize,
     max_new_tokens: usize,
     mut token_is_eog: F,
-) -> OpenAiResult<VerifyWindowDecision>
+) -> InferenceResult<VerifyWindowDecision>
 where
-    F: FnMut(i32) -> OpenAiResult<bool>,
+    F: FnMut(i32) -> InferenceResult<bool>,
 {
     if predicted_tokens.is_empty() && !draft_tokens.is_empty() {
-        return Err(OpenAiError::backend(format!(
+        return Err(InferenceError::backend(format!(
             "verify window returned no tokens for {} draft tokens",
             draft_tokens.len()
         )));
@@ -1255,9 +1265,9 @@ pub(super) fn classify_verify_window_with_threshold<F>(
     max_new_tokens: usize,
     acceptance_threshold: f64,
     token_is_eog: F,
-) -> OpenAiResult<VerifyWindowDecision>
+) -> InferenceResult<VerifyWindowDecision>
 where
-    F: FnMut(i32) -> OpenAiResult<bool>,
+    F: FnMut(i32) -> InferenceResult<bool>,
 {
     let decision = classify_verify_window(
         draft_tokens,

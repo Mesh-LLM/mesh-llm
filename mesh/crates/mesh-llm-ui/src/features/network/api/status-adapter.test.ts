@@ -151,7 +151,8 @@ describe('adaptStatusToDashboard', () => {
       'nodes',
       'active-models',
       'mesh-vram',
-      'inflight'
+      'inflight',
+      'serving-strategy'
     ])
     expect(dashboard.statusMetrics.find((metric) => metric.id === 'mesh-vram')).toEqual(
       expect.objectContaining({ value: '32.5', unit: 'GB' })
@@ -159,6 +160,11 @@ describe('adaptStatusToDashboard', () => {
     expect(dashboard.statusMetrics.find((metric) => metric.id === 'mesh-vram')).not.toHaveProperty('meta')
     expect(dashboard.statusMetrics.find((metric) => metric.id === 'inflight')).toEqual(
       expect.objectContaining({ value: 3 })
+    )
+    // No strategy named is itself the answer: an absent tile would read as a
+    // missing feature rather than a node on built-in defaults.
+    expect(dashboard.statusMetrics.find((metric) => metric.id === 'serving-strategy')).toEqual(
+      expect.objectContaining({ value: 'none', meta: 'running built-in defaults' })
     )
     expect(dashboard.statusMetrics.find((metric) => metric.id === 'inflight')).not.toHaveProperty('meta')
     expect(dashboard.statusMetrics.find((metric) => metric.id === 'active-models')).toEqual(
@@ -673,5 +679,32 @@ describe('advertised memory in the dashboard adapter', () => {
     const [self, worker] = dashboard.peers
     expect(self.memory).toBeUndefined()
     expect(worker.memory).toBeUndefined()
+  })
+
+  it('shows the resolved strategy and how much it composed', () => {
+    const dashboard = adaptStatusToDashboard({
+      ...PUBLIC_STATUS_PAYLOAD,
+      runtime: {
+        serving_strategy: {
+          strategy: 'throughput',
+          applied: [
+            { axis: 'defaults.throughput.last_stage_decode_batch', value: 'true', because: 'why' },
+            { axis: 'defaults.throughput.pipeline_decode_groups', value: '2', because: 'why' }
+          ],
+          declined: [{ axis: 'defaults.speculative.strategy', because: 'you set it explicitly' }]
+        }
+      }
+    })
+
+    const metric = dashboard.statusMetrics.find((m) => m.id === 'serving-strategy')
+    expect(metric).toEqual(
+      expect.objectContaining({
+        value: 'throughput',
+        // The deferred axis is surfaced here too: somebody who set a flag by
+        // hand should see that it won without opening doctor split.
+        meta: '2 composed · 1 left to your settings',
+        badge: { label: 'composed', tone: 'accent' }
+      })
+    )
   })
 })

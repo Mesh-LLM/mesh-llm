@@ -28,7 +28,7 @@ use crate::frontend::generation_receipt::{
 };
 use crate::frontend::util::openai_backend_error;
 use serde_json::json;
-use skippy_inference_api::OpenAiResult;
+use skippy_inference_api::InferenceResult;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -49,7 +49,7 @@ impl StageOpenAiBackend {
         &self,
         mut finalization: LocalGenerationReceiptFinalization<'_>,
         generation_succeeded: bool,
-    ) -> OpenAiResult<()> {
+    ) -> InferenceResult<()> {
         if let Some(observation) = finalization.observation.as_mut() {
             if finalization.cancelled {
                 observation.mark_cancelled();
@@ -99,7 +99,7 @@ impl StageOpenAiBackend {
     pub(super) fn cleanup_local_generation_session(
         &self,
         session_id: &str,
-        ids: &crate::frontend::generation::OpenAiGenerationIds,
+        ids: &crate::frontend::generation::InferenceGenerationIds,
     ) {
         let scheduler_session_id = session_id.to_string();
         if let Ok(outcome) =
