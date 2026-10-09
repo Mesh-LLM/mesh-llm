@@ -1,18 +1,19 @@
-From f0926e48208842c995870531d2645d100c0d7ab9 Mon Sep 17 00:00:00 2001
+From 5c915117f2a4d9203da16d67b4a01ea13fd7e6b2 Mon Sep 17 00:00:00 2001
 From: James Dumay <jameswdumay@gmail.com>
 Date: Tue, 6 Oct 2026 21:48:20 +1100
-Subject: [PATCH] fix(skippy): resolve dynamic views against canonical storage
+Subject: [PATCH 62/67] fix(skippy): resolve dynamic views against canonical
+ storage
 
 ---
  src/skippy/stage_program_extraction.cpp | 14 ++++++++++++++
- src/skippy/stage_program_replay.cpp     | 13 +++++++++++--
- 2 files changed, 25 insertions(+), 2 deletions(-)
+ src/skippy/stage_program_replay.cpp     | 17 +++++++++++++++--
+ 2 files changed, 29 insertions(+), 2 deletions(-)
 
 diff --git a/src/skippy/stage_program_extraction.cpp b/src/skippy/stage_program_extraction.cpp
-index 08e28da9f..7313923b2 100644
+index c56f0cb12..2a7564972 100644
 --- a/src/skippy/stage_program_extraction.cpp
 +++ b/src/skippy/stage_program_extraction.cpp
-@@ -269,6 +269,20 @@ bool extraction::run() {
+@@ -274,6 +274,20 @@ bool extraction::run() {
                                      target_axis = axis;
                                  }
                              }
@@ -34,10 +35,10 @@ index 08e28da9f..7313923b2 100644
                                  if (tensor->view_offs == 0 && source_axis < GGML_MAX_DIMS &&
                                          tensor->ne[source_axis] < tensor->src[0]->ne[source_axis]) {
 diff --git a/src/skippy/stage_program_replay.cpp b/src/skippy/stage_program_replay.cpp
-index 1cd7b50a1..2e951d3a2 100644
+index 031db3a92..e1b06bfba 100644
 --- a/src/skippy/stage_program_replay.cpp
 +++ b/src/skippy/stage_program_replay.cpp
-@@ -354,14 +354,23 @@ ggml_tensor * replay_operation(
+@@ -354,14 +354,27 @@ ggml_tensor * replay_operation(
                  }
                  uint64_t end = 0;
                  valid_span = valid_span && checked_add_u64(view_offset, span, end);
@@ -60,6 +61,10 @@ index 1cd7b50a1..2e951d3a2 100644
                              " name=" + std::string(ggml_get_name(sources[0])) + ")" +
 -                            ": source bytes=" + std::to_string(ggml_nbytes(sources[0])) +
 +                            ": source bytes=" + std::to_string(ggml_nbytes(storage)) +
++                            " source_dims=" + std::to_string(sources[0]->ne[0]) + "x" +
++                                    std::to_string(sources[0]->ne[1]) + "x" +
++                                    std::to_string(sources[0]->ne[2]) + "x" +
++                                    std::to_string(sources[0]->ne[3]) +
                              " offset=" + std::to_string(view_offset) +
                              " dims=" + std::to_string(dims[0]) + "x" + std::to_string(dims[1]) + "x" +
                                      std::to_string(dims[2]) + "x" + std::to_string(dims[3]) +
