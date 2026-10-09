@@ -26,7 +26,6 @@ pub(crate) fn collect_views(collector: &RuntimeDataCollector) -> RuntimeDataApiV
 
 pub(crate) fn status_payload(snapshot: StatusViewSnapshot) -> StatusPayload {
     StatusPayload {
-        twin_policy: crate::api::status::TwinPolicy::current(),
         version: snapshot.version,
         latest_version: snapshot.latest_version,
         node_id: snapshot.node_id,
@@ -177,7 +176,6 @@ mod tests {
 
         let payload = status_payload(snapshot);
         let expected = StatusPayload {
-            twin_policy: crate::api::status::TwinPolicy::current(),
             my_memory: crate::api::status::MemoryPayload::default(),
             version: "0.68.0".into(),
             latest_version: Some("0.68.0".into()),

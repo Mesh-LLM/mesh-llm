@@ -326,42 +326,9 @@ pub(crate) fn build_gpus(
         .collect()
 }
 
-/// How this node treats a pair of requests a client marked as one pair, so a
-/// UI can say truthfully how a pair came to exist. It states fixed behaviour of
-/// this host (see `twin_bracket_id` on `openai.exchange.v1`), not a setting.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-pub(crate) struct TwinPolicy {
-    /// Who marks a pair: always `client_header`, a client sending `header`.
-    pub(crate) marking: &'static str,
-    /// The request header a client marks a pair with.
-    pub(crate) header: &'static str,
-    /// Whether this host ever sends a second copy of a request on its own.
-    pub(crate) host_sends_second_request: bool,
-    /// Whether a serving peer is told its answer is half of a pair: the mark
-    /// is stripped before a request is forwarded to a peer.
-    pub(crate) serving_node_told: bool,
-    /// Whether this host ever infers a pair (from timing or content) without
-    /// the client's mark.
-    pub(crate) inferred: bool,
-}
-
-impl TwinPolicy {
-    pub(crate) const fn current() -> Self {
-        Self {
-            marking: "client_header",
-            header: crate::network::openai::request_parse::MESH_TWIN_BRACKET_HEADER,
-            host_sends_second_request: false,
-            serving_node_told: false,
-            inferred: false,
-        }
-    }
-}
-
 #[derive(Clone, Debug, Serialize)]
 pub(crate) struct StatusPayload {
     pub(crate) version: String,
-    /// How this node treats a client-marked pair of requests.
-    pub(crate) twin_policy: TwinPolicy,
     pub(crate) latest_version: Option<String>,
     pub(crate) node_id: String,
     pub(crate) owner: OwnershipPayload,
@@ -924,20 +891,6 @@ mod tests {
     use super::*;
     use crate::ReleaseAttestationSummary;
 
-    #[test]
-    fn twin_policy_states_that_only_a_client_marks_a_pair() {
-        assert_eq!(
-            serde_json::to_value(TwinPolicy::current()).unwrap(),
-            serde_json::json!({
-                "marking": "client_header",
-                "header": "x-mesh-twin-bracket",
-                "host_sends_second_request": false,
-                "serving_node_told": false,
-                "inferred": false,
-            })
-        );
-    }
-
     fn test_owner_payload() -> OwnershipPayload {
         OwnershipPayload {
             owner_id: None,
@@ -1048,7 +1001,6 @@ mod tests {
     #[test]
     fn status_payload_serializes_node_state_and_node_status_alias() {
         let status = StatusPayload {
-            twin_policy: crate::api::status::TwinPolicy::current(),
             my_memory: crate::api::status::MemoryPayload::default(),
             version: "0.60.2".to_string(),
             latest_version: None,
@@ -1124,7 +1076,6 @@ mod tests {
     #[test]
     fn status_payload_keeps_node_status_for_compatibility() {
         let status = StatusPayload {
-            twin_policy: crate::api::status::TwinPolicy::current(),
             my_memory: crate::api::status::MemoryPayload::default(),
             version: "0.60.2".to_string(),
             latest_version: None,
@@ -1193,7 +1144,6 @@ mod tests {
     #[test]
     fn status_payload_serializes_wakeable_nodes_separately() {
         let status = StatusPayload {
-            twin_policy: crate::api::status::TwinPolicy::current(),
             my_memory: crate::api::status::MemoryPayload::default(),
             version: "0.60.2".to_string(),
             latest_version: None,
@@ -1271,7 +1221,6 @@ mod tests {
     #[test]
     fn status_payload_defaults_to_empty_wakeable_inventory() {
         let status = StatusPayload {
-            twin_policy: crate::api::status::TwinPolicy::current(),
             my_memory: crate::api::status::MemoryPayload::default(),
             version: "0.60.2".to_string(),
             latest_version: None,
