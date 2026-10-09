@@ -15,7 +15,8 @@ BUILD_SCRIPT = ROOT / "skippy" / "scripts" / "build-llama.sh"
 # to finish: configure resolves the generator exactly like CMake (the -G
 # argument wins, then the CMAKE_GENERATOR environment variable, then the
 # Unix Makefiles default), writes a fresh CMakeCache.txt carrying the result,
-# and --build drops the dynamic-link output the script verifies.
+# and --build drops the dynamic-link output the script verifies, plus any
+# static archives listed in CMAKE_STUB_STATIC_ARCHIVES.
 CMAKE_STUB = """\
 #!/usr/bin/env bash
 set -euo pipefail
@@ -34,6 +35,10 @@ if [[ "${args[0]}" == "--build" ]]; then
     for ext in dylib so; do
       touch "$target/$name.$ext"
     done
+  done
+  for archive in ${CMAKE_STUB_STATIC_ARCHIVES:-}; do
+    mkdir -p "$target/$(dirname "$archive")"
+    touch "$target/$archive"
   done
   exit 0
 fi
@@ -55,6 +60,29 @@ if [[ "${1:-}" == "--version" ]]; then
 fi
 exit 0
 """
+
+# The static link closure build-llama.sh checks, as other toolchains name it
+# and as an MSVC build writes it.
+UNIX_STATIC_ARCHIVES = (
+    "src/libllama.a",
+    "common/libllama-common.a",
+    "common/libllama-common-base.a",
+    "ggml/src/libggml.a",
+    "ggml/src/libggml-base.a",
+    "ggml/src/libggml-cpu.a",
+    "tools/mtmd/libmtmd.a",
+    "vendor/hash/libvendor-hash.a",
+)
+MSVC_STATIC_ARCHIVES = (
+    "src/llama.lib",
+    "common/llama-common.lib",
+    "common/llama-common-base.lib",
+    "ggml/src/ggml.lib",
+    "ggml/src/ggml-base.lib",
+    "ggml/src/ggml-cpu.lib",
+    "tools/mtmd/mtmd.lib",
+    "vendor/hash/vendor-hash.lib",
+)
 
 
 class BuildLlamaGeneratorGuardTests(unittest.TestCase):
@@ -86,6 +114,8 @@ class BuildLlamaGeneratorGuardTests(unittest.TestCase):
         deployment_target: str | None = None,
         host_os: str | None = None,
         backend: str = "cpu",
+        link_mode: str = "dynamic",
+        static_archives: tuple[str, ...] = (),
         extra_args: tuple[str, ...] = (),
     ) -> tuple[subprocess.CompletedProcess[str], Path, Path]:
         directory = tempfile.TemporaryDirectory()
@@ -145,8 +175,9 @@ class BuildLlamaGeneratorGuardTests(unittest.TestCase):
                 "LLAMA_WORKDIR": str(workdir),
                 "LLAMA_STAGE_BUILD_DIR": str(build),
                 "LLAMA_STAGE_BACKEND": backend,
-                "LLAMA_STAGE_LINK_MODE": "dynamic",
+                "LLAMA_STAGE_LINK_MODE": link_mode,
                 "CMAKE_STUB_LOG": str(log),
+                "CMAKE_STUB_STATIC_ARCHIVES": " ".join(static_archives),
                 "PATH": path_value,
             }
         )
@@ -160,6 +191,20 @@ class BuildLlamaGeneratorGuardTests(unittest.TestCase):
             command, cwd=ROOT, env=env, capture_output=True, text=True
         )
         return result, build, log
+
+    def test_static_build_accepts_unix_and_msvc_archive_names(self) -> None:
+        for archives in (UNIX_STATIC_ARCHIVES, MSVC_STATIC_ARCHIVES):
+            with self.subTest(archive=archives[0]):
+                result, _, _ = self.run_build(link_mode="static", static_archives=archives)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn("built patched llama.cpp", result.stdout)
+
+    def test_static_build_still_requires_every_archive(self) -> None:
+        for archives in (UNIX_STATIC_ARCHIVES, MSVC_STATIC_ARCHIVES):
+            with self.subTest(archive=archives[0]):
+                result, _, _ = self.run_build(link_mode="static", static_archives=archives[1:])
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("without the full link closure", result.stderr)
 
     def test_macos_target_defaults_and_explicit_override_reach_cmake(self) -> None:
         for target in (None, "14.0"):

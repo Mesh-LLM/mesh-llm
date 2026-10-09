@@ -126,13 +126,20 @@ required_static_archives() {
     "$LLAMA_BUILD_DIR/vendor/hash/libvendor-hash.a"
 }
 
+static_archive_exists() {
+  # MSVC writes the archive other toolchains name libNAME.a as NAME.lib.
+  local name="${1##*/}"
+  name="${name#lib}"
+  [[ -f "$1" || -f "${1%/*}/${name%.a}.lib" ]]
+}
+
 required_static_archives_exist() {
   local archive
   while IFS= read -r archive; do
-    [[ -f "$archive" ]] || return 1
+    static_archive_exists "$archive" || return 1
   done < <(required_static_archives)
-  [[ -f "$LLAMA_BUILD_DIR/ggml/src/libggml-cpu.a" ||
-     -f "$LLAMA_BUILD_DIR/ggml/src/ggml-cpu/libggml-cpu.a" ]]
+  static_archive_exists "$LLAMA_BUILD_DIR/ggml/src/libggml-cpu.a" ||
+    static_archive_exists "$LLAMA_BUILD_DIR/ggml/src/ggml-cpu/libggml-cpu.a"
 }
 
 dynamic_library_name_groups() {
