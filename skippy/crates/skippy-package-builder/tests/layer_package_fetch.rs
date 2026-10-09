@@ -163,6 +163,7 @@ fn function(source: &str, name: &str) -> String {
 }
 #[cfg(unix)]
 #[test]
+#[ignore = "local qualification: runs the real Hugging Face `hf` CLI against the hub mount"]
 fn actual_host_caller_exports_exact_commit_and_actual_hub_mount_then_reuses_offline() {
     use std::os::unix::fs::PermissionsExt as _;
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -285,6 +286,7 @@ fn actual_cli_overall_deadline_kills_and_reaps_pending_native_worker_without_out
 
 #[cfg(unix)]
 #[test]
+#[ignore = "local qualification: needs the container image environment that provides download_hf_file"]
 fn actual_container_download_refuses_configured_geometry_before_exports_and_serving() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .ancestors()
