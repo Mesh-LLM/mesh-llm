@@ -74,6 +74,7 @@ WINDOWS_UNVERIFIED_CRATES = {
     "skippy-quantize",
     "skippy-runtime",
     "skippy-serving",
+    "trajectory-reader",
     "xtask",
 }
 
