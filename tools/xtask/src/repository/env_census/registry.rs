@@ -59,10 +59,7 @@ pub(super) const KNOWN_UNAUDITED_MUTATION_COUNTS: &[(&str, usize)] = &[
         "mesh/crates/mesh-llm-host-runtime/src/mesh/tests/owner_control.rs",
         5,
     ),
-    (
-        "skippy/crates/skippy-model-hf/src/inventory.rs",
-        12,
-    ),
+    ("skippy/crates/skippy-model-hf/src/inventory.rs", 12),
     (
         "mesh/crates/mesh-llm-host-runtime/src/models/resolve/tests.rs",
         4,
