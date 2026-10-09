@@ -208,4 +208,4 @@ pub struct ResolvedRequestDefaultsConfig {
     pub json_schema: Option<toml::Value>,
 }
 
-pub use skippy_api::serving::OpenAiOptions as ResolvedEmbeddedOpenAiArgs;
+pub use skippy_api::serving::InferenceOptions as ResolvedEmbeddedOpenAiArgs;

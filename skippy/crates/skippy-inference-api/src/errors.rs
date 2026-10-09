@@ -7,7 +7,7 @@ use serde::Serialize;
 use serde_json::Value;
 
 #[derive(Debug, Clone)]
-pub struct OpenAiError {
+pub struct InferenceError {
     status: StatusCode,
     message: String,
     error_type: String,
@@ -17,7 +17,7 @@ pub struct OpenAiError {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum OpenAiErrorKind {
+pub enum InferenceErrorKind {
     InvalidRequest,
     Authentication,
     Permission,
@@ -32,10 +32,10 @@ pub enum OpenAiErrorKind {
     Cancelled,
 }
 
-impl OpenAiError {
+impl InferenceError {
     pub fn from_kind(
         status: StatusCode,
-        kind: OpenAiErrorKind,
+        kind: InferenceErrorKind,
         message: impl Into<String>,
     ) -> Self {
         let (error_type, code) = kind_to_openai_fields(kind);
@@ -52,7 +52,7 @@ impl OpenAiError {
     pub fn invalid_request(message: impl Into<String>) -> Self {
         Self::from_kind(
             StatusCode::BAD_REQUEST,
-            OpenAiErrorKind::InvalidRequest,
+            InferenceErrorKind::InvalidRequest,
             message,
         )
     }
@@ -61,7 +61,7 @@ impl OpenAiError {
         let model = model.into();
         Self::from_kind(
             StatusCode::NOT_FOUND,
-            OpenAiErrorKind::NotFound,
+            InferenceErrorKind::NotFound,
             format!("model not found: {model}"),
         )
     }
@@ -69,7 +69,7 @@ impl OpenAiError {
     pub fn backend(message: impl Into<String>) -> Self {
         Self::from_kind(
             StatusCode::BAD_GATEWAY,
-            OpenAiErrorKind::ServiceUnavailable,
+            InferenceErrorKind::ServiceUnavailable,
             message,
         )
     }
@@ -77,7 +77,7 @@ impl OpenAiError {
     pub fn internal(message: impl Into<String>) -> Self {
         Self::from_kind(
             StatusCode::INTERNAL_SERVER_ERROR,
-            OpenAiErrorKind::Internal,
+            InferenceErrorKind::Internal,
             message,
         )
     }
@@ -85,7 +85,7 @@ impl OpenAiError {
     pub fn unsupported(message: impl Into<String>) -> Self {
         Self::from_kind(
             StatusCode::BAD_REQUEST,
-            OpenAiErrorKind::UnsupportedFeature,
+            InferenceErrorKind::UnsupportedFeature,
             message,
         )
     }
@@ -93,7 +93,7 @@ impl OpenAiError {
     pub fn route_not_found(path: impl std::fmt::Display) -> Self {
         Self::from_kind(
             StatusCode::NOT_FOUND,
-            OpenAiErrorKind::InvalidRequest,
+            InferenceErrorKind::InvalidRequest,
             format!("route not found: {path}"),
         )
         .with_code("not_found")
@@ -102,7 +102,7 @@ impl OpenAiError {
     pub fn method_not_allowed(method: impl std::fmt::Display) -> Self {
         Self::from_kind(
             StatusCode::METHOD_NOT_ALLOWED,
-            OpenAiErrorKind::InvalidRequest,
+            InferenceErrorKind::InvalidRequest,
             format!("method not allowed: {method}"),
         )
         .with_code("method_not_allowed")
@@ -111,7 +111,7 @@ impl OpenAiError {
     pub fn payload_too_large(message: impl Into<String>) -> Self {
         Self::from_kind(
             StatusCode::PAYLOAD_TOO_LARGE,
-            OpenAiErrorKind::PayloadTooLarge,
+            InferenceErrorKind::PayloadTooLarge,
             message,
         )
     }
@@ -119,7 +119,7 @@ impl OpenAiError {
     pub fn context_length_exceeded(message: impl Into<String>) -> Self {
         Self::from_kind(
             StatusCode::BAD_REQUEST,
-            OpenAiErrorKind::ContextLengthExceeded,
+            InferenceErrorKind::ContextLengthExceeded,
             message,
         )
     }
@@ -127,7 +127,7 @@ impl OpenAiError {
     pub fn timeout(message: impl Into<String>) -> Self {
         Self::from_kind(
             StatusCode::GATEWAY_TIMEOUT,
-            OpenAiErrorKind::Timeout,
+            InferenceErrorKind::Timeout,
             message,
         )
     }
@@ -135,7 +135,7 @@ impl OpenAiError {
     pub fn cancelled(message: impl Into<String>) -> Self {
         Self::from_kind(
             crate::lifecycle::client_closed_request_status(),
-            OpenAiErrorKind::Cancelled,
+            InferenceErrorKind::Cancelled,
             message,
         )
     }
@@ -176,54 +176,54 @@ impl OpenAiError {
     }
 }
 
-impl std::fmt::Display for OpenAiError {
+impl std::fmt::Display for InferenceError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(formatter, "{}", self.message)
     }
 }
 
-impl std::error::Error for OpenAiError {}
+impl std::error::Error for InferenceError {}
 
-fn map_upstream_kind(status_code: u16, upstream_type: &str) -> OpenAiErrorKind {
+fn map_upstream_kind(status_code: u16, upstream_type: &str) -> InferenceErrorKind {
     match (status_code, upstream_type) {
-        (400, "invalid_request_error") => OpenAiErrorKind::InvalidRequest,
-        (401, "authentication_error") => OpenAiErrorKind::Authentication,
-        (404, "not_found_error") => OpenAiErrorKind::NotFound,
-        (500, "server_error") => OpenAiErrorKind::Internal,
-        (403, "permission_error") => OpenAiErrorKind::Permission,
-        (501, "not_supported_error") => OpenAiErrorKind::UnsupportedFeature,
-        (503, "unavailable_error") => OpenAiErrorKind::ServiceUnavailable,
-        (400, "exceed_context_size_error") => OpenAiErrorKind::ContextLengthExceeded,
-        (400, _) => OpenAiErrorKind::InvalidRequest,
-        (401, _) => OpenAiErrorKind::Authentication,
-        (403, _) => OpenAiErrorKind::Permission,
-        (404, _) => OpenAiErrorKind::NotFound,
-        (429, _) => OpenAiErrorKind::RateLimit,
-        (502, _) => OpenAiErrorKind::ServiceUnavailable,
-        (503, _) => OpenAiErrorKind::ServiceUnavailable,
-        (504, _) => OpenAiErrorKind::Timeout,
-        _ => OpenAiErrorKind::Internal,
+        (400, "invalid_request_error") => InferenceErrorKind::InvalidRequest,
+        (401, "authentication_error") => InferenceErrorKind::Authentication,
+        (404, "not_found_error") => InferenceErrorKind::NotFound,
+        (500, "server_error") => InferenceErrorKind::Internal,
+        (403, "permission_error") => InferenceErrorKind::Permission,
+        (501, "not_supported_error") => InferenceErrorKind::UnsupportedFeature,
+        (503, "unavailable_error") => InferenceErrorKind::ServiceUnavailable,
+        (400, "exceed_context_size_error") => InferenceErrorKind::ContextLengthExceeded,
+        (400, _) => InferenceErrorKind::InvalidRequest,
+        (401, _) => InferenceErrorKind::Authentication,
+        (403, _) => InferenceErrorKind::Permission,
+        (404, _) => InferenceErrorKind::NotFound,
+        (429, _) => InferenceErrorKind::RateLimit,
+        (502, _) => InferenceErrorKind::ServiceUnavailable,
+        (503, _) => InferenceErrorKind::ServiceUnavailable,
+        (504, _) => InferenceErrorKind::Timeout,
+        _ => InferenceErrorKind::Internal,
     }
 }
 
-fn kind_to_openai_fields(kind: OpenAiErrorKind) -> (&'static str, &'static str) {
+fn kind_to_openai_fields(kind: InferenceErrorKind) -> (&'static str, &'static str) {
     match kind {
-        OpenAiErrorKind::InvalidRequest => ("invalid_request_error", "invalid_value"),
-        OpenAiErrorKind::Authentication => ("authentication_error", "invalid_api_key"),
-        OpenAiErrorKind::Permission => ("permission_error", "insufficient_quota"),
-        OpenAiErrorKind::NotFound => ("invalid_request_error", "model_not_found"),
-        OpenAiErrorKind::RateLimit => ("rate_limit_error", "rate_limit_exceeded"),
-        OpenAiErrorKind::PayloadTooLarge => ("invalid_request_error", "payload_too_large"),
-        OpenAiErrorKind::Timeout => ("server_error", "timeout"),
-        OpenAiErrorKind::Internal => ("server_error", "internal_server_error"),
-        OpenAiErrorKind::ServiceUnavailable => ("server_error", "service_unavailable"),
-        OpenAiErrorKind::ContextLengthExceeded => {
+        InferenceErrorKind::InvalidRequest => ("invalid_request_error", "invalid_value"),
+        InferenceErrorKind::Authentication => ("authentication_error", "invalid_api_key"),
+        InferenceErrorKind::Permission => ("permission_error", "insufficient_quota"),
+        InferenceErrorKind::NotFound => ("invalid_request_error", "model_not_found"),
+        InferenceErrorKind::RateLimit => ("rate_limit_error", "rate_limit_exceeded"),
+        InferenceErrorKind::PayloadTooLarge => ("invalid_request_error", "payload_too_large"),
+        InferenceErrorKind::Timeout => ("server_error", "timeout"),
+        InferenceErrorKind::Internal => ("server_error", "internal_server_error"),
+        InferenceErrorKind::ServiceUnavailable => ("server_error", "service_unavailable"),
+        InferenceErrorKind::ContextLengthExceeded => {
             ("invalid_request_error", "context_length_exceeded")
         }
-        OpenAiErrorKind::UnsupportedFeature => {
+        InferenceErrorKind::UnsupportedFeature => {
             ("invalid_request_error", "unsupported_model_feature")
         }
-        OpenAiErrorKind::Cancelled => ("invalid_request_error", "request_cancelled"),
+        InferenceErrorKind::Cancelled => ("invalid_request_error", "request_cancelled"),
     }
 }
 
@@ -301,11 +301,11 @@ pub fn map_upstream_error_body(status_code: u16, body: &[u8]) -> Option<Vec<u8>>
         .unwrap_or_default();
     let kind = map_upstream_kind(status_code, &upstream_type);
     let status = StatusCode::from_u16(status_code).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-    let error = OpenAiError::from_kind(status, kind, message);
+    let error = InferenceError::from_kind(status, kind, message);
     Some(serde_json::to_vec(&error.body()).expect("serializing OpenAI error body should not fail"))
 }
 
-impl IntoResponse for OpenAiError {
+impl IntoResponse for InferenceError {
     fn into_response(self) -> Response {
         let retry_after_secs = self.retry_after_secs;
         let mut response = (self.status, Json(self.body())).into_response();

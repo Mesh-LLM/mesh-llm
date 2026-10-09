@@ -39,11 +39,11 @@ struct RecordingBackend {
 
 struct SequencedBackend {
     chat_requests: Mutex<Vec<ChatCompletionRequest>>,
-    chat_responses: Mutex<VecDeque<OpenAiResult<ChatCompletionResponse>>>,
+    chat_responses: Mutex<VecDeque<InferenceResult<ChatCompletionResponse>>>,
 }
 
 impl SequencedBackend {
-    fn new(chat_responses: Vec<OpenAiResult<ChatCompletionResponse>>) -> Self {
+    fn new(chat_responses: Vec<InferenceResult<ChatCompletionResponse>>) -> Self {
         Self {
             chat_requests: Mutex::new(Vec::new()),
             chat_responses: Mutex::new(VecDeque::from(chat_responses)),
@@ -106,15 +106,15 @@ impl GuardrailTelemetrySink for RecordingTelemetrySink {
 }
 
 #[async_trait]
-impl OpenAiBackend for RecordingBackend {
-    async fn models(&self) -> OpenAiResult<Vec<ModelObject>> {
+impl InferenceBackend for RecordingBackend {
+    async fn models(&self) -> InferenceResult<Vec<ModelObject>> {
         Ok(vec![ModelObject::new("guarded-model")])
     }
 
     async fn chat_completion(
         &self,
         request: ChatCompletionRequest,
-    ) -> OpenAiResult<ChatCompletionResponse> {
+    ) -> InferenceResult<ChatCompletionResponse> {
         *self.seen_chat.lock().unwrap() = Some(request.clone());
         Ok(recording_backend_chat_response(&request))
     }
@@ -122,13 +122,13 @@ impl OpenAiBackend for RecordingBackend {
     async fn chat_completion_stream(
         &self,
         request: ChatCompletionRequest,
-        _context: OpenAiRequestContext,
-    ) -> OpenAiResult<ChatCompletionStream> {
+        _context: InferenceRequestContext,
+    ) -> InferenceResult<ChatCompletionStream> {
         *self.seen_chat_stream.lock().unwrap() = Some(request);
         Ok(Box::pin(stream::empty()))
     }
 
-    async fn completion(&self, request: CompletionRequest) -> OpenAiResult<CompletionResponse> {
+    async fn completion(&self, request: CompletionRequest) -> InferenceResult<CompletionResponse> {
         *self.seen_completion.lock().unwrap() = Some(request.clone());
         Ok(CompletionResponse::new(
             request.model,
@@ -140,23 +140,23 @@ impl OpenAiBackend for RecordingBackend {
     async fn completion_stream(
         &self,
         request: CompletionRequest,
-        _context: OpenAiRequestContext,
-    ) -> OpenAiResult<CompletionStream> {
+        _context: InferenceRequestContext,
+    ) -> InferenceResult<CompletionStream> {
         *self.seen_completion_stream.lock().unwrap() = Some(request);
         Ok(Box::pin(stream::empty()))
     }
 }
 
 #[async_trait]
-impl OpenAiBackend for SequencedBackend {
-    async fn models(&self) -> OpenAiResult<Vec<ModelObject>> {
+impl InferenceBackend for SequencedBackend {
+    async fn models(&self) -> InferenceResult<Vec<ModelObject>> {
         Ok(vec![ModelObject::new("guarded-model")])
     }
 
     async fn chat_completion(
         &self,
         request: ChatCompletionRequest,
-    ) -> OpenAiResult<ChatCompletionResponse> {
+    ) -> InferenceResult<ChatCompletionResponse> {
         self.chat_requests.lock().unwrap().push(request.clone());
         self.chat_responses
             .lock()
@@ -168,12 +168,12 @@ impl OpenAiBackend for SequencedBackend {
     async fn chat_completion_stream(
         &self,
         _request: ChatCompletionRequest,
-        _context: OpenAiRequestContext,
-    ) -> OpenAiResult<ChatCompletionStream> {
+        _context: InferenceRequestContext,
+    ) -> InferenceResult<ChatCompletionStream> {
         Ok(Box::pin(stream::empty()))
     }
 
-    async fn completion(&self, request: CompletionRequest) -> OpenAiResult<CompletionResponse> {
+    async fn completion(&self, request: CompletionRequest) -> InferenceResult<CompletionResponse> {
         Ok(CompletionResponse::new(
             request.model,
             "ok",
@@ -184,8 +184,8 @@ impl OpenAiBackend for SequencedBackend {
     async fn completion_stream(
         &self,
         _request: CompletionRequest,
-        _context: OpenAiRequestContext,
-    ) -> OpenAiResult<CompletionStream> {
+        _context: InferenceRequestContext,
+    ) -> InferenceResult<CompletionStream> {
         Ok(Box::pin(stream::empty()))
     }
 }
@@ -193,7 +193,7 @@ impl OpenAiBackend for SequencedBackend {
 #[tokio::test]
 async fn disabled_mode_delegates_chat_completion() {
     let backend = Arc::new(RecordingBackend::default());
-    let guarded = GuardedOpenAiBackend::new(backend.clone(), GuardrailPolicy::default());
+    let guarded = GuardedInferenceBackend::new(backend.clone(), GuardrailPolicy::default());
     let request: ChatCompletionRequest = serde_json::from_value(json!({
         "model": "guarded-model",
         "messages": [{"role": "user", "content": "hello"}],
@@ -205,7 +205,7 @@ async fn disabled_mode_delegates_chat_completion() {
     let models = guarded.models().await.unwrap();
     let _ = guarded.chat_completion(request.clone()).await.unwrap();
     let _ = guarded
-        .chat_completion_stream(request.clone(), OpenAiRequestContext::new())
+        .chat_completion_stream(request.clone(), InferenceRequestContext::new())
         .await
         .unwrap();
 
@@ -219,7 +219,7 @@ async fn disabled_mode_delegates_chat_completion() {
         .await
         .unwrap();
     let _ = guarded
-        .completion_stream(completion_request.clone(), OpenAiRequestContext::new())
+        .completion_stream(completion_request.clone(), InferenceRequestContext::new())
         .await
         .unwrap();
 
@@ -246,7 +246,8 @@ async fn disabled_mode_delegates_chat_completion() {
 async fn policy_handle_enables_same_guarded_backend_without_reconstruction() {
     let backend = Arc::new(RecordingBackend::default());
     let policy_handle = GuardrailPolicyHandle::default();
-    let guarded = GuardedOpenAiBackend::with_policy_handle(backend.clone(), policy_handle.clone());
+    let guarded =
+        GuardedInferenceBackend::with_policy_handle(backend.clone(), policy_handle.clone());
     let request: ChatCompletionRequest = serde_json::from_value(json!({
         "model": "guarded-model",
         "messages": [{"role": "user", "content": "hello"}],
@@ -281,7 +282,7 @@ async fn policy_handle_enables_same_guarded_backend_without_reconstruction() {
 #[tokio::test]
 async fn compacting_backend_applies_forced_mesh_compact_override() {
     let backend = Arc::new(RecordingBackend::default());
-    let compacting = CompactingOpenAiBackend::new(backend.clone(), CompactionConfig::default());
+    let compacting = CompactingInferenceBackend::new(backend.clone(), CompactionConfig::default());
     let request: ChatCompletionRequest = serde_json::from_value(json!({
         "model": "tiny",
         "messages": [
@@ -302,7 +303,7 @@ async fn compacting_backend_applies_forced_mesh_compact_override() {
 #[tokio::test]
 async fn compacting_backend_applies_forced_mesh_compact_override_to_chat_stream() {
     let backend = Arc::new(RecordingBackend::default());
-    let compacting = CompactingOpenAiBackend::new(backend.clone(), CompactionConfig::default());
+    let compacting = CompactingInferenceBackend::new(backend.clone(), CompactionConfig::default());
     let request: ChatCompletionRequest = serde_json::from_value(json!({
         "model": "tiny",
         "messages": [
@@ -314,7 +315,7 @@ async fn compacting_backend_applies_forced_mesh_compact_override_to_chat_stream(
     .unwrap();
 
     let stream = compacting
-        .chat_completion_stream(request, OpenAiRequestContext::new())
+        .chat_completion_stream(request, InferenceRequestContext::new())
         .await
         .unwrap();
     drop(stream);
@@ -327,7 +328,7 @@ async fn compacting_backend_applies_forced_mesh_compact_override_to_chat_stream(
 #[tokio::test]
 async fn compacting_backend_leaves_completion_requests_untouched() {
     let backend = Arc::new(RecordingBackend::default());
-    let compacting = CompactingOpenAiBackend::new(backend.clone(), CompactionConfig::default());
+    let compacting = CompactingInferenceBackend::new(backend.clone(), CompactionConfig::default());
     let request: CompletionRequest = serde_json::from_value(json!({
         "model": "tiny",
         "prompt": "hello"
@@ -336,7 +337,7 @@ async fn compacting_backend_leaves_completion_requests_untouched() {
 
     compacting.completion(request.clone()).await.unwrap();
     let stream = compacting
-        .completion_stream(request.clone(), OpenAiRequestContext::new())
+        .completion_stream(request.clone(), InferenceRequestContext::new())
         .await
         .unwrap();
     drop(stream);
@@ -523,7 +524,7 @@ fn request_contract_parses_raw_openai_fields() {
 #[tokio::test]
 async fn auto_tool_request_injects_mesh_respond() {
     let backend = Arc::new(RecordingBackend::default());
-    let guarded = GuardedOpenAiBackend::new(
+    let guarded = GuardedInferenceBackend::new(
         backend.clone(),
         GuardrailPolicy {
             mode: GuardrailMode::Enforce,
@@ -557,7 +558,7 @@ async fn auto_tool_request_injects_mesh_respond() {
 #[tokio::test]
 async fn guarded_tool_request_suppresses_implicit_thinking() {
     let backend = Arc::new(RecordingBackend::default());
-    let guarded = GuardedOpenAiBackend::new(backend.clone(), enforce_policy());
+    let guarded = GuardedInferenceBackend::new(backend.clone(), enforce_policy());
     let request: ChatCompletionRequest = serde_json::from_value(json!({
         "model": "Qwen3-8B-Q4_K_M",
         "messages": [{"role": "user", "content": "hello"}],
@@ -581,7 +582,7 @@ async fn guarded_tool_request_suppresses_implicit_thinking() {
 #[tokio::test]
 async fn guarded_structured_request_suppresses_implicit_thinking() {
     let backend = Arc::new(RecordingBackend::default());
-    let guarded = GuardedOpenAiBackend::new(backend.clone(), enforce_policy());
+    let guarded = GuardedInferenceBackend::new(backend.clone(), enforce_policy());
     let request: ChatCompletionRequest = serde_json::from_value(json!({
         "model": "Qwen3-8B-Q4_K_M",
         "messages": [{"role": "user", "content": "json"}],
@@ -604,7 +605,7 @@ async fn guarded_structured_request_suppresses_implicit_thinking() {
 #[tokio::test]
 async fn guarded_request_preserves_explicit_reasoning_effort() {
     let backend = Arc::new(RecordingBackend::default());
-    let guarded = GuardedOpenAiBackend::new(backend.clone(), enforce_policy());
+    let guarded = GuardedInferenceBackend::new(backend.clone(), enforce_policy());
     let request: ChatCompletionRequest = serde_json::from_value(json!({
         "model": "Qwen3-8B-Q4_K_M",
         "messages": [{"role": "user", "content": "hello"}],
@@ -623,7 +624,7 @@ async fn guarded_request_preserves_explicit_reasoning_effort() {
 #[tokio::test]
 async fn guarded_request_preserves_explicit_provider_thinking_flag() {
     let backend = Arc::new(RecordingBackend::default());
-    let guarded = GuardedOpenAiBackend::new(backend.clone(), enforce_policy());
+    let guarded = GuardedInferenceBackend::new(backend.clone(), enforce_policy());
     let request: ChatCompletionRequest = serde_json::from_value(json!({
         "model": "Qwen3-8B-Q4_K_M",
         "messages": [{"role": "user", "content": "hello"}],
@@ -650,7 +651,7 @@ async fn guarded_request_preserves_explicit_provider_thinking_flag() {
 #[tokio::test]
 async fn absent_tool_choice_injects_mesh_respond() {
     let backend = Arc::new(RecordingBackend::default());
-    let guarded = GuardedOpenAiBackend::new(
+    let guarded = GuardedInferenceBackend::new(
         backend.clone(),
         GuardrailPolicy {
             mode: GuardrailMode::Enforce,
@@ -676,7 +677,7 @@ async fn absent_tool_choice_injects_mesh_respond() {
 #[tokio::test]
 async fn structured_only_request_injects_mesh_emit_structured() {
     let backend = Arc::new(RecordingBackend::default());
-    let guarded = GuardedOpenAiBackend::new(
+    let guarded = GuardedInferenceBackend::new(
         backend.clone(),
         GuardrailPolicy {
             mode: GuardrailMode::Enforce,
@@ -702,7 +703,7 @@ async fn structured_only_request_injects_mesh_emit_structured() {
 #[tokio::test]
 async fn forced_user_tool_request_does_not_inject_mesh_respond() {
     let backend = Arc::new(RecordingBackend::default());
-    let guarded = GuardedOpenAiBackend::new(
+    let guarded = GuardedInferenceBackend::new(
         backend.clone(),
         GuardrailPolicy {
             mode: GuardrailMode::Enforce,
@@ -729,7 +730,7 @@ async fn forced_user_tool_request_does_not_inject_mesh_respond() {
 #[tokio::test]
 async fn reserved_tool_name_is_rejected_in_enforce_mode() {
     let backend = Arc::new(RecordingBackend::default());
-    let guarded = GuardedOpenAiBackend::new(
+    let guarded = GuardedInferenceBackend::new(
         backend.clone(),
         GuardrailPolicy {
             mode: GuardrailMode::Enforce,
@@ -757,7 +758,7 @@ async fn reserved_tool_name_is_rejected_in_enforce_mode() {
 #[tokio::test]
 async fn forced_reserved_tool_name_is_rejected_in_enforce_mode() {
     let backend = Arc::new(RecordingBackend::default());
-    let guarded = GuardedOpenAiBackend::new(
+    let guarded = GuardedInferenceBackend::new(
         backend.clone(),
         GuardrailPolicy {
             mode: GuardrailMode::Enforce,
@@ -786,7 +787,7 @@ async fn forced_reserved_tool_name_is_rejected_in_enforce_mode() {
 async fn metrics_only_records_reserved_tool_collision_and_passes_through() {
     let backend = Arc::new(RecordingBackend::default());
     let telemetry = Arc::new(RecordingTelemetrySink::default());
-    let guarded = GuardedOpenAiBackend::new(
+    let guarded = GuardedInferenceBackend::new(
         backend.clone(),
         GuardrailPolicy {
             mode: GuardrailMode::MetricsOnly,
@@ -817,7 +818,7 @@ async fn metrics_only_records_reserved_tool_collision_and_passes_through() {
 #[tokio::test]
 async fn unsupported_structured_with_real_tools_is_rejected_in_enforce_mode() {
     let backend = Arc::new(RecordingBackend::default());
-    let guarded = GuardedOpenAiBackend::new(
+    let guarded = GuardedInferenceBackend::new(
         backend.clone(),
         GuardrailPolicy {
             mode: GuardrailMode::Enforce,
@@ -848,7 +849,7 @@ async fn unsupported_structured_with_real_tools_is_rejected_in_enforce_mode() {
 #[tokio::test]
 async fn real_tools_plus_structured_output_returns_unsupported() {
     let backend = Arc::new(RecordingBackend::default());
-    let guarded = GuardedOpenAiBackend::new(
+    let guarded = GuardedInferenceBackend::new(
         backend.clone(),
         GuardrailPolicy {
             mode: GuardrailMode::Enforce,
@@ -879,7 +880,7 @@ async fn real_tools_plus_structured_output_returns_unsupported() {
 #[tokio::test]
 async fn forced_tool_plus_structured_is_rejected_in_enforce_mode() {
     let backend = Arc::new(RecordingBackend::default());
-    let guarded = GuardedOpenAiBackend::new(
+    let guarded = GuardedInferenceBackend::new(
         backend.clone(),
         GuardrailPolicy {
             mode: GuardrailMode::Enforce,
@@ -910,7 +911,7 @@ async fn forced_tool_plus_structured_is_rejected_in_enforce_mode() {
 #[tokio::test]
 async fn parallel_tool_calls_false_with_structured_is_rejected_in_enforce_mode() {
     let backend = Arc::new(RecordingBackend::default());
-    let guarded = GuardedOpenAiBackend::new(
+    let guarded = GuardedInferenceBackend::new(
         backend.clone(),
         GuardrailPolicy {
             mode: GuardrailMode::Enforce,
@@ -942,7 +943,7 @@ async fn parallel_tool_calls_false_with_structured_is_rejected_in_enforce_mode()
 async fn metrics_only_records_unsupported_combination_and_passes_through() {
     let backend = Arc::new(RecordingBackend::default());
     let telemetry = Arc::new(RecordingTelemetrySink::default());
-    let guarded = GuardedOpenAiBackend::new(
+    let guarded = GuardedInferenceBackend::new(
         backend.clone(),
         GuardrailPolicy {
             mode: GuardrailMode::MetricsOnly,
@@ -974,7 +975,7 @@ async fn metrics_only_records_unsupported_combination_and_passes_through() {
 async fn streaming_requests_bypass_guardrails() {
     let backend = Arc::new(RecordingBackend::default());
     let telemetry = Arc::new(RecordingTelemetrySink::default());
-    let guarded = GuardedOpenAiBackend::new(
+    let guarded = GuardedInferenceBackend::new(
         backend.clone(),
         GuardrailPolicy {
             mode: GuardrailMode::Enforce,
@@ -1005,7 +1006,7 @@ async fn streaming_requests_bypass_guardrails() {
 async fn no_tools_and_text_response_format_passes_through() {
     let backend = Arc::new(RecordingBackend::default());
     let telemetry = Arc::new(RecordingTelemetrySink::default());
-    let guarded = GuardedOpenAiBackend::new(
+    let guarded = GuardedInferenceBackend::new(
         backend.clone(),
         GuardrailPolicy {
             mode: GuardrailMode::Enforce,
@@ -1034,7 +1035,7 @@ async fn no_tools_and_text_response_format_passes_through() {
 #[tokio::test]
 async fn small_model_threshold_controls_small_model_eligibility() {
     let guarded_backend = Arc::new(RecordingBackend::default());
-    let guarded = GuardedOpenAiBackend::new(
+    let guarded = GuardedInferenceBackend::new(
         guarded_backend.clone(),
         GuardrailPolicy {
             mode: GuardrailMode::Enforce,
@@ -1054,7 +1055,7 @@ async fn small_model_threshold_controls_small_model_eligibility() {
 
     let bypass_backend = Arc::new(RecordingBackend::default());
     let bypass_telemetry = Arc::new(RecordingTelemetrySink::default());
-    let bypass = GuardedOpenAiBackend::new(
+    let bypass = GuardedInferenceBackend::new(
         bypass_backend.clone(),
         GuardrailPolicy {
             mode: GuardrailMode::Enforce,
@@ -1085,7 +1086,7 @@ async fn small_model_threshold_controls_small_model_eligibility() {
 #[tokio::test]
 async fn small_model_only_policy_bypasses_large_model() {
     let small_backend = Arc::new(RecordingBackend::default());
-    let small_guarded = GuardedOpenAiBackend::new(
+    let small_guarded = GuardedInferenceBackend::new(
         small_backend.clone(),
         GuardrailPolicy {
             mode: GuardrailMode::Enforce,
@@ -1104,7 +1105,7 @@ async fn small_model_only_policy_bypasses_large_model() {
 
     let large_backend = Arc::new(RecordingBackend::default());
     let large_telemetry = Arc::new(RecordingTelemetrySink::default());
-    let large_guarded = GuardedOpenAiBackend::new(
+    let large_guarded = GuardedInferenceBackend::new(
         large_backend.clone(),
         GuardrailPolicy {
             mode: GuardrailMode::Enforce,
@@ -1134,7 +1135,7 @@ async fn small_model_only_policy_bypasses_large_model() {
 #[tokio::test]
 async fn all_model_policy_guards_large_models_too() {
     let backend = Arc::new(RecordingBackend::default());
-    let guarded = GuardedOpenAiBackend::new(
+    let guarded = GuardedInferenceBackend::new(
         backend.clone(),
         GuardrailPolicy {
             mode: GuardrailMode::Enforce,
@@ -1159,7 +1160,7 @@ async fn all_model_policy_guards_large_models_too() {
 async fn mesh_guardrails_false_cannot_bypass_enforced_request() {
     let backend = Arc::new(RecordingBackend::default());
     let telemetry = Arc::new(RecordingTelemetrySink::default());
-    let guarded = GuardedOpenAiBackend::new(
+    let guarded = GuardedInferenceBackend::new(
         backend.clone(),
         GuardrailPolicy {
             mode: GuardrailMode::Enforce,
@@ -1190,7 +1191,7 @@ async fn mesh_guardrails_false_cannot_bypass_enforced_request() {
 #[tokio::test]
 async fn mesh_guardrails_true_opts_large_model_into_guardrails() {
     let backend = Arc::new(RecordingBackend::default());
-    let guarded = GuardedOpenAiBackend::new(
+    let guarded = GuardedInferenceBackend::new(
         backend.clone(),
         GuardrailPolicy {
             mode: GuardrailMode::Enforce,

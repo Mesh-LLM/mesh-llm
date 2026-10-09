@@ -25,9 +25,9 @@ pub(super) struct FusedFirstDecodeContext<'a, 'request, F> {
 
 pub(super) fn apply_fused_first_decode<F>(
     context: FusedFirstDecodeContext<'_, '_, F>,
-) -> OpenAiResult<bool>
+) -> InferenceResult<bool>
 where
-    F: FnMut(i32) -> OpenAiResult<TokenControl>,
+    F: FnMut(i32) -> InferenceResult<TokenControl>,
 {
     let FusedFirstDecodeContext {
         backend,

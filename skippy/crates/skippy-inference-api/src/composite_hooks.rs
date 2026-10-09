@@ -1,26 +1,26 @@
 //! Ordered core transformations composed with read-only exchange policies.
 use crate::{
     CapsuleMarker, ChatCompletionOutcome, ChatCompletionRequest, ChatCompletionResponse,
-    ChatExchangeRoute, ChatHookOutcome, GenerationHookSignals, OpenAiHookPolicy, OpenAiResult,
-    PrefillHookSignals, apply_chat_hook_outcome,
+    ChatExchangeRoute, ChatHookOutcome, GenerationHookSignals, InferenceHookPolicy,
+    InferenceResult, PrefillHookSignals, apply_chat_hook_outcome,
 };
 use async_trait::async_trait;
 use std::sync::Arc;
 
 pub struct CompositeOpenAiHookPolicy {
-    policies: Vec<Arc<dyn OpenAiHookPolicy>>,
+    policies: Vec<Arc<dyn InferenceHookPolicy>>,
 }
 impl CompositeOpenAiHookPolicy {
-    pub fn new(policies: Vec<Arc<dyn OpenAiHookPolicy>>) -> Arc<Self> {
+    pub fn new(policies: Vec<Arc<dyn InferenceHookPolicy>>) -> Arc<Self> {
         Arc::new(Self { policies })
     }
 }
 #[async_trait]
-impl OpenAiHookPolicy for CompositeOpenAiHookPolicy {
+impl InferenceHookPolicy for CompositeOpenAiHookPolicy {
     async fn before_chat_completion(
         &self,
         request: &mut ChatCompletionRequest,
-    ) -> OpenAiResult<ChatHookOutcome> {
+    ) -> InferenceResult<ChatHookOutcome> {
         for policy in &self.policies {
             let outcome = policy.before_chat_completion(request).await?;
             apply_chat_hook_outcome(request, &outcome);
@@ -31,7 +31,7 @@ impl OpenAiHookPolicy for CompositeOpenAiHookPolicy {
         &self,
         request: &mut ChatCompletionRequest,
         signals: PrefillHookSignals,
-    ) -> OpenAiResult<ChatHookOutcome> {
+    ) -> InferenceResult<ChatHookOutcome> {
         for policy in &self.policies {
             let outcome = policy.after_prefill(request, signals.clone()).await?;
             apply_chat_hook_outcome(request, &outcome);
@@ -42,7 +42,7 @@ impl OpenAiHookPolicy for CompositeOpenAiHookPolicy {
         &self,
         request: &mut ChatCompletionRequest,
         signals: GenerationHookSignals,
-    ) -> OpenAiResult<ChatHookOutcome> {
+    ) -> InferenceResult<ChatHookOutcome> {
         for policy in &self.policies {
             let outcome = policy.mid_generation(request, signals.clone()).await?;
             apply_chat_hook_outcome(request, &outcome);
@@ -53,7 +53,7 @@ impl OpenAiHookPolicy for CompositeOpenAiHookPolicy {
         &self,
         request: &ChatCompletionRequest,
         route: &ChatExchangeRoute,
-    ) -> OpenAiResult<()> {
+    ) -> InferenceResult<()> {
         for policy in &self.policies {
             policy
                 .admit_effective_chat_completion(request, route)
@@ -65,7 +65,7 @@ impl OpenAiHookPolicy for CompositeOpenAiHookPolicy {
         &self,
         request: &crate::CompletionRequest,
         exchange_id: &str,
-    ) -> OpenAiResult<()> {
+    ) -> InferenceResult<()> {
         for policy in &self.policies {
             policy
                 .admit_effective_completion(request, exchange_id)

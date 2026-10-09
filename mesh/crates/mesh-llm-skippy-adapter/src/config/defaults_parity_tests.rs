@@ -1,7 +1,7 @@
 //! Prevent Mesh and standalone Skippy from drifting when a serving default changes.
 use super::{test_support::*, *};
 use mesh_llm_config::MeshConfig;
-use skippy_api::{SingleStageOptions, serving::OpenAiOptions};
+use skippy_api::{SingleStageOptions, serving::InferenceOptions};
 use skippy_protocol::LoadMode;
 
 #[test]
@@ -25,7 +25,7 @@ fn mesh_and_skippy_resolve_identical_default_stages_and_frontends() {
         })
         .unwrap();
         let mesh_frontend = resolved.to_embedded_openai_args(0, true).unwrap();
-        let mut skippy_frontend = OpenAiOptions::direct_single_stage_defaults(
+        let mut skippy_frontend = InferenceOptions::direct_single_stage_defaults(
             "model".into(),
             skippy_config::local_serving::MAX_OUTPUT_TOKENS,
             skippy_config::local_serving::PARALLEL,
@@ -104,7 +104,7 @@ fn automatic_draft_discovery_and_pairing_match_mesh_policy() {
             })
             .unwrap();
             let mesh = resolved.to_embedded_openai_args(0, true).unwrap();
-            let mut standalone = OpenAiOptions::direct_single_stage_defaults(
+            let mut standalone = InferenceOptions::direct_single_stage_defaults(
                 "model".into(),
                 skippy_config::local_serving::MAX_OUTPUT_TOKENS,
                 skippy_config::local_serving::PARALLEL,

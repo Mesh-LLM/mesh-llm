@@ -10,7 +10,7 @@ use mesh_llm_node::serving::{
 use mesh_llm_system::hardware::{self, Metric};
 #[cfg(test)]
 use mesh_llm_types::models::capabilities::ModelCapabilities;
-use skippy_inference_api::{ChatCompletionRequest, ChatMessage, MessageContent, OpenAiBackend};
+use skippy_inference_api::{ChatCompletionRequest, ChatMessage, InferenceBackend, MessageContent};
 use std::collections::{BTreeMap, HashMap};
 use std::io::Write;
 use std::path::Path;
