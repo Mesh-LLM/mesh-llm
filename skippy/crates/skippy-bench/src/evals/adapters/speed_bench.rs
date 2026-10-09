@@ -12,7 +12,8 @@ pub(in crate::evals) fn speed_bench_command(
     let harness = harness_dir(root, definition);
 
     let script = harness.join("tools/server/bench/speed-bench/speed_bench.py");
-    let launcher = super::super::external_sdk_source::leaf("speed-bench-auth.py")?;
+    let launcher =
+        super::super::external_sdk_source::command_leaf("speed-bench-auth.py", args.dry_run)?;
     let cache_root = super::super::speed_environment::base(root);
     let command = CommandSpec::new(
         super::super::speed_environment::runtime_python(root)
@@ -78,6 +79,9 @@ pub(in crate::evals) fn speed_bench_command(
 mod tests {
     #[test]
     fn response_timings_are_written_as_json_lines() {
+        if !crate::evals::external_sdk_source::configured() {
+            return;
+        }
         let bytes = super::super::super::external_sdk_source::read("speed-bench-auth.py").unwrap();
         let launcher = std::str::from_utf8(&bytes).unwrap();
         assert!(launcher.contains(r#"sort_keys=True) + "\n")"#));
