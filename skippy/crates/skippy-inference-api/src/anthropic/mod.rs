@@ -1,7 +1,7 @@
 //! Anthropic Messages API (`/v1/messages`) frontend.
 //!
 //! Translates the Anthropic Messages wire protocol onto the same
-//! [`crate::backend::OpenAiBackend`] pipeline that serves the OpenAI-compatible
+//! [`crate::backend::InferenceBackend`] pipeline that serves the OpenAI-compatible
 //! routes, so both protocols share generation, tool plumbing, mesh routing,
 //! and MoA behavior. Claude Code speaks this protocol natively; serving it
 //! directly removes the OpenAI bridge hop for Anthropic-protocol clients.

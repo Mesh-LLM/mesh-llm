@@ -1,31 +1,31 @@
 use super::StageOpenAiBackend;
 use crate::frontend::util::openai_backend_error;
-use skippy_inference_api::{OpenAiError, OpenAiResult};
+use skippy_inference_api::{InferenceError, InferenceResult};
 use skippy_runtime::ModelWorkload;
 use std::sync::OnceLock;
 
 /// A backend owns one immutable loaded model; clones share its probe result.
 /// Preserve probe errors rather than assuming an unsupported model is causal.
 #[derive(Default)]
-pub(in crate::frontend) struct CachedModelWorkload(OnceLock<OpenAiResult<ModelWorkload>>);
+pub(in crate::frontend) struct CachedModelWorkload(OnceLock<InferenceResult<ModelWorkload>>);
 
 impl CachedModelWorkload {
     /// Serialize the first probe and reuse its success or failure for this loaded model.
     fn get_or_probe(
         &self,
-        probe: impl FnOnce() -> OpenAiResult<ModelWorkload>,
-    ) -> OpenAiResult<ModelWorkload> {
+        probe: impl FnOnce() -> InferenceResult<ModelWorkload>,
+    ) -> InferenceResult<ModelWorkload> {
         self.0.get_or_init(probe).clone()
     }
 }
 
 impl StageOpenAiBackend {
     /// Classify text generation without locking the runtime after its first request.
-    pub(in crate::frontend) fn model_workload(&self) -> OpenAiResult<ModelWorkload> {
+    pub(in crate::frontend) fn model_workload(&self) -> InferenceResult<ModelWorkload> {
         self.workload.get_or_probe(|| {
             self.runtime
                 .lock()
-                .map_err(|_| OpenAiError::backend("runtime lock poisoned"))?
+                .map_err(|_| InferenceError::backend("runtime lock poisoned"))?
                 .workload_info()
                 .map(|info| info.kind)
                 .map_err(openai_backend_error)
@@ -71,7 +71,7 @@ mod tests {
     fn failed_probe_remains_fail_closed_and_preserves_the_error() {
         let cache = CachedModelWorkload::default();
         let first = cache
-            .get_or_probe(|| Err(OpenAiError::backend("native workload probe failed")))
+            .get_or_probe(|| Err(InferenceError::backend("native workload probe failed")))
             .unwrap_err();
         let cached = cache
             .get_or_probe(|| panic!("failed immutable-model probes must not be retried"))

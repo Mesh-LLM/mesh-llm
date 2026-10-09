@@ -115,7 +115,7 @@ pub(super) fn seed_resident_prefix(kv: &KvStageIntegration, identity: &PrefillKv
         .expect("synthetic radix prefix should record");
 }
 
-pub(super) fn unsupported_code(error: OpenAiError) -> Option<String> {
+pub(super) fn unsupported_code(error: InferenceError) -> Option<String> {
     error.body().error.code
 }
 
@@ -144,7 +144,7 @@ pub(super) fn local_openai_backend(
         request_defaults: EmbeddedOpenAiRequestDefaults::default(),
         thinking: None,
         ctx_size,
-        mode: OpenAiBackendMode::LocalRuntime,
+        mode: InferenceBackendMode::LocalRuntime,
         draft: None,
         speculative_window: 0,
         adaptive_speculative_window: false,

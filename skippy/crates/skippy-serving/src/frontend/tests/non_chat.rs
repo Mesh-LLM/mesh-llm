@@ -261,10 +261,10 @@ async fn certify_embedding(backend: &StageOpenAiBackend) -> Result<()> {
         user: None,
     };
     let first = backend
-        .embeddings(request.clone(), OpenAiRequestContext::new())
+        .embeddings(request.clone(), InferenceRequestContext::new())
         .await?;
     let second = backend
-        .embeddings(request, OpenAiRequestContext::new())
+        .embeddings(request, InferenceRequestContext::new())
         .await?;
     assert_eq!(first.object, "list");
     assert_eq!(first.data.len(), 2);
@@ -301,9 +301,11 @@ async fn certify_rerank(backend: &StageOpenAiBackend) -> Result<()> {
         return_documents: true,
     };
     let first = backend
-        .rerank(request.clone(), OpenAiRequestContext::new())
+        .rerank(request.clone(), InferenceRequestContext::new())
         .await?;
-    let second = backend.rerank(request, OpenAiRequestContext::new()).await?;
+    let second = backend
+        .rerank(request, InferenceRequestContext::new())
+        .await?;
     assert_eq!(first.results.len(), 2);
     assert_eq!(first.results.len(), second.results.len());
     assert!(first.usage.prompt_tokens > 0);
@@ -401,7 +403,7 @@ async fn certify_speech_synthesis(backend: &StageOpenAiBackend) -> Result<()> {
                 response_format: AudioFormat::Wav,
                 speed: 1.0,
             },
-            OpenAiRequestContext::new(),
+            InferenceRequestContext::new(),
         )
         .await
         .expect_err("speaker selection must not be interpreted as a language");
@@ -422,7 +424,7 @@ async fn certify_speech_synthesis(backend: &StageOpenAiBackend) -> Result<()> {
                 response_format: AudioFormat::Wav,
                 speed: 1.0,
             },
-            OpenAiRequestContext::new(),
+            InferenceRequestContext::new(),
         )
         .await?;
     assert_eq!(response.content_type, "audio/wav");
@@ -454,7 +456,7 @@ async fn certify_speech_recognition(
                 response_format: "json".to_string(),
                 temperature: Some(0.0),
             },
-            OpenAiRequestContext::new(),
+            InferenceRequestContext::new(),
         )
         .await?;
     assert!(!response.text.trim().is_empty());

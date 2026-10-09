@@ -2,10 +2,10 @@
 use crate::frontend::generation::GENERATION_RETRY_AFTER_SECS;
 #[cfg(test)]
 use axum::http::StatusCode;
-use skippy_inference_api::OpenAiError;
+use skippy_inference_api::InferenceError;
 #[cfg(test)]
-use skippy_inference_api::OpenAiErrorKind;
-use skippy_inference_api::OpenAiResult;
+use skippy_inference_api::InferenceErrorKind;
+use skippy_inference_api::InferenceResult;
 use std::sync::Arc;
 use std::sync::Mutex;
 use tokio::sync::Notify;
@@ -70,13 +70,13 @@ impl GenerationTokenBudget {
     pub(super) fn try_reserve(
         self: &Arc<Self>,
         request: GenerationTokenBudgetRequest,
-    ) -> OpenAiResult<Option<GenerationTokenReservation>> {
+    ) -> InferenceResult<Option<GenerationTokenReservation>> {
         let tokens = request.reservation_tokens();
         self.ensure_request_fits(tokens)?;
         let mut state = self
             .state
             .lock()
-            .map_err(|_| OpenAiError::backend("generation token budget lock poisoned"))?;
+            .map_err(|_| InferenceError::backend("generation token budget lock poisoned"))?;
         if state.active_tokens.saturating_add(tokens) > self.capacity_tokens {
             return Ok(None);
         }
@@ -91,13 +91,13 @@ impl GenerationTokenBudget {
     pub(super) fn can_reserve_now(
         &self,
         request: GenerationTokenBudgetRequest,
-    ) -> OpenAiResult<bool> {
+    ) -> InferenceResult<bool> {
         let tokens = request.reservation_tokens();
         self.ensure_request_fits(tokens)?;
         let state = self
             .state
             .lock()
-            .map_err(|_| OpenAiError::backend("generation token budget lock poisoned"))?;
+            .map_err(|_| InferenceError::backend("generation token budget lock poisoned"))?;
         Ok(state.active_tokens.saturating_add(tokens) <= self.capacity_tokens)
     }
 
@@ -110,7 +110,7 @@ impl GenerationTokenBudget {
         self: &Arc<Self>,
         request: GenerationTokenBudgetRequest,
         admission_timeout: Duration,
-    ) -> OpenAiResult<GenerationTokenReservation> {
+    ) -> InferenceResult<GenerationTokenReservation> {
         self.reserve_cancellable(request, admission_timeout, None)
     }
 
@@ -120,17 +120,17 @@ impl GenerationTokenBudget {
         request: GenerationTokenBudgetRequest,
         admission_timeout: Duration,
         cancellation: Option<&skippy_inference_api::CancellationToken>,
-    ) -> OpenAiResult<GenerationTokenReservation> {
+    ) -> InferenceResult<GenerationTokenReservation> {
         let tokens = request.reservation_tokens();
         self.ensure_request_fits(tokens)?;
         let deadline = Instant::now() + admission_timeout;
         let mut state = self
             .state
             .lock()
-            .map_err(|_| OpenAiError::backend("generation token budget lock poisoned"))?;
+            .map_err(|_| InferenceError::backend("generation token budget lock poisoned"))?;
         loop {
             if cancellation.is_some_and(skippy_inference_api::CancellationToken::is_cancelled) {
-                return Err(OpenAiError::backend("request cancelled"));
+                return Err(InferenceError::backend("request cancelled"));
             }
             if state.active_tokens.saturating_add(tokens) <= self.capacity_tokens {
                 state.active_tokens = state.active_tokens.saturating_add(tokens);
@@ -159,7 +159,7 @@ impl GenerationTokenBudget {
             let (next_state, wait_result) = self
                 .released
                 .wait_timeout(state, wait_for)
-                .map_err(|_| OpenAiError::backend("generation token budget lock poisoned"))?;
+                .map_err(|_| InferenceError::backend("generation token budget lock poisoned"))?;
             state = next_state;
             if wait_result.timed_out() && Instant::now() >= deadline {
                 return Err(generation_token_budget_timeout_error(
@@ -176,11 +176,11 @@ impl GenerationTokenBudget {
         self.capacity_tokens
     }
 
-    fn ensure_request_fits(&self, requested_tokens: usize) -> OpenAiResult<()> {
+    fn ensure_request_fits(&self, requested_tokens: usize) -> InferenceResult<()> {
         if requested_tokens <= self.capacity_tokens {
             return Ok(());
         }
-        Err(OpenAiError::context_length_exceeded(format!(
+        Err(InferenceError::context_length_exceeded(format!(
             "request requires {requested_tokens} KV tokens but the runtime pool holds {}",
             self.capacity_tokens
         )))
@@ -240,10 +240,10 @@ fn generation_token_budget_timeout_error(
     requested_tokens: usize,
     active_tokens: usize,
     capacity_tokens: usize,
-) -> OpenAiError {
-    OpenAiError::from_kind(
+) -> InferenceError {
+    InferenceError::from_kind(
         StatusCode::TOO_MANY_REQUESTS,
-        OpenAiErrorKind::RateLimit,
+        InferenceErrorKind::RateLimit,
         format!(
             "timed out waiting for KV token budget after {} seconds \
              (requested_tokens={requested_tokens}, active_tokens={active_tokens}, \

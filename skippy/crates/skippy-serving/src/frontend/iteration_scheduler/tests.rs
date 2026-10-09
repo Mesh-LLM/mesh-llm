@@ -177,7 +177,7 @@ fn direct_iteration_rechecks_deadline_after_worker_reply() {
     );
     request
         .reply
-        .send(Err(OpenAiError::backend("late worker result")))
+        .send(Err(InferenceError::backend("late worker result")))
         .unwrap();
 
     let error = caller.join().unwrap().unwrap_err();

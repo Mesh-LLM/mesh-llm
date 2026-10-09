@@ -1,6 +1,6 @@
 use super::*;
 use async_trait::async_trait;
-use skippy_inference_api::OpenAiHookPolicy;
+use skippy_inference_api::InferenceHookPolicy;
 use std::sync::{Arc, Mutex};
 
 #[derive(Default)]
@@ -10,7 +10,7 @@ struct PreparedPolicy {
 }
 
 #[async_trait]
-impl OpenAiHookPolicy for PreparedPolicy {
+impl InferenceHookPolicy for PreparedPolicy {
     fn observes_dispatched_request(&self) -> bool {
         true
     }
@@ -21,10 +21,10 @@ impl OpenAiHookPolicy for PreparedPolicy {
         &self,
         request: &ChatCompletionRequest,
         route: &ChatExchangeRoute,
-    ) -> OpenAiResult<()> {
+    ) -> InferenceResult<()> {
         self.seen.lock().unwrap().push(route.exchange_id.clone());
         if request.model == "prepared-denied" {
-            return Err(OpenAiError::invalid_request("prepared request denied"));
+            return Err(InferenceError::invalid_request("prepared request denied"));
         }
         Ok(())
     }

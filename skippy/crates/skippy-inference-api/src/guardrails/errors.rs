@@ -1,4 +1,4 @@
-use crate::errors::OpenAiError;
+use crate::errors::InferenceError;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum GuardrailErrorKind {
@@ -19,27 +19,27 @@ pub const GUARDRAIL_VALIDATION_FAILED_MESSAGE: &str =
 pub const GUARDRAIL_UNSUPPORTED_SCHEMA_FEATURE_CODE: &str = "guardrail_unsupported_schema_feature";
 pub const GUARDRAIL_UNSUPPORTED_SCHEMA_FEATURE_MESSAGE: &str = "guardrails support only json_object or a json_schema subset using type/properties/required/additionalProperties/items in v1";
 
-pub fn reserved_tool_name_error() -> OpenAiError {
-    OpenAiError::invalid_request(GUARDRAIL_RESERVED_TOOL_NAME_MESSAGE)
+pub fn reserved_tool_name_error() -> InferenceError {
+    InferenceError::invalid_request(GUARDRAIL_RESERVED_TOOL_NAME_MESSAGE)
         .with_code(GUARDRAIL_RESERVED_TOOL_NAME_CODE)
 }
 
-pub fn unsupported_combination_error() -> OpenAiError {
-    OpenAiError::invalid_request(GUARDRAIL_UNSUPPORTED_COMBINATION_MESSAGE)
+pub fn unsupported_combination_error() -> InferenceError {
+    InferenceError::invalid_request(GUARDRAIL_UNSUPPORTED_COMBINATION_MESSAGE)
         .with_code(GUARDRAIL_UNSUPPORTED_COMBINATION_CODE)
 }
 
-pub fn validation_failed_error() -> OpenAiError {
-    OpenAiError::invalid_request(GUARDRAIL_VALIDATION_FAILED_MESSAGE)
+pub fn validation_failed_error() -> InferenceError {
+    InferenceError::invalid_request(GUARDRAIL_VALIDATION_FAILED_MESSAGE)
         .with_code(GUARDRAIL_VALIDATION_FAILED_CODE)
 }
 
-pub fn unsupported_schema_feature_error() -> OpenAiError {
-    OpenAiError::invalid_request(GUARDRAIL_UNSUPPORTED_SCHEMA_FEATURE_MESSAGE)
+pub fn unsupported_schema_feature_error() -> InferenceError {
+    InferenceError::invalid_request(GUARDRAIL_UNSUPPORTED_SCHEMA_FEATURE_MESSAGE)
         .with_code(GUARDRAIL_UNSUPPORTED_SCHEMA_FEATURE_CODE)
 }
 
-pub(crate) fn guardrail_error(kind: GuardrailErrorKind) -> OpenAiError {
+pub(crate) fn guardrail_error(kind: GuardrailErrorKind) -> InferenceError {
     match kind {
         GuardrailErrorKind::ReservedToolName => reserved_tool_name_error(),
         GuardrailErrorKind::UnsupportedCombination => unsupported_combination_error(),
@@ -48,7 +48,7 @@ pub(crate) fn guardrail_error(kind: GuardrailErrorKind) -> OpenAiError {
     }
 }
 
-pub(crate) fn guardrail_error_catalog() -> [OpenAiError; 4] {
+pub(crate) fn guardrail_error_catalog() -> [InferenceError; 4] {
     [
         guardrail_error(GuardrailErrorKind::ReservedToolName),
         guardrail_error(GuardrailErrorKind::UnsupportedCombination),
