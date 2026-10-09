@@ -212,10 +212,13 @@ fn host_environment() -> impl Iterator<Item = (OsString, Value)> {
             // Preserve it as well as the operator's literal UUID selection.
             .filter(|value| key == "CUDA_VISIBLE_DEVICES" || !value.is_empty())
             .map(|value| {
-                let value = if value.is_empty() {
-                    Value::Public(value)
-                } else {
+                // Host search paths are not credentials and can exceed the
+                // secret size bound on Windows runners; only the operator's
+                // device selection is redacted.
+                let value = if key == "CUDA_VISIBLE_DEVICES" && !value.is_empty() {
                     Value::Secret(value)
+                } else {
+                    Value::Public(value)
                 };
                 (key.into(), value)
             })

@@ -100,19 +100,18 @@ fn migration_lifecycle_child_environment_has_only_execution_inputs_and_private_r
 
     for (key, value) in environment {
         match value {
-            Value::Secret(_) => assert!(
-                [
+            Value::Secret(_) => assert_eq!(key, "CUDA_VISIBLE_DEVICES"),
+            Value::Public(_)
+                if [
                     "PATH",
                     "SYSTEMROOT",
                     "WINDIR",
                     "LD_LIBRARY_PATH",
                     "DYLD_LIBRARY_PATH",
                     "DYLD_FALLBACK_LIBRARY_PATH",
-                    "CUDA_VISIBLE_DEVICES",
                 ]
                 .iter()
-                .any(|allowed| key == *allowed)
-            ),
+                .any(|host| key == *host) => {}
             Value::Public(value) => {
                 let path = std::path::Path::new(&value);
                 assert!(
