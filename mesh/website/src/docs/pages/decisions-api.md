@@ -110,14 +110,14 @@ curl -sS http://127.0.0.1:9337/v1/decisions \
 | `input` | Text string, or an array of `user` messages with string content or `input_text` parts. Images return an unsupported error until the local backend can evaluate them. |
 | `questions` | Nonempty array. Each question has a `type` of `predicate`, `choice`, or `score`. `name` is optional and echoed as `null` when omitted. |
 | `instructions` | Required text for each question. |
-| `choices` | Required for `choice`; each option has a distinct string or boolean `value` and optional `description`. String `"true"` and boolean `true` are distinct. |
-| `levels` | Required for `score`; each level has a distinct `label` and optional `description`. The response's numeric `value` is its position in this array. |
+| `choices` | Required for `choice`; the local backend accepts 2 to 26 options. Each option has a distinct string or boolean `value` and optional `description`. String `"true"` and boolean `true` are distinct. |
+| `levels` | Required for `score`; the local backend accepts 2 to 10 levels. Each level has a distinct `label` and optional `description`. The response's numeric `value` is its position in this array. |
 | `safety_identifier` | Optional caller-provided identifier. The local backend does not use it for inference. |
 
-The selected System One backend also sets option-count and runtime limits.
-See [System One API](/docs/pages/system-one-api/#make-a-read) before using a
-large choice or score set. The endpoint returns decisions for the supplied
-questions; it does not execute tools or run an agent loop. Standard chat
+The selected System One backend also sets runtime limits. See
+[System One API](/docs/pages/system-one-api/#make-a-read) for details. The
+endpoint returns decisions for the supplied questions; it does not execute
+tools or run an agent loop. Standard chat
 completion methods in OpenAI SDKs do not call `/v1/decisions`.
 
 ## Smoke a running server
