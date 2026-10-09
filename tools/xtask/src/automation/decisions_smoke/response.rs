@@ -84,6 +84,26 @@ pub(super) fn validate(body: &Value, model: &str) -> DynResult<()> {
     {
         return Err("invalid Decisions token usage".into());
     }
+    if body["usage"]["input_tokens_details"]
+        != serde_json::json!({"cached_tokens": 0, "cache_write_tokens": 0})
+        || body["usage"]["output_tokens_details"] != serde_json::json!({"reasoning_tokens": 0})
+    {
+        return Err("invalid Decisions detailed token usage".into());
+    }
+    Ok(())
+}
+
+pub(super) fn validate_boolean_choice(body: &Value) -> DynResult<()> {
+    let answer = &body["answers"][0];
+    if answer["type"] != "choice" || !answer["name"].is_null() || !answer["choice"].is_boolean() {
+        return Err("invalid Decisions unnamed boolean choice".into());
+    }
+    let values: Option<Vec<&Value>> = answer["probabilities"]
+        .as_array()
+        .map(|rows| rows.iter().map(|row| &row["value"]).collect());
+    if values != Some(vec![&Value::Bool(true), &Value::Bool(false)]) {
+        return Err("invalid Decisions boolean probabilities".into());
+    }
     Ok(())
 }
 #[cfg(test)]

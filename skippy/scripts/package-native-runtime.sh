@@ -714,6 +714,10 @@ if [[ "$runtime_os" == "windows" ]]; then
             if [[ -d "$dependency_dir" ]]; then
                 dependency_args+=(--search-dir "$dependency_dir")
             fi
+            # CUDA 13 on Windows installs its runtime DLLs under bin\x64.
+            if [[ "$dependency_root" == CUDA_PATH && -d "$dependency_dir/x64" ]]; then
+                dependency_args+=(--search-dir "$dependency_dir/x64")
+            fi
         fi
     done
     cargo xtool native windows-runtime-deps collect \

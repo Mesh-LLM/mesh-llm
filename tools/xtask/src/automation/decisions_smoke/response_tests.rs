@@ -6,7 +6,9 @@ fn valid() -> Value {
          "probabilities":[{"value":"billing","probability":0.8},{"value":"support","probability":0.2}]},
         {"type":"score","name":"frustration","score":1.25,"confidence":0.7,
          "probabilities":[{"value":0,"label":"0","probability":0.3},{"value":1,"label":"1","probability":0.7}]}],
-        "usage":{"input_tokens":10,"output_tokens":5,"total_tokens":15}})
+        "usage":{"input_tokens":10,"output_tokens":5,"total_tokens":15,
+            "input_tokens_details":{"cached_tokens":0,"cache_write_tokens":0},
+            "output_tokens_details":{"reasoning_tokens":0}}})
 }
 #[test]
 fn valid_scores_are_finite_without_invented_range_or_sum_constraints() {
@@ -65,4 +67,24 @@ fn discovery_excludes_aliases_and_requires_advertised_exact_capability() {
     }
     assert!(select_model(&serde_json::json!({"data":[]}), None).is_err());
     assert!(select_model(&serde_json::json!({"data":null}), None).is_err());
+}
+
+#[test]
+fn boolean_choice_requires_unnamed_ordered_boolean_probabilities() {
+    let valid = serde_json::json!({"answers":[{"type":"choice","name":null,"choice":true,
+        "probabilities":[{"value":true,"probability":0.9},{"value":false,"probability":0.1}]}]});
+    assert!(validate_boolean_choice(&valid).is_ok());
+    let mut named = valid.clone();
+    named["answers"][0]["name"] = serde_json::json!("team");
+    assert!(validate_boolean_choice(&named).is_err());
+    let mut reordered = valid.clone();
+    reordered["answers"][0]["probabilities"][0]["value"] = serde_json::json!(false);
+    assert!(validate_boolean_choice(&reordered).is_err());
+}
+
+#[test]
+fn response_requires_zero_detailed_usage() {
+    let mut body = valid();
+    body["usage"]["output_tokens_details"]["reasoning_tokens"] = serde_json::json!(1);
+    assert!(validate(&body, "actual").is_err());
 }

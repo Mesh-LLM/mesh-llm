@@ -104,20 +104,27 @@ fn graph_windows_release_composers_require_prebuilt_verifier_before_packaging() 
     }
 }
 #[test]
-fn graph_windows_cuda12_label_is_validated_before_install_and_package() {
+fn graph_windows_cuda_labels_are_validated_before_install_and_package() {
     let doc = document("release.yml");
     let j = job(&doc, "build_native_runtime_windows_gpu");
     let env = j.get("env").unwrap();
     for key in ["WINDOWS_CUDA_VERSION", "MESH_CUDA_VERSION"] {
-        assert_eq!(text(env, key), Some("${{ vars.CUDA_VERSION || '12.9.2' }}"));
+        assert_eq!(
+            text(env, key),
+            Some("${{ matrix.cuda_version || vars.CUDA_VERSION || '12.9.2' }}")
+        );
     }
-    let validation = named(j, "Validate CUDA 12 artifact contract");
+    let validation = named(j, "Validate CUDA artifact contract");
     assert_eq!(
         text(validation, "if"),
         Some("${{ matrix.backend == 'cuda' }}")
     );
     let run = text(validation, "run").unwrap();
-    assert!(run.contains("$cudaMajor -ne '12'"));
+    assert_eq!(
+        text(validation.get("env").unwrap(), "EXPECTED_CUDA_MAJOR"),
+        Some("${{ matrix.cuda_major }}")
+    );
+    assert!(run.contains("$cudaMajor -ne $env:EXPECTED_CUDA_MAJOR"));
     assert!(run.contains("throw"));
     let install = named(j, "Install CUDA toolkit");
     assert_eq!(
@@ -127,7 +134,7 @@ fn graph_windows_cuda12_label_is_validated_before_install_and_package() {
     let package = action(j, "./.github/actions/prepare-native-runtime-input");
     assert_eq!(
         text(package.get("env").unwrap(), "MESH_LLM_CUDA_TOOLKIT_MAJOR"),
-        Some("12")
+        Some("${{ matrix.cuda_major || '12' }}")
     );
     let position = |n: &Node| steps(j).iter().position(|s| std::ptr::eq(s, n)).unwrap();
     assert!(position(validation) < position(install) && position(install) < position(package));
@@ -145,7 +152,7 @@ fn graph_windows_cuda12_label_is_validated_before_install_and_package() {
         .iter()
         .filter(|r| text(r, "backend") == Some("cuda"))
         .collect::<Vec<_>>();
-    assert_eq!(cuda.len(), 1);
+    assert_eq!(cuda.len(), 2);
     assert_eq!(
         text(cuda[0], "artifact_name"),
         Some("release-native-runtime-windows-x86_64-cuda12")
@@ -155,6 +162,17 @@ fn graph_windows_cuda12_label_is_validated_before_install_and_package() {
             .unwrap()
             .split(';')
             .any(|a| a == "61")
+    );
+    assert_eq!(text(cuda[1], "cuda_version"), Some("13.1.2"));
+    assert_eq!(
+        text(cuda[1], "artifact_name"),
+        Some("release-native-runtime-windows-x86_64-cuda13")
+    );
+    assert!(
+        text(cuda[1], "cuda_architectures")
+            .unwrap()
+            .split(';')
+            .any(|a| a == "120")
     );
     assert_eq!(
         text(

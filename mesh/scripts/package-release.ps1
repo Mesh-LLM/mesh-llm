@@ -109,6 +109,13 @@ function Get-FlavorSuffix {
         return ""
     }
 
+    # When MESH_CUDA_VERSION is set (release matrix), include the CUDA major,
+    # as package-release.sh does: -cuda-12, -cuda-13.
+    if ($BinaryFlavor -eq "cuda" -and $env:MESH_CUDA_VERSION) {
+        $major = ("$env:MESH_CUDA_VERSION".Trim() -split '\.', 2)[0]
+        return "-$BinaryFlavor-$major"
+    }
+
     return "-$BinaryFlavor"
 }
 

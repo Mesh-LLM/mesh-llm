@@ -62,6 +62,9 @@ async fn smoke(
     let body = request::questions(&model);
     let answers = exchange(&options.base, "v1/decisions", Some(&body), deadline, token).await?;
     response::validate(&answers, &model)?;
+    let body = request::boolean_choice(&model);
+    let typed = exchange(&options.base, "v1/decisions", Some(&body), deadline, token).await?;
+    response::validate_boolean_choice(&typed)?;
     Ok(model)
 }
 pub(crate) fn run(args: &[String]) -> DynResult<()> {
@@ -82,7 +85,7 @@ pub(crate) fn run(args: &[String]) -> DynResult<()> {
         return Err("Decisions smoke terminal cancellation/deadline".into());
     }
     println!(
-        "Decisions live smoke passed: model={}, questions=predicate,choice,score",
+        "Decisions live smoke passed: model={}, questions=predicate,choice,score,boolean-choice",
         result?
     );
     Ok(())

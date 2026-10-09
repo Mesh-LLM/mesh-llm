@@ -5,10 +5,12 @@ description: Use Mesh's Decisions endpoint with System One models
 
 # Decisions API
 
-`POST /v1/decisions` asks a System One model to answer named questions about
+`POST /v1/decisions` asks a System One model to answer questions about
 text. A request can combine a yes/no `predicate`, a `choice` from supplied
 options, and a numeric `score`. Mesh serves the request through a local or
 reachable mesh model; it does not send the input to OpenAI.
+
+The request and answer fields follow [OpenAI's Decisions API](https://developers.openai.com/api/docs/guides/decisions) for text input. User-message text parts are joined into text evidence for the local model. This backend does not yet evaluate images or produce refusal answers. Model IDs identify locally loaded System One models, rather than OpenAI's `gpt-6-luna`.
 
 ## Start and find a model
 
@@ -75,7 +77,13 @@ the model and input:
       {"value": 2, "label": "2", "probability": 0.375}
     ], "confidence": 0.5}
   ],
-  "usage": {"input_tokens": 12, "output_tokens": 0, "total_tokens": 12}
+  "usage": {
+    "input_tokens": 12,
+    "input_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0},
+    "output_tokens": 0,
+    "output_tokens_details": {"reasoning_tokens": 0},
+    "total_tokens": 12
+  }
 }
 ```
 
@@ -99,16 +107,17 @@ curl -sS http://127.0.0.1:9337/v1/decisions \
 | Field | Requirement |
 | --- | --- |
 | `model` | Exact ID or alias advertised with `system_one` by this node's `/v1/models`. Automatic model selection is unsupported. |
-| `input` | Text string. Images and object input are unsupported in this adapter. |
-| `questions` | Nonempty array. Each question needs a distinct, nonempty `name` and a `type` of `predicate`, `choice`, or `score`. |
-| `instructions` | Optional text for each question. |
-| `choices` | Required for `choice`; each option has a distinct, nonempty string `value` and optional `description`. |
-| `levels` | Required for `score`; each level has a distinct, nonempty `label` and optional `description`. The response's numeric `value` is its position in this array. |
+| `input` | Text string, or an array of `user` messages with string content or `input_text` parts. Images return an unsupported error until the local backend can evaluate them. |
+| `questions` | Nonempty array. Each question has a `type` of `predicate`, `choice`, or `score`. `name` is optional and echoed as `null` when omitted. |
+| `instructions` | Required text for each question. |
+| `choices` | Required for `choice`; the local backend accepts 2 to 26 options. Each option has a distinct string or boolean `value` and optional `description`. String `"true"` and boolean `true` are distinct. |
+| `levels` | Required for `score`; the local backend accepts 2 to 10 levels. Each level has a distinct `label` and optional `description`. The response's numeric `value` is its position in this array. |
+| `safety_identifier` | Optional caller-provided identifier. The local backend does not use it for inference. |
 
-The selected System One backend also sets option-count and runtime limits.
-See [System One API](/docs/pages/system-one-api/#make-a-read) before using a
-large choice or score set. The endpoint returns decisions for the supplied
-questions; it does not execute tools or run an agent loop. Standard chat
+The selected System One backend also sets runtime limits. See
+[System One API](/docs/pages/system-one-api/#make-a-read) for details. The
+endpoint returns decisions for the supplied questions; it does not execute
+tools or run an agent loop. Standard chat
 completion methods in OpenAI SDKs do not call `/v1/decisions`.
 
 ## Smoke a running server

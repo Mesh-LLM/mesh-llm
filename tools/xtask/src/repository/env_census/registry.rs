@@ -29,7 +29,7 @@ pub(super) const AUDITED_FILES: &[&str] = &[
     "skippy/crates/skippy-model-hf/src/remote_catalog/tests.rs",
     "mesh/crates/mesh-llm-host-runtime/tests/membership_test_home_isolation.rs",
     "mesh/crates/mesh-llm-system/src/autoupdate.rs",
-    "mesh/crates/mesh-llm-system/src/autoupdate/release_fetch.rs",
+    "mesh/crates/mesh-llm-system/src/autoupdate/release_fetch/tests.rs",
     "mesh/crates/mesh-llm-system/src/benchmark/tests.rs",
     "skippy/crates/skippy-runtime/src/logging.rs",
     "mesh/crates/mesh-llm-host-runtime/src/runtime/run_auto.rs",

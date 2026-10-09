@@ -9,9 +9,13 @@ fn prepare() -> Node {
     let Node::Seq(steps) = document.get("runs").unwrap().get("steps").unwrap() else {
         panic!("action steps")
     };
-    let [step] = steps.as_slice() else {
-        panic!("one runtime preparation step required")
+    let [install, step] = steps.as_slice() else {
+        panic!("just install and runtime preparation steps required")
     };
+    assert_eq!(
+        install.get("uses").and_then(Node::text),
+        Some("taiki-e/install-action@3d23c1bbdafe696dfccad2664945a04f47d03dc3")
+    );
     assert_eq!(step.get("id").and_then(Node::text), Some("prepare"));
     assert_eq!(step.get("shell").and_then(Node::text), Some("bash"));
     for key in ["backend", "target", "output_dir", "build"] {

@@ -12,3 +12,13 @@ pub(super) fn questions(model: &str) -> serde_json::Value {
         ]
     })
 }
+
+pub(super) fn boolean_choice(model: &str) -> serde_json::Value {
+    serde_json::json!({
+        "model": model,
+        "input": [{"role":"user","content":[{"type":"input_text","text":"Please review this request."}]}],
+        "questions": [{"type":"choice","instructions":"Is this a request?","choices":[
+            {"value":true,"description":"A request"},
+            {"value":false,"description":"Not a request"}]}]
+    })
+}

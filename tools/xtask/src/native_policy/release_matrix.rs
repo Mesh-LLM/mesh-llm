@@ -118,6 +118,56 @@ fn asset_target(asset: &str) -> Result<Option<Target>, String> {
     Ok(None)
 }
 
+/// GPU arches a release target exists for. The runtime resolver rejects a
+/// runtime whose declared arches omit the host GPU, so a runtime missing one of
+/// these would be unusable on exactly the hardware its lane was added for.
+fn required_gpu_arches(target: &Target) -> &'static [&'static str] {
+    match (
+        target.os.as_str(),
+        target.arch.as_str(),
+        target.backend.as_str(),
+        target.major.as_deref(),
+    ) {
+        ("windows", "x86_64", "cuda", Some("13")) => &["120"],
+        _ => &[],
+    }
+}
+
+fn gpu_arches(value: &Json) -> BTreeSet<&str> {
+    let backend = value.get("backend");
+    backend
+        .and_then(|backend| backend.get("kind")?.as_str())
+        .and_then(|kind| backend?.get(kind)?.get("gpu_arches")?.as_array())
+        .map(|arches| arches.iter().filter_map(Json::as_str).collect())
+        .unwrap_or_default()
+}
+
+fn matrix_violation(required: &Target, candidates: &[(Target, &Json)]) -> Option<String> {
+    let matches: Vec<&Json> = candidates
+        .iter()
+        .filter(|(candidate, _)| required.covers(candidate))
+        .map(|(_, artifact)| *artifact)
+        .collect();
+    if matches.is_empty() {
+        return Some(format!(
+            "release matrix error: missing native runtime for binary target {}\n",
+            required.label()
+        ));
+    }
+    let arches = required_gpu_arches(required);
+    if matches.iter().any(|artifact| {
+        let declared = gpu_arches(artifact);
+        arches.iter().all(|arch| declared.contains(arch))
+    }) {
+        return None;
+    }
+    Some(format!(
+        "release matrix error: native runtime for binary target {} does not declare required GPU arches {}\n",
+        required.label(),
+        arches.join(", ")
+    ))
+}
+
 fn catalog_target(value: &Json) -> Option<Target> {
     let platform = value.get("platform")?;
     let backend = value.get("backend")?;
@@ -239,22 +289,16 @@ pub(super) fn run(args: &[String]) -> CheckReport {
             }
         }
     }
-    let candidates: Vec<Target> = manifest
+    let candidates: Vec<(Target, &Json)> = manifest
         .get("artifacts")
         .and_then(Json::as_array)
         .unwrap_or_default()
         .iter()
-        .filter_map(catalog_target)
+        .filter_map(|artifact| Some((catalog_target(artifact)?, artifact)))
         .collect();
     let stderr: String = required
         .iter()
-        .filter(|target| !candidates.iter().any(|candidate| target.covers(candidate)))
-        .map(|target| {
-            format!(
-                "release matrix error: missing native runtime for binary target {}\n",
-                target.label()
-            )
-        })
+        .filter_map(|target| matrix_violation(target, &candidates))
         .collect();
     if stderr.is_empty() {
         CheckReport::success("release native runtime matrix is complete\n".to_owned())
@@ -291,5 +335,33 @@ mod diagnostic_tests {
         assert!(report.stderr.contains("unsupported CUDA release suffix"));
         assert_eq!(std::fs::read(manifest).unwrap(), original);
         assert_eq!(std::fs::read_dir(scratch.path()).unwrap().count(), 1);
+    }
+
+    fn windows_cuda13(gpu_arches: &str) -> CheckReport {
+        let scratch = tempfile::tempdir().unwrap();
+        let manifest = scratch.path().join("native-runtimes.json");
+        std::fs::write(
+            &manifest,
+            format!(
+                "{{\"artifacts\":[{{\"platform\":{{\"os\":\"windows\",\"arch\":\"x86_64\"}},\"backend\":{{\"kind\":\"cuda\",\"cuda\":{{\"toolkit_major\":13,\"gpu_arches\":{gpu_arches}}}}}}}]}}"
+            ),
+        )
+        .unwrap();
+        run(&[
+            "--manifest".into(),
+            manifest.to_str().unwrap().into(),
+            "mesh-llm-v1-x86_64-pc-windows-msvc-cuda-13.zip".into(),
+        ])
+    }
+
+    #[test]
+    fn windows_cuda13_runtime_must_declare_blackwell_arch() {
+        assert_eq!(windows_cuda13("[\"89\",\"120\"]").code, 0);
+        let missing = windows_cuda13("[\"89\"]");
+        assert_eq!(missing.code, 1);
+        assert_eq!(
+            missing.stderr,
+            "release matrix error: native runtime for binary target windows/x86_64/cuda13 does not declare required GPU arches 120\n"
+        );
     }
 }

@@ -140,7 +140,7 @@ fn windows_abi_cache_declares_exact_compatibility_identity_and_restore_outputs()
             "$resolvedBuildDir -eq $llamaWorktree",
             "$resolvedBuildDir.StartsWith(",
             "$backend -in @(\"cuda\", \"rocm\") -and -not $architectureSet",
-            "cuda-$version-Jimver-v0.2.35",
+            "cuda-$version-Jimver-v0.2.36",
             "vulkan-$version-jakoch-v1.5.2",
             "rocm-$version",
             "mesh-llm-windows-2022-skippy-abi-$backend-$architectureSet-$toolchain-$toolchainEpoch-$inputHash",

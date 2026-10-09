@@ -94,8 +94,7 @@ fn probe_nvidia_backend() -> bool {
             .any(|model| is_tegra_nvidia_model(model))
 }
 
-#[cfg(test)]
-fn is_blackwell_compute_capability(capability: &str) -> bool {
+pub(super) fn is_blackwell_compute_capability(capability: &str) -> bool {
     let normalized = capability
         .chars()
         .filter(|ch| ch.is_ascii_digit())

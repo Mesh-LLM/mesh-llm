@@ -77,7 +77,13 @@ fn answers(model: &str) -> Value {
             "probabilities":[{"value":"billing","probability":0.8},{"value":"support","probability":0.2}]},
         {"type":"score","name":"frustration","score":1.25,"confidence":0.7,
             "probabilities":[{"value":0,"label":"0","probability":0.3},{"value":1,"label":"1","probability":0.7}]}],
-        "usage":{"input_tokens":10,"output_tokens":5,"total_tokens":15}})
+        "usage":{"input_tokens":10,"output_tokens":5,"total_tokens":15,
+            "input_tokens_details":{"cached_tokens":0,"cache_write_tokens":0},
+            "output_tokens_details":{"reasoning_tokens":0}}})
+}
+fn boolean_choice() -> Value {
+    json!({"answers":[{"type":"choice","name":null,"choice":true,"confidence":0.9,
+        "probabilities":[{"value":true,"probability":0.9},{"value":false,"probability":0.1}]}]})
 }
 impl Peer {
     fn start(mode: &'static str) -> Self {
@@ -146,6 +152,8 @@ fn reply(mode: &str, path: &str, input: &Value) -> (u16, Vec<u8>) {
     }
     let mut body = if path == "/v1/models" {
         models()
+    } else if input["input"].is_array() {
+        boolean_choice()
     } else {
         answers(input["model"].as_str().unwrap_or("absent"))
     };
@@ -215,7 +223,8 @@ fn decisions_cli_discovers_real_capability_and_sends_all_three_questions() {
             String::from_utf8_lossy(&output.stderr)
         );
         let calls = peer.calls.lock().unwrap();
-        assert_eq!(calls.len(), 2);
+        assert_eq!(calls.len(), 3);
+        assert_eq!(calls[2].1["questions"][0]["choices"][0]["value"], true);
         assert_eq!(calls[0], ("/v1/models".into(), Value::Null));
         assert_eq!(calls[1].0, "/v1/decisions");
         let selected = if extra.is_empty() { "actual" } else { "second" };
