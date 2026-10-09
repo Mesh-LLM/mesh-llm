@@ -117,6 +117,8 @@ pub struct ResolvedThroughputConfig {
     pub parallel: usize,
     pub continuous_batching: String,
     pub pipeline_decode_groups: Option<u32>,
+    /// Planned final-stage decode batching. `None` leaves it unbatched.
+    pub last_stage_decode_batch: Option<bool>,
     pub threads: Option<usize>,
     pub threads_batch: Option<usize>,
     pub tuning_profile: String,

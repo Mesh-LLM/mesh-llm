@@ -23,6 +23,7 @@ pub(in crate::network::openai) async fn route_local_attempt(
     node: &mesh::Node,
     tcp_stream: &mut ClientStream,
     port: u16,
+    model: Option<&str>,
     prefetched: &[u8],
     logging: RouteAttemptLoggingContext<'_>,
 ) -> RouteAttemptResult {
@@ -35,21 +36,16 @@ pub(in crate::network::openai) async fn route_local_attempt(
         served_by,
         peer_capsule_id,
     } = logging;
+    // The decoded model identity is only consulted by seller payment
+    // admission. Keep the parameter deliberate when that feature is compiled
+    // out so the denied-warnings build does not flag it as unused.
+    #[cfg(not(feature = "payments"))]
+    let _ = model;
     #[cfg(feature = "payments")]
     {
         if !super::paid::is_local_origin(tcp_stream) {
-            let model = super::super::request_parse::parse_json_body_from_http_request(prefetched)
-                .and_then(|body| {
-                    body.get("model")
-                        .and_then(serde_json::Value::as_str)
-                        .map(str::to_owned)
-                });
             match node.advertised_payment_offers().await {
-                Ok(prices)
-                    if model
-                        .as_ref()
-                        .is_some_and(|model| prices.contains_key(model)) =>
-                {
+                Ok(prices) if priced_model_requires_payment(model, &prices) => {
                     return super::paid::payment_error(
                         tcp_stream,
                         "this provider requires the Lightning payment protocol",
@@ -91,6 +87,14 @@ pub(in crate::network::openai) async fn route_local_attempt(
         route_observer,
     )
     .await
+}
+
+#[cfg(feature = "payments")]
+fn priced_model_requires_payment(
+    model: Option<&str>,
+    prices: &std::collections::BTreeMap<String, mesh_llm_payments_types::pricing::Pricing>,
+) -> bool {
+    model.is_some_and(|model| prices.contains_key(model))
 }
 
 async fn acquire_local_attempt_upstream(
@@ -923,6 +927,7 @@ mod tests {
                 &node,
                 &mut client,
                 port,
+                Some("free-model"),
                 request.as_bytes(),
                 RouteAttemptLoggingContext {
                     exchange_id: None,
@@ -969,5 +974,29 @@ mod tests {
         drop(client);
         node.endpoint.close().await;
         server.close().await;
+    }
+    #[cfg(feature = "payments")]
+    #[test]
+    fn decoded_chunked_model_cannot_bypass_seller_payment_admission() {
+        const MODEL: &str = "paid-model";
+        const BODY: &str = r#"{"model":"paid-model","prompt":"Hello"}"#;
+        let raw = format!(
+            "POST /v1/completions HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n{:x}\r\n{BODY}\r\n0\r\n\r\n",
+            BODY.len(),
+        );
+        assert!(
+            super::super::super::request_parse::parse_json_body_from_http_request(raw.as_bytes())
+                .is_none(),
+            "raw JSON reparsing must demonstrate the chunk-framing bypass"
+        );
+        let prices = std::collections::BTreeMap::from([(
+            MODEL.to_string(),
+            mesh_llm_payments_types::pricing::Pricing {
+                input_msat_per_million: 1,
+                output_msat_per_million: 1,
+            },
+        )]);
+
+        assert!(priced_model_requires_payment(Some(MODEL), &prices));
     }
 }

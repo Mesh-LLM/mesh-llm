@@ -12,7 +12,7 @@ use crate::{
     errors::InferenceError,
 };
 
-#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 pub struct CompletionRequest {
     pub model: String,
     pub prompt: CompletionPrompt,

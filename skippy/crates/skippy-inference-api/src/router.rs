@@ -179,6 +179,7 @@ pub struct InferenceFrontendConfig {
     /// trusted immediate upstream. `None` disables header-derived identity.
     pub agent_session_header: Option<HeaderName>,
     pub(crate) lifecycle_observer: Option<Arc<dyn InferenceLifecycleObserver>>,
+    pub http_exchange_policy: Option<Arc<dyn crate::http_exchange::HttpExchangePolicy>>,
 }
 
 impl std::fmt::Debug for InferenceFrontendConfig {
@@ -189,6 +190,10 @@ impl std::fmt::Debug for InferenceFrontendConfig {
             .field("backend_timeout", &self.backend_timeout)
             .field("agent_session_header", &self.agent_session_header)
             .field("has_lifecycle_observer", &self.lifecycle_observer.is_some())
+            .field(
+                "has_http_exchange_policy",
+                &self.http_exchange_policy.is_some(),
+            )
             .finish()
     }
 }
@@ -232,6 +237,14 @@ impl InferenceFrontendConfig {
         self.lifecycle_observer = Some(observer);
         self
     }
+
+    pub fn with_http_exchange_policy(
+        mut self,
+        policy: Arc<dyn crate::http_exchange::HttpExchangePolicy>,
+    ) -> Self {
+        self.http_exchange_policy = Some(policy);
+        self
+    }
 }
 
 impl Default for InferenceFrontendConfig {
@@ -242,6 +255,7 @@ impl Default for InferenceFrontendConfig {
                 .unwrap_or(Some(Self::DEFAULT_BACKEND_TIMEOUT)),
             agent_session_header: configured_agent_session_header(),
             lifecycle_observer: None,
+            http_exchange_policy: None,
         }
     }
 }
@@ -266,8 +280,11 @@ where
 
 pub fn router_for_with_config(
     backend: Arc<dyn InferenceBackend>,
-    config: InferenceFrontendConfig,
+    mut config: InferenceFrontendConfig,
 ) -> Router {
+    if config.http_exchange_policy.is_none() {
+        config.http_exchange_policy = backend.http_exchange_policy();
+    }
     let state = FrontendState { backend, config };
     Router::new()
         .route("/health", get(health))
@@ -297,6 +314,10 @@ pub fn router_for_with_config(
         .route("/systemone", post(system_one))
         .method_not_allowed_fallback(method_not_allowed)
         .fallback(not_found)
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            crate::http_exchange::http_exchange_middleware,
+        ))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             frontend_lifecycle_middleware,

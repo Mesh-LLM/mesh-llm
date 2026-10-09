@@ -34,7 +34,7 @@ Subject: [PATCH] skippy: replay extracted stage programs
  src/skippy/model_loading.cpp                  |  24 +-
  src/skippy/session.cpp                        |   6 +
  src/skippy/stage_plan.cpp                     |  10 +-
- src/skippy/stage_program.cpp                  | 878 +++++++++++++++++
+ src/skippy/stage_program.cpp                  | 883 +++++++++++++++++
  src/skippy/stage_program.h                    | 326 +++++++
  src/skippy/stage_program_extraction.cpp       | 706 ++++++++++++++
  .../stage_program_extraction_internal.h       |  75 ++
@@ -57,8 +57,8 @@ Subject: [PATCH] skippy: replay extracted stage programs
  src/skippy/tests/profile_residency.cpp        | 137 ++-
  .../tests/renamed_multishard_planning.cpp     | 223 ++++-
  src/skippy/tests/stage_program_parity.h       | 374 ++++++++
- tests/test-llama-archs.cpp                    |  39 +
- 54 files changed, 7944 insertions(+), 267 deletions(-)
+ tests/test-llama-archs.cpp                    |  41 +
+ 54 files changed, 7951 insertions(+), 267 deletions(-)
  create mode 100644 src/skippy/stage_program.cpp
  create mode 100644 src/skippy/stage_program.h
  create mode 100644 src/skippy/stage_program_extraction.cpp
@@ -4469,10 +4469,10 @@ index f0cd2726c..539a9bdc7 100644
      params.embeddings = false;
 diff --git a/src/skippy/stage_program.cpp b/src/skippy/stage_program.cpp
 new file mode 100644
-index 000000000..9d484103c
+index 000000000..a51617bcf
 --- /dev/null
 +++ b/src/skippy/stage_program.cpp
-@@ -0,0 +1,878 @@
+@@ -0,0 +1,883 @@
 +#include "stage_program.h"
 +
 +#include "stage_program_inputs.h"
@@ -4759,6 +4759,11 @@ index 000000000..9d484103c
 +    };
 +    const auto make_recurrent_input = [&](const input & recipe, size_t slot) {
 +        auto recurrent = std::make_unique<llm_graph_input_rs>(memory_recurrent);
++        recurrent->s_copy = nullptr;
++        recurrent->s_copy_main = nullptr;
++        recurrent->s_copy_extra = nullptr;
++        recurrent->head = memory_recurrent->get_head();
++        recurrent->rs_z = memory_recurrent->get_rs_z();
 +        if (!recipe.values[slot].empty()) {
 +            recurrent->s_copy = ggml_new_tensor_1d(context, GGML_TYPE_I32, memory_recurrent->get_n_rs());
 +            ggml_set_input(recurrent->s_copy);
@@ -10945,10 +10950,10 @@ index 000000000..f73ab0b34
 +
 +};
 diff --git a/tests/test-llama-archs.cpp b/tests/test-llama-archs.cpp
-index 3a588b682..57313f4e3 100644
+index b296b2d72..e0122c9ed 100644
 --- a/tests/test-llama-archs.cpp
 +++ b/tests/test-llama-archs.cpp
-@@ -1082,6 +1082,8 @@ int main(int argc, char ** argv) {
+@@ -1079,6 +1079,8 @@ int main(int argc, char ** argv) {
      std::string out;
      const char * target_backend = nullptr;
      bool deepseek4_mtp = false;
@@ -10957,7 +10962,7 @@ index 3a588b682..57313f4e3 100644
      bool text_only = false;
      std::string mtp_model;
      uint32_t contract_layers = 0, contract_width = 0, contract_mtp_layers = 0;
-@@ -1095,6 +1097,10 @@ int main(int argc, char ** argv) {
+@@ -1092,6 +1094,10 @@ int main(int argc, char ** argv) {
              contract_mtp_layers = std::stoul(argv[++i]);
          } else if (strcmp(argv[i], "--text-only") == 0 || strcmp(argv[i], "-t") == 0) {
              text_only = true;
@@ -10968,7 +10973,7 @@ index 3a588b682..57313f4e3 100644
          } else if (strcmp(argv[i], "--deepseek4-mtp") == 0) {
              deepseek4_mtp = true;
          } else if (strcmp(argv[i], "--test-mtp-model") == 0 && i + 1 < argc) {
-@@ -1182,6 +1188,39 @@ int main(int argc, char ** argv) {
+@@ -1179,6 +1185,41 @@ int main(int argc, char ** argv) {
          if (!mtp_model.empty()) {
              return test_deepseek4_mtp(mtp_model);
          }
@@ -10996,6 +11001,7 @@ index 3a588b682..57313f4e3 100644
 +            llama_model_ptr model(llama_model_init_from_user(gguf.get(), set_tensor_data, &tensor_params, params));
 +            if (!model || model->hparams.n_layer_nextn != dense_mtp_depth) throw std::runtime_error("failed to generate dense MTP fixture");
 +            const std::string path = out + "/dense-mtp.gguf";
++            begin_fixture_write(path);
 +            llama_model_saver saver(model.get());
 +            saver.add_kv_from_model();
 +            const std::array<bool, 3> recurrent = {model->hparams.is_recr(0), model->hparams.is_recr(1), false};
@@ -11003,6 +11009,7 @@ index 3a588b682..57313f4e3 100644
 +                    GGUF_TYPE_BOOL, recurrent.data(), recurrent.size());
 +            saver.add_tensors_from_model();
 +            saver.save(path);
++            require_fixture_written(path);
 +            return 0;
 +        }
          if (deepseek4_mtp) {

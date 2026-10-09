@@ -166,6 +166,14 @@ fn response_content_type(response: &Response<Body>) -> Option<String> {
 struct SseDecoder {
     buffer: Vec<u8>,
     ready: VecDeque<EmbeddedSseEvent>,
+    /// Bytes of `buffer[..scan_offset]` have been examined and contain no blank line.
+    scan_offset: usize,
+    /// Whether the line that begins at `scan_offset` has content.
+    line_has_content: bool,
+    /// Bytes examined by the incremental scan; a return to per-push whole-buffer
+    /// rescanning would show up as super-linear growth here.
+    #[cfg(test)]
+    scanned_bytes: usize,
 }
 
 impl SseDecoder {
@@ -175,11 +183,13 @@ impl SseDecoder {
 
     fn push(&mut self, input: &[u8]) -> Result<()> {
         self.buffer.extend_from_slice(input);
-        while let Some(end) = sse_frame_end(&self.buffer) {
+        while let Some(end) = self.next_frame_end() {
             if end > MAX_SSE_EVENT_BYTES {
                 bail!("embedded OpenAI SSE event exceeds 8 MiB");
             }
             let raw = self.buffer.drain(..end).collect::<Vec<_>>();
+            self.scan_offset = 0;
+            self.line_has_content = false;
             if let Some(event) = parse_sse_event(raw)? {
                 self.ready.push_back(event);
             }
@@ -198,45 +208,63 @@ impl SseDecoder {
             bail!("embedded OpenAI SSE event exceeds 8 MiB");
         }
         let raw = std::mem::take(&mut self.buffer);
+        self.scan_offset = 0;
+        self.line_has_content = false;
         if let Some(event) = parse_sse_event(raw)? {
             self.ready.push_back(event);
         }
         Ok(())
     }
-}
 
-fn sse_frame_end(bytes: &[u8]) -> Option<usize> {
-    let mut line_start = 0;
-    let mut index = 0;
-    while index < bytes.len() {
-        let line_end = match bytes[index] {
-            b'\r' => {
-                let end = if bytes.get(index + 1) == Some(&b'\n') {
-                    index + 2
-                } else {
-                    index + 1
-                };
-                if index == line_start {
-                    return Some(end);
+    /// Returns the end of the first blank line in the buffered bytes, or `None` when
+    /// no complete blank line has arrived. The scan continues where the previous call
+    /// stopped, so each buffered byte is examined once instead of once per push.
+    fn next_frame_end(&mut self) -> Option<usize> {
+        let bytes = &self.buffer;
+        let mut line_has_content = self.line_has_content;
+        let mut index = self.scan_offset;
+        while index < bytes.len() {
+            #[cfg(test)]
+            {
+                self.scanned_bytes += 1;
+            }
+            match bytes[index] {
+                b'\r' => {
+                    if index + 1 == bytes.len() && line_has_content {
+                        // A trailing CR may still pair with the next chunk's LF into a
+                        // single line break, which is not a blank line.
+                        self.scan_offset = index;
+                        self.line_has_content = line_has_content;
+                        return None;
+                    }
+                    let end = if bytes.get(index + 1) == Some(&b'\n') {
+                        index + 2
+                    } else {
+                        index + 1
+                    };
+                    if !line_has_content {
+                        return Some(end);
+                    }
+                    line_has_content = false;
+                    index = end;
                 }
-                end
-            }
-            b'\n' => {
-                let end = index + 1;
-                if index == line_start {
-                    return Some(end);
+                b'\n' => {
+                    if !line_has_content {
+                        return Some(index + 1);
+                    }
+                    line_has_content = false;
+                    index += 1;
                 }
-                end
+                _ => {
+                    line_has_content = true;
+                    index += 1;
+                }
             }
-            _ => {
-                index += 1;
-                continue;
-            }
-        };
-        line_start = line_end;
-        index = line_end;
+        }
+        self.scan_offset = index;
+        self.line_has_content = line_has_content;
+        None
     }
-    None
 }
 
 fn parse_sse_event(raw: Vec<u8>) -> Result<Option<EmbeddedSseEvent>> {
@@ -316,5 +344,41 @@ mod tests {
         decoder.buffer = frame;
         assert!(decoder.finish().is_err());
         assert!(decoder.pop().is_none());
+    }
+
+    #[test]
+    fn sse_decoder_scans_each_byte_once_across_chunks() {
+        // A long unterminated frame used to be rescanned from the buffer start on
+        // every push (O(n^2)). Each push must now examine only the bytes it added.
+        const CHUNK: usize = 4 * 1024;
+        let chunk = vec![b'x'; CHUNK];
+        let mut decoder = SseDecoder::default();
+        let mut per_push = Vec::new();
+        for _ in 0..64 {
+            let before = decoder.scanned_bytes;
+            decoder.push(&chunk).unwrap();
+            per_push.push(decoder.scanned_bytes - before);
+        }
+        let body = CHUNK * per_push.len();
+        assert!(
+            per_push.iter().all(|&scanned| scanned <= CHUNK),
+            "each push must scan only its own bytes, got {per_push:?}"
+        );
+        assert!(
+            decoder.scanned_bytes <= body,
+            "total scanned {} exceeds body {body}",
+            decoder.scanned_bytes
+        );
+    }
+
+    #[test]
+    fn sse_decoder_decodes_crlf_split_between_cr_and_lf() {
+        let mut decoder = SseDecoder::default();
+        decoder.push(b"data: one\r").unwrap();
+        assert!(decoder.pop().is_none());
+        decoder.push(b"\ndata: two\r\n\r\n").unwrap();
+        let event = decoder.pop().expect("complete event");
+        assert_eq!(event.data, "one\ntwo");
+        assert_eq!(event.raw, "data: one\r\ndata: two\r\n\r\n");
     }
 }

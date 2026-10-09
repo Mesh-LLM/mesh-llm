@@ -38,7 +38,7 @@ pub(crate) struct RequestSummaryMetadata {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     caller_path_type: Option<CallerPathType>,
     /// The host-minted per-exchange join-key other consumers of the
-    /// exchange (plugins, the terminal event) can join on (`openai_frontend::hooks::ChatExchangeRoute::exchange_id`).
+    /// exchange (plugins, the terminal event) can join on (`skippy_inference_api::hooks::ChatExchangeRoute::exchange_id`).
     /// `None` for a request that never dispatched through the
     /// exchange-tracked chat/responses path.
     #[serde(default, skip_serializing_if = "Option::is_none")]

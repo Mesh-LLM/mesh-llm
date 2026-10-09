@@ -488,6 +488,24 @@ async fn wait_for_ready(
         if let Some(queue) = model_open_events {
             report_model_open_events(queue)?;
         }
+        // AN ALREADY-FINISHED TASK IS NOT A RACE TO SAMPLE. `tokio::select!`
+        // polls its branches in random order, so when the serving task has
+        // already exited its outcome competes with the API probe's connection
+        // error and the reason reported depends on which branch select! picked.
+        // Both are "ready" immediately, so the coin is genuinely fair: the test
+        // below for this distinction failed about 40% of the time.
+        //
+        // The exit is also the better answer whenever it is available. Probing
+        // the API of a process that is gone can only produce a startup timeout,
+        // which sends somebody looking at the network instead of at the reason
+        // the server stopped.
+        if server.is_finished() {
+            (&mut *server).await.context("join serving task")??;
+            if shutdown_requested.load(Ordering::SeqCst) {
+                return Ok(ReadinessOutcome::ShutdownRequested);
+            }
+            bail!("server exited before the API became ready");
+        }
         tokio::select! {
             outcome = &mut *server => {
                 outcome.context("join serving task")??;

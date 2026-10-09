@@ -8,6 +8,7 @@ mod daemon_startup;
 mod dashboard;
 mod default_plugins;
 mod discovery;
+mod failed_node_start;
 pub mod instance;
 mod instance_lifecycle;
 mod interactive;
@@ -25,12 +26,33 @@ pub(crate) mod model_reconciliation;
 mod node_lifecycle_events;
 mod operational_logging;
 mod options;
+mod passive_readiness;
 mod plugin_host_role;
 pub(crate) mod proxy;
 mod publication;
 mod release_attestation;
 mod run_auto;
 mod runtime_registry;
+pub(crate) mod serving_strategy;
+pub use serving_strategy::ServingStrategy;
+
+/// The split placement policy implied by these launch options.
+///
+/// Derived at each point of use rather than stored on [`RuntimeOptions`]: it is
+/// a pure function of `auto_balance`, `split` and `strategy`, and a cached copy
+/// on a public options struct is a field callers can set and a value that can
+/// go stale.
+pub(crate) fn placement_policy_for(
+    options: &RuntimeOptions,
+) -> split_planning::SplitPlacementPolicy {
+    serving_strategy::strategy_placement_policy(
+        options.strategy,
+        serving_strategy::StrategyContext {
+            split: options.split,
+            auto_balance_requested: options.auto_balance,
+        },
+    )
+}
 mod serving_surface;
 mod shutdown_signal;
 mod split_participant_settle;

@@ -49,6 +49,7 @@ fn make_test_peer_info(peer_id: EndpointId) -> PeerInfo {
         stage_protocol_generation_supported: false,
         stage_status_list_supported: false,
         local_gguf_content_id_supported: false,
+        decode_batch_policy_supported: false,
         owner_summary: OwnershipSummary::default(),
         advertised_model_throughput: vec![],
         #[cfg(feature = "payments")]

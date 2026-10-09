@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-from ._binding import native
-from .client import Client, Inference, Node
+from .client import Inference, Node
 from .types import (
     MeshError,
     Model,
@@ -14,7 +13,6 @@ from .types import (
 )
 
 __all__ = [
-    "Client",
     "Inference",
     "MeshError",
     "Model",
@@ -25,11 +23,6 @@ __all__ = [
     "OpenAIStreamEvent",
     "OpenAIStreamStarted",
     "Status",
-    "generate_owner_keypair_hex",
 ]
 
 __version__ = "0.76.1"
-
-
-def generate_owner_keypair_hex() -> str:
-    return native().generate_owner_keypair_hex()

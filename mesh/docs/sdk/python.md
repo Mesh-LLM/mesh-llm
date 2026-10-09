@@ -1,13 +1,26 @@
-# Python SDK examples
+# Python SDK
 
-The Python SDK source and full guide live at:
+The Python package exposes one `Node` with `client`, `serve`, and `combined`
+roles. `serve` is serve-only; inference methods reject that role.
 
-- [`sdk/python/README.md`](../../sdk/python/README.md)
-- [Python SDK website guide](../../website/src/docs/pages/sdk-python.md)
+```python
+from meshllm import Node
 
-The package exposes `Client` for joining an existing mesh and `Node` for
-embedded-node lifecycles. Agent runtimes should use the protocol-preserving
-`chat_completions()` and `responses()` methods so OpenAI-compatible tool,
-multimodal, structured-output, finish, and usage fields survive unchanged.
-`stream_chat_completions()` and `stream_responses()` preserve complete SSE
-frames, including incremental tool-call arguments and future protocol fields.
+async with Node.create(mode="client", auto_join=True) as node:
+    models = await node.inference.list_models()
+    response = await node.inference.chat_completions({
+        "model": models[0].id,
+        "messages": [{"role": "user", "content": "Hello"}],
+    })
+```
+
+For a private mesh, use `join_tokens=(token,)` instead of `auto_join=True`.
+To serve, use `mode="serve"` or `mode="combined"` and pass
+`models=("publisher/model:quant",)`. Serving requires an installed matching
+native runtime. Set `owner_key_path` to a Mesh LLM owner keystore path when
+owner identity is required. The old in-memory keypair hex constructor and
+`Client` class have been removed.
+
+Streaming is available through `node.inference.stream_chat_completions(...)`
+and `stream_responses(...)`; each event carries the original SSE data and raw
+frame. See [native runtime guidance](../SDK.md#native-runtime-artifacts).

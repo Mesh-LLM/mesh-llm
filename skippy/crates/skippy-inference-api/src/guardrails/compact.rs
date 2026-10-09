@@ -65,6 +65,9 @@ impl CompactingInferenceBackend {
 
 #[async_trait]
 impl InferenceBackend for CompactingInferenceBackend {
+    fn http_exchange_policy(&self) -> Option<Arc<dyn crate::http_exchange::HttpExchangePolicy>> {
+        self.backend.http_exchange_policy()
+    }
     async fn count_chat_tokens(&self, request: ChatCompletionRequest) -> InferenceResult<u32> {
         self.backend.count_chat_tokens(request).await
     }

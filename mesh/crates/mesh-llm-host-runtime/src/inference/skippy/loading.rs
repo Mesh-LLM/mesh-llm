@@ -56,6 +56,7 @@ impl SkippyModelHandle {
         hook_policy: Option<Arc<dyn InferenceHookPolicy>>,
         guardrail_telemetry: survey::SurveyTelemetry,
     ) -> Result<Self> {
+        crate::system::native_runtime_requirement::ensure_native_runtime_available()?;
         audit_load(|| Self::load_local(options, hook_policy, guardrail_telemetry, None))
     }
 
@@ -65,6 +66,7 @@ impl SkippyModelHandle {
         model_open_events: Option<NativeModelOpenEvents>,
         guardrail_telemetry: survey::SurveyTelemetry,
     ) -> Result<Self> {
+        crate::system::native_runtime_requirement::ensure_native_runtime_available()?;
         audit_load(|| {
             Self::load_local(options, hook_policy, guardrail_telemetry, model_open_events)
         })
@@ -182,6 +184,7 @@ impl SkippyModelHandle {
         guardrails: SkippyOpenAiGuardrailOptions,
         serving_hooks_factory: Option<SharedModelServingHooksFactory>,
     ) -> Result<Self> {
+        crate::system::native_runtime_requirement::ensure_native_runtime_available()?;
         audit_load(|| {
             Self::load_stage0_prepared(
                 runtime_options,
@@ -204,6 +207,7 @@ impl SkippyModelHandle {
         guardrails: SkippyOpenAiGuardrailOptions,
         serving_hooks_factory: Option<SharedModelServingHooksFactory>,
     ) -> Result<Self> {
+        crate::system::native_runtime_requirement::ensure_native_runtime_available()?;
         audit_load(|| {
             Self::load_stage0_prepared(
                 runtime_options,
@@ -309,6 +313,7 @@ impl SkippyModelHandle {
             runtime: loaded.runtime,
             backend: loaded.backend,
             config: loaded.config,
+            thinking: loaded.thinking,
             openai_guardrails,
             started_at_unix_nanos: now_unix_nanos(),
             status: Arc::new(Mutex::new(HandleState {

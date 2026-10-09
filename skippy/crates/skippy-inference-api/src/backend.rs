@@ -158,6 +158,10 @@ impl Default for InferenceRequestContext {
 
 #[async_trait]
 pub trait InferenceBackend: Send + Sync + 'static {
+    /// HTTP lifecycle contract inherited by routers and transparent wrappers.
+    fn http_exchange_policy(&self) -> Option<Arc<dyn crate::http_exchange::HttpExchangePolicy>> {
+        None
+    }
     async fn models(&self) -> InferenceResult<Vec<ModelObject>>;
 
     /// Count the model-rendered chat prompt without generating or running hooks.

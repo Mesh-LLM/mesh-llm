@@ -476,6 +476,7 @@ async fn real_multimodal_split_smoke_when_fixture_is_set() -> Result<()> {
             downstream_wire_condition: WireCondition::new(0.0, None)?,
             downstream_connect_timeout_secs: 5,
             native_mtp_enabled: true,
+            last_stage_decode_batch: None,
             continuous_batching: true,
             compute_meter: None,
             openai: None,
@@ -535,6 +536,8 @@ async fn real_multimodal_split_smoke_when_fixture_is_set() -> Result<()> {
         telemetry.clone(),
     )?;
     let backend = StageOpenAiBackend {
+        speculation_governor: None,
+        runahead_governor: None,
         runtime,
         workload: Default::default(),
         telemetry,
@@ -542,6 +545,7 @@ async fn real_multimodal_split_smoke_when_fixture_is_set() -> Result<()> {
         model_id: "mm-smoke".to_string(),
         default_max_tokens: 16,
         request_defaults: EmbeddedOpenAiRequestDefaults::default(),
+        thinking: None,
         ctx_size,
         mode: InferenceBackendMode::EmbeddedStageZero {
             config: stage0_config,
