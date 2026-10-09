@@ -154,6 +154,85 @@ fn integrity_geometry_and_unsafe_roster_refuse_without_success_output() {
         }
     }
 }
+
+#[cfg(unix)]
+fn function(source: &str, name: &str) -> String {
+    let start = source.find(&format!("{name}() {{")).unwrap();
+    let end = source[start..].find("\n}\n").unwrap() + start + 3;
+    source[start..end].into()
+}
+#[cfg(unix)]
+#[test]
+fn actual_host_caller_exports_exact_commit_and_actual_hub_mount_then_reuses_offline() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .nth(3)
+        .unwrap();
+    let source = fs::read_to_string(root.join("skippy/evals/wan-lab/up.sh")).unwrap();
+    let functions = [
+        "parse_hf_package_ref",
+        "hf_home_dir",
+        "verify_package_cache",
+        "ensure_hf_package",
+    ]
+    .map(|name| function(&source, name))
+    .join("\n");
+    let payload = tempfile::tempdir().unwrap();
+    fixtures::fixture(payload.path());
+    let server = fetch_server::Server::start(payload.path(), "success");
+    let cache = tempfile::tempdir().unwrap();
+    let just = cache.path().join("just");
+    fs::write(&just,"#!/usr/bin/env bash\nset -euo pipefail\n[[ $1 == --justfile ]]\nrecipe=$3; shift 3\ncase $recipe in skippy-package-reference) command=parse-package-reference;; skippy-layer-package-cache) command=resolve-layer-package-cache;; skippy-layer-package-fetch) command=fetch-layer-package;; skippy-layer-package-inspect) command=inspect-layer-package;; *) exit 64;; esac\nexec \"$REAL_BUILDER\" \"$command\" \"$@\"\n").unwrap();
+    fs::set_permissions(&just, fs::Permissions::from_mode(0o755)).unwrap();
+    let script = format!(
+        "set -euo pipefail\n{functions}\nROOT=unused\nlog() {{ :; }}\nensure_hf_package\nprintf '%s\\n%s\\n' \"$MODEL_PACKAGE_REF\" \"$HF_CACHE_MOUNT\"\n"
+    );
+    let run = |reference: &str, endpoint: &str| {
+        Command::new("bash")
+            .args(["-c", &script])
+            .env("REAL_BUILDER", env!("CARGO_BIN_EXE_skippy-package-builder"))
+            .env("MODEL_PACKAGE_REF", reference)
+            .env("HF_HOME", cache.path().join("unrelated-home"))
+            .env("HF_HUB_CACHE", cache.path().join("actual-hub"))
+            .env("HF_ENDPOINT", endpoint)
+            .env("MESH_HF_RETRY_MAX_ATTEMPTS", "0")
+            .env(
+                "PATH",
+                format!(
+                    "{}:{}",
+                    cache.path().display(),
+                    std::env::var("PATH").unwrap()
+                ),
+            )
+            .output()
+            .unwrap()
+    };
+    let online = run("hf://org/repo@release/étape#v2", &server.endpoint);
+    assert!(
+        online.status.success(),
+        "{}",
+        String::from_utf8_lossy(&online.stderr)
+    );
+    let expected = format!(
+        "hf://org/repo@{}\n{}\n",
+        "a".repeat(40),
+        cache.path().join("actual-hub").display()
+    );
+    assert_eq!(String::from_utf8(online.stdout).unwrap(), expected);
+    drop(server);
+    let offline = run(
+        &format!("hf://org/repo@{}", "a".repeat(40)),
+        "http://127.0.0.1:1",
+    );
+    assert!(
+        offline.status.success(),
+        "{}",
+        String::from_utf8_lossy(&offline.stderr)
+    );
+    assert_eq!(String::from_utf8(offline.stdout).unwrap(), expected);
+}
+
 #[test]
 fn actual_cli_overall_deadline_kills_and_reaps_pending_native_worker_without_output() {
     let payload = tempfile::tempdir().unwrap();
@@ -201,5 +280,92 @@ fn actual_cli_overall_deadline_kills_and_reaps_pending_native_worker_without_out
             std::io::Error::last_os_error().raw_os_error(),
             Some(libc::ESRCH)
         );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn actual_container_download_refuses_configured_geometry_before_exports_and_serving() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .nth(3)
+        .unwrap();
+    let source = fs::read_to_string(root.join("skippy/evals/wan-lab/entrypoint.sh")).unwrap();
+    let functions = ["parse_hf_package_ref", "prepare_hf_layer_package"]
+        .map(|name| function(&source, name))
+        .join("\n")
+        .replace("/usr/local/bin/skippy-package-builder", "\"$REAL_BUILDER\"");
+    for case in ["valid", "wrong-layers", "wrong-width"] {
+        let payload = tempfile::tempdir().unwrap();
+        fixtures::fixture(payload.path());
+        let server = fetch_server::Server::start(payload.path(), "success");
+        let cache = tempfile::tempdir().unwrap();
+        let journal = cache.path().join("environment");
+        let serving = cache.path().join("serving");
+        let script = format!(
+            "set -euo pipefail\n{functions}\nlog() {{ :; }}\ntrap 'printf \"%s\\n%s\\n%s\\n\" \"$MODEL_PATH\" \"$LOAD_MODE\" \"$LAYER_START\" > \"$JOURNAL\"' EXIT\nprepare_hf_layer_package hf://org/repo 0 1 || exit $?\ntouch \"$SERVING\"\n"
+        );
+        let bash = if Path::new("/opt/homebrew/bin/bash").exists() {
+            "/opt/homebrew/bin/bash"
+        } else {
+            "bash"
+        };
+        let result = Command::new(bash)
+            .args(["-c", &script])
+            .env("REAL_BUILDER", env!("CARGO_BIN_EXE_skippy-package-builder"))
+            .env("HF_PACKAGE_SOURCE", "download")
+            .env("HF_ENDPOINT", &server.endpoint)
+            .env("MESH_HF_RETRY_MAX_ATTEMPTS", "0")
+            .env("PACKAGE_CACHE_DIR", cache.path())
+            .env(
+                "LAYER_COUNT",
+                if case == "wrong-layers" { "3" } else { "2" },
+            )
+            .env(
+                "ACTIVATION_WIDTH",
+                if case == "wrong-width" {
+                    "4095"
+                } else {
+                    "4096"
+                },
+            )
+            .env("MODEL_PATH", "original-path")
+            .env("LOAD_MODE", "original-mode")
+            .env("LAYER_START", "original-start")
+            .env("MODEL_ID", "existing-model")
+            .env("JOURNAL", &journal)
+            .env("SERVING", &serving)
+            .output()
+            .unwrap();
+        assert_eq!(
+            result.status.success(),
+            case == "valid",
+            "{case}: {}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        assert_eq!(serving.exists(), case == "valid");
+        if case != "valid" {
+            assert!(result.stdout.is_empty());
+            assert_eq!(
+                fs::read_to_string(&journal).unwrap(),
+                "original-path\noriginal-mode\noriginal-start\n"
+            );
+            assert!(
+                server
+                    .requests
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .filter(|line| line.contains("/resolve/"))
+                    .all(|line| line.contains("model-package.json"))
+            );
+        } else {
+            let state = fs::read_to_string(&journal).unwrap();
+            assert!(state.contains(&format!(
+                "/hub/models--org--repo/snapshots/{}",
+                "a".repeat(40)
+            )));
+            assert!(state.ends_with("\nlayer-package\n0\n"));
+        }
     }
 }
