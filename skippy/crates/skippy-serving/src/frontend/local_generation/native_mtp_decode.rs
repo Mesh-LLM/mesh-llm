@@ -13,7 +13,7 @@ use std::collections::BTreeMap;
 use std::time::Instant;
 
 use serde_json::json;
-use skippy_inference_api::{OpenAiError, OpenAiResult};
+use skippy_inference_api::{InferenceError, InferenceResult};
 
 use crate::frontend::generation::{LocalGeneration, StageOpenAiBackend, TokenControl};
 use crate::frontend::{
@@ -87,8 +87,8 @@ impl StageOpenAiBackend {
         request: &LocalGeneration<'_>,
         session_id: &str,
         state: &mut DecodeState,
-        emit_token: &mut impl FnMut(i32) -> OpenAiResult<TokenControl>,
-    ) -> OpenAiResult<NativeMtpSpanProgress> {
+        emit_token: &mut impl FnMut(i32) -> InferenceResult<TokenControl>,
+    ) -> InferenceResult<NativeMtpSpanProgress> {
         let remaining = (request.max_tokens as usize).saturating_sub(state.decoded_tokens);
         let Some(pending) = state.native_mtp.take_pending_draft() else {
             return Ok(NativeMtpSpanProgress::NotUsed);
@@ -117,7 +117,7 @@ impl StageOpenAiBackend {
 
         let base_position = self
             .native_mtp_span_base_position(session_id)?
-            .ok_or_else(|| OpenAiError::backend("native MTP span session is not active"))?;
+            .ok_or_else(|| InferenceError::backend("native MTP span session is not active"))?;
         let mut verify_inputs = Vec::with_capacity(draft_tokens.len().saturating_add(1));
         verify_inputs.push(state.current);
         verify_inputs.extend_from_slice(&draft_tokens);
@@ -143,7 +143,7 @@ impl StageOpenAiBackend {
         )?;
 
         if verified.committed_tokens.is_empty() {
-            return Err(OpenAiError::backend(
+            return Err(InferenceError::backend(
                 "native MTP span committed no target token",
             ));
         }
@@ -151,7 +151,7 @@ impl StageOpenAiBackend {
         state.decoded_tokens = state
             .decoded_tokens
             .checked_add(verified.committed_tokens.len())
-            .ok_or_else(|| OpenAiError::backend("native MTP span decode count overflow"))?;
+            .ok_or_else(|| InferenceError::backend("native MTP span decode count overflow"))?;
         state.current = *verified
             .committed_tokens
             .last()
@@ -202,7 +202,7 @@ impl StageOpenAiBackend {
         }
     }
 
-    fn native_mtp_span_base_position(&self, session_id: &str) -> OpenAiResult<Option<u64>> {
+    fn native_mtp_span_base_position(&self, session_id: &str) -> InferenceResult<Option<u64>> {
         let session_id = session_id.to_string();
         self.iteration_scheduler
             .execute_runtime("native-mtp-position", move |runtime| {
@@ -220,8 +220,8 @@ impl StageOpenAiBackend {
         draft_tokens: &[i32],
         verify_inputs: &[i32],
         draft_origin: NativeMtpDraftOrigin,
-        emit_token: &mut impl FnMut(i32) -> OpenAiResult<TokenControl>,
-    ) -> OpenAiResult<VerifiedSpan> {
+        emit_token: &mut impl FnMut(i32) -> InferenceResult<TokenControl>,
+    ) -> InferenceResult<VerifiedSpan> {
         let verify_timer = Instant::now();
         let owned_session_id = session_id.to_string();
         let owned_verify_inputs = verify_inputs.to_vec();
@@ -255,7 +255,9 @@ impl StageOpenAiBackend {
                 )?;
                 let position_after_verification = runtime
                     .session_token_count(&owned_session_id)
-                    .ok_or_else(|| OpenAiError::backend("native MTP span session disappeared"))?;
+                    .ok_or_else(|| {
+                        InferenceError::backend("native MTP span session disappeared")
+                    })?;
                 Ok((
                     predictions,
                     next_draft,
@@ -266,11 +268,11 @@ impl StageOpenAiBackend {
         let expected_position = base_position
             .checked_add(
                 u64::try_from(verify_inputs.len())
-                    .map_err(|_| OpenAiError::backend("verification row count exceeds u64"))?,
+                    .map_err(|_| InferenceError::backend("verification row count exceeds u64"))?,
             )
-            .ok_or_else(|| OpenAiError::backend("native MTP span position overflow"))?;
+            .ok_or_else(|| InferenceError::backend("native MTP span position overflow"))?;
         if position_after_verification != expected_position {
-            return Err(OpenAiError::backend(format!(
+            return Err(InferenceError::backend(format!(
                 "native MTP span verification position mismatch: observed {position_after_verification}, expected {expected_position}"
             )));
         }
@@ -355,16 +357,18 @@ impl StageOpenAiBackend {
         verification_rows: usize,
         committed_token_count: usize,
         full_accept: bool,
-    ) -> OpenAiResult<()> {
+    ) -> InferenceResult<()> {
         let canonical_position = base_position
             .checked_add(
                 u64::try_from(committed_token_count)
-                    .map_err(|_| OpenAiError::backend("committed token count exceeds u64"))?,
+                    .map_err(|_| InferenceError::backend("committed token count exceeds u64"))?,
             )
-            .ok_or_else(|| OpenAiError::backend("native MTP span canonical position overflow"))?;
+            .ok_or_else(|| {
+                InferenceError::backend("native MTP span canonical position overflow")
+            })?;
         let session_id = session_id.to_string();
         let verification_rows = u64::try_from(verification_rows)
-            .map_err(|_| OpenAiError::backend("verification row count exceeds u64"))?;
+            .map_err(|_| InferenceError::backend("verification row count exceeds u64"))?;
         let chat_sampling_metadata = request.chat_sampling_metadata.map(str::to_string);
         let prompt_token_count = u64::try_from(request.prompt_token_ids.len()).unwrap_or(u64::MAX);
         let sampling = request.sampling.enabled.then_some(request.sampling.clone());
@@ -377,7 +381,7 @@ impl StageOpenAiBackend {
             }
             if let Err(error) = runtime.trim_session(&session_id, canonical_position) {
                 let _ = runtime.drop_session_timed(&session_id);
-                return Err(OpenAiError::backend(format!(
+                return Err(InferenceError::backend(format!(
                     "native MTP span repair failed and the session was retired: {error:#}"
                 )));
             }
@@ -392,11 +396,11 @@ impl StageOpenAiBackend {
                     .map_err(openai_backend_error)?;
             }
             let repaired_position = runtime.session_token_count(&session_id).ok_or_else(|| {
-                OpenAiError::backend("repaired native MTP span session disappeared")
+                InferenceError::backend("repaired native MTP span session disappeared")
             })?;
             if repaired_position != canonical_position {
                 let _ = runtime.drop_session_timed(&session_id);
-                return Err(OpenAiError::backend(format!(
+                return Err(InferenceError::backend(format!(
                     "native MTP span repair position mismatch: observed {repaired_position}, expected {canonical_position}"
                 )));
             }

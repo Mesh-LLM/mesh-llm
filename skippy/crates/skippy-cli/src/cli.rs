@@ -354,10 +354,10 @@ pub enum OpenAiGuardrailsCliMode {
 
 impl Default for OpenAiGuardrailsCliMode {
     fn default() -> Self {
-        match skippy_serving::frontend::OpenAiGuardrailsMode::default() {
-            skippy_serving::frontend::OpenAiGuardrailsMode::Disabled => Self::Disabled,
-            skippy_serving::frontend::OpenAiGuardrailsMode::Metrics => Self::Metrics,
-            skippy_serving::frontend::OpenAiGuardrailsMode::Enforce => Self::Enforce,
+        match skippy_serving::frontend::InferenceGuardrailsMode::default() {
+            skippy_serving::frontend::InferenceGuardrailsMode::Disabled => Self::Disabled,
+            skippy_serving::frontend::InferenceGuardrailsMode::Metrics => Self::Metrics,
+            skippy_serving::frontend::InferenceGuardrailsMode::Enforce => Self::Enforce,
         }
     }
 }

@@ -11,15 +11,15 @@ struct RecordingBackend {
 }
 
 #[async_trait]
-impl OpenAiBackend for RecordingBackend {
-    async fn models(&self) -> OpenAiResult<Vec<ModelObject>> {
+impl InferenceBackend for RecordingBackend {
+    async fn models(&self) -> InferenceResult<Vec<ModelObject>> {
         Ok(vec![ModelObject::new("auto")])
     }
 
     async fn chat_completion(
         &self,
         request: ChatCompletionRequest,
-    ) -> OpenAiResult<ChatCompletionResponse> {
+    ) -> InferenceResult<ChatCompletionResponse> {
         *self.seen.lock().unwrap() = Some(request.clone());
         Ok(ChatCompletionResponse::new(
             request.model,
@@ -31,8 +31,8 @@ impl OpenAiBackend for RecordingBackend {
     async fn chat_completion_stream(
         &self,
         request: ChatCompletionRequest,
-        _context: OpenAiRequestContext,
-    ) -> OpenAiResult<ChatCompletionStream> {
+        _context: InferenceRequestContext,
+    ) -> InferenceResult<ChatCompletionStream> {
         *self.seen.lock().unwrap() = Some(request);
         Ok(Box::pin(futures_util::stream::empty()))
     }
@@ -41,11 +41,11 @@ impl OpenAiBackend for RecordingBackend {
 struct InjectingHook;
 
 #[async_trait]
-impl OpenAiHookPolicy for InjectingHook {
+impl InferenceHookPolicy for InjectingHook {
     async fn before_chat_completion(
         &self,
         _request: &mut ChatCompletionRequest,
-    ) -> OpenAiResult<ChatHookOutcome> {
+    ) -> InferenceResult<ChatHookOutcome> {
         Ok(ChatHookOutcome::injected("[hint]\n"))
     }
 }
@@ -53,24 +53,24 @@ impl OpenAiHookPolicy for InjectingHook {
 struct FailingBackend;
 
 #[async_trait]
-impl OpenAiBackend for FailingBackend {
-    async fn models(&self) -> OpenAiResult<Vec<ModelObject>> {
+impl InferenceBackend for FailingBackend {
+    async fn models(&self) -> InferenceResult<Vec<ModelObject>> {
         Ok(Vec::new())
     }
 
     async fn chat_completion(
         &self,
         _request: ChatCompletionRequest,
-    ) -> OpenAiResult<ChatCompletionResponse> {
-        Err(crate::errors::OpenAiError::backend("upstream exploded"))
+    ) -> InferenceResult<ChatCompletionResponse> {
+        Err(crate::errors::InferenceError::backend("upstream exploded"))
     }
 
     async fn chat_completion_stream(
         &self,
         _request: ChatCompletionRequest,
-        _context: OpenAiRequestContext,
-    ) -> OpenAiResult<ChatCompletionStream> {
-        Err(crate::errors::OpenAiError::backend("upstream exploded"))
+        _context: InferenceRequestContext,
+    ) -> InferenceResult<ChatCompletionStream> {
+        Err(crate::errors::InferenceError::backend("upstream exploded"))
     }
 }
 
@@ -91,13 +91,13 @@ struct RecordingPolicy {
 }
 
 #[async_trait]
-impl OpenAiHookPolicy for RecordingPolicy {
+impl InferenceHookPolicy for RecordingPolicy {
     async fn before_chat_completion(
         &self,
         _request: &mut ChatCompletionRequest,
-    ) -> OpenAiResult<ChatHookOutcome> {
+    ) -> InferenceResult<ChatHookOutcome> {
         if self.deny {
-            return Err(crate::errors::OpenAiError::invalid_request(
+            return Err(crate::errors::InferenceError::invalid_request(
                 "denied by policy",
             ));
         }
@@ -143,11 +143,11 @@ impl OpenAiHookPolicy for RecordingPolicy {
 struct MediaRescueHook;
 
 #[async_trait]
-impl OpenAiHookPolicy for MediaRescueHook {
+impl InferenceHookPolicy for MediaRescueHook {
     async fn before_chat_completion(
         &self,
         request: &mut ChatCompletionRequest,
-    ) -> OpenAiResult<ChatHookOutcome> {
+    ) -> InferenceResult<ChatHookOutcome> {
         let media = first_chat_media(&request.messages).expect("media");
         Ok(ChatHookOutcome::injected_with_consumed_media(
             "[Audio context: hello]\n\n",
@@ -310,7 +310,7 @@ async fn hooked_backend_applies_injection_once_before_forwarding() {
     let backend = Arc::new(RecordingBackend {
         seen: Mutex::new(None),
     });
-    let hooked = HookedOpenAiBackend::new(backend.clone(), Arc::new(InjectingHook));
+    let hooked = HookedInferenceBackend::new(backend.clone(), Arc::new(InjectingHook));
     let request: ChatCompletionRequest = serde_json::from_value(json!({
         "model": "auto",
         "messages": [{"role": "user", "content": "original"}],
@@ -332,7 +332,7 @@ async fn hooked_backend_consumes_rescued_audio_media_before_forwarding() {
     let backend = Arc::new(RecordingBackend {
         seen: Mutex::new(None),
     });
-    let hooked = HookedOpenAiBackend::new(backend.clone(), Arc::new(MediaRescueHook));
+    let hooked = HookedInferenceBackend::new(backend.clone(), Arc::new(MediaRescueHook));
     let request: ChatCompletionRequest = serde_json::from_value(json!({
         "model": "auto",
         "messages": [{
@@ -431,7 +431,7 @@ async fn effective_request_is_observed_after_mutation_and_terminal_reports_succe
         seen: Mutex::new(None),
     });
     let policy = Arc::new(RecordingPolicy::default());
-    let hooked = HookedOpenAiBackend::new(backend.clone(), policy.clone());
+    let hooked = HookedInferenceBackend::new(backend.clone(), policy.clone());
 
     let response = hooked
         .chat_completion(request_for("gpt-mesh"))
@@ -469,7 +469,7 @@ async fn effective_request_is_observed_after_mutation_and_terminal_reports_succe
 async fn backend_failure_reports_terminal_error_after_observing_effective_request() {
     let backend = Arc::new(FailingBackend);
     let policy = Arc::new(RecordingPolicy::default());
-    let hooked = HookedOpenAiBackend::new(backend, policy.clone());
+    let hooked = HookedInferenceBackend::new(backend, policy.clone());
 
     let error = hooked
         .chat_completion(request_for("gpt-mesh"))
@@ -490,15 +490,15 @@ async fn backend_failure_reports_terminal_error_after_observing_effective_reques
 struct HangingBackend;
 
 #[async_trait]
-impl OpenAiBackend for HangingBackend {
-    async fn models(&self) -> OpenAiResult<Vec<ModelObject>> {
+impl InferenceBackend for HangingBackend {
+    async fn models(&self) -> InferenceResult<Vec<ModelObject>> {
         Ok(Vec::new())
     }
 
     async fn chat_completion(
         &self,
         _request: ChatCompletionRequest,
-    ) -> OpenAiResult<ChatCompletionResponse> {
+    ) -> InferenceResult<ChatCompletionResponse> {
         std::future::pending::<()>().await;
         unreachable!("this backend never returns")
     }
@@ -506,8 +506,8 @@ impl OpenAiBackend for HangingBackend {
     async fn chat_completion_stream(
         &self,
         _request: ChatCompletionRequest,
-        _context: OpenAiRequestContext,
-    ) -> OpenAiResult<ChatCompletionStream> {
+        _context: InferenceRequestContext,
+    ) -> InferenceResult<ChatCompletionStream> {
         Ok(Box::pin(futures_util::stream::empty()))
     }
 }
@@ -520,7 +520,7 @@ impl OpenAiBackend for HangingBackend {
 async fn dropping_the_backend_future_still_fires_exactly_one_terminal_event() {
     let backend = Arc::new(HangingBackend);
     let policy = Arc::new(RecordingPolicy::default());
-    let hooked = Arc::new(HookedOpenAiBackend::new(backend, policy.clone()));
+    let hooked = Arc::new(HookedInferenceBackend::new(backend, policy.clone()));
 
     let hooked_for_task = hooked.clone();
     let handle = tokio::spawn(async move {
@@ -563,7 +563,7 @@ struct HangOnTerminalPolicy {
 }
 
 #[async_trait]
-impl OpenAiHookPolicy for HangOnTerminalPolicy {
+impl InferenceHookPolicy for HangOnTerminalPolicy {
     async fn on_chat_completion_terminal(
         &self,
         _request: &ChatCompletionRequest,
@@ -601,7 +601,7 @@ async fn cancelling_during_the_terminal_hook_await_still_fires_exactly_one_termi
         seen: Mutex::new(None),
     });
     let policy = Arc::new(HangOnTerminalPolicy::default());
-    let hooked = Arc::new(HookedOpenAiBackend::new(backend, policy.clone()));
+    let hooked = Arc::new(HookedInferenceBackend::new(backend, policy.clone()));
 
     let hooked_for_task = hooked.clone();
     let handle = tokio::spawn(async move {
@@ -645,7 +645,7 @@ struct HangOnEffectivePolicy {
 }
 
 #[async_trait]
-impl OpenAiHookPolicy for HangOnEffectivePolicy {
+impl InferenceHookPolicy for HangOnEffectivePolicy {
     async fn on_effective_chat_completion(
         &self,
         _request: &ChatCompletionRequest,
@@ -683,7 +683,7 @@ async fn dropping_the_future_during_on_effective_chat_completion_still_fires_exa
         seen: Mutex::new(None),
     });
     let policy = Arc::new(HangOnEffectivePolicy::default());
-    let hooked = Arc::new(HookedOpenAiBackend::new(backend, policy.clone()));
+    let hooked = Arc::new(HookedInferenceBackend::new(backend, policy.clone()));
 
     let hooked_for_task = hooked.clone();
     let handle = tokio::spawn(async move {
@@ -725,12 +725,12 @@ struct DenyingHangOnTerminalPolicy {
 }
 
 #[async_trait]
-impl OpenAiHookPolicy for DenyingHangOnTerminalPolicy {
+impl InferenceHookPolicy for DenyingHangOnTerminalPolicy {
     async fn before_chat_completion(
         &self,
         _request: &mut ChatCompletionRequest,
-    ) -> OpenAiResult<ChatHookOutcome> {
-        Err(crate::errors::OpenAiError::invalid_request(
+    ) -> InferenceResult<ChatHookOutcome> {
+        Err(crate::errors::InferenceError::invalid_request(
             "denied by policy",
         ))
     }
@@ -769,7 +769,7 @@ async fn cancelling_a_denied_requests_terminal_delivery_still_fires_exactly_one_
         seen: Mutex::new(None),
     });
     let policy = Arc::new(DenyingHangOnTerminalPolicy::default());
-    let hooked = Arc::new(HookedOpenAiBackend::new(backend, policy.clone()));
+    let hooked = Arc::new(HookedInferenceBackend::new(backend, policy.clone()));
 
     let hooked_for_task = hooked.clone();
     let handle = tokio::spawn(async move {
@@ -804,7 +804,7 @@ async fn cancelling_a_denied_requests_terminal_delivery_still_fires_exactly_one_
 struct CapsuleMintingPolicy;
 
 #[async_trait]
-impl OpenAiHookPolicy for CapsuleMintingPolicy {
+impl InferenceHookPolicy for CapsuleMintingPolicy {
     async fn capsule_marker_for_response(
         &self,
         _request: &ChatCompletionRequest,
@@ -822,7 +822,7 @@ async fn capsule_marker_from_hook_is_attached_to_response_before_terminal_fires(
     let backend = Arc::new(RecordingBackend {
         seen: Mutex::new(None),
     });
-    let hooked = HookedOpenAiBackend::new(backend, Arc::new(CapsuleMintingPolicy));
+    let hooked = HookedInferenceBackend::new(backend, Arc::new(CapsuleMintingPolicy));
 
     let response = hooked
         .chat_completion(request_for("gpt-mesh"))
@@ -842,7 +842,7 @@ struct TerminalSnapshotPolicy {
 }
 
 #[async_trait]
-impl OpenAiHookPolicy for TerminalSnapshotPolicy {
+impl InferenceHookPolicy for TerminalSnapshotPolicy {
     async fn capsule_marker_for_response(
         &self,
         _request: &ChatCompletionRequest,
@@ -874,7 +874,7 @@ async fn terminal_hook_observes_the_minted_marker_so_a_plugin_can_correlate_the_
         seen: Mutex::new(None),
     });
     let policy = Arc::new(TerminalSnapshotPolicy::default());
-    let hooked = HookedOpenAiBackend::new(backend, policy.clone());
+    let hooked = HookedInferenceBackend::new(backend, policy.clone());
 
     hooked
         .chat_completion(request_for("gpt-mesh"))
@@ -898,7 +898,7 @@ struct RequestSnapshotPolicy {
 }
 
 #[async_trait]
-impl OpenAiHookPolicy for RequestSnapshotPolicy {
+impl InferenceHookPolicy for RequestSnapshotPolicy {
     async fn on_chat_completion_terminal(
         &self,
         request: &ChatCompletionRequest,
@@ -922,7 +922,7 @@ async fn observes_dispatched_request_true_gets_the_real_post_dispatch_request() 
         consumes: true,
         ..Default::default()
     });
-    let hooked = HookedOpenAiBackend::new(backend, policy.clone());
+    let hooked = HookedInferenceBackend::new(backend, policy.clone());
 
     let response = hooked
         .chat_completion(request_for("gpt-mesh"))
@@ -945,7 +945,7 @@ async fn observes_dispatched_request_false_skips_the_clone_and_sees_a_default_re
         consumes: false,
         ..Default::default()
     });
-    let hooked = HookedOpenAiBackend::new(backend, policy.clone());
+    let hooked = HookedInferenceBackend::new(backend, policy.clone());
 
     // The backend still dispatches the real request (the response model
     // proves it); only the post-dispatch hook snapshot is skipped.
@@ -955,7 +955,7 @@ async fn observes_dispatched_request_false_skips_the_clone_and_sees_a_default_re
         .expect("backend call succeeds");
     assert_eq!(response.model, "gpt-mesh");
 
-    // An empty model here (not "gpt-mesh") proves HookedOpenAiBackend
+    // An empty model here (not "gpt-mesh") proves HookedInferenceBackend
     // handed the hook a default placeholder instead of cloning the real
     // request, matching the `observes_dispatched_request = false` contract.
     assert_eq!(
@@ -969,7 +969,7 @@ async fn default_hook_policy_mints_no_capsule_marker() {
     let backend = Arc::new(RecordingBackend {
         seen: Mutex::new(None),
     });
-    let hooked = HookedOpenAiBackend::new(backend, Arc::new(RecordingPolicy::default()));
+    let hooked = HookedInferenceBackend::new(backend, Arc::new(RecordingPolicy::default()));
 
     let response = hooked
         .chat_completion(request_for("gpt-mesh"))
@@ -988,7 +988,7 @@ async fn denial_by_before_hook_skips_dispatch_and_effective_request_but_reports_
         deny: true,
         ..RecordingPolicy::default()
     });
-    let hooked = HookedOpenAiBackend::new(backend.clone(), policy.clone());
+    let hooked = HookedInferenceBackend::new(backend.clone(), policy.clone());
 
     let error = hooked
         .chat_completion(request_for("gpt-mesh"))
@@ -1010,11 +1010,11 @@ async fn denial_by_before_hook_skips_dispatch_and_effective_request_but_reports_
 }
 
 struct StreamingBackend {
-    chunks: Mutex<Option<Vec<OpenAiResult<ChatCompletionChunk>>>>,
+    chunks: Mutex<Option<Vec<InferenceResult<ChatCompletionChunk>>>>,
 }
 
 impl StreamingBackend {
-    fn new(chunks: Vec<OpenAiResult<ChatCompletionChunk>>) -> Self {
+    fn new(chunks: Vec<InferenceResult<ChatCompletionChunk>>) -> Self {
         Self {
             chunks: Mutex::new(Some(chunks)),
         }
@@ -1022,23 +1022,23 @@ impl StreamingBackend {
 }
 
 #[async_trait]
-impl OpenAiBackend for StreamingBackend {
-    async fn models(&self) -> OpenAiResult<Vec<ModelObject>> {
+impl InferenceBackend for StreamingBackend {
+    async fn models(&self) -> InferenceResult<Vec<ModelObject>> {
         Ok(Vec::new())
     }
 
     async fn chat_completion(
         &self,
         _request: ChatCompletionRequest,
-    ) -> OpenAiResult<ChatCompletionResponse> {
+    ) -> InferenceResult<ChatCompletionResponse> {
         unreachable!("streaming tests only call chat_completion_stream")
     }
 
     async fn chat_completion_stream(
         &self,
         _request: ChatCompletionRequest,
-        _context: OpenAiRequestContext,
-    ) -> OpenAiResult<ChatCompletionStream> {
+        _context: InferenceRequestContext,
+    ) -> InferenceResult<ChatCompletionStream> {
         let chunks = self.chunks.lock().unwrap().take().expect("chunks");
         Ok(Box::pin(futures_util::stream::iter(chunks)))
     }
@@ -1051,23 +1051,23 @@ impl OpenAiBackend for StreamingBackend {
 struct HangingStreamBackend;
 
 #[async_trait]
-impl OpenAiBackend for HangingStreamBackend {
-    async fn models(&self) -> OpenAiResult<Vec<ModelObject>> {
+impl InferenceBackend for HangingStreamBackend {
+    async fn models(&self) -> InferenceResult<Vec<ModelObject>> {
         Ok(Vec::new())
     }
 
     async fn chat_completion(
         &self,
         _request: ChatCompletionRequest,
-    ) -> OpenAiResult<ChatCompletionResponse> {
+    ) -> InferenceResult<ChatCompletionResponse> {
         unreachable!("streaming tests only call chat_completion_stream")
     }
 
     async fn chat_completion_stream(
         &self,
         request: ChatCompletionRequest,
-        _context: OpenAiRequestContext,
-    ) -> OpenAiResult<ChatCompletionStream> {
+        _context: InferenceRequestContext,
+    ) -> InferenceResult<ChatCompletionStream> {
         let first = ChatCompletionChunk::delta(request.model, "partial");
         Ok(Box::pin(
             futures_util::stream::once(async move { Ok(first) })
@@ -1103,10 +1103,10 @@ async fn streaming_exchange_that_ends_normally_fires_stream_completed_terminal_e
         Ok(ChatCompletionChunk::done("gpt-mesh")),
     ]));
     let policy = Arc::new(RecordingPolicy::default());
-    let hooked = HookedOpenAiBackend::new(backend, policy.clone());
+    let hooked = HookedInferenceBackend::new(backend, policy.clone());
 
     let mut stream = hooked
-        .chat_completion_stream(request_for("gpt-mesh"), OpenAiRequestContext::new())
+        .chat_completion_stream(request_for("gpt-mesh"), InferenceRequestContext::new())
         .await
         .expect("stream created");
     while stream
@@ -1126,13 +1126,13 @@ async fn streaming_exchange_that_ends_normally_fires_stream_completed_terminal_e
 async fn streaming_exchange_with_an_error_chunk_fires_error_terminal_exactly_once() {
     let backend = Arc::new(StreamingBackend::new(vec![
         Ok(ChatCompletionChunk::delta("gpt-mesh", "hi")),
-        Err(crate::errors::OpenAiError::backend("upstream exploded")),
+        Err(crate::errors::InferenceError::backend("upstream exploded")),
     ]));
     let policy = Arc::new(RecordingPolicy::default());
-    let hooked = HookedOpenAiBackend::new(backend, policy.clone());
+    let hooked = HookedInferenceBackend::new(backend, policy.clone());
 
     let mut stream = hooked
-        .chat_completion_stream(request_for("gpt-mesh"), OpenAiRequestContext::new())
+        .chat_completion_stream(request_for("gpt-mesh"), InferenceRequestContext::new())
         .await
         .expect("stream created");
     while let Some(item) = stream.next().await {
@@ -1159,10 +1159,10 @@ async fn streaming_exchange_with_an_error_chunk_fires_error_terminal_exactly_onc
 async fn streamed_exchange_dropped_mid_stream_fires_exactly_one_cancelled_terminal() {
     let backend = Arc::new(HangingStreamBackend);
     let policy = Arc::new(RecordingPolicy::default());
-    let hooked = HookedOpenAiBackend::new(backend, policy.clone());
+    let hooked = HookedInferenceBackend::new(backend, policy.clone());
 
     let mut stream = hooked
-        .chat_completion_stream(request_for("gpt-mesh"), OpenAiRequestContext::new())
+        .chat_completion_stream(request_for("gpt-mesh"), InferenceRequestContext::new())
         .await
         .expect("stream created");
     let first = stream.next().await;
@@ -1181,10 +1181,10 @@ async fn streaming_denial_by_before_hook_never_creates_a_stream_but_reports_term
         deny: true,
         ..RecordingPolicy::default()
     });
-    let hooked = HookedOpenAiBackend::new(backend, policy.clone());
+    let hooked = HookedInferenceBackend::new(backend, policy.clone());
 
     let error = match hooked
-        .chat_completion_stream(request_for("gpt-mesh"), OpenAiRequestContext::new())
+        .chat_completion_stream(request_for("gpt-mesh"), InferenceRequestContext::new())
         .await
     {
         Ok(_) => panic!("policy denies the request"),
@@ -1205,10 +1205,10 @@ async fn streaming_denial_by_before_hook_never_creates_a_stream_but_reports_term
 async fn streaming_backend_failure_before_any_chunk_reports_terminal_error_exactly_once() {
     let backend = Arc::new(FailingBackend);
     let policy = Arc::new(RecordingPolicy::default());
-    let hooked = HookedOpenAiBackend::new(backend, policy.clone());
+    let hooked = HookedInferenceBackend::new(backend, policy.clone());
 
     let error = match hooked
-        .chat_completion_stream(request_for("gpt-mesh"), OpenAiRequestContext::new())
+        .chat_completion_stream(request_for("gpt-mesh"), InferenceRequestContext::new())
         .await
     {
         Ok(_) => panic!("backend fails before yielding a stream"),

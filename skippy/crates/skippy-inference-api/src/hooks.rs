@@ -8,7 +8,8 @@ use crate::{
         AudioResponse, AudioSpeechRequest, AudioTranscriptionRequest, AudioTranscriptionResponse,
     },
     backend::{
-        ChatCompletionStream, CompletionStream, OpenAiBackend, OpenAiRequestContext, OpenAiResult,
+        ChatCompletionStream, CompletionStream, InferenceBackend, InferenceRequestContext,
+        InferenceResult,
     },
     chat::{
         CapsuleMarker, ChatCompletionChunk, ChatCompletionRequest, ChatCompletionResponse,
@@ -96,7 +97,7 @@ pub enum ChatMediaKind {
 }
 
 #[async_trait]
-pub trait OpenAiHookPolicy: Send + Sync + 'static {
+pub trait InferenceHookPolicy: Send + Sync + 'static {
     /// Operator-authorized observation cannot be disabled by request mesh_hooks.
     fn requires_exchange_lifecycle(&self) -> bool {
         false
@@ -111,7 +112,7 @@ pub trait OpenAiHookPolicy: Send + Sync + 'static {
         &self,
         _request: &ChatCompletionRequest,
         _route: &ChatExchangeRoute,
-    ) -> OpenAiResult<()> {
+    ) -> InferenceResult<()> {
         Ok(())
     }
     /// Observe the effective legacy completion request after defaults and before generation.
@@ -119,7 +120,7 @@ pub trait OpenAiHookPolicy: Send + Sync + 'static {
         &self,
         _request: &CompletionRequest,
         _exchange_id: &str,
-    ) -> OpenAiResult<()> {
+    ) -> InferenceResult<()> {
         Ok(())
     }
     /// Body-free outcome signal for one backend completion invocation.
@@ -128,7 +129,7 @@ pub trait OpenAiHookPolicy: Send + Sync + 'static {
     async fn before_chat_completion(
         &self,
         _request: &mut ChatCompletionRequest,
-    ) -> OpenAiResult<ChatHookOutcome> {
+    ) -> InferenceResult<ChatHookOutcome> {
         Ok(ChatHookOutcome::none())
     }
 
@@ -136,7 +137,7 @@ pub trait OpenAiHookPolicy: Send + Sync + 'static {
         &self,
         _request: &mut ChatCompletionRequest,
         _signals: PrefillHookSignals,
-    ) -> OpenAiResult<ChatHookOutcome> {
+    ) -> InferenceResult<ChatHookOutcome> {
         Ok(ChatHookOutcome::none())
     }
 
@@ -144,7 +145,7 @@ pub trait OpenAiHookPolicy: Send + Sync + 'static {
         &self,
         _request: &mut ChatCompletionRequest,
         _signals: GenerationHookSignals,
-    ) -> OpenAiResult<ChatHookOutcome> {
+    ) -> InferenceResult<ChatHookOutcome> {
         Ok(ChatHookOutcome::none())
     }
 
@@ -155,7 +156,7 @@ pub trait OpenAiHookPolicy: Send + Sync + 'static {
     /// outcome has been applied, so `request` reflects what will actually be
     /// sent. The route carries only what this layer knows about backend
     /// selection: the frontend dispatches every request to one already-chosen
-    /// [`crate::backend::OpenAiBackend`], so there is no per-request backend
+    /// [`crate::backend::InferenceBackend`], so there is no per-request backend
     /// identity to report here.
     async fn on_effective_chat_completion(
         &self,
@@ -205,7 +206,7 @@ pub trait OpenAiHookPolicy: Send + Sync + 'static {
     /// [`Self::on_chat_completion_terminal`] or
     /// [`Self::capsule_marker_for_response`]. Both fire after the backend
     /// has already taken the effective request by value, so
-    /// `HookedOpenAiBackend` must clone it up front to still have one to
+    /// `HookedInferenceBackend` must clone it up front to still have one to
     /// hand them — a clone that copies real bytes (message content, inline
     /// media) on every non-streaming completion regardless of whether
     /// either hook looks at it. [`Self::on_effective_chat_completion`]
@@ -225,12 +226,12 @@ pub trait OpenAiHookPolicy: Send + Sync + 'static {
 
 /// The route information available to a hook at dispatch time.
 ///
-/// Deliberately narrow: see [`OpenAiHookPolicy::on_effective_chat_completion`].
+/// Deliberately narrow: see [`InferenceHookPolicy::on_effective_chat_completion`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChatExchangeRoute {
     pub model: String,
     /// Stable id for this exchange, shared with the terminal event's
-    /// `exchange_id` — see [`OpenAiHookPolicy::on_chat_completion_terminal`].
+    /// `exchange_id` — see [`InferenceHookPolicy::on_chat_completion_terminal`].
     pub exchange_id: String,
 }
 
@@ -244,7 +245,7 @@ impl ChatExchangeRoute {
 }
 
 /// The terminal outcome of a non-streaming chat completion, as seen by
-/// [`OpenAiHookPolicy::on_chat_completion_terminal`].
+/// [`InferenceHookPolicy::on_chat_completion_terminal`].
 ///
 /// `#[non_exhaustive]`: [`Self::Cancelled`] was added after this type
 /// shipped, precisely so a downstream `match` without a wildcard arm fails
@@ -276,7 +277,7 @@ pub enum ChatCompletionOutcome<'a> {
     StreamCompleted,
 }
 
-/// Guarantees exactly one [`OpenAiHookPolicy::on_chat_completion_terminal`]
+/// Guarantees exactly one [`InferenceHookPolicy::on_chat_completion_terminal`]
 /// call per admitted exchange, even if the future driving the backend call
 /// is dropped mid-flight (an outer request timeout, or the client
 /// disconnecting) before it can report success/error itself.
@@ -292,7 +293,7 @@ pub enum ChatCompletionOutcome<'a> {
 /// [`ChatCompletionOutcome::Cancelled`] so it still happens, just detached
 /// from (and unable to block) whatever cancelled the original future.
 pub struct TerminalGuard {
-    hooks: Arc<dyn OpenAiHookPolicy>,
+    hooks: Arc<dyn InferenceHookPolicy>,
     request: ChatCompletionRequest,
     exchange_id: String,
     fired: bool,
@@ -326,7 +327,7 @@ impl OwnedChatCompletionOutcome {
 
 impl TerminalGuard {
     pub fn new(
-        hooks: Arc<dyn OpenAiHookPolicy>,
+        hooks: Arc<dyn InferenceHookPolicy>,
         request: ChatCompletionRequest,
         exchange_id: String,
     ) -> Self {
@@ -401,49 +402,49 @@ impl Drop for TerminalGuard {
 mod terminal_stream;
 pub use terminal_stream::TerminalGuardedChatStream;
 
-pub struct HookedOpenAiBackend {
-    backend: Arc<dyn OpenAiBackend>,
-    hooks: Arc<dyn OpenAiHookPolicy>,
+pub struct HookedInferenceBackend {
+    backend: Arc<dyn InferenceBackend>,
+    hooks: Arc<dyn InferenceHookPolicy>,
 }
 
-impl HookedOpenAiBackend {
-    pub fn new(backend: Arc<dyn OpenAiBackend>, hooks: Arc<dyn OpenAiHookPolicy>) -> Self {
+impl HookedInferenceBackend {
+    pub fn new(backend: Arc<dyn InferenceBackend>, hooks: Arc<dyn InferenceHookPolicy>) -> Self {
         Self { backend, hooks }
     }
 }
 
 #[async_trait]
-impl OpenAiBackend for HookedOpenAiBackend {
+impl InferenceBackend for HookedInferenceBackend {
     fn http_exchange_policy(&self) -> Option<Arc<dyn crate::http_exchange::HttpExchangePolicy>> {
         self.hooks
             .http_exchange_policy()
             .or_else(|| self.backend.http_exchange_policy())
     }
-    async fn count_chat_tokens(&self, request: ChatCompletionRequest) -> OpenAiResult<u32> {
+    async fn count_chat_tokens(&self, request: ChatCompletionRequest) -> InferenceResult<u32> {
         self.backend.count_chat_tokens(request).await
     }
 
-    async fn models(&self) -> OpenAiResult<Vec<ModelObject>> {
+    async fn models(&self) -> InferenceResult<Vec<ModelObject>> {
         self.backend.models().await
     }
 
-    async fn system_one(&self, request: SystemOneRequest) -> OpenAiResult<SystemOneResponse> {
+    async fn system_one(&self, request: SystemOneRequest) -> InferenceResult<SystemOneResponse> {
         self.backend.system_one(request).await
     }
 
     async fn chat_completion(
         &self,
         request: ChatCompletionRequest,
-    ) -> OpenAiResult<ChatCompletionResponse> {
-        self.chat_completion_with_context(request, OpenAiRequestContext::new())
+    ) -> InferenceResult<ChatCompletionResponse> {
+        self.chat_completion_with_context(request, InferenceRequestContext::new())
             .await
     }
 
     async fn chat_completion_with_context(
         &self,
         mut request: ChatCompletionRequest,
-        context: OpenAiRequestContext,
-    ) -> OpenAiResult<ChatCompletionResponse> {
+        context: InferenceRequestContext,
+    ) -> InferenceResult<ChatCompletionResponse> {
         let exchange_id = uuid::Uuid::new_v4().to_string();
         // Armed immediately after minting the exchange id — before
         // `before_chat_completion` and `on_effective_chat_completion` run —
@@ -540,8 +541,8 @@ impl OpenAiBackend for HookedOpenAiBackend {
     async fn chat_completion_stream(
         &self,
         mut request: ChatCompletionRequest,
-        context: OpenAiRequestContext,
-    ) -> OpenAiResult<ChatCompletionStream> {
+        context: InferenceRequestContext,
+    ) -> InferenceResult<ChatCompletionStream> {
         let exchange_id = uuid::Uuid::new_v4().to_string();
         context.publish_exchange_id(exchange_id.clone());
         // Same admission-time arming as `chat_completion_with_context` above
@@ -603,24 +604,24 @@ impl OpenAiBackend for HookedOpenAiBackend {
         }
     }
 
-    async fn completion(&self, request: CompletionRequest) -> OpenAiResult<CompletionResponse> {
-        self.completion_with_context(request, OpenAiRequestContext::new())
+    async fn completion(&self, request: CompletionRequest) -> InferenceResult<CompletionResponse> {
+        self.completion_with_context(request, InferenceRequestContext::new())
             .await
     }
 
     async fn completion_with_context(
         &self,
         request: CompletionRequest,
-        context: OpenAiRequestContext,
-    ) -> OpenAiResult<CompletionResponse> {
+        context: InferenceRequestContext,
+    ) -> InferenceResult<CompletionResponse> {
         self.backend.completion_with_context(request, context).await
     }
 
     async fn completion_stream(
         &self,
         request: CompletionRequest,
-        context: OpenAiRequestContext,
-    ) -> OpenAiResult<CompletionStream> {
+        context: InferenceRequestContext,
+    ) -> InferenceResult<CompletionStream> {
         self.backend.completion_stream(request, context).await
     }
 
@@ -628,8 +629,8 @@ impl OpenAiBackend for HookedOpenAiBackend {
     async fn embeddings(
         &self,
         request: EmbeddingsRequest,
-        context: OpenAiRequestContext,
-    ) -> OpenAiResult<EmbeddingResponse> {
+        context: InferenceRequestContext,
+    ) -> InferenceResult<EmbeddingResponse> {
         self.backend.embeddings(request, context).await
     }
 
@@ -637,8 +638,8 @@ impl OpenAiBackend for HookedOpenAiBackend {
     async fn rerank(
         &self,
         request: RerankRequest,
-        context: OpenAiRequestContext,
-    ) -> OpenAiResult<RerankResponse> {
+        context: InferenceRequestContext,
+    ) -> InferenceResult<RerankResponse> {
         self.backend.rerank(request, context).await
     }
 
@@ -646,8 +647,8 @@ impl OpenAiBackend for HookedOpenAiBackend {
     async fn audio_speech(
         &self,
         request: AudioSpeechRequest,
-        context: OpenAiRequestContext,
-    ) -> OpenAiResult<AudioResponse> {
+        context: InferenceRequestContext,
+    ) -> InferenceResult<AudioResponse> {
         self.backend.audio_speech(request, context).await
     }
 
@@ -655,8 +656,8 @@ impl OpenAiBackend for HookedOpenAiBackend {
     async fn audio_transcription(
         &self,
         request: AudioTranscriptionRequest,
-        context: OpenAiRequestContext,
-    ) -> OpenAiResult<AudioTranscriptionResponse> {
+        context: InferenceRequestContext,
+    ) -> InferenceResult<AudioTranscriptionResponse> {
         self.backend.audio_transcription(request, context).await
     }
 
@@ -664,8 +665,8 @@ impl OpenAiBackend for HookedOpenAiBackend {
     async fn audio_translation(
         &self,
         request: AudioTranscriptionRequest,
-        context: OpenAiRequestContext,
-    ) -> OpenAiResult<AudioTranscriptionResponse> {
+        context: InferenceRequestContext,
+    ) -> InferenceResult<AudioTranscriptionResponse> {
         self.backend.audio_translation(request, context).await
     }
 }

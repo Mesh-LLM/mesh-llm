@@ -21,7 +21,7 @@ impl StageOpenAiBackend {
         prefill_tokens: &[i32],
         wire_sampling: Option<WireSamplingConfig>,
         cache_stats: &mut GenerationCacheStats,
-    ) -> OpenAiResult<EmbeddedPrefixRestore> {
+    ) -> InferenceResult<EmbeddedPrefixRestore> {
         let allowed = !request.native_mtp_enabled;
         let started = Instant::now();
         let mut chain_cache_restored = false;
