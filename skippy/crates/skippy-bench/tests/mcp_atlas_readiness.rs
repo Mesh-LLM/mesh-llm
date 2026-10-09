@@ -29,6 +29,9 @@ fn native_probe_admits_ipv4_loopback_and_refuses_closed_or_invalid_ports() {
 
 #[test]
 fn actual_template_port_function_uses_the_native_probe_and_preserves_failure() {
+    if !zsh_available() {
+        return;
+    }
     let template = include_str!("../src/evals/adapters/templates/mcp_atlas_run.sh");
     let function = template
         .split("port_ready() {{\n")
@@ -64,4 +67,11 @@ fn actual_template_port_function_uses_the_native_probe_and_preserves_failure() {
     assert!(template.contains("if ! port_ready 3000; then"));
     assert!(template.contains("for _ in {{1..90}}; do"));
     assert!(template.contains("curl -fsS --max-time 5"));
+}
+
+fn zsh_available() -> bool {
+    Command::new("zsh")
+        .args(["-f", "-c", "true"])
+        .output()
+        .is_ok_and(|output| output.status.success())
 }
