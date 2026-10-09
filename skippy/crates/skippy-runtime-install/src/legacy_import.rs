@@ -46,8 +46,8 @@ struct LegacyManifest {
     runtime: LegacyArtifact,
 }
 
-// Kept separate from the normal wire reader: the old spelling is interpreted
-// only after the user explicitly selects a source cache for import.
+// The explicit importer also checks that legacy metadata matches its source
+// directory before copying it into a separate destination cache.
 #[derive(Deserialize)]
 struct LegacyArtifact {
     id: String,

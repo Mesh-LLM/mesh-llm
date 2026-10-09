@@ -1,10 +1,10 @@
 use std::time::Instant;
 
-use skippy_inference_api::{ChatCompletionRequest, OpenAiError, OpenAiResult};
+use skippy_inference_api::{ChatCompletionRequest, InferenceError, InferenceResult};
 use skippy_runtime::{ModelWorkload, SamplingConfig};
 
 use crate::frontend::generation::{
-    GenerationCacheStats, OpenAiGenerationIds, StageOpenAiBackend, TokenControl,
+    GenerationCacheStats, InferenceGenerationIds, StageOpenAiBackend, TokenControl,
     tool_calls_requested,
 };
 use crate::frontend::util::openai_backend_error;
@@ -21,17 +21,17 @@ impl StageOpenAiBackend {
         sampling: &SamplingConfig,
         chat_request: Option<&ChatCompletionRequest>,
         cancellation: Option<&skippy_inference_api::CancellationToken>,
-        ids: &OpenAiGenerationIds,
-        mut emit_token: impl FnMut(i32) -> OpenAiResult<TokenControl>,
-    ) -> OpenAiResult<GenerationCacheStats> {
+        ids: &InferenceGenerationIds,
+        mut emit_token: impl FnMut(i32) -> InferenceResult<TokenControl>,
+    ) -> InferenceResult<GenerationCacheStats> {
         if !self.has_unsplit_full_model_topology() {
-            return Err(OpenAiError::unsupported(
+            return Err(InferenceError::unsupported(
                 "encoder-decoder models currently require an unsplit local runtime",
             ));
         }
         self.ensure_local_workload(ModelWorkload::EncoderDecoder)?;
         if chat_request.is_some_and(tool_calls_requested) {
-            return Err(OpenAiError::unsupported(
+            return Err(InferenceError::unsupported(
                 "tool calls are not supported by encoder-decoder models",
             ));
         }
@@ -42,7 +42,7 @@ impl StageOpenAiBackend {
                 let mut runtime = self
                     .runtime
                     .lock()
-                    .map_err(|_| OpenAiError::backend("runtime lock poisoned"))?;
+                    .map_err(|_| InferenceError::backend("runtime lock poisoned"))?;
                 let prompt_started = Instant::now();
                 let decoder_start = runtime
                     .encode_prompt(&session_id, prompt_token_ids)
@@ -64,7 +64,7 @@ impl StageOpenAiBackend {
                         if cancellation
                             .is_some_and(skippy_inference_api::CancellationToken::is_cancelled)
                         {
-                            return Err(OpenAiError::backend("request cancelled"));
+                            return Err(InferenceError::backend("request cancelled"));
                         }
                         if emit_token(predicted)? == TokenControl::Stop {
                             break;

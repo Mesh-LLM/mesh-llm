@@ -1,6 +1,6 @@
 use crate::binary_transport::connect_binary_downstream;
 use crate::binary_transport::send_client_ready_hello_if_enabled;
-use crate::frontend::generation::OpenAiGenerationIds;
+use crate::frontend::generation::InferenceGenerationIds;
 use crate::frontend::generation::PhaseTimer;
 use crate::frontend::prefill::PrefillChunkObservation;
 use crate::frontend::util::openai_backend_error;
@@ -12,8 +12,8 @@ use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
 use serde_json::json;
-use skippy_inference_api::OpenAiError;
-use skippy_inference_api::OpenAiResult;
+use skippy_inference_api::InferenceError;
+use skippy_inference_api::InferenceResult;
 use skippy_protocol::StageConfig;
 use skippy_protocol::binary::StageReplyStats;
 use skippy_protocol::binary::recv_ready;
@@ -109,14 +109,14 @@ impl PersistentStageLanePool {
 
     pub(in crate::frontend) fn checkout(
         &self,
-        ids: &OpenAiGenerationIds,
-    ) -> OpenAiResult<PersistentStageLane> {
+        ids: &InferenceGenerationIds,
+    ) -> InferenceResult<PersistentStageLane> {
         let timer = PhaseTimer::start();
         let lane = {
             let mut lanes = self
                 .lanes
                 .lock()
-                .map_err(|_| OpenAiError::backend("persistent lane pool lock poisoned"))?;
+                .map_err(|_| InferenceError::backend("persistent lane pool lock poisoned"))?;
             lanes.pop()
         };
         let live_pooled = lane.filter(|lane| lane_stream_is_live(&lane.stream));

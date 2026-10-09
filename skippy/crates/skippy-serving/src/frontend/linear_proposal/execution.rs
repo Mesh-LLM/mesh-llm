@@ -1,6 +1,6 @@
 use std::time::Instant;
 
-use skippy_inference_api::{OpenAiError, OpenAiResult};
+use skippy_inference_api::{InferenceError, InferenceResult};
 use skippy_runtime::SamplingConfig;
 
 use crate::frontend::{
@@ -63,8 +63,8 @@ impl StageOpenAiBackend {
         params: LinearProposalExecutionParams<'_>,
         queried: QueriedLinearProposal,
         cancellation: Option<&skippy_inference_api::CancellationToken>,
-        on_token: &mut (impl FnMut(i32) -> OpenAiResult<TokenControl> + ?Sized),
-    ) -> OpenAiResult<Option<LinearProposalReceipt>> {
+        on_token: &mut (impl FnMut(i32) -> InferenceResult<TokenControl> + ?Sized),
+    ) -> InferenceResult<Option<LinearProposalReceipt>> {
         ensure_request_active(cancellation)?;
         let proposal_token_count = queried.proposal.token_ids.len();
         let mut verify_inputs = Vec::with_capacity(proposal_token_count.saturating_add(1));
@@ -92,7 +92,7 @@ impl StageOpenAiBackend {
             execution.reached_stop,
         );
         if execution.committed_tokens.is_empty() {
-            return Err(OpenAiError::backend(
+            return Err(InferenceError::backend(
                 "linear proposal committed no target token",
             ));
         }
@@ -108,7 +108,7 @@ impl StageOpenAiBackend {
             .generated_len
             .checked_add(execution.committed_tokens.len())
             .ok_or_else(|| {
-                OpenAiError::backend("linear proposal generated-token count overflow")
+                InferenceError::backend("linear proposal generated-token count overflow")
             })?;
         let total_elapsed_us = elapsed_us(queried.operation_started);
         Ok(Some(LinearProposalReceipt {
@@ -132,7 +132,7 @@ impl StageOpenAiBackend {
                     .position_after_verification
                     .saturating_sub(execution.canonical_position),
             )
-            .map_err(|_| OpenAiError::backend("trimmed row count exceeds usize"))?,
+            .map_err(|_| InferenceError::backend("trimmed row count exceeds usize"))?,
             proposal_elapsed_us: queried.proposal_elapsed_us,
             verification_elapsed_us: execution.verification_elapsed_us,
             repair_elapsed_us: execution.repair_elapsed_us,
@@ -149,8 +149,8 @@ impl StageOpenAiBackend {
         proposal_tokens: &[i32],
         verify_inputs: &[i32],
         cancellation: Option<&skippy_inference_api::CancellationToken>,
-        on_token: &mut (impl FnMut(i32) -> OpenAiResult<TokenControl> + ?Sized),
-    ) -> OpenAiResult<Option<LinearProposalExecution>> {
+        on_token: &mut (impl FnMut(i32) -> InferenceResult<TokenControl> + ?Sized),
+    ) -> InferenceResult<Option<LinearProposalExecution>> {
         ensure_request_active(cancellation)?;
         let verify_timer = Instant::now();
         let session_id = params.session_id.to_string();
@@ -163,9 +163,10 @@ impl StageOpenAiBackend {
         let verification = self.iteration_scheduler.execute_runtime_timed(
             "linear-proposal-verify",
             move |runtime| {
-                let observed_position = runtime
-                    .session_token_count(&session_id)
-                    .ok_or_else(|| OpenAiError::backend("linear proposal session is not active"))?;
+                let observed_position =
+                    runtime.session_token_count(&session_id).ok_or_else(|| {
+                        InferenceError::backend("linear proposal session is not active")
+                    })?;
                 if observed_position != base_position {
                     return Ok(None);
                 }
@@ -184,9 +185,10 @@ impl StageOpenAiBackend {
                             .map_err(openai_backend_error)
                     },
                 )?;
-                let position_after_verification = runtime
-                    .session_token_count(&session_id)
-                    .ok_or_else(|| OpenAiError::backend("linear proposal session disappeared"))?;
+                let position_after_verification =
+                    runtime.session_token_count(&session_id).ok_or_else(|| {
+                        InferenceError::backend("linear proposal session disappeared")
+                    })?;
                 Ok(Some((predictions, decision, position_after_verification)))
             },
         )?;
@@ -200,11 +202,11 @@ impl StageOpenAiBackend {
             .base_position
             .checked_add(
                 u64::try_from(verify_inputs.len())
-                    .map_err(|_| OpenAiError::backend("verification row count exceeds u64"))?,
+                    .map_err(|_| InferenceError::backend("verification row count exceeds u64"))?,
             )
-            .ok_or_else(|| OpenAiError::backend("linear proposal position overflow"))?;
+            .ok_or_else(|| InferenceError::backend("linear proposal position overflow"))?;
         if position_after_verification != expected_position_after_verification {
-            return Err(OpenAiError::backend(format!(
+            return Err(InferenceError::backend(format!(
                 "linear proposal verification position mismatch: observed {position_after_verification}, expected {expected_position_after_verification}"
             )));
         }
@@ -215,7 +217,7 @@ impl StageOpenAiBackend {
         let mut callback_error = None;
         for token in predictions.iter().copied().take(decision.commit_count) {
             if cancellation.is_some_and(skippy_inference_api::CancellationToken::is_cancelled) {
-                callback_error = Some(OpenAiError::backend("request cancelled"));
+                callback_error = Some(InferenceError::backend("request cancelled"));
                 break;
             }
             committed_tokens.push(token);
@@ -235,9 +237,11 @@ impl StageOpenAiBackend {
             .base_position
             .checked_add(
                 u64::try_from(committed_tokens.len())
-                    .map_err(|_| OpenAiError::backend("committed token count exceeds u64"))?,
+                    .map_err(|_| InferenceError::backend("committed token count exceeds u64"))?,
             )
-            .ok_or_else(|| OpenAiError::backend("linear proposal canonical position overflow"))?;
+            .ok_or_else(|| {
+                InferenceError::backend("linear proposal canonical position overflow")
+            })?;
         let repair = finish_linear_proposal_after_repair(callback_error, || {
             self.trim_branch_suffix_or_retire(LinearProposalRepairParams {
                 session_id: params.session_id,
@@ -252,7 +256,7 @@ impl StageOpenAiBackend {
         })?;
 
         if committed_tokens.is_empty() {
-            return Err(OpenAiError::backend(
+            return Err(InferenceError::backend(
                 "linear proposal classifier committed no target prediction",
             ));
         }
@@ -277,7 +281,7 @@ impl StageOpenAiBackend {
     fn trim_branch_suffix_or_retire(
         &self,
         params: LinearProposalRepairParams<'_>,
-    ) -> OpenAiResult<LinearProposalRepairTiming> {
+    ) -> InferenceResult<LinearProposalRepairTiming> {
         let LinearProposalRepairParams {
             session_id,
             checkpoint_start,
@@ -320,7 +324,7 @@ impl StageOpenAiBackend {
             move |runtime| {
                 if let Err(error) = runtime.trim_session(&session_id, canonical_position) {
                     let _ = runtime.drop_session_timed(&session_id);
-                    return Err(OpenAiError::backend(format!(
+                    return Err(InferenceError::backend(format!(
                         "linear proposal repair failed and the session was retired: {error:#}"
                     )));
                 }
@@ -336,11 +340,11 @@ impl StageOpenAiBackend {
                 }
                 let repaired_position =
                     runtime.session_token_count(&session_id).ok_or_else(|| {
-                        OpenAiError::backend("repaired linear proposal session disappeared")
+                        InferenceError::backend("repaired linear proposal session disappeared")
                     })?;
                 if repaired_position != canonical_position {
                     let _ = runtime.drop_session_timed(&session_id);
-                    return Err(OpenAiError::backend(format!(
+                    return Err(InferenceError::backend(format!(
                         "linear proposal repair position mismatch: observed {repaired_position}, expected {canonical_position}"
                     )));
                 }
@@ -359,9 +363,9 @@ impl StageOpenAiBackend {
 
 fn ensure_request_active(
     cancellation: Option<&skippy_inference_api::CancellationToken>,
-) -> OpenAiResult<()> {
+) -> InferenceResult<()> {
     if cancellation.is_some_and(skippy_inference_api::CancellationToken::is_cancelled) {
-        Err(OpenAiError::backend("request cancelled"))
+        Err(InferenceError::backend("request cancelled"))
     } else {
         Ok(())
     }
@@ -399,9 +403,9 @@ fn linear_proposal_disposition(
 }
 
 fn finish_linear_proposal_after_repair<T>(
-    callback_error: Option<OpenAiError>,
-    repair: impl FnOnce() -> OpenAiResult<T>,
-) -> OpenAiResult<T> {
+    callback_error: Option<InferenceError>,
+    repair: impl FnOnce() -> InferenceResult<T>,
+) -> InferenceResult<T> {
     let repaired = repair()?;
     callback_error.map_or(Ok(repaired), Err)
 }
@@ -443,7 +447,7 @@ mod tests {
     fn callback_error_is_returned_only_after_repair_runs() {
         let repair_ran = Cell::new(false);
         let result = finish_linear_proposal_after_repair(
-            Some(OpenAiError::backend("synthetic callback failure")),
+            Some(InferenceError::backend("synthetic callback failure")),
             || {
                 repair_ran.set(true);
                 Ok(())
@@ -463,7 +467,7 @@ mod tests {
     fn cancellation_error_is_returned_only_after_repair_runs() {
         let repair_ran = Cell::new(false);
         let result = finish_linear_proposal_after_repair(
-            Some(OpenAiError::backend("request cancelled")),
+            Some(InferenceError::backend("request cancelled")),
             || {
                 repair_ran.set(true);
                 Ok(())

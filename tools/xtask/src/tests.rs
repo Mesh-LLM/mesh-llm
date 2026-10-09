@@ -8,6 +8,9 @@ use mesh_llm_release_footer::read_embedded_release_footer;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+#[cfg(unix)]
+mod client_readiness_smoke;
+
 fn test_signing_key(seed: u8) -> SigningKey {
     SigningKey::from_bytes(&[seed; 32])
 }

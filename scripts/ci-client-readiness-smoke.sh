@@ -87,25 +87,43 @@ shutdown_client_unix() {
 shutdown_client_windows() {
     local child_status=0
     local native_pid=""
+    local signal_status=0
+    local deadline_pid
+    local shutdown_done="$STATE_DIR/shutdown-done"
     local shutdown_timed_out="$STATE_DIR/shutdown-timed-out"
 
-    rm -f "$shutdown_timed_out"
+    rm -f "$shutdown_done" "$shutdown_timed_out"
     if [[ -f "$native_pid_file" ]]; then
         native_pid="$(<"$native_pid_file")"
-        python3 "$WINDOWS_PROCESS_HELPER" ctrl-break --pid "$native_pid" 2>/dev/null || true
-    fi
-
-    for ((attempt = 0; attempt < SHUTDOWN_MAX_WAIT; attempt++)); do
-        if [[ -n "$native_pid" ]] && ! python3 "$WINDOWS_PROCESS_HELPER" is-running --pid "$native_pid"; then
-            break
+        if python3 "$WINDOWS_PROCESS_HELPER" ctrl-break --pid "$native_pid"; then
+            echo "CTRL_BREAK_EVENT sent to native client process group $native_pid"
+        else
+            signal_status=1
+            echo "failed to send CTRL_BREAK_EVENT to native client process group $native_pid" >&2
         fi
-        sleep 1
-    done
-
-    if [[ -n "$native_pid" ]] && python3 "$WINDOWS_PROCESS_HELPER" is-running --pid "$native_pid"; then
-        : >"$shutdown_timed_out"
-        python3 "$WINDOWS_PROCESS_HELPER" force-stop --pid "$native_pid" || true
+    else
+        signal_status=1
+        echo "native client PID record is missing" >&2
     fi
+
+    # The launcher waits on the native child and preserves its exit status.
+    # Windows os.kill(pid, 0) sends CTRL_C_EVENT rather than probing liveness.
+    # Observe the Bash-owned launcher, retaining the native PID only for cleanup.
+    (
+        for ((attempt = 0; attempt < SHUTDOWN_MAX_WAIT; attempt++)); do
+            sleep 1
+            [[ ! -e "$shutdown_done" ]] || exit 0
+        done
+        if [[ ! -e "$shutdown_done" ]] && kill -0 "$pid" 2>/dev/null; then
+            : >"$shutdown_timed_out"
+            if [[ -n "$native_pid" ]]; then
+                python3 "$WINDOWS_PROCESS_HELPER" force-stop --pid "$native_pid" || true
+            else
+                kill -KILL "$pid" 2>/dev/null || true
+            fi
+        fi
+    ) </dev/null >/dev/null 2>&1 &
+    deadline_pid=$!
 
     if wait "$pid"; then
         child_status=0
@@ -113,6 +131,8 @@ shutdown_client_windows() {
         child_status=$?
     fi
     pid=""
+    : >"$shutdown_done"
+    wait "$deadline_pid" 2>/dev/null || true
 
     if [[ -e "$shutdown_timed_out" ]]; then
         echo "client did not stop cleanly after CTRL_BREAK_EVENT within ${SHUTDOWN_MAX_WAIT}s" >&2
@@ -122,7 +142,7 @@ shutdown_client_windows() {
         echo "client exited non-cleanly after CTRL_BREAK_EVENT: $child_status" >&2
         return 1
     fi
-    return 0
+    return "$signal_status"
 }
 
 # shellcheck disable=SC2329 # Invoked by the EXIT cleanup trap.
@@ -132,6 +152,30 @@ shutdown_client() {
     else
         shutdown_client_unix
     fi
+}
+
+# shellcheck disable=SC2329 # Invoked by the EXIT cleanup trap.
+remove_client_log() {
+    local attempt
+    local removal_error=""
+    if [[ "$is_windows" != "1" ]]; then
+        rm -f "$LOG"
+        return
+    fi
+
+    # Windows may retain a log handle briefly after the owning child exits.
+    # Retry only this smoke's file, after shutdown, with a finite cleanup budget.
+    for ((attempt = 1; attempt <= 5; attempt++)); do
+        if removal_error="$(rm -f "$LOG" 2>&1)"; then
+            return 0
+        fi
+        if [[ "$attempt" -lt 5 ]]; then
+            sleep 1
+        fi
+    done
+    printf '%s\n' "$removal_error" >&2
+    echo "client log cleanup failed after 5 attempts; retained at $LOG" >&2
+    return 1
 }
 
 # shellcheck disable=SC2329 # Invoked by the EXIT trap.
@@ -146,7 +190,7 @@ cleanup() {
         cat "$LOG" >&2
     fi
     rm -rf "$STATE_DIR" || cleanup_status=1
-    rm -f "$LOG" || cleanup_status=1
+    remove_client_log || cleanup_status=1
 
     if [[ "$cleanup_status" -ne 0 ]]; then
         exit "$cleanup_status"

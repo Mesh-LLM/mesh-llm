@@ -58,8 +58,6 @@ pub enum WalletCommand {
         input_msat_per_million: Option<u64>,
         #[arg(long, requires_all = ["model", "input_msat_per_million"], conflicts_with = "free")]
         output_msat_per_million: Option<u64>,
-        #[arg(long, default_value_t = 1)]
-        minimum_invoice_msat: u64,
         #[arg(long, requires = "model")]
         free: bool,
     },

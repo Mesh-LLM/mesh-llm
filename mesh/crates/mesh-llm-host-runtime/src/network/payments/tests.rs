@@ -397,7 +397,6 @@ async fn paid_exchange_on(
     let price = Pricing {
         input_msat_per_million: 1_000_000,
         output_msat_per_million: 1_000_000,
-        minimum_invoice_msat: 1,
     };
     provider_service.ledger.set_pricing("test", Some(&price))?;
     let provider = Node::new_for_tests(NodeRole::Host { http_port: 0 }).await?;

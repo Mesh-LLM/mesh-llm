@@ -1,0 +1,892 @@
+{
+  "artifacts": [
+    {
+      "backend": {
+        "kind": "metal"
+      },
+      "files": {
+        "lib/libggml-base.0.25.1.dylib": "c6247bcd3c3798485f59e11c967391f2f14e02f9f7d5b8df526f6b0eb8cac35a",
+        "lib/libggml-base.0.dylib": "ee0b6aa2c8180a5ef7ab72b6b148a5955ab6fa1e4b83dd36e6c2dc4c9df7647d",
+        "lib/libggml-base.dylib": "94bc9fd833b77ff1b00994c74c446e9368b6b86db55e9b986efbc0dcf51a0c4f",
+        "lib/libggml-blas.0.25.1.dylib": "ff89cbd5c4c4c3b2c1230d94360682460142935e02933a4d0831a663d603a24a",
+        "lib/libggml-blas.0.dylib": "da32ec95390ab60a1fafe42e8c5f7641da99a4d6930d9d65ae4c25e9c70d6072",
+        "lib/libggml-blas.dylib": "ca535937fae421398e8181fa2e45bfe679f2ac2d9483ce4cc105440e11775d6d",
+        "lib/libggml-cpu.0.25.1.dylib": "9ac8c6e9a645bc2c6ade5b27f5212f967800f8d6ca5c65ffacd47e28c3f169af",
+        "lib/libggml-cpu.0.dylib": "bccbc25865fd1038e26f1157fc7e03669b4392a59fa1e1bdceaa5777e39d08e0",
+        "lib/libggml-cpu.dylib": "e45a64fab3935dce79fcbfd669ca579ae52797e812d52912bf5747282f6bdad9",
+        "lib/libggml-metal.0.25.1.dylib": "0e66fbf01a5842a1d4637ba0e0a052ef50d0958820060c1e47bbe360aedc1741",
+        "lib/libggml-metal.0.dylib": "dddce1434e840db53947cf180e4f40456ad6a862df59aba75f2f19f3b15f22a4",
+        "lib/libggml-metal.dylib": "26491070034e180786212df1d59fee226ba009b87cc85cdff767e41beb8a6e17",
+        "lib/libggml.0.25.1.dylib": "7db04cc96e32f697008e839e0629ba6386aab0121296faffbc9e71e5c317413a",
+        "lib/libggml.0.dylib": "0ca6bad65ed96c324732a8a322610e3e9cacd03251cf88cba81e64b6c5e86998",
+        "lib/libggml.dylib": "61e4cac1d00903a5e46b545d2f7a0573619a0c8935b3d65039551fe313186b67",
+        "lib/libllama-common.0.5.0.dylib": "d57f4f4e577f44c4a1b6e8945c21dd1e7c3f9b59f0dc960cb49759a5190f5240",
+        "lib/libllama-common.0.dylib": "e6499e61d5caa1b7e39aa6066b72ffd1e90c2625ddda87aa668258cf91f0d7f3",
+        "lib/libllama-common.dylib": "9a55cd3cc25ef9fdd0fa71ff529a349adb25775e9fd2a3aadb4823d49ec6d426",
+        "lib/libllama.0.5.0.dylib": "d5fe185ac3f032316f59cb2ab144db4b982dfaee3b005c291acb8ac15c31d494",
+        "lib/libllama.0.dylib": "461d971fffea794cfb233df5020c67304c55919ba50f2da32710a29bab163678",
+        "lib/libllama.dylib": "7a11b96e58c42ee24b7554e4ddb7cef03fdd2fa1371737365995ef7e98be7cbb",
+        "lib/libmtmd.0.5.0.dylib": "9cfabba4f1da934e3a5da3a8fdce46fb390cd04e6609790f330afccb0b46f5f7",
+        "lib/libmtmd.0.dylib": "6f0eb91deb0b22c7a6164f250b0733085d741e6555c1a0d4eaf6975277671306",
+        "lib/libmtmd.dylib": "671ae32d09a4c688cac6bae915afac8fab57442d75db19946841aaabdefd75a8"
+      },
+      "id": "meshllm-native-runtime-darwin-aarch64-metal",
+      "libraries": [
+        "lib/libggml-base.0.25.1.dylib",
+        "lib/libggml-base.0.dylib",
+        "lib/libggml-base.dylib",
+        "lib/libggml-blas.0.25.1.dylib",
+        "lib/libggml-blas.0.dylib",
+        "lib/libggml-blas.dylib",
+        "lib/libggml-cpu.0.25.1.dylib",
+        "lib/libggml-cpu.0.dylib",
+        "lib/libggml-cpu.dylib",
+        "lib/libggml-metal.0.25.1.dylib",
+        "lib/libggml-metal.0.dylib",
+        "lib/libggml-metal.dylib",
+        "lib/libggml.0.25.1.dylib",
+        "lib/libggml.0.dylib",
+        "lib/libggml.dylib",
+        "lib/libllama-common.0.5.0.dylib",
+        "lib/libllama-common.0.dylib",
+        "lib/libllama-common.dylib",
+        "lib/libllama.0.5.0.dylib",
+        "lib/libllama.0.dylib",
+        "lib/libmtmd.0.5.0.dylib",
+        "lib/libmtmd.0.dylib",
+        "lib/libmtmd.dylib",
+        "lib/libllama.dylib"
+      ],
+      "mesh_version": "0.78.0",
+      "platform": {
+        "arch": "aarch64",
+        "min_glibc": null,
+        "os": "macos",
+        "target": "aarch64-apple-darwin"
+      },
+      "rank": 0,
+      "sha256": "a5facd955480c4704409643b5d1431e415d0a22908ffa5df1266bdf05bba3f0b",
+      "signature": null,
+      "skippy_abi": "0.1.66",
+      "tools": {
+        "tools/mesh-llm-gpu-benchmark": "ba03b1993104ef9d74f7e9fb0dc1cc5f3f2b2eb5c53807692e846a243a8ba5e9",
+        "tools/skippy-model-package": "d6d3eb64a8105cc9f269fabd2422b890a1343197286319f2d3a8ce5571389535"
+      },
+      "url": "https://github.com/Mesh-LLM/mesh-llm/releases/download/v0.78.0/meshllm-native-runtime-darwin-aarch64-metal.tar.gz"
+    },
+    {
+      "backend": {
+        "kind": "cpu"
+      },
+      "files": {
+        "lib/libggml-base.so": "77d7291d86fb01f11df1f481a6fdb2c94252ff7e45bf644792d611c57ca4a782",
+        "lib/libggml-base.so.0": "77d7291d86fb01f11df1f481a6fdb2c94252ff7e45bf644792d611c57ca4a782",
+        "lib/libggml-base.so.0.25.1": "77d7291d86fb01f11df1f481a6fdb2c94252ff7e45bf644792d611c57ca4a782",
+        "lib/libggml-cpu.so": "0a00e48a8710bec0d8cd9286f5223ad014602651f1385f4b6fc48d940b6f3520",
+        "lib/libggml-cpu.so.0": "0a00e48a8710bec0d8cd9286f5223ad014602651f1385f4b6fc48d940b6f3520",
+        "lib/libggml-cpu.so.0.25.1": "0a00e48a8710bec0d8cd9286f5223ad014602651f1385f4b6fc48d940b6f3520",
+        "lib/libggml.so": "f33bb0c9a030c99b8a2d895797c5d85f1558144f66ceabe450baacf66241f62a",
+        "lib/libggml.so.0": "f33bb0c9a030c99b8a2d895797c5d85f1558144f66ceabe450baacf66241f62a",
+        "lib/libggml.so.0.25.1": "f33bb0c9a030c99b8a2d895797c5d85f1558144f66ceabe450baacf66241f62a",
+        "lib/libllama-common.so": "26faefd9667e7fe4eb3c5f0eea2b4e8cc2c56f8cbdd2c3569f376bfb276decdd",
+        "lib/libllama-common.so.0": "26faefd9667e7fe4eb3c5f0eea2b4e8cc2c56f8cbdd2c3569f376bfb276decdd",
+        "lib/libllama-common.so.0.5.0": "26faefd9667e7fe4eb3c5f0eea2b4e8cc2c56f8cbdd2c3569f376bfb276decdd",
+        "lib/libllama.so": "4b70408e2e3f5e5c937f70ab76c9ca15958aebbfd030c21efc3c69d22be23ace",
+        "lib/libllama.so.0": "4b70408e2e3f5e5c937f70ab76c9ca15958aebbfd030c21efc3c69d22be23ace",
+        "lib/libllama.so.0.5.0": "4b70408e2e3f5e5c937f70ab76c9ca15958aebbfd030c21efc3c69d22be23ace",
+        "lib/libmtmd.so": "d4348c4f842b586d12c0afab71de2f40860d38246b68f1ebfe2e4d1a86db6c5a",
+        "lib/libmtmd.so.0": "d4348c4f842b586d12c0afab71de2f40860d38246b68f1ebfe2e4d1a86db6c5a",
+        "lib/libmtmd.so.0.5.0": "d4348c4f842b586d12c0afab71de2f40860d38246b68f1ebfe2e4d1a86db6c5a"
+      },
+      "id": "meshllm-native-runtime-linux-aarch64-cpu",
+      "libraries": [
+        "lib/libggml-base.so",
+        "lib/libggml-base.so.0",
+        "lib/libggml-base.so.0.25.1",
+        "lib/libggml-cpu.so",
+        "lib/libggml-cpu.so.0",
+        "lib/libggml-cpu.so.0.25.1",
+        "lib/libggml.so",
+        "lib/libggml.so.0",
+        "lib/libggml.so.0.25.1",
+        "lib/libllama-common.so",
+        "lib/libllama-common.so.0",
+        "lib/libllama-common.so.0.5.0",
+        "lib/libllama.so.0",
+        "lib/libllama.so.0.5.0",
+        "lib/libmtmd.so",
+        "lib/libmtmd.so.0",
+        "lib/libmtmd.so.0.5.0",
+        "lib/libllama.so"
+      ],
+      "mesh_version": "0.78.0",
+      "platform": {
+        "arch": "aarch64",
+        "min_glibc": "2.39",
+        "os": "linux",
+        "target": "aarch64-unknown-linux-gnu"
+      },
+      "rank": 0,
+      "sha256": "88eceecd88dd6b5280c3293c7311a8afcc1b5497b9481e8a861486e8af4fe847",
+      "signature": null,
+      "skippy_abi": "0.1.66",
+      "tools": {
+        "tools/skippy-model-package": "f8ee779e1d7fdb99e7fdab3ce83d06154d0fae1f3774e13222d447617f00a157"
+      },
+      "url": "https://github.com/Mesh-LLM/mesh-llm/releases/download/v0.78.0/meshllm-native-runtime-linux-aarch64-cpu.tar.gz"
+    },
+    {
+      "backend": {
+        "cuda": {
+          "gpu_arches": [],
+          "toolkit_major": 12
+        },
+        "kind": "cuda"
+      },
+      "files": {
+        "lib/libcublas.so.12": "96ca10361e280aed4ab1c55d6d10f1bd1d761727543684b2478cf84fa456c066",
+        "lib/libcublasLt.so.12": "af9837c7bdc575ae60c4b4bf9b657e9891d274544f35b8912e56f0513e3cf3ae",
+        "lib/libcudart.so.12": "f795754c077c4d74e26b900569c7e65fa3e68d47b2a29d0e6c02f77cd057d117",
+        "lib/libggml-base.so": "d8cbe6eb65722dd038c147766e4c218c9f01ab18102b4dfeee1956371c05fc2b",
+        "lib/libggml-base.so.0": "d8cbe6eb65722dd038c147766e4c218c9f01ab18102b4dfeee1956371c05fc2b",
+        "lib/libggml-base.so.0.25.1": "d8cbe6eb65722dd038c147766e4c218c9f01ab18102b4dfeee1956371c05fc2b",
+        "lib/libggml-cpu.so": "2ea879b1467aeea337dc4201bb4c0298ba9e55173bbaeeb01513daf03a88b58d",
+        "lib/libggml-cpu.so.0": "2ea879b1467aeea337dc4201bb4c0298ba9e55173bbaeeb01513daf03a88b58d",
+        "lib/libggml-cpu.so.0.25.1": "2ea879b1467aeea337dc4201bb4c0298ba9e55173bbaeeb01513daf03a88b58d",
+        "lib/libggml-cuda.so": "6fe6567bcfcce606a047337017d58e24ca08ace73c53385a760a9c871b9044fb",
+        "lib/libggml-cuda.so.0": "6fe6567bcfcce606a047337017d58e24ca08ace73c53385a760a9c871b9044fb",
+        "lib/libggml-cuda.so.0.25.1": "6fe6567bcfcce606a047337017d58e24ca08ace73c53385a760a9c871b9044fb",
+        "lib/libggml.so": "870dcac19a34c47bc98f4cbcb1d2c26338b2afe1b54eed7d2288c15ffe3c9f20",
+        "lib/libggml.so.0": "870dcac19a34c47bc98f4cbcb1d2c26338b2afe1b54eed7d2288c15ffe3c9f20",
+        "lib/libggml.so.0.25.1": "870dcac19a34c47bc98f4cbcb1d2c26338b2afe1b54eed7d2288c15ffe3c9f20",
+        "lib/libllama-common.so": "467c84ccf6c07495908b2fd5f43440ef8a5aaaa3e106f162b89ba55f5c651bc1",
+        "lib/libllama-common.so.0": "467c84ccf6c07495908b2fd5f43440ef8a5aaaa3e106f162b89ba55f5c651bc1",
+        "lib/libllama-common.so.0.5.0": "467c84ccf6c07495908b2fd5f43440ef8a5aaaa3e106f162b89ba55f5c651bc1",
+        "lib/libllama.so": "379b8ed3f3c9454965b6b6febc791a932a7d9079957f1533b4ed1a52f679c07a",
+        "lib/libllama.so.0": "379b8ed3f3c9454965b6b6febc791a932a7d9079957f1533b4ed1a52f679c07a",
+        "lib/libllama.so.0.5.0": "379b8ed3f3c9454965b6b6febc791a932a7d9079957f1533b4ed1a52f679c07a",
+        "lib/libmtmd.so": "db482a5a877c5bb6f9204293c3aa9ba11df0135c158649b37779e1e6aa5f5092",
+        "lib/libmtmd.so.0": "db482a5a877c5bb6f9204293c3aa9ba11df0135c158649b37779e1e6aa5f5092",
+        "lib/libmtmd.so.0.5.0": "db482a5a877c5bb6f9204293c3aa9ba11df0135c158649b37779e1e6aa5f5092",
+        "licenses/NVIDIA-CUDA-LICENSE.txt": "213f2f1cc4bfecd53eb1579edc89d6e3a024ddd2f77413b69b40e2bf3c114d84"
+      },
+      "id": "meshllm-native-runtime-linux-aarch64-cuda12",
+      "libraries": [
+        "lib/libcublasLt.so.12",
+        "lib/libcublas.so.12",
+        "lib/libcudart.so.12",
+        "lib/libggml-base.so",
+        "lib/libggml-base.so.0",
+        "lib/libggml-base.so.0.25.1",
+        "lib/libggml-cpu.so",
+        "lib/libggml-cpu.so.0",
+        "lib/libggml-cpu.so.0.25.1",
+        "lib/libggml-cuda.so",
+        "lib/libggml-cuda.so.0",
+        "lib/libggml-cuda.so.0.25.1",
+        "lib/libggml.so",
+        "lib/libggml.so.0",
+        "lib/libggml.so.0.25.1",
+        "lib/libllama.so.0",
+        "lib/libllama-common.so",
+        "lib/libllama-common.so.0",
+        "lib/libllama-common.so.0.5.0",
+        "lib/libllama.so.0.5.0",
+        "lib/libmtmd.so",
+        "lib/libmtmd.so.0",
+        "lib/libmtmd.so.0.5.0",
+        "lib/libllama.so"
+      ],
+      "mesh_version": "0.78.0",
+      "platform": {
+        "arch": "aarch64",
+        "min_glibc": "2.39",
+        "os": "linux",
+        "target": "aarch64-unknown-linux-gnu"
+      },
+      "rank": 0,
+      "sha256": "ab99b617e6a7d47c0d7cefa431107192c3a0d14fd5e254adc8d5271d18c69c99",
+      "signature": null,
+      "skippy_abi": "0.1.66",
+      "tools": {
+        "tools/mesh-llm-gpu-benchmark": "f114ba24edaad2459ce2bd7aa554a53d2913b296d7aa04baf6bd63d55670c012",
+        "tools/skippy-model-package": "54500d252ce4f27aa9c86b98da4f85268496a3a1c2e696b78098f37bb6b989a1"
+      },
+      "url": "https://github.com/Mesh-LLM/mesh-llm/releases/download/v0.78.0/meshllm-native-runtime-linux-aarch64-cuda12.tar.gz"
+    },
+    {
+      "backend": {
+        "cuda": {
+          "gpu_arches": [],
+          "toolkit_major": 13
+        },
+        "kind": "cuda"
+      },
+      "files": {
+        "lib/libcublas.so.13": "f0993dea3451082be0e2c780f68600b27688dbea364c7031ae77e16ab3f9ed8c",
+        "lib/libcublasLt.so.13": "5af2ae59e652871dfc32fda727c0ede03fce740ca8c06b38b28a59644b35b247",
+        "lib/libcudart.so.13": "7697312d275b1de1aefbde331efe5e7c8c8cfd6003d4e27f75db1cfa1239a636",
+        "lib/libggml-base.so": "d8cbe6eb65722dd038c147766e4c218c9f01ab18102b4dfeee1956371c05fc2b",
+        "lib/libggml-base.so.0": "d8cbe6eb65722dd038c147766e4c218c9f01ab18102b4dfeee1956371c05fc2b",
+        "lib/libggml-base.so.0.25.1": "d8cbe6eb65722dd038c147766e4c218c9f01ab18102b4dfeee1956371c05fc2b",
+        "lib/libggml-cpu.so": "2ea879b1467aeea337dc4201bb4c0298ba9e55173bbaeeb01513daf03a88b58d",
+        "lib/libggml-cpu.so.0": "2ea879b1467aeea337dc4201bb4c0298ba9e55173bbaeeb01513daf03a88b58d",
+        "lib/libggml-cpu.so.0.25.1": "2ea879b1467aeea337dc4201bb4c0298ba9e55173bbaeeb01513daf03a88b58d",
+        "lib/libggml-cuda.so": "e15b35f56176bc41dbae76d92a1b1577b9d1bcccdee47875a97c925bc66f225b",
+        "lib/libggml-cuda.so.0": "e15b35f56176bc41dbae76d92a1b1577b9d1bcccdee47875a97c925bc66f225b",
+        "lib/libggml-cuda.so.0.25.1": "e15b35f56176bc41dbae76d92a1b1577b9d1bcccdee47875a97c925bc66f225b",
+        "lib/libggml.so": "870dcac19a34c47bc98f4cbcb1d2c26338b2afe1b54eed7d2288c15ffe3c9f20",
+        "lib/libggml.so.0": "870dcac19a34c47bc98f4cbcb1d2c26338b2afe1b54eed7d2288c15ffe3c9f20",
+        "lib/libggml.so.0.25.1": "870dcac19a34c47bc98f4cbcb1d2c26338b2afe1b54eed7d2288c15ffe3c9f20",
+        "lib/libllama-common.so": "467c84ccf6c07495908b2fd5f43440ef8a5aaaa3e106f162b89ba55f5c651bc1",
+        "lib/libllama-common.so.0": "467c84ccf6c07495908b2fd5f43440ef8a5aaaa3e106f162b89ba55f5c651bc1",
+        "lib/libllama-common.so.0.5.0": "467c84ccf6c07495908b2fd5f43440ef8a5aaaa3e106f162b89ba55f5c651bc1",
+        "lib/libllama.so": "379b8ed3f3c9454965b6b6febc791a932a7d9079957f1533b4ed1a52f679c07a",
+        "lib/libllama.so.0": "379b8ed3f3c9454965b6b6febc791a932a7d9079957f1533b4ed1a52f679c07a",
+        "lib/libllama.so.0.5.0": "379b8ed3f3c9454965b6b6febc791a932a7d9079957f1533b4ed1a52f679c07a",
+        "lib/libmtmd.so": "db482a5a877c5bb6f9204293c3aa9ba11df0135c158649b37779e1e6aa5f5092",
+        "lib/libmtmd.so.0": "db482a5a877c5bb6f9204293c3aa9ba11df0135c158649b37779e1e6aa5f5092",
+        "lib/libmtmd.so.0.5.0": "db482a5a877c5bb6f9204293c3aa9ba11df0135c158649b37779e1e6aa5f5092",
+        "licenses/NVIDIA-CUDA-LICENSE.txt": "72c22161fc1ebf242443d45158a7dd382d68597b00eeb7a7f539be5c6114be33"
+      },
+      "id": "meshllm-native-runtime-linux-aarch64-cuda13",
+      "libraries": [
+        "lib/libcublasLt.so.13",
+        "lib/libcublas.so.13",
+        "lib/libcudart.so.13",
+        "lib/libggml-base.so",
+        "lib/libggml-base.so.0",
+        "lib/libggml-base.so.0.25.1",
+        "lib/libggml-cpu.so",
+        "lib/libggml-cpu.so.0",
+        "lib/libggml-cpu.so.0.25.1",
+        "lib/libggml-cuda.so",
+        "lib/libggml-cuda.so.0",
+        "lib/libggml-cuda.so.0.25.1",
+        "lib/libggml.so",
+        "lib/libggml.so.0",
+        "lib/libggml.so.0.25.1",
+        "lib/libllama.so.0",
+        "lib/libllama-common.so",
+        "lib/libllama-common.so.0",
+        "lib/libllama-common.so.0.5.0",
+        "lib/libllama.so.0.5.0",
+        "lib/libmtmd.so",
+        "lib/libmtmd.so.0",
+        "lib/libmtmd.so.0.5.0",
+        "lib/libllama.so"
+      ],
+      "mesh_version": "0.78.0",
+      "platform": {
+        "arch": "aarch64",
+        "min_glibc": "2.39",
+        "os": "linux",
+        "target": "aarch64-unknown-linux-gnu"
+      },
+      "rank": 0,
+      "sha256": "c5fc0d23b317c97fad186ae99068314e824d38f6af36819472c03eb31b85c94f",
+      "signature": null,
+      "skippy_abi": "0.1.66",
+      "tools": {
+        "tools/mesh-llm-gpu-benchmark": "9b4e4f07e9dce0d1c932ce53b0b3549616d36678e89e47f523d8910dd05fed07",
+        "tools/skippy-model-package": "54500d252ce4f27aa9c86b98da4f85268496a3a1c2e696b78098f37bb6b989a1"
+      },
+      "url": "https://github.com/Mesh-LLM/mesh-llm/releases/download/v0.78.0/meshllm-native-runtime-linux-aarch64-cuda13.tar.gz"
+    },
+    {
+      "backend": {
+        "kind": "cpu"
+      },
+      "files": {
+        "lib/libggml-base.so": "4d36ac2f2603b5de8e2ae9eb9e381d208bcde263d8c8ffa4b2e87ba8c1cc7028",
+        "lib/libggml-base.so.0": "4d36ac2f2603b5de8e2ae9eb9e381d208bcde263d8c8ffa4b2e87ba8c1cc7028",
+        "lib/libggml-base.so.0.25.1": "4d36ac2f2603b5de8e2ae9eb9e381d208bcde263d8c8ffa4b2e87ba8c1cc7028",
+        "lib/libggml-cpu.so": "9b368690eadd67231e59406b529de5da5275f9547afc16035c5395acf15fba10",
+        "lib/libggml-cpu.so.0": "9b368690eadd67231e59406b529de5da5275f9547afc16035c5395acf15fba10",
+        "lib/libggml-cpu.so.0.25.1": "9b368690eadd67231e59406b529de5da5275f9547afc16035c5395acf15fba10",
+        "lib/libggml.so": "6da56ec957c3103e99d2281a1745266c4942bc6878fb3649d769eeb60c00fe8b",
+        "lib/libggml.so.0": "6da56ec957c3103e99d2281a1745266c4942bc6878fb3649d769eeb60c00fe8b",
+        "lib/libggml.so.0.25.1": "6da56ec957c3103e99d2281a1745266c4942bc6878fb3649d769eeb60c00fe8b",
+        "lib/libllama-common.so": "e1fbf5c0492ace7fb7f15d6dfe5aa26e802a9f53ecddf31ed3c45e4bff197223",
+        "lib/libllama-common.so.0": "e1fbf5c0492ace7fb7f15d6dfe5aa26e802a9f53ecddf31ed3c45e4bff197223",
+        "lib/libllama-common.so.0.5.0": "e1fbf5c0492ace7fb7f15d6dfe5aa26e802a9f53ecddf31ed3c45e4bff197223",
+        "lib/libllama.so": "9a21adcac6b1aa5f8903d3de7ca8e3b303c08f06bb573578c9177a72edf79a11",
+        "lib/libllama.so.0": "9a21adcac6b1aa5f8903d3de7ca8e3b303c08f06bb573578c9177a72edf79a11",
+        "lib/libllama.so.0.5.0": "9a21adcac6b1aa5f8903d3de7ca8e3b303c08f06bb573578c9177a72edf79a11",
+        "lib/libmtmd.so": "ac375de563f8446fb3f5c4a5bde9567f52ab4dee1eeca2626159f172407cab13",
+        "lib/libmtmd.so.0": "ac375de563f8446fb3f5c4a5bde9567f52ab4dee1eeca2626159f172407cab13",
+        "lib/libmtmd.so.0.5.0": "ac375de563f8446fb3f5c4a5bde9567f52ab4dee1eeca2626159f172407cab13"
+      },
+      "id": "meshllm-native-runtime-linux-x86_64-cpu",
+      "libraries": [
+        "lib/libggml-base.so",
+        "lib/libggml-base.so.0",
+        "lib/libggml-base.so.0.25.1",
+        "lib/libggml-cpu.so",
+        "lib/libggml-cpu.so.0",
+        "lib/libggml-cpu.so.0.25.1",
+        "lib/libggml.so",
+        "lib/libggml.so.0",
+        "lib/libggml.so.0.25.1",
+        "lib/libllama-common.so",
+        "lib/libllama-common.so.0",
+        "lib/libllama-common.so.0.5.0",
+        "lib/libllama.so.0",
+        "lib/libllama.so.0.5.0",
+        "lib/libmtmd.so",
+        "lib/libmtmd.so.0",
+        "lib/libmtmd.so.0.5.0",
+        "lib/libllama.so"
+      ],
+      "mesh_version": "0.78.0",
+      "platform": {
+        "arch": "x86_64",
+        "min_glibc": "2.39",
+        "os": "linux",
+        "target": "x86_64-unknown-linux-gnu"
+      },
+      "rank": 0,
+      "sha256": "c8a1079affab2255a1353da5796bd3f47e259061e23d6636f80f0e084cf8aaa4",
+      "signature": null,
+      "skippy_abi": "0.1.66",
+      "tools": {
+        "tools/skippy-model-package": "3fe3756ae3e84529384ec0eb6f793b2d67a0aa6e4971e6efa077579f33abee3c"
+      },
+      "url": "https://github.com/Mesh-LLM/mesh-llm/releases/download/v0.78.0/meshllm-native-runtime-linux-x86_64-cpu.tar.gz"
+    },
+    {
+      "backend": {
+        "cuda": {
+          "gpu_arches": [
+            "61",
+            "75",
+            "80",
+            "86",
+            "87",
+            "89",
+            "90"
+          ],
+          "toolkit_major": 12
+        },
+        "kind": "cuda"
+      },
+      "files": {
+        "lib/libcublas.so.12": "5757ab5839fb4f203ca47ecb336110d10f4a5606b1e097f195fbca89774569e2",
+        "lib/libcublasLt.so.12": "2c9006a75c74b3bea2dc7ae2ec38ab038b0e45ea02cb4b717a915e8a5796acb1",
+        "lib/libcudart.so.12": "256e6409e4f06f618e1fb53d4844a6b81cdded1013afa8ade40c22f99eb133b7",
+        "lib/libggml-base.so": "1dfa493083a59fb03d2a21433621b8a842b1ac21b0b272ab9baddcf44eae1a8d",
+        "lib/libggml-base.so.0": "1dfa493083a59fb03d2a21433621b8a842b1ac21b0b272ab9baddcf44eae1a8d",
+        "lib/libggml-base.so.0.25.1": "1dfa493083a59fb03d2a21433621b8a842b1ac21b0b272ab9baddcf44eae1a8d",
+        "lib/libggml-cpu.so": "a1922279c23a5490de9ea1fa1fb9e0f68d99bd221ee6072b560a94bd4c65f7b3",
+        "lib/libggml-cpu.so.0": "a1922279c23a5490de9ea1fa1fb9e0f68d99bd221ee6072b560a94bd4c65f7b3",
+        "lib/libggml-cpu.so.0.25.1": "a1922279c23a5490de9ea1fa1fb9e0f68d99bd221ee6072b560a94bd4c65f7b3",
+        "lib/libggml-cuda.so": "8c0ee7bfe57a36c448d52901eb58ee1846884094f4f6272e1b6675b31f4c2c03",
+        "lib/libggml-cuda.so.0": "8c0ee7bfe57a36c448d52901eb58ee1846884094f4f6272e1b6675b31f4c2c03",
+        "lib/libggml-cuda.so.0.25.1": "8c0ee7bfe57a36c448d52901eb58ee1846884094f4f6272e1b6675b31f4c2c03",
+        "lib/libggml.so": "14df72f187a5c958576da1f52fa01921e659f77a78478b531c7640942ebb77ea",
+        "lib/libggml.so.0": "14df72f187a5c958576da1f52fa01921e659f77a78478b531c7640942ebb77ea",
+        "lib/libggml.so.0.25.1": "14df72f187a5c958576da1f52fa01921e659f77a78478b531c7640942ebb77ea",
+        "lib/libllama-common.so": "5d1c97ebfc17f3263e26ca186876462297c6562719debd1f5c18313025a5d809",
+        "lib/libllama-common.so.0": "5d1c97ebfc17f3263e26ca186876462297c6562719debd1f5c18313025a5d809",
+        "lib/libllama-common.so.0.5.0": "5d1c97ebfc17f3263e26ca186876462297c6562719debd1f5c18313025a5d809",
+        "lib/libllama.so": "5f487e5ef68f4d3f8ba7898384e1849ab74d41f4d331133f41ad19cf25d39c5b",
+        "lib/libllama.so.0": "5f487e5ef68f4d3f8ba7898384e1849ab74d41f4d331133f41ad19cf25d39c5b",
+        "lib/libllama.so.0.5.0": "5f487e5ef68f4d3f8ba7898384e1849ab74d41f4d331133f41ad19cf25d39c5b",
+        "lib/libmtmd.so": "f2979d24782fffd68c3a0a61db190d40b7da60baa8c8d7af11b6a2991997a5e2",
+        "lib/libmtmd.so.0": "f2979d24782fffd68c3a0a61db190d40b7da60baa8c8d7af11b6a2991997a5e2",
+        "lib/libmtmd.so.0.5.0": "f2979d24782fffd68c3a0a61db190d40b7da60baa8c8d7af11b6a2991997a5e2",
+        "licenses/NVIDIA-CUDA-LICENSE.txt": "213f2f1cc4bfecd53eb1579edc89d6e3a024ddd2f77413b69b40e2bf3c114d84"
+      },
+      "id": "meshllm-native-runtime-linux-x86_64-cuda12",
+      "libraries": [
+        "lib/libcublasLt.so.12",
+        "lib/libcublas.so.12",
+        "lib/libcudart.so.12",
+        "lib/libggml-base.so",
+        "lib/libggml-base.so.0",
+        "lib/libggml-base.so.0.25.1",
+        "lib/libggml-cpu.so",
+        "lib/libggml-cpu.so.0",
+        "lib/libggml-cpu.so.0.25.1",
+        "lib/libggml-cuda.so",
+        "lib/libggml-cuda.so.0",
+        "lib/libggml-cuda.so.0.25.1",
+        "lib/libggml.so",
+        "lib/libggml.so.0",
+        "lib/libggml.so.0.25.1",
+        "lib/libllama.so.0",
+        "lib/libllama-common.so",
+        "lib/libllama-common.so.0",
+        "lib/libllama-common.so.0.5.0",
+        "lib/libllama.so.0.5.0",
+        "lib/libmtmd.so",
+        "lib/libmtmd.so.0",
+        "lib/libmtmd.so.0.5.0",
+        "lib/libllama.so"
+      ],
+      "mesh_version": "0.78.0",
+      "platform": {
+        "arch": "x86_64",
+        "min_glibc": "2.39",
+        "os": "linux",
+        "target": "x86_64-unknown-linux-gnu"
+      },
+      "rank": 0,
+      "sha256": "4360628eacfaae1c01596c2de828d4a089b17eb7bffcad8bb6f3f81e7e3ca5b9",
+      "signature": null,
+      "skippy_abi": "0.1.66",
+      "tools": {
+        "tools/mesh-llm-gpu-benchmark": "cb70cc98abc6abc5838d2c39ef45e03bec55e14be8bfe461553bc2755f727f4d",
+        "tools/skippy-model-package": "9cdef51bc62f9a9244dabae5cde47c439e7b47c357cb7b99bb90aee0f3f23f73"
+      },
+      "url": "https://github.com/Mesh-LLM/mesh-llm/releases/download/v0.78.0/meshllm-native-runtime-linux-x86_64-cuda12.tar.gz"
+    },
+    {
+      "backend": {
+        "cuda": {
+          "gpu_arches": [
+            "75",
+            "80",
+            "86",
+            "87",
+            "89",
+            "90",
+            "100",
+            "103",
+            "120",
+            "121"
+          ],
+          "toolkit_major": 13
+        },
+        "kind": "cuda"
+      },
+      "files": {
+        "lib/libcublas.so.13": "89b60e079abfb9ebcc7a57aedfa4d5d575efe40f9abfc18d868b0c69a295ec74",
+        "lib/libcublasLt.so.13": "82ced05138be3a1e4d6802dcd4290569932601578f10f6f40f3f15fd525390f4",
+        "lib/libcudart.so.13": "9955aa41ec390676be408b6c615f3d94f067f64cb756ef3cdf2b656ac2a81900",
+        "lib/libggml-base.so": "1dfa493083a59fb03d2a21433621b8a842b1ac21b0b272ab9baddcf44eae1a8d",
+        "lib/libggml-base.so.0": "1dfa493083a59fb03d2a21433621b8a842b1ac21b0b272ab9baddcf44eae1a8d",
+        "lib/libggml-base.so.0.25.1": "1dfa493083a59fb03d2a21433621b8a842b1ac21b0b272ab9baddcf44eae1a8d",
+        "lib/libggml-cpu.so": "609b3ff7bbfcb66316fb846e56bcffa04a37fea0a9dc20839e7acedc20780dd6",
+        "lib/libggml-cpu.so.0": "609b3ff7bbfcb66316fb846e56bcffa04a37fea0a9dc20839e7acedc20780dd6",
+        "lib/libggml-cpu.so.0.25.1": "609b3ff7bbfcb66316fb846e56bcffa04a37fea0a9dc20839e7acedc20780dd6",
+        "lib/libggml-cuda.so": "41f91210696cf1c3d43733774cc9bc69a2e25afecce1e654024457c46b48fcc0",
+        "lib/libggml-cuda.so.0": "41f91210696cf1c3d43733774cc9bc69a2e25afecce1e654024457c46b48fcc0",
+        "lib/libggml-cuda.so.0.25.1": "41f91210696cf1c3d43733774cc9bc69a2e25afecce1e654024457c46b48fcc0",
+        "lib/libggml.so": "a1a176bb98840621dd2d0eaab6cda91c76616e08583f9ae9349d9548292c45fc",
+        "lib/libggml.so.0": "a1a176bb98840621dd2d0eaab6cda91c76616e08583f9ae9349d9548292c45fc",
+        "lib/libggml.so.0.25.1": "a1a176bb98840621dd2d0eaab6cda91c76616e08583f9ae9349d9548292c45fc",
+        "lib/libllama-common.so": "74475a3baa9cef256a3cfdc7847e446fa9534969315de1d27d539da9613a31a0",
+        "lib/libllama-common.so.0": "74475a3baa9cef256a3cfdc7847e446fa9534969315de1d27d539da9613a31a0",
+        "lib/libllama-common.so.0.5.0": "74475a3baa9cef256a3cfdc7847e446fa9534969315de1d27d539da9613a31a0",
+        "lib/libllama.so": "4d04f625617254259523203b2cc8f7fe2cc8f805393d84fc7de471089cbf2169",
+        "lib/libllama.so.0": "4d04f625617254259523203b2cc8f7fe2cc8f805393d84fc7de471089cbf2169",
+        "lib/libllama.so.0.5.0": "4d04f625617254259523203b2cc8f7fe2cc8f805393d84fc7de471089cbf2169",
+        "lib/libmtmd.so": "a8f9d5719fa92b2b4b78963608a20675252b14fee60ba5663363c240c35ff578",
+        "lib/libmtmd.so.0": "a8f9d5719fa92b2b4b78963608a20675252b14fee60ba5663363c240c35ff578",
+        "lib/libmtmd.so.0.5.0": "a8f9d5719fa92b2b4b78963608a20675252b14fee60ba5663363c240c35ff578",
+        "licenses/NVIDIA-CUDA-LICENSE.txt": "72c22161fc1ebf242443d45158a7dd382d68597b00eeb7a7f539be5c6114be33"
+      },
+      "id": "meshllm-native-runtime-linux-x86_64-cuda13",
+      "libraries": [
+        "lib/libcublasLt.so.13",
+        "lib/libcublas.so.13",
+        "lib/libcudart.so.13",
+        "lib/libggml-base.so",
+        "lib/libggml-base.so.0",
+        "lib/libggml-base.so.0.25.1",
+        "lib/libggml-cpu.so",
+        "lib/libggml-cpu.so.0",
+        "lib/libggml-cpu.so.0.25.1",
+        "lib/libggml-cuda.so",
+        "lib/libggml-cuda.so.0",
+        "lib/libggml-cuda.so.0.25.1",
+        "lib/libggml.so",
+        "lib/libggml.so.0",
+        "lib/libggml.so.0.25.1",
+        "lib/libllama.so.0",
+        "lib/libllama-common.so",
+        "lib/libllama-common.so.0",
+        "lib/libllama-common.so.0.5.0",
+        "lib/libllama.so.0.5.0",
+        "lib/libmtmd.so",
+        "lib/libmtmd.so.0",
+        "lib/libmtmd.so.0.5.0",
+        "lib/libllama.so"
+      ],
+      "mesh_version": "0.78.0",
+      "platform": {
+        "arch": "x86_64",
+        "min_glibc": "2.39",
+        "os": "linux",
+        "target": "x86_64-unknown-linux-gnu"
+      },
+      "rank": 0,
+      "sha256": "763c24d771aff58b5db1e47120a5943ccdcf76cc3e6709ff8f50e183d46977c8",
+      "signature": null,
+      "skippy_abi": "0.1.66",
+      "tools": {
+        "tools/mesh-llm-gpu-benchmark": "0cf2be9bd02618c500fabdef6f61c6a9ba693d17abcf417a19efec2a028e31a6",
+        "tools/skippy-model-package": "9cdef51bc62f9a9244dabae5cde47c439e7b47c357cb7b99bb90aee0f3f23f73"
+      },
+      "url": "https://github.com/Mesh-LLM/mesh-llm/releases/download/v0.78.0/meshllm-native-runtime-linux-x86_64-cuda13.tar.gz"
+    },
+    {
+      "backend": {
+        "kind": "rocm",
+        "rocm": {
+          "gpu_arches": [
+            "gfx90a",
+            "gfx942",
+            "gfx1100",
+            "gfx1101",
+            "gfx1102",
+            "gfx1103",
+            "gfx1151",
+            "gfx1200",
+            "gfx1201"
+          ]
+        }
+      },
+      "files": {
+        "lib/libggml-base.so": "1dfa493083a59fb03d2a21433621b8a842b1ac21b0b272ab9baddcf44eae1a8d",
+        "lib/libggml-base.so.0": "1dfa493083a59fb03d2a21433621b8a842b1ac21b0b272ab9baddcf44eae1a8d",
+        "lib/libggml-base.so.0.25.1": "1dfa493083a59fb03d2a21433621b8a842b1ac21b0b272ab9baddcf44eae1a8d",
+        "lib/libggml-cpu.so": "3552184d27126fa873b9081ab47195ff39bf585cef8020c450df733bff61c65a",
+        "lib/libggml-cpu.so.0": "3552184d27126fa873b9081ab47195ff39bf585cef8020c450df733bff61c65a",
+        "lib/libggml-cpu.so.0.25.1": "3552184d27126fa873b9081ab47195ff39bf585cef8020c450df733bff61c65a",
+        "lib/libggml-hip.so": "fae68d2c7860912f8263a08379a638d805bc5354d55fe625a177f31943e57416",
+        "lib/libggml-hip.so.0": "fae68d2c7860912f8263a08379a638d805bc5354d55fe625a177f31943e57416",
+        "lib/libggml-hip.so.0.25.1": "fae68d2c7860912f8263a08379a638d805bc5354d55fe625a177f31943e57416",
+        "lib/libggml.so": "0c684ad049ec2ceaffc73739206740113102336d7f93b10f9af20beb1c207567",
+        "lib/libggml.so.0": "0c684ad049ec2ceaffc73739206740113102336d7f93b10f9af20beb1c207567",
+        "lib/libggml.so.0.25.1": "0c684ad049ec2ceaffc73739206740113102336d7f93b10f9af20beb1c207567",
+        "lib/libllama-common.so": "9b6cf2a504d126ff247951fdb0243159b091e1b332db390e8920738385dc47e4",
+        "lib/libllama-common.so.0": "9b6cf2a504d126ff247951fdb0243159b091e1b332db390e8920738385dc47e4",
+        "lib/libllama-common.so.0.5.0": "9b6cf2a504d126ff247951fdb0243159b091e1b332db390e8920738385dc47e4",
+        "lib/libllama.so": "1715d69360e34b1f1da2af2b059f8ddf999bb1f53fc4e9bd0ddabd5bcbfd266b",
+        "lib/libllama.so.0": "1715d69360e34b1f1da2af2b059f8ddf999bb1f53fc4e9bd0ddabd5bcbfd266b",
+        "lib/libllama.so.0.5.0": "1715d69360e34b1f1da2af2b059f8ddf999bb1f53fc4e9bd0ddabd5bcbfd266b",
+        "lib/libmtmd.so": "e9efc44f87847f4c5f5f407ab75ceb6faf9a98a6c7157eff66ec4cbccdc931bd",
+        "lib/libmtmd.so.0": "e9efc44f87847f4c5f5f407ab75ceb6faf9a98a6c7157eff66ec4cbccdc931bd",
+        "lib/libmtmd.so.0.5.0": "e9efc44f87847f4c5f5f407ab75ceb6faf9a98a6c7157eff66ec4cbccdc931bd"
+      },
+      "id": "meshllm-native-runtime-linux-x86_64-rocm",
+      "libraries": [
+        "lib/libggml-base.so",
+        "lib/libggml-base.so.0",
+        "lib/libggml-base.so.0.25.1",
+        "lib/libggml-cpu.so",
+        "lib/libggml-cpu.so.0",
+        "lib/libggml-cpu.so.0.25.1",
+        "lib/libggml-hip.so",
+        "lib/libggml-hip.so.0",
+        "lib/libggml-hip.so.0.25.1",
+        "lib/libggml.so",
+        "lib/libggml.so.0",
+        "lib/libggml.so.0.25.1",
+        "lib/libllama-common.so",
+        "lib/libllama-common.so.0",
+        "lib/libllama-common.so.0.5.0",
+        "lib/libllama.so.0",
+        "lib/libllama.so.0.5.0",
+        "lib/libmtmd.so",
+        "lib/libmtmd.so.0",
+        "lib/libmtmd.so.0.5.0",
+        "lib/libllama.so"
+      ],
+      "mesh_version": "0.78.0",
+      "platform": {
+        "arch": "x86_64",
+        "min_glibc": "2.39",
+        "os": "linux",
+        "target": "x86_64-unknown-linux-gnu"
+      },
+      "rank": 0,
+      "sha256": "d6d2226b47424ae84cf08a2de7dd15dbc5a1faf7162094c4ec2e62e700b7844b",
+      "signature": null,
+      "skippy_abi": "0.1.66",
+      "tools": {
+        "tools/mesh-llm-gpu-benchmark": "b5004c4de4fffbd34ca810fde5685d150fa183d93f50fc673a3217952d7d3344",
+        "tools/skippy-model-package": "9cdef51bc62f9a9244dabae5cde47c439e7b47c357cb7b99bb90aee0f3f23f73"
+      },
+      "url": "https://github.com/Mesh-LLM/mesh-llm/releases/download/v0.78.0/meshllm-native-runtime-linux-x86_64-rocm.tar.gz"
+    },
+    {
+      "backend": {
+        "kind": "vulkan",
+        "vulkan": {}
+      },
+      "files": {
+        "lib/libggml-base.so": "1dfa493083a59fb03d2a21433621b8a842b1ac21b0b272ab9baddcf44eae1a8d",
+        "lib/libggml-base.so.0": "1dfa493083a59fb03d2a21433621b8a842b1ac21b0b272ab9baddcf44eae1a8d",
+        "lib/libggml-base.so.0.25.1": "1dfa493083a59fb03d2a21433621b8a842b1ac21b0b272ab9baddcf44eae1a8d",
+        "lib/libggml-cpu.so": "a8a4c17648f5c1509c90a9ee354b90ef31fc62d824e85abf454e82fc00f3b18f",
+        "lib/libggml-cpu.so.0": "a8a4c17648f5c1509c90a9ee354b90ef31fc62d824e85abf454e82fc00f3b18f",
+        "lib/libggml-cpu.so.0.25.1": "a8a4c17648f5c1509c90a9ee354b90ef31fc62d824e85abf454e82fc00f3b18f",
+        "lib/libggml-vulkan.so": "6588da61c419f363e0c09aceda512dabc16ca11eaf95f36c81f39471bc5a4b8e",
+        "lib/libggml-vulkan.so.0": "6588da61c419f363e0c09aceda512dabc16ca11eaf95f36c81f39471bc5a4b8e",
+        "lib/libggml-vulkan.so.0.25.1": "6588da61c419f363e0c09aceda512dabc16ca11eaf95f36c81f39471bc5a4b8e",
+        "lib/libggml.so": "46eb351c4096ed6ab0d58d866e856dab251fbdae6eba1c38b5911233f96c2abd",
+        "lib/libggml.so.0": "46eb351c4096ed6ab0d58d866e856dab251fbdae6eba1c38b5911233f96c2abd",
+        "lib/libggml.so.0.25.1": "46eb351c4096ed6ab0d58d866e856dab251fbdae6eba1c38b5911233f96c2abd",
+        "lib/libllama-common.so": "4501f5c1b1749ff8c31099d75e19ee667c82f4ba51c8df9e6f7bc82f418624ea",
+        "lib/libllama-common.so.0": "4501f5c1b1749ff8c31099d75e19ee667c82f4ba51c8df9e6f7bc82f418624ea",
+        "lib/libllama-common.so.0.5.0": "4501f5c1b1749ff8c31099d75e19ee667c82f4ba51c8df9e6f7bc82f418624ea",
+        "lib/libllama.so": "feed624f62a71eeeadc3ce6d3b2f51dcbd7da06e67afe6f2de719c0c3fe08bd5",
+        "lib/libllama.so.0": "feed624f62a71eeeadc3ce6d3b2f51dcbd7da06e67afe6f2de719c0c3fe08bd5",
+        "lib/libllama.so.0.5.0": "feed624f62a71eeeadc3ce6d3b2f51dcbd7da06e67afe6f2de719c0c3fe08bd5",
+        "lib/libmtmd.so": "3f657ef44ff60231f6c6df8c2ff2d90c02052f3a695eaa100ca3601d17bce29b",
+        "lib/libmtmd.so.0": "3f657ef44ff60231f6c6df8c2ff2d90c02052f3a695eaa100ca3601d17bce29b",
+        "lib/libmtmd.so.0.5.0": "3f657ef44ff60231f6c6df8c2ff2d90c02052f3a695eaa100ca3601d17bce29b"
+      },
+      "id": "meshllm-native-runtime-linux-x86_64-vulkan",
+      "libraries": [
+        "lib/libggml-base.so",
+        "lib/libggml-base.so.0",
+        "lib/libggml-base.so.0.25.1",
+        "lib/libggml-cpu.so",
+        "lib/libggml-cpu.so.0",
+        "lib/libggml-cpu.so.0.25.1",
+        "lib/libggml-vulkan.so",
+        "lib/libggml-vulkan.so.0",
+        "lib/libggml-vulkan.so.0.25.1",
+        "lib/libggml.so",
+        "lib/libggml.so.0",
+        "lib/libggml.so.0.25.1",
+        "lib/libllama-common.so",
+        "lib/libllama-common.so.0",
+        "lib/libllama-common.so.0.5.0",
+        "lib/libllama.so.0",
+        "lib/libllama.so.0.5.0",
+        "lib/libmtmd.so",
+        "lib/libmtmd.so.0",
+        "lib/libmtmd.so.0.5.0",
+        "lib/libllama.so"
+      ],
+      "mesh_version": "0.78.0",
+      "platform": {
+        "arch": "x86_64",
+        "min_glibc": "2.39",
+        "os": "linux",
+        "target": "x86_64-unknown-linux-gnu"
+      },
+      "rank": 0,
+      "sha256": "4d9d8f7c562e3d45daecf77effe00813131ec696c46ed522f035a6e21ebadc29",
+      "signature": null,
+      "skippy_abi": "0.1.66",
+      "tools": {
+        "tools/skippy-model-package": "9cdef51bc62f9a9244dabae5cde47c439e7b47c357cb7b99bb90aee0f3f23f73"
+      },
+      "url": "https://github.com/Mesh-LLM/mesh-llm/releases/download/v0.78.0/meshllm-native-runtime-linux-x86_64-vulkan.tar.gz"
+    },
+    {
+      "backend": {
+        "kind": "cpu"
+      },
+      "files": {
+        "lib/ggml-base.dll": "eadbe2fa11fdfdf99e75206dc3e2b74bea7733dc12ad062b47b0be8e73a459e1",
+        "lib/ggml-cpu.dll": "c485f1799e648a1181b8e67fe750b9c1bcef6c20265a031dbf2b87bb09ba44a9",
+        "lib/ggml.dll": "9dbf12a84762f39eb203342286ed7d55123d2181a3d7d0d589d6619d0c34674e",
+        "lib/llama-common.dll": "61669d48c2c24d29c20101875a6c2dbb370d79b81a2bc5f544cfc3b5a581a82b",
+        "lib/llama.dll": "85fe315ffed843da0b55382b1358c8c174082a5936e3fe91f7c6df474b1a36cc",
+        "lib/mtmd.dll": "5869a096470b08493a10df4c5e515e5d9108e92e20a469be5e15b5cc25a4da96",
+        "lib/vcomp140.dll": "f96f3a14d88d8846f31f3ab38a490304ce7d6e4f70fae4304c63e59c7aea2d30"
+      },
+      "id": "meshllm-native-runtime-windows-x86_64-cpu",
+      "libraries": [
+        "lib/ggml-base.dll",
+        "lib/ggml-cpu.dll",
+        "lib/ggml.dll",
+        "lib/llama-common.dll",
+        "lib/mtmd.dll",
+        "lib/vcomp140.dll",
+        "lib/llama.dll"
+      ],
+      "mesh_version": "0.78.0",
+      "platform": {
+        "arch": "x86_64",
+        "min_glibc": null,
+        "os": "windows",
+        "target": "x86_64-pc-windows-msvc"
+      },
+      "rank": 0,
+      "sha256": "20af81f75b12ddfb6e06405332dfdbd57490e531c4153babc2d8ffe3a75e244a",
+      "signature": null,
+      "skippy_abi": "0.1.66",
+      "tools": {},
+      "url": "https://github.com/Mesh-LLM/mesh-llm/releases/download/v0.78.0/meshllm-native-runtime-windows-x86_64-cpu.tar.gz"
+    },
+    {
+      "backend": {
+        "cuda": {
+          "gpu_arches": [
+            "61",
+            "75",
+            "80",
+            "86",
+            "87",
+            "89",
+            "90"
+          ],
+          "toolkit_major": 12
+        },
+        "kind": "cuda"
+      },
+      "files": {
+        "lib/cublas64_12.dll": "0a60a7ecbf906f7f3842826fecaf412f1587ff6269729339245a1ec224364161",
+        "lib/cublasLt64_12.dll": "a21ddfc1c9cd090ab07d2c6aad235aa4f15fe60fe896d5db28adf7a279c09ef3",
+        "lib/cudart64_12.dll": "9d9b868955149875ac4ef43442aaaa8913d4a7b3e4d6dd60ee871626aa045768",
+        "lib/ggml-base.dll": "cc28991f68900f207d3938d17573c5a8e69bda4a4ad5611065de712e5764d752",
+        "lib/ggml-cpu.dll": "bb3fad86870cb2fca63b5142b5d5b28895b665e4e1178aa2c09cc936585f546a",
+        "lib/ggml-cuda.dll": "dcba910003afd264e05596c4156af677c32e425fdb956160a4330ebb12b5c1b7",
+        "lib/ggml.dll": "84e0ac2e9a5cb8011aa1119c75efcf69f32199df97ffcff30f72298d42acfbed",
+        "lib/llama-common.dll": "62cab6ef54988956806d70f30aa7e5248fe8dc501c9b5235333d6970c4332ef8",
+        "lib/llama.dll": "4667d00d50c453a2a0c64cbac15d8dc8635c4b1e1cbb88b09ffdc25f860ad28b",
+        "lib/mtmd.dll": "42773caf8303bccf7ba4854c2cf9834dbf2a43bbaaef747dbebc29aad56e8796",
+        "lib/vcomp140.dll": "f96f3a14d88d8846f31f3ab38a490304ce7d6e4f70fae4304c63e59c7aea2d30"
+      },
+      "id": "meshllm-native-runtime-windows-x86_64-cuda12",
+      "libraries": [
+        "lib/cublas64_12.dll",
+        "lib/cublasLt64_12.dll",
+        "lib/cudart64_12.dll",
+        "lib/ggml-base.dll",
+        "lib/ggml-cpu.dll",
+        "lib/ggml-cuda.dll",
+        "lib/ggml.dll",
+        "lib/llama-common.dll",
+        "lib/mtmd.dll",
+        "lib/vcomp140.dll",
+        "lib/llama.dll"
+      ],
+      "mesh_version": "0.78.0",
+      "platform": {
+        "arch": "x86_64",
+        "min_glibc": null,
+        "os": "windows",
+        "target": "x86_64-pc-windows-msvc"
+      },
+      "rank": 0,
+      "sha256": "9f00cd7356d864fefe0dba9c4cc940ffdf836f544772071c3db3ac924611708e",
+      "signature": null,
+      "skippy_abi": "0.1.66",
+      "tools": {
+        "tools/mesh-llm-gpu-benchmark.exe": "ec73a90d70bee70ed4a784b4c8ec146e58d7c41080636e88ffa97749bf5f90a7"
+      },
+      "url": "https://github.com/Mesh-LLM/mesh-llm/releases/download/v0.78.0/meshllm-native-runtime-windows-x86_64-cuda12.tar.gz"
+    },
+    {
+      "backend": {
+        "kind": "rocm",
+        "rocm": {
+          "gpu_arches": [
+            "gfx90a",
+            "gfx942",
+            "gfx1100",
+            "gfx1101",
+            "gfx1102",
+            "gfx1103",
+            "gfx1151",
+            "gfx1200",
+            "gfx1201"
+          ]
+        }
+      },
+      "files": {
+        "lib/amd_comgr_2.dll": "e921f85d59c9bdda9b0507258664b635bd00ca99d428c88d3585d73b60fc83be",
+        "lib/amdhip64_6.dll": "5b22a1bb9d9aa5d4f69b524641a5115edb982c2b605f12195364e977b9927f26",
+        "lib/ggml-base.dll": "0d633c3a42eb8beda0721638824822408d534b871dae67686148d66efce0e22a",
+        "lib/ggml-cpu.dll": "08541cf9f26e347622d61fa4eca34e664be2f5b6a6ecdf5c0245bc4e8d29ecbf",
+        "lib/ggml-hip.dll": "0182593cbd002cf63345d172f02eeef9f5cdc69cf59d052cec44a17007e6d9d0",
+        "lib/ggml.dll": "d1b851a4372245341b0f6e56f7b94ccdc8a9f64053184ba1f2a3a6a26ed4db84",
+        "lib/hipblas.dll": "6842e73070ed9fbf5904293dcb5dc8c576a53011983e4516a709fca6028f91da",
+        "lib/hipblaslt.dll": "6ee8b606dd230c6fd7158236ad2d1931e9f386ca7190b389ce57662911b3074d",
+        "lib/libomp140.x86_64.dll": "9ab1cb787e52b2a36133899c01c1db1f876067d1471cd224ead85f40a8152b99",
+        "lib/llama-common.dll": "b10779f6bde734013bf2b4a31c50c2bf189259262d7eec6ba1810e851ab57155",
+        "lib/llama.dll": "f4b84b7579f81a8c618aac1b56c2c75657f2907ada822aaeb690ee9954c45bb0",
+        "lib/mtmd.dll": "f68e42b96cb78769525379a9d4d1d6e2e3bc3368dcfd0e5c76db86d362a97d39",
+        "lib/rocblas.dll": "ae4fec606b9bf2fc6c6fa3412c7545bc55185715c7d9a3d8245603b4bba83d22"
+      },
+      "id": "meshllm-native-runtime-windows-x86_64-rocm",
+      "libraries": [
+        "lib/amd_comgr_2.dll",
+        "lib/amdhip64_6.dll",
+        "lib/ggml-base.dll",
+        "lib/ggml-cpu.dll",
+        "lib/ggml-hip.dll",
+        "lib/ggml.dll",
+        "lib/hipblas.dll",
+        "lib/hipblaslt.dll",
+        "lib/libomp140.x86_64.dll",
+        "lib/llama-common.dll",
+        "lib/mtmd.dll",
+        "lib/rocblas.dll",
+        "lib/llama.dll"
+      ],
+      "mesh_version": "0.78.0",
+      "platform": {
+        "arch": "x86_64",
+        "min_glibc": null,
+        "os": "windows",
+        "target": "x86_64-pc-windows-msvc"
+      },
+      "rank": 0,
+      "sha256": "448339c4fff1af99294e8e535f4529d9596f7b65f9e712621168403ccb537e22",
+      "signature": null,
+      "skippy_abi": "0.1.66",
+      "tools": {
+        "tools/mesh-llm-gpu-benchmark.exe": "c8a6e92a4113a31200f5e948a66a5cd3607cb1c1cd025677167ddcd6c06768fa"
+      },
+      "url": "https://github.com/Mesh-LLM/mesh-llm/releases/download/v0.78.0/meshllm-native-runtime-windows-x86_64-rocm.tar.gz"
+    },
+    {
+      "backend": {
+        "kind": "vulkan",
+        "vulkan": {}
+      },
+      "files": {
+        "lib/ggml-base.dll": "2f5a16a05f4bad2ff7a94030023a92ab349388296f434ac2ced44144ffee2842",
+        "lib/ggml-cpu.dll": "89e119db4d9902095d32fcbad37de2197e2f7febe3554afa651d1ba9c80fa445",
+        "lib/ggml-vulkan.dll": "e96401fa1f4fc3506876959330dee5907329cf4f9365bbe0e5961a6aa8761332",
+        "lib/ggml.dll": "1fd68edc585919caa1785cef34daf5842a55b7faa69862bc1de01b9e3031ddb1",
+        "lib/libgcc_s_seh-1.dll": "16208d55dd47602ea8bc27d752faa66afbecba2200e346ae0b41c9a94fbe3b0e",
+        "lib/libgomp-1.dll": "ae3939c3ef66913817835c79492c47f737dde2e3c5936923ae980f87c9dc93fc",
+        "lib/libllama-common.dll": "e7467e382c3c9bd69a1700b8b25e12af46628b52668938979e10f6b4152ee0c6",
+        "lib/libllama.dll": "95339f0ff57f791db7c7715976d03c989bd5eefd1048ce33a66470fc326da092",
+        "lib/libmtmd.dll": "8319452784be9c2400b786a301d157d01d01b22483337a720115f4a638dc7ea0",
+        "lib/libstdc++-6.dll": "ea252277c5939cd63848a3db465cf7c88e48dbe169edfd4f19d345851a6b400c",
+        "lib/libwinpthread-1.dll": "f5042e8e3d21edce20c1bc99445f551b89212403164e9388d2c6f48d6d6bcb78"
+      },
+      "id": "meshllm-native-runtime-windows-x86_64-vulkan",
+      "libraries": [
+        "lib/ggml-base.dll",
+        "lib/ggml-cpu.dll",
+        "lib/ggml-vulkan.dll",
+        "lib/ggml.dll",
+        "lib/libgcc_s_seh-1.dll",
+        "lib/libgomp-1.dll",
+        "lib/libllama-common.dll",
+        "lib/libmtmd.dll",
+        "lib/libstdc++-6.dll",
+        "lib/libwinpthread-1.dll",
+        "lib/libllama.dll"
+      ],
+      "mesh_version": "0.78.0",
+      "platform": {
+        "arch": "x86_64",
+        "min_glibc": null,
+        "os": "windows",
+        "target": "x86_64-pc-windows-msvc"
+      },
+      "rank": 0,
+      "sha256": "8916ae077f6e3cc7ed01e838246777ec65ccfbf0218fc0a8f19f6f504d7395f1",
+      "signature": null,
+      "skippy_abi": "0.1.66",
+      "tools": {},
+      "url": "https://github.com/Mesh-LLM/mesh-llm/releases/download/v0.78.0/meshllm-native-runtime-windows-x86_64-vulkan.tar.gz"
+    }
+  ],
+  "mesh_version": "0.78.0",
+  "skippy_abi": "0.1.66"
+}

@@ -19,8 +19,8 @@ use crate::frontend::util::openai_io_error;
 use crate::frontend::wire_messages::{discard_stale_windows_message, retire_verify_window_message};
 use crate::telemetry::now_unix_nanos;
 use serde_json::json;
-use skippy_inference_api::OpenAiError;
-use skippy_inference_api::OpenAiResult;
+use skippy_inference_api::InferenceError;
+use skippy_inference_api::InferenceResult;
 use skippy_protocol::binary::StageReply;
 use skippy_protocol::binary::StageReplyStats;
 use skippy_protocol::binary::StageWireMessage;
@@ -71,7 +71,7 @@ impl StageOpenAiBackend {
         async_forwarder: Option<&mut AsyncForwarder>,
         session_key: &str,
         retirement: VerifyRetirement,
-    ) -> OpenAiResult<()> {
+    ) -> InferenceResult<()> {
         let scheduler_session_key = session_key.to_string();
         self.iteration_scheduler
             .execute_runtime("embedded-verify-retire", move |runtime| {
@@ -120,7 +120,7 @@ impl StageOpenAiBackend {
         downstream: &mut TcpStream,
         async_forwarder: Option<&mut AsyncForwarder>,
         discard: StaleWindowDiscard,
-    ) -> OpenAiResult<()> {
+    ) -> InferenceResult<()> {
         let message = discard_stale_windows_message(
             discard.request_id,
             discard.session_id,
@@ -154,7 +154,7 @@ impl StageOpenAiBackend {
         message: &StageWireMessage,
         token_ids: &[i32],
         expected_reply: WireReplyKind,
-    ) -> OpenAiResult<EmbeddedStageExecution> {
+    ) -> InferenceResult<EmbeddedStageExecution> {
         let dispatched = self.dispatch_embedded_stage_message(
             request,
             downstream,
@@ -174,7 +174,7 @@ impl StageOpenAiBackend {
         message: &StageWireMessage,
         token_ids: &[i32],
         async_forwarder: Option<&mut AsyncForwarder>,
-    ) -> OpenAiResult<DispatchedEmbeddedStage> {
+    ) -> InferenceResult<DispatchedEmbeddedStage> {
         let started = Instant::now();
         let stats = StageReplyStats::default();
         let stage0_timer = PhaseTimer::start();
@@ -321,7 +321,7 @@ impl StageOpenAiBackend {
         downstream: &mut TcpStream,
         dispatched: DispatchedEmbeddedStage,
         expected_reply: WireReplyKind,
-    ) -> OpenAiResult<EmbeddedStageExecution> {
+    ) -> InferenceResult<EmbeddedStageExecution> {
         self.complete_dispatched_stage_message_with_return(
             request,
             downstream,
@@ -337,7 +337,7 @@ impl StageOpenAiBackend {
         downstream: &mut TcpStream,
         dispatched: DispatchedEmbeddedStage,
         expected_reply: WireReplyKind,
-    ) -> OpenAiResult<EmbeddedStageExecution> {
+    ) -> InferenceResult<EmbeddedStageExecution> {
         self.complete_dispatched_stage_message_with_return(
             request,
             downstream,
@@ -354,7 +354,7 @@ impl StageOpenAiBackend {
         mut dispatched: DispatchedEmbeddedStage,
         expected_reply: WireReplyKind,
         require_direct_return: bool,
-    ) -> OpenAiResult<EmbeddedStageExecution> {
+    ) -> InferenceResult<EmbeddedStageExecution> {
         if let Some(receipt) = dispatched.forward_receipt.take() {
             dispatched.execution.forward_write_ms =
                 receipt.finish().map_err(openai_backend_error)?;
@@ -402,15 +402,15 @@ impl StageOpenAiBackend {
 fn receive_direct_prediction_return(
     prediction_return: Option<&PredictionReturnReceiver>,
     expected_reply: WireReplyKind,
-) -> OpenAiResult<StageReply> {
+) -> InferenceResult<StageReply> {
     let prediction_return = prediction_return.ok_or_else(|| {
-        OpenAiError::backend("direct prediction return was required but is not configured")
+        InferenceError::backend("direct prediction return was required but is not configured")
     })?;
     prediction_return
         .recv_expected_timeout(expected_reply, stage_reply_timeout())
         .map_err(openai_backend_error)?
         .ok_or_else(|| {
-            OpenAiError::backend(format!(
+            InferenceError::backend(format!(
                 "timed out waiting for {expected_reply:?} reply from direct prediction return"
             ))
         })
@@ -420,7 +420,7 @@ pub(crate) fn receive_embedded_stage_reply(
     downstream: &mut TcpStream,
     prediction_return: Option<&PredictionReturnReceiver>,
     expected_reply: WireReplyKind,
-) -> OpenAiResult<StageReply> {
+) -> InferenceResult<StageReply> {
     receive_embedded_stage_reply_one_of(
         downstream,
         prediction_return,
@@ -432,9 +432,9 @@ pub(crate) fn receive_embedded_stage_reply_one_of(
     downstream: &mut TcpStream,
     prediction_return: Option<&PredictionReturnReceiver>,
     expected_replies: &[WireReplyKind],
-) -> OpenAiResult<StageReply> {
+) -> InferenceResult<StageReply> {
     if expected_replies.is_empty() {
-        return Err(OpenAiError::backend(
+        return Err(InferenceError::backend(
             "at least one expected stage reply kind is required",
         ));
     }
@@ -448,7 +448,7 @@ fn poll_direct_or_downstream_reply(
     downstream: &mut TcpStream,
     prediction_return: &PredictionReturnReceiver,
     expected_replies: &[WireReplyKind],
-) -> OpenAiResult<StageReply> {
+) -> InferenceResult<StageReply> {
     poll_direct_or_downstream_reply_with_timeouts(
         downstream,
         prediction_return,
@@ -471,11 +471,11 @@ fn poll_direct_or_downstream_reply_with_timeouts(
     fallback_poll: Duration,
     peek_timeout: Duration,
     reply_timeout: Duration,
-) -> OpenAiResult<StageReply> {
+) -> InferenceResult<StageReply> {
     let mut timeout_restore = DirectReturnFallbackTimeout::install(downstream, peek_timeout)?;
     let started = Instant::now();
     let timeout_error = || {
-        OpenAiError::backend(format!(
+        InferenceError::backend(format!(
             "timed out waiting for one of {expected_replies:?} from direct return or downstream"
         ))
     };
@@ -525,10 +525,12 @@ fn poll_direct_or_downstream_reply_with_timeouts(
     result
 }
 
-fn downstream_reply_available(downstream: &TcpStream) -> OpenAiResult<bool> {
+fn downstream_reply_available(downstream: &TcpStream) -> InferenceResult<bool> {
     let mut byte = [0u8; 1];
     match downstream.peek(&mut byte) {
-        Ok(0) => Err(OpenAiError::backend("downstream closed before stage reply")),
+        Ok(0) => Err(InferenceError::backend(
+            "downstream closed before stage reply",
+        )),
         Ok(_) => Ok(true),
         Err(error)
             if matches!(
@@ -565,7 +567,7 @@ impl<'a> DirectReturnFallbackTimeout<'a> {
     /// Give the downstream socket a short read timeout so availability peeks
     /// return promptly while the reply wait blocks on the direct-return channel,
     /// without toggling nonblocking mode on the shared file description.
-    fn install(downstream: &'a TcpStream, peek_timeout: Duration) -> OpenAiResult<Self> {
+    fn install(downstream: &'a TcpStream, peek_timeout: Duration) -> InferenceResult<Self> {
         let previous_timeout = downstream.read_timeout().map_err(openai_io_error)?;
         downstream
             .set_read_timeout(Some(peek_timeout))
@@ -577,7 +579,7 @@ impl<'a> DirectReturnFallbackTimeout<'a> {
         })
     }
 
-    fn restore(&mut self) -> OpenAiResult<()> {
+    fn restore(&mut self) -> InferenceResult<()> {
         self.downstream
             .set_read_timeout(self.previous_timeout)
             .map_err(openai_io_error)?;
@@ -597,10 +599,10 @@ impl Drop for DirectReturnFallbackTimeout<'_> {
 fn receive_downstream_stage_reply_one_of(
     downstream: &TcpStream,
     expected_replies: &[WireReplyKind],
-) -> OpenAiResult<StageReply> {
+) -> InferenceResult<StageReply> {
     let reply = recv_reply(downstream).map_err(openai_io_error)?;
     if !expected_replies.contains(&reply.kind) {
-        return Err(OpenAiError::backend(format!(
+        return Err(InferenceError::backend(format!(
             "expected one of {expected_replies:?} from downstream, got {:?}",
             reply.kind
         )));

@@ -27,19 +27,20 @@ use skippy_events::usage::TokenUsage;
 
 use crate::{
     audio::{AudioResponse, AudioSpeechRequest, AudioTranscriptionResponse},
-    backend::{OpenAiBackend, OpenAiRequestContext, OpenAiResult, SharedBackend},
+    backend::{InferenceBackend, InferenceRequestContext, InferenceResult, SharedBackend},
     backend_lifecycle::{call_backend, call_backend_with_context},
     chat::{CapsuleMarker, ChatCompletionChunk, ChatCompletionRequest},
     common::{AgentSessionIdentity, AgentSessionSource, Usage},
     completions::CompletionRequest,
     decisions::{DecisionsRequest, DecisionsResponse},
     embeddings::{EmbeddingResponse, EmbeddingsRequest},
-    errors::OpenAiError,
+    errors::InferenceError,
     lifecycle::{
-        CLIENT_NONCE_HEADER, CLIENT_NONCE_ORIGIN_HEADER, OpenAiBackendOperation,
-        OpenAiFrontendRoute, OpenAiLifecycleContext, OpenAiLifecycleEvent, OpenAiLifecycleObserver,
-        OpenAiRequestMethod, OpenAiUsage, client_nonce_from_headers_or_generate,
-        request_id_from_headers_or_generate, request_id_response_header,
+        CLIENT_NONCE_HEADER, CLIENT_NONCE_ORIGIN_HEADER, InferenceBackendOperation,
+        InferenceFrontendRoute, InferenceLifecycleContext, InferenceLifecycleEvent,
+        InferenceLifecycleObserver, InferenceRequestMethod, InferenceUsage,
+        client_nonce_from_headers_or_generate, request_id_from_headers_or_generate,
+        request_id_response_header,
     },
     models::ModelsResponse,
     request_lifecycle::RequestLifecycle,
@@ -69,7 +70,7 @@ const MAX_AUDIO_MULTIPART_BODY_BYTES: usize = 64 * 1024 * 1024 + 1024 * 1024;
 /// Backend timeout override, in whole seconds. `0` disables the timeout.
 ///
 /// Returning `None` means "no override configured", which leaves
-/// [`OpenAiFrontendConfig::DEFAULT_BACKEND_TIMEOUT`] in place. Returning
+/// [`InferenceFrontendConfig::DEFAULT_BACKEND_TIMEOUT`] in place. Returning
 /// `Some(None)` means the operator explicitly disabled the timeout.
 fn configured_backend_timeout() -> Option<Option<Duration>> {
     let value = match std::env::var(BACKEND_TIMEOUT_SECS_ENV) {
@@ -138,11 +139,11 @@ pub use crate::lifecycle::RequestId;
 #[derive(Clone)]
 pub(crate) struct FrontendState {
     pub(crate) backend: SharedBackend,
-    pub(crate) config: OpenAiFrontendConfig,
+    pub(crate) config: InferenceFrontendConfig,
 }
 
 impl FrontendState {
-    pub(crate) fn observe(&self, event: OpenAiLifecycleEvent) {
+    pub(crate) fn observe(&self, event: InferenceLifecycleEvent) {
         if let Some(observer) = &self.config.lifecycle_observer {
             observer.observe(&event);
         }
@@ -150,41 +151,41 @@ impl FrontendState {
 
     pub(crate) fn stream_lifecycle(
         &self,
-        context: OpenAiLifecycleContext,
-        operation: OpenAiBackendOperation,
+        context: InferenceLifecycleContext,
+        operation: InferenceBackendOperation,
     ) -> StreamLifecycle {
         StreamLifecycle::new(self.config.lifecycle_observer.clone(), context, operation)
     }
 
     pub(crate) fn response_completed(
         &self,
-        context: &OpenAiLifecycleContext,
-        operation: OpenAiBackendOperation,
+        context: &InferenceLifecycleContext,
+        operation: InferenceBackendOperation,
         usage: &crate::Usage,
     ) {
-        self.observe(OpenAiLifecycleEvent::ResponseCompleted {
+        self.observe(InferenceLifecycleEvent::ResponseCompleted {
             context: context.clone(),
             operation,
-            usage: OpenAiUsage::from(usage),
+            usage: InferenceUsage::from(usage),
         });
     }
 }
 
 #[derive(Clone)]
-pub struct OpenAiFrontendConfig {
+pub struct InferenceFrontendConfig {
     pub max_request_body_bytes: usize,
     pub backend_timeout: Option<Duration>,
     /// Header accepted as stable agent-session identity from the endpoint's
     /// trusted immediate upstream. `None` disables header-derived identity.
     pub agent_session_header: Option<HeaderName>,
-    pub(crate) lifecycle_observer: Option<Arc<dyn OpenAiLifecycleObserver>>,
+    pub(crate) lifecycle_observer: Option<Arc<dyn InferenceLifecycleObserver>>,
     pub http_exchange_policy: Option<Arc<dyn crate::http_exchange::HttpExchangePolicy>>,
 }
 
-impl std::fmt::Debug for OpenAiFrontendConfig {
+impl std::fmt::Debug for InferenceFrontendConfig {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
-            .debug_struct("OpenAiFrontendConfig")
+            .debug_struct("InferenceFrontendConfig")
             .field("max_request_body_bytes", &self.max_request_body_bytes)
             .field("backend_timeout", &self.backend_timeout)
             .field("agent_session_header", &self.agent_session_header)
@@ -197,7 +198,7 @@ impl std::fmt::Debug for OpenAiFrontendConfig {
     }
 }
 
-impl OpenAiFrontendConfig {
+impl InferenceFrontendConfig {
     pub const DEFAULT_MAX_REQUEST_BODY_BYTES: usize = 4 * 1024 * 1024;
     /// Safety net for a wedged backend, not a latency budget.
     ///
@@ -229,7 +230,10 @@ impl OpenAiFrontendConfig {
     }
 
     /// Observe metadata-only lifecycle boundaries for frontend ingress.
-    pub fn with_lifecycle_observer(mut self, observer: Arc<dyn OpenAiLifecycleObserver>) -> Self {
+    pub fn with_lifecycle_observer(
+        mut self,
+        observer: Arc<dyn InferenceLifecycleObserver>,
+    ) -> Self {
         self.lifecycle_observer = Some(observer);
         self
     }
@@ -243,7 +247,7 @@ impl OpenAiFrontendConfig {
     }
 }
 
-impl Default for OpenAiFrontendConfig {
+impl Default for InferenceFrontendConfig {
     fn default() -> Self {
         Self {
             max_request_body_bytes: Self::DEFAULT_MAX_REQUEST_BODY_BYTES,
@@ -258,25 +262,25 @@ impl Default for OpenAiFrontendConfig {
 
 pub fn router<B>(backend: Arc<B>) -> Router
 where
-    B: OpenAiBackend,
+    B: InferenceBackend,
 {
     router_for(backend)
 }
 
-pub fn router_for(backend: Arc<dyn OpenAiBackend>) -> Router {
-    router_for_with_config(backend, OpenAiFrontendConfig::default())
+pub fn router_for(backend: Arc<dyn InferenceBackend>) -> Router {
+    router_for_with_config(backend, InferenceFrontendConfig::default())
 }
 
-pub fn router_with_config<B>(backend: Arc<B>, config: OpenAiFrontendConfig) -> Router
+pub fn router_with_config<B>(backend: Arc<B>, config: InferenceFrontendConfig) -> Router
 where
-    B: OpenAiBackend,
+    B: InferenceBackend,
 {
     router_for_with_config(backend, config)
 }
 
 pub fn router_for_with_config(
-    backend: Arc<dyn OpenAiBackend>,
-    mut config: OpenAiFrontendConfig,
+    backend: Arc<dyn InferenceBackend>,
+    mut config: InferenceFrontendConfig,
 ) -> Router {
     if config.http_exchange_policy.is_none() {
         config.http_exchange_policy = backend.http_exchange_policy();
@@ -333,12 +337,12 @@ async fn health() -> Json<HealthResponse> {
 
 async fn ready(
     State(state): State<FrontendState>,
-    Extension(context): Extension<OpenAiLifecycleContext>,
-) -> Result<Json<HealthResponse>, OpenAiError> {
+    Extension(context): Extension<InferenceLifecycleContext>,
+) -> Result<Json<HealthResponse>, InferenceError> {
     call_backend(
         state.config.lifecycle_observer.clone(),
         &context,
-        OpenAiBackendOperation::Models,
+        InferenceBackendOperation::Models,
         "models",
         state.config.backend_timeout,
         state.backend.models(),
@@ -349,12 +353,12 @@ async fn ready(
 
 async fn models(
     State(state): State<FrontendState>,
-    Extension(context): Extension<OpenAiLifecycleContext>,
-) -> Result<Json<ModelsResponse>, OpenAiError> {
+    Extension(context): Extension<InferenceLifecycleContext>,
+) -> Result<Json<ModelsResponse>, InferenceError> {
     let data = call_backend(
         state.config.lifecycle_observer.clone(),
         &context,
-        OpenAiBackendOperation::Models,
+        InferenceBackendOperation::Models,
         "models",
         state.config.backend_timeout,
         state.backend.models(),
@@ -368,14 +372,14 @@ async fn models(
 
 async fn system_one(
     State(state): State<FrontendState>,
-    Extension(context): Extension<OpenAiLifecycleContext>,
+    Extension(context): Extension<InferenceLifecycleContext>,
     payload: Result<Json<SystemOneRequest>, JsonRejection>,
-) -> Result<Json<SystemOneResponse>, OpenAiError> {
+) -> Result<Json<SystemOneResponse>, InferenceError> {
     let Json(request) = json_payload(payload)?;
     let response = call_backend(
         state.config.lifecycle_observer.clone(),
         &context,
-        OpenAiBackendOperation::SystemOne,
+        InferenceBackendOperation::SystemOne,
         "system_one",
         state.config.backend_timeout,
         state.backend.system_one(request),
@@ -383,7 +387,7 @@ async fn system_one(
     .await?;
     state.response_completed(
         &context,
-        OpenAiBackendOperation::SystemOne,
+        InferenceBackendOperation::SystemOne,
         &Usage::new(response.usage.input_tokens, response.usage.output_tokens),
     );
     Ok(Json(response))
@@ -391,14 +395,14 @@ async fn system_one(
 
 async fn decisions(
     State(state): State<FrontendState>,
-    Extension(context): Extension<OpenAiLifecycleContext>,
+    Extension(context): Extension<InferenceLifecycleContext>,
     payload: Result<Json<DecisionsRequest>, JsonRejection>,
-) -> Result<Json<DecisionsResponse>, OpenAiError> {
+) -> Result<Json<DecisionsResponse>, InferenceError> {
     let Json(request) = json_payload(payload)?;
     let response = call_backend(
         state.config.lifecycle_observer.clone(),
         &context,
-        OpenAiBackendOperation::SystemOne,
+        InferenceBackendOperation::SystemOne,
         "decisions",
         state.config.backend_timeout,
         state.backend.system_one(request.to_system_one()?),
@@ -408,7 +412,7 @@ async fn decisions(
     let decisions_response = request.response(response)?;
     state.response_completed(
         &context,
-        OpenAiBackendOperation::SystemOne,
+        InferenceBackendOperation::SystemOne,
         &Usage::new(usage.input_tokens, usage.output_tokens),
     );
     Ok(Json(decisions_response))
@@ -417,16 +421,16 @@ async fn decisions(
 /// Validate embedding input and preserve cancellation, usage, and lifecycle identity.
 async fn embeddings(
     State(state): State<FrontendState>,
-    Extension(context): Extension<OpenAiLifecycleContext>,
+    Extension(context): Extension<InferenceLifecycleContext>,
     payload: Result<Json<EmbeddingsRequest>, JsonRejection>,
-) -> Result<Response, OpenAiError> {
+) -> Result<Response, InferenceError> {
     let Json(request) = json_payload(payload)?;
     request.validate()?;
-    let backend_context = OpenAiRequestContext::with_request_id(context.request_id);
+    let backend_context = InferenceRequestContext::with_request_id(context.request_id);
     let response: EmbeddingResponse = call_backend_with_context(
         state.config.lifecycle_observer.clone(),
         &context,
-        OpenAiBackendOperation::Embeddings,
+        InferenceBackendOperation::Embeddings,
         "embeddings",
         state.config.backend_timeout,
         &backend_context,
@@ -435,7 +439,7 @@ async fn embeddings(
     .await?;
     state.response_completed(
         &context,
-        OpenAiBackendOperation::Embeddings,
+        InferenceBackendOperation::Embeddings,
         &response.usage,
     );
     let usage = response.usage.clone();
@@ -445,23 +449,23 @@ async fn embeddings(
 /// Validate query/documents before invoking the context-bound rerank backend.
 async fn rerank(
     State(state): State<FrontendState>,
-    Extension(context): Extension<OpenAiLifecycleContext>,
+    Extension(context): Extension<InferenceLifecycleContext>,
     payload: Result<Json<RerankRequest>, JsonRejection>,
-) -> Result<Response, OpenAiError> {
+) -> Result<Response, InferenceError> {
     let Json(request) = json_payload(payload)?;
     request.validate()?;
-    let backend_context = OpenAiRequestContext::with_request_id(context.request_id);
+    let backend_context = InferenceRequestContext::with_request_id(context.request_id);
     let response: RerankResponse = call_backend_with_context(
         state.config.lifecycle_observer.clone(),
         &context,
-        OpenAiBackendOperation::Rerank,
+        InferenceBackendOperation::Rerank,
         "rerank",
         state.config.backend_timeout,
         &backend_context,
         state.backend.rerank(request, backend_context.clone()),
     )
     .await?;
-    state.response_completed(&context, OpenAiBackendOperation::Rerank, &response.usage);
+    state.response_completed(&context, InferenceBackendOperation::Rerank, &response.usage);
     let usage = response.usage.clone();
     Ok(json_response_with_usage(response, &usage))
 }
@@ -469,16 +473,16 @@ async fn rerank(
 /// Dispatch validated speech input and return binary audio without JSON wrapping.
 async fn audio_speech(
     State(state): State<FrontendState>,
-    Extension(context): Extension<OpenAiLifecycleContext>,
+    Extension(context): Extension<InferenceLifecycleContext>,
     payload: Result<Json<AudioSpeechRequest>, JsonRejection>,
-) -> Result<Response, OpenAiError> {
+) -> Result<Response, InferenceError> {
     let Json(request) = json_payload(payload)?;
     request.validate()?;
-    let backend_context = OpenAiRequestContext::with_request_id(context.request_id);
+    let backend_context = InferenceRequestContext::with_request_id(context.request_id);
     let response = call_backend_with_context(
         state.config.lifecycle_observer.clone(),
         &context,
-        OpenAiBackendOperation::AudioSpeech,
+        InferenceBackendOperation::AudioSpeech,
         "audio_speech",
         state.config.backend_timeout,
         &backend_context,
@@ -489,9 +493,9 @@ async fn audio_speech(
 }
 
 /// Validate the backend media type before placing audio bytes in the response.
-fn audio_response(audio: AudioResponse) -> Result<Response, OpenAiError> {
+fn audio_response(audio: AudioResponse) -> Result<Response, InferenceError> {
     let content_type = HeaderValue::from_str(&audio.content_type)
-        .map_err(|_| OpenAiError::backend("audio backend returned an invalid content type"))?;
+        .map_err(|_| InferenceError::backend("audio backend returned an invalid content type"))?;
     let mut response = Response::new(Body::from(audio.bytes));
     response
         .headers_mut()
@@ -502,52 +506,54 @@ fn audio_response(audio: AudioResponse) -> Result<Response, OpenAiError> {
 /// Handle source-language transcription through the shared multipart path.
 async fn audio_transcriptions(
     State(state): State<FrontendState>,
-    Extension(context): Extension<OpenAiLifecycleContext>,
+    Extension(context): Extension<InferenceLifecycleContext>,
     multipart: Result<Multipart, MultipartRejection>,
-) -> Result<Response, OpenAiError> {
+) -> Result<Response, InferenceError> {
     audio_text_request(state, context, multipart_payload(multipart)?, false).await
 }
 
 /// Select English translation without changing the multipart upload contract.
 async fn audio_translations(
     State(state): State<FrontendState>,
-    Extension(context): Extension<OpenAiLifecycleContext>,
+    Extension(context): Extension<InferenceLifecycleContext>,
     multipart: Result<Multipart, MultipartRejection>,
-) -> Result<Response, OpenAiError> {
+) -> Result<Response, InferenceError> {
     audio_text_request(state, context, multipart_payload(multipart)?, true).await
 }
 
 /// Convert extractor rejection into the frontend's structured invalid-request error.
-fn multipart_payload(multipart: Result<Multipart, MultipartRejection>) -> OpenAiResult<Multipart> {
+fn multipart_payload(
+    multipart: Result<Multipart, MultipartRejection>,
+) -> InferenceResult<Multipart> {
     multipart.map_err(|error| {
-        OpenAiError::invalid_request(format!("invalid multipart request: {error}"))
+        InferenceError::invalid_request(format!("invalid multipart request: {error}"))
     })
 }
 
 /// Preserve payload-too-large status when a bounded multipart field cannot be read.
-fn multipart_error(error: MultipartError, field: &str) -> OpenAiError {
+fn multipart_error(error: MultipartError, field: &str) -> InferenceError {
     if error.status() == StatusCode::PAYLOAD_TOO_LARGE {
-        OpenAiError::payload_too_large(format!("{field} is too large: {error}"))
+        InferenceError::payload_too_large(format!("{field} is too large: {error}"))
     } else {
-        OpenAiError::invalid_request(format!("invalid {field}: {error}"))
+        InferenceError::invalid_request(format!("invalid {field}: {error}"))
     }
 }
 
 /// Share upload validation and cancellation while retaining endpoint-specific dispatch.
 async fn audio_text_request(
     state: FrontendState,
-    context: OpenAiLifecycleContext,
+    context: InferenceLifecycleContext,
     multipart: Multipart,
     translate: bool,
-) -> Result<Response, OpenAiError> {
+) -> Result<Response, InferenceError> {
     let request = parse_audio_multipart(multipart).await?;
     request.validate()?;
     let response_format = request.response_format.clone();
-    let backend_context = OpenAiRequestContext::with_request_id(context.request_id);
+    let backend_context = InferenceRequestContext::with_request_id(context.request_id);
     let operation = if translate {
-        OpenAiBackendOperation::AudioTranslation
+        InferenceBackendOperation::AudioTranslation
     } else {
-        OpenAiBackendOperation::AudioTranscription
+        InferenceBackendOperation::AudioTranscription
     };
     let response: AudioTranscriptionResponse = call_backend_with_context(
         state.config.lifecycle_observer.clone(),
@@ -584,10 +590,10 @@ async fn audio_text_request(
 
 async fn chat_completions(
     State(state): State<FrontendState>,
-    Extension(context): Extension<OpenAiLifecycleContext>,
+    Extension(context): Extension<InferenceLifecycleContext>,
     headers: HeaderMap,
     payload: Result<Json<ChatCompletionRequest>, JsonRejection>,
-) -> Result<Response, OpenAiError> {
+) -> Result<Response, InferenceError> {
     let Json(mut request) = json_payload(payload)?;
     let header_session = agent_session_from_header(&state.config, &headers)?;
     let trusted_agent_session = header_session.is_some();
@@ -601,7 +607,7 @@ async fn chat_completions(
         let stream = call_backend_with_context(
             state.config.lifecycle_observer.clone(),
             &context,
-            OpenAiBackendOperation::ChatCompletionStream,
+            InferenceBackendOperation::ChatCompletionStream,
             "chat_completion_stream",
             state.config.backend_timeout,
             &backend_context,
@@ -611,7 +617,7 @@ async fn chat_completions(
         )
         .await?;
         let lifecycle =
-            state.stream_lifecycle(context, OpenAiBackendOperation::ChatCompletionStream);
+            state.stream_lifecycle(context, InferenceBackendOperation::ChatCompletionStream);
         let exchange_id = backend_context.exchange_id();
         if let Some(exchange_id) = exchange_id.clone() {
             lifecycle.record_exchange_id(exchange_id);
@@ -655,7 +661,7 @@ async fn chat_completions(
         let response = call_backend_with_context(
             state.config.lifecycle_observer.clone(),
             &context,
-            OpenAiBackendOperation::ChatCompletion,
+            InferenceBackendOperation::ChatCompletion,
             "chat_completion",
             state.config.backend_timeout,
             &backend_context,
@@ -666,7 +672,7 @@ async fn chat_completions(
         .await?;
         state.response_completed(
             &context,
-            OpenAiBackendOperation::ChatCompletion,
+            InferenceBackendOperation::ChatCompletion,
             &response.usage,
         );
         let usage = response.usage.clone();
@@ -689,14 +695,14 @@ async fn chat_completions(
 
 async fn responses(
     State(state): State<FrontendState>,
-    Extension(context): Extension<OpenAiLifecycleContext>,
+    Extension(context): Extension<InferenceLifecycleContext>,
     headers: HeaderMap,
     payload: Result<Json<Value>, JsonRejection>,
-) -> Result<Response, OpenAiError> {
+) -> Result<Response, InferenceError> {
     let Json(mut value) = json_payload(payload)?;
     let normalization = normalize_openai_compat_request("/v1/responses", &mut value)?;
     let mut request: ChatCompletionRequest = serde_json::from_value(value).map_err(|error| {
-        OpenAiError::invalid_request(format!("invalid Responses request: {error}"))
+        InferenceError::invalid_request(format!("invalid Responses request: {error}"))
     })?;
     let header_session = agent_session_from_header(&state.config, &headers)?;
     let trusted_agent_session = header_session.is_some();
@@ -716,10 +722,10 @@ async fn responses(
 
 async fn stream_responses(
     state: &FrontendState,
-    context: &OpenAiLifecycleContext,
+    context: &InferenceLifecycleContext,
     request: ChatCompletionRequest,
     trusted_agent_session: bool,
-) -> Result<Response, OpenAiError> {
+) -> Result<Response, InferenceError> {
     let include_usage = request.include_usage();
     let backend_context = request_context(context.request_id, trusted_agent_session, true);
     let cancellation = backend_context.cancellation_token();
@@ -727,7 +733,7 @@ async fn stream_responses(
     let stream = call_backend_with_context(
         state.config.lifecycle_observer.clone(),
         context,
-        OpenAiBackendOperation::ResponsesStream,
+        InferenceBackendOperation::ResponsesStream,
         "responses_stream",
         state.config.backend_timeout,
         &backend_context,
@@ -737,7 +743,7 @@ async fn stream_responses(
     )
     .await?;
     let lifecycle =
-        state.stream_lifecycle(context.clone(), OpenAiBackendOperation::ResponsesStream);
+        state.stream_lifecycle(context.clone(), InferenceBackendOperation::ResponsesStream);
     let exchange_id = backend_context.exchange_id();
     if let Some(exchange_id) = exchange_id.clone() {
         lifecycle.record_exchange_id(exchange_id);
@@ -770,15 +776,15 @@ async fn stream_responses(
 
 async fn non_streaming_responses(
     state: &FrontendState,
-    context: &OpenAiLifecycleContext,
+    context: &InferenceLifecycleContext,
     request: ChatCompletionRequest,
     trusted_agent_session: bool,
-) -> Result<Response, OpenAiError> {
+) -> Result<Response, InferenceError> {
     let backend_context = request_context(context.request_id, trusted_agent_session, false);
     let response = call_backend_with_context(
         state.config.lifecycle_observer.clone(),
         context,
-        OpenAiBackendOperation::Responses,
+        InferenceBackendOperation::Responses,
         "responses",
         state.config.backend_timeout,
         &backend_context,
@@ -787,7 +793,11 @@ async fn non_streaming_responses(
             .chat_completion_with_context(request, backend_context.clone()),
     )
     .await?;
-    state.response_completed(context, OpenAiBackendOperation::Responses, &response.usage);
+    state.response_completed(
+        context,
+        InferenceBackendOperation::Responses,
+        &response.usage,
+    );
     let usage = response.usage.clone();
     let capsule_marker = response.capsule_marker.clone();
     let exchange_id = response.exchange_id.clone();
@@ -809,7 +819,7 @@ async fn non_streaming_responses(
 fn responses_stream_body_events(
     state_machine: &Mutex<ResponseSseState>,
     usage_lifecycle: &StreamLifecycle,
-    item: OpenAiResult<ChatCompletionChunk>,
+    item: InferenceResult<ChatCompletionChunk>,
 ) -> Vec<Event> {
     let mut state_machine = state_machine
         .lock()
@@ -1000,10 +1010,10 @@ fn responses_stream_tail_events(
 
 async fn completions(
     State(state): State<FrontendState>,
-    Extension(context): Extension<OpenAiLifecycleContext>,
+    Extension(context): Extension<InferenceLifecycleContext>,
     headers: HeaderMap,
     payload: Result<Json<CompletionRequest>, JsonRejection>,
-) -> Result<Response, OpenAiError> {
+) -> Result<Response, InferenceError> {
     let Json(mut request) = json_payload(payload)?;
     let header_session = agent_session_from_header(&state.config, &headers)?;
     let trusted_agent_session = header_session.is_some();
@@ -1016,7 +1026,7 @@ async fn completions(
         let stream = call_backend_with_context(
             state.config.lifecycle_observer.clone(),
             &context,
-            OpenAiBackendOperation::CompletionStream,
+            InferenceBackendOperation::CompletionStream,
             "completion_stream",
             state.config.backend_timeout,
             &backend_context,
@@ -1025,7 +1035,8 @@ async fn completions(
                 .completion_stream(request, backend_context.clone()),
         )
         .await?;
-        let lifecycle = state.stream_lifecycle(context, OpenAiBackendOperation::CompletionStream);
+        let lifecycle =
+            state.stream_lifecycle(context, InferenceBackendOperation::CompletionStream);
         let stream = observe_backend_stream(stream, lifecycle.clone());
         let usage_lifecycle = lifecycle.clone();
         let completion_lifecycle = lifecycle.clone();
@@ -1058,7 +1069,7 @@ async fn completions(
         let response = call_backend_with_context(
             state.config.lifecycle_observer.clone(),
             &context,
-            OpenAiBackendOperation::Completion,
+            InferenceBackendOperation::Completion,
             "completion",
             state.config.backend_timeout,
             &backend_context,
@@ -1069,7 +1080,7 @@ async fn completions(
         .await?;
         state.response_completed(
             &context,
-            OpenAiBackendOperation::Completion,
+            InferenceBackendOperation::Completion,
             &response.usage,
         );
         let usage = response.usage.clone();
@@ -1127,9 +1138,9 @@ pub(crate) fn json_response_with_usage<T: Serialize>(value: T, usage: &Usage) ->
 }
 
 pub(crate) fn agent_session_from_header(
-    config: &OpenAiFrontendConfig,
+    config: &InferenceFrontendConfig,
     headers: &HeaderMap,
-) -> OpenAiResult<Option<AgentSessionIdentity>> {
+) -> InferenceResult<Option<AgentSessionIdentity>> {
     let Some(name) = config.agent_session_header.as_ref() else {
         return Ok(None);
     };
@@ -1137,7 +1148,7 @@ pub(crate) fn agent_session_from_header(
         return Ok(None);
     };
     let value = value.to_str().map_err(|_| {
-        OpenAiError::invalid_request("configured agent-session header is not valid UTF-8")
+        InferenceError::invalid_request("configured agent-session header is not valid UTF-8")
     })?;
     AgentSessionIdentity::new(
         value,
@@ -1149,10 +1160,10 @@ pub(crate) fn agent_session_from_header(
 fn resolve_agent_session(
     header: Option<AgentSessionIdentity>,
     protocol: Option<AgentSessionIdentity>,
-) -> OpenAiResult<Option<AgentSessionIdentity>> {
+) -> InferenceResult<Option<AgentSessionIdentity>> {
     match (header, protocol) {
         (Some(header), Some(protocol)) if header.id() != protocol.id() => {
-            Err(OpenAiError::invalid_request(
+            Err(InferenceError::invalid_request(
                 "trusted agent-session header conflicts with Responses conversation identity",
             ))
         }
@@ -1165,8 +1176,8 @@ pub(crate) fn request_context(
     request_id: RequestId,
     trusted_agent_session: bool,
     observe_stream_usage: bool,
-) -> OpenAiRequestContext {
-    let mut context = OpenAiRequestContext::with_request_id(request_id);
+) -> InferenceRequestContext {
+    let mut context = InferenceRequestContext::with_request_id(request_id);
     if trusted_agent_session {
         context = context.with_trusted_agent_session();
     }
@@ -1178,24 +1189,26 @@ pub(crate) fn request_context(
 
 pub(crate) fn json_payload<T>(
     payload: Result<Json<T>, JsonRejection>,
-) -> Result<Json<T>, OpenAiError> {
+) -> Result<Json<T>, InferenceError> {
     payload.map_err(|rejection| {
         if rejection.status() == StatusCode::PAYLOAD_TOO_LARGE {
-            return OpenAiError::payload_too_large(format!("request body too large: {rejection}"));
+            return InferenceError::payload_too_large(format!(
+                "request body too large: {rejection}"
+            ));
         }
-        OpenAiError::invalid_request(format!("invalid JSON request body: {rejection}"))
+        InferenceError::invalid_request(format!("invalid JSON request body: {rejection}"))
     })
 }
 
 async fn not_found(uri: Uri) -> Response {
-    route_error(&uri, OpenAiError::route_not_found(&uri))
+    route_error(&uri, InferenceError::route_not_found(&uri))
 }
 
 async fn method_not_allowed(method: Method, uri: Uri) -> Response {
-    route_error(&uri, OpenAiError::method_not_allowed(method))
+    route_error(&uri, InferenceError::method_not_allowed(method))
 }
 
-fn route_error(uri: &Uri, error: OpenAiError) -> Response {
+fn route_error(uri: &Uri, error: InferenceError) -> Response {
     if uri.path() == "/v1/messages" || uri.path().starts_with("/v1/messages/") {
         crate::anthropic::AnthropicRejection::from(error).into_response()
     } else {
@@ -1236,8 +1249,11 @@ async fn frontend_lifecycle_middleware(
     let request_id = request_id_from_headers_or_generate(request.headers());
     let method = request.method().clone();
     let uri = request.uri().clone();
-    let context =
-        OpenAiLifecycleContext::new(request_id, lifecycle_method(&method), lifecycle_route(&uri));
+    let context = InferenceLifecycleContext::new(
+        request_id,
+        lifecycle_method(&method),
+        lifecycle_route(&uri),
+    );
     request.extensions_mut().insert(request_id);
     request.extensions_mut().insert(context.clone());
     let mut lifecycle =
@@ -1294,34 +1310,34 @@ async fn frontend_lifecycle_middleware(
     response
 }
 
-fn lifecycle_method(method: &Method) -> OpenAiRequestMethod {
+fn lifecycle_method(method: &Method) -> InferenceRequestMethod {
     match *method {
-        Method::GET => OpenAiRequestMethod::Get,
-        Method::POST => OpenAiRequestMethod::Post,
-        _ => OpenAiRequestMethod::Other,
+        Method::GET => InferenceRequestMethod::Get,
+        Method::POST => InferenceRequestMethod::Post,
+        _ => InferenceRequestMethod::Other,
     }
 }
 
 /// Classify the endpoint path for lifecycle events without retaining query parameters.
-fn lifecycle_route(uri: &Uri) -> OpenAiFrontendRoute {
+fn lifecycle_route(uri: &Uri) -> InferenceFrontendRoute {
     match uri.path() {
-        "/health" => OpenAiFrontendRoute::Health,
-        "/healthz" => OpenAiFrontendRoute::Healthz,
-        "/readyz" => OpenAiFrontendRoute::Readyz,
-        "/v1/models" => OpenAiFrontendRoute::Models,
-        "/v1/embeddings" => OpenAiFrontendRoute::Embeddings,
-        "/v1/rerank" => OpenAiFrontendRoute::Rerank,
-        "/v1/audio/speech" => OpenAiFrontendRoute::AudioSpeech,
-        "/v1/audio/transcriptions" => OpenAiFrontendRoute::AudioTranscriptions,
-        "/v1/audio/translations" => OpenAiFrontendRoute::AudioTranslations,
-        "/v1/chat/completions" => OpenAiFrontendRoute::ChatCompletions,
-        "/v1/completions" => OpenAiFrontendRoute::Completions,
-        "/v1/responses" => OpenAiFrontendRoute::Responses,
-        "/v1/decisions" => OpenAiFrontendRoute::Decisions,
-        "/v1/messages/count_tokens" => OpenAiFrontendRoute::MessagesCountTokens,
-        "/v1/messages" => OpenAiFrontendRoute::Messages,
-        "/systemone" => OpenAiFrontendRoute::SystemOne,
-        _ => OpenAiFrontendRoute::Unknown,
+        "/health" => InferenceFrontendRoute::Health,
+        "/healthz" => InferenceFrontendRoute::Healthz,
+        "/readyz" => InferenceFrontendRoute::Readyz,
+        "/v1/models" => InferenceFrontendRoute::Models,
+        "/v1/embeddings" => InferenceFrontendRoute::Embeddings,
+        "/v1/rerank" => InferenceFrontendRoute::Rerank,
+        "/v1/audio/speech" => InferenceFrontendRoute::AudioSpeech,
+        "/v1/audio/transcriptions" => InferenceFrontendRoute::AudioTranscriptions,
+        "/v1/audio/translations" => InferenceFrontendRoute::AudioTranslations,
+        "/v1/chat/completions" => InferenceFrontendRoute::ChatCompletions,
+        "/v1/completions" => InferenceFrontendRoute::Completions,
+        "/v1/responses" => InferenceFrontendRoute::Responses,
+        "/v1/decisions" => InferenceFrontendRoute::Decisions,
+        "/v1/messages/count_tokens" => InferenceFrontendRoute::MessagesCountTokens,
+        "/v1/messages" => InferenceFrontendRoute::Messages,
+        "/systemone" => InferenceFrontendRoute::SystemOne,
+        _ => InferenceFrontendRoute::Unknown,
     }
 }
 

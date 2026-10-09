@@ -1,0 +1,140 @@
+From 3c27649f0213776cb28608f63a114b26c4cd7a61 Mon Sep 17 00:00:00 2001
+From: James Dumay <jameswdumay@gmail.com>
+Date: Mon, 5 Oct 2026 13:59:47 +1100
+Subject: [PATCH] fix(skippy): honor released non-unified KV selection
+
+---
+ include/skippy/runtime.h                      |  2 +-
+ src/skippy/model_loading.cpp                  | 41 +++++++++++++------------
+ .../tests/hardware_application_probe.cpp      |  4 +-
+ 3 files changed, 24 insertions(+), 23 deletions(-)
+
+diff --git a/include/skippy/runtime.h b/include/skippy/runtime.h
+index 371353a7b..b668b87ac 100644
+--- a/include/skippy/runtime.h
++++ b/include/skippy/runtime.h
+@@ -96,7 +96,7 @@ struct skippy_runtime_config {
+     // Tri-state KV/session controls resolved from `model_fit` config.
+     /** @brief Whether K/V tensors are offloaded to the compute backend (mirrors upstream `offload_kqv`). */
+     int32_t kv_offload;
+-    /** @brief Legacy unified-KV setting. Skippy always uses unified KV; AUTO and TRUE are accepted, while FALSE is rejected. */
++    /** @brief Whether the KV cache is unified across sequences/lanes (mirrors upstream `kv_unified`). AUTO derives the setting from lane count; recurrent and hybrid models force it true. */
+     int32_t kv_unified;
+     /** @brief Whether sliding-window-attention layers use a full, unshifted cache window (mirrors upstream `swa_full`). */
+     int32_t swa_full;
+diff --git a/src/skippy/model_loading.cpp b/src/skippy/model_loading.cpp
+index 9b2e245fe..5c71c424e 100644
+--- a/src/skippy/model_loading.cpp
++++ b/src/skippy/model_loading.cpp
+@@ -606,7 +606,7 @@ struct skippy_runtime_config skippy_runtime_config_default(void) {
+     config.cache_type_k = GGML_TYPE_F16;
+     config.cache_type_v = GGML_TYPE_F16;
+     config.kv_offload = SKIPPY_TRISTATE_AUTO;
+-    config.kv_unified = SKIPPY_TRISTATE_TRUE;
++    config.kv_unified = SKIPPY_TRISTATE_AUTO;
+     config.swa_full = SKIPPY_TRISTATE_AUTO;
+     config.op_offload = SKIPPY_TRISTATE_AUTO;
+     config.split_mode = SKIPPY_TRISTATE_AUTO;
+@@ -663,15 +663,6 @@ enum skippy_status skippy_finish_model_open(
+     // Encoder output is context-global in llama.cpp. Until that state can be
+     // isolated per sequence, serialize encoder-decoder work on one lane.
+     const uint32_t lane_count = encoder_decoder ? 1 : configured_lane_count;
+-    if (config != nullptr && config->kv_unified == SKIPPY_TRISTATE_FALSE) {
+-        llama_model_free(model);
+-        const char * message = "non-unified KV is not supported by Skippy";
+-        if (event_scope != nullptr) {
+-            event_scope->emit_failure(SKIPPY_STATUS_INVALID_ARGUMENT, message);
+-        }
+-        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, message);
+-        return SKIPPY_STATUS_INVALID_ARGUMENT;
+-    }
+     uint32_t context_size_per_lane = 0;
+     uint32_t context_size_total = 0;
+     if (!skippy_context_capacity(config, lane_count, context_size_per_lane, context_size_total)) {
+@@ -717,15 +708,16 @@ enum skippy_status skippy_finish_model_open(
+     stage_model->lane_count = lane_count;
+ 
+     llama_context_params params = llama_context_default_params();
+-    // One unified pool reserves the requested context for every lane.
++    // ctx_size is a per-lane limit; reserve it for each admitted lane.
+     params.n_ctx = context_size_total;
+     params.n_batch = config != nullptr && config->n_batch > 0 ? static_cast<uint32_t>(config->n_batch) : context_size_per_lane;
+     params.n_ubatch = config != nullptr && config->n_ubatch > 0 ? static_cast<uint32_t>(config->n_ubatch) : 0u;
+     params.n_threads = config != nullptr && config->n_threads > 0 ? config->n_threads : skippy_default_thread_count();
+     params.n_threads_batch = config != nullptr && config->n_threads_batch > 0 ? config->n_threads_batch : params.n_threads;
+     params.n_seq_max = stage_model->lane_count;
+-    params.kv_unified = true;
++    params.kv_unified = stage_model->lane_count > 1;
+     if (config != nullptr) {
++        params.kv_unified = skippy_resolve_tristate(config->kv_unified, params.kv_unified);
+         params.offload_kqv = skippy_resolve_tristate(config->kv_offload, params.offload_kqv);
+         params.swa_full = skippy_resolve_tristate(config->swa_full, params.swa_full);
+         skippy_apply_context_hardware_config(config, params);
+@@ -765,6 +757,18 @@ enum skippy_status skippy_finish_model_open(
+     if (llm_arch_is_recurrent(model->arch) || llm_arch_is_hybrid(model->arch)) {
+         params.n_seq_max = std::max<uint32_t>(params.n_seq_max, std::max<uint32_t>(2, stage_model->lane_count * 2));
+         params.n_rs_seq = std::max<uint32_t>(params.n_rs_seq, 2);
++        params.kv_unified = true;
++    }
++    // Multi-lane activation exports rely on the shared KV pool's batch order.
++    if (activation_export_stage && stage_model->lane_count > 1 && !params.kv_unified) {
++        const char * message = "an exporting stage with multiple lanes requires a unified KV cache";
++        if (event_scope != nullptr) {
++            event_scope->emit_failure(SKIPPY_STATUS_INVALID_ARGUMENT, message);
++        }
++        llama_model_free(model);
++        delete stage_model;
++        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, message);
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
+     }
+ 
+     const skippy_graph_build_inputs graph_build_inputs = skippy_graph_build_inputs_from_config(config);
+@@ -1141,13 +1145,6 @@ enum skippy_status skippy_model_attach_mtp_draft_model(
+         return SKIPPY_STATUS_INVALID_ARGUMENT;
+     }
+ 
+-    if (config->kv_unified == SKIPPY_TRISTATE_FALSE) {
+-        skippy_set_error(
+-                out_error,
+-                SKIPPY_STATUS_INVALID_ARGUMENT,
+-                "non-unified KV is not supported by Skippy");
+-        return SKIPPY_STATUS_INVALID_ARGUMENT;
+-    }
+     uint32_t context_size_per_lane = 0;
+     uint32_t context_size_total = 0;
+     if (!skippy_context_capacity(
+@@ -1198,12 +1195,16 @@ enum skippy_status skippy_model_attach_mtp_draft_model(
+     ctx_params.n_threads = config != nullptr && config->n_threads > 0 ? config->n_threads : skippy_default_thread_count();
+     ctx_params.n_threads_batch = config != nullptr && config->n_threads_batch > 0 ? config->n_threads_batch : ctx_params.n_threads;
+     ctx_params.n_seq_max = target_model->lane_count;
+-    ctx_params.kv_unified = true;
++    ctx_params.kv_unified = target_model->lane_count > 1;
+     if (config != nullptr) {
++        ctx_params.kv_unified = skippy_resolve_tristate(config->kv_unified, ctx_params.kv_unified);
+         ctx_params.offload_kqv = skippy_resolve_tristate(config->kv_offload, ctx_params.offload_kqv);
+         ctx_params.swa_full = skippy_resolve_tristate(config->swa_full, ctx_params.swa_full);
+         skippy_apply_context_hardware_config(config, ctx_params);
+     }
++    if (llm_arch_is_recurrent(draft_model->arch) || llm_arch_is_hybrid(draft_model->arch)) {
++        ctx_params.kv_unified = true;
++    }
+     ctx_params.flash_attn_type = config != nullptr ? static_cast<llama_flash_attn_type>(config->flash_attn_type) : LLAMA_FLASH_ATTN_TYPE_AUTO;
+ 
+     target_model->mtp_ctx = llama_init_from_model(draft_model, ctx_params);
+diff --git a/src/skippy/tests/hardware_application_probe.cpp b/src/skippy/tests/hardware_application_probe.cpp
+index 43c4e97df..471968158 100644
+--- a/src/skippy/tests/hardware_application_probe.cpp
++++ b/src/skippy/tests/hardware_application_probe.cpp
+@@ -19,8 +19,8 @@ int main() {
+             "default V cache type must be F16");
+     passed &= require(config.kv_offload == SKIPPY_TRISTATE_AUTO,
+             "default kv_offload must preserve the derived default");
+-    passed &= require(config.kv_unified == SKIPPY_TRISTATE_TRUE,
+-            "default kv_unified must enable the shared KV pool");
++    passed &= require(config.kv_unified == SKIPPY_TRISTATE_AUTO,
++            "default kv_unified must preserve the derived default");
+     passed &= require(config.swa_full == SKIPPY_TRISTATE_AUTO,
+             "default swa_full must preserve the derived default");
+     passed &= require(config.op_offload == SKIPPY_TRISTATE_AUTO,
+-- 
+2.54.0 (Apple Git-157)

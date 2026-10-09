@@ -150,6 +150,7 @@ fn build_external_endpoint_target(
     request_path: &str,
     prefetched: &[u8],
 ) -> std::result::Result<ExternalEndpointTarget, ()> {
+    validate_external_endpoint_request_path(request_path)?;
     let (url, host) = parse_external_endpoint_url(base_url)?;
     let port = url.port_or_known_default().unwrap_or(80);
     let forward_path = endpoint_forward_path(&url, request_path);
@@ -160,6 +161,27 @@ fn build_external_endpoint_target(
         port,
         forwarded,
     })
+}
+
+/// Only OpenAI-compatible inference routes may be forwarded to an external
+/// backend. The client picks the path and the model; the model selects the
+/// backend, so without this gate any other route the backend happens to serve
+/// on that listener (admin, metrics, debug) would be reachable through the
+/// mesh ingress.
+fn is_forwardable_external_endpoint_path(request_path: &str) -> bool {
+    let path_only = request_path.split('?').next().unwrap_or(request_path);
+    crate::network::openai::workload_routing::request_workload_class(path_only).is_some()
+        || matches!(path_only, "/v1/messages" | "/v1/models" | "/models")
+}
+
+fn validate_external_endpoint_request_path(request_path: &str) -> std::result::Result<(), ()> {
+    if is_forwardable_external_endpoint_path(request_path) {
+        return Ok(());
+    }
+    tracing::warn!(
+        "API proxy: refusing to forward non-inference path '{request_path}' to external inference endpoint"
+    );
+    Err(())
 }
 
 fn parse_external_endpoint_url(base_url: &str) -> std::result::Result<(Url, String), ()> {
@@ -284,6 +306,56 @@ fn rewrite_http_request_target(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn external_endpoint_target_only_accepts_openai_inference_routes() {
+        for path in [
+            "/v1/chat/completions",
+            "/v1/completions?trace=1",
+            "/v1/responses",
+            "/v1/embeddings",
+            "/v1/rerank",
+            "/v1/audio/speech",
+            "/v1/audio/transcriptions",
+            "/v1/messages",
+            "/v1/models",
+            "/models",
+        ] {
+            assert!(
+                is_forwardable_external_endpoint_path(path),
+                "{path} must be forwardable"
+            );
+            assert!(
+                build_external_endpoint_target(
+                    "http://127.0.0.1:9/",
+                    path,
+                    b"POST /x HTTP/1.1\r\nHost: x\r\nContent-Length: 0\r\n\r\n",
+                )
+                .is_ok()
+            );
+        }
+        for path in [
+            "/admin",
+            "/metrics",
+            "/v1/admin/keys",
+            "/v1/models/../admin",
+            "/",
+            "",
+        ] {
+            assert!(
+                !is_forwardable_external_endpoint_path(path),
+                "{path} must be refused"
+            );
+            assert!(
+                build_external_endpoint_target(
+                    "http://127.0.0.1:9/",
+                    path,
+                    b"POST /x HTTP/1.1\r\nHost: x\r\nContent-Length: 0\r\n\r\n",
+                )
+                .is_err()
+            );
+        }
+    }
 
     #[test]
     fn test_endpoint_forward_path_maps_v1_requests_onto_api_v1_base() {

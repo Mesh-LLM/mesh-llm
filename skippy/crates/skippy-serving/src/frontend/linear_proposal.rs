@@ -10,7 +10,7 @@ use std::{
 
 use anyhow::{Result, bail};
 use serde_json::json;
-use skippy_inference_api::{OpenAiError, OpenAiResult};
+use skippy_inference_api::{InferenceError, InferenceResult};
 use skippy_runtime::SamplingConfig;
 
 use crate::frontend::openai_backend_error;
@@ -565,12 +565,12 @@ pub(crate) struct LinearProposalQueryParams {
 pub(crate) fn query_linear_proposal(
     config: &LinearProposalIngressConfig,
     params: LinearProposalQueryParams,
-) -> OpenAiResult<LinearProposalQueryOutcome> {
+) -> InferenceResult<LinearProposalQueryOutcome> {
     if params.prompt_token_count == 0
         || params.committed_token_count
             != params.prompt_token_count.saturating_add(params.decode_step)
     {
-        return Err(OpenAiError::backend(
+        return Err(InferenceError::backend(
             "linear proposal query does not match the authoritative prompt/decode boundary",
         ));
     }
@@ -585,7 +585,7 @@ pub(crate) fn query_linear_proposal(
     let operation_started = Instant::now();
     let deadline = operation_started
         .checked_add(config.deadline())
-        .ok_or_else(|| OpenAiError::backend("linear proposal deadline overflow"))?;
+        .ok_or_else(|| InferenceError::backend("linear proposal deadline overflow"))?;
     let proposal_started = Instant::now();
     let response = config
         .source()
@@ -651,8 +651,8 @@ pub(crate) fn query_linear_proposal(
 pub(crate) fn execute_linear_proposal_with_terminal_discard<T>(
     config: &LinearProposalIngressConfig,
     decision_id: &OpaqueProposalDecisionId,
-    execute: impl FnOnce() -> OpenAiResult<T>,
-) -> OpenAiResult<T> {
+    execute: impl FnOnce() -> InferenceResult<T>,
+) -> InferenceResult<T> {
     match execute() {
         Ok(value) => Ok(value),
         Err(primary_error) => {
@@ -834,7 +834,7 @@ mod tests {
         let id = OpaqueProposalDecisionId::new(vec![91]).unwrap();
 
         let result = execute_linear_proposal_with_terminal_discard(&config, &id, || {
-            Err::<(), _>(OpenAiError::backend("synthetic execution failure"))
+            Err::<(), _>(InferenceError::backend("synthetic execution failure"))
         });
 
         assert!(
@@ -850,7 +850,7 @@ mod tests {
 
         *source.discard_fails.lock().unwrap() = true;
         let result = execute_linear_proposal_with_terminal_discard(&config, &id, || {
-            Err::<(), _>(OpenAiError::backend("primary error survives"))
+            Err::<(), _>(InferenceError::backend("primary error survives"))
         });
         assert!(
             result

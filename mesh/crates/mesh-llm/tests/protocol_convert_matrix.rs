@@ -120,6 +120,8 @@ fn minimal_config() -> NodeConfigSnapshot {
 
 fn valid_gossip_frame() -> GossipFrame {
     GossipFrame {
+        signed_records: Vec::new(),
+        signed_cache_affinity: Vec::new(),
         r#gen: NODE_PROTOCOL_GENERATION,
         sender_id: vec![0xAB; 32],
         peers: vec![PeerAnnouncement {
@@ -249,6 +251,8 @@ fn v0_tunnel_map_rejects_invalid_hex_peer_id() {
 #[test]
 fn gossip_frame_with_wrong_generation_is_rejected() {
     let bad_frame = GossipFrame {
+        signed_records: Vec::new(),
+        signed_cache_affinity: Vec::new(),
         r#gen: 0,
         sender_id: vec![0u8; 32],
         peers: vec![],
@@ -599,6 +603,48 @@ fn mesh_requirements_release_attestation_rejects_untrusted_signer() {
             ..Default::default()
         }),
         MeshRequirementDecision::Rejected(MeshRequirementRejectReason::ReleaseSignerUntrusted)
+    );
+}
+
+#[test]
+fn mesh_requirements_release_attestation_rejects_advertised_version_mismatch() {
+    let requirements = MeshRequirements {
+        node_version: NodeVersionBounds {
+            min: Some("0.65.1".into()),
+            max: None,
+        },
+        release_attestation: ReleaseAttestationRequirement {
+            required: true,
+            allowed_signer_keys: vec!["trusted-signer".into()],
+        },
+        ..MeshRequirements::unrestricted()
+    };
+    // Self-reported version clears the floor, but the signed attestation says
+    // the binary is actually older: the attested value wins.
+    assert_eq!(
+        requirements.evaluate(&MeshRequirementEvaluationInput {
+            advertised_node_version: Some("0.65.1".into()),
+            release_attestation: PeerReleaseAttestationStatus::Present {
+                signer_key: Some("trusted-signer".into()),
+                attested_version: Some("0.64.0".into()),
+            },
+            ..stable_requirement_input()
+        }),
+        MeshRequirementDecision::Rejected(
+            MeshRequirementRejectReason::NodeVersionAttestationMismatch
+        )
+    );
+    // Equivalent spellings are still accepted.
+    assert_eq!(
+        requirements.evaluate(&MeshRequirementEvaluationInput {
+            advertised_node_version: Some("0.65.1".into()),
+            release_attestation: PeerReleaseAttestationStatus::Present {
+                signer_key: Some("trusted-signer".into()),
+                attested_version: Some("v0.65.1".into()),
+            },
+            ..stable_requirement_input()
+        }),
+        MeshRequirementDecision::Accepted
     );
 }
 

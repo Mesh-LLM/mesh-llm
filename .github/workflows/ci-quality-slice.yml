@@ -156,7 +156,7 @@ jobs:
     name: CI contracts and consistency
     needs: runner_policy
     runs-on: ${{ needs.runner_policy.outputs.runner_4 }}
-    timeout-minutes: 20
+    timeout-minutes: 60
     steps:
       - uses: Mesh-LLM/mesh-llm/.github/actions/audit-depot-pr-isolation@ed07043b84d720aab30e75ed2f038f7042576f16
         with:
@@ -174,16 +174,43 @@ jobs:
           allow_depot_remote_cache: ${{ needs.runner_policy.outputs.allow_depot_remote_cache }}
           allow_native_github_cache: ${{ needs.runner_policy.outputs.allow_native_github_cache }}
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        if: ${{ hashFiles('tools/xtask/src/automation/python_sdk_source.rs') == '' }}
         with:
           python-version: "3.12"
       - name: Install CI Python requirements
+        if: ${{ hashFiles('tools/xtask/src/automation/python_sdk_source.rs') == '' }}
         run: python3 -m pip install --disable-pip-version-check --no-input -r ci/requirements-ci-python.txt
       - uses: ./.github/actions/install-actionlint
       - uses: taiki-e/install-action@3d23c1bbdafe696dfccad2664945a04f47d03dc3 # just
       - name: Validate GitHub Actions
         run: actionlint -config-file .github/actionlint.yaml
+      - name: Prepare Node for native automation fixtures
+        if: ${{ hashFiles('tools/xtask/src/automation/python_sdk_source.rs') != '' }}
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.20.0
+          package-manager-cache: false
+      - name: Prepare immutable SDK source for native contracts
+        if: ${{ hashFiles('tools/xtask/src/automation/python_sdk_source.rs') != '' }}
+        uses: ./.github/actions/prepare-python-sdk-source
+      - name: Prepare immutable research source for native contracts
+        if: ${{ hashFiles('tools/xtask/src/automation/python_sdk_source.rs') != '' }}
+        uses: ./.github/actions/prepare-python-research-source
       - name: Test CI, packaging, and SDK contracts
-        run: python3 -m unittest discover -s scripts/tests -p 'test_*.py'
+        timeout-minutes: ${{ hashFiles('tools/xtask/src/automation/python_sdk_source.rs') != '' && 40 || 20 }}
+        run: |
+          set -euo pipefail
+          if [[ -f tools/xtask/src/automation/python_sdk_source.rs ]]; then
+            test -f tools/xtask/src/automation/python_research_source.rs
+            test -f ci/python-research-source.json
+            just ci-automation-contracts
+            just ci-legacy-contracts
+          elif [[ -f scripts/tests/test_justfile_layout.py ]]; then
+            python3 -m unittest discover -s scripts/tests -p 'test_*.py'
+          else
+            echo 'unsupported source contract shape' >&2
+            exit 1
+          fi
       - name: Check CI crate-list drift
         run: cargo run -p xtask -- repo-consistency ci-crate-lists
       - name: Check publish crate-chain drift
