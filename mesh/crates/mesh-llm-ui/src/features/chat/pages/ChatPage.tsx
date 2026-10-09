@@ -678,10 +678,11 @@ export function ChatPageContent({ data = CHAT_HARNESS, target, onClearTarget }: 
 
     const nextSubmission = queuedSubmissions.find((submission) => submission.conversationId === chatConversationId)
     if (!nextSubmission) return
+    const effectiveFreeOnly = nextSubmission.freeOnly || !paidRoutingAllowed
     if (
       model !== '' &&
       !selectableModels.some(
-        (item) => item.name === model && isOfferedForMode(modelPayments?.get(item.name), nextSubmission.freeOnly)
+        (item) => item.name === model && isOfferedForMode(modelPayments?.get(item.name), effectiveFreeOnly)
       )
     )
       return
@@ -698,13 +699,22 @@ export function ChatPageContent({ data = CHAT_HARNESS, target, onClearTarget }: 
           { prompt: nextSubmission.prompt, attachments: [...nextSubmission.attachments] },
           nextSubmission.conversationId,
           nextSubmission.target,
-          nextSubmission.freeOnly
+          effectiveFreeOnly
         )
       } finally {
         queueDrainInFlightRef.current = false
       }
     })()
-  }, [chatConversationId, isStreaming, model, modelPayments, queuedSubmissions, selectableModels, submitPromptNow])
+  }, [
+    chatConversationId,
+    isStreaming,
+    model,
+    modelPayments,
+    paidRoutingAllowed,
+    queuedSubmissions,
+    selectableModels,
+    submitPromptNow
+  ])
 
   const removeQueuedSubmission = useCallback(
     (submissionId: string) => {

@@ -582,6 +582,25 @@ describe('ChatPage', () => {
     window.localStorage.removeItem('mesh-llm.chat.routing-preferences')
   })
 
+  it('tightens a Paid queued Auto prompt to free-only when policy refetch fails', async () => {
+    const user = userEvent.setup()
+    paidRoutingMock.allowed = true
+    chatMock.sendAssistantText = ''
+    renderChatPage({ mode: 'live' })
+    await user.type(screen.getByLabelText('Prompt'), 'First')
+    await user.click(screen.getByRole('button', { name: 'Send' }))
+    await screen.findByText('Streaming response...')
+    await user.type(screen.getByLabelText('Prompt'), 'Queued paid')
+    await user.click(screen.getByRole('button', { name: 'Queue' }))
+    paidRoutingMock.isError = true
+    // Trigger a render with stale allowed=true and the new error before draining.
+    await user.type(screen.getByLabelText('Prompt'), 'x')
+    await user.click(screen.getByRole('button', { name: 'Stop' }))
+    await waitFor(() => expect(chatMock.sendCalls).toHaveLength(2))
+    expect(chatMock.sendCalls[1]?.content).toBe('Queued paid')
+    expect(chatMock.sendCalls[1]?.freeOnly).toBe(true)
+  })
+
   it('keeps the free-only setting a prompt was queued with', async () => {
     const user = userEvent.setup()
     paidRoutingMock.allowed = true
