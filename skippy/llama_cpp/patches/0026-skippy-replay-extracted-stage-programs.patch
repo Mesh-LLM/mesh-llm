@@ -4,62 +4,62 @@ Date: Fri, 25 Sep 2026 06:30:38 +1000
 Subject: [PATCH 26/67] skippy: replay extracted stage programs
 
 ---
- src/CMakeLists.txt                            | 107 +++
- src/llama-context.cpp                         | 234 +++++
- src/llama-context.h                           |  20 +
- src/llama-graph.cpp                           | 356 +++++--
- src/llama-graph.h                             |  36 +-
- src/llama-impl.h                              |  36 +
- src/llama-kv-cache-dsv4.cpp                   |  27 +-
- src/llama-kv-cache-dsv4.h                     |   4 +
- src/llama-kv-cache-msa.cpp                    |   2 +-
- src/llama-kv-cache.cpp                        | 102 +-
- src/llama-kv-cache.h                          |  10 +
- src/llama-model.cpp                           |  25 +
- src/models/bailingmoe3.cpp                    |  82 +-
- src/models/deepseek4.cpp                      | 273 +++++-
- src/models/delta-net-base.cpp                 | 120 ++-
- src/models/kimi-linear.cpp                    | 111 ++-
- src/models/laguna.cpp                         |   9 +
- src/models/lfm2.cpp                           |  25 +-
- src/models/mamba-base.cpp                     | 194 +++-
- src/models/mimo2.cpp                          |   7 +
- src/models/minicpm3.cpp                       |  28 +-
- src/models/models.h                           |  43 +-
- src/models/olmo2.cpp                          |   6 +
- src/models/qwen35.cpp                         |  82 ++
- src/models/qwen35moe.cpp                      |  54 ++
- src/models/qwen3next.cpp                      | 102 ++
- src/models/qwen4exp.cpp                       | 100 +-
- src/models/spark2-5.cpp                       |   9 +
- src/skippy/model_loading.cpp                  |  24 +-
- src/skippy/session.cpp                        |   6 +
- src/skippy/stage_plan.cpp                     |  10 +-
- src/skippy/stage_program.cpp                  | 889 +++++++++++++++++
- src/skippy/stage_program.h                    | 329 +++++++
- src/skippy/stage_program_extraction.cpp       | 706 ++++++++++++++
- .../stage_program_extraction_internal.h       |  75 ++
- src/skippy/stage_program_extraction_roots.cpp | 589 ++++++++++++
- src/skippy/stage_program_geometry.cpp         | 529 +++++++++++
- src/skippy/stage_program_inputs.cpp           |  56 ++
- src/skippy/stage_program_inputs.h             |  27 +
- src/skippy/stage_program_installation.cpp     | 139 +++
- src/skippy/stage_program_internal.h           |  45 +
- src/skippy/stage_program_outputs.cpp          |  61 ++
- src/skippy/stage_program_outputs.h            |  27 +
- src/skippy/stage_program_replay.cpp           | 605 ++++++++++++
- src/skippy/stage_program_token_axis.cpp       | 195 ++++
- src/skippy/stage_realization.cpp              |  97 +-
- src/skippy/stage_realization.h                |   1 +
- src/skippy/stage_slice_plan.cpp               |   4 +
- src/skippy/state_effects.cpp                  |   8 +-
- src/skippy/tests/graph_build_inputs.cpp       | 891 +++++++++++++++++-
- src/skippy/tests/noalloc_graph_planning.cpp   |  45 +
- src/skippy/tests/profile_residency.cpp        | 153 ++-
- .../tests/renamed_multishard_planning.cpp     | 223 ++++-
- src/skippy/tests/stage_program_parity.h       | 374 ++++++++
- tests/test-llama-archs.cpp                    |  39 +
- 55 files changed, 8082 insertions(+), 269 deletions(-)
+ src/CMakeLists.txt                               | 107 +++
+ src/llama-context.cpp                            | 234 ++++++
+ src/llama-context.h                              |  20 +
+ src/llama-graph.cpp                              | 359 +++++++--
+ src/llama-graph.h                                |  36 +-
+ src/llama-impl.h                                 |  36 +
+ src/llama-kv-cache-dsv4.cpp                      |  27 +-
+ src/llama-kv-cache-dsv4.h                        |   4 +
+ src/llama-kv-cache-msa.cpp                       |   2 +-
+ src/llama-kv-cache.cpp                           | 102 ++-
+ src/llama-kv-cache.h                             |  10 +
+ src/llama-model.cpp                              |  25 +
+ src/models/bailingmoe3.cpp                       |  82 ++-
+ src/models/deepseek4.cpp                         | 273 ++++++-
+ src/models/delta-net-base.cpp                    | 120 ++-
+ src/models/kimi-linear.cpp                       | 111 ++-
+ src/models/laguna.cpp                            |   9 +
+ src/models/lfm2.cpp                              |  25 +-
+ src/models/mamba-base.cpp                        | 194 ++++-
+ src/models/mimo2.cpp                             |   7 +
+ src/models/minicpm3.cpp                          |  28 +-
+ src/models/models.h                              |  43 +-
+ src/models/olmo2.cpp                             |   6 +
+ src/models/qwen35.cpp                            |  82 +++
+ src/models/qwen35moe.cpp                         |  54 ++
+ src/models/qwen3next.cpp                         | 102 +++
+ src/models/qwen4exp.cpp                          | 100 +--
+ src/models/spark2-5.cpp                          |   9 +
+ src/skippy/model_loading.cpp                     |  24 +-
+ src/skippy/session.cpp                           |   6 +
+ src/skippy/stage_plan.cpp                        |  10 +-
+ src/skippy/stage_program.cpp                     | 889 ++++++++++++++++++++++
+ src/skippy/stage_program.h                       | 329 +++++++++
+ src/skippy/stage_program_extraction.cpp          | 711 ++++++++++++++++++
+ src/skippy/stage_program_extraction_internal.h   |  75 ++
+ src/skippy/stage_program_extraction_roots.cpp    | 589 +++++++++++++++
+ src/skippy/stage_program_geometry.cpp            | 529 ++++++++++++++
+ src/skippy/stage_program_inputs.cpp              |  56 ++
+ src/skippy/stage_program_inputs.h                |  27 +
+ src/skippy/stage_program_installation.cpp        | 139 ++++
+ src/skippy/stage_program_internal.h              |  45 ++
+ src/skippy/stage_program_outputs.cpp             |  61 ++
+ src/skippy/stage_program_outputs.h               |  27 +
+ src/skippy/stage_program_replay.cpp              | 606 +++++++++++++++
+ src/skippy/stage_program_token_axis.cpp          | 195 +++++
+ src/skippy/stage_realization.cpp                 |  97 ++-
+ src/skippy/stage_realization.h                   |   1 +
+ src/skippy/stage_slice_plan.cpp                  |   4 +
+ src/skippy/state_effects.cpp                     |   8 +-
+ src/skippy/tests/graph_build_inputs.cpp          | 891 ++++++++++++++++++++++-
+ src/skippy/tests/noalloc_graph_planning.cpp      |  45 ++
+ src/skippy/tests/profile_residency.cpp           | 153 +++-
+ src/skippy/tests/renamed_multishard_planning.cpp | 223 +++++-
+ src/skippy/tests/stage_program_parity.h          | 374 ++++++++++
+ tests/test-llama-archs.cpp                       |  39 +
+ 55 files changed, 8091 insertions(+), 269 deletions(-)
  create mode 100644 src/skippy/stage_program.cpp
  create mode 100644 src/skippy/stage_program.h
  create mode 100644 src/skippy/stage_program_extraction.cpp
@@ -690,7 +690,7 @@ index 315710b6e..98b4ccb43 100644
      llama_adapter_cvec_ptr  cvec;
      llama_adapter_loras_ptr loras;
 diff --git a/src/llama-graph.cpp b/src/llama-graph.cpp
-index d9275a9ea..fbbdddf9f 100644
+index d9275a9ea..60555e1ea 100644
 --- a/src/llama-graph.cpp
 +++ b/src/llama-graph.cpp
 @@ -15,6 +15,7 @@
@@ -1132,7 +1132,7 @@ index d9275a9ea..fbbdddf9f 100644
  // input embeddings with optional lora
  ggml_tensor * llm_graph_context::build_inp_embd(ggml_tensor * tok_embd, float tok_scale, bool allow_embeddings) const {
      if (ubatch.embd && !allow_embeddings) {
-@@ -2996,34 +3141,57 @@ ggml_tensor * llm_graph_context::build_inp_embd(ggml_tensor * tok_embd, float to
+@@ -2996,34 +3141,60 @@ ggml_tensor * llm_graph_context::build_inp_embd(ggml_tensor * tok_embd, float to
      assert(ggml_are_same_shape (inps[0], inps[1]));
      assert(ggml_are_same_stride(inps[0], inps[1]));
  
@@ -1187,7 +1187,10 @@ index d9275a9ea..fbbdddf9f 100644
      }
  
 +    res->t_inp_embd = inps[select_mode];
-+    res->add_skippy_input_choice({{inps[0], inps[1]}}, choice_mode);
++    // A token-only model has no bound embedding request to replay as an alternative.
++    if (allow_embeddings) {
++        res->add_skippy_input_choice({{inps[0], inps[1]}}, choice_mode);
++    }
 +    ggml_tensor * cur = ggml_build_forward_select(gf, inps.data(), n_input_modes, select_mode);
 +
      // scale the token rows only, applied after the select so that the graph is the same for any batch contents
@@ -1200,7 +1203,7 @@ index d9275a9ea..fbbdddf9f 100644
  
          if (!ggml_is_contiguous(cur)) {
              cur = ggml_cont(ctx0, cur);
-@@ -3104,6 +3272,7 @@ ggml_tensor * llm_graph_context::build_inp_mean() const {
+@@ -3104,6 +3275,7 @@ ggml_tensor * llm_graph_context::build_inp_mean() const {
      cur = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_tokens, ubatch.n_seqs_unq);
      ggml_set_input(cur);
      ggml_set_name(cur, "mean");
@@ -1208,7 +1211,7 @@ index d9275a9ea..fbbdddf9f 100644
  
      res->add_input(std::move(inp));
  
-@@ -3118,6 +3287,7 @@ ggml_tensor * llm_graph_context::build_inp_cls() const {
+@@ -3118,6 +3290,7 @@ ggml_tensor * llm_graph_context::build_inp_cls() const {
      cur = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, ubatch.n_seqs_unq);
      ggml_set_input(cur);
      ggml_set_name(cur, "cls");
@@ -1216,7 +1219,7 @@ index d9275a9ea..fbbdddf9f 100644
  
      res->add_input(std::move(inp));
  
-@@ -3216,6 +3386,19 @@ ggml_tensor * llm_graph_context::build_attn_mha(
+@@ -3216,6 +3389,19 @@ ggml_tensor * llm_graph_context::build_attn_mha(
      // q->nb[3]/n_stream only equals that for a contiguous q; nope-only MLA (glm5-next) passes a permuted
      // q_absorbed where nb[3] != ne[2]*nb[2], so using nb[3] read another head's queries for streams s >= 1.
      q = ggml_view_4d(ctx0, q, q->ne[0], q->ne[1], q->ne[2]/n_stream, n_stream, q->nb[1], q->nb[2], q->nb[2]*(q->ne[2]/n_stream), 0);
@@ -1236,7 +1239,7 @@ index d9275a9ea..fbbdddf9f 100644
  
      q = ggml_permute(ctx0, q, 0, 2, 1, 3);
      k = ggml_permute(ctx0, k, 0, 2, 1, 3);
-@@ -3309,6 +3492,11 @@ ggml_tensor * llm_graph_context::build_attn_mha(
+@@ -3309,6 +3495,11 @@ ggml_tensor * llm_graph_context::build_attn_mha(
          if (!v_trans) {
              // note: avoid this branch
              v = ggml_cont(ctx0, ggml_transpose(ctx0, v));
@@ -1248,7 +1251,7 @@ index d9275a9ea..fbbdddf9f 100644
              cb(v, "v_cont", il);
          }
  
-@@ -3325,6 +3513,11 @@ ggml_tensor * llm_graph_context::build_attn_mha(
+@@ -3325,6 +3516,11 @@ ggml_tensor * llm_graph_context::build_attn_mha(
  
          // recombine streams
          cur = ggml_cont_2d(ctx0, cur, cur->ne[0]*cur->ne[1], cur->ne[2]*cur->ne[3]);
@@ -1260,7 +1263,7 @@ index d9275a9ea..fbbdddf9f 100644
  
          if (!cparams.offload_kqv) {
              // all nodes between the KV store and the attention output are run on the CPU
-@@ -3610,6 +3803,12 @@ ggml_tensor * llm_graph_context::build_attn(
+@@ -3610,6 +3806,12 @@ ggml_tensor * llm_graph_context::build_attn(
      ggml_tensor * q = q_cur;
      ggml_tensor * k = mctx_cur->get_k(ctx0, il);
      ggml_tensor * v = ggml_view_4d(ctx0, k, v_cur->ne[0], k->ne[1], k->ne[2], k->ne[3], k->nb[1], k->nb[2], k->nb[3], 0);
@@ -1273,7 +1276,7 @@ index d9275a9ea..fbbdddf9f 100644
  
      state_read(skippy_state_kind::kv_key, k, il);
  
-@@ -4106,27 +4305,7 @@ llm_graph_input_attn_k_iswa * llm_graph_context::build_attn_inp_k_iswa() const {
+@@ -4106,27 +4308,7 @@ llm_graph_input_attn_k_iswa * llm_graph_context::build_attn_inp_k_iswa() const {
  
  llm_graph_input_dsv4 * llm_graph_context::build_inp_dsv4() const {
      const auto * mctx_cur = static_cast<const llama_kv_cache_dsv4_context *>(mctx);
@@ -1302,7 +1305,7 @@ index d9275a9ea..fbbdddf9f 100644
  
      request_inputs(inp.get());
  
-@@ -4166,10 +4345,15 @@ ggml_tensor * llm_graph_context::build_rs_impl(
+@@ -4166,10 +4348,15 @@ ggml_tensor * llm_graph_context::build_rs_impl(
          state_read(*kind, s, il);
      }
      ggml_tensor * states = ggml_reshape_2d(ctx0, s, state_size, s->ne[1]);
@@ -1318,7 +1321,7 @@ index d9275a9ea..fbbdddf9f 100644
      ggml_tensor * zero_write = ggml_scale_inplace(ctx0, state_zero, 0);
      ggml_build_forward_expand(gf, zero_write);
      if (kind != nullptr) {
-@@ -4190,10 +4374,22 @@ ggml_tensor * llm_graph_context::build_rs_impl(
+@@ -4190,10 +4377,22 @@ ggml_tensor * llm_graph_context::build_rs_impl(
      ggml_build_forward_expand(gf, output_states);
  
      // copy extra states which won't be changed further (between n_seqs and n_rs)
@@ -1345,7 +1348,7 @@ index d9275a9ea..fbbdddf9f 100644
      ggml_build_forward_expand(gf, extra_write);
      if (kind != nullptr) {
          state_write(*kind, s, extra_write, il);
-@@ -4218,6 +4414,13 @@ static std::unique_ptr<llm_graph_input_rs> build_rs_inp_impl(
+@@ -4218,6 +4417,13 @@ static std::unique_ptr<llm_graph_input_rs> build_rs_inp_impl(
  
      inp->s_copy_main = ggml_view_1d(ctx0, inp->s_copy, n_seqs, 0);
      inp->s_copy_tail = ggml_view_1d(ctx0, inp->s_copy, n_rs - 1, inp->s_copy->nb[0]);
@@ -1359,7 +1362,7 @@ index d9275a9ea..fbbdddf9f 100644
  
      inp->head = mctx_cur->get_head();
      inp->rs_z = mctx_cur->get_rs_z();
-@@ -4303,10 +4506,19 @@ ggml_tensor * llm_graph_context::build_rwkv_token_shift_store(
+@@ -4303,10 +4509,19 @@ ggml_tensor * llm_graph_context::build_rwkv_token_shift_store(
  
      const auto kv_head = mctx_cur->get_head();
  
@@ -5793,10 +5796,10 @@ index 000000000..819f05b9b
 +#endif
 diff --git a/src/skippy/stage_program_extraction.cpp b/src/skippy/stage_program_extraction.cpp
 new file mode 100644
-index 000000000..2c1fdb4c9
+index 000000000..59d4b864b
 --- /dev/null
 +++ b/src/skippy/stage_program_extraction.cpp
-@@ -0,0 +1,706 @@
+@@ -0,0 +1,711 @@
 +#include "stage_program.h"
 +
 +#include "stage_slice_plan.h"
@@ -5963,7 +5966,12 @@ index 000000000..2c1fdb4c9
 +            operation.input_choice_branches = input_choice_branches[tensor];
 +            std::memcpy(operation.parameters.data(), tensor->op_params, operation.parameters.size());
 +            if (tensor->op == GGML_OP_TOP_K) {
-+                const int32_t k = static_cast<int32_t>(tensor->ne[0]);
++                // DSA graph builders cap this value against the live score width.
++                // Preserve the model cap so replay can do the same for each batch.
++                const bool indexer = model.arch == LLM_ARCH_DEEPSEEK32 || model.arch == LLM_ARCH_GLM_DSA;
++                const int32_t k = indexer && model.hparams.indexer_top_k != 0
++                        ? static_cast<int32_t>(model.hparams.indexer_top_k)
++                        : static_cast<int32_t>(tensor->ne[0]);
 +                std::memcpy(operation.parameters.data(), &k, sizeof(k));
 +            }
 +            if (tensor->op == GGML_OP_REPEAT || tensor->op == GGML_OP_RESHAPE ||
@@ -8107,10 +8115,10 @@ index 000000000..eceba28ba
 +};
 diff --git a/src/skippy/stage_program_replay.cpp b/src/skippy/stage_program_replay.cpp
 new file mode 100644
-index 000000000..3c98342e5
+index 000000000..c3ec97fbc
 --- /dev/null
 +++ b/src/skippy/stage_program_replay.cpp
-@@ -0,0 +1,605 @@
+@@ -0,0 +1,606 @@
 +#include "stage_program.h"
 +
 +#include "stage_slice_plan.h"
@@ -8633,7 +8641,8 @@ index 000000000..3c98342e5
 +            tensor = ggml_lightning_indexer(context, sources[0], sources[1], sources[2], sources[3]);
 +            break;
 +        case GGML_OP_TOP_K:
-+            tensor = ggml_top_k(context, sources[0], operation_parameter<int32_t>(operation, 0));
++            tensor = ggml_top_k(context, sources[0],
++                    static_cast<int32_t>(std::min<int64_t>(sources[0]->ne[0], operation_parameter<int32_t>(operation, 0))));
 +            break;
 +        case GGML_OP_CUMSUM:
 +            tensor = ggml_cumsum(context, sources[0]);
@@ -11193,4 +11202,3 @@ index 71cf37ef2..34440b1e9 100644
              if (arch != LLM_ARCH_DEEPSEEK4 || out.empty()) {
 -- 
 2.54.0 (Apple Git-157)
-

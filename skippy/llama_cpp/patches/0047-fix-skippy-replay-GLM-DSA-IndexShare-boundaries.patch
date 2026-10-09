@@ -4,18 +4,18 @@ Date: Fri, 25 Sep 2026 17:18:49 +1000
 Subject: [PATCH 47/67] fix(skippy): replay GLM DSA IndexShare boundaries
 
 ---
- src/llama-graph.cpp                     | 83 +++++++++++++++++++++++--
- src/models/glm-dsa.cpp                  |  4 ++
- src/skippy/stage_program.cpp            | 17 ++++-
- src/skippy/stage_program_extraction.cpp |  2 +
- src/skippy/stage_program_replay.cpp     | 15 +++--
- src/skippy/stage_program_token_axis.cpp |  2 +
- src/skippy/stage_realization.cpp        | 10 ++-
- tests/test-llama-archs.cpp              |  5 +-
- 8 files changed, 123 insertions(+), 15 deletions(-)
+ src/llama-graph.cpp                     | 102 +++++++++++++++++++++++++++++---
+ src/models/glm-dsa.cpp                  |   4 ++
+ src/skippy/stage_program.cpp            |  17 +++++-
+ src/skippy/stage_program_extraction.cpp |   2 +
+ src/skippy/stage_program_replay.cpp     |  15 +++--
+ src/skippy/stage_program_token_axis.cpp |   2 +
+ src/skippy/stage_realization.cpp        |  10 +++-
+ tests/test-llama-archs.cpp              |   5 +-
+ 8 files changed, 140 insertions(+), 17 deletions(-)
 
 diff --git a/src/llama-graph.cpp b/src/llama-graph.cpp
-index fbbdddf9f..5c07d16ec 100644
+index 60555e1ea..2b2974773 100644
 --- a/src/llama-graph.cpp
 +++ b/src/llama-graph.cpp
 @@ -785,7 +785,9 @@ void llm_graph_input_attn_k_dsa::set_input(const llama_ubatch * ubatch) {
@@ -68,7 +68,7 @@ index fbbdddf9f..5c07d16ec 100644
          for (uint32_t dimension = 0; dimension < source.rank; ++dimension) {
              const int64_t expected = static_cast<int32_t>(dimension) == source.token_axis ?
                      ubatch->n_tokens : source.dimensions[dimension];
-@@ -3875,13 +3891,51 @@ ggml_tensor * llm_graph_context::build_attn(
+@@ -3878,14 +3894,59 @@ ggml_tensor * llm_graph_context::build_attn(
      // reshape KQ mask into tensor with rows of size 1:
      // [n_kv, n_batch, 1, n_stream] -> [1, n_kv, n_batch, n_stream]
      kq_mask_all = ggml_view_4d(ctx0, kq_mask_all, 1, kq_mask_all->ne[0], kq_mask_all->ne[1], kq_mask_all->ne[3], kq_mask_all->nb[0], kq_mask_all->nb[1], kq_mask_all->nb[2], 0);
@@ -112,15 +112,25 @@ index fbbdddf9f..5c07d16ec 100644
  
      // prepare zero-filled tensor with rows of size 1: [1, n_top_k, n_batch, n_stream]
      // this will be our source of zero values for unmasking top k mask elements
-     ggml_tensor * zeros = ggml_new_tensor_4d(ctx0, GGML_TYPE_F32, 1, top_k_3d->ne[0], top_k_3d->ne[1], top_k_3d->ne[2]);
+-    ggml_tensor * zeros = ggml_new_tensor_4d(ctx0, GGML_TYPE_F32, 1, top_k_3d->ne[0], top_k_3d->ne[1], top_k_3d->ne[2]);
+-    zeros = ggml_fill(ctx0, zeros, 0.0f);
++    // Derive the zero rows from top_k so their length contracts with the
++    // replayed indexer output instead of retaining the capture-time width.
++    ggml_tensor * zeros = ggml_reshape_4d(ctx0,
++            ggml_scale(ctx0, ggml_cast(ctx0, top_k_3d, GGML_TYPE_F32), 0.0f),
++            1, top_k_3d->ne[0], top_k_3d->ne[1], top_k_3d->ne[2]);
 +    auto zeros_geometry = skippy_stage_geometry_static(zeros);
-+    zeros_geometry.dimensions[2] = skippy_stage_geometry_expression::tokens_per_kv_stream();
-+    zeros_geometry.dimensions[3] = skippy_stage_geometry_expression::kv_stream_count();
++    zeros_geometry.dimensions = {
++        skippy_stage_geometry_expression::constant(1),
++        skippy_stage_geometry_expression::source_dimension(0, 0),
++        skippy_stage_geometry_expression::source_dimension(0, 1),
++        skippy_stage_geometry_expression::source_dimension(0, 2),
++    };
 +    skippy_stage_geometry_note(zeros, zeros_geometry);
-     zeros = ggml_fill(ctx0, zeros, 0.0f);
  
      // modify KQ mask by unmasking elements that are in top_k indices
-@@ -3891,6 +3945,23 @@ ggml_tensor * llm_graph_context::build_attn(
+     // ggml_set_rows([1, n_kv, n_batch, n_stream], [1, n_top_k, n_batch, n_stream], [n_top_k, n_batch, n_stream, 1])
+@@ -3894,6 +3955,23 @@ ggml_tensor * llm_graph_context::build_attn(
      // reshape to restore the original shape of KQ mask:
      // [1, n_kv, n_batch, n_stream] -> [n_kv, n_batch, 1, n_stream]
      kq_mask_top_k = ggml_view_4d(ctx0, kq_mask_top_k, kq_mask_top_k->ne[1], kq_mask_top_k->ne[2], 1, kq_mask_top_k->ne[3], kq_mask_top_k->nb[2], kq_mask_top_k->nb[3], kq_mask_top_k->nb[3], 0);
@@ -144,6 +154,21 @@ index fbbdddf9f..5c07d16ec 100644
  
      // combine with the original kq mask
      kq_mask_top_k = ggml_add(ctx0, kq_mask_top_k, kq_mask);
+@@ -3901,6 +3979,14 @@ ggml_tensor * llm_graph_context::build_attn(
+     ggml_tensor * q = q_cur;
+     ggml_tensor * k = mctx_cur->get_k(ctx0, il);
+     ggml_tensor * v = ggml_view_4d(ctx0, k, v_cur->ne[0], k->ne[1], k->ne[2], k->ne[3], k->nb[1], k->nb[2], k->nb[3], 0);
++    {
++        auto geometry = skippy_stage_geometry_static(v);
++        for (int32_t axis = 1; axis < GGML_MAX_DIMS; ++axis) {
++            geometry.dimensions[axis] = skippy_stage_geometry_expression::source_dimension(0, axis);
++            geometry.byte_strides[axis] = skippy_stage_geometry_expression::source_stride(0, axis);
++        }
++        skippy_stage_geometry_note(v, geometry);
++    }
+ 
+     ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask_top_k, sinks, v_mla, top_k->ne[0], kq_scale, il);
+     cb(cur, "kqv_out", il);
 diff --git a/src/models/glm-dsa.cpp b/src/models/glm-dsa.cpp
 index 86360c594..34eb29085 100644
 --- a/src/models/glm-dsa.cpp
@@ -195,10 +220,10 @@ index ccf162438..413e55cea 100644
          if (!id.empty() && tensor != nullptr) values[id] = tensor;
      };
 diff --git a/src/skippy/stage_program_extraction.cpp b/src/skippy/stage_program_extraction.cpp
-index 0b44ccc48..08e28da9f 100644
+index d0ef4b4e0..c56f0cb12 100644
 --- a/src/skippy/stage_program_extraction.cpp
 +++ b/src/skippy/stage_program_extraction.cpp
-@@ -532,6 +532,8 @@ bool extraction::run() {
+@@ -537,6 +537,8 @@ bool extraction::run() {
                                  dimension.value_kind == skippy_stage_geometry_expression::kind::runtime_tokens_per_sequence ||
                                  dimension.value_kind == skippy_stage_geometry_expression::kind::runtime_tokens_per_sequence_clamped ||
                                  dimension.value_kind == skippy_stage_geometry_expression::kind::runtime_tokens_per_sequence_capped ||
@@ -208,7 +233,7 @@ index 0b44ccc48..08e28da9f 100644
                                   dimension.source == 0 && dimension.axis == first_axis)) {
                              operation.dynamic_axis = axis;
 diff --git a/src/skippy/stage_program_replay.cpp b/src/skippy/stage_program_replay.cpp
-index b35c2d7fe..1cd7b50a1 100644
+index 53679d800..031db3a92 100644
 --- a/src/skippy/stage_program_replay.cpp
 +++ b/src/skippy/stage_program_replay.cpp
 @@ -377,15 +377,18 @@ ggml_tensor * replay_operation(
@@ -250,10 +275,10 @@ index 61b38ea71..72ef9bccc 100644
                                   expression.source == 0 && expression.axis == first_axis)) {
                              if (axis >= 0) {
 diff --git a/src/skippy/stage_realization.cpp b/src/skippy/stage_realization.cpp
-index 1b7019de7..0f9beb355 100644
+index 0f3685bf5..198c3d1ac 100644
 --- a/src/skippy/stage_realization.cpp
 +++ b/src/skippy/stage_realization.cpp
-@@ -125,7 +125,15 @@ int32_t skippy_activation_token_axis(const ggml_tensor * tensor, uint32_t n_toke
+@@ -138,7 +138,15 @@ int32_t skippy_activation_token_axis(const ggml_tensor * tensor, uint32_t n_toke
  
  int32_t skippy_stage_program_token_axis(const ggml_tensor * tensor, uint32_t n_tokens, int32_t admitted_axis) {
      if (admitted_axis < 0) {
@@ -288,4 +313,3 @@ index 8f8424f85..1e82cdeb5 100644
          std::vector<uint32_t> n_ff_per_layer;
 -- 
 2.54.0 (Apple Git-157)
-
