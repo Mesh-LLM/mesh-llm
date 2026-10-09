@@ -39,7 +39,7 @@ model reference -> artifact/HF adapter -> package format and admission
                 -> runtime load
 ```
 
-Mesh owns its peer discovery, placement, identity, routing, plugins, console,
+Mesh owns its peer discovery, eligibility, identity, routing, plugins, console,
 and management APIs. It translates those decisions into Skippy lifecycle,
 protocol, and serving inputs. The lifecycle API takes explicit locations rather
 than reading Mesh product configuration. Both CLIs use the same HF cache
@@ -47,6 +47,11 @@ preflight and fallback data roots, with `MESH_LLM_DATA_DIR` as the optional
 fallback override. `HF_HUB_CACHE`,
 `HUGGINGFACE_HUB_CACHE`, `HF_HOME`, `HF_XET_CACHE`, and `XDG_CACHE_HOME` still
 take precedence where applicable.
+
+For split execution, Mesh supplies admitted peers, measured capacity and
+transport latency. `skippy-coordinator::topology` owns placement, runtime
+headroom, KV and compute reserve, and the capacity recheck after a cut moves.
+Mesh maps the chosen stages to peer identities and reports diagnostic labels.
 
 `skippy-model-hf::store` uses the same application cache root for both CLIs.
 Its `_in` operations take an explicit application cache root for tests and

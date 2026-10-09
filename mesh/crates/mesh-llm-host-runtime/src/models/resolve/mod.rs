@@ -235,42 +235,28 @@ pub async fn resolve_model_spec(input: &Path) -> Result<PathBuf> {
 }
 
 pub async fn resolve_model_spec_with_progress(input: &Path, progress: bool) -> Result<PathBuf> {
+    use skippy_commands::models::lifecycle::StartupModelSource;
+
     let mut err = mesh_llm_events::console_err();
     let raw = input.to_string_lossy();
-
-    if raw.starts_with("hf://") {
-        return Ok(input.to_path_buf());
-    }
-
-    if input.exists() {
-        // Multipart Hugging Face GGUFs need their snapshot filename until the
-        // complete sibling set has been enumerated. The packaging path then
-        // canonicalizes every managed snapshot link to its regular blob.
-        let resolved = if huggingface_identity_for_path(input).is_some() {
-            canonicalize_cached_hf_path(input)?
-        } else {
-            input.canonicalize().unwrap_or_else(|_| input.to_path_buf())
-        };
-        record_resolved_model_usage(&resolved, Some(raw.as_ref()));
-        return Ok(resolved);
-    }
-
-    if !raw.contains('/') {
-        let installed_name = raw.strip_suffix(".gguf").unwrap_or(&raw);
-        // Prefer the remote meshllm/catalog on HuggingFace. It can be updated
-        // independently of mesh-llm releases and is the source of truth for new
-        // curated models and layer-package metadata.
-        let raw_owned = raw.to_string();
-        if let Some(hf_ref) = tokio::task::spawn_blocking(move || {
-            super::remote_catalog::resolve_model_download(&raw_owned)
-        })
-        .await
-        .context("join remote catalog resolve task")?
-        {
+    match skippy_commands::models::lifecycle::resolve_startup_model_source(input).await? {
+        StartupModelSource::Passthrough(path) => Ok(path),
+        StartupModelSource::Existing(path) => {
+            // Multipart Hugging Face GGUFs keep their snapshot filename until
+            // the packaging path enumerates the complete sibling set.
+            let resolved = if huggingface_identity_for_path(&path).is_some() {
+                canonicalize_cached_hf_path(&path)?
+            } else {
+                path.canonicalize().unwrap_or(path)
+            };
+            record_resolved_model_usage(&resolved, Some(raw.as_ref()));
+            Ok(resolved)
+        }
+        StartupModelSource::Catalog(hf_ref) => {
             if progress {
                 writeln!(err, "📥 Found in remote catalog: {}", hf_ref.name)?;
             }
-            return catalog::download_hf_repo_file_with_progress_label(
+            catalog::download_hf_repo_file_with_progress_label(
                 &hf_ref.repo,
                 hf_ref.revision.as_deref(),
                 &hf_ref.file,
@@ -278,40 +264,40 @@ pub async fn resolve_model_spec_with_progress(input: &Path, progress: bool) -> R
                 progress,
             )
             .await
-            .and_then(|download| canonicalize_hf_download_path(download.path));
+            .and_then(|download| canonicalize_hf_download_path(download.path))
         }
-        let installed_path = find_model_path(installed_name);
-        if installed_path.exists() {
-            let model_ref = huggingface_identity_for_path(&installed_path)
-                .map(|identity| identity.canonical_ref)
-                .unwrap_or_else(|| installed_name.to_string());
-            record_resolved_model_usage(&installed_path, Some(&model_ref));
-            return canonicalize_cached_hf_path(&installed_path);
+        StartupModelSource::Installed(path) => {
+            let model_ref = if raw.contains('/') {
+                raw.to_string()
+            } else {
+                huggingface_identity_for_path(&path)
+                    .map(|identity| identity.canonical_ref)
+                    .unwrap_or_else(|| raw.strip_suffix(".gguf").unwrap_or(&raw).to_string())
+            };
+            record_resolved_model_usage(&path, Some(&model_ref));
+            canonicalize_cached_hf_path(&path)
         }
-        if let Ok(canonical) = canonicalize_model_ref_input(&raw).await
-            && canonical != raw
-        {
-            return download_exact_ref_with_progress(&canonical, progress)
-                .await
-                .and_then(canonicalize_hf_download_path)
-                .with_context(|| format!("Resolve model spec {raw}"));
+        StartupModelSource::Download {
+            reference,
+            bare_name_fallback,
+        } => {
+            let path = if bare_name_fallback {
+                download_exact_ref_with_progress(&reference, progress)
+                    .await
+                    .with_context(|| format!("Resolve model spec {raw}"))?
+            } else {
+                download_model_ref_with_progress_details(&reference, progress)
+                    .await
+                    .with_context(|| format!("Resolve model spec {raw}"))?
+                    .path
+            };
+            canonicalize_hf_download_path(path)
         }
-        bail!(
+        StartupModelSource::MissingBareName => bail!(
             "Model not found: {raw}\nNot a local file, not in the Hugging Face cache, not in catalog.\n\
              Use a path, a catalog name (run `mesh-llm download` to list), or a Hugging Face exact ref/URL."
-        );
+        ),
     }
-
-    let installed_path = find_model_path(&raw);
-    if installed_path.exists() {
-        record_resolved_model_usage(&installed_path, Some(raw.as_ref()));
-        return canonicalize_cached_hf_path(&installed_path);
-    }
-
-    let download = download_model_ref_with_progress_details(&raw, progress)
-        .await
-        .with_context(|| format!("Resolve model spec {raw}"))?;
-    canonicalize_hf_download_path(download.path)
 }
 
 mod downloaded_path;
@@ -1089,33 +1075,6 @@ async fn download_remote_catalog_model(
         progress,
     )
     .await
-}
-
-pub(super) async fn remote_hf_size_label_with_api(
-    _api: &hf_hub::HFClient,
-    repo: &str,
-    revision: Option<&str>,
-    file: &str,
-) -> Option<String> {
-    if split_gguf_shard_info(file).is_some() {
-        let tree_path = Path::new(file)
-            .parent()
-            .and_then(|value| value.to_str())
-            .filter(|value| !value.is_empty());
-        if let Some(tree_entries) = fetch_hf_tree_entries(repo, revision, tree_path).await {
-            let siblings = tree_entries
-                .into_iter()
-                .filter(|entry| entry.entry_type == "file")
-                .map(|entry| (entry.path, entry.size))
-                .collect::<Vec<_>>();
-            if let Some(size) = gguf_variant_size_bytes_from_siblings(file, &siblings) {
-                return Some(format_size_bytes(size));
-            }
-        }
-    }
-
-    let url = huggingface_resolve_url(repo, revision, file);
-    remote_size_label(&url).await
 }
 
 #[cfg(test)]

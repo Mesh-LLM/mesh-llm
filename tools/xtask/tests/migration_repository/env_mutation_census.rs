@@ -56,7 +56,7 @@ fn migration_repository_census_matches_repository_baseline() -> TestResult {
     assert_output(
         &output,
         0,
-        "environment mutation contract: discovered 37 Rust files and 236 mutation sites; 21 contract-audited files; unresolved runtime sites remain explicit\n",
+        "environment mutation contract: discovered 37 Rust files and 235 mutation sites; 21 contract-audited files; unresolved runtime sites remain explicit\n",
         "",
     );
     Ok(())

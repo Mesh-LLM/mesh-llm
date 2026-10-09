@@ -49,9 +49,10 @@ from the Mesh facade. Standalone Skippy release metadata must be supplied by its
 lifecycle layer. Bundle discovery takes an explicit release; existing Mesh path
 and environment names remain pending the coordinated packaging migration.
 Installer options, runtime manifests, and cache inventory name runtime identity
-`release_version`. Artifact/catalog JSON requires `schema_version: 2`. Unversioned
-Mesh-era metadata is read only by `import_legacy_runtime_cache`; normal readers
-reject it instead of silently substituting a fallback release.
+`release_version`. Normal readers accept schema-2 metadata and the published
+Mesh-era format with `mesh_version` and no `schema_version`. The legacy version
+is required and mapped to internal `release_version`; missing versions never
+inherit a fallback. Runtime payload checksums and ABI eligibility still apply.
 
 ## Migrating callers
 
@@ -64,8 +65,9 @@ version. These are source API changes.
 
 Mesh callers can use `mesh_llm_system::native_runtime_install` for Mesh policy
 defaults and compatibility discovery helpers. The Mesh SDK re-exports those
-helpers. Existing cache data is never migrated automatically. The explicit importer
-copies verified bytes and writes current metadata without changing its source.
+helpers. Valid existing Mesh cache entries remain readable in place. The explicit
+importer can copy verified bytes and write current metadata to a separate cache
+without changing its source.
 Artifact names and environment names are separate migration surfaces.
 
 ## Example
@@ -110,5 +112,5 @@ primitive; it does not scan or migrate caches automatically.
 reports missing/unknown entries as skips, and continues past per-runtime failures.
 ABI mismatches produce preservation warnings; imports do not override resolver
 eligibility. Callers must return failure when the report's `has_failures()` is
-true. Generation-marked manifests are not accepted by the legacy reader. The
-normal discovery path does not call this API.
+true. Generation-marked manifests are not accepted by the legacy reader.
+Normal discovery reads valid legacy entries directly and does not call this API.
