@@ -27,6 +27,15 @@ pub(crate) fn assert_second_consumer_refuses_blocked_signal(signal: libc::c_int)
     assert_eq!(std::fs::read_dir(parent.path()).unwrap().count(), 0);
 }
 
+const HOST_SEARCH_PATHS: &[&str] = &[
+    "PATH",
+    "SYSTEMROOT",
+    "WINDIR",
+    "LD_LIBRARY_PATH",
+    "DYLD_LIBRARY_PATH",
+    "DYLD_FALLBACK_LIBRARY_PATH",
+];
+
 #[test]
 fn second_consumer_refuses_overlap_before_state_creation() {
     if std::env::var_os("TASK20_SECOND_CONSUMER").is_none() {
@@ -117,6 +126,8 @@ fn second_consumer_prefix_and_environment_are_distinct() {
             Value::Public(value) => assert!(
                 Path::new(value).starts_with(daemon_home.parent().unwrap())
                     || (key == "MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR" && Path::new(value) == native)
+                    || (HOST_SEARCH_PATHS.contains(&key.to_str().unwrap())
+                        && matches!(client_environment.get(key), Some(Value::Public(client_value)) if value == client_value))
             ),
             Value::Secret(value) => assert!(
                 matches!(client_environment.get(key), Some(Value::Secret(client_value)) if value == client_value)

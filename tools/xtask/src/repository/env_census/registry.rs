@@ -175,7 +175,7 @@ mod tests {
         assert_eq!(AUDITED_FILES.len(), 25);
         assert_eq!(KNOWN_UNAUDITED_MUTATION_COUNTS.len(), 16);
         let frozen: usize = KNOWN_UNAUDITED_MUTATION_COUNTS.iter().map(|(_, n)| n).sum();
-        assert_eq!(frozen, 81);
+        assert_eq!(frozen, 80);
         assert!(
             DEFERRED_FILES
                 .iter()
