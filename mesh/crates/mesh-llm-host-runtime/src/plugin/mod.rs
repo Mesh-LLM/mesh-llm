@@ -16,6 +16,7 @@ mod in_process;
 mod installed;
 pub(crate) mod mcp;
 pub mod openai_exchange;
+pub(crate) mod operations;
 mod runtime;
 mod schema_validation;
 pub(crate) mod stapler;
@@ -906,35 +907,6 @@ impl PluginManager {
             .await
     }
 
-    /// Invoke an operation with an explicit deadline. `None` waits until the
-    /// plugin answers or its connection drops; the caller owns cancellation.
-    pub async fn call_tool_with_timeout(
-        &self,
-        plugin_name: &str,
-        tool_name: &str,
-        arguments_json: &str,
-        timeout: Option<std::time::Duration>,
-    ) -> Result<ToolCallResult> {
-        if self.is_test_bridge_enabled(plugin_name) {
-            return self.call_tool(plugin_name, tool_name, arguments_json).await;
-        }
-        if let Some(summary) = self.inner.inactive.get(plugin_name) {
-            bail!(
-                "Plugin '{}' is disabled: {}",
-                plugin_name,
-                summary.error.as_deref().unwrap_or("unavailable")
-            );
-        }
-        let plugin = self
-            .inner
-            .plugins
-            .get(plugin_name)
-            .with_context(|| format!("Unknown plugin '{plugin_name}'"))?;
-        plugin
-            .call_tool_with_timeout(tool_name, arguments_json, timeout)
-            .await
-    }
-
     pub async fn invoke_operation(
         &self,
         plugin_name: &str,
@@ -952,17 +924,6 @@ impl PluginManager {
         input_json: &str,
     ) -> Result<ToolCallResult> {
         self.call_tool_without_timeout(plugin_name, operation_name, input_json)
-            .await
-    }
-
-    pub async fn invoke_operation_with_timeout(
-        &self,
-        plugin_name: &str,
-        operation_name: &str,
-        input_json: &str,
-        timeout: Option<std::time::Duration>,
-    ) -> Result<ToolCallResult> {
-        self.call_tool_with_timeout(plugin_name, operation_name, input_json, timeout)
             .await
     }
 

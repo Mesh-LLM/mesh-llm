@@ -109,6 +109,50 @@ pub(super) struct RuntimeSliceStagePlan {
     pub(super) parameter_bytes: u64,
 }
 
+/// Warn when last-stage decode batching is planned for a peer that cannot act
+/// on it.
+///
+/// A peer predating `decode-batch-policy-v1` ignores
+/// `StageLoad.last_stage_decode_batch` and serves correctly, just unbatched. So
+/// the operator asks for batching, gets none, and sees nothing but lower
+/// throughput — the silently-ignored-setting failure #2112 exists to remove.
+///
+/// Keyed on the stage that owns the output layers, because that is the only
+/// process that reads the policy (`stage_execution.rs`), and checked per
+/// generation rather than once at startup, because closed-loop placement can
+/// move which peer that is across a cutover.
+pub(super) fn warn_if_decode_batch_policy_unsupported(
+    model_ref: &str,
+    planned: Option<bool>,
+    stages: &[RuntimeSliceStagePlan],
+    participants: &[SplitParticipant],
+) {
+    if planned != Some(true) {
+        return;
+    }
+    let Some(final_stage) = stages.iter().max_by_key(|stage| stage.stage_index) else {
+        return;
+    };
+    let Some(peer) = participants
+        .iter()
+        .find(|participant| participant.node_id == final_stage.node_id)
+    else {
+        return;
+    };
+    if peer.decode_batch_policy_supported {
+        return;
+    }
+    tracing::warn!(
+        model = model_ref,
+        stage_id = final_stage.stage_id,
+        node_id = %final_stage.node_id.fmt_short(),
+        feature = skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_DECODE_BATCH_POLICY_V1,
+        "last-stage decode batching was planned but the peer holding the output \
+         layers does not advertise it, so decode will run unbatched; upgrade that \
+         peer or expect the throughput of an unbatched final stage"
+    );
+}
+
 /// How a split chooses its layer boundaries, and whether they keep moving.
 ///
 /// These were one `auto_balance: bool`, which conflated two decisions that do
@@ -824,7 +868,7 @@ fn planner_recurrent_bytes_by_layer(recurrent: &[u64], layer_count: u32) -> Vec<
 /// reserve, and lane-scaled recurrent state. Mirrors
 /// `layer_required_bytes` in `skippy_coordinator::topology`, including the
 /// 100/85 KV compute-reserve charge from `split_candidate_bytes_per_layer`;
-/// KV is a single shared allocation, so the lane count never multiplies it.
+/// Native reserves a full per-lane context in the shared KV allocation.
 fn stage_required_bytes(
     stage: &RuntimeSliceStagePlan,
     layer_weights: &[u64],
@@ -841,6 +885,7 @@ fn stage_required_bytes(
         .fold(0u128, |total, (weight, recurrent)| {
             let kv_with_compute_reserve = u128::from(kv_per_layer)
                 .saturating_mul(u128::from(context_length))
+                .saturating_mul(parallel_lanes as u128)
                 .saturating_mul(KV_COMPUTE_RESERVE_NUMERATOR)
                 .div_ceil(KV_COMPUTE_RESERVE_DENOMINATOR);
             let recurrent = u128::from(*recurrent).saturating_mul(parallel_lanes as u128);
@@ -970,15 +1015,16 @@ fn split_candidate_bytes_per_layer(
     weight_per_layer: u64,
     kv_per_layer: u64,
     context_length: u32,
-    _parallel_lanes: usize,
+    parallel_lanes: usize,
 ) -> u64 {
     // Mirror of `skippy_coordinator::topology::candidate_bytes_per_layer` so the
     // `split_capacity_shortfall` diagnostic reports the same per-layer cost the
-    // real planner uses. KV cache is a single unified allocation shared across
-    // all parallel lanes with eviction — lane count does not multiply KV cost.
+    // real planner uses. The unified cache reserves a full context per lane.
     // KV is charged at KV_COMPUTE_RESERVE_NUMERATOR/DENOMINATOR (100/85) to hold
     // back 15% of post-weight space for compute-graph buffers/scratch.
-    let kv_bytes = u128::from(kv_per_layer).saturating_mul(u128::from(context_length));
+    let kv_bytes = u128::from(kv_per_layer)
+        .saturating_mul(u128::from(context_length))
+        .saturating_mul(parallel_lanes as u128);
     let kv_with_compute_reserve = kv_bytes
         .saturating_mul(KV_COMPUTE_RESERVE_NUMERATOR)
         .div_ceil(KV_COMPUTE_RESERVE_DENOMINATOR);
@@ -1360,6 +1406,31 @@ mod tests {
     }
 
     #[test]
+    fn an_override_that_exceeds_the_lane_scaled_kv_budget_is_rejected() {
+        let (pkg, participants, stages) = overridden_stages();
+        let kv_bytes_per_token = 24 * 4096;
+        validate_split_capacity(
+            "model-a",
+            &pkg,
+            &participants,
+            &stages,
+            &[],
+            &capacity_model(kv_bytes_per_token, Vec::new(), 65_536, 1),
+        )
+        .expect("one lane of KV fits beside the weights");
+        let error = validate_split_capacity(
+            "model-a",
+            &pkg,
+            &participants,
+            &stages,
+            &[],
+            &capacity_model(kv_bytes_per_token, Vec::new(), 65_536, 4),
+        )
+        .expect_err("four lanes of KV must exceed the same node budget");
+        assert!(error.to_string().contains("context-scaled KV"));
+    }
+
+    #[test]
     fn an_override_that_exceeds_the_lane_scaled_recurrent_budget_is_rejected() {
         let (pkg, participants, stages) = overridden_stages();
         let recurrent = vec![256 * 1024 * 1024; 24];
@@ -1523,6 +1594,76 @@ mod tests {
 
     fn participant(seed: u8, vram_bytes: u64) -> SplitParticipant {
         SplitParticipant::new(make_id(seed), vram_bytes, None)
+    }
+
+    /// The warning's decision, factored so the tests can assert on it without
+    /// capturing a tracing subscriber. Mirrors the guard sequence exactly.
+    fn would_warn(
+        planned: Option<bool>,
+        stages: &[RuntimeSliceStagePlan],
+        participants: &[SplitParticipant],
+    ) -> bool {
+        planned == Some(true)
+            && stages
+                .iter()
+                .max_by_key(|stage| stage.stage_index)
+                .and_then(|final_stage| {
+                    participants
+                        .iter()
+                        .find(|peer| peer.node_id == final_stage.node_id)
+                })
+                .is_some_and(|peer| !peer.decode_batch_policy_supported)
+    }
+
+    #[test]
+    fn a_peer_without_the_decode_batch_feature_warns() {
+        let stages = vec![stage(0, 1, 0, 1), stage(1, 2, 1, 2)];
+        let participants = vec![
+            participant(1, 16_000_000_000).with_decode_batch_policy(true),
+            // The peer holding the OUTPUT layers is the one that reads the
+            // policy, and this one cannot.
+            participant(2, 16_000_000_000).with_decode_batch_policy(false),
+        ];
+        assert!(would_warn(Some(true), &stages, &participants));
+    }
+
+    #[test]
+    fn a_supporting_final_stage_is_silent() {
+        let stages = vec![stage(0, 1, 0, 1), stage(1, 2, 1, 2)];
+        let participants = vec![
+            // Deliberately the reverse of the case above: the peer that cannot
+            // honour the policy holds stage 0, where nothing reads it.
+            participant(1, 16_000_000_000).with_decode_batch_policy(false),
+            participant(2, 16_000_000_000).with_decode_batch_policy(true),
+        ];
+        assert!(!would_warn(Some(true), &stages, &participants));
+    }
+
+    #[test]
+    fn nothing_warns_when_batching_was_not_asked_for() {
+        let stages = vec![stage(0, 1, 0, 1), stage(1, 2, 1, 2)];
+        let participants = vec![
+            participant(1, 16_000_000_000).with_decode_batch_policy(false),
+            participant(2, 16_000_000_000).with_decode_batch_policy(false),
+        ];
+        // Unset and explicitly-false are both "not asked for": warning on them
+        // would fire on every split that leaves the default alone.
+        assert!(!would_warn(None, &stages, &participants));
+        assert!(!would_warn(Some(false), &stages, &participants));
+    }
+
+    #[test]
+    fn a_cutover_that_moves_the_final_stage_warns_again() {
+        // Closed-loop placement can move which peer owns the output layers, so
+        // the check cannot be a one-shot at first load.
+        let participants = vec![
+            participant(1, 16_000_000_000).with_decode_batch_policy(true),
+            participant(2, 16_000_000_000).with_decode_batch_policy(false),
+        ];
+        let before = vec![stage(0, 2, 0, 1), stage(1, 1, 1, 2)];
+        let after = vec![stage(0, 1, 0, 1), stage(1, 2, 1, 2)];
+        assert!(!would_warn(Some(true), &before, &participants));
+        assert!(would_warn(Some(true), &after, &participants));
     }
 
     fn participant_with_rtt(seed: u8, vram_bytes: u64, rtt_ms: u32) -> SplitParticipant {
@@ -1790,5 +1931,11 @@ mod tests {
         assert!(reason.contains("participants ["));
         assert!(reason.contains("max_layers=0"));
         assert!(reason.contains("missing_model_source"));
+    }
+
+    #[test]
+    fn topology_failure_diagnostic_prices_every_kv_lane() {
+        assert_eq!(split_candidate_bytes_per_layer(100, 85, 1, 1), 200);
+        assert_eq!(split_candidate_bytes_per_layer(100, 85, 1, 4), 500);
     }
 }

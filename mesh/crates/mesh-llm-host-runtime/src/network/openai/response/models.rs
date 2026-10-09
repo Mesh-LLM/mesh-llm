@@ -244,6 +244,14 @@ fn models_list_json_with_virtual(
             {
                 object.insert("metadata".to_string(), metadata);
             }
+            // Skippy probes the loaded model's selected chat template and owns the
+            // result; this node republishes it verbatim. Absent when the model was
+            // not probed here — an unprobed control is unknown, not off.
+            if let Some(thinking) = crate::inference::skippy::local_thinking(base_model)
+                && let Some(object) = model.as_object_mut()
+            {
+                object.insert("thinking".to_string(), thinking);
+            }
             Some(model)
         })
         .collect();
@@ -393,6 +401,32 @@ mod tests {
             capabilities,
             ..local_gguf_descriptor(model_name)
         }
+    }
+
+    fn thinking_fixture() -> skippy_inference_api::thinking::ThinkingControls {
+        skippy_inference_api::thinking::ThinkingControls {
+            enabled: true,
+            efforts: vec!["low".to_string(), "medium".to_string(), "high".to_string()],
+        }
+    }
+
+    #[test]
+    fn models_list_reports_the_thinking_probe_skippy_recorded_for_the_local_model() {
+        let model = "Qwen3-32B-Q4_K_M";
+        crate::inference::skippy::register_local_thinking(model, Some(&thinking_fixture()));
+        let body = models_list_json(&[model.to_string()], &[local_gguf_descriptor(model)], &[]);
+        let thinking = &body["data"][0]["thinking"];
+        assert_eq!(thinking["enabled"], true);
+        assert_eq!(thinking["efforts"][1], "medium");
+        crate::inference::skippy::forget_local_thinking(model);
+    }
+
+    #[test]
+    fn models_list_omits_thinking_for_a_model_this_node_did_not_probe() {
+        let model = "Qwen3-32B-Q4_K_M-unprobed";
+        crate::inference::skippy::forget_local_thinking(model);
+        let body = models_list_json(&[model.to_string()], &[local_gguf_descriptor(model)], &[]);
+        assert!(body["data"][0].get("thinking").is_none());
     }
     #[test]
     fn local_and_remote_listing_preserve_the_same_name_and_resolve_at_the_host() {

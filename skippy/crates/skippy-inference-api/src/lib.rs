@@ -21,6 +21,7 @@ pub mod router;
 pub mod sse;
 mod stream_lifecycle;
 pub mod system_one;
+pub mod thinking;
 pub mod wire_bytes;
 
 pub use audio::{
@@ -95,3 +96,4 @@ pub use system_one::{
     SystemOneAnswer, SystemOneJson, SystemOneJsonObject, SystemOneNoulCriteria, SystemOneQuestion,
     SystemOneRequest, SystemOneResponse, SystemOneUsage,
 };
+pub use thinking::ThinkingControls;

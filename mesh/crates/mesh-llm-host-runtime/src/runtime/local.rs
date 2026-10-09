@@ -109,6 +109,8 @@ pub(super) struct LocalRuntimeModelHandle {
     pub(super) slots: usize,
     pub(super) capabilities: models::ModelCapabilities,
     pub(super) workload_class: mesh::ModelWorkloadClass,
+    /// Render-only reasoning-control observations Skippy produced for this model.
+    pub(super) thinking: Option<skippy_inference_api::thinking::ThinkingControls>,
     pub(super) inner: LocalRuntimeBackendHandle,
 }
 
@@ -1203,6 +1205,7 @@ async fn start_local_skippy_model(
             slots: plan.slots,
             capabilities,
             workload_class,
+            thinking: skippy_model.thinking().cloned(),
             inner: LocalRuntimeBackendHandle::Skippy {
                 model: Box::new(skippy_model),
                 http,
@@ -1386,6 +1389,7 @@ async fn start_local_package_v2_model(
             slots: plan.slots,
             capabilities,
             workload_class,
+            thinking: handle.thinking().cloned(),
             inner: LocalRuntimeBackendHandle::Skippy {
                 model: Box::new(handle),
                 http,

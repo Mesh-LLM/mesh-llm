@@ -48,6 +48,7 @@
 //! still recorded on every window, because it is what makes a verdict
 //! interpretable afterwards — it just does not decide when to look.
 
+use serde::{Deserialize, Serialize};
 use std::time::{Duration, Instant};
 
 /// Thresholds for [`SpeculationGate`].
@@ -57,23 +58,164 @@ pub(crate) struct SpeculationGateConfig {
     pub(crate) min_window: Duration,
     /// Matching requests a window needs before it can be judged. One request's
     /// rate is noise; a verdict on it would be a coin flip.
+    ///
+    /// Eight rather than three, because the margin below is small enough that
+    /// the mean has to be tight. The standard error of a mean falls as
+    /// `1/sqrt(n)`: on the measured 0.49% per-request CV, three requests give
+    /// 0.28% and eight give 0.17%. Eight is what licenses a 5% margin with two
+    /// orders of magnitude to spare rather than one.
     pub(crate) min_requests: u64,
-    /// Fractional change in mean decode rate needed to call a trial decisive.
-    /// Must sit above run-to-run noise, which sustained split runs showed at
-    /// roughly ±8% window to window.
+    /// Fractional improvement in mean decode rate needed to call a trial
+    /// decisive.
+    ///
+    /// This was 0.15, justified as "comfortably above the ~8% noise floor".
+    /// That floor was measured on **window-to-window wall-clock rates**, and
+    /// this gate does not use them: #2260 moved it to a mean of per-request
+    /// `predicted_per_second`, precisely because a wall-clock window rate
+    /// below saturation measures offered load rather than capacity. The
+    /// justification outlived the quantity it was about.
+    ///
+    /// The noise that matters is the noise in the quantity this gate compares:
+    /// a window mean of per-request rates, **within one process**. It never
+    /// compares across processes, so cross-run spread does not enter.
+    ///
+    /// Measured on this gate's own freeform workload, 24 requests in one
+    /// process: per-request CV **0.49%**, so the mean of a `min_requests`
+    /// window of 8 has a standard error of 0.17%, or 0.34% at two sigma. A 5%
+    /// margin is roughly 15x that.
+    ///
+    /// Cross-formation spread on the same workload is far larger — the same
+    /// `plain` arm returned 10.10, 10.15 and 10.97 tok/s in three separate
+    /// formations, an 8.7% range, which is where the original "~8% noise
+    /// floor" came from. That number is real but belongs to comparing *runs*,
+    /// which is a benchmark-harness problem and not this controller's.
+    ///
+    /// And 0.15 could not catch the regression this gate exists for:
+    ///
+    /// | case | gain from standing down | decisive at 0.15? |
+    /// |---|---|---|
+    /// | #1581, the motivating run (12.3 against 13.8 tok/s) | 12.2% | **no** |
+    /// | #2112's freeform arm (9.89 against 10.15 tok/s) | 2.6% | **no** |
+    ///
+    /// A gate that calls its own motivating case indecisive and reverts to
+    /// speculating is the "adaptive policy that never adapted" failure in the
+    /// module docs above, arriving through the margin instead of the window.
+    ///
+    /// 0.05 catches #1581 with room and sits well above a window mean's own
+    /// noise. The 2.6% case is deliberately still reachable in principle but
+    /// not worth chasing: an effect that small is below what a single pair of
+    /// windows should be trusted to rank, and the cooldown means a wrong
+    /// verdict persists for half an hour.
     pub(crate) decisive_margin: f64,
     /// Quiet period after a verdict, so the gate cannot oscillate.
     pub(crate) cooldown: Duration,
+}
+
+/// The gate's settings as an operator states them.
+///
+/// Separate from [`SpeculationGateConfig`] because that one holds `Duration`s
+/// for the controller to compare against, while a config file states seconds.
+/// Promoted out of the environment because #2112 workstream 5 puts the gate
+/// under the `balanced` strategy, and a strategy composes configuration — an
+/// environment-only switch cannot be composed, and a 1800s cooldown nobody can
+/// shorten cannot be validated either.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SpeculationGateSettings {
+    /// On by default, and the reason is that speculation is not opt-in.
+    ///
+    /// A model package can declare a speculative strategy, so a deployment can
+    /// be speculating without anybody having chosen to. The regression that
+    /// costs — #1581 measured 12.2-12.4 tok/s against 13.8 for plain decode on
+    /// a freeform workload — is therefore not opt-in either, and protection
+    /// that has to be asked for would not reach the people who need it.
+    ///
+    /// The cost lands only where the risk is. A governor is constructed solely
+    /// when the resolved plan actually speculates (see
+    /// `speculation_plan_is_active`), so a deployment that does not speculate
+    /// pays nothing at all. One that does pays one window per `cooldown` spent
+    /// measuring the setting not in force — against a default 1800s cooldown
+    /// and a 60s window, under a thirtieth of the time, and only the difference
+    /// between the two settings within it.
+    ///
+    /// Deliberately *not* composed by `--strategy balanced`: that stays a
+    /// no-op, so #2112's parity property - an intent can never change an
+    /// existing deployment - holds exactly. The gate is a safety property
+    /// rather than a tuning preference, so it belongs in the defaults and not
+    /// in an intent.
+    #[serde(default = "default_gate_enabled")]
+    pub enabled: bool,
+    #[serde(default = "default_gate_min_window_s")]
+    pub min_window_s: u64,
+    #[serde(default = "default_gate_min_requests")]
+    pub min_requests: u64,
+    #[serde(default = "default_gate_decisive_margin")]
+    pub decisive_margin: f64,
+    #[serde(default = "default_gate_cooldown_s")]
+    pub cooldown_s: u64,
+}
+
+fn default_gate_enabled() -> bool {
+    true
+}
+
+fn default_gate_min_window_s() -> u64 {
+    60
+}
+
+fn default_gate_min_requests() -> u64 {
+    8
+}
+
+fn default_gate_decisive_margin() -> f64 {
+    0.05
+}
+
+fn default_gate_cooldown_s() -> u64 {
+    1800
+}
+
+impl Default for SpeculationGateSettings {
+    fn default() -> Self {
+        Self {
+            enabled: default_gate_enabled(),
+            min_window_s: default_gate_min_window_s(),
+            min_requests: default_gate_min_requests(),
+            decisive_margin: default_gate_decisive_margin(),
+            cooldown_s: default_gate_cooldown_s(),
+        }
+    }
+}
+
+impl From<SpeculationGateSettings> for SpeculationGateConfig {
+    fn from(settings: SpeculationGateSettings) -> Self {
+        let default = Self::default();
+        // A zero means "unset" rather than "instant": a zero-length window or a
+        // zero-request quorum would judge on a single sample, which is the coin
+        // flip `min_requests` exists to prevent.
+        Self {
+            min_window: if settings.min_window_s == 0 {
+                default.min_window
+            } else {
+                Duration::from_secs(settings.min_window_s)
+            },
+            min_requests: settings.min_requests.max(1),
+            decisive_margin: if settings.decisive_margin > 0.0 {
+                settings.decisive_margin
+            } else {
+                default.decisive_margin
+            },
+            cooldown: Duration::from_secs(settings.cooldown_s),
+        }
+    }
 }
 
 impl Default for SpeculationGateConfig {
     fn default() -> Self {
         Self {
             min_window: Duration::from_secs(60),
-            min_requests: 3,
-            // Comfortably above the ~8% noise floor, so a verdict is a signal
-            // and not a coin flip.
-            decisive_margin: 0.15,
+            min_requests: 8,
+            decisive_margin: 0.05,
             // Half an hour between trials, against a 60s window: one window in
             // thirty is spent measuring the setting not in use. Short enough to
             // follow a workload that changes through the day, long enough that
@@ -208,6 +350,14 @@ impl SpeculationGate {
         }
     }
 
+    /// Whether a trial is open, so its flip is inside the current window.
+    ///
+    /// Read by the run-ahead budget search, which must not attribute a rate
+    /// shaped by this gate's flip to a budget of its own.
+    pub(crate) fn is_trialling(&self) -> bool {
+        self.trial.is_some()
+    }
+
     /// Fold one finished request in, and decide if its window has closed.
     ///
     /// `speculating` is the gate's current setting, which the caller owns.
@@ -314,10 +464,11 @@ impl SpeculationGate {
 /// Environment switch that enables the gate. Default off.
 ///
 /// Off by default because the gate changes what a speculating deployment does
-/// over time, and the evidence for its thresholds — the ±8% noise floor and
-/// the 15% decisive margin — comes from a different measurement (#1935's
-/// rebalance windows) than the one it governs. It wants its own two-box run
-/// before it becomes anyone's default.
+/// over time. Its thresholds now come from the measurement it governs — #2112's
+/// two-box freeform arm and #1581's documented regression — rather than from
+/// #1935's rebalance windows, which measured a different quantity on a
+/// wall-clock rate this gate no longer uses. Flipping the default on is
+/// #2112 workstream 5's last step and wants its own run.
 ///
 /// The intended destination is `--strategy balanced`, whose composition in
 /// #2112 is "package-declared speculation, gated on live break-even".
@@ -326,13 +477,32 @@ impl SpeculationGate {
 /// guessing a stated intent rather than filling an unstated gap.
 pub(crate) const SPECULATION_GATE_ENV: &str = "SKIPPY_SPECULATION_GATE";
 
-pub(crate) fn speculation_gate_enabled() -> bool {
-    std::env::var(SPECULATION_GATE_ENV).is_ok_and(|value| {
-        matches!(
-            value.trim().to_ascii_lowercase().as_str(),
-            "1" | "true" | "yes" | "on"
-        )
-    })
+fn truthy(value: &str) -> bool {
+    matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "1" | "true" | "yes" | "on"
+    )
+}
+
+/// Whether the gate runs, from the configured setting and the environment
+/// override.
+///
+/// The environment is read first and decides on its own, the same shape as
+/// `SKIPPY_LAST_STAGE_DECODE_BATCH`: a bench or incident override that needs no
+/// replan. A set-but-unparseable value means off rather than deferring to the
+/// config, so an operator's typo cannot look like a policy.
+pub(crate) fn resolve_speculation_gate_enabled(env_value: Option<&str>, configured: bool) -> bool {
+    match env_value {
+        Some(value) => truthy(value),
+        None => configured,
+    }
+}
+
+pub(crate) fn speculation_gate_enabled(settings: SpeculationGateSettings) -> bool {
+    resolve_speculation_gate_enabled(
+        std::env::var(SPECULATION_GATE_ENV).ok().as_deref(),
+        settings.enabled,
+    )
 }
 
 /// Whether a resolved plan speculates at all.
@@ -372,6 +542,15 @@ impl SpeculationGovernor {
         }
     }
 
+    /// Whether a trial is open. `false` if the lock is poisoned, which keeps
+    /// the run-ahead search sampling rather than starving it on a dead gate.
+    pub(crate) fn is_trialling(&self) -> bool {
+        self.gate
+            .lock()
+            .map(|gate| gate.is_trialling())
+            .unwrap_or(false)
+    }
+
     /// Whether the generation path should speculate right now.
     pub(crate) fn allows_speculation(&self) -> bool {
         self.speculating.load(std::sync::atomic::Ordering::Relaxed)
@@ -408,6 +587,71 @@ mod tests {
     use super::*;
 
     const WINDOW: Duration = Duration::from_secs(60);
+
+    #[test]
+    fn the_environment_overrides_the_configured_gate_either_way() {
+        // Same precedence as SKIPPY_LAST_STAGE_DECODE_BATCH: the environment is a
+        // bench and incident override that needs no replan, so it decides alone.
+        assert!(resolve_speculation_gate_enabled(Some("1"), false));
+        assert!(!resolve_speculation_gate_enabled(Some("0"), true));
+        // Unset defers to configuration, which is what lets a strategy compose it.
+        assert!(resolve_speculation_gate_enabled(None, true));
+        assert!(!resolve_speculation_gate_enabled(None, false));
+        // A typo must not read as a policy.
+        assert!(!resolve_speculation_gate_enabled(Some("ture"), true));
+    }
+
+    #[test]
+    fn settings_become_durations_and_zero_means_unset() {
+        let settings = SpeculationGateSettings {
+            enabled: true,
+            min_window_s: 5,
+            min_requests: 4,
+            decisive_margin: 0.2,
+            cooldown_s: 30,
+        };
+        let config = SpeculationGateConfig::from(settings);
+        assert_eq!(config.min_window, Duration::from_secs(5));
+        assert_eq!(config.min_requests, 4);
+        assert_eq!(config.decisive_margin, 0.2);
+        assert_eq!(config.cooldown, Duration::from_secs(30));
+
+        // A zero window or quorum would judge on a single sample, which is the
+        // coin flip `min_requests` exists to prevent, so it restores the default
+        // rather than meaning "instantly".
+        let defaults = SpeculationGateConfig::default();
+        let zeroed = SpeculationGateConfig::from(SpeculationGateSettings {
+            min_window_s: 0,
+            min_requests: 0,
+            decisive_margin: 0.0,
+            ..settings
+        });
+        assert_eq!(zeroed.min_window, defaults.min_window);
+        assert_eq!(zeroed.min_requests, 1);
+        assert_eq!(zeroed.decisive_margin, defaults.decisive_margin);
+
+        // A zero cooldown IS meaningful: it is how a validation run reaches a
+        // verdict without waiting half an hour for the first trial.
+        assert_eq!(
+            SpeculationGateConfig::from(SpeculationGateSettings {
+                cooldown_s: 0,
+                ..settings
+            })
+            .cooldown,
+            Duration::ZERO
+        );
+    }
+
+    #[test]
+    fn the_gate_is_on_unless_turned_off() {
+        // Speculation can arrive from a model package declaration, so a
+        // deployment can be in the losing regime without having opted in.
+        // Protection that had to be asked for would miss exactly those.
+        assert!(SpeculationGateSettings::default().enabled);
+        // And it is still switchable, from config or from the environment.
+        assert!(!resolve_speculation_gate_enabled(Some("0"), true));
+        assert!(!resolve_speculation_gate_enabled(None, false));
+    }
 
     fn config() -> SpeculationGateConfig {
         SpeculationGateConfig {
@@ -535,21 +779,68 @@ mod tests {
         );
     }
 
-    /// An improvement inside the noise floor is not a verdict. #1935 measured
-    /// roughly ±8% window to window; the margin is 15%.
+    /// An improvement inside the noise floor is not a verdict. A window mean of
+    /// eight requests carries 0.34% at two sigma on the measured workload; the
+    /// margin is 5%, so 2% is comfortably inside it.
     #[test]
     fn an_improvement_inside_the_noise_margin_is_not_decisive() {
         let mut gate = SpeculationGate::new(config());
         let mut at = Instant::now();
         window(&mut gate, &mut at, true, 20.0, 2000, 200);
         window(&mut gate, &mut at, true, 20.0, 2000, 200);
-        assert_eq!(
-            window(&mut gate, &mut at, false, 22.0, 0, 0),
-            GateDecision::Revert {
-                enable: true,
-                baseline: 20.0,
-                observed: 22.0
-            }
+        // 2% — the size of #2112's freeform arm, and under twice the measured
+        // noise. Deliberately out of reach: a margin that caught this would
+        // latch on coin flips.
+        let decision = window(&mut gate, &mut at, false, 20.4, 0, 0);
+        assert!(
+            matches!(decision, GateDecision::Revert { enable: true, .. }),
+            "an improvement inside the noise is not a verdict, got {decision:?}"
+        );
+    }
+
+    /// THE CASE THIS GATE EXISTS FOR. #1581 measured 12.2-12.4 tok/s
+    /// speculating against 13.8 for plain decode on a freeform two-node split.
+    ///
+    /// At the original 0.15 margin that is a 12.2% improvement from standing
+    /// down and therefore *indecisive* — the gate reverted to speculating and
+    /// kept the regression. A gate that cannot catch its own motivating run is
+    /// the "adaptive policy that never adapted" failure in this module's docs,
+    /// reached through the margin rather than the window.
+    #[test]
+    fn the_documented_freeform_regression_is_caught() {
+        let mut gate = SpeculationGate::new(config());
+        let mut at = Instant::now();
+        window(&mut gate, &mut at, true, 12.3, 2214, 660);
+        window(&mut gate, &mut at, true, 12.3, 2214, 660);
+        // Matched on shape, not float equality: the baseline is a mean of
+        // per-request rates, so it carries accumulation error (12.3 sums to
+        // 12.300000000000002) and the verdict is what this pins.
+        let decision = window(&mut gate, &mut at, false, 13.8, 0, 0);
+        assert!(
+            matches!(
+                decision,
+                GateDecision::Keep {
+                    speculating: false,
+                    ..
+                }
+            ),
+            "the documented regression must stand speculation down, got {decision:?}"
+        );
+    }
+
+    #[test]
+    fn a_winning_configuration_is_never_stood_down() {
+        // The other direction, which the smaller margin must not break: on an
+        // input-grounded workload speculation wins several-fold, so the trial
+        // measures far worse and the incumbent has to come straight back.
+        let mut gate = SpeculationGate::new(config());
+        let mut at = Instant::now();
+        window(&mut gate, &mut at, true, 49.6, 2286, 1998);
+        window(&mut gate, &mut at, true, 49.6, 2286, 1998);
+        let decision = window(&mut gate, &mut at, false, 10.1, 0, 0);
+        assert!(
+            matches!(decision, GateDecision::Revert { enable: true, .. }),
+            "a winning configuration must come straight back, got {decision:?}"
         );
     }
 

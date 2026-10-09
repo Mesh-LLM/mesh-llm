@@ -82,6 +82,7 @@ impl StageOpenAiBackend {
     /// caused it. Every request is folded in; the gate only decides once a
     /// window has closed.
     fn record_speculation_outcome(&self, output: &GeneratedText, speculated: bool) {
+        self.record_runahead_outcome(output, speculated);
         let Some(governor) = self.speculation_governor.as_ref() else {
             return;
         };
@@ -114,6 +115,42 @@ impl StageOpenAiBackend {
             serde_json::json!(governor.allows_speculation()),
         );
         self.telemetry.emit("stage.openai_speculation_gate", attrs);
+    }
+
+    /// Fold a finished request into the run-ahead budget search.
+    ///
+    /// Only requests that actually speculated, while the speculation gate was
+    /// holding rather than trialling, can be attributed to a budget — see
+    /// `runahead_search`'s module docs on why the two controllers must not
+    /// read each other's windows.
+    fn record_runahead_outcome(&self, output: &GeneratedText, speculated: bool) {
+        let Some(governor) = self.runahead_governor.as_ref() else {
+            return;
+        };
+        if output.predicted_ms <= 0.0 || output.completion_tokens == 0 {
+            return;
+        }
+        // A gate that is mid-trial has just flipped speculation for this
+        // request, so its rate carries the gate's effect and not the budget's.
+        // With no gate at all there is nothing to be mid-trial.
+        let gate_quiescent = self
+            .speculation_governor
+            .as_ref()
+            .is_none_or(|gate| !gate.is_trialling());
+        let decode_rate = f64::from(output.completion_tokens) * 1000.0 / output.predicted_ms;
+        let Some(decision) = governor.record(super::runahead_search::RequestOutcome {
+            decode_tokens_per_second: decode_rate,
+            speculated,
+            gate_quiescent,
+        }) else {
+            return;
+        };
+        let mut attrs = std::collections::BTreeMap::new();
+        attrs.insert(
+            "llama_stage.spec.runahead_decision".to_string(),
+            serde_json::json!(format!("{decision:?}")),
+        );
+        self.telemetry.emit("stage.openai_runahead_search", attrs);
     }
 
     /// Whether the gate currently allows speculation. `true` when ungoverned.

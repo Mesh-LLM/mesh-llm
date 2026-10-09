@@ -1063,6 +1063,17 @@ impl DashboardState {
                     "API",
                 );
             }
+            OutputEvent::ServingStrategyResolved {
+                strategy,
+                applied,
+                declined,
+            } => {
+                self.serving_strategy = Some(super::state::ServingStrategySummary {
+                    strategy: strategy.clone(),
+                    applied: *applied,
+                    declined: *declined,
+                });
+            }
             OutputEvent::RuntimeReady {
                 api_url,
                 console_url,

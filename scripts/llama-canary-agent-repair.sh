@@ -60,6 +60,7 @@ VERIFY_ROOT="/tmp/mesh-llm-canary-verify-${RUN_KEY}"
 STATE_DIR="$ROOT/.deps/llama-canary-state-${RUN_KEY}-${PASS_ID}"
 TARGET_SHA_FILE="$ROOT/.deps/llama-canary-target-sha"
 AGENT_LOG="$STATE_DIR/agent.log"
+AGENT_COMMAND_LOG_DIR="$STATE_DIR/agent-commands"
 PREPARE_LOG="$STATE_DIR/prepare.log"
 BUILD_LOG="$STATE_DIR/build.log"
 CERTIFY_LOG="$STATE_DIR/certify.log"
@@ -126,6 +127,7 @@ if [[ "$HARNESS_MODE" == repair* ]]; then
 fi
 
 mkdir -p "$STATE_DIR" "$(dirname "$PLAN_PATH")"
+mkdir -p "$AGENT_COMMAND_LOG_DIR"
 rm -f "$AGENT_LOG" "$PREPARE_LOG" "$BUILD_LOG" "$CERTIFY_LOG" \
   "$MANIFEST_POLICY_LOG" \
   "$PR_BODY" "$UPSTREAM_SUMMARY" "$BUNDLE"
@@ -302,6 +304,7 @@ agent_session_step() {
   goose_args+=(--text "$prompt")
   run_for "agent developer task" "$seconds" env \
     -u GH_TOKEN -u GITHUB_TOKEN -u CANARY_REPAIR_TOKEN \
+    CANARY_REPAIR_LOG_DIR="$AGENT_COMMAND_LOG_DIR" \
     GOOSE_MODE=auto GOOSE_DISABLE_SESSION_NAMING=true \
     goose "${goose_args[@]}" \
     > >(tee -a "$AGENT_LOG") 2>&1

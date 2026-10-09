@@ -1,3 +1,5 @@
+mod request;
+
 use super::config::{ExternalPluginSpec, PluginHostMode};
 use super::plugin_manifest_overview;
 use super::support::{plugin_error, serialize_params, summarize_capabilities};
@@ -27,6 +29,9 @@ mod exchange_request_tests;
 mod identity_artifact;
 mod lifecycle_readiness;
 mod socket_auth;
+
+/// How long a stopping plugin waits to tell the node to withdraw its key.
+const PLUGIN_STOPPED_SEND_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
 
 pub(crate) struct ExternalPlugin {
     spec: ExternalPluginSpec,
@@ -334,6 +339,7 @@ impl ExternalPlugin {
                     host_capabilities: vec![
                         mesh_llm_plugin::host_capabilities::PEER_BLOCKS.to_string(),
                         mesh_llm_plugin::host_capabilities::OPENAI_EXCHANGE.to_string(),
+                        mesh_llm_plugin::host_capabilities::PLUGIN_KEYS.to_string(),
                     ],
                 }),
                 Some(self.spec.startup.init_timeout()),
@@ -650,6 +656,7 @@ impl ExternalPlugin {
         summary.error = None;
         drop(summary);
         self.publish_summary().await;
+        self.announce_stopped().await;
     }
 
     pub(crate) async fn call_tool(
@@ -669,56 +676,6 @@ impl ExternalPlugin {
             content_json: response.output_json,
             is_error: response.is_error,
         })
-    }
-
-    /// `None` waits indefinitely; the caller owns cancellation.
-    pub(crate) async fn call_tool_with_timeout(
-        &self,
-        tool_name: &str,
-        arguments_json: &str,
-        timeout: Option<std::time::Duration>,
-    ) -> Result<ToolCallResult> {
-        let response = self
-            .invoke_service(
-                proto::ServiceKind::Operation,
-                tool_name,
-                arguments_json,
-                timeout,
-            )
-            .await?;
-        Ok(ToolCallResult {
-            content_json: response.output_json,
-            is_error: response.is_error,
-        })
-    }
-
-    pub(crate) async fn invoke_service(
-        &self,
-        kind: proto::ServiceKind,
-        service_name: &str,
-        input_json: &str,
-        timeout: Option<std::time::Duration>,
-    ) -> Result<proto::InvokeServiceResponse> {
-        let response = self
-            .request_with_timeout(
-                proto::envelope::Payload::InvokeServiceRequest(proto::InvokeServiceRequest {
-                    kind: kind as i32,
-                    service_name: service_name.to_string(),
-                    input_json: input_json.to_string(),
-                }),
-                timeout,
-            )
-            .await?;
-        match response.payload {
-            Some(proto::envelope::Payload::InvokeServiceResponse(resp)) => Ok(resp),
-            Some(proto::envelope::Payload::ErrorResponse(err)) => {
-                Err(plugin_error(&self.spec.name, "invoke_service", &err))
-            }
-            _ => bail!(
-                "Plugin '{}' returned an unexpected payload for 'invoke_service'",
-                self.spec.name
-            ),
-        }
     }
 
     pub(crate) async fn mcp_request<T, P>(&self, method: &str, params: P) -> Result<T>
@@ -829,32 +786,6 @@ impl ExternalPlugin {
             Some(std::time::Duration::from_secs(REQUEST_TIMEOUT_SECS)),
         )
         .await
-    }
-
-    async fn request_with_timeout(
-        &self,
-        payload: proto::envelope::Payload,
-        timeout: Option<std::time::Duration>,
-    ) -> Result<proto::Envelope> {
-        for attempt in 0..2 {
-            self.ensure_running().await?;
-            let (generation, outbound_tx, pending) = self.runtime_handles().await?;
-            match self
-                .request_once(generation, outbound_tx, pending, payload.clone(), timeout)
-                .await
-            {
-                Ok(response) => return Ok(response),
-                Err(err) if attempt == 0 => {
-                    tracing::debug!(
-                        plugin = %self.spec.name,
-                        error = %err,
-                        "Retrying plugin request after restart"
-                    );
-                }
-                Err(err) => return Err(err),
-            }
-        }
-        bail!("Plugin '{}' request failed after restart", self.spec.name)
     }
 
     async fn send_unsolicited(&self, payload: proto::envelope::Payload, kind: &str) -> Result<()> {
@@ -1022,6 +953,20 @@ impl ExternalPlugin {
         matches!(summary.status.as_str(), "shutting down" | "stopped")
     }
 
+    /// Tell the node this plugin stopped for good, so it withdraws the key it
+    /// announced for it. Bounded: a node that is itself stopping may not read it.
+    async fn announce_stopped(&self) {
+        let _ = self
+            .mesh_tx
+            .send_timeout(
+                PluginMeshEvent::PluginStopped {
+                    plugin_id: self.spec.name.clone(),
+                },
+                PLUGIN_STOPPED_SEND_TIMEOUT,
+            )
+            .await;
+    }
+
     async fn mark_disabled(&self, generation: u64, reason: String) {
         let mut runtime = self.runtime.lock().await;
         let disabled_runtime = (runtime.as_ref().map(|runtime| runtime.generation)
@@ -1054,6 +999,7 @@ impl ExternalPlugin {
         summary.error = Some(crate::logging::policy::redact_urls_in_text(&reason));
         drop(summary);
         self.publish_summary().await;
+        self.announce_stopped().await;
     }
 }
 
@@ -1190,6 +1136,45 @@ pub(crate) mod tests {
         }
     }
 
+    fn stopped_events(rx: &mut mpsc::Receiver<PluginMeshEvent>) -> Vec<String> {
+        let mut out = Vec::new();
+        while let Ok(event) = rx.try_recv() {
+            if let PluginMeshEvent::PluginStopped { plugin_id } = event {
+                out.push(plugin_id);
+            }
+        }
+        out
+    }
+
+    #[tokio::test]
+    async fn a_plugin_that_is_disabled_or_shut_down_asks_the_node_to_withdraw_its_key() {
+        let temp = tempfile::tempdir().unwrap();
+        let (mesh_tx, mut mesh_rx) = mpsc::channel(8);
+        let (plugin, _runtime_data) = plugin_for_spec_with_mesh_tx(
+            plugin_spec(
+                &temp,
+                None,
+                InstalledPluginWebUiValidationStatus::Valid,
+                None,
+            ),
+            mesh_tx,
+        );
+
+        // A failure restarts the plugin: its key stays announced.
+        plugin
+            .handle_runtime_failure(None, "plugin exited".into())
+            .await;
+        assert!(stopped_events(&mut mesh_rx).is_empty());
+
+        // Disabled: withdrawn.
+        plugin.mark_disabled(0, "turned off".into()).await;
+        assert_eq!(stopped_events(&mut mesh_rx), vec!["demo".to_string()]);
+
+        // Shut down (removed, or the host stopping): withdrawn.
+        plugin.shutdown().await;
+        assert_eq!(stopped_events(&mut mesh_rx), vec!["demo".to_string()]);
+    }
+
     /// A builtin spec with no command, as resolved for an in-process plugin.
     pub(crate) fn in_process_plugin(
         name: &str,
@@ -1219,6 +1204,13 @@ pub(crate) mod tests {
         spec: ExternalPluginSpec,
     ) -> (ExternalPlugin, RuntimeDataCollector) {
         let (mesh_tx, _mesh_rx) = mpsc::channel(1);
+        plugin_for_spec_with_mesh_tx(spec, mesh_tx)
+    }
+
+    fn plugin_for_spec_with_mesh_tx(
+        spec: ExternalPluginSpec,
+        mesh_tx: mpsc::Sender<PluginMeshEvent>,
+    ) -> (ExternalPlugin, RuntimeDataCollector) {
         let runtime_data = RuntimeDataCollector::new();
         let plugin_name = spec.name.clone();
         let web_ui_enabled = spec.web_ui_enabled;

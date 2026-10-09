@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 
 use super::SkippyModelHandle;
+use skippy_inference_api::thinking::ThinkingControls;
 
 impl SkippyModelHandle {
     /// Reuse buffer measurements only when the native workload preserves requested lanes.
@@ -32,6 +33,13 @@ impl SkippyModelHandle {
     /// Advertise System One only when this exact runtime can execute the endpoint.
     pub(crate) fn supports_system_one(&self) -> bool {
         self.runtime.supports_system_one()
+    }
+
+    /// Render-only reasoning-control observations Skippy produced for this model.
+    ///
+    /// The host never interprets the value; it republishes it on `/v1/models`.
+    pub(crate) fn thinking(&self) -> Option<&ThinkingControls> {
+        self.thinking.as_ref()
     }
 }
 

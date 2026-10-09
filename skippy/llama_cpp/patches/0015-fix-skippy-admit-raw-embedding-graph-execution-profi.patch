@@ -6,14 +6,14 @@ Subject: [PATCH] fix(skippy): admit raw embedding graph execution profiles
 ---
  src/llama-context.cpp                         | 23 +++--
  src/llama-context.h                           | 11 ++-
- src/skippy/stage_execution_contract.cpp       | 20 ++++-
+ src/skippy/stage_execution_contract.cpp       | 20 +++-
  src/skippy/stage_execution_contract.h         |  8 +-
  src/skippy/stage_plan.cpp                     | 51 ++++++++---
  src/skippy/stage_realization.cpp              |  3 +-
- src/skippy/tests/embedding_input_regression.h | 86 +++++++++++++++++++
- src/skippy/tests/graph_build_inputs.cpp       | 58 +++++++++++++
+ src/skippy/tests/embedding_input_regression.h | 91 +++++++++++++++++++
+ src/skippy/tests/graph_build_inputs.cpp       | 58 ++++++++++++
  .../tests/renamed_multishard_planning.cpp     | 42 +++++----
- 9 files changed, 254 insertions(+), 48 deletions(-)
+ 9 files changed, 259 insertions(+), 48 deletions(-)
  create mode 100644 src/skippy/tests/embedding_input_regression.h
 
 diff --git a/src/llama-context.cpp b/src/llama-context.cpp
@@ -259,10 +259,10 @@ index a0938dcb8..148a2d4a2 100644
      std::vector<std::string> realized_export_identities;
 diff --git a/src/skippy/tests/embedding_input_regression.h b/src/skippy/tests/embedding_input_regression.h
 new file mode 100644
-index 000000000..5d3d4d52d
+index 000000000..803489be0
 --- /dev/null
 +++ b/src/skippy/tests/embedding_input_regression.h
-@@ -0,0 +1,86 @@
+@@ -0,0 +1,91 @@
 +#pragma once
 +
 +#include "llama.h"
@@ -304,10 +304,15 @@ index 000000000..5d3d4d52d
 +        return false;
 +    }
 +    const int32_t width = llama_model_n_embd_inp(model->model);
-+    llama_batch   image = llama_batch_init(2, width, 1);
++    // Like mtmd, an M-RoPE model takes one position per section for each row.
++    const llama_rope_type rope = llama_model_rope_type(model->model);
++    const int32_t n_pos = rope == LLAMA_ROPE_TYPE_MROPE || rope == LLAMA_ROPE_TYPE_IMROPE ? 4 : 1;
++    llama_batch   image = llama_batch_init(2 * n_pos, width, 1);
 +    image.n_tokens      = 2;
 +    for (int32_t row = 0; row < 2; ++row) {
-+        image.pos[row]       = row + 1;
++        for (int32_t section = 0; section < n_pos; ++section) {
++            image.pos[section * 2 + row] = row + 1;
++        }
 +        image.n_seq_id[row]  = 1;
 +        image.seq_id[row][0] = session->seq_id;
 +        image.logits[row]    = 1;

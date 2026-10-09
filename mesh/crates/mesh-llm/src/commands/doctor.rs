@@ -314,6 +314,51 @@ fn unix_time_ms() -> u128 {
         .unwrap_or_default()
 }
 
+/// Render what `--strategy` composed, so a slow split can be explained without
+/// reading the serving process's startup log.
+///
+/// Absent means no strategy was named, which is a different answer from "a
+/// strategy ran and composed nothing" — `balanced` reports itself explicitly,
+/// so silence here means nobody asked for one.
+fn serving_strategy_lines(strategy: &Value) -> Vec<String> {
+    let Some(name) = strategy["strategy"].as_str() else {
+        return Vec::new();
+    };
+    let mut lines = vec![String::new(), format!("Serving strategy: {name}")];
+    let axes = |key: &str| -> Vec<String> {
+        strategy[key]
+            .as_array()
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(|item| {
+                        let axis = item["axis"].as_str()?;
+                        let because = item["because"].as_str().unwrap_or_default();
+                        Some(match item["value"].as_str() {
+                            Some(value) => format!("  {axis} = {value}  ({because})"),
+                            None => format!("  {axis}  ({because})"),
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    let applied = axes("applied");
+    if applied.is_empty() {
+        lines.push("  composed nothing — every axis was already stated".to_string());
+    } else {
+        lines.extend(applied);
+    }
+    // Printed because an operator who set a flag by hand needs to see that it
+    // survived the strategy, not infer it from the absence of a line.
+    let declined = axes("declined");
+    if !declined.is_empty() {
+        lines.push("  deferred to your settings:".to_string());
+        lines.extend(declined);
+    }
+    lines
+}
+
 fn split_readiness_lines(report: &Value) -> Vec<String> {
     let model = report["model_ref"].as_str().unwrap_or("unknown");
     let verdict = report["verdict"].as_str().unwrap_or("unknown");
@@ -327,6 +372,8 @@ fn split_readiness_lines(report: &Value) -> Vec<String> {
         format!("Eligible participants: {participants}"),
         format!("Excluded peers: {exclusions}"),
     ];
+
+    lines.extend(serving_strategy_lines(&report["serving_strategy"]));
 
     if let Some(items) = report["blockers"].as_array() {
         let blockers = split_readiness_blocker_lines(items);
@@ -396,11 +443,50 @@ fn split_readiness_short_node_list(items: &[Value]) -> String {
 mod tests {
     use super::{
         SKIPPY_DIAGNOSTIC_ENDPOINTS, capture_skippy_native_log, select_runtime_instance,
-        split_readiness_lines, write_split_readiness_report,
+        serving_strategy_lines, split_readiness_lines, write_split_readiness_report,
     };
     use mesh_llm_host_runtime::command_support::runtime_instances::LocalInstanceSnapshot;
-    use serde_json::json;
+    use serde_json::{Value, json};
     use std::path::PathBuf;
+
+    #[test]
+    fn serving_strategy_lines_report_applied_and_deferred_axes() {
+        let rendered = serving_strategy_lines(&json!({
+            "strategy": "throughput",
+            "applied": [
+                {"axis": "defaults.throughput.last_stage_decode_batch", "value": "true",
+                 "because": "batching the final stage is what makes a balanced cut pay"}
+            ],
+            "declined": [
+                {"axis": "defaults.speculative.strategy", "because": "you set it explicitly"}
+            ]
+        }))
+        .join("\n");
+        assert!(rendered.contains("Serving strategy: throughput"));
+        assert!(rendered.contains("defaults.throughput.last_stage_decode_batch = true"));
+        // The deferred axis has to show: an operator who set a flag by hand
+        // needs to see it survived, not infer it from a missing line.
+        assert!(rendered.contains("deferred to your settings:"));
+        assert!(rendered.contains("defaults.speculative.strategy"));
+    }
+
+    #[test]
+    fn serving_strategy_lines_are_empty_when_no_strategy_was_named() {
+        // Distinct from a strategy that composed nothing: `balanced` reports
+        // itself, so silence means nobody asked for one.
+        assert!(serving_strategy_lines(&Value::Null).is_empty());
+        assert!(serving_strategy_lines(&json!({})).is_empty());
+    }
+
+    #[test]
+    fn serving_strategy_lines_say_so_when_nothing_was_composed() {
+        let rendered = serving_strategy_lines(&json!({
+            "strategy": "balanced", "applied": [], "declined": []
+        }))
+        .join("\n");
+        assert!(rendered.contains("Serving strategy: balanced"));
+        assert!(rendered.contains("composed nothing"));
+    }
 
     #[test]
     fn split_readiness_lines_show_waiting_guidance() {

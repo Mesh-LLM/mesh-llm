@@ -13,13 +13,13 @@ default = []
 embedded-runtime = []
 
 [dependencies]
-mesh-llm-sdk = { path = "../mesh-llm-sdk", default-features = false, features = ["client", "node", "console", "serving"] }
+mesh-llm-sdk = { path = "../mesh-llm-sdk", default-features = false, features = ["serving"] }
+reqwest = "0.13"
+serde_json.workspace = true
 thiserror = "2"
 tokio = { version = "1", features = ["rt-multi-thread"] }
 uniffi = "=0.32.0"
+uuid = { version = "1", features = ["v4"] }
 
 [build-dependencies]
 uniffi = { version = "=0.32.0", features = ["build"] }
-
-[dev-dependencies]
-mesh-llm-sdk = { path = "../mesh-llm-sdk", default-features = false, features = ["client", "node", "console"] }

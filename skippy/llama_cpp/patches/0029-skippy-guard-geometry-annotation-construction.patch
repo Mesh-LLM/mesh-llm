@@ -26,7 +26,7 @@ same build under capture derives one recipe per site.
  6 files changed, 181 insertions(+), 15 deletions(-)
 
 diff --git a/src/skippy/stage_program.cpp b/src/skippy/stage_program.cpp
-index 9d484103c..7b1a3ba03 100644
+index a51617bcf..ad6207fe0 100644
 --- a/src/skippy/stage_program.cpp
 +++ b/src/skippy/stage_program.cpp
 @@ -33,7 +33,16 @@
@@ -46,7 +46,7 @@ index 9d484103c..7b1a3ba03 100644
      replay_plan plan;
      std::unordered_set<std::string> live_operations;
      for (const auto & operation : operations) {
-@@ -875,4 +884,5 @@ void skippy_stage_program_note_arch_builder_call() { ++test_arch_builder_calls;
+@@ -880,4 +889,5 @@ void skippy_stage_program_note_arch_builder_call() { ++test_arch_builder_calls;
  void skippy_stage_program_note_selector_call() { ++test_selector_calls; }
  uint64_t skippy_stage_program_arch_builder_calls() { return test_arch_builder_calls; }
  uint64_t skippy_stage_program_selector_calls() { return test_selector_calls; }
