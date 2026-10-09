@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -83,6 +84,19 @@ def verify_runtime_source(runtime_input: Path, source_sha: str) -> None:
         raise ValueError("native runtime producer source differs from selected source")
 
 
+def verification_bash(*, windows: bool = os.name == "nt") -> str:
+    if not windows:
+        return "bash"
+    git = shutil.which("git")
+    if git is not None:
+        git_path = Path(git).resolve()
+        for root in (git_path.parent.parent, git_path.parent.parent.parent):
+            bash = root / "bin" / "bash.exe"
+            if bash.is_file():
+                return str(bash)
+    raise FileNotFoundError("Git Bash is required to verify Windows native runtime packages")
+
+
 def verify_discovery(binary: Path, runtime_dir: Path, runtime: dict[str, object]) -> None:
     with tempfile.TemporaryDirectory(prefix="skippy-ci-runtime-cache-") as cache:
         result = subprocess.run(
@@ -119,7 +133,8 @@ def compose(cli_input: Path, runtime_input: Path, output: Path, *, source_sha: s
         raise ValueError("standalone product requires exactly one runtime archive and sidecar")
     archive = archives[0]
     archive_arg = archive.relative_to(ROOT).as_posix()
-    subprocess.run(["bash", "scripts/verify-native-runtime-package.sh", archive_arg], cwd=ROOT, check=True)
+    bash = verification_bash()
+    subprocess.run([bash, "scripts/verify-native-runtime-package.sh", archive_arg], cwd=ROOT, check=True)
     output.mkdir(parents=True, exist_ok=False)
     runtime_root = output / "native-runtimes"
     runtime_root.mkdir()
@@ -130,7 +145,7 @@ def compose(cli_input: Path, runtime_input: Path, output: Path, *, source_sha: s
     manifest_path = manifests[0]
     runtime_dir = manifest_path.parent
     runtime_arg = runtime_dir.relative_to(ROOT).as_posix()
-    subprocess.run(["bash", "scripts/verify-native-runtime-package.sh", runtime_arg], cwd=ROOT, check=True)
+    subprocess.run([bash, "scripts/verify-native-runtime-package.sh", runtime_arg], cwd=ROOT, check=True)
     runtime_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     runtime = validate_pair(cli_contract, runtime_manifest, source_sha=source_sha, target=target, backend=backend)
     binary_name = "skippy.exe" if target.startswith("x86_64-pc-windows") else "skippy"

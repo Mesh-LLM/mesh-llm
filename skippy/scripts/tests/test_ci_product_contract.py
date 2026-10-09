@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -27,6 +28,22 @@ SOURCE = "a" * 40
 
 
 class StandaloneProductContractTests(unittest.TestCase):
+    def test_windows_verifier_selects_git_bash_instead_of_wsl(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "Git"
+            for subdir in ("cmd", "bin"):
+                (root / subdir).mkdir(parents=True)
+            git = root / "cmd" / "git.exe"
+            git.touch()
+            bash = root / "bin" / "bash.exe"
+            bash.touch()
+            with mock.patch.object(PRODUCT.shutil, "which", return_value=str(git)):
+                self.assertEqual(PRODUCT.verification_bash(windows=True), str(bash.resolve()))
+            bash.unlink()
+            with mock.patch.object(PRODUCT.shutil, "which", return_value=str(git)):
+                with self.assertRaisesRegex(FileNotFoundError, "Git Bash"):
+                    PRODUCT.verification_bash(windows=True)
+
     def test_cli_rechecks_executable_checksum_report_and_embedded_identity(self):
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)

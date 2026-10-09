@@ -840,6 +840,8 @@ boundary.
 - `restore-test-model`: the single implementation of model resolve, cache,
   download, and verify. Resolves generated suite manifests, uses exact
   digest-bearing cache keys, and stream-verifies size and SHA-256 before use.
+  Manifest-selected model paths may include safe nested directories; the
+  download step creates their parent before writing the partial file.
   `model_artifact_id` selects one artifact from a multi-artifact manifest,
   and reaches both the resolve and the verify call so verification cannot
   check a different file than the one downloaded.
