@@ -26,6 +26,8 @@ use mesh_llm_membership::announcements::{
 
 use mesh_llm_membership::transitions::TransitivePeerUpdate;
 
+mod admission;
+
 /// Minimum peer version we accept into the local mesh table and re-broadcast.
 ///
 /// Peers below this floor are rejected at ingest in both `add_peer`
@@ -137,48 +139,6 @@ pub(crate) fn emit_join_probe_fallback(last_error: Option<&anyhow::Error>) {
 }
 
 impl Node {
-    async fn validate_direct_announcement_before_payload_apply(
-        &self,
-        their_announcements: &[(EndpointAddr, PeerAnnouncement)],
-        context: AnnouncedPeerContext,
-    ) -> Result<()> {
-        let direct_announcement = their_announcements
-            .iter()
-            .find_map(|(addr, ann)| (addr.id == context.remote).then_some(ann))
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "gossip payload from {} omitted its direct announcement",
-                    context.remote.fmt_short()
-                )
-            })?;
-        if let Err(reason) = self
-            .validate_direct_peer_requirements(
-                context.remote,
-                direct_announcement,
-                context.negotiated_protocol_generation,
-            )
-            .await
-        {
-            self.record_mesh_requirement_rejection(
-                super::requirements::MeshRequirementRejectionSource::Gossip,
-                Some(context.remote),
-                reason.clone(),
-            )
-            .await;
-            self.state
-                .lock()
-                .await
-                .requirement_rejected_peers
-                .insert(context.remote);
-            anyhow::bail!(
-                "peer {} rejected by mesh requirements: {}",
-                context.remote.fmt_short(),
-                reason.code()
-            );
-        }
-        Ok(())
-    }
-
     async fn validate_and_capture_inbound_gossip(
         &self,
         protocol: ControlProtocol,
@@ -316,6 +276,10 @@ impl Node {
         };
         if !direct_peer_requirements_validated {
             self.validate_direct_announcement_before_payload_apply(their_announcements, context)
+                .await?;
+        } else {
+            // Requirement validation is not an ownership admission proof.
+            self.validate_direct_owner_before_payload_apply(their_announcements, context)
                 .await?;
         }
         let context = AnnouncedPeerContext {
