@@ -302,8 +302,13 @@ fn product_action_binds_verified_inputs_and_publishes_the_composer_receipt() {
             .and_then(Node::text),
         Some("composite")
     );
-    assert_eq!(steps(&document).len(), 1);
-    let step = &steps(&document)[0];
+    let [install, step] = steps(&document) else {
+        panic!("automation preparation and compose steps required")
+    };
+    assert_eq!(
+        install.get("uses").and_then(Node::text),
+        Some("./.github/actions/prepare-automation")
+    );
     assert_eq!(step.get("id").and_then(Node::text), Some("compose"));
     assert_eq!(step.get("shell").and_then(Node::text), Some("bash"));
     let bindings = step.get("env").unwrap();

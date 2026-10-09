@@ -10,11 +10,11 @@ fn prepare() -> Node {
         panic!("action steps")
     };
     let [install, step] = steps.as_slice() else {
-        panic!("just install and runtime preparation steps required")
+        panic!("automation preparation and runtime preparation steps required")
     };
     assert_eq!(
         install.get("uses").and_then(Node::text),
-        Some("taiki-e/install-action@3d23c1bbdafe696dfccad2664945a04f47d03dc3")
+        Some("./.github/actions/prepare-automation")
     );
     assert_eq!(step.get("id").and_then(Node::text), Some("prepare"));
     assert_eq!(step.get("shell").and_then(Node::text), Some("bash"));

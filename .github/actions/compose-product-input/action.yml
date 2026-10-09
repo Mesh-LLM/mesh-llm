@@ -56,9 +56,9 @@ outputs:
 runs:
   using: composite
   steps:
-    - name: Install just for automation
+    - name: Prepare automation
       if: runner.os != 'Linux' && env.MESH_LLM_AUTOMATION_BIN == ''
-      uses: taiki-e/install-action@3d23c1bbdafe696dfccad2664945a04f47d03dc3 # just
+      uses: ./.github/actions/prepare-automation
     - name: Verify and compose producer inputs
       id: compose
       shell: bash
