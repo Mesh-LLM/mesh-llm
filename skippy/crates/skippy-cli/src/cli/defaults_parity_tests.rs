@@ -1,5 +1,5 @@
 use super::*;
-use skippy_api::serving::OpenAiOptions;
+use skippy_api::serving::InferenceOptions;
 
 #[test]
 fn standalone_frontends_use_skippy_defaults_for_every_exposed_tuning_control() {
@@ -7,7 +7,7 @@ fn standalone_frontends_use_skippy_defaults_for_every_exposed_tuning_control() {
     let Command::Serve(args) = cli.command else {
         panic!("expected serve");
     };
-    let defaults = OpenAiOptions::direct_single_stage_defaults(
+    let defaults = InferenceOptions::direct_single_stage_defaults(
         "model".into(),
         skippy_config::local_serving::MAX_OUTPUT_TOKENS,
         skippy_config::local_serving::PARALLEL,

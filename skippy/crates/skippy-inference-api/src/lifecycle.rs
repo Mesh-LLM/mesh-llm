@@ -1,4 +1,4 @@
-//! Dependency-safe lifecycle observation contracts for OpenAI ingress.
+//! Dependency-safe lifecycle observation contracts for inference ingress.
 //!
 //! The frontend owns request correlation and classifies request boundaries;
 //! runtimes provide an observer that persists or forwards the metadata. These
@@ -10,9 +10,9 @@ use skippy_events::lifecycle::LifecycleState;
 use skippy_events::usage::TokenUsage;
 use uuid::Uuid;
 
-use crate::{common::Usage, errors::OpenAiError};
+use crate::{common::Usage, errors::InferenceError};
 
-/// The canonical request correlation header used by the OpenAI frontend.
+/// The canonical request correlation header used by the inference frontend.
 pub static REQUEST_ID_HEADER: HeaderName = HeaderName::from_static("x-request-id");
 
 /// A caller-supplied fresh, unpredictable per-request value. Presence alone
@@ -38,17 +38,17 @@ pub const CLIENT_NONCE_ORIGIN_FRONTEND: &str = "frontend";
 
 /// Metadata that identifies a frontend request without retaining its payload.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct OpenAiLifecycleContext {
+pub struct InferenceLifecycleContext {
     pub request_id: RequestId,
-    pub method: OpenAiRequestMethod,
-    pub route: OpenAiFrontendRoute,
+    pub method: InferenceRequestMethod,
+    pub route: InferenceFrontendRoute,
 }
 
-impl OpenAiLifecycleContext {
+impl InferenceLifecycleContext {
     pub const fn new(
         request_id: RequestId,
-        method: OpenAiRequestMethod,
-        route: OpenAiFrontendRoute,
+        method: InferenceRequestMethod,
+        route: InferenceFrontendRoute,
     ) -> Self {
         Self {
             request_id,
@@ -60,7 +60,7 @@ impl OpenAiLifecycleContext {
 
 /// A bounded HTTP method classification for lifecycle metadata.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum OpenAiRequestMethod {
+pub enum InferenceRequestMethod {
     Get,
     Post,
     Other,
@@ -68,7 +68,7 @@ pub enum OpenAiRequestMethod {
 
 /// A bounded frontend route classification for lifecycle metadata.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum OpenAiFrontendRoute {
+pub enum InferenceFrontendRoute {
     Health,
     Healthz,
     Readyz,
@@ -90,7 +90,7 @@ pub enum OpenAiFrontendRoute {
 
 /// The backend operation dispatched by a frontend route.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum OpenAiBackendOperation {
+pub enum InferenceBackendOperation {
     Models,
     Embeddings,
     Rerank,
@@ -111,7 +111,7 @@ pub enum OpenAiBackendOperation {
 
 /// A bounded classification for a request rejected before backend execution.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum OpenAiRejection {
+pub enum InferenceRejection {
     InvalidRequest,
     PayloadTooLarge,
     MethodNotAllowed,
@@ -121,7 +121,7 @@ pub enum OpenAiRejection {
 
 /// A bounded classification for a terminal backend failure.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum OpenAiFailure {
+pub enum InferenceFailure {
     Backend,
     Timeout,
     Internal,
@@ -133,14 +133,14 @@ pub enum OpenAiFailure {
 /// This intentionally cannot retain prompts, completions, model labels, or
 /// arbitrary backend metadata.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct OpenAiUsage {
+pub struct InferenceUsage {
     pub prompt_tokens: u32,
     pub cached_tokens: Option<u32>,
     pub completion_tokens: u32,
     pub total_tokens: u32,
 }
 
-impl From<&Usage> for OpenAiUsage {
+impl From<&Usage> for InferenceUsage {
     fn from(usage: &Usage) -> Self {
         Self {
             prompt_tokens: usage.prompt_tokens,
@@ -156,7 +156,7 @@ impl From<&Usage> for OpenAiUsage {
 
 /// A typed terminal outcome for non-streaming execution and stream completion.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum OpenAiTerminalResult {
+pub enum InferenceTerminalResult {
     Completed {
         status_code: u16,
     },
@@ -166,11 +166,11 @@ pub enum OpenAiTerminalResult {
     },
     Failed {
         status_code: u16,
-        failure: OpenAiFailure,
+        failure: InferenceFailure,
     },
 }
 
-impl OpenAiTerminalResult {
+impl InferenceTerminalResult {
     /// Return the shared lifecycle state corresponding to this terminal result.
     pub const fn lifecycle_state(self) -> LifecycleState {
         match self {
@@ -182,40 +182,40 @@ impl OpenAiTerminalResult {
 
 /// Metadata-only lifecycle events emitted by a frontend ingress owner.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub enum OpenAiLifecycleEvent {
+pub enum InferenceLifecycleEvent {
     Admitted {
-        context: OpenAiLifecycleContext,
+        context: InferenceLifecycleContext,
     },
     Rejected {
-        context: OpenAiLifecycleContext,
+        context: InferenceLifecycleContext,
         status_code: u16,
-        rejection: OpenAiRejection,
+        rejection: InferenceRejection,
     },
     BackendDispatched {
-        context: OpenAiLifecycleContext,
-        operation: OpenAiBackendOperation,
+        context: InferenceLifecycleContext,
+        operation: InferenceBackendOperation,
     },
     BackendTerminal {
-        context: OpenAiLifecycleContext,
-        operation: OpenAiBackendOperation,
-        result: OpenAiTerminalResult,
+        context: InferenceLifecycleContext,
+        operation: InferenceBackendOperation,
+        result: InferenceTerminalResult,
     },
     StreamFirstItem {
-        context: OpenAiLifecycleContext,
-        operation: OpenAiBackendOperation,
+        context: InferenceLifecycleContext,
+        operation: InferenceBackendOperation,
     },
     ExchangeIdentified {
-        context: OpenAiLifecycleContext,
+        context: InferenceLifecycleContext,
         exchange_id: String,
     },
     ResponseCompleted {
-        context: OpenAiLifecycleContext,
-        operation: OpenAiBackendOperation,
-        usage: OpenAiUsage,
+        context: InferenceLifecycleContext,
+        operation: InferenceBackendOperation,
+        usage: InferenceUsage,
     },
     NonStreamTerminal {
-        context: OpenAiLifecycleContext,
-        result: OpenAiTerminalResult,
+        context: InferenceLifecycleContext,
+        result: InferenceTerminalResult,
         /// The host-minted per-exchange id ([`ChatCompletionResponse::exchange_id`][crate::chat::ChatCompletionResponse::exchange_id]),
         /// when this terminal request was a chat/responses completion
         /// dispatched through the exchange-tracked path. `None` for every
@@ -224,17 +224,17 @@ pub enum OpenAiLifecycleEvent {
         exchange_id: Option<String>,
     },
     StreamTerminal {
-        context: OpenAiLifecycleContext,
-        result: OpenAiTerminalResult,
+        context: InferenceLifecycleContext,
+        result: InferenceTerminalResult,
     },
     StreamDropped {
-        context: OpenAiLifecycleContext,
+        context: InferenceLifecycleContext,
     },
     StreamCancelled {
-        context: OpenAiLifecycleContext,
+        context: InferenceLifecycleContext,
     },
     RequestCancelled {
-        context: OpenAiLifecycleContext,
+        context: InferenceLifecycleContext,
     },
 }
 
@@ -242,8 +242,8 @@ pub enum OpenAiLifecycleEvent {
 ///
 /// Implementations must remain non-blocking for request serving. The frontend
 /// deliberately does not prescribe persistence, capture, or runtime adapters.
-pub trait OpenAiLifecycleObserver: Send + Sync + 'static {
-    fn observe(&self, event: &OpenAiLifecycleEvent);
+pub trait InferenceLifecycleObserver: Send + Sync + 'static {
+    fn observe(&self, event: &InferenceLifecycleEvent);
 }
 
 /// Parse an inbound request identifier only when it is a valid UUID.
@@ -369,19 +369,19 @@ pub(crate) fn client_closed_request_status() -> StatusCode {
         .expect("the client-closed status is a valid HTTP status")
 }
 
-pub(crate) fn failure_for_status(status: StatusCode) -> OpenAiFailure {
+pub(crate) fn failure_for_status(status: StatusCode) -> InferenceFailure {
     match status {
-        StatusCode::GATEWAY_TIMEOUT => OpenAiFailure::Timeout,
-        StatusCode::INTERNAL_SERVER_ERROR => OpenAiFailure::Internal,
-        _ => OpenAiFailure::Backend,
+        StatusCode::GATEWAY_TIMEOUT => InferenceFailure::Timeout,
+        StatusCode::INTERNAL_SERVER_ERROR => InferenceFailure::Internal,
+        _ => InferenceFailure::Backend,
     }
 }
 
-pub(crate) fn terminal_result_for_error(error: &OpenAiError) -> OpenAiTerminalResult {
-    OpenAiTerminalResult::Failed {
+pub(crate) fn terminal_result_for_error(error: &InferenceError) -> InferenceTerminalResult {
+    InferenceTerminalResult::Failed {
         status_code: error.status().as_u16(),
         failure: if error.status().as_u16() == CLIENT_CLOSED_REQUEST_STATUS {
-            OpenAiFailure::Cancelled
+            InferenceFailure::Cancelled
         } else {
             failure_for_status(error.status())
         },
@@ -554,42 +554,42 @@ mod tests {
 
     #[test]
     fn lifecycle_events_keep_context_and_terminal_results_typed() {
-        let context = OpenAiLifecycleContext::new(
+        let context = InferenceLifecycleContext::new(
             parse_request_id(REQUEST_ID).expect("test UUID should parse"),
-            OpenAiRequestMethod::Post,
-            OpenAiFrontendRoute::ChatCompletions,
+            InferenceRequestMethod::Post,
+            InferenceFrontendRoute::ChatCompletions,
         );
-        let event = OpenAiLifecycleEvent::NonStreamTerminal {
+        let event = InferenceLifecycleEvent::NonStreamTerminal {
             context: context.clone(),
-            result: OpenAiTerminalResult::Failed {
+            result: InferenceTerminalResult::Failed {
                 status_code: 504,
-                failure: OpenAiFailure::Timeout,
+                failure: InferenceFailure::Timeout,
             },
             exchange_id: None,
         };
 
         assert!(matches!(
             event,
-            OpenAiLifecycleEvent::NonStreamTerminal {
-                context: OpenAiLifecycleContext {
-                    route: OpenAiFrontendRoute::ChatCompletions,
+            InferenceLifecycleEvent::NonStreamTerminal {
+                context: InferenceLifecycleContext {
+                    route: InferenceFrontendRoute::ChatCompletions,
                     ..
                 },
-                result: OpenAiTerminalResult::Failed {
+                result: InferenceTerminalResult::Failed {
                     status_code: 504,
-                    failure: OpenAiFailure::Timeout,
+                    failure: InferenceFailure::Timeout,
                 },
                 ..
             }
         ));
         assert_eq!(
-            OpenAiTerminalResult::Completed { status_code: 200 }.lifecycle_state(),
+            InferenceTerminalResult::Completed { status_code: 200 }.lifecycle_state(),
             LifecycleState::Completed
         );
         assert_eq!(
-            OpenAiTerminalResult::Failed {
+            InferenceTerminalResult::Failed {
                 status_code: 502,
-                failure: OpenAiFailure::Backend,
+                failure: InferenceFailure::Backend,
             }
             .lifecycle_state(),
             LifecycleState::Failed
@@ -599,11 +599,11 @@ mod tests {
 
     #[test]
     fn usage_projection_contains_only_numeric_counts_and_cached_tokens() {
-        let usage = OpenAiUsage::from(&Usage::new(17, 4).with_cached_tokens(11));
+        let usage = InferenceUsage::from(&Usage::new(17, 4).with_cached_tokens(11));
 
         assert_eq!(
             usage,
-            OpenAiUsage {
+            InferenceUsage {
                 prompt_tokens: 17,
                 cached_tokens: Some(11),
                 completion_tokens: 4,
@@ -614,17 +614,17 @@ mod tests {
 
     #[test]
     fn usage_projection_preserves_absent_cache_metadata() {
-        let usage = OpenAiUsage::from(&Usage::new(17, 4));
+        let usage = InferenceUsage::from(&Usage::new(17, 4));
 
         assert_eq!(usage.cached_tokens, None);
     }
 
     #[test]
     fn observer_receives_metadata_only_stream_drop_and_cancel_events() {
-        struct RecordingObserver(Mutex<Vec<OpenAiLifecycleEvent>>);
+        struct RecordingObserver(Mutex<Vec<InferenceLifecycleEvent>>);
 
-        impl OpenAiLifecycleObserver for RecordingObserver {
-            fn observe(&self, event: &OpenAiLifecycleEvent) {
+        impl InferenceLifecycleObserver for RecordingObserver {
+            fn observe(&self, event: &InferenceLifecycleEvent) {
                 self.0
                     .lock()
                     .expect("test observer lock poisoned")
@@ -632,16 +632,16 @@ mod tests {
             }
         }
 
-        let context = OpenAiLifecycleContext::new(
+        let context = InferenceLifecycleContext::new(
             parse_request_id(REQUEST_ID).expect("test UUID should parse"),
-            OpenAiRequestMethod::Post,
-            OpenAiFrontendRoute::Responses,
+            InferenceRequestMethod::Post,
+            InferenceFrontendRoute::Responses,
         );
         let observer = RecordingObserver(Mutex::new(Vec::new()));
-        observer.observe(&OpenAiLifecycleEvent::StreamDropped {
+        observer.observe(&InferenceLifecycleEvent::StreamDropped {
             context: context.clone(),
         });
-        observer.observe(&OpenAiLifecycleEvent::StreamCancelled { context });
+        observer.observe(&InferenceLifecycleEvent::StreamCancelled { context });
 
         assert!(matches!(
             observer
@@ -650,8 +650,8 @@ mod tests {
                 .expect("test observer lock poisoned")
                 .as_slice(),
             [
-                OpenAiLifecycleEvent::StreamDropped { .. },
-                OpenAiLifecycleEvent::StreamCancelled { .. }
+                InferenceLifecycleEvent::StreamDropped { .. },
+                InferenceLifecycleEvent::StreamCancelled { .. }
             ]
         ));
     }

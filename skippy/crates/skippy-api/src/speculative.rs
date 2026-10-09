@@ -1,11 +1,11 @@
 //! Automatic draft discovery and conservative pairing shared by serving products.
-use crate::serving::OpenAiOptions;
+use crate::serving::InferenceOptions;
 use skippy_model_artifact::gguf::scan_gguf_compact_meta;
 use std::path::{Path, PathBuf};
 
 /// Apply automatic draft selection only when the caller has no explicit plan.
 /// An incompatible sibling disables speculation, matching the warn-disable policy.
-pub fn apply_auto_speculation(options: &mut OpenAiOptions, model_path: &Path) {
+pub fn apply_auto_speculation(options: &mut InferenceOptions, model_path: &Path) {
     let Some(draft) = discover_sibling_draft_model(model_path) else {
         return;
     };
@@ -112,7 +112,7 @@ mod tests {
     fn automatic_pairing_preserves_native_mtp_without_a_draft_and_disables_unknown_pairings() {
         let directory = tempfile::tempdir().unwrap();
         let target = directory.path().join("target.gguf");
-        let mut options = OpenAiOptions::direct_single_stage_defaults(
+        let mut options = InferenceOptions::direct_single_stage_defaults(
             "model".into(),
             skippy_config::local_serving::MAX_OUTPUT_TOKENS,
             4,

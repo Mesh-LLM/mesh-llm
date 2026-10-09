@@ -1,6 +1,6 @@
 //! Admission observes the fully prepared typed request immediately before generation.
 use super::*;
-use skippy_inference_api::OpenAiHookPolicy;
+use skippy_inference_api::InferenceHookPolicy;
 use std::sync::{Arc, Mutex};
 
 #[derive(Default)]
@@ -11,20 +11,20 @@ struct PreparedExchangeState {
 
 #[derive(Clone)]
 pub(super) struct PreparedExchangeAdmission {
-    hooks: Option<Arc<dyn OpenAiHookPolicy>>,
+    hooks: Option<Arc<dyn InferenceHookPolicy>>,
     exchange_id: String,
     state: Arc<Mutex<PreparedExchangeState>>,
 }
 
 impl PreparedExchangeAdmission {
-    pub(super) fn new(hooks: Option<Arc<dyn OpenAiHookPolicy>>, exchange_id: String) -> Self {
+    pub(super) fn new(hooks: Option<Arc<dyn InferenceHookPolicy>>, exchange_id: String) -> Self {
         Self {
             hooks,
             exchange_id,
             state: Arc::new(Mutex::new(PreparedExchangeState::default())),
         }
     }
-    pub(super) async fn admit(&self, request: &ChatCompletionRequest) -> OpenAiResult<()> {
+    pub(super) async fn admit(&self, request: &ChatCompletionRequest) -> InferenceResult<()> {
         if let Some(hooks) = &self.hooks {
             if hooks.observes_dispatched_request() {
                 self.state.lock().unwrap().request = Some(request.clone());
@@ -60,8 +60,8 @@ impl StageOpenAiBackend {
     pub(super) async fn admit_prepared_completion(
         &self,
         request: &CompletionRequest,
-        _context: &OpenAiRequestContext,
-    ) -> OpenAiResult<Option<super::completion_exchange::CompletionTerminalGuard>> {
+        _context: &InferenceRequestContext,
+    ) -> InferenceResult<Option<super::completion_exchange::CompletionTerminalGuard>> {
         let Some(hooks) = self
             .hook_policy
             .as_ref()
@@ -94,7 +94,7 @@ mod retention_tests {
         calls: AtomicUsize,
     }
     #[async_trait]
-    impl OpenAiHookPolicy for AdmissionPolicy {
+    impl InferenceHookPolicy for AdmissionPolicy {
         fn observes_dispatched_request(&self) -> bool {
             self.observe
         }
@@ -102,7 +102,7 @@ mod retention_tests {
             &self,
             _request: &ChatCompletionRequest,
             _route: &ChatExchangeRoute,
-        ) -> OpenAiResult<()> {
+        ) -> InferenceResult<()> {
             self.calls.fetch_add(1, Ordering::SeqCst);
             Ok(())
         }

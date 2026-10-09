@@ -1,5 +1,5 @@
 //! Standalone HTTP serving through the same lifecycle used by embedding applications.
-use super::{ModelLoadRequest, ModelOpenEvents, OpenAiOptions};
+use super::{InferenceOptions, ModelLoadRequest, ModelOpenEvents};
 use anyhow::{Result, bail};
 use skippy_protocol::{StageConfig, StageTopology};
 use skippy_serving::{EmbeddedRuntimeOptions, SpeculativeDecodeConfig};
@@ -52,13 +52,13 @@ pub struct LocalOpenAiOptions {
     pub metrics_otlp_grpc: Option<String>,
     pub telemetry_queue_capacity: usize,
     pub telemetry_level: skippy_serving::telemetry::TelemetryLevel,
-    pub openai_guardrails: skippy_serving::frontend::OpenAiGuardrailsMode,
+    pub openai_guardrails: skippy_serving::frontend::InferenceGuardrailsMode,
     pub model_open_events: Option<Arc<skippy_runtime::ModelOpenEventQueue>>,
     pub disk_cache: Option<LocalDiskCacheOptions>,
 }
 
 impl LocalOpenAiOptions {
-    pub fn resolved_openai_options(&self) -> Result<OpenAiOptions> {
+    pub fn resolved_openai_options(&self) -> Result<InferenceOptions> {
         self.tuning.validate()?;
         skippy_config::validate_config(&self.config, self.topology.as_ref())?;
         if self.config.downstream.is_some() {
@@ -85,7 +85,7 @@ impl LocalOpenAiOptions {
         if let Some(speculative) = self.speculative.as_ref() {
             speculative.validate()?;
         }
-        let mut openai = OpenAiOptions::direct_single_stage_defaults(
+        let mut openai = InferenceOptions::direct_single_stage_defaults(
             self.model_id
                 .clone()
                 .unwrap_or_else(|| self.config.model_id.clone()),
@@ -192,9 +192,11 @@ impl LocalOpenAiOptions {
                 kv_observer: None,
                 hook_policy: None,
                 guardrails: self.tuning.guardrails.or_else(|| {
-                    Some(skippy_serving::OpenAiGuardrailsConfig::for_standalone_mode(
-                        self.openai_guardrails,
-                    ))
+                    Some(
+                        skippy_serving::InferenceGuardrailsConfig::for_standalone_mode(
+                            self.openai_guardrails,
+                        ),
+                    )
                 }),
                 guardrail_telemetry: None,
                 downstream_wire_condition: skippy_serving::binary_transport::WireCondition::new(
@@ -246,7 +248,7 @@ mod tests {
             metrics_otlp_grpc: None,
             telemetry_queue_capacity: 0,
             telemetry_level: skippy_serving::telemetry::TelemetryLevel::Off,
-            openai_guardrails: skippy_serving::frontend::OpenAiGuardrailsMode::Disabled,
+            openai_guardrails: skippy_serving::frontend::InferenceGuardrailsMode::Disabled,
             model_open_events: None,
             disk_cache: None,
         }

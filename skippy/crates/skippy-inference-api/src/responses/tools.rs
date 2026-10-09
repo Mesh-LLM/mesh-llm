@@ -1,12 +1,12 @@
 //! Responses function tools are flat on the wire; shared chat tools are nested.
-use crate::OpenAiError;
+use crate::InferenceError;
 use serde_json::{Map, Value};
 
-pub(super) fn normalize(request: &mut Map<String, Value>) -> Result<bool, OpenAiError> {
+pub(super) fn normalize(request: &mut Map<String, Value>) -> Result<bool, InferenceError> {
     let mut changed = false;
     if let Some(tools) = request.get_mut("tools") {
         let tools = tools.as_array_mut().ok_or_else(|| {
-            OpenAiError::invalid_request("tools must be an array").with_param("tools")
+            InferenceError::invalid_request("tools must be an array").with_param("tools")
         })?;
         for tool in tools {
             changed |= normalize_function(tool, "tools")?;
@@ -20,20 +20,20 @@ pub(super) fn normalize(request: &mut Map<String, Value>) -> Result<bool, OpenAi
     Ok(changed)
 }
 
-fn normalize_function(value: &mut Value, param: &str) -> Result<bool, OpenAiError> {
+fn normalize_function(value: &mut Value, param: &str) -> Result<bool, InferenceError> {
     let object = value.as_object_mut().ok_or_else(|| {
-        OpenAiError::invalid_request("function tool must be an object").with_param(param)
+        InferenceError::invalid_request("function tool must be an object").with_param(param)
     })?;
     if object.get("type").and_then(Value::as_str) != Some("function") {
         return Err(
-            OpenAiError::unsupported("only function tools are supported").with_param(param),
+            InferenceError::unsupported("only function tools are supported").with_param(param),
         );
     }
     // Retain the already-supported nested Chat shape for existing clients.
     if object.contains_key("function") {
         if object.contains_key("name") {
             return Err(
-                OpenAiError::invalid_request("ambiguous flat and nested function tool")
+                InferenceError::invalid_request("ambiguous flat and nested function tool")
                     .with_param(param),
             );
         }
@@ -45,7 +45,7 @@ fn normalize_function(value: &mut Value, param: &str) -> Result<bool, OpenAiErro
         Some(name) if !name.is_empty() => name.to_owned(),
         _ => {
             return Err(
-                OpenAiError::invalid_request(missing_function_name(param)).with_param(param)
+                InferenceError::invalid_request(missing_function_name(param)).with_param(param),
             );
         }
     };

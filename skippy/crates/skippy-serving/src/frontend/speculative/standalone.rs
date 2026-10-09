@@ -1,4 +1,4 @@
-use skippy_inference_api::{OpenAiError, OpenAiResult};
+use skippy_inference_api::{InferenceError, InferenceResult};
 
 use super::{HistoryNgramProposer, NgramProposerKind, SpeculativeDecodeConfig};
 
@@ -25,7 +25,7 @@ pub(in crate::frontend) fn propose_configured_ngram_tokens(
     history_proposer: &mut Option<HistoryNgramProposer>,
     committed_history: &[i32],
     proposal_limit: usize,
-) -> OpenAiResult<ConfiguredNgramProposal> {
+) -> InferenceResult<ConfiguredNgramProposal> {
     let Some(ngram) = config.ngram.as_ref() else {
         return Ok(ConfiguredNgramProposal {
             tokens: Vec::new(),
@@ -36,7 +36,9 @@ pub(in crate::frontend) fn propose_configured_ngram_tokens(
     let tokens = match ngram.kind {
         NgramProposerKind::Cache | NgramProposerKind::Suffix => history_proposer
             .as_mut()
-            .ok_or_else(|| OpenAiError::backend("configured history N-gram proposer is missing"))?
+            .ok_or_else(|| {
+                InferenceError::backend("configured history N-gram proposer is missing")
+            })?
             .propose(committed_history, &[], proposal_limit)?,
     };
     Ok(ConfiguredNgramProposal {
