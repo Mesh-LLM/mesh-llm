@@ -222,6 +222,9 @@ fn execute_template(
 }
 #[test]
 fn rendered_template_uses_sealed_sdk_and_preserves_agent_failure_without_runtime_patching() {
+    if !zsh_available() {
+        return;
+    }
     let fixture = Fixture::new();
     let script = render_template(&fixture, "https://host/simple");
     let (module, events) = template_environment(&fixture);
@@ -244,6 +247,9 @@ fn rendered_template_uses_sealed_sdk_and_preserves_agent_failure_without_runtime
 }
 #[test]
 fn rendered_template_success_finishes_gather_and_evaluator_without_sdk_mutation() {
+    if !zsh_available() {
+        return;
+    }
     let fixture = Fixture::new();
     let script = render_template(&fixture, "https://host/simple");
     let (module, events) = template_environment(&fixture);
@@ -267,6 +273,9 @@ fn rendered_template_success_finishes_gather_and_evaluator_without_sdk_mutation(
 }
 #[test]
 fn rendered_template_generator_refusal_prevents_agent_and_evaluator() {
+    if !zsh_available() {
+        return;
+    }
     let fixture = Fixture::new();
     let script = render_template(&fixture, "https://host/simple");
     let (module, events) = template_environment(&fixture);
@@ -325,4 +334,11 @@ fn actual_safe_unprepared_dry_run_renders_without_retired_environment_fields() {
     assert!(rendered.contains("DEPLOYMENT_TYPE=docker\n"));
     assert!(rendered.contains("--dockerhub_username"));
     assert!(!fixture.0.join("cache with spaces/swe-sdk-v1").exists());
+}
+
+fn zsh_available() -> bool {
+    Command::new("zsh")
+        .args(["-f", "-c", "true"])
+        .output()
+        .is_ok_and(|output| output.status.success())
 }
