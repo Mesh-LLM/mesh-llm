@@ -7,6 +7,8 @@ import subprocess
 import sys
 import unittest
 
+import yaml
+
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOWS = ROOT / ".github" / "workflows"
@@ -739,6 +741,30 @@ class CiLaneWorkflowTests(unittest.TestCase):
                 workflow = self.workflow(name)
                 self.assertIn("use_depot:", workflow)
                 self.assertIn("${{ inputs.use_depot }}", workflow)
+
+    def test_windows_capable_jobs_declare_a_shell_for_every_run_step(self) -> None:
+        # A job whose runner can be Windows must not fall back to the platform
+        # default shell (PowerShell): bash-only `run` bodies otherwise fail at
+        # parse time on Windows only, which a Linux-side check cannot see.
+        problems: list[str] = []
+        for path in sorted(WORKFLOWS.glob("*.yml")):
+            document = yaml.safe_load(path.read_text(encoding="utf-8"))
+            if not isinstance(document, dict):
+                continue
+            for job, body in (document.get("jobs") or {}).items():
+                if not isinstance(body, dict):
+                    continue
+                if "windows" not in str(body.get("runs-on") or "").lower():
+                    continue
+                default_shell = ((body.get("defaults") or {}).get("run") or {}).get("shell")
+                if default_shell:
+                    continue
+                for step in body.get("steps") or []:
+                    if not isinstance(step, dict) or "run" not in step:
+                        continue
+                    if "shell" not in step:
+                        problems.append(f"{path.name}:{job}:{step.get('name', '<unnamed>')}")
+        self.assertEqual([], problems, "run steps rely on the Windows default shell")
 
     def test_superseded_pr_runs_cancel_by_pull_request_identity(self) -> None:
         for lane in ("quality", "website", "linux", "macos", "windows"):

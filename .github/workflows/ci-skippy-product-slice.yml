@@ -754,6 +754,7 @@ jobs:
             --evidence skippy-moe.json
       - name: Execute composed Skippy KV cache CPU qualification
         if: ${{ steps.availability.outputs.state == 'available' }}
+        shell: bash
         env:
           DENSE_PATH: ${{ steps.dense_model.outputs.model_path }}
           DENSE_SHA256: ${{ steps.dense_model.outputs.model_sha256 }}
