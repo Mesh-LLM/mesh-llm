@@ -426,7 +426,7 @@ test('live chat uploads an attachment before sending the parity request', async 
   await expect(page.getByTestId('chat-send')).toBeVisible()
 
   await page.locator('input[type="file"]').setInputFiles(CLIP_FIXTURE_PATH)
-  await expect(page.getByText('1 attachment ready')).toBeVisible()
+  await expect(page.getByTestId('composer-attachments')).toContainText('clip.mp3')
 
   await page.locator('#prompt-composer').fill('Keep this prompt')
   await page.getByTestId('chat-send').click()
@@ -469,7 +469,7 @@ test('attachment upload failure keeps the prompt and skips the chat request', as
   await expect(page.getByRole('heading', { name: 'Chat', exact: true })).toBeVisible()
 
   await page.locator('input[type="file"]').setInputFiles(CLIP_FIXTURE_PATH)
-  await expect(page.getByText('1 attachment ready')).toBeVisible()
+  await expect(page.getByTestId('composer-attachments')).toContainText('clip.mp3')
 
   await page.locator('#prompt-composer').fill('Keep this prompt')
   await page.getByTestId('chat-send').click()

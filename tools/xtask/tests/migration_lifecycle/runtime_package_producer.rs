@@ -127,6 +127,12 @@ fn package_gpu_tools_use_shared_cuda_and_each_configured_rocm_arch_without_compi
         if backend == "cuda" {
             let index = args.iter().position(|v| *v == "-cudart").unwrap();
             assert_eq!(args[index + 1], "shared");
+            // Without configured architectures, nvcc keeps its own default.
+            assert!(
+                !args
+                    .iter()
+                    .any(|v| v.starts_with("--generate-code") || v.starts_with("-arch"))
+            );
         } else {
             assert_eq!(
                 args.iter()
@@ -145,6 +151,47 @@ fn package_gpu_tools_use_shared_cuda_and_each_configured_rocm_arch_without_compi
                 .path()
                 .join("stage/tools/mesh-llm-gpu-benchmark")
                 .is_file()
+        );
+        fixture.directory.close().unwrap();
+    }
+}
+#[test]
+fn package_cuda_benchmark_tool_uses_configured_or_blackwell_architectures() {
+    let functions = owner(
+        "gpu_benchmark_tool_path() {",
+        "build_model_package_tool() {",
+    );
+    let cases = [
+        (
+            "cuda",
+            "LLAMA_STAGE_CUDA_ARCHITECTURES='87;120a-real, 75-virtual'\n",
+            vec![
+                "--generate-code=arch=compute_87,code=[compute_87,sm_87]",
+                "--generate-code=arch=compute_120a,code=sm_120a",
+                "--generate-code=arch=compute_75,code=compute_75",
+            ],
+        ),
+        (
+            "cuda-blackwell",
+            "",
+            vec!["--generate-code=arch=compute_120,code=[compute_120,sm_120]"],
+        ),
+    ];
+    for (backend, architectures, expected) in cases {
+        let fixture = Fixture::new();
+        fixture.tool("compiler", "printf '%s\\n' \"$@\" > \"$TEST_ROOT/arguments\"\nprevious=''\nfor argument in \"$@\"; do\n if [[ \"$previous\" == -o ]]; then output=\"$argument\"; fi\n previous=\"$argument\"\ndone\n: > \"$output\"");
+        let body = format!(
+            "{functions}\nBACKEND={backend}\nruntime_os=linux\nstage_dir=\"$TEST_ROOT/stage\"\nREPO_ROOT=\"$TEST_ROOT/inert-source\"\ntool_paths=()\n{architectures}cuda_selected_compiler() {{ printf '%s\\n' \"$TEST_ROOT/bin/compiler\"; }}\nbuild_gpu_benchmark_tool\n"
+        );
+        let (ok, _, error) = fixture.run(&body, &[]);
+        assert!(ok, "{error}");
+        let arguments = fs::read_to_string(fixture.path().join("arguments")).unwrap();
+        assert_eq!(
+            arguments
+                .lines()
+                .filter(|v| v.starts_with("--generate-code"))
+                .collect::<Vec<_>>(),
+            expected
         );
         fixture.directory.close().unwrap();
     }

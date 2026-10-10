@@ -168,7 +168,9 @@ describe('ChatPage', () => {
     const pdf = new File(['pdf-bytes'], 'scan.pdf', { type: 'application/pdf' })
 
     await user.upload(picker, [image, pdf])
-    expect(screen.getByText('2 attachments ready')).toBeInTheDocument()
+    const pendingAttachments = screen.getByTestId('composer-attachments')
+    expect(within(pendingAttachments).getByText('cat.png')).toBeInTheDocument()
+    expect(within(pendingAttachments).getByText('scan.pdf')).toBeInTheDocument()
 
     await user.type(screen.getByLabelText('Prompt'), 'Summarize these')
     await user.click(screen.getByRole('button', { name: 'Send' }))
@@ -187,6 +189,52 @@ describe('ChatPage', () => {
     expect(attachmentPreprocessingMock.describeImageForPrompt).toHaveBeenCalledTimes(1)
     expect(attachmentPreprocessingMock.extractPdfTextFromFile).toHaveBeenCalledWith(pdf)
     expect(attachmentPreprocessingMock.describeScannedPdf).toHaveBeenCalledWith(pdf, expect.any(Function))
+  })
+
+  it('removes a pending attachment from the composer chips before sending', async () => {
+    const user = userEvent.setup()
+
+    renderChatPage({ mode: 'live' })
+
+    const picker = document.querySelector('input[type="file"]') as HTMLInputElement
+    const image = new File(['image-bytes'], 'cat.png', { type: 'image/png' })
+    const pdf = new File(['pdf-bytes'], 'scan.pdf', { type: 'application/pdf' })
+
+    await user.upload(picker, [image, pdf])
+    await user.click(screen.getByRole('button', { name: 'Remove attachment scan.pdf' }))
+
+    const pendingAttachments = screen.getByTestId('composer-attachments')
+    expect(within(pendingAttachments).getByText('cat.png')).toBeInTheDocument()
+    expect(within(pendingAttachments).queryByText('scan.pdf')).not.toBeInTheDocument()
+
+    await user.type(screen.getByLabelText('Prompt'), 'Summarize this')
+    await user.click(screen.getByRole('button', { name: 'Send' }))
+
+    await waitFor(() => {
+      expect(chatMock.sendCalls).toHaveLength(1)
+    })
+    const content = chatMock.sendCalls[0]?.content
+    expect(typeof content).not.toBe('string')
+    expect((content as MultimodalContent).content).toEqual([
+      { type: 'text', content: 'Summarize this' },
+      { type: 'text', content: '[Image description: A tabby cat]' }
+    ])
+    expect(attachmentPreprocessingMock.describeScannedPdf).not.toHaveBeenCalled()
+  })
+
+  it('removing all pending attachments disables sending an empty prompt', async () => {
+    const user = userEvent.setup()
+
+    renderChatPage({ mode: 'live' })
+
+    const picker = document.querySelector('input[type="file"]') as HTMLInputElement
+    await user.upload(picker, new File(['image-bytes'], 'cat.png', { type: 'image/png' }))
+    expect(screen.getByRole('button', { name: 'Send' })).toBeEnabled()
+
+    await user.click(screen.getByRole('button', { name: 'Remove attachment cat.png' }))
+
+    expect(screen.queryByTestId('composer-attachments')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled()
   })
 
   it('shows submitted attachment chips on the user message and opens an image preview', async () => {

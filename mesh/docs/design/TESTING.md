@@ -352,6 +352,11 @@ pnpm run build
 pnpm run test:e2e
 ```
 
+Run the E2E suite with no local `mesh-llm` process serving a console: the Vite
+dev server proxies any `/api` call a spec does not route-mock to the local
+console (default `127.0.0.1:3131`), so a live node leaks real mesh state into
+those specs and fails the logs-area ones en masse.
+
 The browser suite must use the embedded console routes and exercise the real
 typed logging client paths. Its deterministic contract fixture covers an active
 request reaching a terminal outcome, immediate details, stream filtering,
