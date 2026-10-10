@@ -1,5 +1,6 @@
 use crate::binary_transport::stage_execution::binary_message_request_id;
 use crate::binary_transport::stage_execution::estimated_kv_tokens_after;
+use crate::kv_integration::StagePrefixCachePayload;
 use crate::telemetry::Telemetry;
 use crate::telemetry::lifecycle_attrs;
 use serde_json::json;
@@ -170,11 +171,26 @@ impl BinaryRequestSummary {
         self.reply_stats.merge(observation.reply_stats);
     }
 
-    pub(super) fn emit(&self, telemetry: &Telemetry, config: &StageConfig, session_id: u64) {
+    pub(super) fn emit(
+        &self,
+        telemetry: &Telemetry,
+        config: &StageConfig,
+        session_id: u64,
+        payload: Option<StagePrefixCachePayload>,
+    ) {
         if self.message_count == 0 || !telemetry.is_enabled() {
             return;
         }
         let mut attrs = lifecycle_attrs(config);
+        if let Some(payload) = payload {
+            // Sum this count by payload across request summaries to obtain the
+            // selected-payload distribution alongside lookup hit/miss totals.
+            attrs.insert(
+                "skippy.kv.payload".to_string(),
+                json!(format!("{payload:?}")),
+            );
+            attrs.insert(metric::KV_SELECTED_PAYLOADS.to_string(), json!(1));
+        }
         attrs.insert(attr::SESSION_ID.to_string(), json!(session_id.to_string()));
         if let Some(request_id) = self.request_id.as_ref() {
             attrs.insert(attr::REQUEST_ID.to_string(), json!(request_id));
@@ -458,10 +474,39 @@ impl BinaryRequestSummary {
 mod tests {
     use super::{BinaryMessageObservation, BinaryRequestSummary};
     use crate::binary_transport::stage_execution::prefix_cache_test_config;
+    use crate::kv_integration::StagePrefixCachePayload;
+    use crate::telemetry::{Telemetry, TelemetryLevel};
+    use serde_json::json;
     use skippy_protocol::StageConfig;
     use skippy_protocol::binary::{
         StageReplyStats, StageStateHeader, StageWireMessage, WireMessageKind,
     };
+
+    #[test]
+    fn request_summary_exposes_selected_payload_and_lookup_totals_together() {
+        let config = prefix_cache_test_config();
+        let (telemetry, events) = Telemetry::captured(config.clone(), TelemetryLevel::Summary);
+        let summary = BinaryRequestSummary {
+            message_count: 1,
+            reply_stats: StageReplyStats {
+                kv_lookup_hits: 2,
+                kv_lookup_misses: 1,
+                ..StageReplyStats::default()
+            },
+            ..BinaryRequestSummary::default()
+        };
+        summary.emit(
+            &telemetry,
+            &config,
+            3,
+            Some(StagePrefixCachePayload::ResidentKv),
+        );
+        let event = events.try_recv().expect("request summary event");
+        assert_eq!(event.attributes["skippy.kv.payload"], json!("ResidentKv"));
+        assert_eq!(event.attributes["skippy.kv.selected_payloads"], json!(1));
+        assert_eq!(event.attributes["skippy.kv.lookup_hits"], json!(2));
+        assert_eq!(event.attributes["skippy.kv.lookup_misses"], json!(1));
+    }
 
     #[test]
     fn request_summary_tracks_verify_window_compute_ms() {

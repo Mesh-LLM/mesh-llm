@@ -16,7 +16,7 @@ use skippy_cache::{
     SparseCheckpointPolicy, UnifiedRadixCache,
 };
 use skippy_metrics::attr as attr_key;
-use skippy_runtime::{ActivationFrame, RuntimeKvPageDesc};
+use skippy_runtime::{ActivationFrame, MemoryCacheCapabilities, ModelStateKind, RuntimeKvPageDesc};
 
 use crate::kv_proto::{
     Checksum, ChecksumAlgorithm, KvPageManifest, MANIFEST_SCHEMA_VERSION, PageIdentity, PageState,
@@ -24,8 +24,10 @@ use crate::kv_proto::{
 
 mod activation;
 mod cache_affinity;
+mod cache_payload;
 mod config;
 mod exact_state;
+mod snapshot_validation;
 pub(crate) use exact_state::CaptureAdmission;
 mod identity;
 mod l2_serving;
@@ -157,6 +159,12 @@ pub struct KvStageIntegration {
     /// KV here even when a durable tier is configured, so enabling disk does
     /// not replace the fast warm path with serialized state import.
     pub(crate) payload: StagePrefixCachePayload,
+    pub(crate) payload_selection_reason: &'static str,
+    pub(crate) payload_fallbacks: u64,
+    pub(crate) graph_loaded_state_mismatches: u64,
+    pub(crate) admitted_graph_state: String,
+    pub(crate) loaded_state_kind: Option<ModelStateKind>,
+    pub(crate) loaded_memory_cache: Option<MemoryCacheCapabilities>,
     /// Exportable representation written to and restored from L3. This is
     /// separate from `payload` because resident KV is native and borrow-only.
     pub(crate) durable_payload: Option<StagePrefixCachePayload>,
@@ -173,6 +181,7 @@ pub struct KvStageIntegration {
     pub(crate) exact_max_entries: usize,
     pub(crate) exact_byte_limits: ExactStateByteLimits,
     pub(crate) exact_state_record_worker: Arc<ExactStateRecordWorker>,
+    pub(crate) snapshot_export_failures: Arc<AtomicU64>,
     pub(crate) exact_state_records_queued: Arc<AtomicU64>,
     pub(crate) exact_state_records_dropped: Arc<AtomicU64>,
     pub(crate) exact_state_records_pending: Arc<AtomicUsize>,
@@ -1061,6 +1070,31 @@ impl KvStageIntegration {
             ("skippy.kv.mode", json!(format!("{:?}", self.mode))),
             ("skippy.kv.payload", json!(format!("{:?}", self.payload))),
             (
+                "skippy.kv.payload_selection_reason",
+                json!(self.payload_selection_reason),
+            ),
+            ("skippy.kv.payload_fallbacks", json!(self.payload_fallbacks)),
+            (
+                "skippy.kv.admitted_graph_state",
+                json!(self.admitted_graph_state),
+            ),
+            (
+                "skippy.kv.loaded_state_kind",
+                json!(self.loaded_state_kind.map(|kind| format!("{kind:?}"))),
+            ),
+            (
+                "skippy.kv.loaded_memory_cache_resident",
+                json!(self.loaded_memory_cache.map(|cache| cache.resident)),
+            ),
+            (
+                "skippy.kv.loaded_memory_cache_kv_recurrent",
+                json!(self.loaded_memory_cache.map(|cache| cache.kv_recurrent)),
+            ),
+            (
+                "skippy.kv.graph_loaded_state_mismatches",
+                json!(self.graph_loaded_state_mismatches),
+            ),
+            (
                 "skippy.kv.page_size_tokens",
                 json!(self.checkpoint_policy.page_size_tokens),
             ),
@@ -1125,6 +1159,13 @@ impl KvStageIntegration {
             (
                 "skippy.exact_cache.stats_busy",
                 json!(exact_state_stats_busy),
+            ),
+            (
+                "skippy.exact_cache.export_failures",
+                json!(
+                    self.snapshot_export_failures
+                        .load(std::sync::atomic::Ordering::Relaxed)
+                ),
             ),
             (
                 "skippy.exact_cache.records_queued",

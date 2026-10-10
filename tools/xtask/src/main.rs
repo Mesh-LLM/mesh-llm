@@ -5,6 +5,7 @@ mod no_console_print;
 mod publish_consistency;
 mod release_targets;
 mod repo_consistency;
+mod split_payloads;
 mod workflow_checks;
 
 use command::DynResult;
@@ -38,6 +39,12 @@ fn run() -> DynResult<()> {
             if command == "repo-consistency" && scope == "no-console-print" =>
         {
             no_console_print::check_no_console_print_command(rest)
+        }
+        [command, scope, rest @ ..] if command == "split-payloads" && scope == "certify" => {
+            split_payloads::certify_command(rest)
+        }
+        [command, scope, rest @ ..] if command == "split-payloads" && scope == "artifact-for-sha256" => {
+            split_payloads::artifact_for_sha256(rest)
         }
         [command, scope, rest @ ..]
             if command == "release-attestation" && scope == "generate-keypair" =>

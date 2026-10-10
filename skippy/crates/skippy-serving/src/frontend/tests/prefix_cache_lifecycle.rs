@@ -114,7 +114,10 @@ fn real_initialization_notifies_started_then_completed() {
     let kv = KvStageIntegration::from_loaded_model(
         &config,
         Some(skippy_runtime::ModelStateKind::Dense),
-        None,
+        Some(skippy_runtime::MemoryCacheCapabilities {
+            resident: true,
+            kv_recurrent: true,
+        }),
         Some(observer.clone()),
     )
     .unwrap()
@@ -146,7 +149,10 @@ fn disabled_kv_config_never_notifies_init_at_all() {
     let kv = KvStageIntegration::from_loaded_model(
         &config,
         Some(skippy_runtime::ModelStateKind::Dense),
-        None,
+        Some(skippy_runtime::MemoryCacheCapabilities {
+            resident: true,
+            kv_recurrent: true,
+        }),
         Some(observer.clone()),
     )
     .unwrap();

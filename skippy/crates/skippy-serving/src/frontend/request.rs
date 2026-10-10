@@ -2,6 +2,7 @@ use crate::frontend::EmbeddedOpenAiRequestDefaults;
 use crate::frontend::EmbeddedReasoningBudget;
 use crate::frontend::EmbeddedReasoningEnabled;
 use crate::frontend::EmbeddedReasoningFormat;
+use crate::frontend::stop_sequences::validate_stop_sequences;
 use base64::Engine;
 use serde_json::Value;
 use skippy_inference_api::ChatCompletionRequest;
@@ -37,6 +38,9 @@ use skippy_runtime::penalty_window;
 use std::collections::BTreeMap;
 
 const MAX_NATIVE_PARSER_INPUT_BYTES: usize = 1024 * 1024;
+/// Media parts accepted across all messages of one request. Each part is
+/// decoded natively and held in memory until the prompt is evaluated.
+pub(super) const MAX_MEDIA_PARTS_PER_REQUEST: usize = 16;
 
 /// Built-in reasoning default when neither the request nor the deployment config
 /// asks for reasoning: off.
@@ -702,10 +706,6 @@ fn apply_chat_only_request_defaults(
     defaults: &EmbeddedOpenAiRequestDefaults,
 ) -> InferenceResult<()> {
     for (name, value) in [
-        (
-            "chat_template",
-            defaults.chat_template.clone().map(Value::from),
-        ),
         ("jinja", defaults.jinja.map(Value::from)),
         (
             "chat_template_kwargs",
@@ -834,6 +834,11 @@ pub(super) fn message_content_to_generation_text(
                     }
                     continue;
                 }
+                if is_media_part(part) && media.len() >= MAX_MEDIA_PARTS_PER_REQUEST {
+                    return Err(InferenceError::invalid_request(format!(
+                        "a request may include at most {MAX_MEDIA_PARTS_PER_REQUEST} media parts"
+                    )));
+                }
                 if let Some(bytes) = media_bytes_from_part(part)? {
                     media.push(MediaInput { bytes });
                     chunks.push(marker.to_string());
@@ -845,12 +850,15 @@ pub(super) fn message_content_to_generation_text(
     }
 }
 
-pub(super) fn media_bytes_from_part(part: &MessageContentPart) -> InferenceResult<Option<Vec<u8>>> {
-    let is_media = matches!(
+fn is_media_part(part: &MessageContentPart) -> bool {
+    matches!(
         part.content_type.as_str(),
         "image_url" | "input_image" | "image" | "input_audio" | "audio" | "audio_url"
-    );
-    if !is_media {
+    )
+}
+
+pub(super) fn media_bytes_from_part(part: &MessageContentPart) -> InferenceResult<Option<Vec<u8>>> {
+    if !is_media_part(part) {
         return Ok(None);
     }
     if let Some(url) = media_url(part) {
@@ -1076,7 +1084,7 @@ pub(super) fn chat_template_options(
         .map(|kwargs| serialize_bounded_native_parser_json("chat_template_kwargs", &kwargs))
         .transpose()
         .map_err(|error| InferenceError::invalid_request(error.to_string()))?,
-        chat_template: bounded_optional_string_extra(&request.extra, "chat_template")?,
+        chat_template: chat_template(request, defaults)?,
         use_jinja: optional_bool_extra(&request.extra, "jinja")?.unwrap_or(true),
         grammar: structured_output_string(request, "grammar")?,
         json_schema: structured_output_json(request, "json_schema")?,
@@ -1281,6 +1289,39 @@ fn optional_string_extra(
         .transpose()
 }
 
+/// The chat template to render with. A request's own template is accepted
+/// only where the operator set `allow_request_chat_template`: the native
+/// template engine has no recursion, loop, or memory limits, so a template
+/// is code the serving process runs.
+fn chat_template(
+    request: &ChatCompletionRequest,
+    defaults: &EmbeddedOpenAiRequestDefaults,
+) -> InferenceResult<Option<String>> {
+    match bounded_optional_string_extra(&request.extra, "chat_template")? {
+        Some(_) if !defaults.allow_request_chat_template.unwrap_or(false) => {
+            Err(InferenceError::invalid_request(
+                "chat_template cannot be set per request on this server; the operator \
+                 configures the chat template, or enables allow_request_chat_template",
+            ))
+        }
+        Some(template) => Ok(Some(template)),
+        None => operator_chat_template(defaults),
+    }
+}
+
+fn operator_chat_template(
+    defaults: &EmbeddedOpenAiRequestDefaults,
+) -> InferenceResult<Option<String>> {
+    match defaults.chat_template.as_ref() {
+        Some(template) if template.len() > MAX_NATIVE_PARSER_INPUT_BYTES => {
+            Err(InferenceError::invalid_request(format!(
+                "chat_template exceeds the {MAX_NATIVE_PARSER_INPUT_BYTES}-byte limit"
+            )))
+        }
+        template => Ok(template.cloned()),
+    }
+}
+
 fn bounded_optional_string_extra(
     extra: &std::collections::BTreeMap<String, Value>,
     name: &str,
@@ -1326,6 +1367,9 @@ fn structured_output_string(
         return Err(InferenceError::invalid_request(
             "grammar and json_schema cannot both be set",
         ));
+    }
+    if let Some(grammar) = value.as_deref() {
+        crate::grammar_bounds::check_grammar(grammar).map_err(InferenceError::invalid_request)?;
     }
     Ok(value)
 }
@@ -1402,7 +1446,7 @@ pub(super) fn ensure_chat_runtime_features_supported(
             "chat logprobs are parsed by skippy-inference-api but not yet implemented by skippy runtime",
         ));
     }
-    Ok(())
+    validate_stop_sequences(request.stop.as_ref())
 }
 
 pub(super) fn ensure_completion_runtime_features_supported(
@@ -1413,7 +1457,7 @@ pub(super) fn ensure_completion_runtime_features_supported(
             "completion logprobs are parsed by skippy-inference-api but not yet implemented by skippy runtime",
         ));
     }
-    Ok(())
+    validate_stop_sequences(request.stop.as_ref())
 }
 
 pub(super) fn has_requested_tools(value: &Value) -> bool {
