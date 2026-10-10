@@ -186,6 +186,27 @@ class CiQualificationContractTests(unittest.TestCase):
             with self.subTest(row_id=row_id):
                 self.assertEqual(contract.catalog_row(row_id)["id"], row_id)
 
+    def test_every_audit_case_is_required_or_explicitly_deferred(self) -> None:
+        audit_cases = {
+            "packaging-runtime": {"archive-integrity", "imports", "abi", "discovery", "version", "no-driver"},
+            "dense": {"load", "prefill-decode", "stream", "stop-cancel", "concurrent", "continuation", "restart", "staged-parity"},
+            "recurrent": {"prefill-decode", "state-preservation", "repeated-restore", "reset-isolation", "restart"},
+            "moe": {"expert-metadata", "expert-execution", "staged-parity", "repeated-restore", "suffix-continuation", "session-isolation"},
+            "kv-cache": {"dense-prefix-hit", "recurrent-prefix-hit", "suffix-continuation", "divergent-prefix", "isolation", "eviction", "import-export", "persisted-restart", "corrupt-rejection", "restore-observed"},
+            "system-one": {"laya-goldens", "reader-contract", "negative-cases", "lifecycle"},
+            "decisions": {"endpoint-equivalence", "probability-contract", "negative-cases", "lifecycle"},
+        }
+        self.assertEqual(set(contract.SUITE_CASES), set(contract.DEFERRED_CASES))
+        for suite, cases in audit_cases.items():
+            with self.subTest(suite=suite):
+                required = contract.SUITE_CASES[suite]
+                deferred = set(contract.DEFERRED_CASES[suite])
+                self.assertEqual(required | deferred, cases,
+                                 f"{suite} silently dropped or invented an audit case")
+                self.assertFalse(required & deferred, f"{suite} case is both required and deferred")
+                self.assertTrue(all(reason.strip() for reason in contract.DEFERRED_CASES[suite].values()),
+                                f"{suite} deferred case lacks a reason")
+
     def test_system_one_and_decisions_have_separate_required_results(self) -> None:
         self.assertIn("system-one", contract.REQUIRED_SUITES)
         self.assertIn("decisions", contract.REQUIRED_SUITES)
@@ -269,15 +290,27 @@ class CiQualificationContractTests(unittest.TestCase):
                 row_id="linux-cpu",
             )
 
-    def test_available_gpu_row_cannot_be_downgraded_to_unavailable(self) -> None:
-        self.availability.update({"state": "hardware-unavailable", "reason": "runner disappeared"})
-        self.availability.pop("runner")
+    def test_policy_available_accelerator_row_cannot_claim_unavailable(self) -> None:
+        self.availability.update({"state": "available", "runner": "gpu-nvidia"})
         self.receipt["status"] = "hardware-unavailable"
         self.receipt["hardware"] = None
         self.receipt["suites"] = {name: {"status": "not-executed"} for name in contract.REQUIRED_SUITES}
         self.refresh_hashes()
-        with self.assertRaisesRegex(ValueError, "required available row cannot be hardware-unavailable"):
+        with self.assertRaisesRegex(ValueError, "available row must be qualified"):
             self.validate()
+
+    def test_accelerator_row_may_be_recorded_unavailable_by_policy(self) -> None:
+        self.availability.update({"state": "hardware-unavailable",
+                                  "reason": "MESH_CUDA_INFERENCE_RUNNER_ENABLED is not exactly true"})
+        self.availability.pop("runner")
+        self.receipt["status"] = "hardware-unavailable"
+        self.receipt["hardware"] = None
+        packaging = self.receipt["suites"]["packaging-runtime"]
+        self.receipt["suites"] = {name: {"status": "not-executed"} for name in contract.REQUIRED_SUITES}
+        self.receipt["suites"]["packaging-runtime"] = packaging
+        self.refresh_hashes()
+        self.validate()
+        self.assertEqual(self.receipt["status"], "hardware-unavailable")
 
     def test_metal_row_cannot_be_downgraded_to_unavailable(self) -> None:
         self.product.update({"backend": "metal", "target": "aarch64-apple-darwin"})

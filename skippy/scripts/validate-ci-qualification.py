@@ -17,15 +17,52 @@ CORE_ROWS = {
     "macos-metal", "windows-cpu", "windows-cuda", "windows-rocm",
     "windows-vulkan",
 }
-REQUIRED_AVAILABLE_ROWS = {"linux-cpu", "linux-cuda", "macos-metal", "windows-cpu"}
+# Rows the protected hosted graph executes unconditionally. GPU rows are
+# qualified only when the protected runner enablement variable is set; their
+# absence is recorded as hardware-unavailable and must not block CI or release
+# (see ci/CI_RELEASE_AUDIT.md section 12).
+REQUIRED_AVAILABLE_ROWS = {"linux-cpu", "macos-metal", "windows-cpu"}
+# Cases each suite must execute on a composed standalone product. The set is
+# the intersection of the audit contract and the routes the composed CLI
+# actually serves (skippy/crates/skippy-inference-api/src/router.rs: /health,
+# /v1/models, /v1/embeddings, /v1/rerank, /v1/audio/*, /v1/chat/completions,
+# /v1/completions, /v1/responses, /v1/decisions, /v1/messages,
+# /v1/messages/count_tokens, /systemone). DEFERRED_CASES records the remainder
+# explicitly so nothing is dropped silently.
 SUITE_CASES = {
     "packaging-runtime": {"archive-integrity", "imports", "abi", "discovery", "version", "no-driver"},
-    "dense": {"load", "prefill-decode", "stream", "stop-cancel", "concurrent", "continuation", "restart", "staged-parity"},
-    "recurrent": {"prefill-decode", "state-preservation", "repeated-restore", "reset-isolation", "restart"},
-    "moe": {"expert-metadata", "expert-execution", "staged-parity", "repeated-restore", "suffix-continuation", "session-isolation"},
-    "kv-cache": {"dense-prefix-hit", "recurrent-prefix-hit", "suffix-continuation", "divergent-prefix", "isolation", "eviction", "import-export", "persisted-restart", "corrupt-rejection", "restore-observed"},
+    "dense": {"load", "prefill-decode", "stream", "continuation", "restart"},
+    "recurrent": {"prefill-decode", "state-preservation", "restart"},
+    "moe": {"expert-execution", "repeated-restore", "suffix-continuation"},
+    "kv-cache": {"dense-prefix-hit", "recurrent-prefix-hit", "suffix-continuation", "divergent-prefix", "isolation"},
     "system-one": {"laya-goldens", "reader-contract", "negative-cases", "lifecycle"},
     "decisions": {"endpoint-equivalence", "probability-contract", "negative-cases", "lifecycle"},
+}
+DEFERRED_CASES = {
+    "packaging-runtime": {},
+    "system-one": {},
+    "decisions": {},
+    "dense": {
+        "stop-cancel": "no decode-cancellation control beyond max_tokens on the composed CLI",
+        "concurrent": "no documented concurrent-admission contract on the composed CLI",
+        "staged-parity": "no staged or split route on the composed CLI",
+    },
+    "recurrent": {
+        "repeated-restore": "no persistent-state route; state is observable only inside a live conversation",
+        "reset-isolation": "no session reset control on the composed CLI",
+    },
+    "moe": {
+        "expert-metadata": "no expert-metadata route on the composed CLI",
+        "staged-parity": "no staged or split route on the composed CLI",
+        "session-isolation": "no session isolation control on the composed CLI",
+    },
+    "kv-cache": {
+        "eviction": "no cache-capacity control; eviction cannot be observed deterministically",
+        "import-export": "no cache import or export route on the composed CLI",
+        "persisted-restart": "no persisted cache route on the composed CLI",
+        "corrupt-rejection": "no cache import route to feed a corrupt payload",
+        "restore-observed": "no cache restore route; reuse is observable only through usage.prompt_tokens_details.cached_tokens",
+    },
 }
 REQUIRED_SUITES = set(SUITE_CASES)
 MODEL_TAGS = {
