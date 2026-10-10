@@ -1,0 +1,1016 @@
+{
+  "backend-cuda": {
+    "quality": [
+      "authority_linux_x64",
+      "authority_source",
+      "quality"
+    ],
+    "website": [],
+    "linux": [
+      "authority_linux_x64",
+      "authority_source",
+      "hosts",
+      "native_runtimes",
+      "product_smoke",
+      "runtime_product",
+      "ui_artifact"
+    ],
+    "macos": [],
+    "windows": [
+      "authority_linux_x64",
+      "authority_source",
+      "authority_windows_x64",
+      "hosts",
+      "native_runtimes",
+      "runtime_product",
+      "ui_artifact"
+    ]
+  },
+  "backend-rocm": {
+    "quality": [
+      "authority_linux_x64",
+      "authority_source",
+      "quality"
+    ],
+    "website": [],
+    "linux": [
+      "authority_linux_x64",
+      "authority_source",
+      "hosts",
+      "native_runtimes",
+      "product_smoke",
+      "runtime_product",
+      "rust_tests",
+      "static_abi",
+      "ui_artifact"
+    ],
+    "macos": [],
+    "windows": [
+      "authority_linux_x64",
+      "authority_source",
+      "authority_windows_x64",
+      "hosts",
+      "native_runtimes",
+      "runtime_product",
+      "ui_artifact"
+    ]
+  },
+  "cli-surface": {
+    "quality": [
+      "authority_linux_x64",
+      "authority_source",
+      "quality"
+    ],
+    "website": [],
+    "linux": [
+      "authority_linux_x64",
+      "authority_source",
+      "rust_tests",
+      "static_abi"
+    ],
+    "macos": [],
+    "windows": []
+  },
+  "control-draft": {
+    "quality": [
+      "authority_linux_x64",
+      "authority_source",
+      "quality",
+      "runner_contract"
+    ],
+    "website": [],
+    "linux": [
+      "authority_linux_x64",
+      "authority_source",
+      "hosts",
+      "kotlin_sdk_input",
+      "native_runtimes",
+      "product_smoke",
+      "runtime_product",
+      "sdk",
+      "static_abi",
+      "ui_artifact"
+    ],
+    "macos": [
+      "authority_linux_x64",
+      "authority_macos_arm64",
+      "authority_source",
+      "hosts",
+      "native_runtimes",
+      "platform_checks",
+      "product_smoke",
+      "runtime_product",
+      "sdk",
+      "swift_sdk_input",
+      "ui_artifact",
+      "validate_plan"
+    ],
+    "windows": [
+      "authority_linux_x64",
+      "authority_source",
+      "authority_windows_x64",
+      "hosts",
+      "native_runtimes",
+      "platform_checks",
+      "runtime_product",
+      "ui_artifact"
+    ]
+  },
+  "control-main": {
+    "quality": [
+      "authority_linux_x64",
+      "authority_source",
+      "quality",
+      "runner_contract"
+    ],
+    "website": [
+      "authority_linux_x64",
+      "authority_source",
+      "web"
+    ],
+    "linux": [
+      "authority_linux_x64",
+      "authority_source",
+      "hosts",
+      "kotlin_sdk_input",
+      "native_runtimes",
+      "product_smoke",
+      "runtime_product",
+      "rust_tests",
+      "sdk",
+      "static_abi",
+      "ui_artifact"
+    ],
+    "macos": [
+      "authority_linux_x64",
+      "authority_macos_arm64",
+      "authority_source",
+      "hosts",
+      "native_runtimes",
+      "platform_checks",
+      "product_smoke",
+      "runtime_product",
+      "sdk",
+      "swift_sdk_input",
+      "ui_artifact",
+      "validate_plan"
+    ],
+    "windows": [
+      "authority_linux_x64",
+      "authority_source",
+      "authority_windows_x64",
+      "hosts",
+      "native_runtimes",
+      "platform_checks",
+      "runtime_product",
+      "ui_artifact"
+    ]
+  },
+  "control-manual-full": {
+    "quality": [
+      "authority_linux_x64",
+      "authority_source",
+      "quality",
+      "runner_contract"
+    ],
+    "website": [
+      "authority_linux_x64",
+      "authority_source",
+      "web"
+    ],
+    "linux": [
+      "authority_linux_x64",
+      "authority_source",
+      "hosts",
+      "kotlin_sdk_input",
+      "native_runtimes",
+      "product_smoke",
+      "runtime_product",
+      "rust_tests",
+      "sdk",
+      "static_abi",
+      "ui_artifact"
+    ],
+    "macos": [
+      "authority_linux_x64",
+      "authority_macos_arm64",
+      "authority_source",
+      "hosts",
+      "native_runtimes",
+      "platform_checks",
+      "product_smoke",
+      "runtime_product",
+      "sdk",
+      "swift_sdk_input",
+      "ui_artifact",
+      "validate_plan"
+    ],
+    "windows": [
+      "authority_linux_x64",
+      "authority_source",
+      "authority_windows_x64",
+      "hosts",
+      "native_runtimes",
+      "platform_checks",
+      "runtime_product",
+      "ui_artifact"
+    ]
+  },
+  "control-ready": {
+    "quality": [
+      "authority_linux_x64",
+      "authority_source",
+      "quality",
+      "runner_contract"
+    ],
+    "website": [
+      "authority_linux_x64",
+      "authority_source",
+      "web"
+    ],
+    "linux": [
+      "authority_linux_x64",
+      "authority_source",
+      "hosts",
+      "kotlin_sdk_input",
+      "native_runtimes",
+      "product_smoke",
+      "runtime_product",
+      "rust_tests",
+      "sdk",
+      "static_abi",
+      "ui_artifact"
+    ],
+    "macos": [
+      "authority_linux_x64",
+      "authority_macos_arm64",
+      "authority_source",
+      "hosts",
+      "native_runtimes",
+      "platform_checks",
+      "product_smoke",
+      "runtime_product",
+      "sdk",
+      "swift_sdk_input",
+      "ui_artifact",
+      "validate_plan"
+    ],
+    "windows": [
+      "authority_linux_x64",
+      "authority_source",
+      "authority_windows_x64",
+      "hosts",
+      "native_runtimes",
+      "platform_checks",
+      "runtime_product",
+      "ui_artifact"
+    ]
+  },
+  "docs-only": {
+    "quality": [
+      "authority_linux_x64",
+      "authority_source",
+      "quality"
+    ],
+    "website": [],
+    "linux": [],
+    "macos": [],
+    "windows": []
+  },
+  "draft-docs-ci-control": {
+    "quality": [
+      "runner_contract"
+    ],
+    "website": [],
+    "linux": [],
+    "macos": [],
+    "windows": []
+  },
+  "justfile-rust": {
+    "quality": [
+      "authority_linux_x64",
+      "authority_source",
+      "quality"
+    ],
+    "website": [],
+    "linux": [
+      "authority_linux_x64",
+      "authority_source",
+      "static_abi"
+    ],
+    "macos": [],
+    "windows": []
+  },
+  "main": {
+    "quality": [
+      "authority_linux_x64",
+      "authority_source",
+      "quality",
+      "runner_contract"
+    ],
+    "website": [
+      "authority_linux_x64",
+      "authority_source",
+      "web"
+    ],
+    "linux": [
+      "authority_linux_x64",
+      "authority_source",
+      "hosts",
+      "kotlin_sdk_input",
+      "native_runtimes",
+      "product_smoke",
+      "runtime_product",
+      "rust_tests",
+      "sdk",
+      "static_abi",
+      "ui_artifact"
+    ],
+    "macos": [
+      "authority_linux_x64",
+      "authority_macos_arm64",
+      "authority_source",
+      "hosts",
+      "native_runtimes",
+      "platform_checks",
+      "product_smoke",
+      "runtime_product",
+      "sdk",
+      "swift_sdk_input",
+      "ui_artifact",
+      "validate_plan"
+    ],
+    "windows": [
+      "authority_linux_x64",
+      "authority_source",
+      "authority_windows_x64",
+      "hosts",
+      "native_runtimes",
+      "platform_checks",
+      "runtime_product",
+      "ui_artifact"
+    ]
+  },
+  "main-partial-affected": {
+    "quality": [
+      "authority_linux_x64",
+      "authority_source",
+      "quality",
+      "runner_contract"
+    ],
+    "website": [
+      "authority_linux_x64",
+      "authority_source",
+      "web"
+    ],
+    "linux": [
+      "authority_linux_x64",
+      "authority_source",
+      "hosts",
+      "kotlin_sdk_input",
+      "native_runtimes",
+      "product_smoke",
+      "runtime_product",
+      "rust_tests",
+      "sdk",
+      "static_abi",
+      "ui_artifact"
+    ],
+    "macos": [
+      "authority_linux_x64",
+      "authority_macos_arm64",
+      "authority_source",
+      "hosts",
+      "native_runtimes",
+      "platform_checks",
+      "product_smoke",
+      "runtime_product",
+      "sdk",
+      "swift_sdk_input",
+      "ui_artifact",
+      "validate_plan"
+    ],
+    "windows": [
+      "authority_linux_x64",
+      "authority_source",
+      "authority_windows_x64",
+      "hosts",
+      "native_runtimes",
+      "platform_checks",
+      "runtime_product",
+      "ui_artifact"
+    ]
+  },
+  "main-workspace": {
+    "quality": [
+      "authority_linux_x64",
+      "authority_source",
+      "quality",
+      "runner_contract"
+    ],
+    "website": [
+      "authority_linux_x64",
+      "authority_source",
+      "web"
+    ],
+    "linux": [
+      "authority_linux_x64",
+      "authority_source",
+      "hosts",
+      "kotlin_sdk_input",
+      "native_runtimes",
+      "product_smoke",
+      "runtime_product",
+      "rust_tests",
+      "sdk",
+      "static_abi",
+      "ui_artifact"
+    ],
+    "macos": [
+      "authority_linux_x64",
+      "authority_macos_arm64",
+      "authority_source",
+      "hosts",
+      "native_runtimes",
+      "platform_checks",
+      "product_smoke",
+      "runtime_product",
+      "sdk",
+      "swift_sdk_input",
+      "ui_artifact",
+      "validate_plan"
+    ],
+    "windows": [
+      "authority_linux_x64",
+      "authority_source",
+      "authority_windows_x64",
+      "hosts",
+      "native_runtimes",
+      "platform_checks",
+      "runtime_product",
+      "ui_artifact"
+    ]
+  },
+  "manual-full-force-all": {
+    "quality": [
+      "authority_linux_x64",
+      "authority_source",
+      "quality",
+      "runner_contract"
+    ],
+    "website": [
+      "authority_linux_x64",
+      "authority_source",
+      "web"
+    ],
+    "linux": [
+      "authority_linux_x64",
+      "authority_source",
+      "hosts",
+      "kotlin_sdk_input",
+      "native_runtimes",
+      "product_smoke",
+      "runtime_product",
+      "rust_tests",
+      "sdk",
+      "static_abi",
+      "ui_artifact"
+    ],
+    "macos": [
+      "authority_linux_x64",
+      "authority_macos_arm64",
+      "authority_source",
+      "hosts",
+      "native_runtimes",
+      "platform_checks",
+      "product_smoke",
+      "runtime_product",
+      "sdk",
+      "swift_sdk_input",
+      "ui_artifact",
+      "validate_plan"
+    ],
+    "windows": [
+      "authority_linux_x64",
+      "authority_source",
+      "authority_windows_x64",
+      "hosts",
+      "native_runtimes",
+      "platform_checks",
+      "runtime_product",
+      "ui_artifact"
+    ]
+  },
+  "manual-full-partial": {
+    "quality": [
+      "authority_linux_x64",
+      "authority_source",
+      "quality",
+      "runner_contract"
+    ],
+    "website": [
+      "authority_linux_x64",
+      "authority_source",
+      "web"
+    ],
+    "linux": [
+      "authority_linux_x64",
+      "authority_source",
+      "hosts",
+      "kotlin_sdk_input",
+      "native_runtimes",
+      "product_smoke",
+      "runtime_product",
+      "rust_tests",
+      "sdk",
+      "static_abi",
+      "ui_artifact"
+    ],
+    "macos": [
+      "authority_linux_x64",
+      "authority_macos_arm64",
+      "authority_source",
+      "hosts",
+      "native_runtimes",
+      "platform_checks",
+      "product_smoke",
+      "runtime_product",
+      "sdk",
+      "swift_sdk_input",
+      "ui_artifact",
+      "validate_plan"
+    ],
+    "windows": [
+      "authority_linux_x64",
+      "authority_source",
+      "authority_windows_x64",
+      "hosts",
+      "native_runtimes",
+      "platform_checks",
+      "runtime_product",
+      "ui_artifact"
+    ]
+  },
+  "markdown-ci-control-github": {
+    "quality": [
+      "authority_linux_x64",
+      "authority_source",
+      "quality",
+      "runner_contract"
+    ],
+    "website": [],
+    "linux": [],
+    "macos": [],
+    "windows": []
+  },
+  "markdown-ci-control-omo": {
+    "quality": [
+      "authority_linux_x64",
+      "authority_source",
+      "quality",
+      "runner_contract"
+    ],
+    "website": [],
+    "linux": [],
+    "macos": [],
+    "windows": []
+  },
+  "native-ffi": {
+    "quality": [
+      "authority_linux_x64",
+      "authority_source",
+      "quality"
+    ],
+    "website": [],
+    "linux": [
+      "authority_linux_x64",
+      "authority_source",
+      "hosts",
+      "native_runtimes",
+      "product_smoke",
+      "runtime_product",
+      "rust_tests",
+      "static_abi",
+      "ui_artifact"
+    ],
+    "macos": [],
+    "windows": [
+      "authority_linux_x64",
+      "authority_source",
+      "authority_windows_x64",
+      "hosts",
+      "native_runtimes",
+      "platform_checks",
+      "runtime_product",
+      "ui_artifact"
+    ]
+  },
+  "native-pin": {
+    "quality": [
+      "authority_linux_x64",
+      "authority_source",
+      "quality"
+    ],
+    "website": [],
+    "linux": [
+      "authority_linux_x64",
+      "authority_source",
+      "hosts",
+      "native_runtimes",
+      "product_smoke",
+      "runtime_product",
+      "rust_tests",
+      "static_abi",
+      "ui_artifact"
+    ],
+    "macos": [],
+    "windows": []
+  },
+  "noop-draft": {
+    "quality": [],
+    "website": [],
+    "linux": [],
+    "macos": [],
+    "windows": []
+  },
+  "noop-ready": {
+    "quality": [
+      "authority_linux_x64",
+      "authority_source",
+      "quality"
+    ],
+    "website": [],
+    "linux": [],
+    "macos": [],
+    "windows": []
+  },
+  "path-normalization": {
+    "quality": [
+      "authority_linux_x64",
+      "authority_source",
+      "quality"
+    ],
+    "website": [],
+    "linux": [],
+    "macos": [],
+    "windows": []
+  },
+  "platform-macos": {
+    "quality": [
+      "authority_linux_x64",
+      "authority_source",
+      "quality"
+    ],
+    "website": [],
+    "linux": [
+      "authority_linux_x64",
+      "authority_source",
+      "hosts",
+      "native_runtimes",
+      "product_smoke",
+      "runtime_product",
+      "rust_tests",
+      "static_abi",
+      "ui_artifact"
+    ],
+    "macos": [
+      "authority_linux_x64",
+      "authority_macos_arm64",
+      "authority_source",
+      "hosts",
+      "native_runtimes",
+      "platform_checks",
+      "product_smoke",
+      "runtime_product",
+      "ui_artifact",
+      "validate_plan"
+    ],
+    "windows": []
+  },
+  "platform-windows": {
+    "quality": [
+      "authority_linux_x64",
+      "authority_source",
+      "quality"
+    ],
+    "website": [],
+    "linux": [
+      "authority_linux_x64",
+      "authority_source",
+      "hosts",
+      "native_runtimes",
+      "product_smoke",
+      "runtime_product",
+      "rust_tests",
+      "static_abi",
+      "ui_artifact"
+    ],
+    "macos": [],
+    "windows": [
+      "authority_linux_x64",
+      "authority_source",
+      "authority_windows_x64",
+      "hosts",
+      "native_runtimes",
+      "platform_checks",
+      "runtime_product",
+      "ui_artifact"
+    ]
+  },
+  "plugin-exemplar": {
+    "quality": [
+      "authority_linux_x64",
+      "authority_source",
+      "quality"
+    ],
+    "website": [],
+    "linux": [],
+    "macos": [],
+    "windows": []
+  },
+  "reverse-dependency-log-store": {
+    "quality": [
+      "authority_linux_x64",
+      "authority_source",
+      "quality"
+    ],
+    "website": [],
+    "linux": [
+      "authority_linux_x64",
+      "authority_source",
+      "rust_tests",
+      "static_abi"
+    ],
+    "macos": [],
+    "windows": [
+      "authority_source",
+      "authority_windows_x64",
+      "platform_checks"
+    ]
+  },
+  "reverse-dependency-metrics": {
+    "quality": [
+      "authority_linux_x64",
+      "authority_source",
+      "quality"
+    ],
+    "website": [],
+    "linux": [
+      "authority_linux_x64",
+      "authority_source",
+      "rust_tests",
+      "static_abi"
+    ],
+    "macos": [],
+    "windows": []
+  },
+  "reverse-dependency-plugin": {
+    "quality": [
+      "authority_linux_x64",
+      "authority_source",
+      "quality"
+    ],
+    "website": [],
+    "linux": [
+      "authority_linux_x64",
+      "authority_source",
+      "rust_tests",
+      "static_abi"
+    ],
+    "macos": [],
+    "windows": [
+      "authority_source",
+      "authority_windows_x64",
+      "platform_checks"
+    ]
+  },
+  "runner-infra": {
+    "quality": [
+      "authority_linux_x64",
+      "authority_source",
+      "quality",
+      "runner_contract"
+    ],
+    "website": [
+      "authority_linux_x64",
+      "authority_source",
+      "web"
+    ],
+    "linux": [
+      "authority_linux_x64",
+      "authority_source",
+      "hosts",
+      "kotlin_sdk_input",
+      "native_runtimes",
+      "product_smoke",
+      "runtime_product",
+      "rust_tests",
+      "sdk",
+      "static_abi",
+      "ui_artifact"
+    ],
+    "macos": [
+      "authority_linux_x64",
+      "authority_macos_arm64",
+      "authority_source",
+      "hosts",
+      "native_runtimes",
+      "platform_checks",
+      "product_smoke",
+      "runtime_product",
+      "sdk",
+      "swift_sdk_input",
+      "ui_artifact",
+      "validate_plan"
+    ],
+    "windows": [
+      "authority_linux_x64",
+      "authority_source",
+      "authority_windows_x64",
+      "hosts",
+      "native_runtimes",
+      "platform_checks",
+      "runtime_product",
+      "ui_artifact"
+    ]
+  },
+  "runtime": {
+    "quality": [
+      "authority_linux_x64",
+      "authority_source",
+      "quality"
+    ],
+    "website": [],
+    "linux": [
+      "authority_linux_x64",
+      "authority_source",
+      "hosts",
+      "native_runtimes",
+      "product_smoke",
+      "runtime_product",
+      "rust_tests",
+      "static_abi",
+      "ui_artifact"
+    ],
+    "macos": [],
+    "windows": []
+  },
+  "runtime-catalog-pr-1675": {
+    "quality": [
+      "authority_linux_x64",
+      "authority_source",
+      "quality"
+    ],
+    "website": [
+      "authority_linux_x64",
+      "authority_source",
+      "web"
+    ],
+    "linux": [
+      "authority_linux_x64",
+      "authority_source",
+      "hosts",
+      "native_runtimes",
+      "product_smoke",
+      "runtime_product",
+      "rust_tests",
+      "static_abi",
+      "ui_artifact"
+    ],
+    "macos": [],
+    "windows": []
+  },
+  "runtime-draft": {
+    "quality": [],
+    "website": [],
+    "linux": [],
+    "macos": [],
+    "windows": []
+  },
+  "sdk-swift": {
+    "quality": [
+      "authority_linux_x64",
+      "authority_source",
+      "quality"
+    ],
+    "website": [],
+    "linux": [
+      "authority_linux_x64",
+      "authority_source",
+      "hosts",
+      "native_runtimes",
+      "runtime_product",
+      "sdk",
+      "ui_artifact"
+    ],
+    "macos": [
+      "authority_linux_x64",
+      "authority_macos_arm64",
+      "authority_source",
+      "hosts",
+      "native_runtimes",
+      "runtime_product",
+      "sdk",
+      "swift_sdk_input",
+      "ui_artifact",
+      "validate_plan"
+    ],
+    "windows": []
+  },
+  "smoke-fallback": {
+    "quality": [
+      "authority_linux_x64",
+      "authority_source",
+      "quality"
+    ],
+    "website": [],
+    "linux": [
+      "authority_linux_x64",
+      "authority_source",
+      "hosts",
+      "native_runtimes",
+      "product_smoke",
+      "runtime_product",
+      "rust_tests",
+      "static_abi",
+      "ui_artifact"
+    ],
+    "macos": [],
+    "windows": []
+  },
+  "ui-change": {
+    "quality": [
+      "authority_linux_x64",
+      "authority_source",
+      "quality"
+    ],
+    "website": [
+      "authority_linux_x64",
+      "authority_source",
+      "web"
+    ],
+    "linux": [
+      "authority_linux_x64",
+      "authority_source",
+      "hosts",
+      "native_runtimes",
+      "product_smoke",
+      "runtime_product",
+      "rust_tests",
+      "static_abi",
+      "ui_artifact"
+    ],
+    "macos": [],
+    "windows": []
+  },
+  "website-docs": {
+    "quality": [
+      "authority_linux_x64",
+      "authority_source",
+      "quality"
+    ],
+    "website": [
+      "authority_linux_x64",
+      "authority_source",
+      "web"
+    ],
+    "linux": [],
+    "macos": [],
+    "windows": []
+  },
+  "website-generated": {
+    "quality": [
+      "authority_linux_x64",
+      "authority_source",
+      "quality"
+    ],
+    "website": [
+      "authority_linux_x64",
+      "authority_source",
+      "web"
+    ],
+    "linux": [],
+    "macos": [],
+    "windows": []
+  },
+  "windows-log-store": {
+    "quality": [
+      "authority_linux_x64",
+      "authority_source",
+      "quality"
+    ],
+    "website": [],
+    "linux": [
+      "authority_linux_x64",
+      "authority_source",
+      "rust_tests",
+      "static_abi"
+    ],
+    "macos": [],
+    "windows": [
+      "authority_source",
+      "authority_windows_x64",
+      "platform_checks"
+    ]
+  }
+}
