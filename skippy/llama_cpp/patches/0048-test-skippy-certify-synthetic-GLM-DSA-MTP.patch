@@ -10,7 +10,7 @@ Subject: [PATCH 48/67] test(skippy): certify synthetic GLM DSA MTP
  3 files changed, 24 insertions(+), 5 deletions(-)
 
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index 027c97dd1..60d2825e9 100644
+index ff5f2dc73..c931898f4 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
 @@ -194,6 +194,14 @@ if (LLAMA_STAGE_BUILD_TESTS)
@@ -29,7 +29,7 @@ index 027c97dd1..60d2825e9 100644
      file(MAKE_DIRECTORY "${MULTIDEPTH_MTP_FIXTURE_DIR}")
      add_test(NAME skippy_generate_multidepth_mtp COMMAND skippy-model-fixture-generator
 diff --git a/src/skippy/stage_program.cpp b/src/skippy/stage_program.cpp
-index 413e55cea..e9d67aa1a 100644
+index 6c2fb0690..617c64bde 100644
 --- a/src/skippy/stage_program.cpp
 +++ b/src/skippy/stage_program.cpp
 @@ -296,16 +296,20 @@ bool skippy_stage_program::instantiate(

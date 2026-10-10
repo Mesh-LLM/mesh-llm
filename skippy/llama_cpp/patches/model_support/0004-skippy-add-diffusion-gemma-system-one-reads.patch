@@ -31,7 +31,7 @@ index dc8cbb431..571841a60 100644
  
  #endif // SKIPPY_H
 diff --git a/include/skippy/common.h b/include/skippy/common.h
-index 149989b1f..9adaa27d4 100644
+index 8a2781dcb..80ab5b76b 100644
 --- a/include/skippy/common.h
 +++ b/include/skippy/common.h
 @@ -46,7 +46,7 @@ extern "C" {
@@ -118,7 +118,7 @@ index 000000000..4faf057ba
 +
 +#endif // SKIPPY_SYSTEM_ONE_H
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index 6b0fb5098..0d7bb7872 100644
+index 091bdb85e..bb429b1b7 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
 @@ -87,6 +87,7 @@ add_library(llama

@@ -9,10 +9,10 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/bailingmoe3.cpp b/src/models/bailingmoe3.cpp
-index 44e7afb5b10c5366dce231ecfc2d25c82b339d03..23a8b981dd3c534a78bcd7f3b54051f6ddbddd18 100644
+index c204b5e5ba6e4a3cdc56d88f9fc16bb59c016cf5..d55bd7bb6fd815b9e6ec3a442266a988277caae1 100644
 --- a/src/models/bailingmoe3.cpp
 +++ b/src/models/bailingmoe3.cpp
-@@ -250,6 +250,8 @@ llama_model_bailingmoe3::graph::graph(const llama_model & model, const llm_graph
+@@ -278,6 +278,8 @@ llama_model_bailingmoe3::graph::graph(const llama_model & model, const llm_graph
      GGML_ASSERT(ubatch.n_tokens == n_seq_tokens * n_seqs);
  
      for (int il = 0; il < n_layer; ++il) {
@@ -21,7 +21,7 @@ index 44e7afb5b10c5366dce231ecfc2d25c82b339d03..23a8b981dd3c534a78bcd7f3b54051f6
          res->t_layer_inp[il] = inpL;
  
          const auto & layer = model.layers[il];
-@@ -441,6 +443,7 @@ llama_model_bailingmoe3::graph::graph(const llama_model & model, const llm_graph
+@@ -481,6 +483,7 @@ llama_model_bailingmoe3::graph::graph(const llama_model & model, const llm_graph
          cur = build_cvec(cur, il);
          cb(cur, "l_out", il);
          inpL = cur;

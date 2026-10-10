@@ -10,7 +10,7 @@ Subject: [PATCH 62/67] fix(skippy): resolve dynamic views against canonical
  2 files changed, 29 insertions(+), 2 deletions(-)
 
 diff --git a/src/skippy/stage_program_extraction.cpp b/src/skippy/stage_program_extraction.cpp
-index c56f0cb12..2a7564972 100644
+index c971314c1..8491aedbd 100644
 --- a/src/skippy/stage_program_extraction.cpp
 +++ b/src/skippy/stage_program_extraction.cpp
 @@ -274,6 +274,20 @@ bool extraction::run() {
@@ -35,7 +35,7 @@ index c56f0cb12..2a7564972 100644
                                  if (tensor->view_offs == 0 && source_axis < GGML_MAX_DIMS &&
                                          tensor->ne[source_axis] < tensor->src[0]->ne[source_axis]) {
 diff --git a/src/skippy/stage_program_replay.cpp b/src/skippy/stage_program_replay.cpp
-index 031db3a92..e1b06bfba 100644
+index 84673642f..e7b4d212a 100644
 --- a/src/skippy/stage_program_replay.cpp
 +++ b/src/skippy/stage_program_replay.cpp
 @@ -354,14 +354,27 @@ ggml_tensor * replay_operation(

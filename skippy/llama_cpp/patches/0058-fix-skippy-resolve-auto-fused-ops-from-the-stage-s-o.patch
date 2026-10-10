@@ -24,7 +24,7 @@ layers in its reserved graph.
  2 files changed, 87 insertions(+)
 
 diff --git a/src/llama-graph.cpp b/src/llama-graph.cpp
-index 5c07d16ec..4451515ff 100644
+index fbc1ea862..ec8dc4ad0 100644
 --- a/src/llama-graph.cpp
 +++ b/src/llama-graph.cpp
 @@ -1834,6 +1834,19 @@ void llm_graph_result::replace_with_stage_graph(

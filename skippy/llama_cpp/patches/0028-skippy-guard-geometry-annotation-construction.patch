@@ -26,7 +26,7 @@ same build under capture derives one recipe per site.
  6 files changed, 181 insertions(+), 15 deletions(-)
 
 diff --git a/src/skippy/stage_program.cpp b/src/skippy/stage_program.cpp
-index 38f03bea7..2f296f6d1 100644
+index a6007ec51..8c931bb8a 100644
 --- a/src/skippy/stage_program.cpp
 +++ b/src/skippy/stage_program.cpp
 @@ -33,7 +33,16 @@
@@ -53,7 +53,7 @@ index 38f03bea7..2f296f6d1 100644
 +uint64_t skippy_stage_program_replay_plan_builds() { return test_replay_plan_builds; }
  #endif
 diff --git a/src/skippy/stage_program.h b/src/skippy/stage_program.h
-index 912bbe3fd..5c336f507 100644
+index c5919c6c0..6f9affa46 100644
 --- a/src/skippy/stage_program.h
 +++ b/src/skippy/stage_program.h
 @@ -47,6 +47,11 @@ struct skippy_stage_geometry_expression {
@@ -99,7 +99,7 @@ index 912bbe3fd..5c336f507 100644
 +uint64_t skippy_stage_geometry_recipe_derivations();
  #endif
 diff --git a/src/skippy/stage_program_extraction.cpp b/src/skippy/stage_program_extraction.cpp
-index ba7024fd4..02b833a02 100644
+index da7422fa5..41a2ab7c3 100644
 --- a/src/skippy/stage_program_extraction.cpp
 +++ b/src/skippy/stage_program_extraction.cpp
 @@ -185,14 +185,16 @@ bool extraction::run() {
@@ -173,7 +173,7 @@ index ba7024fd4..02b833a02 100644
                              if ((model.arch == LLM_ARCH_RWKV6 || model.arch == LLM_ARCH_RWKV6QWEN2) &&
                                      source_axis == 1 && n_sequences > 1 &&
 diff --git a/src/skippy/stage_program_extraction_roots.cpp b/src/skippy/stage_program_extraction_roots.cpp
-index dbfb73363..778bb12cc 100644
+index 90e86e7c4..d09998c12 100644
 --- a/src/skippy/stage_program_extraction_roots.cpp
 +++ b/src/skippy/stage_program_extraction_roots.cpp
 @@ -353,7 +353,9 @@ bool extraction::assign_root(const ggml_tensor * tensor) {

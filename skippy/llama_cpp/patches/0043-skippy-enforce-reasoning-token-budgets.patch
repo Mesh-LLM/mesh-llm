@@ -345,7 +345,7 @@ index 8b114e3e4..1b42f32c0 100644
  
  #ifdef __cplusplus
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index de75e976a..c30e1e030 100644
+index 37c303bd6..2559a3258 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
 @@ -66,6 +66,7 @@ add_library(llama

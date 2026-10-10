@@ -52,7 +52,7 @@ index 981da6b5d..3d3962b3f 100644
      SKIPPY_KV_PAGE_FLAG_V_TRANSPOSED      = 1 << 0,
      SKIPPY_KV_PAGE_FLAG_HAS_K_IDX         = 1 << 1,
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index 6b0fb5098..75cb51018 100644
+index 7209f263a..091bdb85e 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
 @@ -83,6 +83,7 @@ add_library(llama

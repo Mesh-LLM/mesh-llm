@@ -20,7 +20,7 @@ fixture, whose layers carry the HC fusions.
  2 files changed, 124 insertions(+), 25 deletions(-)
 
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index b4ee9bd87..6b0fb5098 100644
+index 5f242db95..7209f263a 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
 @@ -562,6 +562,14 @@ if (LLAMA_STAGE_BUILD_TESTS)

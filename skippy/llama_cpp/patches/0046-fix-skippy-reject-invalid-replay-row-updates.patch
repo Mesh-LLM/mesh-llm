@@ -8,7 +8,7 @@ Subject: [PATCH 46/67] fix(skippy): reject invalid replay row updates
  1 file changed, 14 insertions(+)
 
 diff --git a/src/skippy/stage_program_replay.cpp b/src/skippy/stage_program_replay.cpp
-index ba358c579..b35c2d7fe 100644
+index 0ca55ef75..85c62297b 100644
 --- a/src/skippy/stage_program_replay.cpp
 +++ b/src/skippy/stage_program_replay.cpp
 @@ -374,6 +374,20 @@ ggml_tensor * replay_operation(

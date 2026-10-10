@@ -1504,7 +1504,7 @@ index 036b008cb..40217e629 100644
      // the trunk tensors through ctx_other (see graph_mtp in nemotron-h-moe.cpp).
      // Without this clause the constructor silently drops params.ctx_other and
 diff --git a/src/llama-graph.cpp b/src/llama-graph.cpp
-index 4451515ff..5c409bca5 100644
+index d5c9ed9af..47a511785 100644
 --- a/src/llama-graph.cpp
 +++ b/src/llama-graph.cpp
 @@ -3435,9 +3435,26 @@ ggml_tensor * llm_graph_context::build_attn_mha(
@@ -1573,7 +1573,7 @@ index 7a122eddf..92e0ac620 100644
      std::array<uint32_t, LLAMA_MAX_LAYERS> n_head_kv_arr;
      std::array<uint32_t, LLAMA_MAX_LAYERS> n_ff_arr;
 diff --git a/src/llama-kv-cache.h b/src/llama-kv-cache.h
-index 6b9bf7e9c..db90cf8e1 100644
+index bd56bb5a1..b837d4366 100644
 --- a/src/llama-kv-cache.h
 +++ b/src/llama-kv-cache.h
 @@ -289,6 +289,10 @@ public:

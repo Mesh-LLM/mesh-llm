@@ -8,7 +8,7 @@ Subject: [PATCH 45/67] fix(skippy): bind inferred DSA cache state
  1 file changed, 11 insertions(+), 8 deletions(-)
 
 diff --git a/src/skippy/stage_program_extraction_roots.cpp b/src/skippy/stage_program_extraction_roots.cpp
-index 880cd75f2..7e5809b2b 100644
+index d09998c12..40454f696 100644
 --- a/src/skippy/stage_program_extraction_roots.cpp
 +++ b/src/skippy/stage_program_extraction_roots.cpp
 @@ -202,16 +202,19 @@ bool extraction::assign_root(const ggml_tensor * tensor) {

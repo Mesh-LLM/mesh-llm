@@ -17,7 +17,7 @@ Subject: [PATCH 53/67] fix(skippy): reuse backend sampler across requests
  create mode 100644 src/skippy/workloads_internal.h
 
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index 60d2825e9..b4ee9bd87 100644
+index c931898f4..5f242db95 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
 @@ -140,7 +140,9 @@ if (LLAMA_STAGE_BUILD_TESTS)

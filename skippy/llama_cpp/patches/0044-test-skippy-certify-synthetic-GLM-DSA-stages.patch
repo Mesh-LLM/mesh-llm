@@ -81,7 +81,7 @@ index 3528c5978..86360c594 100644
      switch (hparams.n_layer()) {
          case 78: type = LLM_TYPE_744B_A40B; break;
 diff --git a/src/skippy/stage_program_extraction.cpp b/src/skippy/stage_program_extraction.cpp
-index ce61a4f95..0b44ccc48 100644
+index 41a2ab7c3..18caff57a 100644
 --- a/src/skippy/stage_program_extraction.cpp
 +++ b/src/skippy/stage_program_extraction.cpp
 @@ -251,13 +251,23 @@ bool extraction::run() {
