@@ -5,7 +5,9 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import json
+import os
 from pathlib import Path
+import subprocess
 import tempfile
 import unittest
 from unittest import mock
@@ -139,6 +141,24 @@ class StandaloneProductContractTests(unittest.TestCase):
             PRODUCT.verify_discovery(binary, runtime_dir, runtime)
             with self.assertRaisesRegex(ValueError, "did not discover"):
                 PRODUCT.verify_discovery(binary, runtime_dir, {**runtime, "id": "foreign"})
+
+    def test_discovery_compares_runtime_directory_identity(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            runtime_dir = directory / "runtime"
+            runtime_dir.mkdir()
+            if os.name == "nt":
+                alias = Path(str(runtime_dir).swapcase())
+            else:
+                alias = directory / "runtime-alias"
+                alias.symlink_to(runtime_dir, target_is_directory=True)
+            installed = [{"native_runtime_id": "native-test", "release_version": "0.78.0", "path": str(alias)}]
+            response = subprocess.CompletedProcess([], 0, stdout=json.dumps(installed), stderr="")
+            with mock.patch.object(PRODUCT.subprocess, "run", return_value=response):
+                PRODUCT.verify_discovery(
+                    directory / "skippy", runtime_dir,
+                    {"id": "native-test", "release_version": "0.78.0"},
+                )
 
 
 if __name__ == "__main__":

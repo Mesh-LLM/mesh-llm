@@ -111,7 +111,7 @@ def verify_discovery(binary: Path, runtime_dir: Path, runtime: dict[str, object]
         and entry.get("native_runtime_id") == runtime["id"]
         and entry.get("release_version") == runtime["release_version"]
         and isinstance(entry.get("path"), str)
-        and Path(entry["path"]).resolve() == runtime_dir.resolve()
+        and os.path.samefile(entry["path"], runtime_dir)
         for entry in installed
     ):
         raise ValueError("composed Skippy CLI did not discover the exact native runtime")
