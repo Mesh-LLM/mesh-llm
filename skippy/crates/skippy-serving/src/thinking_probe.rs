@@ -30,6 +30,7 @@
 use crate::frontend::EmbeddedOpenAiRequestDefaults;
 use crate::frontend::thinking_probe_options;
 use crate::runtime_state::RuntimeState;
+use crate::runtime_state::panic_recovery::lock_runtime;
 use skippy_inference_api::ReasoningConfig;
 use skippy_inference_api::ReasoningEffort;
 use skippy_inference_api::thinking::ThinkingControls;
@@ -303,17 +304,14 @@ pub fn emit_probe_status(report: &ThinkingProbeReport) -> std::io::Result<()> {
 
 /// Runs the probe against an already-loaded runtime.
 ///
-/// Returns `None` when the runtime lock is poisoned. A renderer error is recorded
-/// on the case, not propagated, so one unsupported control cannot hide the rest.
+/// A renderer error is recorded on the case, not propagated, so one unsupported
+/// control cannot hide the rest.
 pub fn probe_loaded_model(
     runtime: &Arc<Mutex<RuntimeState>>,
     inputs: &ThinkingProbeInputs<'_>,
-) -> Option<ThinkingProbeReport> {
-    let reader = runtime.lock().ok()?.model.reader();
-    Some(run_thinking_probe(
-        &NativeChatTemplateProbe { reader: &reader },
-        inputs,
-    ))
+) -> ThinkingProbeReport {
+    let reader = lock_runtime(runtime).model.reader();
+    run_thinking_probe(&NativeChatTemplateProbe { reader: &reader }, inputs)
 }
 
 struct NativeChatTemplateProbe<'a> {

@@ -169,6 +169,8 @@ macro_rules! dynamic_symbols {
 dynamic_symbols! {
     llama_get_embeddings_ith(ctx: *mut Opaque, index: i32) -> *mut f32;
     llama_set_embeddings(ctx: *mut Opaque, embeddings: bool);
+    llama_model_get_vocab(model: *const Opaque) -> *const Opaque;
+    llama_vocab_n_tokens(vocab: *const Opaque) -> i32;
     llama_log_set(log_callback: LlamaLogCallback, user_data: *mut c_void);
     ggml_log_set(log_callback: LlamaLogCallback, user_data: *mut c_void);
     llama_model_quantize_default_params() -> LlamaModelQuantizeParams;
@@ -238,6 +240,7 @@ dynamic_symbols! {
     skippy_export_kv_page(session: *mut Session, layer_start: i32, layer_end: i32, token_start: u64, token_count: u64, out_desc: *mut KvPageDesc, output: *mut c_void, output_capacity: usize, out_bytes: *mut usize, out_error: *mut *mut Error) -> Status;
     skippy_import_kv_page(session: *mut Session, desc: *const KvPageDesc, input: *const c_void, input_bytes: usize, out_error: *mut *mut Error) -> Status;
     skippy_import_cachegen_kv_page_v1(session: *mut Session, desc: *const KvPageDesc, records: *const CacheGenRecordV1, record_count: usize, out_error: *mut *mut Error) -> Status;
+    skippy_model_memory_cache_capabilities(model: *const Model) -> u32;
     skippy_export_recurrent_state(session: *mut Session, output: *mut c_void, output_capacity: usize, out_bytes: *mut usize, out_error: *mut *mut Error) -> Status;
     skippy_import_recurrent_state(session: *mut Session, input: *const c_void, input_bytes: usize, out_error: *mut *mut Error) -> Status;
     skippy_session_save_prefix(session: *mut Session, cache_seq_id: i32, token_count: u64, out_error: *mut *mut Error) -> Status;
@@ -282,6 +285,7 @@ dynamic_symbols! {
     mtmd_helper_bitmap_init_from_buf(ctx: *mut MtmdContext, buf: *const u8, len: usize, placeholder: bool, opt: MtmdHelperInitOpt) -> MtmdHelperBitmapWrapper;
     mtmd_helper_video_free(video: *mut MtmdHelperVideo);
     mtmd_bitmap_free(bitmap: *mut MtmdBitmap);
+    mtmd_bitmap_get_n_bytes(bitmap: *const MtmdBitmap) -> usize;
     mtmd_input_chunks_init() -> *mut MtmdInputChunks;
     mtmd_input_chunks_free(chunks: *mut MtmdInputChunks);
     mtmd_tokenize(ctx: *mut MtmdContext, output: *mut MtmdInputChunks, text: *const MtmdInputText, bitmaps: *const *const MtmdBitmap, n_bitmaps: usize) -> c_int;
