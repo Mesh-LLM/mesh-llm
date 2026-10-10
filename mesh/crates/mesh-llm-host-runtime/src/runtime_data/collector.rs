@@ -700,14 +700,27 @@ fn build_model_payload_from_catalog_entry(
         .as_ref()
         .and_then(|model| model.description.clone());
     let metadata = ctx.metadata_by_name.get(name);
+    let served_metadata = descriptor.and_then(|descriptor| descriptor.metadata.as_ref());
     let architecture = metadata
         .map(|m| m.architecture.trim())
         .filter(|value| !value.is_empty())
         .map(str::to_string);
     let context_length = metadata
         .map(|m| m.context_length)
-        .filter(|value| *value > 0);
-    let quantization = model_quantization_for_view(metadata, catalog_entry.as_ref());
+        .filter(|value| *value > 0)
+        .or_else(|| {
+            served_metadata
+                .and_then(|meta| meta.native_context_length)
+                .filter(|value| *value > 0)
+        });
+    let quantization =
+        model_quantization_for_view(metadata, catalog_entry.as_ref()).or_else(|| {
+            served_metadata
+                .and_then(|meta| meta.quant.as_deref())
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+        });
     let tokenizer = metadata
         .map(|m| m.tokenizer_model_name.trim())
         .filter(|value| !value.is_empty())
