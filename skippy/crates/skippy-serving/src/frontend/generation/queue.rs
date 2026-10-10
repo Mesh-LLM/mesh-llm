@@ -6,11 +6,11 @@ use crate::frontend::generation::GENERATION_RETRY_AFTER_SECS;
 use crate::frontend::generation::PhaseTimer;
 use crate::frontend::util::context_budget_completion_tokens;
 use crate::runtime_state::RuntimeState;
+use crate::runtime_state::panic_recovery::lock_runtime;
 use crate::telemetry::Telemetry;
 use crate::telemetry::lifecycle_attrs;
 use crate::telemetry::now_unix_nanos;
 use anyhow::Result;
-use anyhow::anyhow;
 use anyhow::bail;
 use axum::http::StatusCode;
 use serde_json::json;
@@ -815,9 +815,7 @@ pub(in crate::frontend) fn prewarm_generation_sessions(
     event_name: &'static str,
 ) -> Result<()> {
     let timer = PhaseTimer::start();
-    let mut runtime = runtime
-        .lock()
-        .map_err(|_| anyhow!("runtime lock poisoned"))?;
+    let mut runtime = lock_runtime(runtime);
     let generation_graph_warmed = runtime.warmup_generation_graph()?;
     let sessions = runtime.prewarm_idle_sessions(generation_concurrency)?;
     let mut attrs = lifecycle_attrs(config);

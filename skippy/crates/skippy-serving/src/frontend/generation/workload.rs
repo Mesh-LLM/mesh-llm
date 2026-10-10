@@ -1,6 +1,7 @@
 use super::StageOpenAiBackend;
 use crate::frontend::util::openai_backend_error;
-use skippy_inference_api::{InferenceError, InferenceResult};
+use crate::runtime_state::panic_recovery::lock_runtime;
+use skippy_inference_api::InferenceResult;
 use skippy_runtime::ModelWorkload;
 use std::sync::OnceLock;
 
@@ -23,9 +24,7 @@ impl StageOpenAiBackend {
     /// Classify text generation without locking the runtime after its first request.
     pub(in crate::frontend) fn model_workload(&self) -> InferenceResult<ModelWorkload> {
         self.workload.get_or_probe(|| {
-            self.runtime
-                .lock()
-                .map_err(|_| InferenceError::backend("runtime lock poisoned"))?
+            lock_runtime(&self.runtime)
                 .workload_info()
                 .map(|info| info.kind)
                 .map_err(openai_backend_error)
@@ -36,6 +35,7 @@ impl StageOpenAiBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use skippy_inference_api::InferenceError;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 

@@ -223,7 +223,7 @@ async fn assert_passive_legacy_lifecycle_path_is_rejected(path: &str) {
         receiver.clone(),
         api_port,
         target_rx,
-        Some(api_listener),
+        Some(api_listener.into()),
         false,
         AffinityRouter::new(),
     ));
