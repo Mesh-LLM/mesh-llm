@@ -189,6 +189,7 @@ mod tests {
     #[tokio::test]
     async fn real_launched_child_is_verified_even_without_initial_grants() {
         use super::super::super::transport::LocalListener;
+        use tokio::io::AsyncReadExt;
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("control.sock");
         let listener = tokio::net::UnixListener::bind(&path).unwrap();
@@ -202,10 +203,22 @@ mod tests {
         let mut child = plugin
             .spawn_child_process(path.to_str().unwrap(), "unix")
             .unwrap();
-        let stream = plugin
+        let mut stream = plugin
             .await_plugin_connection(LocalListener::Unix(listener, path), child.id())
             .await
             .unwrap();
+        let LocalStream::Unix(ref mut socket) = stream else {
+            panic!("expected Unix plugin control socket");
+        };
+        let mut connected = [0; 9];
+        tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            socket.read_exact(&mut connected),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(&connected, b"connected");
         assert!(is_authenticated(&stream, child.id(), false));
         assert!(
             validate_lifecycle_declaration(true, is_authenticated(&stream, child.id(), false))

@@ -5,7 +5,7 @@ use crate::mesh::owner_control_response;
 use crate::mesh::owner_lifecycle_cache::OwnerLifecycleResponseReservation;
 use crate::protocol::{
     ControlFrameError, NODE_PROTOCOL_GENERATION, ValidateControlFrame, ensure_control_frame_size,
-    read_len_prefixed, write_len_prefixed,
+    read_frame, read_len_prefixed, write_len_prefixed,
 };
 use anyhow::Result;
 use iroh::EndpointId;
@@ -19,6 +19,10 @@ mod exchange_grants;
 use commands::{OwnedNodeCommand, OwnedNodeCommandDeadline, OwnedNodeCommandExecutionShape};
 
 const OWNER_CONTROL_SERVER_HANDSHAKE_TIMEOUT_SECS: u64 = 2;
+/// Largest handshake frame accepted. The handshake carries one ownership
+/// certificate and is read before the peer is authenticated, so it gets a
+/// small limit rather than the general 8 MiB control frame limit.
+pub(crate) const MAX_OWNER_CONTROL_HANDSHAKE_BYTES: usize = 64 * 1024;
 const OWNER_CONTROL_SERVER_REQUEST_TIMEOUT_SECS: u64 = 5;
 const OWNER_CONTROL_SERVER_RESPONSE_WRITE_TIMEOUT_SECS: u64 = 2;
 const OWNER_CONTROL_STREAM_RESET_ERROR_CODE: u32 = 0;
@@ -201,7 +205,7 @@ impl Node {
     ) -> Result<Option<crate::proto::node::OwnerControlHandshake>> {
         let handshake_bytes = match tokio::time::timeout(
             std::time::Duration::from_secs(OWNER_CONTROL_SERVER_HANDSHAKE_TIMEOUT_SECS),
-            read_len_prefixed(recv),
+            read_frame(recv, MAX_OWNER_CONTROL_HANDSHAKE_BYTES),
         )
         .await
         {
