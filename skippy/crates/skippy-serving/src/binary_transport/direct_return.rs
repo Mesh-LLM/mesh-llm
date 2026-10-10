@@ -1,15 +1,15 @@
 use std::{
     collections::HashMap,
     io::{self, Read},
-    net::{IpAddr, SocketAddr, TcpListener, TcpStream},
+    net::{IpAddr, Shutdown, SocketAddr, TcpListener, TcpStream},
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
         mpsc,
         mpsc::RecvTimeoutError,
     },
     thread::{self, JoinHandle},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -44,12 +44,22 @@ impl PredictionReturnKey {
 
 pub struct PredictionReturnHub {
     waiters: Mutex<HashMap<PredictionReturnKey, mpsc::Sender<Result<StageReply, String>>>>,
+    /// Handles to the return streams being read for each waiter, so that
+    /// ending the waiter can close them. Without this, a peer that stops
+    /// replying keeps its connection, and its listener slot, forever.
+    streams: Mutex<HashMap<PredictionReturnKey, Vec<(u64, TcpStream)>>>,
+    next_stream_id: AtomicU64,
 }
 
 // Return sinks normally wait only until the matching generation reaches the
 // final stage. Bound unmatched opens so they cannot retain sockets indefinitely
 // without limit; a rejected preferred sink uses the existing reverse fallback.
 const MAX_PENDING_PREDICTION_RETURN_SINKS: usize = 64;
+// Each accepted return connection holds a thread. A peer must identify its
+// request promptly, and the listener serves a bounded number of connections,
+// so idle or unidentified connections cannot exhaust threads.
+const PREDICTION_RETURN_OPEN_TIMEOUT: Duration = Duration::from_secs(5);
+const MAX_PREDICTION_RETURN_CONNECTIONS: usize = 1024;
 
 #[derive(Default)]
 pub(crate) struct PredictionReturnSinks {
@@ -60,6 +70,8 @@ impl Default for PredictionReturnHub {
     fn default() -> Self {
         Self {
             waiters: Mutex::new(HashMap::new()),
+            streams: Mutex::new(HashMap::new()),
+            next_stream_id: AtomicU64::new(0),
         }
     }
 }
@@ -72,6 +84,10 @@ pub struct PredictionReturnListener {
 
 impl PredictionReturnListener {
     pub fn start(bind_addr: SocketAddr) -> Result<Self> {
+        Self::start_with_connection_limit(bind_addr, MAX_PREDICTION_RETURN_CONNECTIONS)
+    }
+
+    fn start_with_connection_limit(bind_addr: SocketAddr, connection_limit: usize) -> Result<Self> {
         let listener = TcpListener::bind(bind_addr)
             .with_context(|| format!("bind direct prediction return listener {bind_addr}"))?;
         listener
@@ -81,10 +97,17 @@ impl PredictionReturnListener {
         let thread_shutdown = shutdown.clone();
         let hub = Arc::new(PredictionReturnHub::default());
         let thread_hub = hub.clone();
+        let active_connections = Arc::new(AtomicUsize::new(0));
         let thread = thread::spawn(move || {
             while !thread_shutdown.load(Ordering::SeqCst) {
                 match listener.accept() {
                     Ok((stream, _)) => {
+                        let Some(slot) =
+                            ConnectionSlot::claim(&active_connections, connection_limit)
+                        else {
+                            // Dropping the stream closes the connection.
+                            continue;
+                        };
                         if let Err(error) = stream.set_nonblocking(false) {
                             tracing::warn!(
                                 "direct prediction return connection failed: set blocking: {error}"
@@ -93,6 +116,7 @@ impl PredictionReturnListener {
                         }
                         let hub = thread_hub.clone();
                         thread::spawn(move || {
+                            let _slot = slot;
                             if let Err(error) = handle_prediction_return_connection(hub, stream) {
                                 tracing::warn!(
                                     "direct prediction return connection failed: {error:#}"
@@ -123,6 +147,26 @@ impl PredictionReturnListener {
     }
 }
 
+/// One of the listener's connection slots, released when dropped.
+struct ConnectionSlot(Arc<AtomicUsize>);
+
+impl ConnectionSlot {
+    fn claim(active: &Arc<AtomicUsize>, limit: usize) -> Option<Self> {
+        active
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |count| {
+                (count < limit).then_some(count + 1)
+            })
+            .ok()
+            .map(|_| Self(active.clone()))
+    }
+}
+
+impl Drop for ConnectionSlot {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
 impl Drop for PredictionReturnListener {
     fn drop(&mut self) {
         self.shutdown.store(true, Ordering::SeqCst);
@@ -134,20 +178,62 @@ impl Drop for PredictionReturnListener {
 
 fn handle_prediction_return_connection(
     hub: Arc<PredictionReturnHub>,
-    mut stream: TcpStream,
+    stream: TcpStream,
 ) -> Result<()> {
+    handle_prediction_return_connection_within(hub, stream, PREDICTION_RETURN_OPEN_TIMEOUT)
+}
+
+/// Serves one return connection, which must send its open message within
+/// `open_timeout` in total. Replies afterwards may be far apart, so the
+/// deadline is lifted once the connection has identified its request.
+fn handle_prediction_return_connection_within(
+    hub: Arc<PredictionReturnHub>,
+    mut stream: TcpStream,
+    open_timeout: Duration,
+) -> Result<()> {
+    let deadline = Instant::now() + open_timeout;
+    stream
+        .set_read_timeout(Some(open_timeout))
+        .context("set direct prediction return open deadline")?;
     consume_optional_client_ready_hello(&mut stream)
         .context("consume optional direct prediction return client ready hello")?;
     send_ready(&mut stream).context("send direct prediction return ready")?;
-    let open = read_prediction_return_open(&mut stream)?;
+    let open = read_prediction_return_open(&mut stream, deadline)?;
+    stream
+        .set_read_timeout(None)
+        .context("clear direct prediction return open deadline")?;
     hub.handle_return_connection(open, stream)
 }
 
-fn read_prediction_return_open(stream: &mut TcpStream) -> Result<StageWireMessage> {
+/// Fills `buf` before `deadline`. A read timeout alone restarts for every
+/// read, so a peer sending one byte at a time could otherwise stretch the
+/// open indefinitely.
+fn read_exact_before(stream: &mut TcpStream, buf: &mut [u8], deadline: Instant) -> Result<()> {
+    let mut filled = 0;
+    while filled < buf.len() {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            bail!("direct prediction return open did not arrive in time");
+        }
+        stream
+            .set_read_timeout(Some(remaining))
+            .context("set direct prediction return open deadline")?;
+        match stream.read(&mut buf[filled..]) {
+            Ok(0) => bail!("direct prediction return closed before its open message"),
+            Ok(read) => filled += read,
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+            Err(error) => return Err(error).context("read direct prediction return open header"),
+        }
+    }
+    Ok(())
+}
+
+fn read_prediction_return_open(
+    stream: &mut TcpStream,
+    deadline: Instant,
+) -> Result<StageWireMessage> {
     let mut header = [0_u8; STAGE_WIRE_FIXED_HEADER_BYTES];
-    stream
-        .read_exact(&mut header)
-        .context("read direct prediction return open header")?;
+    read_exact_before(stream, &mut header, deadline)?;
     let read_i32 = |offset: usize| {
         let mut bytes = [0_u8; 4];
         bytes.copy_from_slice(&header[offset..offset + 4]);
@@ -200,6 +286,42 @@ impl PredictionReturnHub {
         if let Ok(mut waiters) = self.waiters.lock() {
             waiters.remove(&key);
         }
+        let streams = self
+            .streams
+            .lock()
+            .ok()
+            .and_then(|mut streams| streams.remove(&key))
+            .unwrap_or_default();
+        for (_, stream) in streams {
+            // Wakes the reader blocked on this stream so it can exit.
+            let _ = stream.shutdown(Shutdown::Both);
+        }
+    }
+
+    fn has_waiter(&self, key: PredictionReturnKey) -> bool {
+        self.waiters
+            .lock()
+            .is_ok_and(|waiters| waiters.contains_key(&key))
+    }
+
+    /// Records a handle to `stream` until the returned guard drops, so that
+    /// [`Self::unregister`] can close it.
+    fn track_stream(
+        &self,
+        key: PredictionReturnKey,
+        stream: &TcpStream,
+    ) -> Result<TrackedStream<'_>> {
+        let handle = stream
+            .try_clone()
+            .context("clone direct prediction return stream")?;
+        let id = self.next_stream_id.fetch_add(1, Ordering::Relaxed);
+        self.streams
+            .lock()
+            .map_err(|_| anyhow!("prediction return hub lock poisoned"))?
+            .entry(key)
+            .or_default()
+            .push((id, handle));
+        Ok(TrackedStream { hub: self, key, id })
     }
 
     pub(crate) fn handle_return_connection(
@@ -222,6 +344,11 @@ impl PredictionReturnHub {
             .get(&key)
             .cloned()
             .ok_or_else(|| anyhow!("no prediction return waiter for request {}", key.request_id))?;
+        let _tracked = self.track_stream(key, &stream)?;
+        // The waiter may have ended between the lookup and tracking the stream.
+        if !self.has_waiter(key) {
+            return Ok(());
+        }
         loop {
             match recv_reply(&mut stream) {
                 Ok(reply) => {
@@ -239,6 +366,26 @@ impl PredictionReturnHub {
                     let _ = sender.send(Err(error.to_string()));
                     return Err(error).context("read direct prediction return");
                 }
+            }
+        }
+    }
+}
+
+/// Removes a stream handle recorded by [`PredictionReturnHub::track_stream`].
+struct TrackedStream<'a> {
+    hub: &'a PredictionReturnHub,
+    key: PredictionReturnKey,
+    id: u64,
+}
+
+impl Drop for TrackedStream<'_> {
+    fn drop(&mut self) {
+        if let Ok(mut streams) = self.hub.streams.lock()
+            && let Some(handles) = streams.get_mut(&self.key)
+        {
+            handles.retain(|(id, _)| *id != self.id);
+            if handles.is_empty() {
+                streams.remove(&self.key);
             }
         }
     }
@@ -584,6 +731,122 @@ mod tests {
         assert!(result.is_err());
         drop(client);
         handle.join().unwrap();
+    }
+
+    #[test]
+    fn idle_prediction_return_connection_fails_after_the_open_deadline() {
+        // A client that connects and never sends its open message must not
+        // hold the connection's thread forever.
+        let hub = Arc::new(PredictionReturnHub::default());
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let mut client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (server, _) = listener.accept().unwrap();
+        let (result_tx, result_rx) = std::sync::mpsc::channel();
+        let handle = thread::spawn(move || {
+            let _ = result_tx.send(handle_prediction_return_connection_within(
+                hub,
+                server,
+                Duration::from_millis(200),
+            ));
+        });
+        recv_ready(&mut client).unwrap();
+
+        let result = result_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("an idle return connection must time out");
+        assert!(result.is_err());
+        drop(client);
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn trickled_prediction_return_open_fails_at_the_absolute_deadline() {
+        // Each byte arrives well within a per-read timeout, but the whole open
+        // takes far longer than the deadline allows.
+        let hub = Arc::new(PredictionReturnHub::default());
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let mut client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (server, _) = listener.accept().unwrap();
+        let (result_tx, result_rx) = std::sync::mpsc::channel();
+        let handle = thread::spawn(move || {
+            let _ = result_tx.send(handle_prediction_return_connection_within(
+                hub,
+                server,
+                Duration::from_millis(300),
+            ));
+        });
+        recv_ready(&mut client).unwrap();
+        let mut header = Vec::new();
+        write_stage_message(&mut header, &prediction_return_open_message(1, 2)).unwrap();
+        let writer = thread::spawn(move || {
+            for byte in header {
+                if client.write_all(&[byte]).is_err() {
+                    break;
+                }
+                thread::sleep(Duration::from_millis(100));
+            }
+            client
+        });
+
+        let result = result_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("a trickled return open must fail at its deadline");
+        assert!(result.is_err());
+        drop(writer.join().unwrap());
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn stalled_return_stream_is_released_when_its_waiter_ends() {
+        // A peer that opens its return stream and then never replies must not
+        // keep the connection once the request it belongs to is over.
+        let hub = Arc::new(PredictionReturnHub::default());
+        let receiver = hub.register(31, 37).unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (server, _) = listener.accept().unwrap();
+        let open = prediction_return_open_message(31, 37);
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let handle = {
+            let hub = hub.clone();
+            thread::spawn(move || {
+                let _ = done_tx.send(hub.handle_return_connection(open, server));
+            })
+        };
+        thread::sleep(Duration::from_millis(100));
+
+        drop(receiver);
+        done_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("ending the waiter must release its stalled return stream")
+            .expect("the reader exits cleanly once its stream is closed");
+        drop(client);
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn prediction_return_listener_refuses_connections_past_its_limit() {
+        let probe = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = probe.local_addr().unwrap();
+        drop(probe);
+        let listener = PredictionReturnListener::start_with_connection_limit(addr, 1).unwrap();
+
+        let mut held = TcpStream::connect(addr).unwrap();
+        recv_ready(&mut held).unwrap();
+
+        let mut refused = TcpStream::connect(addr).unwrap();
+        refused
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        let mut byte = [0_u8; 1];
+        match refused.read(&mut byte) {
+            Ok(0) => {}
+            other => panic!(
+                "a connection past the limit must be closed without a ready reply, got {other:?}"
+            ),
+        }
+        drop(held);
+        drop(listener);
     }
 
     #[test]

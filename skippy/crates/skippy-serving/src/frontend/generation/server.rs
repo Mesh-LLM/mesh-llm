@@ -24,7 +24,7 @@ use crate::frontend::speculative::{SpeculativeDecodeConfig, standalone_ngram_pro
 use crate::kv_integration::KvStageIntegration;
 use crate::listener::bind_serve_listener;
 use crate::runtime_state::RuntimeState;
-use crate::runtime_state::{loaded_model_has_indexer_memory, loaded_model_state_kind};
+use crate::runtime_state::{loaded_memory_cache_capabilities, loaded_model_state_kind};
 use crate::telemetry::Telemetry;
 use crate::telemetry::lifecycle_attrs;
 use crate::telemetry::now_unix_nanos;
@@ -273,7 +273,7 @@ fn embedded_openai_backend_with_scheduler(
     // Render-only probe of the selected chat template, run once at load. This is
     // where every input is in hand: the loaded runtime, the stage config, and the
     // selected template. `/v1/models` publishes the result as `thinking`.
-    let thinking = probe_thinking_controls(&args);
+    let thinking = Some(probe_thinking_controls(&args));
     let model_id = ModelId::new(
         args.model_id
             .unwrap_or_else(|| args.config.model_id.clone()),
@@ -333,11 +333,20 @@ fn embedded_openai_backend_with_scheduler(
     let kv = KvStageIntegration::from_loaded_model_with_l3_manager(
         &args.config,
         loaded_model_state_kind(Some(&args.runtime)),
-        loaded_model_has_indexer_memory(Some(&args.runtime)),
+        loaded_memory_cache_capabilities(Some(&args.runtime)),
         args.l3_manager.clone(),
         args.kv_lifecycle_observer.clone(),
     )?
     .map(Arc::new);
+    if let Some(kv) = kv.as_ref() {
+        let mut attrs = lifecycle_attrs(&args.config);
+        attrs.extend(
+            kv.attrs()
+                .into_iter()
+                .map(|(key, value)| (key.to_owned(), value)),
+        );
+        args.telemetry.emit("stage.kv_payload_selected", attrs);
+    }
     let ctx_size = usize::try_from(args.config.ctx_size).unwrap_or(usize::MAX);
     let iteration_scheduler = match iteration_scheduler {
         Some(iteration_scheduler) => iteration_scheduler,
@@ -435,9 +444,8 @@ fn embedded_openai_backend_with_scheduler(
 /// Renders the selected template to learn which reasoning controls it reacts to.
 ///
 /// Never generates: see [`crate::thinking_probe`] for what the observations can
-/// and cannot claim. A poisoned runtime lock leaves the model unprobed, which is
-/// reported as absent rather than as a default.
-fn probe_thinking_controls(args: &EmbeddedOpenAiArgs) -> Option<ThinkingControls> {
+/// and cannot claim.
+fn probe_thinking_controls(args: &EmbeddedOpenAiArgs) -> ThinkingControls {
     let artifact = args
         .config
         .source_model_sha256
@@ -452,9 +460,9 @@ fn probe_thinking_controls(args: &EmbeddedOpenAiArgs) -> Option<ThinkingControls
             template_override: args.request_defaults.chat_template.as_deref(),
             renderer: &native_renderer_identity(),
         },
-    )?;
+    );
     let _ = emit_probe_status(&report);
-    Some(report.controls().clone())
+    report.controls().clone()
 }
 
 fn validate_generation_receipt_topology(

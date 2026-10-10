@@ -1128,6 +1128,33 @@ mod tests {
     }
 
     #[test]
+    fn activation_descriptor_rejects_extents_beyond_rank() {
+        // A peer controls every dimension, including axes past `rank`. The
+        // native verify path once walked those axes, so only an extent of
+        // 0 or 1 (an unused axis) may pass.
+        for (axis, extent) in [(2, 1000), (3, 2), (2, -1)] {
+            let frame = multipart_activation_frame(1);
+            let mut desc = frame.desc.clone();
+            desc.parts[0].dimensions[axis] = extent;
+
+            assert_invalid_data(
+                encode_raw_activation_frame(&StageActivationFrame {
+                    desc,
+                    payload: frame.payload,
+                }),
+                "activation part has an extent beyond its rank",
+            );
+        }
+
+        for extent in [0, 1] {
+            let mut frame = multipart_activation_frame(1);
+            frame.desc.parts[0].dimensions[2] = extent;
+            frame.desc.parts[0].dimensions[3] = extent;
+            encode_raw_activation_frame(&frame).expect("unused axes may be 0 or 1");
+        }
+    }
+
+    #[test]
     fn multipart_activation_frame_can_be_taken() {
         let frame = multipart_activation_frame(1);
         let mut message = activation_message(&frame, crate::StageActivationCodec::RawF32V1);
