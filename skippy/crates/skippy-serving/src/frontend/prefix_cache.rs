@@ -983,6 +983,7 @@ impl StageOpenAiBackend {
             decode_step: 0,
             current,
             sampling: wire_sampling.clone(),
+            native_mtp_draft_tokens: request.native_mtp_draft_tokens(),
         })?;
         let has_downstream = request.config.downstream.is_some();
         let scheduler_kv = Arc::clone(kv);
@@ -1067,6 +1068,7 @@ impl StageOpenAiBackend {
                 current,
                 sampling: wire_sampling,
                 chat_sampling_metadata: request.chat_sampling_metadata,
+                native_mtp_draft_tokens: request.native_mtp_draft_tokens(),
             })?;
         let forwarded = forwarded_stage_message_timed(
             request.config,

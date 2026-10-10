@@ -284,27 +284,16 @@ impl StageOpenAiBackend {
             &predictions,
             i64::try_from(verification_elapsed_us).unwrap_or(i64::MAX),
         );
-        // The draft returned by the verify call describes the branch that was
-        // just accepted. It is only valid for the next step when the whole span
-        // held; a trimmed suffix invalidates it.
+        // The draft returned by the verify call continues after the last row
+        // whose input held: the final row when the whole span was accepted,
+        // otherwise the first rejecting row, whose prediction is the
+        // correction committed below.
         let full_accept = native_mtp_span_full_accept(
             decision.rejected,
             decision.accepted_proposal_tokens,
             draft_tokens.len(),
         );
-        if full_accept {
-            if let Some(next_draft) = next_draft {
-                state.native_mtp.observe_next_draft(
-                    Some(crate::frontend::NativeMtpDraft {
-                        tokens: next_draft.token_ids,
-                        proposal_compute_us: next_draft.proposal_compute_us,
-                    }),
-                    draft_origin,
-                );
-            }
-        } else {
-            state.native_mtp.clear_pending_draft();
-        }
+        state.native_mtp.clear_pending_draft();
 
         let mut committed_tokens = Vec::with_capacity(decision.commit_count);
         let mut reached_stop = false;
@@ -336,6 +325,20 @@ impl StageOpenAiBackend {
                     return Err(error);
                 }
             }
+        }
+
+        // A draft is only valid if exactly the decided prefix was committed.
+        if committed_tokens.len() == decision.commit_count
+            && !reached_stop
+            && let Some(next_draft) = next_draft
+        {
+            state.native_mtp.observe_next_draft(
+                Some(crate::frontend::NativeMtpDraft {
+                    tokens: next_draft.token_ids,
+                    proposal_compute_us: next_draft.proposal_compute_us,
+                }),
+                draft_origin,
+            );
         }
 
         Ok(VerifiedSpan {
