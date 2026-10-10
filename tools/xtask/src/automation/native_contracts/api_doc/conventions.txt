@@ -1,0 +1,12 @@
+
+<a id="skippy-abi-conventions"></a>
+## ABI conventions
+
+- All exported functions use the `skippy_` prefix and return `skippy_status`, except direct discovery values and `void` cleanup functions.
+- Handles are opaque C structs. Successful creators transfer ownership to the caller; the matching `*_free` function releases them.
+- Buffer-writing functions use caller-provided pointers and capacities, returning the required size through an output parameter and `SKIPPY_STATUS_BUFFER_TOO_SMALL` when needed.
+- Errors returned through `struct skippy_error ** out_error` are owned by the caller and must be released with `skippy_error_free`.
+- Check `skippy_abi_version()` and `skippy_abi_features()` before using optional capabilities.
+
+<a id="skippy-exported-functions"></a>
+## Exported functions
