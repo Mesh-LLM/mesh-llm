@@ -321,7 +321,6 @@ Recommended first-pass behavior:
 ### Nice-to-Have Later
 
 - drag-and-drop attachments
-- paste image support
 - microphone capture for audio input
 - waveform / duration preview for audio
 - video upload once there is either frame-sampling support or native serving support

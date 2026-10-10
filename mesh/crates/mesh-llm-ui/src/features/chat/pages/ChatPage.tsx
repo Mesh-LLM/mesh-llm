@@ -196,6 +196,12 @@ export function ChatPageContent({ data = CHAT_HARNESS, target, onClearTarget }: 
     },
     [composerConversationId]
   )
+  const removeComposerAttachment = useCallback(
+    (index: number) => {
+      updateComposerAttachments((current) => current.filter((_, currentIndex) => currentIndex !== index))
+    },
+    [updateComposerAttachments]
+  )
   const clearComposerDraft = useCallback(
     (conversationId: string) => setComposerDraft(conversationId, { prompt: '', attachments: [] }),
     [setComposerDraft]
@@ -781,7 +787,7 @@ export function ChatPageContent({ data = CHAT_HARNESS, target, onClearTarget }: 
         pendingRetryRef.current = null
         updateComposerAttachments((current) => [...current, ...files])
       }}
-      composerAttachmentCount={composerDraft.attachments.length}
+      onRemoveComposerAttachment={removeComposerAttachment}
       composerDisabled={composerIsPreparingAttachments || !canChat}
       composerIsPreparingAttachments={composerIsPreparingAttachments}
       attachmentProcessingStage={attachmentProcessingStatus?.stage}
