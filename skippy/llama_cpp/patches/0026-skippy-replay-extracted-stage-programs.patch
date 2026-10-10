@@ -25,7 +25,7 @@ Subject: [PATCH 26/67] skippy: replay extracted stage programs
  src/models/kimi-linear.cpp                       | 111 ++-
  src/models/laguna.cpp                            |   9 +
  src/models/lfm2.cpp                              |  25 +-
- src/models/mamba-base.cpp                        | 194 ++++-
+ src/models/mamba-base.cpp                     | 205 +++-
  src/models/mimo2.cpp                             |   7 +
  src/models/minicpm3.cpp                          |  28 +-
  src/models/models.h                              |  43 +-
@@ -65,7 +65,7 @@ Subject: [PATCH 26/67] skippy: replay extracted stage programs
  src/skippy/tests/renamed_multishard_planning.cpp | 223 +++++-
  src/skippy/tests/stage_program_parity.h          | 374 +++++++++
  tests/test-llama-archs.cpp                       |  39 +
- 61 files changed, 8886 insertions(+), 324 deletions(-)
+ 61 files changed, 8893 insertions(+), 328 deletions(-)
 
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
 index b4f9bb467..37c303bd6 100644
@@ -3604,7 +3604,7 @@ index 9a7eadd24..8b0d5bebb 100644
          return y;
      };
 diff --git a/src/models/mamba-base.cpp b/src/models/mamba-base.cpp
-index 2d17560e8..01ad85449 100644
+index 2d17560e8..298953a21 100644
 --- a/src/models/mamba-base.cpp
 +++ b/src/models/mamba-base.cpp
 @@ -1,4 +1,5 @@
@@ -3821,21 +3821,33 @@ index 2d17560e8..01ad85449 100644
  
      // conv
      {
-@@ -219,11 +313,23 @@ ggml_tensor * llm_build_mamba_base::build_mamba2_layer(llm_graph_input_rs * inp,
-         for (int64_t slot = 0; slot < n_written; ++slot) {
+@@ -214,16 +308,31 @@ ggml_tensor * llm_build_mamba_base::build_mamba2_layer(llm_graph_input_rs * inp,
+ 
+         const int64_t row_count = (d_conv - 1) * (d_inner + 2 * n_group * d_state);
+         const size_t  row_size  = ggml_row_size(conv_states_all->type, row_count);
+-        const int64_t n_written = std::min<int64_t>(n_seq_tokens, K);
+-
+-        for (int64_t slot = 0; slot < n_written; ++slot) {
++        // The snapshot loop is bounded by the rollback depth, not by the ubatch
++        // width, so the captured operation list does not depend on how many
++        // tokens a replay carries. A batch shorter than the rollback depth
++        // clamps its window to the earliest one, as build_recurrent_attn does.
++        for (int64_t slot = 0; slot < K; ++slot) {
              ggml_tensor * last_conv = ggml_view_3d(ctx0, conv_x, d_conv - 1, d_inner + 2 * n_group * d_state, n_seqs,
-                                                    conv_x->nb[1], conv_x->nb[2], (n_seq_tokens - slot) * conv_x->nb[0]);
+-                                                   conv_x->nb[1], conv_x->nb[2], (n_seq_tokens - slot) * conv_x->nb[0]);
 -
 -            ggml_tensor * conv_write = ggml_cpy(ctx0, last_conv,
 -                                                ggml_view_2d(ctx0, conv_states_all, row_count, n_seqs,
 -                                                             conv_states_all->nb[1],
 -                                                             ((size_t) slot * mem_size + kv_head) * row_size));
++                                                   conv_x->nb[1], conv_x->nb[2],
++                                                   std::max<int64_t>(0, n_seq_tokens - slot) * conv_x->nb[0]);
 +            auto last_conv_geometry = skippy_stage_geometry_static(last_conv);
 +            last_conv_geometry.dimensions[2] = skippy_stage_geometry_expression::sequences();
 +            last_conv_geometry.byte_strides[1] = skippy_stage_geometry_expression::source_stride(0, 1);
 +            last_conv_geometry.byte_strides[2] = skippy_stage_geometry_expression::source_stride(0, 2);
-+            last_conv_geometry.view_offset = skippy_stage_geometry_expression::tokens_per_sequence(
-+                    conv_x->nb[0], -slot*static_cast<int64_t>(conv_x->nb[0]));
++            last_conv_geometry.view_offset = skippy_stage_geometry_expression::tokens_per_sequence_clamped(
++                    -slot, conv_x->nb[0]);
 +            skippy_stage_geometry_note(last_conv, last_conv_geometry);
 +
 +            ggml_tensor * state_destination = ggml_view_2d(ctx0, conv_states_all, row_count, n_seqs,
@@ -3850,7 +3862,7 @@ index 2d17560e8..01ad85449 100644
              ggml_build_forward_expand(gf, conv_write);
              state_write(skippy_state_kind::recurrent_conv, conv_states_all, conv_write, il);
          }
-@@ -254,9 +360,22 @@ ggml_tensor * llm_build_mamba_base::build_mamba2_layer(llm_graph_input_rs * inp,
+@@ -254,9 +363,22 @@ ggml_tensor * llm_build_mamba_base::build_mamba2_layer(llm_graph_input_rs * inp,
                                         xBC->nb[1], xBC->nb[2], d_inner * ggml_element_size(xBC));
          ggml_tensor * C = ggml_view_4d(ctx0, xBC, d_state, n_group, n_seq_tokens, n_seqs, d_state * xBC->nb[0],
                                         xBC->nb[1], xBC->nb[2], (d_inner + n_group * d_state) * ggml_element_size(xBC));
@@ -3874,7 +3886,7 @@ index 2d17560e8..01ad85449 100644
  
          ggml_tensor * A = model.layers[il].ssm_a;
  
-@@ -265,6 +384,7 @@ ggml_tensor * llm_build_mamba_base::build_mamba2_layer(llm_graph_input_rs * inp,
+@@ -265,6 +387,7 @@ ggml_tensor * llm_build_mamba_base::build_mamba2_layer(llm_graph_input_rs * inp,
          //  while avoiding to make unnecessary copies of the states)
          auto get_ssm_rows = [&](ggml_context * ctx, ggml_tensor * states, ggml_tensor * ids) {
              ggml_tensor * ssm = ggml_reshape_4d(ctx, states, d_state, head_dim, n_head, state_slots);
@@ -3882,7 +3894,7 @@ index 2d17560e8..01ad85449 100644
  
              // TODO: use semistructured matrices to implement state-space duality
              // => {d_inner, n_seq_tokens, n_seqs} and {d_state, d_inner, n_seqs}
-@@ -280,30 +400,60 @@ ggml_tensor * llm_build_mamba_base::build_mamba2_layer(llm_graph_input_rs * inp,
+@@ -280,30 +403,60 @@ ggml_tensor * llm_build_mamba_base::build_mamba2_layer(llm_graph_input_rs * inp,
          const size_t  y_row_size   = ggml_row_size(y_ssm->type, D);
          const size_t  state_offset = ggml_nelements(x) * ggml_element_size(x);
  
