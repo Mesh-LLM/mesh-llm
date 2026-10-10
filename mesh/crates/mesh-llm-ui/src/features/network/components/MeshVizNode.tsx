@@ -27,6 +27,7 @@ type MeshVizNodeProps = {
   nodeColors?: MeshVizNodeColors
   lifecycle: MeshVizNodeLifecycle
   radarPingRef: RefObject<HTMLSpanElement | null>
+  hoverCardContainer?: HTMLElement | null
   onHoverStart: (nodeId: string) => void
   onHoverEnd: (nodeId: string) => void
   onToggleOpen: (nodeId: string) => void
@@ -63,6 +64,7 @@ export function MeshVizNode({
   nodeColors,
   lifecycle,
   radarPingRef,
+  hoverCardContainer,
   onHoverStart,
   onHoverEnd,
   onToggleOpen,
@@ -192,7 +194,7 @@ export function MeshVizNode({
           </span>
         </button>
       </HoverCardPrimitive.Trigger>
-      <MeshVizNodeHoverCard node={node} peer={peer} />
+      <MeshVizNodeHoverCard node={node} peer={peer} container={hoverCardContainer} />
     </HoverCardPrimitive.Root>
   )
 }
