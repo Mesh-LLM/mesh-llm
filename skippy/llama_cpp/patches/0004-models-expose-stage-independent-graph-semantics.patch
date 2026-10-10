@@ -674,10 +674,10 @@ index dce54b364..bc3ab811b 100644
              drafted_token = try_draft(nc_static, ngram_static);
 diff --git a/common/stage-chat.cpp b/common/stage-chat.cpp
 new file mode 100644
-index 000000000..180c0a884
+index 000000000..1ab58a85d
 --- /dev/null
 +++ b/common/stage-chat.cpp
-@@ -0,0 +1,362 @@
+@@ -0,0 +1,363 @@
 +#include "chat.h"
 +#include "skippy.h"
 +
@@ -930,7 +930,8 @@ index 000000000..180c0a884
 +                inputs.chat_template_kwargs[key] = value.dump();
 +            }
 +        }
-+        if (override_enable_thinking && !enable_thinking) {
++        if (override_enable_thinking && !enable_thinking &&
++            inputs.chat_template_kwargs.find("reasoning_effort") == inputs.chat_template_kwargs.end()) {
 +            inputs.chat_template_kwargs["reasoning_effort"] = "0";
 +        }
 +

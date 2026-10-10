@@ -318,7 +318,7 @@ index 1b89a04c4..85d5c35dc 100644
 -bool common_reasoning_budget_force(struct llama_sampler * smpl);
 +LLAMA_API bool common_reasoning_budget_force(struct llama_sampler * smpl);
 diff --git a/common/stage-chat.cpp b/common/stage-chat.cpp
-index 180c0a884..5b3f8690d 100644
+index 1ab58a85d..485d695f3 100644
 --- a/common/stage-chat.cpp
 +++ b/common/stage-chat.cpp
 @@ -153,6 +153,9 @@ static json skippy_common_chat_metadata_json(
