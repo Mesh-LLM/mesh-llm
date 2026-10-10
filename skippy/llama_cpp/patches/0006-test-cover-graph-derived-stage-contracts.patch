@@ -747,7 +747,7 @@ index 000000000..471968158
 +}
 diff --git a/src/skippy/tests/noalloc_graph_planning.cpp b/src/skippy/tests/noalloc_graph_planning.cpp
 new file mode 100644
-index 000000000..11559ce5c
+index 000000000..9848042f0
 --- /dev/null
 +++ b/src/skippy/tests/noalloc_graph_planning.cpp
 @@ -0,0 +1,1088 @@
@@ -1544,7 +1544,7 @@ index 000000000..11559ce5c
 +    }
 +    result.boundary_pairs = boundaries.size() / 2;
 +
-+    // mirror the mamba2 slot loop: writes = min(n_seq_tokens, 1 + effective n_rs_seq)
++    // mirror the mamba2 slot loop: writes = 1 + effective n_rs_seq, independent of ubatch width
 +    const uint32_t effective_rs_seq = llama_n_rs_seq(context);
 +    if (n_rs_seq > 0 && effective_rs_seq != n_rs_seq) {
 +        std::fprintf(stderr, "metadata-only %s requested n_rs_seq=%u but context clamped it to %u\n",
@@ -1552,7 +1552,7 @@ index 000000000..11559ce5c
 +        llama_free(context);
 +        return false;
 +    }
-+    const size_t expected_conv_writes = std::min<size_t>(n_tokens / n_seqs, 1 + effective_rs_seq);
++    const size_t expected_conv_writes = 1 + effective_rs_seq;
 +
 +    if (!check_state_effects(graph_result, graph, model, profile_name, layer_classes, expected_conv_writes)) {
 +        llama_free(context);
