@@ -26,6 +26,12 @@ The receipt contract requires separate `dense`, `recurrent`, `moe`, `kv-cache`,
 the exact composed product, protected availability record, model identities,
 and all applicable cases validate. No platform workflow produces that complete
 evidence set yet, so the assembler is not a current lane gate.
+Each selected standalone product row now rechecks its final archive, CLI
+imports/version, native ABI/release pairing, and no-driver runtime discovery
+after composition, then uploads a digest-bound `packaging-runtime` evidence
+artifact named `ci-skippy-packaging-<platform>-<architecture>-<backend>`.
+This packaging result is one input to the pending full qualification receipt;
+it does not mark model or hardware execution qualified.
 
 The affected-crate fallback roster in `scripts/affected-crates.sh` includes
 `mesh-llm-moa-plugin` and `mesh-llm-wallet` alongside their related workspace

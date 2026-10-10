@@ -120,6 +120,22 @@ jobs:
           python3 skippy/scripts/compose-ci-product.py --cli-input skippy-cli-input \
             --runtime-input runtime-input --output skippy-product-input \
             --source-sha "$SOURCE_SHA" --target "$TARGET" --backend "$BACKEND"
+      - name: Qualify exact standalone packaging and runtime
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          ROW_ID: ${{ matrix.runtime.id }}
+        run: |
+          python3 skippy/scripts/qualify-ci-packaging.py \
+            --product-dir skippy-product-input --product-archive skippy-product-input.tar.gz \
+            --source-sha "$SOURCE_SHA" --row-id "$ROW_ID" \
+            --evidence skippy-packaging-runtime.json
+      - name: Upload standalone packaging evidence
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: ci-skippy-packaging-linux-${{ matrix.runtime.architecture }}-${{ matrix.runtime.backend }}
+          path: skippy-packaging-runtime.json
+          if-no-files-found: error
+          retention-days: 1
       - name: Restore pinned dense model for standalone CPU pilot
         if: ${{ matrix.runtime.backend == 'cpu' }}
         id: dense_model
@@ -237,6 +253,23 @@ jobs:
           python3 skippy/scripts/compose-ci-product.py --cli-input skippy-cli-input \
             --runtime-input runtime-input --output skippy-product-input \
             --source-sha "$SOURCE_SHA" --target "$TARGET" --backend "$BACKEND"
+      - name: Qualify exact standalone packaging and runtime
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          ROW_ID: ${{ matrix.runtime.id }}
+        run: |
+          python3 skippy/scripts/qualify-ci-packaging.py \
+            --product-dir skippy-product-input --product-archive skippy-product-input.tar.gz \
+            --source-sha "$SOURCE_SHA" --row-id "$ROW_ID" \
+            --evidence skippy-packaging-runtime.json
+      - name: Upload standalone packaging evidence
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: ci-skippy-packaging-macos-${{ matrix.runtime.architecture }}-${{ matrix.runtime.backend }}
+          path: skippy-packaging-runtime.json
+          if-no-files-found: error
+          retention-days: 1
       - name: Upload immutable standalone product
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
@@ -283,6 +316,23 @@ jobs:
           python skippy/scripts/compose-ci-product.py --cli-input skippy-cli-input \
             --runtime-input runtime-input --output skippy-product-input \
             --source-sha "$SOURCE_SHA" --target "$TARGET" --backend "$BACKEND"
+      - name: Qualify exact standalone packaging and runtime
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          ROW_ID: ${{ matrix.runtime.id }}
+        run: |
+          python skippy/scripts/qualify-ci-packaging.py \
+            --product-dir skippy-product-input --product-archive skippy-product-input.tar.gz \
+            --source-sha "$SOURCE_SHA" --row-id "$ROW_ID" \
+            --evidence skippy-packaging-runtime.json
+      - name: Upload standalone packaging evidence
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: ci-skippy-packaging-windows-${{ matrix.runtime.architecture }}-${{ matrix.runtime.backend }}
+          path: skippy-packaging-runtime.json
+          if-no-files-found: error
+          retention-days: 1
       - name: Restore pinned dense model for standalone Windows CPU pilot
         if: ${{ matrix.runtime.backend == 'cpu' }}
         id: dense_model
