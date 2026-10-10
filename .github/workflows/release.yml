@@ -1913,6 +1913,17 @@ jobs:
             release-artifacts/*
           shasum -a 256 release-artifacts/native-runtimes.json | awk '{print $1 "  native-runtimes.json"}' > release-artifacts/native-runtimes.json.sha256
 
+      - name: Upload composed native runtime manifest
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: composed-native-runtimes-manifest
+          path: |
+            release-artifacts/native-runtimes.json
+            release-artifacts/native-runtimes.json.sha256
+          retention-days: 90
+          if-no-files-found: error
+
       - name: Download generated SwiftPM manifest
         if: github.event_name == 'workflow_dispatch'
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -2050,6 +2061,11 @@ jobs:
     permissions:
       contents: read
     steps:
+      - name: Download composed native runtime manifest
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: composed-native-runtimes-manifest
+          path: composed-native-runtimes-manifest
       - name: Dispatch verified release to mesh-packaging
         id: dispatch
         env:
@@ -2076,10 +2092,15 @@ jobs:
             mesh_sha="$(git ls-remote "https://github.com/${GITHUB_REPOSITORY}.git" "refs/tags/${RELEASE_TAG}" | awk 'NR == 1 { print $1 }')"
           fi
           [[ "$mesh_sha" =~ ^[0-9a-f]{40}$ ]] || { echo "published release tag did not resolve to a commit" >&2; exit 1; }
-          manifest_url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/native-runtimes.json"
-          curl --fail --location --retry 3 --proto '=https' --tlsv1.2 --output native-runtimes.json "$manifest_url"
-          [[ -s native-runtimes.json ]] || { echo "published native runtime manifest is missing" >&2; exit 1; }
-          manifest_sha256="$(sha256sum native-runtimes.json | cut -d ' ' -f 1)"
+          # Provenance, not trust-on-first-use: the expected manifest digest is
+          # the composed manifest this workflow uploaded, never the bytes served
+          # back from the published release asset.
+          manifest_sha256="$(sha256sum composed-native-runtimes-manifest/native-runtimes.json | cut -d ' ' -f 1)"
+          [[ "$manifest_sha256" =~ ^[0-9a-f]{64}$ ]] || { echo "composed native runtime manifest is missing" >&2; exit 1; }
+          if ! (cd composed-native-runtimes-manifest && sha256sum -c native-runtimes.json.sha256); then
+            echo "composed native runtime manifest bytes differ from the checksum recorded beside them" >&2
+            exit 1
+          fi
           correlation_id="mesh-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${RELEASE_TAG}"
           {
             echo "correlation_id=$correlation_id"

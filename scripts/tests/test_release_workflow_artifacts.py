@@ -1118,6 +1118,28 @@ class ReleaseWorkflowArtifactTests(unittest.TestCase):
             )
             self.assertNotIn("uses: actions/cache@", job)
 
+    def test_dispatch_manifest_digest_comes_from_the_composed_artifact(self) -> None:
+        workflow = RELEASE_WORKFLOW.read_text(encoding="utf-8")
+        publish = job_block(workflow, "publish", "dispatch_packaging_release")
+        dispatch = job_block(
+            workflow,
+            "dispatch_packaging_release",
+            "await_packaging_release",
+        )
+
+        # The manifest digest downstream verifies against must be produced by the
+        # workflow's own composition step, not fetched back from the public
+        # release asset (trust-on-first-use).
+        self.assertIn("name: composed-native-runtimes-manifest", publish)
+        self.assertIn("name: composed-native-runtimes-manifest", dispatch)
+        self.assertIn(
+            "composed-native-runtimes-manifest/native-runtimes.json",
+            dispatch,
+        )
+        self.assertIn("sha256sum -c native-runtimes.json.sha256", dispatch)
+        self.assertNotIn("releases/download", dispatch)
+        self.assertNotIn("curl ", dispatch)
+
 
 if __name__ == "__main__":
     unittest.main()
