@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "plugins": [
+    {
+      "name": "capsules",
+      "repository": "Mesh-LLM/capsules",
+      "tag": "v0.1.3",
+      "version": "0.1.3",
+      "signer_workflow": "Mesh-LLM/capsules/.github/workflows/release.yml",
+      "archives": {
+        "aarch64-apple-darwin": "90ad75f783b49371fe5e4d436dd306d57c6e3704611d276c25f75d2c4d739e64",
+        "aarch64-unknown-linux-gnu": "992f1ebdf8a1ed624b0082440376daa1b597efeac0ea1fcf46c84f33eb145dd3",
+        "x86_64-unknown-linux-gnu": "7a0a13ce2cb4210a48e937163f36cb41684d5399a402eff03ec389be44d03fb8"
+      },
+      "absent": {
+        "x86_64-pc-windows-msvc": "the plugin has no Windows build yet"
+      }
+    }
+  ]
+}
