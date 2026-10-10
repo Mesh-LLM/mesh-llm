@@ -39,7 +39,7 @@ async fn spawn_api_proxy_test_harness_with_affinity(
         node,
         addr.port(),
         target_rx,
-        Some(listener),
+        Some(listener.into()),
         false,
         affinity.clone(),
     ));
@@ -64,7 +64,7 @@ async fn spawn_api_proxy_test_harness_with_contexts(
         node,
         addr.port(),
         target_rx,
-        Some(listener),
+        Some(listener.into()),
         false,
         affinity::AffinityRouter::default(),
     ));
@@ -99,7 +99,7 @@ async fn spawn_api_proxy_test_harness_with_plugin_manager_and_contexts(
         node,
         addr.port(),
         target_rx,
-        Some(listener),
+        Some(listener.into()),
         false,
         affinity::AffinityRouter::default(),
     ));

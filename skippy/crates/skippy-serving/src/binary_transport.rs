@@ -5,6 +5,7 @@ pub(crate) mod direct_return;
 pub(crate) mod forwarding;
 mod kv_eviction;
 mod options;
+mod peer_sampling;
 mod preconnect;
 mod prefill_execution;
 mod restore_prefill_decode;

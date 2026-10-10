@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { ArrowRightLeft, Check, MessageSquare, MoreVertical, Pencil, Plus, Trash2, X } from 'lucide-react'
 import {
   DropdownMenu,
@@ -128,6 +128,22 @@ export function ChatSidebar({
     input?.select()
   }, [editingConversationId])
 
+  // The menu trigger's ref must keep its identity across renders. Radix composes it with the
+  // dropdown's anchor ref, and a new ref function on every render makes React detach and
+  // re-attach the anchor on each commit, which sets state. While a reply streams the sidebar
+  // re-renders on every token, so those commits chain until React aborts the whole chat view
+  // with "Maximum update depth exceeded" (minified error #185).
+  const registerActionTrigger = useCallback((node: HTMLButtonElement) => {
+    const triggers = actionTriggerRefs.current
+    const conversationId = node.dataset.conversationId
+    if (!conversationId) return
+    triggers.set(conversationId, node)
+    // React 19 ref cleanup: drop this row's entry when its button detaches.
+    return () => {
+      if (triggers.get(conversationId) === node) triggers.delete(conversationId)
+    }
+  }, [])
+
   function startRename(conversation: Conversation) {
     setEditingConversationId(conversation.id)
     setEditingTitle(conversation.title)
@@ -150,14 +166,8 @@ export function ChatSidebar({
           <button
             aria-label={`Open actions for ${conversation.title}`}
             className="grid size-7 place-items-center rounded-[var(--radius)] text-fg-faint outline-none transition-[background,color] hover:bg-panel-strong hover:text-fg focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent"
-            ref={(node) => {
-              if (node) {
-                actionTriggerRefs.current.set(conversation.id, node)
-                return
-              }
-
-              actionTriggerRefs.current.delete(conversation.id)
-            }}
+            data-conversation-id={conversation.id}
+            ref={registerActionTrigger}
             type="button"
           >
             <MoreVertical className="size-3.5" />

@@ -1,7 +1,8 @@
+use crate::runtime_state::panic_recovery::{PanicRecovery, lock_runtime, try_lock_recovering};
 use std::{
     net::SocketAddr,
     sync::atomic::{AtomicBool, Ordering},
-    sync::{Arc, Mutex, OnceLock, TryLockError},
+    sync::{Arc, Mutex, OnceLock},
 };
 
 use anyhow::{Context, Result};
@@ -121,43 +122,28 @@ struct RuntimeHandleState {
 
 impl SkippyRuntimeHandle {
     pub fn input_activation_boundary(&self) -> Option<ActivationBoundaryDesc> {
-        self.runtime
-            .lock()
-            .expect("runtime lock poisoned")
-            .input_activation_boundary()
+        lock_runtime(&self.runtime).input_activation_boundary()
     }
 
     pub fn output_activation_boundary(&self) -> Option<ActivationBoundaryDesc> {
-        self.runtime
-            .lock()
-            .expect("runtime lock poisoned")
-            .output_activation_boundary()
+        lock_runtime(&self.runtime).output_activation_boundary()
     }
 
     /// Returns the runtime-probed workload contract for the loaded model.
     pub fn workload_info(&self) -> Result<WorkloadInfo> {
-        self.runtime
-            .lock()
-            .expect("runtime lock poisoned")
-            .workload_info()
+        lock_runtime(&self.runtime).workload_info()
     }
 
     /// True only when the loaded multimodal projector exposes llama.cpp's
     /// audio-generation helper contract.
     pub fn supports_speech_synthesis(&self) -> bool {
-        self.runtime
-            .lock()
-            .expect("runtime lock poisoned")
-            .supports_speech_synthesis()
+        lock_runtime(&self.runtime).supports_speech_synthesis()
     }
 
     /// True only when this loaded runtime can execute System One reads: a valid
     /// decision canvas on one unsplit execution lane.
     pub fn supports_system_one(&self) -> bool {
-        self.runtime
-            .lock()
-            .expect("runtime lock poisoned")
-            .supports_system_one_endpoint()
+        lock_runtime(&self.runtime).supports_system_one_endpoint()
     }
 
     /// Assemble a ready handle around an already-loaded runtime.
@@ -173,10 +159,7 @@ impl SkippyRuntimeHandle {
         telemetry: Telemetry,
     ) -> Self {
         let initial_session_stats = Captured {
-            value: runtime
-                .lock()
-                .expect("runtime lock poisoned")
-                .session_stats(),
+            value: lock_runtime(&runtime).session_stats(),
             captured_at_unix_nanos: now_unix_nanos(),
         };
         Self {
@@ -336,7 +319,7 @@ impl SkippyRuntimeHandle {
 
     pub fn shutdown(&self) {
         self.tokenizer_active.store(false, Ordering::Release);
-        let runtime = self.runtime.lock().expect("runtime lock poisoned");
+        let runtime = lock_runtime(&self.runtime);
         drop(runtime);
         let mut status = self.status.lock().expect("runtime status lock poisoned");
         if status.state == EmbeddedState::Stopped {
@@ -639,18 +622,19 @@ fn finish_server_status(status: &Arc<Mutex<ServerHandleState>>, result: &Result<
 /// must propagate it rather than stamp the value as freshly observed. Nothing
 /// may gate admission, routing, eviction or shutdown on these values.
 ///
-/// A poisoned `source` still panics, as the previous blocking `lock().expect`
-/// did: cached stats over a panicked runtime would hide a real failure.
+/// A poisoned `source` is recovered, as every other runtime lock is, so the
+/// value read afterwards reflects the reset state rather than a stale cache.
 fn read_without_blocking<S, V>(
     source: &Mutex<S>,
     cache: &Mutex<Captured<V>>,
     read: impl FnOnce(&S) -> V,
 ) -> Captured<V>
 where
+    S: PanicRecovery,
     V: Clone,
 {
-    match source.try_lock() {
-        Ok(guard) => {
+    match try_lock_recovering(source) {
+        Some(guard) => {
             let value = read(&guard);
             drop(guard);
             let captured = Captured {
@@ -662,8 +646,7 @@ where
         }
         // Inference holds the runtime: serve the last published snapshot,
         // carrying the time it was taken, instead of blocking.
-        Err(TryLockError::WouldBlock) => cache.lock().expect("stats cache lock poisoned").clone(),
-        Err(TryLockError::Poisoned(error)) => panic!("runtime lock poisoned: {error}"),
+        None => cache.lock().expect("stats cache lock poisoned").clone(),
     }
 }
 
@@ -674,6 +657,12 @@ mod tests {
     use skippy_protocol::LoadMode;
 
     use super::*;
+
+    impl PanicRecovery for u32 {
+        fn reset_after_panic(&mut self) {
+            *self = 0;
+        }
+    }
 
     #[test]
     fn binary_stage_cannot_be_ready_before_boundaries_are_published() {
@@ -939,11 +928,9 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "runtime lock poisoned")]
-    fn read_without_blocking_still_panics_on_a_poisoned_runtime() {
-        // A poisoned runtime means inference panicked. Serving cached stats
-        // over the top of that would report a healthy node, so this must keep
-        // the pre-existing panic behaviour rather than fall back to the cache.
+    fn read_without_blocking_recovers_a_poisoned_runtime() {
+        // A poisoned runtime means inference panicked. The read recovers the
+        // lock, so it reports the reset state instead of a stale cache.
         let source = Mutex::new(7u32);
         let cache = empty_cache(0);
         let _ = std::panic::catch_unwind(|| {
@@ -951,7 +938,9 @@ mod tests {
             panic!("inference exploded");
         });
         assert!(source.is_poisoned(), "precondition: source is poisoned");
-        let _ = read_without_blocking(&source, &cache, |v| *v);
+        let read = read_without_blocking(&source, &cache, |v| *v);
+        assert_eq!(read.value, 0, "recovery resets the state before the read");
+        assert!(!source.is_poisoned());
     }
 }
 

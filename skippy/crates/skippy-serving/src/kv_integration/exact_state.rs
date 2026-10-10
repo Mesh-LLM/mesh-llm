@@ -690,20 +690,13 @@ impl KvStageIntegration {
                 return Ok(None);
             }
         };
-        let (payload, extra) = match exported {
+        let (payload, extra) = match self.validate_snapshot_export(exported) {
             Ok(exported) => exported,
             Err(error) => {
                 self.finish_record(&identity.page_id);
                 return Err(error);
             }
         };
-        if payload.byte_len() == 0 {
-            // A dense model whose native KV export was unavailable has no
-            // state component at all. Recording it would later restore as a
-            // bare position advance over missing attention state.
-            self.finish_record(&identity.page_id);
-            return Ok(None);
-        }
         let payload_kind = payload.kind();
         let logical_bytes = payload.byte_len();
         match self.enqueue_exact_state_record(PendingExactStateRecord {

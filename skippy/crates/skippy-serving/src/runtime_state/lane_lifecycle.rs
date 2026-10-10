@@ -105,6 +105,7 @@ impl RuntimeState {
     /// long after the owning sessions were gone, producing
     /// `failed to find a memory slot` errors on subsequent admissions.
     pub fn drop_session_timed(&mut self, session_id: &str) -> Result<RuntimeSessionDropStats> {
+        self.forget_reset_session(session_id);
         let reset_started = Instant::now();
         let mut reset_session = false;
         let preserved_resident_prefix = false;
@@ -303,6 +304,7 @@ impl RuntimeState {
         if self.sessions.contains_key(session_id) {
             bail!("session {session_id} already exists");
         }
+        self.ensure_not_reset_by_panic(session_id)?;
         let Some(index) = self.idle_sessions.iter().position(|idle| {
             idle.resident_prefix.as_ref().is_some_and(|prefix| {
                 prefix.page_id == page_id && prefix.token_count == token_count
@@ -432,6 +434,7 @@ impl RuntimeState {
         if self.sessions.contains_key(session_id) {
             bail!("session {session_id} already exists");
         }
+        self.ensure_not_reset_by_panic(session_id)?;
         let model = &self.model;
         let (index, session) = create_indexed_lane_resource(
             &mut self.next_lane_index,

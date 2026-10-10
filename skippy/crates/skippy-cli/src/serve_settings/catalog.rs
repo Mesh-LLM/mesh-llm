@@ -575,6 +575,13 @@ pub const OPTIONS: &[OptionSpec] = &[
         "Default grammar; @file loads UTF-8 text",
     ),
     option(
+        "allow-request-chat-template",
+        "chat",
+        "request.allow_request_chat_template",
+        Kind::Bool,
+        "Let requests supply their own chat template (trusts every caller)",
+    ),
+    option(
         "jinja",
         "chat",
         "request.jinja",
