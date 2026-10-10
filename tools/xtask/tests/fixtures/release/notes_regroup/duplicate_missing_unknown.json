@@ -1,0 +1,18 @@
+{
+  "args": [
+    "--body",
+    "body.md",
+    "--plan",
+    "plan.json",
+    "--out",
+    "notes.md"
+  ],
+  "code": 1,
+  "gh_argv": [],
+  "git_argv": [],
+  "outputs": {
+    "notes.md": null
+  },
+  "stderr": "error: plan does not cover the body exactly\nassigned to more than one section:\n  #1  * Add search by @alice in https://github.com/o/r/pull/1\nmissing from the plan:\n  #2  * Repair cache by @bob in https://github.com/o/r/pull/2\nin the plan but not in the release body:\n  #42\n",
+  "stdout": ""
+}

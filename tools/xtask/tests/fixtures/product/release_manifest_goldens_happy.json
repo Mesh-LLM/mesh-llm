@@ -1,0 +1,72 @@
+{
+  "rebuilt_archive_changes_digest": {
+    "code": 0,
+    "json": {
+      "out/release.json": "{\n  \"artifacts\": [\n    {\n      \"backend\": {\n        \"kind\": \"cpu\"\n      },\n      \"files\": [\n        \"lib/libskippy.so\"\n      ],\n      \"id\": \"rt-linux\",\n      \"libraries\": [\n        \"libskippy.so\"\n      ],\n      \"mesh_version\": \"v1.2.3\",\n      \"platform\": {\n        \"arch\": \"x86_64\",\n        \"os\": \"linux\"\n      },\n      \"sha256\": \"a84772f91bf6cef3387899b151010be1a31a5d25bf319dd8078c93888fb89761\",\n      \"skippy_abi\": 7,\n      \"url\": \"https://github.com/Mesh-LLM/mesh-llm/releases/download/v1.2.3/rt-linux.tar.gz\"\n    }\n  ],\n  \"mesh_version\": \"v1.2.3\",\n  \"skippy_abi\": 7\n}\n",
+      "tmp/archive-0/rt-linux/manifest.json": "{\"runtime\": {\"id\": \"rt-linux\", \"mesh_version\": \"v1.2.3\", \"skippy_abi\": 7, \"platform\": {\"os\": \"linux\", \"arch\": \"x86_64\"}, \"backend\": {\"kind\": \"cpu\"}, \"libraries\": [\"libskippy.so\"], \"files\": [\"lib/libskippy.so\"]}}"
+    },
+    "paths": [
+      "dist/",
+      "dist/rt-linux.tar.gz",
+      "out/",
+      "out/release.json",
+      "tmp/",
+      "tmp/archive-0/",
+      "tmp/archive-0/rt-linux/",
+      "tmp/archive-0/rt-linux/lib/",
+      "tmp/archive-0/rt-linux/lib/libskippy.so",
+      "tmp/archive-0/rt-linux/manifest.json"
+    ],
+    "stderr": "",
+    "stdout": ""
+  },
+  "single_runtime": {
+    "code": 0,
+    "json": {
+      "out/release.json": "{\n  \"artifacts\": [\n    {\n      \"backend\": {\n        \"kind\": \"cpu\"\n      },\n      \"files\": [\n        \"lib/libskippy.so\"\n      ],\n      \"id\": \"rt-linux\",\n      \"libraries\": [\n        \"libskippy.so\"\n      ],\n      \"mesh_version\": \"v1.2.3\",\n      \"platform\": {\n        \"arch\": \"x86_64\",\n        \"os\": \"linux\"\n      },\n      \"sha256\": \"6ad6c5bb400723f04d135bc56ac55f7f2d7775c2a0a798d746fdf586c1febd2e\",\n      \"skippy_abi\": 7,\n      \"url\": \"https://github.com/Mesh-LLM/mesh-llm/releases/download/v1.2.3/rt-linux.tar.gz\"\n    }\n  ],\n  \"mesh_version\": \"v1.2.3\",\n  \"skippy_abi\": 7\n}\n",
+      "tmp/archive-0/rt-linux/manifest.json": "{\"runtime\": {\"id\": \"rt-linux\", \"mesh_version\": \"v1.2.3\", \"skippy_abi\": 7, \"platform\": {\"os\": \"linux\", \"arch\": \"x86_64\"}, \"backend\": {\"kind\": \"cpu\"}, \"libraries\": [\"libskippy.so\"], \"files\": [\"lib/libskippy.so\"]}}"
+    },
+    "paths": [
+      "dist/",
+      "dist/rt-linux.tar.gz",
+      "out/",
+      "out/release.json",
+      "tmp/",
+      "tmp/archive-0/",
+      "tmp/archive-0/rt-linux/",
+      "tmp/archive-0/rt-linux/lib/",
+      "tmp/archive-0/rt-linux/lib/libskippy.so",
+      "tmp/archive-0/rt-linux/manifest.json"
+    ],
+    "stderr": "",
+    "stdout": ""
+  },
+  "two_runtimes_sorted_by_id": {
+    "code": 0,
+    "json": {
+      "out/release.json": "{\n  \"artifacts\": [\n    {\n      \"backend\": {\n        \"kind\": \"cpu\"\n      },\n      \"files\": [\n        \"lib/libskippy.so\"\n      ],\n      \"id\": \"rt-a-mac\",\n      \"libraries\": [\n        \"libskippy.so\"\n      ],\n      \"mesh_version\": \"v1.2.3\",\n      \"platform\": {\n        \"arch\": \"aarch64\",\n        \"os\": \"macos\"\n      },\n      \"sha256\": \"9afd50e5449a2bbdd1cee4970b024ca2cda9b1734ca97d37c2ef7ad8b834b584\",\n      \"skippy_abi\": 7,\n      \"url\": \"https://github.com/Mesh-LLM/mesh-llm/releases/download/v1.2.3/rt-a-mac.tar.gz\"\n    },\n    {\n      \"backend\": {\n        \"kind\": \"cpu\"\n      },\n      \"files\": [\n        \"lib/libskippy.so\"\n      ],\n      \"id\": \"rt-linux\",\n      \"libraries\": [\n        \"libskippy.so\"\n      ],\n      \"mesh_version\": \"v1.2.3\",\n      \"platform\": {\n        \"arch\": \"x86_64\",\n        \"os\": \"linux\"\n      },\n      \"sha256\": \"6ad6c5bb400723f04d135bc56ac55f7f2d7775c2a0a798d746fdf586c1febd2e\",\n      \"skippy_abi\": 7,\n      \"url\": \"https://github.com/Mesh-LLM/mesh-llm/releases/download/v1.2.3/rt-linux.tar.gz\"\n    }\n  ],\n  \"mesh_version\": \"v1.2.3\",\n  \"skippy_abi\": 7\n}\n",
+      "tmp/archive-0/rt-linux/manifest.json": "{\"runtime\": {\"id\": \"rt-linux\", \"mesh_version\": \"v1.2.3\", \"skippy_abi\": 7, \"platform\": {\"os\": \"linux\", \"arch\": \"x86_64\"}, \"backend\": {\"kind\": \"cpu\"}, \"libraries\": [\"libskippy.so\"], \"files\": [\"lib/libskippy.so\"]}}",
+      "tmp/archive-1/rt-a-mac/manifest.json": "{\"runtime\": {\"id\": \"rt-a-mac\", \"mesh_version\": \"v1.2.3\", \"skippy_abi\": 7, \"platform\": {\"os\": \"macos\", \"arch\": \"aarch64\"}, \"backend\": {\"kind\": \"cpu\"}, \"libraries\": [\"libskippy.so\"], \"files\": [\"lib/libskippy.so\"]}}"
+    },
+    "paths": [
+      "dist/",
+      "dist/rt-a-mac.tar.gz",
+      "dist/rt-linux.tar.gz",
+      "out/",
+      "out/release.json",
+      "tmp/",
+      "tmp/archive-0/",
+      "tmp/archive-0/rt-linux/",
+      "tmp/archive-0/rt-linux/lib/",
+      "tmp/archive-0/rt-linux/lib/libskippy.so",
+      "tmp/archive-0/rt-linux/manifest.json",
+      "tmp/archive-1/",
+      "tmp/archive-1/rt-a-mac/",
+      "tmp/archive-1/rt-a-mac/lib/",
+      "tmp/archive-1/rt-a-mac/lib/libskippy.so",
+      "tmp/archive-1/rt-a-mac/manifest.json"
+    ],
+    "stderr": "",
+    "stdout": ""
+  }
+}

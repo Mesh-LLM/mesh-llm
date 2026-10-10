@@ -1,0 +1,13 @@
+{
+  "args": [
+    "--body",
+    "b",
+    "-h"
+  ],
+  "code": 0,
+  "gh_argv": [],
+  "git_argv": [],
+  "outputs": {},
+  "stderr": "",
+  "stdout": "usage: release-notes-classify.py [-h] --body BODY [--range RANGE]\n                                 [--version VERSION] [--date DATE] [--out OUT]\n                                 [--repo-root REPO_ROOT] [--has-entries]\n                                 [--links LINKS]\n\nBuild a release-notes plan deterministically from canonical git commits.\nSquash-merge commit subjects carry a Conventional Commits type, and the type\nmaps to exactly one Keep a Changelog section. This produces the plan that\nscripts/release-notes-regroup.py renders, with no model in the loop. Entries\nwhose commit subject is not conventional cannot be classified and land in\n\"Other changes\" rather than being guessed at. An optional agent review pass\nmay reclassify those afterwards. Usage: release-notes-classify.py --body\nBODY.md --range v0.75.1..v0.76.0 --version 0.76.0 --date 2026-09-10 --out\nplan.json\n\noptions:\n  -h, --help            show this help message and exit\n  --body BODY           published release body\n  --range RANGE         git range, e.g. v0.75.1..v0.76.0\n  --version VERSION\n  --date DATE\n  --out OUT\n  --repo-root REPO_ROOT\n  --has-entries         exit successfully when the body has an entry before\n                        its tail\n  --links LINKS         extra commit records keyed by pull request number\n"
+}
