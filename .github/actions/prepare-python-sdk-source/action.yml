@@ -1,0 +1,21 @@
+name: Prepare immutable Python SDK source
+description: Restore the fixed external SDK checkpoint and admit its tracked source before source contracts or dependency preparation.
+runs:
+  using: composite
+  steps:
+    - name: Restore immutable external Python SDK source
+      uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      with:
+        repository: Mesh-LLM/mesh-llm-python-sdk
+        ref: d2a881612186b0626a153ee237dfa3df00ab6087
+        path: .sdk-source/python
+        persist-credentials: false
+    - name: Admit external Python SDK source
+      shell: bash
+      run: |
+        set -euo pipefail
+        export MESH_PYTHON_SDK_SOURCE="$PWD/.sdk-source/python"
+        automation=(cargo xtool)
+        if [[ -n "${MESH_LLM_AUTOMATION_BIN:-}" ]]; then automation=("$MESH_LLM_AUTOMATION_BIN"); fi
+        sdk_root="$("${automation[@]}" automation smoke-observation sdk-source --kind root)"
+        printf 'MESH_PYTHON_SDK_SOURCE=%s\n' "$sdk_root" >> "$GITHUB_ENV"

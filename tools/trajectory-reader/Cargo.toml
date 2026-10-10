@@ -34,3 +34,8 @@ libc = "0.2"
 
 [target.'cfg(windows)'.dev-dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_Storage_FileSystem", "Win32_System_Console", "Win32_System_Diagnostics_ToolHelp", "Win32_System_JobObjects", "Win32_System_Pipes", "Win32_System_Threading"] }
+
+[[test]]
+name = "prompt_command"
+path = "tests/prompt_command.rs"
+required-features = ["parquet-input"]
