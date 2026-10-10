@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::time::Duration;
+use subtle::ConstantTimeEq;
 
 pub(crate) use crate::discovery::{DiscoveryScope, MeshDiscoveryMode};
 use crate::network::nostr;
@@ -674,7 +675,11 @@ pub(crate) fn verify_lan_details_token_proof(
     if lan_details_challenge_for_bucket(token_fingerprint, challenge_bucket) != challenge.trim() {
         return false;
     }
-    lan_details_token_proof(expected_invite_token, challenge).eq_ignore_ascii_case(proof.trim())
+    // The proof is the only value here derived from the invite token. Compare
+    // it in constant time so response timing cannot reveal it byte by byte.
+    let expected = lan_details_token_proof(expected_invite_token, challenge);
+    let provided = proof.trim().to_ascii_lowercase();
+    expected.as_bytes().ct_eq(provided.as_bytes()).into()
 }
 
 fn lan_details_challenge_for_bucket(token_fingerprint: &str, bucket: u64) -> String {
@@ -1279,6 +1284,32 @@ mod tests {
         );
         assert!(advert.details_path.is_none());
         assert!(advert.proof_challenge.is_none());
+    }
+
+    #[test]
+    fn lan_details_proof_comparison_ignores_case_but_not_content() {
+        let invite_token = "invite-token-for-proof";
+        let token_fingerprint = lan_token_fingerprint(invite_token);
+        let challenge = lan_details_challenge(&token_fingerprint, current_unix_secs());
+        let proof = lan_details_token_proof(invite_token, &challenge);
+        let verify = |candidate: &str| {
+            verify_lan_details_token_proof(
+                invite_token,
+                &token_fingerprint,
+                &challenge,
+                candidate,
+                current_unix_secs(),
+            )
+        };
+
+        assert!(verify(&proof.to_ascii_uppercase()));
+        assert!(verify(&format!(" {proof} ")));
+        let mut wrong_last = proof.clone();
+        let last = if wrong_last.ends_with('0') { "1" } else { "0" };
+        wrong_last.replace_range(proof.len() - 1.., last);
+        assert!(!verify(&wrong_last));
+        assert!(!verify(&proof[..proof.len() - 1]));
+        assert!(!verify(""));
     }
 
     #[test]
