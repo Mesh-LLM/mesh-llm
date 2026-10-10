@@ -11381,7 +11381,7 @@ index b6d9d8213..384880d5b 100644
          rc = check_decode_encode_fallback(argv[2]);
      }
 diff --git a/src/skippy/tests/noalloc_graph_planning.cpp b/src/skippy/tests/noalloc_graph_planning.cpp
-index 11559ce5c..5c8617fe9 100644
+index 9848042f0..5c8617fe9 100644
 --- a/src/skippy/tests/noalloc_graph_planning.cpp
 +++ b/src/skippy/tests/noalloc_graph_planning.cpp
 @@ -14,6 +14,7 @@
