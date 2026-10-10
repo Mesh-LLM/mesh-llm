@@ -121,8 +121,45 @@ class SnapshotHandler(BaseHTTPRequestHandler):
 
 
 class TwoNodeSplitSmokeTests(unittest.TestCase):
+    def test_auto_payload_certification_reads_checkout_with_different_owner(self):
+        expected_head = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True
+        ).strip()
+        harness = (
+            "set -euo pipefail\n"
+            "MODEL_LABEL=dense\nDENSE_ARTIFACT_ID=dense-artifact\n"
+            "DENSE_MODEL_SHA256=model-sha\nMESH_TWO_NODE_SPLIT_SOURCE_SHA=\n"
+            "SPLIT_EVIDENCE_PATH=evidence\nRUNTIME_BUNDLE=runtime\n"
+            "SEED_LOG=seed\nWORKER_LOG=worker\nresponse_dir=responses\n"
+            "WORK_DIR=work\n"
+            "cargo() { printf '%s\\n' \"$*\"; }\n"
+            + shell_function_block("assert_expected_stage_payload", "capture_kv_cache_statuses")
+            + "assert_expected_stage_payload\n"
+        )
+        result = subprocess.run(
+            ["bash", "-s"], input=harness, cwd=ROOT, text=True,
+            capture_output=True, check=False,
+            env={**os.environ, "GIT_TEST_ASSUME_DIFFERENT_OWNER": "1"},
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(f"--tested-commit {expected_head}", result.stdout)
+
+    def test_auto_payload_pin_resolves_without_workflow_only_environment(self):
+        harness = (
+            "set -euo pipefail\n"
+            + shell_function_block("auto_payload_artifact_for_sha256", "quant_selector_from_gguf_file")
+            + "auto_payload_artifact_for_sha256 c4a3dd037301b6ecea31d6da37f5cd793ead920dd5ddfe6d589294628d6ce66a\n"
+        )
+        result = subprocess.run(
+            ["bash", "-s"], input=harness, cwd=ROOT,
+            text=True, capture_output=True, check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), "smollm2-q8-inference")
+
     def run_validator(
-        self, cached_counts: list[int]
+        self, cached_counts: list[int], outputs: list[str] | None = None,
+        payload_kind: str = "kv-recurrent",
     ) -> subprocess.CompletedProcess[str]:
         self.assertEqual(len(cached_counts), len(PROMPT_COUNTS))
         with tempfile.TemporaryDirectory() as directory:
@@ -132,7 +169,7 @@ class TwoNodeSplitSmokeTests(unittest.TestCase):
             ):
                 response = {
                     "object": "chat.completion",
-                    "choices": [{"message": {"role": "assistant", "content": "ok"}}],
+                    "choices": [{"message": {"role": "assistant", "content": (outputs or ["ok"] * 6)[index - 1]}}],
                     "usage": {
                         "prompt_tokens": prompt_tokens,
                         "prompt_tokens_details": {"cached_tokens": cached_tokens},
@@ -143,7 +180,7 @@ class TwoNodeSplitSmokeTests(unittest.TestCase):
                 )
 
             return subprocess.run(
-                [sys.executable, "-", directory, "6", "kv-recurrent"],
+                [sys.executable, "-", directory, "6", payload_kind],
                 input=prefix_validator_source(),
                 text=True,
                 capture_output=True,
@@ -170,6 +207,20 @@ class TwoNodeSplitSmokeTests(unittest.TestCase):
                     expected_exit,
                     msg=f"stdout={result.stdout!r}\nstderr={result.stderr!r}",
                 )
+
+    def test_warm_continuation_must_match_cold(self):
+        result = self.run_validator(
+            [0, 512, 512, 640, 640, 768],
+            ["cold", "wrong warm", "ok", "ok", "ok", "ok"],
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("diverged from uncached", result.stderr)
+
+    def test_dense_checkpoint_restore_under_capacity_pressure(self):
+        result = self.run_validator([0, 512, 512, 640, 640, 768], payload_kind="")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        miss = self.run_validator([0, 0, 512, 640, 640, 768], payload_kind="")
+        self.assertNotEqual(miss.returncode, 0)
 
     def test_readiness_reconciles_persisted_snapshots_from_both_observers(self):
         script = SMOKE_SCRIPT.read_text(encoding="utf-8")

@@ -120,6 +120,7 @@ fn planned_profile(profile_id: &str) -> PlannedStageProfile {
         activation_exports: Vec::new(),
         activation_import_bindings: Vec::new(),
         activation_export_bindings: Vec::new(),
+        state_effects: Vec::new(),
     }
 }
 
@@ -152,6 +153,7 @@ fn planned(m: &PackageManifest, tensors: &[&str], profiles: &[&str]) -> PlannedS
         resident_tensor_ids: tensors.iter().map(|t| t.to_string()).collect(),
         sidecars: Vec::new(),
         profiles: profiles.iter().map(|p| planned_profile(p)).collect(),
+        kv_graph_state: "full-state".into(),
     }
 }
 
@@ -473,4 +475,83 @@ fn rejects_changed_execution_contract_with_unchanged_plan_identity() {
         admit_stage_plan(&p, &r, &m),
         Err(StagePlanAdmissionError::ExecutionContractMismatch)
     ));
+}
+
+#[test]
+fn graph_state_requires_consistent_profiles_and_rejects_derived_state() {
+    use skippy_ffi::{StagePlanStateAccess, StagePlanStateKind, StagePlanStateResidency};
+    let effect = |kind| RealizedStageStateEffect {
+        identity: "state".into(),
+        kind,
+        access: StagePlanStateAccess::Write,
+        residency: StagePlanStateResidency::LayerLocal,
+        layer: 0,
+        write_ordinal: 0,
+    };
+    let mut decode = planned_profile("decode");
+    decode.state_effects.push(effect(StagePlanStateKind::KvKey));
+    let mut prefill = planned_profile("prefill");
+    prefill
+        .state_effects
+        .push(effect(StagePlanStateKind::KvValue));
+    assert_eq!(
+        super::kv_graph_state([
+            decode.state_effects.as_slice(),
+            prefill.state_effects.as_slice()
+        ]),
+        "dense"
+    );
+    prefill
+        .state_effects
+        .push(effect(StagePlanStateKind::RecurrentSsm));
+    assert_eq!(
+        super::kv_graph_state([
+            decode.state_effects.as_slice(),
+            prefill.state_effects.as_slice()
+        ]),
+        "full-state"
+    );
+    decode
+        .state_effects
+        .push(effect(StagePlanStateKind::RecurrentConv));
+    assert_eq!(
+        super::kv_graph_state([
+            decode.state_effects.as_slice(),
+            prefill.state_effects.as_slice()
+        ]),
+        "recurrent"
+    );
+    decode
+        .state_effects
+        .push(effect(StagePlanStateKind::DerivedPersistent));
+    assert_eq!(
+        super::kv_graph_state([
+            decode.state_effects.as_slice(),
+            prefill.state_effects.as_slice()
+        ]),
+        "full-state"
+    );
+}
+
+#[test]
+fn package_metadata_vetoes_a_dense_graph_with_recurrent_state() {
+    use skippy_ffi::{StagePlanStateAccess, StagePlanStateKind, StagePlanStateResidency};
+    let mut manifest = manifest();
+    manifest.model_metadata.insert(
+        "model.attention.recurrent_layers".into(),
+        serde_json::json!([false, true]),
+    );
+    let mut profile = realized_profile("decode");
+    profile.state_effects.push(RealizedStageStateEffect {
+        identity: "kv-key".into(),
+        kind: StagePlanStateKind::KvKey,
+        access: StagePlanStateAccess::Write,
+        residency: StagePlanStateResidency::LayerLocal,
+        layer: 0,
+        write_ordinal: 0,
+    });
+    assert_eq!(
+        super::package_kv_graph_state(&manifest, &[profile]),
+        "full-state"
+    );
 }

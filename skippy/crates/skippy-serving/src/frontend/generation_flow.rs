@@ -24,12 +24,14 @@ use crate::frontend::request::wire_sampling_config;
 use crate::frontend::util::generation_stop_values;
 use crate::frontend::util::openai_backend_error;
 use crate::frontend::util::openai_io_error;
+use crate::frontend::util::openai_media_error;
 use crate::frontend::wire_messages::MultimodalPrefillArgs;
 use crate::frontend::wire_messages::ReusableDecodeMessage;
 use crate::frontend::wire_messages::ReusableDecodeMessageArgs;
 use crate::frontend::wire_messages::generation_config_message;
 use crate::frontend::wire_messages::multimodal_prefill_message;
 use crate::kv_integration::proactive_eviction_attrs;
+use crate::runtime_state::panic_recovery::lock_runtime;
 use anyhow::anyhow;
 use serde_json::json;
 use skippy_inference_api::ChatCompletionRequest;
@@ -311,7 +313,7 @@ impl StageOpenAiBackend {
                                     &scheduler_prompt.media,
                                     scheduler_sampling.enabled.then_some(&scheduler_sampling),
                                 )
-                                .map_err(openai_backend_error)?;
+                                .map_err(openai_media_error)?;
                             let token_signal =
                                 runtime.last_token_signal(&scheduler_session_id).ok();
                             let signal_window = runtime
@@ -746,7 +748,7 @@ impl StageOpenAiBackend {
                                 &scheduler_prompt.text,
                                 &scheduler_prompt.media,
                             )
-                            .map_err(openai_backend_error)?;
+                            .map_err(openai_media_error)?;
                         let runtime_sessions_after = runtime.session_stats();
                         Ok((prefill, runtime_sessions_before, runtime_sessions_after))
                     },
@@ -1045,10 +1047,8 @@ impl StageOpenAiBackend {
                 // a stride so the rate is observable without a debug build or a
                 // telemetry sink: phase spans only reach a job artifact, and
                 // SKIPPY_GRAPH_TRACE emits nothing here.
-                if decode_input_index.is_multiple_of(GRAPH_REUSE_LOG_STRIDE)
-                    && let Ok(runtime) = self.runtime.lock()
-                {
-                    let stats = runtime.session_stats();
+                if decode_input_index.is_multiple_of(GRAPH_REUSE_LOG_STRIDE) {
+                    let stats = lock_runtime(&self.runtime).session_stats();
                     if stats.tokens_evaluated > 0 {
                         tracing::info!(
                             target: "skippy::graph_reuse",
