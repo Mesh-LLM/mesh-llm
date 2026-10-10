@@ -3,6 +3,26 @@ name: CI Rust Tests Slice
 on:
   workflow_call:
     inputs:
+      authority_linux_x64:
+        description: Exact same-run protected native producer identity JSON, source SHA, artifact ID, independent digest, OS, and architecture.
+        required: false
+        default: ''
+        type: string
+      authority_linux_arm64:
+        description: Exact same-run protected native producer identity JSON, source SHA, artifact ID, independent digest, OS, and architecture.
+        required: false
+        default: ''
+        type: string
+      authority_macos_arm64:
+        description: Exact same-run protected native producer identity JSON, source SHA, artifact ID, independent digest, OS, and architecture.
+        required: false
+        default: ''
+        type: string
+      authority_windows_x64:
+        description: Exact same-run protected native producer identity JSON, source SHA, artifact ID, independent digest, OS, and architecture.
+        required: false
+        default: ''
+        type: string
       source_sha:
         description: Immutable product source revision.
         required: false
@@ -123,6 +143,10 @@ jobs:
         uses: Mesh-LLM/mesh-llm/.github/actions/resolve-source-layout@5c8fb4d472bc57058c8153761c561daa77dd5b94 # product-layout compatibility helpers
       - name: Verify prebuilt test environment
         run: verify-runner-image public cpu
+      - uses: ./.github/actions/prepare-automation
+        with:
+          allow_depot_remote_cache: ${{ needs.runner_policy.outputs.allow_depot_remote_cache }}
+          allow_native_github_cache: ${{ needs.runner_policy.outputs.allow_native_github_cache }}
       - name: Resolve static ABI toolchain epoch
         uses: ./.github/actions/resolve-native-toolchain-epoch
         with:
@@ -197,16 +221,7 @@ jobs:
         id: skippy_correctness_model
         if: ${{ contains(steps.resolve_batch_crates.outputs.crates, 'skippy-runtime') || (contains(steps.resolve_batch_crates.outputs.crates, 'skippy-model-package') || contains(steps.resolve_batch_crates.outputs.crates, 'skippy-package-builder')) }}
         run: |
-          set -euo pipefail
-          if [[ -f scripts/resolve-test-model-manifest.py ]]; then
-            model_resolver=(python3 scripts/resolve-test-model-manifest.py)
-          elif [[ -f tools/xtask/src/model_registry/resolve.rs ]]; then
-            model_resolver=(cargo xtool models resolve)
-          else
-            echo 'unsupported model manifest resolver source' >&2
-            exit 1
-          fi
-          "${model_resolver[@]}" \
+          cargo xtool models resolve \
             ci/model-artifacts/manifests/skippy-correctness.json \
             --cadence "${{ (inputs.original_event_name == 'pull_request' || inputs.original_event_name == 'pull_request_target') && 'pull-request' || inputs.original_event_name == 'push' && 'main' || 'manual' }}" \
             --github-output "$GITHUB_OUTPUT"
@@ -230,15 +245,7 @@ jobs:
         if: ${{ contains(steps.resolve_batch_crates.outputs.crates, 'skippy-runtime') || (contains(steps.resolve_batch_crates.outputs.crates, 'skippy-model-package') || contains(steps.resolve_batch_crates.outputs.crates, 'skippy-package-builder')) }}
         run: |
           set -euo pipefail
-          if [[ -f scripts/resolve-test-model-manifest.py ]]; then
-            model_resolver=(python3 scripts/resolve-test-model-manifest.py)
-          elif [[ -f tools/xtask/src/model_registry/resolve.rs ]]; then
-            model_resolver=(cargo xtool models resolve)
-          else
-            echo 'unsupported model manifest resolver source' >&2
-            exit 1
-          fi
-          "${model_resolver[@]}" \
+          cargo xtool models resolve \
             ci/model-artifacts/manifests/skippy-correctness.json \
             --cadence "${{ (inputs.original_event_name == 'pull_request' || inputs.original_event_name == 'pull_request_target') && 'pull-request' || inputs.original_event_name == 'push' && 'main' || 'manual' }}" \
             --verify-root "$RUNNER_TEMP/skippy-correctness-model"
@@ -255,8 +262,8 @@ jobs:
         run: |
           npm install --global @anthropic-ai/claude-code@2.1.273
           test "$(claude --version | awk '{print $1}')" = "2.1.273"
-      - name: Prepare immutable research source for native benchmark contracts
-        if: ${{ contains(fromJson(steps.resolve_batch_crates.outputs.crates), 'skippy-bench') && hashFiles('tools/xtask/src/automation/python_research_source.rs') != '' }}
+      - name: Prepare immutable research source for Skippy benchmark contracts
+        if: ${{ contains(fromJson(steps.resolve_batch_crates.outputs.crates), 'skippy-bench') }}
         uses: ./.github/actions/prepare-python-research-source
       - name: Run isolated Cargo tests for the batch
         env:
@@ -319,6 +326,10 @@ jobs:
         uses: Mesh-LLM/mesh-llm/.github/actions/resolve-source-layout@5c8fb4d472bc57058c8153761c561daa77dd5b94 # product-layout compatibility helpers
       - name: Verify prebuilt test environment
         run: verify-runner-image public cpu
+      - uses: ./.github/actions/prepare-automation
+        with:
+          allow_depot_remote_cache: ${{ needs.runner_policy.outputs.allow_depot_remote_cache }}
+          allow_native_github_cache: ${{ needs.runner_policy.outputs.allow_native_github_cache }}
       - name: Resolve static ABI toolchain epoch
         uses: ./.github/actions/resolve-native-toolchain-epoch
         with:
@@ -348,16 +359,7 @@ jobs:
       - name: Resolve SafeTensors checkpoint manifest
         id: safetensors_model
         run: |
-          set -euo pipefail
-          if [[ -f scripts/resolve-test-model-manifest.py ]]; then
-            model_resolver=(python3 scripts/resolve-test-model-manifest.py)
-          elif [[ -f tools/xtask/src/model_registry/resolve.rs ]]; then
-            model_resolver=(cargo xtool models resolve)
-          else
-            echo 'unsupported model manifest resolver source' >&2
-            exit 1
-          fi
-          "${model_resolver[@]}" \
+          cargo xtool models resolve \
             ci/model-artifacts/manifests/safetensors-runtime-smoke.json \
             --cadence pull-request \
             --github-output "$GITHUB_OUTPUT"
@@ -371,15 +373,7 @@ jobs:
           hf download "${{ steps.safetensors_model.outputs.repo }}" "${files[@]}" \
             --revision "${{ steps.safetensors_model.outputs.revision }}" \
             --local-dir "$fixture_dir"
-          if [[ -f scripts/resolve-test-model-manifest.py ]]; then
-            model_resolver=(python3 scripts/resolve-test-model-manifest.py)
-          elif [[ -f tools/xtask/src/model_registry/resolve.rs ]]; then
-            model_resolver=(cargo xtool models resolve)
-          else
-            echo 'unsupported model manifest resolver source' >&2
-            exit 1
-          fi
-          "${model_resolver[@]}" \
+          cargo xtool models resolve \
             ci/model-artifacts/manifests/safetensors-runtime-smoke.json \
             --cadence pull-request \
             --verify-root "$fixture_dir"
@@ -438,6 +432,13 @@ jobs:
         run: |
           set -euo pipefail
           fixture_dir="$RUNNER_TEMP/safetensors-smollm2"
+          quantizations="$(jq -er '
+            if type == "array" and length > 0 and
+               all(.[]; type == "string" and test("^[A-Za-z0-9_]+$"))
+            then .[]
+            else error("Expected a nonempty quantization list")
+            end
+          ' <<<"$SAFETENSORS_QUANTIZATIONS_JSON")"
           while IFS= read -r quantization; do
             echo "::group::$quantization"
             SKIPPY_SAFETENSORS_SMOKE_DIR="$fixture_dir" \
@@ -446,4 +447,4 @@ jobs:
               "$SAFETENSORS_SMOKE_TEST_BINARY" \
                 "$SAFETENSORS_SMOKE_TEST_NAME" --exact --ignored --nocapture
             echo "::endgroup::"
-          done < <(jq -r '.[]' <<<"$SAFETENSORS_QUANTIZATIONS_JSON")
+          done <<<"$quantizations"

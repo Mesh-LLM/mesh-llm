@@ -1,6 +1,6 @@
 # Highest GLIBC symbol version any shipped Linux artifact may require.
 #
-# Read by scripts/verify-host-dependencies.py through --max-glibc. The host,
+# Read by native verify-host-dependencies and embedded in the runtime verifier. The host,
 # the native runtime libraries, and the executable tools packaged beside them
 # are all checked against it, so the floor is a declared number rather than a
 # side effect of whichever base image the release lane happened to build in.

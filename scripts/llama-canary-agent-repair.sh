@@ -104,6 +104,51 @@ if [[ -n "$(git status --porcelain)" ]]; then
   echo "changed-pin canary requires a clean trusted-main checkout" >&2
   exit 1
 fi
+# Legacy workload automation selection begins.
+# Normal verify freezes this trusted controller before importing candidate source.
+if [[ "$HARNESS_MODE" == repair || "$HARNESS_MODE" == verify ]]; then
+  if [[ "${MESH_LLM_AUTOMATION_BIN+set}" == set ]]; then
+    repair_workload_controller="$MESH_LLM_AUTOMATION_BIN"
+  else
+    repair_workload_bootstrap="$(just --justfile "$TRUSTED_ROOT/Justfile" automation-bootstrap)" || exit 1
+    repair_workload_controller="$(printf '%s\n' "$repair_workload_bootstrap" | awk -F= '
+      $1 == "binary_path" { count++; value=substr($0, index($0, "=") + 1) }
+      END { if (count != 1 || value == "") exit 1; print value }
+    ')" || { echo 'automation bootstrap must return one nonempty binary_path' >&2; exit 1; }
+  fi
+else
+  # Native build modes already require the hosted-prepared trusted controller.
+  repair_workload_controller="${MESH_LLM_AUTOMATION_BIN:-}"
+fi
+  if [[ "$repair_workload_controller" != /* || ! -f "$repair_workload_controller" || ! -x "$repair_workload_controller" ]]; then
+    echo 'MESH_LLM_AUTOMATION_BIN or bootstrap binary_path must be an absolute executable' >&2
+    exit 1
+  fi
+  repair_workload_controller_sha="$(shasum -a 256 "$repair_workload_controller" | awk '{print $1}')" || exit 1
+  repair_workload_automation=("$repair_workload_controller")
+  repair_workload_controller_unchanged() {
+    local current
+    current="$(shasum -a 256 "$repair_workload_controller" | awk '{print $1}')" || return 1
+    if [[ "$current" != "$repair_workload_controller_sha" ]]; then
+      echo 'frozen workload automation controller changed after admission' >&2
+      return 1
+    fi
+  }
+# Legacy workload automation selection ends.
+if [[ "$HARNESS_MODE" == repair* ]]; then
+  repair_recovery_controller="${MESH_LLM_AUTOMATION_BIN:-${repair_workload_controller:-}}"
+  if [[ "$repair_recovery_controller" != /* || ! -f "$repair_recovery_controller" || ! -x "$repair_recovery_controller" || -L "$repair_recovery_controller" ]]; then
+    echo 'source recovery requires the admitted immutable automation executable' >&2
+    exit 1
+  fi
+  repair_recovery_controller_sha="$(shasum -a 256 "$repair_recovery_controller" | awk '{print $1}')" || exit 1
+  repair_recovery_controller_unchanged() {
+    local current
+    [[ ! -L "$repair_recovery_controller" ]] || return 1
+    current="$(shasum -a 256 "$repair_recovery_controller" | awk '{print $1}')" || return 1
+    [[ "$current" == "$repair_recovery_controller_sha" ]]
+  }
+fi
 if [[ "$HARNESS_MODE" != pinned-build ]] && [[ -z "$(git config user.name)" || -z "$(git config user.email)" ]]; then
   echo "git user.name and user.email must be configured before canary repair" >&2
   exit 1
@@ -142,12 +187,41 @@ rm -rf /tmp/llama-old-pin /tmp/llama-repair /tmp/llama-repair-* 2>/dev/null || t
 run_for() {
   local label="$1" seconds="$2"
   shift 2
-  local cleanup=()
-  if [[ "$label" == "agent developer task" ]]; then
-    cleanup+=(--cleanup-on-exit)
+  local transaction_root input executable result timeout_parent
+  local automation=()
+  if [[ "$HARNESS_MODE" == repair || "$HARNESS_MODE" == verify ]]; then
+    repair_workload_controller_unchanged || return 125
+    automation=("${repair_workload_automation[@]}")
+    timeout_parent="${RUNNER_TEMP:-/tmp}"
+  else
+    automation=("${MESH_LLM_AUTOMATION_BIN:?}")
+    timeout_parent="${RUNNER_TEMP:?}"
   fi
-  python3 scripts/run-command-with-timeout.py \
-    --seconds "$seconds" --label "$label" "${cleanup[@]}" -- "$@"
+  executable="$(command -v "$1")" || return 125
+  if [[ "$executable" != /* && "$executable" == */* ]]; then
+    executable="$PWD/$executable"
+  fi
+  if [[ "$executable" != /* ]]; then
+    echo "$label requires an absolute executable" >&2
+    return 125
+  fi
+  transaction_root="$(mktemp -d "$timeout_parent/canary-timeout.XXXXXXXX")" || return 125
+  input="$transaction_root/input.json"
+  shift
+  jq -n --arg label "$label" --argjson seconds "$seconds" --arg cwd "$PWD" \
+    --arg executable "$executable" --args \
+    '{label:$label,seconds:$seconds,cwd:$cwd,executable:$executable,arguments:$ARGS.positional}' \
+    -- "$@" > "$input" || { rm -rf "$transaction_root"; return 125; }
+  if "${automation[@]}" automation canary-timeout --input "$input"; then
+    result=0
+  else
+    result=$?
+  fi
+  rm -rf "$transaction_root" || return 125
+  if [[ "$HARNESS_MODE" == repair || "$HARNESS_MODE" == verify ]]; then
+    repair_workload_controller_unchanged || return 125
+  fi
+  return "$result"
 }
 
 record_failure_class() {
@@ -161,15 +235,96 @@ record_failure_class() {
   fi
 }
 
+verification_source_inspection() {
+  local verb="$1" log="${2:-}" transaction_root input status
+  [[ "$HARNESS_MODE" == verify ]] || return 1
+  case "$verb" in
+    verification-source-admit|verification-manifest-policy|verification-parity-inventory|verification-split-roster-check) ;;
+    *) echo "unsupported independent verification inspection" >&2; return 1 ;;
+  esac
+  repair_workload_controller_unchanged || return 1
+  transaction_root="$(mktemp -d "${RUNNER_TEMP:-/tmp}/independent-verification.XXXXXXXX")" || return 1
+  input="$transaction_root/input.json"
+  if ! jq -n --arg controller_root "$TRUSTED_ROOT" --arg controller_revision "$BASE_HEAD" \
+    --arg controller_sha "$repair_workload_controller_sha" --arg root "$ROOT" \
+    --arg base "$CANDIDATE_BASE_HEAD" --arg candidate "$CERTIFIED_SHA" --arg tree "$VERIFICATION_TREE" \
+    '{authority:{controller:{root:$controller_root,revision:$controller_revision,executable_sha256:$controller_sha},
+      root:$root,base:$base,candidate:$candidate,tree:$tree}}' > "$input"; then
+    rm -rf "$transaction_root"
+    return 1
+  fi
+  if [[ -n "$log" ]]; then
+    if run_verification_logged "parity manifest validation" "$log" \
+      "${repair_workload_automation[@]}" automation canary-receipts "$verb" --input "$input"; then
+      status=0
+    else
+      status=$?
+    fi
+  elif "${repair_workload_automation[@]}" automation canary-receipts "$verb" --input "$input"; then
+    status=0
+  else
+    status=$?
+  fi
+  rm -rf "$transaction_root" || return 1
+  repair_workload_controller_unchanged || return 1
+  return "$status"
+}
+
+verification_candidate_unchanged() {
+  if [[ "$HARNESS_MODE" == verify && -n "$CERTIFIED_SHA" ]]; then
+    verification_source_inspection verification-source-admit
+  fi
+}
+
+repair_family_plan_step() {
+  local log="$1"
+  shift
+  local status
+  repair_workload_controller_unchanged || return 1
+  verification_candidate_unchanged || return 1
+  if [[ -n "$log" ]]; then
+    if run_verification_logged "full family certification plan" "$log" "$@"; then status=0; else status=$?; fi
+  else
+    if "$@"; then status=0; else status=$?; fi
+  fi
+  verification_candidate_unchanged || return 1
+  repair_workload_controller_unchanged || return 1
+  return "$status"
+}
+
+repair_family_plan() {
+  local shards="$1" log="${2:-}" manifest="$ROOT/ci/llama-canary/family-certified.json"
+  mkdir -p "$(dirname "$PLAN_PATH")" || return 1
+  repair_family_plan_step "$log" "${repair_workload_automation[@]}" --repo-root "$ROOT" ci family-plan \
+    --manifest "$manifest" --shard-count "$shards" --output "$PLAN_PATH" || return 1
+  repair_family_plan_step "$log" "${repair_workload_automation[@]}" --repo-root "$ROOT" ci family-plan \
+    --manifest "$manifest" --verify-plan "$PLAN_PATH" || return 1
+  repair_family_plan_step "$log" "${repair_workload_automation[@]}" automation family-battery-policy --cache \
+    "$ROOT" "$manifest" "$PLAN_PATH" "${HF_CACHE:?}" || return 1
+}
+
 check_family_cache() {
-  mkdir -p "$(dirname "$PLAN_PATH")"
-  python3 scripts/plan-family-battery.py \
-    --manifest ci/llama-canary/family-certified.json \
-    --shard-count 256 \
-    --check-cache \
-    --cache-root "$HF_CACHE" \
-    --output "$PLAN_PATH"
-  python3 scripts/plan-family-battery.py --verify-plan "$PLAN_PATH"
+  if [[ "$HARNESS_MODE" == *-build ]]; then
+    local transaction_root input source_revision
+    transaction_root="$(mktemp -d "${RUNNER_TEMP:?}/canary-cache-plan.XXXXXXXX")" || return 1
+    input="$transaction_root/input.json"
+    source_revision="$(git rev-parse HEAD)" || return 1
+    jq -n --arg controller_root "$TRUSTED_ROOT" --arg source_root "$ROOT" \
+      --arg controller_revision "${CANARY_CONTROLLER_SHA:?}" --arg selected_revision "$source_revision" \
+      --arg output "$transaction_root/admitted" --arg cache_root "${HF_CACHE:?}" \
+      '{controller_root:$controller_root,source_root:$source_root,controller_revision:$controller_revision,selected_revision:$selected_revision,
+        manifest:"ci/llama-canary/family-certified.json",output:$output,cache:{mode:"gguf_metadata",root:$cache_root}}' > "$input" || return 1
+    "${MESH_LLM_AUTOMATION_BIN:?}" automation canary-receipts preflight --input "$input" || return 1
+    mkdir -p "$(dirname "$PLAN_PATH")" || return 1
+    cp "$transaction_root/admitted/plan.json" "$PLAN_PATH"
+    return
+  fi
+  if [[ "$HARNESS_MODE" == repair || "$HARNESS_MODE" == verify ]]; then
+    repair_family_plan 256
+    return
+  fi
+  echo "unsupported canary cache mode: $HARNESS_MODE" >&2
+  return 2
 }
 
 remaining_verification_seconds() {
@@ -223,7 +378,11 @@ Do not weaken, skip, or narrow a gate. Do not edit the workflow, this wrapper, i
   if [[ -n "${CANARY_PREVIOUS_FEEDBACK:-}" ]]; then
     printf '\n\nThis is distributed repair attempt %s. The exact prior candidate has already been restored as uncommitted changes on the frozen base. Read the digest-bound family failure summary and every failed-family directory under %s before editing. Preserve the prior repairs, fix the candidate failures demonstrated there, and use focused reproductions before returning control for a new complete family pass.\n\n' \
       "$PASS_ID" "$CANARY_PREVIOUS_FEEDBACK"
-    python3 scripts/summarize-canary-feedback.py "$CANARY_PREVIOUS_FEEDBACK"
+    if [[ -z "${CANARY_PREVIOUS_FEEDBACK_SUMMARY:-}" || ! -f "$CANARY_PREVIOUS_FEEDBACK_SUMMARY" ]]; then
+      echo "distributed repair requires the native verified feedback summary" >&2
+      return 1
+    fi
+    cat "$CANARY_PREVIOUS_FEEDBACK_SUMMARY"
   fi
 }
 
@@ -274,19 +433,30 @@ agent_session_step() {
     return 124
   fi
   started="$(date +%s)"
-  set -m
   # shellcheck disable=SC2016
   env -i PATH="$PATH" bash -c '
     root="$1"
     started="$2"
-    while sleep 600; do
+    sleeper=""
+    stop_heartbeat() {
+      if [[ -n "$sleeper" ]]; then
+        kill "$sleeper" 2>/dev/null || true
+        wait "$sleeper" 2>/dev/null || true
+      fi
+    }
+    trap stop_heartbeat EXIT
+    trap "exit 0" TERM INT
+    while true; do
+      sleep 600 &
+      sleeper=$!
+      wait "$sleeper" || break
+      sleeper=""
       newest="$(find "$root/.deps/llama.cpp" -type f -newer "$root/skippy/llama_cpp/upstream.txt" -print -quit 2>/dev/null || true)"
       printf "heartbeat: agent task running for %dm; recent llama.cpp activity: %s\n" \
         "$(( ($(date +%s) - started) / 60 ))" "${newest:-none observed yet}"
     done
   ' heartbeat "$ROOT" "$started" &
   heartbeat_pid=$!
-  set +m
   set +e
   goose_args=(
     run
@@ -310,7 +480,7 @@ agent_session_step() {
     > >(tee -a "$AGENT_LOG") 2>&1
   status=$?
   set -e
-  kill -- "-$heartbeat_pid" 2>/dev/null || kill "$heartbeat_pid" 2>/dev/null || true
+  kill "$heartbeat_pid" 2>/dev/null || true
   wait "$heartbeat_pid" 2>/dev/null || true
   if (( status != 0 )); then
     printf 'agent developer task exited with status %s\n' "$status" \
@@ -347,12 +517,60 @@ assert_agent_control_unchanged() {
   fi
 }
 
+repair_source_inspection() {
+  local verb="$1" check="${2:-}" log="${3:-}" transaction_root input status
+  repair_workload_controller_unchanged || return 1
+  transaction_root="$(mktemp -d "${RUNNER_TEMP:-/tmp}/local-repair-inspection.XXXXXXXX")" || return 1
+  input="$transaction_root/input.json"
+  if ! jq -n --arg controller_root "$TRUSTED_ROOT" --arg controller_revision "$BASE_HEAD" \
+    --arg controller_sha "$repair_workload_controller_sha" --arg root "$ROOT" \
+    --arg base "$CANDIDATE_BASE_HEAD" --arg check "$check" \
+    '{authority:{controller:{root:$controller_root,revision:$controller_revision,executable_sha256:$controller_sha},root:$root,base:$base}}
+      + (if $check == "true" then {check:true} elif $check == "false" then {check:false} else {} end)' \
+    > "$input"; then
+    rm -rf "$transaction_root"
+    return 1
+  fi
+  if [[ -n "$log" ]]; then
+    if run_verification_logged "parity manifest validation" "$log" \
+      "${repair_workload_automation[@]}" automation canary-receipts "$verb" --input "$input"; then
+      status=0
+    else
+      status=$?
+    fi
+  elif "${repair_workload_automation[@]}" automation canary-receipts "$verb" --input "$input"; then
+    status=0
+  else
+    status=$?
+  fi
+  rm -rf "$transaction_root" || return 1
+  return "$status"
+}
+
 validate_agent_manifest_changes() {
+  if [[ "$HARNESS_MODE" == *-build ]]; then
+    local transaction_root input context
+    transaction_root="$(mktemp -d "${RUNNER_TEMP:?}/canary-manifest-policy.XXXXXXXX")" || return 1
+    input="$transaction_root/input.json"
+    context="$(controller_package_context)" || return 1
+    jq -n --argjson context "$context" --arg root "$ROOT" --arg base "$CANDIDATE_BASE_HEAD" \
+      '{context:$context,root:$root,base:$base}' > "$input" || return 1
+    : > "$MANIFEST_POLICY_LOG"
+    "${MESH_LLM_AUTOMATION_BIN:?}" automation canary-receipts manifest-policy --input "$input" \
+      > >(tee -a "$MANIFEST_POLICY_LOG") 2>&1
+    return
+  fi
   : > "$MANIFEST_POLICY_LOG"
-  python3 scripts/validate-llama-canary-agent-manifests.py \
-    --base-ref "$CANDIDATE_BASE_HEAD" \
-    --llama-src "$ROOT/.deps/llama.cpp" \
-    > >(tee -a "$MANIFEST_POLICY_LOG") 2>&1
+  if [[ "$HARNESS_MODE" == repair ]]; then
+    repair_source_inspection local-manifest-policy > >(tee -a "$MANIFEST_POLICY_LOG") 2>&1
+    return
+  fi
+  if [[ "$HARNESS_MODE" == verify ]]; then
+    verification_source_inspection verification-manifest-policy > >(tee -a "$MANIFEST_POLICY_LOG") 2>&1
+    return
+  fi
+  echo "unsupported canary manifest mode: $HARNESS_MODE" >&2
+  return 2
 }
 
 agent_feedback_prompt() {
@@ -364,13 +582,17 @@ snapshot_candidate_tree() {
   assert_agent_control_unchanged || return 1
   verify_repair_pin || return 1
   validate_agent_manifest_changes || return 1
-  # Verify the dirty-tree producer before snapshotting changes its source identity.
-  local closure="${LLAMA_STAGE_BUILD_DIR:?}-workloads"
-  python3 "$ROOT/scripts/check-skippy-workload-candidate.py" \
-    --candidate-binary "$closure/cargo/debug/skippy" \
-    --native-build-dir "$closure/native" --producer-manifest "$closure/producer.json"
-  CANARY_VERIFIED_WORKLOAD_PRODUCER="$(shasum -a 256 "$closure/producer.json" | awk '{print $1}')"
-  export CANARY_VERIFIED_WORKLOAD_PRODUCER
+  # Freeze the actual dirty-tree producer before staging changes Git identity.
+  if [[ "$HARNESS_MODE" == "repair-build" ]]; then
+    controller_producer_receipt || return 1
+  else
+    local closure="${LLAMA_STAGE_BUILD_DIR:?}-workloads"
+    repair_workload_controller_unchanged || return 1
+    "${repair_workload_automation[@]}" automation canary-receipts workload-manifest verify \
+      "$ROOT" "$closure/cargo/debug/skippy" "$closure/native" "$closure/producer.json" || return 1
+    CANARY_VERIFIED_WORKLOAD_PRODUCER="$(shasum -a 256 "$closure/producer.json" | awk '{print $1}')" || return 1
+    export CANARY_VERIFIED_WORKLOAD_PRODUCER
+  fi
   git add -A
   if git diff --cached --quiet; then
     echo "agent produced no candidate changes to verify" >&2
@@ -542,6 +764,10 @@ run_full_build() {
 
 # Local CLI compatibility path. CI uses *-build modes and separate family jobs.
 run_certification() {
+  if [[ "$HARNESS_MODE" != repair && "$HARNESS_MODE" != verify ]]; then
+    echo "local certification requires repair or verify mode" >&2
+    return 2
+  fi
   local setting workload_settings
   local workload_env=()
   workload_settings="$(bash scripts/skippy-workload-oracles-build.sh --print-env "${LLAMA_STAGE_BUILD_DIR:?}-workloads")" || return 1
@@ -554,17 +780,12 @@ run_certification() {
   done <<< "$workload_settings"
   : > "$CERTIFY_LOG"
   echo "trusted candidate gate: certify" | tee -a "$CERTIFY_LOG"
-  run_verification_logged "parity manifest validation" "$CERTIFY_LOG" \
-    python3 scripts/skippy-llama-parity.py --llama-src .deps/llama.cpp validate \
-    || return 1
-  run_verification_logged "full family certification plan" "$CERTIFY_LOG" \
-    python3 scripts/plan-family-battery.py \
-      --manifest ci/llama-canary/family-certified.json \
-      --shard-count 1 \
-      --check-cache \
-      --cache-root "$HF_CACHE" \
-      --output "$PLAN_PATH" \
-    || return 1
+  if [[ "$HARNESS_MODE" == repair ]]; then
+    repair_source_inspection local-parity-inventory "" "$CERTIFY_LOG" || return 1
+  elif [[ "$HARNESS_MODE" == verify ]]; then
+    verification_source_inspection verification-parity-inventory "$CERTIFY_LOG" || return 1
+  fi
+  repair_family_plan 1 "$CERTIFY_LOG" || return 1
   run_verification_logged "full supported-family certification" "$CERTIFY_LOG" env \
     FAMILY_BATTERY_RUN_ID="$FAMILY_BATTERY_RUN_ID" \
     "${workload_env[@]}" \
@@ -576,11 +797,15 @@ run_early_metal_certification() {
   local workload_env=()
   # A cached executable is usable only when its recorded source tree (and
   # therefore pin), native stamp, and every handed-off binary still match.
+  repair_workload_controller_unchanged || return 1
+  verification_candidate_unchanged || return 1
   run_verification_logged "verify exact workload producer" "$CERTIFY_LOG" \
-    python3 scripts/check-skippy-workload-candidate.py \
-      --candidate-binary "${LLAMA_STAGE_BUILD_DIR:?}-workloads/cargo/debug/skippy" \
-      --native-build-dir "${LLAMA_STAGE_BUILD_DIR:?}-workloads/native" \
-      --producer-manifest "${LLAMA_STAGE_BUILD_DIR:?}-workloads/producer.json" || return 1
+    "${repair_workload_automation[@]}" automation canary-receipts workload-manifest verify \
+      "$ROOT" "${LLAMA_STAGE_BUILD_DIR:?}-workloads/cargo/debug/skippy" \
+      "${LLAMA_STAGE_BUILD_DIR:?}-workloads/native" \
+      "${LLAMA_STAGE_BUILD_DIR:?}-workloads/producer.json" || return 1
+  verification_candidate_unchanged || return 1
+  repair_workload_controller_unchanged || return 1
   workload_settings="$(bash scripts/skippy-workload-oracles-build.sh --print-env "${LLAMA_STAGE_BUILD_DIR:?}-workloads")" || return 1
   [[ -n "$workload_settings" ]] || return 1
   while IFS= read -r setting; do
@@ -616,35 +841,74 @@ run_candidate_gates() {
     # Independent verification uses the default read-only mode below.
     write_split_certification_roster || return 1
   fi
-  # The prepared pin supplies the exact GGML type table. Compare tensor
-  # descriptors with the manifest now, before the native and Rust builds.
-  run_verification_logged "validate pinned GGUF tensor bytes before compilation" "$CERTIFY_LOG" \
-    python3 scripts/plan-family-battery.py --shard-count 256 \
-      --check-cache --cache-root "$HF_CACHE" \
-      --gguf-constants "$ROOT/.deps/llama.cpp/gguf-py/gguf/constants.py" \
-      --output "$PLAN_PATH" || return 1
+  # The prepared pin supplies GGML layout data. Validate immutable cache and
+  # tensor descriptors before compilation; placement uses conservative file sizes.
+  repair_family_plan 256 "$CERTIFY_LOG" || return 1
+  repair_family_plan_step "$CERTIFY_LOG" "${repair_workload_automation[@]}" \
+    automation family-battery-policy --cache-descriptors "$ROOT" \
+    "$ROOT/ci/llama-canary/family-certified.json" "$PLAN_PATH" "${HF_CACHE:?}" || return 1
   validate_agent_manifest_changes || return 1
   if [[ "$HARNESS_MODE" == *-build ]]; then
     run_verification_logged "validate family plan before compilation" "$CERTIFY_LOG" \
-      python3 scripts/plan-family-battery.py --shard-count 256 \
+      "${MESH_LLM_AUTOMATION_BIN:?}" --repo-root "$ROOT" ci family-plan --shard-count 256 \
         --output "$PLAN_PATH" || return 1
   fi
   run_full_build || return 1
   if [[ "$HARNESS_MODE" == *-build ]]; then
     run_early_metal_certification || return 1
-    run_verification_logged "parity manifest validation" "$CERTIFY_LOG" \
-      python3 scripts/skippy-llama-parity.py --llama-src .deps/llama.cpp validate
+    controller_parity_inventory
   else
     run_certification
   fi
 }
 
+controller_parity_inventory() {
+  local transaction_root input context
+  transaction_root="$(mktemp -d "${RUNNER_TEMP:?}/canary-parity.XXXXXXXX")" || return 1
+  input="$transaction_root/input.json"
+  context="$(controller_package_context)" || return 1
+  jq -n --argjson context "$context" --arg root "$ROOT" --arg base "$CANDIDATE_BASE_HEAD" \
+    --arg source_revision "${CERTIFIED_SHA:-$BASE_HEAD}" \
+    '{context:$context,root:$root,base:$base,source_revision:$source_revision}' > "$input" || return 1
+  run_verification_logged "parity manifest validation" "$CERTIFY_LOG" \
+    "${MESH_LLM_AUTOMATION_BIN:?}" automation canary-receipts parity-inventory --input "$input"
+}
+
+controller_split_roster() {
+  local check="$1" transaction_root input context
+  transaction_root="$(mktemp -d "${RUNNER_TEMP:?}/canary-roster.XXXXXXXX")" || return 1
+  input="$transaction_root/input.json"
+  context="$(controller_package_context)" || return 1
+  jq -n --argjson context "$context" --arg root "$ROOT" --argjson check "$check" \
+    '{context:$context,root:$root,check:$check}' > "$input" || return 1
+  "${MESH_LLM_AUTOMATION_BIN:?}" automation canary-receipts split-roster --input "$input"
+}
+
 write_split_certification_roster() {
-  python3 scripts/generate-split-certified.py
+  if [[ "$HARNESS_MODE" == *-build ]]; then
+    controller_split_roster false
+  elif [[ "$HARNESS_MODE" == repair ]]; then
+    repair_source_inspection local-split-roster false
+  elif [[ "$HARNESS_MODE" == verify ]]; then
+    echo "independent verification cannot write the split roster" >&2
+    return 1
+  else
+    echo "unsupported canary roster mode: $HARNESS_MODE" >&2
+    return 2
+  fi
 }
 
 check_split_certification_roster() {
-  python3 scripts/generate-split-certified.py --check
+  if [[ "$HARNESS_MODE" == *-build ]]; then
+    controller_split_roster true
+  elif [[ "$HARNESS_MODE" == repair ]]; then
+    repair_source_inspection local-split-roster true
+  elif [[ "$HARNESS_MODE" == verify ]]; then
+    verification_source_inspection verification-split-roster-check
+  else
+    echo "unsupported canary roster mode: $HARNESS_MODE" >&2
+    return 2
+  fi
 }
 
 repair_candidate_until_green() {
@@ -714,6 +978,7 @@ write_pr_body() {
 }
 
 finalize_certified_tree() {
+  verification_candidate_unchanged || return 1
   verify_repair_pin || return 1
   if [[ -n "$(git status --porcelain --untracked-files=no)" ]]; then
     echo "verified checkout changed tracked files during final verification" >&2
@@ -726,7 +991,7 @@ finalize_certified_tree() {
   write_pr_body
   git -c core.hooksPath=/dev/null -C "$TRUSTED_ROOT" \
     branch -f "$BRANCH" "$CERTIFIED_SHA"
-  git -C "$TRUSTED_ROOT" bundle create "$BUNDLE" "$BRANCH" "^${BASE_HEAD}"
+  git -C "$TRUSTED_ROOT" bundle create "$BUNDLE" "$BRANCH" "^${CANDIDATE_BASE_HEAD}"
   git -C "$TRUSTED_ROOT" bundle verify "$BUNDLE" >/dev/null
   if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
     {
@@ -739,14 +1004,66 @@ finalize_certified_tree() {
   echo "certified local canary commit: branch=$BRANCH head=$CERTIFIED_SHA"
 }
 
+controller_package_context() {
+  jq -n --arg controller_root "$TRUSTED_ROOT" --arg controller_revision "${CANARY_CONTROLLER_SHA:?}" \
+    --arg selected_source "${CANARY_MESH_SOURCE:-}" --arg run_id "${GITHUB_RUN_ID:?}" \
+    --arg run_attempt "${GITHUB_RUN_ATTEMPT:?}" \
+    '{controller_root:$controller_root,controller_revision:$controller_revision,selected_source:$selected_source,run_id:$run_id,run_attempt:$run_attempt}'
+}
+
+controller_producer_receipt() {
+  local transaction_root input result context
+  transaction_root="$(mktemp -d "${RUNNER_TEMP:?}/canary-package.XXXXXXXX")" || return 1
+  CANARY_PRODUCER_RECEIPT="$transaction_root/producer.json"
+  input="$transaction_root/producer-input.json"
+  context="$(controller_package_context)" || return 1
+  jq -n --argjson context "$context" --arg root "$ROOT" \
+    --arg closure "${LLAMA_STAGE_BUILD_DIR:?}-workloads" --arg output "$CANARY_PRODUCER_RECEIPT" \
+    '{context:$context,root:$root,closure:$closure,output:$output}' > "$input" || return 1
+  if result="$("${MESH_LLM_AUTOMATION_BIN:?protected automation required}" automation canary-receipts producer-receipt --input "$input")"; then
+    CANARY_PRODUCER_RECEIPT_SHA="$(jq -er '.producer_receipt_sha256' <<< "$result")" || return 1
+  else
+    record_failure_class infrastructure producer-receipt
+    return 1
+  fi
+}
+
 export_family_inputs() {
   local destination="${CANARY_EXPORT_DIR:?CANARY_EXPORT_DIR required}"
+  local context transaction_root input result admission admission_sha
+  [[ -n "${CANARY_PRODUCER_RECEIPT:-}" ]] || controller_producer_receipt || return 1
+  context="$(controller_package_context)" || return 1
+  transaction_root="$(mktemp -d "${RUNNER_TEMP:?}/canary-admission.XXXXXXXX")" || return 1
+  admission="$transaction_root/admitted"
+  input="$transaction_root/plan-input.json"
+  jq -n --argjson context "$context" --arg root "$ROOT" --arg base "$CANDIDATE_BASE_HEAD" \
+    --arg candidate "$CERTIFIED_SHA" --arg cache_root "${HF_CACHE:?}" --arg output "$admission" \
+    '{context:$context,root:$root,base:$base,candidate:$candidate,cache_root:$cache_root,output:$output}' > "$input" || return 1
+  if result="$("${MESH_LLM_AUTOMATION_BIN:?}" automation canary-receipts candidate-plan --input "$input")"; then
+    admission_sha="$(jq -er '.admitted_identity_sha256' <<< "$result")" || return 1
+  else
+    record_failure_class infrastructure candidate-plan
+    return 1
+  fi
   write_upstream_summary
-  python3 "$TRUSTED_ROOT/scripts/llama-canary-family-evidence.py" pack \
-    --root "$ROOT" --output "$destination" --candidate "$CERTIFIED_SHA" \
-    --base "$CANDIDATE_BASE_HEAD" --branch "$BRANCH" --pass-id "$PASS_ID" \
-    --test-build "$STATE_DIR/mm-build.jsonl" --bundle "$BUNDLE" --summary "$UPSTREAM_SUMMARY" \
-    --workload-oracles "${LLAMA_STAGE_BUILD_DIR:?}-workloads"
+  input="$transaction_root/pack-input.json"
+  jq -n --argjson context "$context" --arg root "$ROOT" --arg output "$destination" \
+    --arg candidate "$CERTIFIED_SHA" --arg base "$CANDIDATE_BASE_HEAD" --arg branch "$BRANCH" \
+    --arg pass_id "$PASS_ID" --arg mode "$HARNESS_MODE" --arg test_build "$STATE_DIR/mm-build.jsonl" \
+    --arg bundle "$BUNDLE" --arg summary "$UPSTREAM_SUMMARY" \
+    --arg workload_oracles "${LLAMA_STAGE_BUILD_DIR:?}-workloads" --arg admitted_plan "$admission" \
+    --arg admitted_identity_sha256 "$admission_sha" --arg producer_receipt "$CANARY_PRODUCER_RECEIPT" \
+    --arg producer_receipt_sha256 "$CANARY_PRODUCER_RECEIPT_SHA" \
+    '{context:$context,root:$root,output:$output,candidate:$candidate,base:$base,branch:$branch,pass_id:$pass_id,mode:$mode,
+      test_build:$test_build,bundle:(if $mode == "pinned-build" then null else $bundle end),summary:$summary,
+      workload_oracles:$workload_oracles,admitted_plan:$admitted_plan,admitted_identity_sha256:$admitted_identity_sha256,
+      producer_receipt:$producer_receipt,producer_receipt_sha256:$producer_receipt_sha256}' > "$input" || return 1
+  if "${MESH_LLM_AUTOMATION_BIN:?}" automation canary-receipts pack --input "$input"; then
+    :
+  else
+    record_failure_class infrastructure artifact-export
+    return 1
+  fi
 }
 
 if ! check_family_cache; then
@@ -764,10 +1081,12 @@ if [[ "$HARNESS_MODE" == repair* ]]; then
     :
   else
     status=$?
-    # Run the helper from the trusted base commit: a failed agent may have
-    # edited its checkout's scripts. The result is diagnostic evidence only.
-    if ! python3 - "$ROOT" "$STATE_DIR/recovery" "$BASE_HEAD" \
-        < <(git show "$BASE_HEAD:scripts/llama-canary-recover-source.py"); then
+    # The admitted native controller remains independent of candidate edits.
+    # Recovery is diagnostic only and cannot replace the original failure.
+    if ! { repair_recovery_controller_unchanged \
+        && "$repair_recovery_controller" automation canary-receipts recover-source \
+          --root "$ROOT" --output "$STATE_DIR/recovery" --base "$BASE_HEAD" \
+        && repair_recovery_controller_unchanged; }; then
       echo "could not capture the unverified repair source" >&2
     fi
     echo "agent task failed or timed out; no canary branch or pull request was published" >&2
@@ -794,6 +1113,9 @@ load_candidate_bundle
 trap cleanup_verification_worktree EXIT
 materialize_verification_tree
 VERIFICATION_DEADLINE_AT="$(( $(date +%s) + VERIFICATION_TIMEOUT_SECONDS ))"
+if [[ "$HARNESS_MODE" == verify ]]; then
+  verification_source_inspection verification-source-admit || exit 1
+fi
 echo "starting independent verification build of the exact candidate"
 if run_candidate_gates; then
   :

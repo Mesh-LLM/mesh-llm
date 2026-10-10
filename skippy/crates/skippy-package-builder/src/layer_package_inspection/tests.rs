@@ -159,3 +159,49 @@ fn local_inspection_refuses_writer_failures_after_custody() {
     .unwrap();
     assert!(crate::run_with_output(args, &mut Refused).is_err());
 }
+#[cfg(unix)]
+#[test]
+fn actual_host_cache_function_passes_expected_argv_and_propagates_peer_refusal() {
+    use std::os::unix::fs::PermissionsExt;
+    let temp = tempfile::tempdir().unwrap();
+    fixture(temp.path());
+    let tools = temp.path().join("bin");
+    fs::create_dir(&tools).unwrap();
+    let just = tools.join("just");
+    fs::write(&just,b"#!/bin/bash\nset -euo pipefail\n[[ $1 == --justfile && $2 == \"$ROOT/Justfile\" && $3 == skippy-layer-package-inspect ]]\nshift 3\nexec \"$FIXTURE_NATIVE\" inspect-layer-package \"$@\"\n").unwrap();
+    fs::set_permissions(just, fs::Permissions::from_mode(0o700)).unwrap();
+    let source = include_str!("../../../../evals/wan-lab/up.sh");
+    let start = source.find("verify_package_cache() {").unwrap();
+    let end = start + source[start..].find("\nensure_hf_package() {").unwrap();
+    // The native dispatcher is already exercised above. Host command wiring is captured by a private inert peer here.
+    let peer = tools.join("native");
+    fs::write(
+        &peer,
+        b"#!/bin/bash\nprintf '%s\\n' \"$@\" > \"$FIXTURE_LOG\"\nexit \"$FIXTURE_STATUS\"\n",
+    )
+    .unwrap();
+    fs::set_permissions(&peer, fs::Permissions::from_mode(0o700)).unwrap();
+    for status in ["0", "23"] {
+        let output = std::process::Command::new("/bin/bash")
+            .args([
+                "-c",
+                &format!(
+                    "set -euo pipefail\n{}\nverify_package_cache \"$FIXTURE_SNAPSHOT\"\n",
+                    &source[start..end]
+                ),
+            ])
+            .env("PATH", format!("{}:/usr/bin:/bin", tools.display()))
+            .env("ROOT", "/fixture/repo with spaces")
+            .env("FIXTURE_NATIVE", &peer)
+            .env("FIXTURE_LOG", temp.path().join("argv"))
+            .env("FIXTURE_STATUS", status)
+            .env("FIXTURE_SNAPSHOT", temp.path())
+            .env("LAYER_COUNT", "2")
+            .env("ACTIVATION_WIDTH", "4096")
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(status.parse().unwrap()));
+        let args = fs::read_to_string(temp.path().join("argv")).unwrap();
+        assert!(args.contains("--expected-layer-count\n2\n--expected-activation-width\n4096\n"));
+    }
+}

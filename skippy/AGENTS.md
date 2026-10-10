@@ -110,8 +110,8 @@ implementation file.
 
   ```bash
   scripts/prepare-llama.sh pinned
-  python3 scripts/generate-skippy-api-doc.py
-  python3 scripts/generate-skippy-api-doc.py --check
+  cargo xtool automation native-generator contracts api-doc
+  cargo xtool automation native-generator contracts api-doc --check
   ```
 
 - Commit the regenerated `mesh/website/src/docs/pages/skippy-api.md` with the

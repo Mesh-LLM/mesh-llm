@@ -7,11 +7,36 @@ metadata:
 
 # HF Quant And Layer Package Jobs
 
+New repository-side job planning and orchestration follows
+`../manage-ci/SKILL.md`: no new Python tooling; use typed `tools/xtask`
+commands behind thin Just recipes. From the repository root,
+`cargo xtool repo-consistency ci-crate-lists` is a working alias example, not
+a quantization or packaging command. The combined native quant Jobs route uses
+the existing `model-package-generic-jobs` facade and
+`automation hf-certify quant-job-worker`.
+See [the operator contract](../../../skippy/docs/HF_QUANTIZATION_JOBS.md).
+
 Use this skill when a workflow should produce both a quantized GGUF repo and a
 Skippy layer package from an existing BF16/FP16 GGUF repo. The quantization
 phase must use `skippy-quantize`; do not use `llama-quantize`,
 `llama-quantise`, `convert_hf_to_gguf.py`, `hf_to_gguf.py`, or the misspelled
 old notes form `hf_to_gguff.py`.
+
+## Current capability and Jobs flow
+
+The current source-built `skippy-quantize` llama-api/skippy-abi quant backend
+rejects `--max-memory` and partial split windows. It requires the complete
+split range. The native-rust backend supports conversion, not quantization.
+Manifest creation, status and next-window planning do not establish that the
+requested quantization window can execute. Do not remove the memory bound or
+quantize the whole model as a substitute for the intended low-residency flow.
+
+The native Jobs coordinator supervises a supplied `skippy-quantize` whose
+executable, source revision and native runtime are pinned and whose actual
+preflight and finite window run
+prove the required recipe, memory and split behavior. An unspecified image or
+external job helper is not that proof. No new quantizer feature or native ABI
+change is implied by this skill.
 
 ## Preconditions
 
@@ -25,56 +50,25 @@ old notes form `hf_to_gguff.py`.
 
 ## Local Workflow
 
-Quantize first:
+First obtain a complete, verified quant artifact using an explicitly pinned
+supplied quantizer that proves the required split-window and memory behavior.
+Preserve the intended window size 1 and 32G budget; the current source-built
+backend cannot execute that profile. Record the quant manifest, tensor recipe,
+source revision and verification result. This acquisition/quantization step
+is not replaced by the packaging commands below.
+
+For an existing complete artifact and admitted manifest, native verification
+is available (load validation requires the appropriate native runtime):
 
 ```bash
-target/release/skippy-quantize init-quant \
-  --source /mnt/bf16 \
-  --source-prefix BF16 \
-  --target /mnt/quant \
-  --target-prefix <quant-selector> \
-  --output-basename <model>-<quant-selector> \
-  --quant <quant-selector> \
-  --tensor-type-file /mnt/recipe/tensor-types.txt \
-  --window-size 1 \
-  --manifest /tmp/skippy-quantize.json
-
-target/release/skippy-quantize run-quant \
-  --manifest /tmp/skippy-quantize.json \
-  --backend skippy-abi \
-  --max-memory 32G \
-  --work-dir /tmp/skippy-quantize-work \
-  --spool-dir /tmp/skippy-quantize-output \
-  --record-dir /tmp/skippy-quantize-records \
-  --json-event-file /tmp/skippy-quantize-status.json \
-  --json-event-interval-seconds 120 \
-  --json-event-window 8
-
 target/release/skippy-quantize verify-job \
-  --manifest /tmp/skippy-quantize.json \
-  --llama-load
+  --manifest /tmp/skippy-quantize.json --llama-load
 ```
 
-Before the real run, dry-run the same quant job and confirm it reports the
-expected source, target, tensor recipe, backend, memory budget, and next window:
-
-```bash
-target/release/skippy-quantize quant-job \
-  --source /mnt/bf16 \
-  --source-prefix BF16 \
-  --target /mnt/quant \
-  --target-prefix <quant-selector> \
-  --output-basename <model>-<quant-selector> \
-  --quant <quant-selector> \
-  --tensor-type-file /mnt/recipe/tensor-types.txt \
-  --window-size 1 \
-  --manifest /tmp/skippy-quantize.json \
-  --backend skippy-abi \
-  --max-memory 32G \
-  --dry-run
-```
-
-Publish the quant repo if the target is not already a mounted Hub repo:
+Publish a verified quant artifact only with explicit authorization and record
+the resulting immutable commit. A writable directory/model mount alone does
+not establish remote persistence. An independently authorized publication may
+use the existing HF CLI:
 
 ```bash
 hf repo create <org>/<quant-repo> --type model --private
@@ -125,48 +119,39 @@ model card.
 
 ## HF Jobs Workflow
 
-When combining both phases in one HF Job, keep the quantized GGUF repo as the
-durable boundary:
+The intended combined Job keeps the quantized GGUF repo as a durable boundary
+and retains the four-day allowance. The native combined submission, worker and
+collection owner uses workflow
+`quantization-and-package` with a 345600-second whole budget. Follow
+[HF quantization Jobs](../../../skippy/docs/HF_QUANTIZATION_JOBS.md) for the exact
+request and prepare/submit/collect commands. Submission requires explicit
+authorization and `--confirm-submission`; preparation makes no remote request.
+Tool/window fixtures do not qualify a model, memory profile, image or cloud run.
+The owner must:
 
-1. Mount the BF16/FP16 source repo read-only.
-2. Mount the target quant repo read/write.
-3. Run `skippy-quantize init-quant` if the manifest is missing.
-4. Run `skippy-quantize run-quant` until complete.
-5. Run `skippy-quantize verify-job`; stop if it fails.
-6. Submit or run the `mesh-llm models package <quant-repo>:<selector>` package
-   phase.
-7. Record both the quant repo commit and the layer-package repo commit.
+1. Admit a complete read-only BF16/FP16 source at an immutable revision, recipe
+   pins and a supported supplied quantizer with observed window/memory behavior.
+2. Resume from exact-byte-verified published quant shards, stage only the next
+   admitted window, and keep partial observations on cancellation or failure.
+3. Publish each completed window and verify its immutable bytes before deleting
+   staged files. Preserve a durable quant plan and tensor recipe.
+4. Verify the complete quant artifact; stop before packaging if verification fails.
+5. Run or submit the existing package phase against the exact published quant
+   commit, with reviewed generation defaults and the intended target repo.
+6. Collect correlated native receipts, both immutable artifact commits and
+   package certification. Remote Job completion alone does not prove either artifact.
 
-Template:
-
-```bash
-hf jobs uv run \
-  --namespace meshllm \
-  --flavor cpu-upgrade \
-  --timeout 4d \
-  --secrets HF_TOKEN \
-  --volume hf://models/<bf16-repo>:/mnt/bf16 \
-  --volume hf://models/<quant-repo>:/mnt/quant \
-  --env SKIPPY_QUANTIZE_OUTPUT=json \
-  --env PYTHONUNBUFFERED=1 \
-  --detach \
-  /path/to/skippy_quant_then_package_job.py \
-  -- \
-  --source /mnt/bf16 \
-  --source-prefix BF16 \
-  --target /mnt/quant \
-  --target-prefix <quant-selector> \
-  --output-basename <model>-<quant-selector> \
-  --quant <quant-selector> \
-  --tensor-type-file /mnt/recipe/tensor-types.txt \
-  --package-ref <org>/<quant-repo>:<quant-selector> \
-  --max-memory 32G
-```
+The request needs exact source/tool/runtime/runner pins, both target repos,
+selectors and output basename, tensor policy, window and memory profile,
+namespace/image/cost plan, four-day budget, explicit publication confirmation
+and durable evidence destination. Collection cadence must cover the full four
+days; the existing generic conversion workflow's three-day cap is insufficient.
 
 ## Resume Rules
 
-- If quant shards already exist, `skippy-quantize` resumes at the first missing
-  shard.
+- Resume at the first missing shard only after immutable target bytes and the
+  source/recipe lineage are verified. Current local filename checks do not
+  establish remote resume integrity.
 - If the quant repo verifies successfully, skip quantization and run or inspect
   the package job.
 - Do not delete a verified quant repo to force a clean package run. Package jobs

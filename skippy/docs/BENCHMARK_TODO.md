@@ -18,7 +18,7 @@ numbers.
 
 - Model-free local scratch output: `benchmark-output/<run-id>/`
 - Generated corpora: keep under `target/bench-corpora/` via
-  `scripts/generate-bench-corpus.py`.
+  `just bench-corpus <tier> --out-root <fresh-directory>` (native trajectory-reader).
 - OpenAI smoke and benchy scratch output: keep under `/tmp/skippy-openai-smoke/`
   or another explicit `/tmp` path.
 - Existing `skippy-bench` distributed output: keep under the configured bench root

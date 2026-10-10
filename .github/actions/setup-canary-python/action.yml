@@ -1,15 +1,59 @@
-name: Set up canary Python SDK
-description: Restore locked SDK dependencies in a controller-owned virtual environment.
+name: Set up locked Python SDK smoke environment
+description: Restore genuine SDK dependencies through the existing Python runtime authority.
+inputs:
+  sdk-kind:
+    description: Closed SDK class; embedding keeps minimal OpenAI dependencies, compatibility includes the three required clients.
+    required: false
+    default: embedding
 runs:
   using: composite
   steps:
-    - name: Prepare locked embedding SDK
+    - uses: ./.github/actions/prepare-python-sdk-source
+    - name: Prepare locked SDK environment
       shell: bash
+      env:
+        SDK_KIND: ${{ inputs.sdk-kind }}
+        HF_TOKEN: ''
+        HUGGING_FACE_HUB_TOKEN: ''
       run: |
         set -euo pipefail
-        export PATH="$HOME/.local/bin:$PATH"
-        export UV_PYTHON_DOWNLOADS=never
-        uv sync --locked --project ci/canary-python
-        sdk_python="$PWD/ci/canary-python/.venv/bin/python"
-        "$sdk_python" -c 'from openai import OpenAI'
-        echo "SKIPPY_WORKLOAD_SDK_PYTHON=$sdk_python" >> "$GITHUB_ENV"
+        export MESH_PYTHON_SDK_SOURCE="$PWD/.sdk-source/python"
+        automation=(cargo xtool)
+        if [[ -n "${MESH_LLM_AUTOMATION_BIN:-}" ]]; then automation=("$MESH_LLM_AUTOMATION_BIN"); fi
+        sdk_root="$("${automation[@]}" automation smoke-observation sdk-source --kind root)"
+        sdk_project="$("${automation[@]}" automation smoke-observation sdk-source --kind "$SDK_KIND")"
+        host_python="$(command -v python3)"
+        case "$SDK_KIND" in
+          embedding)
+            export PATH="$HOME/.local/bin:$PATH"
+            command -v uv >/dev/null 2>&1 || { echo "preinstalled canonical canary uv is required" >&2; exit 1; }
+            export UV_PYTHON_DOWNLOADS=never
+            export UV_CACHE_DIR="$RUNNER_TEMP/required-sdk-uv-cache"
+            export UV_PROJECT_ENVIRONMENT="$RUNNER_TEMP/required-sdk-embedding"
+            uv sync --locked --project "$sdk_project" --python "$host_python"
+            sdk_python="$UV_PROJECT_ENVIRONMENT/bin/python"
+            "$sdk_python" -I "$sdk_root/scripts/import-embedding.py"
+            sdk_variable=SKIPPY_WORKLOAD_SDK_PYTHON
+            ;;
+          compatibility)
+            [[ "$("$host_python" --version)" == 'Python 3.12.'* ]] || { echo "required SDK lock needs existing CPython 3.12" >&2; exit 1; }
+            sdk_environment="$RUNNER_TEMP/required-sdk-compatibility"
+            [[ ! -e "$sdk_environment" && ! -L "$sdk_environment" ]] || exit 1
+            "$host_python" -I -m venv "$sdk_environment"
+            sdk_python="$sdk_environment/bin/python"
+            env -u PIP_INDEX_URL -u PIP_EXTRA_INDEX_URL -u PIP_TRUSTED_HOST \
+              PIP_CONFIG_FILE=/dev/null \
+              "$sdk_python" -I -m pip --isolated install --disable-pip-version-check --no-input \
+              --no-cache-dir --require-hashes --no-deps --only-binary=:all: \
+              --index-url https://pypi.org/simple \
+              -r "$sdk_project/requirements.lock"
+            "$sdk_python" -I -m pip --isolated check
+            "$sdk_python" -I "$sdk_root/scripts/import-compatibility.py"
+            sdk_variable=MESH_REQUIRED_SDK_PYTHON
+            ;;
+          *) echo "unsupported SDK environment class" >&2; exit 1 ;;
+        esac
+        [[ "$sdk_python" == /* && -f "$sdk_python" && -x "$sdk_python" ]] || exit 1
+        "${automation[@]}" automation smoke-observation sdk-source --kind root >/dev/null
+        printf 'MESH_PYTHON_SDK_SOURCE=%s\n' "$sdk_root" >> "$GITHUB_ENV"
+        printf '%s=%s\n' "$sdk_variable" "$sdk_python" >> "$GITHUB_ENV"

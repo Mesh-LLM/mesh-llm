@@ -35,6 +35,36 @@ if [[ ! -s "$BUNDLE" ]]; then
   echo "certified canary bundle is missing or empty: $BUNDLE" >&2
   exit 1
 fi
+# Use the prepared controller, never a candidate-owned Cargo bootstrap after checkout.
+PUBLICATION_AUTOMATION="${MESH_LLM_AUTOMATION_BIN:-}"
+if [[ "$PUBLICATION_AUTOMATION" != /* || ! -f "$PUBLICATION_AUTOMATION" || ! -x "$PUBLICATION_AUTOMATION" ]]; then
+  echo 'canary publication requires the prepared absolute automation executable' >&2
+  exit 1
+fi
+publication_parent="${RUNNER_TEMP:-/tmp}"
+if [[ "$publication_parent" != /* || ! -d "$publication_parent" ]]; then
+  echo 'canary publication requires an absolute existing temporary directory' >&2
+  exit 1
+fi
+PUBLICATION_STATE="$(mktemp -d "$publication_parent/canary-publication.XXXXXXXX")"
+ASKPASS=''
+redactor_pid=''
+cleanup_publication_files() {
+  if [[ -n "$redactor_pid" ]]; then
+    kill "$redactor_pid" >/dev/null 2>&1 || true
+    wait "$redactor_pid" >/dev/null 2>&1 || true
+  fi
+  if [[ -n "$ASKPASS" ]]; then rm -f -- "$ASKPASS"; fi
+  rm -rf -- "$PUBLICATION_STATE"
+}
+trap cleanup_publication_files EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+cp -- "$PUBLICATION_AUTOMATION" "$PUBLICATION_STATE/automation"
+chmod 700 "$PUBLICATION_STATE/automation"
+PUBLICATION_AUTOMATION="$PUBLICATION_STATE/automation"
+readonly PUBLICATION_AUTOMATION
+
 git bundle verify "$BUNDLE" >/dev/null
 bundle_head="$(git bundle list-heads "$BUNDLE" "refs/heads/${BRANCH}" | awk '{print $1}')"
 if [[ "$bundle_head" != "$CERTIFIED_SHA" ]]; then
@@ -70,7 +100,21 @@ gh_repair() {
 }
 
 redact_token() {
-  python3 -c 'import os, sys; token = os.environ["CANARY_REPAIR_TOKEN"]; sys.stdout.write(sys.stdin.read().replace(token, "***redacted***"))'
+  exec "$PUBLICATION_AUTOMATION" automation canary-receipts redact-publication-log
+}
+
+start_publication_redactor() {
+  mkfifo -m 600 "$PUBLICATION_STATE/diagnostics" || return 1
+  redact_token < "$PUBLICATION_STATE/diagnostics" >&2 &
+  redactor_pid=$!
+}
+
+finish_publication_redactor() {
+  local redaction_status=0
+  wait "$redactor_pid" || redaction_status=$?
+  redactor_pid=''
+  rm -f -- "$PUBLICATION_STATE/diagnostics"
+  return "$redaction_status"
 }
 
 encoded_branch="${BRANCH//\//%2F}"
@@ -106,12 +150,12 @@ cleanup_before_pr() {
     exact_pr="$(find_exact_ready_pr || true)"
     if [[ -n "$exact_pr" ]]; then
       echo "certified canary PR exists despite an interrupted response: $exact_pr"
-      rm -f "$ASKPASS"
+      cleanup_publication_files
       exit 0
     fi
     cleanup_exact_remote_branch
   fi
-  rm -f "$ASKPASS"
+  cleanup_publication_files
   exit "$status"
 }
 trap 'cleanup_before_pr $?' EXIT
@@ -124,13 +168,23 @@ if existing="$(gh_repair gh pr list --repo "$REPOSITORY" --head "$BRANCH" \
   exit 1
 fi
 
-if ! GIT_ASKPASS="$ASKPASS" GIT_TERMINAL_PROMPT=0 \
+start_publication_redactor
+push_status=0
+if GIT_ASKPASS="$ASKPASS" GIT_TERMINAL_PROMPT=0 \
     git push "https://github.com/${REPOSITORY}.git" \
-    "HEAD:refs/heads/${BRANCH}" 2> >(redact_token >&2); then
+    "HEAD:refs/heads/${BRANCH}" 2> "$PUBLICATION_STATE/diagnostics"; then
+  branch_pushed=1
+else
+  push_status=$?
+fi
+if ! finish_publication_redactor; then
+  echo 'could not redact canary push diagnostics' >&2
+  exit 1
+fi
+if (( push_status != 0 )); then
   echo "could not push certified canary branch $BRANCH" >&2
   exit 1
 fi
-branch_pushed=1
 
 remote_head="$(gh_repair gh api "repos/${REPOSITORY}/git/ref/heads/${encoded_branch}" --jq .object.sha)"
 if [[ "$remote_head" != "$CERTIFIED_SHA" ]]; then
@@ -139,8 +193,22 @@ if [[ "$remote_head" != "$CERTIFIED_SHA" ]]; then
 fi
 
 title="fix(llama): certify upstream $(tr -d '[:space:]' < skippy/llama_cpp/upstream.txt | cut -c1-10)"
-if ! pr_url="$(gh_repair gh pr create --repo "$REPOSITORY" --base main --head "$BRANCH" \
-    --title "$title" --body-file "$PR_BODY" 2> >(redact_token >&2))"; then
+create_ready_pr() {
+  local create_status=0 redactor_pid=''
+  start_publication_redactor || return 125
+  if gh_repair gh pr create --repo "$REPOSITORY" --base main --head "$BRANCH" \
+      --title "$title" --body-file "$PR_BODY" 2> "$PUBLICATION_STATE/diagnostics"; then
+    :
+  else
+    create_status=$?
+  fi
+  if ! finish_publication_redactor; then
+    echo 'could not redact canary pull-request diagnostics' >&2
+    return 125
+  fi
+  return "$create_status"
+}
+if ! pr_url="$(create_ready_pr)"; then
   pr_url="$(find_exact_ready_pr || true)"
   if [[ -z "$pr_url" ]]; then
     echo "could not create or reconcile the certified canary PR" >&2
@@ -154,7 +222,7 @@ fi
 # publication failed after a ready PR exists.
 published=1
 trap - EXIT INT TERM
-rm -f "$ASKPASS"
+cleanup_publication_files
 set +e
 if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
   printf 'pr_url=%s\n' "$pr_url" >> "$GITHUB_OUTPUT"

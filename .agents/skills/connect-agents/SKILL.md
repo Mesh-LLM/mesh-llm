@@ -67,14 +67,14 @@ Exact manual provider JSON for OpenCode and Pi is in `mesh/docs/AGENTS.md`.
 Direct API contract probe (tool-call forcing, streaming reconstruction):
 
 ```bash
-scripts/qa-agent-tool-call-reliability.py \
+cargo xtool automation stability tool-call \
   --base-url http://127.0.0.1:9337/v1 --models auto,mesh --attempts 3 \
   --output target/agent-tool-call-reliability/results.jsonl
 ```
 
 Broader harness (models, chat, streaming, plus optional Goose/OpenCode/Pi
-smokes): `scripts/qa-nightly-stability.py` — see `mesh/docs/AGENTS.md`. Use
-`--print-plan` on either script for a side-effect-free preview.
+smokes): `cargo xtool automation stability nightly` — see `mesh/docs/AGENTS.md`. Use
+`--print-plan` on either command for a side-effect-free preview.
 
 ## Blackboard (cross-mesh agent coordination)
 

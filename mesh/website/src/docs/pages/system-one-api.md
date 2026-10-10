@@ -69,13 +69,14 @@ not automatically route chat through Laya.
 ### Advanced: convert your own checkpoint
 
 The published model above is sufficient for normal use. For a custom conversion,
-use a Mesh source checkout with its patched converter, the Hugging Face CLI,
-and the converter's Python dependencies:
+use the pinned external research converter project and the Hugging Face CLI.
+Set `MESH_RESEARCH_ROOT` to the admitted research checkout:
 
 ```sh
-just llama-prepare
+cd "${MESH_RESEARCH_ROOT:?}/model-converters"
+just prepare
 hf download convaiinnovations/laya-multilingual --local-dir /tmp/laya-multilingual
-python3 .deps/llama.cpp/convert_hf_to_gguf.py /tmp/laya-multilingual \
+uv run --locked --no-sync python convert_hf_to_gguf.py /tmp/laya-multilingual \
   --outtype f16 --outfile /tmp/laya-multilingual-F16.gguf
 mesh-llm serve --gguf /tmp/laya-multilingual-F16.gguf
 ```

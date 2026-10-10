@@ -201,44 +201,12 @@ sha256_file() {
     fi
 }
 
-python_bin() {
-    local candidate
-    for candidate in python3 python; do
-        if command -v "$candidate" >/dev/null 2>&1 &&
-            "$candidate" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 9) else 1)' >/dev/null 2>&1; then
-            printf '%s\n' "$candidate"
-            return 0
-        fi
-    done
-    echo "Python 3.9 or newer is required to package native runtimes" >&2
-    exit 1
-}
-
 skippy_runtime_version() {
-    "$(python_bin)" - "$REPO_ROOT/skippy/crates/skippy-native-runtime/RUNTIME_VERSION" <<'PYVERSION'
-import pathlib
-import re
-import sys
-
-version = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8").strip()
-if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?", version):
-    raise SystemExit("invalid Skippy runtime release version")
-print(version)
-PYVERSION
+    cargo xtool native package-source-version runtime "$REPO_ROOT/skippy/crates/skippy-native-runtime/RUNTIME_VERSION"
 }
 
 skippy_abi_version() {
-    "$(python_bin)" - "$REPO_ROOT/skippy/crates/skippy-ffi/src/lib.rs" <<'PY'
-import re
-import sys
-
-values = {}
-for line in open(sys.argv[1], encoding="utf-8"):
-    match = re.match(r"pub const ABI_VERSION_(MAJOR|MINOR|PATCH): u32 = ([0-9]+);", line.strip())
-    if match:
-        values[match.group(1)] = match.group(2)
-print("{}.{}.{}".format(values["MAJOR"], values["MINOR"], values["PATCH"]))
-PY
+    cargo xtool native package-source-version abi "$REPO_ROOT/skippy/crates/skippy-ffi/src/lib.rs"
 }
 
 library_pattern() {
@@ -382,7 +350,7 @@ build_model_package_tool() {
         return 0
     fi
 
-    local tool_rel tool_path source_path configured cargo_target_dir
+    local tool_rel tool_path source_path configured cargo_target_dir cargo_metadata
     local -a cargo_env=(
         "LLAMA_STAGE_LINK_MODE=dynamic"
         "LLAMA_STAGE_LIB_DIR=$stage_dir/lib"
@@ -404,10 +372,8 @@ build_model_package_tool() {
         env "${cargo_env[@]}" \
             cargo build --release --locked --target "$TARGET_TRIPLE" \
                 -p skippy-package-builder
-        cargo_target_dir="$(
-            cargo metadata --no-deps --format-version 1 |
-                "$(python_bin)" -c 'import json, sys; print(json.load(sys.stdin)["target_directory"])'
-        )"
+        cargo_metadata="$(cargo metadata --no-deps --format-version 1)"
+        cargo_target_dir="$(cargo xtool repository cargo-target-directory <<< "$cargo_metadata")"
         source_path="$cargo_target_dir/$TARGET_TRIPLE/release/$(basename "$tool_rel")"
         if [[ ! -x "$source_path" ]]; then
             echo "model package tool build did not produce $source_path" >&2
@@ -579,7 +545,7 @@ collect_linux_cuda_dependencies() {
         [[ -n "$dependency_dir" ]] && dependency_args+=(--search-dir "$dependency_dir")
     done < <(linux_cuda_dependency_search_dirs | awk '!seen[$0]++')
 
-    "$(python_bin)" "$SCRIPT_DIR/linux-native-runtime-deps.py" collect \
+    cargo xtool native linux-runtime-deps collect \
         --lib-dir "$stage_dir/lib" \
         --scan-dir "$stage_dir/tools" \
         --arch "$runtime_arch" \
@@ -590,7 +556,7 @@ collect_linux_cuda_dependencies() {
     while IFS= read -r library; do
         [[ -n "$library" ]] && library_paths+=("lib/$library")
     done < <(
-        "$(python_bin)" "$SCRIPT_DIR/linux-native-runtime-deps.py" order \
+        cargo xtool native linux-runtime-deps order \
             --lib-dir "$stage_dir/lib" \
             --scan-dir "$stage_dir/tools" \
             --arch "$runtime_arch" \
@@ -794,7 +760,7 @@ if [[ "$runtime_os" == "windows" ]]; then
             fi
         fi
     done
-    "$(python_bin)" "$SCRIPT_DIR/windows-native-runtime-deps.py" collect \
+    cargo xtool native windows-runtime-deps collect \
         --lib-dir "$stage_dir/lib" \
         --scan-dir "$stage_dir/tools" \
         "${dependency_args[@]}"
@@ -815,7 +781,6 @@ rewrite_macos_runtime_paths
 rewrite_linux_runtime_paths
 
 primary_library="lib/$primary_name"
-primary_sha="$(sha256_file "$stage_dir/$primary_library")"
 runtime_release_version="$(skippy_runtime_version)"
 abi_version="$(skippy_abi_version)"
 cuda_major=""
@@ -840,7 +805,9 @@ if [[ -f "$LLAMA_WORKDIR/.mesh-llm-patch-digest" ]]; then
     patch_digest="$(tr -d '[:space:]' < "$LLAMA_WORKDIR/.mesh-llm-patch-digest")"
 fi
 
-manifest_args=("$stage_dir/manifest.json" "$primary_library" "${library_paths[@]}" --)
+manifest_args=("$stage_dir/manifest.json" "$artifact_id" "$runtime_release_version" "$abi_version"
+    "$runtime_os" "$runtime_arch" "$TARGET_TRIPLE" "$platform" "$BACKEND" "$cuda_major"
+    "$primary_library" "$upstream_sha" "$patched_sha" "$patch_digest" "${library_paths[@]}" --)
 if [[ "${#tool_paths[@]}" -gt 0 ]]; then
     manifest_args+=("${tool_paths[@]}")
 fi
@@ -850,149 +817,7 @@ if [[ "${#license_paths[@]}" -gt 0 ]]; then
 fi
 manifest_args+=(-- "${linux_relocatable_library_paths[@]}")
 
-"$(python_bin)" - "${manifest_args[@]}" <<PY
-import json
-import hashlib
-import os
-import re
-import subprocess
-import sys
-
-manifest_path = sys.argv[1]
-primary_library = sys.argv[2]
-separator = sys.argv.index("--")
-file_separator = sys.argv.index("--", separator + 1)
-relocatable_separator = sys.argv.index("--", file_separator + 1)
-library_paths = sys.argv[3:separator]
-tool_paths = sys.argv[separator + 1:file_separator]
-license_paths = sys.argv[file_separator + 1:relocatable_separator]
-relocatable_library_paths = sys.argv[relocatable_separator + 1:]
-backend = "$BACKEND"
-kind = {"hip": "rocm", "cuda-blackwell": "cuda"}.get(backend, backend)
-
-def split_arches(raw):
-    values = []
-    for comma_part in raw.split(","):
-        values.extend(part.strip() for part in comma_part.split(";"))
-    return [value for value in values if value]
-
-cuda_arches = split_arches(
-    os.environ.get("LLAMA_STAGE_CUDA_ARCHITECTURES")
-    or os.environ.get("SKIPPY_CUDA_ARCHITECTURES")
-    or ("sm_120" if backend == "cuda-blackwell" else "")
-)
-rocm_arches = split_arches(
-    os.environ.get("LLAMA_STAGE_AMDGPU_TARGETS")
-    or os.environ.get("SKIPPY_AMDGPU_TARGETS")
-    or ""
-)
-
-def file_sha256(path):
-    digest = hashlib.sha256()
-    with open(path, "rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-def packaged_glibc_requirement(paths):
-    if "$runtime_os" != "linux":
-        return None
-    requirements = []
-    readelf_env = os.environ.copy()
-    readelf_env["LC_ALL"] = "C"
-    for relative_path in paths:
-        path = os.path.join(os.path.dirname(manifest_path), relative_path)
-        with open(path, "rb") as handle:
-            if handle.read(4) != b"\x7fELF":
-                continue
-        output = subprocess.run(
-            ["readelf", "-V", path], check=True, capture_output=True, text=True,
-            env=readelf_env,
-        ).stdout
-        _, heading, needs = output.partition("Version needs section")
-        if heading:
-            def glibc_requirement(version):
-                if version == "GLIBC_ABI_DT_RELR":
-                    return (2, 36)
-                major, minor = version.removeprefix("GLIBC_").split(".")
-                return (int(major), int(minor))
-
-            requirements.extend(
-                glibc_requirement(version)
-                for version in re.findall(r"GLIBC_(?:\d+\.\d+|ABI_DT_RELR)", needs)
-            )
-    if not requirements:
-        return None
-    major, minor = max(requirements)
-    return f"{major}.{minor}"
-
-files = {
-    path: file_sha256(os.path.join(os.path.dirname(manifest_path), path))
-    for path in [*library_paths, *license_paths]
-}
-tools = {
-    path: file_sha256(os.path.join(os.path.dirname(manifest_path), path))
-    for path in tool_paths
-}
-min_glibc = packaged_glibc_requirement([*library_paths, *tool_paths])
-backend_manifest = {"kind": kind}
-if kind == "cuda":
-    backend_manifest["cuda"] = {
-        "toolkit_major": int("$cuda_major"),
-        "gpu_arches": cuda_arches,
-    }
-    min_driver = os.environ.get("MESH_LLM_CUDA_MIN_DRIVER")
-    if min_driver:
-        backend_manifest["cuda"]["min_driver"] = min_driver
-elif kind == "rocm":
-    backend_manifest["rocm"] = {
-        "gpu_arches": rocm_arches,
-    }
-    version = os.environ.get("MESH_LLM_ROCM_VERSION")
-    if version:
-        backend_manifest["rocm"]["version"] = version
-elif kind == "vulkan":
-    backend_manifest["vulkan"] = {}
-    min_api = os.environ.get("MESH_LLM_VULKAN_MIN_API_VERSION")
-    if min_api:
-        backend_manifest["vulkan"]["min_api_version"] = min_api
-
-manifest = {
-    "schema_version": 2,
-    "runtime": {
-        "id": "$artifact_id",
-        "release_version": "$runtime_release_version",
-        "skippy_abi": "$abi_version",
-        "platform": {
-            "os": "$runtime_os",
-            "arch": "$runtime_arch",
-            "target": "$TARGET_TRIPLE",
-            "min_glibc": min_glibc,
-        },
-        "backend": backend_manifest,
-        "rank": int(os.environ.get("MESH_LLM_NATIVE_RUNTIME_RANK") or 0),
-        "libraries": library_paths,
-        "files": files,
-        "tools": tools,
-        "url": None,
-        "sha256": None,
-        "signature": None,
-    },
-    "build": {
-        "platform": "$platform",
-        "backend": "$BACKEND",
-        "primary_library": primary_library,
-        "relocatable_libraries": relocatable_library_paths if "$runtime_os" == "linux" else [],
-        "library_sha256": "$primary_sha",
-        "llama_upstream_sha": "$upstream_sha" or None,
-        "llama_patched_sha": "$patched_sha" or None,
-        "llama_patch_digest": "$patch_digest" or None,
-    },
-}
-with open(manifest_path, "w", encoding="utf-8") as fh:
-    json.dump(manifest, fh, indent=2, sort_keys=True)
-    fh.write("\\n")
-PY
+cargo xtool native runtime-manifest-write --schema-v2 "${manifest_args[@]}"
 
 cat > "$stage_dir/README.md" <<EOF
 # $artifact_id
