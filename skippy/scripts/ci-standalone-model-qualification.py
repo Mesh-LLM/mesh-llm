@@ -14,6 +14,8 @@ import hashlib
 import importlib.util
 import json
 from pathlib import Path
+import platform
+import re
 import socket
 import subprocess
 import sys
@@ -34,7 +36,12 @@ DEVICES = {"cpu": "CPU", "cuda": "CUDA0", "rocm": "ROCm0",
            "vulkan": "Vulkan0", "metal": "MTL0"}
 SUITE_DEVICE_BACKENDS = set(DEVICES)
 PROMPT = "Reply with one short sentence about the weather."
-PREFIX = "Reference facts: " + " ".join(f"fact-{index}" for index in range(32))
+# Prefix reuse is only reported once the reusable prefix is long enough for the
+# runtime's prefix cache to retain a block (measured: a ~130-token repeat still
+# reports cached_tokens=0 on both Metal and CPU, while a ~500-token repeat is
+# served from cache). Keep this comfortably above that boundary so every
+# supported backend and tokenizer observes a real prefix hit.
+PREFIX = "Reference facts: " + " ".join(f"fact-{index}" for index in range(160))
 SUFFIX = "\nNow summarise the reference facts in one line."
 
 
@@ -199,6 +206,131 @@ class Server:
         self.stop()
 
 
+def selected_backend_device(log_path: Path) -> str | None:
+    """Read the device the running product actually selected from its log.
+
+    The composed CLI emits one JSON event per line and publishes a
+    ``backend_device_selected`` record naming the backend device it bound to.
+    That token is the product's own runtime evidence, so it cannot be forged by
+    a manifest claim or masked by a silent CPU fallback.
+    """
+    if not log_path.is_file():
+        return None
+    for raw in log_path.read_text(encoding="utf-8", errors="replace").splitlines():
+        line = raw.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(event, dict) or event.get("type") != "backend_device_selected":
+            continue
+        detail = event.get("data")
+        if isinstance(detail, dict):
+            detail = detail.get("detail")
+        if isinstance(detail, str) and detail.strip():
+            return detail.strip()
+    return None
+
+
+def host_hardware(product_dir: Path, manifest: dict, directory: Path) -> dict:
+    """Return the composed product's own host hardware profile."""
+    process = subprocess.run(
+        [str(product_dir / manifest["cli"]["path"]),
+         "--runtime-bundle", str(product_dir / manifest["runtime"]["path"]),
+         "--runtime-cache", str(directory / "doctor-runtime-cache"),
+         "--runtime-selection", manifest["backend"], "doctor", "--output", "json"],
+        capture_output=True, text=True, timeout=180,
+    )
+    require(process.returncode == 0, f"skippy doctor failed: {process.stderr[-2000:]}")
+    report = json.loads(process.stdout)
+    hardware = report.get("hardware")
+    require(isinstance(hardware, dict), "composed product reported no hardware profile")
+    return hardware
+
+
+def _apple_chip_name() -> str | None:
+    try:
+        process = subprocess.run(["sysctl", "-n", "machdep.cpu.brand_string"],
+                                 capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    name = process.stdout.strip()
+    return name or None
+
+
+def _first_gpu_name(profile: dict) -> str | None:
+    for gpu in profile.get("gpus") or []:
+        if not isinstance(gpu, dict):
+            continue
+        name = gpu.get("display_name")
+        if isinstance(name, str) and name.strip() and name.strip() != "Type: GPU":
+            return name.strip()
+    return None
+
+
+def _metal_runtime_version(profile: dict) -> str | None:
+    for gpu in profile.get("gpus") or []:
+        name = gpu.get("display_name") if isinstance(gpu, dict) else None
+        if not isinstance(name, str):
+            continue
+        match = re.search(r"Metal\s+\d+(?:\.\d+)*", name)
+        if match:
+            return match.group(0)
+    return None
+
+
+def build_hardware(row: dict, availability: dict, profile: dict, selected_device: str) -> dict:
+    """Build the receipt hardware record from the product's real device use."""
+    require(availability.get("state") == "available",
+            "hardware evidence requires a policy-available row")
+    require(availability.get("row_id") == row["id"], "availability belongs to another row")
+    runner = availability.get("runner")
+    require(isinstance(runner, str) and bool(runner.strip()),
+            "available row lacks an approved runner")
+    backend = row["backend"]
+    require(selected_device == DEVICES[backend],
+            f"product selected device {selected_device!r}, not {DEVICES[backend]!r}")
+    if backend == "cpu":
+        return {"actual_backend": "cpu", "runner": runner,
+                "device": "CPU", "selected_device": "CPU"}
+    device = _apple_chip_name() if backend == "metal" else None
+    device = device or _first_gpu_name(profile)
+    require(isinstance(device, str) and bool(device.strip()),
+            "GPU row exposes no hardware device identity")
+    if backend == "cuda":
+        cuda = profile.get("cuda") or {}
+        majors = sorted(cuda.get("toolkit_majors") or [])
+        arches = sorted(cuda.get("gpu_arches") or [])
+        driver = cuda.get("driver_version")
+        runtime_version = f"CUDA {majors[-1]}" if majors else None
+        architecture = arches[-1] if arches else None
+    elif backend == "rocm":
+        rocm = profile.get("rocm") or {}
+        arches = sorted(rocm.get("gpu_arches") or [])
+        driver = rocm.get("version")
+        runtime_version = rocm.get("version")
+        architecture = arches[0] if arches else None
+    elif backend == "vulkan":
+        vulkan = profile.get("vulkan") or {}
+        driver = vulkan.get("api_version")
+        runtime_version = vulkan.get("api_version")
+        architecture = device
+    else:  # metal
+        macos_version = platform.mac_ver()[0]
+        driver = f"macOS {macos_version}" if macos_version else None
+        runtime_version = _metal_runtime_version(profile)
+        architecture = profile.get("arch")
+    for name, value in (("driver", driver), ("runtime_version", runtime_version),
+                        ("device_architecture", architecture)):
+        require(isinstance(value, str) and bool(value.strip()),
+                f"GPU row exposes no {name} identity from the composed product")
+    return {"actual_backend": backend, "runner": runner, "device": device,
+            "selected_device": selected_device, "driver": driver,
+            "runtime_version": runtime_version, "device_architecture": architecture}
+
+
 def dense_cases(server: Server, observations: dict) -> list[str]:
     first = completion(server.base, server.model_id, [{"role": "user", "content": PROMPT}])
     observations["prefill_tokens"] = usage_tokens(first)["prompt_tokens"]
@@ -296,9 +428,21 @@ def parse_model(values: list[list[str]]) -> list[tuple[str, Path, str, str]]:
     return models
 
 
-def run(product_dir: Path, row_id: str, suite: str, device: str, ctx_size: int,
-        models: list[tuple[str, Path, str, str]], evidence: Path) -> dict:
+def validate_suite_models(suite: str, models: list[tuple[str, Path, str, str]],
+                          known: dict[str, set[str]]) -> None:
+    """Require every capability group the suite needs to be covered."""
+    for group in SUITE_MODEL_TAGS[suite]:
+        require(any(set(group) & known.get(artifact_id, set())
+                    for artifact_id, _, _, _ in models),
+                f"{suite} lacks a model tagged {sorted(group)}")
+
+
+def run(product_dir: Path, row_id: str, suite: str, device: str | None, ctx_size: int,
+        models: list[tuple[str, Path, str, str]], evidence: Path,
+        availability_path: Path | None = None,
+        hardware_evidence: Path | None = None) -> dict:
     row = contract.catalog_row(row_id)
+    device = device or DEVICES[row["backend"]]
     require(device == DEVICES[row["backend"]], "device differs from the selected backend")
     manifest_path = product_dir / "product-manifest.json"
     manifest = contract.load_json(manifest_path)
@@ -312,13 +456,12 @@ def run(product_dir: Path, row_id: str, suite: str, device: str, ctx_size: int,
     known = {item["id"]: set(item.get("capability_tags", []))
              for item in contract.load_json(
                  contract.ROOT / "ci/model-artifacts/registry.json")["artifacts"]}
-    for group in SUITE_MODEL_TAGS[suite]:
-        require(any(group & known[artifact_id] for artifact_id, _, _, _ in models),
-                f"{suite} lacks a model tagged {sorted(group)}")
+    validate_suite_models(suite, models, known)
 
     driver, restart = SUITE_DRIVERS[suite]
     cases: list[str] = []
     observations: dict[str, object] = {}
+    selected_device: str | None = None
     for artifact_id, model, model_sha256, model_id in models:
         require(model.is_file() and sha256(model) == model_sha256,
                 f"pinned {artifact_id} bytes differ")
@@ -326,6 +469,10 @@ def run(product_dir: Path, row_id: str, suite: str, device: str, ctx_size: int,
             directory = Path(temporary)
             server = Server(product_dir, manifest, model, model_id, device, ctx_size, directory)
             with server:
+                if selected_device is None:
+                    selected_device = selected_backend_device(server.log_path)
+                    require(selected_device == DEVICES[row["backend"]],
+                            f"product selected device {selected_device!r}, not {DEVICES[row['backend']]!r}")
                 executed = driver(server, observations)
                 if restart:
                     restart_case(server, observations)
@@ -343,6 +490,16 @@ def run(product_dir: Path, row_id: str, suite: str, device: str, ctx_size: int,
               "executed_cases": sorted(set(cases)), "models": identifiers,
               "observations": observations}
     evidence.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    if hardware_evidence is not None:
+        require(availability_path is not None, "--hardware-evidence requires --availability")
+        hardware = build_hardware(
+            row, contract.load_json(availability_path),
+            host_hardware(product_dir, manifest, evidence.parent), selected_device,
+        )
+        hardware_evidence.parent.mkdir(parents=True, exist_ok=True)
+        hardware_evidence.write_text(
+            json.dumps(hardware, indent=2, sort_keys=True) + "\n", encoding="utf-8",
+        )
     return result
 
 
@@ -351,15 +508,18 @@ def main() -> int:
     parser.add_argument("--product-dir", type=Path, required=True)
     parser.add_argument("--row-id", required=True)
     parser.add_argument("--suite", choices=sorted(SUITE_DRIVERS), required=True)
-    parser.add_argument("--device", required=True)
+    parser.add_argument("--device", help="Backend device token; defaults to the selected row's device.")
     parser.add_argument("--ctx-size", type=int, default=2048)
     parser.add_argument("--model", nargs=4, action="append", metavar=("ARTIFACT", "PATH", "SHA256", "MODEL_ID"),
                         required=True)
     parser.add_argument("--evidence", type=Path, required=True)
+    parser.add_argument("--availability", type=Path)
+    parser.add_argument("--hardware-evidence", type=Path)
     args = parser.parse_args()
     try:
         run(args.product_dir.resolve(), args.row_id, args.suite, args.device,
-            args.ctx_size, parse_model(args.model), args.evidence)
+            args.ctx_size, parse_model(args.model), args.evidence,
+            availability_path=args.availability, hardware_evidence=args.hardware_evidence)
     except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError,
             json.JSONDecodeError) as error:
         print(f"standalone model qualification failed: {error}", file=sys.stderr)

@@ -213,12 +213,13 @@ def evidence(suite: str, source_sha: str, row_id: str, product_digest: str,
 
 
 def run(product: Path, model: Path, model_hash: str, model_id: str,
-        row_id: str, device: str, evidence_dir: Path) -> None:
+        row_id: str, device: str | None, evidence_dir: Path) -> None:
     manifest_path = product / "product-manifest.json"
     manifest = contract.load_json(manifest_path)
     row = contract.catalog_row(row_id)
     require(manifest.get("source_sha") and manifest.get("target") == row["target"]
             and manifest.get("backend") == row["backend"], "product differs from selected row")
+    device = device or DEVICES[row["backend"]]
     require(device == DEVICES[row["backend"]], "device differs from selected backend")
     contract.validate_product_bytes(manifest, product)
     require(model.is_file() and contract.digest(model) == model_hash, "pinned Laya bytes differ")
@@ -279,7 +280,7 @@ def main() -> int:
     parser.add_argument("--model-sha256", required=True)
     parser.add_argument("--model-id", required=True)
     parser.add_argument("--row-id", required=True)
-    parser.add_argument("--device", required=True)
+    parser.add_argument("--device", help="Backend device token; defaults to the selected row's device.")
     parser.add_argument("--evidence-dir", type=Path, required=True)
     args = parser.parse_args()
     try:

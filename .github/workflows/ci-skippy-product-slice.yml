@@ -125,10 +125,12 @@ jobs:
             --runtime-input runtime-input --output skippy-product-input \
             --source-sha "$SOURCE_SHA" --target "$TARGET" --backend "$BACKEND"
       - name: Materialize protected hardware availability
+        id: availability
         env:
           SOURCE_SHA: ${{ inputs.source_sha }}
           PLAN_DIGEST: ${{ inputs.plan_digest }}
           ROW_ID: ${{ matrix.runtime.id }}
+          BACKEND: ${{ matrix.runtime.backend }}
           MESH_CUDA_INFERENCE_RUNNER_ENABLED: ${{ vars.MESH_CUDA_INFERENCE_RUNNER_ENABLED }}
           MESH_ROCM_INFERENCE_RUNNER_ENABLED: ${{ vars.MESH_ROCM_INFERENCE_RUNNER_ENABLED }}
           MESH_VULKAN_INFERENCE_RUNNER_ENABLED: ${{ vars.MESH_VULKAN_INFERENCE_RUNNER_ENABLED }}
@@ -136,6 +138,12 @@ jobs:
           python3 skippy/scripts/ci-qualification-availability.py \
             --source-sha "$SOURCE_SHA" --plan-digest "$PLAN_DIGEST" \
             --row-id "$ROW_ID" --output skippy-availability.json
+          case "$BACKEND" in
+            cpu|cuda|rocm|vulkan|metal) ;;
+            *) echo "unknown backend: $BACKEND" >&2; exit 1 ;;
+          esac
+          state=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["state"])' skippy-availability.json)
+          echo "state=$state" >> "$GITHUB_OUTPUT"
       - name: Upload hardware availability
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
@@ -160,7 +168,7 @@ jobs:
           if-no-files-found: error
           retention-days: 1
       - name: Restore pinned Laya model for standalone CPU qualification
-        if: ${{ matrix.runtime.backend == 'cpu' }}
+        if: ${{ steps.availability.outputs.state == 'available' }}
         id: laya_model
         uses: ./.github/actions/restore-test-model
         with:
@@ -169,7 +177,7 @@ jobs:
           model_cadence: ${{ inputs.original_event_name == 'pull_request' && 'pull-request' || 'main' }}
           model_cache_scope: standalone-laya-qualification
       - name: Execute composed Skippy System One and Decisions qualification
-        if: ${{ matrix.runtime.backend == 'cpu' }}
+        if: ${{ steps.availability.outputs.state == 'available' }}
         env:
           MODEL_PATH: ${{ steps.laya_model.outputs.model_path }}
           MODEL_SHA256: ${{ steps.laya_model.outputs.model_sha256 }}
@@ -179,10 +187,10 @@ jobs:
             --product-dir skippy-product-input --model "$MODEL_PATH" \
             --model-sha256 "$MODEL_SHA256" \
             --model-id 'meshllm/laya-multilingual-F16-GGUF:F16' \
-            --row-id "$ROW_ID" --device CPU \
+            --row-id "$ROW_ID" \
             --evidence-dir skippy-laya-qualification
       - name: Upload standalone Laya qualification evidence
-        if: ${{ matrix.runtime.backend == 'cpu' }}
+        if: ${{ steps.availability.outputs.state == 'available' }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: ci-skippy-laya-qualification-linux-${{ matrix.runtime.architecture }}-${{ matrix.runtime.backend }}
@@ -190,7 +198,7 @@ jobs:
           if-no-files-found: error
           retention-days: 1
       - name: Restore pinned dense model for standalone CPU qualification
-        if: ${{ matrix.runtime.backend == 'cpu' }}
+        if: ${{ steps.availability.outputs.state == 'available' }}
         id: dense_model
         uses: ./.github/actions/restore-test-model
         with:
@@ -199,18 +207,19 @@ jobs:
           model_cadence: ${{ inputs.original_event_name == 'pull_request' && 'pull-request' || 'main' }}
           model_cache_scope: standalone-dense-smoke
       - name: Execute composed Skippy dense CPU qualification
-        if: ${{ matrix.runtime.backend == 'cpu' }}
+        if: ${{ steps.availability.outputs.state == 'available' }}
         env:
           MODEL_PATH: ${{ steps.dense_model.outputs.model_path }}
           MODEL_SHA256: ${{ steps.dense_model.outputs.model_sha256 }}
           ROW_ID: ${{ matrix.runtime.id }}
         run: |
           python3 skippy/scripts/ci-standalone-model-qualification.py \
-            --product-dir skippy-product-input --row-id "$ROW_ID" --suite dense --device CPU \
+            --product-dir skippy-product-input --row-id "$ROW_ID" --suite dense \
             --model smollm2-q8-inference "$MODEL_PATH" "$MODEL_SHA256" 'unsloth/SmolLM2-135M-Instruct-GGUF:Q8_0' \
+            --availability skippy-availability.json --hardware-evidence skippy-hardware.json \
             --evidence skippy-dense.json
       - name: Restore pinned recurrent model for standalone CPU qualification
-        if: ${{ matrix.runtime.backend == 'cpu' }}
+        if: ${{ steps.availability.outputs.state == 'available' }}
         id: recurrent_model
         uses: ./.github/actions/restore-test-model
         with:
@@ -219,18 +228,18 @@ jobs:
           model_cadence: ${{ inputs.original_event_name == 'pull_request' && 'pull-request' || 'main' }}
           model_cache_scope: standalone-recurrent-smoke
       - name: Execute composed Skippy recurrent CPU qualification
-        if: ${{ matrix.runtime.backend == 'cpu' }}
+        if: ${{ steps.availability.outputs.state == 'available' }}
         env:
           MODEL_PATH: ${{ steps.recurrent_model.outputs.model_path }}
           MODEL_SHA256: ${{ steps.recurrent_model.outputs.model_sha256 }}
           ROW_ID: ${{ matrix.runtime.id }}
         run: |
           python3 skippy/scripts/ci-standalone-model-qualification.py \
-            --product-dir skippy-product-input --row-id "$ROW_ID" --suite recurrent --device CPU \
+            --product-dir skippy-product-input --row-id "$ROW_ID" --suite recurrent \
             --model family-granite-hybrid "$MODEL_PATH" "$MODEL_SHA256" 'ibm-granite/granite-4.0-h-350m-GGUF:Q4_K_M' \
             --evidence skippy-recurrent.json
       - name: Restore pinned MoE model for standalone CPU qualification
-        if: ${{ matrix.runtime.backend == 'cpu' }}
+        if: ${{ steps.availability.outputs.state == 'available' }}
         id: moe_model
         uses: ./.github/actions/restore-test-model
         with:
@@ -239,18 +248,18 @@ jobs:
           model_cadence: ${{ inputs.original_event_name == 'pull_request' && 'pull-request' || 'main' }}
           model_cache_scope: standalone-moe-smoke
       - name: Execute composed Skippy MoE CPU qualification
-        if: ${{ matrix.runtime.backend == 'cpu' }}
+        if: ${{ steps.availability.outputs.state == 'available' }}
         env:
           MODEL_PATH: ${{ steps.moe_model.outputs.model_path }}
           MODEL_SHA256: ${{ steps.moe_model.outputs.model_sha256 }}
           ROW_ID: ${{ matrix.runtime.id }}
         run: |
           python3 skippy/scripts/ci-standalone-model-qualification.py \
-            --product-dir skippy-product-input --row-id "$ROW_ID" --suite moe --device CPU \
+            --product-dir skippy-product-input --row-id "$ROW_ID" --suite moe \
             --model family-granite-moe "$MODEL_PATH" "$MODEL_SHA256" 'sinatras/granite-moe-1b-split:Q4_K_M' \
             --evidence skippy-moe.json
       - name: Execute composed Skippy KV cache CPU qualification
-        if: ${{ matrix.runtime.backend == 'cpu' }}
+        if: ${{ steps.availability.outputs.state == 'available' }}
         env:
           DENSE_PATH: ${{ steps.dense_model.outputs.model_path }}
           DENSE_SHA256: ${{ steps.dense_model.outputs.model_sha256 }}
@@ -259,14 +268,14 @@ jobs:
           ROW_ID: ${{ matrix.runtime.id }}
         run: |
           python3 skippy/scripts/ci-standalone-model-qualification.py \
-            --product-dir skippy-product-input --row-id "$ROW_ID" --suite kv-cache --device CPU \
+            --product-dir skippy-product-input --row-id "$ROW_ID" --suite kv-cache \
             --model smollm2-q8-inference "$DENSE_PATH" "$DENSE_SHA256" \
             'unsloth/SmolLM2-135M-Instruct-GGUF:Q8_0' \
             --model family-granite-hybrid "$HYBRID_PATH" "$HYBRID_SHA256" \
             'ibm-granite/granite-4.0-h-350m-GGUF:Q4_K_M' \
             --evidence skippy-kv-cache.json
       - name: Upload standalone model qualification evidence
-        if: ${{ matrix.runtime.backend == 'cpu' }}
+        if: ${{ steps.availability.outputs.state == 'available' }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: ci-skippy-model-qualification-linux-${{ matrix.runtime.architecture }}
@@ -277,6 +286,40 @@ jobs:
             skippy-kv-cache.json
           if-no-files-found: error
           retention-days: 1
+      - name: Assemble and validate standalone qualification receipt
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          PLAN_DIGEST: ${{ inputs.plan_digest }}
+          ROW_ID: ${{ matrix.runtime.id }}
+        run: |
+          set -euo pipefail
+          mkdir -p skippy-evidence
+          cp skippy-packaging-runtime.json skippy-evidence/packaging-runtime.json
+          for suite in dense recurrent moe kv-cache; do
+            [ -f "skippy-$suite.json" ] && cp "skippy-$suite.json" "skippy-evidence/$suite.json"
+          done
+          for suite in system-one decisions; do
+            [ -f "skippy-laya-qualification/$suite.json" ] && \
+              cp "skippy-laya-qualification/$suite.json" "skippy-evidence/$suite.json"
+          done
+          python3 skippy/scripts/assemble-ci-qualification.py \
+            --product-dir skippy-product-input --availability skippy-availability.json \
+            --evidence-dir skippy-evidence --hardware skippy-hardware.json \
+            --source-sha "$SOURCE_SHA" --plan-digest "$PLAN_DIGEST" --row-id "$ROW_ID" \
+            --output skippy-receipt.json
+          python3 skippy/scripts/validate-ci-qualification.py \
+            --receipt skippy-receipt.json \
+            --product-manifest skippy-product-input/product-manifest.json \
+            --product-dir skippy-product-input --availability skippy-availability.json \
+            --evidence-dir skippy-evidence --source-sha "$SOURCE_SHA" \
+            --plan-digest "$PLAN_DIGEST" --row-id "$ROW_ID"
+      - name: Upload standalone qualification receipt
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: ci-skippy-receipt-linux-${{ matrix.runtime.architecture }}-${{ matrix.runtime.backend }}
+          path: skippy-receipt.json
+          if-no-files-found: error
+          retention-days: 7
       - name: Upload immutable standalone product
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
@@ -290,7 +333,7 @@ jobs:
     needs: runner_policy
     if: ${{ needs.runner_policy.result == 'success' && inputs.platform == 'macos' }}
     runs-on: ${{ needs.runner_policy.outputs.macos }}
-    timeout-minutes: 20
+    timeout-minutes: 45
     strategy:
       fail-fast: ${{ inputs.fail_fast }}
       max-parallel: ${{ inputs.max_parallel }}
@@ -321,10 +364,12 @@ jobs:
             --runtime-input runtime-input --output skippy-product-input \
             --source-sha "$SOURCE_SHA" --target "$TARGET" --backend "$BACKEND"
       - name: Materialize protected hardware availability
+        id: availability
         env:
           SOURCE_SHA: ${{ inputs.source_sha }}
           PLAN_DIGEST: ${{ inputs.plan_digest }}
           ROW_ID: ${{ matrix.runtime.id }}
+          BACKEND: ${{ matrix.runtime.backend }}
           MESH_CUDA_INFERENCE_RUNNER_ENABLED: ${{ vars.MESH_CUDA_INFERENCE_RUNNER_ENABLED }}
           MESH_ROCM_INFERENCE_RUNNER_ENABLED: ${{ vars.MESH_ROCM_INFERENCE_RUNNER_ENABLED }}
           MESH_VULKAN_INFERENCE_RUNNER_ENABLED: ${{ vars.MESH_VULKAN_INFERENCE_RUNNER_ENABLED }}
@@ -332,6 +377,12 @@ jobs:
           python3 skippy/scripts/ci-qualification-availability.py \
             --source-sha "$SOURCE_SHA" --plan-digest "$PLAN_DIGEST" \
             --row-id "$ROW_ID" --output skippy-availability.json
+          case "$BACKEND" in
+            cpu|cuda|rocm|vulkan|metal) ;;
+            *) echo "unknown backend: $BACKEND" >&2; exit 1 ;;
+          esac
+          state=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["state"])' skippy-availability.json)
+          echo "state=$state" >> "$GITHUB_OUTPUT"
       - name: Upload hardware availability
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
@@ -357,7 +408,7 @@ jobs:
           if-no-files-found: error
           retention-days: 1
       - name: Restore pinned Laya model for standalone Metal qualification
-        if: ${{ matrix.runtime.backend == 'metal' }}
+        if: ${{ steps.availability.outputs.state == 'available' }}
         id: laya_model
         uses: ./.github/actions/restore-test-model
         with:
@@ -366,7 +417,7 @@ jobs:
           model_cadence: ${{ inputs.original_event_name == 'pull_request' && 'pull-request' || 'main' }}
           model_cache_scope: standalone-laya-qualification
       - name: Execute composed Skippy System One and Decisions qualification
-        if: ${{ matrix.runtime.backend == 'metal' }}
+        if: ${{ steps.availability.outputs.state == 'available' }}
         shell: bash
         env:
           MODEL_PATH: ${{ steps.laya_model.outputs.model_path }}
@@ -377,16 +428,144 @@ jobs:
             --product-dir skippy-product-input --model "$MODEL_PATH" \
             --model-sha256 "$MODEL_SHA256" \
             --model-id 'meshllm/laya-multilingual-F16-GGUF:F16' \
-            --row-id "$ROW_ID" --device MTL0 \
+            --row-id "$ROW_ID" \
             --evidence-dir skippy-laya-qualification
       - name: Upload standalone Laya qualification evidence
-        if: ${{ matrix.runtime.backend == 'metal' }}
+        if: ${{ steps.availability.outputs.state == 'available' }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: ci-skippy-laya-qualification-macos-${{ matrix.runtime.architecture }}-${{ matrix.runtime.backend }}
           path: skippy-laya-qualification/
           if-no-files-found: error
           retention-days: 1
+      - name: Restore pinned dense model for standalone Metal qualification
+        if: ${{ steps.availability.outputs.state == 'available' }}
+        id: dense_model
+        uses: ./.github/actions/restore-test-model
+        with:
+          model_manifest: ci/model-artifacts/manifests/product-smoke.json
+          model_artifact_id: smollm2-q8-inference
+          model_cadence: ${{ inputs.original_event_name == 'pull_request' && 'pull-request' || 'main' }}
+          model_cache_scope: standalone-dense-smoke
+      - name: Execute composed Skippy dense Metal qualification
+        if: ${{ steps.availability.outputs.state == 'available' }}
+        shell: bash
+        env:
+          MODEL_PATH: ${{ steps.dense_model.outputs.model_path }}
+          MODEL_SHA256: ${{ steps.dense_model.outputs.model_sha256 }}
+          ROW_ID: ${{ matrix.runtime.id }}
+        run: |
+          python3 skippy/scripts/ci-standalone-model-qualification.py \
+            --product-dir skippy-product-input --row-id "$ROW_ID" --suite dense \
+            --model smollm2-q8-inference "$MODEL_PATH" "$MODEL_SHA256" 'unsloth/SmolLM2-135M-Instruct-GGUF:Q8_0' \
+            --availability skippy-availability.json --hardware-evidence skippy-hardware.json \
+            --evidence skippy-dense.json
+      - name: Restore pinned recurrent model for standalone Metal qualification
+        if: ${{ steps.availability.outputs.state == 'available' }}
+        id: recurrent_model
+        uses: ./.github/actions/restore-test-model
+        with:
+          model_manifest: ci/model-artifacts/manifests/product-smoke.json
+          model_artifact_id: family-granite-hybrid
+          model_cadence: ${{ inputs.original_event_name == 'pull_request' && 'pull-request' || 'main' }}
+          model_cache_scope: standalone-recurrent-smoke
+      - name: Execute composed Skippy recurrent Metal qualification
+        if: ${{ steps.availability.outputs.state == 'available' }}
+        shell: bash
+        env:
+          MODEL_PATH: ${{ steps.recurrent_model.outputs.model_path }}
+          MODEL_SHA256: ${{ steps.recurrent_model.outputs.model_sha256 }}
+          ROW_ID: ${{ matrix.runtime.id }}
+        run: |
+          python3 skippy/scripts/ci-standalone-model-qualification.py \
+            --product-dir skippy-product-input --row-id "$ROW_ID" --suite recurrent \
+            --model family-granite-hybrid "$MODEL_PATH" "$MODEL_SHA256" 'ibm-granite/granite-4.0-h-350m-GGUF:Q4_K_M' \
+            --evidence skippy-recurrent.json
+      - name: Restore pinned MoE model for standalone Metal qualification
+        if: ${{ steps.availability.outputs.state == 'available' }}
+        id: moe_model
+        uses: ./.github/actions/restore-test-model
+        with:
+          model_manifest: ci/model-artifacts/manifests/product-smoke.json
+          model_artifact_id: family-granite-moe
+          model_cadence: ${{ inputs.original_event_name == 'pull_request' && 'pull-request' || 'main' }}
+          model_cache_scope: standalone-moe-smoke
+      - name: Execute composed Skippy MoE Metal qualification
+        if: ${{ steps.availability.outputs.state == 'available' }}
+        shell: bash
+        env:
+          MODEL_PATH: ${{ steps.moe_model.outputs.model_path }}
+          MODEL_SHA256: ${{ steps.moe_model.outputs.model_sha256 }}
+          ROW_ID: ${{ matrix.runtime.id }}
+        run: |
+          python3 skippy/scripts/ci-standalone-model-qualification.py \
+            --product-dir skippy-product-input --row-id "$ROW_ID" --suite moe \
+            --model family-granite-moe "$MODEL_PATH" "$MODEL_SHA256" 'sinatras/granite-moe-1b-split:Q4_K_M' \
+            --evidence skippy-moe.json
+      - name: Execute composed Skippy KV cache Metal qualification
+        if: ${{ steps.availability.outputs.state == 'available' }}
+        shell: bash
+        env:
+          DENSE_PATH: ${{ steps.dense_model.outputs.model_path }}
+          DENSE_SHA256: ${{ steps.dense_model.outputs.model_sha256 }}
+          HYBRID_PATH: ${{ steps.recurrent_model.outputs.model_path }}
+          HYBRID_SHA256: ${{ steps.recurrent_model.outputs.model_sha256 }}
+          ROW_ID: ${{ matrix.runtime.id }}
+        run: |
+          python3 skippy/scripts/ci-standalone-model-qualification.py \
+            --product-dir skippy-product-input --row-id "$ROW_ID" --suite kv-cache \
+            --model smollm2-q8-inference "$DENSE_PATH" "$DENSE_SHA256" \
+            'unsloth/SmolLM2-135M-Instruct-GGUF:Q8_0' \
+            --model family-granite-hybrid "$HYBRID_PATH" "$HYBRID_SHA256" \
+            'ibm-granite/granite-4.0-h-350m-GGUF:Q4_K_M' \
+            --evidence skippy-kv-cache.json
+      - name: Upload standalone model qualification evidence
+        if: ${{ steps.availability.outputs.state == 'available' }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: ci-skippy-model-qualification-macos-${{ matrix.runtime.architecture }}
+          path: |
+            skippy-dense.json
+            skippy-recurrent.json
+            skippy-moe.json
+            skippy-kv-cache.json
+          if-no-files-found: error
+          retention-days: 1
+      - name: Assemble and validate standalone qualification receipt
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          PLAN_DIGEST: ${{ inputs.plan_digest }}
+          ROW_ID: ${{ matrix.runtime.id }}
+        run: |
+          set -euo pipefail
+          mkdir -p skippy-evidence
+          cp skippy-packaging-runtime.json skippy-evidence/packaging-runtime.json
+          for suite in dense recurrent moe kv-cache; do
+            [ -f "skippy-$suite.json" ] && cp "skippy-$suite.json" "skippy-evidence/$suite.json"
+          done
+          for suite in system-one decisions; do
+            [ -f "skippy-laya-qualification/$suite.json" ] && \
+              cp "skippy-laya-qualification/$suite.json" "skippy-evidence/$suite.json"
+          done
+          python3 skippy/scripts/assemble-ci-qualification.py \
+            --product-dir skippy-product-input --availability skippy-availability.json \
+            --evidence-dir skippy-evidence --hardware skippy-hardware.json \
+            --source-sha "$SOURCE_SHA" --plan-digest "$PLAN_DIGEST" --row-id "$ROW_ID" \
+            --output skippy-receipt.json
+          python3 skippy/scripts/validate-ci-qualification.py \
+            --receipt skippy-receipt.json \
+            --product-manifest skippy-product-input/product-manifest.json \
+            --product-dir skippy-product-input --availability skippy-availability.json \
+            --evidence-dir skippy-evidence --source-sha "$SOURCE_SHA" \
+            --plan-digest "$PLAN_DIGEST" --row-id "$ROW_ID"
+      - name: Upload standalone qualification receipt
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: ci-skippy-receipt-macos-${{ matrix.runtime.architecture }}-${{ matrix.runtime.backend }}
+          path: skippy-receipt.json
+          if-no-files-found: error
+          retention-days: 7
       - name: Upload immutable standalone product
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
@@ -434,11 +613,13 @@ jobs:
             --runtime-input runtime-input --output skippy-product-input \
             --source-sha "$SOURCE_SHA" --target "$TARGET" --backend "$BACKEND"
       - name: Materialize protected hardware availability
+        id: availability
         shell: bash
         env:
           SOURCE_SHA: ${{ inputs.source_sha }}
           PLAN_DIGEST: ${{ inputs.plan_digest }}
           ROW_ID: ${{ matrix.runtime.id }}
+          BACKEND: ${{ matrix.runtime.backend }}
           MESH_CUDA_INFERENCE_RUNNER_ENABLED: ${{ vars.MESH_CUDA_INFERENCE_RUNNER_ENABLED }}
           MESH_ROCM_INFERENCE_RUNNER_ENABLED: ${{ vars.MESH_ROCM_INFERENCE_RUNNER_ENABLED }}
           MESH_VULKAN_INFERENCE_RUNNER_ENABLED: ${{ vars.MESH_VULKAN_INFERENCE_RUNNER_ENABLED }}
@@ -446,6 +627,12 @@ jobs:
           python skippy/scripts/ci-qualification-availability.py \
             --source-sha "$SOURCE_SHA" --plan-digest "$PLAN_DIGEST" \
             --row-id "$ROW_ID" --output skippy-availability.json
+          case "$BACKEND" in
+            cpu|cuda|rocm|vulkan|metal) ;;
+            *) echo "unknown backend: $BACKEND" >&2; exit 1 ;;
+          esac
+          state=$(python -c 'import json,sys;print(json.load(open(sys.argv[1]))["state"])' skippy-availability.json)
+          echo "state=$state" >> "$GITHUB_OUTPUT"
       - name: Upload hardware availability
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
@@ -471,7 +658,7 @@ jobs:
           if-no-files-found: error
           retention-days: 1
       - name: Restore pinned Laya model for standalone Windows CPU qualification
-        if: ${{ matrix.runtime.backend == 'cpu' }}
+        if: ${{ steps.availability.outputs.state == 'available' }}
         id: laya_model
         uses: ./.github/actions/restore-test-model
         with:
@@ -480,7 +667,7 @@ jobs:
           model_cadence: ${{ inputs.original_event_name == 'pull_request' && 'pull-request' || 'main' }}
           model_cache_scope: standalone-laya-qualification
       - name: Execute composed Skippy System One and Decisions qualification
-        if: ${{ matrix.runtime.backend == 'cpu' }}
+        if: ${{ steps.availability.outputs.state == 'available' }}
         shell: bash
         env:
           MODEL_PATH: ${{ steps.laya_model.outputs.model_path }}
@@ -491,10 +678,10 @@ jobs:
             --product-dir skippy-product-input --model "$MODEL_PATH" \
             --model-sha256 "$MODEL_SHA256" \
             --model-id 'meshllm/laya-multilingual-F16-GGUF:F16' \
-            --row-id "$ROW_ID" --device CPU \
+            --row-id "$ROW_ID" \
             --evidence-dir skippy-laya-qualification
       - name: Upload standalone Laya qualification evidence
-        if: ${{ matrix.runtime.backend == 'cpu' }}
+        if: ${{ steps.availability.outputs.state == 'available' }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: ci-skippy-laya-qualification-windows-${{ matrix.runtime.architecture }}-${{ matrix.runtime.backend }}
@@ -502,7 +689,7 @@ jobs:
           if-no-files-found: error
           retention-days: 1
       - name: Restore pinned dense model for standalone Windows CPU qualification
-        if: ${{ matrix.runtime.backend == 'cpu' }}
+        if: ${{ steps.availability.outputs.state == 'available' }}
         id: dense_model
         uses: ./.github/actions/restore-test-model
         with:
@@ -511,7 +698,7 @@ jobs:
           model_cadence: ${{ inputs.original_event_name == 'pull_request' && 'pull-request' || 'main' }}
           model_cache_scope: standalone-dense-smoke
       - name: Execute composed Skippy dense Windows CPU qualification
-        if: ${{ matrix.runtime.backend == 'cpu' }}
+        if: ${{ steps.availability.outputs.state == 'available' }}
         shell: bash
         env:
           MODEL_PATH: ${{ steps.dense_model.outputs.model_path }}
@@ -519,11 +706,12 @@ jobs:
           ROW_ID: ${{ matrix.runtime.id }}
         run: |
           python skippy/scripts/ci-standalone-model-qualification.py \
-            --product-dir skippy-product-input --row-id "$ROW_ID" --suite dense --device CPU \
+            --product-dir skippy-product-input --row-id "$ROW_ID" --suite dense \
             --model smollm2-q8-inference "$MODEL_PATH" "$MODEL_SHA256" 'unsloth/SmolLM2-135M-Instruct-GGUF:Q8_0' \
+            --availability skippy-availability.json --hardware-evidence skippy-hardware.json \
             --evidence skippy-dense.json
       - name: Restore pinned recurrent model for standalone Windows CPU qualification
-        if: ${{ matrix.runtime.backend == 'cpu' }}
+        if: ${{ steps.availability.outputs.state == 'available' }}
         id: recurrent_model
         uses: ./.github/actions/restore-test-model
         with:
@@ -532,7 +720,7 @@ jobs:
           model_cadence: ${{ inputs.original_event_name == 'pull_request' && 'pull-request' || 'main' }}
           model_cache_scope: standalone-recurrent-smoke
       - name: Execute composed Skippy recurrent Windows CPU qualification
-        if: ${{ matrix.runtime.backend == 'cpu' }}
+        if: ${{ steps.availability.outputs.state == 'available' }}
         shell: bash
         env:
           MODEL_PATH: ${{ steps.recurrent_model.outputs.model_path }}
@@ -540,11 +728,11 @@ jobs:
           ROW_ID: ${{ matrix.runtime.id }}
         run: |
           python skippy/scripts/ci-standalone-model-qualification.py \
-            --product-dir skippy-product-input --row-id "$ROW_ID" --suite recurrent --device CPU \
+            --product-dir skippy-product-input --row-id "$ROW_ID" --suite recurrent \
             --model family-granite-hybrid "$MODEL_PATH" "$MODEL_SHA256" 'ibm-granite/granite-4.0-h-350m-GGUF:Q4_K_M' \
             --evidence skippy-recurrent.json
       - name: Restore pinned MoE model for standalone Windows CPU qualification
-        if: ${{ matrix.runtime.backend == 'cpu' }}
+        if: ${{ steps.availability.outputs.state == 'available' }}
         id: moe_model
         uses: ./.github/actions/restore-test-model
         with:
@@ -553,7 +741,7 @@ jobs:
           model_cadence: ${{ inputs.original_event_name == 'pull_request' && 'pull-request' || 'main' }}
           model_cache_scope: standalone-moe-smoke
       - name: Execute composed Skippy MoE Windows CPU qualification
-        if: ${{ matrix.runtime.backend == 'cpu' }}
+        if: ${{ steps.availability.outputs.state == 'available' }}
         shell: bash
         env:
           MODEL_PATH: ${{ steps.moe_model.outputs.model_path }}
@@ -561,11 +749,11 @@ jobs:
           ROW_ID: ${{ matrix.runtime.id }}
         run: |
           python skippy/scripts/ci-standalone-model-qualification.py \
-            --product-dir skippy-product-input --row-id "$ROW_ID" --suite moe --device CPU \
+            --product-dir skippy-product-input --row-id "$ROW_ID" --suite moe \
             --model family-granite-moe "$MODEL_PATH" "$MODEL_SHA256" 'sinatras/granite-moe-1b-split:Q4_K_M' \
             --evidence skippy-moe.json
       - name: Execute composed Skippy KV cache CPU qualification
-        if: ${{ matrix.runtime.backend == 'cpu' }}
+        if: ${{ steps.availability.outputs.state == 'available' }}
         env:
           DENSE_PATH: ${{ steps.dense_model.outputs.model_path }}
           DENSE_SHA256: ${{ steps.dense_model.outputs.model_sha256 }}
@@ -574,14 +762,14 @@ jobs:
           ROW_ID: ${{ matrix.runtime.id }}
         run: |
           python skippy/scripts/ci-standalone-model-qualification.py \
-            --product-dir skippy-product-input --row-id "$ROW_ID" --suite kv-cache --device CPU \
+            --product-dir skippy-product-input --row-id "$ROW_ID" --suite kv-cache \
             --model smollm2-q8-inference "$DENSE_PATH" "$DENSE_SHA256" \
             'unsloth/SmolLM2-135M-Instruct-GGUF:Q8_0' \
             --model family-granite-hybrid "$HYBRID_PATH" "$HYBRID_SHA256" \
             'ibm-granite/granite-4.0-h-350m-GGUF:Q4_K_M' \
             --evidence skippy-kv-cache.json
       - name: Upload standalone model qualification evidence
-        if: ${{ matrix.runtime.backend == 'cpu' }}
+        if: ${{ steps.availability.outputs.state == 'available' }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: ci-skippy-model-qualification-windows-${{ matrix.runtime.architecture }}
@@ -592,6 +780,41 @@ jobs:
             skippy-kv-cache.json
           if-no-files-found: error
           retention-days: 1
+      - name: Assemble and validate standalone qualification receipt
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          PLAN_DIGEST: ${{ inputs.plan_digest }}
+          ROW_ID: ${{ matrix.runtime.id }}
+        run: |
+          set -euo pipefail
+          mkdir -p skippy-evidence
+          cp skippy-packaging-runtime.json skippy-evidence/packaging-runtime.json
+          for suite in dense recurrent moe kv-cache; do
+            [ -f "skippy-$suite.json" ] && cp "skippy-$suite.json" "skippy-evidence/$suite.json"
+          done
+          for suite in system-one decisions; do
+            [ -f "skippy-laya-qualification/$suite.json" ] && \
+              cp "skippy-laya-qualification/$suite.json" "skippy-evidence/$suite.json"
+          done
+          python skippy/scripts/assemble-ci-qualification.py \
+            --product-dir skippy-product-input --availability skippy-availability.json \
+            --evidence-dir skippy-evidence --hardware skippy-hardware.json \
+            --source-sha "$SOURCE_SHA" --plan-digest "$PLAN_DIGEST" --row-id "$ROW_ID" \
+            --output skippy-receipt.json
+          python skippy/scripts/validate-ci-qualification.py \
+            --receipt skippy-receipt.json \
+            --product-manifest skippy-product-input/product-manifest.json \
+            --product-dir skippy-product-input --availability skippy-availability.json \
+            --evidence-dir skippy-evidence --source-sha "$SOURCE_SHA" \
+            --plan-digest "$PLAN_DIGEST" --row-id "$ROW_ID"
+      - name: Upload standalone qualification receipt
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: ci-skippy-receipt-windows-${{ matrix.runtime.architecture }}-${{ matrix.runtime.backend }}
+          path: skippy-receipt.json
+          if-no-files-found: error
+          retention-days: 7
       - name: Upload immutable standalone product
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:

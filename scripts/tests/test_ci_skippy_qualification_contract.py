@@ -98,8 +98,8 @@ class CiQualificationContractTests(unittest.TestCase):
             "status": "qualified",
             "hardware": {
                 "actual_backend": "cuda", "runner": "gpu-nvidia", "device": "NVIDIA GPU",
-                "driver": "test-driver", "runtime_version": "test-runtime",
-                "device_architecture": "sm_86", "offloaded_layers": 16,
+                "selected_device": "CUDA0", "driver": "test-driver",
+                "runtime_version": "test-runtime", "device_architecture": "sm_86",
             },
             "suites": {
                 name: {
@@ -217,7 +217,7 @@ class CiQualificationContractTests(unittest.TestCase):
 
     def test_qualified_gpu_receipt_requires_all_suites_and_actual_device(self) -> None:
         self.validate()
-        for change in ("missing-suite", "missing-case", "wrong-model", "missing-kv-model", "cpu-fallback", "wrong-runner", "zero-offload", "software-renderer", "wrong-plan", "wrong-product", "tampered-evidence"):
+        for change in ("missing-suite", "missing-case", "wrong-model", "missing-kv-model", "cpu-fallback", "wrong-runner", "wrong-selected-device", "software-renderer", "wrong-plan", "wrong-product", "tampered-evidence"):
             with self.subTest(change=change):
                 saved = copy.deepcopy(self.receipt)
                 if change == "missing-suite":
@@ -232,8 +232,8 @@ class CiQualificationContractTests(unittest.TestCase):
                     self.receipt["hardware"]["actual_backend"] = "cpu"
                 elif change == "wrong-runner":
                     self.receipt["hardware"]["runner"] = "unapproved-gpu"
-                elif change == "zero-offload":
-                    self.receipt["hardware"]["offloaded_layers"] = 0
+                elif change == "wrong-selected-device":
+                    self.receipt["hardware"]["selected_device"] = "CUDA1"
                 elif change == "software-renderer":
                     self.receipt["hardware"]["device"] = "lavapipe"
                 elif change == "wrong-plan":

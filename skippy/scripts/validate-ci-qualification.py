@@ -65,6 +65,13 @@ DEFERRED_CASES = {
     },
 }
 REQUIRED_SUITES = set(SUITE_CASES)
+# The runtime-issued device token the composed product reports through its
+# ``backend_device_selected`` event. A GPU row qualifies only when the running
+# product selected exactly this device; a device name in a manifest is not
+# enough, and CPU fallback cannot satisfy a GPU row.
+EXPECTED_DEVICE = {
+    "cpu": "CPU", "cuda": "CUDA0", "rocm": "ROCm0", "vulkan": "Vulkan0", "metal": "MTL0",
+}
 MODEL_TAGS = {
     "dense": ("dense",),
     "recurrent": ("hybrid", "recurrent"),
@@ -253,6 +260,11 @@ def validate_receipt(
     require(hardware.get("actual_backend") == row["backend"], "actual backend differs from selected backend")
     require(hardware.get("runner") == availability["runner"], "execution used a different runner from the protected availability plan")
     require(isinstance(hardware.get("device"), str) and bool(hardware["device"].strip()), "missing actual device")
+    # The running product must have selected exactly the requested device. This
+    # token comes from the runtime's own ``backend_device_selected`` event, so a
+    # silent CPU fallback or a manifest-only backend claim cannot pass.
+    require(hardware.get("selected_device") == EXPECTED_DEVICE[row["backend"]],
+            "qualified row did not select the requested backend device")
     if row["backend"] == "cpu":
         require(hardware["device"] == "CPU", "CPU row has an unexpected device")
         require(hardware.get("offloaded_layers", 0) == 0, "CPU row reports GPU offload")
@@ -260,7 +272,6 @@ def validate_receipt(
         require(isinstance(hardware.get("driver"), str) and bool(hardware["driver"].strip()), "GPU row lacks driver identity")
         require(isinstance(hardware.get("runtime_version"), str) and bool(hardware["runtime_version"].strip()), "GPU row lacks runtime identity")
         require(isinstance(hardware.get("device_architecture"), str) and bool(hardware["device_architecture"].strip()), "GPU row lacks architecture identity")
-        require(type(hardware.get("offloaded_layers")) is int and hardware["offloaded_layers"] > 0, "GPU row lacks positive offload evidence")
         require(hardware["device"].lower() != "cpu", "GPU row reports a CPU device")
         require(not any(word in hardware["device"].lower() for word in ("lavapipe", "llvmpipe", "software")), "software renderer cannot qualify GPU row")
 

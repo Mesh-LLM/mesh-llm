@@ -138,5 +138,34 @@ class CaseBatteryTests(unittest.TestCase):
         self.assertEqual(driver.PREFIX_HIT_CASES["hybrid"], "recurrent-prefix-hit")
 
 
+class SuiteModelTagTests(unittest.TestCase):
+    def models(self, *identifiers: str) -> list[tuple[str, Path, str, str]]:
+        return [(identifier, Path(f"{identifier}.gguf"), "c" * 64, identifier)
+                for identifier in identifiers]
+
+    def test_dense_suite_accepts_a_model_carrying_its_tag(self) -> None:
+        driver.validate_suite_models("dense", self.models("a"), {"a": {"dense", "gguf"}})
+
+    def test_dense_suite_rejects_a_model_without_the_tag(self) -> None:
+        with self.assertRaisesRegex(ValueError, "lacks a model tagged"):
+            driver.validate_suite_models("dense", self.models("a"), {"a": {"hybrid"}})
+
+    def test_kv_suite_needs_both_dense_and_recurrent_models(self) -> None:
+        with self.assertRaisesRegex(ValueError, "lacks a model tagged"):
+            driver.validate_suite_models("kv-cache", self.models("a"), {"a": {"dense"}})
+        driver.validate_suite_models("kv-cache", self.models("a", "b"),
+                                     {"a": {"dense"}, "b": {"hybrid"}})
+
+    def test_unknown_artifact_never_satisfies_a_capability_group(self) -> None:
+        with self.assertRaisesRegex(ValueError, "lacks a model tagged"):
+            driver.validate_suite_models("dense", self.models("missing"), {})
+
+    def test_prefix_is_long_enough_for_a_reported_cache_hit(self) -> None:
+        # Measured on the composed product: a ~130-token repeat still reports
+        # cached_tokens=0, while a ~500-token repeat is served from cache on
+        # both Metal and CPU. Keep the shared prefix well above that boundary.
+        self.assertGreaterEqual(len(driver.PREFIX.split()), 160)
+
+
 if __name__ == "__main__":
     unittest.main()

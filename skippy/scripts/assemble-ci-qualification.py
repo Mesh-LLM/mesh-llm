@@ -29,8 +29,12 @@ def assemble(
     state = availability.get("state")
     if state not in {"available", "hardware-unavailable"}:
         raise ValueError("unknown hardware availability state")
-    if (state == "available") != (hardware_path is not None):
-        raise ValueError("hardware evidence is required exactly when execution is available")
+    if state == "available" and hardware_path is None:
+        raise ValueError("hardware evidence is required when execution is available")
+    if state != "available":
+        # An unavailable row cannot claim hardware use, so any supplied path is
+        # ignored rather than trusted.
+        hardware_path = None
 
     suites = {}
     for name in sorted(contract.REQUIRED_SUITES):
