@@ -82,14 +82,33 @@ pub(crate) fn ensure_control_frame_size(body: &[u8]) -> Result<(), ControlFrameE
 }
 
 pub(crate) async fn read_len_prefixed(recv: &mut iroh::endpoint::RecvStream) -> Result<Vec<u8>> {
+    read_frame(recv, MAX_CONTROL_FRAME_BYTES).await
+}
+
+/// Reads one length-prefixed frame of at most `max_len` bytes.
+///
+/// The buffer grows as the body arrives instead of being sized from the
+/// length prefix, so a peer that claims a large frame and then stalls holds
+/// only as much memory as it actually sent.
+pub(crate) async fn read_frame<R: tokio::io::AsyncRead + Unpin>(
+    reader: &mut R,
+    max_len: usize,
+) -> Result<Vec<u8>> {
+    use tokio::io::AsyncReadExt;
     let mut len_buf = [0u8; 4];
-    recv.read_exact(&mut len_buf).await?;
+    reader.read_exact(&mut len_buf).await?;
     let len = u32::from_le_bytes(len_buf) as usize;
-    if len > MAX_CONTROL_FRAME_BYTES {
+    if len > max_len {
         anyhow::bail!("control frame too large: {} bytes", len);
     }
-    let mut buf = vec![0u8; len];
-    recv.read_exact(&mut buf).await?;
+    let mut buf = Vec::new();
+    (&mut *reader)
+        .take(len as u64)
+        .read_to_end(&mut buf)
+        .await?;
+    if buf.len() < len {
+        anyhow::bail!("control frame ended after {} of {} bytes", buf.len(), len);
+    }
     Ok(buf)
 }
 
