@@ -10,8 +10,7 @@ load_publish_crates() {
     while IFS= read -r crate; do
         crates+=("$crate")
     done < <(
-        sed -n '/^publish_crates=(/,/^)/p' scripts/publish-crates.sh \
-            | sed -n 's/^    \([[:alnum:]_-]*\)$/\1/p'
+        awk '/^publish_crates=\(/ { inside = 1; next } inside && /^\)/ { exit } inside && /^    [[:alnum:]_-]+$/ { print $1 }' scripts/publish-crates.sh
     )
 }
 
