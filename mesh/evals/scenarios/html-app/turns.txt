@@ -1,5 +1,0 @@
-Build a single-file HTML app (index.html) that is a markdown note-taking app. Textarea on the left for editing, live preview on the right that renders markdown to HTML. Dark theme, monospace editor font. Use a CDN markdown library. Add a Save button that downloads as .md file.
-#wait:60
-Read the file you created and check if it's valid HTML. Are there any issues?
-#wait:30
-Add a word count and character count display below the editor.
