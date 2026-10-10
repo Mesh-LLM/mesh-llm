@@ -1,5 +1,0 @@
-Read config.py in this directory. What do you think of the code quality?
-#wait:25
-Refactor it to be DRY: use dataclasses, reduce the repetitive env var pattern, add type hints. Keep the same env var names and defaults. Edit config.py directly.
-#wait:45
-Read it back. Does it still work the same way? Any issues?

@@ -1,7 +1,0 @@
-What are the main approaches to rate limiting in web APIs? Brief overview.
-#wait:20
-Write a Python class that implements a token bucket rate limiter. Save it as rate_limiter.py
-#wait:40
-Now add unit tests for it in test_rate_limiter.py. Cover edge cases like burst and refill.
-#wait:40
-Read both files and tell me if there are any bugs or improvements you'd suggest.

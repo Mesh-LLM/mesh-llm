@@ -1,9 +1,0 @@
-This todo API server has several issues. Please fix it:
-
-1. Add an auto-incrementing ID to each todo
-2. Add input validation (require a "title" field)
-3. Implement DELETE /todos/<id> to remove a todo by ID
-4. Add proper error responses with JSON bodies
-5. Add a GET /todos/<id> endpoint
-
-Edit the file server.py in this directory.
