@@ -1,0 +1,21 @@
+{
+  "manifest": "default",
+  "input": {
+    "profile": "pr-ready",
+    "event_name": "pull_request",
+    "source_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "base_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "changed_files": [
+      "crates/mesh-llm-log-store/src/lib.rs"
+    ],
+    "affected_crates": [
+      "mesh-llm-log-store"
+    ],
+    "workspace_packages": [
+      {
+        "name": "mesh-llm-log-store",
+        "path": "crates/mesh-llm-log-store"
+      }
+    ]
+  }
+}
