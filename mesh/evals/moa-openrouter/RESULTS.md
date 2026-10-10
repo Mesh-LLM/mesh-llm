@@ -399,7 +399,8 @@ MOA_ABLATION_OUT=/tmp/x.jsonl \
 cargo test -p mesh-mixture-of-agents --test eval_openrouter \
   ablation_scaled_study -- --ignored --nocapture
 
-python3 mesh/evals/moa-openrouter/analyze_ablation.py /tmp/x.jsonl
+# Analysis helper is now in the external research checkout; captured results above are unchanged.
+python3 "$MESH_PYTHON_RESEARCH_SOURCE/moa-openrouter/analyze_ablation.py" /tmp/x.jsonl
 ```
 
 Other studies: `matched_peer_structured_study`,

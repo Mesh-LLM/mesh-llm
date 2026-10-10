@@ -23,6 +23,7 @@ if [[ "$(uname -s)" != "Darwin" ]]; then
 fi
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+source "$REPO_ROOT/scripts/lib/automation.sh"
 ARTIFACT_ZIP="$1"
 EXPECTED_MODE="${2:-}"
 
@@ -59,7 +60,7 @@ trap 'rm -rf "$TMP_ROOT"' EXIT
 
 EXTRACT_DIR="$TMP_ROOT/extract"
 mkdir -p "$EXTRACT_DIR"
-python3 "$REPO_ROOT/scripts/safe-extract-zip.py" \
+mesh_automation artifact extract-zip \
   "$ARTIFACT_ZIP" \
   "$EXTRACT_DIR"
 
@@ -84,7 +85,7 @@ xcframework_args=("$XCFRAMEWORK_PATH")
 if [[ -n "$EXPECTED_MODE" ]]; then
   xcframework_args+=("$EXPECTED_MODE")
 fi
-python3 "$REPO_ROOT/scripts/verify-swift-xcframework.py" \
+mesh_automation release swift-xcframework \
   "${xcframework_args[@]}"
 
 CONSUMER_DIR="$TMP_ROOT/consumer"

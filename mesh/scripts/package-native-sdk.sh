@@ -216,25 +216,7 @@ sha256_file() {
 }
 
 workspace_version() {
-    python3 - "$REPO_ROOT/Cargo.toml" <<'PY'
-import re
-import sys
-
-in_workspace_package = False
-for line in open(sys.argv[1], encoding="utf-8"):
-    stripped = line.strip()
-    if stripped == "[workspace.package]":
-        in_workspace_package = True
-        continue
-    if stripped.startswith("[") and stripped != "[workspace.package]":
-        in_workspace_package = False
-    if in_workspace_package:
-        match = re.match(r'version\s*=\s*"([^"]+)"', stripped)
-        if match:
-            print(match.group(1))
-            raise SystemExit(0)
-raise SystemExit("workspace package version not found")
-PY
+    cargo xtool native package-source-version workspace "$REPO_ROOT/Cargo.toml"
 }
 
 if [[ -z "$TARGET_TRIPLE" ]]; then
@@ -338,52 +320,12 @@ if [[ -f "$LLAMA_WORKDIR/.mesh-llm-patch-digest" ]]; then
     patch_digest="$(tr -d '[:space:]' < "$LLAMA_WORKDIR/.mesh-llm-patch-digest")"
 fi
 
-lib_sha="$(sha256_file "$stage_dir/lib/$lib_name")"
 sdk_version="$(workspace_version)"
 
-python3 - "$stage_dir/manifest.json" <<PY
-import json
-import os
-import sys
-
-manifest = {
-    "schema_version": 1,
-    "artifact_id": "$artifact_id",
-    "native_runtime_id": "$artifact_id",
-    "sdk_version": "$sdk_version",
-    "mesh_version": "$sdk_version",
-    "target_triple": "$TARGET_TRIPLE",
-    "platform": "$platform",
-    "os": "$runtime_os",
-    "arch": "$runtime_arch",
-    "backend": "$BACKEND",
-    "flavor": "$flavor",
-    "cargo_profile": "$PROFILE",
-    "library": "lib/$lib_name",
-    "library_paths": ["lib/$lib_name"],
-    "uniffi_library": "lib/$uniffi_lib_name",
-    "library_sha256": "$lib_sha",
-    "url": None,
-    "sha256": None,
-    "signature": None,
-    "requirements": [],
-    "llama_upstream_sha": "$upstream_sha" or None,
-    "llama_patched_sha": "$patched_sha" or None,
-    "llama_patch_digest": "$patch_digest" or None,
-    "cuda_architectures": os.environ.get("LLAMA_STAGE_CUDA_ARCHITECTURES") or os.environ.get("SKIPPY_CUDA_ARCHITECTURES"),
-    "amdgpu_targets": os.environ.get("LLAMA_STAGE_AMDGPU_TARGETS") or os.environ.get("SKIPPY_AMDGPU_TARGETS"),
-    "features": [
-        "mesh-inference",
-        "model-management",
-        "local-serving",
-        "chat",
-        "responses",
-    ],
-}
-with open(sys.argv[1], "w", encoding="utf-8") as fh:
-    json.dump(manifest, fh, indent=2, sort_keys=True)
-    fh.write("\\n")
-PY
+cargo xtool prepared-input native-sdk-manifest-write \
+    "$stage_dir/manifest.json" "$artifact_id" "$sdk_version" "$TARGET_TRIPLE" \
+    "$platform" "$runtime_os" "$runtime_arch" "$BACKEND" "$flavor" "$PROFILE" \
+    "lib/$lib_name" "lib/$uniffi_lib_name" "$upstream_sha" "$patched_sha" "$patch_digest"
 
 cat > "$stage_dir/README.md" <<EOF
 # $artifact_id

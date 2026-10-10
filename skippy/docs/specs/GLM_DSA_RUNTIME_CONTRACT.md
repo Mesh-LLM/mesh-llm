@@ -248,17 +248,13 @@ when the tensor quantization type changes.
 
 ## Artifact Verification
 
-The Phase A artifact gate is:
+The historical Phase A experiments used `scripts/glm-dsa-inventory-verifier.py`
+for checkpoint-to-GGUF inventory comparison. That helper is absent from the
+current checkout; its old command is not an operational verification interface.
+This document does not claim an equivalent current native checkpoint comparator.
 
-```bash
-python3 scripts/glm-dsa-inventory-verifier.py \
-  --checkpoint /path/to/zai-org/GLM-5.2/snapshot \
-  --gguf /path/to/BF16/GGUF/or/package \
-  --json
-```
-
-The preferred BF16 GGUF reference must pass this verifier before it can be used
-as a source artifact for quantization or layer-package generation. A BF16 GGUF
+The preferred BF16 GGUF reference must satisfy the inventory requirements below
+before it can be used for quantization or layer-package generation. A BF16 GGUF
 that lacks `glm-dsa.attention.indexer.types` or still contains unsplit
 `blk.N.attn_kv_b.weight` tensors for GLM-DSA sparse attention is stale and must
 be rebuilt from SafeTensors with the current converter; native llama.cpp will

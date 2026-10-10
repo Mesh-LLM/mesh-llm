@@ -639,9 +639,10 @@ verified against its published checksum. To repeat with extracted product
 bundles and the model fixture below:
 
 ```sh
-python3 scripts/qa-lightning-compatibility.py \
+just with-lld cargo xtool automation lightning-compatibility \
   --current-binary /absolute/current/mesh-bundle/mesh-llm \
   --released-binary /absolute/released/mesh-bundle/mesh-llm \
+  --released-dialect serve-client-bind-port \
   --model /absolute/SmolLM2-135M-Instruct-Q8_0.gguf \
   --output /absolute/new-evidence-directory
 
@@ -649,8 +650,13 @@ just with-lld cargo test -p mesh-llm-payments --lib
 just with-lld cargo test -p mesh-llm-host-runtime --lib payment
 ```
 
-The script writes results and process logs, stops its own nodes, and leaves its
-isolated profiles for inspection. It never calls wallet funding or sending.
+The native command writes `results.json` and process logs, stops its own nodes,
+and leaves isolated profiles for inspection. The declared released dialect must
+match the selected bundle: `serve`, `client`, `--bind-port`, and `--bind-ip`.
+The output directory must be new; the default total budget is 600 seconds
+(`--timeout-secs` accepts 30 through 3600). It never funds or sends wallet payments.
+Its local fixtures cover orchestration; actual product bundles and the model
+remain separate mixed-version runtime qualification.
 
 Notification coverage also exercises already-settled payments, settlement during
 initial lookup, multiple subscribers, unrelated and duplicate events, successful

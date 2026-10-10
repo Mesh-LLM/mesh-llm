@@ -315,7 +315,7 @@ Co-authored-by: Real Person <real@example.com>                  # kept
 ```
 
 Trailers naming a human contributor are untouched. Extend the lists in
-`scripts/check-conventional-commit.py` when a new agent identity shows up.
+`tools/xtask/src/repository/conventional_commit/trailers.rs` when a new agent identity shows up.
 
 A squash merge builds the commit on `main` from the pull request title and
 body, both of which CI validates, so a trailer in a branch commit cannot reach

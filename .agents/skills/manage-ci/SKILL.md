@@ -20,6 +20,52 @@ The specification records design, status and acceptance criteria. When
 implementation and documentation disagree, inspect the implementation, fix the
 owning source, and update the inventory and topology in the same change.
 
+## Rust automation ownership during migration
+
+For new repository automation, reuse an existing typed Rust command in
+`tools/xtask` or add a focused Rust subcommand there with behavioral fixtures
+first. Keep `tools/xtask/src/main.rs` limited to dispatch. Run existing commands
+from the repository root with `cargo xtool <domain> <command> [options]`; for
+example, `cargo xtool repo-consistency ci-crate-lists`. Keep human-facing Just
+recipes thin and preserve required toolchain wrappers such as
+`just with-lld cargo xtool repo-consistency ci-crate-lists`. Use typed inputs,
+argument arrays, explicit working directories, bounded child processes, and
+stable machine-readable output. Validate the shape and intent of the existing
+command with Rust or component-owned tests: documented behavior, real output
+formats consumed by callers, valid-input files and exit semantics, and failure
+modes. Preserve exact bytes where a caller consumes or hashes them.
+
+The explicit `prepare-automation` `hosted-bare` profile is an automation-only
+exception for GitHub-hosted Linux. It uses the existing stable Rust selection
+and locked Cargo without Just or compiler wrappers; default image preparation
+still verifies the runner image and configures sccache. Runtime-seed automation
+preparation may use step-local Cargo home and target directories outside the
+measured paths before preflight, without populating the measured compiler cache.
+Neither exception permits product compilation in composition-only consumers.
+
+Do not implement Python emulation in xtask: repr/str formatting, argparse or
+JSON quirks, interpreter-limit emulation, or vendored parser/entity tables for
+parity. Do not commit differential oracle tests that invoke Python. Legacy
+Python may be deleted in the same change that switches its last caller once
+Rust tests cover the intent; validate the cutover through normal CI. See the
+2026-09-30 Python emulation and lane cutover decision in
+`.omo/evidence/maintainer-decisions.md`.
+
+Keep every maintained xtask integration-test target selected by the normal Rust
+contract roster and its Just recipe. The owner census rejects targets omitted
+from that roster. Preserve platform conditions and live-test prerequisites in
+the owning tests; fixture success does not establish live runtime acceptance.
+
+Do not write new Python tooling, including temporary helpers, inline Python,
+workflow steps, generic test runners, or skill-local scripts. Do not move
+generic automation into shell, PowerShell, or JavaScript to evade this rule;
+platform adapters may remain thin. Existing Python checks, Just recipes and
+workflow entrypoints remain operational during migration and are transitional,
+not templates for new tooling. Existing isolated compatibility or upstream
+fixtures may be retained only with an explicit maintainer decision; new Python
+tooling requires an explicit maintainer decision to change that policy. Do not claim the required path is
+Python-free or remove legacy validation before its Rust replacement passes.
+
 ## Required procedure
 
 1. Inspect `git status`, applicable `AGENTS.md` files, the complete workflows,
@@ -421,6 +467,11 @@ checked-in expiry are the maintainer-controlled approval boundary.
 - No-driver `--version`, runtime discovery, and noninteractive client readiness
   are mandatory for every composed alias. Hardware serving qualification is
   additional coverage, not a replacement.
+- Native readiness observes the owned child's exit status and requires clean
+  graceful shutdown. On Windows, private state deletion retries five times,
+  with one-second waits between attempts; a persistent lock fails the smoke
+  and retains the remaining state. Platform handle-lock fixtures belong to
+  the native private-state owner.
 - Restore smoke inputs through the shared restore action and reusable smoke
   workflows. Every CI invocation of `mesh-llm` includes `--log-format json`.
 - Release and packaging wrap the same producers with signing, attestation,

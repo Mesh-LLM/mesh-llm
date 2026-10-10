@@ -124,9 +124,6 @@ jobs:
         with:
           ref: ${{ inputs.source_sha }}
           persist-credentials: false
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
-        with:
-          python-version: '3.12'
       - uses: ./.github/actions/run-laya-product-smoke
         with:
           artifact_name: ci-product-linux-amd64-cpu
@@ -149,12 +146,7 @@ jobs:
         with:
           ref: ${{ inputs.source_sha }}
           persist-credentials: false
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
-        with:
-          python-version: '3.12'
       - name: Prepare source-bound native cleanup before managed work
-        id: native_cleanup
-        if: ${{ hashFiles('tools/xtask/src/ci_operations/runner_cleanup/mod.rs') != '' && hashFiles('scripts/cleanup-self-hosted.py') == '' }}
         timeout-minutes: 20
         env:
           SOURCE_SHA: ${{ inputs.source_sha || github.sha }}
@@ -177,19 +169,14 @@ jobs:
             printf 'MESH_NATIVE_CLEANUP_SHA=%s\n' "$sha"
             printf 'MESH_NATIVE_CLEANUP_SOURCE=%s\n' "$SOURCE_SHA"
           } >> "$GITHUB_ENV"
-
       - name: Admit cleanup controller before managed work
         run: |
           set -euo pipefail
-          if [[ -f scripts/cleanup-self-hosted.py ]]; then
-            exit 0
-          fi
-          test -f tools/xtask/src/ci_operations/runner_cleanup/mod.rs
           test "$(GIT_MASTER=1 git rev-parse HEAD)" = "$MESH_NATIVE_CLEANUP_SOURCE"
           test "$(sha256sum "$MESH_LLM_AUTOMATION_BIN" | awk '{print $1}')" = "$MESH_NATIVE_CLEANUP_SHA"
           printf 'MESH_NATIVE_MANAGED_WORK_STARTED=true\n' >> "$GITHUB_ENV"
       - uses: ./.github/actions/run-laya-product-smoke
-        timeout-minutes: ${{ hashFiles('scripts/cleanup-self-hosted.py') == '' && 70 || inputs.timeout_minutes }}
+        timeout-minutes: 70
         with:
           artifact_name: ci-product-linux-amd64-cuda
           artifact_path: ci-artifacts/laya-linux-cuda
@@ -206,20 +193,13 @@ jobs:
           CLEANUP_BINARY_PATH: target/release/mesh-llm
         run: |
           set -euo pipefail
-          if [[ -f scripts/cleanup-self-hosted.py ]]; then
-            python3 scripts/cleanup-self-hosted.py --job smoke --evidence-uploaded false
-          elif [[ -f tools/xtask/src/ci_operations/runner_cleanup/mod.rs ]]; then
-            if [[ "${MESH_NATIVE_MANAGED_WORK_STARTED:-}" != true ]]; then
-              echo 'native cleanup refused: managed work never started; no owned workload cleanup attempted' >&2
-              exit 1
-            fi
-            test "$(GIT_MASTER=1 git rev-parse HEAD)" = "$MESH_NATIVE_CLEANUP_SOURCE"
-            test "$(sha256sum "$MESH_LLM_AUTOMATION_BIN" | awk '{print $1}')" = "$MESH_NATIVE_CLEANUP_SHA"
-            "$MESH_LLM_AUTOMATION_BIN" ci-ops runner-cleanup --job smoke --evidence-uploaded false
-          else
-            echo 'unsupported cleanup source' >&2
+          if [[ "${MESH_NATIVE_MANAGED_WORK_STARTED:-}" != true ]]; then
+            echo 'native cleanup refused: managed work never started; no owned workload cleanup attempted' >&2
             exit 1
           fi
+          test "$(GIT_MASTER=1 git rev-parse HEAD)" = "$MESH_NATIVE_CLEANUP_SOURCE"
+          test "$(sha256sum "$MESH_LLM_AUTOMATION_BIN" | awk '{print $1}')" = "$MESH_NATIVE_CLEANUP_SHA"
+          "$MESH_LLM_AUTOMATION_BIN" ci-ops runner-cleanup --job smoke --evidence-uploaded false
 
   # Case-sensitive exact-`true` gate for the two hardware-backed Laya rows.
   #
@@ -277,12 +257,7 @@ jobs:
         with:
           ref: ${{ inputs.source_sha }}
           persist-credentials: false
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
-        with:
-          python-version: '3.12'
       - name: Prepare source-bound native cleanup before managed work
-        id: native_cleanup
-        if: ${{ hashFiles('tools/xtask/src/ci_operations/runner_cleanup/mod.rs') != '' && hashFiles('scripts/cleanup-self-hosted.py') == '' }}
         timeout-minutes: 20
         env:
           SOURCE_SHA: ${{ inputs.source_sha || github.sha }}
@@ -305,19 +280,14 @@ jobs:
             printf 'MESH_NATIVE_CLEANUP_SHA=%s\n' "$sha"
             printf 'MESH_NATIVE_CLEANUP_SOURCE=%s\n' "$SOURCE_SHA"
           } >> "$GITHUB_ENV"
-
       - name: Admit cleanup controller before managed work
         run: |
           set -euo pipefail
-          if [[ -f scripts/cleanup-self-hosted.py ]]; then
-            exit 0
-          fi
-          test -f tools/xtask/src/ci_operations/runner_cleanup/mod.rs
           test "$(GIT_MASTER=1 git rev-parse HEAD)" = "$MESH_NATIVE_CLEANUP_SOURCE"
           test "$(sha256sum "$MESH_LLM_AUTOMATION_BIN" | awk '{print $1}')" = "$MESH_NATIVE_CLEANUP_SHA"
           printf 'MESH_NATIVE_MANAGED_WORK_STARTED=true\n' >> "$GITHUB_ENV"
       - uses: ./.github/actions/run-laya-product-smoke
-        timeout-minutes: ${{ hashFiles('scripts/cleanup-self-hosted.py') == '' && 70 || inputs.timeout_minutes }}
+        timeout-minutes: 70
         with:
           artifact_name: ci-product-linux-amd64-vulkan
           artifact_path: ci-artifacts/laya-linux-vulkan
@@ -335,20 +305,13 @@ jobs:
           CLEANUP_BINARY_PATH: target/release/mesh-llm
         run: |
           set -euo pipefail
-          if [[ -f scripts/cleanup-self-hosted.py ]]; then
-            python3 scripts/cleanup-self-hosted.py --job smoke --evidence-uploaded false
-          elif [[ -f tools/xtask/src/ci_operations/runner_cleanup/mod.rs ]]; then
-            if [[ "${MESH_NATIVE_MANAGED_WORK_STARTED:-}" != true ]]; then
-              echo 'native cleanup refused: managed work never started; no owned workload cleanup attempted' >&2
-              exit 1
-            fi
-            test "$(GIT_MASTER=1 git rev-parse HEAD)" = "$MESH_NATIVE_CLEANUP_SOURCE"
-            test "$(sha256sum "$MESH_LLM_AUTOMATION_BIN" | awk '{print $1}')" = "$MESH_NATIVE_CLEANUP_SHA"
-            "$MESH_LLM_AUTOMATION_BIN" ci-ops runner-cleanup --job smoke --evidence-uploaded false
-          else
-            echo 'unsupported cleanup source' >&2
+          if [[ "${MESH_NATIVE_MANAGED_WORK_STARTED:-}" != true ]]; then
+            echo 'native cleanup refused: managed work never started; no owned workload cleanup attempted' >&2
             exit 1
           fi
+          test "$(GIT_MASTER=1 git rev-parse HEAD)" = "$MESH_NATIVE_CLEANUP_SOURCE"
+          test "$(sha256sum "$MESH_LLM_AUTOMATION_BIN" | awk '{print $1}')" = "$MESH_NATIVE_CLEANUP_SHA"
+          "$MESH_LLM_AUTOMATION_BIN" ci-ops runner-cleanup --job smoke --evidence-uploaded false
 
   laya_rocm:
     name: Laya smoke (Linux ROCm)
@@ -363,12 +326,7 @@ jobs:
         with:
           ref: ${{ inputs.source_sha }}
           persist-credentials: false
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
-        with:
-          python-version: '3.12'
       - name: Prepare source-bound native cleanup before managed work
-        id: native_cleanup
-        if: ${{ hashFiles('tools/xtask/src/ci_operations/runner_cleanup/mod.rs') != '' && hashFiles('scripts/cleanup-self-hosted.py') == '' }}
         timeout-minutes: 20
         env:
           SOURCE_SHA: ${{ inputs.source_sha || github.sha }}
@@ -391,19 +349,14 @@ jobs:
             printf 'MESH_NATIVE_CLEANUP_SHA=%s\n' "$sha"
             printf 'MESH_NATIVE_CLEANUP_SOURCE=%s\n' "$SOURCE_SHA"
           } >> "$GITHUB_ENV"
-
       - name: Admit cleanup controller before managed work
         run: |
           set -euo pipefail
-          if [[ -f scripts/cleanup-self-hosted.py ]]; then
-            exit 0
-          fi
-          test -f tools/xtask/src/ci_operations/runner_cleanup/mod.rs
           test "$(GIT_MASTER=1 git rev-parse HEAD)" = "$MESH_NATIVE_CLEANUP_SOURCE"
           test "$(sha256sum "$MESH_LLM_AUTOMATION_BIN" | awk '{print $1}')" = "$MESH_NATIVE_CLEANUP_SHA"
           printf 'MESH_NATIVE_MANAGED_WORK_STARTED=true\n' >> "$GITHUB_ENV"
       - uses: ./.github/actions/run-laya-product-smoke
-        timeout-minutes: ${{ hashFiles('scripts/cleanup-self-hosted.py') == '' && 70 || inputs.timeout_minutes }}
+        timeout-minutes: 70
         with:
           artifact_name: ci-product-linux-amd64-rocm
           artifact_path: ci-artifacts/laya-linux-rocm
@@ -420,17 +373,10 @@ jobs:
           CLEANUP_BINARY_PATH: target/release/mesh-llm
         run: |
           set -euo pipefail
-          if [[ -f scripts/cleanup-self-hosted.py ]]; then
-            python3 scripts/cleanup-self-hosted.py --job smoke --evidence-uploaded false
-          elif [[ -f tools/xtask/src/ci_operations/runner_cleanup/mod.rs ]]; then
-            if [[ "${MESH_NATIVE_MANAGED_WORK_STARTED:-}" != true ]]; then
-              echo 'native cleanup refused: managed work never started; no owned workload cleanup attempted' >&2
-              exit 1
-            fi
-            test "$(GIT_MASTER=1 git rev-parse HEAD)" = "$MESH_NATIVE_CLEANUP_SOURCE"
-            test "$(sha256sum "$MESH_LLM_AUTOMATION_BIN" | awk '{print $1}')" = "$MESH_NATIVE_CLEANUP_SHA"
-            "$MESH_LLM_AUTOMATION_BIN" ci-ops runner-cleanup --job smoke --evidence-uploaded false
-          else
-            echo 'unsupported cleanup source' >&2
+          if [[ "${MESH_NATIVE_MANAGED_WORK_STARTED:-}" != true ]]; then
+            echo 'native cleanup refused: managed work never started; no owned workload cleanup attempted' >&2
             exit 1
           fi
+          test "$(GIT_MASTER=1 git rev-parse HEAD)" = "$MESH_NATIVE_CLEANUP_SOURCE"
+          test "$(sha256sum "$MESH_LLM_AUTOMATION_BIN" | awk '{print $1}')" = "$MESH_NATIVE_CLEANUP_SHA"
+          "$MESH_LLM_AUTOMATION_BIN" ci-ops runner-cleanup --job smoke --evidence-uploaded false

@@ -7,6 +7,13 @@ metadata:
 
 # skippy-bench
 
+New repository benchmark automation follows `../manage-ci/SKILL.md`: do not
+add Python tooling. Use typed `tools/xtask` commands behind thin Just recipes;
+`cargo xtool repo-consistency ci-crate-lists` works from the repository root
+as an alias example, not a benchmark command. Existing upstream Python
+benchmark environments below remain explicit external tooling, not a model
+for new repository automation.
+
 Use this skill for performance, orchestration, and report-oriented checks.
 Use `skippy-correctness` when the question is pass/fail exactness.
 All reportable benchmark runs need metrics-server. `run`, `focused-runtime`,
@@ -17,29 +24,35 @@ target endpoint's Skippy run id.
 
 Benchmark-managed Skippy server runs must use a release `skippy-serving` build.
 Run `just release-build` before `run`, `focused-runtime`, `local-single`, or
-local split binary benchmarks, and use `target/release/skippy-server` (the
-SkippyBench default). Do not use `target/debug/skippy-server` for performance or
+local split binary benchmarks, and use `target/release/skippy` (the
+SkippyBench default). Do not use `target/debug/skippy` for performance or
 full-corpus validation; SkippyBench rejects that path because debug builds can
 create false timeout and throughput failures.
 
-## Current Repo Shape
+## Current repository ownership
 
-Standalone `skippy-bench` may not be present in this mesh checkout yet. Confirm
-available packages before using old source-repo commands:
+`skippy/crates/skippy-bench` is the maintained benchmark launcher and report
+owner. Its `src/evals` modules own external source admission, explicit SDK
+preparation, and run supervision. Serving remains owned by `skippy-serving`;
+stage runtimes emit telemetry and benchmark tooling owns reports.
 
-```bash
-cargo metadata --no-deps --format-version 1 | jq -r '.packages[].name' | sort
-```
-
-Useful current checks:
+Build and invoke the existing product through Just:
 
 ```bash
-cargo test -p skippy-serving --lib
-cargo test -p mesh-llm-host-runtime --lib inference::skippy
+just with-lld cargo build --locked --release -p skippy-bench --features skippy-runtime/dynamic-native-runtime
+just --command "$PWD/target/release/skippy-bench" eval list
 ```
 
-When benchmark harnesses are imported, keep reporting separate from request-path
-serving. Stage runtimes emit telemetry; benchmark/report tooling owns reports.
+Existing focused checks also use the repository toolchain wrapper:
+
+```bash
+just with-lld cargo test --locked -p skippy-serving --lib
+just with-lld cargo test --locked -p mesh-llm-host-runtime --lib inference::skippy
+```
+
+Select the native ABI/runtime appropriate to the behavior under test. These
+commands do not establish model, platform, or benchmark qualification by
+themselves.
 
 ## External Agent Evals
 
@@ -104,12 +117,10 @@ Optional future packs are intentionally not wired yet:
 - `repo-generation`: NL2RepoBench.
 - `tool-expanded`: Toolathlon / Tool-Decathlon.
 
-Keep `sync`/`install` opt-in. Do not make normal `just build` or `cargo build`
-download external harnesses, datasets, or Docker images.
-`eval sync` checks out the fetched upstream ref directly, and `eval run` records
-the resolved harness SHA as `harness_commit` in `run.json`. Preserve both
-behaviors so benchmark evidence remains reproducible even when definitions use
-floating upstream refs.
+Keep source sync and SDK preparation opt-in. Normal builds must not download
+external harnesses, datasets, or Docker images. MCP/SWE source refs are fixed
+immutable pins; other evals retain their documented source requirements. Every
+run records the resolved `harness_commit`.
 
 Terminal-Bench should be installed with `uv tool install --python 3.12
 terminal-bench`; Python 3.14 currently breaks the `tb` Typer CLI. Treat Docker
@@ -139,17 +150,66 @@ run without Modal credentials. It still runs upstream
 `helper_code/generate_sweagent_instances.py` for the full dataset, then supplies
 SWE-agent with a native `expert_file` instance file for local Docker platform,
 entrypoint settings and SWE-agent's standalone Python/SWE-Rex Docker runtime.
-Local Docker runs install SWE-agent into a dedicated venv and default
-`SWE_BENCH_PRO_SWEREX_SPEC` to `swe-rex[modal]==1.4.0`, which keeps the native
-SWE-ReX Docker runtime but includes the upstream
-`python:3.11.9-slim-bookworm` builder fix. Modal remains an explicit
-environment override and uses the Scale SWE-ReX patch flow. Some official
-SWE-Pro base images point pip at an unavailable localhost package mirror; local
-Docker runs default `SWE_BENCH_PRO_SWEREX_PIP_INDEX_URL` to
-`https://pypi.org/simple` for the derived-image SWE-ReX install. Use
-`SWE_BENCH_PRO_PARSE_FUNCTION=thought_action` for local OpenAI-compatible models
-that do not emit OpenAI tool calls; this is the upstream SWE-agent local-model
-path, not a Skippy dataset or harness rewrite.
+The prepared SDK retains `swe-rex[modal]==1.4.0`. Docker deployment is the
+default; Modal is an explicit prepared profile. Use
+`SWE_BENCH_PRO_PARSE_FUNCTION=thought_action` for local OpenAI-compatible
+models without OpenAI tool calls, preserving the upstream local-model path.
+
+## Explicit MCP and SWE SDK preparation
+
+MCP-Atlas and SWE-Bench Pro use pinned source checkouts and explicitly prepared
+SDK environments. `sync` acquires source and MCP's pinned agent image; it
+does not prepare these SDKs. Preparation is opt-in on Unix and takes existing
+absolute `uv` and Python executable paths. It never downloads an interpreter. Use one explicit cache root for sync,
+prepare, doctor, and run:
+
+```bash
+just with-lld cargo build --locked --release -p skippy-bench --features skippy-runtime/dynamic-native-runtime
+GIT_MASTER=1 just --command "$PWD/target/release/skippy-bench" eval sync mcp-atlas --cache-root "$CACHE_ROOT"
+GIT_MASTER=1 just --command "$PWD/target/release/skippy-bench" eval prepare-mcp \
+  --cache-root "$CACHE_ROOT" --uv "$UV_EXECUTABLE" --python "$CPYTHON_312_EXECUTABLE"
+GIT_MASTER=1 just --command "$PWD/target/release/skippy-bench" eval sync swe-bench-pro --cache-root "$CACHE_ROOT"
+GIT_MASTER=1 just --command "$PWD/target/release/skippy-bench" eval prepare-swe \
+  --cache-root "$CACHE_ROOT" --uv "$UV_EXECUTABLE" --python "$CPYTHON_31113_EXECUTABLE" \
+  --deployment docker --index-url https://pypi.org/simple
+```
+
+`CACHE_ROOT` and tool paths must be absolute. MCP requires existing CPython
+3.12; SWE requires exactly CPython 3.11.13. `--dry-run` inspects preparation
+without installing or publishing a usable receipt. A preparation destination
+must be fresh; retain failed evidence or choose another cache root rather than
+reusing a partial environment. Run dependency setup only through these native
+owners. They use locked projects, bounded child capture and execution, exact
+source admission, and environment seals. The prepared Python runs with `-I -B`.
+Normal `eval run` admits the receipt and its source/environment before and after
+execution; it does not resolve, install, or patch SDK dependencies.
+
+MCP is pinned to `b290e672645791fea0bcb23e2c0f4fec50715cca`. SWE parent is pinned
+to `66f92766bba642462d4bbe5479e83f91f9211862`, with SWE-agent gitlink
+`402a7b8fdac8193f3f255bb53859ba274234f596`. SWE's source-owned lock retains
+`swe-rex[modal]==1.4.0`. Preparation receipts record `benchmark_qualified=false`.
+Source admission, SDK import checks, and native tests do not establish dataset,
+endpoint, model, platform, Docker/Modal deployment, or benchmark results.
+
+For Modal, explicitly prepare with `--deployment modal`, then set
+`SWE_BENCH_PRO_DEPLOYMENT_TYPE=modal` for the run. The runtime deployment and
+`SWE_BENCH_PRO_SWEREX_PIP_INDEX_URL` must match the prepared profile. The default
+is Docker and `https://pypi.org/simple`. The index must be credential-free
+HTTP(S) without a query or fragment. Native preparation applies only the finite
+Docker index or Modal bootstrap/retry patch profile before sealing the SDK.
+Conflicting `SWE_BENCH_PRO_PYTHON` or `SWE_BENCH_PRO_SWEREX_SPEC` selectors are
+refused; they cannot replace the locked interpreter or package graph.
+
+```bash
+just --command "$PWD/target/release/skippy-bench" eval run swe-bench-pro \
+  --cache-root "$CACHE_ROOT" --base-url http://127.0.0.1:9337/v1 \
+  --model org/repo:Q4_K_M --endpoint-concurrency 1 \
+  --metrics-http http://127.0.0.1:18080 --metrics-run-id run-local-qwen
+```
+
+The same run form supports `mcp-atlas`. A real run still needs its endpoint,
+metrics-server, Docker services, credentials where applicable, and full upstream
+dataset. Preparation starts no benchmark services and runs no model requests.
 
 For TTFT/FTTT, use metrics-server correlation rather than harness-only timing.
 `skippy-bench eval run` and `skippy-bench chat-corpus` create/finalize a

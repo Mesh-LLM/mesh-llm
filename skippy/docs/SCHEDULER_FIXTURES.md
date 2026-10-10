@@ -14,7 +14,7 @@ waiting-prefix policy boundary:
   tail latency.
 
 The source of truth is
-[`skippy/evals/skippy-scheduler-fixtures.json`](../evals/skippy-scheduler-fixtures.json).
+[`skippy/skippy/evals/skippy-scheduler-fixtures.json`](../skippy/evals/skippy-scheduler-fixtures.json).
 It pins the Hugging Face commit, selected source, eight session IDs, selection
 rules, runtime shape, generated prompt-manifest hash, exact GGUF repository
 revision and content hash (including its embedded tokenizer), and acceptance
@@ -26,7 +26,8 @@ Validate the catalog and run the actual Rust scheduler against both compact
 traces:
 
 ```bash
-python3 skippy/evals/skippy-scheduler-fixtures.py validate
+just with-lld cargo xtool automation agentic-prompt-manifest validate-fixtures \
+  skippy/evals/skippy-scheduler-fixtures.json
 just with-lld cargo test -p skippy-scheduler
 ```
 
@@ -37,22 +38,55 @@ trace remains at one switch while the eviction-pressure trace collapses to
 seven. This gate is deterministic and performs no model inference or network
 access.
 
-The normal Python script-test lane also validates the catalog, derives the
-minimum context from the checked-in rows, exercises the real prompt generator
-with canned rows, verifies the strict HF command shape and row-provenance
-rejection, and covers profile application in the A/B runner.
+The native prompt-manifest tests validate the catalog, derive the minimum
+context from the checked-in rows,
+check strict HF command arguments and reject row or manifest hash drift before
+publication. Run these portable contracts locally with:
+
+```bash
+just with-lld cargo test --locked -p xtask --bin xtask agentic_prompt_manifest \
+  -- --test-threads=1
+```
+
+The A/B runner also checks profile application. Synthetic fixtures do not prove
+the generated manifest hash against the pinned corpus; that requires the exact
+verified dataset revision.
+
+## Optional Parquet reader
+
+The default automation bootstrap compiles portable selection contracts only.
+Build the optional reader separately when materializing Parquet inputs:
+
+```bash
+just with-lld cargo build --locked -p trajectory-reader --features parquet-input \
+  --bin trajectory-reader
+```
+
+The reader includes the Parquet compression codecs. The main automation tool
+finds it next to its executable, or uses an explicit absolute
+`MESH_LLM_TRAJECTORY_READER_BIN` path. The tool supervises the reader with a
+120-second deadline and validates its versioned response file before publication.
+Selected trajectory data uses a private temporary file, independently of the
+bounded diagnostic capture. The normal `just ci-automation-contracts` gate also
+builds the reader, tests actual compressed Parquet inputs, and executes the
+frontend and reader together to check exact manifest bytes and refusal cleanup.
+Catalog validation and profile display require neither the reader nor HF.
 
 ## Pinned corpus cache
 
 Prepare the model-backed eviction-pressure prompts with:
 
 ```bash
-python3 skippy/evals/skippy-scheduler-fixtures.py prepare \
+just with-lld cargo xtool automation agentic-prompt-manifest prepare-fixture \
+  --catalog skippy/evals/skippy-scheduler-fixtures.json \
   --profile agentic-eviction-pressure \
+  --hf-bin "$(command -v hf)" \
   --output /tmp/skippy-agentic-eviction-pressure.json
 ```
 
-`prepare` performs both operations required by the fixture contract:
+`prepare-fixture` requires an installed Hugging Face CLI at the explicit
+absolute `--hf-bin` path. It performs both operations required by the fixture
+contract:
 
 1. `hf download thoughtworks/agentic-coding-trajectories ... --repo-type dataset --revision cef72d1f4d0caabf85937adf8337a14b7522c782`
 2. `hf cache verify ... --fail-on-missing-files` at the same revision
@@ -60,7 +94,18 @@ python3 skippy/evals/skippy-scheduler-fixtures.py prepare \
 It then selects the pinned rows from `sessions.parquet`, rebuilds the prompt
 manifest, and rejects either row drift or a SHA-256 other than
 `f1ddbe3d5974f3f4bd06f5d70fa45d0e10305bbafa4eb7399a0f972458d1beef`.
-Use `--cache-dir` when a benchmark host owns a dedicated shared cache.
+Use `--cache-dir` when a benchmark host owns a dedicated shared cache. The download
+and verification share a 600-second timeout, configurable with `--timeout`.
+Catalog validation and local materialization do not start HF or install Python
+packages. To regenerate from an already verified local Parquet file:
+
+```bash
+just with-lld cargo xtool automation agentic-prompt-manifest materialize-fixture \
+  --catalog skippy/evals/skippy-scheduler-fixtures.json \
+  --profile agentic-eviction-pressure \
+  --dataset-file /path/to/verified/sessions.parquet \
+  --output /tmp/skippy-agentic-eviction-pressure.json
+```
 
 Never copy `sessions.parquet` or the generated prompt manifest into the
 repository. The corpus is a derivative multi-source dataset; this fixture uses
@@ -68,57 +113,7 @@ only the `swe-smith-claude-3-7-sonnet` rows, whose upstream is
 `SWE-bench/SWE-smith-trajectories` (MIT). The checked-in catalog retains row
 provenance without redistributing the text.
 
-## Periodic hardware replay
+The native fixture commands own catalog validation, profile resolution, pinned HF
+fetch/verification, and prompt-manifest publication. Native fixture tests do not qualify
+hardware replay, corpus acquisition, or its acceptance metrics.
 
-Use exact OLD and NEW release binaries built against the same native ABI, then
-run the A/B harness with the named profile:
-
-```bash
-python3 skippy/evals/skippy-waiting-prefix-ab.py \
-  --fixture-profile agentic-eviction-pressure \
-  --acceptance-contract skippy/evals/skippy-capacity-acceptance.json \
-  --prompt-manifest /tmp/skippy-agentic-eviction-pressure.json \
-  --case-file /path/to/one-model-case.json \
-  --old-bin /path/to/old/skippy-serving \
-  --new-bin /path/to/new/skippy-serving \
-  --old-commit <old-commit> \
-  --new-commit <new-commit> \
-  --native-build /path/to/matched/native-build \
-  --output-dir /path/to/artifacts
-```
-
-The named profile owns rounds, lanes, admission concurrency, cache entries,
-output length, and arrival stagger; ad hoc workload flags do not override it.
-The case file must also match the profile's pinned model ID and GGUF SHA-256.
-HF profiles require their exact generated prompt manifest, while synthetic
-profiles reject external manifests. The result records the profile name and
-catalog SHA alongside binary, model, and prompt-manifest hashes.
-
-The same replay is also the capacity-policy certificate. Pass the checked-in
-`skippy-capacity-acceptance.json` contract when comparing the capacity layer;
-the measured agentic requests remain identical, but the gate changes from
-proving the DFS gain a second time to requiring actual eviction, zero
-fail-closed rejections, and no regression over 2% in recomputation, p95 TTFT,
-makespan, or throughput. The contract first
-seeds eight deterministic synthetic resident prefixes and raises the entry cap
-to sixteen, so the measured agentic requests encounter evictable cold state
-without reducing the validated per-lane context budget. The runner combines
-pre-admission and post-record resident eviction telemetry into per-round token
-and entry totals, reports fail-closed capacity rejections, and retains the
-planner's deterministic work estimate. Because the current per-token estimate
-is uniform within a stage, the certificate describes the effective victim
-policy as cold-first LRU rather than attributing results to cost density. This
-lets a stacked capacity change be compared against the preceding scheduler
-binary without changing the pinned requests or silently treating legacy
-proactive eviction as zero.
-
-The waiting-prefix eviction-pressure certificate requires every request to succeed and, at
-minimum, a 50,000-token suffix-prefill baseline and eight family switches so a
-drifted non-pressure workload cannot pass. It then requires 10% improvements
-in suffix prefill, family switches, p95 TTFT, and makespan plus 10% higher
-output throughput. The warm certificate requires
-identical suffix prefill and switch counts, with user-facing timing/throughput
-movement inside ±5%. A zero baseline is neutral only when both binaries remain
-at zero; any nonzero candidate value fails closed. Alternate binary order
-across all four rounds and retain raw requests, telemetry, configs, logs,
-`comparison.json`, and `report.md`.

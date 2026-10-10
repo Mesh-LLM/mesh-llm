@@ -82,9 +82,9 @@ jobs:
         with:
           persist-credentials: false
       - uses: ./.github/actions/setup-windows-short-paths
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+      - uses: ./.github/actions/prepare-automation
         with:
-          python-version: '3.x'
+          allow_native_github_cache: "true"
       - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
       - name: Resolve Windows native toolchain epoch
         id: native_toolchain
@@ -113,12 +113,13 @@ jobs:
         shell: pwsh
         run: |
           $stamp = Join-Path $env:LLAMA_STAGE_BUILD_DIR ".mesh-llm-build-stamp"
-          python scripts/verify-static-abi-build-stamp.py `
+          & cargo xtool prepared-input static-abi-stamp `
             $stamp `
             --backend cpu `
             --link-mode dynamic `
             --stamp-version 3 `
             --toolchain-epoch $env:MESH_LLM_LLAMA_TOOLCHAIN_EPOCH
+          if ($LASTEXITCODE -ne 0) { throw "Windows CPU ABI stamp verification failed" }
           $requiredLibraries = @{
             llama = @("llama.dll", "libllama.dll")
             common = @("llama-common.dll", "libllama-common.dll")
@@ -173,9 +174,9 @@ jobs:
         with:
           persist-credentials: false
       - uses: ./.github/actions/setup-windows-short-paths
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+      - uses: ./.github/actions/prepare-automation
         with:
-          python-version: '3.x'
+          allow_native_github_cache: "true"
       - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
       - name: Resolve Windows native toolchain epoch
         id: native_toolchain
@@ -266,12 +267,13 @@ jobs:
           CACHE_BACKEND: ${{ matrix.backend }}
         run: |
           $stamp = Join-Path $env:LLAMA_STAGE_BUILD_DIR ".mesh-llm-build-stamp"
-          python scripts/verify-static-abi-build-stamp.py `
+          & cargo xtool prepared-input static-abi-stamp `
             $stamp `
             --backend $env:CACHE_BACKEND `
             --link-mode dynamic `
             --stamp-version 3 `
             --toolchain-epoch $env:MESH_LLM_LLAMA_TOOLCHAIN_EPOCH
+          if ($LASTEXITCODE -ne 0) { throw "Windows GPU ABI stamp verification failed" }
           $requiredLibraries = @{
             llama = @("llama.dll", "libllama.dll")
             common = @("llama-common.dll", "libllama-common.dll")

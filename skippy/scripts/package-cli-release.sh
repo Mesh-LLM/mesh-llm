@@ -27,33 +27,9 @@ binary=skippy
     echo "missing Skippy host import-policy report in $input_dir" >&2
     exit 1
 }
-python3 - "$input_dir/host-imports.json" "$input_dir/$binary" "$target" <<'PY'
-import hashlib
-import json
-from pathlib import Path
-import sys
-
-path, binary_path, target = sys.argv[1:]
-binary = Path(binary_path)
-with open(path, encoding="utf-8") as handle:
-    report = json.load(handle)
-expected_format = {"linux": "elf", "darwin": "macho", "windows": "pe"}[target.split("-", 1)[0]]
-digest = hashlib.sha256()
-with binary.open("rb") as handle:
-    for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-        digest.update(chunk)
-if (
-    not isinstance(report, dict)
-    or report.get("binary") != binary.name
-    or report.get("binary_sha256") != digest.hexdigest()
-    or report.get("policy") != "mesh-llm-dynamic-host-v2"
-    or report.get("rejected_imports") != []
-    or report.get("format") != expected_format
-    or not isinstance(report.get("imports"), list)
-    or not all(isinstance(value, str) for value in report["imports"])
-):
-    raise SystemExit("invalid or rejected Skippy host import-policy report")
-PY
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+source "$REPO_ROOT/scripts/lib/automation.sh"
+mesh_automation product skippy-cli-input "$input_dir/host-imports.json" "$input_dir/$binary" "$target"
 if command -v sha256sum >/dev/null 2>&1; then
     (cd "$input_dir" && sha256sum --check "$binary.sha256")
 else

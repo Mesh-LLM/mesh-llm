@@ -21,12 +21,14 @@ target_link_libraries(skippy-stage-rewriter PRIVATE
 
 include(CTest)
 if (BUILD_TESTING)
-    find_package(Python3 REQUIRED COMPONENTS Interpreter)
+    add_executable(skippy-stage-rewriter-fixture tests/rewriter_fixture.cpp)
+    target_compile_features(skippy-stage-rewriter-fixture PRIVATE cxx_std_17)
+    target_include_directories(skippy-stage-rewriter-fixture SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS})
+    target_link_libraries(skippy-stage-rewriter-fixture PRIVATE LLVM)
     add_test(
-        NAME skippy-stage-rewriter-fixture
+        NAME skippy-stage-rewriter-fixture-native
         COMMAND
-            ${Python3_EXECUTABLE}
-            ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_rewriter.py
+            $<TARGET_FILE:skippy-stage-rewriter-fixture>
             $<TARGET_FILE:skippy-stage-rewriter>
             ${CMAKE_CURRENT_SOURCE_DIR}/tests/source)
 endif()
