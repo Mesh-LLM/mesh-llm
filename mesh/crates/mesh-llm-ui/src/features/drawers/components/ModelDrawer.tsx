@@ -1,6 +1,7 @@
 import { useId } from 'react'
 import { Cpu, HardDrive, Hash, Network } from 'lucide-react'
 import { StatusBadge } from '@/components/ui/StatusBadge'
+import type { StatusBadgeTone } from '@/components/ui/StatusBadge'
 import { Drawer } from '@/features/drawers/components/Drawer'
 import { drawerIcon } from '@/features/drawers/lib/badge-styles'
 import { modelStatusBadge } from '@/features/drawers/lib/model-status'
@@ -10,6 +11,7 @@ import { SectionHead } from '@/features/drawers/components/SectionHead'
 import { LatencySource } from '@/lib/api/types'
 import { formatPeerLatencySummary } from '@/lib/format-latency'
 import { formatModelSizeGB } from '@/lib/format-model-size'
+import { fitLabelTone, headerFitLabel } from '@/lib/model-fit'
 import type { ConfigModel, ModelSummary, Peer } from '@/features/app-tabs/types'
 
 type DrawerModel = ConfigModel | ModelSummary
@@ -23,14 +25,33 @@ function modelSubtitle(model: DrawerModel) {
   return isConfigModel(model) ? model.family : (model.fullId ?? model.family)
 }
 
-function modelQuant(model: ModelSummary) {
-  if (model.quant) return model.quant
-  if (!model.fullId?.startsWith(`${model.name}-`)) return 'Q4_K_XL'
-  return model.fullId.slice(model.name.length + 1)
+function isQuantTag(tag: string): boolean {
+  const upper = tag.toUpperCase()
+  if (upper.startsWith('IQ') || upper.startsWith('BF') || upper.startsWith('UD-')) return true
+  if (!upper.startsWith('Q') && !upper.startsWith('F')) return false
+  return upper.length >= 2 && upper[1] >= '0' && upper[1] <= '9'
 }
 
-function modelSummarySize(model: ModelSummary) {
-  return model.size
+function modelQuant(model: ModelSummary) {
+  if (model.quant) return model.quant
+  const separator = model.name.lastIndexOf(':')
+  if (separator >= 0) {
+    const tag = model.name.slice(separator + 1)
+    return isQuantTag(tag) ? tag : 'Unknown'
+  }
+  // No `:selector` tag: mirror the backend's derive_quantization_type
+  // (mesh-llm-host-runtime src/models/inventory.rs), which scans
+  // hyphen-separated name parts right-to-left for a quant marker.
+  const parts = model.name.replace(/\.gguf$/i, '').split('-')
+  for (let i = parts.length - 1; i >= 0; i--) {
+    if (isQuantTag(parts[i])) return parts[i]
+  }
+  return 'Unknown'
+}
+
+function fitBadgeTone(label?: string): StatusBadgeTone {
+  const tone = fitLabelTone(label)
+  return tone === 'good' || tone === 'warn' || tone === 'bad' ? tone : 'muted'
 }
 
 function modelSummaryContext(model: ModelSummary) {
@@ -125,7 +146,7 @@ function ModelDrawerContent({
             <StatusBadge dot tone={status.tone}>
               {status.label}
             </StatusBadge>
-            <StatusBadge tone="good">Fits</StatusBadge>
+            <StatusBadge tone={fitBadgeTone(model.fitLabel)}>{headerFitLabel(model.fitLabel)}</StatusBadge>
           </>
         }
         onClose={onClose}
@@ -142,7 +163,7 @@ function ModelDrawerContent({
             {availability} node{availability === 1 ? '' : 's'}
           </KV>
           <KV icon={drawerIcon(HardDrive)} label="Mesh VRAM">
-            {modelSummarySize(model)}
+            {formatModelSizeGB(model.meshVramGB)}
           </KV>
           <KV icon={drawerIcon(Cpu)} label="Context">
             {modelSummaryContext(model)}
@@ -195,7 +216,7 @@ function ModelDrawerContent({
                     observerId: peer.latencyObserverId ?? null
                   })}
                 </span>
-                <span>{modelSummarySize(model)}</span>
+                <span>{formatModelSizeGB(peer.vramGB)}</span>
                 <StatusBadge tone="accent">100%</StatusBadge>
               </div>
             ))

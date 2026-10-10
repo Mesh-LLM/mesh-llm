@@ -29,11 +29,13 @@ export function adaptModelsToSummary(models: MeshModelRaw[]): ModelSummary[] {
     paramsLabel: model.params_b != null ? `${model.params_b}B` : undefined,
     quant: model.quantization,
     sizeGB: model.size_gb,
+    meshVramGB: model.mesh_vram_gb,
     diskGB: model.disk_gb,
     ctxMaxK: model.context_length == null ? undefined : Math.round(model.context_length / 1000),
     moe: model.capabilities?.moe ?? model.moe ?? false,
     vision: model.capabilities?.vision ?? model.vision ?? model.tags?.includes('vision') ?? false,
     capabilities: model.capabilities,
-    license: model.license
+    license: model.license,
+    fitLabel: model.fit_label
   }))
 }

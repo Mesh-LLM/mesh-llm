@@ -82,6 +82,7 @@ export type ModelSummary = {
   paramsLabel?: string
   quant?: string
   sizeGB?: number
+  meshVramGB?: number
   diskGB?: number
   ctxMaxK?: number
   ctxPerGB?: number
@@ -90,6 +91,7 @@ export type ModelSummary = {
   capabilities?: ModelCapabilities
   license?: string
   activitySummary?: string
+  fitLabel?: string
 }
 export type MeshNodeRenderKind = 'client' | 'worker' | 'active' | 'serving' | 'self'
 export type MeshNodeState = 'serving' | 'loading' | 'standby' | 'client'
