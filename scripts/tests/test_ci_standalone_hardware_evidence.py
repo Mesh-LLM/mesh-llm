@@ -63,6 +63,20 @@ class HardwareEvidenceTests(unittest.TestCase):
             self.assertIsNone(driver.selected_backend_device(log))
             self.assertIsNone(driver.selected_backend_device(Path(temporary) / "missing.log"))
 
+    def test_wait_for_backend_device_reads_a_late_event(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            log = Path(temporary) / "serve.log"
+            log.write_text('{"data":{"message":"preparing"},"type":"status"}\n', encoding="utf-8")
+            self.assertIsNone(driver.selected_backend_device(log))
+            with log.open("a", encoding="utf-8") as handle:
+                handle.write('{"data":{"detail":"CPU"},"type":"backend_device_selected"}\n')
+            self.assertEqual(driver.wait_for_backend_device(log, timeout=5.0), "CPU")
+
+    def test_wait_for_backend_device_times_out_without_the_event(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            missing = Path(temporary) / "serve.log"
+            self.assertIsNone(driver.wait_for_backend_device(missing, timeout=0.6))
+
     def test_cpu_row_records_the_runtime_cpu_device(self) -> None:
         hardware = driver.build_hardware(
             self.row("linux-cpu"),
@@ -73,7 +87,8 @@ class HardwareEvidenceTests(unittest.TestCase):
                                     "device": "CPU", "selected_device": "CPU"})
 
     def test_metal_row_derives_device_runtime_and_driver(self) -> None:
-        with mock.patch.object(driver, "_apple_chip_name", return_value="Apple M1 Ultra"):
+        with mock.patch.object(driver, "_apple_chip_name", return_value="Apple M1 Ultra"), \
+             mock.patch.object(driver, "_macos_version", return_value="27.0.1"):
             hardware = driver.build_hardware(
                 self.row("macos-metal"),
                 {"state": "available", "row_id": "macos-metal", "runner": "macos-hosted"},
@@ -116,9 +131,38 @@ class HardwareEvidenceTests(unittest.TestCase):
                                        "runner": "macos-hosted"},
                                       {"arch": "aarch64", "gpus": []}, "MTL0")
 
-    def test_missing_metal_runtime_version_fails_closed(self) -> None:
+    def test_metal_runtime_without_a_version_token_uses_the_host_label(self) -> None:
+        # A headless runner can enumerate the Metal stack without a version
+        # number; the row must still carry a non-empty runtime identity.
         with mock.patch.object(driver, "_apple_chip_name", return_value="Apple M2"):
-            with self.assertRaisesRegex(ValueError, "runtime_version identity"):
+            hardware = driver.build_hardware(
+                self.row("macos-metal"),
+                {"state": "available", "row_id": "macos-metal", "runner": "macos-hosted"},
+                {"arch": "aarch64",
+                 "gpus": [{"display_name": "Metal Support: Metal"},
+                          {"display_name": "Type: GPU"}]},
+                "MTL0",
+            )
+        self.assertEqual(hardware["runtime_version"], "Metal Support: Metal")
+
+    def test_metal_runtime_without_any_gpu_uses_the_os_metal_stack(self) -> None:
+        with mock.patch.object(driver, "_apple_chip_name", return_value="Apple M2"), \
+             mock.patch.object(driver, "_macos_version", return_value="14.6"):
+            hardware = driver.build_hardware(
+                self.row("macos-metal"),
+                {"state": "available", "row_id": "macos-metal", "runner": "macos-hosted"},
+                {"arch": "aarch64", "gpus": [{"display_name": "Type: GPU"}]},
+                "MTL0",
+            )
+        self.assertEqual(hardware["runtime_version"], "Metal (macOS 14.6)")
+        self.assertEqual(hardware["driver"], "macOS 14.6")
+
+    def test_unidentified_metal_host_fails_closed(self) -> None:
+        # When the host exposes neither a GPU label nor a readable macOS
+        # version, the row cannot prove its runtime identity and must fail.
+        with mock.patch.object(driver, "_apple_chip_name", return_value="Apple M2"), \
+             mock.patch.object(driver, "_macos_version", return_value=None):
+            with self.assertRaisesRegex(ValueError, "driver identity"):
                 driver.build_hardware(self.row("macos-metal"),
                                       {"state": "available", "row_id": "macos-metal",
                                        "runner": "macos-hosted"},
