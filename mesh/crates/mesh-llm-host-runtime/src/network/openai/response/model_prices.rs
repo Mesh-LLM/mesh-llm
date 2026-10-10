@@ -55,6 +55,7 @@ pub(super) async fn attach_prices(
         {
             item["payment"] = json!({
                 "binding_quote": false,
+                "model": model,
                 "free_available": offers.iter().any(|offer| offer["paid"] == false),
                 "paid_available": offers.iter().any(|offer| offer["paid"] == true),
                 "offers": offers,
@@ -178,7 +179,8 @@ mod tests {
         paid.set_models(vec!["falcon-runtime".into()]).await;
         paid.set_hosted_models(vec!["falcon-runtime".into()]).await;
         paid.set_serving_models(vec!["falcon-runtime".into()]).await;
-        paid.set_served_model_descriptors(vec![descriptor]).await;
+        paid.set_served_model_descriptors(vec![descriptor.clone()])
+            .await;
         let mut announcement =
             paid.build_local_announcement(paid.snapshot_local_announcement_data().await);
         announcement.lightning_offers.insert(
@@ -198,7 +200,8 @@ mod tests {
         node.update_peer_rtt(paid.id(), 1).await;
 
         let mut body = json!({"data":[{"id": public_id}]});
-        attach_prices(&mut body, std::slice::from_ref(&public_id), &[], &node).await;
+        attach_prices(&mut body, &["falcon-runtime".into()], &[descriptor], &node).await;
+        assert_eq!(body["data"][0]["payment"]["model"], "falcon-runtime");
         assert_eq!(body["data"][0]["payment"]["paid_available"], true);
         assert_eq!(body["data"][0]["payment"]["free_available"], false);
         assert!(

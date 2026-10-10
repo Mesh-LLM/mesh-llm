@@ -515,6 +515,7 @@ pub(super) fn apply_admitted_activation_frontier(
 ) -> Result<()> {
     let frontier_profile = skippy::admitted_activation_frontier(load)?;
     config.execution_contract = load.admission.execution_contract.clone();
+    config.kv_graph_state = load.admission.kv_graph_state.clone();
     config.activation_import_identities = frontier_profile.activation_imports.clone();
     config.activation_import_bindings = frontier_profile.activation_import_bindings.clone();
     config.activation_export_identities = frontier_profile.activation_exports.clone();

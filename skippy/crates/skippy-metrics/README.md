@@ -28,3 +28,14 @@ flowchart LR
 The hot inference path must not block on telemetry. Stage servers and runtime
 cache operations emit best-effort summaries, while `metrics-server` owns
 ingestion, SQLite storage, and report export.
+
+## KV snapshot observations
+
+`stage.binary_request_summary` carries `skippy.kv.payload` and
+`skippy.kv.selected_payloads = 1` when a stage has an active KV cache. Sum the
+count grouped by payload to see the request-weighted selection distribution.
+The same event carries `skippy.kv.lookup_hits` and
+`skippy.kv.lookup_misses`; sum those fields within each payload group to
+measure prefix-cache use. A stage's KV attributes separately report
+`skippy.kv.graph_loaded_state_mismatches` when graph admission disagrees with
+the loaded model state.

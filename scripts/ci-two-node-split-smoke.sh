@@ -9,8 +9,8 @@
 # model leg it sends every prompt length twice in a row (X, X, X+more, X+more,
 # ...): the first sight of each length proves reuse keeps growing, and the
 # identical re-send must restore more of the prompt from cache. Dense KV cache
-# repeats must be near-full restores; recurrent KV cache repeats may restore
-# from the latest checkpoint. With MESH_TWO_NODE_SPLIT_RECURRENT_MODEL set, the
+# repeats may restore from an earlier retained checkpoint under capacity
+# pressure. With MESH_TWO_NODE_SPLIT_RECURRENT_MODEL set, the
 # dense leg runs first and the recurrent leg repeats the whole flow against a
 # second model in the same job.
 
@@ -158,6 +158,12 @@ sha256_file() {
     fi
 }
 
+auto_payload_artifact_for_sha256() {
+    "${automation[@]}" split-payloads artifact-for-sha256 \
+        --expectations ci/model-artifacts/kv-auto-smoke-expectations.json \
+        --sha256 "$1"
+}
+
 quant_selector_from_gguf_file() {
     local filename="$1"
     "${automation[@]}" automation split-probe quant "$filename"
@@ -216,6 +222,25 @@ prepare_split_package() {
 
 prepare_split_inputs() {
     local package_tool
+    if [[ -f "$MODEL" ]]; then
+        DENSE_MODEL_SHA256="$(sha256_file "$MODEL")"
+    fi
+    if [[ -n "$RECURRENT_MODEL" && -f "$RECURRENT_MODEL" ]]; then
+        RECURRENT_MODEL_SHA256="$(sha256_file "$RECURRENT_MODEL")"
+    fi
+    if [[ "$DENSE_ARTIFACT_ID" == unspecified && "$DENSE_MODEL_SHA256" != unspecified ]]; then
+        DENSE_ARTIFACT_ID="$(auto_payload_artifact_for_sha256 "$DENSE_MODEL_SHA256")"
+    fi
+    if [[ -n "$RECURRENT_MODEL" && "$RECURRENT_ARTIFACT_ID" == unspecified && "$RECURRENT_MODEL_SHA256" != unspecified ]]; then
+        RECURRENT_ARTIFACT_ID="$(auto_payload_artifact_for_sha256 "$RECURRENT_MODEL_SHA256")"
+    fi
+    if [[ -n "${MESH_TWO_NODE_SPLIT_WORK_DIR:-}" ]] && {
+        [[ "$DENSE_ARTIFACT_ID" == unspecified ]] ||
+        [[ -n "$RECURRENT_MODEL" && "$RECURRENT_ARTIFACT_ID" == unspecified ]];
+    }; then
+        echo "split Auto certification requires pinned expectations for every model leg" >&2
+        return 1
+    fi
     if [[ -d "$MODEL" && -s "$MODEL/model-package.json" ]] &&
         { [[ -z "$RECURRENT_MODEL" ]] || [[ -d "$RECURRENT_MODEL" && -s "$RECURRENT_MODEL/model-package.json" ]]; }; then
         return 0
@@ -677,8 +702,35 @@ validate_prefix_responses() {
 }
 
 assert_expected_stage_payload() {
-    [[ -n "$EXPECTED_EXACT_PAYLOAD_KIND" ]] || return 0
-    "${automation[@]}" automation split-probe payload-kind "$EXPECTED_EXACT_PAYLOAD_KIND" "$SEED_LOG" "$WORKER_LOG"
+    local artifact_id model_sha256 tested_commit
+    case "$MODEL_LABEL" in
+        recurrent)
+            artifact_id="$RECURRENT_ARTIFACT_ID"
+            model_sha256="$RECURRENT_MODEL_SHA256"
+            ;;
+        *)
+            artifact_id="$DENSE_ARTIFACT_ID"
+            model_sha256="$DENSE_MODEL_SHA256"
+            ;;
+    esac
+    # Manual package-v2 probes may not carry a pinned model artifact. CI does.
+    [[ "$artifact_id" != unspecified ]] || return 0
+    # The protected reusable workflow may predate this branch's source-SHA
+    # handoff. Its checkout is still pinned to source_sha. Container checkout
+    # ownership can differ from the running user, so trust only this checkout
+    # when reading its HEAD as the fallback.
+    tested_commit="${MESH_TWO_NODE_SPLIT_SOURCE_SHA:-$(git -c safe.directory="$PWD" rev-parse HEAD)}"
+    "${automation[@]}" split-payloads certify \
+        --evidence "$SPLIT_EVIDENCE_PATH" \
+        --expectations ci/model-artifacts/kv-auto-smoke-expectations.json \
+        --model-manifest ci/model-artifacts/manifests/scripted-binary-smoke.json \
+        --roster skippy/crates/skippy-api/src/split-certified.json \
+        --runtime-bundle "$RUNTIME_BUNDLE" \
+        --tested-commit "$tested_commit" \
+        --artifact-id "$artifact_id" --model-sha256 "$model_sha256" \
+        --seed-log "$SEED_LOG" --worker-log "$WORKER_LOG" \
+        --responses-dir "$response_dir" \
+        --output "${WORK_DIR}/${MODEL_LABEL}-auto-payload-certification.json"
 }
 
 capture_kv_cache_statuses() {
