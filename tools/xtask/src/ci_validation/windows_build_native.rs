@@ -1,0 +1,209 @@
+//! Execute the maintained PowerShell functions on native Windows, never model their path semantics.
+use super::{function, script};
+use crate::process::{
+    self, Cancellation, Completion, Limits, OutputFiles, ProcessSpec, Readiness, Value,
+};
+use std::{
+    collections::BTreeMap,
+    fs,
+    path::{Path, PathBuf},
+    time::Duration,
+};
+
+fn quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "''"))
+}
+fn execute(body: &str, cwd: &Path) -> process::ProcessReport {
+    let body = format!(
+        "$fixturePhaseClock=[System.Diagnostics.Stopwatch]::StartNew(); [Console]::Error.WriteLine('windows-fixture build-body-begin ms='+$fixturePhaseClock.ElapsedMilliseconds); $expectedCore=[System.IO.Path]::Combine($PSHOME,'Modules'); if (![string]::Equals([System.IO.Path]::GetFullPath($env:MESH_WINDOWS_FIXTURE_CORE_MODULE_PATH),$expectedCore,[StringComparison]::OrdinalIgnoreCase)) {{ throw 'fixture admitted core module path mismatch' }}; $env:PSModulePath=$expectedCore; if (![string]::Equals($env:PSModulePath,$expectedCore,[StringComparison]::OrdinalIgnoreCase)) {{ throw 'fixture core module path mismatch' }}; $pathCommand=Get-Command -Name Test-Path -CommandType Cmdlet -ErrorAction Stop; [Console]::Error.WriteLine('windows-fixture path-command kind='+$pathCommand.CommandType+' module='+$pathCommand.ModuleName+' assembly='+$pathCommand.ImplementingType.Assembly.Location); if ($pathCommand.ModuleName -ne 'Microsoft.PowerShell.Management' -or ![string]::Equals($pathCommand.ImplementingType.Assembly.Location,[System.IO.Path]::Combine([System.IO.Path]::Combine($env:SystemRoot, 'Microsoft.Net', 'assembly', 'GAC_MSIL'), 'Microsoft.PowerShell.Commands.Management', 'v4.0_3.0.0.0__31bf3856ad364e35', 'Microsoft.PowerShell.Commands.Management.dll'),[StringComparison]::OrdinalIgnoreCase)) {{ throw 'fixture Test-Path native assembly mismatch' }}; [Console]::Error.WriteLine('windows-fixture build-core-module-admitted ms='+$fixturePhaseClock.ElapsedMilliseconds); [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); $OutputEncoding = [Console]::OutputEncoding; {body}; [Console]::Error.WriteLine('windows-fixture build-body-complete ms='+$fixturePhaseClock.ElapsedMilliseconds)"
+    );
+    let system = std::env::var_os("SystemRoot").expect("Windows SystemRoot");
+    let executable = PathBuf::from(system).join("System32/WindowsPowerShell/v1.0/powershell.exe");
+    assert!(
+        executable.is_file(),
+        "native Windows PowerShell is required"
+    );
+    let mut environment = [
+        "SystemRoot",
+        "WINDIR",
+        "PATH",
+        "TEMP",
+        "TMP",
+        "USERPROFILE",
+        "APPDATA",
+        "LOCALAPPDATA",
+    ]
+    .into_iter()
+    .filter_map(|key| std::env::var_os(key).map(|value| (key.into(), Value::Public(value))))
+    .collect::<BTreeMap<_, _>>();
+    let core_modules = executable.parent().unwrap().join("Modules");
+    assert!(
+        core_modules.is_dir(),
+        "Windows PowerShell core modules required"
+    );
+    // PowerShell reconstructs PSModulePath at startup; retain an independent
+    // exact path binding so the child can close its search path before autoload.
+    environment.insert(
+        "MESH_WINDOWS_FIXTURE_CORE_MODULE_PATH".into(),
+        Value::Public(core_modules.clone().into_os_string()),
+    );
+    environment.insert(
+        "PSModulePath".into(),
+        Value::Public(core_modules.into_os_string()),
+    );
+    let spec = ProcessSpec {
+        executable,
+        arguments: ["-NoProfile", "-NonInteractive", "-Command", body.as_str()]
+            .into_iter()
+            .map(|arg| Value::Public(arg.into()))
+            .collect(),
+        cwd: cwd.into(),
+        environment,
+    };
+    let report = process::supervise(
+        &spec,
+        &Limits {
+            execution: Duration::from_secs(15),
+            graceful_shutdown: Duration::from_secs(1),
+            forced_shutdown: Duration::from_secs(2),
+            retained_bytes_per_stream: 32768,
+            readiness: Readiness::None,
+            completion: Completion::Exit,
+        },
+        &Cancellation::default(),
+        OutputFiles::default(),
+    )
+    .unwrap();
+    assert_eq!(report.outcome, process::Outcome::Exited, "{report:?}");
+    assert!(
+        report.failure.is_none() && report.cleanup.failure.is_none(),
+        "{report:?}"
+    );
+    assert!(
+        report.cleanup.complete && !report.cleanup.forced && !report.cleanup.graceful_signal_failed,
+        "owned PowerShell fixture must finish cleanly: {report:?}"
+    );
+    for stream in [&report.stdout, &report.stderr] {
+        assert!(
+            stream.line_capture_complete && !stream.truncated,
+            "{report:?}"
+        );
+    }
+    report
+}
+fn accepted(body: &str, cwd: &Path) -> String {
+    let report = execute(body, cwd);
+    assert!(report.success(), "{report:?}");
+    String::from_utf8(report.stdout.bytes_retained)
+        .unwrap()
+        .trim()
+        .to_owned()
+}
+#[cfg_attr(windows, test)]
+fn native_windows_build_directory_tracks_prepared_pin_and_explicit_override() {
+    let directory = tempfile::tempdir().unwrap();
+    let llama = directory.path().join("llama-é-模型.cpp");
+    fs::create_dir(&llama).unwrap();
+    let build = directory.path().join("build-é-模型");
+    let body = format!(
+        "$ErrorActionPreference='Stop'; [Console]::Error.WriteLine('windows-fixture build-case=no-stamp'); $llamaDir={}; $llamaBuildRoot={}; [Console]::Error.WriteLine('windows-fixture build-definition-begin'); {}; [Console]::Error.WriteLine('windows-fixture build-resolve-begin'); Resolve-StageBuildDir 'cuda'",
+        quote(llama.to_str().unwrap()),
+        quote(build.to_str().unwrap()),
+        function(&script(), "Resolve-StageBuildDir")
+    );
+    assert_eq!(
+        PathBuf::from(accepted(&body, directory.path())),
+        build.join("build-stage-abi-cuda")
+    );
+    for (pin, suffix) in [
+        ("0123456789abcdef0123456789abcdef01234567", "0123456789ab"),
+        ("fedcba9876543210fedcba9876543210fedcba98", "fedcba987654"),
+    ] {
+        fs::write(llama.join(".mesh-llm-patched-sha"), format!("{pin}\n")).unwrap();
+        assert_eq!(
+            PathBuf::from(accepted(
+                &body.replace("build-case=no-stamp", &format!("build-case=pin-{suffix}")),
+                directory.path()
+            )),
+            build.join(format!("build-stage-abi-cuda-{suffix}"))
+        );
+    }
+    assert_eq!(
+        accepted(
+            &format!(
+                "$env:LLAMA_STAGE_BUILD_DIR='D:/abi'; {}",
+                body.replace("build-case=no-stamp", "build-case=explicit-override")
+            ),
+            directory.path()
+        ),
+        "D:/abi"
+    );
+}
+#[cfg_attr(windows, test)]
+fn native_windows_bash_paths_preserve_repo_case_and_distinguish_git_bash_from_wsl() {
+    let directory = tempfile::tempdir().unwrap();
+    let prefix = format!(
+        "$ErrorActionPreference='Stop'; $repoRoot='D:\\work\\mesh-llm'; {};",
+        function(&script(), "ConvertTo-BashRepoPath")
+    );
+    for (path, switch, expected) in [
+        (r"D:\work\mesh-llm\.deps\llama.cpp", "", ".deps/llama.cpp"),
+        (r"d:\WORK\mesh-llm\.deps\other", "", ".deps/other"),
+        (r"E:\cache\llama.cpp", "", "E:/cache/llama.cpp"),
+        (r"E:\cache\llama.cpp", "-Wsl", "/mnt/e/cache/llama.cpp"),
+        (
+            r"D:\work\mesh-llm\.deps\llama.cpp",
+            "-Wsl",
+            ".deps/llama.cpp",
+        ),
+    ] {
+        assert_eq!(
+            accepted(
+                &format!("{prefix} ConvertTo-BashRepoPath {} {switch}", quote(path)),
+                directory.path()
+            ),
+            expected
+        );
+    }
+    // Preserve the original Windows case-folding test with trailing repo separators.
+    assert_eq!(
+        accepted(
+            &format!(
+                "{prefix} $repoRoot={}; ConvertTo-BashRepoPath {}",
+                quote(r"D:\work\mesh-llm\"),
+                quote(r"d:\WORK\mesh-llm\.deps\other")
+            ),
+            directory.path()
+        ),
+        ".deps/other"
+    );
+    let rejected = execute(
+        &format!("{prefix} ConvertTo-BashRepoPath '\\\\server\\share\\llama.cpp'"),
+        directory.path(),
+    );
+    assert!(!rejected.success());
+    assert!(
+        String::from_utf8_lossy(&rejected.stderr.bytes_retained)
+            .contains("inside the repository or on a drive-letter path")
+    );
+}
+#[cfg_attr(windows, test)]
+fn native_windows_relative_llama_override_is_bound_to_repo_not_process_directory() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = script();
+    let assignment = source
+        .lines()
+        .find(|line| line.starts_with("$llamaDir = "))
+        .expect("llama path assignment");
+    for (value, expected) in [
+        (r".deps\other", r"D:\work\mesh-llm\.deps\other"),
+        ("custom/llama.cpp", r"D:\work\mesh-llm\custom\llama.cpp"),
+        (r"E:\cache\llama.cpp", r"E:\cache\llama.cpp"),
+    ] {
+        let body = format!(
+            "$ErrorActionPreference='Stop'; $repoRoot='D:\\work\\mesh-llm'; $env:MESH_LLM_LLAMA_DIR={}; {assignment}; $llamaDir",
+            quote(value)
+        );
+        assert_eq!(accepted(&body, directory.path()), expected);
+    }
+}
