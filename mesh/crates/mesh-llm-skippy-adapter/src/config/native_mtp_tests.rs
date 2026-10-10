@@ -366,6 +366,82 @@ fn speculative_strategy_auto_uses_package_native_mtp_default() {
     assert_eq!(openai.native_mtp_min_tokens, 0);
 }
 
+/// A single NextN block declared to chain three drafts with an adaptive window.
+fn chained_native_mtp_generation(layer_indices: Vec<u32>) -> PackageGenerationInfo {
+    let mut generation = native_mtp_generation();
+    let speculative = generation.speculative_decoding.as_mut().unwrap();
+    let proposer = speculative.proposers.get_mut("mtp").unwrap();
+    proposer.prediction_depth = Some(3);
+    proposer.layer_indices = layer_indices;
+    speculative.strategies.get_mut("mtp").unwrap().window_policy = Some(PackageWindowPolicyInfo {
+        default: "adaptive".to_string(),
+        initial_window: 2,
+        min_window: 1,
+        max_window: 3,
+        pipeline_depth: None,
+    });
+    generation
+}
+
+fn resolve_with_generation(
+    config: &str,
+    generation: &PackageGenerationInfo,
+) -> anyhow::Result<ResolvedSkippyConfig> {
+    let mesh_config = parse_config(config);
+    let model_file = temp_model_file();
+    resolve_skippy_config(SkippyConfigResolveRequest {
+        mesh_config: &mesh_config,
+        model_id: "meshllm/Qwen3-Coder-30B-A3B-MTP-GGUF",
+        model_path: model_file.path(),
+        model_bytes: 4 * 1024 * 1024 * 1024,
+        allocatable_memory_bytes: None,
+        request_defaults: None,
+        package_generation: Some(generation),
+        compact_meta: None,
+    })
+}
+
+#[test]
+fn package_native_mtp_depth_sets_the_default_draft_depth() {
+    let generation = chained_native_mtp_generation(vec![48]);
+    let resolved =
+        resolve_with_generation("", &generation).expect("chained native MTP should resolve");
+
+    assert!(resolved.speculative.native_mtp_enabled);
+    assert_eq!(resolved.speculative.draft_max_tokens, 3);
+    assert_eq!(resolved.speculative.decode.verify_window.max_tokens, 3);
+    let openai = resolved
+        .to_embedded_openai_args(4096, true)
+        .expect("openai args should build");
+    assert_eq!(openai.native_mtp_max_tokens, 3);
+}
+
+#[test]
+fn explicit_draft_max_tokens_overrides_the_package_depth() {
+    let generation = chained_native_mtp_generation(vec![48]);
+    let resolved = resolve_with_generation(
+        r#"
+[defaults.speculative]
+draft_max_tokens = 2
+"#,
+        &generation,
+    )
+    .expect("chained native MTP should resolve");
+
+    let openai = resolved
+        .to_embedded_openai_args(4096, true)
+        .expect("openai args should build");
+    assert_eq!(openai.native_mtp_max_tokens, 2);
+}
+
+#[test]
+fn multi_block_native_mtp_cannot_draft_past_its_block_count() {
+    let generation = chained_native_mtp_generation(vec![47, 48]);
+    let resolved = resolve_with_generation("", &generation);
+
+    assert!(resolved.is_err() || !resolved.unwrap().speculative.native_mtp_enabled);
+}
+
 #[test]
 fn package_composite_strategy_resolves_native_mtp_with_cache_extension() {
     let mesh_config = parse_config(

@@ -48,6 +48,10 @@ pub(crate) enum Command {
         /// groups are split into deterministic part artifacts. Defaults to 8 GiB.
         #[arg(long)]
         max_artifact_bytes: Option<u64>,
+        /// Draft tokens to recommend per native MTP proposal when the source
+        /// carries one NextN block that chains (1..=8). Defaults to 1.
+        #[arg(long)]
+        native_mtp_draft_depth: Option<u32>,
     },
     /// Verify byte-preserving v2 packages against independent local source files.
     VerifyPackageV2 {
