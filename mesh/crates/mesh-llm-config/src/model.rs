@@ -1048,6 +1048,10 @@ pub struct RequestDefaultsConfig {
     pub chat_template: Option<String>,
     #[serde(default)]
     pub chat_template_file: Option<String>,
+    /// Lets requests supply their own chat template on this node. Off by
+    /// default; see the configuration reference before enabling it.
+    #[serde(default)]
+    pub allow_request_chat_template: Option<bool>,
     #[serde(default)]
     pub jinja: Option<bool>,
     #[serde(default)]

@@ -27,6 +27,7 @@ pub mod runahead_search;
 mod sampling_cache_key;
 mod speculation_gate;
 mod speculative;
+mod stop_sequences;
 mod system_one;
 mod token_counting;
 mod tool_emulation;

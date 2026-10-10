@@ -924,6 +924,10 @@ fn request_defaults_settings(prefix: &str) -> Vec<ConfigSettingSchema> {
             &format!("{prefix}.chat_template_file"),
             ConfigValueSchema::Path,
         ),
+        basic_setting(
+            &format!("{prefix}.allow_request_chat_template"),
+            ConfigValueSchema::Boolean,
+        ),
         basic_setting(&format!("{prefix}.jinja"), ConfigValueSchema::Boolean),
         basic_setting(
             &format!("{prefix}.chat_template_kwargs"),

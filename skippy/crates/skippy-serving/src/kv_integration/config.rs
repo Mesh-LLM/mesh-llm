@@ -18,9 +18,11 @@ use super::{
     EXACT_STATE_RECORD_CAPACITY, EXACT_STATE_RECORD_QUEUE_BYTES, ExactStateByteLimits,
     KvLifecycleEvent, KvLifecycleObserver, KvStageIntegration, PendingExactStateRecord,
     RadixExactEntry, ResidentSequencePool, StageKvMode, StagePrefixCachePayload,
-    model_capability::{ModelKvCapability, loaded_model_kv_capability},
+    model_capability::{ModelKvCapability, graph_model_kv_capability},
     output_tokens::OutputTokenCache,
 };
+
+use super::cache_payload::effective_cache_payload;
 
 mod durable_spill;
 mod exact_state_limits;
@@ -50,11 +52,8 @@ const EXACT_STATE_MAX_BYTES_ENV: &str = "SKIPPY_KV_CACHE_EXACT_MAX_BYTES";
 
 impl KvStageIntegration {
     /// Opens KV integration for an ALREADY-LOADED model runtime.
-    /// `model_state_kind` is the authoritative loaded-runtime state kind
-    /// (Dense/Recurrent/Hybrid/Diffusion) -- never a file-path or
-    /// tensor-name heuristic, since llama.cpp has already resolved the
-    /// actual architecture by the time a model is loaded (see
-    /// `model_capability::loaded_model_kv_capability`).
+    /// The admitted graph in `config` selects the representation; loaded
+    /// native exporter capability only gates whether it can be serialized.
     ///
     /// `observer` accepts the lifecycle observer at CONSTRUCTION time --
     /// before any real initialization work happens -- so
@@ -67,13 +66,13 @@ impl KvStageIntegration {
     pub fn from_loaded_model(
         config: &StageConfig,
         model_state_kind: Option<ModelStateKind>,
-        has_indexer_memory: Option<bool>,
+        memory_cache: Option<skippy_runtime::MemoryCacheCapabilities>,
         observer: Option<Arc<dyn KvLifecycleObserver>>,
     ) -> Result<Option<Self>> {
         Self::from_loaded_model_with_l3(
             config,
             model_state_kind,
-            has_indexer_memory,
+            memory_cache,
             || l3_manager_from_env(config),
             observer,
         )
@@ -85,14 +84,14 @@ impl KvStageIntegration {
     pub fn from_loaded_model_with_l3_manager(
         config: &StageConfig,
         model_state_kind: Option<ModelStateKind>,
-        has_indexer_memory: Option<bool>,
+        memory_cache: Option<skippy_runtime::MemoryCacheCapabilities>,
         manager: Option<L3CacheManager>,
         observer: Option<Arc<dyn KvLifecycleObserver>>,
     ) -> Result<Option<Self>> {
         Self::from_loaded_model_with_l3(
             config,
             model_state_kind,
-            has_indexer_memory,
+            memory_cache,
             || Ok(manager),
             observer,
         )
@@ -101,7 +100,7 @@ impl KvStageIntegration {
     fn from_loaded_model_with_l3(
         config: &StageConfig,
         model_state_kind: Option<ModelStateKind>,
-        has_indexer_memory: Option<bool>,
+        memory_cache: Option<skippy_runtime::MemoryCacheCapabilities>,
         manager: impl FnOnce() -> Result<Option<L3CacheManager>>,
         observer: Option<Arc<dyn KvLifecycleObserver>>,
     ) -> Result<Option<Self>> {
@@ -116,13 +115,64 @@ impl KvStageIntegration {
         if mode == StageKvMode::Disabled {
             return Ok(None);
         }
-        let model_capability = loaded_model_kv_capability(model_state_kind);
-        if let ModelKvCapability::Unknown(reason) = &model_capability {
-            emit_cache_disabled_warning(config, reason);
+        if model_state_kind == Some(ModelStateKind::Diffusion) {
+            emit_cache_disabled_warning(
+                config,
+                "loaded diffusion model has no causal KV state to cache",
+            );
             return Ok(None);
         }
-        let payload =
-            effective_cache_payload(cache_config.payload, &model_capability, has_indexer_memory);
+        let model_capability = graph_model_kv_capability(&config.kv_graph_state);
+        let graph_loaded_state_mismatch = match (&model_capability, model_state_kind) {
+            (ModelKvCapability::KnownDense, Some(kind)) => kind != ModelStateKind::Dense,
+            (ModelKvCapability::KnownRecurrent, Some(kind)) => {
+                !matches!(kind, ModelStateKind::Recurrent | ModelStateKind::Hybrid)
+            }
+            _ => false,
+        };
+        let payload = if graph_loaded_state_mismatch {
+            StagePrefixCachePayload::FullState
+        } else {
+            effective_cache_payload(cache_config.payload, &model_capability, memory_cache)
+        };
+        let payload_fallback = payload == StagePrefixCachePayload::FullState
+            && cache_config.payload != StageKvCachePayload::FullState;
+        let graph_payload_mismatch = matches!(
+            (cache_config.payload, &model_capability),
+            (
+                StageKvCachePayload::ResidentKv,
+                ModelKvCapability::KnownRecurrent
+            ) | (
+                StageKvCachePayload::KvRecurrent,
+                ModelKvCapability::KnownDense
+            )
+        );
+        let payload_selection_reason = if graph_loaded_state_mismatch {
+            "graph_loaded_state_mismatch"
+        } else if cache_config.payload == StageKvCachePayload::FullState {
+            "explicit_full_state"
+        } else if matches!(model_capability, ModelKvCapability::Unknown(_)) {
+            "graph_requires_full_state"
+        } else if graph_payload_mismatch {
+            "explicit_payload_conflicts_with_graph"
+        } else if payload_fallback {
+            "loaded_exporter_unsupported"
+        } else if cache_config.payload == StageKvCachePayload::Auto {
+            "admitted_graph_and_exporter"
+        } else {
+            "explicit_partial_supported"
+        };
+        if payload_fallback {
+            let _ = skippy_events::diagnostics::emit(
+                skippy_events::diagnostics::ServingDiagnostic::Warning {
+                    message: "Skippy prefix cache selected full-state snapshots".into(),
+                    context: Some(format!(
+                        "stage_id={} requested={:?} reason={} counter=skippy.kv.payload_fallbacks",
+                        config.stage_id, cache_config.payload, payload_selection_reason
+                    )),
+                },
+            );
+        }
         if payload == StagePrefixCachePayload::Disabled {
             return Ok(None);
         }
@@ -158,11 +208,16 @@ impl KvStageIntegration {
             );
         }
         let durable_payload = l3_manager.is_some().then(|| {
-            if payload == StagePrefixCachePayload::ResidentKv && dense_without_recurrent {
+            if payload == StagePrefixCachePayload::ResidentKv
+                && dense_without_recurrent
+                && memory_cache.is_some_and(|caps| caps.kv_recurrent)
+            {
                 // Resident KV stays the in-process fast path. Dense families
                 // export KV pages with an empty recurrent snapshot for L3;
                 // the known-dense capability makes that empty component valid.
                 StagePrefixCachePayload::KvRecurrent
+            } else if payload == StagePrefixCachePayload::ResidentKv {
+                StagePrefixCachePayload::FullState
             } else {
                 payload
             }
@@ -184,7 +239,10 @@ impl KvStageIntegration {
             });
         // FullState is architecture-neutral: the native runtime serializes the
         // complete session state for both dense and recurrent model families.
-        if matches!(model_capability, ModelKvCapability::KnownRecurrent) {
+        if matches!(
+            model_state_kind,
+            Some(ModelStateKind::Recurrent | ModelStateKind::Hybrid)
+        ) {
             cache_config.max_entries = cache_config.max_entries.min(RECURRENT_CACHE_MAX_ENTRIES);
         }
         let mut checkpoint_policy = SparseCheckpointPolicy::from_cache(&cache_config);
@@ -348,6 +406,12 @@ impl KvStageIntegration {
         Ok(Some(Self {
             mode,
             payload,
+            payload_selection_reason,
+            payload_fallbacks: u64::from(payload_fallback),
+            graph_loaded_state_mismatches: u64::from(graph_loaded_state_mismatch),
+            admitted_graph_state: config.kv_graph_state.clone(),
+            loaded_state_kind: model_state_kind,
+            loaded_memory_cache: memory_cache,
             durable_payload,
             correctness_mode: false,
             trust_local_writes: true,
@@ -364,6 +428,7 @@ impl KvStageIntegration {
             exact_max_entries,
             exact_byte_limits,
             exact_state_record_worker,
+            snapshot_export_failures: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             exact_state_records_queued,
             exact_state_records_dropped,
             exact_state_records_pending,
@@ -399,7 +464,22 @@ impl KvStageIntegration {
         config: &StageConfig,
         model_state_kind: ModelStateKind,
     ) -> Result<Option<Self>> {
-        Self::from_loaded_model(config, Some(model_state_kind), None, None)
+        let mut config = config.clone();
+        config.kv_graph_state = if model_state_kind == ModelStateKind::Dense {
+            "dense"
+        } else {
+            "recurrent"
+        }
+        .into();
+        Self::from_loaded_model(
+            &config,
+            Some(model_state_kind),
+            Some(skippy_runtime::MemoryCacheCapabilities {
+                resident: model_state_kind == ModelStateKind::Dense,
+                kv_recurrent: true,
+            }),
+            None,
+        )
     }
 }
 
@@ -890,34 +970,6 @@ fn evict_exact_entries_over(
         )?;
     }
     Ok(())
-}
-
-fn effective_cache_payload(
-    requested: StageKvCachePayload,
-    capability: &ModelKvCapability,
-    has_indexer_memory: Option<bool>,
-) -> StagePrefixCachePayload {
-    let payload = match requested {
-        StageKvCachePayload::ResidentKv => StagePrefixCachePayload::ResidentKv,
-        StageKvCachePayload::KvRecurrent => StagePrefixCachePayload::KvRecurrent,
-        StageKvCachePayload::FullState => StagePrefixCachePayload::FullState,
-        StageKvCachePayload::Auto => match capability {
-            ModelKvCapability::KnownDense => StagePrefixCachePayload::ResidentKv,
-            ModelKvCapability::KnownRecurrent => StagePrefixCachePayload::KvRecurrent,
-            ModelKvCapability::Unknown(_) => StagePrefixCachePayload::Disabled,
-        },
-    };
-    // A model with an indexer memory tier (upstream `needs_mem_idx`, e.g.
-    // qwen4exp) serializes that tier only in full-state snapshots. KV-page and
-    // recurrent snapshots restore a conversation whose attention state no
-    // longer matches the indexer's view, silently corrupting the session
-    // (ref #1901), so resolve those payload families to FullState. Resident KV
-    // stays explicit so the recurrent mismatch check can still reject it.
-    if has_indexer_memory == Some(true) && payload == StagePrefixCachePayload::KvRecurrent {
-        StagePrefixCachePayload::FullState
-    } else {
-        payload
-    }
 }
 
 /// Either kill-switch variable resolving to `off` disables the cache, so an
@@ -1639,187 +1691,152 @@ mod tests {
     }
 
     #[test]
-    fn explicit_cache_payload_is_checked_against_loaded_model_capability() {
-        assert_eq!(
-            effective_cache_payload(
-                StageKvCachePayload::ResidentKv,
-                &ModelKvCapability::KnownDense,
-                None,
-            ),
-            StagePrefixCachePayload::ResidentKv
-        );
-        assert_eq!(
-            effective_cache_payload(
-                StageKvCachePayload::KvRecurrent,
-                &ModelKvCapability::KnownRecurrent,
-                None,
-            ),
-            StagePrefixCachePayload::KvRecurrent
-        );
-        assert_eq!(
-            effective_cache_payload(
-                StageKvCachePayload::FullState,
-                &ModelKvCapability::KnownRecurrent,
-                None,
-            ),
-            StagePrefixCachePayload::FullState
-        );
-    }
-
-    #[test]
-    fn indexer_memory_models_downgrade_recurrent_snapshots_to_full_state() {
-        // The qwen4exp QSA indexer cache is not part of recurrent snapshots, so
-        // a restored cache hit silently loses the conversation (ref #1901).
-        assert_eq!(
-            effective_cache_payload(
-                StageKvCachePayload::Auto,
-                &ModelKvCapability::KnownRecurrent,
-                Some(true),
-            ),
-            StagePrefixCachePayload::FullState
-        );
-        assert_eq!(
-            effective_cache_payload(
-                StageKvCachePayload::KvRecurrent,
-                &ModelKvCapability::KnownRecurrent,
-                Some(true),
-            ),
-            StagePrefixCachePayload::FullState
-        );
-        // Explicit full-state remains untouched.
-        assert_eq!(
-            effective_cache_payload(
-                StageKvCachePayload::FullState,
-                &ModelKvCapability::KnownRecurrent,
-                Some(true),
-            ),
-            StagePrefixCachePayload::FullState
-        );
-        // Explicit resident KV is not silently downgraded so the downstream
-        // recurrent mismatch check can still reject the combination.
-        assert_eq!(
-            effective_cache_payload(
-                StageKvCachePayload::ResidentKv,
-                &ModelKvCapability::KnownRecurrent,
-                Some(true),
-            ),
-            StagePrefixCachePayload::ResidentKv
-        );
-        // Dense models keep their Auto choice; the downgrade targets the
-        // recurrent snapshot family only.
-        assert_eq!(
-            effective_cache_payload(
-                StageKvCachePayload::Auto,
-                &ModelKvCapability::KnownDense,
-                Some(true),
-            ),
-            StagePrefixCachePayload::ResidentKv
-        );
-        // Without the indexer flag (other architectures, or an older runtime
-        // without the metadata accessor) the recurrent family is selected as
-        // before.
-        assert_eq!(
-            effective_cache_payload(
-                StageKvCachePayload::Auto,
-                &ModelKvCapability::KnownRecurrent,
-                None,
-            ),
-            StagePrefixCachePayload::KvRecurrent
-        );
-        assert_eq!(
-            effective_cache_payload(
-                StageKvCachePayload::Auto,
-                &ModelKvCapability::KnownRecurrent,
-                Some(false),
-            ),
-            StagePrefixCachePayload::KvRecurrent
-        );
-    }
-
-    #[test]
-    fn loaded_indexer_memory_model_serves_exact_state_snapshots() {
-        let config = enabled_auto_config("future/qwen4exp-family-model");
-
+    fn unknown_hybrid_memory_constructs_full_state_cache() {
+        let mut config = enabled_auto_config("unknown/hybrid");
+        config.kv_graph_state = "recurrent".into();
         let kv = KvStageIntegration::from_loaded_model(
             &config,
             Some(ModelStateKind::Hybrid),
-            Some(true),
+            None,
             None,
         )
         .unwrap()
-        .expect("indexer hybrid loaded model should keep the cache enabled");
-
-        // A hybrid+indexer model must not receive the lossy recurrent payload:
-        // its indexer tier is only serialized by full-state snapshots, which
-        // restore with the indexer intact.
+        .unwrap();
         assert_eq!(kv.payload, StagePrefixCachePayload::FullState);
+        assert_eq!(kv.payload_fallbacks, 1);
+        assert_eq!(kv.payload_selection_reason, "loaded_exporter_unsupported");
+        let attrs = kv.attrs();
+        assert!(attrs.contains(&("skippy.kv.payload_fallbacks", serde_json::json!(1))));
+        assert!(attrs.contains(&(
+            "skippy.kv.payload_selection_reason",
+            serde_json::json!("loaded_exporter_unsupported")
+        )));
+        assert!(attrs.contains(&("skippy.kv.loaded_state_kind", serde_json::json!("Hybrid"))));
+        assert!(attrs.contains(&(
+            "skippy.kv.loaded_memory_cache_resident",
+            serde_json::Value::Null
+        )));
     }
 
     #[test]
-    fn loaded_hybrid_state_overrides_a_misleading_dense_model_name() {
-        let config = enabled_auto_config("nvidia/Nemotron-3-Super-120B-A12B-NVFP4-MTPv2");
+    fn graph_recurrent_state_overrides_a_misleading_dense_model_name() {
+        let mut config = enabled_auto_config("nvidia/Nemotron-3-Super-120B-A12B-NVFP4-MTPv2");
+        config.kv_graph_state = "recurrent".into();
 
         let kv = KvStageIntegration::from_loaded_model(
             &config,
             Some(ModelStateKind::Hybrid),
-            None,
+            Some(skippy_runtime::MemoryCacheCapabilities {
+                resident: false,
+                kv_recurrent: true,
+            }),
             None,
         )
         .unwrap()
         .expect("hybrid loaded model should enable the recurrent cache");
 
         assert_eq!(kv.payload, StagePrefixCachePayload::KvRecurrent);
+        assert_eq!(kv.graph_loaded_state_mismatches, 0);
+    }
+
+    #[test]
+    fn admitted_graph_disagreement_forces_full_state_and_reports_mismatch() {
+        for (graph_state, loaded) in [
+            ("dense", ModelStateKind::Hybrid),
+            ("dense", ModelStateKind::Recurrent),
+            ("recurrent", ModelStateKind::Dense),
+        ] {
+            let mut config = enabled_auto_config("future/model");
+            config.kv_graph_state = graph_state.into();
+            let kv = KvStageIntegration::from_loaded_model(
+                &config,
+                Some(loaded),
+                Some(skippy_runtime::MemoryCacheCapabilities {
+                    resident: true,
+                    kv_recurrent: true,
+                }),
+                None,
+            )
+            .unwrap()
+            .unwrap();
+            assert_eq!(kv.payload, StagePrefixCachePayload::FullState);
+            assert_eq!(kv.payload_fallbacks, 1);
+            assert_eq!(kv.graph_loaded_state_mismatches, 1);
+            assert_eq!(kv.payload_selection_reason, "graph_loaded_state_mismatch");
+            assert!(kv.attrs().contains(&(
+                "skippy.kv.graph_loaded_state_mismatches",
+                serde_json::json!(1)
+            )));
+            assert!(kv.attrs().contains(&(
+                "skippy.kv.loaded_state_kind",
+                serde_json::json!(format!("{loaded:?}"))
+            )));
+        }
     }
 
     #[test]
     fn loaded_dense_state_selects_resident_kv_independent_of_model_name() {
         let config = enabled_auto_config("future/unknown-architecture-name");
 
-        let kv =
-            KvStageIntegration::from_loaded_model(&config, Some(ModelStateKind::Dense), None, None)
-                .unwrap()
-                .expect("dense loaded model should enable resident KV");
+        let kv = KvStageIntegration::from_loaded_model(
+            &config,
+            Some(ModelStateKind::Dense),
+            Some(skippy_runtime::MemoryCacheCapabilities {
+                resident: true,
+                kv_recurrent: true,
+            }),
+            None,
+        )
+        .unwrap()
+        .expect("dense loaded model should enable resident KV");
 
         assert_eq!(kv.payload, StagePrefixCachePayload::ResidentKv);
     }
 
     #[test]
-    fn missing_loaded_descriptor_disables_cache() {
+    fn missing_exporter_capability_uses_full_state() {
         let config = enabled_auto_config("Qwen/Qwen3-8B");
-        assert!(
-            KvStageIntegration::from_loaded_model(&config, None, None, None)
-                .unwrap()
-                .is_none()
-        );
-    }
-
-    #[test]
-    fn explicit_resident_kv_is_rejected_for_loaded_hybrid_model() {
-        let mut config = enabled_auto_config("future/model");
-        config.kv_cache.as_mut().unwrap().payload = StageKvCachePayload::ResidentKv;
-
-        assert!(
-            KvStageIntegration::from_loaded_model(
-                &config,
-                Some(ModelStateKind::Hybrid),
-                None,
-                None
-            )
+        let kv = KvStageIntegration::from_loaded_model(&config, None, None, None)
             .unwrap()
-            .is_none()
-        );
+            .unwrap();
+        assert_eq!(kv.payload, StagePrefixCachePayload::FullState);
     }
 
     #[test]
-    fn explicit_recurrent_kv_is_rejected_for_loaded_dense_model() {
+    fn explicit_resident_kv_on_recurrent_graph_falls_back_visibly() {
+        let mut config = enabled_auto_config("future/model");
+        config.kv_graph_state = "recurrent".into();
+        config.kv_cache.as_mut().unwrap().payload = StageKvCachePayload::ResidentKv;
+        let kv = KvStageIntegration::from_loaded_model(
+            &config,
+            Some(ModelStateKind::Hybrid),
+            None,
+            None,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(kv.payload, StagePrefixCachePayload::FullState);
+        assert_eq!(kv.payload_fallbacks, 1);
+    }
+
+    #[test]
+    fn explicit_recurrent_kv_on_dense_graph_falls_back_visibly() {
         let mut config = enabled_auto_config("future/model");
         config.kv_cache.as_mut().unwrap().payload = StageKvCachePayload::KvRecurrent;
 
-        assert!(
-            KvStageIntegration::from_loaded_model(&config, Some(ModelStateKind::Dense), None, None)
-                .unwrap()
-                .is_none()
-        );
+        let kv = KvStageIntegration::from_loaded_model(
+            &config,
+            Some(ModelStateKind::Dense),
+            Some(skippy_runtime::MemoryCacheCapabilities {
+                resident: true,
+                kv_recurrent: true,
+            }),
+            None,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(kv.payload, StagePrefixCachePayload::FullState);
+        assert_eq!(kv.payload_fallbacks, 1);
     }
 
     #[test]
@@ -1837,19 +1854,34 @@ mod tests {
 
     #[test]
     fn recurrent_cache_cardinality_is_capped_after_load() {
-        let mut config = enabled_auto_config("future/model");
-        config.ctx_size = 65_536;
-        let kv = KvStageIntegration::from_loaded_model(
-            &config,
-            Some(ModelStateKind::Recurrent),
-            None,
-            None,
-        )
-        .unwrap()
-        .expect("recurrent loaded model should enable exact-state caching");
+        for loaded in [ModelStateKind::Recurrent, ModelStateKind::Hybrid] {
+            for graph_state in ["recurrent", "", "full-state"] {
+                let mut config = enabled_auto_config("future/model");
+                config.kv_graph_state = graph_state.into();
+                config.ctx_size = 65_536;
+                let kv = KvStageIntegration::from_loaded_model(
+                    &config,
+                    Some(loaded),
+                    Some(skippy_runtime::MemoryCacheCapabilities {
+                        resident: false,
+                        kv_recurrent: true,
+                    }),
+                    None,
+                )
+                .unwrap()
+                .expect("loaded recurrent state should enable exact-state caching");
 
-        assert_eq!(kv.payload, StagePrefixCachePayload::KvRecurrent);
-        assert_eq!(kv.exact_max_entries, RECURRENT_CACHE_MAX_ENTRIES);
+                assert_eq!(
+                    kv.payload,
+                    if graph_state == "recurrent" {
+                        StagePrefixCachePayload::KvRecurrent
+                    } else {
+                        StagePrefixCachePayload::FullState
+                    }
+                );
+                assert_eq!(kv.exact_max_entries, RECURRENT_CACHE_MAX_ENTRIES);
+            }
+        }
     }
 
     #[test]
@@ -1872,7 +1904,10 @@ mod tests {
         let first = KvStageIntegration::from_loaded_model_with_l3_manager(
             &first,
             Some(ModelStateKind::Dense),
-            None,
+            Some(skippy_runtime::MemoryCacheCapabilities {
+                resident: true,
+                kv_recurrent: true,
+            }),
             Some(manager.clone()),
             None,
         )
@@ -1881,7 +1916,10 @@ mod tests {
         let second = KvStageIntegration::from_loaded_model_with_l3_manager(
             &second,
             Some(ModelStateKind::Dense),
-            None,
+            Some(skippy_runtime::MemoryCacheCapabilities {
+                resident: true,
+                kv_recurrent: true,
+            }),
             Some(manager),
             None,
         )
@@ -1920,7 +1958,10 @@ mod tests {
         let kv = KvStageIntegration::from_loaded_model_with_l3_manager(
             &config,
             Some(ModelStateKind::Dense),
-            None,
+            Some(skippy_runtime::MemoryCacheCapabilities {
+                resident: true,
+                kv_recurrent: true,
+            }),
             Some(manager),
             None,
         )
@@ -1958,7 +1999,10 @@ mod tests {
         let kv = KvStageIntegration::from_loaded_model_with_l3_manager(
             &config,
             Some(ModelStateKind::Dense),
-            None,
+            Some(skippy_runtime::MemoryCacheCapabilities {
+                resident: true,
+                kv_recurrent: true,
+            }),
             Some(manager),
             None,
         )
@@ -1987,7 +2031,10 @@ mod tests {
         let kv = KvStageIntegration::from_loaded_model_with_l3_manager(
             &config,
             Some(ModelStateKind::Dense),
-            None,
+            Some(skippy_runtime::MemoryCacheCapabilities {
+                resident: true,
+                kv_recurrent: true,
+            }),
             None,
             None,
         )
@@ -2025,6 +2072,7 @@ mod tests {
             run_id: "test-run".to_string(),
             topology_id: "test-topology".to_string(),
             model_id: model_id.to_string(),
+            kv_graph_state: "dense".into(),
             package_ref: None,
             manifest_sha256: None,
             source_model_path: None,

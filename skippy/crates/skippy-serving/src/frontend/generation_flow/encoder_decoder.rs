@@ -1,3 +1,4 @@
+use crate::runtime_state::panic_recovery::lock_runtime;
 use std::time::Instant;
 
 use skippy_inference_api::{ChatCompletionRequest, InferenceError, InferenceResult};
@@ -39,10 +40,7 @@ impl StageOpenAiBackend {
         let (result, mut cleanup) = LocalSessionCleanupGuard::run(
             || self.cleanup_local_generation_session(&session_id, ids),
             || {
-                let mut runtime = self
-                    .runtime
-                    .lock()
-                    .map_err(|_| InferenceError::backend("runtime lock poisoned"))?;
+                let mut runtime = lock_runtime(&self.runtime);
                 let prompt_started = Instant::now();
                 let decoder_start = runtime
                     .encode_prompt(&session_id, prompt_token_ids)
