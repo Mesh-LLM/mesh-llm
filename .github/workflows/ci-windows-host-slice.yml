@@ -40,6 +40,16 @@ on:
         default: false
         type: boolean
 
+      plan_digest:
+        description: Protected CI plan digest the standalone receipts must match.
+        required: false
+        default: ''
+        type: string
+      require_skippy_receipts:
+        description: Require standalone Skippy qualification receipts for this host.
+        required: false
+        default: false
+        type: boolean
 permissions:
   contents: read
   packages: read
@@ -147,6 +157,32 @@ jobs:
           if ((-not (Test-Path -LiteralPath $uiPath)) -or ((Get-Item -LiteralPath $uiPath).Length -eq 0)) {
             throw "UI distribution is missing or empty"
           }
+      - name: Download standalone Skippy qualification receipts
+        if: ${{ inputs.require_skippy_receipts }}
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: ci-skippy-receipt-windows-*
+          path: skippy-receipts
+          merge-multiple: true
+      - name: Verify and record standalone Skippy receipts
+        if: ${{ inputs.require_skippy_receipts }}
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          PLAN_DIGEST: ${{ inputs.plan_digest }}
+        run: |
+          python scripts/ci-host-qualification-receipts.py \
+            --receipts skippy-receipts --source-sha "$SOURCE_SHA" \
+            --plan-digest "$PLAN_DIGEST" --platform windows \
+            --output skippy-qualification-receipts.json
+      - name: Upload standalone Skippy receipt record
+        if: ${{ inputs.require_skippy_receipts }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: ci-host-skippy-receipts-windows-${{ matrix.host.architecture }}
+          path: skippy-qualification-receipts.json
+          if-no-files-found: error
+          retention-days: 7
       - name: Prepare immutable Windows host
         uses: ./.github/actions/prepare-windows-host-input
         with:
