@@ -20,7 +20,7 @@ use crate::runtime_data::{
 };
 use anyhow::{Context, Result};
 use mesh_llm_events::{OutputEvent, emit_event};
-use skippy_inference_api::OpenAiHookPolicy;
+use skippy_inference_api::InferenceHookPolicy;
 use skippy_protocol::{FlashAttentionType, LoadMode};
 use skippy_serving::serving_hooks::SharedModelServingHooksFactory;
 use std::net::SocketAddr;
@@ -293,7 +293,7 @@ pub(super) struct LocalOpenAiModelStartSpec<'a> {
     pub(super) openai_guardrail_policy: OpenAiGuardrailPolicyHandle,
     pub(super) skippy_telemetry: skippy::SkippyTelemetryOptions,
     pub(super) survey_telemetry: survey::SurveyTelemetry,
-    pub(super) hook_policy: Option<Arc<dyn OpenAiHookPolicy>>,
+    pub(super) hook_policy: Option<Arc<dyn InferenceHookPolicy>>,
     pub(super) serving_hooks_factory: Option<SharedModelServingHooksFactory>,
     pub(super) http_bind_addr: SocketAddr,
 }

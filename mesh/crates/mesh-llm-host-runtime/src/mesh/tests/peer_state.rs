@@ -1671,3 +1671,436 @@ fn weights_digest_does_not_cross_the_gossip_wire() {
         "weights_digest must be None after gossip roundtrip: it must not cross the wire"
     );
 }
+
+/// A gossip frame's announcements and its sender's verified plugin keys, as a
+/// receiving node reads them.
+fn decode_gossip_payload_and_plugin_keys(
+    protocol: ControlProtocol,
+    remote: EndpointId,
+    buf: &[u8],
+) -> anyhow::Result<crate::protocol::GossipWithPluginKeys> {
+    crate::protocol::decode_gossip_frame_and_plugin_keys(protocol, remote, buf)
+        .map(|(inbound, keys)| (inbound.announcements, keys))
+}
+
+#[test]
+fn plugin_keys_ride_only_the_senders_own_entry_and_are_verified() {
+    use crate::mesh::plugin_keys::{bind, to_proto};
+    use crate::protocol::attach_own_plugin_keys;
+    use prost::Message as _;
+
+    let sender = SecretKey::from_bytes(&[0xab; 32]);
+    let other = SecretKey::from_bytes(&[0xcd; 32]);
+    let sender_id = EndpointId::from(sender.public());
+    let other_id = EndpointId::from(other.public());
+    let own = peer_state_test_announcement(EndpointAddr {
+        id: sender_id,
+        addrs: Default::default(),
+    });
+    let relayed = peer_state_test_announcement(EndpointAddr {
+        id: other_id,
+        addrs: Default::default(),
+    });
+    let key = bind(&sender, "capsules", [5; 32]);
+    let mut frame = build_gossip_frame(&[own, relayed], sender_id);
+    attach_own_plugin_keys(&mut frame, &to_proto(std::slice::from_ref(&key)));
+    assert_eq!(frame.peers[0].plugin_keys.len(), 1, "on the sender's own entry");
+    assert!(frame.peers[1].plugin_keys.is_empty(), "never on a relayed entry");
+
+    // Keys on a relayed entry are not read, even validly bound ones.
+    frame.peers[1].plugin_keys = to_proto(&[bind(&other, "capsules", [6; 32])]);
+    let (announcements, keys) = decode_gossip_payload_and_plugin_keys(
+        ControlProtocol::ProtoV1,
+        sender_id,
+        &frame.encode_to_vec(),
+    )
+    .expect("a valid frame decodes");
+    assert_eq!(announcements.len(), 2);
+    assert_eq!(keys, vec![key]);
+
+    // A key on the sender's entry that another node bound is dropped.
+    frame.peers[0].plugin_keys = to_proto(&[bind(&other, "capsules", [5; 32])]);
+    let (_, keys) = decode_gossip_payload_and_plugin_keys(
+        ControlProtocol::ProtoV1,
+        sender_id,
+        &frame.encode_to_vec(),
+    )
+    .expect("a valid frame decodes");
+    assert!(keys.is_empty(), "a binding by another node never verifies");
+}
+
+#[tokio::test]
+async fn a_peer_that_leaves_is_no_longer_listed_with_plugin_keys() {
+    use crate::mesh::plugin_keys::bind;
+
+    let node = make_test_node(super::NodeRole::Worker)
+        .await
+        .expect("test node must start");
+    let peer = SecretKey::from_bytes(&[0xab; 32]);
+    let peer_id = EndpointId::from(peer.public());
+    let key = ed25519_dalek::SigningKey::from_bytes(&[7; 32])
+        .verifying_key()
+        .to_bytes();
+    node.plugin_keys
+        .set_peer(peer_id, vec![bind(&peer, "key-demo", key)]);
+    assert_eq!(node.plugin_keys.peers().len(), 1);
+
+    node.remove_peer(peer_id, super::MeshPeerRemovalReason::CleanShutdown)
+        .await;
+    assert!(
+        node.plugin_keys.peers().is_empty(),
+        "a removed peer's keys are not kept"
+    );
+}
+
+#[tokio::test]
+async fn a_disallowed_peer_is_no_longer_listed_with_plugin_keys() {
+    use crate::mesh::plugin_keys::bind;
+
+    let node = make_test_node(super::NodeRole::Worker)
+        .await
+        .expect("test node must start");
+    let peer = SecretKey::from_bytes(&[0xab; 32]);
+    let peer_id = EndpointId::from(peer.public());
+    let key = ed25519_dalek::SigningKey::from_bytes(&[7; 32])
+        .verifying_key()
+        .to_bytes();
+    node.plugin_keys
+        .set_peer(peer_id, vec![bind(&peer, "key-demo", key)]);
+    assert_eq!(node.plugin_keys.peers().len(), 1);
+
+    node.remove_disallowed_peer(peer_id).await;
+    assert!(
+        node.plugin_keys.peers().is_empty(),
+        "a disallowed peer's keys are not kept"
+    );
+}
+
+#[tokio::test]
+async fn plugin_keys_are_listed_only_for_an_admitted_peer() {
+    use crate::mesh::plugin_keys::bind;
+    use prost::Message as _;
+
+    let node = make_test_node(super::NodeRole::Worker)
+        .await
+        .expect("test node must start");
+    let admit = |secret: u8, version: &str| {
+        let peer = SecretKey::from_bytes(&[secret; 32]);
+        let peer_id = EndpointId::from(peer.public());
+        let mut announcement = peer_state_test_announcement(EndpointAddr {
+            id: peer_id,
+            addrs: Default::default(),
+        });
+        announcement.version = Some(version.to_string());
+        let frame = build_gossip_frame(&[announcement], peer_id);
+        let decoded =
+            decode_gossip_payload(ControlProtocol::ProtoV1, peer_id, &frame.encode_to_vec())
+                .expect("a valid frame decodes");
+        (peer, peer_id, decoded)
+    };
+
+    // A peer whose gossip has not been accepted is never listed.
+    let (peer, peer_id, decoded) = admit(0xab, env!("CARGO_PKG_VERSION"));
+    let key = bind(&peer, "capsules", [5; 32]);
+    node.store_plugin_keys_if_admitted(peer_id, vec![key.clone()])
+        .await;
+    assert!(
+        node.plugin_keys.peers().is_empty(),
+        "keys of a peer that is not admitted are not kept"
+    );
+
+    // Once its gossip is accepted, it is.
+    node.apply_announced_peers(
+        peer_id,
+        &decoded,
+        None,
+        Some(NODE_PROTOCOL_GENERATION),
+        false,
+    )
+    .await
+    .expect("valid gossip is accepted");
+    node.store_plugin_keys_if_admitted(peer_id, vec![key.clone()])
+        .await;
+    assert_eq!(node.plugin_keys.peers().get(&peer_id), Some(&vec![key]));
+
+    // A peer whose gossip is applied without error but who is refused (here,
+    // below the version floor) is not listed either.
+    let (old, old_id, decoded) = admit(0xcd, "0.1.0");
+    node.apply_announced_peers(
+        old_id,
+        &decoded,
+        None,
+        Some(NODE_PROTOCOL_GENERATION),
+        false,
+    )
+    .await
+    .expect("a refused peer's gossip still applies without error");
+    node.store_plugin_keys_if_admitted(old_id, vec![bind(&old, "capsules", [6; 32])])
+        .await;
+    assert!(
+        !node.plugin_keys.peers().contains_key(&old_id),
+        "keys of a refused peer are not kept"
+    );
+}
+
+#[test]
+fn a_gossip_frame_without_plugin_keys_decodes_with_no_sender_keys() {
+    use prost::Message as _;
+
+    // A frame as a node without plugin keys writes it: field 53 is never set,
+    // so it is absent from the encoded bytes.
+    let sender = SecretKey::from_bytes(&[0xab; 32]);
+    let sender_id = EndpointId::from(sender.public());
+    let other_id = EndpointId::from(SecretKey::from_bytes(&[0xcd; 32]).public());
+    let frame = build_gossip_frame(
+        &[
+            peer_state_test_announcement(EndpointAddr {
+                id: sender_id,
+                addrs: Default::default(),
+            }),
+            peer_state_test_announcement(EndpointAddr {
+                id: other_id,
+                addrs: Default::default(),
+            }),
+        ],
+        sender_id,
+    );
+    assert!(frame.peers.iter().all(|peer| peer.plugin_keys.is_empty()));
+    let bytes = frame.encode_to_vec();
+
+    let (announcements, keys) =
+        decode_gossip_payload_and_plugin_keys(ControlProtocol::ProtoV1, sender_id, &bytes)
+            .expect("a frame without plugin keys decodes");
+    assert!(keys.is_empty(), "its sender has no plugin keys");
+    let plain = decode_gossip_payload(ControlProtocol::ProtoV1, sender_id, &bytes)
+        .expect("the existing decoder reads it");
+    assert_eq!(announcements.len(), 2);
+    assert_eq!(format!("{announcements:?}"), format!("{plain:?}"));
+}
+
+#[test]
+fn a_gossip_frame_with_plugin_keys_decodes_to_the_same_announcements() {
+    use crate::mesh::plugin_keys::{bind, to_proto};
+    use crate::protocol::attach_own_plugin_keys;
+    use prost::Message as _;
+
+    let sender = SecretKey::from_bytes(&[0xab; 32]);
+    let sender_id = EndpointId::from(sender.public());
+    let other_id = EndpointId::from(SecretKey::from_bytes(&[0xcd; 32]).public());
+    let frame = build_gossip_frame(
+        &[
+            peer_state_test_announcement(EndpointAddr {
+                id: sender_id,
+                addrs: Default::default(),
+            }),
+            peer_state_test_announcement(EndpointAddr {
+                id: other_id,
+                addrs: Default::default(),
+            }),
+        ],
+        sender_id,
+    );
+    let without = frame.encode_to_vec();
+    let key = bind(&sender, "capsules", [5; 32]);
+    let mut with_keys = frame.clone();
+    attach_own_plugin_keys(&mut with_keys, &to_proto(std::slice::from_ref(&key)));
+    let with = with_keys.encode_to_vec();
+    assert_ne!(with, without, "field 53 is on the wire");
+
+    // The existing decoder reads the same announcements from either frame.
+    let before = decode_gossip_payload(ControlProtocol::ProtoV1, sender_id, &without)
+        .expect("decodes without field 53");
+    let after = decode_gossip_payload(ControlProtocol::ProtoV1, sender_id, &with)
+        .expect("decodes with field 53");
+    assert_eq!(format!("{after:?}"), format!("{before:?}"));
+
+    let (announcements, keys) =
+        decode_gossip_payload_and_plugin_keys(ControlProtocol::ProtoV1, sender_id, &with)
+            .expect("decodes with field 53");
+    assert_eq!(format!("{announcements:?}"), format!("{before:?}"));
+    assert_eq!(keys, vec![key]);
+}
+
+/// A test node with a fixed node key, so a "restarted" node keeps its identity.
+async fn node_with_key(secret: SecretKey) -> super::Node {
+    let transport_config = iroh::endpoint::QuicTransportConfig::builder()
+        .max_concurrent_bidi_streams(128u32.into())
+        .build();
+    let endpoint = iroh::Endpoint::builder(iroh::endpoint::presets::Minimal)
+        .secret_key(secret.clone())
+        .alpns(vec![
+            crate::protocol::ALPN.to_vec(),
+            skippy_protocol::STAGE_ALPN_V2.to_vec(),
+        ])
+        .transport_config(transport_config)
+        .bind_addr(std::net::SocketAddr::from(([127, 0, 0, 1], 0)))
+        .expect("loopback address")
+        .bind()
+        .await
+        .expect("endpoint binds");
+    let node = super::Node::new_test_node_from_endpoint(super::NodeRole::Worker, endpoint, secret);
+    let accept_node = node.clone();
+    tokio::spawn(async move {
+        accept_node.accept_loop().await;
+    });
+    node
+}
+
+/// One real gossip exchange, `from` dialling `to`; `step` names it in a failure.
+async fn gossip_once(from: &super::Node, to: &super::Node, step: &str) {
+    let conn = crate::protocol::connect_mesh(&from.endpoint, to.endpoint_addr_for_advertisement())
+        .await
+        .unwrap_or_else(|error| panic!("{step}: connect: {error:#}"));
+    from.initiate_gossip(conn, to.id())
+        .await
+        .unwrap_or_else(|error| panic!("{step}: gossip: {error:#}"));
+}
+
+/// The life of one plugin key, as a peer sees it over real gossip: announced,
+/// re-announced after a plugin restart, rotated, withdrawn, withdrawn by the
+/// host when the plugin stops for good, dropped with the peer, and announced
+/// again after the node restarts.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_plugin_key_through_its_lifecycle_as_a_peer_sees_it() {
+    use crate::mesh::plugin_keys::bind;
+    use crate::plugin::proto::PluginKeyRequest;
+
+    let key = |seed: u8| {
+        ed25519_dalek::SigningKey::from_bytes(&[seed; 32])
+            .verifying_key()
+            .to_bytes()
+    };
+    let announce = |node: &super::Node, public_key: Vec<u8>| {
+        node.apply_plugin_key_request("capsules", PluginKeyRequest { public_key })
+            .expect("the key request is accepted");
+    };
+    let listed = |viewer: &super::Node, peer: EndpointId| {
+        viewer.plugin_keys.peers().get(&peer).cloned().unwrap_or_default()
+    };
+
+    let a_secret = SecretKey::from_bytes(&[0x31; 32]);
+    let a = node_with_key(a_secret.clone()).await;
+    let b = make_test_node(super::NodeRole::Worker)
+        .await
+        .expect("test node must start");
+    a.start_accepting();
+    b.start_accepting();
+    let a_id = a.id();
+
+    // Announced: the peer lists the key, bound to the announcing node.
+    announce(&a, key(1).to_vec());
+    gossip_once(&b, &a, "announced").await;
+    assert_eq!(listed(&b, a_id), vec![bind(&a_secret, "capsules", key(1))]);
+
+    // A plugin restart re-announces the same key: one key, the same binding.
+    announce(&a, key(1).to_vec());
+    assert_eq!(a.plugin_keys.own().len(), 1);
+    gossip_once(&b, &a, "plugin restart").await;
+    assert_eq!(listed(&b, a_id), vec![bind(&a_secret, "capsules", key(1))]);
+
+    // Rotation: the new key replaces the old one, here and at the peer.
+    announce(&a, key(2).to_vec());
+    assert_eq!(a.plugin_keys.own(), vec![bind(&a_secret, "capsules", key(2))]);
+    gossip_once(&b, &a, "rotation").await;
+    assert_eq!(listed(&b, a_id), vec![bind(&a_secret, "capsules", key(2))]);
+
+    // Withdrawn: the peer forgets it at the next exchange.
+    announce(&a, Vec::new());
+    gossip_once(&b, &a, "withdrawn").await;
+    assert!(listed(&b, a_id).is_empty(), "a withdrawn key is forgotten");
+
+    // The plugin is disabled or removed: the node withdraws its key, peers
+    // forget it at the next exchange, and another plugin's key stays.
+    announce(&a, key(3).to_vec());
+    a.apply_plugin_key_request(
+        "other",
+        PluginKeyRequest {
+            public_key: key(4).to_vec(),
+        },
+    )
+    .expect("the key request is accepted");
+    gossip_once(&b, &a, "two plugins").await;
+    assert_eq!(listed(&b, a_id).len(), 2);
+    a.forward_plugin_event(crate::plugin::PluginMeshEvent::PluginStopped {
+        plugin_id: "capsules".into(),
+    })
+    .await
+    .expect("the event is handled");
+    assert_eq!(a.plugin_keys.own(), vec![bind(&a_secret, "other", key(4))]);
+    gossip_once(&b, &a, "plugin stopped").await;
+    assert_eq!(listed(&b, a_id), vec![bind(&a_secret, "other", key(4))]);
+    a.apply_plugin_key_request(
+        "other",
+        PluginKeyRequest {
+            public_key: Vec::new(),
+        },
+    )
+    .expect("the withdrawal is accepted");
+
+    // Removed with the peer: a node that leaves is no longer listed.
+    announce(&a, key(3).to_vec());
+    gossip_once(&b, &a, "re-announced").await;
+    assert_eq!(listed(&b, a_id).len(), 1);
+    b.remove_peer(a_id, super::MeshPeerRemovalReason::CleanShutdown)
+        .await;
+    assert!(listed(&b, a_id).is_empty(), "a removed peer is not listed");
+
+    // Node restart: keys live in memory only, so the restarted node announces
+    // nothing until its plugin registers again; the binding it then makes is
+    // the same one, because the node key is the same.
+    a.endpoint.close().await;
+    drop(a);
+    let restarted = node_with_key(a_secret.clone()).await;
+    restarted.start_accepting();
+    assert!(restarted.plugin_keys.own().is_empty(), "keys are not persisted");
+    gossip_once(&b, &restarted, "restarted, no keys").await;
+    assert!(listed(&b, a_id).is_empty());
+    announce(&restarted, key(3).to_vec());
+    gossip_once(&b, &restarted, "restarted, re-announced").await;
+    assert_eq!(listed(&b, a_id), vec![bind(&a_secret, "capsules", key(3))]);
+}
+
+#[tokio::test]
+async fn a_plugin_sets_replaces_and_withdraws_only_its_own_key() {
+    use crate::plugin::proto::PluginKeyRequest;
+
+    let node = make_test_node(super::NodeRole::Worker)
+        .await
+        .expect("test node must start");
+    let key = |seed: u8| {
+        ed25519_dalek::SigningKey::from_bytes(&[seed; 32])
+            .verifying_key()
+            .to_bytes()
+            .to_vec()
+    };
+    let set = node
+        .apply_plugin_key_request("capsules", PluginKeyRequest { public_key: key(1) })
+        .expect("a valid key is announced");
+    assert_eq!(set.node_id, hex::encode(node.endpoint.id().as_bytes()));
+    let own = node.plugin_keys.own();
+    assert_eq!(own.len(), 1);
+    assert_eq!(own[0].plugin, "capsules", "under the connection's name");
+    assert!(crate::mesh::plugin_keys::verify(&node.endpoint.id(), &own[0]));
+    assert_eq!(set.binding_signature, own[0].binding_signature.to_vec());
+
+    node.apply_plugin_key_request("capsules", PluginKeyRequest { public_key: key(2) })
+        .expect("a later key replaces the first");
+    assert_eq!(node.plugin_keys.own().len(), 1);
+    assert_eq!(node.plugin_keys.own()[0].public_key.to_vec(), key(2));
+
+    let withdrawn = node
+        .apply_plugin_key_request("capsules", PluginKeyRequest { public_key: Vec::new() })
+        .expect("an empty key withdraws");
+    assert!(withdrawn.binding_signature.is_empty());
+    assert!(node.plugin_keys.own().is_empty());
+
+    for bad in [vec![1; 31], vec![1; 33]] {
+        assert!(node
+            .apply_plugin_key_request("capsules", PluginKeyRequest { public_key: bad })
+            .is_err());
+    }
+    assert!(node
+        .apply_plugin_key_request("a plugin", PluginKeyRequest { public_key: key(1) })
+        .is_err(), "a name the gossip format cannot carry is refused");
+    assert!(node.plugin_keys.own().is_empty(), "nothing was announced by a refused request");
+}

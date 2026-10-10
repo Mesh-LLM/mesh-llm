@@ -3,10 +3,10 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result, ensure};
 use skippy_inference_api::thinking::ThinkingControls;
-use skippy_inference_api::{GuardrailTelemetrySink, OpenAiBackend, OpenAiHookPolicy};
+use skippy_inference_api::{GuardrailTelemetrySink, InferenceBackend, InferenceHookPolicy};
 use skippy_protocol::{LoadMode, StageConfig};
 use skippy_serving::{
-    EmbeddedRuntimeOptions, OpenAiGuardrailsConfig, SkippyRuntimeHandle,
+    EmbeddedRuntimeOptions, InferenceGuardrailsConfig, SkippyRuntimeHandle,
     binary_transport::{PredictionReturnListener, WireCondition},
     embedded_openai_backend,
     frontend::{GenerationLifecycleConfig, GenerationLifecycleIngress},
@@ -15,7 +15,7 @@ use skippy_serving::{
     telemetry::Telemetry,
 };
 
-use super::{OpenAiOptions, ServingTelemetryOptions};
+use super::{InferenceOptions, ServingTelemetryOptions};
 
 /// Whether the caller needs the native model-open event path, even without a sink.
 pub enum ModelOpenEvents {
@@ -26,13 +26,13 @@ pub enum ModelOpenEvents {
 /// Explicit inputs; product configuration, plugin loading and event storage stay outside Skippy.
 pub struct ModelLoadRequest {
     pub runtime: EmbeddedRuntimeOptions,
-    pub openai: OpenAiOptions,
+    pub openai: InferenceOptions,
     pub open_events: ModelOpenEvents,
     pub hooks_factory: Option<SharedModelServingHooksFactory>,
     pub generation_observer: Option<Arc<dyn GenerationLifecycleIngress>>,
     pub kv_observer: Option<Arc<dyn KvLifecycleObserver>>,
-    pub hook_policy: Option<Arc<dyn OpenAiHookPolicy>>,
-    pub guardrails: Option<OpenAiGuardrailsConfig>,
+    pub hook_policy: Option<Arc<dyn InferenceHookPolicy>>,
+    pub guardrails: Option<InferenceGuardrailsConfig>,
     pub guardrail_telemetry: Option<Arc<dyn GuardrailTelemetrySink>>,
     pub downstream_wire_condition: WireCondition,
     pub serving_telemetry: Option<ServingTelemetryOptions>,
@@ -42,7 +42,7 @@ pub struct ModelLoadRequest {
 /// Keep the native runtime and prediction listener alive for the backend's lifetime.
 pub struct LoadedModelBackend {
     pub runtime: SkippyRuntimeHandle,
-    pub backend: Arc<dyn OpenAiBackend>,
+    pub backend: Arc<dyn InferenceBackend>,
     pub config: StageConfig,
     pub prediction_return_listener: Option<PredictionReturnListener>,
     /// Render-only observations of the reasoning controls the selected template
@@ -202,7 +202,7 @@ mod tests {
     fn request() -> ModelLoadRequest {
         let config: StageConfig = serde_json::from_value(skippy_config::example_config()).unwrap();
         ModelLoadRequest {
-            openai: OpenAiOptions::direct_single_stage_defaults(
+            openai: InferenceOptions::direct_single_stage_defaults(
                 config.model_id.clone(),
                 32,
                 1,

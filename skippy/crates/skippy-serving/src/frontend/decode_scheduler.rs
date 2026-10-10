@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, VecDeque};
 use std::time::Instant;
 
-use skippy_inference_api::{OpenAiError, OpenAiResult};
+use skippy_inference_api::{InferenceError, InferenceResult};
 use skippy_metrics::attr as attr_key;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -324,14 +324,14 @@ impl VerifyWindowScheduler {
         base_position: usize,
         decode_step: usize,
         token_count: usize,
-    ) -> OpenAiResult<VerifyWindow> {
+    ) -> InferenceResult<VerifyWindow> {
         if !self.has_capacity() {
-            return Err(OpenAiError::backend(
+            return Err(InferenceError::backend(
                 "verify window pipeline depth exceeded",
             ));
         }
         if token_count > self.admissible_window_tokens() {
-            return Err(OpenAiError::backend(
+            return Err(InferenceError::backend(
                 "verify window run-ahead token budget exceeded",
             ));
         }
@@ -339,7 +339,7 @@ impl VerifyWindowScheduler {
         self.next_id = self
             .next_id
             .checked_add(1)
-            .ok_or_else(|| OpenAiError::backend("verify window id overflow"))?;
+            .ok_or_else(|| InferenceError::backend("verify window id overflow"))?;
         let window = VerifyWindow {
             id,
             base_position,
@@ -356,14 +356,14 @@ impl VerifyWindowScheduler {
         Ok(window)
     }
 
-    pub(super) fn complete_next(&mut self, reply_window_id: i32) -> OpenAiResult<VerifyWindow> {
+    pub(super) fn complete_next(&mut self, reply_window_id: i32) -> InferenceResult<VerifyWindow> {
         let Some(window) = self.in_flight.front() else {
-            return Err(OpenAiError::backend(
+            return Err(InferenceError::backend(
                 "verify window reply arrived with no in-flight window",
             ));
         };
         if window.id != reply_window_id {
-            return Err(OpenAiError::backend(format!(
+            return Err(InferenceError::backend(format!(
                 "verify window reply out of order: got {reply_window_id}, expected {}",
                 window.id
             )));

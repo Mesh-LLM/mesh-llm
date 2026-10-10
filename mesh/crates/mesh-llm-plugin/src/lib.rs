@@ -104,6 +104,8 @@ pub mod host_capabilities {
     pub const OPENAI_EXCHANGE: &str = crate::openai_exchange::OPENAI_EXCHANGE_CAPABILITY;
     /// The host accepts `PeerBlockRequest`.
     pub const PEER_BLOCKS: &str = "peer_blocks.v1";
+    /// The host accepts `PluginKeyRequest` and announces the key it binds.
+    pub const PLUGIN_KEYS: &str = "plugin_keys.v1";
 }
 
 #[macro_export]

@@ -319,9 +319,9 @@ impl ServeSettings {
     fn guardrails(
         &self,
         mode: crate::cli::OpenAiGuardrailsCliMode,
-    ) -> Result<skippy_serving::OpenAiGuardrailsConfig> {
-        use skippy_serving::frontend::OpenAiGuardrailsConfig;
-        let mut config = OpenAiGuardrailsConfig::for_standalone_mode(mode.into());
+    ) -> Result<skippy_serving::InferenceGuardrailsConfig> {
+        use skippy_serving::frontend::InferenceGuardrailsConfig;
+        let mut config = InferenceGuardrailsConfig::for_standalone_mode(mode.into());
         let mut policy = config.policy.snapshot();
         if let Some(value) = self.number("guardrails-tool-retries")? {
             policy.max_tool_retries = value;

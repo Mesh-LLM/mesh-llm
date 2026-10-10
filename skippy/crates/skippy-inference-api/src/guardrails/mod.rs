@@ -7,7 +7,8 @@ use crate::{
         AudioResponse, AudioSpeechRequest, AudioTranscriptionRequest, AudioTranscriptionResponse,
     },
     backend::{
-        ChatCompletionStream, CompletionStream, OpenAiBackend, OpenAiRequestContext, OpenAiResult,
+        ChatCompletionStream, CompletionStream, InferenceBackend, InferenceRequestContext,
+        InferenceResult,
     },
     chat::{ChatCompletionRequest, ChatCompletionResponse},
     completions::{CompletionRequest, CompletionResponse},
@@ -29,7 +30,7 @@ mod telemetry;
 mod tools;
 mod validation;
 
-pub use compact::CompactingOpenAiBackend;
+pub use compact::CompactingInferenceBackend;
 pub use policy::{
     GuardrailMode, GuardrailPolicy, GuardrailPolicyHandle, RetryExhaustionMode,
     StreamingGuardrailMode,
@@ -51,19 +52,19 @@ use self::{
 };
 
 #[derive(Clone)]
-pub struct GuardedOpenAiBackend {
-    backend: Arc<dyn OpenAiBackend>,
+pub struct GuardedInferenceBackend {
+    backend: Arc<dyn InferenceBackend>,
     policy: GuardrailPolicyHandle,
     telemetry: Option<Arc<dyn GuardrailTelemetrySink>>,
 }
 
-impl GuardedOpenAiBackend {
-    pub fn new(backend: Arc<dyn OpenAiBackend>, policy: GuardrailPolicy) -> Self {
+impl GuardedInferenceBackend {
+    pub fn new(backend: Arc<dyn InferenceBackend>, policy: GuardrailPolicy) -> Self {
         Self::with_policy_handle(backend, GuardrailPolicyHandle::new(policy))
     }
 
     pub fn with_policy_handle(
-        backend: Arc<dyn OpenAiBackend>,
+        backend: Arc<dyn InferenceBackend>,
         policy: GuardrailPolicyHandle,
     ) -> Self {
         Self {
@@ -81,8 +82,8 @@ impl GuardedOpenAiBackend {
     async fn guarded_chat_completion(
         &self,
         request: ChatCompletionRequest,
-        context: OpenAiRequestContext,
-    ) -> OpenAiResult<ChatCompletionResponse> {
+        context: InferenceRequestContext,
+    ) -> InferenceResult<ChatCompletionResponse> {
         let _guardrail_error_catalog = guardrail_error_catalog();
         let policy = self.policy.snapshot();
         let engine = GuardrailEngine::new(policy.clone());
@@ -174,8 +175,8 @@ impl GuardedOpenAiBackend {
         request: ChatCompletionRequest,
         engine: &GuardrailEngine,
         prepared: &state::PreparedGuardrailRequest,
-        context: OpenAiRequestContext,
-    ) -> OpenAiResult<ChatCompletionResponse> {
+        context: InferenceRequestContext,
+    ) -> InferenceResult<ChatCompletionResponse> {
         let response = self
             .backend
             .chat_completion_with_context(request, context)
@@ -307,64 +308,64 @@ fn telemetry_attempt_bucket(attempts: u8) -> GuardrailTelemetryAttemptBucket {
 }
 
 #[async_trait]
-impl OpenAiBackend for GuardedOpenAiBackend {
+impl InferenceBackend for GuardedInferenceBackend {
     fn http_exchange_policy(&self) -> Option<Arc<dyn crate::http_exchange::HttpExchangePolicy>> {
         self.backend.http_exchange_policy()
     }
-    async fn count_chat_tokens(&self, request: ChatCompletionRequest) -> OpenAiResult<u32> {
+    async fn count_chat_tokens(&self, request: ChatCompletionRequest) -> InferenceResult<u32> {
         self.backend.count_chat_tokens(request).await
     }
 
-    async fn models(&self) -> OpenAiResult<Vec<ModelObject>> {
+    async fn models(&self) -> InferenceResult<Vec<ModelObject>> {
         self.backend.models().await
     }
 
-    async fn system_one(&self, request: SystemOneRequest) -> OpenAiResult<SystemOneResponse> {
+    async fn system_one(&self, request: SystemOneRequest) -> InferenceResult<SystemOneResponse> {
         self.backend.system_one(request).await
     }
 
     async fn chat_completion(
         &self,
         request: ChatCompletionRequest,
-    ) -> OpenAiResult<ChatCompletionResponse> {
-        self.guarded_chat_completion(request, OpenAiRequestContext::new())
+    ) -> InferenceResult<ChatCompletionResponse> {
+        self.guarded_chat_completion(request, InferenceRequestContext::new())
             .await
     }
 
     async fn chat_completion_with_context(
         &self,
         request: ChatCompletionRequest,
-        context: OpenAiRequestContext,
-    ) -> OpenAiResult<ChatCompletionResponse> {
+        context: InferenceRequestContext,
+    ) -> InferenceResult<ChatCompletionResponse> {
         self.guarded_chat_completion(request, context).await
     }
 
     async fn chat_completion_stream(
         &self,
         request: ChatCompletionRequest,
-        context: OpenAiRequestContext,
-    ) -> OpenAiResult<ChatCompletionStream> {
+        context: InferenceRequestContext,
+    ) -> InferenceResult<ChatCompletionStream> {
         self.backend.chat_completion_stream(request, context).await
     }
 
-    async fn completion(&self, request: CompletionRequest) -> OpenAiResult<CompletionResponse> {
-        self.completion_with_context(request, OpenAiRequestContext::new())
+    async fn completion(&self, request: CompletionRequest) -> InferenceResult<CompletionResponse> {
+        self.completion_with_context(request, InferenceRequestContext::new())
             .await
     }
 
     async fn completion_with_context(
         &self,
         request: CompletionRequest,
-        context: OpenAiRequestContext,
-    ) -> OpenAiResult<CompletionResponse> {
+        context: InferenceRequestContext,
+    ) -> InferenceResult<CompletionResponse> {
         self.backend.completion_with_context(request, context).await
     }
 
     async fn completion_stream(
         &self,
         request: CompletionRequest,
-        context: OpenAiRequestContext,
-    ) -> OpenAiResult<CompletionStream> {
+        context: InferenceRequestContext,
+    ) -> InferenceResult<CompletionStream> {
         self.backend.completion_stream(request, context).await
     }
 
@@ -372,8 +373,8 @@ impl OpenAiBackend for GuardedOpenAiBackend {
     async fn embeddings(
         &self,
         request: EmbeddingsRequest,
-        context: OpenAiRequestContext,
-    ) -> OpenAiResult<EmbeddingResponse> {
+        context: InferenceRequestContext,
+    ) -> InferenceResult<EmbeddingResponse> {
         self.backend.embeddings(request, context).await
     }
 
@@ -381,8 +382,8 @@ impl OpenAiBackend for GuardedOpenAiBackend {
     async fn rerank(
         &self,
         request: RerankRequest,
-        context: OpenAiRequestContext,
-    ) -> OpenAiResult<RerankResponse> {
+        context: InferenceRequestContext,
+    ) -> InferenceResult<RerankResponse> {
         self.backend.rerank(request, context).await
     }
 
@@ -390,8 +391,8 @@ impl OpenAiBackend for GuardedOpenAiBackend {
     async fn audio_speech(
         &self,
         request: AudioSpeechRequest,
-        context: OpenAiRequestContext,
-    ) -> OpenAiResult<AudioResponse> {
+        context: InferenceRequestContext,
+    ) -> InferenceResult<AudioResponse> {
         self.backend.audio_speech(request, context).await
     }
 
@@ -399,8 +400,8 @@ impl OpenAiBackend for GuardedOpenAiBackend {
     async fn audio_transcription(
         &self,
         request: AudioTranscriptionRequest,
-        context: OpenAiRequestContext,
-    ) -> OpenAiResult<AudioTranscriptionResponse> {
+        context: InferenceRequestContext,
+    ) -> InferenceResult<AudioTranscriptionResponse> {
         self.backend.audio_transcription(request, context).await
     }
 
@@ -408,8 +409,8 @@ impl OpenAiBackend for GuardedOpenAiBackend {
     async fn audio_translation(
         &self,
         request: AudioTranscriptionRequest,
-        context: OpenAiRequestContext,
-    ) -> OpenAiResult<AudioTranscriptionResponse> {
+        context: InferenceRequestContext,
+    ) -> InferenceResult<AudioTranscriptionResponse> {
         self.backend.audio_translation(request, context).await
     }
 }

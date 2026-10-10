@@ -283,8 +283,45 @@ hip_offload_arch_args() {
     done
 }
 
+# nvcc flags for the configured CUDA architectures, in CMAKE_CUDA_ARCHITECTURES
+# syntax. Without them nvcc embeds only PTX for its default architecture, which
+# a driver older than the toolkit cannot JIT-compile.
+cuda_gencode_args() {
+    local raw arch
+    local -a arches=()
+    raw="${LLAMA_STAGE_CUDA_ARCHITECTURES:-${SKIPPY_CUDA_ARCHITECTURES:-}}"
+    if [[ -z "$raw" && "$BACKEND" == "cuda-blackwell" ]]; then
+        raw="sm_120"
+    fi
+    [[ -n "$raw" ]] || return 0
+
+    raw="${raw//;/ }"
+    raw="${raw//,/ }"
+    read -r -a arches <<< "$raw"
+    for arch in ${arches[@]+"${arches[@]}"}; do
+        arch="${arch#sm_}"
+        case "$arch" in
+            "") ;;
+            native|all|all-major) printf -- '-arch=%s\n' "$arch" ;;
+            *-real)
+                arch="${arch%-real}"
+                printf -- '--generate-code=arch=compute_%s,code=sm_%s\n' "$arch" "$arch"
+                ;;
+            *-virtual)
+                arch="${arch%-virtual}"
+                printf -- '--generate-code=arch=compute_%s,code=compute_%s\n' "$arch" "$arch"
+                ;;
+            *)
+                printf -- '--generate-code=arch=compute_%s,code=[compute_%s,sm_%s]\n' \
+                    "$arch" "$arch" "$arch"
+                ;;
+        esac
+    done
+}
+
 build_gpu_benchmark_tool() {
     local tool_rel tool_path source_root compiler arch_arg
+    local -a cuda_arch_args=()
     local -a hip_arch_args=()
     case "$BACKEND" in
         cuda|cuda-blackwell|rocm|hip|metal) ;;
@@ -299,11 +336,14 @@ build_gpu_benchmark_tool() {
     case "$BACKEND" in
         cuda|cuda-blackwell)
             compiler="$(cuda_selected_compiler)"
+            while IFS= read -r arch_arg; do
+                cuda_arch_args+=("$arch_arg")
+            done < <(cuda_gencode_args)
             if [[ "$runtime_os" == "linux" ]]; then
-                "$compiler" -O3 -std=c++17 -cudart shared \
+                "$compiler" -O3 -std=c++17 -cudart shared ${cuda_arch_args[@]+"${cuda_arch_args[@]}"} \
                     "$source_root/cuda/membench-fingerprint.cu" -o "$tool_path"
             else
-                "$compiler" -O3 -std=c++17 \
+                "$compiler" -O3 -std=c++17 ${cuda_arch_args[@]+"${cuda_arch_args[@]}"} \
                     "$source_root/cuda/membench-fingerprint.cu" -o "$tool_path"
             fi
             ;;
@@ -747,6 +787,10 @@ if [[ "$runtime_os" == "windows" ]]; then
             dependency_dir="$dependency_dir/$(if [[ "$dependency_root" == VULKAN_SDK ]]; then printf Bin; else printf bin; fi)"
             if [[ -d "$dependency_dir" ]]; then
                 dependency_args+=(--search-dir "$dependency_dir")
+            fi
+            # CUDA 13 on Windows installs its runtime DLLs under bin\x64.
+            if [[ "$dependency_root" == CUDA_PATH && -d "$dependency_dir/x64" ]]; then
+                dependency_args+=(--search-dir "$dependency_dir/x64")
             fi
         fi
     done

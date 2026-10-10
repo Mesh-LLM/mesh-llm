@@ -233,7 +233,7 @@ async fn audio_translation_uses_translation_backend() {
 /// Binary upload limits remain independent of JSON endpoint limits.
 async fn audio_upload_uses_its_dedicated_body_limit() {
     let boundary = "mesh-large-audio-boundary";
-    let file_bytes = vec![0x2a; OpenAiFrontendConfig::default().max_request_body_bytes + 1];
+    let file_bytes = vec![0x2a; InferenceFrontendConfig::default().max_request_body_bytes + 1];
     let mut body = format!(
         "--{boundary}\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\naudio-model\r\n\
          --{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"sample.wav\"\r\n\

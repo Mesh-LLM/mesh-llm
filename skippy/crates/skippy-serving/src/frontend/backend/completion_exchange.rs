@@ -1,17 +1,17 @@
 //! Completion stream termination signals backend outcomes independently of HTTP status.
 use super::*;
-use skippy_inference_api::OpenAiHookPolicy;
+use skippy_inference_api::InferenceHookPolicy;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
 type TerminalFuture = Pin<Box<dyn std::future::Future<Output = ()> + Send>>;
 pub(super) struct CompletionTerminalGuard {
-    hooks: Arc<dyn OpenAiHookPolicy>,
+    hooks: Arc<dyn InferenceHookPolicy>,
     id: String,
     finished: bool,
 }
 impl CompletionTerminalGuard {
-    pub(super) fn new(hooks: Arc<dyn OpenAiHookPolicy>, id: String) -> Self {
+    pub(super) fn new(hooks: Arc<dyn InferenceHookPolicy>, id: String) -> Self {
         Self {
             hooks,
             id,
@@ -63,10 +63,10 @@ impl Drop for GuardedCompletionStream {
     }
 }
 enum PendingEmission {
-    Error(OpenAiError),
+    Error(InferenceError),
     End,
 }
-pub(super) fn error_outcome(error: &OpenAiError) -> &'static str {
+pub(super) fn error_outcome(error: &InferenceError) -> &'static str {
     if error.status().as_u16() == 504 {
         "timed_out"
     } else {
@@ -74,7 +74,7 @@ pub(super) fn error_outcome(error: &OpenAiError) -> &'static str {
     }
 }
 impl futures_util::Stream for GuardedCompletionStream {
-    type Item = OpenAiResult<skippy_inference_api::CompletionChunk>;
+    type Item = InferenceResult<skippy_inference_api::CompletionChunk>;
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         if let Some(terminal) = self.terminal.as_mut() {
             if terminal.as_mut().poll(cx).is_pending() {
@@ -132,7 +132,7 @@ mod tests {
         expected: &'static str,
     }
     #[async_trait]
-    impl OpenAiHookPolicy for BlockingTerminal {
+    impl InferenceHookPolicy for BlockingTerminal {
         async fn on_completion_terminal(&self, _id: &str, outcome: &str) {
             assert_eq!(outcome, self.expected);
             self.calls.fetch_add(1, Ordering::SeqCst);
@@ -151,7 +151,7 @@ mod tests {
             expected: "backend_error",
         });
         let inner: CompletionStream = Box::pin(futures_util::stream::once(async {
-            Err(OpenAiError::backend("failure"))
+            Err(InferenceError::backend("failure"))
         }));
         let mut stream = guarded(
             inner,
@@ -176,7 +176,7 @@ mod tests {
             });
             let inner: CompletionStream = if error {
                 Box::pin(futures_util::stream::once(async {
-                    Err(OpenAiError::backend("failure"))
+                    Err(InferenceError::backend("failure"))
                 }))
             } else {
                 Box::pin(futures_util::stream::empty())
