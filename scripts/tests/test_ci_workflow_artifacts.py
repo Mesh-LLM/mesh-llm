@@ -271,15 +271,17 @@ class CiWorkflowArtifactTests(unittest.TestCase):
         )
         self.assertIn("run_durable_restart_probe", smoke_script)
         self.assertIn("kv-cache status", smoke_script)
-        self.assertIn(
-            "if not checkpointed_restore and (", smoke_script
-        )
+        self.assertIn("assert_expected_stage_payload", smoke_script)
+        self.assertIn("split-payloads certify", smoke_script)
+        self.assertIn("MESH_TWO_NODE_SPLIT_SOURCE_SHA", smoke_script)
+        self.assertIn("warm request {repeat} diverged from uncached request", smoke_script)
 
     def test_split_smoke_uploads_reconciled_evidence_on_every_outcome(self):
         workflow = (WORKFLOWS / "scripted-binary-smoke.yml").read_text()
         caller = (WORKFLOWS / "ci-linux-product-smoke-slice.yml").read_text()
 
         self.assertIn("name: Upload split-smoke evidence", workflow)
+        self.assertIn("MESH_TWO_NODE_SPLIT_SOURCE_SHA: ${{ inputs.source_sha }}", workflow)
         self.assertIn("success() || failure()", workflow)
         self.assertIn("split_evidence_artifact_name", workflow)
         self.assertIn("if-no-files-found: error", workflow)

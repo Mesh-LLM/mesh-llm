@@ -283,6 +283,7 @@ with their runtime purpose; existing controls follow in the same sections.
 | `--json-schema` | `json_schema` | Default structured-output JSON schema; @file loads JSON |
 | `--system-prompt` | `system_prompt` | Default system prompt; @file loads UTF-8 text |
 | `--chat-template` | `chat_template` | Chat template; @file loads UTF-8 text |
+| `--allow-request-chat-template` | `allow_request_chat_template` | Let requests supply their own chat template. Off by default. The template engine has no recursion, loop, or memory limits, so this trusts every caller that can reach the server |
 | `--grammar` | `grammar` | Default grammar; @file loads UTF-8 text |
 | `--jinja` | `jinja` | Use the Jinja template engine |
 | `--skip-chat-parsing` | `skip_chat_parsing` | Skip structured chat-output parsing |

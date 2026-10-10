@@ -1,6 +1,7 @@
 mod cache_runtime;
 mod detached_runtime;
 mod direct_batch;
+mod direct_reply;
 
 use self::cache_runtime::{
     CacheAffinityRefresh, CacheRuntimeQueue, CacheRuntimeTelemetry,
@@ -12,11 +13,13 @@ use self::direct_batch::{
     pipeline_group_batch_size, resolve_pipeline_decode_groups, scheduler_safe_mode_from_value,
     should_serve_direct, take_direct_iteration_batch, validate_direct_iteration,
 };
+use self::direct_reply::DirectReply;
 use crate::frontend::admission::DECODE_BATCH_HEADROOM_TOKENS;
 use crate::frontend::generation::TokenControl;
 use crate::frontend::generation::generation_queue_full_error;
 use crate::frontend::util::openai_backend_error;
 use crate::kv_integration::StagePrefixCachePayload;
+use crate::runtime_state::panic_recovery::lock_runtime;
 use crate::runtime_state::{RuntimeIterationBatchRequest, RuntimeSessionAlignStats, RuntimeState};
 use crate::telemetry::Telemetry;
 use serde_json::json;
@@ -138,7 +141,7 @@ struct DirectIteration {
     deadline: Option<Instant>,
     cancellation: Option<skippy_inference_api::CancellationToken>,
     enqueued_at: Instant,
-    reply: std_mpsc::SyncSender<InferenceResult<SchedulerIterationOutcome>>,
+    reply: DirectReply,
 }
 
 impl DirectIteration {
@@ -257,25 +260,21 @@ where
             // The compute meter covers lock-held work only: from guard
             // acquisition to the end of the runtime operation, so
             // scheduler-thread lock contention does not count as model time.
-            let mut metered = Duration::ZERO;
-            let outcome = runtime
-                .lock()
-                .map_err(|_| InferenceError::backend("runtime lock poisoned"))
-                .and_then(|mut runtime| {
-                    let runtime_lock_wait_ms = lock_started.elapsed().as_secs_f64() * 1_000.0;
-                    let hold_started = Instant::now();
-                    let result = operation(&mut runtime).map(|value| {
-                        let runtime_lock_hold_ms = hold_started.elapsed().as_secs_f64() * 1_000.0;
-                        SchedulerRuntimeOutcome {
-                            value,
-                            queue_wait_ms,
-                            runtime_lock_wait_ms,
-                            runtime_lock_hold_ms,
-                        }
-                    });
-                    metered = hold_started.elapsed();
-                    result
+            let (outcome, metered) = {
+                let mut runtime = lock_runtime(runtime);
+                let runtime_lock_wait_ms = lock_started.elapsed().as_secs_f64() * 1_000.0;
+                let hold_started = Instant::now();
+                let result = operation(&mut runtime).map(|value| {
+                    let runtime_lock_hold_ms = hold_started.elapsed().as_secs_f64() * 1_000.0;
+                    SchedulerRuntimeOutcome {
+                        value,
+                        queue_wait_ms,
+                        runtime_lock_wait_ms,
+                        runtime_lock_hold_ms,
+                    }
                 });
+                (result, hold_started.elapsed())
+            };
             let _ = reply.send(outcome);
             metered
         }),
@@ -311,11 +310,9 @@ where
             let lock_started = Instant::now();
             // Compute meter: lock-held work only, as in `runtime_operation`.
             let mut metered = Duration::ZERO;
-            let outcome = worker_control.ensure_active().and_then(|()| {
-                runtime
-                    .lock()
-                    .map_err(|_| InferenceError::backend("runtime lock poisoned"))
-            });
+            let outcome = worker_control
+                .ensure_active()
+                .map(|()| lock_runtime(runtime));
             let outcome = outcome.and_then(|mut runtime| {
                 worker_control.ensure_active()?;
                 let runtime_lock_wait_ms = lock_started.elapsed().as_secs_f64() * 1_000.0;
@@ -412,9 +409,7 @@ impl IterationScheduler {
         telemetry: Telemetry,
     ) -> InferenceResult<Self> {
         let (lane_count, kv_pool_tokens, compute_meter) = {
-            let runtime = runtime
-                .lock()
-                .map_err(|_| InferenceError::backend("runtime lock poisoned"))?;
+            let runtime = lock_runtime(&runtime);
             (
                 runtime.lane_count() as usize,
                 runtime.kv_pool_tokens() as usize,
@@ -758,7 +753,7 @@ impl IterationScheduler {
                 deadline,
                 cancellation: cancellation.cloned(),
                 enqueued_at: Instant::now(),
-                reply: channel.reply.clone(),
+                reply: channel.reply.clone().into(),
             },
         )))?;
         let result = channel.result.recv().map_err(|error| {
@@ -888,9 +883,11 @@ impl Drop for IterationScheduler {
 
 impl SchedulerWorker {
     fn run(mut self) {
-        let outcome = catch_unwind(AssertUnwindSafe(|| self.run_loop()));
-        if outcome.is_err() {
-            let error = InferenceError::backend("iteration scheduler worker panicked");
+        // A panic must not end the worker: every later request would find a
+        // disconnected command channel and never reach the runtime lock's
+        // recovery. Fail the work that was in flight, then keep serving the
+        // commands the panic never touched.
+        while catch_unwind(AssertUnwindSafe(|| self.run_loop())).is_err() {
             if let Some(telemetry) = self.telemetry.as_ref() {
                 telemetry.emit(
                     "stage.scheduler_worker_panic",
@@ -900,8 +897,10 @@ impl SchedulerWorker {
                     )]),
                 );
             }
-            self.fail_all(error.clone());
-            self.fail_queued(error);
+            self.fail_all(InferenceError::backend(
+                "iteration scheduler worker panicked",
+            ));
+            self.cache_runtime_queue.clear();
         }
     }
 
@@ -1080,16 +1079,14 @@ impl SchedulerWorker {
         // waits, including lock contention, are excluded from the meter.
         let compute = (operation.run)(&self.runtime);
         self.record_compute(compute);
-        if let Ok(runtime) = self.runtime.lock() {
-            self.active_runtime_sessions = runtime.active_session_count();
-            if self.active_runtime_sessions < self.max_direct_batch_size {
-                self.direct_wave_full = false;
-            } else if cache.as_ref().is_some_and(|cache| cache.wave_aware) {
-                // A cache restore may complete before its caller can enqueue
-                // the first direct iteration. Remember the saturated wave so
-                // another cache restore cannot slip in during that gap.
-                self.direct_wave_full = true;
-            }
+        self.active_runtime_sessions = lock_runtime(&self.runtime).active_session_count();
+        if self.active_runtime_sessions < self.max_direct_batch_size {
+            self.direct_wave_full = false;
+        } else if cache.as_ref().is_some_and(|cache| cache.wave_aware) {
+            // A cache restore may complete before its caller can enqueue
+            // the first direct iteration. Remember the saturated wave so
+            // another cache restore cannot slip in during that gap.
+            self.direct_wave_full = true;
         }
         if let Some(telemetry) = self.telemetry.as_ref() {
             let mut attrs = BTreeMap::from([
@@ -1364,7 +1361,7 @@ impl SchedulerWorker {
             match request.ensure_active() {
                 Ok(()) => active.push(request),
                 Err(error) => {
-                    let _ = request.reply.send(Err(error));
+                    request.reply.send(Err(error));
                 }
             }
         }
@@ -1373,23 +1370,13 @@ impl SchedulerWorker {
         }
 
         let lock_started = Instant::now();
-        let mut runtime = match self.runtime.lock() {
-            Ok(runtime) => runtime,
-            Err(_) => {
-                for request in active {
-                    let _ = request
-                        .reply
-                        .send(Err(InferenceError::backend("runtime lock poisoned")));
-                }
-                return;
-            }
-        };
+        let mut runtime = lock_runtime(&self.runtime);
         let runtime_lock_wait_ms = lock_started.elapsed().as_secs_f64() * 1_000.0;
         let hold_started = Instant::now();
         let mut runnable = Vec::with_capacity(active.len());
         for request in active {
             if let Err(error) = request.ensure_active() {
-                let _ = request.reply.send(Err(error));
+                request.reply.send(Err(error));
                 continue;
             }
             let alignment = match request.target_token_count {
@@ -1400,7 +1387,7 @@ impl SchedulerWorker {
             match alignment {
                 Ok(alignment) => runnable.push((request, alignment)),
                 Err(error) => {
-                    let _ = request.reply.send(Err(openai_backend_error(error)));
+                    request.reply.send(Err(openai_backend_error(error)));
                 }
             }
         }
@@ -1432,6 +1419,13 @@ impl SchedulerWorker {
                 phase: request.phase,
             })
             .collect::<Vec<_>>();
+        #[cfg(test)]
+        if requests
+            .iter()
+            .any(|request| request.session_id == tests::PANICKING_DIRECT_SESSION)
+        {
+            panic!("direct iteration batch panicked");
+        }
         let result = runtime
             .iteration_batch_sampled(&requests)
             .map_err(openai_backend_error);
@@ -1474,7 +1468,7 @@ impl SchedulerWorker {
                         runnable.len()
                     ));
                     for (request, _) in runnable {
-                        let _ = request.reply.send(Err(error.clone()));
+                        request.reply.send(Err(error.clone()));
                     }
                     return;
                 }
@@ -1487,7 +1481,7 @@ impl SchedulerWorker {
                             runnable.len()
                         ));
                         for (request, _) in runnable {
-                            let _ = request.reply.send(Err(error.clone()));
+                            request.reply.send(Err(error.clone()));
                         }
                         return;
                     };
@@ -1497,7 +1491,7 @@ impl SchedulerWorker {
                             sample.request_index
                         ));
                         for (request, _) in runnable {
-                            let _ = request.reply.send(Err(error.clone()));
+                            request.reply.send(Err(error.clone()));
                         }
                         return;
                     }
@@ -1508,7 +1502,7 @@ impl SchedulerWorker {
                     .zip(predicted)
                     .zip(batch_wait_ms)
                 {
-                    let _ = request.reply.send(Ok(SchedulerIterationOutcome {
+                    request.reply.send(Ok(SchedulerIterationOutcome {
                         predicted: predicted.unwrap_or(-1),
                         output,
                         batch_size,
@@ -1521,7 +1515,7 @@ impl SchedulerWorker {
             }
             Err(error) => {
                 for (request, _) in runnable {
-                    let _ = request.reply.send(Err(error.clone()));
+                    request.reply.send(Err(error.clone()));
                 }
             }
         }
@@ -1722,10 +1716,7 @@ impl SchedulerWorker {
         &self,
         setup: &[(String, Option<String>, Option<SamplingConfig>, usize)],
     ) -> InferenceResult<RuntimeSetupOutcome> {
-        let mut runtime = self
-            .runtime
-            .lock()
-            .map_err(|_| InferenceError::backend("runtime lock poisoned"))?;
+        let mut runtime = lock_runtime(&self.runtime);
         let mut configured = Vec::new();
         let mut failures = Vec::new();
         for (id, metadata, sampling, prompt_token_count) in setup {
@@ -1765,10 +1756,7 @@ impl SchedulerWorker {
         &self,
         plan: &skippy_scheduler::IterationPlan,
     ) -> InferenceResult<Vec<IterationPrediction>> {
-        let mut runtime = self
-            .runtime
-            .lock()
-            .map_err(|_| InferenceError::backend("runtime lock poisoned"))?;
+        let mut runtime = lock_runtime(&self.runtime);
         let hold_started = Instant::now();
         let requests = plan
             .work
@@ -1835,41 +1823,21 @@ impl SchedulerWorker {
             }
         }
         for request in self.direct_iterations.drain(..) {
-            let _ = request.reply.send(Err(error.clone()));
-        }
-    }
-
-    fn fail_queued(&mut self, error: InferenceError) {
-        while let Ok(command) = self.commands.try_recv() {
-            match command {
-                SchedulerCommand::Submit(request) => {
-                    let _ = request.reply.send(SchedulerEvent::Error(error.clone()));
-                }
-                SchedulerCommand::ExecuteIteration(request) => {
-                    let _ = request.reply.send(Err(error.clone()));
-                }
-                SchedulerCommand::ExecuteRuntime(_)
-                | SchedulerCommand::ExecuteCacheAwareRuntime(_, _, _, _, _)
-                | SchedulerCommand::Cancel(_)
-                | SchedulerCommand::Shutdown => {}
-            }
+            request.reply.send(Err(error.clone()));
         }
     }
 
     fn drop_runtime_sessions<'a>(&mut self, ids: impl IntoIterator<Item = &'a str>) {
-        let active_runtime_sessions = if let Ok(mut runtime) = self.runtime.lock() {
+        let active_runtime_sessions = {
+            let mut runtime = lock_runtime(&self.runtime);
             for id in ids {
                 let _ = runtime.drop_session_timed(id);
             }
-            Some(runtime.active_session_count())
-        } else {
-            None
+            runtime.active_session_count()
         };
-        if let Some(active_runtime_sessions) = active_runtime_sessions {
-            self.active_runtime_sessions = active_runtime_sessions;
-            if active_runtime_sessions < self.max_direct_batch_size {
-                self.direct_wave_full = false;
-            }
+        self.active_runtime_sessions = active_runtime_sessions;
+        if active_runtime_sessions < self.max_direct_batch_size {
+            self.direct_wave_full = false;
         }
     }
 }

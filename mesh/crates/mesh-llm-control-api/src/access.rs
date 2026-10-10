@@ -53,6 +53,8 @@ pub fn requires_trusted_local_access(method: &str, path: &str) -> bool {
             | ("POST", "/api/runtime/control/unload-model")
             | ("POST", "/api/runtime/control/ensure-model")
             | ("POST", "/api/runtime/control/drain-model")
+            | ("POST", "/api/runtime/control/kv-cache")
+            | ("POST", "/api/runtime/kv-cache/prune")
             | ("POST", "/api/runtime/config/validate")
             | ("POST", "/api/runtime/pick-directory")
             | ("POST", "/api/runtime/mesh-guardrails")
@@ -61,6 +63,7 @@ pub fn requires_trusted_local_access(method: &str, path: &str) -> bool {
             | ("PUT", "/api/runtime/activity/override")
     ) || (method == "DELETE"
         && (path == "/api/runtime/activity/override"
+            || path == "/api/runtime/kv-cache"
             || path.starts_with("/api/runtime/models/")
             || path.starts_with("/api/runtime/instances/")
             || path.starts_with("/api/model-interests/")))
@@ -174,6 +177,9 @@ mod tests {
             ("GET", "/api/peer-blocks"),
             ("POST", "/api/peer-blocks"),
             ("POST", "/api/peer-blocks/unblock"),
+            ("POST", "/api/runtime/control/kv-cache"),
+            ("POST", "/api/runtime/kv-cache/prune"),
+            ("DELETE", "/api/runtime/kv-cache"),
         ] {
             assert!(
                 requires_trusted_local_access(method, path),
