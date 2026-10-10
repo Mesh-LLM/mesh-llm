@@ -15,6 +15,11 @@ SPEC = importlib.util.spec_from_file_location("validate_ci_qualification", MODUL
 assert SPEC is not None and SPEC.loader is not None
 contract = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(contract)
+ASSEMBLER_PATH = ROOT / "skippy/scripts/assemble-ci-qualification.py"
+ASSEMBLER_SPEC = importlib.util.spec_from_file_location("assemble_ci_qualification", ASSEMBLER_PATH)
+assert ASSEMBLER_SPEC is not None and ASSEMBLER_SPEC.loader is not None
+assembler = importlib.util.module_from_spec(ASSEMBLER_SPEC)
+ASSEMBLER_SPEC.loader.exec_module(assembler)
 SHA = "a" * 40
 PLAN = "b" * 64
 REGISTRY = json.loads((ROOT / "ci/model-artifacts/registry.json").read_text(encoding="utf-8"))
@@ -32,7 +37,10 @@ SUITE_MODELS = {
         "family-qwen3-dense": MODEL_HASHES["family-qwen3-dense"],
         "family-granite-hybrid": MODEL_HASHES["family-granite-hybrid"],
     },
-    "system-one-decisions": {
+    "system-one": {
+        "family-laya-multilingual": MODEL_HASHES["family-laya-multilingual"],
+    },
+    "decisions": {
         "family-laya-multilingual": MODEL_HASHES["family-laya-multilingual"],
     },
 }
@@ -107,6 +115,7 @@ class CiQualificationContractTests(unittest.TestCase):
 
     def refresh_hashes(self) -> None:
         self.product_path.write_text(json.dumps(self.product), encoding="utf-8")
+        (self.product_dir / "product-manifest.json").write_bytes(self.product_path.read_bytes())
         self.availability_path.write_text(json.dumps(self.availability), encoding="utf-8")
         self.receipt["product_manifest_sha256"] = hashlib.sha256(self.product_path.read_bytes()).hexdigest()
         self.receipt["availability_sha256"] = hashlib.sha256(self.availability_path.read_bytes()).hexdigest()
@@ -114,7 +123,8 @@ class CiQualificationContractTests(unittest.TestCase):
             if result["status"] == "passed":
                 path = self.evidence_dir / f"{name}.json"
                 evidence = {
-                    "schema_version": 1, "source_sha": SHA, "row_id": self.availability["row_id"],
+                    "schema_version": 1, "status": "passed", "source_sha": SHA,
+                    "row_id": self.availability["row_id"],
                     "suite": name, "product_manifest_sha256": self.receipt["product_manifest_sha256"],
                     "executed_cases": result["cases"],
                 }
@@ -129,10 +139,60 @@ class CiQualificationContractTests(unittest.TestCase):
             row_id=self.availability["row_id"],
         )
 
+    def assemble(self) -> dict:
+        return assembler.assemble(
+            product_dir=self.product_dir, availability_path=self.availability_path,
+            evidence_dir=self.evidence_dir,
+            hardware_path=self.hardware_path,
+            source_sha=SHA, plan_digest=PLAN, row_id=self.availability["row_id"],
+        )
+
+    def test_assembler_accepts_exact_executed_suite_set(self) -> None:
+        self.hardware_path = Path(self.temporary.name) / "hardware.json"
+        self.hardware_path.write_text(json.dumps(self.receipt["hardware"]), encoding="utf-8")
+        self.assertEqual(self.assemble(), self.receipt)
+
+    def test_assembler_rejects_missing_or_failed_suite_evidence(self) -> None:
+        self.hardware_path = Path(self.temporary.name) / "hardware.json"
+        self.hardware_path.write_text(json.dumps(self.receipt["hardware"]), encoding="utf-8")
+        path = self.evidence_dir / "moe.json"
+        saved = path.read_bytes()
+        path.unlink()
+        with self.assertRaises(OSError):
+            self.assemble()
+        path.write_bytes(saved)
+        evidence = json.loads(saved)
+        evidence["status"] = "failed"
+        path.write_text(json.dumps(evidence), encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "moe evidence did not pass"):
+            self.assemble()
+
+    def test_assembler_requires_packaging_evidence_on_unavailable_row(self) -> None:
+        self.product["backend"] = "rocm"
+        self.availability["row_id"] = "linux-rocm"
+        self.availability.update({"state": "hardware-unavailable", "reason": "no approved GPU runner"})
+        self.availability.pop("runner")
+        self.refresh_hashes()
+        self.hardware_path = None
+        receipt = self.assemble()
+        self.assertEqual(receipt["status"], "hardware-unavailable")
+        self.assertEqual(receipt["suites"]["dense"], {"status": "not-executed"})
+        (self.evidence_dir / "packaging-runtime.json").unlink()
+        with self.assertRaises(OSError):
+            self.assemble()
+
     def test_all_nine_core_rows_match_runtime_catalog(self) -> None:
         for row_id in contract.CORE_ROWS:
             with self.subTest(row_id=row_id):
                 self.assertEqual(contract.catalog_row(row_id)["id"], row_id)
+
+    def test_system_one_and_decisions_have_separate_required_results(self) -> None:
+        self.assertIn("system-one", contract.REQUIRED_SUITES)
+        self.assertIn("decisions", contract.REQUIRED_SUITES)
+        self.assertNotIn("system-one-decisions", contract.REQUIRED_SUITES)
+        self.receipt["suites"].pop("decisions")
+        with self.assertRaisesRegex(ValueError, "missing, duplicate, or unknown qualification suite"):
+            self.validate()
 
     def test_qualified_gpu_receipt_requires_all_suites_and_actual_device(self) -> None:
         self.validate()
@@ -238,6 +298,15 @@ class CiQualificationContractTests(unittest.TestCase):
         path.write_text('{"status":"failed","status":"passed"}', encoding="utf-8")
         with self.assertRaisesRegex(ValueError, "duplicate JSON key"):
             contract.load_json(path)
+
+    def test_failed_evidence_cannot_be_labeled_as_passed_in_receipt(self) -> None:
+        path = self.evidence_dir / "dense.json"
+        evidence = json.loads(path.read_text(encoding="utf-8"))
+        evidence["status"] = "failed"
+        path.write_text(json.dumps(evidence), encoding="utf-8")
+        self.receipt["suites"]["dense"]["evidence_sha256"] = contract.digest(path)
+        with self.assertRaisesRegex(ValueError, "dense evidence did not pass"):
+            self.validate()
 
     def test_changed_product_bytes_fail_even_when_manifest_is_unchanged(self) -> None:
         (self.product_dir / "skippy").write_bytes(b"corrupted CLI")

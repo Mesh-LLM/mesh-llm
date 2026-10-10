@@ -24,7 +24,8 @@ SUITE_CASES = {
     "recurrent": {"prefill-decode", "state-preservation", "repeated-restore", "reset-isolation", "restart"},
     "moe": {"expert-metadata", "expert-execution", "staged-parity", "repeated-restore", "suffix-continuation", "session-isolation"},
     "kv-cache": {"dense-prefix-hit", "recurrent-prefix-hit", "suffix-continuation", "divergent-prefix", "isolation", "eviction", "import-export", "persisted-restart", "corrupt-rejection", "restore-observed"},
-    "system-one-decisions": {"laya-goldens", "endpoint-equivalence", "probability-contract", "negative-cases", "lifecycle"},
+    "system-one": {"laya-goldens", "reader-contract", "negative-cases", "lifecycle"},
+    "decisions": {"endpoint-equivalence", "probability-contract", "negative-cases", "lifecycle"},
 }
 REQUIRED_SUITES = set(SUITE_CASES)
 MODEL_TAGS = {
@@ -32,7 +33,8 @@ MODEL_TAGS = {
     "recurrent": ("hybrid", "recurrent"),
     "moe": ("moe",),
     "kv-cache": ("dense", "hybrid"),
-    "system-one-decisions": ("system-one", "decision"),
+    "system-one": ("system-one",),
+    "decisions": ("decision",),
 }
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
 GIT_SHA = re.compile(r"^[0-9a-f]{40}$")
@@ -197,6 +199,7 @@ def validate_receipt(
         require(result.get("evidence_sha256") == digest(evidence_path), f"{name} evidence digest differs from bytes")
         evidence = load_json(evidence_path)
         require(evidence.get("schema_version") == 1, f"{name} evidence has unknown schema")
+        require(evidence.get("status") == "passed", f"{name} evidence did not pass")
         require(evidence.get("source_sha") == source_sha and evidence.get("row_id") == row_id, f"{name} evidence belongs to another source or row")
         require(evidence.get("suite") == name, f"{name} evidence belongs to another suite")
         require(evidence.get("product_manifest_sha256") == digest(product_manifest), f"{name} evidence belongs to another product")

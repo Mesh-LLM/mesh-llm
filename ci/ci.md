@@ -18,8 +18,14 @@ standalone product is an immutable run artifact. The Linux and Windows CPU produ
 also restore pinned SmolLM2 dense and Granite hybrid fixtures and require
 real prefill and decode through that composed CLI/runtime pair before uploading
 the product. They upload digest-bound pilot evidence files. These pilots cover
-only load and prefill/decode; the full six-suite, nine-row model and hardware qualification
+only load and prefill/decode; the six named executable results plus packaging/runtime across nine rows
 gate remains pending in the audit's acceptance checklist.
+The receipt contract requires separate `dense`, `recurrent`, `moe`, `kv-cache`,
+`system-one`, and `decisions` results in addition to `packaging-runtime`.
+`skippy/scripts/assemble-ci-qualification.py` accepts suite evidence only when
+the exact composed product, protected availability record, model identities,
+and all applicable cases validate. No platform workflow produces that complete
+evidence set yet, so the assembler is not a current lane gate.
 
 The affected-crate fallback roster in `scripts/affected-crates.sh` includes
 `mesh-llm-moa-plugin` and `mesh-llm-wallet` alongside their related workspace
@@ -1019,7 +1025,7 @@ protected pre-migration host slices derive it from their checked-out source.
 Linux and Windows CPU standalone product jobs execute pinned dense, hybrid, and MoE
 models through the composed CLI and runtime, require positive prefill and decode,
 and upload digest-bound pilot evidence. These pilots do not constitute the full
-six-suite, nine-row qualification receipt.
+six named executable results plus packaging/runtime across nine rows.
 Native-runtime slices build or restore one Skippy llama.cpp
 runtime per selected backend and upload a source-bound `ci-source.json` beside
 the archive. The Linux CPU package cache uses the exact source revision in its
