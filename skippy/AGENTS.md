@@ -28,6 +28,23 @@ See `CONTRIBUTING.md` for full dev workflow.
 
 ## llama.cpp ABI Patch Queue
 
+### No model-family special cases in shared Skippy machinery
+
+- Do not branch on a model-family name or `LLM_ARCH_*` in shared Skippy stage
+  extraction, planning, replay, proof, input ownership, or serving logic to
+  make a family pass. This is a hard rule for new code and repairs.
+- Express a difference through the graph, an explicit capability or input
+  contract, runtime metadata, or a recipe supplied by the owning model builder.
+  Put genuinely family-specific graph construction and annotations in that
+  model's implementation and its owning `model_support/` patch.
+- Before adding a shared-runtime exception, audit the same capability across
+  other families and test the general contract. If the capability cannot yet
+  be expressed generally, report the gap instead of adding an architecture
+  allowlist or a family-named fallback.
+- Existing family checks in shared Skippy paths are audit debt, not precedent.
+  When touching one, replace it with a semantic contract or record the blocker
+  and a migration plan; do not copy the pattern into another path.
+
 mesh-llm embeds the stage runtime and links patched llama.cpp static ABI
 libraries. The only durable llama.cpp patch queue is
 `skippy/llama_cpp/patches`, pinned by `skippy/llama_cpp/upstream.txt`.
