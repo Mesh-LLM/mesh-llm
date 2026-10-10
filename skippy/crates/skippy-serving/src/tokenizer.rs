@@ -1,3 +1,4 @@
+use crate::runtime_state::panic_recovery::lock_runtime;
 use std::{
     sync::atomic::{AtomicBool, Ordering},
     sync::{Arc, Mutex},
@@ -119,12 +120,7 @@ impl TokenizerSource for LoadedStageZeroTokenizer {
         if let Some(signal) = &self.initial_check_signal {
             signal.wait();
         }
-        let runtime =
-            self.runtime
-                .lock()
-                .map_err(|_| TokenizerCapabilityError::BackendFailure {
-                    message: "runtime lock poisoned".to_owned(),
-                })?;
+        let runtime = lock_runtime(&self.runtime);
         self.ensure_active()?;
         let tokens = runtime
             .model
@@ -137,12 +133,7 @@ impl TokenizerSource for LoadedStageZeroTokenizer {
 
     fn token_pieces(&self, token_ids: &[i32]) -> Result<Vec<Vec<u8>>, TokenizerCapabilityError> {
         self.ensure_active()?;
-        let runtime =
-            self.runtime
-                .lock()
-                .map_err(|_| TokenizerCapabilityError::BackendFailure {
-                    message: "runtime lock poisoned".to_owned(),
-                })?;
+        let runtime = lock_runtime(&self.runtime);
         self.ensure_active()?;
         token_ids
             .iter()

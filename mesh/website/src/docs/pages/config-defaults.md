@@ -91,6 +91,7 @@ jinja         = true                      # Use Jinja chat rendering
 skip_chat_parsing = false                 # Return raw template output metadata
 # chat_template = "..."                  # Optional inline template override
 # chat_template_file = "/path/template.jinja"
+# allow_request_chat_template = false   # Let requests send templates (trusts all callers)
 # system_prompt = "You are a concise assistant."
 # prefill_assistant = "The answer is"
 # grammar = "root ::= ..."               # Mutually exclusive with json_schema
