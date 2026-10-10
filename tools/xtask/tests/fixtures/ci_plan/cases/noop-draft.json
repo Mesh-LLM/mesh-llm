@@ -1,0 +1,17 @@
+{
+  "manifest": "default",
+  "input": {
+    "profile": "pr-draft",
+    "event_name": "pull_request",
+    "source_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "base_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "changed_files": [],
+    "affected_crates": [],
+    "workspace_packages": [
+      {
+        "name": "mesh-llm",
+        "path": "crates/mesh-llm"
+      }
+    ]
+  }
+}
