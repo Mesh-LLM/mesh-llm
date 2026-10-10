@@ -185,10 +185,10 @@ index 86360c594..34eb29085 100644
                  cb(top_k, "top_k", il);
              } else {
 diff --git a/src/skippy/stage_program.cpp b/src/skippy/stage_program.cpp
-index ccf162438..413e55cea 100644
+index 2f296f6d1..091e33cea 100644
 --- a/src/skippy/stage_program.cpp
 +++ b/src/skippy/stage_program.cpp
-@@ -244,7 +244,6 @@ bool skippy_stage_program::instantiate(
+@@ -254,7 +254,6 @@ bool skippy_stage_program::instantiate(
                  tensor = ggml_new_tensor_4d(context, static_cast<ggml_type>(root.type),
                          dims[0], dims[1], dims[2], dims[3]);
                  ggml_set_input(tensor);
@@ -196,7 +196,7 @@ index ccf162438..413e55cea 100644
                  break;
              }
              case root_kind::scratch: {
-@@ -278,6 +277,22 @@ bool skippy_stage_program::instantiate(
+@@ -306,6 +305,22 @@ bool skippy_stage_program::instantiate(
          if (tensor != nullptr) values.emplace(root.value_id, tensor);
      }
  
@@ -220,23 +220,23 @@ index ccf162438..413e55cea 100644
          if (!id.empty() && tensor != nullptr) values[id] = tensor;
      };
 diff --git a/src/skippy/stage_program_extraction.cpp b/src/skippy/stage_program_extraction.cpp
-index d0ef4b4e0..c56f0cb12 100644
+index 01477d290..13559b2b6 100644
 --- a/src/skippy/stage_program_extraction.cpp
 +++ b/src/skippy/stage_program_extraction.cpp
-@@ -537,6 +537,8 @@ bool extraction::run() {
+@@ -619,6 +619,8 @@ bool extraction::run() {
                                  dimension.value_kind == skippy_stage_geometry_expression::kind::runtime_tokens_per_sequence ||
                                  dimension.value_kind == skippy_stage_geometry_expression::kind::runtime_tokens_per_sequence_clamped ||
                                  dimension.value_kind == skippy_stage_geometry_expression::kind::runtime_tokens_per_sequence_capped ||
 +                                (dimension.value_kind == skippy_stage_geometry_expression::kind::runtime_tokens_per_kv_stream &&
 +                                 std::strncmp(ggml_get_name(tensor), "top_k", 5) == 0) ||
                                  (dimension.value_kind == skippy_stage_geometry_expression::kind::source_dimension &&
-                                  dimension.source == 0 && dimension.axis == first_axis)) {
-                             operation.dynamic_axis = axis;
+                                  dimension.source == 0 && dimension.axis == first_axis) ||
+                                 (dimension.value_kind == skippy_stage_geometry_expression::kind::source_elements &&
 diff --git a/src/skippy/stage_program_replay.cpp b/src/skippy/stage_program_replay.cpp
-index 53679d800..031db3a92 100644
+index d961ad108..fb31527c8 100644
 --- a/src/skippy/stage_program_replay.cpp
 +++ b/src/skippy/stage_program_replay.cpp
-@@ -377,15 +377,18 @@ ggml_tensor * replay_operation(
+@@ -400,15 +400,18 @@ ggml_tensor * replay_operation(
              if (sources[0] == nullptr || sources[1] == nullptr || sources[2] == nullptr ||
                      sources[0]->ne[1] != sources[1]->ne[0]) {
                  error = "stage program SET_ROWS geometry mismatch for " + operation.name +
@@ -311,5 +311,6 @@ index 8f8424f85..1e82cdeb5 100644
  
      if (arch == LLM_ARCH_NEMOTRON_H || arch == LLM_ARCH_NEMOTRON_H_MOE) {
          std::vector<uint32_t> n_ff_per_layer;
+
 -- 
-2.54.0 (Apple Git-157)
+2.39.5

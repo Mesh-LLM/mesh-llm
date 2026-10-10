@@ -17,16 +17,16 @@ make the difference observable, and the structural coverage tests assert it: an
 unsplit gemma build reaches 168 annotation sites and derives none, while the
 same build under capture derives one recipe per site.
 ---
- src/skippy/stage_program.cpp                  | 10 +++
- src/skippy/stage_program.h                    | 22 ++++++
- src/skippy/stage_program_extraction.cpp       | 18 +++--
+ src/skippy/stage_program.cpp                  | 10 ++++
+ src/skippy/stage_program.h                    | 22 ++++++++
+ src/skippy/stage_program_extraction.cpp       | 18 ++++---
  src/skippy/stage_program_extraction_roots.cpp |  4 +-
- src/skippy/stage_program_geometry.cpp         | 77 +++++++++++++++++--
- src/skippy/tests/graph_build_inputs.cpp       | 65 +++++++++++++++-
+ src/skippy/stage_program_geometry.cpp         | 77 +++++++++++++++++++++++++--
+ src/skippy/tests/graph_build_inputs.cpp       | 65 +++++++++++++++++++++-
  6 files changed, 181 insertions(+), 15 deletions(-)
 
 diff --git a/src/skippy/stage_program.cpp b/src/skippy/stage_program.cpp
-index 38425a923..965b90df8 100644
+index 38f03bea7..2f296f6d1 100644
 --- a/src/skippy/stage_program.cpp
 +++ b/src/skippy/stage_program.cpp
 @@ -33,7 +33,16 @@
@@ -46,17 +46,17 @@ index 38425a923..965b90df8 100644
      replay_plan plan;
      std::unordered_set<std::string> live_operations;
      for (const auto & operation : operations) {
-@@ -911,4 +920,5 @@ void skippy_stage_program_note_arch_builder_call() { ++test_arch_builder_calls;
+@@ -920,4 +929,5 @@ void skippy_stage_program_note_arch_builder_call() { ++test_arch_builder_calls;
  void skippy_stage_program_note_selector_call() { ++test_selector_calls; }
  uint64_t skippy_stage_program_arch_builder_calls() { return test_arch_builder_calls; }
  uint64_t skippy_stage_program_selector_calls() { return test_selector_calls; }
 +uint64_t skippy_stage_program_replay_plan_builds() { return test_replay_plan_builds; }
  #endif
 diff --git a/src/skippy/stage_program.h b/src/skippy/stage_program.h
-index 4d510ef11..6bbe2a6d9 100644
+index 912bbe3fd..5c336f507 100644
 --- a/src/skippy/stage_program.h
 +++ b/src/skippy/stage_program.h
-@@ -45,6 +45,11 @@ struct skippy_stage_geometry_expression {
+@@ -47,6 +47,11 @@ struct skippy_stage_geometry_expression {
          source_stride_tokens_per_sequence,
          source_elements,
          source_elements_per_token,
@@ -68,7 +68,7 @@ index 4d510ef11..6bbe2a6d9 100644
      };
  
      kind value_kind = kind::constant;
-@@ -300,7 +305,18 @@ bool skippy_extract_stage_program(
+@@ -306,7 +311,18 @@ bool skippy_extract_stage_program(
  // during capture before a stage program can be installed.
  bool skippy_stage_program_supports_operation(uint32_t op);
  
@@ -87,7 +87,7 @@ index 4d510ef11..6bbe2a6d9 100644
  void skippy_stage_geometry_note(const ggml_tensor * tensor, const skippy_stage_geometry_recipe & recipe);
  void skippy_stage_geometry_reset();
  bool skippy_stage_geometry_lookup(const ggml_tensor * tensor, skippy_stage_geometry_recipe & recipe);
-@@ -334,4 +350,10 @@ void skippy_stage_program_note_arch_builder_call();
+@@ -340,4 +356,10 @@ void skippy_stage_program_note_arch_builder_call();
  void skippy_stage_program_note_selector_call();
  uint64_t skippy_stage_program_arch_builder_calls();
  uint64_t skippy_stage_program_selector_calls();
@@ -99,10 +99,10 @@ index 4d510ef11..6bbe2a6d9 100644
 +uint64_t skippy_stage_geometry_recipe_derivations();
  #endif
 diff --git a/src/skippy/stage_program_extraction.cpp b/src/skippy/stage_program_extraction.cpp
-index 59d4b864b..3f09b31e0 100644
+index ba7024fd4..02b833a02 100644
 --- a/src/skippy/stage_program_extraction.cpp
 +++ b/src/skippy/stage_program_extraction.cpp
-@@ -179,14 +179,16 @@ bool extraction::run() {
+@@ -185,14 +185,16 @@ bool extraction::run() {
                  const bool same_shape_cont = tensor->op == GGML_OP_CONT && tensor->src[0] != nullptr &&
                          dimensions(tensor) == dimensions(tensor->src[0]);
                  if (recorded_geometry && same_shape_cont) {
@@ -121,7 +121,7 @@ index 59d4b864b..3f09b31e0 100644
                          for (int32_t axis = 0; axis < GGML_MAX_DIMS; ++axis) {
                              operation.geometry.dimensions[axis] =
                                      skippy_stage_geometry_expression::source_dimension(0, axis);
-@@ -196,7 +198,7 @@ bool extraction::run() {
+@@ -202,7 +204,7 @@ bool extraction::run() {
                          // Preserve padded target extents while unpadded axes continue to follow the
                          // runtime source. Replay recomputes right padding from this target geometry
                          // and the captured invariant left padding.
@@ -130,7 +130,7 @@ index 59d4b864b..3f09b31e0 100644
                          for (int32_t axis = 0; axis < GGML_MAX_DIMS; ++axis) {
                              const int32_t left = ggml_get_op_params_i32(tensor, 2*axis);
                              const int32_t right = ggml_get_op_params_i32(tensor, 2*axis + 1);
-@@ -238,12 +240,12 @@ bool extraction::run() {
+@@ -244,12 +246,12 @@ bool extraction::run() {
                                      std::to_string(tensor->src[0]->ne[3]);
                              return false;
                          }
@@ -145,7 +145,7 @@ index 59d4b864b..3f09b31e0 100644
                          const int32_t source_axis = dynamic_axis(value(tensor->src[0]));
                          for (int32_t axis = 0; axis < GGML_MAX_DIMS; ++axis) {
                              if (n_sequences > 1 && tensor->ne[axis] == static_cast<int64_t>(n_sequences) &&
-@@ -328,7 +330,7 @@ bool extraction::run() {
+@@ -386,7 +388,7 @@ bool extraction::run() {
                          }
                      } else if (tensor->op == GGML_OP_CONT && tensor->src[0] != nullptr &&
                              ggml_nelements(tensor) == ggml_nelements(tensor->src[0])) {
@@ -154,7 +154,7 @@ index 59d4b864b..3f09b31e0 100644
                          int32_t token_axis = -1;
                          for (int32_t axis = 0; axis < GGML_MAX_DIMS; ++axis) {
                              if (tensor->ne[axis] != static_cast<int64_t>(n_tokens)) continue;
-@@ -358,7 +360,7 @@ bool extraction::run() {
+@@ -416,7 +418,7 @@ bool extraction::run() {
                              singleton_only = tensor->src[0]->ne[source_axes[axis]] == tensor->ne[target_axes[axis]];
                          }
                          if (singleton_only) {
@@ -163,17 +163,17 @@ index 59d4b864b..3f09b31e0 100644
                              for (size_t axis = 0; axis < source_axes.size(); ++axis) {
                                  operation.geometry.dimensions[target_axes[axis]] =
                                          skippy_stage_geometry_expression::source_dimension(0, source_axes[axis]);
-@@ -367,7 +369,7 @@ bool extraction::run() {
+@@ -425,7 +427,7 @@ bool extraction::run() {
                              const std::string source_id = value(tensor->src[0]);
                              int32_t source_axis = dynamic_axis(source_id);
                              if (source_axis < 0) source_axis = reference_dynamic_axis(source_id);
 -                            operation.geometry = skippy_stage_geometry_static(tensor);
 +                            operation.geometry = skippy_stage_geometry_snapshot(tensor);
                              bool recipe_built = false;
-                             int32_t runtime_token_axis = -1;
-                             for (int32_t axis = 0; axis < GGML_MAX_DIMS; ++axis) {
+                             if ((model.arch == LLM_ARCH_RWKV6 || model.arch == LLM_ARCH_RWKV6QWEN2) &&
+                                     source_axis == 1 && n_sequences > 1 &&
 diff --git a/src/skippy/stage_program_extraction_roots.cpp b/src/skippy/stage_program_extraction_roots.cpp
-index 2913255a0..47b39e50a 100644
+index dbfb73363..778bb12cc 100644
 --- a/src/skippy/stage_program_extraction_roots.cpp
 +++ b/src/skippy/stage_program_extraction_roots.cpp
 @@ -353,7 +353,9 @@ bool extraction::assign_root(const ggml_tensor * tensor) {
@@ -188,7 +188,7 @@ index 2913255a0..47b39e50a 100644
                      if (tensor->ne[axis] == static_cast<int64_t>(n_tokens)) {
                          root.geometry.dimensions[axis] = skippy_stage_geometry_expression::tokens();
 diff --git a/src/skippy/stage_program_geometry.cpp b/src/skippy/stage_program_geometry.cpp
-index 5818ff5b9..3da69760d 100644
+index d18e39f67..56c498faa 100644
 --- a/src/skippy/stage_program_geometry.cpp
 +++ b/src/skippy/stage_program_geometry.cpp
 @@ -35,6 +35,14 @@ namespace {
@@ -218,7 +218,7 @@ index 5818ff5b9..3da69760d 100644
          case skippy_stage_geometry_expression::kind::constant:
              result = expression.constant_value;
              return true;
-@@ -498,18 +511,64 @@ skippy_stage_geometry_expression skippy_stage_geometry_expression::source_elemen
+@@ -515,18 +528,64 @@ skippy_stage_geometry_expression skippy_stage_geometry_expression::source_elemen
      return result;
  }
  
@@ -288,7 +288,7 @@ index 5818ff5b9..3da69760d 100644
  }
  
  void skippy_stage_geometry_reset() {
-@@ -557,4 +616,12 @@ bool skippy_stage_geometry_evaluate_for_test(
+@@ -574,4 +633,12 @@ bool skippy_stage_geometry_evaluate_for_test(
      runtime.kv_stream_count = kv_stream_count;
      return skippy_stage_program_detail::evaluate_geometry(recipe, runtime, sources, dims, strides, offset, error);
  }
@@ -426,6 +426,6 @@ index 384880d5b..d402f64fb 100644
      if (result == 0 && (!observed_changed_sequences || !observed_partial_outputs || !observed_zero_outputs ||
              !observed_token_input || !observed_embedding_input)) result = 125;
      set_reuse_environment(had_reuse_setting ? saved_reuse_setting.c_str() : nullptr);
--- 
-2.54.0 (Apple Git-157)
 
+-- 
+2.39.5

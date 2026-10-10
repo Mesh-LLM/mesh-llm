@@ -4,62 +4,66 @@ Date: Fri, 25 Sep 2026 06:30:38 +1000
 Subject: [PATCH 26/67] skippy: replay extracted stage programs
 
 ---
- src/CMakeLists.txt                            | 107 ++
- src/llama-context.cpp                         | 234 +++++
- src/llama-context.h                           |  20 +
- src/llama-graph.cpp                           | 359 +++++--
- src/llama-graph.h                             |  36 +-
- src/llama-impl.h                              |  36 +
- src/llama-kv-cache-dsv4.cpp                   |  27 +-
- src/llama-kv-cache-dsv4.h                     |   4 +
- src/llama-kv-cache-msa.cpp                    |   2 +-
- src/llama-kv-cache.cpp                        | 102 +-
- src/llama-kv-cache.h                          |  10 +
- src/llama-model.cpp                           |  25 +
- src/models/bailingmoe3.cpp                    |  82 +-
- src/models/deepseek4.cpp                      | 273 +++++-
- src/models/delta-net-base.cpp                 | 120 ++-
- src/models/kimi-linear.cpp                    | 111 ++-
- src/models/laguna.cpp                         |   9 +
- src/models/lfm2.cpp                           |  25 +-
- src/models/mamba-base.cpp                     | 194 +++-
- src/models/mimo2.cpp                          |   7 +
- src/models/minicpm3.cpp                       |  28 +-
- src/models/models.h                           |  43 +-
- src/models/olmo2.cpp                          |   6 +
- src/models/qwen35.cpp                         |  82 ++
- src/models/qwen35moe.cpp                      |  54 ++
- src/models/qwen3next.cpp                      | 102 ++
- src/models/qwen4exp.cpp                       | 268 +++--
- src/models/spark2-5.cpp                       |   9 +
- src/skippy/model_loading.cpp                  |  24 +-
- src/skippy/session.cpp                        |   6 +
- src/skippy/stage_plan.cpp                     |  10 +-
- src/skippy/stage_program.cpp                  | 923 ++++++++++++++++++
- src/skippy/stage_program.h                    | 343 +++++++
- src/skippy/stage_program_extraction.cpp       | 717 ++++++++++++++
- .../stage_program_extraction_internal.h       |  75 ++
- src/skippy/stage_program_extraction_roots.cpp | 627 ++++++++++++
- src/skippy/stage_program_geometry.cpp         | 577 +++++++++++
- src/skippy/stage_program_inputs.cpp           |  56 ++
- src/skippy/stage_program_inputs.h             |  27 +
- src/skippy/stage_program_installation.cpp     | 139 +++
- src/skippy/stage_program_internal.h           |  52 +
- src/skippy/stage_program_outputs.cpp          |  61 ++
- src/skippy/stage_program_outputs.h            |  27 +
- src/skippy/stage_program_replay.cpp           | 628 ++++++++++++
- src/skippy/stage_program_token_axis.cpp       | 195 ++++
- src/skippy/stage_realization.cpp              |  97 +-
- src/skippy/stage_realization.h                |   1 +
- src/skippy/stage_slice_plan.cpp               |   4 +
- src/skippy/state_effects.cpp                  |   8 +-
- src/skippy/tests/graph_build_inputs.cpp       | 891 ++++++++++++++++-
- src/skippy/tests/noalloc_graph_planning.cpp   |  45 +
- src/skippy/tests/profile_residency.cpp        | 153 ++-
- .../tests/renamed_multishard_planning.cpp     | 223 ++++-
- src/skippy/tests/stage_program_parity.h       | 374 +++++++
- tests/test-llama-archs.cpp                    |  39 +
- 55 files changed, 8411 insertions(+), 286 deletions(-)
+ src/CMakeLists.txt                               | 107 +++
+ src/llama-context.cpp                            | 234 ++++++
+ src/llama-context.h                              |  20 +
+ src/llama-graph.cpp                              | 359 +++++++--
+ src/llama-graph.h                                |  36 +-
+ src/llama-impl.h                                 |  36 +
+ src/llama-kv-cache-dsv4.cpp                      |  27 +-
+ src/llama-kv-cache-dsv4.h                        |   4 +
+ src/llama-kv-cache-msa.cpp                       |   2 +-
+ src/llama-kv-cache.cpp                           | 102 ++-
+ src/llama-kv-cache.h                             |  10 +
+ src/llama-model.cpp                              |  25 +
+ src/models/bailingmoe3.cpp                       |  82 +-
+ src/models/deepseek4.cpp                         | 273 ++++++-
+ src/models/delta-net-base.cpp                    | 120 ++-
+ src/models/granite-switch.cpp                    |  25 +-
+ src/models/kimi-linear.cpp                       | 111 ++-
+ src/models/laguna.cpp                            |   9 +
+ src/models/lfm2.cpp                              |  25 +-
+ src/models/mamba-base.cpp                        | 194 ++++-
+ src/models/mimo2.cpp                             |   7 +
+ src/models/minicpm3.cpp                          |  28 +-
+ src/models/models.h                              |  43 +-
+ src/models/olmo2.cpp                             |   6 +
+ src/models/qwen35.cpp                            |  82 ++
+ src/models/qwen35moe.cpp                         |  54 ++
+ src/models/qwen3next.cpp                         | 102 +++
+ src/models/qwen4exp.cpp                          | 268 +++++--
+ src/models/rwkv6-base.cpp                        |  13 +-
+ src/models/rwkv7-base.cpp                        |  36 +-
+ src/models/rwkv7.cpp                             |  35 +-
+ src/models/spark2-5.cpp                          |   9 +
+ src/skippy/model_loading.cpp                     |  24 +-
+ src/skippy/session.cpp                           |   6 +
+ src/skippy/stage_plan.cpp                        |  10 +-
+ src/skippy/stage_program.cpp                     | 953 +++++++++++++++++++++++
+ src/skippy/stage_program.h                       | 344 ++++++++
+ src/skippy/stage_program_extraction.cpp          | 802 +++++++++++++++++++
+ src/skippy/stage_program_extraction_internal.h   |  75 ++
+ src/skippy/stage_program_extraction_roots.cpp    | 635 +++++++++++++++
+ src/skippy/stage_program_geometry.cpp            | 577 ++++++++++++++
+ src/skippy/stage_program_inputs.cpp              | 104 +++
+ src/skippy/stage_program_inputs.h                |  43 +
+ src/skippy/stage_program_installation.cpp        | 139 ++++
+ src/skippy/stage_program_internal.h              |  52 ++
+ src/skippy/stage_program_outputs.cpp             |  61 ++
+ src/skippy/stage_program_outputs.h               |  27 +
+ src/skippy/stage_program_replay.cpp              | 654 ++++++++++++++++
+ src/skippy/stage_program_token_axis.cpp          | 195 +++++
+ src/skippy/stage_realization.cpp                 |  97 ++-
+ src/skippy/stage_realization.h                   |   1 +
+ src/skippy/stage_slice_plan.cpp                  |   4 +
+ src/skippy/state_effects.cpp                     |   8 +-
+ src/skippy/tests/graph_build_inputs.cpp          | 891 ++++++++++++++++++++-
+ src/skippy/tests/noalloc_graph_planning.cpp      |  45 ++
+ src/skippy/tests/profile_residency.cpp           | 153 +++-
+ src/skippy/tests/renamed_multishard_planning.cpp | 223 +++++-
+ src/skippy/tests/stage_program_parity.h          | 374 +++++++++
+ tests/test-llama-archs.cpp                       |  39 +
+ 59 files changed, 8715 insertions(+), 305 deletions(-)
  create mode 100644 src/skippy/stage_program.cpp
  create mode 100644 src/skippy/stage_program.h
  create mode 100644 src/skippy/stage_program_extraction.cpp
@@ -2861,6 +2865,49 @@ index 342a5d795..50278115b 100644
  
      ggml_tensor * ssm_write = ggml_cpy(ctx0, src, dst);
      ggml_build_forward_expand(gf, ssm_write);
+diff --git a/src/models/granite-switch.cpp b/src/models/granite-switch.cpp
+index c190a4778..776fae196 100644
+--- a/src/models/granite-switch.cpp
++++ b/src/models/granite-switch.cpp
+@@ -302,8 +302,12 @@ llama_model_granite_switch::graph::graph(
+     cb(router_out, "router_out", R);
+ 
+     // row 0 of router_out is the attended slot; clamp+round to an I32 index
+-    ggml_tensor * slot_f = ggml_cont(ctx0,
+-        ggml_view_2d(ctx0, router_out, 1, n_tokens, router_out->nb[1], 0));
++    ggml_tensor * slot_view = ggml_view_2d(ctx0, router_out, 1, n_tokens, router_out->nb[1], 0);
++    auto slot_view_geometry = skippy_stage_geometry_static(slot_view);
++    slot_view_geometry.dimensions[1] = skippy_stage_geometry_expression::tokens();
++    slot_view_geometry.byte_strides[1] = skippy_stage_geometry_expression::source_stride(0, 1);
++    skippy_stage_geometry_note(slot_view, slot_view_geometry);
++    ggml_tensor * slot_f = ggml_cont(ctx0, slot_view);
+     slot_f = ggml_reshape_1d(ctx0, slot_f, n_tokens);
+     slot_f = ggml_clamp(ctx0, slot_f, 0.0f, (float) smodel.n_adapters);
+     slot_f = ggml_round(ctx0, slot_f);
+@@ -374,9 +378,20 @@ ggml_tensor * llama_model_granite_switch::graph::build_attention_layer(
+     const int64_t n_embd_kv = n_embd_head * n_head_kv;
+ 
+     // slice fused qkv into Q/K/V, made contiguous so LoRA deltas can be added
+-    ggml_tensor * Qcur = ggml_cont(ctx0, ggml_view_2d(ctx0, qkv, n_embd_q,  qkv->ne[1], qkv->nb[1], 0));
+-    ggml_tensor * Kcur = ggml_cont(ctx0, ggml_view_2d(ctx0, qkv, n_embd_kv, qkv->ne[1], qkv->nb[1], n_embd_q*ggml_element_size(qkv)));
+-    ggml_tensor * Vcur = ggml_cont(ctx0, ggml_view_2d(ctx0, qkv, n_embd_kv, qkv->ne[1], qkv->nb[1], (n_embd_q + n_embd_kv)*ggml_element_size(qkv)));
++    // the slices view the token-major projection, so the stage takes their token
++    // extent from the source instead of deriving it from the captured slice shape
++    ggml_tensor * q_slice = ggml_view_2d(ctx0, qkv, n_embd_q,  qkv->ne[1], qkv->nb[1], 0);
++    ggml_tensor * k_slice = ggml_view_2d(ctx0, qkv, n_embd_kv, qkv->ne[1], qkv->nb[1], n_embd_q*ggml_element_size(qkv));
++    ggml_tensor * v_slice = ggml_view_2d(ctx0, qkv, n_embd_kv, qkv->ne[1], qkv->nb[1], (n_embd_q + n_embd_kv)*ggml_element_size(qkv));
++    for (ggml_tensor * slice : {q_slice, k_slice, v_slice}) {
++        auto geometry = skippy_stage_geometry_static(slice);
++        geometry.dimensions[1] = skippy_stage_geometry_expression::tokens();
++        geometry.byte_strides[1] = skippy_stage_geometry_expression::source_stride(0, 1);
++        skippy_stage_geometry_note(slice, geometry);
++    }
++    ggml_tensor * Qcur = ggml_cont(ctx0, q_slice);
++    ggml_tensor * Kcur = ggml_cont(ctx0, k_slice);
++    ggml_tensor * Vcur = ggml_cont(ctx0, v_slice);
+ 
+     Qcur = ggml_add(ctx0, Qcur, build_switched_lora_delta(sl.a_q, sl.b_q, cur, adapter_ids));
+     Kcur = ggml_add(ctx0, Kcur, build_switched_lora_delta(sl.a_k, sl.b_k, cur, adapter_ids));
 diff --git a/src/models/kimi-linear.cpp b/src/models/kimi-linear.cpp
 index b8c455360..af8aaa757 100644
 --- a/src/models/kimi-linear.cpp
@@ -4764,6 +4811,153 @@ index 6b89dde89..6b6c1a097 100644
      cb(conv_out, "ple_conv_out", il);
  
      return ggml_add(ctx0, hidden, ggml_add(ctx0, gated, conv_out));
+diff --git a/src/models/rwkv6-base.cpp b/src/models/rwkv6-base.cpp
+index 27d30b669..ff68a6ea9 100644
+--- a/src/models/rwkv6-base.cpp
++++ b/src/models/rwkv6-base.cpp
+@@ -141,9 +141,16 @@ ggml_tensor * llm_build_rwkv6_base::build_rwkv6_time_mix(llm_graph_input_rs * in
+     cur       = ggml_view_1d(ctx0, wkv_output, n_embd * n_tokens, 0);
+     wkv_state = ggml_view_1d(ctx0, wkv_output, n_embd * head_size * n_seqs, n_embd * n_tokens * sizeof(float));
+ 
+-    ggml_tensor * wkv_state_write = ggml_cpy(ctx0, wkv_state,
+-                     ggml_view_1d(ctx0, mctx_cur->get_s_l(il), hparams.n_embd_s() * n_seqs,
+-                                  hparams.n_embd_s() * kv_head * ggml_element_size(mctx_cur->get_s_l(il))));
++    ggml_tensor * wkv_state_destination = ggml_view_1d(ctx0, mctx_cur->get_s_l(il),
++            hparams.n_embd_s() * n_seqs,
++            hparams.n_embd_s() * kv_head * ggml_element_size(mctx_cur->get_s_l(il)));
++    auto wkv_state_destination_geometry = skippy_stage_geometry_static(wkv_state_destination);
++    wkv_state_destination_geometry.dimensions[0] =
++            skippy_stage_geometry_expression::sequences(hparams.n_embd_s());
++    wkv_state_destination_geometry.view_offset =
++            skippy_stage_geometry_expression::recurrent_head_offset(0, 1);
++    skippy_stage_geometry_note(wkv_state_destination, wkv_state_destination_geometry);
++    ggml_tensor * wkv_state_write = ggml_cpy(ctx0, wkv_state, wkv_state_destination);
+     ggml_build_forward_expand(gf, wkv_state_write);
+     state_write(skippy_state_kind::recurrent_ssm, mctx_cur->get_s_l(il), wkv_state_write, il);
+ 
+diff --git a/src/models/rwkv7-base.cpp b/src/models/rwkv7-base.cpp
+index d42c07ab7..1a8479705 100644
+--- a/src/models/rwkv7-base.cpp
++++ b/src/models/rwkv7-base.cpp
+@@ -63,6 +63,21 @@ ggml_tensor * llm_build_rwkv7_base::build_rwkv7_time_mix(llm_graph_input_rs * in
+         has_gating ? ggml_view_2d(ctx0, xxx, n_embd, n_tokens, xxx->nb[1], n_embd * n_tokens * 5 * sizeof(float)) :
+                      nullptr;
+ 
++    // Each projection plane spans the runtime token count. Rebuild the view
++    // extent and offset from the source when the stage replays a new batch.
++    ggml_tensor * projections[] = {xr, xw, xk, xv, xa, xg};
++    for (int i = 0; i < 6; ++i) {
++        ggml_tensor * projection = projections[i];
++        if (projection == nullptr) {
++            continue;
++        }
++        auto geometry = skippy_stage_geometry_static(projection);
++        geometry.dimensions[1] = skippy_stage_geometry_expression::tokens();
++        geometry.byte_strides[1] = skippy_stage_geometry_expression::source_stride(0, 1);
++        geometry.view_offset = skippy_stage_geometry_expression::source_stride(0, 3, i);
++        skippy_stage_geometry_note(projection, geometry);
++    }
++
+     ggml_tensor * r = build_lora_mm(layer.time_mix_receptance, xr);
+     ggml_tensor * w = ggml_add(
+         ctx0, ggml_mul_mat(ctx0, layer.time_mix_w2, ggml_tanh(ctx0, ggml_mul_mat(ctx0, layer.time_mix_w1, xw))),
+@@ -108,9 +123,16 @@ ggml_tensor * llm_build_rwkv7_base::build_rwkv7_time_mix(llm_graph_input_rs * in
+     cur                      = ggml_view_1d(ctx0, wkv_output, n_embd * n_tokens, 0);
+     wkv_state = ggml_view_1d(ctx0, wkv_output, n_embd * head_size * n_seqs, n_embd * n_tokens * sizeof(float));
+ 
+-    ggml_tensor * wkv_state_write = ggml_cpy(ctx0, wkv_state,
+-                     ggml_view_1d(ctx0, mctx_cur->get_s_l(il), hparams.n_embd_s() * n_seqs,
+-                                  hparams.n_embd_s() * kv_head * ggml_element_size(mctx_cur->get_s_l(il))));
++    ggml_tensor * wkv_state_destination = ggml_view_1d(ctx0, mctx_cur->get_s_l(il),
++            hparams.n_embd_s() * n_seqs,
++            hparams.n_embd_s() * kv_head * ggml_element_size(mctx_cur->get_s_l(il)));
++    auto wkv_state_destination_geometry = skippy_stage_geometry_static(wkv_state_destination);
++    wkv_state_destination_geometry.dimensions[0] =
++            skippy_stage_geometry_expression::sequences(hparams.n_embd_s());
++    wkv_state_destination_geometry.view_offset =
++            skippy_stage_geometry_expression::recurrent_head_offset(0, 1);
++    skippy_stage_geometry_note(wkv_state_destination, wkv_state_destination_geometry);
++    ggml_tensor * wkv_state_write = ggml_cpy(ctx0, wkv_state, wkv_state_destination);
+     ggml_build_forward_expand(gf, wkv_state_write);
+     state_write(skippy_state_kind::recurrent_ssm, mctx_cur->get_s_l(il), wkv_state_write, il);
+ 
+@@ -125,8 +147,12 @@ ggml_tensor * llm_build_rwkv7_base::build_rwkv7_time_mix(llm_graph_input_rs * in
+     } else {
+         cur = ggml_reshape_2d(ctx0, cur, n_embd, n_tokens);
+     }
+-    ggml_tensor * rk = ggml_sum_rows(
+-        ctx0, ggml_mul(ctx0, ggml_mul(ctx0, k, r), ggml_reshape_2d(ctx0, layer.time_mix_r_k, head_size, head_count)));
++    ggml_tensor * rk_weight = ggml_reshape_2d(ctx0, layer.time_mix_r_k, head_size, head_count);
++    auto rk_weight_geometry = skippy_stage_geometry_static(rk_weight);
++    rk_weight_geometry.dimensions[0] = skippy_stage_geometry_expression::source_dimension(0, 0, 1, head_count);
++    rk_weight_geometry.dimensions[1] = skippy_stage_geometry_expression::source_dimension(0, 0, 1, head_size);
++    skippy_stage_geometry_note(rk_weight, rk_weight_geometry);
++    ggml_tensor * rk = ggml_sum_rows(ctx0, ggml_mul(ctx0, ggml_mul(ctx0, k, r), rk_weight));
+     cur = ggml_add(ctx0, cur, ggml_reshape_2d(ctx0, ggml_mul(ctx0, v, rk), n_embd, n_tokens));
+ 
+     if (has_gating) {
+diff --git a/src/models/rwkv7.cpp b/src/models/rwkv7.cpp
+index 67c51f5b5..1d0e226f4 100644
+--- a/src/models/rwkv7.cpp
++++ b/src/models/rwkv7.cpp
+@@ -154,9 +154,17 @@ llama_model_rwkv7::graph::graph(const llama_model & model, const llm_graph_param
+         ggml_tensor * att_norm = build_norm(inpL, layer->attn_norm, layer->attn_norm_b, LLM_NORM, il);
+         cb(att_norm, "attn_norm", il);
+ 
+-        ggml_tensor * x_prev = ggml_concat(
+-            ctx0, att_shift,
+-            ggml_view_3d(ctx0, att_norm, n_embd, n_seq_tokens - 1, n_seqs, att_norm->nb[1], att_norm->nb[2], 0), 1);
++        // The history view is empty for a captured single token, but grows
++        // with each runtime sequence during prefill.
++        ggml_tensor * att_history = ggml_view_3d(
++                ctx0, att_norm, n_embd, n_seq_tokens - 1, n_seqs, att_norm->nb[1], att_norm->nb[2], 0);
++        auto att_history_geometry = skippy_stage_geometry_static(att_history);
++        att_history_geometry.dimensions[1] = skippy_stage_geometry_expression::tokens_per_sequence(1, -1);
++        att_history_geometry.dimensions[2] = skippy_stage_geometry_expression::sequences();
++        att_history_geometry.byte_strides[1] = skippy_stage_geometry_expression::source_stride(0, 1);
++        att_history_geometry.byte_strides[2] = skippy_stage_geometry_expression::source_stride(0, 2);
++        skippy_stage_geometry_note(att_history, att_history_geometry);
++        ggml_tensor * x_prev = ggml_concat(ctx0, att_shift, att_history, 1);
+ 
+         cur = build_rwkv7_time_mix(rs_inp, att_norm, x_prev, v_first, ubatch, il);
+ 
+@@ -166,9 +174,15 @@ llama_model_rwkv7::graph::graph(const llama_model & model, const llm_graph_param
+         ggml_tensor * ffn_norm = build_norm(ffn_inp, layer->attn_norm_2, layer->attn_norm_2_b, LLM_NORM, il);
+         cb(ffn_norm, "ffn_norm", il);
+ 
+-        x_prev = ggml_concat(
+-            ctx0, ffn_shift,
+-            ggml_view_3d(ctx0, ffn_norm, n_embd, n_seq_tokens - 1, n_seqs, ffn_norm->nb[1], ffn_norm->nb[2], 0), 1);
++        ggml_tensor * ffn_history = ggml_view_3d(
++                ctx0, ffn_norm, n_embd, n_seq_tokens - 1, n_seqs, ffn_norm->nb[1], ffn_norm->nb[2], 0);
++        auto ffn_history_geometry = skippy_stage_geometry_static(ffn_history);
++        ffn_history_geometry.dimensions[1] = skippy_stage_geometry_expression::tokens_per_sequence(1, -1);
++        ffn_history_geometry.dimensions[2] = skippy_stage_geometry_expression::sequences();
++        ffn_history_geometry.byte_strides[1] = skippy_stage_geometry_expression::source_stride(0, 1);
++        ffn_history_geometry.byte_strides[2] = skippy_stage_geometry_expression::source_stride(0, 2);
++        skippy_stage_geometry_note(ffn_history, ffn_history_geometry);
++        x_prev = ggml_concat(ctx0, ffn_shift, ffn_history, 1);
+ 
+         token_shift = ggml_concat(ctx0,
+                                   ggml_view_3d(ctx0, att_norm, n_embd, 1, n_seqs, att_norm->nb[1], att_norm->nb[2],
+@@ -179,8 +193,17 @@ llama_model_rwkv7::graph::graph(const llama_model & model, const llm_graph_param
+         ggml_build_forward_expand(gf, build_rwkv_token_shift_store(token_shift, ubatch, il));
+ 
+         ffn_inp  = ggml_reshape_2d(ctx0, ffn_inp, n_embd, n_tokens);
++        auto ffn_inp_geometry = skippy_stage_geometry_static(ffn_inp);
++        ffn_inp_geometry.dimensions[1] = skippy_stage_geometry_expression::tokens();
++        skippy_stage_geometry_note(ffn_inp, ffn_inp_geometry);
+         ffn_norm = ggml_reshape_2d(ctx0, ffn_norm, n_embd, n_tokens);
++        auto ffn_norm_geometry = skippy_stage_geometry_static(ffn_norm);
++        ffn_norm_geometry.dimensions[1] = skippy_stage_geometry_expression::tokens();
++        skippy_stage_geometry_note(ffn_norm, ffn_norm_geometry);
+         x_prev   = ggml_reshape_2d(ctx0, x_prev, n_embd, n_tokens);
++        auto x_prev_geometry = skippy_stage_geometry_static(x_prev);
++        x_prev_geometry.dimensions[1] = skippy_stage_geometry_expression::tokens();
++        skippy_stage_geometry_note(x_prev, x_prev_geometry);
+ 
+         if (il == n_layer - 1 && inp_out_ids) {
+             ffn_inp  = ggml_get_rows(ctx0, ffn_inp, inp_out_ids);
 diff --git a/src/models/spark2-5.cpp b/src/models/spark2-5.cpp
 index 107448777..7eab7191d 100644
 --- a/src/models/spark2-5.cpp
@@ -4888,10 +5082,10 @@ index f0cd2726c..539a9bdc7 100644
      params.embeddings = false;
 diff --git a/src/skippy/stage_program.cpp b/src/skippy/stage_program.cpp
 new file mode 100644
-index 000000000..38f03bea7
+index 000000000..1f73a8032
 --- /dev/null
 +++ b/src/skippy/stage_program.cpp
-@@ -0,0 +1,923 @@
+@@ -0,0 +1,953 @@
 +#include "stage_program.h"
 +
 +#include "stage_program_inputs.h"
@@ -5616,6 +5810,36 @@ index 000000000..38f03bea7
 +                result.add_input(std::move(recipe));
 +                break;
 +            }
++            case input_kind::granite_switch: {
++                const auto * switch_model = dynamic_cast<const llama_model_granite_switch *>(&model);
++                if (switch_model == nullptr) {
++                    error = "stage program granite-switch input requires a granite-switch model";
++                    return false;
++                }
++                auto recipe = std::make_unique<skippy_stage_program_granite_switch_input>(*switch_model);
++                if (!input.values[0].empty()) {
++                    recipe->sub_tokens = ggml_new_tensor_1d(context, GGML_TYPE_I32, params.ubatch.n_tokens);
++                    ggml_set_input(recipe->sub_tokens);
++                    bind(input.values[0], recipe->sub_tokens);
++                }
++                if (!input.values[1].empty()) {
++                    recipe->router_ksig = ggml_new_tensor_1d(context, GGML_TYPE_F32, params.ubatch.n_tokens);
++                    ggml_set_input(recipe->router_ksig);
++                    bind(input.values[1], recipe->router_ksig);
++                }
++                if (!input.values[2].empty()) {
++                    recipe->router_vval = ggml_new_tensor_1d(context, GGML_TYPE_F32, params.ubatch.n_tokens);
++                    ggml_set_input(recipe->router_vval);
++                    bind(input.values[2], recipe->router_vval);
++                }
++                if (!input.values[3].empty()) {
++                    recipe->router_q = ggml_new_tensor_1d(context, GGML_TYPE_F32, params.ubatch.n_tokens);
++                    ggml_set_input(recipe->router_q);
++                    bind(input.values[3], recipe->router_q);
++                }
++                result.add_input(std::move(recipe));
++                break;
++            }
 +            case input_kind::minimax_m3_msa: {
 +                if (memory_msa == nullptr || input.minimax_m3_msa_block_size <= 0) {
 +                    error = "stage program MiniMax-M3 MSA input has no compatible runtime memory";
@@ -5817,10 +6041,10 @@ index 000000000..38f03bea7
 +#endif
 diff --git a/src/skippy/stage_program.h b/src/skippy/stage_program.h
 new file mode 100644
-index 000000000..912bbe3fd
+index 000000000..720d49c64
 --- /dev/null
 +++ b/src/skippy/stage_program.h
-@@ -0,0 +1,343 @@
+@@ -0,0 +1,344 @@
 +#pragma once
 +
 +#include "graph_identity.h"
@@ -5963,6 +6187,7 @@ index 000000000..912bbe3fd
 +        qwen4exp_kpool,
 +        qwen4exp_ple,
 +        minimax_m3_msa,
++        granite_switch,
 +    };
 +
 +    enum class state_partition : uint8_t {
@@ -6166,10 +6391,10 @@ index 000000000..912bbe3fd
 +#endif
 diff --git a/src/skippy/stage_program_extraction.cpp b/src/skippy/stage_program_extraction.cpp
 new file mode 100644
-index 000000000..30c60d440
+index 000000000..9feddb347
 --- /dev/null
 +++ b/src/skippy/stage_program_extraction.cpp
-@@ -0,0 +1,717 @@
+@@ -0,0 +1,802 @@
 +#include "stage_program.h"
 +
 +#include "stage_slice_plan.h"
@@ -6230,6 +6455,11 @@ index 000000000..30c60d440
 +                program.supports_token_inputs |= capture.ubatch.token != nullptr && typed->tokens != nullptr;
 +                program.supports_embedding_inputs |= capture.ubatch.token == nullptr && typed->embd != nullptr;
 +            }
++        }
++        // Granite-Switch derives its graph inputs from token ids in its own
++        // input type, so it does not appear in the generic embedding inputs.
++        if (model.arch == LLM_ARCH_GRANITE_SWITCH && capture.ubatch.token != nullptr) {
++            program.supports_token_inputs = true;
 +        }
 +        program.separates_token_generation = model.arch == LLM_ARCH_MINIMAX_M3 ||
 +                model.arch == LLM_ARCH_KIMI_LINEAR;
@@ -6430,6 +6660,12 @@ index 000000000..30c60d440
 +                                        skippy_stage_geometry_expression::sequences();
 +                            }
 +                        }
++                        if ((model.arch == LLM_ARCH_RWKV6 || model.arch == LLM_ARCH_RWKV6QWEN2) &&
++                                tensor->ne[2] == static_cast<int64_t>(n_sequences) &&
++                                tensor->src[0]->ne[2] == tensor->ne[2]) {
++                            operation.geometry.dimensions[2] =
++                                    skippy_stage_geometry_expression::source_dimension(0, 2);
++                        }
 +                        if (source_axis >= 0) {
 +                            int32_t target_axis = -1;
 +                            for (int32_t axis = 0; axis < GGML_MAX_DIMS; ++axis) {
@@ -6496,10 +6732,57 @@ index 000000000..30c60d440
 +                                        skippy_stage_geometry_expression::source_dimension(
 +                                                0, source_axis, 1, 1,
 +                                                tensor->ne[target_axis] - tensor->src[0]->ne[source_axis]);
++                                // A view can move the token axis and select a later
++                                // slice of the source's next axis. Its captured
++                                // offset then scales with the runtime token count.
++                                const uint64_t source_stride = tensor->src[0]->nb[source_axis];
++                                uint64_t source_slice_bytes = 0;
++                                if (target_axis != source_axis && tensor->view_offs != 0 &&
++                                        tensor->src[0]->ne[source_axis] > 0 &&
++                                        tensor->nb[target_axis] == source_stride &&
++                                        checked_multiply_u64(
++                                                static_cast<uint64_t>(tensor->src[0]->ne[source_axis]),
++                                                source_stride, source_slice_bytes) &&
++                                        source_slice_bytes != 0 && tensor->view_offs % source_slice_bytes == 0) {
++                                    uint64_t multiplier = 0;
++                                    if (checked_multiply_u64(tensor->view_offs / source_slice_bytes,
++                                            source_stride, multiplier) &&
++                                            multiplier <= static_cast<uint64_t>(std::numeric_limits<int64_t>::max())) {
++                                        operation.geometry.view_offset =
++                                                skippy_stage_geometry_expression::source_dimension(
++                                                        0, source_axis, static_cast<int64_t>(multiplier));
++                                    }
++                                }
 +                                if (target_axis == source_axis) {
 +                                    for (int32_t axis = 1; axis < GGML_MAX_DIMS; ++axis) {
 +                                        operation.geometry.byte_strides[axis] =
 +                                                skippy_stage_geometry_expression::source_stride(0, axis);
++                                    }
++                                }
++                            }
++                        }
++                        // Recurrent attention concatenates token output and the
++                        // next state. Both the token view's length and the state
++                        // view's starting offset follow the runtime batch width.
++                        if ((tensor->src[0]->op == GGML_OP_RWKV_WKV6 ||
++                                tensor->src[0]->op == GGML_OP_RWKV_WKV7 ||
++                                tensor->src[0]->op == GGML_OP_GATED_LINEAR_ATTN) && n_tokens > 0) {
++                            const uint64_t row_bytes = ggml_row_size(
++                                    tensor->src[0]->type, tensor->src[0]->ne[0]);
++                            uint64_t captured_token_bytes = 0;
++                            if (row_bytes <= static_cast<uint64_t>(std::numeric_limits<int64_t>::max()) &&
++                                    checked_multiply_u64(static_cast<uint64_t>(n_tokens),
++                                            row_bytes, captured_token_bytes)) {
++                                if (tensor->view_offs == 0 && ggml_nbytes(tensor) == captured_token_bytes) {
++                                    operation.geometry.dimensions[0] = skippy_stage_geometry_expression::tokens(
++                                            tensor->src[0]->ne[0]);
++                                } else if (tensor->view_offs == captured_token_bytes) {
++                                    operation.geometry.view_offset =
++                                            skippy_stage_geometry_expression::tokens(static_cast<int64_t>(row_bytes));
++                                    if (n_sequences > 0 && tensor->ne[0] % n_sequences == 0) {
++                                        operation.geometry.dimensions[0] =
++                                                skippy_stage_geometry_expression::sequences(
++                                                        tensor->ne[0] / n_sequences);
 +                                    }
 +                                }
 +                            }
@@ -6547,6 +6830,30 @@ index 000000000..30c60d440
 +                            if (source_axis < 0) source_axis = reference_dynamic_axis(source_id);
 +                            operation.geometry = skippy_stage_geometry_static(tensor);
 +                            bool recipe_built = false;
++                            if ((model.arch == LLM_ARCH_RWKV6 || model.arch == LLM_ARCH_RWKV6QWEN2) &&
++                                    source_axis == 1 && n_sequences > 1 &&
++                                    tensor->ne[0] == static_cast<int64_t>(model.hparams.n_embd) &&
++                                    tensor->ne[1] == static_cast<int64_t>(n_tokens) && tensor->ne[2] == 1 &&
++                                    tensor->src[0]->ne[0] == tensor->ne[0] &&
++                                    tensor->src[0]->ne[2] == static_cast<int64_t>(n_sequences)) {
++                                // Flattening the sequence axis must follow the live source.
++                                // Output selection can shrink it below the runtime token count.
++                                operation.geometry.dimensions[1] =
++                                        skippy_stage_geometry_expression::source_elements(0, 1, tensor->ne[0]);
++                                recipe_built = true;
++                            }
++                            if (!recipe_built && (model.arch == LLM_ARCH_RWKV6 || model.arch == LLM_ARCH_RWKV6QWEN2) &&
++                                    n_sequences > 0 && n_tokens % n_sequences == 0 &&
++                                    tensor->ne[0] == static_cast<int64_t>(model.hparams.n_embd) &&
++                                    tensor->ne[1] == static_cast<int64_t>(n_tokens/n_sequences) &&
++                                    tensor->ne[2] == static_cast<int64_t>(n_sequences) &&
++                                    ggml_nelements(tensor->src[0]) == ggml_nelements(tensor)) {
++                                operation.geometry.dimensions[1] =
++                                        skippy_stage_geometry_expression::tokens_per_sequence();
++                                operation.geometry.dimensions[2] =
++                                        skippy_stage_geometry_expression::sequences();
++                                recipe_built = true;
++                            }
 +                            int32_t runtime_token_axis = -1;
 +                            for (int32_t axis = 0; axis < GGML_MAX_DIMS; ++axis) {
 +                                if (tensor->ne[axis] != static_cast<int64_t>(n_tokens)) continue;
@@ -6704,7 +7011,9 @@ index 000000000..30c60d440
 +                                dimension.value_kind == skippy_stage_geometry_expression::kind::runtime_tokens_per_sequence_clamped ||
 +                                dimension.value_kind == skippy_stage_geometry_expression::kind::runtime_tokens_per_sequence_capped ||
 +                                (dimension.value_kind == skippy_stage_geometry_expression::kind::source_dimension &&
-+                                 dimension.source == 0 && dimension.axis == first_axis)) {
++                                 dimension.source == 0 && dimension.axis == first_axis) ||
++                                (dimension.value_kind == skippy_stage_geometry_expression::kind::source_elements &&
++                                 dimension.source == 0 && first_axis >= 0)) {
 +                            operation.dynamic_axis = axis;
 +                            break;
 +                        }
@@ -6726,6 +7035,7 @@ index 000000000..30c60d440
 +                case GGML_OP_SCALE:
 +                case GGML_OP_NORM:
 +                case GGML_OP_RMS_NORM:
++                case GGML_OP_L2_NORM:
 +                case GGML_OP_ROPE:
 +                case GGML_OP_ROPE_BACK:
 +                case GGML_OP_SOFT_MAX:
@@ -6970,10 +7280,10 @@ index 000000000..695e80c7f
 +}
 diff --git a/src/skippy/stage_program_extraction_roots.cpp b/src/skippy/stage_program_extraction_roots.cpp
 new file mode 100644
-index 000000000..dbfb73363
+index 000000000..b67124978
 --- /dev/null
 +++ b/src/skippy/stage_program_extraction_roots.cpp
-@@ -0,0 +1,627 @@
+@@ -0,0 +1,635 @@
 +#include "stage_program.h"
 +
 +#include "stage_slice_plan.h"
@@ -7417,6 +7727,14 @@ index 000000000..dbfb73363
 +            capture(typed->self_kq_mask_lid, base + 3, 1);
 +            capture(typed->self_k_rot_lid, base + 4, -1);
 +        };
++        const auto capture_named = [&](const char * identity, size_t index, int32_t token_axis) {
++            const std::string prefix = std::string(identity) + ".";
++            for (const auto & request : requests) {
++                if (request.second == identity || request.second.compare(0, prefix.size(), prefix) == 0) {
++                    capture(request.first, index, token_axis);
++                }
++            }
++        };
 +        if (const auto * typed = dynamic_cast<const llama_model_qwen4exp::llm_graph_input_kpool *>(input)) {
 +            recipe.kind = skippy_stage_program::input_kind::qwen4exp_kpool;
 +            recipe.qwen4exp_kpool_size = typed->kpool;
@@ -7534,19 +7852,19 @@ index 000000000..dbfb73363
 +        } else if (const auto * typed = dynamic_cast<const llm_graph_input_cls *>(input)) {
 +            recipe.kind = skippy_stage_program::input_kind::pooling_indices;
 +            capture(typed->cls, 0, -1);
++        } else if (model.arch == LLM_ARCH_GRANITE_SWITCH) {
++            // the granite-switch inputs are token-derived, so the stage owns them
++            // by request name instead of by a graph-input cast
++            recipe.kind = skippy_stage_program::input_kind::granite_switch;
++            capture_named("granite_switch.substituted_tokens", 0, 0);
++            capture_named("granite_switch.router_key_signal", 1, 0);
++            capture_named("granite_switch.router_value", 2, 0);
++            capture_named("granite_switch.router_query", 3, 0);
 +        } else if (model.arch == LLM_ARCH_MINIMAX_M3) {
 +            const auto & minimax = static_cast<const llama_model_minimax_m3 &>(model);
 +            recipe.kind = skippy_stage_program::input_kind::minimax_m3_msa;
 +            recipe.minimax_m3_msa_block_size = minimax.msa_p.blk;
 +            recipe.minimax_m3_msa_local_blocks = minimax.msa_p.local;
-+            const auto capture_named = [&](const char * identity, size_t index, int32_t token_axis) {
-+                const std::string prefix = std::string(identity) + ".";
-+                for (const auto & request : requests) {
-+                    if (request.second == identity || request.second.compare(0, prefix.size(), prefix) == 0) {
-+                        capture(request.first, index, token_axis);
-+                    }
-+                }
-+            };
 +            capture_named("attention.msa.local_bias", 0, 1);
 +            capture_named("attention.msa.position_mask", 1, 1);
 +            capture_named("attention.msa.position_to_cell_indices", 2, -1);
@@ -8186,15 +8504,17 @@ index 000000000..d18e39f67
 +#endif
 diff --git a/src/skippy/stage_program_inputs.cpp b/src/skippy/stage_program_inputs.cpp
 new file mode 100644
-index 000000000..a259fe3be
+index 000000000..f0535b913
 --- /dev/null
 +++ b/src/skippy/stage_program_inputs.cpp
-@@ -0,0 +1,56 @@
+@@ -0,0 +1,104 @@
 +#include "stage_program_inputs.h"
 +
 +#include "llama-kv-cache-msa.h"
 +
 +#include "ggml.h"
++#include "ggml-backend.h"
++#include "models/models.h"
 +
 +#include <vector>
 +
@@ -8246,17 +8566,64 @@ index 000000000..a259fe3be
 +                (cell_blocks->ne[0] == static_cast<int64_t>(runtime_memory->get_base()->get_n_kv()) &&
 +                 cell_blocks->ne[1] == streams));
 +}
++
++skippy_stage_program_granite_switch_input::skippy_stage_program_granite_switch_input(
++        const llama_model_granite_switch & smodel) : smodel(smodel) {}
++
++// the switch signals derive from the token ids and the adapter tables, so the
++// replayed stage rebuilds them the same way the model graph does
++void skippy_stage_program_granite_switch_input::set_input(const llama_ubatch * ubatch) {
++    if (ubatch->token == nullptr) {
++        return;
++    }
++
++    const int64_t n_tokens = ubatch->n_tokens;
++    std::vector<int32_t> sub (n_tokens);
++    std::vector<float>   ksig(n_tokens);
++    std::vector<float>   vval(n_tokens);
++    std::vector<float>   q   (n_tokens, 1.0f);
++
++    for (int64_t i = 0; i < n_tokens; ++i) {
++        const llama_token tok = ubatch->token[i];
++        const auto slot = smodel.adapter_token_to_slot.find(tok);
++        if (slot != smodel.adapter_token_to_slot.end()) {
++            ksig[i] = +smodel.router_gain;
++            vval[i] = (float) slot->second;
++        } else {
++            ksig[i] = -smodel.router_gain;
++            vval[i] = 0.0f;
++        }
++        const auto substitute = smodel.adapter_token_to_substitute.find(tok);
++        sub[i] = (substitute != smodel.adapter_token_to_substitute.end())
++            ? (int32_t) substitute->second
++            : (int32_t) tok;
++    }
++
++    if (sub_tokens != nullptr && sub_tokens->buffer != nullptr) {
++        ggml_backend_tensor_set(sub_tokens, sub.data(), 0, n_tokens*ggml_element_size(sub_tokens));
++    }
++    if (router_ksig != nullptr && router_ksig->buffer != nullptr) {
++        ggml_backend_tensor_set(router_ksig, ksig.data(), 0, n_tokens*ggml_element_size(router_ksig));
++    }
++    if (router_vval != nullptr && router_vval->buffer != nullptr) {
++        ggml_backend_tensor_set(router_vval, vval.data(), 0, n_tokens*ggml_element_size(router_vval));
++    }
++    if (router_q != nullptr && router_q->buffer != nullptr) {
++        ggml_backend_tensor_set(router_q, q.data(), 0, n_tokens*ggml_element_size(router_q));
++    }
++}
 diff --git a/src/skippy/stage_program_inputs.h b/src/skippy/stage_program_inputs.h
 new file mode 100644
-index 000000000..a369823ef
+index 000000000..5abb95711
 --- /dev/null
 +++ b/src/skippy/stage_program_inputs.h
-@@ -0,0 +1,27 @@
+@@ -0,0 +1,43 @@
 +#pragma once
 +
 +#include "llama-graph.h"
 +
 +class llama_kv_cache_msa_context;
++struct llama_model_granite_switch;
 +
 +class skippy_stage_program_minimax_m3_msa_input final : public llm_graph_input_i {
 +public:
@@ -8278,6 +8645,21 @@ index 000000000..a369823ef
 +    const llama_kv_cache_msa_context * memory;
 +    int32_t block_size;
 +    int32_t local_blocks;
++};
++
++class skippy_stage_program_granite_switch_input final : public llm_graph_input_i {
++public:
++    explicit skippy_stage_program_granite_switch_input(const llama_model_granite_switch & smodel);
++
++    void set_input(const llama_ubatch * ubatch) override;
++
++    ggml_tensor * sub_tokens  = nullptr; // I32 [n_tokens], adapter-substituted token ids
++    ggml_tensor * router_ksig = nullptr; // F32 [n_tokens], router key signal
++    ggml_tensor * router_vval = nullptr; // F32 [n_tokens], router value (adapter slot or 0)
++    ggml_tensor * router_q    = nullptr; // F32 [n_tokens], router query (constant 1.0)
++
++private:
++    const llama_model_granite_switch & smodel;
 +};
 diff --git a/src/skippy/stage_program_installation.cpp b/src/skippy/stage_program_installation.cpp
 new file mode 100644
@@ -8584,10 +8966,10 @@ index 000000000..eceba28ba
 +};
 diff --git a/src/skippy/stage_program_replay.cpp b/src/skippy/stage_program_replay.cpp
 new file mode 100644
-index 000000000..3212767cc
+index 000000000..0723d8033
 --- /dev/null
 +++ b/src/skippy/stage_program_replay.cpp
-@@ -0,0 +1,628 @@
+@@ -0,0 +1,654 @@
 +#include "stage_program.h"
 +
 +#include "stage_slice_plan.h"
@@ -8647,6 +9029,7 @@ index 000000000..3212767cc
 +        case GGML_OP_SCALE:
 +        case GGML_OP_NORM:
 +        case GGML_OP_RMS_NORM:
++        case GGML_OP_L2_NORM:
 +        case GGML_OP_MUL:
 +        case GGML_OP_MUL_MAT:
 +        case GGML_OP_FLASH_ATTN_EXT:
@@ -8669,6 +9052,8 @@ index 000000000..3212767cc
 +        case GGML_OP_SSM_CONV:
 +        case GGML_OP_UNARY:
 +        case GGML_OP_SSM_SCAN:
++        case GGML_OP_RWKV_WKV6:
++        case GGML_OP_RWKV_WKV7:
 +        case GGML_OP_GATED_DELTA_NET:
 +        case GGML_OP_SQR:
 +        case GGML_OP_SQRT:
@@ -8784,6 +9169,11 @@ index 000000000..3212767cc
 +            tensor = operation.alias_source == 0
 +                    ? ggml_norm_inplace(context, sources[0], operation_parameter<float>(operation, 0))
 +                    : ggml_norm(context, sources[0], operation_parameter<float>(operation, 0));
++            break;
++        case GGML_OP_L2_NORM:
++            tensor = operation.alias_source == 0
++                    ? ggml_l2_norm_inplace(context, sources[0], operation_parameter<float>(operation, 0))
++                    : ggml_l2_norm(context, sources[0], operation_parameter<float>(operation, 0));
 +            break;
 +        case GGML_OP_MUL:
 +            if (!ggml_can_repeat(sources[1], sources[0])) {
@@ -9072,6 +9462,24 @@ index 000000000..3212767cc
 +                    sources[0], sources[1], sources[2], sources[3],
 +                    sources[4], sources[5], sources[6],
 +                    operation_parameter<int32_t>(operation, 0));
++            break;
++        case GGML_OP_RWKV_WKV6:
++            if (std::any_of(sources.begin(), sources.begin() + 6,
++                    [](const ggml_tensor * source) { return source == nullptr || !ggml_is_contiguous(source); })) {
++                error = "stage program RWKV_WKV6 requires six contiguous source tensors";
++                return nullptr;
++            }
++            tensor = ggml_rwkv_wkv6(context,
++                    sources[0], sources[1], sources[2], sources[3], sources[4], sources[5]);
++            break;
++        case GGML_OP_RWKV_WKV7:
++            if (std::any_of(sources.begin(), sources.begin() + 7,
++                    [](const ggml_tensor * source) { return source == nullptr || !ggml_is_contiguous(source); })) {
++                error = "stage program RWKV_WKV7 requires seven contiguous source tensors";
++                return nullptr;
++            }
++            tensor = ggml_rwkv_wkv7(context,
++                    sources[0], sources[1], sources[2], sources[3], sources[4], sources[5], sources[6]);
 +            break;
 +        case GGML_OP_GATED_DELTA_NET:
 +            tensor = ggml_gated_delta_net(context,
@@ -11691,5 +12099,3 @@ index 71cf37ef2..34440b1e9 100644
          if (deepseek4_mtp) {
              const llm_arch arch = arch_from_filter(arch_filter);
              if (arch != LLM_ARCH_DEEPSEEK4 || out.empty()) {
--- 
-2.54.0 (Apple Git-157)
