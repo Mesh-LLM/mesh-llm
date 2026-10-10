@@ -861,15 +861,28 @@ pub fn ensure_control_frame_size(body: &[u8]) -> Result<(), ControlFrameError> {
     Ok(())
 }
 
+/// Reads one length-prefixed control frame.
+///
+/// The buffer grows as the body arrives instead of being sized from the
+/// length prefix, so a peer that claims a large frame and then stalls holds
+/// only as much memory as it actually sent.
 pub async fn read_len_prefixed(recv: &mut iroh::endpoint::RecvStream) -> Result<Vec<u8>> {
+    const READ_CHUNK_BYTES: usize = 64 * 1024;
     let mut len_buf = [0u8; 4];
     recv.read_exact(&mut len_buf).await?;
     let len = u32::from_le_bytes(len_buf) as usize;
     if len > MAX_CONTROL_FRAME_BYTES {
         anyhow::bail!("control frame too large: {} bytes", len);
     }
-    let mut buf = vec![0u8; len];
-    recv.read_exact(&mut buf).await?;
+    let mut buf = Vec::with_capacity(len.min(READ_CHUNK_BYTES));
+    let mut chunk = vec![0u8; len.min(READ_CHUNK_BYTES)];
+    while buf.len() < len {
+        let wanted = (len - buf.len()).min(chunk.len());
+        match recv.read(&mut chunk[..wanted]).await? {
+            Some(read) => buf.extend_from_slice(&chunk[..read]),
+            None => anyhow::bail!("control frame ended after {} of {} bytes", buf.len(), len),
+        }
+    }
     Ok(buf)
 }
 

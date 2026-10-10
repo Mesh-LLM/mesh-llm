@@ -1551,6 +1551,13 @@ pub const WIRING_MANIFEST: &[WiringEntry] = &[
         behavior: WiringBehavior::None,
     },
     WiringEntry {
+        path: "request_defaults.allow_request_chat_template",
+        status: WiringStatus::Wired,
+        owner: "n/a",
+        reason: "",
+        behavior: WiringBehavior::None,
+    },
+    WiringEntry {
         path: "request_defaults.jinja",
         status: WiringStatus::Wired,
         owner: "n/a",

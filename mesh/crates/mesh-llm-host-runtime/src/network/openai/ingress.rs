@@ -613,49 +613,6 @@ pub(super) fn parse_model_with_profile(model: &str) -> (&str, &str) {
     }
 }
 
-/// Waits out an accept error so the caller can loop again.
-///
-/// Neither ingress loop drops its listener on an accept error. The listening
-/// socket survives every error `accept` reports, so returning here is how
-/// #1703 silently removed `:9338` from a node that otherwise looked healthy.
-/// Resource pressure is logged, because the previous code swallowed it and
-/// left nothing behind to explain the missing listener.
-async fn recover_accept_loop(port: u16, error: &std::io::Error, surface: &'static str) {
-    match accept::recover_from_accept_error(error) {
-        accept::AcceptRecovery::Retry => {}
-        accept::AcceptRecovery::Backoff(delay) => {
-            tracing::warn!(
-                port,
-                surface,
-                error = %error,
-                backoff_ms = delay.as_millis() as u64,
-                "accept failed; retrying without dropping the listener"
-            );
-            tokio::time::sleep(delay).await;
-        }
-    }
-}
-
-async fn bind_api_proxy_listener(
-    port: u16,
-    existing_listener: Option<tokio::net::TcpListener>,
-    listen_all: bool,
-) -> Option<tokio::net::TcpListener> {
-    match existing_listener {
-        Some(listener) => Some(listener),
-        None => {
-            let addr = if listen_all { "0.0.0.0" } else { "127.0.0.1" };
-            match tokio::net::TcpListener::bind(format!("{addr}:{port}")).await {
-                Ok(listener) => Some(listener),
-                Err(error) => {
-                    tracing::error!("Failed to bind API proxy to port {port}: {error}");
-                    None
-                }
-            }
-        }
-    }
-}
-
 async fn handle_models_list_request(
     tcp_stream: ClientStream,
     node: &mesh::Node,
@@ -2399,11 +2356,13 @@ pub(crate) async fn api_proxy(
     node: mesh::Node,
     port: u16,
     target_rx: tokio::sync::watch::Receiver<election::ModelTargets>,
-    existing_listener: Option<tokio::net::TcpListener>,
+    existing_listener: Option<accept::IngressListener>,
     listen_all: bool,
     affinity: affinity::AffinityRouter,
 ) {
-    let Some(listener) = bind_api_proxy_listener(port, existing_listener, listen_all).await else {
+    let Some(accept::IngressListener { listener, slots }) =
+        accept::bind_api_proxy_listener(port, existing_listener, listen_all).await
+    else {
         return;
     };
 
@@ -2411,9 +2370,13 @@ pub(crate) async fn api_proxy(
         let (tcp_stream, _addr) = match listener.accept().await {
             Ok(accepted) => accepted,
             Err(error) => {
-                recover_accept_loop(port, &error, "api_proxy").await;
+                accept::recover_accept_loop(port, &error, "api_proxy").await;
                 continue;
             }
+        };
+        let Some(slot) = slots.try_claim() else {
+            accept::refuse_over_capacity(tcp_stream);
+            continue;
         };
         let _ = tcp_stream.set_nodelay(true);
 
@@ -2421,6 +2384,7 @@ pub(crate) async fn api_proxy(
         let node = node.clone();
         let affinity = affinity.clone();
         tokio::spawn(async move {
+            let _slot = slot;
             handle_api_proxy_connection(
                 node,
                 tcp_stream.into(),
@@ -2435,11 +2399,12 @@ pub(crate) async fn api_proxy(
 }
 
 /// Bootstrap proxy: runs during GPU startup, tunnels all requests to mesh hosts.
-/// Returns the TcpListener when signaled to stop (so api_proxy can take it over).
+/// Returns the listener and its connection slots when signaled to stop (so
+/// api_proxy can take them over).
 pub(crate) async fn bootstrap_proxy(
     node: mesh::Node,
     port: u16,
-    mut stop_rx: tokio::sync::mpsc::Receiver<tokio::sync::oneshot::Sender<tokio::net::TcpListener>>,
+    mut stop_rx: tokio::sync::mpsc::Receiver<tokio::sync::oneshot::Sender<accept::IngressListener>>,
     listen_all: bool,
     affinity: affinity::AffinityRouter,
 ) {
@@ -2460,20 +2425,28 @@ pub(crate) async fn bootstrap_proxy(
         context: Some("bootstrap_proxy".to_string()),
     });
 
+    let slots = accept::ConnectionSlots::new(accept::MAX_INGRESS_CONNECTIONS);
     loop {
         tokio::select! {
             accept = listener.accept() => {
                 let (tcp_stream, _addr) = match accept {
                     Ok(accepted) => accepted,
                     Err(error) => {
-                        recover_accept_loop(port, &error, "bootstrap_proxy").await;
+                        accept::recover_accept_loop(port, &error, "bootstrap_proxy").await;
                         continue;
                     }
+                };
+                let Some(slot) = slots.try_claim() else {
+                    accept::refuse_over_capacity(tcp_stream);
+                    continue;
                 };
                 let _ = tcp_stream.set_nodelay(true);
                 let node = node.clone();
                 let affinity = affinity.clone();
-                tokio::spawn(Box::pin(proxy::handle_mesh_request(node, tcp_stream.into(), true, affinity)));
+                tokio::spawn(async move {
+                    let _slot = slot;
+                    Box::pin(proxy::handle_mesh_request(node, tcp_stream.into(), true, affinity)).await
+                });
             }
             resp_tx = stop_rx.recv() => {
                 if let Some(tx) = resp_tx {
@@ -2481,7 +2454,7 @@ pub(crate) async fn bootstrap_proxy(
                         message: "Bootstrap proxy handing off to full API proxy".to_string(),
                         context: Some("bootstrap_proxy".to_string()),
                     });
-                    let _ = tx.send(listener);
+                    let _ = tx.send(accept::IngressListener { listener, slots });
                 }
                 return;
             }

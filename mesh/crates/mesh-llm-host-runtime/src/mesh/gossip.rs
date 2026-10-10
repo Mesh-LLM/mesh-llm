@@ -941,7 +941,7 @@ impl Node {
     ) -> Result<()> {
         tracing::info!("Inbound gossip from {}", remote.fmt_short());
 
-        let buf = read_len_prefixed(&mut recv).await?;
+        let buf = super::pre_admission::read_pre_admission_frame(&mut recv).await?;
         let (inbound, their_plugin_keys) =
             decode_gossip_frame_and_plugin_keys(protocol, remote, &buf)?;
         let their_announcements = self.resolve_inbound_gossip(remote, inbound).await;

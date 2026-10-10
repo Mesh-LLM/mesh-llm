@@ -1,5 +1,3 @@
-use skippy_runtime::ModelStateKind;
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum ModelKvCapability {
     KnownDense,
@@ -7,25 +5,13 @@ pub(super) enum ModelKvCapability {
     Unknown(String),
 }
 
-/// Translate the authoritative descriptor captured from the loaded native
-/// model into the cache payload families understood by the server.
-///
-/// Model names, repository paths, and tensor-name heuristics are deliberately
-/// excluded: llama.cpp has already resolved the actual architecture by this
-/// point, including hybrid/recurrent state that is not visible in a package
-/// name.
-pub(super) fn loaded_model_kv_capability(state_kind: Option<ModelStateKind>) -> ModelKvCapability {
-    match state_kind {
-        Some(ModelStateKind::Dense) => ModelKvCapability::KnownDense,
-        Some(ModelStateKind::Recurrent | ModelStateKind::Hybrid) => {
-            ModelKvCapability::KnownRecurrent
-        }
-        Some(ModelStateKind::Diffusion) => ModelKvCapability::Unknown(
-            "loaded diffusion model has no causal KV state to cache".to_string(),
-        ),
-        None => ModelKvCapability::Unknown(
-            "loaded model capability descriptor is unavailable".to_string(),
-        ),
+/// The admitted graph is the only authority for the representation shape.
+/// An absent or unrecognized summary may use full-state snapshots only.
+pub(super) fn graph_model_kv_capability(state: &str) -> ModelKvCapability {
+    match state {
+        "dense" => ModelKvCapability::KnownDense,
+        "recurrent" => ModelKvCapability::KnownRecurrent,
+        _ => ModelKvCapability::Unknown("graph state is not partial-snapshot safe".to_string()),
     }
 }
 
@@ -34,24 +20,23 @@ mod tests {
     use super::*;
 
     #[test]
-    fn loaded_model_state_is_the_only_kv_authority() {
-        for (state_kind, expected) in [
-            (ModelStateKind::Dense, ModelKvCapability::KnownDense),
-            (ModelStateKind::Recurrent, ModelKvCapability::KnownRecurrent),
-            (ModelStateKind::Hybrid, ModelKvCapability::KnownRecurrent),
+    fn admitted_graph_state_selects_representation() {
+        for (state, expected) in [
+            ("dense", ModelKvCapability::KnownDense),
+            ("recurrent", ModelKvCapability::KnownRecurrent),
         ] {
-            assert_eq!(loaded_model_kv_capability(Some(state_kind)), expected);
+            assert_eq!(graph_model_kv_capability(state), expected);
         }
     }
 
     #[test]
-    fn unsupported_or_missing_loaded_descriptor_fails_closed() {
+    fn unsupported_or_missing_graph_fails_closed() {
         assert!(matches!(
-            loaded_model_kv_capability(Some(ModelStateKind::Diffusion)),
+            graph_model_kv_capability("full-state"),
             ModelKvCapability::Unknown(_)
         ));
         assert!(matches!(
-            loaded_model_kv_capability(None),
+            graph_model_kv_capability(""),
             ModelKvCapability::Unknown(_)
         ));
     }

@@ -199,6 +199,7 @@ pub struct ResolvedRequestDefaultsConfig {
     pub reasoning_budget: Option<ReasoningBudget>,
     pub chat_template: Option<String>,
     pub chat_template_file: Option<String>,
+    pub allow_request_chat_template: Option<bool>,
     pub jinja: Option<bool>,
     pub chat_template_kwargs: Option<toml::Value>,
     pub skip_chat_parsing: Option<bool>,
