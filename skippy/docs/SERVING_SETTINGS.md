@@ -126,6 +126,16 @@ codec settings require `--stage-transport binary`. A complete speculative JSON
 plan can be loaded with `--speculative-config`; individual speculative flags
 override its fields.
 
+`--speculative-strategy dflash` attaches a DFlash or DFlash2 block drafter
+given by `--draft-model-path` to the target model. The draft reads target
+hidden states, so it requires local serving of the complete target model, a
+DFlash GGUF trained for that target, and a runtime that exports the upstream
+draft-context API (not Windows builds). It drafts only for greedy requests;
+other requests decode normally. DSpark drafts are rejected. DFlash is opt-in:
+`--dflash-max-tokens` without `--speculative-strategy dflash` is an error, but
+a `--speculative-config` plan that already has a `dflash` field runs under
+`auto`.
+
 Live K/V precision is independent of weight quantization. Supported explicit
 values are `f16`, `q8_0`, and `q4_0`. Quantized V requires compatible Flash
 Attention and model geometry; incompatible explicit choices fail at runtime.
@@ -292,7 +302,7 @@ with their runtime purpose; existing controls follow in the same sections.
 
 | CLI flag | TOML key | Purpose |
 |---|---|---|
-| `--speculative-strategy` | `speculative_strategy` | Speculation: auto, disabled, draft-model, native-mtp, ngram, mtp-ngram |
+| `--speculative-strategy` | `speculative_strategy` | Speculation: auto, disabled, draft-model, native-mtp, ngram, mtp-ngram, dflash |
 | `--draft-device` | `draft_device` | Backend device for the draft model |
 | `--draft-cache-type-k` | `draft_cache_type_k` | Draft key-cache precision: f16, q8_0, q4_0 |
 | `--draft-cache-type-v` | `draft_cache_type_v` | Draft value-cache precision: f16, q8_0, q4_0 |
@@ -302,6 +312,7 @@ with their runtime purpose; existing controls follow in the same sections.
 | `--ngram-fallback-draft` | `ngram_fallback_draft` | Use the draft model after an N-gram miss; requires pipelined verification |
 | `--draft-threads` | `draft_threads` | CPU threads for the draft model |
 | `--mtp-max-tokens` | `mtp_max_tokens` | Maximum native MTP proposal length |
+| `--dflash-max-tokens` | `dflash_max_tokens` | Maximum DFlash draft tokens per block; defaults to the trained block |
 | `--mtp-min-tokens` | `mtp_min_tokens` | Minimum native MTP proposal length |
 | `--mtp-reject-cooldown-tokens` | `mtp_reject_cooldown_tokens` | Cooldown after native MTP rejection |
 | `--mtp-suppress-cooldown-draft-limit` | `mtp_suppress_cooldown_draft_limit` | Maximum suppressed cooldown drafts |

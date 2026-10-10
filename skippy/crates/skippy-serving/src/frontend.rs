@@ -74,8 +74,8 @@ pub use self::linear_proposal::{
 pub(crate) use self::request::thinking_probe_options;
 pub use self::speculation_gate::SpeculationGateSettings;
 pub use self::speculative::{
-    NativeMtpProposalConfig, NgramExtensionConfig, NgramProposalConfig, NgramProposerKind,
-    SpeculativeDecodeConfig, VerifyWindowConfig,
+    DFLASH_STRATEGY, DFlashProposalConfig, NativeMtpProposalConfig, NgramExtensionConfig,
+    NgramProposalConfig, NgramProposerKind, SpeculativeDecodeConfig, VerifyWindowConfig,
 };
 pub use self::system_one::LayaSystemOneBackend;
 

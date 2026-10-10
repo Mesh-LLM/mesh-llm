@@ -11,7 +11,7 @@ use skippy_runtime::RuntimeConfig;
 use skippy_runtime::RuntimeLoadMode;
 use skippy_runtime::StageModel;
 use skippy_runtime::StageSession;
-use skippy_runtime::{ModelInfo, MtpSource};
+use skippy_runtime::{DFlashDraftInfo, DFlashDraftOptions, ModelInfo, MtpSource};
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -111,6 +111,14 @@ impl DraftRunner {
     ) -> Result<Self> {
         if !path.is_file() {
             bail!("draft model does not exist: {}", path.display());
+        }
+        if skippy_model_artifact::gguf::scan_gguf_compact_meta(path)
+            .is_some_and(|meta| meta.architecture == "dflash")
+        {
+            bail!(
+                "{} is a DFlash draft, which reads target hidden states; select the dflash speculative strategy",
+                path.display()
+            );
         }
         let layer_count = model_layer_count(path)?;
         let model = StageModel::open(
@@ -235,6 +243,49 @@ pub(in crate::frontend) fn attach_native_mtp_draft_model(
             )?,
         )
         .with_context(|| format!("attach MTP draft model {}", path.display()))
+}
+
+/// Attaches the plan's DFlash draft to the single-stage target model. Must run
+/// before serving sessions exist, since only later sessions feed the draft.
+pub(in crate::frontend) fn attach_dflash_draft(
+    runtime: &Arc<Mutex<RuntimeState>>,
+    config: &StageConfig,
+    n_gpu_layers: Option<i32>,
+    speculative: &SpeculativeDecodeConfig,
+) -> Result<Option<DFlashDraftInfo>> {
+    let Some(dflash) = &speculative.dflash else {
+        return Ok(None);
+    };
+    if config.downstream.is_some() {
+        bail!("DFlash drafts require single-stage serving; the target is split across stages");
+    }
+    let path = dflash.draft_model_path.as_path();
+    if !path.is_file() {
+        bail!("DFlash draft model does not exist: {}", path.display());
+    }
+    // The draft mirrors the target's lanes and must see the complete target.
+    let mut target_config = draft_runtime_config(
+        config,
+        None,
+        speculative,
+        MtpSource::Disabled,
+        config.layer_end,
+    )?;
+    target_config.lane_count = config.lane_count;
+    target_config.layer_start = config.layer_start;
+    target_config.resident_tensor_names = config.resident_tensor_names.clone();
+    target_config.n_gpu_layers = config.n_gpu_layers;
+    let options = DFlashDraftOptions {
+        max_draft_tokens: dflash.max_draft_tokens,
+        n_gpu_layers,
+        device: speculative.draft_device.clone(),
+    };
+    let mut runtime = lock_runtime(runtime);
+    runtime
+        .model
+        .attach_dflash_draft(path, &options, &target_config)
+        .with_context(|| format!("attach DFlash draft model {}", path.display()))
+        .map(Some)
 }
 
 pub(in crate::frontend) fn draft_runtime_config(

@@ -1111,6 +1111,29 @@ a request-local proposer and standalone strategy. See
 [Suffix N-gram Proposer](../../skippy/docs/SUFFIX_NGRAM_PROPOSER.md) for the lookup
 contract, telemetry, and benchmark requirements.
 
+### DFlash block drafts
+
+A DFlash or DFlash2 draft is a small model trained for one target. It reads
+hidden states from several target layers and drafts a whole block in one pass.
+DFlash is opt-in: set `strategy = "dflash"` and point `draft_model` at a GGUF
+whose architecture is `dflash`. Under `strategy = "auto"` a DFlash draft is not
+selected, and speculation stays off for that model. `draft_max_tokens` caps the
+block; the default is the trained block size minus one.
+
+```toml
+[[models]]
+model = "Qwen/Qwen3-4B-GGUF:Q4_K_M"
+
+[models.speculative]
+strategy = "dflash"
+draft_model = "/models/Qwen3-4B-DFlash.Q8_0.gguf"
+```
+
+DFlash needs the complete target model on one node. A model that is split
+across nodes serves without the draft, unless `pairing_fault = "fail_closed"`,
+which rejects the load. DFlash drafts only for greedy requests; other requests
+decode normally. DSpark drafts and Windows runtimes are not supported.
+
 ### Run-ahead admission
 
 `verify_window_pipeline_depth` admits a fixed number of verify windows. Setting

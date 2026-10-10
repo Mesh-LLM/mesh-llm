@@ -8,6 +8,7 @@ mod checkpoint;
 mod config;
 mod decision;
 mod devices;
+mod dflash;
 mod error;
 mod gguf_writer;
 mod kv_pages;
@@ -42,6 +43,7 @@ pub use decision::{
     DecisionRequest, DecisionValue,
 };
 pub use devices::{BackendDevice, BackendDeviceType, backend_devices};
+pub use dflash::{DFlashDraftInfo, DFlashDraftOptions, DFlashProposal, DFlashVariant};
 pub(crate) use error::ensure_ok;
 pub use gguf_writer::{
     ModelInfo, write_gguf_from_parts, write_gguf_from_parts_consuming,

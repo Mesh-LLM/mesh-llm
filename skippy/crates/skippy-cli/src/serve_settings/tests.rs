@@ -547,6 +547,7 @@ fn speculative_strategy_native_mtp_conflicts_are_rejected() {
         ("disabled", "--native-mtp=true"),
         ("draft-model", "--native-mtp=true"),
         ("ngram", "--native-mtp=true"),
+        ("dflash", "--native-mtp=true"),
         ("native-mtp", "--native-mtp=false"),
         ("mtp-ngram", "--native-mtp=false"),
     ] {
@@ -571,13 +572,223 @@ fn speculative_strategy_native_mtp_conflicts_are_rejected() {
         let error = args
             .public
             .settings
-            .speculative(skippy_serving::SpeculativeDecodeConfig::default(), true)
+            .speculative(
+                skippy_serving::SpeculativeDecodeConfig::default(),
+                Some(std::path::Path::new("draft.gguf")),
+            )
             .unwrap_err();
         assert!(
             error.to_string().contains("conflicts"),
             "{strategy}: {error}"
         );
     }
+}
+
+#[test]
+fn dflash_strategy_moves_the_draft_into_the_plan() {
+    let Command::Serve(args) = parse_test(&[
+        "skippy",
+        "serve",
+        "--model",
+        "missing.gguf",
+        "--draft-model-path",
+        "draft-dflash.gguf",
+        "--speculative-strategy",
+        "dflash",
+        "--dflash-max-tokens",
+        "8",
+    ])
+    .unwrap()
+    .command
+    else {
+        panic!()
+    };
+    let settings = &args.public.settings;
+    let tuning = settings.tuning(args.public.openai_guardrails).unwrap();
+    assert_eq!(tuning.draft_model_path, None);
+
+    let plan = settings
+        .speculative(
+            skippy_serving::SpeculativeDecodeConfig::default(),
+            Some(std::path::Path::new("draft-dflash.gguf")),
+        )
+        .unwrap();
+    assert_eq!(plan.effective_strategy, "dflash");
+    assert!(!plan.native_mtp.enabled);
+    let dflash = plan.dflash.unwrap();
+    assert_eq!(
+        dflash.draft_model_path,
+        std::path::PathBuf::from("draft-dflash.gguf")
+    );
+    assert_eq!(dflash.max_draft_tokens, Some(8));
+
+    let error = settings
+        .speculative(skippy_serving::SpeculativeDecodeConfig::default(), None)
+        .unwrap_err();
+    assert!(error.to_string().contains("--draft-model-path"), "{error}");
+}
+
+#[test]
+fn dflash_settings_do_not_select_dflash_without_the_strategy() {
+    let Command::Serve(args) = parse_test(&[
+        "skippy",
+        "serve",
+        "--model",
+        "missing.gguf",
+        "--draft-model-path",
+        "draft.gguf",
+        "--dflash-max-tokens",
+        "8",
+    ])
+    .unwrap()
+    .command
+    else {
+        panic!()
+    };
+
+    let error = args
+        .public
+        .settings
+        .speculative(
+            skippy_serving::SpeculativeDecodeConfig::default(),
+            Some(std::path::Path::new("draft.gguf")),
+        )
+        .unwrap_err();
+
+    assert!(
+        error.to_string().contains("--speculative-strategy dflash"),
+        "{error}"
+    );
+}
+
+#[test]
+fn draft_model_path_overrides_a_configured_dflash_draft() {
+    let Command::Serve(args) = parse_test(&[
+        "skippy",
+        "serve",
+        "--model",
+        "missing.gguf",
+        "--draft-model-path",
+        "other-dflash.gguf",
+    ])
+    .unwrap()
+    .command
+    else {
+        panic!()
+    };
+    let base = skippy_serving::SpeculativeDecodeConfig {
+        effective_strategy: "dflash".into(),
+        dflash: Some(skippy_serving::DFlashProposalConfig {
+            draft_model_path: "draft-dflash.gguf".into(),
+            max_draft_tokens: Some(6),
+        }),
+        ..Default::default()
+    };
+    let settings = &args.public.settings;
+
+    let plan = settings
+        .speculative(
+            base.clone(),
+            Some(std::path::Path::new("other-dflash.gguf")),
+        )
+        .unwrap();
+    let dflash = plan.dflash.unwrap();
+    assert_eq!(
+        dflash.draft_model_path,
+        std::path::PathBuf::from("other-dflash.gguf")
+    );
+    assert_eq!(dflash.max_draft_tokens, Some(6));
+
+    // A discovered default path is not an override.
+    let Command::Serve(args) = parse_test(&["skippy", "serve", "--model", "missing.gguf"])
+        .unwrap()
+        .command
+    else {
+        panic!()
+    };
+    let plan = args
+        .public
+        .settings
+        .speculative(base, Some(std::path::Path::new("discovered.gguf")))
+        .unwrap();
+    assert_eq!(
+        plan.dflash.unwrap().draft_model_path,
+        std::path::PathBuf::from("draft-dflash.gguf")
+    );
+}
+
+#[test]
+fn dflash_strategy_keeps_a_configured_dflash_draft() {
+    let Command::Serve(args) = parse_test(&[
+        "skippy",
+        "serve",
+        "--model",
+        "missing.gguf",
+        "--speculative-strategy",
+        "dflash",
+    ])
+    .unwrap()
+    .command
+    else {
+        panic!()
+    };
+    let base = skippy_serving::SpeculativeDecodeConfig {
+        dflash: Some(skippy_serving::DFlashProposalConfig {
+            draft_model_path: "draft-dflash.gguf".into(),
+            max_draft_tokens: Some(6),
+        }),
+        ..Default::default()
+    };
+    let settings = &args.public.settings;
+
+    for discovered in [None, Some(std::path::Path::new("discovered.gguf"))] {
+        let plan = settings.speculative(base.clone(), discovered).unwrap();
+        assert_eq!(plan.effective_strategy, "dflash");
+        assert_eq!(
+            plan.dflash.unwrap(),
+            skippy_serving::DFlashProposalConfig {
+                draft_model_path: "draft-dflash.gguf".into(),
+                max_draft_tokens: Some(6),
+            },
+            "{discovered:?}"
+        );
+    }
+}
+
+#[test]
+fn cli_strategy_overrides_a_configured_dflash_plan() {
+    let Command::Serve(args) = parse_test(&[
+        "skippy",
+        "serve",
+        "--model",
+        "missing.gguf",
+        "--draft-model-path",
+        "draft.gguf",
+        "--speculative-strategy",
+        "draft-model",
+    ])
+    .unwrap()
+    .command
+    else {
+        panic!()
+    };
+    let base = skippy_serving::SpeculativeDecodeConfig {
+        effective_strategy: "dflash".into(),
+        dflash: Some(skippy_serving::DFlashProposalConfig {
+            draft_model_path: "draft-dflash.gguf".into(),
+            max_draft_tokens: None,
+        }),
+        ..Default::default()
+    };
+
+    let plan = args
+        .public
+        .settings
+        .speculative(base, Some(std::path::Path::new("draft.gguf")))
+        .unwrap();
+
+    assert!(plan.dflash.is_none());
+    assert_eq!(plan.effective_strategy, "draft-model");
 }
 
 #[test]

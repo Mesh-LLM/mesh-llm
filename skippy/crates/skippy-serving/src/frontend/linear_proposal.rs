@@ -1,6 +1,6 @@
 mod execution;
 
-pub(crate) use execution::{LinearProposalExecutionParams, elapsed_us};
+pub(crate) use execution::{LinearProposalExecution, LinearProposalExecutionParams, elapsed_us};
 
 use std::{
     collections::BTreeMap,
