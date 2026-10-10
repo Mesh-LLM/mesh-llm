@@ -654,6 +654,10 @@ reasoning_budget  = "auto"   # integer, low/medium/high, auto, or unrestricted
 # Chat template (leave unset to use model's embedded template)
 # chat_template      = "chatml"
 # chat_template_file = "/path/to.jinja"
+# Requests that set their own chat_template get a 400 unless this node
+# enables the opt-in below. Templates run unsandboxed, so this trusts every
+# caller that can reach the node, including mesh-routed requests.
+# allow_request_chat_template = false
 # jinja              = false
 # skip_chat_parsing  = false
 

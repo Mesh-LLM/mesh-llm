@@ -87,6 +87,59 @@ fn raw_lifecycle_marker_requires_one_matching_canonical_request_id() {
     );
 }
 
+#[tokio::test(start_paused = true)]
+async fn stalled_request_headers_fail_after_the_read_deadline() {
+    // A client that sends part of its headers and then goes quiet must not
+    // hold the connection, and its task, open indefinitely (slowloris).
+    let (mut client, mut server) = tokio::io::duplex(1024);
+    client
+        .write_all(b"POST /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\n")
+        .await
+        .unwrap();
+
+    let read = tokio::time::timeout(
+        HTTP_HEADER_READ_TIMEOUT * 2,
+        read_http_request_with_limits(&mut server, HTTP_READ_LIMITS, None),
+    )
+    .await
+    .expect("a stalled request must fail within the header read deadline");
+    assert!(read.is_err());
+    drop(client);
+}
+
+#[tokio::test(start_paused = true)]
+async fn stalled_request_bodies_fail_after_the_body_read_deadline() {
+    // Complete headers followed by a body that never arrives must not hold
+    // the connection open either.
+    for headers in [
+        "POST /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\nContent-Length: 100\r\n\r\n{",
+        "POST /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\nTransfer-Encoding: chunked\r\n\r\n5\r\n{",
+    ] {
+        let (mut client, mut server) = tokio::io::duplex(1024);
+        client.write_all(headers.as_bytes()).await.unwrap();
+
+        let read = tokio::time::timeout(
+            HTTP_BODY_READ_GRACE * 2,
+            read_http_request_with_limits(&mut server, HTTP_READ_LIMITS, None),
+        )
+        .await
+        .expect("a stalled body must fail within the body read deadline");
+        assert!(read.is_err());
+        drop(client);
+    }
+}
+
+#[test]
+fn body_read_deadline_grows_with_the_bytes_received() {
+    let started = tokio::time::Instant::now();
+    let deadline = BodyReadDeadline::new(started);
+    assert_eq!(deadline.at(0), started + HTTP_BODY_READ_GRACE);
+    assert_eq!(
+        deadline.at(HTTP_BODY_MIN_BYTES_PER_SEC * 3),
+        started + HTTP_BODY_READ_GRACE + std::time::Duration::from_secs(3)
+    );
+}
+
 #[tokio::test]
 async fn parse_failures_expose_lifecycle_context_only_after_complete_headers() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
