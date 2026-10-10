@@ -1,0 +1,7 @@
+{
+  "code": 1,
+  "github_output": null,
+  "stats": null,
+  "stderr": "ERROR: sccache JSON field stats.cache_writes must be a non-negative integer\n",
+  "stdout": ""
+}

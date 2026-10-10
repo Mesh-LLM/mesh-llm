@@ -1,0 +1,5 @@
+{
+  "code": 0,
+  "stderr": "",
+  "stdout": "usage: runner-image-identity.py bind [-h] --image-id IMAGE_ID --cohort COHORT\n                                     --anchor ANCHOR --output OUTPUT\n\noptions:\n  -h, --help           show this help message and exit\n  --image-id IMAGE_ID\n  --cohort COHORT\n  --anchor ANCHOR\n  --output OUTPUT\n"
+}

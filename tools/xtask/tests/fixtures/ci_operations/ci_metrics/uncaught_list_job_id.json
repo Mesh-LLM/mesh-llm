@@ -1,0 +1,13 @@
+{
+  "args": [
+    "--input",
+    "list_job_id.json",
+    "--json-out",
+    "out/nested/metrics.json"
+  ],
+  "code": 1,
+  "output": null,
+  "raw_output": null,
+  "stderr_last_line": "TypeError: unhashable type: 'list'",
+  "stdout": ""
+}

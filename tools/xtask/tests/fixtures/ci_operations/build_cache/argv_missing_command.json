@@ -1,0 +1,5 @@
+{
+  "code": 2,
+  "stderr": "usage: manage-build-cache.py [-h] {status,prune,build} ...\nmanage-build-cache.py: error: the following arguments are required: command\n",
+  "stdout": ""
+}

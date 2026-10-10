@@ -1,0 +1,54 @@
+[
+  {
+    "databaseId": 106,
+    "attempt": 1,
+    "status": "completed",
+    "conclusion": "cancelled",
+    "createdAt": "2026-07-05T00:00:00Z",
+    "startedAt": "2026-07-05T00:00:01Z",
+    "updatedAt": "2026-07-05T00:11:00Z",
+    "jobs": [
+      {
+        "id": 1061,
+        "name": "linux build",
+        "conclusion": "success",
+        "created_at": "2026-07-05T00:00:05Z",
+        "started_at": "2026-07-05T00:00:10Z",
+        "completed_at": "2026-07-05T00:10:00Z",
+        "labels": [
+          "depot-ubuntu-24.04-8"
+        ]
+      },
+      {
+        "id": 1062,
+        "name": "windows build",
+        "conclusion": "cancelled",
+        "created_at": "2026-07-05T00:00:06Z",
+        "started_at": "2026-07-05T00:00:10Z",
+        "completed_at": "2026-07-05T00:10:00Z",
+        "labels": [
+          "depot-windows-2022-8"
+        ]
+      },
+      {
+        "id": 1063,
+        "name": "linux follow-up",
+        "conclusion": "success",
+        "created_at": "2026-07-05T00:10:00Z",
+        "started_at": "2026-07-05T00:10:00Z",
+        "completed_at": "2026-07-05T00:10:30Z",
+        "labels": [
+          "depot-ubuntu-24.04-8"
+        ]
+      },
+      {
+        "id": 1064,
+        "name": "untimed",
+        "conclusion": "success",
+        "labels": [
+          "mystery"
+        ]
+      }
+    ]
+  }
+]

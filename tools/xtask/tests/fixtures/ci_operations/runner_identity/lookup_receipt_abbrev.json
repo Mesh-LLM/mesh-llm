@@ -1,0 +1,5 @@
+{
+  "code": 0,
+  "stderr": "",
+  "stdout": "{\n  \"cohort_sha256\": \"sha256:82ce86fd271ad275c0a7a5d6016aa6a56eee75c7a941a2ada1e54e97750827bb\",\n  \"index_candidate_key\": \"candidate-index-public-web\",\n  \"schema\": 1\n}\n"
+}

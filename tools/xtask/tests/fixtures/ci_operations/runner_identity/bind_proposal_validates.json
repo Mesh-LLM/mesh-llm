@@ -1,0 +1,5 @@
+{
+  "code": 0,
+  "stderr": "",
+  "stdout": "{\n  \"admission_validator_revision\": \"ffffffffffffffffffffffffffffffffffffffff\",\n  \"cohort_sha256\": \"sha256:3cdef451a09f1767db47a6cac97ba4a7d3ca05af9969fb93312defaf65135fe7\",\n  \"origin\": {\n    \"event\": \"push\",\n    \"mesh_revision\": \"1111111111111111111111111111111111111111\",\n    \"repository\": \"Mesh-LLM/mesh-llm-runner-images\",\n    \"repository_id\": 123,\n    \"run_attempt\": 1,\n    \"run_id\": 789,\n    \"runner_images_revision\": \"2222222222222222222222222222222222222222\",\n    \"timestamp\": \"20260908000000\",\n    \"workflow_id\": 456,\n    \"workflow_path\": \".github/workflows/build-and-push.yml\"\n  },\n  \"schema\": 1,\n  \"scope\": \"reviewed_producer_admission\",\n  \"validation\": \"offline_binding_only\"\n}\n"
+}
