@@ -192,12 +192,31 @@ class BuildLlamaGeneratorGuardTests(unittest.TestCase):
         )
         return result, build, log
 
+    def commit_fixture_workdir(self) -> None:
+        workdir = self.build_env["LLAMA_WORKDIR"]
+        subprocess.run(["git", "init", "-q", workdir], check=True)
+        subprocess.run(["git", "-C", workdir, "add", "."], check=True)
+        subprocess.run([
+            "git", "-C", workdir, "-c", "user.name=Fixture",
+            "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false",
+            "commit", "-qm", "fixture",
+        ], check=True)
+
     def test_static_build_accepts_unix_and_msvc_archive_names(self) -> None:
         for archives in (UNIX_STATIC_ARCHIVES, MSVC_STATIC_ARCHIVES):
             with self.subTest(archive=archives[0]):
-                result, _, _ = self.run_build(link_mode="static", static_archives=archives)
+                result, _, log = self.run_build(link_mode="static", static_archives=archives)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertIn("built patched llama.cpp", result.stdout)
+                self.commit_fixture_workdir()
+                configured = log.read_text()
+                warm = subprocess.run(
+                    ["bash", str(BUILD_SCRIPT), "--require-existing"],
+                    cwd=ROOT, env=self.build_env, capture_output=True, text=True,
+                )
+                self.assertEqual(warm.returncode, 0, warm.stderr)
+                self.assertIn("patched llama.cpp ABI already built", warm.stdout)
+                self.assertEqual(log.read_text(), configured)
 
     def test_static_build_still_requires_every_archive(self) -> None:
         for archives in (UNIX_STATIC_ARCHIVES, MSVC_STATIC_ARCHIVES):
@@ -218,14 +237,7 @@ class BuildLlamaGeneratorGuardTests(unittest.TestCase):
     def test_target_change_rejects_existing_native_build(self) -> None:
         result, build, log = self.run_build(host_os="Darwin", deployment_target="13.3")
         self.assertEqual(result.returncode, 0, result.stderr)
-        workdir = self.build_env["LLAMA_WORKDIR"]
-        subprocess.run(["git", "init", "-q", workdir], check=True)
-        subprocess.run(["git", "-C", workdir, "add", "."], check=True)
-        subprocess.run([
-            "git", "-C", workdir, "-c", "user.name=Fixture",
-            "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false",
-            "commit", "-qm", "fixture",
-        ], check=True)
+        self.commit_fixture_workdir()
         command = ["bash", str(BUILD_SCRIPT), "--require-existing"]
         warm = subprocess.run(command, cwd=ROOT, env=self.build_env, capture_output=True, text=True)
         self.assertEqual(warm.returncode, 0, warm.stderr)
