@@ -144,9 +144,11 @@ emission.
 
 A client can mark two or more exchanges as one pair it sent to different nodes
 on purpose, for example to compare their answers. It sends the same value in the
-`x-mesh-twin-bracket` request header on each. The host copies that value, unread,
-into `twin_bracket_id` on the exchange's `openai.exchange.v1` events. Without the
-header the field is absent.
+`x-mesh-twin-bracket` request header on each. The host trims spaces and tabs from
+the value's ends and accepts 1 to 128 characters of `[A-Za-z0-9._:-]`; a malformed
+value, or the header sent more than once, gets `400`. It copies the accepted value,
+otherwise unread, into `twin_bracket_id` on the exchange's `openai.exchange.v1`
+events. Without the header the field is absent.
 
 Three things the host never does:
 
