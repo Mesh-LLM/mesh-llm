@@ -124,6 +124,7 @@ class CiProductComposerTests(unittest.TestCase):
         runtime_archive: str | None = None,
         host_sidecar: str | None = None,
         attestation_sidecar: str | None = None,
+        qualification_receipts: str | None = None,
     ) -> subprocess.CompletedProcess[str]:
         host_input, runtime_input = self.write_fake_product_inputs(
             workspace,
@@ -173,6 +174,8 @@ class CiProductComposerTests(unittest.TestCase):
             "INPUT_BINARY_NAME": "mesh-llm",
             "INPUT_READINESS_SMOKE": "false",
         }
+        if qualification_receipts is not None:
+            environment["INPUT_QUALIFICATION_RECEIPTS"] = qualification_receipts
         if attestation_sidecar is not None:
             verifier = host_input / "release-attestation-verifier"
             verifier.write_bytes(b"test verifier")
@@ -222,6 +225,141 @@ class CiProductComposerTests(unittest.TestCase):
         self.assertIn("scripts/ci-client-readiness-smoke.sh", script)
         self.assertIn('archive_path="$product_dir.tar.gz"', script)
         self.assertIn('tar -C "$product_dir" -czf "$archive_path" .', script)
+
+    def write_qualification_record(
+        self,
+        workspace: Path,
+        *,
+        overrides: dict | None = None,
+    ) -> Path:
+        record = {
+            "schema_version": 1,
+            "source_sha": "a" * 64,
+            "plan_digest": "b" * 64,
+            "platform": "linux",
+            "required_row": "linux-cpu",
+            "receipts": [
+                {"row_id": "linux-cpu", "status": "qualified", "receipt_sha256": "c" * 64},
+                {"row_id": "linux-cuda", "status": "hardware-unavailable", "receipt_sha256": "d" * 64},
+            ],
+        }
+        if overrides:
+            record.update(overrides)
+        path = workspace / "skippy-receipts" / "skippy-qualification-receipts.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(record) + "\n", encoding="utf-8")
+        return path
+
+    def test_qualification_record_binds_into_the_composed_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            record = self.write_qualification_record(workspace)
+            result = self.run_product_composer(
+                workspace, qualification_receipts=str(record),
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            product = workspace / "product-input"
+            manifest = json.loads((product / "product-manifest.json").read_text())
+            binding = manifest["skippy_qualification"]
+            self.assertEqual(binding["schema_version"], 1)
+            self.assertEqual(binding["source_sha"], "a" * 64)
+            self.assertEqual(binding["plan_digest"], "b" * 64)
+            self.assertEqual(binding["platform"], "linux")
+            self.assertEqual(binding["required_row"], "linux-cpu")
+            self.assertEqual(
+                [entry["row_id"] for entry in binding["receipts"]],
+                ["linux-cpu", "linux-cuda"],
+            )
+            self.assertEqual(
+                binding["record_path"], "skippy-qualification-receipts.json",
+            )
+            self.assertEqual(
+                binding["record_sha256"],
+                hashlib.sha256((product / "skippy-qualification-receipts.json").read_bytes()).hexdigest(),
+            )
+            self.assertEqual(
+                (product / "skippy-qualification-receipts.json").read_bytes(),
+                record.read_bytes(),
+            )
+
+    def test_compose_rejects_an_unqualified_or_foreign_record(self) -> None:
+        for overrides, message in (
+            ({"required_row": "linux-cuda"}, "is not qualified"),
+            (
+                {"receipts": [{"row_id": "macos-metal", "status": "qualified", "receipt_sha256": "c" * 64}]},
+                "foreign row",
+            ),
+        ):
+            with self.subTest(overrides=overrides):
+                with tempfile.TemporaryDirectory() as directory:
+                    workspace = Path(directory)
+                    record = self.write_qualification_record(workspace, overrides=overrides)
+                    result = self.run_product_composer(
+                        workspace, qualification_receipts=str(record),
+                    )
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn(message, result.stderr)
+
+    def test_product_slices_bind_receipts_and_lanes_request_them(self) -> None:
+        for platform in ("linux", "macos", "windows"):
+            with self.subTest(platform=platform):
+                slice_text = (
+                    ROOT / ".github" / "workflows" / f"ci-{platform}-product-slice.yml"
+                ).read_text(encoding="utf-8")
+                self.assertIn("require_skippy_receipts:", slice_text)
+                expected_artifact = (
+                    "name: ci-host-skippy-receipts-" + platform
+                    + "-${{ matrix.runtime.architecture }}"
+                )
+                self.assertIn(expected_artifact, slice_text)
+                self.assertIn(
+                    "qualification_receipts: ${{ inputs.require_skippy_receipts && "
+                    "'skippy-receipts/skippy-qualification-receipts.json' || '' }}",
+                    slice_text,
+                )
+                lane_text = (
+                    ROOT / ".github" / "workflows" / f"ci-{platform}-lane.yml"
+                ).read_text(encoding="utf-8")
+                self.assertIn("require_skippy_receipts: true", lane_text)
+
+    def test_extracted_product_recomposes_to_the_same_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            record = self.write_qualification_record(workspace)
+            result = self.run_product_composer(
+                workspace, qualification_receipts=str(record),
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            extract = workspace / "extracted"
+            shutil.copytree(workspace / "product-input", extract)
+            runtime = (
+                extract / "native-runtimes"
+                / "meshllm-native-runtime-darwin-x86_64-cpu"
+            )
+
+            def check() -> subprocess.CompletedProcess[str]:
+                return subprocess.run(
+                    [
+                        "python3",
+                        str(ROOT / "scripts" / "compose-product-bundle.py"),
+                        "--bundle", str(extract),
+                        "--host", str(extract / "mesh-llm"),
+                        "--runtime", str(runtime),
+                        "--version", "1.2.3",
+                        "--backend", "cpu",
+                        "--check",
+                    ],
+                    cwd=ROOT,
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
+
+            verified = check()
+            self.assertEqual(verified.returncode, 0, verified.stderr)
+            (extract / "skippy-qualification-receipts.json").unlink()
+            tampered = check()
+            self.assertNotEqual(tampered.returncode, 0)
 
     def test_product_composer_normalizes_windows_shell_boundaries(self) -> None:
         script = COMPOSE_SCRIPT.read_text(encoding="utf-8")

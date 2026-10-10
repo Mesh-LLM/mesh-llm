@@ -31,6 +31,11 @@ on:
         required: false
         default: false
         type: boolean
+      require_skippy_receipts:
+        description: Bind the standalone Skippy qualification receipt record into the composed product manifest.
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -98,6 +103,11 @@ jobs:
         with:
           name: ci-runtime-macos-${{ matrix.runtime.architecture }}-${{ matrix.runtime.backend }}
           path: runtime-input
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        if: ${{ inputs.require_skippy_receipts }}
+        with:
+          name: ci-host-skippy-receipts-macos-${{ matrix.runtime.architecture }}
+          path: skippy-receipts
       - name: Compose immutable macOS product
         id: compose
         uses: ./.github/actions/compose-product-input
@@ -106,6 +116,7 @@ jobs:
           runtime_input_dir: runtime-input
           output_dir: product-input
           backend: ${{ matrix.runtime.backend }}
+          qualification_receipts: ${{ inputs.require_skippy_receipts && 'skippy-receipts/skippy-qualification-receipts.json' || '' }}
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: ci-product-macos-${{ matrix.runtime.architecture }}-${{ matrix.runtime.backend }}
