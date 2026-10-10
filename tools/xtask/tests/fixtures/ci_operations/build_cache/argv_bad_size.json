@@ -1,0 +1,5 @@
+{
+  "code": 2,
+  "stderr": "usage: manage-build-cache.py status [-h] [--workspace WORKSPACE]\n                                    [--target-dir TARGET_DIR]\n                                    [--max-size MAX_SIZE] [--max-age MAX_AGE]\n                                    [--json]\nmanage-build-cache.py status: error: argument --max-size: invalid size: lots\n",
+  "stdout": ""
+}

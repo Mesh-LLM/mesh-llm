@@ -1,0 +1,5 @@
+{
+  "code": 0,
+  "stderr": "",
+  "stdout": "Cargo target: 16.0 KiB\nConfigured limit: 10.0 KiB\nConfigured maximum age: 3 days\nOver limit: 6.0 KiB\nLargest target entries:\n    15.4 KiB  {root}/ws/target/debug\n     700.0 B  {root}/ws/target/aarch64-apple-darwin\n       0.0 B  {root}/ws/target/.mesh-llm-cache-prune.lock\n"
+}

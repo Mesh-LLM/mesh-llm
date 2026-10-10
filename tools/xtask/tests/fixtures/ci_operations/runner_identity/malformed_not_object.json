@@ -1,0 +1,5 @@
+{
+  "code": 1,
+  "stderr": "runner image identity: {root}/ci/runner-images.json: expected an object\n",
+  "stdout": ""
+}

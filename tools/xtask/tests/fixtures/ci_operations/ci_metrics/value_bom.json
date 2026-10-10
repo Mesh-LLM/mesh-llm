@@ -1,0 +1,15 @@
+{
+  "args": [
+    "--input",
+    "bom.json",
+    "--json-out",
+    "out/nested/metrics.json",
+    "--raw-out",
+    "raw/runs.json"
+  ],
+  "code": 2,
+  "output": null,
+  "raw_output": null,
+  "stderr": "ci metrics error: Unexpected UTF-8 BOM (decode using utf-8-sig): line 1 column 1 (char 0)\n",
+  "stdout": ""
+}

@@ -1,0 +1,14 @@
+{
+  "args": [
+    "--run-id",
+    "3",
+    "--json-out",
+    "out/nested/metrics.json"
+  ],
+  "code": 2,
+  "gh_argv": [],
+  "output": null,
+  "raw_output": null,
+  "stderr": "ci metrics error: gh is required for live collection\n",
+  "stdout": ""
+}

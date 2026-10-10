@@ -1,0 +1,5 @@
+{
+  "code": 2,
+  "stderr": "usage: runner-image-identity.py lookup [-h]\n                                       [--field {reference,native_toolchain_epoch,receipt,provenance}]\n                                       role\nrunner-image-identity.py lookup: error: the following arguments are required: role\n",
+  "stdout": ""
+}

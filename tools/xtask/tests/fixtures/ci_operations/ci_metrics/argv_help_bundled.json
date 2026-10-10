@@ -1,0 +1,12 @@
+{
+  "args": [
+    "--input",
+    "x",
+    "-hx"
+  ],
+  "code": 0,
+  "output": null,
+  "raw_output": null,
+  "stderr": "",
+  "stdout": "usage: collect-ci-metrics.py [-h] [--repo REPO] [--workflow WORKFLOW]\n                             [--run-id RUN_ID] [--input INPUT]\n                             [--compare-input COMPARE_INPUT] [--limit LIMIT]\n                             [--status STATUS] [--branch BRANCH]\n                             [--event EVENT] [--created CREATED] [--top TOP]\n                             [--label KEY=VALUE] [--json-out JSON_OUT]\n                             [--markdown-out MARKDOWN_OUT] [--raw-out RAW_OUT]\n\nCollect read-only GitHub Actions timing and runner metrics.\n\noptions:\n  -h, --help            show this help message and exit\n  --repo REPO\n  --workflow WORKFLOW\n  --run-id RUN_ID\n  --input INPUT         Detailed run JSON, --raw-out JSON, or -\n  --compare-input COMPARE_INPUT\n                        Detailed/raw run JSON for a historical baseline cohort\n  --limit LIMIT\n  --status STATUS\n  --branch BRANCH\n  --event EVENT\n  --created CREATED     GitHub date filter, e.g. >=2026-07-01\n  --top TOP\n  --label KEY=VALUE\n  --json-out JSON_OUT\n  --markdown-out MARKDOWN_OUT\n  --raw-out RAW_OUT     Save detailed inputs for offline analysis\n"
+}
