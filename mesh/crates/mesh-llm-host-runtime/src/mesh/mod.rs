@@ -100,6 +100,7 @@ mod plugin_config;
 pub(crate) mod plugin_keys;
 mod plugin_mesh;
 mod plugin_streams;
+mod pre_admission;
 pub mod requirements;
 mod signed_records;
 mod stage_artifacts;
