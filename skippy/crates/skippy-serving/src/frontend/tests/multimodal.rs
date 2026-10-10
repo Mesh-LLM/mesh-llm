@@ -8,6 +8,7 @@ const MM_SPLIT_LAYER_ENV: &str = "SKIPPY_MM_SPLIT_LAYER";
 const MM_CTX_SIZE_ENV: &str = "SKIPPY_MM_CTX_SIZE";
 const MM_MAX_TOKENS_ENV: &str = "SKIPPY_MM_MAX_TOKENS";
 const MM_N_GPU_LAYERS_ENV: &str = "SKIPPY_MM_N_GPU_LAYERS";
+const MM_SYSTEM_PROMPT_ENV: &str = "SKIPPY_MM_SYSTEM_PROMPT";
 
 struct MultimodalSmokeFixture {
     model_path: PathBuf,
@@ -259,22 +260,27 @@ fn multimodal_chat_request_with_max_tokens(
         _ => "image/png",
     };
     let encoded = base64::engine::general_purpose::STANDARD.encode(image);
+    let mut messages = Vec::new();
+    if let Ok(system_prompt) = env::var(MM_SYSTEM_PROMPT_ENV) {
+        messages.push(json!({"role": "system", "content": system_prompt}));
+    }
+    messages.push(json!({
+        "role": "user",
+        "content": [
+            {"type": "text", "text": "Describe this image briefly."},
+            {"type": "image_url", "image_url": {"url": format!("data:{mime_type};base64,{encoded}")}}
+        ]
+    }));
     // The smoke checks answer content within a small token budget.
     // Reasoning tokens would consume that budget before the answer starts.
     serde_json::from_value(json!({
-            "model": "mm-smoke",
-            "messages": [{
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": "Describe this image briefly."},
-                    {"type": "image_url", "image_url": {"url": format!("data:{mime_type};base64,{encoded}")}}
-                ]
-            }],
-            "max_tokens": max_tokens,
-            "reasoning_effort": "none",
-            "temperature": 0.0
-        }))
-        .context("build multimodal smoke request")
+        "model": "mm-smoke",
+        "messages": messages,
+        "max_tokens": max_tokens,
+        "reasoning_effort": "none",
+        "temperature": 0.0
+    }))
+    .context("build multimodal smoke request")
 }
 
 fn malformed_multimodal_chat_request() -> ChatCompletionRequest {

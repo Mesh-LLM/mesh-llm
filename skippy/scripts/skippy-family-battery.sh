@@ -795,11 +795,18 @@ run_mmproj_smoke() {
   log_path="$smoke_run_dir/mmproj-smoke.log"
   echo "==> family-certify mmproj smoke: family=$family model=$(basename "$target") mmproj=$(basename "$mmproj")"
   MM_SMOKE_TOTAL=$((MM_SMOKE_TOTAL + 1))
+  local -a smoke_command smoke_env=()
+  if [[ "$family" == "mistral3" ]]; then
+    # The pinned reasoning template supplies a long thinking instruction when
+    # no system message is present, exhausting this answer-content smoke.
+    smoke_env+=(SKIPPY_MM_SYSTEM_PROMPT="You are a concise image captioner. Give only the final answer in one sentence.")
+  fi
   if (( DRY_RUN == 1 )); then
-    echo "env SKIPPY_MM_MODEL='$target' SKIPPY_MM_PROJECTOR='$mmproj' SKIPPY_MM_IMAGE='$ROOT/ci/llama-canary/fixtures/multimodal-smoke.png' SKIPPY_MM_ACTIVATION_WIDTH='$activation_width' SKIPPY_MM_SPLIT_LAYER='$split_layer' cargo test --manifest-path '$ROOT/Cargo.toml' -p skippy-serving --lib frontend::tests::multimodal -- --nocapture --test-threads=1"
+    printf 'env '
+    if (( ${#smoke_env[@]} > 0 )); then printf '%q ' "${smoke_env[@]}"; fi
+    echo "SKIPPY_MM_MODEL='$target' SKIPPY_MM_PROJECTOR='$mmproj' SKIPPY_MM_IMAGE='$ROOT/ci/llama-canary/fixtures/multimodal-smoke.png' SKIPPY_MM_ACTIVATION_WIDTH='$activation_width' SKIPPY_MM_SPLIT_LAYER='$split_layer' cargo test --manifest-path '$ROOT/Cargo.toml' -p skippy-serving --lib frontend::tests::multimodal -- --nocapture --test-threads=1"
     return 0
   fi
-  local -a smoke_command
   if [[ -n "${FAMILY_BATTERY_MM_TEST_BIN:-}" ]]; then
     [[ -x "$FAMILY_BATTERY_MM_TEST_BIN" ]] || return 1
     smoke_command=("$FAMILY_BATTERY_MM_TEST_BIN" frontend::tests::multimodal --nocapture --test-threads=1)
@@ -811,6 +818,7 @@ run_mmproj_smoke() {
     --seconds "$smoke_timeout" \
     --label "mmproj smoke $family" \
     -- env \
+      "${smoke_env[@]}" \
       SKIPPY_MM_MODEL="$target" \
       SKIPPY_MM_PROJECTOR="$mmproj" \
       SKIPPY_MM_IMAGE="$ROOT/ci/llama-canary/fixtures/multimodal-smoke.png" \
