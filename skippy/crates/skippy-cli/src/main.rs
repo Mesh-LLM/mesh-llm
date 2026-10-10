@@ -1,6 +1,7 @@
 mod cli;
 mod conversion;
 mod disk_cache;
+mod laya_serve;
 mod local_model;
 mod local_resource_planning;
 mod native_logging;

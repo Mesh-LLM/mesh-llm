@@ -38,7 +38,7 @@ class CompletionEvidenceTests(unittest.TestCase):
         self.assertIn("--suite recurrent-pilot", windows)
         self.assertIn("--suite moe-pilot", windows)
         self.assertIn("name: ci-skippy-model-pilot-windows-${{ matrix.runtime.architecture }}", windows)
-        self.assertEqual(windows.count("if: ${{ matrix.runtime.backend == 'cpu' }}"), 7)
+        self.assertEqual(windows.count("if: ${{ matrix.runtime.backend == 'cpu' }}"), 10)
 
 
 if __name__ == "__main__":

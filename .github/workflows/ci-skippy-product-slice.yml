@@ -136,6 +136,36 @@ jobs:
           path: skippy-packaging-runtime.json
           if-no-files-found: error
           retention-days: 1
+      - name: Restore pinned Laya model for standalone CPU qualification
+        if: ${{ matrix.runtime.backend == 'cpu' }}
+        id: laya_model
+        uses: ./.github/actions/restore-test-model
+        with:
+          model_manifest: ci/model-artifacts/manifests/skippy-system-one-smoke.json
+          model_artifact_id: family-laya-multilingual
+          model_cadence: ${{ inputs.original_event_name == 'pull_request' && 'pull-request' || 'main' }}
+          model_cache_scope: standalone-laya-qualification
+      - name: Execute composed Skippy System One and Decisions qualification
+        if: ${{ matrix.runtime.backend == 'cpu' }}
+        env:
+          MODEL_PATH: ${{ steps.laya_model.outputs.model_path }}
+          MODEL_SHA256: ${{ steps.laya_model.outputs.model_sha256 }}
+          ROW_ID: ${{ matrix.runtime.id }}
+        run: |
+          python3 skippy/scripts/ci-standalone-laya-qualification.py \
+            --product-dir skippy-product-input --model "$MODEL_PATH" \
+            --model-sha256 "$MODEL_SHA256" \
+            --model-id 'meshllm/laya-multilingual-F16-GGUF:F16' \
+            --row-id "$ROW_ID" --device CPU \
+            --evidence-dir skippy-laya-qualification
+      - name: Upload standalone Laya qualification evidence
+        if: ${{ matrix.runtime.backend == 'cpu' }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: ci-skippy-laya-qualification-linux-${{ matrix.runtime.architecture }}-${{ matrix.runtime.backend }}
+          path: skippy-laya-qualification/
+          if-no-files-found: error
+          retention-days: 1
       - name: Restore pinned dense model for standalone CPU pilot
         if: ${{ matrix.runtime.backend == 'cpu' }}
         id: dense_model
@@ -270,6 +300,37 @@ jobs:
           path: skippy-packaging-runtime.json
           if-no-files-found: error
           retention-days: 1
+      - name: Restore pinned Laya model for standalone Metal qualification
+        if: ${{ matrix.runtime.backend == 'metal' }}
+        id: laya_model
+        uses: ./.github/actions/restore-test-model
+        with:
+          model_manifest: ci/model-artifacts/manifests/skippy-system-one-smoke.json
+          model_artifact_id: family-laya-multilingual
+          model_cadence: ${{ inputs.original_event_name == 'pull_request' && 'pull-request' || 'main' }}
+          model_cache_scope: standalone-laya-qualification
+      - name: Execute composed Skippy System One and Decisions qualification
+        if: ${{ matrix.runtime.backend == 'metal' }}
+        shell: bash
+        env:
+          MODEL_PATH: ${{ steps.laya_model.outputs.model_path }}
+          MODEL_SHA256: ${{ steps.laya_model.outputs.model_sha256 }}
+          ROW_ID: ${{ matrix.runtime.id }}
+        run: |
+          python3 skippy/scripts/ci-standalone-laya-qualification.py \
+            --product-dir skippy-product-input --model "$MODEL_PATH" \
+            --model-sha256 "$MODEL_SHA256" \
+            --model-id 'meshllm/laya-multilingual-F16-GGUF:F16' \
+            --row-id "$ROW_ID" --device MTL0 \
+            --evidence-dir skippy-laya-qualification
+      - name: Upload standalone Laya qualification evidence
+        if: ${{ matrix.runtime.backend == 'metal' }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: ci-skippy-laya-qualification-macos-${{ matrix.runtime.architecture }}-${{ matrix.runtime.backend }}
+          path: skippy-laya-qualification/
+          if-no-files-found: error
+          retention-days: 1
       - name: Upload immutable standalone product
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
@@ -331,6 +392,37 @@ jobs:
         with:
           name: ci-skippy-packaging-windows-${{ matrix.runtime.architecture }}-${{ matrix.runtime.backend }}
           path: skippy-packaging-runtime.json
+          if-no-files-found: error
+          retention-days: 1
+      - name: Restore pinned Laya model for standalone Windows CPU qualification
+        if: ${{ matrix.runtime.backend == 'cpu' }}
+        id: laya_model
+        uses: ./.github/actions/restore-test-model
+        with:
+          model_manifest: ci/model-artifacts/manifests/skippy-system-one-smoke.json
+          model_artifact_id: family-laya-multilingual
+          model_cadence: ${{ inputs.original_event_name == 'pull_request' && 'pull-request' || 'main' }}
+          model_cache_scope: standalone-laya-qualification
+      - name: Execute composed Skippy System One and Decisions qualification
+        if: ${{ matrix.runtime.backend == 'cpu' }}
+        shell: bash
+        env:
+          MODEL_PATH: ${{ steps.laya_model.outputs.model_path }}
+          MODEL_SHA256: ${{ steps.laya_model.outputs.model_sha256 }}
+          ROW_ID: ${{ matrix.runtime.id }}
+        run: |
+          python skippy/scripts/ci-standalone-laya-qualification.py \
+            --product-dir skippy-product-input --model "$MODEL_PATH" \
+            --model-sha256 "$MODEL_SHA256" \
+            --model-id 'meshllm/laya-multilingual-F16-GGUF:F16' \
+            --row-id "$ROW_ID" --device CPU \
+            --evidence-dir skippy-laya-qualification
+      - name: Upload standalone Laya qualification evidence
+        if: ${{ matrix.runtime.backend == 'cpu' }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: ci-skippy-laya-qualification-windows-${{ matrix.runtime.architecture }}-${{ matrix.runtime.backend }}
+          path: skippy-laya-qualification/
           if-no-files-found: error
           retention-days: 1
       - name: Restore pinned dense model for standalone Windows CPU pilot
