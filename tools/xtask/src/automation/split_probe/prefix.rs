@@ -73,12 +73,37 @@ fn validate(metrics: &[(u64, u64)], kind: &str) -> DynResult<()> {
     {
         return Err("cache reuse did not grow".into());
     }
+    // Resident capacity pressure can evict the deepest checkpoint, so a valid
+    // repeat may leave a suffix uncached. Output equality in `verify` proves the
+    // restored prefix still leads to the same continuation as the uncached request.
     for pair in metrics.as_chunks::<2>().0 {
-        if pair[0].1 >= pair[0].0
-            || pair[1].1 <= pair[0].1
-            || (!recurrent && pair[1].1 < pair[1].0.saturating_sub(2))
-        {
+        if pair[0].1 >= pair[0].0 || pair[1].1 <= pair[0].1 {
             return Err("growth suffix or repeated restore failed".into());
+        }
+    }
+    Ok(())
+}
+
+fn continuation(response: &Response, index: usize) -> DynResult<String> {
+    response
+        .choices
+        .first()
+        .and_then(|choice| choice.pointer("/message/content"))
+        .and_then(serde_json::Value::as_str)
+        .filter(|content| !content.is_empty())
+        .map(str::to_owned)
+        .ok_or_else(|| format!("prefix request {index} returned no assistant continuation").into())
+}
+
+fn same_continuations(outputs: &[String]) -> DynResult<()> {
+    for (pair, outputs) in outputs.as_chunks::<2>().0.iter().enumerate() {
+        if outputs[0] != outputs[1] {
+            let (first, repeat) = (pair * 2 + 1, pair * 2 + 2);
+            return Err(format!(
+                "warm request {repeat} diverged from uncached request {first}: {:?} != {:?}",
+                outputs[0], outputs[1]
+            )
+            .into());
         }
     }
     Ok(())
@@ -86,18 +111,21 @@ fn validate(metrics: &[(u64, u64)], kind: &str) -> DynResult<()> {
 
 pub(super) fn verify(directory: &Path, count: usize, kind: &str) -> DynResult<String> {
     let mut metrics = Vec::new();
+    let mut outputs = Vec::new();
     for index in 1..=count {
         let response: Response =
             serde_json::from_slice(&fs::read(directory.join(format!("response-{index}.json")))?)?;
         if response.object != "chat.completion" || response.choices.is_empty() {
             return Err("prefix response is not a chat completion".into());
         }
+        outputs.push(continuation(&response, index)?);
         metrics.push((
             response.usage.prompt_tokens,
             response.usage.prompt_tokens_details.cached_tokens,
         ));
     }
     validate(&metrics, kind)?;
+    same_continuations(&outputs)?;
     Ok(format!(
         "Split prefix cache reuse grew and repeated prompts restored from cache: {}\n",
         metrics
@@ -116,7 +144,7 @@ pub(super) fn verify(directory: &Path, count: usize, kind: &str) -> DynResult<St
 mod tests {
     use super::*;
     #[test]
-    fn dense_requires_near_full_repeats_and_growing_prefix() {
+    fn dense_accepts_partial_repeats_but_requires_growing_prefix() {
         assert!(
             validate(
                 &[
@@ -140,6 +168,20 @@ mod tests {
                     (200, 100),
                     (300, 190),
                     (300, 200)
+                ],
+                "kv-dense"
+            )
+            .is_ok()
+        );
+        assert!(
+            validate(
+                &[
+                    (100, 0),
+                    (100, 10),
+                    (200, 90),
+                    (200, 100),
+                    (300, 90),
+                    (300, 100)
                 ],
                 "kv-dense"
             )

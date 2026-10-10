@@ -166,6 +166,7 @@ pub(crate) fn stage0_config(
         cache_idle_slots: context.runtime_settings.cache_idle_slots,
         resident_tensor_names: Vec::new(),
         execution_contract: context.admission.execution_contract.clone(),
+        kv_graph_state: context.admission.kv_graph_state.clone(),
         activation_import_identities: frontier_profile.activation_imports.clone(),
         activation_import_bindings: frontier_profile.activation_import_bindings.clone(),
         activation_export_identities: frontier_profile.activation_exports.clone(),
@@ -271,6 +272,7 @@ mod tests {
             },
         };
         context.admission.execution_contract = "admitted-dependency-contract".into();
+        context.admission.kv_graph_state = "dense".into();
         let request = remote_stage_load_request(
             &context,
             &MeshStagePlan {
@@ -327,6 +329,7 @@ mod tests {
             stage0.execution_contract,
             context.admission.execution_contract
         );
+        assert_eq!(stage0.kv_graph_state, context.admission.kv_graph_state);
         assert_eq!(stage0.kv_offload, context.runtime_settings.kv_offload);
         assert_eq!(stage0.kv_unified, context.runtime_settings.kv_unified);
         assert_eq!(stage0.swa_full, context.runtime_settings.swa_full);
