@@ -6,6 +6,9 @@ pub(super) fn run_eval(args: EvalRunArgs) -> Result<()> {
     }
     let root = absolute_path(cache_root(args.cache_root.clone())?)?;
     let definition = definition(args.eval);
+    if definition.id == EvalId::SweBenchPro {
+        super::swe_environment::Configuration::runtime()?;
+    }
     let run_dir = absolute_path(output_dir(args.output_dir.clone(), args.eval)?)?;
     let run_id = args
         .run_id
@@ -26,6 +29,15 @@ pub(super) fn run_eval(args: EvalRunArgs) -> Result<()> {
                 harness.display(),
                 definition.id.as_str()
             );
+        }
+        super::harness_source::admit_run(&root, definition)?;
+        super::external_sdk_source::admit_run(definition.id)?;
+        if definition.id == EvalId::McpAtlas {
+            super::mcp_environment::admit(&root)?;
+        } else if definition.id == EvalId::SpeedBench {
+            super::speed_environment::admit(&root)?;
+        } else if definition.id == EvalId::SweBenchPro {
+            super::swe_environment::admit(&root)?;
         }
         preflight_eval_run(definition)?;
     }
@@ -71,7 +83,16 @@ pub(super) fn run_eval(args: EvalRunArgs) -> Result<()> {
             &stdout_path,
             &stderr_path,
         )
-        .with_context(|| format!("run {}", definition.id.as_str()))?;
+        .with_context(|| format!("run {}", definition.id.as_str()));
+        super::external_sdk_source::admit_run(definition.id)?;
+        if definition.id == EvalId::McpAtlas {
+            super::mcp_environment::admit(&root)?;
+        } else if definition.id == EvalId::SpeedBench {
+            super::speed_environment::admit(&root)?;
+        } else if definition.id == EvalId::SweBenchPro {
+            super::swe_environment::admit(&root)?;
+        }
+        let outcome = outcome?;
         let duration_ms = started.elapsed().as_secs_f64() * 1000.0;
         report.exit_status = outcome.exit_status;
         report.success = outcome.success;

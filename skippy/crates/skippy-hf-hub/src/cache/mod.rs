@@ -132,3 +132,37 @@ impl crate::blocking::HFClientSync {
         self.runtime.block_on(self.inner.scan_cache().send())
     }
 }
+
+/// Resolve only the exact local revision to a validated immutable commit.
+/// This reads cache metadata and never contacts the Hub or selects a latest snapshot.
+pub fn resolve_cached_revision(
+    cache_root: &std::path::Path,
+    repo: &str,
+    repo_type: impl crate::RepoType,
+    revision: &str,
+) -> HFResult<Option<String>> {
+    let parts: Vec<_> = repo.split('/').collect();
+    if !(1..=2).contains(&parts.len())
+        || parts.iter().any(|part| {
+            part.is_empty()
+                || *part == "."
+                || *part == ".."
+                || part.contains("--")
+                || part
+                    .chars()
+                    .any(|ch| ch.is_control() || matches!(ch, '\\' | ':'))
+        })
+    {
+        return Err(crate::error::HFError::InvalidParameter(
+            "unsafe cached repository id".into(),
+        ));
+    }
+    if storage::is_commit_hash(revision) {
+        return Ok(Some(revision.to_owned()));
+    }
+    storage::read_ref_sync(
+        cache_root,
+        &storage::repo_folder_name(repo, repo_type.plural()),
+        revision,
+    )
+}

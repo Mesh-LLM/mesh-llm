@@ -20,6 +20,7 @@ fn write_swe_bench_pro_run_script(
     harness: &Path,
     run_dir: &Path,
 ) -> Result<()> {
+    super::super::swe_environment::Configuration::runtime()?;
     let raw_dir = run_dir.join("raw/swe-bench-pro");
     let instances = raw_dir.join("instances.yaml");
     let expert_instances = raw_dir.join("instances-expert.yaml");
@@ -36,10 +37,6 @@ fn write_swe_bench_pro_run_script(
     let docker_platform =
         env::var("SWE_BENCH_PRO_DOCKER_PLATFORM").unwrap_or_else(|_| "linux/amd64".to_string());
     let parse_function = env::var("SWE_BENCH_PRO_PARSE_FUNCTION").ok();
-    let sweagent_python = env::var("SWE_BENCH_PRO_PYTHON").unwrap_or_else(|_| "3.12".to_string());
-    let swerex_spec = env::var("SWE_BENCH_PRO_SWEREX_SPEC").ok();
-    let swerex_pip_index_url = env::var("SWE_BENCH_PRO_SWEREX_PIP_INDEX_URL")
-        .unwrap_or_else(|_| "https://pypi.org/simple".to_string());
     let use_local_eval = env::var("SWE_BENCH_PRO_USE_LOCAL_DOCKER")
         .map(|value| matches!(value.as_str(), "1" | "true" | "yes"))
         .unwrap_or(true);
@@ -51,6 +48,37 @@ fn write_swe_bench_pro_run_script(
     let model = litellm_model_name(&args.model);
     let script = format!(
         include_str!("templates/swe_bench_pro_run.sh"),
+        sdk_generate = shell_quote(
+            &super::super::external_sdk_source::command_leaf(
+                "swe-generate-instances.py",
+                args.dry_run
+            )?
+            .display()
+            .to_string()
+        ),
+        sdk_expert = shell_quote(
+            &super::super::external_sdk_source::command_leaf(
+                "swe-expert-instances.py",
+                args.dry_run
+            )?
+            .display()
+            .to_string()
+        ),
+        sdk_evaluate = shell_quote(
+            &super::super::external_sdk_source::command_leaf("swe-evaluate.py", args.dry_run)?
+                .display()
+                .to_string()
+        ),
+        prepared_python = shell_quote(
+            &super::super::swe_environment::runtime_python(cache_root)
+                .display()
+                .to_string()
+        ),
+        prepared_agent = shell_quote(
+            &super::super::swe_environment::agent(cache_root)
+                .display()
+                .to_string()
+        ),
         harness = shell_quote(&harness.display().to_string()),
         raw_dir = shell_quote(&raw_dir.display().to_string()),
         instances = shell_quote(&instances.display().to_string()),
@@ -66,9 +94,6 @@ fn write_swe_bench_pro_run_script(
         eval_workers = shell_quote(&eval_workers),
         docker_platform = shell_quote(&docker_platform),
         parse_function = shell_quote(parse_function.as_deref().unwrap_or("")),
-        sweagent_python = shell_quote(&sweagent_python),
-        swerex_spec = shell_quote(swerex_spec.as_deref().unwrap_or("")),
-        swerex_pip_index_url = shell_quote(&swerex_pip_index_url),
         local_eval_flag = shell_quote(local_eval_flag),
         hf_home = shell_quote(&cache_root.join("hf").display().to_string()),
         hf_datasets_cache = shell_quote(&cache_root.join("hf-datasets").display().to_string()),

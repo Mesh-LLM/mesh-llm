@@ -148,6 +148,7 @@ pub struct HFClientBuilder {
     user_agent: Option<String>,
     headers: Option<HeaderMap>,
     client: Option<reqwest::Client>,
+    request_timeout: Option<Duration>,
     cache_dir: Option<std::path::PathBuf>,
     cache_enabled: Option<bool>,
     retry_max_attempts: Option<usize>,
@@ -163,6 +164,7 @@ impl HFClientBuilder {
             user_agent: None,
             headers: None,
             client: None,
+            request_timeout: None,
             cache_dir: None,
             cache_enabled: None,
             retry_max_attempts: None,
@@ -201,6 +203,13 @@ impl HFClientBuilder {
     /// the [`headers`](Self::headers) and [`user_agent`](Self::user_agent) options are ignored.
     pub fn client(mut self, client: reqwest::Client) -> Self {
         self.client = Some(client);
+        self
+    }
+
+    /// Bound native HTTP requests, including the separately owned no-redirect
+    /// metadata client. A supplied custom HTTP client retains its own policy.
+    pub fn request_timeout(mut self, timeout: Duration) -> Self {
+        self.request_timeout = Some(timeout);
         self
     }
 
@@ -263,18 +272,28 @@ impl HFClientBuilder {
             })?,
         );
 
+        let configure = |builder: reqwest::ClientBuilder| {
+            if let Some(timeout) = self.request_timeout {
+                builder
+                    .timeout(timeout)
+                    .connect_timeout(timeout.min(Duration::from_secs(20)))
+            } else {
+                builder
+            }
+        };
         let client = match self.client {
             Some(c) => c,
-            None => reqwest::Client::builder()
-                .default_headers(default_headers.clone())
+            None => configure(reqwest::Client::builder().default_headers(default_headers.clone()))
                 .build()?,
         };
 
         #[cfg(not(target_family = "wasm"))]
-        let no_redirect_client = reqwest::Client::builder()
-            .default_headers(default_headers)
-            .redirect(reqwest::redirect::Policy::none())
-            .build()?;
+        let no_redirect_client = configure(
+            reqwest::Client::builder()
+                .default_headers(default_headers)
+                .redirect(reqwest::redirect::Policy::none()),
+        )
+        .build()?;
 
         let retry_config = RetryConfig {
             max_attempts: self
