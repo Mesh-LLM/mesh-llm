@@ -149,6 +149,7 @@ type UseChatLaneOptions = {
   setResponseMetadataByConversation: Dispatch<SetStateAction<Record<string, Record<string, ThreadMessageMetadata>>>>
   sessionModel: string
   sessionTarget: string
+  sessionFreeOnly: boolean
   systemPrompt: string
   updateThread: ReturnType<typeof useConversations>['updateThread']
 }
@@ -162,6 +163,7 @@ function useChatLane({
   setResponseMetadataByConversation,
   sessionModel,
   sessionTarget,
+  sessionFreeOnly,
   systemPrompt,
   updateThread
 }: UseChatLaneOptions): ChatLane {
@@ -190,6 +192,7 @@ function useChatLane({
     model: sessionModel,
     systemPrompt,
     target: sessionTarget,
+    freeOnly: sessionFreeOnly,
     initialMessages: initialThread,
     onResponseMetadata: handleResponseMetadata
   })
@@ -267,6 +270,7 @@ export function ChatSessionProvider({ children, data = CHAT_HARNESS }: ChatSessi
   const visibleLaneId = selectedLaneId ?? activeLaneId
   const [sessionModel, setSessionModel] = useState('auto')
   const [sessionTarget, setSessionTarget] = useState('')
+  const [sessionFreeOnly, setSessionFreeOnly] = useState(false)
   const [messageModels, setMessageModels] = useState<Record<string, string>>({})
   const { systemPrompt, setSystemPrompt } = usePersistentChatSystemPrompt()
   const [responseMetadataByConversation, setResponseMetadataByConversation] = useState<
@@ -290,6 +294,7 @@ export function ChatSessionProvider({ children, data = CHAT_HARNESS }: ChatSessi
     setResponseMetadataByConversation,
     sessionModel,
     sessionTarget,
+    sessionFreeOnly,
     systemPrompt,
     updateThread
   })
@@ -302,6 +307,7 @@ export function ChatSessionProvider({ children, data = CHAT_HARNESS }: ChatSessi
     setResponseMetadataByConversation,
     sessionModel,
     sessionTarget,
+    sessionFreeOnly,
     systemPrompt,
     updateThread
   })
@@ -397,6 +403,7 @@ export function ChatSessionProvider({ children, data = CHAT_HARNESS }: ChatSessi
       setSessionModel,
       sessionTarget,
       setSessionTarget,
+      setSessionFreeOnly,
       setSystemPrompt,
       systemPrompt,
       streamingConversationIds,

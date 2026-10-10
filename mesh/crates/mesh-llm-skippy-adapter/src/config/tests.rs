@@ -1375,6 +1375,7 @@ ignore_eos = true
 reasoning_format = "hidden"
 reasoning_budget = 384
 chat_template = "{{ messages }}"
+allow_request_chat_template = true
 jinja = true
 chat_template_kwargs = { custom_mode = 7 }
 skip_chat_parsing = true
@@ -1426,6 +1427,7 @@ threshold = 0.12
         Some(EmbeddedReasoningBudget::Tokens(384))
     );
     assert_eq!(defaults.chat_template.as_deref(), Some("{{ messages }}"));
+    assert_eq!(defaults.allow_request_chat_template, Some(true));
     assert_eq!(defaults.skip_chat_parsing, Some(true));
     assert_eq!(defaults.system_prompt.as_deref(), Some("configured system"));
     assert_eq!(defaults.grammar, Some(serde_json::json!("root ::= 'ok'")));
