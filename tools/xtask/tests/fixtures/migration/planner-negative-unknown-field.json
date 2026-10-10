@@ -1,0 +1,36 @@
+{
+  "fixture_schema": 1,
+  "case_id": "ci-plan-unknown-field",
+  "source": {
+    "path": "scripts/plan-ci.py input boundary",
+    "revision": "2c4c92fcef592798efb3efedb721a74e2003afa6",
+    "blocker_path": "scripts/affected-crates.sh"
+  },
+  "input": {
+    "profile": "pr-ready",
+    "event_name": "pull_request",
+    "source_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "base_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "changed_files": ["docs/design/TESTING.md"],
+    "affected_crates": [],
+    "workspace_packages": [{"name": "mesh-llm", "path": "crates/mesh-llm"}],
+    "unexpected_policy_override": true
+  },
+  "observed": {
+    "outcome": "unknown_field_rejected_with_homebrew_bash_5_3",
+    "command": "jq -c '. + {unexpected_policy_override:true}' scripts/tests/fixtures/ci-plan/docs-only.json | PATH=/opt/homebrew/opt/bash/bin:$PATH python3 scripts/plan-ci.py",
+    "child_exit_status": 2,
+    "stdout": "",
+    "stderr": "ERROR: unable to build CI plan: planner input has unknown fields: unexpected_policy_override\n",
+    "consumed_json": null,
+    "system_bash_3_2": {"outcome": "blocked_before_unknown_field_validation", "test_exit_status": 1, "stderr": "affected-crates.sh failed: scripts/affected-crates.sh: line 224: local: -A: invalid option\nlocal: usage: local name[=value] ...", "consumed_json": null}
+  },
+  "parity_proof": {
+    "status": "legacy_behavior_observed_on_bash_5_3_only",
+    "reason": "PATH-selected Homebrew Bash 5.3 reaches planner validation and rejects the unknown field. System Bash 3.2 fails earlier; no Rust parity was tested."
+  },
+  "normalization": {
+    "allowed": [],
+    "identity_fields_never_normalize": ["source_sha", "base_sha", "model_revision", "sha256"]
+  }
+}
