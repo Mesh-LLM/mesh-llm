@@ -159,7 +159,7 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
-          ref: ${{ github.event.repository.default_branch }}
+          ref: ${{ github.event_name == 'workflow_dispatch' && github.sha || github.event.repository.default_branch }}
           persist-credentials: false
       - name: Validate planned Windows jobs
         id: validate

@@ -415,6 +415,12 @@ runner-contract update is active.
 | `ci-macos-lane.yml` | macOS standalone CLI/runtime composition before the Mesh host, then product/platform/Swift/Metal graph with one platform-local UI producer |
 | `ci-windows-lane.yml` | Windows standalone CLI/runtime composition before the Mesh host, then product/platform/smoke graph with one platform-local UI producer |
 | `ci-pr-canary-lane.yml` | Optional protected merge-source diagnostic lane for one Linux amd64 CPU UI/host/runtime/product chain; runner policy stays on the default branch, and the summary is step-summary-only and non-required |
+
+Linux, macOS, and Windows lane summaries check out the workflow-dispatch
+revision for their validator and report action during an explicit branch
+dispatch. PR callers continue to use the protected default-branch summary.
+This lets branch diagnostics validate the added standalone jobs against the
+same revision that defined the lane graph.
 | `ci-quality-slice.yml` | Contracts (including product-crate README, description, and local-link checks), format, unused-dependency check, Clippy and generated CLI inventory freshness; additive protected authority sentinel |
 | `ci-web-slice.yml` | Console quality, console Playwright E2E, public website build, and CLI explorer browser validation |
 | `ci-ui-artifact-slice.yml` | Immutable console distribution producer; release callers prepare one source/version-bound UI with complete file checksums, shared by all hosts and SDK resources |

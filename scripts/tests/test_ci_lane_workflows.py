@@ -119,10 +119,13 @@ class CiLaneWorkflowTests(unittest.TestCase):
                 self.assertIn("lane_plan_json:", workflow)
                 self.assertIn(f"name: {check}", workflow)
                 self.assertIn("uses: ./.github/actions/report-ci-lane", workflow)
-                self.assertIn(
-                    "ref: ${{ github.event.repository.default_branch }}",
-                    workflow,
+                summary_ref = (
+                    "ref: ${{ github.event_name == 'workflow_dispatch' && github.sha "
+                    "|| github.event.repository.default_branch }}"
+                    if lane in {"linux", "macos", "windows"}
+                    else "ref: ${{ github.event.repository.default_branch }}"
                 )
+                self.assertIn(summary_ref, workflow)
 
     def test_macos_runtime_configures_lld_before_building_packaged_tools(self) -> None:
         workflow = self.workflow("ci-macos-runtime-slice.yml")

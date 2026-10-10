@@ -588,6 +588,11 @@ graphs contain no macOS/Windows placeholder jobs, and the converse holds for
 the other platforms. Protected manual control uses the Actions API only
 for a closed list of five checked-in workflow files and passes data through
 native inputs. No workflow YAML is generated and no lane allocates a planner.
+For explicit branch workflow dispatches, Linux, macOS, and Windows summaries
+validate the lane graph using the workflow revision (`github.sha`); PR lane
+summaries continue to use the protected default branch. This keeps the
+standalone CLI and product jobs visible to the branch summary validator before
+the new graph lands on `main`.
 
 ## Planner and profiles
 
