@@ -9,10 +9,10 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/gemma4.cpp b/src/models/gemma4.cpp
-index 15ae4010b0a0759e1b0ba75c17dc91adc1340de9..a76749a97a310a377e407e8b7aecd9f73421a69d 100644
+index 4758ce172daa41eca3d24a4724446b32539eb6e8..1c203dfc26a5fef9ffc64dc88c65458fddef41cd 100644
 --- a/src/models/gemma4.cpp
 +++ b/src/models/gemma4.cpp
-@@ -182,6 +182,8 @@ llama_model_gemma4::graph::graph(const llama_model & model, const llm_graph_para
+@@ -191,6 +191,8 @@ llama_model_gemma4::graph::graph(const llama_model & model, const llm_graph_para
      }
  
      for (int il = 0; il < n_layer; ++il) {
@@ -21,7 +21,7 @@ index 15ae4010b0a0759e1b0ba75c17dc91adc1340de9..a76749a97a310a377e407e8b7aecd9f7
          const int64_t n_embd_head = hparams.n_embd_head_k(il);
          GGML_ASSERT(n_embd_head == hparams.n_embd_head_v(il));
  
-@@ -399,6 +401,7 @@ llama_model_gemma4::graph::graph(const llama_model & model, const llm_graph_para
+@@ -408,6 +410,7 @@ llama_model_gemma4::graph::graph(const llama_model & model, const llm_graph_para
  
          // input for next layer
          inpL = cur;

@@ -5146,7 +5146,7 @@ new file mode 100644
 index 000000000..1f73a8032
 --- /dev/null
 +++ b/src/skippy/stage_program.cpp
-@@ -0,0 +1,953 @@
+@@ -0,0 +1,961 @@
 +#include "stage_program.h"
 +
 +#include "stage_program_inputs.h"
@@ -5901,6 +5901,14 @@ index 000000000..1f73a8032
 +                result.add_input(std::move(recipe));
 +                break;
 +            }
++            case input_kind::request_tokens: {
++                auto recipe = std::make_unique<skippy_stage_program_request_tokens_input>();
++                recipe->tokens = ggml_new_tensor_1d(context, GGML_TYPE_I32, params.ubatch.n_tokens);
++                ggml_set_input(recipe->tokens);
++                bind(input.values[0], recipe->tokens);
++                result.add_input(std::move(recipe));
++                break;
++            }
 +            case input_kind::minimax_m3_msa: {
 +                if (memory_msa == nullptr || input.minimax_m3_msa_block_size <= 0) {
 +                    error = "stage program MiniMax-M3 MSA input has no compatible runtime memory";
@@ -6105,7 +6113,7 @@ new file mode 100644
 index 000000000..720d49c64
 --- /dev/null
 +++ b/src/skippy/stage_program.h
-@@ -0,0 +1,344 @@
+@@ -0,0 +1,345 @@
 +#pragma once
 +
 +#include "graph_identity.h"
@@ -6249,6 +6257,7 @@ index 000000000..720d49c64
 +        qwen4exp_ple,
 +        minimax_m3_msa,
 +        granite_switch,
++        request_tokens,
 +    };
 +
 +    enum class state_partition : uint8_t {
@@ -6455,7 +6464,7 @@ new file mode 100644
 index 000000000..e5f8207e5
 --- /dev/null
 +++ b/src/skippy/stage_program_extraction.cpp
-@@ -0,0 +1,798 @@
+@@ -0,0 +1,803 @@
 +#include "stage_program.h"
 +
 +#include "stage_slice_plan.h"
@@ -6586,7 +6595,12 @@ index 000000000..e5f8207e5
 +            const std::pair<int32_t, int32_t> binding(static_cast<int32_t>(effect.kind), effect.layer);
 +            const auto found = states.find(storage);
 +            if (found != states.end() && found->second != binding) {
-+                error = "stage program state root has conflicting semantics";
++                error = "stage program state root has conflicting semantics: storage=" +
++                        std::string(ggml_get_name(storage)) + " captured_kind=" +
++                        std::to_string(found->second.first) + " captured_layer=" +
++                        std::to_string(found->second.second) + " effect_kind=" +
++                        std::to_string(binding.first) + " effect_layer=" +
++                        std::to_string(binding.second);
 +                return false;
 +            }
 +            states[storage] = binding;
@@ -7340,7 +7354,7 @@ new file mode 100644
 index 000000000..b67124978
 --- /dev/null
 +++ b/src/skippy/stage_program_extraction_roots.cpp
-@@ -0,0 +1,635 @@
+@@ -0,0 +1,664 @@
 +#include "stage_program.h"
 +
 +#include "stage_slice_plan.h"
@@ -7687,9 +7701,17 @@ index 000000000..b67124978
 +            for (int32_t node_index = 0; fill_scratch && node_index < selection.source_graph->n_nodes; ++node_index) {
 +                const ggml_tensor * consumer = selection.source_graph->nodes[node_index];
 +                for (int32_t source = 0; source < GGML_MAX_SRC; ++source) {
-+                    if (consumer->src[source] == tensor && !(consumer->op == GGML_OP_FILL && source == 0)) {
-+                        fill_scratch = false;
++                    if (consumer->src[source] != tensor) continue;
++                    if (consumer->op == GGML_OP_FILL && source == 0) continue;
++                    if (consumer->op == GGML_OP_CLAMP && source == 0) {
++                        // A degenerate clamp (min == max) rewrites every element
++                        // with one constant, so it initializes scratch memory
++                        // exactly like FILL does.
++                        const float clamp_min = ((const float *) consumer->op_params)[0];
++                        const float clamp_max = ((const float *) consumer->op_params)[1];
++                        if (clamp_min == clamp_max) continue;
 +                    }
++                    fill_scratch = false;
 +                }
 +            }
 +            if (fill_scratch) {
@@ -7928,11 +7950,32 @@ index 000000000..b67124978
 +            capture_named("attention.msa.position_to_cell_values", 3, -1);
 +            capture_named("attention.msa.cell_blocks", 4, -1);
 +        } else {
-+            // Requests actually owned by an unsupported input remain uncaptured
-+            // and are rejected by the request-root ownership check after the
-+            // selected nodes have been traversed. An unsupported input that owns
-+            // no selected request is irrelevant to this stage.
-+            return true;
++            // Generic fallback for inputs whose class the extractor does not
++            // model: when the input owns the standard request token-id vector
++            // (I32, 1-D, n_tokens), replay can materialize and fill it without
++            // family knowledge, so it still gets an owned recipe. Anything
++            // else remains uncaptured and is rejected by the request-root
++            // ownership check after the selected nodes have been traversed.
++            for (const auto & request : requests) {
++                const ggml_tensor * tensor = request.first;
++                if (tensor->type != GGML_TYPE_I32 ||
++                        tensor->ne[0] != static_cast<int64_t>(n_tokens) ||
++                        tensor->ne[1] != 1 || tensor->ne[2] != 1 || tensor->ne[3] != 1) {
++                    continue;
++                }
++                const std::string id = value(tensor);
++                bool captured = false;
++                for (const auto & owned : program.inputs) {
++                    if (std::find(owned.values.begin(), owned.values.end(), id) != owned.values.end()) {
++                        captured = true;
++                        break;
++                    }
++                }
++                if (captured) continue;
++                recipe.kind = skippy_stage_program::input_kind::request_tokens;
++                capture(request.first, 0, 0);
++                break;
++            }
 +        }
 +        if (std::any_of(recipe.values.begin(), recipe.values.end(), [](const auto & id) { return !id.empty(); })) {
 +            recipe.values.resize(48);
@@ -8564,7 +8607,7 @@ new file mode 100644
 index 000000000..f0535b913
 --- /dev/null
 +++ b/src/skippy/stage_program_inputs.cpp
-@@ -0,0 +1,104 @@
+@@ -0,0 +1,110 @@
 +#include "stage_program_inputs.h"
 +
 +#include "llama-kv-cache-msa.h"
@@ -8669,12 +8712,18 @@ index 000000000..f0535b913
 +        ggml_backend_tensor_set(router_q, q.data(), 0, n_tokens*ggml_element_size(router_q));
 +    }
 +}
++
++void skippy_stage_program_request_tokens_input::set_input(const llama_ubatch * ubatch) {
++    if (ubatch->token != nullptr && tokens != nullptr && tokens->buffer != nullptr) {
++        ggml_backend_tensor_set(tokens, ubatch->token, 0, ubatch->n_tokens*ggml_element_size(tokens));
++    }
++}
 diff --git a/src/skippy/stage_program_inputs.h b/src/skippy/stage_program_inputs.h
 new file mode 100644
 index 000000000..242af65c9
 --- /dev/null
 +++ b/src/skippy/stage_program_inputs.h
-@@ -0,0 +1,44 @@
+@@ -0,0 +1,52 @@
 +#pragma once
 +
 +#include "llama-graph.h"
@@ -8718,6 +8767,14 @@ index 000000000..242af65c9
 +
 +private:
 +    const llama_model_granite_switch & smodel;
++};
++
++class skippy_stage_program_request_tokens_input final : public llm_graph_input_i {
++public:
++    void set_input(const llama_ubatch * ubatch) override;
++    bool has_token_input() const override { return tokens != nullptr; }
++
++    ggml_tensor * tokens = nullptr; // I32 [n_tokens], the standard request token ids
 +};
 diff --git a/src/skippy/stage_program_installation.cpp b/src/skippy/stage_program_installation.cpp
 new file mode 100644
@@ -9027,7 +9084,7 @@ new file mode 100644
 index 000000000..0723d8033
 --- /dev/null
 +++ b/src/skippy/stage_program_replay.cpp
-@@ -0,0 +1,654 @@
+@@ -0,0 +1,658 @@
 +#include "stage_program.h"
 +
 +#include "stage_slice_plan.h"
@@ -9134,6 +9191,7 @@ index 000000000..0723d8033
 +        case GGML_OP_SOLVE_TRI:
 +        case GGML_OP_POOL_2D:
 +        case GGML_OP_ARANGE:
++        case GGML_OP_MEAN:
 +            return true;
 +        default:
 +            return false;
@@ -9548,6 +9606,9 @@ index 000000000..0723d8033
 +            tensor = operation.alias_source == 0
 +                    ? ggml_sqr_inplace(context, sources[0])
 +                    : ggml_sqr(context, sources[0]);
++            break;
++        case GGML_OP_MEAN:
++            tensor = ggml_mean(context, sources[0]);
 +            break;
 +        case GGML_OP_SQRT:
 +            tensor = operation.alias_source == 0
@@ -12157,3 +12218,89 @@ index 71cf37ef2..34440b1e9 100644
          if (deepseek4_mtp) {
              const llm_arch arch = arch_from_filter(arch_filter);
              if (arch != LLM_ARCH_DEEPSEEK4 || out.empty()) {
+
+diff --git a/src/models/gemma3n.cpp b/src/models/gemma3n.cpp
+index e0f3f75ad..02fea3ad7 100644
+--- a/src/models/gemma3n.cpp
++++ b/src/models/gemma3n.cpp
+@@ -1,4 +1,5 @@
+ #include "models.h"
++#include "skippy/stage_program.h"
+ 
+ void llama_model_gemma3n::load_arch_hparams(llama_model_loader & ml) {
+     hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
+@@ -82,8 +83,16 @@ std::unique_ptr<llm_graph_context> llama_model_gemma3n::build_arch_graph(const l
+ // get 2D slice view from a 3D tensor, the idx corresponds to the 3rd dim
+ static ggml_tensor * gemma3n_view_2d_slice(ggml_context * ctx0, ggml_tensor * x, int idx) {
+     GGML_ASSERT(idx < (int) x->ne[2]);
+-    return ggml_view_2d(ctx0, x, x->ne[0], x->ne[1], ggml_row_size(x->type, x->ne[0]),
++    ggml_tensor * res = ggml_view_2d(ctx0, x, x->ne[0], x->ne[1], ggml_row_size(x->type, x->ne[0]),
+                         idx * x->ne[0] * x->ne[1] * ggml_element_size(x));
++    auto res_geometry = skippy_stage_geometry_static(res);
++    // The slice offset scales with the runtime token extent; the captured
++    // absolute byte offset is only correct for the capture-time token count.
++    res_geometry.dimensions[1]   = skippy_stage_geometry_expression::source_dimension(0, 1);
++    res_geometry.byte_strides[2] = skippy_stage_geometry_expression::source_stride(0, 2);
++    res_geometry.view_offset     = skippy_stage_geometry_expression::source_stride(0, 2, idx);
++    skippy_stage_geometry_note(res, res_geometry);
++    return res;
+ }
+ 
+ llama_model_gemma3n::graph::graph(const llama_model & model, const llm_graph_params & params) :
+@@ -255,6 +264,13 @@ llama_model_gemma3n::graph::graph(const llama_model & model, const llm_graph_par
+             ggml_tensor * slice_rest  = ggml_view_3d(
+                 ctx0, corrected, n_embd, n_tokens, n_altup - 1, ggml_row_size(corrected->type, n_embd),
+                 ggml_row_size(corrected->type, n_embd * n_tokens), n_embd * n_tokens * ggml_element_size(corrected));
++            {
++                auto slice_rest_geometry = skippy_stage_geometry_static(slice_rest);
++                slice_rest_geometry.dimensions[1]   = skippy_stage_geometry_expression::source_dimension(0, 1);
++                slice_rest_geometry.byte_strides[2] = skippy_stage_geometry_expression::source_stride(0, 2);
++                slice_rest_geometry.view_offset     = skippy_stage_geometry_expression::source_stride(0, 2, 1);
++                skippy_stage_geometry_note(slice_rest, slice_rest_geometry);
++            }
+             ggml_tensor * tmp = ggml_add(ctx0, slice_rest, first_prediction);  // [n_embd, n_tokens, n_altup - 1]
+             corrected         = ggml_concat(ctx0, slice_first, tmp, 2);        // [n_embd, n_tokens, n_altup]
+         }
+@@ -275,6 +291,13 @@ llama_model_gemma3n::graph::graph(const llama_model & model, const llm_graph_par
+         ggml_tensor * alt_slice =
+             ggml_view_3d(ctx0, cur, n_embd, n_tokens, n_altup - 1, ggml_row_size(cur->type, n_embd),
+                          ggml_row_size(cur->type, n_embd * n_tokens), n_embd * n_tokens * ggml_element_size(cur));
++        {
++            auto alt_slice_geometry = skippy_stage_geometry_static(alt_slice);
++            alt_slice_geometry.dimensions[1]   = skippy_stage_geometry_expression::source_dimension(0, 1);
++            alt_slice_geometry.byte_strides[2] = skippy_stage_geometry_expression::source_stride(0, 2);
++            alt_slice_geometry.view_offset     = skippy_stage_geometry_expression::source_stride(0, 2, 1);
++            skippy_stage_geometry_note(alt_slice, alt_slice_geometry);
++        }
+         ggml_tensor * altup_unembd =
+             ggml_mul_mat(ctx0, model.altup_unembd_proj, alt_slice);  // shape: [n_embd, n_tokens, n_altup - 1]
+         ggml_tensor * new_magnitude = calc_magnitude(altup_unembd);
+diff --git a/src/models/gemma4.cpp b/src/models/gemma4.cpp
+index a76749a97..1c203dfc2 100644
+--- a/src/models/gemma4.cpp
++++ b/src/models/gemma4.cpp
+@@ -1,5 +1,6 @@
+ #include "models.h"
+ #include "llama-impl.h"
++#include "skippy/stage_program.h"
+ 
+ void llama_model_gemma4::load_arch_hparams(llama_model_loader & ml) {
+     hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
+@@ -149,8 +150,16 @@ std::unique_ptr<llm_graph_context> llama_model_gemma4::build_arch_graph(const ll
+ // get 2D slice view from a 3D tensor, the idx corresponds to the 3rd dim
+ static ggml_tensor * gemma4_view_2d_slice(ggml_context * ctx0, ggml_tensor * x, int idx) {
+     GGML_ASSERT(idx < (int) x->ne[2]);
+-    return ggml_view_2d(ctx0, x, x->ne[0], x->ne[1], ggml_row_size(x->type, x->ne[0]),
++    ggml_tensor * res = ggml_view_2d(ctx0, x, x->ne[0], x->ne[1], ggml_row_size(x->type, x->ne[0]),
+                         idx * x->ne[0] * x->ne[1] * ggml_element_size(x));
++    auto res_geometry = skippy_stage_geometry_static(res);
++    // The slice offset scales with the runtime token extent; the captured
++    // absolute byte offset is only correct for the capture-time token count.
++    res_geometry.dimensions[1]   = skippy_stage_geometry_expression::source_dimension(0, 1);
++    res_geometry.byte_strides[2] = skippy_stage_geometry_expression::source_stride(0, 2);
++    res_geometry.view_offset     = skippy_stage_geometry_expression::source_stride(0, 2, idx);
++    skippy_stage_geometry_note(res, res_geometry);
++    return res;
+ }
+ 
+ llama_model_gemma4::graph::graph(const llama_model & model, const llm_graph_params & params) :

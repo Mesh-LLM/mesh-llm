@@ -1,5 +1,5 @@
 {
-  "full_patch_sha256": "a87b3f270c0a2ce09ac97a7c343e6db8eaa1dda9590d5a231f67e63249bc1992",
+  "full_patch_sha256": "35903bcd0fa1ff000ddf2720508ff7e7676029542b613c7571cf4ae0e2b7cd11",
   "generator_version": "0.5.0",
   "schema_version": 1,
   "shards": [
@@ -220,7 +220,7 @@
         "gemma3n"
       ],
       "file": "0022-family-gemma3n.patch",
-      "sha256": "a42a29410e453383659dd9252b8c2a7da9c741c32ea3d217869d66cb3f38c051",
+      "sha256": "0724b0b426bf7947e7d5ccc63f142673aac4179683e23787d4084d9d7a518115",
       "sources": [
         "src/models/gemma3n.cpp"
       ]
@@ -230,7 +230,7 @@
         "gemma4"
       ],
       "file": "0023-family-gemma4.patch",
-      "sha256": "f11d065b2af2c4d1c2bee55b10ad52f5c598e538cae92abffa88dbf40dca3463",
+      "sha256": "88fa60c5ba2dd5d0807553893cfb1ef9baf4851f09b869ee3f42cc30d8d5add3",
       "sources": [
         "src/models/gemma4.cpp"
       ]
