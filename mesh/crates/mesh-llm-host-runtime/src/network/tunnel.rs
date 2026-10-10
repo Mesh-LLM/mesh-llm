@@ -140,6 +140,13 @@ async fn handle_inbound_stage_transport(
     if open.requester_id.as_slice() != remote.as_bytes() {
         anyhow::bail!("stage transport requester_id does not match QUIC peer identity");
     }
+    if !node.stage_transport_allowed(remote, &open).await {
+        anyhow::bail!(
+            "stage transport requester is not part of topology {} / {}",
+            open.topology_id,
+            open.run_id
+        );
+    }
 
     let bind_addr = resolve_stage_transport_bind_addr(&node, &open).await?;
     let tcp_stream = TcpStream::connect(&bind_addr).await?;
