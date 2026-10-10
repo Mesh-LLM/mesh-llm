@@ -1,0 +1,11 @@
+{
+  "candidate": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "family": "dense",
+  "identity_sha256": "83ba38a8607348198c0607e6c92eb03575362b93f049d660fa30ded87042a03d",
+  "outcome": "success",
+  "pass_id": "repair-1",
+  "results_sha256": "f76ac6d8886f8cb0d066d6c9628a69a69f5ec5cc5323115e75ccc4e132bcbdf6",
+  "run_attempt": "3",
+  "run_id": "123",
+  "runner": "fixture-\u00e9-\ud83d\ude00"
+}

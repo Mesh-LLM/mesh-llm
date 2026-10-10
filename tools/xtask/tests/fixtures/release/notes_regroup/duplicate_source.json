@@ -1,0 +1,18 @@
+{
+  "args": [
+    "--body",
+    "body.md",
+    "--plan",
+    "plan.json",
+    "--out",
+    "notes.md"
+  ],
+  "code": 1,
+  "gh_argv": [],
+  "git_argv": [],
+  "outputs": {
+    "notes.md": null
+  },
+  "stderr": "error: PR #1 appears twice in the source body\n",
+  "stdout": ""
+}

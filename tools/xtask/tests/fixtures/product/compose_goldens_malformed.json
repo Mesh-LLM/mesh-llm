@@ -1,0 +1,152 @@
+{
+  "array_nesting_limit": {
+    "code": 1,
+    "products": {},
+    "stderr": "RecursionError: maximum recursion depth exceeded while decoding a JSON array from a unicode string\n",
+    "stdout": ""
+  },
+  "backend_string": {
+    "code": 1,
+    "products": {},
+    "stderr": "TypeError: string indices must be integers, not 'str'\n",
+    "stdout": ""
+  },
+  "build_backend_list": {
+    "code": 1,
+    "products": {},
+    "stderr": "TypeError: unhashable type: 'list'\n",
+    "stdout": ""
+  },
+  "build_backend_object": {
+    "code": 1,
+    "products": {},
+    "stderr": "TypeError: unhashable type: 'dict'\n",
+    "stdout": ""
+  },
+  "build_false": {
+    "code": 1,
+    "products": {},
+    "stderr": "TypeError: 'bool' object is not subscriptable\n",
+    "stdout": ""
+  },
+  "build_list": {
+    "code": 1,
+    "products": {},
+    "stderr": "TypeError: list indices must be integers or slices, not str\n",
+    "stdout": ""
+  },
+  "build_missing_backend": {
+    "code": 1,
+    "products": {},
+    "stderr": "KeyError: 'backend'\n",
+    "stdout": ""
+  },
+  "byte_order_mark": {
+    "code": 1,
+    "products": {},
+    "stderr": "json.decoder.JSONDecodeError: Unexpected UTF-8 BOM (decode using utf-8-sig): line 1 column 1 (char 0)\n",
+    "stdout": ""
+  },
+  "empty_file": {
+    "code": 1,
+    "products": {},
+    "stderr": "json.decoder.JSONDecodeError: Expecting value: line 1 column 1 (char 0)\n",
+    "stdout": ""
+  },
+  "extra_data": {
+    "code": 1,
+    "products": {},
+    "stderr": "json.decoder.JSONDecodeError: Extra data: line 1 column 4 (char 3)\n",
+    "stdout": ""
+  },
+  "integer_digit_limit": {
+    "code": 1,
+    "products": {},
+    "stderr": "ValueError: Exceeds the limit (4300 digits) for integer string conversion: value has 5000 digits; use sys.set_int_max_str_digits() to increase the limit\n",
+    "stdout": ""
+  },
+  "invalid_json": {
+    "code": 1,
+    "products": {},
+    "stderr": "json.decoder.JSONDecodeError: Expecting value: line 2 column 10 (char 22)\n",
+    "stdout": ""
+  },
+  "invalid_utf8": {
+    "code": 1,
+    "products": {},
+    "stderr": "UnicodeDecodeError: 'utf-8' codec can't decode byte 0xff in position 7: invalid start byte\n",
+    "stdout": ""
+  },
+  "mesh_version_list": {
+    "code": 1,
+    "products": {},
+    "stderr": "AttributeError: 'list' object has no attribute 'removeprefix'\n",
+    "stdout": ""
+  },
+  "mesh_version_number": {
+    "code": 1,
+    "products": {},
+    "stderr": "AttributeError: 'int' object has no attribute 'removeprefix'\n",
+    "stdout": ""
+  },
+  "missing_backend": {
+    "code": 1,
+    "products": {},
+    "stderr": "KeyError: 'backend'\n",
+    "stdout": ""
+  },
+  "missing_id": {
+    "code": 1,
+    "products": {},
+    "stderr": "KeyError: 'id'\n",
+    "stdout": ""
+  },
+  "missing_kind": {
+    "code": 1,
+    "products": {},
+    "stderr": "KeyError: 'kind'\n",
+    "stdout": ""
+  },
+  "missing_mesh_version": {
+    "code": 1,
+    "products": {},
+    "stderr": "KeyError: 'mesh_version'\n",
+    "stdout": ""
+  },
+  "missing_runtime_key": {
+    "code": 1,
+    "products": {},
+    "stderr": "KeyError: 'runtime'\n",
+    "stdout": ""
+  },
+  "object_nesting_limit": {
+    "code": 1,
+    "products": {},
+    "stderr": "RecursionError: maximum recursion depth exceeded while decoding a JSON object from a unicode string\n",
+    "stdout": ""
+  },
+  "runtime_null": {
+    "code": 1,
+    "products": {},
+    "stderr": "TypeError: 'NoneType' object is not subscriptable\n",
+    "stdout": ""
+  },
+  "runtime_number": {
+    "code": 1,
+    "products": {},
+    "stderr": "TypeError: 'float' object is not subscriptable\n",
+    "stdout": ""
+  },
+  "top_level_list": {
+    "code": 1,
+    "products": {},
+    "stderr": "TypeError: list indices must be integers or slices, not str\n",
+    "stdout": ""
+  },
+  "top_level_string": {
+    "code": 1,
+    "products": {},
+    "stderr": "TypeError: string indices must be integers, not 'str'\n",
+    "stdout": ""
+  }
+}

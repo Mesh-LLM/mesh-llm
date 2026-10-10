@@ -1,0 +1,1223 @@
+{
+  "description": "native linux-runtime-deps cases; code/stdout/stderr/calls are observed scripts/linux-native-runtime-deps.py (python3.13) output with only the case readelf stub on PATH. elves are ELF-magic files with canned readelf -h/-d output (see migration_native_policy/elf_stub.rs).",
+  "cases": [
+    {
+      "group": "happy",
+      "name": "verify a closed package",
+      "args": [
+        "verify",
+        "--lib-dir",
+        "lib",
+        "--arch",
+        "x86_64"
+      ],
+      "elves": {
+        "lib/libmesh.so": {
+          "needed": [
+            "libggml.so",
+            "libc.so.6",
+            "libstdc++.so.6"
+          ],
+          "soname": "libmesh.so"
+        },
+        "lib/libggml.so": {
+          "needed": [
+            "libm.so.6",
+            "libgomp.so.1",
+            "libnvidia-ml.so.1"
+          ]
+        }
+      },
+      "code": 0,
+      "stdout": "",
+      "stderr": "",
+      "calls": "readelf -h lib/libggml.so\nreadelf -d lib/libggml.so\nreadelf -h lib/libmesh.so\nreadelf -d lib/libmesh.so\n"
+    },
+    {
+      "group": "happy",
+      "name": "verify an empty or absent package",
+      "args": [
+        "verify",
+        "--lib-dir",
+        "absent",
+        "--scan-dir",
+        "also-absent"
+      ],
+      "code": 0,
+      "stdout": "",
+      "stderr": "",
+      "calls": ""
+    },
+    {
+      "group": "happy",
+      "name": "verify resolves scan-dir importers",
+      "args": [
+        "verify",
+        "--lib-dir=./lib/",
+        "--scan-dir",
+        "bin",
+        "--arch=aarch64"
+      ],
+      "elves": {
+        "bin/mesh-llm": {
+          "class": "ELF64",
+          "machine": "AArch64",
+          "needed": [
+            "libmesh.so",
+            "libc.so.6"
+          ]
+        },
+        "lib/libmesh.so": {
+          "class": "ELF64",
+          "machine": "AArch64",
+          "needed": [
+            "ld-linux-aarch64.so.1"
+          ]
+        }
+      },
+      "code": 0,
+      "stdout": "",
+      "stderr": "",
+      "calls": "readelf -h bin/mesh-llm\nreadelf -d bin/mesh-llm\nreadelf -h lib/libmesh.so\nreadelf -d lib/libmesh.so\n"
+    },
+    {
+      "group": "happy",
+      "name": "verify arm32 package with non-ELF neighbours",
+      "args": [
+        "verify",
+        "--lib-dir",
+        "lib",
+        "--arch",
+        "arm"
+      ],
+      "files": {
+        "lib/README": "not an elf\n",
+        "lib/sub/notes.txt": "x"
+      },
+      "elves": {
+        "lib/libmesh.so": {
+          "class": "ELF32",
+          "machine": "ARM",
+          "needed": [
+            "libsub.so"
+          ]
+        },
+        "lib/sub/libsub.so": {
+          "class": "ELF32",
+          "machine": "ARM"
+        }
+      },
+      "code": 0,
+      "stdout": "",
+      "stderr": "",
+      "calls": "readelf -h lib/libmesh.so\nreadelf -d lib/libmesh.so\nreadelf -h lib/sub/libsub.so\nreadelf -d lib/sub/libsub.so\n"
+    },
+    {
+      "group": "happy",
+      "name": "order puts dependencies first and primary last",
+      "args": [
+        "order",
+        "--lib-dir",
+        "lib",
+        "--primary",
+        "libmesh.so"
+      ],
+      "files": {
+        "lib/zz-readme.txt": "plain\n"
+      },
+      "links": {
+        "lib/libggml.so.0": "libggml.so"
+      },
+      "elves": {
+        "lib/libmesh.so": {
+          "needed": [
+            "libggml.so",
+            "libcudart.so.12"
+          ]
+        },
+        "lib/libggml.so": {
+          "needed": [
+            "libggml-base.so"
+          ]
+        },
+        "lib/libggml-base.so": {
+          "needed": [
+            "libc.so.6"
+          ]
+        },
+        "lib/libcudart.so.12": {
+          "soname": "libcudart.so.12"
+        },
+        "lib/liba-extra.so": {
+          "needed": [
+            "libggml-base.so"
+          ]
+        }
+      },
+      "code": 0,
+      "stdout": "libggml-base.so\nliba-extra.so\nlibcudart.so.12\nlibggml.so\nzz-readme.txt\nlibmesh.so\n",
+      "stderr": "",
+      "calls": "readelf -h lib/liba-extra.so\nreadelf -d lib/liba-extra.so\nreadelf -h lib/libcudart.so.12\nreadelf -d lib/libcudart.so.12\nreadelf -h lib/libggml-base.so\nreadelf -d lib/libggml-base.so\nreadelf -h lib/libggml.so\nreadelf -d lib/libggml.so\nreadelf -h lib/libmesh.so\nreadelf -d lib/libmesh.so\nreadelf -h lib/liba-extra.so\nreadelf -d lib/liba-extra.so\nreadelf -h lib/libcudart.so.12\nreadelf -d lib/libcudart.so.12\nreadelf -h lib/libggml-base.so\nreadelf -d lib/libggml-base.so\nreadelf -h lib/libggml.so\nreadelf -d lib/libggml.so\nreadelf -h lib/libmesh.so\nreadelf -d lib/libmesh.so\n"
+    },
+    {
+      "group": "happy",
+      "name": "order when another library needs the primary",
+      "args": [
+        "order",
+        "--lib-dir",
+        "lib",
+        "--primary",
+        "libmesh.so"
+      ],
+      "elves": {
+        "lib/libmesh.so": {
+          "needed": [
+            "libbase.so"
+          ]
+        },
+        "lib/libplugin.so": {
+          "needed": [
+            "libmesh.so"
+          ]
+        },
+        "lib/libbase.so": {}
+      },
+      "code": 0,
+      "stdout": "libbase.so\nlibplugin.so\nlibmesh.so\n",
+      "stderr": "",
+      "calls": "readelf -h lib/libbase.so\nreadelf -d lib/libbase.so\nreadelf -h lib/libmesh.so\nreadelf -d lib/libmesh.so\nreadelf -h lib/libplugin.so\nreadelf -d lib/libplugin.so\nreadelf -h lib/libbase.so\nreadelf -d lib/libbase.so\nreadelf -h lib/libmesh.so\nreadelf -d lib/libmesh.so\nreadelf -h lib/libplugin.so\nreadelf -d lib/libplugin.so\n"
+    },
+    {
+      "group": "happy",
+      "name": "order a placeholder package without ELF files",
+      "args": [
+        "order",
+        "--lib-dir",
+        "lib",
+        "--primary",
+        "libmesh.so"
+      ],
+      "files": {
+        "lib/libmesh.so": "placeholder",
+        "lib/b.txt": "b",
+        "lib/a.txt": "a"
+      },
+      "code": 0,
+      "stdout": "a.txt\nb.txt\nlibmesh.so\n",
+      "stderr": "",
+      "calls": ""
+    },
+    {
+      "group": "happy",
+      "name": "order a non-ELF primary beside ELF libraries",
+      "args": [
+        "order",
+        "--lib-dir",
+        "lib",
+        "--primary",
+        "libmesh.so"
+      ],
+      "files": {
+        "lib/libmesh.so": "placeholder"
+      },
+      "elves": {
+        "lib/libz-helper.so": {
+          "needed": [
+            "libc.so.6"
+          ]
+        }
+      },
+      "code": 0,
+      "stdout": "libz-helper.so\nlibmesh.so\n",
+      "stderr": "",
+      "calls": "readelf -h lib/libz-helper.so\nreadelf -d lib/libz-helper.so\nreadelf -h lib/libz-helper.so\nreadelf -d lib/libz-helper.so\n"
+    },
+    {
+      "group": "happy",
+      "name": "collect reviewed CUDA 12 redistributables transitively",
+      "args": [
+        "collect",
+        "--lib-dir",
+        "lib",
+        "--search-dir",
+        "cuda",
+        "--search-dir",
+        "mirror",
+        "--cuda-major",
+        "12",
+        "--arch",
+        "x86_64"
+      ],
+      "elves": {
+        "lib/libggml-cuda.so": {
+          "needed": [
+            "libcublas.so.12",
+            "libcudart.so.12",
+            "libcuda.so.1"
+          ]
+        },
+        "cuda/lib64/libcublas.so.12.9.1": {
+          "soname": "libcublas.so.12",
+          "needed": [
+            "libcublasLt.so.12"
+          ]
+        },
+        "cuda/lib64/libcublasLt.so.12": {
+          "needed": [
+            "libc.so.6"
+          ]
+        },
+        "cuda/lib64/libcudart.so.12": {
+          "content": "cudart12"
+        },
+        "mirror/libcudart.so.12": {
+          "content": "cudart12"
+        },
+        "cuda/lib64/stubs/libcuda.so.1": {},
+        "cuda/lib64/libcufft.so.12": {
+          "machine": "AArch64"
+        }
+      },
+      "code": 0,
+      "stdout": "bundled Linux runtime dependency: libcublas.so.12\nbundled Linux runtime dependency: libcudart.so.12\nbundled Linux runtime dependency: libcublasLt.so.12\n",
+      "stderr": "",
+      "calls": "readelf -h cuda/lib64/libcublas.so.12.9.1\nreadelf -d cuda/lib64/libcublas.so.12.9.1\nreadelf -h cuda/lib64/libcublasLt.so.12\nreadelf -d cuda/lib64/libcublasLt.so.12\nreadelf -h cuda/lib64/libcudart.so.12\nreadelf -d cuda/lib64/libcudart.so.12\nreadelf -h cuda/lib64/libcufft.so.12\nreadelf -d cuda/lib64/libcufft.so.12\nreadelf -h mirror/libcudart.so.12\nreadelf -d mirror/libcudart.so.12\nreadelf -h cuda/lib64/stubs/libcuda.so.1\nreadelf -d cuda/lib64/stubs/libcuda.so.1\nreadelf -h lib/libggml-cuda.so\nreadelf -d lib/libggml-cuda.so\nreadelf -h lib/libcublas.so.12\nreadelf -d lib/libcublas.so.12\nreadelf -h lib/libcudart.so.12\nreadelf -d lib/libcudart.so.12\nreadelf -h lib/libggml-cuda.so\nreadelf -d lib/libggml-cuda.so\nreadelf -h lib/libcublas.so.12\nreadelf -d lib/libcublas.so.12\nreadelf -h lib/libcublasLt.so.12\nreadelf -d lib/libcublasLt.so.12\nreadelf -h lib/libcudart.so.12\nreadelf -d lib/libcudart.so.12\nreadelf -h lib/libggml-cuda.so\nreadelf -d lib/libggml-cuda.so\n"
+    },
+    {
+      "group": "happy",
+      "name": "collect CUDA 13 with an existing identical copy",
+      "args": [
+        "collect",
+        "--lib-dir",
+        "lib",
+        "--search-dir",
+        "cuda",
+        "--cuda-major",
+        "13"
+      ],
+      "files": {
+        "lib/libnvJitLink.so.13": "not elf"
+      },
+      "elves": {
+        "lib/libggml-cuda.so": {
+          "needed": [
+            "libnvJitLink.so.13.1.80"
+          ]
+        },
+        "cuda/libnvJitLink.so.13.1.80": {}
+      },
+      "code": 0,
+      "stdout": "bundled Linux runtime dependency: libnvJitLink.so.13.1.80\n",
+      "stderr": "",
+      "calls": "readelf -h cuda/libnvJitLink.so.13.1.80\nreadelf -d cuda/libnvJitLink.so.13.1.80\nreadelf -h lib/libggml-cuda.so\nreadelf -d lib/libggml-cuda.so\nreadelf -h lib/libggml-cuda.so\nreadelf -d lib/libggml-cuda.so\nreadelf -h lib/libnvJitLink.so.13.1.80\nreadelf -d lib/libnvJitLink.so.13.1.80\n"
+    },
+    {
+      "group": "happy",
+      "name": "collect with nothing missing",
+      "args": [
+        "collect",
+        "--lib-dir",
+        "lib",
+        "--cuda-major",
+        "13"
+      ],
+      "elves": {
+        "lib/libmesh.so": {
+          "needed": [
+            "libc.so.6"
+          ]
+        }
+      },
+      "code": 0,
+      "stdout": "",
+      "stderr": "",
+      "calls": "readelf -h lib/libmesh.so\nreadelf -d lib/libmesh.so\n"
+    },
+    {
+      "group": "rejected",
+      "name": "collect rejects the wrong CUDA major",
+      "args": [
+        "collect",
+        "--lib-dir",
+        "lib",
+        "--search-dir",
+        "cuda",
+        "--cuda-major",
+        "12"
+      ],
+      "elves": {
+        "lib/libggml-cuda.so": {
+          "needed": [
+            "libcudart.so.13"
+          ]
+        },
+        "cuda/libcudart.so.13": {}
+      },
+      "code": 1,
+      "stdout": "",
+      "stderr": "Linux CUDA runtime dependency is not in the reviewed redistributable allowlist for CUDA 12: libcudart.so.13\n",
+      "calls": "readelf -h cuda/libcudart.so.13\nreadelf -d cuda/libcudart.so.13\nreadelf -h lib/libggml-cuda.so\nreadelf -d lib/libggml-cuda.so\n"
+    },
+    {
+      "group": "rejected",
+      "name": "collect rejects unreviewed CUDA libraries",
+      "args": [
+        "collect",
+        "--lib-dir",
+        "lib",
+        "--search-dir",
+        "cuda",
+        "--cuda-major",
+        "12"
+      ],
+      "elves": {
+        "lib/libggml-cuda.so": {
+          "needed": [
+            "libcufft.so.12"
+          ]
+        },
+        "cuda/libcufft.so.12": {}
+      },
+      "code": 1,
+      "stdout": "",
+      "stderr": "Linux CUDA runtime dependency is not in the reviewed redistributable allowlist for CUDA 12: libcufft.so.12\n",
+      "calls": "readelf -h cuda/libcufft.so.12\nreadelf -d cuda/libcufft.so.12\nreadelf -h lib/libggml-cuda.so\nreadelf -d lib/libggml-cuda.so\n"
+    },
+    {
+      "group": "rejected",
+      "name": "collect rejects a search dependency of the wrong architecture",
+      "args": [
+        "collect",
+        "--lib-dir",
+        "lib",
+        "--search-dir",
+        "cuda",
+        "--search-dir",
+        "cuda2",
+        "--cuda-major",
+        "12",
+        "--arch",
+        "x86_64"
+      ],
+      "elves": {
+        "lib/libggml-cuda.so": {
+          "needed": [
+            "libcudart.so.12"
+          ]
+        },
+        "cuda/libcudart.so.12": {
+          "machine": "AArch64"
+        },
+        "cuda2/libcudart.so.12": {
+          "class": "ELF32",
+          "machine": "ARM"
+        }
+      },
+      "code": 1,
+      "stdout": "",
+      "stderr": "wrong architecture for search dependency libcudart.so.12; expected x86_64, found: cuda/libcudart.so.12 (ELF64/AArch64), cuda2/libcudart.so.12 (ELF32/ARM)\n",
+      "calls": "readelf -h cuda/libcudart.so.12\nreadelf -d cuda/libcudart.so.12\nreadelf -h cuda2/libcudart.so.12\nreadelf -d cuda2/libcudart.so.12\nreadelf -h lib/libggml-cuda.so\nreadelf -d lib/libggml-cuda.so\n"
+    },
+    {
+      "group": "rejected",
+      "name": "collect rejects conflicting search providers",
+      "args": [
+        "collect",
+        "--lib-dir",
+        "lib",
+        "--search-dir",
+        "a",
+        "--search-dir",
+        "b",
+        "--cuda-major",
+        "12"
+      ],
+      "elves": {
+        "lib/libggml-cuda.so": {
+          "needed": [
+            "libcublas.so.12"
+          ]
+        },
+        "a/libcublas.so.12": {},
+        "b/libcublas.so.12": {}
+      },
+      "code": 1,
+      "stdout": "",
+      "stderr": "conflicting ELF libraries provide libcublas.so.12: a/libcublas.so.12, b/libcublas.so.12\n",
+      "calls": "readelf -h a/libcublas.so.12\nreadelf -d a/libcublas.so.12\nreadelf -h b/libcublas.so.12\nreadelf -d b/libcublas.so.12\nreadelf -h lib/libggml-cuda.so\nreadelf -d lib/libggml-cuda.so\n"
+    },
+    {
+      "group": "rejected",
+      "name": "collect refuses a CUDA stub",
+      "args": [
+        "collect",
+        "--lib-dir",
+        "lib",
+        "--search-dir",
+        "cuda",
+        "--cuda-major",
+        "12"
+      ],
+      "elves": {
+        "lib/libggml-cuda.so": {
+          "needed": [
+            "libcublas.so.12"
+          ]
+        },
+        "cuda/Stubs/libcublas.so.12": {}
+      },
+      "code": 1,
+      "stdout": "",
+      "stderr": "CUDA stub library cannot satisfy runtime dependency libcublas.so.12: cuda/Stubs/libcublas.so.12\n",
+      "calls": "readelf -h cuda/Stubs/libcublas.so.12\nreadelf -d cuda/Stubs/libcublas.so.12\nreadelf -h lib/libggml-cuda.so\nreadelf -d lib/libggml-cuda.so\n"
+    },
+    {
+      "group": "rejected",
+      "name": "collect reports unresolved dependencies",
+      "args": [
+        "collect",
+        "--lib-dir",
+        "lib",
+        "--search-dir",
+        "cuda",
+        "--cuda-major",
+        "12"
+      ],
+      "elves": {
+        "lib/libggml-cuda.so": {
+          "needed": [
+            "libzzz.so",
+            "libcudart.so.12",
+            "libaaa.so"
+          ]
+        },
+        "lib/libother.so": {
+          "needed": [
+            "libq.so"
+          ]
+        },
+        "cuda/libcudart.so.12": {}
+      },
+      "code": 1,
+      "stdout": "",
+      "stderr": "unresolved Linux runtime ELF dependencies: libggml-cuda.so: libaaa.so, libzzz.so; libother.so: libq.so\n",
+      "calls": "readelf -h cuda/libcudart.so.12\nreadelf -d cuda/libcudart.so.12\nreadelf -h lib/libggml-cuda.so\nreadelf -d lib/libggml-cuda.so\nreadelf -h lib/libother.so\nreadelf -d lib/libother.so\n"
+    },
+    {
+      "group": "rejected",
+      "name": "collect refuses a symlinked destination",
+      "args": [
+        "collect",
+        "--lib-dir",
+        "lib",
+        "--search-dir",
+        "cuda",
+        "--cuda-major",
+        "12"
+      ],
+      "links": {
+        "lib/libcudart.so.12": "../cuda/libcudart.so.12"
+      },
+      "elves": {
+        "lib/libggml-cuda.so": {
+          "needed": [
+            "libcudart.so.12"
+          ]
+        },
+        "cuda/libcudart.so.12": {}
+      },
+      "code": 1,
+      "stdout": "",
+      "stderr": "packaged dependency destination must not be a symlink: lib/libcudart.so.12\n",
+      "calls": "readelf -h cuda/libcudart.so.12\nreadelf -d cuda/libcudart.so.12\nreadelf -h lib/libggml-cuda.so\nreadelf -d lib/libggml-cuda.so\n"
+    },
+    {
+      "group": "rejected",
+      "name": "collect refuses to overwrite a different destination",
+      "args": [
+        "collect",
+        "--lib-dir",
+        "lib",
+        "--search-dir",
+        "cuda",
+        "--cuda-major",
+        "12"
+      ],
+      "files": {
+        "lib/libcudart.so.12": "different"
+      },
+      "elves": {
+        "lib/libggml-cuda.so": {
+          "needed": [
+            "libcudart.so.12"
+          ]
+        },
+        "cuda/libcudart.so.12": {}
+      },
+      "code": 1,
+      "stdout": "",
+      "stderr": "conflicting packaged dependency libcudart.so.12: lib/libcudart.so.12 and cuda/libcudart.so.12\n",
+      "calls": "readelf -h cuda/libcudart.so.12\nreadelf -d cuda/libcudart.so.12\nreadelf -h lib/libggml-cuda.so\nreadelf -d lib/libggml-cuda.so\n"
+    },
+    {
+      "group": "rejected",
+      "name": "collect reports a dependency only a versioned file could provide",
+      "args": [
+        "collect",
+        "--lib-dir",
+        "lib",
+        "--search-dir",
+        "cuda",
+        "--cuda-major",
+        "12"
+      ],
+      "elves": {
+        "lib/libggml-cuda.so": {
+          "needed": [
+            "libcublas.so.12"
+          ]
+        },
+        "cuda/libcublas.so.12.9": {
+          "soname": "libcublas.so.12"
+        },
+        "lib/libcublas.so.12.9": {
+          "content": "cuda%libcublas.so.12.9"
+        }
+      },
+      "code": 1,
+      "stdout": "",
+      "stderr": "unresolved Linux runtime ELF dependencies: libggml-cuda.so: libcublas.so.12\n",
+      "calls": "readelf -h cuda/libcublas.so.12.9\nreadelf -d cuda/libcublas.so.12.9\nreadelf -h lib/libcublas.so.12.9\nreadelf -d lib/libcublas.so.12.9\nreadelf -h lib/libggml-cuda.so\nreadelf -d lib/libggml-cuda.so\n"
+    },
+    {
+      "group": "rejected",
+      "name": "verify rejects a bundled CUDA driver",
+      "args": [
+        "verify",
+        "--lib-dir",
+        "lib"
+      ],
+      "elves": {
+        "lib/libcuda.so.1": {},
+        "lib/libNVIDIA-ptxjitcompiler.so.1": {},
+        "lib/libmesh.so": {
+          "needed": [
+            "libcuda.so.1"
+          ]
+        }
+      },
+      "code": 1,
+      "stdout": "",
+      "stderr": "host-owned Linux libraries must not be packaged: libNVIDIA-ptxjitcompiler.so.1, libcuda.so.1\n",
+      "calls": "readelf -h lib/libNVIDIA-ptxjitcompiler.so.1\nreadelf -d lib/libNVIDIA-ptxjitcompiler.so.1\nreadelf -h lib/libcuda.so.1\nreadelf -d lib/libcuda.so.1\nreadelf -h lib/libmesh.so\nreadelf -d lib/libmesh.so\n"
+    },
+    {
+      "group": "rejected",
+      "name": "verify rejects a packaged library of the wrong architecture",
+      "args": [
+        "verify",
+        "--lib-dir",
+        "lib",
+        "--arch",
+        "x86_64"
+      ],
+      "elves": {
+        "lib/libmesh.so": {
+          "class": "ELF64",
+          "machine": "AArch64"
+        }
+      },
+      "code": 1,
+      "stdout": "",
+      "stderr": "wrong architecture for packaged runtime: lib/libmesh.so is ELF64/AArch64, expected x86_64\n",
+      "calls": "readelf -h lib/libmesh.so\nreadelf -d lib/libmesh.so\n"
+    },
+    {
+      "group": "rejected",
+      "name": "verify reports missing dependencies",
+      "args": [
+        "verify",
+        "--lib-dir",
+        "lib",
+        "--scan-dir",
+        "bin"
+      ],
+      "elves": {
+        "lib/libmesh.so": {
+          "needed": [
+            "libggml.so",
+            "libcudart.so.12",
+            "LIBC.SO.6"
+          ]
+        },
+        "bin/mesh-llm": {
+          "needed": [
+            "libmesh.so",
+            "libskippy.so"
+          ]
+        },
+        "lib/libfoo.so.1.2": {
+          "soname": "libfoo.so.1"
+        },
+        "lib/libbar.so": {
+          "needed": [
+            "libfoo.so.1"
+          ]
+        }
+      },
+      "code": 1,
+      "stdout": "",
+      "stderr": "unpackaged Linux runtime ELF dependencies: libbar.so: libfoo.so.1; libmesh.so: libcudart.so.12, libggml.so; mesh-llm: libskippy.so\n",
+      "calls": "readelf -h bin/mesh-llm\nreadelf -d bin/mesh-llm\nreadelf -h lib/libbar.so\nreadelf -d lib/libbar.so\nreadelf -h lib/libfoo.so.1.2\nreadelf -d lib/libfoo.so.1.2\nreadelf -h lib/libmesh.so\nreadelf -d lib/libmesh.so\n"
+    },
+    {
+      "group": "rejected",
+      "name": "verify rejects conflicting aliases",
+      "args": [
+        "verify",
+        "--lib-dir",
+        "lib",
+        "--scan-dir",
+        "extra"
+      ],
+      "elves": {
+        "lib/libggml.so": {},
+        "extra/libggml.so": {}
+      },
+      "code": 1,
+      "stdout": "",
+      "stderr": "conflicting ELF libraries provide libggml.so: extra/libggml.so and lib/libggml.so\n",
+      "calls": "readelf -h extra/libggml.so\nreadelf -d extra/libggml.so\nreadelf -h lib/libggml.so\nreadelf -d lib/libggml.so\n"
+    },
+    {
+      "group": "rejected",
+      "name": "order rejects a dependency cycle",
+      "args": [
+        "order",
+        "--lib-dir",
+        "lib",
+        "--primary",
+        "libmesh.so"
+      ],
+      "elves": {
+        "lib/libmesh.so": {
+          "needed": [
+            "liba.so"
+          ]
+        },
+        "lib/liba.so": {
+          "needed": [
+            "libb.so"
+          ]
+        },
+        "lib/libb.so": {
+          "needed": [
+            "liba.so"
+          ]
+        }
+      },
+      "code": 1,
+      "stdout": "",
+      "stderr": "cyclic Linux runtime dependency graph at liba.so\n",
+      "calls": "readelf -h lib/liba.so\nreadelf -d lib/liba.so\nreadelf -h lib/libb.so\nreadelf -d lib/libb.so\nreadelf -h lib/libmesh.so\nreadelf -d lib/libmesh.so\nreadelf -h lib/liba.so\nreadelf -d lib/liba.so\nreadelf -h lib/libb.so\nreadelf -d lib/libb.so\nreadelf -h lib/libmesh.so\nreadelf -d lib/libmesh.so\n"
+    },
+    {
+      "group": "rejected",
+      "name": "order requires the primary",
+      "args": [
+        "order",
+        "--lib-dir",
+        "lib",
+        "--primary",
+        "libmissing.so"
+      ],
+      "elves": {
+        "lib/libmesh.so": {}
+      },
+      "code": 1,
+      "stdout": "",
+      "stderr": "primary Linux runtime library is missing: libmissing.so\n",
+      "calls": "readelf -h lib/libmesh.so\nreadelf -d lib/libmesh.so\nreadelf -h lib/libmesh.so\nreadelf -d lib/libmesh.so\n"
+    },
+    {
+      "group": "rejected",
+      "name": "order verifies first",
+      "args": [
+        "order",
+        "--lib-dir",
+        "lib",
+        "--primary",
+        "libmesh.so"
+      ],
+      "elves": {
+        "lib/libmesh.so": {
+          "needed": [
+            "libgone.so"
+          ]
+        }
+      },
+      "code": 1,
+      "stdout": "",
+      "stderr": "unpackaged Linux runtime ELF dependencies: libmesh.so: libgone.so\n",
+      "calls": "readelf -h lib/libmesh.so\nreadelf -d lib/libmesh.so\n"
+    },
+    {
+      "group": "error",
+      "name": "readelf failure is reported",
+      "args": [
+        "verify",
+        "--lib-dir",
+        "lib"
+      ],
+      "elves": {
+        "lib/libbroken.so": {
+          "broken": true
+        }
+      },
+      "code": 1,
+      "stdout": "",
+      "stderr": "cannot inspect ELF file lib/libbroken.so: readelf: Error: lib/libbroken.so: Failed to read file header\n",
+      "calls": "readelf -h lib/libbroken.so\n"
+    },
+    {
+      "group": "error",
+      "name": "header without machine",
+      "args": [
+        "verify",
+        "--lib-dir",
+        "lib"
+      ],
+      "elves": {
+        "lib/libodd.so": {
+          "machine": ""
+        }
+      },
+      "code": 1,
+      "stdout": "",
+      "stderr": "ELF header is missing class or machine: lib/libodd.so\n",
+      "calls": "readelf -h lib/libodd.so\n"
+    },
+    {
+      "group": "error",
+      "name": "header without class",
+      "args": [
+        "collect",
+        "--lib-dir",
+        "lib",
+        "--search-dir",
+        "s",
+        "--cuda-major",
+        "12"
+      ],
+      "elves": {
+        "s/libodd.so": {
+          "class": ""
+        }
+      },
+      "code": 1,
+      "stdout": "",
+      "stderr": "ELF header is missing class or machine: s/libodd.so\n",
+      "calls": "readelf -h s/libodd.so\n"
+    },
+    {
+      "group": "error",
+      "name": "readelf is not installed",
+      "args": [
+        "verify",
+        "--lib-dir",
+        "lib"
+      ],
+      "no_readelf": true,
+      "elves": {
+        "lib/libmesh.so": {}
+      },
+      "code": 1,
+      "stdout": "",
+      "stderr": "readelf is required to inspect Linux native runtime ELF files\n",
+      "calls": ""
+    },
+    {
+      "group": "error",
+      "name": "order with a missing lib dir",
+      "args": [
+        "order",
+        "--lib-dir",
+        "nosuch",
+        "--primary",
+        "a"
+      ],
+      "code": 1,
+      "stdout": "",
+      "stderr": "[Errno 2] No such file or directory: 'nosuch'\n",
+      "calls": ""
+    },
+    {
+      "group": "error",
+      "name": "order with a file as lib dir",
+      "args": [
+        "order",
+        "--lib-dir",
+        "afile",
+        "--primary",
+        "a"
+      ],
+      "files": {
+        "afile": "x"
+      },
+      "code": 1,
+      "stdout": "",
+      "stderr": "[Errno 20] Not a directory: 'afile'\n",
+      "calls": ""
+    },
+    {
+      "group": "error",
+      "name": "order normalizes the lib dir before the primary check",
+      "args": [
+        "order",
+        "--lib-dir",
+        ".//lib/.",
+        "--primary",
+        "zz"
+      ],
+      "files": {
+        "lib/a": "x"
+      },
+      "code": 1,
+      "stdout": "",
+      "stderr": "primary Linux runtime library is missing: zz\n",
+      "calls": ""
+    },
+    {
+      "group": "usage",
+      "name": "no arguments",
+      "args": [],
+      "code": 2,
+      "stdout": "",
+      "stderr": "usage: linux-native-runtime-deps.py [-h] {collect,verify,order} ...\nlinux-native-runtime-deps.py: error: the following arguments are required: command\n",
+      "calls": ""
+    },
+    {
+      "group": "usage",
+      "name": "top-level help",
+      "args": [
+        "-h",
+        "verify"
+      ],
+      "code": 0,
+      "stdout": "usage: linux-native-runtime-deps.py [-h] {collect,verify,order} ...\n\nCollect and verify redistributable Linux ELF runtime dependencies.\n\npositional arguments:\n  {collect,verify,order}\n\noptions:\n  -h, --help            show this help message and exit\n",
+      "stderr": "",
+      "calls": ""
+    },
+    {
+      "group": "usage",
+      "name": "bundled top-level help",
+      "args": [
+        "--help"
+      ],
+      "code": 0,
+      "stdout": "usage: linux-native-runtime-deps.py [-h] {collect,verify,order} ...\n\nCollect and verify redistributable Linux ELF runtime dependencies.\n\npositional arguments:\n  {collect,verify,order}\n\noptions:\n  -h, --help            show this help message and exit\n",
+      "stderr": "",
+      "calls": ""
+    },
+    {
+      "group": "usage",
+      "name": "top-level help prefix",
+      "args": [
+        "--help"
+      ],
+      "code": 0,
+      "stdout": "usage: linux-native-runtime-deps.py [-h] {collect,verify,order} ...\n\nCollect and verify redistributable Linux ELF runtime dependencies.\n\npositional arguments:\n  {collect,verify,order}\n\noptions:\n  -h, --help            show this help message and exit\n",
+      "stderr": "",
+      "calls": ""
+    },
+    {
+      "group": "usage",
+      "name": "top-level help with a value",
+      "args": [
+        "--help=1"
+      ],
+      "code": 2,
+      "stdout": "",
+      "stderr": "usage: linux-native-runtime-deps.py [-h] {collect,verify,order} ...\nlinux-native-runtime-deps.py: error: argument -h/--help: ignored explicit argument '1'\n",
+      "calls": ""
+    },
+    {
+      "group": "usage",
+      "name": "unknown command",
+      "args": [
+        "bogus",
+        "--lib-dir",
+        "x"
+      ],
+      "code": 2,
+      "stdout": "",
+      "stderr": "usage: linux-native-runtime-deps.py [-h] {collect,verify,order} ...\nlinux-native-runtime-deps.py: error: argument command: invalid choice: 'bogus' (choose from 'collect', 'verify', 'order')\n",
+      "calls": ""
+    },
+    {
+      "group": "usage",
+      "name": "command prefix is not accepted",
+      "args": [
+        "col"
+      ],
+      "code": 2,
+      "stdout": "",
+      "stderr": "usage: linux-native-runtime-deps.py [-h] {collect,verify,order} ...\nlinux-native-runtime-deps.py: error: argument command: invalid choice: 'col' (choose from 'collect', 'verify', 'order')\n",
+      "calls": ""
+    },
+    {
+      "group": "usage",
+      "name": "negative number as command",
+      "args": [
+        "-1",
+        "verify"
+      ],
+      "code": 2,
+      "stdout": "",
+      "stderr": "usage: linux-native-runtime-deps.py [-h] {collect,verify,order} ...\nlinux-native-runtime-deps.py: error: argument command: invalid choice: '-1' (choose from 'collect', 'verify', 'order')\n",
+      "calls": ""
+    },
+    {
+      "group": "usage",
+      "name": "only unknown options",
+      "args": [
+        "--foo"
+      ],
+      "code": 2,
+      "stdout": "",
+      "stderr": "usage: linux-native-runtime-deps.py [-h] {collect,verify,order} ...\nlinux-native-runtime-deps.py: error: the following arguments are required: command\n",
+      "calls": ""
+    },
+    {
+      "group": "usage",
+      "name": "unknown options on both levels",
+      "args": [
+        "--foo",
+        "verify",
+        "--lib-dir",
+        "x",
+        "--bar",
+        "y"
+      ],
+      "code": 2,
+      "stdout": "",
+      "stderr": "usage: linux-native-runtime-deps.py [-h] {collect,verify,order} ...\nlinux-native-runtime-deps.py: error: unrecognized arguments: --foo --bar y\n",
+      "calls": ""
+    },
+    {
+      "group": "usage",
+      "name": "separator before the command",
+      "args": [
+        "--",
+        "verify",
+        "--lib-dir",
+        "absent"
+      ],
+      "code": 0,
+      "stdout": "",
+      "stderr": "",
+      "calls": ""
+    },
+    {
+      "group": "usage",
+      "name": "double separator",
+      "args": [
+        "--",
+        "--",
+        "verify"
+      ],
+      "code": 2,
+      "stdout": "",
+      "stderr": "usage: linux-native-runtime-deps.py [-h] {collect,verify,order} ...\nlinux-native-runtime-deps.py: error: argument command: invalid choice: '--' (choose from 'collect', 'verify', 'order')\n",
+      "calls": ""
+    },
+    {
+      "group": "usage",
+      "name": "separator inside the command",
+      "args": [
+        "verify",
+        "--",
+        "--lib-dir",
+        "x"
+      ],
+      "code": 2,
+      "stdout": "",
+      "stderr": "usage: linux-native-runtime-deps.py verify [-h] --lib-dir LIB_DIR\n                                           [--scan-dir SCAN_DIR]\n                                           [--arch {x86_64,aarch64,arm}]\nlinux-native-runtime-deps.py verify: error: the following arguments are required: --lib-dir\n",
+      "calls": ""
+    },
+    {
+      "group": "usage",
+      "name": "trailing separator words",
+      "args": [
+        "verify",
+        "--lib-dir",
+        "x",
+        "--",
+        "extra"
+      ],
+      "code": 2,
+      "stdout": "",
+      "stderr": "usage: linux-native-runtime-deps.py [-h] {collect,verify,order} ...\nlinux-native-runtime-deps.py: error: unrecognized arguments: -- extra\n",
+      "calls": ""
+    },
+    {
+      "group": "usage",
+      "name": "collect help",
+      "args": [
+        "collect",
+        "--lib-dir",
+        "x",
+        "-h"
+      ],
+      "code": 0,
+      "stdout": "usage: linux-native-runtime-deps.py collect [-h] --lib-dir LIB_DIR\n                                            [--scan-dir SCAN_DIR]\n                                            [--arch {x86_64,aarch64,arm}]\n                                            [--search-dir SEARCH_DIR]\n                                            --cuda-major {12,13}\n\noptions:\n  -h, --help            show this help message and exit\n  --lib-dir LIB_DIR\n  --scan-dir SCAN_DIR\n  --arch {x86_64,aarch64,arm}\n  --search-dir SEARCH_DIR\n  --cuda-major {12,13}\n",
+      "stderr": "",
+      "calls": ""
+    },
+    {
+      "group": "usage",
+      "name": "verify help",
+      "args": [
+        "verify",
+        "-h"
+      ],
+      "code": 0,
+      "stdout": "usage: linux-native-runtime-deps.py verify [-h] --lib-dir LIB_DIR\n                                           [--scan-dir SCAN_DIR]\n                                           [--arch {x86_64,aarch64,arm}]\n\noptions:\n  -h, --help            show this help message and exit\n  --lib-dir LIB_DIR\n  --scan-dir SCAN_DIR\n  --arch {x86_64,aarch64,arm}\n",
+      "stderr": "",
+      "calls": ""
+    },
+    {
+      "group": "usage",
+      "name": "order help",
+      "args": [
+        "order",
+        "--help"
+      ],
+      "code": 0,
+      "stdout": "usage: linux-native-runtime-deps.py order [-h] --lib-dir LIB_DIR\n                                          [--scan-dir SCAN_DIR]\n                                          [--arch {x86_64,aarch64,arm}]\n                                          --primary PRIMARY\n\noptions:\n  -h, --help            show this help message and exit\n  --lib-dir LIB_DIR\n  --scan-dir SCAN_DIR\n  --arch {x86_64,aarch64,arm}\n  --primary PRIMARY\n",
+      "stderr": "",
+      "calls": ""
+    },
+    {
+      "group": "usage",
+      "name": "collect requires options",
+      "args": [
+        "collect"
+      ],
+      "code": 2,
+      "stdout": "",
+      "stderr": "usage: linux-native-runtime-deps.py collect [-h] --lib-dir LIB_DIR\n                                            [--scan-dir SCAN_DIR]\n                                            [--arch {x86_64,aarch64,arm}]\n                                            [--search-dir SEARCH_DIR]\n                                            --cuda-major {12,13}\nlinux-native-runtime-deps.py collect: error: the following arguments are required: --lib-dir, --cuda-major\n",
+      "calls": ""
+    },
+    {
+      "group": "usage",
+      "name": "order requires primary",
+      "args": [
+        "order",
+        "--lib-dir",
+        "x"
+      ],
+      "code": 2,
+      "stdout": "",
+      "stderr": "usage: linux-native-runtime-deps.py order [-h] --lib-dir LIB_DIR\n                                          [--scan-dir SCAN_DIR]\n                                          [--arch {x86_64,aarch64,arm}]\n                                          --primary PRIMARY\nlinux-native-runtime-deps.py order: error: the following arguments are required: --primary\n",
+      "calls": ""
+    },
+    {
+      "group": "usage",
+      "name": "cuda major out of range",
+      "args": [
+        "collect",
+        "--lib-dir",
+        "x",
+        "--cuda-major",
+        "0011"
+      ],
+      "code": 2,
+      "stdout": "",
+      "stderr": "usage: linux-native-runtime-deps.py collect [-h] --lib-dir LIB_DIR\n                                            [--scan-dir SCAN_DIR]\n                                            [--arch {x86_64,aarch64,arm}]\n                                            [--search-dir SEARCH_DIR]\n                                            --cuda-major {12,13}\nlinux-native-runtime-deps.py collect: error: argument --cuda-major: invalid choice: '11' (choose from '12', '13')\n",
+      "calls": ""
+    },
+    {
+      "group": "usage",
+      "name": "cuda major not an int",
+      "args": [
+        "collect",
+        "--lib-dir",
+        "x",
+        "--cuda-major",
+        "1__2"
+      ],
+      "code": 2,
+      "stdout": "",
+      "stderr": "usage: linux-native-runtime-deps.py collect [-h] --lib-dir LIB_DIR\n                                            [--scan-dir SCAN_DIR]\n                                            [--arch {x86_64,aarch64,arm}]\n                                            [--search-dir SEARCH_DIR]\n                                            --cuda-major {12,13}\nlinux-native-runtime-deps.py collect: error: argument --cuda-major: invalid int value: '1__2'\n",
+      "calls": ""
+    },
+    {
+      "group": "usage",
+      "name": "arch choice",
+      "args": [
+        "verify",
+        "--lib-dir",
+        "x",
+        "--arch=arm=x"
+      ],
+      "code": 2,
+      "stdout": "",
+      "stderr": "usage: linux-native-runtime-deps.py verify [-h] --lib-dir LIB_DIR\n                                           [--scan-dir SCAN_DIR]\n                                           [--arch {x86_64,aarch64,arm}]\nlinux-native-runtime-deps.py verify: error: argument --arch: invalid choice: 'arm=x' (choose from 'x86_64', 'aarch64', 'arm')\n",
+      "calls": ""
+    },
+    {
+      "group": "usage",
+      "name": "missing option value",
+      "args": [
+        "verify",
+        "--lib-dir",
+        "-x"
+      ],
+      "code": 2,
+      "stdout": "",
+      "stderr": "usage: linux-native-runtime-deps.py verify [-h] --lib-dir LIB_DIR\n                                           [--scan-dir SCAN_DIR]\n                                           [--arch {x86_64,aarch64,arm}]\nlinux-native-runtime-deps.py verify: error: argument --lib-dir: expected one argument\n",
+      "calls": ""
+    },
+    {
+      "group": "usage",
+      "name": "verify rejects collect options",
+      "args": [
+        "verify",
+        "--lib-dir",
+        "x",
+        "--cuda-major",
+        "12"
+      ],
+      "code": 2,
+      "stdout": "",
+      "stderr": "usage: linux-native-runtime-deps.py [-h] {collect,verify,order} ...\nlinux-native-runtime-deps.py: error: unrecognized arguments: --cuda-major 12\n",
+      "calls": ""
+    },
+    {
+      "group": "usage",
+      "name": "ambiguous prefix",
+      "args": [
+        "collect",
+        "--s",
+        "x"
+      ],
+      "code": 2,
+      "stdout": "",
+      "stderr": "usage: linux-native-runtime-deps.py collect [-h] --lib-dir LIB_DIR\n                                            [--scan-dir SCAN_DIR]\n                                            [--arch {x86_64,aarch64,arm}]\n                                            [--search-dir SEARCH_DIR]\n                                            --cuda-major {12,13}\nlinux-native-runtime-deps.py collect: error: ambiguous option: --s could match --scan-dir, --search-dir\n",
+      "calls": ""
+    },
+    {
+      "group": "usage",
+      "name": "bundled subcommand help",
+      "args": [
+        "verify",
+        "--help"
+      ],
+      "code": 0,
+      "stdout": "usage: linux-native-runtime-deps.py verify [-h] --lib-dir LIB_DIR\n                                           [--scan-dir SCAN_DIR]\n                                           [--arch {x86_64,aarch64,arm}]\n\noptions:\n  -h, --help            show this help message and exit\n  --lib-dir LIB_DIR\n  --scan-dir SCAN_DIR\n  --arch {x86_64,aarch64,arm}\n",
+      "stderr": "",
+      "calls": ""
+    }
+  ]
+}

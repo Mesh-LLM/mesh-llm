@@ -1,0 +1,3191 @@
+[
+  {
+    "name": "ok-json",
+    "manifest": {
+      "json": {
+        "manifest_kind": "test-model-artifacts",
+        "artifacts": [
+          {
+            "id": "fixture",
+            "repo": "org/repo",
+            "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "selector": "fixture",
+            "model_ref": "org/repo:fixture",
+            "cadences": [
+              "manual"
+            ],
+            "files": [
+              "fixture.bin"
+            ],
+            "file_integrity": {
+              "fixture.bin": {
+                "size_bytes": 18,
+                "blob_id": "f54c0e057d3e7f1465d495ad1e0d75d500f87fc1cd8700d5027b7b233d5a842e"
+              }
+            },
+            "urls": [
+              "https://example.invalid/fixture.bin"
+            ]
+          }
+        ]
+      }
+    },
+    "args": [
+      "{m}",
+      "--cadence",
+      "manual"
+    ],
+    "code": 0,
+    "stdout": "{\"artifact_id\": \"fixture\", \"file\": \"fixture.bin\", \"files_json\": \"[\\\"fixture.bin\\\"]\", \"model_ref\": \"org/repo:fixture\", \"repo\": \"org/repo\", \"revision\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\", \"selector\": \"fixture\", \"sha256\": \"f54c0e057d3e7f1465d495ad1e0d75d500f87fc1cd8700d5027b7b233d5a842e\", \"size_bytes\": \"18\", \"url\": \"https://example.invalid/fixture.bin\"}\n",
+    "stderr": "",
+    "github_output": "preexisting=1\n"
+  },
+  {
+    "name": "ok-verify",
+    "manifest": {
+      "json": {
+        "manifest_kind": "test-model-artifacts",
+        "artifacts": [
+          {
+            "id": "fixture",
+            "repo": "org/repo",
+            "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "selector": "fixture",
+            "model_ref": "org/repo:fixture",
+            "cadences": [
+              "manual"
+            ],
+            "files": [
+              "fixture.bin"
+            ],
+            "file_integrity": {
+              "fixture.bin": {
+                "size_bytes": 18,
+                "blob_id": "f54c0e057d3e7f1465d495ad1e0d75d500f87fc1cd8700d5027b7b233d5a842e"
+              }
+            },
+            "urls": [
+              "https://example.invalid/fixture.bin"
+            ]
+          }
+        ]
+      }
+    },
+    "args": [
+      "{m}",
+      "--cadence",
+      "manual",
+      "--verify-root",
+      "{root}"
+    ],
+    "code": 0,
+    "stdout": "verified immutable test artifact: {root}/fixture.bin (18 bytes)\n",
+    "stderr": "",
+    "github_output": "preexisting=1\n"
+  },
+  {
+    "name": "ok-verify-dot-root",
+    "manifest": {
+      "json": {
+        "manifest_kind": "test-model-artifacts",
+        "artifacts": [
+          {
+            "id": "fixture",
+            "repo": "org/repo",
+            "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "selector": "fixture",
+            "model_ref": "org/repo:fixture",
+            "cadences": [
+              "manual"
+            ],
+            "files": [
+              "fixture.bin"
+            ],
+            "file_integrity": {
+              "fixture.bin": {
+                "size_bytes": 18,
+                "blob_id": "f54c0e057d3e7f1465d495ad1e0d75d500f87fc1cd8700d5027b7b233d5a842e"
+              }
+            },
+            "urls": [
+              "https://example.invalid/fixture.bin"
+            ]
+          }
+        ]
+      }
+    },
+    "args": [
+      "{m}",
+      "--cadence",
+      "manual",
+      "--verify-root",
+      "./"
+    ],
+    "code": 0,
+    "stdout": "verified immutable test artifact: fixture.bin (18 bytes)\n",
+    "stderr": "",
+    "github_output": "preexisting=1\n"
+  },
+  {
+    "name": "ok-verify-with-output",
+    "manifest": {
+      "json": {
+        "manifest_kind": "test-model-artifacts",
+        "artifacts": [
+          {
+            "id": "fixture",
+            "repo": "org/repo",
+            "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "selector": "fixture",
+            "model_ref": "org/repo:fixture",
+            "cadences": [
+              "manual"
+            ],
+            "files": [
+              "fixture.bin"
+            ],
+            "file_integrity": {
+              "fixture.bin": {
+                "size_bytes": 18,
+                "blob_id": "f54c0e057d3e7f1465d495ad1e0d75d500f87fc1cd8700d5027b7b233d5a842e"
+              }
+            },
+            "urls": [
+              "https://example.invalid/fixture.bin"
+            ]
+          }
+        ]
+      }
+    },
+    "args": [
+      "{m}",
+      "--cadence",
+      "manual",
+      "--verify-root",
+      "{root}",
+      "--github-output",
+      "{out}"
+    ],
+    "code": 0,
+    "stdout": "verified immutable test artifact: {root}/fixture.bin (18 bytes)\n",
+    "stderr": "",
+    "github_output": "preexisting=1\nartifact_id=fixture\nrepo=org/repo\nrevision=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\nselector=fixture\nmodel_ref=org/repo:fixture\nfiles_json=[\"fixture.bin\"]\nfile=fixture.bin\nurl=https://example.invalid/fixture.bin\nsha256=f54c0e057d3e7f1465d495ad1e0d75d500f87fc1cd8700d5027b7b233d5a842e\nsize_bytes=18\n"
+  },
+  {
+    "name": "ok-prefix",
+    "manifest": {
+      "json": {
+        "manifest_kind": "test-model-artifacts",
+        "artifacts": [
+          {
+            "id": "fixture",
+            "repo": "org/repo",
+            "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "selector": "fixture",
+            "model_ref": "org/repo:fixture",
+            "cadences": [
+              "manual"
+            ],
+            "files": [
+              "fixture.bin"
+            ],
+            "file_integrity": {
+              "fixture.bin": {
+                "size_bytes": 18,
+                "blob_id": "f54c0e057d3e7f1465d495ad1e0d75d500f87fc1cd8700d5027b7b233d5a842e"
+              }
+            },
+            "urls": [
+              "https://example.invalid/fixture.bin"
+            ]
+          }
+        ]
+      }
+    },
+    "args": [
+      "{m}",
+      "--cadence",
+      "manual",
+      "--github-output",
+      "{out}",
+      "--github-output-prefix",
+      "dense_"
+    ],
+    "code": 0,
+    "stdout": "",
+    "stderr": "",
+    "github_output": "preexisting=1\ndense_artifact_id=fixture\ndense_repo=org/repo\ndense_revision=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\ndense_selector=fixture\ndense_model_ref=org/repo:fixture\ndense_files_json=[\"fixture.bin\"]\ndense_file=fixture.bin\ndense_url=https://example.invalid/fixture.bin\ndense_sha256=f54c0e057d3e7f1465d495ad1e0d75d500f87fc1cd8700d5027b7b233d5a842e\ndense_size_bytes=18\n"
+  },
+  {
+    "name": "ok-empty-prefix",
+    "manifest": {
+      "json": {
+        "manifest_kind": "test-model-artifacts",
+        "artifacts": [
+          {
+            "id": "fixture",
+            "repo": "org/repo",
+            "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "selector": "fixture",
+            "model_ref": "org/repo:fixture",
+            "cadences": [
+              "manual"
+            ],
+            "files": [
+              "fixture.bin"
+            ],
+            "file_integrity": {
+              "fixture.bin": {
+                "size_bytes": 18,
+                "blob_id": "f54c0e057d3e7f1465d495ad1e0d75d500f87fc1cd8700d5027b7b233d5a842e"
+              }
+            },
+            "urls": [
+              "https://example.invalid/fixture.bin"
+            ]
+          }
+        ]
+      }
+    },
+    "args": [
+      "{m}",
+      "--cadence",
+      "manual",
+      "--github-output",
+      "{out}",
+      "--github-output-prefix",
+      ""
+    ],
+    "code": 0,
+    "stdout": "",
+    "stderr": "",
+    "github_output": "preexisting=1\nartifact_id=fixture\nrepo=org/repo\nrevision=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\nselector=fixture\nmodel_ref=org/repo:fixture\nfiles_json=[\"fixture.bin\"]\nfile=fixture.bin\nurl=https://example.invalid/fixture.bin\nsha256=f54c0e057d3e7f1465d495ad1e0d75d500f87fc1cd8700d5027b7b233d5a842e\nsize_bytes=18\n"
+  },
+  {
+    "name": "ok-quantizations",
+    "manifest": {
+      "json": {
+        "manifest_kind": "test-model-artifacts",
+        "artifacts": [
+          {
+            "id": "fixture",
+            "repo": "org/repo",
+            "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "selector": "fixture",
+            "model_ref": "org/repo:fixture",
+            "cadences": [
+              "manual"
+            ],
+            "files": [
+              "fixture.bin"
+            ],
+            "file_integrity": {
+              "fixture.bin": {
+                "size_bytes": 18,
+                "blob_id": "f54c0e057d3e7f1465d495ad1e0d75d500f87fc1cd8700d5027b7b233d5a842e"
+              }
+            },
+            "urls": [
+              "https://example.invalid/fixture.bin"
+            ],
+            "quantizations": [
+              "Q8_0",
+              "é"
+            ]
+          }
+        ]
+      }
+    },
+    "args": [
+      "{m}",
+      "--cadence",
+      "manual",
+      "--github-output",
+      "{out}"
+    ],
+    "code": 0,
+    "stdout": "",
+    "stderr": "",
+    "github_output": "preexisting=1\nartifact_id=fixture\nrepo=org/repo\nrevision=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\nselector=fixture\nmodel_ref=org/repo:fixture\nfiles_json=[\"fixture.bin\"]\nfile=fixture.bin\nurl=https://example.invalid/fixture.bin\nsha256=f54c0e057d3e7f1465d495ad1e0d75d500f87fc1cd8700d5027b7b233d5a842e\nsize_bytes=18\nquantizations_json=[\"Q8_0\",\"\\u00e9\"]\n"
+  },
+  {
+    "name": "ok-quantizations-empty",
+    "manifest": {
+      "json": {
+        "manifest_kind": "test-model-artifacts",
+        "artifacts": [
+          {
+            "id": "fixture",
+            "repo": "org/repo",
+            "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "selector": "fixture",
+            "model_ref": "org/repo:fixture",
+            "cadences": [
+              "manual"
+            ],
+            "files": [
+              "fixture.bin"
+            ],
+            "file_integrity": {
+              "fixture.bin": {
+                "size_bytes": 18,
+                "blob_id": "f54c0e057d3e7f1465d495ad1e0d75d500f87fc1cd8700d5027b7b233d5a842e"
+              }
+            },
+            "urls": [
+              "https://example.invalid/fixture.bin"
+            ],
+            "quantizations": []
+          }
+        ]
+      }
+    },
+    "args": [
+      "{m}",
+      "--cadence",
+      "manual"
+    ],
+    "code": 0,
+    "stdout": "{\"artifact_id\": \"fixture\", \"file\": \"fixture.bin\", \"files_json\": \"[\\\"fixture.bin\\\"]\", \"model_ref\": \"org/repo:fixture\", \"quantizations_json\": \"[]\", \"repo\": \"org/repo\", \"revision\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\", \"selector\": \"fixture\", \"sha256\": \"f54c0e057d3e7f1465d495ad1e0d75d500f87fc1cd8700d5027b7b233d5a842e\", \"size_bytes\": \"18\", \"url\": \"https://example.invalid/fixture.bin\"}\n",
+    "stderr": "",
+    "github_output": "preexisting=1\n"
+  },
+  {
+    "name": "skip-quantizations-invalid",
+    "manifest": {
+      "json": {
+        "manifest_kind": "test-model-artifacts",
+        "artifacts": [
+          {
+            "id": "fixture",
+            "repo": "org/repo",
+            "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "selector": "fixture",
+            "model_ref": "org/repo:fixture",
+            "cadences": [
+              "manual"
+            ],
+            "files": [
+              "fixture.bin"
+            ],
+            "file_integrity": {
+              "fixture.bin": {
+                "size_bytes": 18,
+                "blob_id": "f54c0e057d3e7f1465d495ad1e0d75d500f87fc1cd8700d5027b7b233d5a842e"
+              }
+            },
+            "urls": [
+              "https://example.invalid/fixture.bin"
+            ],
+            "quantizations": [
+              "Q8_0",
+              1
+            ]
+          }
+        ]
+      }
+    },
+    "args": [
+      "{m}",
+      "--cadence",
+      "manual"
+    ],
+    "code": 0,
+    "stdout": "{\"artifact_id\": \"fixture\", \"file\": \"fixture.bin\", \"files_json\": \"[\\\"fixture.bin\\\"]\", \"model_ref\": \"org/repo:fixture\", \"repo\": \"org/repo\", \"revision\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\", \"selector\": \"fixture\", \"sha256\": \"f54c0e057d3e7f1465d495ad1e0d75d500f87fc1cd8700d5027b7b233d5a842e\", \"size_bytes\": \"18\", \"url\": \"https://example.invalid/fixture.bin\"}\n",
+    "stderr": "",
+    "github_output": "preexisting=1\n"
+  },
+  {
+    "name": "ok-non-ascii-json",
+    "manifest": {
+      "json": {
+        "manifest_kind": "test-model-artifacts",
+        "artifacts": [
+          {
+            "id": "fixture",
+            "repo": "org/repo",
+            "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "selector": "sél ",
+            "model_ref": "org/repo:fixture",
+            "cadences": [
+              "manual"
+            ],
+            "files": [
+              "fixture.bin"
+            ],
+            "file_integrity": {
+              "fixture.bin": {
+                "size_bytes": 18,
+                "blob_id": "f54c0e057d3e7f1465d495ad1e0d75d500f87fc1cd8700d5027b7b233d5a842e"
+              }
+            },
+            "urls": [
+              "https://example.invalid/fixture.bin"
+            ]
+          }
+        ]
+      }
+    },
+    "args": [
+      "{m}",
+      "--cadence",
+      "manual"
+    ],
+    "code": 0,
+    "stdout": "{\"artifact_id\": \"fixture\", \"file\": \"fixture.bin\", \"files_json\": \"[\\\"fixture.bin\\\"]\", \"model_ref\": \"org/repo:fixture\", \"repo\": \"org/repo\", \"revision\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\", \"selector\": \"s\\u00e9l\\u2028\", \"sha256\": \"f54c0e057d3e7f1465d495ad1e0d75d500f87fc1cd8700d5027b7b233d5a842e\", \"size_bytes\": \"18\", \"url\": \"https://example.invalid/fixture.bin\"}\n",
+    "stderr": "",
+    "github_output": "preexisting=1\n"
+  },
+  {
+    "name": "ok-multifile-json",
+    "manifest": {
+      "json": {
+        "manifest_kind": "test-model-artifacts",
+        "artifacts": [
+          {
+            "id": "fixture",
+            "repo": "org/repo",
+            "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "selector": "fixture",
+            "model_ref": "org/repo:fixture",
+            "cadences": [
+              "manual"
+            ],
+            "files": [
+              "fixture.bin",
+              "b.bin"
+            ],
+            "file_integrity": {
+              "fixture.bin": {
+                "size_bytes": 18,
+                "blob_id": "f54c0e057d3e7f1465d495ad1e0d75d500f87fc1cd8700d5027b7b233d5a842e"
+              },
+              "b.bin": {
+                "size_bytes": 1,
+                "blob_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+              }
+            },
+            "urls": [
+              "https://example.invalid/fixture.bin",
+              "u2"
+            ]
+          }
+        ]
+      }
+    },
+    "args": [
+      "{m}",
+      "--cadence",
+      "manual"
+    ],
+    "code": 0,
+    "stdout": "{\"artifact_id\": \"fixture\", \"files_json\": \"[\\\"fixture.bin\\\",\\\"b.bin\\\"]\", \"model_ref\": \"org/repo:fixture\", \"repo\": \"org/repo\", \"revision\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\", \"selector\": \"fixture\"}\n",
+    "stderr": "",
+    "github_output": "preexisting=1\n"
+  },
+  {
+    "name": "multifile-single-required",
+    "manifest": {
+      "json": {
+        "manifest_kind": "test-model-artifacts",
+        "artifacts": [
+          {
+            "id": "fixture",
+            "repo": "org/repo",
+            "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "selector": "fixture",
+            "model_ref": "org/repo:fixture",
+            "cadences": [
+              "manual"
+            ],
+            "files": [
+              "fixture.bin",
+              "b.bin"
+            ],
+            "file_integrity": {
+              "fixture.bin": {
+                "size_bytes": 18,
+                "blob_id": "f54c0e057d3e7f1465d495ad1e0d75d500f87fc1cd8700d5027b7b233d5a842e"
+              },
+              "b.bin": {
+                "size_bytes": 1,
+                "blob_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+              }
+            },
+            "urls": [
+              "https://example.invalid/fixture.bin",
+              "u2"
+            ]
+          }
+        ]
+      }
+    },
+    "args": [
+      "{m}",
+      "--cadence",
+      "manual",
+      "--require-single-file"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact fixture must contain exactly one file\n",
+    "github_output": "preexisting=1\n"
+  },
+  {
+    "name": "multifile-verify-missing",
+    "manifest": {
+      "json": {
+        "manifest_kind": "test-model-artifacts",
+        "artifacts": [
+          {
+            "id": "fixture",
+            "repo": "org/repo",
+            "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "selector": "fixture",
+            "model_ref": "org/repo:fixture",
+            "cadences": [
+              "manual"
+            ],
+            "files": [
+              "fixture.bin",
+              "b.bin"
+            ],
+            "file_integrity": {
+              "fixture.bin": {
+                "size_bytes": 18,
+                "blob_id": "f54c0e057d3e7f1465d495ad1e0d75d500f87fc1cd8700d5027b7b233d5a842e"
+              },
+              "b.bin": {
+                "size_bytes": 1,
+                "blob_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+              }
+            },
+            "urls": [
+              "https://example.invalid/fixture.bin",
+              "u2"
+            ]
+          }
+        ]
+      }
+    },
+    "args": [
+      "{m}",
+      "--cadence",
+      "manual",
+      "--verify-root",
+      "{root}"
+    ],
+    "code": 2,
+    "stdout": "verified immutable test artifact: {root}/fixture.bin (18 bytes)\n",
+    "stderr": "test-model manifest error: artifact file is missing: {root}/b.bin\n",
+    "github_output": "preexisting=1\n"
+  },
+  {
+    "name": "bad-prefix-digit-start",
+    "manifest": {
+      "json": {
+        "manifest_kind": "test-model-artifacts",
+        "artifacts": [
+          {
+            "id": "fixture",
+            "repo": "org/repo",
+            "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "selector": "fixture",
+            "model_ref": "org/repo:fixture",
+            "cadences": [
+              "manual"
+            ],
+            "files": [
+              "fixture.bin"
+            ],
+            "file_integrity": {
+              "fixture.bin": {
+                "size_bytes": 18,
+                "blob_id": "f54c0e057d3e7f1465d495ad1e0d75d500f87fc1cd8700d5027b7b233d5a842e"
+              }
+            },
+            "urls": [
+              "https://example.invalid/fixture.bin"
+            ]
+          }
+        ]
+      }
+    },
+    "args": [
+      "{m}",
+      "--cadence",
+      "manual",
+      "--github-output",
+      "{out}",
+      "--github-output-prefix",
+      "1x_"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: github output prefix must end in '_' and contain only ASCII letters, digits, and underscores\n",
+    "github_output": "preexisting=1\n"
+  },
+  {
+    "name": "bad-prefix-no-underscore",
+    "manifest": {
+      "json": {
+        "manifest_kind": "test-model-artifacts",
+        "artifacts": [
+          {
+            "id": "fixture",
+            "repo": "org/repo",
+            "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "selector": "fixture",
+            "model_ref": "org/repo:fixture",
+            "cadences": [
+              "manual"
+            ],
+            "files": [
+              "fixture.bin"
+            ],
+            "file_integrity": {
+              "fixture.bin": {
+                "size_bytes": 18,
+                "blob_id": "f54c0e057d3e7f1465d495ad1e0d75d500f87fc1cd8700d5027b7b233d5a842e"
+              }
+            },
+            "urls": [
+              "https://example.invalid/fixture.bin"
+            ]
+          }
+        ]
+      }
+    },
+    "args": [
+      "{m}",
+      "--cadence",
+      "manual",
+      "--github-output",
+      "{out}",
+      "--github-output-prefix",
+      "dense"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: github output prefix must end in '_' and contain only ASCII letters, digits, and underscores\n",
+    "github_output": "preexisting=1\n"
+  },
+  {
+    "name": "bad-prefix-newline",
+    "manifest": {
+      "json": {
+        "manifest_kind": "test-model-artifacts",
+        "artifacts": [
+          {
+            "id": "fixture",
+            "repo": "org/repo",
+            "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "selector": "fixture",
+            "model_ref": "org/repo:fixture",
+            "cadences": [
+              "manual"
+            ],
+            "files": [
+              "fixture.bin"
+            ],
+            "file_integrity": {
+              "fixture.bin": {
+                "size_bytes": 18,
+                "blob_id": "f54c0e057d3e7f1465d495ad1e0d75d500f87fc1cd8700d5027b7b233d5a842e"
+              }
+            },
+            "urls": [
+              "https://example.invalid/fixture.bin"
+            ]
+          }
+        ]
+      }
+    },
+    "args": [
+      "{m}",
+      "--cadence",
+      "manual",
+      "--github-output",
+      "{out}",
+      "--github-output-prefix",
+      "a_\nurl=evil_"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: github output prefix must end in '_' and contain only ASCII letters, digits, and underscores\n",
+    "github_output": "preexisting=1\n"
+  },
+  {
+    "name": "newline-selector-output",
+    "manifest": {
+      "json": {
+        "manifest_kind": "test-model-artifacts",
+        "artifacts": [
+          {
+            "id": "fixture",
+            "repo": "org/repo",
+            "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "selector": "x\nurl=https://evil",
+            "model_ref": "org/repo:fixture",
+            "cadences": [
+              "manual"
+            ],
+            "files": [
+              "fixture.bin"
+            ],
+            "file_integrity": {
+              "fixture.bin": {
+                "size_bytes": 18,
+                "blob_id": "f54c0e057d3e7f1465d495ad1e0d75d500f87fc1cd8700d5027b7b233d5a842e"
+              }
+            },
+            "urls": [
+              "https://example.invalid/fixture.bin"
+            ]
+          }
+        ]
+      }
+    },
+    "args": [
+      "{m}",
+      "--cadence",
+      "manual",
+      "--github-output",
+      "{out}"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: output selector must be single-line\n",
+    "github_output": "preexisting=1\nartifact_id=fixture\nrepo=org/repo\nrevision=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n"
+  },
+  {
+    "name": "carriage-return-url-output",
+    "manifest": {
+      "json": {
+        "manifest_kind": "test-model-artifacts",
+        "artifacts": [
+          {
+            "id": "fixture",
+            "repo": "org/repo",
+            "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "selector": "fixture",
+            "model_ref": "org/repo:fixture",
+            "cadences": [
+              "manual"
+            ],
+            "files": [
+              "fixture.bin"
+            ],
+            "file_integrity": {
+              "fixture.bin": {
+                "size_bytes": 18,
+                "blob_id": "f54c0e057d3e7f1465d495ad1e0d75d500f87fc1cd8700d5027b7b233d5a842e"
+              }
+            },
+            "urls": [
+              "https://x\r"
+            ]
+          }
+        ]
+      }
+    },
+    "args": [
+      "{m}",
+      "--cadence",
+      "manual",
+      "--github-output",
+      "{out}"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: output url must be single-line\n",
+    "github_output": "preexisting=1\nartifact_id=fixture\nrepo=org/repo\nrevision=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\nselector=fixture\nmodel_ref=org/repo:fixture\nfiles_json=[\"fixture.bin\"]\nfile=fixture.bin\n"
+  },
+  {
+    "name": "newline-selector-json",
+    "manifest": {
+      "json": {
+        "manifest_kind": "test-model-artifacts",
+        "artifacts": [
+          {
+            "id": "fixture",
+            "repo": "org/repo",
+            "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "selector": "x\nurl=https://evil",
+            "model_ref": "org/repo:fixture",
+            "cadences": [
+              "manual"
+            ],
+            "files": [
+              "fixture.bin"
+            ],
+            "file_integrity": {
+              "fixture.bin": {
+                "size_bytes": 18,
+                "blob_id": "f54c0e057d3e7f1465d495ad1e0d75d500f87fc1cd8700d5027b7b233d5a842e"
+              }
+            },
+            "urls": [
+              "https://example.invalid/fixture.bin"
+            ]
+          }
+        ]
+      }
+    },
+    "args": [
+      "{m}",
+      "--cadence",
+      "manual"
+    ],
+    "code": 0,
+    "stdout": "{\"artifact_id\": \"fixture\", \"file\": \"fixture.bin\", \"files_json\": \"[\\\"fixture.bin\\\"]\", \"model_ref\": \"org/repo:fixture\", \"repo\": \"org/repo\", \"revision\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\", \"selector\": \"x\\nurl=https://evil\", \"sha256\": \"f54c0e057d3e7f1465d495ad1e0d75d500f87fc1cd8700d5027b7b233d5a842e\", \"size_bytes\": \"18\", \"url\": \"https://example.invalid/fixture.bin\"}\n",
+    "stderr": "",
+    "github_output": "preexisting=1\n"
+  },
+  {
+    "name": "path-traversal",
+    "manifest": {
+      "json": {
+        "manifest_kind": "test-model-artifacts",
+        "artifacts": [
+          {
+            "id": "fixture",
+            "repo": "org/repo",
+            "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "selector": "fixture",
+            "model_ref": "org/repo:fixture",
+            "cadences": [
+              "manual"
+            ],
+            "files": [
+              "../fixture.bin"
+            ],
+            "file_integrity": {
+              "fixture.bin": {
+                "size_bytes": 18,
+                "blob_id": "f54c0e057d3e7f1465d495ad1e0d75d500f87fc1cd8700d5027b7b233d5a842e"
+              }
+            },
+            "urls": [
+              "https://example.invalid/fixture.bin"
+            ]
+          }
+        ]
+      }
+    },
+    "args": [
+      "{m}",
+      "--cadence",
+      "manual"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact.files[0] is unsafe: '../fixture.bin'\n",
+    "github_output": "preexisting=1\n"
+  },
+  {
+    "name": "path-inner-traversal",
+    "manifest": {
+      "json": {
+        "manifest_kind": "test-model-artifacts",
+        "artifacts": [
+          {
+            "id": "fixture",
+            "repo": "org/repo",
+            "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "selector": "fixture",
+            "model_ref": "org/repo:fixture",
+            "cadences": [
+              "manual"
+            ],
+            "files": [
+              "a/../fixture.bin"
+            ],
+            "file_integrity": {
+              "fixture.bin": {
+                "size_bytes": 18,
+                "blob_id": "f54c0e057d3e7f1465d495ad1e0d75d500f87fc1cd8700d5027b7b233d5a842e"
+              }
+            },
+            "urls": [
+              "https://example.invalid/fixture.bin"
+            ]
+          }
+        ]
+      }
+    },
+    "args": [
+      "{m}",
+      "--cadence",
+      "manual"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact.files[0] is unsafe: 'a/../fixture.bin'\n",
+    "github_output": "preexisting=1\n"
+  },
+  {
+    "name": "path-absolute",
+    "manifest": {
+      "json": {
+        "manifest_kind": "test-model-artifacts",
+        "artifacts": [
+          {
+            "id": "fixture",
+            "repo": "org/repo",
+            "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "selector": "fixture",
+            "model_ref": "org/repo:fixture",
+            "cadences": [
+              "manual"
+            ],
+            "files": [
+              "/etc/passwd"
+            ],
+            "file_integrity": {
+              "fixture.bin": {
+                "size_bytes": 18,
+                "blob_id": "f54c0e057d3e7f1465d495ad1e0d75d500f87fc1cd8700d5027b7b233d5a842e"
+              }
+            },
+            "urls": [
+              "https://example.invalid/fixture.bin"
+            ]
+          }
+        ]
+      }
+    },
+    "args": [
+      "{m}",
+      "--cadence",
+      "manual"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact.files[0] is unsafe: '/etc/passwd'\n",
+    "github_output": "preexisting=1\n"
+  },
+  {
+    "name": "path-double-slash",
+    "manifest": {
+      "json": {
+        "manifest_kind": "test-model-artifacts",
+        "artifacts": [
+          {
+            "id": "fixture",
+            "repo": "org/repo",
+            "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "selector": "fixture",
+            "model_ref": "org/repo:fixture",
+            "cadences": [
+              "manual"
+            ],
+            "files": [
+              "//etc/passwd"
+            ],
+            "file_integrity": {
+              "fixture.bin": {
+                "size_bytes": 18,
+                "blob_id": "f54c0e057d3e7f1465d495ad1e0d75d500f87fc1cd8700d5027b7b233d5a842e"
+              }
+            },
+            "urls": [
+              "https://example.invalid/fixture.bin"
+            ]
+          }
+        ]
+      }
+    },
+    "args": [
+      "{m}",
+      "--cadence",
+      "manual"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact.files[0] is unsafe: '//etc/passwd'\n",
+    "github_output": "preexisting=1\n"
+  },
+  {
+    "name": "path-backslash",
+    "manifest": {
+      "json": {
+        "manifest_kind": "test-model-artifacts",
+        "artifacts": [
+          {
+            "id": "fixture",
+            "repo": "org/repo",
+            "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "selector": "fixture",
+            "model_ref": "org/repo:fixture",
+            "cadences": [
+              "manual"
+            ],
+            "files": [
+              "a\\b.bin"
+            ],
+            "file_integrity": {
+              "fixture.bin": {
+                "size_bytes": 18,
+                "blob_id": "f54c0e057d3e7f1465d495ad1e0d75d500f87fc1cd8700d5027b7b233d5a842e"
+              }
+            },
+            "urls": [
+              "https://example.invalid/fixture.bin"
+            ]
+          }
+        ]
+      }
+    },
+    "args": [
+      "{m}",
+      "--cadence",
+      "manual"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact.files[0] is unsafe: 'a\\\\b.bin'\n",
+    "github_output": "preexisting=1\n"
+  },
+  {
+    "name": "path-empty",
+    "manifest": {
+      "json": {
+        "manifest_kind": "test-model-artifacts",
+        "artifacts": [
+          {
+            "id": "fixture",
+            "repo": "org/repo",
+            "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "selector": "fixture",
+            "model_ref": "org/repo:fixture",
+            "cadences": [
+              "manual"
+            ],
+            "files": [
+              ""
+            ],
+            "file_integrity": {
+              "fixture.bin": {
+                "size_bytes": 18,
+                "blob_id": "f54c0e057d3e7f1465d495ad1e0d75d500f87fc1cd8700d5027b7b233d5a842e"
+              }
+            },
+            "urls": [
+              "https://example.invalid/fixture.bin"
+            ]
+          }
+        ]
+      }
+    },
+    "args": [
+      "{m}",
+      "--cadence",
+      "manual"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact.files[0] must be a non-empty string\n",
+    "github_output": "preexisting=1\n"
+  },
+  {
+    "name": "path-not-string",
+    "manifest": {
+      "json": {
+        "manifest_kind": "test-model-artifacts",
+        "artifacts": [
+          {
+            "id": "fixture",
+            "repo": "org/repo",
+            "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "selector": "fixture",
+            "model_ref": "org/repo:fixture",
+            "cadences": [
+              "manual"
+            ],
+            "files": [
+              1
+            ],
+            "file_integrity": {
+              "fixture.bin": {
+                "size_bytes": 18,
+                "blob_id": "f54c0e057d3e7f1465d495ad1e0d75d500f87fc1cd8700d5027b7b233d5a842e"
+              }
+            },
+            "urls": [
+              "https://example.invalid/fixture.bin"
+            ]
+          }
+        ]
+      }
+    },
+    "args": [
+      "{m}",
+      "--cadence",
+      "manual"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact.files[0] must be a non-empty string\n",
+    "github_output": "preexisting=1\n"
+  },
+  {
+    "name": "path-dot-segments",
+    "manifest": {
+      "json": {
+        "manifest_kind": "test-model-artifacts",
+        "artifacts": [
+          {
+            "id": "fixture",
+            "repo": "org/repo",
+            "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "selector": "fixture",
+            "model_ref": "org/repo:fixture",
+            "cadences": [
+              "manual"
+            ],
+            "files": [
+              "./fixture.bin"
+            ],
+            "file_integrity": {
+              "./fixture.bin": {
+                "size_bytes": 18,
+                "blob_id": "f54c0e057d3e7f1465d495ad1e0d75d500f87fc1cd8700d5027b7b233d5a842e"
+              }
+            },
+            "urls": [
+              "https://example.invalid/fixture.bin"
+            ]
+          }
+        ]
+      }
+    },
+    "args": [
+      "{m}",
+      "--cadence",
+      "manual",
+      "--verify-root",
+      "{root}/"
+    ],
+    "code": 0,
+    "stdout": "verified immutable test artifact: {root}/fixture.bin (18 bytes)\n",
+    "stderr": "",
+    "github_output": "preexisting=1\n"
+  },
+  {
+    "name": "integrity-missing",
+    "manifest": {
+      "json": {
+        "manifest_kind": "test-model-artifacts",
+        "artifacts": [
+          {
+            "id": "fixture",
+            "repo": "org/repo",
+            "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "selector": "fixture",
+            "model_ref": "org/repo:fixture",
+            "cadences": [
+              "manual"
+            ],
+            "files": [
+              "fixture.bin"
+            ],
+            "file_integrity": {},
+            "urls": [
+              "https://example.invalid/fixture.bin"
+            ]
+          }
+        ]
+      }
+    },
+    "args": [
+      "{m}",
+      "--cadence",
+      "manual"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact.file_integrity is missing fixture.bin\n",
+    "github_output": "preexisting=1\n"
+  },
+  {
+    "name": "integrity-not-object",
+    "manifest": {
+      "json": {
+        "manifest_kind": "test-model-artifacts",
+        "artifacts": [
+          {
+            "id": "fixture",
+            "repo": "org/repo",
+            "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "selector": "fixture",
+            "model_ref": "org/repo:fixture",
+            "cadences": [
+              "manual"
+            ],
+            "files": [
+              "fixture.bin"
+            ],
+            "file_integrity": [],
+            "urls": [
+              "https://example.invalid/fixture.bin"
+            ]
+          }
+        ]
+      }
+    },
+    "args": [
+      "{m}",
+      "--cadence",
+      "manual"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact files and file_integrity are required\n",
+    "github_output": "preexisting=1\n"
+  },
+  {
+    "name": "size-zero",
+    "manifest": {
+      "json": {
+        "manifest_kind": "test-model-artifacts",
+        "artifacts": [
+          {
+            "id": "fixture",
+            "repo": "org/repo",
+            "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "selector": "fixture",
+            "model_ref": "org/repo:fixture",
+            "cadences": [
+              "manual"
+            ],
+            "files": [
+              "fixture.bin"
+            ],
+            "file_integrity": {
+              "fixture.bin": {
+                "size_bytes": 0,
+                "blob_id": "f54c0e057d3e7f1465d495ad1e0d75d500f87fc1cd8700d5027b7b233d5a842e"
+              }
+            },
+            "urls": [
+              "https://example.invalid/fixture.bin"
+            ]
+          }
+        ]
+      }
+    },
+    "args": [
+      "{m}",
+      "--cadence",
+      "manual"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact size is invalid for fixture.bin\n",
+    "github_output": "preexisting=1\n"
+  },
+  {
+    "name": "size-negative",
+    "manifest": {
+      "json": {
+        "manifest_kind": "test-model-artifacts",
+        "artifacts": [
+          {
+            "id": "fixture",
+            "repo": "org/repo",
+            "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "selector": "fixture",
+            "model_ref": "org/repo:fixture",
+            "cadences": [
+              "manual"
+            ],
+            "files": [
+              "fixture.bin"
+            ],
+            "file_integrity": {
+              "fixture.bin": {
+                "size_bytes": -1,
+                "blob_id": "f54c0e057d3e7f1465d495ad1e0d75d500f87fc1cd8700d5027b7b233d5a842e"
+              }
+            },
+            "urls": [
+              "https://example.invalid/fixture.bin"
+            ]
+          }
+        ]
+      }
+    },
+    "args": [
+      "{m}",
+      "--cadence",
+      "manual"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact size is invalid for fixture.bin\n",
+    "github_output": "preexisting=1\n"
+  },
+  {
+    "name": "size-float",
+    "manifest": {
+      "json": {
+        "manifest_kind": "test-model-artifacts",
+        "artifacts": [
+          {
+            "id": "fixture",
+            "repo": "org/repo",
+            "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "selector": "fixture",
+            "model_ref": "org/repo:fixture",
+            "cadences": [
+              "manual"
+            ],
+            "files": [
+              "fixture.bin"
+            ],
+            "file_integrity": {
+              "fixture.bin": {
+                "size_bytes": 18.0,
+                "blob_id": "f54c0e057d3e7f1465d495ad1e0d75d500f87fc1cd8700d5027b7b233d5a842e"
+              }
+            },
+            "urls": [
+              "https://example.invalid/fixture.bin"
+            ]
+          }
+        ]
+      }
+    },
+    "args": [
+      "{m}",
+      "--cadence",
+      "manual"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact size is invalid for fixture.bin\n",
+    "github_output": "preexisting=1\n"
+  },
+  {
+    "name": "size-bool",
+    "manifest": {
+      "json": {
+        "manifest_kind": "test-model-artifacts",
+        "artifacts": [
+          {
+            "id": "fixture",
+            "repo": "org/repo",
+            "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "selector": "fixture",
+            "model_ref": "org/repo:fixture",
+            "cadences": [
+              "manual"
+            ],
+            "files": [
+              "fixture.bin"
+            ],
+            "file_integrity": {
+              "fixture.bin": {
+                "size_bytes": true,
+                "blob_id": "f54c0e057d3e7f1465d495ad1e0d75d500f87fc1cd8700d5027b7b233d5a842e"
+              }
+            },
+            "urls": [
+              "https://example.invalid/fixture.bin"
+            ]
+          }
+        ]
+      }
+    },
+    "args": [
+      "{m}",
+      "--cadence",
+      "manual"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact size is invalid for fixture.bin\n",
+    "github_output": "preexisting=1\n"
+  },
+  {
+    "name": "size-string",
+    "manifest": {
+      "json": {
+        "manifest_kind": "test-model-artifacts",
+        "artifacts": [
+          {
+            "id": "fixture",
+            "repo": "org/repo",
+            "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "selector": "fixture",
+            "model_ref": "org/repo:fixture",
+            "cadences": [
+              "manual"
+            ],
+            "files": [
+              "fixture.bin"
+            ],
+            "file_integrity": {
+              "fixture.bin": {
+                "size_bytes": "18",
+                "blob_id": "f54c0e057d3e7f1465d495ad1e0d75d500f87fc1cd8700d5027b7b233d5a842e"
+              }
+            },
+            "urls": [
+              "https://example.invalid/fixture.bin"
+            ]
+          }
+        ]
+      }
+    },
+    "args": [
+      "{m}",
+      "--cadence",
+      "manual"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact size is invalid for fixture.bin\n",
+    "github_output": "preexisting=1\n"
+  },
+  {
+    "name": "size-mismatch",
+    "manifest": {
+      "json": {
+        "manifest_kind": "test-model-artifacts",
+        "artifacts": [
+          {
+            "id": "fixture",
+            "repo": "org/repo",
+            "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "selector": "fixture",
+            "model_ref": "org/repo:fixture",
+            "cadences": [
+              "manual"
+            ],
+            "files": [
+              "fixture.bin"
+            ],
+            "file_integrity": {
+              "fixture.bin": {
+                "size_bytes": 19,
+                "blob_id": "f54c0e057d3e7f1465d495ad1e0d75d500f87fc1cd8700d5027b7b233d5a842e"
+              }
+            },
+            "urls": [
+              "https://example.invalid/fixture.bin"
+            ]
+          }
+        ]
+      }
+    },
+    "args": [
+      "{m}",
+      "--cadence",
+      "manual",
+      "--verify-root",
+      "{root}"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact size mismatch for {root}/fixture.bin: expected 19, got 18\n",
+    "github_output": "preexisting=1\n"
+  },
+  {
+    "name": "sha-uppercase",
+    "manifest": {
+      "json": {
+        "manifest_kind": "test-model-artifacts",
+        "artifacts": [
+          {
+            "id": "fixture",
+            "repo": "org/repo",
+            "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "selector": "fixture",
+            "model_ref": "org/repo:fixture",
+            "cadences": [
+              "manual"
+            ],
+            "files": [
+              "fixture.bin"
+            ],
+            "file_integrity": {
+              "fixture.bin": {
+                "size_bytes": 18,
+                "blob_id": "F54C0E057D3E7F1465D495AD1E0D75D500F87FC1CD8700D5027B7B233D5A842E"
+              }
+            },
+            "urls": [
+              "https://example.invalid/fixture.bin"
+            ]
+          }
+        ]
+      }
+    },
+    "args": [
+      "{m}",
+      "--cadence",
+      "manual"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact SHA-256 is invalid for fixture.bin\n",
+    "github_output": "preexisting=1\n"
+  },
+  {
+    "name": "sha-short",
+    "manifest": {
+      "json": {
+        "manifest_kind": "test-model-artifacts",
+        "artifacts": [
+          {
+            "id": "fixture",
+            "repo": "org/repo",
+            "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "selector": "fixture",
+            "model_ref": "org/repo:fixture",
+            "cadences": [
+              "manual"
+            ],
+            "files": [
+              "fixture.bin"
+            ],
+            "file_integrity": {
+              "fixture.bin": {
+                "size_bytes": 18,
+                "blob_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+              }
+            },
+            "urls": [
+              "https://example.invalid/fixture.bin"
+            ]
+          }
+        ]
+      }
+    },
+    "args": [
+      "{m}",
+      "--cadence",
+      "manual"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact SHA-256 is invalid for fixture.bin\n",
+    "github_output": "preexisting=1\n"
+  },
+  {
+    "name": "sha-trailing-newline",
+    "manifest": {
+      "json": {
+        "manifest_kind": "test-model-artifacts",
+        "artifacts": [
+          {
+            "id": "fixture",
+            "repo": "org/repo",
+            "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "selector": "fixture",
+            "model_ref": "org/repo:fixture",
+            "cadences": [
+              "manual"
+            ],
+            "files": [
+              "fixture.bin"
+            ],
+            "file_integrity": {
+              "fixture.bin": {
+                "size_bytes": 18,
+                "blob_id": "f54c0e057d3e7f1465d495ad1e0d75d500f87fc1cd8700d5027b7b233d5a842e\n"
+              }
+            },
+            "urls": [
+              "https://example.invalid/fixture.bin"
+            ]
+          }
+        ]
+      }
+    },
+    "args": [
+      "{m}",
+      "--cadence",
+      "manual"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact SHA-256 is invalid for fixture.bin\n",
+    "github_output": "preexisting=1\n"
+  },
+  {
+    "name": "sha-null",
+    "manifest": {
+      "json": {
+        "manifest_kind": "test-model-artifacts",
+        "artifacts": [
+          {
+            "id": "fixture",
+            "repo": "org/repo",
+            "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "selector": "fixture",
+            "model_ref": "org/repo:fixture",
+            "cadences": [
+              "manual"
+            ],
+            "files": [
+              "fixture.bin"
+            ],
+            "file_integrity": {
+              "fixture.bin": {
+                "size_bytes": 18,
+                "blob_id": null
+              }
+            },
+            "urls": [
+              "https://example.invalid/fixture.bin"
+            ]
+          }
+        ]
+      }
+    },
+    "args": [
+      "{m}",
+      "--cadence",
+      "manual"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact SHA-256 is invalid for fixture.bin\n",
+    "github_output": "preexisting=1\n"
+  },
+  {
+    "name": "sha-mismatch",
+    "manifest": {
+      "json": {
+        "manifest_kind": "test-model-artifacts",
+        "artifacts": [
+          {
+            "id": "fixture",
+            "repo": "org/repo",
+            "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "selector": "fixture",
+            "model_ref": "org/repo:fixture",
+            "cadences": [
+              "manual"
+            ],
+            "files": [
+              "fixture.bin"
+            ],
+            "file_integrity": {
+              "fixture.bin": {
+                "size_bytes": 18,
+                "blob_id": "0000000000000000000000000000000000000000000000000000000000000000"
+              }
+            },
+            "urls": [
+              "https://example.invalid/fixture.bin"
+            ]
+          }
+        ]
+      }
+    },
+    "args": [
+      "{m}",
+      "--cadence",
+      "manual",
+      "--verify-root",
+      "{root}"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact SHA-256 mismatch for {root}/fixture.bin: expected 0000000000000000000000000000000000000000000000000000000000000000, got f54c0e057d3e7f1465d495ad1e0d75d500f87fc1cd8700d5027b7b233d5a842e\n",
+    "github_output": "preexisting=1\n"
+  },
+  {
+    "name": "file-missing-on-disk",
+    "manifest": {
+      "json": {
+        "manifest_kind": "test-model-artifacts",
+        "artifacts": [
+          {
+            "id": "fixture",
+            "repo": "org/repo",
+            "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "selector": "fixture",
+            "model_ref": "org/repo:fixture",
+            "cadences": [
+              "manual"
+            ],
+            "files": [
+              "absent.bin"
+            ],
+            "file_integrity": {
+              "absent.bin": {
+                "size_bytes": 18,
+                "blob_id": "f54c0e057d3e7f1465d495ad1e0d75d500f87fc1cd8700d5027b7b233d5a842e"
+              }
+            },
+            "urls": [
+              "https://example.invalid/fixture.bin"
+            ]
+          }
+        ]
+      }
+    },
+    "args": [
+      "{m}",
+      "--cadence",
+      "manual",
+      "--verify-root",
+      "{root}"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact file is missing: {root}/absent.bin\n",
+    "github_output": "preexisting=1\n"
+  },
+  {
+    "name": "file-is-directory",
+    "manifest": {
+      "json": {
+        "manifest_kind": "test-model-artifacts",
+        "artifacts": [
+          {
+            "id": "fixture",
+            "repo": "org/repo",
+            "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "selector": "fixture",
+            "model_ref": "org/repo:fixture",
+            "cadences": [
+              "manual"
+            ],
+            "files": [
+              "sub"
+            ],
+            "file_integrity": {
+              "sub": {
+                "size_bytes": 18,
+                "blob_id": "f54c0e057d3e7f1465d495ad1e0d75d500f87fc1cd8700d5027b7b233d5a842e"
+              }
+            },
+            "urls": [
+              "https://example.invalid/fixture.bin"
+            ]
+          }
+        ]
+      }
+    },
+    "args": [
+      "{m}",
+      "--cadence",
+      "manual",
+      "--verify-root",
+      "/"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact file is missing: /sub\n",
+    "github_output": "preexisting=1\n"
+  },
+  {
+    "name": "urls-short",
+    "manifest": {
+      "json": {
+        "manifest_kind": "test-model-artifacts",
+        "artifacts": [
+          {
+            "id": "fixture",
+            "repo": "org/repo",
+            "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "selector": "fixture",
+            "model_ref": "org/repo:fixture",
+            "cadences": [
+              "manual"
+            ],
+            "files": [
+              "fixture.bin"
+            ],
+            "file_integrity": {
+              "fixture.bin": {
+                "size_bytes": 18,
+                "blob_id": "f54c0e057d3e7f1465d495ad1e0d75d500f87fc1cd8700d5027b7b233d5a842e"
+              }
+            },
+            "urls": []
+          }
+        ]
+      }
+    },
+    "args": [
+      "{m}",
+      "--cadence",
+      "manual"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact urls must exactly cover files\n",
+    "github_output": "preexisting=1\n"
+  },
+  {
+    "name": "urls-not-list",
+    "manifest": {
+      "json": {
+        "manifest_kind": "test-model-artifacts",
+        "artifacts": [
+          {
+            "id": "fixture",
+            "repo": "org/repo",
+            "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "selector": "fixture",
+            "model_ref": "org/repo:fixture",
+            "cadences": [
+              "manual"
+            ],
+            "files": [
+              "fixture.bin"
+            ],
+            "file_integrity": {
+              "fixture.bin": {
+                "size_bytes": 18,
+                "blob_id": "f54c0e057d3e7f1465d495ad1e0d75d500f87fc1cd8700d5027b7b233d5a842e"
+              }
+            },
+            "urls": "u"
+          }
+        ]
+      }
+    },
+    "args": [
+      "{m}",
+      "--cadence",
+      "manual"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact urls must exactly cover files\n",
+    "github_output": "preexisting=1\n"
+  },
+  {
+    "name": "url-empty",
+    "manifest": {
+      "json": {
+        "manifest_kind": "test-model-artifacts",
+        "artifacts": [
+          {
+            "id": "fixture",
+            "repo": "org/repo",
+            "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "selector": "fixture",
+            "model_ref": "org/repo:fixture",
+            "cadences": [
+              "manual"
+            ],
+            "files": [
+              "fixture.bin"
+            ],
+            "file_integrity": {
+              "fixture.bin": {
+                "size_bytes": 18,
+                "blob_id": "f54c0e057d3e7f1465d495ad1e0d75d500f87fc1cd8700d5027b7b233d5a842e"
+              }
+            },
+            "urls": [
+              ""
+            ]
+          }
+        ]
+      }
+    },
+    "args": [
+      "{m}",
+      "--cadence",
+      "manual"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact URL is invalid for fixture.bin\n",
+    "github_output": "preexisting=1\n"
+  },
+  {
+    "name": "files-empty",
+    "manifest": {
+      "json": {
+        "manifest_kind": "test-model-artifacts",
+        "artifacts": [
+          {
+            "id": "fixture",
+            "repo": "org/repo",
+            "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "selector": "fixture",
+            "model_ref": "org/repo:fixture",
+            "cadences": [
+              "manual"
+            ],
+            "files": [],
+            "file_integrity": {
+              "fixture.bin": {
+                "size_bytes": 18,
+                "blob_id": "f54c0e057d3e7f1465d495ad1e0d75d500f87fc1cd8700d5027b7b233d5a842e"
+              }
+            },
+            "urls": []
+          }
+        ]
+      }
+    },
+    "args": [
+      "{m}",
+      "--cadence",
+      "manual"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact files and file_integrity are required\n",
+    "github_output": "preexisting=1\n"
+  },
+  {
+    "name": "unauthorized-cadence",
+    "manifest": {
+      "json": {
+        "manifest_kind": "test-model-artifacts",
+        "artifacts": [
+          {
+            "id": "fixture",
+            "repo": "org/repo",
+            "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "selector": "fixture",
+            "model_ref": "org/repo:fixture",
+            "cadences": [
+              "manual"
+            ],
+            "files": [
+              "fixture.bin"
+            ],
+            "file_integrity": {
+              "fixture.bin": {
+                "size_bytes": 18,
+                "blob_id": "f54c0e057d3e7f1465d495ad1e0d75d500f87fc1cd8700d5027b7b233d5a842e"
+              }
+            },
+            "urls": [
+              "https://example.invalid/fixture.bin"
+            ]
+          }
+        ]
+      }
+    },
+    "args": [
+      "{m}",
+      "--cadence",
+      "nightly"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact fixture is not allowed at cadence 'nightly'\n",
+    "github_output": "preexisting=1\n"
+  },
+  {
+    "name": "unauthorized-cadence-quote",
+    "manifest": {
+      "json": {
+        "manifest_kind": "test-model-artifacts",
+        "artifacts": [
+          {
+            "id": "fixture",
+            "repo": "org/repo",
+            "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "selector": "fixture",
+            "model_ref": "org/repo:fixture",
+            "cadences": [
+              "manual"
+            ],
+            "files": [
+              "fixture.bin"
+            ],
+            "file_integrity": {
+              "fixture.bin": {
+                "size_bytes": 18,
+                "blob_id": "f54c0e057d3e7f1465d495ad1e0d75d500f87fc1cd8700d5027b7b233d5a842e"
+              }
+            },
+            "urls": [
+              "https://example.invalid/fixture.bin"
+            ]
+          }
+        ]
+      }
+    },
+    "args": [
+      "{m}",
+      "--cadence",
+      "it's"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact fixture is not allowed at cadence \"it's\"\n",
+    "github_output": "preexisting=1\n"
+  },
+  {
+    "name": "cadences-empty",
+    "manifest": {
+      "json": {
+        "manifest_kind": "test-model-artifacts",
+        "artifacts": [
+          {
+            "id": "fixture",
+            "repo": "org/repo",
+            "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "selector": "fixture",
+            "model_ref": "org/repo:fixture",
+            "cadences": [],
+            "files": [
+              "fixture.bin"
+            ],
+            "file_integrity": {
+              "fixture.bin": {
+                "size_bytes": 18,
+                "blob_id": "f54c0e057d3e7f1465d495ad1e0d75d500f87fc1cd8700d5027b7b233d5a842e"
+              }
+            },
+            "urls": [
+              "https://example.invalid/fixture.bin"
+            ]
+          }
+        ]
+      }
+    },
+    "args": [
+      "{m}",
+      "--cadence",
+      "manual"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact.cadences must be a non-empty string list\n",
+    "github_output": "preexisting=1\n"
+  },
+  {
+    "name": "cadences-bad-item",
+    "manifest": {
+      "json": {
+        "manifest_kind": "test-model-artifacts",
+        "artifacts": [
+          {
+            "id": "fixture",
+            "repo": "org/repo",
+            "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "selector": "fixture",
+            "model_ref": "org/repo:fixture",
+            "cadences": [
+              "manual",
+              ""
+            ],
+            "files": [
+              "fixture.bin"
+            ],
+            "file_integrity": {
+              "fixture.bin": {
+                "size_bytes": 18,
+                "blob_id": "f54c0e057d3e7f1465d495ad1e0d75d500f87fc1cd8700d5027b7b233d5a842e"
+              }
+            },
+            "urls": [
+              "https://example.invalid/fixture.bin"
+            ]
+          }
+        ]
+      }
+    },
+    "args": [
+      "{m}",
+      "--cadence",
+      "manual"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact.cadences must be a non-empty string list\n",
+    "github_output": "preexisting=1\n"
+  },
+  {
+    "name": "missing-repo",
+    "manifest": {
+      "json": {
+        "manifest_kind": "test-model-artifacts",
+        "artifacts": [
+          {
+            "id": "fixture",
+            "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "selector": "fixture",
+            "model_ref": "org/repo:fixture",
+            "cadences": [
+              "manual"
+            ],
+            "files": [
+              "fixture.bin"
+            ],
+            "file_integrity": {
+              "fixture.bin": {
+                "size_bytes": 18,
+                "blob_id": "f54c0e057d3e7f1465d495ad1e0d75d500f87fc1cd8700d5027b7b233d5a842e"
+              }
+            },
+            "urls": [
+              "https://example.invalid/fixture.bin"
+            ]
+          }
+        ]
+      }
+    },
+    "args": [
+      "{m}",
+      "--cadence",
+      "manual"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact.repo must be a non-empty string\n",
+    "github_output": "preexisting=1\n"
+  },
+  {
+    "name": "empty-model-ref",
+    "manifest": {
+      "json": {
+        "manifest_kind": "test-model-artifacts",
+        "artifacts": [
+          {
+            "id": "fixture",
+            "repo": "org/repo",
+            "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "selector": "fixture",
+            "model_ref": "",
+            "cadences": [
+              "manual"
+            ],
+            "files": [
+              "fixture.bin"
+            ],
+            "file_integrity": {
+              "fixture.bin": {
+                "size_bytes": 18,
+                "blob_id": "f54c0e057d3e7f1465d495ad1e0d75d500f87fc1cd8700d5027b7b233d5a842e"
+              }
+            },
+            "urls": [
+              "https://example.invalid/fixture.bin"
+            ]
+          }
+        ]
+      }
+    },
+    "args": [
+      "{m}",
+      "--cadence",
+      "manual"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact.model_ref must be a non-empty string\n",
+    "github_output": "preexisting=1\n"
+  },
+  {
+    "name": "absent-required-model",
+    "manifest": {
+      "json": {
+        "manifest_kind": "test-model-artifacts",
+        "artifacts": [
+          {
+            "id": "fixture",
+            "repo": "org/repo",
+            "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "selector": "fixture",
+            "model_ref": "org/repo:fixture",
+            "cadences": [
+              "manual"
+            ],
+            "files": [
+              "fixture.bin"
+            ],
+            "file_integrity": {
+              "fixture.bin": {
+                "size_bytes": 18,
+                "blob_id": "f54c0e057d3e7f1465d495ad1e0d75d500f87fc1cd8700d5027b7b233d5a842e"
+              }
+            },
+            "urls": [
+              "https://example.invalid/fixture.bin"
+            ]
+          }
+        ]
+      }
+    },
+    "args": [
+      "{m}",
+      "--artifact-id",
+      "missing",
+      "--cadence",
+      "manual"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact id is absent from manifest: missing\n",
+    "github_output": "preexisting=1\n"
+  },
+  {
+    "name": "duplicate-artifact",
+    "manifest": {
+      "json": {
+        "manifest_kind": "test-model-artifacts",
+        "artifacts": [
+          {
+            "id": "fixture",
+            "repo": "org/repo",
+            "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "selector": "fixture",
+            "model_ref": "org/repo:fixture",
+            "cadences": [
+              "manual"
+            ],
+            "files": [
+              "fixture.bin"
+            ],
+            "file_integrity": {
+              "fixture.bin": {
+                "size_bytes": 18,
+                "blob_id": "f54c0e057d3e7f1465d495ad1e0d75d500f87fc1cd8700d5027b7b233d5a842e"
+              }
+            },
+            "urls": [
+              "https://example.invalid/fixture.bin"
+            ]
+          },
+          {
+            "id": "fixture",
+            "repo": "org/repo",
+            "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "selector": "fixture",
+            "model_ref": "org/repo:fixture",
+            "cadences": [
+              "manual"
+            ],
+            "files": [
+              "fixture.bin"
+            ],
+            "file_integrity": {
+              "fixture.bin": {
+                "size_bytes": 18,
+                "blob_id": "f54c0e057d3e7f1465d495ad1e0d75d500f87fc1cd8700d5027b7b233d5a842e"
+              }
+            },
+            "urls": [
+              "https://example.invalid/fixture.bin"
+            ]
+          }
+        ]
+      }
+    },
+    "args": [
+      "{m}",
+      "--artifact-id",
+      "fixture",
+      "--cadence",
+      "manual"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact id is duplicated in manifest: fixture\n",
+    "github_output": "preexisting=1\n"
+  },
+  {
+    "name": "ambiguous-no-default",
+    "manifest": {
+      "json": {
+        "manifest_kind": "test-model-artifacts",
+        "artifacts": [
+          {
+            "id": "fixture",
+            "repo": "org/repo",
+            "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "selector": "fixture",
+            "model_ref": "org/repo:fixture",
+            "cadences": [
+              "manual"
+            ],
+            "files": [
+              "fixture.bin"
+            ],
+            "file_integrity": {
+              "fixture.bin": {
+                "size_bytes": 18,
+                "blob_id": "f54c0e057d3e7f1465d495ad1e0d75d500f87fc1cd8700d5027b7b233d5a842e"
+              }
+            },
+            "urls": [
+              "https://example.invalid/fixture.bin"
+            ]
+          },
+          {
+            "id": "two",
+            "repo": "org/repo",
+            "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "selector": "fixture",
+            "model_ref": "org/repo:fixture",
+            "cadences": [
+              "manual"
+            ],
+            "files": [
+              "fixture.bin"
+            ],
+            "file_integrity": {
+              "fixture.bin": {
+                "size_bytes": 18,
+                "blob_id": "f54c0e057d3e7f1465d495ad1e0d75d500f87fc1cd8700d5027b7b233d5a842e"
+              }
+            },
+            "urls": [
+              "https://example.invalid/fixture.bin"
+            ]
+          }
+        ]
+      }
+    },
+    "args": [
+      "{m}",
+      "--cadence",
+      "manual"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: manifest contains multiple artifacts; pass --artifact-id\n",
+    "github_output": "preexisting=1\n"
+  },
+  {
+    "name": "one-non-object-artifact",
+    "manifest": {
+      "json": {
+        "manifest_kind": "test-model-artifacts",
+        "artifacts": [
+          1
+        ]
+      }
+    },
+    "args": [
+      "{m}",
+      "--cadence",
+      "manual"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: manifest contains multiple artifacts; pass --artifact-id\n",
+    "github_output": "preexisting=1\n"
+  },
+  {
+    "name": "default-used",
+    "manifest": {
+      "json": {
+        "manifest_kind": "test-model-artifacts",
+        "artifacts": [
+          {
+            "id": "fixture",
+            "repo": "org/repo",
+            "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "selector": "fixture",
+            "model_ref": "org/repo:fixture",
+            "cadences": [
+              "manual"
+            ],
+            "files": [
+              "fixture.bin"
+            ],
+            "file_integrity": {
+              "fixture.bin": {
+                "size_bytes": 18,
+                "blob_id": "f54c0e057d3e7f1465d495ad1e0d75d500f87fc1cd8700d5027b7b233d5a842e"
+              }
+            },
+            "urls": [
+              "https://example.invalid/fixture.bin"
+            ]
+          },
+          {
+            "id": "two",
+            "repo": "org/repo",
+            "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "selector": "fixture",
+            "model_ref": "org/repo:fixture",
+            "cadences": [
+              "manual"
+            ],
+            "files": [
+              "fixture.bin"
+            ],
+            "file_integrity": {
+              "fixture.bin": {
+                "size_bytes": 18,
+                "blob_id": "f54c0e057d3e7f1465d495ad1e0d75d500f87fc1cd8700d5027b7b233d5a842e"
+              }
+            },
+            "urls": [
+              "https://example.invalid/fixture.bin"
+            ]
+          }
+        ],
+        "default_artifact_id": "two"
+      }
+    },
+    "args": [
+      "{m}",
+      "--cadence",
+      "manual"
+    ],
+    "code": 0,
+    "stdout": "{\"artifact_id\": \"two\", \"file\": \"fixture.bin\", \"files_json\": \"[\\\"fixture.bin\\\"]\", \"model_ref\": \"org/repo:fixture\", \"repo\": \"org/repo\", \"revision\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\", \"selector\": \"fixture\", \"sha256\": \"f54c0e057d3e7f1465d495ad1e0d75d500f87fc1cd8700d5027b7b233d5a842e\", \"size_bytes\": \"18\", \"url\": \"https://example.invalid/fixture.bin\"}\n",
+    "stderr": "",
+    "github_output": "preexisting=1\n"
+  },
+  {
+    "name": "default-null",
+    "manifest": {
+      "json": {
+        "manifest_kind": "test-model-artifacts",
+        "artifacts": [
+          {
+            "id": "fixture",
+            "repo": "org/repo",
+            "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "selector": "fixture",
+            "model_ref": "org/repo:fixture",
+            "cadences": [
+              "manual"
+            ],
+            "files": [
+              "fixture.bin"
+            ],
+            "file_integrity": {
+              "fixture.bin": {
+                "size_bytes": 18,
+                "blob_id": "f54c0e057d3e7f1465d495ad1e0d75d500f87fc1cd8700d5027b7b233d5a842e"
+              }
+            },
+            "urls": [
+              "https://example.invalid/fixture.bin"
+            ]
+          }
+        ],
+        "default_artifact_id": null
+      }
+    },
+    "args": [
+      "{m}",
+      "--cadence",
+      "manual"
+    ],
+    "code": 0,
+    "stdout": "{\"artifact_id\": \"fixture\", \"file\": \"fixture.bin\", \"files_json\": \"[\\\"fixture.bin\\\"]\", \"model_ref\": \"org/repo:fixture\", \"repo\": \"org/repo\", \"revision\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\", \"selector\": \"fixture\", \"sha256\": \"f54c0e057d3e7f1465d495ad1e0d75d500f87fc1cd8700d5027b7b233d5a842e\", \"size_bytes\": \"18\", \"url\": \"https://example.invalid/fixture.bin\"}\n",
+    "stderr": "",
+    "github_output": "preexisting=1\n"
+  },
+  {
+    "name": "default-empty",
+    "manifest": {
+      "json": {
+        "manifest_kind": "test-model-artifacts",
+        "artifacts": [
+          {
+            "id": "fixture",
+            "repo": "org/repo",
+            "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "selector": "fixture",
+            "model_ref": "org/repo:fixture",
+            "cadences": [
+              "manual"
+            ],
+            "files": [
+              "fixture.bin"
+            ],
+            "file_integrity": {
+              "fixture.bin": {
+                "size_bytes": 18,
+                "blob_id": "f54c0e057d3e7f1465d495ad1e0d75d500f87fc1cd8700d5027b7b233d5a842e"
+              }
+            },
+            "urls": [
+              "https://example.invalid/fixture.bin"
+            ]
+          }
+        ],
+        "default_artifact_id": ""
+      }
+    },
+    "args": [
+      "{m}",
+      "--cadence",
+      "manual"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: default_artifact_id must be a non-empty string\n",
+    "github_output": "preexisting=1\n"
+  },
+  {
+    "name": "default-absent-row",
+    "manifest": {
+      "json": {
+        "manifest_kind": "test-model-artifacts",
+        "artifacts": [
+          {
+            "id": "fixture",
+            "repo": "org/repo",
+            "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "selector": "fixture",
+            "model_ref": "org/repo:fixture",
+            "cadences": [
+              "manual"
+            ],
+            "files": [
+              "fixture.bin"
+            ],
+            "file_integrity": {
+              "fixture.bin": {
+                "size_bytes": 18,
+                "blob_id": "f54c0e057d3e7f1465d495ad1e0d75d500f87fc1cd8700d5027b7b233d5a842e"
+              }
+            },
+            "urls": [
+              "https://example.invalid/fixture.bin"
+            ]
+          }
+        ],
+        "default_artifact_id": "gone"
+      }
+    },
+    "args": [
+      "{m}",
+      "--cadence",
+      "manual"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact id is absent from manifest: gone\n",
+    "github_output": "preexisting=1\n"
+  },
+  {
+    "name": "wrong-kind",
+    "manifest": {
+      "json": {
+        "manifest_kind": "other",
+        "artifacts": [
+          {
+            "id": "fixture",
+            "repo": "org/repo",
+            "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "selector": "fixture",
+            "model_ref": "org/repo:fixture",
+            "cadences": [
+              "manual"
+            ],
+            "files": [
+              "fixture.bin"
+            ],
+            "file_integrity": {
+              "fixture.bin": {
+                "size_bytes": 18,
+                "blob_id": "f54c0e057d3e7f1465d495ad1e0d75d500f87fc1cd8700d5027b7b233d5a842e"
+              }
+            },
+            "urls": [
+              "https://example.invalid/fixture.bin"
+            ]
+          }
+        ]
+      }
+    },
+    "args": [
+      "{m}",
+      "--cadence",
+      "manual"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: manifest_kind must be test-model-artifacts\n",
+    "github_output": "preexisting=1\n"
+  },
+  {
+    "name": "not-object",
+    "manifest": {
+      "json": []
+    },
+    "args": [
+      "{m}",
+      "--cadence",
+      "manual"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: manifest_kind must be test-model-artifacts\n",
+    "github_output": "preexisting=1\n"
+  },
+  {
+    "name": "artifacts-empty",
+    "manifest": {
+      "json": {
+        "manifest_kind": "test-model-artifacts",
+        "artifacts": []
+      }
+    },
+    "args": [
+      "{m}",
+      "--cadence",
+      "manual"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: manifest must contain artifacts\n",
+    "github_output": "preexisting=1\n"
+  },
+  {
+    "name": "invalid-json",
+    "manifest": {
+      "text": "{"
+    },
+    "args": [
+      "{m}",
+      "--cadence",
+      "manual"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: Expecting property name enclosed in double quotes: line 1 column 2 (char 1)\n",
+    "github_output": "preexisting=1\n"
+  },
+  {
+    "name": "manifest-missing",
+    "manifest": {
+      "json": {
+        "manifest_kind": "test-model-artifacts",
+        "artifacts": [
+          {
+            "id": "fixture",
+            "repo": "org/repo",
+            "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "selector": "fixture",
+            "model_ref": "org/repo:fixture",
+            "cadences": [
+              "manual"
+            ],
+            "files": [
+              "fixture.bin"
+            ],
+            "file_integrity": {
+              "fixture.bin": {
+                "size_bytes": 18,
+                "blob_id": "f54c0e057d3e7f1465d495ad1e0d75d500f87fc1cd8700d5027b7b233d5a842e"
+              }
+            },
+            "urls": [
+              "https://example.invalid/fixture.bin"
+            ]
+          }
+        ]
+      }
+    },
+    "args": [
+      "missing.json",
+      "--cadence",
+      "manual"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: [Errno 2] No such file or directory: 'missing.json'\n",
+    "github_output": "preexisting=1\n"
+  },
+  {
+    "name": "manifest-directory",
+    "manifest": {
+      "json": {
+        "manifest_kind": "test-model-artifacts",
+        "artifacts": [
+          {
+            "id": "fixture",
+            "repo": "org/repo",
+            "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "selector": "fixture",
+            "model_ref": "org/repo:fixture",
+            "cadences": [
+              "manual"
+            ],
+            "files": [
+              "fixture.bin"
+            ],
+            "file_integrity": {
+              "fixture.bin": {
+                "size_bytes": 18,
+                "blob_id": "f54c0e057d3e7f1465d495ad1e0d75d500f87fc1cd8700d5027b7b233d5a842e"
+              }
+            },
+            "urls": [
+              "https://example.invalid/fixture.bin"
+            ]
+          }
+        ]
+      }
+    },
+    "args": [
+      "{root}",
+      "--cadence",
+      "manual"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: [Errno 21] Is a directory: '{root}'\n",
+    "github_output": "preexisting=1\n"
+  },
+  {
+    "name": "output-unwritable",
+    "manifest": {
+      "json": {
+        "manifest_kind": "test-model-artifacts",
+        "artifacts": [
+          {
+            "id": "fixture",
+            "repo": "org/repo",
+            "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "selector": "fixture",
+            "model_ref": "org/repo:fixture",
+            "cadences": [
+              "manual"
+            ],
+            "files": [
+              "fixture.bin"
+            ],
+            "file_integrity": {
+              "fixture.bin": {
+                "size_bytes": 18,
+                "blob_id": "f54c0e057d3e7f1465d495ad1e0d75d500f87fc1cd8700d5027b7b233d5a842e"
+              }
+            },
+            "urls": [
+              "https://example.invalid/fixture.bin"
+            ]
+          }
+        ]
+      }
+    },
+    "args": [
+      "{m}",
+      "--cadence",
+      "manual",
+      "--github-output",
+      "{root}/nodir/out"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: [Errno 2] No such file or directory: '{root}/nodir/out'\n",
+    "github_output": "preexisting=1\n"
+  },
+  {
+    "name": "usage-missing-all",
+    "manifest": {
+      "json": {
+        "manifest_kind": "test-model-artifacts",
+        "artifacts": [
+          {
+            "id": "fixture",
+            "repo": "org/repo",
+            "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "selector": "fixture",
+            "model_ref": "org/repo:fixture",
+            "cadences": [
+              "manual"
+            ],
+            "files": [
+              "fixture.bin"
+            ],
+            "file_integrity": {
+              "fixture.bin": {
+                "size_bytes": 18,
+                "blob_id": "f54c0e057d3e7f1465d495ad1e0d75d500f87fc1cd8700d5027b7b233d5a842e"
+              }
+            },
+            "urls": [
+              "https://example.invalid/fixture.bin"
+            ]
+          }
+        ]
+      }
+    },
+    "args": [],
+    "code": 2,
+    "stdout": "",
+    "stderr": "usage: resolve-test-model-manifest.py [-h] [--artifact-id ARTIFACT_ID]\n                                      --cadence CADENCE\n                                      [--require-single-file]\n                                      [--github-output GITHUB_OUTPUT]\n                                      [--github-output-prefix GITHUB_OUTPUT_PREFIX]\n                                      [--verify-root VERIFY_ROOT]\n                                      manifest\nresolve-test-model-manifest.py: error: the following arguments are required: manifest, --cadence\n",
+    "github_output": "preexisting=1\n"
+  },
+  {
+    "name": "usage-missing-cadence",
+    "manifest": {
+      "json": {
+        "manifest_kind": "test-model-artifacts",
+        "artifacts": [
+          {
+            "id": "fixture",
+            "repo": "org/repo",
+            "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "selector": "fixture",
+            "model_ref": "org/repo:fixture",
+            "cadences": [
+              "manual"
+            ],
+            "files": [
+              "fixture.bin"
+            ],
+            "file_integrity": {
+              "fixture.bin": {
+                "size_bytes": 18,
+                "blob_id": "f54c0e057d3e7f1465d495ad1e0d75d500f87fc1cd8700d5027b7b233d5a842e"
+              }
+            },
+            "urls": [
+              "https://example.invalid/fixture.bin"
+            ]
+          }
+        ]
+      }
+    },
+    "args": [
+      "{m}"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "usage: resolve-test-model-manifest.py [-h] [--artifact-id ARTIFACT_ID]\n                                      --cadence CADENCE\n                                      [--require-single-file]\n                                      [--github-output GITHUB_OUTPUT]\n                                      [--github-output-prefix GITHUB_OUTPUT_PREFIX]\n                                      [--verify-root VERIFY_ROOT]\n                                      manifest\nresolve-test-model-manifest.py: error: the following arguments are required: --cadence\n",
+    "github_output": "preexisting=1\n"
+  },
+  {
+    "name": "usage-missing-manifest",
+    "manifest": {
+      "json": {
+        "manifest_kind": "test-model-artifacts",
+        "artifacts": [
+          {
+            "id": "fixture",
+            "repo": "org/repo",
+            "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "selector": "fixture",
+            "model_ref": "org/repo:fixture",
+            "cadences": [
+              "manual"
+            ],
+            "files": [
+              "fixture.bin"
+            ],
+            "file_integrity": {
+              "fixture.bin": {
+                "size_bytes": 18,
+                "blob_id": "f54c0e057d3e7f1465d495ad1e0d75d500f87fc1cd8700d5027b7b233d5a842e"
+              }
+            },
+            "urls": [
+              "https://example.invalid/fixture.bin"
+            ]
+          }
+        ]
+      }
+    },
+    "args": [
+      "--cadence",
+      "manual"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "usage: resolve-test-model-manifest.py [-h] [--artifact-id ARTIFACT_ID]\n                                      --cadence CADENCE\n                                      [--require-single-file]\n                                      [--github-output GITHUB_OUTPUT]\n                                      [--github-output-prefix GITHUB_OUTPUT_PREFIX]\n                                      [--verify-root VERIFY_ROOT]\n                                      manifest\nresolve-test-model-manifest.py: error: the following arguments are required: manifest\n",
+    "github_output": "preexisting=1\n"
+  },
+  {
+    "name": "usage-cadence-no-value",
+    "manifest": {
+      "json": {
+        "manifest_kind": "test-model-artifacts",
+        "artifacts": [
+          {
+            "id": "fixture",
+            "repo": "org/repo",
+            "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "selector": "fixture",
+            "model_ref": "org/repo:fixture",
+            "cadences": [
+              "manual"
+            ],
+            "files": [
+              "fixture.bin"
+            ],
+            "file_integrity": {
+              "fixture.bin": {
+                "size_bytes": 18,
+                "blob_id": "f54c0e057d3e7f1465d495ad1e0d75d500f87fc1cd8700d5027b7b233d5a842e"
+              }
+            },
+            "urls": [
+              "https://example.invalid/fixture.bin"
+            ]
+          }
+        ]
+      }
+    },
+    "args": [
+      "{m}",
+      "--cadence"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "usage: resolve-test-model-manifest.py [-h] [--artifact-id ARTIFACT_ID]\n                                      --cadence CADENCE\n                                      [--require-single-file]\n                                      [--github-output GITHUB_OUTPUT]\n                                      [--github-output-prefix GITHUB_OUTPUT_PREFIX]\n                                      [--verify-root VERIFY_ROOT]\n                                      manifest\nresolve-test-model-manifest.py: error: argument --cadence: expected one argument\n",
+    "github_output": "preexisting=1\n"
+  },
+  {
+    "name": "usage-extra-positional",
+    "manifest": {
+      "json": {
+        "manifest_kind": "test-model-artifacts",
+        "artifacts": [
+          {
+            "id": "fixture",
+            "repo": "org/repo",
+            "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "selector": "fixture",
+            "model_ref": "org/repo:fixture",
+            "cadences": [
+              "manual"
+            ],
+            "files": [
+              "fixture.bin"
+            ],
+            "file_integrity": {
+              "fixture.bin": {
+                "size_bytes": 18,
+                "blob_id": "f54c0e057d3e7f1465d495ad1e0d75d500f87fc1cd8700d5027b7b233d5a842e"
+              }
+            },
+            "urls": [
+              "https://example.invalid/fixture.bin"
+            ]
+          }
+        ]
+      }
+    },
+    "args": [
+      "{m}",
+      "extra",
+      "--cadence",
+      "manual"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "usage: resolve-test-model-manifest.py [-h] [--artifact-id ARTIFACT_ID]\n                                      --cadence CADENCE\n                                      [--require-single-file]\n                                      [--github-output GITHUB_OUTPUT]\n                                      [--github-output-prefix GITHUB_OUTPUT_PREFIX]\n                                      [--verify-root VERIFY_ROOT]\n                                      manifest\nresolve-test-model-manifest.py: error: unrecognized arguments: extra\n",
+    "github_output": "preexisting=1\n"
+  },
+  {
+    "name": "usage-unknown-option",
+    "manifest": {
+      "json": {
+        "manifest_kind": "test-model-artifacts",
+        "artifacts": [
+          {
+            "id": "fixture",
+            "repo": "org/repo",
+            "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "selector": "fixture",
+            "model_ref": "org/repo:fixture",
+            "cadences": [
+              "manual"
+            ],
+            "files": [
+              "fixture.bin"
+            ],
+            "file_integrity": {
+              "fixture.bin": {
+                "size_bytes": 18,
+                "blob_id": "f54c0e057d3e7f1465d495ad1e0d75d500f87fc1cd8700d5027b7b233d5a842e"
+              }
+            },
+            "urls": [
+              "https://example.invalid/fixture.bin"
+            ]
+          }
+        ]
+      }
+    },
+    "args": [
+      "{m}",
+      "--cadence",
+      "manual",
+      "--bogus"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "usage: resolve-test-model-manifest.py [-h] [--artifact-id ARTIFACT_ID]\n                                      --cadence CADENCE\n                                      [--require-single-file]\n                                      [--github-output GITHUB_OUTPUT]\n                                      [--github-output-prefix GITHUB_OUTPUT_PREFIX]\n                                      [--verify-root VERIFY_ROOT]\n                                      manifest\nresolve-test-model-manifest.py: error: unrecognized arguments: --bogus\n",
+    "github_output": "preexisting=1\n"
+  },
+  {
+    "name": "usage-flag-with-value",
+    "manifest": {
+      "json": {
+        "manifest_kind": "test-model-artifacts",
+        "artifacts": [
+          {
+            "id": "fixture",
+            "repo": "org/repo",
+            "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "selector": "fixture",
+            "model_ref": "org/repo:fixture",
+            "cadences": [
+              "manual"
+            ],
+            "files": [
+              "fixture.bin"
+            ],
+            "file_integrity": {
+              "fixture.bin": {
+                "size_bytes": 18,
+                "blob_id": "f54c0e057d3e7f1465d495ad1e0d75d500f87fc1cd8700d5027b7b233d5a842e"
+              }
+            },
+            "urls": [
+              "https://example.invalid/fixture.bin"
+            ]
+          }
+        ]
+      }
+    },
+    "args": [
+      "{m}",
+      "--cadence",
+      "manual",
+      "--require-single-file=1"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "usage: resolve-test-model-manifest.py [-h] [--artifact-id ARTIFACT_ID]\n                                      --cadence CADENCE\n                                      [--require-single-file]\n                                      [--github-output GITHUB_OUTPUT]\n                                      [--github-output-prefix GITHUB_OUTPUT_PREFIX]\n                                      [--verify-root VERIFY_ROOT]\n                                      manifest\nresolve-test-model-manifest.py: error: argument --require-single-file: ignored explicit argument '1'\n",
+    "github_output": "preexisting=1\n"
+  },
+  {
+    "name": "equals-form",
+    "manifest": {
+      "json": {
+        "manifest_kind": "test-model-artifacts",
+        "artifacts": [
+          {
+            "id": "fixture",
+            "repo": "org/repo",
+            "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "selector": "fixture",
+            "model_ref": "org/repo:fixture",
+            "cadences": [
+              "manual"
+            ],
+            "files": [
+              "fixture.bin"
+            ],
+            "file_integrity": {
+              "fixture.bin": {
+                "size_bytes": 18,
+                "blob_id": "f54c0e057d3e7f1465d495ad1e0d75d500f87fc1cd8700d5027b7b233d5a842e"
+              }
+            },
+            "urls": [
+              "https://example.invalid/fixture.bin"
+            ]
+          }
+        ]
+      }
+    },
+    "args": [
+      "{m}",
+      "--cadence=manual",
+      "--artifact-id=fixture"
+    ],
+    "code": 0,
+    "stdout": "{\"artifact_id\": \"fixture\", \"file\": \"fixture.bin\", \"files_json\": \"[\\\"fixture.bin\\\"]\", \"model_ref\": \"org/repo:fixture\", \"repo\": \"org/repo\", \"revision\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\", \"selector\": \"fixture\", \"sha256\": \"f54c0e057d3e7f1465d495ad1e0d75d500f87fc1cd8700d5027b7b233d5a842e\", \"size_bytes\": \"18\", \"url\": \"https://example.invalid/fixture.bin\"}\n",
+    "stderr": "",
+    "github_output": "preexisting=1\n"
+  },
+  {
+    "name": "repeated-cadence-last-wins",
+    "manifest": {
+      "json": {
+        "manifest_kind": "test-model-artifacts",
+        "artifacts": [
+          {
+            "id": "fixture",
+            "repo": "org/repo",
+            "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "selector": "fixture",
+            "model_ref": "org/repo:fixture",
+            "cadences": [
+              "manual"
+            ],
+            "files": [
+              "fixture.bin"
+            ],
+            "file_integrity": {
+              "fixture.bin": {
+                "size_bytes": 18,
+                "blob_id": "f54c0e057d3e7f1465d495ad1e0d75d500f87fc1cd8700d5027b7b233d5a842e"
+              }
+            },
+            "urls": [
+              "https://example.invalid/fixture.bin"
+            ]
+          }
+        ]
+      }
+    },
+    "args": [
+      "{m}",
+      "--cadence",
+      "nightly",
+      "--cadence",
+      "manual"
+    ],
+    "code": 0,
+    "stdout": "{\"artifact_id\": \"fixture\", \"file\": \"fixture.bin\", \"files_json\": \"[\\\"fixture.bin\\\"]\", \"model_ref\": \"org/repo:fixture\", \"repo\": \"org/repo\", \"revision\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\", \"selector\": \"fixture\", \"sha256\": \"f54c0e057d3e7f1465d495ad1e0d75d500f87fc1cd8700d5027b7b233d5a842e\", \"size_bytes\": \"18\", \"url\": \"https://example.invalid/fixture.bin\"}\n",
+    "stderr": "",
+    "github_output": "preexisting=1\n"
+  },
+  {
+    "name": "double-dash-positional",
+    "manifest": {
+      "json": {
+        "manifest_kind": "test-model-artifacts",
+        "artifacts": [
+          {
+            "id": "fixture",
+            "repo": "org/repo",
+            "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "selector": "fixture",
+            "model_ref": "org/repo:fixture",
+            "cadences": [
+              "manual"
+            ],
+            "files": [
+              "fixture.bin"
+            ],
+            "file_integrity": {
+              "fixture.bin": {
+                "size_bytes": 18,
+                "blob_id": "f54c0e057d3e7f1465d495ad1e0d75d500f87fc1cd8700d5027b7b233d5a842e"
+              }
+            },
+            "urls": [
+              "https://example.invalid/fixture.bin"
+            ]
+          }
+        ]
+      }
+    },
+    "args": [
+      "--cadence",
+      "manual",
+      "--",
+      "{m}"
+    ],
+    "code": 0,
+    "stdout": "{\"artifact_id\": \"fixture\", \"file\": \"fixture.bin\", \"files_json\": \"[\\\"fixture.bin\\\"]\", \"model_ref\": \"org/repo:fixture\", \"repo\": \"org/repo\", \"revision\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\", \"selector\": \"fixture\", \"sha256\": \"f54c0e057d3e7f1465d495ad1e0d75d500f87fc1cd8700d5027b7b233d5a842e\", \"size_bytes\": \"18\", \"url\": \"https://example.invalid/fixture.bin\"}\n",
+    "stderr": "",
+    "github_output": "preexisting=1\n"
+  }
+]
