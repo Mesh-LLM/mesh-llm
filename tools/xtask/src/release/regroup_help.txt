@@ -1,0 +1,22 @@
+usage: release-notes-regroup.py [-h] --body BODY [--plan PLAN] [--out OUT]
+                                [--list] [--check]
+                                [--metadata-from METADATA_FROM]
+
+Regroup a GitHub release body into Keep a Changelog sections. Entry lines are
+moved verbatim: the subject, the author, and the PR link are never rewritten,
+so contributor credit survives the reformat. The script fails loudly when a
+plan would drop, duplicate, or invent an entry. Usage:
+regroup_release_notes.py --body BODY.md --list regroup_release_notes.py --body
+BODY.md --plan PLAN.json --out NEW.md regroup_release_notes.py --body BODY.md
+--plan PLAN.json --check
+
+options:
+  -h, --help            show this help message and exit
+  --body BODY           release body markdown
+  --plan PLAN           JSON plan mapping PR numbers to sections
+  --out OUT             write the regrouped body here
+  --list                print every entry as '<pr>\t<subject>' and exit
+  --check               validate the plan without rendering
+  --metadata-from METADATA_FROM
+                        take version and date from this plan instead of the
+                        one rendered
