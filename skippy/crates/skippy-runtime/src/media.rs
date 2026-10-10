@@ -113,8 +113,14 @@ type MediaFrameEval = (
 
 mod chunk_aggregation;
 mod chunk_capture;
+mod declared_size;
+mod decoded_budget;
+mod rejected;
 use chunk_aggregation::aggregate_media_chunk_outputs;
 use chunk_capture::{ChunkCapture, capture_microbatch, split_chunk_frames};
+use declared_size::check_declared_media_size;
+use decoded_budget::DecodedMediaBudget;
+pub use rejected::MediaRejected;
 
 // The experimental C ABI owns synchronization internally for model/session use.
 // Rust stage-server access is additionally serialized behind a Mutex.
@@ -479,10 +485,12 @@ impl StageModel {
         }
 
         let mut bitmaps = Vec::with_capacity(media.len());
+        let mut decoded = DecodedMediaBudget::default();
         for item in media {
             if item.bytes.is_empty() {
                 return Err(anyhow!("media item must not be empty"));
             }
+            check_declared_media_size(&item.bytes)?;
             let wrapper = unsafe {
                 skippy_ffi::mtmd_helper_bitmap_init_from_buf(
                     projector.raw,
@@ -501,6 +509,7 @@ impl StageModel {
             if bitmap.raw.is_null() {
                 return Err(anyhow!("failed to decode media item for projector"));
             }
+            decoded.charge(unsafe { skippy_ffi::mtmd_bitmap_get_n_bytes(bitmap.raw) })?;
             bitmaps.push(bitmap);
         }
 
@@ -664,10 +673,12 @@ impl StageModel {
         }
 
         let mut bitmaps = Vec::with_capacity(media.len());
+        let mut decoded = DecodedMediaBudget::default();
         for item in media {
             if item.bytes.is_empty() {
                 return Err(anyhow!("media item must not be empty"));
             }
+            check_declared_media_size(&item.bytes)?;
             let wrapper = unsafe {
                 skippy_ffi::mtmd_helper_bitmap_init_from_buf(
                     projector.raw,
@@ -686,6 +697,7 @@ impl StageModel {
             if bitmap.raw.is_null() {
                 return Err(anyhow!("failed to decode media item for projector"));
             }
+            decoded.charge(unsafe { skippy_ffi::mtmd_bitmap_get_n_bytes(bitmap.raw) })?;
             bitmaps.push(bitmap);
         }
 
