@@ -1,5 +1,5 @@
 {
-  "full_patch_sha256": "16a9a4c65ab8581652adbc8a6e8868dd58f5289d94e6db5c5dcdc06eca757f70",
+  "full_patch_sha256": "a87b3f270c0a2ce09ac97a7c343e6db8eaa1dda9590d5a231f67e63249bc1992",
   "generator_version": "0.5.0",
   "schema_version": 1,
   "shards": [
@@ -39,7 +39,7 @@
         "rwkv7"
       ],
       "file": "0004-family-arwkv7--rwkv7.patch",
-      "sha256": "15fe0da41402437a7234f5ce371eab33f871c4ebd18919de040d070fd14b9334",
+      "sha256": "6a19744b7abed1d5e0b8de137069d75dfcf7113ef5cf6fd904aaf60350c57b68",
       "sources": [
         "src/models/arwkv7.cpp"
       ]
@@ -334,7 +334,7 @@
         "granite-switch"
       ],
       "file": "0033-family-granite-switch.patch",
-      "sha256": "e52738c3d6712c95814700c2ef995e6b1b99cb5872cb189b17eb676beb4a074a",
+      "sha256": "2a68df823e8de6b734166545fe4b7012746d6b30fa3c3b2f538a6bd48e321679",
       "sources": [
         "src/models/granite-switch.cpp"
       ]

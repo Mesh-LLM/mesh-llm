@@ -7,8 +7,8 @@ Subject: [PATCH 26/67] skippy: replay extracted stage programs
  src/CMakeLists.txt                               | 107 +++
  src/llama-context.cpp                            | 234 ++++++
  src/llama-context.h                              |  20 +
- src/llama-graph.cpp                              | 359 +++++++--
- src/llama-graph.h                                |  36 +-
+ src/llama-graph.cpp                              | 360 +++++++--
+ src/llama-graph.h                                |  39 +-
  src/llama-impl.h                                 |  36 +
  src/llama-kv-cache-dsv4.cpp                      |  27 +-
  src/llama-kv-cache-dsv4.h                        |   4 +
@@ -16,10 +16,11 @@ Subject: [PATCH 26/67] skippy: replay extracted stage programs
  src/llama-kv-cache.cpp                           | 102 ++-
  src/llama-kv-cache.h                             |  10 +
  src/llama-model.cpp                              |  25 +
+ src/models/arwkv7.cpp                            |  24 +-
  src/models/bailingmoe3.cpp                       |  82 +-
  src/models/deepseek4.cpp                         | 273 ++++++-
  src/models/delta-net-base.cpp                    | 120 ++-
- src/models/granite-switch.cpp                    |  25 +-
+ src/models/granite-switch.cpp                    |  26 +-
  src/models/kimi-linear.cpp                       | 111 ++-
  src/models/laguna.cpp                            |   9 +
  src/models/lfm2.cpp                              |  25 +-
@@ -41,12 +42,12 @@ Subject: [PATCH 26/67] skippy: replay extracted stage programs
  src/skippy/stage_plan.cpp                        |  10 +-
  src/skippy/stage_program.cpp                     | 953 +++++++++++++++++++++++
  src/skippy/stage_program.h                       | 344 ++++++++
- src/skippy/stage_program_extraction.cpp          | 802 +++++++++++++++++++
+ src/skippy/stage_program_extraction.cpp          | 798 +++++++++++++++++++
  src/skippy/stage_program_extraction_internal.h   |  75 ++
  src/skippy/stage_program_extraction_roots.cpp    | 635 +++++++++++++++
  src/skippy/stage_program_geometry.cpp            | 577 ++++++++++++++
  src/skippy/stage_program_inputs.cpp              | 104 +++
- src/skippy/stage_program_inputs.h                |  43 +
+ src/skippy/stage_program_inputs.h                |  44 ++
  src/skippy/stage_program_installation.cpp        | 139 ++++
  src/skippy/stage_program_internal.h              |  52 ++
  src/skippy/stage_program_outputs.cpp             |  61 ++
@@ -63,22 +64,7 @@ Subject: [PATCH 26/67] skippy: replay extracted stage programs
  src/skippy/tests/renamed_multishard_planning.cpp | 223 +++++-
  src/skippy/tests/stage_program_parity.h          | 374 +++++++++
  tests/test-llama-archs.cpp                       |  39 +
- 59 files changed, 8715 insertions(+), 305 deletions(-)
- create mode 100644 src/skippy/stage_program.cpp
- create mode 100644 src/skippy/stage_program.h
- create mode 100644 src/skippy/stage_program_extraction.cpp
- create mode 100644 src/skippy/stage_program_extraction_internal.h
- create mode 100644 src/skippy/stage_program_extraction_roots.cpp
- create mode 100644 src/skippy/stage_program_geometry.cpp
- create mode 100644 src/skippy/stage_program_inputs.cpp
- create mode 100644 src/skippy/stage_program_inputs.h
- create mode 100644 src/skippy/stage_program_installation.cpp
- create mode 100644 src/skippy/stage_program_internal.h
- create mode 100644 src/skippy/stage_program_outputs.cpp
- create mode 100644 src/skippy/stage_program_outputs.h
- create mode 100644 src/skippy/stage_program_replay.cpp
- create mode 100644 src/skippy/stage_program_token_axis.cpp
- create mode 100644 src/skippy/tests/stage_program_parity.h
+ 60 files changed, 8740 insertions(+), 306 deletions(-)
 
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
 index b4f9bb467..37c303bd6 100644
@@ -694,7 +680,7 @@ index 315710b6e..98b4ccb43 100644
      llama_adapter_cvec_ptr  cvec;
      llama_adapter_loras_ptr loras;
 diff --git a/src/llama-graph.cpp b/src/llama-graph.cpp
-index d9275a9ea..60555e1ea 100644
+index d9275a9ea..6d50f2403 100644
 --- a/src/llama-graph.cpp
 +++ b/src/llama-graph.cpp
 @@ -15,6 +15,7 @@
@@ -1366,7 +1352,7 @@ index d9275a9ea..60555e1ea 100644
  
      inp->head = mctx_cur->get_head();
      inp->rs_z = mctx_cur->get_rs_z();
-@@ -4303,10 +4509,19 @@ ggml_tensor * llm_graph_context::build_rwkv_token_shift_store(
+@@ -4303,10 +4509,20 @@ ggml_tensor * llm_graph_context::build_rwkv_token_shift_store(
  
      const auto kv_head = mctx_cur->get_head();
  
@@ -1377,6 +1363,7 @@ index d9275a9ea..60555e1ea 100644
 +    ggml_tensor * token_shift_source = ggml_view_1d(ctx0, token_shift, n_embd * n_seqs * token_shift_count, 0);
 +    auto token_shift_source_geometry = skippy_stage_geometry_static(token_shift_source);
 +    token_shift_source_geometry.dimensions[0] = skippy_stage_geometry_expression::sequences(n_embd*token_shift_count);
++    token_shift_source_geometry.view_offset = skippy_stage_geometry_expression::constant(0);
 +    skippy_stage_geometry_note(token_shift_source, token_shift_source_geometry);
 +
 +    ggml_tensor * token_shift_destination = ggml_view_1d(ctx0, mctx_cur->get_r_l(il), hparams.n_embd_r()*n_seqs,
@@ -1391,7 +1378,7 @@ index d9275a9ea..60555e1ea 100644
      return token_shift_write;
  }
 diff --git a/src/llama-graph.h b/src/llama-graph.h
-index 41b643821..ec87324ea 100644
+index 41b643821..8e18a0ccc 100644
 --- a/src/llama-graph.h
 +++ b/src/llama-graph.h
 @@ -9,6 +9,7 @@
@@ -1410,10 +1397,7 @@ index 41b643821..ec87324ea 100644
  
  //
  // llm_graph_input
-@@ -177,9 +179,12 @@ public:
-     virtual void set_build_inputs(const skippy_graph_build_inputs & inputs) {
-         GGML_UNUSED(inputs);
-     }
+@@ -180,6 +182,9 @@ public:
  
      virtual void set_input(const llama_ubatch * ubatch) = 0;
  
@@ -1952,6 +1936,62 @@ index 58ab74918..eff3dda07 100644
  
      return llm->res->get_gf();
  }
+diff --git a/src/models/arwkv7.cpp b/src/models/arwkv7.cpp
+index b38b20647..7ee88dcff 100644
+--- a/src/models/arwkv7.cpp
++++ b/src/models/arwkv7.cpp
+@@ -1,4 +1,5 @@
+ #include "models.h"
++#include "skippy/stage_program.h"
+ 
+ void llama_model_arwkv7::load_arch_hparams(llama_model_loader & ml) {
+     ml.get_key(LLM_KV_ATTENTION_LAYERNORM_EPS,                hparams.f_norm_eps, false);
+@@ -143,16 +144,31 @@ llama_model_arwkv7::graph::graph(const llama_model & model, const llm_graph_para
+         ggml_tensor * att_norm = build_norm(inpL, layer->attn_norm, layer->attn_norm_b, LLM_NORM_RMS, il);
+         cb(att_norm, "attn_norm", il);
+ 
++        ggml_tensor * att_history = ggml_view_3d(
++                ctx0, att_norm, n_embd, n_seq_tokens - 1, n_seqs, att_norm->nb[1], att_norm->nb[2], 0);
++        auto att_history_geometry = skippy_stage_geometry_static(att_history);
++        att_history_geometry.dimensions[1] = skippy_stage_geometry_expression::tokens_per_sequence(1, -1);
++        att_history_geometry.dimensions[2] = skippy_stage_geometry_expression::sequences();
++        att_history_geometry.byte_strides[1] = skippy_stage_geometry_expression::source_stride(0, 1);
++        att_history_geometry.byte_strides[2] = skippy_stage_geometry_expression::source_stride(0, 2);
++        skippy_stage_geometry_note(att_history, att_history_geometry);
+         ggml_tensor * x_prev = ggml_concat(
+                 ctx0,
+                 token_shift,
+-                ggml_view_3d(ctx0, att_norm, n_embd, n_seq_tokens - 1, n_seqs, att_norm->nb[1], att_norm->nb[2], 0),
++                att_history,
+                 1
+                 );
+ 
+         cur = build_rwkv7_time_mix(rs_inp, att_norm, x_prev, v_first, ubatch, il);
+ 
+         token_shift = ggml_view_3d(ctx0, att_norm, n_embd, 1, n_seqs, att_norm->nb[1], att_norm->nb[2], (n_seq_tokens-1)*n_embd*ggml_element_size(att_norm));
++        auto token_shift_geometry = skippy_stage_geometry_static(token_shift);
++        token_shift_geometry.dimensions[2] = skippy_stage_geometry_expression::sequences();
++        token_shift_geometry.byte_strides[1] = skippy_stage_geometry_expression::source_stride(0, 1);
++        token_shift_geometry.byte_strides[2] = skippy_stage_geometry_expression::source_stride(0, 2);
++        token_shift_geometry.view_offset = skippy_stage_geometry_expression::tokens_per_sequence_clamped(
++                -1, n_embd*ggml_element_size(att_norm));
++        skippy_stage_geometry_note(token_shift, token_shift_geometry);
+         ggml_build_forward_expand(gf, build_rwkv_token_shift_store(token_shift, ubatch, il));
+ 
+         ggml_tensor * ffn_inp = ggml_add(ctx0, cur, inpL);
+@@ -160,6 +176,12 @@ llama_model_arwkv7::graph::graph(const llama_model & model, const llm_graph_para
+ 
+         cur     = ggml_reshape_2d(ctx0, cur,     n_embd, n_tokens);
+         ffn_inp = ggml_reshape_2d(ctx0, ffn_inp, n_embd, n_tokens);
++        auto cur_geometry = skippy_stage_geometry_static(cur);
++        cur_geometry.dimensions[1] = skippy_stage_geometry_expression::tokens();
++        skippy_stage_geometry_note(cur, cur_geometry);
++        auto ffn_inp_geometry = skippy_stage_geometry_static(ffn_inp);
++        ffn_inp_geometry.dimensions[1] = skippy_stage_geometry_expression::tokens();
++        skippy_stage_geometry_note(ffn_inp, ffn_inp_geometry);
+ 
+         if (il == n_layer - 1 && inp_out_ids) {
+             cur     = ggml_get_rows(ctx0, cur,     inp_out_ids);
 diff --git a/src/models/bailingmoe3.cpp b/src/models/bailingmoe3.cpp
 index b3ac119d0..44e7afb5b 100644
 --- a/src/models/bailingmoe3.cpp
@@ -2882,8 +2922,7 @@ diff --git a/src/models/granite-switch.cpp b/src/models/granite-switch.cpp
 index c190a4778..1af4c6ed4 100644
 --- a/src/models/granite-switch.cpp
 +++ b/src/models/granite-switch.cpp
-@@ -146,7 +146,8 @@ public:
-     llm_graph_input_switch(const llama_model_granite_switch & smodel) : smodel(smodel) {}
+@@ -147,6 +147,7 @@ public:
      virtual ~llm_graph_input_switch() = default;
  
      void set_input(const llama_ubatch * ubatch) override;
@@ -2891,7 +2930,7 @@ index c190a4778..1af4c6ed4 100644
  
      ggml_tensor * sub_tokens  = nullptr; // I32 [n_tokens] adapter-substituted token ids
      ggml_tensor * router_ksig = nullptr; // F32 [n_tokens] router K signal (+/-gain)
-@@ -302,8 +302,12 @@ llama_model_granite_switch::graph::graph(
+@@ -302,8 +303,12 @@ llama_model_granite_switch::graph::graph(
      cb(router_out, "router_out", R);
  
      // row 0 of router_out is the attended slot; clamp+round to an I32 index
@@ -2906,7 +2945,7 @@ index c190a4778..1af4c6ed4 100644
      slot_f = ggml_reshape_1d(ctx0, slot_f, n_tokens);
      slot_f = ggml_clamp(ctx0, slot_f, 0.0f, (float) smodel.n_adapters);
      slot_f = ggml_round(ctx0, slot_f);
-@@ -374,9 +378,20 @@ ggml_tensor * llama_model_granite_switch::graph::build_attention_layer(
+@@ -374,9 +379,20 @@ ggml_tensor * llama_model_granite_switch::graph::build_attention_layer(
      const int64_t n_embd_kv = n_embd_head * n_head_kv;
  
      // slice fused qkv into Q/K/V, made contiguous so LoRA deltas can be added
@@ -6413,7 +6452,7 @@ index 000000000..720d49c64
 +#endif
 diff --git a/src/skippy/stage_program_extraction.cpp b/src/skippy/stage_program_extraction.cpp
 new file mode 100644
-index 000000000..9feddb347
+index 000000000..e5f8207e5
 --- /dev/null
 +++ b/src/skippy/stage_program_extraction.cpp
 @@ -0,0 +1,798 @@
@@ -8632,7 +8671,7 @@ index 000000000..f0535b913
 +}
 diff --git a/src/skippy/stage_program_inputs.h b/src/skippy/stage_program_inputs.h
 new file mode 100644
-index 000000000..5abb95711
+index 000000000..242af65c9
 --- /dev/null
 +++ b/src/skippy/stage_program_inputs.h
 @@ -0,0 +1,44 @@
