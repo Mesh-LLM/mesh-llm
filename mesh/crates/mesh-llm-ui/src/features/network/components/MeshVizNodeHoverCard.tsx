@@ -9,9 +9,13 @@ import { hoverCardPlacement, nodeMetrics, roleLabel } from '@/features/network/c
 type MeshVizNodeHoverCardProps = {
   node: MeshNode
   peer?: Peer
+  // Portal target override. The default (document.body) is invisible while the
+  // canvas is fullscreen — only the fullscreen element's subtree paints — so
+  // MeshViz passes the canvas element in that mode.
+  container?: HTMLElement | null
 }
 
-export function MeshVizNodeHoverCard({ node, peer }: MeshVizNodeHoverCardProps) {
+export function MeshVizNodeHoverCard({ node, peer, container }: MeshVizNodeHoverCardProps) {
   const metrics = nodeMetrics(node, peer)
   const ageMetric = metrics.find((metric) => metric.id === 'age')
   const detailMetrics = metrics.filter((metric) => metric.id !== 'age')
@@ -26,7 +30,7 @@ export function MeshVizNodeHoverCard({ node, peer }: MeshVizNodeHoverCardProps) 
   const { side, align } = hoverCardPlacement(node)
 
   return (
-    <HoverCardPrimitive.Portal>
+    <HoverCardPrimitive.Portal container={container ?? undefined}>
       <HoverCardPrimitive.Content
         id={`mesh-node-popover-${node.id}`}
         role="tooltip"
