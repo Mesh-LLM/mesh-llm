@@ -326,6 +326,19 @@ fallback for fields the request body leaves absent or null. Sampling values
 are encoded into the stage protocol and native sampler chain; chat defaults
 are applied by the embedded OpenAI frontend before prompt rendering.
 
+The chat template is the exception. A template is code: the node renders it
+with a Jinja engine that has no recursion, loop, or memory limits, so a
+hostile template can crash the process or hold the model's template lock.
+A request that sets `chat_template` is rejected with a 400 unless the node
+that renders it enables `request_defaults.allow_request_chat_template`; when
+enabled, the request's template takes precedence over the configured one.
+Only the serving node's own configuration can enable it, and enabling it
+trusts every caller that can reach that node, including requests routed to
+it through the mesh. Template execution is not sandboxed. To migrate a
+client that sent `chat_template` with each request, set the template in
+`request_defaults.chat_template` on the serving node instead, or enable the
+opt-in on a node whose callers are all trusted.
+
 | Key path | Type | Allowed values / default (`auto`) | `[defaults]` / `[[models]]` | Restart | Status | CLI equivalent |
 |---|---|---|---|---|---|---|
 | `request_defaults.max_tokens` | integer | unset | both | request-time | wired | none |
@@ -352,6 +365,7 @@ are applied by the embedded OpenAI frontend before prompt rendering.
 | `request_defaults.reasoning_enabled` | bool-or-enum | `auto`, `off`, `on` | both | request-time | wired | none |
 | `request_defaults.reasoning_budget` | integer-or-enum | `auto`, `low`, `medium`, `high` | both | request-time | wired | none |
 | `request_defaults.chat_template`<br>`request_defaults.chat_template_file`<br>`request_defaults.jinja` | string / path / boolean | backend auto-detection default | both | request-time | wired | none |
+| `request_defaults.allow_request_chat_template` | boolean | `false`; when `true`, a request's `chat_template` is rendered and takes precedence over the configured template. Trusts every caller that can reach this node, including mesh-routed requests; template execution is not sandboxed | both | request-time | wired | none |
 | `request_defaults.chat_template_kwargs` | object | unset | both | request-time | wired | none |
 | `request_defaults.skip_chat_parsing` | boolean | `false` | both | request-time | wired | none |
 | `request_defaults.prefill_assistant` | string or object | unset | both | request-time | wired | none |

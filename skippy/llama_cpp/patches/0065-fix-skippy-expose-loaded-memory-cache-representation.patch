@@ -1,0 +1,272 @@
+From cbb9be2f469491d88374ed1ab864bba754410026 Mon Sep 17 00:00:00 2001
+From: Michael Neale <14976+michaelneale@users.noreply.github.com>
+Date: Mon, 5 Oct 2026 17:56:58 +1100
+Subject: [PATCH] fix(skippy): expose loaded memory cache representation
+ capabilities
+
+---
+ include/skippy/common.h              |  2 +-
+ include/skippy/state.h               | 11 +++++
+ src/CMakeLists.txt                   |  1 +
+ src/skippy/state.cpp                 | 32 ++----------
+ src/skippy/state_memory.cpp          | 74 ++++++++++++++++++++++++++++
+ src/skippy/state_memory.h            | 14 ++++++
+ tests/test-skippy-kv-page-export.cpp | 19 +++++++
+ 7 files changed, 124 insertions(+), 29 deletions(-)
+ create mode 100644 src/skippy/state_memory.cpp
+ create mode 100644 src/skippy/state_memory.h
+
+diff --git a/include/skippy/common.h b/include/skippy/common.h
+index 149989b1f..8a2781dcb 100644
+--- a/include/skippy/common.h
++++ b/include/skippy/common.h
+@@ -46,7 +46,7 @@ extern "C" {
+ 
+ #define SKIPPY_ABI_VERSION_MAJOR 0
+ #define SKIPPY_ABI_VERSION_MINOR 1
+-#define SKIPPY_ABI_VERSION_PATCH 64
++#define SKIPPY_ABI_VERSION_PATCH 65
+ 
+ #if defined(_MSC_VER)
+ #define SKIPPY_DEPRECATED(message) __declspec(deprecated(message))
+diff --git a/include/skippy/state.h b/include/skippy/state.h
+index 981da6b5d..3d3962b3f 100644
+--- a/include/skippy/state.h
++++ b/include/skippy/state.h
+@@ -12,6 +12,17 @@
+ extern "C" {
+ #endif
+ 
++/** @brief Complete cache representations supported by the loaded memory adapters. */
++enum skippy_memory_cache_capability {
++    SKIPPY_MEMORY_CACHE_RESIDENT = 1 << 0,
++    SKIPPY_MEMORY_CACHE_KV_RECURRENT = 1 << 1,
++};
++
++/** @brief Returns supported complete cache representations, or zero for unknown memory.
++ * Full-state serialization is the fallback; no model architecture names are consulted.
++ */
++LLAMA_API uint32_t skippy_model_memory_cache_capabilities(const struct skippy_model * model);
++
+ enum skippy_kv_page_flag {
+     SKIPPY_KV_PAGE_FLAG_V_TRANSPOSED      = 1 << 0,
+     SKIPPY_KV_PAGE_FLAG_HAS_K_IDX         = 1 << 1,
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+index 6b0fb5098..75cb51018 100644
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -83,6 +83,7 @@ add_library(llama
+             skippy/stage_realization.cpp
+             skippy/stage_execution_contract.cpp
+             skippy/state.cpp
++            skippy/state_memory.cpp
+             skippy/state_effects.cpp
+             skippy/speculative_decoding.cpp
+             skippy/tokenization.cpp
+diff --git a/src/skippy/state.cpp b/src/skippy/state.cpp
+index b935a9e65..aa197340b 100644
+--- a/src/skippy/state.cpp
++++ b/src/skippy/state.cpp
+@@ -1,4 +1,5 @@
+ #include "skippy/state.h"
++#include "skippy/state_memory.h"
+ #include "skippy/errors.h"
+ #include "skippy/runtime_support.h"
+ #include "skippy/runtime_types.h"
+@@ -276,17 +277,7 @@ static llama_memory_recurrent * skippy_get_recurrent_memory(
+         return nullptr;
+     }
+ 
+-    if (auto * recurrent = dynamic_cast<llama_memory_recurrent *>(memory)) {
+-        return recurrent;
+-    }
+-    if (auto * hybrid = dynamic_cast<llama_memory_hybrid *>(memory)) {
+-        return hybrid->get_mem_recr();
+-    }
+-    if (auto * hybrid_iswa = dynamic_cast<llama_memory_hybrid_iswa *>(memory)) {
+-        return hybrid_iswa->get_mem_recr();
+-    }
+-
+-    return nullptr;
++    return skippy_memory_recurrent_adapter(memory);
+ }
+ 
+ enum skippy_status skippy_export_recurrent_state(
+@@ -401,16 +392,7 @@ static llama_kv_cache * skippy_get_kv_cache(
+         return nullptr;
+     }
+ 
+-    if (auto * hybrid = dynamic_cast<llama_memory_hybrid *>(memory)) {
+-        return hybrid->get_mem_attn();
+-    }
+-    if (auto * kv = dynamic_cast<llama_kv_cache *>(memory)) {
+-        return kv;
+-    }
+-    if (auto * dsa = dynamic_cast<llama_kv_cache_dsa *>(memory)) {
+-        return dsa->get_mla();
+-    }
+-    return nullptr;
++    return skippy_memory_kv_adapter(memory);
+ }
+ 
+ static llama_kv_cache_iswa * skippy_get_iswa_cache(skippy_session * session) {
+@@ -418,13 +400,7 @@ static llama_kv_cache_iswa * skippy_get_iswa_cache(skippy_session * session) {
+         return nullptr;
+     }
+     llama_memory_t memory = session->ctx->get_memory();
+-    if (auto * iswa = dynamic_cast<llama_kv_cache_iswa *>(memory)) {
+-        return iswa;
+-    }
+-    if (auto * hybrid = dynamic_cast<llama_memory_hybrid_iswa *>(memory)) {
+-        return hybrid->get_mem_attn();
+-    }
+-    return nullptr;
++    return skippy_memory_iswa_adapter(memory);
+ }
+ 
+ static skippy_kv_page_component_desc skippy_component_from_page(
+diff --git a/src/skippy/state_memory.cpp b/src/skippy/state_memory.cpp
+new file mode 100644
+index 000000000..ad59dced1
+--- /dev/null
++++ b/src/skippy/state_memory.cpp
+@@ -0,0 +1,74 @@
++#include "skippy/state_memory.h"
++#include "skippy/state.h"
++#include "skippy/runtime_types.h"
++#include "llama-kv-cache.h"
++#include "llama-kv-cache-iswa.h"
++#include "llama-kv-cache-dsa.h"
++#include "llama-memory-hybrid.h"
++#include "llama-memory-hybrid-iswa.h"
++#include "llama-memory-recurrent.h"
++#include <typeinfo>
++
++llama_kv_cache * skippy_memory_kv_adapter(llama_memory_t memory) {
++    if (auto * hybrid = dynamic_cast<llama_memory_hybrid *>(memory)) {
++        return hybrid->get_mem_attn();
++    }
++    if (auto * kv = dynamic_cast<llama_kv_cache *>(memory)) {
++        return kv;
++    }
++    if (auto * dsa = dynamic_cast<llama_kv_cache_dsa *>(memory)) {
++        return dsa->get_mla();
++    }
++    return nullptr;
++}
++
++llama_kv_cache_iswa * skippy_memory_iswa_adapter(llama_memory_t memory) {
++    if (auto * iswa = dynamic_cast<llama_kv_cache_iswa *>(memory)) {
++        return iswa;
++    }
++    if (auto * hybrid = dynamic_cast<llama_memory_hybrid_iswa *>(memory)) {
++        return hybrid->get_mem_attn();
++    }
++    return nullptr;
++}
++
++llama_memory_recurrent * skippy_memory_recurrent_adapter(llama_memory_t memory) {
++    if (auto * recurrent = dynamic_cast<llama_memory_recurrent *>(memory)) {
++        return recurrent;
++    }
++    if (auto * hybrid = dynamic_cast<llama_memory_hybrid *>(memory)) {
++        return hybrid->get_mem_recr();
++    }
++    if (auto * hybrid = dynamic_cast<llama_memory_hybrid_iswa *>(memory)) {
++        return hybrid->get_mem_recr();
++    }
++    return nullptr;
++}
++
++uint32_t skippy_memory_cache_capabilities(llama_memory_t memory) {
++    if (!memory) {
++        return 0;
++    }
++    // Exact types are intentional: an unknown derived class may own additional
++    // state that a base-class adapter would silently omit. Never infer complete
++    // coverage merely from a successful dynamic_cast or a nonempty export.
++    const auto & type = typeid(*memory);
++    if (type == typeid(llama_kv_cache) || type == typeid(llama_kv_cache_iswa)) {
++        return SKIPPY_MEMORY_CACHE_RESIDENT | SKIPPY_MEMORY_CACHE_KV_RECURRENT;
++    }
++    if (type == typeid(llama_memory_recurrent)) {
++        return skippy_memory_recurrent_adapter(memory) ? SKIPPY_MEMORY_CACHE_KV_RECURRENT : 0;
++    }
++    if (type == typeid(llama_memory_hybrid) || type == typeid(llama_memory_hybrid_iswa)) {
++        return skippy_memory_recurrent_adapter(memory) &&
++                (skippy_memory_kv_adapter(memory) || skippy_memory_iswa_adapter(memory))
++                ? SKIPPY_MEMORY_CACHE_KV_RECURRENT : 0;
++    }
++    // DSA/MSA memories include an indexer tier. Until a real-model resident
++    // save/restore proves that tier survives, use complete state snapshots.
++    return 0;
++}
++
++extern "C" uint32_t skippy_model_memory_cache_capabilities(const skippy_model * model) {
++    return model && model->ctx ? skippy_memory_cache_capabilities(model->ctx->get_memory()) : 0;
++}
+diff --git a/src/skippy/state_memory.h b/src/skippy/state_memory.h
+new file mode 100644
+index 000000000..d045c9b82
+--- /dev/null
++++ b/src/skippy/state_memory.h
+@@ -0,0 +1,14 @@
++#pragma once
++
++#include "../llama-memory.h"
++#include <cstdint>
++
++class llama_kv_cache;
++class llama_kv_cache_iswa;
++class llama_memory_recurrent;
++
++// The export adapters and capability query share this loaded-memory dispatch.
++llama_kv_cache * skippy_memory_kv_adapter(llama_memory_t memory);
++llama_kv_cache_iswa * skippy_memory_iswa_adapter(llama_memory_t memory);
++llama_memory_recurrent * skippy_memory_recurrent_adapter(llama_memory_t memory);
++uint32_t skippy_memory_cache_capabilities(llama_memory_t memory);
+diff --git a/tests/test-skippy-kv-page-export.cpp b/tests/test-skippy-kv-page-export.cpp
+index 3c0dcbb13..3b6992151 100644
+--- a/tests/test-skippy-kv-page-export.cpp
++++ b/tests/test-skippy-kv-page-export.cpp
+@@ -1,4 +1,5 @@
+ #include "skippy.h"
++#include "../src/skippy/state_memory.h"
+ 
+ #include "../src/llama-batch.h"
+ #include "../src/llama-kv-cache.h"
+@@ -9,6 +10,12 @@
+ #include <string>
+ #include <vector>
+ 
++// An unrecognized derived memory may add state that the base adapter omits.
++class unknown_kv_memory : public llama_kv_cache {
++public:
++    using llama_kv_cache::llama_kv_cache;
++};
++
+ int main() {
+     std::unique_ptr<llama_model> model(llama_model_create(LLM_ARCH_LLAMA, llama_model_default_params()));
+     if (!model) {
+@@ -45,6 +52,18 @@ int main() {
+             {},
+             {});
+ 
++    if (skippy_memory_cache_capabilities(&kv) !=
++            (SKIPPY_MEMORY_CACHE_RESIDENT | SKIPPY_MEMORY_CACHE_KV_RECURRENT) ||
++            skippy_model_memory_cache_capabilities(nullptr) != 0) {
++        return 1;
++    }
++    unknown_kv_memory unknown(*model, hparams, GGML_TYPE_F32, GGML_TYPE_F32,
++            true, false, true, 1, 1, 1, 0, LLAMA_SWA_TYPE_NONE, nullptr,
++            [](int32_t il) { return il == 0; }, {}, {});
++    if (skippy_memory_cache_capabilities(&unknown) != 0) {
++        return 1;
++    }
++
+     llama_pos pos = 0;
+     llama_seq_id seq_id = 0;
+     llama_seq_id * seq_ids = &seq_id;
+-- 
+2.54.0 (Apple Git-157)
+

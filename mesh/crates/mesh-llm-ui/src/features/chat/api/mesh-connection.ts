@@ -243,7 +243,8 @@ async function* runConnect(
   abortSignal?: AbortSignal,
   onResponseMetadata?: (metadata: ChatResponseMetadata) => void,
   systemPrompt = '',
-  target = ''
+  target = '',
+  paymentMode = ''
 ): AsyncGenerator<StreamChunk> {
   const clientId = getClientId()
   const requestId = generateRequestId()
@@ -265,6 +266,7 @@ async function* runConnect(
       attachmentUploadCache
     )
     for (let attempt = 0; ; attempt += 1) {
+      if (paymentMode === 'free_only') requestBody = withFreeOnlyPayment(requestBody)
       response = await fetch(`${env.managementApiUrl}/api/responses`, {
         method: 'POST',
         headers: chatRequestHeaders(target),
@@ -401,11 +403,26 @@ function submittedTarget(data: Record<string, unknown> | undefined): string | un
   return typeof target === 'string' ? target : undefined
 }
 
+/** The node folds a request's `mesh_payment` into its own spending policy and can only narrow it,
+ *  so `free_only` here keeps this request off paid hosts without touching the node's policy. */
+export function withFreeOnlyPayment<T extends object>(body: T): T & { mesh_payment: { mode: 'free_only' } } {
+  return { ...body, mesh_payment: { mode: 'free_only' } }
+}
+
+/** Free-only taken at submit (`sendMessage(content, { body: { freeOnly } })`) wins over the current
+ *  setting, matching how a submitted target works. */
+function submittedPaymentMode(data: Record<string, unknown> | undefined): string | undefined {
+  const freeOnly = data?.freeOnly
+  if (typeof freeOnly !== 'boolean') return undefined
+  return freeOnly ? 'free_only' : ''
+}
+
 export function createMeshConnectionAdapter(
   model: StringSource,
   onResponseMetadata?: (metadata: ChatResponseMetadata) => void,
   systemPrompt?: StringSource,
-  target?: StringSource
+  target?: StringSource,
+  paymentMode?: StringSource
 ): ConnectConnectionAdapter {
   return {
     connect: (_messages, _data, abortSignal) =>
@@ -415,7 +432,8 @@ export function createMeshConnectionAdapter(
         abortSignal,
         onResponseMetadata,
         resolveOptionalString(systemPrompt),
-        submittedTarget(_data) ?? resolveOptionalString(target)
+        submittedTarget(_data) ?? resolveOptionalString(target),
+        submittedPaymentMode(_data) ?? resolveOptionalString(paymentMode)
       )
   }
 }

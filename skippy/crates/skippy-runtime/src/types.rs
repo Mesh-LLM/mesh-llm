@@ -39,15 +39,27 @@ pub enum ModelStateKind {
     Diffusion,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct MemoryCacheCapabilities {
+    pub resident: bool,
+    pub kv_recurrent: bool,
+}
+
+impl MemoryCacheCapabilities {
+    pub(crate) fn from_native_bits(bits: u32) -> Self {
+        Self {
+            resident: bits & 1 != 0,
+            kv_recurrent: bits & 2 != 0,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LoadedModelCapability {
     pub state_kind: ModelStateKind,
-    /// Upstream gates a separate indexer memory tier behind an architecture
-    /// allowlist (`needs_mem_idx`, llama-model.cpp). Indexer state is only
-    /// serialized by full-state snapshots, never by KV-page or recurrent
-    /// snapshots, so cache payload selection must treat these models as
-    /// exact-state-only. See skippy-server `effective_cache_payload`.
-    pub has_indexer_memory: bool,
+    /// Complete representations supported by the loaded native memory adapters.
+    /// Unknown memory advertises neither; callers must use full-state snapshots.
+    pub cache_capabilities: MemoryCacheCapabilities,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -744,6 +756,18 @@ impl Default for SamplingConfig {
 }
 
 impl SamplingConfig {
+    /// Caps the repetition and DRY penalty windows at `ctx_size` tokens. Both
+    /// samplers allocate their whole window up front, and a window longer than
+    /// the context can never fill. The legacy `-1` alias is resolved to the
+    /// default window first, so it is capped too.
+    #[must_use]
+    pub fn with_penalty_windows_within(mut self, ctx_size: usize) -> Self {
+        let limit = i32::try_from(ctx_size).unwrap_or(i32::MAX);
+        self.penalty_last_n = penalty_window(self.penalty_last_n).min(limit);
+        self.dry.penalty_last_n = penalty_window(self.dry.penalty_last_n).min(limit);
+        self
+    }
+
     pub fn resolve_reasoning_budget(&mut self, max_output_tokens: u32) {
         self.reasoning_budget
             .resolve_for_output(max_output_tokens as usize);
@@ -1253,6 +1277,61 @@ mod kv_page_descriptor_tests {
         };
 
         assert!(sampling.as_raw().is_err());
+    }
+
+    #[test]
+    fn penalty_windows_are_capped_at_the_context_size() {
+        let sampling = SamplingConfig {
+            penalty_last_n: i32::MAX,
+            dry: DrySamplingConfig {
+                penalty_last_n: i32::MAX,
+                ..SamplingConfig::default().dry
+            },
+            ..SamplingConfig::default()
+        }
+        .with_penalty_windows_within(4_096);
+        assert_eq!(sampling.penalty_last_n, 4_096);
+        assert_eq!(sampling.dry.penalty_last_n, 4_096);
+
+        for (window, expected) in [
+            (-1, DEFAULT_PENALTY_LAST_N),
+            (0, 0),
+            (64, 64),
+            (4_096, 4_096),
+        ] {
+            let sampling = SamplingConfig {
+                penalty_last_n: window,
+                dry: DrySamplingConfig {
+                    penalty_last_n: window,
+                    ..SamplingConfig::default().dry
+                },
+                ..SamplingConfig::default()
+            }
+            .with_penalty_windows_within(4_096);
+            assert_eq!(sampling.penalty_last_n, expected);
+            assert_eq!(sampling.dry.penalty_last_n, expected);
+        }
+
+        // The legacy -1 alias means the default window, which a small context
+        // must still cap.
+        let small_context = SamplingConfig {
+            penalty_last_n: -1,
+            dry: DrySamplingConfig {
+                penalty_last_n: -1,
+                ..SamplingConfig::default().dry
+            },
+            ..SamplingConfig::default()
+        }
+        .with_penalty_windows_within(32);
+        assert_eq!(small_context.penalty_last_n, 32);
+        assert_eq!(small_context.dry.penalty_last_n, 32);
+
+        let sampling = SamplingConfig {
+            penalty_last_n: i32::MAX,
+            ..SamplingConfig::default()
+        }
+        .with_penalty_windows_within(usize::MAX);
+        assert_eq!(sampling.penalty_last_n, i32::MAX);
     }
 
     #[test]
