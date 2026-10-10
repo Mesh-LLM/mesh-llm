@@ -195,8 +195,6 @@ Switches:
   diagnostics as JSONL. See [SWARM_CAPTURE.md](SWARM_CAPTURE.md) for the full
   debug-capture workflow.
 - `--publish`: publish your mesh for discovery.
-- `--no-default-plugins`: don't install the default plugins on first run (same
-  as `MESH_LLM_NO_DEFAULT_PLUGINS=1`). See [Default Plugins](plugins/README.md#default-plugins).
 - `--require-release-attestation`: when creating a requirement-aware mesh,
   require peers to present a trusted release attestation.
 - `--release-signer-key <KEY>`: allow a release signer key in the creation-time
@@ -476,6 +474,7 @@ Switches:
 - `--version <VERSION>`: install a specific release tag or version, for example `v0.60.0`.
 - `--flavor <FLAVOR>`: install or switch to a specific release bundle flavor (`cpu`, `cuda`, `rocm`, `vulkan`, or `metal`).
 - `--detect-flavor`: re-detect the best host backend flavor before selecting the release bundle. Cannot be combined with `--flavor`.
+- `--no-default-plugins`: turn the default plugins off, so the updated node does not install them from its release's bundled copy, now or later, until `mesh-llm plugins enable NAME` (same as `mesh-llm plugins install-defaults --off`). See [Default Plugins](plugins/README.md#default-plugins).
 - `--auto-update`: available on most commands; when set, mesh-llm checks for a newer bundled release before proceeding.
 
 
@@ -844,7 +843,8 @@ Subcommands:
 - `plugins disable <NAME>`: keep an installed plugin on disk but prevent host
   startup from launching it.
 - `plugins delete <NAME>`: remove the installed archive contents and local
-  metadata.
+  metadata. A deleted default plugin stays removed: the installers and
+  `mesh-llm update` do not install it again until `plugins enable <NAME>`.
 - `plugins info <NAME>`: show source, version, target, path, and latest known
   status for an installed or configured plugin.
 - `plugins search [QUERY]`: search the configured plugin catalog.

@@ -117,7 +117,7 @@ class InstallPs1BehaviorTests(unittest.TestCase):
             )
 
             self.assertEqual(result.returncode, 0, self._combined_output(result))
-            self.assertEqual(self._read_calls(calls), ["--version", "setup"])
+            self.assertEqual(self._read_calls(calls), ["--version", "plugins install-defaults", "setup"])
             self.assertIn("Installing Windows x64 MeshLLM product bundle", result.stdout)
             self.assertIn("Ignoring legacy -Flavor 'cuda'", self._combined_output(result))
 
@@ -127,11 +127,25 @@ class InstallPs1BehaviorTests(unittest.TestCase):
             result, calls = self._run_install(tmp_path, interactive=False)
 
             self.assertEqual(result.returncode, 0, self._combined_output(result))
-            self.assertEqual(self._read_calls(calls), ["--version"])
+            self.assertEqual(self._read_calls(calls), ["--version", "plugins install-defaults"])
             self.assertIn("Run this next:", result.stdout)
             self.assertIn('mesh-llm.exe" setup', result.stdout)
             self.assertTrue(
                 (tmp_path / "bin/native-runtimes/test-runtime/manifest.json").is_file()
+            )
+
+    def test_no_default_plugins_turns_the_defaults_off(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            result, calls = self._run_install(
+                tmp_path,
+                interactive=False,
+                args=["-NoDefaultPlugins"],
+            )
+
+            self.assertEqual(result.returncode, 0, self._combined_output(result))
+            self.assertEqual(
+                self._read_calls(calls), ["--version", "plugins install-defaults --off"]
             )
 
     def test_no_setup_prints_command_without_running_setup(self) -> None:
@@ -144,7 +158,7 @@ class InstallPs1BehaviorTests(unittest.TestCase):
             )
 
             self.assertEqual(result.returncode, 0, self._combined_output(result))
-            self.assertEqual(self._read_calls(calls), ["--version"])
+            self.assertEqual(self._read_calls(calls), ["--version", "plugins install-defaults"])
             self.assertIn("Run this next:", result.stdout)
             self.assertIn('mesh-llm.exe" setup', result.stdout)
 

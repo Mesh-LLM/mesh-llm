@@ -19,6 +19,10 @@ use release_integrity::{
 const DEFAULT_RELEASE_REPO: &str = "Mesh-LLM/mesh-llm";
 const PRODUCT_MANIFEST_NAME: &str = "product-manifest.json";
 const NATIVE_RUNTIMES_DIR_NAME: &str = "native-runtimes";
+/// The default plugins a release bundles (each plugin's release archive and
+/// `manifest.json`). An update installs the new release's copy in place of the
+/// old one; the node loads defaults only from here, never from a download.
+const BUNDLED_PLUGINS_DIR_NAME: &str = "plugins";
 const PATH_WRITE_PROBE_PREFIX: &str = ".mesh-llm-write-probe";
 #[cfg(not(windows))]
 pub(super) const INSTALL_SCRIPT_URL: &str =
@@ -722,6 +726,10 @@ fn collect_bundle_files(
     if dirs.contains(&NATIVE_RUNTIMES_DIR_NAME.to_string()) {
         staged.push(NATIVE_RUNTIMES_DIR_NAME.to_string());
     }
+    // The bundled default plugins install as a whole tree, like the runtime.
+    if dirs.contains(&BUNDLED_PLUGINS_DIR_NAME.to_string()) {
+        staged.push(BUNDLED_PLUGINS_DIR_NAME.to_string());
+    }
     // The mesh binary must install first so a mid-install failure can never
     // leave the new runtime tree beside an old host.
     staged.sort_by_key(|name| (name != &mesh_binary_name(), name.clone()));
@@ -788,6 +796,80 @@ mod composed_product_regression_tests {
         let path = std::env::temp_dir().join(unique);
         std::fs::create_dir_all(&path).unwrap();
         path
+    }
+
+    /// An update installs the release's bundled default plugins and replaces
+    /// the previous release's copy as a whole: the node loads defaults only
+    /// from this directory, so it must hold exactly the new release's.
+    #[test]
+    fn test_update_replaces_the_bundled_plugins_with_the_new_releases() {
+        use std::process::Command;
+        let base = temp_dir("self-update-bundled-plugins");
+        let bundle_root = base.join("mesh-bundle");
+        std::fs::create_dir_all(bundle_root.join("native-runtimes").join("runtime")).unwrap();
+        std::fs::create_dir_all(bundle_root.join(BUNDLED_PLUGINS_DIR_NAME)).unwrap();
+        std::fs::write(bundle_root.join(mesh_binary_name()), b"binary").unwrap();
+        std::fs::write(bundle_root.join(PRODUCT_MANIFEST_NAME), b"{}").unwrap();
+        std::fs::write(
+            bundle_root
+                .join("native-runtimes")
+                .join("runtime")
+                .join("lib"),
+            b"runtime",
+        )
+        .unwrap();
+        std::fs::write(
+            bundle_root
+                .join(BUNDLED_PLUGINS_DIR_NAME)
+                .join("example-1.1.0-x86_64-unknown-linux-gnu.tar.gz"),
+            b"new plugin",
+        )
+        .unwrap();
+        std::fs::write(
+            bundle_root
+                .join(BUNDLED_PLUGINS_DIR_NAME)
+                .join("manifest.json"),
+            b"{}",
+        )
+        .unwrap();
+        let archive = base.join("bundle.tar.gz");
+        assert!(
+            Command::new("tar")
+                .arg("-C")
+                .arg(&base)
+                .arg("-czf")
+                .arg(&archive)
+                .arg("mesh-bundle")
+                .status()
+                .unwrap()
+                .success()
+        );
+        let extracted = base.join("extracted");
+        std::fs::create_dir_all(&extracted).unwrap();
+        extract_bundle_archive(&archive, &extracted).unwrap();
+        let staged = collect_bundle_files(&extracted, backend::BinaryFlavor::Cpu).unwrap();
+        assert!(staged.contains(&BUNDLED_PLUGINS_DIR_NAME.to_string()));
+
+        let install_dir = base.join("install");
+        let old = install_dir.join(BUNDLED_PLUGINS_DIR_NAME);
+        std::fs::create_dir_all(&old).unwrap();
+        std::fs::write(
+            old.join("example-1.0.0-x86_64-unknown-linux-gnu.tar.gz"),
+            b"old",
+        )
+        .unwrap();
+        replace_bundle_files(&install_dir, &extracted, &base.join("backup"), &staged).unwrap();
+
+        assert_eq!(
+            std::fs::read(old.join("example-1.1.0-x86_64-unknown-linux-gnu.tar.gz")).unwrap(),
+            b"new plugin"
+        );
+        assert!(
+            !old.join("example-1.0.0-x86_64-unknown-linux-gnu.tar.gz")
+                .exists(),
+            "the old release's bundled plugin is gone"
+        );
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]

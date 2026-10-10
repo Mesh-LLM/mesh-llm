@@ -4,6 +4,7 @@ param(
     [string]$Flavor,
     [switch]$NoPathUpdate,
     [switch]$NoSetup,
+    [switch]$NoDefaultPlugins,
     [switch]$Help
 )
 
@@ -42,7 +43,7 @@ if (-not $InstallDir) {
 
 function Show-Usage {
     @"
-Usage: install.ps1 [-PreRelease] [-InstallDir <DIR>] [-Flavor <FLAVOR>] [-NoPathUpdate] [-NoSetup]
+Usage: install.ps1 [-PreRelease] [-InstallDir <DIR>] [-Flavor <FLAVOR>] [-NoPathUpdate] [-NoSetup] [-NoDefaultPlugins]
 
 Options:
   -PreRelease             Install the latest published GitHub prerelease instead of the latest stable release.
@@ -50,6 +51,7 @@ Options:
   -Flavor <FLAVOR>        Legacy compatibility flag. The installer installs the Windows x64 product bundle, including its packaged runtime; ``mesh-llm.exe setup`` may select another compatible runtime.
   -NoPathUpdate           Do not add the install directory to the user Path.
   -NoSetup                Do not run ``mesh-llm.exe setup``; print the exact command instead.
+  -NoDefaultPlugins       Turn the default plugins off (mesh-llm plugins enable NAME undoes it).
   -Help                   Show this help text.
 
 Environment overrides:
@@ -709,6 +711,21 @@ try {
     $meshBinary = Join-Path $InstallDir "mesh-llm.exe"
     Write-Host "Installed $asset to $InstallDir"
     & $meshBinary --version
+
+    # Windows releases bundle no default plugin yet, so there is nothing to
+    # install; -NoDefaultPlugins still records the opt-out for a later release.
+    $defaultsArgs = @('plugins', 'install-defaults')
+    if ($NoDefaultPlugins) {
+        $defaultsArgs += '--off'
+    }
+    try {
+        & $meshBinary @defaultsArgs
+        if ($LASTEXITCODE -ne 0) {
+            Write-Warning "Default plugins could not be fully installed; MeshLLM is installed."
+        }
+    } catch {
+        Write-Warning "Default plugins could not be fully installed; MeshLLM is installed: $_"
+    }
 
     if ($NoPathUpdate -and -not $pathUpdated) {
         Write-Host "Install directory was not added to PATH. Use the full command below until you add $InstallDir to PATH."

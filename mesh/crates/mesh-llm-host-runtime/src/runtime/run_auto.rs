@@ -1,5 +1,4 @@
 use super::daemon_startup::{check_mode_conflicts, resolve_effective_mode};
-use super::default_plugins::resolve_after_defaults;
 use super::failed_node_start::cleanup_failed_node_start;
 use super::join_sources;
 use super::plugin_host_role;
@@ -1763,7 +1762,10 @@ async fn run_auto_inner(
     // legacy/profile-unaware request cannot bypass local-required policy in
     // that window. False entries deliberately clear stale in-process policy.
     register_pre_accept_local_source_policies(&config, &startup_specs);
-    let resolved_plugins = resolve_after_defaults(&config, &options).await?;
+    // The default plugins come from this release's bundled copy, never a
+    // download, and are installed before plugins are resolved.
+    super::default_plugins::provision_bundled_defaults_at_start(&config);
+    let resolved_plugins = resolve_plugins_from_config(&config, &options)?;
     let swarm_capture = configure_swarm_capture(&options)?;
     tracing::debug!(
         mesh_requirements = ?runtime_startup_requirements(&startup_mesh_creation_state),

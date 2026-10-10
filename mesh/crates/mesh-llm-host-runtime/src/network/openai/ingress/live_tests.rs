@@ -73,6 +73,7 @@ impl LiveHost {
             install_root: root.path().join("installed"),
             catalog_url: "unused".into(),
             target: PluginTarget::current().unwrap(),
+            bundled_plugins_dir: None,
         };
         let installed = mesh_llm_plugin_manager::install::install_plugin_archive(
             NAME,

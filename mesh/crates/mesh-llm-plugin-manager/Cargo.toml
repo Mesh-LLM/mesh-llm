@@ -24,6 +24,8 @@ serde_json.workspace = true
 sha2.workspace = true
 tar = "0.4"
 tempfile = "3"
+tokio = { version = "1", features = ["time"] }
 zip = { version = "8.6", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt", "time"] }

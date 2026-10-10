@@ -17,6 +17,7 @@ INSTALL_VERBOSE="${MESH_LLM_INSTALL_VERBOSE:-0}"
 # only; remove it after their documented support window ends.
 COMPOSED_PRODUCT_MIN_VERSION="0.75.0"
 AUTO_SETUP=1
+DEFAULT_PLUGINS=1
 DOWNLOADED_ARCHIVE=""
 DOWNLOADED_ASSET=""
 SETUP_ARGS=()
@@ -65,7 +66,7 @@ path_contains_install_dir() {
 
 usage() {
     cat <<EOF
-Usage: install.sh [--pre-release] [--install-dir DIR] [--no-setup] [--verbose]
+Usage: install.sh [--pre-release] [--install-dir DIR] [--no-setup] [--no-default-plugins] [--verbose]
 
 Options:
   --pre-release              Install the latest published GitHub prerelease instead of the latest stable release.
@@ -73,6 +74,8 @@ Options:
   --no-setup                 Do not run \
                              \
 mesh-llm setup automatically after install.
+  --no-default-plugins       Turn the default plugins off: they are not installed
+                             from the bundle, now or later (mesh-llm plugins enable NAME undoes it).
   --service                  Legacy compatibility flag. Passes --service through to \
                              \
 mesh-llm setup instead of installing services in shell.
@@ -120,6 +123,9 @@ parse_args() {
                 ;;
             --no-setup)
                 AUTO_SETUP=0
+                ;;
+            --no-default-plugins)
+                DEFAULT_PLUGINS=0
                 ;;
             --verbose)
                 INSTALL_VERBOSE=1
@@ -856,6 +862,16 @@ main() {
     fi
 
     install_bundle "$tmp_dir/mesh-bundle"
+    # The default plugins ship in the bundle (plugins/); install them from
+    # that copy, with no download. A node also does this when it starts, so
+    # --no-default-plugins records the opt-out rather than skipping a step.
+    if ! bool_is_true "$DEFAULT_PLUGINS"; then
+        if ! "$INSTALL_DIR/mesh-llm" plugins install-defaults --off; then
+            warn "could not turn the default plugins off; run: mesh-llm plugins install-defaults --off"
+        fi
+    elif ! "$INSTALL_DIR/mesh-llm" plugins install-defaults; then
+        warn "default plugins could not be fully installed; mesh-llm is installed"
+    fi
     if bool_is_true "$INSTALL_VERBOSE"; then
         echo "Installed $DOWNLOADED_ASSET to $INSTALL_DIR"
     else
