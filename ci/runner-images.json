@@ -273,6 +273,32 @@
     }
   },
   "consumer_roles": {
+    "skippy-cli-linux": {
+      "image_id": "public-cpu",
+      "scope": "ordinary",
+      "bindings": [
+        {
+          "workflow": "ci-skippy-cli-slice.yml",
+          "job": "linux_cli",
+          "matrix_selector": null,
+          "image_expression": "{image}",
+          "epoch_field": null
+        }
+      ]
+    },
+    "skippy-product-linux": {
+      "image_id": "public-cpu",
+      "scope": "ordinary",
+      "bindings": [
+        {
+          "workflow": "ci-skippy-product-slice.yml",
+          "job": "linux_product",
+          "matrix_selector": null,
+          "image_expression": "{image}",
+          "epoch_field": null
+        }
+      ]
+    },
     "rust-clippy": {
       "image_id": "public-cpu",
       "scope": "ordinary",

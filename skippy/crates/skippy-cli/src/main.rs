@@ -1,6 +1,7 @@
 mod cli;
 mod conversion;
 mod disk_cache;
+mod laya_serve;
 mod local_model;
 mod local_resource_planning;
 mod native_logging;
@@ -71,6 +72,19 @@ async fn run_main(
     startup_warnings: Vec<String>,
     native_logs: Arc<native_logging::NativeDiagnostics>,
 ) -> Result<()> {
+    if matches!(&cli.command, Command::BuildContract) {
+        skippy_commands::console::install(skippy_commands::console::OutputMode::Json);
+        return skippy_commands::console::write_json(&serde_json::json!({
+            "schema_version": 1,
+            "product": "skippy",
+            "product_version": env!("CARGO_PKG_VERSION"),
+            "runtime_release": skippy_runtime_install::runtime_release_version(),
+            "skippy_abi": skippy_runtime_install::current_skippy_abi_version(),
+            "source_sha": option_env!("SKIPPY_SOURCE_SHA"),
+            "os": std::env::consts::OS,
+            "architecture": std::env::consts::ARCH,
+        }));
+    }
     let output = match (&cli.command, cli.output) {
         (Command::Serve(args), OutputFormat::Auto) if args.print_effective_config => {
             OutputFormat::Json
@@ -107,6 +121,7 @@ async fn run_main(
     }
     skippy_runtime::logging::set_native_log_sink(native_logs);
     match cli.command {
+        Command::BuildContract => unreachable!("handled before runtime resolution"),
         Command::Doctor => runtime::doctor(&native_options),
         Command::Prompt(args) => {
             tokio::task::spawn_blocking(move || {

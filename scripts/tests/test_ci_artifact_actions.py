@@ -41,13 +41,15 @@ class CiArtifactActionTests(unittest.TestCase):
         self.assertIn("& just $recipe", action)
         self.assertIn("skippy.sha256", action)
         self.assertIn("skippy.exe.sha256", action)
+        self.assertIn("build-contract.json", action)
+        cli_workflow = (ROOT / ".github/workflows/ci-skippy-cli-slice.yml").read_text(encoding="utf-8")
         for platform in ("linux", "macos", "windows"):
-            workflow = (ROOT / ".github" / "workflows" / f"ci-{platform}-host-slice.yml").read_text(encoding="utf-8")
-            self.assertLess(
-                workflow.index("Prepare standalone Skippy CLI"),
-                workflow.index("Prepare immutable"),
-            )
-            self.assertIn(f"ci-skippy-cli-{platform}-", workflow)
+            host = (ROOT / ".github" / "workflows" / f"ci-{platform}-host-slice.yml").read_text(encoding="utf-8")
+            lane = (ROOT / ".github" / "workflows" / f"ci-{platform}-lane.yml").read_text(encoding="utf-8")
+            self.assertNotIn("prepare-skippy-cli-input", host)
+            self.assertIn(f"ci-skippy-cli-{platform}-", cli_workflow)
+            self.assertIn("needs: [skippy_cli, native_runtimes]", lane)
+            self.assertIn("needs: [ui_artifact, skippy_product]", lane)
 
     def test_skippy_release_cli_archive_is_separate_and_checksum_bound(self) -> None:
         script = ROOT / "skippy" / "scripts" / "package-cli-release.sh"
@@ -96,6 +98,14 @@ class CiArtifactActionTests(unittest.TestCase):
         script = action["runs"]["steps"][0]["run"]
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
+            subprocess.run(["git", "init", "-q", str(root)], check=True)
+            subprocess.run(
+                ["git", "-C", str(root), "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "--allow-empty", "-qm", "fixture"],
+                check=True,
+            )
+            source_sha = subprocess.check_output(
+                ["git", "-C", str(root), "rev-parse", "HEAD"], text=True
+            ).strip()
             binary = root / "target" / "release" / "skippy"
             binary.parent.mkdir(parents=True)
             binary.write_bytes(b"\x7fELFtest-cli")
@@ -119,20 +129,24 @@ class CiArtifactActionTests(unittest.TestCase):
             )
             (tools / "just").chmod(0o755)
             (tools / "readelf").chmod(0o755)
-            result = subprocess.run(
-                ["bash", "-c", script],
-                cwd=root,
-                env={
-                    **os.environ,
-                    "PATH": f"{tools}{os.pathsep}{os.environ['PATH']}",
-                    "INPUT_PROFILE": "release",
-                    "INPUT_OUTPUT_DIR": "cli-input",
-                },
-                capture_output=True,
-                text=True,
-            )
-            self.assertNotEqual(result.returncode, 0)
-            self.assertIn("host dependency policy rejected", result.stderr)
+            for selected_sha in (source_sha, ""):
+                with self.subTest(selected_sha=selected_sha or "legacy host"):
+                    result = subprocess.run(
+                        ["bash", "-c", script],
+                        cwd=root,
+                        env={
+                            **os.environ,
+                            "PATH": f"{tools}{os.pathsep}{os.environ['PATH']}",
+                            "INPUT_PROFILE": "release",
+                            "INPUT_OUTPUT_DIR": "cli-input",
+                            "INPUT_SOURCE_SHA": selected_sha,
+                            "GITHUB_WORKSPACE": str(root),
+                        },
+                        capture_output=True,
+                        text=True,
+                    )
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("host dependency policy rejected", result.stderr)
             self.assertFalse((root / "cli-input" / "skippy.sha256").exists())
             report = json.loads((root / "cli-input" / "host-imports.json").read_text())
             self.assertEqual(report["rejected_imports"], ["libllama.so"])
@@ -2598,7 +2612,7 @@ class CiArtifactActionTests(unittest.TestCase):
                 if "pr_approved_ref:" in block:
                     approved_policy_calls += 1
                     self.assertIn("pr_approved_sha:", block)
-        self.assertEqual(selector_calls, 20)
+        self.assertEqual(selector_calls, 22)
         self.assertEqual(approved_policy_calls, 18)
 
         cases = (

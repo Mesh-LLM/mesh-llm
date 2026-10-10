@@ -411,15 +411,24 @@ runner-contract update is active.
 | --- | --- |
 | `ci-quality-lane.yml` | Quality and runner/cache contract graph; reusable from PRs and dispatchable for main/manual |
 | `ci-website-lane.yml` | Console and website graph; reusable from PRs and dispatchable for main/manual |
-| `ci-linux-lane.yml` | Linux host/runtime/product/Rust/SDK/smoke graph with one platform-local UI producer |
-| `ci-macos-lane.yml` | macOS host/runtime/product/platform/Swift/Metal graph with one platform-local UI producer |
-| `ci-windows-lane.yml` | Windows host/runtime/product/platform/smoke graph with one platform-local UI producer |
+| `ci-linux-lane.yml` | Linux standalone CLI/runtime composition before the Mesh host, then product/Rust/SDK/smoke graph with one platform-local UI producer |
+| `ci-macos-lane.yml` | macOS standalone CLI/runtime composition before the Mesh host, then product/platform/Swift/Metal graph with one platform-local UI producer |
+| `ci-windows-lane.yml` | Windows standalone CLI/runtime composition before the Mesh host, then product/platform/smoke graph with one platform-local UI producer |
 | `ci-pr-canary-lane.yml` | Optional protected merge-source diagnostic lane for one Linux amd64 CPU UI/host/runtime/product chain; runner policy stays on the default branch, and the summary is step-summary-only and non-required |
+
+Linux, macOS, and Windows lane summaries check out the workflow-dispatch
+revision for their validator and report action during an explicit branch
+dispatch. PR callers continue to use the protected default-branch summary.
+This lets branch diagnostics validate the added standalone jobs against the
+same revision that defined the lane graph.
 | `ci-quality-slice.yml` | Contracts (including product-crate README, description, and local-link checks), format, unused-dependency check, Clippy and generated CLI inventory freshness; additive protected authority sentinel |
 | `ci-web-slice.yml` | Console quality, console Playwright E2E, public website build, and CLI explorer browser validation |
 | `ci-ui-artifact-slice.yml` | Immutable console distribution producer; release callers prepare one source/version-bound UI with complete file checksums, shared by all hosts and SDK resources |
 | `static-abi-artifact.yml` | Typed static llama ABI producer with internal runner policy and an exact toolchain-epoch output |
-| `ci-rust-tests-slice.yml` | Typed deterministic Cargo test batches that prepare the patched llama checkout before verifying the producer-owned static ABI revision and toolchain epoch, plus a pinned, digest-verified Skippy correctness fixture; related PR changes (including `mesh-llm-skippy-adapter`) additionally compile the asserted `mesh-llm-skippy-adapter` library test `config::hardware_translation_tests::safetensors_checkpoint_reaches_mesh_host_runtime` and smoke an immutable SmolLM2 SafeTensors checkpoint through the Mesh config/adapter/Skippy serving/native path to sampled prefill and decode with every supported load-time quantization |
+| `ci-rust-tests-slice.yml` | Typed deterministic Cargo test batches that prepare the patched llama checkout before verifying the producer-owned static ABI revision and toolchain epoch, plus a pinned, digest-verified Skippy correctness fixture; planned `skippy-ffi` tests execute; selected PR, main, and manual-full Skippy changes additionally compile the asserted `mesh-llm-skippy-adapter` library test `config::hardware_translation_tests::safetensors_checkpoint_reaches_mesh_host_runtime` and smoke an immutable SmolLM2 SafeTensors checkpoint through the Mesh config/adapter/Skippy serving/native path to sampled prefill and decode with every supported load-time quantization |
+| `ci-skippy-cli-slice.yml` | Hosted, backend-neutral standalone Skippy CLI producer on the selected Linux, macOS, or Windows target; passes the selected source SHA to preparation, checks it against the checkout, and emits a checksum, import report, and binary-verified source/version/ABI build contract |
+| `ci-skippy-product-slice.yml` | Platform-local composition of each selected runtime with that exact Skippy CLI; rejects mismatched source, target, backend, release, ABI, or checksum and checks no-driver discovery before the Mesh host starts. Every row rechecks its final archive, CLI imports/version, ABI/release pairing and discovery, then uploads digest-bound packaging/runtime evidence. Linux and Windows CPU additionally restore pinned dense, hybrid, and MoE models and require actual prefill/decode through the composed artifact, uploading pilot evidence files. The local receipt contract requires six separate executable results plus packaging/runtime across nine rows; the six executable suite producers and gate remain to be added. |
+
 | `ci-{linux,macos,windows}-host-slice.yml` | Platform-pure neutral host producers; no empty cross-platform jobs |
 | `ci-{linux,macos,windows}-runtime-slice.yml` | Platform-pure native runtime producers. The Linux CPU row also runs the native runtime-event gate against its verified built-or-restored runtime and uploads its evidence. |
 | `ci-{linux,macos,windows}-product-slice.yml` | Platform-pure composition-only product consumers |
@@ -434,6 +443,12 @@ runner-contract update is active.
 | `scripted-binary-smoke.yml` | Artifact-based scripted product smoke with optional typed model context-size and recurrent-model inputs; recurrent models restore and save through a dedicated trust-scoped cache before the smoke runs. It passes `source_sha` to the split smoke; `xtask split-payloads` certifies each stage and writes revision-bound JSON evidence. |
 | `sdk-smoke.yml` | Artifact-based SDK consumers; all SDK rows consume the lane's immutable console UI artifact, while Rust smoke restores the main-seeded, target/profile/image/toolchain/recipe-bound Cargo/target cache through `Swatinem/rust-cache` |
 | `hf-download-smoke.yml` | Hugging Face download smoke |
+
+Rust test and Quality Clippy batch jobs now upload a `mesh-ci-cargo-census-v1`
+receipt after every selected Cargo invocation succeeds. The receipt binds the
+resolved selected and actually executed package names, batch ID, kind and source
+SHA; a mismatch fails the batch. This is per-batch execution evidence; the
+planner and `ci-crate-lists` still own exhaustive main workspace allocation.
 
 The four source-compatible slices select real legacy Python contracts or their
 native Rust/Just owners from the admitted checkout. Native Quality runs both
@@ -785,12 +800,19 @@ boundary.
 - `prepare-host-input` / `prepare-windows-host-input`: neutral host bytes,
   import report and checksum.
 - `prepare-skippy-cli-input`: one backend-neutral standalone Skippy CLI and
-  checksum per platform host slice, built before the MeshLLM host. PR/main CI
+  checksum per independent platform CLI slice, built before the MeshLLM host. PR/main CI
   publishes `ci-skippy-cli-<platform>-<architecture>` once per platform;
-  Unix and Windows producers verify host imports before checksumming and retain
-  `host-imports.json`; release publishes separate versioned CLI archives from the
+  the new CLI slices pass the selected source SHA explicitly, while protected
+  pre-migration host slices derive it from their immutable selected checkout;
+  Unix and Windows producers verify host imports before checksumming, record
+  the binary's build contract, and retain `host-imports.json`; release publishes separate versioned CLI archives from the
   same producer, verifies the report matches the executable SHA-256, and includes
   it in the archive.
+- `release.yml` crates preflight: the same-run `release-linux` producer supplies
+  the checksummed CPU product before any GitHub publication. The dry run also
+  runs in release canaries; the publisher remains stable-only and checks the
+  published archive again. The dry run does not yet verify unpublished
+  same-version dependent packages, so it is not the complete staged DAG gate.
 - `prepare-native-runtime-input`: one verified native runtime archive and
   manifest. Non-Windows artifacts include the checksum-bound
   `skippy-package-builder` tool used by split-serving consumers to prepare
@@ -798,10 +820,12 @@ boundary.
   a reliable import-library path for the tool. The Linux CPU row uses a
   forced-hosted selection from the central runner policy, leaving accelerator
   rows on their normal provider, and can restore an exact cache of this
-  packaged runtime, keyed by target,
+  packaged runtime, keyed by target, immutable source revision,
   toolchain/image epoch, Skippy and native recipe inputs. Restored bytes are
   verified against the planned backend and target as well as the full package
-  contract before the runtime-event gate and run-scoped upload. Only trusted
+  contract before the runtime-event gate and run-scoped upload. Each CI runtime
+  upload includes `ci-source.json` from the verified checkout, and standalone
+  composition rejects a foreign source. Only trusted
   main pushes publish; PRs restore only and Depot rows bypass this cache.
 - `prepare-static-abi-input`: portable static ABI archive.
 - `compose-product-input`: exact host/runtime verification and composition.
@@ -822,6 +846,8 @@ boundary.
 - `restore-test-model`: the single implementation of model resolve, cache,
   download, and verify. Resolves generated suite manifests, uses exact
   digest-bearing cache keys, and stream-verifies size and SHA-256 before use.
+  Manifest-selected model paths may include safe nested directories; the
+  download step creates their parent before writing the partial file.
   `model_artifact_id` selects one artifact from a multi-artifact manifest,
   and reaches both the resolve and the verify call so verification cannot
   check a different file than the one downloaded.
@@ -839,9 +865,10 @@ boundary.
 - `restore-sccache-seed`: exact-key restore of the trusted 2 GiB Linux seed;
   central runner policy permits it only for GitHub-hosted selections, and
   native runtime restore is explicitly disabled after zero-reuse qualification.
-- `capture-sccache-stats`: machine-readable cache evidence. Warm consumers with
-  a positive floor fail when no cache requests are observable; the zero-floor
-  SafeTensors observation remains non-failing and emits a wiring warning.
+- `capture-sccache-stats`: machine-readable cache evidence. Required CI
+  consumers use a zero hit-rate floor and emit a wiring warning when no cache
+  requests are observable. Dedicated cache qualification canaries retain their
+  positive warm-restore floors.
 
 Rust-test batches that contain `skippy-runtime` or `skippy-package-builder`
 resolve the generated Skippy correctness manifest, then restore the pinned Qwen
@@ -1021,8 +1048,10 @@ parity canaries remain required. Other variables include `CUDA_VERSION`,
 `VULKAN_SDK_VERSION`, `MESH_ROCM_INFERENCE_RUNNER_ENABLED`,
 `MESH_VULKAN_INFERENCE_RUNNER_ENABLED`, smoke configuration variables, and
 release/deployment variables. Secret values never belong in this inventory;
-known names include `HF_TOKEN`, release-attestation keys, `CARGO_REGISTRY_TOKEN`
-and deployment tokens.
+known names include `HF_TOKEN`, release-attestation keys, `CARGO_REGISTRY_TOKEN`,
+`MESH_AGENT_IMAGES_DISPATCH_TOKEN`, and deployment tokens. The packaging
+dispatch token needs Contents write and Actions read on `mesh-packaging` so the
+upstream release can dispatch and verify the correlated terminal receipt.
 
 ## Live inspection
 

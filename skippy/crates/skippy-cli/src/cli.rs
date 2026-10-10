@@ -50,6 +50,9 @@ impl From<OutputFormat> for skippy_commands::console::OutputMode {
 
 #[derive(Subcommand)]
 pub enum Command {
+    /// Emit the immutable build requirements used by artifact composition.
+    #[command(hide = true)]
+    BuildContract,
     /// Inspect hardware, caches, and the selected native runtime.
     Doctor,
     /// Prompt a running Skippy OpenAI endpoint interactively.

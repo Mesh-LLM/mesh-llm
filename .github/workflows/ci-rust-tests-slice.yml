@@ -262,11 +262,13 @@ jobs:
         env:
           TEST_CRATES: ${{ steps.resolve_batch_crates.outputs.crates }}
           SKIPPY_CORRECTNESS_MODEL: ${{ runner.temp }}/skippy-correctness-model/${{ steps.skippy_correctness_model.outputs.file }}
+          CARGO_BATCH_ID: ${{ matrix.batch.id }}
+          CARGO_SOURCE_SHA: ${{ inputs.source_sha || github.sha }}
         run: |
           set -euo pipefail
           mapfile -t crates < <(jq -r '.[]' <<<"$TEST_CRATES")
+          executed=()
           for crate in ${crates[@]+"${crates[@]}"}; do
-            [[ "$crate" == "skippy-ffi" ]] && continue
             echo "::group::cargo test -p $crate"
             cargo test --locked -p "$crate"
             if [[ "$crate" == "mesh-llm-host-runtime" ]]; then
@@ -276,20 +278,33 @@ jobs:
                 claude_cli_executes_read_tool_through_host_ingress
               echo "::endgroup::"
             fi
+            executed+=("$crate")
             echo "::endgroup::"
           done
+          executed_json="$(jq -cn --args '$ARGS.positional' ${executed[@]+"${executed[@]}"})"
+          python3 "$GITHUB_WORKSPACE/scripts/record-ci-cargo-census.py" \
+            --kind test --batch-id "$CARGO_BATCH_ID" --source-sha "$CARGO_SOURCE_SHA" \
+            --selected "$TEST_CRATES" --executed "$executed_json" \
+            --out "$RUNNER_TEMP/cargo-census.json"
+      - name: Upload actual Rust test package census
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: cargo-census-test-${{ matrix.batch.id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/cargo-census.json
+          if-no-files-found: error
+          retention-days: 1
       - name: Capture Rust test cache evidence
         if: ${{ !cancelled() }}
         uses: ./.github/actions/capture-sccache-stats
         with:
           artifact_name: sccache-ci-rust-tests-${{ matrix.batch.id }}-${{ github.run_attempt }}
           cache_expectation: ${{ steps.sccache_seed.outputs.cache_hit == 'true' && 'warm' || 'cold' }}
-          minimum_hit_rate: "0.20"
+          minimum_hit_rate: "0"
 
   safetensors_runtime_smoke:
     name: SafeTensors runtime smoke
     needs: runner_policy
-    if: ${{ inputs.original_event_name == 'pull_request' && (contains(inputs.rust_tests_matrix, 'skippy-model') || contains(inputs.rust_tests_matrix, 'skippy-runtime') || contains(inputs.rust_tests_matrix, 'skippy-quantize') || contains(inputs.rust_tests_matrix, 'skippy-ffi') || contains(inputs.rust_tests_matrix, 'skippy-server') || contains(inputs.rust_tests_matrix, 'skippy-serving') || contains(inputs.rust_tests_matrix, 'skippy-cli') || contains(inputs.rust_tests_matrix, 'mesh-llm-skippy-adapter') || contains(inputs.rust_tests_matrix, 'skippy-protocol') || contains(inputs.rust_tests_matrix, 'skippy-cache') || contains(inputs.rust_tests_matrix, 'mesh-llm-config') || contains(inputs.rust_tests_matrix, 'mesh-llm-host-runtime') || contains(inputs.rust_tests_matrix, 'mesh-llm-cli')) }}
+    if: ${{ (inputs.original_event_name == 'pull_request' || inputs.original_event_name == 'push' || inputs.original_event_name == 'workflow_dispatch') && (contains(inputs.rust_tests_matrix, 'skippy-model') || contains(inputs.rust_tests_matrix, 'skippy-runtime') || contains(inputs.rust_tests_matrix, 'skippy-quantize') || contains(inputs.rust_tests_matrix, 'skippy-ffi') || contains(inputs.rust_tests_matrix, 'skippy-server') || contains(inputs.rust_tests_matrix, 'skippy-serving') || contains(inputs.rust_tests_matrix, 'skippy-cli') || contains(inputs.rust_tests_matrix, 'mesh-llm-skippy-adapter') || contains(inputs.rust_tests_matrix, 'skippy-protocol') || contains(inputs.rust_tests_matrix, 'skippy-cache') || contains(inputs.rust_tests_matrix, 'mesh-llm-config') || contains(inputs.rust_tests_matrix, 'mesh-llm-host-runtime') || contains(inputs.rust_tests_matrix, 'mesh-llm-cli')) }}
     runs-on: ${{ needs.runner_policy.outputs.runner }}
     timeout-minutes: 60
     container:

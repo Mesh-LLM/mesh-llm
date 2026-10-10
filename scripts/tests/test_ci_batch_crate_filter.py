@@ -90,6 +90,7 @@ def _stub_cargo(root: Path, members: list[str], metadata_fails: bool) -> Path:
         f"  printf '%s\\n' {json.dumps(payload)}\n"
         "  exit 0\n"
         "fi\n"
+        'if [[ -n "${STUB_CARGO_FAIL:-}" && "$*" == *"$STUB_CARGO_FAIL"* ]]; then exit 101; fi\n'
         "exit 0\n",
         encoding="utf-8",
     )
@@ -107,7 +108,8 @@ class BatchCrateFilterTest(unittest.TestCase):
         *,
         members: list[str] | None = None,
         metadata_fails: bool = False,
-    ) -> tuple[subprocess.CompletedProcess[str], subprocess.CompletedProcess[str], list[str]]:
+        cargo_fail: str = "",
+    ) -> tuple[subprocess.CompletedProcess[str], subprocess.CompletedProcess[str], list[str], dict]:
         """Run the resolve step then the batch step, as the workflow does."""
         resolve_step, batch_step = self._steps(workflow)
         resolve_script = _run_script(workflow, resolve_step)
@@ -128,6 +130,10 @@ class BatchCrateFilterTest(unittest.TestCase):
                     "STUB_CARGO_LOG": str(log),
                     "RUNNER_TEMP": str(runner_temp),
                     "GITHUB_OUTPUT": str(github_output),
+                    "GITHUB_WORKSPACE": str(ROOT),
+                    "CARGO_BATCH_ID": "fixture-batch",
+                    "CARGO_SOURCE_SHA": "a" * 40,
+                    "STUB_CARGO_FAIL": cargo_fail,
                     "PLANNED_BATCH_CRATES": json.dumps(requested),
                 }
             )
@@ -151,7 +157,9 @@ class BatchCrateFilterTest(unittest.TestCase):
                 text=True,
                 check=False,
             )
-            return resolved, completed, log.read_text(encoding="utf-8").splitlines()
+            census_path = runner_temp / "cargo-census.json"
+            census = json.loads(census_path.read_text(encoding="utf-8")) if census_path.exists() else {}
+            return resolved, completed, log.read_text(encoding="utf-8").splitlines(), census
 
     @staticmethod
     def _steps(workflow: str) -> tuple[str, str]:
@@ -169,7 +177,7 @@ class BatchCrateFilterTest(unittest.TestCase):
     def test_batch_resolves_against_the_checked_out_workspace(self) -> None:
         for workflow, _, _ in _BATCH_STEPS:
             with self.subTest(workflow=workflow):
-                resolved, completed, calls = self._execute(
+                resolved, completed, calls, census = self._execute(
                     workflow,
                     ["mesh-llm-analytics", "mesh-llm-host-runtime"],
                     members=["mesh-llm", "mesh-llm-host-runtime"],
@@ -180,12 +188,13 @@ class BatchCrateFilterTest(unittest.TestCase):
                 executed = self._executed_batches(calls)
                 self.assertNotIn("mesh-llm-analytics", executed)
                 self.assertIn("mesh-llm-host-runtime", executed)
+                self.assertEqual(census["executed"], ["mesh-llm-host-runtime"])
 
     @unittest.skipUnless(BASH, "needs bash >= 4 for mapfile")
     def test_all_absent_batch_skips_cargo(self) -> None:
         for workflow, _, _ in _BATCH_STEPS:
             with self.subTest(workflow=workflow):
-                resolved, completed, calls = self._execute(
+                resolved, completed, calls, census = self._execute(
                     workflow,
                     ["mesh-llm-analytics", "mesh-llm-not-a-member"],
                     members=["mesh-llm", "mesh-llm-host-runtime"],
@@ -194,12 +203,13 @@ class BatchCrateFilterTest(unittest.TestCase):
                 self.assertRegex(resolved.stdout, r"::warning::.*mesh-llm-analytics")
                 self.assertEqual(completed.returncode, 0, completed.stderr)
                 self.assertEqual(self._executed_batches(calls), "")
+                self.assertEqual(census["executed"], [])
 
     @unittest.skipUnless(BASH, "needs bash >= 4 for mapfile")
     def test_failed_metadata_runs_the_planned_batch_unchanged(self) -> None:
         for workflow, _, _ in _BATCH_STEPS:
             with self.subTest(workflow=workflow):
-                resolved, completed, calls = self._execute(
+                resolved, completed, calls, census = self._execute(
                     workflow,
                     ["mesh-llm-analytics"],
                     metadata_fails=True,
@@ -208,12 +218,13 @@ class BatchCrateFilterTest(unittest.TestCase):
                 self.assertIn("cargo metadata failed", resolved.stdout)
                 self.assertEqual(completed.returncode, 0, completed.stderr)
                 self.assertIn("mesh-llm-analytics", self._executed_batches(calls))
+                self.assertEqual(census["executed"], ["mesh-llm-analytics"])
 
     @unittest.skipUnless(BASH, "needs bash >= 4 for mapfile")
     def test_present_batch_runs_without_warnings(self) -> None:
         for workflow, _, _ in _BATCH_STEPS:
             with self.subTest(workflow=workflow):
-                resolved, completed, calls = self._execute(
+                resolved, completed, calls, census = self._execute(
                     workflow,
                     ["mesh-llm", "mesh-llm-host-runtime"],
                     members=["mesh-llm", "mesh-llm-host-runtime"],
@@ -224,6 +235,38 @@ class BatchCrateFilterTest(unittest.TestCase):
                 executed = self._executed_batches(calls)
                 self.assertIn("mesh-llm", executed)
                 self.assertIn("mesh-llm-host-runtime", executed)
+                self.assertEqual(census["executed"], ["mesh-llm", "mesh-llm-host-runtime"])
+
+    @unittest.skipUnless(BASH, "needs bash >= 4 for mapfile")
+    def test_skippy_ffi_is_executed_in_both_owning_budgets(self) -> None:
+        for workflow, _, _ in _BATCH_STEPS:
+            with self.subTest(workflow=workflow):
+                resolved, completed, calls, census = self._execute(
+                    workflow,
+                    ["skippy-ffi", "mesh-llm"],
+                    members=["skippy-ffi", "mesh-llm"],
+                )
+                self.assertEqual(resolved.returncode, 0, resolved.stderr)
+                self.assertEqual(completed.returncode, 0, completed.stderr)
+                executed = self._executed_batches(calls)
+                self.assertIn("-p skippy-ffi", executed)
+                self.assertEqual(executed.count("-p skippy-ffi"), 1)
+                self.assertEqual(census["executed"], ["mesh-llm", "skippy-ffi"])
+
+    @unittest.skipUnless(BASH, "needs bash >= 4 for mapfile")
+    def test_failed_cargo_command_never_emits_a_passing_census(self) -> None:
+        for workflow, _, _ in _BATCH_STEPS:
+            with self.subTest(workflow=workflow):
+                resolved, completed, calls, census = self._execute(
+                    workflow,
+                    ["skippy-ffi"],
+                    members=["skippy-ffi"],
+                    cargo_fail="skippy-ffi",
+                )
+                self.assertEqual(resolved.returncode, 0, resolved.stderr)
+                self.assertNotEqual(completed.returncode, 0)
+                self.assertIn("skippy-ffi", self._executed_batches(calls))
+                self.assertEqual(census, {})
 
     def test_renamed_batches_are_translated_before_the_workspace_filter(self) -> None:
         """A planned batch is translated first, then filtered by this revision.

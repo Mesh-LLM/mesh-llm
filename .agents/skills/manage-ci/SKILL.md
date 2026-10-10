@@ -206,6 +206,12 @@ owning source, and update the inventory and topology in the same change.
 - Pull requests test affected crates plus reverse dependents. Main tests every
   workspace member exactly once. Workspace discovery belongs to Cargo metadata,
   not a workflow-maintained allowlist.
+- A planned Rust package must execute its Clippy and test checks. When a package
+  needs an isolated feature graph, run a separate Cargo invocation and include
+  its result in the same required lane. Each batch records the package names
+  only after its Cargo invocation succeeds, rejects a selected/executed
+  mismatch, and uploads the run-scoped execution census. The selected SafeTensors executable
+  smoke runs with the same required cases on PR, main, and manual-full sources.
 - Use measured workload data to rebalance deterministic shards, but keep the
   checked-in algorithm reproducible. Use one Cargo invocation per shard unless
   a documented package-isolation check requires otherwise.
@@ -301,8 +307,10 @@ owning source, and update the inventory and topology in the same change.
   or enable per-object GHA publication for Linux Clippy, Rust tests, host, or
   runtime jobs.
 - Every seeded compiler job records whether the exact seed was warm or cold.
-  Enforce a measured minimum hit rate only for an exact warm restore; an
-  intentional cache miss is classified cold and must not fail the build.
+  Required CI jobs capture the measured hit rate as evidence with a zero floor;
+  cache efficiency does not block correctness while the Skippy-first workflow
+  is established. Dedicated cache qualification canaries retain their positive
+  warm-restore floors. An intentional cache miss is classified cold.
 
 ### Bounded Depot PR cache-risk exception
 
@@ -408,6 +416,16 @@ checked-in expiry are the maintainer-controlled approval boundary.
 - Model every executable product as a backend-neutral host, one separately
   packaged native runtime per OS/architecture/backend, and a composition-only
   product. A backend matrix belongs to runtime/product rows, never host rows.
+- Each selected platform builds one backend-neutral standalone Skippy CLI
+  independently of the Mesh UI and host. Pass the selected immutable source SHA
+  into CLI preparation and require the checkout to match before building.
+  Until the protected pre-migration host slices are removed, their local CLI
+  preparation may derive that SHA from the selected checked-out commit; the
+  dedicated CLI slices and release callers must pass it explicitly.
+  Verify its embedded source/version/ABI contract and the native producer's
+  source sidecar, then compose it with each exact selected runtime before starting
+  the Mesh host. Standalone composition and its eventual qualification receipt
+  are required dependencies of the matching platform's Mesh host producer.
 - Build prepared UI assets once per selected platform lane and feed that
   immutable artifact to every host producer in the lane. Host producers must
   not rerun UI tests. Cross-workflow artifact sharing is an explicit timing

@@ -317,6 +317,7 @@ jobs:
       - name: Prepare standalone Skippy CLI
         uses: ./.github/actions/prepare-skippy-cli-input
         with:
+          source_sha: ${{ needs.metadata.outputs.source_sha }}
           profile: release
       - name: Package standalone Skippy CLI
         env:
@@ -933,6 +934,7 @@ jobs:
       - name: Prepare standalone Skippy CLI
         uses: ./.github/actions/prepare-skippy-cli-input
         with:
+          source_sha: ${{ needs.metadata.outputs.source_sha }}
           profile: release
       - name: Package standalone ARM64 Skippy CLI
         env:
@@ -1392,6 +1394,7 @@ jobs:
       - name: Prepare standalone Skippy CLI
         uses: ./.github/actions/prepare-skippy-cli-input
         with:
+          source_sha: ${{ needs.metadata.outputs.source_sha }}
           profile: release
       - name: Package standalone Windows Skippy CLI
         shell: bash
@@ -1780,7 +1783,8 @@ jobs:
       - compose_windows_gpu
       - build_native_runtime_windows_cpu
       - build_native_runtime_windows_gpu
-    if: ${{ !cancelled() && needs.metadata.result == 'success' && needs.metadata.outputs.canary != 'true' && needs.compose_cpu_products.result == 'success' && needs.inference_smoke_tests.result == 'success' && needs.build_native_sdk_runtime.result == 'success' && needs.build_node_sdk_addon.result == 'success' && needs.build_native_runtime.result == 'success' && (needs.build_native_runtime_linux_aarch64_cuda.result == 'success' || needs.build_native_runtime_linux_aarch64_cuda.result == 'skipped') && (needs.build_native_runtime_linux_x86_64_cuda.result == 'success' || needs.build_native_runtime_linux_x86_64_cuda.result == 'skipped') && (needs.build_native_runtime_linux_x86_64_rocm.result == 'success' || needs.build_native_runtime_linux_x86_64_rocm.result == 'skipped') && (needs.build_native_runtime_linux_x86_64_vulkan.result == 'success' || needs.build_native_runtime_linux_x86_64_vulkan.result == 'skipped') && needs.build_swift_sdk_artifact.result == 'success' && needs.compose_linux_arm64_cpu.result == 'success' && needs.smoke_linux_arm64_artifact.result == 'success' && (needs.compose_linux_aarch64_cuda.result == 'success' || needs.compose_linux_aarch64_cuda.result == 'skipped') && (needs.compose_linux_cuda.result == 'success' || needs.compose_linux_cuda.result == 'skipped') && (needs.compose_linux_rocm.result == 'success' || needs.compose_linux_rocm.result == 'skipped') && (needs.compose_linux_vulkan.result == 'success' || needs.compose_linux_vulkan.result == 'skipped') && needs.compose_windows_cpu.result == 'success' && (needs.compose_windows_gpu.result == 'success' || needs.compose_windows_gpu.result == 'skipped') && needs.build_native_runtime_windows_cpu.result == 'success' && (needs.build_native_runtime_windows_gpu.result == 'success' || needs.build_native_runtime_windows_gpu.result == 'skipped') }}
+      - publish_crates_preflight
+    if: ${{ !cancelled() && needs.metadata.result == 'success' && needs.metadata.outputs.canary != 'true' && needs.publish_crates_preflight.result == 'success' && needs.compose_cpu_products.result == 'success' && needs.inference_smoke_tests.result == 'success' && needs.build_native_sdk_runtime.result == 'success' && needs.build_node_sdk_addon.result == 'success' && needs.build_native_runtime.result == 'success' && (needs.build_native_runtime_linux_aarch64_cuda.result == 'success' || needs.build_native_runtime_linux_aarch64_cuda.result == 'skipped') && (needs.build_native_runtime_linux_x86_64_cuda.result == 'success' || needs.build_native_runtime_linux_x86_64_cuda.result == 'skipped') && (needs.build_native_runtime_linux_x86_64_rocm.result == 'success' || needs.build_native_runtime_linux_x86_64_rocm.result == 'skipped') && (needs.build_native_runtime_linux_x86_64_vulkan.result == 'success' || needs.build_native_runtime_linux_x86_64_vulkan.result == 'skipped') && needs.build_swift_sdk_artifact.result == 'success' && needs.compose_linux_arm64_cpu.result == 'success' && needs.smoke_linux_arm64_artifact.result == 'success' && (needs.compose_linux_aarch64_cuda.result == 'success' || needs.compose_linux_aarch64_cuda.result == 'skipped') && (needs.compose_linux_cuda.result == 'success' || needs.compose_linux_cuda.result == 'skipped') && (needs.compose_linux_rocm.result == 'success' || needs.compose_linux_rocm.result == 'skipped') && (needs.compose_linux_vulkan.result == 'success' || needs.compose_linux_vulkan.result == 'skipped') && needs.compose_windows_cpu.result == 'success' && (needs.compose_windows_gpu.result == 'success' || needs.compose_windows_gpu.result == 'skipped') && needs.build_native_runtime_windows_cpu.result == 'success' && (needs.build_native_runtime_windows_gpu.result == 'success' || needs.build_native_runtime_windows_gpu.result == 'skipped') }}
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -1908,6 +1912,17 @@ jobs:
             "${validator_args[@]}" \
             release-artifacts/*
           shasum -a 256 release-artifacts/native-runtimes.json | awk '{print $1 "  native-runtimes.json"}' > release-artifacts/native-runtimes.json.sha256
+
+      - name: Upload composed native runtime manifest
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: composed-native-runtimes-manifest
+          path: |
+            release-artifacts/native-runtimes.json
+            release-artifacts/native-runtimes.json.sha256
+          retention-days: 90
+          if-no-files-found: error
 
       - name: Download generated SwiftPM manifest
         if: github.event_name == 'workflow_dispatch'
@@ -2039,10 +2054,20 @@ jobs:
     needs: [metadata, publish]
     if: ${{ needs.publish.result == 'success' && needs.metadata.outputs.prerelease != 'true' && needs.metadata.outputs.skip_gpu_bundles != 'true' }}
     runs-on: ubuntu-24.04
+    outputs:
+      correlation_id: ${{ steps.dispatch.outputs.correlation_id }}
+      mesh_sha: ${{ steps.dispatch.outputs.mesh_sha }}
+      manifest_sha256: ${{ steps.dispatch.outputs.manifest_sha256 }}
     permissions:
       contents: read
     steps:
+      - name: Download composed native runtime manifest
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: composed-native-runtimes-manifest
+          path: composed-native-runtimes-manifest
       - name: Dispatch verified release to mesh-packaging
+        id: dispatch
         env:
           GH_TOKEN: ${{ secrets.MESH_AGENT_IMAGES_DISPATCH_TOKEN }}
           TARGET_REPOSITORY: Mesh-LLM/mesh-packaging
@@ -2062,16 +2087,42 @@ jobs:
             echo "MESH_AGENT_IMAGES_DISPATCH_TOKEN must grant Contents write access to ${TARGET_REPOSITORY}; update the secret before retrying this release" >&2
             exit 1
           }
+          mesh_sha="$(git ls-remote "https://github.com/${GITHUB_REPOSITORY}.git" "refs/tags/${RELEASE_TAG}^{}" | awk 'NR == 1 { print $1 }')"
+          if [[ -z "$mesh_sha" ]]; then
+            mesh_sha="$(git ls-remote "https://github.com/${GITHUB_REPOSITORY}.git" "refs/tags/${RELEASE_TAG}" | awk 'NR == 1 { print $1 }')"
+          fi
+          [[ "$mesh_sha" =~ ^[0-9a-f]{40}$ ]] || { echo "published release tag did not resolve to a commit" >&2; exit 1; }
+          # Provenance, not trust-on-first-use: the expected manifest digest is
+          # the composed manifest this workflow uploaded, never the bytes served
+          # back from the published release asset.
+          manifest_sha256="$(sha256sum composed-native-runtimes-manifest/native-runtimes.json | cut -d ' ' -f 1)"
+          [[ "$manifest_sha256" =~ ^[0-9a-f]{64}$ ]] || { echo "composed native runtime manifest is missing" >&2; exit 1; }
+          if ! (cd composed-native-runtimes-manifest && sha256sum -c native-runtimes.json.sha256); then
+            echo "composed native runtime manifest bytes differ from the checksum recorded beside them" >&2
+            exit 1
+          fi
+          correlation_id="mesh-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${RELEASE_TAG}"
+          {
+            echo "correlation_id=$correlation_id"
+            echo "mesh_sha=$mesh_sha"
+            echo "manifest_sha256=$manifest_sha256"
+          } >> "$GITHUB_OUTPUT"
           jq -n \
             --arg repository "$GITHUB_REPOSITORY" \
             --arg ref "$RELEASE_TAG" \
             --arg version "$RELEASE_VERSION" \
+            --arg mesh_sha "$mesh_sha" \
+            --arg manifest_sha256 "$manifest_sha256" \
+            --arg correlation_id "$correlation_id" \
             '{
               event_type: "mesh-llm-release",
               client_payload: {
                 repository: $repository,
                 ref: $ref,
                 version: $version,
+                expected_mesh_sha: $mesh_sha,
+                expected_manifest_sha256: $manifest_sha256,
+                correlation_id: $correlation_id,
                 dry_run: false,
                 publish_images: true,
                 publish_release_assets: true,
@@ -2083,10 +2134,47 @@ jobs:
               "repos/${TARGET_REPOSITORY}/dispatches" \
               --input -
 
+  await_packaging_release:
+    name: Verify terminal packaging readiness
+    needs: [metadata, dispatch_packaging_release]
+    if: ${{ needs.dispatch_packaging_release.result == 'success' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ needs.metadata.outputs.source_sha }}
+          persist-credentials: false
+      - name: Wait for correlated packaging receipt
+        env:
+          GH_TOKEN: ${{ secrets.MESH_AGENT_IMAGES_DISPATCH_TOKEN }}
+          RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
+          CORRELATION_ID: ${{ needs.dispatch_packaging_release.outputs.correlation_id }}
+          MESH_SHA: ${{ needs.dispatch_packaging_release.outputs.mesh_sha }}
+          MANIFEST_SHA256: ${{ needs.dispatch_packaging_release.outputs.manifest_sha256 }}
+        run: |
+          python3 scripts/await-packaging-release.py \
+            --repository Mesh-LLM/mesh-packaging \
+            --correlation-id "$CORRELATION_ID" \
+            --upstream-repository "$GITHUB_REPOSITORY" \
+            --upstream-ref "$RELEASE_TAG" \
+            --upstream-sha "$MESH_SHA" \
+            --manifest-sha256 "$MANIFEST_SHA256" \
+            --out packaging-readiness.json
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        if: ${{ !cancelled() }}
+        with:
+          name: release-packaging-readiness-${{ needs.metadata.outputs.tag }}
+          path: packaging-readiness.json
+          if-no-files-found: warn
+          retention-days: 90
+
   publish_crates_preflight:
     name: Preflight crates.io packages
-    needs: [metadata, publish]
-    if: ${{ needs.metadata.outputs.prerelease != 'true' && needs.metadata.outputs.canary != 'true' }}
+    needs: [metadata, compose_cpu_products]
+    if: ${{ needs.metadata.result == 'success' && needs.compose_cpu_products.result == 'success' }}
     runs-on: ubuntu-24.04
     container:
       image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:f499b79bc52dc7492d57397fdbec9f890c6f6bb1d8c1fcde9c1c97d45c0541a7
@@ -2096,7 +2184,7 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
-          ref: ${{ needs.metadata.outputs.tag }}
+          ref: ${{ needs.metadata.outputs.source_sha }}
           persist-credentials: false
       - name: Trust checkout directory
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
@@ -2112,6 +2200,11 @@ jobs:
         run: scripts/release-version.sh "$RELEASE_TAG"
       - name: Check crates.io publish-chain consistency
         run: cargo run -p xtask -- repo-consistency publish-crates
+      - name: Download immutable Linux release product
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-linux
+          path: release-artifacts
       - name: Restore verified release runtime libraries
         id: runtime
         shell: bash
@@ -2122,12 +2215,9 @@ jobs:
           archive="mesh-llm-${RELEASE_TAG}-x86_64-unknown-linux-gnu.tar.gz"
           runtime_root="$RUNNER_TEMP/mesh-llm-release-runtime"
           mkdir -p "$runtime_root"
-          curl --fail --location --retry 3 \
-            --output "$runtime_root/$archive" \
-            "https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/${archive}"
-          curl --fail --location --retry 3 \
-            --output "$runtime_root/$archive.sha256" \
-            "https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/${archive}.sha256"
+          test -s "release-artifacts/$archive"
+          test -s "release-artifacts/$archive.sha256"
+          cp "release-artifacts/$archive" "release-artifacts/$archive.sha256" "$runtime_root/"
           (
             cd "$runtime_root"
             sha256sum --check "$archive.sha256"

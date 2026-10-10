@@ -114,7 +114,7 @@ class CiRunnerSelectionAndCachePolicyTests(RunnerSelectorMixin, unittest.TestCas
                 if "pr_approved_ref:" in block:
                     approved_policy_calls += 1
                     self.assertIn("pr_approved_sha:", block)
-        self.assertEqual(selector_calls, 20)
+        self.assertEqual(selector_calls, 22)
         # The release selector and hosted CPU runtime selector do not pass
         # the deprecated pull-request approval inputs.
         self.assertEqual(approved_policy_calls, 18)

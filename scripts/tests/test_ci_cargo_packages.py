@@ -88,6 +88,8 @@ class CargoPackageCompatibilityTests(unittest.TestCase):
 
     def test_safetensors_step_compiles_selected_owner_once_and_requires_exact_test(self):
         job = yaml.safe_load((ROOT / '.github/workflows/ci-rust-tests-slice.yml').read_text())['jobs']['safetensors_runtime_smoke']
+        self.assertIn("inputs.original_event_name == 'push'", job['if'])
+        self.assertIn("inputs.original_event_name == 'workflow_dispatch'", job['if'])
         script = next(step['run'] for step in job['steps'] if step.get('id') == 'safetensors_smoke_test')
         for adapter in (False, True):
             for present in (False, True):

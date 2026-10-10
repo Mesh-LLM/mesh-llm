@@ -82,7 +82,18 @@ pub async fn run(mut args: ServeCommandArgs) -> Result<()> {
     }
     match args.stage_transport {
         Some(StageTransport::Binary) => serve_binary_stage(args).await,
-        None => serve_public(args).await,
+        None => {
+            if args
+                .public
+                .model_path
+                .as_deref()
+                .is_some_and(crate::laya_serve::is_laya)
+            {
+                crate::laya_serve::run(args).await
+            } else {
+                serve_public(args).await
+            }
+        }
     }
 }
 
@@ -456,7 +467,7 @@ async fn serve_with_readiness(
     }
 }
 
-fn readiness_addr(bind_addr: SocketAddr) -> SocketAddr {
+pub(crate) fn readiness_addr(bind_addr: SocketAddr) -> SocketAddr {
     // A wildcard listener accepts loopback; a LAN-only listener does not.
     if bind_addr.ip().is_unspecified() {
         SocketAddr::new(

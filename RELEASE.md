@@ -1,5 +1,11 @@
 # Releasing mesh-llm
 
+The [CI and release audit](ci/CI_RELEASE_AUDIT.md) proposes Skippy-first
+qualification, verified artifact reuse, final-byte release testing and workflow
+cleanup. It includes the platform matrix, before/after workflow inventory and
+phased implementation plan. The procedure below describes the current release
+process.
+
 ## Preferred path: dispatch from GitHub
 
 Releases are normally cut by running the **Release** workflow
@@ -17,7 +23,9 @@ range plus any post-RC changes. The `just release <version>` recipe performs
 local preflight and
 dispatches this same workflow; it does not maintain a second version-bump path.
 Canary dispatches build the requested version without changing `main` or
-publishing. After a complete
+publishing and run the same credential-free crates dry run against the
+same-run Linux release artifact. The dry run gates GitHub publication for a
+normal release. After a complete
 stable, non-canary release with the full GPU matrix succeeds, it dispatches
 `Mesh-LLM/mesh-packaging` to package the verified release archives, publish the
 native package release assets, publish the supported GHCR image matrix, and
@@ -25,7 +33,9 @@ assemble and publish the Node SDK to npm. Prereleases publish their immutable
 GitHub Release inputs without invoking downstream publication. Dispatch inputs
 include `skip_gpu_bundles` and `canary` (dry-run: build and smoke everything
 without publishing). Releases that intentionally skip GPU bundles do not
-dispatch the full packaging matrix.
+dispatch the full packaging matrix. The stable full release then waits for an
+identity-bound terminal packaging receipt; dispatch acceptance by itself does
+not complete the upstream release workflow.
 
 Do not use GitHub's bare **Draft a new release** form as an alternate release
 path. It bypasses the verified artifact graph. The Release workflow is the only
@@ -250,7 +260,8 @@ If the downstream dispatch preflight fails, update the repository Actions secret
 `MESH_AGENT_IMAGES_DISPATCH_TOKEN` with a fine-grained token or GitHub App token
 that has Contents write access to `Mesh-LLM/mesh-packaging`, then retry the
 failed dispatch job. A repository secret's presence does not prove that its
-credential can write the target repository. Do not put the token in workflow
+credential can write the target repository. The receipt wait additionally needs
+Actions read access there. Do not put the token in workflow
 logs or command output.
 
 On non-prerelease tags, the release workflow also publishes the Rust SDK crate
