@@ -1,0 +1,31 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: James Dumay <jameswdumay@gmail.com>
+Date: Sat, 11 Oct 2026 09:30:00 +1100
+Subject: [PATCH] fix(skippy): passthrough empty SET destinations in stage replay
+
+A 0-token ubatch (the state-handoff flush pass) rebuilds SET destinations
+empty. Chameleon's image-logit suppression splice is the only recorded SET
+producer and its constant-size img_logits source asserts against the empty
+destination in ggml_set_impl, aborting the handoff. Pass the empty
+destination through unchanged: the recorded set is vacuous there, and every
+other family replays zero SET operations.
+---
+diff --git a/src/skippy/stage_program_replay.cpp b/src/skippy/stage_program_replay.cpp
+index e7b4d212a..c134ae58d 100644
+--- a/src/skippy/stage_program_replay.cpp
++++ b/src/skippy/stage_program_replay.cpp
+@@ -609,6 +609,14 @@ ggml_tensor * replay_operation(
+             tensor = ggml_cumsum(context, sources[0]);
+             break;
+         case GGML_OP_SET:
++            // A 0-token ubatch rebuilds the destination empty and the recorded set
++            // is vacuous there; passthrough keeps the empty output instead of
++            // tripping ggml_set_impl's element-count assert (chameleon's
++            // constant-size image-logit splice is the only SET producer).
++            if (ggml_nelements(sources[0]) == 0) {
++                tensor = sources[0];
++                break;
++            }
+             tensor = operation.alias_source == 0
+                     ? ggml_set_inplace(context, sources[0], sources[1],
+                             operation_parameter<int32_t>(operation, 0), operation_parameter<int32_t>(operation, 1),
