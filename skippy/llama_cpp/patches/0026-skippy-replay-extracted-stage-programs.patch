@@ -21,6 +21,7 @@ Subject: [PATCH 26/67] skippy: replay extracted stage programs
  src/models/deepseek4.cpp                         | 273 ++++++-
  src/models/delta-net-base.cpp                    | 120 ++-
  src/models/granite-switch.cpp                    |  26 +-
+ src/models/kimi-k3.cpp                           | 102 ++-
  src/models/kimi-linear.cpp                       | 111 ++-
  src/models/laguna.cpp                            |   9 +
  src/models/lfm2.cpp                              |  25 +-
@@ -64,7 +65,7 @@ Subject: [PATCH 26/67] skippy: replay extracted stage programs
  src/skippy/tests/renamed_multishard_planning.cpp | 223 +++++-
  src/skippy/tests/stage_program_parity.h          | 374 +++++++++
  tests/test-llama-archs.cpp                       |  39 +
- 60 files changed, 8740 insertions(+), 306 deletions(-)
+ 61 files changed, 8835 insertions(+), 313 deletions(-)
 
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
 index b4f9bb467..37c303bd6 100644
@@ -2969,6 +2970,225 @@ index c190a4778..1af4c6ed4 100644
  
      Qcur = ggml_add(ctx0, Qcur, build_switched_lora_delta(sl.a_q, sl.b_q, cur, adapter_ids));
      Kcur = ggml_add(ctx0, Kcur, build_switched_lora_delta(sl.a_k, sl.b_k, cur, adapter_ids));
+diff --git a/src/models/kimi-k3.cpp b/src/models/kimi-k3.cpp
+index 17ff450ee..84a341f6a 100644
+--- a/src/models/kimi-k3.cpp
++++ b/src/models/kimi-k3.cpp
+@@ -2,6 +2,7 @@
+ 
+ #include <algorithm>
+ #include "llama-memory-recurrent.h"
++#include "skippy/stage_program.h"
+ 
+ //
+ // Kimi-K3 text model: hybrid KDA (linear) + MLA (full) attention, as in kimi-linear.
+@@ -369,9 +370,16 @@ static ggml_tensor * kimi_k3_conv1d(ggml_cgraph * gf, ggml_context * ctx0,
+         (d_conv - 1)   * ggml_element_size(conv_state_all),
+         n_embd_r_total * ggml_element_size(conv_state_all),
+         qkv * conv_state_size * ggml_element_size(conv_state_all));
++    auto conv_state_x_geometry = skippy_stage_geometry_static(conv_state_x);
++    conv_state_x_geometry.dimensions[2] = skippy_stage_geometry_expression::sequences();
++    skippy_stage_geometry_note(conv_state_x, conv_state_x_geometry);
+ 
+     ggml_tensor * x_proj = ggml_mul_mat(ctx0, proj_w, x);
+     ggml_tensor * x_3d   = ggml_reshape_3d(ctx0, x_proj, d_inner, n_seq_tokens, n_seqs);
++    auto x_3d_geometry = skippy_stage_geometry_static(x_3d);
++    x_3d_geometry.dimensions[1] = skippy_stage_geometry_expression::tokens_per_sequence();
++    x_3d_geometry.dimensions[2] = skippy_stage_geometry_expression::sequences();
++    skippy_stage_geometry_note(x_3d, x_3d_geometry);
+     ggml_tensor * conv_x = ggml_concat(ctx0, conv_state_x, ggml_transpose(ctx0, x_3d), 0);
+ 
+     // group s holds the conv window s tokens back.
+@@ -380,20 +388,41 @@ static ggml_tensor * kimi_k3_conv1d(ggml_cgraph * gf, ggml_context * ctx0,
+         const int64_t s_idx = std::max<int64_t>(0, n_seq_tokens - s);
+         ggml_tensor * conv_x_s = ggml_view_3d(ctx0, conv_x, d_conv - 1, d_inner, n_seqs,
+             conv_x->nb[1], conv_x->nb[2], s_idx * conv_x->nb[0]);
+-        ggml_build_forward_expand(gf,
+-            ggml_cpy(ctx0, conv_x_s,
+-                ggml_view_3d(ctx0, conv_states_all, d_conv - 1, d_inner, n_seqs,
+-                    (d_conv - 1)   * ggml_element_size(conv_states_all),
+-                    n_embd_r_total * ggml_element_size(conv_states_all),
+-                    ((s * mem_size + kv_head) * n_embd_r_total + qkv * conv_state_size) * ggml_element_size(conv_states_all))));
++        auto conv_x_s_geometry = skippy_stage_geometry_static(conv_x_s);
++        conv_x_s_geometry.dimensions[2] = skippy_stage_geometry_expression::sequences();
++        conv_x_s_geometry.byte_strides[1] = skippy_stage_geometry_expression::source_stride(0, 1);
++        conv_x_s_geometry.byte_strides[2] = skippy_stage_geometry_expression::source_stride(0, 2);
++        conv_x_s_geometry.view_offset = skippy_stage_geometry_expression::tokens_per_sequence_clamped(
++                -s, conv_x->nb[0]);
++        skippy_stage_geometry_note(conv_x_s, conv_x_s_geometry);
++        ggml_tensor * conv_state_destination = ggml_view_3d(ctx0, conv_states_all, d_conv - 1, d_inner, n_seqs,
++                (d_conv - 1)   * ggml_element_size(conv_states_all),
++                n_embd_r_total * ggml_element_size(conv_states_all),
++                ((s * mem_size + kv_head) * n_embd_r_total + qkv * conv_state_size) * ggml_element_size(conv_states_all));
++        auto conv_state_destination_geometry = skippy_stage_geometry_static(conv_state_destination);
++        conv_state_destination_geometry.dimensions[2] = skippy_stage_geometry_expression::sequences();
++        conv_state_destination_geometry.view_offset = skippy_stage_geometry_expression::recurrent_head_offset(
++                0, 1, (s * mem_size * n_embd_r_total + qkv * conv_state_size) *
++                        static_cast<int64_t>(ggml_element_size(conv_states_all)));
++        skippy_stage_geometry_note(conv_state_destination, conv_state_destination_geometry);
++        ggml_build_forward_expand(gf, ggml_cpy(ctx0, conv_x_s, conv_state_destination));
+     }
+ 
+     ggml_tensor * conv_weight = ggml_reshape_2d(ctx0, conv_w, d_conv, d_inner);
++    skippy_stage_geometry_note(conv_weight, skippy_stage_geometry_static(conv_weight));
+     ggml_tensor * Xcur = ggml_ssm_conv(ctx0, conv_x, conv_weight);
+     Xcur = ggml_reshape_2d(ctx0, Xcur, d_inner, n_tokens);
++    auto xcur_geometry = skippy_stage_geometry_static(Xcur);
++    xcur_geometry.dimensions[1] = skippy_stage_geometry_expression::tokens();
++    skippy_stage_geometry_note(Xcur, xcur_geometry);
+     Xcur = ggml_silu(ctx0, Xcur);
+ 
+-    return ggml_reshape_4d(ctx0, Xcur, head_dim, n_head, n_seq_tokens, n_seqs);
++    ggml_tensor * result = ggml_reshape_4d(ctx0, Xcur, head_dim, n_head, n_seq_tokens, n_seqs);
++    auto result_geometry = skippy_stage_geometry_static(result);
++    result_geometry.dimensions[2] = skippy_stage_geometry_expression::tokens_per_sequence();
++    result_geometry.dimensions[3] = skippy_stage_geometry_expression::sequences();
++    skippy_stage_geometry_note(result, result_geometry);
++    return result;
+ }
+ 
+ ggml_tensor * llama_model_kimi_k3::graph::build_kda_layer(
+@@ -426,31 +455,53 @@ ggml_tensor * llama_model_kimi_k3::graph::build_kda_layer(
+     g1 = ggml_add(ctx0, g1, layer.ssm_dt_b);
+ 
+     ggml_tensor * A = ggml_reshape_3d(ctx0, layer.ssm_a, 1, n_head_kda, 1);
++    skippy_stage_geometry_note(A, skippy_stage_geometry_static(A));
+ 
+     if (hparams.kda_gate_lower_bound > -INFINITY) {
+         g1 = ggml_reshape_3d(ctx0, g1, head_dim, n_head_kda, n_tokens);
++        auto gate_geometry = skippy_stage_geometry_static(g1);
++        gate_geometry.dimensions[2] = skippy_stage_geometry_expression::tokens();
++        skippy_stage_geometry_note(g1, gate_geometry);
+         g1 = ggml_mul(ctx0, g1, A);                                    // -exp(A_log) * (...)
+         g1 = ggml_sigmoid(ctx0, ggml_scale(ctx0, g1, -1.0f));
+         g1 = ggml_scale(ctx0, g1, hparams.kda_gate_lower_bound);
+     } else {
+         g1 = ggml_softplus(ctx0, g1);
+         g1 = ggml_reshape_3d(ctx0, g1, head_dim, n_head_kda, n_tokens);
++        auto gate_geometry = skippy_stage_geometry_static(g1);
++        gate_geometry.dimensions[2] = skippy_stage_geometry_expression::tokens();
++        skippy_stage_geometry_note(g1, gate_geometry);
+         g1 = ggml_mul(ctx0, g1, A);
+     }
+     cb(g1, "kda_g1", il);
+ 
+     g1 = ggml_reshape_4d(ctx0, g1, head_dim, n_head_kda, n_seq_tokens, n_seqs);
++    auto gate_sequence_geometry = skippy_stage_geometry_static(g1);
++    gate_sequence_geometry.dimensions[2] = skippy_stage_geometry_expression::tokens_per_sequence();
++    gate_sequence_geometry.dimensions[3] = skippy_stage_geometry_expression::sequences();
++    skippy_stage_geometry_note(g1, gate_sequence_geometry);
+ 
+     ggml_tensor * beta = ggml_mul_mat(ctx0, layer.ssm_beta, cur);
+     beta = ggml_reshape_4d(ctx0, beta, 1, n_head_kda, n_seq_tokens, n_seqs);
++    auto beta_geometry = skippy_stage_geometry_static(beta);
++    beta_geometry.dimensions[2] = skippy_stage_geometry_expression::tokens_per_sequence();
++    beta_geometry.dimensions[3] = skippy_stage_geometry_expression::sequences();
++    skippy_stage_geometry_note(beta, beta_geometry);
+     beta = ggml_sigmoid(ctx0, beta);
+     cb(beta, "kda_beta", il);
+ 
+     ggml_tensor * cur_3d = ggml_reshape_3d(ctx0, cur, cur->ne[0], n_seq_tokens, n_seqs);
++    auto recurrent_input_geometry = skippy_stage_geometry_static(cur_3d);
++    recurrent_input_geometry.dimensions[1] = skippy_stage_geometry_expression::tokens_per_sequence();
++    recurrent_input_geometry.dimensions[2] = skippy_stage_geometry_expression::sequences();
++    skippy_stage_geometry_note(cur_3d, recurrent_input_geometry);
+ 
+     ggml_tensor * ssm_states_all = mctx_cur->get_s_l(il);
+     ggml_tensor * state = build_rs(inp_rs, ssm_states_all, hparams.n_embd_s(), n_seqs, skippy_state_kind::recurrent_ssm, il);
+     state = ggml_reshape_4d(ctx0, state, head_dim, head_dim, n_head_kda, n_seqs);
++    auto state_geometry = skippy_stage_geometry_static(state);
++    state_geometry.dimensions[3] = skippy_stage_geometry_expression::sequences();
++    skippy_stage_geometry_note(state, state_geometry);
+ 
+     const float eps_norm = hparams.f_norm_rms_eps;
+     Qcur = build_gdn_l2_norm(ctx0, Qcur, eps_norm);
+@@ -458,20 +509,37 @@ ggml_tensor * llama_model_kimi_k3::graph::build_kda_layer(
+ 
+     ggml_tensor * output = build_recurrent_attn(inp_rs, ssm_states_all, Qcur, Kcur, Vcur, g1, beta, state, il);
+     output = ggml_cont(ctx0, output);
++    auto output_geometry = skippy_stage_geometry_static(output);
++    for (int axis = 0; axis < GGML_MAX_DIMS; ++axis) {
++        output_geometry.dimensions[axis] = skippy_stage_geometry_expression::source_dimension(0, axis);
++    }
++    skippy_stage_geometry_note(output, output_geometry);
+     cb(output, "kda_scan_out", il);
+ 
+     // K3: single full-rank gate (kimi-linear factors this as g_b(g_a(x)))
+     ggml_tensor * cur_2d = ggml_reshape_2d(ctx0, cur_3d, cur_3d->ne[0], n_seq_tokens * n_seqs);
++    auto cur_2d_geometry = skippy_stage_geometry_static(cur_2d);
++    cur_2d_geometry.dimensions[1] = skippy_stage_geometry_expression::tokens();
++    skippy_stage_geometry_note(cur_2d, cur_2d_geometry);
+     ggml_tensor * g2     = ggml_mul_mat(ctx0, layer.ssm_g, cur_2d);
+     g2 = ggml_reshape_3d(ctx0, g2, head_dim, n_head_kda, n_seq_tokens * n_seqs);
++    auto g2_geometry = skippy_stage_geometry_static(g2);
++    g2_geometry.dimensions[2] = skippy_stage_geometry_expression::tokens();
++    skippy_stage_geometry_note(g2, g2_geometry);
+ 
+     ggml_tensor * o      = ggml_reshape_3d(ctx0, output, head_dim, n_head_kda, n_seq_tokens * n_seqs);
++    auto attn_output_geometry = skippy_stage_geometry_static(o);
++    attn_output_geometry.dimensions[2] = skippy_stage_geometry_expression::tokens();
++    skippy_stage_geometry_note(o, attn_output_geometry);
+     ggml_tensor * normed = build_norm(o, layer.ssm_o_norm, nullptr, LLM_NORM_RMS, il);
+     cb(g2, "kda_g2", il);
+     cb(normed, "kda_normed", il);
+     ggml_tensor * gated  = ggml_mul(ctx0, normed, ggml_sigmoid(ctx0, g2));
+ 
+     gated = ggml_cont_2d(ctx0, gated, d_inner, n_tokens);
++    auto gated_geometry = skippy_stage_geometry_static(gated);
++    gated_geometry.dimensions[1] = skippy_stage_geometry_expression::tokens();
++    skippy_stage_geometry_note(gated, gated_geometry);
+     cur   = ggml_mul_mat(ctx0, layer.wo, gated);
+     cb(cur, "kda_out", il);
+ 
+@@ -503,10 +571,19 @@ ggml_tensor * llama_model_kimi_k3::graph::build_mla_layer(
+ 
+     ggml_tensor * kv_cmpr = ggml_view_2d(ctx0, kv_cmpr_pe, kv_lora_rank, n_tokens,
+         ggml_row_size(kv_cmpr_pe->type, kv_lora_rank + n_embd_head_qk_rope), 0);
++    auto kv_cmpr_geometry = skippy_stage_geometry_static(kv_cmpr);
++    kv_cmpr_geometry.dimensions[1] = skippy_stage_geometry_expression::tokens();
++    kv_cmpr_geometry.byte_strides[1] = skippy_stage_geometry_expression::source_stride(0, 1);
++    skippy_stage_geometry_note(kv_cmpr, kv_cmpr_geometry);
+     ggml_tensor * k_pe = ggml_view_3d(ctx0, kv_cmpr_pe, n_embd_head_qk_rope, 1, n_tokens,
+         ggml_row_size(kv_cmpr_pe->type, kv_lora_rank + n_embd_head_qk_rope),
+         ggml_row_size(kv_cmpr_pe->type, kv_lora_rank + n_embd_head_qk_rope),
+         ggml_row_size(kv_cmpr_pe->type, kv_lora_rank));
++    auto k_pe_geometry = skippy_stage_geometry_static(k_pe);
++    k_pe_geometry.dimensions[2] = skippy_stage_geometry_expression::tokens();
++    k_pe_geometry.byte_strides[1] = skippy_stage_geometry_expression::source_stride(0, 1);
++    k_pe_geometry.byte_strides[2] = skippy_stage_geometry_expression::source_stride(0, 1);
++    skippy_stage_geometry_note(k_pe, k_pe_geometry);
+ 
+     // no RoPE: mla_use_nope is asserted at conversion time
+     kv_cmpr = build_norm(kv_cmpr, layer.attn_kv_a_norm, nullptr, LLM_NORM_RMS, il);
+@@ -516,10 +593,18 @@ ggml_tensor * llama_model_kimi_k3::graph::build_mla_layer(
+         ggml_tensor * q_nope = ggml_view_3d(ctx0, Qcur, n_embd_head_qk_nope, n_head, n_tokens,
+             ggml_row_size(Qcur->type, n_embd_head_k_mla),
+             ggml_row_size(Qcur->type, n_embd_head_k_mla) * n_head, 0);
++        auto q_nope_geometry = skippy_stage_geometry_static(q_nope);
++        q_nope_geometry.dimensions[2] = skippy_stage_geometry_expression::tokens();
++        q_nope_geometry.byte_strides[2] = skippy_stage_geometry_expression::source_stride(0, 1);
++        skippy_stage_geometry_note(q_nope, q_nope_geometry);
+         ggml_tensor * q_pe = ggml_view_3d(ctx0, Qcur, n_embd_head_qk_rope, n_head, n_tokens,
+             ggml_row_size(Qcur->type, n_embd_head_k_mla),
+             ggml_row_size(Qcur->type, n_embd_head_k_mla) * n_head,
+             ggml_row_size(Qcur->type, n_embd_head_qk_nope));
++        auto q_pe_geometry = skippy_stage_geometry_static(q_pe);
++        q_pe_geometry.dimensions[2] = skippy_stage_geometry_expression::tokens();
++        q_pe_geometry.byte_strides[2] = skippy_stage_geometry_expression::source_stride(0, 1);
++        skippy_stage_geometry_note(q_pe, q_pe_geometry);
+ 
+         q_nope = ggml_permute(ctx0, q_nope, 0, 2, 1, 3);
+         ggml_tensor * q_nope_absorbed = ggml_mul_mat(ctx0, layer.wk_b, q_nope);
+@@ -527,6 +612,9 @@ ggml_tensor * llama_model_kimi_k3::graph::build_mla_layer(
+ 
+         ggml_tensor * Q = ggml_concat(ctx0, q_nope_absorbed, q_pe, 0);
+         ggml_tensor * kv_cmpr_3d = ggml_reshape_3d(ctx0, kv_cmpr, kv_lora_rank, 1, n_tokens);
++        auto kv_cmpr_reshape_geometry = skippy_stage_geometry_static(kv_cmpr_3d);
++        kv_cmpr_reshape_geometry.dimensions[2] = skippy_stage_geometry_expression::tokens();
++        skippy_stage_geometry_note(kv_cmpr_3d, kv_cmpr_reshape_geometry);
+         ggml_tensor * K = ggml_concat(ctx0, kv_cmpr_3d, k_pe, 0);
+         ggml_tensor * V = kv_cmpr_3d;
+ 
 diff --git a/src/models/kimi-linear.cpp b/src/models/kimi-linear.cpp
 index b8c455360..af8aaa757 100644
 --- a/src/models/kimi-linear.cpp
