@@ -11819,15 +11819,38 @@ dependencies = [
 name = "xtask"
 version = "0.78.0"
 dependencies = [
+ "caseless",
  "ed25519-dalek",
+ "flate2",
  "getrandom 0.3.4",
+ "glob",
  "hex",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "libc",
  "mesh-llm-release-footer",
+ "num-bigint 0.4.8",
+ "plist",
  "proc-macro2",
+ "rcgen",
+ "regex",
+ "rustls",
+ "semver",
  "serde",
  "serde_json",
  "sha2 0.11.0",
  "syn 2.0.119",
+ "tar",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+ "toml 0.9.12+spec-1.1.0",
+ "trajectory-reader",
+ "unicode-normalization",
+ "url",
+ "uuid",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

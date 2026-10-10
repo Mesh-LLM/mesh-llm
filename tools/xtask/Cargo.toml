@@ -3,14 +3,73 @@ name = "xtask"
 version.workspace = true
 edition = "2024"
 publish = false
+default-run = "xtask"
 
 [dependencies]
+trajectory-reader = { path = "../trajectory-reader", default-features = false }
+caseless = "=0.2.2"
+unicode-normalization = "=0.1.25"
 ed25519-dalek = { version = "=3.0.0", features = ["rand_core"] }
+flate2 = "1"
 getrandom = "0.3"
+glob = "=0.3.4"
 hex = "0.4"
+http-body-util = "=0.1.5"
+hyper = { version = "=1.11.1", features = ["client", "server", "http1"] }
+hyper-util = { version = "=0.1.20", features = ["tokio"] }
 mesh-llm-release-footer.workspace = true
+num-bigint = "=0.4.8"
+plist = "=1.10.0"
 proc-macro2 = { version = "1", features = ["span-locations"] }
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+serde_json = { version = "1", features = ["float_roundtrip", "raw_value"] }
 sha2 = "0.11"
 syn = { version = "2", features = ["full", "visit"] }
+thiserror = "2"
+tempfile = "3"
+tar = "0.4"
+tokio = { version = "=1.53.1", features = ["rt", "net", "time", "macros", "io-util", "sync"] }
+toml = "0.9"
+uuid = "=1.26.0"
+url = "=2.5.8"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_Storage_FileSystem", "Win32_System_Console", "Win32_System_Diagnostics_ToolHelp", "Win32_System_JobObjects", "Win32_System_Pipes", "Win32_System_Threading"] }
+
+[dev-dependencies]
+rcgen = "=0.14.10"
+rustls = { version = "=0.23.43", default-features = false, features = ["ring", "std", "tls12"] }
+regex = "=1.13.1"
+semver = "=1.0.28"
+
+[[bin]]
+name = "laya-product-fixture"
+path = "tests/laya_product/fixture.rs"
+test = false
+
+[[example]]
+name = "migration_process_driver"
+path = "tests/migration_process/driver.rs"
+
+[[example]]
+name = "migration_client_fixture"
+path = "tests/migration_lifecycle/fixture.rs"
+
+[[example]]
+name = "migration_client_qa"
+path = "tests/migration_lifecycle/qa.rs"
+
+[[example]]
+name = "migration_daemon_fixture"
+path = "tests/migration_lifecycle/daemon/fixture.rs"
+
+[[example]]
+name = "migration_patch_fixture"
+path = "examples/migration_patch_fixture.rs"
+
+[[example]]
+name = "migration_smoke_fixture"
+path = "tests/migration_required_smoke/executable/fixture.rs"
