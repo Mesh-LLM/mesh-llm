@@ -164,7 +164,6 @@ jobs:
         with:
           pattern: ci-skippy-receipt-linux-*
           path: skippy-receipts
-          merge-multiple: true
       - name: Verify and record standalone Skippy receipts
         if: ${{ inputs.require_skippy_receipts }}
         shell: bash

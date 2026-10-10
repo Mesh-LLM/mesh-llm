@@ -102,5 +102,26 @@ class HostReceiptConsumerTests(unittest.TestCase):
             self.verify("bsd")
 
 
+class HostSliceWiringTests(unittest.TestCase):
+    def test_host_slices_keep_one_directory_per_receipt_artifact(self) -> None:
+        # Every receipt artifact contains a file of the same name, so merging
+        # them into one directory would silently keep just one receipt.
+        for platform in ("linux", "macos", "windows"):
+            with self.subTest(platform=platform):
+                text = (ROOT / f".github/workflows/ci-{platform}-host-slice.yml").read_text(
+                    encoding="utf-8")
+                self.assertIn(f"pattern: ci-skippy-receipt-{platform}-*", text)
+                self.assertNotIn("merge-multiple", text)
+
+    def test_full_lanes_require_receipts_and_the_canary_does_not(self) -> None:
+        for platform in ("linux", "macos", "windows"):
+            with self.subTest(platform=platform):
+                lane = (ROOT / f".github/workflows/ci-{platform}-lane.yml").read_text(
+                    encoding="utf-8")
+                self.assertIn("require_skippy_receipts: true", lane)
+        canary = (ROOT / ".github/workflows/ci-pr-canary-lane.yml").read_text(encoding="utf-8")
+        self.assertNotIn("require_skippy_receipts", canary)
+
+
 if __name__ == "__main__":
     unittest.main()

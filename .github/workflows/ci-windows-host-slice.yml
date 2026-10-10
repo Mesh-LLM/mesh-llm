@@ -163,7 +163,6 @@ jobs:
         with:
           pattern: ci-skippy-receipt-windows-*
           path: skippy-receipts
-          merge-multiple: true
       - name: Verify and record standalone Skippy receipts
         if: ${{ inputs.require_skippy_receipts }}
         shell: bash
