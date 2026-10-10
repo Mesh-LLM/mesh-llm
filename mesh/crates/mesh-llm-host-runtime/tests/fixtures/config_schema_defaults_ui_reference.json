@@ -295,6 +295,13 @@
       }
     },
     {
+      "canonical_path": "defaults.request_defaults.allow_request_chat_template",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
       "canonical_path": "defaults.request_defaults.chat_template",
       "support": "supported",
       "source": {

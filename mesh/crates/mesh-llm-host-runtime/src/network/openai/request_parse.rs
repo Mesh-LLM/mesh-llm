@@ -56,6 +56,37 @@ pub(super) struct HttpReadLimits {
     pub(super) max_chunked_wire_bytes: usize,
 }
 
+/// How long a client may take to send its complete request headers. Slow
+/// clients that never finish them would otherwise hold a connection and its
+/// task open forever. Matches the mesh tunnel's header read timeout.
+pub(super) const HTTP_HEADER_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Time a request body gets before it must keep up a minimum rate. A body that
+/// stalls is dropped after the grace period; one that trickles below
+/// [`HTTP_BODY_MIN_BYTES_PER_SEC`] is dropped once it falls behind.
+pub(super) const HTTP_BODY_READ_GRACE: std::time::Duration = std::time::Duration::from_secs(10);
+/// Slowest average body rate a client may sustain after the grace period.
+pub(super) const HTTP_BODY_MIN_BYTES_PER_SEC: usize = 64 * 1024;
+
+/// Deadline for reading a request body: the grace period plus one second for
+/// every [`HTTP_BODY_MIN_BYTES_PER_SEC`] bytes already received.
+pub(super) struct BodyReadDeadline {
+    started: tokio::time::Instant,
+}
+
+impl BodyReadDeadline {
+    pub(super) fn new(started: tokio::time::Instant) -> Self {
+        Self { started }
+    }
+
+    pub(super) fn at(&self, received_bytes: usize) -> tokio::time::Instant {
+        let earned = std::time::Duration::from_secs_f64(
+            received_bytes as f64 / HTTP_BODY_MIN_BYTES_PER_SEC as f64,
+        );
+        self.started + HTTP_BODY_READ_GRACE + earned
+    }
+}
+
 const HTTP_READ_LIMITS: HttpReadLimits = HttpReadLimits {
     max_header_bytes: MAX_HEADER_BYTES,
     max_body_bytes: MAX_BODY_BYTES,
@@ -381,9 +412,13 @@ where
     S: AsyncRead + AsyncWrite + Unpin,
 {
     let mut raw = Vec::with_capacity(8192);
-    let parsed = read_until_headers_parsed(stream, &mut raw, limits.max_header_bytes)
-        .await
-        .map_err(OpenAiRequestReadError::before_headers)?;
+    let parsed = tokio::time::timeout(
+        HTTP_HEADER_READ_TIMEOUT,
+        read_until_headers_parsed(stream, &mut raw, limits.max_header_bytes),
+    )
+    .await
+    .unwrap_or_else(|_| Err(anyhow::anyhow!("timed out reading request headers")))
+    .map_err(OpenAiRequestReadError::before_headers)?;
     let body_limits = body_limits_for_path(&parsed.path, limits);
     let header_end = parsed.header_end;
     let body = read_buffered_request_body(stream, &mut raw, &parsed, header_end, body_limits)
@@ -491,8 +526,10 @@ async fn read_buffered_request_body<S>(
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
+    let deadline = BodyReadDeadline::new(tokio::time::Instant::now());
     if parsed.is_chunked {
-        return read_chunked_request_body(stream, raw, parsed, header_end, body_limits).await;
+        return read_chunked_request_body(stream, raw, parsed, header_end, body_limits, &deadline)
+            .await;
     }
     if let Some(content_length) = parsed.content_length {
         return read_fixed_length_request_body(
@@ -502,6 +539,7 @@ where
             header_end,
             content_length,
             body_limits,
+            &deadline,
         )
         .await;
     }
@@ -515,6 +553,7 @@ async fn read_chunked_request_body<S>(
     parsed: &ParsedHeaders,
     header_end: usize,
     body_limits: HttpReadLimits,
+    deadline: &BodyReadDeadline,
 ) -> Result<Vec<u8>>
 where
     S: AsyncRead + AsyncWrite + Unpin,
@@ -530,7 +569,7 @@ where
             stream.write_all(b"HTTP/1.1 100 Continue\r\n\r\n").await?;
             sent_continue = true;
         }
-        read_more(stream, raw).await?;
+        read_body_more(stream, raw, deadline.at(raw.len() - header_end)).await?;
         if raw.len().saturating_sub(header_end) > body_limits.max_chunked_wire_bytes {
             bail!(
                 "HTTP chunked wire body exceeds {} bytes",
@@ -547,6 +586,7 @@ async fn read_fixed_length_request_body<S>(
     header_end: usize,
     content_length: usize,
     body_limits: HttpReadLimits,
+    deadline: &BodyReadDeadline,
 ) -> Result<Vec<u8>>
 where
     S: AsyncRead + AsyncWrite + Unpin,
@@ -561,7 +601,7 @@ where
             stream.write_all(b"HTTP/1.1 100 Continue\r\n\r\n").await?;
             sent_continue = true;
         }
-        read_more(stream, raw).await?;
+        read_body_more(stream, raw, deadline.at(raw.len() - header_end)).await?;
     }
     raw.truncate(body_end);
     Ok(raw[header_end..body_end].to_vec())
@@ -1029,6 +1069,18 @@ fn client_nonce_from_headers(headers: &[httparse::Header<'_>]) -> (String, Optio
             Some(skippy_inference_api::lifecycle::CLIENT_NONCE_ORIGIN_FRONTEND),
         ),
     }
+}
+
+/// Reads more of a request body, failing once the body falls behind its
+/// minimum-rate deadline.
+async fn read_body_more<S: AsyncRead + Unpin>(
+    stream: &mut S,
+    buf: &mut Vec<u8>,
+    deadline: tokio::time::Instant,
+) -> Result<()> {
+    tokio::time::timeout_at(deadline, read_more(stream, buf))
+        .await
+        .unwrap_or_else(|_| Err(anyhow::anyhow!("timed out reading HTTP request body")))
 }
 
 async fn read_more<S: AsyncRead + Unpin>(stream: &mut S, buf: &mut Vec<u8>) -> Result<()> {

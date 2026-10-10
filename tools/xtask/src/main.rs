@@ -22,6 +22,7 @@ mod release;
 mod release_targets;
 mod repo_consistency;
 mod repository;
+mod split_payloads;
 
 use command::DynResult;
 
@@ -161,6 +162,8 @@ fn run() -> DynResult<()> {
         cli::CliCommand::GenerateKeypair(rest) => {
             attestation::generate_release_attestation_keypair(rest)
         }
+        cli::CliCommand::SplitPayloadsCertify(rest) => split_payloads::certify_command(rest),
+        cli::CliCommand::SplitPayloadsArtifact(rest) => split_payloads::artifact_for_sha256(rest),
         cli::CliCommand::Inspect(rest) => attestation::inspect_release_attestation(rest),
         cli::CliCommand::Check(check, rest) => repository::run_check(check, rest, explicit_root),
         cli::CliCommand::CiPlan(rest) => {

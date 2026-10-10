@@ -167,6 +167,64 @@ fn artifact_transfer_authorization_is_limited_to_stage_assignment() {
     );
 }
 
+#[test]
+fn stage_transport_is_limited_to_topology_participants() {
+    let stage0 = make_test_endpoint_id(0xa1);
+    let stage1 = make_test_endpoint_id(0xa2);
+    let outsider = make_test_endpoint_id(0xa3);
+    let assignment = |stage_id: &str, stage_index: u32, node_id: EndpointId| StageAssignment {
+        stage_id: stage_id.to_string(),
+        stage_index,
+        node_id,
+        layer_start: stage_index,
+        layer_end: stage_index + 1,
+        endpoint: StageEndpoint {
+            bind_addr: String::new(),
+        },
+    };
+    let topology = StageTopologyInstance {
+        topology_id: "topology-a".to_string(),
+        run_id: "run-a".to_string(),
+        model_id: "model-a".to_string(),
+        package_ref: String::new(),
+        manifest_sha256: String::new(),
+        admissions: Default::default(),
+        stages: vec![
+            assignment("stage-0", 0, stage0),
+            assignment("stage-1", 1, stage1),
+        ],
+    };
+    let open = |requester: EndpointId, run_id: &str, stage_id: &str| {
+        skippy_protocol::proto::stage::StageTransportOpen {
+            r#gen: skippy_protocol::STAGE_PROTOCOL_GENERATION,
+            requester_id: requester.as_bytes().to_vec(),
+            topology_id: "topology-a".to_string(),
+            run_id: run_id.to_string(),
+            stage_id: stage_id.to_string(),
+        }
+    };
+    let allowed = |requester: EndpointId, run_id: &str, stage_id: &str| {
+        stage_transport_allowed_by_topology(
+            std::slice::from_ref(&topology),
+            requester,
+            &open(requester, run_id, stage_id),
+        )
+    };
+
+    // Neighbouring stages bridge to each other in both directions.
+    assert!(allowed(stage0, "run-a", "stage-1"));
+    assert!(allowed(stage1, "run-a", "stage-0"));
+    // A mesh peer that knows the public stage ids is not a participant.
+    assert!(!allowed(outsider, "run-a", "stage-1"));
+    assert!(!allowed(stage0, "run-b", "stage-1"));
+    assert!(!allowed(stage0, "run-a", "stage-9"));
+    assert!(!stage_transport_allowed_by_topology(
+        &[],
+        stage0,
+        &open(stage0, "run-a", "stage-1"),
+    ));
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[serial]
 async fn artifact_transfer_stream_uses_mesh_subprotocol_and_rejects_dedicated_alpn() -> Result<()> {
