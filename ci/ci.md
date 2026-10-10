@@ -1406,8 +1406,8 @@ unchanged, including historical `mesh_ref` certification. Missing artifact sizes
 and peaks beyond the larger tier fail planning. No family is silently skipped.
 An optional source-owned `minimum_runner_memory_gib` value of 128 or 256 may
 promote an estimate-selected row but cannot demote it; plans without the field
-remain estimate-only. GLM-4.5-Air, Qwen4exp and Llama4 currently require the
-256-plus tier through this policy.
+remain estimate-only. GLM-4.5-Air, Qwen4exp, Llama4 and MiniMax-M2 currently
+require the 256-plus tier through this policy.
 
 `scripts/lib/canary_family_memory.py` uses the greater of pinned file sizes and
 the model estimate, including projector/draft artifacts. Causal parity releases

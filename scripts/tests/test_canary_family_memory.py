@@ -85,7 +85,7 @@ class MemoryTests(unittest.TestCase):
         original = copy.deepcopy(plan)
         rows = {r['families']: r for r in E.scheduling_matrix(plan)['include']}
         self.assertEqual(plan, original)
-        for family in ('minimax-m3', 'inkling', 'glm45-air', 'qwen4exp', 'llama4'):
+        for family in ('minimax-m2', 'minimax-m3', 'inkling', 'glm45-air', 'qwen4exp', 'llama4'):
             self.assertEqual(rows[family]['memory_tier'], 'accelerator-memory-256plus')
         self.assertEqual(rows['lfm2-vl']['memory_tier'], 'accelerator-memory-128plus')
 

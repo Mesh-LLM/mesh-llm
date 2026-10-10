@@ -959,7 +959,7 @@
       "profile": "full",
       "artifact": {"repo": "unsloth/MiniMax-M2.7-GGUF", "revision": "d2a05ccf69491b03db0cc40b335aec14bdaf7198", "files": ["UD-Q3_K_S/MiniMax-M2.7-UD-Q3_K_S-00001-of-00003.gguf", "UD-Q3_K_S/MiniMax-M2.7-UD-Q3_K_S-00002-of-00003.gguf", "UD-Q3_K_S/MiniMax-M2.7-UD-Q3_K_S-00003-of-00003.gguf"], "file_integrity": {"UD-Q3_K_S/MiniMax-M2.7-UD-Q3_K_S-00001-of-00003.gguf": {"size_bytes": 8237824, "blob_id": "ec73a864385ed70633fb85719985ac7ceae6d7f54993bb1885de73e0adca8d37"}, "UD-Q3_K_S/MiniMax-M2.7-UD-Q3_K_S-00002-of-00003.gguf": {"size_bytes": 49844040960, "blob_id": "2ed4db6452da66c69021e959c6b31dca32c5c1253aef6fef7ada0d56960ffed9"}, "UD-Q3_K_S/MiniMax-M2.7-UD-Q3_K_S-00003-of-00003.gguf": {"size_bytes": 43785019584, "blob_id": "d1964bae02fe0ece1a8b4012bc320c47705f7a63655f5331749aa6c88ee72656"}}, "selector": "UD-Q3_K_S"},
       "execution": {"trunk_layers": 62, "mtp_layers": 0, "activation_width": 3072, "speculative_policy": "mtp-if-present"},
-      "resources": {"runner_role": "family-certify", "cache_policy": "immutable-local", "estimated_model_bytes": 93629009920},
+      "resources": {"runner_role": "family-certify", "cache_policy": "immutable-local", "estimated_model_bytes": 93629009920, "minimum_runner_memory_gib": 256},
       "notes": "minimax-m2 MoE (256 experts, 8 active); smallest 3-bit artifact is ~94 GB, so this row is manual-full only; estimated_model_bytes is the exact pinned GGUF tensor byte sum"
     },
     {
