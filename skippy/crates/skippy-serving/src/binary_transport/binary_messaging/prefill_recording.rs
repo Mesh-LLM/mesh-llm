@@ -258,7 +258,10 @@ mod tests {
         let kv = KvStageIntegration::from_loaded_model_with_l3_manager(
             &config,
             Some(ModelStateKind::Dense),
-            None,
+            Some(skippy_runtime::MemoryCacheCapabilities {
+                resident: true,
+                kv_recurrent: true,
+            }),
             Some(manager),
             None,
         )

@@ -948,7 +948,9 @@ mod tests {
             .block_on(load_release_manifest(options))
             .unwrap();
         assert_eq!(manifest.release_version, "0.78.0");
-        assert_eq!(manifest.skippy_abi, current_skippy_abi_version());
+        // The published v0.78.0 catalog records its release ABI; this branch
+        // may have advanced the native ABI since that release.
+        assert_eq!(manifest.skippy_abi, "0.1.66");
         assert_eq!(manifest.artifacts.len(), 13);
     }
 

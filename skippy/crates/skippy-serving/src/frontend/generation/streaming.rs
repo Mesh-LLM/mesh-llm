@@ -8,6 +8,7 @@ use crate::frontend::generation::incremental_text::suffix_delta;
 use crate::frontend::generation::tool_call_stream::ToolCallStreamState;
 use crate::frontend::generation::tool_calls_requested;
 use crate::frontend::generation::tool_calls_stream_delta;
+use crate::frontend::stop_sequences::stop_in_new_text;
 use crate::frontend::tool_emulation;
 use crate::frontend::util::finish_reason_for_generation;
 use crate::frontend::util::openai_backend_error;
@@ -15,6 +16,7 @@ use crate::frontend::util::saturating_u32;
 use crate::frontend::util::trim_at_stop;
 use crate::frontend::util::valid_utf8_prefix_len;
 use crate::runtime_state::RuntimeState;
+use crate::runtime_state::panic_recovery::lock_runtime;
 use serde_json::Value;
 use skippy_inference_api::ChatCompletionChunk;
 use skippy_inference_api::ChatCompletionRequest;
@@ -172,12 +174,7 @@ impl ChatOutputStreamParser {
     ) -> InferenceResult<Self> {
         let passthrough_content =
             chat_stream_can_passthrough_content(&request, &metadata, emit_reasoning);
-        let model = backend
-            .runtime
-            .lock()
-            .map_err(|_| InferenceError::backend("runtime lock poisoned"))?
-            .model
-            .reader();
+        let model = lock_runtime(&backend.runtime).model.reader();
         Ok(Self {
             backend,
             model,
@@ -347,6 +344,8 @@ where
     text: String,
     streamed_text_len: usize,
     max_stop_bytes: usize,
+    /// Length of `text` already searched for stop sequences.
+    stop_searched_len: usize,
     generated_text_bytes: Vec<u8>,
     completion_tokens: usize,
     generation_gate: Option<Arc<dyn crate::frontend::generation_gate::GenerationGate>>,
@@ -370,11 +369,7 @@ where
             .map(|value| value.len())
             .max()
             .unwrap_or(0);
-        let model = runtime
-            .lock()
-            .map_err(|_| InferenceError::backend("runtime lock poisoned"))?
-            .model
-            .reader();
+        let model = lock_runtime(&runtime).model.reader();
         Ok(Self {
             model,
             stop_values,
@@ -382,6 +377,7 @@ where
             text: String::new(),
             streamed_text_len: 0,
             max_stop_bytes,
+            stop_searched_len: 0,
             generated_text_bytes: Vec::new(),
             completion_tokens: 0,
             generation_gate: None,
@@ -448,13 +444,17 @@ where
                 }
             } else if candidate != self.text {
                 self.text = candidate.to_string();
+                self.stop_searched_len = 0;
             }
         }
-        if self
-            .stop_values
-            .iter()
-            .any(|stop| !stop.is_empty() && self.text.contains(stop))
-        {
+        let stop_found = stop_in_new_text(
+            &self.text,
+            self.stop_searched_len,
+            &self.stop_values,
+            self.max_stop_bytes,
+        );
+        self.stop_searched_len = self.text.len();
+        if stop_found {
             self.text = trim_at_stop(&self.text, &self.stop_values).to_string();
             self.emit_safe_delta(true)?;
             self.finish_reason = finish_reason_for_generation(false);
