@@ -1,0 +1,238 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: James Dumay <jameswdumay@gmail.com>
+Date: Sat, 10 Oct 2026 20:05:00 +1100
+Subject: [PATCH] fix(skippy): key shared-KV state effects on owner cache layer
+
+Gemma3n/Gemma4 reuse an earlier layer's KV cache for layers at or beyond
+n_layer_kv_from_start. Consumer layers read the owner's storage through
+map_layer_ids while the state effect records the access-site layer, so
+stage program admission sees two (kind, layer) bindings on one storage
+root and rejects the program ("state root has conflicting semantics").
+
+Record a storage-identity layer on each state effect: the owner cache
+layer for shared-KV readers, else the access-site layer. Admission and
+the state roots key on that identity; residency and write ordinals keep
+the access-site layer. Consumers never write shared KV, so ordinals are
+unchanged.
+diff --git a/src/llama-graph.cpp b/src/llama-graph.cpp
+index ec8dc4ad0..d5c9ed9af 100644
+--- a/src/llama-graph.cpp
++++ b/src/llama-graph.cpp
+@@ -1996,13 +1996,14 @@ void llm_graph_context::end_block(ggml_tensor * cur, int il) const {
+     res->block_boundaries.push_back({skippy_block_boundary_kind::exit, il, cur});
+ }
+ 
+-void llm_graph_context::state_read(skippy_state_kind kind, ggml_tensor * storage, int il) const {
++void llm_graph_context::state_read(skippy_state_kind kind, ggml_tensor * storage, int il, int32_t identity_layer) const {
+     res->state_effects.push_back({kind, skippy_state_access::read,
+             il, skippy_state_canonical_storage(storage), nullptr, -1,
+-            il >= n_layer ? skippy_state_residency::per_stage : skippy_state_residency::layer_local});
++            il >= n_layer ? skippy_state_residency::per_stage : skippy_state_residency::layer_local,
++            identity_layer < 0 ? il : identity_layer});
+ }
+ 
+-void llm_graph_context::state_write(skippy_state_kind kind, ggml_tensor * storage, ggml_tensor * effect_node, int il) const {
++void llm_graph_context::state_write(skippy_state_kind kind, ggml_tensor * storage, ggml_tensor * effect_node, int il, int32_t identity_layer) const {
+     const ggml_tensor * canonical = skippy_state_canonical_storage(storage);
+     int64_t ordinal = 0;
+     for (const auto & effect : res->state_effects) {
+@@ -2012,7 +2013,8 @@ void llm_graph_context::state_write(skippy_state_kind kind, ggml_tensor * storag
+         }
+     }
+     res->state_effects.push_back({kind, skippy_state_access::write, il, canonical, effect_node, ordinal,
+-            il >= n_layer ? skippy_state_residency::per_stage : skippy_state_residency::layer_local});
++            il >= n_layer ? skippy_state_residency::per_stage : skippy_state_residency::layer_local,
++            identity_layer < 0 ? il : identity_layer});
+ }
+ 
+ void llm_graph_context::request_input(ggml_tensor * tensor, const char * identity) const {
+@@ -3729,15 +3731,19 @@ ggml_tensor * llm_graph_context::build_attn(
+             ggml_build_forward_expand(gf, k_write);
+             ggml_build_forward_expand(gf, v_write);
+ 
+-            state_write(skippy_state_kind::kv_key,   k_write, k_write, il);
+-            state_write(skippy_state_kind::kv_value, v_write, v_write, il);
++            const int32_t il_state = mctx_cur->state_owner_layer(il);
++
++            state_write(skippy_state_kind::kv_key,   k_write, k_write, il, il_state);
++            state_write(skippy_state_kind::kv_value, v_write, v_write, il, il_state);
+         }
+ 
+         k = mctx_cur->get_k(ctx0, il);
+         v = mctx_cur->get_v(ctx0, il);
+ 
+-        state_read(skippy_state_kind::kv_key,   k, il);
+-        state_read(skippy_state_kind::kv_value, v, il);
++        const int32_t il_state = mctx_cur->state_owner_layer(il);
++
++        state_read(skippy_state_kind::kv_key,   k, il, il_state);
++        state_read(skippy_state_kind::kv_value, v, il, il_state);
+     }
+ 
+     ggml_tensor * kq_mask = inp->get_kq_mask();
+@@ -3827,7 +3833,8 @@ ggml_tensor * llm_graph_context::build_attn(
+ 
+         ggml_tensor * k_write = mctx_cur->cpy_k(ctx0, k_cur, k_idxs, il);
+         ggml_build_forward_expand(gf, k_write);
+-        state_write(skippy_state_kind::kv_key, k_write, k_write, il);
++        const int32_t il_state = mctx_cur->state_owner_layer(il);
++        state_write(skippy_state_kind::kv_key, k_write, k_write, il, il_state);
+     }
+ 
+     const auto & kq_mask = inp->get_kq_mask();
+@@ -3842,7 +3849,8 @@ ggml_tensor * llm_graph_context::build_attn(
+     }
+     skippy_stage_geometry_note(v, v_geometry);
+ 
+-    state_read(skippy_state_kind::kv_key, k, il);
++    const int32_t il_state = mctx_cur->state_owner_layer(il);
++    state_read(skippy_state_kind::kv_key, k, il, il_state);
+ 
+     ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, sinks, v_mla, 0, kq_scale, il);
+     cb(cur, "kqv_out", il);
+@@ -4075,7 +4083,8 @@ ggml_tensor * llm_graph_context::build_attn(
+ 
+         ggml_tensor * k_write = mctx_cur->cpy_k(ctx0, k_cur, k_idxs, il);
+         ggml_build_forward_expand(gf, k_write);
+-        state_write(skippy_state_kind::kv_key, k_write, k_write, il);
++        const int32_t il_state = mctx_cur->state_owner_layer(il);
++        state_write(skippy_state_kind::kv_key, k_write, k_write, il, il_state);
+     }
+ 
+     if (store_kv && v_cur) {
+@@ -4083,7 +4092,8 @@ ggml_tensor * llm_graph_context::build_attn(
+ 
+         ggml_tensor * v_write = mctx_cur->cpy_v(ctx0, v_cur, v_idxs, il);
+         ggml_build_forward_expand(gf, v_write);
+-        state_write(skippy_state_kind::kv_value, v_write, v_write, il);
++        const int32_t il_state = mctx_cur->state_owner_layer(il);
++        state_write(skippy_state_kind::kv_value, v_write, v_write, il, il_state);
+     }
+ 
+     const auto & kq_mask = is_swa ? inp->get_kq_mask_swa() : inp->get_kq_mask();
+@@ -4092,8 +4102,10 @@ ggml_tensor * llm_graph_context::build_attn(
+     ggml_tensor * k = use_kv_cur ? k_cur : mctx_cur->get_k(ctx0, il);
+     ggml_tensor * v = use_kv_cur ? v_cur : mctx_cur->get_v(ctx0, il);
+ 
+-    state_read(skippy_state_kind::kv_key,   k, il);
+-    state_read(skippy_state_kind::kv_value, v, il);
++    const int32_t il_state = mctx_cur->state_owner_layer(il);
++
++    state_read(skippy_state_kind::kv_key,   k, il, il_state);
++    state_read(skippy_state_kind::kv_value, v, il, il_state);
+ 
+     ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, sinks, v_mla, 0, kq_scale, il);
+     cb(cur, "kqv_out", il);
+@@ -4158,7 +4170,8 @@ ggml_tensor * llm_graph_context::build_attn(
+ 
+         ggml_tensor * k_write = mctx_cur->cpy_k(ctx0, k_cur, k_idxs, il);
+         ggml_build_forward_expand(gf, k_write);
+-        state_write(skippy_state_kind::kv_key, k_write, k_write, il);
++        const int32_t il_state = mctx_cur->state_owner_layer(il);
++        state_write(skippy_state_kind::kv_key, k_write, k_write, il, il_state);
+     }
+ 
+     const auto & kq_mask = is_swa ? inp->get_kq_mask_swa() : inp->get_kq_mask();
+@@ -4168,7 +4181,8 @@ ggml_tensor * llm_graph_context::build_attn(
+     ggml_tensor * k = mctx_cur->get_k(ctx0, il);
+     ggml_tensor * v = ggml_view_4d(ctx0, k, v_cur->ne[0], k->ne[1], k->ne[2], k->ne[3], k->nb[1], k->nb[2], k->nb[3], 0);
+ 
+-    state_read(skippy_state_kind::kv_key, k, il);
++    const int32_t il_state = mctx_cur->state_owner_layer(il);
++    state_read(skippy_state_kind::kv_key, k, il, il_state);
+ 
+     ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, sinks, v_mla, 0, kq_scale, il);
+     cb(cur, "kqv_out", il);
+diff --git a/src/llama-graph.h b/src/llama-graph.h
+index 8e18a0ccc..87f35233f 100644
+--- a/src/llama-graph.h
++++ b/src/llama-graph.h
+@@ -1326,8 +1326,8 @@ struct llm_graph_context {
+ 
+     // register a persistent-state read or ordered write established by a
+     // generic helper; owned by the exact graph result, stage-independent
+-    void state_read(skippy_state_kind kind, ggml_tensor * storage, int il) const;
+-    void state_write(skippy_state_kind kind, ggml_tensor * storage, ggml_tensor * effect_node, int il) const;
++    void state_read(skippy_state_kind kind, ggml_tensor * storage, int il, int32_t identity_layer = -1) const;
++    void state_write(skippy_state_kind kind, ggml_tensor * storage, ggml_tensor * effect_node, int il, int32_t identity_layer = -1) const;
+     void request_input(ggml_tensor * tensor, const char * identity) const;
+     void request_inputs(llm_graph_input_attn_no_cache * input) const;
+     void request_inputs(llm_graph_input_attn_kv * input) const;
+diff --git a/src/llama-kv-cache.cpp b/src/llama-kv-cache.cpp
+index 4d322ce36..f36c38c0c 100644
+--- a/src/llama-kv-cache.cpp
++++ b/src/llama-kv-cache.cpp
+@@ -1524,6 +1524,13 @@ ggml_tensor * llama_kv_cache::graph_k_storage(ggml_context * ctx, int32_t il) co
+     return result;
+ }
+ 
++int32_t llama_kv_cache::state_owner_layer(int32_t il) const {
++    // shared-KV readers admit under the owner cache layer; layers with no
++    // reuse mapping own themselves
++    const auto found = map_layer_ids.find(il);
++    return found == map_layer_ids.end() ? il : static_cast<int32_t>(layers[found->second].il);
++}
++
+ ggml_tensor * llama_kv_cache::graph_v_storage(ggml_context * ctx, int32_t il) const {
+     const auto found = map_layer_ids.find(il);
+     if (found != map_layer_ids.end()) {
+@@ -4388,6 +4395,10 @@ ggml_tensor * llama_kv_cache_context::get_k_storage(int32_t il) const {
+     return kv->get_k_storage(il);
+ }
+ 
++int32_t llama_kv_cache_context::state_owner_layer(int32_t il) const {
++    return kv->state_owner_layer(il);
++}
++
+ ggml_tensor * llama_kv_cache_context::get_v_storage(int32_t il) const {
+     return kv->get_v_storage(il);
+ }
+diff --git a/src/llama-kv-cache.h b/src/llama-kv-cache.h
+index 6b9bf7e9c..bd56bb5a1 100644
+--- a/src/llama-kv-cache.h
++++ b/src/llama-kv-cache.h
+@@ -180,6 +180,8 @@ public:
+     ggml_tensor * get_v_storage(int32_t il) const;
+     ggml_tensor * find_k_storage(int32_t il) const;
+     ggml_tensor * find_v_storage(int32_t il) const;
++    // storage-identity layer: owner cache layer for shared-KV readers, else il
++    int32_t state_owner_layer(int32_t il) const;
+     const llama_kv_cells & get_cells(llama_seq_id seq_id) const;
+ 
+     // The stream holding seq_id's cells.
+@@ -479,6 +481,7 @@ public:
+ 
+     // Native stage-program proof: explicit lifetime-managed state bindings.
+     ggml_tensor * get_k_storage(int32_t il) const;
++    int32_t state_owner_layer(int32_t il) const;
+     ggml_tensor * get_v_storage(int32_t il) const;
+     ggml_tensor * find_k_storage(int32_t il) const;
+     ggml_tensor * find_v_storage(int32_t il) const;
+diff --git a/src/skippy/stage_program_extraction.cpp b/src/skippy/stage_program_extraction.cpp
+index 8491aedbd..ecb925bcf 100644
+--- a/src/skippy/stage_program_extraction.cpp
++++ b/src/skippy/stage_program_extraction.cpp
+@@ -125,7 +125,8 @@ bool extraction::run() {
+         }
+         for (const auto & effect : selection.state_effects) {
+             const ggml_tensor * storage = program_canonical_storage(effect.storage);
+-            const std::pair<int32_t, int32_t> binding(static_cast<int32_t>(effect.kind), effect.layer);
++            const std::pair<int32_t, int32_t> binding(static_cast<int32_t>(effect.kind),
++                    effect.identity_layer < 0 ? effect.layer : effect.identity_layer);
+             const auto found = states.find(storage);
+             if (found != states.end() && found->second != binding) {
+                 error = "stage program state root has conflicting semantics: storage=" +
+diff --git a/src/skippy/state_effects.h b/src/skippy/state_effects.h
+index 5bb6b779b..213b3e596 100644
+--- a/src/skippy/state_effects.h
++++ b/src/skippy/state_effects.h
+@@ -48,6 +48,9 @@ struct skippy_state_effect {
+     /** Per-owner write order: zero-based, contiguous; -1 only for read declarations. */
+     int64_t write_ordinal = -1;
+     skippy_state_residency residency = skippy_state_residency::layer_local;
++    // storage-identity layer for state-root admission: the owner cache layer
++    // for shared-KV readers; -1 falls back to the access-site layer
++    int32_t identity_layer = -1;
+ };
+ 
+ // Resolve a possibly-view tensor to its canonical backing storage.
