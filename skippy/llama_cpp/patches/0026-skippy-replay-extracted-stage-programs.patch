@@ -2879,9 +2879,18 @@ index 342a5d795..50278115b 100644
      ggml_tensor * ssm_write = ggml_cpy(ctx0, src, dst);
      ggml_build_forward_expand(gf, ssm_write);
 diff --git a/src/models/granite-switch.cpp b/src/models/granite-switch.cpp
-index c190a4778..776fae196 100644
+index c190a4778..1af4c6ed4 100644
 --- a/src/models/granite-switch.cpp
 +++ b/src/models/granite-switch.cpp
+@@ -146,7 +146,8 @@ public:
+     llm_graph_input_switch(const llama_model_granite_switch & smodel) : smodel(smodel) {}
+     virtual ~llm_graph_input_switch() = default;
+ 
+     void set_input(const llama_ubatch * ubatch) override;
++    bool has_token_input() const override { return sub_tokens != nullptr; }
+ 
+     ggml_tensor * sub_tokens  = nullptr; // I32 [n_tokens] adapter-substituted token ids
+     ggml_tensor * router_ksig = nullptr; // F32 [n_tokens] router K signal (+/-gain)
 @@ -302,8 +302,12 @@ llama_model_granite_switch::graph::graph(
      cb(router_out, "router_out", R);
  
