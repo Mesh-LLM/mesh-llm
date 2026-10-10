@@ -56,7 +56,7 @@ pub(super) fn handle_stop(
         bail!("cannot stop with {pending_prefill_replies} deferred prefill replies");
     }
     let mut stop_stats = std::mem::take(pending_reply_stats);
-    request_summary.emit(telemetry, config, session_id);
+    request_summary.emit(telemetry, config, session_id, kv.map(|stage| stage.payload));
     *request_summary = BinaryRequestSummary::default();
     if let Some(downstream) = downstream.as_mut() {
         if let Some(forwarder) = async_forwarder {

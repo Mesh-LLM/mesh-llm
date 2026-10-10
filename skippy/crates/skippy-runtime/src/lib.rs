@@ -98,8 +98,9 @@ pub use types::{
     ChatTemplateMessage, ChatTemplateOptions, DEFAULT_PENALTY_LAST_N, DecodeFrameBatchOutput,
     DrySamplingConfig, GenerationSignalWindow, IterationBatchOutput, IterationSample,
     LoadedModelCapability, LogitBias, MAX_LOGIT_BIAS, MediaInput, MediaPrefill,
-    MediaPrefillChunkFrame, MediaPrefillFrame, ModelStateKind, ReasoningBudget, RuntimeKvPage,
-    RuntimeKvPageDesc, SamplingConfig, TensorInfo, TokenSignal, XtcSamplingConfig, penalty_window,
+    MediaPrefillChunkFrame, MediaPrefillFrame, MemoryCacheCapabilities, ModelStateKind,
+    ReasoningBudget, RuntimeKvPage, RuntimeKvPageDesc, SamplingConfig, TensorInfo, TokenSignal,
+    XtcSamplingConfig, penalty_window,
 };
 
 #[cfg(feature = "dynamic-native-runtime")]

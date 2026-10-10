@@ -104,9 +104,9 @@ pub(crate) fn prepare_openai_stage(args: &ServeOpenAiArgs) -> Result<StageConfig
             // Load from the verified source locator (including managed multipart
             // views), not from an independently resolved input path.
             options.model_path = identity.source_model_path.clone();
-            let mut config = skippy_api::single_stage_config(
+            let mut config = skippy_api::single_stage_config_with_graph_evidence(
                 &options,
-                identity.into(),
+                identity,
                 format!("skippy-{}", uuid::Uuid::new_v4()),
             )?;
             args.settings.apply_stage(&mut config)?;

@@ -939,6 +939,7 @@ pub(in crate::binary_transport) fn prefix_cache_test_config() -> StageConfig {
         run_id: "run".to_string(),
         topology_id: "topology".to_string(),
         model_id: "hugging-quants/Llama-3.2-1B-Instruct-GGUF:Q4_K_M".to_string(),
+        kv_graph_state: "dense".into(),
         package_ref: None,
         manifest_sha256: None,
         source_model_path: None,
