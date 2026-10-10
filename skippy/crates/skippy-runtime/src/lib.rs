@@ -25,6 +25,7 @@ mod runtime_events;
 mod session;
 mod stage_planning;
 mod types;
+mod vocabulary;
 
 pub use activation::{
     DecodeFrameBatchRequest, IterationBatchPhase, IterationBatchRequest, PartialBatchExecution,
@@ -55,7 +56,7 @@ pub use logging::{
     register_filtered_native_logs, restore_native_logs, set_filtered_native_logs_enabled,
     suppress_native_logs, unregister_filtered_native_logs, write_native_log_note,
 };
-pub use media::{SpeechAudio, SpeechOutputFormat, SpeechSynthesisConfig};
+pub use media::{MediaRejected, SpeechAudio, SpeechOutputFormat, SpeechSynthesisConfig};
 pub use native::{
     ModelWorkload, PoolingType, StageModel, StageModelReader, SystemOneReadSlot, WorkloadInfo,
 };
@@ -97,8 +98,9 @@ pub use types::{
     ChatTemplateMessage, ChatTemplateOptions, DEFAULT_PENALTY_LAST_N, DecodeFrameBatchOutput,
     DrySamplingConfig, GenerationSignalWindow, IterationBatchOutput, IterationSample,
     LoadedModelCapability, LogitBias, MAX_LOGIT_BIAS, MediaInput, MediaPrefill,
-    MediaPrefillChunkFrame, MediaPrefillFrame, ModelStateKind, ReasoningBudget, RuntimeKvPage,
-    RuntimeKvPageDesc, SamplingConfig, TensorInfo, TokenSignal, XtcSamplingConfig, penalty_window,
+    MediaPrefillChunkFrame, MediaPrefillFrame, MemoryCacheCapabilities, ModelStateKind,
+    ReasoningBudget, RuntimeKvPage, RuntimeKvPageDesc, SamplingConfig, TensorInfo, TokenSignal,
+    XtcSamplingConfig, penalty_window,
 };
 
 #[cfg(feature = "dynamic-native-runtime")]

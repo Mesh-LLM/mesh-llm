@@ -52,9 +52,9 @@ pub fn single_stage_config(options: &SkippyModelLoadOptions) -> Result<StageConf
         Some(identity) => identity.clone(),
         None => synthetic_direct_gguf_package(&options.model_id, &options.model_path)?,
     };
-    let config = skippy_api::single_stage_config(
+    let config = skippy_api::single_stage_config_with_graph_evidence(
         &prepared_options,
-        package_identity.into(),
+        package_identity,
         format!("mesh-skippy-{}", now_unix_nanos()),
     )?;
     checkpoint::emit_load_notice(

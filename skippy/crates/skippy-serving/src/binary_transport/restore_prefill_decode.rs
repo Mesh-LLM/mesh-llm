@@ -30,9 +30,10 @@ use super::{
         BinaryProactiveEviction, BinaryProactiveEvictionPlan,
         evict_binary_resident_prefix_for_decode,
     },
+    peer_sampling::runtime_sampling_config,
     stage_execution::{
         binary_message_attrs, elapsed_ms, input_activation_frame, run_binary_stage_message,
-        runtime_sampling_config, stage_output_activation_capacity,
+        stage_output_activation_capacity,
     },
 };
 
@@ -156,7 +157,10 @@ pub(super) fn handle_binary_restore_prefill_decode_control(
             )
             .map_err(|error| skippy_inference_api::InferenceError::backend(format!("{error:#}")))?;
             if let Some(metadata) = scheduler_message.chat_sampling_metadata.as_deref() {
-                let sampling = runtime_sampling_config(scheduler_message.sampling.as_ref());
+                let sampling = runtime_sampling_config(
+                    scheduler_message.sampling.as_ref(),
+                    runtime.kv_pool_tokens(),
+                );
                 runtime
                     .configure_chat_sampling(
                         &scheduler_session_id,

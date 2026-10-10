@@ -614,6 +614,28 @@ fn message_content_to_generation_text_inserts_media_markers() {
 }
 
 #[test]
+fn message_content_to_generation_text_caps_media_parts_per_request() {
+    let image =
+        json!({"type": "image_url", "image_url": {"url": "data:image/png;base64,aGVsbG8="}});
+    let content: MessageContent =
+        serde_json::from_value(json!(vec![image; MAX_MEDIA_PARTS_PER_REQUEST])).unwrap();
+    let mut media = Vec::new();
+    message_content_to_generation_text(&content, "<__media__>", &mut media)
+        .expect("media parts up to the limit are accepted");
+    assert_eq!(media.len(), MAX_MEDIA_PARTS_PER_REQUEST);
+
+    // The limit spans every message of the request, so one more part fails.
+    let one_more: MessageContent = serde_json::from_value(json!([
+        {"type": "image_url", "image_url": {"url": "data:image/png;base64,aGVsbG8="}}
+    ]))
+    .unwrap();
+    let error =
+        message_content_to_generation_text(&one_more, "<__media__>", &mut media).unwrap_err();
+    assert_eq!(error.status().as_u16(), 400);
+    assert_eq!(media.len(), MAX_MEDIA_PARTS_PER_REQUEST);
+}
+
+#[test]
 fn message_content_to_generation_text_rejects_remote_media_urls() {
     let content: MessageContent = serde_json::from_value(json!([
         {"type": "input_image", "image_url": "https://example.com/image.png"}

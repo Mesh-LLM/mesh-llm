@@ -41,8 +41,9 @@ use std::time::{Duration, Instant};
 mod startup_loop;
 pub(super) use startup_loop::*;
 
-pub(super) type BootstrapProxyStopTx =
-    tokio::sync::mpsc::Sender<tokio::sync::oneshot::Sender<tokio::net::TcpListener>>;
+pub(super) type BootstrapProxyStopTx = tokio::sync::mpsc::Sender<
+    tokio::sync::oneshot::Sender<crate::network::openai::accept::IngressListener>,
+>;
 
 pub(super) struct StartupLaunchHandles {
     pub(super) loaded_name: String,

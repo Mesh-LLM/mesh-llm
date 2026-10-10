@@ -232,6 +232,26 @@ pub(crate) async fn wait_local_stage_control_response(
         .map_err(|_| anyhow::anyhow!("stage control response dropped"))?
 }
 
+/// Whether `remote` may bridge a transport stream into the local stage named
+/// by `open`. Only nodes assigned to a stage of the same topology run qualify.
+/// Stage ids are visible to every mesh peer, so without this any peer could
+/// feed activations and decode steps into a stage it does not belong to.
+pub(crate) fn stage_transport_allowed_by_topology<'a>(
+    topologies: impl IntoIterator<Item = &'a StageTopologyInstance>,
+    remote: EndpointId,
+    open: &skippy_protocol::proto::stage::StageTransportOpen,
+) -> bool {
+    topologies.into_iter().any(|topology| {
+        topology.topology_id == open.topology_id
+            && topology.run_id == open.run_id
+            && topology
+                .stages
+                .iter()
+                .any(|stage| stage.stage_id == open.stage_id)
+            && topology.stages.iter().any(|stage| stage.node_id == remote)
+    })
+}
+
 pub(crate) fn artifact_transfer_allowed_by_topology(
     topologies: &[StageTopologyInstance],
     remote: EndpointId,
@@ -1149,6 +1169,16 @@ impl Node {
             .lock()
             .await
             .insert(key, bind_addr.into());
+    }
+
+    /// Whether `remote` belongs to the topology run of the stage `open` targets.
+    pub(crate) async fn stage_transport_allowed(
+        &self,
+        remote: EndpointId,
+        open: &skippy_protocol::proto::stage::StageTransportOpen,
+    ) -> bool {
+        let state = self.stage_topologies.lock().await;
+        stage_transport_allowed_by_topology(state.topologies.values(), remote, open)
     }
 
     pub(crate) async fn stage_transport_alias(
