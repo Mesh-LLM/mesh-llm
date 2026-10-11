@@ -25,6 +25,7 @@ ci-validate:
 ci-legacy-contracts:
     just with-lld cargo test --locked -p xtask --bin xtask ci_validation::windows_runtime::tests:: -- --test-threads=1
     just with-lld cargo test --locked -p xtask --test ci_runner_cache_contract windows_ -- --test-threads=1
+    just with-lld cargo test --locked -p xtask --test migration_lifecycle windows_ -- --test-threads=1
 
 # Native whole-session cohort fixtures use the pinned Parquet reader and codecs.
 agentic-trajectory-reader-contracts:
@@ -249,8 +250,16 @@ ci-automation-contracts:
         --test lane_l3_cache_metadata \
         --test lane_l3_display_projection \
         --test lane_l3_l2_dispatch \
+        --test lane_l5_adapter_contracts \
+        --test lane_l5_release_product \
         --test lane_l6_sdk_swift \
+        --test lane_l7_control_plane \
+        --test lane_l7_daemon_lifecycle \
+        --test lane_l7_logging_console \
+        --test lane_l7_logging_recovery \
         --test lane_l7_plans \
+        --test lane_l7_sdk_fixture \
+        --test lane_l7_split_recovery \
         --test lane_l7_standalone \
         --test lane_l8_smoke \
         --test laya_cli_fixture \
@@ -263,13 +272,16 @@ ci-automation-contracts:
         --test migration_cargo_metadata \
         --test migration_cargo_packages_cli \
         --test migration_ci_graph \
+        --test migration_ci_operations \
         --test migration_ci_plan \
         --test migration_cli \
         --test migration_family_plan \
         --test migration_hf_artifact_cli \
         --test migration_hf_artifact_controls \
         --test migration_hf_converted_artifact \
+        --test migration_lifecycle \
         --test migration_stability \
+        --test migration_models \
         --test migration_native_fixtures \
         --test migration_native_generator \
         --test migration_native_policy \
@@ -279,6 +291,7 @@ ci-automation-contracts:
         --test migration_patch_bytes \
         --test migration_patch_shards \
         --test migration_prepared_inputs \
+        --test migration_process \
         --test migration_product \
         --test migration_release \
         --test migration_report_contract \
@@ -287,6 +300,8 @@ ci-automation-contracts:
         --test migration_run_family \
         --test migration_workload_oracle_cli \
         --test migration_xcframework_cli \
+        --test openai_smoke_config \
+        --test opencode_config_adapter \
         --test opencode_fixture_evidence \
         --test prepared_source \
         --test release_inventory_evidence \
@@ -298,6 +313,7 @@ ci-automation-contracts:
         --test replay_context_preflight \
         --test replay_external_engines \
         --test replay_external_run \
+        --test replay_history \
         --test replay_history_hub \
         --test replay_interruption \
         --test replay_l3 \
@@ -321,6 +337,7 @@ ci-automation-contracts:
         --test workload_certify_contract \
         --test workload_oracle_producer_contract \
         --test workload_smoke_config \
+        --test workload_start_retry \
         -- --test-threads=1
 
 # Native component owner and actual CLI, including the embedded job caller.
