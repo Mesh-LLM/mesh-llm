@@ -7,6 +7,10 @@ if [[ "$#" -ne 4 ]]; then
 fi
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+automation=(cargo run --quiet --manifest-path "$REPO_ROOT/tools/xtask/Cargo.toml" --)
+if [[ -n "${MESH_LLM_AUTOMATION_BIN:-}" ]]; then
+    automation=("$MESH_LLM_AUTOMATION_BIN")
+fi
 download_dir="$1"
 build_dir="$2"
 expected_target="$3"
@@ -61,11 +65,11 @@ if [[ "${#download_entries[@]}" -ne 2 ||
     echo "static ABI input must contain exactly its archive and checksum" >&2
     exit 1
 fi
-python3 "$REPO_ROOT/scripts/verify-checksum-sidecar.py" "$archive"
+"${automation[@]}" artifact verify-checksum "$archive"
 
 extract_root="$(mktemp -d "${RUNNER_TEMP:-/tmp}/mesh-static-abi.XXXXXX")"
 trap 'rm -rf -- "$extract_root"' EXIT
-python3 "$REPO_ROOT/scripts/safe-extract-tar.py" \
+"${automation[@]}" artifact extract-tar \
     "$archive" \
     "$extract_root"
 
@@ -105,48 +109,14 @@ if [[ ! -s "$restored_dir/ggml/src/libggml-cpu.a" &&
     exit 1
 fi
 
-python3 - \
+"${automation[@]}" prepared-input static-abi-manifest verify \
     "$manifest" \
     "$build_stamp" \
     "$expected_target" \
     "$expected_backend" \
     "$expected_basename" \
-    "$expected_toolchain_epoch" <<'PY'
-import hashlib
-import json
-import sys
-
-(
-    manifest_path,
-    stamp_path,
-    target,
-    backend,
-    build_directory,
-    toolchain_epoch,
-) = sys.argv[1:]
-with open(manifest_path, encoding="utf-8") as handle:
-    manifest = json.load(handle)
-expected = {
-    "schema_version": 3,
-    "contract": "mesh-llm-static-abi-v3",
-    "target_triple": target,
-    "backend": backend,
-    "build_directory": build_directory,
-    "toolchain_epoch": toolchain_epoch,
-}
-for field, value in expected.items():
-    if manifest.get(field) != value:
-        raise SystemExit(
-            f"static ABI manifest {field} mismatch: "
-            f"expected {value!r}, got {manifest.get(field)!r}"
-        )
-with open(stamp_path, "rb") as handle:
-    stamp_bytes = handle.read()
-stamp_sha256 = hashlib.sha256(stamp_bytes).hexdigest()
-if manifest.get("build_stamp_sha256") != stamp_sha256:
-    raise SystemExit("static ABI build stamp checksum mismatch")
-PY
-python3 "$REPO_ROOT/scripts/verify-static-abi-build-stamp.py" \
+    "$expected_toolchain_epoch"
+"${automation[@]}" prepared-input static-abi-stamp \
     "$build_stamp" \
     --backend "$expected_backend" \
     --link-mode static \

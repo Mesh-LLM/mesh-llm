@@ -14,6 +14,7 @@ elif [[ "$#" -ne 6 ]]; then
 fi
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$REPO_ROOT/scripts/lib/automation.sh"
 cd "$REPO_ROOT"
 
 # Pull requests execute the protected default-branch workflow definition. Until
@@ -57,7 +58,7 @@ scripts/verify-swift-release-artifact.sh \
 
 SWIFT_EXTRACT_DIR="$(mktemp -d)"
 trap 'rm -rf "$SWIFT_EXTRACT_DIR"' EXIT
-scripts/safe-extract-zip.py "$SWIFT_INPUT_ARCHIVE" "$SWIFT_EXTRACT_DIR"
+mesh_automation artifact extract-zip "$SWIFT_INPUT_ARCHIVE" "$SWIFT_EXTRACT_DIR"
 
 SWIFT_GENERATED_DIR="mesh/sdk/swift/Generated"
 if [[ -L "$SWIFT_GENERATED_DIR" ]] \
@@ -86,11 +87,13 @@ native_runtime_dir="$(
 )"
 export MESHLLM_NATIVE_RUNTIME_ARTIFACT_DIR="$native_runtime_dir"
 
+export MESH_SDK_REPOSITORY_ROOT="$REPO_ROOT"
+
 # shellcheck disable=SC2016 # The nested shell expands exported fixture variables.
 scripts/ci-sdk-fixture.sh "$1" "$2" "$3" -- \
     bash -lc '
         set -euo pipefail
-        cd '"$REPO_ROOT"'
+        cd "$MESH_SDK_REPOSITORY_ROOT"
         swift run \
             --package-path mesh/sdk/swift/example/MeshExampleApp \
             MeshExampleApp \
