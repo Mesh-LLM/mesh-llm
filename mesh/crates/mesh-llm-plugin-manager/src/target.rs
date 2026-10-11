@@ -53,6 +53,16 @@ impl PluginTarget {
     pub fn archive_ext(&self) -> ArchiveExt {
         self.archive_ext
     }
+
+    /// The suffix of a plugin executable built for this target: `.exe` on
+    /// Windows, nothing elsewhere. Follows the target, not the host.
+    pub fn executable_suffix(&self) -> &'static str {
+        if self.triple.contains("-windows-") {
+            ".exe"
+        } else {
+            ""
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -120,6 +130,21 @@ mod tests {
         assert!(!PluginTarget::is_supported_triple(
             "x86_64-unknown-linux-gun"
         ));
+    }
+
+    #[test]
+    fn executable_suffix_follows_the_target_not_the_host() {
+        for (os, arch, suffix) in [
+            ("windows", "x86_64", ".exe"),
+            ("windows", "aarch64", ".exe"),
+            ("linux", "x86_64", ""),
+            ("linux", "aarch64", ""),
+            ("macos", "aarch64", ""),
+            ("macos", "x86_64", ""),
+        ] {
+            let target = PluginTarget::from_os_arch(os, arch).unwrap();
+            assert_eq!(target.executable_suffix(), suffix, "{os}/{arch}");
+        }
     }
 
     #[test]

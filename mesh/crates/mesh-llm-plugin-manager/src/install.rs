@@ -159,6 +159,7 @@ pub fn install_bundled_default(
     let extracted = extract_plugin_archive(
         &archive_path,
         ArchiveExt::TarGz,
+        options.target.executable_suffix(),
         name,
         &options.install_root,
     )?;
@@ -239,8 +240,13 @@ pub fn install_plugin_archive(
     });
     let store = PluginStore::new(&options.store_root);
     let current = store.load_optional(name)?;
-    let extracted =
-        extract_plugin_archive(&archive_path, archive_ext, name, &options.install_root)?;
+    let extracted = extract_plugin_archive(
+        &archive_path,
+        archive_ext,
+        options.target.executable_suffix(),
+        name,
+        &options.install_root,
+    )?;
     let metadata = InstalledPluginMetadata {
         name: name.to_string(),
         source_repository: format!("local:{}", archive_path.display()),
@@ -402,6 +408,7 @@ async fn install_resolved_plugin(
     let extracted = extract_plugin_archive(
         &archive_path,
         options.target.archive_ext(),
+        options.target.executable_suffix(),
         &resolved.plugin_name,
         &options.install_root,
     )?;
@@ -787,9 +794,14 @@ mod tests {
         )
         .unwrap();
 
-        let extracted =
-            extract_plugin_archive(&archive_path, ArchiveExt::TarGz, "demo", &install_root)
-                .expect("archive should extract");
+        let extracted = extract_plugin_archive(
+            &archive_path,
+            ArchiveExt::TarGz,
+            std::env::consts::EXE_SUFFIX,
+            "demo",
+            &install_root,
+        )
+        .expect("archive should extract");
         let resolved = ResolvedInstallSource {
             plugin_name: "demo".to_string(),
             source: GitHubPluginSource::from_url("https://github.com/mesh-llm/demo").unwrap(),
@@ -982,6 +994,7 @@ mod tests {
         let extracted = extract_plugin_archive(
             &archive_path,
             ArchiveExt::TarGz,
+            std::env::consts::EXE_SUFFIX,
             "demo",
             &temp.path().join("installed"),
         )
