@@ -85,7 +85,10 @@ fn validate(members: &[Member]) -> Result<Vec<(&Member, Parts)>, String> {
         if parts.is_empty() {
             continue;
         }
-        if !(member.is_dir() || member.is_reg() || member.is_sym() || member.is_lnk()) {
+        // GNU sparse members (`S`) count as regular for `tarfile`, but their
+        // payload is a sparse map rather than file bytes, so refuse them.
+        let sparse = member.kind == b'S';
+        if sparse || !(member.is_dir() || member.is_reg() || member.is_sym() || member.is_lnk()) {
             return Err(format!(
                 "unsupported archive member type for {}: 0x{:02x}",
                 member.name, member.kind
