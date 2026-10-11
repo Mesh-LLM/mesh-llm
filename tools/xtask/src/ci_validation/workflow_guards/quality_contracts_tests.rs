@@ -28,10 +28,10 @@ fn current_quality_and_local_recipes_select_owning_portable_targets() {
 fn missing_extra_duplicate_or_filtered_cargo_coverage_is_rejected() {
     let (source, targets) = inputs();
     for changed in [
-        source.replace("--test migration_lifecycle \\", ""),
+        source.replace("--test migration_stability \\", ""),
         source.replace(
-            "--test migration_lifecycle \\",
-            "--test migration_lifecycle --test migration_lifecycle \\",
+            "--test migration_stability \\",
+            "--test migration_stability --test migration_stability \\",
         ),
         source.replace("--test-threads=1", "--test-threads=1 --ignored"),
         source.replace("--bin xtask", "--bin another_tool"),
