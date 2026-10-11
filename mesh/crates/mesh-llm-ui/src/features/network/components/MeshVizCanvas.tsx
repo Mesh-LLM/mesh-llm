@@ -1,4 +1,4 @@
-import type { PointerEvent as ReactPointerEvent, RefObject } from 'react'
+import { useCallback, useState, type PointerEvent as ReactPointerEvent, type RefObject } from 'react'
 import { Maximize2, Minus, Plus, RotateCcw } from 'lucide-react'
 import { cn } from '@/lib/cn'
 import type { MeshNode, Peer } from '@/features/app-tabs/types'
@@ -159,6 +159,18 @@ export function MeshVizCanvas({
   viewportControlClassName,
   viewportControlIconClassName
 }: MeshVizCanvasProps) {
+  // Mirror the canvas element into state so the hover-card portal container
+  // can be read during render (reading canvasRef.current there is a React
+  // compiler violation).
+  const [canvasElement, setCanvasElement] = useState<HTMLDivElement | null>(null)
+  const handleCanvasRef = useCallback(
+    (element: HTMLDivElement | null) => {
+      canvasRef.current = element
+      setCanvasElement(element)
+    },
+    [canvasRef]
+  )
+
   return (
     <section className="panel-shell flex h-full min-h-0 flex-col overflow-hidden rounded-[var(--radius-lg)] border border-border bg-panel">
       <header className="flex shrink-0 items-center justify-between border-b border-border-soft px-4 py-3">
@@ -175,7 +187,7 @@ export function MeshVizCanvas({
       </header>
       <div className="flex min-h-0 flex-1 p-3.5">
         <div
-          ref={canvasRef}
+          ref={handleCanvasRef}
           data-testid="mesh-canvas"
           className={cn(
             'relative w-full touch-none overflow-hidden rounded-[var(--radius-lg)] mesh-canvas',
@@ -365,6 +377,11 @@ export function MeshVizCanvas({
                     nodeColors={dotColorScheme.nodeColors}
                     lifecycle={nodeLifecyclePhase(node.id)}
                     radarPingRef={radarPingRef}
+                    // Fullscreen paints only the fullscreen element's subtree,
+                    // so the hover card must portal into the canvas there.
+                    // In normal mode keep the body portal: the canvas is
+                    // overflow-hidden and would clip edge cards.
+                    hoverCardContainer={isFullscreen ? canvasElement : null}
                     onHoverStart={onNodeHoverStart}
                     onHoverEnd={onNodeHoverEnd}
                     onToggleOpen={onNodeToggleOpen}
