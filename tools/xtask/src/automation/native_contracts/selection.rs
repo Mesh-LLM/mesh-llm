@@ -56,7 +56,9 @@ fn select(base: &Series, current: &Series) -> DynResult<Selection> {
     let keys: BTreeSet<_> = old.keys().chain(new.keys()).copied().collect();
     let mut selection = Selection::empty("none", "no-shard-changes");
     for key in keys {
-        if old.get(key).map(|shard| &shard.sha256) == new.get(key).map(|shard| &shard.sha256) {
+        if old.get(key).map(|shard| (&shard.sha256, &shard.families))
+            == new.get(key).map(|shard| (&shard.sha256, &shard.families))
+        {
             continue;
         }
         selection.mode = "targeted";
@@ -174,6 +176,22 @@ mod tests {
         };
         let result = select(&base, &current).unwrap();
         assert_eq!(result.families, BTreeSet::from(["a".into()]));
+    }
+
+    #[test]
+    fn reassigned_owner_with_same_digest_selects_both_owners() {
+        let shard = |family: &str| Series {
+            schema_version: 1,
+            generator_version: "v1".into(),
+            shards: vec![Shard {
+                sources: vec!["src/models/a.cpp".into()],
+                families: vec![family.into()],
+                sha256: "same".into(),
+            }],
+        };
+        let result = select(&shard("a"), &shard("b")).unwrap();
+        assert_eq!(result.mode, "targeted");
+        assert_eq!(result.families, BTreeSet::from(["a".into(), "b".into()]));
     }
 
     #[test]

@@ -42,13 +42,16 @@ pub(in crate::automation) async fn exchange_with_authorization(
             .host()
             .is_none_or(|h| h.parse::<std::net::Ipv4Addr>().is_err())
     {
-        return super::curl_transport::exchange(
-            &uri.to_string(),
+        return Box::pin(owned_exchange(
+            base,
+            suffix,
             body,
             deadline,
             cancellation,
             authorization,
-        );
+            false,
+        ))
+        .await;
     }
     let socket = tokio::net::TcpStream::connect((
         uri.host().ok_or("missing HTTP host")?,
