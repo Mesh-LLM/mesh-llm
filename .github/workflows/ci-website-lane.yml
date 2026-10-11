@@ -121,7 +121,8 @@ jobs:
           LANE_PLAN: ${{ inputs.lane_plan_json }}
           NEEDS_RESULTS: ${{ toJson(needs) }}
         run: '"$MESH_LLM_AUTOMATION_BIN" ci validate-lane --lane-plan "$LANE_PLAN" --needs "$NEEDS_RESULTS"'
-      - uses: ./.github/actions/report-ci-lane
+      - if: ${{ !cancelled() }}
+        uses: ./.github/actions/report-ci-lane
         with:
           lane_name: CI / Website
           lane_result: ${{ steps.validate.outcome == 'success' && 'success' || 'failure' }}

@@ -232,8 +232,8 @@ fn workload_cli_executes_all_six_classes_against_local_wire_fixtures() -> TestRe
             ])
             .arg(media.path())
             .output()?;
-        server.join().map_err(|_| "fixture server panicked")??;
         assert!(result.status.success(), "{class}: {:?}", result.stderr);
+        server.join().map_err(|_| "fixture server panicked")??;
         assert_eq!(
             String::from_utf8(result.stdout)?,
             format!("OpenAI HTTP {class} smoke passed: model=fixture\n")

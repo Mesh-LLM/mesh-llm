@@ -402,6 +402,7 @@ run_battery_timeout() {
   transaction_root="$(mktemp -d "$ARTIFACT_DIR/command-timeout.XXXXXXXX")" || return 125
   input="$transaction_root/input.json"
   executable="$(command -v "$1")" || {
+    echo "$label: executable not found: $1" >&2
     rmdir "$transaction_root" || true
     return 125
   }
