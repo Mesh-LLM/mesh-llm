@@ -54,14 +54,25 @@ impl PluginTarget {
         self.archive_ext
     }
 
-    /// The suffix of a plugin executable built for this target: `.exe` on
-    /// Windows, nothing elsewhere. Follows the target, not the host.
-    pub fn executable_suffix(&self) -> &'static str {
-        if self.triple.contains("-windows-") {
+    /// The suffix of a plugin executable built for `triple`: `.exe` on
+    /// Windows, nothing elsewhere. `None` for a triple this build does not
+    /// support.
+    pub fn executable_suffix_for(triple: &str) -> Option<&'static str> {
+        if !Self::is_supported_triple(triple) {
+            return None;
+        }
+        Some(if triple.contains("-windows-") {
             ".exe"
         } else {
             ""
-        }
+        })
+    }
+
+    /// The suffix of a plugin executable built for this target. Follows the
+    /// target, not the host; only a deserialized target can name a triple
+    /// this build does not support, and that falls back to the host's suffix.
+    pub fn executable_suffix(&self) -> &'static str {
+        Self::executable_suffix_for(&self.triple).unwrap_or(std::env::consts::EXE_SUFFIX)
     }
 }
 
@@ -144,7 +155,13 @@ mod tests {
         ] {
             let target = PluginTarget::from_os_arch(os, arch).unwrap();
             assert_eq!(target.executable_suffix(), suffix, "{os}/{arch}");
+            assert_eq!(
+                PluginTarget::executable_suffix_for(target.triple()),
+                Some(suffix),
+                "{os}/{arch}"
+            );
         }
+        assert_eq!(PluginTarget::executable_suffix_for("test-target"), None);
     }
 
     #[test]

@@ -290,9 +290,13 @@ pub struct InstalledPluginMetadata {
 }
 
 impl InstalledPluginMetadata {
+    /// The plugin's executable, named for the target it was installed for,
+    /// the same name the install checked. A stored triple this build does not
+    /// support (a hand-written or test record) falls back to the host's suffix.
     pub fn executable_path(&self) -> PathBuf {
-        self.install_path
-            .join(format!("{}{}", self.name, std::env::consts::EXE_SUFFIX))
+        let suffix = crate::target::PluginTarget::executable_suffix_for(&self.target_triple)
+            .unwrap_or(std::env::consts::EXE_SUFFIX);
+        self.install_path.join(format!("{}{suffix}", self.name))
     }
 
     pub fn web_ui_asset_root_path(&self) -> Option<PathBuf> {
@@ -472,6 +476,28 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
+
+    #[test]
+    fn executable_path_follows_the_stored_target_on_any_host() {
+        let mut item = metadata("demo");
+        for (triple, executable) in [
+            ("x86_64-pc-windows-msvc", "demo.exe".to_string()),
+            ("aarch64-pc-windows-msvc", "demo.exe".to_string()),
+            ("x86_64-unknown-linux-gnu", "demo".to_string()),
+            ("aarch64-apple-darwin", "demo".to_string()),
+            (
+                "test-target",
+                format!("demo{}", std::env::consts::EXE_SUFFIX),
+            ),
+        ] {
+            item.target_triple = triple.to_string();
+            assert_eq!(
+                item.executable_path(),
+                item.install_path.join(&executable),
+                "{triple}"
+            );
+        }
+    }
 
     fn metadata(name: &str) -> InstalledPluginMetadata {
         InstalledPluginMetadata {
