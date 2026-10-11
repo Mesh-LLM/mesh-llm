@@ -38,21 +38,11 @@ runs:
           --silent \
           "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/${archive_name}" \
           --output "$archive"
-        python3 - "$archive" "$checksum" <<'PY'
-        import hashlib
-        from pathlib import Path
-        import sys
-
-        archive, expected = Path(sys.argv[1]), sys.argv[2]
-        actual = hashlib.sha256(archive.read_bytes()).hexdigest()
-        if actual != expected:
-            raise SystemExit(
-                f"actionlint archive checksum mismatch: {actual} != {expected}"
-            )
-        PY
+        printf '%s  %s\n' "$checksum" "$archive_name" > "$archive.sha256"
+        cargo xtool artifact verify-checksum "$archive"
 
         mkdir -p "$install_dir"
-        python3 scripts/safe-extract-tar.py "$archive" "$install_dir"
+        cargo xtool artifact extract-tar "$archive" "$install_dir"
         test -x "$install_dir/actionlint"
         "$install_dir/actionlint" -version
         printf '%s\n' "$install_dir" >> "$GITHUB_PATH"

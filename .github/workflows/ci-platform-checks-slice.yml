@@ -3,6 +3,26 @@ name: CI Platform Checks Slice
 on:
   workflow_call:
     inputs:
+      authority_linux_x64:
+        description: Exact same-run protected native producer identity JSON, source SHA, artifact ID, independent digest, OS, and architecture.
+        required: false
+        default: ''
+        type: string
+      authority_linux_arm64:
+        description: Exact same-run protected native producer identity JSON, source SHA, artifact ID, independent digest, OS, and architecture.
+        required: false
+        default: ''
+        type: string
+      authority_macos_arm64:
+        description: Exact same-run protected native producer identity JSON, source SHA, artifact ID, independent digest, OS, and architecture.
+        required: false
+        default: ''
+        type: string
+      authority_windows_x64:
+        description: Exact same-run protected native producer identity JSON, source SHA, artifact ID, independent digest, OS, and architecture.
+        required: false
+        default: ''
+        type: string
       source_sha:
         description: Immutable product source revision.
         required: false
@@ -117,12 +137,13 @@ jobs:
       - name: Configure macOS linker
         if: ${{ matrix.check.platform == 'macos' }}
         uses: ./.github/actions/setup-macos-lld
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
-        if: ${{ matrix.check.platform == 'windows' }}
-        with:
-          python-version: "3.x"
       - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
         if: ${{ matrix.check.platform == 'windows' }}
+      - uses: ./.github/actions/configure-sccache-gha
+        if: ${{ matrix.check.platform == 'windows' }}
+        with:
+          allow_depot_remote_cache: ${{ needs.runner_policy.outputs.allow_depot_remote_cache }}
+          allow_native_github_cache: ${{ needs.runner_policy.outputs.allow_native_github_cache }}
       - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
         if: ${{ matrix.check.platform == 'windows' }}
         with:
@@ -267,3 +288,75 @@ jobs:
             cargo test --locked -p $crate --lib --features mesh-llm-system/dynamic-native-runtime
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
+
+      - name: Prepare Windows automation contract tools
+        if: ${{ matrix.check.kind == 'unit' && matrix.check.platform == 'windows' }}
+        id: windows_automation
+        uses: ./.github/actions/prepare-automation
+        with:
+          allow_depot_remote_cache: ${{ needs.runner_policy.outputs.allow_depot_remote_cache }}
+          allow_native_github_cache: ${{ needs.runner_policy.outputs.allow_native_github_cache }}
+      - name: Run native Windows automation contracts
+        if: ${{ matrix.check.kind == 'unit' && matrix.check.platform == 'windows' }}
+        timeout-minutes: 20
+        shell: pwsh
+        env:
+          CARGO_TARGET_DIR: ${{ steps.windows_automation.outputs.target_directory }}
+          RUST_MIN_STACK: "8388608"
+        run: |
+          $ErrorActionPreference = "Stop"
+          if ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture -ne [System.Runtime.InteropServices.Architecture]::X64) { throw "native Windows x64 contracts require x64" }
+          Get-Command just -ErrorAction Stop | Out-Null
+          $justVersion = @(just --version)
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $justVersion | Write-Host
+          if ($justVersion.Count -ne 1 -or $justVersion[0] -notmatch '^just ([0-9]+\.[0-9]+\.[0-9]+)$') { throw "cannot determine installed Just version" }
+          if ([version]$Matches[1] -lt [version]'1.32.0') { throw "recipe-local script requires Just >=1.32" }
+          Get-Command sccache -ErrorAction Stop | Out-Null
+          just with-lld cargo build --locked -p xtask --bin xtask --example migration_generator_fixture
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $expected = @(
+            "ci_validation::windows_runtime::tests::native::native_windows_build_directory_tracks_prepared_pin_and_explicit_override",
+            "ci_validation::windows_runtime::tests::native::native_windows_bash_paths_preserve_repo_case_and_distinguish_git_bash_from_wsl",
+            "ci_validation::windows_runtime::tests::native::native_windows_relative_llama_override_is_bound_to_repo_not_process_directory",
+            "ci_validation::windows_runtime::tests::installer::native::native_windows_installer_interactive_runs_setup_and_warns_for_legacy_flavor",
+            "ci_validation::windows_runtime::tests::installer::native::native_windows_installer_noninteractive_prints_setup_and_installs_runtime",
+            "ci_validation::windows_runtime::tests::installer::native::native_windows_installer_no_setup_prints_command_without_executing_setup",
+            "ci_validation::windows_runtime::tests::installer::native::native_windows_installer_tampered_host_digest_preserves_existing_install",
+            "ci_validation::windows_runtime::tests::installer::native::native_windows_installer_removes_stale_host_imports_when_bundle_omits_it",
+            "ci_validation::windows_runtime::tests::installer::native::native_windows_installer_failed_runtime_replacement_restores_previous_product",
+            "ci_validation::windows_runtime::tests::installer::native::native_windows_installer_stale_cleanup_failure_keeps_committed_new_product",
+            "ci_validation::windows_runtime::tests::installer::consumer::native_windows_consumer_interactive_runs_setup_and_warns_for_legacy_flavor",
+            "ci_validation::windows_runtime::tests::installer::consumer::native_windows_consumer_noninteractive_prints_setup_and_installs_runtime",
+            "ci_validation::windows_runtime::tests::installer::consumer::native_windows_consumer_no_setup_prints_command_without_executing_setup",
+            "ci_validation::windows_runtime::tests::installer::consumer::native_windows_consumer_tampered_host_digest_preserves_existing_install",
+            "ci_validation::windows_runtime::tests::installer::consumer::native_windows_consumer_removes_stale_host_imports_when_bundle_omits_it",
+            "ci_validation::windows_runtime::tests::installer::consumer::native_windows_consumer_failed_runtime_replacement_restores_previous_product",
+            "ci_validation::windows_runtime::tests::installer::consumer::native_windows_consumer_stale_cleanup_failure_keeps_committed_new_product",
+            "ci_validation::windows_runtime::tests::installer::consumer::native_windows_consumer_help_and_missing_cli_value_avoid_download_and_mutation",
+            "automation::private_state::deletion::tests::windows_transient_handle_lock_is_removed_after_release",
+            "automation::private_state::deletion::tests::windows_persistent_handle_lock_retains_log_and_reports_failure"
+          )
+          if ($expected.Count -ne 20 -or @($expected | Select-Object -Unique).Count -ne 20) { throw "native Windows contract roster must contain twenty distinct methods" }
+          $verified = 0
+          foreach ($method in $expected) {
+            $listing = @(just with-lld cargo test --locked -p xtask --bin xtask $method -- --exact --list)
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            $actual = @($listing | Where-Object { $_ -match '^(.+): test$' } | ForEach-Object { $_ -replace ': test$', '' })
+            if ($actual.Count -ne 1 -or $actual[0] -ne $method) { throw "native Windows method was not selected exactly: $method" }
+            $listing | Write-Host
+            $result = @(just with-lld cargo test --locked -p xtask --bin xtask $method -- --exact --test-threads=1)
+            if ($LASTEXITCODE -ne 0) { $result | Write-Host; exit $LASTEXITCODE }
+            $result | Write-Host
+            if (@($result | Where-Object { $_ -match '^test result: ok\. 1 passed; 0 failed; 0 ignored;' }).Count -ne 1) { throw "native Windows method must pass without an ignored test: $method" }
+            $verified++
+          }
+          if ($verified -ne 20) { throw "all twenty native Windows methods must be verified" }
+          $wrapper = "ci_validation::windows_runtime::tests::with_lld::windows_with_lld_propagates_native_failure_and_success"
+          $wrapperListing = @(just with-lld cargo test --locked -p xtask --bin xtask $wrapper -- --exact --list)
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (@($wrapperListing | Where-Object { $_ -eq "$($wrapper): test" }).Count -ne 1) { throw "Windows wrapper regression method was not selected" }
+          $wrapperResult = @(just with-lld cargo test --locked -p xtask --bin xtask $wrapper -- --exact --test-threads=1)
+          if ($LASTEXITCODE -ne 0) { $wrapperResult | Write-Host; exit $LASTEXITCODE }
+          $wrapperResult | Write-Host
+          if (@($wrapperResult | Where-Object { $_ -match '^test result: ok\. 1 passed; 0 failed; 0 ignored;' }).Count -ne 1) { throw "native Windows wrapper regression must pass without an ignored test" }

@@ -1,0 +1,136 @@
+name: Upload immutable repository automation
+description: Build automation once in a compiler-capable producer and publish source-bound checksummed bytes.
+inputs:
+  source_sha:
+    description: Immutable checked-out automation source commit.
+    required: true
+  runner-profile:
+    description: Existing closed automation preparation profile; image or hosted-bare only.
+    required: false
+    default: image
+  source-profile:
+    description: Closed source claim; release-prepared preserves release checkout identity, protected-clean requires a clean source tree.
+    required: false
+    default: release-prepared
+  ci-lane:
+    description: Optional closed CI artifact scope, quality, website, linux, macos, or windows; requires protected-clean source.
+    required: false
+    default: ''
+outputs:
+  artifact_id:
+    description: Immutable same-run artifact identifier supplied by upload-artifact.
+    value: ${{ steps.upload.outputs.artifact-id }}
+  source_sha:
+    description: Checked producer automation commit, distinct from product/PR identity.
+    value: ${{ inputs.source_sha }}
+  binary_sha256:
+    description: Staged executable digest supplied independently of artifact contents.
+    value: ${{ steps.stage.outputs.binary_sha256 }}
+runs:
+  using: composite
+  steps:
+    - name: Admit producer preparation profile
+      shell: bash
+      env:
+        AUTOMATION_PROFILE: ${{ inputs.runner-profile }}
+        AUTOMATION_SOURCE_PROFILE: ${{ inputs.source-profile }}
+        AUTOMATION_SOURCE_SHA: ${{ inputs.source_sha }}
+        AUTOMATION_CI_LANE: ${{ inputs.ci-lane }}
+      run: |
+        set -euo pipefail
+        case "${AUTOMATION_CI_LANE:-}" in
+          '') ;;
+          quality|website|linux|macos|windows)
+            test "$AUTOMATION_SOURCE_PROFILE" = protected-clean || exit 1
+            ;;
+          *) echo "unsupported automation CI lane" >&2; exit 1 ;;
+        esac
+        [[ "$AUTOMATION_SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || exit 1
+        test "$(git rev-parse HEAD)" = "$AUTOMATION_SOURCE_SHA" || exit 1
+        case "$AUTOMATION_SOURCE_PROFILE" in
+          release-prepared) test "$AUTOMATION_PROFILE" = image || exit 1 ;;
+          protected-clean)
+            source_status="$(git status --porcelain --untracked-files=normal)" || exit 1
+            test -z "$source_status" || exit 1
+            ;;
+          *) echo "unsupported automation source profile" >&2; exit 1 ;;
+        esac
+        case "$AUTOMATION_PROFILE" in
+          image|hosted-bare) ;;
+          *) echo "unsupported automation producer profile" >&2; exit 1 ;;
+        esac
+    - name: Prepare producer automation
+      id: prepare
+      if: runner.os == 'Windows' || inputs.runner-profile == 'hosted-bare' || (runner.os == 'macOS' && inputs.source-profile == 'protected-clean')
+      uses: ./.github/actions/prepare-automation
+      with:
+        runner-profile: ${{ inputs.runner-profile }}
+    - name: Build and stage automation
+      id: stage
+      shell: bash
+      env:
+        AUTOMATION_SOURCE_SHA: ${{ inputs.source_sha }}
+        AUTOMATION_CI_LANE: ${{ inputs.ci-lane }}
+        AUTOMATION_BINARY_PATH: ${{ steps.prepare.outputs.binary_path }}
+        AUTOMATION_PROFILE: ${{ inputs.runner-profile }}
+        AUTOMATION_SOURCE_PROFILE: ${{ inputs.source-profile }}
+      run: |
+        set -euo pipefail
+        case "${AUTOMATION_CI_LANE:-}" in
+          '') ;;
+          quality|website|linux|macos|windows)
+            test "$AUTOMATION_SOURCE_PROFILE" = protected-clean || exit 1
+            ;;
+          *) echo "unsupported automation CI lane" >&2; exit 1 ;;
+        esac
+        [[ "$AUTOMATION_SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || exit 1
+        test "$(git rev-parse HEAD)" = "$AUTOMATION_SOURCE_SHA" || exit 1
+        case "$AUTOMATION_SOURCE_PROFILE" in
+          release-prepared) test "$AUTOMATION_PROFILE" = image || exit 1 ;;
+          protected-clean)
+            source_status="$(git status --porcelain --untracked-files=normal)" || exit 1
+            test -z "$source_status" || exit 1
+            ;;
+          *) echo "unsupported automation source profile" >&2; exit 1 ;;
+        esac
+        binary_path="${AUTOMATION_BINARY_PATH%$'\r'}"
+        if [[ -z "$binary_path" && "$RUNNER_OS" != Windows ]]; then
+          test "$AUTOMATION_PROFILE" = image || exit 1
+          report="$(just automation-bootstrap)"
+          binary_path="$(printf '%s\n' "$report" | sed -n 's/^binary_path=//p')"
+        fi
+        if command -v cygpath >/dev/null 2>&1; then
+          binary_path="$(cygpath -u "$binary_path")"
+        fi
+        [[ "$binary_path" == /* && -f "$binary_path" && ! -L "$binary_path" && -x "$binary_path" ]] || exit 1
+        test "$(git rev-parse HEAD)" = "$AUTOMATION_SOURCE_SHA" || exit 1
+        case "$AUTOMATION_SOURCE_PROFILE" in
+          release-prepared) test "$AUTOMATION_PROFILE" = image || exit 1 ;;
+          protected-clean)
+            source_status="$(git status --porcelain --untracked-files=normal)" || exit 1
+            test -z "$source_status" || exit 1
+            ;;
+          *) echo "unsupported automation source profile" >&2; exit 1 ;;
+        esac
+        stage="$RUNNER_TEMP/immutable-automation"
+        mkdir "$stage"
+        binary=xtask
+        if [[ "$RUNNER_OS" == Windows ]]; then binary=xtask.exe; fi
+        cp "$binary_path" "$stage/$binary"
+        printf '%s\n' "$AUTOMATION_SOURCE_SHA" > "$stage/source.txt"
+        cd "$stage"
+        if command -v sha256sum >/dev/null 2>&1; then
+          sha256sum "$binary" source.txt > SHA256SUMS
+        else
+          shasum -a 256 "$binary" source.txt > SHA256SUMS
+        fi
+        read -r binary_digest _ < SHA256SUMS
+        printf 'binary_sha256=%s\n' "$binary_digest" >> "$GITHUB_OUTPUT"
+    - name: Upload automation bytes
+      id: upload
+      uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+      with:
+        name: automation-${{ runner.os }}-${{ runner.arch }}-${{ inputs.source_sha }}${{ inputs.ci-lane != '' && format('-{0}', inputs.ci-lane) || '' }}
+        path: ${{ runner.temp }}/immutable-automation/*
+        if-no-files-found: error
+        retention-days: ${{ inputs.ci-lane != '' && 1 || 90 }}

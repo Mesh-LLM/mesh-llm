@@ -62,7 +62,11 @@ runs:
         SCCACHE_MINIMUM_HIT_RATE: ${{ inputs.minimum_hit_rate }}
       run: |
         set -euo pipefail
-        python3 "$GITHUB_ACTION_PATH/capture.py" \
+        automation=(cargo xtool)
+        if [[ -n "${MESH_LLM_AUTOMATION_BIN:-}" ]]; then
+          automation=("$MESH_LLM_AUTOMATION_BIN")
+        fi
+        "${automation[@]}" ci-ops sccache-stats \
           --artifact-name "$SCCACHE_STATS_ARTIFACT_NAME" \
           --cache-expectation "$SCCACHE_CACHE_EXPECTATION" \
           --minimum-hit-rate "$SCCACHE_MINIMUM_HIT_RATE" \

@@ -152,6 +152,9 @@ outputs:
 runs:
   using: composite
   steps:
+    - uses: ./.github/actions/prepare-automation
+      with:
+        runner-profile: hosted-bare
     - name: Build versioned CI plan
       id: plan
       shell: bash
@@ -219,7 +222,7 @@ runs:
           --argjson affected_crates "$affected_crates_json" \
           '{profile: $profile, event_name: $event_name, source_sha: $source_sha, base_sha: $base_sha, changed_files: $changed_files[0]}
            + if ($affected_crates | length) > 0 then {affected_crates: $affected_crates} else {} end' \
-          | python3 scripts/plan-ci.py --manifest-root "$manifest_root" > ci-plan.json
+          | "$MESH_LLM_AUTOMATION_BIN" ci plan --manifest-root "$manifest_root" > ci-plan.json
 
         plan_json=$(jq -c . ci-plan.json)
         plan_digest=$(printf '%s' "$plan_json" | sha256sum | awk '{print $1}')

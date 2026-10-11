@@ -29,12 +29,14 @@ runs:
         UI_RELEASE_TAG: ${{ inputs.release_tag }}
       run: |
         set -euo pipefail
-        if command -v python3 >/dev/null 2>&1; then
-          python_bin=python3
+        if [[ -n "${MESH_LLM_AUTOMATION_BIN:-}" ]]; then
+          "$MESH_LLM_AUTOMATION_BIN" prepared-input ui-distribution verify \
+            --dist "$UI_DIR/dist" \
+            --source-sha "$UI_SOURCE_SHA" \
+            --release-tag "$UI_RELEASE_TAG"
         else
-          python_bin=python
+          cargo xtool prepared-input ui-distribution verify \
+            --dist "$UI_DIR/dist" \
+            --source-sha "$UI_SOURCE_SHA" \
+            --release-tag "$UI_RELEASE_TAG"
         fi
-        "$python_bin" scripts/ui-distribution.py verify \
-          --dist "$UI_DIR/dist" \
-          --source-sha "$UI_SOURCE_SHA" \
-          --release-tag "$UI_RELEASE_TAG"
