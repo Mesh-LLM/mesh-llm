@@ -41,5 +41,8 @@ RUN cargo build --locked -p mesh-llm -p mesh-llm-plugin
 # Keep this to the crates that matter; the full workspace does not fit the budget.
 RUN cargo test --locked --no-run -p mesh-llm -p mesh-llm-plugin
 
+# The scanner's agent may use a login shell, which resets PATH and loses cargo.
+RUN echo 'export PATH=/usr/local/cargo/bin:$PATH' > /etc/profile.d/10-cargo.sh
+
 # Cheap smoke check only. A failing check must not abort the build.
 RUN ./target/debug/mesh-llm --version || echo "WARNING: mesh-llm --version failed"
