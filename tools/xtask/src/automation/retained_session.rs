@@ -9,12 +9,25 @@ pub(crate) enum Error<Rejection> {
     Interrupt(#[from] Reason),
     #[error(transparent)]
     Process(#[from] Failure),
-    #[error("retained session finalization failed: {reason}")]
+    #[error(
+        "retained session finalization failed: {reason}; preceding={}",
+        describe_preceding(preceding)
+    )]
     Finalization {
         #[source]
         reason: Reason,
         preceding: Result<Report<Rejection>, Failure>,
     },
+}
+/// Summarizes the session result that finalization superseded.
+fn describe_preceding<Rejection>(preceding: &Result<Report<Rejection>, Failure>) -> String {
+    match preceding {
+        Ok(report) => match &report.failure {
+            Some(failure) => format!("{:?} with failure: {failure}", report.outcome),
+            None => format!("{:?}", report.outcome),
+        },
+        Err(failure) => format!("process failure: {failure}"),
+    }
 }
 impl<Rejection> std::fmt::Debug for Error<Rejection> {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

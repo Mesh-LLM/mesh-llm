@@ -34,7 +34,7 @@ impl Row {
                     .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
         }) || self.created_utc.as_deref().is_none_or(str::is_empty)
         {
-            return Err("history row requires created_utc and a40-character source SHA".into());
+            return Err("history row requires created_utc and a 40-character source SHA".into());
         }
         for value in [
             self.measured_wall_ms,

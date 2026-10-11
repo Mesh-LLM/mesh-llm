@@ -208,7 +208,7 @@ fn default_base(mode: Mode, environment: &impl Fn(&str) -> Option<String>) -> St
         .filter(|value| !value.is_empty())
         .map_or_else(
             || "http://127.0.0.1:9337/v1".into(),
-            |value| format!("{}/v1", value.trim_end_matches('/')),
+            |value| value.trim().to_owned(),
         )
 }
 
@@ -305,6 +305,11 @@ mod tests {
         let tool = Options::with_environment(&args(&["tool-call"]), |_| None).unwrap();
         assert_eq!(tool.attempts, 1);
         assert_eq!(tool.models, ["auto", "mesh"]);
+        let versioned = Options::with_environment(&args(&["nightly"]), |name| {
+            (name == "MESH_CLIENT_API_BASE").then(|| "https://fixture.invalid/tenant/v1/".into())
+        })
+        .unwrap();
+        assert_eq!(versioned.base.as_str(), "https://fixture.invalid/tenant/v1");
     }
 
     #[test]

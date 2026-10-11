@@ -190,8 +190,8 @@ pub(super) fn run(args: &[String]) -> DynResult<()> {
 }
 
 fn run_selected(path: &str, source_root: Option<&str>) -> DynResult<()> {
-    let root = source_root
-        .map(|root| -> DynResult<PathBuf> {
+    let bound = source_root
+        .map(|root| -> DynResult<(PathBuf, PathBuf)> {
             let root = super::RepositoryRoot::resolve(Some(std::path::Path::new(root)))?;
             let root = root.as_path().to_path_buf();
             let script = std::path::Path::new(path).canonicalize()?;
@@ -199,13 +199,17 @@ fn run_selected(path: &str, source_root: Option<&str>) -> DynResult<()> {
             if script != expected || !script.starts_with(&root) {
                 return Err("publish script is not bound to the selected source".into());
             }
-            Ok(root)
+            Ok((root, script))
         })
         .transpose()?;
-    if !std::fs::metadata(path)?.is_file() {
+    let script_path = bound
+        .as_ref()
+        .map_or_else(|| PathBuf::from(path), |(_, script)| script.clone());
+    let root = bound.map(|(root, _)| root);
+    if !std::fs::metadata(&script_path)?.is_file() {
         return Err("publish script must be a regular file".into());
     }
-    let script = std::fs::File::open(path)?;
+    let script = std::fs::File::open(&script_path)?;
     let mut contents = String::new();
     script.take(1_048_577).read_to_string(&mut contents)?;
     if contents.len() > 1_048_576 {

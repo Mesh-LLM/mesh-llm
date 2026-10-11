@@ -5,7 +5,7 @@ pub(super) fn fingerprint(bytes: &[u8]) -> DynResult<(Value, Value)> {
     let text = std::str::from_utf8(bytes)?;
     let fields = row(text)?;
     if fields.len() != 9 {
-        return Err("runner GPU fingerprint must contain one9-field row".into());
+        return Err("runner GPU fingerprint must contain one 9-field row".into());
     }
     let stable = [
         "name",
@@ -16,7 +16,7 @@ pub(super) fn fingerprint(bytes: &[u8]) -> DynResult<(Value, Value)> {
     ];
     for (index, name) in stable.iter().enumerate() {
         if fields[index].is_empty() {
-            return Err(format!("runner GPU fingerprint missing stable field:{name}").into());
+            return Err(format!("runner GPU fingerprint missing stable field: {name}").into());
         }
     }
     let identity = crate::automation::cohort_identity::digest(

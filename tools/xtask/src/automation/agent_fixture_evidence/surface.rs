@@ -47,12 +47,12 @@ struct Capabilities {
 
 impl Capabilities {
     fn observe(&mut self, event: Event, minimum_body_bytes: usize) -> DynResult<()> {
-        if event.method == "GET" && event.path.trim_end_matches('/') == "/v1/models" {
+        let route = event.path.split('?').next().unwrap_or_default();
+        let route = route.trim_end_matches('/');
+        if event.method == "GET" && route == "/v1/models" {
             self.models += 1;
         }
-        if event.method != "POST"
-            || event.path.split('?').next().unwrap().trim_end_matches('/') != "/v1/chat/completions"
-        {
+        if event.method != "POST" || route != "/v1/chat/completions" {
             return Ok(());
         }
         self.chats += 1;

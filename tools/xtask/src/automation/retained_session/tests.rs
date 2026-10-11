@@ -59,6 +59,11 @@ fn finalization_failure_preserves_preceding_process_error() {
         code: Some(2),
     });
     let result = finalize(preceding, Err(Reason::Interrupted));
+    let rendered = match &result {
+        Err(error) => format!("{error:?}"),
+        Ok(_) => panic!("finalization failure must surface"),
+    };
+    assert!(rendered.contains("spawn"), "{rendered}");
     assert!(matches!(
         result,
         Err(Error::Finalization {
