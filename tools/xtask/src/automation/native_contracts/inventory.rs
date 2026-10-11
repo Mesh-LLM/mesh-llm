@@ -172,19 +172,23 @@ pub(super) fn run(args: &[String]) -> DynResult<()> {
         &["--inventory", "--markdown", "--typescript", "--check"],
     )?;
     let path = values.get("--inventory").map_or_else(
-        || PathBuf::from("crates/mesh-llm-runtime-event-contracts/inventory/runtime_events.toml"),
+        || {
+            PathBuf::from(
+                "mesh/crates/mesh-llm-runtime-event-contracts/inventory/runtime_events.toml",
+            )
+        },
         PathBuf::from,
     );
     let inventory: Inventory = toml::from_str(&std::fs::read_to_string(path)?)?;
     let events = resolve(&inventory)?;
     let markdown = values.get("--markdown").map_or_else(
-        || PathBuf::from("docs/design/RUNTIME_EVENT_INVENTORY.md"),
+        || PathBuf::from("mesh/docs/design/RUNTIME_EVENT_INVENTORY.md"),
         PathBuf::from,
     );
     let typescript = values.get("--typescript").map_or_else(
         || {
             PathBuf::from(
-                "crates/mesh-llm-runtime-event-contracts/fixtures/runtime_event_inventory.ts",
+                "mesh/crates/mesh-llm-runtime-event-contracts/fixtures/runtime_event_inventory.ts",
             )
         },
         PathBuf::from,

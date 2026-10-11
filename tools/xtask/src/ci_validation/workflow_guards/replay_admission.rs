@@ -193,7 +193,7 @@ fn budgets(jobs: &Node, replay: &Node, steps: &[Node]) -> DynResult<()> {
         if let Some(Node::Seq(job_steps)) = job.get("steps") {
             for step in job_steps {
                 if step.get("timeout-minutes").is_some() && minutes(step)? > 360 {
-                    return Err("GitHub step timeout cannot exceed360 minutes".into());
+                    return Err("GitHub step timeout cannot exceed 360 minutes".into());
                 }
             }
         }

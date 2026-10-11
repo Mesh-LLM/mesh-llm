@@ -37,7 +37,7 @@ impl<'a> Input<'a> {
             .checked_add(data.len())
             .ok_or("history input size overflow")?;
         if self.bytes > 128 * 1024 * 1024 {
-            return Err("history total input exceeds128MiB".into());
+            return Err("history total input exceeds 128 MiB".into());
         }
         self.sources.insert(path.canonicalize()?);
         Ok(data)

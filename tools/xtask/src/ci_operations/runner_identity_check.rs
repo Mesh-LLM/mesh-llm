@@ -15,7 +15,7 @@ use crate::ci_plan::document::Json;
 use crate::prepared_input::value_format::display;
 use crate::repository::text::repr;
 use serde_json::Value;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 pub(crate) fn runtime_consumer(catalog: &Json) -> Outcome<(String, String, String)> {
     let runtime = item(item(catalog, "compiler_seed")?, "runtime_consumer")?;
@@ -38,14 +38,16 @@ fn load_workflows(catalog: &Json, root: &Path) -> Outcome<Workflows> {
     let directory = root.join(".github/workflows");
     let shown = python_path_display(&directory);
     let entries = std::fs::read_dir(&directory).map_err(|error| os_error_text(&error, &shown))?;
-    let mut paths: Vec<PathBuf> = entries
-        .filter_map(Result::ok)
-        .map(|entry| entry.path())
-        .filter(|path| {
-            path.extension()
-                .is_some_and(|ext| ext == "yml" || ext == "yaml")
-        })
-        .collect();
+    let mut paths = Vec::new();
+    for entry in entries {
+        let path = entry.map_err(|error| os_error_text(&error, &shown))?.path();
+        if path
+            .extension()
+            .is_some_and(|ext| ext == "yml" || ext == "yaml")
+        {
+            paths.push(path);
+        }
+    }
     paths.sort();
     let (runtime_workflow, runtime_job, _) = runtime_consumer(catalog)?;
     let mut workflows = Workflows::new();

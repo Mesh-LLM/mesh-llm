@@ -92,6 +92,13 @@ fn install(source: &Path, cache: &Path) -> DynResult<PathBuf> {
     }
     std::fs::create_dir_all(&version_root)?;
     let target = version_root.join(&manifest.runtime.id);
+    // Copy beside the target first so a failed copy leaves the existing cache intact;
+    // the staging directory is removed when it drops.
+    let staging = tempfile::Builder::new()
+        .prefix(".runtime-staging-")
+        .tempdir_in(&version_root)?;
+    let staged = staging.path().join("runtime");
+    copy_tree(&source, &staged)?;
     match std::fs::symlink_metadata(&target) {
         Ok(metadata) if metadata.file_type().is_symlink() => {
             return Err("runtime cache target must not be a symlink".into());
@@ -100,7 +107,7 @@ fn install(source: &Path, cache: &Path) -> DynResult<PathBuf> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => (),
         Err(error) => return Err(error.into()),
     }
-    copy_tree(&source, &target)?;
+    std::fs::rename(&staged, &target)?;
     Ok(target)
 }
 
@@ -166,6 +173,21 @@ mod tests {
         );
         assert!(!cache.join("legacy-ignored").exists());
         assert!(!target.join("stale").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn failed_copy_preserves_existing_cache() {
+        let root = tempfile::tempdir().unwrap();
+        let source = fixture(root.path(), "cpu-fixture");
+        std::os::unix::fs::symlink("lib/runtime.so", source.join("link")).unwrap();
+        let cache = root.path().join("cache");
+        let existing = cache.join("1.2.3/cpu-fixture");
+        std::fs::create_dir_all(&existing).unwrap();
+        std::fs::write(existing.join("kept"), b"old").unwrap();
+        assert!(install(&source, &cache).is_err());
+        assert_eq!(std::fs::read(existing.join("kept")).unwrap(), b"old");
+        assert_eq!(std::fs::read_dir(cache.join("1.2.3")).unwrap().count(), 1);
     }
 
     #[test]

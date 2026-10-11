@@ -8,28 +8,28 @@ fn check(bytes: &[u8]) -> Result<(), Error> {
 }
 
 #[test]
-fn migration_canary_receipts_accepts_literal_separator_1c() {
+fn migration_canary_receipts_rejects_literal_separator_1c() {
     let given = include_bytes!("fixtures/separator-1c.jsonl");
     let when = check(given);
     assert_eq!(when.unwrap_err().kind, ErrorKind::Json);
 }
 
 #[test]
-fn migration_canary_receipts_accepts_literal_separator_1d() {
+fn migration_canary_receipts_rejects_literal_separator_1d() {
     let given = include_bytes!("fixtures/separator-1d.jsonl");
     let when = check(given);
     assert_eq!(when.unwrap_err().kind, ErrorKind::Json);
 }
 
 #[test]
-fn migration_canary_receipts_accepts_literal_separator_1e() {
+fn migration_canary_receipts_rejects_literal_separator_1e() {
     let given = include_bytes!("fixtures/separator-1e.jsonl");
     let when = check(given);
     assert_eq!(when.unwrap_err().kind, ErrorKind::Json);
 }
 
 #[test]
-fn migration_canary_receipts_accepts_literal_separator_1f() {
+fn migration_canary_receipts_rejects_literal_separator_1f() {
     let given = include_bytes!("fixtures/separator-1f.jsonl");
     let when = check(given);
     assert_eq!(when.unwrap_err().kind, ErrorKind::Json);

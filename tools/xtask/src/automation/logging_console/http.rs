@@ -47,8 +47,14 @@ async fn exchange(request: Request) -> Result<Response, String> {
                         "POST"
                     }),
             )
-            .header("host", format!("127.0.0.1:{}", request.port))
             .header("content-type", "application/json");
+        if !request
+            .headers
+            .iter()
+            .any(|(key, _)| key.eq_ignore_ascii_case("host"))
+        {
+            message = message.header("host", format!("127.0.0.1:{}", request.port));
+        }
         for (key, value) in &request.headers {
             message = message.header(key, value);
         }
