@@ -22,7 +22,11 @@ if [[ -n "${MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE:-}" ]]; then
         --expected-attestation "${MESH_RELEASE_ATTESTATION_EXPECTED_STATUS:-valid}")
 fi
 if [[ -n "${MESH_CI_BATCH_SIZE:-}" || -n "${MESH_CI_UBATCH_SIZE:-}" ]]; then
-    args+=(--batch-size "${MESH_CI_BATCH_SIZE:-}" --ubatch-size "${MESH_CI_UBATCH_SIZE:-}")
+    if [[ -z "${MESH_CI_BATCH_SIZE:-}" || -z "${MESH_CI_UBATCH_SIZE:-}" ]]; then
+        echo "MESH_CI_BATCH_SIZE and MESH_CI_UBATCH_SIZE must be set together" >&2
+        exit 2
+    fi
+    args+=(--batch-size "$MESH_CI_BATCH_SIZE" --ubatch-size "$MESH_CI_UBATCH_SIZE")
 fi
 if [[ -n "${MESH_TOKIO_STACK_SIZE:-}" ]]; then args+=(--stack constrained); fi
 mesh_automation "${args[@]}"
