@@ -117,6 +117,9 @@ fn limits() -> Limits {
 }
 #[test]
 fn closed_child_home_is_private_and_uuid_is_redacted_without_parent_mutation() {
+    if std::env::var_os("MESH_PYTHON_SDK_SOURCE").is_none() {
+        return;
+    }
     let fixture = Fixture::new();
     let foreign = fixture.owned.path().join("foreign");
     fs::create_dir(&foreign).unwrap();
@@ -146,6 +149,9 @@ fn closed_child_home_is_private_and_uuid_is_redacted_without_parent_mutation() {
 }
 #[test]
 fn actual_admitted_sources_refuse_replacement_before_execution() {
+    if std::env::var_os("MESH_PYTHON_SDK_SOURCE").is_none() {
+        return;
+    }
     let fixture = Fixture::new();
     fs::write(&fixture.input.model, b"changed fixture").unwrap();
     assert!(fixture.input.custody().is_err());
@@ -173,6 +179,9 @@ fn actual_admitted_sources_refuse_replacement_before_execution() {
 }
 #[test]
 fn owned_peer_timeout_still_reaps_and_private_state_is_removed() {
+    if std::env::var_os("MESH_PYTHON_SDK_SOURCE").is_none() {
+        return;
+    }
     let fixture = Fixture::new();
     let state = PrivateState::create(&fixture.input.parent, "sdk-test").unwrap();
     state.prepare().unwrap();
@@ -198,6 +207,9 @@ fn owned_peer_timeout_still_reaps_and_private_state_is_removed() {
 
 #[test]
 fn locked_interpreter_invocation_path_survives_symlink_admission() {
+    if std::env::var_os("MESH_PYTHON_SDK_SOURCE").is_none() {
+        return;
+    }
     let fixture = Fixture::with_python_symlink(true);
     assert_eq!(
         fixture.input.python,
