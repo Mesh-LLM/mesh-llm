@@ -1,3 +1,4 @@
+#![cfg(feature = "automation-contracts")]
 #[test]
 fn arm_pass_runs_disjoint_manifest_cohorts_and_retains_complete_result() {
     let state = tempfile::tempdir().unwrap();

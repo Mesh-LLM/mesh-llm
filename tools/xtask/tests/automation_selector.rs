@@ -1,4 +1,5 @@
 //! Exercise the actual shared selector with finite local tools, never Cargo/bootstrap.
+#![cfg(feature = "automation-contracts")]
 #![cfg(unix)]
 use std::{
     fs,

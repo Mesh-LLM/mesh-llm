@@ -1,4 +1,5 @@
 //! Actual Rust CLI fixtures for existing, offline runner cache configuration.
+#![cfg(feature = "automation-contracts")]
 use std::{
     fs,
     path::Path,

@@ -1,3 +1,4 @@
+#![cfg(feature = "automation-contracts")]
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};

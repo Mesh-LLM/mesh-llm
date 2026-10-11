@@ -1,3 +1,4 @@
+#![cfg(feature = "automation-contracts")]
 #[path = "replay_history/mod.rs"]
 mod replay_history;
 use replay_history::support::{Fixture, read, write};

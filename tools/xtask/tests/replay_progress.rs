@@ -1,3 +1,4 @@
+#![cfg(feature = "automation-contracts")]
 #[path = "../src/cli_output.rs"]
 mod cli_output;
 #[path = "../src/automation/replay_matrix/progress.rs"]

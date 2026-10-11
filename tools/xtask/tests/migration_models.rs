@@ -4,6 +4,7 @@
 //! `.github/actions/restore-test-model/action.yml`. Every expectation under
 //! `fixtures/models` is legacy output captured with Python 3.13 and bash 5
 //! (capture scripts: `.omo/evidence/task-14-capture/`).
+#![cfg(feature = "automation-contracts")]
 
 #[path = "migration_models/support.rs"]
 mod support;

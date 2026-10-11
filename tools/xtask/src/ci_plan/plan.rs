@@ -132,7 +132,7 @@ pub(super) fn build(payload: &Json, roots: &Roots<'_>) -> PlanResult<Value> {
 }
 
 /// Crates whose tests run only through the Quality automation contract recipe.
-const CONTRACT_TESTED_CRATES: &[&str] = &["xtask"];
+pub(crate) const CONTRACT_TESTED_CRATES: &[&str] = &["xtask"];
 
 /// The `_validate_plan` invariants a correct derivation cannot violate but a
 /// catalog edit could: unique matrix row IDs and exhaustive test coverage.

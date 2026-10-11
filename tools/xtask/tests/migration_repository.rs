@@ -2,6 +2,7 @@
 //! affected-crate closure, Conventional Commits, the environment-mutation
 //! census and the llama.cpp upstream-pin guard. Expected outputs are the
 //! legacy scripts' observed bytes (see `.omo/evidence/task-8-*`).
+#![cfg(feature = "automation-contracts")]
 
 #[path = "migration_repository/support.rs"]
 mod support;

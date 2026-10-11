@@ -1,3 +1,4 @@
+#![cfg(feature = "automation-contracts")]
 use std::path::Path;
 
 #[path = "lane_l7_daemon_lifecycle/port_reservation.rs"]

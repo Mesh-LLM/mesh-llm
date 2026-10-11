@@ -18,6 +18,7 @@
 //! `scripts/collect-ci-metrics.py`; its cases run on synthetic run JSON and
 //! compare the written report too, goldens under
 //! `fixtures/ci_operations/ci_metrics/` (`generated_at` masked).
+#![cfg(feature = "automation-contracts")]
 
 #[path = "migration_ci_operations/build_cache.rs"]
 mod build_cache;

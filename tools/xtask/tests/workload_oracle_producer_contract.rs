@@ -1,4 +1,5 @@
 //! CPU producer orchestration with finite tool boundaries; no native builds.
+#![cfg(feature = "automation-contracts")]
 #![cfg(unix)]
 
 #[allow(dead_code, unused_imports)]

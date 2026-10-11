@@ -1,3 +1,4 @@
+#![cfg(feature = "automation-contracts")]
 #[test]
 fn pooling_weights_tokens_and_suppresses_deltas_for_changed_outputs() {
     let state = tempfile::tempdir().unwrap();

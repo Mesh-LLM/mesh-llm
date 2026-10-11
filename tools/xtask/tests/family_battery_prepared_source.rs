@@ -1,3 +1,4 @@
+#![cfg(feature = "automation-contracts")]
 #![cfg(unix)]
 use std::{fs, os::unix::fs::PermissionsExt, path::PathBuf, process::Command};
 

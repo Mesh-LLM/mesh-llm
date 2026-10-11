@@ -4,6 +4,7 @@
 //! tree to build in a scratch directory and the command line to run there.
 //! `compose_goldens.json` holds the legacy script's observed status, streams
 //! and resulting `product-manifest.json` for every case.
+#![cfg(feature = "automation-contracts")]
 #![cfg(unix)]
 
 #[path = "migration_product/support.rs"]

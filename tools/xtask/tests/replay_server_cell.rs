@@ -1,3 +1,4 @@
+#![cfg(feature = "automation-contracts")]
 #[cfg(unix)]
 #[test]
 fn server_cell_owns_server_and_worker_until_complete_cleanup() {

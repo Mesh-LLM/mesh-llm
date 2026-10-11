@@ -1,3 +1,4 @@
+#![cfg(feature = "automation-contracts")]
 #[path = "../src/ci_plan/plan_bytes.rs"]
 pub(crate) mod plan_bytes;
 mod ci_plan {

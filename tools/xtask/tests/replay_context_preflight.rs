@@ -1,3 +1,4 @@
+#![cfg(feature = "automation-contracts")]
 #[test]
 fn disposable_preflight_captures_all_cohort_tokens_without_a_live_model() {
     preflight_case(1, true);

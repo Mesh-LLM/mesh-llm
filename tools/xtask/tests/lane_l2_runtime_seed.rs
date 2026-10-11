@@ -1,3 +1,4 @@
+#![cfg(feature = "automation-contracts")]
 use serde_json::{Value, json};
 use std::{error::Error, fs, path::Path, process::Command};
 

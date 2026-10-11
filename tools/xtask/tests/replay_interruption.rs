@@ -1,3 +1,4 @@
+#![cfg(feature = "automation-contracts")]
 #[cfg(unix)]
 #[test]
 fn interrupted_request_retains_partial_evidence_and_fails_command() {

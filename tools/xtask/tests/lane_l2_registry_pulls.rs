@@ -1,3 +1,4 @@
+#![cfg(feature = "automation-contracts")]
 #[path = "../src/ci_operations/registry_pulls.rs"]
 mod registry_pulls;
 

@@ -1,3 +1,4 @@
+#![cfg(feature = "automation-contracts")]
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::fs;

@@ -7,6 +7,7 @@
 //! and compares exit status, stdout, stderr, written files and the recorded
 //! `git`/`gh` argv with a golden under `fixtures/release/`, captured from the
 //! legacy script under Python 3.13 (`{root}` stands for the scratch path).
+#![cfg(feature = "automation-contracts")]
 
 #[path = "migration_release/failure_diagnostics.rs"]
 mod failure_diagnostics;

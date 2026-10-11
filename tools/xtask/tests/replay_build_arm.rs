@@ -1,3 +1,4 @@
+#![cfg(feature = "automation-contracts")]
 #[cfg(unix)]
 #[test]
 fn build_arm_runs_exact_just_steps_and_binds_runtime_identity() {

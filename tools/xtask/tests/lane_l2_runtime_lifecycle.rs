@@ -1,3 +1,4 @@
+#![cfg(feature = "automation-contracts")]
 #[cfg(target_os = "linux")]
 use serde_json::{Value, json};
 use std::{error::Error, process::Command};

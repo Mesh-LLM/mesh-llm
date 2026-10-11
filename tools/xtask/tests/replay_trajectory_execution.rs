@@ -1,3 +1,4 @@
+#![cfg(feature = "automation-contracts")]
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::process::Command;
