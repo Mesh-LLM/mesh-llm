@@ -37,14 +37,14 @@ const peer: Peer = {
   firstJoinedMeshTs: FIRST_JOINED_MS
 }
 
-function renderOpenHoverCard(cardNode: MeshNode, cardPeer?: Peer) {
+function renderOpenHoverCard(cardNode: MeshNode, cardPeer?: Peer, container?: HTMLElement) {
   render(
     <div data-testid="mesh-hover-card-inline-host">
       <HoverCardPrimitive.Root open>
         <HoverCardPrimitive.Trigger asChild>
           <button type="button">Open</button>
         </HoverCardPrimitive.Trigger>
-        <MeshVizNodeHoverCard node={cardNode} peer={cardPeer} />
+        <MeshVizNodeHoverCard node={cardNode} peer={cardPeer} container={container} />
       </HoverCardPrimitive.Root>
     </div>
   )
@@ -87,6 +87,16 @@ describe('MeshVizNodeHoverCard', () => {
     renderOpenHoverCard(node, peer)
 
     expect(screen.getByTestId('mesh-hover-card-inline-host')).not.toContainElement(screen.getByRole('tooltip'))
+  })
+
+  it('mounts inside the provided container instead of document.body (fullscreen canvas case)', () => {
+    const container = document.body.appendChild(document.createElement('div'))
+    container.setAttribute('data-testid', 'mesh-canvas')
+
+    renderOpenHoverCard(node, peer, container)
+
+    expect(container).toContainElement(screen.getByRole('tooltip'))
+    container.remove()
   })
 
   it('falls back to node fields when peer data is unavailable', () => {

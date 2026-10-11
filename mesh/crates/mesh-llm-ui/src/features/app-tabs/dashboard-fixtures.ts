@@ -103,6 +103,7 @@ export const PEER_SUMMARY: PeerSummary = { total: 3, online: 3, capacity: 'all s
 export const MODELS: ModelSummary[] = [
   {
     name: 'gemma-4-26B-A4B-it-UD',
+    fitLabel: 'Likely fits',
     fullId: 'gemma-4-26B-A4B-it-UD-Q4_K_XL',
     family: 'Gemma',
     familyColor: 'family-5',
@@ -111,6 +112,7 @@ export const MODELS: ModelSummary[] = [
     quant: 'Q4_K_XL',
     size: '14.8 GB',
     sizeGB: 14.8,
+    meshVramGB: 49.4,
     diskGB: 16,
     context: '64k',
     ctxMaxK: 64,
@@ -124,6 +126,7 @@ export const MODELS: ModelSummary[] = [
   },
   {
     name: 'Qwen3.5-0.8B-UD',
+    fitLabel: 'Likely comfortable',
     fullId: 'Qwen3.5-0.8B-UD-Q4_K_XL',
     family: 'Qwen',
     familyColor: 'family-2',
@@ -132,6 +135,7 @@ export const MODELS: ModelSummary[] = [
     quant: 'Q4_K_XL',
     size: '0.6 GB',
     sizeGB: 0.6,
+    meshVramGB: 49.4,
     diskGB: 0.8,
     context: '32k',
     ctxMaxK: 32,
@@ -145,6 +149,7 @@ export const MODELS: ModelSummary[] = [
   },
   {
     name: 'Qwen3.5-2B',
+    fitLabel: 'Likely comfortable',
     fullId: 'Qwen3.5-2B-Q4_K_M',
     family: 'Qwen',
     familyColor: 'family-2',
@@ -153,6 +158,7 @@ export const MODELS: ModelSummary[] = [
     quant: 'Q4_K_M',
     size: '1.3 GB',
     sizeGB: 1.3,
+    meshVramGB: 49.4,
     diskGB: 1.6,
     context: '32k',
     ctxMaxK: 32,
@@ -166,6 +172,7 @@ export const MODELS: ModelSummary[] = [
   },
   {
     name: 'Qwen3.5-4B-UD',
+    fitLabel: 'Likely fits',
     fullId: 'Qwen3.5-4B-UD-Q4_K_XL',
     family: 'Qwen',
     familyColor: 'family-2',
@@ -174,6 +181,7 @@ export const MODELS: ModelSummary[] = [
     quant: 'Q4_K_XL',
     size: '2.9 GB',
     sizeGB: 2.9,
+    meshVramGB: 61.7,
     diskGB: 3.2,
     context: '32k',
     ctxMaxK: 32,
@@ -187,6 +195,7 @@ export const MODELS: ModelSummary[] = [
   },
   {
     name: 'Qwen3.6-27B-UD',
+    fitLabel: 'Possible with tradeoffs',
     fullId: 'Qwen3.6-27B-UD-Q4_K_XL',
     family: 'Qwen',
     familyColor: 'family-2',
@@ -195,6 +204,7 @@ export const MODELS: ModelSummary[] = [
     quant: 'Q4_K_XL',
     size: '17.8 GB',
     sizeGB: 17.8,
+    meshVramGB: 61.7,
     diskGB: 19,
     context: '256k',
     ctxMaxK: 256,
@@ -208,6 +218,7 @@ export const MODELS: ModelSummary[] = [
   },
   {
     name: 'Qwen3.6-35B-A3B-UD',
+    fitLabel: 'Possible with tradeoffs',
     fullId: 'Qwen3.6-35B-A3B-UD-Q4_K_XL',
     family: 'Qwen',
     familyColor: 'family-2',
@@ -216,6 +227,7 @@ export const MODELS: ModelSummary[] = [
     quant: 'Q4_K_XL',
     size: '22.1 GB',
     sizeGB: 22.1,
+    meshVramGB: 49.4,
     diskGB: 24,
     context: '256k',
     ctxMaxK: 256,
