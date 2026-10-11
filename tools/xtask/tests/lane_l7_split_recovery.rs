@@ -19,7 +19,12 @@ fn range() -> (u16, Vec<TcpListener>) {
         }
     }
 }
+static NARRATIVE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 fn run(stale: bool) -> (tempfile::TempDir, std::process::Output) {
+    let _exclusive = NARRATIVE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let root = tempfile::tempdir().unwrap();
     let location = root.path().canonicalize().unwrap();
     if stale {

@@ -66,6 +66,21 @@ no-console-print:
 ci-shellcheck *scripts:
     shellcheck {{ scripts }}
 
+# Restore the pinned external research checkout into .sdk-source/research,
+# matching .github/actions/prepare-python-research-source. Admission is Rust-owned.
+research-source-restore:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    repository="$(jq -er .repository ci/python-research-source.json)"
+    revision="$(jq -er .revision ci/python-research-source.json)"
+    target=.sdk-source/research
+    if [[ ! -d "$target/.git" ]]; then
+        git init --quiet "$target"
+        git -C "$target" remote add origin "https://github.com/$repository.git"
+    fi
+    git -C "$target" fetch --quiet --depth 1 origin "$revision"
+    git -C "$target" checkout --quiet --detach "$revision"
+
 # Run all checks: repo consistency, Rust tests, author exemplars, fmt, clippy, UI/docs builds, and E2E smoke.
 test-all:
     #!/usr/bin/env bash
@@ -73,7 +88,12 @@ test-all:
 
     # Source-dependent Skippy benchmark tests consume a restored immutable
     # research checkout. This local gate admits it without acquiring SDKs.
-    just with-lld cargo xtool automation smoke-observation research-source --kind root >/dev/null
+    if [[ -z "${MESH_PYTHON_RESEARCH_SOURCE:-}" ]]; then
+        just research-source-restore
+        export MESH_PYTHON_RESEARCH_SOURCE="$PWD/.sdk-source/research"
+    fi
+    MESH_PYTHON_RESEARCH_SOURCE="$(just with-lld cargo xtool automation smoke-observation research-source --kind root)"
+    export MESH_PYTHON_RESEARCH_SOURCE
 
     echo "=== 0/11 Test-all rust crate coverage preflight ==="
     just with-lld cargo run -p xtask -- repo-consistency test-all-rust-crate-coverage

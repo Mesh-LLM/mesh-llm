@@ -37,7 +37,7 @@ fn split_probe_cli_preserves_dense_recurrent_and_transient_decisions() -> TestRe
             fs::write(
                 root.path().join(format!("response-{}.json", index + 1)),
                 serde_json::to_vec(
-                    &serde_json::json!({"object":"chat.completion","choices":[{}],"usage":{"prompt_tokens":prompt,"prompt_tokens_details":{"cached_tokens":cached}}}),
+                    &serde_json::json!({"object":"chat.completion","choices":[{"message":{"content":"ok"}}],"usage":{"prompt_tokens":prompt,"prompt_tokens_details":{"cached_tokens":cached}}}),
                 )?,
             )?;
         }
