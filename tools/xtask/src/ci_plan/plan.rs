@@ -80,9 +80,22 @@ pub(super) fn build(payload: &Json, roots: &Roots<'_>) -> PlanResult<Value> {
         false => Value::Array(Vec::new()),
     };
     matrices.insert("clippy".to_owned(), batches(clippy, catalog.clippy_batches));
+    // xtask tests need the harness environment that `just ci-automation-contracts`
+    // provides in the Quality slice, so plain per-crate test batches skip it.
+    let tested_scope: Vec<String> = rust_scope
+        .iter()
+        .filter(|name| !CONTRACT_TESTED_CRATES.contains(&name.as_str()))
+        .cloned()
+        .collect();
     matrices.insert(
         "rust_tests".to_owned(),
-        batches(has_slice("rust-tests"), catalog.rust_test_batches),
+        match has_slice("rust-tests") {
+            true => Value::Array(matrices::make_batches(
+                &tested_scope,
+                catalog.rust_test_batches,
+            )),
+            false => Value::Array(Vec::new()),
+        },
     );
     let per_slice = |derive: &dyn Fn(&SliceDefinition) -> Value| {
         required
@@ -118,6 +131,9 @@ pub(super) fn build(payload: &Json, roots: &Roots<'_>) -> PlanResult<Value> {
     Ok(plan)
 }
 
+/// Crates whose tests run only through the Quality automation contract recipe.
+const CONTRACT_TESTED_CRATES: &[&str] = &["xtask"];
+
 /// The `_validate_plan` invariants a correct derivation cannot violate but a
 /// catalog edit could: unique matrix row IDs and exhaustive test coverage.
 fn validate(plan: &Value, profile: Profile, packages: &[Package]) -> PlanResult<()> {
@@ -150,6 +166,7 @@ fn validate(plan: &Value, profile: Profile, packages: &[Package]) -> PlanResult<
         let workspace = packages
             .iter()
             .map(|package| package.name.as_str())
+            .filter(|name| !CONTRACT_TESTED_CRATES.contains(name))
             .collect();
         if tested != workspace {
             return fail("main rust test matrix does not cover every workspace crate");
