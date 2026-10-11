@@ -83,5 +83,8 @@ pub(super) fn write(path: &Path, text: &str) -> Result<(), Error> {
     file.sync_all()?;
     drop(file);
     fs::rename(&guard.0, path)?;
+    // Persist the renamed directory entry, not only the file contents.
+    #[cfg(unix)]
+    fs::File::open(parent)?.sync_all()?;
     Ok(())
 }

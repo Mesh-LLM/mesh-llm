@@ -221,8 +221,9 @@ fn arm(
     {
         return Err(format!("MTP arm incomplete or unclean: {:?}", report.outcome).into());
     }
-    let rows: serde_json::Value = serde_json::from_slice(&super::read(
+    let rows: serde_json::Value = serde_json::from_slice(&super::read_bounded(
         &input.output_dir.join(format!("{label}-result.json")),
+        super::RECEIPT_BYTES,
     )?)?;
     if rows["status"] != "completed" {
         return Err("MTP worker result incomplete".into());
