@@ -13,6 +13,7 @@ import {
   type SidebarNavigationSection
 } from '@/components/ui/SidebarNavigation'
 import { TabPanel, type TabPanelItem } from '@/components/ui/TabPanel'
+import { Tooltip } from '@/components/ui/tooltip'
 import { buildConversationGroups } from '@/features/chat/api/conversation-groups'
 import type { Conversation, ConversationGroup } from '@/features/app-tabs/types'
 
@@ -317,13 +318,15 @@ export function ChatSidebar({
       />
       {onNewChat ? (
         <div className="border-t border-border-soft px-3 pb-3 pt-2.5">
-          <button
-            onClick={onNewChat}
-            type="button"
-            className="ui-control inline-flex w-full items-center justify-center gap-2 rounded-[var(--radius)] border px-3 py-2 text-[length:var(--density-type-control-lg)] font-medium outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent"
-          >
-            <Plus className="size-3.5" /> New
-          </button>
+          <Tooltip content="New chat (⌘⇧O / Ctrl+Shift+O)">
+            <button
+              onClick={onNewChat}
+              type="button"
+              className="ui-control inline-flex w-full items-center justify-center gap-2 rounded-[var(--radius)] border px-3 py-2 text-[length:var(--density-type-control-lg)] font-medium outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent"
+            >
+              <Plus className="size-3.5" /> New
+            </button>
+          </Tooltip>
         </div>
       ) : null}
     </div>
