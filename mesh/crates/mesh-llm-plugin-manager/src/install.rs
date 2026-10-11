@@ -156,13 +156,7 @@ pub fn install_bundled_default(
     });
     let store = PluginStore::new(&options.store_root);
     let current = store.load_optional(name)?;
-    let extracted = extract_plugin_archive(
-        &archive_path,
-        ArchiveExt::TarGz,
-        options.target.executable_suffix(),
-        name,
-        &options.install_root,
-    )?;
+    let extracted = extract_for_install(&archive_path, ArchiveExt::TarGz, name, options)?;
     let metadata = InstalledPluginMetadata {
         name: name.to_string(),
         source_repository: format!("bundled:{}", archive_path.display()),
@@ -240,13 +234,7 @@ pub fn install_plugin_archive(
     });
     let store = PluginStore::new(&options.store_root);
     let current = store.load_optional(name)?;
-    let extracted = extract_plugin_archive(
-        &archive_path,
-        archive_ext,
-        options.target.executable_suffix(),
-        name,
-        &options.install_root,
-    )?;
+    let extracted = extract_for_install(&archive_path, archive_ext, name, options)?;
     let metadata = InstalledPluginMetadata {
         name: name.to_string(),
         source_repository: format!("local:{}", archive_path.display()),
@@ -270,6 +258,24 @@ pub fn install_plugin_archive(
         metadata,
         changed: true,
     })
+}
+
+/// Every install path extracts through here, so the executable it checks is
+/// named for `options.target`, as `InstalledPluginMetadata::executable_path`
+/// names the one the host launches.
+fn extract_for_install(
+    archive_path: &std::path::Path,
+    archive_ext: ArchiveExt,
+    name: &str,
+    options: &PluginInstallOptions,
+) -> Result<ExtractedPluginArchive> {
+    extract_plugin_archive(
+        archive_path,
+        archive_ext,
+        options.target.executable_suffix(),
+        name,
+        &options.install_root,
+    )
 }
 
 fn local_archive_ext(path: &std::path::Path) -> Result<ArchiveExt> {
@@ -405,12 +411,11 @@ async fn install_resolved_plugin(
     progress.report(PluginProgressEvent::Extracting {
         asset: asset.name.clone(),
     });
-    let extracted = extract_plugin_archive(
+    let extracted = extract_for_install(
         &archive_path,
         options.target.archive_ext(),
-        options.target.executable_suffix(),
         &resolved.plugin_name,
-        &options.install_root,
+        options,
     )?;
     let _ = fs::remove_file(&archive_path);
 
@@ -1042,5 +1047,85 @@ mod tests {
         asset.digest = Some("sha256:not-a-digest".to_string());
         let malformed = required_plugin_asset_sha256(&asset).unwrap_err();
         assert!(malformed.to_string().contains("invalid sha256"));
+    }
+
+    /// Options for installing for `os`/`arch`, which need not be the host.
+    fn options_for(root: &Path, os: &str, arch: &str) -> PluginInstallOptions {
+        PluginInstallOptions {
+            store_root: root.join("store"),
+            install_root: root.join("installed"),
+            catalog_url: "unused".to_string(),
+            target: PluginTarget::from_os_arch(os, arch).unwrap(),
+            bundled_plugins_dir: Some(root.join("bundle")),
+        }
+    }
+
+    /// A plugin archive whose only executable is `executable`.
+    fn write_archive_with(archive_path: &Path, executable: &str) {
+        write_tar_gz(
+            archive_path,
+            "demo",
+            &[("plugin.toml", b"name = \"demo\""), (executable, b"")],
+        )
+        .unwrap();
+    }
+
+    /// Each target with the executable name its build carries, whatever the host.
+    const TARGETS: [(&str, &str, &str); 2] = [
+        ("windows", "x86_64", "demo.exe"),
+        ("linux", "x86_64", "demo"),
+    ];
+
+    #[test]
+    fn a_local_archive_for_another_target_installs_and_its_executable_is_where_the_host_looks() {
+        for (os, arch, executable) in TARGETS {
+            let temp = TempDir::new().unwrap();
+            let options = options_for(temp.path(), os, arch);
+            let archive_path = temp.path().join("demo.tar.gz");
+            write_archive_with(&archive_path, executable);
+
+            let outcome =
+                install_plugin_archive("demo", "0.1.0", &archive_path, &options, &mut |_| {})
+                    .unwrap_or_else(|error| panic!("{os}/{arch}: {error:#}"));
+
+            assert_eq!(
+                outcome.metadata.executable_path(),
+                outcome.metadata.install_path.join(executable),
+                "{os}/{arch}"
+            );
+            assert!(outcome.metadata.executable_path().is_file(), "{os}/{arch}");
+        }
+    }
+
+    #[test]
+    fn a_bundled_default_for_another_target_installs_and_its_executable_is_where_the_host_looks() {
+        for (os, arch, executable) in TARGETS {
+            let temp = TempDir::new().unwrap();
+            let options = options_for(temp.path(), os, arch);
+            let bundle = temp.path().join("bundle");
+            fs::create_dir_all(&bundle).unwrap();
+            let archive_path = bundle.join(crate::bundled::bundled_archive_name(
+                "demo",
+                "0.1.0",
+                options.target.triple(),
+            ));
+            write_archive_with(&archive_path, executable);
+            let digest = sha256_file(&archive_path).unwrap();
+            let pin = PinnedRelease {
+                version: "0.1.0",
+                sha256: &digest,
+            };
+
+            let outcome = install_bundled_default("demo", pin, &options, &mut |_| {})
+                .unwrap_or_else(|error| panic!("{os}/{arch}: {error:#}"))
+                .unwrap_or_else(|| panic!("{os}/{arch}: the bundled copy was not found"));
+
+            assert_eq!(
+                outcome.metadata.executable_path(),
+                outcome.metadata.install_path.join(executable),
+                "{os}/{arch}"
+            );
+            assert!(outcome.metadata.executable_path().is_file(), "{os}/{arch}");
+        }
     }
 }

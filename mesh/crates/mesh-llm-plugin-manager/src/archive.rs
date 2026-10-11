@@ -597,7 +597,7 @@ mod tests {
     }
 
     #[test]
-    fn executable_check_uses_the_target_suffix_on_any_host() {
+    fn extraction_checks_for_the_executable_suffix_it_is_given() {
         use crate::target::PluginTarget;
 
         let windows = PluginTarget::from_os_arch("windows", "x86_64").unwrap();
