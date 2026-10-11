@@ -1,10 +1,15 @@
 param([string]$Root, [string]$Source, [string]$SourceSha256, [string]$Options)
+$ErrorActionPreference = 'Stop'
+$expectedCore = [System.IO.Path]::Combine($PSHOME, 'Modules')
+if (![string]::Equals([System.IO.Path]::GetFullPath($env:MESH_WINDOWS_FIXTURE_CORE_MODULE_PATH), $expectedCore, [StringComparison]::OrdinalIgnoreCase)) { throw 'fixture admitted core module path mismatch' }
+# Close the module search path before any cmdlet can trigger autoload.
+$env:PSModulePath = $expectedCore
+if (![string]::Equals($env:PSModulePath, $expectedCore, [StringComparison]::OrdinalIgnoreCase)) { throw 'fixture core module path mismatch' }
 $configuration = Get-Content -LiteralPath $Options -Raw | ConvertFrom-Json
 $Interactive = [bool]$configuration.interactive
 $SkipSetup = [bool]$configuration.skip_setup
 $LegacyFlavor = [string]$configuration.flavor
 $FailRuntime = [bool]$configuration.fail_runtime
-$ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 $OutputEncoding = [Console]::OutputEncoding

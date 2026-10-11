@@ -122,33 +122,54 @@ fn run() -> DynResult<()> {
             automation::lightning_compatibility::run(rest)
         }
         cli::CliCommand::ControlPlaneQa(rest) => {
-            let root = repository::RepositoryRoot::resolve(None)?;
+            let root = match explicit_root {
+                Some(root) => root,
+                None => repository::RepositoryRoot::resolve(None)?,
+            };
             automation::control_plane_qa::run(root.as_path(), rest)
         }
         cli::CliCommand::LoggingRecovery(rest) => {
-            let root = repository::RepositoryRoot::resolve(None)?;
+            let root = match explicit_root {
+                Some(root) => root,
+                None => repository::RepositoryRoot::resolve(None)?,
+            };
             automation::logging_recovery::run(root.as_path(), rest)
         }
         cli::CliCommand::DaemonLifecycle(rest) => {
-            let root = repository::RepositoryRoot::resolve(None)?;
+            let root = match explicit_root {
+                Some(root) => root,
+                None => repository::RepositoryRoot::resolve(None)?,
+            };
             automation::daemon_lifecycle::run(root.as_path(), rest)
         }
         cli::CliCommand::StartupRecovery(rest) => {
-            let root = repository::RepositoryRoot::resolve(None)?;
+            let root = match explicit_root {
+                Some(root) => root,
+                None => repository::RepositoryRoot::resolve(None)?,
+            };
             automation::startup_recovery::run(root.as_path(), rest)
         }
         cli::CliCommand::UiBuild(rest) => automation::ui_build::run(rest),
         cli::CliCommand::LoggingConsole(rest) => {
-            let root = repository::RepositoryRoot::resolve(None)?;
+            let root = match explicit_root {
+                Some(root) => root,
+                None => repository::RepositoryRoot::resolve(None)?,
+            };
             automation::logging_console::run(root.as_path(), rest)
         }
         #[cfg(unix)]
         cli::CliCommand::SdkCompat(rest) => {
-            let root = repository::RepositoryRoot::resolve(None)?;
+            let root = match explicit_root {
+                Some(root) => root,
+                None => repository::RepositoryRoot::resolve(None)?,
+            };
             automation::sdk_compat::run(root.as_path(), rest)
         }
         cli::CliCommand::SdkFixture(rest) => {
-            let root = repository::RepositoryRoot::resolve(None)?;
+            let root = match explicit_root {
+                Some(root) => root,
+                None => repository::RepositoryRoot::resolve(None)?,
+            };
             automation::sdk_fixture::run(root.as_path(), rest)
         }
         cli::CliCommand::RuntimeCacheInstall(rest) => automation::runtime_install::run(rest),

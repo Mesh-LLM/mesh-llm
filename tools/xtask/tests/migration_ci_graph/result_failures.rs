@@ -180,6 +180,15 @@ fn lane_argument_admission_rejects_missing_unknown_ambiguous_and_positional_inpu
         &["--lane-plan=", "--needs={}"][..],
         &["--lane-plan", "--needs", "{}"][..],
         &["--help", "--bogus"][..],
+        &["--lane-plan", "{}", "--needs", "{}", "--plan-digest", "abc"][..],
+        &[
+            "--lane-plan",
+            "{}",
+            "--needs",
+            "{}",
+            "--canonical-plan",
+            "{}",
+        ][..],
     ] {
         let output = Call::raw(args).run()?;
         assert_eq!(output.status.code(), Some(2), "{args:?}");

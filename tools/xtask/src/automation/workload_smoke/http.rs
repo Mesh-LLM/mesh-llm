@@ -32,6 +32,11 @@ async fn exchange(
         return Err("workload smoke requires an HTTP endpoint".into());
     }
     let host = uri.host().ok_or("missing HTTP host")?;
+    // URI hosts keep IPv6 literal brackets; socket resolution needs the bare address.
+    let host = host
+        .strip_prefix('[')
+        .and_then(|inner| inner.strip_suffix(']'))
+        .unwrap_or(host);
     let port = uri.port_u16().unwrap_or(80);
     let stream = tokio::net::TcpStream::connect((host, port)).await?;
     let (mut sender, connection) =
@@ -78,5 +83,35 @@ async fn exchange(
     tokio::select! {
         result = &mut response => result,
         result = connection => { result?; response.await }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::{Read as _, Write as _};
+
+    #[test]
+    fn bracketed_ipv6_literal_connects_to_bare_address() {
+        let Ok(listener) = std::net::TcpListener::bind("[::1]:0") else {
+            return;
+        };
+        let port = listener.local_addr().unwrap().port();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0_u8; 4096];
+            let _ = stream.read(&mut request).unwrap();
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\ncontent-type: text/plain\r\ncontent-length: 2\r\nconnection: close\r\n\r\nok")
+                .unwrap();
+        });
+        let body = super::post(
+            &format!("http://[::1]:{port}/v1/x"),
+            "text/plain",
+            b"x".to_vec(),
+            "text/plain",
+        )
+        .unwrap();
+        server.join().unwrap();
+        assert_eq!(body, b"ok");
     }
 }

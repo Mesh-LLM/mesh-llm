@@ -7,7 +7,9 @@ fn execute(marker: Option<&str>, endpoint: bool) -> (tempfile::TempDir, std::pro
     // Each scenario releases a reserved port range before its child binds it.
     // Keep these scenarios sequential so another fixture cannot reuse that gap.
     static SCENARIO: std::sync::Mutex<()> = std::sync::Mutex::new(());
-    let _scenario = SCENARIO.lock().unwrap();
+    let _scenario = SCENARIO
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let root = tempfile::tempdir().unwrap();
     let location = root.path().canonicalize().unwrap();
     if let Some(marker) = marker {

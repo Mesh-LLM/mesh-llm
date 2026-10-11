@@ -364,9 +364,9 @@ fn asr_refusal_empty_and_label_mismatch_fail_after_actual_requests() {
 fn collision_empty_media_and_bad_http_fail_closed() {
     let root = tempfile::tempdir().unwrap();
     let media = root.path().join("audio.wav");
-    let candidate = Server::new(200, "application/json", json!({"text":"Ready"}));
-    let oracle = Server::new(200, "application/json", choice("Ready"));
     for bytes in [b"mesh-llm-ocr-asr-oracle".as_slice(), b""] {
+        let candidate = Server::new(200, "application/json", json!({"text":"Ready"}));
+        let oracle = Server::new(200, "application/json", choice("Ready"));
         fs::write(&media, bytes).unwrap();
         let output = invoke(
             root.path(),
@@ -384,6 +384,8 @@ fn collision_empty_media_and_bad_http_fail_closed() {
         .unwrap()
         .set_len(64 * 1024 * 1024 + 1)
         .unwrap();
+    let candidate = Server::new(200, "application/json", json!({"text":"Ready"}));
+    let oracle = Server::new(200, "application/json", choice("Ready"));
     let output = invoke(
         root.path(),
         &candidate,
@@ -484,9 +486,9 @@ fn special_media_is_ordinary_failure_without_http() {
     let original = image(root.path());
     let symlink = root.path().join("media symlink");
     std::os::unix::fs::symlink(original, &symlink).unwrap();
-    let candidate = Server::new(200, "application/json", choice("MESH 42"));
-    let oracle = Server::new(200, "application/json", choice("MESH 42"));
     for media in [fifo, directory, symlink] {
+        let candidate = Server::new(200, "application/json", choice("MESH 42"));
+        let oracle = Server::new(200, "application/json", choice("MESH 42"));
         let output = invoke(root.path(), &candidate, &oracle, "ocr", &media, &[]);
         assert_eq!(output.outcome, process::Outcome::Exited, "{output:?}");
         assert!(!output.success(), "{output:?}");

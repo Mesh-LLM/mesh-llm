@@ -290,9 +290,20 @@ pub(super) fn worker(args: &[String]) -> DynResult<()> {
     }
     let finish = interrupt.finish();
     let terminal = guard(until, &cancel);
-    if result.is_err() || finish.is_err() || terminal.is_err() {
+    let errors: Vec<String> = [
+        result.err().map(|e| e.to_string()),
+        finish.err().map(|e| e.to_string()),
+        terminal.err().map(|e| e.to_string()),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    if !errors.is_empty() {
         receipt["completed"] = json!(false);
-        receipt["error"] = json!("artifact workspace incomplete; partial copied files retained");
+        receipt["error"] = json!(format!(
+            "artifact workspace incomplete; partial copied files retained: {}",
+            errors.join("; ")
+        ));
     }
     admission::publish(&output_path, &receipt)?;
     if receipt["completed"] == true {

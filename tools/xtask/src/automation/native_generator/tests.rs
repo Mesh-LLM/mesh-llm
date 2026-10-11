@@ -234,3 +234,23 @@ fn parser_rejects_shard_directory_when_option_group_is_incomplete() {
         Err(Error::Arguments("shard options must be used together"))
     ));
 }
+
+#[test]
+fn option_shaped_diff_base_is_refused_before_git_runs() {
+    let root = tempfile::tempdir().unwrap();
+    for base in ["--output=/tmp/x", "-p", ""] {
+        let arguments = [
+            "--source-root".into(),
+            root.path().to_str().unwrap().into(),
+            "--git".into(),
+            raw_fixture().to_str().unwrap().into(),
+            "--diff-base".into(),
+            base.into(),
+            "--output".into(),
+            root.path().join("out.patch").to_str().unwrap().into(),
+            "--max-diff-bytes".into(),
+            "1".into(),
+        ];
+        assert!(matches!(args::parse(&arguments), Err(Error::Arguments(_))));
+    }
+}

@@ -69,6 +69,7 @@ fn selected_output_order(run: &str) -> DynResult<()> {
         || !lines[0].starts_with("\"$MESH_LLM_AUTOMATION_BIN\" repository selected-ref ")
         || lines[0].contains("||")
         || lines[0].contains(';')
+        || lines[0].contains('&')
         || lines[1] != "exit 0"
     {
         return Err(

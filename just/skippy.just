@@ -194,7 +194,7 @@ mtp-checkpoint-helper-build:
 
 # Typed immutable checkpoint/bootstrap/native composition/publication owner.
 hf-skippy-mtp-compose-default input output:
-    cargo xtool automation hf-certify compose-default --input {{input}} --output-directory {{output}}
+    cargo xtool automation hf-certify compose-default --input "{{input}}" --output-directory "{{output}}"
 
 # Isolated native generic conversion Jobs facade; explicit submit authority remains required.
 generic-conversion-jobs-release-build:
