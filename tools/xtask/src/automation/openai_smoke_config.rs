@@ -110,6 +110,23 @@ pub(crate) fn run(args: &[String]) -> DynResult<()> {
     let output = required("--output")?;
     let mut bytes = serde_json::to_vec_pretty(&config)?;
     bytes.push(b'\n');
-    fs::File::create(output)?.write_all(&bytes)?;
+    create_output(Path::new(output), Path::new(config.stage.model_path))?.write_all(&bytes)?;
     Ok(())
+}
+/// Opens the config output, refusing any path that aliases the source model file.
+fn create_output(output: &Path, model: &Path) -> DynResult<fs::File> {
+    if fs::metadata(output).is_ok() && same_file(output, model)? {
+        return Err("config output must not overwrite the source model".into());
+    }
+    Ok(fs::File::create(output)?)
+}
+#[cfg(unix)]
+fn same_file(left: &Path, right: &Path) -> DynResult<bool> {
+    use std::os::unix::fs::MetadataExt as _;
+    let (left, right) = (fs::metadata(left)?, fs::metadata(right)?);
+    Ok(left.dev() == right.dev() && left.ino() == right.ino())
+}
+#[cfg(not(unix))]
+fn same_file(left: &Path, right: &Path) -> DynResult<bool> {
+    Ok(left.canonicalize()? == right.canonicalize()?)
 }
