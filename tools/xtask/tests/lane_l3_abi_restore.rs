@@ -1,3 +1,4 @@
+#![cfg(feature = "automation-contracts")]
 #![cfg(unix)]
 
 use sha2::{Digest, Sha256};

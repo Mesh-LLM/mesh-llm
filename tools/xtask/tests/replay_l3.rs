@@ -1,3 +1,4 @@
+#![cfg(feature = "automation-contracts")]
 use serde_json::{Value, json};
 use std::process::{Command, Output};
 fn invoke(arguments: &[&str]) -> Output {

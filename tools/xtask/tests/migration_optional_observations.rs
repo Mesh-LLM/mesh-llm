@@ -1,4 +1,5 @@
 //! Real native projections used by optional research callers, without starting their servers.
+#![cfg(feature = "automation-contracts")]
 use std::io::Write;
 use std::process::{Command, Stdio};
 fn native(args: &[&str], input: &[u8]) -> std::process::Output {

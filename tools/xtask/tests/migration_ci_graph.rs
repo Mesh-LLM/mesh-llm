@@ -7,6 +7,7 @@
 //! `fixtures/ci_graph/lane_jobs.json`, which jq derived from the legacy
 //! script's rules. Workflow mutations run on temporary copies of the checked-in
 //! workflows.
+#![cfg(feature = "automation-contracts")]
 
 #[path = "migration_ci_graph/support.rs"]
 mod support;

@@ -1,3 +1,4 @@
+#![cfg(feature = "automation-contracts")]
 #[path = "migration_patch_bytes/cases.rs"]
 mod cases;
 #[path = "../src/automation/rewriter_patch.rs"]

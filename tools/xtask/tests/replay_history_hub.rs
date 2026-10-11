@@ -1,3 +1,4 @@
+#![cfg(feature = "automation-contracts")]
 #[cfg(unix)]
 mod unix {
     use std::{

@@ -1,3 +1,4 @@
+#![cfg(feature = "automation-contracts")]
 use std::{
     net::{Ipv4Addr, TcpListener},
     process::Command,

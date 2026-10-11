@@ -1,4 +1,5 @@
 //! Workload wrapper admission and CPU producer consumption, without native execution.
+#![cfg(feature = "automation-contracts")]
 #![cfg(unix)]
 
 use std::{

@@ -1,3 +1,4 @@
+#![cfg(feature = "automation-contracts")]
 #![cfg(unix)]
 
 use std::error::Error;

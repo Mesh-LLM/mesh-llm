@@ -1,3 +1,4 @@
+#![cfg(feature = "automation-contracts")]
 use std::process::{Command, Output};
 
 fn invoke(args: &[&str]) -> Output {

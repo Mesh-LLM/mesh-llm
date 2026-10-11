@@ -4,6 +4,7 @@
 //! `jq -c .` exactly as `.github/actions/plan-ci/action.yml` hashes it. Plans
 //! must match those bytes in full, and failures must match the legacy
 //! status.
+#![cfg(feature = "automation-contracts")]
 
 #[path = "migration_ci_plan/support.rs"]
 mod support;

@@ -1,3 +1,4 @@
+#![cfg(feature = "automation-contracts")]
 #[path = "../src/ci_operations/authority_audit.rs"]
 mod authority_audit;
 

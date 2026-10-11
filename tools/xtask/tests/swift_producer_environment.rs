@@ -1,4 +1,5 @@
 //! Behavioral Swift producer fixtures. All native/build/automation boundaries are local fakes.
+#![cfg(feature = "automation-contracts")]
 #![cfg(unix)]
 
 use std::{

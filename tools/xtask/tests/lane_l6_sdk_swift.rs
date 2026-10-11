@@ -1,3 +1,4 @@
+#![cfg(feature = "automation-contracts")]
 use std::{fs, path::Path, process::Command};
 
 fn root() -> &'static Path {

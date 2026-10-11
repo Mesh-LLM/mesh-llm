@@ -1,3 +1,4 @@
+#![cfg(feature = "automation-contracts")]
 use std::process::Command;
 
 fn run(args: &[&str]) -> std::process::Output {

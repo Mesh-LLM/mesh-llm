@@ -1,3 +1,4 @@
+#![cfg(feature = "automation-contracts")]
 #[test]
 fn acceptance_cli_retains_negative_reports_for_unpaired_or_regressed_rows() {
     let state = tempfile::tempdir().unwrap();

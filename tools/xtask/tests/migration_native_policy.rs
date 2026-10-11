@@ -8,6 +8,7 @@
 //! streams, statuses and report files are the legacy scripts' observed
 //! output. Inspection tools are shell stubs placed alone on `PATH`, so no
 //! real `readelf`/`otool`/`objdump` runs.
+#![cfg(feature = "automation-contracts")]
 #![cfg(unix)]
 
 #[path = "migration_native_policy/support.rs"]

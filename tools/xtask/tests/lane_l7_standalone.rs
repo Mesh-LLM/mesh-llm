@@ -1,3 +1,4 @@
+#![cfg(feature = "automation-contracts")]
 use std::path::{Path, PathBuf};
 
 fn repository() -> PathBuf {

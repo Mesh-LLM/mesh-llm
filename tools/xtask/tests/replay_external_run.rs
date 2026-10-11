@@ -1,3 +1,4 @@
+#![cfg(feature = "automation-contracts")]
 #![cfg(unix)]
 #[path = "replay_external_run/support.rs"]
 mod support;

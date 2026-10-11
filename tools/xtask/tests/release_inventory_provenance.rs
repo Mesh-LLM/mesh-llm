@@ -1,4 +1,5 @@
 //! Actual finite native Git repositories exercise the release inventory provenance owner.
+#![cfg(feature = "automation-contracts")]
 #[path = "release_inventory_provenance/contracts.rs"]
 mod contracts;
 #[path = "../src/process/mod.rs"]

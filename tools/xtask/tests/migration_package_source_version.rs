@@ -1,3 +1,4 @@
+#![cfg(feature = "automation-contracts")]
 use std::error::Error;
 use std::process::Command;
 

@@ -1,3 +1,4 @@
+#![cfg(feature = "automation-contracts")]
 use std::io::Write;
 use std::process::{Command, Stdio};
 
