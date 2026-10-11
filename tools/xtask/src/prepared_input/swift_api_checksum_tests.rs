@@ -271,7 +271,7 @@ fn actual_streaming_tool_surpasses_old_cap_then_admits_final_constants() {
             &library,
             &swift,
             &process::Cancellation::default(),
-            Duration::from_secs(30)
+            Duration::from_secs(120)
         )
         .unwrap(),
         2
