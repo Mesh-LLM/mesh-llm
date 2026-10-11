@@ -27,9 +27,9 @@ pub use types::{
     STAGE_ACTIVATION_PART_OPTIONAL, STAGE_LOGIT_BIAS_WIRE_BYTES, STAGE_SAMPLING_CONFIG_BASE_BYTES,
     STAGE_STATE_HEADER_BYTES, STAGE_STATE_VERSION, STAGE_WIRE_FIXED_HEADER_BYTES,
     StageActivationDesc, StageActivationFrame, StageActivationPartDesc, StageLogitBias,
-    StageNativeMtpDraft, StageReply, StageReplyStats, StageReplyWindow, StageRequestEpoch,
-    StageSamplingConfig, StageStateHeader, StageWireMessage, WireMessageKind, WireReplyKind,
-    WireStagePhase, state_flags,
+    StageNativeMtpDraft, StageReply, StageReplyStats, StageReplyTokenSignal, StageReplyWindow,
+    StageRequestEpoch, StageSamplingConfig, StageStateHeader, StageWireMessage, WireMessageKind,
+    WireReplyKind, WireStagePhase, state_flags,
 };
 
 pub(crate) fn invalid_data(message: &'static str) -> std::io::Error {
@@ -155,12 +155,33 @@ mod tests {
                 token_ids: vec![43, 44],
                 proposal_compute_us: 12_345,
             }),
+            token_signal: None,
             window: StageReplyWindow::default(),
             stats: StageReplyStats::default(),
         };
         let mut bytes = Vec::new();
         send_reply_message(&mut bytes, &reply).unwrap();
 
+        assert_eq!(recv_reply(Cursor::new(bytes)).unwrap(), reply);
+    }
+
+    #[test]
+    fn reply_round_trips_top_two_signal() {
+        let reply = StageReply {
+            kind: WireReplyKind::PredictedToken,
+            predicted: 34,
+            predicted_tokens: vec![34],
+            native_mtp_draft: None,
+            token_signal: Some(StageReplyTokenSignal {
+                top_token: 34,
+                second_token: 225,
+                margin: 0.003953,
+            }),
+            window: StageReplyWindow::default(),
+            stats: StageReplyStats::default(),
+        };
+        let mut bytes = Vec::new();
+        send_reply_message(&mut bytes, &reply).unwrap();
         assert_eq!(recv_reply(Cursor::new(bytes)).unwrap(), reply);
     }
 

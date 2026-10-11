@@ -161,7 +161,7 @@ deadline handling.
 
 - `serve --stage-transport binary` is the tuned binary stage-to-stage path.
 - Binary stages participate in the breaking generation-11 stage protocol.
-  Stage compatibility requires the complete `stage-generation-11` control,
+  Stage compatibility requires the complete `stage-generation-12` control,
   status-list, strict-content-identity, stage-admission, and stale-window-discard
   bundle. Older peers, including generation 7 peers, are rejected during split
   planning rather than being mixed into a generation-11 topology.

@@ -247,6 +247,9 @@ pub struct SplitScanArgs {
     pub stage1_bind_addr: SocketAddr,
     #[arg(long)]
     pub allow_mismatch: bool,
+    /// Also decode the full model at this GPU-layer count for threshold diagnosis.
+    #[arg(long)]
+    pub compare_n_gpu_layers: Option<i32>,
 }
 
 #[derive(Args)]

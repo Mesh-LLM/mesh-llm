@@ -594,15 +594,24 @@ fn sampling_string_list_wire_bytes(values: &[String], maximum_count: usize) -> u
         .sum()
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct StageReply {
     pub kind: WireReplyKind,
     pub predicted: i32,
     /// Target-model predictions only. Native MTP proposals are carried separately.
     pub predicted_tokens: Vec<i32>,
     pub native_mtp_draft: Option<StageNativeMtpDraft>,
+    /// Top two logits from the final stage's sampled output head, when available.
+    pub token_signal: Option<StageReplyTokenSignal>,
     pub window: StageReplyWindow,
     pub stats: StageReplyStats,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct StageReplyTokenSignal {
+    pub top_token: i32,
+    pub second_token: i32,
+    pub margin: f32,
 }
 
 /// A native MTP proposal associated with a stage reply.

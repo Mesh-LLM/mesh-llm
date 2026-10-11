@@ -64,6 +64,8 @@ pub struct BaselineReport {
     pub token_id: i32,
     pub predicted_token: i32,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub top_two: Option<TopTwoReport>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub second_predicted_token: Option<i32>,
 }
 
@@ -81,6 +83,8 @@ pub struct BoundaryReport {
 pub struct SplitReport {
     pub token_id: i32,
     pub predicted_token: i32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub top_two: Option<TopTwoReport>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub second_predicted_token: Option<i32>,
     pub native_mtp: NativeMtpSidebandReport,
@@ -157,6 +161,8 @@ pub struct ChainReport {
     pub token_id: i32,
     pub predicted_token: i32,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub top_two: Option<TopTwoReport>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub second_predicted_token: Option<i32>,
     pub native_mtp: NativeMtpSidebandReport,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -164,6 +170,13 @@ pub struct ChainReport {
     pub activation_width: i32,
     pub stages: Vec<ChainStageReport>,
     pub stage_models: Vec<StageModelReport>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+pub struct TopTwoReport {
+    pub top_token: i32,
+    pub second_token: i32,
+    pub margin: f32,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -200,9 +213,19 @@ pub struct SplitScanReport {
     pub status: &'static str,
     pub model_identity: ModelIdentity,
     pub baseline: BaselineReport,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub monolithic_comparison: Option<MonolithicComparisonReport>,
     pub split_count: usize,
     pub mismatch_count: usize,
     pub results: Vec<SingleStepReport>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct MonolithicComparisonReport {
+    pub baseline_n_gpu_layers: i32,
+    pub comparison_n_gpu_layers: i32,
+    pub comparison: BaselineReport,
+    pub first_token_matches: bool,
 }
 
 #[derive(Debug, Serialize)]

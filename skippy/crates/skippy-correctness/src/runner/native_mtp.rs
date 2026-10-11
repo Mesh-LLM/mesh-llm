@@ -298,6 +298,7 @@ mod tests {
             predicted,
             predicted_tokens,
             native_mtp_draft,
+            token_signal: None,
             window: Default::default(),
             stats: StageReplyStats::default(),
         }

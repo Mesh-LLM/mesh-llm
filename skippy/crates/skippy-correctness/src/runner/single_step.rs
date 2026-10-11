@@ -8,7 +8,7 @@ use skippy_runtime::{GGML_TYPE_F16, MtpSource, RuntimeConfig, RuntimeLoadMode, S
 
 use crate::{
     cli::{RuntimeArgs, ServerArgs, SingleStepArgs},
-    report::SingleStepReport,
+    report::{SingleStepReport, TopTwoReport},
     support::{
         ChildGuard, activation_width, connect_ready_child, generate_run_id, temp_config_path_for,
     },
@@ -168,6 +168,15 @@ pub(in crate::runner) fn run_full_model_decode(args: &RuntimeArgs) -> Result<Ful
         .decode_step_frame(token_id, None, 0)
         .context("full model failed to decode")?
         .0;
+    let top_two = session
+        .last_token_signal()
+        .ok()
+        .filter(|signal| signal.margin.is_finite() && signal.margin >= 0.0)
+        .map(|signal| TopTwoReport {
+            top_token: signal.top_token,
+            second_token: signal.second_token,
+            margin: signal.margin,
+        });
     let second_predicted_token = session
         .decode_step_frame(predicted_token, None, 0)
         .context("full model failed to decode second token")?
@@ -175,6 +184,7 @@ pub(in crate::runner) fn run_full_model_decode(args: &RuntimeArgs) -> Result<Ful
     Ok(FullModelResult {
         token_id,
         predicted_token,
+        top_two,
         second_predicted_token: Some(second_predicted_token),
     })
 }
@@ -351,6 +361,7 @@ pub(in crate::runner) fn run_binary_split(args: BinarySplitConfig) -> Result<Bin
         .with_context(|| format!("failed to write {}", topology_path.display()))?;
 
     let mut stage_command = Command::new(&args.stage_server_bin);
+    stage_command.env("SKIPPY_PARITY_REPORT_TOKEN_SIGNAL", "1");
     stage_command.args([
         "serve",
         "--stage-transport",
@@ -423,6 +434,11 @@ pub(in crate::runner) fn run_binary_split(args: BinarySplitConfig) -> Result<Bin
     Ok(BinarySplitResult {
         token_id,
         predicted_token: reply.predicted,
+        top_two: reply.token_signal.map(|signal| TopTwoReport {
+            top_token: signal.top_token,
+            second_token: signal.second_token,
+            margin: signal.margin,
+        }),
         second_predicted_token,
         native_mtp,
         native_mtp_verification_compute_us,

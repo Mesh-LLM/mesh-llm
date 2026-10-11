@@ -640,6 +640,7 @@ mod tests {
                 token_ids: vec![43],
                 proposal_compute_us: 123,
             }),
+            token_signal: None,
             window: skippy_protocol::binary::StageReplyWindow { window_id: 7 },
             stats: Default::default(),
         };

@@ -62,6 +62,7 @@ use anyhow::{Context, Result, bail};
 use serde_json::json;
 use skippy_protocol::binary::StageReply;
 use skippy_protocol::binary::StageReplyStats;
+use skippy_protocol::binary::StageReplyTokenSignal;
 use skippy_protocol::binary::StageWireMessage;
 use skippy_protocol::binary::WireMessageKind;
 use skippy_protocol::binary::WireReplyKind;
@@ -155,6 +156,8 @@ fn handle_binary_connection_messages(
     session_tracker: &mut ConnectionSessionTracker,
 ) -> Result<()> {
     let last_stage_batching = last_stage_decode_batch_enabled(last_stage_decode_batch);
+    let parity_token_signal_enabled =
+        std::env::var_os("SKIPPY_PARITY_REPORT_TOKEN_SIGNAL").is_some();
     let connection_session_id = session_tracker.connection_id;
     let max_deferred_prefill_replies =
         reply_credit_limit.unwrap_or_else(|| max_inflight.saturating_sub(1));
@@ -362,6 +365,7 @@ fn handle_binary_connection_messages(
                 predicted: message.state.current_token,
                 predicted_tokens: Vec::new(),
                 native_mtp_draft: None,
+                token_signal: None,
                 window: reply_window_for_message(&message),
                 stats: StageReplyStats::default(),
             };
@@ -1087,11 +1091,34 @@ fn handle_binary_connection_messages(
             upstream_reply_start_unix_nanos.get_or_insert(reply_start_unix_nanos);
             let reply_started = Instant::now();
             let reply_window = reply_window_for_message(&message);
+            let token_signal = if parity_token_signal_enabled
+                && config.downstream.is_none()
+                && !restored_prefill
+                && reply_kind == WireReplyKind::PredictedToken
+                && predicted_tokens.len() == 1
+            {
+                let signal_session_key = session_key.clone();
+                iteration_scheduler
+                    .execute_runtime("binary-token-signal", move |runtime| {
+                        Ok(runtime.last_token_signal(&signal_session_key).ok())
+                    })
+                    .ok()
+                    .flatten()
+                    .filter(|signal| signal.margin.is_finite() && signal.margin >= 0.0)
+                    .map(|signal| StageReplyTokenSignal {
+                        top_token: signal.top_token,
+                        second_token: signal.second_token,
+                        margin: signal.margin,
+                    })
+            } else {
+                None
+            };
             let reply = StageReply {
                 kind: reply_kind,
                 predicted: predicted_token,
                 predicted_tokens,
                 native_mtp_draft,
+                token_signal,
                 window: reply_window,
                 stats: message_reply_stats,
             };

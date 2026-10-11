@@ -27,7 +27,7 @@ use crate::{
     cli::{FlashAttentionArg, RuntimeArgs, StageLoadMode, StatePayloadKind},
     report::{
         BaselineReport, BoundaryReport, NativeMtpSidebandReport, NativeMtpVerificationReport,
-        PackagePartReport, PackageStageReport, SplitReport, StageModelReport,
+        PackagePartReport, PackageStageReport, SplitReport, StageModelReport, TopTwoReport,
     },
 };
 
@@ -35,6 +35,7 @@ use crate::{
 pub(in crate::runner) struct FullModelResult {
     pub(in crate::runner) token_id: i32,
     pub(in crate::runner) predicted_token: i32,
+    pub(in crate::runner) top_two: Option<TopTwoReport>,
     pub(in crate::runner) second_predicted_token: Option<i32>,
 }
 
@@ -62,6 +63,7 @@ pub(in crate::runner) struct BinarySplitConfig {
 pub(in crate::runner) struct BinarySplitResult {
     pub(in crate::runner) token_id: i32,
     pub(in crate::runner) predicted_token: i32,
+    pub(in crate::runner) top_two: Option<TopTwoReport>,
     pub(in crate::runner) second_predicted_token: Option<i32>,
     pub(in crate::runner) native_mtp: NativeMtpSidebandReport,
     pub(in crate::runner) native_mtp_verification_compute_us: Option<i64>,
@@ -251,6 +253,7 @@ pub(in crate::runner) fn baseline_report(result: FullModelResult) -> BaselineRep
     BaselineReport {
         token_id: result.token_id,
         predicted_token: result.predicted_token,
+        top_two: result.top_two,
         second_predicted_token: result.second_predicted_token,
     }
 }
@@ -262,6 +265,7 @@ pub(in crate::runner) fn split_report(
     SplitReport {
         token_id: result.token_id,
         predicted_token: result.predicted_token,
+        top_two: result.top_two,
         second_predicted_token: result.second_predicted_token,
         native_mtp: result.native_mtp,
         native_mtp_verification,

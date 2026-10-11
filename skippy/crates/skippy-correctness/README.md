@@ -120,6 +120,11 @@ skippy-correctness glm-dsa-stage0-trace \
 
 Model parity commands emit JSON, optionally write the same JSON with
 `--report-out`, and exit non-zero on mismatch unless `--allow-mismatch` is set.
+The single-step and chain reports include the full-model and final-stage top-two
+token margins when available. For an offload threshold, `split-scan` accepts
+`--compare-n-gpu-layers <count>` and adds a second full-model token and margin
+at that count. This comparison is diagnostic; the exact-token gate still uses
+the primary `--n-gpu-layers` baseline.
 
 `open-ai-cache-reuse` checks repeated and growing chat requests against an
 already running stage-0 OpenAI endpoint. It requires cached prompt tokens

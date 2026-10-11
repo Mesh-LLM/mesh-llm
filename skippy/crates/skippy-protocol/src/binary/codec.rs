@@ -7,8 +7,8 @@ use super::{
     MAX_STAGE_DRY_SEQUENCE_BREAKERS, MAX_STAGE_LOGIT_BIAS, MAX_STAGE_PREDICTED_TOKENS,
     MAX_STAGE_SAMPLERS, MAX_STAGE_SAMPLING_STRING_BYTES, MAX_STAGE_SIDEBAND_VALUES,
     MAX_STAGE_STATE_IMPORT_BYTES, READY_MAGIC, STAGE_STATE_VERSION, StageLogitBias,
-    StageNativeMtpDraft, StageReply, StageReplyStats, StageReplyWindow, StageSamplingConfig,
-    StageStateHeader, StageWireMessage, WireMessageKind, WireReplyKind,
+    StageNativeMtpDraft, StageReply, StageReplyStats, StageReplyTokenSignal, StageReplyWindow,
+    StageSamplingConfig, StageStateHeader, StageWireMessage, WireMessageKind, WireReplyKind,
     activation::{decode_activation_frame, encode_raw_activation_frame},
     invalid_data, invalid_input,
 };
@@ -37,6 +37,7 @@ pub fn send_reply_ack_with_stats(mut writer: impl Write, stats: StageReplyStats)
             predicted: 0,
             predicted_tokens: Vec::new(),
             native_mtp_draft: None,
+            token_signal: None,
             window: StageReplyWindow::default(),
             stats,
         },
@@ -94,7 +95,8 @@ pub fn send_reply_predicted_with_tokens_window_and_stats(
         window,
     )?;
     write_native_mtp_draft(&mut writer, None)?;
-    write_reply_stats(&mut writer, stats)
+    write_reply_stats(&mut writer, stats)?;
+    write_reply_token_signal(&mut writer, None)
 }
 
 pub fn send_reply_predicted_tokens_with_stats(
@@ -128,7 +130,8 @@ pub fn send_reply_predicted_tokens_with_window_and_stats(
         window,
     )?;
     write_native_mtp_draft(&mut writer, None)?;
-    write_reply_stats(&mut writer, stats)
+    write_reply_stats(&mut writer, stats)?;
+    write_reply_token_signal(&mut writer, None)
 }
 
 pub fn send_reply_message(mut writer: impl Write, reply: &StageReply) -> io::Result<()> {
@@ -143,7 +146,8 @@ pub fn send_reply_message(mut writer: impl Write, reply: &StageReply) -> io::Res
         reply.window,
     )?;
     write_native_mtp_draft(&mut writer, reply.native_mtp_draft.as_ref())?;
-    write_reply_stats(&mut writer, reply.stats)
+    write_reply_stats(&mut writer, reply.stats)?;
+    write_reply_token_signal(&mut writer, reply.token_signal)
 }
 
 pub fn recv_reply(mut reader: impl Read) -> io::Result<StageReply> {
@@ -162,14 +166,52 @@ pub fn recv_reply(mut reader: impl Read) -> io::Result<StageReply> {
     let window = read_reply_window(&mut reader)?;
     let native_mtp_draft = read_native_mtp_draft(&mut reader)?;
     let stats = read_reply_stats(&mut reader)?;
+    let token_signal = read_reply_token_signal(&mut reader)?;
     Ok(StageReply {
         kind,
         predicted,
         predicted_tokens,
         native_mtp_draft,
+        token_signal,
         window,
         stats,
     })
+}
+
+fn write_reply_token_signal(
+    mut writer: impl Write,
+    signal: Option<StageReplyTokenSignal>,
+) -> io::Result<()> {
+    let Some(signal) = signal else {
+        return write_i32(&mut writer, 0);
+    };
+    if !signal.margin.is_finite() || signal.margin < 0.0 {
+        return Err(invalid_input("invalid reply token margin"));
+    }
+    write_i32(&mut writer, 1)?;
+    write_i32(&mut writer, signal.top_token)?;
+    write_i32(&mut writer, signal.second_token)?;
+    write_f32(&mut writer, signal.margin)
+}
+
+fn read_reply_token_signal(mut reader: impl Read) -> io::Result<Option<StageReplyTokenSignal>> {
+    match read_i32(&mut reader)? {
+        0 => Ok(None),
+        1 => {
+            let top_token = read_i32(&mut reader)?;
+            let second_token = read_i32(&mut reader)?;
+            let margin = read_f32(&mut reader)?;
+            if !margin.is_finite() || margin < 0.0 {
+                return Err(invalid_data("invalid reply token margin"));
+            }
+            Ok(Some(StageReplyTokenSignal {
+                top_token,
+                second_token,
+                margin,
+            }))
+        }
+        _ => Err(invalid_data("unknown reply token signal marker")),
+    }
 }
 
 fn write_reply_header(

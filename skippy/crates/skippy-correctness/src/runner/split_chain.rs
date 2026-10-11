@@ -15,7 +15,8 @@ use skippy_runtime::{GGML_TYPE_F16, MtpSource, RuntimeConfig, StageModel};
 use crate::{
     cli::{ChainArgs, CoreParityArgs, FlashAttentionArg, ServerArgs, SplitScanArgs, StageLoadMode},
     report::{
-        ChainReport, ChainStageReport, NativeMtpSidebandReport, SplitScanReport, StageModelReport,
+        ChainReport, ChainStageReport, MonolithicComparisonReport, NativeMtpSidebandReport,
+        SplitScanReport, StageModelReport, TopTwoReport,
     },
     support::{
         ChildGuard, activation_width, connect_ready_child, generate_run_id, temp_config_path_for,
@@ -67,6 +68,7 @@ struct BinaryChainConfig {
 struct BinaryChainResult {
     pub(in crate::runner) token_id: i32,
     pub(in crate::runner) predicted_token: i32,
+    pub(in crate::runner) top_two: Option<TopTwoReport>,
     pub(in crate::runner) second_predicted_token: Option<i32>,
     pub(in crate::runner) native_mtp: NativeMtpSidebandReport,
     pub(in crate::runner) native_mtp_verification_compute_us: Option<i64>,
@@ -194,6 +196,7 @@ fn run_chain_with_baseline(
         baseline: baseline_report(baseline),
         token_id: chain.token_id,
         predicted_token: chain.predicted_token,
+        top_two: chain.top_two,
         second_predicted_token: chain.second_predicted_token,
         native_mtp,
         native_mtp_verification,
@@ -239,6 +242,19 @@ pub fn split_scan(args: SplitScanArgs) -> Result<()> {
     let splits = parse_split_list(&args.splits)?;
     let model_identity = runtime_model_identity(&args.runtime)?;
     let baseline = run_full_model_decode(&args.runtime)?;
+    let monolithic_comparison = if let Some(n_gpu_layers) = args.compare_n_gpu_layers {
+        let mut comparison_runtime = args.runtime.clone();
+        comparison_runtime.n_gpu_layers = n_gpu_layers;
+        let comparison = run_full_model_decode(&comparison_runtime)?;
+        Some(MonolithicComparisonReport {
+            baseline_n_gpu_layers: args.runtime.n_gpu_layers,
+            comparison_n_gpu_layers: n_gpu_layers,
+            first_token_matches: baseline.predicted_token == comparison.predicted_token,
+            comparison: baseline_report(comparison),
+        })
+    } else {
+        None
+    };
     let mut results = Vec::with_capacity(splits.len());
     for split_layer in splits {
         if split_layer == 0 || split_layer >= args.runtime.layer_end {
@@ -254,6 +270,7 @@ pub fn split_scan(args: SplitScanArgs) -> Result<()> {
             FullModelResult {
                 token_id: baseline.token_id,
                 predicted_token: baseline.predicted_token,
+                top_two: baseline.top_two,
                 second_predicted_token: baseline.second_predicted_token,
             },
             SingleStepCase {
@@ -269,6 +286,7 @@ pub fn split_scan(args: SplitScanArgs) -> Result<()> {
         status: status(mismatch_count == 0),
         model_identity,
         baseline: baseline_report(baseline),
+        monolithic_comparison,
         split_count: results.len(),
         mismatch_count,
         results,
@@ -535,6 +553,7 @@ fn run_binary_chain(args: BinaryChainConfig) -> Result<BinaryChainResult> {
         .with_context(|| format!("failed to write {}", topology_path.display()))?;
 
     let mut stage2_command = Command::new(&args.stage_server_bin);
+    stage2_command.env("SKIPPY_PARITY_REPORT_TOKEN_SIGNAL", "1");
     stage2_command.args([
         "serve",
         "--stage-transport",
@@ -639,6 +658,11 @@ fn run_binary_chain(args: BinaryChainConfig) -> Result<BinaryChainResult> {
     Ok(BinaryChainResult {
         token_id,
         predicted_token: reply.predicted,
+        top_two: reply.token_signal.map(|signal| TopTwoReport {
+            top_token: signal.top_token,
+            second_token: signal.second_token,
+            margin: signal.margin,
+        }),
         second_predicted_token,
         native_mtp,
         native_mtp_verification_compute_us,
