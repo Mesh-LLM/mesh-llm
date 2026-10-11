@@ -136,7 +136,7 @@ impl Input {
             .get("--timeout-secs")
             .map_or(Ok(1200), |s| s.parse::<u64>())?;
         if !(1..=3600).contains(&timeout) {
-            return Err("SDK whole budget must be1..3600".into());
+            return Err("SDK whole budget must be 1..3600".into());
         }
         let deadline = Instant::now() + Duration::from_secs(timeout);
         let wrapper = root.join("scripts/ci-compat-smoke.sh");
@@ -252,7 +252,7 @@ pub(super) fn bounded_file(path: &Path, cap: u64) -> DynResult<Vec<u8>> {
 fn digest(path: &Path, deadline: Instant) -> DynResult<String> {
     let mut f = reader(path)?;
     if f.metadata()?.len() > 8589934592 {
-        return Err("SDK input exceeds8GiB bound".into());
+        return Err("SDK input exceeds 8GiB bound".into());
     }
     let mut hash = Sha256::new();
     let mut buffer = [0; 65536];
