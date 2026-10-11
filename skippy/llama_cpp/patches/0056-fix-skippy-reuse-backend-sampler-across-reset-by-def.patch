@@ -1,13 +1,35 @@
-From bfb66d4866b6af59cab951d0ccefd2c2ec733fe8 Mon Sep 17 00:00:00 2001
+From e0f4ce3a059be5b7aa72b0dd10b7f4c09b64a272 Mon Sep 17 00:00:00 2001
 From: Daniel Winter-Wijntjes <danwinter1@me.com>
 Date: Mon, 28 Sep 2026 08:40:55 +1000
 Subject: [PATCH] fix(skippy): reuse backend sampler across reset by default
 
 ---
+ src/skippy/sampling.cpp             | 10 ----------
  src/skippy/session.cpp              | 14 ++++++++------
  src/skippy/tests/runtime_events.cpp |  8 ++++----
- 2 files changed, 12 insertions(+), 10 deletions(-)
+ 3 files changed, 12 insertions(+), 20 deletions(-)
 
+diff --git a/src/skippy/sampling.cpp b/src/skippy/sampling.cpp
+index 51fc3d2c8..f304be0ae 100644
+--- a/src/skippy/sampling.cpp
++++ b/src/skippy/sampling.cpp
+@@ -134,16 +134,6 @@ enum skippy_status skippy_verify_token_batch(
+         return SKIPPY_STATUS_INVALID_ARGUMENT;
+     }
+ 
+-    if (session->sampling_backend_enabled) {
+-        // Verification requests logits for every row and then consumes them on
+-        // the CPU. An attached backend sampler permits only one output row per
+-        // sequence, so retire its one-shot backend initialization before
+-        // building the verification batch.
+-        llama_set_sampler(session->ctx, session->seq_id, nullptr);
+-        session->sampling_backend_enabled = false;
+-        session->sampling_backend_retired = true;
+-    }
+-
+     const int32_t n_tokens = static_cast<int32_t>(token_count);
+     llama_batch batch = llama_batch_init(n_tokens, 0, 1);
+     batch.n_tokens = n_tokens;
 diff --git a/src/skippy/session.cpp b/src/skippy/session.cpp
 index 1babdd733..81f837f35 100644
 --- a/src/skippy/session.cpp
@@ -35,10 +57,10 @@ index 1babdd733..81f837f35 100644
          skippy_clear_chat_sampling(session);
      }
 diff --git a/src/skippy/tests/runtime_events.cpp b/src/skippy/tests/runtime_events.cpp
-index 40f056cdc..75b65fc55 100644
+index 01e47c0aa..a902a13c4 100644
 --- a/src/skippy/tests/runtime_events.cpp
 +++ b/src/skippy/tests/runtime_events.cpp
-@@ -331,7 +331,7 @@ int test_native_model_load_production(const char * fixture_path) {
+@@ -333,7 +333,7 @@ int test_native_model_load_production(const char * fixture_path) {
      const char * old_detach_setting = std::getenv("SKIPPY_DETACH_SAMPLER_ON_RESET");
      const bool had_detach_setting = old_detach_setting != nullptr;
      const std::string saved_detach_setting = had_detach_setting ? old_detach_setting : "";
@@ -46,8 +68,8 @@ index 40f056cdc..75b65fc55 100644
 +    set_detach_sampler_on_reset_environment("1");
      CHECK(fixture_path != nullptr && fixture_path[0] != '\0');
  
-     // A legacy entrypoint with only the process reporter receives concrete
-@@ -366,9 +366,9 @@ int test_native_model_load_production(const char * fixture_path) {
+     CHECK(!skippy_verify_window_fits_rollback(0, 2));
+@@ -383,9 +383,9 @@ int test_native_model_load_production(const char * fixture_path) {
      CHECK(!session->sampling_backend_enabled);
      CHECK(session->sampling_chain == nullptr);
  

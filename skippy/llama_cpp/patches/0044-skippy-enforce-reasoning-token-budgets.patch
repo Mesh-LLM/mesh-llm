@@ -1,4 +1,4 @@
-From c81c80523566dc9240dc6080c37cd33e6be0b478 Mon Sep 17 00:00:00 2001
+From 2a0ac6cad48b2d9868ffa0da22de64dbb0c2046f Mon Sep 17 00:00:00 2001
 From: scama
  <a1860575018c4680d5669dd7bc3bd356b478bccb8d42e194df46304a5e25f49a@meshllm.communities.buzz.xyz>
 Date: Tue, 15 Sep 2026 14:33:49 +1000
@@ -9,7 +9,6 @@ Subject: [PATCH] skippy: enforce reasoning token budgets
  common/reasoning-budget.cpp     | 119 ++++++++++++++++++--------------
  common/reasoning-budget.h       |  16 ++---
  common/stage-chat.cpp           |   3 +
- include/skippy/common.h         |   2 +-
  include/skippy/sampling.h       |   2 +
  src/CMakeLists.txt              |   5 +-
  src/skippy/runtime_types.h      |   2 +
@@ -17,7 +16,7 @@ Subject: [PATCH] skippy: enforce reasoning token budgets
  src/skippy/sampling_internal.h  |   5 ++
  src/skippy/session.cpp          |   4 ++
  tests/test-reasoning-budget.cpp |   1 +
- 12 files changed, 202 insertions(+), 65 deletions(-)
+ 11 files changed, 201 insertions(+), 64 deletions(-)
 
 diff --git a/common/CMakeLists.txt b/common/CMakeLists.txt
 index 732fafee2..650e14517 100644
@@ -332,19 +331,6 @@ index 180c0a884..5b3f8690d 100644
          {"parse_tool_calls", parse_tool_calls},
          {"chat_parser", params.parser},
          {"grammar", params.grammar},
-diff --git a/include/skippy/common.h b/include/skippy/common.h
-index ba62a2c8b..3ad592c16 100644
---- a/include/skippy/common.h
-+++ b/include/skippy/common.h
-@@ -46,7 +46,7 @@ extern "C" {
- 
- #define SKIPPY_ABI_VERSION_MAJOR 0
- #define SKIPPY_ABI_VERSION_MINOR 1
--#define SKIPPY_ABI_VERSION_PATCH 62
-+#define SKIPPY_ABI_VERSION_PATCH 63
- 
- #if defined(_MSC_VER)
- #define SKIPPY_DEPRECATED(message) __declspec(deprecated(message))
 diff --git a/include/skippy/sampling.h b/include/skippy/sampling.h
 index 8b114e3e4..1b42f32c0 100644
 --- a/include/skippy/sampling.h
@@ -402,7 +388,7 @@ index 7cb885d65..24784dd28 100644
      // A sampler chain may be backend-initialized at most once
      // (llama_sampler_chain_backend_init asserts on reuse). Once a chain is
 diff --git a/src/skippy/sampling.cpp b/src/skippy/sampling.cpp
-index a900f28ce..99d9731cf 100644
+index 3a7a96345..8b6719363 100644
 --- a/src/skippy/sampling.cpp
 +++ b/src/skippy/sampling.cpp
 @@ -3,6 +3,7 @@
@@ -449,7 +435,7 @@ index a900f28ce..99d9731cf 100644
              session->sampling_config.logit_bias_count != 0) {
          return false;
      }
-@@ -738,6 +745,7 @@ void skippy_refresh_backend_sampling(
+@@ -737,6 +744,7 @@ void skippy_refresh_backend_sampling(
      if (session->ctx != nullptr &&
              session->sampling_chain != nullptr &&
              session->grammar_sampler == nullptr &&
@@ -457,7 +443,7 @@ index a900f28ce..99d9731cf 100644
              skippy_sampling_is_greedy_equivalent(sampling)) {
          session->sampling_backend_enabled =
                  llama_set_sampler(session->ctx, session->seq_id, session->sampling_chain);
-@@ -755,6 +763,7 @@ bool skippy_init_chat_grammar_sampler(
+@@ -754,6 +762,7 @@ bool skippy_init_chat_grammar_sampler(
  
      const llama_vocab * vocab = llama_model_get_vocab(session->stage_model->model);
      const bool grammar_lazy = metadata.value("grammar_lazy", false);
@@ -465,7 +451,7 @@ index a900f28ce..99d9731cf 100644
      std::vector<std::string> trigger_patterns_storage;
      std::vector<const char *> trigger_patterns;
      std::vector<llama_token> trigger_tokens;
-@@ -831,6 +840,81 @@ bool skippy_init_chat_grammar_sampler(
+@@ -830,6 +839,81 @@ bool skippy_init_chat_grammar_sampler(
      return true;
  }
  
@@ -547,7 +533,7 @@ index a900f28ce..99d9731cf 100644
  static void skippy_sync_chat_sampling_history(skippy_session * session) {
      if (session == nullptr || session->sampling_chain == nullptr) {
          return;
-@@ -839,7 +923,22 @@ static void skippy_sync_chat_sampling_history(skippy_session * session) {
+@@ -838,7 +922,22 @@ static void skippy_sync_chat_sampling_history(skippy_session * session) {
          const size_t index = session->sampling_accepted_token_count;
          const llama_token token = session->token_history[index];
          llama_sampler_accept(session->sampling_chain, token);
@@ -571,7 +557,7 @@ index a900f28ce..99d9731cf 100644
              try {
                  llama_sampler_accept(session->grammar_sampler, token);
              } catch (const std::exception & e) {
-@@ -884,7 +983,10 @@ static llama_token skippy_chat_sample_token(skippy_session * session, int32_t lo
+@@ -883,7 +982,10 @@ static llama_token skippy_chat_sample_token(skippy_session * session, int32_t lo
          -1,
          false,
      };
@@ -583,14 +569,14 @@ index a900f28ce..99d9731cf 100644
          try {
              llama_sampler_apply(session->grammar_sampler, &cur);
          } catch (const std::exception & e) {
-@@ -911,6 +1013,7 @@ llama_token skippy_sample_token_ith(
+@@ -910,6 +1012,7 @@ llama_token skippy_sample_token_ith(
      if (skippy_mtp_greedy_sampling_fastpath_enabled() &&
              !session->sampling_backend_enabled &&
              session->grammar_sampler == nullptr &&
 +            session->reasoning_budget_sampler == nullptr &&
              skippy_sampling_is_greedy_equivalent(sampling)) {
-         if (session->sampling_chain != nullptr) {
-             skippy_clear_chat_sampling(session);
+         // Preserve the chain and its history cursor: verification uses its
+         // presence to stop at the first rejected proposal row.
 diff --git a/src/skippy/sampling_internal.h b/src/skippy/sampling_internal.h
 index 0c4e54724..e48653520 100644
 --- a/src/skippy/sampling_internal.h

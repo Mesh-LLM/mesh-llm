@@ -1,4 +1,4 @@
-From 44487a972062aba7563f4d82e56205dabfe6a22b Mon Sep 17 00:00:00 2001
+From f2d56d017ffabfea53694146ca064a983db9dc64 Mon Sep 17 00:00:00 2001
 From: James Dumay <jameswdumay@gmail.com>
 Date: Sat, 19 Sep 2026 15:17:28 +1000
 Subject: [PATCH] llama: integrate explicit stage planning and loading
@@ -7,7 +7,7 @@ Subject: [PATCH] llama: integrate explicit stage planning and loading
  include/llama.h                |    7 +
  src/llama-arch.cpp             |   22 +
  src/llama-arch.h               |    2 +
- src/llama-context.cpp          |  519 +++++++++++----
+ src/llama-context.cpp          |  515 +++++++++++----
  src/llama-context.h            |   73 ++-
  src/llama-ext.h                |    6 +
  src/llama-graph.cpp            |  687 ++++++++++++++++++--
@@ -28,7 +28,7 @@ Subject: [PATCH] llama: integrate explicit stage planning and loading
  src/llama-model.h              |   17 +-
  src/llama-quant.cpp            |   12 +-
  src/llama.cpp                  |   91 ++-
- 24 files changed, 3281 insertions(+), 353 deletions(-)
+ 24 files changed, 3278 insertions(+), 352 deletions(-)
 
 diff --git a/include/llama.h b/include/llama.h
 index 1805ed055..837293eb4 100644
@@ -119,7 +119,7 @@ index af64f4ec5..e6732e854 100644
      LLM_KV_ATTENTION_INDEXER_LOCAL_BLOCKS,
      LLM_KV_ATTENTION_INDEXER_TYPES,
 diff --git a/src/llama-context.cpp b/src/llama-context.cpp
-index da9c558d2..e1e8dd7ad 100644
+index da9c558d2..4000d044a 100644
 --- a/src/llama-context.cpp
 +++ b/src/llama-context.cpp
 @@ -12,6 +12,8 @@
@@ -495,27 +495,24 @@ index da9c558d2..e1e8dd7ad 100644
      }
  
      if (batch_inp.tokens.empty()) {
-@@ -1746,12 +1843,13 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
+@@ -1746,12 +1843,11 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
                  }
  
                  seq_output_count[seq_id]++;
 -                auto sampler = sampling.samplers.find(seq_id);
 -                if (sampler != sampling.samplers.end() &&
--                        seq_output_count[seq_id] > (int32_t) cparams.n_outputs_max_per_seq) {
++                // Apply the configured output capacity only to sampled sequences.
++                if (sampling.samplers.count(seq_id) > 0 &&
+                         seq_output_count[seq_id] > (int32_t) cparams.n_outputs_max_per_seq) {
 -                    LLAMA_LOG_ERROR("%s: backend sampling supports at most %u outputs per sequence "
 -                            "(seq_id %d had %d)\n", __func__, cparams.n_outputs_max_per_seq,
 -                            seq_id, seq_output_count[seq_id]);
-+                // Only sequences that actually have a backend sampler attached
-+                // are limited to one output row; a sampler on some other
-+                // sequence of this context must not reject a multi-output
-+                // batch (e.g. speculative verification) for this one.
-+                if (seq_output_count[seq_id] > 1 && sampling.samplers.count(seq_id) > 0) {
-+                    LLAMA_LOG_ERROR("%s: backend sampling requires at most one output token per sequence (seq_id %d had %d)\n",
-+                            __func__, seq_id, seq_output_count[seq_id]);
++                    LLAMA_LOG_ERROR("%s: backend sampling supports at most %u outputs per sequence (seq_id %d had %d)\n",
++                            __func__, cparams.n_outputs_max_per_seq, seq_id, seq_output_count[seq_id]);
                      return -1;
                  }
              }
-@@ -1779,26 +1877,25 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
+@@ -1779,26 +1875,25 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
  
      GGML_ASSERT((cparams.causal_attn || cparams.n_ubatch >= n_tokens_all) && "non-causal attention requires n_ubatch >= n_tokens");
  
@@ -549,7 +546,7 @@ index da9c558d2..e1e8dd7ad 100644
  
      llama_memory_context_ptr mctx;
  
-@@ -1823,7 +1920,7 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
+@@ -1823,7 +1918,7 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
                      if (!did_optimize) {
                          did_optimize = true;
  
@@ -558,7 +555,7 @@ index da9c558d2..e1e8dd7ad 100644
                              LLAMA_LOG_DEBUG("%s: retrying batch size %d after cache optimization\n", __func__, balloc->get_n_tokens());
  
                              continue;
-@@ -1851,11 +1948,6 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
+@@ -1851,11 +1946,6 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
          return -2;
      };
  
@@ -570,7 +567,7 @@ index da9c558d2..e1e8dd7ad 100644
      int64_t n_outputs_prev = 0;
      int64_t n_tokens_prev  = 0;
  
-@@ -1880,7 +1972,12 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
+@@ -1880,7 +1970,12 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
  
          ggml_status status;
  
@@ -584,7 +581,7 @@ index da9c558d2..e1e8dd7ad 100644
  
          if (!res) {
              // the last ubatch failed or was aborted -> remove all positions of that ubatch from the memory module
-@@ -2016,13 +2113,28 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
+@@ -2016,13 +2111,28 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
  
                  const uint32_t n_embd  = hparams.n_embd_out();
                  float * embd_nextn_out = embd_nextn.data + offset*n_embd;
@@ -615,7 +612,7 @@ index da9c558d2..e1e8dd7ad 100644
              const auto stride = n_vocab;
  
              // async copy the sampling data from the backend to the host
-@@ -2287,9 +2399,9 @@ void llama_context::extract_layer_inputs(const llm_graph_result * res, size_t to
+@@ -2287,9 +2397,9 @@ void llama_context::extract_layer_inputs(const llm_graph_result * res, size_t to
  }
  
  void llama_context::output_reorder() {
@@ -628,7 +625,7 @@ index da9c558d2..e1e8dd7ad 100644
  
      for (size_t s = 0; s < output_swaps.size(); ++s) {
          const uint64_t i0 = output_swaps[s].i0;
-@@ -2302,6 +2414,7 @@ void llama_context::output_reorder() {
+@@ -2302,6 +2412,7 @@ void llama_context::output_reorder() {
          }
  
          if (embd.size > 0) {
@@ -636,7 +633,7 @@ index da9c558d2..e1e8dd7ad 100644
              for (uint64_t k = 0; k < n_embd_out; k++) {
                  std::swap(embd.data[i0*n_embd_out + k], embd.data[i1*n_embd_out + k]);
              }
-@@ -2359,35 +2472,17 @@ void llama_context::output_reorder() {
+@@ -2359,35 +2470,17 @@ void llama_context::output_reorder() {
  //
  
  uint32_t llama_context::graph_max_nodes(uint32_t n_tokens) const {
@@ -678,7 +675,7 @@ index da9c558d2..e1e8dd7ad 100644
      }
  
      uint32_t n_sampling_nodes = 0;
-@@ -2440,7 +2535,6 @@ static void ubatch_prepare_reserve(
+@@ -2440,7 +2533,6 @@ static void ubatch_prepare_reserve(
          }
      }
  
@@ -686,7 +683,7 @@ index da9c558d2..e1e8dd7ad 100644
      std::vector<uint32_t> sampler_seqs;
      std::vector<bool> has_sampler(n_seqs, false);
      for (const auto & entry : samplers) {
-@@ -2448,40 +2542,83 @@ static void ubatch_prepare_reserve(
+@@ -2448,40 +2540,83 @@ static void ubatch_prepare_reserve(
          if (seq_id < 0 || (uint32_t) seq_id >= n_seqs) {
              continue;
          }
@@ -776,7 +773,7 @@ index da9c558d2..e1e8dd7ad 100644
      LLAMA_LOG_DEBUG("%s: reserving a graph for ubatch with n_tokens = %4u, n_seqs = %2u, n_outputs = %4u\n", __func__, n_tokens, n_seqs, n_outputs);
      GGML_ASSERT(n_outputs >= 1);
  
-@@ -2513,13 +2650,140 @@ ggml_cgraph * llama_context::graph_reserve(
+@@ -2513,13 +2648,140 @@ ggml_cgraph * llama_context::graph_reserve(
  
      auto * res = gf_res_reserve.get();
  
@@ -918,7 +915,7 @@ index da9c558d2..e1e8dd7ad 100644
      this->n_outputs = save_n_outputs;
  
      // initialize scheduler with the specified graph
-@@ -2542,7 +2806,8 @@ llm_graph_params llama_context::graph_params(
+@@ -2542,7 +2804,8 @@ llm_graph_params llama_context::graph_params(
                          llm_graph_result * res,
                        const llama_ubatch & ubatch,
              const llama_memory_context_i * mctx,
@@ -928,7 +925,7 @@ index da9c558d2..e1e8dd7ad 100644
      return {
          /*.arch        =*/ model.arch,
          /*.hparams     =*/ model.hparams,
-@@ -2556,6 +2821,7 @@ llm_graph_params llama_context::graph_params(
+@@ -2556,6 +2819,7 @@ llm_graph_params llama_context::graph_params(
          /*.mctx        =*/ mctx,
          /*.cross       =*/ &cross,
          /*.samplers    =*/ sampling.samplers,
@@ -936,7 +933,7 @@ index da9c558d2..e1e8dd7ad 100644
          /*.n_outputs   =*/ n_outputs,
          /*.cb          =*/ graph_get_cb(),
          /*.res         =*/ res,
-@@ -3595,7 +3861,8 @@ void llama_context::opt_epoch_iter(
+@@ -3595,7 +3859,8 @@ void llama_context::opt_epoch_iter(
  
              auto * res = get_gf_res_prev();
  
@@ -946,7 +943,7 @@ index da9c558d2..e1e8dd7ad 100644
  
              // the optimizer graph is allocated outside sched, so the next decode must rebuild
              gf_res_prev_active = nullptr;
-@@ -3700,7 +3967,7 @@ llama_context_params llama_context_default_params() {
+@@ -3700,7 +3965,7 @@ llama_context_params llama_context_default_params() {
          /*.n_seq_max                   =*/ 1,
          /*.n_rs_seq                    =*/ 0,
          /*.n_outputs_max               =*/ 0,
@@ -955,7 +952,7 @@ index da9c558d2..e1e8dd7ad 100644
          /*.n_threads                   =*/ GGML_DEFAULT_N_THREADS, // TODO: better default
          /*.n_threads_batch             =*/ GGML_DEFAULT_N_THREADS,
          /*.ctx_type                    =*/ LLAMA_CONTEXT_TYPE_DEFAULT,
-@@ -3736,9 +4003,10 @@ llama_context_params llama_context_default_params() {
+@@ -3736,9 +4001,10 @@ llama_context_params llama_context_default_params() {
      return result;
  }
  
@@ -969,7 +966,7 @@ index da9c558d2..e1e8dd7ad 100644
      if (!model) {
          LLAMA_LOG_ERROR("%s: model cannot be NULL\n", __func__);
          return nullptr;
-@@ -3758,6 +4026,10 @@ llama_context * llama_init_from_model(
+@@ -3758,6 +4024,10 @@ llama_context * llama_init_from_model(
          LLAMA_LOG_WARN("%s: flash_attn is not compatible with Grok - forcing off\n", __func__);
          params.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_DISABLED;
      }
@@ -980,7 +977,7 @@ index da9c558d2..e1e8dd7ad 100644
  
      if (model->split_mode() == LLAMA_SPLIT_MODE_TENSOR) {
          if (params.flash_attn_type == LLAMA_FLASH_ATTN_TYPE_AUTO) {
-@@ -3773,11 +4045,6 @@ llama_context * llama_init_from_model(
+@@ -3773,11 +4043,6 @@ llama_context * llama_init_from_model(
          }
      }
  
@@ -992,7 +989,7 @@ index da9c558d2..e1e8dd7ad 100644
      if (ggml_is_quantized(params.type_v) && params.flash_attn_type != LLAMA_FLASH_ATTN_TYPE_ENABLED) {
          if (params.flash_attn_type == LLAMA_FLASH_ATTN_TYPE_AUTO) {
              LLAMA_LOG_INFO("%s: enabling flash_attn since it is required for quantized V cache\n", __func__);
-@@ -3818,15 +4085,14 @@ llama_context * llama_init_from_model(
+@@ -3818,15 +4083,14 @@ llama_context * llama_init_from_model(
                         model->hparams.pooling_type, params.pooling_type);
      }
  
@@ -1010,7 +1007,7 @@ index da9c558d2..e1e8dd7ad 100644
          const auto & cparams = ctx->get_cparams();
  
          if (cparams.rope_scaling_type == LLAMA_ROPE_SCALING_TYPE_YARN && cparams.rope_freq_scale != model->hparams.rope_freq_scale_train) {
-@@ -3843,6 +4109,12 @@ llama_context * llama_init_from_model(
+@@ -3843,6 +4107,12 @@ llama_context * llama_init_from_model(
      return nullptr;
  }
  
@@ -1023,7 +1020,7 @@ index da9c558d2..e1e8dd7ad 100644
  // deprecated
  llama_context * llama_new_context_with_model(
                   llama_model * model,
-@@ -4061,7 +4333,8 @@ struct ggml_cgraph * llama_graph_reserve(
+@@ -4061,7 +4331,8 @@ struct ggml_cgraph * llama_graph_reserve(
      if (memory) {
          mctx = memory->init_full();
      }
@@ -1033,7 +1030,7 @@ index da9c558d2..e1e8dd7ad 100644
  }
  
  // llama adapter API
-@@ -4313,13 +4586,25 @@ size_t llama_state_seq_load_file(llama_context * ctx, const char * filepath, lla
+@@ -4313,13 +4584,25 @@ size_t llama_state_seq_load_file(llama_context * ctx, const char * filepath, lla
  // compat: llama_batch -> llama_batch_ext -> encode/decode
  
  int llama_context::encode(const llama_batch & batch_inp) {
@@ -1062,7 +1059,7 @@ index da9c558d2..e1e8dd7ad 100644
  }
  
  ///
-@@ -4338,7 +4623,11 @@ int32_t llama_encode(
+@@ -4338,7 +4621,11 @@ int32_t llama_encode(
  int32_t llama_decode(
          llama_context * ctx,
            llama_batch   batch) {

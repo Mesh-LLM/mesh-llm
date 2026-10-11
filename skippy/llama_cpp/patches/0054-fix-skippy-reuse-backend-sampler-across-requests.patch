@@ -1,19 +1,19 @@
-From 06ba7d134a315fc9f1bba1b5e13ab300e7f26f3b Mon Sep 17 00:00:00 2001
+From 8dc80933a4188f8285a708c96c39745672d79906 Mon Sep 17 00:00:00 2001
 From: James Dumay <jameswdumay@gmail.com>
 Date: Sun, 27 Sep 2026 16:49:17 +1000
 Subject: [PATCH] fix(skippy): reuse backend sampler across requests
 
 ---
  src/CMakeLists.txt                  |   4 +-
- src/llama-context.cpp               |   5 ++
+ src/llama-context.cpp               |   5 +
  src/llama-context.h                 |   2 +
  src/skippy/runtime_types.h          |   2 +
- src/skippy/sampling.cpp             |  77 +++++++++++++++---
- src/skippy/session.cpp              |  19 +++--
- src/skippy/tests/runtime_events.cpp | 116 +++++++++++++++++++++++++++-
+ src/skippy/sampling.cpp             |  77 ++++++++++++--
+ src/skippy/session.cpp              |  19 ++--
+ src/skippy/tests/runtime_events.cpp | 149 +++++++++++++++++++++++++++-
  src/skippy/workloads.cpp            |  12 ++-
  src/skippy/workloads_internal.h     |   8 ++
- 9 files changed, 223 insertions(+), 22 deletions(-)
+ 9 files changed, 256 insertions(+), 22 deletions(-)
  create mode 100644 src/skippy/workloads_internal.h
 
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
@@ -32,7 +32,7 @@ index 60d2825e9..b4ee9bd87 100644
      foreach(SKIPPY_EVENT_TEST_CASE
              register_and_dispatch
 diff --git a/src/llama-context.cpp b/src/llama-context.cpp
-index 012a7ff1b..cc8f6fd83 100644
+index 43c0091c2..a0903e84d 100644
 --- a/src/llama-context.cpp
 +++ b/src/llama-context.cpp
 @@ -706,6 +706,7 @@ void llama_context::sched_reserve(const skippy_graph_build_inputs & graph_build_
@@ -88,7 +88,7 @@ index 24784dd28..fa97e12a5 100644
      bool sampling_config_valid = false;
      std::string chat_sampling_metadata;
 diff --git a/src/skippy/sampling.cpp b/src/skippy/sampling.cpp
-index 99d9731cf..013e49709 100644
+index 8b6719363..6cda79a2d 100644
 --- a/src/skippy/sampling.cpp
 +++ b/src/skippy/sampling.cpp
 @@ -11,6 +11,7 @@
@@ -285,20 +285,22 @@ index 37b0b9c5b..1babdd733 100644
      }
      skippy_mtp_clear_session_state(session);
 diff --git a/src/skippy/tests/runtime_events.cpp b/src/skippy/tests/runtime_events.cpp
-index 60357184a..40f056cdc 100644
+index 60357184a..01e47c0aa 100644
 --- a/src/skippy/tests/runtime_events.cpp
 +++ b/src/skippy/tests/runtime_events.cpp
-@@ -1,7 +1,9 @@
+@@ -1,7 +1,11 @@
  #include "skippy.h"
  
  #include "../events_internal.h"
 +#include "../runtime_support.h"
  #include "../runtime_types.h"
 +#include "../workloads_internal.h"
++#include "../sampling_internal.h"
++#include "../speculative_internal.h"
  
  #include <atomic>
  #include <cstdio>
-@@ -23,6 +25,18 @@ namespace {
+@@ -23,6 +27,18 @@ namespace {
          }                                                                    \
      } while (0)
  
@@ -317,7 +319,7 @@ index 60357184a..40f056cdc 100644
  struct capture {
      std::atomic<int> count{0};
      std::atomic<uint32_t> last_category{0};
-@@ -314,6 +328,10 @@ int test_model_load_events_v2_dispatch() {
+@@ -314,8 +330,19 @@ int test_model_load_events_v2_dispatch() {
  }
  
  int test_native_model_load_production(const char * fixture_path) {
@@ -327,8 +329,32 @@ index 60357184a..40f056cdc 100644
 +    set_detach_sampler_on_reset_environment(nullptr);
      CHECK(fixture_path != nullptr && fixture_path[0] != '\0');
  
++    CHECK(!skippy_verify_window_fits_rollback(0, 2));
++    CHECK(!skippy_verify_window_fits_rollback(1, 0));
++    CHECK(skippy_verify_window_fits_rollback(1, 2));
++    CHECK(skippy_verify_window_fits_rollback(2, 2));
++    CHECK(skippy_verify_window_fits_rollback(3, 2));
++    CHECK(!skippy_verify_window_fits_rollback(4, 2));
++    CHECK(!skippy_verify_window_fits_rollback(SIZE_MAX, 2));
      // A legacy entrypoint with only the process reporter receives concrete
-@@ -342,21 +360,117 @@ int test_native_model_load_production(const char * fixture_path) {
+     // model-load observations from the production completion boundary.
+     production_capture global;
+@@ -333,6 +360,14 @@ int test_native_model_load_production(const char * fixture_path) {
+     CHECK(global.kv_initialized_events.load() > 0);
+     const llama_token prompt[] = {0, 1};
+     size_t output_bytes = 0;
++    // Independent sampler-free baseline before attaching the chat chain.
++    llama_token reference_tokens[2] = {-1, -1};
++    size_t reference_count = 0;
++    CHECK(skippy_prefill_chunk(session, prompt, 2, nullptr, 0, nullptr, 0,
++            &output_bytes, &error) == SKIPPY_STATUS_OK);
++    CHECK(skippy_verify_tokens(session, prompt, 2, reference_tokens, 2,
++            &reference_count, &error) == SKIPPY_STATUS_OK);
++    CHECK(skippy_session_reset(session, &error) == SKIPPY_STATUS_OK);
+     CHECK(skippy_prefill_chunk(
+             session, prompt, 2, nullptr, 0, nullptr, 0,
+             &output_bytes, &error) == SKIPPY_STATUS_OK);
+@@ -342,21 +377,133 @@ int test_native_model_load_production(const char * fixture_path) {
      sampling.flags = SKIPPY_SAMPLING_FLAG_ENABLED;
      sampling.repeat_penalty = 1.0f;
      CHECK(skippy_session_configure_chat_sampling(
@@ -387,9 +413,8 @@ index 60357184a..40f056cdc 100644
 +    CHECK(session->sampling_config_valid);
 +    CHECK(session->ctx->get_sched_reserve_count() == reserves_before_reset);
 +
-+    // Token verification requests every output row and samples those logits on
-+    // the CPU. It must detach and retire a sampler retained across reset before
-+    // decoding the multi-row verification batch.
++    // Multi-row verification retains the backend chain and does not reserve
++    // the scheduler again. Its tokens match a sampler-free baseline.
 +    llama_token verified[2] = {-1, -1};
 +    size_t verified_count = 0;
 +    CHECK(skippy_verify_tokens(
@@ -398,13 +423,30 @@ index 60357184a..40f056cdc 100644
 +    CHECK(verified_count == 2);
 +    CHECK(verified[0] >= 0);
 +    CHECK(verified[1] >= 0);
-+    CHECK(!session->sampling_backend_enabled);
-+    CHECK(session->sampling_backend_retired);
++    CHECK(verified_count == reference_count);
++    CHECK(verified[0] == reference_tokens[0]);
++    CHECK(verified[1] == reference_tokens[1]);
++    CHECK(session->sampling_backend_enabled);
++    CHECK(!session->sampling_backend_retired);
++    CHECK(session->sampling_chain == sampling_chain);
++    CHECK(session->ctx->get_sched_reserve_count() == reserves_before_reset);
 +
 +    CHECK(skippy_session_configure_chat_sampling(
 +            session, &sampling, "{\"grammar\":\"\"}", 2,
 +            &error) == SKIPPY_STATUS_OK);
 +    CHECK(session->sampling_backend_enabled);
++
++    // Force the CPU greedy path with a chain still alive, as in program replay.
++    // It must preserve chain/history state rather than clearing it on each row.
++    llama_set_sampler(session->ctx, session->seq_id, nullptr);
++    session->sampling_backend_enabled = false;
++    session->sampling_backend_retired = true;
++    CHECK(skippy_mtp_greedy_sampling_fastpath_enabled());
++    CHECK(skippy_sample_token_ith(session, &sampling, 0) == verified[0]);
++    CHECK(skippy_sample_token_ith(session, &sampling, 1) == verified[1]);
++    CHECK(session->sampling_chain == sampling_chain);
++    CHECK(session->sampling_config_valid);
++    CHECK(session->sampling_backend_retired);
 +
 +    // Embedding and rerank batches request every output row. Their shared
 +    // preparation boundary must detach a sampler retained by the chat path,
@@ -425,8 +467,8 @@ index 60357184a..40f056cdc 100644
 +    llama_batch_free(multi_output);
 +    skippy_mark_context_work_pending(session->stage_model);
 +
-+    // Sampled verification retires an initialized backend chain after
-+    // detaching it. Reset must discard that one-shot chain immediately rather
++    // An explicitly retired initialized backend chain is still one-shot.
++    // Reset must discard that chain immediately rather
 +    // than reusing it for a CPU-sampled first token on the next request.
 +    CHECK(skippy_session_configure_chat_sampling(
 +            session, &sampling, "{\"grammar\":\"\"}", 0, &error) == SKIPPY_STATUS_OK);
@@ -515,3 +557,4 @@ index 000000000..cc9279e7e
 +void skippy_prepare_non_chat_workload(skippy_session * session);
 -- 
 2.54.0 (Apple Git-157)
+

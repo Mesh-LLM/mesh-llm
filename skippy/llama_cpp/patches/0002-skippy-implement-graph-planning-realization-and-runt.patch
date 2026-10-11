@@ -1,4 +1,4 @@
-From 788a2d5585b53573899dcaa7835efe705faf5dd4 Mon Sep 17 00:00:00 2001
+From 768e32b5f07ab1d9c16d8786ea9403eff6a4bffd Mon Sep 17 00:00:00 2001
 From: James Dumay <jameswdumay@gmail.com>
 Date: Sat, 19 Sep 2026 15:17:16 +1000
 Subject: [PATCH] skippy: implement graph planning realization and runtime
@@ -6,20 +6,20 @@ Subject: [PATCH] skippy: implement graph planning realization and runtime
 ---
  src/skippy-verify-checkpoint.h          |   24 +
  src/skippy/abi.cpp                      |   57 ++
- src/skippy/activation.cpp               |  995 +++++++++++++++++++
+ src/skippy/activation.cpp               | 1000 +++++++++++++++++++
  src/skippy/activation_internal.h        |   86 ++
  src/skippy/activation_layout.cpp        |  171 ++++
  src/skippy/block_boundaries.cpp         |   64 ++
  src/skippy/block_boundaries.h           |   42 +
  src/skippy/devices.cpp                  |  106 ++
  src/skippy/environment.h                |   49 +
- src/skippy/errors.h                     |   44 +
+ src/skippy/errors.h                     |   66 ++
  src/skippy/events.cpp                   |  243 +++++
  src/skippy/events_internal.h            |   35 +
  src/skippy/executable_graph.cpp         |  329 +++++++
  src/skippy/executable_graph.h           |   37 +
- src/skippy/execution-batch.cpp          |  417 ++++++++
- src/skippy/execution-single.cpp         |  613 ++++++++++++
+ src/skippy/execution-batch.cpp          |  422 ++++++++
+ src/skippy/execution-single.cpp         |  619 ++++++++++++
  src/skippy/execution_internal.h         |   20 +
  src/skippy/glm_dsa.cpp                  |  857 +++++++++++++++++
  src/skippy/glm_dsa.h                    |   14 +
@@ -29,20 +29,20 @@ Subject: [PATCH] skippy: implement graph planning realization and runtime
  src/skippy/graph_identity.cpp           | 1092 +++++++++++++++++++++
  src/skippy/graph_identity.h             |   71 ++
  src/skippy/model_lifecycle.cpp          |  155 +++
- src/skippy/model_load_config.cpp        |  186 ++++
+ src/skippy/model_load_config.cpp        |  194 ++++
  src/skippy/model_load_config_internal.h |   25 +
- src/skippy/model_loading.cpp            | 1174 +++++++++++++++++++++++
+ src/skippy/model_loading.cpp            | 1172 +++++++++++++++++++++++
  src/skippy/model_loading_internal.h     |   38 +
  src/skippy/model_package.cpp            |  782 +++++++++++++++
  src/skippy/model_source.cpp             |  457 +++++++++
  src/skippy/package_tensor_binding.cpp   |  120 +++
  src/skippy/package_tensor_binding.h     |   27 +
- src/skippy/runtime_support.h            |   50 +
+ src/skippy/runtime_support.h            |   56 ++
  src/skippy/runtime_types.h              |  173 ++++
- src/skippy/sampling.cpp                 |  961 +++++++++++++++++++
+ src/skippy/sampling.cpp                 |  959 +++++++++++++++++++
  src/skippy/sampling_internal.h          |   49 +
  src/skippy/session.cpp                  |  483 ++++++++++
- src/skippy/speculative_decoding.cpp     |  531 ++++++++++
+ src/skippy/speculative_decoding.cpp     |  549 +++++++++++
  src/skippy/speculative_internal.h       |   32 +
  src/skippy/stage_plan.cpp               |  632 ++++++++++++
  src/skippy/stage_realization.cpp        |  247 +++++
@@ -53,8 +53,8 @@ Subject: [PATCH] skippy: implement graph planning realization and runtime
  src/skippy/state_effects.cpp            |  436 +++++++++
  src/skippy/state_effects.h              |   74 ++
  src/skippy/tokenization.cpp             |  179 ++++
- src/skippy/verification.cpp             |  265 +++++
- 50 files changed, 14714 insertions(+)
+ src/skippy/verification.cpp             |  248 +++++
+ 50 files changed, 14763 insertions(+)
  create mode 100644 src/skippy-verify-checkpoint.h
  create mode 100644 src/skippy/abi.cpp
  create mode 100644 src/skippy/activation.cpp
@@ -201,7 +201,7 @@ index 000000000..cfc6a2e66
 +}
 diff --git a/src/skippy/activation.cpp b/src/skippy/activation.cpp
 new file mode 100644
-index 000000000..abe36674c
+index 000000000..96e72b2a4
 --- /dev/null
 +++ b/src/skippy/activation.cpp
 @@ -0,0 +1,1000 @@
@@ -287,7 +287,7 @@ index 000000000..abe36674c
 +        return false;
 +    }
 +    const uint32_t n_rs_seq = session->ctx->get_cparams().n_rs_seq;
-+    if (n_rs_seq == 0 || token_count == 0 || token_count > static_cast<size_t>(n_rs_seq)) {
++    if (!skippy_verify_window_fits_rollback(token_count, n_rs_seq)) {
 +        return false;
 +    }
 +    return llm_arch_supports_rs_rollback(session->ctx->get_model().arch);
@@ -5993,7 +5993,7 @@ index 000000000..caa9fcd6d
 +} // extern "C"
 diff --git a/src/skippy/model_load_config.cpp b/src/skippy/model_load_config.cpp
 new file mode 100644
-index 000000000..7a3e0fe09
+index 000000000..22aa384f8
 --- /dev/null
 +++ b/src/skippy/model_load_config.cpp
 @@ -0,0 +1,194 @@
@@ -6224,7 +6224,7 @@ index 000000000..0f7c83139
 +        llama_context_params & params);
 diff --git a/src/skippy/model_loading.cpp b/src/skippy/model_loading.cpp
 new file mode 100644
-index 000000000..20b7abad7
+index 000000000..460cf5688
 --- /dev/null
 +++ b/src/skippy/model_loading.cpp
 @@ -0,0 +1,1172 @@
@@ -8856,10 +8856,10 @@ index 000000000..751048af8
 +        std::string & error);
 diff --git a/src/skippy/runtime_support.h b/src/skippy/runtime_support.h
 new file mode 100644
-index 000000000..55499ea20
+index 000000000..78123fc96
 --- /dev/null
 +++ b/src/skippy/runtime_support.h
-@@ -0,0 +1,50 @@
+@@ -0,0 +1,56 @@
 +#pragma once
 +
 +#include "skippy/common.h"
@@ -8867,6 +8867,7 @@ index 000000000..55499ea20
 +
 +#include "llama-memory.h"
 +
++#include <cstddef>
 +#include <cstdint>
 +
 +struct llama_model;
@@ -8902,6 +8903,11 @@ index 000000000..55499ea20
 +bool skippy_memory_needs_verify_checkpoint(llama_memory_t memory);
 +void skippy_mtp_clear_session_state(skippy_session * session);
 +void skippy_clear_chat_sampling(skippy_session * session);
++// A verify span retains its anchor; only the remaining rows need snapshots.
++inline bool skippy_verify_window_fits_rollback(size_t token_count, uint32_t snapshot_count) {
++    return snapshot_count > 0 && token_count > 0 && token_count - 1 <= snapshot_count;
++}
++
 +bool skippy_verify_window_can_roll_back_in_place(
 +        const skippy_session * session,
 +        size_t token_count);
@@ -9091,10 +9097,10 @@ index 000000000..e15910887
 +};
 diff --git a/src/skippy/sampling.cpp b/src/skippy/sampling.cpp
 new file mode 100644
-index 000000000..8c87bbe07
+index 000000000..5c2749445
 --- /dev/null
 +++ b/src/skippy/sampling.cpp
-@@ -0,0 +1,961 @@
+@@ -0,0 +1,959 @@
 +#include "skippy/sampling.h"
 +#include "skippy/errors.h"
 +#include "skippy/execution_internal.h"
@@ -9826,9 +9832,8 @@ index 000000000..8c87bbe07
 +        // Backend initialization belongs to the sampler-chain lifetime. The
 +        // scheduler may reset and reuse the same chain on every iteration;
 +        // attaching it again violates llama_sampler_chain's one-shot init
-+        // contract. A retired chain was detached mid-lifetime (sampled verify
-+        // windows need every output row, which backend sampling forbids) and
-+        // must likewise never be re-attached.
++        // contract. A chain detached mid-lifetime must likewise never be
++        // re-attached; ordinary sampled verification retains its attachment.
 +        return;
 +    }
 +    session->sampling_backend_enabled = false;
@@ -10009,9 +10014,8 @@ index 000000000..8c87bbe07
 +            !session->sampling_backend_enabled &&
 +            session->grammar_sampler == nullptr &&
 +            skippy_sampling_is_greedy_equivalent(sampling)) {
-+        if (session->sampling_chain != nullptr) {
-+            skippy_clear_chat_sampling(session);
-+        }
++        // Preserve the chain and its history cursor: verification uses its
++        // presence to stop at the first rejected proposal row.
 +        const bool ignore_eog =
 +                sampling != nullptr &&
 +                (sampling->flags & SKIPPY_SAMPLING_FLAG_IGNORE_EOS) != 0;
@@ -10602,10 +10606,10 @@ index 000000000..d5cce47f2
 +} // extern "C"
 diff --git a/src/skippy/speculative_decoding.cpp b/src/skippy/speculative_decoding.cpp
 new file mode 100644
-index 000000000..e5f0d9032
+index 000000000..c9f39417b
 --- /dev/null
 +++ b/src/skippy/speculative_decoding.cpp
-@@ -0,0 +1,547 @@
+@@ -0,0 +1,549 @@
 +#include "skippy/speculative_decoding.h"
 +#include "skippy/environment.h"
 +#include "skippy/errors.h"
@@ -10684,7 +10688,9 @@ index 000000000..e5f0d9032
 +};
 +
 +bool skippy_mtp_greedy_sampling_fastpath_enabled() {
-+    return skippy_env_enabled("SKIPPY_NATIVE_MTP_GREEDY_SAMPLING_FASTPATH");
++    // Resolve once per process; an explicit false value remains an opt-out.
++    static const bool enabled = !skippy_env_disabled("SKIPPY_NATIVE_MTP_GREEDY_SAMPLING_FASTPATH");
++    return enabled;
 +}
 +
 +void skippy_mtp_clear_session_state(skippy_session * session) {
@@ -14911,10 +14917,10 @@ index 000000000..54753a161
 +} // extern "C"
 diff --git a/src/skippy/verification.cpp b/src/skippy/verification.cpp
 new file mode 100644
-index 000000000..3ccd2f6a4
+index 000000000..edf0a9a0b
 --- /dev/null
 +++ b/src/skippy/verification.cpp
-@@ -0,0 +1,265 @@
+@@ -0,0 +1,248 @@
 +#include "skippy.h"
 +#include "skippy/activation_internal.h"
 +#include "skippy/errors.h"
@@ -15050,23 +15056,6 @@ index 000000000..3ccd2f6a4
 +            skippy_set_error(out_error, SKIPPY_STATUS_BUFFER_TOO_SMALL, "token output buffer is too small");
 +            return SKIPPY_STATUS_BUFFER_TOO_SMALL;
 +        }
-+    }
-+
-+    if (skippy_runtime_is_terminal_stage(&session->stage_model->config) && session->sampling_backend_enabled) {
-+        // Backend (in-graph) sampling permits at most one output row per
-+        // sequence per decode, but sampled verification must output every row
-+        // of the window, so llama_decode would reject the batch outright.
-+        // Detach the backend sampler and fall back to CPU-chain sampling for
-+        // this session: the chain itself is untouched and the row sampling
-+        // below consumes it through skippy_sample_token_ith. This chain stays
-+        // retired; only building a fresh chain permits backend offload again.
-+        llama_set_sampler(session->ctx, session->seq_id, nullptr);
-+        session->sampling_backend_enabled = false;
-+        // The detached chain has already been backend-initialized and
-+        // llama_sampler_chain_backend_init asserts on reuse, so retire it
-+        // from offload for the rest of its lifetime; a rebuilt chain may
-+        // offload again.
-+        session->sampling_backend_retired = true;
 +    }
 +
 +    const bool activation_input = skippy_is_filtered(session) && session->stage_model->config.layer_start > 0;
