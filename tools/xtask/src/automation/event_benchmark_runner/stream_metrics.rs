@@ -67,12 +67,12 @@ impl Stream {
             .checked_add(bytes.len())
             .ok_or("SSE byte count overflow")?;
         if self.seen > MAX_BYTES {
-            return Err("benchmark SSE exceeds16MiB".into());
+            return Err("benchmark SSE exceeds 16MiB".into());
         }
         self.pending.extend_from_slice(bytes);
         while let Some(end) = self.pending.iter().position(|byte| *byte == b'\n') {
             if end > MAX_LINE {
-                return Err("benchmark SSE line exceeds1MiB".into());
+                return Err("benchmark SSE line exceeds 1MiB".into());
             }
             let line = self.pending.drain(..=end).collect::<Vec<_>>();
             self.line(&line, elapsed);
@@ -81,7 +81,7 @@ impl Stream {
             }
         }
         if self.pending.len() > MAX_LINE {
-            return Err("benchmark SSE line exceeds1MiB".into());
+            return Err("benchmark SSE line exceeds 1MiB".into());
         }
         Ok(())
     }
