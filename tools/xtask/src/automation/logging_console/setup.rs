@@ -193,7 +193,7 @@ fn daemon(inputs: &NodeInputs<'_>, member: MemberId, label: &str) -> Launch {
     }
 }
 
-fn inherited() -> std::collections::BTreeMap<std::ffi::OsString, Value> {
+pub(in crate::automation) fn inherited() -> std::collections::BTreeMap<std::ffi::OsString, Value> {
     std::env::vars_os()
         .map(|(key, value)| {
             let sensitive = key.to_string_lossy().to_ascii_uppercase();

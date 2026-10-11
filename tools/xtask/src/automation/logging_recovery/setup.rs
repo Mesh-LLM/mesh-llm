@@ -91,9 +91,7 @@ fn node(
     let runtime = directory.join(format!("state/{label}/runtime"));
     std::fs::create_dir_all(&home)?;
     std::fs::create_dir_all(&runtime)?;
-    let mut environment = std::env::vars_os()
-        .map(|(key, value)| (key, Value::Public(value)))
-        .collect::<std::collections::BTreeMap<_, _>>();
+    let mut environment = crate::automation::logging_console::setup::inherited();
     environment.insert("HOME".into(), Value::Public(home.into()));
     environment.insert(
         "MESH_LLM_RUNTIME_ROOT".into(),
