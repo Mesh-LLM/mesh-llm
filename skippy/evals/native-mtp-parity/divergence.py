@@ -15,6 +15,26 @@ import numpy as np
 PROBE = Path(__file__).resolve().parent / "build" / "margin_probe"
 
 
+def chat_messages(messages: list[dict]) -> list[dict]:
+    """Tool-call arguments as mappings, as Qwen3-Coder's chat template expects."""
+    out = []
+    for m in messages:
+        m = {**m, "content": m.get("content") or ""}
+        if m.get("tool_calls"):
+            calls = []
+            for c in m["tool_calls"]:
+                args = c["function"].get("arguments") or "{}"
+                if isinstance(args, str):
+                    try:
+                        args = json.loads(args)
+                    except json.JSONDecodeError:
+                        args = {"raw": args}
+                calls.append({**c, "function": {**c["function"], "arguments": args}})
+            m["tool_calls"] = calls
+        out.append(m)
+    return out
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--gguf", required=True)
@@ -36,8 +56,8 @@ def main() -> None:
             continue
         content_off, content_spec = json.loads(o["text"])[0] or "", json.loads(r["text"])[0] or ""
         p = prompts[r["id"]]
-        prompt = tok.apply_chat_template(p["messages"], tools=p.get("tools") or None, tokenize=True,
-                                         add_generation_prompt=True)
+        prompt = tok.apply_chat_template(chat_messages(p["messages"]), tools=p.get("tools") or None,
+                                         tokenize=True, add_generation_prompt=True)
         t_off = tok(content_off, add_special_tokens=False)["input_ids"]
         t_spec = tok(content_spec, add_special_tokens=False)["input_ids"]
         k = 0
