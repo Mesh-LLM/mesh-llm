@@ -4,7 +4,9 @@ use serde::Deserialize;
 #[derive(Deserialize)]
 struct Response {
     choices: Vec<Choice>,
-    timings: Timings,
+    // Servers without llama.cpp timing data still produce displayable choices.
+    #[serde(default)]
+    timings: Option<serde_json::Value>,
 }
 
 #[derive(Deserialize)]
@@ -41,10 +43,14 @@ pub(crate) fn run(args: &[String]) -> DynResult<()> {
         .first()
         .ok_or("chat response has no choices")?;
     let content: String = choice.message.content.chars().take(200).collect();
-    let timings = response.timings;
-    crate::repository::check_report::CheckReport::success(format!(
-        "{content}\n  prompt: {:.1} tok/s  gen: {:.1} tok/s ({} tok)\n",
-        timings.prompt_per_second, timings.predicted_per_second, timings.predicted_n
-    ))
-    .emit()
+    let timings = response
+        .timings
+        .and_then(|value| serde_json::from_value::<Timings>(value).ok())
+        .map_or_else(String::new, |timings| {
+            format!(
+                "  prompt: {:.1} tok/s  gen: {:.1} tok/s ({} tok)\n",
+                timings.prompt_per_second, timings.predicted_per_second, timings.predicted_n
+            )
+        });
+    crate::repository::check_report::CheckReport::success(format!("{content}\n{timings}")).emit()
 }
