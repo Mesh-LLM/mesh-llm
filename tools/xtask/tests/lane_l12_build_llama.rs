@@ -193,14 +193,27 @@ fn mismatched_generator_clears_cache() {
         "CMAKE_GENERATOR:INTERNAL=Ninja\n"
     );
 }
+// The fixture PATH keeps system directories, so a runner-installed ninja there
+// makes the "absent ninja" cases unobservable.
+fn system_ninja_present() -> bool {
+    ["/usr/bin", "/bin", "/usr/sbin", "/sbin"]
+        .iter()
+        .any(|dir| std::path::Path::new(dir).join("ninja").exists())
+}
 #[test]
 fn absent_ninja_selects_makefiles() {
+    if system_ninja_present() {
+        return;
+    }
     let fixture = Fixture::new(false);
     success(fixture.command("Linux").output().unwrap());
     assert!(fixture.log().contains("-G Unix Makefiles"));
 }
 #[test]
 fn inherited_generator_does_not_override_selection() {
+    if system_ninja_present() {
+        return;
+    }
     let fixture = Fixture::new(false);
     success(
         fixture
