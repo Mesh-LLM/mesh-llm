@@ -3,8 +3,7 @@
 Repository QA automation follows `.agents/skills/manage-ci/SKILL.md`: add no
 new Python tooling; use typed `tools/xtask` commands behind thin Just recipes.
 From the repository root, `cargo xtool repo-consistency ci-crate-lists` is an
-existing example. The QA Python commands below are transitional until their
-Rust replacements pass behavioral parity; do not remove existing validation.
+existing example.
 
 Mesh LLM exposes an OpenAI-compatible API on `http://localhost:9337/v1`, so most agent tools can talk to it directly.
 

@@ -14,7 +14,7 @@ waiting-prefix policy boundary:
   tail latency.
 
 The source of truth is
-[`skippy/skippy/evals/skippy-scheduler-fixtures.json`](../skippy/evals/skippy-scheduler-fixtures.json).
+[`skippy/evals/skippy-scheduler-fixtures.json`](../evals/skippy-scheduler-fixtures.json).
 It pins the Hugging Face commit, selected source, eight session IDs, selection
 rules, runtime shape, generated prompt-manifest hash, exact GGUF repository
 revision and content hash (including its embedded tokenizer), and acceptance

@@ -1344,7 +1344,6 @@ catalogs. `cargo xtool repository cargo-packages` in current candidate actions
 translates a pre-extraction batch to its fixed successor owners when the
 protected executor declares `--generation legacy` and the candidate contains
 the extracted package builder. Explicit generation disambiguates the reused
-package name even in a one-package plan. Matrix executors must switch to
 package name even in a one-package plan. Older pinned actions retain their own
 Python helper in the action checkout. Matrix executors must switch to current
 generation when protected workspace names migrate; fixed platform selectors remain legacy. It checks
