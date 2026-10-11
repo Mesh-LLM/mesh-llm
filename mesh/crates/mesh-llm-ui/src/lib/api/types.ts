@@ -60,6 +60,7 @@ export interface MeshModelRaw {
   status: 'warm' | 'cold'
   size_gb?: number
   node_count: number
+  mesh_vram_gb?: number
   capabilities?: ModelCapabilities
   quantization?: string
   context_length?: number
@@ -76,6 +77,7 @@ export interface MeshModelRaw {
   moe?: boolean
   vision?: boolean
   license?: string
+  fit_label?: string
 }
 
 export enum LatencySource {
