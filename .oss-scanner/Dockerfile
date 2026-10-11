@@ -11,14 +11,17 @@
 # The enrolment lives in anthropics/oss-scanner under projects/mesh-llm/.
 FROM rust:1-trixie
 
+# The repo's .cargo/config.toml sets rustc-wrapper = "sccache", which is a developer
+# convenience and is not installed here; the empty env var overrides it.
 ENV DEBIAN_FRONTEND=noninteractive \
     CARGO_TERM_COLOR=never \
+    CARGO_BUILD_RUSTC_WRAPPER="" \
     RUST_BACKTRACE=1
 
 # Mirrors the Linux build deps used by .github/workflows/release.yml.
 RUN apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates git curl jq lsof \
-      build-essential clang lld cmake ninja-build pkg-config \
+      build-essential clang lld mold cmake ninja-build pkg-config \
       libssl-dev libdbus-1-dev python3 \
     && rm -rf /var/lib/apt/lists/*
 
