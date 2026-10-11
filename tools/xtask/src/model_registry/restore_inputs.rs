@@ -98,6 +98,9 @@ fn direct(inputs: &Inputs<'_>, output: &str) -> CheckReport {
     if !safe_filename(inputs.file) {
         return rejected("model_file must be a safe single filename");
     }
+    if !inputs.url.starts_with("https://") || inputs.url.chars().any(char::is_control) {
+        return rejected("model_url must be an https:// URL without control characters");
+    }
     let url = format!("url={}", inputs.url);
     let file = format!("file={}", inputs.file);
     append(output, &[&url, &file, "sha256=", "size_bytes="])
