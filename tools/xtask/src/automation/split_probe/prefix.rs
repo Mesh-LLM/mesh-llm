@@ -242,4 +242,12 @@ mod tests {
             .is_err()
         );
     }
+    #[test]
+    fn warm_repeat_must_match_uncached_continuation() {
+        let same = ["a", "a", "b", "b", "c", "c"].map(String::from);
+        assert!(same_continuations(&same).is_ok());
+        let diverged = ["a", "a", "b", "x", "c", "c"].map(String::from);
+        let error = same_continuations(&diverged).unwrap_err().to_string();
+        assert!(error.contains("warm request 4 diverged from uncached request 3"));
+    }
 }
