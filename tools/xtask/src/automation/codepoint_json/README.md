@@ -1,4 +1,4 @@
-# Lossless automation JSON
+# Order-preserving automation JSON
 
 Replay export and workload evidence share this codepoint-based JSON owner.
 The parser and string emission come from the verified replay implementation.
@@ -7,8 +7,9 @@ which is backed by `serde_json`, so a lone escaped surrogate (for example
 `"\ud800"`) in a string or object key is rejected as invalid input rather than
 preserved. Strings therefore hold Unicode scalar values only; duplicate
 reduction compares decoded codepoints and never converts through the
-String-based `ci_metrics_value::Value`. Numeric tokens alone reuse the existing
-exact-number parser, and finite float spelling still uses `float_repr`.
+String-based `ci_metrics_value::Value`. Integers that fit i64 or u64 are kept exactly;
+any other number is converted to f64, so values beyond f64 precision (for example `0.10000000000000001`) are
+rounded. Finite float spelling still uses `float_repr`.
 
 Keep each complete tree lifetime inside its consumer's 64 MiB worker. Parsing,
 duplicate replacement, cloning, validation, rendering, error unwinding and final
