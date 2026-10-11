@@ -4,7 +4,7 @@ mod evidence;
 mod execution;
 pub(super) mod http;
 mod options;
-mod setup;
+pub(super) mod setup;
 use crate::command::DynResult;
 use serde::Serialize;
 use std::{io::Write, path::Path};
@@ -22,7 +22,7 @@ const CHECKS: &[&str] = &[
     "restart_persistence",
     "trusted_local_rejection",
     "dedicated_sse_replay_gap_and_authoritative_hydration",
-    "real_console_accessibility_and_responsive_modes",
+    "real_console_playwright",
     "cleanup",
 ];
 

@@ -2,7 +2,7 @@
 use super::ModelStage;
 use crate::{command::DynResult, repository::check_args::Grammar};
 use serde::Serialize;
-use std::{fs, io::Write, net::SocketAddr};
+use std::{io::Write, net::SocketAddr};
 const GRAMMAR: Grammar = Grammar {
     usage: "cargo xtool automation openai-smoke-config cache --output PATH --model-id ID --model-path PATH --layer-end N --ctx-size N --bind-addr ADDR --payload KIND --flash-attn KIND --n-batch N --n-ubatch N [--upstream-endpoint driver]",
     values: &[
@@ -139,6 +139,10 @@ pub(super) fn run(args: &[String]) -> DynResult<()> {
     };
     let mut bytes = serde_json::to_vec_pretty(&config)?;
     bytes.push(b'\n');
-    fs::File::create(required("--output")?)?.write_all(&bytes)?;
+    super::create_output(
+        std::path::Path::new(required("--output")?),
+        std::path::Path::new(config.stage.model_path),
+    )?
+    .write_all(&bytes)?;
     Ok(())
 }
