@@ -101,6 +101,23 @@ fn invalid_openai_smoke_inputs_do_not_truncate_existing_config_or_modify_model()
     assert_eq!(std::fs::read(output).unwrap(), b"retained\n");
 }
 
+#[cfg(unix)]
+#[test]
+fn output_aliasing_the_source_model_is_refused_without_truncation() {
+    let dir = tempfile::tempdir().unwrap();
+    let model = dir.path().join("model.gguf");
+    std::fs::write(&model, b"model fixture\n").unwrap();
+    let hard_link = dir.path().join("alias.json");
+    std::fs::hard_link(&model, &hard_link).unwrap();
+    let symlink = dir.path().join("link.json");
+    std::os::unix::fs::symlink(&model, &symlink).unwrap();
+    for output in [&model, &hard_link, &symlink] {
+        let result = execute(&model, output, "32", "256", &[]);
+        assert!(!result.status.success());
+        assert_eq!(std::fs::read(&model).unwrap(), b"model fixture\n");
+    }
+}
+
 #[test]
 fn openai_smoke_cli_requires_complete_inputs_and_help_has_no_file_side_effect() {
     let output = Command::new(env!("CARGO_BIN_EXE_xtask"))

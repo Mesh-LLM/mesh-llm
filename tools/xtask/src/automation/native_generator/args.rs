@@ -93,11 +93,14 @@ pub(super) fn parse(arguments: &[String]) -> Result<Options, Error> {
         git: GitDiff {
             executable,
             source_root: std::fs::canonicalize(required("--source-root")?)?,
-            base: values
-                .get("--diff-base")
-                .copied()
-                .unwrap_or("HEAD")
-                .to_owned(),
+            base: match values.get("--diff-base").copied().unwrap_or("HEAD") {
+                base if base.is_empty() || base.starts_with('-') => {
+                    return Err(Error::Arguments(
+                        "--diff-base must be a revision, not an option",
+                    ));
+                }
+                base => base.to_owned(),
+            },
             environment,
             max_bytes,
             timeout: std::time::Duration::from_secs(timeout),

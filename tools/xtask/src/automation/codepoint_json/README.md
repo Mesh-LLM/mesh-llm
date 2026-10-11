@@ -2,8 +2,11 @@
 
 Replay export and workload evidence share this codepoint-based JSON owner.
 The parser and string emission come from the verified replay implementation.
-Strings and object keys retain lone escaped surrogates; duplicate reduction
-uses decoded codepoints and never converts through Rust `String` or the
+Parsing goes through the order-preserving `ci_plan::document::Json` decoder,
+which is backed by `serde_json`, so a lone escaped surrogate (for example
+`"\ud800"`) in a string or object key is rejected as invalid input rather than
+preserved. Strings therefore hold Unicode scalar values only; duplicate
+reduction compares decoded codepoints and never converts through the
 String-based `ci_metrics_value::Value`. Numeric tokens alone reuse the existing
 exact-number parser, and finite float spelling still uses `float_repr`.
 

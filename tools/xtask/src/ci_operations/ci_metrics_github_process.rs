@@ -4,7 +4,7 @@ use crate::process::{
     self, Cancellation, Completion, Limits, ProcessSpec, RawCaptureOptions, Readiness, Value,
 };
 use std::collections::BTreeMap;
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::io;
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
@@ -56,7 +56,7 @@ fn run_in(
     }
     let cwd = cwd.canonicalize()?;
     let spec = ProcessSpec {
-        executable: executable(&cwd, environment.get(&OsString::from("PATH")).cloned())?,
+        executable: executable(&cwd, path_variable(environment))?,
         arguments: arguments
             .iter()
             .map(|arg| Value::Public(arg.clone().into()))
@@ -67,16 +67,7 @@ fn run_in(
             .map(|(key, value)| {
                 // Only gh's authentication variables need process redaction.
                 // Unrelated inherited multiline keys retain ordinary gh behavior.
-                let secret = !value.is_empty()
-                    && matches!(
-                        key.to_str(),
-                        Some(
-                            "GH_TOKEN"
-                                | "GITHUB_TOKEN"
-                                | "GH_ENTERPRISE_TOKEN"
-                                | "GITHUB_ENTERPRISE_TOKEN"
-                        )
-                    );
+                let secret = !value.is_empty() && is_token_name(key);
                 (
                     key.clone(),
                     if secret {
@@ -138,6 +129,35 @@ fn run_in(
             &report.process.stderr.bytes_retained
         }),
     })
+}
+
+/// Windows environment names are case-insensitive (`Path` is common);
+/// other platforms keep the exact `PATH` spelling.
+fn env_name_matches(key: &OsStr, name: &str) -> bool {
+    let key = key.to_str();
+    if cfg!(windows) {
+        key.is_some_and(|key| key.eq_ignore_ascii_case(name))
+    } else {
+        key == Some(name)
+    }
+}
+
+fn path_variable(environment: &Environment) -> Option<OsString> {
+    environment
+        .iter()
+        .find(|(key, _)| env_name_matches(key, "PATH"))
+        .map(|(_, value)| value.clone())
+}
+
+fn is_token_name(key: &OsStr) -> bool {
+    [
+        "GH_TOKEN",
+        "GITHUB_TOKEN",
+        "GH_ENTERPRISE_TOKEN",
+        "GITHUB_ENTERPRISE_TOKEN",
+    ]
+    .iter()
+    .any(|name| env_name_matches(key, name))
 }
 
 fn executable(cwd: &Path, path: Option<OsString>) -> io::Result<PathBuf> {

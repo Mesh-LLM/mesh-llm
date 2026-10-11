@@ -180,7 +180,7 @@ materializer symlink is verified by canonical file bytes, not a directory hash.
 | `adaptive` | Adds the `mesh-adaptive` backend without expanding fixed capacity |
 | `manifest`, `benchy` | Pinned trace-manifest path and synthetic benchy file artifact when selected |
 | `output` | Absolute owned artifact directory |
-| `timeout_seconds`, `cell_timeout_seconds`, `request_timeout_seconds` | Absolute matrix/cell/request budgets; matrix at least13s, cell at least10s, request positive and less than cell |
+| `timeout_seconds`, `cell_timeout_seconds`, `request_timeout_seconds` | Absolute matrix/cell/request budgets; matrix at least 13 s, cell at least 10 s, request positive and less than cell |
 | `resume`, `force` | Mutually exclusive; resume revalidates complete cells, force quarantines prior cell bytes |
 
 Each selected model entry has `key`, `model` (GGUF artifact) and `backends`.
@@ -272,7 +272,7 @@ cargo xtool automation replay-matrix competitive-report \
   --artifact /path/to/native/platform-artifact
 ```
 
-This consumes only the native schema2 plan, exact raw config snapshot and
+This consumes only the native schema 2 plan, exact raw config snapshot and
 completion-bound cells; legacy Python archives remain separate historical
 artifacts. A partial report omits unmarked cells and says `report_complete=false`;
 a marked invalid cell refuses reporting. Root/cell/worker/report output paths

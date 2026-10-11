@@ -329,6 +329,9 @@ jobs:
           node-version: 24.20.0
           package-manager-cache: false
 
+      - name: Prepare smoke automation
+        uses: ./.github/actions/prepare-automation
+
       # Uses existing CPython 3.12 and a hash-locked SDK-only environment.
       - name: Prepare required locked SDK clients
         uses: ./.github/actions/setup-canary-python

@@ -143,7 +143,7 @@ Attempted automated repair by Goose from nightly run evidence."
       --reader "${REPLAY_READER:?native replay reader required}" --timeout 21600 \
       --ref fixed=HEAD --ref "base=$BASE_SHA" \
       --dataset-file "$REPLAY_DATASET_FILE" \
-      --output "$OUTPUT_DIR/repair/$family" || RERUN_FAILED=1
+      --output "$OUTPUT_DIR/repair/$family" </dev/null || RERUN_FAILED=1
   done < "$REPLAY_MODELS_FILE"
   HISTORY_ARGS=(
     --matrix "$MATRIX_FILE"

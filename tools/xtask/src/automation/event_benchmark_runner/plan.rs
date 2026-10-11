@@ -72,7 +72,7 @@ impl Spec {
             || self.scenarios.len() > 64
             || total.is_none_or(|n| n > MAX_PAIRS)
         {
-            return Err("benchmark plans require positive primary/scenario counts, at least one scenario and at most10000 pairs".into());
+            return Err("benchmark plans require positive primary/scenario counts, at least one scenario and at most 10000 pairs".into());
         }
         let mut names = BTreeSet::new();
         for name in &self.scenarios {

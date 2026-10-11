@@ -52,7 +52,7 @@ pub(super) fn sentinel(job: &Node) -> Result<(), String> {
             {
                 return Err("sentinel no-checkout boundary excludes checkout/local audits".into());
             }
-            if action.starts_with("actions/cache/") {
+            if action.starts_with("actions/cache/") || action.starts_with("actions/cache@") {
                 if !matches!(
                     action,
                     "actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25"

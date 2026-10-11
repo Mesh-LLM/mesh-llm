@@ -1,20 +1,15 @@
 # Local rollout consistency fixtures
 
-Task 26 preparation only. These sources and fixtures have not been compiled,
-formatted, linted, or executed. Cargo and associated validation are reserved.
-No protected merge, dispatch, caller cutover, or acceptance is established.
+These sources and fixtures are compiled and run with the `xtask` unit tests.
+They establish local fact consistency only. No protected merge, dispatch,
+caller cutover, or acceptance is established.
 
 ## Ownership and integration
 
-Only `tools/xtask/src/automation/rollout/` and
-`tools/xtask/tests/migration_rollout/` are new. Shared registrations are left
-unchanged. Integration needs these edits, performed by the shared-file owner:
-
-1. Add `pub(crate) mod rollout;` to `src/automation/mod.rs`.
-2. Add `Rollout(&'a [String])` to `cli::CliCommand` and parse
-   `automation rollout <rest>` before the generic `automation` arm.
-3. Dispatch `CliCommand::Rollout(rest)` to `automation::rollout::run(rest)`.
-4. Include `automation::rollout::USAGE` in help.
+`tools/xtask/src/automation/rollout/` owns the validator and
+`tools/xtask/tests/migration_rollout/` owns its fixtures. The command is
+registered as `automation rollout` in `src/automation/mod.rs` and `src/cli.rs`,
+and `automation::rollout::USAGE` is included in help.
 
 No dependency, manifest, workflow, catalog, or test-target registration is
 needed. The module's `cfg(test)` includes `tests/migration_rollout/mod.rs`.
@@ -74,25 +69,18 @@ Every successful local result explicitly reports
 selected identities and input hashes without adding fields to planner output
 or changing the canonical plan digest. A hash authenticates no author.
 
-## Pending validation after queue grant
+## Validation
 
-After shared registration, run serially from the integrated candidate:
+Run serially:
 
 ```sh
-cargo fmt -p xtask
-cargo fmt -p xtask --check
-cargo check --locked -p xtask
-cargo test --locked -p xtask migration_rollout -- --nocapture
-cargo clippy --locked -p xtask --all-targets -- -D warnings
-just no-console-print
-just automation-bootstrap
+cargo test --locked -p xtask --bin xtask migration_rollout -- --nocapture
 ```
 
-The focused suite contains 45 tests on Unix, 44 on Windows. A zero-test run is
+The focused suite contains 30 tests on Unix, 29 on Windows. A zero-test run is
 not evidence. Tests create isolated local Git repositories and inert binary
 files; no Python, network, service, or real rollout runs. The success fixtures
-do not establish any predecessor acceptance. Existing predecessor tests and
-the full repository validation union remain the integration owner's gates.
+do not establish any predecessor acceptance.
 
 Drive the registered command through a terminal with a locally prepared
 observation envelope and retained existing bootstrap/parity files:
@@ -104,8 +92,7 @@ cargo xtool automation rollout --approve /absolute/observations.json
 
 The first must report local consistency only; the second must reject the
 unknown option. The in-process command fixture exercises the same dispatcher
-with inert evidence. Do not rerun legacy Python parity, dispatch dual runs, or
-claim task 26 acceptance under a Cargo queue grant alone.
+with inert evidence. Do not claim task 26 acceptance from these local checks.
 
 ## Open acceptance contracts
 
