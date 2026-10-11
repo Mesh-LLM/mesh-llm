@@ -140,6 +140,30 @@ and dispatches. Each author's accumulated annotations remain within 4096 bytes;
 discarding excess metadata marks evidence incomplete without breaking HTTP
 emission.
 
+### Client-marked pairs (`twin_bracket_id`)
+
+A client can mark two or more exchanges as one pair it sent to different nodes
+on purpose, for example to compare their answers. It sends the same value in the
+`x-mesh-twin-bracket` request header on each. The host trims spaces and tabs from
+the value's ends and accepts 1 to 128 characters of `[A-Za-z0-9._:-]`; a malformed
+value, or the header sent more than once, gets `400`. It copies the accepted value,
+otherwise unread, into `twin_bracket_id` on the exchange's `openai.exchange.v1`
+events. Without the header the field is absent.
+
+Three things the host never does:
+
+- **It sends no second request.** It never picks a second node or compares
+  answers; pairing is the client's choice.
+- **The serving node is not told.** The header is stripped before a request is
+  forwarded to a peer, so a serving node cannot know its answer is half of a pair.
+- **A pair is never inferred.** It is never derived from timing or content, only
+  copied from the client's header.
+
+A node that accepts the header advertises it as `capabilities.twin_bracket`
+(`{"version": 1, "header": "x-mesh-twin-bracket"}`) on `GET /api/status` and
+`GET /api/runtime`. Check it before asking a user to mark a pair: an exchange
+without `twin_bracket_id` does not show the node lacks support.
+
 ## Exact bytes and bounded side streams
 
 [Wire byte commitments](openai-wire-byte-transcripts.md) define exact SHA-256
