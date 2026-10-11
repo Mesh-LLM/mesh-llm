@@ -74,13 +74,21 @@ fn lane_report(args: &[String]) -> CheckReport {
         Ok(options) => options,
         Err(message) => return usage_error(&message),
     };
+    let digest = match (
+        options.get("--plan-digest"),
+        options.get("--canonical-plan"),
+    ) {
+        (Some(digest), Some(plan)) => Some((digest, plan)),
+        (None, None) => None,
+        _ => {
+            return usage_error("--plan-digest and --canonical-plan must be supplied together");
+        }
+    };
     let request = Request {
         lane_plan: options.value("--lane-plan"),
         needs: options.value("--needs"),
         workflow: options.get("--workflow").map(Path::new),
-        digest: options
-            .get("--plan-digest")
-            .zip(options.get("--canonical-plan")),
+        digest,
     };
     match request.validate() {
         Ok(()) => CheckReport::default(),

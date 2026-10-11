@@ -394,6 +394,7 @@ fn invalid_reference_selection_is_rejected_before_http_or_native_launch() {
     assert!(!output.success(), "{output:?}");
     assert!(candidate.requests.lock().unwrap().is_empty());
     assert!(reference.requests.lock().unwrap().is_empty());
+    let candidate = Server::new(embeddings);
     let output = invoke(
         state.path(),
         vec![
@@ -405,6 +406,7 @@ fn invalid_reference_selection_is_rejected_before_http_or_native_launch() {
             "encoder_decoder".into(),
         ],
     );
+    candidate.finish();
     assert!(!output.success(), "{output:?}");
     assert!(candidate.requests.lock().unwrap().is_empty());
 }

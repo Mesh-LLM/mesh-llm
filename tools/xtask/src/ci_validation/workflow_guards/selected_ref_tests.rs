@@ -100,6 +100,14 @@ fn selected_compiler_bootstrap_authority_and_masked_owner_execution_are_rejected
     let mut workflows = actual();
     let step = resolve(&mut workflows);
     let run = field(step, "run").unwrap().replace(
+        "--summary \"$GITHUB_STEP_SUMMARY\"",
+        "--summary \"$GITHUB_STEP_SUMMARY\" && true",
+    );
+    *field_mut(step, "run") = Node::Scalar(run);
+    assert!(check(&workflows).is_err());
+    let mut workflows = actual();
+    let step = resolve(&mut workflows);
+    let run = field(step, "run").unwrap().replace(
         "--expected-origin \"$GITHUB_SERVER_URL/$GITHUB_REPOSITORY\"",
         "--expected-origin \"$MESH_REF\"",
     );
