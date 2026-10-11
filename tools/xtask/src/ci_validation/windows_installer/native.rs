@@ -90,7 +90,17 @@ pub(super) fn fixture_host() -> Vec<u8> {
     let unit_binary = std::env::current_exe().unwrap();
     let target_debug = unit_binary.parent().unwrap().parent().unwrap();
     let path = target_debug.join("examples/migration_generator_fixture.exe");
-    assert!(fs::symlink_metadata(&path).unwrap().file_type().is_file());
+    let metadata = fs::symlink_metadata(&path).unwrap_or_else(|error| {
+        panic!(
+            "build existing migration_generator_fixture example before native installer tests: {}: {error}",
+            path.display()
+        )
+    });
+    assert!(
+        metadata.file_type().is_file(),
+        "{} must be a regular fixture executable",
+        path.display()
+    );
     let mut bytes = Vec::new();
     fs::File::open(path)
         .expect("build existing migration_generator_fixture example before native installer tests")

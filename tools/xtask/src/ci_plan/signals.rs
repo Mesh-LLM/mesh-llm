@@ -88,10 +88,15 @@ impl Change<'_> {
             Signal::RustChanged => self.any_domain(&RUST_DOMAINS),
             Signal::UiChanged => self.has_domain("ui"),
             Signal::WebsiteChanged => self.has_domain("website"),
-            Signal::WebsiteDocsChanged => {
-                self.any_path(&["website/src/docs/pages/", "website/src/_includes/"])
+            Signal::WebsiteDocsChanged => self.any_path(&[
+                "website/src/docs/pages/",
+                "website/src/_includes/",
+                "mesh/website/src/docs/pages/",
+                "mesh/website/src/_includes/",
+            ]),
+            Signal::PluginExemplarsChanged => {
+                self.any_path(&["docs/plugins/exemplars/", "mesh/docs/plugins/exemplars/"])
             }
-            Signal::PluginExemplarsChanged => self.any_path(&["docs/plugins/exemplars/"]),
             Signal::CliSurfaceChanged => self.has_domain("cli"),
             Signal::DocsOnly => documentation_only(self.domains),
             Signal::BackendChanged => self.any_domain(&BACKEND_DOMAINS),
@@ -121,4 +126,25 @@ pub(super) fn signals(
             (signal.name().to_owned(), Value::Bool(value))
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::signals;
+    use crate::ci_plan::request::Profile;
+    use serde_json::Value;
+
+    #[test]
+    fn mesh_relocated_docs_and_exemplars_raise_their_signals() {
+        let files = [
+            "mesh/website/src/docs/pages/index.md".to_owned(),
+            "mesh/docs/plugins/exemplars/demo/README.md".to_owned(),
+        ];
+        let result = signals(&files, &[], Profile::PrReady);
+        assert_eq!(result["website_docs_changed"], Value::Bool(true));
+        assert_eq!(result["plugin_exemplars_changed"], Value::Bool(true));
+        let unrelated = signals(&["mesh/README.md".to_owned()], &[], Profile::PrReady);
+        assert_eq!(unrelated["website_docs_changed"], Value::Bool(false));
+        assert_eq!(unrelated["plugin_exemplars_changed"], Value::Bool(false));
+    }
 }

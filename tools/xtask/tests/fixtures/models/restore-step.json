@@ -84,7 +84,7 @@
     "github_output": ""
   },
   {
-    "name": "direct-url-newline-legacy",
+    "name": "direct-url-newline-rejected",
     "inputs": {
       "model_url": "https://example.invalid/m.gguf\nsha256=injected",
       "model_file": "m.gguf",
@@ -92,10 +92,10 @@
       "model_artifact_id": "",
       "model_cadence": ""
     },
-    "code": 0,
+    "code": 2,
     "stdout": "",
-    "stderr": "",
-    "github_output": "url=https://example.invalid/m.gguf\nsha256=injected\nfile=m.gguf\nsha256=\nsize_bytes=\n"
+    "stderr": "model_url must be an https:// URL without control characters\n",
+    "github_output": ""
   },
   {
     "name": "direct-url-only",

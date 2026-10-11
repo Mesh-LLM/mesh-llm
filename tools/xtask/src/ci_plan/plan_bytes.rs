@@ -57,7 +57,7 @@ pub(crate) fn write_string(out: &mut String, text: &str) {
             '\t' => out.push_str("\\t"),
             '\u{8}' => out.push_str("\\b"),
             '\u{c}' => out.push_str("\\f"),
-            ' '..='~' | '\u{7f}' => out.push(ch),
+            ' '..='~' => out.push(ch),
             _ => {
                 let mut units = [0_u16; 2];
                 for unit in ch.encode_utf16(&mut units) {
@@ -79,9 +79,7 @@ mod tests {
         let value = json!({"b": ["\u{1}\u{8}\t\n\u{c}\r\u{7f}\"\\é😀"], "a": {"z": 1, "y": true}});
         assert_eq!(
             render(&value),
-            r#"{"a":{"y":true,"z":1},"b":["\u0001\b\t\n\f\r"#.to_owned()
-                + "\u{7f}"
-                + r#"\"\\\u00e9\ud83d\ude00"]}"#
+            r#"{"a":{"y":true,"z":1},"b":["\u0001\b\t\n\f\r\u007f\"\\\u00e9\ud83d\ude00"]}"#
         );
     }
 }

@@ -70,12 +70,11 @@ fn selected_checkout_root_controls_default_manifest_and_source_identity() {
 #[cfg(unix)]
 #[test]
 fn manifest_identity_preserves_literal_backslash_when_path_is_posix() {
-    let directory = root().join(format!(
-        "task24-path-{}-{}",
-        std::process::id(),
-        SEQUENCE.fetch_add(1, Ordering::Relaxed)
-    ));
-    fs::create_dir(&directory).expect("test directory");
+    let temporary = tempfile::Builder::new()
+        .prefix("task24-path-")
+        .tempdir_in(root())
+        .expect("test directory");
+    let directory = temporary.path();
     let path = directory.join("review\\manifest.json");
     fs::write(&path, fixture("synthetic-manifest", "json")).expect("manifest");
 
@@ -94,5 +93,4 @@ fn manifest_identity_preserves_literal_backslash_when_path_is_posix() {
                 .expect("UTF-8")
         )
     );
-    fs::remove_dir_all(directory).expect("cleanup");
 }

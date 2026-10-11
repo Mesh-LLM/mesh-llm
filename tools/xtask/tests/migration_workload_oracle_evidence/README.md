@@ -11,9 +11,9 @@ The isolated correction passed 40 active Rust tests, including the original 32,
 and an explicit differential/file-API run against unchanged Python commands.
 That run retained 178 observations, including 72 PCM rows through both writer
 and verifier, exact successful writer bytes, error-order cases, and one-byte
-artifact tampering. See `WORKLOAD_ORACLE_CORRECTION_RECEIPT.md` at the candidate
-root for source hashes, commands, and compatibility limits. The original receipt
-and source review remain historical pre-correction records.
+artifact tampering. That correction receipt and the original source review were
+working records of the migration and are not tracked in this repository; the
+tests in this directory are the maintained evidence.
 
 Interpreter-backed differential tests have been removed. Current tests execute
 the Rust evidence writer and verifier and assert domain behavior and consumed

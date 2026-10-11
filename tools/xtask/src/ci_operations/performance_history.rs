@@ -70,7 +70,7 @@ pub(super) fn run(args: &[String]) -> CheckReport {
         },
         Err(error) => CheckReport::failure(
             String::new(),
-            format!("performance history error:{error}\n"),
+            format!("performance history error: {error}\n"),
         ),
     }
 }

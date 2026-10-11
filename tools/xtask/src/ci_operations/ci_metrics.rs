@@ -132,7 +132,9 @@ fn collect(args: &Args, out: &mut CheckReport, cancellation: &Cancellation) -> O
     if let Some(path) = markdown_out {
         write(out, path, &summary)?;
     }
-    if truthy(args.json_out.as_ref()).is_none() && markdown_out.is_none() {
+    // A raw `-` already owns stdout; appending Markdown would corrupt its JSON.
+    let raw_to_stdout = truthy(args.raw_out.as_ref()).is_some_and(|path| path == "-");
+    if truthy(args.json_out.as_ref()).is_none() && markdown_out.is_none() && !raw_to_stdout {
         out.stdout.push_str(&summary);
     }
     Ok(())

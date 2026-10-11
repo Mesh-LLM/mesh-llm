@@ -9,7 +9,7 @@ use std::{
     time::Instant,
 };
 
-pub(crate) const USAGE: &str = "automation required-smoke run --binary <absolute path> --model <id or path> --native-runtime-root <directory> [--model-class dense|recurrent] [--stack default|constrained] [--device CPU|MTL0|CUDA0] [--mmproj <path>] [--public-key-file <path>] [--expected-attestation valid|missing|invalid] [--ready-max-wait <1..3600>] [--shutdown-max-wait <1..3600>] [--state-parent <directory>]";
+pub(crate) const USAGE: &str = "automation required-smoke run --binary <absolute path> --model <id or path> --native-runtime-root <directory> [--model-class dense|recurrent] [--stack default|constrained] [--device CPU|MTL0|CUDA0] [--mmproj <path>] [--public-key-file <path>] [--expected-attestation valid|missing|invalid] [--ready-max-wait <1..3600>] [--shutdown-max-wait <1..3600>] [--state-parent <directory>] [--ctx-size <n>] [--batch-size <n> --ubatch-size <n>] [--api-port <port> --console-port <port> --headless-api-port <port> --headless-console-port <port>] (batch sizes are set together; any port flag requires all four distinct ports)";
 
 pub(crate) fn run(root: &Path, args: &[String]) -> DynResult<()> {
     if args == ["--help"] {

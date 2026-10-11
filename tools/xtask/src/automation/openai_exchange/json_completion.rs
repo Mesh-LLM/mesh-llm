@@ -21,7 +21,7 @@ impl Decoder for JsonDecoder {
     }
     fn consume(&mut self, bytes: &[u8], _: Duration) -> Result<(), String> {
         if bytes.len() > (1024 * 1024_usize).saturating_sub(self.bytes.len()) {
-            return Err("nonstream OpenAI body exceeds1MiB".into());
+            return Err("nonstream OpenAI body exceeds 1 MiB".into());
         }
         self.bytes.extend_from_slice(bytes);
         Ok(())
