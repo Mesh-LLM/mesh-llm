@@ -47,6 +47,9 @@ impl Server {
                     thread::park_timeout(Duration::from_millis(5));
                     continue;
                 };
+                // Accepted sockets inherit O_NONBLOCK from the listener on BSD/macOS;
+                // restore blocking reads so the timeouts below govern request reads.
+                stream.set_nonblocking(false).unwrap();
                 stream
                     .set_read_timeout(Some(Duration::from_secs(1)))
                     .unwrap();
