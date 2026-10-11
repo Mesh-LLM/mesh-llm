@@ -212,6 +212,26 @@ mod tests {
         assert_eq!(forwarded, expected);
     }
 
+    /// The serving node is never told a request is half of a client-marked
+    /// pair: the twin-bracket header is stripped before a request is
+    /// forwarded to a peer, and the rest of the request is untouched.
+    #[test]
+    fn the_twin_bracket_header_is_stripped_before_forwarding() {
+        let header = crate::network::openai::request_parse::MESH_TWIN_BRACKET_HEADER;
+        let raw = format!(
+            "POST /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\n{header}: pair-7\r\nContent-Length: 2\r\n\r\n{{}}"
+        );
+        let forwarded = prepare_peer_forwarded_request(raw.as_bytes()).unwrap();
+        let forwarded = String::from_utf8_lossy(&forwarded).to_ascii_lowercase();
+        assert!(!forwarded.contains(header), "{forwarded}");
+        assert!(!forwarded.contains("pair-7"), "{forwarded}");
+        assert!(
+            forwarded.contains("post /v1/chat/completions http/1.1"),
+            "{forwarded}"
+        );
+        assert!(forwarded.ends_with("\r\n\r\n{}"), "{forwarded}");
+    }
+
     /// Regression (CodeRabbit / erlich, PR #1671 round 2): routing headers
     /// must never survive a peer-to-peer hop, or a peer that re-enters
     /// `route_request` can re-route the request again with no hop bound.
