@@ -51,8 +51,10 @@ output contracts. The differential observations above are historical evidence.
 
 JSON parsing uses the default serde JSON boundary, including its nesting and
 number limits. Tests cover duplicate replacement, malformed input and complete
-document rejection. Workload evidence CLI adapters are covered by
-`migration_workload_oracle_cli`; this does not certify a workflow caller cutover.
+document rejection. Workload evidence CLI adapter coverage is planned for the
+`migration_workload_oracle_cli` target, which a later change in this stack
+wires in; it is not registered at this revision. That coverage does not certify
+a workflow caller cutover.
 
 Hashes bind local bytes only. They do not authenticate a remote producer, prove
 that a comparator ran, or prove that supplied PCM metrics came from real audio.
