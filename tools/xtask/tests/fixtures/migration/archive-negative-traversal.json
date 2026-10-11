@@ -30,7 +30,7 @@
   },
   "parity_proof": {
     "status": "legacy_behavior_observed",
-    "note": "The unit test asserts nonzero exit, diagnostic substring and no write outside the extraction root. The recorded member spelling is the test's actual ../escape input."
+    "note": "The unit test asserts nonzero exit and the diagnostic substring only; it does not assert the absence of writes outside the extraction root. The recorded member spelling is the test's actual ../escape input."
   },
   "positive_control": {
     "source_test": "scripts.tests.test_safe_extract_tar.SafeExtractTarTests.test_extracts_regular_files_with_executable_mode",
