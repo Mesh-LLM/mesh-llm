@@ -16,7 +16,7 @@ set -euo pipefail
 # their normal user cache.
 #
 # Policy is owned by the versioned JSON manifest and resolved by
-# scripts/plan-family-battery.py. The planner enforces the three-lane minimum,
+# the current typed controller. The planner enforces the three-lane minimum,
 # exact artifact revisions, and deterministic shards before this script loads
 # any model.
 #
@@ -27,6 +27,18 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 BIN_DIR="${FAMILY_BATTERY_BIN_DIR:-$ROOT/target/debug}"
+
+# A selected-source battery consumes the current controller supplied by its
+# orchestrator. Standalone current-checkout runs use the normal Just facade.
+automation=(just --justfile "$ROOT/Justfile" automation-run)
+if [[ "${MESH_LLM_AUTOMATION_BIN+set}" == set ]]; then
+  if [[ "$MESH_LLM_AUTOMATION_BIN" != /* || ! -f "$MESH_LLM_AUTOMATION_BIN" || ! -x "$MESH_LLM_AUTOMATION_BIN" ]]; then
+    echo "MESH_LLM_AUTOMATION_BIN must be an absolute executable" >&2
+    exit 1
+  fi
+  automation=("$MESH_LLM_AUTOMATION_BIN")
+fi
+
 
 MANIFEST="$ROOT/ci/llama-canary/family-certified.json"
 POLICY_PLAN=""
@@ -54,7 +66,7 @@ NATIVE_MTP_MODELS_TSV="$ARTIFACT_DIR/native-mtp-models.tsv"
 RESOLVED_MANIFEST="$ARTIFACT_DIR/resolved-models.tsv"
 SUMMARY_TSV="$ARTIFACT_DIR/summary.tsv"
 SUMMARY_MD="$ARTIFACT_DIR/summary.md"
-PLANNER="$ROOT/scripts/plan-family-battery.py"
+
 POLICY_PLAN_COPY="$ARTIFACT_DIR/policy-plan.json"
 
 usage() {
@@ -120,14 +132,10 @@ require_cmd() {
 }
 
 require_cmd jq
-require_cmd python3
 if (( DRY_RUN == 0 )); then
   require_cmd hf
 fi
-if [[ ! -x "$PLANNER" ]]; then
-  echo "family battery planner is not executable: $PLANNER" >&2
-  exit 1
-fi
+
 
 for value in \
   "$STARTUP_TIMEOUT_MIN_SECS" \
@@ -165,7 +173,7 @@ printf 'family|class|repo|source_revision|file|selector|two_stage_split|three_st
 
 prepare_policy_plan() {
   local plan_args=(
-    "$PLANNER"
+    "${automation[@]}" --repo-root "$ROOT" ci family-plan
     --manifest "$MANIFEST"
     --output "$POLICY_PLAN_COPY"
   )
@@ -181,50 +189,18 @@ prepare_policy_plan() {
     if [[ -n "$FAMILY_FILTER" ]]; then
       plan_args+=(--families "$FAMILY_FILTER")
     fi
-    # The persistent family runner is offline and read-only. Validate every
-    # exact snapshot/file before native compilation when the battery is run
-    # directly; the workflow performs the same gate and passes its plan in.
-    if [[ -n "${HF_CACHE:-}" ]]; then
-      plan_args+=(--check-cache --cache-root "$HF_CACHE")
-    fi
+    # Plan authority is the frozen controller; policy/source paths stay selected.
+
     "${plan_args[@]}"
   fi
 
-  "$PLANNER" --manifest "$MANIFEST" --verify-plan "$POLICY_PLAN_COPY"
-  python3 - "$MANIFEST" "$POLICY_PLAN_COPY" "$SHARD_INDEX" <<'PY'
-import hashlib
-import json
-import sys
-from pathlib import Path
+  if [[ -n "${HF_CACHE:-}" ]]; then
+    "${automation[@]}" automation family-battery-policy --cache \
+      "$ROOT" "$MANIFEST" "$POLICY_PLAN_COPY" "$HF_CACHE"
+  fi
 
-manifest_path, plan_path, shard_index = sys.argv[1:]
-manifest_sha = hashlib.sha256(Path(manifest_path).read_bytes()).hexdigest()
-plan = json.loads(Path(plan_path).read_text(encoding="utf-8"))
-core = ["single-step", "chain", "state-handoff"]
-class_lanes = {
-    "causal_generation": core,
-    "embedding": ["embedding-smoke", "embedding-oracle"],
-    "rerank": ["rerank-smoke", "rerank-oracle"],
-    "encoder_decoder": ["encoder-decoder-smoke", "encoder-decoder-oracle"],
-    "ocr": ["ocr-smoke", "ocr-oracle"],
-    "speech_synthesis": ["speech-synthesis-smoke", "speech-synthesis-oracle"],
-    "speech_recognition": ["speech-recognition-smoke", "speech-recognition-oracle"],
-}
-if plan.get("schema_version") != 1:
-    raise SystemExit("policy plan has an unsupported schema_version")
-if plan.get("manifest_sha256") != manifest_sha:
-    raise SystemExit("policy plan does not match the checked-in manifest bytes")
-if plan.get("required_certification_lanes") != core:
-    raise SystemExit("policy plan does not preserve the three-lane certification contract")
-if plan.get("model_class_lanes") != class_lanes:
-    raise SystemExit("policy plan does not preserve the model-class lane contract")
-if not plan.get("selected_models"):
-    raise SystemExit("policy plan selected no models")
-if shard_index:
-    requested = int(shard_index)
-    if not any(shard.get("shard_index") == requested for shard in plan.get("shards", [])):
-        raise SystemExit(f"policy plan has no shard index {requested}")
-PY
+  "${automation[@]}" automation family-battery-policy \
+    "$ROOT" "$MANIFEST" "$POLICY_PLAN_COPY" "$SHARD_INDEX"
 }
 
 prepare_policy_plan
@@ -241,20 +217,7 @@ PREFLIGHT_FAILURE_COUNT=0
 PREFLIGHT_FIRST_TARGET=""
 
 snapshot_revision_from_path() {
-  python3 - "$1" <<'PY'
-import re
-import sys
-from pathlib import Path
-
-parts = Path(sys.argv[1]).parts
-for index, part in enumerate(parts[:-1]):
-    if part == "snapshots" and index + 1 < len(parts):
-        revision = parts[index + 1]
-        if re.fullmatch(r"[0-9a-f]{40,64}", revision):
-            print(revision)
-            raise SystemExit(0)
-raise SystemExit(1)
-PY
+  "${automation[@]}" automation family-model-identity --snapshot-revision "$1"
 }
 
 record_preflight_outcome() {
@@ -393,7 +356,7 @@ scan_model() {
 
   MODEL_SIZE_BYTES="$(jq '[.tensors[].byte_size] | add // 0' "$scan_json")"
   local dimensions
-  if ! dimensions="$("$PLANNER" --inspect-gguf "$target")"; then
+  if ! dimensions="$("${automation[@]}" automation family-battery-policy --inspect-gguf "$target")"; then
     jq -c -n \
       --arg family "$family" \
       --arg model_id "$model_id" \
@@ -428,38 +391,42 @@ scan_model() {
 
 preflight_environment() {
   local model_root="${HF_HOME:-$(dirname "$PREFLIGHT_FIRST_TARGET")}"
-  python3 - "$ARTIFACT_DIR" "$model_root" "$MIN_FREE_GIB" "$PREFLIGHT_DIR/environment.json" <<'PY'
-import json
-import shutil
-import sys
-from pathlib import Path
-
-artifact_root, model_root, minimum_gib, output = sys.argv[1:]
-minimum_bytes = int(minimum_gib) * 1024**3
-filesystems = []
-for label, path_text in (("artifacts", artifact_root), ("models", model_root)):
-    path = Path(path_text)
-    while not path.exists() and path != path.parent:
-        path = path.parent
-    usage = shutil.disk_usage(path)
-    filesystems.append(
-        {
-            "label": label,
-            "path": str(path),
-            "free_bytes": usage.free,
-            "minimum_free_bytes": minimum_bytes,
-            "sufficient": usage.free >= minimum_bytes,
-        }
-    )
-
-report = {
-    "filesystems": filesystems,
-    "ports": {"allocation": "os-assigned-at-launch"},
+  "${automation[@]}" automation family-battery-policy --environment \
+    "$ARTIFACT_DIR" "$model_root" "$MIN_FREE_GIB" "$PREFLIGHT_DIR/environment.json"
 }
-Path(output).write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
-if any(not item["sufficient"] for item in filesystems):
-    raise SystemExit(1)
-PY
+
+# Build only the typed deadline input; process ownership belongs to Rust.
+run_battery_timeout() {
+  local label="$1" seconds="$2" transaction_root input executable result
+  shift 2
+  transaction_root="$(mktemp -d "$ARTIFACT_DIR/command-timeout.XXXXXXXX")" || return 125
+  input="$transaction_root/input.json"
+  executable="$(command -v "$1")" || {
+    rmdir "$transaction_root" || true
+    return 125
+  }
+  if [[ "$executable" != /* ]]; then
+    echo "$label requires an absolute executable" >&2
+    rmdir "$transaction_root" || true
+    return 125
+  fi
+  shift
+  if ! jq -n --arg label "$label" --argjson seconds "$seconds" --arg cwd "$PWD" \
+    --arg executable "$executable" --args \
+    '{label:$label,seconds:$seconds,cwd:$cwd,executable:$executable,arguments:$ARGS.positional}' \
+    -- "$@" > "$input"; then
+    rm -f "$input"
+    rmdir "$transaction_root" || true
+    return 125
+  fi
+  if "${automation[@]}" automation canary-timeout --input "$input"; then
+    result=0
+  else
+    result=$?
+  fi
+  rm -f "$input" || return 125
+  rmdir "$transaction_root" || return 125
+  return "$result"
 }
 
 run_certify() {
@@ -498,10 +465,8 @@ run_certify() {
   fi
   exit_code=0
   started_at="$(date +%s)"
-  "$ROOT/scripts/run-command-with-timeout.py" \
-    --seconds "$cert_timeout" \
-    --label "family certification $family split $split_layer" \
-    -- "${command[@]}" || exit_code=$?
+  run_battery_timeout "family certification $family split $split_layer" "$cert_timeout" \
+    "${command[@]}" || exit_code=$?
   elapsed_seconds=$(( $(date +%s) - started_at ))
   manifest_path=""
   if [[ -d "$cert_run_dir" ]]; then
@@ -807,10 +772,7 @@ run_mmproj_smoke() {
     smoke_command=(cargo test --manifest-path "$ROOT/Cargo.toml" -p skippy-serving --lib frontend::tests::multimodal -- --nocapture --test-threads=1)
   fi
   exit_code=0
-  "$ROOT/scripts/run-command-with-timeout.py" \
-    --seconds "$smoke_timeout" \
-    --label "mmproj smoke $family" \
-    -- env \
+  run_battery_timeout "mmproj smoke $family" "$smoke_timeout" env \
       SKIPPY_MM_MODEL="$target" \
       SKIPPY_MM_PROJECTOR="$mmproj" \
       SKIPPY_MM_IMAGE="$ROOT/ci/llama-canary/fixtures/multimodal-smoke.png" \
@@ -833,6 +795,22 @@ run_mmproj_smoke() {
     --argjson exit_code "$exit_code" \
     '{family:$family,model_id:$model_id,mmproj_smoke:true,exit_code:$exit_code,outcomes:[{name:"mmproj-smoke",status:(if $exit_code == 0 then "pass" else "fail" end),outcome:(if $exit_code == 0 then "pass" else "fail" end),exit_code:$exit_code,note:"real projector + image prefill through skippy-serving frontend (local + split)"}]}' \
     >> "$RESULTS_JSONL"
+}
+
+verify_workload_oracle() {
+  local evidence="$1" model_class="$2" smoke_lane="$3" oracle_lane="$4"
+  local model_id="$5" target="$6" candidate="$7" oracle="$8" mmproj="$9"
+  local pinned_patch_sha
+  # Native oracle provenance belongs to this selected source, not the controller.
+  pinned_patch_sha="$("${automation[@]}" automation canary-receipts prepared-source --root "$ROOT")" || return $?
+  local verify_command=("${automation[@]}" automation workload-oracle-evidence verify \
+    --evidence "$evidence" --class "$model_class" --smoke-lane "$smoke_lane" --oracle-lane "$oracle_lane" \
+    --model-id "$model_id" --model-path "$target" --candidate-executable "$candidate" \
+    --oracle-executable "$oracle" --pinned-patch-sha "$pinned_patch_sha")
+  if [[ -n "$mmproj" ]]; then
+    verify_command+=(--projector-path "$mmproj")
+  fi
+  "${verify_command[@]}"
 }
 
 run_workload_certify() {
@@ -900,23 +878,14 @@ run_workload_certify() {
     echo "certified workload $family ($model_class) requires a class-appropriate local-monolithic oracle executable" | tee "$log_path" >&2
     exit_code=1
   else
-    "$ROOT/scripts/run-command-with-timeout.py" \
-      --seconds "$cert_timeout" \
-      --label "workload certification $family ($model_class)" \
-      -- "${command[@]}" >"$log_path" 2>&1 || exit_code=$?
+    run_battery_timeout "workload certification $family ($model_class)" "$cert_timeout" \
+      "${command[@]}" >"$log_path" 2>&1 || exit_code=$?
   fi
   if (( certified == 1 && exit_code == 0 )); then
-    local verify_command=(python3 "$ROOT/scripts/verify-workload-oracle-evidence.py" \
-      --evidence "$cert_run_dir/workload-oracle-evidence.json" \
-      --class "$model_class" --smoke-lane "$smoke_lane" --oracle-lane "$oracle_lane" \
-      --model-id "$model_id" --model-path "$target" \
-      --candidate-executable "${SKIPPY_WORKLOAD_CANDIDATE_BIN_DIR:-$ROOT/target/debug}/skippy-serving" \
-      --oracle-executable "$oracle_executable" \
-      --pinned-patch-sha "$(python3 "$ROOT/scripts/llama-oracle-source.py")")
-    if [[ -n "$mmproj" ]]; then
-      verify_command+=(--projector-path "$mmproj")
-    fi
-    "${verify_command[@]}" >>"$log_path" 2>&1 || exit_code=$?
+    verify_workload_oracle \
+      "$cert_run_dir/workload-oracle-evidence.json" "$model_class" "$smoke_lane" "$oracle_lane" \
+      "$model_id" "$target" "${SKIPPY_WORKLOAD_CANDIDATE_BIN_DIR:-$ROOT/target/debug}/skippy-serving" \
+      "$oracle_executable" "$mmproj" >>"$log_path" 2>&1 || exit_code=$?
   fi
   jq -c -n \
     --arg family "$family" \
