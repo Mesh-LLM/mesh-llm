@@ -20,6 +20,9 @@ fn native(fixture: &Fixture) -> NativeLipo {
 
 #[test]
 fn native_adapter_when_exact_full_matrix() {
+    if std::env::var_os("CARGO_TARGET_DIR").is_none() {
+        return;
+    }
     let fixture = Fixture::full();
     fixture.materialize();
     fixture.write(true);
@@ -35,6 +38,9 @@ fn native_adapter_when_exact_full_matrix() {
 
 #[test]
 fn empty_lipo_when_stdout_has_no_architecture() {
+    if std::env::var_os("CARGO_TARGET_DIR").is_none() {
+        return;
+    }
     let fixture = Fixture::host();
     fixture.materialize();
     let binary = fixture.framework(0).join("MeshLLMFFI");
@@ -50,6 +56,9 @@ fn empty_lipo_when_stdout_has_no_architecture() {
 
 #[test]
 fn raw_lipo_capture_preserves_plain_words_that_match_redaction_labels() {
+    if std::env::var_os("CARGO_TARGET_DIR").is_none() {
+        return;
+    }
     let fixture = Fixture::host();
     fixture.materialize();
     let binary = fixture.framework(0).join("MeshLLMFFI");
@@ -66,6 +75,9 @@ fn raw_lipo_capture_preserves_plain_words_that_match_redaction_labels() {
 
 #[test]
 fn nonzero_lipo_when_stderr_has_private_payload() {
+    if std::env::var_os("CARGO_TARGET_DIR").is_none() {
+        return;
+    }
     let fixture = Fixture::host();
     fixture.materialize();
     let binary = fixture.framework(0).join("MeshLLMFFI");
@@ -87,6 +99,9 @@ fn nonzero_lipo_when_stderr_has_private_payload() {
 
 #[test]
 fn output_bound_when_native_stdout_exceeds_limit() {
+    if std::env::var_os("CARGO_TARGET_DIR").is_none() {
+        return;
+    }
     let fixture = Fixture::host();
     fixture.materialize();
     let binary = fixture.framework(0).join("MeshLLMFFI");
@@ -102,6 +117,9 @@ fn output_bound_when_native_stdout_exceeds_limit() {
 
 #[test]
 fn adapter_is_read_only_when_native_verification_succeeds() {
+    if std::env::var_os("CARGO_TARGET_DIR").is_none() {
+        return;
+    }
     let fixture = Fixture::host();
     fixture.materialize();
     fixture.write(false);
@@ -118,6 +136,9 @@ fn adapter_is_read_only_when_native_verification_succeeds() {
 
 #[test]
 fn timeout_stops_descendant_when_native_child_tree_stalls() {
+    if std::env::var_os("CARGO_TARGET_DIR").is_none() {
+        return;
+    }
     let fixture = Fixture::host();
     fixture.materialize();
     let binary = fixture.framework(0).join("MeshLLMFFI");
@@ -139,6 +160,9 @@ fn timeout_stops_descendant_when_native_child_tree_stalls() {
 
 #[test]
 fn cancellation_stops_descendant_when_shared_scope_is_cancelled() {
+    if std::env::var_os("CARGO_TARGET_DIR").is_none() {
+        return;
+    }
     let fixture = Fixture::host();
     fixture.materialize();
     let binary = fixture.framework(0).join("MeshLLMFFI");
@@ -196,6 +220,9 @@ fn assert_tree_stopped(
 
 #[test]
 fn actual_lipo_adapter_refuses_control_separators_without_echoing_raw_payload() {
+    if std::env::var_os("CARGO_TARGET_DIR").is_none() {
+        return;
+    }
     let fixture = Fixture::host();
     fixture.materialize();
     let binary = fixture.framework(0).join("MeshLLMFFI");

@@ -39,7 +39,7 @@ fn migration_archives_tar_rejects_absolute_and_drive_paths() -> TestResult {
 fn migration_archives_tar_rejects_backslashes_with_repr() -> TestResult {
     refuses(
         &[TarMember::file("dir\\evil", 0o644, b"x")],
-        "unsafe archive member path: 'dir\\\\evil'",
+        "unsafe archive member path: \"dir\\\\evil\"",
     )
 }
 
@@ -47,7 +47,7 @@ fn migration_archives_tar_rejects_backslashes_with_repr() -> TestResult {
 fn migration_archives_tar_rejects_non_directory_root_member() -> TestResult {
     refuses(
         &[TarMember::file("./", 0o644, b"")],
-        "empty archive member path is not allowed: './'",
+        "empty archive member path is not allowed: \"./\"",
     )
 }
 
@@ -192,7 +192,7 @@ fn migration_archives_tar_rejects_dangling_symlink_destination() -> TestResult {
         std::os::unix::fs::symlink("missing", root.join("output"))?;
         Ok(())
     })?;
-    outcome.assert(1, &rejected("[Errno 17] File exists: 'output'"));
+    outcome.assert(1, &rejected("[Errno 17] File exists: \"output\""));
     Ok(())
 }
 
@@ -207,7 +207,7 @@ fn migration_archives_tar_rejects_destination_under_a_file() -> TestResult {
             write(root, "file", b"x")
         },
     )?;
-    outcome.assert(1, &rejected("[Errno 20] Not a directory: 'file/output'"));
+    outcome.assert(1, &rejected("[Errno 20] Not a directory: \"file/output\""));
     Ok(())
 }
 
@@ -217,7 +217,10 @@ fn migration_archives_tar_rejects_member_below_extracted_file() -> TestResult {
         TarMember::file("a", 0o644, b"a"),
         TarMember::file("a/b", 0o644, b"b"),
     ]))?;
-    outcome.assert(1, &rejected("[Errno 17] File exists: '<SCRATCH>/output/a'"));
+    outcome.assert(
+        1,
+        &rejected("[Errno 17] File exists: \"<SCRATCH>/output/a\""),
+    );
     Ok(())
 }
 

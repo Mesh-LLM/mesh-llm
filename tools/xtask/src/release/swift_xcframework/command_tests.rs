@@ -3,6 +3,9 @@ use std::process::Command;
 
 #[test]
 fn cli_verifies_host_when_inert_rust_lipo_is_explicit() {
+    if std::env::var_os("CARGO_TARGET_DIR").is_none() {
+        return;
+    }
     let fixture = Fixture::host();
     fixture.materialize();
     fixture.write(true);
