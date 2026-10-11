@@ -120,7 +120,8 @@ fn finish(stderr: String) -> CheckReport {
 }
 
 /// Every record from `git log --no-merges`, newest first; blank lines are
-/// dropped before the first line is taken as the subject.
+/// dropped before the first line is taken as the subject, and an empty
+/// message is rejected for its empty subject.
 fn check_range(cwd: &Path, range: &str, trailers_only: bool) -> Result<CheckReport, CheckReport> {
     let output = Command::new("git")
         .current_dir(cwd)
@@ -148,8 +149,12 @@ fn check_range(cwd: &Path, range: &str, trailers_only: bool) -> Result<CheckRepo
         ));
     }
     let log = String::from_utf8_lossy(&output.stdout);
-    let stderr = log
-        .split('\u{1e}')
+    let mut records = log.split('\u{1e}').collect::<Vec<_>>();
+    // Text after the final separator is not a commit record; every other
+    // record is kept, so an empty message still reaches `review`.
+    records.pop();
+    let stderr = records
+        .into_iter()
         .map(|record| {
             splitlines(record.trim_matches('\n'))
                 .into_iter()
@@ -157,7 +162,6 @@ fn check_range(cwd: &Path, range: &str, trailers_only: bool) -> Result<CheckRepo
                 .map(str::to_owned)
                 .collect::<Vec<_>>()
         })
-        .filter(|lines| !lines.is_empty())
         .map(|lines| review(&lines, trailers_only))
         .collect::<String>();
     Ok(finish(stderr))
