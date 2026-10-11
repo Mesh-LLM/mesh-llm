@@ -86,12 +86,13 @@ pub(super) fn pax_records(buf: &[u8]) -> Result<Vec<(String, String)>, HeaderErr
         let length: usize = String::from_utf8_lossy(&buf[pos..pos + digits])
             .parse()
             .map_err(|_| INVALID)?;
-        if length < 5 || pos + length > buf.len() || pos + digits + 1 > pos + length - 1 {
+        let end = pos.checked_add(length).ok_or(INVALID)?;
+        if length < 5 || end > buf.len() || pos + digits + 1 > end - 1 {
             return Err(INVALID);
         }
-        let body = &buf[pos + digits + 1..pos + length - 1];
+        let body = &buf[pos + digits + 1..end - 1];
         let split = body.iter().position(|b| *b == b'=');
-        let (Some(split), b'\n') = (split, buf[pos + length - 1]) else {
+        let (Some(split), b'\n') = (split, buf[end - 1]) else {
             return Err(INVALID);
         };
         if split == 0 {
@@ -99,7 +100,7 @@ pub(super) fn pax_records(buf: &[u8]) -> Result<Vec<(String, String)>, HeaderErr
         }
         let text = |bytes: &[u8]| String::from_utf8_lossy(bytes).into_owned();
         records.push((text(&body[..split]), text(&body[split + 1..])));
-        pos += length;
+        pos = end;
     }
     Ok(records)
 }

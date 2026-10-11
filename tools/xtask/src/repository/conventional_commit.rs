@@ -124,7 +124,13 @@ fn finish(stderr: String) -> CheckReport {
 fn check_range(cwd: &Path, range: &str, trailers_only: bool) -> Result<CheckReport, CheckReport> {
     let output = Command::new("git")
         .current_dir(cwd)
-        .args(["log", "--format=%B%x1e", "--no-merges", range])
+        .args([
+            "log",
+            "--format=%B%x1e",
+            "--no-merges",
+            "--end-of-options",
+            range,
+        ])
         .output()
         .map_err(|error| {
             CheckReport::failure(

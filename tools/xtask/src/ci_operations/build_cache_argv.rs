@@ -6,7 +6,9 @@
 use crate::ci_operations::build_cache_help::{
     BUILD_USAGE, PROG, PRUNE_USAGE, STATUS_USAGE, TOP_USAGE, build_help, status_help, top_help,
 };
-use crate::ci_operations::build_cache_options::{Kind, classify, help_flag, is_option_like};
+use crate::ci_operations::build_cache_options::{
+    Kind, classify_abbreviated, first_ambiguity, help_flag, is_option_like,
+};
 use crate::ci_operations::build_cache_values::{Age, parse_age, parse_size};
 use crate::ci_operations::runner_identity_argv::error;
 use crate::repository::check_report::CheckReport;
@@ -73,7 +75,7 @@ fn parse_top(args: &[String]) -> Result<Args, CheckReport> {
         let kind = if positional_only {
             Kind::Positional
         } else {
-            classify(arg, &options)
+            classify_abbreviated(arg, &options)
         };
         match kind {
             Kind::Positional => {
@@ -131,6 +133,9 @@ fn sub_spec(mode: Mode) -> Sub {
 
 fn parse_sub(mode: Mode, args: &[String], extras: &mut Vec<String>) -> Result<Args, CheckReport> {
     let sub = sub_spec(mode);
+    if let Some(message) = first_ambiguity(args, &sub.options) {
+        return Err(sub.fail(&message));
+    }
     let mut parsed = Args {
         mode,
         workspace: None,
@@ -147,7 +152,7 @@ fn parse_sub(mode: Mode, args: &[String], extras: &mut Vec<String>) -> Result<Ar
         let kind = if arg == "--" {
             Kind::Positional
         } else {
-            classify(arg, &sub.options)
+            classify_abbreviated(arg, &sub.options)
         };
         match kind {
             Kind::Positional if mode == Mode::Build => {

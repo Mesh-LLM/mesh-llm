@@ -283,15 +283,21 @@ impl Package {
             ));
         }
         let relocatable = match build.get("relocatable_libraries") {
-            Some(Value::Array(list)) if !list.is_empty() => list
+            None | Some(Value::Null) => library_paths.clone(),
+            Some(Value::Array(list)) if list.is_empty() => library_paths.clone(),
+            Some(Value::Array(list)) => list
                 .iter()
-                .filter_map(Value::as_str)
-                .map(str::to_owned)
-                .collect(),
-            Some(Value::String(text)) if !text.is_empty() => {
-                text.chars().map(|ch| ch.to_string()).collect()
+                .map(|entry| {
+                    entry
+                        .as_str()
+                        .filter(|text| !text.is_empty())
+                        .map(str::to_owned)
+                })
+                .collect::<Option<Vec<_>>>()
+                .ok_or("build.relocatable_libraries entries must be non-empty strings")?,
+            Some(_) => {
+                return Err("build.relocatable_libraries must be an array of strings".to_owned());
             }
-            _ => library_paths.clone(),
         };
         Ok(Self {
             root: root.to_path_buf(),
