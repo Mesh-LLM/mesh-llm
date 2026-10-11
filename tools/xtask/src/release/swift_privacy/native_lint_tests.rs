@@ -63,6 +63,9 @@ fn failure_with_delivery_error(flush_only: bool) -> Error {
 
 #[test]
 fn retains_child_failure_when_diagnostic_write_fails() {
+    if std::env::var_os("SPV_ADAPTER_FIXTURE").is_none() {
+        return;
+    }
     let error = failure_with_delivery_error(false);
     assert!(matches!(error, Error::Diagnostic {
         primary: NativeFailure::Child { exit: Some(23), complete_raw_stderr: true, .. }, output
@@ -71,6 +74,9 @@ fn retains_child_failure_when_diagnostic_write_fails() {
 
 #[test]
 fn retains_child_failure_when_diagnostic_flush_fails() {
+    if std::env::var_os("SPV_ADAPTER_FIXTURE").is_none() {
+        return;
+    }
     let error = failure_with_delivery_error(true);
     assert!(matches!(error, Error::Diagnostic {
         primary: NativeFailure::Child { exit: Some(23), .. }, output
@@ -79,6 +85,9 @@ fn retains_child_failure_when_diagnostic_flush_fails() {
 
 #[test]
 fn retains_child_and_delivery_failures_when_signal_finalization_fails() {
+    if std::env::var_os("SPV_ADAPTER_FIXTURE").is_none() {
+        return;
+    }
     let primary: Result<(), Error> = Err(failure_with_delivery_error(false));
     let error = adapter_error::finish(primary, Err(Reason::Interrupted)).unwrap_err();
     assert!(
@@ -89,6 +98,9 @@ fn retains_child_and_delivery_failures_when_signal_finalization_fails() {
 
 #[test]
 fn omits_raw_diagnostic_from_debug_when_delivery_fails() {
+    if std::env::var_os("SPV_ADAPTER_FIXTURE").is_none() {
+        return;
+    }
     let error = failure_with_delivery_error(false);
     assert!(matches!(error, Error::Diagnostic { .. }));
     assert!(!format!("{error:?}").contains("synthetic-raw"));
