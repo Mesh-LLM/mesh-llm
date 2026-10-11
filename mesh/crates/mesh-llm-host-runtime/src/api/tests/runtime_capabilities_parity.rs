@@ -37,3 +37,19 @@ async fn runtime_capabilities_parity() {
         json!("/api/runtime/events/v1")
     );
 }
+
+/// Both status routes advertise the twin-bracket capability, naming the
+/// header the request parser reads, so a client can check support before
+/// asking a user to mark a pair.
+#[tokio::test]
+async fn twin_bracket_capability_is_advertised_on_both_status_routes() {
+    let expected = json!({
+        "version": 1,
+        "header": crate::network::openai::request_parse::MESH_TWIN_BRACKET_HEADER,
+    });
+    let state = build_test_mesh_api().await;
+    let status_body = request_management_json(state.clone(), "/api/status").await;
+    let runtime_body = request_management_json(state, "/api/runtime").await;
+    assert_eq!(status_body["runtime"]["capabilities"]["twin_bracket"], expected);
+    assert_eq!(runtime_body["capabilities"]["twin_bracket"], expected);
+}
