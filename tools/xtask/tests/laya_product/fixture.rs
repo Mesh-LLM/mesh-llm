@@ -48,39 +48,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         })
         .collect::<Result<Vec<_>, Box<dyn std::error::Error>>>()?;
-    'connections: for stream in listener.incoming() {
+    for stream in listener.incoming() {
         let mut stream = stream?;
         stream.set_read_timeout(Some(std::time::Duration::from_secs(2)))?;
-        let mut bytes = Vec::new();
-        let (header_end, length) = loop {
-            let mut buffer = [0; 4096];
-            let read = stream.read(&mut buffer)?;
-            if read == 0 {
-                continue 'connections;
-            }
-            bytes.extend_from_slice(&buffer[..read]);
-            if let Some(end) = bytes.windows(4).position(|window| window == b"\r\n\r\n") {
-                let header = std::str::from_utf8(&bytes[..end])?;
-                let length = header
-                    .lines()
-                    .find_map(|line| {
-                        line.split_once(':')
-                            .filter(|(key, _)| key.eq_ignore_ascii_case("content-length"))
-                            .map(|(_, value)| value.trim().parse::<usize>())
-                    })
-                    .transpose()?
-                    .unwrap_or(0);
-                break (end + 4, length);
-            }
+        // A dropped, stalled or malformed request only ends its own connection.
+        let Some((bytes, header_end)) = read_request(&mut stream) else {
+            continue;
         };
-        while bytes.len() - header_end < length {
-            let mut buffer = [0; 4096];
-            let read = stream.read(&mut buffer)?;
-            if read == 0 {
-                continue 'connections;
-            }
-            bytes.extend_from_slice(&buffer[..read]);
-        }
         if bytes.starts_with(b"POST /v1/chat/completions ") {
             let request: serde_json::Value = serde_json::from_slice(&bytes[header_end..])?;
             if request["prompt_cache_key"] == "s" && request["max_tokens"] != 1 {
@@ -142,4 +116,34 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         stream.write_all(&body)?;
     }
     Ok(())
+}
+
+/// Reads one request, returning its bytes and the body offset, or `None` when
+/// the client disconnects, stalls or sends a malformed header.
+fn read_request(stream: &mut impl Read) -> Option<(Vec<u8>, usize)> {
+    let mut bytes = Vec::new();
+    let mut buffer = [0; 4096];
+    let (header_end, length) = loop {
+        let read = stream.read(&mut buffer).ok().filter(|read| *read > 0)?;
+        bytes.extend_from_slice(&buffer[..read]);
+        if let Some(end) = bytes.windows(4).position(|window| window == b"\r\n\r\n") {
+            let header = std::str::from_utf8(&bytes[..end]).ok()?;
+            let length = header
+                .lines()
+                .find_map(|line| {
+                    line.split_once(':')
+                        .filter(|(key, _)| key.eq_ignore_ascii_case("content-length"))
+                        .map(|(_, value)| value.trim().parse::<usize>())
+                })
+                .transpose()
+                .ok()?
+                .unwrap_or(0);
+            break (end + 4, length);
+        }
+    };
+    while bytes.len() - header_end < length {
+        let read = stream.read(&mut buffer).ok().filter(|read| *read > 0)?;
+        bytes.extend_from_slice(&buffer[..read]);
+    }
+    Some((bytes, header_end))
 }

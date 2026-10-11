@@ -27,7 +27,7 @@ fn rejected(message: &str) -> String {
 
 /// Reject malformed/unsupported archive data with an actionable category.
 fn raises(archive: Vec<u8>, category: &str) -> Result<Outcome, Box<dyn Error>> {
-    let outcome = extract_as(archive, Parity::LastLine, |_| Ok(()))?;
+    let outcome = extract_as(archive, Parity::Status, |_| Ok(()))?;
     outcome.assert(1, "failure");
     assert!(outcome.stderr.contains(category), "{}", outcome.stderr);
     Ok(outcome)
@@ -100,23 +100,23 @@ fn migration_archives_zip_extracts_files_dirs_modes_and_links() -> TestResult {
 fn migration_archives_zip_rejects_traversal_and_absolute_names() -> TestResult {
     refuses(
         &[ZipEntry::file("safe/../../evil", 0o644, b"x")],
-        "entry escapes the extraction root: 'safe/../../evil'",
+        "entry escapes the extraction root: \"safe/../../evil\"",
     )?;
     refuses(
         &[ZipEntry::file("/etc/evil", 0o644, b"x")],
-        "entry is not a portable relative path: '/etc/evil'",
+        "entry is not a portable relative path: \"/etc/evil\"",
     )?;
     refuses(
         &[ZipEntry::file("C:evil", 0o644, b"x")],
-        "entry is not a portable relative path: 'C:evil'",
+        "entry is not a portable relative path: \"C:evil\"",
     )?;
     refuses(
         &[ZipEntry::file("dir\\evil", 0o644, b"x")],
-        "entry is not a portable relative path: 'dir\\\\evil'",
+        "entry is not a portable relative path: \"dir\\\\evil\"",
     )?;
     refuses(
         &[ZipEntry::raw("./", (S_IFDIR | 0o755) << 16, b"")],
-        "entry escapes the extraction root: '.'",
+        "entry escapes the extraction root: \".\"",
     )
 }
 
@@ -127,7 +127,7 @@ fn migration_archives_zip_validates_every_entry_before_writing() -> TestResult {
             ZipEntry::file("good", 0o644, b"x"),
             ZipEntry::file("tab\tname", 0o644, b"x"),
         ],
-        "entry is not a portable relative path: 'tab\\tname'",
+        "entry is not a portable relative path: \"tab\\tname\"",
     )
 }
 
@@ -138,11 +138,11 @@ fn migration_archives_zip_rejects_duplicates_and_special_entries() -> TestResult
             ZipEntry::file("dir/file", 0o644, b"one"),
             ZipEntry::file("dir//./file", 0o644, b"two"),
         ],
-        "duplicate entry path: 'dir//./file'",
+        "duplicate entry path: \"dir//./file\"",
     )?;
     refuses(
         &[ZipEntry::raw("pipe", 0o010_644 << 16, b"")],
-        "unsupported entry type for 'pipe'",
+        "unsupported entry type for \"pipe\"",
     )
 }
 
@@ -150,26 +150,26 @@ fn migration_archives_zip_rejects_duplicates_and_special_entries() -> TestResult
 fn migration_archives_zip_rejects_escaping_or_ancestor_symlinks() -> TestResult {
     refuses(
         &[ZipEntry::symlink("lib/evil", "../../etc/passwd")],
-        "symlink target escapes the extraction root: '../../etc/passwd'",
+        "symlink target escapes the extraction root: \"../../etc/passwd\"",
     )?;
     refuses(
         &[ZipEntry::symlink("lib/evil", "/etc/passwd")],
-        "symlink target is not portable: '/etc/passwd'",
+        "symlink target is not portable: \"/etc/passwd\"",
     )?;
     refuses(
         &[ZipEntry::symlink("lib/root", "..")],
-        "symlink target resolves to the extraction root: '..'",
+        "symlink target resolves to the extraction root: \"..\"",
     )?;
     refuses(
         &[
             ZipEntry::symlink("link", "dir"),
             ZipEntry::file("link/file", 0o644, b"x"),
         ],
-        "entry is nested beneath an archive symlink: 'link/file'",
+        "entry is nested beneath an archive symlink: \"link/file\"",
     )?;
     refuses(
         &[ZipEntry::raw("bad", 0o120_777 << 16, b"\xff")],
-        "symlink target is not UTF-8: 'bad'",
+        "symlink target is not UTF-8: \"bad\"",
     )
 }
 
@@ -191,7 +191,7 @@ fn migration_archives_zip_rejects_unsafe_destinations() -> TestResult {
     let outcome = extract_as(archive, Parity::LastLine, |root| {
         write(root, "output", b"not a directory")
     })?;
-    outcome.assert(1, "FileExistsError: [Errno 17] File exists: 'output'\n");
+    outcome.assert(1, "FileExistsError: [Errno 17] File exists: \"output\"\n");
     Ok(())
 }
 
