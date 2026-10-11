@@ -1,4 +1,5 @@
 //! Actual release inventory file owners and public xtask command qualification.
+#![cfg(feature = "automation-contracts")]
 #![allow(dead_code)]
 #[path = "release_inventory_publication/owner_projection.rs"]
 mod inventory;

@@ -1,3 +1,4 @@
+#![cfg(feature = "automation-contracts")]
 #[path = "../src/automation/hf_converted_artifact/mod.rs"]
 mod hf_converted_artifact;
 

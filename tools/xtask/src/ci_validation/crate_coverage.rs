@@ -57,7 +57,11 @@ fn check_main_plan_test_coverage(repo_root: &Path) -> DynResult<()> {
         }
     }
 
-    let expected = workspace_package_names(repo_root)?;
+    let mut expected = workspace_package_names(repo_root)?;
+    // Contract-tested crates run through `just ci-automation-contracts`, not the plain test matrix.
+    for name in crate::ci_plan::CONTRACT_TESTED_CRATES {
+        expected.remove(*name);
+    }
     ensure_set_eq(&expected, &actual, "main CI rust-test workspace coverage")
 }
 

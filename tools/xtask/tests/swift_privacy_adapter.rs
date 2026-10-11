@@ -1,3 +1,4 @@
+#![cfg(feature = "automation-contracts")]
 #![cfg(unix)]
 
 #[path = "swift_privacy_adapter/lifecycle.rs"]

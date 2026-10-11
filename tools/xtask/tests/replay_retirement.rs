@@ -1,3 +1,4 @@
+#![cfg(feature = "automation-contracts")]
 #![cfg(unix)]
 use serde_json::json;
 use std::{os::unix::fs::PermissionsExt, path::Path, process::Command};

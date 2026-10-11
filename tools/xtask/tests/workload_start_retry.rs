@@ -1,4 +1,5 @@
 //! Behavioral retry boundaries of the actual workload candidate launcher.
+#![cfg(feature = "automation-contracts")]
 #![cfg(unix)]
 use serde_json::Value;
 use std::{

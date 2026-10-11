@@ -1,3 +1,4 @@
+#![cfg(feature = "automation-contracts")]
 #[path = "migration_canary_receipts_parity/fixture_files.rs"]
 #[expect(
     dead_code,

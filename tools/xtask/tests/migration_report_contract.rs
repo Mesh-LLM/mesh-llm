@@ -1,3 +1,4 @@
+#![cfg(feature = "automation-contracts")]
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::fs::{self, OpenOptions};

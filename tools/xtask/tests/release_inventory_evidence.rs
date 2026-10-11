@@ -1,4 +1,5 @@
 //! Actual finite Git and inert-gh evidence contracts, without remote access.
+#![cfg(feature = "automation-contracts")]
 #[path = "../src/release/inventory/evidence.rs"]
 mod evidence;
 #[cfg(unix)]

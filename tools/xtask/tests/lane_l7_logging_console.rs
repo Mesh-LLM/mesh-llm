@@ -1,3 +1,4 @@
+#![cfg(feature = "automation-contracts")]
 use std::path::Path;
 
 // Each narrative releases a reserved port range before its child binds it.

@@ -24,8 +24,8 @@ ci-validate:
 # the existing selected Windows unit workflow (20 methods plus wrapper1).
 ci-legacy-contracts:
     just with-lld cargo test --locked -p xtask --bin xtask ci_validation::windows_runtime::tests:: -- --test-threads=1
-    just with-lld cargo test --locked -p xtask --test ci_runner_cache_contract windows_ -- --test-threads=1
-    just with-lld cargo test --locked -p xtask --test migration_lifecycle windows_ -- --test-threads=1
+    just with-lld cargo test --locked -p xtask --features automation-contracts --test ci_runner_cache_contract windows_ -- --test-threads=1
+    just with-lld cargo test --locked -p xtask --features automation-contracts --test migration_lifecycle windows_ -- --test-threads=1
 
 # Native whole-session cohort fixtures use the pinned Parquet reader and codecs.
 agentic-trajectory-reader-contracts:
@@ -228,7 +228,7 @@ ci-automation-contracts:
     export MIGRATION_TEST_GIT="$git_path"
     export GIT_MASTER=1 GIT_OPTIONAL_LOCKS=0
     just ci-snapshot-promotion-contracts
-    just with-lld cargo test --locked -p xtask --bin xtask \
+    just with-lld cargo test --locked -p xtask --features automation-contracts --bin xtask \
         --test automation_selector \
         --test canary_cache_configuration \
         --test canary_controller_plan \

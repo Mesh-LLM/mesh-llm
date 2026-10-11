@@ -7,6 +7,7 @@
 //!
 //! Every fixture is built at runtime in a scratch directory. Expected bytes
 //! include authored contract-derived literals, not necessarily captured output.
+#![cfg(feature = "automation-contracts")]
 
 #[path = "migration_prepared_inputs/support.rs"]
 mod support;

@@ -1,3 +1,4 @@
+#![cfg(feature = "automation-contracts")]
 #[path = "migration_optional_isolation/export_cases.rs"]
 mod export_cases;
 #[path = "migration_optional_isolation/export_process.rs"]

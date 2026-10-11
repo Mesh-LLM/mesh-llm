@@ -1,3 +1,4 @@
+#![cfg(feature = "automation-contracts")]
 #![cfg(unix)]
 
 #[path = "migration_run_family/history_consumer.rs"]

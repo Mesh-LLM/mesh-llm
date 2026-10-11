@@ -1,4 +1,5 @@
 //! Actual local action decisions with finite external tool boundaries.
+#![cfg(feature = "automation-contracts")]
 #![cfg(unix)]
 #[allow(dead_code, unused_imports)]
 #[path = "../src/process/mod.rs"]

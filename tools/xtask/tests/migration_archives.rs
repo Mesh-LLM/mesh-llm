@@ -6,6 +6,7 @@
 //! so malformed members (traversal, device nodes, duplicates) need no
 //! checked-in binaries. Expected diagnostics are the legacy scripts' observed
 //! output.
+#![cfg(feature = "automation-contracts")]
 #![cfg(unix)]
 
 #[path = "migration_archives/support.rs"]

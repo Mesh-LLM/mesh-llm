@@ -1,3 +1,4 @@
+#![cfg(feature = "automation-contracts")]
 #[test]
 fn run_execution_qualifies_two_arms_and_reverses_second_pass() {
     execute_case(70.0, true, "captured");

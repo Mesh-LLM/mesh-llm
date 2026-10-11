@@ -1,3 +1,4 @@
+#![cfg(feature = "automation-contracts")]
 #![cfg(unix)]
 
 #[path = "migration_lifecycle/two_node_split/mod.rs"]

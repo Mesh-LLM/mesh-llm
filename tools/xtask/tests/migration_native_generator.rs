@@ -1,3 +1,4 @@
+#![cfg(feature = "automation-contracts")]
 #[path = "../src/process/mod.rs"]
 pub mod process;
 use process::*;

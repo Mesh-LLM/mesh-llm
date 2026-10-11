@@ -1,3 +1,4 @@
+#![cfg(feature = "automation-contracts")]
 #[cfg(unix)]
 #[path = "migration_process/canary_heartbeat.rs"]
 mod canary_heartbeat;

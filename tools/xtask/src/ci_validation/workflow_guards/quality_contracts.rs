@@ -249,6 +249,7 @@ fn invocation(command: &str, targets: &[String]) -> DynResult<()> {
                     break;
                 }
             }
+            "--features" if package && words.next() == Some("automation-contracts") => {}
             "--bin" if !unit => {
                 unit = words.next() == Some("xtask");
                 if !unit {

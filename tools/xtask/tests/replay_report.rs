@@ -1,3 +1,4 @@
+#![cfg(feature = "automation-contracts")]
 mod replay_report_support;
 use replay_report_support::{document, run};
 

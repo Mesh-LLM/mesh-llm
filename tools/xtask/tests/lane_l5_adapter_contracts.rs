@@ -1,3 +1,4 @@
+#![cfg(feature = "automation-contracts")]
 use std::fs;
 use std::path::Path;
 

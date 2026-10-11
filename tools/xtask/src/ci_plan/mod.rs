@@ -17,6 +17,7 @@ mod glob_pattern;
 mod layout_contract_tests;
 mod matrices;
 mod plan;
+pub(crate) use plan::CONTRACT_TESTED_CRATES;
 pub(crate) mod plan_bytes;
 mod profile_catalog;
 mod request;

@@ -1,3 +1,4 @@
+#![cfg(feature = "automation-contracts")]
 use std::{error::Error, fs, path::Path};
 
 type TestResult = Result<(), Box<dyn Error>>;
