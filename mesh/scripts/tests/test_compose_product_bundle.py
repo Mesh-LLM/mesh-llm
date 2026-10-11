@@ -115,7 +115,7 @@ class ComposeProductBundleTests(unittest.TestCase):
 def qualification_record(**overrides: object) -> dict:
     record = {
         "schema_version": 1,
-        "source_sha": "a" * 64,
+        "source_sha": "a" * 40,
         "plan_digest": "b" * 64,
         "platform": "linux",
         "required_row": "linux-cpu",
@@ -138,7 +138,7 @@ class QualificationBindingTests(unittest.TestCase):
             self.assertEqual(bound["schema_version"], 1)
             self.assertEqual(bound["record_path"], "skippy-qualification-receipts.json")
             self.assertEqual(bound["record_sha256"], COMPOSE_PRODUCT_BUNDLE.file_sha256(record))
-            self.assertEqual(bound["source_sha"], "a" * 64)
+            self.assertEqual(bound["source_sha"], "a" * 40)
             self.assertEqual(bound["plan_digest"], "b" * 64)
             self.assertEqual(bound["platform"], "linux")
             self.assertEqual(bound["required_row"], "linux-cpu")
@@ -154,6 +154,7 @@ class QualificationBindingTests(unittest.TestCase):
         cases = (
             ({"schema_version": 2}, "unsupported schema"),
             ({"source_sha": "not-a-sha"}, "invalid source revision"),
+            ({"source_sha": "a" * 64}, "invalid source revision"),
             ({"plan_digest": "z" * 64}, "invalid plan digest"),
             ({"platform": "plan9"}, "unknown platform"),
             ({"required_row": ""}, "names no required row"),

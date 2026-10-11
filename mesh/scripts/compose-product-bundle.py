@@ -24,6 +24,7 @@ QUALIFICATION_PLATFORMS = ("linux", "macos", "windows")
 QUALIFICATION_RECORD_NAME = "skippy-qualification-receipts.json"
 QUALIFICATION_STATUSES = ("qualified", "hardware-unavailable")
 SHA256_HEX = re.compile(r"^[0-9a-f]{64}$")
+GIT_SHA = re.compile(r"^[0-9a-f]{40}$")
 
 
 class RuntimeBackend(TypedDict):
@@ -122,7 +123,7 @@ def bind_qualification_record(bundle: Path, record_path: Path) -> dict[str, obje
         raise ValueError("qualification receipt record has an unsupported schema")
     source_sha = record.get("source_sha")
     plan_digest = record.get("plan_digest")
-    if not isinstance(source_sha, str) or SHA256_HEX.fullmatch(source_sha) is None:
+    if not isinstance(source_sha, str) or GIT_SHA.fullmatch(source_sha) is None:
         raise ValueError("qualification receipt record has an invalid source revision")
     if not isinstance(plan_digest, str) or SHA256_HEX.fullmatch(plan_digest) is None:
         raise ValueError("qualification receipt record has an invalid plan digest")

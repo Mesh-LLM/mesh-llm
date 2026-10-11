@@ -234,7 +234,7 @@ class CiProductComposerTests(unittest.TestCase):
     ) -> Path:
         record = {
             "schema_version": 1,
-            "source_sha": "a" * 64,
+            "source_sha": "a" * 40,
             "plan_digest": "b" * 64,
             "platform": "linux",
             "required_row": "linux-cpu",
@@ -262,7 +262,7 @@ class CiProductComposerTests(unittest.TestCase):
             manifest = json.loads((product / "product-manifest.json").read_text())
             binding = manifest["skippy_qualification"]
             self.assertEqual(binding["schema_version"], 1)
-            self.assertEqual(binding["source_sha"], "a" * 64)
+            self.assertEqual(binding["source_sha"], "a" * 40)
             self.assertEqual(binding["plan_digest"], "b" * 64)
             self.assertEqual(binding["platform"], "linux")
             self.assertEqual(binding["required_row"], "linux-cpu")

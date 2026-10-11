@@ -153,7 +153,8 @@
           "$ref": "#/$defs/sha256"
         },
         "source_sha": {
-          "$ref": "#/$defs/sha256"
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
         },
         "plan_digest": {
           "$ref": "#/$defs/sha256"

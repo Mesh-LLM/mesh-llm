@@ -134,7 +134,8 @@ class HardwareEvidenceTests(unittest.TestCase):
     def test_metal_runtime_without_a_version_token_uses_the_host_label(self) -> None:
         # A headless runner can enumerate the Metal stack without a version
         # number; the row must still carry a non-empty runtime identity.
-        with mock.patch.object(driver, "_apple_chip_name", return_value="Apple M2"):
+        with mock.patch.object(driver, "_apple_chip_name", return_value="Apple M2"), \
+             mock.patch.object(driver, "_macos_version", return_value="14.6"):
             hardware = driver.build_hardware(
                 self.row("macos-metal"),
                 {"state": "available", "row_id": "macos-metal", "runner": "macos-hosted"},
