@@ -108,7 +108,11 @@ pub(super) fn check(workflows: &BTreeMap<String, Node>) -> Result<(), String> {
         };
         if steps
             .iter()
-            .filter(|s| text(s, "uses").is_some_and(|u| u.starts_with("actions/cache/")))
+            .filter(|s| {
+                text(s, "uses").is_some_and(|u| {
+                    u.starts_with("actions/cache/") || u.starts_with("actions/cache@")
+                })
+            })
             .count()
             != expected
         {

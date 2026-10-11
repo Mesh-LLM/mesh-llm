@@ -36,12 +36,28 @@ pub(super) fn empty(path: &Path) -> DynResult<bool> {
     Ok(!path.exists() || fs::read_dir(path)?.next().is_none())
 }
 
+/// A non-executable earlier PATH entry must not mask the tool; the PATH
+/// spelling is kept so symlink-dispatched tools see their invoked name.
+fn is_executable_file(path: &Path) -> bool {
+    let Ok(metadata) = path.metadata() else {
+        return false;
+    };
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        metadata.is_file() && metadata.permissions().mode() & 0o111 != 0
+    }
+    #[cfg(not(unix))]
+    {
+        metadata.is_file()
+    }
+}
+
 pub(super) fn capture(program: &str, arguments: &[&str]) -> DynResult<Vec<u8>> {
     let executable = std::env::split_paths(&std::env::var_os("PATH").ok_or("missing PATH")?)
         .map(|directory| directory.join(program))
-        .find(|path| path.is_file())
-        .ok_or_else(|| format!("missing tool: {program}"))?
-        .canonicalize()?;
+        .find(|path| is_executable_file(path))
+        .ok_or_else(|| format!("missing tool: {program}"))?;
     let environment: BTreeMap<_, _> = std::env::vars_os()
         .map(|(name, value)| {
             let secret = name.to_string_lossy().contains("TOKEN");
