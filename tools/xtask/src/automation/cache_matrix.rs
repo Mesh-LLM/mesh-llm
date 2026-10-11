@@ -345,18 +345,26 @@ pub(crate) fn run(args: &[String]) -> DynResult<()> {
     let result = runtime.block_on(execute(&opts, &interrupt.cancellation()));
     let finished = interrupt.finish();
     if finished.is_err() {
-        let mut report: Value =
-            serde_json::from_slice(&std::fs::read(opts.output.join("cache-matrix.json"))?)?;
-        report["status"] = json!("cancelled");
-        report["error"] = json!("command interruption observed at finalization");
-        atomic(
-            &opts.output,
-            "cache-matrix.json",
-            &serde_json::to_vec_pretty(&report)?,
-        )?;
-        return Err("cache matrix cancelled; endpoint processes remain operator-owned".into());
+        let cancelled = || -> DynResult<()> {
+            Err("cache matrix cancelled; endpoint processes remain operator-owned".into())
+        };
+        let report = opts.output.join("cache-matrix.json");
+        if !report.is_file() || mark_cancelled(&opts.output, &report).is_err() {
+            return result.and_then(|()| cancelled());
+        }
+        return cancelled();
     }
     result
+}
+fn mark_cancelled(output: &Path, report_path: &Path) -> DynResult<()> {
+    let mut report: Value = serde_json::from_slice(&std::fs::read(report_path)?)?;
+    report["status"] = json!("cancelled");
+    report["error"] = json!("command interruption observed at finalization");
+    atomic(
+        output,
+        "cache-matrix.json",
+        &serde_json::to_vec_pretty(&report)?,
+    )
 }
 
 #[cfg(test)]

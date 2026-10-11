@@ -32,11 +32,14 @@ fn extract(text: &str) -> DynResult<Manifest> {
         if let Some((number, label)) = line
             .strip_prefix("### ")
             .and_then(|heading| heading.split_once(' '))
-            && let Some(index) = number
-                .strip_prefix("8.")
-                .and_then(|index| index.parse::<u8>().ok())
-            && (1..=15).contains(&index)
+            && let Some(index) = number.strip_prefix("8.")
         {
+            if !index
+                .parse::<u8>()
+                .is_ok_and(|index| (1..=15).contains(&index))
+            {
+                return Err(format!("unexpected section 8 family heading {number}").into());
+            }
             section = number.to_owned();
             family = label.to_owned();
             ordinal = 0;
@@ -96,7 +99,11 @@ pub(super) fn run(args: &[String]) -> DynResult<()> {
         PathBuf::from,
     );
     let output = values.get("--output").map_or_else(
-        || PathBuf::from("crates/mesh-llm-runtime-event-contracts/inventory/spec_manifest.json"),
+        || {
+            PathBuf::from(
+                "mesh/crates/mesh-llm-runtime-event-contracts/inventory/spec_manifest.json",
+            )
+        },
         PathBuf::from,
     );
     let manifest = extract(&std::fs::read_to_string(spec)?)?;
@@ -129,5 +136,14 @@ mod tests {
     fn incomplete_family_roster_is_rejected() {
         let result = extract("### 8.1 First\nRequired events:\n- event\n## 9. End\n");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn out_of_range_family_heading_is_rejected() {
+        let mut input = (1..=15)
+            .map(|index| format!("### 8.{index} Family {index}\nRequired events:\n- event\n"))
+            .collect::<String>();
+        input.push_str("### 8.16 Extra\nRequired events:\n- stray\n");
+        assert!(extract(&input).is_err());
     }
 }

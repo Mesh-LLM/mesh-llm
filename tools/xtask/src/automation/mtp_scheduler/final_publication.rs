@@ -23,9 +23,8 @@ impl ReceiptFile {
         })
     }
     pub(super) fn write(&mut self, value: &Value) -> DynResult<()> {
-        self.file.set_len(0)?;
         let bytes = serde_json::to_vec_pretty(value)?;
-        if bytes.len() > 64 * 1024 * 1024 {
+        if bytes.len() as u64 > super::RECEIPT_BYTES {
             return Err("MTP receipt exceeds bounded publication".into());
         }
         let metadata = std::fs::symlink_metadata(&self.path)?;

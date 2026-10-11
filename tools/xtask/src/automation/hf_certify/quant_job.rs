@@ -200,6 +200,11 @@ where
         let mut row = json!({"ordinal":ordinal,"window_uploaded":false,"completed_job":false});
         let phase_until = until.min(Instant::now() + Duration::from_secs(request.timeout_seconds));
         let result = run(&request, &phase_root, phase_until, cancel, &mut row);
+        if let Err(error) = &result
+            && row["error"].is_null()
+        {
+            row["error"] = json!(error.to_string());
+        }
         let observed = evidence::retain(&phase_root, "window", &row)?;
         evidence["windows"].as_array_mut().ok_or("quant windows absent")?.push(json!({
             "ordinal":ordinal,"window_uploaded":row["window_uploaded"],"error":row["error"],"observation":observed}));

@@ -48,7 +48,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         })
         .collect::<Result<Vec<_>, Box<dyn std::error::Error>>>()?;
-    for stream in listener.incoming() {
+    'connections: for stream in listener.incoming() {
         let mut stream = stream?;
         stream.set_read_timeout(Some(std::time::Duration::from_secs(2)))?;
         let mut bytes = Vec::new();
@@ -56,7 +56,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut buffer = [0; 4096];
             let read = stream.read(&mut buffer)?;
             if read == 0 {
-                return Err("incomplete fixture request".into());
+                continue 'connections;
             }
             bytes.extend_from_slice(&buffer[..read]);
             if let Some(end) = bytes.windows(4).position(|window| window == b"\r\n\r\n") {
@@ -77,7 +77,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut buffer = [0; 4096];
             let read = stream.read(&mut buffer)?;
             if read == 0 {
-                return Err("incomplete fixture body".into());
+                continue 'connections;
             }
             bytes.extend_from_slice(&buffer[..read]);
         }

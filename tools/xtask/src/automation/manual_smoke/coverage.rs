@@ -157,6 +157,19 @@ fn row(root: &Path, values: &[String]) -> DynResult<()> {
     if !STATUSES.contains(&status) {
         return Err(format!("invalid status for {key}").into());
     }
+    for index in [1, 6] {
+        let path = Path::new(values[index].trim());
+        if path.has_root()
+            || path.components().any(|part| {
+                !matches!(
+                    part,
+                    std::path::Component::Normal(_) | std::path::Component::CurDir
+                )
+            })
+        {
+            return Err(format!("non-relative {} for {key}", HEADER[index]).into());
+        }
+    }
     if !std::fs::metadata(root.join(values[1].trim()))?.is_file() {
         return Err(format!("missing fixture for {key}").into());
     }

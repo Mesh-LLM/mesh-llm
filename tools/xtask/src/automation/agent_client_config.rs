@@ -62,7 +62,15 @@ fn write_json(path: &Path, config: &impl Serialize) -> DynResult<()> {
     Ok(())
 }
 
+fn require_endpoint(client: &str, base: &str, model: &str) -> DynResult<()> {
+    if base.trim_end_matches('/').is_empty() || model.is_empty() {
+        return Err(format!("{client} base URL and model must be nonempty").into());
+    }
+    Ok(())
+}
+
 fn pi(base: &str, model: &str, output: &Path) -> DynResult<()> {
+    require_endpoint("Pi", base, model)?;
     let provider = PiProvider {
         api: "openai-completions",
         api_key: "mesh",
@@ -88,6 +96,7 @@ fn pi(base: &str, model: &str, output: &Path) -> DynResult<()> {
 }
 
 fn goose(base: &str, model: &str, provider: &Path, config: &Path) -> DynResult<()> {
+    require_endpoint("Goose", base, model)?;
     let settings = GooseProvider {
         name: "mesh",
         engine: "openai",

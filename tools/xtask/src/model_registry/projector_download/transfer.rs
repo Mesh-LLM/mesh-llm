@@ -8,6 +8,9 @@ use std::{
 };
 use url::Url;
 
+/// Covers discovery, a multi-GiB transfer and publication for the CLI path.
+const DOWNLOAD_DEADLINE: Duration = Duration::from_secs(30 * 60);
+
 pub(super) fn clean(report: &process::ProcessReport) -> bool {
     report.outcome == process::Outcome::Exited
         && report.status.is_some_and(|s| s.success())
@@ -27,7 +30,7 @@ pub(super) fn download(
         input,
         output,
         cancellation,
-        Instant::now() + Duration::from_secs(60),
+        Instant::now() + DOWNLOAD_DEADLINE,
         64 * 1024 * 1024 * 1024,
         None,
     )
