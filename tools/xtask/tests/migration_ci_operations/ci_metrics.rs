@@ -419,6 +419,20 @@ fn migration_ci_operations_ci_metrics_writes_raw_and_stdin() -> TestResult {
 }
 
 #[test]
+fn migration_ci_operations_ci_metrics_raw_stdout_suppresses_summary() -> TestResult {
+    let sandbox = Sandbox::new("raw-stdout")?;
+    let actual = port(
+        &sandbox,
+        &["--input", "sample_runs.json", "--raw-out", "-"],
+        None,
+    )?;
+    assert_eq!(actual.code, 0, "{}", actual.stderr);
+    let raw: Value = serde_json::from_str(&actual.stdout)?;
+    assert_eq!(raw["schema_version"], json!(1));
+    Ok(())
+}
+
+#[test]
 fn migration_ci_operations_ci_metrics_reports_input_errors() -> TestResult {
     for (name, input) in [
         ("error_no_jobs", "no_jobs.json"),
