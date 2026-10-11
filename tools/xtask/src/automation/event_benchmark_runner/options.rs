@@ -123,7 +123,7 @@ impl Command {
             .iter()
             .any(|n| !(1..=86400).contains(n))
         {
-            return Err("benchmark attempts are limited to1/2; token and lifecycle budgets must be bounded positive values".into());
+            return Err("benchmark attempts are limited to 1/2; token and lifecycle budgets must be bounded positive values".into());
         }
         let (execution, cleanup) = super::lifecycle_budget::cell(
             std::time::Duration::from_secs(self.readiness_secs),
