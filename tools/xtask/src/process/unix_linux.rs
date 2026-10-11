@@ -22,7 +22,12 @@ pub(super) fn group_active(group: libc::pid_t) -> Result<bool, Failure> {
             .and_then(|file| file.take(4096).read_to_end(&mut stat));
         match result {
             Ok(_) => (),
-            Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+            Err(error)
+                if error.kind() == io::ErrorKind::NotFound
+                    || error.raw_os_error() == Some(libc::ESRCH) =>
+            {
+                continue;
+            }
             Err(error) => return Err(Failure::io("inspect process", error)),
         }
         let end = stat

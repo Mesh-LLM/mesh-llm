@@ -7,7 +7,7 @@ pub(super) fn summarize(trajectories: &[Trajectory], records: &[Value]) -> DynRe
         let rows = records.iter().filter(|record| record["session_id"].as_str() == Some(&trajectory.session_id)).collect::<Vec<_>>();
         let requests = rows.iter().map(|record| serde_json::from_value::<Request>((*record).clone())).collect::<Result<Vec<_>, _>>()?;
         let completeness = complete(std::slice::from_ref(trajectory), &requests);
-        let successful = rows.iter().filter(|record| record.get("error").is_none()).collect::<Vec<_>>();
+        let successful = rows.iter().filter(|record| record.get("error").is_none_or(Value::is_null)).collect::<Vec<_>>();
         let sum = |key: &str| successful.iter().try_fold(0_u64, |sum, record| {
             let value = record[key].as_u64().ok_or("missing session token metric")?;
             sum.checked_add(value).ok_or("session token sum overflow")
@@ -48,5 +48,20 @@ mod tests {
         assert_eq!(sessions[0]["prompt_tokens"], 40);
         assert_eq!(sessions[0]["cache_pct"], 75.0);
         assert_eq!(sessions[0]["turns"][1]["error"], "HTTP 500");
+    }
+
+    #[test]
+    fn explicit_null_error_counts_as_successful_turn() {
+        let trajectories = serde_json::from_value::<Vec<Trajectory>>(json!([
+            {"session_id":"s","messages":[{"role":"assistant"}]}
+        ]))
+        .unwrap();
+        let rows = vec![
+            json!({"session_id":"s","request_id":"s:0","prompt_tokens":40,"cached_tokens":30,"error":null}),
+        ];
+        let sessions = summarize(&trajectories, &rows).unwrap();
+        assert_eq!(sessions[0]["complete"], true);
+        assert_eq!(sessions[0]["prompt_tokens"], 40);
+        assert_eq!(sessions[0]["cached_tokens"], 30);
     }
 }

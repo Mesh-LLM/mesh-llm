@@ -12,12 +12,15 @@ fn validate(text: &str) -> DynResult<()> {
     let mut model_open = false;
     let mut reporter_clear = false;
     for line in lines {
+        if line.starts_with("failed") || line.starts_with("blocked") {
+            return Err(format!("native runtime-event evidence records a failure: {line}").into());
+        }
         model_open |= line
             .strip_prefix("model-open:")
-            .is_some_and(|detail| !detail.trim().is_empty());
+            .is_some_and(|detail| detail.split_whitespace().any(|word| word == "succeeded"));
         reporter_clear |= line
             .strip_prefix("reporter-clear:")
-            .is_some_and(|detail| !detail.trim().is_empty());
+            .is_some_and(|detail| detail.trim() == "returned");
     }
     if !model_open || !reporter_clear {
         return Err(format!(
@@ -81,6 +84,9 @@ mod tests {
             "blocked: missing bundle\n",
             "failed: model-open\nexecuted\nmodel-open: attempted\nreporter-clear: returned\n",
             "executed-fake\nmodel-open: succeeded\nreporter-clear: returned\n",
+            "executed\nmodel-open: attempted\nreporter-clear: returned\n",
+            "executed\nmodel-open: succeeded\nreporter-clear: failed\n",
+            "executed\nmodel-open: succeeded\nreporter-clear: returned\nfailed: unload\n",
         ] {
             assert!(validate(text).is_err(), "{text}");
         }

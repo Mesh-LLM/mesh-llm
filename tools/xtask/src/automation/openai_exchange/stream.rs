@@ -20,6 +20,9 @@ pub(in crate::automation) struct Stream {
     bytes_seen: usize,
 }
 
+/// Longest server error text retained in replay evidence.
+const SERVER_ERROR_CHARS: usize = 512;
+
 #[derive(Deserialize)]
 struct Event {
     error: Option<Value>,
@@ -156,6 +159,7 @@ impl Stream {
                 .and_then(Value::as_str)
                 .map(str::to_owned)
                 .unwrap_or_else(|| error.to_string());
+            let message: String = message.chars().take(SERVER_ERROR_CHARS).collect();
             self.error = Some(format!("stream failed with server error: {message}"));
             return Ok(());
         }

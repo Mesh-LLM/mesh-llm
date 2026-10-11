@@ -109,3 +109,15 @@ fn first_delta_identity_and_full_output_identity_remain_distinct() {
     assert_eq!(first.content_sha256, split.content_sha256);
     assert_ne!(first.first_generated_sha256, split.first_generated_sha256);
 }
+
+#[test]
+fn retained_server_error_text_is_bounded() {
+    let mut stream = Stream::default();
+    let event = format!(
+        "data: {}\n\ndata: [DONE]\n",
+        serde_json::json!({"error":{"message":"x".repeat(SERVER_ERROR_CHARS * 4)}})
+    );
+    stream.consume(event.as_bytes(), Duration::ZERO).unwrap();
+    let error = stream.finish(Duration::from_secs(1), true).unwrap_err();
+    assert!(error.chars().filter(|c| *c == 'x').count() <= SERVER_ERROR_CHARS);
+}

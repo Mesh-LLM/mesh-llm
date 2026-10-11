@@ -159,7 +159,9 @@ fn release_container_job_names(release_workflow: &str) -> Vec<&str> {
             }
             let job = workflow_job_section(release_workflow, job_name)?;
             job.lines()
-                .any(|job_line| job_line == "    container:")
+                .any(|job_line| {
+                    job_line == "    container:" || job_line.starts_with("    container: ")
+                })
                 .then_some(job_name)
         })
         .collect()
@@ -236,6 +238,19 @@ jobs:
             VALID_SCCACHE_ACTION,
         )
         .unwrap();
+    }
+
+    #[test]
+    fn release_container_contract_covers_scalar_container_shorthand() {
+        let workflow = VALID_CONTAINER_WORKFLOW
+            .replace(
+                "    container:\n      image: example.invalid/runner@sha256:digest\n",
+                "    container: example.invalid/runner@sha256:digest\n",
+            )
+            .replace("      SCCACHE_GHA_ENABLED: \"false\"\n", "");
+
+        let error = check_release_container_contracts(&workflow, VALID_SCCACHE_ACTION).unwrap_err();
+        assert!(error.to_string().contains("SCCACHE_GHA_ENABLED"));
     }
 
     #[test]
