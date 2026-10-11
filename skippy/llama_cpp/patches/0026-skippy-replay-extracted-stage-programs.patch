@@ -268,7 +268,7 @@ index b4f9bb467..37c303bd6 100644
  
  if (BUILD_SHARED_LIBS)
 diff --git a/src/llama-context.cpp b/src/llama-context.cpp
-index 00c4ce168..9a920a17f 100644
+index 444342fc2..206bae547 100644
 --- a/src/llama-context.cpp
 +++ b/src/llama-context.cpp
 @@ -14,9 +14,12 @@
@@ -629,7 +629,7 @@ index 00c4ce168..9a920a17f 100644
          /*.cb          =*/ graph_get_cb(),
          /*.res         =*/ res,
 diff --git a/src/llama-context.h b/src/llama-context.h
-index 315710b6e..98b4ccb43 100644
+index b0414fe6a..f6cc42111 100644
 --- a/src/llama-context.h
 +++ b/src/llama-context.h
 @@ -18,6 +18,7 @@

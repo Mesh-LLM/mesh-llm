@@ -2777,7 +2777,7 @@ index f3b2ea3f0..e3a6ac5ec 100644
      LLM_TENSOR_POST_MLP_NORM,
      LLM_TENSOR_PER_LAYER_TOKEN_EMBD, // gemma3n
 diff --git a/src/llama-context.cpp b/src/llama-context.cpp
-index 40217e629..4585ba319 100644
+index 98cfad487..c371e2862 100644
 --- a/src/llama-context.cpp
 +++ b/src/llama-context.cpp
 @@ -1802,8 +1802,14 @@ int llama_context::encode(

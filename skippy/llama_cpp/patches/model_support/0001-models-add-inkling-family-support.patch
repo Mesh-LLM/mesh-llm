@@ -1487,7 +1487,7 @@ index 2ffd40650..f3b2ea3f0 100644
      LLM_TENSOR_VISEXP_ATTN_OUT,
      LLM_TENSOR_VISEXP_FFN_GATE,
 diff --git a/src/llama-context.cpp b/src/llama-context.cpp
-index 036b008cb..40217e629 100644
+index 0c17446dd..98cfad487 100644
 --- a/src/llama-context.cpp
 +++ b/src/llama-context.cpp
 @@ -186,6 +186,12 @@ llama_context::llama_context(

@@ -32,7 +32,7 @@ index c931898f4..5f242db95 100644
      foreach(SKIPPY_EVENT_TEST_CASE
              register_and_dispatch
 diff --git a/src/llama-context.cpp b/src/llama-context.cpp
-index 9a920a17f..036b008cb 100644
+index 206bae547..0c17446dd 100644
 --- a/src/llama-context.cpp
 +++ b/src/llama-context.cpp
 @@ -706,6 +706,7 @@ void llama_context::sched_reserve(const skippy_graph_build_inputs & graph_build_
@@ -55,7 +55,7 @@ index 9a920a17f..036b008cb 100644
  skippy_stage_program_installation * llama_context::get_stage_program_installation_for_test(int32_t nextn_layer_offset) {
      if (nextn_layer_offset < 0) return active_stage_program();
 diff --git a/src/llama-context.h b/src/llama-context.h
-index 98b4ccb43..8f7e14c7d 100644
+index f6cc42111..1082ecb19 100644
 --- a/src/llama-context.h
 +++ b/src/llama-context.h
 @@ -92,6 +92,7 @@ struct llama_context {

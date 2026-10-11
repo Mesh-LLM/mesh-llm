@@ -33,7 +33,7 @@ Nothing in the batched path signals "unsupported" any more.
  4 files changed, 77 insertions(+), 38 deletions(-)
 
 diff --git a/src/llama-context.cpp b/src/llama-context.cpp
-index cdae38eff..00c4ce168 100644
+index a679c2216..444342fc2 100644
 --- a/src/llama-context.cpp
 +++ b/src/llama-context.cpp
 @@ -886,6 +886,10 @@ uint32_t llama_context::n_ubatch() const {
@@ -48,7 +48,7 @@ index cdae38eff..00c4ce168 100644
      return cparams.n_seq_max;
  }
 diff --git a/src/llama-context.h b/src/llama-context.h
-index dd6ad1b50..315710b6e 100644
+index ccac95d93..b0414fe6a 100644
 --- a/src/llama-context.h
 +++ b/src/llama-context.h
 @@ -92,6 +92,7 @@ struct llama_context {

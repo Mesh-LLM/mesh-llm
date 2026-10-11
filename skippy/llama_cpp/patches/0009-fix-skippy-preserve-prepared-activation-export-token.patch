@@ -13,7 +13,7 @@ Subject: [PATCH 09/67] fix(skippy): preserve prepared activation export token
  5 files changed, 55 insertions(+), 2 deletions(-)
 
 diff --git a/src/llama-context.cpp b/src/llama-context.cpp
-index 773842bc4..b637e24ff 100644
+index c58a95163..2d3345156 100644
 --- a/src/llama-context.cpp
 +++ b/src/llama-context.cpp
 @@ -2853,6 +2853,16 @@ llm_graph_params llama_context::graph_params(
