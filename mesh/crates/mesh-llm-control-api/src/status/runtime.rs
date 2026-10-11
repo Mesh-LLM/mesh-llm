@@ -77,7 +77,29 @@ pub struct RuntimeCapabilityFlags {
     /// error.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub runtime_events: Option<RuntimeEventsCapability>,
+    /// Additive API capability: this node accepts a client's twin-bracket
+    /// header and copies its value, unread, into `twin_bracket_id` on the
+    /// `openai.exchange.v1` events of that exchange. A client checks it
+    /// before telling a user to mark a pair: an exchange with no
+    /// `twin_bracket_id` does not show the node lacks support. Absent on a
+    /// node that predates it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub twin_bracket: Option<TwinBracketCapability>,
 }
+
+/// The frozen `capabilities.twin_bracket` object on both `GET /api/runtime`
+/// and `GET /api/status`: the request header a client marks a pair with.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+pub struct TwinBracketCapability {
+    pub version: u8,
+    pub header: &'static str,
+}
+
+/// The one frozen value ever advertised for this capability in v1.
+pub const TWIN_BRACKET_CAPABILITY: TwinBracketCapability = TwinBracketCapability {
+    version: 1,
+    header: "x-mesh-twin-bracket",
+};
 
 /// The frozen `capabilities.runtime_events` object on both `GET /api/runtime`
 /// and `GET /api/status`. `cursor` names the wire cursor grammar prefix
@@ -350,6 +372,22 @@ mod tests {
         assert!(!flags.plugin_ingress);
         assert!(!flags.accepting_local);
         assert!(!flags.accepting_remote);
+    }
+
+    #[test]
+    fn twin_bracket_capability_is_frozen_and_absent_when_unset() {
+        assert_eq!(
+            serde_json::to_value(TWIN_BRACKET_CAPABILITY).unwrap(),
+            serde_json::json!({"version": 1, "header": "x-mesh-twin-bracket"})
+        );
+        let unset = serde_json::to_value(RuntimeCapabilityFlags::default()).unwrap();
+        assert!(unset.get("twin_bracket").is_none(), "{unset}");
+        let set = serde_json::to_value(RuntimeCapabilityFlags {
+            twin_bracket: Some(TWIN_BRACKET_CAPABILITY),
+            ..RuntimeCapabilityFlags::default()
+        })
+        .unwrap();
+        assert_eq!(set["twin_bracket"]["header"], "x-mesh-twin-bracket");
     }
 
     // ─── Intent Summary Defaults ────────────────────────────────────────────
