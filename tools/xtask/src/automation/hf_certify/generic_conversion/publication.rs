@@ -87,9 +87,9 @@ pub(super) fn execute(
         "--repo".into(),
         input.target_repo.clone(),
         "--credential-file".into(),
-        credential.display().to_string(),
+        super::helper_contract::path_text(credential, "credential")?.to_owned(),
         "--output-directory".into(),
-        out.display().to_string(),
+        super::helper_contract::path_text(&out, "output")?.to_owned(),
         "--timeout-seconds".into(),
         timeout.to_string(),
     ];

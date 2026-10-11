@@ -143,7 +143,7 @@ fn root(output: &str, input: &Input) -> DynResult<std::path::PathBuf> {
     std::fs::create_dir(&root)?;
     Ok(root)
 }
-fn credential(root: &Path) -> DynResult<tempfile::NamedTempFile> {
+fn credential() -> DynResult<tempfile::NamedTempFile> {
     let token = std::env::var_os("MESH_HF_PUBLICATION_TOKEN")
         .ok_or("explicit Jobs publication secret absent")?;
     let token = token
@@ -158,7 +158,7 @@ fn credential(root: &Path) -> DynResult<tempfile::NamedTempFile> {
         return Err("Jobs publication secret grammar refused".into());
     }
     use std::io::Write as _;
-    let mut file = tempfile::NamedTempFile::new_in(root)?;
+    let mut file = tempfile::NamedTempFile::new()?;
     file.write_all(token.as_bytes())?;
     file.as_file_mut().sync_all()?;
     Ok(file)
@@ -198,7 +198,7 @@ pub(in crate::automation::hf_certify) fn run(args: &[String]) -> DynResult<()> {
     let cancel = interrupt.cancellation();
     let until = Instant::now() + Duration::from_secs(input.timeout_secs);
     let mut evidence = json!({"schema_version":1,"workflow":"default-mtp-composition","request_sha256":admission::digest(&serde_json::to_vec(&input)?),"transport_input_sha256":admission::digest(&bytes),"status":"FAILED","operator_request_sha256":null,"operator":null,"error":null,"image_observed":false,"cost_observed":false});
-    let credential = credential(&root);
+    let credential = credential();
     let native_until = until - Duration::from_secs(input.receipt_export.export_budget_secs);
     let result = match credential.as_ref() {
         Ok(file) => phase(
@@ -209,14 +209,24 @@ pub(in crate::automation::hf_certify) fn run(args: &[String]) -> DynResult<()> {
             file.path(),
             &mut evidence,
         ),
-        Err(_) => Err("composition Jobs explicit credential admission failed".into()),
+        Err(error) => {
+            Err(format!("composition Jobs explicit credential admission failed: {error}").into())
+        }
     };
-    let native_complete = result.is_ok() && guard(native_until, &cancel).is_ok();
-    if native_complete {
-        evidence["status"] = json!("COMPOSITION_COMPLETED");
-    } else {
-        evidence["error"] =
-            json!("generic conversion phase incomplete; partial operator observations retained");
+    let failure = match result {
+        Ok(()) => guard(native_until, &cancel)
+            .err()
+            .map(|error| format!("composition deadline/cancellation guard failed: {error}")),
+        Err(error) => Some(error.to_string()),
+    };
+    let native_complete = failure.is_none();
+    match failure {
+        None => evidence["status"] = json!("COMPOSITION_COMPLETED"),
+        Some(error) => {
+            evidence["error"] = json!(format!(
+                "composition phase incomplete; partial operator observations retained: {error}"
+            ));
+        }
     }
     let native_path = root.join("native-job.json");
     let published = admission::publish(&native_path, &evidence);

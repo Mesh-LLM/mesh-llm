@@ -34,13 +34,22 @@ pub(super) fn qualify(
             .join(format!("preflight-{}.json", build.label()));
         crate::command::write_json_file(&path, &request)?;
         let execution = super::run_transport::invoke(root, "context-preflight", &path, &result);
-        if result.try_exists()? {
+        let recorded = result.try_exists()?;
+        if recorded {
             let evidence: serde_json::Value = serde_json::from_slice(&std::fs::read(&result)?)?;
             qualification.insert(build.label().to_owned(), tokens(&evidence)?);
             document["context_preflight"][build.label()] = evidence;
         }
         super::run_snapshot::write(run_path, document)?;
         execution?;
+        if !recorded {
+            return Err(format!(
+                "context preflight for {} produced no eligibility evidence at {}",
+                build.label(),
+                result.display()
+            )
+            .into());
+        }
     }
     Ok(qualification)
 }

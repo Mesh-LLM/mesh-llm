@@ -148,12 +148,18 @@ impl Row {
                     .max()
                     .unwrap_or(0)
             }),
-            max_prompt_cached_ratio: max_cached.map(|n| {
-                if maximum_prompt == 0 {
-                    0.0
-                } else {
-                    number(n) / number(maximum_prompt)
-                }
+            max_prompt_cached_ratio: qualified.then(|| {
+                runs.iter()
+                    .filter_map(|row| {
+                        let cached = row.cached_tokens?;
+                        Some(if row.prompt_tokens == 0 {
+                            0.0
+                        } else {
+                            number(cached) / number(row.prompt_tokens)
+                        })
+                    })
+                    .max_by(f64::total_cmp)
+                    .unwrap_or(0.0)
             }),
             min_cache_efficiency: qualified.then(|| {
                 efficiency
