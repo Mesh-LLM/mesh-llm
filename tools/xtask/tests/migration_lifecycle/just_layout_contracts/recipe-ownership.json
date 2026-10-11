@@ -112,6 +112,7 @@
       "ci-validate",
       "no-console-print",
       "publish-crates",
+      "research-source-restore",
       "test-all"
     ],
     "just/mesh-client.just": [
