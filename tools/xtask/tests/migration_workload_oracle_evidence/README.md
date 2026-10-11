@@ -15,9 +15,10 @@ artifact tampering. That correction receipt and the original source review were
 working records of the migration and are not tracked in this repository; the
 tests in this directory are the maintained evidence.
 
-Interpreter-backed differential tests have been removed. Current tests execute
-the Rust evidence writer and verifier and assert domain behavior and consumed
-output contracts. The differential observations above are historical evidence.
+Interpreter-backed differential tests have been removed. The Rust writer and
+verifier tests that replace them run from the `migration_workload_oracle_cli`
+target, which is registered with the CI wiring change; at this revision the
+fixtures here are not yet compiled into a test target. The differential observations above are historical evidence.
 
 ## Behavior census
 
