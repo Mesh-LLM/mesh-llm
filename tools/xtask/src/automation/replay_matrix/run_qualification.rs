@@ -35,9 +35,13 @@ pub(super) fn qualify(
         crate::command::write_json_file(&path, &request)?;
         let execution = super::run_transport::invoke(root, "context-preflight", &path, &result);
         let recorded = result.try_exists()?;
+        let mut passed = false;
         if recorded {
             let evidence: serde_json::Value = serde_json::from_slice(&std::fs::read(&result)?)?;
-            qualification.insert(build.label().to_owned(), tokens(&evidence)?);
+            passed = evidence["passed"] == true;
+            if passed {
+                qualification.insert(build.label().to_owned(), tokens(&evidence)?);
+            }
             document["context_preflight"][build.label()] = evidence;
         }
         super::run_snapshot::write(run_path, document)?;
@@ -45,6 +49,14 @@ pub(super) fn qualify(
         if !recorded {
             return Err(format!(
                 "context preflight for {} produced no eligibility evidence at {}",
+                build.label(),
+                result.display()
+            )
+            .into());
+        }
+        if !passed {
+            return Err(format!(
+                "context preflight for {} did not pass; see {}",
                 build.label(),
                 result.display()
             )
