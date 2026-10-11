@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import { ChatLayout } from '@/features/chat/layouts/ChatLayout'
@@ -417,5 +417,18 @@ describe('ChatPage', () => {
       expect.stringContaining('warm-model')
     ])
     expect(screen.queryByText('cold-model')).not.toBeInTheDocument()
+  })
+
+  it('starts a new chat on Cmd/Ctrl+Shift+O, clearing and focusing the composer', async () => {
+    const user = userEvent.setup()
+
+    renderChatPage()
+    await user.type(screen.getByLabelText('Prompt'), 'draft that belongs to the old chat')
+
+    fireEvent.keyDown(window, { key: 'o', metaKey: true, shiftKey: true })
+
+    expect(await screen.findAllByText(/New chat/)).not.toHaveLength(0)
+    expect(screen.getByLabelText('Prompt')).toHaveValue('')
+    await waitFor(() => expect(screen.getByLabelText('Prompt')).toHaveFocus())
   })
 })

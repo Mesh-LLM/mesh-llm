@@ -76,8 +76,9 @@ use self::status::{
     IntentSummary, LifecycleInstancePayload, LoggingStatusPayload, MeshModelPayload,
     OpenAiGuardrailsPayload, PluginFrameTelemetryPayload, RUNTIME_EVENTS_CAPABILITY,
     RuntimeCapabilityFlags, RuntimeLlamaPayload, RuntimeProcessesPayload, RuntimeStatusPayload,
-    StatusPayload, build_runtime_processes_payload, build_runtime_stage_payloads,
-    build_runtime_status_payload, derive_daemon_state, runtime_stage_state_label,
+    StatusPayload, TWIN_BRACKET_CAPABILITY, build_runtime_processes_payload,
+    build_runtime_stage_payloads, build_runtime_status_payload, derive_daemon_state,
+    runtime_stage_state_label,
 };
 use crate::mesh;
 use crate::models::append_external_inference_models;
@@ -1153,6 +1154,7 @@ fn derive_capability_flags(
         accepting_local,
         accepting_remote,
         runtime_events: Some(RUNTIME_EVENTS_CAPABILITY),
+        twin_bracket: Some(TWIN_BRACKET_CAPABILITY),
     }
 }
 
