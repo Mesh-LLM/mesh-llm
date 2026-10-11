@@ -79,7 +79,10 @@ fn generate(args: &[String]) -> Result<(), Failure> {
         let sha256 = file_sha256(Path::new(&archive))
             .map_err(|failure| os_error_line(&failure.error, &archive))?;
         let runtime = inspect(&archive, index, tmp_root, tag, release_version, &mut shared)?;
-        let name = archive.rsplit('/').next().unwrap_or("");
+        let name = Path::new(&archive)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or_else(|| format!("runtime archive has no UTF-8 file name: {archive}"))?;
         let mut artifact = runtime;
         set(
             &mut artifact,
