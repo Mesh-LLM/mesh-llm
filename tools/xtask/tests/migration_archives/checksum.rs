@@ -78,13 +78,13 @@ fn migration_archives_checksum_rejects_wrong_name_and_extra_lines() -> TestResul
     let wrong = verify(&format!("{digest}  wrong-name.tar.gz\n"))?;
     wrong.assert(
         1,
-        "checksum sidecar names 'wrong-name.tar.gz', expected 'runtime.tar.gz'\n",
+        "checksum sidecar names \"wrong-name.tar.gz\", expected \"runtime.tar.gz\"\n",
     );
     // A trailing space is part of the recorded name, not a format error.
     let trailing = verify(&format!("{digest}  {NAME} \n"))?;
     trailing.assert(
         1,
-        "checksum sidecar names 'runtime.tar.gz ', expected 'runtime.tar.gz'\n",
+        "checksum sidecar names \"runtime.tar.gz \", expected \"runtime.tar.gz\"\n",
     );
     let one_line = "checksum sidecar must contain exactly one canonical line\n";
     for contents in [
@@ -129,7 +129,8 @@ fn migration_archives_checksum_rejects_mismatch() -> TestResult {
 #[test]
 fn migration_archives_checksum_reports_decode_and_io_errors() -> TestResult {
     let outcome = verify_at(NAME, Some(b"\xff\n"))?;
-    let expected = "'utf-8' codec can't decode byte 0xff in position 0: invalid start byte\n";
+    let expected =
+        "checksum sidecar is not valid UTF-8: invalid utf-8 sequence of 1 bytes from index 0\n";
     outcome.assert(1, expected);
     // Given a well-formed sidecar whose artifact is a directory.
     let line = format!("{}  dist\n", digest());
@@ -137,7 +138,7 @@ fn migration_archives_checksum_reports_decode_and_io_errors() -> TestResult {
         std::fs::create_dir(root.join("dist"))?;
         write(root, "dist.sha256", line.as_bytes())
     })?;
-    directory.assert(1, "[Errno 21] Is a directory: 'dist'\n");
+    directory.assert(1, "[Errno 21] Is a directory: \"dist\"\n");
     Ok(())
 }
 
@@ -195,6 +196,6 @@ fn migration_archives_checksum_treats_dash_values_as_artifacts() -> TestResult {
         let expected = format!("archive checksum sidecar is missing or empty: {shown}.sha256\n");
         run_args(args)?.assert(1, &expected);
     }
-    run_args(&["/"])?.assert(1, "PosixPath('/') has an empty name\n");
+    run_args(&["/"])?.assert(1, "artifact path has an empty filename: \"/\"\n");
     Ok(())
 }

@@ -81,14 +81,15 @@ pub(crate) struct Outcome {
     pub(crate) stderr: String,
     pub(crate) tree: BTreeMap<String, String>,
     pub(crate) root: Scratch,
+    parity: Parity,
 }
 
 impl Outcome {
     pub(crate) fn assert(&self, code: i32, stderr: &str) {
-        if code == 0 || stderr.is_empty() {
-            assert_eq!(self.stderr, stderr, "stderr");
-        } else {
-            assert!(!self.stderr.is_empty(), "failure diagnostic");
+        match self.parity {
+            Parity::Exact => assert_eq!(self.stderr, stderr, "stderr"),
+            Parity::LastLine => assert_eq!(last_line(&self.stderr), last_line(stderr), "stderr"),
+            Parity::Status => assert_eq!(self.stderr.is_empty(), stderr.is_empty(), "stderr"),
         }
         assert_eq!(self.stdout, "", "stdout");
         assert_eq!(self.code, Some(code), "status");
@@ -106,15 +107,20 @@ impl Outcome {
 pub(crate) fn run(
     tool: Tool,
     args: &[&str],
-    _parity: Parity,
+    parity: Parity,
     build: impl Fn(&Path) -> Built,
 ) -> Result<Outcome, Box<dyn Error>> {
-    execute(tool, args, &build)
+    execute(tool, args, parity, &build)
+}
+
+fn last_line(stream: &str) -> &str {
+    stream.lines().last().unwrap_or_default()
 }
 
 fn execute(
     tool: Tool,
     args: &[&str],
+    parity: Parity,
     build: &impl Fn(&Path) -> Built,
 ) -> Result<Outcome, Box<dyn Error>> {
     let root = Scratch::new(tool.command())?;
@@ -131,6 +137,7 @@ fn execute(
         stderr: text(&output.stderr).replace(&scratch, SCRATCH),
         tree: snapshot(root.path())?,
         root,
+        parity,
     })
 }
 

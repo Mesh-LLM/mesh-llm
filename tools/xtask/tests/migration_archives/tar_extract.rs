@@ -198,7 +198,7 @@ fn migration_archives_tar_reports_missing_archive_after_creating_destination() -
         Parity::Exact,
         |_| Ok(()),
     )?;
-    let expected = "[Errno 2] No such file or directory: 'missing.tar.gz'";
+    let expected = "[Errno 2] No such file or directory: \"missing.tar.gz\"";
     outcome.assert(1, &rejected(expected));
     assert!(outcome.path("output").is_dir());
     Ok(())
@@ -289,7 +289,12 @@ fn migration_archives_tar_rejects_invalid_pax_size_before_extracting_any_member(
                     TarMember::file("bad", 0o644, b"payload"),
                 ]);
                 let outcome = extract(tar(&members))?;
-                outcome.assert(1, &rejected("invalid PAX size"));
+                let expected = if earlier_member {
+                    "invalid PAX size"
+                } else {
+                    "invalid or unsupported tar archive: invalid PAX size"
+                };
+                outcome.assert(1, &rejected(expected));
                 assert!(
                     outcome.stderr.contains("invalid PAX size"),
                     "{}",
