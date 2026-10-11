@@ -101,9 +101,15 @@ pub(super) fn regular(path: &Path, maximum: u64) -> DynResult<PathBuf> {
     }
     Ok(path)
 }
+/// Largest receipt the worker publishes and the parent accepts.
+pub(super) const RECEIPT_BYTES: u64 = 64 * 1024 * 1024;
+const INPUT_BYTES: u64 = 16 * 1024 * 1024;
 pub(super) fn read(path: &Path) -> DynResult<Vec<u8>> {
+    read_bounded(path, INPUT_BYTES)
+}
+pub(super) fn read_bounded(path: &Path, maximum: u64) -> DynResult<Vec<u8>> {
     use std::io::Read;
-    let path = regular(path, 16 * 1024 * 1024)?;
+    let path = regular(path, maximum)?;
     let mut options = std::fs::OpenOptions::new();
     options.read(true);
     #[cfg(unix)]
@@ -113,12 +119,12 @@ pub(super) fn read(path: &Path) -> DynResult<Vec<u8>> {
     }
     let file = options.open(path)?;
     let metadata = file.metadata()?;
-    if !metadata.is_file() || metadata.len() > 16 * 1024 * 1024 {
+    if !metadata.is_file() || metadata.len() > maximum {
         return Err("requires bounded regular input".into());
     }
     let mut bytes = Vec::new();
-    file.take(16 * 1024 * 1024 + 1).read_to_end(&mut bytes)?;
-    if bytes.len() > 16 * 1024 * 1024 {
+    file.take(maximum + 1).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > maximum {
         return Err("input grew beyond bound".into());
     }
     Ok(bytes)

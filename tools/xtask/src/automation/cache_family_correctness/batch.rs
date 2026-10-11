@@ -113,8 +113,15 @@ fn profile(request: &Request, case: &Value, value: &Value) -> DynResult<Input> {
     input.borrow_resident_hits = true;
     input.cache_decoded_result_hits = false;
     input.topologies = request.topologies.clone();
+    (input.source_port, input.restore_port) = loopback_ports()?;
     input.validate()?;
     Ok(input)
+}
+/// Two distinct ephemeral loopback ports, released before the producer binds.
+fn loopback_ports() -> DynResult<(u16, u16)> {
+    let source = std::net::TcpListener::bind("127.0.0.1:0")?;
+    let restore = std::net::TcpListener::bind("127.0.0.1:0")?;
+    Ok((source.local_addr()?.port(), restore.local_addr()?.port()))
 }
 fn row(case: &Value, topology: Value, evidence: &Value) -> Value {
     let r = &evidence["skippy"];

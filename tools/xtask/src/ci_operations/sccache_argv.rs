@@ -4,7 +4,9 @@
 //! `--minimum-hit-rate`, with unique-prefix options, `=value`, `-h`
 //! bundling, `--` handling and Python 3.13's sequential error order.
 
-use crate::ci_operations::build_cache_options::{Kind, classify, help_flag, is_option_like};
+use crate::ci_operations::build_cache_options::{
+    Kind, classify_abbreviated, first_ambiguity, help_flag, is_option_like,
+};
 use crate::ci_operations::runner_identity_argv::error;
 use crate::repository::check_report::CheckReport;
 use crate::repository::text::repr;
@@ -59,6 +61,9 @@ struct Seen {
 
 /// Parses `args`, or returns the help/usage report argparse would produce.
 pub(crate) fn parse(args: &[String]) -> Result<Args, CheckReport> {
+    if let Some(message) = first_ambiguity(args, &OPTIONS) {
+        return Err(fail(&message));
+    }
     let mut seen = Seen::default();
     let mut extras: Vec<String> = Vec::new();
     let mut positional_only = false;
@@ -70,7 +75,7 @@ pub(crate) fn parse(args: &[String]) -> Result<Args, CheckReport> {
             extras.push(arg.clone());
             continue;
         }
-        match classify(arg, &OPTIONS) {
+        match classify_abbreviated(arg, &OPTIONS) {
             Kind::Positional | Kind::Unknown => extras.push(arg.clone()),
             Kind::Known("-h" | "--help", explicit, sep) => {
                 help_flag(explicit, sep, "-h/--help", &fail)?;

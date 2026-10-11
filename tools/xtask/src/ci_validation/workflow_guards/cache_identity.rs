@@ -164,7 +164,10 @@ fn seed(workflows: &BTreeMap<String, Node>) -> Result<(), String> {
         }
     }
     let mut caches = 0;
-    for step in all_steps(warmer).filter(|s| text(s, "uses").starts_with("actions/cache/")) {
+    for step in all_steps(warmer).filter(|s| {
+        let action = text(s, "uses");
+        action.starts_with("actions/cache/") || action.starts_with("actions/cache@")
+    }) {
         caches += 1;
         exact(
             step.get("with").ok_or("warmer cache inputs missing")?,

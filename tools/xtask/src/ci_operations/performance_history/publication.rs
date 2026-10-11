@@ -42,18 +42,30 @@ pub(super) fn publish(input: &mut Input<'_>, outputs: [(&Path, &[u8]); 2]) -> Dy
         input.check()
     })();
     if let Err(error) = result {
-        for item in stages.iter_mut().rev().filter(|item| item.committed) {
-            if let Some(previous) = item.restore.take() {
-                previous
-                    .persist(&item.destination)
-                    .map_err(|error| error.error)?;
-            } else {
-                std::fs::remove_file(&item.destination)?;
-            }
+        let failures = rollback(&mut stages);
+        if failures.is_empty() {
+            return Err(error);
         }
-        return Err(error);
+        return Err(format!("{error}; rollback failed: {}", failures.join("; ")).into());
     }
     Ok(())
+}
+/// Attempts every committed stage, newest first, and reports each failure.
+fn rollback(stages: &mut [Stage]) -> Vec<String> {
+    let mut failures = Vec::new();
+    for item in stages.iter_mut().rev().filter(|item| item.committed) {
+        let restored = match item.restore.take() {
+            Some(previous) => previous
+                .persist(&item.destination)
+                .map(drop)
+                .map_err(|error| error.error),
+            None => std::fs::remove_file(&item.destination),
+        };
+        if let Err(error) = restored {
+            failures.push(format!("{}: {error}", item.destination.display()));
+        }
+    }
+    failures
 }
 fn stage(input: &mut Input<'_>, path: &Path, bytes: &[u8]) -> DynResult<Stage> {
     let parent = path

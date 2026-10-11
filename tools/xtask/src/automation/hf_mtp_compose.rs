@@ -85,7 +85,12 @@ fn finalize(
         }
     };
     if let Some(plan) = plan {
-        admission::publish(&root.join("publication-plan.json"), &plan)?;
+        if let Err(error) = admission::publish(&root.join("publication-plan.json"), &plan) {
+            report["status"] = json!("FAILED");
+            report["error"] = json!(format!("publication plan publication failed: {error}"));
+            let _receipt = admission::publish(&root.join("report.json"), report);
+            return Err(error);
+        }
         if let Err(error) = admission::publish(&root.join("report.json"), report) {
             // This freshly owned leaf must not survive failed receipt publication.
             std::fs::remove_file(root.join("publication-plan.json"))?;

@@ -16,13 +16,15 @@ use std::{
 };
 fn arguments(target: &Target) -> Vec<OsString> {
     let mut args = vec!["download".into(), target.repo.clone().into()];
-    if let Some(revision) = &target.revision {
+    if target.verified.is_some() {
         args.extend(target.includes.iter().map(OsString::from));
-        args.extend(["--revision".into(), revision.into()]);
     } else {
         for include in &target.includes {
             args.extend(["--include".into(), include.into()]);
         }
+    }
+    if let Some(revision) = &target.revision {
+        args.extend(["--revision".into(), revision.into()]);
     }
     args
 }
