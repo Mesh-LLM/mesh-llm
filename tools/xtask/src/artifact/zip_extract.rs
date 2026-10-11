@@ -108,14 +108,28 @@ fn portable_parts(name: &str) -> Result<Vec<String>, Failure> {
     Ok(parts)
 }
 
-fn resolve_link(parts: &[String], target: &str) -> Result<(), Failure> {
+fn resolve_link(
+    parts: &[String],
+    target: &str,
+    symlinks: &HashSet<&[String]>,
+) -> Result<(), Failure> {
     if has_unportable_text(target) {
         return fail(format!("symlink target is not portable: {}", repr(target)));
     }
     let mut resolved = parts[..parts.len() - 1].to_vec();
+    // Descending through an archive symlink stays inside that link's own
+    // validated target, but `..` after one follows the physical target's
+    // parent, which lexical resolution cannot bound.
+    let mut through_link = false;
     for part in posix_parts(target) {
         if part != ".." {
             resolved.push(part);
+            through_link |= symlinks.contains(resolved.as_slice());
+        } else if through_link {
+            let shown = repr(target);
+            return fail(format!(
+                "symlink target traverses upward through an archive symlink: {shown}"
+            ));
         } else if resolved.pop().is_none() {
             let shown = repr(target);
             return fail(format!(
@@ -151,7 +165,7 @@ fn classify<'a>(archive: &Archive, info: &'a Info) -> Result<Entry<'a>, Failure>
                     repr(&info.filename)
                 ));
             };
-            resolve_link(&parts, &target)?;
+            resolve_link(&parts, &target, &HashSet::new())?;
             Kind::Symlink(target)
         }
         0 | S_IFREG => Kind::File,
@@ -192,6 +206,9 @@ fn inspect(archive: &Archive) -> Result<Vec<Entry<'_>>, Failure> {
             return fail(format!(
                 "entry is nested beneath an archive symlink: {name}"
             ));
+        }
+        if let Kind::Symlink(target) = &entry.kind {
+            resolve_link(&entry.parts, target, &symlinks)?;
         }
     }
     Ok(entries)

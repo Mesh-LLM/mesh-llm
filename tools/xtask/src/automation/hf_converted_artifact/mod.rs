@@ -105,7 +105,7 @@ pub(crate) fn validate_converted_artifact_manifest(
         Some(Value::Number(number)) => number
             .as_u64()
             .and_then(|count| usize::try_from(count).ok())
-            .filter(|count| *count > 0)
+            .filter(|count| (1..=1024).contains(count))
             .ok_or_else(|| ArtifactError::InvalidSplitCount(manifest_path.clone()))?,
         _ => return Err(ArtifactError::InvalidSplitCount(manifest_path)),
     };

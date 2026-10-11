@@ -433,9 +433,15 @@ async fn exchange(
     let mut row = json!({"request_index":index,"phase":phase,"family":item.get("family"),"prompt_sha256":hex::encode(Sha256::digest(prompt.as_bytes())),"requested_completion_tokens":tokens});
     match result {
         Ok(evidence) => {
+            let Some(new_prompt_tokens) =
+                evidence.prompt_tokens.checked_sub(evidence.cached_tokens)
+            else {
+                row["error"] = json!("cached prompt tokens exceed prompt tokens");
+                return row;
+            };
             row["prompt_tokens"] = json!(evidence.prompt_tokens);
             row["cached_prompt_tokens"] = json!(evidence.cached_tokens);
-            row["new_prompt_tokens"] = json!(evidence.prompt_tokens - evidence.cached_tokens);
+            row["new_prompt_tokens"] = json!(new_prompt_tokens);
             row["completion_tokens"] = json!(evidence.completion_tokens);
             row["content_sha256"] = json!(evidence.content_sha256);
             row["ttft_seconds"] = json!(evidence.ttft_seconds);

@@ -7,12 +7,22 @@ pub(super) fn group_active(group: libc::pid_t) -> Result<bool, Failure> {
     let size =
         i32::try_from(std::mem::size_of_val(&members)).map_err(|_| Failure::EnumerationLimit)?;
     let group = u32::try_from(group).map_err(|_| Failure::EnumerationLimit)?;
+    // SAFETY: __error returns this thread's errno slot; clearing it lets a
+    // zero-byte result be distinguished from a reported failure.
+    unsafe { *libc::__error() = 0 };
     // SAFETY: members is an aligned initialized PID array, and size is its exact
     // writable byte length. libproc writes at most size bytes.
     let bytes =
         unsafe { libc::proc_listpids(PROC_PGRP_ONLY, group, members.as_mut_ptr().cast(), size) };
-    if bytes <= 0 {
+    if bytes < 0 {
         return Err(Failure::io("list group", io::Error::last_os_error()));
+    }
+    if bytes == 0 {
+        let error = io::Error::last_os_error();
+        if error.raw_os_error() == Some(0) {
+            return Ok(false);
+        }
+        return Err(Failure::io("list group", error));
     }
     if bytes == size {
         return Err(Failure::EnumerationLimit);
