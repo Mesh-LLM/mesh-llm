@@ -21,11 +21,25 @@ surface, and an external plugin protocol.
   Treat these as reachable from other local processes and from the browser (CSRF,
   DNS rebinding, missing origin checks are in scope).
 
-## Out of scope / lower priority
-- `evals/`, `recipes/`, `docs/`, `contrib/`, benchmark harnesses.
-- Vendored or third-party crates (`llama.cpp` and friends) unless the bug is in how
-  mesh-llm calls into them.
+## Out of scope — please do not report findings in these
+These are developer and CI conveniences. They run on a maintainer's machine or in
+CI with trusted input, never on a user's node and never on untrusted data. Shell
+quoting, argument injection, `curl | sh`, path handling and temp-file use in them
+are intentional and not vulnerabilities.
+
+- `scripts/` and `mesh/scripts/`, `skippy/scripts/` — ~200 dev/release shell scripts.
+- `ci/`, `.github/`, `just/`, `Justfile`, `tools/xtask` — build, lint and release automation.
+- `mesh/evals/`, `skippy/evals/`, `mesh/deploy/`, `mesh/website/`, `mesh/docs/`,
+  `skippy/docs/`, `install.sh`, `install.ps1`.
+- `mesh/crates/mesh-llm-test-harness`, `skippy/crates/skippy-bench`,
+  `skippy-gpu-bench`, `llama-spec-bench`, and any `benches/`, `tests/`, `examples/`,
+  or `#[cfg(test)]` code. Test-only panics, unwraps and weak randomness are fine.
+- `skippy/llama_cpp/` and other vendored third-party code — report upstream, unless
+  the bug is in how mesh-llm calls into it (per SECURITY.md).
 - Anything requiring the attacker to already have shell access on the node.
+
+In short: a finding only counts if it is reachable in a shipped `mesh-llm` binary
+from input an attacker controls.
 
 ## How you rate severity
 - **Critical**: remote pre-auth memory corruption or RCE from peer traffic or a
