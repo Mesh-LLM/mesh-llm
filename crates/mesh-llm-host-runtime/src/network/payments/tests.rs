@@ -25,12 +25,14 @@ mod forwarding;
 mod metered;
 mod metered_acceptance;
 mod metered_live;
+mod metered_strikes;
 
 #[derive(Default)]
 struct Network {
     entries: Mutex<HashMap<String, (u8, Transaction)>>,
     next: AtomicUsize,
     payments: AtomicUsize,
+    top_up_msat: AtomicUsize,
     invoice_expiry_seconds: AtomicUsize,
     updates: tokio::sync::Notify,
     hold_payments: AtomicBool,
@@ -46,7 +48,7 @@ struct TestWallet {
 impl WalletProvider for TestWallet {
     async fn balance(&self) -> Result<Balance> {
         Ok(Balance {
-            spendable_msat: 100_000,
+            spendable_msat: 100_000 + self.network.top_up_msat.load(Ordering::SeqCst) as u64,
         })
     }
     async fn transactions(&self, _: usize) -> Result<Vec<Transaction>> {

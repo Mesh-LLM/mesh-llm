@@ -29,3 +29,20 @@ mod workload_routing;
 
 #[cfg(all(test, feature = "payments"))]
 pub(crate) use response::metered_payer::start as test_metered_start;
+
+#[cfg(all(test, feature = "payments"))]
+pub(crate) async fn test_payment_rank(
+    node: &crate::mesh::Node,
+    ordered: Vec<crate::inference::election::InferenceTarget>,
+) -> (
+    Result<bool, &'static str>,
+    Vec<crate::inference::election::InferenceTarget>,
+    usize,
+) {
+    let mut candidates = routing_rank::RankedCandidates {
+        equivalent_prefix: ordered.len(),
+        ordered,
+    };
+    let result = payment_routing::rank(node, "test", 1, 8, &mut candidates, None).await;
+    (result, candidates.ordered, candidates.equivalent_prefix)
+}
