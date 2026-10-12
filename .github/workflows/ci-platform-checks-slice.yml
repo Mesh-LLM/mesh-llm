@@ -335,9 +335,10 @@ jobs:
             "ci_validation::windows_runtime::tests::installer::consumer::native_windows_consumer_stale_cleanup_failure_keeps_committed_new_product",
             "ci_validation::windows_runtime::tests::installer::consumer::native_windows_consumer_help_and_missing_cli_value_avoid_download_and_mutation",
             "automation::private_state::deletion::tests::windows_transient_handle_lock_is_removed_after_release",
-            "automation::private_state::deletion::tests::windows_persistent_handle_lock_retains_log_and_reports_failure"
+            "automation::private_state::deletion::tests::windows_persistent_handle_lock_retains_log_and_reports_failure",
+            "automation::private_state::windows_privacy::tests::migration_lifecycle_windows_directory_has_only_current_user_inheritable_dacl"
           )
-          if ($expected.Count -ne 20 -or @($expected | Select-Object -Unique).Count -ne 20) { throw "native Windows contract roster must contain twenty distinct methods" }
+          if ($expected.Count -ne 21 -or @($expected | Select-Object -Unique).Count -ne 21) { throw "native Windows contract roster must contain twenty-one distinct methods" }
           $verified = 0
           foreach ($method in $expected) {
             $listing = @(just with-lld cargo test --locked -p xtask --bin xtask $method -- --exact --list)
@@ -351,7 +352,7 @@ jobs:
             if (@($result | Where-Object { $_ -match '^test result: ok\. 1 passed; 0 failed; 0 ignored;' }).Count -ne 1) { throw "native Windows method must pass without an ignored test: $method" }
             $verified++
           }
-          if ($verified -ne 20) { throw "all twenty native Windows methods must be verified" }
+          if ($verified -ne 21) { throw "all twenty-one native Windows methods must be verified" }
           $wrapper = "ci_validation::windows_runtime::tests::with_lld::windows_with_lld_propagates_native_failure_and_success"
           $wrapperListing = @(just with-lld cargo test --locked -p xtask --bin xtask $wrapper -- --exact --list)
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
