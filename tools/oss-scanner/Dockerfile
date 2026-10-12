@@ -33,7 +33,7 @@ WORKDIR /src
 RUN cargo fetch --locked
 
 # Debug build keeps debug info and assertions, which is what the scanner wants.
-# crates/mesh-llm-ui/build.rs falls back to an empty dist when the UI is not built,
+# mesh/crates/mesh-llm-ui/build.rs falls back to an empty dist when the UI is not built,
 # so no Node toolchain is required here.
 RUN cargo build --locked -p mesh-llm -p mesh-llm-plugin
 
