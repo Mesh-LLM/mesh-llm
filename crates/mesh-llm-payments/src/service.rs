@@ -147,9 +147,9 @@ impl PaymentService {
     }
 
     /// A charge left by the retired per-request payment protocol. It is never
-    /// submitted or resubmitted; only wallet facts settle it. A charge the
-    /// wallet never recorded is failed once its invoice expires (nothing can
-    /// pay it after that) or immediately if it was never submitted.
+    /// submitted or resubmitted; only wallet facts settle it. A never-submitted
+    /// charge fails immediately. A submitted charge the wallet has no record of
+    /// stays pending with its reservation held, even after invoice expiry.
     async fn observe_retired_charge(&self, charge: &Charge) -> Result<()> {
         let _guard = self.payment_lock.lock().await;
         let hash = &charge.invoice.payment_hash;
@@ -236,9 +236,11 @@ impl PaymentService {
         Ok(payment)
     }
 
-    /// Recover each charge independently. A pending charge the wallet has no
-    /// record of is resubmitted (idempotent per payment hash) until its
-    /// invoice expires, then failed and its reservation released.
+    /// Recover each charge independently. Metered charges use the metered
+    /// path. A pending local `wallet send` charge the wallet has no record of
+    /// is resubmitted (idempotent per payment hash) until its invoice expires,
+    /// then failed and its reservation released. Retired-protocol charges are
+    /// only observed (see `observe_retired_charge`).
     pub async fn reconcile_pending(&self) -> Result<()> {
         self.ledger.finalize_terminal_requests()?;
         let mut first_error = None;
