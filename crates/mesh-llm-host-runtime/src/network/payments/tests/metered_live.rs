@@ -198,6 +198,8 @@ async fn exchanges(
     let parsed = crate::network::payments::request::PaidRequest::parse(raw)?;
     for completed in 1..=2 {
         let mut body = parsed.body.clone();
+        // Parsed backend bodies already opt in; construct fresh caller intent.
+        body.as_object_mut().unwrap().remove("stream_options");
         let include_usage = completed == 2;
         if include_usage {
             body["stream_options"] = serde_json::json!({"include_usage": true});
