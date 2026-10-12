@@ -510,7 +510,10 @@ async fn emit_translated_reasoning_delta(
     else {
         return Ok(());
     };
-    let output_index = state.claim_message_output_index();
+    // Reasoning streams under the message's item, so the message is announced
+    // first, keeping item-added events in output order.
+    emit_translated_output_item_prelude(tcp_stream, capture, state).await?;
+    let output_index = state.message_output_index.unwrap_or_default();
     let sequence_number = state.next_sequence_number();
     let event = serde_json::to_string(&at_output_index(
         response_adapter::responses_stream_reasoning_delta_event_with_sequence(

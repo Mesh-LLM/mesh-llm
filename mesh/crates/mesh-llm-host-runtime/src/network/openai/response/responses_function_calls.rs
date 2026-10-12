@@ -240,6 +240,9 @@ pub(super) fn translated_terminal_event(
         .and_then(serde_json::Value::as_object_mut)
     {
         response.insert("status".into(), serde_json::json!("incomplete"));
+        // The builder filled completed_at for a completed response; only a
+        // completed status carries one.
+        response.insert("completed_at".into(), serde_json::Value::Null);
         response.insert(
             "incomplete_details".into(),
             serde_json::json!({ "reason": "max_output_tokens" }),
@@ -263,11 +266,19 @@ pub(super) async fn finish_translated_function_calls(
         .values()
         .filter_map(|call| {
             let output_index = call.output_index?;
+            // A complete call without arguments closes with an empty JSON
+            // object, which clients and backends parse; a cut call keeps the
+            // fragment it got.
+            let arguments = if call.arguments.is_empty() && !calls_cut {
+                "{}".to_string()
+            } else {
+                call.arguments.clone()
+            };
             Some((
                 output_index,
                 call.item_id.clone(),
-                call.arguments.clone(),
-                call.item(status, &call.arguments),
+                arguments.clone(),
+                call.item(status, &arguments),
             ))
         })
         .collect::<Vec<_>>();
@@ -450,9 +461,9 @@ mod tests {
     }
 
     /// A reasoning model that thinks and then calls a tool, without text:
-    /// its reasoning streams under the message item, so that message keeps
-    /// the position the reasoning named and stays in the output before the
-    /// call.
+    /// its reasoning streams under the message item, so that message is
+    /// announced first, keeps the position the reasoning named and stays in
+    /// the output before the call.
     #[tokio::test]
     async fn translated_stream_keeps_reasoning_on_its_message_before_a_function_call() {
         let (result, body) = relay_translated_over(
@@ -474,6 +485,30 @@ mod tests {
         assert_eq!(reasoning.len(), 1);
         assert_eq!(reasoning[0]["output_index"], 0);
         let message_id = reasoning[0]["item_id"].as_str().unwrap();
+
+        let added = events_of(&events, "response.output_item.added")
+            .iter()
+            .map(|event| {
+                (
+                    event["output_index"].as_i64().unwrap(),
+                    event["item"]["type"].as_str().unwrap().to_string(),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            added,
+            [(0, "message".to_string()), (1, "function_call".to_string())],
+            "items are announced in output order: {body}"
+        );
+        let first_added = events
+            .iter()
+            .position(|event| event["type"] == "response.output_item.added")
+            .unwrap();
+        let first_reasoning = events
+            .iter()
+            .position(|event| event["type"] == "response.reasoning_text.delta")
+            .unwrap();
+        assert!(first_added < first_reasoning, "{body}");
 
         let done = events_of(&events, "response.output_item.done")
             .iter()
@@ -572,6 +607,7 @@ mod tests {
         assert_eq!(incomplete.len(), 1, "{body}");
         let response = &incomplete[0]["response"];
         assert_eq!(response["status"], "incomplete");
+        assert!(response["completed_at"].is_null(), "{body}");
         assert_eq!(
             response["incomplete_details"]["reason"],
             "max_output_tokens"
@@ -580,6 +616,32 @@ mod tests {
         assert_eq!(output.len(), 1);
         assert_eq!(output[0]["status"], "incomplete");
         assert_eq!(output[0]["arguments"], r#"{"path":"a","text":"hel"#);
+    }
+
+    /// A call without arguments closes with an empty JSON object, which
+    /// clients parse and send back, instead of an empty string.
+    #[tokio::test]
+    async fn translated_stream_closes_a_call_without_arguments_with_an_empty_object() {
+        let (result, body) = relay_translated_over(
+            concat!(
+                r#"data: {"id":"c","object":"chat.completion.chunk","created":1,"model":"qwen","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_now","type":"function","function":{"name":"now","arguments":""}}]},"finish_reason":null}]}"#,
+                "\n\n",
+                r#"data: {"id":"c","object":"chat.completion.chunk","created":1,"model":"qwen","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}"#,
+                "\n\ndata: [DONE]\n\n",
+            )
+            .as_bytes(),
+        )
+        .await;
+        assert!(matches!(result, Ok(RouteAttemptResult::Delivered { .. })));
+        let events = sse_json_events(&body);
+
+        let done = events_of(&events, "response.function_call_arguments.done");
+        assert_eq!(done.len(), 1, "{body}");
+        assert_eq!(done[0]["arguments"], "{}");
+        let item_done = events_of(&events, "response.output_item.done");
+        assert_eq!(item_done[0]["item"]["arguments"], "{}");
+        let completed = events_of(&events, "response.completed");
+        assert_eq!(completed[0]["response"]["output"][0]["arguments"], "{}");
     }
 
     /// An upstream error in the middle of a call's arguments relays the
