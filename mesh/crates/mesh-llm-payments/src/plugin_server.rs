@@ -302,6 +302,18 @@ fn add_serving_ops(router: &mut OperationRouter, source: &ServiceSource) {
     add_op(
         router,
         source,
+        ops::SERVE_ABANDON,
+        "Close interrupted serving without final debt.",
+        |service, request: IdRequest| async move {
+            service
+                .ledger
+                .abandon_serving(&request.id)
+                .map(|()| Empty {})
+        },
+    );
+    add_op(
+        router,
+        source,
         ops::OUTPUT_RECEIVABLE,
         "Issue or return the output invoice.",
         |service, request: IdRequest| async move {

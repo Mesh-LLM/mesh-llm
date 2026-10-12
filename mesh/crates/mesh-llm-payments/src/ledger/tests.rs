@@ -175,3 +175,24 @@ fn single_policy_controls_eligibility_and_preserves_reservations() -> Result<()>
     );
     Ok(())
 }
+
+#[test]
+fn interrupted_delivery_closes_without_final_debt_and_survives_restart() {
+    let directory = tempfile::tempdir().unwrap();
+    let ledger = Ledger::open(directory.path()).unwrap();
+    ledger
+        .begin_serving("interrupted", "peer", &terms("interrupted", 1).pricing, 100)
+        .unwrap();
+    ledger.record_delivered_tokens("interrupted", 42).unwrap();
+    ledger.abandon_serving("interrupted").unwrap();
+    ledger.abandon_serving("interrupted").unwrap();
+    assert!(!ledger.has_outstanding_payment("peer").unwrap());
+    assert!(ledger.receivables(Some("interrupted")).unwrap().is_empty());
+    drop(ledger);
+    let ledger = Ledger::open(directory.path()).unwrap();
+    assert!(!ledger.has_outstanding_payment("peer").unwrap());
+    assert!(ledger.receivables(Some("interrupted")).unwrap().is_empty());
+    ledger
+        .begin_serving("next", "peer", &terms("next", 1).pricing, 100)
+        .unwrap();
+}

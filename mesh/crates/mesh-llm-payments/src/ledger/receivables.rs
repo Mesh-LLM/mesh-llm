@@ -109,6 +109,34 @@ impl Ledger {
         Ok(())
     }
 
+    /// A closed exchange explicitly excluded from further invoicing.
+    pub fn serving_is_forgiven(&self, id: &str) -> Result<bool> {
+        Ok(self.lock()?.query_row(
+            "SELECT forgiven FROM serving_accounting WHERE id=?1",
+            [id],
+            |row| row.get(0),
+        )?)
+    }
+
+    /// Close an interrupted exchange without creating recoverable final debt.
+    /// Confirmed deposits remain received; only unpaid receivables are lapsed.
+    pub fn abandon_serving(&self, id: &str) -> Result<()> {
+        let mut connection = self.lock()?;
+        let transaction =
+            connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let changed = transaction.execute(
+            "UPDATE serving_accounting SET finished=1, forgiven=1 WHERE id=?1",
+            [id],
+        )?;
+        ensure!(changed == 1, "unknown serving request");
+        transaction.execute(
+            "UPDATE receivables SET state='lapsed' WHERE request_id=?1 AND state='unpaid'",
+            [id],
+        )?;
+        transaction.commit()?;
+        Ok(())
+    }
+
     pub fn finish_serving(&self, id: &str) -> Result<()> {
         self.lock()?
             .execute("UPDATE serving_accounting SET finished=1 WHERE id=?", [id])?;

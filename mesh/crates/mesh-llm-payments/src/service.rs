@@ -342,7 +342,7 @@ impl PaymentService {
         let _guard = self.receivable_lock.lock().await;
         let (peer, pricing, tokens, finished) = self.ledger.serving_account(id)?;
         ensure!(finished, "generation is still active");
-        if tokens == 0 {
+        if tokens == 0 || self.ledger.serving_is_forgiven(id)? {
             return Ok(None);
         }
         ensure!(

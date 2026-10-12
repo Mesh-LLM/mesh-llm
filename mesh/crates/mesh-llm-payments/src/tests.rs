@@ -478,3 +478,28 @@ async fn one_policy_command_enables_paid_use_and_free_only_stops_new_work() -> R
     assert_eq!(wallet.calls.load(Ordering::SeqCst), 1);
     Ok(())
 }
+
+#[tokio::test]
+async fn abandoned_delivery_cannot_invoice_even_when_recovery_is_called_directly() {
+    let dir = tempfile::tempdir().unwrap();
+    let wallet = Arc::new(MockWallet::default());
+    let service = PaymentService::with_provider(dir.path(), wallet.clone()).unwrap();
+    service
+        .ledger
+        .begin_serving("aborted", "peer", &terms("aborted", 1).pricing, 100)
+        .unwrap();
+    service
+        .ledger
+        .record_delivered_tokens("aborted", 42)
+        .unwrap();
+    service.ledger.abandon_serving("aborted").unwrap();
+    assert!(
+        service
+            .output_receivable("aborted")
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(!service.ledger.has_outstanding_payment("peer").unwrap());
+    assert!(wallet.invoice_expiries.lock().unwrap().is_empty());
+}

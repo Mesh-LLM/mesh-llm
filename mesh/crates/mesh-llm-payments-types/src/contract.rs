@@ -52,6 +52,8 @@ pub mod ops {
     pub const RECORD_DELIVERED: &str = "record_delivered";
     /// Close a serving request's accounting.
     pub const SERVE_FINISH: &str = "serve_finish";
+    /// Close an interrupted exchange without final debt (additive operation).
+    pub const SERVE_ABANDON: &str = "serve_abandon";
     /// Issue (or return) the output invoice of a finished serving request.
     pub const OUTPUT_RECEIVABLE: &str = "output_receivable";
     /// Answer a payer's recovery probe for a serving request.
@@ -83,6 +85,7 @@ pub fn deadline(operation: &str) -> Option<Duration> {
             | ops::CANCEL
             | ops::RECORD_DELIVERED
             | ops::SERVE_FINISH
+            | ops::SERVE_ABANDON
     )
     .then_some(BOOKKEEPING_DEADLINE)
 }
@@ -300,6 +303,7 @@ mod tests {
         ops::SETTLE_RECEIVED,
         ops::RECORD_DELIVERED,
         ops::SERVE_FINISH,
+        ops::SERVE_ABANDON,
         ops::OUTPUT_RECEIVABLE,
         ops::SERVE_RECOVER,
     ];
@@ -321,6 +325,7 @@ mod tests {
                 ops::CANCEL,
                 ops::RECORD_DELIVERED,
                 ops::SERVE_FINISH,
+                ops::SERVE_ABANDON,
             ]
         );
     }
