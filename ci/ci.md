@@ -875,7 +875,29 @@ model cadence, device gates and protected action references remain unchanged.
 - `ci-{linux,macos,windows}-product-slice.yml` — composition-only consumers
   that join only their matching immutable host and runtime artifacts.
 - `ci-platform-checks-slice.yml` — macOS portable/unit, Windows portable/unit,
-  and focused Windows log-store privacy ACL checks.
+  focused Windows log-store privacy ACL checks, and the Windows CPU native
+  Skippy probes (`windows-skippy-probes`, #2222 item 2). That row is selected
+  by `native-abi` changes (the patch queue and the llama build scripts) and on
+  every main run. It replays the pinned patch queue, builds the static CPU ABI
+  with `LLAMA_STAGE_BUILD_TESTS=ON`, and lets `build-llama.sh` run every
+  `^skippy_` test; nothing is skipped. It runs them with the image's 64-bit
+  CMake (`C:\Program Files\CMake`) rather than the 32-bit ctest that
+  `msvc-dev-cmd` puts first on `PATH`, which dies on the graph-contract
+  probes' output. The row's `ctest_parallel` is sized by memory, not cores:
+  Windows charges every allocated byte against the commit limit, touched or
+  not. Measured on Windows 11 with MSVC 14.44, each of the 96 graph contracts
+  in its own ctest call: median 3.1 GiB committed (0.8 GiB touched), 12 above
+  6 GiB, and at most 13.0 GiB (`glm53_synthetic`; `qwen4exp` 11.4,
+  `minimax-m3` 10.2). The row starts serial (`ctest_parallel: 1`), so its
+  ceiling is that 13 GiB contract; the whole suite (271 tests) took about 45
+  minutes serially on 16 threads, within the row's 150-minute timeout. At 2
+  the two largest can run together: two runs took about 25 minutes and added
+  17 and 24 GiB to the system commit at their peaks, so raising it needs
+  evidence that the selected runner leaves about 25 GiB of commit free. A
+  step before the probes logs the runner's physical memory, commit limit,
+  committed memory and headroom (also in the job summary), and warns when
+  the headroom is under 13 GiB, so the first runs show what the runner offers
+  and a memory failure can be read against it rather than retried.
 - `ci-linux-product-smoke-slice.yml`, `ci-macos-product-smoke-slice.yml`, and
   `ci-windows-product-smoke-slice.yml` — platform-local callers of the core,
   scripted, model-download, and Laya smokes. The registry-pinned Laya
