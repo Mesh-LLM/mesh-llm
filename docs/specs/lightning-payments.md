@@ -199,12 +199,14 @@ reservation remains held; the PoC has no force-release command. Recovery contact
 identity while retaining its wallet/database is deliberately unsupported; unrelated
 same-model peers are never asked to settle that debt.
 
-Metered admission is bounded by derived per-peer exposure, not by a debt
-blacklist. Debt recorded by the retired per-request protocol stays in the
-ledger but is no longer billed or collected. `mesh-llm wallet blocked` and
-`mesh-llm wallet unblock PEER` (see the pending decision on retaining them)
-list and forgive that legacy debt; metered invoices are never forgiven. Both
-are ledger-only commands. Forgiveness is an operator override, not a refund.
+Metered admission is bounded by derived per-peer exposure. Expired unpaid
+invoices prevent no-deposit trust for subsequent requests from the same payer;
+the receivables and exposure survive restart. This requires a deposit rather
+than universally banning the payer, and exposure can independently refuse admission.
+Debt recorded by the retired per-request protocol stays in the ledger but is
+no longer billed or collected. The legacy `wallet blocked` / `wallet unblock`
+commands and their debt-forgiveness helpers are removed; wallet records,
+schema migrations and generic mesh peer controls remain unchanged.
 
 Definitively failed inference payments stop automatic recovery attempts and
 release unused payer authorization; provider debt is not forgiven. The PoC does
@@ -328,8 +330,6 @@ mesh-llm wallet fund-wallet --amount-sats 10000
 mesh-llm wallet send lnbc... --max-fee-msat 1000
 mesh-llm wallet send lnbc... --amount-msat 10000 --max-fee-msat 1000
 mesh-llm wallet pending
-mesh-llm wallet blocked
-mesh-llm wallet unblock PEER_ID
 mesh-llm wallet policy --mode automatic --daily-budget-sats 100
 mesh-llm wallet policy --mode free-only
 mesh-llm wallet pricing MODEL --input-msat-per-million 500 --output-msat-per-million 1500

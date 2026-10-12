@@ -3,7 +3,7 @@ use anyhow::{Result, ensure};
 use rusqlite::Connection;
 
 /// 1: first versioned schema. 2: `serving_accounting.forgiven`, set by the
-/// operator `unblock` command for delivered output that will not be invoiced.
+/// retired operator debt-forgiveness command for uninvoiced delivered output.
 /// 3: `metered_requests` and `peer_credit` for metered (v2) settlement.
 const VERSION: u32 = 3;
 

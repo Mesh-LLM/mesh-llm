@@ -228,3 +228,103 @@ async fn complete_retires_prepared_and_payee_pin_survives_restart() {
         Some("completed")
     );
 }
+
+#[tokio::test]
+async fn expired_nonpayment_survives_restart_and_requires_deposit_in_later_sessions() {
+    let dir = tempfile::tempdir().unwrap();
+    let wallet = Arc::new(MockWallet::default());
+    let expired = invoice_with_expiry(91, 1100, 0);
+    assert!(expired.expires_at_ms <= crate::now_ms());
+    {
+        let service = PaymentService::with_provider(dir.path(), wallet.clone()).unwrap();
+        admit(&service, "unpaid");
+        service
+            .ledger
+            .metered_claim_dispatch("unpaid", "peer")
+            .unwrap();
+        service.ledger.metered_finalize("unpaid", report()).unwrap();
+        service
+            .ledger
+            .record_receivable(&crate::ledger::receivables::Receivable {
+                request_id: "unpaid".into(),
+                peer: "peer".into(),
+                segment: 1,
+                invoice: expired.clone(),
+                tokens: 0,
+                paid: false,
+            })
+            .unwrap();
+        assert_eq!(service.ledger.metered_exposure("peer").unwrap(), 1100);
+    }
+    let service = PaymentService::with_provider(dir.path(), wallet).unwrap();
+    let debts = service.ledger.receivables(Some("unpaid")).unwrap();
+    assert_eq!(debts.len(), 1);
+    assert_eq!(debts[0].invoice, expired);
+    assert!(!debts[0].paid);
+    assert_eq!(service.ledger.metered_exposure("peer").unwrap(), 1100);
+
+    // Re-earn cache standing after restart. A denial with an empty cache alone
+    // would not prove that the persisted unpaid invoice affects future trust.
+    for peer in ["peer", "other"] {
+        let seed = format!("settled-{peer}");
+        service
+            .ledger
+            .metered_admit(&MeteredRequest {
+                id: &seed,
+                peer,
+                pricing: &rates(),
+                estimated_input_tokens: 1,
+                max_output_tokens: 1,
+                peer_cap_msat: 10_000,
+                require_deposit: true,
+            })
+            .unwrap();
+        service
+            .ledger
+            .metered_finalize(
+                &seed,
+                MeteredOutcome::Usage(MeteredUsage {
+                    prompt_tokens: 0,
+                    completion_tokens: 0,
+                }),
+            )
+            .unwrap();
+        service.metered_note_settled(&seed, peer).await.unwrap();
+        let trusted = service.metered_trusted(peer).await.unwrap();
+        assert_eq!(trusted, peer == "other");
+        let later = service
+            .ledger
+            .metered_admit(&MeteredRequest {
+                id: &format!("later-{peer}"),
+                peer,
+                pricing: &rates(),
+                estimated_input_tokens: 1000,
+                max_output_tokens: 500,
+                peer_cap_msat: 10_000,
+                require_deposit: !trusted,
+            })
+            .unwrap();
+        assert_eq!(later.deposit_msat, if peer == "peer" { 300 } else { 0 });
+    }
+    // Persisted exposure also independently refuses further work at the cap.
+    assert!(
+        service
+            .ledger
+            .metered_admit(&MeteredRequest {
+                id: "over-cap",
+                peer: "peer",
+                pricing: &rates(),
+                estimated_input_tokens: 1000,
+                max_output_tokens: 500,
+                peer_cap_msat: 2600,
+                require_deposit: true,
+            })
+            .is_err()
+    );
+    assert!(service.ledger.metered_owner("over-cap").unwrap().is_none());
+    // Clearing only the invoice debt now restores the already re-earned
+    // standing, proving the earlier denial was not merely an empty cache.
+    service.ledger.mark_received(&expired.payment_hash).unwrap();
+    assert!(service.metered_trusted("peer").await.unwrap());
+    assert_eq!(service.ledger.metered_exposure("peer").unwrap(), 1500);
+}
