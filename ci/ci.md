@@ -897,7 +897,12 @@ model cadence, device gates and protected action references remain unchanged.
   step before the probes logs the runner's physical memory, commit limit,
   committed memory and headroom (also in the job summary), and warns when
   the headroom is under 13 GiB, so the first runs show what the runner offers
-  and a memory failure can be read against it rather than retried.
+  and a memory failure can be read against it rather than retried. Each
+  probe is also bounded at 15 minutes (`--timeout 900`, like the other ctest
+  calls in `build-llama.sh`). The slowest contracts are single-threaded:
+  pinned to one logical CPU, `glm53_synthetic` took 187 s, `qwen4exp` 145 s
+  and `minimax-m3` 133 s, the same as with all 16, so the bound depends on
+  the runner's per-core speed rather than its core count.
 - `ci-linux-product-smoke-slice.yml`, `ci-macos-product-smoke-slice.yml`, and
   `ci-windows-product-smoke-slice.yml` — platform-local callers of the core,
   scripted, model-download, and Laya smokes. The registry-pinned Laya
