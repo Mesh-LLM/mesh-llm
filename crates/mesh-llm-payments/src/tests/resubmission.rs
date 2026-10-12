@@ -172,7 +172,7 @@ async fn retired_protocol_charge_is_observed_but_never_resubmitted() -> Result<(
 
     assert_eq!(wallet.calls.load(Ordering::SeqCst), 1, "no resubmission");
     assert_eq!(payments_recorded(&wallet), 0);
-    assert_eq!(service.ledger.pending_charges()?.len(), 1, "awaits expiry");
+    assert_eq!(service.ledger.pending_charges()?.len(), 1, "stays pending");
     Ok(())
 }
 
@@ -195,5 +195,35 @@ async fn retired_protocol_charge_settles_from_a_recorded_payment() -> Result<()>
     assert_eq!(wallet.calls.load(Ordering::SeqCst), 1);
     assert!(service.ledger.pending_charges()?.is_empty());
     assert_eq!(service.ledger.requests()?[0].spent_msat, 110);
+    Ok(())
+}
+
+#[tokio::test]
+async fn expired_retired_charge_without_wallet_record_stays_pending() -> Result<()> {
+    let directory = tempfile::tempdir()?;
+    let wallet = Arc::new(MockWallet::default());
+    wallet.lose_submission.store(true, Ordering::SeqCst);
+    let mut charge = charge("one", 0, 1, 100, 200);
+    charge.invoice = invoice_with_expiry(1, 100, 1);
+    let service = PaymentService::with_provider(directory.path(), wallet.clone())?;
+    service.ledger.set_policy(&Policy {
+        mode: ApprovalMode::Automatic,
+        daily_budget_msat: Some(BUDGET),
+    })?;
+    service.await_authorization(&terms("one", 1000)).await?;
+    assert!(service.pay_charge(&charge).await.is_err());
+    let wait = charge.invoice.expires_at_ms.saturating_sub(crate::now_ms()) + 25;
+    tokio::time::sleep(Duration::from_millis(wait)).await;
+
+    service.reconcile_pending().await?;
+
+    assert_eq!(wallet.calls.load(Ordering::SeqCst), 1, "no resubmission");
+    assert_eq!(payments_recorded(&wallet), 0);
+    assert_eq!(service.ledger.pending_charges()?.len(), 1, "not failed by expiry");
+    assert_eq!(
+        service.ledger.available_budget(BUDGET, crate::now_ms())?,
+        BUDGET - 1000,
+        "the request reservation is held"
+    );
     Ok(())
 }

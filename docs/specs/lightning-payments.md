@@ -171,11 +171,11 @@ existing payment (Lexe SDK 0.1.24 and later does, even if that payment failed),
 so a resubmission racing an earlier one that is still landing cannot double-pay.
 A rejected or again-uncertain resubmission stays `pending` for the next scan.
 Charges left by the retired per-request inference protocol are never
-submitted or resubmitted: a recorded wallet payment settles them, a
-never-submitted one fails at once, and an unrecorded one fails at expiry.
-Once the invoice has expired and the lookup still finds nothing, the charge is
-marked `failed` and its reservation released: nothing can settle an expired
-invoice, so nothing was paid.
+submitted or resubmitted (a charge counts as `wallet send` only when both
+its terms' `peer` and `model` are `wallet-send`): a recorded wallet payment settles them, a
+never-submitted one fails at once, and an unrecorded submitted one stays
+`pending` with its reservation held, even after invoice expiry: a missing
+wallet record is not proof that nothing was paid.
 The wallet contract distinguishes `NotSubmitted` from `Uncertain` errors.
 Definite preflight rejection and terminal failure close unused authorization,
 while uncertain sibling charges remain reserved. Successful standalone sends

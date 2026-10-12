@@ -165,9 +165,8 @@ impl PaymentService {
             validate_payment_update(&payment, hash, false)?;
             return self.ledger.reconcile(&payment, crate::now_ms());
         }
-        if charge.invoice.expires_at_ms <= crate::now_ms() {
-            self.ledger.fail_unsubmitted(hash)?;
-        }
+        // No wallet record is not proof of failure, even after invoice expiry:
+        // keep the charge and its reservation pending for a later lookup.
         Ok(())
     }
 
