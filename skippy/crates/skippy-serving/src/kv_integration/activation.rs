@@ -145,12 +145,12 @@ fn activation_prefix_frame(
         output.payload_bytes = u64::try_from(payload.len() - output_offset).ok()?;
         parts[part_index] = output;
     }
-    let mut prefix = frame.clone();
-    prefix.desc.token_count = u32::try_from(candidate_token_count).ok()?;
-    prefix.desc.payload_bytes = u64::try_from(payload.len()).ok()?;
-    prefix.desc.parts = parts;
-    prefix.payload = payload;
-    Some(prefix)
+    // The prefix already owns its payload; do not clone the full source buffer.
+    let mut desc = frame.desc;
+    desc.token_count = u32::try_from(candidate_token_count).ok()?;
+    desc.payload_bytes = u64::try_from(payload.len()).ok()?;
+    desc.parts = parts;
+    Some(ActivationFrame { desc, payload })
 }
 
 #[cfg(test)]
@@ -272,6 +272,29 @@ mod tests {
             },
             payload: vec![7; payload_bytes],
         }
+    }
+
+    #[test]
+    fn activation_prefix_preserves_metadata_and_source() {
+        let mut frame = activation_frame(4, 32);
+        frame.payload = (0..32).collect();
+        frame.desc.producer_stage_index = 3;
+        frame.desc.sequence_count = 2;
+        let original = frame.clone();
+
+        let prefix = activation_prefix_frame(&frame, 2).expect("valid prefix");
+
+        let mut expected_desc = original.desc;
+        expected_desc.token_count = 2;
+        expected_desc.payload_bytes = 16;
+        expected_desc.parts[0].dimensions[1] = 2;
+        expected_desc.parts[0].payload_bytes = 16;
+        assert_eq!(prefix.desc, expected_desc);
+        assert_eq!(prefix.payload, original.payload[..16]);
+        assert_eq!(frame, original);
+        assert_eq!(activation_prefix_frame(&frame, 4), Some(original));
+        assert!(activation_prefix_frame(&frame, 0).is_none());
+        assert!(activation_prefix_frame(&frame, 5).is_none());
     }
 
     #[test]
