@@ -107,7 +107,7 @@ async fn stream_backend(
         );
         stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\ndata: {\"choices\":[{\"text\":\"hello\"}]}\n\n").await?;
         tokio::task::yield_now().await;
-        stream.write_all(b"data: {\"usage\":{\"prompt_tokens\":40,\"completion_tokens\":3}}\n\ndata: [DONE]\n\n").await?;
+        stream.write_all(b"data: {\"choices\":[],\"usage\":{\"prompt_tokens\":40,\"completion_tokens\":3}}\n\ndata: [DONE]\n\n").await?;
         stream.shutdown().await?;
     }
     Ok(())

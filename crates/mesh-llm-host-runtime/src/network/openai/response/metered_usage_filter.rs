@@ -113,7 +113,23 @@ impl UsageFilter {
             self.mode = Mode::Passthrough;
             return;
         }
-        let chunked = has("transfer-encoding", b"chunked");
+        // Only exactly one `Transfer-Encoding: chunked` (or none) is
+        // understood; any other coding (`gzip, chunked`, `chunkedjunk`, ...)
+        // passes through untouched before any transformation.
+        let mut codings = response
+            .headers
+            .iter()
+            .filter(|header| header.name.eq_ignore_ascii_case("transfer-encoding"));
+        let chunked = match (codings.next(), codings.next()) {
+            (None, _) => false,
+            (Some(header), None) if header.value.trim_ascii().eq_ignore_ascii_case(b"chunked") => {
+                true
+            }
+            _ => {
+                self.mode = Mode::Passthrough;
+                return;
+            }
+        };
         // The body length changes, so drop any Content-Length. The backend
         // response is `Connection: close`, so EOF still delimits it.
         let head = &self.raw[..offset];
@@ -270,13 +286,15 @@ fn filter_event(event: &[u8], out: &mut Vec<u8>) {
     let Ok(Value::Object(mut chunk)) = serde_json::from_slice::<Value>(&data) else {
         return out.extend_from_slice(event);
     };
-    if chunk.get("usage").is_none_or(Value::is_null) {
+    if chunk.get("usage").is_none_or(Value::is_null) || chunk.contains_key("error") {
         return out.extend_from_slice(event);
     }
-    let usage_only = chunk
-        .get("choices")
-        .is_none_or(|choices| choices.as_array().is_some_and(Vec::is_empty));
-    if usage_only {
+    // Only a well-formed chat chunk is touched: no `choices` array means an
+    // unknown event shape, which passes through byte for byte.
+    let Some(choices) = chunk.get("choices").and_then(Value::as_array) else {
+        return out.extend_from_slice(event);
+    };
+    if choices.is_empty() {
         return;
     }
     chunk.remove("usage");
@@ -416,9 +434,32 @@ mod tests {
             format!("HTTP/1.1 500 Error\r\nContent-Type: text/event-stream\r\n\r\n{USAGE_ONLY}"),
             format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Encoding: gzip\r\n\r\n{USAGE_ONLY}"),
             format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\nzz\r\n{USAGE_ONLY}"),
+            format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: gzip, chunked\r\n\r\n{USAGE_ONLY}"),
+            format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunkedjunk\r\n\r\n{USAGE_ONLY}"),
+            format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\nTransfer-Encoding: chunked\r\n\r\n{USAGE_ONLY}"),
         ] {
             assert_eq!(run(response.as_bytes(), 5), response.as_bytes());
         }
+    }
+
+    #[test]
+    fn event_without_choices_array_is_preserved() {
+        for event in [
+            "data: {\"usage\":{\"prompt_tokens\":1}}\n\n",
+            "data: {\"choices\":null,\"usage\":{\"prompt_tokens\":1}}\n\n",
+        ] {
+            let mut out = Vec::new();
+            filter_event(event.as_bytes(), &mut out);
+            assert_eq!(out, event.as_bytes());
+        }
+    }
+
+    #[test]
+    fn error_event_with_usage_is_preserved() {
+        let error = "data: {\"error\":{\"message\":\"boom\"},\"usage\":{\"prompt_tokens\":1}}\n\n";
+        let mut out = Vec::new();
+        filter_event(error.as_bytes(), &mut out);
+        assert_eq!(out, error.as_bytes());
     }
 
     #[test]
@@ -453,13 +494,18 @@ mod tests {
         out.extend(filter.push(b"junk"));
         out.extend(filter.finish());
         let (h, body) = split(&out);
-        assert!(h.contains("Transfer-Encoding: chunked") && !h.to_ascii_lowercase().contains("content-length"));
+        assert!(
+            h.contains("Transfer-Encoding: chunked")
+                && !h.to_ascii_lowercase().contains("content-length")
+        );
         // Filtered + held-back bytes are well-formed chunks; raw resumes at the bad line.
         let tail_at = body.windows(4).position(|w| w == b"zz\r\n").unwrap();
         let decoded = decode_chunked(&[&body[..tail_at], b"0\r\n\r\n"].concat());
         assert_eq!(
             String::from_utf8(decoded).unwrap(),
-            format!("data: {{\"choices\":[{{\"delta\":{{\"content\":\"!\"}},\"index\":0}}]}}\n\n{partial}")
+            format!(
+                "data: {{\"choices\":[{{\"delta\":{{\"content\":\"!\"}},\"index\":0}}]}}\n\n{partial}"
+            )
         );
         assert_eq!(&body[tail_at..], b"zz\r\njunk");
     }
@@ -480,7 +526,9 @@ mod tests {
             // Before fallback usage is hidden; after it, passthrough (documented).
             assert_eq!(
                 decoded,
-                format!("data: {{\"choices\":[{{\"delta\":{{\"content\":\"!\"}},\"index\":0}}]}}\n\n{big}{USAGE_ONLY}{DONE}"),
+                format!(
+                    "data: {{\"choices\":[{{\"delta\":{{\"content\":\"!\"}},\"index\":0}}]}}\n\n{big}{USAGE_ONLY}{DONE}"
+                ),
                 "step {step}"
             );
             assert!(body.ends_with(b"0\r\nX-Trailer: 1\r\n\r\n"));
@@ -500,7 +548,9 @@ mod tests {
             assert!(!h.to_ascii_lowercase().contains("content-length"));
             assert_eq!(
                 String::from_utf8(out).unwrap(),
-                format!("data: {{\"choices\":[{{\"delta\":{{\"content\":\"!\"}},\"index\":0}}]}}\n\n{big}{USAGE_ONLY}{DONE}"),
+                format!(
+                    "data: {{\"choices\":[{{\"delta\":{{\"content\":\"!\"}},\"index\":0}}]}}\n\n{big}{USAGE_ONLY}{DONE}"
+                ),
                 "step {step}"
             );
         }
