@@ -12,6 +12,14 @@
 //! client. Every other event, including errors and `[DONE]`, is forwarded
 //! byte-for-byte. Malformed framing or an over-limit event switches to
 //! verbatim passthrough rather than corrupting or truncating the response.
+//!
+//! Limitation: suppression is best effort. After a fallback the rest of the
+//! response, including any later usage event, reaches the client unfiltered.
+//! Fallback stays framing-consistent with what was already emitted: chunked
+//! responses keep `Transfer-Encoding: chunked`, held-back decoded bytes are
+//! re-chunked, and the remaining raw input always starts on an original chunk
+//! boundary (only whole chunks are consumed). Identity responses already had
+//! `Content-Length` removed and are delimited by connection close.
 
 use serde_json::Value;
 
@@ -428,5 +436,73 @@ mod tests {
         assert!(filter.event.is_empty() && filter.raw.is_empty());
         out.extend(filter.push(USAGE_ONLY.as_bytes()));
         assert!(out.ends_with(USAGE_ONLY.as_bytes()));
+    }
+
+    #[test]
+    fn chunked_fallback_after_transformed_event_keeps_valid_framing() {
+        let head = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n";
+        let first = format!("{USAGE_ONLY}{CONTENT_USAGE}");
+        let partial = "data: {\"choices\":[{\"delta\":{}}]";
+        let mut filter = UsageFilter::default();
+        let mut out = filter.push(head.as_bytes());
+        out.extend(filter.push(format!("{:x}\r\n{first}\r\n", first.len()).as_bytes()));
+        // Held-back partial event, then an invalid chunk-size line.
+        out.extend(filter.push(format!("{:x}\r\n{partial}\r\n", partial.len()).as_bytes()));
+        out.extend(filter.push(b"zz\r\n"));
+        assert!(matches!(filter.mode, Mode::Passthrough));
+        out.extend(filter.push(b"junk"));
+        out.extend(filter.finish());
+        let (h, body) = split(&out);
+        assert!(h.contains("Transfer-Encoding: chunked") && !h.to_ascii_lowercase().contains("content-length"));
+        // Filtered + held-back bytes are well-formed chunks; raw resumes at the bad line.
+        let tail_at = body.windows(4).position(|w| w == b"zz\r\n").unwrap();
+        let decoded = decode_chunked(&[&body[..tail_at], b"0\r\n\r\n"].concat());
+        assert_eq!(
+            String::from_utf8(decoded).unwrap(),
+            format!("data: {{\"choices\":[{{\"delta\":{{\"content\":\"!\"}},\"index\":0}}]}}\n\n{partial}")
+        );
+        assert_eq!(&body[tail_at..], b"zz\r\njunk");
+    }
+
+    #[test]
+    fn chunked_buffer_limit_after_transformed_event_keeps_framing_and_trailers() {
+        let head = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n";
+        let big = "a".repeat(LIMIT + 1);
+        let mut response = String::from(head);
+        for piece in [CONTENT_USAGE, USAGE_ONLY, big.as_str(), USAGE_ONLY, DONE] {
+            response.push_str(&format!("{:x}\r\n{piece}\r\n", piece.len()));
+        }
+        response.push_str("0\r\nX-Trailer: 1\r\n\r\n");
+        for step in [7, 4096, response.len()] {
+            let (h, body) = split(&run(response.as_bytes(), step));
+            assert!(h.contains("Transfer-Encoding: chunked"));
+            let decoded = String::from_utf8(decode_chunked(&body)).unwrap();
+            // Before fallback usage is hidden; after it, passthrough (documented).
+            assert_eq!(
+                decoded,
+                format!("data: {{\"choices\":[{{\"delta\":{{\"content\":\"!\"}},\"index\":0}}]}}\n\n{big}{USAGE_ONLY}{DONE}"),
+                "step {step}"
+            );
+            assert!(body.ends_with(b"0\r\nX-Trailer: 1\r\n\r\n"));
+        }
+    }
+
+    #[test]
+    fn identity_buffer_limit_after_transformed_event_is_plain_body() {
+        let big = "a".repeat(LIMIT + 1);
+        let body = format!("{CONTENT_USAGE}{USAGE_ONLY}{big}{USAGE_ONLY}{DONE}");
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        for step in [7, 4096, response.len()] {
+            let (h, out) = split(&run(response.as_bytes(), step));
+            assert!(!h.to_ascii_lowercase().contains("content-length"));
+            assert_eq!(
+                String::from_utf8(out).unwrap(),
+                format!("data: {{\"choices\":[{{\"delta\":{{\"content\":\"!\"}},\"index\":0}}]}}\n\n{big}{USAGE_ONLY}{DONE}"),
+                "step {step}"
+            );
+        }
     }
 }
