@@ -550,9 +550,10 @@ For operator-run mainnet validation:
    Verify two settled payments on the payer and two receipts on the provider.
 5. Repeat in automatic mode with a small budget. Launch concurrent requests that
    together exceed the budget and verify rejected reservations do not spend.
-6. Cancel a streaming request after output begins. Confirm generation stops and
-   only transmitted output is invoiced. Restart after an uncertain payment and
-   verify the same hash is reconciled without another debit.
+6. Cancel a streaming request after output begins. Confirm that unknown usage
+   leaves an unresolved reservation rather than billing transmitted bytes as
+   tokens. Restart after an uncertain payment and verify the same hash is
+   reconciled without another debit.
 7. Verify rejection, invoice expiry, unpaid-peer denial, free-provider fallback,
    remote requests never spending the relay wallet, and a released peer's free
    inference/gossip interoperability. Record hashes/amounts privately as evidence.
