@@ -1,69 +1,60 @@
 # Lightning payments PoC
 
-This branch implements two-payment inference over authenticated mesh QUIC
-connections, a provider-neutral wallet API, durable settlement, CLI controls, and
-an initial Lexe mainnet adapter. Mainnet settlement was exercised on September
-18, 2026 with two isolated Lexe wallets and a real Skippy CUDA model. The
-validation results and remaining gaps are recorded below.
+Paid inference runs over authenticated mesh QUIC connections using the
+backend-neutral metered exchange (`/mesh/payment/v2`), a provider-neutral
+wallet API, durable settlement and CLI controls. The per-request
+`/mesh/payment/v1` protocol and Skippy's payment generation gate have been
+removed; there is no fallback to them. Wallets, keys, balances and ledger
+storage are unchanged by that cutover.
 
 ## Payment flow
 
-1. Select a provider and send the request with its advertised prices. The caller
-   may supply the ordinary OpenAI output limit. There is no separate quote round trip.
-2. The provider prefills the complete model-tokenized input, then sends an input
-   BOLT11 invoice with frozen prices, input count, the backend's resolved output
-   allowance, and total cap.
-3. The payer validates the invoice and reserves its maximum debit against
-   the automatic spending budget.
-4. After successful prefill, decode runs concurrently with invoice creation and
-   payment observation. Up to `PRE_PAYMENT_OUTPUT_TOKENS` (512) tokens may be
-   consumed ahead of the payment; the provider's payment gate then pauses token
-   *delivery* until the payment arrives, fails, is cancelled or the invoice
-   expires. This bounds bytes buffered, not GPU work: on the default skippy
-   scheduler path, decode may continue up to the request's `max_tokens` while
-   token IDs queue behind the gate. Output is held in a 1 MiB queue sized so
-   the token pause is reached first. No response headers or body
-   are released until its own wallet observes payment arrival (`claiming` or
-   terminal fallback). Failed or expired authorization discards buffered output.
-5. Authorized output streams through the ordinary OpenAI response path. The
-   payer reads concurrently with its terminal payment reconciliation; neither
-   ledger records settlement until terminal success is observed.
-6. The provider invoices actual output transmitted, and the payer settles under
-   the original authorization. No human approval is needed.
+1. The payer selects a provider and sends a `Request` frame with the model, the
+   advertised pricing, its spending cap (`max_total_msat`, including routing
+   fees) and the unchanged OpenAI HTTP request. There is no quote round trip.
+2. The provider estimates input from the request (an admission hint, not a
+   bill), takes the output ceiling from the caller's request, and reserves
+   exposure (estimated input + bounded output at frozen rates) in one ledger
+   transaction. Admission is refused if the peer's exposure would exceed the
+   provider's per-peer limit or the payer's cap.
+3. The provider replies `Admission` with frozen `AdmissionTerms`. Unless the
+   peer is in the provider's (disposable, in-memory) trust cache, the terms
+   carry a small deposit invoice of 0.3 x estimated input cost. Existing peer
+   credit is stated and applied. The deposit is credited against the bill; it
+   is not an extra fee or an input-token claim.
+4. The payer validates the terms against its own spending authority, durably
+   authorizes them, pays any deposit, and sends `Accepted`. The provider
+   verifies the deposit in its own wallet before dispatching to the backend.
+5. The provider forwards the request to the existing local or plugin HTTP
+   backend unchanged and streams response bytes back as `Output` frames.
+   Usage is read from the backend's own response (JSON `usage` or the SSE usage
+   chunk); stream chunks are never counted as tokens. When the caller did not
+   ask for usage, the standard usage chunk is hidden on a best-effort basis and
+   all other bytes pass through unchanged.
+6. On completion the provider sends `Settlement`: reported usage, the bill at
+   the frozen rates, deposit and credit applied, remaining credit and, if
+   anything is still owed, a final invoice. The payer pays it under the
+   original authorization and replies `Complete`. No human approval is needed.
 
-Both wallets start their pre-payment I/O during prefill. The provider wakes its
-wallet so invoice creation doesn't wait on a cold start, and the payer reads the
-balance that step 3 reserves against. If a concurrent payment settles in
-between, that balance overstates the funds, but the wallet still refuses any
-payment it cannot afford. A fresh charge then goes straight to the wallet's
-`pay`, which recovers any existing payment by hash. The Lexe adapter looks one
-up only when preflight rejects the invoice.
+Outcomes:
 
-Prices and counts are the provider's claims. Proof of prefill, proof of correct
-inference, refunds, and encrypted output are not implemented. Prefill before
-payment avoids requiring blind input prepayment; it still exposes providers to
-unpaid work. A paid provider must run a single-node text model. Distributed
-inference, multimodal paid inference, and fan-out are out of scope.
+- **Usage reported:** billed exactly once. A deposit larger than the bill
+  becomes peer credit.
+- **Backend error or never dispatched:** no bill; any paid deposit becomes peer
+  credit and exposure is released.
+- **Response delivered, usage unknown (`usage_missing`):** no bill, no
+  forfeiture, no credit; the reservation is held until a later finalize
+  resolves it. A missing usage report is never treated as a zero bill.
 
-The supported underlying endpoints are `/v1/chat/completions` and
-`/v1/completions`, with one completion per request. Existing OpenAI callers keep
-using the local proxy. Payments impose no additional output-token default or
-ceiling. Omitted limits use the backend's normal generation settings (by default,
-the remaining context window); explicit limits are preserved and may be clamped
-to the remaining context by the backend. The former 256-token fallback and
-4,096-token payment ceiling have been removed. Input remains limited to 131,072
-tokens and requests to 1 MiB. Rejected paid attempts do not silently retry on
-another paid provider.
+Peer exposure is derived from durable rows, not stored, so restart needs no
+rebuild. Trust is an optimization only: losing it means the next request asks
+for a deposit again. A peer with an expired unpaid metered invoice loses trust.
 
-The backend reports its resolved output allowance after tokenization and prefill.
-That allowance is persisted and included in the input invoice terms so the payer
-can reserve a maximum cost without truncating generation for payment reasons.
-It must be positive and no greater than an explicit caller limit, if present.
-Longer context allowances can require larger wallet/budget reservations; a
-request whose maximum cost does not fit is declined before input payment rather
-than silently shortening its answer. Only actual delivered output is charged.
-The wire fields are unchanged, and existing persisted requests keep their
-original terms. Older payment implementations still apply their own limits.
+Prices and counts are the provider's claims. Proof of correct inference,
+refunds and encrypted output are not implemented. The supported endpoints are
+`/v1/chat/completions` and `/v1/completions`, one completion per request.
+Prompt estimates are capped at 131,072 tokens. Rejected paid attempts do not
+silently retry on another paid provider.
 
 ## Wallet and persistence
 
@@ -103,22 +94,8 @@ the plugin boundary, and no per-token IPC exists.
 
 The host supplies every invoice's expiry (`wallet_create_invoice.expiry_secs`);
 a plugin must not substitute a provider default. `mesh-llm-payments::lifetimes`
-owns the values: input inference invoices expire after 60 seconds, output
-invoices after 60 minutes, `fund-wallet` invoices after 24 hours. The seller
-waits for the input payment to arrive for exactly the input invoice lifetime.
-A payer cannot recall an in-flight HTLC, and the payee's node claims any HTLC
-that lands before expiry, so a shorter wait would leave a window in which the
-seller has discarded its buffered output but still gets paid for it. Aligning
-the two means "the seller gave up" and "the payment can no longer land" are the
-same moment; the price is that an unpaid request can hold a backend slot for
-up to 60 seconds (paused at the pre-payment token cap). This also bounds how long an unpaid input invoice keeps a
-peer blocked.
-
-Receiver-side arrival is a normalized field, `Transaction.claiming`, set by the
-plugin only for a pending inbound payment whose HTLC is irrevocably committed.
-`status_msg` is display text and nothing in the payment path branches on it.
-A plugin that cannot observe claiming leaves the flag false and the receiver
-waits for completion, which the contract permits.
+owns the values: metered deposit invoices expire after 60 seconds, final
+invoices after 60 minutes, `fund-wallet` invoices after 24 hours.
 
 `wallet.v1` operations return structured errors with a kind:
 `not_open`, `invalid_request`, `not_submitted`, `uncertain`, `failed`. The
@@ -208,12 +185,11 @@ Live cancellation atomically closes pending or approved requests only before
 charge preparation; periodic reconciliation does not sweep live approvals.
 Prepared and uncertain charges retain their reservations.
 
-Recovery refreshes input receipts from authoritative wallet status, including
-zero-output requests. Output invoices require terminal input success; claiming,
-unknown, failed, or unavailable input status preserves debt without invoicing it.
-Recovery never reruns inference. Delivered-output debt survives provider restart;
-KV state does not. No payment retry can replace a recorded segment invoice.
-Receiving-wallet identity is pinned by the input invoice's signed payee key.
+Recovery never reruns inference. Metered settlement state survives provider
+restart; KV state does not. No payment retry can replace a recorded segment
+invoice. Receiving-wallet identity is pinned by the first invoice's signed
+payee key. Only local `wallet send` charges are resubmitted; charges left by the
+retired per-request protocol are observed from wallet facts only.
 
 An uncertain payment the wallet has recorded is not released just because its
 invoice expired: an in-flight HTLC can outlive the invoice. If the wallet remains
@@ -222,36 +198,12 @@ reservation remains held; the PoC has no force-release command. Recovery contact
 identity while retaining its wallet/database is deliberately unsupported; unrelated
 same-model peers are never asked to settle that debt.
 
-Providers reject a peer with unpaid recorded invoices or finished, delivered
-output debt awaiting invoice creation. Background recovery creates missing
-output invoices in bounded batches after a crash or temporary wallet failure.
-Admission waits up to 30 seconds for the requesting peer's recorded debt to
-settle, refreshing only that peer's unpaid invoices. No backend starts during
-this wait. The transactional admission check still rejects outstanding debt
-after the deadline; claiming alone does not clear it. This covers the window
-where the previous HTTP response finished but its trailing invoice is settling. Peer identities
-can be replaced, so this blacklist is only a PoC deterrent. A slow or
-interrupted payment is not debt: once the input invoice has been expired for
-`INPUT_LAPSE_GRACE` (60 s, covering wallet observation lag), the request has
-finished, a wallet lookup shows no successful or arriving payment, and no
-output was delivered, recovery or the next admission marks it `lapsed` and the
-peer is not blocked. This runs from durable state, so it also covers
-disconnects, wallet errors and restarts. Repeated abandoned prefill is not
-penalised yet (the seller loses the prefill and any undelivered decode). Expiry
-stops new payment attempts; it does not prove an already accepted payment has
-settled or become observable. If wallet observation fails at the deadline, a
-payer can be charged for completed prefill with no output: an accepted
-residual risk, not a no-charge guarantee. Lapsed invoices are not rescanned by
-background recovery; a receipt that arrives after lapse is recorded only by a
-later explicit lookup for that request. Delivered-but-unpaid output
-still blocks, and that block is deliberate and does not clear on its own. `mesh-llm wallet blocked`
-lists blocked peers with the full peer identifier and each recorded debt, and
-`mesh-llm wallet unblock PEER` (the full identifier or a unique prefix of at
-least eight characters) forgives that peer's recorded debt: unpaid invoices are
-marked forgiven and delivered-but-uninvoiced output is never invoiced. Both are
-ledger-only commands and work while the node is stopped. Forgiveness is an
-operator override, not a refund; a forgiven invoice that is paid later is still
-recorded as received.
+Metered admission is bounded by derived per-peer exposure, not by a debt
+blacklist. Debt recorded by the retired per-request protocol stays in the
+ledger but is no longer billed or collected. `mesh-llm wallet blocked` and
+`mesh-llm wallet unblock PEER` (see the pending decision on retaining them)
+list and forgive that legacy debt; metered invoices are never forgiven. Both
+are ledger-only commands. Forgiveness is an operator override, not a refund.
 
 Definitively failed inference payments stop automatic recovery attempts and
 release unused payer authorization; provider debt is not forgiven. The PoC does
@@ -266,7 +218,7 @@ payment without creating a new approval or debit.
 The seller explicitly configures per-model input/output msat per million tokens
 and a minimum invoice quantum. Free serving is the default. Charges use wide
 integer arithmetic, ceiling division and quantum rounding at the invoice
-boundary. Zero delivered output produces no output invoice.
+boundary. A zero remaining amount produces no final invoice.
 
 Enabling `wallet pricing MODEL` without explicit rates uses 500 input and 1500
 output msat per million tokens;
@@ -285,23 +237,11 @@ increase the sent amount; that increase also counts against the cap. Actual
 outgoing amount and fees are recorded. Operators can choose a different cap for
 an explicit `wallet send`.
 
-Input includes templates, system messages and tools, including cached input at
-the ordinary rate. Output counts canonical accepted tokens, excluding EOS and
-rejected speculative candidates. Streaming responses carry ordered usage
-watermarks; billing advances only after those bytes are accepted by the peer
-transport. Socket acceptance does not prove receipt by the end application.
-Partial frames or a crash between transmission and accounting can conservatively
-undercharge. Non-streaming responses become billable when their complete JSON
-usage is transmitted.
-
-Unpaid output delivery waits until the input invoice expires (60 seconds) or
-cancellation. Decode runs ahead of the payment only up to the pre-payment token
-cap, then pauses in the backend's generation gate; the 1 MiB queue is a
-backstop, not the pause. If it ever filled, reads would stop and the backend's
-10-second receiver-stall timeout would cancel generation rather than pause it. Settlement continues independently of the application's HTTP
-connection. The provider stops further generation when it receives cancellation.
-Late input payment after state release is recorded but does not regenerate output
-or trigger an automatic refund.
+Billing uses the input and output token counts the backend reports in its
+response, at the rates frozen in the admission terms. Socket acceptance does not
+prove receipt by the end application. Settlement continues independently of the
+application's HTTP connection, and the provider stops generation when it
+receives `Cancel`.
 
 ## Approval and routing
 

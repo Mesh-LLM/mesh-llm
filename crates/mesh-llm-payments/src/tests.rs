@@ -15,7 +15,6 @@ use crate::{
     wallet::{Balance, PayError, PaymentStatus, Transaction, WalletProvider},
 };
 
-mod blocking;
 mod failure_boundaries;
 mod metered_service;
 mod metered_settlement;

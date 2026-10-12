@@ -234,23 +234,3 @@ async fn notification_error_keeps_reservation_until_authoritative_recovery() -> 
     Ok(())
 }
 
-fn publish_claiming(wallet: &MockWallet, invoice: &Invoice) {
-    wallet.payments.lock().unwrap().insert(
-        invoice.payment_hash.clone(),
-        Transaction {
-            id: invoice.payment_hash.clone(),
-            payment_hash: Some(invoice.payment_hash.clone()),
-            inbound: true,
-            amount_msat: invoice.amount_msat.unwrap(),
-            fee_msat: 0,
-            status: PaymentStatus::Pending,
-            claiming: true,
-            // Display text is provider-specific and must not drive the gate.
-            status_msg: Some("Claiming inbound HTLC".into()),
-            created_at_ms: crate::now_ms(),
-            settled_at_ms: None,
-        },
-    );
-    wallet.updates.notify_waiters();
-}
-
