@@ -169,7 +169,21 @@ fn finish(seen: Seen, extras: &[String]) -> Result<Args, CheckReport> {
 /// Python `float(text)`: surrounding whitespace ignored, underscores only
 /// between digits, `inf`/`infinity`/`nan` in any case with a sign.
 pub(crate) fn python_float(text: &str) -> Option<f64> {
-    text.parse::<f64>().ok().filter(|number| number.is_finite())
+    let text = text.trim();
+    let bytes = text.as_bytes();
+    let separated = bytes.iter().enumerate().all(|(index, byte)| {
+        *byte != b'_'
+            || (index > 0
+                && bytes[index - 1].is_ascii_digit()
+                && bytes.get(index + 1).is_some_and(u8::is_ascii_digit))
+    });
+    if !separated {
+        return None;
+    }
+    text.replace('_', "")
+        .parse::<f64>()
+        .ok()
+        .filter(|number| number.is_finite())
 }
 
 #[cfg(test)]
@@ -179,7 +193,9 @@ mod tests {
     #[test]
     fn migration_ci_operations_python_float_follows_cpython() {
         assert_eq!(python_float("0.5"), Some(0.5));
-        assert_eq!(python_float("1_0"), None);
+        assert_eq!(python_float("1_0"), Some(10.0));
+        assert_eq!(python_float("0_5e-2"), Some(0.05));
+        assert_eq!(python_float(" 0.5\n"), Some(0.5));
         assert_eq!(python_float("-iNfInity"), None);
         assert_eq!(python_float("+nan"), None);
         for rejected in ["", "_1", "1_", "1__0", "1_.5", "x", "0x10", "1e"] {
