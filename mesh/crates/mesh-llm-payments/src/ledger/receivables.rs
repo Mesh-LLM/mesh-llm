@@ -53,11 +53,11 @@ pub struct Receivable {
 pub const UNPAID_FINAL_INVOICE_LIMIT: u32 = 3;
 
 /// A peer is held while an input (admission) invoice is unpaid, and blocked
-/// once it carries [`UNPAID_FINAL_INVOICE_LIMIT`] distinct requests with final
-/// output debt: an unpaid output invoice, or delivered output not yet
-/// invoiced. Abandoned requests are forgiven and never count; retries of one
-/// request count once.
-const PEER_BLOCKED_SQL: &str = "SELECT EXISTS(SELECT 1 FROM receivables WHERE peer=?1 AND segment=0 AND state='unpaid') OR (SELECT COUNT(*) FROM serving_requests r JOIN serving_accounting a ON a.id=r.id WHERE r.peer=?1 AND a.finished=1 AND a.tokens>0 AND a.forgiven=0 AND (EXISTS(SELECT 1 FROM receivables WHERE request_id=r.id AND segment>0 AND state='unpaid') OR NOT EXISTS(SELECT 1 FROM receivables WHERE request_id=r.id AND segment=1))) >= 3";
+/// once it carries [`UNPAID_FINAL_INVOICE_LIMIT`] distinct requests with an
+/// issued, unpaid final invoice. Delivered output not yet invoiced (for
+/// example after a provider-side invoicing failure) is no bill to pay and
+/// never counts; nor do abandoned requests. Retries of one request count once.
+const PEER_BLOCKED_SQL: &str = "SELECT EXISTS(SELECT 1 FROM receivables WHERE peer=?1 AND segment=0 AND state='unpaid') OR (SELECT COUNT(DISTINCT x.request_id) FROM receivables x JOIN serving_accounting a ON a.id=x.request_id WHERE x.peer=?1 AND x.segment>0 AND x.state='unpaid' AND a.forgiven=0) >= 3";
 
 impl Ledger {
     /// Claim an unguessable request ID before running inference. A replay can

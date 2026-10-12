@@ -351,7 +351,7 @@ async fn already_paid_send_repairs_legacy_phantom_authorizations() -> Result<()>
 }
 
 #[tokio::test]
-async fn uninvoiced_debt_blocks_admission_after_crash_and_invoice_failure() -> Result<()> {
+async fn uninvoiced_output_is_no_strike_until_its_final_invoice_is_issued() -> Result<()> {
     let dir = tempfile::tempdir()?;
     let wallet = Arc::new(MockWallet::default());
     let pricing = terms("debt", 1000).pricing;
@@ -390,24 +390,18 @@ async fn uninvoiced_debt_blocks_admission_after_crash_and_invoice_failure() -> R
         }
     }
     let service = PaymentService::with_provider(dir.path(), wallet.clone())?;
-    // Three requests with final debt reach the limit, across the crash.
-    assert!(
-        service
-            .ledger
-            .begin_serving("second", "debtor", &pricing, 8)
-            .is_err()
-    );
+    // Two issued unpaid final invoices plus uninvoiced output: the uninvoiced
+    // output is no bill to pay, so the buyer is still admitted, including
+    // while the provider's invoicing fails.
+    service
+        .ledger
+        .begin_serving("second", "debtor", &pricing, 8)?;
     service
         .ledger
         .begin_serving("unrelated", "other", &pricing, 8)?;
     wallet.invoice_unavailable.store(true, Ordering::SeqCst);
     assert!(service.recover_output_debt().await.is_err());
-    assert!(
-        service
-            .ledger
-            .begin_serving("third", "debtor", &pricing, 8)
-            .is_err()
-    );
+    assert!(!service.ledger.has_outstanding_payment("debtor")?);
     wallet.invoice_unavailable.store(false, Ordering::SeqCst);
     service.recover_output_debt().await?;
     let invoices = service.ledger.unpaid_invoices("debtor")?;
