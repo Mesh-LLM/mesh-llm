@@ -293,6 +293,64 @@ class PackageNativeRuntimeTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def _package_cpu(
+        self,
+        root: Path,
+        *args: str,
+        patchelf: str = "#!/bin/sh\nexit 0\n",
+    ) -> subprocess.CompletedProcess[str]:
+        build_dir = root / "build"
+        build_dir.mkdir()
+        (build_dir / "libllama.so").write_bytes(b"test native runtime")
+        tool_dir = root / "tools"
+        tool_dir.mkdir()
+        patchelf_path = tool_dir / "patchelf"
+        patchelf_path.write_text(patchelf, encoding="utf-8")
+        patchelf_path.chmod(0o755)
+
+        run_env = os.environ.copy()
+        run_env["LLAMA_STAGE_BUILD_DIR"] = str(build_dir)
+        run_env["MESH_NATIVE_RUNTIME_MODEL_PACKAGE_TOOL"] = "/usr/bin/true"
+        run_env["PATH"] = f"{tool_dir}{os.pathsep}{run_env['PATH']}"
+        return subprocess.run(
+            [
+                "/bin/bash",
+                str(SCRIPT),
+                "--backend",
+                "cpu",
+                "--target",
+                "x86_64-unknown-linux-gnu",
+                "--out",
+                str(root / "output"),
+                *args,
+            ],
+            env=run_env,
+            text=True,
+            capture_output=True,
+        )
+
+    def test_distribution_build_keeps_runpath_and_skips_model_package_tool(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            log = root / "patchelf.log"
+            patchelf = (
+                "#!/bin/sh\n"
+                f'echo "$@" >> "{log}"\n'
+                'if [ "$1" = --print-rpath ]; then echo /opt/deps/lib; fi\n'
+            )
+            result = self._package_cpu(
+                root, "--keep-runpath", "--no-model-package-tool", patchelf=patchelf
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            stage = root / "output" / "meshllm-native-runtime-linux-x86_64-cpu"
+            manifest = json.loads((stage / "manifest.json").read_text(encoding="utf-8"))
+            self.assertEqual(manifest["runtime"]["tools"], {})
+            self.assertIn(
+                f"--set-rpath $ORIGIN:/opt/deps/lib {stage / 'lib/libllama.so'}",
+                log.read_text(encoding="utf-8").splitlines(),
+            )
+
     def test_model_package_tool_keeps_repository_cargo_defaults(self) -> None:
         script = SCRIPT.read_text(encoding="utf-8")
         start = script.index("build_model_package_tool() {")
