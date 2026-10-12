@@ -37,7 +37,7 @@ fn concurrent_cell_runs_every_recorded_turn_with_matching_summary() {
     let server = std::thread::spawn(move || {
         let mut observed = Vec::new();
         for _ in 0..4 {
-            let (mut connection, _) = listener.accept().unwrap();
+            let mut connection = accept_within(&listener);
             let request = read_request(&mut connection);
             let end = request
                 .windows(4)
@@ -116,31 +116,8 @@ fn trajectory_execution_preserves_stream_evidence_through_http() {
     let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
     let address = listener.local_addr().unwrap();
     let server = std::thread::spawn(move || {
-        let (mut connection, _) = listener.accept().unwrap();
-        connection
-            .set_read_timeout(Some(std::time::Duration::from_secs(5)))
-            .unwrap();
-        let mut request = Vec::new();
-        loop {
-            let mut buffer = [0; 4096];
-            let count = connection.read(&mut buffer).unwrap();
-            assert!(count > 0);
-            request.extend_from_slice(&buffer[..count]);
-            if let Some(end) = request.windows(4).position(|bytes| bytes == b"\r\n\r\n") {
-                let headers = String::from_utf8_lossy(&request[..end]);
-                let length = headers
-                    .lines()
-                    .find_map(|line| {
-                        let (key, value) = line.split_once(':')?;
-                        key.eq_ignore_ascii_case("content-length")
-                            .then(|| value.trim().parse::<usize>().unwrap())
-                    })
-                    .unwrap();
-                if request.len() >= end + 4 + length {
-                    break;
-                }
-            }
-        }
+        let mut connection = accept_within(&listener);
+        let request = read_request(&mut connection);
         let body = b"data: {\"choices\":[{\"delta\":{\"content\":\"saved answer\"},\"finish_reason\":\"stop\"}]}\n\ndata: {\"usage\":{\"prompt_tokens\":40,\"completion_tokens\":2,\"prompt_tokens_details\":{\"cached_tokens\":30}}}\n\ndata: [DONE]\n\n";
         write!(connection, "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len()).unwrap();
         connection.write_all(body).unwrap();
@@ -192,7 +169,7 @@ fn cell_execution_retains_failed_turns_and_negative_completeness() {
     let address = listener.local_addr().unwrap();
     let server = std::thread::spawn(move || {
         for _ in 0..2 {
-            let (mut connection, _) = listener.accept().unwrap();
+            let mut connection = accept_within(&listener);
             connection
                 .set_read_timeout(Some(std::time::Duration::from_secs(5)))
                 .unwrap();
@@ -237,4 +214,27 @@ fn cell_execution_retains_failed_turns_and_negative_completeness() {
         serde_json::from_slice(&std::fs::read(summary).unwrap()).unwrap();
     assert_eq!(report["completeness"]["passed"], false);
     assert_eq!(report["failed_requests"], 2);
+}
+
+// Bounded so an early CLI exit fails the test instead of leaving the fixture
+// thread blocked in accept() forever.
+fn accept_within(listener: &std::net::TcpListener) -> std::net::TcpStream {
+    listener.set_nonblocking(true).unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    loop {
+        match listener.accept() {
+            Ok((stream, _)) => {
+                stream.set_nonblocking(false).unwrap();
+                return stream;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "CLI did not connect to the fixture server"
+                );
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            Err(error) => panic!("{error}"),
+        }
+    }
 }
