@@ -219,7 +219,11 @@ async fn expired_retired_charge_without_wallet_record_stays_pending() -> Result<
 
     assert_eq!(wallet.calls.load(Ordering::SeqCst), 1, "no resubmission");
     assert_eq!(payments_recorded(&wallet), 0);
-    assert_eq!(service.ledger.pending_charges()?.len(), 1, "not failed by expiry");
+    assert_eq!(
+        service.ledger.pending_charges()?.len(),
+        1,
+        "not failed by expiry"
+    );
     assert_eq!(
         service.ledger.available_budget(BUDGET, crate::now_ms())?,
         BUDGET - 1000,
