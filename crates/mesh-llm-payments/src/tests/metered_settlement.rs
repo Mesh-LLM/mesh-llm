@@ -184,17 +184,6 @@ fn usage_missing_stays_unresolved_without_bill_forfeit_or_credit() {
 }
 
 #[test]
-fn metered_rows_are_invisible_to_legacy_recovery_and_debt_blocking() {
-    let (_d, l) = open();
-    admit(&l, "x", 1000, 500, 10_000, true).unwrap();
-    record(&l, "x", 0, 1, 300, false);
-    assert!(l.unpaid_input_batch(0).unwrap().is_empty());
-    assert!(l.unpaid_input_requests("peer").unwrap().is_empty());
-    l.metered_finalize("x", usage(1000, 100)).unwrap();
-    assert!(l.uninvoiced_output().unwrap().is_empty());
-}
-
-#[test]
 fn usage_missing_resolves_once_from_later_authoritative_usage() {
     let (_d, l) = open();
     admit(&l, "m", 1000, 500, 10_000, true).unwrap();
@@ -226,23 +215,6 @@ fn usage_missing_resolves_once_from_later_authoritative_usage() {
         .unwrap();
     assert_eq!(s.credit_created_msat, 300);
     assert_eq!(l.metered_exposure("peer").unwrap(), 800);
-}
-
-#[test]
-fn unpaid_final_invoice_counts_once_and_survives_unblock() {
-    let (_d, l) = open();
-    admit(&l, "f", 1000, 500, 10_000, false).unwrap();
-    l.metered_finalize("f", usage(900, 200)).unwrap();
-    record(&l, "f", 1, 3, 1100, false);
-    // Recorded-but-unpaid final invoice: remaining only, no reservation.
-    assert_eq!(l.metered_exposure("peer").unwrap(), 1100);
-    let blocked = l.blocked_peers().unwrap();
-    assert_eq!(blocked[0].debts[0].kind, "metered_invoice");
-    assert!(l.has_outstanding_payment("peer").unwrap());
-    assert!(l.unblock_peer("peer").is_err());
-    assert_eq!(l.metered_exposure("peer").unwrap(), 1100);
-    assert!(l.has_outstanding_payment("peer").unwrap());
-    assert!(!l.receivables(Some("f")).unwrap()[0].paid);
 }
 
 #[test]

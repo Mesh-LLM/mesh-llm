@@ -167,7 +167,7 @@ impl Ledger {
             "client exposure cap exceeded"
         );
         // serving_requests owns peer identity for receivables; no
-        // serving_accounting row, so legacy output recovery never sees it.
+        // serving_accounting row (that table only holds pre-cutover rows).
         tx.execute(
             "INSERT INTO serving_requests(id,peer) VALUES (?1,?2)",
             params![id, peer],

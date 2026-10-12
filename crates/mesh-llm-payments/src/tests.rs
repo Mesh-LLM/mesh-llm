@@ -11,7 +11,7 @@ use crate::{
     invoice::Invoice,
     ledger::{ApprovalMode, Charge, Ledger, Policy, RequestTerms},
     pricing::Pricing,
-    service::{Arrival, PaymentService},
+    service::PaymentService,
     wallet::{Balance, PayError, PaymentStatus, Transaction, WalletProvider},
 };
 
@@ -347,37 +347,6 @@ fn invoices_reject_peer_metadata_substitution_and_amount_changes() {
     );
     invoice.payment_hash = "00".repeat(32);
     assert!(invoice.validate_payment(100, crate::now_ms()).is_err());
-}
-
-#[test]
-fn committed_output_debt_survives_process_restart() {
-    let dir = tempfile::tempdir().unwrap();
-    let price = terms("one", 1000).pricing;
-    {
-        let service =
-            PaymentService::with_provider(dir.path(), Arc::new(MockWallet::default())).unwrap();
-        service
-            .ledger
-            .begin_serving("one", "peer", &price, 2)
-            .unwrap();
-        service.ledger.record_delivered_tokens("one", 2).unwrap();
-        service.ledger.record_delivered_tokens("one", 2).unwrap();
-        assert!(service.ledger.record_delivered_tokens("one", 3).is_err());
-    }
-    let service =
-        PaymentService::with_provider(dir.path(), Arc::new(MockWallet::default())).unwrap();
-    let (_, _, tokens, finished) = service.ledger.serving_account("one").unwrap();
-    assert_eq!(tokens, 2);
-    assert!(finished);
-    assert!(service.ledger.record_delivered_tokens("one", 3).is_err());
-}
-
-#[tokio::test]
-async fn oversized_wire_frame_is_rejected_before_allocation() {
-    use tokio::io::AsyncWriteExt;
-    let (mut writer, mut reader) = tokio::io::duplex(64);
-    writer.write_u32(u32::MAX).await.unwrap();
-    assert!(crate::wire::read(&mut reader).await.is_err());
 }
 
 #[tokio::test]

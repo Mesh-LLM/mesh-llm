@@ -12,32 +12,8 @@ use crate::invoice::Invoice;
 use crate::ledger::{ApprovalMode, Charge, Ledger, RequestTerms};
 use crate::wallet::{Balance, PayError, PaymentStatus, Transaction, WalletProvider};
 
-/// Which receiver-side evidence ended an arrival wait.
-///
-/// Diagnostic only: both variants mean the same thing for authorization, and
-/// neither is a settlement record.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Arrival {
-    /// A transient claiming state was observed before the payment settled.
-    Claiming,
-    /// The claiming state was missed or never published, and the wait ended on
-    /// a terminal status.
-    Terminal,
-}
-
-impl Arrival {
-    /// A static label safe to attach to a log event.
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Claiming => "claiming",
-            Self::Terminal => "terminal",
-        }
-    }
-}
-
 /// Owns wallet I/O and durable authorization for a single data directory.
-/// Bound on the one-shot lookup at the end of an arrival wait; kept below the
-/// host gate's decode-pause slack (5 s) so the gate cannot give up first.
+/// Bound on the one-shot lookup after an incoming-payment wait times out.
 const FINAL_LOOKUP_TIMEOUT: Duration = Duration::from_secs(2);
 
 pub struct PaymentService {
@@ -47,7 +23,6 @@ pub struct PaymentService {
     factory: Arc<dyn crate::provisioning::WalletFactory>,
     payment_lock: Mutex<()>,
     receivable_lock: Mutex<()>,
-    input_recovery_cursor: Mutex<i64>,
     metered_standing: Mutex<std::collections::HashSet<String>>,
     _process_lock: std::fs::File,
 }
@@ -72,7 +47,6 @@ impl PaymentService {
             .open(directory.join("service.lock"))?;
         fs2::FileExt::try_lock_exclusive(&process_lock)
             .context("payment service is already running; use its local API")?;
-        ledger.close_interrupted_serving()?;
         ledger.close_interrupted_metered()?;
         ledger.close_abandoned_approvals()?;
         ledger.fail_unsubmitted_input_charges()?;
@@ -84,7 +58,6 @@ impl PaymentService {
             factory,
             payment_lock: Mutex::new(()),
             receivable_lock: Mutex::new(()),
-            input_recovery_cursor: Mutex::new(0),
             metered_standing: Mutex::new(Default::default()),
             _process_lock: process_lock,
         })
@@ -261,138 +234,8 @@ impl PaymentService {
         first_error.map_or(Ok(()), Err)
     }
 
-    pub async fn recover_output_debt(&self) -> Result<()> {
-        let mut first_error = None;
-        // Input observation tasks do not survive restart, including requests
-        // with no output or with an output invoice already persisted.
-        let mut cursor = self.input_recovery_cursor.lock().await;
-        for (row, id) in self.ledger.unpaid_input_batch(*cursor)? {
-            *cursor = row;
-            if let Err(error) = self.input_received(&id).await {
-                first_error.get_or_insert(error);
-            }
-        }
-        drop(cursor);
-        for id in self.ledger.uninvoiced_output()? {
-            if let Err(error) = self.output_receivable(&id).await {
-                first_error.get_or_insert(error);
-            }
-        }
-        first_error.map_or(Ok(()), Err)
-    }
-
-    /// Refresh the durable input receipt without treating arrival or expiry as settlement.
-    pub async fn input_received(&self, id: &str) -> Result<bool> {
-        let Some(receipt) = self
-            .ledger
-            .receivables(Some(id))?
-            .into_iter()
-            .find(|r| r.segment == 0)
-        else {
-            return Ok(false);
-        };
-        if receipt.paid {
-            return Ok(true);
-        }
-        let lookup = self
-            .wallet()
-            .await?
-            .lookup(&receipt.invoice.payment_hash)
-            .await?;
-        let Some(payment) = lookup else {
-            // No payment ever reached this node: once the grace after expiry
-            // has passed, a zero-delivery request is abandoned, not debt.
-            self.ledger
-                .lapse_abandoned_input(id, &receipt.invoice, crate::now_ms())?;
-            return Ok(false);
-        };
-        validate_payment_update(&payment, &receipt.invoice.payment_hash, true)?;
-        // Past expiry plus the grace, zero-delivery prefill stops blocking the
-        // peer whatever the wallet reports short of `Succeeded`: an issued but
-        // unpaid invoice reads as `Pending`. This is a policy choice, not proof
-        // that no accepted payment is still settling.
-        if payment.status != PaymentStatus::Succeeded {
-            self.ledger
-                .lapse_abandoned_input(id, &receipt.invoice, crate::now_ms())?;
-        }
-        if payment.status != PaymentStatus::Succeeded {
-            return Ok(false);
-        }
-        self.ledger.mark_received(&receipt.invoice.payment_hash)?;
-        Ok(true)
-    }
-
-    pub async fn output_receivable(
-        &self,
-        id: &str,
-    ) -> Result<Option<crate::ledger::receivables::Receivable>> {
-        let _guard = self.receivable_lock.lock().await;
-        let (peer, pricing, tokens, finished) = self.ledger.serving_account(id)?;
-        ensure!(finished, "generation is still active");
-        if tokens == 0 {
-            return Ok(None);
-        }
-        ensure!(
-            self.input_received(id).await?,
-            "input settlement is not confirmed"
-        );
-        if let Some(receipt) = self
-            .ledger
-            .receivables(Some(id))?
-            .into_iter()
-            .find(|r| r.segment == 1)
-        {
-            return Ok(Some(receipt));
-        }
-        let invoice = self
-            .wallet()
-            .await?
-            .create_invoice(
-                Some(pricing.output_charge(tokens)?),
-                crate::lifetimes::OUTPUT_INVOICE_EXPIRY_SECS,
-            )
-            .await?;
-        let receipt = crate::ledger::receivables::Receivable {
-            request_id: id.into(),
-            peer,
-            segment: 1,
-            invoice,
-            tokens,
-            paid: false,
-        };
-        self.ledger.record_receivable(&receipt)?;
-        Ok(Some(receipt))
-    }
-
-    /// Wait for the earliest receiver-side evidence that this incoming payment
-    /// has arrived, which is the safe point to start work that has not yet been
-    /// delivered. It is **not** a settlement record: the caller must still
-    /// `wait_received` before treating the payment as received.
-    ///
-    /// `deadline` is how long the caller is willing to hold work for this
-    /// payment; the wait also ends at invoice expiry, whichever comes first.
-    /// Callers that discard work on timeout must not pass a deadline shorter
-    /// than the invoice lifetime: a payer cannot recall an in-flight HTLC, and
-    /// this node will still claim one that lands before expiry.
-    ///
-    /// The returned [`Arrival`] records which evidence opened the gate, so a
-    /// caller can tell an early claiming observation from the terminal
-    /// fallback. It is diagnostic only and must not change settlement.
-    pub async fn wait_arrival(&self, invoice: &Invoice, deadline: Duration) -> Result<Arrival> {
-        let payment = self.await_incoming(invoice, true, Some(deadline)).await?;
-        ensure!(
-            payment.status == PaymentStatus::Succeeded || payment.is_claiming(),
-            "incoming payment did not succeed"
-        );
-        Ok(if payment.is_claiming() {
-            Arrival::Claiming
-        } else {
-            Arrival::Terminal
-        })
-    }
-
     pub async fn wait_received(&self, invoice: &Invoice) -> Result<()> {
-        let payment = self.await_incoming(invoice, false, None).await?;
+        let payment = self.await_incoming(invoice).await?;
         ensure!(
             payment.status == PaymentStatus::Succeeded,
             "incoming payment did not succeed"
@@ -403,19 +246,11 @@ impl PaymentService {
     async fn await_incoming(
         &self,
         invoice: &Invoice,
-        claiming: bool,
-        deadline: Option<Duration>,
     ) -> Result<Transaction> {
         let wallet = self.wallet().await?;
         let until_expiry = invoice.expires_at_ms.saturating_sub(crate::now_ms());
-        let deadline_ms =
-            deadline.map(|deadline| u64::try_from(deadline.as_millis()).unwrap_or(u64::MAX));
-        let remaining = deadline_ms.map_or(until_expiry, |limit| limit.min(until_expiry));
-        let timed_out = if deadline_ms.is_some_and(|limit| limit < until_expiry) {
-            "incoming payment did not arrive in time"
-        } else {
-            "payment invoice expired"
-        };
+        let remaining = until_expiry;
+        let timed_out = "payment invoice expired";
         let payment = if remaining == 0 {
             // Expiry ends an unpaid wait, but must not hide an existing receipt.
             let payment = wallet
@@ -428,13 +263,7 @@ impl PaymentService {
             );
             payment
         } else {
-            let waiting = async {
-                if claiming {
-                    wallet.wait_for_arrival(&invoice.payment_hash).await
-                } else {
-                    wallet.wait_for_payment(&invoice.payment_hash).await
-                }
-            };
+            let waiting = wallet.wait_for_payment(&invoice.payment_hash);
             match tokio::time::timeout(Duration::from_millis(remaining), waiting).await {
                 Ok(payment) => payment?,
                 // The watcher may lag the wallet: look once more so a payment
@@ -444,10 +273,7 @@ impl PaymentService {
                     tokio::time::timeout(FINAL_LOOKUP_TIMEOUT, wallet.lookup(&invoice.payment_hash))
                         .await
                         .context(timed_out)??
-                        .filter(|payment| {
-                            payment.status == PaymentStatus::Succeeded
-                                || (claiming && payment.is_claiming())
-                        })
+                        .filter(|payment| payment.status == PaymentStatus::Succeeded)
                         .context(timed_out)?
                 }
             }

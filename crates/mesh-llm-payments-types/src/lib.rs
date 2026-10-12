@@ -11,6 +11,5 @@ pub mod metering;
 pub mod pricing;
 pub mod response_usage;
 pub mod terms;
-pub mod wire;
 
 pub use terms::RequestTerms;

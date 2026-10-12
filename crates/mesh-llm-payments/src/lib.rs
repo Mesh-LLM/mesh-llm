@@ -14,7 +14,7 @@ pub mod service;
 
 // Pure data types live in `mesh-llm-payments-types` so mesh core can depend on
 // them without linking the ledger; re-exported here under their old paths.
-pub use mesh_llm_payments_types::{lifetimes, pricing, wire};
+pub use mesh_llm_payments_types::{lifetimes, pricing};
 
 /// Wallet types re-exported under their historical paths.
 pub mod invoice {

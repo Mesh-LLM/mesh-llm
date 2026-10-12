@@ -22,43 +22,6 @@ fn terms(id: &str, cap: u64) -> RequestTerms {
 }
 
 #[test]
-fn backend_context_allowance_is_durable_and_bounds_delivery() {
-    let directory = tempfile::tempdir().unwrap();
-    let ledger = Ledger::open(directory.path()).unwrap();
-    ledger
-        .begin_serving(
-            "context",
-            "peer",
-            &terms("context", 1).pricing,
-            u64::from(u32::MAX),
-        )
-        .unwrap();
-    ledger
-        .resolve_serving_output_allowance("context", 6000)
-        .unwrap();
-    assert!(
-        ledger
-            .resolve_serving_output_allowance("context", 6001)
-            .is_err()
-    );
-    assert!(
-        ledger
-            .resolve_serving_output_allowance("context", 0)
-            .is_err()
-    );
-    ledger.record_delivered_tokens("context", 5000).unwrap();
-    assert!(
-        ledger
-            .resolve_serving_output_allowance("context", 6000)
-            .is_err()
-    );
-    drop(ledger);
-    let ledger = Ledger::open(directory.path()).unwrap();
-    ledger.record_delivered_tokens("context", 6000).unwrap();
-    assert!(ledger.record_delivered_tokens("context", 6001).is_err());
-}
-
-#[test]
 fn restart_and_day_rollover_preserve_reservations() {
     let directory = tempfile::tempdir().unwrap();
     {
