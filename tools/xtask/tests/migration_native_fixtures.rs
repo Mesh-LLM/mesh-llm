@@ -1,4 +1,5 @@
 #![cfg(feature = "automation-contracts")]
+#![cfg(any(target_os = "linux", target_os = "macos"))]
 use serde::Deserialize;
 use std::fs;
 use std::io::Write;
