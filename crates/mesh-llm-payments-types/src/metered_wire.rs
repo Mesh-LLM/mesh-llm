@@ -1,12 +1,15 @@
-//! Explicitly negotiated request-in/response-out billing. Payment v1 retains
-//! its old semantics; neither side may downgrade after accepting these terms.
+//! Explicitly negotiated request-in/response-out billing.
+//! Neither side may downgrade to a retired payment protocol.
 
 use anyhow::{Result, ensure};
 use mesh_llm_wallet::invoice::Invoice;
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
-use crate::{metering::MeteredUsage, pricing::Pricing, wire::MAX_FRAME_BYTES};
+use crate::{metering::MeteredUsage, pricing::Pricing};
+
+/// Maximum encoded v2 frame length, checked before allocation.
+pub const MAX_FRAME_BYTES: usize = 4 * 1024 * 1024;
 
 pub const HTTP_UPGRADE: &[u8] =
     b"POST /mesh/payment/v2 HTTP/1.1\r\nHost: mesh\r\nContent-Length: 0\r\n\r\n";
@@ -91,10 +94,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn version_two_is_not_a_silent_version_one_reinterpretation() {
-        assert_ne!(HTTP_UPGRADE, crate::wire::HTTP_UPGRADE);
-        let bytes = serde_json::to_vec(&Frame::Accepted {}).unwrap();
-        assert!(serde_json::from_slice::<crate::wire::Frame>(&bytes).is_err());
+    fn version_two_rejects_retired_frames_and_unknown_fields() {
+        assert!(HTTP_UPGRADE.starts_with(b"POST /mesh/payment/v2 HTTP/1.1\r\n"));
+        assert!(serde_json::from_slice::<Frame>(br#"{"type":"input_invoice"}"#).is_err());
         assert!(serde_json::from_slice::<Frame>(br#"{"type":"accepted","hidden":1}"#).is_err());
     }
 

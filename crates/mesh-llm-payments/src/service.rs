@@ -153,7 +153,10 @@ impl PaymentService {
     async fn observe_retired_charge(&self, charge: &Charge) -> Result<()> {
         let _guard = self.payment_lock.lock().await;
         let hash = &charge.invoice.payment_hash;
-        let state = self.ledger.charge_state(hash)?.context("payment intent missing")?;
+        let state = self
+            .ledger
+            .charge_state(hash)?
+            .context("payment intent missing")?;
         if state == "prepared" {
             return self.ledger.fail_unsubmitted(hash);
         }
@@ -267,10 +270,7 @@ impl PaymentService {
         Ok(())
     }
 
-    async fn await_incoming(
-        &self,
-        invoice: &Invoice,
-    ) -> Result<Transaction> {
+    async fn await_incoming(&self, invoice: &Invoice) -> Result<Transaction> {
         let wallet = self.wallet().await?;
         let until_expiry = invoice.expires_at_ms.saturating_sub(crate::now_ms());
         let remaining = until_expiry;

@@ -1,9 +1,5 @@
-use anyhow::{Result, bail, ensure};
-use mesh_llm_payments::{
-    ledger::RequestTerms,
-    service::PaymentService,
-    wire::{self, Frame},
-};
+use anyhow::Result;
+use mesh_llm_payments::{ledger::RequestTerms, service::PaymentService};
 
 use crate::mesh::Node;
 
@@ -12,7 +8,6 @@ use crate::mesh::Node;
 pub(crate) async fn recover(node: &Node, service: &PaymentService) -> Result<()> {
     // One uncertain charge or unavailable invoice must not block other debts.
     let _ = service.reconcile_pending().await;
-    let _ = service.recover_output_debt().await;
     for request in service.ledger.requests()? {
         if request.state != "approved" || request.terms.peer == "wallet-send" {
             continue;
@@ -40,33 +35,7 @@ async fn recover_request(
     peer: iroh::EndpointId,
 ) -> Result<()> {
     if let Some(admission) = service.metered_authorization(&terms.id)? {
-        return super::metered_payer::recover(node, service, terms, &admission, peer).await;
+        super::metered_payer::recover(node, service, terms, &admission, peer).await?;
     }
-    let (mut send, mut recv) = node.open_http_tunnel(peer).await?;
-    send.write_all(wire::HTTP_UPGRADE).await?;
-    wire::write(
-        &mut send,
-        &Frame::Recover {
-            id: terms.id.clone(),
-        },
-    )
-    .await?;
-    loop {
-        match wire::read(&mut recv).await? {
-            Frame::OutputInvoice {
-                request_id,
-                tokens,
-                invoice,
-            } => {
-                ensure!(request_id == terms.id, "recovery request mismatch");
-                super::paid::settle_output(service, terms, tokens, invoice).await?;
-            }
-            Frame::Complete => {
-                service.ledger.finish(&terms.id)?;
-                return Ok(());
-            }
-            Frame::Pending => return Ok(()),
-            _ => bail!("invalid recovery response"),
-        }
-    }
+    Ok(())
 }

@@ -348,7 +348,6 @@ where
     max_stop_bytes: usize,
     generated_text_bytes: Vec<u8>,
     completion_tokens: usize,
-    generation_gate: Option<Arc<dyn crate::frontend::generation_gate::GenerationGate>>,
     finish_reason: FinishReason,
     metrics: GenerationMetrics,
     emulation_active: bool,
@@ -383,7 +382,6 @@ where
             max_stop_bytes,
             generated_text_bytes: Vec::new(),
             completion_tokens: 0,
-            generation_gate: None,
             finish_reason: finish_reason_for_generation(true),
             metrics: GenerationMetrics::default(),
             emulation_active: false,
@@ -405,14 +403,6 @@ where
         self
     }
 
-    pub(in crate::frontend) fn with_generation_gate(
-        mut self,
-        gate: Option<Arc<dyn crate::frontend::generation_gate::GenerationGate>>,
-    ) -> Self {
-        self.generation_gate = gate;
-        self
-    }
-
     pub(in crate::frontend) fn push_token(&mut self, token: i32) -> OpenAiResult<TokenControl> {
         let eog_timer = Instant::now();
         if !self.ignore_eos
@@ -427,9 +417,6 @@ where
         }
         self.metrics.eog_check_ms += eog_timer.elapsed().as_secs_f64() * 1000.0;
         self.completion_tokens += 1;
-        if let Some(gate) = self.generation_gate.as_ref() {
-            gate.committed_token()?;
-        }
         let detokenize_timer = Instant::now();
         let piece = self
             .model

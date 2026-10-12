@@ -95,16 +95,6 @@ async fn stream_backend(
             backend_network.payments.load(Ordering::SeqCst) > 0,
             "dispatch before deposit"
         );
-        let id = text
-            .lines()
-            .find_map(|l| l.strip_prefix("x-request-id: "))
-            .unwrap();
-        let id = uuid::Uuid::parse_str(id.trim())?;
-        assert!(
-            skippy_server::frontend::generation_gate::registered_for_test(*id.as_bytes())
-                .unwrap()
-                .is_none()
-        );
         stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\ndata: {\"choices\":[{\"text\":\"hello\"}]}\n\n").await?;
         tokio::task::yield_now().await;
         stream.write_all(b"data: {\"choices\":[],\"usage\":{\"prompt_tokens\":40,\"completion_tokens\":3}}\n\ndata: [DONE]\n\n").await?;

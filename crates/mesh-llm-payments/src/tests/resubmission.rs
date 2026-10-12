@@ -20,7 +20,9 @@ async fn uncertain_charge(
         mode: ApprovalMode::Automatic,
         daily_budget_msat: Some(BUDGET),
     })?;
-    service.await_authorization(&wallet_send_terms("one", 1000)).await?;
+    service
+        .await_authorization(&wallet_send_terms("one", 1000))
+        .await?;
     assert!(service.pay_charge(charge).await.is_err());
     assert_eq!(service.ledger.pending_charges()?.len(), 1);
     Ok(service)

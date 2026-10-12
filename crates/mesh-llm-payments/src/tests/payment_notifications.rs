@@ -233,4 +233,3 @@ async fn notification_error_keeps_reservation_until_authoritative_recovery() -> 
     assert_eq!(service.ledger.requests()?[0].spent_msat, 110);
     Ok(())
 }
-

@@ -8,7 +8,6 @@ mod embedded_generation;
 mod generation;
 mod generation_commit_batcher;
 mod generation_flow;
-pub mod generation_gate;
 mod generation_receipt;
 mod guardrails;
 pub(crate) mod iteration_scheduler;

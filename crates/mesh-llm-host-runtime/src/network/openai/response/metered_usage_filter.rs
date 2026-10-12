@@ -7,7 +7,8 @@
 //! client-visible HTTP/SSE bytes; provider evidence and settlement never see
 //! it.
 //!
-//! Usage-only events (empty or absent `choices`) are dropped. A usage object
+//! Chat usage-only events (`choices: []`) are dropped; absent or non-array
+//! `choices` and error events pass through unchanged. A usage object
 //! attached to a content chunk is removed so the content still reaches the
 //! client. Every other event, including errors and `[DONE]`, is forwarded
 //! byte-for-byte. Malformed framing or an over-limit event switches to
@@ -37,6 +38,8 @@ pub(super) struct UsageFilter {
     raw: Vec<u8>,
     /// Decoded SSE body bytes not yet forming a complete event.
     event: Vec<u8>,
+    event_scan: usize,
+    event_line_start: usize,
 }
 
 impl Default for UsageFilter {
@@ -45,6 +48,8 @@ impl Default for UsageFilter {
             mode: Mode::Headers,
             raw: Vec::new(),
             event: Vec::new(),
+            event_scan: 0,
+            event_line_start: 0,
         }
     }
 }
@@ -184,8 +189,14 @@ impl UsageFilter {
     fn body(&mut self, bytes: &[u8], chunked: bool, out: &mut Vec<u8>) {
         self.event.extend_from_slice(bytes);
         let mut filtered = Vec::new();
-        while let Some(end) = event_end(&self.event) {
+        while let Some(end) = event_end(
+            &self.event,
+            &mut self.event_scan,
+            &mut self.event_line_start,
+        ) {
             let event = self.event.drain(..end).collect::<Vec<_>>();
+            self.event_scan = 0;
+            self.event_line_start = 0;
             filter_event(&event, &mut filtered);
         }
         emit(out, &filtered, chunked);
@@ -219,25 +230,25 @@ fn emit(out: &mut Vec<u8>, bytes: &[u8], chunked: bool) {
 /// End offset of the first complete SSE event (through its blank line).
 /// Accepts CRLF, LF and CR line endings. A trailing CR is treated as
 /// incomplete because it may be the first half of CRLF.
-fn event_end(bytes: &[u8]) -> Option<usize> {
-    let mut line_start = 0;
-    let mut i = 0;
-    while i < bytes.len() {
-        let terminator = match bytes[i] {
+fn event_end(bytes: &[u8], scan: &mut usize, line_start: &mut usize) -> Option<usize> {
+    // Remember scanned bytes across fragmented input: rescanning an unfinished
+    // multi-megabyte line on every socket read is quadratic work.
+    while *scan < bytes.len() {
+        let terminator = match bytes[*scan] {
             b'\n' => 1,
-            b'\r' if i + 1 == bytes.len() => return None,
-            b'\r' if bytes[i + 1] == b'\n' => 2,
+            b'\r' if *scan + 1 == bytes.len() => return None,
+            b'\r' if bytes[*scan + 1] == b'\n' => 2,
             b'\r' => 1,
             _ => {
-                i += 1;
+                *scan += 1;
                 continue;
             }
         };
-        if i == line_start {
-            return Some(i + terminator);
+        if *scan == *line_start {
+            return Some(*scan + terminator);
         }
-        i += terminator;
-        line_start = i;
+        *scan += terminator;
+        *line_start = *scan;
     }
     None
 }

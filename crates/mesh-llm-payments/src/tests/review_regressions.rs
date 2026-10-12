@@ -116,9 +116,9 @@ async fn unindexed_uncertain_payment_is_retried_but_never_released_before_expiry
 }
 
 #[tokio::test]
-async fn prepared_output_payment_can_resume_without_resubmitting_started_payment() -> Result<()> {
-    // Segment 1: the seller has delivered and is owed, so a never-submitted
-    // output charge survives a restart and is paid exactly once.
+async fn retired_prepared_output_payment_is_failed_without_submission() -> Result<()> {
+    // A v1 output intent remains persisted, but the cutover must never
+    // submit it through the retired execution path.
     let dir = tempfile::tempdir()?;
     let wallet = Arc::new(MockWallet::default());
     let charge = charge("prepared", 1, 4, 600, 700);
@@ -130,9 +130,16 @@ async fn prepared_output_payment_can_resume_without_resubmitting_started_payment
     }
     let service = PaymentService::with_provider(dir.path(), wallet.clone())?;
     service.reconcile_pending().await?;
-    service.pay_charge(&charge).await?;
-    assert_eq!(wallet.calls.load(Ordering::SeqCst), 1);
-    assert_eq!(service.ledger.requests()?[0].spent_msat, 610);
+    assert!(service.pay_charge(&charge).await.is_err());
+    assert_eq!(wallet.calls.load(Ordering::SeqCst), 0);
+    assert_eq!(service.ledger.requests()?[0].spent_msat, 0);
+    assert_eq!(
+        service
+            .ledger
+            .charge_state(&charge.invoice.payment_hash)?
+            .as_deref(),
+        Some("failed")
+    );
     Ok(())
 }
 

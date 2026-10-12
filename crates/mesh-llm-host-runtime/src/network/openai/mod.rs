@@ -25,8 +25,6 @@ mod payment_routing;
 #[cfg(feature = "payments")]
 pub(crate) use response::payment_recovery;
 
-#[cfg(all(test, feature = "payments"))]
-pub(crate) use response::paid::exchange as test_payment_exchange;
 mod workload_routing;
 
 #[cfg(all(test, feature = "payments"))]

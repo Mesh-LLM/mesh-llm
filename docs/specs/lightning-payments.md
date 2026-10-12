@@ -81,13 +81,13 @@ NWC, BOLT12 and multi-provider selection are deferred.
 
 Feature layering, so embedding applications never link a wallet SDK:
 `payments` (host-runtime, `mesh-llm`, `mesh-llm-embedded-runtime`,
-`mesh-llm-sdk`) is the ledger, gates and the `wallet.v1` adapter; `wallet-lexe`
+`mesh-llm-sdk`) is the ledger, metered exchange and the `wallet.v1` adapter; `wallet-lexe`
 (host-runtime, `mesh-llm`) is the built-in Lexe implementation and the only
 feature that links Lexe. The shipped CLI enables both. `mesh-llm-sdk` with
 `serving` compiles neither; with `serving,payments` it compiles the ledger and
 adapter and expects an external `wallet.v1` plugin.
 
-What stays in the host: token metering, output gating, budgets, the ledger,
+What stays in the host: backend usage metering, admission, budgets, the ledger,
 settlement bookkeeping, recovery, invoice lifetimes and fee policy. What the
 plugin does: turn wallet intents into wallet facts. Response bytes never cross
 the plugin boundary, and no per-token IPC exists.
@@ -118,7 +118,8 @@ ledger-only and every wallet operation fails with a clear error.
 
 The payment service awaits provider completion for incoming and pending outgoing
 payments. A second method awaits the earliest receiver-side evidence that an
-incoming payment has arrived, used only to open the output-delivery gate; it defaults to
+incoming payment has arrived. This shared wallet API remains available, but the
+retired Mesh output-delivery gate no longer calls it. It defaults to
 the completion wait, so an adapter without such a signal is simply slower, never
 wrong. Event-capable adapters can use native subscriptions. To stay within Lexe's
 rate limits, the Lexe adapter implements both with one shared watcher that tails the
