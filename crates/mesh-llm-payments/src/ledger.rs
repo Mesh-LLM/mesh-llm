@@ -311,6 +311,30 @@ impl Ledger {
         Ok(())
     }
 
+    /// Metered v2 payer only: on an authoritative Complete, retire a deposit
+    /// charge that was never submitted (`prepared`), releasing its reservation
+    /// without the legacy failed-request cascade. A `pending` (possibly
+    /// submitted) deposit is untouched until wallet facts resolve it. Returns
+    /// whether a charge was retired; replays return `false`.
+    pub fn retire_unsubmitted_metered_deposit(&self, id: &str) -> Result<bool> {
+        let mut connection = self.lock()?;
+        let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let metered: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM settings WHERE key='metered-payer/'||?1)",
+            [id],
+            |r| r.get(0),
+        )?;
+        ensure!(metered, "not a metered payer request");
+        // `retired` is terminal and outside ('prepared','pending'), so
+        // reconcile ignores it and `finish` can complete the request.
+        let changed = tx.execute(
+            "UPDATE charges SET state='retired' WHERE request_id=?1 AND segment=0 AND state='prepared'",
+            [id],
+        )?;
+        tx.commit()?;
+        Ok(changed == 1)
+    }
+
     /// Run only while opening the exclusively locked service, before live approvals.
     /// Metered v2 payer requests (`metered-payer/<id>` setting) are excluded:
     /// a trusted no-deposit request may already be dispatched with no charge.

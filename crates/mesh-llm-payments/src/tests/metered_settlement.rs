@@ -419,3 +419,69 @@ fn startup_closes_interrupted_rows_by_dispatch_marker() {
     l.mark_received(&invoice(30, 300).payment_hash).unwrap();
     assert_eq!(l.peer_credit("peer").unwrap(), 600);
 }
+
+#[test]
+fn retire_only_never_submitted_metered_deposit() {
+    use crate::ledger::{ApprovalMode, Charge, Policy, RequestTerms};
+    let (_d, l) = open();
+    l.set_policy(&Policy {
+        mode: ApprovalMode::Automatic,
+        daily_budget_msat: Some(100_000),
+    })
+    .unwrap();
+    for (n, id) in [(40u8, "v2a"), (41, "v2b"), (42, "legacy")] {
+        l.propose(&RequestTerms {
+            exchange_id: None,
+            id: id.into(),
+            peer: "peer".into(),
+            payee: None,
+            model: "m".into(),
+            pricing: rates(),
+            input_tokens: 10,
+            max_output_tokens: 10,
+            max_total_msat: 1000,
+            expires_at_ms: u64::MAX,
+        })
+        .unwrap();
+        if id != "legacy" {
+            l.set_setting(&format!("metered-payer/{id}"), "{}").unwrap();
+        }
+        l.approve(id, 100_000, 1).unwrap();
+        l.prepare_charge(&Charge {
+            request_id: id.into(),
+            segment: 0,
+            invoice: invoice(n, 300),
+            amount_msat: 300,
+            max_total_msat: 400,
+        })
+        .unwrap();
+    }
+    // v2b was submitted: must stay unresolved.
+    l.begin_submission(&invoice(41, 300).payment_hash).unwrap();
+    assert!(l.retire_unsubmitted_metered_deposit("v2a").unwrap());
+    assert!(!l.retire_unsubmitted_metered_deposit("v2a").unwrap());
+    assert!(!l.retire_unsubmitted_metered_deposit("v2b").unwrap());
+    assert!(l.retire_unsubmitted_metered_deposit("legacy").is_err());
+    assert_eq!(
+        l.charge_state(&invoice(40, 300).payment_hash)
+            .unwrap()
+            .as_deref(),
+        Some("retired")
+    );
+    assert_eq!(
+        l.charge_state(&invoice(41, 300).payment_hash)
+            .unwrap()
+            .as_deref(),
+        Some("pending")
+    );
+    // No failed cascade: request still approved, and completes cleanly.
+    assert_eq!(l.request_state("v2a").unwrap().as_deref(), Some("approved"));
+    l.finish("v2a").unwrap();
+    assert!(l.finish("v2b").is_err());
+    assert!(
+        l.pending_charges()
+            .unwrap()
+            .iter()
+            .all(|c| c.request_id != "v2a")
+    );
+}
