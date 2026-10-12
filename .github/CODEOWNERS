@@ -1,5 +1,5 @@
 # The last matching pattern wins. Keep broad fallbacks before product paths.
-* @i386 @ndizazzo
+* @i386 @ndizazzo @michaelneale
 
 # Shared workspace infrastructure and CI.
 /.github/ @i386 @ndizazzo
