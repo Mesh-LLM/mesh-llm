@@ -248,6 +248,10 @@ fn package_model_tool_windows_omission_and_cargo_defaults_preserve_inherited_fla
         "build_model_package_tool() {",
         "collect_runtime_libraries() {",
     );
+    let functions = format!(
+        "{}\n{functions}",
+        owner("set_linux_runpath() {", "build_gpu_benchmark_tool() {")
+    );
     for runtime in ["windows", "linux"] {
         let fixture = Fixture::new();
         fixture.tool("cargo", "case \"${1:-}\" in\n build) printf '%s\\n' \"$*\" \"RUSTFLAGS=$RUSTFLAGS\" \"CARGO_ENCODED_RUSTFLAGS=$CARGO_ENCODED_RUSTFLAGS\" > \"$TEST_ROOT/build-call\"; mkdir -p \"$TEST_ROOT/target/x86_64-unknown-linux-gnu/release\"; printf '#!/bin/sh\\nexit 0\\n' > \"$TEST_ROOT/target/x86_64-unknown-linux-gnu/release/skippy-package-builder\"; chmod +x \"$TEST_ROOT/target/x86_64-unknown-linux-gnu/release/skippy-package-builder\" ;;\n metadata) printf '{\"target_directory\":\"%s/target\"}\\n' \"$TEST_ROOT\" ;;\n xtool) shift; exec \"$AUTOMATION\" \"$@\" ;;\n *) exit 98 ;;\nesac");
