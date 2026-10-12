@@ -1,4 +1,5 @@
 #![cfg(feature = "automation-contracts")]
+#![cfg(any(target_os = "linux", target_os = "macos"))]
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::fs::{self, OpenOptions};

@@ -298,7 +298,7 @@ fn executed_probe_keeps_raw_jsonl_parseable_and_emits_completed_fields() {
     let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
     let address = listener.local_addr().unwrap();
     let server = std::thread::spawn(move || {
-        let (mut stream, _) = listener.accept().unwrap();
+        let mut stream = accept_within(&listener);
         stream
             .set_read_timeout(Some(Duration::from_secs(3)))
             .unwrap();
@@ -446,5 +446,28 @@ fn worker_records_reach_retained_server_cell_parent_output() {
     for line in std::fs::read_to_string(raw).unwrap().lines() {
         let record: serde_json::Value = serde_json::from_str(line).unwrap();
         assert_eq!(record["request_id"], "worker-session:0");
+    }
+}
+
+// Bounded so an early CLI exit fails the test instead of leaving the fixture
+// thread blocked in accept() forever.
+fn accept_within(listener: &std::net::TcpListener) -> std::net::TcpStream {
+    listener.set_nonblocking(true).unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    loop {
+        match listener.accept() {
+            Ok((stream, _)) => {
+                stream.set_nonblocking(false).unwrap();
+                return stream;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "CLI did not connect to the fixture server"
+                );
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            Err(error) => panic!("{error}"),
+        }
     }
 }
