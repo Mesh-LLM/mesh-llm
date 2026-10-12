@@ -260,16 +260,17 @@ async fn run_backend(
     reader: &mut (impl AsyncRead + Unpin),
     writer: &mut (impl AsyncWrite + Unpin),
 ) -> MeteredOutcome {
-    let Ok(mut backend) = session
+    let mut backend = match session
         .backend
         .connect(&session.request, &session.terms.id)
         .await
-    else {
-        return MeteredOutcome::BackendError;
+    {
+        Ok(backend) => backend,
+        Err(failure) => return failure.outcome(),
     };
     let mut usage = ResponseUsage::default();
     let mut buffer = [0_u8; 16 * 1024];
-    let cancelled = wire::read(reader);
+    let cancelled = wait_for_cancel_or_invalid_frame(reader);
     tokio::pin!(cancelled);
     loop {
         let read = tokio::select! {
@@ -300,6 +301,26 @@ async fn run_backend(
         ResponseEvidence::Reported(usage) => MeteredOutcome::Usage(usage),
         ResponseEvidence::BackendError => MeteredOutcome::BackendError,
         ResponseEvidence::Missing => MeteredOutcome::UsageMissing,
+    }
+}
+
+/// A clean send-half EOF is not cancellation: the buyer may still consume
+/// the response. Invalid/truncated frames terminate conservatively, rather
+/// than pretending the buyer sent Cancel. The response writer detects loss
+/// of the receive half independently.
+async fn wait_for_cancel_or_invalid_frame(reader: &mut (impl AsyncRead + Unpin)) -> Result<()> {
+    let mut prefix = [0_u8; 1];
+    match reader.read(&mut prefix).await {
+        Ok(0) => std::future::pending::<Result<()>>().await,
+        Ok(_) => {
+            let mut framed = std::io::Cursor::new(prefix).chain(reader);
+            ensure!(
+                matches!(wire::read(&mut framed).await?, Frame::Cancel {}),
+                "unexpected buyer frame during inference"
+            );
+            Ok(())
+        }
+        Err(error) => Err(error.into()),
     }
 }
 
@@ -357,4 +378,46 @@ async fn recover(
         return wire::write(writer, &Frame::Pending {}).await;
     }
     settle(service, id, peer, writer).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::task::Poll;
+    use tokio::io::AsyncWriteExt;
+
+    #[tokio::test]
+    async fn send_half_eof_is_not_cancel_but_explicit_cancel_is() -> Result<()> {
+        let mut eof = tokio::io::empty();
+        let watcher = wait_for_cancel_or_invalid_frame(&mut eof);
+        tokio::pin!(watcher);
+        std::future::poll_fn(|cx| {
+            assert!(matches!(
+                std::future::Future::poll(watcher.as_mut(), cx),
+                Poll::Pending
+            ));
+            Poll::Ready(())
+        })
+        .await;
+        let mut bytes = Vec::new();
+        wire::write(&mut bytes, &Frame::Cancel {}).await?;
+        wait_for_cancel_or_invalid_frame(&mut bytes.as_slice()).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn truncated_and_unexpected_buyer_frames_are_errors_not_cancel() -> Result<()> {
+        let mut bytes = Vec::new();
+        wire::write(&mut bytes, &Frame::Accepted {}).await?;
+        assert!(
+            wait_for_cancel_or_invalid_frame(&mut bytes.as_slice())
+                .await
+                .is_err()
+        );
+        let (mut send, mut recv) = tokio::io::duplex(8);
+        send.write_all(&[0]).await?;
+        send.shutdown().await?;
+        assert!(wait_for_cancel_or_invalid_frame(&mut recv).await.is_err());
+        Ok(())
+    }
 }

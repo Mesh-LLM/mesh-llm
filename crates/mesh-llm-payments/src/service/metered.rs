@@ -213,6 +213,8 @@ impl PaymentService {
             Err(error) => {
                 // A deposit can arrive during wallet I/O. Retry only a changed
                 // snapshot; other wallet/persistence failures remain visible.
+                // The stale wallet invoice was never advertised or persisted.
+                // Leave it orphaned to expire; reusing it would charge an old amount.
                 let current = self.ledger.metered_settlement(id)?;
                 if current.remaining_msat == settlement.remaining_msat {
                     return Err(error);
