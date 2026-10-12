@@ -23,6 +23,8 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 # shellcheck disable=SC1091
 source "$SCRIPT_DIR/lib/cuda-toolkit.sh"
 BUILD=0
+KEEP_RUNPATH=0
+MODEL_PACKAGE_TOOL=1
 OUT_DIR="$REPO_ROOT/dist/native-runtimes"
 BACKEND="${LLAMA_STAGE_BACKEND:-${SKIPPY_LLAMA_BACKEND:-cpu}}"
 TARGET_TRIPLE="${MESH_NATIVE_RUNTIME_TARGET:-}"
@@ -40,6 +42,9 @@ Options:
   --backend NAME      cpu, metal, cuda, rocm, hip, vulkan, or cuda-blackwell.
   --target TRIPLE     Runtime target triple. Defaults to the host target.
   --out DIR           Output directory. Defaults to dist/native-runtimes.
+  --keep-runpath      Linux: prepend $ORIGIN to existing runpaths, don't replace them.
+  --no-model-package-tool
+                      Leave out the offline skippy-package-builder.
   -h, --help          Show this help.
 
 Environment:
@@ -71,6 +76,14 @@ while [[ "$#" -gt 0 ]]; do
         --out)
             OUT_DIR="${2:?missing output directory}"
             shift 2
+            ;;
+        --keep-runpath)
+            KEEP_RUNPATH=1
+            shift
+            ;;
+        --no-model-package-tool)
+            MODEL_PACKAGE_TOOL=0
+            shift
             ;;
         -h|--help)
             usage
@@ -319,6 +332,15 @@ cuda_gencode_args() {
     done
 }
 
+# Sets the runpath to $1, followed by the existing one with --keep-runpath.
+set_linux_runpath() {
+    local runpath="$1" file="$2" existing=""
+    if [[ "${KEEP_RUNPATH:-0}" == 1 ]]; then
+        existing="$(patchelf --print-rpath "$file")"
+    fi
+    patchelf --set-rpath "$runpath${existing:+:$existing}" "$file"
+}
+
 build_gpu_benchmark_tool() {
     local tool_rel tool_path source_root compiler arch_arg
     local -a cuda_arch_args=()
@@ -365,7 +387,7 @@ build_gpu_benchmark_tool() {
     esac
 
     case "$runtime_os" in
-        linux) patchelf --set-rpath "\$ORIGIN/../lib" "$tool_path" ;;
+        linux) set_linux_runpath "\$ORIGIN/../lib" "$tool_path" ;;
         macos) install_name_tool -add_rpath '@loader_path/../lib' "$tool_path" ;;
     esac
     chmod +x "$tool_path"
@@ -378,7 +400,7 @@ build_model_package_tool() {
     # dynamic link, and the current consumers do not need this offline tool.
     # Keep Windows runtime artifacts limited to the established DLL producer
     # path until an import-library mechanism is available.
-    if [[ "$runtime_os" == "windows" ]]; then
+    if [[ "$runtime_os" == "windows" || "${MODEL_PACKAGE_TOOL:-1}" == 0 ]]; then
         return 0
     fi
 
@@ -418,7 +440,7 @@ build_model_package_tool() {
     cp "$source_path" "$tool_path"
     case "$runtime_os" in
         linux)
-            patchelf --set-rpath "\$ORIGIN/../lib" "$tool_path"
+            set_linux_runpath "\$ORIGIN/../lib" "$tool_path"
             ;;
         macos)
             if ! otool -l "$tool_path" | awk '
@@ -668,7 +690,7 @@ rewrite_linux_runtime_paths() {
     local rel_path library
     for rel_path in "${linux_relocatable_library_paths[@]}"; do
         library="$stage_dir/$rel_path"
-        patchelf --set-rpath "\$ORIGIN" "$library"
+        set_linux_runpath "\$ORIGIN" "$library"
     done
 }
 
