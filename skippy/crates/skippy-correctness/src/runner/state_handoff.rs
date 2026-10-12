@@ -554,6 +554,8 @@ fn run_binary_state_handoff(args: BinaryStateHandoffConfig) -> Result<BinaryStat
             .context("source config path is not valid UTF-8")?,
         "--max-inflight",
         &args.max_inflight.to_string(),
+        "--startup-timeout-secs",
+        &args.startup_timeout_secs.to_string(),
     ]);
     configure_child_logs(&mut source_command, args.child_logs);
     let mut source = ChildGuard::spawn(source_command)?;
@@ -604,6 +606,8 @@ fn run_binary_state_handoff(args: BinaryStateHandoffConfig) -> Result<BinaryStat
             .context("restore config path is not valid UTF-8")?,
         "--max-inflight",
         &args.max_inflight.to_string(),
+        "--startup-timeout-secs",
+        &args.startup_timeout_secs.to_string(),
     ]);
     configure_child_logs(&mut restore_command, args.child_logs);
     let mut restore = ChildGuard::spawn(restore_command)?;

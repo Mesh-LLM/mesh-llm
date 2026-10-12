@@ -718,6 +718,8 @@ fn start_stage0(
             // deferred prefill reply that Stop must reject.
             "--max-inflight",
             "1",
+            "--startup-timeout-secs",
+            &args.server.startup_timeout_secs.to_string(),
         ])
         .env("SKIPPY_GLM_DSA_OP_TIMING", "1")
         .env("SKIPPY_GLM_DSA_TENSOR_TRACE", "1")

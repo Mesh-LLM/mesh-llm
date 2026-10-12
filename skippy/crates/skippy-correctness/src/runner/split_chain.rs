@@ -569,6 +569,8 @@ fn run_binary_chain(args: BinaryChainConfig) -> Result<BinaryChainResult> {
             .context("topology path is not valid UTF-8")?,
         "--max-inflight",
         &args.max_inflight.to_string(),
+        "--startup-timeout-secs",
+        &args.startup_timeout_secs.to_string(),
     ]);
     configure_child_logs(&mut stage2_command, args.child_logs);
     let mut stage2 = ChildGuard::spawn(stage2_command)?;
@@ -597,6 +599,8 @@ fn run_binary_chain(args: BinaryChainConfig) -> Result<BinaryChainResult> {
             .context("topology path is not valid UTF-8")?,
         "--max-inflight",
         &args.max_inflight.to_string(),
+        "--startup-timeout-secs",
+        &args.startup_timeout_secs.to_string(),
     ]);
     configure_child_logs(&mut stage1_command, args.child_logs);
     let mut stage1 = ChildGuard::spawn(stage1_command)?;

@@ -129,6 +129,8 @@ pub(super) fn spawn_stage(
             .context("topology path is not valid UTF-8")?,
         "--telemetry-level",
         "debug",
+        "--startup-timeout-secs",
+        &args.server.startup_timeout_secs.to_string(),
     ]);
     if let Some(openai_bind_addr) = openai_bind_addr {
         command.args(["--bind-addr", &openai_bind_addr.to_string()]);

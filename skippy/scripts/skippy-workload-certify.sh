@@ -199,7 +199,10 @@ fi
 
 MEDIA_PATH=""
 case "$MODEL_CLASS" in
-  ocr) MEDIA_PATH="$ROOT/ci/llama-canary/fixtures/multimodal-smoke.png" ;;
+  ocr)
+    MEDIA_PATH="$WORK_DIR/ocr-oracle-mesh-42.png"
+    python3 "$ROOT/scripts/generate-ocr-oracle-fixture.py" --output "$MEDIA_PATH"
+    ;;
   speech_recognition) MEDIA_PATH="$ROOT/ci/llama-canary/fixtures/audio-smoke.wav" ;;
 esac
 
@@ -410,17 +413,12 @@ if [[ -n "$ORACLE_SERVER" ]]; then
   }
   start_oracle_server
   if [[ "$MODEL_CLASS" =~ ^(ocr|speech_recognition)$ ]]; then
-    ORACLE_MEDIA_PATH="$MEDIA_PATH"
-    if [[ "$MODEL_CLASS" == "ocr" ]]; then
-      ORACLE_MEDIA_PATH="$WORK_DIR/ocr-oracle-mesh-42.png"
-      python3 "$ROOT/scripts/generate-ocr-oracle-fixture.py" --output "$ORACLE_MEDIA_PATH"
-    fi
     python3 "$ROOT/scripts/skippy-ocr-asr-oracle.py" \
       --candidate-url "http://127.0.0.1:$PORT/v1" \
       --oracle-url "http://127.0.0.1:$ORACLE_PORT/v1" \
       --model "$MODEL_ID" \
       --class "$MODEL_CLASS" \
-      --media-path "$ORACLE_MEDIA_PATH" | tee "$COMPARISON_LOG"
+      --media-path "$MEDIA_PATH" | tee "$COMPARISON_LOG"
   else
     python3 "$ROOT/scripts/ci-workload-monolithic-oracle.py" \
       --candidate-url "http://127.0.0.1:$PORT/v1" \

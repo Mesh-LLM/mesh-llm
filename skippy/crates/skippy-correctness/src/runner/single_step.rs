@@ -377,6 +377,8 @@ pub(in crate::runner) fn run_binary_split(args: BinarySplitConfig) -> Result<Bin
             .context("topology path is not valid UTF-8")?,
         "--max-inflight",
         &args.max_inflight.to_string(),
+        "--startup-timeout-secs",
+        &args.startup_timeout_secs.to_string(),
     ]);
     configure_child_logs(&mut stage_command, args.child_logs);
     let mut stage1 = ChildGuard::spawn(stage_command)?;
