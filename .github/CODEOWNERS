@@ -16,7 +16,7 @@
 /mesh/crates/mesh-llm-plugin-manager/ @michaelneale @ndizazzo @i386
 /mesh/crates/mesh-native-serving-plugin-api/ @michaelneale @ndizazzo @i386
 /mesh/crates/mesh-native-serving-plugin-host/ @michaelneale @ndizazzo @i386
-/mesh/crates/mesh-llm-ui/ @ndizazzo @i386
+/mesh/crates/mesh-llm-ui/ @ndizazzo @i386 @iamthesvn
 /mesh/docs/ @ndizazzo
 /mesh/website/ @ndizazzo
 /skippy/ @i386 @danielwinterw
