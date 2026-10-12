@@ -540,6 +540,16 @@ impl Ledger {
         Ok(())
     }
 
+    /// Whether `id` is a local `wallet send` request, the only non-metered
+    /// charge this service still submits.
+    pub fn is_wallet_send(&self, id: &str) -> Result<bool> {
+        Ok(self.lock()?.query_row(
+            "SELECT EXISTS(SELECT 1 FROM requests WHERE id=? AND json_extract(terms,'$.peer')='wallet-send')",
+            [id],
+            |r| r.get(0),
+        )?)
+    }
+
     pub fn pending_charges(&self) -> Result<Vec<Charge>> {
         let connection = self.lock()?;
         let mut statement = connection.prepare("SELECT request_id,segment,invoice,amount,max_total FROM charges WHERE state IN ('prepared','pending')")?;

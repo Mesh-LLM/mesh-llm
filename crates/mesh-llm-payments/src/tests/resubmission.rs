@@ -1,6 +1,8 @@
-//! Recovery of `pending` charges whose outcome was uncertain. Providers treat
-//! a repeat `pay` for the same invoice as a lookup of the existing payment, so
-//! recovery may resubmit until the invoice expires.
+//! Recovery of `pending` charges whose outcome was uncertain. Only local
+//! `wallet send` charges are resubmitted: providers treat a repeat `pay` for
+//! the same invoice as a lookup of the existing payment, so recovery may
+//! resubmit until the invoice expires. Charges left by the retired
+//! per-request protocol are observed from wallet facts and never resubmitted.
 
 use std::time::Duration;
 
@@ -18,10 +20,18 @@ async fn uncertain_charge(
         mode: ApprovalMode::Automatic,
         daily_budget_msat: Some(BUDGET),
     })?;
-    service.await_authorization(&terms("one", 1000)).await?;
+    service.await_authorization(&wallet_send_terms("one", 1000)).await?;
     assert!(service.pay_charge(charge).await.is_err());
     assert_eq!(service.ledger.pending_charges()?.len(), 1);
     Ok(service)
+}
+
+fn wallet_send_terms(id: &str, cap: u64) -> RequestTerms {
+    RequestTerms {
+        peer: "wallet-send".into(),
+        model: "wallet-send".into(),
+        ..terms(id, cap)
+    }
 }
 
 fn payments_recorded(wallet: &MockWallet) -> usize {
@@ -139,5 +149,49 @@ async fn rejected_resubmission_stays_pending_until_expiry() -> Result<()> {
         BUDGET - 1000,
         "the request reservation is held"
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn retired_protocol_charge_is_observed_but_never_resubmitted() -> Result<()> {
+    let directory = tempfile::tempdir()?;
+    let wallet = Arc::new(MockWallet::default());
+    wallet.lose_submission.store(true, Ordering::SeqCst);
+    let charge = charge("one", 0, 1, 100, 200);
+    let service = PaymentService::with_provider(directory.path(), wallet.clone())?;
+    service.ledger.set_policy(&Policy {
+        mode: ApprovalMode::Automatic,
+        daily_budget_msat: Some(BUDGET),
+    })?;
+    service.await_authorization(&terms("one", 1000)).await?;
+    assert!(service.pay_charge(&charge).await.is_err());
+
+    service.reconcile_pending().await?;
+
+    assert_eq!(wallet.calls.load(Ordering::SeqCst), 1, "no resubmission");
+    assert_eq!(payments_recorded(&wallet), 0);
+    assert_eq!(service.ledger.pending_charges()?.len(), 1, "awaits expiry");
+    Ok(())
+}
+
+#[tokio::test]
+async fn retired_protocol_charge_settles_from_a_recorded_payment() -> Result<()> {
+    let directory = tempfile::tempdir()?;
+    let wallet = Arc::new(MockWallet::default());
+    wallet.lose_response.store(true, Ordering::SeqCst);
+    let charge = charge("one", 0, 1, 100, 200);
+    let service = PaymentService::with_provider(directory.path(), wallet.clone())?;
+    service.ledger.set_policy(&Policy {
+        mode: ApprovalMode::Automatic,
+        daily_budget_msat: Some(BUDGET),
+    })?;
+    service.await_authorization(&terms("one", 1000)).await?;
+    assert!(service.pay_charge(&charge).await.is_err());
+
+    service.reconcile_pending().await?;
+
+    assert_eq!(wallet.calls.load(Ordering::SeqCst), 1);
+    assert!(service.ledger.pending_charges()?.is_empty());
+    assert_eq!(service.ledger.requests()?[0].spent_msat, 110);
     Ok(())
 }

@@ -186,12 +186,15 @@ Payment intent is committed as `prepared` before wallet I/O and changes durably
 to `pending` immediately before submission. Only prepared intents may be
 submitted during recovery for the first time. Unknown outcomes retain their
 reservation and are observed by the same payment hash, including after restart.
-When the wallet has no record of a pending attempt, recovery resubmits the same
-invoice, amount and `max_total_msat` through the normal preflight, fee check and
+When the wallet has no record of a pending local `wallet send` attempt,
+recovery resubmits the same invoice, amount and `max_total_msat` through the normal preflight, fee check and
 pay path. Providers must treat a repeat `pay` for an invoice as a lookup of the
 existing payment (Lexe SDK 0.1.24 and later does, even if that payment failed),
 so a resubmission racing an earlier one that is still landing cannot double-pay.
 A rejected or again-uncertain resubmission stays `pending` for the next scan.
+Charges left by the retired per-request inference protocol are never
+submitted or resubmitted: a recorded wallet payment settles them, a
+never-submitted one fails at once, and an unrecorded one fails at expiry.
 Once the invoice has expired and the lookup still finds nothing, the charge is
 marked `failed` and its reservation released: nothing can settle an expired
 invoice, so nothing was paid.

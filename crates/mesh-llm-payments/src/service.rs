@@ -146,6 +146,28 @@ impl PaymentService {
         Ok(payment)
     }
 
+    /// A charge left by the retired per-request payment protocol. It is never
+    /// submitted or resubmitted; only wallet facts settle it. A charge the
+    /// wallet never recorded is failed once its invoice expires (nothing can
+    /// pay it after that) or immediately if it was never submitted.
+    async fn observe_retired_charge(&self, charge: &Charge) -> Result<()> {
+        let _guard = self.payment_lock.lock().await;
+        let hash = &charge.invoice.payment_hash;
+        let state = self.ledger.charge_state(hash)?.context("payment intent missing")?;
+        if state == "prepared" {
+            return self.ledger.fail_unsubmitted(hash);
+        }
+        let wallet = self.wallet().await?;
+        if let Some(payment) = wallet.lookup(hash).await? {
+            validate_payment_update(&payment, hash, false)?;
+            return self.ledger.reconcile(&payment, crate::now_ms());
+        }
+        if charge.invoice.expires_at_ms <= crate::now_ms() {
+            self.ledger.fail_unsubmitted(hash)?;
+        }
+        Ok(())
+    }
+
     async fn start_or_observe_charge(&self, charge: &Charge) -> Result<Transaction> {
         let _guard = self.payment_lock.lock().await;
         let state = self
@@ -221,11 +243,13 @@ impl PaymentService {
         for charge in self.ledger.pending_charges()? {
             let result = if self.metered_authorization(&charge.request_id)?.is_some() {
                 self.metered_reconcile_charge(&charge).await
-            } else {
+            } else if self.ledger.is_wallet_send(&charge.request_id)? {
                 match self.start_or_observe_charge(&charge).await {
                     Ok(payment) => self.ledger.reconcile(&payment, crate::now_ms()),
                     Err(error) => Err(error),
                 }
+            } else {
+                self.observe_retired_charge(&charge).await
             };
             if let Err(error) = result {
                 first_error.get_or_insert(error);
