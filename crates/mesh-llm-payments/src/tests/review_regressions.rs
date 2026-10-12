@@ -336,6 +336,7 @@ async fn already_paid_send_repairs_legacy_phantom_authorizations() -> Result<()>
         let id = format!("send-{}", invoice.payment_hash);
         let mut request = terms(&id, 200);
         request.peer = "wallet-send".into();
+        request.model = "wallet-send".into();
         service.ledger.set_policy(&Policy {
             mode: ApprovalMode::Automatic,
             daily_budget_msat: Some(100_000),

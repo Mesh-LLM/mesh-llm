@@ -544,7 +544,7 @@ impl Ledger {
     /// charge this service still submits.
     pub fn is_wallet_send(&self, id: &str) -> Result<bool> {
         Ok(self.lock()?.query_row(
-            "SELECT EXISTS(SELECT 1 FROM requests WHERE id=? AND json_extract(terms,'$.peer')='wallet-send')",
+            "SELECT EXISTS(SELECT 1 FROM requests WHERE id=? AND json_extract(terms,'$.peer')='wallet-send' AND json_extract(terms,'$.model')='wallet-send')",
             [id],
             |r| r.get(0),
         )?)
