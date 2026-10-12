@@ -4,7 +4,10 @@ use rusqlite::Connection;
 
 /// 1: first versioned schema. 2: `serving_accounting.forgiven`, set by the
 /// operator `unblock` command for delivered output that will not be invoiced.
-const VERSION: u32 = 2;
+/// 3: `metered_requests` and `peer_credit` for metered (v2) settlement.
+const VERSION: u32 = 3;
+
+const METERED_TABLES: &str = include_str!("metered_schema.sql");
 
 pub(super) fn initialize(connection: &mut Connection) -> Result<()> {
     let version: u32 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
@@ -30,6 +33,8 @@ pub(super) fn initialize(connection: &mut Connection) -> Result<()> {
             "forgiven",
             "INTEGER NOT NULL DEFAULT 0",
         )?;
+        // Version 3: additive metered tables, idempotent on any prior version.
+        transaction.execute_batch(METERED_TABLES)?;
         transaction.pragma_update(None, "user_version", VERSION)?;
         transaction.commit()?;
     }

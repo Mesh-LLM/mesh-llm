@@ -159,7 +159,7 @@ impl Ledger {
         let connection = self.lock()?;
         let query = |cursor| -> Result<Vec<(i64, String)>> {
             let mut statement = connection.prepare(
-                "SELECT rowid,request_id FROM receivables WHERE segment=0 AND state='unpaid' AND rowid>? ORDER BY rowid LIMIT 32",
+                "SELECT rowid,request_id FROM receivables WHERE segment=0 AND state='unpaid' AND NOT EXISTS(SELECT 1 FROM metered_requests WHERE id=receivables.request_id) AND rowid>? ORDER BY rowid LIMIT 32",
             )?;
             Ok(statement
                 .query_map([cursor], |row| Ok((row.get(0)?, row.get(1)?)))?
@@ -230,7 +230,7 @@ impl Ledger {
     pub fn unpaid_input_requests(&self, peer: &str) -> Result<Vec<String>> {
         let connection = self.lock()?;
         let mut statement = connection.prepare(
-            "SELECT request_id FROM receivables WHERE peer=? AND segment=0 AND state='unpaid'",
+            "SELECT request_id FROM receivables WHERE peer=? AND segment=0 AND state='unpaid' AND NOT EXISTS(SELECT 1 FROM metered_requests WHERE id=receivables.request_id)",
         )?;
         Ok(statement
             .query_map([peer], |row| row.get(0))?

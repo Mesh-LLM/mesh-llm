@@ -27,3 +27,4 @@ CREATE TABLE IF NOT EXISTS serving_accounting(
 CREATE INDEX IF NOT EXISTS receivables_peer_state ON receivables(peer,state);
 CREATE INDEX IF NOT EXISTS serving_requests_peer ON serving_requests(peer);
 CREATE INDEX IF NOT EXISTS charges_state ON charges(state);
+

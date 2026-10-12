@@ -17,6 +17,7 @@ use crate::{
 
 mod blocking;
 mod failure_boundaries;
+mod metered_settlement;
 mod payment_notifications;
 mod provisioning;
 mod recovery_boundaries;
