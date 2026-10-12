@@ -63,7 +63,16 @@ impl PaidRequest {
         // Preserve normal inference defaults and caller limits. The backend
         // reports its resolved context allowance after tokenizing the prompt.
         if body.get("stream").and_then(Value::as_bool) == Some(true) {
-            body["stream_options"] = serde_json::json!({"include_usage": true});
+            let options = body
+                .as_object_mut()
+                .context("request must be an object")?
+                .entry("stream_options")
+                .or_insert_with(|| serde_json::json!({}));
+            if options.is_null() {
+                *options = serde_json::json!({});
+            }
+            let options = options.as_object_mut().context("invalid stream options")?;
+            options.insert("include_usage".into(), Value::Bool(true));
         }
         Ok(Self {
             model,
@@ -92,7 +101,7 @@ impl PaidRequest {
 
     pub fn backend_http(&self, request_id: &str) -> Result<Vec<u8>> {
         let bytes = serde_json::to_vec(&self.body)?;
-        let mut raw = format!("POST {} HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nConnection: close\r\nx-request-id: {}\r\nContent-Length: {}\r\n\r\n", self.path, request_id, bytes.len()).into_bytes();
+        let mut raw = format!("POST {} HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nAccept-Encoding: identity\r\nConnection: close\r\nx-request-id: {}\r\nContent-Length: {}\r\n\r\n", self.path, request_id, bytes.len()).into_bytes();
         raw.extend(bytes);
         Ok(raw)
     }
@@ -205,5 +214,72 @@ mod tests {
         let body = &raw[raw.windows(4).position(|w| w == b"\r\n\r\n").unwrap() + 4..];
         let body: Value = serde_json::from_slice(body).unwrap();
         assert_eq!(body["model"], "local-gguf/sha256-abc");
+    }
+    #[test]
+    fn backend_stream_requests_include_usage_without_losing_options() {
+        let parsed = PaidRequest::parse(b"POST /v1/chat/completions HTTP/1.1\r\n\r\n{\"model\":\"m\",\"stream\":true,\"stream_options\":{\"include_usage\":false,\"other\":true}}").unwrap();
+        assert_eq!(parsed.body["stream_options"]["include_usage"], true);
+        assert_eq!(parsed.body["stream_options"]["other"], true);
+        let raw = parsed.backend_http("id").unwrap();
+        let raw = String::from_utf8(raw).unwrap();
+        assert!(raw.contains("Accept-Encoding: identity\r\n"));
+        assert!(raw.contains("Connection: close\r\n"));
+    }
+    #[tokio::test]
+    async fn backend_stream_opt_in_reaches_usage_collector_over_http() {
+        use mesh_llm_payments_types::metering::MeteredUsage;
+        use mesh_llm_payments_types::response_usage::{ResponseEvidence, ResponseUsage};
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let backend = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut received = Vec::new();
+            let mut byte = [0_u8; 1];
+            loop {
+                socket.read_exact(&mut byte).await.unwrap();
+                received.extend(byte);
+                let mut headers = [httparse::EMPTY_HEADER; 64];
+                let mut request = httparse::Request::new(&mut headers);
+                if let httparse::Status::Complete(offset) = request.parse(&received).unwrap() {
+                    let length: usize = request
+                        .headers
+                        .iter()
+                        .find(|header| header.name.eq_ignore_ascii_case("content-length"))
+                        .map(|header| std::str::from_utf8(header.value).unwrap().parse().unwrap())
+                        .unwrap();
+                    if received.len() == offset + length {
+                        let body: Value = serde_json::from_slice(&received[offset..]).unwrap();
+                        assert_eq!(body["stream_options"]["include_usage"], true);
+                        assert_eq!(body["stream"], true);
+                        break;
+                    }
+                }
+            }
+            socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\ndata: {\"choices\":[{\"delta\":{\"content\":\"hello\"}}]}\n\ndata: {\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":2}}\n\ndata: [DONE]\n\n").await.unwrap();
+        });
+        let request = PaidRequest::parse(
+            b"POST /v1/chat/completions HTTP/1.1\r\n\r\n{\"model\":\"m\",\"stream\":true}",
+        )
+        .unwrap();
+        let mut socket = tokio::net::TcpStream::connect(address).await.unwrap();
+        socket
+            .write_all(&request.backend_http("id").unwrap())
+            .await
+            .unwrap();
+        let mut collector = ResponseUsage::default();
+        let mut byte = [0_u8; 1];
+        while socket.read(&mut byte).await.unwrap() != 0 {
+            collector.observe(&byte);
+        }
+        collector.finish();
+        assert_eq!(
+            collector.evidence(),
+            ResponseEvidence::Reported(MeteredUsage {
+                prompt_tokens: 5,
+                completion_tokens: 2
+            })
+        );
+        backend.await.unwrap();
     }
 }

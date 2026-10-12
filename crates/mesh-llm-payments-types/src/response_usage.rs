@@ -17,24 +17,65 @@ pub struct ResponseUsage {
     usage: Option<MeteredUsage>,
     ended: bool,
     finished: bool,
+    unavailable: bool,
+    backend_error: bool,
+}
+
+/// Settlement evidence, distinct from transport success. A backend error is
+/// not a fabricated zero-token report or a buyer failure.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ResponseEvidence {
+    Reported(MeteredUsage),
+    BackendError,
+    Missing,
 }
 
 impl ResponseUsage {
-    pub fn observe(&mut self, bytes: &[u8]) -> Result<()> {
-        self.buffer.extend_from_slice(bytes);
+    /// Observe a copy of bytes without controlling delivery. Meter failures are
+    /// sticky and discard evidence; callers still forward the original bytes.
+    pub fn observe(&mut self, bytes: &[u8]) {
+        if self.unavailable || self.backend_error {
+            return;
+        }
+        if self.try_observe(bytes).is_err() {
+            self.invalidate();
+        }
+    }
+
+    fn invalidate(&mut self) {
+        self.unavailable = true;
+        self.usage = None;
+        self.buffer.clear();
+        self.body.clear();
+        self.data.clear();
+    }
+
+    fn try_observe(&mut self, bytes: &[u8]) -> Result<()> {
         ensure!(
-            self.buffer.len() <= LIMIT,
+            bytes.len() <= LIMIT.saturating_sub(self.buffer.len()),
             "response framing exceeded limit"
         );
+        self.buffer.extend_from_slice(bytes);
         if !self.headers_done {
             let mut headers = [httparse::EMPTY_HEADER; 64];
             let mut response = httparse::Response::new(&mut headers);
             let httparse::Status::Complete(offset) = response.parse(&self.buffer)? else {
                 return Ok(());
             };
+            let code = response
+                .code
+                .ok_or_else(|| anyhow::anyhow!("missing HTTP status"))?;
+            if !(200..300).contains(&code) {
+                self.backend_error = true;
+                self.buffer.clear();
+                return Ok(());
+            }
             ensure!(
-                response.code.is_some_and(|code| (200..300).contains(&code)),
-                "backend error response"
+                response.headers.iter().all(|header| {
+                    !header.name.eq_ignore_ascii_case("content-encoding")
+                        || header.value.eq_ignore_ascii_case(b"identity")
+                }),
+                "encoded response usage unavailable"
             );
             self.chunked = response.headers.iter().any(|header| {
                 header.name.eq_ignore_ascii_case("transfer-encoding")
@@ -86,8 +127,11 @@ impl ResponseUsage {
     }
 
     fn observe_body(&mut self, bytes: &[u8]) -> Result<()> {
+        ensure!(
+            bytes.len() <= LIMIT.saturating_sub(self.body.len()),
+            "usage buffer exceeded limit"
+        );
         self.body.extend_from_slice(bytes);
-        ensure!(self.body.len() <= LIMIT, "usage buffer exceeded limit");
         if self.streaming {
             while let Some(end) = self.body.iter().position(|byte| *byte == b'\n') {
                 let line = self.body.drain(..=end).collect::<Vec<_>>();
@@ -127,18 +171,30 @@ impl ResponseUsage {
 
     /// Mark successful upstream EOF. Truncated chunk framing must not promote
     /// a non-streaming JSON prefix into a final bill.
-    pub fn finish(&mut self) -> Result<()> {
-        ensure!(self.headers_done, "incomplete backend response");
-        ensure!(!self.chunked || self.ended, "incomplete chunked response");
-        self.finished = true;
-        Ok(())
+    pub fn finish(&mut self) {
+        if !self.headers_done || (self.chunked && !self.ended) {
+            self.invalidate();
+        } else {
+            self.finished = true;
+        }
+    }
+
+    pub fn evidence(&self) -> ResponseEvidence {
+        if self.backend_error {
+            ResponseEvidence::BackendError
+        } else {
+            self.usage()
+                .map_or(ResponseEvidence::Missing, ResponseEvidence::Reported)
+        }
     }
 
     /// Evidence received so far, usable after disconnect. No report is None;
     /// a partially received usage event cannot supply a final bill. Ordinary
     /// JSON is authoritative only after successful response completion.
     pub fn usage(&self) -> Option<MeteredUsage> {
-        if self.streaming {
+        if self.unavailable || self.backend_error {
+            None
+        } else if self.streaming {
             self.usage
         } else if self.finished {
             serde_json::from_slice(&self.body)
@@ -162,14 +218,14 @@ mod tests {
             .iter()
             .chain(body)
         {
-            json.observe(&[*byte]).unwrap();
+            json.observe(&[*byte]);
         }
         let expected = Some(MeteredUsage {
             prompt_tokens: 12,
             completion_tokens: 7,
         });
         assert_eq!(json.usage(), None);
-        json.finish().unwrap();
+        json.finish();
         assert_eq!(json.usage(), expected);
         let mut sse = ResponseUsage::default();
         let event =
@@ -180,7 +236,7 @@ mod tests {
             std::str::from_utf8(event).unwrap()
         );
         for byte in response.bytes() {
-            sse.observe(&[byte]).unwrap();
+            sse.observe(&[byte]);
         }
         assert_eq!(sse.usage(), expected);
     }
@@ -188,9 +244,9 @@ mod tests {
     #[test]
     fn missing_partial_and_reasoning_chunks_are_not_token_counts() {
         let mut usage = ResponseUsage::default();
-        usage.observe(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\r\ndata: {\"choices\":[{\"delta\":{\"content\":\"hello\"}}]}\n\ndata: {\"usage\":{\"prompt_tokens\":4,\"completion_tokens\":9}}").unwrap();
+        usage.observe(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\r\ndata: {\"choices\":[{\"delta\":{\"content\":\"hello\"}}]}\n\ndata: {\"usage\":{\"prompt_tokens\":4,\"completion_tokens\":9}}");
         assert_eq!(usage.usage(), None);
-        usage.observe(b"\n\n").unwrap();
+        usage.observe(b"\n\n");
         assert_eq!(
             usage.usage(),
             Some(MeteredUsage {
@@ -198,10 +254,33 @@ mod tests {
                 completion_tokens: 9
             })
         );
-        assert!(
-            usage
-                .observe(b"data: {\"usage\":{\"prompt_tokens\":4,\"completion_tokens\":8}}\n\n")
-                .is_err()
+        usage.observe(b"data: {\"usage\":{\"prompt_tokens\":4,\"completion_tokens\":8}}\n\n");
+        assert_eq!(usage.evidence(), ResponseEvidence::Missing);
+        usage.observe(b"data: {\"usage\":{\"prompt_tokens\":4,\"completion_tokens\":10}}\n\n");
+        assert_eq!(usage.evidence(), ResponseEvidence::Missing);
+    }
+    #[test]
+    fn collector_failures_are_sticky_and_backend_errors_are_distinct() {
+        let mut error = ResponseUsage::default();
+        error.observe(b"HTTP/1.1 500 Error\r\nContent-Length: 0\r\n\r\n");
+        error.finish();
+        assert_eq!(error.evidence(), ResponseEvidence::BackendError);
+        for response in [
+            b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\nzz\r\n".as_slice(),
+            b"HTTP/1.1 200 OK\r\nContent-Encoding: gzip\r\n\r\ncompressed".as_slice(),
+        ] {
+            let mut usage = ResponseUsage::default();
+            usage.observe(response);
+            usage.finish();
+            assert_eq!(usage.evidence(), ResponseEvidence::Missing);
+        }
+        let mut oversized = ResponseUsage::default();
+        oversized.observe(&vec![b'x'; LIMIT + 1]);
+        assert!(oversized.buffer.is_empty());
+        oversized.observe(
+            b"HTTP/1.1 200 OK\r\n\r\n{\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":2}}",
         );
+        oversized.finish();
+        assert_eq!(oversized.evidence(), ResponseEvidence::Missing);
     }
 }
