@@ -27,6 +27,7 @@ mod expiry;
 mod forwarding;
 mod handoff;
 mod metered;
+mod metered_acceptance;
 mod review_regressions;
 
 #[derive(Default)]
