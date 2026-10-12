@@ -130,7 +130,7 @@ impl Ledger {
         )?;
         ensure!(changed == 1, "unknown serving request");
         transaction.execute(
-            "UPDATE receivables SET state='lapsed' WHERE request_id=?1 AND state='unpaid'",
+            "UPDATE receivables SET state='lapsed' WHERE request_id=?1 AND segment>0 AND state='unpaid'",
             [id],
         )?;
         transaction.commit()?;

@@ -302,7 +302,7 @@ async fn payments_decode_runs_while_input_payment_is_pending_but_delivery_waits(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn payments_cancellation_settles_transmitted_output() -> Result<()> {
+async fn payments_cancellation_bills_no_further_output() -> Result<()> {
     tokio::time::timeout(
         Duration::from_secs(20),
         paid_exchange(true, false, Some(8), 8),
@@ -509,7 +509,11 @@ async fn paid_exchange_on(
     } else {
         assert_seller_did_not_claim_a_served_exchange(&provider_events.events());
     }
-    assert_settlement(&network, &payer_service, &provider_service, output_tokens)?;
+    if cancel_after_output {
+        assert_interrupted_settlement(&network, &provider_service)?;
+    } else {
+        assert_settlement(&network, &payer_service, &provider_service, output_tokens)?;
+    }
     assert_eq!(
         payer_service.ledger.requests()?[0].terms.max_output_tokens,
         u64::from(output_allowance)
@@ -680,6 +684,23 @@ fn assert_settlement(
             .iter()
             .all(|r| r.paid)
     );
+    Ok(())
+}
+
+/// An interrupted delivery: only the input payment, no output invoice and no
+/// recoverable debt left on the provider.
+fn assert_interrupted_settlement(
+    network: &Network,
+    provider_service: &PaymentService,
+) -> Result<()> {
+    assert_eq!(network.payments.load(Ordering::SeqCst), 1);
+    let receivables = provider_service.ledger.receivables(None)?;
+    assert_eq!(
+        receivables.len(),
+        1,
+        "interrupted delivery must leave no output receivable"
+    );
+    assert!(receivables[0].paid);
     Ok(())
 }
 

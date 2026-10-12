@@ -128,7 +128,11 @@ async fn serve_inner(
         lifecycle,
         observations: Arc::new(std::sync::OnceLock::new()),
     });
-    let _serving_guard = ServingGuard { gate: gate.clone() };
+    let serving_guard = ServingGuard {
+        gate: gate.clone(),
+        payments: payments.clone(),
+        closed: Arc::new(AtomicBool::new(false)),
+    };
     // The same exchange events the free serving path publishes.
     let exchange = crate::network::openai::paid_exchange::PaidServedExchange::begin(
         node,
@@ -148,10 +152,19 @@ async fn serve_inner(
     )
     .await;
     // Close serving on every path, before anything else can observe this
-    // peer, so an interrupted request's delivered output counts as debt.
+    // peer.
     // Whether the response reached the payer in full is read before closing.
     let completed = delivered_in_full(&generated, &gate);
     let closed = gate.close_serving().await;
+    serving_guard.closed.store(true, Ordering::Release);
+    // An interrupted or failed delivery (payer disconnect, cancellation,
+    // backend failure) is billed no further: close it without a final invoice
+    // or debt. A confirmed input payment stays received (settling marks it
+    // paid whatever its receivable state).
+    let abandoned = match (&closed, completed) {
+        (Ok(_), false) => abandon(&payments, &id).await.map(|()| true),
+        _ => Ok(false),
+    };
     let observations = gate.observations();
     observe_delivered(&observations, &closed);
     // A terminal event on every path, as on the free path: a failed
@@ -169,6 +182,7 @@ async fn serve_inner(
     .await;
     let transport_alive = generated?;
     closed?;
+    let abandoned = abandoned?;
     // Generation is over. Release the runtime's in-flight slot (the gate
     // registration ended with generation) before waiting on the payer's wallet: those waits can last
     // up to the output invoice lifetime, and the debt they settle is already
@@ -177,6 +191,12 @@ async fn serve_inner(
     // Delivery opened on receiver-side HTLC arrival; the input payment must
     // still be recorded as settled before this request is complete.
     gate.await_input_settlement().await?;
+    if abandoned {
+        if transport_alive {
+            wire::write(writer, &Frame::Complete).await?;
+        }
+        return Ok(());
+    }
     let output = if gate.authorized.load(Ordering::Acquire) {
         payments
             .call::<_, OutputReceivableResponse>(
@@ -559,17 +579,35 @@ pub(super) async fn recover(
     wire::write(writer, &Frame::Complete).await
 }
 
+/// Close an interrupted exchange's accounting with no final invoice or debt.
+async fn abandon(payments: &Payments, id: &str) -> Result<()> {
+    let _: Empty = payments
+        .call(ops::SERVE_ABANDON, &IdRequest { id: id.into() })
+        .await
+        .context("payment engine could not abandon interrupted serving")?;
+    Ok(())
+}
+
 struct ServingGuard {
     gate: Arc<InvoiceGate>,
+    payments: Payments,
+    /// Set once the serving task itself closed accounting.
+    closed: Arc<AtomicBool>,
 }
 impl Drop for ServingGuard {
     fn drop(&mut self) {
         self.gate.cancelled.store(true, Ordering::Release);
+        if self.closed.load(Ordering::Acquire) {
+            return;
+        }
         // Backstop for a cancelled serving task, which never reaches the
-        // awaited close; every other path has already closed serving.
+        // awaited close: that is an interruption, so it is abandoned too.
         let gate = self.gate.clone();
+        let payments = self.payments.clone();
         self.gate.runtime.spawn(async move {
-            let _ = gate.close_serving().await;
+            if gate.close_serving().await.is_ok() {
+                let _ = abandon(&payments, &gate.request_id).await;
+            }
         });
     }
 }
