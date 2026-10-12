@@ -143,12 +143,7 @@ fn case(name: &str, sandbox: &Sandbox, args: &[&str]) -> Result<Observed, Box<dy
         github_output: text(&golden["github_output"]),
     };
     if expected.code != 0 {
-        let expected_code = if matches!(name, "rate_nan") {
-            2
-        } else {
-            expected.code
-        };
-        assert_eq!(actual.code, expected_code, "{name}");
+        assert_eq!(actual.code, expected.code, "{name}");
         assert_eq!(actual.stdout, expected.stdout, "{name}");
         assert_eq!(actual.stats, expected.stats, "{name}");
         assert_eq!(actual.github_output, expected.github_output, "{name}");

@@ -180,10 +180,9 @@ pub(crate) fn python_float(text: &str) -> Option<f64> {
     if !separated {
         return None;
     }
-    text.replace('_', "")
-        .parse::<f64>()
-        .ok()
-        .filter(|number| number.is_finite())
+    // Non-finite values parse like CPython and are rejected by the range
+    // check in `sccache_evidence::assess`, as in the legacy script.
+    text.replace('_', "").parse::<f64>().ok()
 }
 
 #[cfg(test)]
@@ -196,8 +195,8 @@ mod tests {
         assert_eq!(python_float("1_0"), Some(10.0));
         assert_eq!(python_float("0_5e-2"), Some(0.05));
         assert_eq!(python_float(" 0.5\n"), Some(0.5));
-        assert_eq!(python_float("-iNfInity"), None);
-        assert_eq!(python_float("+nan"), None);
+        assert_eq!(python_float("-iNfInity"), Some(f64::NEG_INFINITY));
+        assert!(python_float("+nan").is_some_and(f64::is_nan));
         for rejected in ["", "_1", "1_", "1__0", "1_.5", "x", "0x10", "1e"] {
             assert_eq!(python_float(rejected), None, "{rejected}");
         }
