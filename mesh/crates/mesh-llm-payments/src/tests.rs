@@ -503,3 +503,64 @@ async fn abandoned_delivery_cannot_invoice_even_when_recovery_is_called_directly
     assert!(!service.ledger.has_outstanding_payment("peer").unwrap());
     assert!(wallet.invoice_expiries.lock().unwrap().is_empty());
 }
+
+/// Disconnect before the input (admission) invoice is paid, then restart:
+/// the unpaid invoice holds the buyer only until it expires plus grace, then
+/// lapses. Nothing ever re-issues or charges it, and no output invoice exists.
+#[tokio::test]
+async fn abandoned_unpaid_input_expires_and_is_never_charged_across_restart() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let wallet = Arc::new(MockWallet::default());
+    for delivered in [0, 3] {
+        let id = format!("cut-{delivered}");
+        {
+            let service = PaymentService::with_provider(dir.path(), wallet.clone())?;
+            service
+                .ledger
+                .begin_serving(&id, "buyer", &terms(&id, 1).pricing, 8)?;
+            service
+                .ledger
+                .record_receivable(&crate::ledger::receivables::Receivable {
+                    request_id: id.clone(),
+                    peer: "buyer".into(),
+                    segment: 0,
+                    invoice: invoice(150 + delivered as u8, 40),
+                    tokens: 40,
+                    paid: false,
+                })?;
+            service.ledger.record_delivered_tokens(&id, delivered)?;
+            service.ledger.finish_serving(&id)?;
+            service.ledger.abandon_serving(&id)?;
+        }
+        // Restart.
+        let service = PaymentService::with_provider(dir.path(), wallet.clone())?;
+        assert!(service.output_receivable(&id).await?.is_none());
+        service.recover_output_debt().await?;
+        assert!(
+            service
+                .ledger
+                .unpaid_invoices("buyer")?
+                .iter()
+                .all(|i| { i.payment_hash == invoice(150 + delivered as u8, 40).payment_hash })
+        );
+        // Still held while the payment could be in flight: expiry, not debt.
+        assert!(service.ledger.has_outstanding_payment("buyer")?);
+        let unpaid = invoice(150 + delivered as u8, 40);
+        let grace = crate::lifetimes::INPUT_LAPSE_GRACE.as_millis() as u64;
+        assert!(
+            !service
+                .ledger
+                .lapse_abandoned_input(&id, &unpaid, unpaid.expires_at_ms)?
+        );
+        assert!(service.ledger.lapse_abandoned_input(
+            &id,
+            &unpaid,
+            unpaid.expires_at_ms + grace
+        )?);
+        assert!(!service.ledger.has_outstanding_payment("buyer")?);
+        assert!(service.ledger.unpaid_invoices("buyer")?.is_empty());
+    }
+    assert!(wallet.invoice_expiries.lock().unwrap().is_empty());
+    assert_eq!(wallet.calls.load(Ordering::SeqCst), 0);
+    Ok(())
+}

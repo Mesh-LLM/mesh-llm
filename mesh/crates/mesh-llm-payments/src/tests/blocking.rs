@@ -45,20 +45,16 @@ async fn blocked_peers_are_listed_with_their_identifier_and_unblocked_by_prefix(
         .begin_serving("req-b", OTHER, &pricing(), 10)?;
     service.ledger.record_delivered_tokens("req-b", 7)?;
     service.ledger.finish_serving("req-b")?;
+    // An unpaid admission invoice holds PEER; one final debt alone is below
+    // the unpaid-final-invoice limit, so OTHER is listed but not held.
     assert!(
         service
             .ledger
             .begin_serving("req-c", PEER, &pricing(), 10)
             .is_err()
     );
-    assert!(
-        service
-            .ledger
-            .begin_serving("req-d", OTHER, &pricing(), 10)
-            .is_err()
-    );
     assert!(service.ledger.has_outstanding_payment(PEER)?);
-    assert!(service.ledger.has_outstanding_payment(OTHER)?);
+    assert!(!service.ledger.has_outstanding_payment(OTHER)?);
     assert_eq!(
         service.ledger.uninvoiced_output()?,
         vec!["req-b".to_string()]
@@ -205,5 +201,47 @@ async fn abandoned_input_with_nothing_delivered_does_not_block() -> Result<()> {
         delivered.expires_at_ms + grace
     )?);
     assert!(service.ledger.has_outstanding_payment(OTHER)?);
+    Ok(())
+}
+
+#[tokio::test]
+async fn buyers_are_blocked_at_three_distinct_unpaid_final_invoices() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let service = PaymentService::open(dir.path())?;
+    let final_debt = |id: &str, number: u8| -> Result<()> {
+        service.ledger.begin_serving(id, PEER, &pricing(), 10)?;
+        service.ledger.record_delivered_tokens(id, 5)?;
+        service.ledger.finish_serving(id)?;
+        service.ledger.record_receivable(&Receivable {
+            request_id: id.into(),
+            peer: PEER.into(),
+            segment: 1,
+            invoice: invoice(number, 5),
+            tokens: 5,
+            paid: false,
+        })
+    };
+    final_debt("final-1", 1)?;
+    final_debt("final-2", 2)?;
+    // Two unpaid final invoices do not hold the buyer.
+    assert!(!service.ledger.has_outstanding_payment(PEER)?);
+    // An abandoned request never counts, even with delivered output.
+    service
+        .ledger
+        .begin_serving("abandoned", PEER, &pricing(), 10)?;
+    service.ledger.record_delivered_tokens("abandoned", 5)?;
+    service.ledger.finish_serving("abandoned")?;
+    service.ledger.abandon_serving("abandoned")?;
+    assert!(!service.ledger.has_outstanding_payment(PEER)?);
+    // The third distinct unpaid final invoice blocks.
+    final_debt("final-3", 3)?;
+    assert!(service.ledger.has_outstanding_payment(PEER)?);
+    assert!(
+        service
+            .ledger
+            .begin_serving("refused", PEER, &pricing(), 10)
+            .is_err()
+    );
+    assert!(!service.ledger.has_outstanding_payment(OTHER)?);
     Ok(())
 }

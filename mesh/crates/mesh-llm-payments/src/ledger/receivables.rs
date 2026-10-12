@@ -49,6 +49,16 @@ pub struct Receivable {
     pub paid: bool,
 }
 
+/// Unpaid final invoices a buyer may carry before it is refused service.
+pub const UNPAID_FINAL_INVOICE_LIMIT: u32 = 3;
+
+/// A peer is held while an input (admission) invoice is unpaid, and blocked
+/// once it carries [`UNPAID_FINAL_INVOICE_LIMIT`] distinct requests with final
+/// output debt: an unpaid output invoice, or delivered output not yet
+/// invoiced. Abandoned requests are forgiven and never count; retries of one
+/// request count once.
+const PEER_BLOCKED_SQL: &str = "SELECT EXISTS(SELECT 1 FROM receivables WHERE peer=?1 AND segment=0 AND state='unpaid') OR (SELECT COUNT(*) FROM serving_requests r JOIN serving_accounting a ON a.id=r.id WHERE r.peer=?1 AND a.finished=1 AND a.tokens>0 AND a.forgiven=0 AND (EXISTS(SELECT 1 FROM receivables WHERE request_id=r.id AND segment>0 AND state='unpaid') OR NOT EXISTS(SELECT 1 FROM receivables WHERE request_id=r.id AND segment=1))) >= 3";
+
 impl Ledger {
     /// Claim an unguessable request ID before running inference. A replay can
     /// recover invoices, but cannot start a second generation under that ID.
@@ -62,11 +72,7 @@ impl Ledger {
         let mut connection = self.lock()?;
         let connection =
             connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-        let blocked: bool = connection.query_row(
-            "SELECT EXISTS(SELECT 1 FROM receivables WHERE peer=?1 AND state='unpaid') OR EXISTS(SELECT 1 FROM serving_requests r JOIN serving_accounting a ON a.id=r.id WHERE r.peer=?1 AND a.finished=1 AND a.tokens>0 AND a.forgiven=0 AND NOT EXISTS(SELECT 1 FROM receivables WHERE request_id=r.id AND segment=1))",
-            [peer],
-            |r| r.get(0),
-        )?;
+        let blocked: bool = connection.query_row(PEER_BLOCKED_SQL, [peer], |r| r.get(0))?;
         ensure!(!blocked, "client has an outstanding payment");
         connection.execute(
             "INSERT INTO serving_requests(id,peer) VALUES (?1,?2)",
@@ -84,11 +90,9 @@ impl Ledger {
     /// transactional check in `begin_serving` remains the authority. Debt an
     /// operator has forgiven with [`Self::unblock_peer`] no longer counts.
     pub fn has_outstanding_payment(&self, peer: &str) -> Result<bool> {
-        Ok(self.lock()?.query_row(
-            "SELECT EXISTS(SELECT 1 FROM receivables WHERE peer=?1 AND state='unpaid') OR EXISTS(SELECT 1 FROM serving_requests r JOIN serving_accounting a ON a.id=r.id WHERE r.peer=?1 AND a.finished=1 AND a.tokens>0 AND a.forgiven=0 AND NOT EXISTS(SELECT 1 FROM receivables WHERE request_id=r.id AND segment=1))",
-            [peer],
-            |row| row.get(0),
-        )?)
+        Ok(self
+            .lock()?
+            .query_row(PEER_BLOCKED_SQL, [peer], |row| row.get(0))?)
     }
 
     /// Freeze the backend's resolved context allowance before creating the
@@ -272,7 +276,7 @@ impl Ledger {
             return Ok(false);
         }
         let changed = self.lock()?.execute(
-            "UPDATE receivables SET state='lapsed' WHERE hash=?1 AND request_id=?2 AND segment=0 AND state='unpaid' AND EXISTS(SELECT 1 FROM serving_accounting WHERE id=?2 AND finished=1 AND tokens=0)",
+            "UPDATE receivables SET state='lapsed' WHERE hash=?1 AND request_id=?2 AND segment=0 AND state='unpaid' AND EXISTS(SELECT 1 FROM serving_accounting WHERE id=?2 AND finished=1 AND (tokens=0 OR forgiven=1))",
             params![invoice.payment_hash, request_id],
         )?;
         Ok(changed == 1)

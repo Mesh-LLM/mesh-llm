@@ -355,16 +355,42 @@ async fn uninvoiced_debt_blocks_admission_after_crash_and_invoice_failure() -> R
     let dir = tempfile::tempdir()?;
     let wallet = Arc::new(MockWallet::default());
     let pricing = terms("debt", 1000).pricing;
+    let debts = ["debt-1", "debt-2", "debt-3"];
     {
         let service = PaymentService::with_provider(dir.path(), wallet.clone())?;
-        service
-            .ledger
-            .begin_serving("debt", "debtor", &pricing, 8)?;
-        let input = super::recovery_boundaries::record_input(&service, "debt", "debtor")?;
-        service.ledger.mark_received(&input.payment_hash)?;
-        service.ledger.record_delivered_tokens("debt", 3)?;
+        for (number, id) in (190u8..).zip(debts) {
+            service.ledger.begin_serving(id, "debtor", &pricing, 8)?;
+            let input = invoice(number, 1);
+            service
+                .ledger
+                .record_receivable(&crate::ledger::receivables::Receivable {
+                    request_id: id.into(),
+                    peer: "debtor".into(),
+                    segment: 0,
+                    invoice: input.clone(),
+                    tokens: 1,
+                    paid: false,
+                })?;
+            service.ledger.mark_received(&input.payment_hash)?;
+            service.ledger.record_delivered_tokens(id, 3)?;
+            if id != "debt-1" {
+                // Already invoiced and unpaid; only debt-1 needs recovery.
+                service.ledger.finish_serving(id)?;
+                service
+                    .ledger
+                    .record_receivable(&crate::ledger::receivables::Receivable {
+                        request_id: id.into(),
+                        peer: "debtor".into(),
+                        segment: 1,
+                        invoice: invoice(number - 10, 3),
+                        tokens: 3,
+                        paid: false,
+                    })?;
+            }
+        }
     }
     let service = PaymentService::with_provider(dir.path(), wallet.clone())?;
+    // Three requests with final debt reach the limit, across the crash.
     assert!(
         service
             .ledger
@@ -385,7 +411,7 @@ async fn uninvoiced_debt_blocks_admission_after_crash_and_invoice_failure() -> R
     wallet.invoice_unavailable.store(false, Ordering::SeqCst);
     service.recover_output_debt().await?;
     let invoices = service.ledger.unpaid_invoices("debtor")?;
-    assert_eq!(invoices.len(), 1);
+    assert_eq!(invoices.len(), 3);
     assert!(service.ledger.unpaid_invoices("other")?.is_empty());
     assert!(
         service
@@ -393,6 +419,7 @@ async fn uninvoiced_debt_blocks_admission_after_crash_and_invoice_failure() -> R
             .begin_serving("fourth", "debtor", &pricing, 8)
             .is_err()
     );
+    // Paying one final invoice drops the buyer below the limit.
     service.ledger.mark_received(&invoices[0].payment_hash)?;
     service
         .ledger
