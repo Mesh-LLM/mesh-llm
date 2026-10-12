@@ -219,7 +219,7 @@
     {"id": "windows-portable", "platform": "windows", "architecture": "amd64", "runner_role": "windows-build", "kind": "portable"},
     {"id": "windows-unit", "platform": "windows", "architecture": "amd64", "runner_role": "windows-build", "kind": "unit"},
     {"id": "windows-log-store", "platform": "windows", "architecture": "amd64", "runner_role": "windows-build", "kind": "log-store"},
-    {"id": "windows-skippy-probes", "platform": "windows", "architecture": "amd64", "runner_role": "windows-build", "kind": "skippy-probes", "ctest_parallel": 2, "timeout_minutes": 150}
+    {"id": "windows-skippy-probes", "platform": "windows", "architecture": "amd64", "runner_role": "windows-build", "kind": "skippy-probes", "ctest_parallel": 1, "timeout_minutes": 150}
   ],
   "sdk_rows": [
     {"id": "rust", "language": "rust", "platform": "linux", "architecture": "amd64", "runner_role": "linux-build-4"},
