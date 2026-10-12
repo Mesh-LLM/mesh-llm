@@ -298,6 +298,15 @@ declared dependency-first load plan closes every packaged CUDA dependency while
 CUDA lanes use `MESH_LLM_CUDA_TOOLKIT_MAJOR` to emit IDs such as `cuda12` or
 `cuda13`. `--backend cuda-blackwell` defaults to `cuda13-sm120`.
 
+Distributions that build the runtime from source and install it next to
+`mesh-llm` can keep their library paths and skip the offline model package
+tool (such packages are not relocatable, so not for the release catalog):
+
+```bash
+scripts/package-native-runtime.sh --backend vulkan --out "$prefix/share/mesh-llm/runtimes" \
+  --keep-runpath --no-model-package-tool
+```
+
 Generate the release manifest:
 
 ```bash
