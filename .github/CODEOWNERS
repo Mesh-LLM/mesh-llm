@@ -32,5 +32,5 @@
 /mesh/crates/mesh-llm-ffi/ @michaelneale @ndizazzo @i386
 /mesh/crates/mesh-llm-nodejs/ @michaelneale @ndizazzo @i386
 /mesh/crates/mesh-llm-console-server/ @michaelneale @ndizazzo @i386
-/mesh/docs/SDK.md @ndizazzo @i386
-/mesh/docs/sdk/ @ndizazzo @i386
+/mesh/docs/SDK.md @ndizazzo @i386 @michaelneale
+/mesh/docs/sdk/ @ndizazzo @i386 @michaelneale
