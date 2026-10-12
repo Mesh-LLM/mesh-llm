@@ -14,6 +14,33 @@ numbers.
 - Record the model identity, corpus, context size, generation limit, topology,
   commit SHA, hardware, and command line beside every performance result.
 
+## Hot-path copy regression run
+
+Use `skippy/evals/skippy-mixed-prefill-decode-ab.py` with a long prompt and
+concurrent anchor streams when changing scheduler, cache, prefix, or restore
+copy behavior. Keep the old and new binaries, native builds, model, and workload
+identical except for the candidate change. The runner records per-request TTFT,
+anchor inter-token gaps, and sampled peak RSS across the stage processes; its
+paired report includes p95 latency and memory deltas. For split-serving paths,
+set `--split-layer` so both stage processes are included.
+
+```bash
+python3 skippy/evals/skippy-mixed-prefill-decode-ab.py \
+  --old-binary /path/to/base/skippy --new-binary /path/to/candidate/skippy \
+  --old-native-build /path/to/base/native --new-native-build /path/to/candidate/native \
+  --old-commit BASE_SHA --new-commit CANDIDATE_SHA \
+  --model /path/to/model.gguf --model-id pinned-model \
+  --layer-end MODEL_LAYER_COUNT --split-layer SPLIT_LAYER \
+  --prefill-prompt-blocks 1024 --output-dir benchmark-output/copy-regression
+```
+
+The RSS sample is taken about every 25 ms with `ps`, so it can miss shorter
+allocation spikes. On platforms without `ps`, the RSS field is unavailable.
+Record copied bytes or allocation counts separately with a
+platform profiler when the claim depends on a transient copy, and attach that
+profile to the performance report. Do not infer copied bytes from RSS. Keep
+the JSON output with the exact command, hardware, model hash, and source commits.
+
 ## Output Policy
 
 - Model-free local scratch output: `benchmark-output/<run-id>/`

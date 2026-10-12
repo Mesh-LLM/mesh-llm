@@ -2,7 +2,12 @@
 
 import importlib.util
 import json
+import os
+import shutil
+import subprocess
+import sys
 import tempfile
+import threading
 import unittest
 from argparse import Namespace
 from pathlib import Path
@@ -26,6 +31,28 @@ BENCH = load_module()
 
 
 class MixedPrefillDecodeAbTests(unittest.TestCase):
+    def test_rss_sampler_reads_a_live_child(self):
+        if shutil.which("ps") is None:
+            self.skipTest("ps is unavailable on this platform")
+        self.assertGreater(BENCH.process_rss_bytes(os.getpid()), 0)
+        child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(1)"])
+        stop = threading.Event()
+        samples = []
+        try:
+            worker = threading.Thread(
+                target=BENCH.sample_peak_rss, args=([child], stop, samples)
+            )
+            worker.start()
+            stop.wait(0.1)
+            stop.set()
+            worker.join(timeout=2)
+            self.assertFalse(worker.is_alive())
+            self.assertTrue(any(value > 0 for value in samples))
+        finally:
+            stop.set()
+            child.terminate()
+            child.wait(timeout=2)
+
     def test_stable_prompt_is_deterministic_and_nonempty(self):
         first = BENCH.stable_prompt(4, 2, "anchor")
         second = BENCH.stable_prompt(4, 2, "anchor")

@@ -14,6 +14,7 @@ import runpy
 import socket
 import statistics
 import subprocess
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -103,6 +104,33 @@ def stop(process: subprocess.Popen[str] | None) -> None:
     except subprocess.TimeoutExpired:
         process.kill()
         process.wait(timeout=10)
+
+
+def process_rss_bytes(pid: int) -> int | None:
+    """Return resident bytes for a child, or None if it has exited."""
+    try:
+        result = subprocess.run(
+            ["ps", "-o", "rss=", "-p", str(pid)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except FileNotFoundError:
+        return None
+    if result.returncode != 0 or not result.stdout.strip():
+        return None
+    return int(result.stdout.strip()) * 1024
+
+
+def sample_peak_rss(
+    processes: list[subprocess.Popen[str]], stop_event: threading.Event, samples: list[int]
+) -> None:
+    """Sample combined stage RSS while a benchmark cell is active."""
+    while not stop_event.is_set():
+        values = [process_rss_bytes(process.pid) for process in processes]
+        if any(value is not None for value in values):
+            samples.append(sum(value or 0 for value in values))
+        stop_event.wait(0.025)
 
 
 def stable_prompt(blocks: int, request_index: int, role: str) -> str:
@@ -516,6 +544,9 @@ def launch_cell(
     environment["SKIPPY_NATIVE_MTP_GREEDY_SAMPLING_FASTPATH"] = "1"
     stage0_process = None
     stage1_process = None
+    rss_samples: list[int] = []
+    rss_stop = threading.Event()
+    rss_thread = None
     with (
         stage0_log_path.open("w") as stage0_log,
         stage1_log_path.open("w") as stage1_log,
@@ -560,6 +591,16 @@ def launch_cell(
             if "error" in warmup:
                 raise RuntimeError(f"warmup request failed: {warmup['error']}")
             warmup_iteration_count = len(scheduler_events(stage0_log_path))
+            rss_thread = threading.Thread(
+                target=sample_peak_rss,
+                args=(
+                    [process for process in (stage0_process, stage1_process) if process],
+                    rss_stop,
+                    rss_samples,
+                ),
+                daemon=True,
+            )
+            rss_thread.start()
             specs = []
             for index in range(args.anchors):
                 specs.append(
@@ -627,6 +668,9 @@ def launch_cell(
                 requests = [future.result() for future in futures]
             wall_ms = (time.monotonic() - epoch) * 1000.0
         finally:
+            rss_stop.set()
+            if rss_thread is not None:
+                rss_thread.join()
             stop(stage0_process)
             stop(stage1_process)
     events = scheduler_events(stage0_log_path)[warmup_iteration_count:]
@@ -646,6 +690,7 @@ def launch_cell(
     summary = summarize_requests(requests, wall_ms, events, args.n_batch)
     summary.update(
         {
+            "sampled_peak_stage_rss_bytes": max(rss_samples, default=None),
             "prefill_chunk_count_median": median_attribute(
                 "llama_stage.prefill_chunk_count"
             ),
@@ -689,6 +734,7 @@ METRICS = (
     "mean_token_occupancy",
     "prefill_chunk_count_median",
     "prefill_max_chunk_size_median",
+    "sampled_peak_stage_rss_bytes",
 )
 
 
@@ -786,6 +832,7 @@ def markdown(
         ("Token-budget occupancy", "mean_token_occupancy"),
         ("Prefill chunks / request", "prefill_chunk_count_median"),
         ("Maximum prefill chunk", "prefill_max_chunk_size_median"),
+        ("Sampled peak stage RSS bytes", "sampled_peak_stage_rss_bytes"),
     ]
     chart_metrics = [
         ("Makespan", "makespan_ms"),
@@ -929,7 +976,6 @@ def parse_args() -> argparse.Namespace:
         "n_batch",
         "n_ubatch",
         "layer_end",
-        "activation_width",
     )
     if any(getattr(args, name) <= 0 for name in positive):
         parser.error(
