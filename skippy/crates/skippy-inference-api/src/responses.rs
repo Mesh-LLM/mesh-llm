@@ -55,8 +55,8 @@ pub struct ChatCompletionStreamChoice {
     pub delta: Option<ChatCompletionStreamDelta>,
     #[serde(default)]
     pub logprobs: Option<Value>,
-    #[serde(rename = "finish_reason", default)]
-    _finish_reason: Option<String>,
+    #[serde(default)]
+    pub finish_reason: Option<String>,
     #[serde(flatten)]
     _extra: Map<String, Value>,
 }
