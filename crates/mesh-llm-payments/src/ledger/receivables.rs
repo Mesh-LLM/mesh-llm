@@ -10,8 +10,10 @@ use crate::invoice::Invoice;
 pub struct PeerDebt {
     pub request_id: String,
     pub segment: u32,
-    /// `unpaid_invoice` for a recorded invoice the peer has not paid, or
-    /// `uninvoiced_output` for delivered output that has no invoice yet.
+    /// `unpaid_invoice` for a recorded invoice the peer has not paid,
+    /// `metered_invoice` for an unpaid metered (v2) invoice, which `unblock`
+    /// does not forgive, or `uninvoiced_output` for delivered output that
+    /// has no invoice yet.
     pub kind: String,
     pub tokens: u64,
     pub amount_msat: Option<u64>,
@@ -238,8 +240,20 @@ impl Ledger {
     }
 
     pub fn mark_received(&self, hash: &str) -> Result<()> {
-        self.lock()?
-            .execute("UPDATE receivables SET state='paid' WHERE hash=?", [hash])?;
+        let mut connection = self.lock()?;
+        let tx = connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        // Only an actual transition moves money, so replays are no-ops.
+        let paid: Option<(String, u32)> = tx
+            .query_row(
+                "UPDATE receivables SET state='paid' WHERE hash=? AND state!='paid' RETURNING request_id,segment",
+                [hash],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?;
+        if let Some((request_id, 0)) = paid {
+            super::metered::apply_late_deposit(&tx, &request_id)?;
+        }
+        tx.commit()?;
         Ok(())
     }
 
@@ -269,7 +283,7 @@ impl Ledger {
         let connection = self.lock()?;
         let mut by_peer: std::collections::BTreeMap<String, Vec<PeerDebt>> = Default::default();
         let mut unpaid = connection.prepare(
-            "SELECT peer,request_id,segment,invoice,tokens FROM receivables WHERE state='unpaid' ORDER BY rowid",
+            "SELECT peer,request_id,segment,invoice,tokens,EXISTS(SELECT 1 FROM metered_requests WHERE id=receivables.request_id) FROM receivables WHERE state='unpaid' ORDER BY rowid",
         )?;
         for row in unpaid.query_map([], |r| {
             Ok((
@@ -278,14 +292,20 @@ impl Ledger {
                 r.get::<_, u32>(2)?,
                 r.get::<_, String>(3)?,
                 read_amount(r, 4)?,
+                r.get::<_, bool>(5)?,
             ))
         })? {
-            let (peer, request_id, segment, invoice, tokens) = row?;
+            let (peer, request_id, segment, invoice, tokens, metered) = row?;
             let invoice = Invoice::parse(&invoice)?;
             by_peer.entry(peer).or_default().push(PeerDebt {
                 request_id,
                 segment,
-                kind: "unpaid_invoice".into(),
+                kind: if metered {
+                    "metered_invoice"
+                } else {
+                    "unpaid_invoice"
+                }
+                .into(),
                 tokens,
                 amount_msat: invoice.amount_msat,
                 expires_at_ms: Some(invoice.expires_at_ms),
@@ -351,11 +371,13 @@ impl Ledger {
     /// request paid inference again. Unpaid invoices are marked `forgiven`
     /// (a later payment is still recorded as received) and delivered output
     /// that has no invoice yet is never invoiced. Nothing is refunded.
+    /// Metered invoices are settled through the metered ledger and are never
+    /// forgiven here; they keep blocking and counting as exposure.
     pub fn unblock_peer(&self, peer: &str) -> Result<Forgiven> {
         let mut connection = self.lock()?;
         let tx = connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         let invoices = tx.execute(
-            "UPDATE receivables SET state='forgiven' WHERE peer=?1 AND state='unpaid'",
+            "UPDATE receivables SET state='forgiven' WHERE peer=?1 AND state='unpaid' AND NOT EXISTS(SELECT 1 FROM metered_requests WHERE id=receivables.request_id)",
             [peer],
         )?;
         let output_requests = tx.execute(

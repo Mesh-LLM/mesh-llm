@@ -193,3 +193,154 @@ fn metered_rows_are_invisible_to_legacy_recovery_and_debt_blocking() {
     l.metered_finalize("x", usage(1000, 100)).unwrap();
     assert!(l.uninvoiced_output().unwrap().is_empty());
 }
+
+#[test]
+fn usage_missing_resolves_once_from_later_authoritative_usage() {
+    let (_d, l) = open();
+    admit(&l, "m", 1000, 500, 10_000, true).unwrap();
+    record(&l, "m", 0, 1, 300, true);
+    l.metered_finalize("m", MeteredOutcome::UsageMissing)
+        .unwrap();
+    // Replaying missing is a no-op; authoritative usage resolves it.
+    l.metered_finalize("m", MeteredOutcome::UsageMissing)
+        .unwrap();
+    let s = l.metered_finalize("m", usage(900, 200)).unwrap();
+    assert_eq!((s.status, s.remaining_msat), (MeteredStatus::Billed, 800));
+    assert_eq!(l.metered_finalize("m", usage(900, 200)).unwrap(), s);
+    assert!(
+        l.metered_finalize("m", MeteredOutcome::UsageMissing)
+            .is_err()
+    );
+    assert!(
+        l.metered_finalize("m", MeteredOutcome::BackendError)
+            .is_err()
+    );
+    assert_eq!(l.metered_exposure("peer").unwrap(), 800);
+    // Backend-error finding also resolves a missing row, crediting the deposit.
+    admit(&l, "n", 1000, 500, 10_000, true).unwrap();
+    record(&l, "n", 0, 2, 300, true);
+    l.metered_finalize("n", MeteredOutcome::UsageMissing)
+        .unwrap();
+    let s = l
+        .metered_finalize("n", MeteredOutcome::BackendError)
+        .unwrap();
+    assert_eq!(s.credit_created_msat, 300);
+    assert_eq!(l.metered_exposure("peer").unwrap(), 800);
+}
+
+#[test]
+fn unpaid_final_invoice_counts_once_and_survives_unblock() {
+    let (_d, l) = open();
+    admit(&l, "f", 1000, 500, 10_000, false).unwrap();
+    l.metered_finalize("f", usage(900, 200)).unwrap();
+    record(&l, "f", 1, 3, 1100, false);
+    // Recorded-but-unpaid final invoice: remaining only, no reservation.
+    assert_eq!(l.metered_exposure("peer").unwrap(), 1100);
+    let blocked = l.blocked_peers().unwrap();
+    assert_eq!(blocked[0].debts[0].kind, "metered_invoice");
+    assert!(l.has_outstanding_payment("peer").unwrap());
+    assert!(l.unblock_peer("peer").is_err());
+    assert_eq!(l.metered_exposure("peer").unwrap(), 1100);
+    assert!(l.has_outstanding_payment("peer").unwrap());
+    assert!(!l.receivables(Some("f")).unwrap()[0].paid);
+}
+
+#[test]
+fn admission_identity_is_exact_token_terms_not_rounded_amounts() {
+    let (_d, l) = open();
+    let low = Pricing {
+        input_msat_per_million: 1,
+        output_msat_per_million: 1,
+        minimum_invoice_msat: 1,
+    };
+    let mk = |input, output| MeteredRequest {
+        id: "low",
+        peer: "peer",
+        pricing: &low,
+        estimated_input_tokens: input,
+        max_output_tokens: output,
+        peer_cap_msat: 10_000,
+        require_deposit: true,
+    };
+    let a = l.metered_admit(&mk(10, 10)).unwrap();
+    // Same rounded charge, different token terms.
+    assert!(l.metered_admit(&mk(11, 12)).is_err());
+    assert_eq!(l.metered_admit(&mk(10, 10)).unwrap(), a);
+    assert!(admit(&l, "d", 10, 10, 10_000, true).is_ok());
+    assert!(admit(&l, "d", 10, 10, 10_000, false).is_err());
+}
+
+#[test]
+fn late_deposit_after_finalize_is_applied_exactly_once() {
+    let (_d, l) = open();
+    let paid = |n: u8, amount| {
+        l.mark_received(&invoice(n, amount).payment_hash).unwrap();
+    };
+    // BackendError: late deposit becomes credit.
+    admit(&l, "be", 1000, 500, 100_000, true).unwrap();
+    record(&l, "be", 0, 10, 300, false);
+    l.metered_finalize("be", MeteredOutcome::BackendError)
+        .unwrap();
+    assert_eq!(l.peer_credit("peer").unwrap(), 0);
+    paid(10, 300);
+    paid(10, 300);
+    assert_eq!(l.peer_credit("peer").unwrap(), 300);
+    let s = l.metered_settlement("be").unwrap();
+    assert_eq!((s.deposit_paid_msat, s.credit_created_msat), (300, 300));
+    // Usage, no final invoice yet: late deposit reduces remaining.
+    admit(&l, "u", 1000, 500, 100_000, true).unwrap();
+    record(&l, "u", 0, 11, 300, false);
+    let s = l.metered_finalize("u", usage(900, 200)).unwrap();
+    // Existing 300 credit applied at finalize; deposit still unpaid.
+    assert_eq!((s.remaining_msat, s.credit_applied_msat), (800, 300));
+    paid(11, 300);
+    paid(11, 300);
+    let s = l.metered_settlement("u").unwrap();
+    assert_eq!((s.remaining_msat, s.deposit_paid_msat), (500, 300));
+    assert_eq!(l.peer_credit("peer").unwrap(), 0);
+    // Usage with final invoice already recorded: deposit becomes credit.
+    admit(&l, "f", 1000, 500, 100_000, true).unwrap();
+    record(&l, "f", 0, 12, 300, false);
+    l.metered_finalize("f", usage(900, 200)).unwrap();
+    record(&l, "f", 1, 13, 1100, false);
+    assert_eq!(l.peer_credit("peer").unwrap(), 0);
+    paid(12, 300);
+    assert_eq!(l.peer_credit("peer").unwrap(), 300);
+    assert_eq!(l.metered_settlement("f").unwrap().remaining_msat, 1100);
+    // UsageMissing: untouched until resolved, which then counts the deposit.
+    admit(&l, "m", 1000, 500, 100_000, true).unwrap();
+    record(&l, "m", 0, 14, 300, false);
+    l.metered_finalize("m", MeteredOutcome::UsageMissing)
+        .unwrap();
+    paid(14, 300);
+    assert_eq!(l.metered_settlement("m").unwrap().deposit_paid_msat, 0);
+    let s = l.metered_finalize("m", usage(900, 200)).unwrap();
+    // Deposit counted (300) and the 300 credit from "f" applied.
+    assert_eq!((s.deposit_paid_msat, s.credit_applied_msat), (300, 300));
+    assert_eq!(s.remaining_msat, 500);
+}
+
+#[test]
+fn dispatch_claim_is_once_only_and_survives_restart() {
+    let dir = tempfile::tempdir().unwrap();
+    {
+        let l = Ledger::open(dir.path()).unwrap();
+        admit(&l, "c", 1000, 500, 10_000, false).unwrap();
+        assert!(l.metered_claim_dispatch("c", "other").is_err());
+        assert!(l.metered_claim_dispatch("c", "peer").unwrap());
+        // Admission replay does not re-authorize dispatch.
+        admit(&l, "c", 1000, 500, 10_000, false).unwrap();
+        assert!(!l.metered_claim_dispatch("c", "peer").unwrap());
+        admit(&l, "n", 1000, 500, 10_000, false).unwrap();
+        l.metered_finalize("n", MeteredOutcome::BackendError)
+            .unwrap();
+        assert!(l.metered_claim_dispatch("n", "peer").is_err());
+        assert!(l.metered_claim_dispatch("zz", "peer").is_err());
+    }
+    let l = Ledger::open(dir.path()).unwrap();
+    assert!(!l.metered_claim_dispatch("c", "peer").unwrap());
+    let o = l.metered_owner("c").unwrap().unwrap();
+    assert_eq!((o.peer.as_str(), o.dispatched), ("peer", true));
+    assert!(!l.metered_owner("n").unwrap().unwrap().dispatched);
+    assert!(l.metered_owner("zz").unwrap().is_none());
+}

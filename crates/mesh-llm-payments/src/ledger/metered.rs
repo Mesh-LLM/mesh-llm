@@ -59,6 +59,7 @@ pub enum MeteredOutcome {
     BackendError,
     /// Response delivered but usage unknown. Left unresolved for
     /// reconciliation: no bill, no forfeiture, no credit, reservation held.
+    /// A later `Usage` or `BackendError` finalize resolves it exactly once.
     UsageMissing,
 }
 
@@ -87,6 +88,12 @@ pub struct MeteredSettlement {
     pub credit_created_msat: u64,
     /// Amount the final invoice (segment 1) must carry; 0 means none.
     pub remaining_msat: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MeteredOwner {
+    pub peer: String,
+    pub dispatched: bool,
 }
 
 impl Ledger {
@@ -119,16 +126,32 @@ impl Ledger {
         let pricing_json = serde_json::to_string(pricing)?;
         let mut connection = self.lock()?;
         let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let existing: Option<(String, String, u64, u64)> = tx
+        // Identity is the exact admitted terms, not the rounded msat amounts:
+        // different token terms can round to the same charge at low rates.
+        let existing: Option<(String, String, u64, u64, bool)> = tx
             .query_row(
-                "SELECT peer,pricing,reserved_msat,deposit_msat FROM metered_requests WHERE id=?",
+                "SELECT peer,pricing,estimated_input_tokens,max_output_tokens,require_deposit FROM metered_requests WHERE id=?",
                 [id],
-                |r| Ok((r.get(0)?, r.get(1)?, read_amount(r, 2)?, read_amount(r, 3)?)),
+                |r| {
+                    Ok((
+                        r.get(0)?,
+                        r.get(1)?,
+                        read_amount(r, 2)?,
+                        read_amount(r, 3)?,
+                        r.get(4)?,
+                    ))
+                },
             )
             .optional()?;
         if let Some(row) = existing {
             ensure!(
-                row == (peer.to_owned(), pricing_json, reserved, deposit),
+                row == (
+                    peer.to_owned(),
+                    pricing_json,
+                    estimated_input_tokens,
+                    max_output_tokens,
+                    require_deposit
+                ),
                 "request identity reused with different metered terms"
             );
             return Ok(MeteredAdmission {
@@ -150,8 +173,17 @@ impl Ledger {
             params![id, peer],
         )?;
         tx.execute(
-            "INSERT INTO metered_requests(id,peer,pricing,reserved_msat,deposit_msat,state) VALUES (?1,?2,?3,?4,?5,'reserved')",
-            params![id, peer, pricing_json, sql_amount(reserved)?, sql_amount(deposit)?],
+            "INSERT INTO metered_requests(id,peer,pricing,estimated_input_tokens,max_output_tokens,require_deposit,reserved_msat,deposit_msat,state) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,'reserved')",
+            params![
+                id,
+                peer,
+                pricing_json,
+                sql_amount(estimated_input_tokens)?,
+                sql_amount(max_output_tokens)?,
+                require_deposit,
+                sql_amount(reserved)?,
+                sql_amount(deposit)?
+            ],
         )?;
         tx.commit()?;
         Ok(MeteredAdmission {
@@ -189,7 +221,11 @@ impl Ledger {
             .optional()?
             .ok_or_else(|| anyhow::anyhow!("unknown metered request"))?;
         let outcome_json = serde_json::to_string(&outcome)?;
-        if state != "reserved" {
+        // `usage_missing` is the only resolvable final state: later
+        // authoritative usage (or a backend-error finding) replaces it once.
+        let resolvable = state == "reserved"
+            || (state == "usage_missing" && outcome != MeteredOutcome::UsageMissing);
+        if !resolvable {
             ensure!(
                 stored_outcome.as_deref() == Some(outcome_json.as_str()),
                 "metered request already finalized differently"
@@ -235,7 +271,7 @@ impl Ledger {
             )?;
         }
         let changed = tx.execute(
-            "UPDATE metered_requests SET state=?2,outcome=?3,bill_msat=?4,deposit_paid_msat=?5,credit_applied_msat=?6,credit_created_msat=?7,remaining_msat=?8 WHERE id=?1 AND state='reserved'",
+            "UPDATE metered_requests SET state=?2,outcome=?3,bill_msat=?4,deposit_paid_msat=?5,credit_applied_msat=?6,credit_created_msat=?7,remaining_msat=?8 WHERE id=?1 AND state IN ('reserved','usage_missing')",
             params![
                 id,
                 state,
@@ -298,6 +334,50 @@ impl Ledger {
         })
     }
 
+    /// Durable once-only dispatch authorization. Admission is replayable, so
+    /// it alone must never authorize (re)generating a request. Returns `true`
+    /// to exactly one caller; later calls (including after restart) get
+    /// `false`. Fails for an unknown ID, another peer, or a finalized row.
+    pub fn metered_claim_dispatch(&self, id: &str, peer: &str) -> Result<bool> {
+        let mut connection = self.lock()?;
+        let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let (owner, state, dispatched): (String, String, bool) = tx
+            .query_row(
+                "SELECT peer,state,dispatched FROM metered_requests WHERE id=?",
+                [id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .optional()?
+            .ok_or_else(|| anyhow::anyhow!("unknown metered request"))?;
+        ensure!(owner == peer, "metered request owned by another peer");
+        if dispatched {
+            return Ok(false);
+        }
+        ensure!(state == "reserved", "metered request already finalized");
+        tx.execute("UPDATE metered_requests SET dispatched=1 WHERE id=?", [id])?;
+        tx.commit()?;
+        Ok(true)
+    }
+
+    /// Owner and dispatch marker, for authenticated recovery. A dispatched
+    /// request whose usage is unknown must be finalized `UsageMissing`, never
+    /// `BackendError` as if it had not been dispatched.
+    pub fn metered_owner(&self, id: &str) -> Result<Option<MeteredOwner>> {
+        Ok(self
+            .lock()?
+            .query_row(
+                "SELECT peer,dispatched FROM metered_requests WHERE id=?",
+                [id],
+                |r| {
+                    Ok(MeteredOwner {
+                        peer: r.get(0)?,
+                        dispatched: r.get(1)?,
+                    })
+                },
+            )
+            .optional()?)
+    }
+
     /// Exposure currently counted against `peer`'s cap.
     pub fn metered_exposure(&self, peer: &str) -> Result<u64> {
         Ok(self
@@ -310,6 +390,59 @@ impl Ledger {
         let tx = connection.unchecked_transaction()?;
         peer_credit(&tx, peer)
     }
+}
+
+/// A metered deposit (segment 0) paid after finalization, applied inside the
+/// `mark_received` transaction. Called only on an unpaid->paid transition, so
+/// replays cannot mint credit twice. Before finalization nothing happens:
+/// finalize reads the paid deposit itself. `usage_missing` stays untouched
+/// until resolved, which then counts the deposit.
+pub(super) fn apply_late_deposit(tx: &Transaction<'_>, id: &str) -> Result<()> {
+    let row: Option<(String, String, u64, u64, u64)> = tx
+        .query_row(
+            "SELECT peer,state,deposit_msat,deposit_paid_msat,remaining_msat FROM metered_requests WHERE id=?",
+            [id],
+            |r| {
+                Ok((
+                    r.get(0)?,
+                    r.get(1)?,
+                    read_amount(r, 2)?,
+                    read_amount(r, 3)?,
+                    read_amount(r, 4)?,
+                ))
+            },
+        )
+        .optional()?;
+    let Some((peer, state, deposit, already, remaining)) = row else {
+        return Ok(());
+    };
+    if deposit == 0 || already > 0 || !matches!(state.as_str(), "billed" | "backend_error") {
+        return Ok(());
+    }
+    // Once a final invoice exists its amount is fixed, so the deposit can only
+    // become credit; otherwise it first reduces what is still owed.
+    let final_recorded: bool = tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM receivables WHERE request_id=? AND segment=1)",
+        [id],
+        |r| r.get(0),
+    )?;
+    let reduce = if state == "billed" && !final_recorded {
+        deposit.min(remaining)
+    } else {
+        0
+    };
+    let created = deposit - reduce;
+    if created > 0 {
+        tx.execute(
+            "INSERT INTO peer_credit(peer,msat) VALUES (?1,?2) ON CONFLICT(peer) DO UPDATE SET msat=msat+excluded.msat",
+            params![peer, sql_amount(created)?],
+        )?;
+    }
+    tx.execute(
+        "UPDATE metered_requests SET deposit_paid_msat=?2,remaining_msat=remaining_msat-?3,credit_created_msat=credit_created_msat+?4 WHERE id=?1",
+        params![id, sql_amount(deposit)?, sql_amount(reduce)?, sql_amount(created)?],
+    )?;
+    Ok(())
 }
 
 fn deposit_paid(tx: &Transaction<'_>, id: &str) -> Result<bool> {
