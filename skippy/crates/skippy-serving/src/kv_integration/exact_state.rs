@@ -672,14 +672,11 @@ impl KvStageIntegration {
                     }
                     Err(error) => return Err(error),
                 };
+                let (kv_payload, kv_desc) =
+                    kv.map(|kv| (kv.payload, Some(kv.desc))).unwrap_or_default();
                 Ok((
-                    ExactStatePayload::kv_recurrent(
-                        kv.as_ref().map(|kv| kv.payload.clone()).unwrap_or_default(),
-                        recurrent,
-                    ),
-                    ExactStateExtra {
-                        kv_desc: kv.as_ref().map(|kv| kv.desc.clone()),
-                    },
+                    ExactStatePayload::kv_recurrent(kv_payload, recurrent),
+                    ExactStateExtra { kv_desc },
                 ))
             })(),
             StagePrefixCachePayload::Disabled | StagePrefixCachePayload::ResidentKv => {
