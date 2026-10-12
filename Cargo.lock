@@ -4647,6 +4647,7 @@ name = "mesh-llm-payments-types"
 version = "0.76.1"
 dependencies = [
  "anyhow",
+ "httparse",
  "mesh-llm-wallet",
  "serde",
  "serde_json",
