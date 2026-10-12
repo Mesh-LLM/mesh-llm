@@ -1,1 +1,0 @@
-Read app.js in this directory. It has at least 5 bugs. Find them all, explain each one, and fix them. Edit the file directly.

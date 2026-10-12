@@ -15,6 +15,10 @@ if [[ "${args[0]}" == --build ]]; then
   for name in libllama libllama-common libmtmd; do
     touch "$target/$name.dylib" "$target/$name.so"
   done
+  for archive in ${CMAKE_STUB_STATIC_ARCHIVES:-}; do
+    mkdir -p "$target/$(dirname "$archive")"
+    touch "$target/$archive"
+  done
 else
   printf 'CMAKE_GENERATOR:INTERNAL=%s\n' "$generator" > "$target/CMakeCache.txt"
 fi
