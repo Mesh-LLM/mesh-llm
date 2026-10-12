@@ -140,8 +140,9 @@ impl Ledger {
             receipt.invoice == Invoice::parse(&receipt.invoice.bolt11)?,
             "invalid invoice metadata"
         );
-        let connection = self.lock()?;
-        let peer: Option<String> = connection
+        let mut connection = self.lock()?;
+        let tx = connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let peer: Option<String> = tx
             .query_row(
                 "SELECT peer FROM serving_requests WHERE id=?",
                 [&receipt.request_id],
@@ -152,7 +153,11 @@ impl Ledger {
             peer.as_deref() == Some(&receipt.peer),
             "unknown serving request"
         );
-        connection.execute("INSERT INTO receivables(hash,request_id,peer,segment,invoice,tokens,state) VALUES (?1,?2,?3,?4,?5,?6,'unpaid')", params![receipt.invoice.payment_hash,receipt.request_id,receipt.peer,receipt.segment,receipt.invoice.bolt11,sql_amount(receipt.tokens)?])?;
+        // Metered amounts are checked against current state in this txn, so a
+        // snapshot made stale by a late deposit is refused, not persisted.
+        super::metered::check_metered_receivable(&tx, receipt)?;
+        tx.execute("INSERT INTO receivables(hash,request_id,peer,segment,invoice,tokens,state) VALUES (?1,?2,?3,?4,?5,?6,'unpaid')", params![receipt.invoice.payment_hash,receipt.request_id,receipt.peer,receipt.segment,receipt.invoice.bolt11,sql_amount(receipt.tokens)?])?;
+        tx.commit()?;
         Ok(())
     }
 

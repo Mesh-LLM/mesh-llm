@@ -176,3 +176,33 @@ fn single_policy_controls_eligibility_and_preserves_reservations() -> Result<()>
     );
     Ok(())
 }
+
+#[test]
+fn startup_closures_preserve_metered_payer_authority() {
+    let directory = tempfile::tempdir().unwrap();
+    let ledger = Ledger::open(directory.path()).unwrap();
+    ledger
+        .set_policy(&Policy {
+            mode: ApprovalMode::Automatic,
+            daily_budget_msat: Some(10_000),
+        })
+        .unwrap();
+    for id in ["v2", "legacy"] {
+        ledger.propose(&terms(id, 700)).unwrap();
+    }
+    ledger.set_setting("metered-payer/v2", "{}").unwrap();
+    ledger.approve("v2", 10_000, 1).unwrap();
+    ledger.approve("legacy", 10_000, 1).unwrap();
+    drop(ledger);
+    let ledger = Ledger::open(directory.path()).unwrap();
+    ledger.close_abandoned_approvals().unwrap();
+    ledger.fail_unsubmitted_input_charges().unwrap();
+    assert_eq!(
+        ledger.request_state("v2").unwrap().as_deref(),
+        Some("approved")
+    );
+    assert_eq!(
+        ledger.request_state("legacy").unwrap().as_deref(),
+        Some("failed")
+    );
+}

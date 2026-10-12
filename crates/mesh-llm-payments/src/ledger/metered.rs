@@ -378,6 +378,31 @@ impl Ledger {
             .optional()?)
     }
 
+    /// Startup-only: run after the exclusive service lock, before serving and
+    /// never from live Recover (it would race active inference). Rows left
+    /// `reserved` by a crash close as `UsageMissing` if dispatch was claimed
+    /// (the backend may have run) or `BackendError` if not (deposit refunded
+    /// as credit now, or on late arrival via `mark_received`).
+    pub fn close_interrupted_metered(&self) -> Result<()> {
+        let rows: Vec<(String, bool)> = {
+            let connection = self.lock()?;
+            let mut statement = connection
+                .prepare("SELECT id,dispatched FROM metered_requests WHERE state='reserved'")?;
+            statement
+                .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+                .collect::<rusqlite::Result<_>>()?
+        };
+        for (id, dispatched) in rows {
+            let outcome = if dispatched {
+                MeteredOutcome::UsageMissing
+            } else {
+                MeteredOutcome::BackendError
+            };
+            self.metered_finalize(&id, outcome)?;
+        }
+        Ok(())
+    }
+
     /// Exposure currently counted against `peer`'s cap.
     pub fn metered_exposure(&self, peer: &str) -> Result<u64> {
         Ok(self
@@ -390,6 +415,39 @@ impl Ledger {
         let tx = connection.unchecked_transaction()?;
         peer_credit(&tx, peer)
     }
+}
+
+/// Refuse a metered receivable that does not match current state: segment 0
+/// must be the admitted deposit on a still-reserved row; segment 1 must equal
+/// the current `remaining_msat` of a billed row. A stale amount errors so the
+/// caller re-reads the settlement and retries. Non-metered rows pass through.
+pub(super) fn check_metered_receivable(
+    tx: &Transaction<'_>,
+    receipt: &super::receivables::Receivable,
+) -> Result<()> {
+    let row: Option<(String, u64, u64)> = tx
+        .query_row(
+            "SELECT state,deposit_msat,remaining_msat FROM metered_requests WHERE id=?",
+            [&receipt.request_id],
+            |r| Ok((r.get(0)?, read_amount(r, 1)?, read_amount(r, 2)?)),
+        )
+        .optional()?;
+    let Some((state, deposit, remaining)) = row else {
+        return Ok(());
+    };
+    let amount = receipt.invoice.amount_msat;
+    match receipt.segment {
+        0 => ensure!(
+            state == "reserved" && deposit > 0 && amount == Some(deposit),
+            "metered deposit invoice does not match admitted deposit"
+        ),
+        1 => ensure!(
+            state == "billed" && remaining > 0 && amount == Some(remaining),
+            "stale metered final invoice: amount must equal current remaining"
+        ),
+        _ => bail!("metered requests have only segments 0 and 1"),
+    }
+    Ok(())
 }
 
 /// A metered deposit (segment 0) paid after finalization, applied inside the

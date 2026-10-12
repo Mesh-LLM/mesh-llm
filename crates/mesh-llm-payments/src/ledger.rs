@@ -303,7 +303,7 @@ impl Ledger {
         let mut connection = self.lock()?;
         let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         tx.execute(
-            "UPDATE charges SET state='failed' WHERE segment=0 AND state='prepared' AND request_id IN (SELECT id FROM requests WHERE json_extract(terms,'$.peer')!='wallet-send')",
+            "UPDATE charges SET state='failed' WHERE segment=0 AND state='prepared' AND request_id IN (SELECT id FROM requests WHERE json_extract(terms,'$.peer')!='wallet-send') AND NOT EXISTS(SELECT 1 FROM settings WHERE key='metered-payer/'||charges.request_id)",
             [],
         )?;
         finalize_terminal_requests(&tx)?;
@@ -312,8 +312,10 @@ impl Ledger {
     }
 
     /// Run only while opening the exclusively locked service, before live approvals.
+    /// Metered v2 payer requests (`metered-payer/<id>` setting) are excluded:
+    /// a trusted no-deposit request may already be dispatched with no charge.
     pub fn close_abandoned_approvals(&self) -> Result<()> {
-        self.lock()?.execute("UPDATE requests SET state='failed' WHERE state='approved' AND NOT EXISTS(SELECT 1 FROM charges WHERE request_id=requests.id)", [])?;
+        self.lock()?.execute("UPDATE requests SET state='failed' WHERE state='approved' AND NOT EXISTS(SELECT 1 FROM charges WHERE request_id=requests.id) AND NOT EXISTS(SELECT 1 FROM settings WHERE key='metered-payer/'||requests.id)", [])?;
         Ok(())
     }
 

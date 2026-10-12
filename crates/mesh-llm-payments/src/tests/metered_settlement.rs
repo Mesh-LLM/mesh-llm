@@ -344,3 +344,78 @@ fn dispatch_claim_is_once_only_and_survives_restart() {
     assert!(!l.metered_owner("n").unwrap().unwrap().dispatched);
     assert!(l.metered_owner("zz").unwrap().is_none());
 }
+
+fn try_record(l: &Ledger, id: &str, segment: u32, n: u8, amount: u64) -> anyhow::Result<()> {
+    l.record_receivable(&Receivable {
+        request_id: id.into(),
+        peer: "peer".into(),
+        segment,
+        invoice: invoice(n, amount),
+        tokens: 0,
+        paid: false,
+    })
+}
+
+#[test]
+fn metered_receivables_must_match_current_state() {
+    let (_d, l) = open();
+    admit(&l, "s", 1000, 500, 100_000, true).unwrap();
+    // Deposit must equal the admitted deposit.
+    assert!(try_record(&l, "s", 0, 20, 299).is_err());
+    assert!(
+        try_record(&l, "s", 1, 21, 1100).is_err(),
+        "no final before bill"
+    );
+    try_record(&l, "s", 0, 22, 300).unwrap();
+    let snapshot = l.metered_finalize("s", usage(900, 200)).unwrap();
+    assert_eq!(snapshot.remaining_msat, 1100);
+    // Late deposit lands between the settlement read and invoice persistence.
+    l.mark_received(&invoice(22, 300).payment_hash).unwrap();
+    assert!(
+        try_record(&l, "s", 1, 23, snapshot.remaining_msat).is_err(),
+        "stale snapshot refused"
+    );
+    let current = l.metered_settlement("s").unwrap().remaining_msat;
+    assert_eq!(current, 800);
+    try_record(&l, "s", 1, 23, current).unwrap();
+    assert_eq!(l.metered_exposure("peer").unwrap(), 800);
+    assert_eq!(l.peer_credit("peer").unwrap(), 0);
+    // Not-billed states and no-deposit rows cannot carry invoices.
+    admit(&l, "n", 1000, 500, 100_000, false).unwrap();
+    assert!(try_record(&l, "n", 0, 24, 0).is_err());
+    l.metered_finalize("n", MeteredOutcome::BackendError)
+        .unwrap();
+    assert!(try_record(&l, "n", 1, 25, 1).is_err());
+    assert!(try_record(&l, "n", 2, 26, 1).is_err());
+}
+
+#[test]
+fn startup_closes_interrupted_rows_by_dispatch_marker() {
+    let dir = tempfile::tempdir().unwrap();
+    {
+        let l = Ledger::open(dir.path()).unwrap();
+        admit(&l, "d", 1000, 500, 100_000, false).unwrap();
+        assert!(l.metered_claim_dispatch("d", "peer").unwrap());
+        admit(&l, "u", 1000, 500, 100_000, true).unwrap();
+        record(&l, "u", 0, 30, 300, false);
+        admit(&l, "p", 1000, 500, 100_000, true).unwrap();
+        record(&l, "p", 0, 31, 300, true);
+    }
+    let l = Ledger::open(dir.path()).unwrap();
+    l.close_interrupted_metered().unwrap();
+    l.close_interrupted_metered().unwrap();
+    // Dispatched: usage unknown, reservation held, no refund.
+    assert_eq!(
+        l.metered_settlement("d").unwrap().status,
+        MeteredStatus::UsageMissing
+    );
+    assert_eq!(l.metered_exposure("peer").unwrap(), 1500);
+    // Never dispatched: paid deposit refunded now, unpaid one on arrival.
+    assert_eq!(
+        l.metered_settlement("p").unwrap().status,
+        MeteredStatus::BackendError
+    );
+    assert_eq!(l.peer_credit("peer").unwrap(), 300);
+    l.mark_received(&invoice(30, 300).payment_hash).unwrap();
+    assert_eq!(l.peer_credit("peer").unwrap(), 600);
+}
