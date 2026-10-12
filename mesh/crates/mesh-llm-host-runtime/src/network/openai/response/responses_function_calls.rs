@@ -107,13 +107,20 @@ pub(super) async fn emit_translated_function_call_deltas(
             .function_calls
             .entry(index)
             .or_insert_with(|| TranslatedFunctionCall::new(created_at, index));
-        if let Some(id) = tool_call.get("id").and_then(serde_json::Value::as_str) {
+        // Some backends repeat `"id": ""` or `"name": ""` in later fragments;
+        // those must not blank what an earlier fragment set.
+        if let Some(id) = tool_call
+            .get("id")
+            .and_then(serde_json::Value::as_str)
+            .filter(|id| !id.is_empty())
+        {
             call.call_id = id.to_string();
         }
         let function = tool_call.get("function");
         if let Some(name) = function
             .and_then(|function| function.get("name"))
             .and_then(serde_json::Value::as_str)
+            .filter(|name| !name.is_empty())
         {
             call.name = name.to_string();
         }
@@ -329,14 +336,15 @@ mod tests {
     /// /v1/responses client as a function_call item with its arguments, the
     /// way OpenAI streams it, so Responses clients such as Codex can call
     /// tools through the mesh. Before, only reasoning and an empty message
-    /// came through.
+    /// came through. A later fragment repeating an empty id and name, as some
+    /// backends send, leaves the call's own untouched.
     #[tokio::test]
     async fn translated_stream_carries_a_streamed_tool_call_as_a_function_call() {
         let (result, body) = relay_translated_over(
             concat!(
                 r#"data: {"id":"c","object":"chat.completion.chunk","created":1,"model":"qwen","choices":[{"index":0,"delta":{"role":"assistant","content":null,"tool_calls":[{"index":0,"id":"call_abc","type":"function","function":{"name":"read","arguments":""}}]},"finish_reason":null}]}"#,
                 "\n\n",
-                r#"data: {"id":"c","object":"chat.completion.chunk","created":1,"model":"qwen","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"path\":"}}]},"finish_reason":null}]}"#,
+                r#"data: {"id":"c","object":"chat.completion.chunk","created":1,"model":"qwen","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"","type":"function","function":{"name":"","arguments":"{\"path\":"}}]},"finish_reason":null}]}"#,
                 "\n\n",
                 r#"data: {"id":"c","object":"chat.completion.chunk","created":1,"model":"qwen","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\"a.txt\"}"}}]},"finish_reason":null}]}"#,
                 "\n\n",
@@ -380,6 +388,7 @@ mod tests {
         assert_eq!(output.len(), 1, "no empty message next to the call");
         assert_eq!(output[0]["type"], "function_call");
         assert_eq!(output[0]["call_id"], "call_abc");
+        assert_eq!(output[0]["name"], "read");
         assert_eq!(output[0]["arguments"], r#"{"path":"a.txt"}"#);
         assert!(events_of(&events, "response.output_text.delta").is_empty());
 
