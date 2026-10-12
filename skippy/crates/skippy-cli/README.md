@@ -60,6 +60,18 @@ Qwen3.5 today.
 skippy serve --model /models/supported-checkpoint --quant Q4_K_M
 ```
 
+Laya GGUFs use the decision-only reader and serve `/systemone` and
+`/v1/decisions`. Select an explicit native device; Laya does not use stage
+GPU-layer offload or chat generation:
+
+```sh
+skippy --runtime-selection metal serve --model-path /models/laya-multilingual-F16.gguf \
+  --model-id meshllm/laya-multilingual-F16-GGUF:F16 --device MTL0
+```
+
+Use `--device CPU` with a CPU runtime. `--prompt`, `--n-gpu-layers`, and
+`--print-effective-config` are not available for this decision-only path.
+
 For multimodal GGUFs, Skippy looks for a matching installed `mmproj` sidecar.
 Catalog downloads include the catalog's projector asset; select an explicit
 local projector with `--mmproj /path/to/mmproj.gguf`.

@@ -92,6 +92,9 @@ class SccacheEvidenceTests(unittest.TestCase):
             "&& 'false' || 'true' }}"
         )
         expected = {
+            ("ci-skippy-cli-slice.yml", "linux_cli"): "false",
+            ("ci-skippy-cli-slice.yml", "macos_cli"): "false",
+            ("ci-skippy-cli-slice.yml", "windows_cli"): "false",
             ("ci-linux-host-slice.yml", "linux_host"): policy,
             ("ci-linux-runtime-slice.yml", "linux_runtime"): (
                 "${{ matrix.runtime.backend == 'cpu' && "

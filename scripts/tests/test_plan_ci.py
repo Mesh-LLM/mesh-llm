@@ -348,6 +348,16 @@ class PlanCiTests(unittest.TestCase):
             ["core", "two-node-client", "two-node-split"],
         )
 
+    def test_standalone_composer_change_selects_every_runtime_row(self) -> None:
+        payload = fixture("runtime.json")
+        payload["changed_files"] = ["skippy/scripts/compose-ci-product.py"]
+        payload["affected_crates"] = []
+
+        plan = PLANNER.build_plan(payload, root=ROOT)
+
+        self.assertIn("ci-control", plan["domains"])
+        self.assertEqual(len(plan["matrices"]["runtime_products"]), 9)
+
     def test_cuda_change_selects_the_gpu_smoke_row(self) -> None:
         payload = fixture("runtime.json")
         payload["changed_files"] = ["scripts/detect-cuda-arch.sh"]

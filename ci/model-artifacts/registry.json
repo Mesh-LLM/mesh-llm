@@ -3131,11 +3131,15 @@
       "id": "family-granite-moe",
       "family": "granite-moe",
       "suites": [
-        "llama-family-certification"
+        "llama-family-certification",
+        "product-smoke"
       ],
       "cadences": [
         "llama-bump",
-        "manual-full"
+        "manual-full",
+        "pull-request",
+        "main",
+        "release"
       ],
       "capability_tags": [
         "gguf",

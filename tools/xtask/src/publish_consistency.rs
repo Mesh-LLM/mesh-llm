@@ -464,8 +464,8 @@ fn check_publish_workflow_invariants(repo_root: &Path) -> DynResult<()> {
         &release_workflow,
         "publish_crates_preflight:
           name: Preflight crates.io packages
-          needs: [metadata, publish]
-          if: ${{ needs.metadata.outputs.prerelease != 'true' && needs.metadata.outputs.canary != 'true' }}
+          needs: [metadata, compose_cpu_products]
+          if: ${{ needs.metadata.result == 'success' && needs.compose_cpu_products.result == 'success' }}
           runs-on: ubuntu-24.04
           container:
             image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:f499b79bc52dc7492d57397fdbec9f890c6f6bb1d8c1fcde9c1c97d45c0541a7
@@ -475,7 +475,7 @@ fn check_publish_workflow_invariants(repo_root: &Path) -> DynResult<()> {
           steps:
             - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
               with:
-                ref: ${{ needs.metadata.outputs.tag }}
+                ref: ${{ needs.metadata.outputs.source_sha }}
                 persist-credentials: false
             - name: Trust checkout directory
               run: git config --global --add safe.directory \"$GITHUB_WORKSPACE\"
@@ -490,6 +490,23 @@ fn check_publish_workflow_invariants(repo_root: &Path) -> DynResult<()> {
                 RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
               run: scripts/release-version.sh \"$RELEASE_TAG\"",
         "release workflow publish preflight dispatched version preparation",
+    )?;
+    let preflight_job = workflow_job_section(&release_workflow, "publish_crates_preflight")
+        .ok_or("release workflow: missing crates preflight job")?;
+    ensure_contains(
+        preflight_job,
+        "name: release-linux",
+        "release preflight same-run Linux artifact",
+    )?;
+    ensure_not_contains(
+        preflight_job,
+        "releases/download",
+        "release preflight must not fetch already-published assets",
+    )?;
+    ensure_contains(
+        publish_job,
+        "needs.publish_crates_preflight.result == 'success'",
+        "GitHub publication must wait for crates preflight",
     )?;
     ensure_contains(
         &release_workflow,

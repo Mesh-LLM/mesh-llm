@@ -670,7 +670,16 @@ class ReleaseWorkflowArtifactTests(unittest.TestCase):
             workflow.index("  publish_crates:\n")
         ]
 
-        self.assertIn("needs: [metadata, publish]", preflight)
+        self.assertIn("needs: [metadata, compose_cpu_products]", preflight)
+        self.assertIn("name: release-linux", preflight)
+        self.assertNotIn("releases/download", preflight)
+        publish = workflow[
+            workflow.index("  publish:\n") :
+            workflow.index("  release_notes:\n")
+        ]
+        self.assertIn("- publish_crates_preflight", publish)
+        self.assertIn("needs.publish_crates_preflight.result == 'success'", publish)
+        self.assertNotIn("needs.metadata.outputs.canary", preflight)
         self.assertIn('sha256sum --check "$archive.sha256"', preflight)
         self.assertIn("libmtmd.so libllama-common.so libllama.so", preflight)
         self.assertIn("LLAMA_STAGE_LIB_DIR: ${{ steps.runtime.outputs.lib_dir }}", preflight)
@@ -1108,6 +1117,28 @@ class ReleaseWorkflowArtifactTests(unittest.TestCase):
                 job,
             )
             self.assertNotIn("uses: actions/cache@", job)
+
+    def test_dispatch_manifest_digest_comes_from_the_composed_artifact(self) -> None:
+        workflow = RELEASE_WORKFLOW.read_text(encoding="utf-8")
+        publish = job_block(workflow, "publish", "dispatch_packaging_release")
+        dispatch = job_block(
+            workflow,
+            "dispatch_packaging_release",
+            "await_packaging_release",
+        )
+
+        # The manifest digest downstream verifies against must be produced by the
+        # workflow's own composition step, not fetched back from the public
+        # release asset (trust-on-first-use).
+        self.assertIn("name: composed-native-runtimes-manifest", publish)
+        self.assertIn("name: composed-native-runtimes-manifest", dispatch)
+        self.assertIn(
+            "composed-native-runtimes-manifest/native-runtimes.json",
+            dispatch,
+        )
+        self.assertIn("sha256sum -c native-runtimes.json.sha256", dispatch)
+        self.assertNotIn("releases/download", dispatch)
+        self.assertNotIn("curl ", dispatch)
 
 
 if __name__ == "__main__":

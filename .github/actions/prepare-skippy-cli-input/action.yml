@@ -2,6 +2,9 @@ name: Prepare standalone Skippy CLI input
 description: Build, verify host imports, and checksum one backend-neutral Skippy CLI for a platform.
 
 inputs:
+  source_sha:
+    description: Full immutable source revision selected by the caller; legacy protected host slices use the checked-out revision.
+    required: false
   profile:
     description: Build profile (debug, dev, or release).
     required: false
@@ -18,6 +21,7 @@ runs:
       if: runner.os != 'Windows'
       shell: bash
       env:
+        INPUT_SOURCE_SHA: ${{ inputs.source_sha }}
         INPUT_PROFILE: ${{ inputs.profile }}
         INPUT_OUTPUT_DIR: ${{ inputs.output_dir }}
       run: |
@@ -27,6 +31,13 @@ runs:
           release) recipe=skippy-cli-release-build; profile_dir=release ;;
           *) echo "unsupported Skippy profile: $INPUT_PROFILE" >&2; exit 1 ;;
         esac
+        # Container users can differ from the checkout owner. Scope Git's trust
+        # exception to this immutable checkout query; do not alter global config.
+        checkout_sha="$(git -c safe.directory="$GITHUB_WORKSPACE" rev-parse HEAD)"
+        if [[ -z "$INPUT_SOURCE_SHA" ]]; then INPUT_SOURCE_SHA="$checkout_sha"; fi
+        [[ "$INPUT_SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid selected source SHA" >&2; exit 1; }
+        [[ "$checkout_sha" == "$INPUT_SOURCE_SHA" ]] || { echo "Skippy CLI checkout differs from selected source" >&2; exit 1; }
+        export SKIPPY_SOURCE_SHA="$INPUT_SOURCE_SHA"
         just "$recipe"
         mkdir -p "$INPUT_OUTPUT_DIR"
         cp "target/$profile_dir/skippy" "$INPUT_OUTPUT_DIR/skippy"
@@ -36,10 +47,13 @@ runs:
           --report "$INPUT_OUTPUT_DIR/host-imports.json" \
           --max-glibc declared
         (cd "$INPUT_OUTPUT_DIR" && { command -v sha256sum >/dev/null && sha256sum skippy || shasum -a 256 skippy; }) > "$INPUT_OUTPUT_DIR/skippy.sha256"
+        "$INPUT_OUTPUT_DIR/skippy" build-contract > "$INPUT_OUTPUT_DIR/build-contract.json"
+        python3 skippy/scripts/verify-cli-input.py "$INPUT_OUTPUT_DIR" --source-sha "$SKIPPY_SOURCE_SHA"
     - name: Build and prepare Windows Skippy CLI
       if: runner.os == 'Windows'
       shell: pwsh
       env:
+        INPUT_SOURCE_SHA: ${{ inputs.source_sha }}
         INPUT_PROFILE: ${{ inputs.profile }}
         INPUT_OUTPUT_DIR: ${{ inputs.output_dir }}
       run: |
@@ -50,6 +64,12 @@ runs:
           'release' { $recipe = 'skippy-cli-release-build'; $profileDir = 'release' }
           default { throw "unsupported Skippy profile: $env:INPUT_PROFILE" }
         }
+        $checkoutSha = (& git rev-parse HEAD).Trim()
+        if ($LASTEXITCODE -ne 0) { throw 'Could not resolve Skippy source revision' }
+        if (-not $env:INPUT_SOURCE_SHA) { $env:INPUT_SOURCE_SHA = $checkoutSha }
+        if ($env:INPUT_SOURCE_SHA -cnotmatch '^[0-9a-f]{40}$') { throw 'Invalid selected source SHA' }
+        if ($checkoutSha -cne $env:INPUT_SOURCE_SHA) { throw 'Skippy CLI checkout differs from selected source' }
+        $env:SKIPPY_SOURCE_SHA = $env:INPUT_SOURCE_SHA
         & just $recipe
         if ($LASTEXITCODE -ne 0) { throw 'Skippy CLI build failed' }
         $source = Join-Path 'target' "$profileDir/skippy.exe"
@@ -62,3 +82,8 @@ runs:
         if ($LASTEXITCODE -ne 0) { throw 'Skippy host import verification failed' }
         $checksum = (Get-FileHash -Algorithm SHA256 -LiteralPath $destination).Hash.ToLowerInvariant()
         "$checksum  skippy.exe" | Set-Content -Path (Join-Path $env:INPUT_OUTPUT_DIR 'skippy.exe.sha256') -NoNewline
+        $contractPath = Join-Path $env:INPUT_OUTPUT_DIR 'build-contract.json'
+        & python -c "import pathlib,subprocess,sys; pathlib.Path(sys.argv[2]).write_bytes(subprocess.check_output([sys.argv[1], 'build-contract']))" $destination $contractPath
+        if ($LASTEXITCODE -ne 0) { throw 'Could not record Skippy build contract' }
+        & python skippy/scripts/verify-cli-input.py $env:INPUT_OUTPUT_DIR --source-sha $env:SKIPPY_SOURCE_SHA
+        if ($LASTEXITCODE -ne 0) { throw 'Skippy CLI input verification failed' }

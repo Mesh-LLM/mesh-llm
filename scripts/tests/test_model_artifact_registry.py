@@ -153,7 +153,7 @@ class ModelArtifactRegistryTests(unittest.TestCase):
                     cwd=ROOT, check=True, capture_output=True, text=True,
                 )
 
-    def test_product_smoke_manifest_is_the_pinned_dense_recurrent_laya_set(self) -> None:
+    def test_product_smoke_manifest_is_the_pinned_dense_recurrent_moe_laya_set(self) -> None:
         manifest = json.loads(
             (MANIFESTS / "product-smoke.json").read_text(
                 encoding="utf-8"
@@ -166,6 +166,7 @@ class ModelArtifactRegistryTests(unittest.TestCase):
             {
                 "smollm2-q8-inference",
                 "family-granite-hybrid",
+                "family-granite-moe",
                 "family-laya-multilingual",
             },
         )
@@ -176,6 +177,10 @@ class ModelArtifactRegistryTests(unittest.TestCase):
         self.assertEqual(
             artifacts["family-granite-hybrid"]["model_ref"],
             "ibm-granite/granite-4.0-h-350m-GGUF:Q4_K_M",
+        )
+        self.assertEqual(
+            artifacts["family-granite-moe"]["model_ref"],
+            "sinatras/granite-moe-1b-split:Q4_K_M",
         )
         self.assertEqual(
             artifacts["family-laya-multilingual"]["model_ref"],

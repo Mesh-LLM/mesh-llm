@@ -5,6 +5,34 @@ This is the checked-in implementation. Normative rules live in
 `.agents/skills/manage-ci/references/current-inventory.md`; the design record
 and acceptance criteria are in `.omo/specs/pr-ci-optimization.md`.
 
+The [CI and release audit](CI_RELEASE_AUDIT.md) records the proposed
+Skippy-first testing and release process, platform coverage, workflow
+before/after inventory and cache/workflow cleanup plan. It is an implementation
+proposal; this topology and the manage-ci contract describe current behavior.
+
+For a selected Linux, macOS, or Windows runtime row, the lane now builds the
+backend-neutral Skippy CLI independently of the console UI, composes it with
+the exact native runtime archive, and verifies source, target, backend,
+release, ABI, import policy, checksums, and no-driver runtime discovery before the Mesh host starts. The
+standalone product is an immutable run artifact. The Linux and Windows CPU product jobs
+also restore pinned SmolLM2 dense and Granite hybrid fixtures and require
+real prefill and decode through that composed CLI/runtime pair before uploading
+the product. They upload digest-bound pilot evidence files. These pilots cover
+only load and prefill/decode; the six named executable results plus packaging/runtime across nine rows
+gate remains pending in the audit's acceptance checklist.
+The receipt contract requires separate `dense`, `recurrent`, `moe`, `kv-cache`,
+`system-one`, and `decisions` results in addition to `packaging-runtime`.
+`skippy/scripts/assemble-ci-qualification.py` accepts suite evidence only when
+the exact composed product, protected availability record, model identities,
+and all applicable cases validate. No platform workflow produces that complete
+evidence set yet, so the assembler is not a current lane gate.
+Each selected standalone product row now rechecks its final archive, CLI
+imports/version, native ABI/release pairing, and no-driver runtime discovery
+after composition, then uploads a digest-bound `packaging-runtime` evidence
+artifact named `ci-skippy-packaging-<platform>-<architecture>-<backend>`.
+This packaging result is one input to the pending full qualification receipt;
+it does not mark model or hardware execution qualified.
+
 The affected-crate fallback roster in `scripts/affected-crates.sh` includes
 `mesh-llm-moa-plugin` and `mesh-llm-wallet` alongside their related workspace
 crates; `just ci-crate-lists` checks it against workspace membership. The
@@ -480,6 +508,15 @@ days.
 After a stable release with the full GPU matrix succeeds, the downstream
 `mesh-packaging` dispatch job first checks that its
 `MESH_AGENT_IMAGES_DISPATCH_TOKEN` credential can write the target repository.
+It resolves the published tag commit and SHA-256 of `native-runtimes.json`,
+then dispatches those immutable expectations with a run correlation ID. The
+`await_packaging_release` job requires Actions read access in the same token,
+waits for the matching terminal packaging run, downloads its readiness artifact,
+and checks the exact source, tag, manifest digest, run attempt, and successful
+channel result before the upstream release workflow can succeed. A dispatch
+acknowledgement alone does not satisfy release completion. The downstream
+workflow contract must be deployed to `mesh-packaging` main before this dispatch
+contract is enabled upstream.
 That repository secret is external GitHub configuration. The checked-in
 workflow can report a missing or insufficient credential, but it cannot grant
 the token access or replace the secret.
@@ -502,11 +539,14 @@ flowchart TD
     RELEASE --> KIND{"Prerelease?"}
     KIND -- "yes" --> RC_DONE["Stop after GitHub prerelease"]
     KIND -- "no" --> DOWNSTREAM["Publish crates and dispatch<br/>packages, images, and npm"]
+    DOWNSTREAM --> RECEIPT["Verify correlated terminal<br/>packaging readiness"]
 ```
 
-The stable crates.io preflight and publisher each verify the checksummed Linux
-x86_64 release archive and restore its native runtime libraries before Cargo
-package verification. Their `LLAMA_STAGE_LIB_DIR` points at the restored `libmtmd.so`,
+The credential-free crates.io dry run now downloads the immutable Linux product
+from the same release run and completes before GitHub publication; canaries run
+it too. The stable crates.io publisher independently verifies the published,
+checksummed Linux x86_64 release archive. Both restore native runtime libraries
+before Cargo package verification. Their `LLAMA_STAGE_LIB_DIR` points at the restored `libmtmd.so`,
 `libllama-common.so`, and `libllama.so`. The same archive gate is used when
 resuming a partial crates.io publication.
 
@@ -560,6 +600,11 @@ graphs contain no macOS/Windows placeholder jobs, and the converse holds for
 the other platforms. Protected manual control uses the Actions API only
 for a closed list of five checked-in workflow files and passes data through
 native inputs. No workflow YAML is generated and no lane allocates a planner.
+For explicit branch workflow dispatches, Linux, macOS, and Windows summaries
+validate the lane graph using the workflow revision (`github.sha`); PR lane
+summaries continue to use the protected default branch. This keeps the
+standalone CLI and product jobs visible to the branch summary validator before
+the new graph lands on `main`.
 
 ## Planner and profiles
 
@@ -577,7 +622,14 @@ closed.
 
 `scripts/plan-ci.py` is the sole Clippy and Rust-test batch allocator;
 `ci-crate-lists` validates that the main `matrices.rust_tests` covers every
-workspace crate exactly once.
+workspace crate exactly once. Planned `skippy-ffi` packages execute their
+tests and run Clippy in an isolated dynamic-runtime feature graph rather than
+being silently skipped by a batch. Selected SafeTensors executable coverage
+runs on PR, exhaustive main and manual-full sources. Each Cargo batch writes a
+run-scoped census after successful invocations, verifies it against its resolved
+package list, and uploads the receipt for review. Historical PR plans may name
+a package absent from their checked-out tree; the existing workspace filter
+records that skip before the resolved list reaches this execution gate.
 
 Control-plane changes fail open through the selected profile. When they
 require the `web` slice, both console and website rows execute even without a
@@ -664,7 +716,7 @@ runtime producers are not duplicated.
   epoch. Batches that exercise Skippy correctness tests restore an
   exact revision- and SHA-256-pinned model cache, verify the file before use,
   and leave publication to one trusted-main batch. Related Skippy crate changes
-  on pull requests also compile the adapter-owned
+  on PR, main, and manual-full sources also compile the adapter-owned
   `config::hardware_translation_tests::safetensors_checkpoint_reaches_mesh_host_runtime`
   library test in `mesh-llm-skippy-adapter`, fail if that
   test is absent, then run its binary against an immutable SmolLM2 revision
@@ -976,11 +1028,20 @@ the package; PRs are restore-only and Depot jobs neither restore nor publish
 this cache. The release producers remain independent of this CI cache.
 
 Skippy and MeshLLM are separate products in the shared source tree. Each
-platform host slice first builds one backend-neutral standalone Skippy CLI and
-uploads `ci-skippy-cli-<platform>-<architecture>` with a checksum and
-`host-imports.json` after verifying host imports, then builds the MeshLLM host.
+platform lane builds one backend-neutral standalone Skippy CLI independently
+of its UI-dependent Mesh host and uploads
+`ci-skippy-cli-<platform>-<architecture>` with a checksum, embedded build
+contract, and `host-imports.json` after verifying host imports.
+The standalone slice passes the selected source SHA into CLI preparation;
+protected pre-migration host slices derive it from their checked-out source.
+Linux and Windows CPU standalone product jobs execute pinned dense, hybrid, and MoE
+models through the composed CLI and runtime, require positive prefill and decode,
+and upload digest-bound pilot evidence. These pilots do not constitute the full
+six named executable results plus packaging/runtime across nine rows.
 Native-runtime slices build or restore one Skippy llama.cpp
-runtime per selected backend; product composition and downstream tests consume
+runtime per selected backend and upload a source-bound `ci-source.json` beside
+the archive. The Linux CPU package cache uses the exact source revision in its
+key. Product composition and downstream tests consume
 the platform host/runtime graph, not per-test rebuilds. Release host jobs use
 the same Skippy CLI producer and publish separate versioned CLI archives while
 MeshLLM continues to package its own host, console and selected runtime. The
@@ -1110,8 +1171,10 @@ This is intentionally not a universal PR write-through policy. One protected
 GitHub-hosted warmer publishes an exact-key compiler seed capped at 2 GiB after
 successful Main Quality. Central runner policy denies that seed to every Depot
 selection because Depot's Actions-cache proxy crosses trust scopes. Seeded
-jobs enforce measured hit-rate floors only after an exact warm restore; a
-missing seed is explicitly cold and does not fail. The seed key fingerprints
+jobs record measured hit rates after an exact warm restore with a zero floor;
+cache efficiency does not block required CI while the Skippy-first workflow is
+established. Dedicated cache qualification canaries retain their positive
+warm-restore floors. A missing seed is explicitly cold. The seed key fingerprints
 the warmer container image and toolchain epoch. Production runtime rows
 explicitly skip seed restoration after three verified CPU warm samples observed
 zero reuse in run `34272984200/1`.

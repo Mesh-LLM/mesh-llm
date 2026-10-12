@@ -11,6 +11,7 @@ set -euo pipefail
 : "${INPUT_READINESS_SMOKE:?INPUT_READINESS_SMOKE is required}"
 INPUT_ATTESTATION_PUBLIC_KEY_FILE="${INPUT_ATTESTATION_PUBLIC_KEY_FILE:-}"
 INPUT_ATTESTATION_VERIFIER="${INPUT_ATTESTATION_VERIFIER:-}"
+INPUT_QUALIFICATION_RECEIPTS="${INPUT_QUALIFICATION_RECEIPTS:-}"
 
 if command -v python3 >/dev/null 2>&1; then
     python_bin="python3"
@@ -244,12 +245,29 @@ if [[ "$host_release_version" != "$version" ]]; then
     echo "Output: $host_version_output" >&2
     exit 1
 fi
-"$python_bin" scripts/compose-product-bundle.py \
-    --bundle "$output_dir" \
-    --host "$output_dir/$INPUT_BINARY_NAME" \
-    --runtime "$runtime_dir" \
-    --version "$version" \
-    --backend "$INPUT_BACKEND"
+compose_product() {
+    "$python_bin" scripts/compose-product-bundle.py \
+        --bundle "$output_dir" \
+        --host "$output_dir/$INPUT_BINARY_NAME" \
+        --runtime "$runtime_dir" \
+        --version "$version" \
+        --backend "$INPUT_BACKEND" \
+        "$@"
+}
+if [[ -n "$INPUT_QUALIFICATION_RECEIPTS" ]]; then
+    # Bind the standalone Skippy qualification receipt record into the product
+    # manifest so the Mesh product carries the provenance of the Skippy bytes
+    # it was composed from.
+    require_nonempty_file \
+        "standalone qualification receipt record" \
+        "$INPUT_QUALIFICATION_RECEIPTS"
+    cp "$INPUT_QUALIFICATION_RECEIPTS" \
+        "$output_dir/skippy-qualification-receipts.json"
+    compose_product \
+        --qualification-receipts "$output_dir/skippy-qualification-receipts.json"
+else
+    compose_product
+fi
 require_nonempty_file "composed product manifest" "$output_dir/product-manifest.json"
 
 if [[ "$INPUT_READINESS_SMOKE" == "true" ]]; then

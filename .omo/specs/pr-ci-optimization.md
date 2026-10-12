@@ -65,9 +65,11 @@ or cache identity.
   lanes; PR-controlled jobs never receive Actions-write permission.
 - Existing static ABI, native SDK, Swift, smoke and HF workflows remain
   lower-level reusable producers/consumers.
-- The Linux, macOS and Windows host slices each build one standalone Skippy CLI
-  input before their MeshLLM host input. Skippy native runtime slices remain
-  backend-specific and feed existing composed-product/test edges. Release
+- The Linux, macOS and Windows lanes build one standalone Skippy CLI input
+  independently of their UI-dependent MeshLLM hosts. Each selected native
+  runtime is composed with that CLI and checked for source, target, ABI,
+  checksum, and no-driver discovery before the MeshLLM host begins. Skippy
+  native runtime slices remain backend-specific. Release
   produces separate platform Skippy CLI archives under the shared tag without
   rebuilding the CLI per backend or test shard.
 - Current PR routing may use Depot for eligible same-repository executor jobs
@@ -179,8 +181,11 @@ credentials may differ.
 - static-abi-artifact.yml: one verified portable static llama ABI producer.
 - ci-rust-tests-slice.yml: deterministic affected/all-workspace Cargo batches.
 - ci-{linux,macos,windows}-host-slice.yml: platform-pure neutral hosts.
+- ci-skippy-cli-slice.yml: one backend-neutral standalone CLI per platform.
+- ci-skippy-product-slice.yml: platform-local standalone CLI and native-runtime
+  composition before the MeshLLM host producer.
 - ci-{linux,macos,windows}-runtime-slice.yml: one native runtime per selected
-  backend, running in parallel with the matching host.
+  backend, running in parallel with the standalone CLI.
 - ci-{linux,macos,windows}-product-slice.yml: platform-local composition after
   matching host and runtime producers succeed.
 - ci-platform-checks-slice.yml: macOS portable/unit and Windows checks.

@@ -44,8 +44,11 @@ class ComposeProductBundleTests(unittest.TestCase):
                             (result["runtime"], schema["$defs"]["runtime_artifact"]),
                         ):
                             self.assertFalse(shape["additionalProperties"])
-                            self.assertEqual(set(actual), set(shape["properties"]))
-                            self.assertEqual(set(actual), set(shape["required"]))
+                            self.assertLessEqual(set(actual), set(shape["properties"]))
+                            self.assertLessEqual(set(shape["required"]), set(actual))
+                            self.assertLessEqual(
+                                set(shape["required"]), set(shape["properties"])
+                            )
                         self.assertEqual(result["mesh_version"], "9.0.0")
                         self.assertEqual(result["runtime"]["release_version"], "2.0.0")
                         self.assertEqual(result["runtime"]["skippy_abi"], "0.1.57")
@@ -107,6 +110,89 @@ class ComposeProductBundleTests(unittest.TestCase):
                 path.unlink()
             (fixture / "lib").rmdir()
             fixture.rmdir()
+
+
+def qualification_record(**overrides: object) -> dict:
+    record = {
+        "schema_version": 1,
+        "source_sha": "a" * 40,
+        "plan_digest": "b" * 64,
+        "platform": "linux",
+        "required_row": "linux-cpu",
+        "receipts": [
+            {"row_id": "linux-cpu", "status": "qualified", "receipt_sha256": "c" * 64},
+            {"row_id": "linux-cuda", "status": "hardware-unavailable", "receipt_sha256": "d" * 64},
+        ],
+    }
+    record.update(overrides)
+    return record
+
+
+class QualificationBindingTests(unittest.TestCase):
+    def test_bound_record_carries_identity_and_receipt_digests(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            bundle = pathlib.Path(directory)
+            record = bundle / "skippy-qualification-receipts.json"
+            record.write_text(json.dumps(qualification_record()) + "\n")
+            bound = COMPOSE_PRODUCT_BUNDLE.bind_qualification_record(bundle, record)
+            self.assertEqual(bound["schema_version"], 1)
+            self.assertEqual(bound["record_path"], "skippy-qualification-receipts.json")
+            self.assertEqual(bound["record_sha256"], COMPOSE_PRODUCT_BUNDLE.file_sha256(record))
+            self.assertEqual(bound["source_sha"], "a" * 40)
+            self.assertEqual(bound["plan_digest"], "b" * 64)
+            self.assertEqual(bound["platform"], "linux")
+            self.assertEqual(bound["required_row"], "linux-cpu")
+            self.assertEqual(
+                bound["receipts"],
+                [
+                    {"row_id": "linux-cpu", "status": "qualified", "receipt_sha256": "c" * 64},
+                    {"row_id": "linux-cuda", "status": "hardware-unavailable", "receipt_sha256": "d" * 64},
+                ],
+            )
+
+    def test_record_is_required_qualified_and_platform_scoped(self) -> None:
+        cases = (
+            ({"schema_version": 2}, "unsupported schema"),
+            ({"source_sha": "not-a-sha"}, "invalid source revision"),
+            ({"source_sha": "a" * 64}, "invalid source revision"),
+            ({"plan_digest": "z" * 64}, "invalid plan digest"),
+            ({"platform": "plan9"}, "unknown platform"),
+            ({"required_row": ""}, "names no required row"),
+            ({"receipts": []}, "carries no receipts"),
+            ({"receipts": [{"row_id": "macos-metal", "status": "qualified", "receipt_sha256": "c" * 64}]}, "foreign row"),
+            ({"receipts": [{"row_id": "linux-cpu", "status": "unclear", "receipt_sha256": "c" * 64}]}, "unknown status"),
+            ({"receipts": [{"row_id": "linux-cpu", "status": "qualified", "receipt_sha256": "nope"}]}, "invalid digest"),
+            (
+                {
+                    "platform": "macos",
+                    "required_row": "macos-metal",
+                    "receipts": [
+                        {"row_id": "macos-metal", "status": "hardware-unavailable", "receipt_sha256": "c" * 64},
+                    ],
+                },
+                "required row macos-metal is not qualified",
+            ),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            bundle = pathlib.Path(directory)
+            record = bundle / "skippy-qualification-receipts.json"
+            for overrides, message in cases:
+                with self.subTest(overrides=overrides):
+                    record.write_text(json.dumps(qualification_record(**overrides)) + "\n")
+                    with self.assertRaisesRegex(ValueError, message):
+                        COMPOSE_PRODUCT_BUNDLE.bind_qualification_record(bundle, record)
+
+    def test_missing_or_unreadable_record_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            bundle = pathlib.Path(directory)
+            with self.assertRaisesRegex(ValueError, "is missing"):
+                COMPOSE_PRODUCT_BUNDLE.bind_qualification_record(
+                    bundle, bundle / "absent.json"
+                )
+            broken = bundle / "broken.json"
+            broken.write_text("{not json\n")
+            with self.assertRaisesRegex(ValueError, "is not JSON"):
+                COMPOSE_PRODUCT_BUNDLE.bind_qualification_record(bundle, broken)
 
 
 if __name__ == "__main__":

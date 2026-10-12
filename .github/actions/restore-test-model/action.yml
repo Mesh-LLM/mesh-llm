@@ -148,7 +148,6 @@ runs:
         MODEL_URL: ${{ steps.resolve-model.outputs.url }}
       run: |
         set -euo pipefail
-        mkdir -p ~/.models
         retry_attempts="${MODEL_DOWNLOAD_RETRY_ATTEMPTS:-12}"
         retry_delay="${MODEL_DOWNLOAD_RETRY_DELAY_SECS:-20}"
         retry_max_time="${MODEL_DOWNLOAD_RETRY_MAX_TIME_SECS:-600}"
@@ -165,6 +164,7 @@ runs:
         fi
         output="$HOME/.models/$MODEL_FILE"
         partial="${output}.download"
+        mkdir -p "$(dirname "$output")"
         rm -f "$partial"
         curl "${curl_args[@]}" \
           "$MODEL_URL" \
