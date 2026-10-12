@@ -51,6 +51,10 @@ pub async fn run(command: &WalletCommand, port: u16, config: Option<&Path>) -> R
                     .context("home directory unavailable")?
                     .join(".mesh-llm/payments")
             };
+            // Same owner-only directory the running node prepares.
+            std::fs::create_dir_all(&directory)?;
+            mesh_llm_config::restrict_private_directory(&directory)
+                .with_context(|| format!("restricting {}", directory.display()))?;
             PaymentService::open(&directory)?.control(command).await?
         }
         Err(error) => return Err(error.into()),
