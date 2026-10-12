@@ -149,11 +149,22 @@ async fn verify_exchanges(
     raw: &[u8],
     price: &Pricing,
 ) -> Result<()> {
+    // The caller omits include_usage first, then opts in. Usage stays hidden
+    // unless requested, while settlement still bills backend-reported usage.
+    let opted_in = String::from_utf8(raw.to_vec())?.replace(
+        "\"stream\":true",
+        "\"stream\":true,\"stream_options\":{\"include_usage\":true}",
+    );
     for completed in 1..=2 {
+        let request = if completed == 1 {
+            raw
+        } else {
+            opted_in.as_bytes()
+        };
         let (mut pipe, ready, _cancel) = crate::network::openai::test_metered_start(
             payer,
             provider.id(),
-            raw,
+            request,
             price.clone(),
             None,
         )
@@ -162,6 +173,8 @@ async fn verify_exchanges(
         let mut response = String::new();
         pipe.read_to_string(&mut response).await?;
         assert!(response.contains("hello"));
+        assert!(response.contains("data: [DONE]"));
+        assert_eq!(response.contains("\"usage\""), completed == 2, "{response}");
         loop {
             if buyer
                 .ledger

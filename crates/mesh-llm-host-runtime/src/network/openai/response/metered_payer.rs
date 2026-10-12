@@ -115,6 +115,8 @@ pub(crate) async fn start(
                 terms,
                 deposit: invoice,
                 observations,
+                usage_filter: (!request.client_include_usage)
+                    .then(super::metered_usage_filter::UsageFilter::default),
             },
             send,
             recv,
@@ -174,6 +176,8 @@ struct Exchange {
     terms: AdmissionTerms,
     deposit: Option<mesh_llm_payments::invoice::Invoice>,
     observations: super::paid_events::Observations,
+    /// Present when the caller did not request streamed usage.
+    usage_filter: Option<super::metered_usage_filter::UsageFilter>,
 }
 
 async fn exchange(
@@ -190,6 +194,7 @@ async fn exchange(
         terms,
         deposit,
         observations,
+        mut usage_filter,
     } = exchange;
     if *cancellation.borrow() {
         service.ledger.cancel_unstarted(&terms.id)?;
@@ -232,6 +237,10 @@ async fn exchange(
         match frame {
             Frame::Output { bytes } => {
                 ensure!(!finalized, "output after settlement");
+                let bytes = match usage_filter.as_mut() {
+                    Some(filter) => filter.push(&bytes),
+                    None => bytes,
+                };
                 if !cancelled && output.write_all(&bytes).await.is_err() {
                     cancelled = true;
                     wire::write(&mut send, &Frame::Cancel {}).await?;
@@ -240,6 +249,7 @@ async fn exchange(
             settlement @ Frame::Settlement { .. } => {
                 ensure!(!finalized, "duplicate settlement");
                 // HTTP delivery ends independently of final wallet completion.
+                flush_filter(&mut usage_filter, output, cancelled).await;
                 output.shutdown().await?;
                 settle(&service, &payer, &terms, settlement, &observations).await?;
                 finalized = true;
@@ -252,8 +262,25 @@ async fn exchange(
                 service.metered_complete(&terms.id).await?;
                 return Ok(());
             }
-            Frame::Pending {} => return Ok(()), // unknown usage keeps authorization
+            Frame::Pending {} => {
+                // Unknown usage keeps authorization.
+                flush_filter(&mut usage_filter, output, cancelled).await;
+                return Ok(());
+            }
             _ => bail!("invalid metered provider frame"),
+        }
+    }
+}
+
+async fn flush_filter(
+    filter: &mut Option<super::metered_usage_filter::UsageFilter>,
+    output: &mut DuplexStream,
+    cancelled: bool,
+) {
+    if let Some(filter) = filter.as_mut() {
+        let rest = filter.finish();
+        if !cancelled && !rest.is_empty() {
+            let _ = output.write_all(&rest).await;
         }
     }
 }
