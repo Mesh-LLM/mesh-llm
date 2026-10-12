@@ -6,6 +6,8 @@ use anyhow::{Context, Result, ensure};
 use tokio::sync::{Mutex, OnceCell};
 use tokio::task::JoinHandle;
 
+pub mod metered;
+
 use crate::invoice::Invoice;
 use crate::ledger::{ApprovalMode, Charge, Ledger, RequestTerms};
 use crate::wallet::{Balance, PayError, PaymentStatus, Transaction, WalletProvider};
@@ -46,6 +48,7 @@ pub struct PaymentService {
     payment_lock: Mutex<()>,
     receivable_lock: Mutex<()>,
     input_recovery_cursor: Mutex<i64>,
+    metered_standing: Mutex<std::collections::HashSet<String>>,
     _process_lock: std::fs::File,
 }
 
@@ -70,6 +73,7 @@ impl PaymentService {
         fs2::FileExt::try_lock_exclusive(&process_lock)
             .context("payment service is already running; use its local API")?;
         ledger.close_interrupted_serving()?;
+        ledger.close_interrupted_metered()?;
         ledger.close_abandoned_approvals()?;
         ledger.fail_unsubmitted_input_charges()?;
         ledger.finalize_terminal_requests()?;
@@ -81,6 +85,7 @@ impl PaymentService {
             payment_lock: Mutex::new(()),
             receivable_lock: Mutex::new(()),
             input_recovery_cursor: Mutex::new(0),
+            metered_standing: Mutex::new(Default::default()),
             _process_lock: process_lock,
         })
     }
@@ -241,9 +246,13 @@ impl PaymentService {
         self.ledger.finalize_terminal_requests()?;
         let mut first_error = None;
         for charge in self.ledger.pending_charges()? {
-            let result = match self.start_or_observe_charge(&charge).await {
-                Ok(payment) => self.ledger.reconcile(&payment, crate::now_ms()),
-                Err(error) => Err(error),
+            let result = if self.metered_authorization(&charge.request_id)?.is_some() {
+                self.metered_reconcile_charge(&charge).await
+            } else {
+                match self.start_or_observe_charge(&charge).await {
+                    Ok(payment) => self.ledger.reconcile(&payment, crate::now_ms()),
+                    Err(error) => Err(error),
+                }
             };
             if let Err(error) = result {
                 first_error.get_or_insert(error);

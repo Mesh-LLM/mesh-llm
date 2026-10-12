@@ -3,6 +3,8 @@
 
 mod delivery;
 mod gate;
+mod metered;
+mod metered_backend;
 mod node_ext;
 pub(crate) mod request;
 mod server;
@@ -13,6 +15,7 @@ pub(crate) use server::serve;
 
 pub(crate) fn is_payment_upgrade(prefix: &[u8]) -> bool {
     prefix.starts_with(b"POST /mesh/payment/v1 HTTP/1.1\r\n")
+        || prefix.starts_with(b"POST /mesh/payment/v2 HTTP/1.1\r\n")
 }
 
 /// What the tunnel should do after payments has looked at the request head.
@@ -50,6 +53,17 @@ pub(crate) async fn intercept_inbound(
             .context("payment ingress unavailable")?
             .borrow()
             .clone();
+        if prefix.starts_with(b"POST /mesh/payment/v2 HTTP/1.1\r\n") {
+            metered::serve(
+                node.clone(),
+                remote,
+                remainder.chain(quic_recv),
+                quic_send,
+                targets,
+            )
+            .await?;
+            return Ok(Inbound::Handled);
+        }
         serve(
             node.clone(),
             remote,

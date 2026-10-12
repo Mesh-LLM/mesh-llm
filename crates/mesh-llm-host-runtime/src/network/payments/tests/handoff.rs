@@ -1,5 +1,6 @@
 use super::*;
 use mesh_llm_payments::ledger::RequestTerms;
+use mesh_llm_payments_types::metered_wire as v2;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn payment_handoff_preserves_correlation_and_never_retries_after_submission() -> Result<()> {
@@ -199,13 +200,13 @@ async fn failing_provider(
     let task = tokio::spawn(async move {
         let conn = failing_node.endpoint.accept().await.unwrap().await?;
         while let Ok((mut send, mut recv)) = accept_payment_stream(&conn).await {
-            let mut prefix = vec![0; wire::HTTP_UPGRADE.len()];
+            let mut prefix = vec![0; v2::HTTP_UPGRADE.len()];
             recv.read_exact(&mut prefix).await?;
-            let _ = wire::read(&mut recv).await?;
+            let _ = v2::read(&mut recv).await?;
             attempts.fetch_add(1, Ordering::SeqCst);
-            wire::write(
+            v2::write(
                 &mut send,
-                &Frame::Error {
+                &v2::Frame::Error {
                     message: "prefill unavailable".into(),
                 },
             )
@@ -237,40 +238,45 @@ async fn fake_paid_provider(
 ) -> Result<()> {
     let connection = provider.endpoint.accept().await.unwrap().await?;
     let (mut send, mut recv) = accept_payment_stream(&connection).await?;
-    let mut prefix = vec![0; wire::HTTP_UPGRADE.len()];
+    let mut prefix = vec![0; v2::HTTP_UPGRADE.len()];
     recv.read_exact(&mut prefix).await?;
-    anyhow::ensure!(
-        prefix == wire::HTTP_UPGRADE,
-        "unexpected tunnel prefix: {:?}",
-        String::from_utf8_lossy(&prefix)
-    );
-    let Frame::Request { id, .. } = wire::read(&mut recv).await? else {
+    anyhow::ensure!(prefix == v2::HTTP_UPGRADE, "unexpected tunnel prefix");
+    let v2::Frame::Request {
+        id, max_total_msat, ..
+    } = v2::read(&mut recv).await?
+    else {
         anyhow::bail!("request expected")
     };
     if let Some(attempts) = prior_attempts {
-        assert!(
-            attempts.load(Ordering::SeqCst) > 0,
-            "failing provider must be attempted first"
-        );
+        assert!(attempts.load(Ordering::SeqCst) > 0);
     }
     let seller = TestWallet {
         owner: 1,
         network: network.clone(),
     };
     let invoice = seller.create_invoice(Some(1), 3600).await?;
-    let terms = RequestTerms {
-        exchange_id: None,
+    let terms = v2::AdmissionTerms {
         id,
-        peer: String::new(),
-        payee: None,
         model: "test".into(),
-        max_total_msat: price.request_cap_msat(price.input_charge(1)?, 8)?,
         pricing: price,
-        input_tokens: 1,
+        prompt_estimate: 1,
         max_output_tokens: 8,
-        expires_at_ms: invoice.expires_at_ms,
+        max_total_msat,
+        deposit_msat: 1,
+        credit_msat: 0,
     };
-    wire::write(&mut send, &Frame::InputInvoice { terms, invoice }).await?;
+    v2::write(
+        &mut send,
+        &v2::Frame::Admission {
+            terms,
+            invoice: Some(invoice),
+        },
+    )
+    .await?;
+    anyhow::ensure!(
+        matches!(v2::read(&mut recv).await?, v2::Frame::Accepted {}),
+        "acceptance expected"
+    );
     while if hold {
         service.ledger.pending_charges()?.is_empty()
     } else {

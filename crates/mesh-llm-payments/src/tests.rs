@@ -17,6 +17,7 @@ use crate::{
 
 mod blocking;
 mod failure_boundaries;
+mod metered_service;
 mod metered_settlement;
 mod payment_notifications;
 mod provisioning;
@@ -110,9 +111,10 @@ impl WalletProvider for MockWallet {
             !self.invoice_unavailable.load(Ordering::SeqCst),
             "invoice service unavailable"
         );
-        self.invoice_expiries.lock().unwrap().push(expiry_secs);
+        let mut expiries = self.invoice_expiries.lock().unwrap();
+        expiries.push(expiry_secs);
         Ok(invoice_with_expiry(
-            200,
+            200 + u8::try_from(expiries.len()).unwrap(),
             amount.unwrap_or(1000),
             u64::from(expiry_secs),
         ))

@@ -1,14 +1,22 @@
+#[cfg(test)]
 use std::sync::Arc;
 
-use anyhow::{Context, Result, bail, ensure};
+#[cfg(test)]
+use anyhow::{Context, bail};
+use anyhow::{Result, ensure};
 use mesh_llm_payments::{
     ledger::{Charge, RequestTerms},
     pricing::{Pricing, payment_cap_msat},
     service::PaymentService,
+};
+#[cfg(test)]
+use mesh_llm_payments::{
     wallet::Balance,
     wire::{self, Frame},
 };
-use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt, DuplexStream};
+#[cfg(test)]
+use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::io::{AsyncWriteExt, DuplexStream};
 
 use super::{
     common::{ResponseRetryPolicy, RouteAttemptLoggingContext, RouteAttemptResult},
@@ -33,7 +41,7 @@ pub(super) async fn route(
         .await;
     }
     let started = tokio::select! {
-        result = start(node, peer, raw, price, logging.exchange_id) => result,
+        result = super::metered_payer::start(node, peer, raw, price, logging.exchange_id) => result,
         _ = client.wait_for_response_disconnect() => return RouteAttemptResult::ClientDisconnected,
     };
     let (pipe, mut ready, cancel) = match started {
@@ -118,7 +126,7 @@ impl Drop for CancelOnDrop {
     }
 }
 
-type StartedExchange = (
+pub(super) type StartedExchange = (
     DuplexStream,
     tokio::sync::oneshot::Receiver<()>,
     tokio::sync::watch::Sender<bool>,
@@ -126,7 +134,7 @@ type StartedExchange = (
 
 /// Constructed only before any payment-capable task exists.
 #[derive(Debug)]
-struct PrePaymentTransportFailure;
+pub(super) struct PrePaymentTransportFailure;
 
 impl std::fmt::Display for PrePaymentTransportFailure {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -135,80 +143,7 @@ impl std::fmt::Display for PrePaymentTransportFailure {
 }
 impl std::error::Error for PrePaymentTransportFailure {}
 
-async fn start(
-    node: &Node,
-    peer: iroh::EndpointId,
-    raw: &[u8],
-    price: Pricing,
-    exchange_id: Option<&str>,
-) -> Result<StartedExchange> {
-    let request = PaidRequest::parse(raw)?;
-    let (mut send, mut recv) = node
-        .open_http_tunnel(peer)
-        .await
-        .map_err(|_| PrePaymentTransportFailure)?;
-    let service = node.payment_service().await?;
-    ensure!(
-        effective_intent(&service, &request)?.permits(&price, 0),
-        "paid inference is excluded by spending policy or request restriction"
-    );
-    // Read the balance for approval during the seller's prefill. If a
-    // concurrent payment settles in between, the balance overstates the
-    // funds, but the wallet still refuses any payment it cannot afford.
-    let balance = service.prefetch_balance();
-    let id = uuid::Uuid::new_v4().to_string();
-    send.write_all(wire::HTTP_UPGRADE)
-        .await
-        .map_err(|_| PrePaymentTransportFailure)?;
-    wire::write(
-        &mut send,
-        &Frame::Request {
-            id: id.clone(),
-            model: request.model.clone(),
-            pricing: price.clone(),
-            http: request.backend_http(&id)?,
-        },
-    )
-    .await
-    .map_err(|_| PrePaymentTransportFailure)?;
-    // Prefill/invoice receipt happens before spawning anything that can pay.
-    let initial = tokio::time::timeout(
-        std::time::Duration::from_secs(300),
-        read_initial_invoice(&mut recv),
-    )
-    .await
-    .map_err(|_| PrePaymentTransportFailure)??;
-    validate_initial_invoice(&service, &request, &price, &id, &initial)?;
-    let (pipe, mut output) = tokio::io::duplex(64 * 1024);
-    let (ready, wait_ready) = tokio::sync::oneshot::channel();
-    let (cancel, cancellation) = tokio::sync::watch::channel(false);
-    let evidence = exchange_id.map(|id| (node.clone(), id.to_owned()));
-    tokio::spawn(async move {
-        let result = exchange(
-            service,
-            peer,
-            id,
-            request,
-            price,
-            send,
-            recv,
-            initial,
-            balance,
-            &mut output,
-            ready,
-            cancellation,
-            evidence,
-        )
-        .await;
-        if result.is_err() {
-            // Static logging only: invoices, prompt contents, and hashes are
-            // operator data and do not belong in ordinary runtime logs.
-            tracing::warn!("paid inference exchange interrupted; durable settlement retained");
-        }
-    });
-    Ok((pipe, wait_ready, cancel))
-}
-
+#[cfg(test)]
 async fn read_initial_invoice(recv: &mut (impl AsyncRead + Unpin)) -> Result<Frame> {
     let frame = wire::read(recv).await.map_err(|error| {
         if error.downcast_ref::<std::io::Error>().is_some() {
@@ -225,6 +160,7 @@ async fn read_initial_invoice(recv: &mut (impl AsyncRead + Unpin)) -> Result<Fra
     Ok(frame)
 }
 
+#[cfg(test)]
 fn validate_initial_invoice(
     service: &PaymentService,
     request: &PaidRequest,
@@ -262,6 +198,7 @@ fn validate_initial_invoice(
     Ok((input_amount, total))
 }
 
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn exchange(
     service: Arc<PaymentService>,

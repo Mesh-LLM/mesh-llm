@@ -51,6 +51,9 @@ pub enum Frame {
         request_id: String,
         usage: Option<MeteredUsage>,
         bill_msat: Option<u64>,
+        /// Received deposit used against this bill, excluding deposit credited
+        /// after the final invoice was fixed.
+        deposit_applied_msat: u64,
         credit_applied_msat: u64,
         credit_remaining_msat: u64,
         invoice: Option<Invoice>,
@@ -101,6 +104,7 @@ mod tests {
             request_id: "r".into(),
             usage: None,
             bill_msat: None,
+            deposit_applied_msat: 0,
             credit_applied_msat: 0,
             credit_remaining_msat: 10,
             invoice: None,

@@ -39,6 +39,9 @@ async fn recover_request(
     terms: &RequestTerms,
     peer: iroh::EndpointId,
 ) -> Result<()> {
+    if let Some(admission) = service.metered_authorization(&terms.id)? {
+        return super::metered_payer::recover(node, service, terms, &admission, peer).await;
+    }
     let (mut send, mut recv) = node.open_http_tunnel(peer).await?;
     send.write_all(wire::HTTP_UPGRADE).await?;
     wire::write(

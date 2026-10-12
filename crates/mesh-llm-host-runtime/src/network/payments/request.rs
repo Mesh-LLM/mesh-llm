@@ -83,6 +83,7 @@ impl PaidRequest {
         })
     }
 
+    #[cfg(test)]
     pub fn validate_output_allowance(&self, tokens: u64) -> Result<()> {
         ensure!(
             tokens > 0 && tokens <= u64::from(self.max_tokens.unwrap_or(u32::MAX)),
