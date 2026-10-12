@@ -107,7 +107,10 @@ pub(crate) async fn start(
     let (pipe, mut output) = tokio::io::duplex(64 * 1024);
     let (ready, wait_ready) = tokio::sync::oneshot::channel();
     let (cancel, cancellation) = tokio::sync::watch::channel(false);
+    let strike_node = node.clone();
+    let payee = peer;
     tokio::spawn(async move {
+        let mut progress = ExchangeProgress::default();
         let result = exchange(
             Exchange {
                 service,
@@ -123,8 +126,12 @@ pub(crate) async fn start(
             &mut output,
             ready,
             cancellation,
+            &mut progress,
         )
         .await;
+        if result.is_err() && progress.paid_undelivered().await {
+            record_paid_undelivered(&strike_node, payee).await;
+        }
         if result.is_err() {
             tracing::warn!("metered inference interrupted; durable authorization retained");
         }
@@ -170,6 +177,46 @@ fn validate_admission(
     Ok(())
 }
 
+/// What a metered exchange had done when it ended, for the payee blocklist.
+#[derive(Default)]
+pub(super) struct ExchangeProgress {
+    deposit: Option<tokio::task::JoinHandle<Result<()>>>,
+    output_delivered: bool,
+    cancelled: bool,
+}
+
+impl ExchangeProgress {
+    /// The deposit is confirmed settled, the provider sent no output, and we
+    /// did not cancel: the provider took payment and delivered nothing. An
+    /// unsettled, failed or uncertain deposit is never proof of nondelivery.
+    pub(super) async fn paid_undelivered(&mut self) -> bool {
+        if self.output_delivered || self.cancelled {
+            return false;
+        }
+        match self.deposit.take() {
+            Some(payment) => matches!(payment.await, Ok(Ok(()))),
+            None => false,
+        }
+    }
+}
+
+async fn record_paid_undelivered(node: &Node, peer: iroh::EndpointId) {
+    let directory = node.config_state.lock().await.payment_directory();
+    let payee = peer.to_string();
+    let now = mesh_llm_payments::now_ms();
+    match tokio::task::spawn_blocking(move || {
+        crate::network::payments::strikes::record_strike(&directory, &payee, now)
+    })
+    .await
+    {
+        Ok(Ok(true)) => {
+            tracing::warn!("paid provider blocked after repeated paid-but-undelivered exchanges");
+        }
+        Ok(Ok(false)) => {}
+        _ => tracing::warn!("could not persist paid-but-undelivered strike"),
+    }
+}
+
 struct Exchange {
     service: Arc<PaymentService>,
     payer: RequestTerms,
@@ -187,6 +234,7 @@ async fn exchange(
     output: &mut DuplexStream,
     ready: tokio::sync::oneshot::Sender<()>,
     mut cancellation: tokio::sync::watch::Receiver<bool>,
+    progress: &mut ExchangeProgress,
 ) -> Result<()> {
     let Exchange {
         service,
@@ -220,7 +268,7 @@ async fn exchange(
         })
     });
     let _ = ready.send(());
-    let mut input_payment = input_payment;
+    progress.deposit = input_payment;
     let mut cancelled = false;
     let mut finalized = false;
     loop {
@@ -230,6 +278,7 @@ async fn exchange(
             frame = &mut reading => frame?,
             _ = cancellation.changed(), if !cancelled => {
                 cancelled = true;
+                progress.cancelled = true;
                 wire::write(&mut send, &Frame::Cancel {}).await?;
                 reading.await?
             }
@@ -237,12 +286,14 @@ async fn exchange(
         match frame {
             Frame::Output { bytes } => {
                 ensure!(!finalized, "output after settlement");
+                progress.output_delivered |= !bytes.is_empty();
                 let bytes = match usage_filter.as_mut() {
                     Some(filter) => filter.push(&bytes),
                     None => bytes,
                 };
                 if !cancelled && output.write_all(&bytes).await.is_err() {
                     cancelled = true;
+                    progress.cancelled = true;
                     wire::write(&mut send, &Frame::Cancel {}).await?;
                 }
             }
@@ -256,7 +307,7 @@ async fn exchange(
             }
             Frame::Complete {} => {
                 ensure!(finalized, "completion before settlement");
-                if let Some(payment) = input_payment.take() {
+                if let Some(payment) = progress.deposit.take() {
                     payment.await??;
                 }
                 service.metered_complete(&terms.id).await?;
@@ -425,5 +476,38 @@ pub(super) async fn recover(
             Frame::Pending {} => return Ok(()),
             _ => bail!("invalid metered recovery frame"),
         }
+    }
+}
+
+#[cfg(test)]
+mod strike_tests {
+    use super::ExchangeProgress;
+
+    fn progress(deposit: Option<anyhow::Result<()>>) -> ExchangeProgress {
+        ExchangeProgress {
+            deposit: deposit.map(|result| tokio::spawn(async move { result })),
+            ..ExchangeProgress::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn settled_deposit_without_output_is_a_strike() {
+        assert!(progress(Some(Ok(()))).paid_undelivered().await);
+    }
+
+    #[tokio::test]
+    async fn unsettled_or_absent_deposit_is_not_proof() {
+        assert!(!progress(Some(Err(anyhow::anyhow!("uncertain")))).paid_undelivered().await);
+        assert!(!progress(None).paid_undelivered().await);
+    }
+
+    #[tokio::test]
+    async fn cancellation_or_any_output_is_not_a_strike() {
+        let mut cancelled = progress(Some(Ok(())));
+        cancelled.cancelled = true;
+        assert!(!cancelled.paid_undelivered().await);
+        let mut delivered = progress(Some(Ok(())));
+        delivered.output_delivered = true;
+        assert!(!delivered.paid_undelivered().await);
     }
 }
