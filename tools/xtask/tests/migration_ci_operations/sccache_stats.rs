@@ -143,7 +143,7 @@ fn case(name: &str, sandbox: &Sandbox, args: &[&str]) -> Result<Observed, Box<dy
         github_output: text(&golden["github_output"]),
     };
     if expected.code != 0 {
-        let expected_code = if matches!(name, "rate_nan" | "rate_underscore") {
+        let expected_code = if matches!(name, "rate_nan") {
             2
         } else {
             expected.code
