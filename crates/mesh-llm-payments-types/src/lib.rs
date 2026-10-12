@@ -6,6 +6,7 @@
 #![forbid(unsafe_code)]
 
 pub mod lifetimes;
+pub mod metering;
 pub mod pricing;
 pub mod terms;
 pub mod wire;
