@@ -46,6 +46,25 @@ Outcomes:
   forfeiture, no credit; the reservation is held until a later finalize
   resolves it. A missing usage report is never treated as a zero bill.
 
+On buyer cancellation or a transport failure before successful backend EOF,
+only a validated SSE usage report followed by a complete `[DONE]` event is
+retained for billing. A provisional usage object, incomplete event or ordinary
+JSON prefix is not final evidence. Backends without `[DONE]` can still settle
+on successful EOF under the existing completion rules, but do not qualify for
+abort-path billing. Non-2xx headers on abort remain unknown; normal completed
+backend-error handling is unchanged.
+
+Billing uses backend-generated tokens, not proof that every token reached the
+buyer. A write failure on the terminal content/usage chunk can therefore record
+a bill for generated tokens the buyer did not receive. Recording that bill does
+not collect payment from a disconnected buyer. This narrow terminal-evidence
+rule does not resolve mid-generation unknown usage, indefinitely retained
+estimated exposure or trusted-buyer admission policy.
+
+Unused deposits become provider-local credit for the same buyer at the same
+provider, not a cash or Lightning refund. Credit is not portable and cannot help
+a buyer who never returns to that provider.
+
 Peer exposure is derived from durable rows, not stored, so restart needs no
 rebuild. Trust is an optimization only: losing it means the next request asks
 for a deposit again. A peer with an expired unpaid metered invoice loses trust.

@@ -17,6 +17,7 @@ pub struct ResponseUsage {
     usage: Option<MeteredUsage>,
     ended: bool,
     finished: bool,
+    stream_done: bool,
     unavailable: bool,
     backend_error: bool,
 }
@@ -145,6 +146,13 @@ impl ResponseUsage {
         let line = line.strip_suffix(b"\n").unwrap_or(line);
         let line = line.strip_suffix(b"\r").unwrap_or(line);
         if line.is_empty() {
+            ensure!(
+                !self.stream_done || self.data.is_empty(),
+                "SSE data after terminal marker"
+            );
+            if self.data == b"[DONE]" {
+                self.stream_done = true;
+            }
             if let Ok(value) = serde_json::from_slice(&self.data)
                 && let Some(usage) = MeteredUsage::from_response(&value)
             {
@@ -176,6 +184,17 @@ impl ResponseUsage {
             self.invalidate();
         } else {
             self.finished = true;
+        }
+    }
+
+    /// Evidence safe to retain when transport aborts before successful EOF.
+    /// A complete SSE usage object alone may be provisional: require the
+    /// backend's terminal marker. Never promote incomplete ordinary JSON.
+    pub fn interrupted_evidence(&self) -> ResponseEvidence {
+        if self.streaming && self.stream_done {
+            self.evidence()
+        } else {
+            ResponseEvidence::Missing
         }
     }
 
@@ -259,6 +278,40 @@ mod tests {
         usage.observe(b"data: {\"usage\":{\"prompt_tokens\":4,\"completion_tokens\":10}}\n\n");
         assert_eq!(usage.evidence(), ResponseEvidence::Missing);
     }
+    #[test]
+    fn abort_requires_complete_terminal_sse_not_provisional_or_truncated_events() {
+        let mut usage = ResponseUsage::default();
+        usage.observe(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\r\ndata: {\"usage\":{\"prompt_tokens\":4,\"completion_tokens\":9}}\n\n");
+        assert_eq!(usage.interrupted_evidence(), ResponseEvidence::Missing);
+        for byte in b"data: [DONE]\n" {
+            usage.observe(&[*byte]);
+            assert_eq!(usage.interrupted_evidence(), ResponseEvidence::Missing);
+        }
+        usage.observe(b"\n");
+        assert_eq!(
+            usage.interrupted_evidence(),
+            ResponseEvidence::Reported(MeteredUsage {
+                prompt_tokens: 4,
+                completion_tokens: 9,
+            })
+        );
+        usage.observe(b"data: {\"usage\":{\"prompt_tokens\":4,\"completion_tokens\":10}}\n\n");
+        assert_eq!(usage.interrupted_evidence(), ResponseEvidence::Missing);
+        // Malformed framing remains sticky even after the terminal event.
+        let mut chunked = ResponseUsage::default();
+        let body =
+            b"data: {\"usage\":{\"prompt_tokens\":4,\"completion_tokens\":9}}\n\ndata: [DONE]\n\n";
+        chunked.observe(format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n{:x}\r\n", body.len()).as_bytes());
+        chunked.observe(body);
+        chunked.observe(b"\r\n");
+        assert!(matches!(
+            chunked.interrupted_evidence(),
+            ResponseEvidence::Reported(_)
+        ));
+        chunked.observe(b"zz\r\n");
+        assert_eq!(chunked.interrupted_evidence(), ResponseEvidence::Missing);
+    }
+
     #[test]
     fn collector_failures_are_sticky_and_backend_errors_are_distinct() {
         let mut error = ResponseUsage::default();

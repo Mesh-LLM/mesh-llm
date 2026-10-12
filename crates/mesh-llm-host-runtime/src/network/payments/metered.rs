@@ -260,7 +260,7 @@ async fn run_backend(
     reader: &mut (impl AsyncRead + Unpin),
     writer: &mut (impl AsyncWrite + Unpin),
 ) -> MeteredOutcome {
-    let mut backend = match session
+    let backend = match session
         .backend
         .connect(&session.request, &session.terms.id)
         .await
@@ -268,6 +268,15 @@ async fn run_backend(
         Ok(backend) => backend,
         Err(failure) => return failure.outcome(),
     };
+    forward_backend(backend, reader, writer).await
+}
+
+/// Observe the backend independently of buyer transport completion.
+async fn forward_backend(
+    mut backend: impl AsyncRead + Unpin,
+    reader: &mut (impl AsyncRead + Unpin),
+    writer: &mut (impl AsyncWrite + Unpin),
+) -> MeteredOutcome {
     let mut usage = ResponseUsage::default();
     let mut buffer = [0_u8; 16 * 1024];
     let cancelled = wait_for_cancel_or_invalid_frame(reader);
@@ -275,7 +284,7 @@ async fn run_backend(
     loop {
         let read = tokio::select! {
             read = tokio::time::timeout(Duration::from_secs(300), backend.read(&mut buffer)) => read,
-            _ = &mut cancelled => return MeteredOutcome::UsageMissing,
+            _ = &mut cancelled => return evidence_outcome(usage.interrupted_evidence()),
         };
         match read {
             Ok(Ok(0)) => break,
@@ -290,14 +299,18 @@ async fn run_backend(
                 .await
                 .is_err()
                 {
-                    return MeteredOutcome::UsageMissing;
+                    return evidence_outcome(usage.interrupted_evidence());
                 }
             }
-            _ => return MeteredOutcome::UsageMissing,
+            _ => return evidence_outcome(usage.interrupted_evidence()),
         }
     }
     usage.finish();
-    match usage.evidence() {
+    evidence_outcome(usage.evidence())
+}
+
+fn evidence_outcome(evidence: ResponseEvidence) -> MeteredOutcome {
+    match evidence {
         ResponseEvidence::Reported(usage) => MeteredOutcome::Usage(usage),
         ResponseEvidence::BackendError => MeteredOutcome::BackendError,
         ResponseEvidence::Missing => MeteredOutcome::UsageMissing,
@@ -421,3 +434,7 @@ mod tests {
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[path = "tests/metered_abort.rs"]
+mod abort_tests;
