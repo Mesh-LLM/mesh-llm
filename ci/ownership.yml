@@ -61,7 +61,6 @@
       "patterns": [
         ".agents/**",
         ".cargo/**",
-        ".oss-scanner/**",
         ".dockerignore",
         ".gitignore",
         ".gitattributes",
