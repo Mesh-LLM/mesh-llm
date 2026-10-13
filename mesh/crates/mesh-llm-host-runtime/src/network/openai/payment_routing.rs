@@ -9,7 +9,6 @@ use mesh_llm_payments_types::contract::{RoutingBudgetRequest, RoutingBudgetRespo
 pub(super) async fn rank(
     node: &Node,
     model: &str,
-    input_estimate: u64,
     max_output: u64,
     candidates: &mut RankedCandidates<InferenceTarget>,
     request_body: Option<&serde_json::Value>,
@@ -45,10 +44,12 @@ pub(super) async fn rank(
             InferenceTarget::Local(_) => Some((0, 0)),
             InferenceTarget::Remote(peer) => match prices.get(peer) {
                 Some(price) => {
-                    let input_amount = price.input_charge(input_estimate).ok()?;
-                    let cost = input_amount.checked_add(price.output_charge(max_output).ok()?)?;
-                    let total = price.request_cap_msat(input_amount, max_output).ok()?;
-                    (intent.permits(price, total) && total <= available).then_some((1, cost))
+                    // No prompt estimate: order by the output allowance's
+                    // cost, input rate breaking ties.
+                    let cost = price.output_charge(max_output).ok()?;
+                    let total = price.request_cap_msat(0, max_output).ok()?;
+                    (intent.permits(price, total) && total <= available)
+                        .then_some((1, cost.saturating_add(price.input_msat_per_million)))
                 }
                 None => Some((2, 0)),
             },
@@ -155,7 +156,6 @@ pub(super) async fn rank_remote_hosts(
     let payment_ranked = rank(
         node,
         model,
-        (request.body_len_bytes as u64).div_ceil(4),
         u64::from(request.completion_tokens.unwrap_or(256)),
         &mut ranked,
         request.body_json.as_ref(),
@@ -179,7 +179,6 @@ pub(super) async fn rank_remote_hosts(
 pub(super) async fn rank(
     _node: &Node,
     _model: &str,
-    _input_estimate: u64,
     _max_output: u64,
     _candidates: &mut RankedCandidates<InferenceTarget>,
     _request_body: Option<&serde_json::Value>,
@@ -271,11 +270,7 @@ mod tests {
         assert_eq!(hosts, vec![free]);
         assert_eq!(equivalent_hosts, 1);
         // Only free targets remain, so the route is left unranked by price.
-        assert!(
-            !rank(&node, "test", 1, 1, &mut candidates, None)
-                .await
-                .unwrap()
-        );
+        assert!(!rank(&node, "test", 1, &mut candidates, None).await.unwrap());
         assert_eq!(candidates.ordered, vec![InferenceTarget::Remote(free)]);
         assert_eq!(candidates.equivalent_prefix, 1);
         // The free route keeps its context/throughput tiering: a tied run of
@@ -292,7 +287,7 @@ mod tests {
             ],
             equivalent_prefix: 3,
         };
-        assert!(!rank(&node, "test", 1, 1, &mut tiered, None).await.unwrap());
+        assert!(!rank(&node, "test", 1, &mut tiered, None).await.unwrap());
         assert_eq!(
             tiered.ordered,
             vec![
@@ -306,16 +301,12 @@ mod tests {
             ordered: vec![InferenceTarget::Remote(seller.id())],
             equivalent_prefix: 1,
         };
-        assert!(
-            rank(&node, "test", 1, 1, &mut paid_only, None)
-                .await
-                .is_err()
-        );
+        assert!(rank(&node, "test", 1, &mut paid_only, None).await.is_err());
         let mut empty = RankedCandidates {
             ordered: vec![],
             equivalent_prefix: 0,
         };
-        assert!(!rank(&node, "test", 1, 1, &mut empty, None).await.unwrap());
+        assert!(!rank(&node, "test", 1, &mut empty, None).await.unwrap());
         assert!(!service.has_wallet());
         assert!(service.ledger.requests()?.is_empty());
         assert!(matches!(

@@ -59,7 +59,6 @@ async fn recover_request(
         id: terms.id.clone(),
         model: terms.model.clone(),
         pricing: terms.pricing.clone(),
-        prompt_estimate: terms.input_tokens,
         deposit_msat: 0,
     };
     let mut settled = false;

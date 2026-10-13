@@ -13,7 +13,6 @@ fn terms(id: &str, cap: u64) -> RequestTerms {
             input_msat_per_million: 1000,
             output_msat_per_million: 1000,
         },
-        input_tokens: 10,
         max_output_tokens: 10,
         max_total_msat: cap,
         expires_at_ms: u64::MAX,

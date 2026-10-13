@@ -26,7 +26,7 @@ impl PaymentService {
     /// Admit one request at the seller's current prices. Buyers at the strike
     /// limit are refused; buyers in good standing are admitted without a
     /// deposit and dispatch is claimed here; everyone else is quoted a deposit
-    /// of 0.3 x the estimated input cost. Replaying the same terms before
+    /// of a flat 1 sat. Replaying the same terms before
     /// dispatch returns the same answer; a request already dispatched or
     /// finalized is reported as replayed: never a second dispatch.
     pub async fn serve_admit(&self, request: ServeAdmitRequest) -> Result<ServeAdmitResponse> {
@@ -35,7 +35,6 @@ impl PaymentService {
             buyer,
             model,
             pricing,
-            estimate,
         } = request;
         if let Some(owner) = self.ledger.metered_owner(&request_id)? {
             ensure!(owner == buyer, "request belongs to another buyer");
@@ -58,7 +57,6 @@ impl PaymentService {
             id: &request_id,
             peer: &buyer,
             pricing: &pricing,
-            estimated_input_tokens: estimate.input_tokens,
             require_deposit,
         })?;
         if deposit == 0 {

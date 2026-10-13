@@ -5,7 +5,7 @@
 //! lets the router reach the next paid seller.
 use super::*;
 use mesh_llm_payments_types::metered_wire::AdmissionTerms;
-use mesh_llm_payments_types::metering::{DEPOSIT_MSAT, PromptEstimate};
+use mesh_llm_payments_types::metering::DEPOSIT_MSAT;
 
 /// How the fake seller ends a handed-off exchange.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -273,8 +273,7 @@ async fn fake_seller(
             "refusing seller must be attempted first"
         );
     }
-    let request = crate::network::payments::request::PaidRequest::parse(&http)?;
-    let estimate = PromptEstimate::from_request(&request.body)?;
+    crate::network::payments::request::PaidRequest::parse(&http)?;
     let deposit = DEPOSIT_MSAT;
     let wallet = TestWallet {
         owner: 1,
@@ -290,7 +289,6 @@ async fn fake_seller(
                 id: id.clone(),
                 model: "test".into(),
                 pricing,
-                prompt_estimate: estimate.input_tokens,
                 deposit_msat: deposit,
             },
             invoice: Some(invoice),

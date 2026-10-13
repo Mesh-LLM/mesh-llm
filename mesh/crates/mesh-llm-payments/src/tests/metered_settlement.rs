@@ -41,19 +41,18 @@ fn record(ledger: &Ledger, id: &str, segment: u32, n: u8, amount: u64, paid: boo
     }
 }
 
-fn req(id: &str, input: u64, deposit: bool) -> MeteredRequest<'_> {
+fn req(id: &str, deposit: bool) -> MeteredRequest<'_> {
     static RATES: std::sync::OnceLock<Pricing> = std::sync::OnceLock::new();
     MeteredRequest {
         id,
         peer: "peer",
         pricing: RATES.get_or_init(rates),
-        estimated_input_tokens: input,
         require_deposit: deposit,
     }
 }
 
-fn admit(l: &Ledger, id: &str, input: u64, deposit: bool) -> anyhow::Result<u64> {
-    l.metered_admit(&req(id, input, deposit))
+fn admit(l: &Ledger, id: &str, deposit: bool) -> anyhow::Result<u64> {
+    l.metered_admit(&req(id, deposit))
 }
 
 fn open() -> (tempfile::TempDir, Ledger) {
@@ -65,13 +64,12 @@ fn open() -> (tempfile::TempDir, Ledger) {
 #[test]
 fn deposit_is_flat_and_admission_is_idempotent() {
     let (_d, l) = open();
-    assert_eq!(admit(&l, "a", 1000, true).unwrap(), 1000);
+    assert_eq!(admit(&l, "a", true).unwrap(), 1000);
     // Idempotent replay; differing terms rejected.
-    assert_eq!(admit(&l, "a", 1000, true).unwrap(), 1000);
-    assert!(admit(&l, "a", 1001, true).is_err());
-    assert!(admit(&l, "a", 1000, false).is_err());
+    assert_eq!(admit(&l, "a", true).unwrap(), 1000);
+    assert!(admit(&l, "a", false).is_err());
     // Trusted peers owe no deposit; no cap or reservation is involved.
-    assert_eq!(admit(&l, "b", 1_000_000, false).unwrap(), 0);
+    assert_eq!(admit(&l, "b", false).unwrap(), 0);
     assert_eq!(
         l.metered_settlement("b").unwrap().status,
         MeteredStatus::Admitted
@@ -83,7 +81,7 @@ fn usage_bills_input_plus_output_minus_paid_deposit_until_final_paid() {
     let dir = tempfile::tempdir().unwrap();
     {
         let l = Ledger::open(dir.path()).unwrap();
-        admit(&l, "r", 1000, true).unwrap();
+        admit(&l, "r", true).unwrap();
         record(&l, "r", 0, 1, 1000, true);
         let s = l.metered_finalize("r", usage(900, 200)).unwrap();
         assert_eq!(s.status, MeteredStatus::Billed);
@@ -109,7 +107,7 @@ fn usage_bills_input_plus_output_minus_paid_deposit_until_final_paid() {
 #[test]
 fn covering_deposit_means_no_final_invoice_and_no_refund() {
     let (_d, l) = open();
-    admit(&l, "a", 1000, true).unwrap();
+    admit(&l, "a", true).unwrap();
     record(&l, "a", 0, 1, 1000, true);
     let s = l.metered_finalize("a", usage(100, 50)).unwrap();
     assert_eq!(
@@ -117,7 +115,7 @@ fn covering_deposit_means_no_final_invoice_and_no_refund() {
         (MeteredStatus::Settled, Some(1500), 1000, 0)
     );
     // Nothing is carried to the next request.
-    admit(&l, "b", 10, false).unwrap();
+    admit(&l, "b", false).unwrap();
     let s = l.metered_finalize("b", usage(100, 100)).unwrap();
     assert_eq!((s.deposit_paid_msat, s.remaining_msat), (0, 2000));
 }
@@ -125,7 +123,7 @@ fn covering_deposit_means_no_final_invoice_and_no_refund() {
 #[test]
 fn unpaid_deposit_never_reduces_the_bill() {
     let (_d, l) = open();
-    admit(&l, "u", 1000, true).unwrap();
+    admit(&l, "u", true).unwrap();
     record(&l, "u", 0, 1, 1000, false);
     let s = l.metered_finalize("u", usage(900, 200)).unwrap();
     assert_eq!((s.deposit_paid_msat, s.remaining_msat), (0, 11000));
@@ -138,7 +136,7 @@ fn unpaid_deposit_never_reduces_the_bill() {
 #[test]
 fn abandoned_requests_have_no_bill_no_debt_and_keep_a_received_deposit() {
     let (_d, l) = open();
-    admit(&l, "e", 1000, true).unwrap();
+    admit(&l, "e", true).unwrap();
     record(&l, "e", 0, 1, 1000, true);
     let s = l.metered_finalize("e", MeteredOutcome::Abandoned).unwrap();
     assert_eq!(
@@ -160,40 +158,38 @@ fn three_issued_unpaid_final_invoices_block_admission() {
     let (_d, l) = open();
     for n in 0..STRIKE_LIMIT {
         let id = format!("s{n}");
-        admit(&l, &id, 10, false).unwrap();
+        admit(&l, &id, false).unwrap();
         l.metered_finalize(&id, usage(100, 100)).unwrap();
         // A billed remainder without an issued invoice is not a strike.
         assert_eq!(l.metered_unpaid_finals("peer").unwrap(), n);
         record(&l, &id, 1, n as u8 + 1, 2000, false);
     }
     assert_eq!(l.metered_unpaid_finals("peer").unwrap(), STRIKE_LIMIT);
-    assert!(admit(&l, "blocked", 10, true).is_err());
+    assert!(admit(&l, "blocked", true).is_err());
     // Deposits and abandoned requests never count; paying one final unblocks.
     assert_eq!(l.metered_unpaid_finals("other").unwrap(), 0);
     l.mark_metered_received(&invoice(1, 20).payment_hash)
         .unwrap();
     assert_eq!(l.metered_unpaid_finals("peer").unwrap(), STRIKE_LIMIT - 1);
-    admit(&l, "again", 10, true).unwrap();
+    admit(&l, "again", true).unwrap();
 }
 
 #[test]
-fn admission_identity_is_exact_token_terms_not_rounded_amounts() {
+fn admission_identity_is_the_exact_terms() {
     let (_d, l) = open();
     let low = Pricing {
         input_msat_per_million: 1,
         output_msat_per_million: 1,
     };
-    let mk = |input| MeteredRequest {
+    let mk = |require_deposit| MeteredRequest {
         id: "low",
         peer: "peer",
         pricing: &low,
-        estimated_input_tokens: input,
-        require_deposit: true,
+        require_deposit,
     };
-    let a = l.metered_admit(&mk(10)).unwrap();
-    // Same rounded charge, different token terms.
-    assert!(l.metered_admit(&mk(11)).is_err());
-    assert_eq!(l.metered_admit(&mk(10)).unwrap(), a);
+    let a = l.metered_admit(&mk(true)).unwrap();
+    assert!(l.metered_admit(&mk(false)).is_err());
+    assert_eq!(l.metered_admit(&mk(true)).unwrap(), a);
 }
 
 #[test]
@@ -201,13 +197,13 @@ fn dispatch_claim_is_once_only_and_survives_restart() {
     let dir = tempfile::tempdir().unwrap();
     {
         let l = Ledger::open(dir.path()).unwrap();
-        admit(&l, "c", 1000, false).unwrap();
+        admit(&l, "c", false).unwrap();
         assert!(l.metered_claim_dispatch("c", "other").is_err());
         assert!(l.metered_claim_dispatch("c", "peer").unwrap());
         // Admission replay does not re-authorize dispatch.
-        admit(&l, "c", 1000, false).unwrap();
+        admit(&l, "c", false).unwrap();
         assert!(!l.metered_claim_dispatch("c", "peer").unwrap());
-        admit(&l, "n", 1000, false).unwrap();
+        admit(&l, "n", false).unwrap();
         l.metered_finalize("n", MeteredOutcome::Abandoned).unwrap();
         assert!(l.metered_claim_dispatch("n", "peer").is_err());
         assert!(l.metered_claim_dispatch("zz", "peer").is_err());
@@ -235,7 +231,7 @@ fn try_record(l: &Ledger, id: &str, segment: u32, n: u8, amount: u64) -> anyhow:
 #[test]
 fn metered_receivables_must_match_current_state() {
     let (_d, l) = open();
-    admit(&l, "s", 1000, true).unwrap();
+    admit(&l, "s", true).unwrap();
     // Deposit must equal the admitted deposit.
     assert!(try_record(&l, "s", 0, 20, 999).is_err());
     assert!(
@@ -250,7 +246,7 @@ fn metered_receivables_must_match_current_state() {
     assert!(try_record(&l, "s", 1, 23, 11000).is_err());
     try_record(&l, "s", 1, 23, 10000).unwrap();
     // Abandoned and no-deposit rows cannot carry invoices.
-    admit(&l, "n", 1000, false).unwrap();
+    admit(&l, "n", false).unwrap();
     assert!(try_record(&l, "n", 0, 24, 0).is_err());
     l.metered_finalize("n", MeteredOutcome::Abandoned).unwrap();
     assert!(try_record(&l, "n", 1, 25, 1).is_err());
@@ -262,11 +258,11 @@ fn startup_abandons_interrupted_rows() {
     let dir = tempfile::tempdir().unwrap();
     {
         let l = Ledger::open(dir.path()).unwrap();
-        admit(&l, "d", 1000, false).unwrap();
+        admit(&l, "d", false).unwrap();
         assert!(l.metered_claim_dispatch("d", "peer").unwrap());
-        admit(&l, "p", 1000, true).unwrap();
+        admit(&l, "p", true).unwrap();
         record(&l, "p", 0, 31, 1000, true);
-        admit(&l, "b", 1000, false).unwrap();
+        admit(&l, "b", false).unwrap();
         l.metered_finalize("b", usage(100, 100)).unwrap();
     }
     let l = Ledger::open(dir.path()).unwrap();
@@ -290,11 +286,11 @@ fn forgiving_a_peer_clears_its_strikes_but_a_late_payment_is_still_recorded() {
     let (_d, l) = open();
     for n in 0..STRIKE_LIMIT {
         let id = format!("s{n}");
-        admit(&l, &id, 10, false).unwrap();
+        admit(&l, &id, false).unwrap();
         l.metered_finalize(&id, usage(100, 100)).unwrap();
         record(&l, &id, 1, n as u8 + 1, 2000, false);
     }
-    assert!(admit(&l, "blocked", 10, true).is_err());
+    assert!(admit(&l, "blocked", true).is_err());
     let listed = l.blocked_peers().unwrap();
     assert_eq!(listed.len(), 1);
     assert!(listed[0].blocked);
@@ -312,7 +308,7 @@ fn forgiving_a_peer_clears_its_strikes_but_a_late_payment_is_still_recorded() {
             .unpaid_invoices
             .is_empty()
     );
-    admit(&l, "again", 10, true).unwrap();
+    admit(&l, "again", true).unwrap();
     // Forgiven is not paid: the bill stays billed until a receipt turns up.
     assert_eq!(
         l.metered_settlement("s0").unwrap().status,

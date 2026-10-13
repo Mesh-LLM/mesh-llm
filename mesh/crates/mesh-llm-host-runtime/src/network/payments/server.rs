@@ -14,16 +14,13 @@ use mesh_llm_payments_types::contract::{
     ServeRecoverResponse, ServeSettleRequest, SettledReceived, ops,
 };
 use mesh_llm_payments_types::metered_wire::{self as wire, AdmissionTerms, Frame};
-use mesh_llm_payments_types::metering::{MeteredUsage, PromptEstimate};
+use mesh_llm_payments_types::metering::MeteredUsage;
 use mesh_llm_payments_types::response_usage::{ResponseEvidence, ResponseUsage};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite};
 
 use super::{backend::Backend, client::Payments, request::PaidRequest};
 use crate::{inference::election::ModelTargets, mesh::Node};
 use exchange_events::DeliveredCapture;
-
-/// Seller-side bound on the admitted prompt estimate.
-const MAX_PROMPT_ESTIMATE: u64 = 131_072;
 
 /// How long the backend may go without producing a byte.
 const BACKEND_STALL: Duration = Duration::from_secs(300);
@@ -126,11 +123,6 @@ async fn admit(
     uuid::Uuid::parse_str(&id).context("invalid request ID")?;
     let mut request = PaidRequest::parse(&http)?;
     ensure!(request.model == model, "model mismatch");
-    let estimate = PromptEstimate::from_request(&request.body)?;
-    ensure!(
-        !estimate.has_media && estimate.input_tokens <= MAX_PROMPT_ESTIMATE,
-        "unsupported or oversized prompt"
-    );
     // Prices and offers use the public model ID; the local backend is
     // registered, and must be addressed, under its internal name.
     let backend_model =
@@ -145,7 +137,6 @@ async fn admit(
                 buyer: peer.clone(),
                 model: model.clone(),
                 pricing: pricing.clone(),
-                estimate,
             },
         )
         .await?;
@@ -164,7 +155,6 @@ async fn admit(
         id,
         model,
         pricing,
-        prompt_estimate: estimate.input_tokens,
         deposit_msat,
     };
     let (lifecycle, exchange_id) = provider_observers(node).await;

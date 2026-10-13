@@ -19,8 +19,8 @@ pub const HTTP_UPGRADE: &[u8] =
     b"POST /mesh/payment/v3 HTTP/1.1\r\nHost: mesh\r\nContent-Length: 0\r\n\r\n";
 
 /// Admission terms are agreed before any backend work. The deposit is a
-/// share of the *estimated* input cost; it is applied against the final bill,
-/// never an extra fee, a reservation or an exact input-token claim. Output is
+/// flat 1 sat proving the buyer can pay; it is applied against the final bill,
+/// never an extra fee or a reservation. Output is
 /// always post-paid from the backend's reported usage.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -28,7 +28,6 @@ pub struct AdmissionTerms {
     pub id: String,
     pub model: String,
     pub pricing: Pricing,
-    pub prompt_estimate: u64,
     pub deposit_msat: u64,
 }
 

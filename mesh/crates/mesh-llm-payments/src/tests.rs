@@ -58,7 +58,6 @@ fn terms(id: &str, cap: u64) -> RequestTerms {
             input_msat_per_million: 1000,
             output_msat_per_million: 1000,
         },
-        input_tokens: 100,
         max_output_tokens: 100,
         max_total_msat: cap,
         expires_at_ms: crate::now_ms() + 3_600_000,

@@ -58,7 +58,7 @@ async fn assert_seller_answers_recovery_from_its_ledger(pair: &Pair, id: &str) -
     let ServeRecoverResponse::Billed { bill } = recovered else {
         panic!("expected a bill, got {recovered:?}");
     };
-    assert_eq!(bill.bill_msat, 43);
+    assert_eq!(bill.bill_msat, 4300);
     assert!(bill.settled);
     let unknown = payments
         .call::<_, ServeRecoverResponse>(
@@ -98,7 +98,7 @@ async fn assert_buyer_replays_a_settled_request(pair: &Pair, id: &str) -> Result
     else {
         panic!("expected settlement replay");
     };
-    assert_eq!((request_id.as_str(), bill_msat), (id, Some(43)));
+    assert_eq!((request_id.as_str(), bill_msat), (id, Some(4300)));
     assert!(matches!(wire::read(&mut recv).await?, Frame::Complete {}));
     let _: mesh_llm_payments_types::contract::Empty = payments
         .call(ops::FINISH, &IdRequest { id: id.to_owned() })

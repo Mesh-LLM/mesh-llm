@@ -32,9 +32,7 @@ async fn fake_seller(deliver: bool) -> Result<()> {
         else {
             anyhow::bail!("request expected");
         };
-        let request = crate::network::payments::request::PaidRequest::parse(&http)?;
-        let estimate =
-            mesh_llm_payments_types::metering::PromptEstimate::from_request(&request.body)?;
+        crate::network::payments::request::PaidRequest::parse(&http)?;
         let deposit = DEPOSIT_MSAT;
         let wallet = TestWallet {
             owner: 1,
@@ -49,7 +47,6 @@ async fn fake_seller(deliver: bool) -> Result<()> {
                     id: id.clone(),
                     model: "test".into(),
                     pricing,
-                    prompt_estimate: estimate.input_tokens,
                     deposit_msat: deposit,
                 },
                 invoice: Some(invoice),

@@ -26,14 +26,12 @@ allowance terms, delivery watermarks, receivables or refunds.
    ID, the exact model, the advertised pricing and the ordinary OpenAI HTTP
    request. The payer's own spending cap is local policy and never leaves the
    payer. There is no quote round trip.
-2. The provider estimates input tokens from the request content (UTF-8
-   bytes / 4 plus four tokens per chat message, tools and function definitions
-   included; an admission hint, not a bill), resolves the backend that serves
-   the model, and asks the payments engine to admit the request at its current
+2. The provider resolves the backend that serves the model (there is no
+   prompt-token estimate; only backend-reported usage is billed), and asks the payments engine to admit the request at its current
    prices. Admission is refused only when the peer already has three distinct
    issued and unpaid final invoices.
 3. The provider replies `Admission` with frozen `AdmissionTerms` (`id`,
-   `model`, `pricing`, `prompt_estimate`, `deposit_msat`). Unless the peer is
+   `model`, `pricing`, `deposit_msat`). Unless the peer is
    in the provider's trust cache, the terms carry a deposit invoice for a
    flat 1 sat (1000 msat). It only proves the buyer can pay before backend
    work starts. The deposit is applied against the final bill; it is not an
@@ -101,8 +99,7 @@ doubles as the bearer recovery capability and is never published as evidence.
 Prices and counts are the provider's claims. Proof of correct inference,
 refunds and encrypted output are not implemented. The supported endpoints are
 `/v1/chat/completions` and `/v1/completions`, one completion per request
-(`n` must be 1), POST, at most 1 MiB. Prompts with media parts are refused on
-both sides, and the seller refuses estimates above 131,072 tokens. A paid
+(`n` must be 1), POST, at most 1 MiB. A paid
 request without `max_tokens` / `max_completion_tokens` is given the default
 output allowance of 16,384 tokens, which the payer inserts into the request it
 forwards so the backend is bounded by the same limit the cap was computed
@@ -414,11 +411,10 @@ small requests at those rates bill a few msat, which the payment floor waives.
 
 The payer reserves a routing-fee allowance for each inference payment of
 `max(3000 msat, 1% of the amount)` (`pricing::fee_allowance_msat`). Its local
-cap for a request is `request_cap_msat(input, output)`: the estimated input
-charge at twice the prompt estimate (headroom for tokenizers denser than
-bytes / 4) plus the output charge for the request's output allowance, each
-with its fee allowance. The cap must fit the effective spending policy and
-is reserved against the daily budget when the admission is accepted; the seller never sees it. At settlement the recomputed bill must
+cap for a request is the effective policy's per-request `max_total_msat`,
+bounded by what remains of today's budget; there is no prompt estimate and no
+wallet-balance check before the request. The seller's rates must fit the
+policy's rate caps. The cap is reserved against the daily budget when the admission is accepted; the seller never sees it. At settlement the recomputed bill must
 not exceed the cap. The wallet is told `amount + fee_allowance` as the cap for
 each payment. A wallet that can bound fees must not submit a payment whose
 amount plus fees exceeds it; Lexe preflights a route and submits that same
@@ -483,7 +479,7 @@ budget. The field is stripped before backend or remote forwarding. Existing
 remote-ingress restrictions remain authoritative.
 
 Routing prefers local inference, eligible paid peers, then free peers. Paid peers
-are ranked by estimated input plus maximum output cost for the exact model.
+are ranked by maximum output cost for the exact model, input rate breaking ties.
 Existing capability, health and context checks still apply. Equal-price choices
 retain cache/observed-performance preferences. No universal throughput floor is
 introduced. Paid providers on the local payee blocklist are dropped before
@@ -809,7 +805,7 @@ emits no events.
 
 The terms digest is lowercase SHA-256 over checked JCS JSON using the existing
 host `request_body_digest` helper, applied to the object containing exactly
-`exchange_id`, `model`, `pricing`, `prompt_estimate`, and `deposit_msat`: the
+`exchange_id`, `model`, `pricing`, and `deposit_msat`: the
 public admission terms. The recovery ID, the payer's cap, the output allowance
 and the local peer are excluded. Event refs use the same construction over the
 event object with `event_ref` set to `""`. Integers outside the helper's safe

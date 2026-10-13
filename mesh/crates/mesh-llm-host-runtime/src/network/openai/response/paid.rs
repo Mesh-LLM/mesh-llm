@@ -6,10 +6,12 @@
 
 mod exchange;
 
-use anyhow::{Context, Result, bail, ensure};
-use mesh_llm_payments_types::contract::{CancelRequest, CancelStage, Empty, ops};
+use anyhow::{Result, bail, ensure};
+use mesh_llm_payments_types::contract::{
+    CancelRequest, CancelStage, Empty, RoutingBudgetRequest, RoutingBudgetResponse, ops,
+};
 use mesh_llm_payments_types::metered_wire::{self as wire, AdmissionTerms, Frame};
-use mesh_llm_payments_types::metering::{DEPOSIT_MSAT, PromptEstimate};
+use mesh_llm_payments_types::metering::DEPOSIT_MSAT;
 use mesh_llm_payments_types::{RequestTerms, intent::PaymentIntent, pricing::Pricing};
 use tokio::io::{AsyncRead, AsyncWriteExt, DuplexStream};
 
@@ -158,10 +160,6 @@ impl std::error::Error for PrePaymentTransportFailure {}
 /// answer has not charged anything yet.
 const ADMISSION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
-/// Local reservation headroom over the prompt estimate: the estimate is
-/// bytes / 4, and real tokenizers can count denser text higher.
-const ESTIMATE_HEADROOM: u64 = 2;
-
 /// How long an accepted admission stays approved in the ledger.
 const AUTHORIZATION_LIFETIME_MS: u64 = 3_600_000;
 
@@ -173,10 +171,8 @@ pub(crate) async fn start(
     exchange_id: Option<&str>,
 ) -> Result<StartedExchange> {
     let request = PaidRequest::parse(raw)?;
-    let estimate = PromptEstimate::from_request(&request.body)?;
-    ensure!(!estimate.has_media, "paid media is unsupported");
     let payments = Payments::for_node(node).await?;
-    let cap = local_cap(&payments, &request, &price, &estimate).await?;
+    let cap = local_cap(&payments, &request, &price).await?;
     let id = uuid::Uuid::new_v4().to_string();
     let (mut send, mut recv) = node
         .open_http_tunnel(peer)
@@ -200,7 +196,7 @@ pub(crate) async fn start(
     let initial = tokio::time::timeout(ADMISSION_TIMEOUT, read_admission(&mut recv))
         .await
         .map_err(|_| PrePaymentTransportFailure)??;
-    let (terms, deposit) = match validate_admission(initial, &request, &price, &estimate, &id) {
+    let (terms, deposit) = match validate_admission(initial, &request, &price, &id) {
         Ok(admission) => admission,
         Err(error) => {
             cancel(&payments, &id, CancelStage::Unstarted).await;
@@ -222,7 +218,6 @@ pub(crate) async fn start(
             payee: deposit.as_ref().map(|invoice| invoice.payee.clone()),
             model: terms.model.clone(),
             pricing: price,
-            input_tokens: terms.prompt_estimate,
             max_output_tokens: u64::from(request.max_tokens),
             max_total_msat: cap,
             expires_at_ms: mesh_llm_wallet::now_ms() + AUTHORIZATION_LIFETIME_MS,
@@ -261,29 +256,30 @@ pub(crate) async fn start(
     Ok((pipe, wait_ready, cancel))
 }
 
-/// The buyer's own spending cap for this request: what the estimated prompt
-/// (with headroom) and the output allowance would cost at `price`, within
-/// the effective policy. Reserved locally; the seller never sees it.
-async fn local_cap(
-    payments: &Payments,
-    request: &PaidRequest,
-    price: &Pricing,
-    estimate: &PromptEstimate,
-) -> Result<u64> {
-    let intent = effective_intent(payments, request).await?;
-    let PaymentIntent::AllowPaid { max_total_msat, .. } = intent else {
+/// The buyer's own spending cap for this request: the effective policy's
+/// per-request total, bounded by what is left of today's budget. No prompt
+/// estimate: the bill is whatever the backend reports, refused only if it
+/// exceeds this cap. Reserved locally; the seller never sees it.
+async fn local_cap(payments: &Payments, request: &PaidRequest, price: &Pricing) -> Result<u64> {
+    let budget: RoutingBudgetResponse = payments
+        .call(
+            ops::ROUTING_BUDGET,
+            &RoutingBudgetRequest {
+                request_intent: request
+                    .intent
+                    .as_ref()
+                    .map(serde_json::to_value)
+                    .transpose()?,
+            },
+        )
+        .await?;
+    let PaymentIntent::AllowPaid { max_total_msat, .. } = budget.intent else {
         bail!("paid inference is excluded by spending policy or request restriction");
     };
-    let input = price.input_charge(
-        estimate
-            .input_tokens
-            .checked_mul(ESTIMATE_HEADROOM)
-            .context("estimate overflow")?,
-    )?;
-    let cap = price.request_cap_msat(input, u64::from(request.max_tokens))?;
+    let cap = max_total_msat.min(budget.available_msat);
     ensure!(
-        intent.permits(price, cap) && cap <= max_total_msat,
-        "estimated cost exceeds the spending cap"
+        cap > 0 && budget.intent.permits(price, cap),
+        "seller prices or remaining budget exceed the spending policy"
     );
     Ok(cap)
 }
@@ -310,17 +306,13 @@ fn validate_admission(
     frame: Frame,
     request: &PaidRequest,
     price: &Pricing,
-    estimate: &PromptEstimate,
     id: &str,
 ) -> Result<(AdmissionTerms, Option<mesh_llm_wallet::invoice::Invoice>)> {
     let Frame::Admission { terms, invoice } = frame else {
         bail!("expected admission");
     };
     ensure!(
-        terms.id == id
-            && terms.model == request.model
-            && terms.pricing == *price
-            && terms.prompt_estimate == estimate.input_tokens,
+        terms.id == id && terms.model == request.model && terms.pricing == *price,
         "admission terms mismatch"
     );
     ensure!(
@@ -401,17 +393,6 @@ async fn record_paid_undelivered(node: &Node, peer: iroh::EndpointId) {
         Ok(Ok(false)) => {}
         _ => tracing::warn!("could not persist paid-but-undelivered strike"),
     }
-}
-
-pub(super) async fn effective_intent(
-    payments: &Payments,
-    request: &PaidRequest,
-) -> Result<PaymentIntent> {
-    let profile: PaymentIntent = payments.call(ops::PAYMENT_INTENT, &Empty {}).await?;
-    Ok(request
-        .intent
-        .as_ref()
-        .map_or_else(|| profile.clone(), |request| profile.restrict(request)))
 }
 
 #[cfg(test)]

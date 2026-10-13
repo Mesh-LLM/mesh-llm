@@ -26,7 +26,6 @@ pub(super) fn unpaid_final(
         id,
         peer,
         pricing: &pricing(),
-        estimated_input_tokens: 10,
         require_deposit: false,
     })?;
     service.ledger.metered_finalize(
@@ -74,7 +73,6 @@ async fn blocked_peers_are_listed_with_their_identifier_and_unblocked_by_prefix(
                 id: "refused",
                 peer: PEER,
                 pricing: &pricing(),
-                estimated_input_tokens: 10,
                 require_deposit: true,
             })
             .is_err()
@@ -83,7 +81,6 @@ async fn blocked_peers_are_listed_with_their_identifier_and_unblocked_by_prefix(
         id: "admitted",
         peer: OTHER,
         pricing: &pricing(),
-        estimated_input_tokens: 10,
         require_deposit: true,
     })?;
 
@@ -121,7 +118,6 @@ async fn blocked_peers_are_listed_with_their_identifier_and_unblocked_by_prefix(
         id: "readmitted",
         peer: PEER,
         pricing: &pricing(),
-        estimated_input_tokens: 10,
         require_deposit: true,
     })?;
     assert!(unblock(&service, PEER).await.is_err());
@@ -149,7 +145,6 @@ async fn unpaid_deposits_and_abandoned_requests_do_not_block() -> Result<()> {
             id,
             peer: PEER,
             pricing: &pricing(),
-            estimated_input_tokens: 100,
             require_deposit: true,
         })?;
         if id == "slow-a" {
@@ -176,7 +171,6 @@ async fn unpaid_deposits_and_abandoned_requests_do_not_block() -> Result<()> {
         id: "next",
         peer: PEER,
         pricing: &pricing(),
-        estimated_input_tokens: 10,
         require_deposit: true,
     })?;
     // The expired deposit still counts against wallet switching until it is

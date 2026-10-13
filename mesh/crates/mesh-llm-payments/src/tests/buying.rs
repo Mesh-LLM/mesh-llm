@@ -20,7 +20,6 @@ fn rates() -> Pricing {
 fn local(id: &str, cap: u64) -> RequestTerms {
     RequestTerms {
         pricing: rates(),
-        input_tokens: 1000,
         max_output_tokens: 100,
         ..terms(id, cap)
     }
@@ -31,7 +30,6 @@ fn admission(id: &str, deposit_msat: u64) -> AdmissionTerms {
         id: id.into(),
         model: "test".into(),
         pricing: rates(),
-        prompt_estimate: 1000,
         deposit_msat,
     }
 }
@@ -74,13 +72,6 @@ async fn an_admission_must_restate_the_terms_and_the_defined_deposit() {
     let (_, service) = open(dir.path());
     for (admission, reason) in [
         (admission("other", 1000), "id"),
-        (
-            AdmissionTerms {
-                prompt_estimate: 999,
-                ..admission("r", 1000)
-            },
-            "estimate",
-        ),
         (admission("r", 999), "deposit share"),
     ] {
         assert!(

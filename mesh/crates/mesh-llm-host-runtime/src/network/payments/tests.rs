@@ -214,8 +214,8 @@ fn allow_paid(service: &PaymentService) -> Result<()> {
 
 fn price() -> Pricing {
     Pricing {
-        input_msat_per_million: 1_000_000,
-        output_msat_per_million: 1_000_000,
+        input_msat_per_million: 100_000_000,
+        output_msat_per_million: 100_000_000,
     }
 }
 

@@ -336,7 +336,7 @@ fn terms_digest(exchange_id: &str, terms: &AdmissionTerms) -> Option<String> {
     request_body_digest(
         &serde_json::json!({
             "exchange_id": exchange_id, "model": terms.model, "pricing": terms.pricing,
-            "prompt_estimate": terms.prompt_estimate, "deposit_msat": terms.deposit_msat,
+            "deposit_msat": terms.deposit_msat,
         }),
         None,
     )
@@ -354,7 +354,6 @@ mod tests {
                 input_msat_per_million: 1000,
                 output_msat_per_million: 2000,
             },
-            prompt_estimate: 10,
             deposit_msat: 3,
         }
     }

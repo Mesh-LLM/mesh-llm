@@ -33,7 +33,6 @@ pub struct MeteredRequest<'a> {
     pub id: &'a str,
     pub peer: &'a str,
     pub pricing: &'a Pricing,
-    pub estimated_input_tokens: u64,
     pub require_deposit: bool,
 }
 
@@ -80,7 +79,6 @@ impl Ledger {
             id,
             peer,
             pricing,
-            estimated_input_tokens,
             require_deposit,
         } = *request;
         let deposit = if require_deposit { DEPOSIT_MSAT } else { 0 };
@@ -89,21 +87,16 @@ impl Ledger {
         let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         // Identity is the exact admitted terms, not the rounded msat amounts:
         // different token terms can round to the same charge at low rates.
-        let existing: Option<(String, String, u64, bool)> = tx
+        let existing: Option<(String, String, bool)> = tx
             .query_row(
-                "SELECT peer,pricing,estimated_input_tokens,require_deposit FROM metered_requests WHERE id=?",
+                "SELECT peer,pricing,require_deposit FROM metered_requests WHERE id=?",
                 [id],
-                |r| Ok((r.get(0)?, r.get(1)?, read_amount(r, 2)?, r.get(3)?)),
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
             )
             .optional()?;
         if let Some(row) = existing {
             ensure!(
-                row == (
-                    peer.to_owned(),
-                    pricing_json,
-                    estimated_input_tokens,
-                    require_deposit
-                ),
+                row == (peer.to_owned(), pricing_json, require_deposit),
                 "request identity reused with different metered terms"
             );
             return Ok(deposit);
@@ -114,12 +107,11 @@ impl Ledger {
             "buyer has {unpaid} unpaid final invoices"
         );
         tx.execute(
-            "INSERT INTO metered_requests(id,peer,pricing,estimated_input_tokens,require_deposit,deposit_msat,state) VALUES (?1,?2,?3,?4,?5,?6,'admitted')",
+            "INSERT INTO metered_requests(id,peer,pricing,require_deposit,deposit_msat,state) VALUES (?1,?2,?3,?4,?5,'admitted')",
             params![
                 id,
                 peer,
                 pricing_json,
-                sql_amount(estimated_input_tokens)?,
                 require_deposit,
                 sql_amount(deposit)?
             ],

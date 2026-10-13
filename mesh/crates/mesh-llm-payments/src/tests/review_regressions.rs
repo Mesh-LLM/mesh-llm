@@ -225,7 +225,6 @@ async fn prepared_wallet_send_survives_reopen() -> Result<()> {
                 input_msat_per_million: 1,
                 output_msat_per_million: 1,
             },
-            input_tokens: 0,
             max_output_tokens: 1,
             max_total_msat: 200,
             expires_at_ms: invoice.expires_at_ms,

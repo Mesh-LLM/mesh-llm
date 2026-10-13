@@ -34,8 +34,7 @@ impl PaymentService {
         ensure!(
             admission.id == terms.id
                 && admission.model == terms.model
-                && admission.pricing == terms.pricing
-                && admission.prompt_estimate == terms.input_tokens,
+                && admission.pricing == terms.pricing,
             "admission does not match the proposed terms"
         );
         ensure!(

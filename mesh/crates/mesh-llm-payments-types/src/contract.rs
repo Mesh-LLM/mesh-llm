@@ -208,7 +208,6 @@ pub struct ServeAdmitRequest {
     pub buyer: String,
     pub model: String,
     pub pricing: crate::pricing::Pricing,
-    pub estimate: crate::metering::PromptEstimate,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

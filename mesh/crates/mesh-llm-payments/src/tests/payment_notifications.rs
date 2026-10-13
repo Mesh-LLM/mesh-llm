@@ -410,10 +410,6 @@ async fn metered_invoice_expiries_are_chosen_by_the_host_not_the_wallet() -> Res
             buyer: "peer".into(),
             model: "m".into(),
             pricing: pricing.clone(),
-            estimate: mesh_llm_payments_types::metering::PromptEstimate {
-                input_tokens: 1000,
-                has_media: false,
-            },
         })
         .await?;
     assert!(matches!(
@@ -429,7 +425,6 @@ async fn metered_invoice_expiries_are_chosen_by_the_host_not_the_wallet() -> Res
         id: "trusted",
         peer: "peer",
         pricing: &pricing,
-        estimated_input_tokens: 10,
         require_deposit: false,
     })?;
     service.ledger.metered_finalize(

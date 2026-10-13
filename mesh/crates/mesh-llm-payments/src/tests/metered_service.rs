@@ -6,7 +6,7 @@ use crate::ledger::metered_invoices::{MeteredInvoice, MeteredInvoiceKind};
 use mesh_llm_payments_types::contract::{
     FinalBill, ServeAdmitRequest, ServeAdmitResponse, ServeRecoverResponse, ServeSettleRequest,
 };
-use mesh_llm_payments_types::metering::{MeteredUsage, PromptEstimate};
+use mesh_llm_payments_types::metering::MeteredUsage;
 
 const MODEL: &str = "metered-model";
 
@@ -24,16 +24,12 @@ fn open(dir: &std::path::Path, wallet: Arc<MockWallet>) -> Arc<PaymentService> {
     service
 }
 
-fn admit(id: &str, buyer: &str, input_tokens: u64) -> ServeAdmitRequest {
+fn admit(id: &str, buyer: &str) -> ServeAdmitRequest {
     ServeAdmitRequest {
         request_id: id.into(),
         buyer: buyer.into(),
         model: MODEL.into(),
         pricing: rates(),
-        estimate: PromptEstimate {
-            input_tokens,
-            has_media: false,
-        },
     }
 }
 
@@ -90,20 +86,20 @@ async fn deposit_then_final_invoice_for_the_remainder_settles_trust() {
     let wallet = Arc::new(MockWallet::default());
     let service = open(dir.path(), wallet.clone());
     // Prices are the seller's own; a stale or forged quote is refused.
-    let mut stale = admit("r", "peer", 1000);
+    let mut stale = admit("r", "peer");
     stale.pricing.input_msat_per_million += 1;
     assert!(service.serve_admit(stale).await.is_err());
 
-    let first = service.serve_admit(admit("r", "peer", 1000)).await.unwrap();
+    let first = service.serve_admit(admit("r", "peer")).await.unwrap();
     let deposit = deposit_invoice(&first);
     assert_eq!(deposit.amount_msat, Some(1000), "flat 1 sat deposit");
-    // Replaying the admission returns the same persisted invoice; different
-    // terms under the same ID are refused.
+    // Replaying the admission returns the same persisted invoice; another
+    // buyer reusing the ID is refused.
     assert_eq!(
-        deposit_invoice(&service.serve_admit(admit("r", "peer", 1000)).await.unwrap()),
+        deposit_invoice(&service.serve_admit(admit("r", "peer")).await.unwrap()),
         deposit
     );
-    assert!(service.serve_admit(admit("r", "peer", 1001)).await.is_err());
+    assert!(service.serve_admit(admit("r", "other")).await.is_err());
     assert!(matches!(
         service.serve_recover("r").await.unwrap(),
         ServeRecoverResponse::Pending
@@ -154,27 +150,18 @@ async fn deposit_then_final_invoice_for_the_remainder_settles_trust() {
     // Good standing: the next request is admitted without a deposit and
     // dispatch is claimed by the admission itself.
     assert!(matches!(
-        service
-            .serve_admit(admit("next", "peer", 1_000_000))
-            .await
-            .unwrap(),
+        service.serve_admit(admit("next", "peer")).await.unwrap(),
         ServeAdmitResponse::Admitted { .. }
     ));
     // A replay of a dispatched request is never a second dispatch.
     assert!(matches!(
-        service
-            .serve_admit(admit("next", "peer", 1_000_000))
-            .await
-            .unwrap(),
+        service.serve_admit(admit("next", "peer")).await.unwrap(),
         ServeAdmitResponse::Replayed { .. }
     ));
     assert!(service.serve_deposit_confirmed("next").await.is_err());
     // Strangers still owe a deposit.
     assert!(matches!(
-        service
-            .serve_admit(admit("s", "stranger", 1000))
-            .await
-            .unwrap(),
+        service.serve_admit(admit("s", "stranger")).await.unwrap(),
         ServeAdmitResponse::Deposit { .. }
     ));
 }
@@ -184,7 +171,7 @@ async fn covering_deposit_means_no_final_invoice_and_abandonment_keeps_the_depos
     let dir = tempfile::tempdir().unwrap();
     let wallet = Arc::new(MockWallet::default());
     let service = open(dir.path(), wallet.clone());
-    let deposit = deposit_invoice(&service.serve_admit(admit("c", "peer", 1000)).await.unwrap());
+    let deposit = deposit_invoice(&service.serve_admit(admit("c", "peer")).await.unwrap());
     received(&wallet, &deposit);
     service.serve_deposit_confirmed("c").await.unwrap();
     let bill = service.serve_settle(settle("c", 100, 50)).await.unwrap();
@@ -203,12 +190,7 @@ async fn covering_deposit_means_no_final_invoice_and_abandonment_keeps_the_depos
 
     // An abandoned request: deposit kept, no bill, no invoice, no strike, and
     // settlement afterwards is refused.
-    let deposit = deposit_invoice(
-        &service
-            .serve_admit(admit("a", "other", 1000))
-            .await
-            .unwrap(),
-    );
+    let deposit = deposit_invoice(&service.serve_admit(admit("a", "other")).await.unwrap());
     received(&wallet, &deposit);
     service.serve_deposit_confirmed("a").await.unwrap();
     service.serve_abandon("a").unwrap();
@@ -236,7 +218,7 @@ async fn unpaid_deposit_never_reduces_the_bill() {
     let dir = tempfile::tempdir().unwrap();
     let wallet = Arc::new(MockWallet::default());
     let service = open(dir.path(), wallet.clone());
-    let deposit = deposit_invoice(&service.serve_admit(admit("u", "peer", 1000)).await.unwrap());
+    let deposit = deposit_invoice(&service.serve_admit(admit("u", "peer")).await.unwrap());
     // The host settles only after confirmation; a direct settle with the
     // deposit unpaid bills the full amount and the deposit arriving later
     // changes nothing already fixed.
@@ -269,7 +251,6 @@ async fn three_unpaid_final_invoices_block_admission_until_one_is_paid() {
                 id: &id,
                 peer: "peer",
                 pricing: &rates(),
-                estimated_input_tokens: 10,
                 require_deposit: false,
             })
             .unwrap();
@@ -289,18 +270,12 @@ async fn three_unpaid_final_invoices_block_admission_until_one_is_paid() {
         );
     }
     assert!(matches!(
-        service
-            .serve_admit(admit("blocked", "peer", 10))
-            .await
-            .unwrap(),
+        service.serve_admit(admit("blocked", "peer")).await.unwrap(),
         ServeAdmitResponse::Blocked { .. }
     ));
     assert!(service.ledger.metered_owner("blocked").unwrap().is_none());
     assert!(matches!(
-        service
-            .serve_admit(admit("fine", "other", 10))
-            .await
-            .unwrap(),
+        service.serve_admit(admit("fine", "other")).await.unwrap(),
         ServeAdmitResponse::Deposit { .. }
     ));
     // Paying one final (observed through reconciliation) unblocks.
@@ -311,10 +286,7 @@ async fn three_unpaid_final_invoices_block_admission_until_one_is_paid() {
         STRIKE_LIMIT - 1
     );
     assert!(matches!(
-        service
-            .serve_admit(admit("again", "peer", 10))
-            .await
-            .unwrap(),
+        service.serve_admit(admit("again", "peer")).await.unwrap(),
         ServeAdmitResponse::Deposit { .. }
     ));
 }
@@ -326,15 +298,10 @@ async fn restart_abandons_in_flight_requests_and_never_redispatches() {
     let deposit;
     {
         let service = open(dir.path(), wallet.clone());
-        deposit = deposit_invoice(
-            &service
-                .serve_admit(admit("never", "peer", 1000))
-                .await
-                .unwrap(),
-        );
+        deposit = deposit_invoice(&service.serve_admit(admit("never", "peer")).await.unwrap());
         let paid = deposit_invoice(
             &service
-                .serve_admit(admit("dispatched", "peer", 1000))
+                .serve_admit(admit("dispatched", "peer"))
                 .await
                 .unwrap(),
         );
@@ -379,7 +346,6 @@ async fn expired_nonpayment_survives_restart_and_requires_deposit_in_later_sessi
                 id: "unpaid",
                 peer: "peer",
                 pricing: &rates(),
-                estimated_input_tokens: 10,
                 require_deposit: false,
             })
             .unwrap();
@@ -419,7 +385,6 @@ async fn expired_nonpayment_survives_restart_and_requires_deposit_in_later_sessi
                 id: &seed,
                 peer,
                 pricing: &rates(),
-                estimated_input_tokens: 1,
                 require_deposit: false,
             })
             .unwrap();
@@ -433,7 +398,7 @@ async fn expired_nonpayment_survives_restart_and_requires_deposit_in_later_sessi
         let trusted = service.metered_trusted(peer).await.unwrap();
         assert_eq!(trusted, peer == "other");
         let later = service
-            .serve_admit(admit(&format!("later-{peer}"), peer, 1000))
+            .serve_admit(admit(&format!("later-{peer}"), peer))
             .await
             .unwrap();
         assert_eq!(
