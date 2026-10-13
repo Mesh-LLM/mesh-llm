@@ -1,10 +1,13 @@
 use crate::automation::command_interrupt::Interrupt;
 use crate::command::DynResult;
-use crate::process::{self, Completion, Limits, OutputFiles, ProcessSpec, Readiness, Value};
+use crate::process::{self, Completion, Limits, ProcessSpec, RawCaptureOptions, Readiness, Value};
 use std::{
     cell::RefCell,
     collections::BTreeMap,
     ffi::OsString,
+    fs::OpenOptions,
+    io::Write,
+    num::NonZeroUsize,
     path::{Path, PathBuf},
     time::Duration,
 };
@@ -88,7 +91,7 @@ pub(super) fn git(
         .as_ref()
         .map(Interrupt::cancellation)
         .unwrap_or_else(cancellation);
-    let report = process::supervise(
+    let report = process::supervise_raw(
         &ProcessSpec {
             executable: PathBuf::from("/usr/bin/git"),
             arguments: args.into_iter().map(Value::Public).collect(),
@@ -104,8 +107,8 @@ pub(super) fn git(
             completion: Completion::Exit,
         },
         &cancellation,
-        OutputFiles {
-            stdout: capture.map(Path::to_path_buf),
+        RawCaptureOptions {
+            stdout: NonZeroUsize::new(4 * 1024 * 1024),
             stderr: None,
         },
     );
@@ -113,17 +116,25 @@ pub(super) fn git(
         interrupt.finish()?;
     }
     let report = report?;
-    if !report.success()
-        || report.stderr.truncated
-        || (capture.is_none() && report.stdout.truncated)
-    {
+    if !report.process.success() || report.process.stderr.truncated {
         return Err(format!(
             "canary package Git admission failed: {:?}, status {:?}",
-            report.outcome, report.status
+            report.process.outcome, report.process.status
         )
         .into());
     }
-    Ok(report.stdout.bytes_retained)
+    // Manifests, NUL-delimited paths and binary diffs are data, not diagnostics.
+    // Redaction can suppress ordinary names such as XHToken and token_generation.
+    let stdout = report.stdout.ok_or("canary Git payload was not captured")?;
+    let bytes = stdout.as_bytes();
+    if let Some(path) = capture {
+        OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(path)?
+            .write_all(bytes)?;
+    }
+    Ok(bytes.to_vec())
 }
 
 pub(super) fn text(root: &Path, args: &[&str]) -> DynResult<String> {
@@ -132,3 +143,7 @@ pub(super) fn text(root: &Path, args: &[&str]) -> DynResult<String> {
         .trim()
         .to_owned())
 }
+
+#[cfg(all(test, unix))]
+#[path = "git_payload_tests.rs"]
+mod tests;

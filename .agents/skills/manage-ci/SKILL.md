@@ -572,6 +572,10 @@ checked-in expiry are the maintainer-controlled approval boundary.
 
 ## Llama canary family fan-out
 
+Git payloads consumed as manifests, source inventories or source identity diffs
+must use bounded raw capture, never redacted diagnostic output. Keep diagnostic
+redaction enabled separately; incomplete or oversized payloads fail admission.
+
 The trusted-main canary releases its build runner before scheduling one job
 per certified family. Every worker consumes the exact source, plan, manifest,
 and executable handoff from its producer; family workers never rebuild.
