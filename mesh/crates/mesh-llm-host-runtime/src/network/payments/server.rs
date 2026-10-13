@@ -1,27 +1,32 @@
-use std::collections::VecDeque;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+//! Seller side of the token-metered exchange: admission at the request,
+//! deposit before any backend work, unchanged streaming, settlement from the
+//! backend's reported usage. Every ledger and wallet step goes through the
+//! `payments.v1` provider; this module owns the transport, the backend and
+//! delivery.
+
+mod exchange_events;
+
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail, ensure};
 use mesh_llm_payments_types::contract::{
-    Empty, IdRequest, InvoiceRequest, OutputReceivableResponse, ServeBeginRequest,
-    ServeRecoverResponse, SettledReceived, ops,
+    Empty, FinalBill, RequestIdRequest, ServeAdmitRequest, ServeAdmitResponse,
+    ServeRecoverResponse, ServeSettleRequest, SettledReceived, ops,
 };
-use mesh_llm_payments_types::wire::{self, Frame};
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
-use tokio::net::TcpStream;
-use tokio::sync::mpsc;
+use mesh_llm_payments_types::metered_wire::{self as wire, AdmissionTerms, Frame};
+use mesh_llm_payments_types::metering::{MeteredUsage, PromptEstimate};
+use mesh_llm_payments_types::response_usage::{ResponseEvidence, ResponseUsage};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite};
 
-use super::{
-    client::Payments,
-    gate::{GateEvent, InvoiceGate},
-    request::PaidRequest,
-};
-use crate::{
-    inference::election::{InferenceTarget, ModelTargets},
-    mesh::Node,
-};
+use super::{backend::Backend, client::Payments, request::PaidRequest};
+use crate::{inference::election::ModelTargets, mesh::Node};
+use exchange_events::DeliveredCapture;
+
+/// Seller-side bound on the admitted prompt estimate.
+const MAX_PROMPT_ESTIMATE: u64 = 131_072;
+
+/// How long the backend may go without producing a byte.
+const BACKEND_STALL: Duration = Duration::from_secs(300);
 
 pub(crate) async fn serve(
     node: Node,
@@ -36,12 +41,23 @@ pub(crate) async fn serve(
         let _ = wire::write(
             &mut writer,
             &Frame::Error {
-                message: "paid inference failed; recover pending invoices by request ID".into(),
+                message: "metered exchange interrupted; recover by request ID".into(),
             },
         )
         .await;
     }
     result
+}
+
+/// One admitted request, from admission to settlement.
+struct Session {
+    payments: Payments,
+    terms: AdmissionTerms,
+    request: PaidRequest,
+    backend: Backend,
+    deposit: Option<mesh_llm_wallet::invoice::Invoice>,
+    observations: super::lifecycle::Observations,
+    exchange_id: Option<String>,
 }
 
 async fn serve_inner(
@@ -51,11 +67,53 @@ async fn serve_inner(
     writer: &mut (impl AsyncWrite + Unpin),
     targets: &ModelTargets,
 ) -> Result<()> {
-    let frame = tokio::time::timeout(Duration::from_secs(10), wire::read(reader)).await??;
+    let initial = tokio::time::timeout(Duration::from_secs(10), wire::read(reader)).await??;
     let payments = Payments::for_node(node).await?;
-    if let Frame::Recover { id } = frame {
+    let payer = peer;
+    let peer = peer.to_string();
+    if let Frame::Recover { id } = initial {
         return recover(&payments, &id, writer).await;
     }
+    let session = match admit(node, &payments, peer, initial, targets).await? {
+        Admission::Admitted(session) => session,
+        Admission::Refused => {
+            return wire::write(
+                writer,
+                &Frame::Error {
+                    message: "admission refused".into(),
+                },
+            )
+            .await;
+        }
+        // The buyer replayed a request this seller already holds: answer
+        // from the ledger, never a second dispatch.
+        Admission::Replayed(id) => return recover(&payments, &id, writer).await,
+    };
+    let result = serve_admitted(node, &session, payer, reader, writer).await;
+    if result.is_err() {
+        // Any exit without usage abandons the request: no bill, no debt. A
+        // request already settled or abandoned is unchanged (idempotent).
+        let _: Result<Empty> = session
+            .payments
+            .call(ops::SERVE_ABANDON, &request_id(&session.terms.id))
+            .await;
+    }
+    result
+}
+
+enum Admission {
+    Admitted(Session),
+    Refused,
+    Replayed(String),
+}
+
+async fn admit(
+    node: &Node,
+    payments: &Payments,
+    peer: String,
+    frame: Frame,
+    targets: &ModelTargets,
+) -> Result<Admission> {
     let Frame::Request {
         id,
         model,
@@ -63,162 +121,67 @@ async fn serve_inner(
         http,
     } = frame
     else {
-        bail!("expected inference request");
+        bail!("expected metered request");
     };
     uuid::Uuid::parse_str(&id).context("invalid request ID")?;
     let mut request = PaidRequest::parse(&http)?;
     ensure!(request.model == model, "model mismatch");
-    // The digest of the request as the payer sent it, before the model is
-    // renamed for the local backend, as the free path digests the request it
-    // received.
-    let request_digest = crate::plugin::openai_exchange::request_body_digest(&request.body, None);
+    let estimate = PromptEstimate::from_request(&request.body)?;
+    ensure!(
+        !estimate.has_media && estimate.input_tokens <= MAX_PROMPT_ESTIMATE,
+        "unsupported or oversized prompt"
+    );
     // Prices and offers use the public model ID; the local backend is
     // registered, and must be addressed, under its internal name.
     let backend_model =
         crate::network::openai::ingress::served_model_for_public_id(node, targets, &model).await;
+    let backend = Backend::resolve(node, targets, &backend_model, &model).await?;
     request.use_backend_model(&backend_model);
-    let port = targets
-        .candidates(&backend_model)
-        .iter()
-        .find_map(|target| match target {
-            InferenceTarget::Local(port) => Some(*port),
-            _ => None,
-        })
-        .context("paid model must be served locally")?;
-    // Checks the seller's current price, wakes the receiving wallet during
-    // prefill, and waits out this peer's prior debt before opening serving.
-    // The payer, as the stream's QUIC-authenticated remote id: the terminal
-    // exchange event names it, as the free path names the tunnel's.
-    let payer = peer;
-    let peer = peer.to_string();
-    let _: Empty = payments
+    let admitted: ServeAdmitResponse = payments
         .call(
-            ops::SERVE_BEGIN,
-            &ServeBeginRequest {
-                id: id.clone(),
-                peer: peer.clone(),
+            ops::SERVE_ADMIT,
+            &ServeAdmitRequest {
+                request_id: id.clone(),
+                buyer: peer.clone(),
                 model: model.clone(),
                 pricing: pricing.clone(),
-                max_output: u64::from(request.max_tokens.unwrap_or(u32::MAX)),
-                prior_settlement_ms: PRIOR_SETTLEMENT_WAIT.as_millis() as u64,
+                estimate,
             },
         )
         .await?;
-    let (lifecycle, exchange_id) = provider_observers(node).await;
-    let _instance = node.begin_runtime_instance_request(port).await?;
-    let model_for_events = model.clone();
-    let (events, mut receiver) = mpsc::unbounded_channel();
-    let gate = Arc::new(InvoiceGate {
-        payments: payments.clone(),
-        request_id: id.clone(),
-        peer: peer.clone(),
-        model,
-        pricing: pricing.clone(),
-        max_tokens: request.max_tokens,
-        events,
-        runtime: tokio::runtime::Handle::current(),
-        authorized: Arc::new(AtomicBool::new(false)),
-        cancelled: Arc::new(AtomicBool::new(false)),
-        started: AtomicBool::new(false),
-        output_tokens: AtomicU64::new(0),
-        delivered_tokens: AtomicU64::new(0),
-        flushed_tokens: AtomicU64::new(0),
-        invoice_expires_at_ms: Arc::new(AtomicU64::new(0)),
-        input_settlement: Arc::new(tokio::sync::Mutex::new(None)),
-        lifecycle,
-        observations: Arc::new(std::sync::OnceLock::new()),
-    });
-    let _serving_guard = ServingGuard { gate: gate.clone() };
-    // The same exchange events the free serving path publishes.
-    let exchange = crate::network::openai::paid_exchange::PaidServedExchange::begin(
-        node,
-        &model_for_events,
-        exchange_id.as_deref(),
-    )
-    .await;
-    let mut delivered = exchange.as_ref().map(|_| DeliveredCapture::default());
-    let generated = generate(
-        reader,
-        writer,
-        port,
-        &request,
-        &gate,
-        &mut receiver,
-        delivered.as_mut(),
-    )
-    .await;
-    // Close serving on every path, before anything else can observe this
-    // peer, so an interrupted request's delivered output counts as debt.
-    // Whether the response reached the payer in full is read before closing.
-    let completed = delivered_in_full(&generated, &gate);
-    let closed = gate.close_serving().await;
-    let observations = gate.observations();
-    observe_delivered(&observations, &closed);
-    // A terminal event on every path, as on the free path: a failed
-    // generation or closure still ends the exchange the effective event
-    // opened, before the error is returned.
-    end_exchange(
-        node,
-        exchange.zip(delivered),
-        paid_response_adapter(&request),
-        completed && closed.is_ok(),
-        &model_for_events,
-        request_digest.as_deref(),
-        payer,
-    )
-    .await;
-    let transport_alive = generated?;
-    closed?;
-    // Generation is over. Release the runtime's in-flight slot (the gate
-    // registration ended with generation) before waiting on the payer's wallet: those waits can last
-    // up to the output invoice lifetime, and the debt they settle is already
-    // durable, so recovery finishes it if this task ends first.
-    drop(_instance);
-    // Delivery opened on receiver-side HTLC arrival; the input payment must
-    // still be recorded as settled before this request is complete.
-    gate.await_input_settlement().await?;
-    let output = if gate.authorized.load(Ordering::Acquire) {
-        payments
-            .call::<_, OutputReceivableResponse>(
-                ops::OUTPUT_RECEIVABLE,
-                &IdRequest { id: id.clone() },
-            )
-            .await?
-            .output
-    } else {
-        None
-    };
-    if let Some(receipt) = output {
-        observations.invoice(1, &receipt.invoice);
-        if transport_alive {
-            wire::write(
-                writer,
-                &Frame::OutputInvoice {
-                    request_id: id.clone(),
-                    tokens: receipt.tokens,
-                    invoice: receipt.invoice.clone(),
-                },
-            )
-            .await?;
+    let (deposit, deposit_msat) = match admitted {
+        ServeAdmitResponse::Blocked { .. } => return Ok(Admission::Refused),
+        ServeAdmitResponse::Replayed { request_id } => {
+            return Ok(Admission::Replayed(request_id));
         }
-        let settled: SettledReceived = payments
-            .call(
-                ops::SETTLE_RECEIVED,
-                &InvoiceRequest {
-                    invoice: receipt.invoice.clone(),
-                },
-            )
-            .await?;
-        observations.received(1, &receipt.invoice, &settled);
-    }
-    if transport_alive {
-        wire::write(writer, &Frame::Complete).await?;
-    }
-    Ok(())
+        ServeAdmitResponse::Admitted { .. } => (None, 0),
+        ServeAdmitResponse::Deposit { invoice, .. } => {
+            let amount = invoice.amount_msat.context("amountless deposit invoice")?;
+            (Some(invoice), amount)
+        }
+    };
+    let terms = AdmissionTerms {
+        id,
+        model,
+        pricing,
+        prompt_estimate: estimate.input_tokens,
+        deposit_msat,
+    };
+    let (lifecycle, exchange_id) = provider_observers(node).await;
+    let observations = lifecycle.observe(&terms);
+    Ok(Admission::Admitted(Session {
+        payments: payments.clone(),
+        terms,
+        request,
+        backend,
+        deposit,
+        observations,
+        exchange_id,
+    }))
 }
 
-/// The provider lifecycle for this paid serving request, and the one fresh
-/// ID naming the request on both of the provider's channels,
+/// The provider lifecycle for this serving request, and the one fresh ID
+/// naming the request on both of the provider's channels,
 /// `payment.lifecycle.v1` and `openai.exchange.v1`, so a plugin subscribed to
 /// both joins them exactly. The ID is minted only when a plugin subscribes to
 /// either, and is never the private request (recovery) ID.
@@ -230,422 +193,376 @@ async fn provider_observers(node: &Node) -> (super::lifecycle::ProviderLifecycle
     (lifecycle.named(exchange_id.clone()), exchange_id)
 }
 
-/// Served only when the backend's response reached the payer in full:
-/// `Ok(false)` is a payer disconnect and a payer cancellation frame returns
-/// `Ok(true)` with `cancelled` set.
-fn delivered_in_full(generated: &Result<bool>, gate: &InvoiceGate) -> bool {
-    matches!(generated, Ok(true)) && !gate.cancelled.load(Ordering::Acquire)
-}
-
-/// The delivered phase, once, with the watermark the close wrote, whatever
-/// the transport did.
-fn observe_delivered(observations: &super::lifecycle::Observations, closed: &Result<u64>) {
-    if let Ok(tokens) = closed {
-        observations.delivered(*tokens);
-    }
-}
-
-/// Publish the terminal exchange event, when an effective one was published.
-async fn end_exchange(
+async fn serve_admitted(
     node: &Node,
-    exchange: Option<(
-        crate::network::openai::paid_exchange::PaidServedExchange,
-        DeliveredCapture,
-    )>,
-    adapter: crate::network::openai::transport::ResponseAdapter,
-    served: bool,
-    model: &str,
-    request_digest: Option<&str>,
+    session: &Session,
     payer: iroh::EndpointId,
-) {
-    if let Some((exchange, delivered)) = exchange {
-        let outcome = exchange_outcome(served, delivered, adapter).await;
-        exchange
-            .finish(node, model, &outcome, request_digest, payer)
-            .await;
+    reader: &mut (impl AsyncRead + Unpin),
+    writer: &mut (impl AsyncWrite + Unpin),
+) -> Result<()> {
+    wire::write(
+        writer,
+        &Frame::Admission {
+            terms: session.terms.clone(),
+            invoice: session.deposit.clone(),
+        },
+    )
+    .await?;
+    let accepted = tokio::time::timeout(Duration::from_secs(60), wire::read(reader)).await??;
+    ensure!(
+        matches!(accepted, Frame::Accepted {}),
+        "admission cancelled"
+    );
+    confirm_dispatch(session).await?;
+    let outcome = dispatch(node, session, payer, reader, writer).await;
+    let bill = match outcome {
+        Some(usage) => {
+            let bill: FinalBill = session
+                .payments
+                .call(
+                    ops::SERVE_SETTLE,
+                    &ServeSettleRequest {
+                        request_id: session.terms.id.clone(),
+                        usage,
+                    },
+                )
+                .await?;
+            session.observations.delivered(usage.completion_tokens);
+            Some(bill)
+        }
+        None => {
+            let _: Empty = session
+                .payments
+                .call(ops::SERVE_ABANDON, &request_id(&session.terms.id))
+                .await?;
+            None
+        }
+    };
+    settle(session, bill, writer).await
+}
+
+/// Wait for the deposit (if any) to settle and claim the once-only dispatch.
+/// Nothing runs on the backend before this returns.
+async fn confirm_dispatch(session: &Session) -> Result<()> {
+    let Some(invoice) = &session.deposit else {
+        // Admitted without a deposit: dispatch was claimed at admission.
+        return Ok(());
+    };
+    session.observations.invoice(0, invoice);
+    let settled: SettledReceived = session
+        .payments
+        .call(ops::SERVE_DEPOSIT_CONFIRMED, &request_id(&session.terms.id))
+        .await?;
+    session.observations.received(0, invoice, &settled);
+    Ok(())
+}
+
+/// Run the backend and forward its response. `None` abandons the request:
+/// the backend reported no usage, failed, or the buyer cancelled.
+async fn dispatch(
+    node: &Node,
+    session: &Session,
+    payer: iroh::EndpointId,
+    reader: &mut (impl AsyncRead + Unpin),
+    writer: &mut (impl AsyncWrite + Unpin),
+) -> Option<MeteredUsage> {
+    let instance = match session.backend.local_port() {
+        Some(port) => match node.begin_runtime_instance_request(port).await {
+            Ok(guard) => guard,
+            Err(_) => return None,
+        },
+        None => None,
+    };
+    let request_digest =
+        crate::plugin::openai_exchange::request_body_digest(&session.request.body, None);
+    let exchange = crate::network::openai::paid_exchange::PaidServedExchange::begin(
+        node,
+        &session.terms.model,
+        session.exchange_id.as_deref(),
+    )
+    .await;
+    let mut delivered = exchange.as_ref().map(|_| DeliveredCapture::default());
+    let usage = match session
+        .backend
+        .connect(&session.request, &session.terms.id)
+        .await
+    {
+        Ok(backend) => forward_backend(backend, reader, writer, delivered.as_mut()).await,
+        Err(_) => None,
+    };
+    drop(instance);
+    exchange_events::end_exchange(
+        node,
+        exchange.zip(delivered),
+        exchange_events::paid_response_adapter(&session.request),
+        usage.is_some(),
+        &session.terms.model,
+        request_digest.as_deref(),
+        payer,
+    )
+    .await;
+    usage
+}
+
+/// Forward the backend's response to the buyer, observing usage on the way.
+/// The backend is observed independently of buyer transport completion: a
+/// buyer that goes away mid-response still owes nothing (abandoned), and a
+/// complete response is billed even when the last frame did not land.
+async fn forward_backend(
+    mut backend: impl AsyncRead + Unpin,
+    reader: &mut (impl AsyncRead + Unpin),
+    writer: &mut (impl AsyncWrite + Unpin),
+    mut delivered: Option<&mut DeliveredCapture>,
+) -> Option<MeteredUsage> {
+    let mut usage = ResponseUsage::default();
+    let mut buffer = [0_u8; 16 * 1024];
+    let cancelled = wait_for_cancel_or_invalid_frame(reader);
+    tokio::pin!(cancelled);
+    loop {
+        let read = tokio::select! {
+            read = tokio::time::timeout(BACKEND_STALL, backend.read(&mut buffer)) => read,
+            _ = &mut cancelled => return reported(usage.interrupted_evidence()),
+        };
+        let count = match read {
+            Ok(Ok(0)) => break,
+            Ok(Ok(count)) => count,
+            _ => return reported(usage.interrupted_evidence()),
+        };
+        usage.observe(&buffer[..count]);
+        if let Some(capture) = delivered.as_deref_mut() {
+            capture.push(&buffer[..count]);
+        }
+        let frame = Frame::Output {
+            bytes: buffer[..count].to_vec(),
+        };
+        if wire::write(writer, &frame).await.is_err() {
+            return reported(usage.interrupted_evidence());
+        }
+    }
+    usage.finish();
+    reported(usage.evidence())
+}
+
+fn reported(evidence: ResponseEvidence) -> Option<MeteredUsage> {
+    match evidence {
+        ResponseEvidence::Reported(usage) => Some(usage),
+        ResponseEvidence::BackendError | ResponseEvidence::Missing => None,
     }
 }
 
-/// The terminal exchange event's outcome: what was delivered when serving
-/// completed, `Failed` when generation or closing serving failed.
-async fn exchange_outcome(
-    served: bool,
-    delivered: DeliveredCapture,
-    adapter: crate::network::openai::transport::ResponseAdapter,
-) -> crate::network::openai::transport::RouteDispatchOutcome {
-    if served {
-        delivered_outcome(delivered, adapter).await
-    } else {
-        crate::network::openai::transport::RouteDispatchOutcome::Failed(
-            "paid serving failed before the response was delivered",
-        )
+/// A clean send-half EOF is not cancellation: the buyer may still consume
+/// the response. Invalid/truncated frames terminate conservatively, rather
+/// than pretending the buyer sent Cancel. The response writer detects loss
+/// of the receive half independently.
+async fn wait_for_cancel_or_invalid_frame(reader: &mut (impl AsyncRead + Unpin)) -> Result<()> {
+    let mut prefix = [0_u8; 1];
+    match reader.read(&mut prefix).await {
+        Ok(0) => std::future::pending::<Result<()>>().await,
+        Ok(_) => {
+            let mut framed = std::io::Cursor::new(prefix).chain(reader);
+            ensure!(
+                matches!(wire::read(&mut framed).await?, Frame::Cancel {}),
+                "unexpected buyer frame during inference"
+            );
+            Ok(())
+        }
+        Err(error) => Err(error.into()),
     }
 }
 
-/// What was delivered, for the terminal exchange event: the relay's own
-/// usage and digests over the delivered bytes. Past the capture limit, only
-/// the response status, read off the kept head of the response.
-async fn delivered_outcome(
-    delivered: DeliveredCapture,
-    adapter: crate::network::openai::transport::ResponseAdapter,
-) -> crate::network::openai::transport::RouteDispatchOutcome {
-    use crate::network::openai::transport::RouteDispatchOutcome;
-    let status = delivered.status();
-    match delivered.into_bytes() {
-        Some(raw) => crate::network::openai::served_outcome_of_raw_response(&raw, adapter).await,
-        None => match status {
-            Some(status) => RouteDispatchOutcome::Responded(status),
-            None => RouteDispatchOutcome::Failed("the served response had no HTTP status line"),
+/// Send the settlement, wait for the final invoice to be received and close.
+async fn settle(
+    session: &Session,
+    bill: Option<FinalBill>,
+    writer: &mut (impl AsyncWrite + Unpin),
+) -> Result<()> {
+    let frame = settlement_frame(&session.terms.id, bill.as_ref());
+    wire::write(writer, &frame).await?;
+    if let Some(bill) = bill {
+        session.observations.final_amount(bill.bill_msat);
+        if let Some(invoice) = bill.invoice {
+            session.observations.invoice(1, &invoice);
+            let settled: SettledReceived = session
+                .payments
+                .call(
+                    ops::SETTLE_RECEIVED,
+                    &mesh_llm_payments_types::contract::InvoiceRequest {
+                        invoice: invoice.clone(),
+                    },
+                )
+                .await?;
+            session.observations.received(1, &invoice, &settled);
+        }
+    }
+    wire::write(writer, &Frame::Complete {}).await
+}
+
+fn settlement_frame(id: &str, bill: Option<&FinalBill>) -> Frame {
+    match bill {
+        Some(bill) => Frame::Settlement {
+            request_id: id.to_owned(),
+            usage: Some(bill.usage),
+            bill_msat: Some(bill.bill_msat),
+            deposit_applied_msat: bill.deposit_msat.min(bill.bill_msat),
+            invoice: bill.invoice.clone(),
+        },
+        None => Frame::Settlement {
+            request_id: id.to_owned(),
+            usage: None,
+            bill_msat: None,
+            deposit_applied_msat: 0,
+            invoice: None,
         },
     }
 }
 
-/// The adapter the payer's relay applies to this response, so the seller's
-/// replay computes the same usage and digests. Mirrors the payer's default
-/// for a chat request (`request_parse.rs`): a paid request arrives already
-/// normalized to the backend's chat shape.
-fn paid_response_adapter(
-    request: &PaidRequest,
-) -> crate::network::openai::transport::ResponseAdapter {
-    use crate::network::openai::transport::ResponseAdapter;
-    if request.path.split('?').next() != Some("/v1/chat/completions") {
-        return ResponseAdapter::None;
-    }
-    if request
-        .body
-        .get("stream")
-        .and_then(serde_json::Value::as_bool)
-        == Some(true)
-    {
-        ResponseAdapter::OpenAiChatCompletionsStream
-    } else {
-        ResponseAdapter::OpenAiChatCompletionsJson
-    }
-}
-
-/// Runs the backend under the registered payment gate until its output is
-/// delivered or the payer goes away; the registration ends with generation.
-async fn generate(
-    reader: &mut (impl AsyncRead + Unpin),
-    writer: &mut (impl AsyncWrite + Unpin),
-    port: u16,
-    request: &PaidRequest,
-    gate: &Arc<InvoiceGate>,
-    receiver: &mut mpsc::UnboundedReceiver<GateEvent>,
-    delivered: Option<&mut DeliveredCapture>,
-) -> Result<bool> {
-    let backend_id = uuid::Uuid::new_v4();
-    let _registration =
-        skippy_serving::frontend::generation_gate::register(*backend_id.as_bytes(), gate.clone())
-            .map_err(|_| anyhow::anyhow!("could not install payment gate"))?;
-    let mut backend = TcpStream::connect(("127.0.0.1", port)).await?;
-    backend
-        .write_all(&request.backend_http(&backend_id.to_string())?)
-        .await?;
-    stream_output(reader, writer, &mut backend, gate, receiver, delivered).await
-}
-
-/// The bytes delivered to the payer, kept to replay through the relay for
-/// the exchange event's digests. Past [`MAX_CAPTURED_RESPONSE_BYTES`] the
-/// capture is dropped and the event carries no digests, never partial ones.
-#[derive(Default)]
-struct DeliveredCapture {
-    bytes: Vec<u8>,
-    overflowed: bool,
-    /// The first bytes delivered, kept past the capture limit so the
-    /// response status is still known.
-    head: Vec<u8>,
-}
-
-/// Enough of the response to hold its status line (`HTTP/1.1 200 `).
-const RESPONSE_HEAD_BYTES: usize = 64;
-
-const MAX_CAPTURED_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
-
-impl DeliveredCapture {
-    fn push(&mut self, bytes: &[u8]) {
-        let room = RESPONSE_HEAD_BYTES.saturating_sub(self.head.len());
-        self.head.extend_from_slice(&bytes[..room.min(bytes.len())]);
-        if self.overflowed || self.bytes.len() + bytes.len() > MAX_CAPTURED_RESPONSE_BYTES {
-            self.overflowed = true;
-            self.bytes = Vec::new();
-            return;
-        }
-        self.bytes.extend_from_slice(bytes);
-    }
-
-    fn into_bytes(self) -> Option<Vec<u8>> {
-        (!self.overflowed).then_some(self.bytes)
-    }
-
-    /// The HTTP status of the delivered response, from its status line.
-    fn status(&self) -> Option<u16> {
-        let line = self.head.strip_prefix(b"HTTP/1.")?;
-        let code = line.get(2..5)?;
-        std::str::from_utf8(code).ok()?.parse().ok()
-    }
-}
-
-async fn stream_output(
-    reader: &mut (impl AsyncRead + Unpin),
-    writer: &mut (impl AsyncWrite + Unpin),
-    backend: &mut TcpStream,
-    gate: &InvoiceGate,
-    events: &mut mpsc::UnboundedReceiver<GateEvent>,
-    mut delivered: Option<&mut DeliveredCapture>,
-) -> Result<bool> {
-    // Decode runs as soon as prefill completes. Drain the backend into a
-    // bounded buffer, but do not release even HTTP headers until the provider's
-    // receiving wallet sees `claiming` or a terminal fallback. The payment gate
-    // pauses token delivery after `PRE_PAYMENT_OUTPUT_TOKENS`, which keeps this buffer
-    // from filling while unpaid. The byte cap is only a backstop: if it is
-    // ever reached, reads stop, the backend's stream stalls, and its
-    // receiver-stall timeout cancels generation (it does not pause decode).
-    let mut buffer = vec![0; 16 * 1024];
-    let mut pending: VecDeque<Vec<u8>> = VecDeque::new();
-    let mut pending_bytes = 0_usize;
-    let mut gate_open = false;
-    let mut invoice_sent = false;
-    let mut backend_eof = false;
-    let mut delivery = super::delivery::DeliveryUsage::default();
-    let invoice_timeout = tokio::time::sleep(Duration::from_secs(300));
-    tokio::pin!(invoice_timeout);
-    // Keep partial cancellation-frame bytes across backend output reads.
-    let incoming = wire::read(reader);
-    tokio::pin!(incoming);
-    loop {
-        if gate_open {
-            while let Some(bytes) = pending.pop_front() {
-                pending_bytes -= bytes.len();
-                if !deliver_output(writer, gate, &mut delivery, bytes, delivered.as_deref_mut())
-                    .await?
-                {
-                    return Ok(false);
-                }
-            }
-            if backend_eof {
-                break;
-            }
-        }
-        let read_capacity = if gate_open {
-            buffer.len()
-        } else {
-            buffer
-                .len()
-                .min(MAX_BUFFERED_OUTPUT_BYTES.saturating_sub(pending_bytes))
-        };
-        tokio::select! {
-            _ = &mut invoice_timeout, if !invoice_sent => {
-                bail!("generation did not reach payment gate");
-            }
-            event = events.recv(), if !gate_open => {
-                match event.context("payment gate closed")? {
-                    GateEvent::InputInvoice(invoice) => {
-                        ensure!(!invoice_sent, "duplicate input invoice");
-                        if wire::write(writer, invoice.as_ref()).await.is_err() {
-                            gate.cancelled.store(true, Ordering::Release);
-                            return Ok(false);
-                        }
-                        invoice_sent = true;
-                    }
-                    GateEvent::Opened => {
-                        ensure!(invoice_sent, "payment gate opened before invoice");
-                        gate_open = true;
-                    }
-                    GateEvent::Failed => bail!("input payment was not authorized"),
-                }
-            }
-            incoming = &mut incoming => {
-                let _ = incoming;
-                gate.cancelled.store(true, Ordering::Release);
-                break;
-            }
-            read = backend.read(&mut buffer[..read_capacity]), if !backend_eof && read_capacity > 0 => {
-                let count = read?;
-                if count == 0 {
-                    // No authorization means the backend never produced a
-                    // first token (e.g. prefill was rejected); nothing will be
-                    // invoiced, so fail now instead of waiting for the invoice.
-                    ensure!(
-                        gate.started.load(Ordering::Acquire),
-                        "backend ended before payment authorization started"
-                    );
-                    backend_eof = true;
-                } else if gate_open {
-                    if !deliver_output(writer, gate, &mut delivery, buffer[..count].to_vec(), delivered.as_deref_mut()).await? {
-                        return Ok(false);
-                    }
-                } else {
-                    pending_bytes += count;
-                    pending.push_back(buffer[..count].to_vec());
-                }
-            }
-        }
-    }
-    Ok(true)
-}
-
-/// Backstop for bytes buffered before payment. Sized at ~2 KiB per token of
-/// `PRE_PAYMENT_OUTPUT_TOKENS`, several times a streamed chat-completion
-/// chunk, so the token pause is always reached first.
-const MAX_BUFFERED_OUTPUT_BYTES: usize = 1024 * 1024;
-const _: () = assert!(
-    MAX_BUFFERED_OUTPUT_BYTES as u64
-        >= 2048 * mesh_llm_payments_types::lifetimes::PRE_PAYMENT_OUTPUT_TOKENS
-);
-
-async fn deliver_output(
-    writer: &mut (impl AsyncWrite + Unpin),
-    gate: &InvoiceGate,
-    delivery: &mut super::delivery::DeliveryUsage,
-    bytes: Vec<u8>,
-    delivered: Option<&mut DeliveredCapture>,
-) -> Result<bool> {
-    let frame = Frame::Output { bytes };
-    if wire::write(writer, &frame).await.is_err() {
-        gate.cancelled.store(true, Ordering::Release);
-        return Ok(false);
-    }
-    if let (Some(capture), Frame::Output { bytes }) = (delivered, &frame) {
-        capture.push(bytes);
-    }
-    let Frame::Output { bytes } = frame else {
-        unreachable!("output frame changed before delivery accounting");
-    };
-    let delivered_tokens = delivery.observe(&bytes)?;
-    gate.delivered_tokens
-        .fetch_max(delivered_tokens, Ordering::AcqRel);
-    if delivered_tokens.saturating_sub(gate.flushed_tokens.load(Ordering::Acquire))
-        >= DELIVERED_FLUSH_TOKENS
-    {
-        gate.flush_delivered().await?;
-    }
-    Ok(true)
-}
-
-/// How long a new request waits for the same peer's prior debt to settle.
-const PRIOR_SETTLEMENT_WAIT: Duration = Duration::from_secs(30);
-
-/// Delivered-token watermark writes are batched: the ledger is raised once at
-/// least this many tokens accumulate, and the final count is written
-/// atomically with the serving close. A crash can only under-record (never
-/// over-record): the loss is bounded by one batch plus the last output frame,
-/// which for coalesced SSE or a nonstreaming response can hold many tokens.
-const DELIVERED_FLUSH_TOKENS: u64 = 32;
-
+/// A buyer refetches the outcome of a request after a disconnect or restart.
+/// Never dispatches; a request still in progress answers `Pending`.
 pub(super) async fn recover(
     payments: &Payments,
     id: &str,
     writer: &mut (impl AsyncWrite + Unpin),
 ) -> Result<()> {
     uuid::Uuid::parse_str(id)?;
-    let response: ServeRecoverResponse = payments
-        .call(ops::SERVE_RECOVER, &IdRequest { id: id.into() })
-        .await?;
-    let ServeRecoverResponse::Complete { output } = response else {
-        return wire::write(writer, &Frame::Pending).await;
+    let response: ServeRecoverResponse = payments.call(ops::SERVE_RECOVER, &request_id(id)).await?;
+    let bill = match response {
+        ServeRecoverResponse::Pending => return wire::write(writer, &Frame::Pending {}).await,
+        ServeRecoverResponse::Abandoned => None,
+        ServeRecoverResponse::Billed { bill } => Some(bill),
     };
-    if let Some(receipt) = output {
-        wire::write(
-            writer,
-            &Frame::OutputInvoice {
-                request_id: id.into(),
-                tokens: receipt.tokens,
-                invoice: receipt.invoice,
-            },
-        )
-        .await?;
+    wire::write(writer, &settlement_frame(id, bill.as_ref())).await?;
+    if let Some(invoice) = bill.and_then(|bill| bill.invoice) {
+        let _: SettledReceived = payments
+            .call(
+                ops::SETTLE_RECEIVED,
+                &mesh_llm_payments_types::contract::InvoiceRequest { invoice },
+            )
+            .await?;
     }
-    wire::write(writer, &Frame::Complete).await
+    wire::write(writer, &Frame::Complete {}).await
 }
 
-struct ServingGuard {
-    gate: Arc<InvoiceGate>,
-}
-impl Drop for ServingGuard {
-    fn drop(&mut self) {
-        self.gate.cancelled.store(true, Ordering::Release);
-        // Backstop for a cancelled serving task, which never reaches the
-        // awaited close; every other path has already closed serving.
-        let gate = self.gate.clone();
-        self.gate.runtime.spawn(async move {
-            let _ = gate.close_serving().await;
-        });
+fn request_id(id: &str) -> RequestIdRequest {
+    RequestIdRequest {
+        request_id: id.to_owned(),
     }
 }
 
 #[cfg(test)]
-mod delivered_capture_tests {
+mod tests {
     use super::*;
-    use crate::network::openai::transport::RouteDispatchOutcome;
+    use std::task::Poll;
+    use tokio::io::AsyncWriteExt;
 
-    const OK: &[u8] =
-        b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}";
-
-    #[test]
-    fn replay_uses_the_normalized_paid_request_adapter() {
-        use crate::network::openai::transport::ResponseAdapter;
-        for (path, stream, expected) in [
-            (
-                "/v1/chat/completions",
-                true,
-                ResponseAdapter::OpenAiChatCompletionsStream,
-            ),
-            (
-                "/v1/chat/completions",
-                false,
-                ResponseAdapter::OpenAiChatCompletionsJson,
-            ),
-            ("/v1/completions", true, ResponseAdapter::None),
-            ("/v1/completions", false, ResponseAdapter::None),
-        ] {
-            let raw =
-                format!("POST {path} HTTP/1.1\r\n\r\n{{\"model\":\"test\",\"stream\":{stream}}}");
-            let request = PaidRequest::parse(raw.as_bytes()).unwrap();
-            assert_eq!(paid_response_adapter(&request), expected);
-        }
-    }
-
-    #[test]
-    fn the_status_is_read_off_the_first_bytes() {
-        let mut capture = DeliveredCapture::default();
-        capture.push(&OK[..5]);
-        capture.push(&OK[5..]);
-        assert_eq!(capture.status(), Some(200));
-        assert_eq!(DeliveredCapture::default().status(), None);
-        let mut not_http = DeliveredCapture::default();
-        not_http.push(b"garbage");
-        assert_eq!(not_http.status(), None);
+    #[tokio::test]
+    async fn send_half_eof_is_not_cancel_but_explicit_cancel_is() -> Result<()> {
+        let mut eof = tokio::io::empty();
+        let watcher = wait_for_cancel_or_invalid_frame(&mut eof);
+        tokio::pin!(watcher);
+        std::future::poll_fn(|cx| {
+            assert!(matches!(
+                std::future::Future::poll(watcher.as_mut(), cx),
+                Poll::Pending
+            ));
+            Poll::Ready(())
+        })
+        .await;
+        let mut bytes = Vec::new();
+        wire::write(&mut bytes, &Frame::Cancel {}).await?;
+        wait_for_cancel_or_invalid_frame(&mut bytes.as_slice()).await?;
+        Ok(())
     }
 
     #[tokio::test]
-    async fn past_the_capture_limit_the_status_is_kept_and_only_the_digests_dropped() {
-        let mut capture = DeliveredCapture::default();
-        capture.push(OK);
-        capture.push(&vec![b'x'; MAX_CAPTURED_RESPONSE_BYTES]);
-        assert!(matches!(
-            exchange_outcome(
-                true,
-                capture,
-                crate::network::openai::transport::ResponseAdapter::None
-            )
-            .await,
-            RouteDispatchOutcome::Responded(200)
-        ));
+    async fn truncated_and_unexpected_buyer_frames_are_errors_not_cancel() -> Result<()> {
+        let mut bytes = Vec::new();
+        wire::write(&mut bytes, &Frame::Accepted {}).await?;
+        assert!(
+            wait_for_cancel_or_invalid_frame(&mut bytes.as_slice())
+                .await
+                .is_err()
+        );
+        let (mut send, mut recv) = tokio::io::duplex(8);
+        send.write_all(&[0]).await?;
+        send.shutdown().await?;
+        assert!(wait_for_cancel_or_invalid_frame(&mut recv).await.is_err());
+        Ok(())
     }
 
     #[tokio::test]
-    async fn a_failed_serving_still_ends_the_exchange_with_a_terminal_failure() {
-        let mut capture = DeliveredCapture::default();
-        capture.push(OK);
-        assert!(matches!(
-            exchange_outcome(
-                false,
-                capture,
-                crate::network::openai::transport::ResponseAdapter::None
-            )
-            .await,
-            RouteDispatchOutcome::Failed(_)
-        ));
+    async fn a_complete_response_is_billed_even_when_the_buyer_stopped_reading() {
+        let response = b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 44\r\n\r\n{\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":2}}";
+        let (mut buyer_send, mut buyer_recv) = tokio::io::duplex(1 << 16);
+        buyer_send.shutdown().await.unwrap();
+        let mut sink = Vec::new();
+        let usage = forward_backend(&response[..], &mut buyer_recv, &mut sink, None).await;
+        assert_eq!(
+            usage,
+            Some(MeteredUsage {
+                prompt_tokens: 5,
+                completion_tokens: 2
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn a_backend_that_reports_no_usage_abandons() {
+        let response = b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}";
+        let (_buyer_send, mut buyer_recv) = tokio::io::duplex(16);
+        let mut sink = Vec::new();
+        assert_eq!(
+            forward_backend(&response[..], &mut buyer_recv, &mut sink, None).await,
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn a_buyer_cancel_abandons_a_stalled_backend() {
+        let (_backend_send, backend_recv) = tokio::io::duplex(16);
+        let (mut buyer_send, mut buyer_recv) = tokio::io::duplex(64);
+        wire::write(&mut buyer_send, &Frame::Cancel {})
+            .await
+            .unwrap();
+        let mut sink = Vec::new();
+        assert_eq!(
+            forward_backend(backend_recv, &mut buyer_recv, &mut sink, None).await,
+            None
+        );
+    }
+
+    #[test]
+    fn an_abandoned_settlement_carries_no_bill_and_a_billed_one_applies_the_deposit() {
+        let Frame::Settlement {
+            usage,
+            bill_msat,
+            deposit_applied_msat,
+            invoice,
+            ..
+        } = settlement_frame("id", None)
+        else {
+            panic!("expected settlement");
+        };
+        assert!(usage.is_none() && bill_msat.is_none() && invoice.is_none());
+        assert_eq!(deposit_applied_msat, 0);
+        let bill = FinalBill {
+            usage: MeteredUsage {
+                prompt_tokens: 1,
+                completion_tokens: 1,
+            },
+            bill_msat: 10,
+            deposit_msat: 30,
+            remaining_msat: 0,
+            settled: true,
+            invoice: None,
+        };
+        let Frame::Settlement {
+            deposit_applied_msat,
+            ..
+        } = settlement_frame("id", Some(&bill))
+        else {
+            panic!("expected settlement");
+        };
+        // A deposit exceeding the bill is applied only up to the bill.
+        assert_eq!(deposit_applied_msat, 10);
     }
 }

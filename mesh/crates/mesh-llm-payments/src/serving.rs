@@ -26,8 +26,8 @@ impl PaymentService {
     /// Admit one request at the seller's current prices. Buyers at the strike
     /// limit are refused; buyers in good standing are admitted without a
     /// deposit and dispatch is claimed here; everyone else is quoted a deposit
-    /// of 0.3 x the estimated input cost. Replaying the same terms returns the
-    /// same answer, but never a second dispatch.
+    /// of 0.3 x the estimated input cost. A request this seller already holds
+    /// is reported as replayed: never a second dispatch.
     pub async fn serve_admit(&self, request: ServeAdmitRequest) -> Result<ServeAdmitResponse> {
         let ServeAdmitRequest {
             request_id,
@@ -36,6 +36,10 @@ impl PaymentService {
             pricing,
             estimate,
         } = request;
+        if let Some(owner) = self.ledger.metered_owner(&request_id)? {
+            ensure!(owner == buyer, "request belongs to another buyer");
+            return Ok(ServeAdmitResponse::Replayed { request_id });
+        }
         ensure!(
             self.ledger.pricing()?.get(&model) == Some(&pricing),
             "seller prices changed"

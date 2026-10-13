@@ -67,6 +67,8 @@ pub enum Frame {
     Recover {
         id: String,
     },
+    /// Recovery answer for a request still in progress: nothing to settle yet.
+    Pending {},
     Cancel {},
     Error {
         message: String,

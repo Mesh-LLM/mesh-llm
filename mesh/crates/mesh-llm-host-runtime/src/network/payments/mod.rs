@@ -1,10 +1,11 @@
-//! Invoice exchange over authenticated peer tunnels. Wallet authorization is
-//! owned by local ingress; remote forwarding cannot spend the relay's wallet.
+//! Token-metered exchange over authenticated peer tunnels: admission and
+//! deposit before any backend work, unchanged streaming, settlement from the
+//! backend's reported usage. Wallet authorization is owned by local ingress;
+//! remote forwarding cannot spend the relay's wallet.
 
+mod backend;
 pub(crate) mod client;
-mod delivery;
 pub mod engine;
-mod gate;
 pub(crate) mod lifecycle;
 pub(crate) mod node_ext;
 pub(crate) mod request;
@@ -18,11 +19,14 @@ pub(crate) use node_ext::{
 pub(crate) use server::serve;
 
 pub(crate) fn is_payment_upgrade(prefix: &[u8]) -> bool {
-    prefix.starts_with(b"POST /mesh/payment/v2 HTTP/1.1\r\n")
+    prefix.starts_with(b"POST /mesh/payment/v3 HTTP/1.1\r\n")
 }
 
+/// v1 and v2 payers speak fixed-allowance protocols this seller no longer
+/// serves. Both still parse the v2 frame format's `Error` frame.
 pub(crate) fn is_legacy_payment_upgrade(prefix: &[u8]) -> bool {
     prefix.starts_with(mesh_llm_payments_types::wire::LEGACY_V1_UPGRADE_PREFIX)
+        || prefix.starts_with(b"POST /mesh/payment/v2 HTTP/1.1\r\n")
 }
 
 #[cfg(test)]
@@ -31,9 +35,12 @@ mod upgrade_tests {
 
     #[test]
     fn payment_upgrade_matches_only_the_current_protocol() {
-        let current = mesh_llm_payments_types::wire::HTTP_UPGRADE;
+        let current = mesh_llm_payments_types::metered_wire::HTTP_UPGRADE;
         assert!(is_payment_upgrade(current));
         assert!(!is_legacy_payment_upgrade(current));
+        let v2 = mesh_llm_payments_types::wire::HTTP_UPGRADE;
+        assert!(!is_payment_upgrade(v2));
+        assert!(is_legacy_payment_upgrade(v2));
         let v1 = b"POST /mesh/payment/v1 HTTP/1.1\r\nHost: mesh\r\nContent-Length: 0\r\n\r\n";
         assert!(!is_payment_upgrade(v1));
         assert!(is_legacy_payment_upgrade(v1));
@@ -89,13 +96,14 @@ pub(crate) async fn intercept_inbound(
         return Ok(Inbound::Handled);
     }
     if is_legacy_payment_upgrade(&prefix) {
-        // v1 payers (<= v0.78.x) speak an incompatible frame format. Refuse in
-        // the frame format they still parse, before any payment state exists.
+        // v1 (<= v0.78.x) and v2 payers speak fixed-allowance protocols.
+        // Refuse in the frame format they still parse, before any payment
+        // state exists.
         let mut send = quic_send;
         let _ = mesh_llm_payments_types::wire::write(
             &mut send,
             &mesh_llm_payments_types::wire::Frame::Error {
-                message: "payment protocol v1 is not supported by this seller; upgrade mesh-llm"
+                message: "this seller requires token-metered payment protocol v3; upgrade mesh-llm"
                     .into(),
             },
         )

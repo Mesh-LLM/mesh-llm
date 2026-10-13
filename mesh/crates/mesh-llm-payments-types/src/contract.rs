@@ -227,6 +227,9 @@ pub enum ServeAdmitResponse {
     Admitted { request_id: String },
     /// Refused: the buyer has too many issued and unpaid final invoices.
     Blocked { reason: String },
+    /// This seller already holds the request: answer with
+    /// [`ops::SERVE_RECOVER`], never a second dispatch.
+    Replayed { request_id: String },
 }
 
 /// Request for [`ops::SERVE_DEPOSIT_CONFIRMED`], [`ops::SERVE_ABANDON`] and

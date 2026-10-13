@@ -89,14 +89,16 @@ impl PaymentService {
             .ledger
             .request_terms(&request_id)?
             .context("unknown metered request")?;
-        ensure!(
-            usage.completion_tokens <= terms.max_output_tokens,
-            "output allowance exceeded"
-        );
         let bill = usage.bill_msat(&admission.pricing)?;
         ensure!(
             bill_msat == Some(bill),
             "bill does not match the admitted rates"
+        );
+        // The buyer's own cap, approved against policy and balance; the
+        // seller never saw it.
+        ensure!(
+            bill <= terms.max_total_msat,
+            "bill exceeds the approved cap"
         );
         ensure!(
             deposit_applied_msat <= admission.deposit_msat && deposit_applied_msat <= bill,
