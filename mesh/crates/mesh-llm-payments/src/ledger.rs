@@ -278,7 +278,7 @@ impl Ledger {
         let mut connection = self.lock()?;
         let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         tx.execute(
-            "UPDATE charges SET state='failed' WHERE segment=0 AND state='prepared' AND request_id IN (SELECT id FROM requests WHERE json_extract(terms,'$.peer')!='wallet-send')",
+            "UPDATE charges SET state='failed' WHERE segment=0 AND state='prepared' AND request_id IN (SELECT id FROM requests WHERE json_extract(terms,'$.peer')!='wallet-send') AND NOT EXISTS(SELECT 1 FROM settings WHERE key='metered-payer/'||charges.request_id)",
             [],
         )?;
         finalize_terminal_requests(&tx)?;
@@ -286,10 +286,48 @@ impl Ledger {
         Ok(())
     }
 
-    /// Run only while opening the exclusively locked service, before live approvals.
+    /// Metered buyer only: on the seller's authoritative Complete, retire a
+    /// deposit charge that was never submitted (`prepared`), releasing its
+    /// reservation without the failed-request cascade. A `pending` (possibly
+    /// submitted) deposit is untouched until wallet facts resolve it. Returns
+    /// whether a charge was retired; replays return `false`.
+    pub fn retire_unsubmitted_metered_deposit(&self, id: &str) -> Result<bool> {
+        let mut connection = self.lock()?;
+        let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let metered: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM settings WHERE key='metered-payer/'||?1)",
+            [id],
+            |r| r.get(0),
+        )?;
+        ensure!(metered, "not a metered buyer request");
+        // `retired` is terminal and outside ('prepared','pending'), so
+        // reconcile ignores it and `finish` can complete the request.
+        let changed = tx.execute(
+            "UPDATE charges SET state='retired' WHERE request_id=?1 AND segment=0 AND state='prepared'",
+            [id],
+        )?;
+        tx.commit()?;
+        Ok(changed == 1)
+    }
+
+    /// Run only while opening the exclusively locked service, before live
+    /// approvals. Metered buyer requests (`metered-payer/<id>` setting) are
+    /// excluded: a trusted no-deposit request may be dispatched with no charge
+    /// and still owe its final invoice.
     pub fn close_abandoned_approvals(&self) -> Result<()> {
-        self.lock()?.execute("UPDATE requests SET state='failed' WHERE state='approved' AND NOT EXISTS(SELECT 1 FROM charges WHERE request_id=requests.id)", [])?;
+        self.lock()?.execute("UPDATE requests SET state='failed' WHERE state='approved' AND NOT EXISTS(SELECT 1 FROM charges WHERE request_id=requests.id) AND NOT EXISTS(SELECT 1 FROM settings WHERE key='metered-payer/'||requests.id)", [])?;
         Ok(())
+    }
+
+    /// The terms of one request, if proposed.
+    pub fn request_terms(&self, id: &str) -> Result<Option<RequestTerms>> {
+        let connection = self.lock()?;
+        let terms: Option<String> = connection
+            .query_row("SELECT terms FROM requests WHERE id=?1", [id], |r| r.get(0))
+            .optional()?;
+        terms
+            .map(|terms| serde_json::from_str(&terms).map_err(Into::into))
+            .transpose()
     }
 
     /// Serialize cancellation with approval and charge preparation in SQLite.

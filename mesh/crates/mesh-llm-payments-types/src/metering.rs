@@ -28,6 +28,27 @@ impl MeteredUsage {
     }
 }
 
+/// Deposit share of the estimated input cost, in tenths.
+pub const DEPOSIT_TENTHS: u128 = 3;
+
+/// The admission deposit for an estimated input charge: 0.3 x the charge,
+/// rounded up. The single definition both sides check an admission against.
+pub fn deposit_msat(estimated_input_charge_msat: u64) -> Result<u64> {
+    Ok(u64::try_from(
+        (u128::from(estimated_input_charge_msat) * DEPOSIT_TENTHS).div_ceil(10),
+    )?)
+}
+
+impl MeteredUsage {
+    /// The bill for this usage at `pricing`: input plus output charges.
+    pub fn bill_msat(&self, pricing: &crate::pricing::Pricing) -> Result<u64> {
+        pricing
+            .input_charge(self.prompt_tokens)?
+            .checked_add(pricing.output_charge(self.completion_tokens)?)
+            .ok_or_else(|| anyhow::anyhow!("bill overflow"))
+    }
+}
+
 /// Parsed-content estimate with explicit media uncertainty. `input_tokens`
 /// uses UTF-8 bytes / 4 plus modest message overhead; it is not a tokenizer
 /// result.

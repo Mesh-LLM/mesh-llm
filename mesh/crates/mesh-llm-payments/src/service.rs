@@ -43,7 +43,7 @@ pub struct PaymentService {
     directory: PathBuf,
     wallet: OnceCell<Arc<dyn WalletProvider>>,
     factory: Arc<dyn crate::provisioning::WalletFactory>,
-    payment_lock: Mutex<()>,
+    pub(crate) payment_lock: Mutex<()>,
     pub(crate) receivable_lock: Mutex<()>,
     /// Buyers that settled a metered request in this process: admitted without
     /// a deposit while they carry no expired unpaid invoice.
@@ -265,9 +265,15 @@ impl PaymentService {
         self.ledger.finalize_terminal_requests()?;
         let mut first_error = None;
         for charge in self.ledger.pending_charges()? {
-            let result = match self.start_or_observe_charge(&charge).await {
-                Ok(payment) => self.ledger.reconcile(&payment, crate::now_ms()),
-                Err(error) => Err(error),
+            // A metered buyer charge is only observed: the seller's settlement
+            // decides whether anything is owed, so recovery never resubmits.
+            let result = if self.is_metered_buyer_request(&charge.request_id)? {
+                self.observe_metered_charge(&charge).await
+            } else {
+                match self.start_or_observe_charge(&charge).await {
+                    Ok(payment) => self.ledger.reconcile(&payment, crate::now_ms()),
+                    Err(error) => Err(error),
+                }
             };
             if let Err(error) = result {
                 first_error.get_or_insert(error);

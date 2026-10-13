@@ -20,9 +20,6 @@ use super::{Ledger, read_amount, sql_amount};
 use crate::pricing::Pricing;
 use mesh_llm_payments_types::metering::MeteredUsage;
 
-/// Deposit share of the estimated input cost, in tenths.
-const DEPOSIT_TENTHS: u128 = 3;
-
 /// Distinct issued, unpaid final invoices at which a buyer is refused.
 pub const STRIKE_LIMIT: u64 = 3;
 
@@ -88,7 +85,7 @@ impl Ledger {
         } = *request;
         let input = pricing.input_charge(estimated_input_tokens)?;
         let deposit = if require_deposit {
-            u64::try_from((u128::from(input) * DEPOSIT_TENTHS).div_ceil(10))?
+            mesh_llm_payments_types::metering::deposit_msat(input)?
         } else {
             0
         };
@@ -170,10 +167,7 @@ impl Ledger {
         let pricing: Pricing = serde_json::from_str(&pricing)?;
         let (state, bill, remaining) = match outcome {
             MeteredOutcome::Usage(usage) => {
-                let bill = pricing
-                    .input_charge(usage.prompt_tokens)?
-                    .checked_add(pricing.output_charge(usage.completion_tokens)?)
-                    .ok_or_else(|| anyhow::anyhow!("bill overflow"))?;
+                let bill = usage.bill_msat(&pricing)?;
                 ("billed", Some(bill), bill.saturating_sub(deposit_paid))
             }
             MeteredOutcome::Abandoned => ("abandoned", None, 0),

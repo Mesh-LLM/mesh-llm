@@ -9,9 +9,10 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use mesh_llm_payments_types::contract::{
-    AdvertisedPricing, ArrivalResponse, AuthorizeRequest, CancelRequest, Empty, FinishRequest,
-    IdRequest, InvoiceRequest, OpError, PayInputRequest, RequestIdRequest, RoutingBudgetRequest,
-    ServeAdmitRequest, ServeSettleRequest, SettleOutputRequest, SettledReceived,
+    AcceptAdmissionRequest, AdvertisedPricing, ArrivalResponse, CancelRequest, Empty,
+    FinishRequest, IdRequest, InvoiceRequest, OpError, PayDepositRequest, RequestIdRequest,
+    RoutingBudgetRequest, ServeAdmitRequest, ServeSettleRequest, SettleFinalRequest,
+    SettledReceived,
 };
 use mesh_llm_payments_types::engine::AdvertisedPrices;
 use mesh_llm_plugin::{
@@ -169,17 +170,10 @@ fn operation_router(source: ServiceSource, prices: AdvertisedPrices) -> Operatio
     add_op(
         &mut router,
         &source,
-        ops::SETTLE_OUTPUT,
-        "Validate and pay a seller output invoice.",
-        |service, request: SettleOutputRequest| async move { service.settle_output(request).await },
-    );
-    add_op(
-        &mut router,
-        &source,
         ops::FINISH,
-        "Mark a request finished.",
+        "Close a completed metered request.",
         |service, request: FinishRequest| async move {
-            service.ledger.finish(&request.id).map(|()| Empty {})
+            service.finish_metered(&request.id).await.map(|()| Empty {})
         },
     );
     add_op(
@@ -199,10 +193,10 @@ fn operation_router(source: ServiceSource, prices: AdvertisedPrices) -> Operatio
     add_op(
         &mut router,
         &source,
-        ops::AUTHORIZE,
-        "Propose and approve request terms.",
-        |service, request: AuthorizeRequest| async move {
-            service.authorize(request).await.map(|()| Empty {})
+        ops::ACCEPT_ADMISSION,
+        "Approve a seller's admission against policy, balance and the local cap.",
+        |service, request: AcceptAdmissionRequest| async move {
+            service.accept_admission(request).await.map(|()| Empty {})
         },
     );
     add_op(
@@ -215,11 +209,21 @@ fn operation_router(source: ServiceSource, prices: AdvertisedPrices) -> Operatio
     add_op(
         &mut router,
         &source,
-        ops::PAY_INPUT,
-        "Pay the input invoice of an authorized request.",
-        |service, request: PayInputRequest| async move {
+        ops::PAY_DEPOSIT,
+        "Pay the deposit invoice of an accepted admission.",
+        |service, request: PayDepositRequest| async move {
             // Durable submission continues even if the caller goes away.
-            tokio::spawn(async move { service.pay_input(request).await }).await?
+            tokio::spawn(async move { service.pay_deposit(request).await }).await?
+        },
+    );
+    add_op(
+        &mut router,
+        &source,
+        ops::SETTLE_FINAL,
+        "Check a seller's settlement against the admission and pay the final invoice.",
+        |service, request: SettleFinalRequest| async move {
+            // Durable submission continues even if the caller goes away.
+            tokio::spawn(async move { service.settle_final(request).await }).await?
         },
     );
     add_serving_ops(&mut router, &source);

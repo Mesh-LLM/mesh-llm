@@ -24,20 +24,24 @@ pub mod ops {
     /// Reconcile uncertain charges and recover output debt; returns the
     /// approved requests the host must re-contact their sellers about.
     pub const RECONCILE: &str = "reconcile";
-    /// Validate and pay a seller's output invoice for a request.
-    pub const SETTLE_OUTPUT: &str = "settle_output";
-    /// Mark a request finished.
+    /// Close a metered request the seller completed: retire an unsubmitted
+    /// deposit and mark the request finished.
     pub const FINISH: &str = "finish";
     /// The operator's profile payment intent (no wallet I/O).
     pub const PAYMENT_INTENT: &str = "payment_intent";
     /// Start reading the balance for a request so it overlaps seller prefill.
     pub const PREFETCH: &str = "prefetch";
-    /// Durably propose and approve request terms against policy and balance.
-    pub const AUTHORIZE: &str = "authorize";
+    /// Durably approve a seller's admission: the local spending cap against
+    /// policy and balance, and the admitted terms every later payment of the
+    /// request is checked against.
+    pub const ACCEPT_ADMISSION: &str = "accept_admission";
     /// Release a request that did not (or can no longer) start paying.
     pub const CANCEL: &str = "cancel";
-    /// Pay the seller's input invoice for an authorized request.
-    pub const PAY_INPUT: &str = "pay_input";
+    /// Pay the seller's deposit invoice for an accepted admission.
+    pub const PAY_DEPOSIT: &str = "pay_deposit";
+    /// Check a seller's settlement against the admission and pay the final
+    /// invoice; an abandoned settlement creates no charge.
+    pub const SETTLE_FINAL: &str = "settle_final";
 
     // Seller (serving) side: token-metered billing.
     /// Admit a buyer's request at the seller's current prices: refuse a buyer
@@ -129,15 +133,30 @@ pub struct RoutingBudgetResponse {
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct ReconcileResponse {
-    /// Approved requests (excluding local wallet sends) still owing output.
+    /// Accepted admissions (excluding local wallet sends) whose settlement
+    /// has not been completed; the host refetches each from its seller.
     pub approved: Vec<RequestTerms>,
 }
 
+/// Request for [`ops::SETTLE_FINAL`]: the seller's settlement frame, as
+/// received. The provider recomputes the bill from the stored admission and
+/// pays only an invoice that matches the remainder.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct SettleOutputRequest {
-    pub terms: RequestTerms,
-    pub tokens: u64,
-    pub invoice: mesh_llm_wallet::invoice::Invoice,
+pub struct SettleFinalRequest {
+    pub request_id: String,
+    /// `None` means the seller abandoned the request: no bill, no charge.
+    pub usage: Option<crate::metering::MeteredUsage>,
+    pub bill_msat: Option<u64>,
+    pub deposit_applied_msat: u64,
+    pub invoice: Option<mesh_llm_wallet::invoice::Invoice>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct SettleFinalResponse {
+    /// The bill the provider verified; zero for an abandoned request.
+    pub bill_msat: u64,
+    /// The final payment, when a remainder was owed and paid.
+    pub payment: Option<mesh_llm_wallet::provider::Transaction>,
 }
 
 /// Request for [`ops::FINISH`].
@@ -151,9 +170,13 @@ pub struct IdRequest {
     pub id: String,
 }
 
+/// Request for [`ops::ACCEPT_ADMISSION`]. `terms` carry the buyer's local
+/// cap (`max_total_msat`) and never leave this node; `admission` is what the
+/// seller stated and what every payment of the request is checked against.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct AuthorizeRequest {
+pub struct AcceptAdmissionRequest {
     pub terms: RequestTerms,
+    pub admission: crate::metered_wire::AdmissionTerms,
 }
 
 /// Which release a [`ops::CANCEL`] performs.
@@ -172,9 +195,10 @@ pub struct CancelRequest {
     pub stage: CancelStage,
 }
 
+/// Request for [`ops::PAY_DEPOSIT`]; the amount comes from the admission.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct PayInputRequest {
-    pub terms: RequestTerms,
+pub struct PayDepositRequest {
+    pub request_id: String,
     pub invoice: mesh_llm_wallet::invoice::Invoice,
 }
 
@@ -302,13 +326,13 @@ mod tests {
         ops::PRICING,
         ops::ROUTING_BUDGET,
         ops::RECONCILE,
-        ops::SETTLE_OUTPUT,
         ops::FINISH,
         ops::PAYMENT_INTENT,
         ops::PREFETCH,
-        ops::AUTHORIZE,
+        ops::ACCEPT_ADMISSION,
         ops::CANCEL,
-        ops::PAY_INPUT,
+        ops::PAY_DEPOSIT,
+        ops::SETTLE_FINAL,
         ops::SERVE_ADMIT,
         ops::SERVE_DEPOSIT_CONFIRMED,
         ops::SERVE_SETTLE,
