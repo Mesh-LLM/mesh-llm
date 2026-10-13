@@ -1,4 +1,4 @@
-From c8185c3dcf81a641b1e8adcedb27b55f5c8477e0 Mon Sep 17 00:00:00 2001
+From 8468ce44742f0381fb5089f2dc5d0e2f8bdb532a Mon Sep 17 00:00:00 2001
 From: James Dumay <jameswdumay@gmail.com>
 Date: Sat, 19 Sep 2026 15:17:16 +1000
 Subject: [PATCH] skippy: implement graph planning realization and runtime
@@ -41,7 +41,7 @@ Subject: [PATCH] skippy: implement graph planning realization and runtime
  src/skippy/runtime_types.h              |  173 ++++
  src/skippy/sampling.cpp                 |  961 +++++++++++++++++++
  src/skippy/sampling_internal.h          |   49 +
- src/skippy/session.cpp                  |  525 ++++++++++
+ src/skippy/session.cpp                  |  527 ++++++++++
  src/skippy/speculative_decoding.cpp     |  547 +++++++++++
  src/skippy/speculative_internal.h       |   32 +
  src/skippy/stage_plan.cpp               |  632 ++++++++++++
@@ -54,7 +54,7 @@ Subject: [PATCH] skippy: implement graph planning realization and runtime
  src/skippy/state_effects.h              |   74 ++
  src/skippy/tokenization.cpp             |  179 ++++
  src/skippy/verification.cpp             |  265 +++++
- 50 files changed, 14816 insertions(+)
+ 50 files changed, 14818 insertions(+)
  create mode 100644 src/skippy-verify-checkpoint.h
  create mode 100644 src/skippy/abi.cpp
  create mode 100644 src/skippy/activation.cpp
@@ -10113,10 +10113,10 @@ index 000000000..9f819704f
 +llama_token skippy_sample_token(skippy_session * session, const skippy_sampling_config * sampling);
 diff --git a/src/skippy/session.cpp b/src/skippy/session.cpp
 new file mode 100644
-index 000000000..1f13e2bbc
+index 000000000..e1cdcaab6
 --- /dev/null
 +++ b/src/skippy/session.cpp
-@@ -0,0 +1,525 @@
+@@ -0,0 +1,527 @@
 +#include "skippy.h"
 +#include "skippy/errors.h"
 +#include "skippy/environment.h"
@@ -10473,10 +10473,12 @@ index 000000000..1f13e2bbc
 +        skippy_refresh_backend_sampling(session, sampling);
 +    } catch (const std::exception & e) {
 +        skippy_clear_chat_sampling(session);
-+        return skippy_success(out_error);
++        skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, e.what());
++        return SKIPPY_STATUS_RUNTIME_ERROR;
 +    } catch (...) {
 +        skippy_clear_chat_sampling(session);
-+        return skippy_success(out_error);
++        skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "failed to configure chat sampling");
++        return SKIPPY_STATUS_RUNTIME_ERROR;
 +    }
 +    return skippy_success(out_error);
 +}

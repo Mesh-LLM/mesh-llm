@@ -103,6 +103,9 @@ impl ChatStreamDeltas {
         &self,
         fallback: FinishReason,
     ) -> InferenceResult<FinishReason> {
+        if fallback == FinishReason::Length {
+            return Ok(fallback);
+        }
         if self.tool_calls.incomplete() && fallback == FinishReason::Stop {
             return Err(openai_backend_error(anyhow::anyhow!(
                 "generation stopped with an incomplete or inconsistent tool call"

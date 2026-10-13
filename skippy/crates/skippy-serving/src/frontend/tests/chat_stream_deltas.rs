@@ -94,6 +94,11 @@ fn concatenated_wire_fragments_equal_the_non_streaming_arguments() {
         "a client concatenating fragments must reconstruct the non-streaming arguments"
     );
     assert_eq!(
+        deltas.finish_reason(FinishReason::Length).unwrap(),
+        FinishReason::Length,
+        "a completed tool call must preserve an explicit output budget"
+    );
+    assert_eq!(
         deltas.finish_reason(FinishReason::Stop).unwrap(),
         FinishReason::ToolCalls
     );
