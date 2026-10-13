@@ -369,6 +369,14 @@ fn changed_pin_graph_requires_preflight_candidate_independent_verification_and_p
     assert!(field(env, "CANARY_AGENT_MODEL").contains("glm-5.3-flash"));
     let (_, evidence) = named(build, "id", "upload_evidence");
     assert_eq!(field(evidence.get("with").unwrap(), "retention-days"), "14");
+    let evidence = evidence.get("with").unwrap();
+    assert_eq!(field(evidence, "include-hidden-files"), "true");
+    assert!(
+        field(evidence, "path").contains("${{ env.CANARY_SOURCE_ROOT }}/.deps/llama-canary-state-")
+    );
+    assert!(
+        field(evidence, "path").contains("${{ env.LLAMA_STAGE_BUILD_DIR }}/Testing/Temporary/")
+    );
 }
 #[test]
 fn frozen_prebuilt_workers_load_cache_after_controller_and_before_consumption() {

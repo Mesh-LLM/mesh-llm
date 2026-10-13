@@ -331,6 +331,9 @@ repeated infrastructure failure or invalid aggregate evidence stops. Only
 complete independent success permits publication.
 Full worker/build logs remain for 14 days; executable handoffs remain for seven
 days so a single-machine queue can complete later passes.
+Build evidence explicitly includes hidden run-owned `.deps` state and native
+CTest results before cleanup. Live controller output retains up to 16 MiB per
+stream; the artifact contains the complete gate logs when that bound is exceeded.
 Agent-run build and test commands stream to the live job and save individual
 logs and exit statuses under `agent-commands/` in the build evidence artifact.
 The command wrapper also snapshots available CTest result files after each run.

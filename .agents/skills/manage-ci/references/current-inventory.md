@@ -202,6 +202,9 @@ battery, so Nomic embedding uses the same interpreter as family workers.
 Goose's build and test commands use `scripts/llama-canary-log-command.sh` to
 stream output and retain separate invocation logs, exit statuses, and available
 CTest result files under the build job's 14-day repair evidence artifact.
+That upload explicitly includes hidden run-owned `.deps` state and the native
+build's `Testing/Temporary` results before cleanup. The controller forwards up
+to 16 MiB per output stream; complete gate logs remain in the evidence artifact.
 
 Before compilation, the controller runs the selected battery in cache-free
 `--dry-run --skip-build` mode against its own planner output. This checks the

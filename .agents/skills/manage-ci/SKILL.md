@@ -572,6 +572,10 @@ checked-in expiry are the maintainer-controlled approval boundary.
 
 ## Llama canary family fan-out
 
+Build evidence uploads must explicitly include the run-owned hidden `.deps`
+state and native CTest results before cleanup. A truncated live log is not a
+substitute for the retained failure output.
+
 Git payloads consumed as manifests, source inventories or source identity diffs
 must use bounded raw capture, never redacted diagnostic output. Keep diagnostic
 redaction enabled separately; incomplete or oversized payloads fail admission.
