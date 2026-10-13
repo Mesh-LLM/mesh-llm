@@ -60,6 +60,22 @@ skippy-bench eval sync --pack core
 skippy-bench eval run speed-bench --base-url http://127.0.0.1:9337/v1 --model org/repo:Q4_K_M --metrics-http http://127.0.0.1:18080 --metrics-run-id run-local-qwen
 ```
 
+SPEED uses a fixed llama.cpp source revision and an explicit optional prepared
+SDK. Set `MESH_PYTHON_RESEARCH_SOURCE` to the restored, pinned research checkout
+before preparation or execution. With existing absolute uv and CPython 3.12
+paths, prepare the locked dependencies and pinned qualitative dataset once:
+
+```bash
+GIT_MASTER=1 just --command "$PWD/target/release/skippy-bench" eval sync speed-bench --cache-root "$PWD/.cache/evals"
+GIT_MASTER=1 just --command "$PWD/target/release/skippy-bench" eval prepare-speed --cache-root "$PWD/.cache/evals" --uv /absolute/path/to/uv --python /absolute/path/to/python3.12
+```
+
+Preparation is bounded and records `benchmark_qualified=false`. Runtime admits
+the source, regular dataset bytes and sealed environment, then uses that Python
+directly with offline dataset caches. It performs no uv resolution, installation
+or Hugging Face dataset acquisition. Actual benchmark requests still go to the
+selected endpoint and require the existing metrics-server cadence.
+
 `local-single` starts a public inference endpoint and drives `/v1/completions`.
 Split workers communicate only over the binary stage protocol.
 
@@ -163,14 +179,11 @@ concurrency override such as `SWE_BENCH_PRO_NUM_WORKERS` or
 `MCP_ATLAS_COMPLETION_CONCURRENCY` is set to a different value, `eval run`
 fails before launching the native harness.
 
-`sync` clones or installs the external harnesses into
-`~/.cache/mesh-llm/skippy-bench/harnesses/` by default. Use `--cache-root` to
-override that location. Use `--dry-run` with `sync` or `run` to inspect the
-commands without cloning, pulling Docker images, or launching a benchmark.
-For an existing harness clone, `sync` fetches the configured upstream ref and
-checks out the fetched commit directly, so a stale local branch cannot leave the
-cache behind upstream. Each run records that resolved commit in
-`run.json` as `harness_commit` for reproducible benchmark evidence.
+MCP-Atlas and SWE-Bench Pro `sync` acquire pinned source without installing
+their Python SDK environments. MCP sync also pulls its pinned agent image;
+other evals retain their existing tool/dependency setup. Use the explicit SDK
+preparation below for MCP/SWE. Each run records the
+resolved source commit as `harness_commit` in `run.json`.
 Before launching native harness traffic, `eval run` enforces the same required
 tool checks as `eval doctor`, including Docker container-start readiness for
 Docker-backed evals.
@@ -202,25 +215,72 @@ without Modal credentials. The adapter first runs upstream
 `helper_code/generate_sweagent_instances.py` for the full dataset, then feeds
 SWE-agent a native `expert_file` instance file so local Docker can set the
 official image platform, clear image entrypoints, and use SWE-agent's
-standalone Python/SWE-Rex Docker runtime. Local Docker runs install SWE-agent
-into a dedicated venv and default `SWE_BENCH_PRO_SWEREX_SPEC` to
-`swe-rex[modal]==1.4.0`, which preserves SWE-ReX's native Docker runtime while
-using the upstream `python:3.11.9-slim-bookworm` builder fix. Modal runs keep
-the Scale SWE-Rex patch flow. Some SWE-Pro base images carry a pip index config
-for an unavailable localhost mirror, so the local Docker adapter defaults
-`SWE_BENCH_PRO_SWEREX_PIP_INDEX_URL` to `https://pypi.org/simple` for the
-derived-image SWE-ReX install step. Override
-`SWE_BENCH_PRO_DOCKERHUB_USERNAME`,
-`SWE_BENCH_PRO_DOCKER_PLATFORM`, `SWE_BENCH_PRO_DEPLOYMENT_TYPE`,
+standalone Python/SWE-Rex Docker runtime. The prepared SDK retains SWE-ReX 1.4.0's native Docker runtime. Override
+`SWE_BENCH_PRO_DOCKERHUB_USERNAME`, `SWE_BENCH_PRO_DOCKER_PLATFORM`,
 `SWE_BENCH_PRO_NUM_WORKERS`, `SWE_BENCH_PRO_EVAL_WORKERS`, or
-`SWE_BENCH_PRO_PARSE_FUNCTION`. Use `SWE_BENCH_PRO_PYTHON` to choose the
-SWE-agent venv interpreter and `SWE_BENCH_PRO_SWEREX_SPEC` to override the
-SWE-ReX package spec. Use `SWE_BENCH_PRO_SWEREX_PIP_INDEX_URL` to choose the
-package index used inside SWE-ReX derived Docker images. Set
-`SWE_BENCH_PRO_PARSE_FUNCTION=thought_action` for local OpenAI-compatible
-models that do not emit OpenAI tool calls; this is the upstream SWE-agent
-local-model path. Set `SWE_BENCH_PRO_USE_LOCAL_DOCKER=0` when running the full
-harness in a different environment such as Modal.
+`SWE_BENCH_PRO_PARSE_FUNCTION` as needed. Request workers must still match
+`--endpoint-concurrency`. Set `SWE_BENCH_PRO_PARSE_FUNCTION=thought_action`
+for local OpenAI-compatible models that do not emit OpenAI tool calls.
+`SWE_BENCH_PRO_USE_LOCAL_DOCKER=0` preserves the upstream remote evaluation
+choice. Deployment and index selection must match explicit preparation.
+
+### Prepared MCP and SWE SDKs
+
+MCP-Atlas and SWE-Bench Pro use pinned source checkouts and explicitly prepared
+SDK environments. `sync` acquires source and MCP's pinned agent image; it
+does not prepare these SDKs. Preparation is opt-in on Unix and takes existing
+absolute `uv` and Python executable paths. It never downloads an interpreter.
+Before preparing or running these evals, set `MESH_PYTHON_RESEARCH_SOURCE` to
+the restored pinned research checkout. Use one explicit cache root for sync,
+prepare, doctor, and run:
+
+```bash
+just with-lld cargo build --locked --release -p skippy-bench --features skippy-runtime/dynamic-native-runtime
+GIT_MASTER=1 just --command "$PWD/target/release/skippy-bench" eval sync mcp-atlas --cache-root "$CACHE_ROOT"
+GIT_MASTER=1 just --command "$PWD/target/release/skippy-bench" eval prepare-mcp \
+  --cache-root "$CACHE_ROOT" --uv "$UV_EXECUTABLE" --python "$CPYTHON_312_EXECUTABLE"
+GIT_MASTER=1 just --command "$PWD/target/release/skippy-bench" eval sync swe-bench-pro --cache-root "$CACHE_ROOT"
+GIT_MASTER=1 just --command "$PWD/target/release/skippy-bench" eval prepare-swe \
+  --cache-root "$CACHE_ROOT" --uv "$UV_EXECUTABLE" --python "$CPYTHON_31113_EXECUTABLE" \
+  --deployment docker --index-url https://pypi.org/simple
+```
+
+`CACHE_ROOT` and tool paths must be absolute. MCP requires existing CPython
+3.12; SWE requires exactly CPython 3.11.13. `--dry-run` inspects preparation
+without installing or publishing a usable receipt. A preparation destination
+must be fresh; retain failed evidence or choose another cache root rather than
+reusing a partial environment. Run dependency setup only through these native
+owners. They use locked projects, bounded child capture and execution, exact
+source admission, and environment seals. The prepared Python runs with `-I -B`.
+Normal `eval run` admits the receipt and its source/environment before and after
+execution; it does not resolve, install, or patch SDK dependencies.
+
+MCP is pinned to `b290e672645791fea0bcb23e2c0f4fec50715cca`. SWE parent is pinned
+to `66f92766bba642462d4bbe5479e83f91f9211862`, with SWE-agent gitlink
+`402a7b8fdac8193f3f255bb53859ba274234f596`. SWE's source-owned lock retains
+`swe-rex[modal]==1.4.0`. Preparation receipts record `benchmark_qualified=false`.
+Source admission, SDK import checks, and native tests do not establish dataset,
+endpoint, model, platform, Docker/Modal deployment, or benchmark results.
+
+For Modal, explicitly prepare with `--deployment modal`, then set
+`SWE_BENCH_PRO_DEPLOYMENT_TYPE=modal` for the run. The runtime deployment and
+`SWE_BENCH_PRO_SWEREX_PIP_INDEX_URL` must match the prepared profile. The default
+is Docker and `https://pypi.org/simple`. The index must be credential-free
+HTTP(S) without a query or fragment. Native preparation applies only the finite
+Docker index or Modal bootstrap/retry patch profile before sealing the SDK.
+Conflicting `SWE_BENCH_PRO_PYTHON` or `SWE_BENCH_PRO_SWEREX_SPEC` selectors are
+refused; they cannot replace the locked interpreter or package graph.
+
+```bash
+just --command "$PWD/target/release/skippy-bench" eval run swe-bench-pro \
+  --cache-root "$CACHE_ROOT" --base-url http://127.0.0.1:9337/v1 \
+  --model org/repo:Q4_K_M --endpoint-concurrency 1 \
+  --metrics-http http://127.0.0.1:18080 --metrics-run-id run-local-qwen
+```
+
+The same run form supports `mcp-atlas`. A real run still needs its endpoint,
+metrics-server, Docker services, credentials where applicable, and full upstream
+dataset. Preparation starts no benchmark services and runs no model requests.
 
 Every `eval run` writes `run.json` under the run directory with command status,
 the resolved harness commit, raw artifact paths, wall-clock duration, and
@@ -272,10 +332,32 @@ just bench-corpus coding-loop
 just bench-corpus long-context
 ```
 
-The generator uses the Hugging Face CLI to resolve dataset revisions and
-download parquet artifacts, then samples the cached parquet files locally with
-DuckDB. If DuckDB is not installed in the active Python, the script falls back
-to `uv run --with duckdb`.
+`just bench-corpus` builds the optional Rust `trajectory-reader` with the
+`corpus-input` feature. The native Hugging Face client binds each configured
+repository to its immutable commit before fetching selected Parquet artifacts.
+CommitPackFT and APPS use their pinned repository JSONL files directly; dataset
+loader scripts are never executed. Sampling uses the documented
+`sha256-source-row-v1` ordering, not the former DuckDB ordering. The resulting
+manifest records configuration, artifact and corpus SHA256 digests, quotas,
+source revisions, and conversion provenance when applicable.
+
+Generation refuses an existing tier directory before acquisition and publishes
+a complete staged corpus/manifest directory in one rename. To regenerate,
+choose a fresh output root, for example:
+
+```sh
+just bench-corpus smoke --out-root target/bench-corpora-rerun
+```
+
+The command may download dataset artifacts and must run within an authorized
+data scope. It does not install Python or invoke a dataset script. Each HTTP
+request has a 120-second timeout; this does not establish a hard whole-command
+or native Xet worker deadline. Unsupported repository layouts require an
+explicit `--artifact-manifest` binding the original dataset commit, config,
+split, conversion provenance, and each local artifact's size and SHA256.
+There is no latest-revision or unbound converted-Parquet fallback. Native
+fixture tests qualify the selection policy; they do not qualify public dataset
+acquisition or a measured benchmark run.
 
 Generated layout:
 

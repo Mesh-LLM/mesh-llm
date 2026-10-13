@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://mesh-llm.dev/schemas/family-certified.schema.json",
   "title": "MeshLLM supported-family certification policy",
-  "$comment": "The schema validates transport shape and workload/profile separation. scripts/plan-family-battery.py additionally enforces exact class-specific lane semantics, unique families, safe artifact paths, and deterministic sharding.",
+  "$comment": "The schema validates transport shape and workload/profile separation. cargo xtool ci family-plan additionally enforces exact class-specific lane semantics, unique families, safe artifact paths, and deterministic sharding; automation family-battery-policy admits immutable cache metadata and prepared tensor descriptors.",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema_version", "policy", "models"],

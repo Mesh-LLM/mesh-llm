@@ -33,13 +33,12 @@ The default package is:
 hf://meshllm/gemma-4-26B-A4B-it-UD-Q4_K_M-layers
 ```
 
-`HF_HOME` controls which host Hugging Face cache is used. If unset, the launcher
-uses `${HOME}/.cache/huggingface`. Authenticate with the host `hf` CLI when
-needed:
-
-```bash
-hf auth login
-```
+`HF_HOME` defaults to `${HOME}/.cache/huggingface`. The actual Hub cache root
+is `HF_HUB_CACHE`, then `HUGGINGFACE_HUB_CACHE`, then `${HF_HOME}/hub`. The
+launcher passes that Hub root to the native package owner and mounts the same
+directory read-only at `/hf-cache`; containers use `HF_HUB_CACHE=/hf-cache`.
+No `hf` CLI or Python package client is needed for native cache admission or
+package acquisition.
 
 To calibrate WAN latency from a target such as `100.90.121.70`:
 
@@ -56,22 +55,48 @@ you want rate limiting as well as latency.
 Use the launcher, not raw `docker compose`, so the model invariant is enforced:
 
 ```bash
-skippy/evals/wan-lab/up.sh
+just --command bash skippy/evals/wan-lab/up.sh
 ```
 
-Before compose starts, the launcher runs the equivalent of:
+Before compose starts, the launcher uses the existing source-built native
+package recipes. To inspect an exact requested ref without network acquisition:
 
 ```bash
-hf download meshllm/gemma-4-26B-A4B-it-UD-Q4_K_M-layers \
-  --include model-package.json \
-  --include 'shared/*' \
-  --include 'layers/*' \
-  --include 'projectors/*'
+just skippy-package-reference "$MODEL_PACKAGE_REF"
+just skippy-layer-package-cache --reference "$MODEL_PACKAGE_REF" --cache-root "$HUB_ROOT"
+just skippy-layer-package-inspect --package "$SNAPSHOT_PATH" \
+  --expected-layer-count "$LAYER_COUNT" --expected-activation-width "$ACTIVATION_WIDTH"
 ```
 
-It then verifies the package manifest, layer count, activation width, artifact
-presence, and artifact byte sizes from the host cache. If anything is missing,
-the lab exits before any containers start.
+`HUB_ROOT` is the Hub cache directory, not its `HF_HOME` parent. Cache lookup
+requires the requested ref's exact immutable commit and admitted snapshot;
+it makes no HTTP requests and does not fall back to another cached revision.
+The inspector checks the complete declared package closure and source geometry.
+Use the package's actual layer count and activation width; do not substitute
+example numbers.
+
+Explicit acquisition uses the same native owner:
+
+```bash
+just skippy-layer-package-fetch --reference "$MODEL_PACKAGE_REF" --cache-root "$HUB_ROOT" \
+  --expected-layer-count "$LAYER_COUNT" --expected-activation-width "$ACTIVATION_WIDTH" \
+  --timeout-secs 3600
+```
+
+The launcher reuses a fully verified requested cache entry or acquires the
+package at one resolved immutable commit. It verifies artifact identities,
+byte sizes, and complete package geometry before starting containers, then
+exports that exact commit in `MODEL_PACKAGE_REF`. Fetch uses an owned native
+worker with bounded execution/capture and cleanup; failure prevents serving.
+It preserves valid Hugging Face blob symlinks inside the admitted cache.
+
+Stage artifact selection uses the native `plan-layer-package-artifacts`
+command inside the image, with the manifest, stage index/count, and declared
+layer range. The planner shares the package manifest validators and includes
+required shared/head/tail/projector artifacts. Planning declares files; it does
+not prove that they were downloaded. Containers read the host's admitted cache
+and refuse incomplete stage inputs before launch. Acquisition and fixture
+validation are separate from actual model inference or WAN benchmark proof.
 
 ## Interactive Prompt
 
@@ -133,7 +158,7 @@ docker compose \
 
 ## Notes
 
-- The host HF cache is mounted read-only at `/hf-cache`.
+- The actual host Hub cache root is mounted read-only at `/hf-cache`.
 - The default load mode is `layer-package` with tensor filtering enabled.
 - CPU execution is forced with `n_gpu_layers: 0`.
 - Use `WAN_ENABLE=0` to disable shaping without changing the compose topology.

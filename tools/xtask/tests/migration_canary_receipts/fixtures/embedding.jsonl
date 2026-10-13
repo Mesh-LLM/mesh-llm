@@ -1,0 +1,1 @@
+{"family":"dense","exit_code":0,"workload_class":"embedding","outcomes":[{"name":"embedding-smoke","status":"pass","exit_code":0},{"name":"embedding-oracle","status":"pass","exit_code":0}]}

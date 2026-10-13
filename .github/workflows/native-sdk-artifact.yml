@@ -3,6 +3,26 @@ name: Reusable Native SDK Artifact
 on:
   workflow_call:
     inputs:
+      authority_linux_x64:
+        description: Exact same-run protected native producer identity JSON, source SHA, artifact ID, independent digest, OS, and architecture.
+        required: false
+        default: ''
+        type: string
+      authority_linux_arm64:
+        description: Exact same-run protected native producer identity JSON, source SHA, artifact ID, independent digest, OS, and architecture.
+        required: false
+        default: ''
+        type: string
+      authority_macos_arm64:
+        description: Exact same-run protected native producer identity JSON, source SHA, artifact ID, independent digest, OS, and architecture.
+        required: false
+        default: ''
+        type: string
+      authority_windows_x64:
+        description: Exact same-run protected native producer identity JSON, source SHA, artifact ID, independent digest, OS, and architecture.
+        required: false
+        default: ''
+        type: string
       source_sha:
         description: Immutable product source revision.
         required: false
@@ -190,6 +210,10 @@ jobs:
       packages: read
     uses: ./.github/workflows/static-abi-artifact.yml
     with:
+      authority_linux_x64: ${{ inputs.authority_linux_x64 }}
+      authority_linux_arm64: ${{ inputs.authority_linux_arm64 }}
+      authority_macos_arm64: ${{ inputs.authority_macos_arm64 }}
+      authority_windows_x64: ${{ inputs.authority_windows_x64 }}
       original_event_name: ${{ inputs.original_event_name }}
       force_hosted: ${{ inputs.force_hosted }}
       backend: ${{ inputs.backend }}

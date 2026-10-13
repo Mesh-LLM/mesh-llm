@@ -1,0 +1,92 @@
+name: Product-source repository automation
+
+on:
+  workflow_call:
+    inputs:
+      platform:
+        description: Native executor, linux-x64, macos-arm64, or windows-x64.
+        required: true
+        type: string
+      lane:
+        description: Topic scope, linux, macos, or windows.
+        required: true
+        type: string
+      product_source_sha:
+        description: Immutable product source revision (the lane's source_sha) whose xtask this job compiles once for same-run consumers.
+        required: true
+        type: string
+    outputs:
+      identity_json:
+        description: Source-bound native identity projected only from this producer's independent outputs.
+        value: ${{ format('{{"source_sha":"{0}","artifact_id":"{1}","binary_sha256":"{2}","producer_os":"{3}","producer_arch":"{4}"}}', jobs.producer.outputs.source_sha, jobs.producer.outputs.artifact_id, jobs.producer.outputs.binary_sha256, jobs.producer.outputs.producer_os, jobs.producer.outputs.producer_arch) }}
+      source_sha:
+        value: ${{ jobs.producer.outputs.source_sha }}
+      artifact_id:
+        value: ${{ jobs.producer.outputs.artifact_id }}
+      binary_sha256:
+        value: ${{ jobs.producer.outputs.binary_sha256 }}
+      producer_os:
+        value: ${{ jobs.producer.outputs.producer_os }}
+      producer_arch:
+        value: ${{ jobs.producer.outputs.producer_arch }}
+
+permissions:
+  contents: read
+
+jobs:
+  producer:
+    name: Product automation (${{ inputs.platform }})
+    # Closed GitHub-hosted map; the first step fails closed on any platform or
+    # runner mismatch, and inputs cannot select a label.
+    runs-on: ${{ inputs.platform == 'macos-arm64' && 'macos-15' || inputs.platform == 'windows-x64' && 'windows-2022' || 'ubuntu-24.04' }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      GIT_MASTER: '1'
+      CARGO_INCREMENTAL: '0'
+      SCCACHE_GHA_ENABLED: 'false'
+      SCCACHE_MULTILEVEL_CHAIN: disk
+    outputs:
+      source_sha: ${{ steps.upload.outputs.source_sha }}
+      artifact_id: ${{ steps.upload.outputs.artifact_id }}
+      binary_sha256: ${{ steps.upload.outputs.binary_sha256 }}
+      producer_os: ${{ steps.identity.outputs.producer_os }}
+      producer_arch: ${{ steps.identity.outputs.producer_arch }}
+    steps:
+      - name: Admit hosted product executor
+        id: identity
+        shell: bash
+        env:
+          AUTOMATION_PLATFORM: ${{ inputs.platform }}
+          AUTOMATION_LANE: ${{ inputs.lane }}
+          AUTOMATION_PRODUCT_SHA: ${{ inputs.product_source_sha }}
+        run: |
+          set -euo pipefail
+          test "$RUNNER_ENVIRONMENT" = github-hosted || exit 1
+          case "$AUTOMATION_PLATFORM:$RUNNER_OS:$RUNNER_ARCH" in
+            linux-x64:Linux:X64|macos-arm64:macOS:ARM64|windows-x64:Windows:X64) ;;
+            *) echo "unsupported or mismatched product automation executor" >&2; exit 1 ;;
+          esac
+          case "$AUTOMATION_LANE" in
+            linux|macos|windows) ;;
+            *) echo "unsupported product automation topic" >&2; exit 1 ;;
+          esac
+          [[ "$AUTOMATION_PRODUCT_SHA" =~ ^[0-9a-f]{40}$ ]] || exit 1
+          {
+            printf 'producer_os=%s\n' "$RUNNER_OS"
+            printf 'producer_arch=%s\n' "$RUNNER_ARCH"
+          } >> "$GITHUB_OUTPUT"
+          printf 'SCCACHE_DIR=%s/product-automation-sccache\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ inputs.product_source_sha }}
+          persist-credentials: false
+      - name: Produce immutable product-source automation
+        id: upload
+        uses: ./.github/actions/upload-automation
+        with:
+          source_sha: ${{ inputs.product_source_sha }}
+          source-profile: product-clean
+          runner-profile: ${{ runner.os == 'Linux' && 'hosted-bare' || 'image' }}
+          ci-lane: ${{ inputs.lane }}

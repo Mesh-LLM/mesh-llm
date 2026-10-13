@@ -1,0 +1,5 @@
+{
+  "code": 0,
+  "stderr": "",
+  "stdout": "Mode: dry-run\nBefore: 16.0 KiB\nAfter: 7.3 KiB\nReclaimed: 8.7 KiB\n  incremental: {root}/ws/target/aarch64-apple-darwin/release/incremental/cross-3 (700.0 B)\n  incremental: {root}/ws/target/debug/incremental/escape (24.0 B)\n  incremental: {root}/ws/target/debug/incremental/stale-1 (2.9 KiB)\n  cargo-package: demo-pkg (5.1 KiB)\n"
+}

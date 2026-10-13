@@ -1,0 +1,18 @@
+{
+  "total_count": 1,
+  "artifacts": [
+    {
+      "id": 801,
+      "name": "ci-product-macos-arm64-metal",
+      "expired": false,
+      "digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "workflow_run": {
+        "id": 202,
+        "repository_id": 42,
+        "head_repository_id": 42,
+        "head_branch": "main",
+        "head_sha": "2222222222222222222222222222222222222222"
+      }
+    }
+  ]
+}

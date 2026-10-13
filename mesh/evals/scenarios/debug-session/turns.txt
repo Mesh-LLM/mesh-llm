@@ -1,7 +1,0 @@
-Read buggy.py and sample.csv in this directory. What does the script do?
-#wait:25
-Try running it: python buggy.py sample.csv output.csv
-#wait:25
-Find and fix all the bugs. Edit buggy.py directly.
-#wait:40
-Run it again and verify the output looks correct.

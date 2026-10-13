@@ -1,0 +1,1 @@
+{"schema_version":1,"llama_cpp_commit":"abc","generator_version":"0.2.0","builders":[{"file":"src/models/granite.cpp","constructor":"build_graph_attention","verdict":"already_transformed"},{"file":"src/models/granite.cpp","constructor":"build_graph_ffn","verdict":"already_transformed"}],"summary":{"already_transformed":2}}

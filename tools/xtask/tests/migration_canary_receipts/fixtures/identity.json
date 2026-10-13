@@ -1,0 +1,10 @@
+{
+  "schema": 3,
+  "candidate": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "base": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "branch": "llama-canary/repair-123-2-aaaaaaaaaa",
+  "pass_id": "repair-1",
+  "run_id": "123",
+  "run_attempt": "2",
+  "platform": "macos-arm64-metal"
+}

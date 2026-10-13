@@ -22,7 +22,8 @@ use reqwest::header::IF_NONE_MATCH;
 use serde::Deserialize;
 
 use super::files::{
-    extract_commit_hash, extract_etag, extract_file_size, extract_xet_hash, matches_any_glob,
+    admit_commit, admit_etag, extract_commit_hash, extract_etag, extract_file_size,
+    extract_xet_hash, matches_any_glob,
 };
 use super::{FileMetadataInfo, HFRepository, RepoTreeEntry, RepoType};
 use crate::cache::storage as cache;
@@ -346,10 +347,7 @@ impl<T: RepoType> HFRepository<T> {
         let commit_hash = if cache::is_commit_hash(revision) {
             Some(revision.to_string())
         } else {
-            let ref_path = cache::ref_path(cache_dir, repo_folder, revision);
-            std::fs::read_to_string(&ref_path)
-                .ok()
-                .map(|s| s.trim().to_string())
+            cache::read_ref_sync(cache_dir, repo_folder, revision)?
         };
 
         if let Some(ref hash) = commit_hash {
@@ -385,10 +383,9 @@ impl<T: RepoType> HFRepository<T> {
         let commit_hash = if cache::is_commit_hash(revision) {
             Some(revision.to_string())
         } else {
-            let ref_path = cache::ref_path(cache_dir, repo_folder, revision);
-            std::fs::read_to_string(&ref_path)
+            cache::read_ref_sync(cache_dir, repo_folder, revision)
                 .ok()
-                .map(|s| s.trim().to_string())
+                .flatten()
         };
 
         let hash = commit_hash?;
@@ -537,10 +534,11 @@ impl<T: RepoType> HFRepository<T> {
                 .await?;
         }
 
-        let etag = etag?;
+        let etag = admit_etag(&etag?)?;
         let commit_hash = commit_hash.ok_or_else(|| {
             HFError::malformed_response_at("missing X-Repo-Commit header", url.clone())
         })?;
+        let commit_hash = admit_commit(&commit_hash, revision)?;
 
         params.progress.emit(DownloadEvent::Start {
             total_files: 1,
@@ -787,12 +785,13 @@ impl<T: RepoType> HFRepository<T> {
         let info: ShaOnly = self
             .fetch_repo_info(Some(revision.to_string()), None)
             .await?;
-        info.sha.ok_or_else(|| {
+        let commit = info.sha.ok_or_else(|| {
             HFError::malformed_response(format!(
                 "repo info for {}@{} returned no commit sha",
                 repo_path, revision
             ))
-        })
+        })?;
+        admit_commit(&commit, revision)
     }
 
     async fn list_filtered_files(
@@ -906,6 +905,7 @@ impl<T: RepoType> HFRepository<T> {
                     // treated as an error instead.
                     if resp.status() == reqwest::StatusCode::NOT_FOUND {
                         if let Some(commit) = extract_commit_hash(&resp) {
+                            let commit = admit_commit(&commit, &commit_hash)?;
                             let no_exist = cache::no_exist_path(cache_dir, &repo_folder, &commit, &filename);
                             if let Some(parent) = no_exist.parent() {
                                 let _ = std::fs::create_dir_all(parent);
@@ -920,7 +920,8 @@ impl<T: RepoType> HFRepository<T> {
                     let etag = extract_etag(&resp).ok_or_else(|| {
                         HFError::malformed_response_at(format!("missing ETag header for {filename}"), url.clone())
                     })?;
-                    let commit = extract_commit_hash(&resp).unwrap_or(commit_hash);
+                    let etag = admit_etag(&etag)?;
+                    let commit = admit_commit(&extract_commit_hash(&resp).unwrap_or_else(|| commit_hash.clone()), &commit_hash)?;
                     let xet_hash = extract_xet_hash(&resp);
                     let file_size: u64 = extract_file_size(&resp).unwrap_or_else(|| {
                         tracing::warn!(file = %filename, "missing or invalid Content-Length/X-Linked-Size header, defaulting file size to 0");
@@ -1169,6 +1170,10 @@ async fn mark_no_exist_and_return_error(
     filename: &str,
 ) -> HFError {
     if let Some(commit_hash) = extract_commit_hash(response) {
+        let commit_hash = match admit_commit(&commit_hash, revision) {
+            Ok(commit) => commit,
+            Err(error) => return error,
+        };
         let no_exist = cache::no_exist_path(cache_dir, repo_folder, &commit_hash, filename);
         if let Some(parent) = no_exist.parent() {
             let _ = std::fs::create_dir_all(parent);

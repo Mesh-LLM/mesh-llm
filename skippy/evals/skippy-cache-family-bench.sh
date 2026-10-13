@@ -1,53 +1,33 @@
 #!/usr/bin/env bash
 set -euo pipefail
-
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+automation=(just --justfile "$ROOT/Justfile" automation-run)
+if [[ "${MESH_LLM_AUTOMATION_BIN+set}" == set ]]; then
+  if [[ "$MESH_LLM_AUTOMATION_BIN" != /* || ! -f "$MESH_LLM_AUTOMATION_BIN" || ! -x "$MESH_LLM_AUTOMATION_BIN" ]]; then
+    echo 'MESH_LLM_AUTOMATION_BIN must be an absolute executable' >&2
+    exit 1
+  fi
+  automation=("$MESH_LLM_AUTOMATION_BIN")
+fi
+: "${SKIPPY_CACHE_OPERATOR_INPUT:?Set SKIPPY_CACHE_OPERATOR_INPUT to an absolute native cache operator JSON file}"
+if [[ "$SKIPPY_CACHE_OPERATOR_INPUT" != /* || ! -f "$SKIPPY_CACHE_OPERATOR_INPUT" ]]; then
+  echo 'SKIPPY_CACHE_OPERATOR_INPUT must be an absolute regular input file' >&2
+  exit 1
+fi
 RUN_ID="${SKIPPY_CACHE_RUN_ID:-$(date +%Y%m%d-%H%M%S)}"
 OUTPUT_DIR="${1:-/tmp/skippy-cache-family-bench-${RUN_ID}}"
-
-PREFIX_TOKENS="${PREFIX_TOKENS:-128}"
-RUNTIME_LANE_COUNT="${RUNTIME_LANE_COUNT:-1}"
-LLAMA_PARALLEL="${LLAMA_PARALLEL:-1}"
-LLAMA_REPEATS="${LLAMA_REPEATS:-3}"
-CACHE_HIT_REPEATS="${CACHE_HIT_REPEATS:-3}"
-LLAMA_STAGE_BUILD_DIR="${LLAMA_STAGE_BUILD_DIR:-${ROOT}/.deps/llama-build/build-stage-abi-cpu}"
-LLAMA_SERVER_BIN="${LLAMA_SERVER_BIN:-${LLAMA_STAGE_BUILD_DIR}/bin/llama-server}"
-SKIPPY_CORRECTNESS_BIN="${SKIPPY_CORRECTNESS_BIN:-${ROOT}/target/debug/skippy-correctness}"
-
-FULL_DIR="${OUTPUT_DIR}/full-gguf"
-USECASE_DIR="${OUTPUT_DIR}/use-cases"
-REPORT="${OUTPUT_DIR}/readme-tables.md"
-
-if [[ "${SKIPPY_CACHE_SKIP_BUILD:-0}" != "1" ]]; then
-  (cd "$ROOT" && just build)
-  (cd "$ROOT" && cargo build -p skippy-correctness)
+mkdir -p "$OUTPUT_DIR"
+OUTPUT_DIR="$(cd "$OUTPUT_DIR" && pwd)"
+if [[ "${SKIPPY_CACHE_SKIP_BUILD:-0}" != 1 ]]; then
+  (cd "$ROOT" && just skippy-workload-oracles-build "${SKIPPY_CACHE_BUILD_OUTPUT:-${OUTPUT_DIR}/tools}")
 fi
-
-COMMON_ARGS=(
-  --runtime-lane-count "$RUNTIME_LANE_COUNT"
-  --llama-parallel "$LLAMA_PARALLEL"
-  --llama-repeats "$LLAMA_REPEATS"
-  --cache-hit-repeats "$CACHE_HIT_REPEATS"
-  --prefix-tokens "$PREFIX_TOKENS"
-  --llama-stage-build-dir "$LLAMA_STAGE_BUILD_DIR"
-  --llama-server-bin "$LLAMA_SERVER_BIN"
-  --skippy-correctness-bin "$SKIPPY_CORRECTNESS_BIN"
-)
-
-(cd "$ROOT" && python3 skippy/evals/skippy-cache-production-bench.py \
-  --output-dir "$FULL_DIR" \
-  "${COMMON_ARGS[@]}")
-
-(cd "$ROOT" && python3 skippy/evals/skippy-cache-production-bench.py \
-  --output-dir "$USECASE_DIR" \
-  --use-case all \
-  "${COMMON_ARGS[@]}")
-
-(cd "$ROOT" && python3 skippy/evals/skippy-cache-family-report.py \
-  --input "${FULL_DIR}/production-cache-bench.json" \
-  --input "${USECASE_DIR}/production-cache-bench.json" \
-  --output "$REPORT")
-
-printf 'Wrote raw full-GGUF results: %s\n' "${FULL_DIR}/production-cache-bench.json"
-printf 'Wrote raw use-case results: %s\n' "${USECASE_DIR}/production-cache-bench.json"
-printf 'Wrote README tables: %s\n' "$REPORT"
+USECASE_CORPUS="${SKIPPY_CACHE_USECASE_CORPUS:-${ROOT}/skippy/evals/skippy-usecase-corpus.json}"
+COMMON_ARGS=(--use-case-corpus "$USECASE_CORPUS" --prefix-tokens "${PREFIX_TOKENS:-128}" --runtime-lane-count "${RUNTIME_LANE_COUNT:-1}" --llama-parallel "${LLAMA_PARALLEL:-1}" --llama-repeats "${LLAMA_REPEATS:-3}" --cache-hit-repeats "${CACHE_HIT_REPEATS:-3}")
+"${automation[@]}" automation cache-family-run prepare-full --input "$SKIPPY_CACHE_OPERATOR_INPUT" --output "$OUTPUT_DIR/full-input" "${COMMON_ARGS[@]}"
+"${automation[@]}" automation cache-family-run --input "$OUTPUT_DIR/full-input/cache-family-input.json" --output "$OUTPUT_DIR/full-gguf"
+"${automation[@]}" automation cache-family-run prepare-use-cases --input "$SKIPPY_CACHE_OPERATOR_INPUT" --output "$OUTPUT_DIR/usecase-input" "${COMMON_ARGS[@]}"
+"${automation[@]}" automation cache-family-run --input "$OUTPUT_DIR/usecase-input/cache-family-input.json" --output "$OUTPUT_DIR/use-cases"
+"${automation[@]}" automation cache-family-report --input "$OUTPUT_DIR/full-gguf/production-cache-bench.json" --input "$OUTPUT_DIR/use-cases/production-cache-bench.json" --use-case-corpus "$USECASE_CORPUS" --output "$OUTPUT_DIR/readme-tables.md"
+printf 'Wrote raw full-GGUF results: %s\n' "$OUTPUT_DIR/full-gguf/production-cache-bench.json"
+printf 'Wrote raw use-case results: %s\n' "$OUTPUT_DIR/use-cases/production-cache-bench.json"
+printf 'Wrote README tables: %s\n' "$OUTPUT_DIR/readme-tables.md"

@@ -3,6 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../scripts" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+source "$REPO_ROOT/scripts/lib/automation.sh"
 OUT_DIR="$REPO_ROOT/dist/native-sdk-crates"
 TMP_ROOT=""
 trap 'rm -rf "$TMP_ROOT"' EXIT
@@ -73,26 +74,18 @@ artifact_dir_for_input() {
         return 0
     fi
 
-    TMP_ROOT="$(mktemp -d)"
-    tar -C "$TMP_ROOT" -xzf "$input"
+    mesh_automation artifact extract-tar "$input" "$TMP_ROOT"
     find "$TMP_ROOT" -mindepth 1 -maxdepth 1 -type d -print -quit
 }
 
+if [[ ! -d "$INPUT" ]]; then
+    TMP_ROOT="$(mktemp -d)"
+fi
 artifact_dir="$(artifact_dir_for_input "$INPUT")"
 manifest="$artifact_dir/manifest.json"
 
 read_manifest_field() {
-    python3 - "$manifest" "$1" <<'PY'
-import json
-import sys
-
-with open(sys.argv[1], encoding="utf-8") as fh:
-    manifest = json.load(fh)
-value = manifest[sys.argv[2]]
-if value is None:
-    value = ""
-print(value)
-PY
+    mesh_automation prepared-input native-sdk-crate-field "$manifest" "$1"
 }
 
 artifact_id="$(read_manifest_field artifact_id)"

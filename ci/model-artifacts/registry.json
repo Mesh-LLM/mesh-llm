@@ -4293,7 +4293,7 @@
         },
         "notes": "Local full-model embedding, HTTP and official SDK smoke, and pinned CPU monolithic batch/single-vector parity; staged tensor filtering is intentionally unsupported",
         "evidence": {
-          "fixture": "scripts/workload_fixtures.py#EMBEDDING_INPUTS",
+          "fixture": "tools/xtask/src/automation/workload_smoke/mod.rs#INPUTS",
           "comparison": "batch and individual vectors within 1e-4 coordinate error and 0.99999 cosine"
         }
       }
@@ -4342,7 +4342,7 @@
         },
         "notes": "Local full-model cross-encoder rerank and HTTP smoke with pinned CPU monolithic score/order parity; staged tensor filtering is intentionally unsupported",
         "evidence": {
-          "fixture": "scripts/workload_fixtures.py#RERANK_DOCUMENTS",
+          "fixture": "tools/xtask/src/automation/workload_smoke/mod.rs#RERANK_DOCUMENTS",
           "comparison": "scores within 1e-4 and identical document order"
         }
       }
@@ -4391,7 +4391,7 @@
         },
         "notes": "Local full-model encoder-decoder generation and HTTP smoke with pinned CPU monolithic completion text parity; cross-attention staging is intentionally unsupported",
         "evidence": {
-          "fixture": "scripts/workload_fixtures.py#ENCODER_DECODER_PROMPT",
+          "fixture": "tools/xtask/src/automation/workload_smoke/mod.rs#ENCODER_DECODER_PROMPT",
           "comparison": "identical normalized greedy text from pinned llama-completion"
         }
       }
@@ -4439,9 +4439,9 @@
           "estimated_model_bytes": 933384192,
           "startup_timeout_secs": 900
         },
-        "notes": "Local full-model OCR and HTTP smoke with the pinned PaddleOCR projector and mandatory generated-image monolithic parity; projector and trunk remain colocated",
+        "notes": "Local full-model OCR and HTTP smoke with the pinned PaddleOCR projector and mandatory monolithic parity on the reviewed static OCR fixture; projector and trunk remain colocated",
         "evidence": {
-          "fixture": "scripts/generate-ocr-oracle-fixture.py#MESH 42",
+          "fixture": "ci/fixtures/ocr-mesh-42.png",
           "comparison": "normalized monolithic text parity plus independent MESH 42 label"
         },
         "mmproj_artifact": {
@@ -4503,7 +4503,7 @@
         },
         "notes": "Local full-model speech-synthesis and HTTP WAV smoke with deterministic pinned monolithic PCM parity; distributed staging is intentionally unsupported",
         "evidence": {
-          "fixture": "scripts/skippy-tts-oracle.py#PROMPT",
+          "fixture": "tools/xtask/src/automation/workload_smoke/tts_oracle/mod.rs#PROMPT",
           "comparison": "fixed-seed PCM format and length; RMS error at most 2 percent and waveform cosine at least 0.9995"
         },
         "mmproj_artifact": {

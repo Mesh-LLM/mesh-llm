@@ -1,0 +1,9 @@
+{
+  "models": [
+    {"family": "afmoe", "class": "causal_generation", "profile": "full"},
+    {"family": "deepseek2", "class": "causal_generation", "profile": "full"},
+    {"family": "mistral4", "class": "causal_generation", "profile": "full"},
+    {"family": "rwkv6", "class": "causal_generation", "profile": "full"},
+    {"family": "embedding-fixture", "class": "embedding", "profile": "workload-oracle"}
+  ]
+}

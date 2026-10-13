@@ -43,7 +43,7 @@ curl -s localhost:3131/api/status | jq '.runtime.openai_guardrails'
 ```
 
 ```bash
-python3 scripts/run-openai-guardrail-corpus.py \
+just automation-run automation guardrail-corpus \
   --base-url http://127.0.0.1:9337/v1 \
   --model MiniMax-M2.5-Q4_K_M \
   --guardrail-mode metrics \

@@ -219,12 +219,16 @@ fn port_check(name: &str, port: u16) -> DoctorCheck {
     }
 }
 
+pub(super) fn require_loopback_port(port: u16) -> Result<()> {
+    if localhost_port_ready(port) {
+        Ok(())
+    } else {
+        bail!("127.0.0.1:{port} did not accept a connection within 500ms")
+    }
+}
+
 fn localhost_port_ready(port: u16) -> bool {
     let timeout = Duration::from_millis(500);
-    ("127.0.0.1", port)
-        .to_socket_addrs()
-        .ok()
-        .into_iter()
-        .flatten()
-        .any(|addr| TcpStream::connect_timeout(&addr, timeout).is_ok())
+    let address = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, port));
+    TcpStream::connect_timeout(&address, timeout).is_ok()
 }

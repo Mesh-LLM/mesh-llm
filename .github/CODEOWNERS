@@ -1,0 +1,36 @@
+# The last matching pattern wins. Keep broad fallbacks before product paths.
+* @i386 @ndizazzo @michaelneale
+
+# Shared workspace infrastructure and CI.
+/.github/ @i386 @ndizazzo
+/ci/ @i386 @ndizazzo
+/tools/ @ndizazzo @i386
+
+# Products.
+/mesh/ @michaelneale @ndizazzo
+/mesh/crates/mesh-llm-host-runtime/ @michaelneale @danielwinterw @ndizazzo
+/mesh/crates/mesh-llm-host-runtime/src/plugin/ @michaelneale @danielwinterw @i386
+/mesh/crates/mesh-llm-config/ @ndizazzo @danielwinterw
+/mesh/crates/mesh-llm-moa-plugin/ @michaelneale
+/mesh/crates/mesh-llm-plugin/ @michaelneale @ndizazzo @i386
+/mesh/crates/mesh-llm-plugin-manager/ @michaelneale @ndizazzo @i386
+/mesh/crates/mesh-native-serving-plugin-api/ @michaelneale @ndizazzo @i386
+/mesh/crates/mesh-native-serving-plugin-host/ @michaelneale @ndizazzo @i386
+/mesh/crates/mesh-llm-ui/ @ndizazzo @i386 @iamthesvn
+/mesh/docs/ @ndizazzo
+/mesh/website/ @ndizazzo
+/skippy/ @i386 @danielwinterw
+
+# SDK packages, public Rust interfaces, embedding, and language bridges.
+/mesh/sdk/ @michaelneale @ndizazzo @i386
+/mesh/crates/mesh-client/ @michaelneale @ndizazzo @i386
+/mesh/crates/mesh-llm-api-client/ @michaelneale @ndizazzo @i386
+/mesh/crates/mesh-llm-api-server/ @michaelneale @ndizazzo @i386
+/mesh/crates/mesh-llm-sdk/ @michaelneale @ndizazzo @i386
+/mesh/crates/mesh-llm-node/ @michaelneale @ndizazzo @i386
+/mesh/crates/mesh-llm-embedded-runtime/ @michaelneale @ndizazzo @i386
+/mesh/crates/mesh-llm-ffi/ @michaelneale @ndizazzo @i386
+/mesh/crates/mesh-llm-nodejs/ @michaelneale @ndizazzo @i386
+/mesh/crates/mesh-llm-console-server/ @michaelneale @ndizazzo @i386
+/mesh/docs/SDK.md @ndizazzo @i386 @michaelneale
+/mesh/docs/sdk/ @ndizazzo @i386 @michaelneale

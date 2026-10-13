@@ -1,0 +1,1 @@
+{"replay":{"mode":"all","sessions_per_concurrency":16,"minimum_worker_waves":2,"minimum_context_tokens":131072,"minimum_session_prompt_tokens":32768,"min_isl":32768,"max_isl":131072,"min_turns":5,"passes":2,"warmup_turns":4,"max_output_tokens":2048,"concurrency":[1,true,4,8],"temperature":0,"seed":42,"backend":"metal","selection_algorithm":"balanced-md5-v2"}}

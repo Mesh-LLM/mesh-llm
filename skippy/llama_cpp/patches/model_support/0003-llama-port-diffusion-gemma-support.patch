@@ -1,7 +1,7 @@
-From 1d15336bf41c19bc9eb0cf9d08eb0f0af846da37 Mon Sep 17 00:00:00 2001
+From 1a2cd31665360349f038613e35dffa31e33c1bd3 Mon Sep 17 00:00:00 2001
 From: Daniel Han <danielhanchen@gmail.com>
 Date: Sun, 20 Sep 2026 11:16:21 +1000
-Subject: [PATCH 1/2] llama: port DiffusionGemma support
+Subject: [PATCH] llama: port DiffusionGemma support
 
 Port the feature diff from ggml-org/llama.cpp PR #24423 at 12e0a9627d02c6395fd4bbf2aadff93d0d46a0e4 onto the mesh-llm llama.cpp pin. Express the phase-specific embedding selection as one assignment so the deterministic Skippy stage rewriter can prove the layer-carried activation.
 
@@ -11,8 +11,6 @@ Signed-off-by: Michael Neale <14976+michaelneale@users.noreply.github.com>
 ---
  common/arg.cpp                                |  90 +-
  common/common.h                               |  15 +
- conversion/__init__.py                        |   2 +
- conversion/diffusion_gemma.py                 | 122 +++
  examples/CMakeLists.txt                       |   2 +
  examples/diffusion-gemma-eval/CMakeLists.txt  |   5 +
  .../diffusion-gemma-eval.cpp                  | 196 ++++
@@ -25,8 +23,6 @@ Signed-off-by: Michael Neale <14976+michaelneale@users.noreply.github.com>
  ggml/src/ggml-cuda/diffusion-sampling.cu      | 178 ++++
  ggml/src/ggml-cuda/diffusion-sampling.cuh     |  19 +
  ggml/src/ggml-cuda/ggml-cuda.cu               |   4 +
- gguf-py/gguf/constants.py                     |  54 +-
- gguf-py/gguf/gguf_writer.py                   |  21 +
  include/llama.h                               |  49 +
  src/llama-arch.cpp                            |  15 +
  src/llama-arch.h                              |   7 +
@@ -38,8 +34,7 @@ Signed-off-by: Michael Neale <14976+michaelneale@users.noreply.github.com>
  src/models/gemma4-common.h                    | 126 +++
  src/models/models.h                           |  60 ++
  tests/test-llama-archs.cpp                    |  23 +-
- 29 files changed, 3258 insertions(+), 125 deletions(-)
- create mode 100644 conversion/diffusion_gemma.py
+ 25 files changed, 3060 insertions(+), 124 deletions(-)
  create mode 100644 examples/diffusion-gemma-eval/CMakeLists.txt
  create mode 100644 examples/diffusion-gemma-eval/diffusion-gemma-eval.cpp
  create mode 100644 examples/diffusion-gemma-server/CMakeLists.txt
@@ -204,147 +199,6 @@ index 39f855c4f..b81754e21 100644
  };
  
  // reasoning API response format (not to be confused as chat template's reasoning format)
-diff --git a/conversion/__init__.py b/conversion/__init__.py
-index a8c7172b0..f50f7716e 100644
---- a/conversion/__init__.py
-+++ b/conversion/__init__.py
-@@ -66,6 +66,8 @@ TEXT_MODEL_MAP: dict[str, str] = {
-     "DistilBertForMaskedLM": "bert",
-     "DistilBertForSequenceClassification": "bert",
-     "DistilBertModel": "bert",
-+    "DiffusionGemma4ModelForBlockDiffusion": "diffusion_gemma",
-+    "DiffusionGemmaForBlockDiffusion": "diffusion_gemma",
-     "Dots1ForCausalLM": "dots1",
-     "Dots3NoteForCausalLM": "dots3",
-     "Dots3NoteForConditionalGeneration": "dots3",
-diff --git a/conversion/diffusion_gemma.py b/conversion/diffusion_gemma.py
-new file mode 100644
-index 000000000..53d49dea2
---- /dev/null
-+++ b/conversion/diffusion_gemma.py
-@@ -0,0 +1,122 @@
-+from __future__ import annotations
-+
-+import json
-+from typing import Iterable
-+
-+from torch import Tensor
-+
-+from .base import ModelBase, SentencePieceTokenTypes
-+from .gemma import Gemma4Model
-+import gguf
-+
-+
-+@ModelBase.register("DiffusionGemma4ModelForBlockDiffusion", "DiffusionGemmaForBlockDiffusion")
-+class DiffusionGemmaModel(Gemma4Model):
-+    """Block text-diffusion MoE on a Gemma-4 backbone.
-+
-+    Encoder (causal prefill) and decoder (bidirectional canvas denoising) share all weights except a
-+    per-layer layer_scalar; the backbone lives under model.decoder.*. Strategy: rewrite model.decoder.<x>
-+    -> model.<x> so the inherited Gemma4 tensor map handles it, then export the encoder layer_scalars
-+    (ENC_LAYER_OUT_SCALE) and the self_conditioning gated MLP (SC_*) explicitly. Vision tower ignored;
-+    lm_head tied to model.decoder.embed_tokens.
-+    """
-+
-+    model_arch = gguf.MODEL_ARCH.DIFFUSION_GEMMA
-+
-+    # TextModel.__init__ merges text_config into root hparams; root-only keys (canvas_length) are preserved.
-+
-+    def _create_vocab_sentencepiece(self):
-+        tokens, scores, toktypes = super()._create_vocab_sentencepiece()
-+        # Some Gemma special tokens ship non-control ('</s>', and tool/channel tokens with asymmetric
-+        # '<|...>' / '<...|>' brackets the generic heuristic misses); tag them control so the vocab is correct.
-+
-+        def looks_control(s: str) -> bool:
-+            return (s in ("<s>", "</s>")
-+                    or (s.startswith("<|") and s.endswith(">"))    # <|tool_response>, <|...|>
-+                    or (s.startswith("<") and s.endswith("|>")))   # <tool_response|>, <turn|>
-+        for i, tok in enumerate(tokens):
-+            s = tok.decode("utf-8", "ignore") if isinstance(tok, (bytes, bytearray)) else str(tok)
-+            if toktypes[i] in (SentencePieceTokenTypes.NORMAL, SentencePieceTokenTypes.USER_DEFINED) and looks_control(s):
-+                toktypes[i] = SentencePieceTokenTypes.CONTROL
-+        return tokens, scores, toktypes
-+
-+    def set_gguf_parameters(self):
-+        # plain Gemma-4 MoE: disable gemma3n-only features (per-layer-input embeddings, KV-sharing)
-+        self.hparams.setdefault("num_kv_shared_layers", 0)
-+        self.hparams.setdefault("hidden_size_per_layer_input", 0)
-+
-+        super().set_gguf_parameters()
-+
-+        # bidirectional decoder; the forward fills its own region-aware mask
-+        self.gguf_writer.add_causal_attention(False)
-+
-+        # canvas_length is required (the runtime splits [prompt | canvas] on it)
-+        canvas_length = self.find_hparam(["canvas_length"], optional=False)
-+        if canvas_length is None or int(canvas_length) <= 0:
-+            raise ValueError("DiffusionGemma conversion requires a positive root canvas_length")
-+        self.gguf_writer.add_diffusion_canvas_length(int(canvas_length))
-+
-+        # entropy-bound sampler defaults (the real decoder) from generation_config; missing keys fall back to
-+        # the runtime's reference defaults, so older configs still convert.
-+        gen_cfg_path = self.dir_model / "generation_config.json"
-+        if gen_cfg_path.is_file():
-+            with open(gen_cfg_path, encoding="utf-8") as f:
-+                gen_cfg = json.load(f)
-+            sampler_cfg = gen_cfg.get("sampler_config", {})
-+            if "max_denoising_steps" in gen_cfg:
-+                self.gguf_writer.add_diffusion_eb_max_steps(int(gen_cfg["max_denoising_steps"]))
-+            if "t_min" in gen_cfg:
-+                self.gguf_writer.add_diffusion_eb_t_min(float(gen_cfg["t_min"]))
-+            if "t_max" in gen_cfg:
-+                self.gguf_writer.add_diffusion_eb_t_max(float(gen_cfg["t_max"]))
-+            if "entropy_bound" in sampler_cfg:
-+                self.gguf_writer.add_diffusion_eb_entropy_bound(float(sampler_cfg["entropy_bound"]))
-+            if "stability_threshold" in gen_cfg:
-+                self.gguf_writer.add_diffusion_eb_stability_threshold(int(gen_cfg["stability_threshold"]))
-+            if "confidence_threshold" in gen_cfg:
-+                self.gguf_writer.add_diffusion_eb_confidence_threshold(float(gen_cfg["confidence_threshold"]))
-+
-+    @classmethod
-+    def filter_tensors(cls, item):
-+        name, gen = item
-+
-+        # encoder contributes only layer_scalar buffers; suffix them like decoder scalars (raw 1-D)
-+        if name.endswith("layer_scalar"):
-+            name = name + ".weight"
-+
-+        return super().filter_tensors((name, gen))
-+
-+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-+        # base filter_tensors strips "language_model.", so encoder tensors arrive as "model.encoder.layers.N.*"
-+
-+        # drop vision tower entirely (diffusion path is text-only)
-+        if "vision" in name or "embed_vision" in name:
-+            return
-+
-+        # encoder-mode per-layer scalar -> dedicated ENC_LAYER_OUT_SCALE tensor
-+        if name.startswith("model.encoder.layers.") and "layer_scalar" in name:
-+            yield (self.format_tensor_name(gguf.MODEL_TENSOR.ENC_LAYER_OUT_SCALE, bid), data_torch)
-+            return
-+
-+        # ignore any other encoder-only tensors (its backbone weights are tied to the decoder)
-+        if name.startswith("model.encoder."):
-+            return
-+
-+        # decoder-only self-conditioning gated MLP
-+        if name.startswith("model.decoder.self_conditioning."):
-+            sub = name[len("model.decoder.self_conditioning."):]
-+            sc_map = {
-+                "pre_norm.weight":  gguf.MODEL_TENSOR.SC_PRE_NORM,
-+                "gate_proj.weight": gguf.MODEL_TENSOR.SC_GATE,
-+                "up_proj.weight":   gguf.MODEL_TENSOR.SC_UP,
-+                "down_proj.weight": gguf.MODEL_TENSOR.SC_DOWN,
-+            }
-+            if sub in sc_map:
-+                yield (self.format_tensor_name(sc_map[sub]), data_torch)
-+            return
-+
-+        # remap the backbone (everything else under model.decoder.*) to model.<x> for Gemma4Model
-+        if name.startswith("model.decoder."):
-+            name = "model." + name[len("model.decoder."):]
-+
-+        yield from super().modify_tensors(data_torch, name, bid)
 diff --git a/examples/CMakeLists.txt b/examples/CMakeLists.txt
 index 39f802d25..2888c13d1 100644
 --- a/examples/CMakeLists.txt
@@ -2500,138 +2354,6 @@ index b77c901f6..d9833926d 100644
      return nullptr;
  }
  
-diff --git a/gguf-py/gguf/constants.py b/gguf-py/gguf/constants.py
-index bffd089ff..e6a96308a 100644
---- a/gguf-py/gguf/constants.py
-+++ b/gguf-py/gguf/constants.py
-@@ -464,7 +464,14 @@ class Keys:
-             LAYERNORM_EPS   = "clip.gen.audio.attention.layer_norm_epsilon"
- 
-     class Diffusion:
--        SHIFT_LOGITS        = "diffusion.shift_logits"
-+        SHIFT_LOGITS         = "diffusion.shift_logits"
-+        CANVAS_LENGTH        = "diffusion.canvas_length"
-+        EB_MAX_STEPS         = "diffusion.eb_max_steps"
-+        EB_T_MIN             = "diffusion.eb_t_min"
-+        EB_T_MAX             = "diffusion.eb_t_max"
-+        EB_ENTROPY_BOUND     = "diffusion.eb_entropy_bound"
-+        EB_STABILITY         = "diffusion.eb_stability_threshold"
-+        EB_CONFIDENCE        = "diffusion.eb_confidence_threshold"
- 
-     class xIELU:
-         ALPHA_P             = "xielu.alpha_p"
-@@ -540,6 +547,7 @@ class MODEL_ARCH(IntEnum):
-     GEMMA3N          = auto()
-     GEMMA4           = auto()
-     GEMMA4_ASSISTANT = auto()
-+    DIFFUSION_GEMMA  = auto()
-     GEMMA_EMBEDDING  = auto()
-     STARCODER2       = auto()
-     RWKV6            = auto()
-@@ -721,6 +729,11 @@ class MODEL_TENSOR(IntEnum):
-     ATTN_K_NORM          = auto()
-     LAYER_OUT_NORM       = auto()
-     LAYER_OUT_SCALE      = auto()
-+    ENC_LAYER_OUT_SCALE  = auto() # diffusion-gemma (encoder-mode per-layer scalar)
-+    SC_PRE_NORM          = auto() # diffusion-gemma self-conditioning
-+    SC_GATE              = auto() # diffusion-gemma self-conditioning
-+    SC_UP                = auto() # diffusion-gemma self-conditioning
-+    SC_DOWN              = auto() # diffusion-gemma self-conditioning
-     PER_LAYER_TOKEN_EMBD = auto() # gemma3n
-     PER_LAYER_MODEL_PROJ = auto() # gemma3n
-     PER_LAYER_INP_GATE   = auto() # gemma3n
-@@ -1307,6 +1320,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
-     MODEL_ARCH.GEMMA3N:          "gemma3n",
-     MODEL_ARCH.GEMMA4:           "gemma4",
-     MODEL_ARCH.GEMMA4_ASSISTANT: "gemma4-assistant",
-+    MODEL_ARCH.DIFFUSION_GEMMA:  "diffusion-gemma",
-     MODEL_ARCH.GEMMA_EMBEDDING:  "gemma-embedding",
-     MODEL_ARCH.STARCODER2:       "starcoder2",
-     MODEL_ARCH.RWKV6:            "rwkv6",
-@@ -1487,6 +1501,11 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
-     MODEL_TENSOR.MOE_LATENT_UP:             "blk.{bid}.ffn_latent_up",        # nemotron 3 super
-     MODEL_TENSOR.LAYER_OUT_NORM:            "blk.{bid}.layer_output_norm",
-     MODEL_TENSOR.LAYER_OUT_SCALE:           "blk.{bid}.layer_output_scale",
-+    MODEL_TENSOR.ENC_LAYER_OUT_SCALE:       "blk.{bid}.enc_layer_output_scale", # diffusion-gemma
-+    MODEL_TENSOR.SC_PRE_NORM:               "self_cond_pre_norm",               # diffusion-gemma
-+    MODEL_TENSOR.SC_GATE:                   "self_cond_gate",                   # diffusion-gemma
-+    MODEL_TENSOR.SC_UP:                     "self_cond_up",                     # diffusion-gemma
-+    MODEL_TENSOR.SC_DOWN:                   "self_cond_down",                   # diffusion-gemma
-     MODEL_TENSOR.PER_LAYER_TOKEN_EMBD:      "per_layer_token_embd",           # gemma3n
-     MODEL_TENSOR.PER_LAYER_MODEL_PROJ:      "per_layer_model_proj",           # gemma3n
-     MODEL_TENSOR.PER_LAYER_PROJ_NORM:       "per_layer_proj_norm",            # gemma3n
-@@ -3325,6 +3344,39 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
-         MODEL_TENSOR.PER_LAYER_PROJ_NORM,
-         MODEL_TENSOR.PER_LAYER_POST_NORM,
-     ],
-+    MODEL_ARCH.DIFFUSION_GEMMA: [
-+        MODEL_TENSOR.ROPE_FREQS,
-+        MODEL_TENSOR.TOKEN_EMBD,
-+        MODEL_TENSOR.OUTPUT,
-+        MODEL_TENSOR.OUTPUT_NORM,
-+        MODEL_TENSOR.ATTN_Q,
-+        MODEL_TENSOR.ATTN_Q_NORM,
-+        MODEL_TENSOR.ATTN_K,
-+        MODEL_TENSOR.ATTN_K_NORM,
-+        MODEL_TENSOR.ATTN_V,
-+        MODEL_TENSOR.ATTN_OUT,
-+        MODEL_TENSOR.FFN_GATE,
-+        MODEL_TENSOR.FFN_DOWN,
-+        MODEL_TENSOR.FFN_UP,
-+        MODEL_TENSOR.FFN_GATE_UP_EXP,
-+        MODEL_TENSOR.FFN_GATE_EXP,
-+        MODEL_TENSOR.FFN_UP_EXP,
-+        MODEL_TENSOR.FFN_DOWN_EXP,
-+        MODEL_TENSOR.ATTN_NORM,
-+        MODEL_TENSOR.ATTN_POST_NORM,
-+        MODEL_TENSOR.FFN_GATE_INP,
-+        MODEL_TENSOR.FFN_PRE_NORM,
-+        MODEL_TENSOR.FFN_PRE_NORM_2,
-+        MODEL_TENSOR.FFN_POST_NORM,
-+        MODEL_TENSOR.FFN_POST_NORM_1,
-+        MODEL_TENSOR.FFN_POST_NORM_2,
-+        MODEL_TENSOR.LAYER_OUT_SCALE,
-+        MODEL_TENSOR.ENC_LAYER_OUT_SCALE,
-+        MODEL_TENSOR.SC_PRE_NORM,
-+        MODEL_TENSOR.SC_GATE,
-+        MODEL_TENSOR.SC_UP,
-+        MODEL_TENSOR.SC_DOWN,
-+    ],
-     MODEL_ARCH.GEMMA4_ASSISTANT: [
-         MODEL_TENSOR.ROPE_FREQS,
-         MODEL_TENSOR.TOKEN_EMBD,
-diff --git a/gguf-py/gguf/gguf_writer.py b/gguf-py/gguf/gguf_writer.py
-index 56cc65a70..c2236bef1 100644
---- a/gguf-py/gguf/gguf_writer.py
-+++ b/gguf-py/gguf/gguf_writer.py
-@@ -1590,6 +1590,27 @@ class GGUFWriter:
-     def add_diffusion_shift_logits(self, value: bool) -> None:
-         self.add_bool(Keys.Diffusion.SHIFT_LOGITS, value)
- 
-+    def add_diffusion_canvas_length(self, value: int) -> None:
-+        self.add_uint32(Keys.Diffusion.CANVAS_LENGTH, value)
-+
-+    def add_diffusion_eb_max_steps(self, value: int) -> None:
-+        self.add_uint32(Keys.Diffusion.EB_MAX_STEPS, value)
-+
-+    def add_diffusion_eb_t_min(self, value: float) -> None:
-+        self.add_float32(Keys.Diffusion.EB_T_MIN, value)
-+
-+    def add_diffusion_eb_t_max(self, value: float) -> None:
-+        self.add_float32(Keys.Diffusion.EB_T_MAX, value)
-+
-+    def add_diffusion_eb_entropy_bound(self, value: float) -> None:
-+        self.add_float32(Keys.Diffusion.EB_ENTROPY_BOUND, value)
-+
-+    def add_diffusion_eb_stability_threshold(self, value: int) -> None:
-+        self.add_uint32(Keys.Diffusion.EB_STABILITY, value)
-+
-+    def add_diffusion_eb_confidence_threshold(self, value: float) -> None:
-+        self.add_float32(Keys.Diffusion.EB_CONFIDENCE, value)
-+
-     def _pack(self, fmt: str, value: Any, skip_pack_prefix: bool = False) -> bytes:
-         pack_prefix = ''
-         if not skip_pack_prefix:
 diff --git a/include/llama.h b/include/llama.h
 index 837293eb4..2950a2e9e 100644
 --- a/include/llama.h
@@ -2779,10 +2501,10 @@ index c48613aca..4c271709f 100644
      LLM_TENSOR_POST_MLP_NORM,
      LLM_TENSOR_PER_LAYER_TOKEN_EMBD, // gemma3n
 diff --git a/src/llama-context.cpp b/src/llama-context.cpp
-index 66d484684..4826bfb19 100644
+index 4125ba648..a3bc9403c 100644
 --- a/src/llama-context.cpp
 +++ b/src/llama-context.cpp
-@@ -1563,8 +1563,14 @@ int llama_context::encode(
+@@ -1793,8 +1793,14 @@ int llama_context::encode(
      // eagle3/DFlash: features as encoder input, and non-draft paths fall back to model's input dim
      const int64_t n_vocab = model.vocab.n_tokens();
  
@@ -2798,7 +2520,7 @@ index 66d484684..4826bfb19 100644
          LLAMA_LOG_ERROR("%s: failed to initialize batch\n", __func__);
          return -1;
      }
-@@ -1593,17 +1599,27 @@ int llama_context::encode(
+@@ -1823,17 +1829,27 @@ int llama_context::encode(
  
      n_queued_tokens += n_tokens;
  
@@ -2832,7 +2554,7 @@ index 66d484684..4826bfb19 100644
  
      const auto causal_attn_org = cparams.causal_attn;
  
-@@ -1636,7 +1652,7 @@ int llama_context::encode(
+@@ -1866,7 +1882,7 @@ int llama_context::encode(
          GGML_ASSERT(backend_res != nullptr);
          GGML_ASSERT(logits.data != nullptr);
  
@@ -2854,10 +2576,10 @@ index e466919d5..c4cda0421 100644
          default:
              return true;
 diff --git a/src/llama-model.cpp b/src/llama-model.cpp
-index 887adad5f..2c1cd275f 100644
+index 29dd071ad..650cbd25f 100644
 --- a/src/llama-model.cpp
 +++ b/src/llama-model.cpp
-@@ -153,6 +153,8 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
+@@ -154,6 +154,8 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
              return new llama_model_gemma4(params);
          case LLM_ARCH_GEMMA4_ASSISTANT:
              return new llama_model_gemma4_assistant(params);
@@ -2866,7 +2588,7 @@ index 887adad5f..2c1cd275f 100644
          case LLM_ARCH_GEMMA_EMBEDDING:
              return new llama_model_gemma_embedding(params);
          case LLM_ARCH_STARCODER2:
-@@ -2409,6 +2411,7 @@ llama_memory_i * llama_model::create_memory(
+@@ -2410,6 +2412,7 @@ llama_memory_i * llama_model::create_memory(
          case LLM_ARCH_LLADA:
          case LLM_ARCH_LLADA_MOE:
          case LLM_ARCH_RND1:
@@ -2874,7 +2596,7 @@ index 887adad5f..2c1cd275f 100644
              {
                  res = nullptr;
              } break;
-@@ -3155,6 +3158,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
+@@ -3180,6 +3183,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
          case LLM_ARCH_GEMMA3N:
          case LLM_ARCH_GEMMA4:
          case LLM_ARCH_GEMMA4_ASSISTANT:
@@ -3902,7 +3624,7 @@ index 000000000..9a6f4ddd5
 +    return cur;
 +}
 diff --git a/src/models/models.h b/src/models/models.h
-index 527ea4ba6..e567d0b71 100644
+index 8eefc5649..be7f04899 100644
 --- a/src/models/models.h
 +++ b/src/models/models.h
 @@ -882,6 +882,66 @@ struct llama_model_gemma4 : public llama_model_base {
@@ -3973,10 +3695,10 @@ index 527ea4ba6..e567d0b71 100644
      llama_model_gemma4_assistant(const struct llama_model_params & params) : llama_model_base(params) {}
      void load_arch_hparams(llama_model_loader & ml) override;
 diff --git a/tests/test-llama-archs.cpp b/tests/test-llama-archs.cpp
-index a8150b9ff..3a588b682 100644
+index 102ec148e..7e0bb515a 100644
 --- a/tests/test-llama-archs.cpp
 +++ b/tests/test-llama-archs.cpp
-@@ -296,8 +296,11 @@ static gguf_context_ptr get_gguf_ctx(
+@@ -322,8 +322,11 @@ static gguf_context_ptr get_gguf_ctx(
          // SWA pattern: every 5th layer is full attention (matches E2B layer_types)
          ms.add_kv(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, uint32_t(5));
      } else if (arch == LLM_ARCH_COHERE2MOE || arch == LLM_ARCH_MIMO2 || arch == LLM_ARCH_STEP35 || arch == LLM_ARCH_SPARK2_5 ||
@@ -3990,7 +3712,7 @@ index a8150b9ff..3a588b682 100644
          std::vector<uint32_t> pattern;
          pattern.reserve(n_layer);
          for (uint32_t il = 0; il < n_layer; il++) {
-@@ -461,6 +464,16 @@ static gguf_context_ptr get_gguf_ctx(
+@@ -511,6 +514,16 @@ static gguf_context_ptr get_gguf_ctx(
          ms.add_kv(LLM_KV_SWIGLU_CLAMP_EXP,   std::vector<float>({0.0f, 4.0f}));
          ms.add_kv(LLM_KV_SWIGLU_CLAMP_SHEXP, std::vector<float>({0.0f, 5.0f}));
      }
@@ -4007,7 +3729,7 @@ index a8150b9ff..3a588b682 100644
      ms.add_kv(LLM_KV_WKV_HEAD_SIZE,               n_embd/n_head);
      ms.add_kv(LLM_KV_SHORTCONV_L_CACHE,           uint32_t(3));
      ms.add_kv(LLM_KV_RESIDUAL_SCALE,              3.5565588200778455f);
-@@ -659,6 +672,7 @@ static bool moe_mandatory(const llm_arch arch) {
+@@ -709,6 +722,7 @@ static bool moe_mandatory(const llm_arch arch) {
          case LLM_ARCH_DEEPSEEK2:
          case LLM_ARCH_DEEPSEEK32:
          case LLM_ARCH_DOTS3NOTE:
@@ -4015,7 +3737,7 @@ index a8150b9ff..3a588b682 100644
          case LLM_ARCH_DEEPSEEK4:
          case LLM_ARCH_GLM4_MOE:
          case LLM_ARCH_GLM_DSA:
-@@ -944,7 +958,10 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
+@@ -996,7 +1010,10 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
              continue;
          }
  

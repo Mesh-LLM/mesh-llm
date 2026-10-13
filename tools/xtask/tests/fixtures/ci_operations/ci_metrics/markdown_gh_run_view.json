@@ -1,0 +1,14 @@
+{
+  "args": [
+    "--input",
+    "gh_run_view.json",
+    "--markdown-out",
+    "md/nested/summary.md"
+  ],
+  "code": 0,
+  "markdown_output": "# CI timing summary\n\nAnalyzed **1** completed run(s) from `gh_run_view.json`.\n\n## Workflow timing\n\n| Timing | Samples | p50 | p90 | p95 | Max |\n| --- | ---: | ---: | ---: | ---: | ---: |\n| Wall time | 1 | 10m 0s | 10m 0s | 10m 0s | 10m 0s |\n| Queue | 1 | 5s | 5s | 5s | 5s |\n| Dependency wait | 0 | n/a | n/a | n/a | n/a |\n| Execution | 2 | 4m 42s | 7m 20s | 7m 40s | 8m 0s |\n\n## Runner dimensions\n\n| Provider | OS | Architecture | Role | Depot size | Jobs | Execution p50 | Execution p95 | Runner queue p95 |\n| --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: |\n| github-hosted | linux | amd64 | n/a | n/a | 2 | 4m 42s | 7m 40s | 5s |\n\n## Capacity and rollout heuristics\n\nRunner-minutes: **9.417**; cancelled runner-minutes: **0.0**; peak workers: **1**.\nQueue p95: **5s**; terminal queue p95: **5s**; capacity contaminated: **False**; state: **insufficient_sample**.\n\n## Step timing\n\nNo job step timestamps were available; cache, context-upload, and export/import phases are not inferred from logs.\n\n## Slow job families\n\n| Job | Samples | Duration p50 | Duration p95 | Runner queue p50 | Runner queue p95 |\n| --- | ---: | ---: | ---: | ---: | ---: |\n| build | 1 | 8m 0s | 8m 0s | n/a | n/a |\n| smoke | 1 | 1m 25s | 1m 25s | 5s | 5s |\n\n## Terminal jobs (critical-path candidates)\n\n| Job | Runs finishing last | Share |\n| --- | ---: | ---: |\n| smoke | 1 | 100.0% |\n\n## Slowest observations\n\n| Run | Job | Duration | Queue |\n| --- | --- | ---: | ---: |\n| [101](https://example.test/runs/101) | build | 8m 0s | n/a |\n| [101](https://example.test/runs/101) | smoke | 1m 25s | 5s |\n\n_Job queue uses GitHub's job creation-to-start interval. Offline `gh run view` data may omit creation times; those samples are n/a. Workflow and start-delay timing excludes rerun attempts because their run timestamps belong to the original attempt. Terminal jobs are candidates only; the DAG is not reconstructed._\n",
+  "output": null,
+  "raw_output": null,
+  "stderr": "",
+  "stdout": ""
+}

@@ -1,0 +1,15 @@
+{
+  "args": [
+    "--input",
+    "int_digit_limit.json",
+    "--json-out",
+    "out/nested/metrics.json",
+    "--raw-out",
+    "raw/runs.json"
+  ],
+  "code": 2,
+  "output": null,
+  "raw_output": null,
+  "stderr": "ci metrics error: Exceeds the limit (4300 digits) for integer string conversion: value has 4301 digits; use sys.set_int_max_str_digits() to increase the limit\n",
+  "stdout": ""
+}

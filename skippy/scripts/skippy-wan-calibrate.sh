@@ -1,6 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+automation=(just --justfile "$ROOT/Justfile" automation-run)
+if [[ "${MESH_LLM_AUTOMATION_BIN+set}" == set ]]; then
+  if [[ "$MESH_LLM_AUTOMATION_BIN" != /* || ! -f "$MESH_LLM_AUTOMATION_BIN" || ! -x "$MESH_LLM_AUTOMATION_BIN" || -L "$MESH_LLM_AUTOMATION_BIN" ]]; then
+    echo "MESH_LLM_AUTOMATION_BIN must be an absolute regular executable" >&2
+    exit 1
+  fi
+  automation=("$MESH_LLM_AUTOMATION_BIN")
+fi
+
 TARGET="${1:-100.90.121.70}"
 OUT="${2:-skippy/evals/wan-lab/.env.link}"
 PING_COUNT="${PING_COUNT:-10}"
@@ -23,26 +33,15 @@ if [[ -z "$avg_rtt" ]]; then
   exit 1
 fi
 
-one_way="$(python3 - "$avg_rtt" <<'PY'
-import sys
-print(f"{float(sys.argv[1]) / 2.0:.3f}")
-PY
-)"
+one_way="$("${automation[@]}" automation wan-observation delay "$avg_rtt")"
 
 rate_mbit=""
 if command -v iperf3 >/dev/null 2>&1; then
   if iperf_json="$(iperf3 -c "$TARGET" -J -t "$IPERF_SECONDS" 2>/dev/null)"; then
-    rate_mbit="$(
-      IPERF_JSON="$iperf_json" python3 - <<'PY'
-import json
-import os
-import sys
-data = json.loads(os.environ["IPERF_JSON"])
-sender = data.get("end", {}).get("sum_sent") or data.get("end", {}).get("sum")
-if sender and sender.get("bits_per_second"):
-    print(max(1, round(sender["bits_per_second"] / 1_000_000)))
-PY
-    )"
+    if ! rate_mbit="$(printf '%s\n' "$iperf_json" | "${automation[@]}" automation wan-observation bandwidth)"; then
+      echo "iperf3 observation was invalid; bandwidth remains unmeasured" >&2
+      rate_mbit=""
+    fi
   fi
 fi
 

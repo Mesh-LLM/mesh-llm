@@ -94,12 +94,55 @@ pub(crate) async fn read_ref(
     repo_folder: &str,
     revision: &str,
 ) -> crate::error::HFResult<Option<String>> {
-    let path = ref_path(cache_dir, repo_folder, revision);
-    match std::fs::read_to_string(&path) {
-        Ok(content) => Ok(Some(content.trim().to_string())),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(e) => Err(e.into()),
+    read_ref_sync(cache_dir, repo_folder, revision)
+}
+
+pub(crate) fn read_ref_sync(
+    cache_dir: &Path,
+    repo_folder: &str,
+    revision: &str,
+) -> crate::error::HFResult<Option<String>> {
+    use std::io::Read as _;
+    let safe = |value: &str| {
+        !value.is_empty()
+            && value != "."
+            && value != ".."
+            && !value
+                .chars()
+                .any(|ch| ch.is_control() || matches!(ch, '\\' | ':' | '/'))
+    };
+    if !safe(repo_folder) || !revision.split('/').all(safe) {
+        return Err(crate::error::HFError::InvalidParameter(
+            "unsafe cached reference path".into(),
+        ));
     }
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.custom_flags(libc::O_NONBLOCK);
+    }
+    let file = match options.open(ref_path(cache_dir, repo_folder, revision)) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
+    };
+    let metadata = file.metadata()?;
+    if !metadata.is_file() || metadata.len() > 128 {
+        return Err(crate::error::HFError::InvalidParameter(
+            "cached reference must be a bounded regular file".into(),
+        ));
+    }
+    let mut content = String::new();
+    file.take(129).read_to_string(&mut content)?;
+    let commit = content.trim();
+    if content.len() > 128 || !is_commit_hash(commit) {
+        return Err(crate::error::HFError::InvalidParameter(
+            "cached reference is not an immutable commit".into(),
+        ));
+    }
+    Ok(Some(commit.to_owned()))
 }
 
 pub(crate) async fn create_pointer_symlink(
@@ -538,6 +581,39 @@ mod tests {
         assert_eq!(
             hash,
             Some("abc123def456abc123def456abc123def456abcd".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn cached_ref_rejects_malformed_commits_and_paths_before_join() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = ref_path(dir.path(), "models--owner--repo", "main");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        for value in ["../outside", "/absolute", "short", "", "aaaa\nbbbb"] {
+            std::fs::write(&path, value).unwrap();
+            assert!(
+                read_ref(dir.path(), "models--owner--repo", "main")
+                    .await
+                    .is_err()
+            );
+        }
+        std::fs::write(&path, "a".repeat(129)).unwrap();
+        assert!(
+            read_ref(dir.path(), "models--owner--repo", "main")
+                .await
+                .is_err()
+        );
+        assert!(
+            read_ref(dir.path(), "models--owner--repo", "../outside")
+                .await
+                .is_err()
+        );
+        std::fs::write(&path, format!("{}\n", "a".repeat(40))).unwrap();
+        assert_eq!(
+            read_ref(dir.path(), "models--owner--repo", "main")
+                .await
+                .unwrap(),
+            Some("a".repeat(40))
         );
     }
 

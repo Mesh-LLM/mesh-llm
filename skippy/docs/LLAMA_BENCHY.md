@@ -80,7 +80,20 @@ Artifacts default to `/tmp/skippy-openai-smoke`.
 
 ## Run Benchy
 
-The helper script defaults to the local `serve-openai` address:
+The helper script defaults to the local `serve-openai` address. If `MODEL` is
+unset, native `cargo xtool automation endpoint-model-discovery` selects the
+first advertised `/v1/models` ID with a ten-second deadline. An explicit `MODEL`
+bypasses discovery. `SERVED_MODEL_NAME` defaults to the selected model, and an
+explicit served name stays unchanged. Run from the repository root, or supply
+an absolute executable `MESH_LLM_AUTOMATION_BIN` from automation preparation.
+Discovery reads `API_KEY` from the environment and keeps its bearer bytes out of
+child argv and displayed commands. DNS/HTTPS discovery uses the existing
+supervised curl transport, which requires installed curl 8.4 or newer.
+
+The benchmark still uses the optional external `uvx llama-benchy` dependency.
+Its existing `--api-key` argument remains visible to the operating system's
+process inspection, although this wrapper redacts the displayed command.
+Native discovery does not certify the loaded model's bytes or benchmark results:
 
 ```bash
 MODEL=meta-llama/Llama-3.2-1B-Instruct:Q4_K_M \
@@ -124,7 +137,7 @@ curl -s localhost:3131/api/status | jq '.runtime.openai_guardrails'
 ```
 
 ```bash
-python3 scripts/run-openai-guardrail-corpus.py \
+just automation-run automation guardrail-corpus \
   --base-url http://127.0.0.1:9337/v1 \
   --model meta-llama/Llama-3.2-1B-Instruct:Q4_K_M \
   --guardrail-mode metrics \

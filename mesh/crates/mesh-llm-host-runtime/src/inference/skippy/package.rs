@@ -580,6 +580,7 @@ mod tests {
             source_model_sha256: "source".to_string(),
             source_model_bytes: Some(120),
             layer_count: 2,
+            activation_width: None,
             generation: None,
             projectors: Vec::new(),
             layers: vec![
@@ -611,6 +612,7 @@ mod tests {
             source_model_sha256: "source".to_string(),
             source_model_bytes: Some(70),
             layer_count: 2,
+            activation_width: None,
             generation: None,
             projectors: Vec::new(),
             layers: vec![

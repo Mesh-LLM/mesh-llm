@@ -28,6 +28,14 @@ set -euo pipefail
 # Exit: 0 pass | unqualified, 1 fail (including an unusable environment).
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+automation=(just --justfile "$ROOT/Justfile" automation-run)
+if [[ "${MESH_LLM_AUTOMATION_BIN+set}" == set ]]; then
+  if [[ "$MESH_LLM_AUTOMATION_BIN" != /* || ! -f "$MESH_LLM_AUTOMATION_BIN" || ! -x "$MESH_LLM_AUTOMATION_BIN" ]]; then
+    echo "MESH_LLM_AUTOMATION_BIN must be an absolute regular executable" >&2
+    exit 2
+  fi
+  automation=("$MESH_LLM_AUTOMATION_BIN")
+fi
 
 resolve_llama_build_dir() {
   if [[ -n "${LLAMA_STAGE_BUILD_DIR:-}" ]]; then
@@ -50,8 +58,8 @@ CERTIFIED_BACKENDS="${SYSTEMONE_SMOKE_CERTIFIED_BACKENDS:-cuda}"
 REQUIRE_QUALIFIED="${SYSTEMONE_SMOKE_REQUIRE_QUALIFIED:-0}"
 SKIP_CONTRACT="${SYSTEMONE_SMOKE_SKIP_CONTRACT:-0}"
 ALIAS="${SYSTEMONE_SMOKE_ALIAS:-openjev-latest}"
-CASES_DRIVER="${SYSTEMONE_SMOKE_DRIVER:-$ROOT/scripts/skippy-system-one-cases.py}"
-TEST_MODEL_RESOLVER="$ROOT/scripts/resolve-test-model-manifest.py"
+CASES_DRIVER="${SYSTEMONE_SMOKE_DRIVER:-}"
+DRIVER_TIMEOUT_SECS="${SYSTEMONE_SMOKE_DRIVER_TIMEOUT_SECS:-14400}"
 STAGE_SERVER_BIN="${STAGE_SERVER_BIN:-$ROOT/target/debug/skippy}"
 MODEL_PACKAGE_BIN="${MODEL_PACKAGE_BIN:-$ROOT/target/debug/skippy-package-builder}"
 CTX_SIZE="${SYSTEMONE_SMOKE_CTX_SIZE:-8192}"
@@ -94,13 +102,7 @@ require_file() {
 }
 
 pick_port() {
-  python3 - <<'PY'
-import socket
-sock = socket.socket()
-sock.bind(("127.0.0.1", 0))
-print(sock.getsockname()[1])
-sock.close()
-PY
+  "${automation[@]}" automation local-ports 1
 }
 
 cleanup() {
@@ -134,7 +136,7 @@ record_reason() {
 # enforces the authorized cadence, single-file membership, and the pinned
 # size + SHA-256. Prints the resolver's JSON summary.
 artifact_summary() {
-  python3 "$TEST_MODEL_RESOLVER" "$SMOKE_MANIFEST" \
+  "${automation[@]}" models resolve "$SMOKE_MANIFEST" \
     --artifact-id "$1" \
     --cadence "$SMOKE_CADENCE" \
     --require-single-file
@@ -159,7 +161,7 @@ cached_artifact_path() {
 # Verifies the pinned size and SHA-256 of the artifact files in `dir`. A
 # mismatch is a hard failure, never a skip.
 verify_artifact_digest() {
-  python3 "$TEST_MODEL_RESOLVER" "$SMOKE_MANIFEST" \
+  "${automation[@]}" models resolve "$SMOKE_MANIFEST" \
     --artifact-id "$1" \
     --cadence "$SMOKE_CADENCE" \
     --require-single-file \
@@ -167,52 +169,7 @@ verify_artifact_digest() {
 }
 
 write_stage_config() {
-  python3 - "$@" <<'PY'
-import json
-import sys
-from pathlib import Path
-
-(
-    config_path,
-    model_id,
-    model_path,
-    source_sha256,
-    layer_end,
-    bind_addr,
-    lane_count,
-    ctx_size,
-    n_batch,
-    n_gpu_layers,
-) = sys.argv[1:]
-
-config = {
-    "run_id": "skippy-system-one-smoke",
-    "topology_id": "skippy-system-one-smoke-single-stage",
-    "model_id": model_id,
-    "model_path": model_path,
-    "stage_id": "stage-0",
-    "stage_index": 0,
-    "layer_start": 0,
-    "layer_end": int(layer_end),
-    "ctx_size": int(ctx_size),
-    "lane_count": int(lane_count),
-    "n_batch": int(n_batch),
-    "n_ubatch": int(n_batch),
-    "n_gpu_layers": int(n_gpu_layers),
-    "cache_type_k": "f16",
-    "cache_type_v": "f16",
-    "load_mode": "runtime-slice",
-    "execution_contract": "",
-    "bind_addr": bind_addr,
-    "upstream": None,
-    "downstream": None,
-}
-if source_sha256:
-    config["source_model_sha256"] = source_sha256
-with Path(config_path).open("w", encoding="utf-8") as handle:
-    json.dump(config, handle, indent=2)
-    handle.write("\n")
-PY
+  "${automation[@]}" automation system-one-smoke stage "$@"
 }
 
 # Both parts need a patched native build. Checked lazily so an unqualified
@@ -304,7 +261,7 @@ run_cases_against_stage() {
     return 2
   fi
 
-  port="$(pick_port)"
+  port="$(pick_port)" || return 2
   config="$WORK_DIR/${mode}-stage.json"
   log="$WORK_DIR/${mode}-server.log"
   if [[ "$mode" == "full-read" ]]; then
@@ -313,10 +270,14 @@ run_cases_against_stage() {
     gpu_layers=0
   fi
   write_stage_config "$config" "$model_id" "$model_path" "$(jq -r '.sha256' <<<"$summary")" \
-    "$layer_end" "127.0.0.1:${port}" 1 "$CTX_SIZE" "$n_batch" "$gpu_layers"
+    "$layer_end" "127.0.0.1:${port}" 1 "$CTX_SIZE" "$n_batch" "$gpu_layers" || return 2
   start_stage_server "$label" "$config" "$port" "$log" || return 1
   rc=0
-  python3 "$CASES_DRIVER" \
+  local case_command=("${automation[@]}" automation system-one-cases)
+  if [[ "${SYSTEMONE_SMOKE_DRIVER+set}" == set ]]; then
+    case_command=("${automation[@]}" automation system-one-cases --driver-executable "$CASES_DRIVER" --driver-timeout "$DRIVER_TIMEOUT_SECS")
+  fi
+  "${case_command[@]}" \
     --base-url "http://127.0.0.1:${port}" \
     --model "$model_id" \
     --alias "$ALIAS" \
@@ -411,7 +372,7 @@ read_part() {
 
 main() {
   if [[ "${1:-}" == "--prewarm" ]]; then
-    require_cmd python3 || exit 2
+    require_cmd jq || exit 2
     if [[ ! -f "$SMOKE_MANIFEST" ]]; then
       echo "System One smoke manifest not found: $SMOKE_MANIFEST" >&2
       exit 2
@@ -421,16 +382,21 @@ main() {
   fi
 
   require_cmd jq || exit 2
-  require_cmd python3 || exit 2
   require_cmd curl || exit 2
   if [[ ! -f "$SMOKE_MANIFEST" ]]; then
     echo "System One smoke manifest not found: $SMOKE_MANIFEST" >&2
-    echo "regenerate it with scripts/generate-test-model-manifests.py" >&2
+    echo "regenerate it with cargo xtool models generate" >&2
     exit 2
   fi
-  if [[ ! -f "$CASES_DRIVER" ]]; then
-    echo "System One case driver not found: $CASES_DRIVER" >&2
-    exit 2
+  if [[ "${SYSTEMONE_SMOKE_DRIVER+set}" == set ]]; then
+    if [[ "$CASES_DRIVER" == *.py ]]; then
+      echo "SYSTEMONE_SMOKE_DRIVER no longer accepts Python scripts; use an absolute native executable with the System One case arguments" >&2
+      exit 2
+    fi
+    if [[ "$CASES_DRIVER" != /* || ! -f "$CASES_DRIVER" || ! -x "$CASES_DRIVER" || -L "$CASES_DRIVER" ]]; then
+      echo "SYSTEMONE_SMOKE_DRIVER must be an absolute regular executable (not a symlink)" >&2
+      exit 2
+    fi
   fi
   mkdir -p "$REPORT_DIR"
 
@@ -487,54 +453,11 @@ main() {
     *) status="fail"; exit_status=1 ;;
   esac
 
-  SYSTEMONE_SMOKE_STATUS="$status" \
-  SYSTEMONE_SMOKE_CONTRACT_STATUS="$contract_status" \
-  SYSTEMONE_SMOKE_READ_STATUS="$read_status" \
-  SYSTEMONE_SMOKE_BUILD_BACKEND="$BUILD_BACKEND" \
-  SYSTEMONE_SMOKE_CERTIFIED_BACKENDS="$CERTIFIED_BACKENDS" \
-  SYSTEMONE_SMOKE_REASONS="$REPORT_REASONS" \
-  SYSTEMONE_SMOKE_REPORT_PATH="$REPORT_PATH" \
-  SYSTEMONE_SMOKE_READ_ARTIFACT="$READ_ARTIFACT_ID" \
-  SYSTEMONE_SMOKE_RESOLVED_ARTIFACT_PATH="$READ_RESOLVED_ARTIFACT_PATH" \
-  SYSTEMONE_SMOKE_ARTIFACT_CACHE_CHECKED="$READ_ARTIFACT_CACHE_CHECKED" \
-  SYSTEMONE_SMOKE_REQUIRE_QUALIFIED_FLAG="$REQUIRE_QUALIFIED" \
-  SYSTEMONE_SMOKE_SKIP_CONTRACT_FLAG="$SKIP_CONTRACT" \
-  SYSTEMONE_SMOKE_CTX_SIZE_VALUE="$CTX_SIZE" \
-    python3 - <<'PY'
-import json
-import os
-from pathlib import Path
-
-report = {
-    "schema_version": 1,
-    "status": os.environ["SYSTEMONE_SMOKE_STATUS"],
-    "contract": {"status": os.environ["SYSTEMONE_SMOKE_CONTRACT_STATUS"]},
-    "full_model_read": {
-        "status": os.environ["SYSTEMONE_SMOKE_READ_STATUS"],
-        "artifact": os.environ["SYSTEMONE_SMOKE_READ_ARTIFACT"],
-        "backend": os.environ["SYSTEMONE_SMOKE_BUILD_BACKEND"] or None,
-        "artifact_path": os.environ["SYSTEMONE_SMOKE_RESOLVED_ARTIFACT_PATH"] or None,
-        "artifact_cache_checked": os.environ["SYSTEMONE_SMOKE_ARTIFACT_CACHE_CHECKED"]
-        in ("1", "true"),
-        "certified_backends": [
-            item
-            for item in os.environ["SYSTEMONE_SMOKE_CERTIFIED_BACKENDS"].split(",")
-            if item
-        ],
-        "require_qualified": os.environ["SYSTEMONE_SMOKE_REQUIRE_QUALIFIED_FLAG"]
-        in ("1", "true"),
-    },
-    "contract_part_skipped": os.environ["SYSTEMONE_SMOKE_SKIP_CONTRACT_FLAG"]
-    in ("1", "true"),
-    "reasons": [item for item in os.environ["SYSTEMONE_SMOKE_REASONS"].split("; ") if item],
-}
-path = Path(os.environ["SYSTEMONE_SMOKE_REPORT_PATH"])
-path.parent.mkdir(parents=True, exist_ok=True)
-with path.open("w", encoding="utf-8") as handle:
-    json.dump(report, handle, indent=2, sort_keys=True)
-    handle.write("\n")
-print(json.dumps(report, indent=2, sort_keys=True))
-PY
+  "${automation[@]}" automation system-one-smoke report \
+    "$REPORT_PATH" "$status" "$contract_status" "$read_status" \
+    "$READ_ARTIFACT_ID" "$BUILD_BACKEND" "$READ_RESOLVED_ARTIFACT_PATH" \
+    "$READ_ARTIFACT_CACHE_CHECKED" "$CERTIFIED_BACKENDS" \
+    "$REQUIRE_QUALIFIED" "$SKIP_CONTRACT" "$REPORT_REASONS"
 
   case "$status" in
     pass) echo "system-one smoke passed" ;;

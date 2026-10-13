@@ -1,0 +1,12 @@
+{
+  "args": [
+    "--out",
+    "x"
+  ],
+  "code": 2,
+  "gh_argv": [],
+  "git_argv": [],
+  "outputs": {},
+  "stderr": "usage: release-notes-link.py [-h] --body BODY --range RANGE --repo REPO\n                             [--repo-root REPO_ROOT] --out-body OUT_BODY\n                             --out-links OUT_LINKS [--api-budget API_BUDGET]\nrelease-notes-link.py: error: ambiguous option: --out could match --out-body, --out-links\n",
+  "stdout": ""
+}

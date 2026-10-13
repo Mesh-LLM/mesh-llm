@@ -1,0 +1,5 @@
+{
+  "code": 1,
+  "stderr": "runner image identity: recipe hash must be lowercase SHA-256\n",
+  "stdout": ""
+}

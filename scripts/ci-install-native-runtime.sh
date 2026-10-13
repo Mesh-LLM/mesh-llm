@@ -24,44 +24,7 @@ native_runtime_dir="$(scripts/ci-prepare-native-runtime.sh "$OUT_DIR" "$BACKEND"
 echo "Installing CI native runtime:" >&2
 echo "  runtime: $native_runtime_dir" >&2
 echo "  cache:   $RUNTIME_CACHE" >&2
-python3 - "$native_runtime_dir" "$RUNTIME_CACHE" <<'PY'
-import json
-import shutil
-import sys
-from pathlib import Path
-
-source = Path(sys.argv[1])
-cache = Path(sys.argv[2])
-manifest_path = source / "manifest.json"
-
-with manifest_path.open("r", encoding="utf-8") as fh:
-    manifest = json.load(fh)
-
-if type(manifest.get("schema_version")) is not int or manifest["schema_version"] != 2:
-    raise SystemExit("native runtime manifest requires schema_version 2; import legacy caches explicitly")
-
-runtime = manifest["runtime"]
-runtime_id = runtime["id"]
-release_version = runtime.get("release_version") or "unknown"
-libraries = runtime.get("libraries") or []
-if not runtime_id.strip():
-    raise SystemExit(f"native runtime id is empty in {manifest_path}")
-if not release_version.strip():
-    raise SystemExit(f"native runtime release_version is empty in {manifest_path}")
-if not libraries:
-    raise SystemExit(f"native runtime libraries are empty in {manifest_path}")
-
-for library in libraries:
-    library_path = source / library
-    if not library_path.is_file():
-        raise SystemExit(f"native runtime library is missing: {library_path}")
-
-target = cache / release_version / runtime_id
-if target.exists():
-    shutil.rmtree(target)
-target.parent.mkdir(parents=True, exist_ok=True)
-shutil.copytree(source, target)
-print(f"Installed CI native runtime: {target}", file=sys.stderr)
-PY
+source "$REPO_ROOT/scripts/lib/automation.sh"
+mesh_automation automation runtime-cache-install "$native_runtime_dir" "$RUNTIME_CACHE"
 
 printf '%s\n' "$RUNTIME_CACHE"

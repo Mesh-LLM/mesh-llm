@@ -120,10 +120,10 @@ supplied matching invite token (mDNS advertisements only carry fingerprints).
 
 ```bash
 # Peers on each node (expect N-1)
-curl -s http://localhost:3131/api/status | python3 -m json.tool
+curl -s http://localhost:3131/api/status
 
 # Union of models across the mesh
-curl -s http://localhost:9337/v1/models | python3 -m json.tool
+curl -s http://localhost:9337/v1/models
 
 # Route to a specific peer's model — the response "model" field
 # confirms which node answered

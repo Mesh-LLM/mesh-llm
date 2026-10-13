@@ -140,4 +140,33 @@ pub struct LlamaModelQuantizeParams {
     pub kv_overrides: *const LlamaModelKvOverride,
     pub tt_overrides: *const LlamaModelTensorOverride,
     pub prune_layers: *const i32,
+    /// Maximum bytes of tensor rows retained by the upstream quantizer; zero selects its default.
+    pub max_buf_size: usize,
+}
+
+#[cfg(test)]
+mod quantize_layout_tests {
+    use super::LlamaModelQuantizeParams;
+    use std::mem::{align_of, offset_of, size_of};
+
+    #[test]
+    fn quantize_params_matches_current_native_c_layout() {
+        // Compare with the independent C probe against the prepared llama.h.
+        let pointer_bytes = size_of::<usize>();
+        let expected = match pointer_bytes {
+            8 => (64, 8, 56),
+            4 => (44, 4, 40),
+            other => panic!("unsupported native pointer width: {other}"),
+        };
+        assert_eq!(size_of::<LlamaModelQuantizeParams>(), expected.0);
+        assert_eq!(align_of::<LlamaModelQuantizeParams>(), expected.1);
+        assert_eq!(
+            offset_of!(LlamaModelQuantizeParams, max_buf_size),
+            expected.2
+        );
+        assert_eq!(
+            offset_of!(LlamaModelQuantizeParams, prune_layers) + pointer_bytes,
+            expected.2
+        );
+    }
 }

@@ -31,7 +31,7 @@ residency. This lane tests native head execution and target-state isolation;
 the existing split lanes retain responsibility for staged transport parity.
 
 ```bash
-python3 scripts/plan-family-battery.py --inspect-gguf /path/to/model.gguf
+cargo xtool automation family-battery-policy --inspect-gguf /path/to/model.gguf
 target/debug/skippy-correctness native-mtp-heads \
   --model /path/to/model.gguf --layer-end 48 --n-gpu-layers 999 \
   --report-out /tmp/native-mtp-heads.json

@@ -130,10 +130,10 @@ Check the current stable GitHub release separately from the installed version:
 
 ```sh
 curl -fsSL https://api.github.com/repos/Mesh-LLM/mesh-llm/releases/latest |
-  python3 -c 'import json,sys; print(json.load(sys.stdin)["tag_name"])'
+  jq -er '.tag_name | select(type == "string" and length > 0)'
 ```
 
-If Python is unavailable, inspect the API response with another local JSON
+If jq is unavailable, inspect the API response with another local JSON
 tool. In PowerShell use:
 
 ```powershell
@@ -151,7 +151,7 @@ entry where `prerelease` is true and `draft` is false:
 
 ```sh
 curl -fsSL 'https://api.github.com/repos/Mesh-LLM/mesh-llm/releases?per_page=20' |
-  python3 -c 'import json,sys; print(next(r["tag_name"] for r in json.load(sys.stdin) if r["prerelease"] and not r["draft"]))'
+  jq -er '[.[] | select(.prerelease == true and .draft == false)][0].tag_name | select(type == "string" and length > 0)'
 ```
 
 Use `mesh-llm update --version '<tag>'` only after the user confirms that exact
@@ -670,7 +670,7 @@ by `/v1/models`.
 For a coding harness, validate tool calls rather than stopping at plain chat:
 
 ```sh
-scripts/qa-agent-tool-call-reliability.py \
+cargo xtool automation stability tool-call \
   --base-url http://127.0.0.1:9337/v1 \
   --models '<exact-model-id>' --attempts 2 --print-plan
 ```
