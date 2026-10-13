@@ -1,6 +1,10 @@
 use crate::command::DynResult;
 use std::time::{Duration, Instant};
 
+// A loaded Mesh model listing can take several seconds to return.
+// Keep each poll bounded, and always clamp it to the overall startup deadline.
+const READINESS_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+
 pub(in crate::automation) fn run(args: &[String]) -> DynResult<()> {
     let [startup, console_port, workload, requests, summary] = args else {
         return Err("invalid server cell worker arguments".into());
@@ -31,7 +35,8 @@ pub(in crate::automation) fn run(args: &[String]) -> DynResult<()> {
         if Instant::now() >= deadline {
             return Err("replay model startup deadline exceeded".into());
         }
-        let budget = Duration::from_secs(2).min(deadline.saturating_duration_since(Instant::now()));
+        let budget =
+            READINESS_REQUEST_TIMEOUT.min(deadline.saturating_duration_since(Instant::now()));
         if let Ok(bytes) = runtime.block_on(async {
             tokio::time::timeout(
                 budget,
@@ -39,10 +44,9 @@ pub(in crate::automation) fn run(args: &[String]) -> DynResult<()> {
             )
             .await?
         }) && let Ok(list) = serde_json::from_slice::<Models>(&bytes)
-            && let [model] = list.data.as_slice()
-            && !model.id.is_empty()
+            && let Some(model) = list.single_direct_model()
         {
-            break model.id.clone();
+            break model.to_owned();
         }
         std::thread::sleep(Duration::from_millis(100));
     };
@@ -59,7 +63,7 @@ pub(in crate::automation) fn run(args: &[String]) -> DynResult<()> {
                 return Err("runtime context startup deadline exceeded".into());
             }
             let budget =
-                Duration::from_secs(2).min(deadline.saturating_duration_since(Instant::now()));
+                READINESS_REQUEST_TIMEOUT.min(deadline.saturating_duration_since(Instant::now()));
             if let Ok(bytes) =
                 runtime.block_on(async { tokio::time::timeout(budget, get(&url)).await? })
                 && let Ok(document) =
@@ -114,6 +118,17 @@ fn bind_context(
 struct Models {
     data: Vec<Model>,
 }
+
+impl Models {
+    fn single_direct_model(&self) -> Option<&str> {
+        // Mesh advertises its routing alias alongside the loaded model. Replay
+        // must address the single concrete model, without routing through it.
+        let mut direct = self.data.iter().filter(|model| model.id != "mesh");
+        let model = direct.next()?;
+        (!model.id.is_empty() && direct.next().is_none()).then_some(model.id.as_str())
+    }
+}
+
 #[derive(serde::Deserialize)]
 struct Model {
     id: String,
@@ -131,5 +146,44 @@ pub(super) fn limits(execution: Duration) -> crate::process::Limits {
         retained_bytes_per_stream: 65536,
         readiness: crate::process::Readiness::None,
         completion: crate::process::Completion::Exit,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Models;
+
+    #[test]
+    fn selects_one_concrete_model_with_or_without_the_routing_alias() {
+        for ids in [
+            vec!["loaded"],
+            vec!["mesh", "loaded"],
+            vec!["loaded", "mesh"],
+        ] {
+            let models: Models = serde_json::from_value(serde_json::json!({
+                "data": ids.into_iter().map(|id| serde_json::json!({"id":id})).collect::<Vec<_>>()
+            }))
+            .unwrap();
+            assert_eq!(models.single_direct_model(), Some("loaded"));
+        }
+    }
+
+    #[test]
+    fn never_selects_an_alias_empty_identity_or_ambiguous_model() {
+        for ids in [
+            vec![],
+            vec!["mesh"],
+            vec![""],
+            vec!["mesh", ""],
+            vec!["first", "second"],
+            vec!["mesh", "first", "second"],
+            vec!["loaded", "loaded"],
+        ] {
+            let models: Models = serde_json::from_value(serde_json::json!({
+                "data": ids.into_iter().map(|id| serde_json::json!({"id":id})).collect::<Vec<_>>()
+            }))
+            .unwrap();
+            assert_eq!(models.single_direct_model(), None);
+        }
     }
 }
