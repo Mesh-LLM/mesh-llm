@@ -170,7 +170,7 @@ Switches:
 ### Common runtime options
 
 - `--join <TOKEN>`: join a specific mesh using an invite token (repeatable).
-- `--discover [NAME]`: discover a mesh and join it. With a name, joins the mesh matching that name. Without a name, behaves like `--auto`.
+- `--discover[=NAME]`: discover a mesh and join it. With a name, joins the mesh matching that name. Without a name, behaves like `--auto`. The name must be `=`-attached (`--discover=alice`), so the next token is never mistaken for it (`--discover status` runs `status`).
 - `--mesh-discovery-mode <nostr|mdns>`: choose the discovery provider. `nostr`
   is the default public/WAN-capable mode. `mdns` browses LAN DNS-SD records,
   requires a supplied matching invite token for join material and LAN detail

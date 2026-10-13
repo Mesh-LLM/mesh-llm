@@ -9,7 +9,7 @@ If you are just trying Mesh for the first time, do not start here. Run the [Quic
 Run the same private mesh name on each machine:
 
 ```sh
-mesh-llm serve --discover my-private-mesh --model <model-ref>
+mesh-llm serve --discover=my-private-mesh --model <model-ref>
 ```
 
 Each serving node advertises its available models. Your local API stays:
@@ -29,7 +29,7 @@ mesh-llm models search gemma
 Serve a selected ref:
 
 ```sh
-mesh-llm serve --discover my-private-mesh --model unsloth/gemma-4-26B-A4B-it-GGUF:UD-Q4_K_M
+mesh-llm serve --discover=my-private-mesh --model unsloth/gemma-4-26B-A4B-it-GGUF:UD-Q4_K_M
 ```
 
 ## Layer packages

@@ -40,6 +40,8 @@ pub(crate) async fn run_discover(options: DiscoverOptions) -> Result<()> {
     }
 }
 
+/// Runs the Nostr discovery flow: lists matching meshes and joins when a
+/// name filter or `--auto` asks for one.
 async fn run_nostr_discover(
     filter: nostr::MeshFilter,
     auto_join: bool,
@@ -115,25 +117,27 @@ async fn run_nostr_discover(
         let best = &meshes[0];
         writeln!(err, "Auto-joining best match: {}", best)?;
         writeln!(err, "\nRun:")?;
-        writeln!(err, "  mesh-llm --join {}", best.listing.invite_token)?;
+        writeln!(err, "  mesh-llm serve --join {}", best.listing.invite_token)?;
         let mut out = mesh_llm_events::machine_out();
         writeln!(out, "{}", best.listing.invite_token)?;
     } else {
         writeln!(err, "To join a mesh:")?;
-        writeln!(err, "  mesh-llm --join <token>")?;
+        writeln!(err, "  mesh-llm serve --join <token>")?;
         writeln!(
             err,
-            "  mesh-llm --discover <name>       # join by mesh name"
+            "  mesh-llm serve --discover=<name>  # join by mesh name"
         )?;
         writeln!(
             err,
-            "  mesh-llm client --discover <name> # join as client by mesh name"
+            "  mesh-llm client --discover=<name> # join as client by mesh name"
         )?;
     }
 
     Ok(())
 }
 
+/// Runs the LAN (mDNS) discovery flow: lists local meshes and joins when a
+/// name filter, a supplied token, or `--auto` asks for one.
 async fn run_lan_discover(
     filter: nostr::MeshFilter,
     auto_join: bool,
@@ -218,10 +222,10 @@ async fn run_lan_discover(
         }
     } else {
         writeln!(err, "To join a LAN mesh:")?;
-        writeln!(err, "  mesh-llm --join <token>")?;
+        writeln!(err, "  mesh-llm serve --join <token>")?;
         writeln!(
             err,
-            "  mesh-llm --join <token> discover --mesh-discovery-mode mdns --auto"
+            "  mesh-llm serve --join <token> discover --mesh-discovery-mode mdns --auto"
         )?;
     }
 

@@ -16,7 +16,7 @@ mesh-llm serve --auto
 For a private mesh, restart with the same mesh name and model you used before:
 
 ```sh
-mesh-llm serve --discover my-private-mesh --model unsloth/gemma-4-E4B-it-GGUF:UD-Q4_K_XL
+mesh-llm serve --discover=my-private-mesh --model unsloth/gemma-4-E4B-it-GGUF:UD-Q4_K_XL
 ```
 
 ## Switch flavors

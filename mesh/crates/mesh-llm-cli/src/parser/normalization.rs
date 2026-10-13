@@ -25,7 +25,10 @@ pub struct NormalizedRuntimeArgs {
 /// values were mistaken for the subcommand position. Every spelling clap
 /// accepts has to be here, so aliases are chained in: `get_long()` returns
 /// only the primary name, and a primary-only derivation once dropped
-/// `--checkpoint-quantization`, a visible alias of `--quant`.
+/// `--checkpoint-quantization`, a visible alias of `--quant`. Options with
+/// `require_equals` are excluded: they never consume a separate token, so the
+/// scanner must not skip what follows them (`--discover status` has to find
+/// the `status` subcommand).
 #[must_use]
 pub fn value_taking_option_names() -> Vec<String> {
     use clap::CommandFactory;
@@ -36,7 +39,7 @@ pub fn value_taking_option_names() -> Vec<String> {
             matches!(
                 argument.get_action(),
                 clap::ArgAction::Set | clap::ArgAction::Append
-            )
+            ) && !argument.is_require_equals_set()
         })
         .flat_map(|argument| {
             let longs = argument
@@ -139,6 +142,10 @@ where
     }
 }
 
+/// Deprecation warning for legacy top-level runtime flags: returns the
+/// suggested explicit rewrite when the invocation implies a surface without
+/// naming one, and `None` when an explicit surface or subcommand is present
+/// or no legacy flags were used.
 pub fn legacy_runtime_surface_warning(
     cli: &Cli,
     original_args: &[OsString],
@@ -160,6 +167,12 @@ pub fn legacy_runtime_surface_warning(
         || cli.mmproj.is_some()
         || cli.checkpoint_quantization.is_some()
         || cli.checkpoint_imatrix.is_some()
+        || cli.auto
+        || !cli.join.is_empty()
+        || !cli.join_file.is_empty()
+        || cli.discover.is_some()
+        || cli.publish
+        || cli.strategy.is_some()
     {
         return Some(format!(
             "⚠️ top-level serving flags now map to `mesh-llm serve`.\n  Please use: {}",
@@ -230,8 +243,12 @@ mod tests {
 
     /// Staleness guard: the pseudo-subcommand scanner must skip the value of
     /// EVERY spelling of EVERY value-taking option clap declares, aliases
-    /// included. The scanner's hand-maintained list previously fell behind
-    /// the clap declaration, so newer flags' values were mistaken for the
+    /// included. Options with `require_equals` are excluded here: clap still
+    /// counts them as value-taking (`is_takes_value_set` is independent of
+    /// `require_equals`), but they never consume a separate token, and the
+    /// sibling guard below asserts that side. The scanner's hand-maintained
+    /// list previously fell behind the clap declaration, so newer flags'
+    /// values were mistaken for the
     /// `serve` position (`mesh-llm --kv-cache-disk 32GiB serve` failed to
     /// parse); a later primary-only reflection dropped `--quant`'s alias the
     /// same way. Deriving the expectation from clap keeps this test red until
@@ -250,7 +267,7 @@ mod tests {
                 matches!(
                     argument.get_action(),
                     clap::ArgAction::Set | clap::ArgAction::Append
-                )
+                ) && !argument.is_require_equals_set()
             })
             .flat_map(|argument| {
                 let longs = argument
@@ -275,6 +292,48 @@ mod tests {
                 args.explicit_surface,
                 Some(RuntimeSurface::Serve),
                 "{option} value was mistaken for the pseudo-subcommand position"
+            );
+        }
+    }
+
+    /// Mirror of the staleness guard for `require_equals` options: they never
+    /// consume a separate token, so the scanner must find the subcommand
+    /// directly after them. `--discover` is the only one declared today; this
+    /// keeps the guarantee derived, so a future `require_equals` option is
+    /// covered without anyone remembering to add a test.
+    #[test]
+    fn every_require_equals_option_leaves_the_next_token_reachable() {
+        use clap::CommandFactory;
+
+        let options: Vec<String> = Cli::command()
+            .get_arguments()
+            .filter(|argument| argument.is_require_equals_set())
+            .flat_map(|argument| {
+                let longs = argument
+                    .get_long()
+                    .into_iter()
+                    .chain(argument.get_all_aliases().into_iter().flatten())
+                    .map(|long| format!("--{long}"));
+                let shorts = argument
+                    .get_short()
+                    .into_iter()
+                    .chain(argument.get_all_short_aliases().into_iter().flatten())
+                    .map(|short| format!("-{short}"));
+                longs.chain(shorts)
+            })
+            .collect();
+        assert!(
+            !options.is_empty(),
+            "clap declares no require_equals options"
+        );
+
+        for option in options {
+            let argv = ["mesh-llm", option.as_str(), "serve", "--auto"];
+            let args = normalize_runtime_surface_args(argv);
+            assert_eq!(
+                args.explicit_surface,
+                Some(RuntimeSurface::Serve),
+                "{option} must not consume the token after it"
             );
         }
     }
@@ -575,6 +634,130 @@ mod tests {
                 .expect("warning should be present");
 
         assert!(warning.contains("mesh-llm client --auto"));
+    }
+
+    #[test]
+    fn legacy_runtime_surface_warning_for_bare_join_and_discovery_flags() {
+        // Bare mesh-joining flags silently imply `serve`; they should warn
+        // just like the model-family flags do.
+        for args in [
+            vec!["mesh-llm", "--auto"],
+            vec!["mesh-llm", "--join", "token123"],
+            vec!["mesh-llm", "--join-file", "/tmp/token.txt"],
+            vec!["mesh-llm", "--publish"],
+            vec!["mesh-llm", "--discover=MyMesh"],
+            vec!["mesh-llm", "--discover"],
+            vec!["mesh-llm", "--strategy", "interactive"],
+        ] {
+            let normalized = normalize_runtime_surface_args(args.clone());
+            let cli = Cli::parse_from(normalized.normalized.clone());
+            let warning = legacy_runtime_surface_warning(
+                &cli,
+                &normalized.original,
+                normalized.explicit_surface,
+            );
+            assert!(warning.is_some(), "expected a warning for {args:?}");
+            assert!(
+                warning.unwrap().contains("mesh-llm serve"),
+                "warning should suggest the explicit serve form for {args:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn legacy_runtime_surface_warning_stays_silent_for_bare_invocation() {
+        let normalized = normalize_runtime_surface_args(["mesh-llm"]);
+        let cli = Cli::parse_from(normalized.normalized.clone());
+
+        assert!(
+            legacy_runtime_surface_warning(&cli, &normalized.original, normalized.explicit_surface)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn discover_flag_keeps_equals_and_bare_forms() {
+        let cli = Cli::try_parse_from(["mesh-llm", "--discover=MyMesh"]).unwrap();
+        assert_eq!(cli.discover.as_deref(), Some("MyMesh"));
+
+        let cli = Cli::try_parse_from(["mesh-llm", "--discover"]).unwrap();
+        assert_eq!(cli.discover.as_deref(), Some(""));
+    }
+
+    #[test]
+    fn discover_flag_no_longer_swallows_the_status_subcommand() {
+        // Regression: with an optional value and no require_equals,
+        // `--discover status` consumed `status` as the mesh name.
+        let cli = Cli::try_parse_from(["mesh-llm", "--discover", "status"]).unwrap();
+        assert_eq!(cli.discover.as_deref(), Some(""));
+        assert!(
+            matches!(cli.command, Some(Command::Status { .. })),
+            "status must parse as the subcommand, not as --discover's value"
+        );
+
+        // A space-separated non-subcommand token is no longer eaten as the
+        // mesh name; it lands on the external-plugin dispatch instead (which
+        // errors on the unknown name at runtime) — the flag keeps its bare
+        // meaning.
+        let cli = Cli::try_parse_from(["mesh-llm", "--discover", "MyMesh"]).unwrap();
+        assert_eq!(cli.discover.as_deref(), Some(""));
+        assert!(matches!(cli.command, Some(Command::ExternalPlugin(_))));
+    }
+
+    #[test]
+    fn normalize_runtime_surface_args_finds_serve_after_discover_flag() {
+        // The scanner must not skip `serve` as if it were --discover's value.
+        let normalized =
+            normalize_runtime_surface_args(["mesh-llm", "--discover", "serve", "--auto"]);
+        assert_eq!(normalized.explicit_surface, Some(RuntimeSurface::Serve));
+        assert_eq!(
+            normalized.normalized,
+            vec![
+                OsString::from("mesh-llm"),
+                OsString::from("--discover"),
+                OsString::from("--auto")
+            ]
+        );
+
+        let normalized = normalize_runtime_surface_args(["mesh-llm", "--discover=MyMesh", "serve"]);
+        assert_eq!(normalized.explicit_surface, Some(RuntimeSurface::Serve));
+        assert_eq!(
+            normalized.normalized,
+            vec![
+                OsString::from("mesh-llm"),
+                OsString::from("--discover=MyMesh")
+            ]
+        );
+    }
+
+    #[test]
+    fn normalize_runtime_surface_args_finds_client_after_discover_flag() {
+        let normalized = normalize_runtime_surface_args(["mesh-llm", "--discover", "client"]);
+        assert_eq!(normalized.explicit_surface, Some(RuntimeSurface::Client));
+        assert_eq!(
+            normalized.normalized,
+            vec![
+                OsString::from("mesh-llm"),
+                OsString::from("--discover"),
+                OsString::from("--client")
+            ]
+        );
+    }
+
+    #[test]
+    fn legacy_warning_prefers_client_over_serving_flags() {
+        // --client and a serving flag together: the client rewrite is the
+        // specific one, so its warning wins.
+        let normalized =
+            normalize_runtime_surface_args(["mesh-llm", "--client", "--model", "m.gguf"]);
+        let cli = Cli::parse_from(normalized.normalized.clone());
+
+        let warning =
+            legacy_runtime_surface_warning(&cli, &normalized.original, normalized.explicit_surface)
+                .expect("warning should be present");
+
+        assert!(warning.contains("mesh-llm client"));
+        assert!(!warning.contains("mesh-llm serve"));
     }
 
     #[test]
