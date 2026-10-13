@@ -16,6 +16,7 @@ use crate::{
 };
 
 mod blocking;
+mod buying;
 mod failure_boundaries;
 mod metered_service;
 mod metered_settlement;
