@@ -227,7 +227,10 @@ a branch moving later cannot change the selected source for that run.
 
 `llama-canary-family-pass.yml` owns the reusable build → family matrix → hosted
 aggregate. The producer performs prepare, manifest-policy, full native and Rust
-builds, generated-family validation, smoke, and split-roster checks. It validates
+builds, generated-family validation, smoke, and split-roster checks. It reads
+Git manifest, path-list and diff payloads through bounded raw capture, separately
+from redacted diagnostics, so ordinary model names containing `token` retain
+their exact bytes. Capture overflow or incomplete output fails admission. It validates
 the immutable HF cache before compilation. After preparing the exact llama.cpp
 pin, it reads GGUF tensor descriptors with that pin's GGML type table and
 compares each target's tensor byte sum with the manifest before any build.
@@ -328,6 +331,9 @@ repeated infrastructure failure or invalid aggregate evidence stops. Only
 complete independent success permits publication.
 Full worker/build logs remain for 14 days; executable handoffs remain for seven
 days so a single-machine queue can complete later passes.
+Build evidence explicitly includes hidden run-owned `.deps` state and native
+CTest results before cleanup. Live controller output retains up to 16 MiB per
+stream; the artifact contains the complete gate logs when that bound is exceeded.
 Agent-run build and test commands stream to the live job and save individual
 logs and exit statuses under `agent-commands/` in the build evidence artifact.
 The command wrapper also snapshots available CTest result files after each run.

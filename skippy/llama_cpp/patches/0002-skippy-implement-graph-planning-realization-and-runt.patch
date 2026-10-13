@@ -1,4 +1,4 @@
-From 89fe928adf056289875f5e8984f1ef38e96ff336 Mon Sep 17 00:00:00 2001
+From 32efcb3202f4d797d1868aeaa57b5df3e53e31f5 Mon Sep 17 00:00:00 2001
 From: James Dumay <jameswdumay@gmail.com>
 Date: Sat, 19 Sep 2026 15:17:16 +1000
 Subject: [PATCH] skippy: implement graph planning realization and runtime
@@ -41,7 +41,7 @@ Subject: [PATCH] skippy: implement graph planning realization and runtime
  src/skippy/runtime_types.h              |  173 ++++
  src/skippy/sampling.cpp                 |  986 +++++++++++++++++++
  src/skippy/sampling_internal.h          |   49 +
- src/skippy/session.cpp                  |  483 ++++++++++
+ src/skippy/session.cpp                  |  527 ++++++++++
  src/skippy/speculative_decoding.cpp     |  550 +++++++++++
  src/skippy/speculative_internal.h       |   32 +
  src/skippy/stage_plan.cpp               |  632 ++++++++++++
@@ -54,7 +54,7 @@ Subject: [PATCH] skippy: implement graph planning realization and runtime
  src/skippy/state_effects.h              |   74 ++
  src/skippy/tokenization.cpp             |  179 ++++
  src/skippy/verification.cpp             |  248 +++++
- 50 files changed, 14794 insertions(+)
+ 50 files changed, 14838 insertions(+)
  create mode 100644 src/skippy-verify-checkpoint.h
  create mode 100644 src/skippy/abi.cpp
  create mode 100644 src/skippy/activation.cpp
@@ -10147,10 +10147,10 @@ index 000000000..9f819704f
 +llama_token skippy_sample_token(skippy_session * session, const skippy_sampling_config * sampling);
 diff --git a/src/skippy/session.cpp b/src/skippy/session.cpp
 new file mode 100644
-index 000000000..d5cce47f2
+index 000000000..e1cdcaab6
 --- /dev/null
 +++ b/src/skippy/session.cpp
-@@ -0,0 +1,483 @@
+@@ -0,0 +1,527 @@
 +#include "skippy.h"
 +#include "skippy/errors.h"
 +#include "skippy/environment.h"
@@ -10411,6 +10411,48 @@ index 000000000..d5cce47f2
 +    return skippy_success(out_error);
 +}
 +
++enum skippy_status skippy_session_restore_token_history(
++        struct skippy_session * session,
++        const llama_token * token_ids,
++        size_t token_count,
++        struct skippy_error ** out_error) {
++    if (session == nullptr || session->ctx == nullptr || session->stage_model == nullptr ||
++            (token_count > 0 && token_ids == nullptr)) {
++        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "session and token history are required");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
++    if (session->n_past < 0 || token_count != static_cast<size_t>(session->n_past)) {
++        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "token history must match the imported session position");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
++    const auto status = skippy_require_usable_session(session, out_error);
++    if (status != SKIPPY_STATUS_OK) {
++        return status;
++    }
++    try {
++        // State payloads contain tensors, not sampler history. Absolute indices
++        // keep grammar start and penalty windows identical to a cold prefill.
++        std::vector<llama_token> history;
++        if (token_count > 0) {
++            history.assign(token_ids, token_ids + token_count);
++        }
++        const std::string metadata = session->chat_sampling_metadata;
++        const skippy_sampling_config sampling = session->sampling_config;
++        const bool sampling_valid = session->sampling_config_valid;
++        const uint64_t generated_start = session->grammar_generated_start;
++        session->token_history.swap(history);
++        skippy_clear_chat_sampling(session);
++        if (!metadata.empty()) {
++            return skippy_session_configure_chat_sampling(session, sampling_valid ? &sampling : nullptr,
++                    metadata.c_str(), generated_start, out_error);
++        }
++        return skippy_success(out_error);
++    } catch (const std::exception & e) {
++        skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, e.what());
++        return SKIPPY_STATUS_RUNTIME_ERROR;
++    }
++}
++
 +enum skippy_status skippy_session_sample_current(
 +        struct skippy_session * session,
 +        const struct skippy_sampling_config * sampling,
@@ -10465,10 +10507,12 @@ index 000000000..d5cce47f2
 +        skippy_refresh_backend_sampling(session, sampling);
 +    } catch (const std::exception & e) {
 +        skippy_clear_chat_sampling(session);
-+        return skippy_success(out_error);
++        skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, e.what());
++        return SKIPPY_STATUS_RUNTIME_ERROR;
 +    } catch (...) {
 +        skippy_clear_chat_sampling(session);
-+        return skippy_success(out_error);
++        skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "failed to configure chat sampling");
++        return SKIPPY_STATUS_RUNTIME_ERROR;
 +    }
 +    return skippy_success(out_error);
 +}

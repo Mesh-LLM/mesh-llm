@@ -232,8 +232,10 @@ jobs:
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: llama-build-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.pass_id }}
+          include-hidden-files: true
           path: |
             ${{ env.CANARY_SOURCE_ROOT }}/.deps/llama-canary-state-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.pass_id }}/
+            ${{ env.LLAMA_STAGE_BUILD_DIR }}/Testing/Temporary/
             ${{ runner.temp }}/canary-build-contract-${{ inputs.pass_id }}/
           if-no-files-found: warn
           retention-days: 14

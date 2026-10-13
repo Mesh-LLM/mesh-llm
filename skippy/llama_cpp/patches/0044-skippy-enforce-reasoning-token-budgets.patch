@@ -1,4 +1,4 @@
-From baedc663f30a8f614f6867b7736d2dcbde330a32 Mon Sep 17 00:00:00 2001
+From 8fee768064e2b62ee0d95a0e6010a54f64d1b070 Mon Sep 17 00:00:00 2001
 From: scama
  <a1860575018c4680d5669dd7bc3bd356b478bccb8d42e194df46304a5e25f49a@meshllm.communities.buzz.xyz>
 Date: Tue, 15 Sep 2026 14:33:49 +1000
@@ -345,7 +345,7 @@ index 8b114e3e4..1b42f32c0 100644
  
  #ifdef __cplusplus
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index de75e976a..c30e1e030 100644
+index d947ccd3b..26eacabcb 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
 @@ -66,6 +66,7 @@ add_library(llama
@@ -602,10 +602,10 @@ index 0c4e54724..e48653520 100644
          skippy_session * session,
          const skippy_sampling_config * sampling,
 diff --git a/src/skippy/session.cpp b/src/skippy/session.cpp
-index 1fe72b2cc..37b0b9c5b 100644
+index 41054f139..a3e5debb7 100644
 --- a/src/skippy/session.cpp
 +++ b/src/skippy/session.cpp
-@@ -315,6 +315,10 @@ enum skippy_status skippy_session_configure_chat_sampling(
+@@ -357,6 +357,10 @@ enum skippy_status skippy_session_configure_chat_sampling(
              skippy_clear_chat_sampling(session);
              return out_error != nullptr && *out_error != nullptr ? (*out_error)->status : SKIPPY_STATUS_RUNTIME_ERROR;
          }

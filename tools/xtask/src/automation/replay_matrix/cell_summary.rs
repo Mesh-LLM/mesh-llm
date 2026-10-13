@@ -162,6 +162,9 @@ pub(super) fn summarize(
         "prompt_tokens_min":prompt_min,"prompt_tokens_max":prompt_max,
         "content_sha256_by_request":content_hashes,
         "budget_exhausted_requests":exhausted,"finish_reason_length_requests":length_finishes,
+        "output_incomplete_requests":records.iter().filter(|record|
+            record.get("error").is_some() || record["output_problems"].as_array().is_none_or(|problems| !problems.is_empty())
+        ).count(),
         "agent_steps_per_second":ratio(number(successful.len())?,window),
         "workload_output_tokens_per_second":ratio(completion,window),
         "decode_tokens_per_second":ratio(completion,generation),"mean_in_flight":mean,
