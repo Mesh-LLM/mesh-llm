@@ -8,14 +8,75 @@ const QUALITY: &str =
 const LINUX: &str = r#"{"lane":"linux","required":true,"required_slices":["runtime-product"],"matrices":{"hosts":[{"id":"linux-amd64-host"}],"runtime_products":[{"id":"linux-cpu"}],"rust_tests":[],"smoke":[],"sdk":[]}}"#;
 
 fn linux_needs(runtime_product: &str) -> String {
-    format!(
-        r#"{{"ui_artifact":{{"result":"success"}},"static_abi":{{"result":"skipped"}},"rust_tests":{{"result":"skipped"}},"hosts":{{"result":"success"}},"native_runtimes":{{"result":"success"}},"runtime_product":{runtime_product},"kotlin_sdk_input":{{"result":"skipped"}},"sdk":{{"result":"skipped"}},"product_smoke":{{"result":"skipped"}}}}"#
-    )
+    let mut states = serde_json::json!({});
+    for job in [
+        "ui_artifact",
+        "skippy_cli",
+        "skippy_product",
+        "hosts",
+        "native_runtimes",
+        "authority_source",
+        "authority_linux_x64",
+        "product_automation_linux_x64",
+    ] {
+        states[job] = serde_json::json!({"result": "success"});
+    }
+    states["runtime_product"] = serde_json::from_str(runtime_product).expect("result fixture");
+    states.to_string()
+}
+
+#[test]
+fn standalone_qualification_jobs_cannot_skip_fail_or_disappear() -> TestResult {
+    for job in ["skippy_cli", "skippy_product"] {
+        for result in [Some("skipped"), Some("failure"), Some("cancelled"), None] {
+            let mut states = serde_json::json!({
+                "ui_artifact": {"result": "success"},
+                "hosts": {"result": "success"},
+                "skippy_cli": {"result": "success"},
+                "skippy_product": {"result": "success"},
+                "native_runtimes": {"result": "success"},
+                "runtime_product": {"result": "success"},
+                "authority_source": {"result": "success"},
+                "authority_linux_x64": {"result": "success"},
+                "product_automation_linux_x64": {"result": "success"}
+            });
+            if let Some(result) = result {
+                states[job]["result"] = result.into();
+            } else {
+                states.as_object_mut().expect("object").remove(job);
+            }
+            let output = Call::lane(LINUX, &states.to_string()).run()?;
+            assert_eq!(output.status.code(), Some(2));
+            assert!(text(&output.stderr).contains(job));
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn runtime_without_host_fails_even_without_workflow_evidence() -> TestResult {
+    for platform in ["linux", "macos", "windows"] {
+        let plan = serde_json::json!({
+            "lane": platform, "required": true, "required_slices": [],
+            "matrices": {"runtime_products": [{"id": format!("{platform}-cpu")}]}
+        });
+        let output = Call::lane(&plan.to_string(), "{}").run()?;
+        assert_eq!(output.status.code(), Some(2));
+        assert!(text(&output.stderr).contains("runtime products require a platform host row"));
+    }
+    Ok(())
 }
 
 fn rejects(lane_plan: &str, needs: &str, message: &str) -> TestResult {
     let output = Call::lane(lane_plan, needs).run()?;
     assert_output(&output, 2, &format!("ERROR: {message}\n"));
+    // The Rust owner uses JSON string quoting instead of Python repr.
+    assert_eq!(
+        text(&output.stderr),
+        format!("ERROR: {message}\n")
+            .replace('\'', "\"")
+            .replace("None", "missing")
+    );
     Ok(())
 }
 

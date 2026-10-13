@@ -62,8 +62,8 @@ pub(crate) fn validate_record(record: &Json) -> Result<HostRecord, String> {
     let required_row = record
         .get("required_row")
         .and_then(Json::as_str)
-        .filter(|value| !value.is_empty())
-        .ok_or("qualification receipt record names no required row")?;
+        .filter(|value| REQUIRED_ROW.contains(&(platform, *value)))
+        .ok_or("qualification receipt record does not name the platform's mandatory row")?;
     let receipts = record
         .get("receipts")
         .and_then(Json::as_array)
@@ -77,7 +77,7 @@ pub(crate) fn validate_record(record: &Json) -> Result<HostRecord, String> {
         )?;
         let row_id = entry.get("row_id").and_then(Json::as_str).unwrap_or("");
         contract::require(
-            !row_id.is_empty() && row_id.starts_with(&format!("{platform}-")),
+            contract::CORE_ROWS.contains(&row_id) && row_id.starts_with(&format!("{platform}-")),
             "qualification receipt record carries a foreign row",
         )?;
         let status = entry.get("status").and_then(Json::as_str).unwrap_or("");

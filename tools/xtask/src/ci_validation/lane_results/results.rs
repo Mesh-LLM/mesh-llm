@@ -131,7 +131,11 @@ impl Planner<'_> {
     fn products(&mut self) -> Checked<Vec<String>> {
         let hosts = self.rows("hosts")?;
         let runtimes = self.rows("runtime_products")?;
-        self.add(!hosts.is_empty(), &["ui_artifact", "hosts"]);
+        if !runtimes.is_empty() && hosts.is_empty() {
+            return Err("runtime products require a platform host row".to_owned());
+        }
+        self.add(!hosts.is_empty(), &["ui_artifact", "skippy_cli", "hosts"]);
+        self.add(!runtimes.is_empty(), &["skippy_product"]);
         Ok(runtimes)
     }
 

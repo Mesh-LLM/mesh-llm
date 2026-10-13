@@ -140,11 +140,21 @@ jobs:
           backend: ${{ matrix.runtime.backend }}
           target: ${{ matrix.runtime.target }}
           output_dir: runtime-input
+      - name: Bind native producer to selected source
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$(git -c safe.directory="$GITHUB_WORKSPACE" rev-parse HEAD)" == "$SOURCE_SHA" ]]
+          printf '{"source_sha":"%s"}\n' "$SOURCE_SHA" > runtime-input/ci-source.json
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: ci-runtime-macos-${{ matrix.runtime.architecture }}-${{ matrix.runtime.backend }}
           path: |
             runtime-input/*.tar.gz
             runtime-input/*.sha256
+            runtime-input/ci-source.json
           if-no-files-found: error
           retention-days: 1

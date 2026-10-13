@@ -69,6 +69,7 @@ fn accelerator_rows_require_exact_lowercase_true() {
             "linux-cuda",
             &[("MESH_CUDA_INFERENCE_RUNNER_ENABLED", value)],
         );
+        assert!(result.status.success(), "{}", support::stderr(&result));
         let record: serde_json::Value =
             serde_json::from_slice(&std::fs::read(root.join("availability.json")).unwrap())
                 .unwrap();
@@ -79,6 +80,7 @@ fn accelerator_rows_require_exact_lowercase_true() {
         "linux-cuda",
         &[("MESH_CUDA_INFERENCE_RUNNER_ENABLED", "true")],
     );
+    assert!(enabled.status.success(), "{}", support::stderr(&enabled));
     let record: serde_json::Value =
         serde_json::from_slice(&std::fs::read(root.join("availability.json")).unwrap()).unwrap();
     assert_eq!(record["state"], "available");
@@ -88,6 +90,7 @@ fn accelerator_rows_require_exact_lowercase_true() {
         "linux-rocm",
         &[("MESH_ROCM_INFERENCE_RUNNER_ENABLED", "true")],
     );
+    assert!(rocm.status.success(), "{}", support::stderr(&rocm));
     let record: serde_json::Value =
         serde_json::from_slice(&std::fs::read(root.join("availability.json")).unwrap()).unwrap();
     assert_eq!(record["runner"], "gpu-amd");
@@ -102,6 +105,7 @@ fn windows_accelerators_never_queue() {
         "windows-vulkan",
         &[("MESH_VULKAN_INFERENCE_RUNNER_ENABLED", "true")],
     );
+    assert!(result.status.success(), "{}", support::stderr(&result));
     let record: serde_json::Value =
         serde_json::from_slice(&std::fs::read(checkout.root().join("availability.json")).unwrap())
             .unwrap();

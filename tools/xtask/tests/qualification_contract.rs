@@ -15,6 +15,8 @@ mod census;
 mod compose_record;
 #[path = "qualification_contract/host_receipts.rs"]
 mod host_receipts;
+#[path = "qualification_contract/planning.rs"]
+mod planning;
 #[path = "qualification_contract/support.rs"]
 mod support;
 #[path = "qualification_contract/validate.rs"]

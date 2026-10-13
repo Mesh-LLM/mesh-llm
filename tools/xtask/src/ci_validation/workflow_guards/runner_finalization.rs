@@ -116,6 +116,13 @@ fn cleanup_invocation(run: &str) -> bool {
     }
     match lines.as_slice() {
         [command] => direct_cleanup(command),
+        [digest_check, command]
+            if *digest_check
+                == "test \"$(sha256sum \"$MESH_LLM_AUTOMATION_BIN\" | awk '{print $1}')\" = \"$SKIPPY_CONTROLLER_SHA256\"" =>
+        {
+            *command
+                == "\"$MESH_LLM_AUTOMATION_BIN\" ci-ops runner-cleanup --job smoke --evidence-uploaded false"
+        }
         [selector, frozen, otherwise, facade, end]
             if *selector == "if [[ -n \"${MESH_LLM_AUTOMATION_BIN:-}\" ]]; then"
                 && *otherwise == "else"

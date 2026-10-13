@@ -6,7 +6,6 @@ use super::support::{
     write_json, xtool,
 };
 use serde_json::Value;
-use std::path::Path;
 
 struct Row {
     checkout: Checkout,

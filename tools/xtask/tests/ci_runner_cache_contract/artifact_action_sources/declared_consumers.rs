@@ -477,8 +477,10 @@ fn assert_hosted_cpu_selector(step: &Node) {
 fn selector_call_census_declares_exact_head_and_paired_approval_inputs() {
     let calls = action_calls("select-ci-runners");
     let total = calls.values().map(Vec::len).sum::<usize>();
-    assert_eq!(total, 20);
+    assert_eq!(total, 22);
     let expected = BTreeMap::from([
+        ("ci-skippy-cli-slice.yml", 1),
+        ("ci-skippy-product-slice.yml", 1),
         ("ci-quality-slice.yml", 2),
         ("ci-linux-product-slice.yml", 1),
         ("native-sdk-artifact.yml", 1),
@@ -525,7 +527,7 @@ fn selector_call_census_declares_exact_head_and_paired_approval_inputs() {
             }
         }
     }
-    assert_eq!(approval, 18);
+    assert_eq!(approval, 20);
 }
 fn producer_stats(document: &Node, prefix: &str, count: usize) {
     let stats = workflow_steps(document)

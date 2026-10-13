@@ -268,6 +268,13 @@ Python-free or remove legacy validation before its Rust replacement passes.
 - Pull requests test affected crates plus reverse dependents. Main tests every
   workspace member exactly once. Workspace discovery belongs to Cargo metadata,
   not a workflow-maintained allowlist.
+- A planned Rust package must execute its Clippy and test checks. When a
+  package needs an isolated feature graph, run a separate Cargo invocation and
+  include its result in the same required lane. Each batch records the package
+  names only after its Cargo invocation succeeds, rejects a selected/executed
+  mismatch through `repository cargo-census`, and uploads the run-scoped
+  execution census. The selected SafeTensors executable smoke runs with the
+  same required cases on PR, main, and manual-full sources.
 - Use measured workload data to rebalance deterministic shards, but keep the
   checked-in algorithm reproducible. Use one Cargo invocation per shard unless
   a documented package-isolation check requires otherwise.
@@ -363,8 +370,10 @@ Python-free or remove legacy validation before its Rust replacement passes.
   or enable per-object GHA publication for Linux Clippy, Rust tests, host, or
   runtime jobs.
 - Every seeded compiler job records whether the exact seed was warm or cold.
-  Enforce a measured minimum hit rate only for an exact warm restore; an
-  intentional cache miss is classified cold and must not fail the build.
+  Required CI jobs capture the measured hit rate as evidence with a zero floor;
+  cache efficiency does not block correctness while the Skippy-first workflow
+  is established. Dedicated cache qualification canaries retain their positive
+  warm-restore floors. An intentional cache miss is classified cold.
 
 ### Bounded Depot PR cache-risk exception
 
@@ -475,6 +484,25 @@ checked-in expiry are the maintainer-controlled approval boundary.
 - Model every executable product as a backend-neutral host, one separately
   packaged native runtime per OS/architecture/backend, and a composition-only
   product. A backend matrix belongs to runtime/product rows, never host rows.
+- Each selected platform builds one backend-neutral standalone Skippy CLI
+  independently of the Mesh UI and host. Pass the selected immutable source SHA
+  into CLI preparation and require the checkout to match before building; the
+  dedicated CLI slices and release callers pass it explicitly. Verify the
+  embedded source/version/ABI build contract and the native producer's source
+  sidecar, then compose the CLI with each exact selected runtime and qualify
+  the composed product before the Mesh host starts. Standalone qualification
+  receipts are required dependencies of the matching platform's Mesh host
+  producer, and the composed Mesh product binds the host's receipt record into
+  its manifest.
+- Qualification/composer ownership changes select all nine core runtime rows.
+  Backend-only plans include the platform's mandatory CPU row (macOS uses Metal).
+  A hardware-unavailable receipt cannot satisfy mandatory-row admission, and CPU
+  or software-renderer fallback cannot qualify an accelerator row.
+- Release publication requires a credential-free crates preflight against the
+  current run's composed Linux artifact. Correlate downstream packaging with the
+  exact Mesh commit and composed-manifest digest, require terminal readiness for
+  selected channels, and retain that manifest and readiness receipt for 90 days.
+  Keep the packaging dispatcher rollout gated on its downstream contract delivery.
 - Build prepared UI assets once per selected platform lane and feed that
   immutable artifact to every host producer in the lane. Host producers must
   not rerun UI tests. Cross-workflow artifact sharing is an explicit timing

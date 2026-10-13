@@ -48,6 +48,25 @@ fn last(workflows: &mut BTreeMap<String, Node>) -> &mut Node {
 fn actual_persistent_jobs_finish_after_uploads_and_release_cache_save() {
     check(&actual()).unwrap();
 }
+
+#[test]
+fn standalone_cleanup_requires_the_admitted_digest_and_preserves_evidence() {
+    let workflows = actual();
+    let job = workflows["ci-skippy-product-slice.yml"]
+        .get("jobs")
+        .unwrap()
+        .get("linux_product")
+        .unwrap();
+    let run = field(steps(job).unwrap().last().unwrap(), "run").unwrap();
+    assert!(cleanup_invocation(run));
+    for (before, after) in [
+        ("$SKIPPY_CONTROLLER_SHA256", "arbitrary-digest"),
+        ("--evidence-uploaded false", "--evidence-uploaded true"),
+        ("--job smoke", "--job runner-contract"),
+    ] {
+        assert!(!cleanup_invocation(&run.replace(before, after)));
+    }
+}
 #[test]
 fn actual_job_missing_cleanup_or_with_a_later_step_is_rejected() {
     let mut workflows = actual();

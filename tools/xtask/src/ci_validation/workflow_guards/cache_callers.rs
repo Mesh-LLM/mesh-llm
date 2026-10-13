@@ -78,6 +78,8 @@ pub(super) fn nested_windows(action: &Node) -> Result<(), String> {
     Ok(())
 }
 const ELIGIBLE: &[&str] = &[
+    "ci-skippy-cli-slice.yml",
+    "ci-skippy-product-slice.yml",
     "ci-quality-slice.yml",
     "ci-web-slice.yml",
     "ci-ui-artifact-slice.yml",
@@ -168,10 +170,14 @@ fn bounded_inputs(name: &str, selector: &Node) -> Result<(), String> {
         expected(inputs, key, value)?;
     }
     let cpu = name == "ci-linux-runtime-slice.yml" && text(selector, "id") == "cpu_policy";
+    let standalone = matches!(
+        name,
+        "ci-skippy-cli-slice.yml" | "ci-skippy-product-slice.yml"
+    );
     expected(
         inputs,
         "force_hosted",
-        if cpu {
+        if cpu || standalone {
             "true"
         } else {
             "${{ inputs.force_hosted }}"
@@ -192,6 +198,8 @@ fn bounded_inputs(name: &str, selector: &Node) -> Result<(), String> {
         ] {
             expected(inputs, key, value)?;
         }
+    } else if standalone {
+        standalone_inputs(inputs)?;
     } else if cpu {
         for (key, value) in [
             (
@@ -230,6 +238,19 @@ fn bounded_inputs(name: &str, selector: &Node) -> Result<(), String> {
     }
     if selector.get("if").is_some() || selector.get("continue-on-error").is_some() {
         return Err("bounded selector cannot be bypassed".into());
+    }
+    Ok(())
+}
+
+fn standalone_inputs(inputs: &Node) -> Result<(), String> {
+    for (key, value) in [
+        ("depot_main_enabled", "false"),
+        ("depot_pr_enabled", "false"),
+        ("pr_canary_ref", "${{ vars.DEPOT_PR_CANARY_REF }}"),
+        ("pr_approved_ref", "${{ vars.DEPOT_PR_APPROVED_REF }}"),
+        ("pr_approved_sha", "${{ vars.DEPOT_PR_APPROVED_SHA }}"),
+    ] {
+        expected(inputs, key, value)?;
     }
     Ok(())
 }

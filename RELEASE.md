@@ -27,6 +27,15 @@ include `skip_gpu_bundles` and `canary` (dry-run: build and smoke everything
 without publishing). Releases that intentionally skip GPU bundles do not
 dispatch the full packaging matrix.
 
+GitHub publication waits for the credential-free crates preflight against the
+same run's composed `release-linux` artifact, including checksum and native
+runtime verification. Canary builds run this preflight without publication.
+The workflow retains `composed-native-runtimes-manifest` for 90 days, dispatches
+its digest with the exact Mesh commit and a correlation ID, then waits for the
+matching downstream packaging receipt. All selected channels must report
+terminal readiness; dispatch acceptance alone does not complete the release.
+The receipt is retained as `release-packaging-readiness-<tag>` for 90 days.
+
 Do not use GitHub's bare **Draft a new release** form as an alternate release
 path. It bypasses the verified artifact graph. The Release workflow is the only
 supported GitHub release publisher; use the Actions UI or `just release` to
@@ -43,10 +52,10 @@ bundle validation.
 - Node/npm installed for the UI build
 - `gh` CLI authenticated if publishing manually
 - `MESH_AGENT_IMAGES_DISPATCH_TOKEN` configured as a fine-grained repository
-  token or GitHub App token with Contents write access to
-  `Mesh-LLM/mesh-packaging`, which is the permission required to create a
-  repository dispatch event. The workflow checks this access without printing
-  the credential before it sends the event. The legacy secret name is retained
+  token or GitHub App token with Contents write and Actions read access to
+  `Mesh-LLM/mesh-packaging`, to create a repository dispatch event and read its
+  readiness artifact. The workflow checks dispatch access without printing the
+  credential before it sends the event. The legacy secret name is retained
   so existing release environments do not require a coordinated secret rename.
 
 ## Release Attestation Signing Keys
@@ -248,7 +257,7 @@ distribution channel.
 
 If the downstream dispatch preflight fails, update the repository Actions secret
 `MESH_AGENT_IMAGES_DISPATCH_TOKEN` with a fine-grained token or GitHub App token
-that has Contents write access to `Mesh-LLM/mesh-packaging`, then retry the
+that has Contents write and Actions read access to `Mesh-LLM/mesh-packaging`, then retry the
 failed dispatch job. A repository secret's presence does not prove that its
 credential can write the target repository. Do not put the token in workflow
 logs or command output.

@@ -122,3 +122,22 @@ fn an_unqualified_required_row_record_is_rejected() {
     );
     assert!(!bundle.join("product-manifest.json").exists());
 }
+
+#[test]
+fn a_qualified_accelerator_cannot_replace_the_mandatory_cpu_row() {
+    let temp = tempfile::tempdir().unwrap();
+    let bundle = temp.path().join("bundle");
+    bundle_fixture(&bundle);
+    let mut broken = record();
+    broken["required_row"] = json!("linux-cuda");
+    broken["receipts"][0]["row_id"] = json!("linux-cuda");
+    support::write_json(&bundle.join("skippy-qualification-receipts.json"), &broken);
+    let result = compose(&bundle, &[]);
+    assert!(!result.status.success());
+    assert!(
+        stderr(&result).contains("mandatory row"),
+        "{}",
+        stderr(&result)
+    );
+    assert!(!bundle.join("product-manifest.json").exists());
+}

@@ -1,5 +1,55 @@
 # MeshLLM CI topology
 
+## Standalone qualification before Mesh production
+
+Each platform lane builds the standalone CLI and native runtime independently.
+`skippy_product` composes their exact bytes and runs packaging, dense, recurrent,
+MoE, KV cache, System One and Decisions qualification before `hosts` can run.
+The closed runtime catalog contains Linux CPU/CUDA/ROCm/Vulkan, macOS Metal,
+and Windows CPU/CUDA/ROCm/Vulkan. Backend-only plans also select their platform
+CPU row so host admission can require its mandatory qualification.
+
+Consumers restore the lane's immutable `product_automation_*` executable.
+CLI inputs include a source-bound `build-contract.json`; runtime inputs include
+`ci-source.json`, and Linux runtime cache keys include the source SHA.
+Seven-day `ci-skippy-receipt-<platform>-<architecture>-<backend>` artifacts bind
+source SHA, plan digest, product bytes, availability and suite evidence.
+Hosts validate all their selected receipts with `qualify host-receipts`, retain
+`ci-host-skippy-receipts-<platform>-<architecture>` for seven days, and pass the
+record into Mesh product composition. The product manifest and archive carry
+`skippy_qualification`; missing mandatory qualification fails admission.
+
+Linux accelerator qualification uses the existing opt-in GPU runner selectors.
+Disabled hardware is recorded as `hardware-unavailable`, never as a qualified
+GPU result; hosted packaging checks still run. CPU fallback cannot satisfy a
+GPU row. Runner-group admission and real hardware runs remain rollout evidence,
+not a consequence of checking in workflow definitions. Standalone CLI and product
+archives retain one day; availability, packaging, Laya and model artifacts retain
+their owning evidence, with Linux model artifact names including backend to
+avoid collisions between available rows.
+
+Clippy and test batches record selected and successfully executed package
+censuses as `cargo-census-{clippy,test}-<batch>-<attempt>`. Skippy FFI executes
+in its isolated feature graph. SafeTensors selection permits PR, push and manual
+events. Required CI cache capture remains observational with a zero hit-rate
+floor; dedicated cache qualification retains its positive gate.
+
+Release publication requires the credential-free crates preflight against the
+same run's `release-linux` artifact. The composed native-runtime manifest is
+retained for 90 days. Downstream dispatch binds correlation ID, Mesh commit and
+manifest digest; `await_packaging_release` requires the matching terminal receipt
+and retains `release-packaging-readiness-<tag>` for 90 days. Packaging contract
+deployment verification, nonpublishing rehearsal and failure-injection evidence
+remain required before declaring release readiness. The identity contract in
+[mesh-packaging#35](https://github.com/Mesh-LLM/mesh-packaging/pull/35) merged on
+2026-10-11; this does not establish an end-to-end release rehearsal pass.
+
+Protected PR lanes and summaries continue to use main's authority. Catalog and
+lane-validator prerequisites must land through the protected CI-control process
+before branch graph evidence can be green; candidate workflows do not replace
+protected validation. See [the acceptance checklist](CI_RELEASE_AUDIT.md#12-validation-and-acceptance-checklist)
+for the outstanding live qualification and release evidence.
+
 The L2 planner action and all five lane summaries now invoke Rust `ci plan`
 and `ci validate-lane` using `prepare-automation`'s explicit `hosted-bare`
 profile. That profile is restricted to GitHub-hosted Linux, uses the existing
@@ -1961,11 +2011,13 @@ Hosted restore remains unqualified. A passing source contract or mock FFI test d
 bridge, model serving or real client requests.
 
 `prepare-python-research-source` restores and natively admits the fixed external
-research checkpoint in `ci/python-research-source.json` only for resolved Rust
-test batches containing `skippy-bench`. Its source tests retain their existing
-required cadence. For local `just test-all`, restore that checkout and set
-`MESH_PYTHON_RESEARCH_SOURCE` first; the recipe admits the same source before its
-workspace gates and does not download source or install research SDKs. The
+research checkpoint in `ci/python-research-source.json` for the Quality contract
+job and resolved Rust test batches containing `skippy-bench`. Its source tests
+retain their existing required cadence. For local `just ci-automation-contracts`,
+`just ci-validate`, or `just test-all`, restore that checkout and set
+`MESH_PYTHON_RESEARCH_SOURCE` first. The automation contract recipes inherit that
+input without acquiring source; `test-all` can restore it when unset. Source
+admission does not install research SDKs. The
 [research checkpoint](python-research-source.json) is published; fresh anonymous restore and native source admission passed.
 Hosted restore remains unqualified. Source admission does not qualify datasets, installed SDKs or
 benchmark results.
