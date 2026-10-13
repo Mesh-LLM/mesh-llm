@@ -1,4 +1,4 @@
-From 183448eec25bd236184c64eec7b67b1f8420c3bd Mon Sep 17 00:00:00 2001
+From bd375e5a45d856b836a7d430e03c2bd1bc6a5178 Mon Sep 17 00:00:00 2001
 From: James Dumay <jameswdumay@gmail.com>
 Date: Sat, 19 Sep 2026 15:17:50 +1000
 Subject: [PATCH] build: wire staged runtime and backend support
@@ -9,8 +9,8 @@ Subject: [PATCH] build: wire staged runtime and backend support
  ggml/src/ggml-cuda/ggml-cuda.cu         |   7 +-
  ggml/src/ggml-metal/ggml-metal-device.m | 191 ++++++++++-
  ggml/src/ggml-metal/ggml-metal-impl.h   |  34 +-
- src/CMakeLists.txt                      | 422 ++++++++++++++++++++++++
- 6 files changed, 656 insertions(+), 24 deletions(-)
+ src/CMakeLists.txt                      | 431 ++++++++++++++++++++++++
+ 6 files changed, 665 insertions(+), 24 deletions(-)
 
 diff --git a/CMakeLists.txt b/CMakeLists.txt
 index 8a874c96e..beb8af2a7 100644
@@ -104,7 +104,7 @@ index 81ea7f9d7..5f02543f2 100644
  
  #ifndef TARGET_OS_VISION
  #define TARGET_OS_VISION 0
-@@ -164,6 +165,11 @@ int ggml_metal_pipeline_max_theads_per_threadgroup(struct ggml_metal_pipeline_wi
+@@ -164,6 +165,11 @@ struct ggml_metal_library {
      ggml_metal_device_t dev;
      ggml_metal_pipelines_t pipelines; // cache of compiled pipelines
  
@@ -451,7 +451,7 @@ index 490dd83a1..3f8e638eb 100644
      int32_t  n_tokens;
      int32_t  n_iter;
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index afdaddc79..0cc6123c7 100644
+index afdaddc79..57745f9fc 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
 @@ -46,6 +46,34 @@ set(LLAMA_CORE_SOURCES
@@ -489,7 +489,7 @@ index afdaddc79..0cc6123c7 100644
              unicode.h
              ${LLAMA_MODELS_SOURCES}
              )
-@@ -62,16 +90,410 @@ set_target_properties(llama PROPERTIES
+@@ -62,16 +90,419 @@ set_target_properties(llama PROPERTIES
  set_source_files_properties(${LLAMA_CORE_SOURCES} ../include/llama.h unicode.h
      PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON)
  
@@ -653,6 +653,15 @@ index afdaddc79..0cc6123c7 100644
 +            --out "${SKIPPY_MODEL_FIXTURE_DIR}")
 +    set_tests_properties(skippy_generate_gemma_fixture PROPERTIES
 +        FIXTURES_SETUP skippy-model-loader-fixtures)
++
++    add_executable(skippy-sampling-history skippy/tests/sampling_history.cpp)
++    target_include_directories(skippy-sampling-history PRIVATE .)
++    target_compile_features(skippy-sampling-history PRIVATE cxx_std_17)
++    target_link_libraries(skippy-sampling-history PRIVATE llama)
++    add_test(NAME skippy_sampling_history COMMAND skippy-sampling-history
++        "${SKIPPY_MODEL_FIXTURE_DIR}/gemma-dense.gguf")
++    set_tests_properties(skippy_sampling_history PROPERTIES
++        FIXTURES_REQUIRED skippy-model-loader-fixtures)
 +
 +    add_test(
 +        NAME skippy_generate_qwen3_fixture
@@ -901,5 +910,5 @@ index afdaddc79..0cc6123c7 100644
 +    target_link_libraries(llama PRIVATE ${SKIPPY_ACCELERATE_FRAMEWORK})
 +endif()
 -- 
-2.54.0 (Apple Git-157)
+2.56.0
 

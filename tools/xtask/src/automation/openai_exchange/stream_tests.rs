@@ -17,6 +17,74 @@ fn nullable_tool_calls_do_not_discard_generated_content() {
 const SUCCESS: &[u8] = b"data: {\"choices\":[{\"delta\":{\"content\":\"hi\"},\"finish_reason\":\"stop\"}]}\n\ndata: {\"usage\":{\"prompt_tokens\":40,\"completion_tokens\":2,\"prompt_tokens_details\":{\"cached_tokens\":30}}}\n\ndata: [DONE]\n\n";
 
 #[test]
+fn output_integrity_detects_truncated_and_malformed_tool_streams() {
+    for (arguments, reason, valid) in [
+        (r#"{"final":true}"#, "tool_calls", true),
+        (r#"{"final":false}"#, "tool_calls", true),
+        (r#"{"final":"#, "stop", false),
+        (r#"{"final":True}"#, "tool_calls", false),
+        (r#"{"final":true}"#, "stop", false),
+        (r#"{"final":true}"#, "length", false),
+        ("{} trailing", "tool_calls", false),
+    ] {
+        let mut stream = Stream::default();
+        let frames = format!(
+            "data: {}\n\ndata: {}\n\ndata: [DONE]\n",
+            serde_json::json!({"choices":[{"delta":{"tool_calls":[{"index":0,"type":"function",
+                "function":{"name":"buzz__send","arguments":arguments}}]},"finish_reason":reason}]}),
+            serde_json::json!({"usage":{"prompt_tokens":351,"completion_tokens":92,
+                "prompt_tokens_details":{"cached_tokens":256}}})
+        );
+        for fragment in frames.as_bytes().chunks(7) {
+            stream.consume(fragment, Duration::from_secs(1)).unwrap();
+        }
+        let evidence = stream.finish(Duration::from_secs(2), false).unwrap();
+        assert_eq!(
+            evidence.output_problems.is_empty(),
+            valid,
+            "{arguments} / {reason}"
+        );
+        assert_eq!(evidence.cached_tokens, 256);
+    }
+}
+
+#[test]
+fn strict_evidence_distinguishes_missing_finish_and_budget_truncation_from_stop() {
+    for (reason, valid) in [
+        (Some("stop"), true),
+        (Some("length"), false),
+        (None, false),
+        (Some("tool_calls"), false),
+    ] {
+        let mut stream = Stream::default();
+        let event = format!(
+            "data: {}\n",
+            serde_json::json!({"choices":[{
+            "delta":{"content":"Hello"},"finish_reason":reason}]})
+        );
+        stream.consume(event.as_bytes(), Duration::ZERO).unwrap();
+        stream.consume(b"data: {\"usage\":{\"prompt_tokens\":40,\"completion_tokens\":2,\"prompt_tokens_details\":{\"cached_tokens\":30}}}\n\ndata: [DONE]\n", Duration::from_secs(1)).unwrap();
+        assert_eq!(
+            stream
+                .finish(Duration::from_secs(2), false)
+                .unwrap()
+                .output_problems
+                .is_empty(),
+            valid
+        );
+    }
+}
+
+#[test]
+fn reasoning_only_stop_is_not_a_complete_answer() {
+    let mut stream = Stream::default();
+    stream.consume(b"data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"I will call the tool\"},\"finish_reason\":\"stop\"}]}\n", Duration::ZERO).unwrap();
+    stream.consume(b"data: {\"usage\":{\"prompt_tokens\":351,\"completion_tokens\":92,\"prompt_tokens_details\":{\"cached_tokens\":256}}}\n\ndata: [DONE]\n", Duration::from_secs(1)).unwrap();
+    let evidence = stream.finish(Duration::from_secs(2), false).unwrap();
+    assert!(!evidence.output_problems.is_empty());
+}
+
+#[test]
 fn arbitrary_frame_boundaries_preserve_usage_and_terminal_marker() {
     let mut stream = Stream::default();
     for chunk in SUCCESS.chunks(3) {

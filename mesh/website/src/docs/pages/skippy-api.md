@@ -9,7 +9,7 @@ description: Generated reference for the capability-oriented Skippy C ABI.
 
 This reference is generated from the patched llama.cpp public headers. It documents the native C ABI used by Skippy's Rust FFI layer and staged runtime. The ABI is experimental and versioned for lockstep native/Rust builds.
 
-Current generated surface: **18 headers** and **110 exported functions**.
+Current generated surface: **18 headers** and **111 exported functions**.
 
 ## Quick navigation
 
@@ -103,7 +103,7 @@ Current generated surface: **18 headers** and **110 exported functions**.
       </div>
     </section>
     <section class="skippy-api-index__group">
-      <a class="skippy-api-index__group-title" href="#skippy-header-runtime-h"><code>runtime.h</code><span>23 functions</span></a>
+      <a class="skippy-api-index__group-title" href="#skippy-header-runtime-h"><code>runtime.h</code><span>24 functions</span></a>
       <div class="skippy-api-index__functions">
         <a href="#skippy-fn-skippy-runtime-config-default"><code>skippy_runtime_config_default</code></a>
         <a href="#skippy-fn-skippy-model-open"><code>skippy_model_open</code></a>
@@ -124,6 +124,7 @@ Current generated surface: **18 headers** and **110 exported functions**.
         <a href="#skippy-fn-skippy-session-begin-external-decode"><code>skippy_session_begin_external_decode</code></a>
         <a href="#skippy-fn-skippy-session-end-external-decode"><code>skippy_session_end_external_decode</code></a>
         <a href="#skippy-fn-skippy-session-set-position"><code>skippy_session_set_position</code></a>
+        <a href="#skippy-fn-skippy-session-restore-token-history"><code>skippy_session_restore_token_history</code></a>
         <a href="#skippy-fn-skippy-session-sample-current"><code>skippy_session_sample_current</code></a>
         <a href="#skippy-fn-skippy-session-configure-chat-sampling"><code>skippy_session_configure_chat_sampling</code></a>
         <a href="#skippy-fn-skippy-session-reset"><code>skippy_session_reset</code></a>
@@ -1140,6 +1141,19 @@ LLAMA_API enum skippy_status skippy_session_set_position(
         struct skippy_error ** out_error);
 ```
 
+<a id="skippy-fn-skippy-session-restore-token-history"></a>
+#### `skippy_session_restore_token_history`
+
+Restores token history after importing cached model state. The count must equal the imported session position and the IDs must describe that prefix. Call before suffix prefill or sampling. Rebuilds sampler/grammar history while retaining the current request's chat sampling configuration.
+
+```cpp
+LLAMA_API enum skippy_status skippy_session_restore_token_history(
+         struct skippy_session * session,
+        const llama_token * token_ids,
+        size_t token_count,
+        struct skippy_error ** out_error);
+```
+
 <a id="skippy-fn-skippy-session-sample-current"></a>
 #### `skippy_session_sample_current`
 
@@ -1877,7 +1891,7 @@ LLAMA_API enum skippy_status skippy_session_encode_prompt(
 The headers also define the following enums, structs, opaque handles, and ABI constants:
 
 - `activation.h`: `skippy_activation_part_desc`, `skippy_activation_boundary_desc`, `skippy_activation_desc`, `SKIPPY_ACTIVATION_FRAME_VERSION = 2`, `SKIPPY_ACTIVATION_BOUNDARY_DESC_VERSION = 2`, `SKIPPY_ACTIVATION_IDENTITY_BYTES = 32`, `SKIPPY_ACTIVATION_MAX_DIMS = 4`, `SKIPPY_ACTIVATION_MAX_PARTS = 16`, `SKIPPY_ACTIVATION_PART_OPTIONAL = (UINT32_C(1) << 0)`
-- `common.h`: `skippy_feature`, `skippy_status`, `skippy_error`, `skippy_abi_version`, `SKIPPY_ABI_VERSION_MAJOR = 0`, `SKIPPY_ABI_VERSION_MINOR = 1`, `SKIPPY_ABI_VERSION_PATCH = 67`, `SKIPPY_FEATURE_RUNTIME_EVENT_REPORTER = ((uint64_t)1 << 31)`, `SKIPPY_FEATURE_MODEL_LOAD_EVENTS_V2 = ((uint64_t)1 << 32)`, `SKIPPY_FEATURE_KV_EVENTS = ((uint64_t)1 << 33)`, `SKIPPY_FEATURE_DEVICE_EVENTS = ((uint64_t)1 << 34)`, `SKIPPY_FEATURE_DIAGNOSTIC_EVENTS = ((uint64_t)1 << 35)`, `SKIPPY_FEATURE_UNLOAD_EVENTS = ((uint64_t)1 << 36)`, `SKIPPY_FEATURE_NON_CHAT_WORKLOADS = ((uint64_t)1 << 37)`, `SKIPPY_FEATURE_SYSTEM_ONE = ((uint64_t)1 << 38)`, `SKIPPY_FEATURE_CACHEGEN_KV_PAGE = (UINT64_C(1) << 39)`, `SKIPPY_FEATURE_LAYA_DECISIONS = (UINT64_C(1) << 40)`
+- `common.h`: `skippy_feature`, `skippy_status`, `skippy_error`, `skippy_abi_version`, `SKIPPY_ABI_VERSION_MAJOR = 0`, `SKIPPY_ABI_VERSION_MINOR = 1`, `SKIPPY_ABI_VERSION_PATCH = 68`, `SKIPPY_FEATURE_RUNTIME_EVENT_REPORTER = ((uint64_t)1 << 31)`, `SKIPPY_FEATURE_MODEL_LOAD_EVENTS_V2 = ((uint64_t)1 << 32)`, `SKIPPY_FEATURE_KV_EVENTS = ((uint64_t)1 << 33)`, `SKIPPY_FEATURE_DEVICE_EVENTS = ((uint64_t)1 << 34)`, `SKIPPY_FEATURE_DIAGNOSTIC_EVENTS = ((uint64_t)1 << 35)`, `SKIPPY_FEATURE_UNLOAD_EVENTS = ((uint64_t)1 << 36)`, `SKIPPY_FEATURE_NON_CHAT_WORKLOADS = ((uint64_t)1 << 37)`, `SKIPPY_FEATURE_SYSTEM_ONE = ((uint64_t)1 << 38)`, `SKIPPY_FEATURE_CACHEGEN_KV_PAGE = (UINT64_C(1) << 39)`, `SKIPPY_FEATURE_LAYA_DECISIONS = (UINT64_C(1) << 40)`
 - `devices.h`: `skippy_backend_device_type`, `skippy_backend_device_cap`, `skippy_backend_device`
 - `events.h`: `skippy_runtime_event_v1`, `skippy_runtime_event_reporter_v1`, `SKIPPY_RUNTIME_EVENT_V1_ABI_VERSION = 1`
 - `execution.h`: `skippy_iteration_request`

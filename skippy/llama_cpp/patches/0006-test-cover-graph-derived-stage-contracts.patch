@@ -1,14 +1,15 @@
-From 2228d9a4cab80fda1282f2a7bec8a148ee26e87d Mon Sep 17 00:00:00 2001
+From bbde3036a40a8bc1c315f84bbe8ba42ac87d949b Mon Sep 17 00:00:00 2001
 From: James Dumay <jameswdumay@gmail.com>
 Date: Sat, 19 Sep 2026 15:17:59 +1000
 Subject: [PATCH] test: cover graph-derived stage contracts
 
 ---
  src/skippy/tests/graph_build_inputs.cpp       |  619 +++++++
- .../tests/hardware_application_probe.cpp      |   64 +
+ .../tests/hardware_application_probe.cpp      |   76 +
  src/skippy/tests/noalloc_graph_planning.cpp   | 1088 ++++++++++++
  .../tests/renamed_multishard_planning.cpp     | 1512 +++++++++++++++++
  src/skippy/tests/runtime_events.cpp           |  489 ++++++
+ src/skippy/tests/sampling_history.cpp         |  248 +++
  src/skippy/tests/stage_plan_header.c          |   10 +
  src/skippy/tests/stage_plan_header.cpp        |   13 +
  src/skippy/tests/stage_slice_plan.cpp         | 1146 +++++++++++++
@@ -22,12 +23,13 @@ Subject: [PATCH] test: cover graph-derived stage contracts
  tests/test-skippy-model-loader-accounting.cpp |  326 ++++
  .../test-skippy-recurrent-state-roundtrip.cpp |  159 ++
  ...st-skippy-verify-checkpoint-retirement.cpp |   26 +
- 18 files changed, 6274 insertions(+), 23 deletions(-)
+ 19 files changed, 6522 insertions(+), 23 deletions(-)
  create mode 100644 src/skippy/tests/graph_build_inputs.cpp
  create mode 100644 src/skippy/tests/hardware_application_probe.cpp
  create mode 100644 src/skippy/tests/noalloc_graph_planning.cpp
  create mode 100644 src/skippy/tests/renamed_multishard_planning.cpp
  create mode 100644 src/skippy/tests/runtime_events.cpp
+ create mode 100644 src/skippy/tests/sampling_history.cpp
  create mode 100644 src/skippy/tests/stage_plan_header.c
  create mode 100644 src/skippy/tests/stage_plan_header.cpp
  create mode 100644 src/skippy/tests/stage_slice_plan.cpp
@@ -665,7 +667,7 @@ index 000000000..0926be9b3
 +}
 diff --git a/src/skippy/tests/hardware_application_probe.cpp b/src/skippy/tests/hardware_application_probe.cpp
 new file mode 100644
-index 000000000..1a1bb0ca5
+index 000000000..471968158
 --- /dev/null
 +++ b/src/skippy/tests/hardware_application_probe.cpp
 @@ -0,0 +1,76 @@
@@ -3852,6 +3854,260 @@ index 000000000..1f0dfbeb9
 +    std::fprintf(stderr, "unknown test: %s\n", name.c_str());
 +    return 2;
 +}
+diff --git a/src/skippy/tests/sampling_history.cpp b/src/skippy/tests/sampling_history.cpp
+new file mode 100644
+index 000000000..a52a94736
+--- /dev/null
++++ b/src/skippy/tests/sampling_history.cpp
+@@ -0,0 +1,248 @@
++#include "skippy.h"
++#include "../runtime_types.h"
++#include "llama-model.h"
++
++#include <cstdio>
++#include <cstdlib>
++#include <vector>
++
++#define CHECK(condition) do { if (!(condition)) { \
++    std::fprintf(stderr, "CHECK failed: %s at %s:%d\n", #condition, __FILE__, __LINE__); \
++    std::exit(1); } } while (0)
++
++namespace {
++
++void ok(skippy_status status, skippy_error * error) {
++    if (status != SKIPPY_STATUS_OK) {
++        std::fprintf(stderr, "native failure: %s\n", error ? error->message : "no detail");
++        std::exit(1);
++    }
++    skippy_error_free(error);
++}
++
++void prefill(skippy_session * session, const std::vector<llama_token> & tokens) {
++    size_t bytes = 0;
++    skippy_error * error = nullptr;
++    const auto status = skippy_prefill_chunk(session, tokens.data(), tokens.size(),
++            nullptr, 0, nullptr, 0, &bytes, &error);
++    ok(status, error);
++}
++
++skippy_sampling_config sampling_config() {
++    skippy_sampling_config config{};
++    config.version = 1;
++    config.flags = SKIPPY_SAMPLING_FLAG_ENABLED;
++    config.repeat_penalty = 1.0f;
++    config.reasoning_budget_tokens = -1;
++    config.logit_bias_count = 1;
++    config.logit_bias[0] = {42, 100000.0f};
++    return config;
++}
++
++void configure(skippy_session * session, const skippy_sampling_config & sampling,
++        bool lazy, size_t prompt_count) {
++    const char * metadata = lazy
++        ? R"({"grammar":"root ::= <[42]> <[43]> <[44]>","grammar_lazy":true,"grammar_triggers":[{"type":0,"token":42}]})"
++        : R"({"grammar":"root ::= <[42]> <[43]> <[44]>"})";
++    skippy_error * error = nullptr;
++    const auto status = skippy_session_configure_chat_sampling(
++            session, &sampling, metadata, prompt_count, &error);
++    ok(status, error);
++    CHECK(session->grammar_sampler != nullptr);
++}
++
++llama_token decode(skippy_session * session, const skippy_sampling_config & sampling, llama_token token) {
++    llama_token predicted = -1;
++    size_t bytes = 0;
++    skippy_error * error = nullptr;
++    const auto status = skippy_decode_step_sampled(session, token, &sampling,
++            nullptr, 0, nullptr, 0, &bytes, &predicted, &error);
++    ok(status, error);
++    return predicted;
++}
++
++struct snapshot {
++    bool full;
++    int32_t layers;
++    skippy_kv_page_desc page{};
++    std::vector<uint8_t> payload;
++    std::vector<uint8_t> recurrent;
++
++    snapshot(skippy_session * source, bool full_state) : full(full_state),
++            layers(source->stage_model->model->hparams.n_layer()) {
++        skippy_error * error = nullptr;
++        size_t bytes = 0;
++        auto export_payload = [&](void * output, size_t capacity) {
++            return full ? skippy_export_full_state(source, 0, layers, output, capacity, &bytes, &error)
++                : skippy_export_kv_page(source, 0, layers, 0, source->n_past, &page,
++                        output, capacity, &bytes, &error);
++        };
++        const auto status = export_payload(nullptr, 0);
++        CHECK(status == SKIPPY_STATUS_BUFFER_TOO_SMALL || status == SKIPPY_STATUS_OK);
++        skippy_error_free(error);
++        error = nullptr;
++        CHECK(bytes > 0);
++        payload.resize(bytes);
++        const auto exported = export_payload(payload.data(), payload.size());
++        ok(exported, error);
++        if (!full) {
++            error = nullptr;
++            bytes = 0;
++            const auto recurrent_status = skippy_export_recurrent_state(source, nullptr, 0, &bytes, &error);
++            CHECK(recurrent_status == SKIPPY_STATUS_BUFFER_TOO_SMALL || recurrent_status == SKIPPY_STATUS_OK);
++            skippy_error_free(error);
++            error = nullptr;
++            recurrent.resize(bytes);
++            if (bytes > 0) {
++                const auto result = skippy_export_recurrent_state(source, recurrent.data(), bytes, &bytes, &error);
++                ok(result, error);
++            }
++        }
++    }
++
++    void restore(skippy_session * session, const std::vector<llama_token> & prefix) const {
++        skippy_error * error = nullptr;
++        auto status = full
++            ? skippy_import_full_state(session, 0, layers, payload.data(), payload.size(), &error)
++            : skippy_import_kv_page(session, &page, payload.data(), payload.size(), &error);
++        ok(status, error);
++        if (!recurrent.empty()) {
++            error = nullptr;
++            status = skippy_import_recurrent_state(session, recurrent.data(), recurrent.size(), &error);
++            ok(status, error);
++        }
++        error = nullptr;
++        status = skippy_session_set_position(session, prefix.size(), &error);
++        ok(status, error);
++        error = nullptr;
++        status = skippy_session_restore_token_history(session, prefix.data(), prefix.size(), &error);
++        ok(status, error);
++        CHECK(session->token_history == prefix);
++    }
++};
++
++skippy_session * create(skippy_model * model) {
++    skippy_session * session = nullptr;
++    skippy_error * error = nullptr;
++    const auto status = skippy_session_create(model, &session, &error);
++    ok(status, error);
++    return session;
++}
++
++void release(skippy_session * session) {
++    skippy_error * error = nullptr;
++    const auto status = skippy_session_free(session, &error);
++    ok(status, error);
++}
++
++void grammar_restore(skippy_model * model, bool full, bool lazy) {
++    const auto sampling = sampling_config();
++    const std::vector<llama_token> prefix(256, 1);
++    const std::vector<llama_token> suffix(94, 2);
++    auto * cold = create(model);
++    configure(cold, sampling, lazy, 351);
++    prefill(cold, prefix);
++    snapshot cached(cold, full);
++    prefill(cold, suffix);
++    std::vector<llama_token> expected;
++    llama_token previous = 2;
++    for (int i = 0; i < 3; ++i) {
++        previous = decode(cold, sampling, previous);
++        expected.push_back(previous);
++    }
++    CHECK(expected == std::vector<llama_token>({42, 43, 44}));
++    release(cold);
++    auto * warm = create(model);
++    for (int attempt = 0; attempt < 3; ++attempt) {
++        skippy_error * error = nullptr;
++        const auto status = skippy_session_reset(warm, &error);
++        ok(status, error);
++        // Configure before importing state, just like the serving restore path.
++        configure(warm, sampling, lazy, 351);
++        cached.restore(warm, prefix);
++        prefill(warm, suffix);
++        previous = 2;
++        for (const auto token : expected) {
++            previous = decode(warm, sampling, previous);
++            CHECK(previous == token);
++        }
++        CHECK(warm->token_history.size() == 353);
++    }
++    release(warm);
++}
++
++void generated_prefix_restore(skippy_model * model) {
++    const auto sampling = sampling_config();
++    auto * source = create(model);
++    const std::vector<llama_token> prefix{1, 1, 1, 1, 42};
++    prefill(source, prefix);
++    snapshot cached(source, true);
++    release(source);
++    auto * restored = create(model);
++    configure(restored, sampling, true, 4);
++    cached.restore(restored, prefix);
++    // The restored generated token 42 arms the lazy grammar; 43 advances it.
++    CHECK(decode(restored, sampling, 43) == 44);
++    const auto before = restored->token_history;
++    skippy_error * error = nullptr;
++    CHECK(skippy_session_restore_token_history(restored, prefix.data(), 1, &error)
++            == SKIPPY_STATUS_INVALID_ARGUMENT);
++    skippy_error_free(error);
++    CHECK(restored->token_history == before);
++    error = nullptr;
++    CHECK(skippy_session_restore_token_history(restored, nullptr, before.size(), &error)
++            == SKIPPY_STATUS_INVALID_ARGUMENT);
++    skippy_error_free(error);
++    CHECK(restored->token_history == before);
++    release(restored);
++}
++
++void penalty_restore(skippy_model * model, bool full) {
++    auto sampling = sampling_config();
++    sampling.penalty_last_n = 512;
++    sampling.frequency_penalty = 1.0f;
++    sampling.presence_penalty = 1.0f;
++    sampling.logit_bias_count = 2;
++    sampling.logit_bias[0] = {42, 100.0f};
++    sampling.logit_bias[1] = {43, 50.0f};
++    const std::vector<llama_token> prefix(256, 42);
++    auto * cold = create(model);
++    skippy_error * error = nullptr;
++    auto status = skippy_session_configure_chat_sampling(cold, &sampling, "{}", 257, &error);
++    ok(status, error);
++    prefill(cold, prefix);
++    snapshot cached(cold, full);
++    CHECK(decode(cold, sampling, 1) == 43);
++    release(cold);
++    auto * restored = create(model);
++    error = nullptr;
++    status = skippy_session_configure_chat_sampling(restored, &sampling, "{}", 257, &error);
++    ok(status, error);
++    cached.restore(restored, prefix);
++    CHECK(decode(restored, sampling, 1) == 43);
++    release(restored);
++}
++
++} // namespace
++
++int main(int argc, char ** argv) {
++    CHECK(argc == 2);
++    auto config = skippy_runtime_config_default();
++    config.selected_backend_device = "CPU";
++    config.ctx_size = 512;
++    skippy_model * model = nullptr;
++    skippy_error * error = nullptr;
++    const auto status = skippy_model_open(argv[1], &config, &model, &error);
++    ok(status, error);
++    for (const bool full : {false, true}) {
++        penalty_restore(model, full);
++        for (const bool lazy : {false, true}) {
++            grammar_restore(model, full, lazy);
++        }
++    }
++    generated_prefix_restore(model);
++    error = nullptr;
++    const auto freed = skippy_model_free(model, &error);
++    ok(freed, error);
++    return 0;
++}
 diff --git a/src/skippy/tests/stage_plan_header.c b/src/skippy/tests/stage_plan_header.c
 new file mode 100644
 index 000000000..2e5a5e1a6
@@ -6688,5 +6944,5 @@ index 000000000..d09acccb4
 +    return 0;
 +}
 -- 
-2.54.0 (Apple Git-157)
+2.56.0
 
