@@ -519,7 +519,9 @@ pub struct Cli {
     pub join_file: Vec<PathBuf>,
 
     /// Discover a mesh and join it.
-    #[arg(long, default_missing_value = "", num_args = 0..=1)]
+    // require_equals: without it, `--discover status` swallows the `status`
+    // subcommand as the mesh name (optional values grab the next token).
+    #[arg(long, default_missing_value = "", num_args = 0..=1, require_equals = true)]
     pub discover: Option<String>,
 
     /// Auto-join the best mesh found via discovery.
