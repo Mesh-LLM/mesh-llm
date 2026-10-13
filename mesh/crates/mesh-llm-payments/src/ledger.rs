@@ -1,7 +1,8 @@
 //! SQLite owns approvals and reservations across processes and restarts.
 
+pub mod metered;
+pub mod metered_invoices;
 mod migrations;
-pub mod receivables;
 pub mod wallet_switch;
 
 #[cfg(test)]
