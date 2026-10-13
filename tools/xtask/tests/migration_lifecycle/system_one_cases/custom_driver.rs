@@ -226,7 +226,9 @@ fn actual_custom_driver_deadline_and_causal_cancel_reap_owned_sleep_without_succ
         let result = run(
             &root,
             &driver,
-            if cancelled { "5" } else { "0.2" },
+            // Allow process startup under suite load; the 60-second child still
+            // must be stopped by the deadline, with no success receipt.
+            if cancelled { "5" } else { "2" },
             &cancellation,
         );
         if let Some(trigger) = trigger {
