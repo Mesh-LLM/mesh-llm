@@ -1,8 +1,8 @@
 # Live graph slicing cutover
 
 Status: replay-free implementation, rebased onto main; targeted rebase
-qualification passes. The complete local CI gate retains the timing-fixture
-limitation documented below. Earlier final95 results are historical evidence. No runtime
+qualification passes. The CI repair qualification is recorded below separately
+from the original rebase results. Earlier final95 results are historical evidence. No runtime
 fallback or backward-compatibility selector remains. Broad release certification
 still requires the immutable candidate canary, including CUDA and real GLM-DSA.
 
@@ -64,7 +64,7 @@ The full CI gate also requires `MESH_PYTHON_SDK_SOURCE` pointing to the external
 SDK revision declared in `ci/required-sdk-python/sdk-source.json`; source
 admission and the affected SDK fixtures pass with that exact checkout.
 
-`just ci-validate` is not green on this host. Its final run passed 2,325 unit
+The original rebase's `just ci-validate` was not green on this host. That run passed 2,325 unit
 contracts and reached 1,155 passing lifecycle fixtures with one failure:
 `actual_custom_driver_deadline_and_causal_cancel_reap_owned_sleep_without_success`
 expects its child-start marker within a 200 ms deadline. That unchanged main
@@ -72,6 +72,40 @@ fixture passes in isolation but fails in the full run here. Its deadline was
 not relaxed. The full command stops there, so later automation suites are not
 claimed as passing. The targeted split, native, product, and generator results
 above are independent completed checks.
+
+### CI repair qualification
+
+The first candidate canary stopped in protected-main bootstrap before testing
+models: disk-only sccache had no `SCCACHE_DIR`. The shared macOS setup action now
+initializes that directory both for explicit disk-only callers and the existing
+missing-GHA-endpoint fallback. Executable fixtures cover both and preserve an
+explicit cache directory. This controller fix requires a separate main rollout.
+
+Linux's growing-prefix smoke exposed backend sampler attachment on an
+activation-export context. Such contexts output every token, while backend
+sampling permits at most one output per sequence. The generic attachment guard
+now checks the context's all-row embedding capability. No architecture dispatch
+or replay path is involved. The change is folded into core patch 0002; patch 0006
+exercises sampling configuration and repeated multi-token prefill/reset on the
+synthetic split families.
+
+The retained CI requests reproduce the exact `rc=-1` failure at position 658 on
+the original runtime. All six pass with the repaired packaged runtime, including
+cached-token counts 0, 664, 658, 808, 802, and 936. The focused synthetic suite
+passes 18/18 including fixtures. Author tree `91012bf49` and cold-applied queue
+`2ef154c37965` match exactly; neither the queue nor applied source contains
+stage-program modules, geometry recipes, or the experimental selector.
+
+Quality's pooled-sampler contract now inspects its current owning patches and
+the current reuse lifecycle. The process-deadline fixture uses a two-second
+startup budget to reach its held child before testing deadline cleanup; causal
+cancellation remains separately exercised. The full lifecycle target passes
+1,156 tests with eight existing ignored cases. All automation contract targets
+and repository consistency gates pass; the run resumed after installing the
+local `gtimeout` prerequisite and admitting the pinned external research source.
+Formatting, ShellCheck, xtask check/Clippy, Skippy API tests (124), API check/Clippy,
+and Mesh check/Clippy pass. The PR records the complete native and hosted results
+separately from this focused repair evidence.
 
 Main's Rust generator initially rejected the C++ producer's null refusal reason
 on successful builders. The parser now accepts that documented nullable field;
