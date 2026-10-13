@@ -20,52 +20,20 @@ fn terms(id: &str, cap: u64) -> RequestTerms {
 }
 
 #[test]
-fn restart_and_day_rollover_preserve_reservations() {
+fn approvals_do_not_reserve_the_daily_budget() {
     let directory = tempfile::tempdir().unwrap();
-    {
-        let ledger = Ledger::open(directory.path()).unwrap();
-        ledger
-            .set_policy(&Policy {
-                mode: ApprovalMode::Automatic,
-                daily_budget_msat: Some(1000),
-            })
-            .unwrap();
-        ledger.propose(&terms("one", 700)).unwrap();
-        ledger.approve("one", 1).unwrap();
-    }
     let ledger = Ledger::open(directory.path()).unwrap();
-    ledger.propose(&terms("two", 400)).unwrap();
-    assert!(ledger.approve("two", DAY_MS + 1).is_err());
-    ledger.finish("one").unwrap();
-    ledger.approve("two", DAY_MS + 1).unwrap();
-}
-
-#[test]
-fn independent_connections_cannot_double_reserve() {
-    let directory = tempfile::tempdir().unwrap();
-    let first = Ledger::open(directory.path()).unwrap();
-    let second = Ledger::open(directory.path()).unwrap();
-    first
+    ledger
         .set_policy(&Policy {
             mode: ApprovalMode::Automatic,
             daily_budget_msat: Some(1000),
         })
         .unwrap();
-    first.propose(&terms("one", 700)).unwrap();
-    second.propose(&terms("two", 700)).unwrap();
-    let barrier = std::sync::Barrier::new(2);
-    let results = std::thread::scope(|scope| {
-        let one = scope.spawn(|| {
-            barrier.wait();
-            first.approve("one", 1).is_ok()
-        });
-        let two = scope.spawn(|| {
-            barrier.wait();
-            second.approve("two", 1).is_ok()
-        });
-        (one.join().unwrap(), two.join().unwrap())
-    });
-    assert_ne!(results.0, results.1);
+    ledger.propose(&terms("one", 700)).unwrap();
+    ledger.propose(&terms("two", 700)).unwrap();
+    ledger.approve("one", 1).unwrap();
+    ledger.approve("two", 1).unwrap();
+    assert_eq!(ledger.available_budget(1).unwrap(), 1000);
 }
 
 #[test]
@@ -110,7 +78,7 @@ fn evidence_correlation_survives_reopen_without_schema_change() -> Result<()> {
 }
 
 #[test]
-fn single_policy_controls_eligibility_and_preserves_reservations() -> Result<()> {
+fn single_policy_controls_eligibility() -> Result<()> {
     let directory = tempfile::tempdir()?;
     let ledger = Ledger::open(directory.path())?;
     assert_eq!(ledger.policy()?.mode, ApprovalMode::FreeOnly);
@@ -127,8 +95,8 @@ fn single_policy_controls_eligibility_and_preserves_reservations() -> Result<()>
     })?;
     ledger.approve("disabled", 1)?;
     let status = ledger.policy_status(1)?;
-    assert_eq!(status["reserved_msat"], 500);
-    assert_eq!(status["remaining_daily_budget_msat"], 500);
+    assert_eq!(status["in_flight_msat"], 0);
+    assert_eq!(status["remaining_daily_budget_msat"], 1000);
     ledger.set_policy(&Policy::default())?;
     assert_eq!(ledger.policy_status(1)?["remaining_daily_budget_msat"], 0);
     assert_eq!(

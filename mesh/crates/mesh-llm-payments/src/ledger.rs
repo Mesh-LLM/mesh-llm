@@ -152,55 +152,39 @@ impl Ledger {
     pub fn policy_status(&self, now_ms: u64) -> Result<serde_json::Value> {
         let policy = self.policy()?;
         let connection = self.lock()?;
-        let reserved: u64 = connection.query_row(
-            "SELECT COALESCE(SUM(MAX(cap-spent,0)),0) FROM requests WHERE state='approved'",
-            [],
-            |r| read_amount(r, 0),
-        )?;
         let spent: u64 = connection.query_row(
             "SELECT COALESCE(SUM(total),0) FROM charges WHERE state='succeeded' AND settled_day=?",
             [sql_amount(now_ms / DAY_MS)?],
             |r| read_amount(r, 0),
         )?;
+        let committed = committed_today(&connection, now_ms)?;
         let remaining = if policy.mode == ApprovalMode::Automatic {
             policy
                 .daily_budget_msat
                 .unwrap_or(0)
-                .saturating_sub(spent)
-                .saturating_sub(reserved)
+                .saturating_sub(committed)
         } else {
             0
         };
         Ok(serde_json::json!({
             "mode": policy.mode, "daily_budget_msat": policy.daily_budget_msat,
-            "spent_today_msat": spent, "reserved_msat": reserved,
+            "spent_today_msat": spent, "in_flight_msat": committed - spent,
             "remaining_daily_budget_msat": remaining,
         }))
     }
 
-    /// Unreserved daily allowance. The wallet balance is not consulted: a
+    /// Daily allowance left after settled and in-flight payments. The wallet balance is not consulted: a
     /// payment the wallet cannot make simply fails at payment time.
     pub fn available_budget(&self, now_ms: u64) -> Result<u64> {
         let policy = self.policy()?;
-        let connection = self.lock()?;
-        let reserved: u64 = connection.query_row(
-            "SELECT COALESCE(SUM(MAX(cap-spent,0)),0) FROM requests WHERE state='approved'",
-            [],
-            |r| read_amount(r, 0),
-        )?;
         if policy.mode == ApprovalMode::FreeOnly {
             return Ok(0);
         }
-        let spent: u64 = connection.query_row(
-            "SELECT COALESCE(SUM(total),0) FROM charges WHERE state='succeeded' AND settled_day=?",
-            [sql_amount(now_ms / DAY_MS)?],
-            |r| read_amount(r, 0),
-        )?;
+        let connection = self.lock()?;
         Ok(policy
             .daily_budget_msat
             .unwrap_or(0)
-            .saturating_sub(spent)
-            .saturating_sub(reserved))
+            .saturating_sub(committed_today(&connection, now_ms)?))
     }
 
     pub fn approve(&self, id: &str, now_ms: u64) -> Result<()> {
@@ -218,12 +202,7 @@ impl Ledger {
             "request cannot be approved in state {state}"
         );
         let terms: RequestTerms = serde_json::from_str(&json)?;
-        ensure!(terms.expires_at_ms > now_ms, "input invoice has expired");
-        let reserved: u64 = transaction.query_row(
-            "SELECT COALESCE(SUM(MAX(cap-spent,0)),0) FROM requests WHERE state='approved'",
-            [],
-            |r| read_amount(r, 0),
-        )?;
+        ensure!(terms.expires_at_ms > now_ms, "request terms have expired");
         let policy_json: Option<String> = transaction
             .query_row("SELECT value FROM settings WHERE key='policy'", [], |r| {
                 r.get(0)
@@ -240,42 +219,15 @@ impl Ledger {
         );
         if policy.mode == ApprovalMode::Automatic {
             policy.validate()?;
-            let spent: u64 = transaction.query_row("SELECT COALESCE(SUM(total),0) FROM charges WHERE state='succeeded' AND settled_day=?", [sql_amount(now_ms / DAY_MS)?], |r| read_amount(r, 0))?;
-            let available = policy
-                .daily_budget_msat
-                .unwrap_or(0)
-                .saturating_sub(spent)
-                .saturating_sub(reserved);
+            // No reservation: approval only needs budget left today. Each
+            // payment is checked against the budget when it is prepared.
             ensure!(
-                terms.max_total_msat <= available,
+                policy.daily_budget_msat.unwrap_or(0) > committed_today(&transaction, now_ms)?,
                 "daily payment budget exhausted"
             );
         }
         transaction.execute("UPDATE requests SET state='approved' WHERE id=?", [id])?;
         transaction.commit()?;
-        Ok(())
-    }
-
-    /// Run only while opening the exclusively locked service, before live
-    /// approvals. A `prepared` charge is one for which `begin_submission` never
-    /// ran, so the wallet was never called and nothing is lost by failing it.
-    /// For an input charge (segment 0) there is also nothing to gain: the
-    /// seller's prefill state did not survive our restart, so paying now would
-    /// buy nothing. Output charges (segment 1) are left alone because the
-    /// seller has delivered and is owed; `pending` charges may have been
-    /// submitted and must be reconciled, never failed here. Explicit
-    /// `wallet send` requests are excluded: the user's intent to pay that
-    /// invoice does not expire with the process, and their resumption path
-    /// (`send` again) is idempotent by payment hash.
-    pub fn fail_unsubmitted_input_charges(&self) -> Result<()> {
-        let mut connection = self.lock()?;
-        let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        tx.execute(
-            "UPDATE charges SET state='failed' WHERE segment=0 AND state='prepared' AND request_id IN (SELECT id FROM requests WHERE json_extract(terms,'$.peer')!='wallet-send') AND NOT EXISTS(SELECT 1 FROM settings WHERE key='metered-payer/'||charges.request_id)",
-            [],
-        )?;
-        finalize_terminal_requests(&tx)?;
-        tx.commit()?;
         Ok(())
     }
 
@@ -458,6 +410,32 @@ impl Ledger {
             charge.max_total_msat <= cap.saturating_sub(spent).saturating_sub(pending),
             "request payment limit exceeded"
         );
+        let terms: RequestTerms = transaction
+            .query_row(
+                "SELECT terms FROM requests WHERE id=?",
+                [&charge.request_id],
+                |r| r.get::<_, String>(0),
+            )
+            .map(|json| serde_json::from_str(&json))??;
+        // Under free-only, already-approved requests still settle what they
+        // owe; the budget applies while paid use is automatic.
+        if terms.peer != "wallet-send" {
+            let policy: Policy = transaction
+                .query_row("SELECT value FROM settings WHERE key='policy'", [], |r| {
+                    r.get::<_, String>(0)
+                })
+                .optional()?
+                .map(|j| serde_json::from_str(&j))
+                .transpose()?
+                .unwrap_or_default();
+            ensure!(
+                policy.mode != ApprovalMode::Automatic
+                    || committed_today(&transaction, crate::now_ms())?
+                        .saturating_add(charge.max_total_msat)
+                        <= policy.daily_budget_msat.unwrap_or(0),
+                "daily payment budget exhausted"
+            );
+        }
         transaction.execute("INSERT INTO charges(hash,request_id,segment,invoice,amount,max_total,state,total) VALUES (?1,?2,?3,?4,?5,?6,'prepared',0)", params![charge.invoice.payment_hash,charge.request_id,charge.segment,charge.invoice.bolt11,sql_amount(charge.amount_msat)?,sql_amount(charge.max_total_msat)?])?;
         transaction.commit()?;
         Ok(true)
@@ -580,4 +558,21 @@ fn read_amount(row: &rusqlite::Row<'_>, index: usize) -> rusqlite::Result<u64> {
     value
         .try_into()
         .map_err(|_| rusqlite::Error::IntegralValueOutOfRange(index, value))
+}
+
+/// Today's settled spend plus every payment still in flight (fee caps
+/// included). The daily budget is enforced against actual payments, never a
+/// per-request reservation.
+fn committed_today(connection: &rusqlite::Connection, now_ms: u64) -> Result<u64> {
+    let spent: u64 = connection.query_row(
+        "SELECT COALESCE(SUM(total),0) FROM charges WHERE state='succeeded' AND settled_day=?",
+        [sql_amount(now_ms / DAY_MS)?],
+        |r| read_amount(r, 0),
+    )?;
+    let in_flight: u64 = connection.query_row(
+        "SELECT COALESCE(SUM(max_total),0) FROM charges WHERE state IN ('prepared','pending')",
+        [],
+        |r| read_amount(r, 0),
+    )?;
+    Ok(spent.saturating_add(in_flight))
 }

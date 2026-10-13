@@ -78,7 +78,6 @@ impl PaymentService {
             .context("payment service is already running; use its local API")?;
         ledger.close_interrupted_metered()?;
         ledger.close_abandoned_approvals()?;
-        ledger.fail_unsubmitted_input_charges()?;
         ledger.finalize_terminal_requests()?;
         Ok(Self {
             ledger,

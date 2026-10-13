@@ -14,7 +14,7 @@ use mesh_llm_payments_types::contract::{
 use crate::invoice::Invoice;
 use crate::ledger::metered::{MeteredOutcome, MeteredRequest, MeteredSettlement, MeteredStatus};
 use crate::ledger::metered_invoices::{MeteredInvoice, MeteredInvoiceKind};
-use crate::lifetimes::{INPUT_INVOICE_EXPIRY_SECS, OUTPUT_INVOICE_EXPIRY_SECS};
+use crate::lifetimes::{DEPOSIT_INVOICE_EXPIRY_SECS, FINAL_INVOICE_EXPIRY_SECS};
 use crate::service::{Arrival, PaymentService};
 use crate::wallet::{PaymentStatus, Transaction};
 
@@ -210,8 +210,8 @@ impl PaymentService {
             return Ok(Some(receipt.invoice));
         }
         let expiry = match kind {
-            MeteredInvoiceKind::Deposit => INPUT_INVOICE_EXPIRY_SECS,
-            MeteredInvoiceKind::Final => OUTPUT_INVOICE_EXPIRY_SECS,
+            MeteredInvoiceKind::Deposit => DEPOSIT_INVOICE_EXPIRY_SECS,
+            MeteredInvoiceKind::Final => FINAL_INVOICE_EXPIRY_SECS,
         };
         let invoice = self
             .wallet()

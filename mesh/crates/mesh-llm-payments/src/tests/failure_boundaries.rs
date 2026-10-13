@@ -2,7 +2,7 @@ use super::*;
 use std::time::Duration;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn simultaneous_requests_only_pay_one_with_one_reservation_available() -> Result<()> {
+async fn simultaneous_payments_only_pay_what_the_daily_budget_allows() -> Result<()> {
     let directory = tempfile::tempdir()?;
     let wallet = Arc::new(MockWallet::default());
     let service = Arc::new(PaymentService::with_provider(
@@ -24,10 +24,11 @@ async fn simultaneous_requests_only_pay_one_with_one_reservation_available() -> 
             if service.await_authorization(&terms(&id, 700)).await.is_err() {
                 return Ok::<_, anyhow::Error>(false);
             }
-            service
+            // Approval reserves nothing; the budget is checked per payment.
+            Ok(service
                 .pay_charge(&charge(&id, 0, number, 600, 700))
-                .await?;
-            Ok(true)
+                .await
+                .is_ok())
         });
     }
     let mut approved = 0;
@@ -36,12 +37,12 @@ async fn simultaneous_requests_only_pay_one_with_one_reservation_available() -> 
     }
     assert_eq!(approved, 1);
     assert_eq!(wallet.calls.load(Ordering::SeqCst), 1);
-    assert_eq!(service.ledger.available_budget(crate::now_ms())?, 300);
+    assert_eq!(service.ledger.available_budget(crate::now_ms())?, 390);
     let winner = service
         .ledger
         .requests()?
         .into_iter()
-        .find(|r| r.state == "approved")
+        .find(|r| r.spent_msat > 0)
         .unwrap();
     assert_eq!(winner.spent_msat, 610);
     service.ledger.finish(&winner.terms.id)?;
@@ -145,11 +146,7 @@ async fn assert_pending_survives_outage_and_expiry(
     assert_eq!(wallet.calls.load(Ordering::SeqCst), 1);
     assert_eq!(service.ledger.pending_charges()?.len(), 1);
     assert!(service.ledger.finish("uncertain").is_err());
-    assert!(
-        service
-            .await_authorization(&terms("second", 700))
-            .await
-            .is_err()
-    );
+    // The uncertain charge holds only its own amount, not a reservation.
+    service.await_authorization(&terms("second", 700)).await?;
     Ok(())
 }

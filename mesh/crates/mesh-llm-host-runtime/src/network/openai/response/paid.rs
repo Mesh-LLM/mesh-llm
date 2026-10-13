@@ -257,7 +257,7 @@ pub(crate) async fn start(
 }
 
 /// The buyer's own spending cap for this request: the effective policy's
-/// per-request total, bounded by what is left of today's budget. No prompt
+/// per-request total, as long as some of today's budget is left. No prompt
 /// estimate: the bill is whatever the backend reports, refused only if it
 /// exceeds this cap. Reserved locally; the seller never sees it.
 async fn local_cap(payments: &Payments, request: &PaidRequest, price: &Pricing) -> Result<u64> {
@@ -276,9 +276,9 @@ async fn local_cap(payments: &Payments, request: &PaidRequest, price: &Pricing) 
     let PaymentIntent::AllowPaid { max_total_msat, .. } = budget.intent else {
         bail!("paid inference is excluded by spending policy or request restriction");
     };
-    let cap = max_total_msat.min(budget.available_msat);
+    let cap = max_total_msat;
     ensure!(
-        cap > 0 && budget.intent.permits(price, cap),
+        budget.available_msat > 0 && budget.intent.permits(price, cap),
         "seller prices or remaining budget exceed the spending policy"
     );
     Ok(cap)

@@ -411,10 +411,12 @@ small requests at those rates bill a few msat, which the payment floor waives.
 
 The payer reserves a routing-fee allowance for each inference payment of
 `max(3000 msat, 1% of the amount)` (`pricing::fee_allowance_msat`). Its local
-cap for a request is the effective policy's per-request `max_total_msat`,
-bounded by what remains of today's budget; there is no prompt estimate and no
-wallet-balance check before the request. The seller's rates must fit the
-policy's rate caps. The cap is reserved against the daily budget when the admission is accepted; the seller never sees it. At settlement the recomputed bill must
+cap for a request is the effective policy's per-request `max_total_msat`;
+there is no prompt estimate and no wallet-balance check before the request.
+The seller's rates must fit the policy's rate caps. Nothing is reserved when
+the admission is accepted: the daily budget is checked against each payment as
+it is prepared (today's settled spend plus payments in flight, fee caps
+included). The seller never sees the cap. At settlement the recomputed bill must
 not exceed the cap. The wallet is told `amount + fee_allowance` as the cap for
 each payment. A wallet that can bound fees must not submit a payment whose
 amount plus fees exceeds it; Lexe preflights a route and submits that same
@@ -458,14 +460,14 @@ per-token price caps or extra setup calls. Seller pricing is independent.
 
 Policy persists across restarts and mesh switches. `wallet policy` without flags
 reads it without changing it, returning `mode`, `daily_budget_msat`,
-`spent_today_msat`, `reserved_msat`, and `remaining_daily_budget_msat`. The latter
+`spent_today_msat`, `in_flight_msat`, and `remaining_daily_budget_msat`. The latter
 is the budget allowance, not a guarantee of wallet funds. Reading policy does not
 provision a wallet. Applications use the same `policy` command through
 `POST /api/wallet`; no second setting is required.
 
 The budget uses UTC calendar days and actual settlement timestamps, including
-fees. Outstanding reservations carry across midnight. Authorization atomically
-checks the remaining budget. The wallet balance is not checked up front: a
+fees. Payments still in flight count against the budget, including across
+midnight. Each payment atomically checks the remaining budget. The wallet balance is not checked up front: a
 payment the wallet cannot make fails at payment time and the request is
 dropped. Switching to free-only stops new paid
 inference, but does not cancel already-submitted settlement. Manual

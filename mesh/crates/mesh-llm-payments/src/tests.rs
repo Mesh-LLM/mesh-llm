@@ -418,18 +418,14 @@ async fn one_policy_command_enables_paid_use_and_free_only_stops_new_work() -> R
         service.ledger.payment_intent()?,
         PaymentIntent::AllowPaid { .. }
     ));
+    // Approval reserves nothing: a second request fits alongside.
     service.await_authorization(&terms("paid", 700)).await?;
-    assert!(
-        service
-            .await_authorization(&terms("over", 400))
-            .await
-            .is_err()
-    );
+    service.await_authorization(&terms("also", 400)).await?;
     let status = service
         .control(ControlCommand::Policy { value: None })
         .await?;
-    assert_eq!(status["reserved_msat"], 700);
-    assert_eq!(status["remaining_daily_budget_msat"], 300);
+    assert_eq!(status["in_flight_msat"], 0);
+    assert_eq!(status["remaining_daily_budget_msat"], 1000);
     service
         .control(ControlCommand::Policy {
             value: Some(Policy::default()),
@@ -448,7 +444,7 @@ async fn one_policy_command_enables_paid_use_and_free_only_stops_new_work() -> R
         .control(ControlCommand::Policy { value: None })
         .await?;
     assert_eq!(status["spent_today_msat"], 110);
-    assert_eq!(status["reserved_msat"], 0);
+    assert_eq!(status["in_flight_msat"], 0);
     assert_eq!(status["remaining_daily_budget_msat"], 0);
     assert_eq!(wallet.calls.load(Ordering::SeqCst), 1);
     Ok(())

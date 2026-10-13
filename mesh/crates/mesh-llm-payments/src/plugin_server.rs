@@ -276,7 +276,7 @@ fn add_serving_ops(router: &mut OperationRouter, source: &ServiceSource) {
         "Wait for receiver-side evidence of an incoming payment.",
         |service, request: InvoiceRequest| async move {
             let claiming = service
-                .arrival(&request.invoice, crate::lifetimes::INPUT_ARRIVAL_WAIT)
+                .arrival(&request.invoice, crate::lifetimes::DEPOSIT_ARRIVAL_WAIT)
                 .await?;
             Ok(ArrivalResponse { claiming })
         },
