@@ -98,7 +98,7 @@ async fn serve_admitted(
         .metered_invoice(
             &session.terms.id,
             &session.peer,
-            0,
+            mesh_llm_payments::ledger::metered_invoices::MeteredInvoiceKind::Deposit,
             session.terms.deposit_msat,
         )
         .await?;
@@ -125,7 +125,7 @@ async fn serve_admitted(
         session
             .service
             .ledger
-            .mark_received(&invoice.payment_hash)?;
+            .mark_metered_received(&invoice.payment_hash)?;
     }
     if !session
         .service
@@ -317,7 +317,9 @@ async fn settle(
     .await?;
     if let Some(invoice) = invoice {
         service.wait_received(&invoice).await?;
-        service.ledger.mark_received(&invoice.payment_hash)?;
+        service
+            .ledger
+            .mark_metered_received(&invoice.payment_hash)?;
     }
     service.metered_note_settled(id, peer).await?;
     wire::write(writer, &Frame::Complete {}).await

@@ -247,7 +247,12 @@ async fn partial_backend_submission_abandons_without_bill_and_keeps_dispatch_cla
         require_deposit: true,
     })?;
     let invoice = service
-        .metered_invoice("partial", "buyer", 0, deposit_msat)
+        .metered_invoice(
+            "partial",
+            "buyer",
+            mesh_llm_payments::ledger::metered_invoices::MeteredInvoiceKind::Deposit,
+            deposit_msat,
+        )
         .await?
         .unwrap();
     // Authoritative incoming wallet fact before dispatch.

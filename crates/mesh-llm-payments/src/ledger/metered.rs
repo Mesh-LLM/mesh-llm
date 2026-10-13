@@ -25,9 +25,8 @@ const DEPOSIT_TENTHS: u128 = 3;
 /// Distinct issued, unpaid final invoices at which a buyer is refused.
 pub const STRIKE_LIMIT: u64 = 3;
 
-const UNPAID_FINALS: &str = "SELECT COUNT(*) FROM metered_requests m \
-    WHERE m.peer=?1 AND m.state='billed' AND EXISTS(\
-    SELECT 1 FROM receivables WHERE request_id=m.id AND segment=1 AND state!='paid')";
+const UNPAID_FINALS: &str =
+    "SELECT COUNT(*) FROM metered_invoices WHERE peer=?1 AND kind='final' AND state='unpaid'";
 
 /// Admission inputs. The deposit is 0.3 x estimated input cost when
 /// `require_deposit`; the provider skips it for peers in its trust cache.
@@ -122,10 +121,6 @@ impl Ledger {
             "buyer has {unpaid} unpaid final invoices"
         );
         tx.execute(
-            "INSERT INTO serving_requests(id,peer) VALUES (?1,?2)",
-            params![id, peer],
-        )?;
-        tx.execute(
             "INSERT INTO metered_requests(id,peer,pricing,estimated_input_tokens,require_deposit,deposit_msat,state) VALUES (?1,?2,?3,?4,?5,?6,'admitted')",
             params![
                 id,
@@ -204,7 +199,7 @@ impl Ledger {
     pub fn metered_settlement(&self, id: &str) -> Result<MeteredSettlement> {
         let connection = self.lock()?;
         let row = connection.query_row(
-            "SELECT m.state,m.outcome,m.bill_msat,m.deposit_paid_msat,m.remaining_msat, EXISTS(SELECT 1 FROM receivables WHERE request_id=m.id AND segment=1 AND state='paid') FROM metered_requests m WHERE m.id=?",
+            "SELECT m.state,m.outcome,m.bill_msat,m.deposit_paid_msat,m.remaining_msat, EXISTS(SELECT 1 FROM metered_invoices WHERE request_id=m.id AND kind='final' AND state='paid') FROM metered_requests m WHERE m.id=?",
             [id],
             |r| {
                 Ok((
@@ -299,41 +294,9 @@ impl Ledger {
     }
 }
 
-/// Refuse a metered receivable that does not match current state: segment 0
-/// must be the admitted deposit on a still-admitted row; segment 1 must equal
-/// the `remaining_msat` of a billed row. Non-metered rows pass through.
-pub(super) fn check_metered_receivable(
-    tx: &Transaction<'_>,
-    receipt: &super::receivables::Receivable,
-) -> Result<()> {
-    let row: Option<(String, u64, u64)> = tx
-        .query_row(
-            "SELECT state,deposit_msat,remaining_msat FROM metered_requests WHERE id=?",
-            [&receipt.request_id],
-            |r| Ok((r.get(0)?, read_amount(r, 1)?, read_amount(r, 2)?)),
-        )
-        .optional()?;
-    let Some((state, deposit, remaining)) = row else {
-        return Ok(());
-    };
-    let amount = receipt.invoice.amount_msat;
-    match receipt.segment {
-        0 => ensure!(
-            state == "admitted" && deposit > 0 && amount == Some(deposit),
-            "metered deposit invoice does not match admitted deposit"
-        ),
-        1 => ensure!(
-            state == "billed" && remaining > 0 && amount == Some(remaining),
-            "metered final invoice must equal the billed remainder"
-        ),
-        _ => bail!("metered requests have only segments 0 and 1"),
-    }
-    Ok(())
-}
-
 fn deposit_paid(tx: &Transaction<'_>, id: &str) -> Result<bool> {
     Ok(tx.query_row(
-        "SELECT EXISTS(SELECT 1 FROM receivables WHERE request_id=? AND segment=0 AND state='paid')",
+        "SELECT EXISTS(SELECT 1 FROM metered_invoices WHERE request_id=? AND kind='deposit' AND state='paid')",
         [id],
         |r| r.get(0),
     )?)

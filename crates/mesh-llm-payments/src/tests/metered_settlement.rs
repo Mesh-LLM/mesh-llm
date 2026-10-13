@@ -2,7 +2,7 @@
 use super::invoice;
 use crate::ledger::Ledger;
 use crate::ledger::metered::{MeteredOutcome, MeteredRequest, MeteredStatus, STRIKE_LIMIT};
-use crate::ledger::receivables::Receivable;
+use crate::ledger::metered_invoices::{MeteredInvoice, MeteredInvoiceKind};
 use crate::pricing::Pricing;
 use mesh_llm_payments_types::metering::MeteredUsage;
 
@@ -25,17 +25,20 @@ fn usage(prompt: u64, completion: u64) -> MeteredOutcome {
 fn record(ledger: &Ledger, id: &str, segment: u32, n: u8, amount: u64, paid: bool) {
     let inv = invoice(n, amount);
     ledger
-        .record_receivable(&Receivable {
+        .record_metered_invoice(&MeteredInvoice {
             request_id: id.into(),
             peer: "peer".into(),
-            segment,
+            kind: if segment == 0 {
+                MeteredInvoiceKind::Deposit
+            } else {
+                MeteredInvoiceKind::Final
+            },
             invoice: inv.clone(),
-            tokens: 0,
             paid: false,
         })
         .unwrap();
     if paid {
-        ledger.mark_received(&inv.payment_hash).unwrap();
+        ledger.mark_metered_received(&inv.payment_hash).unwrap();
     }
 }
 
@@ -128,7 +131,8 @@ fn unpaid_deposit_never_reduces_the_bill() {
     let s = l.metered_finalize("u", usage(900, 200)).unwrap();
     assert_eq!((s.deposit_paid_msat, s.remaining_msat), (0, 1100));
     // A deposit arriving after finalize changes nothing already fixed.
-    l.mark_received(&invoice(1, 300).payment_hash).unwrap();
+    l.mark_metered_received(&invoice(1, 300).payment_hash)
+        .unwrap();
     assert_eq!(l.metered_settlement("u").unwrap().remaining_msat, 1100);
 }
 
@@ -167,7 +171,8 @@ fn three_issued_unpaid_final_invoices_block_admission() {
     assert!(admit(&l, "blocked", 10, true).is_err());
     // Deposits and abandoned requests never count; paying one final unblocks.
     assert_eq!(l.metered_unpaid_finals("other").unwrap(), 0);
-    l.mark_received(&invoice(1, 20).payment_hash).unwrap();
+    l.mark_metered_received(&invoice(1, 20).payment_hash)
+        .unwrap();
     assert_eq!(l.metered_unpaid_finals("peer").unwrap(), STRIKE_LIMIT - 1);
     admit(&l, "again", 10, true).unwrap();
 }
@@ -216,12 +221,15 @@ fn dispatch_claim_is_once_only_and_survives_restart() {
 }
 
 fn try_record(l: &Ledger, id: &str, segment: u32, n: u8, amount: u64) -> anyhow::Result<()> {
-    l.record_receivable(&Receivable {
+    l.record_metered_invoice(&MeteredInvoice {
         request_id: id.into(),
         peer: "peer".into(),
-        segment,
+        kind: if segment == 0 {
+            MeteredInvoiceKind::Deposit
+        } else {
+            MeteredInvoiceKind::Final
+        },
         invoice: invoice(n, amount),
-        tokens: 0,
         paid: false,
     })
 }
@@ -237,7 +245,8 @@ fn metered_receivables_must_match_current_state() {
         "no final before bill"
     );
     try_record(&l, "s", 0, 22, 300).unwrap();
-    l.mark_received(&invoice(22, 300).payment_hash).unwrap();
+    l.mark_metered_received(&invoice(22, 300).payment_hash)
+        .unwrap();
     let s = l.metered_finalize("s", usage(900, 200)).unwrap();
     assert_eq!(s.remaining_msat, 800);
     assert!(try_record(&l, "s", 1, 23, 1100).is_err());

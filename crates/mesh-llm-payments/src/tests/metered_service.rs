@@ -1,6 +1,7 @@
 //! Real service startup and wallet-observation boundaries for metered requests.
 use super::*;
 use crate::ledger::metered::{MeteredOutcome, MeteredRequest, MeteredStatus};
+use crate::ledger::metered_invoices::MeteredInvoiceKind;
 use mesh_llm_payments_types::{metered_wire::AdmissionTerms, metering::MeteredUsage};
 
 fn rates() -> Pricing {
@@ -53,13 +54,16 @@ async fn final_invoice_is_the_billed_remainder_and_settles_trust() {
     let service = PaymentService::with_provider(dir.path(), wallet.clone()).unwrap();
     admit(&service, "r");
     let deposit = service
-        .metered_invoice("r", "peer", 0, 300)
+        .metered_invoice("r", "peer", MeteredInvoiceKind::Deposit, 300)
         .await
         .unwrap()
         .unwrap();
     // The same persisted invoice is returned on retry.
     assert_eq!(
-        service.metered_invoice("r", "peer", 0, 300).await.unwrap(),
+        service
+            .metered_invoice("r", "peer", MeteredInvoiceKind::Deposit, 300)
+            .await
+            .unwrap(),
         Some(deposit.clone())
     );
     received(&wallet, &deposit);
@@ -106,7 +110,7 @@ async fn restart_abandons_in_flight_requests_and_never_redispatches() {
         admit(&service, "dispatched");
         admit(&service, "never");
         deposit = service
-            .metered_invoice("never", "peer", 0, 300)
+            .metered_invoice("never", "peer", MeteredInvoiceKind::Deposit, 300)
             .await
             .unwrap()
             .unwrap();
@@ -241,19 +245,18 @@ async fn expired_nonpayment_survives_restart_and_requires_deposit_in_later_sessi
         service.ledger.metered_finalize("unpaid", report()).unwrap();
         service
             .ledger
-            .record_receivable(&crate::ledger::receivables::Receivable {
+            .record_metered_invoice(&crate::ledger::metered_invoices::MeteredInvoice {
                 request_id: "unpaid".into(),
                 peer: "peer".into(),
-                segment: 1,
+                kind: crate::ledger::metered_invoices::MeteredInvoiceKind::Final,
                 invoice: expired.clone(),
-                tokens: 0,
                 paid: false,
             })
             .unwrap();
         assert_eq!(service.ledger.metered_unpaid_finals("peer").unwrap(), 1);
     }
     let service = PaymentService::with_provider(dir.path(), wallet).unwrap();
-    let debts = service.ledger.receivables(Some("unpaid")).unwrap();
+    let debts = service.ledger.metered_invoices(Some("unpaid")).unwrap();
     assert_eq!(debts.len(), 1);
     assert_eq!(debts[0].invoice, expired);
     assert!(!debts[0].paid);
@@ -300,7 +303,10 @@ async fn expired_nonpayment_survives_restart_and_requires_deposit_in_later_sessi
     }
     // Clearing only the invoice debt now restores the already re-earned
     // standing, proving the earlier denial was not merely an empty cache.
-    service.ledger.mark_received(&expired.payment_hash).unwrap();
+    service
+        .ledger
+        .mark_metered_received(&expired.payment_hash)
+        .unwrap();
     assert!(service.metered_trusted("peer").await.unwrap());
     assert_eq!(service.ledger.metered_unpaid_finals("peer").unwrap(), 0);
 }

@@ -150,7 +150,7 @@ async fn qualify(
                 .and_then(|rows| Ok(serde_json::to_string(&rows)?)),
             seller
                 .ledger
-                .receivables(None)
+                .metered_invoices(None)
                 .and_then(|rows| Ok(serde_json::to_string(&rows)?)),
             buyer.ledger.policy_status(mesh_llm_payments::now_ms()),
             seller.ledger.metered_unpaid_finals(&payer.id().to_string())
@@ -235,7 +235,13 @@ async fn exchanges(
             buyer.ledger.policy_status(mesh_llm_payments::now_ms())?["reserved_msat"],
             0
         );
-        assert!(seller.ledger.receivables(None)?.iter().all(|row| row.paid));
+        assert!(
+            seller
+                .ledger
+                .metered_invoices(None)?
+                .iter()
+                .all(|row| row.paid)
+        );
         assert_settled_requests(buyer, seller, completed)?;
     }
     Ok(())
@@ -271,7 +277,7 @@ async fn wait_for_completion(
                 .and_then(|rows| Ok(serde_json::to_string(&rows)?)),
             seller
                 .ledger
-                .receivables(None)
+                .metered_invoices(None)
                 .and_then(|rows| Ok(serde_json::to_string(&rows)?))
         )
     })??;

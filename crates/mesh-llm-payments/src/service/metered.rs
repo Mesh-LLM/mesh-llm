@@ -3,7 +3,11 @@ use anyhow::{Context, Result, ensure};
 use mesh_llm_payments_types::metered_wire::AdmissionTerms;
 
 use super::PaymentService;
-use crate::{invoice::Invoice, ledger::receivables::Receivable, wallet::PaymentStatus};
+use crate::{
+    invoice::Invoice,
+    ledger::metered_invoices::{MeteredInvoice, MeteredInvoiceKind},
+    wallet::PaymentStatus,
+};
 
 impl PaymentService {
     /// Submit new v2 charges once; an uncertain existing submission is only
@@ -112,7 +116,7 @@ impl PaymentService {
         Ok(self.metered_standing.lock().await.contains(peer)
             && !self
                 .ledger
-                .receivables(None)?
+                .metered_invoices(None)?
                 .iter()
                 .any(|r| r.peer == peer && !r.paid && r.invoice.expires_at_ms <= crate::now_ms()))
     }
@@ -136,7 +140,7 @@ impl PaymentService {
         &self,
         id: &str,
         peer: &str,
-        segment: u32,
+        kind: MeteredInvoiceKind,
         amount: u64,
     ) -> Result<Option<Invoice>> {
         if amount == 0 {
@@ -145,9 +149,9 @@ impl PaymentService {
         let _guard = self.receivable_lock.lock().await;
         if let Some(receipt) = self
             .ledger
-            .receivables(Some(id))?
+            .metered_invoices(Some(id))?
             .into_iter()
-            .find(|r| r.segment == segment)
+            .find(|r| r.kind == kind)
         {
             ensure!(
                 receipt.peer == peer && receipt.invoice.amount_msat == Some(amount),
@@ -155,7 +159,7 @@ impl PaymentService {
             );
             return Ok(Some(receipt.invoice));
         }
-        let expiry = if segment == 0 {
+        let expiry = if kind == MeteredInvoiceKind::Deposit {
             crate::lifetimes::INPUT_INVOICE_EXPIRY_SECS
         } else {
             crate::lifetimes::OUTPUT_INVOICE_EXPIRY_SECS
@@ -170,12 +174,11 @@ impl PaymentService {
             invoice.amount_msat == Some(amount),
             "wallet changed invoice amount"
         );
-        self.ledger.record_receivable(&Receivable {
+        self.ledger.record_metered_invoice(&MeteredInvoice {
             request_id: id.into(),
             peer: peer.into(),
-            segment,
+            kind,
             invoice: invoice.clone(),
-            tokens: 0,
             paid: false,
         })?;
         Ok(Some(invoice))
@@ -192,9 +195,9 @@ impl PaymentService {
         ensure!(owner == peer, "metered invoice peer mismatch");
         if let Some(receipt) = self
             .ledger
-            .receivables(Some(id))?
+            .metered_invoices(Some(id))?
             .into_iter()
-            .find(|r| r.segment == 1)
+            .find(|r| r.kind == MeteredInvoiceKind::Final)
         {
             return Ok(Some(receipt.invoice));
         }
@@ -202,13 +205,18 @@ impl PaymentService {
         if settlement.status != crate::ledger::metered::MeteredStatus::Billed {
             return Ok(None);
         }
-        self.metered_invoice(id, peer, 1, settlement.remaining_msat)
-            .await
+        self.metered_invoice(
+            id,
+            peer,
+            MeteredInvoiceKind::Final,
+            settlement.remaining_msat,
+        )
+        .await
     }
 
     /// Refresh incoming facts only; never invoke legacy input/output recovery.
     pub async fn metered_refresh(&self, id: &str) -> Result<()> {
-        for receipt in self.ledger.receivables(Some(id))? {
+        for receipt in self.ledger.metered_invoices(Some(id))? {
             if !receipt.paid
                 && let Some(payment) = self
                     .wallet()
@@ -223,7 +231,8 @@ impl PaymentService {
                             >= receipt.invoice.amount_msat.context("amountless invoice")?,
                         "incoming underpayment"
                     );
-                    self.ledger.mark_received(&receipt.invoice.payment_hash)?;
+                    self.ledger
+                        .mark_metered_received(&receipt.invoice.payment_hash)?;
                 }
             }
         }
