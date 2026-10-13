@@ -1106,6 +1106,37 @@ Release-profile hosts are used for both selected PR rows and main rows. Besides
 keeping product semantics identical, this prevents unstripped debug binaries
 from being duplicated into every composed product artifact.
 
+### Standalone Skippy qualification
+
+The standalone Skippy product has its own typed qualification surface under
+`cargo xtool qualify` (module `tools/xtask/src/qualification/`), the Rust owner
+of the retired `skippy/scripts/*qualification*` Python suite. The verbs are
+`availability` (closed per-row hardware policy bound to a source SHA and plan
+digest), `verify-cli-input` (CLI producer bytes plus the embedded
+`build-contract` identity), `compose` (exact CLI + native-runtime composition
+into a `skippy-product-v1` manifest and `<output>.tar.gz`), `packaging`
+(archive census and re-verification evidence), `models` (dense, recurrent,
+moe, and kv-cache serving suites over the composed CLI), `laya` (System One
+and Decisions suites reusing the in-crate Laya drivers), `assemble` (receipt
+assembly with self-validation), `validate` (fail-closed receipt validation
+against the exact product bytes, availability record, and the nine-row
+`ci/slices.yml` runtime catalog), and `host-receipts` (the host-side
+`skippy-qualification-receipts.json` provenance record, one platform's rows
+with the mandatory row qualified). Planned artifact names for the workflow
+wiring are `ci-skippy-cli-<platform>-<arch>`,
+`ci-skippy-availability-<platform>-<arch>-<backend>`, `ci-skippy-packaging-…`,
+`ci-skippy-model-qualification-<platform>-<arch>`,
+`ci-skippy-laya-qualification-…`, `ci-skippy-receipt-<platform>-<arch>-<backend>`
+(7 days), `ci-skippy-product-<platform>-<arch>-<backend>`,
+`ci-host-skippy-receipts-<platform>-<arch>` (7 days), and the census artifacts
+`cargo-census-<kind>-<batch>-<attempt>` (1 day). Batch execution is recorded by
+`cargo xtool repository cargo-census` (schema `mesh-ci-cargo-census-v1`), and
+the packaging release correlation is awaited by `cargo xtool release
+await-packaging` (schema `mesh-packaging-readiness-v1`). A composed Mesh
+product binds the host record through `cargo xtool product compose
+--qualification-receipts` as the optional `skippy_qualification` manifest
+member (`schemas/product-v2.schema.json`).
+
 ## Provider and cache policy
 
 Windows platform checks apply the shared sccache policy immediately after

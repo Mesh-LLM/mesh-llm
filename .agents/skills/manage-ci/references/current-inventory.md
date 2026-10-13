@@ -828,6 +828,22 @@ sccache with short `C:\\s` and `C:\\t` roots, and every Windows native backend
 asks CMake to hash object paths at 180 characters before the legacy MAX_PATH
 boundary.
 
+The standalone Skippy qualification owners are xtask: `cargo xtool qualify
+{availability,verify-cli-input,compose,packaging,models,laya,assemble,validate,host-receipts}`
+own the per-row hardware policy, CLI input verification, standalone product
+composition and packaging evidence, serving suites, receipt assembly and
+validation, and the host `skippy-qualification-receipts.json` record. Their
+integration owners are `qualification_contract` and
+`qualification_await_packaging` in the required Quality roster.
+`cargo xtool repository cargo-census` records the executed Cargo package set of
+one Clippy or test batch (`mesh-ci-cargo-census-v1`), and
+`cargo xtool release await-packaging` consumes the correlated mesh-packaging
+readiness receipt (`mesh-packaging-readiness-v1`) through bounded `gh api`
+calls. `cargo xtool product compose --qualification-receipts` binds the host
+record into the v2 product manifest, auto-discovering
+`skippy-qualification-receipts.json` inside the bundle on recompose and
+`--check`.
+
 - `restore-release-ui` / `prepared-input ui-distribution`: verify the shared release
   console's source SHA, version, complete file hashes and built JavaScript entry
   before platform-specific Rust compilation or SDK resource packaging. The

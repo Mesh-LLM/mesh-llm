@@ -304,6 +304,8 @@ ci-automation-contracts:
         --test opencode_config_adapter \
         --test opencode_fixture_evidence \
         --test prepared_source \
+        --test qualification_await_packaging \
+        --test qualification_contract \
         --test release_inventory_evidence \
         --test release_inventory_provenance \
         --test release_inventory_publication \
