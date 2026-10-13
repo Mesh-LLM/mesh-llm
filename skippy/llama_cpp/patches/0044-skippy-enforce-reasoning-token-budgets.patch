@@ -1,4 +1,4 @@
-From 97c66065bc090e7c0bc2f3936514e929deb0ab4b Mon Sep 17 00:00:00 2001
+From a678d7da636acf52a99253b94fe27adf1a6d197d Mon Sep 17 00:00:00 2001
 From: scama
  <a1860575018c4680d5669dd7bc3bd356b478bccb8d42e194df46304a5e25f49a@meshllm.communities.buzz.xyz>
 Date: Tue, 15 Sep 2026 14:33:49 +1000
@@ -345,7 +345,7 @@ index 8b114e3e4..1b42f32c0 100644
  
  #ifdef __cplusplus
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index 161c74f3c..dfc8648c0 100644
+index d947ccd3b..26eacabcb 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
 @@ -66,6 +66,7 @@ add_library(llama

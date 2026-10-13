@@ -1,4 +1,4 @@
-From bbde3036a40a8bc1c315f84bbe8ba42ac87d949b Mon Sep 17 00:00:00 2001
+From 25c0a3b4209d427ba578448a38595ce12ab476a5 Mon Sep 17 00:00:00 2001
 From: James Dumay <jameswdumay@gmail.com>
 Date: Sat, 19 Sep 2026 15:17:59 +1000
 Subject: [PATCH] test: cover graph-derived stage contracts
@@ -9,7 +9,7 @@ Subject: [PATCH] test: cover graph-derived stage contracts
  src/skippy/tests/noalloc_graph_planning.cpp   | 1088 ++++++++++++
  .../tests/renamed_multishard_planning.cpp     | 1512 +++++++++++++++++
  src/skippy/tests/runtime_events.cpp           |  489 ++++++
- src/skippy/tests/sampling_history.cpp         |  248 +++
+ src/skippy/tests/sampling_history.cpp         |  263 +++
  src/skippy/tests/stage_plan_header.c          |   10 +
  src/skippy/tests/stage_plan_header.cpp        |   13 +
  src/skippy/tests/stage_slice_plan.cpp         | 1146 +++++++++++++
@@ -23,7 +23,7 @@ Subject: [PATCH] test: cover graph-derived stage contracts
  tests/test-skippy-model-loader-accounting.cpp |  326 ++++
  .../test-skippy-recurrent-state-roundtrip.cpp |  159 ++
  ...st-skippy-verify-checkpoint-retirement.cpp |   26 +
- 19 files changed, 6522 insertions(+), 23 deletions(-)
+ 19 files changed, 6537 insertions(+), 23 deletions(-)
  create mode 100644 src/skippy/tests/graph_build_inputs.cpp
  create mode 100644 src/skippy/tests/hardware_application_probe.cpp
  create mode 100644 src/skippy/tests/noalloc_graph_planning.cpp
@@ -3856,16 +3856,17 @@ index 000000000..1f0dfbeb9
 +}
 diff --git a/src/skippy/tests/sampling_history.cpp b/src/skippy/tests/sampling_history.cpp
 new file mode 100644
-index 000000000..a52a94736
+index 000000000..cbc02d616
 --- /dev/null
 +++ b/src/skippy/tests/sampling_history.cpp
-@@ -0,0 +1,248 @@
+@@ -0,0 +1,263 @@
 +#include "skippy.h"
 +#include "../runtime_types.h"
 +#include "llama-model.h"
 +
 +#include <cstdio>
 +#include <cstdlib>
++#include <cstring>
 +#include <vector>
 +
 +#define CHECK(condition) do { if (!(condition)) { \
@@ -3873,6 +3874,8 @@ index 000000000..a52a94736
 +    std::exit(1); } } while (0)
 +
 +namespace {
++
++bool require_recurrent = false;
 +
 +void ok(skippy_status status, skippy_error * error) {
 +    if (status != SKIPPY_STATUS_OK) {
@@ -3955,6 +3958,9 @@ index 000000000..a52a94736
 +            skippy_error_free(error);
 +            error = nullptr;
 +            recurrent.resize(bytes);
++            // Hybrid cases must restore real recurrent tensors, not quietly
++            // exercise only the dense KV path with an empty side payload.
++            CHECK(!require_recurrent || !recurrent.empty());
 +            if (bytes > 0) {
 +                const auto result = skippy_export_recurrent_state(source, recurrent.data(), bytes, &bytes, &error);
 +                ok(result, error);
@@ -4088,7 +4094,11 @@ index 000000000..a52a94736
 +} // namespace
 +
 +int main(int argc, char ** argv) {
-+    CHECK(argc == 2);
++    CHECK(argc == 4);
++    const bool grammar = std::strcmp(argv[2], "grammar") == 0;
++    CHECK(grammar || std::strcmp(argv[2], "penalty") == 0);
++    CHECK(std::strcmp(argv[3], "dense") == 0 || std::strcmp(argv[3], "recurrent") == 0);
++    require_recurrent = std::strcmp(argv[3], "recurrent") == 0;
 +    auto config = skippy_runtime_config_default();
 +    config.selected_backend_device = "CPU";
 +    config.ctx_size = 512;
@@ -4097,12 +4107,17 @@ index 000000000..a52a94736
 +    const auto status = skippy_model_open(argv[1], &config, &model, &error);
 +    ok(status, error);
 +    for (const bool full : {false, true}) {
-+        penalty_restore(model, full);
-+        for (const bool lazy : {false, true}) {
-+            grammar_restore(model, full, lazy);
++        if (grammar) {
++            for (const bool lazy : {false, true}) {
++                grammar_restore(model, full, lazy);
++            }
++        } else {
++            penalty_restore(model, full);
 +        }
 +    }
-+    generated_prefix_restore(model);
++    if (grammar) {
++        generated_prefix_restore(model);
++    }
 +    error = nullptr;
 +    const auto freed = skippy_model_free(model, &error);
 +    ok(freed, error);
@@ -6943,6 +6958,3 @@ index 000000000..d09acccb4
 +    if (skippy_retire_verify_checkpoint_exact(checkpoints, 10, 3)) return 6;
 +    return 0;
 +}
--- 
-2.56.0
-

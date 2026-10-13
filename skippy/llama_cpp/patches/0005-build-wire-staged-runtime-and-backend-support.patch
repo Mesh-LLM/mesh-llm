@@ -1,4 +1,4 @@
-From bd375e5a45d856b836a7d430e03c2bd1bc6a5178 Mon Sep 17 00:00:00 2001
+From 7a0e41fa83a05d1f86b28c555ef7b379a8e16243 Mon Sep 17 00:00:00 2001
 From: James Dumay <jameswdumay@gmail.com>
 Date: Sat, 19 Sep 2026 15:17:50 +1000
 Subject: [PATCH] build: wire staged runtime and backend support
@@ -9,8 +9,8 @@ Subject: [PATCH] build: wire staged runtime and backend support
  ggml/src/ggml-cuda/ggml-cuda.cu         |   7 +-
  ggml/src/ggml-metal/ggml-metal-device.m | 191 ++++++++++-
  ggml/src/ggml-metal/ggml-metal-impl.h   |  34 +-
- src/CMakeLists.txt                      | 431 ++++++++++++++++++++++++
- 6 files changed, 665 insertions(+), 24 deletions(-)
+ src/CMakeLists.txt                      | 439 ++++++++++++++++++++++++
+ 6 files changed, 673 insertions(+), 24 deletions(-)
 
 diff --git a/CMakeLists.txt b/CMakeLists.txt
 index 8a874c96e..beb8af2a7 100644
@@ -451,7 +451,7 @@ index 490dd83a1..3f8e638eb 100644
      int32_t  n_tokens;
      int32_t  n_iter;
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index afdaddc79..57745f9fc 100644
+index afdaddc79..b3a03a2d7 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
 @@ -46,6 +46,34 @@ set(LLAMA_CORE_SOURCES
@@ -489,7 +489,7 @@ index afdaddc79..57745f9fc 100644
              unicode.h
              ${LLAMA_MODELS_SOURCES}
              )
-@@ -62,16 +90,419 @@ set_target_properties(llama PROPERTIES
+@@ -62,16 +90,427 @@ set_target_properties(llama PROPERTIES
  set_source_files_properties(${LLAMA_CORE_SOURCES} ../include/llama.h unicode.h
      PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON)
  
@@ -658,10 +658,18 @@ index afdaddc79..57745f9fc 100644
 +    target_include_directories(skippy-sampling-history PRIVATE .)
 +    target_compile_features(skippy-sampling-history PRIVATE cxx_std_17)
 +    target_link_libraries(skippy-sampling-history PRIVATE llama)
-+    add_test(NAME skippy_sampling_history COMMAND skippy-sampling-history
-+        "${SKIPPY_MODEL_FIXTURE_DIR}/gemma-dense.gguf")
-+    set_tests_properties(skippy_sampling_history PROPERTIES
-+        FIXTURES_REQUIRED skippy-model-loader-fixtures)
++    function(add_skippy_sampling_history_tests family fixture state)
++        foreach(mode grammar penalty)
++            add_test(NAME skippy_sampling_history_${family}_${mode}
++                COMMAND skippy-sampling-history
++                    "${SKIPPY_MODEL_FIXTURE_DIR}/${family}-dense.gguf" ${mode} ${state})
++            set_tests_properties(skippy_sampling_history_${family}_${mode} PROPERTIES
++                FIXTURES_REQUIRED ${fixture})
++        endforeach()
++    endfunction()
++    add_skippy_sampling_history_tests(gemma skippy-model-loader-fixtures dense)
++    add_skippy_sampling_history_tests(qwen35 skippy-noalloc-qwen35-fixture recurrent)
++    add_skippy_sampling_history_tests(granitehybrid skippy-noalloc-granite-hybrid-fixture recurrent)
 +
 +    add_test(
 +        NAME skippy_generate_qwen3_fixture
@@ -909,6 +917,3 @@ index afdaddc79..57745f9fc 100644
 +    find_library(SKIPPY_ACCELERATE_FRAMEWORK Accelerate REQUIRED)
 +    target_link_libraries(llama PRIVATE ${SKIPPY_ACCELERATE_FRAMEWORK})
 +endif()
--- 
-2.56.0
-
