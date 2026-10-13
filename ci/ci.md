@@ -227,7 +227,10 @@ a branch moving later cannot change the selected source for that run.
 
 `llama-canary-family-pass.yml` owns the reusable build → family matrix → hosted
 aggregate. The producer performs prepare, manifest-policy, full native and Rust
-builds, generated-family validation, smoke, and split-roster checks. It validates
+builds, generated-family validation, smoke, and split-roster checks. It reads
+Git manifest, path-list and diff payloads through bounded raw capture, separately
+from redacted diagnostics, so ordinary model names containing `token` retain
+their exact bytes. Capture overflow or incomplete output fails admission. It validates
 the immutable HF cache before compilation. After preparing the exact llama.cpp
 pin, it reads GGUF tensor descriptors with that pin's GGML type table and
 compares each target's tensor byte sum with the manifest before any build.

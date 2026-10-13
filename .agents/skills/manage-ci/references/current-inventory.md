@@ -172,6 +172,9 @@ a branch moving later cannot change the selected source for that run.
 `llama-canary-family-pass.yml` owns the reusable build → family matrix → hosted
 aggregate. The protected controller prepares automation and invokes `canary-receipts build`
 with frozen controller/selected revisions, pass identity, budgets and previous-package admission.
+Package Git probes capture exact raw stdout with a 4 MiB ceiling before parsing
+manifests, enumerating source paths or hashing source diffs. Diagnostics remain
+redacted; failed or incomplete probes cannot publish a partial diff capture.
 Resumed repairs admit candidate-only feedback from the exact preceding pass,
 retain its immutable evidence snapshot throughout the wrapper, and render a
 bounded native summary for the repair prompt. Independent verification remains
