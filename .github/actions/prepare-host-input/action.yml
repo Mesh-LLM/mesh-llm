@@ -117,10 +117,17 @@ runs:
           chmod +x "$INPUT_OUTPUT_DIR/release-attestation-verifier"
         fi
 
-        cargo xtool native verify-host-dependencies \
-          "$binary_path" \
-          --report "$imports_path" \
-          --max-glibc declared
+        if [[ -n "${MESH_LLM_AUTOMATION_BIN:-}" ]]; then
+          "$MESH_LLM_AUTOMATION_BIN" native verify-host-dependencies \
+            "$binary_path" \
+            --report "$imports_path" \
+            --max-glibc declared
+        else
+          cargo xtool native verify-host-dependencies \
+            "$binary_path" \
+            --report "$imports_path" \
+            --max-glibc declared
+        fi
         if command -v sha256sum >/dev/null 2>&1; then
           checksum="$(sha256sum "$binary_path" | awk '{print $1}')"
         else

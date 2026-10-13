@@ -43,6 +43,22 @@ preparation may use step-local Cargo home and target directories outside the
 measured paths before preflight, without populating the measured compiler cache.
 Neither exception permits product compilation in composition-only consumers.
 
+Automation is compiled at most once per run and platform for product-source
+work, never once per job. Each platform lane has one `product_automation_*`
+producer (`product-automation-artifact.yml` through `upload-automation` with
+the `product-clean` source profile) that compiles `xtask` for the lane's
+`source_sha` on a GitHub-hosted runner with a read-only token and no secrets.
+Host, runtime, product, Rust-test and static-ABI jobs of that lane declare it in
+`needs` and restore it through `restore-automation`, which checks the
+producer's source, artifact ID, executable digest and runner OS/architecture;
+they never rebuild it and never fall back to `prepare-automation`. Its artifact
+name carries a `product-` prefix, so it cannot collide with or stand in for the
+protected `authority_*` artifacts, and it retains for one day. Jobs that must
+not wait on a producer (planners, commit convention, lane summaries) use
+`prepare-automation` with the `hosted-bare` profile, which restores an exact-key
+cached release executable and compiles only on a miss; the protected authority
+producers opt out of that cache so their bytes are always compiled in-run.
+
 Do not implement Python emulation in xtask: repr/str formatting, argparse or
 JSON quirks, interpreter-limit emulation, or vendored parser/entity tables for
 parity. Do not commit differential oracle tests that invoke Python. Legacy
@@ -440,6 +456,11 @@ checked-in expiry are the maintainer-controlled approval boundary.
   before reuse. Never store credentials or private endpoints in a cache.
 - Artifacts move outputs within a run; caches accelerate regeneration across
   runs. Do not use a cache as the producer/consumer correctness contract.
+  The hosted automation executable cache is therefore only an accelerator for
+  jobs without a producer dependency; it is keyed exactly on every compiled
+  input, is restored and saved only by the `hosted-bare` profile, and a miss
+  compiles locally. The image profile (possibly on Depot's repository-wide
+  cache namespace) never restores an executable.
 - PR and smoke-only artifacts default to one-day retention. Release evidence
   follows the release policy.
 

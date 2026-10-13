@@ -2,7 +2,8 @@
 
 L2 post-checkout planning and the five lane summaries use Rust through the
 closed `prepare-automation` hosted-bare profile. Only GitHub-hosted Linux may
-select it; locked release Cargo bypasses compiler wrappers and Just, while
+select it; locked release Cargo bypasses compiler wrappers and Just and reuses
+an exact-key cached release executable when present, while
 image callers retain verification and sccache unchanged. Quality convention
 and environment ownership checks, runner-contract cleanup, registry summary,
 and runtime-seed lifecycle have Rust callers. Runtime-seed preparation uses
@@ -1618,6 +1619,52 @@ No hosted execution or cross-platform native qualification is recorded here.
 The existing Windows unit platform row additionally prepares the repository automation tool and selects twenty exact native xtask binary methods: three build/path, seven installer-helper, eight whole-installer-consumer and two private-state handle-lock tests. Each method requires independent `--exact` listing and one passing nonignored result, followed by a verified count of twenty. It prebuilds the inert migration_generator_fixture PE through Just. A separate native Windows wrapper regression checks success, native nonzero propagation and missing-sccache refusal. This does not add a runner or planner row, select Unix-only composition fixtures on Windows, or replace live product/hardware acceptance. Portable/static fixtures remain in the normal Quality Rust roster.
 
 Windows row selection is conditional. This owning workflow edit maps through ci-control to all platform rows, and main/manual-full profiles select all rows. Standalone future changes under tools/xtask, just, Justfile or install.ps1 are not guaranteed to select Windows unit under the protected ownership catalog. The gate qualifies only a planner-selected Windows unit row; an unselected row records no native evidence. This proposal changes no protected catalog and adds no routing bypass.
+
+## Same-run product-source automation
+
+Product-source jobs no longer compile `xtask` once per job. The Linux, macOS and
+Windows lanes and the optional Linux CI canary each declare one
+`product_automation_<platform>` producer: `product-automation-artifact.yml`
+checks out the lane's exact `source_sha` (the canary's merge SHA) on a fixed
+GitHub-hosted runner with a read-only token, no secrets and no checkout
+credentials, and publishes it through `upload-automation` with the
+`product-clean` source profile. The artifact is named
+`automation-product-<os>-<arch>-<source_sha>-<lane>` with one-day retention, so
+it cannot collide with the protected `automation-<os>-<arch>-<sha>-<lane>`
+authority artifact, and `product-clean` claims no protected authority. Its
+`identity_json` output (source SHA, artifact ID, executable digest, producer
+OS/architecture) is the only value consumers receive.
+
+The static ABI producer, Rust test batches, host, native-runtime and product
+composition jobs of each lane list the producer in `needs`, take its identity as
+the `product_automation` input and run `restore-automation`, which verifies
+source, artifact ID, digest and that the producer ran on the same OS and
+architecture. They never rebuild xtask and have no `prepare-automation`
+fallback. The one exception is `static-abi-artifact.yml`, whose
+`product_automation` input is optional because the release SDK build calls it
+without a lane producer; it prepares automation only when the input is empty. `package-native-runtime.sh`,
+`prepare-host-input`, `prepare-skippy-cli-input` and `prepare-windows-host-input`
+run the restored executable when `MESH_LLM_AUTOMATION_BIN` is set and otherwise
+keep `cargo xtool`. The lane planner (`ci validate-lane`) lists the producers as
+required exactly when a restoring job is planned, so a selected consumer cannot
+run without its producer and an unplanned producer must be skipped.
+
+Jobs that must not wait on a producer keep `prepare-automation`: the planner and
+lane summaries, Quality commit convention, the release UI stamp and the
+Windows unit platform-check jobs, SDK and smoke consumers (they restore through
+`restore-smoke-inputs`, which already prefers an exported
+`MESH_LLM_AUTOMATION_BIN`), release, canary, nightly, Docker and warm-cache
+workflows. The `hosted-bare` profile now restores a release executable from an
+exact-key `actions/cache` entry (`xtask-hosted-bare-<os>-<arch>-<hash>` over
+`Cargo.lock`, `Cargo.toml`, `.cargo/config.toml`, the action file,
+`.github/cache-version.txt`, `tools/xtask/**`, `tools/trajectory-reader/**`,
+`mesh/crates/mesh-llm-release-footer/**`, the compiled-in JSON/script inputs and
+the Linux linker drivers), compiles only on a miss and saves on a miss. The image
+profile never restores or saves an executable. The protected authority producers
+pass `reuse-hosted-binary: false`, so their bytes are always compiled in the
+run from the frozen protected source. A first run after any hashed input changes
+is a cold miss. Pull requests execute main's reusable workflows, so none of this
+applies to a PR until it is merged. No hosted execution is recorded here.
 
 ## External Python SDK source preparation
 

@@ -61,12 +61,14 @@ impl Fixture {
         for (k, v) in extra {
             environment.insert((*k).into(), process::Value::Public(v.as_str().into()));
         }
+        let helper = owner("xtool() {", "\n# shellcheck disable=SC1091");
+        let body = format!("{helper}\n{body}");
         let raw = process::supervise_raw(
             &process::ProcessSpec {
                 executable: "/bin/bash".into(),
                 cwd: self.path().into(),
                 environment,
-                arguments: ["-euo", "pipefail", "-c", body]
+                arguments: ["-euo", "pipefail", "-c", body.as_str()]
                     .into_iter()
                     .map(|v| process::Value::Public(v.into()))
                     .collect(),

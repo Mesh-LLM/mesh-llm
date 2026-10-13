@@ -31,11 +31,19 @@ runs:
         mkdir -p "$INPUT_OUTPUT_DIR"
         cp "target/$profile_dir/skippy" "$INPUT_OUTPUT_DIR/skippy"
         chmod +x "$INPUT_OUTPUT_DIR/skippy"
-        cargo xtool native verify-host-dependencies \
-          "$INPUT_OUTPUT_DIR/skippy" \
-          --bind-sha256 \
-          --report "$INPUT_OUTPUT_DIR/host-imports.json" \
-          --max-glibc declared
+        if [[ -n "${MESH_LLM_AUTOMATION_BIN:-}" ]]; then
+          "$MESH_LLM_AUTOMATION_BIN" native verify-host-dependencies \
+            "$INPUT_OUTPUT_DIR/skippy" \
+            --bind-sha256 \
+            --report "$INPUT_OUTPUT_DIR/host-imports.json" \
+            --max-glibc declared
+        else
+          cargo xtool native verify-host-dependencies \
+            "$INPUT_OUTPUT_DIR/skippy" \
+            --bind-sha256 \
+            --report "$INPUT_OUTPUT_DIR/host-imports.json" \
+            --max-glibc declared
+        fi
         (cd "$INPUT_OUTPUT_DIR" && { command -v sha256sum >/dev/null && sha256sum skippy || shasum -a 256 skippy; }) > "$INPUT_OUTPUT_DIR/skippy.sha256"
     - name: Build and prepare Windows Skippy CLI
       if: runner.os == 'Windows'
@@ -59,7 +67,11 @@ runs:
         $destination = Join-Path $env:INPUT_OUTPUT_DIR 'skippy.exe'
         Copy-Item -LiteralPath $source -Destination $destination -Force
         $importsPath = Join-Path $env:INPUT_OUTPUT_DIR 'host-imports.json'
-        & cargo xtool native verify-host-dependencies $destination --report $importsPath --format pe --bind-sha256
+        if ($env:MESH_LLM_AUTOMATION_BIN) {
+          & $env:MESH_LLM_AUTOMATION_BIN native verify-host-dependencies $destination --report $importsPath --format pe --bind-sha256
+        } else {
+          & cargo xtool native verify-host-dependencies $destination --report $importsPath --format pe --bind-sha256
+        }
         if ($LASTEXITCODE -ne 0) { throw 'Skippy host import verification failed' }
         $checksum = (Get-FileHash -Algorithm SHA256 -LiteralPath $destination).Hash.ToLowerInvariant()
         "$checksum  skippy.exe" | Set-Content -Path (Join-Path $env:INPUT_OUTPUT_DIR 'skippy.exe.sha256') -NoNewline

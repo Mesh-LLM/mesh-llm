@@ -78,6 +78,10 @@ impl Fixture {
             "#!/bin/bash\nset -euo pipefail\n[[ $1 == xtool ]] || exit 92\nshift\nprintf 'verify\\n' >> \"$FIXTURE_ROOT/events\"\nexec \"$FIXTURE_XTASK\" \"$@\"\n",
         );
         executable(
+            &root.join("bin/automation"),
+            "#!/bin/bash\nset -euo pipefail\n[[ $1 != native ]] || printf 'verify\\n' >> \"$FIXTURE_ROOT/events\"\nexec \"$FIXTURE_XTASK\" \"$@\"\n",
+        );
+        executable(
             &root.join("bin/just"),
             "#!/bin/bash\nset -euo pipefail\n[[ $# == 1 && ( $1 == skippy-cli-build || $1 == skippy-cli-release-build ) ]] || exit 93\nprintf 'build|%s\\n' \"$1\" >> \"$FIXTURE_ROOT/events\"\nexit \"${BUILD_STATUS:-0}\"\n",
         );
@@ -108,7 +112,7 @@ impl Fixture {
             ("FIXTURE_XTASK", env!("CARGO_BIN_EXE_xtask").to_owned()),
             (
                 "MESH_LLM_AUTOMATION_BIN",
-                env!("CARGO_BIN_EXE_xtask").to_owned(),
+                self.root.join("bin/automation").display().to_string(),
             ),
             ("INSPECT_IMPORT", "libc.so.6".to_owned()),
             ("INPUT_PROFILE", "release".to_owned()),

@@ -27,6 +27,11 @@ on:
         required: false
         default: ''
         type: string
+      product_automation:
+        description: Optional same-run product-source automation identity JSON from the lane's product_automation producer (source SHA, artifact ID, executable digest, OS, architecture). When supplied the job restores that executable instead of compiling xtask.
+        required: false
+        default: ''
+        type: string
       source_sha:
         description: Immutable product source revision.
         required: false
@@ -183,7 +188,18 @@ jobs:
       - name: Verify prebuilt static ABI environment
         run: verify-runner-image public cpu
 
-      - uses: ./.github/actions/prepare-automation
+      - name: Restore product-source automation
+        if: ${{ inputs.product_automation != '' }}
+        uses: ./.github/actions/restore-automation
+        with:
+          source_sha: ${{ inputs.source_sha }}
+          artifact_id: ${{ fromJson(inputs.product_automation).artifact_id }}
+          binary_sha256: ${{ fromJson(inputs.product_automation).binary_sha256 }}
+          producer_os: ${{ fromJson(inputs.product_automation).producer_os }}
+          producer_arch: ${{ fromJson(inputs.product_automation).producer_arch }}
+      - name: Prepare automation for callers without a product-source producer
+        if: ${{ inputs.product_automation == '' }}
+        uses: ./.github/actions/prepare-automation
         with:
           allow_depot_remote_cache: ${{ needs.runner_policy.outputs.allow_depot_remote_cache }}
           allow_native_github_cache: ${{ needs.runner_policy.outputs.allow_native_github_cache }}

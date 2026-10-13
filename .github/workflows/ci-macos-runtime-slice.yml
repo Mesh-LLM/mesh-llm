@@ -23,6 +23,10 @@ on:
         required: false
         default: ''
         type: string
+      product_automation:
+        description: Same-run product-source automation identity JSON from the lane's product_automation producer (source SHA, artifact ID, executable digest, OS, architecture). The job restores that executable and never compiles xtask.
+        required: true
+        type: string
       source_sha:
         description: Immutable product source revision.
         required: true
@@ -118,6 +122,14 @@ jobs:
         with:
           ref: ${{ inputs.source_sha || github.sha }}
           persist-credentials: false
+      - name: Restore product-source automation
+        uses: ./.github/actions/restore-automation
+        with:
+          source_sha: ${{ inputs.source_sha }}
+          artifact_id: ${{ fromJson(inputs.product_automation).artifact_id }}
+          binary_sha256: ${{ fromJson(inputs.product_automation).binary_sha256 }}
+          producer_os: ${{ fromJson(inputs.product_automation).producer_os }}
+          producer_arch: ${{ fromJson(inputs.product_automation).producer_arch }}
       - uses: ./.github/actions/resolve-native-toolchain-epoch
         with:
           include_tool_versions: "true"

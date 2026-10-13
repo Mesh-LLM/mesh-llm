@@ -16,10 +16,20 @@ fn artifact_platform_products_depend_only_on_matching_host_and_runtime_producers
             .list()
             .into_iter()
             .collect::<BTreeSet<_>>();
+        let product_automation = format!("product_automation_{authority}");
         let authority = format!("authority_{authority}");
         assert_eq!(
             needs,
-            BTreeSet::from(["hosts", "native_runtimes", authority.as_str()])
+            BTreeSet::from([
+                "hosts",
+                "native_runtimes",
+                authority.as_str(),
+                product_automation.as_str()
+            ])
+        );
+        assert_eq!(
+            input(product, "product_automation"),
+            Some(format!("${{{{ needs.{product_automation}.outputs.identity_json }}}}").as_str())
         );
         assert_eq!(
             text(product, "uses"),

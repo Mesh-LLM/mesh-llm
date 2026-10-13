@@ -19,6 +19,7 @@ rpath_paths() {
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../scripts" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+xtool() { if [[ -n "${MESH_LLM_AUTOMATION_BIN:-}" ]]; then "$MESH_LLM_AUTOMATION_BIN" "$@"; else cargo xtool "$@"; fi; }
 
 # shellcheck disable=SC1091
 source "$SCRIPT_DIR/lib/cuda-toolkit.sh"
@@ -215,11 +216,11 @@ sha256_file() {
 }
 
 skippy_runtime_version() {
-    cargo xtool native package-source-version runtime "$REPO_ROOT/skippy/crates/skippy-native-runtime/RUNTIME_VERSION"
+    xtool native package-source-version runtime "$REPO_ROOT/skippy/crates/skippy-native-runtime/RUNTIME_VERSION"
 }
 
 skippy_abi_version() {
-    cargo xtool native package-source-version abi "$REPO_ROOT/skippy/crates/skippy-ffi/src/lib.rs"
+    xtool native package-source-version abi "$REPO_ROOT/skippy/crates/skippy-ffi/src/lib.rs"
 }
 
 library_pattern() {
@@ -395,7 +396,7 @@ build_model_package_tool() {
             cargo build --release --locked --target "$TARGET_TRIPLE" \
                 -p skippy-package-builder
         cargo_metadata="$(cargo metadata --no-deps --format-version 1)"
-        cargo_target_dir="$(cargo xtool repository cargo-target-directory <<< "$cargo_metadata")"
+        cargo_target_dir="$(xtool repository cargo-target-directory <<< "$cargo_metadata")"
         source_path="$cargo_target_dir/$TARGET_TRIPLE/release/$(basename "$tool_rel")"
         if [[ ! -x "$source_path" ]]; then
             echo "model package tool build did not produce $source_path" >&2
@@ -567,7 +568,7 @@ collect_linux_cuda_dependencies() {
         [[ -n "$dependency_dir" ]] && dependency_args+=(--search-dir "$dependency_dir")
     done < <(linux_cuda_dependency_search_dirs | awk '!seen[$0]++')
 
-    cargo xtool native linux-runtime-deps collect \
+    xtool native linux-runtime-deps collect \
         --lib-dir "$stage_dir/lib" \
         --scan-dir "$stage_dir/tools" \
         --arch "$runtime_arch" \
@@ -578,7 +579,7 @@ collect_linux_cuda_dependencies() {
     while IFS= read -r library; do
         [[ -n "$library" ]] && library_paths+=("lib/$library")
     done < <(
-        cargo xtool native linux-runtime-deps order \
+        xtool native linux-runtime-deps order \
             --lib-dir "$stage_dir/lib" \
             --scan-dir "$stage_dir/tools" \
             --arch "$runtime_arch" \
@@ -782,7 +783,7 @@ if [[ "$runtime_os" == "windows" ]]; then
             fi
         fi
     done
-    cargo xtool native windows-runtime-deps collect \
+    xtool native windows-runtime-deps collect \
         --lib-dir "$stage_dir/lib" \
         --scan-dir "$stage_dir/tools" \
         "${dependency_args[@]}"
@@ -839,7 +840,7 @@ if [[ "${#license_paths[@]}" -gt 0 ]]; then
 fi
 manifest_args+=(-- "${linux_relocatable_library_paths[@]}")
 
-cargo xtool native runtime-manifest-write --schema-v2 "${manifest_args[@]}"
+xtool native runtime-manifest-write --schema-v2 "${manifest_args[@]}"
 
 cat > "$stage_dir/README.md" <<EOF
 # $artifact_id

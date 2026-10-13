@@ -23,6 +23,10 @@ on:
         required: false
         default: ''
         type: string
+      product_automation:
+        description: Optional same-run product-source automation identity JSON from the lane's product_automation producer (source SHA, artifact ID, executable digest, OS, architecture). When supplied the job restores that executable instead of compiling xtask.
+        required: true
+        type: string
       source_sha:
         description: Immutable product source revision.
         required: false
@@ -143,10 +147,14 @@ jobs:
         uses: Mesh-LLM/mesh-llm/.github/actions/resolve-source-layout@5c8fb4d472bc57058c8153761c561daa77dd5b94 # product-layout compatibility helpers
       - name: Verify prebuilt test environment
         run: verify-runner-image public cpu
-      - uses: ./.github/actions/prepare-automation
+      - name: Restore product-source automation
+        uses: ./.github/actions/restore-automation
         with:
-          allow_depot_remote_cache: ${{ needs.runner_policy.outputs.allow_depot_remote_cache }}
-          allow_native_github_cache: ${{ needs.runner_policy.outputs.allow_native_github_cache }}
+          source_sha: ${{ inputs.source_sha }}
+          artifact_id: ${{ fromJson(inputs.product_automation).artifact_id }}
+          binary_sha256: ${{ fromJson(inputs.product_automation).binary_sha256 }}
+          producer_os: ${{ fromJson(inputs.product_automation).producer_os }}
+          producer_arch: ${{ fromJson(inputs.product_automation).producer_arch }}
       - name: Resolve static ABI toolchain epoch
         uses: ./.github/actions/resolve-native-toolchain-epoch
         with:
@@ -221,7 +229,7 @@ jobs:
         id: skippy_correctness_model
         if: ${{ contains(steps.resolve_batch_crates.outputs.crates, 'skippy-runtime') || (contains(steps.resolve_batch_crates.outputs.crates, 'skippy-model-package') || contains(steps.resolve_batch_crates.outputs.crates, 'skippy-package-builder')) }}
         run: |
-          cargo xtool models resolve \
+          "$MESH_LLM_AUTOMATION_BIN" models resolve \
             ci/model-artifacts/manifests/skippy-correctness.json \
             --cadence "${{ (inputs.original_event_name == 'pull_request' || inputs.original_event_name == 'pull_request_target') && 'pull-request' || inputs.original_event_name == 'push' && 'main' || 'manual' }}" \
             --github-output "$GITHUB_OUTPUT"
@@ -245,7 +253,7 @@ jobs:
         if: ${{ contains(steps.resolve_batch_crates.outputs.crates, 'skippy-runtime') || (contains(steps.resolve_batch_crates.outputs.crates, 'skippy-model-package') || contains(steps.resolve_batch_crates.outputs.crates, 'skippy-package-builder')) }}
         run: |
           set -euo pipefail
-          cargo xtool models resolve \
+          "$MESH_LLM_AUTOMATION_BIN" models resolve \
             ci/model-artifacts/manifests/skippy-correctness.json \
             --cadence "${{ (inputs.original_event_name == 'pull_request' || inputs.original_event_name == 'pull_request_target') && 'pull-request' || inputs.original_event_name == 'push' && 'main' || 'manual' }}" \
             --verify-root "$RUNNER_TEMP/skippy-correctness-model"
@@ -326,10 +334,14 @@ jobs:
         uses: Mesh-LLM/mesh-llm/.github/actions/resolve-source-layout@5c8fb4d472bc57058c8153761c561daa77dd5b94 # product-layout compatibility helpers
       - name: Verify prebuilt test environment
         run: verify-runner-image public cpu
-      - uses: ./.github/actions/prepare-automation
+      - name: Restore product-source automation
+        uses: ./.github/actions/restore-automation
         with:
-          allow_depot_remote_cache: ${{ needs.runner_policy.outputs.allow_depot_remote_cache }}
-          allow_native_github_cache: ${{ needs.runner_policy.outputs.allow_native_github_cache }}
+          source_sha: ${{ inputs.source_sha }}
+          artifact_id: ${{ fromJson(inputs.product_automation).artifact_id }}
+          binary_sha256: ${{ fromJson(inputs.product_automation).binary_sha256 }}
+          producer_os: ${{ fromJson(inputs.product_automation).producer_os }}
+          producer_arch: ${{ fromJson(inputs.product_automation).producer_arch }}
       - name: Resolve static ABI toolchain epoch
         uses: ./.github/actions/resolve-native-toolchain-epoch
         with:
@@ -359,7 +371,7 @@ jobs:
       - name: Resolve SafeTensors checkpoint manifest
         id: safetensors_model
         run: |
-          cargo xtool models resolve \
+          "$MESH_LLM_AUTOMATION_BIN" models resolve \
             ci/model-artifacts/manifests/safetensors-runtime-smoke.json \
             --cadence pull-request \
             --github-output "$GITHUB_OUTPUT"
@@ -373,7 +385,7 @@ jobs:
           hf download "${{ steps.safetensors_model.outputs.repo }}" "${files[@]}" \
             --revision "${{ steps.safetensors_model.outputs.revision }}" \
             --local-dir "$fixture_dir"
-          cargo xtool models resolve \
+          "$MESH_LLM_AUTOMATION_BIN" models resolve \
             ci/model-artifacts/manifests/safetensors-runtime-smoke.json \
             --cadence pull-request \
             --verify-root "$fixture_dir"

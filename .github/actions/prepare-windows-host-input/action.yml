@@ -154,7 +154,11 @@ runs:
           Copy-Item -LiteralPath $verifier -Destination $attestationVerifierPath -Force
         }
 
-        & cargo xtool native verify-host-dependencies $binaryPath --report $importsPath
+        if ($env:MESH_LLM_AUTOMATION_BIN) {
+          & $env:MESH_LLM_AUTOMATION_BIN native verify-host-dependencies $binaryPath --report $importsPath
+        } else {
+          & cargo xtool native verify-host-dependencies $binaryPath --report $importsPath
+        }
         if ($LASTEXITCODE -ne 0) {
           throw "backend-neutral host dependency verification failed"
         }

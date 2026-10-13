@@ -40,8 +40,8 @@ fn migration_ci_graph_consumer_without_declared_need_is_rejected() -> TestResult
     graph_rejects(
         "linux",
         &[(
-            "needs: [hosts, native_runtimes, authority_linux_x64]",
-            "needs: [native_runtimes, authority_linux_x64]",
+            "needs: [hosts, native_runtimes, authority_linux_x64, product_automation_linux_x64]",
+            "needs: [native_runtimes, authority_linux_x64, product_automation_linux_x64]",
         )],
         // When/Then: the undeclared read is a disconnected consumer.
         "job 'runtime_product' reads needs.hosts without declaring it",
@@ -54,8 +54,8 @@ fn migration_ci_graph_artifact_producer_off_needs_path_is_rejected() -> TestResu
     graph_rejects(
         "linux",
         &[(
-            "needs: [ui_artifact, authority_linux_x64]\n    if: ${{ (!cancelled() && needs.ui_artifact.result == 'success' && ",
-            "needs: [authority_linux_x64]\n    if: ${{ (!cancelled() && ",
+            "needs: [ui_artifact, authority_linux_x64, product_automation_linux_x64]\n    if: ${{ (!cancelled() && needs.ui_artifact.result == 'success' && ",
+            "needs: [authority_linux_x64, product_automation_linux_x64]\n    if: ${{ (!cancelled() && ",
         )],
         // When/Then: the producer is unreachable through needs.
         "consumer 'hosts' input ui_artifact_name: producer 'ui_artifact' is not on its needs path",

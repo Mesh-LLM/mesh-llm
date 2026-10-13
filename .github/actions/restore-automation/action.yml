@@ -12,6 +12,14 @@ inputs:
     description: Optional producer output executable digest; must be paired with artifact_id.
     required: false
     default: ''
+  producer_os:
+    description: Optional producer runner OS from the declared producer dependency; must match this runner when supplied.
+    required: false
+    default: ''
+  producer_arch:
+    description: Optional producer runner architecture from the declared producer dependency; must match this runner when supplied.
+    required: false
+    default: ''
 runs:
   using: composite
   steps:
@@ -21,12 +29,18 @@ runs:
         AUTOMATION_SOURCE_SHA: ${{ inputs.source_sha }}
         AUTOMATION_ARTIFACT_ID: ${{ inputs.artifact_id }}
         AUTOMATION_BINARY_SHA256: ${{ inputs.binary_sha256 }}
+        AUTOMATION_PRODUCER_OS: ${{ inputs.producer_os }}
+        AUTOMATION_PRODUCER_ARCH: ${{ inputs.producer_arch }}
       run: |
         set -euo pipefail
         [[ "$AUTOMATION_SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || exit 1
         if [[ -n "$AUTOMATION_ARTIFACT_ID" || -n "$AUTOMATION_BINARY_SHA256" ]]; then
           [[ "$AUTOMATION_ARTIFACT_ID" =~ ^[1-9][0-9]{0,19}$ ]] || exit 1
           [[ "$AUTOMATION_BINARY_SHA256" =~ ^[0-9a-f]{64}$ ]] || exit 1
+        fi
+        if [[ -n "$AUTOMATION_PRODUCER_OS$AUTOMATION_PRODUCER_ARCH" ]]; then
+          test "$AUTOMATION_PRODUCER_OS" = "$RUNNER_OS" || exit 1
+          test "$AUTOMATION_PRODUCER_ARCH" = "$RUNNER_ARCH" || exit 1
         fi
         mkdir "$RUNNER_TEMP/immutable-automation-restored"
     - name: Download automation bytes
