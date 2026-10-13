@@ -253,6 +253,20 @@ impl Ledger {
         Ok(true)
     }
 
+    /// Whether `id` was dispatched, or finalized without a dispatch: either
+    /// way the request is past admission and must only be recovered.
+    pub fn metered_past_admission(&self, id: &str) -> Result<bool> {
+        Ok(self
+            .lock()?
+            .query_row(
+                "SELECT dispatched OR state!='admitted' FROM metered_requests WHERE id=?",
+                [id],
+                |r| r.get(0),
+            )
+            .optional()?
+            .unwrap_or(false))
+    }
+
     /// Owning peer, for authenticated recovery.
     pub fn metered_owner(&self, id: &str) -> Result<Option<String>> {
         Ok(self

@@ -172,13 +172,31 @@ impl Ledger {
     }
 
     /// Record an invoice paid. Applies to unpaid and forgiven invoices alike:
-    /// a receipt that still turns up is a fact, not debt.
-    pub fn mark_metered_received(&self, hash: &str) -> Result<()> {
-        self.lock()?.execute(
+    /// a receipt that still turns up is a fact, not debt. Returns the
+    /// receipt when the hash names a metered invoice.
+    pub fn mark_metered_received(&self, hash: &str) -> Result<Option<MeteredInvoice>> {
+        let connection = self.lock()?;
+        connection.execute(
             "UPDATE metered_invoices SET state='paid' WHERE hash=? AND state IN ('unpaid','forgiven')",
             [hash],
         )?;
-        Ok(())
+        let row: Option<(String, String, String, String)> = connection
+            .query_row(
+                "SELECT request_id,peer,kind,invoice FROM metered_invoices WHERE hash=?",
+                [hash],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .optional()?;
+        row.map(|(request_id, peer, kind, invoice)| {
+            Ok(MeteredInvoice {
+                request_id,
+                peer,
+                kind: MeteredInvoiceKind::parse(&kind)?,
+                invoice: Invoice::parse(&invoice)?,
+                paid: true,
+            })
+        })
+        .transpose()
     }
 
     /// Every peer with an issued, unpaid final invoice. Read-only and

@@ -69,6 +69,7 @@ pub(super) async fn run(
     });
     let _ = ready.send(());
     let mut deposit_pending = deposit_payment.is_some();
+    let mut watching = true;
     let mut cancelled = false;
     let mut settled = false;
     loop {
@@ -76,17 +77,27 @@ pub(super) async fn run(
         tokio::pin!(reading);
         let frame = loop {
             tokio::select! {
-                result = deposit_payment.as_mut().expect("pending deposit has a task"), if deposit_pending => {
+                result = async {
+                    match deposit_payment.as_mut() {
+                        Some(task) => task.await,
+                        None => std::future::pending().await,
+                    }
+                }, if deposit_pending => {
                     deposit_pending = false;
                     let payment = result.context("deposit payment task failed")??;
                     observations.settled(0, &payment);
                     progress.deposit_settled = true;
                 }
                 frame = &mut reading => break frame?,
-                _ = cancellation.changed(), if !cancelled => {
-                    cancelled = true;
-                    progress.cancelled = true;
-                    wire::write(&mut send, &Frame::Cancel {}).await?;
+                changed = cancellation.changed(), if watching => {
+                    // A dropped sender is the application side finishing
+                    // after the response ended, not a cancellation.
+                    watching = false;
+                    if changed.is_ok() && *cancellation.borrow() {
+                        cancelled = true;
+                        progress.cancelled = true;
+                        wire::write(&mut send, &Frame::Cancel {}).await?;
+                    }
                 }
             }
         };
@@ -127,6 +138,13 @@ pub(super) async fn run(
                         },
                     )
                     .await?;
+                // Closing the exchange does not make it a delivery: a seller
+                // that ends it having sent no output kept the deposit and
+                // returned nothing, which is the abuse the blocklist is for.
+                ensure!(
+                    cancelled || progress.output_delivered,
+                    "seller completed the exchange without delivering output"
+                );
                 return Ok(());
             }
             _ => bail!("invalid metered seller frame"),

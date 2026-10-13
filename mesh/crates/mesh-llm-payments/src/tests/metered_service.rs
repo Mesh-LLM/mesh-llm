@@ -160,12 +160,14 @@ async fn deposit_then_final_invoice_for_the_remainder_settles_trust() {
             .unwrap(),
         ServeAdmitResponse::Admitted { .. }
     ));
-    assert!(
+    // A replay of a dispatched request is never a second dispatch.
+    assert!(matches!(
         service
             .serve_admit(admit("next", "peer", 1_000_000))
             .await
-            .is_err()
-    );
+            .unwrap(),
+        ServeAdmitResponse::Replayed { .. }
+    ));
     assert!(service.serve_deposit_confirmed("next").await.is_err());
     // Strangers still owe a deposit.
     assert!(matches!(

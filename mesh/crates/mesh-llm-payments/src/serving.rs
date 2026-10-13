@@ -26,8 +26,9 @@ impl PaymentService {
     /// Admit one request at the seller's current prices. Buyers at the strike
     /// limit are refused; buyers in good standing are admitted without a
     /// deposit and dispatch is claimed here; everyone else is quoted a deposit
-    /// of 0.3 x the estimated input cost. A request this seller already holds
-    /// is reported as replayed: never a second dispatch.
+    /// of 0.3 x the estimated input cost. Replaying the same terms before
+    /// dispatch returns the same answer; a request already dispatched or
+    /// finalized is reported as replayed: never a second dispatch.
     pub async fn serve_admit(&self, request: ServeAdmitRequest) -> Result<ServeAdmitResponse> {
         let ServeAdmitRequest {
             request_id,
@@ -38,7 +39,9 @@ impl PaymentService {
         } = request;
         if let Some(owner) = self.ledger.metered_owner(&request_id)? {
             ensure!(owner == buyer, "request belongs to another buyer");
-            return Ok(ServeAdmitResponse::Replayed { request_id });
+            if self.ledger.metered_past_admission(&request_id)? {
+                return Ok(ServeAdmitResponse::Replayed { request_id });
+            }
         }
         ensure!(
             self.ledger.pricing()?.get(&model) == Some(&pricing),
@@ -132,8 +135,20 @@ impl PaymentService {
     /// receiving wallet's record of the payment.
     pub async fn settle_received(&self, invoice: &Invoice) -> Result<Transaction> {
         let payment = self.wait_received(invoice).await?;
-        self.ledger.mark_metered_received(&invoice.payment_hash)?;
+        self.record_received(&invoice.payment_hash).await?;
         Ok(payment)
+    }
+
+    /// Record a metered invoice paid; a paid final invoice puts its buyer in
+    /// good standing for the next admission.
+    async fn record_received(&self, hash: &str) -> Result<()> {
+        if let Some(receipt) = self.ledger.mark_metered_received(hash)?
+            && receipt.kind == MeteredInvoiceKind::Final
+            && self.ledger.metered_settlement(&receipt.request_id)?.status == MeteredStatus::Settled
+        {
+            self.note_settled(&receipt.peer).await;
+        }
+        Ok(())
     }
 
     pub async fn arrival(&self, invoice: &Invoice, deadline: Duration) -> Result<bool> {
@@ -257,22 +272,18 @@ impl PaymentService {
                 payment.amount_msat >= receipt.invoice.amount_msat.context("amountless invoice")?,
                 "incoming underpayment"
             );
-            self.ledger
-                .mark_metered_received(&receipt.invoice.payment_hash)?;
+            self.record_received(&receipt.invoice.payment_hash).await?;
         }
         Ok(())
     }
 
     /// Whether `peer` may be admitted without a deposit: it has settled a
-    /// request in this process's lifetime and carries no expired unpaid
-    /// invoice. Seller-owned and disposable; debt itself is durable.
+    /// request in this process's lifetime and owes no final invoice. An
+    /// unpaid deposit is an admission that never dispatched, not debt.
+    /// Seller-owned and disposable; debt itself is durable.
     pub async fn metered_trusted(&self, peer: &str) -> Result<bool> {
         Ok(self.metered_standing.lock().await.contains(peer)
-            && !self
-                .ledger
-                .unpaid_metered_invoices()?
-                .iter()
-                .any(|r| r.peer == peer && r.invoice.expires_at_ms <= crate::now_ms()))
+            && self.ledger.metered_unpaid_finals(peer)? == 0)
     }
 
     async fn note_settled(&self, peer: &str) {

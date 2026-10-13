@@ -303,7 +303,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn a_bookkeeping_operation_is_bounded() {
         let fake = Arc::new(FakePayments::default());
-        fake.hang(ops::SERVE_FINISH);
+        fake.hang(ops::SERVE_ABANDON);
         let payments = Payments::for_plugins(
             manager(
                 &[("payments-fake", &[CAPABILITY])],
@@ -314,13 +314,13 @@ mod tests {
         .await;
 
         let error = payments
-            .call::<_, Empty>(ops::SERVE_FINISH, &Empty {})
+            .call::<_, Empty>(ops::SERVE_ABANDON, &Empty {})
             .await
             .expect_err("a hung bookkeeping operation must fail instead of hanging the caller");
         assert!(error.to_string().contains("did not answer"), "{error}");
         assert_eq!(
             fake.calls(),
-            [(String::from("payments-fake"), ops::SERVE_FINISH.to_owned())],
+            [(String::from("payments-fake"), ops::SERVE_ABANDON.to_owned())],
             "the operation is attempted exactly once"
         );
     }

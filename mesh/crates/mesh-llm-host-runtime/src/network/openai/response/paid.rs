@@ -48,7 +48,7 @@ pub(super) async fn route(
         }
         Err(_) => return payment_error(client, "could not start paid inference").await,
     };
-    let _cancel_on_drop = CancelOnDrop(cancel);
+    let mut cancel_on_drop = CancelOnDrop(Some(cancel));
     tokio::select! {
         result = &mut ready => if result.is_err() { return payment_error(client, "payment was not authorized").await; },
         _ = client.wait_for_response_disconnect() => return RouteAttemptResult::ClientDisconnected,
@@ -66,6 +66,11 @@ pub(super) async fn route(
         logging.route_observer,
     )
     .await;
+    // The response reached the application in full: the exchange goes on to
+    // its settlement uncancelled. Anything else cancels it on return.
+    if matches!(result, RouteAttemptResult::Delivered { .. }) {
+        cancel_on_drop.disarm();
+    }
     // Once a paid exchange starts, ordinary transport/quality retries must not
     // create a second bill. A failed attempt is terminal for this HTTP request.
     match result {
@@ -116,14 +121,21 @@ pub(super) async fn payment_error(client: &mut ClientStream, message: &str) -> R
     }
 }
 
-struct CancelOnDrop(tokio::sync::watch::Sender<bool>);
+struct CancelOnDrop(Option<tokio::sync::watch::Sender<bool>>);
+impl CancelOnDrop {
+    fn disarm(&mut self) {
+        self.0 = None;
+    }
+}
 impl Drop for CancelOnDrop {
     fn drop(&mut self) {
-        let _ = self.0.send(true);
+        if let Some(cancel) = &self.0 {
+            let _ = cancel.send(true);
+        }
     }
 }
 
-type StartedExchange = (
+pub(crate) type StartedExchange = (
     DuplexStream,
     tokio::sync::oneshot::Receiver<()>,
     tokio::sync::watch::Sender<bool>,
@@ -151,7 +163,7 @@ const ESTIMATE_HEADROOM: u64 = 2;
 /// How long an accepted admission stays approved in the ledger.
 const AUTHORIZATION_LIFETIME_MS: u64 = 3_600_000;
 
-async fn start(
+pub(crate) async fn start(
     node: &Node,
     peer: iroh::EndpointId,
     raw: &[u8],
