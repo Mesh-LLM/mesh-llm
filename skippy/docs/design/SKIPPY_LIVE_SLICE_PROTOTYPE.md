@@ -286,6 +286,43 @@ Raw reports and configs are in
 Keep the corpus, per-request observations, and metrics exports together when
 moving this temporary evidence to durable storage.
 
+## 2026-10-14 canary diagnosis and rebase
+
+[Canary 38473877840](https://github.com/Mesh-LLM/mesh-llm/actions/runs/38473877840)
+attempted to certify source `91d48ce44917b7fae40afbbcf4b8cf9db7dc3121` through protected
+controller `6ca629425d4f6f661742855f427943a820e20815`. Source resolution and NAS
+preflight passed. The studio54 native build passed all 339 tests, without skips,
+in 354.49 seconds. The following first graph-rewriter pass hit its 60-second
+subprocess deadline after reaching translation unit 87 of 157. No family
+certification ran. The retained build artifact establishes this failure;
+the previous run's missing diagnostics do not establish its precise cause.
+
+The Rust generator now budgets 600 seconds for each complete rewriter pass,
+separately from the default 60-second Git command budget. An explicit timeout
+still overrides both. Tests cover both passes exceeding the Git budget,
+deadline cleanup without publication, and readable retained diagnostics.
+The default failure message previously printed captured bytes as a large
+single-line debug array, which the outer log collector suppressed. It now
+prints the phase, outcome, status, elapsed time, cleanup result, and readable
+sanitized output. Generation, idempotence, and all graph gates remain required.
+
+The pre-rebase local generator check passed validation and idempotence for all
+154 builders, exact generated-shard comparison, compilation, and 272 graph
+tests. That faster local host did not expose the runner's 60-second deadline.
+
+The candidate is rebased onto main `8b848ead56609a00166c89f339b9139db97d73c9`,
+including #2412's token-history restoration and native ABI 0.1.68. Its five
+native source changes were merged into the replay-free tree, folded into the
+existing patch owners, and cold-applied. The resulting tree exactly matches
+the intended combined source. Qualification of that combined candidate is
+separate from the older 339-test and model-parity evidence above. All 345 native
+tests have passing results: the initial full run passed 344, and the upstream
+tokenizer fixture test passed after hydrating its Git LFS data. Skippy FFI,
+runtime, serving, and Mesh checks and warning-denying Clippy passed. The
+generator's 33 tests and API documentation check also passed. The later main
+commits changed Rust response/runtime selection code and ownership metadata,
+without changing the validated native queue.
+
 ## Canary and release decision
 
 | Decision | Result | Remaining obligation |
@@ -295,8 +332,8 @@ moving this temporary evidence to durable storage.
 | GLM-DSA graph, integer frontier, and phase behavior | synthetic pass | Real-weight canary |
 | MTP and persistent-state behavior | tested probes pass | Full roster/head coverage |
 | Native and Rust validation; packaged Metal serving | pass | Remote clean candidate build |
-| Complete main-based local CI gate | blocked by timing fixture | Unchanged 200 ms child-start assertion fails in full run; focused check passes |
-| Queue GitHub Metal family canary | ready | Published candidate SHA |
+| Complete main-based local CI gate | resumed checks pass | Original run hit the 200 ms fixture; its existing fix and every remaining gate passed |
+| GitHub Metal family canary | build failed after native tests | Validate rewriter deadline repair on studio54, then dispatch the rebased SHA |
 | Stable performance conclusion | inconclusive | Quiescent interleaved A/B |
 | Universal or cross-backend support claim | no-go | Full roster plus separate CUDA lane |
 
