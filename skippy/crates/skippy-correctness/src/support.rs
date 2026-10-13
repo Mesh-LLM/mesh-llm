@@ -99,10 +99,8 @@ pub fn activation_width(frame: &skippy_runtime::ActivationFrame) -> Result<i32> 
         .parts()?
         .first()
         .context("activation frame has no primary part")?;
-    anyhow::ensure!(
-        primary.ggml_type == skippy_runtime::GGML_TYPE_F32,
-        "primary activation part is not F32"
-    );
+    // Width counts elements outside the token axis. Typed sidebands may be
+    // ordered before floating-point hidden states in a multipart frontier.
     let rank = usize::try_from(primary.rank).context("primary activation rank exceeds usize")?;
     anyhow::ensure!(
         rank > 0 && rank <= primary.dimensions.len(),
@@ -178,7 +176,37 @@ mod tests {
         process::{Command, Stdio},
     };
 
-    use super::{ChildGuard, connect_ready_child};
+    use super::{ChildGuard, activation_width, connect_ready_child};
+
+    #[test]
+    fn integer_frontier_width_uses_shape_without_reinterpreting_payload() -> anyhow::Result<()> {
+        let mut parts =
+            [skippy_runtime::ActivationPartDesc::default(); skippy_runtime::ACTIVATION_MAX_PARTS];
+        parts[0] = skippy_runtime::ActivationPartDesc {
+            ggml_type: skippy_runtime::GGML_TYPE_I32,
+            rank: 2,
+            token_axis: 1,
+            dimensions: [8, 3, 1, 1],
+            ..Default::default()
+        };
+        let frame = skippy_runtime::ActivationFrame {
+            desc: skippy_runtime::ActivationDesc {
+                version: skippy_runtime::ACTIVATION_FRAME_VERSION,
+                producer_stage_index: 0,
+                layer_start: 0,
+                layer_end: 1,
+                part_count: 1,
+                token_count: 3,
+                sequence_count: 1,
+                payload_bytes: 0,
+                frontier_identity: [0; skippy_runtime::ACTIVATION_IDENTITY_BYTES],
+                parts,
+            },
+            payload: Vec::new(),
+        };
+        assert_eq!(activation_width(&frame)?, 8);
+        Ok(())
+    }
 
     #[test]
     fn readiness_reports_a_child_that_exits_before_listening() -> anyhow::Result<()> {

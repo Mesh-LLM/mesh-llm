@@ -661,10 +661,10 @@ fn validate_activation_edge(
     consumer: ActivationBoundaryDesc,
 ) -> Result<()> {
     producer
-        .raw_f32_width("output")
+        .primary_token_width("output")
         .with_context(|| format!("invalid graph boundary advertised by producer {producer_id}"))?;
     consumer
-        .raw_f32_width("input")
+        .primary_token_width("input")
         .with_context(|| format!("invalid graph boundary advertised by consumer {consumer_id}"))?;
     anyhow::ensure!(
         producer == consumer,
@@ -1312,6 +1312,13 @@ mod activation_boundary_tests {
             .expect_err("a mismatch on the second edge must block the topology");
         assert!(error.to_string().contains("stage-1"));
         assert!(error.to_string().contains("stage-2"));
+    }
+
+    #[test]
+    fn integer_frontier_can_activate_a_matching_edge() {
+        let mut descriptor = boundary(8);
+        descriptor.parts[0].ggml_type = skippy_runtime::GGML_TYPE_I32;
+        validate_activation_edge("producer", descriptor, "consumer", descriptor).unwrap();
     }
 
     #[test]

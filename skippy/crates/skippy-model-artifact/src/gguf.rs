@@ -567,6 +567,9 @@ pub fn scan_gguf_compact_meta(path: &Path) -> Option<GgufCompactMeta> {
     for _ in 0..n_kv {
         let key = read_gguf_string(&mut f).ok()?;
         let vtype = GgufType::from_u32(read_u32(&mut f).ok()?)?;
+        // Structural decoder fields live directly under the architecture
+        // namespace. Auxiliary subgraphs can have fields with the same suffix.
+        let model_key = key.split_once('.').map(|(_, field)| field);
 
         if key == "general.architecture" {
             meta.architecture = read_gguf_value_as_string_opt(&mut f, vtype).ok()??;
@@ -574,7 +577,7 @@ pub fn scan_gguf_compact_meta(path: &Path) -> Option<GgufCompactMeta> {
             meta.parameter_size = read_gguf_value_as_string_opt(&mut f, vtype).ok()?;
         } else if key == "tokenizer.ggml.model" {
             meta.tokenizer_model_name = read_gguf_value_as_string_opt(&mut f, vtype).ok()??;
-        } else if key.ends_with(".context_length") {
+        } else if model_key == Some("context_length") {
             if let Ok(Some(v)) = read_gguf_value_as_u32(&mut f, vtype) {
                 meta.context_length = v;
             }
@@ -582,11 +585,11 @@ pub fn scan_gguf_compact_meta(path: &Path) -> Option<GgufCompactMeta> {
             if let Ok(Some(v)) = read_gguf_value_as_u32(&mut f, vtype) {
                 meta.max_len = v;
             }
-        } else if key.ends_with(".embedding_length") {
+        } else if model_key == Some("embedding_length") {
             if let Ok(Some(v)) = read_gguf_value_as_u32(&mut f, vtype) {
                 meta.embedding_size = v;
             }
-        } else if key.ends_with(".head_count") && !key.ends_with("_kv") {
+        } else if model_key == Some("attention.head_count") {
             if let Ok(Some(v)) = read_gguf_value_as_u32(&mut f, vtype) {
                 meta.head_count = v;
             }
@@ -598,11 +601,11 @@ pub fn scan_gguf_compact_meta(path: &Path) -> Option<GgufCompactMeta> {
                     meta.kv_head_counts = values;
                 }
             }
-        } else if key.ends_with(".block_count") {
+        } else if model_key == Some("block_count") {
             if let Ok(Some(v)) = read_gguf_value_as_u32(&mut f, vtype) {
                 meta.layer_count = v;
             }
-        } else if key.ends_with(".feed_forward_length") {
+        } else if model_key == Some("feed_forward_length") {
             if let Ok(Some(v)) = read_gguf_value_as_u32(&mut f, vtype) {
                 meta.feed_forward_length = v;
             }
@@ -1089,6 +1092,43 @@ mod tests {
         push_array_header(bytes, GgufType::Uint32, values.len() as u64);
         for value in values {
             bytes.extend_from_slice(&value.to_le_bytes());
+        }
+    }
+
+    #[test]
+    fn compact_meta_ignores_auxiliary_structural_fields_in_either_order() {
+        let fields = [
+            ("future.block_count", 3),
+            ("future.embedding_length", 128),
+            ("future.context_length", 512),
+            ("future.attention.head_count", 4),
+            ("future.feed_forward_length", 256),
+            ("future.posnet.block_count", 0),
+            ("future.convnext.embedding_length", 0),
+            ("future.aux.context_length", 0),
+            ("future.attention.indexer.head_count", 8),
+            ("future.aux.feed_forward_length", 0),
+        ];
+        for reverse in [false, true] {
+            let mut fields = fields;
+            if reverse {
+                fields.reverse();
+            }
+            let mut bytes = b"GGUF".to_vec();
+            bytes.extend_from_slice(&2u32.to_le_bytes());
+            bytes.extend_from_slice(&0i64.to_le_bytes());
+            bytes.extend_from_slice(&(fields.len() as i64).to_le_bytes());
+            for (key, value) in fields {
+                push_u32_kv(&mut bytes, key, value);
+            }
+            let path = write_bytes("skippy-aux-structural-fields", &bytes);
+            let meta = scan_gguf_compact_meta(&path).unwrap();
+            assert_eq!(meta.executable_layer_count(), Some(3));
+            assert_eq!(meta.embedding_size, 128);
+            assert_eq!(meta.context_length, 512);
+            assert_eq!(meta.head_count, 4);
+            assert_eq!(meta.feed_forward_length, 256);
+            std::fs::remove_file(path).unwrap();
         }
     }
 

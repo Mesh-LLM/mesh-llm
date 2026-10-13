@@ -1,29 +1,28 @@
-From 8468ce44742f0381fb5089f2dc5d0e2f8bdb532a Mon Sep 17 00:00:00 2001
-From: James Dumay <jameswdumay@gmail.com>
-Date: Sat, 19 Sep 2026 15:17:16 +1000
-Subject: [PATCH] skippy: implement graph planning realization and runtime
+From f74670dac920de65ef2339b0bb9291562c67e921 Mon Sep 17 00:00:00 2001
+From: James Dumay <james@generalinference.xyz>
+Date: Tue, 13 Oct 2026 22:06:42 +1100
+Subject: [PATCH] feat(skippy): realize admitted stages from live graphs
 
 ---
- src/skippy-verify-checkpoint.h          |   24 +
- src/skippy/abi.cpp                      |   57 ++
- src/skippy/activation.cpp               | 1000 +++++++++++++++++++
- src/skippy/activation_internal.h        |   86 ++
- src/skippy/activation_layout.cpp        |  171 ++++
+ src/skippy/abi.cpp                      |   59 ++
+ src/skippy/activation.cpp               | 1014 +++++++++++++++++++
+ src/skippy/activation_internal.h        |   88 ++
+ src/skippy/activation_layout.cpp        |  156 +++
  src/skippy/block_boundaries.cpp         |   64 ++
  src/skippy/block_boundaries.h           |   42 +
  src/skippy/devices.cpp                  |  106 ++
- src/skippy/environment.h                |   49 +
+ src/skippy/environment.h                |   48 +
  src/skippy/errors.h                     |   66 ++
  src/skippy/events.cpp                   |  243 +++++
  src/skippy/events_internal.h            |   35 +
  src/skippy/executable_graph.cpp         |  329 +++++++
  src/skippy/executable_graph.h           |   37 +
- src/skippy/execution-batch.cpp          |  422 ++++++++
- src/skippy/execution-single.cpp         |  619 ++++++++++++
+ src/skippy/execution-batch.cpp          |  453 +++++++++
+ src/skippy/execution-single.cpp         |  641 ++++++++++++
  src/skippy/execution_internal.h         |   20 +
- src/skippy/glm_dsa.cpp                  |  857 +++++++++++++++++
+ src/skippy/glm_dsa.cpp                  |  857 ++++++++++++++++
  src/skippy/glm_dsa.h                    |   14 +
- src/skippy/graph_build_inputs.h         |  108 +++
+ src/skippy/graph_build_inputs.h         |  109 +++
  src/skippy/graph_dependencies.cpp       |   57 ++
  src/skippy/graph_dependencies.h         |   11 +
  src/skippy/graph_identity.cpp           | 1092 +++++++++++++++++++++
@@ -31,31 +30,38 @@ Subject: [PATCH] skippy: implement graph planning realization and runtime
  src/skippy/model_lifecycle.cpp          |  155 +++
  src/skippy/model_load_config.cpp        |  194 ++++
  src/skippy/model_load_config_internal.h |   25 +
- src/skippy/model_loading.cpp            | 1172 +++++++++++++++++++++++
+ src/skippy/model_loading.cpp            | 1191 +++++++++++++++++++++++
  src/skippy/model_loading_internal.h     |   38 +
  src/skippy/model_package.cpp            |  782 +++++++++++++++
- src/skippy/model_source.cpp             |  457 +++++++++
+ src/skippy/model_source.cpp             |  463 +++++++++
  src/skippy/package_tensor_binding.cpp   |  120 +++
  src/skippy/package_tensor_binding.h     |   27 +
+ src/skippy/rerank_template.h            |   36 +
  src/skippy/runtime_support.h            |   50 +
- src/skippy/runtime_types.h              |  173 ++++
- src/skippy/sampling.cpp                 |  961 +++++++++++++++++++
- src/skippy/sampling_internal.h          |   49 +
- src/skippy/session.cpp                  |  527 ++++++++++
- src/skippy/speculative_decoding.cpp     |  547 +++++++++++
+ src/skippy/runtime_types.h              |  178 ++++
+ src/skippy/sampling.cpp                 | 1128 +++++++++++++++++++++
+ src/skippy/sampling_internal.h          |   70 ++
+ src/skippy/sampling_vocab.cpp           |   74 ++
+ src/skippy/session.cpp                  |  539 ++++++++++
+ src/skippy/speculative_decoding.cpp     |  568 +++++++++++
  src/skippy/speculative_internal.h       |   32 +
- src/skippy/stage_plan.cpp               |  632 ++++++++++++
- src/skippy/stage_realization.cpp        |  247 +++++
- src/skippy/stage_realization.h          |   13 +
+ src/skippy/stage_execution_contract.cpp |   72 ++
+ src/skippy/stage_execution_contract.h   |   15 +
+ src/skippy/stage_plan.cpp               |  701 +++++++++++++
+ src/skippy/stage_realization.cpp        |  292 ++++++
+ src/skippy/stage_realization.h          |   21 +
  src/skippy/stage_slice_plan.cpp         |  871 +++++++++++++++++
- src/skippy/stage_slice_plan.h           |  117 +++
- src/skippy/state.cpp                    | 1095 +++++++++++++++++++++
- src/skippy/state_effects.cpp            |  436 +++++++++
+ src/skippy/stage_slice_plan.h           |  119 +++
+ src/skippy/state.cpp                    | 1167 ++++++++++++++++++++++
+ src/skippy/state_effects.cpp            |  450 +++++++++
  src/skippy/state_effects.h              |   74 ++
+ src/skippy/state_memory.cpp             |   74 ++
+ src/skippy/state_memory.h               |   14 +
  src/skippy/tokenization.cpp             |  179 ++++
- src/skippy/verification.cpp             |  265 +++++
- 50 files changed, 14818 insertions(+)
- create mode 100644 src/skippy-verify-checkpoint.h
+ src/skippy/verification.cpp             |  270 +++++
+ src/skippy/workloads.cpp                |  371 +++++++
+ src/skippy/workloads_internal.h         |    8 +
+ 57 files changed, 15980 insertions(+)
  create mode 100644 src/skippy/abi.cpp
  create mode 100644 src/skippy/activation.cpp
  create mode 100644 src/skippy/activation_internal.h
@@ -88,13 +94,17 @@ Subject: [PATCH] skippy: implement graph planning realization and runtime
  create mode 100644 src/skippy/model_source.cpp
  create mode 100644 src/skippy/package_tensor_binding.cpp
  create mode 100644 src/skippy/package_tensor_binding.h
+ create mode 100644 src/skippy/rerank_template.h
  create mode 100644 src/skippy/runtime_support.h
  create mode 100644 src/skippy/runtime_types.h
  create mode 100644 src/skippy/sampling.cpp
  create mode 100644 src/skippy/sampling_internal.h
+ create mode 100644 src/skippy/sampling_vocab.cpp
  create mode 100644 src/skippy/session.cpp
  create mode 100644 src/skippy/speculative_decoding.cpp
  create mode 100644 src/skippy/speculative_internal.h
+ create mode 100644 src/skippy/stage_execution_contract.cpp
+ create mode 100644 src/skippy/stage_execution_contract.h
  create mode 100644 src/skippy/stage_plan.cpp
  create mode 100644 src/skippy/stage_realization.cpp
  create mode 100644 src/skippy/stage_realization.h
@@ -103,45 +113,19 @@ Subject: [PATCH] skippy: implement graph planning realization and runtime
  create mode 100644 src/skippy/state.cpp
  create mode 100644 src/skippy/state_effects.cpp
  create mode 100644 src/skippy/state_effects.h
+ create mode 100644 src/skippy/state_memory.cpp
+ create mode 100644 src/skippy/state_memory.h
  create mode 100644 src/skippy/tokenization.cpp
  create mode 100644 src/skippy/verification.cpp
+ create mode 100644 src/skippy/workloads.cpp
+ create mode 100644 src/skippy/workloads_internal.h
 
-diff --git a/src/skippy-verify-checkpoint.h b/src/skippy-verify-checkpoint.h
-new file mode 100644
-index 000000000..8793000c1
---- /dev/null
-+++ b/src/skippy-verify-checkpoint.h
-@@ -0,0 +1,24 @@
-+#pragma once
-+
-+#include <algorithm>
-+#include <cstdint>
-+#include <vector>
-+
-+template<typename T>
-+bool skippy_retire_verify_checkpoint_exact(
-+        std::vector<T> & checkpoints,
-+        uint64_t token_start,
-+        uint64_t token_count) {
-+    const auto it = std::find_if(
-+            checkpoints.begin(), checkpoints.end(),
-+            [token_start, token_count](const T & checkpoint) {
-+                return checkpoint.valid &&
-+                       static_cast<uint64_t>(checkpoint.token_start) == token_start &&
-+                       checkpoint.token_count == token_count;
-+            });
-+    if (it == checkpoints.end()) {
-+        return false;
-+    }
-+    checkpoints.erase(it);
-+    return true;
-+}
 diff --git a/src/skippy/abi.cpp b/src/skippy/abi.cpp
 new file mode 100644
-index 000000000..cfc6a2e66
+index 000000000..ceed6e5d3
 --- /dev/null
 +++ b/src/skippy/abi.cpp
-@@ -0,0 +1,57 @@
+@@ -0,0 +1,59 @@
 +#include "skippy/common.h"
 +
 +#include <cstdlib>
@@ -188,7 +172,9 @@ index 000000000..cfc6a2e66
 +           SKIPPY_FEATURE_KV_EVENTS |
 +           SKIPPY_FEATURE_DEVICE_EVENTS |
 +           SKIPPY_FEATURE_DIAGNOSTIC_EVENTS |
-+           SKIPPY_FEATURE_UNLOAD_EVENTS;
++           SKIPPY_FEATURE_UNLOAD_EVENTS |
++           SKIPPY_FEATURE_NON_CHAT_WORKLOADS |
++           SKIPPY_FEATURE_CACHEGEN_KV_PAGE;
 +}
 +
 +void skippy_error_free(struct skippy_error * error) {
@@ -201,10 +187,10 @@ index 000000000..cfc6a2e66
 +}
 diff --git a/src/skippy/activation.cpp b/src/skippy/activation.cpp
 new file mode 100644
-index 000000000..abe36674c
+index 000000000..6e76337b2
 --- /dev/null
 +++ b/src/skippy/activation.cpp
-@@ -0,0 +1,1000 @@
+@@ -0,0 +1,1014 @@
 +#include "skippy.h"
 +#include "skippy/activation_internal.h"
 +#include "skippy/graph_build_inputs.h"
@@ -542,7 +528,8 @@ index 000000000..abe36674c
 +        size_t * out_output_payload_bytes,
 +        skippy_activation_desc * output_desc,
 +        const skippy_activation_desc * input_desc,
-+        struct skippy_error ** out_error) {
++        struct skippy_error ** out_error,
++        skippy_activation_frame_shape shape) {
 +    skippy_activation_desc descriptor = {};
 +    descriptor.version = SKIPPY_ACTIVATION_FRAME_VERSION;
 +    descriptor.producer_stage_index = session != nullptr ? session->stage_model->config.stage_index : -1;
@@ -569,7 +556,7 @@ index 000000000..abe36674c
 +                    if (forwarded != nullptr && forwarded->dimensions[dimension] > 0) part.dimensions[dimension] = forwarded->dimensions[dimension];
 +                    else {
 +                        part.dimensions[dimension] = skippy_resolve_activation_part_dimension(
-+                                session, part, dimension, token_count);
++                                session, part, dimension, shape != skippy_activation_frame_shape::reservation);
 +                        if (part.dimensions[dimension] > 0) continue;
 +                        skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "output frontier has an unresolved dynamic dimension");
 +                        return SKIPPY_STATUS_RUNTIME_ERROR;
@@ -628,6 +615,11 @@ index 000000000..abe36674c
 +            return SKIPPY_STATUS_INVALID_ARGUMENT;
 +        }
 +        if (output_payload_capacity < payload_bytes) {
++            if (shape == skippy_activation_frame_shape::live_within_reservation) {
++                session->reset_required = true;
++                skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "live activation output exceeds its graph reservation; session requires reset");
++                return SKIPPY_STATUS_RUNTIME_ERROR;
++            }
 +            skippy_set_error(out_error, SKIPPY_STATUS_BUFFER_TOO_SMALL, "output activation buffer is too small");
 +            return SKIPPY_STATUS_BUFFER_TOO_SMALL;
 +        }
@@ -667,6 +659,7 @@ index 000000000..abe36674c
 +    inputs.activation_export_identities = configured_inputs.activation_export_identities;
 +    inputs.activation_export_bindings = configured_inputs.activation_export_bindings;
 +    inputs.resident_tensor_names = configured_inputs.resident_tensor_names;
++    inputs.execution_contract = configured_inputs.execution_contract;
 +    const char * phase_log = getenv("SKIPPY_GLM_DSA_LOG_DIRECT_SPARSE_DECISIONS");
 +    if (phase_log != nullptr && atoi(phase_log) != 0) {
 +        LLAMA_LOG_INFO(
@@ -768,6 +761,13 @@ index 000000000..abe36674c
 +                desc, input_desc, out_error);
 +        if (status != SKIPPY_STATUS_OK) return status;
 +    }
++    // Preflight uses the scheduler's reserved graph to bound buffer size before
++    // decode mutates state. Emit dimensions from the actual completed graph.
++    const size_t prepared_bytes = desc->payload_bytes;
++    const enum skippy_status shape_status = skippy_prepare_output_activation_frame(
++            session, token_count, output_payload, prepared_bytes, out_output_payload_bytes,
++            desc, input_desc, out_error, skippy_activation_frame_shape::live_within_reservation);
++    if (shape_status != SKIPPY_STATUS_OK) return shape_status;
 +    skippy_synchronize_context_if_pending(session->stage_model);
 +
 +    llm_graph_result * result = session->ctx->get_gf_res_prev_active();
@@ -1207,10 +1207,10 @@ index 000000000..abe36674c
 +}
 diff --git a/src/skippy/activation_internal.h b/src/skippy/activation_internal.h
 new file mode 100644
-index 000000000..0f90f47dc
+index 000000000..29674ebda
 --- /dev/null
 +++ b/src/skippy/activation_internal.h
-@@ -0,0 +1,86 @@
+@@ -0,0 +1,88 @@
 +#pragma once
 +
 +#include "skippy/activation.h"
@@ -1224,17 +1224,18 @@ index 000000000..0f90f47dc
 +struct skippy_session;
 +struct skippy_model;
 +
++enum class skippy_activation_frame_shape {
++    reservation,
++    live,
++    live_within_reservation,
++};
++
 +bool skippy_emits_activation_frame(const skippy_session * session);
-+bool skippy_is_glm_dsa_activation_model(const skippy_session * session);
-+uint32_t skippy_glm_dsa_sideband_top_k_count_for_n_kv(
-+        const skippy_session * session,
-+        uint64_t n_kv);
-+uint32_t skippy_glm_dsa_sideband_top_k_count(const skippy_session * session, size_t token_count);
 +int64_t skippy_resolve_activation_part_dimension(
 +        const skippy_session * session,
 +        const skippy_activation_part_desc & part,
 +        uint32_t dimension,
-+        size_t token_count);
++        bool live_graph);
 +bool skippy_has_activation_payload(const skippy_activation_desc * desc, const void * payload);
 +const skippy_activation_part_desc * skippy_activation_part_at(const skippy_activation_desc * desc, size_t index);
 +const skippy_activation_part_desc * skippy_activation_find_part(
@@ -1269,7 +1270,8 @@ index 000000000..0f90f47dc
 +        size_t * out_output_payload_bytes,
 +        skippy_activation_desc * output_desc,
 +        const skippy_activation_desc * input_desc,
-+        skippy_error ** out_error);
++        skippy_error ** out_error,
++        skippy_activation_frame_shape shape = skippy_activation_frame_shape::reservation);
 +enum skippy_status skippy_copy_output_activation_frame(
 +        skippy_session * session,
 +        size_t token_count,
@@ -1299,10 +1301,10 @@ index 000000000..0f90f47dc
 +        skippy_error ** out_error);
 diff --git a/src/skippy/activation_layout.cpp b/src/skippy/activation_layout.cpp
 new file mode 100644
-index 000000000..a6b7df59c
+index 000000000..59233f3e7
 --- /dev/null
 +++ b/src/skippy/activation_layout.cpp
-@@ -0,0 +1,171 @@
+@@ -0,0 +1,156 @@
 +#include "skippy.h"
 +#include "skippy/activation_internal.h"
 +#include "skippy/errors.h"
@@ -1372,39 +1374,23 @@ index 000000000..a6b7df59c
 +           !skippy_runtime_is_terminal_stage(&session->stage_model->config);
 +}
 +
-+bool skippy_is_glm_dsa_activation_model(const skippy_session * session) {
-+    if (session == nullptr || session->stage_model == nullptr || session->stage_model->model == nullptr) {
-+        return false;
-+    }
-+    return session->stage_model->model->arch == LLM_ARCH_GLM_DSA;
-+}
-+
-+// Activation sidebands carry the actual top-k tensor width produced by
-+// glm-dsa.cpp, not the padded graph-capacity width used for output buffers.
-+uint32_t skippy_glm_dsa_sideband_top_k_count_for_n_kv(
-+        const skippy_session * session,
-+        uint64_t n_kv) {
-+    if (!skippy_is_glm_dsa_activation_model(session)) {
-+        return 0;
-+    }
-+
-+    return static_cast<uint32_t>(
-+            std::min<uint64_t>(n_kv, session->stage_model->model->hparams.indexer_top_k));
-+}
-+
-+uint32_t skippy_glm_dsa_sideband_top_k_count(const skippy_session * session, size_t token_count) {
-+    const uint64_t n_kv = static_cast<uint64_t>(std::max<int32_t>(session->n_past, 0)) + token_count;
-+    return skippy_glm_dsa_sideband_top_k_count_for_n_kv(session, n_kv);
-+}
-+
 +int64_t skippy_resolve_activation_part_dimension(
 +        const skippy_session * session,
 +        const skippy_activation_part_desc & part,
 +        uint32_t dimension,
-+        size_t token_count) {
-+    if (part.ggml_type == GGML_TYPE_I32 && dimension == 0 &&
-+            skippy_is_glm_dsa_activation_model(session)) {
-+        return skippy_glm_dsa_sideband_top_k_count(session, token_count);
++        bool live_graph) {
++    if (session == nullptr || session->ctx == nullptr || dimension >= GGML_MAX_DIMS) return -1;
++    const auto * result = live_graph ? session->ctx->get_gf_res_prev_active() : session->ctx->get_gf_res_reserve();
++    if (result == nullptr) return -1;
++    const auto & ports = result->get_skippy_activation_exports();
++    const auto & boundary = session->stage_model->output_activation_boundary;
++    if (ports.size() != boundary.part_count) return -1;
++    for (size_t index = 0; index < ports.size(); ++index) {
++        if (std::memcmp(part.identity, boundary.parts[index].identity, SKIPPY_ACTIVATION_IDENTITY_BYTES) != 0) continue;
++        const auto * tensor = ports[index].tensor;
++        if (tensor == nullptr || static_cast<uint32_t>(tensor->type) != part.ggml_type ||
++                ports[index].token_axis != part.token_axis) return -1;
++        return tensor->ne[dimension];
 +    }
 +    return -1;
 +}
@@ -1465,7 +1451,8 @@ index 000000000..a6b7df59c
 +            out_output_payload_bytes,
 +            output_desc,
 +            nullptr,
-+            out_error);
++            out_error,
++            skippy_activation_frame_shape::live);
 +    if (status != SKIPPY_STATUS_OK) {
 +        return status;
 +    }
@@ -1706,10 +1693,10 @@ index 000000000..2068a9b1c
 +
 diff --git a/src/skippy/environment.h b/src/skippy/environment.h
 new file mode 100644
-index 000000000..f22af9c5a
+index 000000000..a9f574b2f
 --- /dev/null
 +++ b/src/skippy/environment.h
-@@ -0,0 +1,49 @@
+@@ -0,0 +1,48 @@
 +#pragma once
 +
 +#include <algorithm>
@@ -1758,10 +1745,9 @@ index 000000000..f22af9c5a
 +
 +    return std::min<uint32_t>(max_value, std::max<uint32_t>(min_value, static_cast<uint32_t>(parsed)));
 +}
-+
 diff --git a/src/skippy/errors.h b/src/skippy/errors.h
 new file mode 100644
-index 000000000..69706e3fa
+index 000000000..08a147aae
 --- /dev/null
 +++ b/src/skippy/errors.h
 @@ -0,0 +1,66 @@
@@ -1813,7 +1799,7 @@ index 000000000..69706e3fa
 +// A C++ exception must never unwind out of this ABI into Rust: Rust cannot
 +// catch a foreign exception, so its personality routine prints
 +// "fatal runtime error: Rust cannot catch foreign exceptions, aborting" and
-+// terminates the process. Every entry point that can execute stage program
++// terminates the process. Every entry point that can execute graph
 +// code therefore contains an escaping exception here and reports it as an
 +// ordinary skippy failure. Pass nullptr for `out_error` when the caller
 +// reports the failure itself.
@@ -1826,7 +1812,7 @@ index 000000000..69706e3fa
 +        skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, exception.what());
 +        return false;
 +    } catch (...) {
-+        skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "native stage program failure without a diagnostic");
++        skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "native graph execution failure without a diagnostic");
 +        return false;
 +    }
 +}
@@ -2501,10 +2487,10 @@ index 000000000..aa02187d1
 +        std::string & error);
 diff --git a/src/skippy/execution-batch.cpp b/src/skippy/execution-batch.cpp
 new file mode 100644
-index 000000000..3e4211566
+index 000000000..c45f66421
 --- /dev/null
 +++ b/src/skippy/execution-batch.cpp
-@@ -0,0 +1,422 @@
+@@ -0,0 +1,453 @@
 +#include "skippy.h"
 +#include "skippy/activation_internal.h"
 +#include "skippy/errors.h"
@@ -2513,6 +2499,7 @@ index 000000000..3e4211566
 +#include "skippy/runtime_types.h"
 +#include "skippy/sampling_internal.h"
 +
++#include "llama-arch.h"
 +#include "llama-context.h"
 +#include "llama-graph.h"
 +#include "llama-model.h"
@@ -2548,9 +2535,9 @@ index 000000000..3e4211566
 +    if (requests[0].input_desc == nullptr) return SKIPPY_STATUS_OK;
 +    const auto & boundary = requests[0].session->stage_model->input_activation_boundary;
 +    if (requests[0].input_desc->part_count != boundary.part_count) {
-+        skippy_set_error(out_error, SKIPPY_STATUS_UNSUPPORTED,
-+                "iteration batching defers optional activation ports to serial execution");
-+        return SKIPPY_STATUS_UNSUPPORTED;
++        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT,
++                "iteration batching accepts planned frontier parts only");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
 +    }
 +    storage.reserve(boundary.part_count);
 +    graph_inputs.activation_frontier.reserve(boundary.part_count);
@@ -2579,17 +2566,17 @@ index 000000000..3e4211566
 +        for (size_t request_index = 0; request_index < request_count; ++request_index) {
 +            const auto * desc = requests[request_index].input_desc;
 +            if (desc == nullptr || desc->part_count != boundary.part_count) {
-+                skippy_set_error(out_error, SKIPPY_STATUS_UNSUPPORTED,
++                skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT,
 +                        "iteration batching requires the same planned frontier for every request");
-+                return SKIPPY_STATUS_UNSUPPORTED;
++                return SKIPPY_STATUS_INVALID_ARGUMENT;
 +            }
 +            const auto * part = skippy_activation_find_part(desc, first->identity);
 +            const size_t request_plane_bytes = inner_bytes*requests[request_index].token_count;
 +            if (part == nullptr || !skippy_batch_part_compatible(*first, *part) ||
 +                    part->payload_bytes != request_plane_bytes*outer_count) {
-+                skippy_set_error(out_error, SKIPPY_STATUS_UNSUPPORTED,
++                skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT,
 +                        "iteration activation shapes differ outside the token axis");
-+                return SKIPPY_STATUS_UNSUPPORTED;
++                return SKIPPY_STATUS_INVALID_ARGUMENT;
 +            }
 +            const auto * source = static_cast<const uint8_t *>(
 +                    skippy_activation_part_payload(desc, requests[request_index].input_payload, part));
@@ -2633,9 +2620,9 @@ index 000000000..3e4211566
 +    if (!skippy_emits_activation_frame(session)) return SKIPPY_STATUS_OK;
 +    const auto & boundary = session->stage_model->output_activation_boundary;
 +    if (desc == nullptr || desc->part_count != boundary.part_count) {
-+        skippy_set_error(out_error, SKIPPY_STATUS_UNSUPPORTED,
-+                "iteration batching defers optional activation ports to serial execution");
-+        return SKIPPY_STATUS_UNSUPPORTED;
++        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT,
++                "iteration batching accepts planned frontier parts only");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
 +    }
 +    llm_graph_result * result = session->ctx->get_gf_res_prev_active();
 +    const auto * ports = result == nullptr ? nullptr : &result->get_skippy_activation_exports();
@@ -2645,6 +2632,10 @@ index 000000000..3e4211566
 +        return SKIPPY_STATUS_RUNTIME_ERROR;
 +    }
 +    const size_t token_count = offsets[request_index + 1] - offsets[request_index];
++    const enum skippy_status shape_status = skippy_prepare_output_activation_frame(
++            session, token_count, payload, desc->payload_bytes, nullptr, desc, nullptr, out_error,
++            skippy_activation_frame_shape::live_within_reservation);
++    if (shape_status != SKIPPY_STATUS_OK) return shape_status;
 +    for (size_t part_index = 0; part_index < boundary.part_count; ++part_index) {
 +        const auto & part = desc->parts[part_index];
 +        ggml_tensor * tensor = (*ports)[part_index].tensor;
@@ -2662,6 +2653,13 @@ index 000000000..3e4211566
 +                part.payload_bytes % destination_plane_bytes != 0) {
 +            skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR,
 +                    "batched graph export does not match its activation descriptor");
++            return SKIPPY_STATUS_RUNTIME_ERROR;
++        }
++        // Exports come from the last microbatch, so slicing them by request
++        // offset is only defined while that microbatch covers the whole batch.
++        if (tensor->ne[token_axis] != static_cast<int64_t>(offsets.back())) {
++            skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR,
++                    "exported activation token axis does not cover the batched iteration");
 +            return SKIPPY_STATUS_RUNTIME_ERROR;
 +        }
 +        const size_t outer_count = static_cast<size_t>(part.payload_bytes)/destination_plane_bytes;
@@ -2711,15 +2709,13 @@ index 000000000..3e4211566
 +    const bool request_logits = skippy_runtime_is_terminal_stage(&first->stage_model->config);
 +    const bool request_exports = skippy_emits_activation_frame(first);
 +    if (n_pos_per_embd <= 0) {
-+        skippy_set_error(out_error, SKIPPY_STATUS_UNSUPPORTED, "stage input dimensions cannot be batched");
-+        return SKIPPY_STATUS_UNSUPPORTED;
++        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "stage input dimensions cannot be batched");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
 +    }
 +
 +    std::unordered_set<skippy_session *> unique_sessions;
 +    std::vector<size_t> offsets(request_count + 1, 0);
 +    size_t sampled_count = 0;
-+    bool uniform_token_counts = true;
-+    bool consecutive_sequence_ids = true;
 +    for (size_t index = 0; index < request_count; ++index) {
 +        const auto & request = requests[index];
 +        if (request.session == nullptr || request.session->ctx != first->ctx ||
@@ -2734,15 +2730,6 @@ index 000000000..3e4211566
 +                    "iteration token count exceeds int32 range");
 +            return SKIPPY_STATUS_INVALID_ARGUMENT;
 +        }
-+        if (index > 0) {
-+            uniform_token_counts =
-+                    uniform_token_counts && request.token_count == requests[0].token_count;
-+            const llama_seq_id previous = requests[index - 1].session->seq_id;
-+            consecutive_sequence_ids =
-+                    consecutive_sequence_ids &&
-+                    previous != std::numeric_limits<llama_seq_id>::max() &&
-+                    request.session->seq_id == previous + 1;
-+        }
 +        const size_t expected_positions = request.token_count*static_cast<size_t>(n_pos_per_embd);
 +        if ((request.positions == nullptr && request.position_count != 0) ||
 +                (request.positions != nullptr && request.position_count != expected_positions)) {
@@ -2756,9 +2743,9 @@ index 000000000..3e4211566
 +        if (status != SKIPPY_STATUS_OK) return status;
 +        if (request.input_desc != nullptr &&
 +                request.input_desc->part_count != request.session->stage_model->input_activation_boundary.part_count) {
-+            skippy_set_error(out_error, SKIPPY_STATUS_UNSUPPORTED,
-+                    "iteration batching defers optional activation ports to serial execution");
-+            return SKIPPY_STATUS_UNSUPPORTED;
++            skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT,
++                    "iteration batching accepts planned frontier parts only");
++            return SKIPPY_STATUS_INVALID_ARGUMENT;
 +        }
 +        status = skippy_prepare_output_activation_frame(
 +                request.session, request.token_count,
@@ -2770,19 +2757,41 @@ index 000000000..3e4211566
 +        if (status != SKIPPY_STATUS_OK) return status;
 +        if (output_descs != nullptr && request_exports &&
 +                output_descs[index].part_count != request.session->stage_model->output_activation_boundary.part_count) {
-+            skippy_set_error(out_error, SKIPPY_STATUS_UNSUPPORTED,
-+                    "iteration batching defers optional activation ports to serial execution");
-+            return SKIPPY_STATUS_UNSUPPORTED;
++            skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT,
++                    "iteration batching accepts planned frontier parts only");
++            return SKIPPY_STATUS_INVALID_ARGUMENT;
 +        }
 +        offsets[index + 1] = offsets[index] + request.token_count;
 +        if (request.sample_last && request_logits) ++sampled_count;
 +    }
-+    if (request_exports &&
-+            (!uniform_token_counts || !consecutive_sequence_ids ||
-+             offsets.back() > static_cast<size_t>(first->ctx->n_ubatch()))) {
-+        skippy_set_error(out_error, SKIPPY_STATUS_UNSUPPORTED,
-+                "activation export batch would span more than one native microbatch");
-+        return SKIPPY_STATUS_UNSUPPORTED;
++    // Batched exports are sliced by request offset, which is the microbatch row
++    // order only when llama decodes the batch with split_simple, so a stage that
++    // exports activations needs a unified KV cache. Multi-lane exporting stages
++    // cannot turn that off (model_loading.cpp rejects the combination), and a
++    // terminal stage never reads exports.
++    if (request_exports && request_count > 1 && !first->ctx->kv_unified()) {
++        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT,
++                "batched activation exports require a unified KV cache");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
++    // Recurrent and hybrid memory splits an all-output batch by sequence
++    // (split_seq), so the last microbatch only carries one request's rows and
++    // its exports cannot be sliced by request offset. The runtime routes those
++    // stages one request at a time; reaching this means that routing is wrong.
++    if (request_exports && request_count > 1 &&
++            (llm_arch_is_recurrent(first->stage_model->model->arch) ||
++             llm_arch_is_hybrid(first->stage_model->model->arch))) {
++        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT,
++                "recurrent and hybrid stages cannot batch activation exports");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
++    // Exports are read from the last microbatch's graph, so an exporting stage
++    // must see the whole batch in one microbatch. The scheduler caps batched
++    // tokens at n_ubatch; exceeding it here is a scheduler bug.
++    if (request_exports && offsets.back() > static_cast<size_t>(first->ctx->n_ubatch())) {
++        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT,
++                "iteration batch exceeds the native microbatch on an exporting stage");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
 +    }
 +    if (sampled_count > sampled_output_capacity ||
 +            (sampled_count > 0 &&
@@ -2862,13 +2871,21 @@ index 000000000..3e4211566
 +                output_payloads == nullptr ? nullptr : output_payloads[request_index],
 +                out_error);
 +        if (status != SKIPPY_STATUS_OK) return status;
++        if (out_output_payload_bytes != nullptr && output_descs != nullptr) {
++            out_output_payload_bytes[request_index] = output_descs[request_index].payload_bytes;
++        }
 +        request.session->n_past += static_cast<int32_t>(request.token_count);
 +        skippy_record_tokens(request.session, request.token_ids, request.token_count);
 +        if (request.sample_last && request_logits) {
-+            out_sampled_request_indexes[sampled_index] = request_index;
-+            out_predicted_tokens[sampled_index++] = skippy_sample_token_ith(
-+                    request.session, request.sampling,
-+                    static_cast<int32_t>(offsets[request_index + 1] - 1));
++            // Logits are indexed by the original batch row; llama.cpp handles
++            // sparse output-row translation internally.
++            const skippy_status sample_status = skippy_store_sampled_token(
++                    skippy_sample_token_ith(
++                            request.session, request.sampling,
++                            static_cast<int32_t>(offsets[request_index + 1] - 1)),
++                    &out_predicted_tokens[sampled_index], out_error);
++            if (sample_status != SKIPPY_STATUS_OK) return sample_status;
++            out_sampled_request_indexes[sampled_index++] = request_index;
 +        }
 +    }
 +    *out_sampled_output_count = sampled_index;
@@ -2929,10 +2946,10 @@ index 000000000..3e4211566
 +} // extern "C"
 diff --git a/src/skippy/execution-single.cpp b/src/skippy/execution-single.cpp
 new file mode 100644
-index 000000000..d5ae4d66d
+index 000000000..6b6835f22
 --- /dev/null
 +++ b/src/skippy/execution-single.cpp
-@@ -0,0 +1,619 @@
+@@ -0,0 +1,641 @@
 +#include "skippy.h"
 +#include "skippy/activation_internal.h"
 +#include "skippy/graph_build_inputs.h"
@@ -3054,7 +3071,8 @@ index 000000000..d5ae4d66d
 +    }
 +
 +    if (out_predicted_token != nullptr) {
-+        *out_predicted_token = skippy_sample_token(session, sampling);
++        return skippy_store_sampled_token(
++                skippy_sample_token(session, sampling), out_predicted_token, out_error);
 +    }
 +
 +    return skippy_success(out_error);
@@ -3174,7 +3192,11 @@ index 000000000..d5ae4d66d
 +        session->n_past += 1;
 +        skippy_record_tokens(session, &token_ids[i], 1);
 +        const skippy_sampling_config * request_sampling = sampling != nullptr ? sampling[i] : nullptr;
-+        out_predicted_tokens[i] = skippy_sample_token_ith(session, request_sampling, i);
++        const skippy_status sample_status = skippy_store_sampled_token(
++                skippy_sample_token_ith(session, request_sampling, i), &out_predicted_tokens[i], out_error);
++        if (sample_status != SKIPPY_STATUS_OK) {
++            return sample_status;
++        }
 +    }
 +
 +    return skippy_success(out_error);
@@ -3222,7 +3244,12 @@ index 000000000..d5ae4d66d
 +    if (status == SKIPPY_STATUS_OK) {
 +        const int32_t n_tokens = static_cast<int32_t>(token_count);
 +        for (int32_t i = 0; i < n_tokens; ++i) {
-+            output_tokens[i] = skippy_greedy_sample_ith(session, i);
++            status = skippy_store_sampled_token(
++                    skippy_greedy_sample_ith(session, i), &output_tokens[i], out_error);
++            if (status != SKIPPY_STATUS_OK) {
++                *out_token_count = 0;
++                return status;
++            }
 +        }
 +    }
 +    return status;
@@ -3306,8 +3333,14 @@ index 000000000..d5ae4d66d
 +    }
 +
 +    if (out_predicted_token != nullptr) {
-+        *out_predicted_token = skippy_runtime_is_terminal_stage(&session->stage_model->config) ?
-+                skippy_sample_token(session, sampling) : -1;
++        *out_predicted_token = -1;
++        if (skippy_runtime_is_terminal_stage(&session->stage_model->config)) {
++            status = skippy_store_sampled_token(
++                    skippy_sample_token(session, sampling), out_predicted_token, out_error);
++            if (status != SKIPPY_STATUS_OK) {
++                return status;
++            }
++        }
 +    }
 +
 +    return skippy_copy_output_activation_frame(
@@ -3499,8 +3532,14 @@ index 000000000..d5ae4d66d
 +    }
 +
 +    if (out_predicted_token != nullptr) {
-+        *out_predicted_token = skippy_runtime_is_terminal_stage(&session->stage_model->config) ?
-+                skippy_sample_token(session, sampling) : -1;
++        *out_predicted_token = -1;
++        if (skippy_runtime_is_terminal_stage(&session->stage_model->config)) {
++            status = skippy_store_sampled_token(
++                    skippy_sample_token(session, sampling), out_predicted_token, out_error);
++            if (status != SKIPPY_STATUS_OK) {
++                return status;
++            }
++        }
 +    }
 +
 +    return skippy_copy_output_activation_frame(
@@ -4463,10 +4502,10 @@ index 000000000..7d7f5cc0d
 +void skippy_glm_dsa_op_timing_end(skippy_session * session);
 diff --git a/src/skippy/graph_build_inputs.h b/src/skippy/graph_build_inputs.h
 new file mode 100644
-index 000000000..16b33929d
+index 000000000..c08f2d510
 --- /dev/null
 +++ b/src/skippy/graph_build_inputs.h
-@@ -0,0 +1,108 @@
+@@ -0,0 +1,109 @@
 +#pragma once
 +
 +#include "skippy/activation.h"
@@ -4489,6 +4528,7 @@ index 000000000..16b33929d
 +            has_phase_hint) {
 +        inputs.selection.enabled = skippy_runtime_has_stage_plan(config);
 +        if (config != nullptr) {
++            if (config->execution_contract != nullptr) inputs.execution_contract = config->execution_contract;
 +            inputs.selection.layer_start = config->layer_start;
 +            inputs.selection.layer_end = config->layer_end;
 +            inputs.selection.glm_dsa_policy_profile = config->glm_dsa_policy_profile;
@@ -6224,10 +6264,10 @@ index 000000000..0f7c83139
 +        llama_context_params & params);
 diff --git a/src/skippy/model_loading.cpp b/src/skippy/model_loading.cpp
 new file mode 100644
-index 000000000..460cf5688
+index 000000000..ea92120e4
 --- /dev/null
 +++ b/src/skippy/model_loading.cpp
-@@ -0,0 +1,1172 @@
+@@ -0,0 +1,1191 @@
 +#include "skippy.h"
 +#include "skippy/errors.h"
 +#include "skippy/environment.h"
@@ -6672,6 +6712,9 @@ index 000000000..460cf5688
 +    if (config->resident_tensor_name_count == 0 || config->resident_tensor_names == nullptr) {
 +        return "filtered stage loading requires explicit resident tensor names";
 +    }
++    if (config->execution_contract == nullptr || config->execution_contract[0] == '\0') {
++        return "filtered stage loading requires an admitted execution contract";
++    }
 +    for (size_t i = 0; i < config->resident_tensor_name_count; ++i) {
 +        const char * name = config->resident_tensor_names[i];
 +        if (name == nullptr || name[0] == '\0') {
@@ -6762,40 +6805,19 @@ index 000000000..460cf5688
 +        return false;
 +    }
 +
-+    if (model->arch != LLM_ARCH_GLM_DSA) {
-+        return true;
-+    }
-+
-+    const size_t il = static_cast<size_t>(model->hparams.n_layer());
-+    if (il >= model->layers.size()) {
-+        return false;
-+    }
-+
-+    const llama_layer_nextn & nextn = model->layers[il].nextn;
-+    const bool has_mtp_block = nextn.eh_proj != nullptr &&
-+                               nextn.enorm != nullptr &&
-+                               nextn.hnorm != nullptr;
-+    const bool has_token_embedding = nextn.embed_tokens != nullptr ||
-+                                     model->tok_embd != nullptr;
-+    const bool has_head_norm = nextn.shared_head_norm != nullptr ||
-+                               model->output_norm != nullptr;
-+    const bool has_head = nextn.shared_head_head != nullptr ||
-+                          model->output != nullptr;
-+
-+    return has_mtp_block &&
-+           has_token_embedding &&
-+           has_head_norm &&
-+           has_head;
++    // A declared auxiliary head must satisfy ordinary builder admission.
++    // Missing dependencies are an error, not a family-specific silent opt-out.
++    return true;
 +}
 +
 +static void skippy_enable_integrated_mtp_tensors(
 +        const skippy_runtime_config * config,
 +        llama_model_params & params) {
-+    // A terminal stage does not imply MTP ownership. Only the resolved
-+    // integrated source keeps optional NextN tensors in the target load.
++    // Exact stage residency decides which optional weights are loaded, even
++    // when drafting is disabled. Unfiltered loads retain the source policy.
 +    params.load_mtp = config != nullptr &&
 +                      skippy_runtime_is_terminal_stage(config) &&
-+                      config->mtp_source == SKIPPY_MTP_SOURCE_INTEGRATED;
++                      (skippy_runtime_has_stage_plan(config) || config->mtp_source == SKIPPY_MTP_SOURCE_INTEGRATED);
 +}
 +
 +// Applies a tri-state config override on top of a derived default. Auto
@@ -6877,9 +6899,19 @@ index 000000000..460cf5688
 +        }
 +    }
 +
-+    const uint32_t lane_count = config != nullptr && config->lane_count > 0
++    const bool encoder_decoder = llama_model_has_encoder(model) && llama_model_has_decoder(model);
++    const bool classifier_workload = model->cls != nullptr || model->cls_out != nullptr;
++    const bool embedding_workload = !encoder_decoder &&
++            (classifier_workload ||
++             (llama_model_has_encoder(model) ||
++              (model->hparams.pooling_type != LLAMA_POOLING_TYPE_NONE &&
++               model->hparams.pooling_type != LLAMA_POOLING_TYPE_UNSPECIFIED)));
++    const uint32_t configured_lane_count = config != nullptr && config->lane_count > 0
 +        ? static_cast<uint32_t>(config->lane_count)
 +        : 1;
++    // Encoder output is context-global in llama.cpp. Until that state can be
++    // isolated per sequence, serialize encoder-decoder work on one lane.
++    const uint32_t lane_count = encoder_decoder ? 1 : configured_lane_count;
 +    uint32_t context_size_per_lane = 0;
 +    uint32_t context_size_total = 0;
 +    if (!skippy_context_capacity(config, lane_count, context_size_per_lane, context_size_total)) {
@@ -6919,12 +6951,13 @@ index 000000000..460cf5688
 +        stage_model->config.activation_export_identities = stage_model->activation_export_identity_ptrs.data();
 +        stage_model->config.activation_export_bindings = stage_model->activation_export_binding_ptrs.data();
 +        stage_model->config.resident_tensor_names = stage_model->resident_tensor_name_ptrs.data();
++        stage_model->execution_contract = config->execution_contract == nullptr ? "" : config->execution_contract;
++        stage_model->config.execution_contract = stage_model->execution_contract.c_str();
 +    }
 +    stage_model->lane_count = lane_count;
 +
 +    llama_context_params params = llama_context_default_params();
-+    // ctx_size is the per-lane request limit. llama.cpp's n_ctx is the total
-+    // cell pool, so every simultaneously admitted lane needs that capacity.
++    // ctx_size is a per-lane limit; reserve it for each admitted lane.
 +    params.n_ctx = context_size_total;
 +    params.n_batch = config != nullptr && config->n_batch > 0 ? static_cast<uint32_t>(config->n_batch) : context_size_per_lane;
 +    params.n_ubatch = config != nullptr && config->n_ubatch > 0 ? static_cast<uint32_t>(config->n_ubatch) : 0u;
@@ -6939,8 +6972,17 @@ index 000000000..460cf5688
 +        skippy_apply_context_hardware_config(config, params);
 +    }
 +    params.flash_attn_type = config != nullptr ? static_cast<llama_flash_attn_type>(config->flash_attn_type) : LLAMA_FLASH_ATTN_TYPE_AUTO;
-+    params.embeddings = skippy_runtime_has_stage_plan(config) &&
-+            !skippy_runtime_is_terminal_stage(config);
++    if (classifier_workload) {
++        params.pooling_type = LLAMA_POOLING_TYPE_RANK;
++    }
++    const bool activation_export_stage =
++            skippy_runtime_has_stage_plan(config) && !skippy_runtime_is_terminal_stage(config);
++    params.embeddings = embedding_workload || activation_export_stage;
++    if (embedding_workload) {
++        // Non-causal embedding graphs must fit their logical batch in one
++        // physical batch, matching llama-embedding's runtime contract.
++        params.n_ubatch = params.n_batch;
++    }
 +    const bool glm_dsa_op_timing_enabled = skippy_glm_dsa_op_timing_enabled();
 +    const bool glm_dsa_tensor_trace_enabled = skippy_glm_dsa_tensor_trace_enabled();
 +    if (model->arch == LLM_ARCH_GLM_DSA && (glm_dsa_op_timing_enabled || glm_dsa_tensor_trace_enabled)) {
@@ -6966,6 +7008,17 @@ index 000000000..460cf5688
 +        params.n_rs_seq = std::max<uint32_t>(params.n_rs_seq, 2);
 +        params.kv_unified = true;
 +    }
++    // Multi-lane activation exports rely on the shared KV pool's batch order.
++    if (activation_export_stage && stage_model->lane_count > 1 && !params.kv_unified) {
++        const char * message = "an exporting stage with multiple lanes requires a unified KV cache";
++        if (event_scope != nullptr) {
++            event_scope->emit_failure(SKIPPY_STATUS_INVALID_ARGUMENT, message);
++        }
++        llama_model_free(model);
++        delete stage_model;
++        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, message);
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
 +
 +    const skippy_graph_build_inputs graph_build_inputs = skippy_graph_build_inputs_from_config(config);
 +    stage_model->ctx = llama_init_from_model_with_graph_inputs(model, params, graph_build_inputs);
@@ -6984,6 +7037,8 @@ index 000000000..460cf5688
 +        if (event_scope != nullptr) {
 +            event_scope->emit_failure(SKIPPY_STATUS_RUNTIME_ERROR, message);
 +        }
++        llama_free(stage_model->mtp_ctx);
++        stage_model->mtp_ctx = nullptr;
 +        llama_free(stage_model->ctx);
 +        stage_model->ctx = nullptr;
 +        llama_model_free(model);
@@ -7086,6 +7141,7 @@ index 000000000..460cf5688
 +               model->hparams.n_layer_nextn > 0) {
 +        fprintf(stderr, "skippy: integrated MTP requested, but this split stage is missing required MTP graph tensors; continuing without drafts\n");
 +    }
++
 +
 +    stage_model->lane_in_use.assign(stage_model->lane_count, false);
 +    stage_model->lane_resident_prefix_tokens.resize(stage_model->lane_count);
@@ -7372,7 +7428,7 @@ index 000000000..460cf5688
 +    ctx_params.ctx_type = LLAMA_CONTEXT_TYPE_MTP;
 +    ctx_params.ctx_other = target_model->ctx;
 +    ctx_params.n_ctx = context_size_total;
-+    ctx_params.n_batch = config != nullptr && config->n_batch > 0 ? static_cast<uint32_t>(config->n_batch) : context_size_per_lane;
++    ctx_params.n_batch = config->n_batch > 0 ? static_cast<uint32_t>(config->n_batch) : context_size_per_lane;
 +    ctx_params.n_ubatch = config != nullptr && config->n_ubatch > 0 ? static_cast<uint32_t>(config->n_ubatch) : 0u;
 +    ctx_params.n_threads = config != nullptr && config->n_threads > 0 ? config->n_threads : skippy_default_thread_count();
 +    ctx_params.n_threads_batch = config != nullptr && config->n_threads_batch > 0 ? config->n_threads_batch : ctx_params.n_threads;
@@ -7384,6 +7440,9 @@ index 000000000..460cf5688
 +        ctx_params.swa_full = skippy_resolve_tristate(config->swa_full, ctx_params.swa_full);
 +        skippy_apply_context_hardware_config(config, ctx_params);
 +    }
++    if (llm_arch_is_recurrent(draft_model->arch) || llm_arch_is_hybrid(draft_model->arch)) {
++        ctx_params.kv_unified = true;
++    }
 +    ctx_params.flash_attn_type = config != nullptr ? static_cast<llama_flash_attn_type>(config->flash_attn_type) : LLAMA_FLASH_ATTN_TYPE_AUTO;
 +
 +    target_model->mtp_ctx = llama_init_from_model(draft_model, ctx_params);
@@ -7393,8 +7452,8 @@ index 000000000..460cf5688
 +        return SKIPPY_STATUS_RUNTIME_ERROR;
 +    }
 +
-+    target_model->mtp_model = draft_model;
 +    llama_set_embeddings_nextn(target_model->ctx, true, false);
++    target_model->mtp_model = draft_model;
 +    llama_set_embeddings_nextn(target_model->mtp_ctx, true, false);
 +    return skippy_success(out_error);
 +}
@@ -8234,10 +8293,10 @@ index 000000000..75cf28fbd
 +}
 diff --git a/src/skippy/model_source.cpp b/src/skippy/model_source.cpp
 new file mode 100644
-index 000000000..e03242e0d
+index 000000000..02ad771ad
 --- /dev/null
 +++ b/src/skippy/model_source.cpp
-@@ -0,0 +1,457 @@
+@@ -0,0 +1,463 @@
 +#include "skippy/model_source.h"
 +
 +#include "skippy/errors.h"
@@ -8586,6 +8645,12 @@ index 000000000..e03242e0d
 +        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "layer_start must be non-negative and less than layer_end");
 +        return SKIPPY_STATUS_INVALID_ARGUMENT;
 +    }
++    if (skippy_runtime_has_stage_plan(config) &&
++            (config->execution_contract == nullptr || config->execution_contract[0] == '\0')) {
++        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT,
++                "filtered stage loading requires an admitted execution contract");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
 +    skippy_imatrix_map imatrix;
 +    std::vector<llama_model_imatrix_data> native_imatrix;
 +    std::string imatrix_error;
@@ -8626,7 +8691,7 @@ index 000000000..e03242e0d
 +
 +    llama_model_params params = llama_model_default_params();
 +    params.load_mtp = config != nullptr && skippy_runtime_is_terminal_stage(config) &&
-+                      config->mtp_source == SKIPPY_MTP_SOURCE_INTEGRATED;
++                      (skippy_runtime_has_stage_plan(config) || config->mtp_source == SKIPPY_MTP_SOURCE_INTEGRATED);
 +    if (config != nullptr) {
 +        params.n_gpu_layers = config->n_gpu_layers;
 +        skippy_apply_model_load_memory_config(config, params);
@@ -8854,6 +8919,48 @@ index 000000000..751048af8
 +        const std::vector<skippy_package_tensor_binding_input> & inputs,
 +        std::vector<skippy_parameter_binding> & bindings,
 +        std::string & error);
+diff --git a/src/skippy/rerank_template.h b/src/skippy/rerank_template.h
+new file mode 100644
+index 000000000..f0c3b2ea7
+--- /dev/null
++++ b/src/skippy/rerank_template.h
+@@ -0,0 +1,36 @@
++#pragma once
++
++#include <algorithm>
++#include <cstddef>
++#include <string>
++#include <string_view>
++
++// Substitute only markers from the model-authored template. User-supplied
++// query/document bytes are appended verbatim and must never be parsed again.
++inline std::string skippy_render_rerank_template(
++        std::string_view prompt_template,
++        std::string_view query,
++        std::string_view document) {
++    constexpr std::string_view query_marker = "{query}";
++    constexpr std::string_view document_marker = "{document}";
++    std::string rendered;
++    std::size_t cursor = 0;
++    while (cursor < prompt_template.size()) {
++        const std::size_t query_pos = prompt_template.find(query_marker, cursor);
++        const std::size_t document_pos = prompt_template.find(document_marker, cursor);
++        const std::size_t next = std::min(query_pos, document_pos);
++        if (next == std::string_view::npos) {
++            rendered.append(prompt_template.data() + cursor, prompt_template.size() - cursor);
++            break;
++        }
++        rendered.append(prompt_template.data() + cursor, next - cursor);
++        if (next == query_pos) {
++            rendered.append(query.data(), query.size());
++            cursor = next + query_marker.size();
++        } else {
++            rendered.append(document.data(), document.size());
++            cursor = next + document_marker.size();
++        }
++    }
++    return rendered;
++}
 diff --git a/src/skippy/runtime_support.h b/src/skippy/runtime_support.h
 new file mode 100644
 index 000000000..55499ea20
@@ -8912,10 +9019,10 @@ index 000000000..55499ea20
 +        skippy_error ** out_error);
 diff --git a/src/skippy/runtime_types.h b/src/skippy/runtime_types.h
 new file mode 100644
-index 000000000..e15910887
+index 000000000..fa97e12a5
 --- /dev/null
 +++ b/src/skippy/runtime_types.h
-@@ -0,0 +1,173 @@
+@@ -0,0 +1,178 @@
 +#pragma once
 +
 +#include "skippy.h"
@@ -9017,6 +9124,7 @@ index 000000000..e15910887
 +    std::vector<std::string> activation_export_bindings;
 +    std::vector<const char *> activation_export_binding_ptrs;
 +    std::vector<std::string> resident_tensor_names;
++    std::string execution_contract;
 +    std::vector<const char *> resident_tensor_name_ptrs;
 +    skippy_glm_dsa_op_timing glm_dsa_timing = {};
 +    bool executable = true;
@@ -9062,12 +9170,16 @@ index 000000000..e15910887
 +    std::vector<int8_t> prefill_logits;
 +    llama_sampler * sampling_chain = nullptr;
 +    llama_sampler * grammar_sampler = nullptr;
++    llama_sampler * reasoning_budget_sampler = nullptr;
++    bool grammar_lazy = false;
 +    bool sampling_backend_enabled = false;
 +    // A sampler chain may be backend-initialized at most once
 +    // (llama_sampler_chain_backend_init asserts on reuse). Once a chain is
 +    // detached -- e.g. so a sampled verify window can output every row --
 +    // it must never be re-attached; only building a fresh chain clears this.
 +    bool sampling_backend_retired = false;
++    uint64_t sampling_reuse_hit_count = 0;
++    uint64_t sampling_rebuild_count = 0;
 +    skippy_sampling_config sampling_config = {};
 +    bool sampling_config_valid = false;
 +    std::string chat_sampling_metadata;
@@ -9091,15 +9203,16 @@ index 000000000..e15910887
 +};
 diff --git a/src/skippy/sampling.cpp b/src/skippy/sampling.cpp
 new file mode 100644
-index 000000000..8c87bbe07
+index 000000000..691dc6dd6
 --- /dev/null
 +++ b/src/skippy/sampling.cpp
-@@ -0,0 +1,961 @@
+@@ -0,0 +1,1128 @@
 +#include "skippy/sampling.h"
 +#include "skippy/errors.h"
 +#include "skippy/execution_internal.h"
 +#include "skippy/runtime_support.h"
 +#include "skippy/runtime_types.h"
++#include "../../common/reasoning-budget.h"
 +#include "skippy/sampling_internal.h"
 +#include "skippy/speculative_internal.h"
 +
@@ -9107,6 +9220,7 @@ index 000000000..8c87bbe07
 +#include "../vendor/nlohmann/json.hpp"
 +
 +#include <algorithm>
++#include <cinttypes>
 +#include <cmath>
 +#include <cstdint>
 +#include <cstring>
@@ -9141,8 +9255,6 @@ index 000000000..8c87bbe07
 +        bool request_logits,
 +        int32_t glm_dsa_phase_hint,
 +        struct skippy_error ** out_error) {
-+    (void) request_logits;
-+
 +    if (session == nullptr || session->ctx == nullptr || token_ids == nullptr || token_count == 0) {
 +        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "session and at least one token are required");
 +        return SKIPPY_STATUS_INVALID_ARGUMENT;
@@ -9231,6 +9343,16 @@ index 000000000..8c87bbe07
 +        return SKIPPY_STATUS_INVALID_ARGUMENT;
 +    }
 +
++    if (session->sampling_backend_enabled) {
++        // Verification requests logits for every row and then consumes them on
++        // the CPU. An attached backend sampler permits only one output row per
++        // sequence, so retire its one-shot backend initialization before
++        // building the verification batch.
++        llama_set_sampler(session->ctx, session->seq_id, nullptr);
++        session->sampling_backend_enabled = false;
++        session->sampling_backend_retired = true;
++    }
++
 +    const int32_t n_tokens = static_cast<int32_t>(token_count);
 +    llama_batch batch = llama_batch_init(n_tokens, 0, 1);
 +    batch.n_tokens = n_tokens;
@@ -9267,6 +9389,8 @@ index 000000000..8c87bbe07
 +    }
 +    const llama_vocab * vocab = llama_model_get_vocab(model);
 +    const int32_t n_vocab = llama_vocab_n_tokens(vocab);
++    int32_t suppress_token_count = 0;
++    const llama_token * suppress_tokens = llama_vocab_get_suppress_tokens(vocab, &suppress_token_count);
 +    llama_synchronize(ctx);
 +    const float * logits = llama_get_logits_ith(ctx, index);
 +    if (logits == nullptr) {
@@ -9284,24 +9408,17 @@ index 000000000..8c87bbe07
 +            &accelerated_best_logit,
 +            &best_index,
 +            static_cast<vDSP_Length>(n_vocab));
-+    if (!ignore_eog || !llama_vocab_is_eog(vocab, static_cast<llama_token>(best_index))) {
++    const bool accelerated_suppressed = suppress_tokens != nullptr && suppress_token_count > 0 &&
++            std::find(suppress_tokens, suppress_tokens + suppress_token_count,
++                    static_cast<llama_token>(best_index)) != suppress_tokens + suppress_token_count;
++    if (!accelerated_suppressed &&
++            (!ignore_eog || !llama_vocab_is_eog(vocab, static_cast<llama_token>(best_index)))) {
 +        return static_cast<llama_token>(best_index);
 +    }
 +#endif
 +
-+    llama_token best = 0;
-+    float best_logit = -std::numeric_limits<float>::infinity();
-+    for (int32_t token = 0; token < n_vocab; ++token) {
-+        if (ignore_eog && llama_vocab_is_eog(vocab, token)) {
-+            continue;
-+        }
-+        if (logits[token] > best_logit) {
-+            best_logit = logits[token];
-+            best = token;
-+        }
-+    }
-+
-+    return best;
++    return skippy_greedy_sample_allowed_logits(
++            logits, vocab, n_vocab, suppress_tokens, suppress_token_count, ignore_eog);
 +}
 +
 +llama_token skippy_greedy_sample_context(
@@ -9417,8 +9534,11 @@ index 000000000..8c87bbe07
 +    }
 +    llama_sampler_free(session->sampling_chain);
 +    llama_sampler_free(session->grammar_sampler);
++    llama_sampler_free(session->reasoning_budget_sampler);
 +    session->sampling_chain = nullptr;
 +    session->grammar_sampler = nullptr;
++    session->reasoning_budget_sampler = nullptr;
++    session->grammar_lazy = false;
 +    session->sampling_backend_enabled = false;
 +    session->sampling_backend_retired = false;
 +    session->sampling_config = {};
@@ -9506,6 +9626,7 @@ index 000000000..8c87bbe07
 +            lhs.mirostat_entropy != rhs.mirostat_entropy ||
 +            lhs.mirostat_learning_rate != rhs.mirostat_learning_rate ||
 +            lhs.sampler_count != rhs.sampler_count ||
++            lhs.reasoning_budget_tokens != rhs.reasoning_budget_tokens ||
 +            lhs.ignore_eos != rhs.ignore_eos ||
 +            lhs.dry_sequence_breaker_count != rhs.dry_sequence_breaker_count) {
 +        return false;
@@ -9539,30 +9660,79 @@ index 000000000..8c87bbe07
 +    return true;
 +}
 +
++static bool skippy_sampling_chain_is_reusable_for(
++        const skippy_session * session,
++        const skippy_sampling_config * sampling) {
++    if (session == nullptr || !session->sampling_config_valid ||
++            session->sampling_backend_retired) {
++        return false;
++    }
++    if (sampling != nullptr &&
++            skippy_sampling_configs_equal(session->sampling_config, *sampling)) {
++        return true;
++    }
++    // Greedy-equivalent configurations all build the same one-node greedy
++    // chain. Fields such as seed and top_p are semantically inactive while
++    // temperature is zero, so changing them must not detach the sampler and
++    // force an otherwise identical scheduler reservation.
++    return skippy_sampling_is_greedy_equivalent(&session->sampling_config) &&
++           skippy_sampling_is_greedy_equivalent(sampling);
++}
++
++static void skippy_store_sampling_config(
++        skippy_session * session,
++        const skippy_sampling_config * sampling) {
++    session->sampling_config = sampling != nullptr ?
++            *sampling : skippy_sampling_config{};
++    session->sampling_config_valid = true;
++}
++
++static void skippy_log_sampling_cache_metrics(
++        const skippy_session * session,
++        const char * action) {
++    if (session == nullptr || session->ctx == nullptr) {
++        return;
++    }
++    LLAMA_LOG_INFO(
++            "%s: seq=%d action=%s reuse_hits=%" PRIu64 " rebuilds=%" PRIu64 " scheduler_reserves=%" PRIu64 "\n",
++            __func__,
++            session->seq_id,
++            action,
++            session->sampling_reuse_hit_count,
++            session->sampling_rebuild_count,
++            session->ctx->get_sched_reserve_count());
++}
++
 +bool skippy_reuse_plain_chat_sampling(
 +        skippy_session * session,
 +        const skippy_sampling_config * sampling,
 +        const char * metadata_json,
 +        uint64_t prompt_token_count) {
-+    if (session == nullptr || sampling == nullptr || metadata_json == nullptr ||
++    if (session == nullptr || metadata_json == nullptr ||
 +            std::strcmp(metadata_json, "{\"grammar\":\"\"}") != 0 ||
 +            session->sampling_chain == nullptr || session->grammar_sampler != nullptr ||
++            session->reasoning_budget_sampler != nullptr ||
 +            !session->sampling_config_valid || session->sampling_config.logit_bias_count != 0 ||
-+            sampling->logit_bias_count != 0 ||
-+            !skippy_sampling_configs_equal(session->sampling_config, *sampling)) {
++            (sampling != nullptr && sampling->logit_bias_count != 0) ||
++            !skippy_sampling_chain_is_reusable_for(session, sampling)) {
 +        return false;
 +    }
 +    llama_sampler_reset(session->sampling_chain);
++    skippy_store_sampling_config(session, sampling);
 +    session->chat_sampling_metadata = metadata_json;
 +    session->grammar_generated_start = prompt_token_count;
 +    session->sampling_accepted_token_count = 0;
 +    skippy_refresh_backend_sampling(session, sampling);
++    ++session->sampling_reuse_hit_count;
++    skippy_log_sampling_cache_metrics(session, "reuse");
 +    return true;
 +}
 +
 +bool skippy_reset_reusable_sampling(skippy_session * session) {
 +    if (session == nullptr || session->sampling_chain == nullptr ||
 +            session->grammar_sampler != nullptr || !session->sampling_config_valid ||
++            session->reasoning_budget_sampler != nullptr ||
++            session->sampling_backend_retired ||
 +            session->sampling_config.logit_bias_count != 0) {
 +        return false;
 +    }
@@ -9571,35 +9741,43 @@ index 000000000..8c87bbe07
 +    session->grammar_generated_start = 0;
 +    session->sampling_accepted_token_count = 0;
 +    skippy_refresh_backend_sampling(session, &session->sampling_config);
++    ++session->sampling_reuse_hit_count;
++    skippy_log_sampling_cache_metrics(session, "reset-reuse");
 +    return true;
 +}
 +
 +static std::vector<llama_logit_bias> skippy_sampling_logit_biases(
 +        skippy_session * session,
 +        const skippy_sampling_config * sampling) {
-+    const uint32_t count = std::min<uint32_t>(sampling->logit_bias_count, SKIPPY_MAX_LOGIT_BIAS);
-+    std::vector<llama_logit_bias> biases(sampling->logit_bias, sampling->logit_bias + count);
-+    const bool ignore_eos = sampling->ignore_eos != 0 ||
-+            (sampling->flags & SKIPPY_SAMPLING_FLAG_IGNORE_EOS) != 0;
-+    if (!ignore_eos) {
-+        return biases;
++    std::vector<llama_logit_bias> biases;
++    if (sampling != nullptr) {
++        const uint32_t count = std::min<uint32_t>(sampling->logit_bias_count, SKIPPY_MAX_LOGIT_BIAS);
++        biases.assign(sampling->logit_bias, sampling->logit_bias + count);
 +    }
++    const bool ignore_eos = sampling != nullptr &&
++            (sampling->ignore_eos != 0 ||
++                    (sampling->flags & SKIPPY_SAMPLING_FLAG_IGNORE_EOS) != 0);
 +    const llama_vocab * vocab = llama_model_get_vocab(session->stage_model->model);
-+    const int32_t token_count = llama_vocab_n_tokens(vocab);
-+    for (llama_token token = 0; token < token_count; ++token) {
-+        if (!llama_vocab_is_eog(vocab, token)) {
-+            continue;
-+        }
-+        const auto found = std::find_if(biases.begin(), biases.end(), [token](const llama_logit_bias & bias) {
-+            return bias.token == token;
-+        });
-+        if (found == biases.end()) {
-+            biases.push_back({token, -INFINITY});
-+        } else {
-+            found->bias = -INFINITY;
++    if (ignore_eos) {
++        const int32_t token_count = llama_vocab_n_tokens(vocab);
++        for (llama_token token = 0; token < token_count; ++token) {
++            if (!llama_vocab_is_eog(vocab, token)) {
++                continue;
++            }
++            const auto found = std::find_if(biases.begin(), biases.end(), [token](const llama_logit_bias & bias) {
++                return bias.token == token;
++            });
++            if (found == biases.end()) {
++                biases.push_back({token, -INFINITY});
++            } else {
++                found->bias = -INFINITY;
++            }
 +        }
 +    }
-+    return biases;
++    int32_t suppress_token_count = 0;
++    const llama_token * suppress_tokens = llama_vocab_get_suppress_tokens(vocab, &suppress_token_count);
++    return skippy_add_vocab_suppress_token_biases(
++            std::move(biases), suppress_tokens, suppress_token_count);
 +}
 +
 +static std::vector<std::string> skippy_dry_sequence_breaker_storage(
@@ -9704,11 +9882,6 @@ index 000000000..8c87bbe07
 +        return nullptr;
 +    }
 +
-+    if (skippy_sampling_is_greedy_equivalent(sampling)) {
-+        llama_sampler_chain_add(sampler, llama_sampler_init_greedy());
-+        return sampler;
-+    }
-+
 +    const std::vector<llama_logit_bias> logit_biases =
 +            skippy_sampling_logit_biases(session, sampling);
 +    if (!logit_biases.empty()) {
@@ -9719,6 +9892,12 @@ index 000000000..8c87bbe07
 +                        llama_vocab_n_tokens(vocab),
 +                        static_cast<int32_t>(logit_biases.size()),
 +                        logit_biases.data()));
++    }
++    if (skippy_sampling_is_greedy_equivalent(sampling)) {
++        llama_sampler_chain_add(sampler, llama_sampler_init_greedy());
++        ++session->sampling_rebuild_count;
++        skippy_log_sampling_cache_metrics(session, "rebuild");
++        return sampler;
 +    }
 +    const uint32_t seed = sampling->seed == 0 ? LLAMA_DEFAULT_SEED : sampling->seed;
 +    const float repeat_penalty = sampling->repeat_penalty == 0.0f
@@ -9790,6 +9969,8 @@ index 000000000..8c87bbe07
 +    } else {
 +        llama_sampler_chain_add(sampler, llama_sampler_init_dist(seed));
 +    }
++    ++session->sampling_rebuild_count;
++    skippy_log_sampling_cache_metrics(session, "rebuild");
 +    return sampler;
 +}
 +
@@ -9802,8 +9983,8 @@ index 000000000..8c87bbe07
 +
 +    if (session->sampling_chain != nullptr &&
 +            session->chat_sampling_metadata.empty() &&
-+            session->sampling_config_valid &&
-+            skippy_sampling_configs_equal(session->sampling_config, *sampling)) {
++            skippy_sampling_chain_is_reusable_for(session, sampling)) {
++        skippy_store_sampling_config(session, sampling);
 +        return true;
 +    }
 +
@@ -9812,8 +9993,7 @@ index 000000000..8c87bbe07
 +    if (session->sampling_chain == nullptr) {
 +        return false;
 +    }
-+    session->sampling_config = *sampling;
-+    session->sampling_config_valid = true;
++    skippy_store_sampling_config(session, sampling);
 +    session->sampling_accepted_token_count = 0;
 +    skippy_refresh_backend_sampling(session, sampling);
 +    return true;
@@ -9833,8 +10013,12 @@ index 000000000..8c87bbe07
 +    }
 +    session->sampling_backend_enabled = false;
 +    if (session->ctx != nullptr &&
++            // Activation-export and embedding contexts require every output
++            // row. Backend sampling accepts at most one row per sequence.
++            !session->ctx->get_cparams().embeddings &&
 +            session->sampling_chain != nullptr &&
 +            session->grammar_sampler == nullptr &&
++            session->reasoning_budget_sampler == nullptr &&
 +            skippy_sampling_is_greedy_equivalent(sampling)) {
 +        session->sampling_backend_enabled =
 +                llama_set_sampler(session->ctx, session->seq_id, session->sampling_chain);
@@ -9852,6 +10036,7 @@ index 000000000..8c87bbe07
 +
 +    const llama_vocab * vocab = llama_model_get_vocab(session->stage_model->model);
 +    const bool grammar_lazy = metadata.value("grammar_lazy", false);
++    session->grammar_lazy = grammar_lazy;
 +    std::vector<std::string> trigger_patterns_storage;
 +    std::vector<const char *> trigger_patterns;
 +    std::vector<llama_token> trigger_tokens;
@@ -9928,6 +10113,81 @@ index 000000000..8c87bbe07
 +    return true;
 +}
 +
++bool skippy_init_chat_reasoning_budget_sampler(
++        skippy_session * session,
++        const skippy_sampling_config * sampling,
++        const json & metadata,
++        struct skippy_error ** out_error) {
++    if (session == nullptr || sampling == nullptr) {
++        return true;
++    }
++    const bool finite_budget = sampling->reasoning_budget_tokens >= 0;
++    const bool supports_thinking = metadata.value("supports_thinking", false);
++    const std::string start_tag = metadata.value("thinking_start_tag", std::string());
++    const auto end_tags_json = metadata.find("thinking_end_tags");
++    if (start_tag.empty() || end_tags_json == metadata.end() || !end_tags_json->is_array()) {
++        if (finite_budget && supports_thinking) {
++            skippy_set_error(
++                    out_error,
++                    SKIPPY_STATUS_INVALID_ARGUMENT,
++                    "finite reasoning budget requires thinking start and end tags");
++            return false;
++        }
++        return true;
++    }
++    const bool needs_sampler = finite_budget || session->grammar_lazy;
++    if (!needs_sampler) {
++        return true;
++    }
++    const llama_vocab * vocab = llama_model_get_vocab(session->stage_model->model);
++    const std::vector<llama_token> start_tokens = skippy_tokenize_text(vocab, start_tag, false, true);
++    std::vector<std::vector<llama_token>> end_tokens;
++    for (const auto & value : *end_tags_json) {
++        if (!value.is_string()) {
++            continue;
++        }
++        std::vector<llama_token> tokens = skippy_tokenize_text(vocab, value.get<std::string>(), false, true);
++        if (!tokens.empty()) {
++            end_tokens.push_back(std::move(tokens));
++        }
++    }
++    if (start_tokens.empty() || end_tokens.empty()) {
++        if (finite_budget && supports_thinking) {
++            skippy_set_error(
++                    out_error,
++                    SKIPPY_STATUS_INVALID_ARGUMENT,
++                    "finite reasoning budget requires non-empty tokenized thinking tags");
++            return false;
++        }
++        return true;
++    }
++    const int32_t budget = sampling->reasoning_budget_tokens < 0
++            ? std::numeric_limits<int32_t>::max()
++            : sampling->reasoning_budget_tokens;
++    session->reasoning_budget_sampler = common_reasoning_budget_init(
++            vocab, {start_tokens}, end_tokens, end_tokens.front(), budget);
++    if (session->reasoning_budget_sampler == nullptr) {
++        skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "failed to initialize reasoning budget sampler");
++        return false;
++    }
++    const std::string generation_prompt = metadata.value("generation_prompt", std::string());
++    for (const llama_token token : skippy_tokenize_text(vocab, generation_prompt, false, true)) {
++        llama_sampler_accept(session->reasoning_budget_sampler, token);
++    }
++    return true;
++}
++
++static bool skippy_chat_grammar_should_apply(const skippy_session * session) {
++    if (session == nullptr || session->grammar_sampler == nullptr) {
++        return false;
++    }
++    if (!session->grammar_lazy || session->reasoning_budget_sampler == nullptr) {
++        return true;
++    }
++    const auto state = common_reasoning_budget_get_state(session->reasoning_budget_sampler);
++    return state == REASONING_BUDGET_IDLE || state == REASONING_BUDGET_DONE;
++}
++
 +static void skippy_sync_chat_sampling_history(skippy_session * session) {
 +    if (session == nullptr || session->sampling_chain == nullptr) {
 +        return;
@@ -9936,7 +10196,22 @@ index 000000000..8c87bbe07
 +        const size_t index = session->sampling_accepted_token_count;
 +        const llama_token token = session->token_history[index];
 +        llama_sampler_accept(session->sampling_chain, token);
-+        if (session->grammar_sampler != nullptr && index >= session->grammar_generated_start) {
++        const bool generated = index >= session->grammar_generated_start;
++        const bool accept_grammar = generated && skippy_chat_grammar_should_apply(session);
++        if (session->reasoning_budget_sampler != nullptr && generated) {
++            llama_sampler_accept(session->reasoning_budget_sampler, token);
++            if (!accept_grammar && session->grammar_sampler != nullptr &&
++                    common_reasoning_budget_get_state(session->reasoning_budget_sampler) == REASONING_BUDGET_DONE) {
++                const std::vector<llama_token> * end_match =
++                        common_reasoning_budget_get_end_match(session->reasoning_budget_sampler);
++                if (end_match != nullptr) {
++                    for (const llama_token end_token : *end_match) {
++                        llama_sampler_accept(session->grammar_sampler, end_token);
++                    }
++                }
++            }
++        }
++        if (accept_grammar) {
 +            try {
 +                llama_sampler_accept(session->grammar_sampler, token);
 +            } catch (const std::exception & e) {
@@ -9981,7 +10256,10 @@ index 000000000..8c87bbe07
 +        -1,
 +        false,
 +    };
-+    if (session->grammar_sampler != nullptr) {
++    if (session->reasoning_budget_sampler != nullptr) {
++        llama_sampler_apply(session->reasoning_budget_sampler, &cur);
++    }
++    if (skippy_chat_grammar_should_apply(session)) {
 +        try {
 +            llama_sampler_apply(session->grammar_sampler, &cur);
 +        } catch (const std::exception & e) {
@@ -10008,6 +10286,7 @@ index 000000000..8c87bbe07
 +    if (skippy_mtp_greedy_sampling_fastpath_enabled() &&
 +            !session->sampling_backend_enabled &&
 +            session->grammar_sampler == nullptr &&
++            session->reasoning_budget_sampler == nullptr &&
 +            skippy_sampling_is_greedy_equivalent(sampling)) {
 +        if (session->sampling_chain != nullptr) {
 +            skippy_clear_chat_sampling(session);
@@ -10058,10 +10337,10 @@ index 000000000..8c87bbe07
 +}
 diff --git a/src/skippy/sampling_internal.h b/src/skippy/sampling_internal.h
 new file mode 100644
-index 000000000..9f819704f
+index 000000000..e48653520
 --- /dev/null
 +++ b/src/skippy/sampling_internal.h
-@@ -0,0 +1,49 @@
+@@ -0,0 +1,70 @@
 +#pragma once
 +
 +#include "skippy/common.h"
@@ -10072,10 +10351,12 @@ index 000000000..9f819704f
 +
 +#include <cstddef>
 +#include <cstdint>
++#include <vector>
 +
 +struct llama_context;
 +struct llama_model;
 +struct llama_sampler;
++struct llama_vocab;
 +struct skippy_session;
 +
 +void skippy_record_tokens(skippy_session * session, const llama_token * token_ids, size_t token_count);
@@ -10093,8 +10374,22 @@ index 000000000..9f819704f
 +        size_t token_count,
 +        skippy_error ** out_error);
 +llama_token skippy_greedy_sample_context(const llama_model * model, llama_context * ctx, int32_t index);
++llama_token skippy_greedy_sample_allowed_logits(
++        const float * logits,
++        const llama_vocab * vocab,
++        int32_t n_vocab,
++        const llama_token * suppress_tokens,
++        int32_t suppress_token_count,
++        bool ignore_eog);
 +llama_token skippy_greedy_sample_ith(skippy_session * session, int32_t index);
++// Keep exhausted sampling out of public outputs and subsequent decode inputs.
++enum skippy_status skippy_store_sampled_token(
++        llama_token token, llama_token * output, skippy_error ** out_error);
 +llama_sampler * skippy_build_sampling_chain(skippy_session * session, const skippy_sampling_config * sampling);
++std::vector<llama_logit_bias> skippy_add_vocab_suppress_token_biases(
++        std::vector<llama_logit_bias> biases,
++        const llama_token * suppress_tokens,
++        int32_t suppress_token_count);
 +void skippy_refresh_backend_sampling(skippy_session * session, const skippy_sampling_config * sampling);
 +bool skippy_reuse_plain_chat_sampling(
 +        skippy_session * session,
@@ -10106,17 +10401,102 @@ index 000000000..9f819704f
 +        skippy_session * session,
 +        const nlohmann::ordered_json & metadata,
 +        skippy_error ** out_error);
++bool skippy_init_chat_reasoning_budget_sampler(
++        skippy_session * session,
++        const skippy_sampling_config * sampling,
++        const nlohmann::ordered_json & metadata,
++        skippy_error ** out_error);
 +llama_token skippy_sample_token_ith(
 +        skippy_session * session,
 +        const skippy_sampling_config * sampling,
 +        int32_t logits_index);
 +llama_token skippy_sample_token(skippy_session * session, const skippy_sampling_config * sampling);
+diff --git a/src/skippy/sampling_vocab.cpp b/src/skippy/sampling_vocab.cpp
+new file mode 100644
+index 000000000..baf83db44
+--- /dev/null
++++ b/src/skippy/sampling_vocab.cpp
+@@ -0,0 +1,74 @@
++#include "skippy/sampling_internal.h"
++#include "skippy/errors.h"
++
++#include "llama.h"
++
++#include <algorithm>
++#include <cmath>
++#include <cstdint>
++#include <limits>
++#include <vector>
++
++enum skippy_status skippy_store_sampled_token(
++        llama_token token, llama_token * output, skippy_error ** out_error) {
++    if (token < 0) {
++        skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "sampling produced no allowed token");
++        return SKIPPY_STATUS_RUNTIME_ERROR;
++    }
++    *output = token;
++    return skippy_success(out_error);
++}
++
++std::vector<llama_logit_bias> skippy_add_vocab_suppress_token_biases(
++        std::vector<llama_logit_bias> biases,
++        const llama_token * suppress_tokens,
++        int32_t suppress_token_count) {
++    if (suppress_tokens == nullptr || suppress_token_count <= 0) {
++        return biases;
++    }
++    const llama_token * suppress_end = suppress_tokens + suppress_token_count;
++    biases.erase(std::remove_if(biases.begin(), biases.end(), [=](const llama_logit_bias & bias) {
++        return std::find(suppress_tokens, suppress_end, bias.token) != suppress_end;
++    }), biases.end());
++    biases.reserve(biases.size() + suppress_token_count);
++    for (const llama_token * token = suppress_tokens; token != suppress_end; ++token) {
++        biases.push_back({*token, -INFINITY});
++    }
++    return biases;
++}
++
++llama_token skippy_greedy_sample_allowed_logits(
++        const float * logits,
++        const llama_vocab * vocab,
++        int32_t n_vocab,
++        const llama_token * suppress_tokens,
++        int32_t suppress_token_count,
++        bool ignore_eog) {
++    if (logits == nullptr || n_vocab <= 0) {
++        return LLAMA_TOKEN_NULL;
++    }
++    std::vector<uint8_t> suppressed;
++    if (suppress_tokens != nullptr && suppress_token_count > 0) {
++        suppressed.resize(static_cast<size_t>(n_vocab), 0);
++        for (int32_t i = 0; i < suppress_token_count; ++i) {
++            const llama_token token = suppress_tokens[i];
++            if (token >= 0 && token < n_vocab) {
++                suppressed[static_cast<size_t>(token)] = 1;
++            }
++        }
++    }
++
++    llama_token best = LLAMA_TOKEN_NULL;
++    float best_logit = -std::numeric_limits<float>::infinity();
++    for (llama_token token = 0; token < n_vocab; ++token) {
++        if ((!suppressed.empty() && suppressed[static_cast<size_t>(token)] != 0) ||
++                (ignore_eog && vocab != nullptr && llama_vocab_is_eog(vocab, token))) {
++            continue;
++        }
++        if (best == LLAMA_TOKEN_NULL || logits[token] > best_logit) {
++            best_logit = logits[token];
++            best = token;
++        }
++    }
++    return best;
++}
 diff --git a/src/skippy/session.cpp b/src/skippy/session.cpp
 new file mode 100644
-index 000000000..e1cdcaab6
+index 000000000..a089530b0
 --- /dev/null
 +++ b/src/skippy/session.cpp
-@@ -0,0 +1,527 @@
+@@ -0,0 +1,539 @@
 +#include "skippy.h"
 +#include "skippy/errors.h"
 +#include "skippy/environment.h"
@@ -10192,7 +10572,7 @@ index 000000000..e1cdcaab6
 +        const skippy_session * session,
 +        skippy_error ** out_error) {
 +    if (session != nullptr && session->reset_required) {
-+        skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "session requires reset after failed verify-window recovery");
++        skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "session requires reset after failed execution or recovery");
 +        return SKIPPY_STATUS_RUNTIME_ERROR;
 +    }
 +    return SKIPPY_STATUS_OK;
@@ -10428,8 +10808,8 @@ index 000000000..e1cdcaab6
 +        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "session and out_predicted_token are required");
 +        return SKIPPY_STATUS_INVALID_ARGUMENT;
 +    }
-+    *out_predicted_token = skippy_sample_token(session, sampling);
-+    return skippy_success(out_error);
++    return skippy_store_sampled_token(
++            skippy_sample_token(session, sampling), out_predicted_token, out_error);
 +}
 +
 +enum skippy_status skippy_session_configure_chat_sampling(
@@ -10460,13 +10840,16 @@ index 000000000..e1cdcaab6
 +            return SKIPPY_STATUS_RUNTIME_ERROR;
 +        }
 +        session->chat_sampling_metadata = metadata_json;
-+        if (sampling != nullptr) {
-+            session->sampling_config = *sampling;
-+            session->sampling_config_valid = true;
-+        }
++        session->sampling_config = sampling != nullptr ?
++                *sampling : skippy_sampling_config{};
++        session->sampling_config_valid = true;
 +        session->grammar_generated_start = prompt_token_count;
 +        session->sampling_accepted_token_count = 0;
 +        if (!skippy_init_chat_grammar_sampler(session, metadata, out_error)) {
++            skippy_clear_chat_sampling(session);
++            return out_error != nullptr && *out_error != nullptr ? (*out_error)->status : SKIPPY_STATUS_RUNTIME_ERROR;
++        }
++        if (!skippy_init_chat_reasoning_budget_sampler(session, sampling, metadata, out_error)) {
 +            skippy_clear_chat_sampling(session);
 +            return out_error != nullptr && *out_error != nullptr ? (*out_error)->status : SKIPPY_STATUS_RUNTIME_ERROR;
 +        }
@@ -10514,7 +10897,16 @@ index 000000000..e1cdcaab6
 +        session->token_history.clear();
 +    }
 +    session->signal_history.clear();
-+    if (!skippy_reset_reusable_sampling(session)) {
++    // Keep a reusable backend sampler attached across reset. Detaching it
++    // makes the next sampled decode reattach the chain and mark the scheduler
++    // for reserve, which rebuilds compute buffers at every request boundary.
++    // Operators can restore detach-on-reset with
++    // SKIPPY_DETACH_SAMPLER_ON_RESET=1. Single-session prefill requests no
++    // output rows; batched prefill requests at most the final row, so the
++    // reuse path remains within the one-output-per-sequence contract.
++    const bool detach_sampler_on_reset =
++            skippy_env_enabled("SKIPPY_DETACH_SAMPLER_ON_RESET");
++    if (detach_sampler_on_reset || !skippy_reset_reusable_sampling(session)) {
 +        skippy_clear_chat_sampling(session);
 +    }
 +    skippy_mtp_clear_session_state(session);
@@ -10646,10 +11038,10 @@ index 000000000..e1cdcaab6
 +} // extern "C"
 diff --git a/src/skippy/speculative_decoding.cpp b/src/skippy/speculative_decoding.cpp
 new file mode 100644
-index 000000000..e5f0d9032
+index 000000000..3d15111fb
 --- /dev/null
 +++ b/src/skippy/speculative_decoding.cpp
-@@ -0,0 +1,547 @@
+@@ -0,0 +1,568 @@
 +#include "skippy/speculative_decoding.h"
 +#include "skippy/environment.h"
 +#include "skippy/errors.h"
@@ -10955,8 +11347,16 @@ index 000000000..e5f0d9032
 +            for (int32_t out_i = 0; out_i + 1 < n_decode; ++out_i) {
 +                batch.token[out_i] = batch.token[out_i + 1];
 +            }
-+            batch.token[n_decode - 1] = skippy_greedy_sample_context(
-+                    llama_get_model(mtp_ctx), mtp_ctx, -1);
++            const skippy_status sample_status = skippy_store_sampled_token(
++                    skippy_greedy_sample_context(llama_get_model(mtp_ctx), mtp_ctx, -1),
++                    &batch.token[n_decode - 1], out_error);
++            if (sample_status != SKIPPY_STATUS_OK) {
++                skippy_mtp_clear_session_state(session);
++                std::free(batch.token);
++                batch.token = nullptr;
++                llama_batch_free(batch);
++                return sample_status;
++            }
 +        }
 +        if (batch.token != nullptr) {
 +            std::free(batch.token);
@@ -11102,6 +11502,11 @@ index 000000000..e5f0d9032
 +            }
 +
 +            token = skippy_greedy_sample_context(llama_get_model(mtp_ctx), mtp_ctx, -1);
++            const skippy_status sample_status = skippy_store_sampled_token(token, &token, out_error);
++            if (sample_status != SKIPPY_STATUS_OK) {
++                skippy_mtp_clear_session_state(session);
++                return sample_status;
++            }
 +            if (out_mtp_draft != nullptr) {
 +                out_mtp_draft->token_ids[token_count] = token;
 +            }
@@ -11167,6 +11572,14 @@ index 000000000..e5f0d9032
 +            }
 +
 +            token = skippy_greedy_sample_context(llama_get_model(mtp_ctx), mtp_ctx, -1);
++            const skippy_status sample_status = skippy_store_sampled_token(token, &token, out_error);
++            if (sample_status != SKIPPY_STATUS_OK) {
++                skippy_mtp_clear_session_state(session);
++                std::free(batch.token);
++                batch.token = nullptr;
++                llama_batch_free(batch);
++                return sample_status;
++            }
 +            if (out_mtp_draft != nullptr) {
 +                out_mtp_draft->token_ids[token_count] = token;
 +            }
@@ -11235,12 +11648,111 @@ index 000000000..d8276944d
 +        size_t max_draft_tokens,
 +        skippy_native_mtp_draft * out_mtp_draft,
 +        skippy_error ** out_error);
+diff --git a/src/skippy/stage_execution_contract.cpp b/src/skippy/stage_execution_contract.cpp
+new file mode 100644
+index 000000000..3f707a93f
+--- /dev/null
++++ b/src/skippy/stage_execution_contract.cpp
+@@ -0,0 +1,72 @@
++#include "stage_execution_contract.h"
++#include "llama-graph.h"
++#include "../vendor/nlohmann/json.hpp"
++
++#include <algorithm>
++#include <set>
++#include <stdexcept>
++
++namespace {
++std::vector<std::string> canonical(std::vector<std::string> values) {
++    std::sort(values.begin(), values.end());
++    values.erase(std::unique(values.begin(), values.end()), values.end());
++    return values;
++}
++
++std::vector<std::string> read_parameters(const nlohmann::json & value) {
++    const auto parameters = value.get<std::vector<std::string>>();
++    if (parameters.empty() || canonical(parameters) != parameters ||
++            std::any_of(parameters.begin(), parameters.end(), [](const std::string & name) { return name.empty(); })) {
++        throw std::runtime_error("admitted profile parameters must be nonempty, sorted and unique");
++    }
++    return parameters;
++}
++}
++
++void skippy_validate_execution_dependencies(const skippy_graph_build_inputs & inputs,
++                                            bool                              auxiliary,
++                                            int32_t                           offset,
++                                            const std::vector<std::string> &  parameters,
++                                            bool                              embedding_input) {
++    const auto residents = canonical(inputs.resident_tensor_names);
++    const auto realized = canonical(parameters);
++    if (inputs.execution_contract.empty()) {
++        throw std::runtime_error("staged execution requires an admitted execution contract");
++    }
++    const auto contract = nlohmann::json::parse(inputs.execution_contract);
++    if (contract.at("version") != 1 ||
++            contract.at("layer_start") != inputs.selection.layer_start ||
++            contract.at("layer_end") != inputs.selection.layer_end) {
++        throw std::runtime_error("admitted execution contract version or stage range mismatch");
++    }
++    const auto decoder = read_parameters(contract.at("decoder"));
++    std::set<std::string> union_parameters(decoder.begin(), decoder.end());
++    std::vector<std::string> expected = auxiliary ? std::vector<std::string>() : decoder;
++    if (contract.contains("decoder_embeddings")) {
++        const auto embeddings = read_parameters(contract.at("decoder_embeddings"));
++        union_parameters.insert(embeddings.begin(), embeddings.end());
++        if (!auxiliary && embedding_input) {
++            expected = embeddings;
++        }
++    } else if (!auxiliary && embedding_input) {
++        throw std::runtime_error("raw embedding input has no admitted execution profile");
++    }
++    int32_t expected_offset = 0;
++    const auto & mtp = contract.at("mtp");
++    if (!mtp.is_array()) throw std::runtime_error("admitted auxiliary profiles must be an array");
++    for (const auto & profile : mtp) {
++        if (profile.at("offset") != expected_offset++) {
++            throw std::runtime_error("admitted auxiliary profile offsets must be contiguous and unique");
++        }
++        const auto required = read_parameters(profile.at("parameters"));
++        union_parameters.insert(required.begin(), required.end());
++        if (auxiliary && profile.at("offset") == offset) expected = required;
++    }
++    if (residents != std::vector<std::string>(union_parameters.begin(), union_parameters.end())) {
++        throw std::runtime_error("admitted stage residents do not match the execution profile union");
++    }
++    if (expected.empty() || expected != realized) {
++        throw std::runtime_error("realized graph parameters do not match the admitted execution profile: expected=" +
++                                 nlohmann::json(expected).dump() + " realized=" + nlohmann::json(realized).dump());
++    }
++}
+diff --git a/src/skippy/stage_execution_contract.h b/src/skippy/stage_execution_contract.h
+new file mode 100644
+index 000000000..bcb56cdd7
+--- /dev/null
++++ b/src/skippy/stage_execution_contract.h
+@@ -0,0 +1,15 @@
++#pragma once
++
++#include <cstdint>
++#include <string>
++#include <vector>
++
++struct skippy_graph_build_inputs;
++
++// Validate the selected decoder or auxiliary profile separately from the
++// complete shared resident set. Throws before graph execution on disagreement.
++void skippy_validate_execution_dependencies(const skippy_graph_build_inputs & inputs,
++                                            bool                              auxiliary,
++                                            int32_t                           offset,
++                                            const std::vector<std::string> &  parameters,
++                                            bool                              embedding_input = false);
 diff --git a/src/skippy/stage_plan.cpp b/src/skippy/stage_plan.cpp
 new file mode 100644
-index 000000000..7dc097dad
+index 000000000..d5c645d38
 --- /dev/null
 +++ b/src/skippy/stage_plan.cpp
-@@ -0,0 +1,632 @@
+@@ -0,0 +1,701 @@
 +#include "skippy/stage_plan.h"
 +
 +#include "errors.h"
@@ -11248,6 +11760,7 @@ index 000000000..7dc097dad
 +#include "graph_identity.h"
 +#include "package_tensor_binding.h"
 +#include "stage_slice_plan.h"
++#include "../vendor/nlohmann/json.hpp"
 +
 +#include "ggml-backend.h"
 +#include "gguf.h"
@@ -11368,6 +11881,7 @@ index 000000000..7dc097dad
 +    std::vector<char> strings;
 +    skippy_stage_plan_desc_v1 descriptor{};
 +    std::vector<profile_output> profiles;
++    std::set<std::string>                        embedding_profiles;
 +    std::vector<skippy_stage_plan_value_desc_v1> residents;
 +
 +    skippy_stage_plan_string_ref_v1 add_string(const std::string & value) {
@@ -11414,6 +11928,49 @@ index 000000000..7dc097dad
 +            sizeof(skippy_stage_plan_value_desc_v1), plan.add_string(port_identity),
 +            plan.add_string(binding)});
 +    }
++    return true;
++}
++
++bool build_execution_contract(skippy_stage_plan & plan, const skippy_stage_planner & planner,
++        std::string & error) {
++    std::map<std::string, std::string> names;
++    for (const auto & binding : planner.bindings) names.emplace(binding.identity, ggml_get_name(binding.tensor));
++    const auto native_names = [&](const std::vector<std::string> & identities) {
++        std::vector<std::string> result;
++        for (const auto & identity : identities) result.push_back(names.at(identity));
++        std::sort(result.begin(), result.end());
++        return result;
++    };
++    std::vector<std::string> decoder, embeddings;
++    for (const auto & profile : plan.guarded.profiles) {
++        auto &     expected   = plan.embedding_profiles.count(profile.profile_id) ? embeddings : decoder;
++        const auto parameters = native_names(profile.slice.parameter_identities);
++        if (expected.empty()) {
++            expected = parameters;
++        }
++        if (parameters != expected) {
++            error = "decoder input profiles disagree on parameter dependencies";
++            return false;
++        }
++    }
++    std::map<int32_t, std::vector<std::string>> mtp;
++    for (const auto & profile : plan.guarded.auxiliary_profiles) {
++        const auto parameters = native_names(profile.parameter_identities);
++        const auto inserted = mtp.emplace(profile.nextn_layer_offset, parameters);
++        if (!inserted.second && inserted.first->second != parameters) {
++            error = "MTP execution profiles disagree on parameter dependencies";
++            return false;
++        }
++    }
++    nlohmann::ordered_json auxiliary = nlohmann::ordered_json::array();
++    for (const auto & entry : mtp) auxiliary.push_back({{"offset", entry.first}, {"parameters", entry.second}});
++    nlohmann::ordered_json contract = {{"version", 1},
++        {"layer_start", plan.guarded.layer_start}, {"layer_end", plan.guarded.layer_end},
++        {"decoder", decoder}, {"mtp", auxiliary}};
++    if (!embeddings.empty()) {
++        contract["decoder_embeddings"] = embeddings;
++    }
++    plan.descriptor.execution_contract = plan.add_string(contract.dump());
 +    return true;
 +}
 +
@@ -11470,12 +12027,12 @@ index 000000000..7dc097dad
 +    return true;
 +}
 +
-+bool build_profile(
-+        const skippy_stage_planner & planner,
-+        const owned_profile & profile,
-+        context_owner & context,
-+        skippy_stage_profile_input & input,
-+        std::string & error) {
++bool build_profile(const skippy_stage_planner & planner,
++                   const owned_profile &        profile,
++                   context_owner &              context,
++                   skippy_stage_profile_input & input,
++                   std::string &                error,
++                   bool                         embedding_input = false) {
 +    llama_context_params params = llama_context_default_params();
 +    params.n_ctx = std::max<uint32_t>(32, profile.n_tokens);
 +    params.n_batch = profile.n_tokens;
@@ -11483,7 +12040,8 @@ index 000000000..7dc097dad
 +    params.n_seq_max = profile.n_sequences;
 +    params.n_threads = 1;
 +    params.n_threads_batch = 1;
-+    params.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_DISABLED;
++    // Resolve graph capabilities through the ordinary context, as execution does.
++    params.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_AUTO;
 +    // Semantic planning must observe the model graph before backend rewrites.
 +    params.op_offload = false;
 +    const skippy_graph_build_inputs build_inputs{};
@@ -11496,8 +12054,8 @@ index 000000000..7dc097dad
 +    if (llama_memory_t memory = llama_get_memory(context.get())) {
 +        memory_context = memory->init_full();
 +    }
-+    ggml_cgraph * graph = context->graph_reserve(profile.n_tokens, profile.n_sequences,
-+            profile.n_outputs, memory_context.get(), true, nullptr, build_inputs);
++    ggml_cgraph * graph = context->graph_reserve(profile.n_tokens, profile.n_sequences, profile.n_outputs,
++                                                 memory_context.get(), true, nullptr, build_inputs, embedding_input);
 +    const llm_graph_result * result = context->get_gf_res_reserve();
 +    if (graph == nullptr || result == nullptr || result->get_build_inputs().selection.enabled) {
 +        error = "stage planner cannot build an unfiltered whole-model graph";
@@ -11538,7 +12096,7 @@ index 000000000..7dc097dad
 +    params.n_seq_max = profile.n_sequences;
 +    params.n_threads = 1;
 +    params.n_threads_batch = 1;
-+    params.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_DISABLED;
++    params.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_AUTO;
 +    params.op_offload = false;
 +    params.ctx_type = LLAMA_CONTEXT_TYPE_MTP;
 +    params.embeddings = false;
@@ -11568,7 +12126,9 @@ index 000000000..7dc097dad
 +        const skippy_stage_planner & planner,
 +        skippy_stage_plan & plan,
 +        std::string & error) {
-+    if (plan.guarded.layer_end != plan.guarded.layer_count ||
++    // A router cache slot can reuse nextn storage without being an MTP head.
++    if (planner.model->hparams.router_layer >= 0 ||
++            plan.guarded.layer_end != plan.guarded.layer_count ||
 +            llama_model_n_layer_nextn(planner.model.get()) <= 0) {
 +        return true;
 +    }
@@ -11587,7 +12147,7 @@ index 000000000..7dc097dad
 +            }
 +            const std::string auxiliary_profile_id = profile.profile_id + ":mtp-" +
 +                    std::to_string(nextn_layer_offset);
-+            plan.guarded.auxiliary_profiles.push_back({auxiliary_profile_id, auxiliary.graph_identity});
++            plan.guarded.auxiliary_profiles.push_back({auxiliary_profile_id, auxiliary.graph_identity, auxiliary.parameter_identities, nextn_layer_offset});
 +            residents.insert(auxiliary.parameter_identities.begin(), auxiliary.parameter_identities.end());
 +            plan.contexts.push_back(std::move(context));
 +        }
@@ -11740,22 +12300,43 @@ index 000000000..7dc097dad
 +        return fail(out_error, SKIPPY_STATUS_INVALID_ARGUMENT,
 +                "stage planner range and output are invalid");
 +    }
++    if (llama_model_has_encoder(planner->model.get()) && llama_model_has_decoder(planner->model.get())) {
++        return fail(out_error, SKIPPY_STATUS_UNSUPPORTED,
++                "stage planner does not support encoder-decoder cross-attention");
++    }
 +    try {
 +        auto plan = std::make_unique<skippy_stage_plan>();
 +        plan->package_id = planner->package_id;
 +        plan->model = planner->model;
-+        std::vector<skippy_stage_profile_input> inputs(planner->profiles.size());
++        std::vector<skippy_stage_profile_input> inputs;
++        inputs.reserve(planner->profiles.size() * 2);
 +        std::string error;
 +        for (size_t index = 0; index < planner->profiles.size(); ++index) {
 +            context_owner context(nullptr, llama_free);
-+            if (!build_profile(*planner, planner->profiles[index], context, inputs[index], error)) {
++            skippy_stage_profile_input input;
++            if (!build_profile(*planner, planner->profiles[index], context, input, error)) {
 +                return fail(out_error, SKIPPY_STATUS_UNSUPPORTED, error);
 +            }
++            const bool supports_embeddings =
++                std::any_of(input.request_inputs->begin(), input.request_inputs->end(),
++                            [](const auto & request) { return request.identity.compare(0, 11, "embeddings.") == 0; });
++            inputs.push_back(input);
 +            plan->contexts.push_back(std::move(context));
++            if (supports_embeddings) {
++                owned_profile profile = planner->profiles[index];
++                profile.profile_id    = "embeddings:" + profile.profile_id;
++                if (!build_profile(*planner, profile, context, input, error, true)) {
++                    return fail(out_error, SKIPPY_STATUS_UNSUPPORTED, error);
++                }
++                plan->embedding_profiles.insert(profile.profile_id);
++                inputs.push_back(input);
++                plan->contexts.push_back(std::move(context));
++            }
 +        }
 +        if (!skippy_build_guarded_stage_slice_plan(inputs, layer_start, layer_end,
 +                    plan->guarded, error) ||
-+                !add_mtp_profiles(*planner, *plan, error) || !build_descriptors(*plan, error)) {
++                !add_mtp_profiles(*planner, *plan, error) ||
++                !build_execution_contract(*plan, *planner, error) || !build_descriptors(*plan, error)) {
 +            return fail(out_error, SKIPPY_STATUS_UNSUPPORTED, error);
 +        }
 +        *out_plan = plan.release();
@@ -11875,16 +12456,19 @@ index 000000000..7dc097dad
 +}
 diff --git a/src/skippy/stage_realization.cpp b/src/skippy/stage_realization.cpp
 new file mode 100644
-index 000000000..33b47ef3f
+index 000000000..c7112e82d
 --- /dev/null
 +++ b/src/skippy/stage_realization.cpp
-@@ -0,0 +1,247 @@
+@@ -0,0 +1,292 @@
 +#include "stage_realization.h"
 +
 +#include "stage_slice_plan.h"
++#include "stage_execution_contract.h"
 +
 +#include "llama-graph.h"
 +#include "llama-model.h"
++
++#include "../../ggml/src/ggml-impl.h"
 +
 +#include <algorithm>
 +#include <cstring>
@@ -11904,12 +12488,6 @@ index 000000000..33b47ef3f
 +        }
 +    }
 +    return result;
-+}
-+
-+std::vector<std::string> sorted(std::vector<std::string> values) {
-+    std::sort(values.begin(), values.end());
-+    values.erase(std::unique(values.begin(), values.end()), values.end());
-+    return values;
 +}
 +
 +void require_equal(
@@ -12001,6 +12579,29 @@ index 000000000..33b47ef3f
 +
 +}
 +
++int32_t skippy_activation_token_axis(const ggml_tensor * tensor, uint32_t n_tokens, int32_t prepared_axis) {
++    if (prepared_axis < 0) return infer_token_axis(tensor, n_tokens);
++    return skippy_admitted_token_axis(tensor, n_tokens, prepared_axis);
++}
++
++int32_t skippy_admitted_token_axis(const ggml_tensor * tensor, uint32_t n_tokens, int32_t admitted_axis) {
++    if (admitted_axis < 0) {
++        throw std::runtime_error(
++                "live stage requires an explicit admitted token axis for " +
++                std::string(tensor == nullptr ? "<null>" : ggml_get_name(tensor)) +
++                (tensor == nullptr ? std::string() :
++                    " dims=" + std::to_string(tensor->ne[0]) + "x" + std::to_string(tensor->ne[1]) + "x" +
++                    std::to_string(tensor->ne[2]) + "x" + std::to_string(tensor->ne[3]) +
++                    " op=" + ggml_op_name(tensor->op) + " source0=" +
++                    (tensor->src[0] == nullptr ? std::string("<null>") :
++                        std::string(ggml_get_name(tensor->src[0])) + "/" + ggml_op_name(tensor->src[0]->op))));
++    }
++    if (admitted_axis >= GGML_MAX_DIMS || tensor->ne[admitted_axis] != static_cast<int64_t>(n_tokens)) {
++        throw std::runtime_error("live stage frontier does not match its prepared token axis");
++    }
++    return admitted_axis;
++}
++
 +void skippy_realize_stage_graph(
 +        const llama_model & model,
 +        const llm_graph_params & params,
@@ -12010,8 +12611,18 @@ index 000000000..33b47ef3f
 +    }
 +
 +    const auto parameters = parameter_bindings(model);
-+    skippy_stage_slice_selection selection;
 +    std::string error;
++    if (params.gtype == LLM_GRAPH_TYPE_DECODER_MTP) {
++        skippy_auxiliary_graph_plan auxiliary;
++        if (!skippy_build_auxiliary_graph_plan(result.get_gf(), result.get_state_effects(),
++                    parameters, result.get_request_input_bindings(), auxiliary, error)) {
++            throw std::runtime_error("cannot realize admitted MTP graph: " + error);
++        }
++        skippy_validate_execution_dependencies(params.build_inputs, true,
++                params.cparams.nextn_layer_offset, auxiliary.parameter_identities);
++        return;
++    }
++    skippy_stage_slice_selection selection;
 +    if (!skippy_select_stage_slice(
 +                result.get_gf(),
 +                result.get_block_boundaries(),
@@ -12027,9 +12638,8 @@ index 000000000..33b47ef3f
 +        throw std::runtime_error("cannot realize admitted stage graph: " + error);
 +    }
 +
-+    require_equal("resident tensors",
-+            sorted(params.build_inputs.resident_tensor_names),
-+            sorted(selection.parameter_identities));
++    skippy_validate_execution_dependencies(params.build_inputs, false, 0, selection.parameter_identities,
++                                           params.ubatch.token == nullptr && params.ubatch.embd != nullptr);
 +    std::vector<std::string> realized_import_identities;
 +    std::vector<std::string> realized_import_bindings;
 +    std::vector<std::string> realized_export_identities;
@@ -12055,6 +12665,22 @@ index 000000000..33b47ef3f
 +        throw std::runtime_error("admitted stage frontier bindings do not match the realized graph slice");
 +    }
 +
++    std::vector<int32_t> import_token_axes;
++    import_token_axes.reserve(selection.activation_imports.size());
++    std::vector<bool> explicit_import_token_axes;
++    explicit_import_token_axes.reserve(selection.activation_imports.size());
++    for (size_t index = 0; index < selection.activation_imports.size(); ++index) {
++        const ggml_tensor * source = selection.activation_imports[index];
++        if (index < params.build_inputs.activation_frontier.size()) {
++            const int32_t admitted_axis = params.build_inputs.activation_frontier[index].token_axis;
++            import_token_axes.push_back(skippy_activation_token_axis(source, params.ubatch.n_tokens, admitted_axis));
++            explicit_import_token_axes.push_back(admitted_axis >= 0);
++        } else {
++            import_token_axes.push_back(infer_token_axis(source, params.ubatch.n_tokens));
++            explicit_import_token_axes.push_back(false);
++        }
++    }
++
 +    std::unordered_map<const ggml_tensor *, ggml_tensor *> replacements;
 +    std::vector<skippy_activation_port> imports;
 +    imports.reserve(selection.activation_imports.size());
@@ -12062,11 +12688,8 @@ index 000000000..33b47ef3f
 +        const ggml_tensor * source = selection.activation_imports[index];
 +        ggml_tensor * detached = detach_import(result.get_ctx(), source);
 +        replacements.emplace(source, detached);
-+        const int32_t axis = index < params.build_inputs.activation_frontier.size()
-+                ? params.build_inputs.activation_frontier[index].token_axis
-+                : infer_token_axis(source, params.ubatch.n_tokens);
-+        imports.push_back({detached, axis, false,
-+                params.build_inputs.activation_import_bindings[index]});
++        imports.push_back({detached, import_token_axes[index], false,
++                params.build_inputs.activation_import_bindings[index], explicit_import_token_axes[index]});
 +    }
 +    replace_references(selection, replacements);
 +
@@ -12121,18 +12744,29 @@ index 000000000..33b47ef3f
 +            tensor = replacement->second;
 +        }
 +        ggml_set_output(tensor);
-+        exports.push_back({tensor, infer_token_axis(tensor, params.ubatch.n_tokens), false,
-+                params.build_inputs.activation_export_bindings[index]});
++        const int32_t prepared_axis = index < params.activation_export_token_axes.size()
++                ? params.activation_export_token_axes[index] : -1;
++        const int32_t axis = skippy_activation_token_axis(tensor, params.ubatch.n_tokens, prepared_axis);
++        exports.push_back({tensor, axis, false,
++                params.build_inputs.activation_export_bindings[index], prepared_axis >= 0});
 +    }
 +    result.replace_with_stage_graph(graph, std::move(imports), std::move(exports));
 +}
 diff --git a/src/skippy/stage_realization.h b/src/skippy/stage_realization.h
 new file mode 100644
-index 000000000..a51962749
+index 000000000..6ef94f46d
 --- /dev/null
 +++ b/src/skippy/stage_realization.h
-@@ -0,0 +1,13 @@
+@@ -0,0 +1,21 @@
 +#pragma once
++
++#include <cstdint>
++
++struct ggml_tensor;
++
++// Preserve the admitted token axis when runtime dimensions are ambiguous.
++int32_t skippy_activation_token_axis(const ggml_tensor * tensor, uint32_t n_tokens, int32_t prepared_axis);
++int32_t skippy_admitted_token_axis(const ggml_tensor * tensor, uint32_t n_tokens, int32_t admitted_axis);
 +
 +struct llama_model;
 +struct llm_graph_params;
@@ -12147,7 +12781,7 @@ index 000000000..a51962749
 +        llm_graph_result & result);
 diff --git a/src/skippy/stage_slice_plan.cpp b/src/skippy/stage_slice_plan.cpp
 new file mode 100644
-index 000000000..dda2df504
+index 000000000..75a4da24c
 --- /dev/null
 +++ b/src/skippy/stage_slice_plan.cpp
 @@ -0,0 +1,871 @@
@@ -12450,6 +13084,13 @@ index 000000000..dda2df504
 +        if (cached != request_derived_cache.end()) {
 +            return cached->second > 0;
 +        }
++        // Layer boundaries carry activations even when the boundary itself
++        // is a raw-embedding request leaf. Only auxiliary cones outside the blocks
++        // may be rebuilt independently by the adjacent stage.
++        if (block_boundaries.find(tensor) != block_boundaries.end()) {
++            request_derived_cache[tensor] = -1;
++            return false;
++        }
 +        if (node_index.find(tensor) == node_index.end()) {
 +            const int structural_classes = structural_class_count(tensor);
 +            if (structural_classes > 1) {
@@ -12472,13 +13113,6 @@ index 000000000..dda2df504
 +            }
 +            request_derived_cache[tensor] = 1;
 +            return true;
-+        }
-+        // Transformer boundaries carry computed activations even when their
-+        // leaves are all structural. Only auxiliary cones outside the blocks
-+        // may be rebuilt independently by the adjacent stage.
-+        if (block_boundaries.find(tensor) != block_boundaries.end()) {
-+            request_derived_cache[tensor] = -1;
-+            return false;
 +        }
 +        if (!request_derived_visiting.insert(tensor).second) {
 +            error = "graph dependency cycle encountered while resolving request ownership";
@@ -13024,10 +13658,10 @@ index 000000000..dda2df504
 +}
 diff --git a/src/skippy/stage_slice_plan.h b/src/skippy/stage_slice_plan.h
 new file mode 100644
-index 000000000..61c3ee850
+index 000000000..2272a3fec
 --- /dev/null
 +++ b/src/skippy/stage_slice_plan.h
-@@ -0,0 +1,117 @@
+@@ -0,0 +1,119 @@
 +#pragma once
 +
 +#include "block_boundaries.h"
@@ -13103,6 +13737,8 @@ index 000000000..61c3ee850
 +struct skippy_auxiliary_profile_plan {
 +    std::string profile_id;
 +    std::string graph_identity;
++    std::vector<std::string> parameter_identities;
++    int32_t nextn_layer_offset = 0;
 +};
 +
 +struct skippy_guarded_stage_slice_plan {
@@ -13147,11 +13783,12 @@ index 000000000..61c3ee850
 +        std::string & error);
 diff --git a/src/skippy/state.cpp b/src/skippy/state.cpp
 new file mode 100644
-index 000000000..039dfca72
+index 000000000..aa197340b
 --- /dev/null
 +++ b/src/skippy/state.cpp
-@@ -0,0 +1,1095 @@
+@@ -0,0 +1,1167 @@
 +#include "skippy/state.h"
++#include "skippy/state_memory.h"
 +#include "skippy/errors.h"
 +#include "skippy/runtime_support.h"
 +#include "skippy/runtime_types.h"
@@ -13429,17 +14066,7 @@ index 000000000..039dfca72
 +        return nullptr;
 +    }
 +
-+    if (auto * recurrent = dynamic_cast<llama_memory_recurrent *>(memory)) {
-+        return recurrent;
-+    }
-+    if (auto * hybrid = dynamic_cast<llama_memory_hybrid *>(memory)) {
-+        return hybrid->get_mem_recr();
-+    }
-+    if (auto * hybrid_iswa = dynamic_cast<llama_memory_hybrid_iswa *>(memory)) {
-+        return hybrid_iswa->get_mem_recr();
-+    }
-+
-+    return nullptr;
++    return skippy_memory_recurrent_adapter(memory);
 +}
 +
 +enum skippy_status skippy_export_recurrent_state(
@@ -13554,16 +14181,7 @@ index 000000000..039dfca72
 +        return nullptr;
 +    }
 +
-+    if (auto * hybrid = dynamic_cast<llama_memory_hybrid *>(memory)) {
-+        return hybrid->get_mem_attn();
-+    }
-+    if (auto * kv = dynamic_cast<llama_kv_cache *>(memory)) {
-+        return kv;
-+    }
-+    if (auto * dsa = dynamic_cast<llama_kv_cache_dsa *>(memory)) {
-+        return dsa->get_mla();
-+    }
-+    return nullptr;
++    return skippy_memory_kv_adapter(memory);
 +}
 +
 +static llama_kv_cache_iswa * skippy_get_iswa_cache(skippy_session * session) {
@@ -13571,13 +14189,7 @@ index 000000000..039dfca72
 +        return nullptr;
 +    }
 +    llama_memory_t memory = session->ctx->get_memory();
-+    if (auto * iswa = dynamic_cast<llama_kv_cache_iswa *>(memory)) {
-+        return iswa;
-+    }
-+    if (auto * hybrid = dynamic_cast<llama_memory_hybrid_iswa *>(memory)) {
-+        return hybrid->get_mem_attn();
-+    }
-+    return nullptr;
++    return skippy_memory_iswa_adapter(memory);
 +}
 +
 +static skippy_kv_page_component_desc skippy_component_from_page(
@@ -13804,6 +14416,102 @@ index 000000000..039dfca72
 +        graph->reset();
 +    }
 +    session->n_past = std::max<int32_t>(session->n_past, static_cast<int32_t>(std::min<uint64_t>(desc->token_start + desc->token_count, std::numeric_limits<int32_t>::max())));
++    skippy_mtp_clear_session_state(session);
++    session->verify_checkpoints.clear();
++    session->ctx->synchronize();
++    return skippy_success(out_error);
++}
++
++enum skippy_status skippy_import_cachegen_kv_page_v1(struct skippy_session *                  session,
++                                                     const struct skippy_kv_page_desc *       desc,
++                                                     const struct skippy_cachegen_record_v1 * records,
++                                                     size_t                                   record_count,
++                                                     struct skippy_error **                   out_error) {
++    if (session == nullptr || session->ctx == nullptr || desc == nullptr || records == nullptr || record_count == 0) {
++        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT,
++                         "session, descriptor, and CacheGen records are required");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
++    if (session->n_past != 0) {
++        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "CacheGen page import requires a fresh session");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
++
++    std::string error;
++    bool        ok               = false;
++    bool        unsupported      = false;
++    bool        invalid_argument = false;
++    if (desc->codec == SKIPPY_KV_PAGE_CODEC_ISWA_COMPOSITE_V1) {
++        auto * iswa = skippy_get_iswa_cache(session);
++        if (!skippy_validate_composite_desc(*desc, desc->payload_bytes, error)) {
++            invalid_argument = true;
++        } else if (iswa == nullptr) {
++            unsupported = true;
++            error       = "composite CacheGen page requires ISWA memory";
++        } else {
++            const auto     base         = skippy_page_from_component(*desc, desc->components[0]);
++            const auto     swa          = skippy_page_from_component(*desc, desc->components[1]);
++            const uint64_t split_offset = desc->components[1].payload_offset;
++            size_t         split        = 0;
++            while (split < record_count && records[split].output_offset < split_offset) {
++                ++split;
++            }
++            if (split == 0 || split == record_count) {
++                invalid_argument = true;
++                error            = "CacheGen records do not cover both ISWA components";
++            } else {
++                bool       base_unsupported = false;
++                bool       swa_unsupported  = false;
++                bool       base_invalid     = false;
++                bool       swa_invalid      = false;
++                const bool base_valid       = iswa->get_base()->stage_import_cachegen_kv_page(
++                    session->seq_id, base, records, split, 0, error, base_unsupported, base_invalid, true);
++                const bool swa_valid =
++                    base_valid && iswa->get_swa()->stage_import_cachegen_kv_page(
++                                      session->seq_id, swa, records + split, record_count - split,
++                                      static_cast<size_t>(split_offset), error, swa_unsupported, swa_invalid, true);
++                unsupported      = base_unsupported || swa_unsupported;
++                invalid_argument = base_invalid || swa_invalid;
++                if (base_valid && swa_valid) {
++                    bool ignored         = false;
++                    bool ignored_invalid = false;
++                    ok = iswa->get_base()->stage_import_cachegen_kv_page(session->seq_id, base, records, split, 0,
++                                                                         error, ignored, ignored_invalid) &&
++                         iswa->get_swa()->stage_import_cachegen_kv_page(
++                             session->seq_id, swa, records + split, record_count - split,
++                             static_cast<size_t>(split_offset), error, ignored, ignored_invalid);
++                    invalid_argument = ignored_invalid;
++                }
++            }
++        }
++        if (!ok && iswa != nullptr) {
++            iswa->get_base()->seq_rm(session->seq_id, -1, -1);
++            iswa->get_swa()->seq_rm(session->seq_id, -1, -1);
++        }
++    } else if (desc->codec == 0 || desc->codec == SKIPPY_KV_PAGE_CODEC_SINGLE_V1) {
++        if (auto * kv = skippy_get_kv_cache(session, out_error)) {
++            ok = kv->stage_import_cachegen_kv_page(session->seq_id, *desc, records, record_count, 0, error, unsupported,
++                                                   invalid_argument);
++        } else {
++            return SKIPPY_STATUS_UNSUPPORTED;
++        }
++    } else {
++        invalid_argument = true;
++        error            = "unsupported native KV page codec";
++    }
++    if (!ok) {
++        const enum skippy_status status = invalid_argument ?
++                                              SKIPPY_STATUS_INVALID_ARGUMENT :
++                                              (unsupported ? SKIPPY_STATUS_UNSUPPORTED : SKIPPY_STATUS_RUNTIME_ERROR);
++        skippy_set_error(out_error, status, error.c_str());
++        return status;
++    }
++    if (llm_graph_result * graph = session->ctx->get_gf_res_prev_active()) {
++        graph->reset();
++    }
++    session->n_past = std::max<int32_t>(session->n_past,
++                                        static_cast<int32_t>(std::min<uint64_t>(desc->token_start + desc->token_count,
++                                                                                std::numeric_limits<int32_t>::max())));
 +    skippy_mtp_clear_session_state(session);
 +    session->verify_checkpoints.clear();
 +    session->ctx->synchronize();
@@ -14248,15 +14956,16 @@ index 000000000..039dfca72
 +} // extern "C"
 diff --git a/src/skippy/state_effects.cpp b/src/skippy/state_effects.cpp
 new file mode 100644
-index 000000000..b0224819c
+index 000000000..b33ed2d5d
 --- /dev/null
 +++ b/src/skippy/state_effects.cpp
-@@ -0,0 +1,436 @@
+@@ -0,0 +1,450 @@
 +#include "state_effects.h"
 +
 +#include "block_boundaries.h"
 +
 +#include "ggml.h"
++#include "../../ggml/src/ggml-impl.h"
 +
 +#include <algorithm>
 +#include <cinttypes>
@@ -14555,7 +15264,18 @@ index 000000000..b0224819c
 +
 +    std::unordered_map<const ggml_tensor *, int32_t> positions;
 +    for (int32_t index = 0; index < ggml_graph_n_nodes(const_cast<ggml_cgraph *>(graph)); ++index) {
-+        positions.emplace(ggml_graph_node(const_cast<ggml_cgraph *>(graph), index), index);
++        const ggml_tensor * node = ggml_graph_node(const_cast<ggml_cgraph *>(graph), index);
++        if (node == nullptr) {
++            error = "state inference graph contains a null node";
++            return false;
++        }
++        positions.emplace(node, index);
++    }
++
++    // A raw-embedding entry is a graph leaf, before every executable node.
++    bool initial_entry_is_leaf = false;
++    for (int32_t index = 0; index < graph->n_leafs; ++index) {
++        initial_entry_is_leaf = initial_entry_is_leaf || graph->leafs[index] == boundaries.front().tensor;
 +    }
 +
 +    struct explicit_owner {
@@ -14635,11 +15355,13 @@ index 000000000..b0224819c
 +        for (size_t layer = 0; layer < boundaries.size() / 2; ++layer) {
 +            const auto entry = positions.find(boundaries[2 * layer].tensor);
 +            const auto exit = positions.find(boundaries[2 * layer + 1].tensor);
-+            if (entry == positions.end() || exit == positions.end()) {
++            const bool initial_leaf = layer == 0 && initial_entry_is_leaf && entry == positions.end();
++            if ((!initial_leaf && entry == positions.end()) || exit == positions.end()) {
 +                error = "state inference could not locate a block boundary in the exact graph";
 +                return false;
 +            }
-+            if (index >= entry->second && index <= exit->second) {
++            const int32_t entry_position = initial_leaf ? -1 : entry->second;
++            if (index >= entry_position && index <= exit->second) {
 +                owner_layer = static_cast<int32_t>(layer);
 +                break;
 +            }
@@ -14768,6 +15490,106 @@ index 000000000..5bb6b779b
 +        const std::vector<skippy_block_boundary> & boundaries,
 +        std::vector<skippy_state_effect> & effects,
 +        std::string & error);
+diff --git a/src/skippy/state_memory.cpp b/src/skippy/state_memory.cpp
+new file mode 100644
+index 000000000..ad59dced1
+--- /dev/null
++++ b/src/skippy/state_memory.cpp
+@@ -0,0 +1,74 @@
++#include "skippy/state_memory.h"
++#include "skippy/state.h"
++#include "skippy/runtime_types.h"
++#include "llama-kv-cache.h"
++#include "llama-kv-cache-iswa.h"
++#include "llama-kv-cache-dsa.h"
++#include "llama-memory-hybrid.h"
++#include "llama-memory-hybrid-iswa.h"
++#include "llama-memory-recurrent.h"
++#include <typeinfo>
++
++llama_kv_cache * skippy_memory_kv_adapter(llama_memory_t memory) {
++    if (auto * hybrid = dynamic_cast<llama_memory_hybrid *>(memory)) {
++        return hybrid->get_mem_attn();
++    }
++    if (auto * kv = dynamic_cast<llama_kv_cache *>(memory)) {
++        return kv;
++    }
++    if (auto * dsa = dynamic_cast<llama_kv_cache_dsa *>(memory)) {
++        return dsa->get_mla();
++    }
++    return nullptr;
++}
++
++llama_kv_cache_iswa * skippy_memory_iswa_adapter(llama_memory_t memory) {
++    if (auto * iswa = dynamic_cast<llama_kv_cache_iswa *>(memory)) {
++        return iswa;
++    }
++    if (auto * hybrid = dynamic_cast<llama_memory_hybrid_iswa *>(memory)) {
++        return hybrid->get_mem_attn();
++    }
++    return nullptr;
++}
++
++llama_memory_recurrent * skippy_memory_recurrent_adapter(llama_memory_t memory) {
++    if (auto * recurrent = dynamic_cast<llama_memory_recurrent *>(memory)) {
++        return recurrent;
++    }
++    if (auto * hybrid = dynamic_cast<llama_memory_hybrid *>(memory)) {
++        return hybrid->get_mem_recr();
++    }
++    if (auto * hybrid = dynamic_cast<llama_memory_hybrid_iswa *>(memory)) {
++        return hybrid->get_mem_recr();
++    }
++    return nullptr;
++}
++
++uint32_t skippy_memory_cache_capabilities(llama_memory_t memory) {
++    if (!memory) {
++        return 0;
++    }
++    // Exact types are intentional: an unknown derived class may own additional
++    // state that a base-class adapter would silently omit. Never infer complete
++    // coverage merely from a successful dynamic_cast or a nonempty export.
++    const auto & type = typeid(*memory);
++    if (type == typeid(llama_kv_cache) || type == typeid(llama_kv_cache_iswa)) {
++        return SKIPPY_MEMORY_CACHE_RESIDENT | SKIPPY_MEMORY_CACHE_KV_RECURRENT;
++    }
++    if (type == typeid(llama_memory_recurrent)) {
++        return skippy_memory_recurrent_adapter(memory) ? SKIPPY_MEMORY_CACHE_KV_RECURRENT : 0;
++    }
++    if (type == typeid(llama_memory_hybrid) || type == typeid(llama_memory_hybrid_iswa)) {
++        return skippy_memory_recurrent_adapter(memory) &&
++                (skippy_memory_kv_adapter(memory) || skippy_memory_iswa_adapter(memory))
++                ? SKIPPY_MEMORY_CACHE_KV_RECURRENT : 0;
++    }
++    // DSA/MSA memories include an indexer tier. Until a real-model resident
++    // save/restore proves that tier survives, use complete state snapshots.
++    return 0;
++}
++
++extern "C" uint32_t skippy_model_memory_cache_capabilities(const skippy_model * model) {
++    return model && model->ctx ? skippy_memory_cache_capabilities(model->ctx->get_memory()) : 0;
++}
+diff --git a/src/skippy/state_memory.h b/src/skippy/state_memory.h
+new file mode 100644
+index 000000000..d045c9b82
+--- /dev/null
++++ b/src/skippy/state_memory.h
+@@ -0,0 +1,14 @@
++#pragma once
++
++#include "../llama-memory.h"
++#include <cstdint>
++
++class llama_kv_cache;
++class llama_kv_cache_iswa;
++class llama_memory_recurrent;
++
++// The export adapters and capability query share this loaded-memory dispatch.
++llama_kv_cache * skippy_memory_kv_adapter(llama_memory_t memory);
++llama_kv_cache_iswa * skippy_memory_iswa_adapter(llama_memory_t memory);
++llama_memory_recurrent * skippy_memory_recurrent_adapter(llama_memory_t memory);
++uint32_t skippy_memory_cache_capabilities(llama_memory_t memory);
 diff --git a/src/skippy/tokenization.cpp b/src/skippy/tokenization.cpp
 new file mode 100644
 index 000000000..54753a161
@@ -14955,10 +15777,10 @@ index 000000000..54753a161
 +} // extern "C"
 diff --git a/src/skippy/verification.cpp b/src/skippy/verification.cpp
 new file mode 100644
-index 000000000..3ccd2f6a4
+index 000000000..e078d867c
 --- /dev/null
 +++ b/src/skippy/verification.cpp
-@@ -0,0 +1,265 @@
+@@ -0,0 +1,270 @@
 +#include "skippy.h"
 +#include "skippy/activation_internal.h"
 +#include "skippy/errors.h"
@@ -15190,7 +16012,12 @@ index 000000000..3ccd2f6a4
 +        for (size_t i = 0; i < token_count; ++i) {
 +            skippy_record_tokens(session, &token_ids[i], 1);
 +            const int32_t logits_index = static_cast<int32_t>(i);
-+            output_tokens[i] = skippy_sample_token_ith(session, sampling, logits_index);
++            status = skippy_store_sampled_token(
++                    skippy_sample_token_ith(session, sampling, logits_index), &output_tokens[i], out_error);
++            if (status != SKIPPY_STATUS_OK) {
++                *out_token_count = 0;
++                return status;
++            }
 +            if (stop_after_first_mismatch && i + 1 < token_count && output_tokens[i] != token_ids[i + 1]) {
 +                // Later rows are conditioned on a rejected token and are not
 +                // authoritative predictions. Stop advancing the sampler and
@@ -15224,6 +16051,397 @@ index 000000000..3ccd2f6a4
 +
 +
 +} // extern "C"
+diff --git a/src/skippy/workloads.cpp b/src/skippy/workloads.cpp
+new file mode 100644
+index 000000000..be5c49fa0
+--- /dev/null
++++ b/src/skippy/workloads.cpp
+@@ -0,0 +1,371 @@
++#include "skippy/workloads.h"
++
++#include "llama.h"
++#include "llama-model.h"
++#include "skippy/errors.h"
++#include "skippy/rerank_template.h"
++#include "skippy/runtime_support.h"
++#include "skippy/runtime_types.h"
++#include "skippy/workloads_internal.h"
++
++#include <algorithm>
++#include <cmath>
++#include <cstddef>
++#include <cstdint>
++#include <cstring>
++#include <limits>
++#include <string>
++#include <vector>
++
++namespace {
++
++enum skippy_workload_kind workload_kind(const skippy_model * model) {
++    const bool                    has_encoder = llama_model_has_encoder(model->model);
++    const bool                    has_decoder = llama_model_has_decoder(model->model);
++    const enum llama_pooling_type pooling     = llama_pooling_type(model->ctx);
++
++    if (model->model->cls != nullptr || model->model->cls_out != nullptr || pooling == LLAMA_POOLING_TYPE_RANK) {
++        return SKIPPY_WORKLOAD_RERANK;
++    }
++    if (has_encoder && has_decoder) {
++        return SKIPPY_WORKLOAD_ENCODER_DECODER;
++    }
++    if (has_encoder || (pooling != LLAMA_POOLING_TYPE_NONE && pooling != LLAMA_POOLING_TYPE_UNSPECIFIED)) {
++        return SKIPPY_WORKLOAD_EMBEDDING;
++    }
++    return SKIPPY_WORKLOAD_CAUSAL_GENERATION;
++}
++
++bool is_full_model(const skippy_model * model) {
++    // Mirrors skippy_is_full_model_config(): a stage-plan config (or an
++    // explicit layer range) means filtered stage execution, which non-chat
++    // workloads do not support.
++    return model != nullptr && !skippy_runtime_has_stage_plan(&model->config) &&
++           model->config.layer_start == 0;
++}
++
++enum skippy_status require_workload(skippy_session *          session,
++                                    enum skippy_workload_kind required,
++                                    skippy_error **           out_error) {
++    if (session == nullptr || session->stage_model == nullptr || session->stage_model->model == nullptr ||
++        session->ctx == nullptr) {
++        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "an active session is required");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
++    if (!is_full_model(session->stage_model)) {
++        skippy_set_error(out_error, SKIPPY_STATUS_UNSUPPORTED, "non-chat workloads currently require a full model");
++        return SKIPPY_STATUS_UNSUPPORTED;
++    }
++    if (workload_kind(session->stage_model) != required) {
++        skippy_set_error(out_error, SKIPPY_STATUS_UNSUPPORTED, "model does not implement the requested workload");
++        return SKIPPY_STATUS_UNSUPPORTED;
++    }
++    return SKIPPY_STATUS_OK;
++}
++
++enum skippy_status validate_tokens(skippy_session *    session,
++                                   const llama_token * token_ids,
++                                   size_t              token_count,
++                                   skippy_error **     out_error) {
++    if (token_ids == nullptr || token_count == 0) {
++        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "at least one token is required");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
++    if (token_count > static_cast<size_t>(std::numeric_limits<int32_t>::max()) ||
++        token_count > static_cast<size_t>(llama_n_batch(session->ctx))) {
++        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "token count exceeds the model batch capacity");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
++    return SKIPPY_STATUS_OK;
++}
++
++}  // namespace
++
++void skippy_prepare_non_chat_workload(skippy_session * session) {
++    skippy_synchronize_context_if_pending(session->stage_model);
++    skippy_clear_chat_sampling(session);
++    if (llama_memory_t memory = llama_get_memory(session->ctx)) {
++        llama_memory_clear(memory, true);
++    }
++    session->n_past = 0;
++    session->token_history.clear();
++    session->signal_history.clear();
++}
++
++namespace {
++
++llama_batch make_embedding_batch(skippy_session * session, const llama_token * token_ids, size_t token_count) {
++    llama_batch batch = llama_batch_init(static_cast<int32_t>(token_count), 0, 1);
++    batch.n_tokens    = static_cast<int32_t>(token_count);
++    for (int32_t index = 0; index < batch.n_tokens; ++index) {
++        batch.token[index]     = token_ids[index];
++        batch.pos[index]       = index;
++        batch.n_seq_id[index]  = 1;
++        batch.seq_id[index][0] = session->seq_id;
++        batch.logits[index]    = 1;
++    }
++    return batch;
++}
++
++enum skippy_status decode_embedding(skippy_session *    session,
++                                    const llama_token * token_ids,
++                                    size_t              token_count,
++                                    const float **      out_embedding,
++                                    skippy_error **     out_error) {
++    skippy_prepare_non_chat_workload(session);
++    llama_batch   batch         = make_embedding_batch(session, token_ids, token_count);
++    int32_t decode_status = 0;
++    const bool decoded = skippy_contain_native_failure(
++            out_error, [&] { decode_status = llama_decode(session->ctx, batch); });
++    llama_batch_free(batch);
++    if (!decoded) {
++        return SKIPPY_STATUS_RUNTIME_ERROR;
++    }
++    if (decode_status != 0) {
++        skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "llama_decode failed for non-chat workload");
++        return SKIPPY_STATUS_RUNTIME_ERROR;
++    }
++    skippy_mark_context_work_pending(session->stage_model);
++
++    const enum llama_pooling_type pooling   = llama_pooling_type(session->ctx);
++    const float *                 embedding = pooling == LLAMA_POOLING_TYPE_NONE ?
++                                                  llama_get_embeddings_ith(session->ctx, static_cast<int32_t>(token_count - 1)) :
++                                                  llama_get_embeddings_seq(session->ctx, session->seq_id);
++    skippy_mark_context_synchronized(session->stage_model);
++    if (embedding == nullptr) {
++        skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "model produced no workload output");
++        return SKIPPY_STATUS_RUNTIME_ERROR;
++    }
++    *out_embedding  = embedding;
++    session->n_past = static_cast<int32_t>(token_count);
++    session->token_history.assign(token_ids, token_ids + token_count);
++    return SKIPPY_STATUS_OK;
++}
++
++void normalize_embedding(const float * source, float * output, size_t dimensions) {
++    double squared_norm = 0.0;
++    for (size_t index = 0; index < dimensions; ++index) {
++        squared_norm += static_cast<double>(source[index]) * source[index];
++    }
++    const float scale = squared_norm > 0.0 ? static_cast<float>(1.0 / std::sqrt(squared_norm)) : 1.0f;
++    for (size_t index = 0; index < dimensions; ++index) {
++        output[index] = source[index] * scale;
++    }
++}
++
++std::string token_piece(const llama_vocab * vocab, llama_token token) {
++    char    stack[128];
++    int32_t length = llama_token_to_piece(vocab, token, stack, sizeof(stack), 0, true);
++    if (length >= 0) {
++        return std::string(stack, static_cast<size_t>(length));
++    }
++    std::string dynamic(static_cast<size_t>(-length), '\0');
++    length = llama_token_to_piece(vocab, token, dynamic.data(), static_cast<int32_t>(dynamic.size()), 0, true);
++    return length > 0 ? dynamic.substr(0, static_cast<size_t>(length)) : std::string();
++}
++
++bool tokenize(const llama_vocab * vocab, const std::string & text, std::vector<llama_token> & tokens) {
++    if (text.size() > static_cast<size_t>(std::numeric_limits<int32_t>::max())) {
++        return false;
++    }
++    const int32_t text_length = static_cast<int32_t>(text.size());
++    int32_t       count       = llama_tokenize(vocab, text.data(), text_length, nullptr, 0, true, true);
++    if (count >= 0) {
++        tokens.resize(static_cast<size_t>(count));
++    } else {
++        tokens.resize(static_cast<size_t>(-count));
++    }
++    count =
++        llama_tokenize(vocab, text.data(), text_length, tokens.data(), static_cast<int32_t>(tokens.size()), true, true);
++    if (count < 0) {
++        return false;
++    }
++    tokens.resize(static_cast<size_t>(count));
++    return !tokens.empty();
++}
++
++std::string rerank_prompt(const llama_model * model, const char * query, const char * document) {
++    if (const char * prompt_template = llama_model_chat_template(model, "rerank")) {
++        return skippy_render_rerank_template(prompt_template, query, document);
++    }
++
++    const llama_vocab * vocab = llama_model_get_vocab(model);
++    std::string         prompt(query);
++    if (llama_vocab_get_add_eos(vocab)) {
++        prompt += token_piece(vocab, llama_vocab_eos(vocab));
++    }
++    if (llama_vocab_get_add_sep(vocab)) {
++        prompt += token_piece(vocab, llama_vocab_sep(vocab));
++    }
++    prompt += document;
++    return prompt;
++}
++
++}  // namespace
++
++extern "C" {
++
++enum skippy_status skippy_model_workload_info_v1(const skippy_model *      model,
++                                                 skippy_workload_info_v1 * out_info,
++                                                 skippy_error **           out_error) {
++    if (model == nullptr || model->model == nullptr || model->ctx == nullptr || out_info == nullptr) {
++        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "model and out_info are required");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
++    if (out_info->abi_version != SKIPPY_WORKLOAD_INFO_V1_ABI_VERSION ||
++        out_info->struct_size != sizeof(skippy_workload_info_v1)) {
++        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "incompatible workload descriptor ABI");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
++
++    const skippy_workload_kind kind              = workload_kind(model);
++    const uint32_t             output_dimensions = kind == SKIPPY_WORKLOAD_EMBEDDING ?
++                                                       static_cast<uint32_t>(std::max(llama_model_n_embd_out(model->model), 0)) :
++                                                       0;
++    const uint32_t classifier_outputs = kind == SKIPPY_WORKLOAD_RERANK ? llama_model_n_cls_out(model->model) : 0;
++    *out_info                         = {
++        SKIPPY_WORKLOAD_INFO_V1_ABI_VERSION,
++        static_cast<uint32_t>(sizeof(skippy_workload_info_v1)),
++        kind,
++        static_cast<skippy_workload_pooling>(llama_pooling_type(model->ctx)),
++        output_dimensions,
++        classifier_outputs,
++        llama_model_has_encoder(model->model),
++        llama_model_has_decoder(model->model),
++        true,
++        0,
++    };
++    return skippy_success(out_error);
++}
++
++enum skippy_status skippy_session_embed(skippy_session *    session,
++                                        const llama_token * token_ids,
++                                        size_t              token_count,
++                                        float *             output,
++                                        size_t              output_capacity,
++                                        size_t *            out_dimensions,
++                                        skippy_error **     out_error) {
++    if (out_dimensions != nullptr) {
++        *out_dimensions = 0;
++    }
++    enum skippy_status status = require_workload(session, SKIPPY_WORKLOAD_EMBEDDING, out_error);
++    if (status != SKIPPY_STATUS_OK) {
++        return status;
++    }
++    if (output == nullptr || out_dimensions == nullptr) {
++        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "output and out_dimensions are required");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
++    status = validate_tokens(session, token_ids, token_count, out_error);
++    if (status != SKIPPY_STATUS_OK) {
++        return status;
++    }
++    const int32_t native_dimensions = llama_model_n_embd_out(session->stage_model->model);
++    if (native_dimensions <= 0) {
++        skippy_set_error(out_error, SKIPPY_STATUS_MODEL_ERROR, "model has no embedding output dimensions");
++        return SKIPPY_STATUS_MODEL_ERROR;
++    }
++    const size_t dimensions = static_cast<size_t>(native_dimensions);
++    *out_dimensions         = dimensions;
++    if (output_capacity < dimensions) {
++        skippy_set_error(out_error, SKIPPY_STATUS_BUFFER_TOO_SMALL, "embedding output buffer is too small");
++        return SKIPPY_STATUS_BUFFER_TOO_SMALL;
++    }
++
++    const float * embedding = nullptr;
++    status                  = decode_embedding(session, token_ids, token_count, &embedding, out_error);
++    if (status != SKIPPY_STATUS_OK) {
++        return status;
++    }
++    normalize_embedding(embedding, output, dimensions);
++    return skippy_success(out_error);
++}
++
++enum skippy_status skippy_session_rerank(skippy_session * session,
++                                         const char *     query,
++                                         const char *     document,
++                                         float *          out_score,
++                                         size_t *         out_token_count,
++                                         skippy_error **  out_error) {
++    if (out_token_count != nullptr) {
++        *out_token_count = 0;
++    }
++    enum skippy_status status = require_workload(session, SKIPPY_WORKLOAD_RERANK, out_error);
++    if (status != SKIPPY_STATUS_OK) {
++        return status;
++    }
++    if (query == nullptr || document == nullptr || out_score == nullptr || out_token_count == nullptr) {
++        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT,
++                         "query, document, and output pointers are required");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
++    if (llama_model_n_cls_out(session->stage_model->model) != 1) {
++        skippy_set_error(out_error, SKIPPY_STATUS_UNSUPPORTED, "rerank API requires a single classifier output");
++        return SKIPPY_STATUS_UNSUPPORTED;
++    }
++
++    std::vector<llama_token> tokens;
++    const std::string        prompt = rerank_prompt(session->stage_model->model, query, document);
++    if (!tokenize(llama_model_get_vocab(session->stage_model->model), prompt, tokens)) {
++        skippy_set_error(out_error, SKIPPY_STATUS_MODEL_ERROR, "failed to tokenize rerank input");
++        return SKIPPY_STATUS_MODEL_ERROR;
++    }
++    status = validate_tokens(session, tokens.data(), tokens.size(), out_error);
++    if (status != SKIPPY_STATUS_OK) {
++        return status;
++    }
++
++    const float * ranks = nullptr;
++    status              = decode_embedding(session, tokens.data(), tokens.size(), &ranks, out_error);
++    if (status != SKIPPY_STATUS_OK) {
++        return status;
++    }
++    *out_score       = ranks[0];
++    *out_token_count = tokens.size();
++    return skippy_success(out_error);
++}
++
++enum skippy_status skippy_session_encode_prompt(skippy_session *    session,
++                                                const llama_token * token_ids,
++                                                size_t              token_count,
++                                                llama_token *       out_decoder_start_token,
++                                                skippy_error **     out_error) {
++    enum skippy_status status = require_workload(session, SKIPPY_WORKLOAD_ENCODER_DECODER, out_error);
++    if (status != SKIPPY_STATUS_OK) {
++        return status;
++    }
++    if (out_decoder_start_token == nullptr) {
++        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "out_decoder_start_token is required");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
++    status = validate_tokens(session, token_ids, token_count, out_error);
++    if (status != SKIPPY_STATUS_OK) {
++        return status;
++    }
++    if (token_count > static_cast<size_t>(llama_n_ubatch(session->ctx))) {
++        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT,
++                         "encoder input exceeds the physical batch capacity");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
++
++    skippy_prepare_non_chat_workload(session);
++    llama_batch batch = llama_batch_get_one(const_cast<llama_token *>(token_ids), static_cast<int32_t>(token_count));
++    if (llama_encode(session->ctx, batch) != 0) {
++        skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "llama_encode failed for encoder-decoder workload");
++        return SKIPPY_STATUS_RUNTIME_ERROR;
++    }
++    skippy_mark_context_work_pending(session->stage_model);
++
++    llama_token start = llama_model_decoder_start_token(session->stage_model->model);
++    if (start == LLAMA_TOKEN_NULL) {
++        start = llama_vocab_bos(llama_model_get_vocab(session->stage_model->model));
++    }
++    if (start == LLAMA_TOKEN_NULL) {
++        skippy_set_error(out_error, SKIPPY_STATUS_MODEL_ERROR, "model has no decoder start or BOS token");
++        return SKIPPY_STATUS_MODEL_ERROR;
++    }
++    *out_decoder_start_token = start;
++    return skippy_success(out_error);
++}
++
++}  // extern "C"
+diff --git a/src/skippy/workloads_internal.h b/src/skippy/workloads_internal.h
+new file mode 100644
+index 000000000..cc9279e7e
+--- /dev/null
++++ b/src/skippy/workloads_internal.h
+@@ -0,0 +1,8 @@
++#pragma once
++
++struct skippy_session;
++
++// Prepare a pooled session for a non-chat workload. Embedding and rerank
++// batches request output for every input row, so no backend sampler may remain
++// attached from an earlier chat request.
++void skippy_prepare_non_chat_workload(skippy_session * session);
 -- 
 2.56.0
 

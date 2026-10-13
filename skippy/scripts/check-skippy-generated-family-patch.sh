@@ -189,6 +189,7 @@ TRANSFORMED_TREE_TARGETS=(
   skippy-model-loader-accounting
   skippy-noalloc-graph-planning
   skippy-renamed-multishard-planning
+  skippy-runtime-events-test
   skippy-stage-plan-header-c
   skippy-stage-plan-header-cpp
   skippy-stage-slice-plan

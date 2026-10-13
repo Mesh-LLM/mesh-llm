@@ -77,7 +77,7 @@ impl ReportValue for Builder {
         self.verdict
             .errors(&format!("{path}.verdict"), false, failures);
         self.unsupported_reason
-            .errors(&format!("{path}.unsupported_reason"), false, failures);
+            .errors(&format!("{path}.unsupported_reason"), true, failures);
     }
 }
 
