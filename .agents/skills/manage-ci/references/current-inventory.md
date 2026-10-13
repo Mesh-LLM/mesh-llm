@@ -150,6 +150,10 @@ source repair, an independent upgrade-verification pass, or PR publication.
 The approved Rust source-plan API uses the current controller planner for every
 selected SHA; source build scripts and the battery remain selected-source code.
 Rust `gguf_metadata` yields `metadata_admitted`; other modes stay `pending`, with downgrade rejection.
+Model cache admission checks pinned revision/blob paths, sizes and GGUF metadata
+without rehashing model payloads: full-roster reads are too expensive on the NAS.
+Same-size payload corruption is outside this admission gate; plan, handoff and
+evidence digests remain verified.
 The upstream preflight caller now invokes Rust canary-receipts preflight after protected-controller preparation. It admits exact cached GGUF metadata and memory placement; native tensor, runtime, disk and certification checks remain in the selected real battery. This receipt is not environment readiness. The package binds both revisions, and workers
 reject any changed source identity. This is an operator-authorized trusted-code
 path on persistent lab machines, not isolation for untrusted PRs or fork code.

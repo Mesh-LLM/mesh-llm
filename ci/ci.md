@@ -184,7 +184,12 @@ job, as used by the llama canary, remains a follow-up for this older repair path
 one main source SHA and the upstream target before any hardware work. Unchanged
 scheduled/forced runs build once and certify the complete roster. Every
 certification first runs a deterministic immutable-plan and pinned-cache
-preflight. Changed pins use up to three distributed repair attempts. Each
+preflight. It validates model revision/blob paths, byte sizes and GGUF metadata.
+It does not rehash full model payloads: repeatedly reading the complete roster
+is too expensive for the NAS-backed immutable cache. Same-size payload corruption
+requires cache-population verification or a separate audit; plan, executable
+handoff and evidence hashes remain checked.
+Changed pins use up to three distributed repair attempts. Each
 attempt runs one complete candidate family pass followed (only when all
 families pass) by one independent build and complete verification pass on the
 exact same commit. A candidate-class family failure emits digest-bound evidence

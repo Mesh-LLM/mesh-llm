@@ -244,7 +244,7 @@ fn missing_cache_fails_before_selected_battery_is_run() {
 
 #[cfg(unix)]
 #[test]
-fn corrupt_content_addressed_blob_fails_even_when_name_and_size_match() {
+fn content_addressed_blob_with_wrong_size_fails_even_when_name_matches() {
     let mut fixture = Fixture::new();
     let cache = fixture.directory.path().join("cache");
     let repository = cache.join("hub/models--fixture--zeta");
@@ -252,14 +252,14 @@ fn corrupt_content_addressed_blob_fails_even_when_name_and_size_match() {
     fs::create_dir_all(repository.join("blobs")).expect("blobs");
     fs::create_dir_all(&snapshot).expect("snapshot");
     let blob = repository.join("blobs").join("a".repeat(64));
-    fs::write(&blob, b"x").expect("one byte blob");
+    fs::write(&blob, b"xx").expect("wrong size blob");
     std::os::unix::fs::symlink(blob, snapshot.join("zeta.gguf")).expect("snapshot link");
     fixture.input["cache"] = json!({"mode":"blob_identity","root":cache});
 
     let result = fixture.run("source-plan");
 
     assert!(!result.status.success());
-    assert!(String::from_utf8_lossy(&result.stderr).contains("SHA-256 mismatch"));
+    assert!(String::from_utf8_lossy(&result.stderr).contains("pinned blob identity or size"));
     assert!(!fixture.output("plan.json").exists());
 }
 
