@@ -66,9 +66,11 @@ pub(super) async fn route(
         logging.route_observer,
     )
     .await;
-    // The response reached the application in full: the exchange goes on to
-    // its settlement uncancelled. Anything else cancels it on return.
-    if matches!(result, RouteAttemptResult::Delivered { .. }) {
+    // Only the application going away cancels the exchange. Every other
+    // outcome means the exchange itself ended HTTP delivery (a full response,
+    // or a settlement with no output), and it goes on to settle uncancelled
+    // so a seller that delivered nothing is still held to it.
+    if !matches!(result, RouteAttemptResult::ClientDisconnected) {
         cancel_on_drop.disarm();
     }
     // Once a paid exchange starts, ordinary transport/quality retries must not
