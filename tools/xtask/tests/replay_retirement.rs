@@ -157,14 +157,14 @@ fn receive_http(socket: &mut std::net::TcpStream) -> String {
                 })
                 .unwrap_or(0);
             if bytes.len() >= end + 4 + length {
-                return headers.lines().next().unwrap().to_owned();
+                return String::from_utf8(bytes).unwrap();
             }
         }
     }
 }
 
 #[test]
-fn runtime_context_missing_then_ready_retries_before_measured_cell() {
+fn model_alias_and_missing_context_retry_before_measuring_the_direct_model() {
     use std::{
         io::Write,
         net::TcpListener,
@@ -182,13 +182,13 @@ fn runtime_context_missing_then_ready_retries_before_measured_cell() {
     let stopped = std::sync::atomic::AtomicBool::new(false);
     std::thread::scope(|scope| {
         let server=scope.spawn(|| {
-            let deadline=Instant::now()+Duration::from_secs(8);let mut contexts=0;let mut measured=false;
+            let deadline=Instant::now()+Duration::from_secs(8);let mut contexts=0;let mut models=0;let mut measured=false;
             while Instant::now()<deadline&&!measured&&!stopped.load(std::sync::atomic::Ordering::SeqCst) {
                 let (mut socket,_)=match listener.accept(){Ok(value)=>value,Err(error) if error.kind()==std::io::ErrorKind::WouldBlock=>{std::thread::sleep(Duration::from_millis(5));continue;},Err(error)=>panic!("{error}")};
                 let request=receive_http(&mut socket);
-                let body=if request.contains("/v1/models") {"{\"data\":[{\"id\":\"fixture\"}]}".to_owned()} else if request.contains("/api/runtime") {
+                let body=if request.contains("/v1/models") {models+=1;if models==1 {"{\"data\":[{\"id\":\"mesh\"}]}".to_owned()} else {"{\"data\":[{\"id\":\"mesh\"},{\"id\":\"fixture\"}]}".to_owned()}} else if request.contains("/api/runtime") {
                     contexts+=1;if contexts==1 {"{\"models\":[{\"name\":\"fixture\"}]}".to_owned()} else {"{\"models\":[{\"name\":\"fixture\",\"context_length\":32768}]}".to_owned()}
-                } else {assert!(request.contains("/v1/chat/completions"),"{request}");assert_eq!(contexts,2);measured=true;"data: {\"choices\":[{\"delta\":{\"content\":\"answer\"}}],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":1,\"prompt_tokens_details\":{\"cached_tokens\":0}}}\n\ndata: [DONE]\n\n".to_owned()};
+                } else {assert!(request.contains("/v1/chat/completions"),"{request}");assert_eq!(models,2);assert_eq!(contexts,2);let body:serde_json::Value=serde_json::from_str(request.split_once("\r\n\r\n").unwrap().1).unwrap();assert_eq!(body["model"],"fixture");measured=true;"data: {\"choices\":[{\"delta\":{\"content\":\"answer\"}}],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":1,\"prompt_tokens_details\":{\"cached_tokens\":0}}}\n\ndata: [DONE]\n\n".to_owned()};
                 socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len()).as_bytes()).unwrap();
             }
             if !stopped.load(std::sync::atomic::Ordering::SeqCst) { assert!(measured,"finite server fixture never reached measurement"); }
