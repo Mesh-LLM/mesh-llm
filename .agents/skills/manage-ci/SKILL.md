@@ -591,6 +591,12 @@ Changed pins use up to three distributed repair attempts. Each attempt consists
 of one candidate pass followed by one independent verification pass when the
 candidate is green. Before the first candidate begins, a separate deterministic
 preflight verifies the immutable family plan and every pinned cache artifact.
+For the NAS-backed immutable model cache, validate pinned revision, blob path,
+byte size and GGUF metadata without hashing full model payloads. Re-reading
+the complete model roster over the NAS on every admission is too expensive.
+This gate does not detect same-size payload corruption; content verification
+belongs to cache population or a separate cache audit. Continue hashing
+controller plans, executable handoffs and certification evidence.
 Environment or process-supervision failures stop without asking Goose to repair
 source. Within a candidate build, prepare/build failures return to the same
 bounded Goose session. A candidate-class family or independent-verification

@@ -413,6 +413,63 @@ fn package_cpu_rocm_complete_script_emits_consumable_manifest_archive_and_locale
 }
 
 #[test]
+fn distribution_build_keeps_runpath_and_skips_model_package_tool() {
+    let fixture = Fixture::new();
+    fs::write(
+        fixture.path().join("build/libllama.so"),
+        b"\x7fELFinert-runtime",
+    )
+    .unwrap();
+    fixture.tool(
+        "cargo",
+        "[[ ${1:-} == xtool ]] || exit 96\nshift\nexec \"$AUTOMATION\" \"$@\"",
+    );
+    fixture.tool("readelf", "printf 'Version needs section GLIBC_2.17\\n'");
+    fixture.tool(
+        "patchelf",
+        "printf '%s\\n' \"$*\" >> \"$TEST_ROOT/patchelf.log\"\nif [[ $1 == --print-rpath ]]; then printf '/opt/deps/lib\\n'; fi",
+    );
+    let script = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../skippy/scripts/package-native-runtime.sh");
+    let body = "\"$PACKAGE_SCRIPT\" --backend cpu --target x86_64-unknown-linux-gnu --out \"$TEST_ROOT/output\" --keep-runpath --no-model-package-tool";
+    let (ok, _, error) = fixture.run(
+        body,
+        &[
+            ("PACKAGE_SCRIPT", script.to_string_lossy().into_owned()),
+            (
+                "LLAMA_STAGE_BUILD_DIR",
+                fixture.path().join("build").to_string_lossy().into_owned(),
+            ),
+            (
+                "LLAMA_WORKDIR",
+                fixture
+                    .path()
+                    .join("absent-owned-source")
+                    .to_string_lossy()
+                    .into_owned(),
+            ),
+            (
+                "MESH_NATIVE_RUNTIME_MODEL_PACKAGE_TOOL",
+                "/usr/bin/true".into(),
+            ),
+        ],
+    );
+    assert!(ok, "{error}");
+    let stage = fixture
+        .path()
+        .join("output/meshllm-native-runtime-linux-x86_64-cpu");
+    let manifest: serde_json::Value =
+        serde_json::from_slice(&fs::read(stage.join("manifest.json")).unwrap()).unwrap();
+    assert_eq!(manifest["runtime"]["tools"], serde_json::json!({}));
+    let log = fs::read_to_string(fixture.path().join("patchelf.log")).unwrap();
+    let expected = format!(
+        "--set-rpath $ORIGIN:/opt/deps/lib {}",
+        stage.join("lib/libllama.so").display()
+    );
+    assert!(log.lines().any(|line| line == expected), "{log}");
+}
+
+#[test]
 fn package_runtime_version_reads_product_file_instead_of_differing_workspace_version() {
     let fixture = Fixture::new();
     let product = fixture.path().join("skippy/crates/skippy-native-runtime");

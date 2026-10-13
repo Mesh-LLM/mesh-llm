@@ -150,6 +150,10 @@ source repair, an independent upgrade-verification pass, or PR publication.
 The approved Rust source-plan API uses the current controller planner for every
 selected SHA; source build scripts and the battery remain selected-source code.
 Rust `gguf_metadata` yields `metadata_admitted`; other modes stay `pending`, with downgrade rejection.
+Model cache admission checks pinned revision/blob paths, sizes and GGUF metadata
+without rehashing model payloads: full-roster reads are too expensive on the NAS.
+Same-size payload corruption is outside this admission gate; plan, handoff and
+evidence digests remain verified.
 The upstream preflight caller now invokes Rust canary-receipts preflight after protected-controller preparation. It admits exact cached GGUF metadata and memory placement; native tensor, runtime, disk and certification checks remain in the selected real battery. This receipt is not environment readiness. The package binds both revisions, and workers
 reject any changed source identity. This is an operator-authorized trusted-code
 path on persistent lab machines, not isolation for untrusted PRs or fork code.
@@ -712,6 +716,11 @@ continue to compose normally. Seven call sites:
 `ci-platform-checks-slice.yml`, `ci-macos-host-slice.yml`,
 `swift-sdk-artifact.yml`, `native-sdk-artifact.yml`,
 `node-sdk-addon-artifact.yml`, and two in `release.yml`.
+
+Disk-only sccache preparation initializes and exports `SCCACHE_DIR` before
+compiler probes, including callers that already disable GHA caching. An explicit
+directory is preserved; otherwise the action uses the job's runner temporary
+directory. Missing GHA endpoints retain the existing disk-only fallback.
 
 ### A pinned digest is a frozen artifact
 
@@ -1667,7 +1676,7 @@ run without its producer and an unplanned producer must be skipped.
 
 Jobs that must not wait on a producer keep `prepare-automation`: the planner and
 lane summaries, Quality commit convention, the release UI stamp and the
-Windows unit platform-check jobs, SDK and smoke consumers (they restore through
+Windows unit platform-check jobs, Linux SDK and product smoke consumers (they restore through
 `restore-smoke-inputs`, which already prefers an exported
 `MESH_LLM_AUTOMATION_BIN`), release, canary, nightly, Docker and warm-cache
 workflows. The `hosted-bare` profile now restores a release executable from an
@@ -1694,7 +1703,9 @@ missing native bridge or install missing SDK dependencies.
 
 `prepare-python-sdk-source` restores the fixed source before the Quality contract
 job and Rust/Kotlin/Swift SDK source consumers. `setup-canary-python` reuses it
-before compatibility or embedding dependency preparation. Required SDK cadence
+before compatibility or embedding dependency preparation. The bare macOS Swift SDK
+smoke restores the lane's `product_automation_macos_arm64` executable through
+`restore-automation` before admission and never compiles xtask. Required SDK cadence
 is unchanged. For local `just ci-automation-contracts` or `just ci-validate`, set
 `MESH_PYTHON_SDK_SOURCE` to the exact admitted checkout first; the local recipe
 inherits that input and does not acquire external source. The source-dependent

@@ -30,15 +30,17 @@ runs:
         if [[ "${SCCACHE_GHA_ENABLED:-}" == "true" &&
               -z "${ACTIONS_CACHE_URL:-}" &&
               -z "${ACTIONS_RESULTS_URL:-}" ]]; then
+          echo "SCCACHE_GHA_ENABLED=false" >> "$GITHUB_ENV"
+          echo "SCCACHE_MULTILEVEL_CHAIN=disk" >> "$GITHUB_ENV"
+          export SCCACHE_GHA_ENABLED=false
+          export SCCACHE_MULTILEVEL_CHAIN=disk
+        fi
+        if [[ "${SCCACHE_MULTILEVEL_CHAIN:-}" == "disk" ]]; then
           cache_dir="${SCCACHE_DIR:-$RUNNER_TEMP/mesh-llm-sccache}"
           mkdir -p "$cache_dir"
           echo "SCCACHE_DIR=$cache_dir" >> "$GITHUB_ENV"
-          echo "SCCACHE_GHA_ENABLED=false" >> "$GITHUB_ENV"
-          echo "SCCACHE_MULTILEVEL_CHAIN=disk" >> "$GITHUB_ENV"
           echo "SCCACHE_IGNORE_SERVER_IO_ERROR=1" >> "$GITHUB_ENV"
-          export SCCACHE_GHA_ENABLED=false
           export SCCACHE_DIR="$cache_dir"
-          export SCCACHE_MULTILEVEL_CHAIN=disk
           export SCCACHE_IGNORE_SERVER_IO_ERROR=1
           sccache --stop-server >/dev/null 2>&1 || true
           sccache --start-server

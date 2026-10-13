@@ -184,7 +184,12 @@ job, as used by the llama canary, remains a follow-up for this older repair path
 one main source SHA and the upstream target before any hardware work. Unchanged
 scheduled/forced runs build once and certify the complete roster. Every
 certification first runs a deterministic immutable-plan and pinned-cache
-preflight. Changed pins use up to three distributed repair attempts. Each
+preflight. It validates model revision/blob paths, byte sizes and GGUF metadata.
+It does not rehash full model payloads: repeatedly reading the complete roster
+is too expensive for the NAS-backed immutable cache. Same-size payload corruption
+requires cache-population verification or a separate audit; plan, executable
+handoff and evidence hashes remain checked.
+Changed pins use up to three distributed repair attempts. Each
 attempt runs one complete candidate family pass followed (only when all
 families pass) by one independent build and complete verification pass on the
 exact same commit. A candidate-class family failure emits digest-bound evidence
@@ -1601,6 +1606,12 @@ Full-session replay contract: [configuration and qualification](agentic-replay-n
 
 ## macOS deployment target
 
+The shared macOS accelerator action initializes disk-only sccache before any
+compiler probe, including protected canary bootstrap calls that already set
+`SCCACHE_GHA_ENABLED=false`. It preserves an explicit `SCCACHE_DIR` and otherwise
+creates a job-local directory beneath `RUNNER_TEMP`. This does not grant remote
+cache authority or change the canary's later persistent compiler-cache identity.
+
 `scripts/lib/macos-deployment-target.txt` records the shared default (13.3),
 matching the pinned llama.cpp
 [Apple release](https://github.com/ggml-org/llama.cpp/blob/661643e43079a4ee6faab4c1895291767b67ea8d/.github/workflows/release.yml#L73)
@@ -1908,7 +1919,7 @@ run without its producer and an unplanned producer must be skipped.
 
 Jobs that must not wait on a producer keep `prepare-automation`: the planner and
 lane summaries, Quality commit convention, the release UI stamp and the
-Windows unit platform-check jobs, SDK and smoke consumers (they restore through
+Windows unit platform-check jobs, Linux SDK and product smoke consumers (they restore through
 `restore-smoke-inputs`, which already prefers an exported
 `MESH_LLM_AUTOMATION_BIN`), release, canary, nightly, Docker and warm-cache
 workflows. The `hosted-bare` profile now restores a release executable from an
@@ -1935,7 +1946,9 @@ missing native bridge or install missing SDK dependencies.
 
 `prepare-python-sdk-source` restores the fixed source before the Quality contract
 job and Rust/Kotlin/Swift SDK source consumers. `setup-canary-python` reuses it
-before compatibility or embedding dependency preparation. Required SDK cadence
+before compatibility or embedding dependency preparation. The bare macOS Swift SDK
+smoke restores the lane's `product_automation_macos_arm64` executable through
+`restore-automation` before admission and never compiles xtask. Required SDK cadence
 is unchanged. For local `just ci-automation-contracts` or `just ci-validate`, set
 `MESH_PYTHON_SDK_SOURCE` to the exact admitted checkout first; the local recipe
 inherits that input and does not acquire external source. The source-dependent

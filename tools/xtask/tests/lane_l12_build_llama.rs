@@ -309,3 +309,96 @@ fn deployment_change_rejects_warm_build_without_configuring() {
     );
     assert!(fixture.stamp().contains("DEPLOYMENT_TARGET=14.0"));
 }
+
+const UNIX_ARCHIVES: &[&str] = &[
+    "src/libllama.a",
+    "common/libllama-common.a",
+    "common/libllama-common-base.a",
+    "ggml/src/libggml.a",
+    "ggml/src/libggml-base.a",
+    "ggml/src/libggml-cpu.a",
+    "tools/mtmd/libmtmd.a",
+    "vendor/hash/libvendor-hash.a",
+];
+const MSVC_ARCHIVES: &[&str] = &[
+    "src/llama.lib",
+    "common/llama-common.lib",
+    "common/llama-common-base.lib",
+    "ggml/src/ggml.lib",
+    "ggml/src/ggml-base.lib",
+    "ggml/src/ggml-cpu.lib",
+    "tools/mtmd/mtmd.lib",
+    "vendor/hash/vendor-hash.lib",
+];
+
+fn static_build(fixture: &Fixture, archives: &[&str]) -> Command {
+    let mut command = fixture.command("Linux");
+    command
+        .env("LLAMA_STAGE_LINK_MODE", "static")
+        .env("CMAKE_STUB_STATIC_ARCHIVES", archives.join(" "));
+    command
+}
+
+fn commit_work(work: &Path) {
+    for args in [
+        &["init", "-q"][..],
+        &["add", "."],
+        &[
+            "-c",
+            "user.name=Fixture",
+            "-c",
+            "user.email=fixture@example.invalid",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-qm",
+            "fixture",
+        ],
+    ] {
+        success(
+            Command::new("/usr/bin/git")
+                .arg("-C")
+                .arg(work)
+                .args(args)
+                .output()
+                .unwrap(),
+        );
+    }
+}
+
+#[test]
+fn static_build_accepts_unix_and_msvc_archive_names() {
+    for archives in [UNIX_ARCHIVES, MSVC_ARCHIVES] {
+        let fixture = Fixture::new(true);
+        let output = static_build(&fixture, archives).output().unwrap();
+        assert!(
+            String::from_utf8_lossy(&output.stdout).contains("built patched llama.cpp"),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        success(output);
+        commit_work(&fixture.work);
+        let before = fixture.log();
+        let output = static_build(&fixture, archives)
+            .arg("--require-existing")
+            .output()
+            .unwrap();
+        assert!(
+            String::from_utf8_lossy(&output.stdout).contains("patched llama.cpp ABI already built"),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        success(output);
+        assert_eq!(fixture.log(), before);
+    }
+}
+
+#[test]
+fn static_build_still_requires_every_archive() {
+    for archives in [UNIX_ARCHIVES, MSVC_ARCHIVES] {
+        let fixture = Fixture::new(true);
+        let output = static_build(&fixture, &archives[1..]).output().unwrap();
+        assert!(!output.status.success());
+        assert!(String::from_utf8_lossy(&output.stderr).contains("without the full link closure"));
+    }
+}
