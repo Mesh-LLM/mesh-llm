@@ -102,7 +102,7 @@ async fn serve_inner(
 }
 
 enum Admission {
-    Admitted(Session),
+    Admitted(Box<Session>),
     Refused,
     Replayed(String),
 }
@@ -169,7 +169,7 @@ async fn admit(
     };
     let (lifecycle, exchange_id) = provider_observers(node).await;
     let observations = lifecycle.observe(&terms);
-    Ok(Admission::Admitted(Session {
+    Ok(Admission::Admitted(Box::new(Session {
         payments: payments.clone(),
         terms,
         request,
@@ -177,7 +177,7 @@ async fn admit(
         deposit,
         observations,
         exchange_id,
-    }))
+    })))
 }
 
 /// The provider lifecycle for this serving request, and the one fresh ID

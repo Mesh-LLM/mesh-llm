@@ -140,25 +140,6 @@ impl Payments {
         Self::resolve(plugins).await
     }
 
-    /// A client with no `payments.v1` provider: every operation fails.
-    #[cfg(test)]
-    pub(crate) async fn unavailable_for_tests() -> Result<Self> {
-        let (mesh_tx, _mesh_rx) = tokio::sync::mpsc::channel(8);
-        let plugins = PluginManager::start_with_in_process(
-            &crate::plugin::ResolvedPlugins {
-                externals: Vec::new(),
-                inactive: Vec::new(),
-            },
-            crate::plugin::PluginHostMode {
-                mesh_visibility: mesh_llm_plugin::MeshVisibility::Private,
-            },
-            mesh_tx,
-            crate::plugin::InProcessPlugins::default(),
-        )
-        .await?;
-        Ok(Self::resolve(plugins).await)
-    }
-
     /// Invokes `operation` on this exchange's pinned provider.
     pub(crate) async fn call<Req: Serialize, Res: DeserializeOwned>(
         &self,

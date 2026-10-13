@@ -41,9 +41,6 @@ struct Network {
     record_lifecycle: AtomicBool,
     provider_lifecycle: Arc<Mutex<Vec<serde_json::Value>>>,
     payer_lifecycle: Arc<Mutex<Vec<serde_json::Value>>>,
-    /// The `exchange_id` of each `openai.exchange.v1` event the provider
-    /// published, so a test can join them to its lifecycle events.
-    provider_exchange_ids: Mutex<Vec<String>>,
 }
 
 /// A trusted local plugin that declares `payment.lifecycle.v1` and keeps
@@ -227,7 +224,6 @@ fn price() -> Pricing {
 struct Pair {
     _seller_dir: tempfile::TempDir,
     _buyer_dir: tempfile::TempDir,
-    network: Arc<Network>,
     seller: Arc<PaymentService>,
     buyer: Arc<PaymentService>,
     seller_node: Node,
@@ -291,7 +287,6 @@ impl Pair {
         Ok(Self {
             _seller_dir: seller_dir,
             _buyer_dir: buyer_dir,
-            network,
             seller,
             buyer,
             seller_node,

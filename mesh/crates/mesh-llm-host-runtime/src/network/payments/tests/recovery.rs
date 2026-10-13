@@ -34,14 +34,24 @@ async fn recovered() -> Result<()> {
     pair.wait_completed(1).await?;
     assert_eq!(network.payments.load(Ordering::SeqCst), 2);
     let id = pair.buyer.ledger.requests()?[0].terms.id.clone();
-    // The seller answers a recovery probe from its ledger. The final invoice
-    // is already paid, so recovery completes without a third payment.
-    let seller_payments = super::super::client::Payments::for_node(&pair.seller_node).await?;
-    let recovered: ServeRecoverResponse = seller_payments
+    assert_seller_answers_recovery_from_its_ledger(&pair, &id).await?;
+    assert_buyer_replays_a_settled_request(&pair, &id).await?;
+    assert_eq!(network.payments.load(Ordering::SeqCst), 2);
+    backend.await??;
+    let _connection = serving.await??;
+    pair.close().await;
+    Ok(())
+}
+
+/// The seller answers a recovery probe from its ledger. The final invoice is
+/// already paid, so the bill is settled; unknown requests are refused.
+async fn assert_seller_answers_recovery_from_its_ledger(pair: &Pair, id: &str) -> Result<()> {
+    let payments = super::super::client::Payments::for_node(&pair.seller_node).await?;
+    let recovered: ServeRecoverResponse = payments
         .call(
             ops::SERVE_RECOVER,
             &RequestIdRequest {
-                request_id: id.clone(),
+                request_id: id.to_owned(),
             },
         )
         .await?;
@@ -50,22 +60,24 @@ async fn recovered() -> Result<()> {
     };
     assert_eq!(bill.bill_msat, 43);
     assert!(bill.settled);
-    assert!(
-        seller_payments
-            .call::<_, ServeRecoverResponse>(
-                ops::SERVE_RECOVER,
-                &RequestIdRequest {
-                    request_id: uuid::Uuid::new_v4().to_string(),
-                },
-            )
-            .await
-            .is_err(),
-        "unknown requests are refused"
-    );
-    // The buyer re-runs recovery over the wire for a finished request: the
-    // seller replays the settlement, and nothing is dispatched again.
-    let buyer_payments = super::super::client::Payments::for_node(&pair.buyer_node).await?;
-    let reconciled: ReconcileResponse = buyer_payments
+    let unknown = payments
+        .call::<_, ServeRecoverResponse>(
+            ops::SERVE_RECOVER,
+            &RequestIdRequest {
+                request_id: uuid::Uuid::new_v4().to_string(),
+            },
+        )
+        .await;
+    assert!(unknown.is_err(), "unknown requests are refused");
+    Ok(())
+}
+
+/// The buyer re-runs recovery over the wire for a finished request: the
+/// seller replays the settlement, nothing is dispatched or paid again, and a
+/// finished request needs no recovery pass.
+async fn assert_buyer_replays_a_settled_request(pair: &Pair, id: &str) -> Result<()> {
+    let payments = super::super::client::Payments::for_node(&pair.buyer_node).await?;
+    let reconciled: ReconcileResponse = payments
         .call(ops::RECONCILE, &mesh_llm_payments_types::contract::Empty {})
         .await?;
     assert!(
@@ -77,7 +89,7 @@ async fn recovered() -> Result<()> {
         .open_http_tunnel(pair.seller_node.id())
         .await?;
     send.write_all(wire::HTTP_UPGRADE).await?;
-    wire::write(&mut send, &Frame::Recover { id: id.clone() }).await?;
+    wire::write(&mut send, &Frame::Recover { id: id.to_owned() }).await?;
     let Frame::Settlement {
         request_id,
         bill_msat,
@@ -86,13 +98,10 @@ async fn recovered() -> Result<()> {
     else {
         panic!("expected settlement replay");
     };
-    assert_eq!((request_id, bill_msat), (id.clone(), Some(43)));
+    assert_eq!((request_id.as_str(), bill_msat), (id, Some(43)));
     assert!(matches!(wire::read(&mut recv).await?, Frame::Complete {}));
-    assert_eq!(network.payments.load(Ordering::SeqCst), 2);
-    let _: mesh_llm_payments_types::contract::Empty =
-        buyer_payments.call(ops::FINISH, &IdRequest { id }).await?;
-    backend.await??;
-    let _connection = serving.await??;
-    pair.close().await;
+    let _: mesh_llm_payments_types::contract::Empty = payments
+        .call(ops::FINISH, &IdRequest { id: id.to_owned() })
+        .await?;
     Ok(())
 }

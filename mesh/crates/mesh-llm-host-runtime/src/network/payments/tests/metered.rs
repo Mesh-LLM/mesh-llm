@@ -25,53 +25,84 @@ async fn streamed_pair(record_lifecycle: bool) -> Result<()> {
     let backend = tokio::spawn(stream_backend(listener, network.clone(), 2));
     let serving = pair.serve(local_targets(port), 2);
     pair.connect().await?;
-    let raw = b"POST /v1/completions HTTP/1.1\r\nHost: localhost\r\n\r\n{\"model\":\"test\",\"prompt\":\"Hi\",\"stream\":true,\"max_tokens\":8}";
+    // Before the requests are sent, so the seller's events are recorded.
+    let seller_events =
+        crate::network::openai::paid_exchange::record_paid_exchanges_for_test(&pair.seller_node);
     // The caller omits include_usage first, then opts in. Usage stays hidden
     // unless requested, while settlement still bills backend-reported usage.
+    let raw = b"POST /v1/completions HTTP/1.1\r\nHost: localhost\r\n\r\n{\"model\":\"test\",\"prompt\":\"Hi\",\"stream\":true,\"max_tokens\":8}";
     let opted_in = String::from_utf8(raw.to_vec())?.replace(
         "\"stream\":true",
         "\"stream\":true,\"stream_options\":{\"include_usage\":true}",
     );
-    for completed in 1..=2 {
-        let request: &[u8] = if completed == 1 {
-            raw
-        } else {
-            opted_in.as_bytes()
-        };
-        let response = pair.request(request, Some("host-evidence-id")).await?;
-        assert!(response.contains("hello"), "{response}");
-        assert!(response.contains("data: [DONE]"), "{response}");
-        assert_eq!(response.contains("\"usage\""), completed == 2, "{response}");
-        pair.wait_completed(completed).await?;
-        // First request: deposit + final. Second: trusted, final only.
-        assert_eq!(
-            network.payments.load(Ordering::SeqCst),
-            if completed == 1 { 2 } else { 3 }
-        );
-        assert_eq!(
-            pair.seller
-                .ledger
-                .metered_unpaid_finals(&pair.buyer_node.id().to_string())?,
-            0
-        );
-    }
-    let requests = pair.buyer.ledger.requests()?;
-    assert!(requests.iter().all(|r| r.state == "completed"));
-    // 40 prompt + 3 completion tokens at 1 msat each, plus 10 msat fee per
-    // payment: two payments for the deposited request, one for the trusted.
-    let spent: Vec<u64> = requests.iter().map(|r| r.spent_msat).collect();
-    assert_eq!(spent.iter().sum::<u64>(), 43 * 2 + 30);
-    assert_eq!(
-        requests[0].terms.exchange_id.as_deref(),
-        Some("host-evidence-id")
-    );
+    exchange_round(&pair, &network, raw, 1).await?;
+    exchange_round(&pair, &network, opted_in.as_bytes(), 2).await?;
+    assert_ledgers(&pair)?;
     backend.await??;
     let _connection = serving.await??;
+    assert_seller_published_both_exchanges(&seller_events.events());
     if record_lifecycle {
         assert_lifecycle(&network).await;
     }
     pair.close().await;
     Ok(())
+}
+
+/// One paid request: the response reaches the caller, the buyer's ledger
+/// completes it, and the payments match the round (deposit + final for the
+/// first, final only for the trusted second).
+async fn exchange_round(pair: &Pair, network: &Network, raw: &[u8], round: usize) -> Result<()> {
+    let response = pair.request(raw, Some("host-evidence-id")).await?;
+    assert!(response.contains("hello"), "{response}");
+    assert!(response.contains("data: [DONE]"), "{response}");
+    assert_eq!(response.contains("\"usage\""), round == 2, "{response}");
+    pair.wait_completed(round).await?;
+    assert_eq!(
+        network.payments.load(Ordering::SeqCst),
+        if round == 1 { 2 } else { 3 }
+    );
+    assert_eq!(
+        pair.seller
+            .ledger
+            .metered_unpaid_finals(&pair.buyer_node.id().to_string())?,
+        0
+    );
+    Ok(())
+}
+
+fn assert_ledgers(pair: &Pair) -> Result<()> {
+    let requests = pair.buyer.ledger.requests()?;
+    assert!(requests.iter().all(|r| r.state == "completed"));
+    // 40 prompt + 3 completion tokens at 1 msat each, plus 10 msat fee per
+    // payment: two payments for the deposited request, one for the trusted.
+    let spent: u64 = requests.iter().map(|r| r.spent_msat).sum();
+    assert_eq!(spent, 43 * 2 + 30);
+    assert_eq!(
+        requests[0].terms.exchange_id.as_deref(),
+        Some("host-evidence-id")
+    );
+    Ok(())
+}
+
+/// The seller's paid serving path publishes the same exchange events as the
+/// free path: an effective and a terminal event per request under one fresh
+/// exchange id, with the served status.
+fn assert_seller_published_both_exchanges(
+    events: &[crate::plugin::openai_exchange::OpenAiExchangeEnvelope],
+) {
+    assert_eq!(
+        events.len(),
+        4,
+        "effective + terminal per request: {events:?}"
+    );
+    for pair in events.chunks(2) {
+        assert_eq!(pair[0].exchange_id, pair[1].exchange_id);
+        let terminal = serde_json::to_value(&pair[1]).unwrap();
+        assert_eq!(terminal["phase"], "terminal");
+        assert_eq!(pair[1].status, Some(200));
+        assert_ne!(pair[0].exchange_id, "host-evidence-id");
+    }
+    assert_ne!(events[0].exchange_id, events[2].exchange_id);
 }
 
 async fn stream_backend(
