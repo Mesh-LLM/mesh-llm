@@ -57,3 +57,6 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 tempfile = "3"
 serial_test = "3"
 http = "1"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

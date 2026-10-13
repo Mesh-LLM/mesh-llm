@@ -2,6 +2,16 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+# Frozen automation selection begins.
+family_automation=(just --justfile "$ROOT/Justfile" automation-run)
+if [[ "${MESH_LLM_AUTOMATION_BIN+set}" == set ]]; then
+  if [[ "$MESH_LLM_AUTOMATION_BIN" != /* || ! -f "$MESH_LLM_AUTOMATION_BIN" || ! -x "$MESH_LLM_AUTOMATION_BIN" ]]; then
+    echo 'MESH_LLM_AUTOMATION_BIN must be an absolute executable' >&2
+    exit 1
+  fi
+  family_automation=("$MESH_LLM_AUTOMATION_BIN")
+fi
+# Frozen automation selection ends.
 # shellcheck source=scripts/lib/family-outcome.sh
 source "$ROOT/scripts/lib/family-outcome.sh"
 PORT_START_ATTEMPTS=3
@@ -284,7 +294,7 @@ run_logged_core_parity() {
   : >"$log"
   while (( attempt <= PORT_START_ATTEMPTS )); do
     rm -f "$single_report" "$chain_report"
-    core_ports="$(python3 "$ROOT/scripts/lib/allocate_local_ports.py" 3)"
+    core_ports="$("${family_automation[@]}" automation local-ports 3)"
     IFS=',' read -r single_stage1_port chain_stage1_port chain_stage2_port <<< "$core_ports"
     command=(
       "$@"
@@ -337,7 +347,7 @@ run_logged_state_handoff() {
   : >"$log"
   while (( attempt <= PORT_START_ATTEMPTS )); do
     rm -f "$report"
-    state_ports="$(python3 "$ROOT/scripts/lib/allocate_local_ports.py" 2)"
+    state_ports="$("${family_automation[@]}" automation local-ports 2)"
     IFS=',' read -r source_port restore_port <<< "$state_ports"
     command=(
       "$@"
@@ -372,49 +382,7 @@ run_logged_state_handoff() {
 }
 
 model_identity_json() {
-  local model_id="$1"
-  local model_path="$2"
-  python3 - "$model_id" "$model_path" <<'PY'
-import json
-import os
-import re
-import sys
-from pathlib import Path
-
-model_id, model_path = sys.argv[1:]
-path = Path(model_path)
-parts = path.parts
-identity = {
-    "model_id": model_id,
-}
-
-for index, part in enumerate(parts):
-    if part.startswith("models--") and index + 3 < len(parts) and parts[index + 1] == "snapshots":
-        repo = part.removeprefix("models--").replace("--", "/")
-        revision = parts[index + 2]
-        file = "/".join(parts[index + 3:])
-        basename = Path(file).name
-        distribution_id = basename[:-5] if basename.endswith(".gguf") else basename
-        distribution_id = re.sub(r"-00001-of-[0-9]{5}$", "", distribution_id)
-        selector = None
-        if basename.endswith(".gguf"):
-            stem = distribution_id
-            match = re.search(r"(UD-[A-Z0-9_]+|IQ[0-9A-Z_]+|Q[0-9A-Z_]+|BF16|F16|F32)$", stem, re.I)
-            if match:
-                selector = match.group(1)
-        identity.update({
-            "source_repo": repo,
-            "source_revision": revision,
-            "source_file": file,
-            "canonical_ref": f"{repo}@{revision}/{file}",
-            "distribution_id": distribution_id,
-        })
-        if selector:
-            identity["selector"] = selector
-        break
-
-print(json.dumps(identity, sort_keys=True))
-PY
+  "${family_automation[@]}" automation family-model-identity "$1" "$2"
 }
 
 maybe_build() {

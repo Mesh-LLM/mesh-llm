@@ -50,10 +50,12 @@ diffs the result against that stage-free semantic baseline so static support can
 never leak into or poison the generated shards:
 
 ```sh
-python3 scripts/generate-skippy-family-patch.py \
+cargo xtool automation native-generator generate \
+  --git "$(command -v git)" \
+  --max-diff-bytes 16777216 \
   --source-root .scratch/llama-central \
   --build-dir .scratch/llama-central-build \
-  --rewriter .scratch/skippy-stage-rewriter-build/skippy-stage-rewriter \
+  --rewriter "$PWD/.scratch/skippy-stage-rewriter-build/skippy-stage-rewriter" \
   --report .scratch/skippy-stage-rewriter-report.json \
   --diff-base "$(git -C .scratch/llama-central rev-parse HEAD)" \
   --output target/generated-family-combined.patch \

@@ -31,202 +31,19 @@ healthcheck() {
 }
 
 float_half() {
-  python3 - "$1" <<'PY'
-import sys
-print(float(sys.argv[1]) / 2.0)
-PY
-}
-
-infer_layer_count() {
-  local model_path="$1"
-  skippy-package-builder inspect "$model_path" \
-    | jq -r '[.tensors[] | select(.role == "layer") | .layer_index] | max + 1'
-}
-
-infer_activation_width() {
-  local model_path="$1"
-  python3 - "$model_path" <<'PY'
-import struct
-import sys
-
-path = sys.argv[1]
-
-TYPE_UINT8 = 0
-TYPE_INT8 = 1
-TYPE_UINT16 = 2
-TYPE_INT16 = 3
-TYPE_UINT32 = 4
-TYPE_INT32 = 5
-TYPE_FLOAT32 = 6
-TYPE_BOOL = 7
-TYPE_STRING = 8
-TYPE_ARRAY = 9
-TYPE_UINT64 = 10
-TYPE_INT64 = 11
-TYPE_FLOAT64 = 12
-
-def read_exact(f, n):
-    data = f.read(n)
-    if len(data) != n:
-        raise EOFError("unexpected EOF")
-    return data
-
-def read_u32(f):
-    return struct.unpack("<I", read_exact(f, 4))[0]
-
-def read_u64(f):
-    return struct.unpack("<Q", read_exact(f, 8))[0]
-
-def read_i32(f):
-    return struct.unpack("<i", read_exact(f, 4))[0]
-
-def read_string(f):
-    n = read_u64(f)
-    return read_exact(f, n).decode("utf-8", "replace")
-
-def skip_value(f, kind):
-    if kind in (TYPE_UINT8, TYPE_INT8, TYPE_BOOL):
-        f.seek(1, 1)
-    elif kind in (TYPE_UINT16, TYPE_INT16):
-        f.seek(2, 1)
-    elif kind in (TYPE_UINT32, TYPE_INT32, TYPE_FLOAT32):
-        f.seek(4, 1)
-    elif kind in (TYPE_UINT64, TYPE_INT64, TYPE_FLOAT64):
-        f.seek(8, 1)
-    elif kind == TYPE_STRING:
-        f.seek(read_u64(f), 1)
-    elif kind == TYPE_ARRAY:
-        inner = read_u32(f)
-        count = read_u64(f)
-        for _ in range(count):
-            skip_value(f, inner)
-    else:
-        raise ValueError(f"unknown GGUF metadata type {kind}")
-
-def read_scalar(f, kind):
-    if kind == TYPE_UINT32:
-        return read_u32(f)
-    if kind == TYPE_INT32:
-        return read_i32(f)
-    if kind == TYPE_UINT16:
-        return struct.unpack("<H", read_exact(f, 2))[0]
-    if kind == TYPE_INT16:
-        return struct.unpack("<h", read_exact(f, 2))[0]
-    if kind == TYPE_UINT64:
-        return read_u64(f)
-    if kind == TYPE_INT64:
-        return struct.unpack("<q", read_exact(f, 8))[0]
-    if kind == TYPE_STRING:
-        return read_string(f)
-    skip_value(f, kind)
-    return None
-
-with open(path, "rb") as f:
-    if read_exact(f, 4) != b"GGUF":
-        raise SystemExit("not a GGUF file")
-    version = read_u32(f)
-    if version < 2:
-        raise SystemExit(f"unsupported GGUF version {version}")
-    _tensor_count = read_u64(f)
-    kv_count = read_u64(f)
-    metadata = {}
-    for _ in range(kv_count):
-        key = read_string(f)
-        kind = read_u32(f)
-        metadata[key] = read_scalar(f, kind)
-
-arch = metadata.get("general.architecture")
-if not arch:
-    raise SystemExit("GGUF metadata is missing general.architecture")
-width = metadata.get(f"{arch}.embedding_length")
-if not width:
-    raise SystemExit(f"GGUF metadata is missing {arch}.embedding_length")
-print(int(width))
-PY
+  /usr/local/bin/mesh-llm-automation automation wan-observation delay "$1"
 }
 
 parse_hf_package_ref() {
-  local ref="$1"
-  python3 - "$ref" <<'PY'
-import sys
-
-value = sys.argv[1]
-if not value.startswith("hf://"):
-    raise SystemExit("package ref must start with hf://")
-rest = value[len("hf://"):]
-revision = "main"
-if "@" in rest:
-    rest, revision = rest.rsplit("@", 1)
-elif ":" in rest:
-    rest, revision = rest.rsplit(":", 1)
-if "/" not in rest or not rest or not revision:
-    raise SystemExit(f"invalid HF package ref: {value}")
-print(rest)
-print(revision)
-PY
-}
-
-download_hf_file() {
-  local repo="$1"
-  local revision="$2"
-  local remote_path="$3"
-  local output_path="$4"
-  local expected_bytes="${5:-}"
-
-  mkdir -p "$(dirname "$output_path")"
-  if [[ -f "$output_path" && -n "$expected_bytes" ]]; then
-    local actual_bytes
-    actual_bytes="$(stat -c '%s' "$output_path")"
-    if [[ "$actual_bytes" == "$expected_bytes" ]]; then
-      return 0
-    fi
-  elif [[ -f "$output_path" && -z "$expected_bytes" ]]; then
-    return 0
-  fi
-
-  local tmp_path="${output_path}.tmp.$$"
-  local url="https://huggingface.co/${repo}/resolve/${revision}/${remote_path}"
-  local curl_args=(-fL --retry 5 --retry-delay 2 --connect-timeout 20)
-  if [[ -n "${HF_TOKEN:-}" ]]; then
-    curl_args+=(-H "Authorization: Bearer ${HF_TOKEN}")
-  fi
-  log "downloading ${repo}@${revision}/${remote_path}"
-  curl "${curl_args[@]}" "$url" -o "$tmp_path"
-  if [[ -n "$expected_bytes" ]]; then
-    local actual_bytes
-    actual_bytes="$(stat -c '%s' "$tmp_path")"
-    if [[ "$actual_bytes" != "$expected_bytes" ]]; then
-      rm -f "$tmp_path"
-      log "downloaded size mismatch for ${remote_path}: expected ${expected_bytes}, got ${actual_bytes}"
-      exit 66
-    fi
-  fi
-  mv "$tmp_path" "$output_path"
+  /usr/local/bin/skippy-package-builder parse-package-reference "$1"
 }
 
 hf_cache_snapshot_dir() {
-  local repo="$1"
-  local revision="$2"
-  local cache_root="${HF_CACHE_ROOT:-/hf-cache}"
-  local repo_dir="${cache_root}/hub/models--${repo//\//--}"
-  local commit=""
-
-  if [[ -f "${repo_dir}/refs/${revision}" ]]; then
-    commit="$(cat "${repo_dir}/refs/${revision}")"
-  elif [[ -d "${repo_dir}/snapshots/${revision}" ]]; then
-    commit="$revision"
-  fi
-
-  if [[ -n "$commit" && -d "${repo_dir}/snapshots/${commit}" ]]; then
-    printf '%s\n' "${repo_dir}/snapshots/${commit}"
-    return 0
-  fi
-
-  if [[ -d "${repo_dir}/snapshots" ]]; then
-    find "${repo_dir}/snapshots" -mindepth 1 -maxdepth 1 -type d | sort | tail -n 1
-  fi
+  local result
+  result="$(/usr/local/bin/skippy-package-builder resolve-layer-package-cache \
+    --reference "hf://${1}@${2}" --cache-root "${HF_HUB_CACHE:-${HF_CACHE_ROOT:-/hf-cache}/hub}")" || return $?
+  jq -er '.snapshot_path' <<< "$result"
 }
-
 check_cached_package_files() {
   local package_dir="$1"
   local manifest_path="$2"
@@ -235,6 +52,8 @@ check_cached_package_files() {
   local layer_end="$5"
   local stage_count="$6"
   local missing=()
+  local artifact_rows
+  artifact_rows="$(package_required_artifacts "$manifest_path" "$stage_index" "$layer_start" "$layer_end" "$stage_count")" || return $?
 
   while IFS=$'\t' read -r remote_path expected_bytes; do
     local path="${package_dir}/${remote_path}"
@@ -249,7 +68,7 @@ check_cached_package_files() {
         missing+=("${remote_path} (expected ${expected_bytes} bytes, got ${actual_bytes})")
       fi
     fi
-  done < <(package_required_artifacts "$manifest_path" "$stage_index" "$layer_start" "$layer_end" "$stage_count")
+  done <<< "$artifact_rows"
 
   if ((${#missing[@]} > 0)); then
     printf '%s\n' "${missing[@]}"
@@ -258,42 +77,9 @@ check_cached_package_files() {
 }
 
 package_required_artifacts() {
-  local manifest_path="$1"
-  local stage_index="$2"
-  local layer_start="$3"
-  local layer_end="$4"
-  local stage_count="$5"
-
-  python3 - "$manifest_path" "$stage_index" "$layer_start" "$layer_end" "$stage_count" <<'PY'
-import json
-import sys
-
-manifest_path, stage_index, layer_start, layer_end, stage_count = sys.argv[1:]
-stage_index = int(stage_index)
-layer_start = int(layer_start)
-layer_end = int(layer_end)
-stage_count = int(stage_count)
-
-with open(manifest_path, "r", encoding="utf-8") as handle:
-    manifest = json.load(handle)
-
-def emit(artifact):
-    print(f"{artifact['path']}\t{artifact['artifact_bytes']}")
-
-emit(manifest["shared"]["metadata"])
-if stage_index == 0:
-    emit(manifest["shared"]["embeddings"])
-if stage_index + 1 == stage_count:
-    emit(manifest["shared"]["output"])
-
-layers = {layer["layer_index"]: layer for layer in manifest["layers"]}
-for layer_index in range(layer_start, layer_end):
-    emit(layers[layer_index])
-for projector in manifest.get("projectors", []):
-    emit(projector)
-PY
+  /usr/local/bin/skippy-package-builder plan-layer-package-artifacts \
+    --manifest "$1" --stage-index "$2" --layer-start "$3" --layer-end "$4" --stage-count "$5"
 }
-
 prepare_hf_layer_package_from_host_cache() {
   local repo="$1"
   local revision="$2"
@@ -302,11 +88,14 @@ prepare_hf_layer_package_from_host_cache() {
   local stage_count="$5"
 
   local package_dir
-  package_dir="$(hf_cache_snapshot_dir "$repo" "$revision" || true)"
+  if ! package_dir="$(hf_cache_snapshot_dir "$repo" "$revision")"; then
+    log "requested HF package revision is unavailable in mounted host cache"
+    return 67
+  fi
   if [[ -z "$package_dir" || ! -f "${package_dir}/model-package.json" ]]; then
     log "HF package ${package_ref} is not present in the mounted host cache at ${HF_CACHE_ROOT:-/hf-cache}"
     log "download it on the host first:"
-    log "  hf download ${repo} --revision ${revision} --include model-package.json --include 'shared/*' --include 'layers/*' --include 'projectors/*'"
+    log "  just skippy-layer-package-fetch --reference ${package_ref} --cache-root <hub-cache-root>"
     exit 67
   fi
 
@@ -319,14 +108,16 @@ prepare_hf_layer_package_from_host_cache() {
     exit 65
   fi
 
-  read -r layer_start layer_end < <(even_stage_range "$stage_index" "$stage_count" "$layer_count")
+  local stage_range
+  stage_range="$(even_stage_range "$stage_index" "$stage_count" "$layer_count")" || return $?
+  read -r layer_start layer_end <<< "$stage_range"
 
   local missing
   if ! missing="$(check_cached_package_files "$package_dir" "$manifest_path" "$stage_index" "$layer_start" "$layer_end" "$stage_count")"; then
     log "mounted host cache is missing files needed by stage ${stage_index}:"
     printf '%s\n' "$missing" >&2
     log "download the complete package on the host:"
-    log "  hf download ${repo} --revision ${revision} --include model-package.json --include 'shared/*' --include 'layers/*' --include 'projectors/*'"
+    log "  just skippy-layer-package-fetch --reference ${package_ref} --cache-root <hub-cache-root>"
     exit 67
   fi
 
@@ -348,36 +139,33 @@ prepare_hf_layer_package() {
   local stage_index="$2"
   local stage_count="$3"
 
-  mapfile -t parsed < <(parse_hf_package_ref "$package_ref")
+  local parsed_output
+  parsed_output="$(parse_hf_package_ref "$package_ref")" || return $?
+  local parsed=()
+  mapfile -t parsed <<< "$parsed_output"
+  [[ "${#parsed[@]}" == 2 ]] || return 65
   local repo="${parsed[0]}"
   local revision="${parsed[1]}"
 
   if [[ "${HF_PACKAGE_SOURCE:-host-cache}" == "host-cache" ]]; then
-    prepare_hf_layer_package_from_host_cache "$repo" "$revision" "$package_ref" "$stage_index" "$stage_count"
+    prepare_hf_layer_package_from_host_cache "$repo" "$revision" "$package_ref" "$stage_index" "$stage_count" || return $?
     return 0
   fi
 
-  local safe_repo
-  safe_repo="$(printf '%s__%s' "$repo" "$revision" | tr '/:@' '___')"
-  local package_dir="${PACKAGE_CACHE_DIR:-/package-cache}/${safe_repo}"
-  local manifest_path="${package_dir}/model-package.json"
-
-  download_hf_file "$repo" "$revision" "model-package.json" "$manifest_path"
-
-  local layer_count activation_width
-  layer_count="$(jq -r '.layer_count' "$manifest_path")"
-  activation_width="$(jq -r '.activation_width // empty' "$manifest_path")"
-  if [[ -z "$activation_width" ]]; then
-    log "package manifest has no activation_width; set ACTIVATION_WIDTH"
-    exit 65
-  fi
-
-  read -r layer_start layer_end < <(even_stage_range "$stage_index" "$stage_count" "$layer_count")
-
-  package_required_artifacts "$manifest_path" "$stage_index" "$layer_start" "$layer_end" "$stage_count" \
-    | while IFS=$'\t' read -r remote_path expected_bytes; do
-    download_hf_file "$repo" "$revision" "$remote_path" "${package_dir}/${remote_path}" "$expected_bytes"
-  done
+  [[ "${HF_PACKAGE_SOURCE:-host-cache}" == "download" ]] || return 65
+  local fetched
+  local fetch_args=(--reference "$package_ref" --cache-root "${PACKAGE_CACHE_DIR:-/package-cache}/hub"
+    --stage-index "$stage_index" --stage-count "$stage_count")
+  if [[ -n "${LAYER_COUNT:-}" ]]; then fetch_args+=(--expected-layer-count "$LAYER_COUNT"); fi
+  if [[ -n "${ACTIVATION_WIDTH:-}" ]]; then fetch_args+=(--expected-activation-width "$ACTIVATION_WIDTH"); fi
+  fetched="$(/usr/local/bin/skippy-package-builder fetch-layer-package "${fetch_args[@]}")" || return $?
+  local package_dir manifest_path layer_count activation_width layer_start layer_end
+  package_dir="$(jq -er '.snapshot_path' <<< "$fetched")" || return $?
+  manifest_path="${package_dir}/model-package.json"
+  layer_count="$(jq -er '.layer_count' <<< "$fetched")" || return $?
+  activation_width="$(jq -er '.activation_width' <<< "$fetched")" || return $?
+  layer_start="$(jq -er '.layer_start' <<< "$fetched")" || return $?
+  layer_end="$(jq -er '.layer_end' <<< "$fetched")" || return $?
 
   export MODEL_PATH="$package_dir"
   export LOAD_MODE="layer-package"
@@ -393,25 +181,8 @@ prepare_hf_layer_package() {
 }
 
 even_stage_range() {
-  local stage_index="$1"
-  local stage_count="$2"
-  local layer_count="$3"
-  python3 - "$stage_index" "$stage_count" "$layer_count" <<'PY'
-import sys
-stage_index, stage_count, layer_count = map(int, sys.argv[1:])
-base = layer_count // stage_count
-rem = layer_count % stage_count
-start = 0
-for index in range(stage_count):
-    width = base + (1 if index < rem else 0)
-    end = start + width
-    if index == stage_index:
-        print(start, end)
-        break
-    start = end
-PY
+  /usr/local/bin/skippy-package-builder even-layer-stage-range "$1" "$2" "$3"
 }
-
 route_iface_for_host() {
   local host="$1"
   local ip
@@ -503,42 +274,18 @@ write_stage_config() {
   # addresses avoid requiring every container to be up while the plan is built.
   skippy "${args[@]}" >&2
 
-  python3 - "${plan_root}/plan/stage-${stage_index}.json" "$config_path" <<'PYCONFIG'
-import json
-import os
-import sys
+  local deployment=(automation wan-stage-deployment
+    --input "${plan_root}/plan/stage-${stage_index}.json" --output "$config_path"
+    --stage-index "$stage_index" --stage-count "$stage_count"
+    --bind-port "${STAGE_BIND_PORT:-19000}"
+    --run-id "${RUN_ID:-skippy-docker-wan}"
+    --topology-id "${TOPOLOGY_ID:-docker-wan-four-stage}"
+    --cache-type-k "${CACHE_TYPE_K:-f16}" --cache-type-v "${CACHE_TYPE_V:-f16}"
+    --flash-attn-type "${FLASH_ATTN_TYPE:-disabled}")
+  if [[ -n "${N_BATCH:-}" ]]; then deployment+=(--n-batch "$N_BATCH"); fi
+  if [[ -n "${N_UBATCH:-}" ]]; then deployment+=(--n-ubatch "$N_UBATCH"); fi
+  /usr/local/bin/mesh-llm-automation "${deployment[@]}"
 
-with open(sys.argv[1], encoding="utf-8") as handle:
-    config = json.load(handle)
-stage_index = int(os.environ["STAGE_INDEX"])
-stage_count = int(os.environ.get("STAGE_COUNT", "4"))
-bind_port = int(os.environ.get("STAGE_BIND_PORT", "19000"))
-
-def peer(index):
-    return {
-        "stage_id": f"stage-{index}",
-        "stage_index": index,
-        "endpoint": f"tcp://stage{index}:{bind_port}",
-    }
-
-# Only deployment identity, transport and ordinary runtime controls change.
-# Keep the admitted source, tensor, execution-contract and frontier fields.
-config.update({
-    "run_id": os.environ.get("RUN_ID", "skippy-docker-wan"),
-    "topology_id": os.environ.get("TOPOLOGY_ID", "docker-wan-four-stage"),
-    "bind_addr": f"0.0.0.0:{bind_port}",
-    "upstream": None if stage_index == 0 else peer(stage_index - 1),
-    "downstream": None if stage_index + 1 >= stage_count else peer(stage_index + 1),
-    "n_batch": int(os.environ["N_BATCH"]) if os.environ.get("N_BATCH") else None,
-    "n_ubatch": int(os.environ["N_UBATCH"]) if os.environ.get("N_UBATCH") else None,
-    "cache_type_k": os.environ.get("CACHE_TYPE_K", "f16"),
-    "cache_type_v": os.environ.get("CACHE_TYPE_V", "f16"),
-    "flash_attn_type": os.environ.get("FLASH_ATTN_TYPE", "disabled"),
-})
-with open(sys.argv[2], "w", encoding="utf-8") as handle:
-    json.dump(config, handle, indent=2)
-    handle.write("\n")
-PYCONFIG
 
   printf '%s\n' "$config_path"
 }

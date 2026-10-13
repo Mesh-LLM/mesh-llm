@@ -1,0 +1,44 @@
+{
+  "total_count": 3,
+  "artifacts": [
+    {
+      "id": 700,
+      "name": "ci-product-linux-amd64-cpu-debug",
+      "expired": false,
+      "digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "workflow_run": {
+        "id": 101,
+        "repository_id": 42,
+        "head_repository_id": 42,
+        "head_branch": "main",
+        "head_sha": "1111111111111111111111111111111111111111"
+      }
+    },
+    {
+      "id": 701,
+      "name": "ci-product-linux-amd64-cpu",
+      "expired": false,
+      "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "workflow_run": {
+        "id": 101,
+        "repository_id": 42,
+        "head_repository_id": 42,
+        "head_branch": "main",
+        "head_sha": "1111111111111111111111111111111111111111"
+      }
+    },
+    {
+      "id": 702,
+      "name": "ci-product-linux-amd64-cuda",
+      "expired": false,
+      "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "workflow_run": {
+        "id": 101,
+        "repository_id": 42,
+        "head_repository_id": 42,
+        "head_branch": "main",
+        "head_sha": "1111111111111111111111111111111111111111"
+      }
+    }
+  ]
+}

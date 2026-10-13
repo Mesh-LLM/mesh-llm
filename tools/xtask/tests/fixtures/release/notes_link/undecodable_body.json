@@ -1,0 +1,23 @@
+{
+  "args": [
+    "--body",
+    "body.md",
+    "--range",
+    "v1.0.0..v1.0.1",
+    "--repo",
+    "o/r",
+    "--out-body",
+    "body.linked.md",
+    "--out-links",
+    "links.json"
+  ],
+  "code": 1,
+  "gh_argv": [],
+  "git_argv": [],
+  "outputs": {
+    "body.linked.md": null,
+    "links.json": null
+  },
+  "stderr": "Traceback (most recent call last):\nUnicodeDecodeError: 'utf-8' codec can't decode byte 0xff in position 12: invalid start byte\n",
+  "stdout": ""
+}

@@ -47,6 +47,7 @@ RUN --mount=type=cache,id=mesh-llm-sccache-debian-bookworm-gcc12-cpu-${TARGETARC
     mkdir -p /out && \
     cp /src/target/release/skippy /out/skippy && \
     cp /src/target/release/metrics-server /out/metrics-server && \
+    cp /src/target/release/xtask /out/mesh-llm-automation && \
     cp /src/dist/skippy-host-imports.json /out/skippy-host-imports.json && \
     cp -a /src/dist/native-runtimes /out/native-runtimes
 
@@ -72,6 +73,7 @@ RUN --mount=type=cache,id=mesh-llm-apt-lists-debian-bookworm-${TARGETARCH},targe
 
 COPY --from=builder /out/skippy /usr/local/bin/skippy
 COPY --from=builder /out/metrics-server /usr/local/bin/metrics-server
+COPY --from=builder /out/mesh-llm-automation /usr/local/bin/mesh-llm-automation
 COPY --from=builder /out/skippy-host-imports.json /usr/local/bin/skippy-host-imports.json
 COPY --from=builder /out/native-runtimes /usr/local/bin/native-runtimes
 COPY skippy/evals/wan-lab/entrypoint.sh /usr/local/bin/skippy-wan-lab

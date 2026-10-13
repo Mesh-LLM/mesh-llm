@@ -9,16 +9,16 @@ capabilities, and the suites and cadences allowed to use it.
 Run the generator after changing the registry:
 
 ```bash
-python3 scripts/generate-test-model-manifests.py
+cargo xtool models generate
 ```
 
-`just ci-validate` runs the generator in check mode through the Python contract
-tests. It rejects stale suite manifests, invalid revisions, unsafe paths,
+`cargo test -p xtask --test migration_models` runs the generator in check mode.
+It rejects stale suite manifests, invalid revisions, unsafe paths,
 missing integrity metadata, undeclared suites/cadences, and accidental changes
 to the generated llama family battery.
 
 Consumers should read the generated manifest for their suite with
-`scripts/resolve-test-model-manifest.py --cadence <cadence>`. The resolver
+`cargo xtool models resolve <manifest> --cadence <cadence>`. The resolver
 rejects artifacts outside their declared cadence, emits repository, revision,
 selector, files, URLs, and integrity metadata, and can stream-verify downloaded
 files with `--verify-root`. Single-file consumers additionally pass

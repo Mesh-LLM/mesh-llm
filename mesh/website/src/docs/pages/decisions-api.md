@@ -125,10 +125,15 @@ completion methods in OpenAI SDKs do not call `/v1/decisions`.
 From a source checkout, after starting a System One model, run:
 
 ```sh
-python3 scripts/skippy-decisions-smoke.py --base-url http://127.0.0.1:9337
+just decisions-smoke --base-url http://127.0.0.1:9337
 ```
 
 The command discovers a capable model, sends all three question types through
 HTTP, and checks the response shape. Use `--model <ID>` to select a particular
-advertised model. It requires a running Mesh server with a real System One
-model; the script's presence does not itself establish a live run.
+advertised model. The command shares one deadline across discovery and the
+Decisions request (120 seconds by default; `--timeout <seconds>` changes it),
+limits each response to 1 MiB, and refuses redirects and non-200 responses.
+HTTP(S) root URLs are supported; HTTPS and non-IPv4 hosts use the existing
+bounded curl prerequisite. URLs with credentials, queries, or fragments are
+refused. It requires a running Mesh server with a real System One model;
+fixture tests and the command's presence do not establish a live model run.

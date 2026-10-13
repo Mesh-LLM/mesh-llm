@@ -203,7 +203,7 @@ pub fn resolve_benchmark_tune_trial_gate(environment: Option<&OsStr>) -> Result<
 ///   can answer "what does the event system cost".
 ///
 /// These are the exact three `--mode` values
-/// `scripts/run-event-benchmark-matrix.py` accepts.
+/// `cargo xtool automation event-benchmark-run` accepts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EventSystemTrialMode {
     Production,

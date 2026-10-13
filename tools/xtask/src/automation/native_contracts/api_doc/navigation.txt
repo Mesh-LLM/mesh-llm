@@ -1,0 +1,16 @@
+
+## Quick navigation
+
+<nav class="skippy-api-quicknav" aria-label="Skippy API quick navigation" data-pagefind-ignore="all">
+  <a class="skippy-api-quicknav__item" href="#skippy-include-map"><span class="skippy-api-quicknav__number">01</span><strong>Headers</strong><small>Choose a capability</small></a>
+  <a class="skippy-api-quicknav__item" href="#skippy-function-index"><span class="skippy-api-quicknav__number">02</span><strong>Functions</strong><small>Jump to a symbol</small></a>
+  <a class="skippy-api-quicknav__item" href="#skippy-abi-conventions"><span class="skippy-api-quicknav__number">03</span><strong>ABI rules</strong><small>Ownership and buffers</small></a>
+  <a class="skippy-api-quicknav__item" href="#skippy-native-declarations"><span class="skippy-api-quicknav__number">04</span><strong>Types</strong><small>Enums and structs</small></a>
+</nav>
+
+<div id="skippy-function-index" class="skippy-api-index" data-pagefind-ignore="all">
+  <div class="skippy-api-index__heading">
+    <p class="skippy-api-index__eyebrow">Symbol index</p>
+    <p class="skippy-api-index__hint">Select a function to jump directly to its native declaration.</p>
+  </div>
+  <div class="skippy-api-index__groups">

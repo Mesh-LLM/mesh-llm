@@ -137,14 +137,11 @@ dropped from `7.922s` to `0.443s`. Prewarmed independent hot replay at depth
 which is useful evidence but still not enough to make depth `2` the default
 without a customer-shaped corpus.
 
-Generate configs from the manifest instead of hand-copying run directories:
-
-```bash
-python3 scripts/qwen-package-generate-configs.py \
-  --manifest docs/family/qwen-package-manifest.json \
-  --out-dir target/qwen-package-generated \
-  --run-id qwen-package-validation
-```
+The historical experiments generated configs from `qwen-package-manifest.json`
+with `scripts/qwen-package-generate-configs.py`. That helper is absent from the
+current checkout, so the former invocation is not a current generation interface.
+Preserve the manifest, run identity and explicit output directory when preparing
+a new validation run; this runbook supplies no automatic replacement generator.
 
 ## Default-On Decision
 

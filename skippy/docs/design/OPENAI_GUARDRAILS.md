@@ -106,9 +106,9 @@ can be exported.
 
 ## Evidence Collection
 
-Two scripts cover the rollout evidence path:
+Two native or thin-adapter commands cover the rollout evidence path:
 
-- `scripts/run-openai-guardrail-corpus.py` for guardrail reliability runs
+- `just automation-run automation guardrail-corpus` for guardrail reliability runs
 - `scripts/run-llama-benchy-openai.sh` for throughput and latency runs
 
 The guardrail corpus runner should write its JSON artifact under

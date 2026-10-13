@@ -1,0 +1,18 @@
+{
+  "args": [
+    "--body",
+    "body.md",
+    "--plan",
+    "plan.json",
+    "--out",
+    "notes.md"
+  ],
+  "code": 0,
+  "gh_argv": [],
+  "git_argv": [],
+  "outputs": {
+    "notes.md": "## [1.0.0] - 2026-09-10\n\n### Added\n\n* Add search by @alice in https://github.com/o/r/pull/1\n* Durable KV prefix cache: stable by @cat in https://github.com/o/r/pull/3\n\n### Fixed\n\n* Repair cache by @bob in https://github.com/o/r/pull/2\n\n## New Contributors\n* @cat made their first contribution\n\n**Full Changelog**: https://github.com/o/r/compare/v1...v2\n"
+  },
+  "stderr": "",
+  "stdout": "ok: regrouped 3 entries -> notes.md\n"
+}

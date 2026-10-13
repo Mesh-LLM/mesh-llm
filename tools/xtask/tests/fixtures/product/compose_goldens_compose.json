@@ -1,0 +1,154 @@
+{
+  "absolute_paths": {
+    "code": 0,
+    "products": {
+      "bundle/product-manifest.json": "{\n  \"backend\": \"cpu\",\n  \"contract\": \"mesh-llm-product-v2\",\n  \"host\": {\n    \"path\": \"mesh-llm\",\n    \"sha256\": \"d8215ea0d081c8dc0a0d953811d82a50220457ca8e0bb4a3d364be0f84e59230\"\n  },\n  \"mesh_version\": \"0.70.0\",\n  \"runtime\": {\n    \"id\": \"mesh-llm-native-cpu\",\n    \"manifest_sha256\": \"9ecf7666956132e18af0c5f0a9c2f5ae6fbcf85b29d674a4ea4bd874fed717ad\",\n    \"path\": \"native-runtimes/rt\",\n    \"sha256\": \"f1d865d2f9a8b8e6fa8252057306e1ab2934769a3ed99689e26b742d0532ba08\"\n  },\n  \"schema_version\": 2\n}\n"
+    },
+    "stderr": "",
+    "stdout": ""
+  },
+  "cpu": {
+    "code": 0,
+    "products": {
+      "bundle/product-manifest.json": "{\n  \"backend\": \"cpu\",\n  \"contract\": \"mesh-llm-product-v2\",\n  \"host\": {\n    \"path\": \"mesh-llm\",\n    \"sha256\": \"d8215ea0d081c8dc0a0d953811d82a50220457ca8e0bb4a3d364be0f84e59230\"\n  },\n  \"mesh_version\": \"0.70.0\",\n  \"runtime\": {\n    \"id\": \"mesh-llm-native-cpu\",\n    \"manifest_sha256\": \"9ecf7666956132e18af0c5f0a9c2f5ae6fbcf85b29d674a4ea4bd874fed717ad\",\n    \"path\": \"native-runtimes/rt\",\n    \"sha256\": \"f1d865d2f9a8b8e6fa8252057306e1ab2934769a3ed99689e26b742d0532ba08\"\n  },\n  \"schema_version\": 2\n}\n"
+    },
+    "stderr": "",
+    "stdout": ""
+  },
+  "cuda_blackwell_alias": {
+    "code": 0,
+    "products": {
+      "bundle/product-manifest.json": "{\n  \"backend\": \"cuda-blackwell\",\n  \"contract\": \"mesh-llm-product-v2\",\n  \"host\": {\n    \"path\": \"mesh-llm\",\n    \"sha256\": \"d8215ea0d081c8dc0a0d953811d82a50220457ca8e0bb4a3d364be0f84e59230\"\n  },\n  \"mesh_version\": \"0.70.0\",\n  \"runtime\": {\n    \"id\": \"mesh-llm-native-cuda-blackwell\",\n    \"manifest_sha256\": \"ab54e11998d25646a8b494433b8326e463c24ffb2253ed0ec9743173b7c8588a\",\n    \"path\": \"native-runtimes/rt\",\n    \"sha256\": \"5337438d2b6fb0252493ba6350ce3cae42fbc017a8c689f02c8abe2f92cc177f\"\n  },\n  \"schema_version\": 2\n}\n"
+    },
+    "stderr": "",
+    "stdout": ""
+  },
+  "dotted_and_trailing_paths": {
+    "code": 0,
+    "products": {
+      "bundle/product-manifest.json": "{\n  \"backend\": \"cpu\",\n  \"contract\": \"mesh-llm-product-v2\",\n  \"host\": {\n    \"path\": \"mesh-llm\",\n    \"sha256\": \"d8215ea0d081c8dc0a0d953811d82a50220457ca8e0bb4a3d364be0f84e59230\"\n  },\n  \"mesh_version\": \"0.70.0\",\n  \"runtime\": {\n    \"id\": \"mesh-llm-native-cpu\",\n    \"manifest_sha256\": \"9ecf7666956132e18af0c5f0a9c2f5ae6fbcf85b29d674a4ea4bd874fed717ad\",\n    \"path\": \"native-runtimes/rt\",\n    \"sha256\": \"f1d865d2f9a8b8e6fa8252057306e1ab2934769a3ed99689e26b742d0532ba08\"\n  },\n  \"schema_version\": 2\n}\n"
+    },
+    "stderr": "",
+    "stdout": ""
+  },
+  "duplicate_keys_last_wins": {
+    "code": 0,
+    "products": {
+      "bundle/product-manifest.json": "{\n  \"backend\": \"cpu\",\n  \"contract\": \"mesh-llm-product-v2\",\n  \"host\": {\n    \"path\": \"mesh-llm\",\n    \"sha256\": \"d8215ea0d081c8dc0a0d953811d82a50220457ca8e0bb4a3d364be0f84e59230\"\n  },\n  \"mesh_version\": \"0.70.0\",\n  \"runtime\": {\n    \"id\": \"second\",\n    \"manifest_sha256\": \"818786055713a643b1e5c5839bee6f5a473d4f1f0c8017e55192d798749671d5\",\n    \"path\": \"native-runtimes/rt\",\n    \"sha256\": \"e4f88bfca0fd386a134dc12a46b2c71847e5293bf01e21be2b2b49e9cccb8ba1\"\n  },\n  \"schema_version\": 2\n}\n"
+    },
+    "stderr": "",
+    "stdout": ""
+  },
+  "empty_version_and_backend_strings": {
+    "code": 0,
+    "products": {
+      "bundle/product-manifest.json": "{\n  \"backend\": \"\",\n  \"contract\": \"mesh-llm-product-v2\",\n  \"host\": {\n    \"path\": \"mesh-llm\",\n    \"sha256\": \"d8215ea0d081c8dc0a0d953811d82a50220457ca8e0bb4a3d364be0f84e59230\"\n  },\n  \"mesh_version\": \"\",\n  \"runtime\": {\n    \"id\": \"\",\n    \"manifest_sha256\": \"1f1f6564795e726e7b956fba7cf5178d127813080dd32a970e3afd1ee79b5367\",\n    \"path\": \"native-runtimes/rt\",\n    \"sha256\": \"5817c19847a88dab31648d7019ee48311d99e11395198301235c506eb5139caf\"\n  },\n  \"schema_version\": 2\n}\n"
+    },
+    "stderr": "",
+    "stdout": ""
+  },
+  "hip_alias": {
+    "code": 0,
+    "products": {
+      "bundle/product-manifest.json": "{\n  \"backend\": \"hip\",\n  \"contract\": \"mesh-llm-product-v2\",\n  \"host\": {\n    \"path\": \"mesh-llm\",\n    \"sha256\": \"d8215ea0d081c8dc0a0d953811d82a50220457ca8e0bb4a3d364be0f84e59230\"\n  },\n  \"mesh_version\": \"0.70.0\",\n  \"runtime\": {\n    \"id\": \"mesh-llm-native-rocm\",\n    \"manifest_sha256\": \"5e3db2a9761f02171fd3328612c11d4cb8933a27b853a4fc2449f7c6aff84daa\",\n    \"path\": \"native-runtimes/rt\",\n    \"sha256\": \"e3e8d394636133cca77feb37e4707ca77775421b19f10c3e2479f9847bf20ab5\"\n  },\n  \"schema_version\": 2\n}\n"
+    },
+    "stderr": "",
+    "stdout": ""
+  },
+  "host_symlink": {
+    "code": 0,
+    "products": {
+      "bundle/product-manifest.json": "{\n  \"backend\": \"cpu\",\n  \"contract\": \"mesh-llm-product-v2\",\n  \"host\": {\n    \"path\": \"mesh-llm\",\n    \"sha256\": \"30981f70b1a136a3acd7f09fd53291282990adea85a09f11232d787a1940cff4\"\n  },\n  \"mesh_version\": \"0.70.0\",\n  \"runtime\": {\n    \"id\": \"mesh-llm-native-cpu\",\n    \"manifest_sha256\": \"9ecf7666956132e18af0c5f0a9c2f5ae6fbcf85b29d674a4ea4bd874fed717ad\",\n    \"path\": \"native-runtimes/rt\",\n    \"sha256\": \"f1d865d2f9a8b8e6fa8252057306e1ab2934769a3ed99689e26b742d0532ba08\"\n  },\n  \"schema_version\": 2\n}\n"
+    },
+    "stderr": "",
+    "stdout": ""
+  },
+  "no_build_section": {
+    "code": 0,
+    "products": {
+      "bundle/product-manifest.json": "{\n  \"backend\": \"metal\",\n  \"contract\": \"mesh-llm-product-v2\",\n  \"host\": {\n    \"path\": \"mesh-llm\",\n    \"sha256\": \"d8215ea0d081c8dc0a0d953811d82a50220457ca8e0bb4a3d364be0f84e59230\"\n  },\n  \"mesh_version\": \"0.70.0\",\n  \"runtime\": {\n    \"id\": \"rt\",\n    \"manifest_sha256\": \"1695b37b17601d7408ff1a983bd1a0e077e6b3b9e9c2aeed4371bcec0a3a183f\",\n    \"path\": \"native-runtimes/rt\",\n    \"sha256\": \"e72e620ea7ffb051ff785383ac18e7bd994904192cf5e994383f967308fe9c28\"\n  },\n  \"schema_version\": 2\n}\n"
+    },
+    "stderr": "",
+    "stdout": ""
+  },
+  "null_build_section": {
+    "code": 0,
+    "products": {
+      "bundle/product-manifest.json": "{\n  \"backend\": \"vulkan\",\n  \"contract\": \"mesh-llm-product-v2\",\n  \"host\": {\n    \"path\": \"mesh-llm\",\n    \"sha256\": \"d8215ea0d081c8dc0a0d953811d82a50220457ca8e0bb4a3d364be0f84e59230\"\n  },\n  \"mesh_version\": \"0.70.0\",\n  \"runtime\": {\n    \"id\": \"rt\",\n    \"manifest_sha256\": \"e97572acee91775a8bb3fc98f95d2b5e363f66a9660f729474fe2508b3844a7a\",\n    \"path\": \"native-runtimes/rt\",\n    \"sha256\": \"abdb5106729e4eb50713223c31b7d51040048af4412667cacc275ff26c20b12c\"\n  },\n  \"schema_version\": 2\n}\n"
+    },
+    "stderr": "",
+    "stdout": ""
+  },
+  "overwrites_existing_manifest": {
+    "code": 0,
+    "products": {
+      "bundle/product-manifest.json": "{\n  \"backend\": \"cpu\",\n  \"contract\": \"mesh-llm-product-v2\",\n  \"host\": {\n    \"path\": \"mesh-llm\",\n    \"sha256\": \"d8215ea0d081c8dc0a0d953811d82a50220457ca8e0bb4a3d364be0f84e59230\"\n  },\n  \"mesh_version\": \"0.70.0\",\n  \"runtime\": {\n    \"id\": \"mesh-llm-native-cpu\",\n    \"manifest_sha256\": \"9ecf7666956132e18af0c5f0a9c2f5ae6fbcf85b29d674a4ea4bd874fed717ad\",\n    \"path\": \"native-runtimes/rt\",\n    \"sha256\": \"f1d865d2f9a8b8e6fa8252057306e1ab2934769a3ed99689e26b742d0532ba08\"\n  },\n  \"schema_version\": 2\n}\n"
+    },
+    "stderr": "",
+    "stdout": ""
+  },
+  "rocm_with_hip_build": {
+    "code": 0,
+    "products": {
+      "bundle/product-manifest.json": "{\n  \"backend\": \"rocm\",\n  \"contract\": \"mesh-llm-product-v2\",\n  \"host\": {\n    \"path\": \"mesh-llm\",\n    \"sha256\": \"d8215ea0d081c8dc0a0d953811d82a50220457ca8e0bb4a3d364be0f84e59230\"\n  },\n  \"mesh_version\": \"0.70.0\",\n  \"runtime\": {\n    \"id\": \"rt\",\n    \"manifest_sha256\": \"bb6e972e43910b54e0d10652e89e4c2c6552bd2e6d041ec89bbd550b63f5a788\",\n    \"path\": \"native-runtimes/rt\",\n    \"sha256\": \"ae89e24f97d957b454bfaa5e609bfa6f39ccf3de306e2a1750f519c7c2fde5a0\"\n  },\n  \"schema_version\": 2\n}\n"
+    },
+    "stderr": "",
+    "stdout": ""
+  },
+  "runtime_is_bundle_root": {
+    "code": 0,
+    "products": {
+      "b/product-manifest.json": "{\n  \"backend\": \"cpu\",\n  \"contract\": \"mesh-llm-product-v2\",\n  \"host\": {\n    \"path\": \"mesh-llm\",\n    \"sha256\": \"d329be9e3aea365ba02a318d9392e22abd64076bb7e33eaaacd8b3f29b7f6de8\"\n  },\n  \"mesh_version\": \"1.0\",\n  \"runtime\": {\n    \"id\": \"rt\",\n    \"manifest_sha256\": \"997da39546ddc61156421995ad7918ab88999fc4ffa31e8ccd948c08173c07f1\",\n    \"path\": \".\",\n    \"sha256\": \"1bbe01a0255b7cb76fe2b724c0b0a24c2736a8a1115d178b69959eac2142d633\"\n  },\n  \"schema_version\": 2\n}\n"
+    },
+    "stderr": "",
+    "stdout": ""
+  },
+  "runtime_version_without_prefix": {
+    "code": 0,
+    "products": {
+      "bundle/product-manifest.json": "{\n  \"backend\": \"cpu\",\n  \"contract\": \"mesh-llm-product-v2\",\n  \"host\": {\n    \"path\": \"mesh-llm\",\n    \"sha256\": \"d8215ea0d081c8dc0a0d953811d82a50220457ca8e0bb4a3d364be0f84e59230\"\n  },\n  \"mesh_version\": \"0.70.0\",\n  \"runtime\": {\n    \"id\": \"rt\",\n    \"manifest_sha256\": \"d3f51e23f82ee5e9ab5d3fa8d7200976ab6a461cdff527c37fc1f158243f651d\",\n    \"path\": \"native-runtimes/rt\",\n    \"sha256\": \"70dafb83ed8c96ac767e2974468109293cbdd221ed1d3b4ef947ced34885b9d4\"\n  },\n  \"schema_version\": 2\n}\n"
+    },
+    "stderr": "",
+    "stdout": ""
+  },
+  "runtime_working_directory": {
+    "code": 0,
+    "products": {
+      "product-manifest.json": "{\n  \"backend\": \"cpu\",\n  \"contract\": \"mesh-llm-product-v2\",\n  \"host\": {\n    \"path\": \"mesh-llm\",\n    \"sha256\": \"d329be9e3aea365ba02a318d9392e22abd64076bb7e33eaaacd8b3f29b7f6de8\"\n  },\n  \"mesh_version\": \"1.0\",\n  \"runtime\": {\n    \"id\": \"rt\",\n    \"manifest_sha256\": \"997da39546ddc61156421995ad7918ab88999fc4ffa31e8ccd948c08173c07f1\",\n    \"path\": \".\",\n    \"sha256\": \"bc8c3fa4a7118e831c56a4c2d49a8c7d8268b5400ff962143bd7a3ab8fcc9fad\"\n  },\n  \"schema_version\": 2\n}\n"
+    },
+    "stderr": "",
+    "stdout": ""
+  },
+  "symlinks_and_empty_dirs_in_runtime": {
+    "code": 0,
+    "products": {
+      "bundle/product-manifest.json": "{\n  \"backend\": \"cpu\",\n  \"contract\": \"mesh-llm-product-v2\",\n  \"host\": {\n    \"path\": \"mesh-llm\",\n    \"sha256\": \"d8215ea0d081c8dc0a0d953811d82a50220457ca8e0bb4a3d364be0f84e59230\"\n  },\n  \"mesh_version\": \"0.70.0\",\n  \"runtime\": {\n    \"id\": \"mesh-llm-native-cpu\",\n    \"manifest_sha256\": \"9ecf7666956132e18af0c5f0a9c2f5ae6fbcf85b29d674a4ea4bd874fed717ad\",\n    \"path\": \"native-runtimes/rt\",\n    \"sha256\": \"720f15fe246cc263945a496a67516c70259e30625abe737c2810fbeb03c7837a\"\n  },\n  \"schema_version\": 2\n}\n"
+    },
+    "stderr": "",
+    "stdout": ""
+  },
+  "unicode_and_structured_ids": {
+    "code": 0,
+    "products": {
+      "bundle/product-manifest.json": "{\n  \"backend\": \"cpu\",\n  \"contract\": \"mesh-llm-product-v2\",\n  \"host\": {\n    \"path\": \"mesh-llm\",\n    \"sha256\": \"d8215ea0d081c8dc0a0d953811d82a50220457ca8e0bb4a3d364be0f84e59230\"\n  },\n  \"mesh_version\": \"0.70.0\",\n  \"runtime\": {\n    \"id\": {\n      \"a\": [\n        1,\n        2.5,\n        true,\n        null,\n        12345678901234567890123,\n        Infinity,\n        NaN,\n        -Infinity\n      ],\n      \"m\": {},\n      \"z\": \"r\\u00e9\\ud83d\\ude00\\u007f\"\n    },\n    \"manifest_sha256\": \"bd6fbf272724592dcbb2e2917d0df6dc8e62d9a964f68155395178b224c80070\",\n    \"path\": \"native-runtimes/rt\",\n    \"sha256\": \"ef7b9994f1d50e00f2c6e60a8927890f242dd3591e62d20f2eda2baf38c5f08a\"\n  },\n  \"schema_version\": 2\n}\n"
+    },
+    "stderr": "",
+    "stdout": ""
+  },
+  "version_without_prefix": {
+    "code": 0,
+    "products": {
+      "bundle/product-manifest.json": "{\n  \"backend\": \"cpu\",\n  \"contract\": \"mesh-llm-product-v2\",\n  \"host\": {\n    \"path\": \"mesh-llm\",\n    \"sha256\": \"d8215ea0d081c8dc0a0d953811d82a50220457ca8e0bb4a3d364be0f84e59230\"\n  },\n  \"mesh_version\": \"0.70.0\",\n  \"runtime\": {\n    \"id\": \"mesh-llm-native-cpu\",\n    \"manifest_sha256\": \"9ecf7666956132e18af0c5f0a9c2f5ae6fbcf85b29d674a4ea4bd874fed717ad\",\n    \"path\": \"native-runtimes/rt\",\n    \"sha256\": \"f1d865d2f9a8b8e6fa8252057306e1ab2934769a3ed99689e26b742d0532ba08\"\n  },\n  \"schema_version\": 2\n}\n"
+    },
+    "stderr": "",
+    "stdout": ""
+  },
+  "working_directory_bundle": {
+    "code": 0,
+    "products": {
+      "product-manifest.json": "{\n  \"backend\": \"cpu\",\n  \"contract\": \"mesh-llm-product-v2\",\n  \"host\": {\n    \"path\": \"mesh-llm\",\n    \"sha256\": \"d329be9e3aea365ba02a318d9392e22abd64076bb7e33eaaacd8b3f29b7f6de8\"\n  },\n  \"mesh_version\": \"1.0\",\n  \"runtime\": {\n    \"id\": \"rt\",\n    \"manifest_sha256\": \"997da39546ddc61156421995ad7918ab88999fc4ffa31e8ccd948c08173c07f1\",\n    \"path\": \"rt\",\n    \"sha256\": \"59015994f8e793d947d6eeefdd88d4da5a9a1bf68356f1cac8e515e176897eac\"\n  },\n  \"schema_version\": 2\n}\n"
+    },
+    "stderr": "",
+    "stdout": ""
+  }
+}

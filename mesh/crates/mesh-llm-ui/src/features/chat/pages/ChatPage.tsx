@@ -36,6 +36,7 @@ import {
   usesBrowserAnalyzerForAttachment
 } from '@/features/chat/pages/chat-page-attachments'
 import { ChatPageLayout } from '@/features/chat/pages/ChatPageLayout'
+import { useChatPageKeyboardShortcuts } from '@/features/chat/pages/useChatPageKeyboardShortcuts'
 import {
   AUTO_BACKEND_MODEL,
   AUTO_MODEL_OPTION,
@@ -786,6 +787,36 @@ export function ChatPageContent({ data = CHAT_HARNESS, target, onClearTarget }: 
     })
   }, [activeModelName, chat, chatConversationId, liveMessagesWithModels, liveMode, updateThread])
 
+  const handleNewChat = useCallback(() => {
+    if (liveMode && isStreaming && liveMessagesWithModels.length > 0) {
+      updateThread(chatConversationId, liveMessagesWithModels)
+    }
+    const nextConversationId = createConversation(draftConversationId)
+    setDraftConversationId(createChatDraftConversationId())
+    clearComposerDraft(nextConversationId)
+    setAttachmentProcessingStatus(null)
+    setFailedSubmission(null)
+    setSelectedAttachmentPreview(null)
+    handledChatErrorRef.current = null
+    pendingRetryRef.current = null
+    setInspectedMessage(undefined)
+    setSidebarTab('conversations')
+    focusComposer()
+  }, [
+    chatConversationId,
+    clearComposerDraft,
+    createConversation,
+    draftConversationId,
+    focusComposer,
+    isStreaming,
+    liveMessagesWithModels,
+    liveMode,
+    setDraftConversationId,
+    updateThread
+  ])
+
+  useChatPageKeyboardShortcuts({ onNewChat: handleNewChat })
+
   const visibleFailedSubmission =
     failedSubmission && failedSubmission.conversationId === displayedConversationId ? failedSubmission : null
   const visibleQueuedSubmissions = queuedSubmissions.filter(
@@ -824,22 +855,7 @@ export function ChatPageContent({ data = CHAT_HARNESS, target, onClearTarget }: 
       onSelectConversation={selectConversation}
       onRenameConversation={(conversation, title) => renameConversation(conversation.id, title)}
       onDeleteConversation={requestDeleteConversation}
-      onNewChat={() => {
-        if (liveMode && isStreaming && liveMessagesWithModels.length > 0) {
-          updateThread(chatConversationId, liveMessagesWithModels)
-        }
-        const nextConversationId = createConversation(draftConversationId)
-        setDraftConversationId(createChatDraftConversationId())
-        clearComposerDraft(nextConversationId)
-        setAttachmentProcessingStatus(null)
-        setFailedSubmission(null)
-        setSelectedAttachmentPreview(null)
-        handledChatErrorRef.current = null
-        pendingRetryRef.current = null
-        setInspectedMessage(undefined)
-        setSidebarTab('conversations')
-        focusComposer()
-      }}
+      onNewChat={handleNewChat}
       transparencyTabEnabled={transparencyTabEnabled}
       inspectedMessage={inspectedMessage}
       conversationPendingDelete={conversationPendingDelete}

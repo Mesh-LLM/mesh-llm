@@ -36,6 +36,10 @@ runs:
         INPUT_BUILD: ${{ inputs.build }}
       run: |
         set -euo pipefail
+        automation=(cargo xtool)
+        if [[ -n "${MESH_LLM_AUTOMATION_BIN:-}" ]]; then
+          automation=("$MESH_LLM_AUTOMATION_BIN")
+        fi
 
         if [[ "$INPUT_BACKEND" != "cpu" ]]; then
           echo "unsupported shared static ABI backend: $INPUT_BACKEND" >&2
@@ -150,74 +154,21 @@ runs:
         # build.rs only consumes this OpenMP subset for a CPU static ABI.
         # Excluding the rest removes CMake's producer-local source/build paths
         # while retaining the exact native link decision.
-        python3 - \
+        "${automation[@]}" prepared-input static-abi-cache-filter \
           "$source_build_dir/CMakeCache.txt" \
-          "$portable_build_dir/CMakeCache.txt" <<'PY'
-        import re
-        import sys
-
-        source, destination = sys.argv[1:]
-        safe_key = re.compile(
-            r"^(?:"
-            r"GGML_OPENMP_ENABLED|"
-            r"OpenMP_(?:C|CXX)_LIB_NAMES|"
-            r"OpenMP_[A-Za-z0-9_]+_LIBRARY"
-            r"):[^=]+="
-        )
-        retained = [
-            line
-            for line in open(source, encoding="utf-8", errors="strict")
-            if safe_key.match(line)
-        ]
-        with open(destination, "w", encoding="utf-8") as handle:
-            handle.write("# Portable MeshLLM static ABI link metadata\n")
-            handle.writelines(retained)
-        PY
+          "$portable_build_dir/CMakeCache.txt"
 
         manifest="$portable_build_dir/.mesh-llm-static-abi-input.json"
-        python3 - \
+        "${automation[@]}" prepared-input static-abi-manifest describe \
           "$manifest" \
           "$INPUT_TARGET" \
           "$INPUT_BACKEND" \
           "$(basename "$source_build_dir")" \
           "$toolchain_epoch" \
           "$patched_sha_file" \
-          "$portable_build_dir/.mesh-llm-build-stamp" <<'PY'
-        import hashlib
-        import json
-        import sys
-
-        (
-            manifest_path,
-            target,
-            backend,
-            build_dir,
-            toolchain_epoch,
-            patched_sha_path,
-            stamp_path,
-        ) = sys.argv[1:]
-        with open(patched_sha_path, encoding="utf-8") as handle:
-            expected_patched_sha = handle.read().strip()
-        if not expected_patched_sha:
-            raise SystemExit("prepared llama.cpp patched SHA is empty")
-        with open(stamp_path, "rb") as handle:
-            stamp_bytes = handle.read()
-        stamp_sha256 = hashlib.sha256(stamp_bytes).hexdigest()
-        manifest = {
-            "schema_version": 3,
-            "contract": "mesh-llm-static-abi-v3",
-            "target_triple": target,
-            "backend": backend,
-            "build_directory": build_dir,
-            "toolchain_epoch": toolchain_epoch,
-            "build_stamp_sha256": stamp_sha256,
-        }
-        with open(manifest_path, "w", encoding="utf-8") as handle:
-            json.dump(manifest, handle, indent=2, sort_keys=True)
-            handle.write("\n")
-        PY
+          "$portable_build_dir/.mesh-llm-build-stamp"
         expected_patched_sha="$(tr -d '[:space:]' < "$patched_sha_file")"
-        python3 scripts/verify-static-abi-build-stamp.py \
+        "${automation[@]}" prepared-input static-abi-stamp \
           "$portable_build_dir/.mesh-llm-build-stamp" \
           --backend "$INPUT_BACKEND" \
           --link-mode static \
@@ -227,31 +178,11 @@ runs:
 
         # Fail closed if compiler output or staged metadata retained the
         # producer's checkout/build paths.
-        python3 - \
+        "${automation[@]}" prepared-input static-abi-path-scan \
           "$portable_build_dir" \
           "$(pwd -P)" \
           "$(cd .deps/llama.cpp && pwd -P)" \
-          "$(cd "$source_build_dir" && pwd -P)" <<'PY'
-        import sys
-        from pathlib import Path
-
-        stage = Path(sys.argv[1])
-        forbidden = tuple(
-            value.encode()
-            for value in dict.fromkeys(sys.argv[2:])
-            if value
-        )
-        for path in sorted(stage.rglob("*")):
-            if not path.is_file():
-                continue
-            data = path.read_bytes()
-            for value in forbidden:
-                if value in data:
-                    raise SystemExit(
-                        f"portable static ABI retained producer-local path "
-                        f"{value.decode()!r} in {path.relative_to(stage)}"
-                    )
-        PY
+          "$(cd "$source_build_dir" && pwd -P)"
 
         archive_path="$upload_dir/mesh-llm-static-abi.tar.gz"
         tar -C "$stage_root" \
@@ -264,7 +195,7 @@ runs:
         fi
         printf '%s  %s\n' "$archive_sha" "$(basename "$archive_path")" \
           > "$archive_path.sha256"
-        python3 scripts/verify-checksum-sidecar.py "$archive_path"
+        "${automation[@]}" artifact verify-checksum "$archive_path"
 
         upload_root="$(cd "$upload_dir" && pwd)"
         {

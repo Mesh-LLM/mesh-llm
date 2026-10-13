@@ -1,0 +1,1 @@
+{"schema_version":1,"llama_cpp_commit":"abc","generator_version":"0.2.0","builders":[{"file":"src/models/whole.cpp","verdict":"supported_whole_model","proof":{"execution_scope":"multiple_sequential_layer_domains","scope_evidence":["two domains"]},"edits":[]}],"summary":{"supported_whole_model":1}}

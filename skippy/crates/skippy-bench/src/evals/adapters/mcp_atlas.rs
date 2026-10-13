@@ -33,8 +33,21 @@ fn write_mcp_atlas_run_script(
         "MCP_ATLAS_COMPLETION_CONCURRENCY",
         args.endpoint_concurrency,
     )?;
+    let readiness_helper =
+        env::current_exe().context("locate running SkippyBench readiness helper")?;
     let script = format!(
         include_str!("templates/mcp_atlas_run.sh"),
+        sdk_python = shell_quote(
+            &super::super::mcp_environment::runtime_python(cache_root)
+                .display()
+                .to_string()
+        ),
+        readiness_helper = shell_quote(
+            readiness_helper
+                .to_str()
+                .context("SkippyBench readiness helper path is not UTF-8")?
+        ),
+        agent_image = shell_quote(super::super::registry::MCP_ATLAS_IMAGE),
         harness = shell_quote(&harness.display().to_string()),
         completion_dir = shell_quote(&completion_dir.display().to_string()),
         raw_dir = shell_quote(&raw_dir.display().to_string()),

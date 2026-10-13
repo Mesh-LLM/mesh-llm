@@ -46,9 +46,27 @@ fn prepare_model_download_directories() {
     unsafe { prepared.apply_to_process_environment() };
 }
 
+fn needs_model_download_preparation(command: &CommandKind) -> bool {
+    let CommandKind::Eval(args) = command else {
+        return true;
+    };
+    !matches!(
+        &args.command,
+        cli::EvalCommandKind::PortReady(_)
+            | cli::EvalCommandKind::PatchSwerexIndex(_)
+            | cli::EvalCommandKind::PatchSwerexModal(_)
+            | cli::EvalCommandKind::PrepareMcp(_)
+            | cli::EvalCommandKind::PrepareSpeed(_)
+            | cli::EvalCommandKind::PrepareSwe(_)
+    ) && !matches!(&args.command, cli::EvalCommandKind::Run(args) if matches!(args.eval, cli::EvalId::McpAtlas | cli::EvalId::SweBenchPro | cli::EvalId::SpeedBench))
+}
+
 fn main() -> Result<()> {
-    prepare_model_download_directories();
-    match Cli::parse().command {
+    let cli = Cli::parse();
+    if needs_model_download_preparation(&cli.command) {
+        prepare_model_download_directories();
+    }
+    match cli.command {
         CommandKind::LocalSingle(args) => local_single(args),
         CommandKind::LocalSplitInprocess(args) => local_split_inprocess(args),
         CommandKind::LocalSplitBinary(args) => local_split_binary(args),
@@ -61,5 +79,66 @@ fn main() -> Result<()> {
         CommandKind::FocusedRuntime(args) => focused_runtime(args),
         CommandKind::Eval(args) => eval_command(args),
         CommandKind::Run(args) => run_distributed(args),
+    }
+}
+
+#[cfg(test)]
+mod startup_tests {
+    use super::*;
+    #[test]
+    fn prepared_sdk_profiles_defer_model_cache_but_other_evals_preserve_startup() {
+        let prepare = Cli::try_parse_from([
+            "bench",
+            "eval",
+            "prepare-mcp",
+            "--uv",
+            "/uv",
+            "--python",
+            "/python",
+        ])
+        .unwrap();
+        assert!(!needs_model_download_preparation(&prepare.command));
+        let speed = Cli::try_parse_from([
+            "bench",
+            "eval",
+            "prepare-speed",
+            "--uv",
+            "/uv",
+            "--python",
+            "/python3.12",
+        ])
+        .unwrap();
+        assert!(!needs_model_download_preparation(&speed.command));
+
+        let swe = Cli::try_parse_from([
+            "bench",
+            "eval",
+            "prepare-swe",
+            "--uv",
+            "/uv",
+            "--python",
+            "/python3.11",
+            "--deployment",
+            "modal",
+        ])
+        .unwrap();
+        assert!(!needs_model_download_preparation(&swe.command));
+        for eval in [
+            "mcp-atlas",
+            "speed-bench",
+            "terminal-bench",
+            "swe-gym",
+            "swe-bench-pro",
+        ] {
+            let cli = Cli::try_parse_from(["bench", "eval", "run", eval]).unwrap();
+            assert_eq!(
+                needs_model_download_preparation(&cli.command),
+                !matches!(eval, "mcp-atlas" | "swe-bench-pro" | "speed-bench")
+            );
+        }
+        let info = Cli::try_parse_from(["bench", "eval", "info", "mcp-atlas"]).unwrap();
+        assert!(needs_model_download_preparation(&info.command));
+        let probe = Cli::try_parse_from(["bench", "eval", "port-ready", "1984"]).unwrap();
+        assert!(!needs_model_download_preparation(&probe.command));
     }
 }

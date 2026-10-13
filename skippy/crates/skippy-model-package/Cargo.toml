@@ -12,6 +12,9 @@ readme = "README.md"
 sha2.workspace = true
 
 [dependencies]
+tokenizers = { version = "=0.23.2", default-features = false, features = ["fancy-regex"] }
+base64 = "0.22.1"
+clap.workspace = true
 anyhow.workspace = true
 bytes = "1"
 chrono = "0.4"
@@ -23,6 +26,18 @@ reqwest = { version = "0.13", features = ["json", "stream"] }
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
-tokio = { version = "1", features = ["rt", "time"] }
+tokio = { version = "1", features = ["rt", "time", "signal"] }
 futures = "0.3"
 tempfile = "3"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+signal-hook-registry = "1.4.8"
+
+[[bin]]
+name = "model-package-mtp-checkpoint"
+path = "src/bin/model-package-mtp-checkpoint.rs"
+
+[[bin]]
+name = "model-package-generic-jobs"
+path = "src/bin/model-package-generic-jobs.rs"

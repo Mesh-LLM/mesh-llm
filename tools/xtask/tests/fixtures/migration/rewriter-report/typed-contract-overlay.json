@@ -1,0 +1,25 @@
+{
+  "malformed": {
+    "report": "malformed.json",
+    "input": "{\"builders\": [\n",
+    "stderr": "error: cannot load report: EOF while parsing a list at line 2 column 0\n"
+  },
+  "bad-types": {
+    "stderr": "fail: schema_version: expected unsigned integer schema version\nfail: missing required string field 'llama_cpp_commit'\nfail: missing required string field 'generator_version'\nfail: builders[0].file: expected string\nfail: builders[0].constructor: expected string\nfail: builders[0].verdict: expected verdict string\nfail: builders[0].proof: expected object\nfail: builders[0].edits: expected array\nfail: summary.transformable: expected integer in 0..=9223372036854775807\n"
+  },
+  "correction-dispositions": {
+    "null-builders": "fail: builders: expected array\n",
+    "null-builder": "fail: builders[0]: expected object\n",
+    "boolean-integer-identity": "fail: builders[0].file: expected string\nfail: builders[1].file: expected string\n",
+    "integer-string-identity": "fail: builders[0].file: expected string\n",
+    "integer-float-identity": "fail: builders[0].file: expected string\nfail: builders[1].file: expected string\n",
+    "null-string-identity": "fail: builders[0].file: expected string\n",
+    "constructor-list-string": "fail: builders[0].constructor: expected string\n",
+    "unhashable-file": "fail: builders[0].file: expected string\n",
+    "float-schema": "fail: schema_version: expected unsigned integer schema version\n",
+    "fractional-sum": "fail: summary.transformable: expected integer in 0..=9223372036854775807\nfail: summary.already_transformed: expected integer in 0..=9223372036854775807\n",
+    "large-integer-cancel": "fail: summary.transformable: expected integer in 0..=9223372036854775807\nfail: summary.already_transformed: expected integer in 0..=9223372036854775807\n",
+    "intermediate-overflow": "fail: summary.supported_auxiliary: expected integer in 0..=9223372036854775807\n"
+  },
+  "ordered-constructors": "fail: builders[0].constructor: expected string\nfail: builders[1].constructor: expected string\n"
+}

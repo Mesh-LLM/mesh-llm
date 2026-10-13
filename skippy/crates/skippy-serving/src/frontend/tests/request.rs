@@ -857,17 +857,26 @@ fn provider_enable_thinking_overrides_chat_template_thinking() {
 
 #[test]
 fn chat_template_kwargs_enable_thinking_overrides_template() {
-    let request: ChatCompletionRequest = serde_json::from_value(json!({
-        "model": "jc-builds/SmolLM2-135M-Instruct-Q4_K_M-GGUF:Q4_K_M",
-        "messages": [{"role": "user", "content": "hello"}],
-        "chat_template_kwargs": {"enable_thinking": false}
-    }))
-    .unwrap();
+    for enabled in [true, false] {
+        let request: ChatCompletionRequest = serde_json::from_value(json!({
+            "model": "test",
+            "messages": [{"role": "user", "content": "hello"}],
+            "chat_template_kwargs": {"enable_thinking": enabled}
+        }))
+        .unwrap();
+        let defaults = EmbeddedOpenAiRequestDefaults {
+            reasoning_enabled: Some(if enabled {
+                EmbeddedReasoningEnabled::Disabled
+            } else {
+                EmbeddedReasoningEnabled::Enabled
+            }),
+            ..EmbeddedOpenAiRequestDefaults::default()
+        };
 
-    let options =
-        chat_template_options(&request, &EmbeddedOpenAiRequestDefaults::default()).unwrap();
-    assert_eq!(options.enable_thinking, Some(false));
-    assert_eq!(options.reasoning_format, Some(ChatReasoningFormat::Auto));
+        let options = chat_template_options(&request, &defaults).unwrap();
+        assert_eq!(options.enable_thinking, Some(enabled));
+        assert_eq!(options.reasoning_format, Some(ChatReasoningFormat::Auto));
+    }
 }
 
 #[test]

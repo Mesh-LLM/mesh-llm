@@ -15,6 +15,10 @@
 # second model in the same job.
 
 set -euo pipefail
+automation=(cargo xtool)
+if [[ -n "${MESH_LLM_AUTOMATION_BIN:-}" ]]; then
+    automation=("$MESH_LLM_AUTOMATION_BIN")
+fi
 
 MESH_LLM="${1:?Usage: $0 <mesh-llm-binary> <bin-dir> <model-path-or-ref>}"
 BIN_DIR="${2:?Usage: $0 <mesh-llm-binary> <bin-dir> <model-path-or-ref>}"
@@ -155,110 +159,18 @@ sha256_file() {
 }
 
 auto_payload_artifact_for_sha256() {
-    cargo run -q -p xtask -- split-payloads artifact-for-sha256 \
+    "${automation[@]}" split-payloads artifact-for-sha256 \
         --expectations ci/model-artifacts/kv-auto-smoke-expectations.json \
         --sha256 "$1"
 }
 
 quant_selector_from_gguf_file() {
     local filename="$1"
-    python3 - "$filename" <<'PY'
-import re
-import sys
-
-stem = re.sub(r"-\d{5}-of-\d{5}$", "", sys.argv[1].removesuffix(".gguf"), flags=re.IGNORECASE)
-matches = list(re.finditer(
-    r"(?:^|[-_.])((?:IQ|Q)[1-8](?:_[0-9A-Z]+)+|F(?:16|32)|BF16)(?=$|[-_.])",
-    stem,
-    flags=re.IGNORECASE,
-))
-if not matches:
-    raise SystemExit(f"cannot derive quant selector from GGUF filename: {sys.argv[1]}")
-print(matches[-1].group(1))
-PY
+    "${automation[@]}" automation split-probe quant "$filename"
 }
 
 resolve_package_tool() {
-    python3 - "$RUNTIME_BUNDLE" <<'PY'
-import hashlib
-import json
-import os
-from pathlib import Path, PurePosixPath
-import re
-import sys
-
-runtime_bundle = Path(sys.argv[1])
-if not runtime_bundle.is_dir():
-    raise SystemExit(f"native runtime bundle is not a directory: {runtime_bundle}")
-bundle_root = runtime_bundle.resolve()
-
-manifests = sorted(runtime_bundle.glob("*/manifest.json"))
-if len(manifests) != 1:
-    raise SystemExit(
-        "expected exactly one native runtime manifest under "
-        f"{runtime_bundle}; found {len(manifests)}"
-    )
-
-manifest_path = manifests[0]
-runtime_dir = manifest_path.parent.resolve()
-if runtime_dir.parent != bundle_root:
-    raise SystemExit(f"native runtime manifest is outside its bundle: {manifest_path}")
-try:
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
-    raise SystemExit(f"cannot read native runtime manifest {manifest_path}: {error}")
-
-runtime = manifest.get("runtime")
-if not isinstance(runtime, dict):
-    raise SystemExit(f"native runtime manifest has no runtime object: {manifest_path}")
-tools = runtime.get("tools")
-if not isinstance(tools, dict):
-    raise SystemExit(f"native runtime manifest runtime.tools must be a checksum map: {manifest_path}")
-
-def validate_safe_relative_path(value):
-    if (
-        not isinstance(value, str)
-        or not value
-        or "\\" in value
-        or PurePosixPath(value).is_absolute()
-        or any(part in {"", ".", ".."} for part in PurePosixPath(value).parts)
-    ):
-        raise SystemExit(f"declared runtime tool path is not safe: {value!r}")
-
-for declared_path in tools:
-    validate_safe_relative_path(declared_path)
-
-# This is deliberately an exact manifest key. Looking up by basename could
-# select an unrelated executable from a different declared path.
-tool_rel = "tools/skippy-package-builder"
-if tool_rel not in tools:
-    raise SystemExit(
-        f"native runtime manifest does not declare {tool_rel} in runtime.tools: {manifest_path}"
-    )
-if not isinstance(tools[tool_rel], str) or not re.fullmatch(r"[0-9a-fA-F]{64}", tools[tool_rel]):
-    raise SystemExit(f"invalid SHA-256 for declared runtime tool {tool_rel}")
-
-validate_safe_relative_path(tool_rel)
-
-tool_path = (runtime_dir / tool_rel).resolve()
-try:
-    tool_path.relative_to(runtime_dir)
-except ValueError:
-    raise SystemExit(f"declared runtime tool escapes its bundle: {tool_rel}")
-if not tool_path.is_file():
-    raise SystemExit(f"declared runtime tool is not a file: {tool_rel}")
-if not os.access(tool_path, os.X_OK):
-    raise SystemExit(f"declared runtime tool is not executable: {tool_rel}")
-
-digest = hashlib.sha256()
-with tool_path.open("rb") as handle:
-    for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-        digest.update(chunk)
-if digest.hexdigest() != tools[tool_rel].lower():
-    raise SystemExit(f"declared runtime tool checksum mismatch: {tool_rel}")
-
-print(tool_path)
-PY
+    "${automation[@]}" automation split-probe package-tool "$RUNTIME_BUNDLE"
 }
 
 prepare_split_package() {
@@ -406,16 +318,7 @@ status_json() {
 }
 
 query_token() {
-    STATUS_JSON="$1" python3 - <<'PY'
-import json
-import os
-
-try:
-    status = json.loads(os.environ.get("STATUS_JSON", "") or "{}")
-except Exception:
-    status = {}
-print(status.get("token") or "")
-PY
+    printf '%s' "$1" | "${automation[@]}" automation smoke-observation token 2>/dev/null || true
 }
 
 wait_for_seed_token() {
@@ -484,44 +387,7 @@ capture_json_snapshot() {
         --max-time "$request_timeout" "$url" >"$raw" 2>/dev/null; then
         : >"$raw"
     fi
-    python3 - "$kind" "$raw" "$output" <<'PY'
-import hashlib
-import json
-import os
-from pathlib import Path
-import sys
-
-kind, raw_path, output_path = sys.argv[1:]
-raw = Path(raw_path).read_bytes()
-try:
-    payload = json.loads(raw)
-    if not isinstance(payload, dict):
-        raise ValueError("response root is not an object")
-except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as error:
-    payload = {
-        "capture_error": str(error),
-        "response_bytes": len(raw),
-        "response_sha256": hashlib.sha256(raw).hexdigest(),
-    }
-if kind == "status" and "capture_error" not in payload:
-    peers = payload.get("peers")
-    if not isinstance(peers, list):
-        peers = []
-    payload = {
-        "mesh_id": payload.get("mesh_id"),
-        "node_id": payload.get("node_id"),
-        "peers": [
-            {"id": peer.get("id")}
-            for peer in peers
-            if isinstance(peer, dict) and isinstance(peer.get("id"), str)
-        ],
-    }
-temporary_path = f"{output_path}.tmp"
-with open(temporary_path, "w", encoding="utf-8") as handle:
-    json.dump(payload, handle, indent=2, sort_keys=True)
-    handle.write("\n")
-os.replace(temporary_path, output_path)
-PY
+    "${automation[@]}" automation split-probe snapshot "$kind" "$raw" "$output"
     rm -f "$raw"
 }
 
@@ -561,7 +427,7 @@ capture_split_snapshots() {
 }
 
 reconcile_split_snapshots() {
-    python3 scripts/reconcile-two-node-split-evidence.py \
+    "${automation[@]}" automation split-evidence \
         --seed-status "$SPLIT_SNAPSHOT_DIR/seed-status.json" \
         --seed-stages "$SPLIT_SNAPSHOT_DIR/seed-stages.json" \
         --seed-models "$SPLIT_SNAPSHOT_DIR/seed-models.json" \
@@ -645,32 +511,7 @@ wait_for_split_topology() {
             return 1
         fi
         if [[ "$reconciliation_ready" -eq 1 ]]; then
-            DRIVER_LABEL="$(python3 - "$SPLIT_EVIDENCE_PATH" <<'PY'
-import json
-import sys
-
-evidence = json.load(open(sys.argv[1], encoding="utf-8"))
-stage0 = next(
-    (stage for stage in evidence["topology"]["stages"] if stage["stage_index"] == 0),
-    None,
-)
-if stage0 is None:
-    raise SystemExit("split evidence has no stage 0")
-
-stage0_node = stage0["node_id"]
-matches = [
-    label
-    for label, observer in evidence["observers"].items()
-    if isinstance(observer, dict)
-    and stage0_node.startswith(observer.get("node_id", "missing-observer-node"))
-]
-if len(matches) != 1:
-    raise SystemExit(
-        f"cannot map stage-0 node {stage0_node!r} to exactly one observer: {matches!r}"
-    )
-print(matches[0])
-PY
-)"
+            DRIVER_LABEL="$("${automation[@]}" automation split-probe driver "$SPLIT_EVIDENCE_PATH")"
             case "$DRIVER_LABEL" in
                 seed) DRIVER_API_PORT="$SEED_API_PORT" ;;
                 worker) DRIVER_API_PORT="$WORKER_API_PORT" ;;
@@ -788,13 +629,7 @@ run_client_routing_probe() {
             tail -160 "$CLIENT_LOG" >&2 || true
             exit 1
         fi
-        if CLIENT_MODELS_JSON="$client_models" MODEL_ID="$MODEL_ID" python3 - <<'PY' 2>/dev/null; then
-import json
-import os
-
-models = json.loads(os.environ.get("CLIENT_MODELS_JSON", "") or "{}").get("data", [])
-raise SystemExit(0 if any(item.get("id") == os.environ["MODEL_ID"] for item in models) else 1)
-PY
+        if printf '%s' "$client_models" | "${automation[@]}" automation smoke-observation has-model "$MODEL_ID" 2>/dev/null; then
             break
         fi
         sleep 1
@@ -802,32 +637,11 @@ PY
 
     local probe_root="${WORK_DIR}/client-routing"
     mkdir -p "$probe_root"
-    python3 - "$MODEL_ID" "$probe_root/request.json" "$probe_root/stream.json" <<'PY'
-import json
-import sys
-
-model, request_path, stream_path = sys.argv[1:4]
-for path, stream in ((request_path, False), (stream_path, True)):
-    with open(path, "w", encoding="utf-8") as handle:
-        json.dump({
-            "model": model,
-            "messages": [{"role": "user", "content": "Say ok."}],
-            "stream": stream,
-            "max_tokens": 8,
-            "temperature": 0,
-        }, handle)
-PY
+    "${automation[@]}" automation split-probe client-payloads "$MODEL_ID" "$probe_root/request.json" "$probe_root/stream.json"
     curl -fsS --max-time 120 "http://127.0.0.1:${CLIENT_API_PORT}/v1/chat/completions" \
         -H 'content-type: application/json' -d @"$probe_root/request.json" \
         -o "$probe_root/response.json"
-    python3 - "$probe_root/response.json" <<'PY'
-import json
-import sys
-
-body = json.load(open(sys.argv[1], encoding="utf-8"))
-if body.get("object") != "chat.completion" or not body.get("choices"):
-    raise SystemExit(f"invalid passive-client response: {body!r}")
-PY
+    "${automation[@]}" automation smoke-observation chat <"$probe_root/response.json"
     curl -fsS --max-time 120 -N "http://127.0.0.1:${CLIENT_API_PORT}/v1/chat/completions" \
         -H 'content-type: application/json' -d @"$probe_root/stream.json" \
         -o "$probe_root/stream.txt"
@@ -850,8 +664,7 @@ if [[ -z "$DRIVER_API_PORT" ]]; then
     exit 1
 fi
 MODEL_ID="$(
-    python3 -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8")).get("model_id", ""))' \
-        "$SPLIT_EVIDENCE_PATH"
+    "${automation[@]}" automation split-probe model "$SPLIT_EVIDENCE_PATH"
 )"
 if [[ -z "$MODEL_ID" ]]; then
     echo "${DRIVER_LABEL:-selected driver} split evidence did not return a model id" >&2
@@ -876,46 +689,7 @@ PREFIX_RESPONSE_ROOT="${WORK_DIR}/prefix-responses"
 PREFIX_TRANSIENT_STATUS=75
 
 write_prefix_payloads() {
-    python3 - "$MODEL_ID" "$1" "$2" <<'PY'
-import json
-from pathlib import Path
-import sys
-
-model, output_dir, nonce = sys.argv[1:4]
-output = Path(output_dir)
-# The nonce leads the prompt so every attempt starts from a genuinely cold
-# prefix. Without it, a retry would run against the cache the previous attempt
-# already warmed and the cold-request assertion below would stop meaning
-# anything.
-shared = f"Split prefix cache smoke shared context {nonce}. " + (
-    "Every request keeps these tokens in the same order. " * 48
-)
-extensions = [
-    "First extension block remains reusable by later prompts. " * 16,
-    "Second extension block makes the reusable prefix longer. " * 16,
-    "Third extension block proves reuse keeps growing. " * 16,
-]
-# Every length is sent twice in a row: X, X, X+E1, X+E1, X+E1+E2, X+E1+E2.
-# The first sight of each length proves reuse carries the established prefix
-# forward, and the identical re-send proves a repeated prompt is served from
-# cache instead of being recomputed.
-index = 0
-prompt = shared
-for extension in extensions:
-    prompt += extension
-    for _ in range(2):
-        index += 1
-        payload = {
-            "model": model,
-            "messages": [{"role": "user", "content": prompt}],
-            "user": f"ci-split-prefix-growth-{nonce}",
-            "stream": False,
-            "max_tokens": 1,
-            "temperature": 0,
-        }
-        with (output / f"prompt-{index}.json").open("w", encoding="utf-8") as fh:
-            json.dump(payload, fh)
-PY
+    "${automation[@]}" automation split-probe prefix-payloads "$MODEL_ID" "$1" "$2"
 }
 
 # Requests 1..6: odd indexes are first sights of each prompt length (growth
@@ -924,104 +698,7 @@ PY
 PREFIX_REQUEST_COUNT=6
 
 validate_prefix_responses() {
-    python3 - "$1" "$PREFIX_REQUEST_COUNT" "$EXPECTED_EXACT_PAYLOAD_KIND" <<'PY'
-import json
-from pathlib import Path
-import sys
-
-TRANSIENT_STATUS = 75
-response_dir = Path(sys.argv[1])
-request_count = int(sys.argv[2])
-exact_payload_kind = sys.argv[3]
-checkpointed_restore = exact_payload_kind == "kv-recurrent"
-growth_indexes = list(range(1, request_count + 1, 2))
-repeat_pairs = [(index, index + 1) for index in range(1, request_count + 1, 2)]
-metrics = []
-outputs = []
-for index in range(1, request_count + 1):
-    with (response_dir / f"response-{index}.json").open(encoding="utf-8") as fh:
-        body = json.load(fh)
-    if body.get("object") != "chat.completion":
-        raise SystemExit(
-            f"prefix request {index} returned unexpected object: {body.get('object')!r}"
-        )
-    if not body.get("choices"):
-        raise SystemExit(f"prefix request {index} returned no choices")
-    message = body["choices"][0].get("message") or {}
-    content = message.get("content")
-    if not isinstance(content, str) or not content:
-        raise SystemExit(f"prefix request {index} returned no assistant continuation")
-    outputs.append(content)
-    usage = body.get("usage") or {}
-    prompt_tokens = usage.get("prompt_tokens")
-    details = usage.get("prompt_tokens_details") or {}
-    cached_tokens = details.get("cached_tokens", 0)
-    if not isinstance(prompt_tokens, int) or not isinstance(cached_tokens, int):
-        raise SystemExit(f"prefix request {index} omitted numeric cache usage: {usage!r}")
-    metrics.append((prompt_tokens, cached_tokens))
-
-prompt_counts = [prompt for prompt, _ in metrics]
-cached_counts = [cached for _, cached in metrics]
-growth_prompts = [prompt_counts[index - 1] for index in growth_indexes]
-growth_cached = [cached_counts[index - 1] for index in growth_indexes]
-repeat_cached = [cached_counts[repeat - 1] for _, repeat in repeat_pairs]
-if prompt_counts[0] != prompt_counts[1] or any(
-    prompt_counts[pair[0] - 1] != prompt_counts[pair[1] - 1] for pair in repeat_pairs
-):
-    raise SystemExit(f"repeated prompts diverged between sends: {prompt_counts}")
-if not growth_prompts[0] < growth_prompts[1] < growth_prompts[2]:
-    raise SystemExit(f"prompt token counts did not increase: {prompt_counts}")
-if cached_counts[0] != 0:
-    raise SystemExit(f"cold prefix request unexpectedly restored tokens: {cached_counts}")
-for first, repeat in repeat_pairs:
-    if outputs[first - 1] != outputs[repeat - 1]:
-        raise SystemExit(
-            f"warm request {repeat} diverged from uncached request {first}: "
-            f"{outputs[first - 1]!r} != {outputs[repeat - 1]!r}"
-        )
-# A completely cold attempt can arise while a stage lane is still releasing.
-# A partial follow-up miss is the regression under test and must fail directly,
-# not be hidden by a retry that starts from another cold prefix.
-if all(cached == 0 for cached in cached_counts[1:]):
-    print(
-        f"split prefix reuse was empty on a follow-up request: {cached_counts}",
-        file=sys.stderr,
-    )
-    raise SystemExit(TRANSIENT_STATUS)
-# Dense KV cache can reuse an established prefix while processing a longer
-# first-sight prompt, so its growth arms must increase. Exact recurrent state
-# is checkpoint-aligned and cannot resume at an arbitrary nonzero token offset;
-# a longer first-sight prompt may therefore be cold. Its identical repeat still
-# has to restore a progressively later checkpoint for each longer prompt.
-reuse_growth = repeat_cached if checkpointed_restore else growth_cached
-if not reuse_growth[0] < reuse_growth[1] < reuse_growth[2]:
-    raise SystemExit(f"split prefix reuse did not increase: {cached_counts}")
-# Only growth arms need an uncached suffix; a repeat arm may legitimately
-# restore everything except the final re-fed token.
-for index in growth_indexes:
-    if cached_counts[index - 1] >= prompt_counts[index - 1]:
-        raise SystemExit(
-            f"growing prompts must retain an uncached suffix: {metrics}"
-        )
-# Each identical re-send must extend beyond the first-sight cached region.
-# Resident capacity pressure can evict the deepest checkpoint, so a valid
-# repeat may leave a suffix uncached. Output equality above proves the restored
-# prefix still leads to the same continuation as the uncached request.
-for first, repeat in repeat_pairs:
-    if cached_counts[repeat - 1] <= cached_counts[first - 1]:
-        raise SystemExit(
-            f"re-send {repeat} must extend beyond the first-sight cache of "
-            f"request {first}: {metrics}"
-        )
-
-print(
-    "Split prefix cache reuse grew and repeated prompts restored from cache: "
-    + ", ".join(
-        f"request {index}: prompt_tokens={prompt}, cached_tokens={cached}"
-        for index, (prompt, cached) in enumerate(metrics, start=1)
-    )
-)
-PY
+    "${automation[@]}" automation split-probe prefix-verify "$1" "$PREFIX_REQUEST_COUNT" "$EXPECTED_EXACT_PAYLOAD_KIND"
 }
 
 assert_expected_stage_payload() {
@@ -1043,7 +720,7 @@ assert_expected_stage_payload() {
     # ownership can differ from the running user, so trust only this checkout
     # when reading its HEAD as the fallback.
     tested_commit="${MESH_TWO_NODE_SPLIT_SOURCE_SHA:-$(git -c safe.directory="$PWD" rev-parse HEAD)}"
-    cargo run -q -p xtask -- split-payloads certify \
+    "${automation[@]}" split-payloads certify \
         --evidence "$SPLIT_EVIDENCE_PATH" \
         --expectations ci/model-artifacts/kv-auto-smoke-expectations.json \
         --model-manifest ci/model-artifacts/manifests/scripted-binary-smoke.json \
@@ -1065,18 +742,7 @@ capture_kv_cache_statuses() {
 }
 
 durable_population_ready() {
-    python3 - "$1-seed.json" "$1-worker.json" <<'PY'
-import json
-import sys
-
-statuses = [json.load(open(path, encoding="utf-8")) for path in sys.argv[1:]]
-if any(status.get("effective", {}).get("state") != "active" for status in statuses):
-    raise SystemExit(1)
-if sum(len(status.get("inventory") or []) for status in statuses) == 0:
-    raise SystemExit(1)
-if sum((status.get("activity") or {}).get("writes", 0) for status in statuses) == 0:
-    raise SystemExit(1)
-PY
+    "${automation[@]}" automation split-probe durable-ready "$1"
 }
 
 wait_for_durable_population() {
@@ -1111,150 +777,10 @@ record_durable_restart() {
             return 1
             ;;
     esac
-    python3 - "$DURABLE_L3_RECORDS" "$MODEL_LABEL" "$MODEL" "$artifact_id" \
+    "${automation[@]}" automation split-probe durable-record "$DURABLE_L3_RECORDS" "$MODEL_LABEL" "$MODEL" "$artifact_id" \
         "$model_sha256" "$EXPECTED_EXACT_PAYLOAD_KIND" \
         "${DURABLE_L3_ROOT}/seed" "${DURABLE_L3_ROOT}/worker" \
-        "$evidence_dir" <<'PY'
-import json
-import os
-from pathlib import Path
-import sys
-
-(
-    records_path,
-    model_label,
-    model_path,
-    artifact_id,
-    model_sha256,
-    expected_payload_kind,
-    seed_root,
-    worker_root,
-    evidence_dir,
-) = sys.argv[1:]
-root = Path(evidence_dir)
-
-def load(name):
-    with (root / name).open(encoding="utf-8") as handle:
-        return json.load(handle)
-
-before = {node: load(f"before-{node}.json") for node in ("seed", "worker")}
-restart_before = {
-    node: load(f"restart-before-{node}.json") for node in ("seed", "worker")
-}
-after = {node: load(f"after-{node}.json") for node in ("seed", "worker")}
-cleared = {node: load(f"cleared-{node}.json") for node in ("seed", "worker")}
-warm_response = load("warm-response.json")
-restored_response = load("restored-response.json")
-
-for stage, statuses in (
-    ("before", before),
-    ("restart-before", restart_before),
-    ("after", after),
-    ("cleared", cleared),
-):
-    for node, status in statuses.items():
-        effective = status.get("effective") or {}
-        if effective.get("state") != "active" or effective.get("reason") is not None:
-            raise SystemExit(f"{stage} {node} disk tier is not active: {effective!r}")
-        configured = status.get("configured") or {}
-        sources = configured.get("sources") or {}
-        if configured.get("mode") != "fixed" or configured.get("budget_bytes") != 2 * 1024**3:
-            raise SystemExit(f"{stage} {node} has unexpected disk configuration: {configured!r}")
-        if configured.get("minimum_free_bytes") != 1024**3:
-            raise SystemExit(f"{stage} {node} has unexpected free-space reserve: {configured!r}")
-        if any(sources.get(field) != "cli" for field in ("mode", "budget", "directory", "minimum_free")):
-            raise SystemExit(f"{stage} {node} configuration source is not CLI: {sources!r}")
-
-before_inventory = sum(len(status.get("inventory") or []) for status in before.values())
-restart_inventory = sum(
-    len(status.get("inventory") or []) for status in restart_before.values()
-)
-if before_inventory == 0 or restart_inventory == 0:
-    raise SystemExit("durable inventory was missing before or after process restart")
-
-before_writes = sum((status.get("activity") or {}).get("writes", 0) for status in before.values())
-restart_fills = sum((status.get("activity") or {}).get("fills", 0) for status in after.values())
-restart_initial_fills = sum(
-    (status.get("activity") or {}).get("fills", 0) for status in restart_before.values()
-)
-if before_writes <= 0:
-    raise SystemExit("the population process recorded no durable L3 writes")
-if restart_initial_fills != 0 or restart_fills <= 0:
-    raise SystemExit(
-        f"restart did not prove an L3 fill: before={restart_initial_fills}, after={restart_fills}"
-    )
-
-usage = restored_response.get("usage") or {}
-prompt_tokens = usage.get("prompt_tokens")
-cached_tokens = (usage.get("prompt_tokens_details") or {}).get("cached_tokens")
-if not isinstance(prompt_tokens, int) or not isinstance(cached_tokens, int) or cached_tokens <= 0:
-    raise SystemExit(f"restart response did not report restored tokens: {usage!r}")
-
-def output_text(response):
-    try:
-        return response["choices"][0]["message"]["content"]
-    except (KeyError, IndexError, TypeError):
-        raise SystemExit(f"response omitted assistant output: {response!r}")
-
-warm_output = output_text(warm_response)
-restored_output = output_text(restored_response)
-if warm_output != restored_output:
-    raise SystemExit(
-        f"restart output diverged: warm={warm_output!r}, restored={restored_output!r}"
-    )
-
-payload_kinds = sorted({
-    entry.get("payload_kind")
-    for status in restart_before.values()
-    for entry in status.get("inventory") or []
-    if isinstance(entry, dict) and isinstance(entry.get("payload_kind"), str)
-})
-if not payload_kinds:
-    raise SystemExit("durable inventory did not identify a payload kind")
-if expected_payload_kind and expected_payload_kind not in payload_kinds:
-    raise SystemExit(
-        f"expected payload kind {expected_payload_kind!r}, observed {payload_kinds!r}"
-    )
-
-for node, status in cleared.items():
-    if status.get("inventory"):
-        raise SystemExit(f"clear left {node} inventory behind")
-    if (status.get("usage") or {}).get("used_bytes") != 0:
-        raise SystemExit(f"clear left {node} managed bytes behind: {status.get('usage')!r}")
-
-record = {
-    "model": {
-        "label": model_label,
-        "artifact_id": artifact_id,
-        "sha256": model_sha256,
-        "path": model_path,
-    },
-    "configuration": {
-        "source": "cli",
-        "mode": "fixed",
-        "budget_bytes": 2 * 1024**3,
-        "minimum_free_bytes": 1024**3,
-        "roots": {"seed": seed_root, "worker": worker_root},
-    },
-    "cache_root_lifecycle": "preserved",
-    "process_boundary": True,
-    "payload_kinds": payload_kinds,
-    "statuses": {
-        "before_stop": before,
-        "after_restart_before_request": restart_before,
-        "after_restore": after,
-        "after_clear": cleared,
-    },
-    "restored_prompt_tokens": prompt_tokens,
-    "restored_cached_tokens": cached_tokens,
-    "l3_fill_count": restart_fills,
-    "exact_output_match": True,
-    "status_command": "mesh-llm kv-cache status --json",
-    "clear_command": "mesh-llm kv-cache clear --yes --json",
-}
-with open(records_path, "a", encoding="utf-8") as handle:
-    handle.write(json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n")
-PY
+        "$evidence_dir"
 }
 
 run_durable_restart_probe() {
@@ -1282,27 +808,14 @@ run_durable_restart_probe() {
     DRIVER_LABEL=""
     DRIVER_API_PORT=""
     wait_for_split_topology "${MODEL_LABEL} durable restart: "
-    MODEL_ID="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8")).get("model_id", ""))' "$SPLIT_EVIDENCE_PATH")"
+    MODEL_ID="$("${automation[@]}" automation split-probe model "$SPLIT_EVIDENCE_PATH")"
     [[ -n "$MODEL_ID" ]] || {
         echo "durable restart split evidence did not return a model id" >&2
         return 1
     }
     sleep "$REQUEST_SETTLE_SECONDS"
     capture_kv_cache_statuses "$evidence_dir/restart-before"
-    python3 - "$MODEL_ID" "$evidence_dir/request.json" <<'PY'
-import json
-import os
-import sys
-
-model, path = sys.argv[1:]
-with open(path, encoding="utf-8") as handle:
-    payload = json.load(handle)
-payload["model"] = model
-temporary = f"{path}.tmp"
-with open(temporary, "w", encoding="utf-8") as handle:
-    json.dump(payload, handle)
-os.replace(temporary, path)
-PY
+    "${automation[@]}" automation split-probe rewrite-model "$MODEL_ID" "$evidence_dir/request.json"
     curl -fsS --max-time 180 \
         "http://127.0.0.1:${DRIVER_API_PORT}/v1/chat/completions" \
         -H 'content-type: application/json' \
@@ -1320,31 +833,8 @@ PY
 
 write_durable_l3_evidence() {
     [[ "$DURABLE_L3" == "1" ]] || return 0
-    python3 - "$DURABLE_L3_RECORDS" "$DURABLE_L3_EVIDENCE_PATH" \
-        "$([[ -n "$RECURRENT_MODEL" ]] && printf 'dense,recurrent' || printf '%s' "$PRIMARY_MODEL_LABEL")" <<'PY'
-import json
-import os
-import sys
-
-records_path, output_path, expected_labels = sys.argv[1:]
-with open(records_path, encoding="utf-8") as handle:
-    records = [json.loads(line) for line in handle if line.strip()]
-expected = expected_labels.split(",")
-observed = [record.get("model", {}).get("label") for record in records]
-if observed != expected:
-    raise SystemExit(f"durable L3 evidence models differ: expected {expected}, observed {observed}")
-evidence = {
-    "schema_version": 1,
-    "kind": "mesh-llm-durable-l3-restart",
-    "status": "passed",
-    "models": records,
-}
-temporary = f"{output_path}.tmp"
-with open(temporary, "w", encoding="utf-8") as handle:
-    json.dump(evidence, handle, indent=2, sort_keys=True)
-    handle.write("\n")
-os.replace(temporary, output_path)
-PY
+    "${automation[@]}" automation split-probe durable-evidence "$DURABLE_L3_RECORDS" "$DURABLE_L3_EVIDENCE_PATH" \
+        "$([[ -n "$RECURRENT_MODEL" ]] && printf 'dense,recurrent' || printf '%s' "$PRIMARY_MODEL_LABEL")"
 }
 
 prefix_validated=0
@@ -1437,8 +927,7 @@ run_recurrent_leg() {
         exit 1
     fi
     MODEL_ID="$(
-        python3 -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8")).get("model_id", ""))' \
-            "$SPLIT_EVIDENCE_PATH"
+        "${automation[@]}" automation split-probe model "$SPLIT_EVIDENCE_PATH"
     )"
     if [[ -z "$MODEL_ID" ]]; then
         echo "${DRIVER_LABEL:-selected driver} split evidence did not return a model id (recurrent leg)" >&2

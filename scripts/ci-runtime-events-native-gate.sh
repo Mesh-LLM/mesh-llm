@@ -18,6 +18,11 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# The sourced automation helper uses this root for its Just fallback.
+# shellcheck disable=SC2034
+REPO_ROOT="$ROOT"
+# shellcheck disable=SC1091
+source "$ROOT/scripts/lib/automation.sh"
 
 usage() {
     cat >&2 <<'USAGE'
@@ -105,7 +110,7 @@ MESH_LLM_RUNTIME_EVENTS_NATIVE_TEST=1 \
 # exercised where advertised, and the reporter cleared. A green exit with no
 # `executed` marker means the gate took a blocked path -- which the test
 # reports as a pass by design, so the lane has to check for itself.
-if ! grep -q '^executed' "$EVIDENCE_FILE"; then
+if ! mesh_automation automation native-runtime-evidence "$EVIDENCE_FILE"; then
     echo "native runtime-event gate did not execute; evidence follows:" >&2
     cat "$EVIDENCE_FILE" >&2
     exit 1

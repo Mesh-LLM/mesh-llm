@@ -1,14 +1,11 @@
 use std::{
     env, fs,
-    net::{TcpStream, ToSocketAddrs},
+    net::{Ipv4Addr, SocketAddr, SocketAddrV4, TcpStream},
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
-
-#[cfg(unix)]
-use std::os::unix::process::CommandExt;
 
 use anyhow::{Context, Result, bail};
 use serde::Serialize;
@@ -29,8 +26,20 @@ const CORE_EVALS: [EvalId; 5] = [
 ];
 mod adapters;
 mod doctor;
+mod external_sdk_source;
+mod harness_source;
+mod mcp_environment;
+mod process_cleanup;
+mod sdk_environment;
+mod swe_environment;
+use process_cleanup::{configure_child_group, wait_with_timeout};
 mod registry;
 mod run;
+mod speed_environment;
+mod swerex_index;
+mod swerex_modal;
+#[cfg(unix)]
+mod swerex_source;
 mod sync;
 
 pub fn eval_command(args: EvalArgs) -> Result<()> {
@@ -39,6 +48,18 @@ pub fn eval_command(args: EvalArgs) -> Result<()> {
         EvalCommandKind::Info(args) => registry::info_eval(args),
         EvalCommandKind::Sync(args) | EvalCommandKind::Install(args) => sync::sync_evals(args),
         EvalCommandKind::Doctor(args) => doctor::doctor_evals(args),
+        EvalCommandKind::PrepareSpeed(args) => speed_environment::prepare(args),
+        EvalCommandKind::PrepareMcp(args) => mcp_environment::prepare(args),
+        EvalCommandKind::PrepareSwe(args) => swe_environment::prepare(args),
+        EvalCommandKind::PortReady(args) => doctor::require_loopback_port(args.port),
+        EvalCommandKind::PatchSwerexIndex(args) => {
+            swerex_index::patch(&args.module_source, &args.environment_root, &args.index_url)
+        }
+        EvalCommandKind::PatchSwerexModal(args) => swerex_modal::patch(
+            &args.module_source,
+            &args.environment_root,
+            &args.patch_root,
+        ),
         EvalCommandKind::Run(args) => run::run_eval(*args),
     }
 }
@@ -142,6 +163,7 @@ struct CommandSpec {
     cwd: Option<PathBuf>,
     envs: Vec<(String, String)>,
     secret_envs: Vec<(String, String)>,
+    clear_environment: bool,
 }
 
 impl CommandSpec {
@@ -152,7 +174,13 @@ impl CommandSpec {
             cwd: None,
             envs: Vec::new(),
             secret_envs: Vec::new(),
+            clear_environment: false,
         }
+    }
+
+    fn isolated(mut self) -> Self {
+        self.clear_environment = true;
+        self
     }
 
     fn args(mut self, args: impl IntoIterator<Item = impl Into<String>>) -> Self {
@@ -208,6 +236,9 @@ impl CommandSpec {
 
     fn command(&self) -> Command {
         let mut command = Command::new(&self.program);
+        if self.clear_environment {
+            command.env_clear();
+        }
         command.args(&self.args);
         if let Some(cwd) = &self.cwd {
             command.current_dir(cwd);
@@ -248,78 +279,6 @@ fn run_command_with_timeout(
         .spawn()
         .with_context(|| format!("start {}", spec.program))?;
     wait_with_timeout(&mut child, timeout)
-}
-
-fn wait_with_timeout(child: &mut Child, timeout: Option<Duration>) -> Result<CommandOutcome> {
-    let started = Instant::now();
-    loop {
-        if let Some(status) = child.try_wait().context("poll harness command")? {
-            return Ok(CommandOutcome {
-                exit_status: status.code(),
-                success: status.success(),
-                timed_out: false,
-            });
-        }
-        if timeout.is_some_and(|timeout| started.elapsed() >= timeout) {
-            terminate_child(child)?;
-            return Ok(CommandOutcome {
-                exit_status: None,
-                success: false,
-                timed_out: true,
-            });
-        }
-        thread::sleep(Duration::from_millis(250));
-    }
-}
-
-fn configure_child_group(command: &mut Command) {
-    #[cfg(unix)]
-    {
-        command.process_group(0);
-    }
-}
-
-fn terminate_child(child: &mut Child) -> Result<()> {
-    terminate_child_signal(child, ChildSignal::Terminate)?;
-    let grace = Instant::now();
-    while grace.elapsed() < Duration::from_secs(5) {
-        if child
-            .try_wait()
-            .context("poll terminated harness command")?
-            .is_some()
-        {
-            return Ok(());
-        }
-        thread::sleep(Duration::from_millis(100));
-    }
-    terminate_child_signal(child, ChildSignal::Kill)?;
-    let _ = child.wait().context("wait for killed harness command")?;
-    Ok(())
-}
-
-enum ChildSignal {
-    Terminate,
-    Kill,
-}
-
-#[cfg(unix)]
-fn terminate_child_signal(child: &mut Child, signal: ChildSignal) -> Result<()> {
-    let process_group = -libc::pid_t::try_from(child.id()).context("child PID overflow")?;
-    let signal = match signal {
-        ChildSignal::Terminate => libc::SIGTERM,
-        ChildSignal::Kill => libc::SIGKILL,
-    };
-    // SAFETY: `kill` receives a process-group identifier and signal constant;
-    // it does not dereference memory in this process.
-    if unsafe { libc::kill(process_group, signal) } == -1 {
-        child.kill().context("terminate harness command")?;
-    }
-    Ok(())
-}
-
-#[cfg(not(unix))]
-fn terminate_child_signal(child: &mut Child, _signal: ChildSignal) -> Result<()> {
-    child.kill().context("terminate harness command")
 }
 
 fn env_concurrency_matching_endpoint(
@@ -533,13 +492,25 @@ mod tests {
                 .contains(&"http://127.0.0.1:9337/v1".to_string())
         );
         assert!(command.args.contains(&"tiny-local".to_string()));
+        let launcher = external_sdk_source::command_leaf("speed-bench-auth.py", true).unwrap();
+        assert_eq!(
+            command.program,
+            speed_environment::runtime_python(&root)
+                .display()
+                .to_string()
+        );
+        assert_eq!(&command.args[..2], ["-I", "-B"]);
+        assert_eq!(command.args[2], launcher.display().to_string());
+        assert!(!run_dir.join("raw/speed-bench-auth.py").exists());
+        assert!(command.clear_environment);
+        for key in ["HF_HUB_OFFLINE", "HF_DATASETS_OFFLINE"] {
+            assert!(command.envs.contains(&(key.to_owned(), "1".to_owned())));
+        }
         assert!(
-            command.args.contains(
-                &run_dir
-                    .join("raw/speed-bench-auth.py")
-                    .display()
-                    .to_string()
-            )
+            !command
+                .args
+                .iter()
+                .any(|arg| matches!(arg.as_str(), "uv" | "run" | "--with-requirements"))
         );
         assert!(
             command
@@ -548,7 +519,7 @@ mod tests {
         );
         assert!(command.envs.contains(&(
             "XDG_CACHE_HOME".to_string(),
-            root.join("speed-cache/xdg").display().to_string()
+            root.join("speed-sdk-v1/xdg").display().to_string()
         )));
         assert!(
             command
@@ -569,7 +540,12 @@ mod tests {
                 .display()
                 .contains("SKIPPY_BENCH_API_KEY=<redacted>")
         );
-        let launcher = fs::read_to_string(run_dir.join("raw/speed-bench-auth.py")).unwrap();
+        if !external_sdk_source::configured() {
+            let _ = fs::remove_dir_all(run_dir);
+            return;
+        }
+        let launcher =
+            String::from_utf8(external_sdk_source::read("speed-bench-auth.py").unwrap()).unwrap();
         assert!(launcher.contains("request_origin(url) == benchmark_origin"));
         assert!(launcher.contains("headers.setdefault(\"Authorization\""));
         assert!(launcher.contains("capture_response_timings"));
@@ -734,6 +710,26 @@ mod tests {
                 _ => unreachable!(),
             };
             let script = fs::read_to_string(&command.args[0]).unwrap();
+
+            if eval == EvalId::McpAtlas {
+                let executable = env::current_exe().unwrap();
+                assert!(script.contains(&format!(
+                    "READINESS_HELPER={}",
+                    shell_quote(executable.to_str().unwrap())
+                )));
+                assert!(script.contains("\"$READINESS_HELPER\" eval port-ready \"$1\""));
+                assert!(!script.contains("import socket"));
+            }
+            if eval == EvalId::SweBenchPro {
+                assert!(script.contains("swe-sdk-v1/environment/bin/python"));
+                assert!(
+                    script.contains("\"$PREPARED_PYTHON\" -I -B -m sweagent.run.run run-batch")
+                );
+                assert!(!script.contains("uv run"));
+                assert!(!script.contains("uv pip"));
+                assert!(!script.contains("eval patch-swerex"));
+                assert!(!script.contains("text.replace(old, new)"));
+            }
 
             assert!(command.secret_envs.contains(&(
                 "SKIPPY_BENCH_API_KEY".to_string(),
@@ -1095,6 +1091,22 @@ mod tests {
             std::process::id(),
             unix_millis().unwrap()
         ))
+    }
+
+    #[test]
+    fn actual_mcp_dispatch_refuses_unavailable_environment_before_outputs_or_metrics() {
+        let root = temp_run_dir("unprepared-mcp-root");
+        let output = temp_run_dir("unprepared-mcp-output");
+        let mut args = eval_run_args(EvalId::McpAtlas, "not-persisted");
+        args.cache_root = Some(root.clone());
+        args.output_dir = Some(output.clone());
+        args.dry_run = false;
+        let result = eval_command(EvalArgs {
+            command: EvalCommandKind::Run(Box::new(args)),
+        });
+        assert!(result.is_err());
+        assert!(!output.exists());
+        assert!(!root.exists());
     }
 
     fn eval_run_args(eval: EvalId, api_key: &str) -> EvalRunArgs {

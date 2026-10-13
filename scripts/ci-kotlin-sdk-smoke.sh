@@ -14,6 +14,7 @@ elif [[ "$#" -ne 7 ]]; then
 fi
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$REPO_ROOT/scripts/lib/automation.sh"
 cd "$REPO_ROOT"
 
 scripts/check-sdk-contract.sh
@@ -35,15 +36,7 @@ native_sdk_artifact_dir="$(
         "$7"
 )"
 native_sdk_uniffi_library="$(
-    python3 - "$native_sdk_artifact_dir/manifest.json" <<'PY'
-import json
-import os
-import sys
-
-with open(sys.argv[1], encoding="utf-8") as fh:
-    manifest = json.load(fh)
-print(os.path.dirname(manifest.get("uniffi_library") or manifest["library"]))
-PY
+    mesh_automation prepared-input native-sdk-library-dir "$native_sdk_artifact_dir/manifest.json"
 )"
 export MESHLLM_KOTLIN_JNA_LIBRARY_PATH="$native_sdk_artifact_dir/$native_sdk_uniffi_library"
 native_runtime_dir="$(
@@ -53,6 +46,8 @@ native_runtime_dir="$(
         --reuse-from-binary "$1"
 )"
 export MESHLLM_NATIVE_RUNTIME_ARTIFACT_DIR="$native_runtime_dir"
+
+export MESH_SDK_REPOSITORY_ROOT="$REPO_ROOT"
 
 # shellcheck disable=SC2016 # The nested shell expands exported fixture variables.
 scripts/ci-sdk-fixture.sh "$1" "$2" "$3" -- \
@@ -70,6 +65,6 @@ scripts/ci-sdk-fixture.sh "$1" "$2" "$3" -- \
         export MESH_LLM_NATIVE_RUNTIME_CACHE_DIR="${MESH_LLM_NATIVE_RUNTIME_CACHE_DIR:?}"
         export JNA_LIBRARY_PATH="${MESHLLM_KOTLIN_JNA_LIBRARY_PATH}${JNA_LIBRARY_PATH:+:$JNA_LIBRARY_PATH}"
         export JAVA_TOOL_OPTIONS="${JAVA_TOOL_OPTIONS:-} -Djna.library.path=$MESHLLM_KOTLIN_JNA_LIBRARY_PATH"
-        cd '"$REPO_ROOT"'/mesh/sdk/kotlin/example/example-jvm
+        cd "$MESH_SDK_REPOSITORY_ROOT"/mesh/sdk/kotlin/example/example-jvm
         ./gradlew --no-daemon run --args="$MESH_SDK_INVITE_TOKEN"
     '

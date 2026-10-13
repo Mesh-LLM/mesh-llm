@@ -7,6 +7,9 @@ metadata:
 
 # KV Tool-Loop Stability
 
+QA orchestration follows `../manage-ci/SKILL.md`. The typed Rust command
+`cargo xtool automation stability kv-tool-loop` owns this certification.
+
 Use this skill when changing Skippy KV slot cleanup, prefix-cache lookup,
 OpenAI tool-loop behavior, agent harnesses, or any runtime path related to
 `llama_decode failed`, `failed to find a memory slot`, low same-prefix cache
@@ -22,16 +25,19 @@ reuse, or proactive eviction failures.
    `pressure_turns`, timeout, cache thresholds, output directory, and native
    logs.
 4. Pass the active Skippy native log when available. The harness checkpoints
-   native logs at run start and scans only appended bytes.
+   native logs at run start and scans appended bytes, rescanning a log when
+   it is created, replaced, truncated, or rewritten after the checkpoint.
 5. Preserve the evidence directory: `manifest.json`, `results.jsonl`,
-   `summary.json`, `summary.md`, and `transcripts/*.jsonl`.
+   `summary.json`, `summary.md`, and the transcript paths selected by
+   `manifest.json`. Each run writes a fresh `transcripts/run-*/` directory;
+   preexisting evidence is preserved.
 
 ## Commands
 
 Preview the run without touching the endpoint:
 
 ```bash
-scripts/qa-kv-tool-loop-stability.py \
+cargo xtool automation stability kv-tool-loop \
   --base-url http://127.0.0.1:9337/v1 \
   --models Qwen/Qwen2.5-3B-Instruct-GGUF:q4_k_m \
   --attempts 5 \
@@ -47,7 +53,7 @@ scripts/qa-kv-tool-loop-stability.py \
 Run the certification:
 
 ```bash
-scripts/qa-kv-tool-loop-stability.py \
+cargo xtool automation stability kv-tool-loop \
   --base-url http://127.0.0.1:9337/v1 \
   --models Qwen/Qwen2.5-3B-Instruct-GGUF:q4_k_m \
   --attempts 5 \
@@ -74,6 +80,7 @@ scripts/qa-kv-tool-loop-stability.py \
 When changing this harness, run:
 
 ```bash
-python3 -m unittest scripts.tests.test_qa_kv_tool_loop_stability
-python3 -m py_compile scripts/qa-kv-tool-loop-stability.py scripts/tests/test_qa_kv_tool_loop_stability.py
+just with-lld cargo test --locked -p xtask --bin xtask --test migration_stability stability -- --test-threads=1
+just with-lld cargo clippy --locked -p xtask --all-targets -- -D warnings
+just ci-validate
 ```
