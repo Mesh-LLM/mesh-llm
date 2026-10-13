@@ -38,7 +38,7 @@
 # Windows: CI, packaging and platform code.
 /.github/workflows/*windows*.yml @Virgile-pct @i386 @ndizazzo
 /.github/actions/*windows*/ @Virgile-pct @i386 @ndizazzo
-/mesh/deploy/windows/ @Virgile-pct @michaelneale
+/mesh/deploy/windows/ @Virgile-pct @michaelneale @ndizazzo
 /mesh/scripts/*.ps1 @Virgile-pct @michaelneale @ndizazzo
-/scripts/*.ps1 @Virgile-pct @i386 @ndizazzo
+/scripts/*.ps1 @Virgile-pct @i386 @ndizazzo @michaelneale
 /tools/xtask/src/**/windows* @Virgile-pct @ndizazzo @i386
