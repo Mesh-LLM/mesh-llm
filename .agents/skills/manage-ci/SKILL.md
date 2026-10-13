@@ -582,6 +582,12 @@ generation, patch equality and idempotence must pass before rebuilding and
 running the complete suite. Keep the generator's own unit tests separate.
 Ordinary native build invocations retain their requested test execution.
 
+Whole-source graph rewriting needs a separate bounded deadline from Git
+metadata operations. The native generator allows 600 seconds for each complete
+rewriter pass and 60 seconds per Git command by default; an explicit `--timeout`
+overrides both. Keep both generation and idempotence passes mandatory, and
+report deadline failures with readable retained diagnostics and cleanup status.
+
 Build evidence uploads must explicitly include the run-owned hidden `.deps`
 state and native CTest results before cleanup. A truncated live log is not a
 substitute for the retained failure output.

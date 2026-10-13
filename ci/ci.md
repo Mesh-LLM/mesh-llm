@@ -243,6 +243,11 @@ multimodal library-test executable, and the run-scoped CPU workload oracle
 closure. Static Metal resources are embedded; an unpackaged non-system dylib
 makes the handoff fail. SHA-256 digests bind all handoff bytes to the candidate,
 main base, run/attempt, and pass identity.
+The native generator gives each whole-source rewriter pass a 600-second
+deadline, separate from the 60-second Git command default. An explicit
+`--timeout` overrides both. Generation and idempotence each remain required;
+deadline failures report readable retained output and process cleanup status.
+
 The build job sets `CTEST_PARALLEL_LEVEL=16` for complete upstream CTest runs
 in the repair session and trusted build; the per-case timeout remains 900 seconds.
 
