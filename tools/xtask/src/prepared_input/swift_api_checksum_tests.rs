@@ -137,14 +137,19 @@ fn nonzero_or_timeout_tool_failure_leaves_swift_unchanged() {
     fs::write(&library, b"archive").unwrap();
     let swift = dir.path().join("generated.swift");
     fs::write(&swift, SWIFT).unwrap();
-    for (body, expected) in [("exit 7", "Exited"), ("sleep 10", "Deadline")] {
+    for (body, expected, timeout) in [
+        // The exit-status case needs time to start even on a loaded runner;
+        // only the sleeping fixture is intended to exercise the deadline.
+        ("exit 7", "Exited", Duration::from_secs(2)),
+        ("sleep 10", "Deadline", Duration::from_millis(100)),
+    ] {
         let tool = fixture_tool(dir.path(), body);
         let error = synchronize(
             &tool,
             &library,
             &swift,
             &process::Cancellation::default(),
-            Duration::from_millis(100),
+            timeout,
         )
         .unwrap_err();
         assert!(error.to_string().contains(expected), "{error}");
