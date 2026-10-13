@@ -9,11 +9,11 @@ use mesh_llm_payments_types::contract::{
 use mesh_llm_payments_types::metered_wire::AdmissionTerms;
 use mesh_llm_payments_types::metering::MeteredUsage;
 
-// 1 msat per token both ways: 1000 estimated input tokens -> 300 deposit.
+// 10 msat per token both ways; the deposit is the flat 1000 msat.
 fn rates() -> Pricing {
     Pricing {
-        input_msat_per_million: 1_000_000,
-        output_msat_per_million: 1_000_000,
+        input_msat_per_million: 10_000_000,
+        output_msat_per_million: 10_000_000,
     }
 }
 
@@ -73,20 +73,20 @@ async fn an_admission_must_restate_the_terms_and_the_defined_deposit() {
     let dir = tempfile::tempdir().unwrap();
     let (_, service) = open(dir.path());
     for (admission, reason) in [
-        (admission("other", 300), "id"),
+        (admission("other", 1000), "id"),
         (
             AdmissionTerms {
                 prompt_estimate: 999,
-                ..admission("r", 300)
+                ..admission("r", 1000)
             },
             "estimate",
         ),
-        (admission("r", 299), "deposit share"),
+        (admission("r", 999), "deposit share"),
     ] {
         assert!(
             service
                 .accept_admission(AcceptAdmissionRequest {
-                    terms: local("r", 5_000),
+                    terms: local("r", 50_000),
                     admission,
                 })
                 .await
@@ -97,8 +97,8 @@ async fn an_admission_must_restate_the_terms_and_the_defined_deposit() {
     assert!(service.ledger.requests().unwrap().is_empty());
     service
         .accept_admission(AcceptAdmissionRequest {
-            terms: local("r", 5_000),
-            admission: admission("r", 300),
+            terms: local("r", 50_000),
+            admission: admission("r", 1000),
         })
         .await
         .unwrap();
@@ -107,7 +107,7 @@ async fn an_admission_must_restate_the_terms_and_the_defined_deposit() {
     assert!(
         service
             .accept_admission(AcceptAdmissionRequest {
-                terms: local("r", 5_000),
+                terms: local("r", 50_000),
                 admission: admission("r", 0),
             })
             .await
@@ -121,8 +121,8 @@ async fn deposit_and_final_are_paid_only_at_the_admitted_amounts_to_one_payee() 
     let (wallet, service) = open(dir.path());
     service
         .accept_admission(AcceptAdmissionRequest {
-            terms: local("r", 5_000),
-            admission: admission("r", 300),
+            terms: local("r", 50_000),
+            admission: admission("r", 1000),
         })
         .await
         .unwrap();
@@ -130,7 +130,7 @@ async fn deposit_and_final_are_paid_only_at_the_admitted_amounts_to_one_payee() 
         service
             .pay_deposit(PayDepositRequest {
                 request_id: "r".into(),
-                invoice: invoice(1, 301),
+                invoice: invoice(1, 1001),
             })
             .await
             .is_err(),
@@ -140,7 +140,7 @@ async fn deposit_and_final_are_paid_only_at_the_admitted_amounts_to_one_payee() 
         service
             .pay_deposit(PayDepositRequest {
                 request_id: "unknown".into(),
-                invoice: invoice(1, 300),
+                invoice: invoice(1, 1000),
             })
             .await
             .is_err()
@@ -148,21 +148,21 @@ async fn deposit_and_final_are_paid_only_at_the_admitted_amounts_to_one_payee() 
     let deposit = service
         .pay_deposit(PayDepositRequest {
             request_id: "r".into(),
-            invoice: invoice(1, 300),
+            invoice: invoice(1, 1000),
         })
         .await
         .unwrap();
-    assert_eq!(deposit.amount_msat, 300);
+    assert_eq!(deposit.amount_msat, 1000);
     assert_eq!(wallet.calls.load(Ordering::SeqCst), 1);
-    // Bill 1100 at the admitted rates, 300 applied: final invoice for 800.
+    // Bill 11000 at the admitted rates, 1000 applied: final invoice for 10000.
     for (request, reason) in [
         (
             settlement(
                 "r",
                 Some((900, 200)),
-                Some(1_000),
-                300,
-                Some(invoice(2, 700)),
+                Some(10_000),
+                1000,
+                Some(invoice(2, 9_000)),
             ),
             "bill not at the admitted rates",
         ),
@@ -170,9 +170,9 @@ async fn deposit_and_final_are_paid_only_at_the_admitted_amounts_to_one_payee() 
             settlement(
                 "r",
                 Some((900, 200)),
-                Some(1_100),
-                400,
-                Some(invoice(2, 700)),
+                Some(11_000),
+                2000,
+                Some(invoice(2, 9_000)),
             ),
             "more deposit applied than paid",
         ),
@@ -180,23 +180,23 @@ async fn deposit_and_final_are_paid_only_at_the_admitted_amounts_to_one_payee() 
             settlement(
                 "r",
                 Some((900, 200)),
-                Some(1_100),
-                300,
-                Some(invoice(2, 801)),
+                Some(11_000),
+                1000,
+                Some(invoice(2, 10_001)),
             ),
             "final invoice not for the remainder",
         ),
         (
-            settlement("r", Some((900, 200)), Some(1_100), 300, None),
+            settlement("r", Some((900, 200)), Some(11_000), 300, None),
             "final invoice missing",
         ),
         (
             settlement(
                 "r",
                 Some((9_000, 200)),
-                Some(9_200),
-                300,
-                Some(invoice(2, 8_900)),
+                Some(92_000),
+                1000,
+                Some(invoice(2, 91_000)),
             ),
             "bill above the local cap",
         ),
@@ -208,18 +208,18 @@ async fn deposit_and_final_are_paid_only_at_the_admitted_amounts_to_one_payee() 
         .settle_final(settlement(
             "r",
             Some((900, 200)),
-            Some(1_100),
-            300,
-            Some(invoice(2, 800)),
+            Some(11_000),
+            1000,
+            Some(invoice(2, 10_000)),
         ))
         .await
         .unwrap();
-    assert_eq!(settled.bill_msat, 1_100);
-    assert_eq!(settled.payment.unwrap().amount_msat, 800);
+    assert_eq!(settled.bill_msat, 11_000);
+    assert_eq!(settled.payment.unwrap().amount_msat, 10_000);
     service.finish_metered("r").await.unwrap();
     let request = &service.ledger.requests().unwrap()[0];
     assert_eq!(request.state, "completed");
-    assert_eq!(request.spent_msat, 300 + 800 + 20);
+    assert_eq!(request.spent_msat, 1000 + 10_000 + 20);
 }
 
 #[tokio::test]
@@ -228,8 +228,8 @@ async fn an_abandoned_settlement_creates_no_charge_and_a_covered_bill_needs_no_i
     let (wallet, service) = open(dir.path());
     service
         .accept_admission(AcceptAdmissionRequest {
-            terms: local("a", 5_000),
-            admission: admission("a", 300),
+            terms: local("a", 50_000),
+            admission: admission("a", 1000),
         })
         .await
         .unwrap();
@@ -252,23 +252,23 @@ async fn an_abandoned_settlement_creates_no_charge_and_a_covered_bill_needs_no_i
 
     service
         .accept_admission(AcceptAdmissionRequest {
-            terms: local("c", 5_000),
-            admission: admission("c", 300),
+            terms: local("c", 50_000),
+            admission: admission("c", 1000),
         })
         .await
         .unwrap();
     service
         .pay_deposit(PayDepositRequest {
             request_id: "c".into(),
-            invoice: invoice(3, 300),
+            invoice: invoice(3, 1000),
         })
         .await
         .unwrap();
     let settled = service
-        .settle_final(settlement("c", Some((100, 100)), Some(200), 200, None))
+        .settle_final(settlement("c", Some((50, 50)), Some(1000), 1000, None))
         .await
         .unwrap();
-    assert_eq!((settled.bill_msat, settled.payment), (200, None));
+    assert_eq!((settled.bill_msat, settled.payment), (1000, None));
     service.finish_metered("c").await.unwrap();
     assert_eq!(wallet.calls.load(Ordering::SeqCst), 1);
 }
@@ -280,7 +280,7 @@ async fn a_restart_keeps_an_accepted_admission_open_for_recovery() {
         let (_, service) = open(dir.path());
         service
             .accept_admission(AcceptAdmissionRequest {
-                terms: local("r", 5_000),
+                terms: local("r", 50_000),
                 admission: admission("r", 0),
             })
             .await

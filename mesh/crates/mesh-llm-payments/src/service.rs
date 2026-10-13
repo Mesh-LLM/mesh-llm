@@ -4,11 +4,10 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, ensure};
 use tokio::sync::{Mutex, OnceCell};
-use tokio::task::JoinHandle;
 
 use crate::invoice::Invoice;
 use crate::ledger::{ApprovalMode, Charge, Ledger, RequestTerms};
-use crate::wallet::{Balance, PayError, PaymentStatus, Transaction, WalletProvider};
+use crate::wallet::{PayError, PaymentStatus, Transaction, WalletProvider};
 
 /// Which receiver-side evidence ended an arrival wait.
 ///
@@ -48,9 +47,6 @@ pub struct PaymentService {
     /// Buyers that settled a metered request in this process: admitted without
     /// a deposit while they carry no expired unpaid invoice.
     pub(crate) metered_standing: Mutex<std::collections::HashSet<String>>,
-    /// Balance reads started by `prefetch`, consumed by `authorize`/`cancel`.
-    pub(crate) prefetched:
-        std::sync::Mutex<std::collections::HashMap<String, JoinHandle<Result<Balance>>>>,
     /// Opened by [`Self::open`] with no way to reach a wallet. Its exclusive
     /// `service.lock` proves no node is running on this ledger.
     ledger_only: bool,
@@ -92,7 +88,6 @@ impl PaymentService {
             payment_lock: Mutex::new(()),
             receivable_lock: Mutex::new(()),
             metered_standing: Mutex::default(),
-            prefetched: Default::default(),
             ledger_only: false,
             _process_lock: process_lock,
         })
@@ -126,38 +121,16 @@ impl PaymentService {
     }
 
     pub async fn approve(&self, id: &str) -> Result<()> {
-        let balance = self.wallet().await?.balance().await?;
-        self.ledger
-            .approve(id, balance.spendable_msat, crate::now_ms())
-    }
-
-    /// Read the balance in the background, so its latency, including waking
-    /// a sleeping wallet, overlaps other work.
-    pub fn prefetch_balance(self: &Arc<Self>) -> JoinHandle<Result<Balance>> {
-        let service = self.clone();
-        tokio::spawn(async move { service.wallet().await?.balance().await })
+        self.ledger.approve(id, crate::now_ms())
     }
 
     pub async fn await_authorization(&self, terms: &RequestTerms) -> Result<()> {
-        self.await_authorization_with(terms, async { self.wallet().await?.balance().await })
-            .await
-    }
-
-    /// [`Self::await_authorization`] against a balance the caller may have
-    /// started reading before the terms arrived.
-    pub async fn await_authorization_with(
-        &self,
-        terms: &RequestTerms,
-        balance: impl Future<Output = Result<Balance>>,
-    ) -> Result<()> {
         ensure!(
             self.ledger.policy()?.mode == ApprovalMode::Automatic,
             "paid inference is disabled by free-only policy"
         );
         self.ledger.propose(terms)?;
-        let balance = balance.await?;
-        self.ledger
-            .approve(&terms.id, balance.spendable_msat, crate::now_ms())
+        self.ledger.approve(&terms.id, crate::now_ms())
     }
 
     pub async fn pay_charge(&self, charge: &Charge) -> Result<Transaction> {

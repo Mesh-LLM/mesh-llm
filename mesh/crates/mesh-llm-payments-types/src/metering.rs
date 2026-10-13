@@ -28,15 +28,24 @@ impl MeteredUsage {
     }
 }
 
-/// Deposit share of the estimated input cost, in tenths.
-pub const DEPOSIT_TENTHS: u128 = 3;
+/// Smallest Lightning payment the metered flow sends: 1 sat. Sub-sat
+/// payments are not reliably routable (live: 60/90 msat found no route).
+pub const PAYMENT_FLOOR_MSAT: u64 = 1_000;
 
-/// The admission deposit for an estimated input charge: 0.3 x the charge,
-/// rounded up. The single definition both sides check an admission against.
-pub fn deposit_msat(estimated_input_charge_msat: u64) -> Result<u64> {
-    Ok(u64::try_from(
-        (u128::from(estimated_input_charge_msat) * DEPOSIT_TENTHS).div_ceil(10),
-    )?)
+/// Flat deposit asked of a peer outside the provider's trust cache. It only
+/// proves the buyer can pay before backend work starts; it is not sized to
+/// the request and is applied against the final bill.
+pub const DEPOSIT_MSAT: u64 = PAYMENT_FLOOR_MSAT;
+
+/// What the seller invoices after the deposit: `bill - deposit`, waived when
+/// it is below [`PAYMENT_FLOOR_MSAT`] (the seller absorbs it).
+pub fn final_invoice_msat(bill_msat: u64, deposit_applied_msat: u64) -> u64 {
+    let remaining = bill_msat.saturating_sub(deposit_applied_msat);
+    if remaining < PAYMENT_FLOOR_MSAT {
+        0
+    } else {
+        remaining
+    }
 }
 
 impl MeteredUsage {

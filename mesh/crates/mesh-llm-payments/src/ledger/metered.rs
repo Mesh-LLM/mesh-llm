@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{Ledger, read_amount, sql_amount};
 use crate::pricing::Pricing;
-use mesh_llm_payments_types::metering::MeteredUsage;
+use mesh_llm_payments_types::metering::{DEPOSIT_MSAT, MeteredUsage, final_invoice_msat};
 
 /// Distinct issued, unpaid final invoices at which a buyer is refused.
 pub const STRIKE_LIMIT: u64 = 3;
@@ -26,7 +26,7 @@ pub const STRIKE_LIMIT: u64 = 3;
 const UNPAID_FINALS: &str =
     "SELECT COUNT(*) FROM metered_invoices WHERE peer=?1 AND kind='final' AND state='unpaid'";
 
-/// Admission inputs. The deposit is 0.3 x estimated input cost when
+/// Admission inputs. The deposit is the flat [`DEPOSIT_MSAT`] when
 /// `require_deposit`; the provider skips it for peers in its trust cache.
 #[derive(Clone, Copy, Debug)]
 pub struct MeteredRequest<'a> {
@@ -83,12 +83,7 @@ impl Ledger {
             estimated_input_tokens,
             require_deposit,
         } = *request;
-        let input = pricing.input_charge(estimated_input_tokens)?;
-        let deposit = if require_deposit {
-            mesh_llm_payments_types::metering::deposit_msat(input)?
-        } else {
-            0
-        };
+        let deposit = if require_deposit { DEPOSIT_MSAT } else { 0 };
         let pricing_json = serde_json::to_string(pricing)?;
         let mut connection = self.lock()?;
         let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -168,7 +163,7 @@ impl Ledger {
         let (state, bill, remaining) = match outcome {
             MeteredOutcome::Usage(usage) => {
                 let bill = usage.bill_msat(&pricing)?;
-                ("billed", Some(bill), bill.saturating_sub(deposit_paid))
+                ("billed", Some(bill), final_invoice_msat(bill, deposit_paid))
             }
             MeteredOutcome::Abandoned => ("abandoned", None, 0),
         };

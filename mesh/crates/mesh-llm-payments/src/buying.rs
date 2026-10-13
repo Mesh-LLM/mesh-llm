@@ -9,7 +9,7 @@ use mesh_llm_payments_types::contract::{
     AcceptAdmissionRequest, PayDepositRequest, SettleFinalRequest, SettleFinalResponse,
 };
 use mesh_llm_payments_types::metered_wire::AdmissionTerms;
-use mesh_llm_payments_types::metering::deposit_msat;
+use mesh_llm_payments_types::metering::{DEPOSIT_MSAT, final_invoice_msat};
 
 use crate::invoice::Invoice;
 use crate::ledger::Charge;
@@ -27,8 +27,7 @@ fn payee_key(id: &str) -> String {
 
 impl PaymentService {
     /// Durably approve a seller's admission. `terms` carry the buyer's local
-    /// cap and are approved against policy and balance (using the prefetched
-    /// balance when present); `admission` is pinned so every later payment of
+    /// cap and are approved against policy and the daily budget; `admission` is pinned so every later payment of
     /// the request is checked against what the seller stated here.
     pub async fn accept_admission(&self, request: AcceptAdmissionRequest) -> Result<()> {
         let AcceptAdmissionRequest { terms, admission } = request;
@@ -40,9 +39,7 @@ impl PaymentService {
             "admission does not match the proposed terms"
         );
         ensure!(
-            admission.deposit_msat == 0
-                || admission.deposit_msat
-                    == deposit_msat(admission.pricing.input_charge(admission.prompt_estimate)?)?,
+            admission.deposit_msat == 0 || admission.deposit_msat == DEPOSIT_MSAT,
             "deposit mismatch"
         );
         self.authorize_terms(&terms).await?;
@@ -104,7 +101,8 @@ impl PaymentService {
             deposit_applied_msat <= admission.deposit_msat && deposit_applied_msat <= bill,
             "invalid deposit application"
         );
-        let remaining = bill - deposit_applied_msat;
+        // A remainder below the payment floor is waived by the seller.
+        let remaining = final_invoice_msat(bill, deposit_applied_msat);
         let payment = match invoice {
             Some(invoice) => {
                 ensure!(remaining > 0, "final invoice for a covered bill");

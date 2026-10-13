@@ -6,11 +6,11 @@ use crate::ledger::metered_invoices::{MeteredInvoice, MeteredInvoiceKind};
 use crate::pricing::Pricing;
 use mesh_llm_payments_types::metering::MeteredUsage;
 
-// 1 msat per token both ways keeps arithmetic readable.
+// 10 msat per token both ways; the deposit is the flat 1000 msat.
 fn rates() -> Pricing {
     Pricing {
-        input_msat_per_million: 1_000_000,
-        output_msat_per_million: 1_000_000,
+        input_msat_per_million: 10_000_000,
+        output_msat_per_million: 10_000_000,
     }
 }
 
@@ -63,11 +63,11 @@ fn open() -> (tempfile::TempDir, Ledger) {
 }
 
 #[test]
-fn deposit_is_three_tenths_of_estimated_input_and_admission_is_idempotent() {
+fn deposit_is_flat_and_admission_is_idempotent() {
     let (_d, l) = open();
-    assert_eq!(admit(&l, "a", 1000, true).unwrap(), 300);
+    assert_eq!(admit(&l, "a", 1000, true).unwrap(), 1000);
     // Idempotent replay; differing terms rejected.
-    assert_eq!(admit(&l, "a", 1000, true).unwrap(), 300);
+    assert_eq!(admit(&l, "a", 1000, true).unwrap(), 1000);
     assert!(admit(&l, "a", 1001, true).is_err());
     assert!(admit(&l, "a", 1000, false).is_err());
     // Trusted peers owe no deposit; no cap or reservation is involved.
@@ -84,12 +84,12 @@ fn usage_bills_input_plus_output_minus_paid_deposit_until_final_paid() {
     {
         let l = Ledger::open(dir.path()).unwrap();
         admit(&l, "r", 1000, true).unwrap();
-        record(&l, "r", 0, 1, 300, true);
+        record(&l, "r", 0, 1, 1000, true);
         let s = l.metered_finalize("r", usage(900, 200)).unwrap();
         assert_eq!(s.status, MeteredStatus::Billed);
         assert_eq!(
             (s.bill_msat, s.deposit_paid_msat, s.remaining_msat),
-            (Some(1100), 300, 800)
+            (Some(11000), 1000, 10000)
         );
         // Replay returns the same settlement; a different outcome is refused.
         assert_eq!(l.metered_finalize("r", usage(900, 200)).unwrap(), s);
@@ -98,8 +98,8 @@ fn usage_bills_input_plus_output_minus_paid_deposit_until_final_paid() {
     }
     // Restart: the bill is durable and the final invoice settles it.
     let l = Ledger::open(dir.path()).unwrap();
-    assert_eq!(l.metered_settlement("r").unwrap().remaining_msat, 800);
-    record(&l, "r", 1, 2, 800, true);
+    assert_eq!(l.metered_settlement("r").unwrap().remaining_msat, 10000);
+    record(&l, "r", 1, 2, 10000, true);
     assert_eq!(
         l.metered_settlement("r").unwrap().status,
         MeteredStatus::Settled
@@ -110,42 +110,42 @@ fn usage_bills_input_plus_output_minus_paid_deposit_until_final_paid() {
 fn covering_deposit_means_no_final_invoice_and_no_refund() {
     let (_d, l) = open();
     admit(&l, "a", 1000, true).unwrap();
-    record(&l, "a", 0, 1, 300, true);
+    record(&l, "a", 0, 1, 1000, true);
     let s = l.metered_finalize("a", usage(100, 50)).unwrap();
     assert_eq!(
         (s.status, s.bill_msat, s.deposit_paid_msat, s.remaining_msat),
-        (MeteredStatus::Settled, Some(150), 300, 0)
+        (MeteredStatus::Settled, Some(1500), 1000, 0)
     );
     // Nothing is carried to the next request.
     admit(&l, "b", 10, false).unwrap();
     let s = l.metered_finalize("b", usage(100, 100)).unwrap();
-    assert_eq!((s.deposit_paid_msat, s.remaining_msat), (0, 200));
+    assert_eq!((s.deposit_paid_msat, s.remaining_msat), (0, 2000));
 }
 
 #[test]
 fn unpaid_deposit_never_reduces_the_bill() {
     let (_d, l) = open();
     admit(&l, "u", 1000, true).unwrap();
-    record(&l, "u", 0, 1, 300, false);
+    record(&l, "u", 0, 1, 1000, false);
     let s = l.metered_finalize("u", usage(900, 200)).unwrap();
-    assert_eq!((s.deposit_paid_msat, s.remaining_msat), (0, 1100));
+    assert_eq!((s.deposit_paid_msat, s.remaining_msat), (0, 11000));
     // A deposit arriving after finalize changes nothing already fixed.
     l.mark_metered_received(&invoice(1, 300).payment_hash)
         .unwrap();
-    assert_eq!(l.metered_settlement("u").unwrap().remaining_msat, 1100);
+    assert_eq!(l.metered_settlement("u").unwrap().remaining_msat, 11000);
 }
 
 #[test]
 fn abandoned_requests_have_no_bill_no_debt_and_keep_a_received_deposit() {
     let (_d, l) = open();
     admit(&l, "e", 1000, true).unwrap();
-    record(&l, "e", 0, 1, 300, true);
+    record(&l, "e", 0, 1, 1000, true);
     let s = l.metered_finalize("e", MeteredOutcome::Abandoned).unwrap();
     assert_eq!(
         (s.status, s.bill_msat, s.usage, s.remaining_msat),
         (MeteredStatus::Abandoned, None, None, 0)
     );
-    assert_eq!(s.deposit_paid_msat, 300);
+    assert_eq!(s.deposit_paid_msat, 1000);
     // Terminal: later usage cannot bill an abandoned request.
     assert_eq!(
         l.metered_finalize("e", MeteredOutcome::Abandoned).unwrap(),
@@ -161,10 +161,10 @@ fn three_issued_unpaid_final_invoices_block_admission() {
     for n in 0..STRIKE_LIMIT {
         let id = format!("s{n}");
         admit(&l, &id, 10, false).unwrap();
-        l.metered_finalize(&id, usage(10, 10)).unwrap();
+        l.metered_finalize(&id, usage(100, 100)).unwrap();
         // A billed remainder without an issued invoice is not a strike.
         assert_eq!(l.metered_unpaid_finals("peer").unwrap(), n);
-        record(&l, &id, 1, n as u8 + 1, 20, false);
+        record(&l, &id, 1, n as u8 + 1, 2000, false);
     }
     assert_eq!(l.metered_unpaid_finals("peer").unwrap(), STRIKE_LIMIT);
     assert!(admit(&l, "blocked", 10, true).is_err());
@@ -237,18 +237,18 @@ fn metered_receivables_must_match_current_state() {
     let (_d, l) = open();
     admit(&l, "s", 1000, true).unwrap();
     // Deposit must equal the admitted deposit.
-    assert!(try_record(&l, "s", 0, 20, 299).is_err());
+    assert!(try_record(&l, "s", 0, 20, 999).is_err());
     assert!(
-        try_record(&l, "s", 1, 21, 1100).is_err(),
+        try_record(&l, "s", 1, 21, 11000).is_err(),
         "no final before bill"
     );
-    try_record(&l, "s", 0, 22, 300).unwrap();
+    try_record(&l, "s", 0, 22, 1000).unwrap();
     l.mark_metered_received(&invoice(22, 300).payment_hash)
         .unwrap();
     let s = l.metered_finalize("s", usage(900, 200)).unwrap();
-    assert_eq!(s.remaining_msat, 800);
-    assert!(try_record(&l, "s", 1, 23, 1100).is_err());
-    try_record(&l, "s", 1, 23, 800).unwrap();
+    assert_eq!(s.remaining_msat, 10000);
+    assert!(try_record(&l, "s", 1, 23, 11000).is_err());
+    try_record(&l, "s", 1, 23, 10000).unwrap();
     // Abandoned and no-deposit rows cannot carry invoices.
     admit(&l, "n", 1000, false).unwrap();
     assert!(try_record(&l, "n", 0, 24, 0).is_err());
@@ -265,9 +265,9 @@ fn startup_abandons_interrupted_rows() {
         admit(&l, "d", 1000, false).unwrap();
         assert!(l.metered_claim_dispatch("d", "peer").unwrap());
         admit(&l, "p", 1000, true).unwrap();
-        record(&l, "p", 0, 31, 300, true);
+        record(&l, "p", 0, 31, 1000, true);
         admit(&l, "b", 1000, false).unwrap();
-        l.metered_finalize("b", usage(10, 10)).unwrap();
+        l.metered_finalize("b", usage(100, 100)).unwrap();
     }
     let l = Ledger::open(dir.path()).unwrap();
     l.close_interrupted_metered().unwrap();
@@ -278,7 +278,7 @@ fn startup_abandons_interrupted_rows() {
             MeteredStatus::Abandoned
         );
     }
-    assert_eq!(l.metered_settlement("p").unwrap().deposit_paid_msat, 300);
+    assert_eq!(l.metered_settlement("p").unwrap().deposit_paid_msat, 1000);
     assert_eq!(
         l.metered_settlement("b").unwrap().status,
         MeteredStatus::Billed
@@ -291,15 +291,15 @@ fn forgiving_a_peer_clears_its_strikes_but_a_late_payment_is_still_recorded() {
     for n in 0..STRIKE_LIMIT {
         let id = format!("s{n}");
         admit(&l, &id, 10, false).unwrap();
-        l.metered_finalize(&id, usage(10, 10)).unwrap();
-        record(&l, &id, 1, n as u8 + 1, 20, false);
+        l.metered_finalize(&id, usage(100, 100)).unwrap();
+        record(&l, &id, 1, n as u8 + 1, 2000, false);
     }
     assert!(admit(&l, "blocked", 10, true).is_err());
     let listed = l.blocked_peers().unwrap();
     assert_eq!(listed.len(), 1);
     assert!(listed[0].blocked);
     assert_eq!(listed[0].debts.len(), STRIKE_LIMIT as usize);
-    assert_eq!(listed[0].debts[0].amount_msat, Some(20));
+    assert_eq!(listed[0].debts[0].amount_msat, Some(2000));
     assert_eq!(l.wallet_switch_blockers().unwrap().unpaid_invoices.len(), 3);
     assert!(l.unblock_peer("nobody").is_err());
     let forgiven = l.unblock_peer("peer").unwrap();

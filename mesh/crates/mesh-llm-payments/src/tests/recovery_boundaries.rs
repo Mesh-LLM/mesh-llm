@@ -34,8 +34,8 @@ async fn startup_releases_approvals_that_never_reached_the_wallet() -> Result<()
         }
         let service = PaymentService::with_provider(dir.path(), wallet.clone())?;
         assert_eq!(
-            service.ledger.available_budget(1000, crate::now_ms())?,
-            if released { 1000 } else { 300 },
+            service.ledger.available_budget(crate::now_ms())?,
+            if released { 100_000 } else { 99_300 },
             "segment {segment} {state}"
         );
         assert_eq!(wallet.calls.load(Ordering::SeqCst), 0, "startup never pays");
@@ -63,8 +63,8 @@ async fn cancellation_and_preparation_have_only_one_winner() -> Result<()> {
             assert!(service.ledger.prepare_charge(&charge).is_err());
         }
         assert_eq!(
-            service.ledger.available_budget(1000, crate::now_ms())?,
-            if prepare_first { 300 } else { 1000 }
+            service.ledger.available_budget(crate::now_ms())?,
+            if prepare_first { 99_300 } else { 100_000 }
         );
     }
     Ok(())

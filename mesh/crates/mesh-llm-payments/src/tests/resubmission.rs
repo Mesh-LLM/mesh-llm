@@ -45,7 +45,7 @@ async fn lost_submission_is_resubmitted_and_settles_once() -> Result<()> {
     assert_eq!(service.ledger.requests()?[0].spent_msat, 110);
     service.ledger.finish("one")?;
     assert_eq!(
-        service.ledger.available_budget(BUDGET, crate::now_ms())?,
+        service.ledger.available_budget(crate::now_ms())?,
         BUDGET - 110
     );
     Ok(())
@@ -111,10 +111,7 @@ async fn expired_invoice_with_no_payment_fails_and_releases() -> Result<()> {
         service.ledger.request_state("one")?.as_deref(),
         Some("failed")
     );
-    assert_eq!(
-        service.ledger.available_budget(BUDGET, crate::now_ms())?,
-        BUDGET
-    );
+    assert_eq!(service.ledger.available_budget(crate::now_ms())?, BUDGET);
     // Later scans leave the failed charge alone.
     service.reconcile_pending().await?;
     assert_eq!(wallet.calls.load(Ordering::SeqCst), 1);
@@ -154,7 +151,7 @@ async fn rejected_resubmission_stays_pending_until_expiry() -> Result<()> {
 
     assert_eq!(service.ledger.pending_charges()?.len(), 1);
     assert_eq!(
-        service.ledger.available_budget(BUDGET, crate::now_ms())?,
+        service.ledger.available_budget(crate::now_ms())?,
         BUDGET - 1000,
         "the request reservation is held"
     );

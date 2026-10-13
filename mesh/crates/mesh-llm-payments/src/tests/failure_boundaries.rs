@@ -36,10 +36,7 @@ async fn simultaneous_requests_only_pay_one_with_one_reservation_available() -> 
     }
     assert_eq!(approved, 1);
     assert_eq!(wallet.calls.load(Ordering::SeqCst), 1);
-    assert_eq!(
-        service.ledger.available_budget(100_000, crate::now_ms())?,
-        300
-    );
+    assert_eq!(service.ledger.available_budget(crate::now_ms())?, 300);
     let winner = service
         .ledger
         .requests()?
@@ -48,10 +45,7 @@ async fn simultaneous_requests_only_pay_one_with_one_reservation_available() -> 
         .unwrap();
     assert_eq!(winner.spent_msat, 610);
     service.ledger.finish(&winner.terms.id)?;
-    assert_eq!(
-        service.ledger.available_budget(100_000, crate::now_ms())?,
-        390
-    );
+    assert_eq!(service.ledger.available_budget(crate::now_ms())?, 390);
     Ok(())
 }
 
@@ -112,10 +106,7 @@ async fn pending_htlc_recovers(outcome: PaymentStatus) -> Result<()> {
     } else {
         1000
     };
-    assert_eq!(
-        service.ledger.available_budget(100_000, crate::now_ms())?,
-        remaining
-    );
+    assert_eq!(service.ledger.available_budget(crate::now_ms())?, remaining);
     Ok(())
 }
 
@@ -133,10 +124,7 @@ async fn expired_automatic_authorization_never_calls_the_wallet() -> Result<()> 
     assert!(service.await_authorization(&request).await.is_err());
     assert!(service.approve(&request.id).await.is_err());
     assert_eq!(wallet.calls.load(Ordering::SeqCst), 0);
-    assert_eq!(
-        service.ledger.available_budget(100_000, crate::now_ms())?,
-        100_000
-    );
+    assert_eq!(service.ledger.available_budget(crate::now_ms())?, 100_000);
     assert!(service.ledger.pending_charges()?.is_empty());
     Ok(())
 }
@@ -148,10 +136,7 @@ async fn assert_pending_survives_outage_and_expiry(
 ) -> Result<()> {
     wallet.lookup_unavailable.store(true, Ordering::SeqCst);
     assert!(service.reconcile_pending().await.is_err());
-    assert_eq!(
-        service.ledger.available_budget(100_000, crate::now_ms())?,
-        300
-    );
+    assert_eq!(service.ledger.available_budget(crate::now_ms())?, 300);
     wallet.lookup_unavailable.store(false, Ordering::SeqCst);
     service.reconcile_pending().await?;
     let wait = charge.invoice.expires_at_ms.saturating_sub(crate::now_ms()) + 25;

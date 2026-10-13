@@ -278,10 +278,7 @@ async fn a_fee_above_the_headroom_still_counts_against_the_daily_budget() {
 
     assert_eq!(service.ledger.requests().unwrap()[0].spent_msat, 600);
     assert_eq!(
-        service
-            .ledger
-            .available_budget(100_000, crate::now_ms())
-            .unwrap(),
+        service.ledger.available_budget(crate::now_ms()).unwrap(),
         10_000 - 600,
         "the real fee, not the authorized headroom, is what the budget loses"
     );
@@ -338,10 +335,7 @@ async fn output_payment_uses_the_original_authorization_and_actual_fees() {
     service.ledger.finish("one").unwrap();
     assert_eq!(service.ledger.requests().unwrap()[0].spent_msat, 520);
     assert_eq!(
-        service
-            .ledger
-            .available_budget(100_000, crate::now_ms())
-            .unwrap(),
+        service.ledger.available_budget(crate::now_ms()).unwrap(),
         480
     );
 }
@@ -357,7 +351,7 @@ fn duplicate_segments_and_hashes_cannot_change_the_debit() {
         })
         .unwrap();
     ledger.propose(&terms("one", 1000)).unwrap();
-    ledger.approve("one", 100_000, crate::now_ms()).unwrap();
+    ledger.approve("one", crate::now_ms()).unwrap();
     let original = charge("one", 0, 1, 100, 200);
     assert!(ledger.prepare_charge(&original).unwrap());
     assert!(!ledger.prepare_charge(&original).unwrap());

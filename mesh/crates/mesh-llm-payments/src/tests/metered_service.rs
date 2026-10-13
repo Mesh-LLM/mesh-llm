@@ -13,8 +13,8 @@ const MODEL: &str = "metered-model";
 // 1 msat per token both ways keeps arithmetic readable.
 fn rates() -> Pricing {
     Pricing {
-        input_msat_per_million: 1_000_000,
-        output_msat_per_million: 1_000_000,
+        input_msat_per_million: 10_000_000,
+        output_msat_per_million: 10_000_000,
     }
 }
 
@@ -96,7 +96,7 @@ async fn deposit_then_final_invoice_for_the_remainder_settles_trust() {
 
     let first = service.serve_admit(admit("r", "peer", 1000)).await.unwrap();
     let deposit = deposit_invoice(&first);
-    assert_eq!(deposit.amount_msat, Some(300), "0.3 x 1000 tokens x 1 msat");
+    assert_eq!(deposit.amount_msat, Some(1000), "flat 1 sat deposit");
     // Replaying the admission returns the same persisted invoice; different
     // terms under the same ID are refused.
     assert_eq!(
@@ -112,7 +112,7 @@ async fn deposit_then_final_invoice_for_the_remainder_settles_trust() {
     // but the ledger still refuses a final invoice for an unbilled request.
     received(&wallet, &deposit);
     let settled = service.serve_deposit_confirmed("r").await.unwrap();
-    assert_eq!(settled.credited_msat, Some(300));
+    assert_eq!(settled.credited_msat, Some(1000));
     assert!(
         service.serve_deposit_confirmed("r").await.is_err(),
         "dispatch is claimed exactly once"
@@ -126,10 +126,10 @@ async fn deposit_then_final_invoice_for_the_remainder_settles_trust() {
             bill.remaining_msat,
             bill.settled
         ),
-        (1100, 300, 800, false)
+        (11000, 1000, 10000, false)
     );
     let final_invoice = bill.invoice.clone().expect("final invoice");
-    assert_eq!(final_invoice.amount_msat, Some(800));
+    assert_eq!(final_invoice.amount_msat, Some(10000));
     // Idempotent: the same usage returns the same bill and invoice; a
     // different usage or an abandonment after billing is refused.
     assert_eq!(
@@ -195,7 +195,7 @@ async fn covering_deposit_means_no_final_invoice_and_abandonment_keeps_the_depos
             bill.remaining_msat,
             bill.settled
         ),
-        (150, 300, 0, true)
+        (1500, 1000, 0, true)
     );
     assert!(bill.invoice.is_none(), "nothing owed, nothing refunded");
     assert_eq!(wallet.invoice_expiries.lock().unwrap().len(), 1);
@@ -224,7 +224,7 @@ async fn covering_deposit_means_no_final_invoice_and_abandonment_keeps_the_depos
             .metered_settlement("a")
             .unwrap()
             .deposit_paid_msat,
-        300
+        1000
     );
     assert_eq!(service.ledger.metered_unpaid_finals("other").unwrap(), 0);
     assert!(!service.metered_trusted("other").await.unwrap());
@@ -241,10 +241,10 @@ async fn unpaid_deposit_never_reduces_the_bill() {
     // deposit unpaid bills the full amount and the deposit arriving later
     // changes nothing already fixed.
     let bill = service.serve_settle(settle("u", 900, 200)).await.unwrap();
-    assert_eq!((bill.deposit_msat, bill.remaining_msat), (0, 1100));
+    assert_eq!((bill.deposit_msat, bill.remaining_msat), (0, 11000));
     received(&wallet, &deposit);
     let bill = billed(service.serve_recover("u").await.unwrap());
-    assert_eq!((bill.deposit_msat, bill.remaining_msat), (0, 1100));
+    assert_eq!((bill.deposit_msat, bill.remaining_msat), (0, 11000));
     assert!(
         service
             .ledger
@@ -276,12 +276,12 @@ async fn three_unpaid_final_invoices_block_admission_until_one_is_paid() {
         // A billed remainder without an issued invoice is not a strike.
         service
             .ledger
-            .metered_finalize(&id, MeteredOutcome::Usage(usage(10, 10)))
+            .metered_finalize(&id, MeteredOutcome::Usage(usage(100, 100)))
             .unwrap();
         assert_eq!(service.ledger.metered_unpaid_finals("peer").unwrap(), n);
         finals.push(
             service
-                .serve_settle(settle(&id, 10, 10))
+                .serve_settle(settle(&id, 100, 100))
                 .await
                 .unwrap()
                 .invoice
@@ -369,7 +369,7 @@ async fn restart_abandons_in_flight_requests_and_never_redispatches() {
 async fn expired_nonpayment_survives_restart_and_requires_deposit_in_later_sessions() {
     let dir = tempfile::tempdir().unwrap();
     let wallet = Arc::new(MockWallet::default());
-    let expired = invoice_with_expiry(91, 20, 0);
+    let expired = invoice_with_expiry(91, 2000, 0);
     assert!(expired.expires_at_ms <= crate::now_ms());
     {
         let service = open(dir.path(), wallet.clone());
@@ -385,7 +385,7 @@ async fn expired_nonpayment_survives_restart_and_requires_deposit_in_later_sessi
             .unwrap();
         service
             .ledger
-            .metered_finalize("unpaid", MeteredOutcome::Usage(usage(10, 10)))
+            .metered_finalize("unpaid", MeteredOutcome::Usage(usage(100, 100)))
             .unwrap();
         service
             .ledger

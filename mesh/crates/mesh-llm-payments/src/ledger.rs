@@ -178,9 +178,9 @@ impl Ledger {
         }))
     }
 
-    /// Reserve funds in an immediate transaction; independent processes cannot
-    /// authorize against the same unreserved balance or daily allowance.
-    pub fn available_budget(&self, balance_msat: u64, now_ms: u64) -> Result<u64> {
+    /// Unreserved daily allowance. The wallet balance is not consulted: a
+    /// payment the wallet cannot make simply fails at payment time.
+    pub fn available_budget(&self, now_ms: u64) -> Result<u64> {
         let policy = self.policy()?;
         let connection = self.lock()?;
         let reserved: u64 = connection.query_row(
@@ -188,7 +188,6 @@ impl Ledger {
             [],
             |r| read_amount(r, 0),
         )?;
-        let available = balance_msat.saturating_sub(reserved);
         if policy.mode == ApprovalMode::FreeOnly {
             return Ok(0);
         }
@@ -197,16 +196,14 @@ impl Ledger {
             [sql_amount(now_ms / DAY_MS)?],
             |r| read_amount(r, 0),
         )?;
-        Ok(available.min(
-            policy
-                .daily_budget_msat
-                .unwrap_or(0)
-                .saturating_sub(spent)
-                .saturating_sub(reserved),
-        ))
+        Ok(policy
+            .daily_budget_msat
+            .unwrap_or(0)
+            .saturating_sub(spent)
+            .saturating_sub(reserved))
     }
 
-    pub fn approve(&self, id: &str, balance_msat: u64, now_ms: u64) -> Result<()> {
+    pub fn approve(&self, id: &str, now_ms: u64) -> Result<()> {
         let mut connection = self.lock()?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let (state, json): (String, String) =
@@ -227,10 +224,6 @@ impl Ledger {
             [],
             |r| read_amount(r, 0),
         )?;
-        ensure!(
-            terms.max_total_msat <= balance_msat.saturating_sub(reserved),
-            "insufficient unreserved wallet balance"
-        );
         let policy_json: Option<String> = transaction
             .query_row("SELECT value FROM settings WHERE key='policy'", [], |r| {
                 r.get(0)

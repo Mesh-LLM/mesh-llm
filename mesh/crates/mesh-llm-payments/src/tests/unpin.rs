@@ -79,7 +79,7 @@ async fn unpin_is_refused_while_an_outgoing_payment_is_unresolved() -> Result<()
         daily_budget_msat: Some(100_000),
     })?;
     service.ledger.propose(&terms("one", 1000))?;
-    service.ledger.approve("one", 100_000, crate::now_ms())?;
+    service.ledger.approve("one", crate::now_ms())?;
     let pending = charge("one", 0, 1, 100, 200);
     assert!(service.ledger.prepare_charge(&pending)?);
 

@@ -29,10 +29,8 @@ pub mod ops {
     pub const FINISH: &str = "finish";
     /// The operator's profile payment intent (no wallet I/O).
     pub const PAYMENT_INTENT: &str = "payment_intent";
-    /// Start reading the balance for a request so it overlaps seller prefill.
-    pub const PREFETCH: &str = "prefetch";
     /// Durably approve a seller's admission: the local spending cap against
-    /// policy and balance, and the admitted terms every later payment of the
+    /// policy and the daily budget, and the admitted terms every later payment of the
     /// request is checked against.
     pub const ACCEPT_ADMISSION: &str = "accept_admission";
     /// Release a request that did not (or can no longer) start paying.
@@ -88,7 +86,6 @@ pub fn deadline(operation: &str) -> Option<Duration> {
         ops::PRICING
             | ops::FINISH
             | ops::PAYMENT_INTENT
-            | ops::PREFETCH
             | ops::CANCEL
             | ops::SERVE_ADMIT
             | ops::SERVE_SETTLE
@@ -331,7 +328,6 @@ mod tests {
         ops::RECONCILE,
         ops::FINISH,
         ops::PAYMENT_INTENT,
-        ops::PREFETCH,
         ops::ACCEPT_ADMISSION,
         ops::CANCEL,
         ops::PAY_DEPOSIT,
@@ -358,7 +354,6 @@ mod tests {
                 ops::PRICING,
                 ops::FINISH,
                 ops::PAYMENT_INTENT,
-                ops::PREFETCH,
                 ops::CANCEL,
                 ops::SERVE_ADMIT,
                 ops::SERVE_SETTLE,

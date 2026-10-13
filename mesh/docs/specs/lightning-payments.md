@@ -34,9 +34,10 @@ allowance terms, delivery watermarks, receivables or refunds.
    issued and unpaid final invoices.
 3. The provider replies `Admission` with frozen `AdmissionTerms` (`id`,
    `model`, `pricing`, `prompt_estimate`, `deposit_msat`). Unless the peer is
-   in the provider's trust cache, the terms carry a deposit invoice for
-   `ceil(0.3 x estimated input charge)`. The deposit is applied against the
-   final bill; it is not an extra fee, a reservation or an input-token claim.
+   in the provider's trust cache, the terms carry a deposit invoice for a
+   flat 1 sat (1000 msat). It only proves the buyer can pay before backend
+   work starts. The deposit is applied against the final bill; it is not an
+   extra fee, a reservation or an input-token claim.
 4. The payer validates the terms against its request and its local cap,
    durably authorizes them, sends `Accepted` and pays any deposit. The
    provider waits for the deposit to settle in its own wallet **before any
@@ -52,8 +53,8 @@ allowance terms, delivery watermarks, receivables or refunds.
    a best-effort basis; all other bytes pass through unchanged.
 6. On completion the provider sends `Settlement`: the reported usage, the bill
    (`prompt_tokens` at the input rate + `completion_tokens` at the output
-   rate), the deposit applied and, if anything is still owed, one final
-   invoice for `bill - deposit`. The payer recomputes the bill from the stored
+   rate), the deposit applied and, if at least 1 sat is still owed, one final
+   invoice for `bill - deposit`; a smaller remainder is waived. The payer recomputes the bill from the stored
    admission, checks it against its local cap, pays the final invoice under the
    original authorization, and the provider replies `Complete` once that
    invoice has settled. No human approval is needed.
@@ -396,18 +397,20 @@ replaced, so the strike limit is only a PoC deterrent.
 
 The seller explicitly configures per-model input/output msat per million
 tokens. Free serving is the default. Charges use wide integer arithmetic and
-ceiling division to the msat; there is no minimum invoice quantum (the
-deprecated `LightningOffer.minimum_invoice_msat` gossip field is sent as 1 and
-ignored on read). A zero remaining amount produces no final invoice. The seller
+ceiling division to the msat. Bills are recorded to the msat, but every
+Lightning payment has a 1 sat floor (`PAYMENT_FLOOR_MSAT`): live Lexe
+payments of 60 and 90 msat found no route while 1000 msat and above settled.
+The deposit is exactly the floor, and a final remainder below it produces no
+final invoice (the seller absorbs it). The deprecated
+`LightningOffer.minimum_invoice_msat` gossip field is sent as 1 and ignored
+on read. The seller
 refuses admission when the pricing in the `Request` differs from its current
 configuration for that model, so a price change takes effect at the next
 request a payer makes after it has seen the new advertisement.
 
 Enabling `wallet pricing MODEL` without explicit rates uses 500 input and 1500
 output msat per million tokens;
-small requests at those rates usually round to 1 msat. A 1 msat accounting unit
-is not evidence of economical routing: channel minima, routing fees and liquidity
-can dominate. Validate amounts and receiving liquidity with Lexe on mainnet.
+small requests at those rates bill a few msat, which the payment floor waives.
 
 The payer reserves a routing-fee allowance for each inference payment of
 `max(3000 msat, 1% of the amount)` (`pricing::fee_allowance_msat`). Its local
@@ -415,8 +418,7 @@ cap for a request is `request_cap_msat(input, output)`: the estimated input
 charge at twice the prompt estimate (headroom for tokenizers denser than
 bytes / 4) plus the output charge for the request's output allowance, each
 with its fee allowance. The cap must fit the effective spending policy and
-is reserved against the daily budget and wallet balance when the admission is
-accepted; the seller never sees it. At settlement the recomputed bill must
+is reserved against the daily budget when the admission is accepted; the seller never sees it. At settlement the recomputed bill must
 not exceed the cap. The wallet is told `amount + fee_allowance` as the cap for
 each payment. A wallet that can bound fees must not submit a payment whose
 amount plus fees exceeds it; Lexe preflights a route and submits that same
@@ -467,9 +469,9 @@ provision a wallet. Applications use the same `policy` command through
 
 The budget uses UTC calendar days and actual settlement timestamps, including
 fees. Outstanding reservations carry across midnight. Authorization atomically
-checks unreserved wallet balance and remaining budget; the payer starts
-reading its balance while the seller computes the admission so that check
-does not wait on a cold wallet. Switching to free-only stops new paid
+checks the remaining budget. The wallet balance is not checked up front: a
+payment the wallet cannot make fails at payment time and the request is
+dropped. Switching to free-only stops new paid
 inference, but does not cancel already-submitted settlement. Manual
 per-inference approval is not supported. Provider/model approvals and price
 browsing are separate future features.

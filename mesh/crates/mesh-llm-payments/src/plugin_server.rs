@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use mesh_llm_payments_types::contract::{
     AcceptAdmissionRequest, AdvertisedPricing, ArrivalResponse, CancelRequest, Empty,
-    FinishRequest, IdRequest, InvoiceRequest, OpError, PayDepositRequest, RequestIdRequest,
+    FinishRequest, InvoiceRequest, OpError, PayDepositRequest, RequestIdRequest,
     RoutingBudgetRequest, ServeAdmitRequest, ServeSettleRequest, SettleFinalRequest,
     SettledReceived,
 };
@@ -186,15 +186,8 @@ fn operation_router(source: ServiceSource, prices: AdvertisedPrices) -> Operatio
     add_op(
         &mut router,
         &source,
-        ops::PREFETCH,
-        "Start reading the balance for a request.",
-        |service, request: IdRequest| async move { service.prefetch(request.id).map(|()| Empty {}) },
-    );
-    add_op(
-        &mut router,
-        &source,
         ops::ACCEPT_ADMISSION,
-        "Approve a seller's admission against policy, balance and the local cap.",
+        "Approve a seller's admission against policy, the daily budget and the local cap.",
         |service, request: AcceptAdmissionRequest| async move {
             service.accept_admission(request).await.map(|()| Empty {})
         },

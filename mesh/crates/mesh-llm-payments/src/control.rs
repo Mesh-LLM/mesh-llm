@@ -17,7 +17,8 @@ impl PaymentService {
                 let balance = self.wallet().await?.balance().await?;
                 let available = self
                     .ledger
-                    .available_budget(balance.spendable_msat, crate::now_ms())?;
+                    .available_budget(crate::now_ms())?
+                    .min(balance.spendable_msat);
                 Ok(
                     json!({"spendable_msat": balance.spendable_msat, "available_for_inference_msat": available}),
                 )

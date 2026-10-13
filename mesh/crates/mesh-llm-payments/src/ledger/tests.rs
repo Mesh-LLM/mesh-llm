@@ -32,13 +32,13 @@ fn restart_and_day_rollover_preserve_reservations() {
             })
             .unwrap();
         ledger.propose(&terms("one", 700)).unwrap();
-        ledger.approve("one", 1000, 1).unwrap();
+        ledger.approve("one", 1).unwrap();
     }
     let ledger = Ledger::open(directory.path()).unwrap();
     ledger.propose(&terms("two", 400)).unwrap();
-    assert!(ledger.approve("two", 1000, DAY_MS + 1).is_err());
+    assert!(ledger.approve("two", DAY_MS + 1).is_err());
     ledger.finish("one").unwrap();
-    ledger.approve("two", 1000, DAY_MS + 1).unwrap();
+    ledger.approve("two", DAY_MS + 1).unwrap();
 }
 
 #[test]
@@ -58,11 +58,11 @@ fn independent_connections_cannot_double_reserve() {
     let results = std::thread::scope(|scope| {
         let one = scope.spawn(|| {
             barrier.wait();
-            first.approve("one", 1000, 1).is_ok()
+            first.approve("one", 1).is_ok()
         });
         let two = scope.spawn(|| {
             barrier.wait();
-            second.approve("two", 1000, 1).is_ok()
+            second.approve("two", 1).is_ok()
         });
         (one.join().unwrap(), two.join().unwrap())
     });
@@ -76,7 +76,7 @@ fn approvals_cannot_change_terms_or_revive_rejected_requests() {
     ledger.propose(&terms("one", 700)).unwrap();
     assert!(ledger.propose(&terms("one", 800)).is_err());
     ledger.reject("one").unwrap();
-    assert!(ledger.approve("one", 1000, 1).is_err());
+    assert!(ledger.approve("one", 1).is_err());
     assert!(
         ledger
             .set_policy(&Policy {
@@ -119,14 +119,14 @@ fn single_policy_controls_eligibility_and_preserves_reservations() -> Result<()>
         ledger.payment_intent()?,
         crate::intent::PaymentIntent::FreeOnly
     ));
-    assert_eq!(ledger.available_budget(1000, 1)?, 0);
+    assert_eq!(ledger.available_budget(1)?, 0);
     ledger.propose(&terms("disabled", 500))?;
-    assert!(ledger.approve("disabled", 1000, 1).is_err());
+    assert!(ledger.approve("disabled", 1).is_err());
     ledger.set_policy(&Policy {
         mode: ApprovalMode::Automatic,
         daily_budget_msat: Some(1000),
     })?;
-    ledger.approve("disabled", 1000, 1)?;
+    ledger.approve("disabled", 1)?;
     let status = ledger.policy_status(1)?;
     assert_eq!(status["reserved_msat"], 500);
     assert_eq!(status["remaining_daily_budget_msat"], 500);

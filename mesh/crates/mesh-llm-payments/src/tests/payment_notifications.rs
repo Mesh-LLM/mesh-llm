@@ -200,10 +200,7 @@ async fn cancelled_observation_preserves_pending_payment_for_restart() -> Result
         paying.abort();
         assert!(paying.await.unwrap_err().is_cancelled());
         assert_eq!(service.ledger.pending_charges()?.len(), 1);
-        assert_eq!(
-            service.ledger.available_budget(100_000, crate::now_ms())?,
-            0
-        );
+        assert_eq!(service.ledger.available_budget(crate::now_ms())?, 0);
     }
     publish(&wallet, &charge.invoice, false, PaymentStatus::Succeeded);
     let service = PaymentService::with_provider(dir.path(), wallet.clone())?;
@@ -248,10 +245,7 @@ async fn notification_error_keeps_reservation_until_authoritative_recovery() -> 
     wallet.updates.notify_waiters();
     assert!(paying.await?.is_err());
     assert_eq!(service.ledger.pending_charges()?.len(), 1);
-    assert_eq!(
-        service.ledger.available_budget(100_000, crate::now_ms())?,
-        0
-    );
+    assert_eq!(service.ledger.available_budget(crate::now_ms())?, 0);
     wallet.lookup_unavailable.store(false, Ordering::SeqCst);
     publish(&wallet, &charge.invoice, false, PaymentStatus::Succeeded);
     service.reconcile_pending().await?;
@@ -405,8 +399,8 @@ async fn metered_invoice_expiries_are_chosen_by_the_host_not_the_wallet() -> Res
     let wallet = Arc::new(MockWallet::default());
     let service = Arc::new(PaymentService::with_provider(dir.path(), wallet.clone())?);
     let pricing = Pricing {
-        input_msat_per_million: 1_000_000,
-        output_msat_per_million: 1_000_000,
+        input_msat_per_million: 100_000_000,
+        output_msat_per_million: 100_000_000,
     };
     service.ledger.set_pricing("m", Some(&pricing))?;
     // A deposit is an input-side invoice: short-lived.

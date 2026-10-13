@@ -10,8 +10,8 @@ const OTHER: &str = "0123456789abfffffffffffffffffffffffffffffffffffffffffffffff
 
 fn pricing() -> Pricing {
     Pricing {
-        input_msat_per_million: 1_000_000,
-        output_msat_per_million: 1_000_000,
+        input_msat_per_million: 100_000_000,
+        output_msat_per_million: 100_000_000,
     }
 }
 
@@ -36,7 +36,7 @@ pub(super) fn unpaid_final(
             completion_tokens: 50,
         }),
     )?;
-    let invoice = invoice(n, 100);
+    let invoice = invoice(n, 10_000);
     service.ledger.record_metered_invoice(&MeteredInvoice {
         request_id: id.into(),
         peer: peer.into(),
@@ -95,7 +95,7 @@ async fn blocked_peers_are_listed_with_their_identifier_and_unblocked_by_prefix(
     assert!(peer.blocked);
     assert_eq!(peer.debts.len(), STRIKE_LIMIT as usize);
     assert_eq!(peer.debts[0].request_id, "peer-0");
-    assert_eq!(peer.debts[0].amount_msat, Some(100));
+    assert_eq!(peer.debts[0].amount_msat, Some(10_000));
     let other = blocked.iter().find(|entry| entry.peer == OTHER).unwrap();
     assert!(!other.blocked);
     assert_eq!(other.debts.len(), 1);
@@ -132,7 +132,7 @@ async fn blocked_peers_are_listed_with_their_identifier_and_unblocked_by_prefix(
     assert!(service.ledger.blocked_peers()?.is_empty());
     assert_eq!(
         service.ledger.metered_settlement("peer-0")?.remaining_msat,
-        100
+        10_000
     );
     Ok(())
 }
@@ -143,7 +143,7 @@ async fn blocked_peers_are_listed_with_their_identifier_and_unblocked_by_prefix(
 async fn unpaid_deposits_and_abandoned_requests_do_not_block() -> Result<()> {
     let dir = tempfile::tempdir()?;
     let service = PaymentService::open(dir.path())?;
-    let expired = invoice_with_expiry(1, 30, 0);
+    let expired = invoice_with_expiry(1, 1000, 0);
     for (id, abandon) in [("slow-a", true), ("slow-b", true), ("slow-c", false)] {
         service.ledger.metered_admit(&MeteredRequest {
             id,

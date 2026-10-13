@@ -7,9 +7,9 @@
 mod exchange;
 
 use anyhow::{Context, Result, bail, ensure};
-use mesh_llm_payments_types::contract::{CancelRequest, CancelStage, Empty, IdRequest, ops};
+use mesh_llm_payments_types::contract::{CancelRequest, CancelStage, Empty, ops};
 use mesh_llm_payments_types::metered_wire::{self as wire, AdmissionTerms, Frame};
-use mesh_llm_payments_types::metering::{PromptEstimate, deposit_msat};
+use mesh_llm_payments_types::metering::{DEPOSIT_MSAT, PromptEstimate};
 use mesh_llm_payments_types::{RequestTerms, intent::PaymentIntent, pricing::Pricing};
 use tokio::io::{AsyncRead, AsyncWriteExt, DuplexStream};
 
@@ -178,12 +178,6 @@ pub(crate) async fn start(
     let payments = Payments::for_node(node).await?;
     let cap = local_cap(&payments, &request, &price, &estimate).await?;
     let id = uuid::Uuid::new_v4().to_string();
-    // Read the balance for approval during the seller's admission. If a
-    // concurrent payment settles in between, the balance overstates the
-    // funds, but the wallet still refuses any payment it cannot afford.
-    let _: Empty = payments
-        .call(ops::PREFETCH, &IdRequest { id: id.clone() })
-        .await?;
     let (mut send, mut recv) = node
         .open_http_tunnel(peer)
         .await
@@ -329,9 +323,8 @@ fn validate_admission(
             && terms.prompt_estimate == estimate.input_tokens,
         "admission terms mismatch"
     );
-    let deposit = deposit_msat(price.input_charge(estimate.input_tokens)?)?;
     ensure!(
-        terms.deposit_msat == 0 || terms.deposit_msat == deposit,
+        terms.deposit_msat == 0 || terms.deposit_msat == DEPOSIT_MSAT,
         "deposit mismatch"
     );
     match &invoice {
