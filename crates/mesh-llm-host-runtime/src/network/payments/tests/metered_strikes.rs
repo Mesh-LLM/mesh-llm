@@ -185,7 +185,6 @@ async fn failing_provider(
             id,
             model,
             pricing,
-            max_total_msat,
             http,
         } = v2::read(&mut recv).await?
         else {
@@ -203,11 +202,8 @@ async fn failing_provider(
                     id,
                     model,
                     pricing,
-                    max_total_msat,
                     prompt_estimate: estimate.tokens,
-                    max_output_tokens: u64::from(request.max_tokens.unwrap()),
                     deposit_msat: deposit,
-                    credit_msat: 0,
                 },
                 invoice: Some(invoice.clone()),
             },

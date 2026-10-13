@@ -181,15 +181,15 @@ impl PaymentService {
         Ok(Some(invoice))
     }
 
-    /// Reuse a fixed final invoice, or create one from current durable usage.
-    /// A late deposit may change the remainder while wallet I/O is in flight;
-    /// persistence rejects that stale snapshot and the next recovery retries.
+    /// Reuse the persisted final invoice, or create one for the billed
+    /// remainder. The remainder is fixed at finalize, so retries never change
+    /// the amount or create a second invoice.
     pub async fn metered_final_invoice(&self, id: &str, peer: &str) -> Result<Option<Invoice>> {
         let owner = self
             .ledger
             .metered_owner(id)?
             .context("unknown metered request")?;
-        ensure!(owner.peer == peer, "metered invoice peer mismatch");
+        ensure!(owner == peer, "metered invoice peer mismatch");
         if let Some(receipt) = self
             .ledger
             .receivables(Some(id))?
@@ -199,30 +199,11 @@ impl PaymentService {
             return Ok(Some(receipt.invoice));
         }
         let settlement = self.ledger.metered_settlement(id)?;
-        if !matches!(
-            settlement.status,
-            crate::ledger::metered::MeteredStatus::Billed
-        ) {
+        if settlement.status != crate::ledger::metered::MeteredStatus::Billed {
             return Ok(None);
         }
-        match self
-            .metered_invoice(id, peer, 1, settlement.remaining_msat)
+        self.metered_invoice(id, peer, 1, settlement.remaining_msat)
             .await
-        {
-            Ok(invoice) => Ok(invoice),
-            Err(error) => {
-                // A deposit can arrive during wallet I/O. Retry only a changed
-                // snapshot; other wallet/persistence failures remain visible.
-                // The stale wallet invoice was never advertised or persisted.
-                // Leave it orphaned to expire; reusing it would charge an old amount.
-                let current = self.ledger.metered_settlement(id)?;
-                if current.remaining_msat == settlement.remaining_msat {
-                    return Err(error);
-                }
-                self.metered_invoice(id, peer, 1, current.remaining_msat)
-                    .await
-            }
-        }
     }
 
     /// Refresh incoming facts only; never invoke legacy input/output recovery.

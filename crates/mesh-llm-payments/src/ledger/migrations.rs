@@ -4,7 +4,7 @@ use rusqlite::Connection;
 
 /// 1: first versioned schema. 2: `serving_accounting.forgiven`, set by the
 /// retired operator debt-forgiveness command for uninvoiced delivered output.
-/// 3: `metered_requests` and `peer_credit` for metered (v2) settlement.
+/// 3: `metered_requests` for metered (v2) settlement.
 const VERSION: u32 = 3;
 
 const METERED_TABLES: &str = include_str!("metered_schema.sql");

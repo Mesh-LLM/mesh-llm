@@ -132,7 +132,7 @@ async fn unknown_partial_and_provisional_usage_never_become_abort_bills() -> Res
         for abort in [Abort::Cancel, Abort::Write, Abort::Read] {
             assert_eq!(
                 interrupted(response.clone(), abort).await?,
-                MeteredOutcome::UsageMissing
+                MeteredOutcome::Abandoned
             );
         }
     }

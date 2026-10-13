@@ -143,7 +143,7 @@ async fn qualify(
     .await
     .unwrap_or_else(|error| {
         Err(anyhow::anyhow!(
-            "exchange timeout: {error}; buyer={:?}; seller={:?}; buyer_policy={:?}; exposure={:?}",
+            "exchange timeout: {error}; buyer={:?}; seller={:?}; buyer_policy={:?}; unpaid_finals={:?}",
             buyer
                 .ledger
                 .requests()
@@ -153,7 +153,7 @@ async fn qualify(
                 .receivables(None)
                 .and_then(|rows| Ok(serde_json::to_string(&rows)?)),
             buyer.ledger.policy_status(mesh_llm_payments::now_ms()),
-            seller.ledger.metered_exposure(&payer.id().to_string())
+            seller.ledger.metered_unpaid_finals(&payer.id().to_string())
         ))
     });
     // Keep the accepted QUIC connection alive until the payer consumes Complete.
@@ -225,7 +225,12 @@ async fn exchanges(
             network.payments.load(Ordering::SeqCst),
             if completed == 1 { 2 } else { 3 }
         );
-        assert_eq!(seller.ledger.metered_exposure(&payer.id().to_string())?, 0);
+        assert_eq!(
+            seller
+                .ledger
+                .metered_unpaid_finals(&payer.id().to_string())?,
+            0
+        );
         assert_eq!(
             buyer.ledger.policy_status(mesh_llm_payments::now_ms())?["reserved_msat"],
             0

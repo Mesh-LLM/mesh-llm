@@ -1,5 +1,6 @@
-//! Request-in admission, unchanged streaming, response-out settlement.
-//! Deliberately independent of Skippy's legacy generation gate.
+//! Request-in admission, deposit before any backend work, unchanged
+//! streaming, response-out settlement from the backend's reported usage.
+//! Backend-neutral: native and plugin backends are usage sources only.
 use super::request::PaidRequest;
 use crate::{
     inference::election::{InferenceTarget, ModelTargets},
@@ -18,8 +19,7 @@ use mesh_llm_payments_types::{
 use std::{sync::Arc, time::Duration};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite};
 
-/// Fixed seller safety policy for this slice, separate from buyer authorization.
-const PEER_EXPOSURE_MSAT: u64 = 1_000_000;
+/// Seller-side bound on the admitted prompt estimate.
 const MAX_PROMPT_ESTIMATE: u64 = 131_072;
 
 struct Session {
@@ -70,28 +70,19 @@ async fn serve_inner(
     }
     let session = admit(node, service, peer, initial, targets).await?;
     let result = serve_admitted(node, &session, reader, writer).await;
+    // Any exit without usage abandons the request: no bill, no debt.
     if result.is_err()
         && session
             .service
             .ledger
             .metered_settlement(&session.terms.id)?
             .status
-            == MeteredStatus::Reserved
+            == MeteredStatus::Admitted
     {
-        let dispatched = session
+        session
             .service
             .ledger
-            .metered_owner(&session.terms.id)?
-            .context("unknown metered request")?
-            .dispatched;
-        session.service.ledger.metered_finalize(
-            &session.terms.id,
-            if dispatched {
-                MeteredOutcome::UsageMissing
-            } else {
-                MeteredOutcome::BackendError
-            },
-        )?;
+            .metered_finalize(&session.terms.id, MeteredOutcome::Abandoned)?;
     }
     result
 }
@@ -121,19 +112,12 @@ async fn serve_admitted(
     .await?;
     let accepted = tokio::time::timeout(Duration::from_secs(60), wire::read(reader)).await??;
     if !matches!(accepted, Frame::Accepted {}) {
-        // No dispatch; keep any uncertain payment for authoritative refresh.
+        // Nothing dispatched; record any deposit that did arrive, then abandon.
         session.service.metered_refresh(&session.terms.id).await?;
-        let owner = session
+        session
             .service
             .ledger
-            .metered_owner(&session.terms.id)?
-            .context("unknown metered request")?;
-        if !owner.dispatched {
-            session
-                .service
-                .ledger
-                .metered_finalize(&session.terms.id, MeteredOutcome::BackendError)?;
-        }
+            .metered_finalize(&session.terms.id, MeteredOutcome::Abandoned)?;
         bail!("admission cancelled");
     }
     if let Some(invoice) = deposit {
@@ -175,7 +159,6 @@ async fn admit(
         id,
         model,
         pricing,
-        max_total_msat,
         http,
     } = frame
     else {
@@ -193,27 +176,6 @@ async fn admit(
         !estimate.has_media && estimate.tokens <= MAX_PROMPT_ESTIMATE,
         "unsupported or oversized prompt"
     );
-    // No tokenize RPC or silent output clamp: caller supplies the finite ceiling.
-    let max_output_tokens = u64::from(
-        request
-            .max_tokens
-            .context("metered inference requires explicit max_tokens")?,
-    );
-    ensure!(
-        max_output_tokens <= 131_072,
-        "output allowance exceeds seller limit"
-    );
-    let reservation = pricing
-        .input_charge(estimate.tokens)?
-        .checked_add(pricing.output_charge(max_output_tokens)?)
-        .context("reservation overflow")?;
-    ensure!(
-        max_total_msat
-            >= mesh_llm_payments::pricing::payment_cap_msat(reservation)?
-                .checked_add(mesh_llm_payments::pricing::fee_allowance_msat(reservation)?)
-                .context("cap overflow")?,
-        "buyer cap below estimated exposure plus fees"
-    );
     let internal =
         crate::network::openai::ingress::served_model_for_public_id(node, targets, &model).await;
     let backend = match targets.candidates(&internal).iter().find_map(|target| {
@@ -227,13 +189,11 @@ async fn admit(
         None => super::metered_backend::resolve_plugin(node, &model).await?,
     };
     request.use_backend_model(&internal);
-    let admission = service.ledger.metered_admit(&MeteredRequest {
+    let deposit_msat = service.ledger.metered_admit(&MeteredRequest {
         id: &id,
         peer: &peer,
         pricing: &pricing,
         estimated_input_tokens: estimate.tokens,
-        max_output_tokens,
-        peer_cap_msat: PEER_EXPOSURE_MSAT,
         require_deposit: !service.metered_trusted(&peer).await?,
     })?;
     let terms = AdmissionTerms {
@@ -241,10 +201,7 @@ async fn admit(
         model,
         pricing,
         prompt_estimate: estimate.tokens,
-        max_output_tokens,
-        max_total_msat,
-        deposit_msat: admission.deposit_msat,
-        credit_msat: service.ledger.peer_credit(&peer)?,
+        deposit_msat,
     };
     Ok(Session {
         service,
@@ -312,8 +269,7 @@ async fn forward_backend(
 fn evidence_outcome(evidence: ResponseEvidence) -> MeteredOutcome {
     match evidence {
         ResponseEvidence::Reported(usage) => MeteredOutcome::Usage(usage),
-        ResponseEvidence::BackendError => MeteredOutcome::BackendError,
-        ResponseEvidence::Missing => MeteredOutcome::UsageMissing,
+        ResponseEvidence::BackendError | ResponseEvidence::Missing => MeteredOutcome::Abandoned,
     }
 }
 
@@ -351,22 +307,14 @@ async fn settle(
             request_id: id.into(),
             usage: settlement.usage,
             bill_msat: settlement.bill_msat,
-            deposit_applied_msat: if settlement.usage.is_some() {
-                settlement
-                    .deposit_paid_msat
-                    .saturating_sub(settlement.credit_created_msat)
-            } else {
-                0
+            deposit_applied_msat: match settlement.bill_msat {
+                Some(bill) => settlement.deposit_paid_msat.min(bill),
+                None => 0,
             },
-            credit_applied_msat: settlement.credit_applied_msat,
-            credit_remaining_msat: service.ledger.peer_credit(peer)?,
             invoice: invoice.clone(),
         },
     )
     .await?;
-    if settlement.status == MeteredStatus::UsageMissing {
-        return wire::write(writer, &Frame::Pending {}).await;
-    }
     if let Some(invoice) = invoice {
         service.wait_received(&invoice).await?;
         service.ledger.mark_received(&invoice.payment_hash)?;
@@ -385,11 +333,12 @@ async fn recover(
         .ledger
         .metered_owner(id)?
         .context("unknown metered request")?;
-    ensure!(owner.peer == peer, "recovery peer mismatch");
+    ensure!(owner == peer, "recovery peer mismatch");
     service.metered_refresh(id).await?;
-    if service.ledger.metered_settlement(id)?.status == MeteredStatus::Reserved {
-        return wire::write(writer, &Frame::Pending {}).await;
-    }
+    ensure!(
+        service.ledger.metered_settlement(id)?.status != MeteredStatus::Admitted,
+        "metered request still in progress"
+    );
     settle(service, id, peer, writer).await
 }
 

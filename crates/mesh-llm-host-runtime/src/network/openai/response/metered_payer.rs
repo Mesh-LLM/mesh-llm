@@ -1,4 +1,6 @@
-//! Local spending authority for the backend-neutral v2 exchange.
+//! Local spending authority for the backend-neutral metered exchange. The
+//! buyer's own budget cap (`max_total_msat`) is local policy and never leaves
+//! this node; the seller only sees the request and the frozen pricing.
 use crate::{mesh::Node, network::payments::request::PaidRequest};
 use anyhow::{Context, Result, bail, ensure};
 use mesh_llm_payments::{
@@ -47,7 +49,7 @@ pub(crate) async fn start(
         .context("cap overflow")?;
     ensure!(
         intent.permits(&pricing, minimum) && minimum <= max_total_msat,
-        "estimated exposure exceeds buyer cap"
+        "estimated cost exceeds buyer cap"
     );
     let id = uuid::Uuid::new_v4().to_string();
     let (mut send, mut recv) = node
@@ -63,7 +65,6 @@ pub(crate) async fn start(
             id: id.clone(),
             model: request.model.clone(),
             pricing: pricing.clone(),
-            max_total_msat,
             http: request.backend_http(&id)?,
         },
     )
@@ -76,14 +77,7 @@ pub(crate) async fn start(
     let Frame::Admission { terms, invoice } = initial else {
         bail!("provider did not accept metered v2")
     };
-    validate_admission(
-        &terms,
-        invoice.as_ref(),
-        &request,
-        &pricing,
-        &id,
-        max_total_msat,
-    )?;
+    validate_admission(&terms, invoice.as_ref(), &request, &pricing, &id)?;
     let payer_terms = RequestTerms {
         exchange_id: exchange_id.map(str::to_owned),
         id: id.clone(),
@@ -92,7 +86,7 @@ pub(crate) async fn start(
         model: terms.model.clone(),
         pricing: pricing.clone(),
         input_tokens: terms.prompt_estimate,
-        max_output_tokens: terms.max_output_tokens,
+        max_output_tokens: output,
         max_total_msat,
         expires_at_ms: mesh_llm_payments::now_ms() + 3_600_000,
     };
@@ -146,17 +140,13 @@ fn validate_admission(
     request: &PaidRequest,
     price: &Pricing,
     id: &str,
-    cap: u64,
 ) -> Result<()> {
     let estimate = PromptEstimate::from_request(&request.body)?;
     ensure!(
         terms.id == id
             && terms.model == request.model
             && terms.pricing == *price
-            && terms.prompt_estimate == estimate.tokens
-            && terms.max_output_tokens
-                == u64::from(request.max_tokens.context("missing output limit")?)
-            && terms.max_total_msat == cap,
+            && terms.prompt_estimate == estimate.tokens,
         "admission terms mismatch"
     );
     let deposit =
@@ -324,11 +314,6 @@ async fn exchange(
                 service.metered_complete(&terms.id).await?;
                 return Ok(());
             }
-            Frame::Pending {} => {
-                // Unknown usage keeps authorization.
-                flush_filter(&mut usage_filter, output, cancelled).await;
-                return Ok(());
-            }
             _ => bail!("invalid metered provider frame"),
         }
     }
@@ -359,9 +344,7 @@ pub(super) async fn settle(
         usage,
         bill_msat,
         deposit_applied_msat,
-        credit_applied_msat,
         invoice,
-        ..
     } = frame
     else {
         bail!("expected settlement")
@@ -372,16 +355,13 @@ pub(super) async fn settle(
     );
     let Some(usage) = usage else {
         ensure!(
-            bill_msat.is_none()
-                && invoice.is_none()
-                && credit_applied_msat == 0
-                && deposit_applied_msat == 0,
-            "unknown usage cannot create charge"
+            bill_msat.is_none() && invoice.is_none() && deposit_applied_msat == 0,
+            "abandoned request cannot create charge"
         );
         return Ok(());
     };
     ensure!(
-        usage.completion_tokens <= terms.max_output_tokens,
+        usage.completion_tokens <= payer.max_output_tokens,
         "output allowance exceeded"
     );
     let bill = terms
@@ -394,12 +374,7 @@ pub(super) async fn settle(
         deposit_applied_msat <= terms.deposit_msat && deposit_applied_msat <= bill,
         "invalid deposit application"
     );
-    let owed = bill - deposit_applied_msat;
-    ensure!(
-        credit_applied_msat <= owed && credit_applied_msat <= terms.credit_msat,
-        "unapproved credit application"
-    );
-    let remaining = owed - credit_applied_msat;
+    let remaining = bill - deposit_applied_msat;
     match invoice {
         Some(invoice) => {
             ensure!(
@@ -484,7 +459,6 @@ pub(super) async fn recover(
                 service.metered_complete(&terms.id).await?;
                 return Ok(());
             }
-            Frame::Pending {} => return Ok(()),
             _ => bail!("invalid metered recovery frame"),
         }
     }

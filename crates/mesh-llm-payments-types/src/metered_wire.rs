@@ -14,9 +14,10 @@ pub const MAX_FRAME_BYTES: usize = 4 * 1024 * 1024;
 pub const HTTP_UPGRADE: &[u8] =
     b"POST /mesh/payment/v2 HTTP/1.1\r\nHost: mesh\r\nContent-Length: 0\r\n\r\n";
 
-/// Admission terms are agreed before any backend work. `max_total_msat`
-/// includes wallet routing fees, not just the backend bill. The deposit is
-/// credited, never an extra fee or an exact input-token claim.
+/// Admission terms are agreed before any backend work. The deposit is a
+/// share of the *estimated* input cost; it is applied against the final bill,
+/// never an extra fee, a reservation or an exact input-token claim. Output is
+/// always post-paid from the backend's reported usage.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct AdmissionTerms {
@@ -24,10 +25,7 @@ pub struct AdmissionTerms {
     pub model: String,
     pub pricing: Pricing,
     pub prompt_estimate: u64,
-    pub max_output_tokens: u64,
-    pub max_total_msat: u64,
     pub deposit_msat: u64,
-    pub credit_msat: u64,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -37,7 +35,6 @@ pub enum Frame {
         id: String,
         model: String,
         pricing: Pricing,
-        max_total_msat: u64,
         http: Vec<u8>,
     },
     Admission {
@@ -50,19 +47,19 @@ pub enum Frame {
     Output {
         bytes: Vec<u8>,
     },
+    /// `usage: None` means the request was abandoned: no bill, no invoice.
+    /// It is never a zero-token bill.
     Settlement {
         request_id: String,
         usage: Option<MeteredUsage>,
         bill_msat: Option<u64>,
-        /// Received deposit used against this bill, excluding deposit credited
-        /// after the final invoice was fixed.
+        /// Received deposit applied against this bill. A deposit exceeding
+        /// the bill is kept; nothing is refunded or carried forward.
         deposit_applied_msat: u64,
-        credit_applied_msat: u64,
-        credit_remaining_msat: u64,
         invoice: Option<Invoice>,
     },
     Complete {},
-    Pending {},
+    /// Replay the settlement of a finalized request after a buyer restart.
     Recover {
         id: String,
     },
@@ -107,8 +104,6 @@ mod tests {
             usage: None,
             bill_msat: None,
             deposit_applied_msat: 0,
-            credit_applied_msat: 0,
-            credit_remaining_msat: 10,
             invoice: None,
         };
         let value = serde_json::to_value(frame).unwrap();

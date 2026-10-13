@@ -9,65 +9,71 @@ storage are unchanged by that cutover.
 
 ## Payment flow
 
+Token-metered, backend-neutral, deposit before work, settled from the engine's
+own usage report. There are no reservations, exposure caps, credits, refunds or
+rolling top-ups.
+
 1. The payer selects a provider and sends a `Request` frame with the model, the
-   advertised pricing, its spending cap (`max_total_msat`, including routing
-   fees) and the unchanged OpenAI HTTP request. There is no quote round trip.
-2. The provider estimates input from the request (an admission hint, not a
-   bill), takes the output ceiling from the caller's request, and reserves
-   exposure (estimated input + bounded output at frozen rates) in one ledger
-   transaction. Admission is refused if the peer's exposure would exceed the
-   provider's per-peer limit or the payer's cap.
+   advertised pricing and the unchanged OpenAI HTTP request. The payer's own
+   spending cap is local policy and never leaves the payer. There is no quote
+   round trip.
+2. The provider estimates input tokens from the request (an admission hint,
+   not a bill) and records the admission at frozen rates. Admission is refused
+   only when the peer already has three distinct issued and unpaid final
+   invoices.
 3. The provider replies `Admission` with frozen `AdmissionTerms`. Unless the
    peer is in the provider's (disposable, in-memory) trust cache, the terms
-   carry a small deposit invoice of 0.3 x estimated input cost. Existing peer
-   credit is stated and applied. The deposit is credited against the bill; it
-   is not an extra fee or an input-token claim.
+   carry a small deposit invoice of 0.3 x estimated input cost. The deposit is
+   applied against the final bill; it is not an extra fee or an input-token
+   claim.
 4. The payer validates the terms against its own spending authority, durably
    authorizes them, pays any deposit, and sends `Accepted`. The provider
-   verifies the deposit in its own wallet before dispatching to the backend.
+   verifies the deposit in its own wallet **before any backend work starts**.
 5. The provider forwards the request to the existing local or plugin HTTP
    backend unchanged and streams response bytes back as `Output` frames.
    Usage is read from the backend's own response (JSON `usage` or the SSE usage
-   chunk); stream chunks are never counted as tokens. When the caller did not
-   ask for usage, the standard usage chunk is hidden on a best-effort basis and
-   all other bytes pass through unchanged.
-6. On completion the provider sends `Settlement`: reported usage, the bill at
-   the frozen rates, deposit and credit applied, remaining credit and, if
-   anything is still owed, a final invoice. The payer pays it under the
-   original authorization and replies `Complete`. No human approval is needed.
+   chunk, `stream_options.include_usage` is forced on); stream chunks are never
+   counted as tokens. Any OpenAI-compatible engine (Skippy, llama.cpp, vLLM,
+   plugins) therefore supplies the count with no engine-specific code. When
+   the caller did not ask for usage, the standard usage chunk is hidden on a
+   best-effort basis and all other bytes pass through unchanged.
+6. On completion the provider sends `Settlement`: reported usage, the bill
+   (`prompt_tokens` at the input rate + `completion_tokens` at the output
+   rate), the deposit applied and, if anything is still owed, one final
+   invoice for `bill - deposit`. The payer pays it under the original
+   authorization; the provider replies `Complete`. No human approval is needed.
 
 Outcomes:
 
-- **Usage reported:** billed exactly once. A deposit larger than the bill
-  becomes peer credit.
-- **Backend error or never dispatched:** no bill; any paid deposit becomes peer
-  credit and exposure is released.
-- **Response delivered, usage unknown (`usage_missing`):** no bill, no
-  forfeiture, no credit; the reservation is held until a later finalize
-  resolves it. A missing usage report is never treated as a zero bill.
+- **Usage reported:** billed exactly once. A deposit covering the bill means
+  no final invoice; the excess is kept, not refunded or carried forward.
+- **Abandoned** (backend error, buyer disconnect or cancel, response without a
+  usage report, crash before finalize): no bill, no invoice, no debt. A
+  received deposit stays received. A missing usage report is never treated as
+  a zero bill. `Settlement` carries `usage: null` and is followed by
+  `Complete`.
 
 On buyer cancellation or a transport failure before successful backend EOF,
 only a validated SSE usage report followed by a complete `[DONE]` event is
 retained for billing. A provisional usage object, incomplete event or ordinary
 JSON prefix is not final evidence. Backends without `[DONE]` can still settle
 on successful EOF under the existing completion rules, but do not qualify for
-abort-path billing. Non-2xx headers on abort remain unknown; normal completed
-backend-error handling is unchanged.
+abort-path billing. Non-2xx headers on abort are abandoned.
 
 Billing uses backend-generated tokens, not proof that every token reached the
 buyer. A write failure on the terminal content/usage chunk can therefore record
 a bill for generated tokens the buyer did not receive. Recording that bill does
-not collect payment from a disconnected buyer. This narrow terminal-evidence
-rule does not resolve mid-generation unknown usage, indefinitely retained
-estimated exposure or trusted-buyer admission policy.
+not collect payment from a disconnected buyer.
 
-Unused deposits become provider-local credit for the same buyer at the same
-provider, not a cash or Lightning refund. Credit is not portable and cannot help
-a buyer who never returns to that provider.
+Strikes: a buyer is refused at three distinct issued and unpaid final
+invoices. Deposits, retries, abandoned requests and unissued output are not
+strikes. Paying a final invoice clears it. Trust (deposit skipping) is an
+optimization only: losing it means the next request asks for a deposit again,
+and a peer with an expired unpaid final invoice loses trust.
 
-Peer exposure is derived from durable rows, not stored, so restart needs no
-rebuild. Trust is an optimization only: losing it means the next request asks
-for a deposit again. A peer with an expired unpaid metered invoice loses trust.
+`Recover { id }` lets a restarted payer fetch the settlement of an already
+finalized request; it never re-dispatches and fails for a request still in
+progress.
 
 Prices and counts are the provider's claims. Proof of correct inference,
 refunds and encrypted output are not implemented. The supported endpoints are

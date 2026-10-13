@@ -18,8 +18,6 @@ fn admit(service: &PaymentService, id: &str) {
             peer: "peer",
             pricing: &rates(),
             estimated_input_tokens: 1000,
-            max_output_tokens: 500,
-            peer_cap_msat: 10_000,
             require_deposit: true,
         })
         .unwrap();
@@ -49,54 +47,57 @@ fn received(wallet: &MockWallet, inv: &Invoice) {
 }
 
 #[tokio::test]
-async fn late_deposit_before_and_after_fixed_invoice_is_conserved() {
-    for fixed in [false, true] {
-        let dir = tempfile::tempdir().unwrap();
-        let wallet = Arc::new(MockWallet::default());
-        let service = PaymentService::with_provider(dir.path(), wallet.clone()).unwrap();
-        admit(&service, "r");
-        let deposit = service
-            .metered_invoice("r", "peer", 0, 300)
-            .await
-            .unwrap()
-            .unwrap();
-        service.ledger.metered_claim_dispatch("r", "peer").unwrap();
-        service.ledger.metered_finalize("r", report()).unwrap();
-        let final_before = if fixed {
-            service.metered_final_invoice("r", "peer").await.unwrap()
-        } else {
-            None
-        };
-        received(&wallet, &deposit);
-        service.metered_refresh("r").await.unwrap();
-        service.metered_refresh("r").await.unwrap();
-        let final_invoice = service
+async fn final_invoice_is_the_billed_remainder_and_settles_trust() {
+    let dir = tempfile::tempdir().unwrap();
+    let wallet = Arc::new(MockWallet::default());
+    let service = PaymentService::with_provider(dir.path(), wallet.clone()).unwrap();
+    admit(&service, "r");
+    let deposit = service
+        .metered_invoice("r", "peer", 0, 300)
+        .await
+        .unwrap()
+        .unwrap();
+    // The same persisted invoice is returned on retry.
+    assert_eq!(
+        service.metered_invoice("r", "peer", 0, 300).await.unwrap(),
+        Some(deposit.clone())
+    );
+    received(&wallet, &deposit);
+    service.metered_refresh("r").await.unwrap();
+    service.ledger.metered_claim_dispatch("r", "peer").unwrap();
+    assert!(
+        service
             .metered_final_invoice("r", "peer")
             .await
             .unwrap()
-            .unwrap();
-        assert_eq!(
-            final_invoice.amount_msat,
-            Some(if fixed { 1100 } else { 800 })
-        );
-        if let Some(before) = final_before {
-            assert_eq!(before, final_invoice);
-        }
-        assert_eq!(
-            service.ledger.peer_credit("peer").unwrap(),
-            if fixed { 300 } else { 0 }
-        );
-        assert!(!service.metered_trusted("peer").await.unwrap());
-        received(&wallet, &final_invoice);
-        service.metered_refresh("r").await.unwrap();
-        service.metered_note_settled("r", "peer").await.unwrap();
-        assert!(service.metered_trusted("peer").await.unwrap());
-        assert_eq!(service.ledger.metered_exposure("peer").unwrap(), 0);
-    }
+            .is_none(),
+        "no final invoice before usage"
+    );
+    service.ledger.metered_finalize("r", report()).unwrap();
+    let final_invoice = service
+        .metered_final_invoice("r", "peer")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(final_invoice.amount_msat, Some(800));
+    assert_eq!(
+        service.metered_final_invoice("r", "peer").await.unwrap(),
+        Some(final_invoice.clone())
+    );
+    assert!(service.metered_final_invoice("r", "other").await.is_err());
+    assert!(!service.metered_trusted("peer").await.unwrap());
+    received(&wallet, &final_invoice);
+    service.metered_refresh("r").await.unwrap();
+    service.metered_note_settled("r", "peer").await.unwrap();
+    assert!(service.metered_trusted("peer").await.unwrap());
+    assert_eq!(
+        service.ledger.metered_settlement("r").unwrap().status,
+        MeteredStatus::Settled
+    );
 }
 
 #[tokio::test]
-async fn restart_after_dispatch_claim_retains_unknown_usage_and_never_redispatches() {
+async fn restart_abandons_in_flight_requests_and_never_redispatches() {
     let dir = tempfile::tempdir().unwrap();
     let wallet = Arc::new(MockWallet::default());
     let deposit;
@@ -117,28 +118,29 @@ async fn restart_after_dispatch_claim_retains_unknown_usage_and_never_redispatch
         );
     }
     let service = PaymentService::with_provider(dir.path(), wallet.clone()).unwrap();
-    assert_eq!(
-        service
-            .ledger
-            .metered_settlement("dispatched")
-            .unwrap()
-            .status,
-        MeteredStatus::UsageMissing
-    );
-    assert_eq!(
-        service.ledger.metered_settlement("never").unwrap().status,
-        MeteredStatus::BackendError
-    );
+    for id in ["dispatched", "never"] {
+        assert_eq!(
+            service.ledger.metered_settlement(id).unwrap().status,
+            MeteredStatus::Abandoned
+        );
+        assert!(
+            service
+                .metered_final_invoice(id, "peer")
+                .await
+                .unwrap()
+                .is_none()
+        );
+    }
     assert!(
         service
             .ledger
             .metered_claim_dispatch("dispatched", "peer")
             .is_ok_and(|claimed| !claimed)
     );
-    assert_eq!(service.ledger.metered_exposure("peer").unwrap(), 1500);
+    // A deposit paid after abandonment is observed but creates nothing.
     received(&wallet, &deposit);
     service.metered_refresh("never").await.unwrap();
-    assert_eq!(service.ledger.peer_credit("peer").unwrap(), 300);
+    assert_eq!(service.ledger.metered_unpaid_finals("peer").unwrap(), 0);
     assert!(!service.metered_trusted("peer").await.unwrap());
 }
 
@@ -162,10 +164,7 @@ async fn payer_recovery_only_observes_submitted_v2_deposits() {
                 model: payer.model.clone(),
                 pricing: payer.pricing.clone(),
                 prompt_estimate: 100,
-                max_output_tokens: 100,
-                max_total_msat: 1000,
                 deposit_msat: 100,
-                credit_msat: 0,
             })
             .unwrap();
         service.ledger.propose(&payer).unwrap();
@@ -204,10 +203,7 @@ async fn complete_retires_prepared_and_payee_pin_survives_restart() {
                 model: payer.model.clone(),
                 pricing: payer.pricing.clone(),
                 prompt_estimate: 100,
-                max_output_tokens: 100,
-                max_total_msat: 6000,
                 deposit_msat: 100,
-                credit_msat: 0,
             })
             .unwrap();
         service.await_authorization(&payer).await.unwrap();
@@ -254,14 +250,14 @@ async fn expired_nonpayment_survives_restart_and_requires_deposit_in_later_sessi
                 paid: false,
             })
             .unwrap();
-        assert_eq!(service.ledger.metered_exposure("peer").unwrap(), 1100);
+        assert_eq!(service.ledger.metered_unpaid_finals("peer").unwrap(), 1);
     }
     let service = PaymentService::with_provider(dir.path(), wallet).unwrap();
     let debts = service.ledger.receivables(Some("unpaid")).unwrap();
     assert_eq!(debts.len(), 1);
     assert_eq!(debts[0].invoice, expired);
     assert!(!debts[0].paid);
-    assert_eq!(service.ledger.metered_exposure("peer").unwrap(), 1100);
+    assert_eq!(service.ledger.metered_unpaid_finals("peer").unwrap(), 1);
 
     // Re-earn cache standing after restart. A denial with an empty cache alone
     // would not prove that the persisted unpaid invoice affects future trust.
@@ -274,8 +270,6 @@ async fn expired_nonpayment_survives_restart_and_requires_deposit_in_later_sessi
                 peer,
                 pricing: &rates(),
                 estimated_input_tokens: 1,
-                max_output_tokens: 1,
-                peer_cap_msat: 10_000,
                 require_deposit: true,
             })
             .unwrap();
@@ -299,32 +293,14 @@ async fn expired_nonpayment_survives_restart_and_requires_deposit_in_later_sessi
                 peer,
                 pricing: &rates(),
                 estimated_input_tokens: 1000,
-                max_output_tokens: 500,
-                peer_cap_msat: 10_000,
                 require_deposit: !trusted,
             })
             .unwrap();
-        assert_eq!(later.deposit_msat, if peer == "peer" { 300 } else { 0 });
+        assert_eq!(later, if peer == "peer" { 300 } else { 0 });
     }
-    // Persisted exposure also independently refuses further work at the cap.
-    assert!(
-        service
-            .ledger
-            .metered_admit(&MeteredRequest {
-                id: "over-cap",
-                peer: "peer",
-                pricing: &rates(),
-                estimated_input_tokens: 1000,
-                max_output_tokens: 500,
-                peer_cap_msat: 2600,
-                require_deposit: true,
-            })
-            .is_err()
-    );
-    assert!(service.ledger.metered_owner("over-cap").unwrap().is_none());
     // Clearing only the invoice debt now restores the already re-earned
     // standing, proving the earlier denial was not merely an empty cache.
     service.ledger.mark_received(&expired.payment_hash).unwrap();
     assert!(service.metered_trusted("peer").await.unwrap());
-    assert_eq!(service.ledger.metered_exposure("peer").unwrap(), 1500);
+    assert_eq!(service.ledger.metered_unpaid_finals("peer").unwrap(), 0);
 }

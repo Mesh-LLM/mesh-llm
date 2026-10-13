@@ -5,24 +5,17 @@ use anyhow::{Context, Result, ensure};
 use mesh_llm_payments::ledger::metered::MeteredOutcome;
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 
-/// Only failures before request writing prove that this attempt did not run.
+/// Any failure before usage is reported abandons the request: no bill, no
+/// retry of the backend request on the seller's initiative.
 #[derive(Debug)]
-pub(super) enum SubmissionFailure {
-    NotSubmitted,
-    Uncertain,
-}
+pub(super) struct SubmissionFailure;
 
 impl SubmissionFailure {
     pub(super) fn outcome(self) -> MeteredOutcome {
-        match self {
-            Self::NotSubmitted => MeteredOutcome::BackendError,
-            Self::Uncertain => MeteredOutcome::UsageMissing,
-        }
+        MeteredOutcome::Abandoned
     }
 }
 
-/// Once writing begins, even an error on the first write is not a transport
-/// guarantee of non-submission. Never refund or retry this request on that basis.
 pub(super) async fn submit_request(
     connection: &mut (impl AsyncWrite + Unpin),
     raw: &[u8],
@@ -30,7 +23,7 @@ pub(super) async fn submit_request(
     connection
         .write_all(raw)
         .await
-        .map_err(|_| SubmissionFailure::Uncertain)
+        .map_err(|_| SubmissionFailure)
 }
 
 pub(super) enum Backend {
@@ -61,12 +54,10 @@ impl Backend {
         request: &PaidRequest,
         id: &str,
     ) -> std::result::Result<ClientStream, SubmissionFailure> {
-        let (address, raw) = self
-            .prepare(request, id)
-            .map_err(|_| SubmissionFailure::NotSubmitted)?;
+        let (address, raw) = self.prepare(request, id).map_err(|_| SubmissionFailure)?;
         let mut connection = ClientStream::connect(address)
             .await
-            .map_err(|_| SubmissionFailure::NotSubmitted)?;
+            .map_err(|_| SubmissionFailure)?;
         submit_request(&mut connection, &raw).await?;
         Ok(connection)
     }

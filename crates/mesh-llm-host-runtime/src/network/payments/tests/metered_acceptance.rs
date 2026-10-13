@@ -1,4 +1,5 @@
-//! Provider-path acceptance: missing evidence and trust never bypass exposure.
+//! Provider-path acceptance: missing evidence abandons without a bill, and
+//! recovery never re-dispatches.
 use super::*;
 use mesh_llm_payments::ledger::metered::{MeteredOutcome, MeteredRequest, MeteredStatus};
 use mesh_llm_payments_types::{metered_wire as v2, metering::MeteredUsage};
@@ -35,8 +36,6 @@ impl Fixture {
             peer: &peer.to_string(),
             pricing: &price,
             estimated_input_tokens: 1,
-            max_output_tokens: 1,
-            peer_cap_msat: 1_000_000,
             require_deposit: false,
         })?;
         service.ledger.metered_finalize(
@@ -80,7 +79,6 @@ impl Fixture {
     async fn admit(&self, client: &mut tokio::io::DuplexStream, id: &str) -> Result<()> {
         v2::write(client, &v2::Frame::Request {
             id: id.into(), model: "test".into(), pricing: self.price.clone(),
-            max_total_msat: 2_000_000,
             http: b"POST /v1/completions HTTP/1.1\r\n\r\n{\"model\":\"test\",\"prompt\":\"Hi\",\"stream\":true,\"max_tokens\":100000}".to_vec(),
         }).await?;
         match v2::read(client).await? {
@@ -96,10 +94,10 @@ impl Fixture {
     async fn assert_recover(&self, id: &str, port: u16) -> Result<()> {
         let (mut client, task) = self.start(port);
         v2::write(&mut client, &v2::Frame::Recover { id: id.into() }).await?;
-        assert_missing(v2::read(&mut client).await?);
+        assert_abandoned(v2::read(&mut client).await?);
         assert!(matches!(
             v2::read(&mut client).await?,
-            v2::Frame::Pending {}
+            v2::Frame::Complete {}
         ));
         task.await??;
         assert!(
@@ -112,30 +110,30 @@ impl Fixture {
     }
 }
 
-fn assert_missing(frame: v2::Frame) {
+fn assert_abandoned(frame: v2::Frame) {
     match frame {
         v2::Frame::Settlement {
             usage,
             bill_msat,
             invoice,
-            credit_remaining_msat,
+            deposit_applied_msat,
             ..
         } => {
             assert!(usage.is_none());
             assert!(bill_msat.is_none());
             assert!(invoice.is_none());
-            assert_eq!(credit_remaining_msat, 0);
+            assert_eq!(deposit_applied_msat, 0);
         }
         other => panic!("unexpected settlement: {other:?}"),
     }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn missing_usage_holds_exposure_and_trusted_peer_cap_refuses_dispatch() -> Result<()> {
-    tokio::time::timeout(Duration::from_secs(20), missing_usage_and_cap()).await?
+async fn missing_usage_abandons_without_bill_and_is_not_a_strike() -> Result<()> {
+    tokio::time::timeout(Duration::from_secs(20), missing_usage()).await?
 }
 
-async fn missing_usage_and_cap() -> Result<()> {
+async fn missing_usage() -> Result<()> {
     let fixture = Fixture::trusted().await?;
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?;
     let port = listener.local_addr()?.port();
@@ -147,60 +145,28 @@ async fn missing_usage_and_cap() -> Result<()> {
     assert!(backend.read(&mut request).await? > 0);
     backend.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\ndata: {\"choices\":[{\"text\":\"hello\"}]}\n\ndata: [DONE]\n\n").await?;
     backend.shutdown().await?;
-    read_missing_settlement(&mut client).await?;
+    read_abandoned_settlement(&mut client).await?;
     task.await??;
     assert_eq!(
         fixture.service.ledger.metered_settlement(&id)?.status,
-        MeteredStatus::UsageMissing
+        MeteredStatus::Abandoned
     );
-    let exposure = fixture
-        .service
-        .ledger
-        .metered_exposure(&fixture.peer.to_string())?;
-    assert!(exposure >= 800_000);
-    assert!(
-        fixture
-            .service
-            .metered_trusted(&fixture.peer.to_string())
-            .await?
-    );
+    let peer = fixture.peer.to_string();
+    assert_eq!(fixture.service.ledger.metered_unpaid_finals(&peer)?, 0);
+    assert!(fixture.service.metered_trusted(&peer).await?);
     fixture.assert_recover(&id, port).await?;
-    assert_cap_refusal(&fixture, &listener, port, exposure).await?;
-    fixture.node.endpoint.close().await;
-    Ok(())
-}
-
-async fn assert_cap_refusal(
-    fixture: &Fixture,
-    listener: &tokio::net::TcpListener,
-    port: u16,
-    exposure: u64,
-) -> Result<()> {
-    // A second no-deposit request would exceed the same production cap.
-    let (mut client, task) = fixture.start(port);
-    let refused = uuid::Uuid::new_v4().to_string();
-    assert!(fixture.admit(&mut client, &refused).await.is_err());
-    assert!(task.await?.is_err());
-    assert!(fixture.service.ledger.metered_owner(&refused)?.is_none());
-    assert_eq!(
-        fixture
-            .service
-            .ledger
-            .metered_exposure(&fixture.peer.to_string())?,
-        exposure
-    );
-    // No backend connection for either recovery or refused admission.
+    // Recovery never reaches the backend.
     assert!(
         tokio::time::timeout(Duration::from_millis(30), listener.accept())
             .await
             .is_err()
     );
+    fixture.node.endpoint.close().await;
     Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn cancel_and_receiver_disconnect_remain_unknown_and_recovery_never_dispatches() -> Result<()>
-{
+async fn cancel_and_receiver_disconnect_abandon_and_recovery_never_dispatches() -> Result<()> {
     tokio::time::timeout(Duration::from_secs(20), interrupted_exchanges()).await?
 }
 
@@ -233,22 +199,14 @@ async fn assert_interrupted(
     id: &str,
     port: u16,
 ) -> Result<()> {
-    assert_eq!(
-        fixture.service.ledger.metered_settlement(id)?.status,
-        MeteredStatus::UsageMissing
-    );
-    assert!(
-        fixture
-            .service
-            .ledger
-            .metered_exposure(&fixture.peer.to_string())?
-            >= 800_000
-    );
+    let settlement = fixture.service.ledger.metered_settlement(id)?;
+    assert_eq!(settlement.status, MeteredStatus::Abandoned);
+    assert_eq!(settlement.bill_msat, None);
     assert_eq!(
         fixture
             .service
             .ledger
-            .peer_credit(&fixture.peer.to_string())?,
+            .metered_unpaid_finals(&fixture.peer.to_string())?,
         0
     );
     fixture.assert_recover(id, port).await?;
@@ -260,16 +218,16 @@ async fn assert_interrupted(
     Ok(())
 }
 
-async fn read_missing_settlement(client: &mut tokio::io::DuplexStream) -> Result<()> {
+async fn read_abandoned_settlement(client: &mut tokio::io::DuplexStream) -> Result<()> {
     loop {
         let frame = v2::read(client).await?;
         if matches!(frame, v2::Frame::Output { .. }) {
             continue;
         }
-        assert_missing(frame);
+        assert_abandoned(frame);
         break;
     }
-    assert!(matches!(v2::read(client).await?, v2::Frame::Pending {}));
+    assert!(matches!(v2::read(client).await?, v2::Frame::Complete {}));
     Ok(())
 }
 
@@ -281,10 +239,10 @@ async fn interrupt_client(
 ) -> Result<()> {
     if explicit_cancel {
         v2::write(&mut client, &v2::Frame::Cancel {}).await?;
-        assert_missing(v2::read(&mut client).await?);
+        assert_abandoned(v2::read(&mut client).await?);
         assert!(matches!(
             v2::read(&mut client).await?,
-            v2::Frame::Pending {}
+            v2::Frame::Complete {}
         ));
         task.await??;
     } else {

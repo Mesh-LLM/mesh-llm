@@ -72,17 +72,10 @@ impl Ledger {
     pub fn mark_received(&self, hash: &str) -> Result<()> {
         let mut connection = self.lock()?;
         let tx = connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-        // Only an actual transition moves money, so replays are no-ops.
-        let paid: Option<(String, u32)> = tx
-            .query_row(
-                "UPDATE receivables SET state='paid' WHERE hash=? AND state!='paid' RETURNING request_id,segment",
-                [hash],
-                |r| Ok((r.get(0)?, r.get(1)?)),
-            )
-            .optional()?;
-        if let Some((request_id, 0)) = paid {
-            super::metered::apply_late_deposit(&tx, &request_id)?;
-        }
+        tx.execute(
+            "UPDATE receivables SET state='paid' WHERE hash=? AND state!='paid'",
+            [hash],
+        )?;
         tx.commit()?;
         Ok(())
     }

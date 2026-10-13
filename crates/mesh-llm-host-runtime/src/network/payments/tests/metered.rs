@@ -182,7 +182,12 @@ async fn verify_exchanges(
             network.payments.load(Ordering::SeqCst),
             if completed == 1 { 2 } else { 3 }
         );
-        assert_eq!(seller.ledger.metered_exposure(&payer.id().to_string())?, 0);
+        assert_eq!(
+            seller
+                .ledger
+                .metered_unpaid_finals(&payer.id().to_string())?,
+            0
+        );
     }
     Ok(())
 }
@@ -223,7 +228,7 @@ impl tokio::io::AsyncWrite for PartialSubmission {
 }
 
 #[tokio::test]
-async fn partial_backend_submission_retains_deposit_exposure_and_dispatch_claim() -> Result<()> {
+async fn partial_backend_submission_abandons_without_bill_and_keeps_dispatch_claim() -> Result<()> {
     use mesh_llm_payments::ledger::metered::{MeteredRequest, MeteredStatus};
     let dir = tempfile::tempdir()?;
     let network = Arc::new(Network::default());
@@ -234,17 +239,15 @@ async fn partial_backend_submission_retains_deposit_exposure_and_dispatch_claim(
         output_msat_per_million: 1_000_000,
         minimum_invoice_msat: 1,
     };
-    let admission = service.ledger.metered_admit(&MeteredRequest {
+    let deposit_msat = service.ledger.metered_admit(&MeteredRequest {
         id: "partial",
         peer: "buyer",
         pricing: &price,
         estimated_input_tokens: 1000,
-        max_output_tokens: 100,
-        peer_cap_msat: 2000,
         require_deposit: true,
     })?;
     let invoice = service
-        .metered_invoice("partial", "buyer", 0, admission.deposit_msat)
+        .metered_invoice("partial", "buyer", 0, deposit_msat)
         .await?
         .unwrap();
     // Authoritative incoming wallet fact before dispatch.
@@ -273,15 +276,10 @@ async fn partial_backend_submission_retains_deposit_exposure_and_dispatch_claim(
         .ledger
         .metered_finalize("partial", failure.outcome())?;
     let settlement = service.ledger.metered_settlement("partial")?;
-    assert_eq!(settlement.status, MeteredStatus::UsageMissing);
-    assert_eq!(settlement.deposit_paid_msat, admission.deposit_msat);
-    assert_eq!(settlement.credit_created_msat, 0);
+    assert_eq!(settlement.status, MeteredStatus::Abandoned);
+    assert_eq!(settlement.deposit_paid_msat, deposit_msat);
     assert_eq!(settlement.bill_msat, None);
-    assert_eq!(service.ledger.peer_credit("buyer")?, 0);
-    assert_eq!(
-        service.ledger.metered_exposure("buyer")?,
-        admission.reserved_msat
-    );
+    assert_eq!(service.ledger.metered_unpaid_finals("buyer")?, 0);
     assert!(!service.ledger.metered_claim_dispatch("partial", "buyer")?);
     drop(service);
     let restarted = PaymentService::with_provider(dir.path(), wallet)?;
@@ -291,16 +289,17 @@ async fn partial_backend_submission_retains_deposit_exposure_and_dispatch_claim(
             .ledger
             .metered_claim_dispatch("partial", "buyer")?
     );
-    assert_eq!(
-        restarted.ledger.metered_exposure("buyer")?,
-        admission.reserved_msat
+    assert!(
+        restarted
+            .metered_final_invoice("partial", "buyer")
+            .await?
+            .is_none()
     );
-    assert_eq!(restarted.ledger.peer_credit("buyer")?, 0);
     Ok(())
 }
 
 #[tokio::test]
-async fn connection_failure_before_request_writing_is_definitely_not_submitted() -> Result<()> {
+async fn connection_failure_before_request_writing_abandons() -> Result<()> {
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?;
     let port = listener.local_addr()?.port();
     drop(listener);
@@ -316,7 +315,7 @@ async fn connection_failure_before_request_writing_is_definitely_not_submitted()
     };
     assert!(matches!(
         failure.outcome(),
-        mesh_llm_payments::ledger::metered::MeteredOutcome::BackendError
+        mesh_llm_payments::ledger::metered::MeteredOutcome::Abandoned
     ));
     Ok(())
 }
