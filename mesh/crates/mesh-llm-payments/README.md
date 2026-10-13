@@ -1,7 +1,12 @@
 # mesh-llm-payments
 
-Integer-msat pricing, durable spending authorization, and two-payment inference
-settlement over a provider-neutral wallet. The wallet trait, BOLT11 validation
+Integer-msat pricing, durable spending authorization, and token-metered
+inference settlement over a provider-neutral wallet. The seller side
+(`serving`, `ledger::metered`) admits a request with a deposit of 0.3 x the
+estimated input cost (none for buyers in good standing), bills the
+backend-reported usage at the admitted rates, applies the deposit and issues
+one final invoice for the remainder; a buyer with three issued, unpaid final
+invoices is refused. The wallet trait, BOLT11 validation
 and the `wallet.v1` plugin contract live in `mesh-llm-wallet`; concrete
 wallets such as Lexe are external plugins (`lexe-wallet`). This crate links no wallet SDK and owns
 invoice lifetimes (`lifetimes`) and fee policy (`pricing`). Applications use the

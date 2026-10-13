@@ -1,95 +1,126 @@
-//! Seller-side coarse operations behind `payments.v1`. The host keeps the
-//! transport, the decode gate and delivery; these own every ledger and wallet
-//! step of serving a paid request.
+//! Seller-side coarse operations behind `payments.v1`: token-metered billing.
+//! The host keeps the transport, the backend and delivery; these own every
+//! ledger and wallet step of admitting, depositing, settling and recovering a
+//! paid request. No inference or delivery gate lives here.
 
-use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result, ensure};
 use mesh_llm_payments_types::contract::{
-    InputInvoiceResponse, OutputInvoice, ServeBeginRequest, ServeInputInvoiceRequest,
-    ServeRecoverResponse,
+    FinalBill, ServeAdmitRequest, ServeAdmitResponse, ServeRecoverResponse, ServeSettleRequest,
+    SettledReceived,
 };
 
 use crate::invoice::Invoice;
-use crate::ledger::{RequestTerms, receivables::Receivable};
-use crate::lifetimes::INPUT_INVOICE_EXPIRY_SECS;
+use crate::ledger::metered::{MeteredOutcome, MeteredRequest, MeteredSettlement, MeteredStatus};
+use crate::ledger::metered_invoices::{MeteredInvoice, MeteredInvoiceKind};
+use crate::lifetimes::{INPUT_INVOICE_EXPIRY_SECS, OUTPUT_INVOICE_EXPIRY_SECS};
 use crate::service::{Arrival, PaymentService};
 use crate::wallet::{PaymentStatus, Transaction};
 
-impl PaymentService {
-    /// Check the offered price, wake the receiving wallet, wait out the
-    /// peer's prior debt, then durably open serving.
-    pub async fn serve_begin(self: &Arc<Self>, request: ServeBeginRequest) -> Result<()> {
-        ensure!(
-            self.ledger.pricing()?.get(&request.model) == Some(&request.pricing),
-            "seller prices changed"
-        );
-        // Wake the receiving wallet during prefill so the input invoice
-        // doesn't wait on a cold start.
-        drop(self.prefetch_balance());
-        self.await_prior_settlement(
-            &request.peer,
-            Duration::from_millis(request.prior_settlement_ms),
-        )
-        .await?;
-        self.ledger.begin_serving(
-            &request.id,
-            &request.peer,
-            &request.pricing,
-            request.max_output,
-        )
-    }
+/// Bound on the in-memory good-standing cache. Trust is an optimization, not
+/// a durable registry; money and debt stay in the ledger.
+const STANDING_CACHE: usize = 1024;
 
-    /// Fix the backend's output allowance, then create and durably record the
-    /// input invoice.
-    pub async fn serve_input_invoice(
-        &self,
-        request: ServeInputInvoiceRequest,
-    ) -> Result<InputInvoiceResponse> {
-        let ServeInputInvoiceRequest {
-            id,
-            peer,
+impl PaymentService {
+    /// Admit one request at the seller's current prices. Buyers at the strike
+    /// limit are refused; buyers in good standing are admitted without a
+    /// deposit and dispatch is claimed here; everyone else is quoted a deposit
+    /// of 0.3 x the estimated input cost. Replaying the same terms returns the
+    /// same answer, but never a second dispatch.
+    pub async fn serve_admit(&self, request: ServeAdmitRequest) -> Result<ServeAdmitResponse> {
+        let ServeAdmitRequest {
+            request_id,
+            buyer,
             model,
             pricing,
-            input_tokens,
-            max_output_tokens,
+            estimate,
         } = request;
         ensure!(
-            input_tokens > 0 && input_tokens <= 131_072,
-            "paid input limit exceeded"
+            self.ledger.pricing()?.get(&model) == Some(&pricing),
+            "seller prices changed"
         );
-        self.ledger
-            .resolve_serving_output_allowance(&id, max_output_tokens)?;
-        let amount = pricing.input_charge(input_tokens)?;
-        let max_total_msat = pricing.request_cap_msat(amount, max_output_tokens)?;
-        let invoice = self
-            .wallet()
-            .await?
-            .create_invoice(Some(amount), INPUT_INVOICE_EXPIRY_SECS)
-            .await?;
-        self.ledger.record_receivable(&Receivable {
-            request_id: id.clone(),
-            peer: peer.clone(),
-            segment: 0,
-            invoice: invoice.clone(),
-            tokens: input_tokens,
-            paid: false,
+        let strikes = self.ledger.metered_unpaid_finals(&buyer)?;
+        if strikes >= crate::ledger::metered::STRIKE_LIMIT {
+            return Ok(ServeAdmitResponse::Blocked {
+                reason: format!("buyer has {strikes} unpaid final invoices"),
+            });
+        }
+        let require_deposit = !self.metered_trusted(&buyer).await?;
+        let deposit = self.ledger.metered_admit(&MeteredRequest {
+            id: &request_id,
+            peer: &buyer,
+            pricing: &pricing,
+            estimated_input_tokens: estimate.input_tokens,
+            require_deposit,
         })?;
-        Ok(InputInvoiceResponse {
-            terms: RequestTerms {
-                exchange_id: None,
-                id,
-                peer,
-                payee: Some(invoice.payee.clone()),
-                model,
-                pricing,
-                input_tokens,
-                max_output_tokens,
-                max_total_msat,
-                expires_at_ms: invoice.expires_at_ms,
-            },
+        if deposit == 0 {
+            ensure!(
+                self.ledger.metered_claim_dispatch(&request_id, &buyer)?,
+                "request already dispatched"
+            );
+            return Ok(ServeAdmitResponse::Admitted { request_id });
+        }
+        let invoice = self
+            .metered_invoice(&request_id, &buyer, MeteredInvoiceKind::Deposit, deposit)
+            .await?
+            .context("deposit invoice missing")?;
+        Ok(ServeAdmitResponse::Deposit {
+            request_id,
             invoice,
+        })
+    }
+
+    /// Wait for the admitted deposit to settle in the receiving wallet, record
+    /// it paid and claim the once-only dispatch. Bounded by the deposit
+    /// invoice's lifetime.
+    pub async fn serve_deposit_confirmed(&self, request_id: &str) -> Result<SettledReceived> {
+        let receipt = self
+            .ledger
+            .metered_invoice(request_id, MeteredInvoiceKind::Deposit)?
+            .context("no deposit was requested for this request")?;
+        let payment = self.settle_received(&receipt.invoice).await?;
+        ensure!(
+            self.ledger
+                .metered_claim_dispatch(request_id, &receipt.peer)?,
+            "request already dispatched"
+        );
+        Ok(settled(&payment))
+    }
+
+    /// Bill the backend-reported usage at the admitted rates, apply the paid
+    /// deposit and issue the final invoice for any remainder. Idempotent:
+    /// a retry returns the stored bill and the same invoice.
+    pub async fn serve_settle(&self, request: ServeSettleRequest) -> Result<FinalBill> {
+        let ServeSettleRequest { request_id, usage } = request;
+        let settlement = self
+            .ledger
+            .metered_finalize(&request_id, MeteredOutcome::Usage(usage))?;
+        self.final_bill(&request_id, settlement).await
+    }
+
+    /// Close a request without usage: the deposit stays received, no bill, no
+    /// invoice, no debt, no strike. Terminal and idempotent.
+    pub fn serve_abandon(&self, request_id: &str) -> Result<()> {
+        self.ledger
+            .metered_finalize(request_id, MeteredOutcome::Abandoned)?;
+        Ok(())
+    }
+
+    /// A buyer refetches the outcome of a request after a disconnect or
+    /// restart. Refreshes payment facts from the wallet; never dispatches.
+    pub async fn serve_recover(&self, request_id: &str) -> Result<ServeRecoverResponse> {
+        self.ledger
+            .metered_owner(request_id)?
+            .context("unknown metered request")?;
+        self.metered_refresh(request_id).await?;
+        let settlement = self.ledger.metered_settlement(request_id)?;
+        Ok(match settlement.status {
+            MeteredStatus::Admitted => ServeRecoverResponse::Pending,
+            MeteredStatus::Abandoned => ServeRecoverResponse::Abandoned,
+            MeteredStatus::Billed | MeteredStatus::Settled => ServeRecoverResponse::Billed {
+                bill: self.final_bill(request_id, settlement).await?,
+            },
         })
     }
 
@@ -97,7 +128,7 @@ impl PaymentService {
     /// receiving wallet's record of the payment.
     pub async fn settle_received(&self, invoice: &Invoice) -> Result<Transaction> {
         let payment = self.wait_received(invoice).await?;
-        self.ledger.mark_received(&invoice.payment_hash)?;
+        self.ledger.mark_metered_received(&invoice.payment_hash)?;
         Ok(payment)
     }
 
@@ -105,77 +136,154 @@ impl PaymentService {
         Ok(self.wait_arrival(invoice, deadline).await? == Arrival::Claiming)
     }
 
-    pub async fn output_invoice(&self, id: &str) -> Result<Option<OutputInvoice>> {
-        Ok(self
-            .output_receivable(id)
+    async fn final_bill(
+        &self,
+        request_id: &str,
+        settlement: MeteredSettlement,
+    ) -> Result<FinalBill> {
+        let usage = settlement.usage.context("request was abandoned")?;
+        let bill_msat = settlement.bill_msat.context("request was abandoned")?;
+        let peer = self
+            .ledger
+            .metered_owner(request_id)?
+            .context("unknown metered request")?;
+        let invoice = if settlement.remaining_msat > 0 {
+            self.metered_invoice(
+                request_id,
+                &peer,
+                MeteredInvoiceKind::Final,
+                settlement.remaining_msat,
+            )
             .await?
-            .map(|receipt| OutputInvoice {
-                tokens: receipt.tokens,
-                invoice: receipt.invoice,
-            }))
-    }
-
-    /// A completed HTTP body can precede its trailing output payment. Wait
-    /// before starting another backend, without forgiving debt or granting
-    /// additional credit.
-    pub async fn await_prior_settlement(&self, peer: &str, deadline: Duration) -> Result<()> {
-        tokio::time::timeout(deadline, async {
-            loop {
-                if !self.ledger.has_outstanding_payment(peer)? {
-                    return Ok(());
-                }
-                self.refresh_receivables(peer).await?;
-                if !self.ledger.has_outstanding_payment(peer)? {
-                    return Ok(());
-                }
-                tokio::time::sleep(Duration::from_millis(200)).await;
-            }
+        } else {
+            None
+        };
+        let settled = self.ledger.metered_settlement(request_id)?.status == MeteredStatus::Settled;
+        if settled {
+            self.note_settled(&peer).await;
+        }
+        Ok(FinalBill {
+            usage,
+            bill_msat,
+            deposit_msat: settlement.deposit_paid_msat,
+            remaining_msat: settlement.remaining_msat,
+            settled,
+            invoice,
         })
-        .await
-        .context("prior payment settlement deadline exceeded")?
     }
 
-    async fn refresh_receivables(&self, peer: &str) -> Result<()> {
-        // Records paid input, or lapses abandoned zero-delivery input, so a
-        // slow or interrupted payment does not keep this peer blocked.
-        for id in self.ledger.unpaid_input_requests(peer)? {
-            self.input_received(&id).await?;
+    /// Serialize invoice creation and reuse the exact persisted invoice on
+    /// retry, so a request never carries two invoices of one kind.
+    async fn metered_invoice(
+        &self,
+        request_id: &str,
+        peer: &str,
+        kind: MeteredInvoiceKind,
+        amount: u64,
+    ) -> Result<Option<Invoice>> {
+        if amount == 0 {
+            return Ok(None);
         }
-        let unpaid = self.ledger.unpaid_invoices(peer)?;
-        if unpaid.is_empty() {
-            return Ok(());
+        let _guard = self.receivable_lock.lock().await;
+        if let Some(receipt) = self.ledger.metered_invoice(request_id, kind)? {
+            ensure!(
+                receipt.peer == peer && receipt.invoice.amount_msat == Some(amount),
+                "invoice terms changed"
+            );
+            return Ok(Some(receipt.invoice));
         }
-        let wallet = self.wallet().await?;
-        for invoice in unpaid {
-            if wallet
-                .lookup(&invoice.payment_hash)
-                .await?
-                .is_some_and(|p| {
-                    p.inbound
-                        && p.payment_hash.as_deref() == Some(invoice.payment_hash.as_str())
-                        && p.status == PaymentStatus::Succeeded
-                })
-            {
-                self.ledger.mark_received(&invoice.payment_hash)?;
+        let expiry = match kind {
+            MeteredInvoiceKind::Deposit => INPUT_INVOICE_EXPIRY_SECS,
+            MeteredInvoiceKind::Final => OUTPUT_INVOICE_EXPIRY_SECS,
+        };
+        let invoice = self
+            .wallet()
+            .await?
+            .create_invoice(Some(amount), expiry)
+            .await?;
+        ensure!(
+            invoice.amount_msat == Some(amount),
+            "wallet changed invoice amount"
+        );
+        self.ledger.record_metered_invoice(&MeteredInvoice {
+            request_id: request_id.into(),
+            peer: peer.into(),
+            kind,
+            invoice: invoice.clone(),
+            paid: false,
+        })?;
+        Ok(Some(invoice))
+    }
+
+    /// Refresh incoming facts for one request from the wallet. Observes only;
+    /// never treats expiry as settlement or failure.
+    pub async fn metered_refresh(&self, request_id: &str) -> Result<()> {
+        for receipt in self.ledger.metered_invoices(Some(request_id))? {
+            if !receipt.paid {
+                self.refresh_invoice(&receipt).await?;
             }
         }
         Ok(())
     }
 
-    /// The random request ID is a bearer recovery capability, allowing
-    /// recovery when the client's ephemeral mesh identity changes. The caller
-    /// validates the ID's shape.
-    pub async fn serve_recover(&self, id: &str) -> Result<ServeRecoverResponse> {
-        let (_, _, _, finished) = self.ledger.serving_account(id)?;
-        if !finished {
-            return Ok(ServeRecoverResponse::Pending);
+    /// Refresh every unpaid metered invoice. Used by periodic reconciliation
+    /// so a payment observed late still clears a strike.
+    pub async fn metered_refresh_all(&self) -> Result<()> {
+        let mut first_error = None;
+        for receipt in self.ledger.unpaid_metered_invoices()? {
+            if let Err(error) = self.refresh_invoice(&receipt).await {
+                first_error.get_or_insert(error);
+            }
         }
-        let receipts = self.ledger.receivables(Some(id))?;
-        if receipts.iter().any(|r| r.segment == 0) && !self.input_received(id).await? {
-            return Ok(ServeRecoverResponse::Pending);
+        first_error.map_or(Ok(()), Err)
+    }
+
+    async fn refresh_invoice(&self, receipt: &MeteredInvoice) -> Result<()> {
+        let Some(payment) = self
+            .wallet()
+            .await?
+            .lookup(&receipt.invoice.payment_hash)
+            .await?
+        else {
+            return Ok(());
+        };
+        crate::service::validate_payment_update(&payment, &receipt.invoice.payment_hash, true)?;
+        if payment.status == PaymentStatus::Succeeded {
+            ensure!(
+                payment.amount_msat >= receipt.invoice.amount_msat.context("amountless invoice")?,
+                "incoming underpayment"
+            );
+            self.ledger
+                .mark_metered_received(&receipt.invoice.payment_hash)?;
         }
-        Ok(ServeRecoverResponse::Complete {
-            output: self.output_invoice(id).await?,
-        })
+        Ok(())
+    }
+
+    /// Whether `peer` may be admitted without a deposit: it has settled a
+    /// request in this process's lifetime and carries no expired unpaid
+    /// invoice. Seller-owned and disposable; debt itself is durable.
+    pub async fn metered_trusted(&self, peer: &str) -> Result<bool> {
+        Ok(self.metered_standing.lock().await.contains(peer)
+            && !self
+                .ledger
+                .unpaid_metered_invoices()?
+                .iter()
+                .any(|r| r.peer == peer && r.invoice.expires_at_ms <= crate::now_ms()))
+    }
+
+    async fn note_settled(&self, peer: &str) {
+        let mut standing = self.metered_standing.lock().await;
+        if standing.len() >= STANDING_CACHE {
+            standing.clear();
+        }
+        standing.insert(peer.to_owned());
+    }
+}
+
+fn settled(payment: &Transaction) -> SettledReceived {
+    // A wallet that reports no amount reports 0; never claim a 0 credit.
+    SettledReceived {
+        credited_msat: (payment.amount_msat > 0).then_some(payment.amount_msat),
+        fee_msat: Some(payment.fee_msat),
     }
 }

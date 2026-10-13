@@ -10,9 +10,8 @@ use std::sync::Arc;
 
 use mesh_llm_payments_types::contract::{
     AdvertisedPricing, ArrivalResponse, AuthorizeRequest, CancelRequest, Empty, FinishRequest,
-    IdRequest, InvoiceRequest, OpError, OutputReceivableResponse, PayInputRequest,
-    RecordDeliveredRequest, RoutingBudgetRequest, ServeBeginRequest, ServeFinishRequest,
-    ServeInputInvoiceRequest, SettleOutputRequest, SettledReceived,
+    IdRequest, InvoiceRequest, OpError, PayInputRequest, RequestIdRequest, RoutingBudgetRequest,
+    ServeAdmitRequest, ServeSettleRequest, SettleOutputRequest, SettledReceived,
 };
 use mesh_llm_payments_types::engine::AdvertisedPrices;
 use mesh_llm_plugin::{
@@ -231,26 +230,53 @@ fn add_serving_ops(router: &mut OperationRouter, source: &ServiceSource) {
     add_op(
         router,
         source,
-        ops::SERVE_BEGIN,
-        "Check prices, wait out prior debt and open serving.",
-        |service, request: ServeBeginRequest| async move {
-            service.serve_begin(request).await.map(|()| Empty {})
+        ops::SERVE_ADMIT,
+        "Admit a metered request: refuse, quote a deposit, or admit without one.",
+        |service, request: ServeAdmitRequest| async move { service.serve_admit(request).await },
+    );
+    add_op(
+        router,
+        source,
+        ops::SERVE_DEPOSIT_CONFIRMED,
+        "Wait for the deposit to settle and claim the once-only dispatch.",
+        |service, request: RequestIdRequest| async move {
+            // Durable settlement continues even if the caller goes away.
+            tokio::spawn(async move { service.serve_deposit_confirmed(&request.request_id).await })
+                .await?
         },
     );
     add_op(
         router,
         source,
-        ops::SERVE_INPUT_INVOICE,
-        "Fix the output allowance and issue the input invoice.",
-        |service, request: ServeInputInvoiceRequest| async move {
-            service.serve_input_invoice(request).await
+        ops::SERVE_SETTLE,
+        "Bill the reported usage, apply the deposit and issue the final invoice.",
+        |service, request: ServeSettleRequest| async move { service.serve_settle(request).await },
+    );
+    add_op(
+        router,
+        source,
+        ops::SERVE_ABANDON,
+        "Close a request without usage: no bill, no invoice, no debt.",
+        |service, request: RequestIdRequest| async move {
+            service
+                .serve_abandon(&request.request_id)
+                .map(|()| Empty {})
+        },
+    );
+    add_op(
+        router,
+        source,
+        ops::SERVE_RECOVER,
+        "Answer a buyer's recovery probe with the stored bill.",
+        |service, request: RequestIdRequest| async move {
+            service.serve_recover(&request.request_id).await
         },
     );
     add_op(
         router,
         source,
         ops::AWAIT_ARRIVAL,
-        "Wait for receiver-side evidence of an input payment.",
+        "Wait for receiver-side evidence of an incoming payment.",
         |service, request: InvoiceRequest| async move {
             let claiming = service
                 .arrival(&request.invoice, crate::lifetimes::INPUT_ARRIVAL_WAIT)
@@ -274,48 +300,6 @@ fn add_serving_ops(router: &mut OperationRouter, source: &ServiceSource) {
                 fee_msat: Some(payment.fee_msat),
             })
         },
-    );
-    add_op(
-        router,
-        source,
-        ops::RECORD_DELIVERED,
-        "Raise the delivered-token watermark.",
-        |service, request: RecordDeliveredRequest| async move {
-            service
-                .ledger
-                .record_delivered_tokens(&request.id, request.tokens)
-                .map(|()| Empty {})
-        },
-    );
-    add_op(
-        router,
-        source,
-        ops::SERVE_FINISH,
-        "Record the final delivered-token watermark and close serving accounting atomically.",
-        |service, request: ServeFinishRequest| async move {
-            service
-                .ledger
-                .finish_serving_at(&request.id, request.tokens)
-                .map(|()| Empty {})
-        },
-    );
-    add_op(
-        router,
-        source,
-        ops::OUTPUT_RECEIVABLE,
-        "Issue or return the output invoice.",
-        |service, request: IdRequest| async move {
-            Ok(OutputReceivableResponse {
-                output: service.output_invoice(&request.id).await?,
-            })
-        },
-    );
-    add_op(
-        router,
-        source,
-        ops::SERVE_RECOVER,
-        "Answer a payer's recovery probe.",
-        |service, request: IdRequest| async move { service.serve_recover(&request.id).await },
     );
 }
 

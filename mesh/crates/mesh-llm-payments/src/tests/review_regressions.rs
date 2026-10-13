@@ -351,56 +351,6 @@ async fn already_paid_send_repairs_legacy_phantom_authorizations() -> Result<()>
 }
 
 #[tokio::test]
-async fn uninvoiced_debt_blocks_admission_after_crash_and_invoice_failure() -> Result<()> {
-    let dir = tempfile::tempdir()?;
-    let wallet = Arc::new(MockWallet::default());
-    let pricing = terms("debt", 1000).pricing;
-    {
-        let service = PaymentService::with_provider(dir.path(), wallet.clone())?;
-        service
-            .ledger
-            .begin_serving("debt", "debtor", &pricing, 8)?;
-        let input = super::recovery_boundaries::record_input(&service, "debt", "debtor")?;
-        service.ledger.mark_received(&input.payment_hash)?;
-        service.ledger.record_delivered_tokens("debt", 3)?;
-    }
-    let service = PaymentService::with_provider(dir.path(), wallet.clone())?;
-    assert!(
-        service
-            .ledger
-            .begin_serving("second", "debtor", &pricing, 8)
-            .is_err()
-    );
-    service
-        .ledger
-        .begin_serving("unrelated", "other", &pricing, 8)?;
-    wallet.invoice_unavailable.store(true, Ordering::SeqCst);
-    assert!(service.recover_output_debt().await.is_err());
-    assert!(
-        service
-            .ledger
-            .begin_serving("third", "debtor", &pricing, 8)
-            .is_err()
-    );
-    wallet.invoice_unavailable.store(false, Ordering::SeqCst);
-    service.recover_output_debt().await?;
-    let invoices = service.ledger.unpaid_invoices("debtor")?;
-    assert_eq!(invoices.len(), 1);
-    assert!(service.ledger.unpaid_invoices("other")?.is_empty());
-    assert!(
-        service
-            .ledger
-            .begin_serving("fourth", "debtor", &pricing, 8)
-            .is_err()
-    );
-    service.ledger.mark_received(&invoices[0].payment_hash)?;
-    service
-        .ledger
-        .begin_serving("settled", "debtor", &pricing, 8)?;
-    Ok(())
-}
-
-#[tokio::test]
 async fn failed_charge_does_not_release_an_uncertain_sibling() -> Result<()> {
     let dir = tempfile::tempdir()?;
     let wallet = Arc::new(MockWallet::default());

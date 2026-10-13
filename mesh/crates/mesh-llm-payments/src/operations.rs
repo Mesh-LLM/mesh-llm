@@ -51,11 +51,11 @@ impl PaymentService {
             .unwrap_or(0)
     }
 
-    /// Reconcile financial state only. One uncertain charge or unavailable
-    /// invoice must not block other debts, so those failures are ignored.
+    /// Reconcile financial state only. One uncertain charge or unreachable
+    /// wallet lookup must not block other debts, so those failures are ignored.
     pub async fn reconcile(&self) -> Result<ReconcileResponse> {
         let _ = self.reconcile_pending().await;
-        let _ = self.recover_output_debt().await;
+        let _ = self.metered_refresh_all().await;
         let approved = self
             .ledger
             .requests()?

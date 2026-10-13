@@ -44,8 +44,10 @@ pub struct PaymentService {
     wallet: OnceCell<Arc<dyn WalletProvider>>,
     factory: Arc<dyn crate::provisioning::WalletFactory>,
     payment_lock: Mutex<()>,
-    receivable_lock: Mutex<()>,
-    input_recovery_cursor: Mutex<i64>,
+    pub(crate) receivable_lock: Mutex<()>,
+    /// Buyers that settled a metered request in this process: admitted without
+    /// a deposit while they carry no expired unpaid invoice.
+    pub(crate) metered_standing: Mutex<std::collections::HashSet<String>>,
     /// Balance reads started by `prefetch`, consumed by `authorize`/`cancel`.
     pub(crate) prefetched:
         std::sync::Mutex<std::collections::HashMap<String, JoinHandle<Result<Balance>>>>,
@@ -78,7 +80,7 @@ impl PaymentService {
             .open(directory.join("service.lock"))?;
         fs2::FileExt::try_lock_exclusive(&process_lock)
             .context("payment service is already running; use its local API")?;
-        ledger.close_interrupted_serving()?;
+        ledger.close_interrupted_metered()?;
         ledger.close_abandoned_approvals()?;
         ledger.fail_unsubmitted_input_charges()?;
         ledger.finalize_terminal_requests()?;
@@ -89,7 +91,7 @@ impl PaymentService {
             factory,
             payment_lock: Mutex::new(()),
             receivable_lock: Mutex::new(()),
-            input_recovery_cursor: Mutex::new(0),
+            metered_standing: Mutex::default(),
             prefetched: Default::default(),
             ledger_only: false,
             _process_lock: process_lock,
@@ -274,109 +276,6 @@ impl PaymentService {
         first_error.map_or(Ok(()), Err)
     }
 
-    pub async fn recover_output_debt(&self) -> Result<()> {
-        let mut first_error = None;
-        // Input observation tasks do not survive restart, including requests
-        // with no output or with an output invoice already persisted.
-        let mut cursor = self.input_recovery_cursor.lock().await;
-        for (row, id) in self.ledger.unpaid_input_batch(*cursor)? {
-            *cursor = row;
-            if let Err(error) = self.input_received(&id).await {
-                first_error.get_or_insert(error);
-            }
-        }
-        drop(cursor);
-        for id in self.ledger.uninvoiced_output()? {
-            if let Err(error) = self.output_receivable(&id).await {
-                first_error.get_or_insert(error);
-            }
-        }
-        first_error.map_or(Ok(()), Err)
-    }
-
-    /// Refresh the durable input receipt without treating arrival or expiry as settlement.
-    pub async fn input_received(&self, id: &str) -> Result<bool> {
-        let Some(receipt) = self
-            .ledger
-            .receivables(Some(id))?
-            .into_iter()
-            .find(|r| r.segment == 0)
-        else {
-            return Ok(false);
-        };
-        if receipt.paid {
-            return Ok(true);
-        }
-        let lookup = self
-            .wallet()
-            .await?
-            .lookup(&receipt.invoice.payment_hash)
-            .await?;
-        let Some(payment) = lookup else {
-            // No payment ever reached this node: once the grace after expiry
-            // has passed, a zero-delivery request is abandoned, not debt.
-            self.ledger
-                .lapse_abandoned_input(id, &receipt.invoice, crate::now_ms())?;
-            return Ok(false);
-        };
-        validate_payment_update(&payment, &receipt.invoice.payment_hash, true)?;
-        // Past expiry plus the grace, zero-delivery prefill stops blocking the
-        // peer whatever the wallet reports short of `Succeeded`: an issued but
-        // unpaid invoice reads as `Pending`. This is a policy choice, not proof
-        // that no accepted payment is still settling.
-        if payment.status != PaymentStatus::Succeeded {
-            self.ledger
-                .lapse_abandoned_input(id, &receipt.invoice, crate::now_ms())?;
-        }
-        if payment.status != PaymentStatus::Succeeded {
-            return Ok(false);
-        }
-        self.ledger.mark_received(&receipt.invoice.payment_hash)?;
-        Ok(true)
-    }
-
-    pub async fn output_receivable(
-        &self,
-        id: &str,
-    ) -> Result<Option<crate::ledger::receivables::Receivable>> {
-        let _guard = self.receivable_lock.lock().await;
-        let (peer, pricing, tokens, finished) = self.ledger.serving_account(id)?;
-        ensure!(finished, "generation is still active");
-        if tokens == 0 {
-            return Ok(None);
-        }
-        ensure!(
-            self.input_received(id).await?,
-            "input settlement is not confirmed"
-        );
-        if let Some(receipt) = self
-            .ledger
-            .receivables(Some(id))?
-            .into_iter()
-            .find(|r| r.segment == 1)
-        {
-            return Ok(Some(receipt));
-        }
-        let invoice = self
-            .wallet()
-            .await?
-            .create_invoice(
-                Some(pricing.output_charge(tokens)?),
-                crate::lifetimes::OUTPUT_INVOICE_EXPIRY_SECS,
-            )
-            .await?;
-        let receipt = crate::ledger::receivables::Receivable {
-            request_id: id.into(),
-            peer,
-            segment: 1,
-            invoice,
-            tokens,
-            paid: false,
-        };
-        self.ledger.record_receivable(&receipt)?;
-        Ok(Some(receipt))
-    }
-
     /// Wait for the earliest receiver-side evidence that this incoming payment
     /// has arrived, which is the safe point to start work that has not yet been
     /// delivered. It is **not** a settlement record: the caller must still
@@ -476,7 +375,11 @@ impl PaymentService {
     }
 }
 
-fn validate_payment_update(payment: &Transaction, hash: &str, inbound: bool) -> Result<()> {
+pub(crate) fn validate_payment_update(
+    payment: &Transaction,
+    hash: &str,
+    inbound: bool,
+) -> Result<()> {
     ensure!(
         payment.payment_hash.as_deref() == Some(hash),
         "wallet returned a different payment hash"

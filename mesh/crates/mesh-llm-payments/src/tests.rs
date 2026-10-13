@@ -17,6 +17,8 @@ use crate::{
 
 mod blocking;
 mod failure_boundaries;
+mod metered_service;
+mod metered_settlement;
 mod payment_notifications;
 mod provisioning;
 mod recovery_boundaries;
@@ -112,9 +114,11 @@ impl WalletProvider for MockWallet {
             !self.invoice_unavailable.load(Ordering::SeqCst),
             "invoice service unavailable"
         );
-        self.invoice_expiries.lock().unwrap().push(expiry_secs);
+        let mut expiries = self.invoice_expiries.lock().unwrap();
+        expiries.push(expiry_secs);
+        // Distinct hashes per issued invoice, as a real wallet produces.
         Ok(invoice_with_expiry(
-            200,
+            200 + u8::try_from(expiries.len()).unwrap(),
             amount.unwrap_or(1000),
             u64::from(expiry_secs),
         ))
@@ -380,29 +384,6 @@ fn invoices_reject_peer_metadata_substitution_and_amount_changes() {
     );
     invoice.payment_hash = "00".repeat(32);
     assert!(invoice.validate_payment(100, crate::now_ms()).is_err());
-}
-
-#[test]
-fn committed_output_debt_survives_process_restart() {
-    let dir = tempfile::tempdir().unwrap();
-    let price = terms("one", 1000).pricing;
-    {
-        let service =
-            PaymentService::with_provider(dir.path(), Arc::new(MockWallet::default())).unwrap();
-        service
-            .ledger
-            .begin_serving("one", "peer", &price, 2)
-            .unwrap();
-        service.ledger.record_delivered_tokens("one", 2).unwrap();
-        service.ledger.record_delivered_tokens("one", 2).unwrap();
-        assert!(service.ledger.record_delivered_tokens("one", 3).is_err());
-    }
-    let service =
-        PaymentService::with_provider(dir.path(), Arc::new(MockWallet::default())).unwrap();
-    let (_, _, tokens, finished) = service.ledger.serving_account("one").unwrap();
-    assert_eq!(tokens, 2);
-    assert!(finished);
-    assert!(service.ledger.record_delivered_tokens("one", 3).is_err());
 }
 
 #[tokio::test]
