@@ -73,6 +73,9 @@ mod protected_native_producer;
 #[path = "ci_runner_cache_contract/authority_callers.rs"]
 mod authority_callers;
 
+#[path = "ci_runner_cache_contract/product_native_producer.rs"]
+mod product_native_producer;
+
 #[path = "ci_runner_cache_contract/safetensors_smoke/mod.rs"]
 mod safetensors_smoke;
 

@@ -26,6 +26,7 @@ pub(super) fn check(workflows: &BTreeMap<String, Node>) -> DynResult<()> {
     lane_handoffs(lane)?;
     source_identity(lane)?;
     protected_authority(lane)?;
+    product_automation(lane)?;
     diagnostic_summary(lane)?;
     for (_, name) in SLICES {
         policy(document(workflows, name)?)?;
@@ -36,12 +37,13 @@ pub(super) fn check(workflows: &BTreeMap<String, Node>) -> DynResult<()> {
         "pr_ci_canary.yml",
         "ci-pr-canary-lane.yml",
         "protected-automation-artifact.yml",
+        "product-automation-artifact.yml",
     ]
     .into_iter()
     .chain(SLICES.iter().map(|(_, name)| *name))
     .collect::<BTreeSet<_>>();
     if visited != expected {
-        return Err("PR canary must retain its seven-workflow diagnostic closure".into());
+        return Err("PR canary must retain its eight-workflow diagnostic closure".into());
     }
     Ok(())
 }
@@ -202,6 +204,35 @@ fn protected_authority(lane: &Node) -> DynResult<()> {
     }
     Ok(())
 }
+fn product_automation(lane: &Node) -> DynResult<()> {
+    let producer = h::job(lane, "product_automation_linux_x64")?;
+    h::needs(producer, &["plan"])?;
+    h::condition(producer, "${{ needs.plan.result == 'success' }}")?;
+    h::binding(
+        producer,
+        "uses",
+        "./.github/workflows/product-automation-artifact.yml",
+    )?;
+    let inputs = h::member(producer, "with")?;
+    h::binding(inputs, "platform", "linux-x64")?;
+    h::binding(inputs, "lane", "linux")?;
+    h::binding(inputs, "product_source_sha", "${{ inputs.merge_sha }}")?;
+    for job in ["hosts", "native_runtime", "product"] {
+        let consumer = h::job(lane, job)?;
+        if !h::member(consumer, "needs")?
+            .list()
+            .contains(&"product_automation_linux_x64")
+        {
+            return Err("PR canary consumer requires its product-source automation".into());
+        }
+        h::binding(
+            h::member(consumer, "with")?,
+            "product_automation",
+            "${{ needs.product_automation_linux_x64.outputs.identity_json }}",
+        )?;
+    }
+    Ok(())
+}
 fn source_identity(lane: &Node) -> DynResult<()> {
     let steps = h::steps(h::job(lane, "plan")?)?;
     let checkout = h::checkout(steps, "${{ inputs.merge_sha }}", None)?;
@@ -276,6 +307,7 @@ fn diagnostic_summary(lane: &Node) -> DynResult<()> {
         "plan",
         "authority_source",
         "authority_linux_x64",
+        "product_automation_linux_x64",
         "ui_artifact",
         "hosts",
         "native_runtime",
@@ -293,6 +325,7 @@ fn diagnostic_summary(lane: &Node) -> DynResult<()> {
         ("PLAN_RESULT", "plan"),
         ("AUTHORITY_SOURCE_RESULT", "authority_source"),
         ("AUTHORITY_NATIVE_RESULT", "authority_linux_x64"),
+        ("PRODUCT_AUTOMATION_RESULT", "product_automation_linux_x64"),
         ("UI_RESULT", "ui_artifact"),
         ("HOST_RESULT", "hosts"),
         ("RUNTIME_RESULT", "native_runtime"),

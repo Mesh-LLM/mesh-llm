@@ -42,6 +42,7 @@ pub(crate) fn lane_jobs(lane: &str) -> &'static [&'static str] {
         "linux" => &[
             "authority_source",
             "authority_linux_x64",
+            "product_automation_linux_x64",
             "ui_artifact",
             "static_abi",
             "rust_tests",
@@ -56,6 +57,7 @@ pub(crate) fn lane_jobs(lane: &str) -> &'static [&'static str] {
             "authority_source",
             "authority_linux_x64",
             "authority_macos_arm64",
+            "product_automation_macos_arm64",
             "validate_plan",
             "ui_artifact",
             "hosts",
@@ -70,6 +72,7 @@ pub(crate) fn lane_jobs(lane: &str) -> &'static [&'static str] {
             "authority_source",
             "authority_linux_x64",
             "authority_windows_x64",
+            "product_automation_windows_x64",
             "ui_artifact",
             "hosts",
             "native_runtimes",

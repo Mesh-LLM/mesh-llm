@@ -2,7 +2,8 @@ use super::{LocalAllocation, create, current_user_sid};
 use std::os::windows::ffi::OsStrExt;
 use std::ptr::{null_mut, slice_from_raw_parts};
 use windows_sys::Win32::Security::Authorization::{
-    ConvertSecurityDescriptorToStringSecurityDescriptorW, GetNamedSecurityInfoW, SDDL_REVISION_1,
+    ConvertSecurityDescriptorToStringSecurityDescriptorW,
+    ConvertStringSecurityDescriptorToSecurityDescriptorW, GetNamedSecurityInfoW, SDDL_REVISION_1,
     SE_FILE_OBJECT,
 };
 use windows_sys::Win32::Security::DACL_SECURITY_INFORMATION;
@@ -32,6 +33,31 @@ fn migration_lifecycle_windows_directory_has_only_current_user_inheritable_dacl(
     };
     assert_eq!(status, 0);
     let descriptor = LocalAllocation(descriptor);
+    // Windows may serialize a well-known SID using its SDDL alias, such as LA.
+    // Canonicalize the expected descriptor without relaxing any DACL requirement.
+    let expected = canonical_sddl(&format!("D:P(A;OICI;FA;;;{sid})"));
+    assert_eq!(descriptor_sddl(&descriptor), expected);
+}
+
+fn canonical_sddl(sddl: &str) -> String {
+    let sddl: Vec<u16> = sddl.encode_utf16().chain(Some(0)).collect();
+    let mut descriptor = null_mut();
+    // SAFETY: terminated SDDL and writable allocation output; the API allocates the descriptor.
+    assert_ne!(
+        unsafe {
+            ConvertStringSecurityDescriptorToSecurityDescriptorW(
+                sddl.as_ptr(),
+                SDDL_REVISION_1,
+                &mut descriptor,
+                null_mut(),
+            )
+        },
+        0
+    );
+    descriptor_sddl(&LocalAllocation(descriptor))
+}
+
+fn descriptor_sddl(descriptor: &LocalAllocation) -> String {
     let mut text = null_mut();
     let mut length = 0;
     // SAFETY: descriptor is owned and initialized; conversion supplies allocated UTF-16 and its size.
@@ -50,6 +76,5 @@ fn migration_lifecycle_windows_directory_has_only_current_user_inheritable_dacl(
     let _text = LocalAllocation(text.cast());
     // SAFETY: successful conversion returned length UTF-16 units including the terminator.
     let units = unsafe { &*slice_from_raw_parts(text, usize::try_from(length).unwrap()) };
-    let actual = String::from_utf16(units.strip_suffix(&[0]).unwrap_or(units)).unwrap();
-    assert_eq!(actual, format!("D:P(A;OICI;FA;;;{sid})"));
+    String::from_utf16(units.strip_suffix(&[0]).unwrap_or(units)).unwrap()
 }

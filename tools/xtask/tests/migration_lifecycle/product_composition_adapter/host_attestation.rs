@@ -74,19 +74,26 @@ metadata)
   ;;
 xtool)
   shift
-  if [ "$1" = repository ]; then
-    [ "$#" -eq 2 ] && [ "$2" = cargo-target-directory ] || exit 95
-    exec "$PRODUCT_REAL_XTASK" "$@"
-  fi
-  [ "$#" -eq 7 ] && [ "$1" = native ] && [ "$2" = verify-host-dependencies ] || exit 95
-  [ "$3" = host-produced/mesh-llm ] && [ "$4" = --report ] || exit 95
+  [ "$#" -eq 2 ] && [ "$1" = repository ] && [ "$2" = cargo-target-directory ] || exit 95
+  exec "$PRODUCT_REAL_XTASK" "$@"
+  ;;
+*) exit 95 ;;
+esac
+"#,
+    );
+    executable(
+        &fixture.root.join("bin/automation"),
+        r#"#!/bin/sh
+if [ "$1" = native ] && [ "$2" = verify-host-dependencies ]; then
+  [ "$#" -eq 7 ] && [ "$3" = host-produced/mesh-llm ] && [ "$4" = --report ] || exit 95
   [ "$5" = host-produced/host-imports.json ] && [ "$6" = --max-glibc ] && [ "$7" = declared ] || exit 95
   printf 'producer imports\n' >> "$PRODUCT_EVENTS"
   [ "$PRODUCER_FAILURE" != imports ] || exit 73
   cp inputs/host/host-imports.json "$5" || exit 95
-  ;;
-*) exit 95 ;;
-esac
+  exit 0
+fi
+printf '%s %s\n' "$1" "$2" >> "$PRODUCT_EVENTS"
+exec "$PRODUCT_REAL_XTASK" "$@"
 "#,
     );
     fs::write(fixture.root.join("signing-key"), b"inert observer key").unwrap();

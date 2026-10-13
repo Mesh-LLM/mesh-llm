@@ -44,7 +44,8 @@ fn graph_skippy_seed_restore_verify_publish_keeps_exact_trusted_revision_and_no_
     let guard = text(verify, "if").unwrap();
     assert!(!guard.contains("cache-hit"));
     let run = text(verify, "run").unwrap();
-    assert!(run.contains("cargo xtool models resolve"));
+    assert!(run.contains("\"$MESH_LLM_AUTOMATION_BIN\" models resolve"));
+    assert!(!run.contains("cargo xtool"));
     assert!(run.contains("ci/model-artifacts/manifests/skippy-correctness.json"));
     assert!(run.contains("--verify-root \"$RUNNER_TEMP/skippy-correctness-model\""));
     let guard = text(save, "if").unwrap();

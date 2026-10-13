@@ -11,6 +11,7 @@
       "authority_source",
       "hosts",
       "native_runtimes",
+      "product_automation_linux_x64",
       "product_smoke",
       "runtime_product",
       "ui_artifact"
@@ -22,6 +23,7 @@
       "authority_windows_x64",
       "hosts",
       "native_runtimes",
+      "product_automation_windows_x64",
       "runtime_product",
       "ui_artifact"
     ]
@@ -38,6 +40,7 @@
       "authority_source",
       "hosts",
       "native_runtimes",
+      "product_automation_linux_x64",
       "product_smoke",
       "runtime_product",
       "rust_tests",
@@ -51,6 +54,7 @@
       "authority_windows_x64",
       "hosts",
       "native_runtimes",
+      "product_automation_windows_x64",
       "runtime_product",
       "ui_artifact"
     ]
@@ -65,6 +69,7 @@
     "linux": [
       "authority_linux_x64",
       "authority_source",
+      "product_automation_linux_x64",
       "rust_tests",
       "static_abi"
     ],
@@ -85,6 +90,7 @@
       "hosts",
       "kotlin_sdk_input",
       "native_runtimes",
+      "product_automation_linux_x64",
       "product_smoke",
       "runtime_product",
       "sdk",
@@ -98,6 +104,7 @@
       "hosts",
       "native_runtimes",
       "platform_checks",
+      "product_automation_macos_arm64",
       "product_smoke",
       "runtime_product",
       "sdk",
@@ -112,6 +119,7 @@
       "hosts",
       "native_runtimes",
       "platform_checks",
+      "product_automation_windows_x64",
       "runtime_product",
       "ui_artifact"
     ]
@@ -134,6 +142,7 @@
       "hosts",
       "kotlin_sdk_input",
       "native_runtimes",
+      "product_automation_linux_x64",
       "product_smoke",
       "runtime_product",
       "rust_tests",
@@ -148,6 +157,7 @@
       "hosts",
       "native_runtimes",
       "platform_checks",
+      "product_automation_macos_arm64",
       "product_smoke",
       "runtime_product",
       "sdk",
@@ -162,6 +172,7 @@
       "hosts",
       "native_runtimes",
       "platform_checks",
+      "product_automation_windows_x64",
       "runtime_product",
       "ui_artifact"
     ]
@@ -184,6 +195,7 @@
       "hosts",
       "kotlin_sdk_input",
       "native_runtimes",
+      "product_automation_linux_x64",
       "product_smoke",
       "runtime_product",
       "rust_tests",
@@ -198,6 +210,7 @@
       "hosts",
       "native_runtimes",
       "platform_checks",
+      "product_automation_macos_arm64",
       "product_smoke",
       "runtime_product",
       "sdk",
@@ -212,6 +225,7 @@
       "hosts",
       "native_runtimes",
       "platform_checks",
+      "product_automation_windows_x64",
       "runtime_product",
       "ui_artifact"
     ]
@@ -234,6 +248,7 @@
       "hosts",
       "kotlin_sdk_input",
       "native_runtimes",
+      "product_automation_linux_x64",
       "product_smoke",
       "runtime_product",
       "rust_tests",
@@ -248,6 +263,7 @@
       "hosts",
       "native_runtimes",
       "platform_checks",
+      "product_automation_macos_arm64",
       "product_smoke",
       "runtime_product",
       "sdk",
@@ -262,6 +278,7 @@
       "hosts",
       "native_runtimes",
       "platform_checks",
+      "product_automation_windows_x64",
       "runtime_product",
       "ui_artifact"
     ]
@@ -296,6 +313,7 @@
     "linux": [
       "authority_linux_x64",
       "authority_source",
+      "product_automation_linux_x64",
       "static_abi"
     ],
     "macos": [],
@@ -319,6 +337,7 @@
       "hosts",
       "kotlin_sdk_input",
       "native_runtimes",
+      "product_automation_linux_x64",
       "product_smoke",
       "runtime_product",
       "rust_tests",
@@ -333,6 +352,7 @@
       "hosts",
       "native_runtimes",
       "platform_checks",
+      "product_automation_macos_arm64",
       "product_smoke",
       "runtime_product",
       "sdk",
@@ -347,6 +367,7 @@
       "hosts",
       "native_runtimes",
       "platform_checks",
+      "product_automation_windows_x64",
       "runtime_product",
       "ui_artifact"
     ]
@@ -369,6 +390,7 @@
       "hosts",
       "kotlin_sdk_input",
       "native_runtimes",
+      "product_automation_linux_x64",
       "product_smoke",
       "runtime_product",
       "rust_tests",
@@ -383,6 +405,7 @@
       "hosts",
       "native_runtimes",
       "platform_checks",
+      "product_automation_macos_arm64",
       "product_smoke",
       "runtime_product",
       "sdk",
@@ -397,6 +420,7 @@
       "hosts",
       "native_runtimes",
       "platform_checks",
+      "product_automation_windows_x64",
       "runtime_product",
       "ui_artifact"
     ]
@@ -419,6 +443,7 @@
       "hosts",
       "kotlin_sdk_input",
       "native_runtimes",
+      "product_automation_linux_x64",
       "product_smoke",
       "runtime_product",
       "rust_tests",
@@ -433,6 +458,7 @@
       "hosts",
       "native_runtimes",
       "platform_checks",
+      "product_automation_macos_arm64",
       "product_smoke",
       "runtime_product",
       "sdk",
@@ -447,6 +473,7 @@
       "hosts",
       "native_runtimes",
       "platform_checks",
+      "product_automation_windows_x64",
       "runtime_product",
       "ui_artifact"
     ]
@@ -469,6 +496,7 @@
       "hosts",
       "kotlin_sdk_input",
       "native_runtimes",
+      "product_automation_linux_x64",
       "product_smoke",
       "runtime_product",
       "rust_tests",
@@ -483,6 +511,7 @@
       "hosts",
       "native_runtimes",
       "platform_checks",
+      "product_automation_macos_arm64",
       "product_smoke",
       "runtime_product",
       "sdk",
@@ -497,6 +526,7 @@
       "hosts",
       "native_runtimes",
       "platform_checks",
+      "product_automation_windows_x64",
       "runtime_product",
       "ui_artifact"
     ]
@@ -519,6 +549,7 @@
       "hosts",
       "kotlin_sdk_input",
       "native_runtimes",
+      "product_automation_linux_x64",
       "product_smoke",
       "runtime_product",
       "rust_tests",
@@ -533,6 +564,7 @@
       "hosts",
       "native_runtimes",
       "platform_checks",
+      "product_automation_macos_arm64",
       "product_smoke",
       "runtime_product",
       "sdk",
@@ -547,6 +579,7 @@
       "hosts",
       "native_runtimes",
       "platform_checks",
+      "product_automation_windows_x64",
       "runtime_product",
       "ui_artifact"
     ]
@@ -587,6 +620,7 @@
       "authority_source",
       "hosts",
       "native_runtimes",
+      "product_automation_linux_x64",
       "product_smoke",
       "runtime_product",
       "rust_tests",
@@ -601,6 +635,7 @@
       "hosts",
       "native_runtimes",
       "platform_checks",
+      "product_automation_windows_x64",
       "runtime_product",
       "ui_artifact"
     ]
@@ -617,6 +652,7 @@
       "authority_source",
       "hosts",
       "native_runtimes",
+      "product_automation_linux_x64",
       "product_smoke",
       "runtime_product",
       "rust_tests",
@@ -667,6 +703,7 @@
       "authority_source",
       "hosts",
       "native_runtimes",
+      "product_automation_linux_x64",
       "product_smoke",
       "runtime_product",
       "rust_tests",
@@ -680,6 +717,7 @@
       "hosts",
       "native_runtimes",
       "platform_checks",
+      "product_automation_macos_arm64",
       "product_smoke",
       "runtime_product",
       "ui_artifact",
@@ -699,6 +737,7 @@
       "authority_source",
       "hosts",
       "native_runtimes",
+      "product_automation_linux_x64",
       "product_smoke",
       "runtime_product",
       "rust_tests",
@@ -713,6 +752,7 @@
       "hosts",
       "native_runtimes",
       "platform_checks",
+      "product_automation_windows_x64",
       "runtime_product",
       "ui_artifact"
     ]
@@ -738,6 +778,7 @@
     "linux": [
       "authority_linux_x64",
       "authority_source",
+      "product_automation_linux_x64",
       "rust_tests",
       "static_abi"
     ],
@@ -758,6 +799,7 @@
     "linux": [
       "authority_linux_x64",
       "authority_source",
+      "product_automation_linux_x64",
       "rust_tests",
       "static_abi"
     ],
@@ -774,6 +816,7 @@
     "linux": [
       "authority_linux_x64",
       "authority_source",
+      "product_automation_linux_x64",
       "rust_tests",
       "static_abi"
     ],
@@ -802,6 +845,7 @@
       "hosts",
       "kotlin_sdk_input",
       "native_runtimes",
+      "product_automation_linux_x64",
       "product_smoke",
       "runtime_product",
       "rust_tests",
@@ -816,6 +860,7 @@
       "hosts",
       "native_runtimes",
       "platform_checks",
+      "product_automation_macos_arm64",
       "product_smoke",
       "runtime_product",
       "sdk",
@@ -830,6 +875,7 @@
       "hosts",
       "native_runtimes",
       "platform_checks",
+      "product_automation_windows_x64",
       "runtime_product",
       "ui_artifact"
     ]
@@ -846,6 +892,7 @@
       "authority_source",
       "hosts",
       "native_runtimes",
+      "product_automation_linux_x64",
       "product_smoke",
       "runtime_product",
       "rust_tests",
@@ -871,6 +918,7 @@
       "authority_source",
       "hosts",
       "native_runtimes",
+      "product_automation_linux_x64",
       "product_smoke",
       "runtime_product",
       "rust_tests",
@@ -899,6 +947,7 @@
       "authority_source",
       "hosts",
       "native_runtimes",
+      "product_automation_linux_x64",
       "runtime_product",
       "sdk",
       "ui_artifact"
@@ -909,6 +958,7 @@
       "authority_source",
       "hosts",
       "native_runtimes",
+      "product_automation_macos_arm64",
       "runtime_product",
       "sdk",
       "swift_sdk_input",
@@ -929,6 +979,7 @@
       "authority_source",
       "hosts",
       "native_runtimes",
+      "product_automation_linux_x64",
       "product_smoke",
       "runtime_product",
       "rust_tests",
@@ -954,6 +1005,7 @@
       "authority_source",
       "hosts",
       "native_runtimes",
+      "product_automation_linux_x64",
       "product_smoke",
       "runtime_product",
       "rust_tests",
@@ -1003,6 +1055,7 @@
     "linux": [
       "authority_linux_x64",
       "authority_source",
+      "product_automation_linux_x64",
       "rust_tests",
       "static_abi"
     ],

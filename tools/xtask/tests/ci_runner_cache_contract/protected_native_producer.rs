@@ -301,7 +301,7 @@ fn native_upload_scopes_ci_artifacts_and_initializes_protected_macos_without_cha
         .unwrap();
     assert_eq!(
         text(prepare, "if"),
-        "runner.os == 'Windows' || inputs.runner-profile == 'hosted-bare' || (runner.os == 'macOS' && inputs.source-profile == 'protected-clean')"
+        "runner.os == 'Windows' || inputs.runner-profile == 'hosted-bare' || (runner.os == 'macOS' && (inputs.source-profile == 'protected-clean' || inputs.source-profile == 'product-clean'))"
     );
     let upload = steps
         .iter()
@@ -315,7 +315,7 @@ fn native_upload_scopes_ci_artifacts_and_initializes_protected_macos_without_cha
     );
     assert_eq!(
         text(upload, "name"),
-        "automation-${{ runner.os }}-${{ runner.arch }}-${{ inputs.source_sha }}${{ inputs.ci-lane != '' && format('-{0}', inputs.ci-lane) || '' }}"
+        "automation-${{ inputs.source-profile == 'product-clean' && 'product-' || '' }}${{ runner.os }}-${{ runner.arch }}-${{ inputs.source_sha }}${{ inputs.ci-lane != '' && format('-{0}', inputs.ci-lane) || '' }}"
     );
     let admission = text(&steps[0], "run");
     for lane in [

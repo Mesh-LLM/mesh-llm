@@ -7,6 +7,7 @@ fn actual() -> BTreeMap<String, Node> {
         "pr_ci_canary.yml",
         "ci-pr-canary-lane.yml",
         "protected-automation-artifact.yml",
+        "product-automation-artifact.yml",
     ]
     .into_iter()
     .chain(SLICES.iter().map(|(_, name)| *name))
@@ -35,7 +36,7 @@ fn scalar(value: &str) -> Node {
     Node::Scalar(value.into())
 }
 #[test]
-fn actual_pr_canary_retains_credential_free_seven_workflow_closure() {
+fn actual_pr_canary_retains_credential_free_eight_workflow_closure() {
     check(&actual()).unwrap();
 }
 #[test]
@@ -185,7 +186,7 @@ fn immutable_merge_identity_and_bounded_summary_cannot_be_dropped() {
     for (from, to) in [
         ("name: Canary / CI", "name: Unbound result"),
         (
-            "[plan, ui_artifact, hosts, native_runtime, product, authority_source, authority_linux_x64]",
+            "[plan, ui_artifact, hosts, native_runtime, product, authority_source, authority_linux_x64, product_automation_linux_x64]",
             "[plan, hosts]",
         ),
         ("[[ \"$PRODUCT_RESULT\" == success ]]", "true"),
@@ -227,6 +228,15 @@ fn protected_native_automation_cannot_switch_source_platform_or_skip_summary() {
             "authority_linux_x64: ${{ inputs.merge_sha }}",
         ),
         ("[[ \"$AUTHORITY_NATIVE_RESULT\" == success ]]", "true"),
+        ("[[ \"$PRODUCT_AUTOMATION_RESULT\" == success ]]", "true"),
+        (
+            "product_source_sha: ${{ inputs.merge_sha }}",
+            "product_source_sha: ${{ inputs.head_sha }}",
+        ),
+        (
+            "product_automation: ${{ needs.product_automation_linux_x64.outputs.identity_json }}\n      source_sha: ${{ inputs.merge_sha }}\n      original_event_name: pull_request\n      force_hosted: true\n      runtime_matrix: ${{ needs.plan.outputs.product_matrix }}",
+            "product_automation: ''\n      source_sha: ${{ inputs.merge_sha }}\n      original_event_name: pull_request\n      force_hosted: true\n      runtime_matrix: ${{ needs.plan.outputs.product_matrix }}",
+        ),
         (
             "source_sha=\"$(git rev-parse HEAD)\"",
             "source_sha=\"unbound\"",

@@ -114,6 +114,61 @@ esac
 
 #[cfg(unix)]
 #[test]
+fn hosted_cache_hit_runs_the_restored_binary_and_never_invokes_cargo() -> TestResult {
+    use std::os::unix::fs::PermissionsExt;
+
+    let sandbox = tempfile::tempdir()?;
+    let canonical = sandbox.path().canonicalize()?;
+    let release = sandbox.path().join("target/release");
+    fs::create_dir_all(&release)?;
+    let cached = release.join("xtask");
+    fs::write(
+        &cached,
+        "#!/bin/bash\nset -euo pipefail\ntest \"$*\" = 'automation bootstrap'\nprintf 'binary_path=%s\\ntarget_directory=%s\\n' \"$PWD/target/release/xtask\" \"$PWD/target\"\n",
+    )?;
+    fs::set_permissions(&cached, fs::Permissions::from_mode(0o755))?;
+    let cargo = sandbox.path().join("cargo");
+    fs::write(&cargo, "#!/bin/sh\nexit 99\n")?;
+    fs::set_permissions(&cargo, fs::Permissions::from_mode(0o755))?;
+    let action = fs::read_to_string(root().join(".github/actions/prepare-automation/action.yml"))?;
+    let body = script(&action, "- name: Build automation tool\n")?;
+    for (hit, expect_success) in [("true", true), ("false", false), ("", false)] {
+        let output_file = sandbox.path().join(format!("output-{hit}"));
+        let environment_file = sandbox.path().join(format!("environment-{hit}"));
+        let output = Command::new("/bin/bash")
+            .args(["-c", &body])
+            .current_dir(sandbox.path())
+            .env(
+                "PATH",
+                format!("{}:/usr/bin:/bin", sandbox.path().display()),
+            )
+            .env("AUTOMATION_PROFILE", "hosted-bare")
+            .env("AUTOMATION_CACHE_HIT", hit)
+            .env("RUNNER_TEMP", sandbox.path())
+            .env("GITHUB_OUTPUT", &output_file)
+            .env("GITHUB_ENV", &environment_file)
+            .output()?;
+        assert_eq!(output.status.success(), expect_success, "cache-hit={hit:?}");
+        if expect_success {
+            assert_eq!(
+                fs::read_to_string(&environment_file)?,
+                format!(
+                    "MESH_LLM_AUTOMATION_BIN={}/target/release/xtask\n",
+                    canonical.display()
+                )
+            );
+        } else {
+            assert!(
+                !environment_file.exists(),
+                "a miss must reach the cargo build"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
 fn package_action_consumes_prepared_binary_without_compilation() -> TestResult {
     use std::os::unix::fs::PermissionsExt;
 

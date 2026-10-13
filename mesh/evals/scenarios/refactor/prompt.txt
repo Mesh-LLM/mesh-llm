@@ -1,9 +1,0 @@
-Read config.py in this directory. It works but it's repetitive and hard to maintain. Refactor it to be clean and DRY:
-
-- Group related config into dataclasses or named sections
-- Reduce the repetitive os.environ.get pattern
-- Keep the validation logic but make it cleaner
-- Keep backward compatibility (same env var names, same defaults)
-- Add type hints
-
-Edit config.py directly.

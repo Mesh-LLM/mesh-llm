@@ -9,11 +9,11 @@ inputs:
     required: false
     default: image
   source-profile:
-    description: Closed source claim; release-prepared preserves release checkout identity, protected-clean requires a clean source tree.
+    description: Closed source claim; release-prepared preserves release checkout identity, protected-clean requires a clean protected source tree, product-clean requires a clean tree at the exact product source SHA and claims no protected authority.
     required: false
     default: release-prepared
   ci-lane:
-    description: Optional closed CI artifact scope, quality, website, linux, macos, or windows; requires protected-clean source.
+    description: Optional closed CI artifact scope, quality, website, linux, macos, or windows; requires protected-clean or product-clean source.
     required: false
     default: ''
 outputs:
@@ -41,7 +41,7 @@ runs:
         case "${AUTOMATION_CI_LANE:-}" in
           '') ;;
           quality|website|linux|macos|windows)
-            test "$AUTOMATION_SOURCE_PROFILE" = protected-clean || exit 1
+            case "$AUTOMATION_SOURCE_PROFILE" in protected-clean|product-clean) ;; *) exit 1 ;; esac
             ;;
           *) echo "unsupported automation CI lane" >&2; exit 1 ;;
         esac
@@ -49,7 +49,7 @@ runs:
         test "$(git rev-parse HEAD)" = "$AUTOMATION_SOURCE_SHA" || exit 1
         case "$AUTOMATION_SOURCE_PROFILE" in
           release-prepared) test "$AUTOMATION_PROFILE" = image || exit 1 ;;
-          protected-clean)
+          protected-clean|product-clean)
             source_status="$(git status --porcelain --untracked-files=normal)" || exit 1
             test -z "$source_status" || exit 1
             ;;
@@ -61,10 +61,11 @@ runs:
         esac
     - name: Prepare producer automation
       id: prepare
-      if: runner.os == 'Windows' || inputs.runner-profile == 'hosted-bare' || (runner.os == 'macOS' && inputs.source-profile == 'protected-clean')
+      if: runner.os == 'Windows' || inputs.runner-profile == 'hosted-bare' || (runner.os == 'macOS' && (inputs.source-profile == 'protected-clean' || inputs.source-profile == 'product-clean'))
       uses: ./.github/actions/prepare-automation
       with:
         runner-profile: ${{ inputs.runner-profile }}
+        reuse-hosted-binary: ${{ inputs.source-profile != 'protected-clean' && 'true' || 'false' }}
     - name: Build and stage automation
       id: stage
       shell: bash
@@ -79,7 +80,7 @@ runs:
         case "${AUTOMATION_CI_LANE:-}" in
           '') ;;
           quality|website|linux|macos|windows)
-            test "$AUTOMATION_SOURCE_PROFILE" = protected-clean || exit 1
+            case "$AUTOMATION_SOURCE_PROFILE" in protected-clean|product-clean) ;; *) exit 1 ;; esac
             ;;
           *) echo "unsupported automation CI lane" >&2; exit 1 ;;
         esac
@@ -87,7 +88,7 @@ runs:
         test "$(git rev-parse HEAD)" = "$AUTOMATION_SOURCE_SHA" || exit 1
         case "$AUTOMATION_SOURCE_PROFILE" in
           release-prepared) test "$AUTOMATION_PROFILE" = image || exit 1 ;;
-          protected-clean)
+          protected-clean|product-clean)
             source_status="$(git status --porcelain --untracked-files=normal)" || exit 1
             test -z "$source_status" || exit 1
             ;;
@@ -106,7 +107,7 @@ runs:
         test "$(git rev-parse HEAD)" = "$AUTOMATION_SOURCE_SHA" || exit 1
         case "$AUTOMATION_SOURCE_PROFILE" in
           release-prepared) test "$AUTOMATION_PROFILE" = image || exit 1 ;;
-          protected-clean)
+          protected-clean|product-clean)
             source_status="$(git status --porcelain --untracked-files=normal)" || exit 1
             test -z "$source_status" || exit 1
             ;;
@@ -130,7 +131,7 @@ runs:
       id: upload
       uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
       with:
-        name: automation-${{ runner.os }}-${{ runner.arch }}-${{ inputs.source_sha }}${{ inputs.ci-lane != '' && format('-{0}', inputs.ci-lane) || '' }}
+        name: automation-${{ inputs.source-profile == 'product-clean' && 'product-' || '' }}${{ runner.os }}-${{ runner.arch }}-${{ inputs.source_sha }}${{ inputs.ci-lane != '' && format('-{0}', inputs.ci-lane) || '' }}
         path: ${{ runner.temp }}/immutable-automation/*
         if-no-files-found: error
         retention-days: ${{ inputs.ci-lane != '' && 1 || 90 }}

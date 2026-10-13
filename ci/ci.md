@@ -4,7 +4,8 @@ The L2 planner action and all five lane summaries now invoke Rust `ci plan`
 and `ci validate-lane` using `prepare-automation`'s explicit `hosted-bare`
 profile. That profile is restricted to GitHub-hosted Linux, uses the existing
 stable Rust selection and locked release Cargo without compiler wrappers or
-Just, and preserves the default image profile's verification and cache setup.
+Just, restores an exact-key cached release executable before compiling, and
+preserves the default image profile's verification and cache setup.
 Metadata-only Cargo discovery remains permitted. Composition-only release
 jobs still consume immutable automation and never compile.
 
@@ -1845,6 +1846,52 @@ The existing Windows unit platform row additionally prepares the repository auto
 
 Windows row selection is conditional. This owning workflow edit maps through ci-control to all platform rows, and main/manual-full profiles select all rows. Standalone future changes under tools/xtask, just, Justfile or install.ps1 are not guaranteed to select Windows unit under the protected ownership catalog. The gate qualifies only a planner-selected Windows unit row; an unselected row records no native evidence. This proposal changes no protected catalog and adds no routing bypass.
 
+## Same-run product-source automation
+
+Product-source jobs no longer compile `xtask` once per job. The Linux, macOS and
+Windows lanes and the optional Linux CI canary each declare one
+`product_automation_<platform>` producer: `product-automation-artifact.yml`
+checks out the lane's exact `source_sha` (the canary's merge SHA) on a fixed
+GitHub-hosted runner with a read-only token, no secrets and no checkout
+credentials, and publishes it through `upload-automation` with the
+`product-clean` source profile. The artifact is named
+`automation-product-<os>-<arch>-<source_sha>-<lane>` with one-day retention, so
+it cannot collide with the protected `automation-<os>-<arch>-<sha>-<lane>`
+authority artifact, and `product-clean` claims no protected authority. Its
+`identity_json` output (source SHA, artifact ID, executable digest, producer
+OS/architecture) is the only value consumers receive.
+
+The static ABI producer, Rust test batches, host, native-runtime and product
+composition jobs of each lane list the producer in `needs`, take its identity as
+the `product_automation` input and run `restore-automation`, which verifies
+source, artifact ID, digest and that the producer ran on the same OS and
+architecture. They never rebuild xtask and have no `prepare-automation`
+fallback. The one exception is `static-abi-artifact.yml`, whose
+`product_automation` input is optional because the release SDK build calls it
+without a lane producer; it prepares automation only when the input is empty. `package-native-runtime.sh`,
+`prepare-host-input`, `prepare-skippy-cli-input` and `prepare-windows-host-input`
+run the restored executable when `MESH_LLM_AUTOMATION_BIN` is set and otherwise
+keep `cargo xtool`. The lane planner (`ci validate-lane`) lists the producers as
+required exactly when a restoring job is planned, so a selected consumer cannot
+run without its producer and an unplanned producer must be skipped.
+
+Jobs that must not wait on a producer keep `prepare-automation`: the planner and
+lane summaries, Quality commit convention, the release UI stamp and the
+Windows unit platform-check jobs, Linux SDK and product smoke consumers (they restore through
+`restore-smoke-inputs`, which already prefers an exported
+`MESH_LLM_AUTOMATION_BIN`), release, canary, nightly, Docker and warm-cache
+workflows. The `hosted-bare` profile now restores a release executable from an
+exact-key `actions/cache` entry (`xtask-hosted-bare-<os>-<arch>-<hash>` over
+`Cargo.lock`, `Cargo.toml`, `.cargo/config.toml`, the action file,
+`.github/cache-version.txt`, `tools/xtask/**`, `tools/trajectory-reader/**`,
+`mesh/crates/mesh-llm-release-footer/**`, the compiled-in JSON/script inputs and
+the Linux linker drivers), compiles only on a miss and saves on a miss. The image
+profile never restores or saves an executable. The protected authority producers
+pass `reuse-hosted-binary: false`, so their bytes are always compiled in the
+run from the frozen protected source. A first run after any hashed input changes
+is a cold miss. Pull requests execute main's reusable workflows, so none of this
+applies to a PR until it is merged. No hosted execution is recorded here.
+
 ## External Python SDK source preparation
 
 The Python SDK package, generated Python bindings and four genuine compatibility
@@ -1857,7 +1904,9 @@ missing native bridge or install missing SDK dependencies.
 
 `prepare-python-sdk-source` restores the fixed source before the Quality contract
 job and Rust/Kotlin/Swift SDK source consumers. `setup-canary-python` reuses it
-before compatibility or embedding dependency preparation. Required SDK cadence
+before compatibility or embedding dependency preparation. The bare macOS Swift SDK
+smoke restores the lane's `product_automation_macos_arm64` executable through
+`restore-automation` before admission and never compiles xtask. Required SDK cadence
 is unchanged. For local `just ci-automation-contracts` or `just ci-validate`, set
 `MESH_PYTHON_SDK_SOURCE` to the exact admitted checkout first; the local recipe
 inherits that input and does not acquire external source. The source-dependent
