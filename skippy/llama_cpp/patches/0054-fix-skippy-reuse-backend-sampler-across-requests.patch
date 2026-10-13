@@ -1,4 +1,4 @@
-From 8dc80933a4188f8285a708c96c39745672d79906 Mon Sep 17 00:00:00 2001
+From c4ea4fc748474d339efd1c84f773a82d5d56c86c Mon Sep 17 00:00:00 2001
 From: James Dumay <jameswdumay@gmail.com>
 Date: Sun, 27 Sep 2026 16:49:17 +1000
 Subject: [PATCH] fix(skippy): reuse backend sampler across requests
@@ -8,12 +8,12 @@ Subject: [PATCH] fix(skippy): reuse backend sampler across requests
  src/llama-context.cpp               |   5 +
  src/llama-context.h                 |   2 +
  src/skippy/runtime_types.h          |   2 +
- src/skippy/sampling.cpp             |  77 ++++++++++++--
- src/skippy/session.cpp              |  19 ++--
- src/skippy/tests/runtime_events.cpp | 149 +++++++++++++++++++++++++++-
- src/skippy/workloads.cpp            |  12 ++-
+ src/skippy/sampling.cpp             |  67 +++++++--
+ src/skippy/session.cpp              |  19 +--
+ src/skippy/tests/runtime_events.cpp | 210 +++++++++++++++++++++++++++-
+ src/skippy/workloads.cpp            |  12 +-
  src/skippy/workloads_internal.h     |   8 ++
- 9 files changed, 256 insertions(+), 22 deletions(-)
+ 9 files changed, 307 insertions(+), 22 deletions(-)
  create mode 100644 src/skippy/workloads_internal.h
 
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
@@ -88,7 +88,7 @@ index 24784dd28..fa97e12a5 100644
      bool sampling_config_valid = false;
      std::string chat_sampling_metadata;
 diff --git a/src/skippy/sampling.cpp b/src/skippy/sampling.cpp
-index 8b6719363..6cda79a2d 100644
+index cd0a96452..4be8df9f2 100644
 --- a/src/skippy/sampling.cpp
 +++ b/src/skippy/sampling.cpp
 @@ -11,6 +11,7 @@
@@ -108,24 +108,7 @@ index 8b6719363..6cda79a2d 100644
      if (session == nullptr || session->ctx == nullptr || token_ids == nullptr || token_count == 0) {
          skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "session and at least one token are required");
          return SKIPPY_STATUS_INVALID_ARGUMENT;
-@@ -135,6 +134,16 @@ enum skippy_status skippy_verify_token_batch(
-         return SKIPPY_STATUS_INVALID_ARGUMENT;
-     }
- 
-+    if (session->sampling_backend_enabled) {
-+        // Verification requests logits for every row and then consumes them on
-+        // the CPU. An attached backend sampler permits only one output row per
-+        // sequence, so retire its one-shot backend initialization before
-+        // building the verification batch.
-+        llama_set_sampler(session->ctx, session->seq_id, nullptr);
-+        session->sampling_backend_enabled = false;
-+        session->sampling_backend_retired = true;
-+    }
-+
-     const int32_t n_tokens = static_cast<int32_t>(token_count);
-     llama_batch batch = llama_batch_init(n_tokens, 0, 1);
-     batch.n_tokens = n_tokens;
-@@ -442,25 +451,71 @@ static bool skippy_sampling_configs_equal(
+@@ -470,25 +469,71 @@ static bool skippy_sampling_configs_equal(
      return true;
  }
  
@@ -200,7 +183,7 @@ index 8b6719363..6cda79a2d 100644
      return true;
  }
  
-@@ -468,6 +523,7 @@ bool skippy_reset_reusable_sampling(skippy_session * session) {
+@@ -496,6 +541,7 @@ bool skippy_reset_reusable_sampling(skippy_session * session) {
      if (session == nullptr || session->sampling_chain == nullptr ||
              session->grammar_sampler != nullptr || !session->sampling_config_valid ||
              session->reasoning_budget_sampler != nullptr ||
@@ -208,7 +191,7 @@ index 8b6719363..6cda79a2d 100644
              session->sampling_config.logit_bias_count != 0) {
          return false;
      }
-@@ -476,6 +532,8 @@ bool skippy_reset_reusable_sampling(skippy_session * session) {
+@@ -504,6 +550,8 @@ bool skippy_reset_reusable_sampling(skippy_session * session) {
      session->grammar_generated_start = 0;
      session->sampling_accepted_token_count = 0;
      skippy_refresh_backend_sampling(session, &session->sampling_config);
@@ -217,7 +200,7 @@ index 8b6719363..6cda79a2d 100644
      return true;
  }
  
-@@ -700,6 +758,8 @@ llama_sampler * skippy_build_sampling_chain(
+@@ -728,6 +776,8 @@ llama_sampler * skippy_build_sampling_chain(
      } else {
          llama_sampler_chain_add(sampler, llama_sampler_init_dist(seed));
      }
@@ -226,7 +209,7 @@ index 8b6719363..6cda79a2d 100644
      return sampler;
  }
  
-@@ -712,8 +772,8 @@ static bool skippy_ensure_plain_sampling_chain(
+@@ -740,8 +790,8 @@ static bool skippy_ensure_plain_sampling_chain(
  
      if (session->sampling_chain != nullptr &&
              session->chat_sampling_metadata.empty() &&
@@ -237,7 +220,7 @@ index 8b6719363..6cda79a2d 100644
          return true;
      }
  
-@@ -722,8 +782,7 @@ static bool skippy_ensure_plain_sampling_chain(
+@@ -750,8 +800,7 @@ static bool skippy_ensure_plain_sampling_chain(
      if (session->sampling_chain == nullptr) {
          return false;
      }
@@ -285,7 +268,7 @@ index 37b0b9c5b..1babdd733 100644
      }
      skippy_mtp_clear_session_state(session);
 diff --git a/src/skippy/tests/runtime_events.cpp b/src/skippy/tests/runtime_events.cpp
-index 60357184a..01e47c0aa 100644
+index 60357184a..5a3183bef 100644
 --- a/src/skippy/tests/runtime_events.cpp
 +++ b/src/skippy/tests/runtime_events.cpp
 @@ -1,7 +1,11 @@
@@ -300,7 +283,7 @@ index 60357184a..01e47c0aa 100644
  
  #include <atomic>
  #include <cstdio>
-@@ -23,6 +27,18 @@ namespace {
+@@ -23,6 +27,30 @@ namespace {
          }                                                                    \
      } while (0)
  
@@ -316,10 +299,22 @@ index 60357184a..01e47c0aa 100644
 +#endif
 +}
 +
++void set_greedy_sampling_fastpath_environment(const char * value) {
++#if defined(_WIN32)
++    _putenv_s("SKIPPY_NATIVE_MTP_GREEDY_SAMPLING_FASTPATH", value != nullptr ? value : "");
++#else
++    if (value != nullptr) {
++        setenv("SKIPPY_NATIVE_MTP_GREEDY_SAMPLING_FASTPATH", value, 1);
++    } else {
++        unsetenv("SKIPPY_NATIVE_MTP_GREEDY_SAMPLING_FASTPATH");
++    }
++#endif
++}
++
  struct capture {
      std::atomic<int> count{0};
      std::atomic<uint32_t> last_category{0};
-@@ -314,8 +330,19 @@ int test_model_load_events_v2_dispatch() {
+@@ -314,8 +342,25 @@ int test_model_load_events_v2_dispatch() {
  }
  
  int test_native_model_load_production(const char * fixture_path) {
@@ -336,10 +331,16 @@ index 60357184a..01e47c0aa 100644
 +    CHECK(skippy_verify_window_fits_rollback(3, 2));
 +    CHECK(!skippy_verify_window_fits_rollback(4, 2));
 +    CHECK(!skippy_verify_window_fits_rollback(SIZE_MAX, 2));
++    // The fast path is on by default; force it so an ambient opt-out in the
++    // environment cannot change what this test exercises.
++    const char * old_greedy_setting = std::getenv("SKIPPY_NATIVE_MTP_GREEDY_SAMPLING_FASTPATH");
++    const bool had_greedy_setting = old_greedy_setting != nullptr;
++    const std::string saved_greedy_setting = had_greedy_setting ? old_greedy_setting : "";
++    set_greedy_sampling_fastpath_environment("1");
      // A legacy entrypoint with only the process reporter receives concrete
      // model-load observations from the production completion boundary.
      production_capture global;
-@@ -333,6 +360,14 @@ int test_native_model_load_production(const char * fixture_path) {
+@@ -333,6 +378,14 @@ int test_native_model_load_production(const char * fixture_path) {
      CHECK(global.kv_initialized_events.load() > 0);
      const llama_token prompt[] = {0, 1};
      size_t output_bytes = 0;
@@ -354,7 +355,7 @@ index 60357184a..01e47c0aa 100644
      CHECK(skippy_prefill_chunk(
              session, prompt, 2, nullptr, 0, nullptr, 0,
              &output_bytes, &error) == SKIPPY_STATUS_OK);
-@@ -342,21 +377,133 @@ int test_native_model_load_production(const char * fixture_path) {
+@@ -342,21 +395,176 @@ int test_native_model_load_production(const char * fixture_path) {
      sampling.flags = SKIPPY_SAMPLING_FLAG_ENABLED;
      sampling.repeat_penalty = 1.0f;
      CHECK(skippy_session_configure_chat_sampling(
@@ -436,6 +437,46 @@ index 60357184a..01e47c0aa 100644
 +            &error) == SKIPPY_STATUS_OK);
 +    CHECK(session->sampling_backend_enabled);
 +
++    // A rejected window trims the accepted suffix and then re-configures the
++    // same chain, exactly as the MTP and DFlash repair paths do. A
++    // greedy-equivalent chain keeps no sampler state, so it must stay attached:
++    // no rebuild, no re-attach, no scheduler reserve.
++    const uint64_t rebuilds_before_trim = session->sampling_rebuild_count;
++    session->token_history.resize(3);
++    // A partially rejected window leaves the sampler one row ahead of the
++    // retained prefix; the trim must clamp that cursor, not just keep the
++    // chain.
++    session->sampling_accepted_token_count = 4;
++    CHECK(skippy_trim_chat_sampling_history(session, 3));
++    CHECK(session->sampling_accepted_token_count == 3);
++    CHECK(session->sampling_chain == sampling_chain);
++    CHECK(session->sampling_backend_enabled);
++    CHECK(skippy_session_configure_chat_sampling(
++            session, &sampling, "{\"grammar\":\"\"}", 2,
++            &error) == SKIPPY_STATUS_OK);
++    CHECK(session->sampling_chain == sampling_chain);
++    CHECK(session->sampling_rebuild_count == rebuilds_before_trim);
++    CHECK(session->ctx->get_sched_reserve_count() == reserves_before_reset);
++
++    // A chain that is not stateless still cannot survive a trim: it is cleared
++    // so the next request rebuilds it instead of resuming stale sampler state.
++    skippy_sampling_config warm_sampling = sampling;
++    warm_sampling.temperature = 0.7f;
++    CHECK(skippy_session_configure_chat_sampling(
++            session, &warm_sampling, "{\"grammar\":\"\"}", 2,
++            &error) == SKIPPY_STATUS_OK);
++    CHECK(session->sampling_chain != nullptr);
++    session->token_history.resize(2);
++    CHECK(!skippy_trim_chat_sampling_history(session, 2));
++    CHECK(session->sampling_chain == nullptr);
++
++    // Restore the greedy chain the remaining checks expect.
++    CHECK(skippy_session_configure_chat_sampling(
++            session, &sampling, "{\"grammar\":\"\"}", 2,
++            &error) == SKIPPY_STATUS_OK);
++    CHECK(session->sampling_backend_enabled);
++    sampling_chain = session->sampling_chain;
++
 +    // Force the CPU greedy path with a chain still alive, as in program replay.
 +    // It must preserve chain/history state rather than clearing it on each row.
 +    llama_set_sampler(session->ctx, session->seq_id, nullptr);
@@ -449,8 +490,9 @@ index 60357184a..01e47c0aa 100644
 +    CHECK(session->sampling_backend_retired);
 +
 +    // Embedding and rerank batches request every output row. Their shared
-+    // preparation boundary must detach a sampler retained by the chat path,
-+    // after which a multi-output decode is valid.
++    // preparation boundary must detach a sampler retained by the chat path.
++    // A multi-output decode is now legal with or without a sampler attached,
++    // so only the chain assertion below still pins that detach.
 +    skippy_prepare_non_chat_workload(session);
 +    CHECK(!session->sampling_backend_enabled);
 +    CHECK(session->sampling_chain == nullptr);
@@ -486,6 +528,8 @@ index 60357184a..01e47c0aa 100644
      CHECK(global.unload_completed_events.load() == 1);
 +    set_detach_sampler_on_reset_environment(
 +            had_detach_setting ? saved_detach_setting.c_str() : nullptr);
++    set_greedy_sampling_fastpath_environment(
++            had_greedy_setting ? saved_greedy_setting.c_str() : nullptr);
      if (error != nullptr) {
          skippy_error_free(error);
          error = nullptr;

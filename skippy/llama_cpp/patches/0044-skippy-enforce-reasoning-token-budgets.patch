@@ -1,4 +1,4 @@
-From 2a0ac6cad48b2d9868ffa0da22de64dbb0c2046f Mon Sep 17 00:00:00 2001
+From baedc663f30a8f614f6867b7736d2dcbde330a32 Mon Sep 17 00:00:00 2001
 From: scama
  <a1860575018c4680d5669dd7bc3bd356b478bccb8d42e194df46304a5e25f49a@meshllm.communities.buzz.xyz>
 Date: Tue, 15 Sep 2026 14:33:49 +1000
@@ -12,11 +12,11 @@ Subject: [PATCH] skippy: enforce reasoning token budgets
  include/skippy/sampling.h       |   2 +
  src/CMakeLists.txt              |   5 +-
  src/skippy/runtime_types.h      |   2 +
- src/skippy/sampling.cpp         | 107 +++++++++++++++++++++++++++-
+ src/skippy/sampling.cpp         | 108 ++++++++++++++++++++++++++++-
  src/skippy/sampling_internal.h  |   5 ++
  src/skippy/session.cpp          |   4 ++
  tests/test-reasoning-budget.cpp |   1 +
- 11 files changed, 201 insertions(+), 64 deletions(-)
+ 11 files changed, 202 insertions(+), 64 deletions(-)
 
 diff --git a/common/CMakeLists.txt b/common/CMakeLists.txt
 index 732fafee2..650e14517 100644
@@ -388,7 +388,7 @@ index 7cb885d65..24784dd28 100644
      // A sampler chain may be backend-initialized at most once
      // (llama_sampler_chain_backend_init asserts on reuse). Once a chain is
 diff --git a/src/skippy/sampling.cpp b/src/skippy/sampling.cpp
-index 3a7a96345..8b6719363 100644
+index bbe983bf1..cd0a96452 100644
 --- a/src/skippy/sampling.cpp
 +++ b/src/skippy/sampling.cpp
 @@ -3,6 +3,7 @@
@@ -411,7 +411,15 @@ index 3a7a96345..8b6719363 100644
      session->sampling_backend_enabled = false;
      session->sampling_backend_retired = false;
      session->sampling_config = {};
-@@ -404,6 +408,7 @@ static bool skippy_sampling_configs_equal(
+@@ -390,6 +394,7 @@ bool skippy_trim_chat_sampling_history(skippy_session * session, size_t token_co
+     const bool stateless_chain =
+             session->sampling_chain != nullptr &&
+             session->grammar_sampler == nullptr &&
++            session->reasoning_budget_sampler == nullptr &&
+             session->sampling_config_valid &&
+             skippy_sampling_is_greedy_equivalent(&session->sampling_config);
+     if (!stateless_chain) {
+@@ -431,6 +436,7 @@ static bool skippy_sampling_configs_equal(
              lhs.mirostat_entropy != rhs.mirostat_entropy ||
              lhs.mirostat_learning_rate != rhs.mirostat_learning_rate ||
              lhs.sampler_count != rhs.sampler_count ||
@@ -419,7 +427,7 @@ index 3a7a96345..8b6719363 100644
              lhs.ignore_eos != rhs.ignore_eos ||
              lhs.dry_sequence_breaker_count != rhs.dry_sequence_breaker_count) {
          return false;
-@@ -445,6 +450,7 @@ bool skippy_reuse_plain_chat_sampling(
+@@ -472,6 +478,7 @@ bool skippy_reuse_plain_chat_sampling(
      if (session == nullptr || sampling == nullptr || metadata_json == nullptr ||
              std::strcmp(metadata_json, "{\"grammar\":\"\"}") != 0 ||
              session->sampling_chain == nullptr || session->grammar_sampler != nullptr ||
@@ -427,7 +435,7 @@ index 3a7a96345..8b6719363 100644
              !session->sampling_config_valid || session->sampling_config.logit_bias_count != 0 ||
              sampling->logit_bias_count != 0 ||
              !skippy_sampling_configs_equal(session->sampling_config, *sampling)) {
-@@ -461,6 +467,7 @@ bool skippy_reuse_plain_chat_sampling(
+@@ -488,6 +495,7 @@ bool skippy_reuse_plain_chat_sampling(
  bool skippy_reset_reusable_sampling(skippy_session * session) {
      if (session == nullptr || session->sampling_chain == nullptr ||
              session->grammar_sampler != nullptr || !session->sampling_config_valid ||
@@ -435,7 +443,7 @@ index 3a7a96345..8b6719363 100644
              session->sampling_config.logit_bias_count != 0) {
          return false;
      }
-@@ -737,6 +744,7 @@ void skippy_refresh_backend_sampling(
+@@ -764,6 +772,7 @@ void skippy_refresh_backend_sampling(
      if (session->ctx != nullptr &&
              session->sampling_chain != nullptr &&
              session->grammar_sampler == nullptr &&
@@ -443,7 +451,7 @@ index 3a7a96345..8b6719363 100644
              skippy_sampling_is_greedy_equivalent(sampling)) {
          session->sampling_backend_enabled =
                  llama_set_sampler(session->ctx, session->seq_id, session->sampling_chain);
-@@ -754,6 +762,7 @@ bool skippy_init_chat_grammar_sampler(
+@@ -781,6 +790,7 @@ bool skippy_init_chat_grammar_sampler(
  
      const llama_vocab * vocab = llama_model_get_vocab(session->stage_model->model);
      const bool grammar_lazy = metadata.value("grammar_lazy", false);
@@ -451,7 +459,7 @@ index 3a7a96345..8b6719363 100644
      std::vector<std::string> trigger_patterns_storage;
      std::vector<const char *> trigger_patterns;
      std::vector<llama_token> trigger_tokens;
-@@ -830,6 +839,81 @@ bool skippy_init_chat_grammar_sampler(
+@@ -857,6 +867,81 @@ bool skippy_init_chat_grammar_sampler(
      return true;
  }
  
@@ -533,7 +541,7 @@ index 3a7a96345..8b6719363 100644
  static void skippy_sync_chat_sampling_history(skippy_session * session) {
      if (session == nullptr || session->sampling_chain == nullptr) {
          return;
-@@ -838,7 +922,22 @@ static void skippy_sync_chat_sampling_history(skippy_session * session) {
+@@ -865,7 +950,22 @@ static void skippy_sync_chat_sampling_history(skippy_session * session) {
          const size_t index = session->sampling_accepted_token_count;
          const llama_token token = session->token_history[index];
          llama_sampler_accept(session->sampling_chain, token);
@@ -557,7 +565,7 @@ index 3a7a96345..8b6719363 100644
              try {
                  llama_sampler_accept(session->grammar_sampler, token);
              } catch (const std::exception & e) {
-@@ -883,7 +982,10 @@ static llama_token skippy_chat_sample_token(skippy_session * session, int32_t lo
+@@ -910,7 +1010,10 @@ static llama_token skippy_chat_sample_token(skippy_session * session, int32_t lo
          -1,
          false,
      };
@@ -569,7 +577,7 @@ index 3a7a96345..8b6719363 100644
          try {
              llama_sampler_apply(session->grammar_sampler, &cur);
          } catch (const std::exception & e) {
-@@ -910,6 +1012,7 @@ llama_token skippy_sample_token_ith(
+@@ -937,6 +1040,7 @@ llama_token skippy_sample_token_ith(
      if (skippy_mtp_greedy_sampling_fastpath_enabled() &&
              !session->sampling_backend_enabled &&
              session->grammar_sampler == nullptr &&
