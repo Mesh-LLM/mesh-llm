@@ -713,6 +713,11 @@ continue to compose normally. Seven call sites:
 `swift-sdk-artifact.yml`, `native-sdk-artifact.yml`,
 `node-sdk-addon-artifact.yml`, and two in `release.yml`.
 
+Disk-only sccache preparation initializes and exports `SCCACHE_DIR` before
+compiler probes, including callers that already disable GHA caching. An explicit
+directory is preserved; otherwise the action uses the job's runner temporary
+directory. Missing GHA endpoints retain the existing disk-only fallback.
+
 ### A pinned digest is a frozen artifact
 
 `mesh-llm-runner-images` HEAD says nothing about what is inside the digest a

@@ -1570,6 +1570,12 @@ Full-session replay contract: [configuration and qualification](agentic-replay-n
 
 ## macOS deployment target
 
+The shared macOS accelerator action initializes disk-only sccache before any
+compiler probe, including protected canary bootstrap calls that already set
+`SCCACHE_GHA_ENABLED=false`. It preserves an explicit `SCCACHE_DIR` and otherwise
+creates a job-local directory beneath `RUNNER_TEMP`. This does not grant remote
+cache authority or change the canary's later persistent compiler-cache identity.
+
 `scripts/lib/macos-deployment-target.txt` records the shared default (13.3),
 matching the pinned llama.cpp
 [Apple release](https://github.com/ggml-org/llama.cpp/blob/661643e43079a4ee6faab4c1895291767b67ea8d/.github/workflows/release.yml#L73)

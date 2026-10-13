@@ -444,6 +444,16 @@ fn lld_shell_contract_native_with_lld_probes_before_command_and_preserves_operat
 use super::workflow_yaml;
 #[test]
 fn lld_shell_contract_macos_action_installs_tools_and_probes_with_disk_cache_fallback() {
+    for (gha, chain, cache) in [
+        ("true", "", None),
+        ("false", "disk", None),
+        ("false", "disk", Some("explicit cache")),
+    ] {
+        macos_action_disk_cache(gha, chain, cache);
+    }
+}
+
+fn macos_action_disk_cache(gha: &str, chain: &str, cache: Option<&str>) {
     let f = Fixture::new();
     let source =
         fs::read_to_string(repo().join(".github/actions/setup-macos-lld/action.yml")).unwrap();
@@ -487,10 +497,22 @@ printf '%s\n' "$SCCACHE_GHA_ENABLED" "$SCCACHE_MULTILEVEL_CHAIN" "$SCCACHE_DIR" 
     let output = f.root.join("github.env");
     let github_path = f.root.join("github.path");
     let runner = f.root.join("runner temp");
+    let explicit_cache = cache.map(|path| f.root.join(path));
+    let expected_cache = explicit_cache
+        .clone()
+        .unwrap_or_else(|| runner.join("mesh-llm-sccache"));
     let r = f.shell(
         &scalars.join("\n"),
         &[
-            ("SCCACHE_GHA_ENABLED", "true"),
+            ("SCCACHE_GHA_ENABLED", gha),
+            ("SCCACHE_MULTILEVEL_CHAIN", chain),
+            (
+                "SCCACHE_DIR",
+                explicit_cache
+                    .as_deref()
+                    .and_then(Path::to_str)
+                    .unwrap_or(""),
+            ),
             ("GITHUB_ENV", output.to_str().unwrap()),
             ("GITHUB_PATH", github_path.to_str().unwrap()),
             ("RUNNER_TEMP", runner.to_str().unwrap()),
@@ -507,14 +529,15 @@ printf '%s\n' "$SCCACHE_GHA_ENABLED" "$SCCACHE_MULTILEVEL_CHAIN" "$SCCACHE_DIR" 
     );
     assert_eq!(
         f.text("action.probe"),
-        format!(
-            "false\ndisk\n{}\n",
-            runner.join("mesh-llm-sccache").display()
-        )
+        format!("false\ndisk\n{}\n", expected_cache.display())
     );
     let env = f.text("github.env");
-    assert!(env.contains("SCCACHE_GHA_ENABLED=false\n"));
-    assert!(env.contains("SCCACHE_MULTILEVEL_CHAIN=disk\n"));
+    assert!(expected_cache.is_dir());
+    assert!(env.contains(&format!("SCCACHE_DIR={}\n", expected_cache.display())));
+    if gha == "true" {
+        assert!(env.contains("SCCACHE_GHA_ENABLED=false\n"));
+        assert!(env.contains("SCCACHE_MULTILEVEL_CHAIN=disk\n"));
+    }
     assert_eq!(
         f.text("github.path"),
         format!("{}\n", f.root.join("brew/bin").display())
