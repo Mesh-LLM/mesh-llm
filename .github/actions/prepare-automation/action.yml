@@ -123,10 +123,13 @@ runs:
       run: |
         set -euo pipefail
         report="$RUNNER_TEMP/automation-bootstrap.txt"
+        if [[ "$AUTOMATION_PROFILE" == hosted-bare ]]; then
+          # Hosted runners have no sccache; bootstrap also runs Cargo.
+          export RUSTC_WRAPPER='' CARGO_BUILD_RUSTC_WRAPPER=''
+        fi
         if [[ "$AUTOMATION_PROFILE" == hosted-bare && "${AUTOMATION_CACHE_HIT:-}" == true && -x target/release/xtask ]]; then
           target/release/xtask automation bootstrap | tee "$report"
         elif [[ "$AUTOMATION_PROFILE" == hosted-bare ]]; then
-          export RUSTC_WRAPPER='' CARGO_BUILD_RUSTC_WRAPPER=''
           cargo build --locked --release -p xtask --bin xtask
           cargo run --locked --release -p xtask --bin xtask -- automation bootstrap | tee "$report"
         else
