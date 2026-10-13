@@ -5153,6 +5153,7 @@ name = "mesh-llm-payments-types"
 version = "0.78.0"
 dependencies = [
  "anyhow",
+ "httparse",
  "mesh-llm-plugin",
  "mesh-llm-wallet",
  "serde",

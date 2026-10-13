@@ -11,7 +11,10 @@ pub mod control;
 pub mod engine;
 pub mod intent;
 pub mod lifetimes;
+pub mod metered_wire;
+pub mod metering;
 pub mod pricing;
+pub mod response_usage;
 pub mod terms;
 pub mod wire;
 
