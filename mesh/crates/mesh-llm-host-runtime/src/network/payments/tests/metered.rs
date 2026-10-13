@@ -28,8 +28,8 @@ async fn streamed_pair(record_lifecycle: bool) -> Result<()> {
     // Before the requests are sent, so the seller's events are recorded.
     let seller_events =
         crate::network::openai::paid_exchange::record_paid_exchanges_for_test(&pair.seller_node);
-    // The caller omits include_usage first, then opts in. Usage stays hidden
-    // unless requested, while settlement still bills backend-reported usage.
+    // The caller omits include_usage first, then opts in. The seller always
+    // asks the backend for usage, and it reaches the caller either way.
     let raw = b"POST /v1/completions HTTP/1.1\r\nHost: localhost\r\n\r\n{\"model\":\"test\",\"prompt\":\"Hi\",\"stream\":true,\"max_tokens\":8}";
     let opted_in = String::from_utf8(raw.to_vec())?.replace(
         "\"stream\":true",
@@ -55,7 +55,7 @@ async fn exchange_round(pair: &Pair, network: &Network, raw: &[u8], round: usize
     let response = pair.request(raw, Some("host-evidence-id")).await?;
     assert!(response.contains("hello"), "{response}");
     assert!(response.contains("data: [DONE]"), "{response}");
-    assert_eq!(response.contains("\"usage\""), round == 2, "{response}");
+    assert!(response.contains("\"usage\""), "{response}");
     pair.wait_completed(round).await?;
     assert_eq!(
         network.payments.load(Ordering::SeqCst),

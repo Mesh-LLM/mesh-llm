@@ -224,8 +224,6 @@ pub(crate) async fn start(
         },
         terms,
         deposit,
-        usage_filter: (!request.client_include_usage)
-            .then(super::metered_usage_filter::UsageFilter::default),
     };
     tokio::spawn(async move {
         let mut progress = ExchangeProgress::default();

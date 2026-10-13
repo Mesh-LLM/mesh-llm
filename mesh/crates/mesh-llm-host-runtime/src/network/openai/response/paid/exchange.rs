@@ -16,7 +16,6 @@ use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt, DuplexStream};
 
 use super::ExchangeProgress;
 use crate::mesh::Node;
-use crate::network::openai::response::metered_usage_filter::UsageFilter;
 use crate::network::payments::{client::Payments, lifecycle::Observations};
 
 /// A validated admission, not yet approved or paid.
@@ -26,8 +25,6 @@ pub(super) struct Accepted {
     pub(super) local: RequestTerms,
     pub(super) terms: AdmissionTerms,
     pub(super) deposit: Option<Invoice>,
-    /// Present when the caller did not ask for streamed usage.
-    pub(super) usage_filter: Option<UsageFilter>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -46,7 +43,6 @@ pub(super) async fn run(
         local,
         terms,
         deposit,
-        mut usage_filter,
     } = accepted;
     approve(&payments, &local, &terms, &mut send, &mut cancellation).await?;
     let observations = Observations::for_exchange(evidence.as_ref(), &terms).await;
@@ -105,10 +101,6 @@ pub(super) async fn run(
             Frame::Output { bytes } => {
                 ensure!(!settled, "output after settlement");
                 progress.output_delivered |= !bytes.is_empty();
-                let bytes = match usage_filter.as_mut() {
-                    Some(filter) => filter.push(&bytes),
-                    None => bytes,
-                };
                 if !cancelled && output.write_all(&bytes).await.is_err() {
                     cancelled = true;
                     progress.cancelled = true;
@@ -118,7 +110,6 @@ pub(super) async fn run(
             settlement @ Frame::Settlement { .. } => {
                 ensure!(!settled, "duplicate settlement");
                 // HTTP delivery ends independently of final wallet completion.
-                flush_filter(&mut usage_filter, output, cancelled).await;
                 let _ = output.shutdown().await;
                 settle(&payments, &terms, settlement, &observations).await?;
                 settled = true;
@@ -173,19 +164,6 @@ async fn approve(
         }
     }
     Ok(())
-}
-
-async fn flush_filter(
-    filter: &mut Option<UsageFilter>,
-    output: &mut DuplexStream,
-    cancelled: bool,
-) {
-    if let Some(filter) = filter.as_mut() {
-        let rest = filter.finish();
-        if !cancelled && !rest.is_empty() {
-            let _ = output.write_all(&rest).await;
-        }
-    }
 }
 
 /// Hand the seller's settlement to the provider, which checks it against the

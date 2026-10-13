@@ -11,10 +11,6 @@ pub(crate) struct PaidRequest {
     pub path: String,
     pub body: Value,
     pub intent: Option<mesh_llm_payments_types::intent::PaymentIntent>,
-    /// Whether the caller itself asked for streamed usage. The backend is
-    /// always asked for usage so settlement has evidence; the payer hides it
-    /// from callers that did not opt in, matching the frontend contract.
-    pub client_include_usage: bool,
 }
 
 impl PaidRequest {
@@ -85,10 +81,6 @@ impl PaidRequest {
                 DEFAULT_OUTPUT_ALLOWANCE
             }
         };
-        let client_include_usage = body
-            .pointer("/stream_options/include_usage")
-            .and_then(Value::as_bool)
-            .unwrap_or(false);
         if body.get("stream").and_then(Value::as_bool) == Some(true) {
             let options = body
                 .as_object_mut()
@@ -107,7 +99,6 @@ impl PaidRequest {
             path: path.into(),
             body,
             intent,
-            client_include_usage,
         })
     }
 
@@ -238,17 +229,15 @@ mod tests {
         let parsed = PaidRequest::parse(b"POST /v1/chat/completions HTTP/1.1\r\n\r\n{\"model\":\"m\",\"stream\":true,\"stream_options\":{\"include_usage\":false,\"other\":true}}").unwrap();
         assert_eq!(parsed.body["stream_options"]["include_usage"], true);
         assert_eq!(parsed.body["stream_options"]["other"], true);
-        assert!(!parsed.client_include_usage);
-        for (options, expected) in [
-            ("", false),
-            (",\"stream_options\":null", false),
-            (",\"stream_options\":{\"include_usage\":true}", true),
+        for options in [
+            "",
+            ",\"stream_options\":null",
+            ",\"stream_options\":{\"include_usage\":true}",
         ] {
             let raw = format!(
                 "POST /v1/chat/completions HTTP/1.1\r\n\r\n{{\"model\":\"m\",\"stream\":true{options}}}"
             );
             let parsed = PaidRequest::parse(raw.as_bytes()).unwrap();
-            assert_eq!(parsed.client_include_usage, expected, "{options}");
             assert_eq!(parsed.body["stream_options"]["include_usage"], true);
         }
         let raw = parsed.backend_http("id").unwrap();

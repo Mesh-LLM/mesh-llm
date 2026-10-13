@@ -42,7 +42,6 @@ pub(crate) use send::{
 };
 
 #[cfg(feature = "payments")]
-mod metered_usage_filter;
 
 #[cfg(feature = "payments")]
 pub(crate) mod paid;
