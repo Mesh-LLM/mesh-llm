@@ -1877,7 +1877,7 @@ run without its producer and an unplanned producer must be skipped.
 
 Jobs that must not wait on a producer keep `prepare-automation`: the planner and
 lane summaries, Quality commit convention, the release UI stamp and the
-Windows unit platform-check jobs, SDK and smoke consumers (they restore through
+Windows unit platform-check jobs, Linux SDK and product smoke consumers (they restore through
 `restore-smoke-inputs`, which already prefers an exported
 `MESH_LLM_AUTOMATION_BIN`), release, canary, nightly, Docker and warm-cache
 workflows. The `hosted-bare` profile now restores a release executable from an
@@ -1904,7 +1904,9 @@ missing native bridge or install missing SDK dependencies.
 
 `prepare-python-sdk-source` restores the fixed source before the Quality contract
 job and Rust/Kotlin/Swift SDK source consumers. `setup-canary-python` reuses it
-before compatibility or embedding dependency preparation. Required SDK cadence
+before compatibility or embedding dependency preparation. The bare macOS Swift SDK
+smoke restores the lane's `product_automation_macos_arm64` executable through
+`restore-automation` before admission and never compiles xtask. Required SDK cadence
 is unchanged. For local `just ci-automation-contracts` or `just ci-validate`, set
 `MESH_PYTHON_SDK_SOURCE` to the exact admitted checkout first; the local recipe
 inherits that input and does not acquire external source. The source-dependent

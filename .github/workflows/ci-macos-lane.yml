@@ -221,8 +221,8 @@ jobs:
 
   sdk:
     name: Swift SDK smoke
-    needs: [validate_plan, runtime_product, swift_sdk_input]
-    if: ${{ !cancelled() && needs.validate_plan.result == 'success' && needs.runtime_product.result == 'success' && needs.swift_sdk_input.result == 'success' && contains(fromJson(inputs.lane_plan_json).matrices.sdk.*.id, 'swift') }}
+    needs: [validate_plan, runtime_product, swift_sdk_input, product_automation_macos_arm64]
+    if: ${{ !cancelled() && needs.validate_plan.result == 'success' && needs.runtime_product.result == 'success' && needs.swift_sdk_input.result == 'success' && needs.product_automation_macos_arm64.result == 'success' && contains(fromJson(inputs.lane_plan_json).matrices.sdk.*.id, 'swift') }}
     uses: ./.github/workflows/ci-macos-sdk-slice.yml
     with:
       source_sha: ${{ inputs.source_sha }}
@@ -231,6 +231,7 @@ jobs:
       binary_target: target/release/mesh-llm
       ui_artifact_name: ci-ui-dist-macos-${{ github.run_id }}
       swift_mode: ${{ (fromJson(inputs.lane_plan_json).profile == 'main' || fromJson(inputs.lane_plan_json).profile == 'manual-full') && 'full' || 'host-only' }}
+      product_automation: ${{ needs.product_automation_macos_arm64.outputs.identity_json }}
     secrets:
       HF_TOKEN: ${{ inputs.original_event_name == 'push' && secrets.HF_TOKEN || '' }}
 

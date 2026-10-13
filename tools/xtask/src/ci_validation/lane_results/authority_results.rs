@@ -56,8 +56,9 @@ pub(super) fn extend(lane: Lane, jobs: &mut Vec<&'static str>) {
                 "runtime_product",
             ],
         );
-    let product_native = matches!(lane, Lane::Macos | Lane::Windows)
-        && includes(jobs, &["hosts", "native_runtimes", "runtime_product"]);
+    let product_native = (matches!(lane, Lane::Macos | Lane::Windows)
+        && includes(jobs, &["hosts", "native_runtimes", "runtime_product"]))
+        || (lane == Lane::Macos && includes(jobs, &["sdk"]));
     for (required, job) in [
         (linux || macos || windows, "authority_source"),
         (linux, "authority_linux_x64"),
@@ -118,6 +119,7 @@ fn product_source_automation_follows_only_the_jobs_that_restore_it() {
             "native_runtimes",
             "product_automation_macos_arm64",
         ),
+        (Lane::Macos, "sdk", "product_automation_macos_arm64"),
         (
             Lane::Windows,
             "runtime_product",

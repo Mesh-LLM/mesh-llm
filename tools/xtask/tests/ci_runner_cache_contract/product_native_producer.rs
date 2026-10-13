@@ -20,6 +20,8 @@ const CONSUMERS: &[&str] = &[
     "ci-rust-tests-slice.yml",
     "static-abi-artifact.yml",
 ];
+/// Slices that forward the identity to a reusable workflow which restores it.
+const NESTED_CONSUMERS: &[(&str, &str)] = &[("ci-macos-sdk-slice.yml", "sdk-smoke.yml")];
 
 fn read(path: &str) -> Node {
     workflow_yaml::parse(&fs::read_to_string(support::root().join(path)).unwrap()).unwrap()
@@ -181,7 +183,11 @@ fn every_lane_producer_is_linked_by_needs_and_every_consumer_restores_without_co
             if inputs.get("product_automation").is_none() {
                 continue;
             }
-            assert!(CONSUMERS.contains(&callee), "{lane}/{name}: {callee}");
+            assert!(
+                CONSUMERS.contains(&callee)
+                    || NESTED_CONSUMERS.iter().any(|(slice, _)| *slice == callee),
+                "{lane}/{name}: {callee}"
+            );
             assert!(
                 candidate.get("needs").unwrap().list().contains(&producer),
                 "{lane}/{name}"
@@ -237,6 +243,47 @@ fn consumer_slices_restore_the_same_run_binary_and_never_fall_back_to_a_build() 
                 "{name}"
             );
             assert!(!source.contains("cargo xtool"), "{name}");
+        }
+    }
+}
+
+#[test]
+fn nested_consumer_slices_forward_the_identity_to_a_restoring_workflow() {
+    for (slice, workflow) in NESTED_CONSUMERS {
+        let source =
+            fs::read_to_string(support::root().join(".github/workflows").join(slice)).unwrap();
+        let document = workflow_yaml::parse(&source).unwrap();
+        let input = document
+            .get("on")
+            .unwrap()
+            .get("workflow_call")
+            .unwrap()
+            .get("inputs")
+            .unwrap()
+            .get("product_automation")
+            .unwrap();
+        assert_eq!(text(input, "type"), "string", "{slice}");
+        assert_eq!(text(input, "required"), "true", "{slice}");
+        assert!(
+            source.contains(&format!("uses: ./.github/workflows/{workflow}")),
+            "{slice}"
+        );
+        assert!(
+            source.contains("product_automation: ${{ inputs.product_automation }}"),
+            "{slice}"
+        );
+        let callee =
+            fs::read_to_string(support::root().join(".github/workflows").join(workflow)).unwrap();
+        for expected in [
+            "uses: ./.github/actions/restore-automation",
+            "artifact_id: ${{ fromJson(inputs.product_automation).artifact_id }}",
+            "binary_sha256: ${{ fromJson(inputs.product_automation).binary_sha256 }}",
+            "producer_os: ${{ fromJson(inputs.product_automation).producer_os }}",
+        ] {
+            assert!(callee.contains(expected), "{workflow}: {expected}");
+        }
+        for forbidden in ["uses: ./.github/actions/prepare-automation", "cargo xtool"] {
+            assert!(!callee.contains(forbidden), "{workflow}: {forbidden}");
         }
     }
 }

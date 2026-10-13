@@ -115,6 +115,17 @@ fn setup_restore_and_runtime_share_the_compiled_external_pin() {
     ] {
         assert!(workflow.contains("./.github/actions/prepare-python-sdk-source"));
     }
+    let sdk_smoke = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../.github/workflows/sdk-smoke.yml"
+    ));
+    let automation = sdk_smoke
+        .find("./.github/actions/restore-automation")
+        .unwrap();
+    let admission = sdk_smoke
+        .find("./.github/actions/prepare-python-sdk-source")
+        .unwrap();
+    assert!(automation < admission);
 }
 
 #[test]
