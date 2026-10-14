@@ -85,9 +85,13 @@ impl ChatStreamDeltas {
         if let Some(delta) = suffix_delta(parsed.content.as_deref(), &mut self.emitted_content) {
             events.push(GenerationStreamEvent::Delta(delta));
         }
-        if let Some(tool_calls) = parsed.tool_calls.as_ref().and_then(Value::as_array)
-            && let Some(delta) = self.tool_calls.record(tool_calls, is_partial)
-        {
+        let tool_calls = parsed
+            .tool_calls
+            .as_ref()
+            .and_then(Value::as_array)
+            .map(Vec::as_slice)
+            .unwrap_or_default();
+        if let Some(delta) = self.tool_calls.record(tool_calls, is_partial) {
             events.push(GenerationStreamEvent::ToolCalls(delta));
         }
         events
@@ -95,12 +99,23 @@ impl ChatStreamDeltas {
 
     /// `FinishReason::ToolCalls` only when the terminal parse produced tool calls
     /// the client can reconstruct from the deltas it received.
-    pub(in crate::frontend) fn finish_reason(&self, fallback: FinishReason) -> FinishReason {
-        if self.tool_calls.completed() {
+    pub(in crate::frontend) fn finish_reason(
+        &self,
+        fallback: FinishReason,
+    ) -> InferenceResult<FinishReason> {
+        if fallback == FinishReason::Length {
+            return Ok(fallback);
+        }
+        if self.tool_calls.incomplete() && fallback == FinishReason::Stop {
+            return Err(openai_backend_error(anyhow::anyhow!(
+                "generation stopped with an incomplete or inconsistent tool call"
+            )));
+        }
+        Ok(if self.tool_calls.completed() {
             FinishReason::ToolCalls
         } else {
             fallback
-        }
+        })
     }
 }
 
@@ -201,11 +216,13 @@ impl ChatOutputStreamParser {
     pub(in crate::frontend) fn finish(
         &mut self,
         text: &str,
-    ) -> InferenceResult<Vec<GenerationStreamEvent>> {
+        fallback: FinishReason,
+    ) -> InferenceResult<(Vec<GenerationStreamEvent>, FinishReason)> {
         if self.text != text {
             self.text = text.to_string();
         }
-        self.events_for_text(false)
+        let events = self.events_for_text(false)?;
+        Ok((events, self.deltas.finish_reason(fallback)?))
     }
 
     pub(in crate::frontend) fn events_for_text(
@@ -223,10 +240,6 @@ impl ChatOutputStreamParser {
             return Ok(Vec::new());
         };
         Ok(self.deltas.events_for_parse(&parsed, is_partial))
-    }
-
-    pub(in crate::frontend) fn finish_reason(&self, fallback: FinishReason) -> FinishReason {
-        self.deltas.finish_reason(fallback)
     }
 }
 

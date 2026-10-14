@@ -116,7 +116,12 @@ if [[ "$INERT_FAIL" == '{label}' ]]; then exit 17; fi
         self.tool(
             "tools/uv",
             "uv",
-            r#"printf '%s' "$LLAMA_STAGE_UPSTREAM_TESTS" > "$INERT_ROOT/upstream-tests""#,
+            r#"if [[ ${9} == scripts/build-llama.sh ]]; then
+  printf '%s' "$LLAMA_STAGE_UPSTREAM_TESTS" > "$INERT_ROOT/upstream-tests"
+else
+  [[ ${9} == scripts/check-skippy-generated-family-patch.sh ]] || exit 92
+  /bin/bash "${@:9}"
+fi"#,
         );
         self.tool("tools/lipo", "archive", "printf '%s\\n' \"$INERT_ARCHIVE\"");
         self.tool("scripts/skippy-system-one-smoke.sh", "systemone", r#"printf '%s\0' "$WORK_DIR" "$SYSTEMONE_SMOKE_CADENCE" "$SYSTEMONE_SMOKE_BUILD_BACKEND" "$SYSTEMONE_SMOKE_CERTIFIED_BACKENDS" "$SYSTEMONE_SMOKE_REQUIRE_QUALIFIED" > "$INERT_ROOT/systemone.environment""#);

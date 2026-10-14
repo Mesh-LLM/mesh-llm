@@ -89,6 +89,6 @@ runs:
         git -C "${CANARY_SOURCE_ROOT:-$PWD}" ls-files -s -- .cargo/config.toml scripts/build-llama.sh scripts/package-native-runtime.sh skippy/scripts/build-llama.sh skippy/scripts/package-native-runtime.sh skippy/llama_cpp/upstream.txt skippy/llama_cpp/patches
       } | shasum -a 256 | awk '{print $1}')"
       echo "SCCACHE_C_CUSTOM_CACHE_BUSTER=$cache_buster" >> "$GITHUB_ENV"
-      sccache --start-server >/dev/null 2>&1 || true
-      sccache --zero-stats
+      # prepare-automation's macOS accelerator setup starts the job-owned
+      # cache server before its first compiler probe.
     shell: bash

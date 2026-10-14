@@ -1,4 +1,4 @@
-From 3081d83881f3ebd479f2cd17323f26bebbbebf64 Mon Sep 17 00:00:00 2001
+From e6c0c994f144c40a9e418cd04de8644061dbee2a Mon Sep 17 00:00:00 2001
 From: Daniel Winter <danielwinterw@gmail.com>
 Date: Sun, 27 Sep 2026 21:12:21 +1000
 Subject: [PATCH] models: add Laya decision model support
@@ -70,7 +70,7 @@ index 571841a60..ac091dd24 100644
  
  #endif // SKIPPY_H
 diff --git a/include/skippy/common.h b/include/skippy/common.h
-index 9adaa27d4..ef74b8650 100644
+index 80ab5b76b..ab0182c3a 100644
 --- a/include/skippy/common.h
 +++ b/include/skippy/common.h
 @@ -46,7 +46,7 @@ extern "C" {
@@ -78,7 +78,7 @@ index 9adaa27d4..ef74b8650 100644
  #define SKIPPY_ABI_VERSION_MAJOR 0
  #define SKIPPY_ABI_VERSION_MINOR 1
 -#define SKIPPY_ABI_VERSION_PATCH 66
-+#define SKIPPY_ABI_VERSION_PATCH 67
++#define SKIPPY_ABI_VERSION_PATCH 68
  
  #if defined(_MSC_VER)
  #define SKIPPY_DEPRECATED(message) __declspec(deprecated(message))
@@ -265,10 +265,10 @@ index 000000000..002fac598
 +
 +#endif // SKIPPY_LAYA_H
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index 0d7bb7872..9c00568ca 100644
+index ac456679a..451bdbe61 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
-@@ -88,6 +88,8 @@ add_library(llama
+@@ -89,6 +89,8 @@ add_library(llama
              skippy/tokenization.cpp
              skippy/events.cpp
              skippy/system_one.cpp
@@ -277,7 +277,7 @@ index 0d7bb7872..9c00568ca 100644
              unicode.h
              ${LLAMA_MODELS_SOURCES}
              )
-@@ -112,7 +114,7 @@ set_source_files_properties(${LLAMA_MODELS_SOURCES}
+@@ -113,7 +115,7 @@ set_source_files_properties(${LLAMA_MODELS_SOURCES}
  
  configure_file(llama-version.h.in ${CMAKE_CURRENT_BINARY_DIR}/llama-version.h @ONLY)
  
@@ -2812,5 +2812,5 @@ index 000000000..8a713d563
 +// run one forward pass; returns 0 on success, non-zero on failure
 +LLAMA_API int laya_encode(laya_context * ctx, const laya_batch & batch, laya_result & result);
 -- 
-2.54.0 (Apple Git-157)
+2.56.0
 

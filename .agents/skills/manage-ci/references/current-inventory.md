@@ -121,8 +121,11 @@ for a much larger deterministic radix/blob ownership corpus. It uses the
 pinned `public cpu` image, has no secrets, records exact seed/step budgets and
 source SHA, and uploads the reproducible failure log.
 `llama-upstream-canary.yml` runs daily or on trusted-main dispatch. It freezes
-one main source SHA and the upstream target before any hardware work. Unchanged
-scheduled/forced runs build once and certify the complete roster. Every
+one main source SHA and the upstream target before any hardware work. All
+candidate builds compile native tests with `--build-only`, then the generated
+patch checker owns one full native CTest pass after patch equality and
+idempotence checks. The generator's own unit suite remains separate.
+Unchanged scheduled/forced runs build once and certify the complete roster. Every
 certification first runs a deterministic immutable-plan and pinned-cache
 preflight. Changed pins use up to three distributed repair attempts. Each
 candidate build compares pinned GGUF tensor descriptor bytes with the manifest
@@ -172,6 +175,9 @@ a branch moving later cannot change the selected source for that run.
 `llama-canary-family-pass.yml` owns the reusable build → family matrix → hosted
 aggregate. The protected controller prepares automation and invokes `canary-receipts build`
 with frozen controller/selected revisions, pass identity, budgets and previous-package admission.
+Package Git probes capture exact raw stdout with a 4 MiB ceiling before parsing
+manifests, enumerating source paths or hashing source diffs. Diagnostics remain
+redacted; failed or incomplete probes cannot publish a partial diff capture.
 Resumed repairs admit candidate-only feedback from the exact preceding pass,
 retain its immutable evidence snapshot throughout the wrapper, and render a
 bounded native summary for the repair prompt. Independent verification remains
@@ -199,6 +205,9 @@ battery, so Nomic embedding uses the same interpreter as family workers.
 Goose's build and test commands use `scripts/llama-canary-log-command.sh` to
 stream output and retain separate invocation logs, exit statuses, and available
 CTest result files under the build job's 14-day repair evidence artifact.
+That upload explicitly includes hidden run-owned `.deps` state and the native
+build's `Testing/Temporary` results before cleanup. The controller forwards up
+to 16 MiB per output stream; complete gate logs remain in the evidence artifact.
 
 Before compilation, the controller runs the selected battery in cache-free
 `--dry-run --skip-build` mode against its own planner output. This checks the
@@ -721,6 +730,9 @@ Disk-only sccache preparation initializes and exports `SCCACHE_DIR` before
 compiler probes, including callers that already disable GHA caching. An explicit
 directory is preserved; otherwise the action uses the job's runner temporary
 directory. Missing GHA endpoints retain the existing disk-only fallback.
+The action starts sccache on a unique short Unix socket and exports that endpoint
+for subsequent steps. It never stops the default host server. Canary toolchain
+verification only sets cache identity; accelerator setup owns server startup.
 
 ### A pinned digest is a frozen artifact
 
