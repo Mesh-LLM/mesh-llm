@@ -157,9 +157,10 @@ impl std::fmt::Display for PrePaymentTransportFailure {
 impl std::error::Error for PrePaymentTransportFailure {}
 
 /// Seller admissions are read within this bound; a seller that does not
-/// answer has not charged anything yet. Covers a seller whose freshly started
-/// wallet takes 30-45s to issue its first deposit invoice.
-const ADMISSION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+/// answer has not charged anything yet. Preserve the previous initial-invoice
+/// allowance for wallet startup and queued admissions, without assuming a
+/// typical provider latency. Client disconnect in `route` still cancels this wait.
+const ADMISSION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
 
 /// How long an accepted admission stays approved in the ledger.
 const AUTHORIZATION_LIFETIME_MS: u64 = 3_600_000;

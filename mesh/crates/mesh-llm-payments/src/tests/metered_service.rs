@@ -238,6 +238,54 @@ async fn unpaid_deposit_never_reduces_the_bill() {
 }
 
 #[tokio::test]
+async fn warm_peer_skips_deposits_with_finals_in_flight_until_strike_limit() {
+    let dir = tempfile::tempdir().unwrap();
+    let wallet = Arc::new(MockWallet::default());
+    let service = open(dir.path(), wallet.clone());
+    let deposit = deposit_invoice(&service.serve_admit(admit("seed", "peer")).await.unwrap());
+    received(&wallet, &deposit);
+    service.serve_deposit_confirmed("seed").await.unwrap();
+    assert!(
+        service
+            .serve_settle(settle("seed", 50, 50))
+            .await
+            .unwrap()
+            .settled
+    );
+
+    for n in 0..STRIKE_LIMIT {
+        let id = format!("warm-{n}");
+        assert!(service.metered_trusted("peer").await.unwrap());
+        assert!(matches!(
+            service.serve_admit(admit(&id, "peer")).await.unwrap(),
+            ServeAdmitResponse::Admitted { .. }
+        ));
+        assert!(
+            service
+                .serve_settle(settle(&id, 100, 100))
+                .await
+                .unwrap()
+                .invoice
+                .is_some()
+        );
+        assert_eq!(service.ledger.metered_unpaid_finals("peer").unwrap(), n + 1);
+    }
+    assert!(service.metered_trusted("peer").await.unwrap());
+    assert!(matches!(
+        service
+            .serve_admit(admit("blocked-warm", "peer"))
+            .await
+            .unwrap(),
+        ServeAdmitResponse::Blocked { .. }
+    ));
+    assert_eq!(
+        wallet.invoice_expiries.lock().unwrap().len(),
+        4,
+        "one cold deposit and three finals; no repeat deposits"
+    );
+}
+
+#[tokio::test]
 async fn three_unpaid_final_invoices_block_admission_until_one_is_paid() {
     let dir = tempfile::tempdir().unwrap();
     let wallet = Arc::new(MockWallet::default());
@@ -287,7 +335,7 @@ async fn three_unpaid_final_invoices_block_admission_until_one_is_paid() {
     );
     assert!(matches!(
         service.serve_admit(admit("again", "peer")).await.unwrap(),
-        ServeAdmitResponse::Deposit { .. }
+        ServeAdmitResponse::Admitted { .. }
     ));
 }
 
@@ -333,7 +381,7 @@ async fn restart_abandons_in_flight_requests_and_never_redispatches() {
 }
 
 #[tokio::test]
-async fn expired_nonpayment_survives_restart_and_requires_deposit_in_later_sessions() {
+async fn expired_nonpayment_survives_restart_without_revoking_reearned_trust() {
     let dir = tempfile::tempdir().unwrap();
     let wallet = Arc::new(MockWallet::default());
     let expired = invoice_with_expiry(91, 2000, 0);
@@ -375,8 +423,8 @@ async fn expired_nonpayment_survives_restart_and_requires_deposit_in_later_sessi
     assert_eq!(bill.invoice, Some(expired.clone()));
     assert!(!bill.settled);
 
-    // Re-earn cache standing after restart. A denial with an empty cache alone
-    // would not prove that the persisted unpaid invoice affects future trust.
+    // Re-earn cache standing after restart. Persisted debt is independent of
+    // trust: both peers skip deposits while below the separate strike limit.
     for peer in ["peer", "other"] {
         let seed = format!("settled-{peer}");
         service
@@ -396,7 +444,7 @@ async fn expired_nonpayment_survives_restart_and_requires_deposit_in_later_sessi
                 .settled
         );
         let trusted = service.metered_trusted(peer).await.unwrap();
-        assert_eq!(trusted, peer == "other");
+        assert!(trusted, "{peer} remains warm with a final outstanding");
         let later = service
             .serve_admit(admit(&format!("later-{peer}"), peer))
             .await
@@ -407,8 +455,7 @@ async fn expired_nonpayment_survives_restart_and_requires_deposit_in_later_sessi
             "{peer}"
         );
     }
-    // Clearing only the invoice debt now restores the already re-earned
-    // standing, proving the earlier denial was not merely an empty cache.
+    // Clearing the debt changes strikes, not the already re-earned standing.
     service
         .ledger
         .mark_metered_received(&expired.payment_hash)

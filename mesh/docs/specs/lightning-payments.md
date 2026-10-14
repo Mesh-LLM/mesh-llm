@@ -18,6 +18,22 @@ wallet, routing and operational findings that still apply.
 
 ## Payment flow
 
+Settled protocol rules (not open design choices):
+
+- Cold peers pay a flat **1 sat deposit**, deducted from the final bill.
+- After deduction, a remainder below **500 msat has no invoice**; 500–999
+  msat produces a 1-sat invoice; larger remainders preserve exact msat.
+- Invoice creation, like payment, has no host IPC deadline and is not
+  automatically replayed after an uncertain transport failure. The buyer's
+  initial admission wait is 300 seconds; client disconnect still cancels it.
+  Invoice expiry bounds payment observation, not the creation RPC itself.
+- Warm-peer deposit skipping depends on the provider's settled-request cache,
+  independently of outstanding finals. Cache loss can require a new deposit.
+- Three distinct issued, unpaid final invoices block further admissions;
+  paying one clears that strike. Pending finals below that limit have grace.
+- Recovery by request ID returns the existing outcome/invoice or `Pending`;
+  it never runs inference twice.
+
 Token-metered, backend-neutral, deposit before work, settled from the
 backend's own usage report. There are no prefill-time invoices, output
 allowance terms, delivery watermarks, receivables or refunds.
@@ -85,8 +101,9 @@ unpaid final invoices. Deposits, retries, abandoned requests and bills the
 deposit covered are not strikes. Paying a final invoice clears it, including a
 payment observed late by the provider's periodic refresh. Trust (deposit
 skipping) is an optimization: a peer is trusted only when it has settled a
-request in this provider process's lifetime **and** currently owes no final
-invoice. The cache is in memory, bounded to 1,024 peers and cleared when full,
+request in this provider process's lifetime. Outstanding final invoices do not
+make a warm peer cold; only the separate three-final admission limit blocks it.
+The cache is in memory, bounded to 1,024 peers and cleared when full,
 so losing it means the next request asks for a deposit again.
 
 `Recover { id }` lets a payer refetch the settlement of a request after a

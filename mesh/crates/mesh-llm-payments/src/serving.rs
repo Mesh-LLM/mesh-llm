@@ -276,12 +276,11 @@ impl PaymentService {
     }
 
     /// Whether `peer` may be admitted without a deposit: it has settled a
-    /// request in this process's lifetime and owes no final invoice. An
-    /// unpaid deposit is an admission that never dispatched, not debt.
+    /// request in this process's lifetime. Outstanding finals are enforced
+    /// separately by the admission strike limit, not by making a peer cold.
     /// Seller-owned and disposable; debt itself is durable.
     pub async fn metered_trusted(&self, peer: &str) -> Result<bool> {
-        Ok(self.metered_standing.lock().await.contains(peer)
-            && self.ledger.metered_unpaid_finals(peer)? == 0)
+        Ok(self.metered_standing.lock().await.contains(peer))
     }
 
     async fn note_settled(&self, peer: &str) {
