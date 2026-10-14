@@ -82,3 +82,43 @@ export function getAttachmentSendIssue({
   }
   return 'No warm model supports the attached media. Warm a compatible model or remove the attachment.'
 }
+
+const IMAGE_HEADER_MAX_BYTES = 12
+
+function headerStartsWith(header: Uint8Array, signature: readonly number[], offset = 0): boolean {
+  return signature.every((byte, index) => header[offset + index] === byte)
+}
+
+/** Detects the image MIME type from leading magic bytes (PNG, JPEG, GIF,
+ *  WebP); returns null for any other byte sequence. */
+export function sniffImageType(header: Uint8Array): string | null {
+  if (headerStartsWith(header, [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])) return 'image/png'
+  if (headerStartsWith(header, [0xff, 0xd8, 0xff])) return 'image/jpeg'
+  if (headerStartsWith(header, [0x47, 0x49, 0x46, 0x38, 0x37, 0x61])) return 'image/gif'
+  if (headerStartsWith(header, [0x47, 0x49, 0x46, 0x38, 0x39, 0x61])) return 'image/gif'
+  if (headerStartsWith(header, [0x52, 0x49, 0x46, 0x46]) && headerStartsWith(header, [0x57, 0x45, 0x42, 0x50], 8)) {
+    return 'image/webp'
+  }
+  return null
+}
+
+/** Clipboard and picker files can arrive with an empty `type` when the browser
+ *  could not determine a MIME type. Reads the leading bytes and re-wraps the
+ *  file with the sniffed image type so downstream image routing works; every
+ *  other file (including unreadable ones) is returned unchanged. */
+export async function resolveImageFile(file: File): Promise<File> {
+  if (file.type !== '') return file
+  let header: Uint8Array
+  try {
+    header = new Uint8Array(await file.slice(0, IMAGE_HEADER_MAX_BYTES).arrayBuffer())
+  } catch {
+    return file
+  }
+  const imageType = sniffImageType(header)
+  if (!imageType) return file
+  return new File([file], file.name, { type: imageType, lastModified: file.lastModified })
+}
+
+export async function resolveImageFiles(files: readonly File[]): Promise<File[]> {
+  return Promise.all(files.map((file) => resolveImageFile(file)))
+}
