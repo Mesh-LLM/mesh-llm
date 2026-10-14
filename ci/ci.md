@@ -1759,6 +1759,12 @@ lifecycle. The workflow contract test requires final cleanup for every declared
 self-hosted job, including custom `mesh-llm-*` runner matrix labels.
 
 
+Each canary candidate's initial native build compiles without
+executing tests; the generated-patch checker verifies equality and idempotence,
+rebuilds the full native target set, and runs one unfiltered CTest pass. Its
+generator-tool unit suite remains separate. Standalone native builds retain
+their existing test execution by default.
+
 The native Skippy suite includes sparse synthetic graph-contract tests for every
 canary registry family. `tools/xtask/src/repo_consistency/synthetic_graph_contracts.rs` makes
 missing fixtures and registry dimension/MTP drift fail CI validation. The matrix

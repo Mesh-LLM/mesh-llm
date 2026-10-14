@@ -37,11 +37,15 @@ impl Replay {
         Self { fixture, trace }
     }
     fn run(&self, replay: bool, upstream: bool, force: bool, backend: &str) {
-        let command = self.fixture.command(if backend == "metal" {
+        self.run_args(replay, upstream, force, backend, &[]);
+    }
+    fn run_args(&self, replay: bool, upstream: bool, force: bool, backend: &str, args: &[&str]) {
+        let mut command = self.fixture.command(if backend == "metal" {
             "Darwin"
         } else {
             "Linux"
         });
+        command.args(args);
         let mut environment: BTreeMap<OsString, Value> = command
             .get_envs()
             .filter_map(|(key, value)| {
@@ -317,6 +321,30 @@ fn replay_explicit_upstream_suite_builds_defaults_and_runs_unfiltered_bounded_ct
     assert_eq!(option(ctest, "--timeout"), "900");
     replay.finish();
 }
+#[test]
+fn compile_only_keeps_complete_test_build_and_defers_execution_to_caller() {
+    let replay = Replay::new();
+    replay.run_args(false, true, true, "cpu", &["--build-only"]);
+    let calls = replay.calls();
+    assert!(contains(
+        first(&calls, "cmake", false),
+        "-DLLAMA_BUILD_TESTS=ON"
+    ));
+    assert!(!contains(first(&calls, "cmake", true), "--target"));
+    assert!(!calls.iter().any(|call| call.tool == "ctest"));
+    // A later ordinary invocation still runs the suite, even with warm outputs.
+    replay.run(false, true, false, "cpu");
+    assert_eq!(
+        replay
+            .calls()
+            .iter()
+            .filter(|call| call.tool == "ctest")
+            .count(),
+        1
+    );
+    replay.finish();
+}
+
 #[test]
 fn replay_just_recipe_keeps_pinned_prepare_and_isolated_forced_static_replay() {
     let source = include_str!(concat!(

@@ -717,7 +717,7 @@ run_full_build() {
   echo "trusted candidate gate: build" | tee -a "$BUILD_LOG"
   run_verification_logged "complete patched llama.cpp build" "$BUILD_LOG" env \
     LLAMA_STAGE_UPSTREAM_TESTS=ON uv run --no-project --with jinja2==3.1.6 -- \
-    arch -arm64 bash scripts/build-llama.sh -DCMAKE_OSX_ARCHITECTURES=arm64 -DGGML_METAL_EMBED_LIBRARY=ON \
+    arch -arm64 bash scripts/build-llama.sh --build-only -DCMAKE_OSX_ARCHITECTURES=arm64 -DGGML_METAL_EMBED_LIBRARY=ON \
     || return 1
   archive="$LLAMA_STAGE_BUILD_DIR/src/libllama.a"
   arches="$(lipo -archs "$archive" 2>/dev/null || true)"
@@ -726,7 +726,8 @@ run_full_build() {
     return 1
   fi
   run_verification_logged "generated model-family patch check" "$BUILD_LOG" \
-    scripts/check-skippy-generated-family-patch.sh || return 1
+    uv run --no-project --with jinja2==3.1.6 -- \
+    arch -arm64 bash scripts/check-skippy-generated-family-patch.sh --full-native-suite || return 1
   run_verification_logged "stage runtime crate build" "$BUILD_LOG" \
     cargo build -p skippy-runtime -p skippy-cli -p skippy-package-builder -p skippy-correctness -p skippy-topology --bins \
     || return 1
