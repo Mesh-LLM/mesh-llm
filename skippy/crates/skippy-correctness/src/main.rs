@@ -4,6 +4,7 @@ mod native_mtp_openai;
 mod openai_cache_reuse;
 mod report;
 mod runner;
+mod stage_process;
 mod support;
 
 use anyhow::Result;

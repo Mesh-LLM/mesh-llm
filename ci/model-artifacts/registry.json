@@ -4842,9 +4842,10 @@
         "resources": {
           "runner_role": "family-certify",
           "cache_policy": "immutable-local",
-          "estimated_model_bytes": 93629009920
+          "estimated_model_bytes": 93629009920,
+          "minimum_runner_memory_gib": 256
         },
-        "notes": "minimax-m2 MoE (256 experts, 8 active); smallest 3-bit artifact is ~94 GB, so this row is manual-full only; estimated_model_bytes is the exact pinned GGUF tensor byte sum"
+        "notes": "minimax-m2 MoE (256 experts, 8 active); smallest 3-bit artifact is ~94 GB, so this row is manual-full only; estimated_model_bytes is the exact pinned GGUF tensor byte sum. The 115 GiB estimated peak leaves insufficient available memory on the 128 GiB runner after its 10% reserve; require the 256 GiB tier."
       }
     },
     {

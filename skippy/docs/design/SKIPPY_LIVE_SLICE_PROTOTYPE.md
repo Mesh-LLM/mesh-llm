@@ -107,6 +107,59 @@ prompt unchanged when it cannot remove anything. No family-specific runtime
 branch or reasoning-forcing prompt is introduced. The next candidate run must
 qualify the repaired behavior; the failed run does not become a pass retroactively.
 
+## October 15 startup and runner repairs
+
+The completed old run has 88 passing families and seven failures. Alongside the
+three image/template failures above, MiMo2 and MiniMax-M3 failed stage startup,
+MiniMax-M2 failed memory admission, and Gemma3 failed compiler-cache bootstrap.
+
+The correctness harness waited with the configured startup budget but omitted
+`--startup-timeout-secs` from its child `skippy serve` command. The child therefore
+exited after its default 60 seconds, even when the harness allowed 790 or 900.
+A shared child-command owner now forwards that budget for every local stage
+launch, and remote MTP launches forward it too. No family-specific timeout or
+sleep was added. MiniMax-M3's retained two-stage report and state handoff passed;
+its three-stage startup hit the same 60-second failure as MiMo2. The subsequent
+Metal teardown assertion is retained as historical failure evidence, not a
+successful graph comparison.
+
+MiniMax-M3 already ran on a 256 GiB host with the pinned UD-IQ1_M artifact.
+Its lowest sampled available memory was 63,161,401,344 bytes, above the
+27,487,790,695-byte reserve. This failure does not justify reducing its quant.
+MiniMax-M2's 123,489,073,904-byte estimated peak barely fits the nominal 128 GiB
+tier budget and failed actual available-memory admission. Its source-owned
+resource requirement now selects the existing 256 GiB tier. The 10% reserve,
+available-memory checks, immutable model identity and runtime remain unchanged.
+
+Gemma3 failed before inference because bootstrap stopped and restarted sccache
+on the host's shared default endpoint. The macOS action now exports a unique,
+short Unix socket before compiler probes, preserving the disk-cache directory
+without stopping other jobs' servers. Canary toolchain verification leaves
+server startup to that owner. The controller repair landed on protected main in
+[PR #2439](https://github.com/Mesh-LLM/mesh-llm/pull/2439), commit
+`b51116042f5a3926de2095c89fde059c0a27466b`, before the next candidate dispatch.
+The maintainer authorized its immediate merge without waiting for remote CI.
+
+Local validation passes all 53 correctness unit tests and 84 integration
+contracts (247 existing real-model cases remain opt-in), warning-denying Clippy,
+and two-/three-stage SmolLM2 parity through the packaged Skippy server with a
+790-second launch budget. The macOS action regression executes its real shell
+steps with finite tool fixtures, checks unique sockets and propagated cache
+settings, and rejects any stop-server call. Two real local sccache servers also
+started independently; stopping one left the other available. These checks do
+not substitute for the next full immutable family run. A real C compilation
+also verified persistent reuse: the first server recorded one miss, then a
+fresh server using a different socket and the same disk directory recorded one
+hit and zero misses for the identical compilation.
+
+The full local CI invocation passed 2,338 automation unit tests, all 346 runner
+contracts, and 1,148 lifecycle tests (eight existing lifecycle ignores), then
+caught a stale generated family manifest. The memory requirement was moved into
+the canonical model registry and all projections regenerated. All 26 model
+manifest checks, affected planner checks, every remaining automation target,
+legacy contract gate, and repository consistency check pass on resume. No
+passing model result or test expectation was relaxed to address that failure.
+
 ## Deleted implementation
 
 - All `src/skippy/stage_program*` source/header modules (14 on main; 15 on the
