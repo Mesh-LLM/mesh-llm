@@ -130,6 +130,11 @@ jobs:
     defaults:
       run:
         shell: bash
+    env:
+      # The controller admission step rewrites this with the admitted digest.
+      # The empty default keeps an early cancellation a clean digest mismatch
+      # in the final cleanup step instead of an unbound-variable abort.
+      SKIPPY_CONTROLLER_SHA256: ''
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
@@ -409,10 +414,6 @@ jobs:
           CLEANUP_BINARY_PATH: ci-artifacts/skippy/skippy-product-input/skippy
         run: |
           set -euo pipefail
-          if [[ -z "${SKIPPY_CONTROLLER_SHA256:-}" ]]; then
-            echo "controller admission did not complete; skipping owned cleanup" >&2
-            exit 0
-          fi
           test "$(sha256sum "$MESH_LLM_AUTOMATION_BIN" | awk '{print $1}')" = "$SKIPPY_CONTROLLER_SHA256"
           "$MESH_LLM_AUTOMATION_BIN" ci-ops runner-cleanup --job smoke --evidence-uploaded false
 
