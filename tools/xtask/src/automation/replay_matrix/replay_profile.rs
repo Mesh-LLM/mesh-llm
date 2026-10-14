@@ -120,20 +120,21 @@ pub(super) fn build(
     trajectories
         .iter()
         .map(|trajectory| {
+            if mode == Mode::Window {
+                let window = trajectory
+                    .replay_window
+                    .ok_or("window mode requires replay_window on every trajectory")?;
+                let available =
+                    super::recorded_requests::assistant_turn_count(trajectory, selection);
+                return super::recorded_requests::build_selected(
+                    trajectory,
+                    selection,
+                    Some(window.range(available)?),
+                );
+            }
             let turns = super::recorded_requests::build(trajectory, selection)?;
             if mode == Mode::All {
                 return Ok(turns);
-            }
-            if mode == Mode::Window {
-                let range = trajectory
-                    .replay_window
-                    .ok_or("window mode requires replay_window on every trajectory")?
-                    .range(turns.len())?;
-                return Ok(turns
-                    .into_iter()
-                    .enumerate()
-                    .filter_map(|(index, turn)| range.contains(&index).then_some(turn))
-                    .collect());
             }
             let stage = if mode == Mode::Final {
                 Stage::Final

@@ -2,6 +2,7 @@ use crate::command::DynResult;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::collections::BTreeSet;
+use std::ops::Range;
 
 #[derive(Serialize)]
 pub(super) struct Trajectory {
@@ -122,7 +123,32 @@ fn tools(trajectory: &Trajectory) -> DynResult<Vec<Value>> {
         .collect())
 }
 
+/// Assistant turns a build can materialise for this selection, without building any body.
+pub(super) fn assistant_turn_count(trajectory: &Trajectory, selection: &Selection<'_>) -> usize {
+    let mut count = 0_usize;
+    for recorded in &trajectory.messages {
+        if recorded.get("role").and_then(Value::as_str) == Some("assistant") {
+            if selection.turn_limit.is_some_and(|limit| count >= limit) {
+                break;
+            }
+            count += 1;
+        }
+    }
+    count
+}
+
 pub(super) fn build(trajectory: &Trajectory, selection: &Selection<'_>) -> DynResult<Vec<Turn>> {
+    build_selected(trajectory, selection, None)
+}
+
+/// Builds only the assistant turns inside `selected` (all of them when `None`).
+/// The recorded message walk is shared, so a selected turn still carries its complete
+/// recorded prefix while unselected turns never materialise a request body.
+pub(super) fn build_selected(
+    trajectory: &Trajectory,
+    selection: &Selection<'_>,
+    selected: Option<Range<usize>>,
+) -> DynResult<Vec<Turn>> {
     if trajectory.session_id.is_empty() || selection.maximum_output_tokens == Some(0) {
         return Err("session identity and output budget must be nonempty".into());
     }
@@ -132,6 +158,7 @@ pub(super) fn build(trajectory: &Trajectory, selection: &Selection<'_>) -> DynRe
     }
     let mut history = Vec::new();
     let mut turns = Vec::new();
+    let mut assistant_turn = 0_usize;
     for (index, recorded) in trajectory.messages.iter().enumerate() {
         let role = recorded
             .get("role")
@@ -143,49 +170,55 @@ pub(super) fn build(trajectory: &Trajectory, selection: &Selection<'_>) -> DynRe
         if role == "assistant" {
             if selection
                 .turn_limit
-                .is_some_and(|limit| turns.len() >= limit)
+                .is_some_and(|limit| assistant_turn >= limit)
             {
                 break;
             }
-            // A recorded answer's length is not a safe bound for another model's
-            // completion. Omit the limit unless the caller explicitly supplies it.
-            let output = if selection.qualification_probe {
-                Some(1)
-            } else {
-                selection.maximum_output_tokens
-            };
-            let mut body = serde_json::json!({
-                "prompt_cache_key":trajectory.session_id, "model":selection.model,
-                "messages":history, "temperature":0,
-                "seed":42, "stream":true, "stream_options":{"include_usage":true}
-            });
-            if let Some(output) = output {
-                body["max_tokens"] = output.into();
+            if selected
+                .as_ref()
+                .is_none_or(|range| range.contains(&assistant_turn))
+            {
+                // A recorded answer's length is not a safe bound for another model's
+                // completion. Omit the limit unless the caller explicitly supplies it.
+                let output = if selection.qualification_probe {
+                    Some(1)
+                } else {
+                    selection.maximum_output_tokens
+                };
+                let mut body = serde_json::json!({
+                    "prompt_cache_key":trajectory.session_id, "model":selection.model,
+                    "messages":history, "temperature":0,
+                    "seed":42, "stream":true, "stream_options":{"include_usage":true}
+                });
+                if let Some(output) = output {
+                    body["max_tokens"] = output.into();
+                }
+                if let Some(sampling) = &trajectory.replay_sampling {
+                    sampling.apply(&mut body)?;
+                }
+                if !tools.is_empty() {
+                    body["tools"] = Value::Array(tools.clone());
+                }
+                turns.push(Turn {
+                    request_id: format!("{}:{}", trajectory.session_id, assistant_turn),
+                    session_id: trajectory.session_id.clone(),
+                    source_dataset: trajectory.source_dataset.clone(),
+                    agent_framework: trajectory.agent_framework.clone(),
+                    recorded_model: trajectory.recorded_model.clone(),
+                    assistant_turn,
+                    recorded_message_index: index,
+                    history_message_count: history.len(),
+                    requested_output_tokens: output,
+                    recorded_output_characters: recorded
+                        .get("content")
+                        .and_then(Value::as_str)
+                        .map_or(0, |content| content.chars().count()),
+                    available_tools: tools.len(),
+                    qualification_probe: selection.qualification_probe,
+                    body,
+                });
             }
-            if let Some(sampling) = &trajectory.replay_sampling {
-                sampling.apply(&mut body)?;
-            }
-            if !tools.is_empty() {
-                body["tools"] = Value::Array(tools.clone());
-            }
-            turns.push(Turn {
-                request_id: format!("{}:{}", trajectory.session_id, turns.len()),
-                session_id: trajectory.session_id.clone(),
-                source_dataset: trajectory.source_dataset.clone(),
-                agent_framework: trajectory.agent_framework.clone(),
-                recorded_model: trajectory.recorded_model.clone(),
-                assistant_turn: turns.len(),
-                recorded_message_index: index,
-                history_message_count: history.len(),
-                requested_output_tokens: output,
-                recorded_output_characters: recorded
-                    .get("content")
-                    .and_then(Value::as_str)
-                    .map_or(0, |content| content.chars().count()),
-                available_tools: tools.len(),
-                qualification_probe: selection.qualification_probe,
-                body,
-            });
+            assistant_turn += 1;
         }
         history.push(Value::Object(message(recorded)?));
     }
@@ -318,5 +351,68 @@ mod tests {
         assert_eq!(turns.len(), 1);
         assert_eq!(turns[0].body["max_tokens"], 1);
         assert!(turns[0].qualification_probe);
+    }
+
+    fn counting_trajectory() -> Trajectory {
+        serde_json::from_value(serde_json::json!({
+            "session_id":"s","source_dataset":"fixture","agent_framework":"fixture","recorded_model":null,
+            "messages":[{"role":"user","content":"task"},
+                {"role":"assistant","content":"first"},
+                {"role":"tool","tool_call_id":"call-0","content":"observation"},
+                {"role":"assistant","content":"second"},
+                {"role":"user","content":"more"},
+                {"role":"assistant","content":"third"},
+                {"role":"assistant","content":"fourth"}]
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn turn_count_without_bodies_matches_the_materialised_turns() {
+        let trajectory = counting_trajectory();
+        for turn_limit in [None, Some(1), Some(2), Some(4), Some(9)] {
+            let selection = Selection {
+                model: "target",
+                maximum_output_tokens: Some(2048),
+                turn_limit,
+                qualification_probe: false,
+            };
+            assert_eq!(
+                assistant_turn_count(&trajectory, &selection),
+                build(&trajectory, &selection).unwrap().len()
+            );
+        }
+        let exhausted = Selection {
+            model: "target",
+            maximum_output_tokens: Some(2048),
+            turn_limit: Some(0),
+            qualification_probe: false,
+        };
+        assert_eq!(assistant_turn_count(&trajectory, &exhausted), 0);
+        assert!(build(&trajectory, &exhausted).is_err());
+    }
+
+    #[test]
+    fn selecting_a_range_materialises_only_those_turns_with_intact_prefixes() {
+        let trajectory = counting_trajectory();
+        let selection = Selection {
+            model: "target",
+            maximum_output_tokens: Some(2048),
+            turn_limit: None,
+            qualification_probe: false,
+        };
+        let all = build(&trajectory, &selection).unwrap();
+        assert_eq!(all.len(), 4);
+        for (start, end) in [(0, 1), (1, 3), (3, 4)] {
+            let selected = build_selected(&trajectory, &selection, Some(start..end)).unwrap();
+            assert_eq!(selected.len(), end - start);
+            for (actual, expected) in selected.iter().zip(&all[start..end]) {
+                assert_eq!(actual.request_id, expected.request_id);
+                assert_eq!(actual.assistant_turn, expected.assistant_turn);
+                assert_eq!(actual.history_message_count, expected.history_message_count);
+                assert_eq!(actual.body["messages"], expected.body["messages"]);
+            }
+        }
+        assert!(build_selected(&trajectory, &selection, Some(4..5)).is_err());
     }
 }
