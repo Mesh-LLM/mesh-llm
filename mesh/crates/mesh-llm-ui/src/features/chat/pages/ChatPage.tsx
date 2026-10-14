@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useSearch } from '@tanstack/react-router'
 import { uiMessagesToThreadMessages } from '@/features/chat/api/use-chat-messages'
+import type { ComposerPromptUpdate } from '@/features/chat/components/Composer'
 import { ChatSessionProvider } from '@/features/chat/api/chat-session'
 import { createChatDraftConversationId } from '@/features/chat/api/chat-session-ids'
 import { useOptionalChatSession, useChatSession } from '@/features/chat/api/chat-session-hooks'
@@ -217,10 +218,11 @@ export function ChatPageContent({ data = CHAT_HARNESS, target, onClearTarget }: 
     setComposerDrafts((current) => ({ ...current, [conversationId]: draft }))
   }, [])
   const updateComposerPrompt = useCallback(
-    (nextPrompt: string) => {
+    (update: ComposerPromptUpdate) => {
       setComposerDrafts((current) => {
         const currentDraft = current[composerConversationId] ?? { prompt: '', attachments: [] }
-        return { ...current, [composerConversationId]: { ...currentDraft, prompt: nextPrompt } }
+        const prompt = typeof update === 'function' ? update(currentDraft.prompt) : update
+        return { ...current, [composerConversationId]: { ...currentDraft, prompt } }
       })
     },
     [composerConversationId]

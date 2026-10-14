@@ -1,17 +1,57 @@
-import { useCallback, useRef, type ClipboardEvent, type Ref } from 'react'
+import { useCallback, useRef, useState, type Ref } from 'react'
 import { Code2, ListEnd, MessageSquareX, Paperclip, RotateCcw, Send, Square, X } from 'lucide-react'
 import { Tooltip } from '@/components/ui/tooltip'
 import { cn } from '@/lib/cn'
+import { resolveImageFiles } from '@/lib/attachments'
 
 type ComposerProcessingStage = 'downloading' | 'starting' | 'processing'
 
-function pastedImageFiles(event: ClipboardEvent<HTMLTextAreaElement>): File[] {
-  return Array.from(event.clipboardData?.files ?? []).filter((file) => file.type.startsWith('image/'))
+/** A prompt value, or an updater evaluated against the latest draft so
+ *  concurrent updates (e.g. two overlapping paste restorations) compose
+ *  instead of overwriting each other. */
+export type ComposerPromptUpdate = string | ((current: string) => string)
+
+function candidatePasteImages(files: File[]): File[] {
+  return files.filter((file) => file.type.startsWith('image/') || file.type === '')
+}
+
+function hasUndeterminedType(files: File[]): boolean {
+  return files.some((file) => file.type === '')
+}
+
+type PasteSelection = { start: number; end: number; value: string }
+
+async function attachDetectedPasteImages(
+  files: File[],
+  pastedText: string,
+  selection: PasteSelection,
+  onAttach: (files: File[]) => void,
+  onChange: (value: ComposerPromptUpdate) => void
+): Promise<void> {
+  const resolved = await resolveImageFiles(files)
+  const images = resolved.filter((file) => file.type.startsWith('image/'))
+  if (images.length > 0) {
+    onAttach(images)
+    return
+  }
+  // No image materialized, so the suppressed default paste would have
+  // inserted this text at the selection. Evaluate against the latest
+  // draft so concurrent restorations compose: when the prompt is
+  // untouched since the paste, put the text back exactly there,
+  // replacing what the selection covered; if it was edited meanwhile,
+  // append instead of applying a stale range over the edit.
+  if (pastedText) {
+    onChange((current) =>
+      current === selection.value
+        ? `${current.slice(0, selection.start)}${pastedText}${current.slice(selection.end)}`
+        : `${current}${pastedText}`
+    )
+  }
 }
 
 type ComposerProps = {
   value: string
-  onChange: (value: string) => void
+  onChange: (value: ComposerPromptUpdate) => void
   onSend: () => void
   onAttach?: (files: File[]) => void
   onSystemPrompt?: () => void
@@ -65,11 +105,21 @@ export function Composer({
   showSystemPromptButton = false
 }: ComposerProps) {
   const attachmentInputRef = useRef<HTMLInputElement | null>(null)
+  const [pendingTypeSniffs, setPendingTypeSniffs] = useState(0)
+  const runTypeSniff = useCallback((run: () => Promise<void>) => {
+    setPendingTypeSniffs((count) => count + 1)
+    run()
+      .catch((error) => console.warn('attachment type detection failed', error))
+      .finally(() => setPendingTypeSniffs((count) => count - 1))
+  }, [])
   const handleSend = useCallback(() => {
-    if (!disabled && !requestDisabled && (value.trim() || attachments.length > 0)) onSend()
-  }, [attachments.length, disabled, requestDisabled, value, onSend])
+    if (!disabled && !requestDisabled && pendingTypeSniffs === 0 && (value.trim() || attachments.length > 0)) {
+      onSend()
+    }
+  }, [attachments.length, disabled, requestDisabled, pendingTypeSniffs, value, onSend])
 
-  const sendDisabled = disabled || requestDisabled || (!value.trim() && attachments.length === 0)
+  const sendDisabled =
+    disabled || requestDisabled || pendingTypeSniffs > 0 || (!value.trim() && attachments.length === 0)
   const retryDisabled = disabled || requestDisabled || !canRetry
   const stopDisabled = disabled || !isStreaming || !onStop
   const submitQueuesPrompt = sendMode === 'queue' || isStreaming
@@ -131,11 +181,26 @@ export function Composer({
         onPaste={(event) => {
           if (!onAttach) return
 
-          const images = pastedImageFiles(event)
-          if (images.length === 0) return
+          const candidates = candidatePasteImages(Array.from(event.clipboardData?.files ?? []))
+          if (candidates.length === 0) return
 
+          // preventDefault must run synchronously; the sniffed type of an
+          // undetermined file only resolves afterwards. If nothing turns out
+          // to be an image, the suppressed text payload is restored by
+          // attachDetectedPasteImages.
           event.preventDefault()
-          onAttach(images)
+          if (!hasUndeterminedType(candidates)) {
+            onAttach(candidates)
+            return
+          }
+          const pastedText = event.clipboardData?.getData('text/plain') ?? ''
+          const textarea = event.currentTarget
+          const selection = {
+            start: textarea.selectionStart ?? textarea.value.length,
+            end: textarea.selectionEnd ?? textarea.value.length,
+            value: textarea.value
+          }
+          runTypeSniff(() => attachDetectedPasteImages(candidates, pastedText, selection, onAttach, onChange))
         }}
         onKeyDown={(event) => {
           if (event.key === 'Escape' && isStreaming && onStop) {
@@ -172,7 +237,16 @@ export function Composer({
             onChange={(event) => {
               const files = Array.from(event.target.files ?? [])
               event.target.value = ''
-              if (files.length > 0) onAttach?.(files)
+              if (files.length === 0) return
+              if (!hasUndeterminedType(files)) {
+                onAttach?.(files)
+                return
+              }
+              runTypeSniff(() =>
+                resolveImageFiles(files).then((resolved) => {
+                  onAttach?.(resolved)
+                })
+              )
             }}
           />
           {showSystemPromptButton ? (
