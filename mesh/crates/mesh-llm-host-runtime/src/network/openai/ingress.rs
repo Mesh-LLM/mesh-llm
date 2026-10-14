@@ -2303,13 +2303,6 @@ async fn handle_api_proxy_connection(
     requested_by: Option<iroh::EndpointId>,
 ) {
     let source_addr = tcp_stream.peer_addr().ok();
-    // The compatibility bridge records origin out-of-band, never in a header
-    // that a local caller could forge or a peer could erase.
-    let ingress_type = if source_addr.is_some_and(crate::network::tunnel::is_remote_bridge) {
-        crate::runtime::IngressType::RemoteQuicHttp
-    } else {
-        ingress_type
-    };
     // The election snapshot predates any block the operator set since; drop
     // blocked peers here so every route below sees the same filtered set.
     let targets = node

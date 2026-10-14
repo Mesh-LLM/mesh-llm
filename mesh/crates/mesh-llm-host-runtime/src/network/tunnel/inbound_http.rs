@@ -3,8 +3,7 @@ use crate::network::openai::client_stream::ClientStream;
 use anyhow::{Context, Result};
 use iroh::EndpointId;
 use std::time::Duration;
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpStream;
+use tokio::io::{AsyncRead, AsyncReadExt};
 
 const TUNNELED_HTTP_HEADER_READ_CHUNK_BYTES: usize = 8 * 1024;
 const TUNNELED_HTTP_HEADER_READ_TIMEOUT: Duration = Duration::from_secs(5);
@@ -12,13 +11,12 @@ const TUNNELED_HTTP_HEADER_READ_TIMEOUT: Duration = Duration::from_secs(5);
 #[cfg(test)]
 mod tests;
 
-/// Handle an inbound HTTP tunnel bi-stream through direct ingress or the legacy bridge.
+/// Handle an inbound HTTP tunnel bi-stream through in-process execution ingress.
 pub(super) async fn handle_inbound_http_stream(
     node: Node,
     remote: EndpointId,
     quic_send: iroh::endpoint::SendStream,
     mut quic_recv: iroh::endpoint::RecvStream,
-    http_port: u16,
     ingress: Option<super::HttpIngress>,
 ) -> Result<()> {
     let _inflight = node.begin_inflight_request();
@@ -86,15 +84,10 @@ pub(super) async fn handle_inbound_http_stream(
         return Ok(());
     }
 
-    // Compatibility for embedders/tests that only configure the legacy port.
-    let mut tcp_stream = TcpStream::connect(format!("127.0.0.1:{http_port}")).await?;
-    let _remote_origin = super::remote_origin::RemoteBridge::register(tcp_stream.local_addr()?)?;
-    tcp_stream.set_nodelay(true)?;
-    tcp_stream.write_all(&prefix).await?;
-    let (tcp_read, tcp_write) = tokio::io::split(tcp_stream);
-    // HTTP relay traffic is never link-delayed; the emulation applies only
-    // to stage transport.
-    super::relay_bidirectional(tcp_read, tcp_write, quic_send, quic_recv, None).await
+    let stream = ClientStream::from_quic_with_prefix(quic_recv, quic_send, prefix);
+    crate::network::openai::send_503(stream, "no local execution provider is ready")
+        .await
+        .context("failed to reject unavailable peer execution")
 }
 
 fn remote_tunnel_request_ids(

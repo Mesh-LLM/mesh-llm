@@ -413,17 +413,6 @@ pub async fn handle_mesh_request(
 ) {
     let mut tcp_stream = tcp_stream;
     let source_addr = tcp_stream.peer_addr().ok();
-    if source_addr.is_some_and(crate::network::tunnel::is_remote_bridge) {
-        // A legacy peer bridge reaching a bootstrap/passive gateway has no
-        // execution provider. Do not erase its origin and route it onward.
-        let _ = send_503_observed(
-            tcp_stream,
-            "no local execution provider is ready",
-            OpenAiRouteObserver::default(),
-        )
-        .await;
-        return;
-    }
     let plugin_manager = node.plugin_manager().await;
     let mut request = match read_http_request_with_plugin_manager_with_context(
         &mut tcp_stream,

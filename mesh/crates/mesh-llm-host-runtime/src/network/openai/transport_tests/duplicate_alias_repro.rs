@@ -93,7 +93,7 @@ async fn peer_automatic_model_does_not_route() {
 }
 
 #[tokio::test]
-async fn legacy_peer_bridge_preserves_execution_boundary() {
+async fn peer_without_execution_handler_is_rejected() {
     duplicate_host_request(INTERNAL, false, true, false, "").await;
 }
 
@@ -110,7 +110,7 @@ async fn peer_cannot_force_forwarding_with_headers() {
 async fn duplicate_host_request(
     model: &str,
     available: bool,
-    legacy: bool,
+    unavailable_ingress: bool,
     local: bool,
     header: &str,
 ) {
@@ -120,7 +120,6 @@ async fn duplicate_host_request(
     let (port_b, mut backend_b, task_b) = spawn_tunnel_capture().await;
     let mut managers = Vec::new();
     let mut senders = Vec::new();
-    let mut proxies = Vec::new();
     for (node, channels, port) in [(&a, ac, port_a), (&b, bc, port_b)] {
         node.set_hosted_models(vec![INTERNAL.to_owned()]).await;
         node.set_served_model_descriptors(vec![duplicate_descriptor(INTERNAL)])
@@ -133,19 +132,7 @@ async fn duplicate_host_request(
             TunnelManager::start(node.clone(), channels.rpc, channels.http, channels.stage)
                 .await
                 .unwrap();
-        if legacy && node.id() == b.id() {
-            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-            let port = listener.local_addr().unwrap().port();
-            manager.set_http_port(port);
-            proxies.push(tokio::spawn(crate::network::openai::ingress::api_proxy(
-                node.clone(),
-                port,
-                rx,
-                Some(listener.into()),
-                false,
-                AffinityRouter::new(),
-            )));
-        } else {
+        if !unavailable_ingress || node.id() != b.id() {
             manager.set_http_ingress(rx, AffinityRouter::new());
         }
         managers.push(manager);
@@ -166,14 +153,20 @@ async fn duplicate_host_request(
     b.close_endpoint().await;
     task_a.abort();
     task_b.abort();
-    for task in proxies {
-        task.abort();
-    }
     assert!(
         no_backend_a,
         "selected peer forwarded inference back to caller"
     );
-    assert_duplicate_result(model, available, header, observed.ok(), &response);
+    if unavailable_ingress {
+        assert_unavailable_ingress(&response, observed.ok());
+    } else {
+        assert_duplicate_result(model, available, header, observed.ok(), &response);
+    }
+}
+
+fn assert_unavailable_ingress(response: &[u8], observed: Option<Vec<u8>>) {
+    assert!(String::from_utf8_lossy(response).starts_with("HTTP/1.1 503"));
+    assert!(observed.is_none());
 }
 
 async fn assert_duplicate_names(node: &mesh::Node) {
