@@ -117,11 +117,16 @@ async fn assert_forwarding_denied(
     network: &Network,
     unused_backend: &tokio::net::TcpListener,
 ) -> Result<()> {
-    assert!(response.starts_with("HTTP/1.1 402"), "{response}");
+    let status = if legacy {
+        "HTTP/1.1 402"
+    } else {
+        "HTTP/1.1 503"
+    };
+    assert!(response.starts_with(status), "{response}");
     let message = if legacy {
         "payment-capable peer required"
     } else {
-        "only locally originated requests may spend this wallet"
+        "unavailable on this execution host"
     };
     assert!(response.contains(message), "{response}");
     assert!(service.ledger.requests()?.is_empty());
