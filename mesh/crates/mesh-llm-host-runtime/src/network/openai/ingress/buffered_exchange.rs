@@ -63,10 +63,11 @@ pub(super) async fn handle_buffered_api_request(
             Err(tcp_stream) => tcp_stream,
         };
 
-    let local_models = ctx.route.node.models_being_served().await;
-    let callable = callable_models_with_local_served(ctx.route.targets, local_models);
+    let callable = callable_models(ctx.route.targets);
     let descriptors = ctx.route.node.all_served_model_descriptors().await;
-    proxy::rewrite_public_model_alias(&mut request, &callable, &descriptors);
+    if ingress_type != crate::runtime::IngressType::RemoteQuicHttp {
+        proxy::rewrite_public_model_alias(&mut request, &callable, &descriptors);
+    }
 
     // Admission applies to inference work after control-path rejection.
     let tcp_stream =
@@ -78,6 +79,20 @@ pub(super) async fn handle_buffered_api_request(
                 return;
             }
         };
+
+    if ingress_type == crate::runtime::IngressType::RemoteQuicHttp {
+        let outcome = execution::execute_peer_request(
+            tcp_stream,
+            &mut request,
+            &ctx.route,
+            lifecycle.route_observer(),
+        )
+        .await;
+        proxy::release_request_objects(ctx.route.node, &request.request_object_request_ids).await;
+        finish_exchange(&mut exchange, outcome).await;
+        lifecycle.terminal(terminal_outcome_for_dispatch(outcome));
+        return;
+    }
 
     let decision = match prepare_auto_route_decision(&mut request, &ctx.route, &descriptors).await {
         Ok(decision) => decision,
@@ -158,6 +173,7 @@ pub(super) async fn handle_buffered_api_request(
     let outcome = {
         let route_observer = lifecycle.route_observer();
         route_request(
+            false,
             tcp_stream,
             &mut request,
             &ctx.route,

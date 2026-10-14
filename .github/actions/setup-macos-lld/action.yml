@@ -27,6 +27,11 @@ runs:
         set -euo pipefail
         command -v sccache >/dev/null 2>&1
         sccache --version
+        # A short, unique socket avoids both cross-account TCP-port collisions
+        # and macOS's Unix-socket path limit in long runner workspaces.
+        socket_dir="$(mktemp -d /tmp/mesh-sccache.XXXXXXXX)"
+        export SCCACHE_SERVER_UDS="$socket_dir/server.sock"
+        echo "SCCACHE_SERVER_UDS=$SCCACHE_SERVER_UDS" >> "$GITHUB_ENV"
         if [[ "${SCCACHE_GHA_ENABLED:-}" == "true" &&
               -z "${ACTIONS_CACHE_URL:-}" &&
               -z "${ACTIONS_RESULTS_URL:-}" ]]; then
@@ -42,7 +47,6 @@ runs:
           echo "SCCACHE_IGNORE_SERVER_IO_ERROR=1" >> "$GITHUB_ENV"
           export SCCACHE_DIR="$cache_dir"
           export SCCACHE_IGNORE_SERVER_IO_ERROR=1
-          sccache --stop-server >/dev/null 2>&1 || true
           sccache --start-server
         fi
         lld_bin="$(brew --prefix lld)/bin"

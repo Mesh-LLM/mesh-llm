@@ -5,7 +5,6 @@ use crate::runtime::model_lifecycle::LoadOperation;
 pub(in crate::runtime) struct StartupLoopContext<'a> {
     pub(super) node: &'a mesh::Node,
     pub(super) config: &'a plugin::MeshConfig,
-    pub(super) tunnel_mgr: &'a tunnel::Manager,
     pub(super) target_tx: &'a Arc<tokio::sync::watch::Sender<election::ModelTargets>>,
     pub(super) model_path: &'a PathBuf,
     pub(super) model_ref: &'a str,
@@ -373,7 +372,6 @@ pub(in crate::runtime) async fn startup_handle_replace_event(
     let old_context_length = old_handle.context_length;
     remove_runtime_local_target(ctx.target_tx, &old_loaded_name, old_port);
     add_runtime_local_target(ctx.target_tx, &next.loaded_name, next.handle.port);
-    ctx.tunnel_mgr.set_http_port(ctx.api_port);
     if old_loaded_name != next.loaded_name
         && startup_unregister_runtime_instance(ctx, &old_loaded_name).await
     {
@@ -531,7 +529,6 @@ pub(in crate::runtime) async fn startup_shutdown_local_model_loop(
     };
     let port = handle.port;
     remove_runtime_local_target(ctx.target_tx, &state.loaded_name, port);
-    ctx.tunnel_mgr.set_http_port(ctx.api_port);
     if startup_unregister_runtime_instance(ctx, &state.loaded_name).await {
         publish_runtime_llama_unavailable(
             ctx.runtime_data_producer,
@@ -802,7 +799,6 @@ fn startup_loop_context<'a>(
     StartupLoopContext {
         node: &params.node,
         config: &params.config,
-        tunnel_mgr: &params.tunnel_mgr,
         target_tx: &params.target_tx,
         model_path: &params.model_path,
         model_ref: &params.model_ref,
