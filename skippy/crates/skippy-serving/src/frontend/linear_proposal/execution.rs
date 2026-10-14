@@ -318,6 +318,14 @@ impl StageOpenAiBackend {
             });
         }
 
+        // With at least one committed token the trim below rolls back
+        // `window - 1` rows, which is exactly what the verify window's
+        // snapshots and checkpoints cover. An empty commit (cancellation before
+        // the first token, or a full mismatch) rolls back the whole window
+        // instead. A window that rolled back in place has no checkpoint to
+        // restore from, so the native trim fails and retires the session; the
+        // request is already failing either way, and sizing rollback storage to
+        // the window is the follow-up that would repair it in place.
         let repair_timer = Instant::now();
         let outcome = self.iteration_scheduler.execute_runtime_timed(
             "linear-proposal-repair",

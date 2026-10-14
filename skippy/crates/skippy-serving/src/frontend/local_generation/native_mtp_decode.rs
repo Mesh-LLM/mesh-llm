@@ -379,6 +379,13 @@ impl StageOpenAiBackend {
                     .retire_verify_checkpoint(&session_id, base_position, verification_rows)
                     .map_err(openai_backend_error);
             }
+            // With at least one committed token this trims `window - 1` rows,
+            // which is what the verify window's snapshots and checkpoints
+            // cover. An empty commit rolls back the whole window instead: an
+            // in-place window has no checkpoint to restore from, so the native
+            // trim fails and retires the session. The request is already
+            // failing either way, and window-sized rollback storage is the
+            // follow-up that would repair it in place.
             if let Err(error) = runtime.trim_session(&session_id, canonical_position) {
                 let _ = runtime.drop_session_timed(&session_id);
                 return Err(InferenceError::backend(format!(
