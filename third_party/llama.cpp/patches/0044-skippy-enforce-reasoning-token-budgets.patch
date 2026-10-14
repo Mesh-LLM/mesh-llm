@@ -1,4 +1,4 @@
-From c81c80523566dc9240dc6080c37cd33e6be0b478 Mon Sep 17 00:00:00 2001
+From a678d7da636acf52a99253b94fe27adf1a6d197d Mon Sep 17 00:00:00 2001
 From: scama
  <a1860575018c4680d5669dd7bc3bd356b478bccb8d42e194df46304a5e25f49a@meshllm.communities.buzz.xyz>
 Date: Tue, 15 Sep 2026 14:33:49 +1000
@@ -9,7 +9,6 @@ Subject: [PATCH] skippy: enforce reasoning token budgets
  common/reasoning-budget.cpp     | 119 ++++++++++++++++++--------------
  common/reasoning-budget.h       |  16 ++---
  common/stage-chat.cpp           |   3 +
- include/skippy/common.h         |   2 +-
  include/skippy/sampling.h       |   2 +
  src/CMakeLists.txt              |   5 +-
  src/skippy/runtime_types.h      |   2 +
@@ -17,7 +16,7 @@ Subject: [PATCH] skippy: enforce reasoning token budgets
  src/skippy/sampling_internal.h  |   5 ++
  src/skippy/session.cpp          |   4 ++
  tests/test-reasoning-budget.cpp |   1 +
- 12 files changed, 202 insertions(+), 65 deletions(-)
+ 11 files changed, 201 insertions(+), 64 deletions(-)
 
 diff --git a/common/CMakeLists.txt b/common/CMakeLists.txt
 index 732fafee2..650e14517 100644
@@ -332,19 +331,6 @@ index 180c0a884..5b3f8690d 100644
          {"parse_tool_calls", parse_tool_calls},
          {"chat_parser", params.parser},
          {"grammar", params.grammar},
-diff --git a/include/skippy/common.h b/include/skippy/common.h
-index ba62a2c8b..3ad592c16 100644
---- a/include/skippy/common.h
-+++ b/include/skippy/common.h
-@@ -46,7 +46,7 @@ extern "C" {
- 
- #define SKIPPY_ABI_VERSION_MAJOR 0
- #define SKIPPY_ABI_VERSION_MINOR 1
--#define SKIPPY_ABI_VERSION_PATCH 62
-+#define SKIPPY_ABI_VERSION_PATCH 63
- 
- #if defined(_MSC_VER)
- #define SKIPPY_DEPRECATED(message) __declspec(deprecated(message))
 diff --git a/include/skippy/sampling.h b/include/skippy/sampling.h
 index 8b114e3e4..1b42f32c0 100644
 --- a/include/skippy/sampling.h
@@ -359,7 +345,7 @@ index 8b114e3e4..1b42f32c0 100644
  
  #ifdef __cplusplus
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index de75e976a..c30e1e030 100644
+index d947ccd3b..26eacabcb 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
 @@ -66,6 +66,7 @@ add_library(llama
@@ -608,10 +594,10 @@ index 0c4e54724..e48653520 100644
          skippy_session * session,
          const skippy_sampling_config * sampling,
 diff --git a/src/skippy/session.cpp b/src/skippy/session.cpp
-index 1fe72b2cc..37b0b9c5b 100644
+index 41054f139..a3e5debb7 100644
 --- a/src/skippy/session.cpp
 +++ b/src/skippy/session.cpp
-@@ -315,6 +315,10 @@ enum skippy_status skippy_session_configure_chat_sampling(
+@@ -357,6 +357,10 @@ enum skippy_status skippy_session_configure_chat_sampling(
              skippy_clear_chat_sampling(session);
              return out_error != nullptr && *out_error != nullptr ? (*out_error)->status : SKIPPY_STATUS_RUNTIME_ERROR;
          }
@@ -633,6 +619,3 @@ index 3bcc77e17..7bed3a0b1 100644
  
  #include "llama.h"
  #include "ggml.h"
--- 
-2.54.0 (Apple Git-157)
-

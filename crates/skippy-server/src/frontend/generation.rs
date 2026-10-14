@@ -9,6 +9,7 @@ mod server;
 mod streaming;
 mod timeouts;
 mod tool_call_stream;
+pub(in crate::frontend) mod tool_output_validation;
 mod types;
 mod workload;
 

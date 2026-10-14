@@ -443,7 +443,7 @@ mod tests {
     }
 
     #[test]
-    fn configure_chat_sampling_survives_bad_metadata_json() -> anyhow::Result<()> {
+    fn configure_chat_sampling_rejects_bad_metadata_and_recovers() -> anyhow::Result<()> {
         let Some(model_path) = correctness_model() else {
             eprintln!("skipping: SKIPPY_CORRECTNESS_MODEL is not set");
             return Ok(());
@@ -451,17 +451,38 @@ mod tests {
         let model = open_correctness_model(&model_path)?;
         let mut session = model.create_session()?;
         let sampling = SamplingConfig {
+            enabled: true,
             temperature: 0.0,
+            // Without the recovered grammar, sampling would choose token 43.
+            logit_bias: vec![crate::LogitBias {
+                token_id: 43,
+                bias: 100_000.0,
+            }],
             ..Default::default()
         };
-        // Send deliberately malformed JSON — the C++ catch blocks
-        // should clear chat sampling and return success instead of
-        // surfacing the parse error as a fatal status.
-        let result = session.configure_chat_sampling("this is not valid json", 0, Some(&sampling));
-        assert!(
-            result.is_ok(),
-            "configure_chat_sampling should return Ok even with bad metadata: {result:?}"
-        );
+        for metadata in ["this is not valid json", r#"{"grammar":7}"#] {
+            session.reset()?;
+            session.configure_chat_sampling(
+                r#"{"grammar":"root ::= <[43]>"}"#,
+                1,
+                Some(&sampling),
+            )?;
+            // A parse or type error must reach the caller so serving aborts
+            // the request instead of silently generating without its grammar.
+            let error = session
+                .configure_chat_sampling(metadata, 1, Some(&sampling))
+                .expect_err("invalid sampling metadata must fail");
+            assert!(error.to_string().contains("RuntimeError"), "{error:#}");
+
+            // A later valid request can configure a different grammar. Prove
+            // decoding obeys it rather than keeping the old or no grammar.
+            session.configure_chat_sampling(
+                r#"{"grammar":"root ::= <[42]>"}"#,
+                1,
+                Some(&sampling),
+            )?;
+            assert_eq!(session.decode_step_sampled(1, Some(&sampling))?, 42);
+        }
         Ok(())
     }
 

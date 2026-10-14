@@ -255,6 +255,13 @@ unsafe extern "C" {
         out_error: *mut *mut Error,
     ) -> Status;
 
+    pub fn skippy_session_restore_token_history(
+        session: *mut Session,
+        token_ids: *const i32,
+        token_count: usize,
+        out_error: *mut *mut Error,
+    ) -> Status;
+
     pub fn skippy_session_sample_current(
         session: *mut Session,
         sampling: *const SamplingConfig,

@@ -206,6 +206,7 @@ dynamic_symbols! {
     skippy_session_begin_external_decode(session: *mut Session, out_error: *mut *mut Error) -> Status;
     skippy_session_end_external_decode(session: *mut Session, out_error: *mut *mut Error) -> Status;
     skippy_session_set_position(session: *mut Session, n_past: i32, out_error: *mut *mut Error) -> Status;
+    skippy_session_restore_token_history(session: *mut Session, token_ids: *const i32, token_count: usize, out_error: *mut *mut Error) -> Status;
     skippy_session_sample_current(session: *mut Session, sampling: *const SamplingConfig, out_predicted_token: *mut i32, out_error: *mut *mut Error) -> Status;
     skippy_session_configure_chat_sampling(session: *mut Session, sampling: *const SamplingConfig, metadata_json: *const c_char, prompt_token_count: u64, out_error: *mut *mut Error) -> Status;
     skippy_session_embed(session: *mut Session, token_ids: *const i32, token_count: usize, output: *mut f32, output_capacity: usize, out_dimensions: *mut usize, out_error: *mut *mut Error) -> Status;
