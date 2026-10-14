@@ -9,7 +9,7 @@ use crate::release_target::ReleaseTarget;
 mod platform_probe;
 mod release_fetch;
 
-pub use release_fetch::{latest_release_version, version_newer};
+pub use release_fetch::version_newer;
 
 use platform_probe::{installed_bundle_flavor, preferred_bundle_flavor_for_current_host};
 #[cfg(not(windows))]
@@ -44,6 +44,31 @@ pub const SELF_UPDATE_ATTEMPTED_ENV: &str = "MESH_LLM_SELF_UPDATE_ATTEMPTED";
 /// Mirrored as `ENV_INTERNAL_HELPER` in `mesh-llm-analytics`, which reads it.
 /// `mesh-llm-commands` tests that the two agree.
 pub const INTERNAL_HELPER_ENV: &str = "MESH_LLM_INTERNAL_HELPER";
+
+/// Set to any non-empty value other than `0` to skip the release checks behind
+/// the startup notice and the console's latest version, for installs updated
+/// by other means, such as a package manager.
+pub const NO_UPDATE_CHECK_ENV: &str = "MESH_LLM_NO_UPDATE_CHECK";
+
+/// Whether `value`, the value of [`NO_UPDATE_CHECK_ENV`], opts out.
+fn update_check_opted_out(value: Option<&str>) -> bool {
+    value.is_some_and(|value| !value.is_empty() && value != "0")
+}
+
+fn update_check_disabled() -> bool {
+    update_check_opted_out(std::env::var(NO_UPDATE_CHECK_ENV).ok().as_deref())
+}
+
+/// The latest release version, which the console shows when it is newer.
+///
+/// Returns `None` when [`NO_UPDATE_CHECK_ENV`] opts out or no release could be
+/// fetched.
+pub async fn latest_release_version() -> Option<String> {
+    if update_check_disabled() {
+        return None;
+    }
+    release_fetch::latest_release_version().await
+}
 
 struct UpdateTarget {
     exe: PathBuf,
@@ -114,12 +139,12 @@ fn notice_message(current_version: &str, latest_version: &str, guidance: NoticeG
 
 /// Checks for a newer release and returns a notice when one is available.
 ///
-/// Returns `None` when the platform has no release assets, no release could be
-/// fetched, or the local version is not older than the latest release. Callers
-/// are responsible for presenting [`UpdateNotice::message`] through their own
-/// output facility.
+/// Returns `None` when [`NO_UPDATE_CHECK_ENV`] opts out, the platform has no
+/// release assets, no release could be fetched, or the local version is not
+/// older than the latest release. Callers are responsible for presenting
+/// [`UpdateNotice::message`] through their own output facility.
 pub async fn check_for_update(current_version: &str) -> Option<UpdateNotice> {
-    if !platform_has_release_assets() {
+    if update_check_disabled() || !platform_has_release_assets() {
         return None;
     }
     let release = latest_release_info().await?;
@@ -499,6 +524,15 @@ mod tests {
         // SAFETY: the enclosing test contract is `#[serial]`, so this process
         // environment mutation cannot race another test.
         unsafe { std::env::remove_var(SELF_UPDATE_ATTEMPTED_ENV) };
+    }
+
+    #[test]
+    fn test_update_check_opt_out_values() {
+        assert!(!update_check_opted_out(None));
+        assert!(!update_check_opted_out(Some("")));
+        assert!(!update_check_opted_out(Some("0")));
+        assert!(update_check_opted_out(Some("1")));
+        assert!(update_check_opted_out(Some("true")));
     }
 
     #[test]
