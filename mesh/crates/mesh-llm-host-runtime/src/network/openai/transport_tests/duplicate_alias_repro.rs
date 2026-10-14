@@ -327,3 +327,83 @@ async fn peer_ingress_executes_registered_plugin_without_mesh_forwarding() {
     let captured = captured.expect("plugin execution timed out").unwrap();
     assert!(String::from_utf8_lossy(&captured).contains(PUBLIC));
 }
+
+#[tokio::test]
+async fn peer_incompatible_local_workload_does_not_discover_capable_remote() {
+    let (caller, mut caller_channels, _caller_directory) = start_http_tunnel_test_node().await;
+    let (receiver, channels, _receiver_directory) = start_http_tunnel_test_node().await;
+    let (local_port, mut local_requests, local_task) = spawn_tunnel_capture().await;
+    let mut local_descriptor = duplicate_descriptor(INTERNAL);
+    local_descriptor.metadata = Some(mesh::ServedModelMetadata {
+        workload_class: Some(mesh::ModelWorkloadClass::CausalGeneration),
+        ..Default::default()
+    });
+    receiver.set_hosted_models(vec![INTERNAL.into()]).await;
+    receiver
+        .set_served_model_descriptors(vec![local_descriptor])
+        .await;
+    let mut capable_peer = duplicate_peer(caller.id(), INTERNAL);
+    capable_peer.served_model_descriptors[0].metadata = Some(mesh::ServedModelMetadata {
+        workload_class: Some(mesh::ModelWorkloadClass::Embedding),
+        ..Default::default()
+    });
+    caller.set_hosted_models(vec![INTERNAL.into()]).await;
+    caller
+        .set_served_model_descriptors(capable_peer.served_model_descriptors.clone())
+        .await;
+    receiver.insert_test_peer(capable_peer.clone()).await;
+    let mut targets = election::ModelTargets::default();
+    targets.targets.insert(
+        INTERNAL.into(),
+        vec![election::InferenceTarget::Local(local_port)],
+    );
+    // Prove this fixture would discover the capable peer on ordinary user ingress.
+    let user_candidates = crate::network::openai::workload_routing::ingress_candidates(
+        &receiver,
+        INTERNAL,
+        "/v1/embeddings",
+        &targets,
+    )
+    .await;
+    assert_eq!(
+        user_candidates,
+        vec![election::InferenceTarget::Remote(caller.id())]
+    );
+    let (_tx, rx) = watch::channel(targets);
+    let manager = TunnelManager::start(
+        receiver.clone(),
+        channels.rpc,
+        channels.http,
+        channels.stage,
+    )
+    .await
+    .unwrap();
+    manager.set_http_ingress(rx, AffinityRouter::new());
+    caller.start_accepting();
+    receiver.start_accepting();
+    caller
+        .connect_to_peer(receiver.endpoint_addr_for_advertisement())
+        .await
+        .unwrap();
+    receiver.insert_test_peer(capable_peer).await;
+    let body = format!(r#"{{"model":"{INTERNAL}","input":"hello"}}"#);
+    let raw = format!(
+        "POST /v1/embeddings HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+        body.len()
+    );
+    let response = send_duplicate_request(&caller, &receiver, raw.as_bytes(), false).await;
+    assert!(String::from_utf8_lossy(&response).starts_with("HTTP/1.1 503"));
+    assert!(
+        local_requests.try_recv().is_err(),
+        "incompatible local backend must not execute"
+    );
+    assert!(
+        caller_channels.http.try_recv().is_err(),
+        "peer ingress must not open another HTTP tunnel"
+    );
+    // No HTTP tunnel consumer is installed on caller: any attempted second hop
+    // would stall until send_duplicate_request's bounded timeout, failing this test.
+    caller.close_endpoint().await;
+    receiver.close_endpoint().await;
+    local_task.abort();
+}
