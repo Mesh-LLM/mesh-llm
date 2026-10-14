@@ -70,27 +70,23 @@ pub const BOOKKEEPING_DEADLINE: Duration = Duration::from_secs(10);
 /// operation legitimately waits on the wallet and carries its own deadline.
 ///
 /// Bookkeeping operations touch only the ledger, or start background work and
-/// return: they must answer promptly. `serve_admit`, `serve_settle` and
-/// `serve_recover` may create one invoice, which is a local wallet call with
-/// no counterparty to wait on, so they stay bounded. Without a bound, a stalled engine holds a
+/// return: they must answer promptly. Without a bound, a stalled engine holds a
 /// response, a routing decision or the serving close open forever. Operations
 /// that create invoices, observe settlement, wait out a peer's prior debt or pay
 /// are deliberately unbounded here — the provider bounds them (invoice expiry,
 /// arrival wait, prior-settlement deadline) and the caller owns cancellation.
+/// `serve_admit`, `serve_settle` and `serve_recover` may each create one
+/// invoice in the wallet, which has been observed to take 30-45s on a freshly
+/// started wallet; bounding them here cancelled the ledger write after the
+/// wallet had already issued the invoice, leaving an orphan pending invoice
+/// and a 503 for the buyer. The buyer's admission read is the bound instead.
 ///
 /// An operation that is not listed is unbounded: a new operation must be
 /// classified here, rather than silently inheriting a housekeeping deadline.
 pub fn deadline(operation: &str) -> Option<Duration> {
     matches!(
         operation,
-        ops::PRICING
-            | ops::FINISH
-            | ops::PAYMENT_INTENT
-            | ops::CANCEL
-            | ops::SERVE_ADMIT
-            | ops::SERVE_SETTLE
-            | ops::SERVE_ABANDON
-            | ops::SERVE_RECOVER
+        ops::PRICING | ops::FINISH | ops::PAYMENT_INTENT | ops::CANCEL | ops::SERVE_ABANDON
     )
     .then_some(BOOKKEEPING_DEADLINE)
 }
@@ -354,10 +350,7 @@ mod tests {
                 ops::FINISH,
                 ops::PAYMENT_INTENT,
                 ops::CANCEL,
-                ops::SERVE_ADMIT,
-                ops::SERVE_SETTLE,
                 ops::SERVE_ABANDON,
-                ops::SERVE_RECOVER,
             ]
         );
     }

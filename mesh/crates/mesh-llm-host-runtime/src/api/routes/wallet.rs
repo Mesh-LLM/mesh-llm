@@ -62,7 +62,15 @@ pub(super) async fn handle(
     let result: anyhow::Result<serde_json::Value> =
         crate::network::payments::client::call_node(&node, ops::CONTROL, &command).await;
     match result {
-        Ok(value) => respond_json(stream, 200, &value).await,
+        Ok(value) => {
+            // Prices are read live into every announcement, but peers only
+            // learn them on the 60s heartbeat. Push the new offer now so a
+            // buyer does not route a free request at a seller that charges.
+            if matches!(command, ControlCommand::SetPricing { .. }) {
+                node.regossip().await;
+            }
+            respond_json(stream, 200, &value).await
+        }
         Err(error) => respond_error(stream, 400, &error.to_string()).await,
     }
 }
