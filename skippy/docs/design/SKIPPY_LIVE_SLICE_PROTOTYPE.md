@@ -353,12 +353,30 @@ with eight explicit ignored model-backed tests (including the three separately
 run regressions). Serving and Mesh compile/Clippy, formatting, and no-console
 checks passed. The original four-lane server now reaches OpenAI readiness.
 
-Cache qualification remains open: the first repeated-prompt workload reported
-zero cached tokens; a later invocation against the same server passed all three
-cache-hit checks with 384 cached tokens. This suggests asynchronous publication
-timing but does not establish its cause or a reliable cold-start pass. Do not
-replace that failure with the later success or dispatch another canary as if the
-whole smoke gate has passed. No family certification is claimed from this run.
+The subsequent cache miss is now traced to the smoke configuration. Its typed
+generator requests resident KV but omits `kv_graph_state`. Main's graph-derived
+payload selection (#2252) therefore correctly falls back to asynchronous
+full-state snapshots. A fresh-server telemetry reproduction queued a 44,045,496-byte
+checkpoint, then the immediate repeat missed. A model-backed regression observed
+zero published entries and two pending records after the seed response. The
+immediate repeat missed; after the existing capture/recorder completion barriers
+drained, the next repeat reused 384 tokens. No drops or worker failures occurred.
+The drain after the immediate request took approximately 527 ms in this run.
+
+A controlled fresh-server comparison used `serve --print-effective-config` to
+derive genuine graph evidence through the ordinary planner. The local copy's
+source digest matched the original NAS fixture before its admitted graph-state
+field was transferred to the otherwise unchanged smoke config. Selection became
+`ResidentKv` with zero fallbacks. The unchanged smoke passed on its first run:
+515 cached tokens for the identical repeat, 512 for growing chat, and 542 for
+the growing-chat repeat. No sleeps, request retries, or family-name conditions
+were added. The publication-boundary regression passed along with serving
+compile/Clippy, formatting, and no-console checks.
+
+The smoke generator still needs to consume genuine admission evidence instead
+of emitting an incomplete configuration. This diagnosis and controlled pass do
+not constitute a repaired full smoke gate or family certification. Do not
+redispatch until that owning workflow is corrected and validated end to end.
 
 ## Canary and release decision
 
