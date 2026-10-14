@@ -84,6 +84,7 @@ fn cell(
     if mode == Some("window") {
         for trajectory in input["trajectories"].as_array_mut().unwrap() {
             trajectory["replay_window"] = json!({"start":25,"count":50});
+            trajectory["replay_sampling"] = json!({"temperature":0.6,"top_p":0.95,"top_k":20,"min_p":0.0,"presence_penalty":0.0,"repeat_penalty":1.0});
         }
         input.as_object_mut().unwrap().remove("max_output_tokens");
     }
@@ -142,6 +143,13 @@ fn window_cell_sends_fifty_consecutive_recorded_prefixes_without_output_override
         assert_eq!(body["messages"].as_array().unwrap().len(), 2 * turn + 1);
         assert!(body.get("max_tokens").is_none());
         assert!(body.get("max_completion_tokens").is_none());
+        assert_eq!(body["temperature"], 0.6);
+        assert_eq!(body["top_p"], 0.95);
+        assert_eq!(body["top_k"], 20);
+        assert_eq!(body["min_p"], 0.0);
+        assert_eq!(body["presence_penalty"], 0.0);
+        assert_eq!(body["repeat_penalty"], 1.0);
+        assert_eq!(body["seed"], 42);
     }
 }
 #[test]

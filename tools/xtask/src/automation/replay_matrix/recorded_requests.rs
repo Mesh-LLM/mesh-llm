@@ -13,6 +13,8 @@ pub(super) struct Trajectory {
     pub tools: Option<Vec<Value>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub replay_window: Option<super::replay_profile::Window>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub replay_sampling: Option<super::replay_sampling::Sampling>,
     #[serde(skip)]
     pub original: Value,
 }
@@ -28,6 +30,7 @@ impl<'de> Deserialize<'de> for Trajectory {
             messages: Vec<Map<String, Value>>,
             tools: Option<Vec<Value>>,
             replay_window: Option<super::replay_profile::Window>,
+            replay_sampling: Option<super::replay_sampling::Sampling>,
         }
         let original = Value::deserialize(deserializer)?;
         let recorded: Recorded =
@@ -40,6 +43,7 @@ impl<'de> Deserialize<'de> for Trajectory {
             messages: recorded.messages,
             tools: recorded.tools,
             replay_window: recorded.replay_window,
+            replay_sampling: recorded.replay_sampling,
             original,
         })
     }
@@ -123,6 +127,9 @@ pub(super) fn build(trajectory: &Trajectory, selection: &Selection<'_>) -> DynRe
         return Err("session identity and output budget must be nonempty".into());
     }
     let tools = tools(trajectory)?;
+    if let Some(sampling) = &trajectory.replay_sampling {
+        sampling.validate()?;
+    }
     let mut history = Vec::new();
     let mut turns = Vec::new();
     for (index, recorded) in trajectory.messages.iter().enumerate() {
@@ -154,6 +161,9 @@ pub(super) fn build(trajectory: &Trajectory, selection: &Selection<'_>) -> DynRe
             });
             if let Some(output) = output {
                 body["max_tokens"] = output.into();
+            }
+            if let Some(sampling) = &trajectory.replay_sampling {
+                sampling.apply(&mut body)?;
             }
             if !tools.is_empty() {
                 body["tools"] = Value::Array(tools.clone());
@@ -207,6 +217,7 @@ mod tests {
                 qualification_probe: false,
             };
             for turn in build(&trajectory, &selection).unwrap() {
+                assert_eq!(turn.body["temperature"], 0);
                 assert_eq!(turn.requested_output_tokens, limit);
                 assert_eq!(turn.body.get("max_tokens"), limit.map(Value::from).as_ref());
                 assert!(turn.body.get("max_completion_tokens").is_none());

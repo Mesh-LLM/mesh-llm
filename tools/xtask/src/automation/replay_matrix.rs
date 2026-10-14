@@ -178,6 +178,7 @@ pub(super) mod manual_replay;
 #[cfg(test)]
 mod manual_tests;
 mod replay_profile;
+mod replay_sampling;
 mod resume_profile;
 
 #[cfg(test)]

@@ -119,6 +119,24 @@ starting context as a fixed length. Warm-up still uses initial recorded turns.
 Request progress includes cache percentage, decode TPS and `ttft_seconds`;
 workload throughput and TTFT percentiles appear on completed cells.
 
+Recorded replays retain greedy sampling (`temperature: 0`, `seed: 42`) unless
+the manifest explicitly provides `replay_sampling` on a trajectory. For models
+that need sampled decoding, supply the same profile on measured and warm-up
+trajectories in both arms, for example:
+
+```json
+"replay_sampling": {
+  "temperature": 0.6, "top_p": 0.95, "top_k": 20, "min_p": 0.0,
+  "presence_penalty": 0.0, "repeat_penalty": 1.0
+}
+```
+
+All six fields are required and validated. The profile is retained in the hashed
+manifest and cannot override histories, tools, seed or output limits. Choose it
+from the model's guidance and validate it on the recorded workload; a fixed seed
+does not guarantee matching generated text across engines. Keep greedy regression
+results separate from sampled performance comparisons.
+
 Use `--sessions-per-concurrency N` for a total session count per cohort instead
 of `--trajectories-per-framework N`; choose one count option. Total counts are
 not multiplied by the number of frameworks. `plan` reports selected session
