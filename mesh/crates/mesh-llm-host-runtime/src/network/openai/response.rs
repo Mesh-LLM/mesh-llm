@@ -42,8 +42,6 @@ pub(crate) use send::{
 };
 
 #[cfg(feature = "payments")]
-
-#[cfg(feature = "payments")]
 pub(crate) mod paid;
 
 #[cfg(feature = "payments")]
