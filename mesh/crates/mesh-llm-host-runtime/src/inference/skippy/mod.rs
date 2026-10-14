@@ -673,7 +673,8 @@ mod tests {
 
     fn thinking_fixture() -> ThinkingControls {
         ThinkingControls {
-            enabled: true,
+            toggle: skippy_inference_api::thinking::ThinkingToggle::Observed,
+            reasoning_parser: Some(true),
             efforts: vec!["low".to_string(), "medium".to_string(), "high".to_string()],
         }
     }
@@ -686,7 +687,8 @@ mod tests {
 
         register_local_thinking(model, Some(&thinking_fixture()));
         let value = local_thinking(model).expect("registered thinking");
-        assert_eq!(value["enabled"], true);
+        assert_eq!(value["toggle"], "observed");
+        assert_eq!(value["reasoning_parser"], true);
         assert_eq!(value["efforts"][2], "high");
 
         // A reload that produced no observations must not leave the previous

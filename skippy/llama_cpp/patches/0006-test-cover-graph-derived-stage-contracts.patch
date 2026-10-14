@@ -1,4 +1,4 @@
-From abe4a8bf680e3a60c2c9c592e29303fd6c04d118 Mon Sep 17 00:00:00 2001
+From 7ab79590c5b291b90535b9110e5da6282c1b9144 Mon Sep 17 00:00:00 2001
 From: James Dumay <james@generalinference.xyz>
 Date: Tue, 13 Oct 2026 22:06:43 +1100
 Subject: [PATCH 6/6] test(skippy): cover live graph and state contracts
@@ -7360,7 +7360,7 @@ index 5aa948251..78df176dd 100644
  
  static void test_cohere_reasoning_detection(testing & t) {
 diff --git a/tests/test-chat.cpp b/tests/test-chat.cpp
-index f2728f7cc..e125786fa 100644
+index f2728f7cc..13b28b74c 100644
 --- a/tests/test-chat.cpp
 +++ b/tests/test-chat.cpp
 @@ -436,6 +436,21 @@ static common_chat_tool special_function_tool{
@@ -7540,7 +7540,7 @@ index f2728f7cc..e125786fa 100644
      }
 +
 +    {
-+        // The stage alias hardening must win when thinking is explicitly disabled.
++        // Preserve canonical "none" while keeping the boolean aliases disabled.
 +        auto render_disabled = [](const char * template_path) {
 +            auto tmpls = read_templates(template_path);
 +            common_chat_templates_inputs inputs;
@@ -7562,7 +7562,7 @@ index f2728f7cc..e125786fa 100644
 +            for (const auto & [key, value] : request_kwargs.items()) {
 +                inputs.chat_template_kwargs[key] = value.dump();
 +            }
-+            if (!inputs.enable_thinking) {
++            if (!inputs.enable_thinking && inputs.chat_template_kwargs["reasoning_effort"] != R"("none")") {
 +                inputs.chat_template_kwargs["reasoning_effort"] = "0";
 +            }
 +            return common_chat_templates_apply(tmpls.get(), inputs).prompt;
@@ -7571,7 +7571,7 @@ index f2728f7cc..e125786fa 100644
 +        const auto qwen = render_disabled("models/templates/Qwen-Qwen3-0.6B.jinja");
 +        assert_contains(qwen, "<think>\n\n</think>\n\n");
 +        const auto gpt_oss = render_disabled("models/templates/openai-gpt-oss-120b.jinja");
-+        assert_contains(gpt_oss, "Reasoning: 0");
++        assert_contains(gpt_oss, "Reasoning: none");
 +    }
  }
  

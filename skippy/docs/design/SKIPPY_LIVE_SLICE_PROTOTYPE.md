@@ -16,6 +16,78 @@ metadata-only planning does not encode every runtime view, stride, rollback slot
 or convolution window. Those values belong to the normal builder. The splitter
 uses the resulting graph instead of maintaining a second geometry interpreter.
 
+## October 14 multimodal canary investigation
+
+Candidate `20e91082ccf3f10948188b0877c376feb2482920` passed single-step,
+chain and state-handoff for both Mistral 3 and Muse Glimmer in
+[canary 38519421738](https://github.com/Mesh-LLM/mesh-llm/actions/runs/38519421738).
+Both failed the same three image-smoke assertions: the 16-token response ended
+with `length`, nonempty reasoning and no final answer, in local and split execution.
+This is not completed multimodal qualification.
+
+The pinned templates were extracted with the GGUF metadata reader, without
+hashing NAS payloads, and rendered through the candidate's native chat library.
+Ministral-3-14B-Reasoning-2512 at `fe3b038f30334729263d860d5dadbaa34e0f2a18`
+ignores all tested reasoning controls. Muse-Glimmer-30B at
+`70bf1b61ac09f91b24d39038091b41c582bc5d7a` distinguishes effort via the native
+`reasoning_strength` alias, but its on/off prompts match. Both native parsers
+report reasoning support. Neither observation proves generation obeys an effort
+or can be made reasoning-free.
+
+Local Mistral HTTP reproduction matched the 16-token canary output with default
+reasoning and explicit `reasoning.enabled=false`. At a 512-token ceiling it
+returned a final image description and `stop` after 285 generated tokens.
+The test's image fixture and model/projector revisions were unchanged. Automatic
+compaction was disabled to isolate this comparison: the existing compactor
+counted encoded image bytes as text and inserted a warning even when it removed
+nothing. That system message displaced Mistral's template-default instructions.
+
+Comparing direct library renders with the actual C ABI found an additional
+bridge bug: with thinking disabled, the bridge overwrote explicit string
+`reasoning_effort: "none"` with numeric zero after merging request kwargs.
+Numeric zero does not activate the string alias, so Muse rendered its default
+`Reasoning strength: high`. The bridge now preserves canonical `"none"` while
+still overriding a contradictory positive effort. An actual C ABI regression
+fails on the old bridge and passes on the repaired one. The repair is folded
+into core patch 0005; core 0006 updates the matching template expectation, and
+the Inkling patch is refreshed only for adjacent test context. Cold application
+changes only `common/stage-chat.cpp` and `tests/test-chat.cpp` in the native tree.
+
+On the rebuilt packaged Metal runtime, Muse now advertises `none` and renders
+`Reasoning strength: none`. It still emits reasoning: at 16 tokens the response
+ends by length, while a 1,024-token ceiling produces a final image answer and
+`stop` after 198 tokens. Default settings produce a final answer after 428 tokens.
+These are observations for the pinned image fixture, not proof that the model
+always obeys an effort control. Mistral's HTTP check with ordinary automatic
+compaction now preserves the original 162-token prompt and reaches the same
+285-token final answer without an injected compaction warning.
+
+The repaired native-linked image harness passes 10/10 cases for each pinned
+model, including local/split image serving, length interruption and lane reuse,
+the real parser probe, and the actual C ABI off-effort regression. The ordinary
+`just skippy metal` product build passes. Rust validation passes 17 FFI, 279
+runtime, 998 serving, 126 API, 300 inference-API, 18 guardrail, 3,926 Mesh host,
+and 37 Mesh binary tests. One runtime, nine serving, and 24 Mesh host cases
+remain explicitly ignored; the real image fixtures above were exercised, not
+skipped. Checks and warning-denying Clippy cover the affected crates and Mesh;
+formatting, no-console-print, and the regenerated roster check pass. Native-linked
+Skippy tests run separately from Mesh: combining them enables Mesh's dynamic
+runtime feature and leaves four low-level tests without a loaded library.
+The final production-linked CPU native suite passes 278/278, without skips or
+crashes, including the synthetic Mistral 3 and Muse Glimmer graph contracts.
+These local checks do not certify the full family roster or resolve the
+separate Gemma runner sccache failure.
+
+The repair separates native parser support from an observed, unobserved or
+unknown toggle; preserves the ordinary default-off request; and checks real
+template parser evidence in the image harness. Length-limited smoke responses
+may contain reasoning or final content; normal completion must contain a final
+answer. Empty output, zero generated tokens and unexpected tool calls still
+fail. Compaction excludes media payloads from its text estimate and leaves the
+prompt unchanged when it cannot remove anything. No family-specific runtime
+branch or reasoning-forcing prompt is introduced. The next candidate run must
+qualify the repaired behavior; the failed run does not become a pass retroactively.
+
 ## Deleted implementation
 
 - All `src/skippy/stage_program*` source/header modules (14 on main; 15 on the
