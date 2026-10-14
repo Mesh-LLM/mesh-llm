@@ -1,3 +1,4 @@
+mod execution;
 use crate::inference::{election, pipeline};
 use crate::logging::{CallerPathType, OpenAiLifecycleAttachment, OpenAiRouteObserver};
 use crate::mesh;
@@ -1171,6 +1172,7 @@ async fn route_missing_local_model(
                 model_name,
                 request,
                 proxy::RouteModelRequestContext {
+                    local_execution_only: false,
                     exchange_id: Some(&exchange_id),
                     required_tokens,
                     affinity: ctx.affinity,
@@ -1690,6 +1692,7 @@ async fn try_route_plugin_model(
 /// Route a model-bearing or model-less request: local candidates unless
 /// `x-mesh-target`/`x-mesh-exclude` force this node out of consideration.
 async fn route_request(
+    local_execution_only: bool,
     tcp_stream: ClientStream,
     request: &mut proxy::BufferedHttpRequest,
     ctx: &IngressRouteContext<'_>,
@@ -1716,6 +1719,28 @@ async fn route_request(
         };
         let self_id = ctx.node.id();
         let forced_remote = mesh_headers_force_remote(self_id, target, &excluded);
+
+        if local_execution_only && forced_remote {
+            return response_outcome(
+                409,
+                proxy::send_409_observed(
+                    tcp_stream,
+                    "peer inference ingress cannot forward to another host",
+                    route_observer,
+                )
+                .await,
+            );
+        }
+        if local_execution_only && !has_available_candidates(ctx.targets, model_name) {
+            return execution::local_model_unavailable(
+                tcp_stream,
+                request,
+                ctx,
+                model_name,
+                route_observer,
+            )
+            .await;
+        }
 
         if forced_remote || !has_available_candidates(ctx.targets, model_name) {
             return route_missing_local_model(
@@ -1799,6 +1824,7 @@ async fn route_request(
             model_name,
             request,
             proxy::RouteModelRequestContext {
+                local_execution_only,
                 exchange_id: announce.as_ref().map(|(_, id)| id.as_str()),
                 required_tokens,
                 affinity: ctx.affinity,
@@ -2001,27 +2027,13 @@ pub(crate) async fn served_model_for_public_id(
     targets: &election::ModelTargets,
     requested: &str,
 ) -> String {
-    let callable = callable_models_with_local_served(targets, node.models_being_served().await);
+    let callable = callable_models(targets);
     if callable.iter().any(|model| model == requested) {
         return requested.to_owned();
     }
     let descriptors = node.all_served_model_descriptors().await;
     super::request_parse::internal_model_for_public_id(requested, &callable, &descriptors)
         .unwrap_or_else(|| requested.to_owned())
-}
-
-fn callable_models_with_local_served(
-    targets: &election::ModelTargets,
-    local_models: Vec<String>,
-) -> Vec<String> {
-    let mut callable = callable_models(targets);
-    for name in local_models {
-        if !callable.iter().any(|existing| existing == &name) {
-            callable.push(name);
-        }
-    }
-    callable.sort();
-    callable
 }
 
 async fn maybe_handle_control_request(
@@ -2332,10 +2344,12 @@ async fn handle_buffered_api_request(
             Err(tcp_stream) => tcp_stream,
         };
 
-    let local_models = ctx.route.node.models_being_served().await;
-    let callable = callable_models_with_local_served(ctx.route.targets, local_models);
+    // Advertised public aliases are not executable target keys.
+    let callable = callable_models(ctx.route.targets);
     let descriptors = ctx.route.node.all_served_model_descriptors().await;
-    proxy::rewrite_public_model_alias(&mut request, &callable, &descriptors);
+    if ingress_type != crate::runtime::IngressType::RemoteQuicHttp {
+        proxy::rewrite_public_model_alias(&mut request, &callable, &descriptors);
+    }
 
     // Admission applies to inference work after control-path rejection.
     let tcp_stream =
@@ -2346,6 +2360,21 @@ async fn handle_buffered_api_request(
                 return;
             }
         };
+
+    // Transport-authenticated boundary: a peer has already selected this host.
+    // Never enter gateway auto/virtual/pipeline routing on its behalf.
+    if ingress_type == crate::runtime::IngressType::RemoteQuicHttp {
+        let outcome = execution::execute_peer_request(
+            tcp_stream,
+            &mut request,
+            &ctx.route,
+            lifecycle.route_observer(),
+        )
+        .await;
+        proxy::release_request_objects(ctx.route.node, &request.request_object_request_ids).await;
+        lifecycle.terminal(terminal_outcome_for_dispatch(outcome));
+        return;
+    }
 
     let decision = match prepare_auto_route_decision(&mut request, &ctx.route, &descriptors).await {
         Ok(decision) => decision,
@@ -2423,6 +2452,7 @@ async fn handle_buffered_api_request(
     let outcome = {
         let route_observer = lifecycle.route_observer();
         route_request(
+            false,
             tcp_stream,
             &mut request,
             &ctx.route,
@@ -2455,6 +2485,13 @@ async fn handle_api_proxy_connection(
     requested_by: Option<iroh::EndpointId>,
 ) {
     let source_addr = tcp_stream.peer_addr().ok();
+    // The compatibility bridge records origin out-of-band, never in a header
+    // that a local caller could forge or a peer could erase.
+    let ingress_type = if source_addr.is_some_and(crate::network::tunnel::is_remote_bridge) {
+        crate::runtime::IngressType::RemoteQuicHttp
+    } else {
+        ingress_type
+    };
     // The election snapshot predates any block the operator set since; drop
     // blocked peers here so every route below sees the same filtered set.
     let targets = node
