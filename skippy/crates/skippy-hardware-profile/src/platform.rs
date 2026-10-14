@@ -26,6 +26,7 @@ pub(crate) fn loaded_glibc_version() -> Option<String> {
     version.to_str().ok().map(str::to_string)
 }
 
+/// The system glibc from `getconf`, for targets that don't link glibc.
 #[cfg(not(all(target_os = "linux", target_env = "gnu")))]
 pub(crate) fn loaded_glibc_version() -> Option<String> {
     command_output("getconf", &["GNU_LIBC_VERSION"])
