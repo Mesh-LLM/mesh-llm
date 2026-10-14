@@ -727,6 +727,9 @@ Disk-only sccache preparation initializes and exports `SCCACHE_DIR` before
 compiler probes, including callers that already disable GHA caching. An explicit
 directory is preserved; otherwise the action uses the job's runner temporary
 directory. Missing GHA endpoints retain the existing disk-only fallback.
+The action starts sccache on a unique short Unix socket and exports that endpoint
+for subsequent steps. It never stops the default host server. Canary toolchain
+verification only sets cache identity; accelerator setup owns server startup.
 
 ### A pinned digest is a frozen artifact
 
