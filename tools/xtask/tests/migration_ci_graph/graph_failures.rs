@@ -88,8 +88,8 @@ fn migration_ci_graph_planned_job_outside_static_graph_is_rejected() -> TestResu
         "quality",
         &[
             (
-                "needs: [quality, runner_contract, authority_source, authority_linux_x64]",
-                "needs: [quality, runner_contracts, authority_source, authority_linux_x64]",
+                "needs: [quality, runner_contract, authority_source, authority_linux_x64, product_automation_linux_x64]",
+                "needs: [quality, runner_contracts, authority_source, authority_linux_x64, product_automation_linux_x64]",
             ),
             ("  runner_contract:\n", "  runner_contracts:\n"),
         ],

@@ -35,6 +35,7 @@ pub(crate) fn lane_jobs(lane: &str) -> &'static [&'static str] {
         "quality" => &[
             "authority_source",
             "authority_linux_x64",
+            "product_automation_linux_x64",
             "quality",
             "runner_contract",
         ],

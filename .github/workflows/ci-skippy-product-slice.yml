@@ -383,7 +383,6 @@ jobs:
           if-no-files-found: error
           retention-days: 7
       - name: Upload immutable standalone product
-        id: product_upload
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: ci-skippy-product-linux-${{ matrix.runtime.architecture }}-${{ matrix.runtime.backend }}
@@ -392,7 +391,6 @@ jobs:
           retention-days: 1
 
       - name: Retain standalone qualification diagnostics
-        id: evidence_upload
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
@@ -411,6 +409,10 @@ jobs:
           CLEANUP_BINARY_PATH: ci-artifacts/skippy/skippy-product-input/skippy
         run: |
           set -euo pipefail
+          if [[ -z "${SKIPPY_CONTROLLER_SHA256:-}" ]]; then
+            echo "controller admission did not complete; skipping owned cleanup" >&2
+            exit 0
+          fi
           test "$(sha256sum "$MESH_LLM_AUTOMATION_BIN" | awk '{print $1}')" = "$SKIPPY_CONTROLLER_SHA256"
           "$MESH_LLM_AUTOMATION_BIN" ci-ops runner-cleanup --job smoke --evidence-uploaded false
 
@@ -625,7 +627,7 @@ jobs:
         if: ${{ steps.availability.outputs.state == 'available' }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
-          name: ci-skippy-model-qualification-macos-${{ matrix.runtime.architecture }}
+          name: ci-skippy-model-qualification-macos-${{ matrix.runtime.architecture }}-${{ matrix.runtime.backend }}
           path: |
             skippy-dense.json
             skippy-recurrent.json
@@ -890,7 +892,7 @@ jobs:
         if: ${{ steps.availability.outputs.state == 'available' }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
-          name: ci-skippy-model-qualification-windows-${{ matrix.runtime.architecture }}
+          name: ci-skippy-model-qualification-windows-${{ matrix.runtime.architecture }}-${{ matrix.runtime.backend }}
           path: |
             skippy-dense.json
             skippy-recurrent.json

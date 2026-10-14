@@ -139,7 +139,7 @@ fn migration_ci_graph_unknown_and_absent_results_are_rejected() -> TestResult {
     rejects(QUALITY, "{}", "planned job 'quality' finished with None")?;
     rejects(
         QUALITY,
-        r#"{"quality":{"result":"success"},"authority_source":{"result":"success"},"authority_linux_x64":{"result":"success"},"x\n":{"result":1.5}}"#,
+        r#"{"quality":{"result":"success"},"authority_source":{"result":"success"},"authority_linux_x64":{"result":"success"},"product_automation_linux_x64":{"result":"success"},"x\n":{"result":1.5}}"#,
         "lane job 'x\\n' finished with 1.5",
     )
 }
@@ -149,7 +149,7 @@ fn migration_ci_graph_unplanned_job_must_skip() -> TestResult {
     // Given/When/Then: an unplanned job that ran anyway.
     rejects(
         QUALITY,
-        r#"{"quality":{"result":"success"},"authority_source":{"result":"success"},"authority_linux_x64":{"result":"success"},"runner_contract":{"result":"success"}}"#,
+        r#"{"quality":{"result":"success"},"authority_source":{"result":"success"},"authority_linux_x64":{"result":"success"},"product_automation_linux_x64":{"result":"success"},"runner_contract":{"result":"success"}}"#,
         "lane job 'runner_contract' finished with 'success'",
     )
 }

@@ -1704,8 +1704,8 @@ Windows row selection is conditional. This owning workflow edit maps through ci-
 
 ## Same-run product-source automation
 
-Product-source jobs no longer compile `xtask` once per job. The Linux, macOS and
-Windows lanes and the optional Linux CI canary each declare one
+Product-source jobs no longer compile `xtask` once per job. The Linux, macOS,
+Windows and Quality lanes and the optional Linux CI canary each declare one
 `product_automation_<platform>` producer: `product-automation-artifact.yml`
 checks out the lane's exact `source_sha` (the canary's merge SHA) on a fixed
 GitHub-hosted runner with a read-only token, no secrets and no checkout
@@ -1717,7 +1717,8 @@ authority artifact, and `product-clean` claims no protected authority. Its
 `identity_json` output (source SHA, artifact ID, executable digest, producer
 OS/architecture) is the only value consumers receive.
 
-The static ABI producer, Rust test batches, host, native-runtime and product
+The static ABI producer, Rust test batches, Quality Clippy batches, host,
+native-runtime and product
 composition jobs of each lane list the producer in `needs`, take its identity as
 the `product_automation` input and run `restore-automation`, which verifies
 source, artifact ID, digest and that the producer ran on the same OS and
