@@ -712,33 +712,47 @@ fn find_hf_cache_model_ref_path(root: &Path, model: &model_ref::ModelRef) -> Opt
     if model.repo.starts_with("local-gguf/") {
         return find_synthetic_local_gguf_path(root, model);
     }
-    let cache_info = scan_hf_cache_info(root)?;
+    // Resolve the one requested repository. A cache-wide scan here made every
+    // single-model lookup walk every other cached repository, which is the whole
+    // cost of a lookup when the cache is large or on network storage.
+    let snapshots_dir = root
+        .join(huggingface_repo_folder_name(&model.repo, RepoTypeModel))
+        .join("snapshots");
+    let entries = std::fs::read_dir(&snapshots_dir).ok()?;
     let mut candidates = Vec::new();
-    for repo in &cache_info.repos {
-        if repo.repo_type != RepoTypeModel.singular() || repo.repo_id != model.repo {
+    for entry in entries.flatten() {
+        let snapshot = entry.path();
+        if !snapshot.is_dir() {
             continue;
         }
-        for revision in &repo.revisions {
-            if let Some(wanted_revision) = model.revision.as_deref()
-                && revision.commit_hash != wanted_revision
-            {
+        let commit_hash = entry.file_name().to_string_lossy().to_string();
+        if let Some(wanted_revision) = model.revision.as_deref()
+            && commit_hash != wanted_revision
+        {
+            continue;
+        }
+        let mut files = Vec::new();
+        collect_gguf_paths_recursive(&snapshot, &mut files);
+        for path in files {
+            // A pointer whose blob is missing cannot be loaded, which is how the
+            // cache scan this replaces treated it.
+            if !path.exists() {
                 continue;
             }
-            for file in &revision.files {
-                if !file.file_name.ends_with(".gguf") {
-                    continue;
+            let file_name = path
+                .strip_prefix(&snapshot)
+                .unwrap_or(&path)
+                .to_string_lossy()
+                .replace('\\', "/");
+            let matches = match model.selector.as_deref() {
+                Some(selector) => {
+                    gguf_matches_quant_selector(&file_name, selector)
+                        || normalize_gguf_distribution_id(&file_name).as_deref() == Some(selector)
                 }
-                let matches = match model.selector.as_deref() {
-                    Some(selector) => {
-                        gguf_matches_quant_selector(&file.file_name, selector)
-                            || normalize_gguf_distribution_id(&file.file_name).as_deref()
-                                == Some(selector)
-                    }
-                    None => true,
-                };
-                if matches {
-                    candidates.push(cache_scanned_file_path(root, repo, revision, file));
-                }
+                None => true,
+            };
+            if matches {
+                candidates.push(path);
             }
         }
     }
@@ -775,6 +789,14 @@ fn find_hf_cache_model_path(root: &Path, stem: &str) -> Option<PathBuf> {
     let direct = root.join(&filename);
     if direct.exists() {
         return Some(direct);
+    }
+
+    // Everything below matches a bare cached file name against this stem. A stem
+    // containing a separator is a repository ref (`repo[:selector]`), and no
+    // cached file name can equal it, so the cache-wide walk cannot find anything
+    // and is skipped.
+    if stem.contains('/') {
+        return None;
     }
 
     let split_prefix = format!("{stem}-00001-of-");
@@ -1012,6 +1034,70 @@ mod tests {
         );
 
         assert_eq!(find_model_path(&installed[0]), shard_one);
+
+        restore_env("HF_HUB_CACHE", prev_hub_cache);
+        restore_env("HF_HOME", prev_hf_home);
+        restore_env("XDG_CACHE_HOME", prev_xdg);
+    }
+
+    #[test]
+    #[serial]
+    fn find_model_path_resolves_only_the_requested_repository() {
+        if let Ok(mut paths) = model_ref_paths().lock() {
+            paths.clear();
+        }
+        let prev_hub_cache = std::env::var_os("HF_HUB_CACHE");
+        let prev_hf_home = std::env::var_os("HF_HOME");
+        let prev_xdg = std::env::var_os("XDG_CACHE_HOME");
+
+        let temp = tempfile::tempdir().unwrap();
+        let commit = "ab".repeat(20);
+        let snapshot = temp
+            .path()
+            .join("models--unsloth--one")
+            .join("snapshots")
+            .join(&commit);
+        std::fs::create_dir_all(&snapshot).unwrap();
+        let wanted = snapshot.join("one-Q4_K_M.gguf");
+        std::fs::File::create(&wanted)
+            .unwrap()
+            .set_len(13_000_000)
+            .unwrap();
+
+        // A different repository holding the same file name must not satisfy the
+        // lookup for `unsloth/one`.
+        let other_snapshot = temp
+            .path()
+            .join("models--unsloth--one-extra")
+            .join("snapshots")
+            .join(&commit);
+        std::fs::create_dir_all(&other_snapshot).unwrap();
+        std::fs::File::create(other_snapshot.join("one-Q4_K_M.gguf"))
+            .unwrap()
+            .set_len(13_000_000)
+            .unwrap();
+
+        // SAFETY: the enclosing test contract is `#[serial]`, so this process
+        // environment mutation cannot race another test.
+        unsafe { std::env::set_var("HF_HUB_CACHE", temp.path()) };
+        // SAFETY: the enclosing test contract is `#[serial]`, so this process
+        // environment mutation cannot race another test.
+        unsafe { std::env::remove_var("HF_HOME") };
+        // SAFETY: the enclosing test contract is `#[serial]`, so this process
+        // environment mutation cannot race another test.
+        unsafe { std::env::remove_var("XDG_CACHE_HOME") };
+
+        assert_eq!(find_model_path("unsloth/one:Q4_K_M"), wanted);
+        assert_eq!(
+            find_model_path("unsloth/one-extra:Q4_K_M"),
+            other_snapshot.join("one-Q4_K_M.gguf")
+        );
+        // An uncached repository resolves to the miss path instead of borrowing a
+        // same-named file from another cached repository.
+        assert_eq!(
+            find_model_path("unsloth/absent:Q4_K_M"),
+            temp.path().join("unsloth/absent:Q4_K_M.gguf")
+        );
 
         restore_env("HF_HUB_CACHE", prev_hub_cache);
         restore_env("HF_HOME", prev_hf_home);
