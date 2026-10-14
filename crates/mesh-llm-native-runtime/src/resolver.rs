@@ -235,7 +235,7 @@ impl NativeRuntimeResolver {
     pub fn resolve(&self, selection: &RuntimeSelection) -> Result<NativeRuntimeResolution> {
         let evaluated = self.evaluate(selection)?;
         let expected_abi = self.expected_skippy_abi();
-        let Some(selected) = best_candidate(&evaluated) else {
+        let Some((selected, source)) = self.preferred_candidate(&evaluated)? else {
             bail!(
                 "no compatible native runtime found for Skippy ABI {} on {}/{}",
                 expected_abi,
@@ -244,10 +244,40 @@ impl NativeRuntimeResolver {
             );
         };
         Ok(NativeRuntimeResolution {
-            source: self.source_for_artifact(&selected.artifact)?,
+            source,
             selected: selected.artifact.clone(),
             evaluated,
         })
+    }
+
+    /// The best compatible candidate and where it comes from. Among the
+    /// candidates of the best rank, one already on disk (a bundle, then an
+    /// installed runtime) wins over one that needs a download, so a shipped
+    /// bundle is not replaced by an equally ranked download; a higher rank in
+    /// the catalog still wins.
+    fn preferred_candidate<'a>(
+        &self,
+        evaluated: &'a [CandidateEvaluation],
+    ) -> Result<Option<(&'a CandidateEvaluation, NativeRuntimeSource)>> {
+        let Some(best) = best_candidate(evaluated) else {
+            return Ok(None);
+        };
+        let mut tied = evaluated
+            .iter()
+            .filter(|candidate| candidate.compatible && candidate.rank == best.rank)
+            .collect::<Vec<_>>();
+        tied.sort_by(|left, right| compare_candidates(right, left));
+        let mut sourced = tied
+            .into_iter()
+            .map(|candidate| Ok((candidate, self.source_for_artifact(&candidate.artifact)?)))
+            .collect::<Result<Vec<_>>>()?;
+        let local = |wanted: fn(&NativeRuntimeSource) -> bool| {
+            sourced.iter().position(|(_, source)| wanted(source))
+        };
+        let index = local(|source| matches!(source, NativeRuntimeSource::Bundle { .. }))
+            .or_else(|| local(|source| matches!(source, NativeRuntimeSource::Installed { .. })))
+            .unwrap_or(0);
+        Ok(Some(sourced.swap_remove(index)))
     }
 
     pub fn evaluate(&self, selection: &RuntimeSelection) -> Result<Vec<CandidateEvaluation>> {
@@ -1424,6 +1454,130 @@ mod tests {
             resolution.source,
             NativeRuntimeSource::Bundle {
                 path: bundle.path().to_path_buf()
+            }
+        );
+    }
+
+    /// A CUDA 13 capable host where both toolkits are compatible, as in the
+    /// CUDA 13 Docker image on an RTX 4070 Ti (#2410).
+    fn cuda12_and_13_host() -> HostRuntimeProfile {
+        HostRuntimeProfile {
+            cuda: Some(HostCudaProfile {
+                toolkit_majors: BTreeSet::from([12, 13]),
+                driver_max_major: Some(13),
+                driver_version: None,
+                gpu_arches: BTreeSet::from(["sm_89".to_string()]),
+            }),
+            ..profile()
+        }
+    }
+
+    /// A release catalog listing equally ranked cuda12 and cuda13 runtimes,
+    /// both downloadable; `cuda12_rank` lets a test rank cuda12 above.
+    fn cuda12_and_13_catalog(cuda12_rank: i64) -> NativeRuntimeReleaseManifest {
+        let mut cuda12 = cuda_runtime("meshllm-runtime-linux-x86_64-cuda12", 12, &["sm_89"]);
+        cuda12.rank = cuda12_rank;
+        cuda12.url = Some("https://example.invalid/cuda12.tar.gz".to_string());
+        let mut cuda13 = cuda_runtime("meshllm-runtime-linux-x86_64-cuda13", 13, &["sm_89"]);
+        cuda13.url = Some("https://example.invalid/cuda13.tar.gz".to_string());
+        NativeRuntimeReleaseManifest {
+            mesh_version: "0.68.0".to_string(),
+            skippy_abi: "0.1.25".to_string(),
+            artifacts: vec![cuda12, cuda13],
+        }
+    }
+
+    #[test]
+    fn resolve_prefers_bundled_runtime_over_equally_ranked_download() {
+        let bundle = tempfile::tempdir().unwrap();
+        let cache_root = tempfile::tempdir().unwrap();
+        write_bundle_runtime(
+            bundle.path(),
+            cuda_runtime("meshllm-runtime-linux-x86_64-cuda13", 13, &["sm_89"]),
+        );
+
+        let resolution = NativeRuntimeResolver::new(
+            "0.68.0",
+            cuda12_and_13_host(),
+            cuda12_and_13_catalog(0),
+            NativeRuntimeCache::new(cache_root.path()),
+        )
+        .with_bundle_dirs(vec![bundle.path().to_path_buf()])
+        .with_skippy_abi_version("0.1.25")
+        .resolve(&RuntimeSelection::Recommended)
+        .unwrap();
+
+        assert_eq!(
+            resolution.selected.id,
+            "meshllm-runtime-linux-x86_64-cuda13"
+        );
+        assert_eq!(
+            resolution.source,
+            NativeRuntimeSource::Bundle {
+                path: bundle.path().to_path_buf()
+            }
+        );
+    }
+
+    #[test]
+    fn resolve_prefers_installed_runtime_over_equally_ranked_download() {
+        let staged = tempfile::tempdir().unwrap();
+        let cache_root = tempfile::tempdir().unwrap();
+        write_bundle_runtime(
+            staged.path(),
+            cuda_runtime("meshllm-runtime-linux-x86_64-cuda13", 13, &["sm_89"]),
+        );
+        let cache = NativeRuntimeCache::new(cache_root.path());
+        cache.install_from_dir(staged.path()).unwrap();
+
+        let resolution = NativeRuntimeResolver::new(
+            "0.68.0",
+            cuda12_and_13_host(),
+            cuda12_and_13_catalog(0),
+            cache,
+        )
+        .with_skippy_abi_version("0.1.25")
+        .resolve(&RuntimeSelection::Recommended)
+        .unwrap();
+
+        assert_eq!(
+            resolution.selected.id,
+            "meshllm-runtime-linux-x86_64-cuda13"
+        );
+        assert!(matches!(
+            resolution.source,
+            NativeRuntimeSource::Installed { .. }
+        ));
+    }
+
+    #[test]
+    fn higher_ranked_download_still_wins_over_a_bundle() {
+        let bundle = tempfile::tempdir().unwrap();
+        let cache_root = tempfile::tempdir().unwrap();
+        write_bundle_runtime(
+            bundle.path(),
+            cuda_runtime("meshllm-runtime-linux-x86_64-cuda13", 13, &["sm_89"]),
+        );
+
+        let resolution = NativeRuntimeResolver::new(
+            "0.68.0",
+            cuda12_and_13_host(),
+            cuda12_and_13_catalog(1),
+            NativeRuntimeCache::new(cache_root.path()),
+        )
+        .with_bundle_dirs(vec![bundle.path().to_path_buf()])
+        .with_skippy_abi_version("0.1.25")
+        .resolve(&RuntimeSelection::Recommended)
+        .unwrap();
+
+        assert_eq!(
+            resolution.selected.id,
+            "meshllm-runtime-linux-x86_64-cuda12"
+        );
+        assert_eq!(
+            resolution.source,
+            NativeRuntimeSource::Download {
+                url: "https://example.invalid/cuda12.tar.gz".to_string()
             }
         );
     }
