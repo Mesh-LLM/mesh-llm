@@ -100,7 +100,7 @@ impl PaymentService {
             deposit_applied_msat <= admission.deposit_msat && deposit_applied_msat <= bill,
             "invalid deposit application"
         );
-        // Remainder rounded half-up to whole sats; below 500 msat is free.
+        // Exact remainder; below 500 msat is free, 500..999 msat is 1 sat.
         let remaining = final_invoice_msat(bill, deposit_applied_msat);
         let payment = match invoice {
             Some(invoice) => {

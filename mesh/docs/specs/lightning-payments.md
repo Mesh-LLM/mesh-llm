@@ -51,9 +51,9 @@ allowance terms, delivery watermarks, receivables or refunds.
    a best-effort basis; all other bytes pass through unchanged.
 6. On completion the provider sends `Settlement`: the reported usage, the bill
    (`prompt_tokens` at the input rate + `completion_tokens` at the output
-   rate), the deposit applied and, if `bill - deposit` rounds to at least 1 sat,
-   one final invoice for that remainder rounded half-up to whole sats
-   (`final_invoice_msat`). The payer recomputes the bill from the stored
+   rate), the deposit applied and, unless `bill - deposit` is under 500 msat,
+   one final invoice for that remainder (`final_invoice_msat`: exact to the
+   msat, a 500..999 msat remainder is raised to the 1 sat floor). The payer recomputes the bill from the stored
    admission, checks it against its local cap, pays the final invoice under the
    original authorization, and the provider replies `Complete` once that
    invoice has settled. No human approval is needed.
@@ -398,9 +398,9 @@ tokens. Free serving is the default. Charges use wide integer arithmetic and
 ceiling division to the msat. Bills are recorded to the msat, but every
 Lightning payment has a 1 sat floor (`PAYMENT_FLOOR_MSAT`): live Lexe
 payments of 60 and 90 msat found no route while 1000 msat and above settled.
-The deposit is exactly the floor. The final remainder is rounded half-up to
-whole sats: under 500 msat is free (no final invoice), 500 to 1499 msat is
-1 sat, and so on. Both sides derive it from `final_invoice_msat`, so this
+The deposit is exactly the floor. The final remainder is invoiced exact to the
+msat; only a remainder below the floor is rounded: under 500 msat is free (no
+final invoice) and 500 to 999 msat is raised to 1 sat. Both sides derive it from `final_invoice_msat`, so this
 rounding is part of the `/mesh/payment/v3` wire contract. The deprecated
 `LightningOffer.minimum_invoice_msat` gossip field is sent as 1 and ignored
 on read. The seller

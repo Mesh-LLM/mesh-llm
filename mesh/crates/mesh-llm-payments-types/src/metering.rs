@@ -37,12 +37,17 @@ pub const PAYMENT_FLOOR_MSAT: u64 = 1_000;
 /// the request and is applied against the final bill.
 pub const DEPOSIT_MSAT: u64 = PAYMENT_FLOOR_MSAT;
 
-/// What the seller invoices after the deposit: `bill - deposit` rounded
-/// half-up to whole sats. Below 500 msat is free; 500..1499 msat is 1 sat.
+/// What the seller invoices after the deposit: `bill - deposit`, exact to the
+/// msat. Only a sub-sat remainder is rounded, to respect the 1 sat payment
+/// floor: below 500 msat is free, 500..999 msat is 1 sat.
 /// Buyer and seller both derive the invoice from this one function.
 pub fn final_invoice_msat(bill_msat: u64, deposit_applied_msat: u64) -> u64 {
     let remaining = bill_msat.saturating_sub(deposit_applied_msat);
-    remaining.saturating_add(PAYMENT_FLOOR_MSAT / 2) / PAYMENT_FLOOR_MSAT * PAYMENT_FLOOR_MSAT
+    match remaining {
+        r if r >= PAYMENT_FLOOR_MSAT => r,
+        r if r >= PAYMENT_FLOOR_MSAT / 2 => PAYMENT_FLOOR_MSAT,
+        _ => 0,
+    }
 }
 
 impl MeteredUsage {
@@ -61,16 +66,20 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn final_invoice_rounds_half_up_to_whole_sats() {
+    fn final_invoice_is_exact_and_only_rounds_a_sub_sat_remainder() {
         assert_eq!(final_invoice_msat(0, 0), 0);
         assert_eq!(final_invoice_msat(499, 0), 0);
         assert_eq!(final_invoice_msat(500, 0), 1_000);
-        assert_eq!(final_invoice_msat(1_499, 0), 1_000);
-        assert_eq!(final_invoice_msat(1_500, 0), 2_000);
+        assert_eq!(final_invoice_msat(999, 0), 1_000);
+        assert_eq!(final_invoice_msat(1_000, 0), 1_000);
+        assert_eq!(final_invoice_msat(1_499, 0), 1_499);
+        assert_eq!(final_invoice_msat(4_045, 0), 4_045);
         assert_eq!(final_invoice_msat(1_499, 1_000), 0);
         assert_eq!(final_invoice_msat(1_500, 1_000), 1_000);
+        assert_eq!(final_invoice_msat(1_640, 1_000), 1_000);
+        assert_eq!(final_invoice_msat(2_640, 1_000), 1_640);
         assert_eq!(final_invoice_msat(500, 1_000), 0);
-        assert_eq!(final_invoice_msat(u64::MAX, 0) % 1_000, 0);
+        assert_eq!(final_invoice_msat(u64::MAX, 0), u64::MAX);
     }
 
     #[test]
