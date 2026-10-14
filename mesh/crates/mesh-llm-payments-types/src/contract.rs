@@ -44,7 +44,7 @@ pub mod ops {
     // Seller (serving) side: token-metered billing.
     /// Admit a buyer's request at the seller's current prices: refuse a buyer
     /// at the unpaid-final-invoice strike limit, otherwise state the deposit
-    /// (a share of the *estimated* input cost) or admit without one.
+    /// (a flat 1 sat, applied to the final bill) or admit without one.
     pub const SERVE_ADMIT: &str = "serve_admit";
     /// Wait for the admitted deposit to settle and claim the once-only
     /// backend dispatch. Nothing runs before this returns.
@@ -66,20 +66,13 @@ pub mod ops {
 /// Bound for the ledger-only operations listed by [`deadline`].
 pub const BOOKKEEPING_DEADLINE: Duration = Duration::from_secs(10);
 
-/// Bound for the seller operations that may create one invoice. Creating an
-/// invoice has no counterparty to wait on, but the wallet can take tens of
-/// seconds to answer (observed: 34-44s shortly after a seller restart), and
-/// that must not fail the admission or lose the final bill.
-pub const INVOICE_DEADLINE: Duration = Duration::from_secs(60);
-
 /// How long the host waits for one `payments.v1` operation, or `None` when the
 /// operation legitimately waits on the wallet and carries its own deadline.
 ///
 /// Bookkeeping operations touch only the ledger, or start background work and
 /// return: they must answer promptly. `serve_admit`, `serve_settle` and
 /// `serve_recover` may create one invoice, which is a local wallet call with
-/// no counterparty to wait on, so they stay bounded, by [`INVOICE_DEADLINE`]
-/// rather than the bookkeeping bound. Without a bound, a stalled engine holds a
+/// no counterparty to wait on, so they stay bounded. Without a bound, a stalled engine holds a
 /// response, a routing decision or the serving close open forever. Operations
 /// that create invoices, observe settlement, wait out a peer's prior debt or pay
 /// are deliberately unbounded here — the provider bounds them (invoice expiry,
@@ -88,13 +81,18 @@ pub const INVOICE_DEADLINE: Duration = Duration::from_secs(60);
 /// An operation that is not listed is unbounded: a new operation must be
 /// classified here, rather than silently inheriting a housekeeping deadline.
 pub fn deadline(operation: &str) -> Option<Duration> {
-    match operation {
-        ops::PRICING | ops::FINISH | ops::PAYMENT_INTENT | ops::CANCEL | ops::SERVE_ABANDON => {
-            Some(BOOKKEEPING_DEADLINE)
-        }
-        ops::SERVE_ADMIT | ops::SERVE_SETTLE | ops::SERVE_RECOVER => Some(INVOICE_DEADLINE),
-        _ => None,
-    }
+    matches!(
+        operation,
+        ops::PRICING
+            | ops::FINISH
+            | ops::PAYMENT_INTENT
+            | ops::CANCEL
+            | ops::SERVE_ADMIT
+            | ops::SERVE_SETTLE
+            | ops::SERVE_ABANDON
+            | ops::SERVE_RECOVER
+    )
+    .then_some(BOOKKEEPING_DEADLINE)
 }
 
 /// Advertised seller prices, and whether the provider has any payments state.
@@ -362,15 +360,6 @@ mod tests {
                 ops::SERVE_RECOVER,
             ]
         );
-    }
-
-    #[test]
-    fn invoice_creating_operations_outlast_the_bookkeeping_bound() {
-        for operation in [ops::SERVE_ADMIT, ops::SERVE_SETTLE, ops::SERVE_RECOVER] {
-            assert_eq!(deadline(operation), Some(INVOICE_DEADLINE), "{operation}");
-        }
-        assert_eq!(deadline(ops::SERVE_ABANDON), Some(BOOKKEEPING_DEADLINE));
-        assert!(INVOICE_DEADLINE > BOOKKEEPING_DEADLINE);
     }
 
     #[test]

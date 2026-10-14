@@ -43,7 +43,7 @@ pub struct PaymentService {
     wallet: OnceCell<Arc<dyn WalletProvider>>,
     factory: Arc<dyn crate::provisioning::WalletFactory>,
     pub(crate) payment_lock: Mutex<()>,
-    pub(crate) receivable_lock: Mutex<()>,
+    pub(crate) invoice_lock: Mutex<()>,
     /// Buyers that settled a metered request in this process: admitted without
     /// a deposit while they carry no expired unpaid invoice.
     pub(crate) metered_standing: Mutex<std::collections::HashSet<String>>,
@@ -85,7 +85,7 @@ impl PaymentService {
             wallet: OnceCell::new(),
             factory,
             payment_lock: Mutex::new(()),
-            receivable_lock: Mutex::new(()),
+            invoice_lock: Mutex::new(()),
             metered_standing: Mutex::default(),
             ledger_only: false,
             _process_lock: process_lock,

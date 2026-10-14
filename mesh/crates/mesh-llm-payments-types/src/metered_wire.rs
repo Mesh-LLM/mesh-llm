@@ -1,5 +1,4 @@
-//! Explicitly negotiated token-metered billing: a deposit against the
-//! estimated input, then one final invoice for the backend-reported usage.
+//! Explicitly negotiated token-metered billing: a flat 1-sat deposit, then one final invoice for the backend-reported usage.
 //! Neither side may downgrade to a retired payment protocol.
 
 use anyhow::{Result, ensure};

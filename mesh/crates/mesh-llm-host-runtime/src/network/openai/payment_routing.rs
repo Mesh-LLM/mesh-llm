@@ -47,7 +47,7 @@ pub(super) async fn rank(
                     // No prompt estimate: order by the output allowance's
                     // cost, input rate breaking ties.
                     let cost = price.output_charge(max_output).ok()?;
-                    let total = price.request_cap_msat(0, max_output).ok()?;
+                    let total = mesh_llm_payments_types::pricing::payment_cap_msat(cost).ok()?;
                     (intent.permits(price, total) && total <= available)
                         .then_some((1, cost.saturating_add(price.input_msat_per_million)))
                 }

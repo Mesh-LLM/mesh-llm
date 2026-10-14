@@ -264,7 +264,7 @@ impl Ledger {
     /// Nothing is refunded.
     pub fn unblock_peer(&self, peer: &str) -> Result<Forgiven> {
         let invoices = self.lock()?.execute(
-            "UPDATE metered_invoices SET state='forgiven' WHERE peer=?1 AND state='unpaid'",
+            "UPDATE metered_invoices SET state='forgiven' WHERE peer=?1 AND kind='final' AND state='unpaid'",
             [peer],
         )?;
         ensure!(

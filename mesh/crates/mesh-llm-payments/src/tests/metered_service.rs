@@ -174,7 +174,7 @@ async fn covering_deposit_means_no_final_invoice_and_abandonment_keeps_the_depos
     let deposit = deposit_invoice(&service.serve_admit(admit("c", "peer")).await.unwrap());
     received(&wallet, &deposit);
     service.serve_deposit_confirmed("c").await.unwrap();
-    let bill = service.serve_settle(settle("c", 100, 50)).await.unwrap();
+    let bill = service.serve_settle(settle("c", 100, 40)).await.unwrap();
     assert_eq!(
         (
             bill.bill_msat,
@@ -182,7 +182,7 @@ async fn covering_deposit_means_no_final_invoice_and_abandonment_keeps_the_depos
             bill.remaining_msat,
             bill.settled
         ),
-        (1500, 1000, 0, true)
+        (1400, 1000, 0, true)
     );
     assert!(bill.invoice.is_none(), "nothing owed, nothing refunded");
     assert_eq!(wallet.invoice_expiries.lock().unwrap().len(), 1);

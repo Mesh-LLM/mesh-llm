@@ -109,10 +109,10 @@ fn covering_deposit_means_no_final_invoice_and_no_refund() {
     let (_d, l) = open();
     admit(&l, "a", true).unwrap();
     record(&l, "a", 0, 1, 1000, true);
-    let s = l.metered_finalize("a", usage(100, 50)).unwrap();
+    let s = l.metered_finalize("a", usage(100, 40)).unwrap();
     assert_eq!(
         (s.status, s.bill_msat, s.deposit_paid_msat, s.remaining_msat),
-        (MeteredStatus::Settled, Some(1500), 1000, 0)
+        (MeteredStatus::Settled, Some(1400), 1000, 0)
     );
     // Nothing is carried to the next request.
     admit(&l, "b", false).unwrap();

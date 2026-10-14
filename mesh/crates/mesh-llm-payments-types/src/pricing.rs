@@ -57,18 +57,6 @@ impl Pricing {
         self.charge(self.output_msat_per_million, tokens)
     }
 
-    /// The payer's total reservation for one request: both inference charges
-    /// plus the routing-fee allowance for each. Seller and payer both compute
-    /// this from the same inputs and the payer rejects terms that disagree, so
-    /// it must stay a pure function of pricing, input charge and output
-    /// allowance.
-    pub fn request_cap_msat(&self, input_amount: u64, max_output: u64) -> Result<u64> {
-        let output_amount = self.output_charge(max_output)?;
-        payment_cap_msat(input_amount)?
-            .checked_add(payment_cap_msat(output_amount)?)
-            .context("request price overflow")
-    }
-
     fn charge(&self, rate: u64, tokens: u64) -> Result<u64> {
         self.validate()?;
         if tokens == 0 {
@@ -120,10 +108,9 @@ mod tests {
             input_msat_per_million: 1000,
             output_msat_per_million: 1000,
         };
-        // 100 msat input + 100 msat output, each with the floor allowance.
         assert_eq!(
-            rates.request_cap_msat(100, 100_000).unwrap(),
-            2 * (100 + FEE_ALLOWANCE_FLOOR_MSAT)
+            payment_cap_msat(rates.output_charge(100_000).unwrap()).unwrap(),
+            100 + FEE_ALLOWANCE_FLOOR_MSAT
         );
     }
 

@@ -51,8 +51,9 @@ allowance terms, delivery watermarks, receivables or refunds.
    a best-effort basis; all other bytes pass through unchanged.
 6. On completion the provider sends `Settlement`: the reported usage, the bill
    (`prompt_tokens` at the input rate + `completion_tokens` at the output
-   rate), the deposit applied and, if at least 1 sat is still owed, one final
-   invoice for `bill - deposit`; a smaller remainder is waived. The payer recomputes the bill from the stored
+   rate), the deposit applied and, if `bill - deposit` rounds to at least 1 sat,
+   one final invoice for that remainder rounded half-up to whole sats
+   (`final_invoice_msat`). The payer recomputes the bill from the stored
    admission, checks it against its local cap, pays the final invoice under the
    original authorization, and the provider replies `Complete` once that
    invoice has settled. No human approval is needed.
@@ -397,8 +398,10 @@ tokens. Free serving is the default. Charges use wide integer arithmetic and
 ceiling division to the msat. Bills are recorded to the msat, but every
 Lightning payment has a 1 sat floor (`PAYMENT_FLOOR_MSAT`): live Lexe
 payments of 60 and 90 msat found no route while 1000 msat and above settled.
-The deposit is exactly the floor, and a final remainder below it produces no
-final invoice (the seller absorbs it). The deprecated
+The deposit is exactly the floor. The final remainder is rounded half-up to
+whole sats: under 500 msat is free (no final invoice), 500 to 1499 msat is
+1 sat, and so on. Both sides derive it from `final_invoice_msat`, so this
+rounding is part of the `/mesh/payment/v3` wire contract. The deprecated
 `LightningOffer.minimum_invoice_msat` gossip field is sent as 1 and ignored
 on read. The seller
 refuses admission when the pricing in the `Request` differs from its current
@@ -407,7 +410,7 @@ request a payer makes after it has seen the new advertisement.
 
 Enabling `wallet pricing MODEL` without explicit rates uses 500 input and 1500
 output msat per million tokens;
-small requests at those rates bill a few msat, which the payment floor waives.
+small requests at those rates bill a few msat, which rounds down to free.
 
 The payer reserves a routing-fee allowance for each inference payment of
 `max(3000 msat, 1% of the amount)` (`pricing::fee_allowance_msat`). Its local

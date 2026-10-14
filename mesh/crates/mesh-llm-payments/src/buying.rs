@@ -100,7 +100,7 @@ impl PaymentService {
             deposit_applied_msat <= admission.deposit_msat && deposit_applied_msat <= bill,
             "invalid deposit application"
         );
-        // A remainder below the payment floor is waived by the seller.
+        // Remainder rounded half-up to whole sats; below 500 msat is free.
         let remaining = final_invoice_msat(bill, deposit_applied_msat);
         let payment = match invoice {
             Some(invoice) => {

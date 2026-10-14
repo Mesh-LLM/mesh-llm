@@ -283,12 +283,12 @@ async fn local_cap(payments: &Payments, request: &PaidRequest, price: &Pricing) 
 }
 
 async fn read_admission(recv: &mut (impl AsyncRead + Unpin)) -> Result<Frame> {
+    // Nothing is charged before admission, so any unreadable reply is
+    // retryable. That includes an older seller that does not know this
+    // protocol and answers with plain HTTP bytes.
     let frame = wire::read(recv).await.map_err(|error| {
-        if error.downcast_ref::<std::io::Error>().is_some() {
-            anyhow::Error::from(PrePaymentTransportFailure)
-        } else {
-            error
-        }
+        tracing::debug!(%error, "unreadable payment admission; trying another target");
+        anyhow::Error::from(PrePaymentTransportFailure)
     })?;
     // A seller-side refusal or failure here cannot have charged this buyer:
     // no admission has been accepted and no payment task has been spawned.
@@ -398,7 +398,7 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn initial_transport_drop_is_retryable_but_malformed_frame_is_terminal() -> Result<()> {
+    async fn any_unreadable_admission_is_retryable() -> Result<()> {
         let (writer, mut reader) = tokio::io::duplex(64);
         drop(writer);
         assert!(
@@ -407,14 +407,22 @@ mod tests {
                 .unwrap_err()
                 .is::<PrePaymentTransportFailure>()
         );
-        let (mut writer, mut reader) = tokio::io::duplex(64);
-        writer.write_all(&[0, 0, 0, 1, b'!']).await?;
-        assert!(
-            !read_admission(&mut reader)
-                .await
-                .unwrap_err()
-                .is::<PrePaymentTransportFailure>()
-        );
+        // A malformed frame, and an older seller answering in plain HTTP
+        // (parsed as a huge frame length), both fall back to another target.
+        for reply in [
+            &[0, 0, 0, 1, b'!'][..],
+            b"HTTP/1.1 404 Not Found\r\ncontent-length: 0\r\n\r\n",
+        ] {
+            let (mut writer, mut reader) = tokio::io::duplex(256);
+            writer.write_all(reply).await?;
+            drop(writer);
+            assert!(
+                read_admission(&mut reader)
+                    .await
+                    .unwrap_err()
+                    .is::<PrePaymentTransportFailure>()
+            );
+        }
         Ok(())
     }
 

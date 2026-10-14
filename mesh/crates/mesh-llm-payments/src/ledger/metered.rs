@@ -4,8 +4,8 @@
 //! → `billed` (backend-reported usage priced at the admitted rates, deposit
 //! applied, remainder on one final invoice) or `abandoned` (no usage, no bill,
 //! no debt). There are no reservations, exposure sums or credits: the deposit
-//! is a share of the estimated input cost, a covering deposit means no second
-//! invoice, and nothing is refunded or carried forward.
+//! is a flat 1 sat applied to the bill, a remainder that rounds to 0 sats
+//! means no second invoice, and nothing is refunded or carried forward.
 //!
 //! The deposit and final invoices live in `metered_invoices`
 //! ([`super::metered_invoices`]). A buyer is blocked only by [`STRIKE_LIMIT`]
@@ -219,6 +219,12 @@ impl Ledger {
     /// it alone must never authorize (re)generating a request. Returns `true`
     /// to exactly one caller; later calls (including after restart) get
     /// `false`. Fails for an unknown ID, another peer, or a finalized row.
+    ///
+    /// Known liveness edge, accepted: the claim commits before the host that
+    /// dispatches hears about it. If that reply is lost, the request is never
+    /// dispatched and stays `admitted` until it is abandoned. Recovery never
+    /// re-dispatches it, which is the safe direction. The buyer pays at most
+    /// the 1-sat deposit and receives no output.
     pub fn metered_claim_dispatch(&self, id: &str, peer: &str) -> Result<bool> {
         let mut connection = self.lock()?;
         let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;

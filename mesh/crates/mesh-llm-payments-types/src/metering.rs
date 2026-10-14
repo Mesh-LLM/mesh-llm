@@ -37,15 +37,12 @@ pub const PAYMENT_FLOOR_MSAT: u64 = 1_000;
 /// the request and is applied against the final bill.
 pub const DEPOSIT_MSAT: u64 = PAYMENT_FLOOR_MSAT;
 
-/// What the seller invoices after the deposit: `bill - deposit`, waived when
-/// it is below [`PAYMENT_FLOOR_MSAT`] (the seller absorbs it).
+/// What the seller invoices after the deposit: `bill - deposit` rounded
+/// half-up to whole sats. Below 500 msat is free; 500..1499 msat is 1 sat.
+/// Buyer and seller both derive the invoice from this one function.
 pub fn final_invoice_msat(bill_msat: u64, deposit_applied_msat: u64) -> u64 {
     let remaining = bill_msat.saturating_sub(deposit_applied_msat);
-    if remaining < PAYMENT_FLOOR_MSAT {
-        0
-    } else {
-        remaining
-    }
+    remaining.saturating_add(PAYMENT_FLOOR_MSAT / 2) / PAYMENT_FLOOR_MSAT * PAYMENT_FLOOR_MSAT
 }
 
 impl MeteredUsage {
@@ -62,6 +59,19 @@ impl MeteredUsage {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn final_invoice_rounds_half_up_to_whole_sats() {
+        assert_eq!(final_invoice_msat(0, 0), 0);
+        assert_eq!(final_invoice_msat(499, 0), 0);
+        assert_eq!(final_invoice_msat(500, 0), 1_000);
+        assert_eq!(final_invoice_msat(1_499, 0), 1_000);
+        assert_eq!(final_invoice_msat(1_500, 0), 2_000);
+        assert_eq!(final_invoice_msat(1_499, 1_000), 0);
+        assert_eq!(final_invoice_msat(1_500, 1_000), 1_000);
+        assert_eq!(final_invoice_msat(500, 1_000), 0);
+        assert_eq!(final_invoice_msat(u64::MAX, 0) % 1_000, 0);
+    }
 
     #[test]
     fn usage_is_backend_reported_inclusive_and_may_be_zero() {

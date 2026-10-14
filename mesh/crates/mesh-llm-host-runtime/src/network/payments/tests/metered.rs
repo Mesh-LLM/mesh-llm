@@ -73,10 +73,11 @@ async fn exchange_round(pair: &Pair, network: &Network, raw: &[u8], round: usize
 fn assert_ledgers(pair: &Pair) -> Result<()> {
     let requests = pair.buyer.ledger.requests()?;
     assert!(requests.iter().all(|r| r.state == "completed"));
-    // 40 prompt + 3 completion tokens at 100 msat each, plus 10 msat fee per
-    // payment: two payments for the deposited request, one for the trusted.
+    // 40 prompt + 3 completion tokens at 100 msat each bill 4300 msat, plus
+    // 10 msat fee per payment. Deposited: 1000 deposit + 3300 remainder
+    // rounded half-up to 3000. Trusted: 4300 rounded to 4000.
     let spent: u64 = requests.iter().map(|r| r.spent_msat).sum();
-    assert_eq!(spent, 4300 * 2 + 30);
+    assert_eq!(spent, (1000 + 3000) + 4000 + 30);
     assert_eq!(
         requests[0].terms.exchange_id.as_deref(),
         Some("host-evidence-id")

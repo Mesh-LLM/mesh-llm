@@ -201,7 +201,7 @@ impl PaymentService {
         if amount == 0 {
             return Ok(None);
         }
-        let _guard = self.receivable_lock.lock().await;
+        let _guard = self.invoice_lock.lock().await;
         if let Some(receipt) = self.ledger.metered_invoice(request_id, kind)? {
             ensure!(
                 receipt.peer == peer && receipt.invoice.amount_msat == Some(amount),
