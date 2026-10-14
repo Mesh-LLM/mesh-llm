@@ -400,10 +400,6 @@ fn model_fit_settings(
             &format!("{prefix}.prefix_cache.shared_record_limit"),
             ConfigValueSchema::Integer,
         ),
-        basic_setting(
-            &format!("{prefix}.prefix_cache.payload_mode"),
-            string_enum(["resident-kv", "kv-recurrent", "full-state", "auto"]),
-        ),
         unwired_setting(&format!("{prefix}.keep_tokens"), ConfigValueSchema::Integer),
         unwired_setting(&format!("{prefix}.context_shift"), bool_or_auto_schema()),
         basic_setting(&format!("{prefix}.swa_full"), ConfigValueSchema::Boolean),

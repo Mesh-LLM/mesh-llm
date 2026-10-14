@@ -1,4 +1,4 @@
-From 892c16bc4385487cf60873c568e15cdda7680f5f Mon Sep 17 00:00:00 2001
+From 9047e7a971602caf7ca92e2f4aa789a784ed27ca Mon Sep 17 00:00:00 2001
 From: James Dumay <james@generalinference.xyz>
 Date: Tue, 13 Oct 2026 22:06:42 +1100
 Subject: [PATCH] build(skippy): wire native runtime and backend support

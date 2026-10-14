@@ -72,18 +72,12 @@ fn observer(stage: &Value, observers: &Value) -> DynResult<&'static str> {
     Ok(matches[0])
 }
 
-const SELECTION_FIELDS: [(&str, &str); 8] = [
+const SELECTION_FIELDS: [(&str, &str); 5] = [
     ("payload", "skippy.kv.payload"),
     ("reason", "skippy.kv.payload_selection_reason"),
-    ("fallbacks", "skippy.kv.payload_fallbacks"),
-    ("admitted_graph_state", "skippy.kv.admitted_graph_state"),
     ("loaded_state_kind", "skippy.kv.loaded_state_kind"),
     ("resident", "skippy.kv.loaded_memory_cache_resident"),
     ("kv_recurrent", "skippy.kv.loaded_memory_cache_kv_recurrent"),
-    (
-        "graph_loaded_state_mismatches",
-        "skippy.kv.graph_loaded_state_mismatches",
-    ),
 ];
 
 fn selection(attrs: &Value) -> Value {

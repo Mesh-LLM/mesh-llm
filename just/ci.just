@@ -300,7 +300,6 @@ ci-automation-contracts:
         --test migration_run_family \
         --test migration_workload_oracle_cli \
         --test migration_xcframework_cli \
-        --test openai_smoke_config \
         --test opencode_config_adapter \
         --test opencode_fixture_evidence \
         --test prepared_source \

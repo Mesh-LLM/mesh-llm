@@ -1719,3 +1719,9 @@ The unused local `audit-depot-pr-isolation` implementation is removed. All 27
 protected callers still use their immutable published `ed07043` action, and the
 five published package resolvers retain their separate rollout boundary. Neither
 SDK extraction nor native trajectory input changes those authority checks.
+
+Standalone OpenAI, cache-reuse, and System One smokes now use `skippy serve
+--model-path` directly. The handmade `openai-smoke-config` command and System One
+stage serializer are removed. The server derives cache capabilities from its
+loaded native graph and memory; tests supply only public resource/cache budgets.
+Split parity continues to use native planner evidence and binary stage servers.

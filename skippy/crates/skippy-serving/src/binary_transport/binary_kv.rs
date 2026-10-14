@@ -994,9 +994,10 @@ mod tests {
     #[test]
     fn binary_full_prefill_uses_one_radix_path_per_request() {
         let config = prefix_cache_test_config();
-        let kv = KvStageIntegration::from_config(&config, skippy_runtime::ModelStateKind::Dense)
-            .unwrap()
-            .expect("resident prefix cache enabled");
+        let kv =
+            KvStageIntegration::from_test_state(&config, skippy_runtime::ModelStateKind::Dense)
+                .unwrap()
+                .expect("resident prefix cache enabled");
         let message = prefill_message();
         let recorded_tokens = (0..2214).collect::<Vec<_>>();
         let mut lookup_tokens = recorded_tokens.clone();

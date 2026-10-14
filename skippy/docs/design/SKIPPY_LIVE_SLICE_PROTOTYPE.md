@@ -373,10 +373,75 @@ the growing-chat repeat. No sleeps, request retries, or family-name conditions
 were added. The publication-boundary regression passed along with serving
 compile/Clippy, formatting, and no-console checks.
 
-The smoke generator still needs to consume genuine admission evidence instead
-of emitting an incomplete configuration. This diagnosis and controlled pass do
-not constitute a repaired full smoke gate or family certification. Do not
-redispatch until that owning workflow is corrected and validated end to end.
+That diagnosis exposed an unnecessary configuration boundary. The replacement
+removes operator-authored graph-state labels and cache payload selection
+entirely. The native context intersects state coverage across its reserved
+graphs with the loaded memory's complete exporters. The first capability query
+freezes this admission; subsequent reservations and live graph builds reject
+state coverage that would invalidate it. Graph reuse retains the proof for the
+graph being reused. Unclassified or additional persistent state selects complete
+snapshots; an absent loaded runtime does not authorize a cache.
+
+The public `kv_graph_state`, cache `payload`, Mesh `payload_mode`,
+`--prefix-cache-payload`, and both payload environment overrides are removed.
+Retired inputs fail explicitly, without aliases or compatibility behavior.
+Planner descriptors retain graph-state diagnostics, but those strings no longer
+authorize serving state. Cache enablement, memory budgets, token thresholds,
+and numeric precision remain operator controls.
+
+All three standalone serving smokes now start `skippy serve --model-path`.
+The handmade OpenAI/cache and System One config generators are deleted. Split
+parity still uses real planner-produced contracts and binary stage servers.
+The cache smoke keeps its explicit 64-token threshold through the public CLI:
+its first HTTP fixture has 215 tokens, below the normal 256-token default.
+It does not select a representation, retry the request, or sleep for cache
+publication.
+
+This changes the semantics of
+`uint32_t skippy_model_memory_cache_capabilities(const struct skippy_model *)`
+without changing its signature. Native and Rust ABI versions advance together
+from 0.1.68 to 0.1.69. No native declarations are added or removed. The changes
+remain folded into the six owning core patches; there is no replay-era fixup
+or fallback patch.
+
+Local validation of this cleanup passed the 287-test full native suite, followed
+by added cache-admission regressions for attention, recurrent, unclassified,
+and malformed graph state. Public headers compile as C11/C++17. The final
+production native rebuild, serving suite (995 passed, nine ignored), CLI suite
+(63 passed), Mesh host suite (3,926 passed, 24 ignored), Mesh binary library
+(37 passed), ABI tests (17 passed), and UI configuration adapters (52 passed)
+passed. The ignored resident-cache regression was explicitly enabled against
+the pinned NAS Qwen model: native selection was `ResidentKv`, reason
+`loaded_graph_and_memory`, and the immediate repeat reused 515 tokens.
+
+The complete standalone smoke passed against NAS Qwen3-0.6B Q8 and Falcon-H1
+Q4_K_M, with dense two-/three-stage parity and dense full-state handoff enabled.
+The optional dense suffix comparison needed two lanes because it holds an
+independent reference beside the restored session; the old one-lane invocation
+failed before that comparison and is corrected. All OpenAI assertions and the
+unchanged repeat/growing-chat checks passed (515, 512, and 542 cached tokens).
+The System One contract passed through normal server startup; its full-model
+Metal read remains explicitly unqualified. The 1,156-test automation lifecycle
+target passed 1,148 tests with eight existing ignores. A later packaging test
+caught its stale expected ABI 0.1.68; the expectation is updated to 0.1.69.
+The failed target and every remaining CI contract/repository gate then passed.
+The standalone OpenAI smoke also passed after updating stale expectations:
+`typical_p` is supported, `adaptive` is still rejected, and normal server
+startup emits request/decode telemetry rather than the staged scheduler's
+iteration event.
+
+A separate planner-generated two-stage Qwen server, using the arbitrary model
+ID `local/split-cache-proof`, selected `ResidentKv` with reason
+`loaded_graph_and_memory` on both stages. The cold request reused zero tokens;
+the immediate repeat reused 516 tokens. No representation fields or graph-state
+labels were injected into the generated stage configs.
+
+`just build metal` completed both products, including the packaged native
+runtime and Mesh console. The packaged dynamic Metal runtime then served the
+same NAS model with all layers requested on GPU and reused 515 tokens on an
+immediate repeat. The local Rust toolchain emitted a non-fatal debug-stripping
+warning because its `rust-objcopy` could not find `libLLVM.dylib`; compilation,
+packaging, ABI checks, and the packaged serving check still succeeded.
 
 ## Canary and release decision
 
@@ -388,7 +453,7 @@ redispatch until that owning workflow is corrected and validated end to end.
 | MTP and persistent-state behavior | tested probes pass | Full roster/head coverage |
 | Native and Rust validation; packaged Metal serving | pass | Remote clean candidate build |
 | Complete main-based local CI gate | resumed checks pass | Original run hit the 200 ms fixture; its existing fix and every remaining gate passed |
-| GitHub Metal family canary | native/generator passed; smoke startup failed | Startup repaired locally; resolve cold-start cache smoke before redispatch |
+| GitHub Metal family canary | historical run failed; repaired full local smoke passes | Dispatch and finish certification of the final candidate |
 | Stable performance conclusion | inconclusive | Quiescent interleaved A/B |
 | Universal or cross-backend support claim | no-go | Full roster plus separate CUDA lane |
 

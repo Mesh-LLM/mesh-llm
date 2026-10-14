@@ -36,7 +36,7 @@ pub enum KvLifecycleEvent {
         evicted_entries: usize,
         evicted_tokens: u64,
     },
-    /// `KvStageIntegration::from_config` began attempting real
+    /// `KvStageIntegration::from_test_state` began attempting real
     /// initialization (past every disabled/unsupported/not-applicable
     /// early return).
     KvInitStarted,

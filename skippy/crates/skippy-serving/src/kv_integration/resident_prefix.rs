@@ -811,7 +811,7 @@ fn resident_index_over_capacity(
 mod proactive_eviction_tests {
     use super::*;
     use crate::kv_integration::KvLifecycleObserver;
-    use skippy_protocol::{StageConfig, StageKvCacheConfig, StageKvCacheMode, StageKvCachePayload};
+    use skippy_protocol::{StageConfig, StageKvCacheConfig, StageKvCacheMode};
     use skippy_runtime::ModelStateKind;
     use std::sync::Arc;
 
@@ -845,13 +845,11 @@ mod proactive_eviction_tests {
     #[test]
     fn admitted_capacity_eviction_reports_the_removed_entries() {
         let config = StageConfig {
-            kv_graph_state: "dense".into(),
             ctx_size: 10,
             lane_count: 1,
             kv_cache: Some(StageKvCacheConfig {
                 exact_max_bytes: None,
                 mode: StageKvCacheMode::LookupRecord,
-                payload: StageKvCachePayload::ResidentKv,
                 max_entries: 4,
                 max_bytes: 0,
                 l2_max_bytes: 0,

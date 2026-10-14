@@ -1,4 +1,4 @@
-From 2102cb3be6023f44f8a6cb17eeba9fd6787e6c37 Mon Sep 17 00:00:00 2001
+From 38eab23a7fe629585c6c6f30bf7cd895c8050a79 Mon Sep 17 00:00:00 2001
 From: James Dumay <james@generalinference.xyz>
 Date: Tue, 13 Oct 2026 22:06:42 +1100
 Subject: [PATCH] feat(skippy): define graph-derived native ABI
@@ -17,10 +17,10 @@ Subject: [PATCH] feat(skippy): define graph-derived native ABI
  include/skippy/signals.h              |  53 +++++
  include/skippy/speculative_decoding.h |  71 +++++++
  include/skippy/stage_plan.h           | 252 +++++++++++++++++++++++
- include/skippy/state.h                | 233 ++++++++++++++++++++++
+ include/skippy/state.h                | 234 ++++++++++++++++++++++
  include/skippy/tokenization.h         |  85 ++++++++
  include/skippy/workloads.h            |  93 +++++++++
- 16 files changed, 2107 insertions(+)
+ 16 files changed, 2108 insertions(+)
  create mode 100644 include/skippy.h
  create mode 100644 include/skippy/activation.h
  create mode 100644 include/skippy/common.h
@@ -147,7 +147,7 @@ index 000000000..673c1d81c
 +#endif // SKIPPY_ACTIVATION_H
 diff --git a/include/skippy/common.h b/include/skippy/common.h
 new file mode 100644
-index 000000000..8a2781dcb
+index 000000000..cfad26ad3
 --- /dev/null
 +++ b/include/skippy/common.h
 @@ -0,0 +1,146 @@
@@ -199,7 +199,7 @@ index 000000000..8a2781dcb
 +
 +#define SKIPPY_ABI_VERSION_MAJOR 0
 +#define SKIPPY_ABI_VERSION_MINOR 1
-+#define SKIPPY_ABI_VERSION_PATCH 65
++#define SKIPPY_ABI_VERSION_PATCH 66
 +
 +#if defined(_MSC_VER)
 +#define SKIPPY_DEPRECATED(message) __declspec(deprecated(message))
@@ -1814,10 +1814,10 @@ index 000000000..962674190
 +#endif // SKIPPY_STAGE_PLAN_H
 diff --git a/include/skippy/state.h b/include/skippy/state.h
 new file mode 100644
-index 000000000..3d3962b3f
+index 000000000..620a311e1
 --- /dev/null
 +++ b/include/skippy/state.h
-@@ -0,0 +1,233 @@
+@@ -0,0 +1,234 @@
 +#ifndef SKIPPY_STATE_H
 +#define SKIPPY_STATE_H
 +
@@ -1838,8 +1838,9 @@ index 000000000..3d3962b3f
 +    SKIPPY_MEMORY_CACHE_KV_RECURRENT = 1 << 1,
 +};
 +
-+/** @brief Returns supported complete cache representations, or zero for unknown memory.
-+ * Full-state serialization is the fallback; no model architecture names are consulted.
++/** @brief Returns complete cache representations admitted by the built graph and loaded memory.
++ * Graph state effects restrict the loaded memory adapters' complete export capabilities.
++ * Zero requires full-state serialization; callers cannot supply capability labels.
 + */
 +LLAMA_API uint32_t skippy_model_memory_cache_capabilities(const struct skippy_model * model);
 +

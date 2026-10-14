@@ -44,7 +44,6 @@ pub(crate) mod logging_recovery;
 pub(crate) mod manual_smoke;
 pub(crate) mod native_artifact_identity;
 mod openai_exchange;
-pub(crate) mod openai_smoke_config;
 pub(crate) mod receipt_files;
 pub(crate) mod runtime_install;
 #[cfg(unix)]

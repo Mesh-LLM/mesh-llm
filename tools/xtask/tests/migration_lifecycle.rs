@@ -109,8 +109,6 @@ mod binary_stage_readiness_cli;
 mod canary_source_recovery;
 #[path = "migration_lifecycle/runtime_release_manifest_wrapper.rs"]
 mod runtime_release_manifest_wrapper;
-#[path = "migration_lifecycle/skippy_cache_smoke_config_cli.rs"]
-mod skippy_cache_smoke_config_cli;
 #[path = "migration_lifecycle/skippy_ci_smoke_control_cli.rs"]
 mod skippy_ci_smoke_control_cli;
 #[path = "migration_lifecycle/skippy_cli_release.rs"]

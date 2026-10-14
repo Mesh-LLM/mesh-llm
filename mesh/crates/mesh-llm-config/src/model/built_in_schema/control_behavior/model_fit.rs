@@ -49,10 +49,6 @@ pub(super) fn apply_model_fit_behavior(
             set_numeric(setting, Some(0.0), None, Some(1.0), None);
             push_prefix_cache_disable(setting, prefix);
         }
-        "prefix_cache.payload_mode" => {
-            set_static_options(setting);
-            push_prefix_cache_disable(setting, prefix);
-        }
         "keep_tokens" => {
             set_numeric(setting, Some(0.0), None, Some(1.0), Some("tokens"));
             push_constraint(

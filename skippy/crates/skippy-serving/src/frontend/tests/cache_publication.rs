@@ -1,5 +1,6 @@
 //! Exact-state cache requests must distinguish queued capture from publication.
 use super::*;
+use crate::kv_integration::StagePrefixCachePayload;
 use crate::runtime_state::{loaded_memory_cache_capabilities, loaded_model_state_kind};
 
 fn cache_stats(kv: &KvStageIntegration) -> Value {
@@ -34,13 +35,12 @@ fn cached_tokens(response: &ChatCompletionResponse) -> u64 {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires SKIPPY_WARMUP_STAGE_CONFIG and a local causal GGUF"]
-async fn full_state_repeat_reuses_cache_after_publication() -> Result<()> {
+#[ignore = "requires SKIPPY_WARMUP_STAGE_CONFIG and a resident-cache-capable GGUF"]
+async fn loaded_runtime_selects_cache_and_reuses_immediate_repeat() -> Result<()> {
     let config_path = env::var_os("SKIPPY_WARMUP_STAGE_CONFIG")
         .context("set SKIPPY_WARMUP_STAGE_CONFIG to the cache smoke config")?;
-    let mut config: StageConfig = serde_json::from_slice(&fs::read(config_path)?)?;
-    // Reproduce an unadmitted config's conservative full-state fallback.
-    config.kv_graph_state.clear();
+    let config: StageConfig = serde_json::from_slice(&fs::read(config_path)?)?;
+    // Cache selection must come from the loaded runtime, with no capability hints.
     let model = config.model_id.clone();
     let mut backend = support::local_openai_backend(config.clone(), model.clone())?;
     let kv = Arc::new(
@@ -52,6 +52,11 @@ async fn full_state_repeat_reuses_cache_after_publication() -> Result<()> {
             None,
         )?
         .context("fixture must enable cache recording")?,
+    );
+    assert_eq!(
+        kv.payload,
+        StagePrefixCachePayload::ResidentKv,
+        "this regression requires a runtime that admits resident cache state"
     );
     backend.kv = Some(kv.clone());
     let seed = backend.chat_completion(request(&model)?).await?;
@@ -67,6 +72,10 @@ async fn full_state_repeat_reuses_cache_after_publication() -> Result<()> {
     let after_drain = cache_stats(&kv);
     let published = backend.chat_completion(request(&model)?).await?;
     assert_eq!(cached_tokens(&seed), 0);
+    assert!(
+        cached_tokens(&immediate) > 0,
+        "immediate repeat must reuse admitted state"
+    );
     assert!(
         cached_tokens(&published) > 0,
         "published snapshot must be reusable"

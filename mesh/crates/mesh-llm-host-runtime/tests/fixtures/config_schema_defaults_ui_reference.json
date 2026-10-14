@@ -190,13 +190,6 @@
       }
     },
     {
-      "canonical_path": "defaults.model_fit.prefix_cache.payload_mode",
-      "support": "supported",
-      "source": {
-        "kind": "built_in"
-      }
-    },
-    {
       "canonical_path": "defaults.model_fit.prefix_cache.shared_record_limit",
       "support": "supported",
       "source": {

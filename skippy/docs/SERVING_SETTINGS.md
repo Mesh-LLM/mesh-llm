@@ -204,7 +204,6 @@ with their runtime purpose; existing controls follow in the same sections.
 | CLI flag | TOML key | Purpose |
 |---|---|---|
 | `--prefix-cache` | `prefix_cache` | Prompt reuse: auto, on, off, record |
-| `--prefix-cache-payload` | `prefix_cache_payload` | State payload: auto, resident-kv, kv-recurrent, full-state |
 | `--prefix-cache-codec` | `prefix_cache_codec` | Durable representation: native or experimental cachegen |
 | `--prefix-cache-budget` | `prefix_cache_budget` | Retention target: auto, unbounded, or IEC size; exact snapshots may exceed it |
 | `--prefix-cache-ram` | `prefix_cache_ram` | Host-RAM tier: off or IEC size; requires disk caching |

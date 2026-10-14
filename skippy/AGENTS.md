@@ -40,6 +40,13 @@ Certify independent builds at multiple shapes, numerical parity, persistent
 state, and every MTP head. Never weaken frontier/dependency equality or skip
 live contracts because a retired replay implementation is absent.
 
+Graph state and cache representation are runtime facts, not operator settings.
+Derive complete cache capabilities from the loaded context's reserved/live
+graphs and native memory exporters. Do not restore config fields, environment
+overrides, family-name selection rules, or handmade smoke admission labels.
+Serving smoke tests should start the normal `skippy serve --model-path` path;
+split tests should consume planner-produced contracts.
+
 ### No model-family special cases in shared Skippy machinery
 
 - Do not branch on a model-family name or `LLM_ARCH_*` in shared Skippy stage

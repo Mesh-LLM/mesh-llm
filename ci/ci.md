@@ -1962,3 +1962,10 @@ The unused local `audit-depot-pr-isolation` implementation is removed. All 27
 protected callers still use their immutable published `ed07043` action, and the
 five published package resolvers retain their separate rollout boundary. Neither
 SDK extraction nor native trajectory input changes those authority checks.
+
+Standalone OpenAI, cache-reuse, and System One serving smokes launch `skippy serve`
+with `--model-path` and public resource settings. They do not synthesize stage
+configuration or prescribe attention/recurrent cache representations. Loaded
+native graphs and memory exporters own cache admission. Split correctness still
+uses genuine planner output and binary stage servers. Cache-hit assertions run
+on immediate repeated requests without publication sleeps or retries.

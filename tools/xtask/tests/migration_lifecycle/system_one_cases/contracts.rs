@@ -194,7 +194,7 @@ start_stage_server() {{ : > native-launch; return 97; }}
 if run_cases_against_stage contract family-qwen3-dense "$PWD/{file}" contract 128 2; then exit 98; else exit "$?"; fi
 "#,
             function(&script, "artifact_summary", "cached_artifact_path"),
-            function(&script, "verify_artifact_digest", "write_stage_config"),
+            function(&script, "verify_artifact_digest", "require_smoke_binaries"),
             function(&script, "run_cases_against_stage", "prewarm_plan")
         );
         let report = shell(root, caller, environment(root));

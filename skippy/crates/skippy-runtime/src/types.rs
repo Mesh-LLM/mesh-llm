@@ -57,8 +57,8 @@ impl MemoryCacheCapabilities {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LoadedModelCapability {
     pub state_kind: ModelStateKind,
-    /// Complete representations supported by the loaded native memory adapters.
-    /// Unknown memory advertises neither; callers must use full-state snapshots.
+    /// Complete representations admitted across reserved graph profiles and
+    /// supported by the loaded native memory. Neither bit means full-state only.
     pub cache_capabilities: MemoryCacheCapabilities,
 }
 

@@ -17,8 +17,7 @@ use serde_json::{Value, json};
 use skippy_metrics::attr;
 #[cfg(test)]
 use skippy_protocol::{
-    LoadMode, PeerConfig, StageKvCacheConfig, StageKvCacheMode, StageKvCachePayload,
-    binary::StageStateHeader,
+    LoadMode, PeerConfig, StageKvCacheConfig, StageKvCacheMode, binary::StageStateHeader,
 };
 use skippy_protocol::{
     MessageBase, SCHEMA_VERSION, StageConfig, StageTopology,
@@ -939,7 +938,6 @@ pub(in crate::binary_transport) fn prefix_cache_test_config() -> StageConfig {
         run_id: "run".to_string(),
         topology_id: "topology".to_string(),
         model_id: "hugging-quants/Llama-3.2-1B-Instruct-GGUF:Q4_K_M".to_string(),
-        kv_graph_state: "dense".into(),
         package_ref: None,
         manifest_sha256: None,
         source_model_path: None,
@@ -979,7 +977,6 @@ pub(in crate::binary_transport) fn prefix_cache_test_config() -> StageConfig {
         kv_cache: Some(StageKvCacheConfig {
             exact_max_bytes: None,
             mode: StageKvCacheMode::LookupRecord,
-            payload: StageKvCachePayload::ResidentKv,
             max_entries: 8,
             max_bytes: 0,
             l2_max_bytes: 0,

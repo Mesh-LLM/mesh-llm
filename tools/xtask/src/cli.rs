@@ -23,7 +23,6 @@ pub(crate) fn print_usage() {
     println!("  cargo xtool automation workload-monolithic-oracle --help");
     println!("  cargo xtool automation workload-media-oracle --help");
     println!("  cargo xtool automation workload-tts-oracle --help");
-    println!("  cargo xtool automation openai-smoke-config cache --help");
     println!(
         "  cargo xtool automation agent-fixture-inputs {{sha256 FILE | soak MODEL TARGET_CHARS OUTPUT | surface MODEL OUTPUT | coding-setup ROOT | coding-verify ROOT INITIAL_SHA256 ABSOLUTE_JUST ABSOLUTE_RUSTC}}"
     );
@@ -45,9 +44,6 @@ pub(crate) fn print_usage() {
         "  cargo xtool automation family-battery-policy --cache ROOT MANIFEST PLAN CACHE_ROOT"
     );
     println!("  cargo xtool automation family-battery-policy --inspect-gguf PATH");
-    println!(
-        "  cargo xtool automation openai-smoke-config --output PATH --model-id ID --model-path PATH --layer-end N --ctx-size N"
-    );
     println!(
         "  cargo xtool automation workload-smoke-config --output PATH --model-id ID --model-path PATH --model-sha256 SHA --layer-end N --n-gpu-layers N [--projector-path PATH]"
     );
@@ -134,7 +130,6 @@ pub(crate) enum CliCommand<'a> {
     LocalPorts(&'a [String]),
     ManualSmoke(&'a [String]),
     OpenaiCacheMatrix(&'a [String]),
-    OpenaiSmokeConfig(&'a [String]),
     WorkloadSmokeConfig(&'a [String]),
     SmokeInputs(&'a [String]),
     WorkloadSmoke(&'a [String]),
@@ -355,11 +350,6 @@ impl<'a> Cli<'a> {
             }
             [domain, scope, rest @ ..] if domain == "automation" && scope == "manual-smoke" => {
                 CliCommand::ManualSmoke(rest)
-            }
-            [domain, scope, rest @ ..]
-                if domain == "automation" && scope == "openai-smoke-config" =>
-            {
-                CliCommand::OpenaiSmokeConfig(rest)
             }
             [domain, scope, rest @ ..]
                 if domain == "automation" && scope == "workload-smoke-config" =>

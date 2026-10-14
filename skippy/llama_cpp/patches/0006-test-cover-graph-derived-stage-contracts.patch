@@ -1,4 +1,4 @@
-From 962768554564bd02f3918918418c9d0a98903190 Mon Sep 17 00:00:00 2001
+From d229752a8bc5eb2f4fa9a3973dcee439a7eca642 Mon Sep 17 00:00:00 2001
 From: James Dumay <james@generalinference.xyz>
 Date: Tue, 13 Oct 2026 22:06:43 +1100
 Subject: [PATCH] test(skippy): cover live graph and state contracts
@@ -31,13 +31,13 @@ Subject: [PATCH] test(skippy): cover live graph and state contracts
  tests/test-reasoning-budget.cpp               |    1 +
  tests/test-skippy-cachegen-metal.cpp          |  399 ++++
  tests/test-skippy-kv-cells-contiguous.cpp     |   20 +
- tests/test-skippy-kv-page-export.cpp          |  302 +++
+ tests/test-skippy-kv-page-export.cpp          |  346 ++++
  tests/test-skippy-model-loader-accounting.cpp |  326 ++++
  .../test-skippy-recurrent-state-roundtrip.cpp |  159 ++
  tests/test-skippy-rerank-template.cpp         |   34 +
  tests/test-skippy-sampling-suppress.cpp       |   90 +
  ...st-skippy-verify-checkpoint-retirement.cpp |   26 +
- 33 files changed, 9213 insertions(+), 33 deletions(-)
+ 33 files changed, 9257 insertions(+), 33 deletions(-)
  create mode 100644 src/skippy/tests/embedding_input_regression.h
  create mode 100644 src/skippy/tests/graph_build_inputs.cpp
  create mode 100644 src/skippy/tests/graph_contract_cases.cmake
@@ -8826,16 +8826,17 @@ index 000000000..0e95c35b2
 +}
 diff --git a/tests/test-skippy-kv-page-export.cpp b/tests/test-skippy-kv-page-export.cpp
 new file mode 100644
-index 000000000..3b6992151
+index 000000000..3f2f6bb29
 --- /dev/null
 +++ b/tests/test-skippy-kv-page-export.cpp
-@@ -0,0 +1,302 @@
+@@ -0,0 +1,346 @@
 +#include "skippy.h"
 +#include "../src/skippy/state_memory.h"
 +
 +#include "../src/llama-batch.h"
 +#include "../src/llama-kv-cache.h"
 +#include "../src/llama-model.h"
++#include "../src/llama-graph.h"
 +
 +#include <cstdio>
 +#include <memory>
@@ -8848,7 +8849,50 @@ index 000000000..3b6992151
 +    using llama_kv_cache::llama_kv_cache;
 +};
 +
++static bool graph_cache_capabilities_cover_complete_state() {
++    ggml_init_params params = {ggml_tensor_overhead() * 16 + ggml_graph_overhead_custom(32, false), nullptr, true};
++    ggml_context_ptr ctx(ggml_init(params));
++    auto * input = ggml_new_tensor_1d(ctx.get(), GGML_TYPE_F32, 4);
++    auto * state = ggml_new_tensor_1d(ctx.get(), GGML_TYPE_F32, 4);
++    ggml_set_input(input);
++    auto * output = ggml_cpy(ctx.get(), input, state);
++    auto * graph = ggml_new_graph_custom(ctx.get(), 32, false);
++    ggml_build_forward_expand(graph, output);
++    llm_graph_result result(32);
++    result.block_boundaries = {
++        {skippy_block_boundary_kind::entry, 0, input},
++        {skippy_block_boundary_kind::exit, 0, output},
++    };
++    const auto capabilities = [&](skippy_state_kind kind) {
++        result.replace_with_stage_graph(graph, {}, {}, {
++            {kind, skippy_state_access::read, 0, state, nullptr},
++            {kind, skippy_state_access::write, 0, state, output, 0},
++        });
++        return skippy_graph_cache_capabilities(result);
++    };
++    const uint32_t dense = SKIPPY_MEMORY_CACHE_RESIDENT | SKIPPY_MEMORY_CACHE_KV_RECURRENT;
++    if (capabilities(skippy_state_kind::kv_key) != dense ||
++            capabilities(skippy_state_kind::kv_value) != dense ||
++            capabilities(skippy_state_kind::recurrent_conv) != SKIPPY_MEMORY_CACHE_KV_RECURRENT ||
++            capabilities(skippy_state_kind::recurrent_ssm) != SKIPPY_MEMORY_CACHE_KV_RECURRENT ||
++            capabilities(skippy_state_kind::derived_persistent) != 0) {
++        return false;
++    }
++    capabilities(skippy_state_kind::kv_key);
++    // Malformed ownership and missing graph admission must never advertise a
++    // partial exporter, even when the underlying memory supports KV pages.
++    result.state_effects.back().storage = input;
++    if (skippy_graph_cache_capabilities(result) != 0) { return false; }
++    capabilities(skippy_state_kind::kv_key);
++    result.block_boundaries.clear();
++    return skippy_graph_cache_capabilities(result) == 0;
++}
++
 +int main() {
++    if (!graph_cache_capabilities_cover_complete_state()) {
++        fprintf(stderr, "graph cache capabilities do not cover complete state\n");
++        return 1;
++    }
 +    std::unique_ptr<llama_model> model(llama_model_create(LLM_ARCH_LLAMA, llama_model_default_params()));
 +    if (!model) {
 +        fprintf(stderr, "failed to create test model\n");

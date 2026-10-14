@@ -70,7 +70,6 @@
   "migration_stability",
   "migration_workload_oracle_cli",
   "migration_xcframework_cli",
-  "openai_smoke_config",
   "opencode_config_adapter",
   "opencode_fixture_evidence",
   "prepared_source",
