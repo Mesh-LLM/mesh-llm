@@ -74,6 +74,9 @@ async fn remote_request(legacy: bool) -> Result<()> {
     assert_forwarding_denied(&response, legacy, &service, &network, &unused_backend).await?;
     drop(accepted_connection);
     drop(targets_tx);
+    let payments_manager = relay.take_plugin_manager().await.expect("payments manager");
+    payments_manager.shutdown().await;
+    drop(payments_manager);
     caller.endpoint.close().await;
     relay.endpoint.close().await;
     provider.endpoint.close().await;

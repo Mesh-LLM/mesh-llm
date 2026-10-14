@@ -367,8 +367,23 @@ impl Pair {
     }
 
     async fn close(self) {
-        self.buyer_node.endpoint.close().await;
-        self.seller_node.endpoint.close().await;
+        let buyer = Arc::downgrade(&self.buyer);
+        let seller = Arc::downgrade(&self.seller);
+        for node in [&self.buyer_node, &self.seller_node] {
+            node.shutdown_control_listener().await;
+            if let Some(manager) = node.take_plugin_manager().await {
+                manager.shutdown().await;
+            }
+            node.endpoint.close().await;
+        }
+        drop(self);
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while buyer.upgrade().is_some() || seller.upgrade().is_some() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("payment fixture leaked its service after close");
     }
 }
 

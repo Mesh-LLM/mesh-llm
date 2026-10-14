@@ -277,6 +277,8 @@ mod tests {
             .await?;
         assert!(bad.is_error);
         manager.shutdown().await;
+        drop(node.take_plugin_manager().await);
+        node.endpoint.close().await;
         Ok(())
     }
 

@@ -82,6 +82,9 @@ async fn fake_seller(deliver: bool) -> Result<()> {
         wire::write(&mut send, &Frame::Complete {}).await?;
         send.finish()?;
         let _ = send.stopped().await;
+        // Capture and release the whole Node, not just its endpoint field.
+        // Otherwise the unused fields of this clone live until fixture exit.
+        drop(seller_node);
         Ok::<_, anyhow::Error>(connection)
     });
     pair.connect().await?;
