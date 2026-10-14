@@ -30,7 +30,7 @@ hashing NAS payloads, and rendered through the candidate's native chat library.
 Ministral-3-14B-Reasoning-2512 at `fe3b038f30334729263d860d5dadbaa34e0f2a18`
 ignores all tested reasoning controls. Muse-Glimmer-30B at
 `70bf1b61ac09f91b24d39038091b41c582bc5d7a` distinguishes effort via the native
-`reasoning_strength` alias, but its on/off prompts match. Both native parsers
+`reasoning_strength` alias, but its original on/off prompts matched. Both native parsers
 report reasoning support. Neither observation proves generation obeys an effort
 or can be made reasoning-free.
 
@@ -46,8 +46,10 @@ Comparing direct library renders with the actual C ABI found an additional
 bridge bug: with thinking disabled, the bridge overwrote explicit string
 `reasoning_effort: "none"` with numeric zero after merging request kwargs.
 Numeric zero does not activate the string alias, so Muse rendered its default
-`Reasoning strength: high`. The bridge now preserves canonical `"none"` while
-still overriding a contradictory positive effort. An actual C ABI regression
+`Reasoning strength: high`. The bridge now supplies canonical `"none"` for every
+disabled-thinking request, including defaults and contradictory positive efforts.
+The native capability layer retains numeric aliases for templates that need them.
+An actual C ABI regression
 fails on the old bridge and passes on the repaired one. The repair is folded
 into core patch 0005; core 0006 updates the matching template expectation, and
 the Inkling patch is refreshed only for adjacent test context. Cold application
@@ -56,7 +58,9 @@ changes only `common/stage-chat.cpp` and `tests/test-chat.cpp` in the native tre
 On the rebuilt packaged Metal runtime, Muse now advertises `none` and renders
 `Reasoning strength: none`. It still emits reasoning: at 16 tokens the response
 ends by length, while a 1,024-token ceiling produces a final image answer and
-`stop` after 198 tokens. Default settings produce a final answer after 428 tokens.
+`stop` after 198 tokens. The final default-off correction produces that same
+198-token answer with ordinary defaults, instead of the earlier 428-token answer
+at the template's high strength. The probe now observes an on/off prompt change.
 These are observations for the pinned image fixture, not proof that the model
 always obeys an effort control. Mistral's HTTP check with ordinary automatic
 compaction now preserves the original 162-token prompt and reaches the same
@@ -71,12 +75,27 @@ and 37 Mesh binary tests. One runtime, nine serving, and 24 Mesh host cases
 remain explicitly ignored; the real image fixtures above were exercised, not
 skipped. Checks and warning-denying Clippy cover the affected crates and Mesh;
 formatting, no-console-print, and the regenerated roster check pass. Native-linked
-Skippy tests run separately from Mesh: combining them enables Mesh's dynamic
-runtime feature and leaves four low-level tests without a loaded library.
-The final production-linked CPU native suite passes 278/278, without skips or
-crashes, including the synthetic Mistral 3 and Muse Glimmer graph contracts.
+Skippy tests run separately from packages selecting dynamic FFI defaults:
+combining them leaves four low-level tests without a loaded library.
+The production-linked CPU native suite passed 278/278, without skips or crashes,
+before the final default-effort correction; its graph code is unchanged. The
+final correction was rechecked through native-boundary tests, both real image
+suites, Rust checks/Clippy, and the rebuilt packaged Metal server.
 These local checks do not certify the full family roster or resolve the
 separate Gemma runner sccache failure.
+
+Later receipts from the same old candidate exposed a related Mistral4 failure:
+the pinned template accepts only `"none"` or `"high"`, so numeric zero caused a
+Jinja exception before generation. The default-off correction fixes that exact
+rendering failure. The pinned template from revision
+`bd93c721735aa32c035c0f19e738cb3371fd56ff` passes default/off rendering through
+the actual server C ABI using a local renderer host and a template override;
+this is template validation, not a new Mistral4 real-weight inference result.
+The regression covers absent effort, explicit `"none"`, and conflicting `"high"`.
+MiMo2 separately passed native MTP and state handoff but hit a 60-second stage
+readiness limit during parity, followed by a Metal teardown assertion.
+MiniMax-M2 was rejected by memory admission before tests. Those two failures
+remain outside this image/reasoning repair and must be resolved separately.
 
 The repair separates native parser support from an observed, unobserved or
 unknown toggle; preserves the ordinary default-off request; and checks real

@@ -1,4 +1,4 @@
-From f9a1684501a7dc523ee1fddf60ff7f033fdf218c Mon Sep 17 00:00:00 2001
+From 15c4d79953466704e2162634c4b2b97843f875c7 Mon Sep 17 00:00:00 2001
 From: James Dumay <james@generalinference.xyz>
 Date: Tue, 13 Oct 2026 22:06:42 +1100
 Subject: [PATCH 5/6] build(skippy): wire native runtime and backend support
@@ -15,7 +15,7 @@ Subject: [PATCH 5/6] build(skippy): wire native runtime and backend support
  common/ngram-cache.cpp                     | 158 +++++-
  common/reasoning-budget.cpp                | 119 ++--
  common/reasoning-budget.h                  |  16 +-
- common/stage-chat.cpp                      | 369 ++++++++++++
+ common/stage-chat.cpp                      | 368 ++++++++++++
  ggml/cmake/common.cmake                    |   9 +-
  ggml/include/ggml-backend.h                |  27 +
  ggml/src/ggml-backend.cpp                  |  25 +-
@@ -33,7 +33,7 @@ Subject: [PATCH 5/6] build(skippy): wire native runtime and backend support
  tools/mtmd/mtmd-audio.cpp                  |   2 +
  tools/mtmd/mtmd-helper.cpp                 |  36 +-
  tools/mtmd/mtmd-helper.h                   |  16 +
- 29 files changed, 2786 insertions(+), 127 deletions(-)
+ 29 files changed, 2785 insertions(+), 127 deletions(-)
  create mode 100644 common/stage-chat.cpp
  create mode 100644 ggml/src/ggml-cuda/cachegen.cu
  create mode 100644 ggml/src/ggml-cuda/cachegen.cuh
@@ -1005,10 +1005,10 @@ index 1b89a04c4..85d5c35dc 100644
 +LLAMA_API bool common_reasoning_budget_force(struct llama_sampler * smpl);
 diff --git a/common/stage-chat.cpp b/common/stage-chat.cpp
 new file mode 100644
-index 000000000..30599cede
+index 000000000..2302d7c6b
 --- /dev/null
 +++ b/common/stage-chat.cpp
-@@ -0,0 +1,369 @@
+@@ -0,0 +1,368 @@
 +#include "chat.h"
 +#include "skippy.h"
 +
@@ -1246,7 +1246,7 @@ index 000000000..30599cede
 +            inputs.chat_template_kwargs["enable_think"] = value;
 +            inputs.chat_template_kwargs["think_enabled"] = value;
 +            if (!enable_thinking) {
-+                inputs.chat_template_kwargs["reasoning_effort"] = "0";
++                inputs.chat_template_kwargs["reasoning_effort"] = R"("none")";
 +            }
 +        }
 +        if (reasoning_format_name != nullptr && reasoning_format_name[0] != '\0') {
@@ -1264,12 +1264,11 @@ index 000000000..30599cede
 +                inputs.chat_template_kwargs[key] = value.dump();
 +            }
 +        }
-+        // The canonical string "none" is already an explicit off request.
-+        // Preserve it for templates that consume string effort aliases; numeric
-+        // zero may instead leave those templates at their default effort.
-+        if (override_enable_thinking && !enable_thinking &&
-+                inputs.chat_template_kwargs["reasoning_effort"] != R"("none")") {
-+            inputs.chat_template_kwargs["reasoning_effort"] = "0";
++        // Use the canonical off effort. Numeric zero is rejected by string-only
++        // templates or bypasses their aliases and leaves the default enabled.
++        // Native capability normalization supplies numeric aliases when needed.
++        if (override_enable_thinking && !enable_thinking) {
++            inputs.chat_template_kwargs["reasoning_effort"] = R"("none")";
 +        }
 +
 +        common_chat_templates_ptr custom_tmpls;

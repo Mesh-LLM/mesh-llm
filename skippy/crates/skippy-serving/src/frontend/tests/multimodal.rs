@@ -416,19 +416,20 @@ fn check_native_off_effort(backend: &StageOpenAiBackend) -> Result<()> {
         .model
         .reader();
     // Exercise the actual C ABI, not an imitation of its kwarg merge. Explicit
-    // "none" must survive, while an incompatible high effort stays disabled.
-    for (effort, expected) in [("none", "none"), ("high", "0")] {
+    // "none" must survive, absent effort must default to it, and a conflicting
+    // high effort must stay disabled. String-only templates reject numeric zero.
+    for effort in [None, Some("none"), Some("high")] {
         let rendered = reader.apply_chat_template_json(
             r#"[{"role":"user","content":"hello"}]"#,
             skippy_runtime::ChatTemplateJsonOptions {
                 enable_thinking: Some(false),
-                chat_template_kwargs: Some(json!({"reasoning_effort":effort}).to_string()),
-                chat_template: Some("{% for message in messages %}{{ message['content'] }}{% endfor %} effort={{ reasoning_effort }}".into()),
+                chat_template_kwargs: effort.map(|value| json!({"reasoning_effort":value}).to_string()),
+                chat_template: Some("{% if reasoning_effort not in ['none', 'high'] %}{{ raise_exception('expected string effort') }}{% endif %}{% for message in messages %}{{ message['content'] }}{% endfor %} effort={{ reasoning_effort }}".into()),
                 ..Default::default()
             },
         )?;
         anyhow::ensure!(
-            rendered.prompt.ends_with(&format!("effort={expected}")),
+            rendered.prompt.ends_with("effort=none"),
             "native bridge lost the off effort: {}",
             rendered.prompt
         );

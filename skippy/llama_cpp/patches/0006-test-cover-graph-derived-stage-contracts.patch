@@ -1,4 +1,4 @@
-From 7ab79590c5b291b90535b9110e5da6282c1b9144 Mon Sep 17 00:00:00 2001
+From 3b3b0c864035951e9a1ed1b2bf552c08da9f7ad9 Mon Sep 17 00:00:00 2001
 From: James Dumay <james@generalinference.xyz>
 Date: Tue, 13 Oct 2026 22:06:43 +1100
 Subject: [PATCH 6/6] test(skippy): cover live graph and state contracts
@@ -7360,7 +7360,7 @@ index 5aa948251..78df176dd 100644
  
  static void test_cohere_reasoning_detection(testing & t) {
 diff --git a/tests/test-chat.cpp b/tests/test-chat.cpp
-index f2728f7cc..13b28b74c 100644
+index f2728f7cc..faf95716e 100644
 --- a/tests/test-chat.cpp
 +++ b/tests/test-chat.cpp
 @@ -436,6 +436,21 @@ static common_chat_tool special_function_tool{
@@ -7556,14 +7556,14 @@ index f2728f7cc..13b28b74c 100644
 +            inputs.chat_template_kwargs["thinking_enabled"] = "false";
 +            inputs.chat_template_kwargs["enable_think"] = "false";
 +            inputs.chat_template_kwargs["think_enabled"] = "false";
-+            inputs.chat_template_kwargs["reasoning_effort"] = "0";
++            inputs.chat_template_kwargs["reasoning_effort"] = R"("none")";
 +
 +            json request_kwargs = {{"reasoning_effort", "none"}};
 +            for (const auto & [key, value] : request_kwargs.items()) {
 +                inputs.chat_template_kwargs[key] = value.dump();
 +            }
-+            if (!inputs.enable_thinking && inputs.chat_template_kwargs["reasoning_effort"] != R"("none")") {
-+                inputs.chat_template_kwargs["reasoning_effort"] = "0";
++            if (!inputs.enable_thinking) {
++                inputs.chat_template_kwargs["reasoning_effort"] = R"("none")";
 +            }
 +            return common_chat_templates_apply(tmpls.get(), inputs).prompt;
 +        };
