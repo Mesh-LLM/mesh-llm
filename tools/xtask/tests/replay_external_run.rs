@@ -7,6 +7,35 @@ use sha2::{Digest, Sha256};
 use support::*;
 
 #[test]
+fn timestamped_llama_version_survives_repeated_admission_but_revision_drift_fails() {
+    let fixture = Fixture::new(false);
+    let banner =
+        "version: 0.5.0-dev (build 1, commit 8212c78)\nbuilt with GNU 13.3.0 for Linux aarch64\n";
+    std::fs::write(&fixture.version, banner).unwrap();
+    let engine = fixture.state.path().join("engine-server");
+    let script = std::fs::read_to_string(&engine).unwrap();
+    // Every probe has a different PID, standing in for the upstream elapsed
+    // startup timestamp. The banner and diagnostics both use stderr upstream.
+    std::fs::write(
+        &engine,
+        script.replace(
+            "/bin/cat",
+            "printf '0.00.%s I srv  llama_server: initializing ...\\n' \"$$\" >&2; /bin/cat >&2",
+        ),
+    )
+    .unwrap();
+    assert_success(&fixture.run());
+    assert_eq!(fixture.document()["builds"][0]["version"], banner.trim());
+    fixture.modify_input(|input| input["resume"] = true.into());
+    assert_success(&fixture.run());
+    assert_eq!(fixture.launches(), 2);
+    std::fs::write(&fixture.version, banner.replace("8212c78", "9999999")).unwrap();
+    let failed = fixture.run();
+    assert!(!failed.status.success());
+    assert_eq!(fixture.launches(), 2);
+}
+
+#[test]
 fn all_external_engine_types_execute_captured_runs_through_the_cli() {
     for engine in ["llama.cpp", "vllm", "sglang"] {
         let fixture = Fixture::new(false);

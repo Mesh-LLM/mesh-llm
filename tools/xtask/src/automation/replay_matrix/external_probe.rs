@@ -76,15 +76,11 @@ pub(super) fn verify_with_budget(arm: &Arm, execution: Duration) -> DynResult<Ve
     if !report.success() || report.stdout.truncated || report.stderr.truncated {
         return Err(format!("{} version probe failed: {:?}", arm.label, report.outcome).into());
     }
-    let bytes = if report.stdout.bytes_retained.is_empty() {
-        report.stderr.bytes_retained
-    } else {
-        report.stdout.bytes_retained
-    };
-    let version = String::from_utf8(bytes)?.trim().to_owned();
-    if version.is_empty() {
-        return Err("external version probe returned no version".into());
-    }
+    let version = version_identity(
+        arm.engine,
+        &report.stdout.bytes_retained,
+        &report.stderr.bytes_retained,
+    )?;
     let digest = hex::encode(Sha256::digest(version.as_bytes()));
     Ok(Verified {
         label: arm.label.clone(),
@@ -106,6 +102,112 @@ pub(super) fn verify_with_budget(arm: &Arm, execution: Duration) -> DynResult<Ve
             version_sha256: digest,
         },
     })
+}
+
+fn version_identity(
+    engine: super::external_config::Engine,
+    stdout: &[u8],
+    stderr: &[u8],
+) -> DynResult<String> {
+    let stdout = std::str::from_utf8(stdout)?.trim();
+    let stderr = std::str::from_utf8(stderr)?.trim();
+    if engine == super::external_config::Engine::Llama {
+        // New llama-server prints a timestamped initialization diagnostic before
+        // --version, on stderr. Only its version/build banner is an identity.
+        let mut banners = Vec::new();
+        for stream in [stdout, stderr] {
+            let lines = stream.lines().collect::<Vec<_>>();
+            for (index, line) in lines.iter().enumerate() {
+                if let Some(version) = line.strip_prefix("version:") {
+                    let build = lines
+                        .get(index + 1)
+                        .ok_or("incomplete llama.cpp version banner")?;
+                    if version.trim().is_empty()
+                        || build
+                            .strip_prefix("built with ")
+                            .is_none_or(|value| value.trim().is_empty())
+                    {
+                        return Err("invalid llama.cpp version/build banner".into());
+                    }
+                    banners.push(format!("{line}\n{build}"));
+                }
+            }
+        }
+        if banners.len() > 1 {
+            return Err("ambiguous llama.cpp version banners".into());
+        }
+        if let Some(banner) = banners.pop() {
+            return Ok(banner);
+        }
+    }
+    let version = if stdout.is_empty() { stderr } else { stdout };
+    if version.is_empty() {
+        return Err("external version probe returned no version".into());
+    }
+    Ok(version.to_owned())
+}
+
+#[cfg(test)]
+mod version_tests {
+    use super::{super::external_config::Engine, version_identity};
+    const BANNER: &str =
+        "version: 0.5.0-dev (build 1, commit 8212c78)\nbuilt with GNU 13.3.0 for Linux aarch64";
+
+    #[test]
+    fn llama_identity_ignores_startup_timing_on_either_stream() {
+        for stamp in ["0.00.000.455", "0.00.001.497"] {
+            let output = format!("{stamp} I srv  llama_server: initializing ...\n{BANNER}\n");
+            for (stdout, stderr) in [
+                (output.as_bytes(), b"".as_slice()),
+                (b"diagnostic\n".as_slice(), output.as_bytes()),
+            ] {
+                assert_eq!(
+                    version_identity(Engine::Llama, stdout, stderr).unwrap(),
+                    BANNER
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn llama_build_revision_compiler_and_platform_changes_remain_visible() {
+        for (before, after) in [
+            ("8212c78", "9999999"),
+            ("build 1", "build 2"),
+            ("13.3.0", "14.0.0"),
+            ("aarch64", "x86_64"),
+        ] {
+            let changed = BANNER.replace(before, after);
+            assert_ne!(
+                version_identity(Engine::Llama, b"", changed.as_bytes()).unwrap(),
+                BANNER
+            );
+        }
+    }
+
+    #[test]
+    fn partial_or_ambiguous_banners_fail_closed_and_other_engines_remain_exact() {
+        for invalid in [
+            "version:\nbuilt with GNU",
+            "version: 1",
+            "version: 1\ndiagnostic",
+        ] {
+            assert!(version_identity(Engine::Llama, b"", invalid.as_bytes()).is_err());
+        }
+        assert!(version_identity(Engine::Llama, BANNER.as_bytes(), BANNER.as_bytes()).is_err());
+        assert!(version_identity(Engine::Llama, b"", b"").is_err());
+        for engine in [Engine::Llama, Engine::Vllm, Engine::Sglang] {
+            assert_eq!(
+                version_identity(engine, b"fixture 1.2\n", b"diagnostic").unwrap(),
+                "fixture 1.2"
+            );
+        }
+        let output = format!("diagnostic\n{BANNER}");
+        assert_eq!(
+            version_identity(Engine::Vllm, output.as_bytes(), b"").unwrap(),
+            output
+        );
+    }
 }
 
 pub(super) fn environment() -> std::collections::BTreeMap<std::ffi::OsString, Value> {
