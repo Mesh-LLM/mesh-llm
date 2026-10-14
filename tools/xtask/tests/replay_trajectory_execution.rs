@@ -90,6 +90,7 @@ fn concurrent_cell_runs_every_recorded_turn_with_matching_summary() {
             .filter(|body| body["prompt_cache_key"] == session)
             .collect();
         assert_eq!(turns.len(), 2);
+        assert!(turns.iter().all(|turn| turn["max_tokens"] == 2048));
         assert_eq!(turns[0]["messages"].as_array().unwrap().len(), 1);
         assert_eq!(turns[1]["messages"][1]["content"], "recorded first");
     }
@@ -154,12 +155,20 @@ fn trajectory_execution_preserves_stream_evidence_through_http() {
         String::from_utf8_lossy(&result.stderr)
     );
     assert!(request.starts_with(b"POST /v1/chat/completions "));
+    let end = request
+        .windows(4)
+        .position(|bytes| bytes == b"\r\n\r\n")
+        .unwrap();
+    let body: serde_json::Value = serde_json::from_slice(&request[end + 4..]).unwrap();
+    assert!(body.get("max_tokens").is_none());
+    assert!(body.get("max_completion_tokens").is_none());
     let record: serde_json::Value =
         serde_json::from_slice(&std::fs::read(output).unwrap()).unwrap();
     assert_eq!(record["request_id"], "s:0");
     assert_eq!(record["prompt_tokens"], 40);
     assert_eq!(record["cached_tokens"], 30);
     assert_eq!(record["completion_tokens"], 2);
+    assert!(record["requested_output_tokens"].is_null());
     assert!(record.get("error").is_none());
 }
 

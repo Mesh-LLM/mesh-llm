@@ -17,7 +17,7 @@ struct Input {
     model_sha256: String,
     minimum_context_tokens: u64,
     minimum_session_prompt_tokens: u64,
-    max_output_tokens: u64,
+    max_output_tokens: Option<u64>,
     request_timeout_seconds: u64,
     startup_timeout_seconds: u64,
     timeout_seconds: u64,

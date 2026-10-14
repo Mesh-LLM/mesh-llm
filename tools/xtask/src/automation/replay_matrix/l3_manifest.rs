@@ -53,7 +53,7 @@ pub(super) fn import(
                     trajectory,
                     &Selection {
                         model: "preflight",
-                        maximum_output_tokens: 1,
+                        maximum_output_tokens: Some(1),
                         turn_limit: None,
                         qualification_probe: true,
                     },
@@ -114,7 +114,7 @@ pub(super) fn validate(manifest: &Manifest, config: &Config) -> DynResult<()> {
                 trajectory,
                 &Selection {
                     model: "preflight",
-                    maximum_output_tokens: 1,
+                    maximum_output_tokens: Some(1),
                     turn_limit: None,
                     qualification_probe: true,
                 },

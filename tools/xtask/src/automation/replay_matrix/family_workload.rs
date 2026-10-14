@@ -114,7 +114,7 @@ pub(super) fn prepare(context: &Context<'_>) -> DynResult<Prepared> {
         minimum_session_prompt_tokens: replay.minimum_session_prompt_tokens,
         require_recurrent_restores: model.recurrent,
         passes: replay.passes,
-        max_output_tokens: replay.max_output_tokens,
+        max_output_tokens: Some(replay.max_output_tokens),
         request_timeout_seconds: context.timeout_seconds.min(900),
         startup_timeout_seconds: (inner_timeout - 1).min(1800),
         timeout_seconds: inner_timeout,

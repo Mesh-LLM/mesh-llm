@@ -32,35 +32,6 @@ pub(super) struct Trajectory {
 #[derive(Deserialize)]
 pub(super) struct Message {
     pub role: Role,
-    pub content: Option<String>,
-    pub tool_calls_json: Option<String>,
-    pub tool_calls: Option<serde_json::Value>,
-}
-
-impl Message {
-    pub(super) fn output_budget(&self, maximum: u64) -> u64 {
-        let content = self
-            .content
-            .as_deref()
-            .map_or(0, |text| text.chars().count());
-        let encoded = self
-            .tool_calls_json
-            .as_deref()
-            .map_or(0, |text| text.chars().count());
-        let tools = self
-            .tool_calls
-            .as_ref()
-            .map_or(0, |value| value.to_string().chars().count());
-        u64::try_from(
-            content
-                .saturating_add(encoded)
-                .saturating_add(tools)
-                .div_ceil(4),
-        )
-        .unwrap_or(u64::MAX)
-        .max(8)
-        .min(maximum)
-    }
 }
 
 #[derive(Deserialize)]

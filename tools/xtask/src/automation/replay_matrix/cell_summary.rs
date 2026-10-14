@@ -141,7 +141,14 @@ pub(super) fn summarize(
         .max();
     let exhausted = successful
         .iter()
-        .filter(|record| record["completion_tokens"] == record["requested_output_tokens"])
+        .filter(|record| {
+            record["finish_reason"] == "length"
+                || record["requested_output_tokens"]
+                    .as_u64()
+                    .is_some_and(|requested| {
+                        record["completion_tokens"].as_u64() == Some(requested)
+                    })
+        })
         .count();
     let length_finishes = successful
         .iter()

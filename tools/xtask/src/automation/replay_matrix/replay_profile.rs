@@ -122,7 +122,7 @@ pub(super) fn expected(trajectories: &[Trajectory], mode: Mode) -> DynResult<Vec
         trajectories,
         &Selection {
             model: "identity",
-            maximum_output_tokens: 1,
+            maximum_output_tokens: Some(1),
             turn_limit: None,
             qualification_probe: true,
         },

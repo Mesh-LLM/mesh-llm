@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 #[derive(Deserialize)]
 pub(super) struct Budget {
     pub context_tokens: u64,
-    pub maximum_output_tokens: u64,
+    pub maximum_output_tokens: Option<u64>,
     pub minimum_session_prompt_tokens: u64,
 }
 
@@ -13,7 +13,7 @@ pub(super) struct Budget {
 pub(super) struct Turn {
     request_id: String,
     prompt_tokens: Option<u64>,
-    output_budget: u64,
+    output_budget: Option<u64>,
     fits: bool,
 }
 
@@ -45,7 +45,7 @@ pub(super) fn evaluate(
     };
     for trajectory in trajectories {
         let mut longest = None::<u64>;
-        for (turn, message) in trajectory
+        for (turn, _) in trajectory
             .messages
             .iter()
             .filter(|message| matches!(message.role, Role::Assistant))
@@ -55,16 +55,19 @@ pub(super) fn evaluate(
             let tokens = by_id
                 .get(request_id.as_str())
                 .and_then(|probe| probe.prompt_tokens);
-            let output = message.output_budget(budget.maximum_output_tokens);
+            let output = budget.maximum_output_tokens;
+            // With server defaults the server resolves its own limit against
+            // remaining context. Preflight checks prompt admission only; the
+            // measured output-integrity gate still rejects any length finish.
             let fits = tokens.is_some_and(|tokens| {
                 tokens > 0
                     && tokens
-                        .checked_add(output)
+                        .checked_add(output.unwrap_or(1))
                         .is_some_and(|total| total <= budget.context_tokens)
             });
             if !fits {
                 evidence.problems.push(format!(
-                    "{request_id}: formatted prompt + output does not fit {}",
+                    "{request_id}: formatted prompt + completion allowance does not fit {}",
                     budget.context_tokens
                 ));
             }
@@ -94,7 +97,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn prompt_and_recorded_output_must_fit_without_short_session_substitution() {
+    fn prompt_and_explicit_output_must_fit_without_short_session_substitution() {
         let trajectories: Vec<Trajectory> = serde_json::from_value(serde_json::json!([
             {"session_id":"s","messages":[{"role":"user"},{"role":"assistant","content":"recorded answer"}]}
         ])).unwrap();
@@ -104,15 +107,40 @@ mod tests {
         .unwrap();
         let budget = Budget {
             context_tokens: 131072,
-            maximum_output_tokens: 2048,
+            maximum_output_tokens: Some(2048),
             minimum_session_prompt_tokens: 32768,
         };
         assert!(evaluate(&trajectories, &probes, &budget).passed);
+        // A short recorded answer must not reduce the explicit reservation.
+        probes[0].prompt_tokens = Some(130000);
+        assert!(!evaluate(&trajectories, &probes, &budget).passed);
         probes[0].prompt_tokens = Some(131070);
         assert!(!evaluate(&trajectories, &probes, &budget).passed);
         probes[0].prompt_tokens = Some(8192);
         assert!(!evaluate(&trajectories, &probes, &budget).passed);
         probes[0].prompt_tokens = None;
+        assert!(!evaluate(&trajectories, &probes, &budget).passed);
+    }
+
+    #[test]
+    fn server_default_qualifies_prompt_room_without_inventing_an_output_limit() {
+        let trajectories: Vec<Trajectory> = serde_json::from_value(serde_json::json!([
+            {"session_id":"s","messages":[{"role":"assistant","content":"ok"}]}
+        ]))
+        .unwrap();
+        let mut probes: Vec<Request> = serde_json::from_value(serde_json::json!([
+            {"session_id":"s","request_id":"s:0","prompt_tokens":131071}
+        ]))
+        .unwrap();
+        let budget = Budget {
+            context_tokens: 131072,
+            maximum_output_tokens: None,
+            minimum_session_prompt_tokens: 32768,
+        };
+        let evidence = evaluate(&trajectories, &probes, &budget);
+        assert!(evidence.passed);
+        assert!(evidence.turns[0].output_budget.is_none());
+        probes[0].prompt_tokens = Some(131072);
         assert!(!evaluate(&trajectories, &probes, &budget).passed);
     }
 }

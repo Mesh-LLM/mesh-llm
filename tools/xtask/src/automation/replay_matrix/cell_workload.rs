@@ -9,7 +9,7 @@ pub(super) struct Workload {
     pub model: String,
     pub base_url: String,
     pub concurrency: usize,
-    pub max_output_tokens: u64,
+    pub max_output_tokens: Option<u64>,
     pub request_timeout_seconds: u64,
     #[serde(default)]
     pub qualification_probe: bool,
@@ -48,7 +48,7 @@ impl Workload {
         if self.trajectories.is_empty()
             || !(1..=256).contains(&self.concurrency)
             || !(1..=86400).contains(&self.request_timeout_seconds)
-            || self.max_output_tokens == 0
+            || self.max_output_tokens == Some(0)
             || self.warmup_turns == Some(0)
         {
             return Err("cell requires trajectories, positive output/warmup budgets, concurrency in 1..=256 and timeout in 1..=86400".into());

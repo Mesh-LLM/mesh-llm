@@ -183,11 +183,7 @@ async fn execute(
 ) -> DynResult<Vec<serde_json::Value>> {
     let selection = Selection {
         model: &workload.model,
-        maximum_output_tokens: if workload.qualification_probe {
-            1
-        } else {
-            workload.max_output_tokens
-        },
+        maximum_output_tokens: workload.max_output_tokens,
         turn_limit: None,
         qualification_probe: workload.qualification_probe,
     };

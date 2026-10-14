@@ -23,7 +23,7 @@ pub(super) struct Input {
     pub reference: String,
     pub commit: String,
     pub pass: u32,
-    pub max_output_tokens: u64,
+    pub max_output_tokens: Option<u64>,
     pub request_timeout_seconds: u64,
     pub startup_timeout_seconds: u64,
     pub timeout_seconds: u64,

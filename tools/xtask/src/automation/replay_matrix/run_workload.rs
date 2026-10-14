@@ -34,7 +34,7 @@ pub(super) struct Input {
     #[serde(default)]
     pub require_recurrent_restores: bool,
     pub passes: u32,
-    pub max_output_tokens: u64,
+    pub max_output_tokens: Option<u64>,
     pub request_timeout_seconds: u64,
     pub startup_timeout_seconds: u64,
     pub timeout_seconds: u64,
@@ -92,7 +92,7 @@ impl Input {
                 && !self.model.is_absolute())
             || !self.output.is_absolute()
             || !(1..=1000).contains(&self.passes)
-            || self.max_output_tokens == 0
+            || self.max_output_tokens == Some(0)
             || !(1..=86400).contains(&self.request_timeout_seconds)
             || !(1..=86400).contains(&self.startup_timeout_seconds)
             || !(1..=86400).contains(&self.timeout_seconds)

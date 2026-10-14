@@ -230,7 +230,7 @@ fn verify_cell(
         &requests,
         &super::context_eligibility::Budget {
             context_tokens: context,
-            maximum_output_tokens: input.replay.max_output_tokens,
+            maximum_output_tokens: Some(input.replay.max_output_tokens),
             minimum_session_prompt_tokens: input.replay.minimum_session_prompt_tokens,
         },
     );

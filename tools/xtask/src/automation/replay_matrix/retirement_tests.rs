@@ -266,7 +266,7 @@ fn generated_tool_schemas_are_stable_and_tool_calls_size_output_budget() {
     let trajectory: super::recorded_requests::Trajectory = serde_json::from_value(json!({"session_id":"s","source_dataset":"fixture","agent_framework":"goose","messages":[{"role":"user","content":"task"},{"role":"assistant","content":null,"tool_calls_json":serde_json::to_string(&json!([{"id":"call","type":"function","function":{"name":"zebra","arguments":"x".repeat(400)}}])).unwrap()},{"role":"tool","tool_call_id":"call","content":"observation"},{"role":"assistant","tool_calls_json":serde_json::to_string(&json!([{"function":{"name":"alpha","arguments":"{}"}}])).unwrap()}]})).unwrap();
     let selection = super::recorded_requests::Selection {
         model: "target",
-        maximum_output_tokens: 2048,
+        maximum_output_tokens: Some(2048),
         turn_limit: None,
         qualification_probe: false,
     };

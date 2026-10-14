@@ -16,7 +16,7 @@ fn trajectory(id: &str, framework: &str, turns: usize) -> Trajectory {
 fn selection() -> Selection<'static> {
     Selection {
         model: "target",
-        maximum_output_tokens: 2048,
+        maximum_output_tokens: Some(2048),
         turn_limit: None,
         qualification_probe: false,
     }
@@ -322,6 +322,8 @@ fn public_run_handoff_keeps_captured_profile_uri_gates_and_build_jobs() {
     assert_eq!(input["model_reference"], "hf://owner/model");
     assert_eq!(input["min_cache_pct"], 70.0);
     assert_eq!(input["require_complete_output"], true);
+    assert!(input["max_output_tokens"].is_null());
+    assert_eq!(options.max_output, None);
     assert_eq!(input["build_jobs"][0]["ref"], "HEAD");
     assert_eq!(input["build_jobs"][0]["backend"], "metal");
     assert!(!parent.path().join("artifact").exists());
@@ -341,6 +343,28 @@ fn selected_profile_summary_keeps_metrics_and_checks_selected_ids() {
     assert_eq!(summary["replay_mode"], "final");
     assert_eq!(summary["recorded_assistant_turns"], 4);
     assert_eq!(summary["prompt_tokens"], 19000.0);
+}
+
+#[test]
+fn server_default_limits_do_not_hide_budget_exhaustion() {
+    let cohort = vec![trajectory("s", "goose", 1)];
+    for (finish, problems, exhausted) in [
+        ("stop", json!([]), 0),
+        ("length", json!(["output token budget exhausted"]), 1),
+    ] {
+        let record = json!({"session_id":"s","request_id":"s:0","assistant_turn":0,
+            "prompt_tokens":351,"cached_tokens":256,"completion_tokens":8192,
+            "requested_output_tokens":null,"finish_reason":finish,"output_problems":problems,
+            "generation_seconds":1.0,"elapsed_seconds":1.1,"started":0.0,"completed":1.1,
+            "ttft_seconds":0.1,"cache_pct":72.9,"content_sha256":"fixture"});
+        let summary = replay_profile::summarize(&cohort, &[record], 1, Mode::All).unwrap();
+        assert_eq!(summary["budget_exhausted_requests"], exhausted);
+        assert_eq!(summary["output_incomplete_requests"], exhausted);
+        let mut document = json!({"results":[{"label":"fixed","pass":1,"cells":[summary]}],
+            "gates":{"passed":true,"checks":[]}});
+        super::output_integrity::apply(&mut document).unwrap();
+        assert_eq!(document["gates"]["passed"], exhausted == 0);
+    }
 }
 
 #[test]

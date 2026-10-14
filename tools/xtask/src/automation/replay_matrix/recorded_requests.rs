@@ -51,7 +51,7 @@ pub(super) struct Turn {
     pub assistant_turn: usize,
     pub recorded_message_index: usize,
     pub history_message_count: usize,
-    pub requested_output_tokens: u64,
+    pub requested_output_tokens: Option<u64>,
     pub recorded_output_characters: usize,
     pub available_tools: usize,
     pub qualification_probe: bool,
@@ -60,7 +60,7 @@ pub(super) struct Turn {
 
 pub(super) struct Selection<'a> {
     pub model: &'a str,
-    pub maximum_output_tokens: u64,
+    pub maximum_output_tokens: Option<u64>,
     pub turn_limit: Option<usize>,
     pub qualification_probe: bool,
 }
@@ -115,7 +115,7 @@ fn tools(trajectory: &Trajectory) -> DynResult<Vec<Value>> {
 }
 
 pub(super) fn build(trajectory: &Trajectory, selection: &Selection<'_>) -> DynResult<Vec<Turn>> {
-    if trajectory.session_id.is_empty() || selection.maximum_output_tokens == 0 {
+    if trajectory.session_id.is_empty() || selection.maximum_output_tokens == Some(0) {
         return Err("session identity and output budget must be nonempty".into());
     }
     let tools = tools(trajectory)?;
@@ -136,14 +136,21 @@ pub(super) fn build(trajectory: &Trajectory, selection: &Selection<'_>) -> DynRe
             {
                 break;
             }
-            let budget_message: super::session_evidence::Message =
-                serde_json::from_value(Value::Object(recorded.clone()))?;
-            let output = budget_message.output_budget(selection.maximum_output_tokens);
+            // A recorded answer's length is not a safe bound for another model's
+            // completion. Omit the limit unless the caller explicitly supplies it.
+            let output = if selection.qualification_probe {
+                Some(1)
+            } else {
+                selection.maximum_output_tokens
+            };
             let mut body = serde_json::json!({
                 "prompt_cache_key":trajectory.session_id, "model":selection.model,
-                "messages":history, "max_tokens":output, "temperature":0,
+                "messages":history, "temperature":0,
                 "seed":42, "stream":true, "stream_options":{"include_usage":true}
             });
+            if let Some(output) = output {
+                body["max_tokens"] = output.into();
+            }
             if !tools.is_empty() {
                 body["tools"] = Value::Array(tools.clone());
             }
@@ -179,6 +186,48 @@ mod tests {
     use super::*;
 
     #[test]
+    fn output_limits_follow_the_caller_and_never_the_recorded_answer_length() {
+        let trajectory: Trajectory = serde_json::from_value(serde_json::json!({
+            "session_id":"s","source_dataset":"fixture","agent_framework":"fixture",
+            "messages":[{"role":"user","content":"task"},
+                {"role":"assistant","content":"ok","max_tokens":8},
+                {"role":"user","content":"continue"},
+                {"role":"assistant","content":"a much longer recorded answer"}]
+        }))
+        .unwrap();
+        for limit in [None, Some(2048)] {
+            let mut selection = Selection {
+                model: "target",
+                maximum_output_tokens: limit,
+                turn_limit: None,
+                qualification_probe: false,
+            };
+            for turn in build(&trajectory, &selection).unwrap() {
+                assert_eq!(turn.requested_output_tokens, limit);
+                assert_eq!(turn.body.get("max_tokens"), limit.map(Value::from).as_ref());
+                assert!(turn.body.get("max_completion_tokens").is_none());
+            }
+            selection.qualification_probe = true;
+            for turn in build(&trajectory, &selection).unwrap() {
+                assert_eq!(turn.body["max_tokens"], 1);
+                assert_eq!(turn.requested_output_tokens, Some(1));
+            }
+        }
+        assert!(
+            build(
+                &trajectory,
+                &Selection {
+                    model: "target",
+                    maximum_output_tokens: Some(0),
+                    turn_limit: None,
+                    qualification_probe: false,
+                }
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
     fn captured_assistant_openai_fields_and_direct_tool_calls_are_preserved() {
         let recorded = serde_json::json!({"role":"assistant","content":"","name":"agent",
             "reasoning_content":"private reasoning","provider_extension":{"cache_control":"ephemeral"},
@@ -201,7 +250,7 @@ mod tests {
             &trajectory,
             &Selection {
                 model: "target",
-                maximum_output_tokens: 2048,
+                maximum_output_tokens: Some(2048),
                 turn_limit: None,
                 qualification_probe: false,
             },
@@ -245,7 +294,7 @@ mod tests {
             &trajectory,
             &Selection {
                 model: "target",
-                maximum_output_tokens: 1,
+                maximum_output_tokens: Some(1),
                 turn_limit: Some(1),
                 qualification_probe: true,
             },

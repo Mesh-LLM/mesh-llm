@@ -62,6 +62,15 @@ just automation-run automation replay-matrix run \
 The server command is always `mesh-llm serve --model <model> --log-format
 json`. The runner never sets context size, Mesh execution lanes, KV budget, or
 backend tuning; `--concurrency` controls simultaneous client requests only.
+Manual replay omits `max_tokens` by default, letting each server resolve its
+normal output allowance. An explicit `--max-output-tokens N` sends that full
+limit on every measured turn; recorded answer lengths never shorten it.
+The same policy applies to warm-up; context qualification probes intentionally
+request one token and are excluded from measured completeness checks. With
+server defaults, context preflight checks that the prompt leaves completion
+room, while `--require-complete-output` rejects any measured `length` finish,
+missing terminal response, or malformed tool call. Defaults are not unlimited:
+the server's output cap and remaining context can still cause truncation.
 Trajectory count is deliberately explicit rather than hidden behind a default.
 Generated datasets need a per-cohort session count of at least twice the maximum
 offered client concurrency. Captured cohorts must each cover their own

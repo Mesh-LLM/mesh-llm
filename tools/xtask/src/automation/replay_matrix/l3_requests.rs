@@ -20,7 +20,7 @@ fn turns(
 ) -> DynResult<Vec<Turn>> {
     let selection = Selection {
         model: serving_model,
-        maximum_output_tokens: config.max_output_tokens,
+        maximum_output_tokens: Some(config.max_output_tokens),
         turn_limit: None,
         qualification_probe: false,
     };

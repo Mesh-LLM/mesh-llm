@@ -42,8 +42,8 @@ pub(in crate::automation) fn run(args: &[String]) -> DynResult<()> {
         model,
         maximum_output_tokens: parsed
             .last("--max-output-tokens")
-            .unwrap_or("2048")
-            .parse()?,
+            .map(str::parse)
+            .transpose()?,
         turn_limit: None,
         qualification_probe: parsed.flag("--qualification-probe"),
     };

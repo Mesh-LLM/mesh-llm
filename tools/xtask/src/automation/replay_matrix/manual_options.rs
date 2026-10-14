@@ -79,7 +79,7 @@ pub(super) struct Options {
     pub frameworks: Vec<String>,
     pub sources: Vec<String>,
     pub required_frameworks: Vec<String>,
-    pub max_output: u64,
+    pub max_output: Option<u64>,
     pub min_isl: u64,
     pub max_isl: u64,
     pub min_turns: usize,
@@ -173,7 +173,10 @@ pub(super) fn parse(parsed: &ParsedArgs, running: bool) -> DynResult<Options> {
         frameworks,
         sources,
         required_frameworks,
-        max_output: number(parsed, "--max-output-tokens", "2048")?,
+        max_output: parsed
+            .last("--max-output-tokens")
+            .map(str::parse)
+            .transpose()?,
         min_isl: number(parsed, "--min-isl", "8192")?,
         max_isl: number(parsed, "--max-isl", "65536")?,
         min_turns: number(parsed, "--min-turns", "5")?,
@@ -362,7 +365,7 @@ fn gates(parsed: &ParsedArgs) -> DynResult<Gates> {
 fn validate(options: &Options, running: bool) -> DynResult<()> {
     if !(1..=1000).contains(&options.passes)
         || options.warmup == 0
-        || options.max_output == 0
+        || options.max_output == Some(0)
         || options.min_isl == 0
         || options.min_isl >= options.max_isl
         || options.min_turns == 0
