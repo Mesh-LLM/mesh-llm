@@ -37,7 +37,10 @@
         "scripts/plan-ci.py",
         "scripts/plan-*.sh",
         "scripts/collect-ci-metrics.py",
-        "scripts/tests/test_plan_ci.py"
+        "scripts/tests/test_plan_ci.py",
+        "skippy/scripts/compose-ci-product.py",
+        "skippy/scripts/verify-cli-input.py",
+        "skippy/scripts/tests/test_ci_product_contract.py"
       ]
     },
     {
