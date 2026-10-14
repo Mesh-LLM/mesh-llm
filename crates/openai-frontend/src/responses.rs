@@ -1,3 +1,4 @@
+mod conversation;
 mod tools;
 
 use serde::{Deserialize, Serialize};
@@ -8,6 +9,7 @@ use crate::{
     common::{THINKING_BOOLEAN_ALIASES, Usage, normalize_reasoning_compat_fields},
     errors::OpenAiError,
 };
+use conversation::{is_responses_tool_item, translate_responses_conversation_items};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ResponseAdapterMode {
@@ -55,8 +57,8 @@ pub struct ChatCompletionStreamChoice {
     pub delta: Option<ChatCompletionStreamDelta>,
     #[serde(default)]
     pub logprobs: Option<Value>,
-    #[serde(rename = "finish_reason", default)]
-    _finish_reason: Option<String>,
+    #[serde(default)]
+    pub finish_reason: Option<String>,
     #[serde(flatten)]
     _extra: Map<String, Value>,
 }
@@ -152,7 +154,7 @@ fn translate_responses_content_item(item: &Value) -> Result<Value, OpenAiError> 
     let item_type = object.get("type").and_then(Value::as_str).unwrap_or("text");
 
     match item_type {
-        "input_text" | "text" => {
+        "input_text" | "output_text" | "text" => {
             let text = object
                 .get("text")
                 .and_then(Value::as_str)
@@ -284,6 +286,9 @@ fn translate_responses_input_to_messages(input: &Value) -> Result<Vec<Value>, Op
             "role": "user",
             "content": text,
         })]),
+        Value::Array(items) if items.iter().any(is_responses_tool_item) => {
+            translate_responses_conversation_items(items)
+        }
         Value::Array(items) => {
             let looks_like_messages = items.iter().all(|item| {
                 item.as_object()
