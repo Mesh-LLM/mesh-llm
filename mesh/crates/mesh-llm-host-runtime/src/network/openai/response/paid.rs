@@ -82,7 +82,8 @@ pub(super) async fn route(
 
 pub(super) fn is_local_origin(client: &ClientStream) -> bool {
     client.peer_addr().is_ok_and(|addr| {
-        addr.ip().is_loopback() && !crate::network::tunnel::is_remote_bridge(addr)
+        addr.ip().is_loopback()
+            && !crate::network::management_origin::is_untrusted_management_request(addr)
     })
 }
 

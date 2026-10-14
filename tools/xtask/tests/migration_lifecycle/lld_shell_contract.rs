@@ -444,16 +444,17 @@ fn lld_shell_contract_native_with_lld_probes_before_command_and_preserves_operat
 use super::workflow_yaml;
 #[test]
 fn lld_shell_contract_macos_action_installs_tools_and_probes_with_disk_cache_fallback() {
+    let mut endpoints = std::collections::BTreeSet::new();
     for (gha, chain, cache) in [
         ("true", "", None),
         ("false", "disk", None),
         ("false", "disk", Some("explicit cache")),
     ] {
-        macos_action_disk_cache(gha, chain, cache);
+        assert!(endpoints.insert(macos_action_disk_cache(gha, chain, cache)));
     }
 }
 
-fn macos_action_disk_cache(gha: &str, chain: &str, cache: Option<&str>) {
+fn macos_action_disk_cache(gha: &str, chain: &str, cache: Option<&str>) -> String {
     let f = Fixture::new();
     let source =
         fs::read_to_string(repo().join(".github/actions/setup-macos-lld/action.yml")).unwrap();
@@ -473,7 +474,15 @@ fn macos_action_disk_cache(gha: &str, chain: &str, cache: Option<&str>) {
     executable(&f.root.join("brew/bin/ld64.lld"), "#!/bin/bash\nexit 0\n");
     executable(
         &f.root.join("sccache-template"),
-        "#!/bin/bash\nprintf '%s\\n' \"$*\" >> \"$FIXTURE_ROOT/cache.calls\"\n[[ \"$1\" == --version ]] && echo 'finite sccache'\nexit 0\n",
+        r#"#!/bin/bash
+set -euo pipefail
+printf '%s\n' "$*" >> "$FIXTURE_ROOT/cache.calls"
+if [[ "$1" == --version ]]; then echo 'finite sccache'; exit 0; fi
+[[ "$1" == --start-server ]] || exit 94
+[[ "$SCCACHE_SERVER_UDS" == /tmp/mesh-sccache.*/server.sock ]] || exit 93
+[[ -d "${SCCACHE_SERVER_UDS%/*}" ]] || exit 92
+printf '%s' "$SCCACHE_SERVER_UDS" > "$FIXTURE_ROOT/cache.endpoint"
+"#,
     );
     executable(
         &f.root.join("bin/brew"),
@@ -492,6 +501,7 @@ set -euo pipefail
 [[ "$#" == 1 && "$1" == --mesh-probe ]] || exit 96
 [[ "$PATH" == "$FIXTURE_ROOT/brew/bin:"* ]] || exit 95
 printf '%s\n' "$SCCACHE_GHA_ENABLED" "$SCCACHE_MULTILEVEL_CHAIN" "$SCCACHE_DIR" > "$FIXTURE_ROOT/action.probe"
+[[ "$SCCACHE_SERVER_UDS" == "$(cat "$FIXTURE_ROOT/cache.endpoint")" ]] || exit 91
 "#,
     );
     let output = f.root.join("github.env");
@@ -523,15 +533,16 @@ printf '%s\n' "$SCCACHE_GHA_ENABLED" "$SCCACHE_MULTILEVEL_CHAIN" "$SCCACHE_DIR" 
         f.text("brew.calls"),
         "install lld\ninstall sccache\n--prefix lld\n"
     );
-    assert_eq!(
-        f.text("cache.calls"),
-        "--version\n--stop-server\n--start-server\n"
-    );
+    assert_eq!(f.text("cache.calls"), "--version\n--start-server\n");
     assert_eq!(
         f.text("action.probe"),
         format!("false\ndisk\n{}\n", expected_cache.display())
     );
     let env = f.text("github.env");
+    let endpoint = f.text("cache.endpoint");
+    assert!(env.contains(&format!("SCCACHE_SERVER_UDS={endpoint}\n")));
+    assert!(endpoint.len() < 104, "macOS socket path limit");
+    fs::remove_dir(Path::new(&endpoint).parent().unwrap()).unwrap();
     assert!(expected_cache.is_dir());
     assert!(env.contains(&format!("SCCACHE_DIR={}\n", expected_cache.display())));
     if gha == "true" {
@@ -542,6 +553,7 @@ printf '%s\n' "$SCCACHE_GHA_ENABLED" "$SCCACHE_MULTILEVEL_CHAIN" "$SCCACHE_DIR" 
         f.text("github.path"),
         format!("{}\n", f.root.join("brew/bin").display())
     );
+    endpoint
 }
 
 #[path = "lld_shell_contract/cargo_driver.rs"]
