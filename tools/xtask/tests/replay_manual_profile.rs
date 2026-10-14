@@ -81,6 +81,12 @@ fn cell(
     if let Some(mode) = mode {
         input["replay_mode"] = mode.into();
     }
+    if mode == Some("window") {
+        for trajectory in input["trajectories"].as_array_mut().unwrap() {
+            trajectory["replay_window"] = json!({"start":25,"count":50});
+        }
+        input.as_object_mut().unwrap().remove("max_output_tokens");
+    }
     let path = temporary.path().join("input.json");
     std::fs::write(&path, serde_json::to_vec(&input).unwrap()).unwrap();
     let raw = temporary.path().join("raw.jsonl");
@@ -106,12 +112,37 @@ fn cell(
         .lines()
         .map(|line| serde_json::from_str::<Value>(line).unwrap())
         .collect::<Vec<_>>();
+    let progress = String::from_utf8_lossy(&result.stderr)
+        .lines()
+        .filter_map(|line| line.strip_prefix("replay-progress-v1 "))
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .filter(|record| record["phase"] == "request" && record["event"] == "completed")
+        .collect::<Vec<_>>();
+    assert_eq!(progress.len(), rows.len());
+    for (record, row) in progress.iter().zip(&rows) {
+        assert_eq!(record["metrics"]["cache_pct"], row["cache_pct"]);
+        assert_eq!(record["metrics"]["ttft_seconds"], row["ttft_seconds"]);
+        assert!(record["metrics"].get("ttft_p50_seconds").is_none());
+    }
     for row in &rows {
         assert!(row.get("event").is_none());
         assert!(row.get("body").is_none());
     }
     let summary = serde_json::from_slice(&std::fs::read(summary).unwrap()).unwrap();
     (summary, rows, bodies)
+}
+#[test]
+fn window_cell_sends_fifty_consecutive_recorded_prefixes_without_output_overrides() {
+    let (summary, rows, bodies) = cell(Some("window"), 1, 75, 50);
+    assert_eq!(summary["acceptance"]["passed"], true);
+    assert_eq!(summary["measured_selected_requests"], 50);
+    for (offset, (row, body)) in rows.iter().zip(bodies).enumerate() {
+        let turn = 25 + offset;
+        assert_eq!(row["request_id"], format!("s-0:{turn}"));
+        assert_eq!(body["messages"].as_array().unwrap().len(), 2 * turn + 1);
+        assert!(body.get("max_tokens").is_none());
+        assert!(body.get("max_completion_tokens").is_none());
+    }
 }
 #[test]
 fn final_cell_cli_measures_original_last_id_and_complete_recorded_prefix() {

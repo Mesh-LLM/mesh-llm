@@ -51,7 +51,11 @@ pub(crate) struct Metrics {
     pub completion_tokens: Option<u64>,
     pub cache_pct: Option<f64>,
     pub decode_tokens_per_second: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ttft_seconds: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub workload_output_tokens_per_second: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub ttft_p50_seconds: Option<f64>,
 }
 

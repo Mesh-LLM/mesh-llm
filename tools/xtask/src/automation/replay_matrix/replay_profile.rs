@@ -10,6 +10,7 @@ use std::collections::{BTreeMap, BTreeSet};
 pub(super) enum Mode {
     Checkpoint,
     Final,
+    Window,
     #[default]
     All,
 }
@@ -23,8 +24,28 @@ impl Mode {
             "checkpoint" => Ok(Self::Checkpoint),
             "final" => Ok(Self::Final),
             "all" => Ok(Self::All),
-            _ => Err("replay mode must be checkpoint, final or all".into()),
+            "window" => Ok(Self::Window),
+            _ => Err("replay mode must be checkpoint, final, window or all".into()),
         }
+    }
+}
+/// Zero-based consecutive assistant turns; their recorded prefixes stay intact.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct Window {
+    pub start: usize,
+    pub count: usize,
+}
+impl Window {
+    fn range(self, available: usize) -> DynResult<std::ops::Range<usize>> {
+        let end = self
+            .start
+            .checked_add(self.count)
+            .ok_or("replay window overflow")?;
+        if self.count == 0 || end > available {
+            return Err("replay window must select nonempty available consecutive turns".into());
+        }
+        Ok(self.start..end)
     }
 }
 #[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
@@ -102,6 +123,17 @@ pub(super) fn build(
             let turns = super::recorded_requests::build(trajectory, selection)?;
             if mode == Mode::All {
                 return Ok(turns);
+            }
+            if mode == Mode::Window {
+                let range = trajectory
+                    .replay_window
+                    .ok_or("window mode requires replay_window on every trajectory")?
+                    .range(turns.len())?;
+                return Ok(turns
+                    .into_iter()
+                    .enumerate()
+                    .filter_map(|(index, turn)| range.contains(&index).then_some(turn))
+                    .collect());
             }
             let stage = if mode == Mode::Final {
                 Stage::Final

@@ -106,8 +106,18 @@ assistant turn. Both selected profiles preserve the original request IDs and
 complete recorded prefix. Warm-up always replays initial ordered turns, even
 when the measured profile is checkpoint or final. The nightly `run-family`
 path remains All. Full-session context and recurrent qualification require
-`--replay-mode all`; checkpoint/final results cannot certify those properties
+`--replay-mode all`; selected profiles cannot certify those properties
 or enter qualified nightly history.
+
+For a bounded consecutive replay, use `--replay-mode window` with
+`"replay_window":{"start":25,"count":50}` on each measured trajectory in the
+manifest. This selects zero-based assistant turns 25 through 74, retaining every
+original history message, tool definition, and request identity. Missing, empty,
+or out-of-range windows fail instead of shortening the run. Context grows with
+the recorded history; report actual prompt lengths rather than treating the
+starting context as a fixed length. Warm-up still uses initial recorded turns.
+Request progress includes cache percentage, decode TPS and `ttft_seconds`;
+workload throughput and TTFT percentiles appear on completed cells.
 
 Use `--sessions-per-concurrency N` for a total session count per cohort instead
 of `--trajectories-per-framework N`; choose one count option. Total counts are
@@ -163,7 +173,7 @@ they do not qualify actual captured corpus values or model execution. Required
 SDK validation cadence remains independent. Generic prompt serialization stays
 in the native automation quality lane.
 
-The default per-turn output cap is 2,048 tokens. Reports lead with token-weighted
+Manual replay uses the server's default output allowance. Reports lead with token-weighted
 decode throughput measured after first generated content and show end-to-end
 output throughput separately because it includes prompt ingestion. They also
 show realized mean in-flight concurrency, slot utilization, failed requests,

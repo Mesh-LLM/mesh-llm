@@ -7,7 +7,7 @@ use crate::{
 use serde::Serialize;
 use std::path::PathBuf;
 pub(super) const GRAMMAR: Grammar = Grammar {
-    usage: "cargo xtool automation replay-matrix {plan|run} --ref LABEL=REF... --model MODEL (--trajectory-manifest PATH | --dataset-file PATH --sessions-per-concurrency N) [--replay-mode checkpoint|final|all] [--output PATH]",
+    usage: "cargo xtool automation replay-matrix {plan|run} --ref LABEL=REF... --model MODEL (--trajectory-manifest PATH | --dataset-file PATH --sessions-per-concurrency N) [--replay-mode checkpoint|final|window|all] [--output PATH]",
     values: &[
         "--repo",
         "--ref",

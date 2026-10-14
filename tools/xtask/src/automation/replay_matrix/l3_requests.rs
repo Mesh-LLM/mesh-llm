@@ -100,11 +100,11 @@ async fn request(
     progress.event = super::progress::Event::Completed;
     progress.elapsed_seconds = epoch.elapsed().as_secs_f64() - started;
     progress.outcome = Some(result.0);
-    progress.metrics = result.1.as_ref().ok().map(|e| super::progress::Metrics {
-        prompt_tokens: Some(e.prompt_tokens),
-        completion_tokens: Some(e.completion_tokens),
-        ..Default::default()
-    });
+    progress.metrics = result
+        .1
+        .as_ref()
+        .ok()
+        .map(super::request_metrics::from_evidence);
     let _ = super::progress::emit(&progress);
     let mut record = serde_json::to_value(turn).map_err(|e| e.to_string())?;
     let object = record.as_object_mut().ok_or("invalid L3 request")?;

@@ -21,6 +21,54 @@ fn selection() -> Selection<'static> {
         qualification_probe: false,
     }
 }
+#[test]
+fn fifty_turn_window_keeps_full_original_histories_and_requires_every_selected_id() {
+    let mut cohort = vec![trajectory("s", "goose", 75)];
+    cohort[0].replay_window = Some(super::replay_profile::Window {
+        start: 25,
+        count: 50,
+    });
+    let all = replay_profile::build(&cohort, &selection(), Mode::All).unwrap();
+    let window = replay_profile::build(&cohort, &selection(), Mode::Window).unwrap();
+    assert_eq!(window[0].len(), 50);
+    for (actual, original) in window[0].iter().zip(&all[0][25..]) {
+        assert_eq!(
+            serde_json::to_value(actual).unwrap(),
+            serde_json::to_value(original).unwrap()
+        );
+    }
+    let mut records = window[0]
+        .iter()
+        .map(|turn| json!({"session_id":turn.session_id,"request_id":turn.request_id}))
+        .collect::<Vec<_>>();
+    let complete = replay_profile::completeness(&cohort, &records, Mode::Window).unwrap();
+    assert_eq!(complete["expected_turns"], 50);
+    assert_eq!(complete["passed"], true);
+    records.remove(20);
+    assert_eq!(
+        replay_profile::completeness(&cohort, &records, Mode::Window).unwrap()["passed"],
+        false
+    );
+}
+#[test]
+fn window_rejects_missing_empty_overflow_and_unavailable_ranges() {
+    let mut cohort = vec![trajectory("s", "goose", 75)];
+    for window in [None, Some((0, 0)), Some((26, 50)), Some((usize::MAX, 1))] {
+        cohort[0].replay_window =
+            window.map(|(start, count)| super::replay_profile::Window { start, count });
+        assert!(replay_profile::build(&cohort, &selection(), Mode::Window).is_err());
+    }
+    let mut value = serde_json::to_value(&cohort[0]).unwrap();
+    value["replay_window"] = json!({"start":25,"count":50});
+    let restored: Trajectory = serde_json::from_value(value).unwrap();
+    assert_eq!(
+        replay_profile::expected(&[restored], Mode::Window)
+            .unwrap()
+            .len(),
+        50
+    );
+    assert_eq!(Mode::parse("window").unwrap(), Mode::Window);
+}
 fn args(values: &[&str]) -> Vec<String> {
     values.iter().map(|v| (*v).into()).collect()
 }

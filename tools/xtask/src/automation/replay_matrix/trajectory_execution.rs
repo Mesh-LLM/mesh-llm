@@ -92,11 +92,7 @@ pub(in crate::automation) fn run(args: &[String]) -> DynResult<()> {
         progress.metrics = result
             .as_ref()
             .ok()
-            .map(|evidence| super::progress::Metrics {
-                prompt_tokens: Some(evidence.prompt_tokens),
-                completion_tokens: Some(evidence.completion_tokens),
-                ..Default::default()
-            });
+            .map(super::request_metrics::from_evidence);
         let _ = super::progress::emit(&progress);
         let mut record = serde_json::to_value(&turn)?;
         let object = record.as_object_mut().ok_or("invalid turn record")?;

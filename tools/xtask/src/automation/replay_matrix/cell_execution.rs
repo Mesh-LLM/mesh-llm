@@ -82,26 +82,10 @@ pub(super) fn measure(
     );
     progress.concurrency = Some(workload.concurrency);
     progress.sessions = Some(workload.trajectories.len());
-    progress.turns = Some(workload.warmup_turns.unwrap_or_else(|| {
-        if workload.mode() == super::replay_profile::Mode::All {
-            workload
-                .trajectories
-                .iter()
-                .map(|trajectory| {
-                    trajectory
-                        .messages
-                        .iter()
-                        .filter(|message| {
-                            message.get("role").and_then(serde_json::Value::as_str)
-                                == Some("assistant")
-                        })
-                        .count()
-                })
-                .sum()
-        } else {
-            workload.trajectories.len()
-        }
-    }));
+    progress.turns = Some(match workload.warmup_turns {
+        Some(turns) => turns,
+        None => super::replay_profile::expected(&workload.trajectories, workload.mode())?.len(),
+    });
     super::progress::emit(&progress)?;
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -169,6 +153,7 @@ pub(super) fn measure(
         decode_tokens_per_second: evidence["decode_tokens_per_second"].as_f64(),
         workload_output_tokens_per_second: evidence["workload_output_tokens_per_second"].as_f64(),
         ttft_p50_seconds: evidence["ttft_p50_seconds"].as_f64(),
+        ttft_seconds: None,
     });
     super::progress::emit(&progress)?;
     finish?;
@@ -239,9 +224,7 @@ async fn execute(
                 request_progress.event = super::progress::Event::Completed;
                 request_progress.elapsed_seconds = request_started.elapsed().as_secs_f64();
                 request_progress.outcome = Some(outcome);
-                request_progress.metrics = result.as_ref().ok().map(|evidence| super::progress::Metrics {
-                    prompt_tokens: Some(evidence.prompt_tokens), completion_tokens: Some(evidence.completion_tokens), ..Default::default()
-                });
+                request_progress.metrics = result.as_ref().ok().map(super::request_metrics::from_evidence);
                 let _ = super::progress::emit(&request_progress);
                 let mut record = serde_json::to_value(&turn).map_err(|error| error.to_string())?;
                 let object = record.as_object_mut().ok_or("invalid turn record")?;

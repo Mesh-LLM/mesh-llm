@@ -11,6 +11,8 @@ pub(super) struct Trajectory {
     pub recorded_model: Option<String>,
     pub messages: Vec<Map<String, Value>>,
     pub tools: Option<Vec<Value>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub replay_window: Option<super::replay_profile::Window>,
     #[serde(skip)]
     pub original: Value,
 }
@@ -25,6 +27,7 @@ impl<'de> Deserialize<'de> for Trajectory {
             recorded_model: Option<String>,
             messages: Vec<Map<String, Value>>,
             tools: Option<Vec<Value>>,
+            replay_window: Option<super::replay_profile::Window>,
         }
         let original = Value::deserialize(deserializer)?;
         let recorded: Recorded =
@@ -36,6 +39,7 @@ impl<'de> Deserialize<'de> for Trajectory {
             recorded_model: recorded.recorded_model,
             messages: recorded.messages,
             tools: recorded.tools,
+            replay_window: recorded.replay_window,
             original,
         })
     }

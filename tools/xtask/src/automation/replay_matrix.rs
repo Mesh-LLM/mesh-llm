@@ -61,6 +61,7 @@ mod report_markdown;
 mod report_method;
 mod report_row;
 mod report_table;
+mod request_metrics;
 mod run_builds;
 pub(super) mod run_execution;
 pub(super) mod run_family;
