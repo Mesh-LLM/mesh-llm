@@ -44,9 +44,6 @@ pub(crate) fn print_usage() {
         "  cargo xtool automation family-battery-policy --cache ROOT MANIFEST PLAN CACHE_ROOT"
     );
     println!("  cargo xtool automation family-battery-policy --inspect-gguf PATH");
-    println!(
-        "  cargo xtool automation workload-smoke-config --output PATH --model-id ID --model-path PATH --model-sha256 SHA --layer-end N --n-gpu-layers N [--projector-path PATH]"
-    );
     println!("  cargo xtool prepared-input swift-api-checksum LIBRARY GENERATED_SWIFT");
     println!(
         "  cargo xtool automation smoke-inputs <product-root> <binary-name> <expected-backend>"
@@ -130,7 +127,6 @@ pub(crate) enum CliCommand<'a> {
     LocalPorts(&'a [String]),
     ManualSmoke(&'a [String]),
     OpenaiCacheMatrix(&'a [String]),
-    WorkloadSmokeConfig(&'a [String]),
     SmokeInputs(&'a [String]),
     WorkloadSmoke(&'a [String]),
     Stability(&'a [String]),
@@ -350,11 +346,6 @@ impl<'a> Cli<'a> {
             }
             [domain, scope, rest @ ..] if domain == "automation" && scope == "manual-smoke" => {
                 CliCommand::ManualSmoke(rest)
-            }
-            [domain, scope, rest @ ..]
-                if domain == "automation" && scope == "workload-smoke-config" =>
-            {
-                CliCommand::WorkloadSmokeConfig(rest)
             }
             [domain, scope, rest @ ..] if domain == "automation" && scope == "laya" => {
                 CliCommand::Laya(rest)

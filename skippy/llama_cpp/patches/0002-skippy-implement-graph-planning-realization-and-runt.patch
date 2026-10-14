@@ -1,7 +1,7 @@
-From 453fa88336a4e128a2a05e1cd6905c637292accb Mon Sep 17 00:00:00 2001
+From ca206f0bed26e480725cb1ad580e48627123c264 Mon Sep 17 00:00:00 2001
 From: James Dumay <james@generalinference.xyz>
 Date: Tue, 13 Oct 2026 22:06:42 +1100
-Subject: [PATCH] feat(skippy): realize admitted stages from live graphs
+Subject: [PATCH 2/6] feat(skippy): realize admitted stages from live graphs
 
 ---
  src/skippy/abi.cpp                      |   59 ++
@@ -55,13 +55,13 @@ Subject: [PATCH] feat(skippy): realize admitted stages from live graphs
  src/skippy/state.cpp                    | 1167 ++++++++++++++++++++++
  src/skippy/state_effects.cpp            |  450 +++++++++
  src/skippy/state_effects.h              |   74 ++
- src/skippy/state_memory.cpp             |  109 +++
+ src/skippy/state_memory.cpp             |  116 +++
  src/skippy/state_memory.h               |   16 +
  src/skippy/tokenization.cpp             |  179 ++++
  src/skippy/verification.cpp             |  270 +++++
  src/skippy/workloads.cpp                |  371 +++++++
  src/skippy/workloads_internal.h         |    8 +
- 57 files changed, 16018 insertions(+)
+ 57 files changed, 16025 insertions(+)
  create mode 100644 src/skippy/abi.cpp
  create mode 100644 src/skippy/activation.cpp
  create mode 100644 src/skippy/activation_internal.h
@@ -15493,10 +15493,10 @@ index 000000000..5bb6b779b
 +        std::string & error);
 diff --git a/src/skippy/state_memory.cpp b/src/skippy/state_memory.cpp
 new file mode 100644
-index 000000000..7ba322747
+index 000000000..e271852ff
 --- /dev/null
 +++ b/src/skippy/state_memory.cpp
-@@ -0,0 +1,109 @@
+@@ -0,0 +1,116 @@
 +#include "skippy/state_memory.h"
 +#include "skippy/state.h"
 +#include "skippy/runtime_types.h"
@@ -15555,24 +15555,30 @@ index 000000000..7ba322747
 +    // coverage merely from a successful dynamic_cast or a nonempty export.
 +    const auto & type = typeid(*memory);
 +    if (type == typeid(llama_kv_cache) || type == typeid(llama_kv_cache_iswa)) {
-+        return SKIPPY_MEMORY_CACHE_RESIDENT | SKIPPY_MEMORY_CACHE_KV_RECURRENT;
++        return SKIPPY_MEMORY_CACHE_RESIDENT | SKIPPY_MEMORY_CACHE_KV_RECURRENT | SKIPPY_MEMORY_CACHE_FULL_STATE;
 +    }
 +    if (type == typeid(llama_memory_recurrent)) {
-+        return skippy_memory_recurrent_adapter(memory) ? SKIPPY_MEMORY_CACHE_KV_RECURRENT : 0;
++        return skippy_memory_recurrent_adapter(memory)
++                ? SKIPPY_MEMORY_CACHE_KV_RECURRENT | SKIPPY_MEMORY_CACHE_FULL_STATE : SKIPPY_MEMORY_CACHE_FULL_STATE;
 +    }
 +    if (type == typeid(llama_memory_hybrid) || type == typeid(llama_memory_hybrid_iswa)) {
 +        return skippy_memory_recurrent_adapter(memory) &&
 +                (skippy_memory_kv_adapter(memory) || skippy_memory_iswa_adapter(memory))
-+                ? SKIPPY_MEMORY_CACHE_KV_RECURRENT : 0;
++                ? SKIPPY_MEMORY_CACHE_KV_RECURRENT | SKIPPY_MEMORY_CACHE_FULL_STATE : SKIPPY_MEMORY_CACHE_FULL_STATE;
 +    }
 +    // DSA/MSA memories include an indexer tier. Until a real-model resident
 +    // save/restore proves that tier survives, use complete state snapshots.
-+    return 0;
++    return SKIPPY_MEMORY_CACHE_FULL_STATE;
 +}
 +
 +uint32_t skippy_graph_cache_capabilities(const llm_graph_result & result) {
 +    if (!result.get_gf()) {
 +        return 0;
++    }
++    for (const auto & input : result.inputs) {
++        if (input->has_unserialized_context_state()) {
++            return 0;
++        }
 +    }
 +    std::vector<skippy_state_effect> effects;
 +    std::string error;
@@ -15580,10 +15586,10 @@ index 000000000..7ba322747
 +                result.get_block_boundaries(), effects, error)) {
 +        return 0;
 +    }
-+    uint32_t supported = SKIPPY_MEMORY_CACHE_RESIDENT | SKIPPY_MEMORY_CACHE_KV_RECURRENT;
-+    if (effects.empty()) {
-+        return 0;
-+    }
++    // A phase with no persistent effects adds no cache restrictions. It must
++    // not be confused with failed graph admission or unexported context state.
++    uint32_t supported = SKIPPY_MEMORY_CACHE_RESIDENT | SKIPPY_MEMORY_CACHE_KV_RECURRENT |
++            SKIPPY_MEMORY_CACHE_FULL_STATE;
 +    for (const auto & effect : effects) {
 +        switch (effect.kind) {
 +            case skippy_state_kind::kv_key:
@@ -15594,7 +15600,8 @@ index 000000000..7ba322747
 +                supported &= ~SKIPPY_MEMORY_CACHE_RESIDENT;
 +                break;
 +            case skippy_state_kind::derived_persistent:
-+                return 0;
++                supported &= SKIPPY_MEMORY_CACHE_FULL_STATE;
++                break;
 +        }
 +    }
 +    return supported;

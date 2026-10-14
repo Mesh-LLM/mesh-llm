@@ -65,9 +65,12 @@ graph without applying the decoder slice.
 
 Cache representation is admitted by the loaded context as well. Reserved graph
 profiles establish the state effects, native memory exporters establish which
-partial representations are complete, and the intersection selects the cache.
-Later graph builds must preserve that admitted coverage. Other persistent state
-uses complete snapshots. Operator configuration cannot claim attention-only or
+representations are complete, and the intersection selects the cache.
+Later graph builds must preserve that admitted coverage. A stateless phase adds
+no restriction. Full snapshots require explicit admission too: context-owned
+cross-attention inputs are not serialized by the memory exporter, so their
+presence disables prefix reuse without rejecting inference. RAM and disk tiers
+may only select admitted representations. Operator configuration cannot claim attention-only or
 recurrent state, or override the selected representation; planner diagnostics
 are observations, not serving authority.
 

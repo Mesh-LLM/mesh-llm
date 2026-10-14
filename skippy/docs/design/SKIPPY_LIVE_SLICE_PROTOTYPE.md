@@ -443,6 +443,74 @@ immediate repeat. The local Rust toolchain emitted a non-fatal debug-stripping
 warning because its `rust-objcopy` could not find `libLLVM.dylib`; compilation,
 packaging, ABI checks, and the packaged serving check still succeeded.
 
+## Follow-up audit of automatic cache admission
+
+Canary [38507110517, attempt 2](https://github.com/Mesh-LLM/mesh-llm/actions/runs/38507110517/job/115677108735)
+failed after the disk cleanup, for two independent reasons. Nomic and Jina
+completed inference and their independent oracles, but the parent evidence
+verifier looked for the deleted `skippy-serving` binary instead of `skippy`.
+T5 failed during encoding because a valid stateless encoder graph returned
+zero cache capabilities and invalidated the decoder reservation. Neither
+failure was a KV cache miss or another disk-space failure.
+
+The wider audit found a correctness issue beyond that assertion: native memory
+snapshots do not serialize the context-owned encoder embeddings and sequence
+IDs used by cross-attention. Falling back from zero capabilities to a full
+snapshot would therefore be unsafe. ABI 0.1.70 adds the explicit
+`SKIPPY_MEMORY_CACHE_FULL_STATE` bit; zero now disables prefix caching. Both
+cross-attention graph-input owners declare their unserialized context state.
+This is a graph-input contract, with no family-name dispatch. A valid stateless
+phase imposes no additional restriction, while malformed graphs admit nothing.
+RAM and disk tiers select only an explicitly admitted complete exporter.
+
+The non-chat canary now starts ordinary `skippy serve --model-path`, deleting
+the fourth handwritten smoke-config generator. Behavioral contracts check the
+actual startup arguments and every workload class's parent evidence verifier,
+including failure propagation. The remaining benchmark payload override is
+removed. The API documentation generator now writes to its owning website
+directory after the workspace move.
+
+Expanded real-model testing also exposed two fixture mistakes. OCR, speech
+synthesis, and speech recognition can contain causal decoders and legitimately
+warm a generation graph; their API class does not imply encode-only execution.
+The OCR HTTP smoke had used a colored image containing no text while requiring
+a nonempty transcription. It now uses the manifest's independently reviewed
+`ocr-mesh-42.png` input for backend, HTTP, and oracle checks. A regression
+executes the media selector and checks it against that manifest.
+
+On the repaired CPU runtime, Nomic embedding, Jina reranking, T5 translation,
+PaddleOCR recognition, Qwen3-TTS synthesis, and Ultravox recognition pass their complete local battery
+paths, including normal HTTP serving, independent oracle, and parent receipt
+verification. T5 explicitly admits no prefix-cache representation and passes
+A/B/A translation with different A/B output and identical repeated A output.
+The TTS oracle reports relative RMS error 0 and cosine similarity 1 over 32,640
+samples at 24 kHz. The corrected OCR input returns exactly `MESH 42` through
+normal HTTP; its corrected complete certification also passes, including the
+independent oracle and parent receipt verifier.
+
+Dense full-state handoff and hybrid KV/recurrent handoff pass with real models.
+Normal Qwen HTTP cache checks reuse 515, 512, and 542 tokens for immediate
+repeat, growing chat, and growing-chat repeat, without sleeps or request
+retries. The static native-linked Rust suites pass: 18 ABI, 279 runtime, and
+996 serving tests, with one existing runtime ignore and nine serving ignores.
+The full Metal native suite passes 287/287 with no skips or crashes, including
+MTP and the new state-admission regressions. The six owning core patches
+cold-apply to the tested native tree; no extracted
+stage-program or geometry-recipe symbols remain in its source or headers.
+This follow-up supersedes the earlier assumption that a full snapshot was
+always a safe fallback. The first full CI invocation passed 1,147 lifecycle
+tests but found one stale ASR startup fixture still expecting the deleted
+generated config. That fixture now checks the real model/projector CLI and
+CPU controls; all nine related media-comparison tests pass. Every remaining
+automation target and CI repository gate passes on resume, including the new
+media selector and all-class parent-verifier regressions. Final formatting,
+warning-denying Clippy (including automation-contract tests and the Mesh
+binary), generated API docs, split roster, and ShellCheck pass. The previous
+packaged Metal serving evidence above is from ABI 0.1.69; this follow-up has
+production CPU execution and the complete ABI 0.1.70 native Metal suite, with
+the packaged Metal rebuild still pending. The candidate is ready for a
+certify-only canary; that dispatch does not merge or deploy the change.
+
 ## Canary and release decision
 
 | Decision | Result | Remaining obligation |

@@ -1,7 +1,7 @@
-From d229752a8bc5eb2f4fa9a3973dcee439a7eca642 Mon Sep 17 00:00:00 2001
+From abe4a8bf680e3a60c2c9c592e29303fd6c04d118 Mon Sep 17 00:00:00 2001
 From: James Dumay <james@generalinference.xyz>
 Date: Tue, 13 Oct 2026 22:06:43 +1100
-Subject: [PATCH] test(skippy): cover live graph and state contracts
+Subject: [PATCH 6/6] test(skippy): cover live graph and state contracts
 
 ---
  src/skippy/tests/embedding_input_regression.h |   91 +
@@ -31,13 +31,13 @@ Subject: [PATCH] test(skippy): cover live graph and state contracts
  tests/test-reasoning-budget.cpp               |    1 +
  tests/test-skippy-cachegen-metal.cpp          |  399 ++++
  tests/test-skippy-kv-cells-contiguous.cpp     |   20 +
- tests/test-skippy-kv-page-export.cpp          |  346 ++++
+ tests/test-skippy-kv-page-export.cpp          |  367 ++++
  tests/test-skippy-model-loader-accounting.cpp |  326 ++++
  .../test-skippy-recurrent-state-roundtrip.cpp |  159 ++
  tests/test-skippy-rerank-template.cpp         |   34 +
  tests/test-skippy-sampling-suppress.cpp       |   90 +
  ...st-skippy-verify-checkpoint-retirement.cpp |   26 +
- 33 files changed, 9257 insertions(+), 33 deletions(-)
+ 33 files changed, 9278 insertions(+), 33 deletions(-)
  create mode 100644 src/skippy/tests/embedding_input_regression.h
  create mode 100644 src/skippy/tests/graph_build_inputs.cpp
  create mode 100644 src/skippy/tests/graph_contract_cases.cmake
@@ -8826,10 +8826,10 @@ index 000000000..0e95c35b2
 +}
 diff --git a/tests/test-skippy-kv-page-export.cpp b/tests/test-skippy-kv-page-export.cpp
 new file mode 100644
-index 000000000..3f2f6bb29
+index 000000000..8b595464f
 --- /dev/null
 +++ b/tests/test-skippy-kv-page-export.cpp
-@@ -0,0 +1,346 @@
+@@ -0,0 +1,367 @@
 +#include "skippy.h"
 +#include "../src/skippy/state_memory.h"
 +
@@ -8850,7 +8850,7 @@ index 000000000..3f2f6bb29
 +};
 +
 +static bool graph_cache_capabilities_cover_complete_state() {
-+    ggml_init_params params = {ggml_tensor_overhead() * 16 + ggml_graph_overhead_custom(32, false), nullptr, true};
++    ggml_init_params params = {ggml_tensor_overhead() * 16 + 2 * ggml_graph_overhead_custom(32, false), nullptr, true};
 +    ggml_context_ptr ctx(ggml_init(params));
 +    auto * input = ggml_new_tensor_1d(ctx.get(), GGML_TYPE_F32, 4);
 +    auto * state = ggml_new_tensor_1d(ctx.get(), GGML_TYPE_F32, 4);
@@ -8870,12 +8870,13 @@ index 000000000..3f2f6bb29
 +        });
 +        return skippy_graph_cache_capabilities(result);
 +    };
-+    const uint32_t dense = SKIPPY_MEMORY_CACHE_RESIDENT | SKIPPY_MEMORY_CACHE_KV_RECURRENT;
++    const uint32_t dense = SKIPPY_MEMORY_CACHE_RESIDENT | SKIPPY_MEMORY_CACHE_KV_RECURRENT |
++            SKIPPY_MEMORY_CACHE_FULL_STATE;
 +    if (capabilities(skippy_state_kind::kv_key) != dense ||
 +            capabilities(skippy_state_kind::kv_value) != dense ||
-+            capabilities(skippy_state_kind::recurrent_conv) != SKIPPY_MEMORY_CACHE_KV_RECURRENT ||
-+            capabilities(skippy_state_kind::recurrent_ssm) != SKIPPY_MEMORY_CACHE_KV_RECURRENT ||
-+            capabilities(skippy_state_kind::derived_persistent) != 0) {
++            capabilities(skippy_state_kind::recurrent_conv) != (SKIPPY_MEMORY_CACHE_KV_RECURRENT | SKIPPY_MEMORY_CACHE_FULL_STATE) ||
++            capabilities(skippy_state_kind::recurrent_ssm) != (SKIPPY_MEMORY_CACHE_KV_RECURRENT | SKIPPY_MEMORY_CACHE_FULL_STATE) ||
++            capabilities(skippy_state_kind::derived_persistent) != SKIPPY_MEMORY_CACHE_FULL_STATE) {
 +        return false;
 +    }
 +    capabilities(skippy_state_kind::kv_key);
@@ -8885,6 +8886,26 @@ index 000000000..3f2f6bb29
 +    if (skippy_graph_cache_capabilities(result) != 0) { return false; }
 +    capabilities(skippy_state_kind::kv_key);
 +    result.block_boundaries.clear();
++    if (skippy_graph_cache_capabilities(result) != 0) { return false; }
++
++    // An independently built stateless phase is compatible with every
++    // admitted exporter; absence of effects is not a failure of ownership.
++    auto * stateless_output = ggml_scale(ctx.get(), input, 2.0f);
++    auto * stateless_graph = ggml_new_graph_custom(ctx.get(), 32, false);
++    ggml_build_forward_expand(stateless_graph, stateless_output);
++    result.replace_with_stage_graph(stateless_graph, {}, {}, {});
++    result.block_boundaries = {
++        {skippy_block_boundary_kind::entry, 0, input},
++        {skippy_block_boundary_kind::exit, 0, stateless_output},
++    };
++    if (skippy_graph_cache_capabilities(result) != dense) { return false; }
++
++    // Context-owned cross-attention state is missing even from full memory
++    // snapshots. Each input owner declares that fact without a family lookup.
++    result.add_input(std::make_unique<llm_graph_input_cross_embd>(nullptr));
++    if (skippy_graph_cache_capabilities(result) != 0) { return false; }
++    result.inputs.clear();
++    result.add_input(std::make_unique<llm_graph_input_attn_cross>(nullptr));
 +    return skippy_graph_cache_capabilities(result) == 0;
 +}
 +
@@ -8929,14 +8950,14 @@ index 000000000..3f2f6bb29
 +            {});
 +
 +    if (skippy_memory_cache_capabilities(&kv) !=
-+            (SKIPPY_MEMORY_CACHE_RESIDENT | SKIPPY_MEMORY_CACHE_KV_RECURRENT) ||
++            (SKIPPY_MEMORY_CACHE_RESIDENT | SKIPPY_MEMORY_CACHE_KV_RECURRENT | SKIPPY_MEMORY_CACHE_FULL_STATE) ||
 +            skippy_model_memory_cache_capabilities(nullptr) != 0) {
 +        return 1;
 +    }
 +    unknown_kv_memory unknown(*model, hparams, GGML_TYPE_F32, GGML_TYPE_F32,
 +            true, false, true, 1, 1, 1, 0, LLAMA_SWA_TYPE_NONE, nullptr,
 +            [](int32_t il) { return il == 0; }, {}, {});
-+    if (skippy_memory_cache_capabilities(&unknown) != 0) {
++    if (skippy_memory_cache_capabilities(&unknown) != SKIPPY_MEMORY_CACHE_FULL_STATE) {
 +        return 1;
 +    }
 +

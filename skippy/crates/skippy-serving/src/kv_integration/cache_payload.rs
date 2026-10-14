@@ -5,14 +5,26 @@ use super::StagePrefixCachePayload;
 
 pub(super) fn effective_cache_payload(
     admitted: MemoryCacheCapabilities,
-) -> StagePrefixCachePayload {
+) -> Option<StagePrefixCachePayload> {
     if admitted.resident {
-        StagePrefixCachePayload::ResidentKv
+        Some(StagePrefixCachePayload::ResidentKv)
     } else if admitted.kv_recurrent {
-        StagePrefixCachePayload::KvRecurrent
+        Some(StagePrefixCachePayload::KvRecurrent)
+    } else if admitted.full_state {
+        Some(StagePrefixCachePayload::FullState)
     } else {
-        StagePrefixCachePayload::FullState
+        None
     }
+}
+
+/// Durable tiers require an admitted byte exporter; resident handles cannot spill.
+pub(super) fn durable_cache_payload(
+    admitted: MemoryCacheCapabilities,
+) -> Option<StagePrefixCachePayload> {
+    effective_cache_payload(MemoryCacheCapabilities {
+        resident: false,
+        ..admitted
+    })
 }
 
 #[cfg(test)]
@@ -21,18 +33,51 @@ mod tests {
 
     #[test]
     fn only_admitted_complete_representations_are_selected() {
-        for (resident, kv_recurrent, expected) in [
-            (true, true, StagePrefixCachePayload::ResidentKv),
-            (true, false, StagePrefixCachePayload::ResidentKv),
-            (false, true, StagePrefixCachePayload::KvRecurrent),
-            (false, false, StagePrefixCachePayload::FullState),
+        for (resident, kv_recurrent, full_state, expected) in [
+            (true, true, true, Some(StagePrefixCachePayload::ResidentKv)),
+            (
+                true,
+                false,
+                false,
+                Some(StagePrefixCachePayload::ResidentKv),
+            ),
+            (
+                false,
+                true,
+                true,
+                Some(StagePrefixCachePayload::KvRecurrent),
+            ),
+            (
+                false,
+                true,
+                false,
+                Some(StagePrefixCachePayload::KvRecurrent),
+            ),
+            (false, false, true, Some(StagePrefixCachePayload::FullState)),
+            (false, false, false, None),
         ] {
             assert_eq!(
                 effective_cache_payload(MemoryCacheCapabilities {
                     resident,
-                    kv_recurrent
+                    kv_recurrent,
+                    full_state,
                 }),
                 expected,
+            );
+            let durable = if kv_recurrent {
+                Some(StagePrefixCachePayload::KvRecurrent)
+            } else if full_state {
+                Some(StagePrefixCachePayload::FullState)
+            } else {
+                None
+            };
+            assert_eq!(
+                durable_cache_payload(MemoryCacheCapabilities {
+                    resident,
+                    kv_recurrent,
+                    full_state,
+                }),
+                durable,
             );
         }
     }

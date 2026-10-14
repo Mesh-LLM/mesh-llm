@@ -158,7 +158,10 @@ fn blocked_l3_spill_does_not_head_of_line_block_later_l1_records() {
     let kv = KvStageIntegration::from_loaded_model_with_l3_manager(
         &config,
         Some(ModelStateKind::Dense),
-        Some(skippy_runtime::MemoryCacheCapabilities::default()),
+        Some(skippy_runtime::MemoryCacheCapabilities {
+            full_state: true,
+            ..Default::default()
+        }),
         Some(manager),
         None,
     )

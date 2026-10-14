@@ -117,6 +117,7 @@ fn real_initialization_notifies_started_then_completed() {
         Some(skippy_runtime::MemoryCacheCapabilities {
             resident: true,
             kv_recurrent: true,
+            full_state: true,
         }),
         Some(observer.clone()),
     )
@@ -152,6 +153,7 @@ fn disabled_kv_config_never_notifies_init_at_all() {
         Some(skippy_runtime::MemoryCacheCapabilities {
             resident: true,
             kv_recurrent: true,
+            full_state: true,
         }),
         Some(observer.clone()),
     )

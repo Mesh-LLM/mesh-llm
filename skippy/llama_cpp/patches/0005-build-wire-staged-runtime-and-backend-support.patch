@@ -1,7 +1,7 @@
-From 9047e7a971602caf7ca92e2f4aa789a784ed27ca Mon Sep 17 00:00:00 2001
+From c10a7b6b463616fe490efbce7f6cd776aac24a01 Mon Sep 17 00:00:00 2001
 From: James Dumay <james@generalinference.xyz>
 Date: Tue, 13 Oct 2026 22:06:42 +1100
-Subject: [PATCH] build(skippy): wire native runtime and backend support
+Subject: [PATCH 5/6] build(skippy): wire native runtime and backend support
 
 ---
  CMakeLists.txt                             |  17 +

@@ -259,6 +259,7 @@ mod tests {
             Some(skippy_runtime::MemoryCacheCapabilities {
                 resident: true,
                 kv_recurrent: true,
+                full_state: true,
             }),
             Some(manager),
             None,

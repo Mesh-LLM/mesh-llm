@@ -135,8 +135,11 @@ constraint rather than advertising a switch to disable it.
 
 `prefix_cache = "auto"` follows the model's prefix-cache policy; `on` enables
 lookup/record, `off` disables reuse, and `record` only records state. Automatic
-payload selection preserves recurrent/indexer state when required. Explicit
-payload and experimental codec compatibility resolve against the loaded model.
+payload selection uses the loaded graph and native memory exporters to preserve
+all required state. If no complete representation is available, prefix reuse is
+disabled while inference remains available. Operators cannot override admission
+or select a payload. Experimental codec compatibility resolves against the
+admitted representation.
 
 Cache sizes use whole IEC units (`KiB`, `MiB`, `GiB`, `TiB`). The prefix retention
 budget accepts `auto` or `unbounded`; the exact-state ceiling accepts `auto` or

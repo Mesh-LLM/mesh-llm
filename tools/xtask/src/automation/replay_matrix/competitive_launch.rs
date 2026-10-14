@@ -230,7 +230,7 @@ fn mesh(selected: &Selection<'_>, provenance: &mut Value) -> DynResult<Vec<Strin
 fn stage(model: &Value, artifact: &Artifact, port: u16, capacity: Capacity, cache: bool) -> Value {
     let mut value = json!({"run_id":format!("competitive-{}",model["key"].as_str().unwrap_or("invalid")),"topology_id":"competitive-single-stage","model_id":model["model_id"],"model_path":artifact.path,"source_model_sha256":artifact.sha256,"stage_id":"stage-0","stage_index":0,"layer_start":0,"layer_end":model["layer_end"],"ctx_size":capacity.context,"lane_count":capacity.lanes,"n_batch":2048,"n_ubatch":512,"n_gpu_layers":-1,"cache_type_k":"f16","cache_type_v":"f16","native_mtp_enabled":false,"load_mode":"runtime-slice","execution_contract":"","bind_addr":format!("127.0.0.1:{port}"),"upstream":null,"downstream":null});
     if cache {
-        value["kv_cache"] = json!({"mode":"lookup-record","payload":model["cache_payload"],"max_entries":512,"max_bytes":0,"min_tokens":64,"shared_prefix_stride_tokens":128,"shared_prefix_record_limit":2});
+        value["kv_cache"] = json!({"mode":"lookup-record","max_entries":512,"max_bytes":0,"min_tokens":64,"shared_prefix_stride_tokens":128,"shared_prefix_record_limit":2});
     }
     value
 }

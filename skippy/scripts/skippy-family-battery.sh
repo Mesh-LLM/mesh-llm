@@ -885,7 +885,7 @@ run_workload_certify() {
   if (( certified == 1 && exit_code == 0 )); then
     verify_workload_oracle \
       "$cert_run_dir/workload-oracle-evidence.json" "$model_class" "$smoke_lane" "$oracle_lane" \
-      "$model_id" "$target" "${SKIPPY_WORKLOAD_CANDIDATE_BIN_DIR:-$ROOT/target/debug}/skippy-serving" \
+      "$model_id" "$target" "${SKIPPY_WORKLOAD_CANDIDATE_BIN_DIR:-$ROOT/target/debug}/skippy" \
       "$oracle_executable" "$mmproj" >>"$log_path" 2>&1 || exit_code=$?
   fi
   jq -c -n \

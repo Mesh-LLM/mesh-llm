@@ -207,6 +207,10 @@ The build job sets `CTEST_PARALLEL_LEVEL=16` for complete upstream CTest runs
 in the repair session and trusted build; the per-case timeout remains 900 seconds.
 The build job prepares the locked canary Python SDK before its early Metal
 battery, so Nomic embedding uses the same interpreter as family workers.
+Non-chat certification starts the candidate through `skippy serve --model-path`
+and verifies oracle evidence against that same `skippy` executable. Its native
+fixture distinguishes API workload classes from causal decoder execution;
+OCR and speech frontends may legitimately warm a decoder.
 Goose's build and test commands use `scripts/llama-canary-log-command.sh` to
 stream output and retain separate invocation logs, exit statuses, and available
 CTest result files under the build job's 14-day repair evidence artifact.

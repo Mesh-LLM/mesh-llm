@@ -105,6 +105,5 @@
   "swift_producer_environment",
   "workload_certify_contract",
   "workload_oracle_producer_contract",
-  "workload_smoke_config",
   "workload_start_retry"
 ]

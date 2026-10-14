@@ -867,6 +867,7 @@ mod proactive_eviction_tests {
             Some(skippy_runtime::MemoryCacheCapabilities {
                 resident: true,
                 kv_recurrent: true,
+                full_state: true,
             }),
             None,
         )

@@ -43,6 +43,7 @@ pub enum ModelStateKind {
 pub struct MemoryCacheCapabilities {
     pub resident: bool,
     pub kv_recurrent: bool,
+    pub full_state: bool,
 }
 
 impl MemoryCacheCapabilities {
@@ -50,6 +51,7 @@ impl MemoryCacheCapabilities {
         Self {
             resident: bits & 1 != 0,
             kv_recurrent: bits & 2 != 0,
+            full_state: bits & 4 != 0,
         }
     }
 }
@@ -58,7 +60,7 @@ impl MemoryCacheCapabilities {
 pub struct LoadedModelCapability {
     pub state_kind: ModelStateKind,
     /// Complete representations admitted across reserved graph profiles and
-    /// supported by the loaded native memory. Neither bit means full-state only.
+    /// supported by the loaded native memory. No bits means caching is unavailable.
     pub cache_capabilities: MemoryCacheCapabilities,
 }
 

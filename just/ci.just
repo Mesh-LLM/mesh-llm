@@ -335,7 +335,6 @@ ci-automation-contracts:
         --test swift_producer_environment \
         --test workload_certify_contract \
         --test workload_oracle_producer_contract \
-        --test workload_smoke_config \
         --test workload_start_retry \
         -- --test-threads=1
 

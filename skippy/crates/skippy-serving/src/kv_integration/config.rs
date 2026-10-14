@@ -19,7 +19,7 @@ use super::{
     output_tokens::OutputTokenCache,
 };
 
-use super::cache_payload::effective_cache_payload;
+use super::cache_payload::{durable_cache_payload, effective_cache_payload};
 
 mod durable_spill;
 mod exact_state_limits;
@@ -127,7 +127,9 @@ impl KvStageIntegration {
         let Some(admitted) = memory_cache else {
             return Ok(None);
         };
-        let payload = effective_cache_payload(admitted);
+        let Some(payload) = effective_cache_payload(admitted) else {
+            return Ok(None);
+        };
         let payload_selection_reason = "loaded_graph_and_memory";
         let dense_without_recurrent = admitted.resident;
         let l3_manager = manager()?;
@@ -142,21 +144,9 @@ impl KvStageIntegration {
                 },
             );
         }
-        let durable_payload = l3_manager.is_some().then(|| {
-            if payload == StagePrefixCachePayload::ResidentKv
-                && dense_without_recurrent
-                && memory_cache.is_some_and(|caps| caps.kv_recurrent)
-            {
-                // Resident KV stays the in-process fast path. Dense families
-                // export KV pages with an empty recurrent snapshot for L3;
-                // the known-dense capability makes that empty component valid.
-                StagePrefixCachePayload::KvRecurrent
-            } else if payload == StagePrefixCachePayload::ResidentKv {
-                StagePrefixCachePayload::FullState
-            } else {
-                payload
-            }
-        });
+        let durable_payload = l3_manager
+            .as_ref()
+            .and_then(|_| durable_cache_payload(admitted));
         let l3 = l3_manager
             .zip(durable_payload)
             .map(|(manager, payload)| l3_tier_for_manager(config, payload, manager))
@@ -172,8 +162,8 @@ impl KvStageIntegration {
                     exact_state_identity_for_stage(config, l3_payload_kind(payload)),
                 )
             });
-        // FullState is architecture-neutral: the native runtime serializes the
-        // complete session state for both dense and recurrent model families.
+        // Complete exporters are admitted by the native graph and memory; state
+        // kind only limits retention for larger recurrent snapshots.
         if matches!(
             model_state_kind,
             Some(ModelStateKind::Recurrent | ModelStateKind::Hybrid)
@@ -402,6 +392,7 @@ impl KvStageIntegration {
             Some(skippy_runtime::MemoryCacheCapabilities {
                 resident: model_state_kind == ModelStateKind::Dense,
                 kv_recurrent: true,
+                full_state: true,
             }),
             None,
         )
@@ -974,6 +965,7 @@ mod tests {
     use super::*;
     use skippy_protocol::{FlashAttentionType, LoadMode, StageDevice};
 
+    mod cache_admission;
     mod durable_spill;
 
     fn limits(soft_bytes: u64, hard_bytes: u64) -> ExactStateByteLimits {
@@ -1601,64 +1593,6 @@ mod tests {
     }
 
     #[test]
-    fn loaded_capabilities_select_complete_state_without_configuration_labels() {
-        for (kind, resident, kv_recurrent, expected) in [
-            (
-                ModelStateKind::Dense,
-                true,
-                true,
-                StagePrefixCachePayload::ResidentKv,
-            ),
-            (
-                ModelStateKind::Recurrent,
-                false,
-                true,
-                StagePrefixCachePayload::KvRecurrent,
-            ),
-            (
-                ModelStateKind::Hybrid,
-                false,
-                true,
-                StagePrefixCachePayload::KvRecurrent,
-            ),
-            (
-                ModelStateKind::Hybrid,
-                false,
-                false,
-                StagePrefixCachePayload::FullState,
-            ),
-        ] {
-            let config = enabled_auto_config("arbitrary-model-name");
-            let kv = KvStageIntegration::from_loaded_model(
-                &config,
-                Some(kind),
-                Some(skippy_runtime::MemoryCacheCapabilities {
-                    resident,
-                    kv_recurrent,
-                }),
-                None,
-            )
-            .unwrap()
-            .unwrap();
-            assert_eq!(kv.payload, expected);
-            assert_eq!(kv.payload_selection_reason, "loaded_graph_and_memory");
-            if matches!(kind, ModelStateKind::Recurrent | ModelStateKind::Hybrid) {
-                assert_eq!(kv.exact_max_entries, RECURRENT_CACHE_MAX_ENTRIES);
-            }
-        }
-    }
-
-    #[test]
-    fn no_loaded_runtime_cannot_authorize_a_cache() {
-        let config = enabled_auto_config("arbitrary-model-name");
-        assert!(
-            KvStageIntegration::from_loaded_model(&config, None, None, None)
-                .unwrap()
-                .is_none()
-        );
-    }
-
-    #[test]
     fn injected_manager_is_shared_across_placement_equivalent_stages() {
         let root = std::env::temp_dir()
             .join("skippy-server-l3-manager-tests")
@@ -1680,6 +1614,7 @@ mod tests {
             Some(skippy_runtime::MemoryCacheCapabilities {
                 resident: true,
                 kv_recurrent: true,
+                full_state: true,
             }),
             Some(manager.clone()),
             None,
@@ -1692,6 +1627,7 @@ mod tests {
             Some(skippy_runtime::MemoryCacheCapabilities {
                 resident: true,
                 kv_recurrent: true,
+                full_state: true,
             }),
             Some(manager),
             None,
@@ -1734,6 +1670,7 @@ mod tests {
             Some(skippy_runtime::MemoryCacheCapabilities {
                 resident: true,
                 kv_recurrent: true,
+                full_state: true,
             }),
             Some(manager),
             None,
@@ -1775,6 +1712,7 @@ mod tests {
             Some(skippy_runtime::MemoryCacheCapabilities {
                 resident: true,
                 kv_recurrent: true,
+                full_state: true,
             }),
             Some(manager),
             None,
@@ -1807,6 +1745,7 @@ mod tests {
             Some(skippy_runtime::MemoryCacheCapabilities {
                 resident: true,
                 kv_recurrent: true,
+                full_state: true,
             }),
             None,
             None,

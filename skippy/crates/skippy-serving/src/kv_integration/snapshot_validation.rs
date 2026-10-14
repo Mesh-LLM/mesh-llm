@@ -74,7 +74,10 @@ mod tests {
         let kv = KvStageIntegration::from_loaded_model(
             &config,
             Some(skippy_runtime::ModelStateKind::Hybrid),
-            Some(skippy_runtime::MemoryCacheCapabilities::default()),
+            Some(skippy_runtime::MemoryCacheCapabilities {
+                full_state: true,
+                ..Default::default()
+            }),
             None,
         )
         .unwrap()
