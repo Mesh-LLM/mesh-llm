@@ -7,13 +7,28 @@ use std::process::Command;
 pub(crate) fn detect_glibc_version() -> Option<String> {
     let override_value = std::env::var("MESH_LLM_GLIBC_VERSION").ok();
     let detected_value = cfg!(target_os = "linux")
-        .then(|| command_output("getconf", &["GNU_LIBC_VERSION"]))
+        .then(loaded_glibc_version)
         .flatten();
     detect_glibc_version_from(
         cfg!(target_os = "linux"),
         override_value.as_deref(),
         detected_value.as_deref(),
     )
+}
+
+/// The glibc this process runs on, which is the one that loads native runtimes.
+/// It can differ from the system's (`getconf`), for example in Nix builds.
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+pub(crate) fn loaded_glibc_version() -> Option<String> {
+    // SAFETY: gnu_get_libc_version returns a pointer to a static,
+    // NUL-terminated string owned by glibc.
+    let version = unsafe { std::ffi::CStr::from_ptr(libc::gnu_get_libc_version()) };
+    version.to_str().ok().map(str::to_string)
+}
+
+#[cfg(not(all(target_os = "linux", target_env = "gnu")))]
+pub(crate) fn loaded_glibc_version() -> Option<String> {
+    command_output("getconf", &["GNU_LIBC_VERSION"])
 }
 
 pub(crate) fn detect_glibc_version_from(
