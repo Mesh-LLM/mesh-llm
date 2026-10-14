@@ -34,3 +34,11 @@
 /mesh/crates/mesh-llm-console-server/ @michaelneale @ndizazzo @i386
 /mesh/docs/SDK.md @ndizazzo @i386 @michaelneale
 /mesh/docs/sdk/ @ndizazzo @i386 @michaelneale
+
+# Windows: CI, packaging and platform code.
+/.github/workflows/*windows*.yml @Virgile-pct @i386 @ndizazzo
+/.github/actions/*windows*/ @Virgile-pct @i386 @ndizazzo
+/mesh/deploy/windows/ @Virgile-pct @michaelneale @ndizazzo
+/mesh/scripts/*.ps1 @Virgile-pct @michaelneale @ndizazzo
+/scripts/*.ps1 @Virgile-pct @i386 @ndizazzo @michaelneale
+/tools/xtask/src/**/windows* @Virgile-pct @ndizazzo @i386

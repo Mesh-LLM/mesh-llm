@@ -22,6 +22,8 @@ use std::{
     time::Duration,
 };
 
+const WRAPPER_LOG_BYTES: usize = 16 * 1024 * 1024;
+
 pub(crate) fn run(args: &[String]) -> DynResult<()> {
     const GRAMMAR: Grammar = Grammar {
         usage: "cargo xtool automation canary-receipts build --input PATH",
@@ -101,7 +103,7 @@ fn execute(input: &Input) -> DynResult<()> {
             // Leave 10s for that owner to finish before the wrapper is killed.
             graceful_shutdown: Duration::from_secs(30),
             forced_shutdown: Duration::from_secs(5),
-            retained_bytes_per_stream: 64 * 1024,
+            retained_bytes_per_stream: WRAPPER_LOG_BYTES,
             readiness: Readiness::None,
             completion: Completion::Exit,
         },
