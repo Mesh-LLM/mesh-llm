@@ -502,7 +502,7 @@ async fn real_non_chat_class_smoke_when_fixture_is_set() -> Result<()> {
     // Startup calls this before any request. A non-causal workload must not
     // acquire a decoder session just to warm a generation graph.
     {
-        let runtime = backend.runtime.lock().expect("runtime mutex poisoned");
+        let mut runtime = backend.runtime.lock().expect("runtime mutex poisoned");
         assert!(!runtime.warmup_generation_graph()?);
     }
     match fixture.class {

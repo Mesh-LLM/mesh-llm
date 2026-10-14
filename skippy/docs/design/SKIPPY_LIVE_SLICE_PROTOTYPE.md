@@ -323,6 +323,43 @@ generator's 33 tests and API documentation check also passed. The later main
 commits changed Rust response/runtime selection code and ownership metadata,
 without changing the validated native queue.
 
+## Four-lane startup reproduction and repair
+
+[Canary 38489296604](https://github.com/Mesh-LLM/mesh-llm/actions/runs/38489296604)
+selected `1adc7a4c07b067b677c334e5275341a3b5e423a2`. Its 345 native tests and
+complete generator gate passed. The build then failed starting the repeated-prompt
+cache smoke server, before family fan-out. The captured native diagnostic was
+truncated before the useful terminal error.
+
+Local reproduction with that revision, the pinned Qwen3-0.6B Q8_0 fixture, four
+lanes, an 8192-token context, and disabled flash attention exposed the error:
+`prewarm embedded OpenAI runtime sessions: RuntimeError: no skippy execution lane is available`.
+Binary startup had filled the idle pool with four sessions; graph warmup then
+asked the native model for a fifth session. Leaving one lane free confirmed the
+diagnosis by allowing the same binary to start. Current main `8b848ead5` retains
+the same startup sequence; its panic-recovery repairs do not cover this case.
+
+Warmup now borrows a clean idle session and returns it only after a successful
+decode and reset. Failures discard the session and reclaim its lane index;
+temporary sessions release their capacity as before. Retained-prefix sessions
+are not selected for warmup. This is a shared Rust lifecycle repair, with no
+model-family branch or native patch change.
+
+Local validation passed three explicitly enabled model-backed regressions:
+repeated warmup with full one-/four-lane pools followed by decoding on every
+lane, warmup with idle retention disabled, and failure cleanup of a dirty native
+session followed by capacity reuse. The ordinary serving suite passed 1007 tests
+with eight explicit ignored model-backed tests (including the three separately
+run regressions). Serving and Mesh compile/Clippy, formatting, and no-console
+checks passed. The original four-lane server now reaches OpenAI readiness.
+
+Cache qualification remains open: the first repeated-prompt workload reported
+zero cached tokens; a later invocation against the same server passed all three
+cache-hit checks with 384 cached tokens. This suggests asynchronous publication
+timing but does not establish its cause or a reliable cold-start pass. Do not
+replace that failure with the later success or dispatch another canary as if the
+whole smoke gate has passed. No family certification is claimed from this run.
+
 ## Canary and release decision
 
 | Decision | Result | Remaining obligation |
@@ -333,7 +370,7 @@ without changing the validated native queue.
 | MTP and persistent-state behavior | tested probes pass | Full roster/head coverage |
 | Native and Rust validation; packaged Metal serving | pass | Remote clean candidate build |
 | Complete main-based local CI gate | resumed checks pass | Original run hit the 200 ms fixture; its existing fix and every remaining gate passed |
-| GitHub Metal family canary | build failed after native tests | Validate rewriter deadline repair on studio54, then dispatch the rebased SHA |
+| GitHub Metal family canary | native/generator passed; smoke startup failed | Startup repaired locally; resolve cold-start cache smoke before redispatch |
 | Stable performance conclusion | inconclusive | Quiescent interleaved A/B |
 | Universal or cross-backend support claim | no-go | Full roster plus separate CUDA lane |
 
