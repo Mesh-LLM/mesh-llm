@@ -465,7 +465,7 @@ fn parse_hf_package_ref(package_ref: &str) -> Result<HfPackageRef> {
         .split_once('@')
         .context("artifact transfer requires an explicit immutable hf://namespace/repo@revision")?;
     anyhow::ensure!(
-        repo.split('/').count() == 2 && !repo.contains(':') && !repo.contains('@'),
+        repo.split('/').count() == 2 && repo.split('/').all(is_safe_hf_repo_component),
         "HF package repo id must look like namespace/repo"
     );
     let revision = revision.trim();
@@ -478,6 +478,19 @@ fn parse_hf_package_ref(package_ref: &str) -> Result<HfPackageRef> {
         repo: repo.to_string(),
         revision: revision.to_string(),
     })
+}
+
+/// HF repo id components are restricted to `[A-Za-z0-9._-]` and may not be
+/// `.`/`..`; anything else (notably `\\`, which `PathBuf::join` treats as a
+/// separator on Windows) could alias a different cache directory once the
+/// component is joined into the HF cache folder name.
+fn is_safe_hf_repo_component(component: &str) -> bool {
+    !component.is_empty()
+        && component != "."
+        && component != ".."
+        && component
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-'))
 }
 
 fn is_immutable_revision_hint(revision: &str) -> bool {
@@ -637,11 +650,20 @@ fn validate_sha256(value: &str) -> Result<()> {
 }
 
 fn ensure_path_inside_repo_root(repo_root: &Path, path: &Path) -> Result<()> {
+    let canonical_cache = fs::canonicalize(crate::models::huggingface_hub_cache_dir())
+        .context("HF cache dir is not available")?;
     let canonical_root =
         fs::canonicalize(repo_root).context("package repo cache is not available")?;
+    // The repo root is derived from a peer-supplied package ref and may itself be a
+    // symlink; it must resolve to a direct child of the HF cache dir, otherwise a
+    // `starts_with` check against it would anchor containment outside the cache.
+    anyhow::ensure!(
+        canonical_root.parent() == Some(canonical_cache.as_path()),
+        "package repo cache root escapes the managed HF cache"
+    );
     let canonical_path = fs::canonicalize(path).context("artifact is not cached")?;
     anyhow::ensure!(
-        canonical_path.starts_with(canonical_root),
+        canonical_path.starts_with(&canonical_root),
         "artifact path escapes the managed HF cache repo"
     );
     Ok(())
@@ -1109,6 +1131,57 @@ mod tests {
             expected_sha256: Some(sha256_hex(b"outside!")),
         };
         assert!(servable_artifact_from_request(&request).is_err());
+
+        restore_env("HF_HUB_CACHE", prev);
+    }
+
+    #[test]
+    fn parse_hf_package_ref_rejects_path_separator_and_dot_segment_components() {
+        for package_ref in [
+            "hf://owner/\\..\\..\\escape@abc123",
+            "hf://owner/..@abc123",
+            "hf://./repo@abc123",
+            "hf:///repo@abc123",
+            "hf://owner/@abc123",
+            "hf://owner/re po@abc123",
+            "hf://owner/repo:tag@abc123",
+        ] {
+            assert!(
+                parse_hf_package_ref(package_ref).is_err(),
+                "{package_ref} must be rejected"
+            );
+        }
+        let parsed = parse_hf_package_ref("hf://Owner_1/repo.name-v2@abc123").unwrap();
+        assert_eq!(parsed.repo, "Owner_1/repo.name-v2");
+        assert_eq!(parsed.revision, "abc123");
+    }
+
+    #[test]
+    #[cfg(unix)]
+    #[serial]
+    fn local_artifact_install_parent_rejects_repo_root_symlink_out_of_hf_cache() {
+        use std::os::unix::fs as unix_fs;
+
+        let prev = std::env::var_os("HF_HUB_CACHE");
+        let temp = tempfile::tempdir().unwrap();
+        let cache = temp.path().join("hub");
+        let outside = temp.path().join("outside");
+        fs::create_dir_all(&cache).unwrap();
+        fs::create_dir_all(outside.join("snapshots/abc123/layers")).unwrap();
+        // SAFETY: the enclosing test contract is `#[serial]`, so this process
+        // environment mutation cannot race another test.
+        unsafe { std::env::set_var("HF_HUB_CACHE", &cache) };
+        // The whole repo root is a symlink pointing outside the HF cache: both the
+        // root and the destination canonicalize consistently, so a root-relative
+        // check alone would pass.
+        unix_fs::symlink(&outside, cache.join("models--meshllm--demo-layers")).unwrap();
+
+        let destination =
+            cache.join("models--meshllm--demo-layers/snapshots/abc123/layers/layer-000.gguf");
+        assert!(
+            ensure_local_artifact_install_parent("hf://meshllm/demo-layers@abc123", &destination)
+                .is_err()
+        );
 
         restore_env("HF_HUB_CACHE", prev);
     }
