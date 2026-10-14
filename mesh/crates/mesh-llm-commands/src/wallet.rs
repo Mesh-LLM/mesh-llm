@@ -126,9 +126,20 @@ fn control_command(command: &WalletCommand) -> Result<ControlCommand> {
             model,
             input_msat_per_million,
             output_msat_per_million,
+            cache_discount_percent,
             free,
         } => {
-            if let Some(model) = model {
+            if let (Some(model), Some(percent), None, None) = (
+                model,
+                cache_discount_percent,
+                input_msat_per_million,
+                output_msat_per_million,
+            ) {
+                ControlCommand::SetCacheDiscount {
+                    model: model.clone(),
+                    percent: *percent,
+                }
+            } else if let Some(model) = model {
                 ControlCommand::SetPricing {
                     model: model.clone(),
                     value: if *free {
@@ -137,6 +148,7 @@ fn control_command(command: &WalletCommand) -> Result<ControlCommand> {
                         Some(Pricing {
                             input_msat_per_million: input_msat_per_million.unwrap_or(500),
                             output_msat_per_million: output_msat_per_million.unwrap_or(1500),
+                            cache_discount_percent: cache_discount_percent.unwrap_or(0),
                         })
                     },
                 }

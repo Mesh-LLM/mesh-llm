@@ -10,9 +10,10 @@ provider-neutral wallet API, durable settlement and CLI controls. The earlier
 fixed-allowance protocols (`/mesh/payment/v1` and `/v2`: prefill before an
 input invoice, a resolved output allowance, a pre-payment token cap, a
 generation gate and a trailing output invoice for delivered tokens) are no
-longer served; a seller answers them with an `Error` frame that asks the payer
-to upgrade. Wallets, keys, balances and the ledger file are unchanged by that
-cutover. Mainnet settlement was last exercised on September 18, 2026 against
+longer served. A seller answers them with an `Error` frame that asks the payer
+to upgrade. Wallets, keys, balances and the ledger file location are unchanged;
+the SQLite schema is upgraded as described below. Mainnet settlement was last
+exercised on September 18, 2026 against
 the previous fixed-allowance protocol; those results are kept below for the
 wallet, routing and operational findings that still apply.
 
@@ -21,8 +22,8 @@ wallet, routing and operational findings that still apply.
 Settled protocol rules (not open design choices):
 
 - Cold peers pay a flat **1 sat deposit**, deducted from the final bill.
-- After deduction, a remainder below **500 msat has no invoice**; 500–999
-  msat produces a 1-sat invoice; larger remainders preserve exact msat.
+- After deduction, every positive remainder below **1 sat** produces a
+  1-sat invoice; zero owes nothing and larger remainders preserve exact msat.
 - Invoice creation, like payment, has no host IPC deadline and is not
   automatically replayed after an uncertain transport failure. The buyer's
   initial admission wait is 300 seconds; client disconnect still cancels it.
@@ -67,9 +68,9 @@ allowance terms, delivery watermarks, receivables or refunds.
    a best-effort basis; all other bytes pass through unchanged.
 6. On completion the provider sends `Settlement`: the reported usage, the bill
    (`prompt_tokens` at the input rate + `completion_tokens` at the output
-   rate), the deposit applied and, unless `bill - deposit` is under 500 msat,
+   rate), the deposit applied and, unless the deposit covers the bill,
    one final invoice for that remainder (`final_invoice_msat`: exact to the
-   msat, a 500..999 msat remainder is raised to the 1 sat floor). The payer recomputes the bill from the stored
+   msat, a positive sub-sat remainder is raised to the 1 sat floor). The payer recomputes the bill from the stored
    admission, checks it against its local cap, pays the final invoice under the
    original authorization, and the provider replies `Complete` once that
    invoice has settled. No human approval is needed.
@@ -129,12 +130,43 @@ prefix, at most 4 MiB, `deny_unknown_fields`: `request`, `admission`,
 `accepted`, `output`, `settlement`, `complete`, `recover`, `pending`, `cancel`,
 `error`. Frames of the retired protocols do not parse. The seller reads the
 first frame within 10 seconds and the payer's `Accepted` within 60; the payer
-reads the admission within 30 seconds. The backend may go 300 seconds without
+reads the admission within 300 seconds. The backend may go 300 seconds without
 producing a byte before the request is abandoned. Usage evidence is collected
 from at most 2 MiB of response; beyond that the meter invalidates and the
 request is abandoned.
 
 ## Wallet and persistence
+
+### Upgrading an existing ledger
+
+Before first opening an old ledger, stop its owning payment service and back up
+`payments.sqlite3` together with any `payments.sqlite3-wal` and
+`payments.sqlite3-shm` sidecars. This is a one-way schema upgrade to version 5;
+older binaries reject the newer version. Rollback requires the pre-upgrade
+backup, not changing `user_version` by hand.
+
+- Main/version 0–2: buyer requests, charges, settled spend, in-flight fee caps,
+  policy, pricing and wallet pins survive. Retired fixed-allowance **seller**
+  debt (`receivables` / `serving_*`) is intentionally written off, not converted
+  into metered strikes: the old protocol can no longer settle it.
+- Unreleased metered drafts (including schema versions 3 and 4): empty tables
+  upgrade, but any seller metered records, peer credit, or buyer admission/payee
+  settings cause a clear startup error. Records and schema version are retained.
+  Matching SQL shapes cannot identify the old billing semantics. Use a backup
+  and a compatible binary or an explicit migration; never delete financial
+  records just to make startup pass. Fresh schema-5 ledgers use the current metered billing rules.
+- Corrupt/non-SQLite files and future schema versions fail to open; they are
+  not replaced with an empty ledger.
+
+Startup itself sends no payments. Old approvals with no charge and no metered
+admission close as failed. Legacy prepared charges retain main's recovery
+behavior: recovery can submit them, and can idempotently retry the same hash
+of an unexpired submitted charge if wallet lookup reports no record. A wallet
+lookup outage retains the reservation. Authoritative success accounts for
+actual principal plus fees; failure releases the reservation. Successful old
+inference approvals may remain `approved`, but only actual settled spend—not
+their request caps—consumes the daily budget. Metered recovery is different:
+it only observes existing charges and never infers failure from expiry.
 
 The wallet is a plugin. `mesh-llm-wallet::provider::WalletProvider` exposes
 balance, recent transactions, invoice creation, bounded payment, lookup by
@@ -390,9 +422,11 @@ Seller-side recovery is the same reconcile pass: every unpaid deposit and
 final invoice is looked up in the wallet, and a payment observed late is
 recorded, clearing the strike. Billed state survives provider restart; KV
 state does not. A request interrupted before `serve_settle` is abandoned on
-the error path and stays abandoned; a crash that skipped even that leaves it
-`admitted`, which `serve_recover` reports as `Pending` and which a replayed
-`Request` cannot dispatch again. Invoice creation is serialized and reuses
+the error path and stays abandoned. On provider startup, requests left
+`admitted` by a crash are also marked abandoned before serving; no usage was
+recorded, so no bill can be recovered. A still-running admitted request is
+reported as `Pending`; a replayed `Request` cannot dispatch it again.
+Invoice creation is serialized and reuses
 the persisted invoice, so a request never carries two invoices of one kind
 and no retry can replace a recorded invoice. Expiry is never treated as
 settlement or failure on the receiving side.
@@ -416,8 +450,8 @@ ceiling division to the msat. Bills are recorded to the msat, but every
 Lightning payment has a 1 sat floor (`PAYMENT_FLOOR_MSAT`): live Lexe
 payments of 60 and 90 msat found no route while 1000 msat and above settled.
 The deposit is exactly the floor. The final remainder is invoiced exact to the
-msat; only a remainder below the floor is rounded: under 500 msat is free (no
-final invoice) and 500 to 999 msat is raised to 1 sat. Both sides derive it from `final_invoice_msat`, so this
+msat; every positive remainder below the floor is raised to 1 sat. A zero
+remainder has no final invoice. Both sides derive it from `final_invoice_msat`, so this
 rounding is part of the `/mesh/payment/v3` wire contract. The deprecated
 `LightningOffer.minimum_invoice_msat` gossip field is sent as 1 and ignored
 on read. The seller
@@ -427,7 +461,7 @@ request a payer makes after it has seen the new advertisement.
 
 Enabling `wallet pricing MODEL` without explicit rates uses 500 input and 1500
 output msat per million tokens;
-small requests at those rates bill a few msat, which rounds down to free.
+small requests at those rates bill a few msat; any positive amount still owed after the deposit is raised to the 1 sat payment floor.
 
 The payer reserves a routing-fee allowance for each inference payment of
 `max(3000 msat, 1% of the amount)` (`pricing::fee_allowance_msat`). Its local
@@ -454,7 +488,48 @@ of the application's HTTP connection, and the provider stops the backend when
 it receives `Cancel`. Late deposit payment after the seller gave up is
 recorded as received but does not dispatch anything or trigger a refund.
 
+### Optional cached-input discount
+
+Configure a percentage discount only for backend-reported cached prompt tokens:
+
+```sh
+mesh-llm wallet pricing MODEL --cache-discount-percent 75
+```
+
+This updates an already priced model without resetting input/output rates; `0`
+disables the discount. It can also accompany both rate flags when setting a price.
+Absent configuration retains full input price. Missing
+`usage.prompt_tokens_details.cached_tokens` means zero cached tokens; malformed
+counts or cached counts exceeding prompt tokens are invalid evidence, not a
+zero bill. JSON and SSE use the same parser. Input is charged as uncached tokens
+plus cached tokens at the discounted rate, rounded once to msat; output is
+unchanged. There is no cache-write premium. Prices remain frozen per admission.
+
+The discount is propagated in additive JSON/protobuf fields. New paid exchanges
+use `/mesh/payment/v3`; v1/v2 callers are refused before admission, and new
+buyers never downgrade. The unreleased metered PR uses this single revision,
+including cached-input discounts and the positive-remainder floor; draft builds
+are not a supported compatibility target. Both peers must upgrade for paid inference; ordinary
+free inference and mesh gossip retain their existing compatibility.
+
+Before either seller or buyer admission, including zero-discount pricing, the
+host requires `billing_features` from the same pinned `payments.v1` provider
+with both `cache_discount: true` and `positive_remainder_floor: true`. Missing,
+false, malformed or timed-out support fails before authorization, deposit
+payment or backend dispatch. Discount configuration/advertising separately
+requires cache-discount support. Legacy wallet reconciliation is not gated by
+these new admission requirements. Wallet plugins (`wallet.v1`) are unchanged.
+
+Both provider admission requests (`serve_admit` and `accept_admission`) require
+`billing_revision: "v3"`. The provider rejects missing, legacy or unknown
+revisions while decoding, before opening the engine, authorizing or creating
+an invoice. This protects old hosts calling a new independently versioned
+provider. The host feature checks remain necessary in the opposite direction:
+an old provider could ignore the added request field. Generic reconciliation
+has no new revision gate.
+
 ## Approval and routing
+
 
 Free-only is the default. Automatic policy enables paid providers when available
 and pays without per-inference approval, subject to a positive daily budget and

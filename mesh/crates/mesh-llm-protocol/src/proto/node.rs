@@ -393,6 +393,9 @@ pub struct LightningOffer {
     pub output_msat_per_million: u64,
     #[prost(uint64, tag = "4")]
     pub minimum_invoice_msat: u64,
+    /// Percentage discount for backend-reported cached input (0 = full price).
+    #[prost(uint32, tag = "5")]
+    pub cache_discount_percent: u32,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct SignedMeshGenesisPolicy {

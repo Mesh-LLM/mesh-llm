@@ -18,6 +18,7 @@ use crate::{
 mod blocking;
 mod buying;
 mod failure_boundaries;
+mod historical_recovery;
 mod metered_service;
 mod metered_settlement;
 mod payment_notifications;
@@ -57,6 +58,7 @@ fn terms(id: &str, cap: u64) -> RequestTerms {
         pricing: Pricing {
             input_msat_per_million: 1000,
             output_msat_per_million: 1000,
+            cache_discount_percent: 0,
         },
         max_output_tokens: 100,
         max_total_msat: cap,

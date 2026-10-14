@@ -68,6 +68,11 @@ pub enum ControlCommand {
         value: Option<Policy>,
     },
     Pricing,
+    /// Patch only the cached-input discount of an already priced model.
+    SetCacheDiscount {
+        model: String,
+        percent: u8,
+    },
     SetPricing {
         model: String,
         value: Option<Pricing>,

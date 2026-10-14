@@ -119,9 +119,11 @@ async fn cold_invoice_outlives_query_deadline_without_replay() {
     let pricing = Pricing {
         input_msat_per_million: 1000,
         output_msat_per_million: 1000,
+        cache_discount_percent: 0,
     };
     service.ledger.set_pricing("model", Some(&pricing)).unwrap();
     let request = ServeAdmitRequest {
+        billing_revision: mesh_llm_payments_types::contract::BillingRevision::V3,
         request_id: "cold-request".into(),
         buyer: "buyer".into(),
         model: "model".into(),

@@ -11,6 +11,8 @@ use serde_json::Value;
 pub struct MeteredUsage {
     pub prompt_tokens: u64,
     pub completion_tokens: u64,
+    #[serde(default, skip_serializing_if = "crate::pricing::is_zero")]
+    pub cached_tokens: u64,
 }
 
 impl MeteredUsage {
@@ -21,9 +23,20 @@ impl MeteredUsage {
         let prompt_tokens = usage.get("prompt_tokens")?.as_u64()?;
         let completion_tokens = usage.get("completion_tokens")?.as_u64()?;
         prompt_tokens.checked_add(completion_tokens)?;
+        let cached_tokens = match usage.get("prompt_tokens_details") {
+            None | Some(Value::Null) => 0,
+            Some(details) => match details.as_object()?.get("cached_tokens") {
+                None => 0,
+                Some(value) => value.as_u64()?,
+            },
+        };
+        if cached_tokens > prompt_tokens {
+            return None;
+        }
         Some(Self {
             prompt_tokens,
             completion_tokens,
+            cached_tokens,
         })
     }
 }
@@ -39,13 +52,13 @@ pub const DEPOSIT_MSAT: u64 = PAYMENT_FLOOR_MSAT;
 
 /// What the seller invoices after the deposit: `bill - deposit`, exact to the
 /// msat. Only a sub-sat remainder is rounded, to respect the 1 sat payment
-/// floor: below 500 msat is free, 500..999 msat is 1 sat.
+/// floor: every positive sub-sat remainder is raised to 1 sat.
 /// Buyer and seller both derive the invoice from this one function.
 pub fn final_invoice_msat(bill_msat: u64, deposit_applied_msat: u64) -> u64 {
     let remaining = bill_msat.saturating_sub(deposit_applied_msat);
     match remaining {
         r if r >= PAYMENT_FLOOR_MSAT => r,
-        r if r >= PAYMENT_FLOOR_MSAT / 2 => PAYMENT_FLOOR_MSAT,
+        r if r > 0 => PAYMENT_FLOOR_MSAT,
         _ => 0,
     }
 }
@@ -54,7 +67,7 @@ impl MeteredUsage {
     /// The bill for this usage at `pricing`: input plus output charges.
     pub fn bill_msat(&self, pricing: &crate::pricing::Pricing) -> Result<u64> {
         pricing
-            .input_charge(self.prompt_tokens)?
+            .cached_input_charge(self.prompt_tokens, self.cached_tokens)?
             .checked_add(pricing.output_charge(self.completion_tokens)?)
             .ok_or_else(|| anyhow::anyhow!("bill overflow"))
     }
@@ -68,13 +81,16 @@ mod tests {
     #[test]
     fn final_invoice_is_exact_and_only_rounds_a_sub_sat_remainder() {
         assert_eq!(final_invoice_msat(0, 0), 0);
-        assert_eq!(final_invoice_msat(499, 0), 0);
+        assert_eq!(final_invoice_msat(1, 0), 1_000);
+        assert_eq!(final_invoice_msat(1_001, 1_000), 1_000);
+        assert_eq!(final_invoice_msat(1_000, 1_000), 0);
+        assert_eq!(final_invoice_msat(499, 0), 1_000);
         assert_eq!(final_invoice_msat(500, 0), 1_000);
         assert_eq!(final_invoice_msat(999, 0), 1_000);
         assert_eq!(final_invoice_msat(1_000, 0), 1_000);
         assert_eq!(final_invoice_msat(1_499, 0), 1_499);
         assert_eq!(final_invoice_msat(4_045, 0), 4_045);
-        assert_eq!(final_invoice_msat(1_499, 1_000), 0);
+        assert_eq!(final_invoice_msat(1_499, 1_000), 1_000);
         assert_eq!(final_invoice_msat(1_500, 1_000), 1_000);
         assert_eq!(final_invoice_msat(1_640, 1_000), 1_000);
         assert_eq!(final_invoice_msat(2_640, 1_000), 1_640);
@@ -90,7 +106,8 @@ mod tests {
             ),
             Some(MeteredUsage {
                 prompt_tokens: 10,
-                completion_tokens: 20
+                completion_tokens: 20,
+                cached_tokens: 5,
             })
         );
         assert_eq!(
@@ -99,7 +116,8 @@ mod tests {
             ),
             Some(MeteredUsage {
                 prompt_tokens: 0,
-                completion_tokens: 0
+                completion_tokens: 0,
+                cached_tokens: 0,
             })
         );
         for value in [

@@ -11,9 +11,8 @@ use crate::{metering::MeteredUsage, pricing::Pricing};
 /// Maximum encoded metered frame length, checked before allocation.
 pub const MAX_FRAME_BYTES: usize = 4 * 1024 * 1024;
 
-/// Metered-stream upgrade. `/mesh/payment/v2` ([`crate::wire::HTTP_UPGRADE`])
-/// is the fixed-allowance input/output protocol; its frames are not
-/// interchangeable with these, so the path is bumped.
+/// Metered-stream upgrade with cached-input billing and a positive-remainder
+/// one-sat floor. Supersedes the fixed-allowance protocol on main.
 pub const HTTP_UPGRADE: &[u8] =
     b"POST /mesh/payment/v3 HTTP/1.1\r\nHost: mesh\r\nContent-Length: 0\r\n\r\n";
 

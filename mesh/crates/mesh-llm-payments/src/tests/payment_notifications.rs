@@ -405,11 +405,13 @@ async fn metered_invoice_expiries_are_chosen_by_the_host_not_the_wallet() -> Res
     let pricing = Pricing {
         input_msat_per_million: 100_000_000,
         output_msat_per_million: 100_000_000,
+        cache_discount_percent: 0,
     };
     service.ledger.set_pricing("m", Some(&pricing))?;
     // A deposit is an input-side invoice: short-lived.
     let admitted = service
         .serve_admit(mesh_llm_payments_types::contract::ServeAdmitRequest {
+            billing_revision: mesh_llm_payments_types::contract::BillingRevision::V3,
             request_id: "served".into(),
             buyer: "peer".into(),
             model: "m".into(),
@@ -436,6 +438,7 @@ async fn metered_invoice_expiries_are_chosen_by_the_host_not_the_wallet() -> Res
         MeteredOutcome::Usage(MeteredUsage {
             prompt_tokens: 10,
             completion_tokens: 10,
+            cached_tokens: 0,
         }),
     )?;
     let bill = service.serve_recover("trusted").await?;

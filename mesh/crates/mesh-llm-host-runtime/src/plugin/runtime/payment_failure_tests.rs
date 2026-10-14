@@ -17,6 +17,7 @@ async fn failed_payments_provider_must_not_make_a_priced_model_free() -> Result<
         Some(&Pricing {
             input_msat_per_million: 1_000_000,
             output_msat_per_million: 1_000_000,
+            cache_discount_percent: 0,
         }),
     )?;
     let _payments = Payments::attach_for_tests(&node, service).await?;

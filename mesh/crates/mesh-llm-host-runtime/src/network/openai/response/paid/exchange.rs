@@ -152,6 +152,7 @@ async fn approve(
     cancellation: &mut tokio::sync::watch::Receiver<bool>,
 ) -> Result<()> {
     let accept = AcceptAdmissionRequest {
+        billing_revision: mesh_llm_payments_types::contract::BillingRevision::V3,
         terms: local.clone(),
         admission: terms.clone(),
     };

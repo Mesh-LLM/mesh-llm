@@ -11,6 +11,7 @@ fn rates() -> Pricing {
     Pricing {
         input_msat_per_million: 10_000_000,
         output_msat_per_million: 10_000_000,
+        cache_discount_percent: 0,
     }
 }
 
@@ -18,6 +19,7 @@ fn usage(prompt: u64, completion: u64) -> MeteredOutcome {
     MeteredOutcome::Usage(MeteredUsage {
         prompt_tokens: prompt,
         completion_tokens: completion,
+        cached_tokens: 0,
     })
 }
 
@@ -109,15 +111,29 @@ fn covering_deposit_means_no_final_invoice_and_no_refund() {
     let (_d, l) = open();
     admit(&l, "a", true).unwrap();
     record(&l, "a", 0, 1, 1000, true);
-    let s = l.metered_finalize("a", usage(100, 40)).unwrap();
+    let s = l.metered_finalize("a", usage(60, 40)).unwrap();
     assert_eq!(
         (s.status, s.bill_msat, s.deposit_paid_msat, s.remaining_msat),
-        (MeteredStatus::Settled, Some(1400), 1000, 0)
+        (MeteredStatus::Settled, Some(1000), 1000, 0)
     );
     // Nothing is carried to the next request.
     admit(&l, "b", false).unwrap();
     let s = l.metered_finalize("b", usage(100, 100)).unwrap();
     assert_eq!((s.deposit_paid_msat, s.remaining_msat), (0, 2000));
+}
+
+#[test]
+fn every_positive_sub_sat_remainder_gets_a_final_invoice() {
+    let (_d, l) = open();
+    admit(&l, "small", false).unwrap();
+    let s = l.metered_finalize("small", usage(1, 0)).unwrap();
+    assert_eq!((s.bill_msat, s.remaining_msat), (Some(10), 1000));
+    assert_eq!(s.status, MeteredStatus::Billed);
+    admit(&l, "deposit", true).unwrap();
+    record(&l, "deposit", 0, 80, 1000, true);
+    let s = l.metered_finalize("deposit", usage(100, 1)).unwrap();
+    assert_eq!((s.bill_msat, s.remaining_msat), (Some(1010), 1000));
+    assert_eq!(s.status, MeteredStatus::Billed);
 }
 
 #[test]
@@ -180,6 +196,7 @@ fn admission_identity_is_the_exact_terms() {
     let low = Pricing {
         input_msat_per_million: 1,
         output_msat_per_million: 1,
+        cache_discount_percent: 0,
     };
     let mk = |require_deposit| MeteredRequest {
         id: "low",

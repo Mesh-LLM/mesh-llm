@@ -119,6 +119,22 @@ pub fn payments_plugin(
 
 fn operation_router(source: ServiceSource, prices: AdvertisedPrices) -> OperationRouter {
     let mut router = OperationRouter::new();
+    router.add_raw(
+        operation_with_schema(
+            ops::BILLING_FEATURES,
+            "Supported billing extensions.",
+            serde_json::Map::new(),
+        ),
+        |_request, _context| {
+            Box::pin(async {
+                op_result(Ok(mesh_llm_payments_types::contract::BillingFeatures {
+                    cache_discount: true,
+                    positive_remainder_floor: true,
+                }))
+            })
+        },
+    );
+
     // Answered from the host-supplied price read, so a node that has never had
     // payments state advertises nothing without opening an engine.
     {

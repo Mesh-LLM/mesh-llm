@@ -2,10 +2,16 @@
 use anyhow::{Result, ensure};
 use rusqlite::Connection;
 
-/// 1: first versioned schema. 2: `serving_accounting.forgiven`. 3: token-metered
-/// seller tables (`metered_requests`, `metered_invoices`) replace the
-/// fixed-allowance `receivables`/`serving_*` accounting, which is dropped.
-const VERSION: u32 = 3;
+mod draft_schema;
+
+/// 1: first versioned schema. 2: `serving_accounting.forgiven`.
+/// 3: unreleased token-metered drafts; seller table shapes varied.
+/// 4: canonical metered tables, preserving compatible draft accounting and
+/// rejecting populated incompatible drafts. Retired fixed-allowance seller
+/// accounting is dropped; buyer records and budget reservations are retained.
+/// 5: cached-input billing and the positive-remainder floor. Unversioned
+/// draft metered records cannot be safely assigned these semantics.
+const VERSION: u32 = 5;
 
 /// Seller-side tables of the retired fixed-allowance protocol. Their debt was
 /// recorded under a protocol no peer can settle any more, so it is dropped
@@ -25,8 +31,7 @@ pub(super) fn initialize(connection: &mut Connection) -> Result<()> {
     )?;
     if version < VERSION {
         let transaction = connection.transaction()?;
-        // Version 3 tables are `IF NOT EXISTS`, so the schema is safe to apply
-        // on top of a version 0-2 ledger.
+        draft_schema::adopt(&transaction)?;
         transaction.execute_batch(include_str!("schema.sql"))?;
         transaction.execute_batch(LEGACY_TABLES)?;
         transaction.pragma_update(None, "user_version", VERSION)?;
@@ -36,10 +41,13 @@ pub(super) fn initialize(connection: &mut Connection) -> Result<()> {
 }
 
 #[cfg(test)]
+mod upgrade_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
-    fn has_table(connection: &Connection, table: &str) -> bool {
+    pub(super) fn has_table(connection: &Connection, table: &str) -> bool {
         connection
             .query_row(
                 "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name=?)",

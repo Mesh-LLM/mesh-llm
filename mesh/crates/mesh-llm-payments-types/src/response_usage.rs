@@ -153,12 +153,15 @@ impl ResponseUsage {
             if self.data == b"[DONE]" {
                 self.stream_done = true;
             }
-            if let Ok(value) = serde_json::from_slice(&self.data)
-                && let Some(usage) = MeteredUsage::from_response(&value)
+            if let Ok(value) = serde_json::from_slice::<serde_json::Value>(&self.data)
+                && value.get("usage").is_some_and(|usage| !usage.is_null())
             {
+                let usage = MeteredUsage::from_response(&value)
+                    .ok_or_else(|| anyhow::anyhow!("invalid backend usage report"))?;
                 if let Some(previous) = self.usage {
                     ensure!(
                         usage.prompt_tokens == previous.prompt_tokens
+                            && usage.cached_tokens == previous.cached_tokens
                             && usage.completion_tokens >= previous.completion_tokens,
                         "backend usage changed inconsistently"
                     );
@@ -242,6 +245,7 @@ mod tests {
         let expected = Some(MeteredUsage {
             prompt_tokens: 12,
             completion_tokens: 7,
+            cached_tokens: 0,
         });
         assert_eq!(json.usage(), None);
         json.finish();
@@ -261,6 +265,58 @@ mod tests {
     }
 
     #[test]
+    fn cached_usage_survives_json_and_sse_and_inconsistent_reports_fail() {
+        let body = r#"{"usage":{"prompt_tokens":12,"completion_tokens":7,"prompt_tokens_details":{"cached_tokens":8}}}"#;
+        let mut json = ResponseUsage::default();
+        json.observe(
+            format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{body}").as_bytes(),
+        );
+        json.finish();
+        let expected = Some(MeteredUsage {
+            prompt_tokens: 12,
+            completion_tokens: 7,
+            cached_tokens: 8,
+        });
+        assert_eq!(json.usage(), expected);
+        let mut sse = ResponseUsage::default();
+        sse.observe(
+            format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\r\ndata: {body}\n\n")
+                .as_bytes(),
+        );
+        assert_eq!(sse.usage(), expected);
+        sse.observe(
+            format!(
+                "data: {}\n\n",
+                body.replace("cached_tokens\":8", "cached_tokens\":9")
+            )
+            .as_bytes(),
+        );
+        assert_eq!(sse.evidence(), ResponseEvidence::Missing);
+    }
+
+    #[test]
+    fn malformed_final_usage_discards_previous_evidence_permanently() {
+        for details in [
+            r#"{"cached_tokens":13}"#,
+            r#"{"cached_tokens":-1}"#,
+            r#"{"cached_tokens":"8"}"#,
+            r#"[]"#,
+        ] {
+            let mut sse = ResponseUsage::default();
+            sse.observe(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\r\ndata: {\"usage\":{\"prompt_tokens\":12,\"completion_tokens\":7,\"prompt_tokens_details\":{\"cached_tokens\":8}}}\n\n");
+            assert!(sse.usage().is_some());
+            // Null usage on ordinary delta chunks is not malformed evidence.
+            sse.observe(b"data: {\"usage\":null,\"choices\":[]}\n\n");
+            assert!(sse.usage().is_some());
+            sse.observe(format!("data: {{\"usage\":{{\"prompt_tokens\":12,\"completion_tokens\":7,\"prompt_tokens_details\":{details}}}}}\n\n").as_bytes());
+            sse.observe(b"data: [DONE]\n\n");
+            sse.finish();
+            assert_eq!(sse.evidence(), ResponseEvidence::Missing);
+            assert_eq!(sse.interrupted_evidence(), ResponseEvidence::Missing);
+        }
+    }
+
+    #[test]
     fn missing_partial_and_reasoning_chunks_are_not_token_counts() {
         let mut usage = ResponseUsage::default();
         usage.observe(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\r\ndata: {\"choices\":[{\"delta\":{\"content\":\"hello\"}}]}\n\ndata: {\"usage\":{\"prompt_tokens\":4,\"completion_tokens\":9}}");
@@ -270,7 +326,8 @@ mod tests {
             usage.usage(),
             Some(MeteredUsage {
                 prompt_tokens: 4,
-                completion_tokens: 9
+                completion_tokens: 9,
+                cached_tokens: 0,
             })
         );
         usage.observe(b"data: {\"usage\":{\"prompt_tokens\":4,\"completion_tokens\":8}}\n\n");
@@ -293,6 +350,7 @@ mod tests {
             ResponseEvidence::Reported(MeteredUsage {
                 prompt_tokens: 4,
                 completion_tokens: 9,
+                cached_tokens: 0,
             })
         );
         usage.observe(b"data: {\"usage\":{\"prompt_tokens\":4,\"completion_tokens\":10}}\n\n");

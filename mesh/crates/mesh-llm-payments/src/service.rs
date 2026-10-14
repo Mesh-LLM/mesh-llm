@@ -77,6 +77,7 @@ impl PaymentService {
         fs2::FileExt::try_lock_exclusive(&process_lock)
             .context("payment service is already running; use its local API")?;
         ledger.close_interrupted_metered()?;
+        ledger.fail_unsubmitted_legacy_input_charges()?;
         ledger.close_abandoned_approvals()?;
         ledger.finalize_terminal_requests()?;
         Ok(Self {

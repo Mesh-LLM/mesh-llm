@@ -30,7 +30,11 @@ impl PaymentService {
     /// cap and are approved against policy and the daily budget; `admission` is pinned so every later payment of
     /// the request is checked against what the seller stated here.
     pub async fn accept_admission(&self, request: AcceptAdmissionRequest) -> Result<()> {
-        let AcceptAdmissionRequest { terms, admission } = request;
+        let AcceptAdmissionRequest {
+            terms,
+            admission,
+            billing_revision: _,
+        } = request;
         ensure!(
             admission.id == terms.id
                 && admission.model == terms.model
@@ -96,11 +100,14 @@ impl PaymentService {
             bill <= terms.max_total_msat,
             "bill exceeds the approved cap"
         );
+        // A cold admission cannot produce usage until the seller has received
+        // its deposit. Require its full credit even if the buyer's wallet has
+        // not yet observed that receipt; never pay the same principal twice.
         ensure!(
-            deposit_applied_msat <= admission.deposit_msat && deposit_applied_msat <= bill,
+            deposit_applied_msat == admission.deposit_msat.min(bill),
             "invalid deposit application"
         );
-        // Exact remainder; below 500 msat is free, 500..999 msat is 1 sat.
+        // Exact remainder; every positive sub-sat remainder is raised to 1 sat.
         let remaining = final_invoice_msat(bill, deposit_applied_msat);
         let payment = match invoice {
             Some(invoice) => {
@@ -170,7 +177,14 @@ impl PaymentService {
             invoice.amount_msat == Some(amount),
             "invoice amount does not match the admission"
         );
-        invoice.validate_payment(amount, crate::now_ms())?;
+        ensure!(
+            invoice == Invoice::parse(&invoice.bolt11)?,
+            "invoice metadata mismatch"
+        );
+        // Expiry gates new submissions, not observation of a payment already
+        // made. prepare_charge pins the exact stored invoice/amount/cap before
+        // start_or_observe_charge consults wallet history. Both paths validate
+        // expiry before submitting a new payment.
         self.pin_payee(id, &invoice.payee).await?;
         let payment = self
             .pay_charge(&Charge {

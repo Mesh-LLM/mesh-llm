@@ -31,6 +31,7 @@ impl PaymentService {
     /// finalized is reported as replayed: never a second dispatch.
     pub async fn serve_admit(&self, request: ServeAdmitRequest) -> Result<ServeAdmitResponse> {
         let ServeAdmitRequest {
+            billing_revision: _,
             request_id,
             buyer,
             model,

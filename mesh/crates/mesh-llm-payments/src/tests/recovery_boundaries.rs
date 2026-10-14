@@ -1,11 +1,11 @@
 use super::*;
 #[tokio::test]
 async fn startup_releases_approvals_that_never_reached_the_wallet() -> Result<()> {
-    // Released: an approval with no charge at all. Retained: any prepared or
-    // pending charge, which reconciliation settles or fails.
+    // Empty and unsubmitted legacy input approvals are released. Submitted
+    // input and delivered output remain reserved for reconciliation.
     for (segment, state, released) in [
         (0, "absent", true),
-        (0, "prepared", false),
+        (0, "prepared", true),
         (0, "pending", false),
         (1, "prepared", false),
         (1, "pending", false),

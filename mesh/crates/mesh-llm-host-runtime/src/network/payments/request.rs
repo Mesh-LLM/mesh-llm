@@ -297,7 +297,8 @@ mod tests {
             collector.evidence(),
             ResponseEvidence::Reported(MeteredUsage {
                 prompt_tokens: 5,
-                completion_tokens: 2
+                completion_tokens: 2,
+                cached_tokens: 0,
             })
         );
         backend.await.unwrap();

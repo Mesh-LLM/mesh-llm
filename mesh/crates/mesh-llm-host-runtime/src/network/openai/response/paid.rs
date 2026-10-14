@@ -453,6 +453,7 @@ mod tests {
                 Pricing {
                     input_msat_per_million: 1,
                     output_msat_per_million: 1,
+                    cache_discount_percent: 0,
                 },
                 RouteAttemptLoggingContext {
                     exchange_id: None,

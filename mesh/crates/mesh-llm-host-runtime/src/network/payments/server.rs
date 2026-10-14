@@ -133,6 +133,7 @@ async fn admit(
         .call(
             ops::SERVE_ADMIT,
             &ServeAdmitRequest {
+                billing_revision: mesh_llm_payments_types::contract::BillingRevision::V3,
                 request_id: id.clone(),
                 buyer: peer.clone(),
                 model: model.clone(),
@@ -490,7 +491,8 @@ mod tests {
             usage,
             Some(MeteredUsage {
                 prompt_tokens: 5,
-                completion_tokens: 2
+                completion_tokens: 2,
+                cached_tokens: 0,
             })
         );
     }
@@ -538,6 +540,7 @@ mod tests {
             usage: MeteredUsage {
                 prompt_tokens: 1,
                 completion_tokens: 1,
+                cached_tokens: 0,
             },
             bill_msat: 10,
             deposit_msat: 30,

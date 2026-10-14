@@ -232,6 +232,7 @@ mod tests {
             Pricing {
                 input_msat_per_million: 1,
                 output_msat_per_million: 1,
+                cache_discount_percent: 0,
             },
         );
         node.add_peer_after_direct_requirements_validated(
@@ -335,6 +336,7 @@ mod tests {
         let price = Pricing {
             input_msat_per_million: 1,
             output_msat_per_million: 1,
+            cache_discount_percent: 0,
         };
         let mut prices = std::collections::HashMap::from([(bad, price.clone()), (good, price)]);
         let mut candidates = RankedCandidates {

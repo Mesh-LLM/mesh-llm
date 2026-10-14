@@ -4,8 +4,8 @@
 //! → `billed` (backend-reported usage priced at the admitted rates, deposit
 //! applied, remainder on one final invoice) or `abandoned` (no usage, no bill,
 //! no debt). There are no reservations, exposure sums or credits: the deposit
-//! is a flat 1 sat applied to the bill, a remainder under 500 msat
-//! means no second invoice, and nothing is refunded or carried forward.
+//! is a flat 1 sat applied to the bill; every positive remainder has a 1 sat
+//! payment floor, and nothing is refunded or carried forward.
 //!
 //! The deposit and final invoices live in `metered_invoices`
 //! ([`super::metered_invoices`]). A buyer is blocked only by [`STRIKE_LIMIT`]

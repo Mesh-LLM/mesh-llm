@@ -13,8 +13,31 @@ use crate::terms::RequestTerms;
 /// Capability name the host resolves the payments engine by.
 pub const CAPABILITY: &str = "payments.v1";
 
+/// Billing semantics explicitly selected by the host for a new admission.
+/// No default: old hosts and unknown revisions must fail before opening the
+/// provider or creating authorization/invoices. Feature negotiation separately
+/// protects new hosts from old providers that ignore unknown request fields.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum BillingRevision {
+    /// Cached-input discounts and the positive final-remainder floor.
+    #[serde(rename = "v3")]
+    V3,
+}
+
+/// Optional extensions understood by a payments engine. Missing means unsupported.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
+pub struct BillingFeatures {
+    #[serde(default)]
+    pub cache_discount: bool,
+    /// Positive final remainders below one sat are raised to one sat.
+    #[serde(default)]
+    pub positive_remainder_floor: bool,
+}
+
 /// Operation names.
 pub mod ops {
+    /// Optional, ledger-free billing feature negotiation; old providers may reject it.
+    pub const BILLING_FEATURES: &str = "billing_features";
     /// Run one local operator command (the `/api/wallet` surface).
     pub const CONTROL: &str = "control";
     /// Advertised seller prices, and whether the provider has payments state.
@@ -86,7 +109,12 @@ pub const BOOKKEEPING_DEADLINE: Duration = Duration::from_secs(10);
 pub fn deadline(operation: &str) -> Option<Duration> {
     matches!(
         operation,
-        ops::PRICING | ops::FINISH | ops::PAYMENT_INTENT | ops::CANCEL | ops::SERVE_ABANDON
+        ops::BILLING_FEATURES
+            | ops::PRICING
+            | ops::FINISH
+            | ops::PAYMENT_INTENT
+            | ops::CANCEL
+            | ops::SERVE_ABANDON
     )
     .then_some(BOOKKEEPING_DEADLINE)
 }
@@ -168,6 +196,7 @@ pub struct IdRequest {
 /// seller stated and what every payment of the request is checked against.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AcceptAdmissionRequest {
+    pub billing_revision: BillingRevision,
     pub terms: RequestTerms,
     pub admission: crate::metered_wire::AdmissionTerms,
 }
@@ -199,6 +228,7 @@ pub struct PayDepositRequest {
 /// request identifier; it doubles as the bearer recovery capability.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ServeAdmitRequest {
+    pub billing_revision: BillingRevision,
     pub request_id: String,
     /// Authenticated mesh endpoint ID of the buyer.
     pub buyer: String,
@@ -317,6 +347,7 @@ mod tests {
     /// Every operation the host may invoke, so a new one cannot ship without
     /// being classified as bounded or as a wallet wait.
     const ALL_OPS: &[&str] = &[
+        ops::BILLING_FEATURES,
         ops::CONTROL,
         ops::PRICING,
         ops::ROUTING_BUDGET,
@@ -346,6 +377,7 @@ mod tests {
         assert_eq!(
             bounded,
             [
+                ops::BILLING_FEATURES,
                 ops::PRICING,
                 ops::FINISH,
                 ops::PAYMENT_INTENT,

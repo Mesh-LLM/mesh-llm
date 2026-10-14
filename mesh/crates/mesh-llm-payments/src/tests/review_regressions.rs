@@ -186,6 +186,7 @@ async fn prepared_wallet_send_survives_reopen() -> Result<()> {
             pricing: Pricing {
                 input_msat_per_million: 1,
                 output_msat_per_million: 1,
+                cache_discount_percent: 0,
             },
             max_output_tokens: 1,
             max_total_msat: 200,

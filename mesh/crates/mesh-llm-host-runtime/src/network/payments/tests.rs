@@ -22,6 +22,7 @@ use crate::{
     mesh::{Node, NodeRole},
 };
 
+mod compatibility;
 mod forwarding;
 mod handoff;
 mod metered;
@@ -216,6 +217,7 @@ fn price() -> Pricing {
     Pricing {
         input_msat_per_million: 100_000_000,
         output_msat_per_million: 100_000_000,
+        cache_discount_percent: 0,
     }
 }
 

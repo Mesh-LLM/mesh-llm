@@ -12,6 +12,7 @@ fn pricing() -> Pricing {
     Pricing {
         input_msat_per_million: 100_000_000,
         output_msat_per_million: 100_000_000,
+        cache_discount_percent: 0,
     }
 }
 
@@ -33,6 +34,7 @@ pub(super) fn unpaid_final(
         MeteredOutcome::Usage(MeteredUsage {
             prompt_tokens: 50,
             completion_tokens: 50,
+            cached_tokens: 0,
         }),
     )?;
     let invoice = invoice(n, 10_000);

@@ -100,6 +100,7 @@ mod tests {
                     mesh_llm_payments_types::pricing::Pricing {
                         input_msat_per_million: 10,
                         output_msat_per_million: 20,
+                        cache_discount_percent: 0,
                     },
                 );
             }
@@ -188,6 +189,7 @@ mod tests {
             mesh_llm_payments_types::pricing::Pricing {
                 input_msat_per_million: 10,
                 output_msat_per_million: 20,
+                cache_discount_percent: 0,
             },
         );
         node.add_peer_after_direct_requirements_validated(
@@ -220,6 +222,7 @@ mod tests {
         let price = mesh_llm_payments_types::pricing::Pricing {
             input_msat_per_million: 10,
             output_msat_per_million: 20,
+            cache_discount_percent: 0,
         };
         let free = offer("free", None, Some(3), false);
         let paid = offer("paid", Some(&price), Some(1), false);

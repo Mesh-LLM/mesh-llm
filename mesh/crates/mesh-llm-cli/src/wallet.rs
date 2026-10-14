@@ -58,6 +58,10 @@ pub enum WalletCommand {
         input_msat_per_million: Option<u64>,
         #[arg(long, requires_all = ["model", "input_msat_per_million"], conflicts_with = "free")]
         output_msat_per_million: Option<u64>,
+        /// Discount reported cached input by this percentage (0 disables it).
+        /// Without rates, update the model's existing price without resetting it.
+        #[arg(long, requires = "model", conflicts_with = "free", value_parser = clap::value_parser!(u8).range(0..=100))]
+        cache_discount_percent: Option<u8>,
         #[arg(long, requires = "model")]
         free: bool,
     },

@@ -200,6 +200,7 @@ async fn refusing_seller(buyer: &Node, attempts: Arc<AtomicUsize>) -> Result<(No
         Pricing {
             input_msat_per_million: 500_000,
             output_msat_per_million: 500_000,
+            cache_discount_percent: 0,
         },
     );
     buyer

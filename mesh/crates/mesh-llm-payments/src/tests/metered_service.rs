@@ -15,6 +15,7 @@ fn rates() -> Pricing {
     Pricing {
         input_msat_per_million: 10_000_000,
         output_msat_per_million: 10_000_000,
+        cache_discount_percent: 0,
     }
 }
 
@@ -26,6 +27,7 @@ fn open(dir: &std::path::Path, wallet: Arc<MockWallet>) -> Arc<PaymentService> {
 
 fn admit(id: &str, buyer: &str) -> ServeAdmitRequest {
     ServeAdmitRequest {
+        billing_revision: mesh_llm_payments_types::contract::BillingRevision::V3,
         request_id: id.into(),
         buyer: buyer.into(),
         model: MODEL.into(),
@@ -37,6 +39,7 @@ fn usage(prompt_tokens: u64, completion_tokens: u64) -> MeteredUsage {
     MeteredUsage {
         prompt_tokens,
         completion_tokens,
+        cached_tokens: 0,
     }
 }
 
@@ -174,7 +177,7 @@ async fn covering_deposit_means_no_final_invoice_and_abandonment_keeps_the_depos
     let deposit = deposit_invoice(&service.serve_admit(admit("c", "peer")).await.unwrap());
     received(&wallet, &deposit);
     service.serve_deposit_confirmed("c").await.unwrap();
-    let bill = service.serve_settle(settle("c", 100, 40)).await.unwrap();
+    let bill = service.serve_settle(settle("c", 60, 40)).await.unwrap();
     assert_eq!(
         (
             bill.bill_msat,
@@ -182,7 +185,7 @@ async fn covering_deposit_means_no_final_invoice_and_abandonment_keeps_the_depos
             bill.remaining_msat,
             bill.settled
         ),
-        (1400, 1000, 0, true)
+        (1000, 1000, 0, true)
     );
     assert!(bill.invoice.is_none(), "nothing owed, nothing refunded");
     assert_eq!(wallet.invoice_expiries.lock().unwrap().len(), 1);
@@ -462,4 +465,23 @@ async fn expired_nonpayment_survives_restart_without_revoking_reearned_trust() {
         .unwrap();
     assert!(service.metered_trusted("peer").await.unwrap());
     assert_eq!(service.ledger.metered_unpaid_finals("peer").unwrap(), 0);
+}
+
+#[tokio::test]
+async fn buyer_that_dropped_discount_is_refused_before_deposit() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let wallet = Arc::new(MockWallet::default());
+    let service = open(dir.path(), wallet.clone());
+    let mut price = rates();
+    price.cache_discount_percent = 50;
+    service.ledger.set_pricing(MODEL, Some(&price))?;
+    assert!(
+        service
+            .serve_admit(admit("old-buyer", "peer"))
+            .await
+            .is_err()
+    );
+    assert!(service.ledger.metered_owner("old-buyer")?.is_none());
+    assert_eq!(wallet.calls.load(Ordering::SeqCst), 0);
+    Ok(())
 }

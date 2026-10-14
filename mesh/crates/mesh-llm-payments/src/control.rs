@@ -65,6 +65,14 @@ impl PaymentService {
                 self.ledger.policy_status(crate::now_ms())
             }
             ControlCommand::Pricing => Ok(serde_json::to_value(self.ledger.pricing()?)?),
+            ControlCommand::SetCacheDiscount { model, percent } => {
+                let mut pricing = self.ledger.pricing()?.remove(&model).ok_or_else(|| {
+                    anyhow::anyhow!("set model input/output rates before a cache discount")
+                })?;
+                pricing.cache_discount_percent = percent;
+                self.ledger.set_pricing(&model, Some(&pricing))?;
+                Ok(serde_json::to_value(self.ledger.pricing()?)?)
+            }
             ControlCommand::SetPricing { model, value } => {
                 self.ledger.set_pricing(&model, value.as_ref())?;
                 Ok(serde_json::to_value(self.ledger.pricing()?)?)
@@ -154,6 +162,7 @@ impl PaymentService {
             pricing: Pricing {
                 input_msat_per_million: 1,
                 output_msat_per_million: 1,
+                cache_discount_percent: 0,
             },
             max_output_tokens: 1,
             max_total_msat: cap,

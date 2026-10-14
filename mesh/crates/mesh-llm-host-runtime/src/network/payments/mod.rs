@@ -22,8 +22,8 @@ pub(crate) fn is_payment_upgrade(prefix: &[u8]) -> bool {
     prefix.starts_with(b"POST /mesh/payment/v3 HTTP/1.1\r\n")
 }
 
-/// v1 and v2 payers speak fixed-allowance protocols this seller no longer
-/// serves. Both still parse the v2 frame format's `Error` frame.
+/// Retired fixed-allowance (v1/v2) protocols.
+/// All parse the same length-prefixed JSON `Error` frame.
 pub(crate) fn is_legacy_payment_upgrade(prefix: &[u8]) -> bool {
     prefix.starts_with(mesh_llm_payments_types::wire::LEGACY_V1_UPGRADE_PREFIX)
         || prefix.starts_with(b"POST /mesh/payment/v2 HTTP/1.1\r\n")
@@ -39,6 +39,7 @@ mod upgrade_tests {
         assert!(is_payment_upgrade(current));
         assert!(!is_legacy_payment_upgrade(current));
         let v2 = mesh_llm_payments_types::wire::HTTP_UPGRADE;
+
         assert!(!is_payment_upgrade(v2));
         assert!(is_legacy_payment_upgrade(v2));
         let v1 = b"POST /mesh/payment/v1 HTTP/1.1\r\nHost: mesh\r\nContent-Length: 0\r\n\r\n";
@@ -96,7 +97,7 @@ pub(crate) async fn intercept_inbound(
         return Ok(Inbound::Handled);
     }
     if is_legacy_payment_upgrade(&prefix) {
-        // v1 (<= v0.78.x) and v2 payers speak fixed-allowance protocols.
+        // Retired fixed-allowance and half-up metered protocols.
         // Refuse in the frame format they still parse, before any payment
         // state exists.
         let mut send = quic_send;

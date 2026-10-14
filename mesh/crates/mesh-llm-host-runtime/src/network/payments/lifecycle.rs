@@ -353,6 +353,7 @@ mod tests {
             pricing: mesh_llm_payments_types::pricing::Pricing {
                 input_msat_per_million: 1000,
                 output_msat_per_million: 2000,
+                cache_discount_percent: 0,
             },
             deposit_msat: 3,
         }
