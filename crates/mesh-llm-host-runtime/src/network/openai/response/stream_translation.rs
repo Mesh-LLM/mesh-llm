@@ -215,6 +215,92 @@ impl ResponsesStreamRelayState {
     }
 }
 
+/// Hold an intermediate billing watermark until the stream ends. A usage-only
+/// chunk in the middle of tool arguments looks terminal to some OpenAI clients.
+fn hold_usage_frame(data: &str, pending: &mut Option<String>) -> bool {
+    let usage_only = serde_json::from_str::<serde_json::Value>(data).is_ok_and(|value| {
+        value
+            .get("choices")
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(Vec::is_empty)
+            && value.get("usage").is_some_and(serde_json::Value::is_object)
+            && value.get("error").is_none()
+    });
+    if usage_only {
+        *pending = Some(data.to_owned());
+    } else if !is_finish_frame(data) {
+        *pending = None;
+    }
+    usage_only
+}
+
+fn is_finish_frame(data: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(data).is_ok_and(|value| {
+        value
+            .get("choices")
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|choices| {
+                !choices.is_empty()
+                    && choices.iter().all(|choice| {
+                        choice
+                            .get("finish_reason")
+                            .is_some_and(serde_json::Value::is_string)
+                    })
+            })
+    })
+}
+
+fn normalized_frame_data(frame: &str) -> Option<String> {
+    let lines = frame
+        .lines()
+        .filter_map(|line| line.strip_prefix("data:"))
+        .map(str::trim_start)
+        .collect::<Vec<_>>();
+    let data = lines.join("\n");
+    (!data.trim().is_empty()).then_some(data)
+}
+
+fn observe_normalized_progress(
+    observer: OpenAiRouteObserver<'_>,
+    errored: bool,
+    first_chunk_seen: &mut bool,
+) {
+    if errored {
+        return;
+    }
+    if *first_chunk_seen {
+        observer.stream_chunk();
+    } else {
+        observer.stream_first_token();
+        *first_chunk_seen = true;
+    }
+}
+
+async fn flush_pending_usage(
+    client: &mut ClientStream,
+    capture: &mut Option<OpenAiStreamArtifactCapture>,
+    pending: &mut Option<String>,
+) -> Result<()> {
+    if let Some(data) = pending.take() {
+        write_captured_sse_event(client, capture, None, &data).await?;
+    }
+    Ok(())
+}
+
+async fn observe_normalized_error(
+    data: &str,
+    errored: &mut bool,
+    client: &mut ClientStream,
+    capture: &mut Option<OpenAiStreamArtifactCapture>,
+    pending_usage: &mut Option<String>,
+) -> Result<()> {
+    if !*errored && sse_data_frame_is_openai_error(data) {
+        *errored = true;
+        flush_pending_usage(client, capture, pending_usage).await?;
+    }
+    Ok(())
+}
+
 /// Relay a streaming chat-completions upstream response, normalizing tool-call ids.
 pub(in crate::network::openai::response) async fn relay_normalized_chat_completion_stream<
     R: AsyncRead + Unpin,
@@ -254,6 +340,7 @@ pub(in crate::network::openai::response) async fn relay_normalized_chat_completi
     let mut state = ChatStreamNormalizationState::default();
     let mut assembly = StreamedChatAssembly::default();
     let mut observed_usage = None;
+    let mut pending_usage = None;
     let mut observed_cache_cost = None;
     let mut header = String::from(
         "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\nCache-Control: no-cache\r\n",
@@ -278,27 +365,26 @@ pub(in crate::network::openai::response) async fn relay_normalized_chat_completi
             let frame_end = processed + frame_end_rel;
             let frame = &carry[processed..frame_end];
             processed = frame_end + 2;
-            let data_lines = frame
-                .lines()
-                .filter_map(|line| line.strip_prefix("data:"))
-                .map(str::trim_start)
-                .collect::<Vec<_>>();
-            if data_lines.is_empty() {
+            let Some(data) = normalized_frame_data(frame) else {
                 continue;
-            }
-            let data = data_lines.join("\n");
+            };
             if data == "[DONE]" {
                 done_seen = true;
+                flush_pending_usage(tcp_stream, &mut response_capture, &mut pending_usage).await?;
                 write_captured_sse_event(tcp_stream, &mut response_capture, None, "[DONE]").await?;
                 break;
             }
 
-            if !upstream_error_seen && sse_data_frame_is_openai_error(&data) {
-                // The upstream backend frames failures as OpenAI error bodies
-                // inside a 200 stream. Relay the frame untouched, but do not
-                // let it count as stream progress or terminal success.
-                upstream_error_seen = true;
-            }
+            // An embedded error ends successful stream accounting, but its
+            // frame still reaches the client after any pending usage.
+            observe_normalized_error(
+                &data,
+                &mut upstream_error_seen,
+                tcp_stream,
+                &mut response_capture,
+                &mut pending_usage,
+            )
+            .await?;
             if let Some(usage) = parse_token_usage_from_json_body(data.as_bytes()) {
                 observed_usage = Some(usage);
             }
@@ -306,16 +392,11 @@ pub(in crate::network::openai::response) async fn relay_normalized_chat_completi
                 observed_cache_cost.or_else(|| parse_cache_cost_from_json_body(data.as_bytes()));
             let normalized = state.normalize_data(&data);
             assembly.ingest_chunk(&normalized);
-            write_captured_sse_event(tcp_stream, &mut response_capture, None, &normalized).await?;
-            if upstream_error_seen {
+            if hold_usage_frame(&normalized, &mut pending_usage) {
                 continue;
             }
-            if first_chunk_seen {
-                route_observer.stream_chunk();
-            } else {
-                route_observer.stream_first_token();
-                first_chunk_seen = true;
-            }
+            write_captured_sse_event(tcp_stream, &mut response_capture, None, &normalized).await?;
+            observe_normalized_progress(route_observer, upstream_error_seen, &mut first_chunk_seen);
         }
         if processed > 0 {
             carry = carry[processed..].to_string();
@@ -337,6 +418,7 @@ pub(in crate::network::openai::response) async fn relay_normalized_chat_completi
         }
     }
 
+    flush_pending_usage(tcp_stream, &mut response_capture, &mut pending_usage).await?;
     let _ = tcp_stream.write_all(b"0\r\n\r\n").await;
     let _ = tcp_stream.shutdown().await;
     if upstream_error_seen {
@@ -1652,5 +1734,72 @@ data: [DONE]\n\n";
         };
         assert!(chat.response.is_some());
         assert_eq!(responses.response, chat.response);
+    }
+
+    #[test]
+    fn intermediate_usage_watermark_is_replaced_by_final_totals() {
+        let mut pending = None;
+        assert!(hold_usage_frame(
+            r#"{"choices":[],"usage":{"completion_tokens":1}}"#,
+            &mut pending
+        ));
+        assert!(!hold_usage_frame(
+            r#"{"choices":[{"delta":{"tool_calls":[{"function":{"arguments":"more"}}]},"finish_reason":null}]}"#,
+            &mut pending
+        ));
+        assert!(pending.is_none());
+        assert!(hold_usage_frame(
+            r#"{"choices":[],"usage":{"completion_tokens":4}}"#,
+            &mut pending
+        ));
+        assert!(!hold_usage_frame(
+            r#"{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}"#,
+            &mut pending
+        ));
+        assert!(pending.as_ref().unwrap().contains(":4"));
+    }
+
+    #[tokio::test]
+    async fn billing_watermark_does_not_split_tool_arguments_on_wire() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let (mut upstream_writer, mut upstream_reader) = tokio::io::duplex(64 * 1024);
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server_task = tokio::spawn(async move {
+            let (client_socket, _) = listener.accept().await.unwrap();
+            let mut client_socket: ClientStream = client_socket.into();
+            let header = b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\r\n";
+            relay_normalized_chat_completion_stream(
+                &mut client_socket,
+                &mut upstream_reader,
+                ResponseProbe {
+                    buffered: header.to_vec(),
+                    header_end: header.len(),
+                    status_code: 200,
+                    retryable_context_overflow: false,
+                },
+                ResponseRetryPolicy::next_target_available(false),
+                None,
+                OpenAiRouteObserver::default(),
+            )
+            .await
+        });
+
+        upstream_writer.write_all(b"data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"shell\",\"arguments\":\"{\"}}]},\"finish_reason\":null}]}\n\ndata: {\"choices\":[],\"usage\":{\"completion_tokens\":1}}\n\ndata: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"} \"}}]},\"finish_reason\":null}]}\n\ndata: {\"choices\":[],\"usage\":{\"completion_tokens\":4}}\n\ndata: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\ndata: [DONE]\n\n").await.unwrap();
+        upstream_writer.shutdown().await.unwrap();
+
+        let mut client = ClientStream::connect(addr).await.unwrap();
+        let mut output = Vec::new();
+        client.read_to_end(&mut output).await.unwrap();
+        let result = server_task.await.unwrap().unwrap();
+        let wire = String::from_utf8(output).unwrap();
+        assert!(matches!(result, RouteAttemptResult::Delivered { .. }));
+        assert_eq!(wire.matches("\"usage\"").count(), 1);
+        assert!(
+            wire.find("\"finish_reason\":\"tool_calls\"").unwrap()
+                < wire.find("\"usage\"").unwrap()
+        );
+        assert!(wire.find("\"usage\"").unwrap() < wire.find("[DONE]").unwrap());
     }
 }
