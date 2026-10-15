@@ -121,7 +121,17 @@ for a much larger deterministic radix/blob ownership corpus. It uses the
 pinned `public cpu` image, has no secrets, records exact seed/step budgets and
 source SHA, and uploads the reproducible failure log.
 `llama-upstream-canary.yml` runs daily or on trusted-main dispatch. It freezes
-one main source SHA and the upstream target before any hardware work. All
+one main source SHA and the upstream target before any hardware work. Default
+selection uses `repository llama-upstream-release` to resolve GitHub's latest
+published stable `ggml-org/llama.cpp` release, validate its `vMAJOR.MINOR.PATCH`
+tag, and peel annotated tags to an exact commit. It records the release and
+commit in the Actions summary and rejects lookup failures or tag movement
+without falling back to `master`. The hosted selection step alone receives
+the workflow's read-only GitHub token; the lookup has a 120-second total budget.
+An explicit full `upstream_sha` bypasses release lookup; empty or `latest` selects
+the stable release. `mesh_ref` skips upstream selection entirely and retains
+its certify-only contract. This selection policy does not replace our full
+upgrade certification or independent verification. All
 candidate builds compile native tests with `--build-only`, then the generated
 patch checker owns one full native CTest pass after patch equality and
 idempotence checks. The generator's own unit suite remains separate.

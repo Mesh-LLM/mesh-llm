@@ -584,6 +584,18 @@ checked-in expiry are the maintainer-controlled approval boundary.
 
 ## Llama canary family fan-out
 
+Default upstream selection uses GitHub's latest published stable release of
+`ggml-org/llama.cpp`, never an unqualified `master` tip or a `b*` prerelease.
+The hosted resolver validates the release and peels its tag to an exact commit
+before any hardware work. Missing releases, malformed metadata, moved tags or
+API failures stop resolution without a fallback. Record the release tag and
+commit in the run summary. An explicit full `upstream_sha` remains an operator
+override; `mesh_ref` keeps its existing certify-only semantics. Upstream release
+qualification never replaces the complete candidate and independent family
+passes required before publishing an upgrade PR. Only the hosted upstream
+selection step may receive the read-only GitHub token for public upstream API
+reads; workers and repair agents remain credential-free.
+
 Each candidate build owns one complete native CTest pass. The initial native
 build may compile tests without executing them; after fresh annotation
 generation, patch equality and idempotence must pass before rebuilding and

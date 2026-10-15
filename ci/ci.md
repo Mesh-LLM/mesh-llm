@@ -186,7 +186,18 @@ publisher uses Conventional Commit titles. Independent verification in a fresh
 job, as used by the llama canary, remains a follow-up for this older repair path.
 
 `llama-upstream-canary.yml` runs daily or on trusted-main dispatch. It freezes
-one main source SHA and the upstream target before any hardware work. Unchanged
+one main source SHA and the upstream target before any hardware work. The
+default target is GitHub's latest published stable llama.cpp release, resolved
+by the Rust `repository llama-upstream-release` command. The hosted resolver
+rejects drafts, prereleases and non-version tags, peels the release tag to an
+exact commit, and records both tag and SHA in the summary. API errors, missing
+releases and moving tags fail before hardware work; there is no `master`
+fallback. Public API reads use the workflow's read-only token only in that
+selection step, with a 120-second total lookup budget. An explicit full
+`upstream_sha` remains a deliberate override; empty or `latest` means the latest
+stable release. `mesh_ref` bypasses this lookup and certifies its existing pin.
+Release selection does not waive our candidate or independent verification.
+Unchanged
 scheduled/forced runs build once and certify the complete roster. Every
 certification first runs a deterministic immutable-plan and pinned-cache
 preflight. It validates model revision/blob paths, byte sizes and GGUF metadata.

@@ -85,7 +85,7 @@ fn security(controller: &Node, worker: &Node) -> Result<(), String> {
     let jobs = controller.get("jobs").ok_or("controller jobs absent")?;
     for (name, job) in jobs.entries() {
         if name != "publish-certified-canary" {
-            reject_secrets(job)?;
+            reject_nonpublisher_secrets(name, job)?;
         }
         if let Some(permissions) = job.get("permissions")
             && permissions
@@ -107,6 +107,31 @@ fn security(controller: &Node, worker: &Node) -> Result<(), String> {
         }
     }
     Ok(())
+}
+fn reject_nonpublisher_secrets(name: &str, job: &Node) -> Result<(), String> {
+    if name != "resolve" {
+        return reject_secrets(job);
+    }
+    let mut admitted = job.clone();
+    let Node::Seq(items) = change(&mut admitted, &["steps"]) else {
+        return Err("resolver steps missing".into());
+    };
+    for step in items {
+        if step.get("id").and_then(Node::text) == Some("upstream") {
+            let Node::Map(env) = change(step, &["env"]) else {
+                return Err("upstream selection environment missing".into());
+            };
+            let token = env
+                .iter()
+                .position(|(key, _)| key == "GH_TOKEN")
+                .ok_or("upstream selection read-only token missing")?;
+            if env[token].1.text() != Some("${{ github.token }}") {
+                return Err("upstream selection must use the workflow read-only token".into());
+            }
+            env.remove(token);
+        }
+    }
+    reject_secrets(&admitted)
 }
 fn change<'a>(node: &'a mut Node, keys: &[&str]) -> &'a mut Node {
     if let Some((key, tail)) = keys.split_first() {

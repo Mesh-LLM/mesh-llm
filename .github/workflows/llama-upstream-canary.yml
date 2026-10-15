@@ -9,7 +9,7 @@ on:
         type: string
         default: ''
       upstream_sha:
-        description: Optional exact upstream commit (defaults to upstream master)
+        description: Optional exact upstream commit (defaults to latest stable release)
         type: string
         default: ''
       force_certify:
@@ -46,12 +46,25 @@ jobs:
           runner-profile: hosted-bare
           allow_depot_remote_cache: 'false'
           allow_native_github_cache: 'false'
+      - name: Select stable upstream release or explicit commit
+        id: upstream
+        if: ${{ inputs.mesh_ref == '' }}
+        timeout-minutes: 3
+        env:
+          GH_TOKEN: ${{ github.token }}
+          UPSTREAM: ${{ inputs.upstream_sha }}
+        run: |
+          set -euo pipefail
+          "$MESH_LLM_AUTOMATION_BIN" repository llama-upstream-release \
+            --upstream "$UPSTREAM" --github-output "$GITHUB_OUTPUT" \
+            --summary "$GITHUB_STEP_SUMMARY"
       - name: Freeze trusted source and requested upstream
         id: resolve
         env:
           UPSTREAM: ${{ inputs.upstream_sha }}
           FORCE: ${{ inputs.force_certify }}
           MESH_REF: ${{ inputs.mesh_ref }}
+          SELECTED_UPSTREAM: ${{ steps.upstream.outputs.sha }}
         run: |
           set -euo pipefail
           echo "source=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
@@ -71,10 +84,7 @@ jobs:
             exit 1
           fi
           old="$(tr -d '[:space:]' < "${pins[0]}")"
-          upstream="$UPSTREAM"
-          if [[ -z "$upstream" || "$upstream" == latest ]]; then
-            upstream="$(git ls-remote https://github.com/ggml-org/llama.cpp.git master | awk '{print $1}')"
-          fi
+          upstream="$SELECTED_UPSTREAM"
           [[ "$upstream" =~ ^[0-9a-f]{40}$ ]]
           changed=false
           mode=pinned-build

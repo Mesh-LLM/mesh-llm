@@ -79,6 +79,9 @@ pub(crate) fn print_usage() {
     println!("  cargo xtool native package-source-version {{workspace|abi}} SOURCE (experimental)");
     println!("  cargo xtool repository cargo-target-directory < cargo-metadata.json");
     println!(
+        "  cargo xtool repository llama-upstream-release [--upstream SHA] [--github-output PATH --summary PATH]"
+    );
+    println!(
         "  cargo xtool repository publish-order [--dependency-pairs | --selected-script PATH [--source-root ROOT]] < cargo-metadata.json"
     );
     println!("  cargo xtool product attestation-status < inspection.json");
@@ -198,6 +201,7 @@ pub(crate) enum RepositoryCheck {
     ConventionalCommits,
     EnvMutationCensus,
     LlamaUpstreamPin,
+    LlamaUpstreamRelease,
     SelectedRef,
     DockerPrecheck,
 }
@@ -577,6 +581,7 @@ impl<'a> Cli<'a> {
                     "conventional-commits" => RepositoryCheck::ConventionalCommits,
                     "env-mutation-census" => RepositoryCheck::EnvMutationCensus,
                     "llama-upstream-pin" => RepositoryCheck::LlamaUpstreamPin,
+                    "llama-upstream-release" => RepositoryCheck::LlamaUpstreamRelease,
                     "selected-ref" => RepositoryCheck::SelectedRef,
                     "docker-precheck" => RepositoryCheck::DockerPrecheck,
                     _ => return Err(USAGE.into()),
