@@ -1210,6 +1210,36 @@ fn test_parse_hostname_whitespace() {
     assert_eq!(parse_hostname("  carrack  \n"), Some("carrack".to_string()));
 }
 
+/// Set on the child run of `test_detect_hostname_without_hostname_on_path`.
+#[cfg(target_os = "linux")]
+const DETECT_HOSTNAME_CHILD_ENV: &str = "MESH_LLM_TEST_DETECT_HOSTNAME_CHILD";
+
+/// Runs the check in a child test process with an empty `PATH`, so a
+/// `hostname` command can't supply the name; changing `PATH` in this process
+/// would affect tests running in parallel.
+#[cfg(target_os = "linux")]
+#[test]
+fn test_detect_hostname_without_hostname_on_path() {
+    const NAME: &str = "hardware::tests::test_detect_hostname_without_hostname_on_path";
+    if std::env::var_os(DETECT_HOSTNAME_CHILD_ENV).is_some() {
+        let kernel = std::fs::read_to_string("/proc/sys/kernel/hostname").unwrap();
+        assert_eq!(detect_hostname(), parse_hostname(&kernel));
+        return;
+    }
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", NAME, "--test-threads=1"])
+        .env(DETECT_HOSTNAME_CHILD_ENV, "1")
+        .env("PATH", "")
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success() && stdout.contains("1 passed"),
+        "child run failed:\n{stdout}\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
 #[test]
 fn test_parse_windows_video_controller_json_array() {
     let json = r#"[{"Name":"NVIDIA RTX 4090","AdapterRAM":25769803776},{"Name":"AMD Radeon PRO","AdapterRAM":"8589934592"}]"#;

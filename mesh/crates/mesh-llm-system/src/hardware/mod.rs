@@ -233,6 +233,20 @@ struct DefaultCollector;
 ))]
 struct TegraCollector;
 
+/// Reads the host name from the kernel instead of running `hostname`, which
+/// minimal systems (containers, sandboxed services) don't always have on `PATH`.
+#[cfg(unix)]
+fn detect_hostname() -> Option<String> {
+    let mut bytes = [0_u8; 256];
+    // SAFETY: bytes is writable for the exact length passed to libc.
+    if unsafe { libc::gethostname(bytes.as_mut_ptr().cast(), bytes.len()) } != 0 {
+        return None;
+    }
+    let end = bytes.iter().position(|byte| *byte == 0)?;
+    parse_hostname(std::str::from_utf8(&bytes[..end]).ok()?)
+}
+
+#[cfg(not(unix))]
 fn detect_hostname() -> Option<String> {
     let out = std::process::Command::new("hostname").output().ok()?;
     if !out.status.success() {
