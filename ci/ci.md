@@ -1594,6 +1594,14 @@ Full-session replay contract: [configuration and qualification](agentic-replay-n
 
 ## macOS deployment target
 
+Persistent canary preflight, build, family and retry jobs check provisioned tools
+before automation compilation or SDK dependency preparation. Their
+`preinstalled-macos` bootstrap profile skips Rust, Just and Homebrew installers,
+disables Rustup automatic toolchain installation, and fails early with the name
+of a missing prerequisite. Tool provisioning is external to certification.
+The hosted profiles keep their existing installation behavior. Locked SDK
+dependency environments and offline NAS model admission retain their owners.
+
 The shared macOS accelerator action eagerly starts sccache in every cache mode
 on a unique short Unix socket before any compiler probe and exports it to
 subsequent steps. Parallel compiler clients never initialize the new endpoint;

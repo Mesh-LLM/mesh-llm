@@ -750,6 +750,16 @@ endpoint for subsequent steps. Remote cache configuration is preserved. It never
 stops the default host server. Canary toolchain
 verification only sets cache identity; accelerator setup owns server startup.
 
+Persistent macOS canary preflight, build, family and infrastructure-retry jobs
+run `setup-canary-runner` before `prepare-automation` with
+`runner-profile: preinstalled-macos`. Missing tools fail with their names and a
+runner-provisioning instruction. This profile skips Rust and Just installers,
+disables Rustup automatic toolchain installation, and selects the accelerator
+action's `tool-source: preinstalled` path, which checks Homebrew lld and sccache
+without installing either. Hosted profiles retain their existing installers.
+The build prepares controller automation before the locked Python SDK
+environment, so SDK source admission uses the initialized automation binary.
+
 ### A pinned digest is a frozen artifact
 
 `mesh-llm-runner-images` HEAD says nothing about what is inside the digest a

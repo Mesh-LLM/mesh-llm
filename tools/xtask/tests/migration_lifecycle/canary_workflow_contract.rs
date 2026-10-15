@@ -393,12 +393,19 @@ fn frozen_prebuilt_workers_load_cache_after_controller_and_before_consumption() 
             "Build exact candidate for distributed certification",
         ),
         (worker_jobs.get("family").unwrap(), "Certify one family"),
+        (
+            worker_jobs.get("retry_family").unwrap(),
+            "Recheck one infrastructure-failed family",
+        ),
     ] {
         let (prepare, step) = named(job, "uses", "./.github/actions/prepare-automation");
+        let (prerequisites, _) = named(job, "uses", "./.github/actions/setup-canary-runner");
+        assert!(prerequisites < prepare);
         let (cache, _) = named(job, "uses", "./.github/actions/use-canary-cache");
         let (consume, _) = named(job, "name", consumer);
         assert!(prepare < cache && cache < consume);
         let config = step.get("with").unwrap();
+        assert_eq!(field(config, "runner-profile"), "preinstalled-macos");
         assert_eq!(field(config, "allow_depot_remote_cache"), "false");
         assert_eq!(field(config, "allow_native_github_cache"), "false");
         assert!(
@@ -559,11 +566,32 @@ fn setup_observers() -> &'static str {
     r#"
 export GITHUB_ENV="$PWD/action.env"
 export MACOSX_DEPLOYMENT_TARGET=13.3
-for tool in cargo just sccache jq python3 uv cmake ninja hf git-lfs lipo xcrun; do eval "$tool() { :; }"; done
+for tool in cargo rustc just sccache jq python3 uv cmake ninja hf git-lfs lipo xcrun; do eval "$tool() { :; }"; done
 uname() { printf 'Darwin\n'; }
 git() { printf '%s\n' "$*" >> "$PWD/git.observed"; case "$*" in 'config --local user.name mesh-llama-canary-bot'|'config --local user.email llama-canary-bot@meshllm.invalid'|'lfs install --force') return 0;; *) return 91;; esac; }
 brew() { case "$*" in '--prefix llvm@22') printf '%s\n' "$PWD/pinned";; '--prefix llvm') printf '%s\n' "$PWD/fallback";; *) return 92;; esac; }
 "#
+}
+fn assert_missing_runner_tools(directory: &std::path::Path, production: &str) {
+    for tool in [
+        "cargo", "rustc", "just", "sccache", "jq", "python3", "uv", "cmake", "ninja", "hf",
+        "git-lfs", "lipo", "brew", "xcrun",
+    ] {
+        let observers = format!(
+            "{}\nMISSING_TOOL={tool}\n{}",
+            setup_observers(),
+            r#"command() {
+  if [[ "$1" == -v && "$2" == "$MISSING_TOOL" ]]; then return 1; fi
+  builtin command "$@"
+}"#
+        );
+        let (status, _, stderr) = action_shell(directory, &observers, production);
+        assert_eq!(status, 1, "missing {tool}");
+        assert!(
+            String::from_utf8_lossy(&stderr)
+                .contains(&format!("missing on family-certify image: {tool}"))
+        );
+    }
 }
 #[test]
 fn actual_setup_action_preserves_local_git_identity_and_llvm_fallback_refusal_without_installing() {
@@ -608,6 +636,7 @@ fn actual_setup_action_preserves_local_git_identity_and_llvm_fallback_refusal_wi
                 directory.display()
             ))
     );
+    assert_missing_runner_tools(&directory, &production);
     fs::remove_file(directory.join("pinned/lib/cmake/clang/ClangConfig.cmake")).unwrap();
     fs::write(directory.join("action.env"), "").unwrap();
     let (status, _, _) = action_shell(&directory, setup_observers(), &production);

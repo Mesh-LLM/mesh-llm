@@ -534,6 +534,7 @@ printf '%s\n' "$SCCACHE_GHA_ENABLED" "$SCCACHE_MULTILEVEL_CHAIN" "$SCCACHE_DIR" 
     let r = f.shell(
         &scalars.join("\n"),
         &[
+            ("TOOL_SOURCE", "homebrew"),
             ("SCCACHE_GHA_ENABLED", gha),
             ("SCCACHE_MULTILEVEL_CHAIN", chain),
             (
@@ -607,3 +608,6 @@ mod cargo_driver;
 
 #[path = "lld_shell_contract/developer_bootstrap.rs"]
 mod developer_bootstrap;
+
+#[path = "lld_shell_contract/preinstalled.rs"]
+mod preinstalled;

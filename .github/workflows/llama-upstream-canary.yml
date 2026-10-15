@@ -113,12 +113,14 @@ jobs:
           ref: ${{ needs.resolve.outputs.mesh_source }}
           path: canary-source
           persist-credentials: false
+      - uses: ./.github/actions/setup-canary-runner
       - name: Prepare protected controller automation
         uses: ./.github/actions/prepare-automation
         env:
           SCCACHE_GHA_ENABLED: 'false'
           SCCACHE_MULTILEVEL_CHAIN: disk
         with:
+          runner-profile: preinstalled-macos
           allow_depot_remote_cache: 'false'
           allow_native_github_cache: 'false'
       - uses: ./.github/actions/use-canary-cache

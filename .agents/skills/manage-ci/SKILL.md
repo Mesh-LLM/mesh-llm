@@ -43,6 +43,12 @@ preparation may use step-local Cargo home and target directories outside the
 measured paths before preflight, without populating the measured compiler cache.
 Neither exception permits product compilation in composition-only consumers.
 
+Persistent macOS canary jobs use the `preinstalled-macos` automation profile.
+They check runner prerequisites before compiling automation or preparing SDK
+dependencies and fail if any are absent. Tool installation and upgrades belong
+to runner provisioning: never invoke Rust, Just, or Homebrew installers from
+this profile. Keep job-owned compiler-cache startup and linker verification.
+
 Automation is compiled at most once per run and platform for product-source
 work, never once per job. Each platform lane has one `product_automation_*`
 producer (`product-automation-artifact.yml` through `upload-automation` with
