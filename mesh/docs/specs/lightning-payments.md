@@ -421,8 +421,10 @@ settle that debt.
 Seller-side recovery is the same reconcile pass: every unpaid deposit and
 final invoice is looked up in the wallet, and a payment observed late is
 recorded, clearing the strike. Billed state survives provider restart; KV
-state does not. A request interrupted before `serve_settle` is abandoned on
-the error path and stays abandoned. On provider startup, requests left
+state does not. A dispatch-owning connection interrupted before `serve_settle`
+abandons its request on the error path. A replay or a failure before acquiring
+dispatch ownership must not abandon the shared request; it may still be served
+by another connection. On provider startup, requests left
 `admitted` by a crash are also marked abandoned before serving; no usage was
 recorded, so no bill can be recovered. A still-running admitted request is
 reported as `Pending`; a replayed `Request` cannot dispatch it again.
@@ -1003,7 +1005,12 @@ or the 15-second recovery pass completes settlement from durable state.
 Application disconnect after `Accepted` sends `Cancel`; the seller stops the
 backend and abandons the request unless a complete usage report was already
 observed. A seller that closes the exchange having sent no output after the
-deposit settled is a strike on the buyer's local blocklist. On the seller, any
-exit from the admitted exchange without a settlement abandons the request
-(idempotent), and the buyer is told `metered exchange interrupted; recover by
-request ID` rather than the underlying error.
+deposit settled is a strike on the buyer's local blocklist. On the seller, only
+the connection that received a successful dispatch claim may abandon the request
+on error (idempotent). No-deposit admission already grants that claim. A failed
+or uncertain deposit-confirmation call instead recovers the durable outcome
+without abandoning or dispatching: `Pending` while the winner is working, or
+the stored settlement when available. Other errors tell the buyer
+`metered exchange interrupted; recover by request ID` rather than the underlying
+error. A pre-claim disconnect leaves the admission recoverable; provider startup
+still abandons unfinished admissions as described above.

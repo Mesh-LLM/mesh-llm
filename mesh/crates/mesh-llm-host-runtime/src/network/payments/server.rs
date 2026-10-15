@@ -55,6 +55,9 @@ struct Session {
     deposit: Option<mesh_llm_wallet::invoice::Invoice>,
     observations: super::lifecycle::Observations,
     exchange_id: Option<String>,
+    /// This connection received the successful once-only dispatch claim.
+    /// A shared ledger's dispatched flag cannot establish local ownership.
+    owns_dispatch: bool,
 }
 
 async fn serve_inner(
@@ -71,7 +74,7 @@ async fn serve_inner(
     if let Frame::Recover { id } = initial {
         return recover(&payments, &id, writer).await;
     }
-    let session = match admit(node, &payments, peer, initial, targets).await? {
+    let mut session = match admit(node, &payments, peer, initial, targets).await? {
         Admission::Admitted(session) => session,
         Admission::Refused => {
             return wire::write(
@@ -86,10 +89,10 @@ async fn serve_inner(
         // from the ledger, never a second dispatch.
         Admission::Replayed(id) => return recover(&payments, &id, writer).await,
     };
-    let result = serve_admitted(node, &session, payer, reader, writer).await;
-    if result.is_err() {
-        // Any exit without usage abandons the request: no bill, no debt. A
-        // request already settled or abandoned is unchanged (idempotent).
+    let result = serve_admitted(node, &mut session, payer, reader, writer).await;
+    if result.is_err() && session.owns_dispatch {
+        // Only this connection's successful claim permits cleanup. A losing
+        // replay or a pre-claim failure must not abandon another stream's work.
         let _: Result<Empty> = session
             .payments
             .call(ops::SERVE_ABANDON, &request_id(&session.terms.id))
@@ -165,6 +168,7 @@ async fn admit(
         terms,
         request,
         backend,
+        owns_dispatch: deposit.is_none(),
         deposit,
         observations,
         exchange_id,
@@ -186,7 +190,7 @@ async fn provider_observers(node: &Node) -> (super::lifecycle::ProviderLifecycle
 
 async fn serve_admitted(
     node: &Node,
-    session: &Session,
+    session: &mut Session,
     payer: iroh::EndpointId,
     reader: &mut (impl AsyncRead + Unpin),
     writer: &mut (impl AsyncWrite + Unpin),
@@ -204,7 +208,13 @@ async fn serve_admitted(
         matches!(accepted, Frame::Accepted {}),
         "admission cancelled"
     );
-    confirm_dispatch(session).await?;
+    if confirm_dispatch(session).await.is_err() {
+        // A duplicate may have won the claim while we awaited the deposit.
+        // Even an uncertain provider reply grants no local ownership: recover
+        // the durable outcome without dispatching or abandoning shared state.
+        return recover(&session.payments, &session.terms.id, writer).await;
+    }
+    session.owns_dispatch = true;
     let outcome = dispatch(node, session, payer, reader, writer).await;
     let bill = match outcome {
         Some(usage) => {
