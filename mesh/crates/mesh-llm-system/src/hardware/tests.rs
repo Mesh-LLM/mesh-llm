@@ -1240,6 +1240,24 @@ fn test_detect_hostname_without_hostname_on_path() {
     );
 }
 
+#[cfg(windows)]
+#[test]
+fn test_detect_hostname_matches_windows_api() {
+    use windows_sys::Win32::System::SystemInformation::{
+        ComputerNameDnsHostname, GetComputerNameExW,
+    };
+
+    let mut expected = [0_u16; 256];
+    let mut size = u32::try_from(expected.len()).unwrap();
+    // SAFETY: expected is writable for the exact capacity passed to the API.
+    let succeeded =
+        unsafe { GetComputerNameExW(ComputerNameDnsHostname, expected.as_mut_ptr(), &mut size) };
+    assert_ne!(succeeded, 0);
+    let size = usize::try_from(size).unwrap();
+    let expected = String::from_utf16(&expected[..size]).unwrap();
+    assert_eq!(detect_hostname(), parse_hostname(&expected));
+}
+
 #[test]
 fn test_parse_windows_video_controller_json_array() {
     let json = r#"[{"Name":"NVIDIA RTX 4090","AdapterRAM":25769803776},{"Name":"AMD Radeon PRO","AdapterRAM":"8589934592"}]"#;

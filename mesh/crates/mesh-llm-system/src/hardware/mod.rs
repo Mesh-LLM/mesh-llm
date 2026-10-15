@@ -246,7 +246,24 @@ fn detect_hostname() -> Option<String> {
     parse_hostname(std::str::from_utf8(&bytes[..end]).ok()?)
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+fn detect_hostname() -> Option<String> {
+    use windows_sys::Win32::System::SystemInformation::{
+        ComputerNameDnsHostname, GetComputerNameExW,
+    };
+
+    let mut buffer = [0_u16; 256];
+    let mut size = u32::try_from(buffer.len()).ok()?;
+    // SAFETY: buffer is writable for the exact capacity passed to the API.
+    if unsafe { GetComputerNameExW(ComputerNameDnsHostname, buffer.as_mut_ptr(), &mut size) } == 0 {
+        return None;
+    }
+    let size = usize::try_from(size).ok()?;
+    let name = String::from_utf16(buffer.get(..size)?).ok()?;
+    parse_hostname(&name)
+}
+
+#[cfg(not(any(unix, windows)))]
 fn detect_hostname() -> Option<String> {
     let out = std::process::Command::new("hostname").output().ok()?;
     if !out.status.success() {
