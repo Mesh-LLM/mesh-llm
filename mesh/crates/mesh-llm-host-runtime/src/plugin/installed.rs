@@ -21,7 +21,14 @@ pub(crate) fn configured_disabled_installed_plugin_summary(
         .manifest
         .as_ref()
         .and_then(|manifest| manifest.web_ui.as_ref())?;
-    Some(PluginSummary {
+    Some(disabled_entry_summary(entry, &metadata))
+}
+
+fn disabled_entry_summary(
+    entry: &PluginConfigEntry,
+    metadata: &InstalledPluginMetadata,
+) -> PluginSummary {
+    PluginSummary {
         name: entry.name.clone(),
         kind: "installed".to_string(),
         enabled: false,
@@ -29,14 +36,14 @@ pub(crate) fn configured_disabled_installed_plugin_summary(
         pid: None,
         version: Some(metadata.installed_version.clone()),
         capabilities: Vec::new(),
-        command: Some(installed_plugin_command(&metadata).display().to_string()),
+        command: Some(installed_plugin_command(metadata).display().to_string()),
         args: entry.args.clone(),
         tools: Vec::new(),
         manifest: None,
         web_ui: derive_plugin_web_ui_state(super::PluginWebUiStateInput {
             plugin_name: &entry.name,
             live_manifest: None,
-            installed_metadata: Some(&metadata),
+            installed_metadata: Some(metadata),
             web_ui_enabled: entry.web_ui_enabled,
             web_ui_primary_tab: entry.web_ui_primary_tab_preference(),
             runtime_available: false,
@@ -44,7 +51,7 @@ pub(crate) fn configured_disabled_installed_plugin_summary(
         }),
         startup: None,
         error: None,
-    })
+    }
 }
 
 pub(crate) fn configured_external_plugin_spec(
@@ -59,13 +66,34 @@ pub(crate) fn configured_external_plugin_spec(
             "tcp:// plugin control is unsupported because it has no authenticated capability handshake"
         );
     }
-    let startup = PluginStartupOptions::from_config(&entry.startup);
+    let mut startup = PluginStartupOptions::from_config(&entry.startup);
+    let installed_metadata = installed_plugin_metadata_for_name(&entry.name)
+        .ok()
+        .flatten();
+    if installed_metadata
+        .as_ref()
+        .is_some_and(|metadata| metadata.default_managed)
+    {
+        startup.optional = true;
+    }
     let command = entry
         .command
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_string);
+
+    // An entry without its own command runs the store's copy, so the store's
+    // enabled flag (`mesh-llm plugins disable`) decides whether it starts.
+    if command.is_none()
+        && let Some(metadata) = installed_metadata
+            .as_ref()
+            .filter(|metadata| !metadata.enabled)
+    {
+        return Ok(ConfiguredExternalPlugin::Inactive(disabled_entry_summary(
+            entry, metadata,
+        )));
+    }
 
     let command = match command {
         Some(command) => command,
@@ -90,9 +118,7 @@ pub(crate) fn configured_external_plugin_spec(
         startup,
         web_ui_enabled: entry.web_ui_enabled,
         web_ui_primary_tab: entry.web_ui_primary_tab,
-        installed_metadata: installed_plugin_metadata_for_name(&entry.name)
-            .ok()
-            .flatten(),
+        installed_metadata,
     }))
 }
 
@@ -170,7 +196,10 @@ fn installed_plugin_spec(metadata: &InstalledPluginMetadata) -> ExternalPluginSp
         args: Vec::new(),
         url: None,
         env: BTreeMap::new(),
-        startup: PluginStartupOptions::default(),
+        startup: PluginStartupOptions {
+            optional: metadata.default_managed,
+            ..PluginStartupOptions::default()
+        },
         web_ui_enabled: None,
         web_ui_primary_tab: None,
         installed_metadata: Some(metadata.clone()),
@@ -279,3 +308,7 @@ fn installed_plugin_summary(
         error,
     }
 }
+
+#[cfg(test)]
+#[path = "installed_tests.rs"]
+mod tests;
