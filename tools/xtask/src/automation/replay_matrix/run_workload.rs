@@ -180,6 +180,8 @@ pub(super) enum Build {
 
 #[derive(Deserialize, Serialize)]
 pub(super) struct MeshBuild {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prefix_cache: Option<bool>,
     #[serde(default)]
     pub engine: Engine,
     pub label: String,

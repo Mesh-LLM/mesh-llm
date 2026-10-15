@@ -47,6 +47,10 @@ pub(crate) struct Request {
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Metrics {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cached_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub unavailable_metrics: std::collections::BTreeMap<String, String>,
     pub prompt_tokens: Option<u64>,
     pub completion_tokens: Option<u64>,
     pub cache_pct: Option<f64>,

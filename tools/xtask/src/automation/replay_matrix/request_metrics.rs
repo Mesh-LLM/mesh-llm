@@ -6,6 +6,8 @@ use super::{
 
 pub(super) fn from_evidence(evidence: &Evidence) -> Metrics {
     Metrics {
+        cached_tokens: Some(evidence.cached_tokens),
+        unavailable_metrics: unavailable(evidence),
         prompt_tokens: Some(evidence.prompt_tokens),
         completion_tokens: Some(evidence.completion_tokens),
         cache_pct: Some(evidence.cache_pct),
@@ -23,6 +25,25 @@ pub(super) fn from_evidence(evidence: &Evidence) -> Metrics {
     }
 }
 
+fn unavailable(evidence: &Evidence) -> std::collections::BTreeMap<String, String> {
+    let mut reasons = std::collections::BTreeMap::from([
+        ("native_prefill_tokens_per_second".into(), "Not exposed by the common OpenAI stream; TTFT includes more than prefill.".into()),
+        ("native_decode_tokens_per_second".into(), "Not exposed by the common OpenAI stream; client stream throughput is a separate metric.".into()),
+    ]);
+    for (name, seconds) in [
+        ("decode_tokens_per_second", evidence.generation_seconds),
+        (
+            "output_stream_tokens_per_second",
+            evidence.output_stream_seconds,
+        ),
+    ] {
+        if decode_rate(evidence.completion_tokens, seconds).is_none() {
+            reasons.insert(name.into(), "No finite positive observed interval.".into());
+        }
+    }
+    reasons
+}
+
 fn decode_rate(tokens: u64, seconds: f64) -> Option<f64> {
     if !seconds.is_finite() || seconds <= 0.0 {
         return None;
@@ -37,6 +58,7 @@ mod tests {
     #[test]
     fn request_metrics_include_observed_latency_and_cache_without_aggregate_labels() {
         let evidence = Evidence {
+            output: None,
             ttft_seconds: 10.0,
             elapsed_seconds: 18.0,
             generation_seconds: 8.0,

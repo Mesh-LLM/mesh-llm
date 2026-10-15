@@ -7,7 +7,6 @@
   "upstream_commit": "8212c7802455255460ab8e18fc34754560031b34",
   "context_size": 131072,
   "warmup_turns": 4,
-  "text_action_protocol": "shell-fence-v1",
   "sampling": {
     "temperature": 0.0, "top_p": 0.95, "top_k": 20, "min_p": 0.0,
     "presence_penalty": 1.5, "repeat_penalty": 1.0, "enable_thinking": false

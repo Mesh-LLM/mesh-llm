@@ -340,24 +340,12 @@ fn execute_run_captured_mesh_uri_admission_is_separate_from_local_model_pin_veri
 
 #[test]
 fn strict_truncation_stops_before_the_next_turn_and_retains_warmup_or_measured_failure() {
-    strict_incomplete_output(false);
-}
-
-#[test]
-fn strict_text_action_stops_on_prose_even_with_natural_stop() {
-    strict_incomplete_output(true);
-}
-
-fn strict_incomplete_output(text_action: bool) {
     for warmup in [false, true] {
         let temporary = tempfile::tempdir().unwrap();
         let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
         let mut input = json!({"trajectories":[trajectory("s",3)],"model":"fixture",
             "base_url":format!("http://{}/v1",listener.local_addr().unwrap()),
             "concurrency":1,"request_timeout_seconds":1,"require_complete_output":true});
-        if text_action {
-            input["trajectories"][0]["text_action_protocol"] = "shell-fence-v1".into();
-        }
         if warmup {
             input["warmup_turns"] = 3.into();
         }
@@ -367,8 +355,7 @@ fn strict_incomplete_output(text_action: bool) {
         let summary = temporary.path().join("summary.json");
         // The listener serves only one response: further requests would be visible
         // as additional error records, rather than being silently accepted.
-        let finish = if text_action { "stop" } else { "length" };
-        let server = std::thread::spawn(move || serve_finish(listener, 1, finish));
+        let server = std::thread::spawn(move || serve_finish(listener, 1, "length"));
         let result = Command::new(env!("CARGO_BIN_EXE_xtask"))
             .args(["automation", "replay-matrix", "execute-cell", "--input"])
             .arg(path)
@@ -383,14 +370,7 @@ fn strict_incomplete_output(text_action: bool) {
         let records = std::fs::read_to_string(raw).unwrap();
         assert_eq!(records.lines().count(), 1);
         let record: Value = serde_json::from_str(records.trim()).unwrap();
-        assert_eq!(record["finish_reason"], finish);
-        if text_action {
-            assert_eq!(record["text_action_protocol"], "shell-fence-v1");
-            assert_eq!(
-                record["output_problems"][0],
-                "shell-fence-v1: missing shell command block"
-            );
-        }
+        assert_eq!(record["finish_reason"], "length");
         assert_eq!(record["completion_tokens"], 1);
         assert_eq!(record["warmup"], warmup);
         let summary: Value = serde_json::from_slice(&std::fs::read(summary).unwrap()).unwrap();

@@ -32,6 +32,23 @@ pub(super) fn summarize(records: &[Value], summary: &mut Value) {
                 .map(|tokens| tokens / seconds)
         })
         .map_or(Value::Null, |rate| json!(rate));
+    let mut reasons = serde_json::Map::new();
+    for (name, value) in summary.as_object().into_iter().flatten() {
+        if value.is_null() {
+            reasons.insert(
+                name.clone(),
+                "No complete observations or positive measurement interval.".into(),
+            );
+        }
+    }
+    for name in [
+        "native_prefill_tokens_per_second",
+        "native_decode_tokens_per_second",
+    ] {
+        summary[name] = Value::Null;
+        reasons.insert(name.into(), "Not exposed by the common OpenAI stream; client timing is not native execution timing.".into());
+    }
+    summary["unavailable_metrics"] = Value::Object(reasons);
 }
 
 #[cfg(test)]

@@ -1,5 +1,5 @@
-# Import this entry alongside the existing Jianyang Mesh template catalog.
-# Do not sync this single-entry file over the entire existing catalog.
+# Import these entries alongside the existing Jianyang Mesh template catalog.
+# Do not sync this file over the entire existing catalog.
 version: 1
 build: |
   set -euo pipefail
@@ -31,11 +31,12 @@ templates:
       cd "$JIANYANG_REPO_DIR"
       exec "${CARGO_TARGET_DIR:-target}/release/xtask" automation replay-matrix recorded-comparison \
         --job mesh/evals/recorded-replay/job.json --input "$REPLAY_BINDINGS" \
+        --experiment performance \
         --output "$JIANYANG_ARTIFACT_DIR/recorded-replay"
     budget: { max_usd: 0, max_duration_s: 43200, grace_s: 600 }
     harness:
       name: custom
-      version: recorded-agentic-shell-v4
+      version: recorded-agentic-integrity-v5
       trace:
         kind: file
         ref: thoughtworks/agentic-coding-trajectories@cef72d1f4d0caabf85937adf8337a14b7522c782/sessions.parquet
@@ -45,10 +46,38 @@ templates:
       request_count: 200
       concurrency: [1]
       args:
+        experiment: performance
         job: mesh/evals/recorded-replay/job.json
         thinking: false
         temperature: 0
-        text_action_protocol: shell-fence-v1
         output_limit: server-default
         require_complete_output: true
         timing: first-event_last-event_DONE
+  - key: skippy-agentic-cache-correctness
+    name: Skippy agentic cache correctness
+    group: Checks
+    description: Paired cache-off/cache-on replay of the same two recorded 50-turn windows, requiring real reuse and retaining divergence.
+    target:
+      executor: lab
+      nodes: [spark-james]
+    priority: 10
+    models:
+      - ref: hf:unsloth/Qwen3.5-4B-GGUF@e87f176479d0855a907a41277aca2f8ee7a09523#Qwen3.5-4B-Q4_K_M.gguf
+        env: MODEL
+    inputs:
+      - key: bindings
+        label: Absolute path to verified local input bindings JSON
+        kind: text
+        default: /mnt/lab/benchmarks/recorded-replay/bindings.json
+    env:
+      REPLAY_BINDINGS: ${bindings}
+      CARGO_INCREMENTAL: "0"
+      LLAMA_STAGE_USE_SCCACHE: "0"
+    command: |
+      set -euo pipefail
+      cd "$JIANYANG_REPO_DIR"
+      exec "${CARGO_TARGET_DIR:-target}/release/xtask" automation replay-matrix recorded-comparison \
+        --job mesh/evals/recorded-replay/job.json --input "$REPLAY_BINDINGS" \
+        --experiment cache \
+        --output "$JIANYANG_ARTIFACT_DIR/recorded-cache"
+    budget: { max_usd: 0, max_duration_s: 43200, grace_s: 600 }

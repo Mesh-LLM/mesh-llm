@@ -131,16 +131,11 @@ pub(super) async fn exchange(
     base: &str,
     turn: &super::recorded_requests::Turn,
 ) -> Result<super::stream_evidence::Evidence, Box<dyn std::error::Error + Send + Sync>> {
-    if let Some(protocol) = turn.text_action_protocol {
-        crate::automation::openai_exchange::request_checked(
-            base,
-            &turn.body,
-            turn.qualification_probe,
-            Some(protocol.content_check()),
-        )
-        .await
-    } else {
-        crate::automation::openai_exchange::request(base, &turn.body, turn.qualification_probe)
-            .await
-    }
+    crate::automation::openai_exchange::request_retaining_output(
+        base,
+        &turn.body,
+        turn.qualification_probe,
+        turn.retain_output,
+    )
+    .await
 }

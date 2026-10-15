@@ -145,6 +145,11 @@ pub(super) fn measure(
         super::progress::Outcome::Error
     });
     progress.metrics = Some(super::progress::Metrics {
+        cached_tokens: records
+            .iter()
+            .filter_map(|record| record["cached_tokens"].as_u64())
+            .try_fold(0_u64, u64::checked_add),
+        unavailable_metrics: serde_json::from_value(evidence["unavailable_metrics"].clone())?,
         prompt_tokens: records
             .iter()
             .filter_map(|record| record["prompt_tokens"].as_u64())

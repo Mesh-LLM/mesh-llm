@@ -17,7 +17,6 @@ struct Job {
     context_size: u64,
     warmup_turns: usize,
     sampling: super::replay_sampling::Sampling,
-    text_action_protocol: Option<super::text_action_protocol::Protocol>,
     cases: Vec<Case>,
 }
 #[derive(Deserialize)]
@@ -43,8 +42,8 @@ struct Bindings {
 
 pub(in crate::automation) fn run(root: Option<&Path>, args: &[String]) -> DynResult<()> {
     const GRAMMAR: Grammar = Grammar {
-        usage: "cargo xtool automation replay-matrix recorded-comparison --job PATH --input PATH --output PATH [--plan]",
-        values: &["--job", "--input", "--output"],
+        usage: "cargo xtool automation replay-matrix recorded-comparison --job PATH --input PATH --output PATH [--experiment performance|cache] [--plan]",
+        values: &["--job", "--input", "--output", "--experiment"],
         flags: &["--help", "--plan"],
     };
     let parsed = match GRAMMAR.parse(args) {
@@ -58,6 +57,10 @@ pub(in crate::automation) fn run(root: Option<&Path>, args: &[String]) -> DynRes
         return Err("unexpected positional arguments".into());
     }
     let job_path = parsed.last("--job").ok_or("missing --job")?;
+    let experiment = parsed.last("--experiment").unwrap_or("performance");
+    if !["performance", "cache"].contains(&experiment) {
+        return Err("experiment must be performance or cache".into());
+    }
     let job: Job = serde_json::from_slice(&std::fs::read(job_path)?)?;
     let bindings: Bindings = serde_json::from_slice(&std::fs::read(
         parsed.last("--input").ok_or("missing --input")?,
@@ -85,11 +88,13 @@ pub(in crate::automation) fn run(root: Option<&Path>, args: &[String]) -> DynRes
         "prefix_cache":true,"batch_size":2048,"ubatch_size":512,"extra_args":["--flash-attn","on"]}]}),
     )?;
     let build: Value = serde_json::from_slice(&std::fs::read(&bindings.mesh_build)?)?;
+    let builds = experiment_builds(&build, experiment);
+    let engines = (experiment == "performance").then_some(engines);
     for (case, manifest) in job.cases.iter().zip(manifests) {
         let path = output.join("inputs").join(format!("{}.json", case.name));
         crate::command::write_json_file(&path, &manifest)?;
         let input = json!({"manifest":path,"requirements":{"concurrency":[1],"minimum_worker_waves":1,"warmup_turns":job.warmup_turns,"required_frameworks":[]},
-            "builds":[build],"engine_config":engines,"context_qualification":"captured","replay_mode":"window",
+            "builds":builds,"engine_config":engines,"context_qualification":"captured","replay_mode":"window",
             "model":bindings.model,"model_sha256":job.model_sha256,"hf_home":bindings.hf_home,
             "passes":1,"max_output_tokens":null,"require_complete_output":true,
             "request_timeout_seconds":900,"startup_timeout_seconds":1800,"timeout_seconds":19800,"output":output.join(&case.name)});
@@ -104,9 +109,12 @@ pub(in crate::automation) fn run(root: Option<&Path>, args: &[String]) -> DynRes
                 root,
                 &["--input".into(), input_path.to_string_lossy().into_owned()],
             )?;
+            if experiment == "cache" {
+                super::cache_comparison::write(&output.join(&case.name), case.count)?;
+            }
         }
     }
-    if !parsed.flag("--plan") {
+    if !parsed.flag("--plan") && experiment == "performance" {
         super::comparison_result::write(
             &output,
             &job.cases
@@ -117,6 +125,19 @@ pub(in crate::automation) fn run(root: Option<&Path>, args: &[String]) -> DynRes
         )?;
     }
     Ok(())
+}
+
+fn experiment_builds(build: &Value, experiment: &str) -> Vec<Value> {
+    let mut enabled = build.clone();
+    enabled["prefix_cache"] = true.into();
+    if experiment == "performance" {
+        return vec![enabled];
+    }
+    enabled["label"] = "cache-on".into();
+    let mut disabled = enabled.clone();
+    disabled["label"] = "cache-off".into();
+    disabled["prefix_cache"] = false.into();
+    vec![disabled, enabled]
 }
 
 fn validate(job: &Job) -> DynResult<()> {
@@ -195,14 +216,14 @@ fn manifest(source: &Value, job: &Job, case: &Case) -> DynResult<Value> {
     }
     selected["replay_window"] = json!({"start":case.start,"count":case.count});
     selected["replay_sampling"] = serde_json::to_value(&job.sampling)?;
-    selected["text_action_protocol"] = serde_json::to_value(job.text_action_protocol)?;
+    selected["retain_output"] = true.into();
     let mut warmup = source["cohorts"]["warmup"]
         .as_array()
         .and_then(|v| v.first())
         .ok_or("missing warmup trajectory")?
         .clone();
     warmup["replay_sampling"] = serde_json::to_value(&job.sampling)?;
-    warmup["text_action_protocol"] = serde_json::to_value(job.text_action_protocol)?;
+    warmup["retain_output"] = true.into();
     let selection = super::recorded_requests::Selection {
         model: "pending",
         maximum_output_tokens: None,
@@ -226,32 +247,26 @@ fn manifest(source: &Value, job: &Job, case: &Case) -> DynResult<Value> {
 mod tests {
     use super::*;
     #[test]
+    fn experiments_keep_one_binary_and_explicitly_control_cache() {
+        let build = json!({"label":"mesh","commit":"same","binary_sha256":"same"});
+        let performance = experiment_builds(&build, "performance");
+        assert_eq!(performance.len(), 1);
+        assert_eq!(performance[0]["prefix_cache"], true);
+        let cache = experiment_builds(&build, "cache");
+        assert_eq!(cache[0]["prefix_cache"], false);
+        assert_eq!(cache[1]["prefix_cache"], true);
+        assert_eq!(cache[0]["commit"], cache[1]["commit"]);
+        assert_eq!(cache[0]["binary_sha256"], cache[1]["binary_sha256"]);
+    }
+    #[test]
     fn committed_job_pins_two_windows_and_rejects_thinking_drift() {
         let mut job: Job = serde_json::from_str(include_str!(
             "../../../../../mesh/evals/recorded-replay/job.json"
         ))
         .unwrap();
         validate(&job).unwrap();
-        assert!(job.text_action_protocol.is_some());
         job.sampling.enable_thinking = None;
         assert!(validate(&job).is_err());
-    }
-
-    #[test]
-    fn legacy_job_keeps_exact_history_and_unknown_protocol_is_rejected() {
-        let mut input: Value = serde_json::from_str(include_str!(
-            "../../../../../mesh/evals/recorded-replay/job.json"
-        ))
-        .unwrap();
-        input
-            .as_object_mut()
-            .unwrap()
-            .remove("text_action_protocol");
-        let job: Job = serde_json::from_value(input.clone()).unwrap();
-        assert!(job.text_action_protocol.is_none());
-        validate(&job).unwrap();
-        input["text_action_protocol"] = "unknown".into();
-        assert!(serde_json::from_value::<Job>(input).is_err());
     }
 }
 
@@ -294,17 +309,12 @@ mod selection_tests {
             assert!(
                 requests[0]
                     .iter()
-                    .all(|turn| turn.text_action_protocol.is_some())
-            );
-            assert!(
-                requests[0]
-                    .iter()
                     .all(|turn| turn.body["temperature"] == 0.0)
             );
             assert_eq!(requests[0][0].assistant_turn, case.start);
             assert_eq!(
                 requests[0][0].body["messages"].as_array().unwrap().len(),
-                2 + case.start * 2
+                1 + case.start * 2
             );
             assert_eq!(
                 requests[0][0].body["chat_template_kwargs"]["enable_thinking"],
@@ -314,10 +324,6 @@ mod selection_tests {
             assert_eq!(
                 manifest["cohorts"]["warmup"][0]["replay_sampling"]["temperature"],
                 0.0
-            );
-            assert_eq!(
-                manifest["cohorts"]["warmup"][0]["text_action_protocol"],
-                "shell-fence-v1"
             );
             assert_eq!(
                 manifest["cohorts"]["warmup"][0]["replay_sampling"]["enable_thinking"],

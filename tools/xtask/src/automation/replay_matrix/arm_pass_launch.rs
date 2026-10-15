@@ -23,6 +23,12 @@ pub(super) fn execute(
         return super::external_cell::execute(root, &request);
     }
     let mut arguments = Vec::new();
+    if let Some(enabled) = input.prefix_cache {
+        arguments.extend([
+            "--prefix-cache".into(),
+            if enabled { "on" } else { "off" }.into(),
+        ]);
+    }
     for (option, path) in [
         ("--binary", input.binary.as_path()),
         ("--native-runtime-root", input.native_runtime_root.as_path()),

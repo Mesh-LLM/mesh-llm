@@ -17,6 +17,37 @@ fn nullable_tool_calls_do_not_discard_generated_content() {
 const SUCCESS: &[u8] = b"data: {\"choices\":[{\"delta\":{\"content\":\"hi\"},\"finish_reason\":\"stop\"}]}\n\ndata: {\"usage\":{\"prompt_tokens\":40,\"completion_tokens\":2,\"prompt_tokens_details\":{\"cached_tokens\":30}}}\n\ndata: [DONE]\n\n";
 
 #[test]
+fn retained_output_is_opt_in_and_free_text_has_no_action_format_gate() {
+    for retain in [false, true] {
+        for content in [
+            "I will inspect the files.",
+            "<shell>ls</shell>",
+            "again again again",
+        ] {
+            let input = String::from_utf8(SUCCESS.to_vec())
+                .unwrap()
+                .replace("hi", content);
+            let mut stream = Stream::retaining_output(retain);
+            stream
+                .consume(input.as_bytes(), Duration::from_secs(1))
+                .unwrap();
+            let evidence = stream.finish(Duration::from_secs(2), false).unwrap();
+            assert!(evidence.output_problems.is_empty());
+            if retain {
+                let output = evidence.output.unwrap();
+                assert_eq!(output["content"], content);
+                assert_eq!(
+                    evidence.content_sha256,
+                    hex::encode(Sha256::digest(serde_json::to_vec(&output).unwrap()))
+                );
+            } else {
+                assert!(evidence.output.is_none());
+            }
+        }
+    }
+}
+
+#[test]
 fn output_integrity_detects_truncated_and_malformed_tool_streams() {
     for (arguments, reason, valid) in [
         (r#"{"final":true}"#, "tool_calls", true),

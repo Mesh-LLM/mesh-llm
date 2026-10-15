@@ -3,8 +3,10 @@
 This manual benchmark compares a verified Mesh release build with upstream llama.cpp
 at the pinned source in `job.json`, using Qwen3.5-4B Q4_K_M. It replays two consecutive
 50-turn windows from the pinned Thoughtworks agentic coding dataset, at concurrency 1.
-Recorded histories are retained; generated answers are not fed into later requests.
-Wire requests add the versioned text-action instructions described below.
+Recorded histories remain intact; generated answers are not fed into later requests.
+Prompts are not rewritten. Natural `stop` responses pass regardless of prose,
+XML, command formatting or usefulness. This measures engine correctness and
+performance, not model quality or task completion.
 This is bounded replay, not full-session recurrent-state certification or SkippyBench.
 
 See the [native differential findings](NATIVE_DIFFERENTIAL.md) for the focused
@@ -20,39 +22,27 @@ budget; older builds may retain a fixed server cap. Any `length` finish fails th
 strict run, including during warmup. The runner
 retains the offending response's usage, finish, output-shape counts and integrity
 problems, stops issuing requests, and shuts down its owned server. It never skips a
-bad warmup to obtain a passing score.
-
-## Text-action contract
-
-The pinned job explicitly selects `text_action_protocol: shell-fence-v1` for both
-measured sessions and warmup. These recorded agents use fenced shell commands and
-user observations, rather than API function calls. The original warmup's generic
-system message did not explain how to submit a command or when to wait for its
-result. An introduction ending in `stop` could therefore pass structural checks
-without giving an agent runner any action.
-
-The adaptation appends instructions to the system message (or inserts one when
-absent): emit one nonempty shell-command fence, then end the response and wait for
-an observation. It preserves all other recorded message content. It is an explicit
-benchmark adaptation, not a claim to reproduce the original agent's complete
-configuration. Input manifests retain the original messages; each request record
-identifies the protocol version. Runs with and without this adaptation are different
-workloads and must not share a benchmark identity.
-
-The response checker rejects missing, empty, comment-only, non-shell, or unclosed
-command blocks and any non-whitespace after the closing fence, including fabricated
-results or further actions. Commands may use plain, `bash`, `sh`, or `shell` fences;
-longer backtick fences can contain shorter fences in heredocs. Submission commands
-use the same format. This checks action structure, not shell syntax, command safety,
-execution success, or task completion. Commands are never executed by replay.
-One-token context-qualification probes skip the action-format check; warmups do not.
-
-The protocol is opt-in for general replay inputs. Combining it with API tool
-definitions fails admission rather than silently mixing two action interfaces.
-Unadapted API-tool replay retains its JSON-structure checks and permissive inferred
-schemas; those do not certify original tool-schema conformance.
+bad warmup to obtain a passing score. Tool checks validate JSON structure, not semantic
+completion or the original tool schemas (which are permissive reconstructions).
 
 ## Local invocation
+
+Use two independent experiments with the same job and bindings:
+
+- `--experiment cache`: the same Mesh binary with prefix caching explicitly off
+  and on. Each case requires all 50 request identities, zero reported cache tokens
+  when disabled, and at least one measured cache hit when enabled. It compares
+  output hashes, token counts and finish reasons. A difference fails certification
+  and retains both responses in `cache-comparison.json` for a matched-batching
+  native/logit investigation; a difference alone does not prove KV corruption.
+- `--experiment performance` (default): cache-enabled Mesh versus cache-enabled
+  llama on the same recorded windows. Output equality across engines is not an
+  acceptance gate. Actual output lengths and all measured durations are retained.
+
+Run them separately so a correctness investigation cannot become a throughput
+score. These are two 50-turn windows per experiment, not one 100-turn session.
+Structural integrity gates apply to both experiments and warmups: length finishes,
+malformed API tool arguments, missing stream terminals and runtime errors fail.
 
 Prepare an absolute-path bindings file, separate from the portable job definition:
 
@@ -81,6 +71,7 @@ version and identity. No paths or credentials from a particular lab run are comm
 just with-lld cargo build --release --locked -p xtask --bin xtask
 target/release/xtask automation replay-matrix recorded-comparison \
   --job mesh/evals/recorded-replay/job.json --input /data/bindings.json \
+  --experiment performance \
   --output /data/comparison
 ```
 
@@ -91,14 +82,16 @@ evidence retained; a stopped comparison is not a passing benchmark.
 
 ## Jianyang
 
-`jianyang.yaml` is the reusable template. Its build compiles only the replay automation;
+`jianyang.yaml` contains separate performance and cache-correctness templates.
+Only performance declares a benchmark harness and publishes a score.
+Their build compiles only the replay automation;
 input products must already exist as verified receipts. It is lab-only, pinned to the
 Spark, and has a zero-dollar budget. Set the `bindings` input to the node-local file.
 The selected repository commit identifies the harness; each measured engine's distinct
 identity is retained in its receipt. Artifacts go beneath `JIANYANG_ARTIFACT_DIR`.
 
 Mesh's live Jianyang catalog currently comes from the Jianyang repository. Import this
-entry into that catalog; do not sync this single-entry file over the existing templates.
+entries into that catalog; do not sync this file over the existing templates.
 Committing it does not itself register or replace the live catalog. The checked-in job
 is the benchmark policy; bindings are machine-specific inputs, not a replacement job.
 
@@ -114,4 +107,9 @@ is the benchmark policy; bindings are machine-specific inputs, not a replacement
   historical evidence: first generated event to DONE. Reports label them post-first-output
   throughput rather than decode speed. Do not compare that field to native decode TPS.
 - Output character counts and tool-call counts distinguish reasoning-only output from
-  tool/finish mismatches without retaining response text in metric records.
+  tool/finish mismatches. This pinned public dataset explicitly enables response
+  retention, including content, reasoning and API tool arguments. General replay
+  inputs retain hashes only unless `retain_output: true` is selected.
+- `unavailable_metrics` explains missing observations and native prefill/decode
+  rates. The common OpenAI stream does not expose native timing. TTFT includes
+  other work and must not be converted into a claimed native prefill rate.

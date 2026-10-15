@@ -13,8 +13,6 @@ pub(super) struct Trajectory {
     pub messages: Vec<Map<String, Value>>,
     pub tools: Option<Vec<Value>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub text_action_protocol: Option<super::text_action_protocol::Protocol>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub replay_window: Option<super::replay_profile::Window>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub replay_sampling: Option<super::replay_sampling::Sampling>,
@@ -32,7 +30,6 @@ impl<'de> Deserialize<'de> for Trajectory {
             recorded_model: Option<String>,
             messages: Vec<Map<String, Value>>,
             tools: Option<Vec<Value>>,
-            text_action_protocol: Option<super::text_action_protocol::Protocol>,
             replay_window: Option<super::replay_profile::Window>,
             replay_sampling: Option<super::replay_sampling::Sampling>,
         }
@@ -46,7 +43,6 @@ impl<'de> Deserialize<'de> for Trajectory {
             recorded_model: recorded.recorded_model,
             messages: recorded.messages,
             tools: recorded.tools,
-            text_action_protocol: recorded.text_action_protocol,
             replay_window: recorded.replay_window,
             replay_sampling: recorded.replay_sampling,
             original,
@@ -56,6 +52,8 @@ impl<'de> Deserialize<'de> for Trajectory {
 
 #[derive(Serialize)]
 pub(super) struct Turn {
+    pub request_sha256: String,
+    pub retain_output: bool,
     pub request_id: String,
     pub session_id: String,
     pub source_dataset: String,
@@ -68,8 +66,6 @@ pub(super) struct Turn {
     pub recorded_output_characters: usize,
     pub available_tools: usize,
     pub qualification_probe: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub text_action_protocol: Option<super::text_action_protocol::Protocol>,
     pub body: Value,
 }
 
@@ -78,6 +74,33 @@ pub(super) struct Selection<'a> {
     pub maximum_output_tokens: Option<u64>,
     pub turn_limit: Option<usize>,
     pub qualification_probe: bool,
+}
+
+fn request_digest(body: &Value) -> DynResult<String> {
+    use sha2::{Digest, Sha256};
+    let mut identity = body.clone();
+    identity
+        .as_object_mut()
+        .ok_or("request must be an object")?
+        .remove("model");
+    Ok(hex::encode(Sha256::digest(serde_json::to_vec(&identity)?)))
+}
+
+#[cfg(test)]
+#[test]
+fn request_identity_ignores_only_served_model_alias() {
+    let original = serde_json::json!({"model":"mesh","messages":[{"role":"user","content":"original"}],"temperature":0});
+    let mut changed = original.clone();
+    changed["model"] = "local-hash".into();
+    assert_eq!(
+        request_digest(&original).unwrap(),
+        request_digest(&changed).unwrap()
+    );
+    changed["messages"][0]["content"] = "rewritten".into();
+    assert_ne!(
+        request_digest(&original).unwrap(),
+        request_digest(&changed).unwrap()
+    );
 }
 
 fn message(recorded: &Map<String, Value>) -> DynResult<Map<String, Value>> {
@@ -159,9 +182,6 @@ pub(super) fn build_selected(
         return Err("session identity and output budget must be nonempty".into());
     }
     let tools = tools(trajectory)?;
-    if trajectory.text_action_protocol.is_some() && !tools.is_empty() {
-        return Err("text action protocol cannot be combined with API tools".into());
-    }
     if let Some(sampling) = &trajectory.replay_sampling {
         sampling.validate()?;
     }
@@ -208,10 +228,9 @@ pub(super) fn build_selected(
                 if !tools.is_empty() {
                     body["tools"] = Value::Array(tools.clone());
                 }
-                if let Some(protocol) = trajectory.text_action_protocol {
-                    protocol.apply(&mut body)?;
-                }
                 turns.push(Turn {
+                    request_sha256: request_digest(&body)?,
+                    retain_output: trajectory.original["retain_output"] == true,
                     request_id: format!("{}:{}", trajectory.session_id, assistant_turn),
                     session_id: trajectory.session_id.clone(),
                     source_dataset: trajectory.source_dataset.clone(),
@@ -227,7 +246,6 @@ pub(super) fn build_selected(
                         .map_or(0, |content| content.chars().count()),
                     available_tools: tools.len(),
                     qualification_probe: selection.qualification_probe,
-                    text_action_protocol: trajectory.text_action_protocol,
                     body,
                 });
             }

@@ -26,6 +26,7 @@ pub(super) fn request(
     request["hf_home"] = serde_json::to_value(&input.hf_home)?;
     match build {
         Build::Mesh(build) => {
+            request["prefix_cache"] = serde_json::to_value(build.prefix_cache)?;
             request["binary"] = serde_json::to_value(&build.binary)?;
             request["native_runtime_root"] = serde_json::to_value(&build.runtime_root)?;
         }

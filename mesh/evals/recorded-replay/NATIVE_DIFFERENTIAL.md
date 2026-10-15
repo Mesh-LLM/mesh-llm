@@ -84,6 +84,10 @@ and SHA-256 manifests. Probe source SHA-256:
 
 ## Follow-up: explicit text-action protocol
 
+Historical model-quality exploration, excluded from the benchmark. The protocol
+adaptation and shell-format admission gate described below have been removed.
+The replay now uses the original histories and checks engine integrity only.
+
 The failing first-turn history asks for repository work through a bash tool but
 contains neither API tools nor a text-action format contract. Its retained source
 session has 54 assistant turns, all with fenced commands; observations are user

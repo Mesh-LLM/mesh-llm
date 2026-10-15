@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 
 #[derive(Deserialize)]
 pub(super) struct Input {
+    pub prefix_cache: Option<bool>,
     pub manifest: PathBuf,
     pub requirements: Requirements,
     #[serde(default)]

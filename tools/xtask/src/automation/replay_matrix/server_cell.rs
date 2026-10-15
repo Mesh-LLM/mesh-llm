@@ -20,6 +20,7 @@ const GRAMMAR: Grammar = Grammar {
         "--server-log",
         "--timeout",
         "--startup-timeout",
+        "--prefix-cache",
     ],
     flags: &["--help"],
 };
@@ -98,6 +99,14 @@ pub(in crate::automation) fn run(root: Option<&Path>, args: &[String]) -> DynRes
     let state = PrivateState::create(&std::env::temp_dir(), "replay-server")?;
     state.prepare()?;
     let mut environment = state.environment(&native);
+    if let Some(mode) = parsed.last("--prefix-cache") {
+        if !["on", "off"].contains(&mode) {
+            return Err("prefix cache must be on or off".into());
+        }
+        for name in ["SKIPPY_KV_CACHE", "SKIPPY_PREFIX_CACHE"] {
+            environment.insert(name.into(), Value::Public(mode.into()));
+        }
+    }
     environment.insert("SKIPPY_TELEMETRY_STDERR".into(), Value::Public("1".into()));
     if let Some(home) = hf_home
         .map(std::path::PathBuf::into_os_string)

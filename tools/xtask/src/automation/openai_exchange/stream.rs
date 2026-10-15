@@ -18,7 +18,7 @@ pub(in crate::automation) struct Stream {
     tools: BTreeMap<usize, Tool>,
     finish_reason: Option<String>,
     bytes_seen: usize,
-    content_check: Option<fn(&str) -> Option<String>>,
+    retain_output: bool,
 }
 
 /// Longest server error text retained in replay evidence.
@@ -90,6 +90,8 @@ struct Function {
 
 #[derive(Debug, Serialize)]
 pub(in crate::automation) struct Evidence {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output: Option<Value>,
     pub ttft_seconds: f64,
     pub elapsed_seconds: f64,
     pub generation_seconds: f64,
@@ -114,9 +116,9 @@ pub(in crate::automation) struct Evidence {
 }
 
 impl Stream {
-    pub(super) fn with_content_check(check: Option<fn(&str) -> Option<String>>) -> Self {
+    pub(in crate::automation) fn retaining_output(retain_output: bool) -> Self {
         Self {
-            content_check: check,
+            retain_output,
             ..Self::default()
         }
     }
@@ -291,10 +293,7 @@ impl Stream {
             None if probe => elapsed,
             None => return Err("stream completed without generated content".into()),
         };
-        let mut output_problems = self.output_problems();
-        if !probe && let Some(check) = self.content_check {
-            output_problems.extend(check(&self.content));
-        }
+        let output_problems = self.output_problems();
         let usage = self.usage.ok_or("missing or invalid prompt/cache usage")?;
         if usage.prompt_tokens == 0
             || usage.prompt_tokens_details.cached_tokens > usage.prompt_tokens
@@ -308,6 +307,7 @@ impl Stream {
             "tool_calls":self.tools.values().collect::<Vec<_>>()});
         let encoded = serde_json::to_vec(&identity).map_err(|error| error.to_string())?;
         Ok(Evidence {
+            output: self.retain_output.then_some(identity),
             ttft_seconds: first.as_secs_f64(),
             elapsed_seconds: elapsed.as_secs_f64(),
             generation_seconds: elapsed.saturating_sub(first).as_secs_f64(),
