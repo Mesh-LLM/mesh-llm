@@ -28,6 +28,7 @@ mod exchange_request;
 mod exchange_request_tests;
 mod identity_artifact;
 mod lifecycle_readiness;
+mod shutdown;
 mod socket_auth;
 
 /// How long a stopping plugin waits to tell the node to withdraw its key.
@@ -49,6 +50,7 @@ pub(crate) struct ExternalPlugin {
     rpc_bridge: Arc<Mutex<Option<Arc<dyn PluginRpcBridge>>>>,
     runtime_data_producer: RuntimeDataProducer,
     restart_lock: Arc<Mutex<()>>,
+    stopping: AtomicBool,
     next_request_id: AtomicU64,
     next_generation: AtomicU64,
     /// Serves this plugin as a task in this process instead of a child.
@@ -135,6 +137,7 @@ impl ExternalPlugin {
             rpc_bridge,
             runtime_data_producer,
             restart_lock: Arc::new(Mutex::new(())),
+            stopping: AtomicBool::new(false),
             next_request_id: AtomicU64::new(1),
             next_generation: AtomicU64::new(1),
             in_process,
@@ -485,6 +488,7 @@ impl ExternalPlugin {
     }
 
     async fn ensure_running(&self) -> Result<()> {
+        self.reject_shutdown()?;
         if let Some(reason) = self.disabled_reason().await {
             bail!("Plugin '{}' is disabled: {}", self.spec.name, reason);
         }
@@ -492,6 +496,7 @@ impl ExternalPlugin {
             return Ok(());
         }
         let _guard = self.restart_lock.lock().await;
+        self.reject_shutdown()?;
         if self.runtime.lock().await.is_some() {
             return Ok(());
         }
@@ -629,34 +634,6 @@ impl ExternalPlugin {
             .clone()
             .map(|manifest| manifest_tool_summaries(&manifest))
             .unwrap_or_default())
-    }
-
-    pub(crate) async fn shutdown(&self) {
-        self.authenticated_peer.store(false, Ordering::Release);
-        {
-            let mut summary = self.summary.lock().await;
-            summary.status = "shutting down".into();
-            summary.error = None;
-        }
-
-        let runtime = self.runtime.lock().await.take();
-        if let Some(runtime) = runtime {
-            stop_runtime(runtime, "plugin shutting down").await;
-        }
-
-        *self.server_info.lock().await = None;
-        *self.manifest.lock().await = None;
-
-        let mut summary = self.summary.lock().await;
-        summary.status = "stopped".into();
-        summary.pid = None;
-        summary.version = None;
-        summary.capabilities.clear();
-        summary.tools.clear();
-        summary.error = None;
-        drop(summary);
-        self.publish_summary().await;
-        self.announce_stopped().await;
     }
 
     pub(crate) async fn call_tool(
@@ -1253,6 +1230,7 @@ pub(crate) mod tests {
                 plugin_endpoint_key: None,
             }),
             restart_lock: Arc::new(Mutex::new(())),
+            stopping: AtomicBool::new(false),
             next_request_id: AtomicU64::new(1),
             next_generation: AtomicU64::new(1),
             in_process: None,
