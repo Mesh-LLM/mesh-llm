@@ -185,7 +185,7 @@ Only a passing repaired benchmark emits a publication artifact. The hosted
 publisher uses Conventional Commit titles. Independent verification in a fresh
 job, as used by the llama canary, remains a follow-up for this older repair path.
 
-`llama-upstream-canary.yml` runs daily or on trusted-main dispatch. It freezes
+**Llama Upgrade** (`llama-upstream-canary.yml`) runs daily or on trusted-main dispatch. It freezes
 one main source SHA and the upstream target before any hardware work. The
 default target is GitHub's latest published stable llama.cpp release, resolved
 by the Rust `repository llama-upstream-release` command. The hosted resolver

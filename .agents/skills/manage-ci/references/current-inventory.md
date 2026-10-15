@@ -120,7 +120,7 @@ both evidence sets, and fails after both have had a chance to run.
 for a much larger deterministic radix/blob ownership corpus. It uses the
 pinned `public cpu` image, has no secrets, records exact seed/step budgets and
 source SHA, and uploads the reproducible failure log.
-`llama-upstream-canary.yml` runs daily or on trusted-main dispatch. It freezes
+**Llama Upgrade** (`llama-upstream-canary.yml`) runs daily or on trusted-main dispatch. It freezes
 one main source SHA and the upstream target before any hardware work. Default
 selection uses `repository llama-upstream-release` to resolve GitHub's latest
 published stable `ggml-org/llama.cpp` release, validate its `vMAJOR.MINOR.PATCH`

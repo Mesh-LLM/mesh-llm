@@ -1,4 +1,4 @@
-name: llama.cpp Upstream Canary
+name: Llama Upgrade
 on:
   schedule:
     - cron: "47 3 * * *"
