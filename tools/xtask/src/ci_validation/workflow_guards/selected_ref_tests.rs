@@ -114,3 +114,37 @@ fn selected_compiler_bootstrap_authority_and_masked_owner_execution_are_rejected
     *field_mut(step, "run") = Node::Scalar(run);
     assert!(check(&workflows).is_err());
 }
+
+#[test]
+fn upstream_selection_must_walk_ci_and_never_read_the_raw_branch_tip() {
+    let marker = "upstream=\"$(\"$MESH_LLM_AUTOMATION_BIN\" repository llama-upstream-selection";
+    let mut workflows = actual();
+    let step = resolve(&mut workflows);
+    let run = field(step, "run")
+        .unwrap()
+        .replace(marker, "upstream=\"$(git ls-remote https://github.com/ggml-org/llama.cpp.git master | awk '{print $1}'");
+    *field_mut(step, "run") = Node::Scalar(run);
+    assert!(check(&workflows).is_err());
+
+    let mut workflows = actual();
+    let step = resolve(&mut workflows);
+    let run = format!(
+        "upstream=\"$(git ls-remote https://github.com/ggml-org/llama.cpp.git master | awk '{{print $1}}')\"\n{}",
+        field(step, "run").unwrap()
+    );
+    *field_mut(step, "run") = Node::Scalar(run);
+    assert!(check(&workflows).is_err());
+
+    for binding in [
+        "--pin \"$old\" ",
+        "--requested \"$UPSTREAM\" ",
+        "--github-output \"$GITHUB_OUTPUT\" ",
+    ] {
+        let mut workflows = actual();
+        let step = resolve(&mut workflows);
+        let replaced = field(step, "run").unwrap().replace(binding, "");
+        assert_ne!(replaced, field(step, "run").unwrap(), "{binding}");
+        *field_mut(step, "run") = Node::Scalar(replaced);
+        assert!(check(&workflows).is_err(), "{binding}");
+    }
+}

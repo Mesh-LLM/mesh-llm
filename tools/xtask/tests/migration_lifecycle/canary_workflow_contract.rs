@@ -50,6 +50,125 @@ fn reject_secrets(node: &Node) -> Result<(), String> {
         }),
     }
 }
+/// The workflow-scoped, read-only token the resolve job uses to read public
+/// check-run metadata for the upstream repository.
+const UPSTREAM_CREDENTIAL: &str = concat!("$", "{{ github.token }}");
+
+/// The resolve job is the only controller job that may hold a credential, and
+/// only as one GH_TOKEN binding on the step that selects the upstream commit.
+/// A second binding, a different step, a different value, or any credential in
+/// another controller job or worker node is refused; publish-certified-canary
+/// keeps the only write credential.
+fn admit_upstream_resolution_credential(job: &Node) -> Result<(), String> {
+    let mut bindings: Vec<(&str, &str, &str)> = Vec::new();
+    for step in steps(job) {
+        let env: &[(String, Node)] = step.get("env").map(Node::entries).unwrap_or(&[]);
+        for (key, value) in env {
+            if matches!(
+                key.as_str(),
+                "GH_TOKEN" | "GITHUB_TOKEN" | "CANARY_REPAIR_TOKEN"
+            ) {
+                bindings.push((
+                    step.get("id").and_then(Node::text).unwrap_or_default(),
+                    key.as_str(),
+                    value.text().unwrap_or_default(),
+                ));
+            }
+        }
+    }
+    match bindings.as_slice() {
+        [("resolve", "GH_TOKEN", value)] if *value == UPSTREAM_CREDENTIAL => {}
+        [] => return Err("upstream resolver must bind the read-only GH_TOKEN".into()),
+        _ => {
+            return Err(
+                "upstream resolver may bind exactly one read-only GH_TOKEN on its own step"
+                    .into(),
+            );
+        }
+    }
+    let mut remainder = job.clone();
+    strip_credential_bindings(&mut remainder);
+    reject_secrets(&remainder)
+}
+
+/// Removes every credential binding so the rest of the job node can still be
+/// checked for any other disclosure.
+fn strip_credential_bindings(node: &mut Node) {
+    match node {
+        Node::Map(entries) => {
+            entries.retain(|(key, _)| {
+                !matches!(
+                    key.as_str(),
+                    "GH_TOKEN" | "GITHUB_TOKEN" | "CANARY_REPAIR_TOKEN"
+                )
+            });
+            for (_, value) in entries.iter_mut() {
+                strip_credential_bindings(value);
+            }
+        }
+        Node::Seq(values) => values.iter_mut().for_each(strip_credential_bindings),
+        Node::Scalar(_) => {}
+    }
+}
+
+/// The controller job that owns upstream selection.
+fn resolution_job<'a>(controller: &'a mut Node, name: &str) -> &'a mut Node {
+    change(controller, &["jobs", name])
+}
+
+/// The one step of a job that carries an id.
+fn identified_step<'a>(job: &'a mut Node, id: &str) -> &'a mut Node {
+    let Node::Map(entries) = job else {
+        panic!("job");
+    };
+    let steps = entries
+        .iter_mut()
+        .find(|(key, _)| key == "steps")
+        .expect("steps");
+    let Node::Seq(items) = &mut steps.1 else {
+        panic!("steps");
+    };
+    items
+        .iter_mut()
+        .find(|step| step.get("id").and_then(Node::text) == Some(id))
+        .expect("step id")
+}
+
+/// A step of a job by index.
+fn indexed_step<'a>(job: &'a mut Node, index: usize) -> &'a mut Node {
+    let Node::Map(entries) = job else {
+        panic!("job");
+    };
+    let steps = entries
+        .iter_mut()
+        .find(|(key, _)| key == "steps")
+        .expect("steps");
+    let Node::Seq(items) = &mut steps.1 else {
+        panic!("steps");
+    };
+    &mut items[index]
+}
+
+/// Replaces the credential value of the resolve step.
+fn set_resolution_credential(controller: &mut Node, value: &str) {
+    let step = identified_step(resolution_job(controller, "resolve"), "resolve");
+    let Node::Map(entries) = step else {
+        panic!("step");
+    };
+    let env = entries
+        .iter_mut()
+        .find(|(key, _)| key == "env")
+        .expect("env");
+    let Node::Map(env) = &mut env.1 else {
+        panic!("env");
+    };
+    let binding = env
+        .iter_mut()
+        .find(|(key, _)| key == "GH_TOKEN")
+        .expect("GH_TOKEN");
+    binding.1 = Node::Scalar(value.into());
+}
+
 fn read_only(node: &Node) -> Result<(), String> {
     match node {
         Node::Map(entries)
@@ -84,7 +203,9 @@ fn security(controller: &Node, worker: &Node) -> Result<(), String> {
     reject_secrets(worker)?;
     let jobs = controller.get("jobs").ok_or("controller jobs absent")?;
     for (name, job) in jobs.entries() {
-        if name != "publish-certified-canary" {
+        if name == "resolve" {
+            admit_upstream_resolution_credential(job)?;
+        } else if name != "publish-certified-canary" {
             reject_secrets(job)?;
         }
         if let Some(permissions) = job.get("permissions")
@@ -217,6 +338,78 @@ fn protected_controller_and_worker_credentials_refuse_permission_or_token_mutati
     };
     candidate.push(("secrets".into(), Node::Scalar("inherit".into())));
     assert!(security(&forwarded, &worker).is_err());
+
+    // The resolver holds exactly one credential: the read-only token on its own
+    // step. Removing it, moving it to another step, replacing it with a write
+    // credential, or adding a credential to another controller job is refused.
+    let mut removed = controller.clone();
+    if let Node::Map(entries) = identified_step(resolution_job(&mut removed, "resolve"), "resolve")
+    {
+        let env = entries
+            .iter_mut()
+            .find(|(key, _)| key == "env")
+            .expect("env");
+        if let Node::Map(env) = &mut env.1 {
+            env.retain(|(key, _)| key != "GH_TOKEN");
+        }
+    }
+    assert!(security(&removed, &worker).is_err());
+
+    // A second binding on another step of the same job is refused.
+    let mut moved = controller.clone();
+    let checkout = indexed_step(resolution_job(&mut moved, "resolve"), 0);
+    if let Node::Map(entries) = checkout {
+        entries.push((
+            "env".into(),
+            Node::Map(vec![("GH_TOKEN".into(), Node::Scalar(UPSTREAM_CREDENTIAL.into()))]),
+        ));
+    }
+    assert!(security(&moved, &worker).is_err());
+
+    let mut substituted = controller.clone();
+    set_resolution_credential(&mut substituted, concat!("$", "{{ secrets.CANARY_REPAIR_TOKEN }}"));
+    assert!(security(&substituted, &worker).is_err());
+
+    // A credential in any other controller job is refused.
+    let mut elsewhere = controller.clone();
+    if let Node::Map(entries) = resolution_job(&mut elsewhere, "preflight") {
+        let env = entries
+            .iter_mut()
+            .find(|(key, _)| key == "env")
+            .expect("env");
+        if let Node::Map(env) = &mut env.1 {
+            env.push((
+                "GH_TOKEN".into(),
+                Node::Scalar(UPSTREAM_CREDENTIAL.into()),
+            ));
+        }
+    }
+    assert!(security(&elsewhere, &worker).is_err());
+}
+
+#[test]
+fn upstream_resolution_walks_to_the_newest_ci_passing_commit() {
+    let controller = document(".github/workflows/llama-upstream-canary.yml");
+    let resolve = controller.get("jobs").unwrap().get("resolve").unwrap();
+    let (_, step) = named(resolve, "id", "resolve");
+    let env = step.get("env").unwrap();
+    assert_eq!(field(env, "MESH_REF"), concat!("$", "{{ inputs.mesh_ref }}"));
+    assert_eq!(field(env, "UPSTREAM"), concat!("$", "{{ inputs.upstream_sha }}"));
+    assert_eq!(field(env, "GH_TOKEN"), UPSTREAM_CREDENTIAL);
+    let run = field(step, "run");
+    assert!(run.contains(
+        "upstream=\"$(\"$MESH_LLM_AUTOMATION_BIN\" repository llama-upstream-selection"
+    ));
+    assert!(run.contains("--pin \"$old\" --requested \"$UPSTREAM\""));
+    assert!(
+        run.contains("--github-output \"$GITHUB_OUTPUT\" --summary \"$GITHUB_STEP_SUMMARY\"")
+    );
+    // The raw upstream tip is never the target: no ls-remote lookup remains.
+    assert!(!run.contains("ls-remote"));
+    assert!(
+        run.find("repository llama-upstream-selection").unwrap()
+            < run.find("echo \"upstream=$upstream\"").unwrap()
+    );
 }
 fn current_attempt_inputs(jobs: &Node, index: u8) {
     let repair_name = format!("repair_{index}");

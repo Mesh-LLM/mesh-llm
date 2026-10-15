@@ -9,7 +9,11 @@ on:
         type: string
         default: ''
       upstream_sha:
-        description: Optional exact upstream commit (defaults to upstream master)
+        description: >
+          Optional exact upstream commit. It is admitted under the same rule as
+          the branch tip: a commit that is not passing its own upstream CI is
+          replaced by the newest passing commit at or below it, and the
+          substitution is recorded in the step summary.
         type: string
         default: ''
       force_certify:
@@ -52,6 +56,13 @@ jobs:
           UPSTREAM: ${{ inputs.upstream_sha }}
           FORCE: ${{ inputs.force_certify }}
           MESH_REF: ${{ inputs.mesh_ref }}
+          # The workflow-scoped, read-only token is required only to read public
+          # check-run metadata for the upstream repository. It is bound to this
+          # one step on this GitHub-hosted controller job; no other controller
+          # job and no worker node receives a credential, and publication keeps
+          # the only write credential. The protected-source contract test
+          # (canary_workflow_contract) admits exactly this one binding.
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           echo "source=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
@@ -71,10 +82,12 @@ jobs:
             exit 1
           fi
           old="$(tr -d '[:space:]' < "${pins[0]}")"
-          upstream="$UPSTREAM"
-          if [[ -z "$upstream" || "$upstream" == latest ]]; then
-            upstream="$(git ls-remote https://github.com/ggml-org/llama.cpp.git master | awk '{print $1}')"
-          fi
+          # The upstream target is never the raw branch tip: the protection-owned
+          # selection walks the branch downwards and returns the newest commit
+          # whose own GitHub CI is green, keeping the current pin as the floor.
+          upstream="$("$MESH_LLM_AUTOMATION_BIN" repository llama-upstream-selection \
+            --pin "$old" --requested "$UPSTREAM" \
+            --github-output "$GITHUB_OUTPUT" --summary "$GITHUB_STEP_SUMMARY")"
           [[ "$upstream" =~ ^[0-9a-f]{40}$ ]]
           changed=false
           mode=pinned-build

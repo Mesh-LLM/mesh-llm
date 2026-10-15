@@ -11,6 +11,7 @@ pub(crate) mod publish_roster;
 mod selected_ref;
 pub(crate) mod text;
 mod upstream_pin;
+mod upstream_selection;
 
 use crate::cli::RepositoryCheck;
 use crate::command::DynResult;
@@ -45,6 +46,7 @@ pub(crate) fn run_check(
         RepositoryCheck::EnvMutationCensus => env_census::run(args, default_root),
         RepositoryCheck::LlamaUpstreamPin => upstream_pin::run(args, default_root),
         RepositoryCheck::SelectedRef => selected_ref::run(args, default_root),
+        RepositoryCheck::LlamaUpstreamSelection => upstream_selection::run(args),
         RepositoryCheck::DockerPrecheck => docker_precheck::run(args, default_root),
     }
 }

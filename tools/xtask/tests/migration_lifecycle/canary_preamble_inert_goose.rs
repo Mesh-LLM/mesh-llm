@@ -238,6 +238,36 @@ fn actual_complete_wrapper_refuses_malicious_sha_before_tools_or_state() {
     fixture.finish();
 }
 
+#[test]
+fn actual_complete_wrapper_refuses_a_missing_target_without_reading_the_upstream_tip() {
+    let fixture = Fixture::new();
+    executable(
+        &fixture.root.join("tools/uname"),
+        "#!/bin/bash\ncase \"$1\" in -s) printf Linux;; -m) printf x86_64;; *) exit 91;; esac\n",
+    );
+    executable(
+        &fixture.root.join("tools/git"),
+        "#!/bin/bash\nprintf forbidden > git-called\nexit 99\n",
+    );
+    let report = fixture.run(
+        &repository().join("scripts/llama-canary-agent-repair.sh"),
+        &[],
+        fixture.environment(),
+    );
+    assert_eq!(report.process.status.unwrap().code(), Some(1));
+    let output = [
+        report.stdout.unwrap().as_bytes(),
+        report.stderr.unwrap().as_bytes(),
+    ]
+    .concat();
+    let diagnostic = String::from_utf8(output).unwrap();
+    assert!(diagnostic.contains("an exact upstream SHA is required"));
+    // The raw branch tip is never a pin: no upstream lookup may run.
+    assert!(!fixture.root.join("git-called").exists());
+    assert_eq!(fs::read_dir(fixture.root.join("tmp")).unwrap().count(), 0);
+    fixture.finish();
+}
+
 const GOOSE: &str = r#"#!/bin/bash
 set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"

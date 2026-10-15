@@ -186,7 +186,7 @@ publisher uses Conventional Commit titles. Independent verification in a fresh
 job, as used by the llama canary, remains a follow-up for this older repair path.
 
 `llama-upstream-canary.yml` runs daily or on trusted-main dispatch. It freezes
-one main source SHA and the upstream target before any hardware work. Unchanged
+one main source SHA and the upstream target before any hardware work. The upstream target is never the raw branch tip: `cargo xtool repository llama-upstream-selection` walks the upstream branch from its newest commit downwards and selects the newest commit whose own GitHub check runs all completed without a failure, keeps the current pin as its floor, and keeps the pin unchanged when no newer commit passes. An explicit dispatch `upstream_sha` is admitted under the same rule and is replaced by the newest passing commit at or below it, with the substitution recorded in the run summary. That lookup is the only consumer of the workflow-scoped read-only token, bound to the resolution step of the GitHub-hosted controller job. Unchanged
 scheduled/forced runs build once and certify the complete roster. Every
 certification first runs a deterministic immutable-plan and pinned-cache
 preflight. It validates model revision/blob paths, byte sizes and GGUF metadata.
