@@ -92,6 +92,12 @@ pub(in crate::automation) struct Evidence {
     pub ttft_seconds: f64,
     pub elapsed_seconds: f64,
     pub generation_seconds: f64,
+    /// Client-observed first-to-last generated SSE event, not kernel decode time.
+    pub output_stream_seconds: f64,
+    pub terminal_seconds: f64,
+    pub content_characters: usize,
+    pub reasoning_characters: usize,
+    pub tool_calls: usize,
     pub decode_inter_token_seconds: Vec<f64>,
     pub completion_tokens: u64,
     pub prompt_tokens: u64,
@@ -289,12 +295,25 @@ impl Stream {
             return Err("stream completed without completion-token usage".into());
         }
         let identity = serde_json::json!({"content":self.content,"reasoning_content":self.reasoning,
-            "tool_calls":self.tools.into_values().collect::<Vec<_>>()});
+            "tool_calls":self.tools.values().collect::<Vec<_>>()});
         let encoded = serde_json::to_vec(&identity).map_err(|error| error.to_string())?;
         Ok(Evidence {
             ttft_seconds: first.as_secs_f64(),
             elapsed_seconds: elapsed.as_secs_f64(),
             generation_seconds: elapsed.saturating_sub(first).as_secs_f64(),
+            output_stream_seconds: self
+                .events
+                .last()
+                .copied()
+                .unwrap_or(first)
+                .saturating_sub(first)
+                .as_secs_f64(),
+            terminal_seconds: elapsed
+                .saturating_sub(self.events.last().copied().unwrap_or(elapsed))
+                .as_secs_f64(),
+            content_characters: self.content.chars().count(),
+            reasoning_characters: self.reasoning.chars().count(),
+            tool_calls: self.tools.len(),
             decode_inter_token_seconds: self
                 .events
                 .windows(2)

@@ -96,6 +96,9 @@ pub(in crate::automation) fn run(args: &[String]) -> DynResult<()> {
             &cell.requests_output,
             &cell.summary_output,
         )?;
+        if !passed && cell.workload.require_complete_output {
+            break;
+        }
     }
     if passed {
         Ok(())

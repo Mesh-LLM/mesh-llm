@@ -9,7 +9,8 @@ pub(super) fn prepare(
     let cell = |trajectories: Vec<super::recorded_requests::Trajectory>, concurrency: usize| {
         serde_json::json!({"trajectories":trajectories.into_iter().map(|trajectory|trajectory.original).collect::<Vec<_>>(),
             "model":"pending","base_url":base_url,"concurrency":concurrency,
-            "max_output_tokens":input.max_output_tokens,"request_timeout_seconds":input.request_timeout_seconds})
+            "max_output_tokens":input.max_output_tokens,"request_timeout_seconds":input.request_timeout_seconds,
+            "require_complete_output":input.require_complete_output})
     };
     let warmup = manifest
         .cohorts

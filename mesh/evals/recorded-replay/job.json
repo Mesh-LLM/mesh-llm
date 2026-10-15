@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "name": "Skippy vs llama agentic comparison",
+  "model_sha256": "00fe7986ff5f6b463e62455821146049db6f9313603938a70800d1fb69ef11a4",
+  "dataset_revision": "cef72d1f4d0caabf85937adf8337a14b7522c782",
+  "dataset_sha256": "3dd8ec3546cf771ce4ab2ac6c51ccefdd621197fa997a2cefb430b50df808fb6",
+  "upstream_commit": "8212c7802455255460ab8e18fc34754560031b34",
+  "context_size": 131072,
+  "warmup_turns": 4,
+  "sampling": {
+    "temperature": 1.0, "top_p": 0.95, "top_k": 20, "min_p": 0.0,
+    "presence_penalty": 1.5, "repeat_penalty": 1.0, "enable_thinking": false
+  },
+  "cases": [
+    {"name": "early", "session_id": "kwai-klear-swe-smith-mini::andialbrecht__sqlparse.e57923b3.lm_rewrite__uesfnyoq", "start": 2, "count": 50},
+    {"name": "grown", "session_id": "swe-smith-claude-3-7-sonnet::chardet__chardet.9630f238.combine_file__5zgxk3lq.cb713a4o", "start": 25, "count": 50}
+  ]
+}

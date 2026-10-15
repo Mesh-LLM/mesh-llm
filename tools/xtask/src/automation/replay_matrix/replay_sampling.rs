@@ -11,6 +11,8 @@ pub(super) struct Sampling {
     pub min_p: f64,
     pub presence_penalty: f64,
     pub repeat_penalty: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enable_thinking: Option<bool>,
 }
 
 impl Sampling {
@@ -31,7 +33,17 @@ impl Sampling {
     }
 
     pub(super) fn apply(&self, body: &mut serde_json::Value) -> DynResult<()> {
-        let fields = serde_json::to_value(self)?;
+        let mut fields = serde_json::to_value(self)?;
+        fields
+            .as_object_mut()
+            .ok_or("sampling must be an object")?
+            .remove("enable_thinking");
+        if let Some(enabled) = self.enable_thinking {
+            body["chat_template_kwargs"] = serde_json::json!({"enable_thinking":enabled});
+            body["enable_thinking"] = enabled.into();
+            // Explicitly unrestricted on Mesh; upstream defaults to unrestricted.
+            body["reasoning_budget_tokens"] = (-1).into();
+        }
         body.as_object_mut()
             .ok_or("request must be an object")?
             .extend(
@@ -104,5 +116,23 @@ mod tests {
         sampling.temperature = 0.6;
         sampling.repeat_penalty = f64::INFINITY;
         assert!(sampling.validate().is_err());
+    }
+}
+
+#[cfg(test)]
+mod thinking_tests {
+    use super::*;
+    #[test]
+    fn both_engine_controls_and_reasoning_budget_are_explicit_without_output_cap() {
+        for enabled in [false, true] {
+            let profile: Sampling = serde_json::from_value(serde_json::json!({"temperature":1,"top_p":0.95,"top_k":20,"min_p":0,"presence_penalty":1.5,"repeat_penalty":1,"enable_thinking":enabled})).unwrap();
+            let mut body = serde_json::json!({"messages":[],"seed":42});
+            profile.apply(&mut body).unwrap();
+            assert_eq!(body["enable_thinking"], enabled);
+            assert_eq!(body["chat_template_kwargs"]["enable_thinking"], enabled);
+            assert_eq!(body["reasoning_budget_tokens"], -1);
+            assert!(body.get("max_tokens").is_none());
+            assert!(body.get("max_completion_tokens").is_none());
+        }
     }
 }

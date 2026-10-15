@@ -13,6 +13,8 @@ pub(super) struct Workload {
     pub request_timeout_seconds: u64,
     #[serde(default)]
     pub qualification_probe: bool,
+    #[serde(default)]
+    pub require_complete_output: bool,
     pub warmup_turns: Option<usize>,
     #[serde(default)]
     pub following_cells: Vec<CellJob>,

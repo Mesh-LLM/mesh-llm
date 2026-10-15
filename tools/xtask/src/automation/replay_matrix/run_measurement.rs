@@ -48,6 +48,9 @@ pub(super) fn measure(
                 qualification,
                 budget,
             )?;
+            if !passed && input.require_complete_output {
+                return Ok(false);
+            }
         }
     }
     Ok(passed)

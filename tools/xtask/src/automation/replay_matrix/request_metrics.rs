@@ -14,6 +14,11 @@ pub(super) fn from_evidence(evidence: &Evidence) -> Metrics {
             evidence.generation_seconds,
         ),
         ttft_seconds: Some(evidence.ttft_seconds),
+        output_stream_tokens_per_second: decode_rate(
+            evidence.completion_tokens,
+            evidence.output_stream_seconds,
+        ),
+        terminal_seconds: Some(evidence.terminal_seconds),
         ..Default::default()
     }
 }
@@ -35,6 +40,11 @@ mod tests {
             ttft_seconds: 10.0,
             elapsed_seconds: 18.0,
             generation_seconds: 8.0,
+            output_stream_seconds: 3.0,
+            terminal_seconds: 5.0,
+            content_characters: 120,
+            reasoning_characters: 0,
+            tool_calls: 0,
             decode_inter_token_seconds: vec![],
             completion_tokens: 120,
             prompt_tokens: 1000,

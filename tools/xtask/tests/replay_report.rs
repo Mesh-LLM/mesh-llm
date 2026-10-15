@@ -5,7 +5,9 @@ use replay_report_support::{document, run};
 #[test]
 fn columns_and_values_survive_csv_quoting() {
     let artifact = tempfile::tempdir().unwrap();
-    let input = document("arm,\"quoted\"\nline");
+    let mut input = document("arm,\"quoted\"\nline");
+    input["results"][0]["cells"][0]["output_stream_seconds"] = 4.into();
+    input["results"][0]["cells"][0]["terminal_seconds"] = 6.into();
     std::fs::write(
         artifact.path().join("run.json"),
         serde_json::to_vec(&input).unwrap(),
@@ -17,12 +19,14 @@ fn columns_and_values_survive_csv_quoting() {
     let header = &records[0];
     assert_eq!(
         header.join(","),
-        "label,ref,commit,concurrency,passes,trajectories_per_pass,trajectory_replays,requests,successful_requests,failed_requests,failed_request_ids,failure_identity_known,content_identity,content_identity_known,content_stable_across_passes,prompt_tokens_min,prompt_tokens_max,success_pct,budget_exhausted_pct,agent_steps_per_second,agent_steps_per_second_min,agent_steps_per_second_max,workload_output_tokens_per_second,workload_output_tokens_per_second_min,workload_output_tokens_per_second_max,decode_tokens_per_second,decode_tokens_per_second_min,decode_tokens_per_second_max,ttft_p50_seconds,ttft_p50_seconds_min,ttft_p50_seconds_max,ttft_p95_seconds,mean_in_flight,concurrency_utilization_pct,cache_pct,delta_comparable,agent_steps_per_second_delta_pct,workload_output_tokens_per_second_delta_pct,decode_tokens_per_second_delta_pct,ttft_p50_seconds_delta_pct"
+        "label,ref,commit,concurrency,passes,trajectories_per_pass,trajectory_replays,requests,successful_requests,failed_requests,failed_request_ids,failure_identity_known,content_identity,content_identity_known,content_stable_across_passes,prompt_tokens_min,prompt_tokens_max,success_pct,budget_exhausted_pct,agent_steps_per_second,agent_steps_per_second_min,agent_steps_per_second_max,workload_output_tokens_per_second,workload_output_tokens_per_second_min,workload_output_tokens_per_second_max,decode_tokens_per_second,output_stream_tokens_per_second,terminal_seconds,decode_tokens_per_second_min,decode_tokens_per_second_max,ttft_p50_seconds,ttft_p50_seconds_min,ttft_p50_seconds_max,ttft_p95_seconds,mean_in_flight,concurrency_utilization_pct,cache_pct,delta_comparable,agent_steps_per_second_delta_pct,workload_output_tokens_per_second_delta_pct,decode_tokens_per_second_delta_pct,ttft_p50_seconds_delta_pct"
     );
     let value = |name| &records[1][header.iter().position(|column| column == name).unwrap()];
     assert_eq!(value("label"), "arm,\"quoted\"\nline");
     assert_eq!(value("ref"), "refs/test");
     assert_eq!(value("decode_tokens_per_second"), "10.0");
+    assert_eq!(value("output_stream_tokens_per_second"), "25.0");
+    assert_eq!(value("terminal_seconds"), "6.0");
     assert_eq!(value("prompt_tokens_min"), "40");
     assert_eq!(value("failed_request_ids"), "[]");
     assert_eq!(value("content_identity"), "{\"s:0\":[\"same\"]}");

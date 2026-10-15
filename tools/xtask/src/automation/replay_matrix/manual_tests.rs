@@ -408,7 +408,7 @@ fn server_default_limits_do_not_hide_budget_exhaustion() {
         let summary = replay_profile::summarize(&cohort, &[record], 1, Mode::All).unwrap();
         assert_eq!(summary["budget_exhausted_requests"], exhausted);
         assert_eq!(summary["output_incomplete_requests"], exhausted);
-        let mut document = json!({"results":[{"label":"fixed","pass":1,"cells":[summary]}],
+        let mut document = json!({"results":[{"label":"fixed","pass":1,"warmup":{"requests":4,"output_incomplete_requests":0},"cells":[summary]}],
             "gates":{"passed":true,"checks":[]}});
         super::output_integrity::apply(&mut document).unwrap();
         assert_eq!(document["gates"]["passed"], exhausted == 0);
@@ -430,8 +430,7 @@ fn strict_gate_rejects_structural_truncation_even_when_all_requests_completed() 
             "decode_inter_token_seconds":[0.05],"output_problems":problems});
         let summary = replay_profile::summarize(&cohort, &[record], 1, Mode::All).unwrap();
         assert_eq!(summary["acceptance"]["passed"], true);
-        let mut document =
-            json!({"results":[{"cells":[summary]}],"gates":{"passed":null,"checks":[]}});
+        let mut document = json!({"results":[{"warmup":{"requests":4,"output_incomplete_requests":0},"cells":[summary]}],"gates":{"passed":null,"checks":[]}});
         assert_eq!(
             super::output_integrity::apply(&mut document).unwrap(),
             passed
@@ -492,10 +491,15 @@ fn typed_run_and_arm_workload_propagate_mode_and_hf_home_but_warmup_remains_all(
     assert_eq!(serialized["replay_mode"], "final");
     assert_eq!(serialized["hf_home"], "/fixture/hf");
     let manifest:super::manifest_preflight::Manifest=serde_json::from_value(json!({"cohorts":{"warmup":[trajectory("w","goose",4).original],"1":[trajectory("s","goose",4).original]}})).unwrap();
-    let input:super::arm_pass::Input=serde_json::from_value(json!({"manifest":"/fixture/manifest.json","requirements":{"concurrency":[1],"minimum_worker_waves":1,"warmup_turns":4,"required_frameworks":[]},"model":"hf://owner/model","label":"main","ref":"HEAD","commit":"a".repeat(40),"pass":1,"max_output_tokens":2048,"request_timeout_seconds":1,"startup_timeout_seconds":2,"timeout_seconds":3,"port":9337,"output":"/fixture/artifact","replay_mode":"final","hf_home":"/fixture/hf"})).unwrap();
+    let input:super::arm_pass::Input=serde_json::from_value(json!({"manifest":"/fixture/manifest.json","requirements":{"concurrency":[1],"minimum_worker_waves":1,"warmup_turns":4,"required_frameworks":[]},"model":"hf://owner/model","label":"main","ref":"HEAD","commit":"a".repeat(40),"pass":1,"max_output_tokens":2048,"request_timeout_seconds":1,"startup_timeout_seconds":2,"timeout_seconds":3,"port":9337,"output":"/fixture/artifact","replay_mode":"final","hf_home":"/fixture/hf","require_complete_output":true})).unwrap();
     let (workload, levels) = super::arm_pass_workload::prepare(&input, manifest).unwrap();
     assert_eq!(levels, [1]);
     assert_eq!(workload["replay_mode"], "all");
+    assert_eq!(workload["require_complete_output"], true);
+    assert_eq!(
+        workload["following_cells"][0]["workload"]["require_complete_output"],
+        true
+    );
     assert_eq!(
         workload["following_cells"][0]["workload"]["replay_mode"],
         "final"

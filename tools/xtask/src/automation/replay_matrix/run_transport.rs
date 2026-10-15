@@ -22,6 +22,7 @@ pub(super) fn request(
         "request_timeout_seconds":input.request_timeout_seconds.min(timeout),"startup_timeout_seconds":startup,
         "timeout_seconds":timeout,"port":port,"output":output});
     request["replay_mode"] = serde_json::to_value(input.replay_mode)?;
+    request["require_complete_output"] = input.require_complete_output.into();
     request["hf_home"] = serde_json::to_value(&input.hf_home)?;
     match build {
         Build::Mesh(build) => {

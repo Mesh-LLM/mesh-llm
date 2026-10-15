@@ -1,0 +1,52 @@
+# Import this entry alongside the existing Jianyang Mesh template catalog.
+# Do not sync this single-entry file over the entire existing catalog.
+version: 1
+build: |
+  set -euo pipefail
+  cd "$JIANYANG_REPO_DIR"
+  just with-lld cargo build --release --locked -p xtask --bin xtask
+templates:
+  - key: skippy-vs-llama-agentic
+    name: Skippy vs llama agentic comparison
+    group: Benchmarks
+    description: Two pinned 50-turn windows on Spark, thinking off, server-default output limits and strict warmup/measured completeness.
+    target:
+      executor: lab
+      nodes: [spark-james]
+    priority: 10
+    models:
+      - ref: hf:unsloth/Qwen3.5-4B-GGUF@e87f176479d0855a907a41277aca2f8ee7a09523#Qwen3.5-4B-Q4_K_M.gguf
+        env: MODEL
+    inputs:
+      - key: bindings
+        label: Absolute path to verified local input bindings JSON
+        kind: text
+        default: /mnt/lab/benchmarks/recorded-replay/bindings.json
+    env:
+      REPLAY_BINDINGS: ${bindings}
+      CARGO_INCREMENTAL: "0"
+      LLAMA_STAGE_USE_SCCACHE: "0"
+    command: |
+      set -euo pipefail
+      cd "$JIANYANG_REPO_DIR"
+      exec "${CARGO_TARGET_DIR:-target}/release/xtask" automation replay-matrix recorded-comparison \
+        --job mesh/evals/recorded-replay/job.json --input "$REPLAY_BINDINGS" \
+        --output "$JIANYANG_ARTIFACT_DIR/recorded-replay"
+    budget: { max_usd: 0, max_duration_s: 43200, grace_s: 600 }
+    harness:
+      name: custom
+      version: recorded-agentic-aligned-v2
+      trace:
+        kind: file
+        ref: thoughtworks/agentic-coding-trajectories@cef72d1f4d0caabf85937adf8337a14b7522c782/sessions.parquet
+        sha256: 3dd8ec3546cf771ce4ab2ac6c51ccefdd621197fa997a2cefb430b50df808fb6
+      seed: 42
+      warmup_requests: 16
+      request_count: 200
+      concurrency: [1]
+      args:
+        job: mesh/evals/recorded-replay/job.json
+        thinking: false
+        output_limit: server-default
+        require_complete_output: true
+        timing: first-event_last-event_DONE

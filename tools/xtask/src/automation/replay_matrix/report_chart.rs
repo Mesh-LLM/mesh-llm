@@ -23,8 +23,8 @@ impl Metric {
     fn labels(&self) -> (&'static str, &'static str) {
         match self {
             Self::Decode => (
-                "Decode throughput by arm",
-                "Generated tokens / decode second",
+                "Post-first-output throughput by arm",
+                "Generated tokens / second from first output to DONE",
             ),
             Self::Output => (
                 "End-to-end workload output throughput by arm",

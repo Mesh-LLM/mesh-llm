@@ -154,7 +154,7 @@ pub(super) fn summarize(
         .iter()
         .filter(|record| record["finish_reason"] == "length")
         .count();
-    Ok(json!({
+    let mut summary = json!({
         "concurrency":concurrency,"trajectories":trajectories.len(),"requests":records.len(),
         "session_cohort_sha256":cohort_sha256,
         "sessions":sessions,"successful_trajectories":complete_sessions,
@@ -178,7 +178,9 @@ pub(super) fn summarize(
         "concurrency_utilization_pct":mean.map(|mean|100.0*mean/offered),
         "cache_pct":ratio(100.0*cached,prompt),"ordered_replay":true,"replay_mode":"all",
         "completeness":completeness,"acceptance":{"passed":completeness.passed,"problems":completeness.problems}
-    }))
+    });
+    super::stream_timing::summarize(records, &mut summary);
+    Ok(summary)
 }
 
 fn number(value: usize) -> DynResult<f64> {

@@ -6,11 +6,11 @@ use std::io::Write;
 pub(super) fn write(output: &mut impl Write, rows: &[Row]) -> DynResult<()> {
     writeln!(
         output,
-        "\n## Result table\n\n| Arm | Identity | Offered C | Realized C | Slot use | Trajectories/pass | Measured requests | Prompt tokens | Failures | Output match | Decode tok/s | Pass range | vs baseline | E2E output tok/s | Pass range | TTFT p50 | Pass range | TTFT p95 | TTFT p50 vs baseline | Cached prompt | Budget exhausted |"
+        "\n## Result table\n\n| Arm | Identity | Offered C | Realized C | Slot use | Trajectories/pass | Measured requests | Prompt tokens | Failures | Output match | Post-first-output tok/s | Stream-span tok/s (proxy) | Terminal total | Pass range | vs baseline | E2E output tok/s | Pass range | TTFT p50 | Pass range | TTFT p95 | TTFT p50 vs baseline | Cached prompt | Budget exhausted |"
     )?;
     writeln!(
         output,
-        "|---|---|---:|---:|---:|---:|---:|---:|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|"
+        "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|"
     )?;
     for row in rows {
         let prompt = match (row.prompt_tokens_min, row.prompt_tokens_max) {
@@ -29,6 +29,8 @@ pub(super) fn write(output: &mut impl Write, rows: &[Row]) -> DynResult<()> {
             row.failed_requests.to_string(),
             if row.delta_comparable { "yes" } else { "no" }.into(),
             number(row.decode_tokens_per_second, 2, ""),
+            number(row.output_stream_tokens_per_second, 2, ""),
+            number(row.terminal_seconds, 3, "s"),
             range(
                 (
                     row.decode_tokens_per_second_min,

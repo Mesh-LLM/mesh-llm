@@ -131,6 +131,10 @@ pub(super) fn measure(
             "expected_turns": turns
         });
     }
+    if workload.require_complete_output && records.iter().any(super::output_integrity::incomplete) {
+        evidence["acceptance"]["passed"] = false.into();
+        evidence["acceptance"]["output_integrity_failed"] = true.into();
+    }
     crate::command::write_json_file(summary, &evidence)?;
     progress.event = super::progress::Event::Completed;
     progress.elapsed_seconds = started.elapsed().as_secs_f64();
@@ -154,6 +158,8 @@ pub(super) fn measure(
         workload_output_tokens_per_second: evidence["workload_output_tokens_per_second"].as_f64(),
         ttft_p50_seconds: evidence["ttft_p50_seconds"].as_f64(),
         ttft_seconds: None,
+        output_stream_tokens_per_second: evidence["output_stream_tokens_per_second"].as_f64(),
+        terminal_seconds: evidence["terminal_seconds"].as_f64(),
     });
     super::progress::emit(&progress)?;
     finish?;
@@ -194,16 +200,20 @@ async fn execute(
     let mut active = tokio::task::JoinSet::new();
     let (sender, mut receiver) = tokio::sync::mpsc::channel(workload.concurrency);
     let epoch = Instant::now();
+    let integrity_stop = crate::process::Cancellation::default();
     let launch = |turns: Vec<Turn>, active: &mut tokio::task::JoinSet<Result<(), String>>| {
         let sender = sender.clone();
         let cancellation = cancellation.clone();
+        let integrity_stop = integrity_stop.clone();
         let base = workload.base_url.clone();
         let timeout = Duration::from_secs(workload.request_timeout_seconds);
         let concurrency = workload.concurrency;
         let warmup = workload.warmup_turns.is_some();
+        let strict = workload.require_complete_output;
         let progress = progress.clone();
         active.spawn(async move {
             for turn in turns {
+                if cancellation.is_cancelled() || integrity_stop.is_cancelled() { break; }
                 let started = epoch.elapsed();
                 let request_started = Instant::now();
                 let mut request_progress = progress.clone();
@@ -213,10 +223,11 @@ async fn execute(
                 let operation = async {
                     tokio::select! {
                         result = tokio::time::timeout(timeout, exchange(&base, &turn)) => match result {
-                            Ok(Ok(evidence)) => (super::progress::Outcome::Success, Ok(evidence)),
+                            Ok(Ok(evidence)) => (if evidence.output_problems.is_empty() { super::progress::Outcome::Success } else { super::progress::Outcome::Error }, Ok(evidence)),
                             Ok(Err(error)) => (super::progress::Outcome::Error, Err(error.to_string())),
                             Err(error) => (super::progress::Outcome::Timeout, Err(error.to_string())),
                         },
+                        () = cancelled(&integrity_stop) => (super::progress::Outcome::Cancelled, Err("replay stopped after incomplete output".into())),
                         () = cancelled(&cancellation) => (super::progress::Outcome::Cancelled, Err("replay interrupted".into())),
                     }
                 };
@@ -242,8 +253,10 @@ async fn execute(
                 record["completed"] = epoch.elapsed().as_secs_f64().into();
                 record["concurrency"] = concurrency.into();
                 record["warmup"] = warmup.into();
+                let abort = strict && super::output_integrity::incomplete(&record);
                 sender.send(record).await.map_err(|_| "request evidence writer closed")?;
-                if cancellation.is_cancelled() { break; }
+                if abort { integrity_stop.cancel(); }
+                if cancellation.is_cancelled() || integrity_stop.is_cancelled() { break; }
             }
             Ok(())
         });
@@ -257,7 +270,7 @@ async fn execute(
             Some(record) = receiver.recv() => preserve(file, record, &mut records)?,
             completed = active.join_next() => {
                 completed.ok_or("missing session completion")??.map_err(|error| -> crate::command::DynError { error.into() })?;
-                if !cancellation.is_cancelled() && let Some(turns) = pending.next() { launch(turns, &mut active); }
+                if !cancellation.is_cancelled() && !integrity_stop.is_cancelled() && let Some(turns) = pending.next() { launch(turns, &mut active); }
             }
         }
     }

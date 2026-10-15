@@ -16,6 +16,9 @@ fn trajectory(id: &str, turns: usize) -> Value {
     json!({"session_id":id,"source_dataset":"capture","agent_framework":"goose","recorded_model":null,"messages":messages})
 }
 fn serve(listener: TcpListener, count: usize) -> Vec<Value> {
+    serve_finish(listener, count, "stop")
+}
+fn serve_finish(listener: TcpListener, count: usize, finish: &str) -> Vec<Value> {
     listener.set_nonblocking(true).unwrap();
     let deadline = Instant::now() + Duration::from_secs(5);
     let mut bodies = Vec::new();
@@ -64,6 +67,7 @@ fn serve(listener: TcpListener, count: usize) -> Vec<Value> {
         let end = bytes.windows(4).position(|v| v == b"\r\n\r\n").unwrap();
         bodies.push(serde_json::from_slice(&bytes[end + 4..]).unwrap());
         let sse = "data: {\"choices\":[{\"delta\":{\"content\":\"answer\"}}]}\n\ndata: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":19000,\"completion_tokens\":1,\"prompt_tokens_details\":{\"cached_tokens\":100}}}\n\ndata: [DONE]\n\n";
+        let sse = sse.replace("stop", finish);
         socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{sse}",sse.len()).as_bytes()).unwrap();
     }
     bodies
@@ -331,5 +335,54 @@ fn execute_run_captured_mesh_uri_admission_is_separate_from_local_model_pin_veri
             String::from_utf8_lossy(&result.stderr)
         );
         assert!(!output.exists());
+    }
+}
+
+#[test]
+fn strict_truncation_stops_before_the_next_turn_and_retains_warmup_or_measured_failure() {
+    for warmup in [false, true] {
+        let temporary = tempfile::tempdir().unwrap();
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let mut input = json!({"trajectories":[trajectory("s",3)],"model":"fixture",
+            "base_url":format!("http://{}/v1",listener.local_addr().unwrap()),
+            "concurrency":1,"request_timeout_seconds":1,"require_complete_output":true});
+        if warmup {
+            input["warmup_turns"] = 3.into();
+        }
+        let path = temporary.path().join("input.json");
+        std::fs::write(&path, serde_json::to_vec(&input).unwrap()).unwrap();
+        let raw = temporary.path().join("raw.jsonl");
+        let summary = temporary.path().join("summary.json");
+        // The listener serves only one response: further requests would be visible
+        // as additional error records, rather than being silently accepted.
+        let server = std::thread::spawn(move || serve_finish(listener, 1, "length"));
+        let result = Command::new(env!("CARGO_BIN_EXE_xtask"))
+            .args(["automation", "replay-matrix", "execute-cell", "--input"])
+            .arg(path)
+            .arg("--requests-output")
+            .arg(&raw)
+            .arg("--summary-output")
+            .arg(&summary)
+            .output()
+            .unwrap();
+        assert!(!result.status.success());
+        assert_eq!(server.join().unwrap().len(), 1);
+        let records = std::fs::read_to_string(raw).unwrap();
+        assert_eq!(records.lines().count(), 1);
+        let record: Value = serde_json::from_str(records.trim()).unwrap();
+        assert_eq!(record["finish_reason"], "length");
+        assert_eq!(record["completion_tokens"], 1);
+        assert_eq!(record["warmup"], warmup);
+        let summary: Value = serde_json::from_slice(&std::fs::read(summary).unwrap()).unwrap();
+        assert_eq!(summary["acceptance"]["passed"], false);
+        assert_eq!(summary["output_incomplete_requests"], 1);
+        let progress: Vec<Value> = String::from_utf8_lossy(&result.stderr)
+            .lines()
+            .filter_map(|s| s.strip_prefix("replay-progress-v1 "))
+            .map(|s| serde_json::from_str(s).unwrap())
+            .collect();
+        assert!(progress.iter().any(|p| p["phase"] == "request"
+            && p["event"] == "completed"
+            && p["outcome"] == "error"));
     }
 }

@@ -24,6 +24,8 @@ pub(super) struct Input {
     pub commit: String,
     pub pass: u32,
     pub max_output_tokens: Option<u64>,
+    #[serde(default)]
+    pub require_complete_output: bool,
     pub request_timeout_seconds: u64,
     pub startup_timeout_seconds: u64,
     pub timeout_seconds: u64,

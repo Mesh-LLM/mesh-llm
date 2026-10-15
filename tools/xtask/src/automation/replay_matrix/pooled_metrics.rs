@@ -22,6 +22,8 @@ pub(super) struct Cell {
     pub cached_tokens: f64,
     #[serde(default)]
     pub generation_seconds: f64,
+    pub output_stream_seconds: Option<f64>,
+    pub terminal_seconds: Option<f64>,
     #[serde(default)]
     pub workload_window_seconds: f64,
     #[serde(default)]
@@ -57,6 +59,26 @@ pub(super) fn aggregate(cells: &[&Cell]) -> DynResult<serde_json::Value> {
     let prompt = sum(|cell| cell.prompt_tokens)?;
     let cached = sum(|cell| cell.cached_tokens)?;
     let generation = sum(|cell| cell.generation_seconds)?;
+    for field in ["output_stream_seconds", "terminal_seconds"] {
+        let values: Option<Vec<f64>> = cells
+            .iter()
+            .map(|cell| {
+                if field == "output_stream_seconds" {
+                    cell.output_stream_seconds
+                } else {
+                    cell.terminal_seconds
+                }
+            })
+            .collect();
+        let total = values.map(|v| v.iter().sum::<f64>());
+        output.insert(field.into(), serde_json::json!(total));
+        if field == "output_stream_seconds" {
+            output.insert(
+                "output_stream_tokens_per_second".into(),
+                serde_json::json!(total.and_then(|seconds| ratio(completion, seconds))),
+            );
+        }
+    }
     let window = sum(|cell| cell.workload_window_seconds)?;
     let success = cells.iter().try_fold(0_u64, |total, cell| {
         total

@@ -129,6 +129,7 @@ pub(crate) fn run_replay_matrix(args: &[String], root: Option<&std::path::Path>)
         [verb, rest @ ..] if verb == "l3-plan" => replay_matrix::l3_plan::run(root, rest),
         [verb, rest @ ..] if verb == "l3-run" => replay_matrix::l3_run::run(root, rest),
         [verb, rest @ ..] if verb == "l3-report" => replay_matrix::l3_report::run(rest),
+        [verb, rest @ ..] if verb == "recorded-comparison" => replay_matrix::recorded_comparison::run(root, rest),
         [verb, rest @ ..] if verb == "execute-run" => replay_matrix::run_execution::run(root, rest),
         [verb, rest @ ..] if verb == "context-preflight" => replay_matrix::context_preflight::run(root, rest),
         [verb, rest @ ..] if verb == "arm-pass" => replay_matrix::arm_pass::run(root, rest),

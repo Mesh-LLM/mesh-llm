@@ -47,7 +47,7 @@ pub(super) fn write(output: &mut impl Write, document: &Document) -> DynResult<(
     .join(" \u{2192} ");
     writeln!(
         output,
-        "\n## Charts\n\n![Decode throughput](charts/decode-throughput.svg)\n\n![End-to-end workload output throughput](charts/workload-output-throughput.svg)\n\n![Median TTFT](charts/ttft-p50.svg)\n\n## Method\n\n- Model: {}",
+        "\n## Charts\n\n![Post-first-output throughput](charts/decode-throughput.svg)\n\n![End-to-end workload output throughput](charts/workload-output-throughput.svg)\n\n![Median TTFT](charts/ttft-p50.svg)\n\n## Method\n\n- Model: {}",
         code(&document.config.model)
     )?;
     match &document.config.engine_config {
@@ -95,8 +95,8 @@ pub(super) fn write(output: &mut impl Write, document: &Document) -> DynResult<(
         "Each selected session runs its measured requests sequentially; different sessions overlap up to the offered client concurrency. Cache namespaces are stable per session.",
         "Realized concurrency is the time-weighted mean number of in-flight requests. Slot use makes cohort tail drain explicit; do not interpret offered-concurrency scaling as steady-state when utilization is low.",
         "Each next request uses the recorded conversation history, so experiment arms receive identical growing prefixes and tool observations.",
-        "Per-turn output budgets approximate each recorded assistant action from its character length, capped by the configured maximum; generated output is measured but never fed into the next turn.",
-        "Decode tok/s is token-weighted generation throughput after first content. E2E output tok/s includes prompt ingestion and scheduling.",
+        "Request output limits follow the explicit caller maximum; omitted limits use server defaults. Recorded answer lengths never set output budgets, and generated output is never fed into the next turn.",
+        "Post-first-output tok/s is completion tokens divided by time from first generated event to DONE, including terminal overhead; it is not native decode speed. E2E output tok/s includes prompt ingestion and scheduling.",
         "Percent deltas are suppressed unless request counts, failed request identities, and available stable generated-content identities match. Pass ranges expose run-to-run spread.",
     ] {
         writeln!(output, "- {line}")?;

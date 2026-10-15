@@ -189,3 +189,24 @@ fn retained_server_error_text_is_bounded() {
     let error = stream.finish(Duration::from_secs(1), true).unwrap_err();
     assert!(error.chars().filter(|c| *c == 'x').count() <= SERVER_ERROR_CHARS);
 }
+
+#[test]
+fn delayed_terminal_frames_are_separate_from_output_and_shape_is_retained() {
+    let mut stream = Stream::default();
+    stream
+        .consume(
+            b"data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"why\"}}]}\n",
+            Duration::from_secs(1),
+        )
+        .unwrap();
+    stream.consume(b"data: {\"choices\":[{\"delta\":{\"content\":\"answer\"},\"finish_reason\":\"stop\"}]}\n", Duration::from_secs(3)).unwrap();
+    stream.consume(b"data: {\"usage\":{\"prompt_tokens\":40,\"completion_tokens\":10,\"prompt_tokens_details\":{\"cached_tokens\":30}}}\n\ndata: [DONE]\n", Duration::from_secs(8)).unwrap();
+    let evidence = stream.finish(Duration::from_secs(8), false).unwrap();
+    assert_eq!(evidence.ttft_seconds, 1.0);
+    assert_eq!(evidence.output_stream_seconds, 2.0);
+    assert_eq!(evidence.terminal_seconds, 5.0);
+    assert_eq!(evidence.generation_seconds, 7.0);
+    assert_eq!(evidence.content_characters, 6);
+    assert_eq!(evidence.reasoning_characters, 3);
+    assert_eq!(evidence.tool_calls, 0);
+}
