@@ -202,7 +202,11 @@ fn gpu_normalization(step: &Node) -> DynResult<()> {
 fn gpu_skip_report(step: &Node) -> DynResult<()> {
     // The summary is the only visible trace of a gated row that never ran, so
     // it reads the normalized decision, never the raw variable, and names every
-    // planned row that stays skipped.
+    // planned row that stays skipped. A condition or a tolerated failure would
+    // let the step vanish while its script still matches.
+    if step.get("if").is_some() || step.get("continue-on-error").is_some() {
+        return Err("GPU skip report must run unconditionally and fail the gate on error".into());
+    }
     let env = h::member(step, "env")?;
     for (backend, plan) in [("VULKAN", "linux-vulkan"), ("ROCM", "linux-rocm")] {
         h::binding(
@@ -594,5 +598,15 @@ mod tests {
         let report = steps.remove(index);
         steps.insert(0, report);
         assert!(platforms(&nodes).is_err(), "report before the decision");
+        for (key, value) in [("if", "${{ false }}"), ("continue-on-error", "true")] {
+            let mut nodes = workflows();
+            let steps = gate_steps(&mut nodes);
+            let index = report_index(steps);
+            let Node::Map(entries) = &mut steps[index] else {
+                unreachable!()
+            };
+            entries.push((key.into(), Node::Scalar(value.into())));
+            assert!(platforms(&nodes).is_err(), "report with {key}");
+        }
     }
 }
