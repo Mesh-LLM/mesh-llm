@@ -71,6 +71,11 @@ reports before readiness or artifact publication. Publication fixtures execute
 the real dependency projection against complete workspace metadata; fake Cargo
 is confined to metadata acquisition and publish transport.
 
+SDK fixture failures report the install, daemon and consumer process outcomes,
+exit statuses and cleanup facts separately. Diagnostics omit child output and
+rejection text from the summary so invite credentials remain private. A passing
+consumer does not waive daemon shutdown failure or forced cleanup.
+
 For isolated Unix whole-wrapper diagnostics, `automation sdk-compat run` owns
 execution of the current `scripts/ci-compat-smoke.sh`. Its named inputs include
 the exact product binary, runtime directory and model, the literal absolute SDK

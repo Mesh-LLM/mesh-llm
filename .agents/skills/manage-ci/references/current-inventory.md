@@ -512,6 +512,11 @@ by one-second waits; persistent locks fail cleanup and retain remaining state.
 Native tests cover bounded deletion and actual Windows handle locks; the latter
 require a Windows test host and are separate from local macOS validation.
 
+The shared SDK fixture reports installation, daemon and consumer exit and
+cleanup facts on session failure, without including captured output or rejection
+text in that summary. Its executable contracts distinguish consumer failure,
+nonzero daemon shutdown and forced daemon cleanup; all remain failed smokes.
+
 All workflow calls use typed, bounded semantic inputs. Credential-bearing smoke
 workflows remain fixed to GitHub-hosted runners; the PR entrypoints pass no
 repository secrets. The trusted main entrypoint may pass the optional
