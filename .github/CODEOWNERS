@@ -12,6 +12,7 @@
 /mesh/crates/mesh-llm-host-runtime/src/plugin/ @michaelneale @danielwinterw @i386
 /mesh/crates/mesh-llm-config/ @ndizazzo @danielwinterw
 /mesh/crates/mesh-llm-moa-plugin/ @michaelneale
+/mesh/crates/mesh-llm-capsules-plugin/ @StevenMih @ethanyzhang
 /mesh/crates/mesh-llm-plugin/ @michaelneale @ndizazzo @i386
 /mesh/crates/mesh-llm-plugin-manager/ @michaelneale @ndizazzo @i386
 /mesh/crates/mesh-native-serving-plugin-api/ @michaelneale @ndizazzo @i386
