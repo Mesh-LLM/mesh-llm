@@ -853,8 +853,6 @@ fn inclusion_leaf(octets: &[u8]) -> Option<u64> {
     pos_to_leaf_index(index).ok()
 }
 
-/// Whether `proof` proves the leaf `leaf` with entry `entry` under one of
-/// `peaks` (profile §6.2.1 step 12).
 /// Whether `proof` proves the leaf `leaf` with entry `entry` in the MMR of
 /// `size` nodes whose peaks are `peaks` (profile §6.2.1 step 12). The path
 /// must climb from the leaf's own node to the one peak that holds it, so a
