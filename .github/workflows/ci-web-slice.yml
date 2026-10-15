@@ -46,6 +46,11 @@ on:
         description: Whether the public website source changed.
         required: true
         type: boolean
+      plugin_capsules_changed:
+        description: Whether the capsules plugin changed (its Evidence page gate).
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -192,9 +197,11 @@ jobs:
   website:
     name: Public website build
     needs: runner_policy
-    if: ${{ inputs.website_changed }}
+    # Also runs for the capsules plugin: its web UI gate needs the Rust
+    # toolchain this job's image has (the console UI job's lean image has none).
+    if: ${{ inputs.website_changed || inputs.plugin_capsules_changed }}
     runs-on: ${{ needs.runner_policy.outputs.runner_4 }}
-    timeout-minutes: 20
+    timeout-minutes: 30
     container:
       image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:ff53048ee7a87b3244ccbfa1b2888fde5db31a73d0dfa42f283d25dde0115307
     steps:
@@ -210,17 +217,28 @@ jobs:
           persist-credentials: false
       - name: Resolve product source layout
         id: layout
+        if: ${{ inputs.website_changed }}
         uses: Mesh-LLM/mesh-llm/.github/actions/resolve-source-layout@5c8fb4d472bc57058c8153761c561daa77dd5b94 # product-layout compatibility helpers
       - name: Install website dependencies
+        if: ${{ inputs.website_changed }}
         working-directory: ${{ steps.layout.outputs.website_dir }}
         run: npm ci
       - name: Build public website
+        if: ${{ inputs.website_changed }}
         env:
           MESH_LLM_WEBSITE_DIR: ${{ steps.layout.outputs.website_dir }}
         run: just website-build
       - name: Validate CLI explorer in desktop and mobile browsers
+        if: ${{ inputs.website_changed }}
         working-directory: ${{ steps.layout.outputs.website_dir }}
         run: npm run test:cli-explorer
       - name: Validate website data sources
+        if: ${{ inputs.website_changed }}
         working-directory: ${{ steps.layout.outputs.website_dir }}
         run: npm run test:website-data
+      # Install from the lockfile, typecheck, unit tests, and a build that
+      # writes exactly one ES module.
+      - name: "Capsules plugin gate: web UI"
+        if: ${{ inputs.plugin_capsules_changed }}
+        timeout-minutes: 25
+        run: just plugin-capsules-gate web-ui

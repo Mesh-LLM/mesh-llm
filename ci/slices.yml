@@ -113,7 +113,7 @@
     {"domain": "tooling", "slices": ["quality"]},
     {"domain": "cli", "slices": ["quality"]},
     {"domain": "rust", "slices": ["rust-tests"]},
-    {"domain": "plugin-capsules", "slices": ["quality"]},
+    {"domain": "plugin-capsules", "slices": ["quality", "web"]},
     {
       "domain": "ui",
       "slices": ["web", "ui-artifact", "runtime-product", "product-smoke"]

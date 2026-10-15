@@ -97,6 +97,7 @@ jobs:
       force_hosted: ${{ fromJson(inputs.lane_plan_json).signals.runner_contract_required }}
       ui_changed: ${{ fromJson(inputs.lane_plan_json).signals.ui_changed || contains(fromJson(inputs.lane_plan_json).domains, 'ci-control') }}
       website_changed: ${{ fromJson(inputs.lane_plan_json).signals.website_changed || contains(fromJson(inputs.lane_plan_json).domains, 'ci-control') }}
+      plugin_capsules_changed: ${{ contains(fromJson(inputs.lane_plan_json).domains, 'plugin-capsules') || contains(fromJson(inputs.lane_plan_json).domains, 'ci-control') }}
 
   summary:
     name: CI / Website

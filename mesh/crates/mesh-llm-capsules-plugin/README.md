@@ -87,7 +87,8 @@ directory.
 | `vectors/` | pinned test vectors; `vectors/SOURCES.md` says where each set comes from |
 | `docs/` | sharing policy, verification chain, split-stage records, protocol notes, real-host tests |
 | `plugin.toml`, `plugin.package.json` | the package marker and the reviewed plugin manifest |
-| `scripts/` | packaging, the referee mutant runner and the no-keys check |
+| `scripts/` | release packaging (`package.sh`) |
+| `gates/` | the mutant table the plugin's own CI gates read |
 
 The records are sealed by the [`capsule-emit`](https://crates.io/crates/capsule-emit)
 crate on top of [`checkpointed-local-log`](https://crates.io/crates/checkpointed-local-log)
@@ -96,7 +97,10 @@ developed and tested in their own repositories.
 
 ## Contributing
 
-See mesh-llm's [CONTRIBUTING.md](../../../CONTRIBUTING.md).
+See mesh-llm's [CONTRIBUTING.md](../../../CONTRIBUTING.md). The plugin's own
+checks beyond fmt, Clippy and its tests run one at a time with
+`just plugin-capsules-gate <gate>`: `mutants`, `referee-mutants`,
+`unbounded-depth`, `no-keys`, `vectors`, `web-ui` or `package-twice`.
 
 ## License
 

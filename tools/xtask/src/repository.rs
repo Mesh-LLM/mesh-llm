@@ -1,4 +1,5 @@
 mod affected_crates;
+mod capsules_gate;
 pub(crate) mod cargo_packages;
 mod cargo_projection;
 pub(crate) mod check_args;
@@ -46,6 +47,7 @@ pub(crate) fn run_check(
         RepositoryCheck::LlamaUpstreamPin => upstream_pin::run(args, default_root),
         RepositoryCheck::SelectedRef => selected_ref::run(args, default_root),
         RepositoryCheck::DockerPrecheck => docker_precheck::run(args, default_root),
+        RepositoryCheck::CapsulesPluginGate => capsules_gate::run(args, default_root),
     }
 }
 
