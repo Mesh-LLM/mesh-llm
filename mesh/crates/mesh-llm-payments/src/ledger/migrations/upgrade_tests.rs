@@ -53,7 +53,7 @@ fn actual_main_schema_preserves_buyer_records_and_policy() -> Result<()> {
         initialize(&mut c)?;
         assert_canonical(&c)?;
         assert_eq!(version(&c), VERSION);
-        assert_eq!(super::super::committed_today(&c, 86_400_000)?, 6000);
+        assert_eq!(super::super::settled_today(&c, 86_400_000)?, 2000);
         assert_eq!(
             c.query_row(
                 "SELECT value FROM settings WHERE key='wallet-pin'",
@@ -133,7 +133,7 @@ fn populated_draft_metered_state_is_never_reinterpreted() -> Result<()> {
             assert!(error.to_string().contains("unsupported draft"), "{error:#}");
             assert_eq!(version(&c), old_version);
             assert_eq!(snapshot(&c)?, before);
-            assert_eq!(super::super::committed_today(&c, 86_400_000)?, 4000);
+            assert_eq!(super::super::settled_today(&c, 86_400_000)?, 0);
         }
     }
     Ok(())

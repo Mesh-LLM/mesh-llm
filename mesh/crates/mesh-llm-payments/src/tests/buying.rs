@@ -1,5 +1,5 @@
-//! Buyer-side metered operations: an admission is accepted against the local
-//! cap and pinned, the deposit and final are paid only at the admitted
+//! Buyer-side metered operations: an admission checks recorded daily
+//! spending and is pinned, the deposit and final are paid only at the admitted
 //! amounts, settlements are checked against the admission, and recovery only
 //! observes charges.
 use super::*;
@@ -206,16 +206,6 @@ async fn deposit_and_final_are_paid_only_at_the_admitted_amounts_to_one_payee() 
         (
             settlement("r", Some((900, 200)), Some(11_000), 300, None),
             "final invoice missing",
-        ),
-        (
-            settlement(
-                "r",
-                Some((9_000, 200)),
-                Some(92_000),
-                1000,
-                Some(invoice(2, 91_000)),
-            ),
-            "bill above the local cap",
         ),
     ] {
         assert!(service.settle_final(request).await.is_err(), "{reason}");
@@ -596,5 +586,94 @@ async fn discounted_subsat_final_survives_both_restarts_and_pays_once() -> Resul
     assert_eq!(buyer.ledger.requests()?[0].spent_msat, 1010);
     assert_eq!(wallet.calls.load(Ordering::SeqCst), 1);
     assert_eq!(seller_wallet.invoice_expiries.lock().unwrap().len(), 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn admitted_final_settles_above_legacy_cap_after_daily_allowance_is_exhausted() -> Result<()>
+{
+    let dir = tempfile::tempdir()?;
+    let (wallet, service) = open(dir.path());
+    service.ledger.set_policy(&Policy {
+        mode: ApprovalMode::Automatic,
+        daily_budget_msat: Some(1000),
+    })?;
+    service
+        .accept_admission(AcceptAdmissionRequest {
+            billing_revision: mesh_llm_payments_types::contract::BillingRevision::V3,
+            terms: local("r", 1000),
+            admission: admission("r", 1000),
+        })
+        .await?;
+    service
+        .pay_deposit(PayDepositRequest {
+            request_id: "r".into(),
+            invoice: invoice(20, 1000),
+        })
+        .await?;
+    assert_eq!(service.ledger.available_budget(crate::now_ms())?, 0);
+    assert!(service.authorize_terms(&local("new", 1000)).await.is_err());
+    let final_request = settlement(
+        "r",
+        Some((900, 200)),
+        Some(11_000),
+        1000,
+        Some(invoice(21, 10_000)),
+    );
+    service.settle_final(final_request.clone()).await?;
+    service.settle_final(final_request).await?;
+    service.finish_metered("r").await?;
+    assert_eq!(wallet.calls.load(Ordering::SeqCst), 2);
+    assert_eq!(
+        service.ledger.policy_status(crate::now_ms())?["spent_today_msat"],
+        11_020
+    );
+    assert_eq!(
+        service.ledger.request_state("r")?.as_deref(),
+        Some("completed")
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn expired_metered_charge_needs_authoritative_absence_before_retirement() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let (wallet, service) = open(dir.path());
+    service
+        .accept_admission(AcceptAdmissionRequest {
+            billing_revision: mesh_llm_payments_types::contract::BillingRevision::V3,
+            terms: local("r", 50_000),
+            admission: admission("r", 0),
+        })
+        .await?;
+    let invoice = expired_final_history(dir.path(), &wallet, &service, false).await;
+    // History exists but is not yet observable: an outage is not absence.
+    wallet.lookup_unavailable.store(true, Ordering::SeqCst);
+    assert!(service.reconcile_pending().await.is_err());
+    assert_eq!(service.ledger.pending_charges()?.len(), 1);
+    wallet.lookup_unavailable.store(false, Ordering::SeqCst);
+    {
+        let mut payments = wallet.payments.lock().unwrap();
+        payments.get_mut(&invoice.payment_hash).unwrap().status = PaymentStatus::Pending;
+    }
+    service.reconcile_pending().await?;
+    assert_eq!(
+        service.ledger.pending_charges()?.len(),
+        1,
+        "a pending HTLC can outlive invoice expiry"
+    );
+    wallet.payments.lock().unwrap().clear();
+    service.reconcile_pending().await?;
+    assert!(service.ledger.pending_charges()?.is_empty());
+    assert_eq!(
+        service.ledger.request_state("r")?.as_deref(),
+        Some("failed")
+    );
+    assert!(service.reconcile().await?.approved.is_empty());
+    assert_eq!(
+        wallet.calls.load(Ordering::SeqCst),
+        1,
+        "observation never resubmits"
+    );
     Ok(())
 }

@@ -202,8 +202,8 @@ async fn cancelled_observation_preserves_pending_payment_for_restart() -> Result
         assert_eq!(service.ledger.pending_charges()?.len(), 1);
         assert_eq!(
             service.ledger.available_budget(crate::now_ms())?,
-            800,
-            "the pending charge holds its own cap"
+            1000,
+            "pending charges do not reduce the admission allowance"
         );
     }
     publish(&wallet, &charge.invoice, false, PaymentStatus::Succeeded);
@@ -232,7 +232,7 @@ async fn incoming_notification_wait_expires_without_polling() -> Result<()> {
 }
 
 #[tokio::test(start_paused = true)]
-async fn notification_error_keeps_reservation_until_authoritative_recovery() -> Result<()> {
+async fn notification_error_keeps_payment_pending_until_authoritative_recovery() -> Result<()> {
     let dir = tempfile::tempdir()?;
     let wallet = Arc::new(MockWallet::default());
     wallet.pending.store(true, Ordering::SeqCst);
@@ -249,7 +249,7 @@ async fn notification_error_keeps_reservation_until_authoritative_recovery() -> 
     wallet.updates.notify_waiters();
     assert!(paying.await?.is_err());
     assert_eq!(service.ledger.pending_charges()?.len(), 1);
-    assert_eq!(service.ledger.available_budget(crate::now_ms())?, 800);
+    assert_eq!(service.ledger.available_budget(crate::now_ms())?, 1000);
     wallet.lookup_unavailable.store(false, Ordering::SeqCst);
     publish(&wallet, &charge.invoice, false, PaymentStatus::Succeeded);
     service.reconcile_pending().await?;

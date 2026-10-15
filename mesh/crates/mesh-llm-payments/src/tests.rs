@@ -362,10 +362,11 @@ fn duplicate_segments_and_hashes_cannot_change_the_debit() {
     changed = original.clone();
     changed.segment = 1;
     assert!(ledger.prepare_charge(&changed).is_err());
+    // A distinct final charge is not constrained by the legacy request cap.
     assert!(
         ledger
             .prepare_charge(&charge("one", 1, 2, 900, 1000))
-            .is_err()
+            .unwrap()
     );
 }
 
@@ -426,7 +427,6 @@ async fn one_policy_command_enables_paid_use_and_free_only_stops_new_work() -> R
     let status = service
         .control(ControlCommand::Policy { value: None })
         .await?;
-    assert_eq!(status["in_flight_msat"], 0);
     assert_eq!(status["remaining_daily_budget_msat"], 1000);
     service
         .control(ControlCommand::Policy {
@@ -446,7 +446,6 @@ async fn one_policy_command_enables_paid_use_and_free_only_stops_new_work() -> R
         .control(ControlCommand::Policy { value: None })
         .await?;
     assert_eq!(status["spent_today_msat"], 110);
-    assert_eq!(status["in_flight_msat"], 0);
     assert_eq!(status["remaining_daily_budget_msat"], 0);
     assert_eq!(wallet.calls.load(Ordering::SeqCst), 1);
     Ok(())

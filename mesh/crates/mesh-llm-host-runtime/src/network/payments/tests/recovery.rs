@@ -23,9 +23,7 @@ async fn recovered() -> Result<()> {
         stream.shutdown().await?;
         Ok::<_, anyhow::Error>(())
     });
-    // Hold outgoing payments: the deposit never lands, so the seller never
-    // dispatches, and the buyer's exchange is interrupted before settlement.
-    // The second exchange is the buyer's recovery of the first.
+    // Complete normally, then replay the settlement without another debit.
     let serving = pair.serve(local_targets(port), 2);
     pair.connect().await?;
     let raw = b"POST /v1/completions HTTP/1.1\r\nHost: localhost\r\n\r\n{\"model\":\"test\",\"prompt\":\"Hi\",\"max_tokens\":8}";
@@ -104,4 +102,83 @@ async fn assert_buyer_replays_a_settled_request(pair: &Pair, id: &str) -> Result
         .call(ops::FINISH, &IdRequest { id: id.to_owned() })
         .await?;
     Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn real_buyer_recovery_pays_an_interrupted_final_after_budget_exhaustion() -> Result<()> {
+    tokio::time::timeout(Duration::from_secs(20), interrupted_final()).await?
+}
+
+async fn interrupted_final() -> Result<()> {
+    let network = Arc::new(Network::default());
+    let pair = Pair::new(network.clone()).await?;
+    pair.buyer.ledger.set_policy(&Policy {
+        mode: ApprovalMode::Automatic,
+        daily_budget_msat: Some(1000),
+    })?;
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?;
+    let port = listener.local_addr()?.port();
+    let failure = network.clone();
+    let backend = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await?;
+        read_backend_request(&mut stream).await?;
+        // Deposit already succeeded. Lose only the final payment submission.
+        failure.fail_next_payment.store(true, Ordering::SeqCst);
+        stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 52\r\nConnection: close\r\n\r\n{\"usage\":{\"prompt_tokens\":40,\"completion_tokens\":3}}").await?;
+        stream.shutdown().await?;
+        Ok::<_, anyhow::Error>(())
+    });
+    let serving = serve_original_and_recovery(&pair, port);
+    pair.connect().await?;
+    let raw = b"POST /v1/completions HTTP/1.1\r\nHost: localhost\r\n\r\n{\"model\":\"test\",\"prompt\":\"Hi\",\"max_tokens\":8}";
+    let response = pair.request(raw, None).await?;
+    assert!(response.contains("completion_tokens"), "{response}");
+    network.payment_failed.notified().await;
+    assert_eq!(network.payments.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        pair.buyer
+            .ledger
+            .available_budget(mesh_llm_payments::now_ms())?,
+        0
+    );
+    assert_eq!(pair.buyer.ledger.requests()?[0].state, "approved");
+    crate::network::openai::payment_recovery::recover(&pair.buyer_node).await?;
+    pair.wait_completed(1).await?;
+    assert_eq!(network.payments.load(Ordering::SeqCst), 2);
+    assert_eq!(pair.buyer.ledger.requests()?[0].spent_msat, 4320);
+    let id = pair.buyer.ledger.requests()?[0].terms.id.clone();
+    assert_seller_answers_recovery_from_its_ledger(&pair, &id).await?;
+    crate::network::openai::payment_recovery::recover(&pair.buyer_node).await?;
+    assert_eq!(network.payments.load(Ordering::SeqCst), 2);
+    backend.await??;
+    let _connection = serving.await??;
+    pair.close().await;
+    Ok(())
+}
+
+fn serve_original_and_recovery(pair: &Pair, port: u16) -> ServingTask {
+    let node = pair.seller_node.clone();
+    tokio::spawn(async move {
+        let connection = node.endpoint.accept().await.unwrap().await?;
+        let mut exchanges = tokio::task::JoinSet::new();
+        for _ in 0..2 {
+            let (send, mut recv) = accept_tunnel(&connection).await?;
+            let mut prefix = vec![0; wire::HTTP_UPGRADE.len()];
+            recv.read_exact(&mut prefix).await?;
+            assert_eq!(prefix, wire::HTTP_UPGRADE);
+            let node = node.clone();
+            let payer = connection.remote_id();
+            exchanges.spawn(async move {
+                super::super::serve(node, payer, recv, send, local_targets(port)).await
+            });
+        }
+        while let Some(result) = exchanges.join_next().await {
+            // The original buyer stream may already have closed after its
+            // wallet error; the recovery stream still settles the same debt.
+            let _ = result?;
+        }
+        // Keep the transport alive until the buyer observes Complete and
+        // finishes its ledger entry, just like Pair::serve.
+        Ok(connection)
+    })
 }

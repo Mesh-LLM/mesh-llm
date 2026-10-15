@@ -64,9 +64,8 @@ impl PaidRequest {
         } else {
             read_limit("max_tokens")?
         };
-        // A metered request is always bounded: the buyer reserves budget for
-        // the output allowance, so a caller that set no limit gets the
-        // default one, forwarded to the backend as its limit.
+        // Preserve the caller's output limit; only an omitted limit gets the
+        // default forwarded to the backend. This is not derived from spending.
         let max_tokens = match max_tokens {
             Some(limit) => limit,
             None => {

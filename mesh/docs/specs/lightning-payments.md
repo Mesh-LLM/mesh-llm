@@ -41,7 +41,7 @@ allowance terms, delivery watermarks, receivables or refunds.
 
 1. The payer selects a provider and sends a `Request` frame with its request
    ID, the exact model, the advertised pricing and the ordinary OpenAI HTTP
-   request. The payer's own spending cap is local policy and never leaves the
+   request. The payer's own daily admission policy is local and never leaves the
    payer. There is no quote round trip.
 2. The provider resolves the backend that serves the model (there is no
    prompt-token estimate; only backend-reported usage is billed), and asks the payments engine to admit the request at its current
@@ -53,7 +53,7 @@ allowance terms, delivery watermarks, receivables or refunds.
    flat 1 sat (1000 msat). It only proves the buyer can pay before backend
    work starts. The deposit is applied against the final bill; it is not an
    extra fee, a reservation or an input-token claim.
-4. The payer validates the terms against its request and its local cap,
+4. The payer validates the terms against its request and its local admission policy,
    durably authorizes them, sends `Accepted` and pays any deposit. The
    provider waits for the deposit to settle in its own wallet **before any
    backend work starts**; a peer admitted without a deposit is dispatched at
@@ -63,15 +63,14 @@ allowance terms, delivery watermarks, receivables or refunds.
    frames. Usage is read from the backend's own response (the JSON `usage`
    object, or the SSE usage chunk; `stream_options.include_usage` is forced
    on). Stream chunks are never counted as tokens, so any OpenAI-compatible
-   engine supplies the count with no engine-specific code. When the caller did
-   not ask for usage, the payer hides the usage chunk from the application on
-   a best-effort basis; all other bytes pass through unchanged.
+   engine supplies the count with no engine-specific code. The usage chunk is forwarded even when the caller did not request it;
+   the payer does not filter the response bytes.
 6. On completion the provider sends `Settlement`: the reported usage, the bill
    (`prompt_tokens` at the input rate + `completion_tokens` at the output
    rate), the deposit applied and, unless the deposit covers the bill,
    one final invoice for that remainder (`final_invoice_msat`: exact to the
    msat, a positive sub-sat remainder is raised to the 1 sat floor). The payer recomputes the bill from the stored
-   admission, checks it against its local cap, pays the final invoice under the
+   admission and pays the final invoice under the
    original authorization, and the provider replies `Complete` once that
    invoice has settled. No human approval is needed.
 
@@ -121,8 +120,8 @@ refunds and encrypted output are not implemented. The supported endpoints are
 (`n` must be 1), POST, at most 1 MiB. A paid
 request without `max_tokens` / `max_completion_tokens` is given the default
 output allowance of 16,384 tokens, which the payer inserts into the request it
-forwards so the backend is bounded by the same limit the cap was computed
-from; an explicit caller limit is preserved. Rejected paid attempts do not
+forwards; an explicit caller limit is preserved. This default is not derived
+from the daily budget and does not establish a per-request spending cap. Rejected paid attempts do not
 silently retry on another paid provider.
 
 Frames (`mesh-llm-payments-types::metered_wire`) are JSON with a 4-byte length
@@ -145,7 +144,7 @@ Before first opening an old ledger, stop its owning payment service and back up
 older binaries reject the newer version. Rollback requires the pre-upgrade
 backup, not changing `user_version` by hand.
 
-- Main/version 0–2: buyer requests, charges, settled spend, in-flight fee caps,
+- Main/version 0–2: buyer requests, charges, settled spend, per-payment fee headroom,
   policy, pricing and wallet pins survive. Retired fixed-allowance **seller**
   debt (`receivables` / `serving_*`) is intentionally written off, not converted
   into metered strikes: the old protocol can no longer settle it.
@@ -162,11 +161,13 @@ Startup itself sends no payments. Old approvals with no charge and no metered
 admission close as failed. Legacy prepared charges retain main's recovery
 behavior: recovery can submit them, and can idempotently retry the same hash
 of an unexpired submitted charge if wallet lookup reports no record. A wallet
-lookup outage retains the reservation. Authoritative success accounts for
-actual principal plus fees; failure releases the reservation. Successful old
+lookup outage retains the uncertain payment record. Authoritative success accounts
+for actual principal plus fees; failure closes the payment record. Successful old
 inference approvals may remain `approved`, but only actual settled spend—not
 their request caps—consumes the daily budget. Metered recovery is different:
-it only observes existing charges and never infers failure from expiry.
+it only observes existing charges. Expiry retires a submitted charge only when
+a successful wallet lookup also establishes that no payment was recorded;
+expiry alone or a lookup outage never resolves uncertainty.
 
 The wallet is a plugin. `mesh-llm-wallet::provider::WalletProvider` exposes
 balance, recent transactions, invoice creation, bounded payment, lookup by
@@ -246,9 +247,9 @@ that would exceed it; one that cannot still pays. Either way the fee the wallet
 reports is recorded as spend. With a wallet that cannot bound fees, that fee can
 exceed the headroom, and the overrun is recorded after the fact, not prevented:
 
-- The day's spend can go past the daily budget. Later payments are refused
-  until the budget recovers.
-- The request's spend can go past its cap. The final invoice is still checked
+- The day's spend can go past the daily budget. Later admissions are refused
+  until the daily allowance is positive again; admitted requests still settle.
+- The request has no spending cap. The final invoice is still checked
   against the bill, not against what the deposit actually cost, so a deposit
   fee overrun does not by itself leave the seller unpaid.
 
@@ -382,7 +383,7 @@ seeing a paid provider does not provision one. The directory contains:
 
 Payment intent is committed as `prepared` before wallet I/O and changes durably
 to `pending` immediately before submission. Unknown outcomes retain their
-reservation and are observed by the same payment hash, including after restart.
+durable payment record and are observed by the same payment hash, including after restart.
 Metered buyer charges (deposit, segment 0; final, segment 1) are **observed
 only** by recovery: the seller's settlement decides what is owed, so a deposit
 or final that was never submitted is never resubmitted without that settlement
@@ -392,19 +393,19 @@ wallet has no record of a pending attempt, recovery resubmits the same invoice,
 amount and `max_total_msat` through the normal preflight, fee check and pay
 path (providers must treat a repeat `pay` as a lookup of the existing payment,
 which Lexe 0.1.24 and later does), and once the invoice has expired with
-nothing found the charge is marked `failed` and its reservation released.
+nothing found the charge is marked `failed`.
 The wallet contract distinguishes `NotSubmitted` from `Uncertain` errors.
 Definite preflight rejection and terminal failure close unused authorization,
-while uncertain sibling charges remain reserved. Startup releases abandoned
+while uncertain sibling charges remain recoverable. Startup closes abandoned
 approvals only when no charge was ever recorded. Live cancellation atomically
 closes pending or approved requests only before charge preparation; periodic
 reconciliation does not sweep live approvals. Prepared and uncertain charges
-retain their reservations.
+retain their durable payment records, not daily budget reservations.
 
-An uncertain payment the wallet has recorded is not released just because its
+An uncertain payment the wallet has recorded is not failed just because its
 invoice expired: an in-flight HTLC can outlive the invoice. If the wallet remains
 unreachable or a recorded payment cannot be conclusively reconciled, its
-reservation remains held; the PoC has no force-release command.
+payment remains unresolved; the PoC has no force-failure command.
 
 Buyer-side recovery (`payment_recovery.rs`) runs every 15 seconds: the engine
 reconciles its charges, then returns the accepted admissions still open with
@@ -465,16 +466,20 @@ Enabling `wallet pricing MODEL` without explicit rates uses 500 input and 1500
 output msat per million tokens;
 small requests at those rates bill a few msat; any positive amount still owed after the deposit is raised to the 1 sat payment floor.
 
-The payer reserves a routing-fee allowance for each inference payment of
-`max(3000 msat, 1% of the amount)` (`pricing::fee_allowance_msat`). Its local
-cap for a request is the effective policy's per-request `max_total_msat`;
-there is no prompt estimate and no wallet-balance check before the request.
-The seller's rates must fit the policy's rate caps. Nothing is reserved when
-the admission is accepted: the daily budget is checked against each payment as
-it is prepared (today's settled spend plus payments in flight, fee caps
-included). The seller never sees the cap. At settlement the recomputed bill must
-not exceed the cap. The wallet is told `amount + fee_allowance` as the cap for
-each payment. A wallet that can bound fees must not submit a payment whose
+The daily budget gates **new admissions** using only recorded successful
+payments settled today, including actual fees. Pending/prepared payments do not
+reduce that allowance. Already-admitted work finishes and settles at its frozen
+prices even when other work has exhausted the daily allowance. Concurrent work
+can overshoot: this is an eventually consistent admission limit, not a hard
+wallet ceiling. There are no per-request inference spending caps or prompt
+estimates, and wallet balance is not checked before admission. Legacy
+`max_total_msat` request fields remain readable for compatibility but do not
+limit metered settlement.
+
+Each wallet payment still gets routing-fee headroom of
+`max(3000 msat, 1% of the amount)` (`pricing::fee_allowance_msat`). This is not
+reserved against the daily budget. The wallet is told `amount + fee_allowance`
+as the cap for that payment. A wallet that can bound fees must not submit a payment whose
 amount plus fees exceeds it; Lexe preflights a route and submits that same
 route only when its total debit fits. A wallet that cannot bound fees may
 exceed it (see the wallet contract above). Route minimums can increase the
@@ -551,23 +556,25 @@ mesh-llm wallet policy --mode free-only
 
 `client --auto` selects mesh discovery, not payment authorization. Funding alone
 does not enable spending. Automatic policy retains free providers as candidates;
-it neither requires nor guarantees a paid provider. A request whose cap does
-not fit the remaining budget is not authorized. There are no mandatory
-per-token price caps or extra setup calls. Seller pricing is independent.
+it neither requires nor guarantees a paid provider. New admissions stop when
+recorded spending today reaches the daily budget; existing admissions still
+settle. There are no per-request spending caps, mandatory per-token price caps
+or extra setup calls. Seller pricing is independent.
 
 Policy persists across restarts and mesh switches. `wallet policy` without flags
 reads it without changing it, returning `mode`, `daily_budget_msat`,
-`spent_today_msat`, `in_flight_msat`, and `remaining_daily_budget_msat`. The latter
+`spent_today_msat` and `remaining_daily_budget_msat`. The latter
 is the budget allowance, not a guarantee of wallet funds. Reading policy does not
 provision a wallet. Applications use the same `policy` command through
 `POST /api/wallet`; no second setting is required.
 
 The budget uses UTC calendar days and actual settlement timestamps, including
-fees. Payments still in flight count against the budget, including across
-midnight. Each payment atomically checks the remaining budget. The wallet balance is not checked up front: a
+fees. Prepared and pending payments do not count against admission, including
+across midnight. Each new admission checks recorded spending; concurrent admitted
+work may overshoot the budget. The wallet balance is not checked up front: a
 payment the wallet cannot make fails at payment time and the request is
 dropped. Switching to free-only stops new paid
-inference, but does not cancel already-submitted settlement. Manual
+inference, but does not cancel settlement for already-admitted requests. Manual
 per-inference approval is not supported. Provider/model approvals and price
 browsing are separate future features.
 
@@ -653,7 +660,7 @@ Commands are `balance`, `transactions` (`limit`), `fund`, `inspect_invoice`
 `set_pricing`
 (`model`, nullable `value`). `expected_pid` and `expected_directory` are optional
 local destination checks. The balance response exposes `spendable_msat` and
-`available_for_inference_msat` after policy and reservations. `pending` returns
+`available_for_inference_msat` after policy and recorded settled spending. `pending` returns
 durable request records, including completed history; filter `state="pending"`
 when inspecting unfinished work. Transactions and invoices use provider-neutral JSON types.
 
@@ -672,7 +679,7 @@ Local coverage for the metered protocol lives in `mesh-llm-payments`
 `blocking.rs`, `recovery_boundaries.rs`, `failure_boundaries.rs`) and the
 host payment suite (`mesh-llm-host-runtime` `network/payments/tests`,
 including real QUIC peers with simulated wallets and backends, the strike
-blocklist and usage-filter cases). These cover admission, deposit computation
+blocklist and raw usage-forwarding cases). These cover admission, deposit computation
 on both sides, trust and the strike limit, abandoned requests, replayed
 requests, recovery of pending/abandoned/billed requests, cancellation,
 transport loss during output, and the payee blocklist. They do not prove
@@ -738,7 +745,7 @@ downloadable application bundle.
 
 Lexe's default invoice expiry and recovery from an ambiguous in-flight Lightning
 HTLC have not been exercised on mainnet. Simulated tests cover uncertain-send
-recovery and concurrent reservation enforcement, including resubmission of an
+recovery and settled-spend admission, including resubmission of an
 unrecorded `wallet send`, reconciliation without a second `pay`, the expiry
 give-up, and a resubmission racing the first landing
 (`mesh-llm-payments` `src/tests/resubmission.rs`). Refunds and proof of
@@ -756,12 +763,12 @@ bitcoin. Checks that depended on the fixed-allowance protocol are marked.
   profiles, and each binary's matching CPU runtime. Pin
   `runtime.native_runtime.selection = "cpu"`; `--device CPU` alone does not
   prevent the released binary from trying to install a GPU runtime at startup.
-- **Concurrent authorization:** 16 simultaneous service requests competed for a
+- **Concurrent authorization (historical reserved-budget policy, now superseded):** 16 simultaneous service requests competed for a
   1,000-msat budget with 700-msat per-request reservations. Exactly one reached
   the simulated wallet.
 - **Uncertain HTLC:** simulated payment submission lost its response while the
   wallet retained a pending HTLC. Restart, a status-query outage and invoice
-  expiry did not release its reservation or submit a second payment. Separate
+  expiry did not discard its uncertain payment record or submit a second payment. Separate
   success and failure cases reconciled the original hash, including replay
   afterward.
 - **Expiry** (fixed-allowance protocol): a signed two-second input invoice
@@ -837,8 +844,9 @@ For operator-run mainnet validation of the metered protocol:
 5. Repeat immediately: the provider should admit the second request without a
    deposit (one final payment only). Restart the provider and repeat once more
    to confirm the deposit returns.
-6. Launch concurrent requests that together exceed the budget and verify
-   rejected reservations do not spend.
+6. Launch concurrent requests admitted while recorded spending is below the
+   budget. Verify all admitted requests settle even if they overshoot, and a
+   subsequent new request is refused after recorded spending reaches the budget.
 7. Cancel a streaming request after output begins. Confirm generation stops
    and the request is abandoned (no final invoice). Kill the payer during a
    response, restart it, and confirm recovery fetches the settlement and pays
@@ -892,7 +900,8 @@ the fee the receiving wallet deducted) and, on the provider side,
 `credited_msat` (what the receiving wallet reports it credited; Lexe reports
 it net of the fee). Both are omitted when the wallet or the `payments.v1`
 provider did not report them, and both are covered by `event_ref`.
-Terms acceptance is `payer_asserted` (amount is the payer's local cap);
+Terms acceptance is `payer_asserted` (amount retains the legacy local
+`max_total_msat` metadata; it is not an enforced request spending cap);
 invoice issuance is `provider_asserted` as observed by the payer, not
 independently verified issuance. Settlement is `wallet_reported`, amount
 excluding fees (the fee is in `fee_msat`). Final accounting is
@@ -905,7 +914,7 @@ emits no events.
 The terms digest is lowercase SHA-256 over checked JCS JSON using the existing
 host `request_body_digest` helper, applied to the object containing exactly
 `exchange_id`, `model`, `pricing`, and `deposit_msat`: the
-public admission terms. The recovery ID, the payer's cap, the output allowance
+public admission terms. The recovery ID, the legacy local amount, the output allowance
 and the local peer are excluded. Event refs use the same construction over the
 event object with `event_ref` set to `""`. Integers outside the helper's safe
 range suppress evidence, not payment.
@@ -981,11 +990,11 @@ acceptance expectations, not a claim that every fixture is implemented:
 | Abandoned request | A deposit may have settled with no `delivered` or `final_accounted`; nothing is owed. |
 | Exhausted automatic budget | Paid request is rejected with HTTP 402, not represented as a successful paid exchange. |
 | Free-only policy against a paid-only route | HTTP 402 policy refusal, not a wallet outage or settlement failure. |
-| Restart with a pending payment | Reconcile the existing payment without a second debit; successful terminal reconciliation releases its reservation. |
+| Restart with a pending payment | Reconcile the existing payment without a second debit; successful terminal reconciliation records actual spend. |
 | Harness or observation failure | Preserve the failed attempt and its limitation separately from any corrected rerun; do not silently turn it into a pass. |
 
 Uncertain payments must remain distinguishable from terminal outcomes. Do not
-discard unresolved charges merely to report zero outstanding reservations.
+discard unresolved charges merely to report zero unresolved payments.
 
 ### Failure and recovery boundaries
 

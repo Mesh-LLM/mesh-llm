@@ -16,7 +16,7 @@ local management API.
 update. Adapters may use native events or poll behind this interface.
 Subscriptions must also observe already-settled payments and close the
 subscribe/lookup race. Cancelling observation never cancels the payment or
-releases an uncertain reservation. Durable recovery continues independently.
+discards an uncertain payment record. Durable recovery continues independently.
 
 See [Lightning payments](../../docs/specs/lightning-payments.md) for the protocol,
 CLI, security boundaries, recovery behavior, and PoC limitations.

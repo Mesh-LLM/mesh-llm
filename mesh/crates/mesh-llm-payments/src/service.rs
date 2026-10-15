@@ -146,7 +146,7 @@ impl PaymentService {
         let mut payment = self.start_or_observe_charge(charge).await?;
         validate_payment_update(&payment, &charge.invoice.payment_hash, false)?;
         if payment.status == PaymentStatus::Pending {
-            // The provider owns notification transport. Keep the reservation if
+            // The provider owns notification transport. Keep the payment unresolved if
             // observation is interrupted; outgoing HTLCs may outlive the invoice.
             payment = wallet
                 .wait_for_payment(&charge.invoice.payment_hash)
@@ -184,7 +184,7 @@ impl PaymentService {
                 return Ok(payment);
             }
             // Nothing can settle an expired invoice, so an attempt the wallet
-            // never recorded paid nothing: release the reservation.
+            // never recorded paid nothing: close the payment record.
             if charge.invoice.expires_at_ms <= crate::now_ms() {
                 self.ledger.fail_unsubmitted(&charge.invoice.payment_hash)?;
                 anyhow::bail!("Lightning payment failed; invoice expired unpaid");
@@ -233,7 +233,7 @@ impl PaymentService {
 
     /// Recover each charge independently. A pending charge the wallet has no
     /// record of is resubmitted (idempotent per payment hash) until its
-    /// invoice expires, then failed and its reservation released.
+    /// invoice expires, then marked failed.
     pub async fn reconcile_pending(&self) -> Result<()> {
         self.ledger.finalize_terminal_requests()?;
         let mut first_error = None;

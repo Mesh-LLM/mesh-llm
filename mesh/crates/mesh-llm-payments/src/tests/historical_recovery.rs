@@ -45,7 +45,7 @@ async fn main_v2_submitted_success_failure_and_outage_preserve_exact_budget() ->
         }
         let calls = wallet.calls.load(Ordering::SeqCst);
         let service = PaymentService::with_provider(dir.path(), wallet.clone())?;
-        assert_eq!(service.ledger.available_budget(crate::now_ms())?, 16_000);
+        assert_eq!(service.ledger.available_budget(crate::now_ms())?, 20_000);
         assert_eq!(
             wallet.calls.load(Ordering::SeqCst),
             calls,
@@ -56,7 +56,7 @@ async fn main_v2_submitted_success_failure_and_outage_preserve_exact_budget() ->
         let (charge_state, remaining) = match outcome {
             "success" => ("succeeded", 18_990),
             "failure" => ("failed", 20_000),
-            _ => ("pending", 16_000),
+            _ => ("pending", 20_000),
         };
         assert_eq!(
             service

@@ -59,7 +59,7 @@ async fn send_recovery_closes_success_and_failure_after_restart() -> Result<()> 
             let service = PaymentService::with_provider(dir.path(), wallet.clone())?;
             automatic(&service)?;
             assert!(service.control(send(&invoice)).await.is_err());
-            assert_eq!(service.ledger.available_budget(crate::now_ms())?, 300);
+            assert_eq!(service.ledger.available_budget(crate::now_ms())?, 1000);
         }
         let service = PaymentService::with_provider(dir.path(), wallet.clone())?;
         service.reconcile_pending().await?;
@@ -96,7 +96,7 @@ async fn unindexed_uncertain_payment_is_retried_but_never_released_before_expiry
     // payment hash); the rejection leaves the charge pending, not failed.
     assert_eq!(wallet.calls.load(Ordering::SeqCst), 3);
     assert_eq!(service.ledger.pending_charges()?.len(), 1);
-    assert_eq!(service.ledger.available_budget(crate::now_ms())?, 300);
+    assert_eq!(service.ledger.available_budget(crate::now_ms())?, 1000);
     wallet.hide_payments.store(false, Ordering::SeqCst);
     service.reconcile_pending().await?;
     assert_eq!(service.ledger.available_budget(crate::now_ms())?, 390);
@@ -312,7 +312,7 @@ async fn failed_charge_does_not_release_an_uncertain_sibling() -> Result<()> {
             .await
             .is_err()
     );
-    assert_eq!(service.ledger.available_budget(crate::now_ms())?, 800);
+    assert_eq!(service.ledger.available_budget(crate::now_ms())?, 1000);
     assert_eq!(service.ledger.pending_charges()?.len(), 1);
     wallet.reject_submission.store(false, Ordering::SeqCst);
     wallet.pay(&pending.invoice, 100, 200).await?;

@@ -96,7 +96,6 @@ fn single_policy_controls_eligibility() -> Result<()> {
     })?;
     ledger.approve("disabled", 1)?;
     let status = ledger.policy_status(1)?;
-    assert_eq!(status["in_flight_msat"], 0);
     assert_eq!(status["remaining_daily_budget_msat"], 1000);
     ledger.set_policy(&Policy::default())?;
     assert_eq!(ledger.policy_status(1)?["remaining_daily_budget_msat"], 0);

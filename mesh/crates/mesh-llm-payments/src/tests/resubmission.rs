@@ -152,8 +152,8 @@ async fn rejected_resubmission_stays_pending_until_expiry() -> Result<()> {
     assert_eq!(service.ledger.pending_charges()?.len(), 1);
     assert_eq!(
         service.ledger.available_budget(crate::now_ms())?,
-        BUDGET - 200,
-        "the pending charge holds its own cap"
+        BUDGET,
+        "pending charges do not reduce the admission allowance"
     );
     Ok(())
 }

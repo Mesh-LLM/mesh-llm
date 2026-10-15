@@ -26,9 +26,9 @@ fn payee_key(id: &str) -> String {
 }
 
 impl PaymentService {
-    /// Durably approve a seller's admission. `terms` carry the buyer's local
-    /// cap and are approved against policy and the daily budget; `admission` is pinned so every later payment of
-    /// the request is checked against what the seller stated here.
+    /// Durably approve against policy and recorded spending today. Pin the
+    /// admission so every later payment is checked against the seller's terms,
+    /// without rechecking the daily allowance or imposing a per-request cap.
     pub async fn accept_admission(&self, request: AcceptAdmissionRequest) -> Result<()> {
         let AcceptAdmissionRequest {
             terms,
@@ -85,20 +85,10 @@ impl PaymentService {
             );
             return Ok(SettleFinalResponse::default());
         };
-        let terms = self
-            .ledger
-            .request_terms(&request_id)?
-            .context("unknown metered request")?;
         let bill = usage.bill_msat(&admission.pricing)?;
         ensure!(
             bill_msat == Some(bill),
             "bill does not match the admitted rates"
-        );
-        // The buyer's own cap, approved against policy and balance; the
-        // seller never saw it.
-        ensure!(
-            bill <= terms.max_total_msat,
-            "bill exceeds the approved cap"
         );
         // A cold admission cannot produce usage until the seller has received
         // its deposit. Require its full credit even if the buyer's wallet has
@@ -142,8 +132,8 @@ impl PaymentService {
         Ok(self.admission(id)?.is_some())
     }
 
-    /// Observe wallet facts for one metered charge; never resubmit, and never
-    /// infer failure from invoice expiry.
+    /// Observe wallet facts without resubmitting. Expiry alone is not failure:
+    /// only a successful lookup proving no wallet record can retire a charge.
     pub(crate) async fn observe_metered_charge(&self, charge: &Charge) -> Result<()> {
         let _guard = self.payment_lock.lock().await;
         if self
@@ -162,6 +152,8 @@ impl PaymentService {
         {
             crate::service::validate_payment_update(&payment, &charge.invoice.payment_hash, false)?;
             self.ledger.reconcile(&payment, crate::now_ms())?;
+        } else if charge.invoice.expires_at_ms <= crate::now_ms() {
+            self.ledger.fail_unsubmitted(&charge.invoice.payment_hash)?;
         }
         Ok(())
     }

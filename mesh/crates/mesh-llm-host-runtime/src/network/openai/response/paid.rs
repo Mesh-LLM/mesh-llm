@@ -175,7 +175,7 @@ pub(crate) async fn start(
 ) -> Result<StartedExchange> {
     let request = PaidRequest::parse(raw)?;
     let payments = Payments::for_node(node).await?;
-    let cap = local_cap(&payments, &request, &price).await?;
+    let cap = admission_eligibility(&payments, &request, &price).await?;
     let id = uuid::Uuid::new_v4().to_string();
     let (mut send, mut recv) = node
         .open_http_tunnel(peer)
@@ -257,11 +257,15 @@ pub(crate) async fn start(
     Ok((pipe, wait_ready, cancel))
 }
 
-/// The buyer's own spending cap for this request: the effective policy's
-/// per-request total, as long as some of today's budget is left. No prompt
-/// estimate: the bill is whatever the backend reports, refused only if it
-/// exceeds this cap. Reserved locally; the seller never sees it.
-async fn local_cap(payments: &Payments, request: &PaidRequest, price: &Pricing) -> Result<u64> {
+/// Check paid eligibility and advertised rates before requesting admission.
+/// The returned value preserves the legacy terms field, not a settlement cap.
+/// Daily spending is checked again when the provider durably approves admission;
+/// accepted work settles at the admitted rates without reserving budget.
+async fn admission_eligibility(
+    payments: &Payments,
+    request: &PaidRequest,
+    price: &Pricing,
+) -> Result<u64> {
     let budget: RoutingBudgetResponse = payments
         .call(
             ops::ROUTING_BUDGET,

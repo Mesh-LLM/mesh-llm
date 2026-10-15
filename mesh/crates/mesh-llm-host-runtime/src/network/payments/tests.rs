@@ -38,6 +38,8 @@ struct Network {
     invoice_expiry_seconds: AtomicUsize,
     updates: tokio::sync::Notify,
     hold_payments: AtomicBool,
+    fail_next_payment: AtomicBool,
+    payment_failed: tokio::sync::Notify,
     payment_release: tokio::sync::Notify,
     /// When set, each node also loads a plugin that records every
     /// `payment.lifecycle.v1` message it is sent.
@@ -171,6 +173,12 @@ impl WalletProvider for TestWallet {
     async fn pay(&self, invoice: &Invoice, amount: u64, cap: u64) -> Result<Transaction, PayError> {
         invoice.validate_payment(amount, mesh_llm_payments::now_ms())?;
         assert!(amount + 10 <= cap);
+        if self.network.fail_next_payment.swap(false, Ordering::SeqCst) {
+            self.network.payment_failed.notify_one();
+            return Err(PayError::Uncertain(anyhow::anyhow!(
+                "simulated lost submission"
+            )));
+        }
         while self.network.hold_payments.load(Ordering::SeqCst) {
             let released = self.network.payment_release.notified();
             tokio::pin!(released);

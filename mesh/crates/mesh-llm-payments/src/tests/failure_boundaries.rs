@@ -2,7 +2,7 @@ use super::*;
 use std::time::Duration;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn simultaneous_payments_only_pay_what_the_daily_budget_allows() -> Result<()> {
+async fn admitted_payments_settle_then_recorded_spending_blocks_new_admissions() -> Result<()> {
     let directory = tempfile::tempdir()?;
     let wallet = Arc::new(MockWallet::default());
     let service = Arc::new(PaymentService::with_provider(
@@ -20,33 +20,46 @@ async fn simultaneous_payments_only_pay_what_the_daily_budget_allows() -> Result
         let barrier = barrier.clone();
         tasks.spawn(async move {
             let id = format!("request-{number}");
+            service.await_authorization(&terms(&id, 700)).await?;
+            // All requests are admitted before any payment settles.
             barrier.wait().await;
-            if service.await_authorization(&terms(&id, 700)).await.is_err() {
-                return Ok::<_, anyhow::Error>(false);
-            }
-            // Approval reserves nothing; the budget is checked per payment.
-            Ok(service
-                .pay_charge(&charge(&id, 0, number, 600, 700))
-                .await
-                .is_ok())
+            Ok::<_, anyhow::Error>(
+                service
+                    .pay_charge(&charge(&id, 0, number, 600, 700))
+                    .await
+                    .is_ok(),
+            )
         });
     }
     let mut approved = 0;
     while let Some(result) = tasks.join_next().await {
         approved += usize::from(result??);
     }
-    assert_eq!(approved, 1);
-    assert_eq!(wallet.calls.load(Ordering::SeqCst), 1);
-    assert_eq!(service.ledger.available_budget(crate::now_ms())?, 390);
-    let winner = service
-        .ledger
-        .requests()?
-        .into_iter()
-        .find(|r| r.spent_msat > 0)
-        .unwrap();
-    assert_eq!(winner.spent_msat, 610);
-    service.ledger.finish(&winner.terms.id)?;
-    assert_eq!(service.ledger.available_budget(crate::now_ms())?, 390);
+    assert_eq!(approved, 16);
+    assert_eq!(wallet.calls.load(Ordering::SeqCst), 16);
+    assert_eq!(service.ledger.available_budget(crate::now_ms())?, 0);
+    assert_eq!(
+        service.ledger.policy_status(crate::now_ms())?["spent_today_msat"],
+        16 * 610
+    );
+    assert!(
+        service
+            .await_authorization(&terms("later", 700))
+            .await
+            .is_err()
+    );
+    for request in service.ledger.requests()? {
+        if request.state == "approved" {
+            assert_eq!(request.spent_msat, 610);
+            service.ledger.finish(&request.terms.id)?;
+        }
+    }
+    assert_eq!(
+        service
+            .ledger
+            .available_budget(crate::now_ms() + 86_400_000)?,
+        1000
+    );
     Ok(())
 }
 
@@ -137,7 +150,7 @@ async fn assert_pending_survives_outage_and_expiry(
 ) -> Result<()> {
     wallet.lookup_unavailable.store(true, Ordering::SeqCst);
     assert!(service.reconcile_pending().await.is_err());
-    assert_eq!(service.ledger.available_budget(crate::now_ms())?, 300);
+    assert_eq!(service.ledger.available_budget(crate::now_ms())?, 1000);
     wallet.lookup_unavailable.store(false, Ordering::SeqCst);
     service.reconcile_pending().await?;
     let wait = charge.invoice.expires_at_ms.saturating_sub(crate::now_ms()) + 25;
@@ -146,7 +159,7 @@ async fn assert_pending_survives_outage_and_expiry(
     assert_eq!(wallet.calls.load(Ordering::SeqCst), 1);
     assert_eq!(service.ledger.pending_charges()?.len(), 1);
     assert!(service.ledger.finish("uncertain").is_err());
-    // The uncertain charge holds only its own amount, not a reservation.
+    // Uncertain payments do not consume the daily admission allowance.
     service.await_authorization(&terms("second", 700)).await?;
     Ok(())
 }
