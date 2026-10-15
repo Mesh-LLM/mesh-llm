@@ -267,7 +267,9 @@ fn current_nightly_pin_fragment_rejects_missing_and_ambiguous_layouts() {
         .split_once("pins=()")
         .unwrap()
         .1
-        .split_once("upstream=\"$UPSTREAM\"")
+        // The pin-layout block ends where the protected resolution binds the
+        // selected upstream commit, which the walk owns.
+        .split_once("upstream=\"$(")
         .unwrap()
         .0;
     let script = format!("pins=(){fragment}\nprintf '%s' \"$old\"\n");

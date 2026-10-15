@@ -34,9 +34,13 @@ if [[ -n "${CANARY_MESH_SOURCE:-}" ]]; then
     exit 1
   fi
 fi
-UPSTREAM_SHA="${1:-${UPSTREAM_SHA_INPUT:-latest}}"
-if [[ "$UPSTREAM_SHA" == "latest" || -z "$UPSTREAM_SHA" ]]; then
-  UPSTREAM_SHA="$(git ls-remote https://github.com/ggml-org/llama.cpp.git master | awk '{print $1}')"
+UPSTREAM_SHA="${1:-${UPSTREAM_SHA_INPUT:-}}"
+# The canary pins only upstream commits whose own CI is green, so the wrapper
+# never reads the upstream branch tip itself: the target must be resolved by
+# `repository llama-upstream-selection` and handed in explicitly.
+if [[ -z "$UPSTREAM_SHA" || "$UPSTREAM_SHA" == "latest" ]]; then
+  echo "an exact upstream SHA is required: this wrapper never reads the upstream branch tip" >&2
+  exit 1
 fi
 if [[ ! "$UPSTREAM_SHA" =~ ^[0-9a-f]{40}$ ]]; then
   echo "refusing to run the canary against a non-40-hex upstream SHA: $UPSTREAM_SHA" >&2

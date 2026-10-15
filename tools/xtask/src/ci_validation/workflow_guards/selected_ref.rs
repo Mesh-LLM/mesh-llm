@@ -39,8 +39,36 @@ pub(super) fn check(workflows: &BTreeMap<String, Node>) -> DynResult<()> {
             ("--summary", "\"$GITHUB_STEP_SUMMARY\""),
         ],
     )?;
-    selected_output_order(field(step, "run").ok_or("resolver run missing")?)
+    let run = field(step, "run").ok_or("resolver run missing")?;
+    selected_output_order(run)?;
+    upstream_selection(run)
 }
+
+/// The default path admits an upstream target only through the protection-owned
+/// selection command, which walks the branch downwards for the newest commit
+/// whose own CI is green. The raw branch tip is never the target.
+fn upstream_selection(run: &str) -> DynResult<()> {
+    if run.contains("git ls-remote") {
+        return Err("upstream resolution must not read the raw branch tip".into());
+    }
+    let marker = "upstream=\"$(\"$MESH_LLM_AUTOMATION_BIN\" repository llama-upstream-selection";
+    let start = run
+        .find(marker)
+        .ok_or("upstream resolution must select through the protection-owned walk")?;
+    let command = &run[start..];
+    for pair in [
+        "--pin \"$old\"",
+        "--requested \"$UPSTREAM\"",
+        "--github-output \"$GITHUB_OUTPUT\"",
+        "--summary \"$GITHUB_STEP_SUMMARY\"",
+    ] {
+        if !command.contains(pair) {
+            return Err(format!("upstream selection must bind {pair}").into());
+        }
+    }
+    Ok(())
+}
+
 fn selected_output_order(run: &str) -> DynResult<()> {
     let run = run.replace("\\\n", " ");
     let (prefix, rest) = run

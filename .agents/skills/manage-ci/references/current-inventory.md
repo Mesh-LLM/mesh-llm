@@ -121,7 +121,7 @@ for a much larger deterministic radix/blob ownership corpus. It uses the
 pinned `public cpu` image, has no secrets, records exact seed/step budgets and
 source SHA, and uploads the reproducible failure log.
 `llama-upstream-canary.yml` runs daily or on trusted-main dispatch. It freezes
-one main source SHA and the upstream target before any hardware work. All
+one main source SHA and the upstream target before any hardware work. The upstream target is never the raw branch tip: `cargo xtool repository llama-upstream-selection` walks the upstream branch from its newest commit downwards and selects the newest commit whose own GitHub check runs all completed without a failure, keeps the current pin as its floor, and keeps the pin unchanged when no newer commit passes. An explicit dispatch `upstream_sha` is admitted under the same rule and is replaced by the newest passing commit at or below it, with the substitution recorded in the run summary. That lookup is the only consumer of the workflow-scoped read-only token, bound to the resolution step of the GitHub-hosted controller job. All
 candidate builds compile native tests with `--build-only`, then the generated
 patch checker owns one full native CTest pass after patch equality and
 idempotence checks. The generator's own unit suite remains separate.
