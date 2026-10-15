@@ -81,3 +81,43 @@ Retained evidence includes the probe source and binaries, request, rendered
 prompts, per-step token choices, full vocabulary logits, comparison summaries,
 and SHA-256 manifests. Probe source SHA-256:
 `aadca65f5bb595b6ff77be94631d771b44b0216076d544727db103ac47f295cf`.
+
+## Follow-up: explicit text-action protocol
+
+The failing first-turn history asks for repository work through a bash tool but
+contains neither API tools nor a text-action format contract. Its retained source
+session has 54 assistant turns, all with fenced commands; observations are user
+messages. The replay adapter cannot infer a structured tool schema from those
+fences. Previously, any nonempty prose ending in `stop` passed structural checks.
+
+Two focused HTTP trials on the same Spark, model, and retained engine builds added
+only system instructions to the temperature-0 request. The first described one
+fenced command followed by an immediate end of response. The second also supplied
+a literal Markdown example and explicitly excluded XML wrappers. Neither request
+set an output limit. Each engine started cold; the runs did not execute commands.
+
+| Protocol instruction | Prompt tokens | Mesh completion tokens / finish | llama completion tokens / finish | Action format |
+|---|---:|---|---|---|
+| Verbal fenced-command contract | 717 | 62 / stop | 63 / stop | Fail |
+| Contract plus literal Markdown example | 768 | 62 / stop | 63 / stop | Fail |
+
+All four response texts were identical, including this action:
+
+```text
+<shell>
+find /testbed -type f -name "*.py" | grep -E "(secret|Secret)" | head -20
+</shell>
+```
+
+The model emitted one command and stopped, without inventing an observation in
+these trials, but did not follow the requested fence syntax. The completion-token
+accounting differs by one between the engines despite identical text. These are
+natural stops, not successful protocol responses, and no successful benchmark
+score is claimed. The final `shell-fence-v1` validator rejects this missing-fence
+shape; the accepted syntax was not broadened to admit the observed failure.
+
+This establishes that making the interaction explicit changed the observed
+behavior but did not fully repair output quality at temperature 0. It does not
+isolate model weights, quantization, or shared llama.cpp execution as the remaining
+cause. The new replay gate detects the failure; it is not a model-quality fix.
+No sustained replay followed these diagnostics, and all owned servers exited.

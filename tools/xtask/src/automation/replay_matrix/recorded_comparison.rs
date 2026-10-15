@@ -17,6 +17,7 @@ struct Job {
     context_size: u64,
     warmup_turns: usize,
     sampling: super::replay_sampling::Sampling,
+    text_action_protocol: Option<super::text_action_protocol::Protocol>,
     cases: Vec<Case>,
 }
 #[derive(Deserialize)]
@@ -194,12 +195,14 @@ fn manifest(source: &Value, job: &Job, case: &Case) -> DynResult<Value> {
     }
     selected["replay_window"] = json!({"start":case.start,"count":case.count});
     selected["replay_sampling"] = serde_json::to_value(&job.sampling)?;
+    selected["text_action_protocol"] = serde_json::to_value(job.text_action_protocol)?;
     let mut warmup = source["cohorts"]["warmup"]
         .as_array()
         .and_then(|v| v.first())
         .ok_or("missing warmup trajectory")?
         .clone();
     warmup["replay_sampling"] = serde_json::to_value(&job.sampling)?;
+    warmup["text_action_protocol"] = serde_json::to_value(job.text_action_protocol)?;
     let selection = super::recorded_requests::Selection {
         model: "pending",
         maximum_output_tokens: None,
@@ -229,8 +232,26 @@ mod tests {
         ))
         .unwrap();
         validate(&job).unwrap();
+        assert!(job.text_action_protocol.is_some());
         job.sampling.enable_thinking = None;
         assert!(validate(&job).is_err());
+    }
+
+    #[test]
+    fn legacy_job_keeps_exact_history_and_unknown_protocol_is_rejected() {
+        let mut input: Value = serde_json::from_str(include_str!(
+            "../../../../../mesh/evals/recorded-replay/job.json"
+        ))
+        .unwrap();
+        input
+            .as_object_mut()
+            .unwrap()
+            .remove("text_action_protocol");
+        let job: Job = serde_json::from_value(input.clone()).unwrap();
+        assert!(job.text_action_protocol.is_none());
+        validate(&job).unwrap();
+        input["text_action_protocol"] = "unknown".into();
+        assert!(serde_json::from_value::<Job>(input).is_err());
     }
 }
 
@@ -273,12 +294,17 @@ mod selection_tests {
             assert!(
                 requests[0]
                     .iter()
+                    .all(|turn| turn.text_action_protocol.is_some())
+            );
+            assert!(
+                requests[0]
+                    .iter()
                     .all(|turn| turn.body["temperature"] == 0.0)
             );
             assert_eq!(requests[0][0].assistant_turn, case.start);
             assert_eq!(
                 requests[0][0].body["messages"].as_array().unwrap().len(),
-                1 + case.start * 2
+                2 + case.start * 2
             );
             assert_eq!(
                 requests[0][0].body["chat_template_kwargs"]["enable_thinking"],
@@ -288,6 +314,10 @@ mod selection_tests {
             assert_eq!(
                 manifest["cohorts"]["warmup"][0]["replay_sampling"]["temperature"],
                 0.0
+            );
+            assert_eq!(
+                manifest["cohorts"]["warmup"][0]["text_action_protocol"],
+                "shell-fence-v1"
             );
             assert_eq!(
                 manifest["cohorts"]["warmup"][0]["replay_sampling"]["enable_thinking"],

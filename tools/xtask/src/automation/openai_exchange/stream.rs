@@ -18,6 +18,7 @@ pub(in crate::automation) struct Stream {
     tools: BTreeMap<usize, Tool>,
     finish_reason: Option<String>,
     bytes_seen: usize,
+    content_check: Option<fn(&str) -> Option<String>>,
 }
 
 /// Longest server error text retained in replay evidence.
@@ -113,6 +114,12 @@ pub(in crate::automation) struct Evidence {
 }
 
 impl Stream {
+    pub(super) fn with_content_check(check: Option<fn(&str) -> Option<String>>) -> Self {
+        Self {
+            content_check: check,
+            ..Self::default()
+        }
+    }
     fn output_problems(&self) -> Vec<String> {
         let mut problems = Vec::new();
         match self.finish_reason.as_deref() {
@@ -284,7 +291,10 @@ impl Stream {
             None if probe => elapsed,
             None => return Err("stream completed without generated content".into()),
         };
-        let output_problems = self.output_problems();
+        let mut output_problems = self.output_problems();
+        if !probe && let Some(check) = self.content_check {
+            output_problems.extend(check(&self.content));
+        }
         let usage = self.usage.ok_or("missing or invalid prompt/cache usage")?;
         if usage.prompt_tokens == 0
             || usage.prompt_tokens_details.cached_tokens > usage.prompt_tokens

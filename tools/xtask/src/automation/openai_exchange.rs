@@ -58,6 +58,15 @@ pub(super) async fn request(
     body: &serde_json::Value,
     qualification_probe: bool,
 ) -> TransportResult<stream::Evidence> {
+    request_checked(base, body, qualification_probe, None).await
+}
+
+pub(super) async fn request_checked(
+    base: &str,
+    body: &serde_json::Value,
+    qualification_probe: bool,
+    content_check: Option<fn(&str) -> Option<String>>,
+) -> TransportResult<stream::Evidence> {
     let started = Instant::now();
     let uri = format!("{}/chat/completions", base.trim_end_matches('/')).parse()?;
     post(
@@ -66,7 +75,7 @@ pub(super) async fn request(
         started,
         true,
         OpenAiDecoder {
-            stream: Stream::default(),
+            stream: Stream::with_content_check(content_check),
             probe: qualification_probe,
             exact_ok: false,
             maximum: 64 * 1024 * 1024,

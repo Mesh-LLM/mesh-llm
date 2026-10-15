@@ -3,7 +3,8 @@
 This manual benchmark compares a verified Mesh release build with upstream llama.cpp
 at the pinned source in `job.json`, using Qwen3.5-4B Q4_K_M. It replays two consecutive
 50-turn windows from the pinned Thoughtworks agentic coding dataset, at concurrency 1.
-Recorded histories remain intact; generated answers are not fed into later requests.
+Recorded histories are retained; generated answers are not fed into later requests.
+Wire requests add the versioned text-action instructions described below.
 This is bounded replay, not full-session recurrent-state certification or SkippyBench.
 
 See the [native differential findings](NATIVE_DIFFERENTIAL.md) for the focused
@@ -19,8 +20,37 @@ budget; older builds may retain a fixed server cap. Any `length` finish fails th
 strict run, including during warmup. The runner
 retains the offending response's usage, finish, output-shape counts and integrity
 problems, stops issuing requests, and shuts down its owned server. It never skips a
-bad warmup to obtain a passing score. Tool checks validate JSON structure, not semantic
-completion or the original tool schemas (which are permissive reconstructions).
+bad warmup to obtain a passing score.
+
+## Text-action contract
+
+The pinned job explicitly selects `text_action_protocol: shell-fence-v1` for both
+measured sessions and warmup. These recorded agents use fenced shell commands and
+user observations, rather than API function calls. The original warmup's generic
+system message did not explain how to submit a command or when to wait for its
+result. An introduction ending in `stop` could therefore pass structural checks
+without giving an agent runner any action.
+
+The adaptation appends instructions to the system message (or inserts one when
+absent): emit one nonempty shell-command fence, then end the response and wait for
+an observation. It preserves all other recorded message content. It is an explicit
+benchmark adaptation, not a claim to reproduce the original agent's complete
+configuration. Input manifests retain the original messages; each request record
+identifies the protocol version. Runs with and without this adaptation are different
+workloads and must not share a benchmark identity.
+
+The response checker rejects missing, empty, comment-only, non-shell, or unclosed
+command blocks and any non-whitespace after the closing fence, including fabricated
+results or further actions. Commands may use plain, `bash`, `sh`, or `shell` fences;
+longer backtick fences can contain shorter fences in heredocs. Submission commands
+use the same format. This checks action structure, not shell syntax, command safety,
+execution success, or task completion. Commands are never executed by replay.
+One-token context-qualification probes skip the action-format check; warmups do not.
+
+The protocol is opt-in for general replay inputs. Combining it with API tool
+definitions fails admission rather than silently mixing two action interfaces.
+Unadapted API-tool replay retains its JSON-structure checks and permissive inferred
+schemas; those do not certify original tool-schema conformance.
 
 ## Local invocation
 

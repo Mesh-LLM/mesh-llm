@@ -13,6 +13,8 @@ pub(super) struct Trajectory {
     pub messages: Vec<Map<String, Value>>,
     pub tools: Option<Vec<Value>>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub text_action_protocol: Option<super::text_action_protocol::Protocol>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub replay_window: Option<super::replay_profile::Window>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub replay_sampling: Option<super::replay_sampling::Sampling>,
@@ -30,6 +32,7 @@ impl<'de> Deserialize<'de> for Trajectory {
             recorded_model: Option<String>,
             messages: Vec<Map<String, Value>>,
             tools: Option<Vec<Value>>,
+            text_action_protocol: Option<super::text_action_protocol::Protocol>,
             replay_window: Option<super::replay_profile::Window>,
             replay_sampling: Option<super::replay_sampling::Sampling>,
         }
@@ -43,6 +46,7 @@ impl<'de> Deserialize<'de> for Trajectory {
             recorded_model: recorded.recorded_model,
             messages: recorded.messages,
             tools: recorded.tools,
+            text_action_protocol: recorded.text_action_protocol,
             replay_window: recorded.replay_window,
             replay_sampling: recorded.replay_sampling,
             original,
@@ -64,6 +68,8 @@ pub(super) struct Turn {
     pub recorded_output_characters: usize,
     pub available_tools: usize,
     pub qualification_probe: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text_action_protocol: Option<super::text_action_protocol::Protocol>,
     pub body: Value,
 }
 
@@ -153,6 +159,9 @@ pub(super) fn build_selected(
         return Err("session identity and output budget must be nonempty".into());
     }
     let tools = tools(trajectory)?;
+    if trajectory.text_action_protocol.is_some() && !tools.is_empty() {
+        return Err("text action protocol cannot be combined with API tools".into());
+    }
     if let Some(sampling) = &trajectory.replay_sampling {
         sampling.validate()?;
     }
@@ -199,6 +208,9 @@ pub(super) fn build_selected(
                 if !tools.is_empty() {
                     body["tools"] = Value::Array(tools.clone());
                 }
+                if let Some(protocol) = trajectory.text_action_protocol {
+                    protocol.apply(&mut body)?;
+                }
                 turns.push(Turn {
                     request_id: format!("{}:{}", trajectory.session_id, assistant_turn),
                     session_id: trajectory.session_id.clone(),
@@ -215,6 +227,7 @@ pub(super) fn build_selected(
                         .map_or(0, |content| content.chars().count()),
                     available_tools: tools.len(),
                     qualification_probe: selection.qualification_probe,
+                    text_action_protocol: trajectory.text_action_protocol,
                     body,
                 });
             }
