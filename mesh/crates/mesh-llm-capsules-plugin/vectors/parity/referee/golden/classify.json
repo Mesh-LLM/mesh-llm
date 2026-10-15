@@ -1,0 +1,29 @@
+{
+ "path": "classify",
+ "source": "the Python reference, and the rules where it departs",
+ "v": 1,
+ "answers": {
+  "ack_refusal_about_the_other_twin": [{"ack_refusals":0,"contradicted":0,"corroborated":1,"inconclusive":0,"not_comparable":0}],
+  "ack_refusal_claiming_a_contradiction": [{"ack_refusals":0,"contradicted":0,"corroborated":0,"inconclusive":1,"not_comparable":0}],
+  "ack_refusal_counted_once": [{"ack_refusals":1,"contradicted":1,"corroborated":0,"inconclusive":0,"not_comparable":0}],
+  "ack_refusal_of_a_forged_verdict": [{"ack_refusals":0,"contradicted":0,"corroborated":0,"inconclusive":0,"not_comparable":0}],
+  "ack_refusal_of_a_verified_contradiction": [{"ack_refusals":1,"contradicted":1,"corroborated":0,"inconclusive":0,"not_comparable":0}],
+  "ack_refusal_without_the_verdict": [{"ack_refusals":0,"contradicted":0,"corroborated":0,"inconclusive":0,"not_comparable":0}],
+  "contradiction_of_the_other_twin": [{"ack_refusals":0,"contradicted":0,"corroborated":1,"inconclusive":0,"not_comparable":0}],
+  "contradiction_of_x": [{"ack_refusals":0,"contradicted":1,"corroborated":0,"inconclusive":0,"not_comparable":0}],
+  "corroborated": [{"ack_refusals":0,"contradicted":0,"corroborated":1,"inconclusive":0,"not_comparable":0}],
+  "forged_copied_block": [{"ack_refusals":0,"contradicted":0,"corroborated":0,"inconclusive":0,"not_comparable":0}],
+  "forged_many": [{"ack_refusals":0,"contradicted":0,"corroborated":0,"inconclusive":0,"not_comparable":0}],
+  "forged_no_referee": [{"ack_refusals":0,"contradicted":0,"corroborated":0,"inconclusive":0,"not_comparable":0}],
+  "forged_referee_not_announced": [{"ack_refusals":0,"contradicted":0,"corroborated":0,"inconclusive":0,"not_comparable":0}],
+  "forged_unannounced_key": [{"ack_refusals":0,"contradicted":0,"corroborated":0,"inconclusive":0,"not_comparable":0}],
+  "forged_unsigned": [{"ack_refusals":0,"contradicted":0,"corroborated":0,"inconclusive":0,"not_comparable":0}],
+  "held_by_many_references": [{"ack_refusals":0,"contradicted":1,"corroborated":0,"inconclusive":0,"not_comparable":0}],
+  "inconclusive": [{"ack_refusals":0,"contradicted":0,"corroborated":0,"inconclusive":1,"not_comparable":0}],
+  "not_comparable": [{"ack_refusals":0,"contradicted":0,"corroborated":0,"inconclusive":0,"not_comparable":1}],
+  "one_referee_one_pair": [{"ack_refusals":0,"contradicted":1,"corroborated":0,"inconclusive":0,"not_comparable":0}],
+  "one_referee_two_pairs": [{"ack_refusals":0,"contradicted":2,"corroborated":0,"inconclusive":0,"not_comparable":0}],
+  "two_referees_one_pair": [{"ack_refusals":0,"contradicted":2,"corroborated":0,"inconclusive":0,"not_comparable":0}],
+  "x_was_not_judged": [{"ack_refusals":0,"contradicted":0,"corroborated":0,"inconclusive":0,"not_comparable":0}]
+ }
+}

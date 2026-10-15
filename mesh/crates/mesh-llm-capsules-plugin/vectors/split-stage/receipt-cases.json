@@ -1,0 +1,1112 @@
+[
+ {
+  "name": "all_present",
+  "receipt": {
+   "coordinator_node_id": "node-coordinator-c",
+   "kind": "mesh-coordinator-receipt",
+   "request_id": "18446744073709551615",
+   "run_id": "mesh-split-1790000000000000000-g2",
+   "stage_seal_deadline_ms": 2000,
+   "stages": [
+    {
+     "bundle": "not_requested",
+     "hop_id": "stage-0"
+    },
+    {
+     "bundle": "present",
+     "bundle_ref": {
+      "digest": "0101010101010101010101010101010101010101010101010101010101010100",
+      "digest_alg": "SHA-256",
+      "type": "capsule"
+     },
+     "hop_id": "stage-1"
+    },
+    {
+     "bundle": "present",
+     "bundle_ref": {
+      "digest": "0202020202020202020202020202020202020202020202020202020202020200",
+      "digest_alg": "SHA-256",
+      "type": "capsule"
+     },
+     "hop_id": "stage-2"
+    }
+   ],
+   "topology": [
+    {
+     "assignment": {
+      "layer_end": 16,
+      "layer_start": 0,
+      "node_id": "node-coordinator-c",
+      "package_id": "sha256:abababababababababababababababababababababababababababababababab"
+     },
+     "hop_id": "stage-0",
+     "observation_point": null,
+     "role": "coordinator",
+     "seq": 0
+    },
+    {
+     "assignment": {
+      "layer_end": 32,
+      "layer_start": 16,
+      "node_id": "node-b",
+      "package_id": "sha256:abababababababababababababababababababababababababababababababab"
+     },
+     "hop_id": "stage-1",
+     "observation_point": null,
+     "role": "stage",
+     "seq": 1
+    },
+    {
+     "assignment": {
+      "layer_end": 48,
+      "layer_start": 32,
+      "node_id": "node-d",
+      "package_id": "sha256:abababababababababababababababababababababababababababababababab"
+     },
+     "hop_id": "stage-2",
+     "observation_point": null,
+     "role": "stage",
+     "seq": 2
+    }
+   ],
+   "v": 1
+  },
+  "valid": true
+ },
+ {
+  "name": "absent_and_not_requested",
+  "receipt": {
+   "coordinator_node_id": "node-coordinator-c",
+   "kind": "mesh-coordinator-receipt",
+   "request_id": "18446744073709551615",
+   "run_id": "mesh-split-1790000000000000000-g2",
+   "stage_seal_deadline_ms": 2000,
+   "stages": [
+    {
+     "bundle": "not_requested",
+     "hop_id": "stage-0"
+    },
+    {
+     "bundle": "present",
+     "bundle_ref": {
+      "digest": "0101010101010101010101010101010101010101010101010101010101010100",
+      "digest_alg": "SHA-256",
+      "type": "capsule"
+     },
+     "hop_id": "stage-1"
+    },
+    {
+     "bundle": "absent",
+     "hop_id": "stage-2"
+    }
+   ],
+   "topology": [
+    {
+     "assignment": {
+      "layer_end": 16,
+      "layer_start": 0,
+      "node_id": "node-coordinator-c",
+      "package_id": "sha256:abababababababababababababababababababababababababababababababab"
+     },
+     "hop_id": "stage-0",
+     "observation_point": null,
+     "role": "coordinator",
+     "seq": 0
+    },
+    {
+     "assignment": {
+      "layer_end": 32,
+      "layer_start": 16,
+      "node_id": "node-b",
+      "package_id": "sha256:abababababababababababababababababababababababababababababababab"
+     },
+     "hop_id": "stage-1",
+     "observation_point": null,
+     "role": "stage",
+     "seq": 1
+    },
+    {
+     "assignment": {
+      "layer_end": 48,
+      "layer_start": 32,
+      "node_id": "node-d",
+      "package_id": "sha256:abababababababababababababababababababababababababababababababab"
+     },
+     "hop_id": "stage-2",
+     "observation_point": null,
+     "role": "stage",
+     "seq": 2
+    }
+   ],
+   "v": 1
+  },
+  "valid": true
+ },
+ {
+  "name": "conflict_two_refs",
+  "receipt": {
+   "coordinator_node_id": "node-coordinator-c",
+   "kind": "mesh-coordinator-receipt",
+   "request_id": "18446744073709551615",
+   "run_id": "mesh-split-1790000000000000000-g2",
+   "stage_seal_deadline_ms": 2000,
+   "stages": [
+    {
+     "bundle": "not_requested",
+     "hop_id": "stage-0"
+    },
+    {
+     "bundle": "present",
+     "bundle_ref": {
+      "digest": "0101010101010101010101010101010101010101010101010101010101010100",
+      "digest_alg": "SHA-256",
+      "type": "capsule"
+     },
+     "hop_id": "stage-1"
+    },
+    {
+     "bundle": "conflict",
+     "bundle_refs": [
+      {
+       "digest": "e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1",
+       "digest_alg": "SHA-256",
+       "type": "capsule"
+      },
+      {
+       "digest": "e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2",
+       "digest_alg": "SHA-256",
+       "type": "capsule"
+      }
+     ],
+     "hop_id": "stage-2"
+    }
+   ],
+   "topology": [
+    {
+     "assignment": {
+      "layer_end": 16,
+      "layer_start": 0,
+      "node_id": "node-coordinator-c",
+      "package_id": "sha256:abababababababababababababababababababababababababababababababab"
+     },
+     "hop_id": "stage-0",
+     "observation_point": null,
+     "role": "coordinator",
+     "seq": 0
+    },
+    {
+     "assignment": {
+      "layer_end": 32,
+      "layer_start": 16,
+      "node_id": "node-b",
+      "package_id": "sha256:abababababababababababababababababababababababababababababababab"
+     },
+     "hop_id": "stage-1",
+     "observation_point": null,
+     "role": "stage",
+     "seq": 1
+    },
+    {
+     "assignment": {
+      "layer_end": 48,
+      "layer_start": 32,
+      "node_id": "node-d",
+      "package_id": "sha256:abababababababababababababababababababababababababababababababab"
+     },
+     "hop_id": "stage-2",
+     "observation_point": null,
+     "role": "stage",
+     "seq": 2
+    }
+   ],
+   "v": 1
+  },
+  "valid": true
+ },
+ {
+  "name": "present_without_ref",
+  "receipt": {
+   "coordinator_node_id": "node-coordinator-c",
+   "kind": "mesh-coordinator-receipt",
+   "request_id": "18446744073709551615",
+   "run_id": "mesh-split-1790000000000000000-g2",
+   "stage_seal_deadline_ms": 2000,
+   "stages": [
+    {
+     "bundle": "not_requested",
+     "hop_id": "stage-0"
+    },
+    {
+     "bundle": "present",
+     "hop_id": "stage-1"
+    },
+    {
+     "bundle": "present",
+     "bundle_ref": {
+      "digest": "0202020202020202020202020202020202020202020202020202020202020200",
+      "digest_alg": "SHA-256",
+      "type": "capsule"
+     },
+     "hop_id": "stage-2"
+    }
+   ],
+   "topology": [
+    {
+     "assignment": {
+      "layer_end": 16,
+      "layer_start": 0,
+      "node_id": "node-coordinator-c",
+      "package_id": "sha256:abababababababababababababababababababababababababababababababab"
+     },
+     "hop_id": "stage-0",
+     "observation_point": null,
+     "role": "coordinator",
+     "seq": 0
+    },
+    {
+     "assignment": {
+      "layer_end": 32,
+      "layer_start": 16,
+      "node_id": "node-b",
+      "package_id": "sha256:abababababababababababababababababababababababababababababababab"
+     },
+     "hop_id": "stage-1",
+     "observation_point": null,
+     "role": "stage",
+     "seq": 1
+    },
+    {
+     "assignment": {
+      "layer_end": 48,
+      "layer_start": 32,
+      "node_id": "node-d",
+      "package_id": "sha256:abababababababababababababababababababababababababababababababab"
+     },
+     "hop_id": "stage-2",
+     "observation_point": null,
+     "role": "stage",
+     "seq": 2
+    }
+   ],
+   "v": 1
+  },
+  "valid": false
+ },
+ {
+  "name": "absent_with_ref",
+  "receipt": {
+   "coordinator_node_id": "node-coordinator-c",
+   "kind": "mesh-coordinator-receipt",
+   "request_id": "18446744073709551615",
+   "run_id": "mesh-split-1790000000000000000-g2",
+   "stage_seal_deadline_ms": 2000,
+   "stages": [
+    {
+     "bundle": "not_requested",
+     "hop_id": "stage-0"
+    },
+    {
+     "bundle": "absent",
+     "bundle_ref": {
+      "digest": "e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1",
+      "digest_alg": "SHA-256",
+      "type": "capsule"
+     },
+     "hop_id": "stage-1"
+    },
+    {
+     "bundle": "present",
+     "bundle_ref": {
+      "digest": "0202020202020202020202020202020202020202020202020202020202020200",
+      "digest_alg": "SHA-256",
+      "type": "capsule"
+     },
+     "hop_id": "stage-2"
+    }
+   ],
+   "topology": [
+    {
+     "assignment": {
+      "layer_end": 16,
+      "layer_start": 0,
+      "node_id": "node-coordinator-c",
+      "package_id": "sha256:abababababababababababababababababababababababababababababababab"
+     },
+     "hop_id": "stage-0",
+     "observation_point": null,
+     "role": "coordinator",
+     "seq": 0
+    },
+    {
+     "assignment": {
+      "layer_end": 32,
+      "layer_start": 16,
+      "node_id": "node-b",
+      "package_id": "sha256:abababababababababababababababababababababababababababababababab"
+     },
+     "hop_id": "stage-1",
+     "observation_point": null,
+     "role": "stage",
+     "seq": 1
+    },
+    {
+     "assignment": {
+      "layer_end": 48,
+      "layer_start": 32,
+      "node_id": "node-d",
+      "package_id": "sha256:abababababababababababababababababababababababababababababababab"
+     },
+     "hop_id": "stage-2",
+     "observation_point": null,
+     "role": "stage",
+     "seq": 2
+    }
+   ],
+   "v": 1
+  },
+  "valid": false
+ },
+ {
+  "name": "not_requested_with_ref",
+  "receipt": {
+   "coordinator_node_id": "node-coordinator-c",
+   "kind": "mesh-coordinator-receipt",
+   "request_id": "18446744073709551615",
+   "run_id": "mesh-split-1790000000000000000-g2",
+   "stage_seal_deadline_ms": 2000,
+   "stages": [
+    {
+     "bundle": "not_requested",
+     "hop_id": "stage-0"
+    },
+    {
+     "bundle": "not_requested",
+     "bundle_ref": {
+      "digest": "e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1",
+      "digest_alg": "SHA-256",
+      "type": "capsule"
+     },
+     "hop_id": "stage-1"
+    },
+    {
+     "bundle": "present",
+     "bundle_ref": {
+      "digest": "0202020202020202020202020202020202020202020202020202020202020200",
+      "digest_alg": "SHA-256",
+      "type": "capsule"
+     },
+     "hop_id": "stage-2"
+    }
+   ],
+   "topology": [
+    {
+     "assignment": {
+      "layer_end": 16,
+      "layer_start": 0,
+      "node_id": "node-coordinator-c",
+      "package_id": "sha256:abababababababababababababababababababababababababababababababab"
+     },
+     "hop_id": "stage-0",
+     "observation_point": null,
+     "role": "coordinator",
+     "seq": 0
+    },
+    {
+     "assignment": {
+      "layer_end": 32,
+      "layer_start": 16,
+      "node_id": "node-b",
+      "package_id": "sha256:abababababababababababababababababababababababababababababababab"
+     },
+     "hop_id": "stage-1",
+     "observation_point": null,
+     "role": "stage",
+     "seq": 1
+    },
+    {
+     "assignment": {
+      "layer_end": 48,
+      "layer_start": 32,
+      "node_id": "node-d",
+      "package_id": "sha256:abababababababababababababababababababababababababababababababab"
+     },
+     "hop_id": "stage-2",
+     "observation_point": null,
+     "role": "stage",
+     "seq": 2
+    }
+   ],
+   "v": 1
+  },
+  "valid": false
+ },
+ {
+  "name": "one_record_cited_under_two_hops",
+  "receipt": {
+   "coordinator_node_id": "node-coordinator-c",
+   "kind": "mesh-coordinator-receipt",
+   "request_id": "18446744073709551615",
+   "run_id": "mesh-split-1790000000000000000-g2",
+   "stage_seal_deadline_ms": 2000,
+   "stages": [
+    {
+     "bundle": "not_requested",
+     "hop_id": "stage-0"
+    },
+    {
+     "bundle": "present",
+     "bundle_ref": {
+      "digest": "0101010101010101010101010101010101010101010101010101010101010100",
+      "digest_alg": "SHA-256",
+      "type": "capsule"
+     },
+     "hop_id": "stage-1"
+    },
+    {
+     "bundle": "present",
+     "bundle_ref": {
+      "digest": "0101010101010101010101010101010101010101010101010101010101010100",
+      "digest_alg": "SHA-256",
+      "type": "capsule"
+     },
+     "hop_id": "stage-2"
+    }
+   ],
+   "topology": [
+    {
+     "assignment": {
+      "layer_end": 16,
+      "layer_start": 0,
+      "node_id": "node-coordinator-c",
+      "package_id": "sha256:abababababababababababababababababababababababababababababababab"
+     },
+     "hop_id": "stage-0",
+     "observation_point": null,
+     "role": "coordinator",
+     "seq": 0
+    },
+    {
+     "assignment": {
+      "layer_end": 32,
+      "layer_start": 16,
+      "node_id": "node-b",
+      "package_id": "sha256:abababababababababababababababababababababababababababababababab"
+     },
+     "hop_id": "stage-1",
+     "observation_point": null,
+     "role": "stage",
+     "seq": 1
+    },
+    {
+     "assignment": {
+      "layer_end": 48,
+      "layer_start": 32,
+      "node_id": "node-d",
+      "package_id": "sha256:abababababababababababababababababababababababababababababababab"
+     },
+     "hop_id": "stage-2",
+     "observation_point": null,
+     "role": "stage",
+     "seq": 2
+    }
+   ],
+   "v": 1
+  },
+  "valid": false
+ },
+ {
+  "name": "conflict_one_ref",
+  "receipt": {
+   "coordinator_node_id": "node-coordinator-c",
+   "kind": "mesh-coordinator-receipt",
+   "request_id": "18446744073709551615",
+   "run_id": "mesh-split-1790000000000000000-g2",
+   "stage_seal_deadline_ms": 2000,
+   "stages": [
+    {
+     "bundle": "not_requested",
+     "hop_id": "stage-0"
+    },
+    {
+     "bundle": "present",
+     "bundle_ref": {
+      "digest": "0101010101010101010101010101010101010101010101010101010101010100",
+      "digest_alg": "SHA-256",
+      "type": "capsule"
+     },
+     "hop_id": "stage-1"
+    },
+    {
+     "bundle": "conflict",
+     "bundle_refs": [
+      {
+       "digest": "e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1",
+       "digest_alg": "SHA-256",
+       "type": "capsule"
+      }
+     ],
+     "hop_id": "stage-2"
+    }
+   ],
+   "topology": [
+    {
+     "assignment": {
+      "layer_end": 16,
+      "layer_start": 0,
+      "node_id": "node-coordinator-c",
+      "package_id": "sha256:abababababababababababababababababababababababababababababababab"
+     },
+     "hop_id": "stage-0",
+     "observation_point": null,
+     "role": "coordinator",
+     "seq": 0
+    },
+    {
+     "assignment": {
+      "layer_end": 32,
+      "layer_start": 16,
+      "node_id": "node-b",
+      "package_id": "sha256:abababababababababababababababababababababababababababababababab"
+     },
+     "hop_id": "stage-1",
+     "observation_point": null,
+     "role": "stage",
+     "seq": 1
+    },
+    {
+     "assignment": {
+      "layer_end": 48,
+      "layer_start": 32,
+      "node_id": "node-d",
+      "package_id": "sha256:abababababababababababababababababababababababababababababababab"
+     },
+     "hop_id": "stage-2",
+     "observation_point": null,
+     "role": "stage",
+     "seq": 2
+    }
+   ],
+   "v": 1
+  },
+  "valid": false
+ },
+ {
+  "name": "conflict_repeated_ref",
+  "receipt": {
+   "coordinator_node_id": "node-coordinator-c",
+   "kind": "mesh-coordinator-receipt",
+   "request_id": "18446744073709551615",
+   "run_id": "mesh-split-1790000000000000000-g2",
+   "stage_seal_deadline_ms": 2000,
+   "stages": [
+    {
+     "bundle": "not_requested",
+     "hop_id": "stage-0"
+    },
+    {
+     "bundle": "present",
+     "bundle_ref": {
+      "digest": "0101010101010101010101010101010101010101010101010101010101010100",
+      "digest_alg": "SHA-256",
+      "type": "capsule"
+     },
+     "hop_id": "stage-1"
+    },
+    {
+     "bundle": "conflict",
+     "bundle_refs": [
+      {
+       "digest": "e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1",
+       "digest_alg": "SHA-256",
+       "type": "capsule"
+      },
+      {
+       "digest": "e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1",
+       "digest_alg": "SHA-256",
+       "type": "capsule"
+      }
+     ],
+     "hop_id": "stage-2"
+    }
+   ],
+   "topology": [
+    {
+     "assignment": {
+      "layer_end": 16,
+      "layer_start": 0,
+      "node_id": "node-coordinator-c",
+      "package_id": "sha256:abababababababababababababababababababababababababababababababab"
+     },
+     "hop_id": "stage-0",
+     "observation_point": null,
+     "role": "coordinator",
+     "seq": 0
+    },
+    {
+     "assignment": {
+      "layer_end": 32,
+      "layer_start": 16,
+      "node_id": "node-b",
+      "package_id": "sha256:abababababababababababababababababababababababababababababababab"
+     },
+     "hop_id": "stage-1",
+     "observation_point": null,
+     "role": "stage",
+     "seq": 1
+    },
+    {
+     "assignment": {
+      "layer_end": 48,
+      "layer_start": 32,
+      "node_id": "node-d",
+      "package_id": "sha256:abababababababababababababababababababababababababababababababab"
+     },
+     "hop_id": "stage-2",
+     "observation_point": null,
+     "role": "stage",
+     "seq": 2
+    }
+   ],
+   "v": 1
+  },
+  "valid": false
+ },
+ {
+  "name": "stage_0_present",
+  "receipt": {
+   "coordinator_node_id": "node-coordinator-c",
+   "kind": "mesh-coordinator-receipt",
+   "request_id": "18446744073709551615",
+   "run_id": "mesh-split-1790000000000000000-g2",
+   "stage_seal_deadline_ms": 2000,
+   "stages": [
+    {
+     "bundle": "present",
+     "bundle_ref": {
+      "digest": "e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1",
+      "digest_alg": "SHA-256",
+      "type": "capsule"
+     },
+     "hop_id": "stage-0"
+    },
+    {
+     "bundle": "present",
+     "bundle_ref": {
+      "digest": "0101010101010101010101010101010101010101010101010101010101010100",
+      "digest_alg": "SHA-256",
+      "type": "capsule"
+     },
+     "hop_id": "stage-1"
+    },
+    {
+     "bundle": "present",
+     "bundle_ref": {
+      "digest": "0202020202020202020202020202020202020202020202020202020202020200",
+      "digest_alg": "SHA-256",
+      "type": "capsule"
+     },
+     "hop_id": "stage-2"
+    }
+   ],
+   "topology": [
+    {
+     "assignment": {
+      "layer_end": 16,
+      "layer_start": 0,
+      "node_id": "node-coordinator-c",
+      "package_id": "sha256:abababababababababababababababababababababababababababababababab"
+     },
+     "hop_id": "stage-0",
+     "observation_point": null,
+     "role": "coordinator",
+     "seq": 0
+    },
+    {
+     "assignment": {
+      "layer_end": 32,
+      "layer_start": 16,
+      "node_id": "node-b",
+      "package_id": "sha256:abababababababababababababababababababababababababababababababab"
+     },
+     "hop_id": "stage-1",
+     "observation_point": null,
+     "role": "stage",
+     "seq": 1
+    },
+    {
+     "assignment": {
+      "layer_end": 48,
+      "layer_start": 32,
+      "node_id": "node-d",
+      "package_id": "sha256:abababababababababababababababababababababababababababababababab"
+     },
+     "hop_id": "stage-2",
+     "observation_point": null,
+     "role": "stage",
+     "seq": 2
+    }
+   ],
+   "v": 1
+  },
+  "valid": false
+ },
+ {
+  "name": "unknown_bundle_state",
+  "receipt": {
+   "coordinator_node_id": "node-coordinator-c",
+   "kind": "mesh-coordinator-receipt",
+   "request_id": "18446744073709551615",
+   "run_id": "mesh-split-1790000000000000000-g2",
+   "stage_seal_deadline_ms": 2000,
+   "stages": [
+    {
+     "bundle": "not_requested",
+     "hop_id": "stage-0"
+    },
+    {
+     "bundle": "late",
+     "hop_id": "stage-1"
+    },
+    {
+     "bundle": "present",
+     "bundle_ref": {
+      "digest": "0202020202020202020202020202020202020202020202020202020202020200",
+      "digest_alg": "SHA-256",
+      "type": "capsule"
+     },
+     "hop_id": "stage-2"
+    }
+   ],
+   "topology": [
+    {
+     "assignment": {
+      "layer_end": 16,
+      "layer_start": 0,
+      "node_id": "node-coordinator-c",
+      "package_id": "sha256:abababababababababababababababababababababababababababababababab"
+     },
+     "hop_id": "stage-0",
+     "observation_point": null,
+     "role": "coordinator",
+     "seq": 0
+    },
+    {
+     "assignment": {
+      "layer_end": 32,
+      "layer_start": 16,
+      "node_id": "node-b",
+      "package_id": "sha256:abababababababababababababababababababababababababababababababab"
+     },
+     "hop_id": "stage-1",
+     "observation_point": null,
+     "role": "stage",
+     "seq": 1
+    },
+    {
+     "assignment": {
+      "layer_end": 48,
+      "layer_start": 32,
+      "node_id": "node-d",
+      "package_id": "sha256:abababababababababababababababababababababababababababababababab"
+     },
+     "hop_id": "stage-2",
+     "observation_point": null,
+     "role": "stage",
+     "seq": 2
+    }
+   ],
+   "v": 1
+  },
+  "valid": false
+ },
+ {
+  "name": "missing_assignment",
+  "receipt": {
+   "coordinator_node_id": "node-coordinator-c",
+   "kind": "mesh-coordinator-receipt",
+   "request_id": "18446744073709551615",
+   "run_id": "mesh-split-1790000000000000000-g2",
+   "stage_seal_deadline_ms": 2000,
+   "stages": [
+    {
+     "bundle": "not_requested",
+     "hop_id": "stage-0"
+    },
+    {
+     "bundle": "present",
+     "bundle_ref": {
+      "digest": "0101010101010101010101010101010101010101010101010101010101010100",
+      "digest_alg": "SHA-256",
+      "type": "capsule"
+     },
+     "hop_id": "stage-1"
+    },
+    {
+     "bundle": "present",
+     "bundle_ref": {
+      "digest": "0202020202020202020202020202020202020202020202020202020202020200",
+      "digest_alg": "SHA-256",
+      "type": "capsule"
+     },
+     "hop_id": "stage-2"
+    }
+   ],
+   "topology": [
+    {
+     "assignment": {
+      "layer_end": 16,
+      "layer_start": 0,
+      "node_id": "node-coordinator-c",
+      "package_id": "sha256:abababababababababababababababababababababababababababababababab"
+     },
+     "hop_id": "stage-0",
+     "observation_point": null,
+     "role": "coordinator",
+     "seq": 0
+    },
+    {
+     "hop_id": "stage-1",
+     "observation_point": null,
+     "role": "stage",
+     "seq": 1
+    },
+    {
+     "assignment": {
+      "layer_end": 48,
+      "layer_start": 32,
+      "node_id": "node-d",
+      "package_id": "sha256:abababababababababababababababababababababababababababababababab"
+     },
+     "hop_id": "stage-2",
+     "observation_point": null,
+     "role": "stage",
+     "seq": 2
+    }
+   ],
+   "v": 1
+  },
+  "valid": false
+ },
+ {
+  "name": "stage_0_not_the_coordinator",
+  "receipt": {
+   "coordinator_node_id": "node-coordinator-c",
+   "kind": "mesh-coordinator-receipt",
+   "request_id": "18446744073709551615",
+   "run_id": "mesh-split-1790000000000000000-g2",
+   "stage_seal_deadline_ms": 2000,
+   "stages": [
+    {
+     "bundle": "not_requested",
+     "hop_id": "stage-0"
+    },
+    {
+     "bundle": "present",
+     "bundle_ref": {
+      "digest": "0101010101010101010101010101010101010101010101010101010101010100",
+      "digest_alg": "SHA-256",
+      "type": "capsule"
+     },
+     "hop_id": "stage-1"
+    },
+    {
+     "bundle": "present",
+     "bundle_ref": {
+      "digest": "0202020202020202020202020202020202020202020202020202020202020200",
+      "digest_alg": "SHA-256",
+      "type": "capsule"
+     },
+     "hop_id": "stage-2"
+    }
+   ],
+   "topology": [
+    {
+     "assignment": {
+      "layer_end": 16,
+      "layer_start": 0,
+      "node_id": "node-b",
+      "package_id": "sha256:abababababababababababababababababababababababababababababababab"
+     },
+     "hop_id": "stage-0",
+     "observation_point": null,
+     "role": "coordinator",
+     "seq": 0
+    },
+    {
+     "assignment": {
+      "layer_end": 32,
+      "layer_start": 16,
+      "node_id": "node-b",
+      "package_id": "sha256:abababababababababababababababababababababababababababababababab"
+     },
+     "hop_id": "stage-1",
+     "observation_point": null,
+     "role": "stage",
+     "seq": 1
+    },
+    {
+     "assignment": {
+      "layer_end": 48,
+      "layer_start": 32,
+      "node_id": "node-d",
+      "package_id": "sha256:abababababababababababababababababababababababababababababababab"
+     },
+     "hop_id": "stage-2",
+     "observation_point": null,
+     "role": "stage",
+     "seq": 2
+    }
+   ],
+   "v": 1
+  },
+  "valid": false
+ },
+ {
+  "name": "topology_out_of_order",
+  "receipt": {
+   "coordinator_node_id": "node-coordinator-c",
+   "kind": "mesh-coordinator-receipt",
+   "request_id": "18446744073709551615",
+   "run_id": "mesh-split-1790000000000000000-g2",
+   "stage_seal_deadline_ms": 2000,
+   "stages": [
+    {
+     "bundle": "not_requested",
+     "hop_id": "stage-0"
+    },
+    {
+     "bundle": "present",
+     "bundle_ref": {
+      "digest": "0101010101010101010101010101010101010101010101010101010101010100",
+      "digest_alg": "SHA-256",
+      "type": "capsule"
+     },
+     "hop_id": "stage-1"
+    },
+    {
+     "bundle": "present",
+     "bundle_ref": {
+      "digest": "0202020202020202020202020202020202020202020202020202020202020200",
+      "digest_alg": "SHA-256",
+      "type": "capsule"
+     },
+     "hop_id": "stage-2"
+    }
+   ],
+   "topology": [
+    {
+     "assignment": {
+      "layer_end": 16,
+      "layer_start": 0,
+      "node_id": "node-coordinator-c",
+      "package_id": "sha256:abababababababababababababababababababababababababababababababab"
+     },
+     "hop_id": "stage-0",
+     "observation_point": null,
+     "role": "coordinator",
+     "seq": 0
+    },
+    {
+     "assignment": {
+      "layer_end": 48,
+      "layer_start": 32,
+      "node_id": "node-d",
+      "package_id": "sha256:abababababababababababababababababababababababababababababababab"
+     },
+     "hop_id": "stage-2",
+     "observation_point": null,
+     "role": "stage",
+     "seq": 2
+    },
+    {
+     "assignment": {
+      "layer_end": 32,
+      "layer_start": 16,
+      "node_id": "node-b",
+      "package_id": "sha256:abababababababababababababababababababababababababababababababab"
+     },
+     "hop_id": "stage-1",
+     "observation_point": null,
+     "role": "stage",
+     "seq": 1
+    }
+   ],
+   "v": 1
+  },
+  "valid": false
+ },
+ {
+  "name": "ref_digest_uppercase",
+  "receipt": {
+   "coordinator_node_id": "node-coordinator-c",
+   "kind": "mesh-coordinator-receipt",
+   "request_id": "18446744073709551615",
+   "run_id": "mesh-split-1790000000000000000-g2",
+   "stage_seal_deadline_ms": 2000,
+   "stages": [
+    {
+     "bundle": "not_requested",
+     "hop_id": "stage-0"
+    },
+    {
+     "bundle": "present",
+     "bundle_ref": {
+      "digest": "E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1",
+      "digest_alg": "SHA-256",
+      "type": "capsule"
+     },
+     "hop_id": "stage-1"
+    },
+    {
+     "bundle": "present",
+     "bundle_ref": {
+      "digest": "0202020202020202020202020202020202020202020202020202020202020200",
+      "digest_alg": "SHA-256",
+      "type": "capsule"
+     },
+     "hop_id": "stage-2"
+    }
+   ],
+   "topology": [
+    {
+     "assignment": {
+      "layer_end": 16,
+      "layer_start": 0,
+      "node_id": "node-coordinator-c",
+      "package_id": "sha256:abababababababababababababababababababababababababababababababab"
+     },
+     "hop_id": "stage-0",
+     "observation_point": null,
+     "role": "coordinator",
+     "seq": 0
+    },
+    {
+     "assignment": {
+      "layer_end": 32,
+      "layer_start": 16,
+      "node_id": "node-b",
+      "package_id": "sha256:abababababababababababababababababababababababababababababababab"
+     },
+     "hop_id": "stage-1",
+     "observation_point": null,
+     "role": "stage",
+     "seq": 1
+    },
+    {
+     "assignment": {
+      "layer_end": 48,
+      "layer_start": 32,
+      "node_id": "node-d",
+      "package_id": "sha256:abababababababababababababababababababababababababababababababab"
+     },
+     "hop_id": "stage-2",
+     "observation_point": null,
+     "role": "stage",
+     "seq": 2
+    }
+   ],
+   "v": 1
+  },
+  "valid": false
+ }
+]

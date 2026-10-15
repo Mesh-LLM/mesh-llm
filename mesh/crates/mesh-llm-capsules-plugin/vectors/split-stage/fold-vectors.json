@@ -1,0 +1,63 @@
+[
+ {
+  "coordinator_node_id": "node-coordinator-c",
+  "expect": {
+   "digest": "sha256:2d3e82dcb5ae8da132f262d24422fe6df8b4568b738ddc42985de5b890f6c06b",
+   "frames": 0
+  },
+  "frames_hex": [],
+  "hop_index": 0,
+  "lane": "forward",
+  "name": "empty_forward",
+  "request_id": "18446744073709551615",
+  "run_id": "mesh-split-1790000000000000000-g2"
+ },
+ {
+  "coordinator_node_id": "node-coordinator-c",
+  "expect": {
+   "digest": "sha256:54e330e1359ae0115b320a206febefa312f8f91d7b586a96a4f4f5811424291d",
+   "frames": 1
+  },
+  "frames_hex": [
+   "000102"
+  ],
+  "hop_index": 1,
+  "lane": "reply",
+  "name": "one_frame_reply",
+  "request_id": "18446744073709551615",
+  "run_id": "mesh-split-1790000000000000000-g2"
+ },
+ {
+  "coordinator_node_id": "node-coordinator-c",
+  "expect": {
+   "digest": "sha256:0c9d6c3c0c0ec2fcbf5446770f19f35f1dc055e7159572a5b9895289e3427bfc",
+   "frames": 3
+  },
+  "frames_hex": [
+   "762d6672616d652d30",
+   "762d6672616d652d31",
+   "762d6672616d652d32"
+  ],
+  "hop_index": 0,
+  "lane": "forward",
+  "name": "three_frames_forward",
+  "request_id": "18446744073709551615",
+  "run_id": "mesh-split-1790000000000000000-g2"
+ },
+ {
+  "coordinator_node_id": "node-coordinator-c",
+  "expect": {
+   "digest": "sha256:3453a785c16808bbaf8eb2aba8c3c7f3303a9dd77b8ab0a0b89f70bac732a9e0",
+   "frames": 2
+  },
+  "frames_hex": [
+   "642d6672616d652d30",
+   "642d6672616d652d31"
+  ],
+  "hop_index": 2,
+  "lane": "direct_return",
+  "name": "direct_return_lane",
+  "request_id": "18446744073709551615",
+  "run_id": "mesh-split-1790000000000000000-g2"
+ }
+]

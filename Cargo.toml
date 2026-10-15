@@ -77,6 +77,7 @@ members = [
     "skippy/crates/skippy-bench",
     "mesh/crates/mesh-mixture-of-agents",
     "mesh/crates/mesh-llm-moa-plugin",
+    "mesh/crates/mesh-llm-capsules-plugin",
     "tools/xtask",
     "tools/trajectory-reader",
 ]

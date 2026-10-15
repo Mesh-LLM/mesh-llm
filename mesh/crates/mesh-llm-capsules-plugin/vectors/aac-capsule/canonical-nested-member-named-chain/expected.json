@@ -1,0 +1,16 @@
+{
+  "canonical_preimages": {
+    "capsule_id": "{\"action_id\":\"canonical-nested-member-named-chain\",\"action_type\":\"decide\",\"assurance\":{\"attestation_mode\":\"self_attested\",\"effect_mode\":\"not_applicable\",\"ledger_mode\":\"standalone\"},\"canonicalization_id\":\"jcs\",\"developer\":\"conformance-vector@v1\",\"disposition\":{\"approver\":\"policy\",\"decision\":\"accept\",\"human_disposed\":false,\"verdict_class\":\"executed\"},\"extension\":{\"canonical_test_value\":{\"a\":{\"chain\":\"inner\"}}},\"format_version\":\"4\",\"operator\":\"AAC-CONFORMANCE\",\"spec_version\":\"draft-mih-scitt-agent-action-capsule-04\",\"timestamp\":\"2026-09-13T00:00:00Z\"}"
+  },
+  "capsule_id_recomputed": "e4bdbe094dcf029e3c2224067b12468d6a35cfb6aae588406d18258da7e4168f",
+  "derived": {
+    "attestation_mode": "self_attested",
+    "effect_mode": "not_applicable",
+    "ledger_mode": "standalone"
+  },
+  "description": "Top-level capsule_id/chain exclusion does not apply to nested members with those names under explicit format-4 plain JCS.",
+  "findings": [],
+  "kind": "positive",
+  "ok": true,
+  "provenance": "spec-derived"
+}

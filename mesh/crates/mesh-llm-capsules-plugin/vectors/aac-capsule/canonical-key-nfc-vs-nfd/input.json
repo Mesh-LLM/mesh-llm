@@ -1,0 +1,28 @@
+{
+  "action_id": "canonical-key-nfc-vs-nfd",
+  "action_type": "decide",
+  "assurance": {
+    "attestation_mode": "self_attested",
+    "effect_mode": "not_applicable",
+    "ledger_mode": "standalone"
+  },
+  "canonicalization_id": "jcs",
+  "capsule_id": "30b3305fb290f6f4fa3443fab73f2eb474fa2d6c9cd7f826161f94f9fed04f1d",
+  "developer": "conformance-vector@v1",
+  "disposition": {
+    "approver": "policy",
+    "decision": "accept",
+    "human_disposed": false,
+    "verdict_class": "executed"
+  },
+  "extension": {
+    "canonical_test_value": {
+      "Å": "combining",
+      "B": "plain"
+    }
+  },
+  "format_version": "4",
+  "operator": "AAC-CONFORMANCE",
+  "spec_version": "draft-mih-scitt-agent-action-capsule-04",
+  "timestamp": "2026-09-13T00:00:00Z"
+}

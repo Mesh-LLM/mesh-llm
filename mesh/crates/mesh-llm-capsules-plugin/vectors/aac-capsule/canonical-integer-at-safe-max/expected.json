@@ -1,0 +1,16 @@
+{
+  "canonical_preimages": {
+    "capsule_id": "{\"action_id\":\"canonical-integer-at-safe-max\",\"action_type\":\"decide\",\"assurance\":{\"attestation_mode\":\"self_attested\",\"effect_mode\":\"not_applicable\",\"ledger_mode\":\"standalone\"},\"canonicalization_id\":\"jcs\",\"developer\":\"conformance-vector@v1\",\"disposition\":{\"approver\":\"policy\",\"decision\":\"accept\",\"human_disposed\":false,\"verdict_class\":\"executed\"},\"extension\":{\"canonical_test_value\":{\"a\":9007199254740991}},\"format_version\":\"4\",\"operator\":\"AAC-CONFORMANCE\",\"spec_version\":\"draft-mih-scitt-agent-action-capsule-04\",\"timestamp\":\"2026-09-13T00:00:00Z\"}"
+  },
+  "capsule_id_recomputed": "31d6f1560531feaeb2d806e0e413ee6c0c951b166e346175f271f1863b225629",
+  "derived": {
+    "attestation_mode": "self_attested",
+    "effect_mode": "not_applicable",
+    "ledger_mode": "standalone"
+  },
+  "description": "Integer at exactly Number.MAX_SAFE_INTEGER = 9007199254740991 accepted (S:5.1 boundary) under explicit format-4 plain JCS.",
+  "findings": [],
+  "kind": "positive",
+  "ok": true,
+  "provenance": "spec-derived"
+}

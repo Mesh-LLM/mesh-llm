@@ -311,6 +311,8 @@ literal_version_files=(
     "mesh/crates/mesh-llm-config/src/model/built_in_schema/presentation.rs"
     "mesh/crates/mesh-llm-host-runtime/tests/fixtures/config_schema_reference.json"
     "mesh/website/src/docs/pages/developing-plugins.md"
+    "mesh/crates/mesh-llm-capsules-plugin/plugin.toml"
+    "mesh/crates/mesh-llm-capsules-plugin/web-ui/package.json"
 )
 
 for logical_file in "${literal_version_files[@]}"; do
@@ -318,7 +320,7 @@ for logical_file in "${literal_version_files[@]}"; do
     file="$REPO_ROOT/$relative_file"
     require_file "$file"
     case "$relative_file" in
-        mesh/crates/mesh-llm-ui/package.json | mesh/crates/mesh-llm-ui/package-lock.json | mesh/sdk/node/package.json)
+        mesh/crates/mesh-llm-ui/package.json | mesh/crates/mesh-llm-ui/package-lock.json | mesh/sdk/node/package.json | mesh/crates/mesh-llm-capsules-plugin/web-ui/package.json)
             update_json_package_version_references "$file" "$previous_version" "$version"
             ;;
         *)

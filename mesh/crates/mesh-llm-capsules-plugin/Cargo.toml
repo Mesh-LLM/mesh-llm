@@ -1,0 +1,152 @@
+[package]
+name = "mesh-llm-capsules-plugin"
+version.workspace = true
+edition = "2021"
+license = "Apache-2.0"
+description = "The capsules mesh-llm plugin: a signed, hash-chained record of every exchange and the Evidence page."
+repository = "https://github.com/Mesh-LLM/mesh-llm"
+homepage = "https://github.com/Mesh-LLM/mesh-llm"
+readme = "README.md"
+publish = false
+
+[[bin]]
+name = "capsules"
+path = "src/main.rs"
+
+[features]
+# Deliberately-broken variant: never denies a blocked model (fail-open bug).
+# Built and run against the same interop test to prove the test actually
+# distinguishes correct behavior from this specific regression.
+mutant-blocked-model-served = []
+# Deliberately-broken variant: treats an unparseable body as allow instead of
+# deny (silently fail-open on malformed input instead of failing safe).
+mutant-malformed-body-served = []
+# Deliberately-broken receiver: skips the claim checks on a served half (who
+# served it, which weights). CI builds it and requires the record-push parity
+# run to FAIL, so the parity run is shown to catch a receiver that drops a
+# check, not only a changed answer file.
+mutant-record-push-skips-claims = []
+# Deliberately-broken responder: answers evidence requests without the
+# sharing-policy gate. CI builds it and requires the evidence-request parity
+# run to FAIL on the not_authorized cases.
+mutant-evidence-skips-policy-gate = []
+# Deliberately-broken requester: checks an answer's witness receipts with no
+# keys, as before 0.1.5. CI builds it and requires the witness-key tests to
+# FAIL on a receipt under its witness's configured key.
+mutant-answer-ignores-witness-keys = []
+# Deliberately-broken TEE check: accepts a quote whose REPORT_DATA does not
+# bind the record. CI builds it and requires the tee_attest tests to FAIL on
+# the quote-bound-to-another-record case.
+mutant-tee-skips-binding-check = []
+# Deliberately-broken announce: this node never asks the host to announce
+# its key. CI builds it and requires the own-key tests to FAIL, so a peer
+# with no configured keys is shown to depend on the announce.
+mutant-own-key-not-announced = []
+# Deliberately-broken responder: accepts any requester signature. CI builds
+# it and requires the requester-auth tests to FAIL on PRD T3, a node signing
+# under another node's key id.
+mutant-requester-auth-skips-verify = []
+# Deliberately-broken responder: accepts a signed request addressed to any
+# node. CI requires the relay test to FAIL.
+mutant-requester-auth-skips-audience = []
+# Deliberately-broken responder: answers every failed signature as an
+# unsigned request would be. CI requires the never-downgraded tests to FAIL.
+mutant-requester-auth-downgrades-all = []
+# Deliberately-broken signer and responder: every channel signs under the
+# Evidence Request's tag again. CI requires the cross-channel tests to FAIL.
+mutant-requester-auth-shared-tag = []
+
+# The referee's implementation mutants: each builds the referee with one
+# deliberate fault (vectors/parity/referee/mutants.json names the fault and
+# the cases that must catch it). CI builds each and requires the referee
+# parity run to FAIL on those cases.
+mutant-referee-select-skips-bar-window = []
+mutant-referee-select-mixes-tiers = []
+mutant-referee-select-ignores-blocked = []
+mutant-referee-verdict-tier-not-sealed = []
+mutant-referee-hold-ignores-the-asked-tier = []
+mutant-referee-request-asks-twice-per-pair = []
+mutant-referee-counts-skip-asked-gate = []
+mutant-referee-verdict-names-wrong-twin = []
+mutant-referee-hold-skips-asked-check = []
+
+[dependencies]
+mesh-llm-plugin = { path = "../mesh-llm-plugin", version = "0.78.0" }
+tokio = { version = "1", features = ["full"] }
+axum = "0.7"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+schemars = "1"
+anyhow = "1"
+thiserror = "1"
+sha2 = "0.10"
+hex = "0.4"
+ed25519-dalek = "2"
+# The TDX quote's signature chain (`producer::tee_attest`, checks 5-8):
+# ECDSA P-256 over the quote and the QE report, and the PCK certificates.
+p256 = { version = "0.13", default-features = false, features = ["ecdsa", "std"] }
+x509-cert = { version = "0.2", default-features = false, features = ["pem", "std"] }
+# The `ledger-fetch/1` responder (`ledger_fetch_bridge`) base64-encodes raw
+# COSE_Sign1 bytes for its JSON carrier.
+base64 = "0.22"
+tracing = "0.1"
+# mesh keeps the console's plugin settings in its config file and does not
+# pass them to the plugin; the plugin reads them there (`settings`).
+toml = "0.9"
+# Record times and the stop-routing rule's window (`routing_rule`).
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# The referee's re-answer goes through the host's own OpenAI-compatible API
+# (`referee::live`, only when the operator turned the referee on); the interop
+# tests also drive the plugin's routes with it.
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+# The capsule producer: every record this plugin seals, its ledger,
+# checkpoints and offline verification come from the capsule-emit crate; the
+# mesh record kinds are written against its extension points in `producer`.
+# A pushed record's checks, `capsule_id` and producer signature are checked
+# with it too, and a bundle's inclusion proof with `cll`. Renamed because
+# this crate already has a `capsule_emit` module.
+# 0.0.4 carries `settlement` (draft-mih-agent-settlement-records-00 legs);
+# 0.0.6 gives each witness its own client, dialled at the URL given (no
+# built-in service, no redirect followed).
+capsule-emit-lib = { package = "capsule-emit", version = "0.0.6" }
+cll = { package = "checkpointed-local-log", version = "0.2.1" }
+# Evidence requests are answered in-process (`evidence_answer`): parsing,
+# resolution, signed refusals and the artifact answer come from the protocol
+# crate (draft-mih-agent-evidence-request-00). Pinned exactly: a new release
+# may change what verifies. 0.0.4 takes its witness-receipt checks from the
+# crates.io scitt-cose-receipt.
+capsule-emit-evidence-request = "=0.0.4"
+# The witness's own record of this log (`witness_status`): one blocking GET,
+# no redirects, a capped body. Already in the tree through capsule-emit.
+ureq = { version = "2", features = ["json"] }
+# O_NOFOLLOW for the lock files (`data_dir`). Already in the tree.
+libc = "0.2"
+# A witness's receipt for a checkpoint is checked offline before the page
+# counts it (`witness_status`). 0.1.0 is yanked, so this resolves to 0.1.1 or
+# later.
+scitt-cose-receipt = "0.1"
+
+[dev-dependencies]
+# The record-push parity run reads its own golden answers, which hold a record
+# nested at the strict parser's limit inside the answer's own nesting. Only
+# the test's fixture reader lifts the limit (`disable_recursion_limit`); a
+# pushed body is still parsed under the default one.
+serde_json = { version = "1", features = ["unbounded_depth"] }
+# Temporary ledger directories in the Evidence route and pane tests.
+tempfile = "3"
+# Decodes the `CallToolResult` a `tools/call` `RpcResponse` carries, in
+# `tests/mesh_evidence_bridge_interop.rs` -- same version mesh-llm-plugin
+# itself pins, so the wire shape matches exactly.
+rmcp = "3"
+# Frames the fake host's envelopes in `tests/quiet_default_interop.rs`, whose
+# reader task owns the read half of the plugin socket -- same version
+# mesh-llm-plugin itself pins.
+prost = "0.14"
+# Mints witness receipts (COSE_Sign1, EdDSA, RFC 9162 inclusion proof) for the
+# answer-verification tests -- the same coset the evidence-request crate reads.
+coset = "0.4"
+# Builds a test-only TDX certificate chain for the quote signature checks.
+x509-cert = { version = "0.2", features = ["builder"] }
+p256 = { version = "0.13", features = ["ecdsa", "pkcs8"] }
+sha2 = { version = "0.10", features = ["oid"] }

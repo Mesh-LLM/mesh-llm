@@ -1,0 +1,27 @@
+{
+  "action_id": "canonical-integer-zero",
+  "action_type": "decide",
+  "assurance": {
+    "attestation_mode": "self_attested",
+    "effect_mode": "not_applicable",
+    "ledger_mode": "standalone"
+  },
+  "canonicalization_id": "jcs",
+  "capsule_id": "03b25a4e64227ef0c1e06e6d54f44fc0d3b619c9403639fd5e9422226d4437d0",
+  "developer": "conformance-vector@v1",
+  "disposition": {
+    "approver": "policy",
+    "decision": "accept",
+    "human_disposed": false,
+    "verdict_class": "executed"
+  },
+  "extension": {
+    "canonical_test_value": {
+      "a": 0
+    }
+  },
+  "format_version": "4",
+  "operator": "AAC-CONFORMANCE",
+  "spec_version": "draft-mih-scitt-agent-action-capsule-04",
+  "timestamp": "2026-09-13T00:00:00Z"
+}

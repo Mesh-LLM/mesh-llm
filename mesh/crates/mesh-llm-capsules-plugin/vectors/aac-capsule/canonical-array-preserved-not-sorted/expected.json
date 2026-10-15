@@ -1,0 +1,16 @@
+{
+  "canonical_preimages": {
+    "capsule_id": "{\"action_id\":\"canonical-array-preserved-not-sorted\",\"action_type\":\"decide\",\"assurance\":{\"attestation_mode\":\"self_attested\",\"effect_mode\":\"not_applicable\",\"ledger_mode\":\"standalone\"},\"canonicalization_id\":\"jcs\",\"developer\":\"conformance-vector@v1\",\"disposition\":{\"approver\":\"policy\",\"decision\":\"accept\",\"human_disposed\":false,\"verdict_class\":\"executed\"},\"extension\":{\"canonical_test_value\":{\"a\":[\"b\",\"a\",\"c\"]}},\"format_version\":\"4\",\"operator\":\"AAC-CONFORMANCE\",\"spec_version\":\"draft-mih-scitt-agent-action-capsule-04\",\"timestamp\":\"2026-09-13T00:00:00Z\"}"
+  },
+  "capsule_id_recomputed": "ef4569c8da38a36c5004b12517cb1c0bbcbdcecd48ee6ed97ec756bbc385d316",
+  "derived": {
+    "attestation_mode": "self_attested",
+    "effect_mode": "not_applicable",
+    "ledger_mode": "standalone"
+  },
+  "description": "Array elements preserved in insertion order, not sorted (RFC 8785 S:3.2.2) under explicit format-4 plain JCS.",
+  "findings": [],
+  "kind": "positive",
+  "ok": true,
+  "provenance": "spec-derived"
+}

@@ -1,0 +1,16 @@
+{
+ "path": "deliver",
+ "source": "the Python reference, and the rules where it departs",
+ "v": 1,
+ "answers": {
+  "cites_no_record_of_this_node": [{"held":false,"reply":{"issued_at_is_now":true,"refused":"request_malformed","request_digest_is_body_sha256":true,"signed_by_node":true,"status":null}}],
+  "cites_nothing": [{"held":false,"reply":{"issued_at_is_now":true,"refused":"request_malformed","request_digest_is_body_sha256":true,"signed_by_node":true,"status":null}}],
+  "cites_own_half": [{"held":true,"reply":{"status":"received"}}],
+  "contradicted_node_declines": [{"held":false,"reply":{"issued_at_is_now":true,"refused":"policy_decline","request_digest_is_body_sha256":true,"signed_by_node":true,"status":"WITHHELD"}}],
+  "fails_verification": [{"held":false,"reply":{"issued_at_is_now":true,"refused":"request_malformed","request_digest_is_body_sha256":true,"signed_by_node":true,"status":null}}],
+  "no_capsule_id": [{"held":false,"reply":{"issued_at_is_now":true,"refused":"request_malformed","request_digest_is_body_sha256":true,"signed_by_node":true,"status":null}}],
+  "not_json": [{"held":false,"reply":{"issued_at_is_now":true,"refused":"request_malformed","request_digest_is_body_sha256":true,"signed_by_node":true,"status":null}}],
+  "verdict_signed_by_the_requester": [{"held":false,"reply":{"issued_at_is_now":true,"refused":"verdict_unverified","request_digest_is_body_sha256":true,"signed_by_node":true,"status":null}}],
+  "verdict_the_referee_did_not_sign": [{"held":false,"reply":{"issued_at_is_now":true,"refused":"verdict_unverified","request_digest_is_body_sha256":true,"signed_by_node":true,"status":null}}]
+ }
+}
