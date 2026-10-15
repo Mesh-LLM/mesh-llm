@@ -137,7 +137,8 @@ fn gpu_runner_gate(workflow: &Node) -> DynResult<()> {
         "${{ contains(fromJson(inputs.smoke_matrix).*.id, 'core') && (contains(fromJson(inputs.runtime_matrix).*.id, 'linux-vulkan') || contains(fromJson(inputs.runtime_matrix).*.id, 'linux-rocm')) }}",
     )?;
     h::binding(job, "runs-on", "ubuntu-24.04")?;
-    let (_, step) = h::step(h::steps(job)?, "id", "check")?;
+    let steps = h::steps(job)?;
+    let (check, step) = h::step(steps, "id", "check")?;
     for backend in ["VULKAN", "ROCM"] {
         h::binding(
             h::member(step, "env")?,
@@ -152,24 +153,31 @@ fn gpu_runner_gate(workflow: &Node) -> DynResult<()> {
             &format!("${{{{ steps.check.outputs.{key} }}}}"),
         )?;
     }
-    gpu_normalization(step)
+    gpu_normalization(step)?;
+    let (report, step) = h::step(steps, "name", "Report GPU rows without a qualified runner")?;
+    h::before(check, report)?;
+    gpu_skip_report(step)
 }
 
-fn gpu_normalization(step: &Node) -> DynResult<()> {
-    // A finite loop owns the policy decision. Additional shell commands could
-    // override the admitted value, so token presence alone is insufficient.
-    let source = super::field(step, "run").ok_or("GPU normalization command missing")?;
+fn script_lines(step: &Node) -> DynResult<Vec<String>> {
+    let source = super::field(step, "run").ok_or("GPU gate command missing")?;
     let source = source
         .lines()
         .filter(|line| !line.trim_start().starts_with('#'))
         .collect::<Vec<_>>()
         .join("\n")
         .replace("\\\n", " ");
-    let actual = source
+    Ok(source
         .lines()
         .map(|line| line.split_whitespace().collect::<Vec<_>>().join(" "))
         .filter(|line| !line.is_empty())
-        .collect::<Vec<_>>();
+        .collect())
+}
+
+fn gpu_normalization(step: &Node) -> DynResult<()> {
+    // A finite loop owns the policy decision. Additional shell commands could
+    // override the admitted value, so token presence alone is insufficient.
+    let actual = script_lines(step)?;
     let expected = [
         "set -euo pipefail",
         "for pair in \"vulkan_enabled:MESH_VULKAN_INFERENCE_RUNNER_ENABLED\" \"rocm_enabled:MESH_ROCM_INFERENCE_RUNNER_ENABLED\"",
@@ -188,6 +196,57 @@ fn gpu_normalization(step: &Node) -> DynResult<()> {
         Ok(())
     } else {
         Err("GPU normalization must decide exact lowercase true inside the bounded backend loop without overrides".into())
+    }
+}
+
+fn gpu_skip_report(step: &Node) -> DynResult<()> {
+    // The summary is the only visible trace of a gated row that never ran, so
+    // it reads the normalized decision, never the raw variable, and names every
+    // planned row that stays skipped.
+    let env = h::member(step, "env")?;
+    for (backend, plan) in [("VULKAN", "linux-vulkan"), ("ROCM", "linux-rocm")] {
+        h::binding(
+            env,
+            &format!("{backend}_PLANNED"),
+            &format!("${{{{ contains(fromJson(inputs.runtime_matrix).*.id, '{plan}') }}}}"),
+        )?;
+        h::binding(
+            env,
+            &format!("{backend}_ENABLED"),
+            &format!(
+                "${{{{ steps.check.outputs.{}_enabled }}}}",
+                backend.to_lowercase()
+            ),
+        )?;
+    }
+    let expected = [
+        "set -euo pipefail",
+        "{",
+        "echo \"### GPU inference rows\"",
+        "echo",
+        "for row in \"Linux Vulkan:VULKAN:MESH_VULKAN_INFERENCE_RUNNER_ENABLED\" \"Linux ROCm:ROCM:MESH_ROCM_INFERENCE_RUNNER_ENABLED\"",
+        "do",
+        "label=\"${row%%:*}\"",
+        "rest=\"${row#*:}\"",
+        "backend=\"${rest%%:*}\"",
+        "variable=\"${rest#*:}\"",
+        "planned=\"${backend}_PLANNED\"",
+        "enabled=\"${backend}_ENABLED\"",
+        "if [[ \"${!planned}\" != \"true\" ]]; then",
+        "continue",
+        "fi",
+        "if [[ \"${!enabled}\" == \"true\" ]]; then",
+        "echo \"- $label: inference smoke scheduled on its qualified runner; its result is in the row job.\"",
+        "else",
+        "echo \"- $label: inference smoke skipped, no qualified runner (\\`$variable\\` is not \\`true\\`). No inference ran on this backend.\"",
+        "fi",
+        "done",
+        "} >> \"$GITHUB_STEP_SUMMARY\"",
+    ];
+    if script_lines(step)?.iter().map(String::as_str).eq(expected) {
+        Ok(())
+    } else {
+        Err("GPU skip report must name every planned row from the normalized gate decision".into())
     }
 }
 
@@ -462,5 +521,78 @@ mod tests {
             h::replace(command, &["run"], Node::Scalar(replaced));
             assert!(platforms(&workflows).is_err());
         }
+    }
+    fn gate_steps(workflows: &mut BTreeMap<String, Node>) -> &mut Vec<Node> {
+        let document = workflows
+            .get_mut("ci-linux-product-smoke-slice.yml")
+            .unwrap();
+        let Node::Seq(steps) = h::mutable(
+            h::mutable(h::mutable(document, "jobs"), "gpu_runner_gate"),
+            "steps",
+        ) else {
+            unreachable!()
+        };
+        steps
+    }
+    fn report_index(steps: &[Node]) -> usize {
+        steps
+            .iter()
+            .position(|step| {
+                super::super::field(step, "name")
+                    == Some("Report GPU rows without a qualified runner")
+            })
+            .unwrap()
+    }
+    #[test]
+    fn gpu_skip_report_cannot_drop_a_row_or_read_the_raw_variable() {
+        platforms(&workflows()).unwrap();
+        for (path, value) in [
+            (
+                vec!["env", "VULKAN_ENABLED"],
+                "${{ vars.MESH_VULKAN_INFERENCE_RUNNER_ENABLED }}",
+            ),
+            (
+                vec!["env", "ROCM_ENABLED"],
+                "${{ steps.check.outputs.vulkan_enabled }}",
+            ),
+            (
+                vec!["env", "ROCM_PLANNED"],
+                "${{ contains(fromJson(inputs.runtime_matrix).*.id, 'linux-vulkan') }}",
+            ),
+        ] {
+            let mut nodes = workflows();
+            let steps = gate_steps(&mut nodes);
+            let index = report_index(steps);
+            h::replace(&mut steps[index], &path, Node::Scalar(value.into()));
+            assert!(platforms(&nodes).is_err(), "{path:?}");
+        }
+        for (before, after) in [
+            (
+                "if [[ \"${!enabled}\" == \"true\" ]]; then",
+                "if true; then",
+            ),
+            ("\"Linux ROCm:ROCM:MESH_ROCM_INFERENCE_RUNNER_ENABLED\"", ""),
+            ("} >> \"$GITHUB_STEP_SUMMARY\"", "} >> /dev/null"),
+        ] {
+            let mut nodes = workflows();
+            let steps = gate_steps(&mut nodes);
+            let index = report_index(steps);
+            let source = super::super::field(&steps[index], "run").unwrap();
+            assert!(source.contains(before), "{before}");
+            let replaced = source.replace(before, after);
+            h::replace(&mut steps[index], &["run"], Node::Scalar(replaced));
+            assert!(platforms(&nodes).is_err(), "{before}");
+        }
+        let mut nodes = workflows();
+        let steps = gate_steps(&mut nodes);
+        let index = report_index(steps);
+        steps.remove(index);
+        assert!(platforms(&nodes).is_err(), "report removed");
+        let mut nodes = workflows();
+        let steps = gate_steps(&mut nodes);
+        let index = report_index(steps);
+        let report = steps.remove(index);
+        steps.insert(0, report);
+        assert!(platforms(&nodes).is_err(), "report before the decision");
     }
 }
