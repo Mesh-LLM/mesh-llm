@@ -418,7 +418,9 @@ checked-in expiry are the maintainer-controlled approval boundary.
 ## Cache contract
 
 - macOS compiler-cache bootstrap must use a job-owned Unix socket before any
-  compiler probe. Never stop or restart the host-wide default sccache server:
+  compiler probe. Eagerly start its server in every cache mode; parallel compiler
+  clients must not race to initialize a newly allocated socket. Never stop or
+  restart the host-wide default sccache server:
   multiple runner accounts can share one physical host. Preserve the disk cache
   independently of the server endpoint, and pass the endpoint to later steps.
 - Declare cache mode per slice: no remote cache, PR restore-only/isolated, or

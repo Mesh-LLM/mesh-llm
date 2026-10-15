@@ -47,8 +47,10 @@ runs:
           echo "SCCACHE_IGNORE_SERVER_IO_ERROR=1" >> "$GITHUB_ENV"
           export SCCACHE_DIR="$cache_dir"
           export SCCACHE_IGNORE_SERVER_IO_ERROR=1
-          sccache --start-server
         fi
+        # Start the fresh endpoint in remote-cache modes too, before parallel
+        # compiler clients can race to bind the same Unix socket.
+        sccache --start-server
         lld_bin="$(brew --prefix lld)/bin"
         test -x "$lld_bin/ld64.lld"
         echo "$lld_bin" >> "$GITHUB_PATH"

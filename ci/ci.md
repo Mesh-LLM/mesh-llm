@@ -1594,8 +1594,10 @@ Full-session replay contract: [configuration and qualification](agentic-replay-n
 
 ## macOS deployment target
 
-The shared macOS accelerator action initializes disk-only sccache on a unique
-short Unix socket before any compiler probe and exports it to subsequent steps.
+The shared macOS accelerator action eagerly starts sccache in every cache mode
+on a unique short Unix socket before any compiler probe and exports it to
+subsequent steps. Parallel compiler clients never initialize the new endpoint;
+the caller's remote-cache configuration remains unchanged.
 It never stops the default host server, so concurrent runner accounts cannot
 disrupt each other's compiler cache. Canary toolchain verification sets cache
 identity and leaves server startup to this action.

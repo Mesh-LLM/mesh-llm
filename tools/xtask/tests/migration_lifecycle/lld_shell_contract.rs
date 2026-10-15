@@ -443,18 +443,35 @@ fn lld_shell_contract_native_with_lld_probes_before_command_and_preserves_operat
 }
 use super::workflow_yaml;
 #[test]
-fn lld_shell_contract_macos_action_installs_tools_and_probes_with_disk_cache_fallback() {
+fn lld_shell_contract_macos_action_starts_server_before_probe_in_every_cache_mode() {
     let mut endpoints = std::collections::BTreeSet::new();
-    for (gha, chain, cache) in [
-        ("true", "", None),
-        ("false", "disk", None),
-        ("false", "disk", Some("explicit cache")),
+    for (gha, chain, cache, endpoint) in [
+        ("true", "", None, None),
+        ("false", "disk", None, None),
+        ("false", "disk", Some("explicit cache"), None),
+        (
+            "true",
+            "disk,gha",
+            Some("explicit cache"),
+            Some("ACTIONS_CACHE_URL"),
+        ),
+        (
+            "true",
+            "disk,gha",
+            Some("explicit cache"),
+            Some("ACTIONS_RESULTS_URL"),
+        ),
     ] {
-        assert!(endpoints.insert(macos_action_disk_cache(gha, chain, cache)));
+        assert!(endpoints.insert(macos_action_cache(gha, chain, cache, endpoint)));
     }
 }
 
-fn macos_action_disk_cache(gha: &str, chain: &str, cache: Option<&str>) -> String {
+fn macos_action_cache(
+    gha: &str,
+    chain: &str,
+    cache: Option<&str>,
+    remote_endpoint: Option<&str>,
+) -> String {
     let f = Fixture::new();
     let source =
         fs::read_to_string(repo().join(".github/actions/setup-macos-lld/action.yml")).unwrap();
@@ -511,11 +528,30 @@ printf '%s\n' "$SCCACHE_GHA_ENABLED" "$SCCACHE_MULTILEVEL_CHAIN" "$SCCACHE_DIR" 
     let expected_cache = explicit_cache
         .clone()
         .unwrap_or_else(|| runner.join("mesh-llm-sccache"));
+    if remote_endpoint.is_some() {
+        fs::create_dir_all(&expected_cache).unwrap();
+    }
     let r = f.shell(
         &scalars.join("\n"),
         &[
             ("SCCACHE_GHA_ENABLED", gha),
             ("SCCACHE_MULTILEVEL_CHAIN", chain),
+            (
+                "ACTIONS_CACHE_URL",
+                if remote_endpoint == Some("ACTIONS_CACHE_URL") {
+                    "https://cache.invalid"
+                } else {
+                    ""
+                },
+            ),
+            (
+                "ACTIONS_RESULTS_URL",
+                if remote_endpoint == Some("ACTIONS_RESULTS_URL") {
+                    "https://results.invalid"
+                } else {
+                    ""
+                },
+            ),
             (
                 "SCCACHE_DIR",
                 explicit_cache
@@ -536,7 +572,11 @@ printf '%s\n' "$SCCACHE_GHA_ENABLED" "$SCCACHE_MULTILEVEL_CHAIN" "$SCCACHE_DIR" 
     assert_eq!(f.text("cache.calls"), "--version\n--start-server\n");
     assert_eq!(
         f.text("action.probe"),
-        format!("false\ndisk\n{}\n", expected_cache.display())
+        if remote_endpoint.is_some() {
+            format!("{gha}\n{chain}\n{}\n", expected_cache.display())
+        } else {
+            format!("false\ndisk\n{}\n", expected_cache.display())
+        }
     );
     let env = f.text("github.env");
     let endpoint = f.text("cache.endpoint");
@@ -544,8 +584,14 @@ printf '%s\n' "$SCCACHE_GHA_ENABLED" "$SCCACHE_MULTILEVEL_CHAIN" "$SCCACHE_DIR" 
     assert!(endpoint.len() < 104, "macOS socket path limit");
     fs::remove_dir(Path::new(&endpoint).parent().unwrap()).unwrap();
     assert!(expected_cache.is_dir());
-    assert!(env.contains(&format!("SCCACHE_DIR={}\n", expected_cache.display())));
-    if gha == "true" {
+    if remote_endpoint.is_none() {
+        assert!(env.contains(&format!("SCCACHE_DIR={}\n", expected_cache.display())));
+    } else {
+        assert!(!env.contains("SCCACHE_GHA_ENABLED="));
+        assert!(!env.contains("SCCACHE_MULTILEVEL_CHAIN="));
+        assert!(!env.contains("SCCACHE_DIR="));
+    }
+    if gha == "true" && remote_endpoint.is_none() {
         assert!(env.contains("SCCACHE_GHA_ENABLED=false\n"));
         assert!(env.contains("SCCACHE_MULTILEVEL_CHAIN=disk\n"));
     }
