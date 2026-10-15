@@ -563,24 +563,7 @@ async fn download_hf_assets_async(
 ) -> Result<HfAssetsDownload> {
     let mut console = mesh_llm_events::console_err();
     let api = super::build_hf_tokio_api(false)?;
-    let mut download_plan = initial_download_plan_for_assets(assets)?;
-    let current_plan: Vec<(bool, HfAsset)> = download_plan.iter().cloned().collect();
-    for (_, asset) in current_plan {
-        if !is_mlx_primary_asset(&asset.file) {
-            continue;
-        }
-        for sidecar in mlx_sidecar_assets(&asset) {
-            download_plan.insert(sidecar);
-        }
-        // Expand shards from an index file (downloads index to discover shard names)
-        for shard in mlx_sharded_weight_assets(&api, &asset).await? {
-            download_plan.insert((true, shard));
-        }
-        // Expand shards from a first-shard ref without needing to download the index
-        for shard in expand_split_mlx_first_shard(&asset) {
-            download_plan.insert((true, shard));
-        }
-    }
+    let download_plan = download_plan_for_assets(&api, assets).await?;
     if progress {
         emit_or_print_model_progress(
             label,
@@ -886,6 +869,31 @@ fn multipart_progress_terminal_line(progress: &MultipartDownloadProgress) -> Str
 
 fn multipart_progress_label(label: &str) -> String {
     format!("parts::{label}")
+}
+
+async fn download_plan_for_assets(
+    api: &hf_hub::HFClient,
+    assets: Vec<HfAsset>,
+) -> Result<std::collections::BTreeSet<(bool, HfAsset)>> {
+    let mut download_plan = initial_download_plan_for_assets(assets)?;
+    let current_plan: Vec<(bool, HfAsset)> = download_plan.iter().cloned().collect();
+    for (_, asset) in current_plan {
+        if !is_mlx_primary_asset(&asset.file) {
+            continue;
+        }
+        for sidecar in mlx_sidecar_assets(&asset) {
+            download_plan.insert(sidecar);
+        }
+        // Expand shards from an index file (downloads index to discover shard names)
+        for shard in mlx_sharded_weight_assets(api, &asset).await? {
+            download_plan.insert((true, shard));
+        }
+        // Expand shards from a first-shard ref without needing to download the index
+        for shard in expand_split_mlx_first_shard(&asset) {
+            download_plan.insert((true, shard));
+        }
+    }
+    Ok(download_plan)
 }
 
 fn initial_download_plan_for_assets(
