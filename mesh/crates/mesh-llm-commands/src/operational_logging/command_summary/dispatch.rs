@@ -45,11 +45,13 @@ pub(super) fn format_command(command: &Command, assembly: &mut SummaryAssembly) 
             version,
             flavor,
             detect_flavor,
+            no_default_plugins,
         } => {
             assembly.command.push_str(" update");
             assembly.redact("--version", version.is_some());
             assembly.redact("--flavor", flavor.is_some());
             assembly.flag("detect-flavor", *detect_flavor);
+            assembly.flag("no-default-plugins", *no_default_plugins);
         }
         Command::Gpus { json, command } => {
             administration::format_gpus(*json, command.as_ref(), assembly);
