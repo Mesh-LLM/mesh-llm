@@ -1,4 +1,4 @@
-//! Preserve remote provenance when legacy embedders bridge QUIC through TCP.
+//! Preserve untrusted management-API origin across its loopback HTTP proxy.
 //! A process-owned socket registry cannot be forged through HTTP headers.
 use std::collections::HashSet;
 use std::net::SocketAddr;
@@ -9,8 +9,8 @@ fn connections() -> &'static Mutex<HashSet<SocketAddr>> {
     CONNECTIONS.get_or_init(Mutex::default)
 }
 
-pub(crate) struct RemoteBridge(SocketAddr);
-impl RemoteBridge {
+pub(crate) struct UntrustedManagementRequest(SocketAddr);
+impl UntrustedManagementRequest {
     pub(crate) fn register(address: SocketAddr) -> anyhow::Result<Self> {
         connections()
             .lock()
@@ -19,7 +19,7 @@ impl RemoteBridge {
         Ok(Self(address))
     }
 }
-impl Drop for RemoteBridge {
+impl Drop for UntrustedManagementRequest {
     fn drop(&mut self) {
         if let Ok(mut connections) = connections().lock() {
             connections.remove(&self.0);
@@ -27,27 +27,27 @@ impl Drop for RemoteBridge {
     }
 }
 
-#[cfg(feature = "payments")]
-pub(crate) fn is_remote_bridge(address: SocketAddr) -> bool {
-    // Poisoned provenance fails closed for wallet spending.
+#[cfg(any(test, feature = "payments"))]
+pub(crate) fn is_untrusted_management_request(address: SocketAddr) -> bool {
+    // Poisoned origin tracking fails closed for wallet spending.
     connections()
         .lock()
         .map_or(true, |connections| connections.contains(&address))
 }
 
-#[cfg(all(test, feature = "payments"))]
+#[cfg(test)]
 mod tests {
     use super::*;
     #[tokio::test]
-    async fn payments_remote_provenance_follows_actual_bridge_socket_lifetime() {
+    async fn remote_provenance_follows_actual_bridge_socket_lifetime() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let bridge = tokio::net::TcpStream::connect(listener.local_addr().unwrap())
             .await
             .unwrap();
-        let guard = RemoteBridge::register(bridge.local_addr().unwrap()).unwrap();
+        let guard = UntrustedManagementRequest::register(bridge.local_addr().unwrap()).unwrap();
         let (_, caller) = listener.accept().await.unwrap();
-        assert!(is_remote_bridge(caller));
+        assert!(is_untrusted_management_request(caller));
         drop(guard);
-        assert!(!is_remote_bridge(caller));
+        assert!(!is_untrusted_management_request(caller));
     }
 }

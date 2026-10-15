@@ -417,6 +417,10 @@ checked-in expiry are the maintainer-controlled approval boundary.
 
 ## Cache contract
 
+- macOS compiler-cache bootstrap must use a job-owned Unix socket before any
+  compiler probe. Never stop or restart the host-wide default sccache server:
+  multiple runner accounts can share one physical host. Preserve the disk cache
+  independently of the server endpoint, and pass the endpoint to later steps.
 - Declare cache mode per slice: no remote cache, PR restore-only/isolated, or
   trusted read-write. Derive it from the same policy as runner placement.
 - GitHub-hosted PR writes remain isolated from trusted main: normal protected
@@ -571,6 +575,12 @@ checked-in expiry are the maintainer-controlled approval boundary.
   required jobs reach a terminal successful conclusion; state expected skips.
 
 ## Llama canary family fan-out
+
+Each candidate build owns one complete native CTest pass. The initial native
+build may compile tests without executing them; after fresh annotation
+generation, patch equality and idempotence must pass before rebuilding and
+running the complete suite. Keep the generator's own unit tests separate.
+Ordinary native build invocations retain their requested test execution.
 
 Build evidence uploads must explicitly include the run-owned hidden `.deps`
 state and native CTest results before cleanup. A truncated live log is not a

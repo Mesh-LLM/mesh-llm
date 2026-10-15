@@ -3,6 +3,7 @@
   "unknown_path_policy": "fail",
   "domains": [
     "ci-control",
+    "skippy-qualification",
     "docs",
     "tooling",
     "cli",
@@ -28,6 +29,20 @@
   ],
   "path_rules": [
     {
+      "domain": "skippy-qualification",
+      "patterns": [
+        "tools/xtask/src/qualification/**",
+        "tools/xtask/src/product/**",
+        "tools/xtask/tests/qualification_contract*",
+        "tools/xtask/tests/qualification_contract/**",
+        "tools/xtask/tests/qualification_await_packaging.rs",
+        ".github/workflows/ci-skippy-*-slice.yml",
+        ".github/actions/prepare-skippy-cli-input/**",
+        ".github/actions/compose-product-input/**",
+        "scripts/ci-compose-product-input.sh"
+      ]
+    },
+    {
       "domain": "ci-control",
       "patterns": [
         ".github/**",
@@ -38,6 +53,11 @@
         "scripts/plan-*.sh",
         "scripts/collect-ci-metrics.py",
         "scripts/tests/test_plan_ci.py",
+        "tools/xtask/src/qualification/**",
+        "tools/xtask/src/product/**",
+        "tools/xtask/tests/qualification_contract*",
+        "tools/xtask/tests/qualification_contract/**",
+        "tools/xtask/tests/qualification_await_packaging.rs",
         "skippy/scripts/compose-ci-product.py",
         "skippy/scripts/verify-cli-input.py",
         "skippy/scripts/tests/test_ci_product_contract.py"

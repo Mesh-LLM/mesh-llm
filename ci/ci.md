@@ -1581,7 +1581,12 @@ Full-session replay contract: [configuration and qualification](agentic-replay-n
 
 ## macOS deployment target
 
-The shared macOS accelerator action initializes disk-only sccache before any
+The shared macOS accelerator action initializes disk-only sccache on a unique
+short Unix socket before any compiler probe and exports it to subsequent steps.
+It never stops the default host server, so concurrent runner accounts cannot
+disrupt each other's compiler cache. Canary toolchain verification sets cache
+identity and leaves server startup to this action.
+The action initializes the disk directory before any
 compiler probe, including protected canary bootstrap calls that already set
 `SCCACHE_GHA_ENABLED=false`. It preserves an explicit `SCCACHE_DIR` and otherwise
 creates a job-local directory beneath `RUNNER_TEMP`. This does not grant remote
@@ -1758,6 +1763,12 @@ Cargo target output. Hosted fallback rows retain their normal disposable-runner
 lifecycle. The workflow contract test requires final cleanup for every declared
 self-hosted job, including custom `mesh-llm-*` runner matrix labels.
 
+
+Each canary candidate's initial native build compiles without
+executing tests; the generated-patch checker verifies equality and idempotence,
+rebuilds the full native target set, and runs one unfiltered CTest pass. Its
+generator-tool unit suite remains separate. Standalone native builds retain
+their existing test execution by default.
 
 The native Skippy suite includes sparse synthetic graph-contract tests for every
 canary registry family. `tools/xtask/src/repo_consistency/synthetic_graph_contracts.rs` makes

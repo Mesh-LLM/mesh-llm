@@ -10,7 +10,7 @@ use crate::api;
 use crate::inference::{election, skippy};
 use crate::mesh;
 use crate::network::openai::accept::IngressListener;
-use crate::network::{affinity, discovery as mesh_discovery, nostr, tunnel};
+use crate::network::{affinity, discovery as mesh_discovery, nostr};
 use crate::plugin;
 use crate::runtime::interactive;
 use crate::runtime::survey;
@@ -906,7 +906,6 @@ pub(super) struct RunAutoAdditionalModelsContext<'a> {
     pub(super) options: &'a RuntimeOptions,
     pub(super) config: &'a plugin::MeshConfig,
     pub(super) node: &'a mesh::Node,
-    pub(super) tunnel_mgr: &'a tunnel::Manager,
     pub(super) startup_models: &'a [StartupModelPlan],
     pub(super) primary_model_name: &'a str,
     pub(super) target_tx: &'a Arc<tokio::sync::watch::Sender<election::ModelTargets>>,
@@ -1164,7 +1163,6 @@ pub(super) async fn spawn_run_auto_additional_model_tasks(ctx: RunAutoAdditional
         let extra_task = tokio::spawn(Box::pin(startup_local_model_loop(StartupLocalModelTask {
             node: ctx.node.clone(),
             config: ctx.config.clone(),
-            tunnel_mgr: ctx.tunnel_mgr.clone(),
             target_tx: ctx.target_tx.clone(),
             model_path: extra_model.resolved_path.clone(),
             model_ref: extra_model.declared_ref.clone(),
