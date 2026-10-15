@@ -180,7 +180,16 @@ impl ActivationBoundaryDesc {
             .with_context(|| format!("graph-observed {edge} activation width exceeds i32"))
     }
 
+    /// Reject unsupported wire types in every part, even when geometry is dynamic.
+    pub fn validate_transport_types(&self) -> Result<()> {
+        for part in self.parts()? {
+            ggml_type_bytes(part.ggml_type)?;
+        }
+        Ok(())
+    }
+
     pub fn payload_bytes_hint(self, edge: &str, token_count: u32) -> Result<Option<u64>> {
+        self.validate_transport_types()?;
         let mut total = 0_u64;
         for part in self.parts()? {
             if part.token_axis < 0
@@ -1108,6 +1117,22 @@ mod activation_boundary_descriptor_tests {
                 .unwrap_err()
                 .to_string()
                 .contains("unresolved dynamic dimension")
+        );
+    }
+
+    #[test]
+    fn dynamic_payload_hint_still_rejects_unsupported_types_in_later_parts() {
+        let mut boundary = f32_boundary(8);
+        boundary.parts[0].dimensions[0] = -1;
+        boundary.part_count = 2;
+        boundary.parts[1] = f32_boundary(8).parts[0];
+        boundary.parts[1].ggml_type = u32::MAX;
+
+        let error = boundary.payload_bytes_hint("output", 2).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("transport does not support ggml type")
         );
     }
 }

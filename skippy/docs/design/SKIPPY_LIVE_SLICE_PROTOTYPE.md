@@ -16,6 +16,42 @@ metadata-only planning does not encode every runtime view, stride, rollback slot
 or convolution window. Those values belong to the normal builder. The splitter
 uses the resulting graph instead of maintaining a second geometry interpreter.
 
+## October 15 review and main integration
+
+Both open review findings on PR #2414 were confirmed in the current source.
+Split-edge admission now rejects unsupported transport types in every activation
+part before matching descriptors, including parts following dynamic geometry.
+The payload-size hint uses the same validation, so an early dynamic-dimension
+result cannot hide an unsupported later part. F32, F16, BF16 and I32 frontiers
+remain supported.
+
+Compact GGUF metadata now selects `general.architecture` before assigning any
+structural fields. Only exact fields under that namespace can supply model
+dimensions, attention/recurrent state or MTP metadata; competing namespaces and
+auxiliary subgraphs cannot overwrite them. Missing architecture is rejected.
+This reads header metadata only, never model tensor payloads. Regression tests
+cover both field orders and architecture declarations before and after fields.
+
+The branch is rebased onto main `11f371be0`, retaining its single native-test
+pass, qualification ownership and glibc detection changes. The documentation
+conflict preserves both the single-test-pass rule and the longer whole-source
+rewriter deadline. Native patches and the split-certification digest are
+unchanged by this integration. [Canary 38596029602](https://github.com/Mesh-LLM/mesh-llm/actions/runs/38596029602)
+completed successfully after the manual Gemma4 rerun for candidate
+`cf727d2d3ce3ed884bbf6ebf00dc921edac9537e`. Its earlier automatic retry passed
+Gemma4 but failed evidence reconciliation (`retry artifact root contains
+undeclared files`); the manual rerun used the ordinary family-receipt path.
+That separate retry-evidence defect is not repaired here. The successful canary
+does not certify the new Rust changes.
+
+Local review validation passes: 70 model-artifact tests, the 279-test runtime
+suite plus the new dynamic-payload regression, and 3,937 Mesh host tests (the
+existing one runtime and 24 host ignores remain). Checks and warning-denying
+Clippy cover all three changed crates and the shipped Mesh binary. Formatting
+and the complete `just ci-validate` gate pass, including 2,338 automation unit
+tests, 346 runner contracts, 1,148 lifecycle tests, the native-test ownership
+contracts and repository consistency checks.
+
 ## October 14 multimodal canary investigation
 
 Candidate `20e91082ccf3f10948188b0877c376feb2482920` passed single-step,
