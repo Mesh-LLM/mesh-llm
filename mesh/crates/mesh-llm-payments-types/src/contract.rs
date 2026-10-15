@@ -15,7 +15,7 @@ pub const CAPABILITY: &str = "payments.v1";
 
 /// Billing semantics explicitly selected by the host for a new admission.
 /// No default: old hosts and unknown revisions must fail before opening the
-/// provider or creating authorization/invoices. Feature negotiation separately
+/// provider or creating authorization/invoices. Contract negotiation separately
 /// protects new hosts from old providers that ignore unknown request fields.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BillingRevision {
@@ -24,20 +24,16 @@ pub enum BillingRevision {
     V3,
 }
 
-/// Optional extensions understood by a payments engine. Missing means unsupported.
-#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
-pub struct BillingFeatures {
-    #[serde(default)]
-    pub cache_discount: bool,
-    /// Positive final remainders below one sat are raised to one sat.
-    #[serde(default)]
-    pub positive_remainder_floor: bool,
+/// Ledger-free declaration of the billing contract implemented by a provider.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+pub struct BillingContract {
+    pub revision: BillingRevision,
 }
 
 /// Operation names.
 pub mod ops {
-    /// Optional, ledger-free billing feature negotiation; old providers may reject it.
-    pub const BILLING_FEATURES: &str = "billing_features";
+    /// Ledger-free billing contract check; incompatible providers fail closed.
+    pub const BILLING_CONTRACT: &str = "billing_contract";
     /// Run one local operator command (the `/api/wallet` surface).
     pub const CONTROL: &str = "control";
     /// Advertised seller prices, and whether the provider has payments state.
@@ -109,7 +105,7 @@ pub const BOOKKEEPING_DEADLINE: Duration = Duration::from_secs(10);
 pub fn deadline(operation: &str) -> Option<Duration> {
     matches!(
         operation,
-        ops::BILLING_FEATURES
+        ops::BILLING_CONTRACT
             | ops::PRICING
             | ops::FINISH
             | ops::PAYMENT_INTENT
@@ -347,7 +343,7 @@ mod tests {
     /// Every operation the host may invoke, so a new one cannot ship without
     /// being classified as bounded or as a wallet wait.
     const ALL_OPS: &[&str] = &[
-        ops::BILLING_FEATURES,
+        ops::BILLING_CONTRACT,
         ops::CONTROL,
         ops::PRICING,
         ops::ROUTING_BUDGET,
@@ -377,7 +373,7 @@ mod tests {
         assert_eq!(
             bounded,
             [
-                ops::BILLING_FEATURES,
+                ops::BILLING_CONTRACT,
                 ops::PRICING,
                 ops::FINISH,
                 ops::PAYMENT_INTENT,

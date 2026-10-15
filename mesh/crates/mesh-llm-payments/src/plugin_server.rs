@@ -121,15 +121,14 @@ fn operation_router(source: ServiceSource, prices: AdvertisedPrices) -> Operatio
     let mut router = OperationRouter::new();
     router.add_raw(
         operation_with_schema(
-            ops::BILLING_FEATURES,
-            "Supported billing extensions.",
+            ops::BILLING_CONTRACT,
+            "Implemented billing contract.",
             serde_json::Map::new(),
         ),
         |_request, _context| {
             Box::pin(async {
-                op_result(Ok(mesh_llm_payments_types::contract::BillingFeatures {
-                    cache_discount: true,
-                    positive_remainder_floor: true,
+                op_result(Ok(mesh_llm_payments_types::contract::BillingContract {
+                    revision: mesh_llm_payments_types::contract::BillingRevision::V3,
                 }))
             })
         },

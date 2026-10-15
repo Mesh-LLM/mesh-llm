@@ -1,4 +1,4 @@
-//! Old hosts bypass feature negotiation: exercise the real provider IPC decoder.
+//! Old hosts bypass the contract check: exercise the real provider IPC decoder.
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -43,6 +43,22 @@ async fn old_admissions_are_refused_before_opening_the_engine() {
     )
     .await
     .unwrap();
+    let contract = manager
+        .invoke_operation("revision-test", ops::BILLING_CONTRACT, "{}")
+        .await
+        .unwrap();
+    assert!(!contract.is_error);
+    let contract: mesh_llm_payments_types::contract::BillingContract =
+        serde_json::from_str(&contract.content_json).unwrap();
+    assert_eq!(
+        contract.revision,
+        mesh_llm_payments_types::contract::BillingRevision::V3
+    );
+    assert_eq!(
+        opens.load(Ordering::SeqCst),
+        0,
+        "contract check must not open the engine"
+    );
     let pricing = json!({"input_msat_per_million":1000,"output_msat_per_million":1000});
     let requests = [
         (

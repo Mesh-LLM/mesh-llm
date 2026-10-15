@@ -13,9 +13,9 @@ generation gate and a trailing output invoice for delivered tokens) are no
 longer served. A seller answers them with an `Error` frame that asks the payer
 to upgrade. Wallets, keys, balances and the ledger file location are unchanged;
 the SQLite schema is upgraded as described below. Mainnet settlement was last
-exercised on September 18, 2026 against
-the previous fixed-allowance protocol; those results are kept below for the
-wallet, routing and operational findings that still apply.
+exercised on September 18, 2026 against the previous fixed-allowance protocol;
+a short summary of the wallet findings that still apply is kept below, the
+full narrative is in this file's git history.
 
 ## Payment flow
 
@@ -148,10 +148,10 @@ backup, not changing `user_version` by hand.
   policy, pricing and wallet pins survive. Retired fixed-allowance **seller**
   debt (`receivables` / `serving_*`) is intentionally written off, not converted
   into metered strikes: the old protocol can no longer settle it.
-- Unreleased metered drafts (including schema versions 3 and 4): empty tables
-  upgrade, but any seller metered records, peer credit, or buyer admission/payee
-  settings cause a clear startup error. Records and schema version are retained.
-  Matching SQL shapes cannot identify the old billing semantics. Use a backup
+- Unreleased metered drafts are not migrated, even when empty. Schema versions
+  3 and 4, or older versions containing metered tables, peer credit, or buyer
+  admission/payee settings, fail before migration writes. Records and schema
+  version are retained; matching SQL shapes cannot identify billing semantics. Use a backup
   and a compatible binary or an explicit migration; never delete financial
   records just to make startup pass. Fresh schema-5 ledgers use the current metered billing rules.
 - Corrupt/non-SQLite files and future schema versions fail to open; they are
@@ -263,7 +263,7 @@ API while distributing/installing a wallet plugin separately.
 Ownership: the host keeps the transport, the backend connection, response
 bytes and usage observation, and talks to the payments engine only through
 coarse per-request `payments.v1` operations (`mesh-llm-payments-types::contract`).
-Buyer side: `prefetch`, `accept_admission`, `pay_deposit`, `settle_final`,
+Buyer side: `accept_admission`, `pay_deposit`, `settle_final`,
 `finish`, `cancel`, `payment_intent`, `routing_budget`, `reconcile`. Seller
 side: `serve_admit`, `serve_deposit_confirmed`, `serve_settle`,
 `serve_abandon`, `serve_recover`, `settle_received`, `await_arrival`. The
@@ -271,7 +271,7 @@ engine (`mesh-llm-payments`, installed in-process by the binary or the SDK's
 `payments` feature) owns budgets, the ledger, admission and billing
 bookkeeping, recovery, invoice lifetimes and fee policy; host-runtime links
 only `mesh-llm-payments-types`. With no engine installed the node is free-only.
-Ledger-only operations (`pricing`, `finish`, `payment_intent`, `prefetch`,
+Ledger-only operations (`pricing`, `finish`, `payment_intent`,
 `cancel`, `serve_admit`, `serve_settle`, `serve_abandon`, `serve_recover`) must
 answer within 10 seconds; operations that wait on a wallet or a peer are
 bounded by invoice expiry and the caller's cancellation instead. The provider
@@ -519,21 +519,17 @@ including cached-input discounts and the positive-remainder floor; draft builds
 are not a supported compatibility target. Both peers must upgrade for paid inference; ordinary
 free inference and mesh gossip retain their existing compatibility.
 
-Before either seller or buyer admission, including zero-discount pricing, the
-host requires `billing_features` from the same pinned `payments.v1` provider
-with both `cache_discount: true` and `positive_remainder_floor: true`. Missing,
-false, malformed or timed-out support fails before authorization, deposit
-payment or backend dispatch. Discount configuration/advertising separately
-requires cache-discount support. Legacy wallet reconciliation is not gated by
-these new admission requirements. Wallet plugins (`wallet.v1`) are unchanged.
-
-Both provider admission requests (`serve_admit` and `accept_admission`) require
-`billing_revision: "v3"`. The provider rejects missing, legacy or unknown
-revisions while decoding, before opening the engine, authorizing or creating
-an invoice. This protects old hosts calling a new independently versioned
-provider. The host feature checks remain necessary in the opposite direction:
-an old provider could ignore the added request field. Generic reconciliation
-has no new revision gate.
+Billing compatibility is a single contract, not a feature negotiation. Both
+admission requests (`serve_admit` and `accept_admission`) carry
+`billing_revision: "v3"`, and the engine rejects a missing, legacy or unknown
+revision while decoding, before opening a wallet, authorizing or creating an
+invoice. In the other direction the host checks the pinned `payments.v1`
+provider's ledger-free `billing_contract` once per exchange, before invoking
+operations; standalone calls check their freshly resolved provider. A missing,
+unknown or timed-out revision fails closed before deposit payment or backend
+dispatch. There is no per-field capability probing and no compatibility with
+intermediate draft builds. Wallet plugins (`wallet.v1`) and reconciliation
+semantics are unchanged; reconciliation also requires a compatible provider.
 
 ## Approval and routing
 
@@ -692,69 +688,25 @@ and unpin coverage (`resubmission.rs`, `payment_notifications.rs`,
 cutover, as is the mixed-version compatibility harness
 (`cargo xtool automation lightning-compatibility`) described below.
 
-### Mainnet results, September 18, 2026
+### Previous-protocol mainnet exercise
 
-> These results were produced against the previous fixed-allowance protocol
-> (input invoice after prefill, output invoice for delivered tokens, manual
-> approval mode). The wallet, funding, fee, budget, restart and security
-> observations still describe the shipped wallet and ledger; the invoice
-> shapes and delivery gating they mention no longer exist.
-
-Two isolated nodes on Ubuntu 26.04 used Lexe mainnet and a private QUIC mesh.
-The provider served `Qwen3.8-27B-Lightning` from the Qwen3.8-27B Q4_K_M GGUF on
-an RTX 5090 through embedded Skippy. The payer had a 100-sat test spending cap.
-Input/output prices were 10,000,000/30,000,000 msat per million tokens, with a
-1,000-msat invoice quantum. These are test rates, not new defaults.
-
-- Manual approval withheld application output until authorization. Input and
-  output invoices both settled and matched the provider's receipts.
-- Automatic non-streaming inference settled both charges and returned correct
-  text and usage.
-- Disconnecting a stream after five displayed tokens stopped delivery at six
-  transmitted tokens, settled the final invoice, and released the reservation.
-- Two requests with an exhausted daily budget created no invoices or payments.
-  The error at the time was a misleading capacity-related HTTP 503; the
-  metered path answers HTTP 402 with a payment-specific message.
-- Restarting the payer preserved policy, invoices and settled records, and a
-  subsequent inference succeeded. Restarting the provider preserved its seller
-  prices and financial records.
-- Killing the payer after its first output token left a durable output debt.
-  Recovery after restart settled the original output invoice without a duplicate
-  input debit. (Under the metered protocol the same crash abandons the
-  request: nothing is billed, and the deposit stays with the provider.)
-- Explicit wallet sending and replaying the same invoice produced one debit.
-- Rejecting manual approval returned HTTP 402 without a debit. The provider then
-  denied that peer's next request. Explicitly settling the rejected 1-sat test
-  invoice cleared the block, and another paid inference succeeded.
-- A free offer remained usable with an exhausted automatic budget. Price changes
-  propagated through the normal approximately 60-second heartbeat; the wallet
-  control API does not currently trigger immediate price gossip.
-- Untrusted Host and Origin headers were refused by the wallet API.
-
-The initial 10,000-sat deposit credited 9,950 sats after a 50-sat receiving fee.
-Provider receipts also deducted 0.5%: each 1-sat invoice credited 0.995 sats.
-These observations demonstrate the tested Lexe-to-Lexe routes only, not arbitrary
-Lightning routing or economical sub-satoshi invoices. The successful test sends
-used no outgoing routing fees.
-
-Total outgoing test spending was **21 sats across 14 successful payments**,
-including the explicit send and rejected-invoice settlement. All recorded
-provider invoices were paid at the end. Both isolated wallet directories were
-retained, and no wallet credentials or transaction files are included in the
-downloadable application bundle.
-
-Lexe's default invoice expiry and recovery from an ambiguous in-flight Lightning
-HTLC have not been exercised on mainnet. Simulated tests cover uncertain-send
-recovery and settled-spend admission, including resubmission of an
-unrecorded `wallet send`, reconciliation without a second `pay`, the expiry
-give-up, and a resubmission racing the first landing
-(`mesh-llm-payments` `src/tests/resubmission.rs`). Refunds and proof of
-computation remain outside this PoC.
+Mainnet settlement was last exercised on September 18, 2026 against the
+retired fixed-allowance protocol (two Ubuntu nodes, Lexe mainnet, a private
+QUIC mesh; 21 sats across 14 successful payments). Those invoice shapes,
+delivery gating and manual-approval flows no longer exist, so the results are
+not evidence for the metered protocol and are not reproduced here. The full
+narrative is in this file's history before the metered cutover
+(`git log -- mesh/docs/specs/lightning-payments.md`). Observations that still
+describe the shipped wallet: Lexe deducted a 50-sat fee from a 10,000-sat
+deposit and 0.5% from each received payment (a 1-sat invoice credited
+0.995 sats); only Lexe-to-Lexe routes were exercised, not arbitrary Lightning
+routing or economical sub-satoshi invoices; Lexe's default invoice expiry and
+recovery from an ambiguous in-flight HTLC have not been exercised on mainnet.
 
 ### Follow-up failure and compatibility checks
 
 The following passed without funding new wallets or spending additional
-bitcoin. Checks that depended on the fixed-allowance protocol are marked.
+bitcoin.
 
 - **Mixed versions:** a released v0.76.1 client received real model output from
   this branch's free provider, and HTTP 402 after that provider enabled paid
@@ -763,22 +715,11 @@ bitcoin. Checks that depended on the fixed-allowance protocol are marked.
   profiles, and each binary's matching CPU runtime. Pin
   `runtime.native_runtime.selection = "cpu"`; `--device CPU` alone does not
   prevent the released binary from trying to install a GPU runtime at startup.
-- **Concurrent authorization (historical reserved-budget policy, now superseded):** 16 simultaneous service requests competed for a
-  1,000-msat budget with 700-msat per-request reservations. Exactly one reached
-  the simulated wallet.
 - **Uncertain HTLC:** simulated payment submission lost its response while the
   wallet retained a pending HTLC. Restart, a status-query outage and invoice
   expiry did not discard its uncertain payment record or submit a second payment. Separate
   success and failure cases reconciled the original hash, including replay
   afterward.
-- **Expiry** (fixed-allowance protocol): a signed two-second input invoice
-  released the waiting backend with zero decoded tokens and no output invoice.
-  Under the metered protocol the equivalent case is an unpaid deposit: the
-  seller never dispatches and the request is abandoned.
-- **Native resource release** (fixed-allowance protocol): the real SmolLM2
-  model prefilled before approval and emitted no tokens when the gate reported
-  expiry. The metered path runs nothing on the backend before the deposit
-  settles, so there is no gate to release.
 - **Three-node forwarding:** a remote caller targeting a paid third node could
   not spend an automatically enabled intermediary wallet. Both direct QUIC
   ingress and the legacy loopback bridge returned HTTP 402, with no payer
@@ -1003,8 +944,8 @@ A transport failure, timeout or seller `Error` frame while awaiting the
 spawned: nothing has been authorized and the seller cannot have charged this
 buyer. An admission that does not restate the request, the frozen price or the
 single defined deposit, a malformed invoice, and policy refusal are terminal
-for the HTTP request (`cancel`, stage `unstarted`, releases the prefetched
-balance). Client disconnection during foreground setup drops that setup
+for the HTTP request (`cancel`, stage `unstarted`, rejects the proposed
+request). Client disconnection during foreground setup drops that setup
 without spawning a payer. Once the admission is accepted and `Accepted` has
 been sent, failures are terminal even if the deposit is still pending: the
 application receives HTTP 402 (`paid inference interrupted; settlement remains

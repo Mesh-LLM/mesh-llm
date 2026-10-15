@@ -2,15 +2,10 @@
 use anyhow::{Result, ensure};
 use rusqlite::Connection;
 
-mod draft_schema;
-
 /// 1: first versioned schema. 2: `serving_accounting.forgiven`.
-/// 3: unreleased token-metered drafts; seller table shapes varied.
-/// 4: canonical metered tables, preserving compatible draft accounting and
-/// rejecting populated incompatible drafts. Retired fixed-allowance seller
-/// accounting is dropped; buyer records and budget reservations are retained.
-/// 5: cached-input billing and the positive-remainder floor. Unversioned
-/// draft metered records cannot be safely assigned these semantics.
+/// 3/4: unsupported, unreleased development schemas.
+/// 5: token-metered billing with cached-input discounts and the remainder floor.
+/// Released buyer records are retained; retired seller accounting is dropped.
 const VERSION: u32 = 5;
 
 /// Seller-side tables of the retired fixed-allowance protocol. Their debt was
@@ -24,6 +19,9 @@ pub(super) fn initialize(connection: &mut Connection) -> Result<()> {
         version <= VERSION,
         "payment ledger schema is newer than this binary"
     );
+    if version < VERSION {
+        reject_draft(connection, version)?;
+    }
     // Connection settings must precede the schema transaction (WAL cannot be
     // enabled inside one). Never lower a newer schema version.
     connection.execute_batch(
@@ -31,12 +29,36 @@ pub(super) fn initialize(connection: &mut Connection) -> Result<()> {
     )?;
     if version < VERSION {
         let transaction = connection.transaction()?;
-        draft_schema::adopt(&transaction)?;
         transaction.execute_batch(include_str!("schema.sql"))?;
         transaction.execute_batch(LEGACY_TABLES)?;
         transaction.pragma_update(None, "user_version", VERSION)?;
         transaction.commit()?;
     }
+    Ok(())
+}
+
+// Development schemas have no supported conversion. Check before changing even
+// connection settings, and leave all accounting intact for explicit recovery.
+fn reject_draft(connection: &Connection, version: u32) -> Result<()> {
+    let draft_tables: bool = connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name IN ('metered_requests','metered_invoices','peer_credit'))",
+        [],
+        |row| row.get(0),
+    )?;
+    let settings: bool = connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name='settings')",
+        [],
+        |row| row.get(0),
+    )?;
+    let buyer_draft = settings && connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM settings WHERE key GLOB 'metered-payer/*' OR key GLOB 'metered-payee/*')",
+        [],
+        |row| row.get::<_, bool>(0),
+    )?;
+    ensure!(
+        version < 3 && !draft_tables && !buyer_draft,
+        "unsupported draft payment ledger; data retained, back up payments.sqlite3 and use a compatible binary or explicit migration"
+    );
     Ok(())
 }
 
@@ -60,7 +82,7 @@ mod tests {
     #[test]
     fn adopts_legacy_data_and_rejects_future_schema_without_downgrade() -> Result<()> {
         let mut connection = Connection::open_in_memory()?;
-        connection.execute_batch(include_str!("schema.sql"))?;
+        connection.execute_batch(include_str!("migrations/fixtures/main_v2.sql"))?;
         connection.execute("INSERT INTO settings VALUES ('sentinel','preserved')", [])?;
         initialize(&mut connection)?;
         initialize(&mut connection)?;

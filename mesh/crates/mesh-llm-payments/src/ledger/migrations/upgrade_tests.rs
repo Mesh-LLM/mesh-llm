@@ -1,10 +1,7 @@
-//! Historical SQL fixtures copied from main 8b848ead5, credit draft 1b9d88794,
-//! estimate draft dd02d797d, and early estimate 95ddf720b. No wallet or network access.
+//! Released schema fixture from main 8b848ead5. No wallet or network access.
 use super::*;
 
 const MAIN: &str = include_str!("fixtures/main_v2.sql");
-const CREDIT: &str = include_str!("fixtures/credit_v3.sql");
-const ESTIMATE: &str = include_str!("fixtures/estimate_v3.sql");
 
 fn version(connection: &Connection) -> u32 {
     connection
@@ -12,22 +9,7 @@ fn version(connection: &Connection) -> u32 {
         .unwrap()
 }
 
-fn assert_canonical(connection: &Connection) -> Result<()> {
-    let fresh = Connection::open_in_memory()?;
-    fresh.execute_batch(include_str!("../schema.sql"))?;
-    for table in ["metered_requests", "metered_invoices"] {
-        assert_eq!(
-            draft_schema::ddl(connection, table)?,
-            draft_schema::ddl(&fresh, table)?,
-            "{table}"
-        );
-    }
-    Ok(())
-}
-
 fn admit(connection: &Connection) -> Result<()> {
-    assert_canonical(connection)?;
-
     connection.execute("INSERT INTO metered_requests(id,peer,pricing,require_deposit,deposit_msat,state) VALUES ('new','peer','{}',1,1000,'admitted')", [])?;
     connection.execute(
         "INSERT INTO metered_invoices VALUES ('hash','new','peer','deposit','{}','unpaid')",
@@ -51,7 +33,6 @@ fn actual_main_schema_preserves_buyer_records_and_policy() -> Result<()> {
         c.pragma_update(None, "user_version", old_version)?;
         initialize(&mut c)?;
         initialize(&mut c)?;
-        assert_canonical(&c)?;
         assert_eq!(version(&c), VERSION);
         assert_eq!(super::super::settled_today(&c, 86_400_000)?, 2000);
         assert_eq!(
@@ -73,82 +54,66 @@ fn actual_main_schema_preserves_buyer_records_and_policy() -> Result<()> {
 }
 
 #[test]
-fn empty_estimate_draft_upgrades() -> Result<()> {
-    let mut c = Connection::open_in_memory()?;
-    c.execute_batch(ESTIMATE)?;
-    c.pragma_update(None, "user_version", 3)?;
-    initialize(&mut c)?;
-    admit(&c)?;
-    Ok(())
-}
-
-#[test]
-fn empty_credit_draft_can_be_adopted() -> Result<()> {
-    let mut c = Connection::open_in_memory()?;
-    c.execute_batch(MAIN)?;
-    c.execute_batch(CREDIT)?;
-    c.pragma_update(None, "user_version", 3)?;
-    initialize(&mut c)?;
-    admit(&c)?;
-    Ok(())
-}
-
-#[test]
-fn populated_credit_draft_is_rejected_without_losing_money_or_version() -> Result<()> {
-    let mut c = Connection::open_in_memory()?;
-    c.execute_batch(MAIN)?;
-    c.execute_batch(CREDIT)?;
-    c.execute("INSERT INTO peer_credit VALUES ('peer',1500)", [])?;
-    c.pragma_update(None, "user_version", 3)?;
-    let error = initialize(&mut c).unwrap_err();
-    assert!(error.to_string().contains("unsupported draft"), "{error:#}");
-    assert_eq!(version(&c), 3);
-    assert_eq!(
-        c.query_row("SELECT msat FROM peer_credit", [], |r| r.get::<_, i64>(0))?,
-        1500
-    );
-    assert!(tests::has_table(&c, "receivables"));
-    Ok(())
-}
-
-#[test]
-fn populated_draft_metered_state_is_never_reinterpreted() -> Result<()> {
-    for old_version in [0, 3, 4] {
-        for marker in ["seller", "buyer", "payee"] {
-            let mut c = Connection::open_in_memory()?;
-            c.execute_batch(include_str!("../schema.sql"))?;
-            c.execute_batch(
-                "INSERT INTO requests VALUES ('old','{}','approved',10000,0);
-                INSERT INTO charges VALUES ('uncertain','old',1,'{}',1000,4000,'pending',0,NULL);",
-            )?;
-            match marker {
-                "seller" => c.execute_batch("INSERT INTO metered_requests(id,peer,pricing,require_deposit,deposit_msat,state) VALUES ('old','peer','{}',0,0,'billed');
-                    INSERT INTO metered_invoices VALUES ('debt','old','peer','final','{}','unpaid');")?,
-                "buyer" => { c.execute("INSERT INTO settings VALUES ('metered-payer/old','{}')", [])?; }
-                _ => { c.execute("INSERT INTO settings VALUES ('metered-payee/old','pin')", [])?; }
+fn unsupported_drafts_are_rejected_without_changing_the_file() -> Result<()> {
+    for old_version in [0, 1, 2, 3, 4] {
+        for marker in [
+            "CREATE TABLE metered_requests(id TEXT); INSERT INTO metered_requests VALUES ('debt');",
+            "CREATE TABLE metered_invoices(id TEXT); INSERT INTO metered_invoices VALUES ('receipt');",
+            "CREATE TABLE peer_credit(msat INTEGER); INSERT INTO peer_credit VALUES (1500);",
+            "INSERT INTO settings VALUES ('metered-payer/old','authorization');",
+            "INSERT INTO settings VALUES ('metered-payee/old','pin');",
+        ] {
+            let dir = tempfile::tempdir()?;
+            let path = dir.path().join("payments.sqlite3");
+            {
+                let c = Connection::open(&path)?;
+                c.execute_batch(MAIN)?;
+                c.execute_batch(marker)?;
+                c.pragma_update(None, "user_version", old_version)?;
             }
-            c.pragma_update(None, "user_version", old_version)?;
-            let before = snapshot(&c)?;
+            let before = std::fs::read(&path)?;
+            let mut c = Connection::open(&path)?;
             let error = initialize(&mut c).unwrap_err();
             assert!(error.to_string().contains("unsupported draft"), "{error:#}");
             assert_eq!(version(&c), old_version);
-            assert_eq!(snapshot(&c)?, before);
-            assert_eq!(super::super::settled_today(&c, 86_400_000)?, 0);
+            drop(c);
+            assert_eq!(std::fs::read(&path)?, before);
         }
     }
     Ok(())
 }
 
 #[test]
-fn empty_canonical_drafts_upgrade() -> Result<()> {
+fn empty_versioned_drafts_are_not_adopted() -> Result<()> {
     for old_version in [3, 4] {
         let mut c = Connection::open_in_memory()?;
-        c.execute_batch(include_str!("../schema.sql"))?;
         c.pragma_update(None, "user_version", old_version)?;
-        initialize(&mut c)?;
-        assert_eq!(version(&c), VERSION);
-        admit(&c)?;
+        assert!(initialize(&mut c).is_err());
+        assert_eq!(version(&c), old_version);
+        assert!(!tests::has_table(&c, "settings"));
     }
+    Ok(())
+}
+
+#[test]
+fn current_metered_records_survive_reopen() -> Result<()> {
+    let mut c = Connection::open_in_memory()?;
+    initialize(&mut c)?;
+    admit(&c)?;
+    c.execute(
+        "INSERT INTO settings VALUES ('metered-payer/new','authorization')",
+        [],
+    )?;
+    initialize(&mut c)?;
+    assert_eq!(version(&c), VERSION);
+    let count: u32 = c.query_row("SELECT COUNT(*) FROM metered_invoices", [], |r| r.get(0))?;
+    assert_eq!(count, 1);
+    let value: String = c.query_row(
+        "SELECT value FROM settings WHERE key='metered-payer/new'",
+        [],
+        |r| r.get(0),
+    )?;
+    assert_eq!(value, "authorization");
     Ok(())
 }
 
@@ -161,90 +126,4 @@ fn corrupt_file_is_not_replaced() -> Result<()> {
     assert!(super::super::Ledger::open(dir.path()).is_err());
     assert_eq!(std::fs::read(path)?, bytes);
     Ok(())
-}
-
-#[test]
-fn populated_partial_drafts_are_not_dropped() -> Result<()> {
-    for schema in [
-        "CREATE TABLE metered_requests(id TEXT PRIMARY KEY, old_debt INTEGER); INSERT INTO metered_requests VALUES ('old',1000);",
-        "CREATE TABLE metered_invoices(hash TEXT PRIMARY KEY, invoice TEXT); INSERT INTO metered_invoices VALUES ('old','receipt');",
-    ] {
-        let mut c = Connection::open_in_memory()?;
-        c.execute_batch(MAIN)?;
-        c.execute_batch(schema)?;
-        c.pragma_update(None, "user_version", 3)?;
-        let before: String =
-            c.query_row("SELECT group_concat(sql) FROM sqlite_master", [], |r| {
-                r.get(0)
-            })?;
-        assert!(
-            initialize(&mut c)
-                .unwrap_err()
-                .to_string()
-                .contains("unsupported draft")
-        );
-        let after: String =
-            c.query_row("SELECT group_concat(sql) FROM sqlite_master", [], |r| {
-                r.get(0)
-            })?;
-        assert_eq!(before, after);
-        assert_eq!(version(&c), 3);
-    }
-    Ok(())
-}
-
-#[test]
-fn early_constraints_and_dangling_foreign_keys_are_not_adopted_as_canonical() -> Result<()> {
-    for dangling in [false, true] {
-        for populated in [false, true] {
-            let mut c = Connection::open_in_memory()?;
-            if dangling {
-                c.execute_batch(&ESTIMATE.replace(
-                    "id TEXT PRIMARY KEY, peer TEXT NOT NULL",
-                    "id TEXT PRIMARY KEY REFERENCES serving_requests(id), peer TEXT NOT NULL",
-                ))?;
-            } else {
-                c.execute_batch(include_str!("fixtures/early_estimate.sql"))?;
-            }
-            c.execute_batch("PRAGMA foreign_keys=OFF;")?;
-            if populated {
-                c.execute_batch("INSERT INTO metered_requests(id,peer,pricing,estimated_input_tokens,require_deposit,deposit_msat,state) VALUES ('old','peer','{}',1,0,0,'admitted');")?;
-            }
-            let before = draft_schema::ddl(&c, "metered_requests")?;
-            let result = initialize(&mut c);
-            if populated {
-                assert!(result.is_err());
-                assert_eq!(version(&c), 0);
-                assert_eq!(before, draft_schema::ddl(&c, "metered_requests")?);
-            } else {
-                result?;
-                admit(&c)?;
-                c.execute("UPDATE metered_invoices SET state='forgiven'", [])?;
-            }
-        }
-    }
-    Ok(())
-}
-
-fn snapshot(c: &Connection) -> Result<Vec<Vec<rusqlite::types::Value>>> {
-    let mut result = Vec::new();
-    for table in [
-        "sqlite_master",
-        "settings",
-        "requests",
-        "charges",
-        "metered_requests",
-        "metered_invoices",
-    ] {
-        let mut statement = c.prepare(&format!("SELECT * FROM {table} ORDER BY rowid"))?;
-        let columns = statement.column_count();
-        for row in statement.query_map([], |row| {
-            (0..columns)
-                .map(|i| row.get(i))
-                .collect::<rusqlite::Result<Vec<_>>>()
-        })? {
-            result.push(row?);
-        }
-    }
-    Ok(result)
 }

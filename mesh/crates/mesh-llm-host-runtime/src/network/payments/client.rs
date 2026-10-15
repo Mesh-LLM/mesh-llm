@@ -24,6 +24,7 @@ pub(crate) async fn call<Req: Serialize, Res: DeserializeOwned>(
         .available_provider_for_capability(CAPABILITY)
         .await?
         .ok_or_else(|| anyhow!("no provider for '{CAPABILITY}'"))?;
+    require_billing_contract(plugins, &provider.plugin_name).await?;
     invoke(plugins, &provider.plugin_name, operation, request).await
 }
 
@@ -62,57 +63,22 @@ async fn invoke<Req: Serialize, Res: DeserializeOwned>(
     request: &Req,
 ) -> Result<Res> {
     let input = serde_json::to_value(request)?;
-    use mesh_llm_payments_types::contract::ops;
-    let admission = matches!(operation, ops::SERVE_ADMIT | ops::ACCEPT_ADMISSION);
-    if admission || needs_cache_discount(&input) {
-        require_billing_features(plugins, provider, admission).await?;
-    }
     let result = invoke_raw(plugins, provider, operation, &input).await?;
-    if operation == mesh_llm_payments_types::contract::ops::PRICING && needs_cache_discount(&result)
-    {
-        require_billing_features(plugins, provider, false).await?;
-    }
     Ok(serde_json::from_value(result)?)
 }
 
-fn needs_cache_discount(value: &serde_json::Value) -> bool {
-    match value {
-        serde_json::Value::Object(fields) => {
-            fields
-                .get("cache_discount_percent")
-                .and_then(serde_json::Value::as_u64)
-                .is_some_and(|n| n > 0)
-                || fields.get("command").and_then(serde_json::Value::as_str)
-                    == Some("set_cache_discount")
-                || fields.values().any(needs_cache_discount)
-        }
-        serde_json::Value::Array(values) => values.iter().any(needs_cache_discount),
-        _ => false,
-    }
-}
-
-async fn require_billing_features(
-    plugins: &PluginManager,
-    provider: &str,
-    admission: bool,
-) -> Result<()> {
-    use mesh_llm_payments_types::contract::{BillingFeatures, ops};
-    let features = invoke_raw(
+async fn require_billing_contract(plugins: &PluginManager, provider: &str) -> Result<()> {
+    use mesh_llm_payments_types::contract::{BillingContract, ops};
+    let contract = invoke_raw(
         plugins,
         provider,
-        ops::BILLING_FEATURES,
+        ops::BILLING_CONTRACT,
         &serde_json::json!({}),
     )
     .await?;
-    let features: BillingFeatures = serde_json::from_value(features)?;
-    anyhow::ensure!(
-        features.cache_discount,
-        "payments provider does not support cached-input discounts; upgrade it before using discounted prices"
-    );
-    anyhow::ensure!(
-        !admission || features.positive_remainder_floor,
-        "payments provider does not support the positive-remainder payment floor; upgrade it before admitting paid requests"
-    );
+    // A required, closed revision enum rejects absent and unknown contracts.
+    serde_json::from_value::<BillingContract>(contract)
+        .map_err(|error| anyhow!("incompatible payments billing contract: {error}"))?;
     Ok(())
 }
 
@@ -150,6 +116,8 @@ async fn invoke_raw(
 pub(crate) struct Payments {
     plugins: PluginManager,
     provider: Option<Arc<str>>,
+    // Shared across clones; a failed check also closes this exchange permanently.
+    contract: Arc<tokio::sync::OnceCell<Result<(), String>>>,
 }
 
 impl Payments {
@@ -161,7 +129,11 @@ impl Payments {
             .ok()
             .flatten()
             .map(|provider| Arc::from(provider.plugin_name.as_str()));
-        Self { plugins, provider }
+        Self {
+            plugins,
+            provider,
+            contract: Arc::new(tokio::sync::OnceCell::new()),
+        }
     }
 
     /// Serves `service` from `node` over an in-process `payments.v1`, as
@@ -212,6 +184,15 @@ impl Payments {
             .provider
             .as_deref()
             .ok_or_else(|| anyhow!("no provider for '{CAPABILITY}'"))?;
+        self.contract
+            .get_or_init(|| async {
+                require_billing_contract(&self.plugins, provider)
+                    .await
+                    .map_err(|error| error.to_string())
+            })
+            .await
+            .as_ref()
+            .map_err(|error| anyhow!("{error}"))?;
         invoke(&self.plugins, provider, operation, request).await
     }
 }
@@ -238,7 +219,7 @@ mod tests {
         calls: Mutex<Vec<(String, String)>>,
         hang: Mutex<Vec<String>>,
         pricing: Mutex<AdvertisedPricing>,
-        features: Mutex<serde_json::Value>,
+        contract: Mutex<Option<serde_json::Value>>,
     }
 
     impl FakePayments {
@@ -273,14 +254,12 @@ mod tests {
                 let body = match request.name.as_str() {
                     ops::PRICING => serde_json::to_value(this.pricing.lock().unwrap().clone())
                         .map_err(transport_error)?,
-                    ops::BILLING_FEATURES => {
-                        let features = this.features.lock().unwrap();
-                        if features.is_null() {
-                            json!({})
-                        } else {
-                            features.clone()
-                        }
-                    }
+                    ops::BILLING_CONTRACT => this
+                        .contract
+                        .lock()
+                        .unwrap()
+                        .clone()
+                        .unwrap_or_else(|| json!({"revision":"v3"})),
                     ops::RECONCILE => json!({"approved": []}),
                     _ => json!({}),
                 };
@@ -353,124 +332,59 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn old_provider_is_refused_before_any_admission() {
-        let fake = Arc::new(FakePayments::default());
-        let payments = Payments::for_plugins(
-            manager(&[("old", &[CAPABILITY])], Arc::new(Arc::clone(&fake))).await,
-        )
-        .await;
-        let error = payments
-            .call::<_, Empty>(
-                ops::ACCEPT_ADMISSION,
-                &json!({"admission":{"pricing":{"cache_discount_percent":50}}}),
-            )
-            .await
-            .unwrap_err();
-        assert!(error.to_string().contains("does not support"));
-        assert_eq!(fake.calls(), [("old".into(), ops::BILLING_FEATURES.into())]);
-        payments
-            .call::<_, Empty>(
-                ops::ACCEPT_ADMISSION,
-                &json!({"admission":{"pricing":{"input_msat_per_million":500}}}),
-            )
-            .await
-            .unwrap_err();
-        assert_eq!(
-            fake.calls(),
-            vec![("old".into(), ops::BILLING_FEATURES.into()); 2]
-        );
-    }
-
-    #[tokio::test]
-    async fn old_provider_cannot_admit_configure_or_advertise_discounted_prices() {
-        let fake = Arc::new(FakePayments::default());
-        let payments = Payments::for_plugins(
-            manager(&[("old", &[CAPABILITY])], Arc::new(Arc::clone(&fake))).await,
-        )
-        .await;
-        for (operation, request) in [
-            (
-                ops::SERVE_ADMIT,
-                json!({"pricing":{"cache_discount_percent":50}}),
-            ),
-            (
-                ops::CONTROL,
-                json!({"command":"set_cache_discount","percent":0}),
-            ),
-            (
-                ops::CONTROL,
-                json!({"pricing":{"cache_discount_percent":50}}),
-            ),
-        ] {
-            assert!(
-                payments
-                    .call::<_, Empty>(operation, &request)
-                    .await
-                    .is_err()
-            );
-        }
-        assert!(
-            fake.calls()
-                .iter()
-                .all(|(_, op)| op == ops::BILLING_FEATURES)
-        );
-        *fake.pricing.lock().unwrap() = AdvertisedPricing {
-            configured: true,
-            prices: BTreeMap::from([(
-                "model".into(),
-                Pricing {
-                    input_msat_per_million: 7,
-                    output_msat_per_million: 9,
-                    cache_discount_percent: 50,
-                },
-            )]),
-        };
-        let error = payments
-            .call::<_, AdvertisedPricing>(ops::PRICING, &Empty {})
-            .await
-            .unwrap_err();
-        assert!(error.to_string().contains("does not support"));
-        assert_eq!(
-            &fake.calls()[3..],
-            &[
-                ("old".into(), ops::PRICING.into()),
-                ("old".into(), ops::BILLING_FEATURES.into()),
-            ]
-        );
-    }
-
-    #[tokio::test]
-    async fn both_billing_features_are_required_on_both_admission_sides() {
-        for features in [
+    async fn incompatible_contract_never_invokes_financial_operations() {
+        for contract in [
             json!({}),
-            json!({"cache_discount":true}),
-            json!({"positive_remainder_floor":true}),
-            json!({"cache_discount":true,"positive_remainder_floor":false}),
-            json!({"cache_discount":true,"positive_remainder_floor":true}),
+            json!({"revision":"v2"}),
+            json!({"revision":"v5"}),
+            json!({"revision":null}),
         ] {
-            let supported =
-                features["cache_discount"] == true && features["positive_remainder_floor"] == true;
-            for operation in [ops::SERVE_ADMIT, ops::ACCEPT_ADMISSION] {
-                let fake = Arc::new(FakePayments::default());
-                *fake.features.lock().unwrap() = features.clone();
-                let payments = Payments::for_plugins(
-                    manager(&[("provider", &[CAPABILITY])], Arc::new(Arc::clone(&fake))).await,
-                )
-                .await;
-                let result = payments
-                    .call::<_, Empty>(operation, &json!({"pricing":{"cache_discount_percent":0}}))
-                    .await;
-                assert_eq!(result.is_ok(), supported, "{features}: {operation}");
-                assert_eq!(fake.calls().len(), if supported { 2 } else { 1 });
-                assert_eq!(fake.calls()[0].1, ops::BILLING_FEATURES);
+            let fake = Arc::new(FakePayments::default());
+            *fake.contract.lock().unwrap() = Some(contract);
+            let payments = Payments::for_plugins(
+                manager(&[("old", &[CAPABILITY])], Arc::new(Arc::clone(&fake))).await,
+            )
+            .await;
+            for operation in [
+                ops::ACCEPT_ADMISSION,
+                ops::SERVE_ADMIT,
+                ops::PAY_DEPOSIT,
+                ops::SETTLE_FINAL,
+                ops::CONTROL,
+            ] {
+                assert!(
+                    payments
+                        .call::<_, Empty>(operation, &Empty {})
+                        .await
+                        .is_err()
+                );
             }
+            assert_eq!(fake.calls(), [("old".into(), ops::BILLING_CONTRACT.into())]);
         }
+    }
+
+    #[tokio::test]
+    async fn cloned_exchange_checks_contract_once() {
+        let fake = Arc::new(FakePayments::default());
+        let payments = Payments::for_plugins(
+            manager(&[("provider", &[CAPABILITY])], Arc::new(Arc::clone(&fake))).await,
+        )
+        .await;
+        let clone = payments.clone();
+        let (a, b) = tokio::join!(
+            payments.call::<_, Empty>(ops::SERVE_ADMIT, &Empty {}),
+            clone.call::<_, Empty>(ops::ACCEPT_ADMISSION, &Empty {})
+        );
+        a.unwrap();
+        b.unwrap();
+        assert_eq!(fake.calls().len(), 3);
+        assert_eq!(fake.calls()[0].1, ops::BILLING_CONTRACT);
     }
 
     #[tokio::test(start_paused = true)]
-    async fn hung_feature_negotiation_cannot_admit() {
+    async fn hung_contract_check_cannot_admit() {
         let fake = Arc::new(FakePayments::default());
-        fake.hang(ops::BILLING_FEATURES);
+        fake.hang(ops::BILLING_CONTRACT);
         let payments = Payments::for_plugins(
             manager(&[("provider", &[CAPABILITY])], Arc::new(Arc::clone(&fake))).await,
         )
@@ -482,7 +396,7 @@ mod tests {
         assert!(error.to_string().contains("did not answer"));
         assert_eq!(
             fake.calls(),
-            [("provider".into(), ops::BILLING_FEATURES.into())]
+            [("provider".into(), ops::BILLING_CONTRACT.into())]
         );
     }
 
@@ -506,7 +420,13 @@ mod tests {
         assert!(error.to_string().contains("did not answer"), "{error}");
         assert_eq!(
             fake.calls(),
-            [(String::from("payments-fake"), ops::SERVE_ABANDON.to_owned())],
+            [
+                (
+                    String::from("payments-fake"),
+                    ops::BILLING_CONTRACT.to_owned()
+                ),
+                (String::from("payments-fake"), ops::SERVE_ABANDON.to_owned())
+            ],
             "the operation is attempted exactly once"
         );
     }
@@ -566,6 +486,7 @@ mod tests {
         assert_eq!(
             fake.calls(),
             [
+                (String::from("a-payments"), ops::BILLING_CONTRACT.to_owned()),
                 (String::from("a-payments"), ops::PAYMENT_INTENT.to_owned()),
                 (String::from("a-payments"), ops::PAYMENT_INTENT.to_owned()),
             ]
