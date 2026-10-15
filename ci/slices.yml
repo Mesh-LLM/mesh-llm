@@ -107,6 +107,7 @@
     }
   },
   "domain_rules": [
+    {"domain": "skippy-qualification", "slices": ["runtime-product", "product-smoke"]},
     {"domain": "ci-control", "slices": ["runner-contract"]},
     {"domain": "docs", "slices": []},
     {"domain": "tooling", "slices": ["quality"]},
@@ -162,6 +163,7 @@
     {"domain": "runner-infra", "slices": ["runner-contract"]}
   ],
   "domain_rows": {
+    "skippy-qualification": ["linux-cpu", "linux-cuda", "linux-rocm", "linux-vulkan", "macos-metal", "windows-cpu", "windows-cuda", "windows-rocm", "windows-vulkan"],
     "runtime-product": ["linux-cpu"],
     "ui": ["linux-cpu"],
     "native-abi": ["linux-cpu"],
@@ -173,9 +175,9 @@
     "sdk-swift": ["macos-metal"],
     "platform-macos": ["macos-metal"],
     "platform-windows": ["windows-cpu"],
-    "backend-cuda": ["linux-cuda", "windows-cuda"],
-    "backend-rocm": ["linux-rocm", "windows-rocm"],
-    "backend-vulkan": ["linux-vulkan", "windows-vulkan"]
+    "backend-cuda": ["linux-cpu", "linux-cuda", "windows-cpu", "windows-cuda"],
+    "backend-rocm": ["linux-cpu", "linux-rocm", "windows-cpu", "windows-rocm"],
+    "backend-vulkan": ["linux-cpu", "linux-vulkan", "windows-cpu", "windows-vulkan"]
   },
   "smoke_domain_rows": {
     "runtime-product": ["core", "two-node-client", "two-node-split"],
