@@ -471,8 +471,7 @@ fn answer_from(
         if !matches!(req.coverage, Coverage::ExpectedPin(_)) {
             return Err(Reason::PolicyDeclined);
         }
-        let latest = index.chain.iter().rposition(|c| c.statement.is_some());
-        if latest != Some(at) {
+        if at + 1 != index.chain.len() {
             return Err(Reason::CoverageUnsatisfiable);
         }
     }
@@ -493,13 +492,8 @@ fn answer_from(
             return Err(Reason::PolicyDeclined);
         }
         let records: Vec<u64> = match &req.subject {
-            Subject::Range(a, b) => {
-                // A range reaching past the anchor is not under it.
-                if *b >= covered {
-                    return Err(Reason::NoSuchSubject);
-                }
-                (*a..=*b).collect()
-            }
+            // The resolver refused a range reaching past the anchor.
+            Subject::Range(a, b) => (*a..=*b).collect(),
             Subject::FullHistory => (0..covered).collect(),
             // Held, but after the anchor: not yet committed under it.
             Subject::Record(d) => match index.leaf_index_of(d) {
@@ -518,11 +512,7 @@ fn answer_from(
         }
         records
     } else if !served_summary {
-        let listed = index.chain[..=at]
-            .iter()
-            .filter(|c| c.statement.is_some())
-            .count();
-        if listed as u64 > MAX_ANSWER_CHECKPOINTS {
+        if at as u64 + 1 > MAX_ANSWER_CHECKPOINTS {
             return Err(Reason::PolicyDeclined);
         }
         Vec::new()
@@ -553,40 +543,28 @@ fn answer_from(
 }
 
 /// The chain position of the checkpoint an answer is served under. For an
-/// anchor, the stated checkpoint it names. For an `exchange` subject pinned
-/// by the requester's own half, the earliest stated checkpoint covering the
-/// last record citing the half among those the latest one covers, so growth
-/// that adds no citing record does not change the artifact (-00 §5), as
-/// evidencebook and the Go responder choose it; `coverage_unsatisfiable`
-/// when no stated checkpoint covers one yet.
+/// anchor, the checkpoint it names. For an `exchange` subject pinned by the
+/// requester's own half, the earliest checkpoint covering the last record
+/// citing the half among those the latest one covers, so growth that adds
+/// no citing record does not change the artifact (-00 §5), as evidencebook
+/// and the Go responder choose it; `coverage_unsatisfiable` when no
+/// checkpoint covers one yet.
 fn serving_position(index: &LedgerIndex, anchor: &ResolvedAnchor) -> Result<usize, Reason> {
-    let stated = || {
-        index
+    let covers = |c: &evidence_log::ChainCheckpoint| leaf_count(c.record.mmr_size).unwrap_or(0);
+    match anchor {
+        ResolvedAnchor::Anchor(a) => index
             .chain
             .iter()
-            .enumerate()
-            .filter(|(_, c)| c.statement.is_some())
-    };
-    match anchor {
-        ResolvedAnchor::Anchor(a) => stated()
-            .find(|(_, c)| c.anchor_digest().as_deref() == Some(a.digest.as_str()))
-            .map(|(i, _)| i),
+            .position(|c| c.anchor_digest() == a.digest),
         ResolvedAnchor::ExchangeHalf(half) => {
-            let latest = stated()
-                .next_back()
-                .and_then(|(_, c)| leaf_count(c.record.mmr_size).ok())
-                .unwrap_or(0);
+            let latest = index.chain.last().map_or(0, covers);
             index
                 .citing(half)
                 .iter()
                 .copied()
                 .filter(|&i| i < latest)
                 .max()
-                .and_then(|last| {
-                    stated()
-                        .find(|(_, c)| leaf_count(c.record.mmr_size).is_ok_and(|n| n > last))
-                        .map(|(i, _)| i)
-                })
+                .and_then(|last| index.chain.iter().position(|c| covers(c) > last))
         }
     }
     .ok_or(Reason::CoverageUnsatisfiable)

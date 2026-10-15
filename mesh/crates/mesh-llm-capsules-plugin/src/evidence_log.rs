@@ -13,22 +13,23 @@
 //!
 //! **Only checkpoints this index re-derives.** A checkpoint from
 //! `checkpoints.jsonl` joins the chain only if it is signed by this node's
-//! key, chains from the stream's first checkpoint, and its root is the root
-//! this index computes at its size. The first checkpoint that fails any of
-//! these ends the chain: nothing after it is served, so an answer is never
-//! signed under a root its proofs would not reach. A line that is not a
+//! key, chains from the stream's first checkpoint, its root is the root
+//! this index computes at its size, and its line carries its own COSE wire
+//! statement (below). The first checkpoint that fails any of these ends the
+//! chain: nothing after it is served, so an answer is never signed under a
+//! root its proofs would not reach, and every checkpoint an answer lists
+//! extends the one listed before it. A line that is not a
 //! well-formed record (no 64-hex `capsule_id`) ends the index the same way,
 //! as the checkpointer refuses to fold one.
 //!
-//! **Anchors are stated checkpoints.** An anchor is a chain checkpoint whose
-//! line carries its COSE wire statement (`checkpoint_cose`), identified by
-//! the SHA-256 of that statement: the `cll-checkpoint` item of the interop
-//! profile (agent-action-capsule `spec/interop-profile-v0.md` §6.2.1), the
-//! value a requester pins, as evidencebook and the Go responder identify
-//! one. The statement must verify under this node's key and state exactly
-//! the checkpoint on its line; one that does not, or a line without one
-//! (the checkpointer writes it best-effort), stays in the chain but anchors
-//! no answer.
+//! **Anchors are identified by their statement.** Each chain checkpoint is
+//! an anchor, identified by the SHA-256 of its COSE wire statement
+//! (`checkpoint_cose`): the `cll-checkpoint` item of the interop profile
+//! (agent-action-capsule `spec/interop-profile-v0.md` §6.2.1), the value a
+//! requester pins, as evidencebook and the Go responder identify one. The
+//! statement must verify under this node's key and state exactly the
+//! checkpoint on its line. The checkpointer writes it best-effort, so a line
+//! without one, or with another, ends the chain like any other failure.
 //!
 //! **What a record is here.** A record's digest is its `capsule_id` (the leaf
 //! the checkpoints commit to) and its body is its line in `capsules.jsonl`,
@@ -185,23 +186,19 @@ impl Tail {
 /// the new MMR, and the new peaks.
 pub type ConsistencyParts = (Vec<Hash>, Vec<Vec<Hash>>, Vec<Hash>);
 
-/// One checkpoint of the chain, with its COSE wire statement when it has one
-/// that states it.
+/// One checkpoint of the chain, with its COSE wire statement.
 #[derive(Clone, Debug)]
 pub struct ChainCheckpoint {
     pub record: CheckpointRecord,
-    /// The `cll-checkpoint` octets: present only for a statement that
-    /// verifies under this node's key and states exactly `record`.
-    pub statement: Option<Vec<u8>>,
+    /// The `cll-checkpoint` octets: a statement that verifies under this
+    /// node's key and states exactly `record`.
+    pub statement: Vec<u8>,
 }
 
 impl ChainCheckpoint {
     /// The digest an anchor is pinned by: the SHA-256 of its statement.
-    /// `None` for a checkpoint that anchors no answer.
-    pub fn anchor_digest(&self) -> Option<String> {
-        self.statement
-            .as_ref()
-            .map(|s| hex::encode(Sha256::digest(s)))
+    pub fn anchor_digest(&self) -> String {
+        hex::encode(Sha256::digest(&self.statement))
     }
 }
 
@@ -395,13 +392,8 @@ impl LedgerIndex {
             .as_ref()
             .and_then(Value::as_str)
             .and_then(|h| hex::decode(h).ok())
-            .filter(|s| states(s, &cp));
-        if statement.is_none() {
-            tracing::warn!(
-                mmr_size = cp.mmr_size,
-                "a checkpoint has no COSE statement of its own: it anchors no evidence answer"
-            );
-        }
+            .filter(|s| states(s, &cp))
+            .ok_or("its line carries no COSE statement of its own")?;
         Ok(Some(ChainCheckpoint {
             record: cp,
             statement,
@@ -576,7 +568,7 @@ impl Responder for LogView<'_> {
             .iter()
             .filter_map(|cp| {
                 Some(Anchor {
-                    digest: cp.anchor_digest()?,
+                    digest: cp.anchor_digest(),
                     size: leaf_count(cp.record.mmr_size).ok()?,
                     issued_at: cp.record.timestamp.clone(),
                 })

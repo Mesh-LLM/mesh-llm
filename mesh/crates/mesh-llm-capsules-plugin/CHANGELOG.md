@@ -24,7 +24,8 @@
   node cannot read the old one.
   - **What an anchor is.** A checkpoint is pinned by the SHA-256 of its COSE wire statement (the
     `checkpoint_cose` the checkpointer already writes beside each checkpoint), not by the digest of
-    its JSON form. A checkpoint without its own statement anchors no answer.
+    its JSON form. A checkpoint line without its own statement ends the evidence chain there, as
+    any checkpoint the index cannot take does: nothing after it is served.
   - **A record answer** is the record's ledger line, as before, with the profile's Checkpointed
     Local Log material for its `capsule_id` (the anchor's statement, the inclusion proof, and the
     consistency proof when the checkpoint extends another). The line is not the `capsule_id`

@@ -118,17 +118,11 @@ pub struct Build<'a> {
 pub fn build(b: &Build<'_>, view: &LogView<'_>) -> Result<Value, Reason> {
     let index = view.index;
     let served = index.chain.get(b.at).ok_or(Reason::CoverageUnsatisfiable)?;
-    let statement = served
-        .statement
-        .as_ref()
-        .ok_or(Reason::CoverageUnsatisfiable)?;
-    let anchor_digest = sha256_hex(statement);
-    // The stated checkpoints up to the serving one: a checkpoint list and a
-    // history card.
-    let stated: Vec<&ChainCheckpoint> = index.chain[..=b.at]
-        .iter()
-        .filter(|c| c.statement.is_some())
-        .collect();
+    let statement = &served.statement;
+    let anchor_digest = served.anchor_digest();
+    // The checkpoints up to the serving one: a checkpoint list and a history
+    // card.
+    let listed: Vec<&ChainCheckpoint> = index.chain[..=b.at].iter().collect();
 
     let mut head = Map::new();
     head.insert("anchor".into(), json!(anchor_digest));
@@ -140,22 +134,26 @@ pub fn build(b: &Build<'_>, view: &LogView<'_>) -> Result<Value, Reason> {
 
     let artifact = match (&b.request.derivation, &b.request.subject) {
         (Some(Derivation::Token(t)), _) if t == DERIVATION_HISTORY_CARD => {
-            let mut history = Vec::with_capacity(stated.len());
-            for (i, cp) in stated.iter().enumerate() {
-                let consistency = match i.checked_sub(1).map(|p| stated[p]) {
-                    Some(prev) if prev.record.mmr_size < cp.record.mmr_size => json!(hex::encode(
-                        consistency(view, prev.record.mmr_size, cp.record.mmr_size)?
-                    )),
-                    _ => Value::Null,
+            let mut history = Vec::with_capacity(listed.len());
+            for (i, cp) in listed.iter().enumerate() {
+                // The chain grows strictly, so every checkpoint after the
+                // first extends the one before it by a proof.
+                let consistency = match i.checked_sub(1).map(|p| listed[p]) {
+                    Some(prev) => json!(hex::encode(consistency(
+                        view,
+                        prev.record.mmr_size,
+                        cp.record.mmr_size
+                    )?)),
+                    None => Value::Null,
                 };
                 history.push(json!({
-                    "checkpoint": hex::encode(cp.statement.as_deref().unwrap_or_default()),
+                    "checkpoint": hex::encode(&cp.statement),
                     "consistency_from_previous": consistency,
                 }));
             }
             head.insert("derivation".into(), json!(DERIVATION_HISTORY_CARD));
             head.insert("history".into(), Value::Array(history));
-            carried = stated.clone();
+            carried = listed.clone();
             jcs(head)?
         }
         (Some(Derivation::Token(t)), Subject::FullHistory)
@@ -179,12 +177,12 @@ pub fn build(b: &Build<'_>, view: &LogView<'_>) -> Result<Value, Reason> {
         }
         (Some(_), _) => return Err(Reason::DerivationUnsupported),
         (None, Subject::Checkpoints) => {
-            let list = stated
+            let list = listed
                 .iter()
-                .map(|cp| json!(hex::encode(cp.statement.as_deref().unwrap_or_default())))
+                .map(|cp| json!(hex::encode(&cp.statement)))
                 .collect();
             head.insert("checkpoints".into(), Value::Array(list));
-            carried = stated.clone();
+            carried = listed.clone();
             jcs(head)?
         }
         (None, Subject::Record(digest)) => {
@@ -677,6 +675,7 @@ fn check_named_record(
             &env.verification_content[1],
             leaf,
             &entry,
+            served.cp.mmr_size,
             &served.cp.new_peak_hashes,
         )
     {
@@ -753,7 +752,13 @@ fn check_record_set(
             return fail("the records are not in log order");
         }
         let raw = raw_digest(digest)?;
-        if !proves(proof, leaf, &raw, &served.cp.new_peak_hashes) {
+        if !proves(
+            proof,
+            leaf,
+            &raw,
+            served.cp.mmr_size,
+            &served.cp.new_peak_hashes,
+        ) {
             return fail("a record's inclusion proof does not hold");
         }
         leaves.push(leaf);
@@ -850,19 +855,32 @@ fn inclusion_leaf(octets: &[u8]) -> Option<u64> {
 
 /// Whether `proof` proves the leaf `leaf` with entry `entry` under one of
 /// `peaks` (profile §6.2.1 step 12).
-fn proves(proof: &[u8], leaf: u64, entry: &Hash, peaks: &[Hash]) -> bool {
+/// Whether `proof` proves the leaf `leaf` with entry `entry` in the MMR of
+/// `size` nodes whose peaks are `peaks` (profile §6.2.1 step 12). The path
+/// must climb from the leaf's own node to the one peak that holds it, so a
+/// leaf cannot be passed off at another position: a peak that is itself a
+/// leaf would otherwise match any position given an empty path.
+fn proves(proof: &[u8], leaf: u64, entry: &Hash, size: u64, peaks: &[Hash]) -> bool {
     let Some((index, path)) = inclusion_parts(proof) else {
         return false;
     };
     if cll::mmr::leaf_index_to_pos(leaf).ok() != Some(index) || path.len() > MAX_PATH {
         return false;
     }
-    included_root(index, leaf_hash(entry), &path).is_some_and(|root| peaks.contains(&root))
+    let Ok(positions) = cll::mmr::peaks(size) else {
+        return false;
+    };
+    let Some(k) = positions.iter().position(|&p| p >= index) else {
+        return false;
+    };
+    positions.len() == peaks.len()
+        && included_root(index, leaf_hash(entry), &path) == Some((positions[k], peaks[k]))
 }
 
 /// MMR's `included_root`: the node at `index` with hash `node`, carried up
-/// its path. `None` when the path climbs past any MMR of profile size.
-fn included_root(mut index: u64, mut node: Hash, path: &[Hash]) -> Option<Hash> {
+/// its path, as the position it reaches and its hash. `None` when the path
+/// climbs past any MMR of profile size.
+fn included_root(mut index: u64, mut node: Hash, path: &[Hash]) -> Option<(u64, Hash)> {
     for (height, sibling) in (height_at(index)..).zip(path) {
         if index.checked_add(1)? > MAX_NODE_INDEX {
             return None;
@@ -878,7 +896,7 @@ fn included_root(mut index: u64, mut node: Hash, path: &[Hash]) -> Option<Hash> 
             node = interior_hash(&node, sibling, index);
         }
     }
-    Some(node)
+    Some((index, node))
 }
 
 /// Whether `proof` (a `cll-consistency-proof` item) proves that the MMR of
@@ -917,7 +935,7 @@ fn consistent(
             if path.len() > MAX_PATH {
                 return Some(false);
             }
-            let root = included_root(*index, *peak, &path)?;
+            let (_, root) = included_root(*index, *peak, &path)?;
             if roots.last() != Some(&root) {
                 roots.push(root);
             }
@@ -1461,12 +1479,19 @@ mod tests {
         );
     }
 
-    /// A ledger the producer itself wrote, checkpointed by capsule-emit's
-    /// own checkpointer: its checkpoints anchor answers, and a record and a
-    /// range served from it verify, the record under the profile's own
-    /// check too.
-    #[test]
-    fn a_ledger_the_producer_wrote_is_answered_and_verifies() {
+    /// A ledger the producer itself wrote: `records` sealed exchanges, with
+    /// capsule-emit's own checkpointer cutting a checkpoint after each
+    /// record listed in `cuts`. Returns the directory, the ledger and the
+    /// node key.
+    fn producer_ledger(
+        records: usize,
+        cuts: &[usize],
+    ) -> (
+        tempfile::TempDir,
+        std::path::PathBuf,
+        SigningKey,
+        Vec<String>,
+    ) {
         use crate::producer::anchor::AnchorClient;
         use crate::producer::checkpoint::{CheckpointCadenceConfig, CheckpointState};
         let dir = tempfile::tempdir().unwrap();
@@ -1480,7 +1505,7 @@ mod tests {
         .unwrap();
         let anchor = AnchorClient::new("http://127.0.0.1:1");
         let mut ids = Vec::new();
-        for i in 0..5 {
+        for i in 0..records {
             let id = format!("e-{i}");
             let emitted = state
                 .emit_for_exchange(&crate::capsule_emit::ExchangeRecord {
@@ -1495,66 +1520,83 @@ mod tests {
                 })
                 .unwrap();
             ids.push(emitted.capsule_id);
-            // Two checkpoints: after the third record and after the fifth.
-            if i == 2 || i == 4 {
+            if cuts.contains(&i) {
                 checkpoints
                     .checkpoint_covering(&ids[i], state.signing_key(), &anchor)
                     .unwrap();
             }
         }
-
         let key = state.signing_key().clone();
+        (dir, ledger, key, ids)
+    }
+
+    /// The anchors of `ledger` (stated checkpoints) and its chain length.
+    fn anchors_of(ledger: &std::path::Path, key: &SigningKey) -> (Vec<String>, usize) {
         let key_id = hex::encode(key.verifying_key().to_bytes());
-        let (stated, total) = crate::evidence_log::with_index(&ledger, &key_id, |index| {
-            let stated: Vec<String> = index
-                .chain
-                .iter()
-                .filter_map(|c| c.anchor_digest())
-                .collect();
+        crate::evidence_log::with_index(ledger, &key_id, |index| {
+            let stated = index.chain.iter().map(|c| c.anchor_digest()).collect();
             (stated, index.chain.len())
         })
-        .unwrap();
+        .unwrap()
+    }
+
+    /// `request` answered from `ledger`, openly, and checked as a requester
+    /// checks it.
+    fn ask_ledger(
+        ledger: &std::path::Path,
+        key: &SigningKey,
+        request: &Value,
+    ) -> (Result<Checked, CheckError>, Value) {
+        let bytes = serde_json::to_vec(request).unwrap();
+        let announced = announced_keys();
+        let replay = crate::requester_auth::ReplayCache::default();
+        let outcome = evidence_answer::answer_and_log(
+            &bytes,
+            false,
+            &Responder {
+                ledger_dir: ledger,
+                signing_key: key,
+                now: NOW,
+                history_segments: "peers",
+                share_standard_history: true,
+                keys: crate::requester_auth::Keys {
+                    announced: &announced,
+                    configured: None,
+                },
+                replay: &replay,
+                node_id: Some(RESPONDER_NODE),
+            },
+            None,
+        );
+        let Outcome::Answered { wire, .. } = outcome else {
+            panic!("{request}: {outcome:?}");
+        };
+        let req = request::parse_json(&bytes).unwrap();
+        (
+            check(&bytes, &req, &wire, &key.verifying_key(), &|_| None),
+            wire,
+        )
+    }
+
+    /// A ledger the producer itself wrote, checkpointed by capsule-emit's
+    /// own checkpointer: its checkpoints anchor answers, and a record, the
+    /// full history and a history card served from it verify. A profile
+    /// verifier reports the record `NOT_CHECKED`, never `FAIL`.
+    #[test]
+    fn a_ledger_the_producer_wrote_is_answered_and_verifies() {
+        let (_dir, ledger, key, ids) = producer_ledger(5, &[2, 4]);
+        let (stated, total) = anchors_of(&ledger, &key);
         assert_eq!(
             (stated.len(), total),
             (2, 2),
             "both checkpoints are stated anchors"
         );
-
-        let announced = announced_keys();
-        let ask = |request: &Value| {
-            let bytes = serde_json::to_vec(request).unwrap();
-            let replay = crate::requester_auth::ReplayCache::default();
-            let outcome = evidence_answer::answer_and_log(
-                &bytes,
-                false,
-                &Responder {
-                    ledger_dir: &ledger,
-                    signing_key: &key,
-                    now: NOW,
-                    history_segments: "peers",
-                    share_standard_history: true,
-                    keys: crate::requester_auth::Keys {
-                        announced: &announced,
-                        configured: None,
-                    },
-                    replay: &replay,
-                    node_id: Some(RESPONDER_NODE),
-                },
-                None,
-            );
-            let Outcome::Answered { wire, .. } = outcome else {
-                panic!("{request}: {outcome:?}");
-            };
-            let req = request::parse_json(&bytes).unwrap();
-            (
-                check(&bytes, &req, &wire, &key.verifying_key(), &|_| None),
-                wire,
-            )
-        };
-        let (checked, wire) =
-            ask(&json!({"subject": {"record": ids[3]}, "coverage": {"expected_pin": stated[1]}}));
-        let checked = checked.unwrap();
-        assert_eq!(checked.anchor, stated[1]);
+        let (checked, wire) = ask_ledger(
+            &ledger,
+            &key,
+            &json!({"subject": {"record": ids[3]}, "coverage": {"expected_pin": stated[1]}}),
+        );
+        assert_eq!(checked.unwrap().anchor, stated[1]);
         let report = cll_material::check_anchor_inclusion(
             &envelope_of(&wire),
             &ResponderLogKey(key.verifying_key()),
@@ -1565,13 +1607,112 @@ mod tests {
             "{}",
             report.detail
         );
-        let (checked, _) =
-            ask(&json!({"subject": {"full_history": null}, "coverage": {"min_freshness": 1}}));
-        assert!(checked.unwrap().records.len() >= 5);
-        let (checked, _) = ask(
-            &json!({"subject": {"full_history": null}, "coverage": {"expected_pin": stated[1]}, "derivation": "history_card/1"}),
+        let full = json!({"subject": {"full_history": null}, "coverage": {"min_freshness": 1}});
+        assert!(ask_ledger(&ledger, &key, &full).0.unwrap().records.len() >= 5);
+        let card = json!({"subject": {"full_history": null}, "coverage": {"expected_pin": stated[1]}, "derivation": "history_card/1"});
+        assert_eq!(ask_ledger(&ledger, &key, &card).0.unwrap().checkpoints, 2);
+    }
+
+    /// A checkpoint whose line lost its COSE statement ends the chain, as
+    /// any checkpoint this index cannot take does: what came before it is
+    /// still answered and verifies, and nothing after it is served, so every
+    /// list an answer carries extends checkpoint by checkpoint.
+    #[test]
+    fn a_checkpoint_without_its_statement_ends_the_chain() {
+        let (_dir, ledger, key, _) = producer_ledger(6, &[1, 3, 5]);
+        let path = ledger.join(crate::evidence_log::CHECKPOINTS_FILE);
+        let lines: Vec<Value> = std::fs::read_to_string(&path)
+            .unwrap()
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        assert_eq!(lines.len(), 3);
+        let last = hex::encode(Sha256::digest(
+            hex::decode(lines[2]["checkpoint_cose"].as_str().unwrap()).unwrap(),
+        ));
+        let mut stripped = lines.clone();
+        stripped[1]
+            .as_object_mut()
+            .unwrap()
+            .remove("checkpoint_cose");
+        crate::evidence_request_parity::write_jsonl(&path, &stripped);
+        let (anchors, total) = anchors_of(&ledger, &key);
+        assert_eq!(total, 1, "the chain ends before the unstated checkpoint");
+
+        let card = json!({"subject": {"full_history": null}, "coverage": {"expected_pin": anchors[0]}, "derivation": "history_card/1"});
+        assert_eq!(ask_ledger(&ledger, &key, &card).0.unwrap().checkpoints, 1);
+        let bytes = serde_json::to_vec(
+            &json!({"subject": {"checkpoints": null}, "coverage": {"expected_pin": last}}),
+        )
+        .unwrap();
+        let announced = announced_keys();
+        let replay = crate::requester_auth::ReplayCache::default();
+        let outcome = evidence_answer::answer_and_log(
+            &bytes,
+            false,
+            &Responder {
+                ledger_dir: &ledger,
+                signing_key: &key,
+                now: NOW,
+                history_segments: "peers",
+                share_standard_history: true,
+                keys: crate::requester_auth::Keys {
+                    announced: &announced,
+                    configured: None,
+                },
+                replay: &replay,
+                node_id: Some(RESPONDER_NODE),
+            },
+            None,
         );
-        assert_eq!(checked.unwrap().checkpoints, 2);
+        assert!(
+            matches!(
+                outcome,
+                Outcome::Refused {
+                    reason: Reason::CoverageUnsatisfiable,
+                    ..
+                }
+            ),
+            "{outcome:?}"
+        );
+    }
+
+    /// A leaf that is itself a peak cannot be passed off at another
+    /// position: in a three-leaf MMR, leaf 2 is the right peak, and an empty
+    /// path from leaf 0's position must not reach it.
+    #[test]
+    fn an_inclusion_proof_proves_its_leafs_position() {
+        use cll::mmr::{add_leaf, peaks, MemoryNodeStore, NodeReader};
+        let entries = [[1u8; 32], [2u8; 32], [3u8; 32]];
+        let mut nodes = MemoryNodeStore::new();
+        for e in &entries {
+            add_leaf(&mut nodes, leaf_hash(e)).unwrap();
+        }
+        let size = nodes.size();
+        let peak_hashes: Vec<Hash> = peaks(size)
+            .unwrap()
+            .iter()
+            .map(|&p| nodes.node(p))
+            .collect();
+        let proof = |leaf: u64| {
+            let path = cll::mmr::inclusion_proof(&nodes, leaf, size)
+                .unwrap()
+                .witness;
+            let path: Vec<Hash> = path
+                .iter()
+                .map(|h| hex::decode(h).unwrap().try_into().unwrap())
+                .collect();
+            encode_inclusion_proof(leaf, &path).unwrap()
+        };
+        for (leaf, entry) in entries.iter().enumerate() {
+            assert!(
+                proves(&proof(leaf as u64), leaf as u64, entry, size, &peak_hashes),
+                "{leaf}"
+            );
+        }
+        let forged = encode_inclusion_proof(0, &[]).unwrap();
+        assert!(!proves(&forged, 0, &entries[2], size, &peak_hashes));
+        assert!(!proves(&proof(2), 2, &entries[2], size, &peak_hashes[..1]));
     }
 
     /// `included_root` stays inside the profile's integers on a hostile
@@ -1589,7 +1730,7 @@ mod tests {
             &mut proof,
         )
         .unwrap();
-        assert!(!proves(&proof, 1, &entry, &[leaf_hash(&entry)]));
+        assert!(!proves(&proof, 1, &entry, 3, &[leaf_hash(&entry)]));
         assert!(inclusion_parts(b"not cbor").is_none());
         let ledger = corpus_ledger();
         let cps = crate::evidence_request_parity::corpus_checkpoints(&ledger, &key());

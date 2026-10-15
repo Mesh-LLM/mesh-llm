@@ -486,7 +486,7 @@ interoperability (M1–M5).
 | 0.1.4 release | **Released** 2026-10-12 22:41Z (#22) | releases |
 | #23 (model ids vs weights; unblocks Hugging Face twins) | Merged 2026-10-13 00:22Z, **unreleased** | #23; CHANGELOG "Unreleased" |
 | #8 settlement legs; #5, #15 referee | Merged | PRs |
-| `capsule-emit-evidence-request` 0.0.3 (receipts, deterministic refusal encoding) | Pinned `=0.0.3` from crates.io | #21; CHANGELOG 0.1.4 |
+| `evidence-request` 0.2.0 (the interop profile's envelope; was `capsule-emit-evidence-request` 0.0.3), `capsule-emit` 0.0.8, `checkpointed-local-log` 0.3.1 | Pinned `=0.2.0` from crates.io; one CLL line, no evidencebook | #21, #32; CHANGELOG "Unreleased" |
 | mesh-llm #2138 (exchange names both nodes) | Merged 2026-10-03 | README |
 | mesh-llm #2169 (wallet credited/fee on settlement) | Merged 2026-10-03 | mesh-llm #2169 |
 | mesh-llm #2299 (plugin key announced, bound to node key) | Merged 2026-10-08, **after v0.78.1** (latest release, 2026-10-05) | mesh-llm #2299; releases |
