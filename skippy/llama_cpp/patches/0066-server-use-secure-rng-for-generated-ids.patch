@@ -1,0 +1,38 @@
+From f251c127f11aa896a2a8fdcd967b0fdb90a34ca6 Mon Sep 17 00:00:00 2001
+From: benthecarman <benthecarman@live.com>
+Date: Wed, 7 Oct 2026 14:42:10 -0500
+Subject: [PATCH] server: use a secure RNG for generated IDs
+
+random_string() seeded a fresh mt19937 with a single 32-bit value from
+random_device on every call, so each 32-character ID could take at most
+2^32 distinct values instead of the ~190 bits the length suggests.
+These strings are used for completion, response and tool-call IDs, and
+completion IDs are looked up across all clients by the
+/v1/chat/completions/control endpoint.
+
+Draw every character from random_device directly. This also removes
+the small modulo bias of reducing generator output by the alphabet
+size.
+---
+ tools/server/server-common.cpp | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/tools/server/server-common.cpp b/tools/server/server-common.cpp
+index 77dbec5e13c2..0ec74a428dc2 100644
+--- a/tools/server/server-common.cpp
++++ b/tools/server/server-common.cpp
+@@ -112,12 +112,12 @@ std::string random_string() {
+     static const std::string str("0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz");
+ 
+     std::random_device rd;
+-    std::mt19937 generator(rd());
++    std::uniform_int_distribution<size_t> dist(0, str.size() - 1);
+ 
+     std::string result(32, ' ');
+ 
+     for (int i = 0; i < 32; ++i) {
+-        result[i] = str[generator() % str.size()];
++        result[i] = str[dist(rd)];
+     }
+ 
+     return result;
