@@ -13,9 +13,9 @@ pub const PREFILL_ADAPTIVE_MAX: usize = 512;
 pub const PREFILL_ADAPTIVE_TARGET_MS: f64 = 100.0;
 pub const PREFILL_CHUNK_POLICY: &str = "fixed";
 
-/// Completion ceiling when the client leaves its output budget unspecified.
-/// Serving clamps it to the remaining context window.
-pub const MAX_OUTPUT_TOKENS: u32 = 8192;
+/// No fixed completion ceiling when the client leaves its output budget unspecified.
+/// Serving resolves this sentinel to the remaining context window before decoding.
+pub const MAX_OUTPUT_TOKENS: u32 = u32::MAX;
 /// Default native-MTP proposal window when the operator sets no bound.
 ///
 /// On Qwen3.8-27B-UD-Q4_K_XL (RTX 5090, CUDA 13, 8192 context), depth one

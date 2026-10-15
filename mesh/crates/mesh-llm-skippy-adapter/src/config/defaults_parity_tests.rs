@@ -25,6 +25,8 @@ fn mesh_and_skippy_resolve_identical_default_stages_and_frontends() {
         })
         .unwrap();
         let mesh_frontend = resolved.to_embedded_openai_args(0, true).unwrap();
+        assert_eq!(mesh_frontend.default_max_tokens, u32::MAX);
+        assert_eq!(mesh_frontend.request_defaults.max_tokens, None);
         let mut skippy_frontend = InferenceOptions::direct_single_stage_defaults(
             "model".into(),
             skippy_config::local_serving::MAX_OUTPUT_TOKENS,

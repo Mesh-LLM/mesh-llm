@@ -438,19 +438,26 @@ fn omitted_max_tokens_can_use_remaining_context_budget() {
 }
 
 #[test]
-fn omitted_max_tokens_with_embedded_default_is_bounded() {
-    // Server picked DEFAULT_EMBEDDED_MAX_TOKENS as the cap because the
-    // client omitted max_tokens. With a large ctx window the cap is
-    // the binding limit.
+fn omitted_max_tokens_with_embedded_default_uses_remaining_context() {
     let limit = GenerationTokenLimit::from_request(None, DEFAULT_EMBEDDED_MAX_TOKENS);
-    let ctx_size = 32_000;
-    let resolved = limit.resolve(128, ctx_size).unwrap();
-    assert_eq!(resolved, DEFAULT_EMBEDDED_MAX_TOKENS);
-    assert!((resolved as usize) < ctx_size);
+    // The observed 593-token prompt must not inherit the old 8192-token cap.
+    assert_eq!(limit.resolve(593, 131_072).unwrap(), 130_479);
 }
 
 #[test]
-fn qwen35_incident_path_gets_bounded_output_and_native_reasoning_budget() {
+fn configured_and_explicit_output_limits_still_take_precedence() {
+    let configured = GenerationTokenLimit::from_request(None, 2048);
+    assert_eq!(configured.resolve(593, 131_072).unwrap(), 2048);
+    assert_eq!(configured.resolve(1000, 1024).unwrap(), 24);
+    for default in [2048, DEFAULT_EMBEDDED_MAX_TOKENS] {
+        let explicit = GenerationTokenLimit::from_request(Some(512), default);
+        assert_eq!(explicit.resolve(593, 131_072).unwrap(), 512);
+        assert_eq!(explicit.resolve(1000, 1024).unwrap(), 24);
+    }
+}
+
+#[test]
+fn context_budget_output_preserves_native_reasoning_budget() {
     let request: ChatCompletionRequest = serde_json::from_value(json!({
         "model": "unsloth/Qwen3.5-9B-GGUF:Q4_K_M",
         "messages": [{"role": "user", "content": "hello"}]
@@ -465,7 +472,7 @@ fn qwen35_incident_path_gets_bounded_output_and_native_reasoning_budget() {
     sampling.resolve_reasoning_budget(output_limit);
     let wire = wire_sampling_config(&sampling).expect("resolved sampling wire payload");
 
-    assert_eq!(output_limit, 8_192);
+    assert_eq!(output_limit, 31_872);
     assert_eq!(wire.reasoning_budget_tokens, 4_096);
 }
 

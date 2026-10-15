@@ -756,7 +756,7 @@ pub(in crate::frontend) enum GenerationTokenLimit {
     /// for the specific number, the server picked it.
     Default(u32),
     /// Caller didn't send `max_tokens` and the server is configured
-    /// with [`CONTEXT_BUDGET_MAX_TOKENS`] (opt-in unbounded). Use the
+    /// with [`CONTEXT_BUDGET_MAX_TOKENS`] (the shared default). Use the
     /// entire remaining context window.
     ContextBudget,
 }

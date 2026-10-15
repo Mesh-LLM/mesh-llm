@@ -6,10 +6,17 @@ at the pinned source in `job.json`, using Qwen3.5-4B Q4_K_M. It replays two cons
 Recorded histories remain intact; generated answers are not fed into later requests.
 This is bounded replay, not full-session recurrent-state certification or SkippyBench.
 
+See the [native differential findings](NATIVE_DIFFERENTIAL.md) for the focused
+Qwen3.5-4B comparison of prefill batching, sampling, and prefix restoration.
+
 Both measured trajectories and the separate four-turn warmup use the same numeric
-sampling profile, seed 42, explicit thinking off and unrestricted reasoning budget.
-Requests omit output-token limits. Mesh and upstream may have different server-default
-limits: any `length` finish fails the strict run, including during warmup. The runner
+sampling profile with temperature 0, seed 42, explicit thinking off and unrestricted
+reasoning budget. Temperature 0 selects greedy decoding; it does not guarantee
+identical output across engines with different numerical execution. The temperature-0
+harness version is distinct from earlier temperature-1 measurements.
+Requests omit output-token limits. Current Mesh defaults to the remaining context
+budget; older builds may retain a fixed server cap. Any `length` finish fails the
+strict run, including during warmup. The runner
 retains the offending response's usage, finish, output-shape counts and integrity
 problems, stops issuing requests, and shuts down its owned server. It never skips a
 bad warmup to obtain a passing score. Tool checks validate JSON structure, not semantic

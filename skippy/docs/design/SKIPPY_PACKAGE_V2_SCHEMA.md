@@ -227,8 +227,8 @@ Request fields resolve independently in this order:
 3. selected package profile;
 4. Mesh fallback.
 
-When all higher layers omit limits, total output is capped at the lesser of
-8,192 tokens and the context remaining after the prompt. Reasoning receives the
+When all higher layers omit limits, total output can use the context remaining
+after the prompt, with no fixed completion cap. Reasoning receives the
 lesser of 4,096 tokens and half the effective output cap. Semantic reasoning
 levels map to 1,024 (`low`), 4,096 (`medium`), and 8,192 (`high`), then clamp to
 half the output cap. Numeric values are explicit and may exceed those

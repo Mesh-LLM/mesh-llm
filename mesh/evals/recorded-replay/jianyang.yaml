@@ -35,7 +35,7 @@ templates:
     budget: { max_usd: 0, max_duration_s: 43200, grace_s: 600 }
     harness:
       name: custom
-      version: recorded-agentic-aligned-v2
+      version: recorded-agentic-greedy-v3
       trace:
         kind: file
         ref: thoughtworks/agentic-coding-trajectories@cef72d1f4d0caabf85937adf8337a14b7522c782/sessions.parquet
@@ -47,6 +47,7 @@ templates:
       args:
         job: mesh/evals/recorded-replay/job.json
         thinking: false
+        temperature: 0
         output_limit: server-default
         require_complete_output: true
         timing: first-event_last-event_DONE

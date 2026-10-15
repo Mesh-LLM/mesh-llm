@@ -270,6 +270,11 @@ mod selection_tests {
             )
             .unwrap();
             assert_eq!(requests[0].len(), 50);
+            assert!(
+                requests[0]
+                    .iter()
+                    .all(|turn| turn.body["temperature"] == 0.0)
+            );
             assert_eq!(requests[0][0].assistant_turn, case.start);
             assert_eq!(
                 requests[0][0].body["messages"].as_array().unwrap().len(),
@@ -280,6 +285,10 @@ mod selection_tests {
                 false
             );
             assert!(requests[0][0].body.get("max_tokens").is_none());
+            assert_eq!(
+                manifest["cohorts"]["warmup"][0]["replay_sampling"]["temperature"],
+                0.0
+            );
             assert_eq!(
                 manifest["cohorts"]["warmup"][0]["replay_sampling"]["enable_thinking"],
                 false

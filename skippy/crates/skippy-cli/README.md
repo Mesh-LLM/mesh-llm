@@ -71,7 +71,7 @@ skippy serve --model Qwen3-0.6B-Q4_K_M --prompt
 ```
 
 Serving defaults are owned by Skippy and shared with Mesh. Both use an
-8,192-token completion ceiling, clamped to remaining context space, automatic
+output budget equal to the remaining context space, automatic
 chat compaction, and disabled compatibility guardrails. Memory-aware context
 and concurrency planning, F16 KV, 512-token batch/microbatch limits, prefix
 caching, and prefill policies also use the same defaults. Automatic speculation

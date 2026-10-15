@@ -17,20 +17,12 @@ static OPENAI_PROCESS_NONCE: OnceLock<String> = OnceLock::new();
 /// request consume the entire remaining context window when the client
 /// also omits max_tokens".
 ///
-/// This is opt-in and should only be wired in by callers that have made
-/// a deliberate decision to allow unbounded chat completions. The
-/// embedded mesh-llm wiring uses [`DEFAULT_EMBEDDED_MAX_TOKENS`] instead.
+/// This is the shared default for standalone Skippy and embedded Mesh serving.
 pub const CONTEXT_BUDGET_MAX_TOKENS: u32 = u32::MAX;
 
 /// Default max completion tokens for embedded mesh-llm chat serving when
-/// the client omits max_tokens. Bounded so that an adversarial or
-/// non-terminating generation cannot run for the full context window.
-/// Clients can still request more by sending max_tokens explicitly, up
-/// to the remaining context budget.
-///
-/// When the configured context window is smaller than this value, the
-/// request is silently clamped to whatever remaining budget exists
-/// rather than rejected — see `GenerationTokenLimit::resolve`.
+/// the client omits max_tokens. Use the remaining context window, matching
+/// standalone serving. Explicit request and operator limits still take precedence.
 pub const DEFAULT_EMBEDDED_MAX_TOKENS: u32 = skippy_config::local_serving::MAX_OUTPUT_TOKENS;
 pub(in crate::frontend) const GENERATION_RETRY_AFTER_SECS: u64 = 1;
 pub(in crate::frontend) const MAX_EXACT_REPLAY_TOKENS: usize = 8;
