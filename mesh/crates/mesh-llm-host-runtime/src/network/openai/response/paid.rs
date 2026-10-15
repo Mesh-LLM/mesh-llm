@@ -283,7 +283,7 @@ async fn admission_eligibility(
     };
     let cap = max_total_msat;
     ensure!(
-        budget.available_msat > 0 && budget.intent.permits(price, cap),
+        budget.available_msat > 0 && budget.intent.permits(price),
         "seller prices or remaining budget exceed the spending policy"
     );
     Ok(cap)

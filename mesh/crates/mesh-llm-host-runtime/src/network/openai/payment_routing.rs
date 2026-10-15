@@ -44,11 +44,12 @@ pub(super) async fn rank(
             InferenceTarget::Local(_) => Some((0, 0)),
             InferenceTarget::Remote(peer) => match prices.get(peer) {
                 Some(price) => {
-                    // No prompt estimate: order by the output allowance's
-                    // cost, input rate breaking ties.
-                    let cost = price.output_charge(max_output).ok()?;
-                    let total = mesh_llm_payments_types::pricing::payment_cap_msat(cost).ok()?;
-                    (intent.permits(price, total) && total <= available)
+                    // The daily budget only gates new work: any allowance left
+                    // admits it, and admitted work settles even past the budget.
+                    // Price order uses the output allowance's cost, input rate
+                    // breaking ties; it is ordering, not a spending check.
+                    let cost = price.output_charge(max_output).unwrap_or(u64::MAX);
+                    (intent.permits(price) && available > 0)
                         .then_some((1, cost.saturating_add(price.input_msat_per_million)))
                 }
                 None => Some((2, 0)),
