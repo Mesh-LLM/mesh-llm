@@ -88,16 +88,16 @@
 //! can change a byte), and the signed envelope. A refusal is the crate's
 //! refusal object. The carrier is plugin-internal, not a standardized wire.
 
-use capsule_emit_evidence_request::answer::{self, BuildError, MAX_RECORDS};
-use capsule_emit_evidence_request::digest::request_digest;
-use capsule_emit_evidence_request::jcs;
-use capsule_emit_evidence_request::refusal;
-use capsule_emit_evidence_request::registry::Reason;
-use capsule_emit_evidence_request::request::{self, Coverage, Derivation, Request, Subject};
-use capsule_emit_evidence_request::resolve::{self, Resolution, ResolvedAnchor};
-use capsule_emit_evidence_request::time::parse_utc;
 use cll::mmr::leaf_count;
 use ed25519_dalek::{Signer, SigningKey};
+use evidence_request::answer::{self, BuildError, MAX_RECORDS};
+use evidence_request::digest::request_digest;
+use evidence_request::jcs;
+use evidence_request::refusal;
+use evidence_request::registry::Reason;
+use evidence_request::request::{self, Coverage, Derivation, Request, Subject};
+use evidence_request::resolve::{self, Resolution, ResolvedAnchor};
+use evidence_request::time::parse_utc;
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 use std::path::Path;
@@ -338,7 +338,7 @@ fn requester(
     map: &Map<String, Value>,
     form: Form,
     req: &Request,
-    now: capsule_emit_evidence_request::time::UtcTime,
+    now: evidence_request::time::UtcTime,
     responder: &Responder<'_>,
     asker: &mut Asker,
 ) -> Result<Option<Principal>, Reason> {

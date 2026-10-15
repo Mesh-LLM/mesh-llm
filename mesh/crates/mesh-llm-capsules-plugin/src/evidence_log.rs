@@ -35,14 +35,14 @@ use std::io::{BufRead, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use capsule_emit_evidence_request::answer::{EvidenceLog, Record};
-use capsule_emit_evidence_request::registry::{SubjectForm, DERIVATION_HISTORY_CARD};
-use capsule_emit_evidence_request::request::Derivation;
-use capsule_emit_evidence_request::resolve::{Anchor, Responder};
 use cll::checkpoint::CheckpointRecord;
 use cll::mmr::{
     add_leaf, leaf_count, leaf_hash, peaks, root_from_peaks, MemoryNodeStore, NodeReader,
 };
+use evidence_request::answer::{EvidenceLog, Record};
+use evidence_request::registry::{SubjectForm, DERIVATION_HISTORY_CARD};
+use evidence_request::request::Derivation;
+use evidence_request::resolve::{Anchor, Responder};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 

@@ -551,7 +551,7 @@ pub async fn handle_mesh_evidence_request(
     };
     Ok(serde_json::json!({
         "answer": answer,
-        "request_digest": capsule_emit_evidence_request::digest::request_digest(&request_bytes),
+        "request_digest": evidence_request::digest::request_digest(&request_bytes),
         "verification": verification,
     }))
 }

@@ -43,9 +43,9 @@
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Mutex, OnceLock, PoisonError};
 
-use capsule_emit_evidence_request::jcs;
-use capsule_emit_evidence_request::time::UtcTime;
 use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
+use evidence_request::jcs;
+use evidence_request::time::UtcTime;
 use serde_json::{json, Map, Value};
 
 /// The request member the signature travels in.

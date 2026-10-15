@@ -15,6 +15,11 @@
 
 ### Changed
 
+- **The evidence request protocol crate is now `evidence-request`** (`=0.1.0`), which
+  `capsule-emit-evidence-request` became when it moved to agent-action-capsule, next to
+  draft-mih-agent-evidence-request-00 and its conformance vectors. 0.1.0 has 0.0.4's API: 0.0.3's,
+  plus requests in the CBOR binding are accepted only in core deterministic encoding. Paths read
+  `evidence_request::` in place of `capsule_emit_evidence_request::`.
 - **Who asks for evidence is now proven, not stated. Upgrade both nodes.** Each evidence request
   this node sends is signed with the key its host announces for it. The request carries
   `requester_auth` (`key_id`, `sig`), an `audience` (the node it is sent to), a `nonce` and a

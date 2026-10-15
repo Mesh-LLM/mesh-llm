@@ -113,10 +113,12 @@ capsule-emit-lib = { package = "capsule-emit", version = "0.0.6" }
 cll = { package = "checkpointed-local-log", version = "0.2.1" }
 # Evidence requests are answered in-process (`evidence_answer`): parsing,
 # resolution, signed refusals and the artifact answer come from the protocol
-# crate (draft-mih-agent-evidence-request-00). Pinned exactly: a new release
-# may change what verifies. 0.0.4 takes its witness-receipt checks from the
-# crates.io scitt-cose-receipt.
-capsule-emit-evidence-request = "=0.0.4"
+# crate (draft-mih-agent-evidence-request-00), `evidence-request`, which is
+# what `capsule-emit-evidence-request` became when it moved to
+# agent-action-capsule. Pinned exactly: 0.1.0 is 0.0.4's API (0.0.3's plus
+# requests parsed as core deterministic CBOR only), and a new release may
+# change what verifies.
+evidence-request = "=0.1.0"
 # The witness's own record of this log (`witness_status`): one blocking GET,
 # no redirects, a capped body. Already in the tree through capsule-emit.
 ureq = { version = "2", features = ["json"] }

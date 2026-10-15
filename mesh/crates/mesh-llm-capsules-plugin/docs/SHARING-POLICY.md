@@ -89,7 +89,7 @@ request is answered, and a signature that fails any check is still refused.
 
 **Evidence requests** (`evidence-request/1`, draft-mih-agent-evidence-request-00)
 are answered in-process by `evidence_answer.rs`, with the protocol from the
-`capsule-emit-evidence-request` crate. The same rule applies to every record
+`evidence-request` crate. The same rule applies to every record
 an answer would carry, for every subject that carries record bodies (`record`,
 `range`, `full_history`, `correlation`, `exchange`). An answer is served whole
 or refused `not_authorized` whole, never filtered per asker, because an
@@ -99,7 +99,7 @@ artifact is the same for every requester.
 the key its host announces for it (mesh-llm `plugin_keys.v1`), in a
 `requester_auth` member: `{"key_id", "sig"}`, where `sig` is Ed25519 over
 `evidence-request/1/requester-auth`, a zero byte, and the canonical JSON (RFC
-8785, as the `capsule-emit-evidence-request` crate encodes it) of the rest of
+8785, as the `evidence-request` crate encodes it) of the rest of
 the request. A signed request also carries an `audience` (the mesh id of the
 node it is sent to), a `nonce` and a `deadline`.
 

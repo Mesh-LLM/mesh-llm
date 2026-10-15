@@ -30,6 +30,6 @@ checks that they do. The referee's mutants are listed in
 `referee/mutants.json`, each with the cases that must catch it;
 `scripts/referee-mutants.sh` builds each and checks it fails on those cases.
 
-Evidence-request protocol answers are judged by the
-`capsule-emit-evidence-request` crate's own conformance vectors, not by these
-goldens.
+Evidence-request protocol answers are judged by the draft's conformance
+vectors (agent-action-capsule `vectors/evidence-request/`, which the
+`evidence-request` crate is tested against), not by these goldens.

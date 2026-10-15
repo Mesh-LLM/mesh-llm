@@ -343,12 +343,12 @@ async fn responder_answers_an_evidence_request_in_process() {
         serde_json::from_slice(&ask_over_stream(stream, request_bytes).await)
             .expect("a JSON answer");
 
-    let check = capsule_emit_evidence_request::refusal::check(&response);
+    let check = evidence_request::refusal::check(&response);
     assert!(check.conformant, "a conforming, signed refusal: {response}");
     assert_eq!(response["reason"], "coverage_unsatisfiable");
     assert_eq!(
         response["request_digest"],
-        capsule_emit_evidence_request::digest::request_digest(request_bytes)
+        evidence_request::digest::request_digest(request_bytes)
     );
     assert!(
         received.lock().await.is_empty(),
@@ -391,13 +391,13 @@ async fn standard_history_is_one_signed_refusal_to_every_non_counterparty_by_def
             serde_json::from_slice(&ask_over_stream(stream, request.as_bytes()).await)
                 .expect("a JSON answer");
         assert!(
-            capsule_emit_evidence_request::refusal::check(&response).conformant,
+            evidence_request::refusal::check(&response).conformant,
             "a conforming, signed refusal: {response}"
         );
         assert_eq!(response["reason"], "policy_declined", "{response}");
         assert_eq!(
             response["request_digest"],
-            capsule_emit_evidence_request::digest::request_digest(request.as_bytes())
+            evidence_request::digest::request_digest(request.as_bytes())
         );
         let members = response.as_object_mut().unwrap();
         let mut names: Vec<&str> = members.keys().map(String::as_str).collect();

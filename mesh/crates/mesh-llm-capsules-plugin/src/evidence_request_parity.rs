@@ -19,11 +19,11 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use capsule_emit_evidence_request::digest::request_digest;
-use capsule_emit_evidence_request::refusal;
 use cll::checkpoint::{sign_checkpoint_digest, CheckpointRecord, WitnessRecord};
 use cll::mmr::{add_leaf, leaf_hash, peaks, root_from_peaks, MemoryNodeStore, NodeReader};
 use ed25519_dalek::SigningKey;
+use evidence_request::digest::request_digest;
+use evidence_request::refusal;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 

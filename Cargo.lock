@@ -1154,23 +1154,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "capsule-emit-evidence-request"
-version = "0.0.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "10cc7c4a8e643a934927712acd47daff4841c2ecfa2db3a29c4b633252eef0bd"
-dependencies = [
- "base64 0.22.1",
- "checkpointed-local-log",
- "ciborium",
- "coset",
- "ed25519-dalek 2.2.0",
- "hex",
- "serde_json",
- "sha2 0.10.9",
- "thiserror 1.0.69",
-]
-
-[[package]]
 name = "cargo-platform"
 version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3045,6 +3028,23 @@ checksum = "8be9f3dfaaffdae2972880079a491a1a8bb7cbed0b8dd7a347f668b4150a3b93"
 dependencies = [
  "event-listener",
  "pin-project-lite",
+]
+
+[[package]]
+name = "evidence-request"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cb3587833cd210019ceb1f2b4a8380686d1d0d448ea3bd34f626484b8bb714cc"
+dependencies = [
+ "base64 0.22.1",
+ "checkpointed-local-log",
+ "ciborium",
+ "coset",
+ "ed25519-dalek 2.2.0",
+ "hex",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror 1.0.69",
 ]
 
 [[package]]
@@ -5024,11 +5024,11 @@ dependencies = [
  "axum 0.7.9",
  "base64 0.22.1",
  "capsule-emit",
- "capsule-emit-evidence-request",
  "checkpointed-local-log",
  "chrono",
  "coset",
  "ed25519-dalek 2.2.0",
+ "evidence-request",
  "hex",
  "libc",
  "mesh-llm-plugin",
