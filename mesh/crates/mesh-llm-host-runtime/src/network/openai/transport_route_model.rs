@@ -6,6 +6,8 @@ use crate::network::openai::routing_rank::{RankedCandidates, rank_targets_by_con
 use crate::network::reservations::RoutingReservation;
 
 pub(crate) struct RouteModelRequestContext<'a> {
+    /// Peer ingress may execute local targets only, never discover a fallback peer.
+    pub(crate) local_execution_only: bool,
     pub(crate) exchange_id: Option<&'a str>,
     pub(crate) required_tokens: Option<u32>,
     pub(crate) affinity: &'a AffinityRouter,
@@ -77,6 +79,7 @@ pub async fn route_model_request(
         targets,
         model,
         request,
+        local_execution_only: context.local_execution_only,
         exchange_id: context.exchange_id,
         required_tokens: context.required_tokens,
         affinity: context.affinity,
@@ -89,6 +92,7 @@ pub async fn route_model_request(
 }
 
 struct RouteModelRequestArgs<'a> {
+    local_execution_only: bool,
     node: mesh::Node,
     tcp_stream: ClientStream,
     targets: &'a election::ModelTargets,
@@ -146,6 +150,32 @@ async fn cache_target_for_request(
     selected
 }
 
+async fn execution_candidates(
+    node: &mesh::Node,
+    model: &str,
+    request: &BufferedHttpRequest,
+    targets: &election::ModelTargets,
+    local_execution_only: bool,
+) -> Vec<election::InferenceTarget> {
+    if local_execution_only {
+        let local = targets
+            .candidates(model)
+            .into_iter()
+            .filter(|target| matches!(target, election::InferenceTarget::Local(_)))
+            .collect::<Vec<_>>();
+        super::super::workload_routing::eligible_targets(node, model, &request.client_path, &local)
+            .await
+    } else {
+        super::super::workload_routing::ingress_candidates(
+            node,
+            model,
+            &request.client_path,
+            targets,
+        )
+        .await
+    }
+}
+
 fn clear_peer_capsule(sink: Option<&PeerCapsuleIdSink>) {
     if let Some(sink) = sink {
         sink.take();
@@ -186,14 +216,10 @@ async fn prepare_model_candidates(
     request: &BufferedHttpRequest,
     required_tokens: Option<u32>,
     affinity: &AffinityRouter,
+    local_execution_only: bool,
 ) -> Result<PreparedModelCandidates, ModelRouteRejection> {
-    let candidates = super::super::workload_routing::ingress_candidates(
-        node,
-        model,
-        &request.client_path,
-        targets,
-    )
-    .await;
+    let candidates =
+        execution_candidates(node, model, request, targets, local_execution_only).await;
     let mut ranked = rank_targets_by_context(node, model, required_tokens, &candidates).await;
     let payment_ranked = crate::network::openai::payment_routing::rank(
         node,
@@ -229,6 +255,7 @@ async fn route_model_request_inner(args: RouteModelRequestArgs<'_>) -> RouteDisp
         targets,
         model,
         request,
+        local_execution_only,
         required_tokens,
         exchange_id,
         affinity,
@@ -243,8 +270,16 @@ async fn route_model_request_inner(args: RouteModelRequestArgs<'_>) -> RouteDisp
         ranked,
         ordered_candidates,
         payment_ranked,
-    } = match prepare_model_candidates(&node, targets, model, request, required_tokens, affinity)
-        .await
+    } = match prepare_model_candidates(
+        &node,
+        targets,
+        model,
+        request,
+        required_tokens,
+        affinity,
+        local_execution_only,
+    )
+    .await
     {
         Ok(prepared) => prepared,
         Err(rejection) => return rejection.respond(tcp_stream, route_observer).await,
@@ -1215,6 +1250,7 @@ mod tests {
             model,
             &request,
             RouteModelRequestContext {
+                local_execution_only: false,
                 exchange_id: None,
                 required_tokens: None,
                 affinity: &affinity,

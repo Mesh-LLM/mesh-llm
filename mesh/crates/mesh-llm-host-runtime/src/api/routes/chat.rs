@@ -82,9 +82,11 @@ pub(super) async fn handle(
             // payment gate charges (or refuses) it like any other remote peer.
             let _remote_origin = match caller {
                 CallerTrust::TrustedLocal => None,
-                CallerTrust::Untrusted => Some(crate::network::tunnel::RemoteBridge::register(
-                    upstream.local_addr()?,
-                )?),
+                CallerTrust::Untrusted => Some(
+                    crate::network::management_origin::UntrustedManagementRequest::register(
+                        upstream.local_addr()?,
+                    )?,
+                ),
             };
             let rewritten = if is_openai_passthrough {
                 req.to_string()

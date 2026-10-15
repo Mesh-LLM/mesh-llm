@@ -1045,6 +1045,11 @@ impl InferenceBackend for StageOpenAiBackend {
                 } else {
                     None
                 };
+                crate::frontend::generation::tool_output_validation::validate(
+                    &request,
+                    output.finish_reason,
+                    parsed_message.as_ref(),
+                )?;
                 let parsed_message = apply_reasoning_visibility(parsed_message, &template_options);
                 let response = chat_response_from_generated_text(
                     request.model.clone(),
@@ -1944,14 +1949,14 @@ impl StageOpenAiBackend {
                     output.queue_wait_ms = admission_wait_ms;
                     backend.observe_generation_completed(&output, demand);
                     let finish_reason = if let Some(parser) = chat_stream_parser.as_mut() {
-                        match parser.finish(&output.text) {
-                            Ok(events) => {
+                        match parser.finish(&output.text, output.finish_reason) {
+                            Ok((events, reason)) => {
                                 for event in events {
                                     if sender.send_terminal(Ok(event)).is_err() {
                                         return;
                                     }
                                 }
-                                parser.finish_reason(output.finish_reason)
+                                reason
                             }
                             Err(error) => {
                                 let _ = sender.send_terminal(Err(error));

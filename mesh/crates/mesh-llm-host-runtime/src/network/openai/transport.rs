@@ -1905,6 +1905,7 @@ pub(crate) async fn test_paid_multi_target(
         "test",
         &request,
         RouteModelRequestContext {
+            local_execution_only: false,
             exchange_id: Some("multi-provider-exchange"),
             required_tokens: None,
             affinity: &AffinityRouter::new(),

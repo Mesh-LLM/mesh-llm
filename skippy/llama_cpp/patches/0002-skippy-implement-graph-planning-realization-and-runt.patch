@@ -1,4 +1,4 @@
-From 788a2d5585b53573899dcaa7835efe705faf5dd4 Mon Sep 17 00:00:00 2001
+From 8468ce44742f0381fb5089f2dc5d0e2f8bdb532a Mon Sep 17 00:00:00 2001
 From: James Dumay <jameswdumay@gmail.com>
 Date: Sat, 19 Sep 2026 15:17:16 +1000
 Subject: [PATCH] skippy: implement graph planning realization and runtime
@@ -6,20 +6,20 @@ Subject: [PATCH] skippy: implement graph planning realization and runtime
 ---
  src/skippy-verify-checkpoint.h          |   24 +
  src/skippy/abi.cpp                      |   57 ++
- src/skippy/activation.cpp               |  995 +++++++++++++++++++
+ src/skippy/activation.cpp               | 1000 +++++++++++++++++++
  src/skippy/activation_internal.h        |   86 ++
  src/skippy/activation_layout.cpp        |  171 ++++
  src/skippy/block_boundaries.cpp         |   64 ++
  src/skippy/block_boundaries.h           |   42 +
  src/skippy/devices.cpp                  |  106 ++
  src/skippy/environment.h                |   49 +
- src/skippy/errors.h                     |   44 +
+ src/skippy/errors.h                     |   66 ++
  src/skippy/events.cpp                   |  243 +++++
  src/skippy/events_internal.h            |   35 +
  src/skippy/executable_graph.cpp         |  329 +++++++
  src/skippy/executable_graph.h           |   37 +
- src/skippy/execution-batch.cpp          |  417 ++++++++
- src/skippy/execution-single.cpp         |  613 ++++++++++++
+ src/skippy/execution-batch.cpp          |  422 ++++++++
+ src/skippy/execution-single.cpp         |  619 ++++++++++++
  src/skippy/execution_internal.h         |   20 +
  src/skippy/glm_dsa.cpp                  |  857 +++++++++++++++++
  src/skippy/glm_dsa.h                    |   14 +
@@ -29,9 +29,9 @@ Subject: [PATCH] skippy: implement graph planning realization and runtime
  src/skippy/graph_identity.cpp           | 1092 +++++++++++++++++++++
  src/skippy/graph_identity.h             |   71 ++
  src/skippy/model_lifecycle.cpp          |  155 +++
- src/skippy/model_load_config.cpp        |  186 ++++
+ src/skippy/model_load_config.cpp        |  194 ++++
  src/skippy/model_load_config_internal.h |   25 +
- src/skippy/model_loading.cpp            | 1174 +++++++++++++++++++++++
+ src/skippy/model_loading.cpp            | 1172 +++++++++++++++++++++++
  src/skippy/model_loading_internal.h     |   38 +
  src/skippy/model_package.cpp            |  782 +++++++++++++++
  src/skippy/model_source.cpp             |  457 +++++++++
@@ -41,8 +41,8 @@ Subject: [PATCH] skippy: implement graph planning realization and runtime
  src/skippy/runtime_types.h              |  173 ++++
  src/skippy/sampling.cpp                 |  961 +++++++++++++++++++
  src/skippy/sampling_internal.h          |   49 +
- src/skippy/session.cpp                  |  483 ++++++++++
- src/skippy/speculative_decoding.cpp     |  531 ++++++++++
+ src/skippy/session.cpp                  |  527 ++++++++++
+ src/skippy/speculative_decoding.cpp     |  547 +++++++++++
  src/skippy/speculative_internal.h       |   32 +
  src/skippy/stage_plan.cpp               |  632 ++++++++++++
  src/skippy/stage_realization.cpp        |  247 +++++
@@ -54,7 +54,7 @@ Subject: [PATCH] skippy: implement graph planning realization and runtime
  src/skippy/state_effects.h              |   74 ++
  src/skippy/tokenization.cpp             |  179 ++++
  src/skippy/verification.cpp             |  265 +++++
- 50 files changed, 14714 insertions(+)
+ 50 files changed, 14818 insertions(+)
  create mode 100644 src/skippy-verify-checkpoint.h
  create mode 100644 src/skippy/abi.cpp
  create mode 100644 src/skippy/activation.cpp
@@ -5993,7 +5993,7 @@ index 000000000..caa9fcd6d
 +} // extern "C"
 diff --git a/src/skippy/model_load_config.cpp b/src/skippy/model_load_config.cpp
 new file mode 100644
-index 000000000..7a3e0fe09
+index 000000000..22aa384f8
 --- /dev/null
 +++ b/src/skippy/model_load_config.cpp
 @@ -0,0 +1,194 @@
@@ -6224,7 +6224,7 @@ index 000000000..0f7c83139
 +        llama_context_params & params);
 diff --git a/src/skippy/model_loading.cpp b/src/skippy/model_loading.cpp
 new file mode 100644
-index 000000000..20b7abad7
+index 000000000..460cf5688
 --- /dev/null
 +++ b/src/skippy/model_loading.cpp
 @@ -0,0 +1,1172 @@
@@ -10113,10 +10113,10 @@ index 000000000..9f819704f
 +llama_token skippy_sample_token(skippy_session * session, const skippy_sampling_config * sampling);
 diff --git a/src/skippy/session.cpp b/src/skippy/session.cpp
 new file mode 100644
-index 000000000..d5cce47f2
+index 000000000..e1cdcaab6
 --- /dev/null
 +++ b/src/skippy/session.cpp
-@@ -0,0 +1,483 @@
+@@ -0,0 +1,527 @@
 +#include "skippy.h"
 +#include "skippy/errors.h"
 +#include "skippy/environment.h"
@@ -10377,6 +10377,48 @@ index 000000000..d5cce47f2
 +    return skippy_success(out_error);
 +}
 +
++enum skippy_status skippy_session_restore_token_history(
++        struct skippy_session * session,
++        const llama_token * token_ids,
++        size_t token_count,
++        struct skippy_error ** out_error) {
++    if (session == nullptr || session->ctx == nullptr || session->stage_model == nullptr ||
++            (token_count > 0 && token_ids == nullptr)) {
++        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "session and token history are required");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
++    if (session->n_past < 0 || token_count != static_cast<size_t>(session->n_past)) {
++        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "token history must match the imported session position");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
++    const auto status = skippy_require_usable_session(session, out_error);
++    if (status != SKIPPY_STATUS_OK) {
++        return status;
++    }
++    try {
++        // State payloads contain tensors, not sampler history. Absolute indices
++        // keep grammar start and penalty windows identical to a cold prefill.
++        std::vector<llama_token> history;
++        if (token_count > 0) {
++            history.assign(token_ids, token_ids + token_count);
++        }
++        const std::string metadata = session->chat_sampling_metadata;
++        const skippy_sampling_config sampling = session->sampling_config;
++        const bool sampling_valid = session->sampling_config_valid;
++        const uint64_t generated_start = session->grammar_generated_start;
++        session->token_history.swap(history);
++        skippy_clear_chat_sampling(session);
++        if (!metadata.empty()) {
++            return skippy_session_configure_chat_sampling(session, sampling_valid ? &sampling : nullptr,
++                    metadata.c_str(), generated_start, out_error);
++        }
++        return skippy_success(out_error);
++    } catch (const std::exception & e) {
++        skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, e.what());
++        return SKIPPY_STATUS_RUNTIME_ERROR;
++    }
++}
++
 +enum skippy_status skippy_session_sample_current(
 +        struct skippy_session * session,
 +        const struct skippy_sampling_config * sampling,
@@ -10431,10 +10473,12 @@ index 000000000..d5cce47f2
 +        skippy_refresh_backend_sampling(session, sampling);
 +    } catch (const std::exception & e) {
 +        skippy_clear_chat_sampling(session);
-+        return skippy_success(out_error);
++        skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, e.what());
++        return SKIPPY_STATUS_RUNTIME_ERROR;
 +    } catch (...) {
 +        skippy_clear_chat_sampling(session);
-+        return skippy_success(out_error);
++        skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "failed to configure chat sampling");
++        return SKIPPY_STATUS_RUNTIME_ERROR;
 +    }
 +    return skippy_success(out_error);
 +}
@@ -15181,5 +15225,5 @@ index 000000000..3ccd2f6a4
 +
 +} // extern "C"
 -- 
-2.54.0 (Apple Git-157)
+2.56.0
 

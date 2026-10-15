@@ -80,6 +80,24 @@ fn validate_native_sequence_id(sequence_id: i32) -> Result<i32> {
 unsafe impl Send for StageSession {}
 
 impl StageSession {
+    /// Restore the actual prefix tokens after importing KV/recurrent state.
+    /// Native sampling retains its chat configuration and restarts acceptance
+    /// over this history, including penalties and generated-token grammar state.
+    pub fn restore_token_history(&mut self, token_ids: &[i32]) -> Result<()> {
+        let mut error = ptr::null_mut();
+        // SAFETY: the session is owned by self and the token slice remains valid
+        // for the call; native code copies the tokens and checks its position.
+        let status = unsafe {
+            skippy_ffi::skippy_session_restore_token_history(
+                self.raw,
+                token_ids.as_ptr(),
+                token_ids.len(),
+                &mut error,
+            )
+        };
+        ensure_ok(status, error)
+    }
+
     /// Graph reuse counters for this session's llama context.
     ///
     /// `n_reused` counts compute graphs reused instead of rebuilt; `n_eval`

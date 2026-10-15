@@ -122,6 +122,7 @@ pub(super) fn prepare(context: &Context<'_>) -> DynResult<Prepared> {
         prompt_token_range: None,
         min_cache_pct: None,
         require_output_match: false,
+        require_complete_output: false,
         max_ttft_regression_pct: None,
         resume: false,
         dataset: Some(dataset),

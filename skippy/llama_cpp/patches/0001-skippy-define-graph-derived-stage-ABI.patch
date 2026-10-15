@@ -1,4 +1,4 @@
-From 11d8f884b831dbd3e4d0cf41e7953e776e233125 Mon Sep 17 00:00:00 2001
+From 1d0062b666a1fc6f89782486ad1782e3bdc5b477 Mon Sep 17 00:00:00 2001
 From: James Dumay <jameswdumay@gmail.com>
 Date: Sat, 19 Sep 2026 15:17:03 +1000
 Subject: [PATCH] skippy: define graph-derived stage ABI
@@ -6,20 +6,20 @@ Subject: [PATCH] skippy: define graph-derived stage ABI
 ---
  include/skippy.h                      |  28 +++
  include/skippy/activation.h           |  66 +++++++
- include/skippy/common.h               | 142 ++++++++++++++
+ include/skippy/common.h               | 142 +++++++++++++
  include/skippy/devices.h              |  56 ++++++
- include/skippy/events.h               | 229 ++++++++++++++++++++++
- include/skippy/execution.h            | 264 ++++++++++++++++++++++++++
+ include/skippy/events.h               | 229 +++++++++++++++++++++
+ include/skippy/execution.h            | 264 +++++++++++++++++++++++++
  include/skippy/model_package.h        |  93 +++++++++
  include/skippy/model_source.h         |  84 ++++++++
- include/skippy/runtime.h              | 264 ++++++++++++++++++++++++++
- include/skippy/sampling.h             |  74 ++++++++
- include/skippy/signals.h              |  53 ++++++
+ include/skippy/runtime.h              | 275 ++++++++++++++++++++++++++
+ include/skippy/sampling.h             |  74 +++++++
+ include/skippy/signals.h              |  53 +++++
  include/skippy/speculative_decoding.h |  71 +++++++
- include/skippy/stage_plan.h           | 250 ++++++++++++++++++++++++
+ include/skippy/stage_plan.h           | 250 +++++++++++++++++++++++
  include/skippy/state.h                | 187 ++++++++++++++++++
- include/skippy/tokenization.h         |  85 +++++++++
- 15 files changed, 1946 insertions(+)
+ include/skippy/tokenization.h         |  85 ++++++++
+ 15 files changed, 1957 insertions(+)
  create mode 100644 include/skippy.h
  create mode 100644 include/skippy/activation.h
  create mode 100644 include/skippy/common.h
@@ -1048,10 +1048,10 @@ index 000000000..5d77f4804
 +#endif // SKIPPY_MODEL_SOURCE_H
 diff --git a/include/skippy/runtime.h b/include/skippy/runtime.h
 new file mode 100644
-index 000000000..97989af15
+index 000000000..78d3ec976
 --- /dev/null
 +++ b/include/skippy/runtime.h
-@@ -0,0 +1,264 @@
+@@ -0,0 +1,275 @@
 +#ifndef SKIPPY_RUNTIME_H
 +#define SKIPPY_RUNTIME_H
 +
@@ -1284,6 +1284,17 @@ index 000000000..97989af15
 +LLAMA_API enum skippy_status skippy_session_set_position(
 +        struct skippy_session * session,
 +        int32_t n_past,
++        struct skippy_error ** out_error);
++
++/** @brief Restores token history after importing cached model state.
++ * The count must equal the imported session position and the IDs must describe
++ * that prefix. Call before suffix prefill or sampling. Rebuilds sampler/grammar
++ * history while retaining the current request's chat sampling configuration.
++ */
++LLAMA_API enum skippy_status skippy_session_restore_token_history(
++        struct skippy_session * session,
++        const llama_token * token_ids,
++        size_t token_count,
 +        struct skippy_error ** out_error);
 +
 +/** @brief Samples the current logits using the supplied sampling configuration. */
@@ -2073,5 +2084,5 @@ index 000000000..c9697cf6c
 +
 +#endif // SKIPPY_TOKENIZATION_H
 -- 
-2.54.0 (Apple Git-157)
+2.56.0
 

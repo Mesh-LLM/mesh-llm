@@ -94,7 +94,12 @@ fn concatenated_wire_fragments_equal_the_non_streaming_arguments() {
         "a client concatenating fragments must reconstruct the non-streaming arguments"
     );
     assert_eq!(
-        deltas.finish_reason(FinishReason::Stop),
+        deltas.finish_reason(FinishReason::Length).unwrap(),
+        FinishReason::Length,
+        "a completed tool call must preserve an explicit output budget"
+    );
+    assert_eq!(
+        deltas.finish_reason(FinishReason::Stop).unwrap(),
         FinishReason::ToolCalls
     );
 }
@@ -134,10 +139,93 @@ fn a_generation_truncated_mid_tool_call_does_not_report_tool_calls() {
     }
 
     assert_eq!(
-        deltas.finish_reason(FinishReason::Length),
+        deltas.finish_reason(FinishReason::Length).unwrap(),
         FinishReason::Length,
         "streaming a partial call must not upgrade the finish reason to tool_calls"
     );
+}
+
+#[test]
+fn malformed_tool_calls_fail_instead_of_sending_a_successful_stop() {
+    let call = |name: &str, arguments: &str| {
+        json!([{"id":"call_1","type":"function","function":{
+            "name":name,"arguments":arguments
+        }}])
+    };
+    let partial = call("buzz__send", r#"{"final":"#);
+    for terminal in [
+        None,
+        Some(json!([])),
+        Some(call("buzz__send", "{")),
+        Some(call("buzz__send", r#"{"final":True}"#)),
+        Some(call("other_tool", r#"{"final":true}"#)),
+    ] {
+        let mut deltas = ChatStreamDeltas::new(false);
+        let events = deltas.events_for_parse(&parsed(Some(partial.clone()), None), true);
+        assert!(!streamed_tool_call_chunks(events).is_empty());
+        deltas.events_for_parse(&parsed(terminal.clone(), None), false);
+        let error = deltas.finish_reason(FinishReason::Stop).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("incomplete or inconsistent tool call")
+        );
+        // The real chunk converter must propagate the error, not emit a Done chunk.
+        assert!(generation_event_to_chat_chunk(Err(error), "test").is_err());
+        assert_eq!(
+            deltas.finish_reason(FinishReason::Length).unwrap(),
+            FinishReason::Length,
+            "an explicit output budget remains distinguishable from malformed stop"
+        );
+    }
+}
+
+#[test]
+fn terminal_boolean_suffix_completes_the_tool_call() {
+    let mut deltas = ChatStreamDeltas::new(false);
+    let call = |arguments: &str| {
+        parsed(
+            Some(json!([{"function":{"name":"buzz__send","arguments":arguments}}])),
+            None,
+        )
+    };
+    deltas.events_for_parse(&call(r#"{"final":"#), true);
+    let events = deltas.events_for_parse(&call(r#"{"final":true}"#), false);
+    assert_eq!(
+        streamed_tool_call_chunks(events)[0][0]["function"]["arguments"],
+        "true}"
+    );
+    assert_eq!(
+        deltas.finish_reason(FinishReason::Stop).unwrap(),
+        FinishReason::ToolCalls
+    );
+}
+
+#[test]
+fn an_empty_terminal_tool_array_is_an_ordinary_text_stop() {
+    let mut deltas = ChatStreamDeltas::new(false);
+    deltas.events_for_parse(&parsed(Some(json!([])), Some("Hello")), false);
+    assert_eq!(
+        deltas.finish_reason(FinishReason::Stop).unwrap(),
+        FinishReason::Stop
+    );
+}
+
+#[test]
+fn terminal_parse_cannot_rewrite_already_streamed_boolean_bytes() {
+    let mut deltas = ChatStreamDeltas::new(false);
+    for (arguments, partial) in [(r#"{"final":True"#, true), (r#"{"final":true}"#, false)] {
+        deltas.events_for_parse(
+            &parsed(
+                Some(json!([{"function":{
+                    "name":"buzz__send","arguments":arguments
+                }}])),
+                None,
+            ),
+            partial,
+        );
+    }
+    assert!(deltas.finish_reason(FinishReason::Stop).is_err());
 }
 
 #[test]
@@ -160,7 +248,10 @@ fn a_request_without_tool_calls_streams_content_exactly_as_before() {
         terminal.is_empty(),
         "an unchanged terminal parse adds nothing"
     );
-    assert_eq!(deltas.finish_reason(FinishReason::Stop), FinishReason::Stop);
+    assert_eq!(
+        deltas.finish_reason(FinishReason::Stop).unwrap(),
+        FinishReason::Stop
+    );
 }
 
 #[test]
@@ -215,6 +306,9 @@ fn reasoning_prefix_frames_reconstruct_on_auto_wire_and_remain_absent_when_hidde
             assert!(reasoning.is_empty(), "hidden reasoning leaked: {wire:?}");
             assert_eq!(wire.len(), 2);
         }
-        assert_eq!(deltas.finish_reason(FinishReason::Stop), FinishReason::Stop);
+        assert_eq!(
+            deltas.finish_reason(FinishReason::Stop).unwrap(),
+            FinishReason::Stop
+        );
     }
 }

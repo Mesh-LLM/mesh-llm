@@ -13,6 +13,11 @@ pub(super) fn record_restored_session_token_count(
 }
 
 impl RuntimeState {
+    /// Complete an exact-state restore with the tokens belonging to its prefix.
+    pub fn restore_token_history(&mut self, session_id: &str, tokens: &[i32]) -> Result<()> {
+        self.session(session_id)?.restore_token_history(tokens)
+    }
+
     pub fn export_state(&mut self, session_id: &str) -> Result<Vec<u8>> {
         let layer_start = i32::try_from(self.model_layer_start())?;
         let layer_end = i32::try_from(self.model_layer_end())?;

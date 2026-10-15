@@ -43,6 +43,8 @@ pub(super) struct Input {
     pub min_cache_pct: Option<f64>,
     #[serde(default)]
     pub require_output_match: bool,
+    #[serde(default)]
+    pub require_complete_output: bool,
     pub max_ttft_regression_pct: Option<f64>,
     #[serde(default, skip_serializing)]
     pub resume: bool,
