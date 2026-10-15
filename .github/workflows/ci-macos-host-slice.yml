@@ -3,6 +3,16 @@ name: CI macOS Host Slice
 on:
   workflow_call:
     inputs:
+      require_skippy_receipts:
+        description: Require standalone Skippy qualification before consuming this product.
+        required: false
+        default: false
+        type: boolean
+      plan_digest:
+        description: Exact CI plan digest for the standalone qualification receipts.
+        required: false
+        default: ''
+        type: string
       authority_linux_x64:
         description: Exact same-run protected native producer identity JSON, source SHA, artifact ID, independent digest, OS, and architecture.
         required: false
@@ -161,17 +171,31 @@ jobs:
         env:
           UI_DIR: ${{ steps.layout.outputs.ui_dir }}
         run: test -s "$UI_DIR/dist/index.html"
-      - name: Prepare standalone Skippy CLI
-        uses: ./.github/actions/prepare-skippy-cli-input
+      - name: Download standalone qualification receipts
+        if: ${{ inputs.require_skippy_receipts }}
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          profile: ${{ inputs.profile }}
-      - name: Upload immutable macOS Skippy CLI input
+          pattern: ci-skippy-receipt-macos-${{ matrix.host.architecture }}-*
+          path: skippy-receipts
+      - name: Verify standalone qualification before Mesh host production
+        if: ${{ inputs.require_skippy_receipts }}
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          PLAN_DIGEST: ${{ inputs.plan_digest }}
+        run: |
+          set -euo pipefail
+          "$MESH_LLM_AUTOMATION_BIN" qualify host-receipts --receipts skippy-receipts \
+            --source-sha "$SOURCE_SHA" --plan-digest "$PLAN_DIGEST" --platform macos \
+            --output skippy-qualification-receipts.json
+      - name: Upload host qualification record
+        if: ${{ inputs.require_skippy_receipts }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
-          name: ci-skippy-cli-macos-${{ matrix.host.architecture }}
-          path: skippy-cli-input/
+          name: ci-host-skippy-receipts-macos-${{ matrix.host.architecture }}
+          path: skippy-qualification-receipts.json
           if-no-files-found: error
-          retention-days: 1
+          retention-days: 7
       - name: Prepare immutable macOS host
         uses: ./.github/actions/prepare-host-input
         with:

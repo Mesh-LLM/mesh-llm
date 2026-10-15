@@ -226,8 +226,8 @@ fn actual_custom_driver_deadline_and_causal_cancel_reap_owned_sleep_without_succ
         let result = run(
             &root,
             &driver,
-            // The deadline must allow the driver to start before verifying
-            // that the owned sleeping process is reaped, even on a busy host.
+            // Allow process startup under suite load; the 60-second child still
+            // must be stopped by the deadline, with no success receipt.
             if cancelled { "5" } else { "2" },
             &cancellation,
         );

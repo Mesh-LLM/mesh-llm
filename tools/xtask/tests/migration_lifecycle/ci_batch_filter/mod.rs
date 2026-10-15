@@ -2,6 +2,28 @@ mod fixture;
 use crate::workflow_yaml;
 use fixture::{Fixture, WORKFLOWS};
 use workflow_yaml::Node;
+
+#[test]
+fn ffi_executes_in_its_own_graph_and_is_included_in_the_census() {
+    for workflow in WORKFLOWS {
+        let fixture = Fixture::new(
+            workflow,
+            &["normal-owner", "skippy-ffi"],
+            &["normal-owner", "skippy-ffi"],
+            false,
+            false,
+        );
+        fixture.run();
+        assert_eq!(fixture.packages(), ["normal-owner", "skippy-ffi"]);
+        let calls = fixture.calls();
+        let builds: Vec<_> = calls.iter().filter(|call| call[0] != "metadata").collect();
+        assert_eq!(builds.len(), 2);
+        for call in builds {
+            assert_eq!(call.iter().filter(|arg| *arg == "-p").count(), 1);
+        }
+    }
+}
+
 #[test]
 fn actual_batch_filter_drops_only_absent_packages_before_cargo_execution() {
     for workflow in WORKFLOWS {

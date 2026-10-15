@@ -2,7 +2,7 @@
   "schema_version": 1,
   "manifest_kind": "test-model-artifacts",
   "suite": "radix-cache",
-  "registry_sha256": "c4332d8d0a7cf0da0850548258ec6f4e1c242ef10243e34c5ff1d678bb53f1ac",
+  "registry_sha256": "1f332d3f32fe4272e18644571a5268b23c3606f02f9fad36f3378d181c377649",
   "artifacts": [
     {
       "id": "family-deepseek2",

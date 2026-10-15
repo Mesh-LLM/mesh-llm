@@ -11,7 +11,7 @@ const RESTORE: &str = "Restore exact Linux CPU runtime";
 const SAVE: &str = "Save exact Linux CPU runtime from trusted main";
 const RESTORE_GATE: &str = "${{ matrix.runtime.backend == 'cpu' && needs.runner_policy.outputs.allow_native_github_cache_cpu == 'true' && !startsWith(needs.runner_policy.outputs.runner_cpu, 'depot-') }}";
 const SAVE_GATE: &str = "${{ matrix.runtime.backend == 'cpu' && github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.runner_policy.outputs.allow_native_github_cache_cpu == 'true' && !startsWith(needs.runner_policy.outputs.runner_cpu, 'depot-') && steps.runtime_cache.outputs.cache-hit != 'true' }}";
-const KEY: &str = "skippy-runtime-linux-${{ matrix.runtime.target }}-${{ matrix.runtime.toolchain_epoch }}-${{ hashFiles('skippy/**', 'Cargo.toml', 'Cargo.lock', '.cargo/**', 'Justfile', 'just/**', 'scripts/**', 'ci/slices.yml', '.github/actions/prepare-native-runtime-input/**', '.github/cache-version.txt') }}";
+const KEY: &str = "skippy-runtime-linux-${{ inputs.source_sha }}-${{ matrix.runtime.target }}-${{ matrix.runtime.toolchain_epoch }}-${{ hashFiles('skippy/**', 'Cargo.toml', 'Cargo.lock', '.cargo/**', 'Justfile', 'just/**', 'scripts/**', 'ci/slices.yml', '.github/actions/prepare-native-runtime-input/**', '.github/cache-version.txt') }}";
 
 fn member<'a>(node: &'a Node, key: &str) -> Result<&'a Node, String> {
     node.get(key)

@@ -243,7 +243,10 @@ VERIFICATION_DEADLINE_AT="$(( $(date +%s) + 30 ))"
         assert!(
             report.process.cleanup.complete
                 && !report.process.cleanup.forced
-                && !report.process.cleanup.graceful_signal_failed
+                && !report.process.cleanup.graceful_signal_failed,
+            "{:?}: {}",
+            report.process,
+            self.diagnostic(&report)
         );
         for (stream, raw) in [
             (&report.process.stdout, report.stdout.as_ref().unwrap()),

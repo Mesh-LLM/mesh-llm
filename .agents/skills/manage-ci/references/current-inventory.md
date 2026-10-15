@@ -1,5 +1,56 @@
 # MeshLLM CI inventory
 
+## Standalone qualification before Mesh production
+
+Each platform lane builds the standalone CLI and native runtime independently.
+`skippy_product` composes their exact bytes and runs packaging, dense, recurrent,
+MoE, KV cache, System One and Decisions qualification before `hosts` can run.
+The closed runtime catalog contains Linux CPU/CUDA/ROCm/Vulkan, macOS Metal,
+and Windows CPU/CUDA/ROCm/Vulkan. Backend-only plans also select their platform
+CPU row so host admission can require its mandatory qualification.
+
+Consumers restore the lane's immutable `product_automation_*` executable.
+CLI inputs include a source-bound `build-contract.json`; runtime inputs include
+`ci-source.json`, and Linux runtime cache keys include the source SHA.
+Seven-day `ci-skippy-receipt-<platform>-<architecture>-<backend>` artifacts bind
+source SHA, plan digest, product bytes, availability and suite evidence.
+Hosts validate all their selected receipts with `qualify host-receipts`, retain
+`ci-host-skippy-receipts-<platform>-<architecture>` for seven days, and pass the
+record into Mesh product composition. The product manifest and archive carry
+`skippy_qualification`; missing mandatory qualification fails admission.
+
+Linux accelerator qualification uses the existing opt-in GPU runner selectors.
+Disabled hardware is recorded as `hardware-unavailable`, never as a qualified
+GPU result; hosted packaging checks still run. CPU fallback cannot satisfy a
+GPU row. Runner-group admission and real hardware runs remain rollout evidence,
+not a consequence of checking in workflow definitions. Standalone CLI and product
+archives retain one day; availability, packaging, Laya and model artifacts retain
+their owning evidence, with Linux model artifact names including backend to
+avoid collisions between available rows.
+
+Clippy and test batches record selected and successfully executed package
+censuses as `cargo-census-{clippy,test}-<batch>-<attempt>`. Skippy FFI executes
+in its isolated feature graph. SafeTensors selection permits PR, push and manual
+events. Required CI cache capture remains observational with a zero hit-rate
+floor; dedicated cache qualification retains its positive gate.
+
+Release publication requires the credential-free crates preflight against the
+same run's `release-linux` artifact. The composed native-runtime manifest is
+retained for 90 days. Downstream dispatch binds correlation ID, Mesh commit and
+manifest digest; `await_packaging_release` requires the matching terminal receipt
+and retains `release-packaging-readiness-<tag>` for 90 days. Packaging contract
+deployment verification, nonpublishing rehearsal and failure-injection evidence
+remain required before declaring release readiness. The identity contract in
+[mesh-packaging#35](https://github.com/Mesh-LLM/mesh-packaging/pull/35) merged on
+2026-10-11; this does not establish an end-to-end release rehearsal pass.
+
+Protected PR lanes and summaries continue to use main's authority. Catalog and
+lane-validator prerequisites must land through the protected CI-control process
+before branch graph evidence can be green; candidate workflows do not replace
+protected validation. See the section 12 acceptance checklist in `ci/CI_RELEASE_AUDIT.md`
+for the outstanding live qualification and release evidence.
+
+
 L2 post-checkout planning and the five lane summaries use Rust through the
 closed `prepare-automation` hosted-bare profile. Only GitHub-hosted Linux may
 select it; locked release Cargo bypasses compiler wrappers and Just and reuses
@@ -849,6 +900,22 @@ sccache with short `C:\\s` and `C:\\t` roots, and every Windows native backend
 asks CMake to hash object paths at 180 characters before the legacy MAX_PATH
 boundary.
 
+The standalone Skippy qualification owners are xtask: `cargo xtool qualify
+{availability,verify-cli-input,compose,packaging,models,laya,assemble,validate,host-receipts}`
+own the per-row hardware policy, CLI input verification, standalone product
+composition and packaging evidence, serving suites, receipt assembly and
+validation, and the host `skippy-qualification-receipts.json` record. Their
+integration owners are `qualification_contract` and
+`qualification_await_packaging` in the required Quality roster.
+`cargo xtool repository cargo-census` records the executed Cargo package set of
+one Clippy or test batch (`mesh-ci-cargo-census-v1`), and
+`cargo xtool release await-packaging` consumes the correlated mesh-packaging
+readiness receipt (`mesh-packaging-readiness-v1`) through bounded `gh api`
+calls. `cargo xtool product compose --qualification-receipts` binds the host
+record into the v2 product manifest, auto-discovering
+`skippy-qualification-receipts.json` inside the bundle on recompose and
+`--check`.
+
 - `restore-release-ui` / `prepared-input ui-distribution`: verify the shared release
   console's source SHA, version, complete file hashes and built JavaScript entry
   before platform-specific Rust compilation or SDK resource packaging. The
@@ -1643,8 +1710,8 @@ Windows row selection is conditional. This owning workflow edit maps through ci-
 
 ## Same-run product-source automation
 
-Product-source jobs no longer compile `xtask` once per job. The Linux, macOS and
-Windows lanes and the optional Linux CI canary each declare one
+Product-source jobs no longer compile `xtask` once per job. The Linux, macOS,
+Windows and Quality lanes and the optional Linux CI canary each declare one
 `product_automation_<platform>` producer: `product-automation-artifact.yml`
 checks out the lane's exact `source_sha` (the canary's merge SHA) on a fixed
 GitHub-hosted runner with a read-only token, no secrets and no checkout
@@ -1656,7 +1723,8 @@ authority artifact, and `product-clean` claims no protected authority. Its
 `identity_json` output (source SHA, artifact ID, executable digest, producer
 OS/architecture) is the only value consumers receive.
 
-The static ABI producer, Rust test batches, host, native-runtime and product
+The static ABI producer, Rust test batches, Quality Clippy batches, host,
+native-runtime and product
 composition jobs of each lane list the producer in `needs`, take its identity as
 the `product_automation` input and run `restore-automation`, which verifies
 source, artifact ID, digest and that the producer ran on the same OS and

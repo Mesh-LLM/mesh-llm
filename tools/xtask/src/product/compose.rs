@@ -9,6 +9,7 @@ use super::digest::{IoFailure, file_sha256, tree_sha256};
 use super::json_object::{display, dumps, equal, get, item, require_hashable};
 use super::manifest_load::load;
 use super::pure_path::PurePath;
+use super::qualification_record;
 use crate::artifact::zip_extract::os_error_line;
 use crate::ci_plan::document::Json;
 use crate::repository::check_report::CheckReport;
@@ -71,6 +72,22 @@ fn compose(args: &Args) -> Result<(), String> {
     std::fs::write(&manifest_path, bytes).map_err(|error| os_error_line(&error, &manifest_path))
 }
 
+/// The explicit `--qualification-receipts` input, or the record discovered
+/// inside the bundle so recomposition and `--check` bind the same record.
+fn qualification_record(args: &Args, bundle: &PurePath) -> Result<Option<Json>, String> {
+    let record_path = match &args.qualification_receipts {
+        Some(path) => Path::new(path).to_path_buf(),
+        None => {
+            let discovered = Path::new(&bundle.display()).join(qualification_record::RECORD_NAME);
+            if !discovered.is_file() {
+                return Ok(None);
+            }
+            discovered
+        }
+    };
+    qualification_record::bind(bundle, &record_path).map(Some)
+}
+
 fn compose_manifest(args: &Args, bundle: &PurePath) -> Result<Json, String> {
     let version = args.version.strip_prefix('v').unwrap_or(&args.version);
     let host = PurePath::new(&args.host);
@@ -98,7 +115,7 @@ fn compose_manifest(args: &Args, bundle: &PurePath) -> Result<Json, String> {
     let runtime_sha = tree_sha256(Path::new(&runtime.display())).map_err(io)?;
     let manifest_sha = file_sha256(Path::new(&runtime_manifest_path)).map_err(io)?;
     let text = |value: &str| Json::String(value.to_owned());
-    Ok(Json::Object(vec![
+    let mut manifest = vec![
         ("schema_version".to_owned(), Json::Number(2.into())),
         ("contract".to_owned(), text("mesh-llm-product-v2")),
         ("mesh_version".to_owned(), text(version)),
@@ -131,7 +148,11 @@ fn compose_manifest(args: &Args, bundle: &PurePath) -> Result<Json, String> {
                 ("manifest_sha256".to_owned(), text(&manifest_sha)),
             ]),
         ),
-    ]))
+    ];
+    if let Some(qualification) = qualification_record(args, bundle)? {
+        manifest.push(("skippy_qualification".to_owned(), qualification));
+    }
+    Ok(Json::Object(manifest))
 }
 
 /// `validate_runtime_backend`: the runtime family, then any build backend,

@@ -45,7 +45,7 @@ pub(super) fn extend(lane: Lane, jobs: &mut Vec<&'static str>) {
                 "platform_checks",
             ],
         );
-    let product_linux = lane == Lane::Linux
+    let product_linux = (lane == Lane::Linux
         && includes(
             jobs,
             &[
@@ -55,7 +55,8 @@ pub(super) fn extend(lane: Lane, jobs: &mut Vec<&'static str>) {
                 "native_runtimes",
                 "runtime_product",
             ],
-        );
+        ))
+        || (lane == Lane::Quality && includes(jobs, &["quality"]));
     let product_native = (matches!(lane, Lane::Macos | Lane::Windows)
         && includes(jobs, &["hosts", "native_runtimes", "runtime_product"]))
         || (lane == Lane::Macos && includes(jobs, &["sdk"]));
@@ -90,7 +91,19 @@ fn every_audited_topic_requires_its_native_producer_and_protected_source() {
     ] {
         let mut jobs = vec![consumer];
         extend(lane, &mut jobs);
-        assert_eq!(jobs, [consumer, "authority_source", producer]);
+        if lane == Lane::Quality {
+            assert_eq!(
+                jobs,
+                [
+                    consumer,
+                    "authority_source",
+                    producer,
+                    "product_automation_linux_x64"
+                ]
+            );
+        } else {
+            assert_eq!(jobs, [consumer, "authority_source", producer]);
+        }
     }
     let mut jobs = vec!["rust_tests"];
     extend(Lane::Linux, &mut jobs);
@@ -135,7 +148,6 @@ fn product_source_automation_follows_only_the_jobs_that_restore_it() {
         (Lane::Linux, "product_smoke"),
         (Lane::Macos, "platform_checks"),
         (Lane::Windows, "platform_checks"),
-        (Lane::Quality, "quality"),
         (Lane::Website, "web"),
     ] {
         let mut jobs = vec![consumer];

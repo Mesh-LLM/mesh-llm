@@ -11,6 +11,7 @@ set -euo pipefail
 : "${INPUT_READINESS_SMOKE:?INPUT_READINESS_SMOKE is required}"
 INPUT_ATTESTATION_PUBLIC_KEY_FILE="${INPUT_ATTESTATION_PUBLIC_KEY_FILE:-}"
 INPUT_ATTESTATION_VERIFIER="${INPUT_ATTESTATION_VERIFIER:-}"
+INPUT_QUALIFICATION_RECEIPTS="${INPUT_QUALIFICATION_RECEIPTS:-}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -83,6 +84,9 @@ if [[ -n "$INPUT_ATTESTATION_PUBLIC_KEY_FILE" ]]; then
 fi
 if [[ -n "$INPUT_ATTESTATION_VERIFIER" ]]; then
     INPUT_ATTESTATION_VERIFIER="$(to_shell_path "$INPUT_ATTESTATION_VERIFIER")"
+fi
+if [[ -n "$INPUT_QUALIFICATION_RECEIPTS" ]]; then
+    INPUT_QUALIFICATION_RECEIPTS="$(to_shell_path "$INPUT_QUALIFICATION_RECEIPTS")"
 fi
 
 require_file "immutable host" "$host"
@@ -190,12 +194,27 @@ if [[ "$host_release_version" != "$version" ]]; then
     echo "Output: $host_version_output" >&2
     exit 1
 fi
+compose_args=()
+if [[ -n "$INPUT_QUALIFICATION_RECEIPTS" ]]; then
+    # Bind the standalone Skippy qualification receipt record into the product
+    # manifest so the Mesh product carries the provenance of the Skippy bytes
+    # it was composed from.
+    require_nonempty_file \
+        "standalone qualification receipt record" \
+        "$INPUT_QUALIFICATION_RECEIPTS"
+    cp "$INPUT_QUALIFICATION_RECEIPTS" \
+        "$output_dir/skippy-qualification-receipts.json"
+    compose_args+=(
+        --qualification-receipts "$output_dir/skippy-qualification-receipts.json"
+    )
+fi
 mesh_automation product compose \
     --bundle "$output_dir" \
     --host "$output_dir/$INPUT_BINARY_NAME" \
     --runtime "$runtime_dir" \
     --version "$version" \
-    --backend "$INPUT_BACKEND"
+    --backend "$INPUT_BACKEND" \
+    ${compose_args[@]+"${compose_args[@]}"}
 require_nonempty_file "composed product manifest" "$output_dir/product-manifest.json"
 
 if [[ "$INPUT_READINESS_SMOKE" == "true" ]]; then

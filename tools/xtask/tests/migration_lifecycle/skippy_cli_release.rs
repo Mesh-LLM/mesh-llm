@@ -17,6 +17,15 @@ use std::{
 };
 
 const PAYLOAD: &[u8] = b"\x7fELFinert standalone CLI";
+const SOURCE_SHA: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+// The executable is an inert CLI observer; readelf remains an inspection peer.
+const CLI_OBSERVER: &str = r#"#!/bin/bash
+case "$1" in
+build-contract) printf '%s\n' '{"schema_version":1,"product":"skippy","source_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","product_version":"1.2.3","runtime_release":"runtime-fixture","skippy_abi":"fixture-abi","os":"linux","architecture":"amd64"}' ;;
+--version) printf 'skippy 1.2.3\n' ;;
+*) exit 92 ;;
+esac
+"#;
 fn repository() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
@@ -79,7 +88,13 @@ impl Fixture {
         );
         executable(
             &root.join("bin/automation"),
-            "#!/bin/bash\nset -euo pipefail\n[[ $1 != native ]] || printf 'verify\\n' >> \"$FIXTURE_ROOT/events\"\nexec \"$FIXTURE_XTASK\" \"$@\"\n",
+            "#!/bin/bash\nset -euo pipefail\nif [[ $1 == native ]]; then\n  printf 'verify\\n' >> \"$FIXTURE_ROOT/events\"\n  set -- \"$@\" --format elf\nfi\nexec \"$FIXTURE_XTASK\" \"$@\"\n",
+        );
+        executable(
+            &root.join("bin/git"),
+            &format!(
+                "#!/bin/bash\n[[ $3 == rev-parse && $4 == HEAD ]] || exit 91\nprintf '%s\\n' '{SOURCE_SHA}'\n"
+            ),
         );
         executable(
             &root.join("bin/just"),
@@ -116,6 +131,7 @@ impl Fixture {
             ),
             ("INSPECT_IMPORT", "libc.so.6".to_owned()),
             ("INPUT_PROFILE", "release".to_owned()),
+            ("INPUT_SOURCE_SHA", SOURCE_SHA.to_owned()),
             ("INPUT_OUTPUT_DIR", "prepared".to_owned()),
         ]
         .into_iter()
@@ -415,29 +431,33 @@ fn standalone_cli_actual_producer_verifies_imports_before_checksumming_and_binds
         ("dev", "debug", "skippy-cli-build"),
     ] {
         let fixture = Fixture::new();
-        fs::write(
-            fixture.root.join(format!("target/{directory}/skippy")),
-            PAYLOAD,
-        )
-        .unwrap();
+        executable(
+            &fixture.root.join(format!("target/{directory}/skippy")),
+            CLI_OBSERVER,
+        );
         let report = fixture.run(
             vec!["-c".into(), unix_producer()],
             &[("INPUT_PROFILE", profile)],
         );
         assert!(
             report.process.status.unwrap().success(),
-            "{:?}",
-            report.stderr
+            "{}",
+            String::from_utf8_lossy(report.stderr.as_ref().unwrap().as_bytes())
         );
         let imports: Value = serde_json::from_slice(
             &fs::read(fixture.root.join("prepared/host-imports.json")).unwrap(),
         )
         .unwrap();
-        assert_eq!(imports["binary_sha256"], digest(PAYLOAD));
+        assert_eq!(imports["binary_sha256"], digest(CLI_OBSERVER.as_bytes()));
         assert_eq!(imports["rejected_imports"], json!([]));
+        let contract: Value = serde_json::from_slice(
+            &fs::read(fixture.root.join("prepared/build-contract.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(contract["source_sha"], SOURCE_SHA);
         assert_eq!(
             fs::read_to_string(fixture.root.join("prepared/skippy.sha256")).unwrap(),
-            format!("{}  skippy\n", digest(PAYLOAD))
+            format!("{}  skippy\n", digest(CLI_OBSERVER.as_bytes()))
         );
         let events = fixture.events();
         assert!(events.starts_with(&format!("build|{recipe}\nverify\n")));
@@ -477,18 +497,31 @@ fn standalone_cli_actual_producer_build_failure_or_unknown_profile_stops_before_
 }
 
 #[test]
+fn standalone_cli_source_mismatch_stops_before_building() {
+    for source in ["invalid", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"] {
+        let fixture = Fixture::new();
+        rejected(&fixture.run(
+            vec!["-c".into(), unix_producer()],
+            &[("INPUT_SOURCE_SHA", source)],
+        ));
+        assert!(!fixture.root.join("events").exists());
+        assert!(!fixture.root.join("prepared").exists());
+    }
+}
+
+#[test]
 fn standalone_cli_platform_graph_orders_separate_producer_upload_before_mesh_host() {
-    for (platform, job) in [
-        ("linux", "linux_host"),
-        ("macos", "macos_host"),
-        ("windows", "windows_host"),
-    ] {
-        let workflow = document(&format!(".github/workflows/ci-{platform}-host-slice.yml"));
-        let row = workflow.get("jobs").unwrap().get(job).unwrap();
+    let workflow = document(".github/workflows/ci-skippy-cli-slice.yml");
+    for platform in ["linux", "macos", "windows"] {
+        let row = workflow
+            .get("jobs")
+            .unwrap()
+            .get(&format!("{platform}_cli"))
+            .unwrap();
         let items = steps(row);
         let producer = items
             .iter()
-            .position(|s| text(s, "name") == "Prepare standalone Skippy CLI")
+            .position(|s| text(s, "uses") == "./.github/actions/prepare-skippy-cli-input")
             .unwrap();
         let upload = &items[producer + 1];
         assert_eq!(
@@ -498,12 +531,37 @@ fn standalone_cli_platform_graph_orders_separate_producer_upload_before_mesh_hos
         assert!(text(upload, "uses").starts_with("actions/upload-artifact@"));
         assert_eq!(
             text(upload.get("with").unwrap(), "name"),
-            format!("ci-skippy-cli-{platform}-${{{{ matrix.host.architecture }}}}")
+            format!("ci-skippy-cli-{platform}-${{{{ inputs.architecture }}}}")
         );
-        assert!(text(&items[producer + 2], "name").starts_with("Prepare immutable"));
+        assert_eq!(
+            text(items[producer].get("with").unwrap(), "source_sha"),
+            "${{ inputs.source_sha }}"
+        );
         assert_eq!(
             text(upload.get("with").unwrap(), "if-no-files-found"),
             "error"
+        );
+        let lane = document(&format!(".github/workflows/ci-{platform}-lane.yml"));
+        let jobs = lane.get("jobs").unwrap();
+        for (consumer, dependency) in [
+            ("skippy_product", "skippy_cli"),
+            ("hosts", "skippy_product"),
+        ] {
+            let Node::Seq(needs) = jobs.get(consumer).unwrap().get("needs").unwrap() else {
+                panic!("needs required")
+            };
+            assert!(needs.iter().any(|need| need.text() == Some(dependency)));
+        }
+        let host = document(&format!(".github/workflows/ci-{platform}-host-slice.yml"));
+        assert!(
+            steps(
+                host.get("jobs")
+                    .unwrap()
+                    .get(&format!("{platform}_host"))
+                    .unwrap()
+            )
+            .iter()
+            .all(|step| text(step, "uses") != "./.github/actions/prepare-skippy-cli-input")
         );
     }
     let action = document(".github/actions/prepare-skippy-cli-input/action.yml");

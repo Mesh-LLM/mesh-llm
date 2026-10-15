@@ -18,6 +18,7 @@ mod prepared_input;
 pub mod process;
 mod product;
 mod publish_consistency;
+mod qualification;
 mod release;
 mod release_targets;
 mod repo_consistency;
@@ -222,6 +223,13 @@ fn run() -> DynResult<()> {
         cli::CliCommand::RewriterReport(rest) => automation::rewriter_report::run(rest),
         cli::CliCommand::PreparedInput(rest) => prepared_input::run(rest),
         cli::CliCommand::Product(command, rest) => product::run(command, rest),
+        cli::CliCommand::Qualify(command, rest) => qualification::run(command, rest, || {
+            let root = match explicit_root {
+                Some(root) => root,
+                None => repository::RepositoryRoot::resolve(None)?,
+            };
+            Ok(root.as_path().to_path_buf())
+        }),
         cli::CliCommand::Release(command, rest) => release::run(command, rest),
         cli::CliCommand::Artifact(command, rest) => artifact::run(command, rest),
         cli::CliCommand::Models(command, rest) => model_registry::run(command, rest, || {

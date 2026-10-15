@@ -322,6 +322,7 @@ fn product_action_binds_verified_inputs_and_publishes_the_composer_receipt() {
         "readiness_smoke",
         "attestation_public_key_file",
         "attestation_verifier",
+        "qualification_receipts",
     ];
     assert_eq!(bindings.entries().len(), keys.len());
     for key in keys {

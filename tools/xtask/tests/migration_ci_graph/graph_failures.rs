@@ -54,8 +54,8 @@ fn migration_ci_graph_artifact_producer_off_needs_path_is_rejected() -> TestResu
     graph_rejects(
         "linux",
         &[(
-            "needs: [ui_artifact, authority_linux_x64, product_automation_linux_x64]\n    if: ${{ (!cancelled() && needs.ui_artifact.result == 'success' && ",
-            "needs: [authority_linux_x64, product_automation_linux_x64]\n    if: ${{ (!cancelled() && ",
+            "needs: [skippy_product, ui_artifact, authority_linux_x64, product_automation_linux_x64]\n    if: ${{ needs.skippy_product.result == 'success' && (!cancelled() && needs.ui_artifact.result == 'success' && ",
+            "needs: [skippy_product, authority_linux_x64, product_automation_linux_x64]\n    if: ${{ needs.skippy_product.result == 'success' && (!cancelled() && ",
         )],
         // When/Then: the producer is unreachable through needs.
         "consumer 'hosts' input ui_artifact_name: producer 'ui_artifact' is not on its needs path",
@@ -76,7 +76,7 @@ fn migration_ci_graph_unplanned_producer_is_rejected() -> TestResult {
     assert_output(
         &output,
         2,
-        "ERROR: planned job 'runtime_product' needs producer 'hosts', which is not planned\n",
+        "ERROR: runtime products require a platform host row\n",
     );
     Ok(())
 }
@@ -88,8 +88,8 @@ fn migration_ci_graph_planned_job_outside_static_graph_is_rejected() -> TestResu
         "quality",
         &[
             (
-                "needs: [quality, runner_contract, authority_source, authority_linux_x64]",
-                "needs: [quality, runner_contracts, authority_source, authority_linux_x64]",
+                "needs: [quality, runner_contract, authority_source, authority_linux_x64, product_automation_linux_x64]",
+                "needs: [quality, runner_contracts, authority_source, authority_linux_x64, product_automation_linux_x64]",
             ),
             ("  runner_contract:\n", "  runner_contracts:\n"),
         ],

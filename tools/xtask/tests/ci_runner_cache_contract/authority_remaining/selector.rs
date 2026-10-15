@@ -69,8 +69,8 @@ fn authority_all_eligible_selector_inputs_are_bounded_and_mutations_refused() {
         }
     }
     assert_eq!(cpu_selectors, 2); // Ordinary selector plus forced-hosted CPU policy.
-    assert_eq!(count - cpu_selectors, 17); // Other sixteen workflows plus Quality sentinel.
-    assert_eq!(count, 19);
+    assert_eq!(count - cpu_selectors, 19); // Other eighteen workflows plus Quality sentinel.
+    assert_eq!(count, 21);
 }
 #[test]
 fn authority_protected_audit27_keep_exact_pin_and_central_runner_projection() {
