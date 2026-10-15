@@ -1,0 +1,267 @@
+{
+  "draft": "draft-mih-agent-evidence-request-00",
+  "provenance": "spec-derived",
+  "corpus": "outcomes",
+  "description": "The three outcomes, pending, and the three-state discipline.",
+  "count": 13,
+  "cases": [
+    {
+      "id": "out-artifact-verified",
+      "section": [
+        "§4 Interaction Outcomes",
+        "§4.1 The Artifact Response",
+        "§4.6 Mapping to a Requirement-Satisfaction Status"
+      ],
+      "description": "An artifact response that verifies against the anchor.",
+      "facts": {
+        "received": "artifact",
+        "artifact_verification": "verified",
+        "window": "open"
+      },
+      "expect": {
+        "state": "artifact_verified",
+        "must_not_record_as": [
+          "refusal",
+          "recorded_absence",
+          "pending"
+        ]
+      }
+    },
+    {
+      "id": "out-artifact-verification-failed",
+      "section": [
+        "§4.1 The Artifact Response",
+        "§4.5 The Three-State Discipline"
+      ],
+      "description": "An artifact that fails verification: a response received and failed. Not a grant, not an absence, not a fourth outcome.",
+      "facts": {
+        "received": "artifact",
+        "artifact_verification": "failed",
+        "window": "open"
+      },
+      "expect": {
+        "state": "artifact_verification_failed",
+        "must_not_record_as": [
+          "artifact_verified",
+          "recorded_absence",
+          "refusal"
+        ]
+      }
+    },
+    {
+      "id": "out-refusal-signed",
+      "section": [
+        "§4.2 The Signed Refusal",
+        "§4.5 The Three-State Discipline"
+      ],
+      "description": "A valid signed refusal.",
+      "facts": {
+        "received": "refusal",
+        "refusal_signature": "valid",
+        "refusal_reason": "policy_declined",
+        "window": "open"
+      },
+      "expect": {
+        "state": "refusal",
+        "must_not_record_as": [
+          "recorded_absence",
+          "pending",
+          "artifact_verified"
+        ]
+      }
+    },
+    {
+      "id": "neg-refusal-as-absence",
+      "section": [
+        "§4.5 The Three-State Discipline"
+      ],
+      "description": "A valid signed no_such_subject refusal is a refusal. Discarding it and recording an absence misstates the exchange.",
+      "facts": {
+        "received": "refusal",
+        "refusal_signature": "valid",
+        "refusal_reason": "no_such_subject",
+        "window": "closed"
+      },
+      "expect": {
+        "state": "refusal",
+        "must_not_record_as": [
+          "recorded_absence"
+        ]
+      }
+    },
+    {
+      "id": "out-refusal-over-http",
+      "section": [
+        "§10 Transport Bindings",
+        "§4.5 The Three-State Discipline"
+      ],
+      "description": "HTTP binding: a refusal is a successful transport exchange carrying a refusal answer.",
+      "facts": {
+        "received": "refusal",
+        "refusal_signature": "valid",
+        "refusal_reason": "not_authorized",
+        "transport": "http",
+        "window": "open"
+      },
+      "expect": {
+        "state": "refusal",
+        "must_not_record_as": [
+          "recorded_absence"
+        ]
+      }
+    },
+    {
+      "id": "out-pending",
+      "section": [
+        "§4.3 Pending",
+        "§4.5 The Three-State Discipline"
+      ],
+      "description": "Nothing received and the window still open.",
+      "facts": {
+        "received": "nothing",
+        "window": "open"
+      },
+      "expect": {
+        "state": "pending",
+        "must_not_record_as": [
+          "recorded_absence",
+          "refusal"
+        ]
+      }
+    },
+    {
+      "id": "out-absence",
+      "section": [
+        "§4.4 Recorded Absence",
+        "§4.5 The Three-State Discipline"
+      ],
+      "description": "Nothing received and the window closed.",
+      "facts": {
+        "received": "nothing",
+        "window": "closed"
+      },
+      "expect": {
+        "state": "recorded_absence",
+        "must_not_record_as": [
+          "refusal",
+          "pending"
+        ]
+      }
+    },
+    {
+      "id": "neg-timeout-as-refusal",
+      "section": [
+        "§4.5 The Three-State Discipline"
+      ],
+      "description": "No party may manufacture a refusal from a timeout.",
+      "facts": {
+        "received": "nothing",
+        "window": "closed",
+        "deadline_passed": true
+      },
+      "expect": {
+        "state": "recorded_absence",
+        "must_not_record_as": [
+          "refusal"
+        ]
+      }
+    },
+    {
+      "id": "neg-transport-error-as-refusal",
+      "section": [
+        "§10 Transport Bindings",
+        "§4.5 The Three-State Discipline"
+      ],
+      "description": "A transport-level error is never a refusal.",
+      "facts": {
+        "received": "transport_error",
+        "window": "closed"
+      },
+      "expect": {
+        "state": "recorded_absence",
+        "must_not_record_as": [
+          "refusal"
+        ]
+      }
+    },
+    {
+      "id": "out-transport-error-inside-window",
+      "section": [
+        "§4.3 Pending",
+        "§10 Transport Bindings"
+      ],
+      "description": "A transport failure while the window is open leaves the request pending.",
+      "facts": {
+        "received": "transport_error",
+        "window": "open"
+      },
+      "expect": {
+        "state": "pending",
+        "must_not_record_as": [
+          "recorded_absence",
+          "refusal"
+        ]
+      },
+      "ambiguity": "§4.3 / §10: the stream binding says absence is 'the stream closed or timed out without a response frame'; §4.3 says only the close of the waiting window resolves a request. Vectors follow §4.3: a transport failure inside the window leaves the request pending."
+    },
+    {
+      "id": "neg-subprotocol-not-offered",
+      "section": [
+        "§10 Transport Bindings"
+      ],
+      "description": "A peer that does not offer evidence-request/1 has not refused; it has not answered.",
+      "facts": {
+        "received": "subprotocol_not_offered",
+        "window": "closed"
+      },
+      "expect": {
+        "state": "recorded_absence",
+        "must_not_record_as": [
+          "refusal"
+        ]
+      }
+    },
+    {
+      "id": "neg-commitment-makes-refusal",
+      "section": [
+        "§4.4 Recorded Absence",
+        "§4.5 The Three-State Discipline",
+        "§9 Retention Commitments"
+      ],
+      "description": "An absence inside an outstanding retention commitment is attributable to the responder but is still an absence, never a refusal.",
+      "facts": {
+        "received": "nothing",
+        "window": "closed",
+        "retention_commitment": "in_force"
+      },
+      "expect": {
+        "state": "recorded_absence",
+        "must_not_record_as": [
+          "refusal"
+        ]
+      }
+    },
+    {
+      "id": "neg-unregistered-reason-as-absence",
+      "section": [
+        "§4.2 The Signed Refusal",
+        "§4.5 The Three-State Discipline"
+      ],
+      "description": "A correctly signed object with an unregistered reason is not a conforming refusal, and is still the responder's signed answer: never an absence.",
+      "facts": {
+        "received": "refusal",
+        "refusal_signature": "valid",
+        "refusal_reason": "no_such_record",
+        "window": "closed"
+      },
+      "expect": {
+        "state": "refusal_nonconformant",
+        "must_not_record_as": [
+          "recorded_absence",
+          "refusal"
+        ]
+      },
+      "ambiguity": "§4.2 item 2 / §4.5: -00 does not say what a correctly signed object with an unregistered reason is. Vectors: not a conforming refusal, and still never recorded as absence."
+    }
+  ]
+}

@@ -7,6 +7,7 @@ mod checkpoint_cadence;
 mod data_dir;
 mod decision;
 mod evidence_answer;
+mod evidence_artifact;
 mod evidence_log;
 mod evidence_panes;
 #[cfg(test)]

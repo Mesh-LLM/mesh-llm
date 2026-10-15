@@ -398,7 +398,7 @@ mod tests {
 
     #[test]
     fn the_ledger_route_lists_records_and_never_padding() {
-        let padding = json!({"capsule_id": "c".repeat(64), "record_type": "padding", "store_nonce": "d".repeat(64)});
+        let padding = json!({"capsule_id": "c".repeat(64), "record_type": "padding", "epistemic_type": "producer_claim", "store_nonce": "d".repeat(64)});
         let dir = ledger(&[record(&"1".repeat(64)), padding]);
         let source = EvidenceSource {
             ledger_dir: dir.path().into(),

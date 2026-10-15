@@ -1,5 +1,5 @@
-//! This node's ledger as the evidence-request protocol crate sees it: an
-//! [`EvidenceLog`] (what an answer is built from) and a [`Responder`] (what a
+//! This node's ledger as the evidence-request responder sees it: the index
+//! an answer is built from (`evidence_answer`) and a [`Responder`] (what a
 //! request is resolved against).
 //!
 //! **Read-only, and its own MMR.** The plugin's checkpoint cadence owns the
@@ -11,19 +11,33 @@
 //! since the last one. A file that was replaced or rewritten under the index
 //! (its last indexed line no longer matches) is re-indexed from the start.
 //!
-//! **Only anchors this index re-derives.** A checkpoint from
-//! `checkpoints.jsonl` is offered as an anchor only if it is signed by this
-//! node's key, chains from the stream's first checkpoint, and its root is the
-//! root this index computes at its size. The first checkpoint that fails any
-//! of these ends the chain: nothing after it is served, so an answer is never
+//! **Only checkpoints this index re-derives.** A checkpoint from
+//! `checkpoints.jsonl` joins the chain only if it is signed by this node's
+//! key, chains from the stream's first checkpoint, and its root is the root
+//! this index computes at its size. The first checkpoint that fails any of
+//! these ends the chain: nothing after it is served, so an answer is never
 //! signed under a root its proofs would not reach. A line that is not a
 //! well-formed record (no 64-hex `capsule_id`) ends the index the same way,
 //! as the checkpointer refuses to fold one.
 //!
+//! **Anchors are stated checkpoints.** An anchor is a chain checkpoint whose
+//! line carries its COSE wire statement (`checkpoint_cose`), identified by
+//! the SHA-256 of that statement: the `cll-checkpoint` item of the interop
+//! profile (agent-action-capsule `spec/interop-profile-v0.md` §6.2.1), the
+//! value a requester pins, as evidencebook and the Go responder identify
+//! one. The statement must verify under this node's key and state exactly
+//! the checkpoint on its line; one that does not, or a line without one
+//! (the checkpointer writes it best-effort), stays in the chain but anchors
+//! no answer.
+//!
 //! **What a record is here.** A record's digest is its `capsule_id` (the leaf
 //! the checkpoints commit to) and its body is its line in `capsules.jsonl`,
-//! byte for byte. A requester checks one with [`record_digest`]: the body's
-//! recomputed `capsule_id`, which must equal the one it states.
+//! byte for byte, producer envelope included. A requester checks one with
+//! [`record_digest`]: the body's recomputed `capsule_id`, which must equal the
+//! one it states. The body is not the `capsule_id` preimage, so its SHA-256 is
+//! not its digest: the interop profile's Checkpointed Local Log check reports
+//! such a record `NOT_CHECKED` (profile §6.2.1 step 5), and this node's
+//! requester checks it instead (`evidence_artifact`).
 //!
 //! **Padding** (Evidence Layer -00 §12.1) is a leaf, so a range carries it,
 //! but it is never a record: it is not found by digest, correlation or
@@ -35,11 +49,10 @@ use std::io::{BufRead, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use cll::checkpoint::CheckpointRecord;
+use cll::checkpoint::{verify_checkpoint_cose_offline, CheckpointRecord};
 use cll::mmr::{
-    add_leaf, leaf_count, leaf_hash, peaks, root_from_peaks, MemoryNodeStore, NodeReader,
+    add_leaf, leaf_count, leaf_hash, peaks, root_from_peaks, Hash, MemoryNodeStore, NodeReader,
 };
-use evidence_request::answer::{EvidenceLog, Record};
 use evidence_request::registry::{SubjectForm, DERIVATION_HISTORY_CARD};
 use evidence_request::request::Derivation;
 use evidence_request::resolve::{Anchor, Responder};
@@ -168,6 +181,30 @@ impl Tail {
     }
 }
 
+/// What a consistency proof is made of: the old peaks, each one's path into
+/// the new MMR, and the new peaks.
+pub type ConsistencyParts = (Vec<Hash>, Vec<Vec<Hash>>, Vec<Hash>);
+
+/// One checkpoint of the chain, with its COSE wire statement when it has one
+/// that states it.
+#[derive(Clone, Debug)]
+pub struct ChainCheckpoint {
+    pub record: CheckpointRecord,
+    /// The `cll-checkpoint` octets: present only for a statement that
+    /// verifies under this node's key and states exactly `record`.
+    pub statement: Option<Vec<u8>>,
+}
+
+impl ChainCheckpoint {
+    /// The digest an anchor is pinned by: the SHA-256 of its statement.
+    /// `None` for a checkpoint that anchors no answer.
+    pub fn anchor_digest(&self) -> Option<String> {
+        self.statement
+            .as_ref()
+            .map(|s| hex::encode(Sha256::digest(s)))
+    }
+}
+
 /// The index of one ledger directory.
 pub struct LedgerIndex {
     ledger_dir: PathBuf,
@@ -184,7 +221,7 @@ pub struct LedgerIndex {
     /// Why indexing stopped, if it did: nothing after this line is a leaf.
     capsules_stopped: Option<String>,
     /// The valid checkpoint chain, oldest first.
-    pub chain: Vec<CheckpointRecord>,
+    pub chain: Vec<ChainCheckpoint>,
     /// Why the chain ended, if it did.
     chain_stopped: Option<String>,
 }
@@ -313,18 +350,18 @@ impl LedgerIndex {
 
     /// `Some` for a checkpoint that extends the chain; `None` for one past
     /// what the index holds yet; `Err` for one that ends the chain.
-    fn check_checkpoint(&self, body: &[u8]) -> Result<Option<CheckpointRecord>, String> {
+    fn check_checkpoint(&self, body: &[u8]) -> Result<Option<ChainCheckpoint>, String> {
         let mut value: Value =
             serde_json::from_slice(body).map_err(|e| format!("not JSON: {e}"))?;
-        if let Some(obj) = value.as_object_mut() {
-            obj.remove("checkpoint_cose");
-        }
+        let cose_hex = value
+            .as_object_mut()
+            .and_then(|obj| obj.remove("checkpoint_cose"));
         let cp: CheckpointRecord =
             serde_json::from_value(value).map_err(|e| format!("not a checkpoint: {e}"))?;
         if cp.key_id != self.node_key_id || !cp.verify_signature_offline() {
             return Err("not signed by this node's key".into());
         }
-        match self.chain.last() {
+        match self.chain.last().map(|c| &c.record) {
             None if cp.prev_size != 0 || !cp.prev_root.is_empty() => {
                 return Err("the first checkpoint does not start the stream".into())
             }
@@ -354,7 +391,44 @@ impl LedgerIndex {
         if hex::encode(root_from_peaks(&peak_hashes)) != cp.root {
             return Err("its root is not this ledger's root at its size".into());
         }
-        Ok(Some(cp))
+        let statement = cose_hex
+            .as_ref()
+            .and_then(Value::as_str)
+            .and_then(|h| hex::decode(h).ok())
+            .filter(|s| states(s, &cp));
+        if statement.is_none() {
+            tracing::warn!(
+                mmr_size = cp.mmr_size,
+                "a checkpoint has no COSE statement of its own: it anchors no evidence answer"
+            );
+        }
+        Ok(Some(ChainCheckpoint {
+            record: cp,
+            statement,
+        }))
+    }
+
+    /// The inclusion path (sibling hashes, leaf upward) of `leaf_index` in
+    /// the MMR of `size` nodes.
+    pub fn inclusion_path(&self, leaf_index: u64, size: u64) -> Option<Vec<Hash>> {
+        let proof = cll::mmr::inclusion_proof(&self.nodes, leaf_index, size).ok()?;
+        hashes(&proof.witness)
+    }
+
+    /// What a consistency proof from the MMR of `from` nodes to the MMR of
+    /// `to` nodes is made of: the old peaks, each one's path into the new
+    /// MMR, and the new peaks.
+    pub fn consistency_parts(&self, from: u64, to: u64) -> Option<ConsistencyParts> {
+        let proof = cll::mmr::consistency_proof(&self.nodes, from, to).ok()?;
+        Some((
+            hashes(&proof.old_peaks)?,
+            proof
+                .witness
+                .iter()
+                .map(|p| hashes(p))
+                .collect::<Option<_>>()?,
+            hashes(&proof.new_peaks)?,
+        ))
     }
 
     pub fn leaf_index_of(&self, capsule_id: &str) -> Option<u64> {
@@ -424,13 +498,14 @@ pub struct LogView<'a> {
 }
 
 impl LogView<'_> {
-    fn record(&self, leaf_index: u64) -> Option<Record> {
+    /// The record at `leaf_index`, its body read from the ledger. `None`
+    /// when the line is no longer the one indexed.
+    pub fn record_at(&self, leaf_index: u64) -> Option<Record> {
         let leaf = self.index.leaves.get(usize::try_from(leaf_index).ok()?)?;
         let mut body = vec![0u8; usize::try_from(leaf.len).ok()?];
         let mut file = self.file.as_ref()?;
         file.seek(SeekFrom::Start(leaf.offset)).ok()?;
         file.read_exact(&mut body).ok()?;
-        // The line must still be the one indexed.
         let parsed: Value = serde_json::from_slice(&body).ok()?;
         (parsed.get("capsule_id").and_then(Value::as_str) == Some(leaf.capsule_id.as_str())).then(
             || Record {
@@ -440,36 +515,46 @@ impl LogView<'_> {
             },
         )
     }
-
-    fn digests(&self, indices: &[u64]) -> Vec<String> {
-        indices
-            .iter()
-            .filter_map(|&i| self.index.leaves.get(i as usize))
-            .map(|l| l.capsule_id.clone())
-            .collect()
-    }
 }
 
-impl EvidenceLog for LogView<'_> {
-    type Nodes = MemoryNodeStore;
-    fn nodes(&self) -> &MemoryNodeStore {
-        &self.index.nodes
-    }
-    fn checkpoints(&self) -> Vec<CheckpointRecord> {
-        self.index.chain.clone()
-    }
-    fn record_by_digest(&self, digest: &str) -> Option<Record> {
-        self.record(self.index.leaf_index_of(digest)?)
-    }
-    fn record_at(&self, leaf_index: u64) -> Option<Record> {
-        self.record(leaf_index)
-    }
-    fn correlation(&self, id: &str) -> Vec<String> {
-        self.digests(self.index.correlated(id))
-    }
-    fn citing(&self, half_digest: &str) -> Vec<String> {
-        self.digests(self.index.citing(half_digest))
-    }
+/// One record, as an answer serves it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Record {
+    /// 0-based position in the log.
+    pub leaf_index: u64,
+    /// The `capsule_id`, the entry the log commits.
+    pub digest: String,
+    /// The record's line in the ledger.
+    pub body: Vec<u8>,
+}
+
+/// A record's digest as a requester computes it from the body it was sent:
+/// the body's recomputed `capsule_id`, when that is the id the body states.
+/// `None` for a body that is not a record of this format.
+pub fn record_digest(body: &[u8]) -> Option<String> {
+    let record = crate::producer::jcs::decode_record(body).ok()?;
+    let stated = record.get("capsule_id").and_then(Value::as_str)?;
+    let recomputed = crate::producer::jcs::compute_capsule_id(&record).ok()?;
+    (recomputed == stated).then_some(recomputed)
+}
+
+/// Whether `statement` is this checkpoint's own COSE wire statement: it
+/// verifies under its `kid`, which is the checkpoint's key, and it states
+/// exactly the checkpoint's log, sizes, roots and time.
+fn states(statement: &[u8], cp: &CheckpointRecord) -> bool {
+    let verified = verify_checkpoint_cose_offline(statement);
+    let Some(decoded) = verified.decoded.filter(|_| verified.ok) else {
+        return false;
+    };
+    decoded.key_id == cp.key_id
+        && decoded.to_checkpoint_record().signing_body() == cp.signing_body()
+}
+
+fn hashes(hex_list: &[String]) -> Option<Vec<Hash>> {
+    hex_list
+        .iter()
+        .map(|h| hex::decode(h).ok()?.try_into().ok())
+        .collect()
 }
 
 impl Responder for LogView<'_> {
@@ -491,9 +576,9 @@ impl Responder for LogView<'_> {
             .iter()
             .filter_map(|cp| {
                 Some(Anchor {
-                    digest: cp.digest(),
-                    size: leaf_count(cp.mmr_size).ok()?,
-                    issued_at: cp.timestamp.clone(),
+                    digest: cp.anchor_digest()?,
+                    size: leaf_count(cp.record.mmr_size).ok()?,
+                    issued_at: cp.record.timestamp.clone(),
                 })
             })
             .collect()
@@ -509,16 +594,6 @@ impl Responder for LogView<'_> {
             _ => None,
         }
     }
-}
-
-/// A record's digest as a requester computes it from the body it was sent:
-/// the body's recomputed `capsule_id`, when that is the id the body states.
-/// `None` for a body that is not a record of this format.
-pub fn record_digest(body: &[u8]) -> Option<String> {
-    let record: Value = serde_json::from_slice(body).ok()?;
-    let stated = record.get("capsule_id").and_then(Value::as_str)?;
-    let recomputed = crate::producer::jcs::compute_capsule_id(&record).ok()?;
-    (recomputed == stated).then_some(recomputed)
 }
 
 fn trim_newline(line: &[u8]) -> &[u8] {
@@ -585,8 +660,8 @@ mod tests {
 
     fn checkpoint_lines(ledger: &[Value], key: &SigningKey) -> Vec<Value> {
         corpus_checkpoints(ledger, key)
-            .into_iter()
-            .map(|cp| serde_json::to_value(cp).unwrap())
+            .iter()
+            .map(|cp| cp.line())
             .collect()
     }
 

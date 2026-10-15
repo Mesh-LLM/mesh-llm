@@ -1,0 +1,110 @@
+{
+  "draft": "draft-mih-agent-evidence-request-00",
+  "provenance": "spec-derived",
+  "corpus": "digest",
+  "description": "The request digest: SHA-256 over the request bytes as received.",
+  "count": 7,
+  "cases": [
+    {
+      "id": "digest-json-jcs",
+      "section": [
+        "§4.2 The Signed Refusal",
+        "§3.8 Recording the Request"
+      ],
+      "description": "RFC 8785 bytes: the recorded bytes and the transmitted bytes are the same.",
+      "encoding": "json",
+      "request_json": "{\"coverage\":{\"expected_pin\":\"6441370955d2b408884793962a664daec6bb25e06d76a2f53d8a80f66a675202\"},\"nonce\":\"n-0201\",\"subject\":{\"record\":\"2ab350895f867d54a5cfdc1dd1aa214cbc723c659663460e7511dff16a5ccc85\"}}",
+      "deterministic_encoding": true,
+      "expect": {
+        "request_digest": "8f5e0250575fce29af389b723181daa665d35011a9ff93af5b16bb6e7b04b563"
+      },
+      "ambiguity": "§3.1, §3.2, §4.2: -00 names digests but not the hash algorithm or representation. Vectors use SHA-256 as 64 lowercase hex characters, as text in both the JSON and CBOR bindings."
+    },
+    {
+      "id": "digest-json-as-received",
+      "section": [
+        "§4.2 The Signed Refusal"
+      ],
+      "description": "The same logical request received pretty-printed with another member order. The digest is over these bytes, never over a re-canonicalized form.",
+      "encoding": "json",
+      "request_json": "{\n  \"nonce\": \"n-0201\",\n  \"coverage\": {\n    \"expected_pin\": \"6441370955d2b408884793962a664daec6bb25e06d76a2f53d8a80f66a675202\"\n  },\n  \"subject\": {\n    \"record\": \"2ab350895f867d54a5cfdc1dd1aa214cbc723c659663460e7511dff16a5ccc85\"\n  }\n}",
+      "deterministic_encoding": false,
+      "expect": {
+        "request_digest": "5d5fd71bef55a0b17f9f0641d73ed4740840cebf880a34c5022aa92554e1a914"
+      },
+      "ambiguity": "§3.1, §3.2, §4.2: -00 names digests but not the hash algorithm or representation. Vectors use SHA-256 as 64 lowercase hex characters, as text in both the JSON and CBOR bindings."
+    },
+    {
+      "id": "digest-cbor-deterministic",
+      "section": [
+        "§4.2 The Signed Refusal",
+        "§3.8 Recording the Request",
+        "§10 Transport Bindings"
+      ],
+      "description": "RFC 8949 §4.2.1 frame of the same logical request.",
+      "encoding": "cbor",
+      "request_cbor_hex": "a3656e6f6e6365666e2d30323031677375626a656374a1667265636f726478403261623335303839356638363764353461356366646331646431616132313463626337323363363539363633343630653735313164666631366135636363383568636f766572616765a16c65787065637465645f70696e784036343431333730393535643262343038383834373933393632613636346461656336626232356530366437366132663533643861383066363661363735323032",
+      "deterministic_encoding": true,
+      "expect": {
+        "request_digest": "0a4b2bbcd79387ff92d6cca189518762aa7d38c4658bb979ce16b631f2251fc3"
+      },
+      "ambiguity": "§3.1, §3.2, §4.2: -00 names digests but not the hash algorithm or representation. Vectors use SHA-256 as 64 lowercase hex characters, as text in both the JSON and CBOR bindings."
+    },
+    {
+      "id": "digest-cbor-as-received",
+      "section": [
+        "§4.2 The Signed Refusal",
+        "§10 Transport Bindings"
+      ],
+      "description": "The same logical map as CBOR with unsorted keys: a different byte string, so a different digest. The digest is over the bytes received.",
+      "encoding": "cbor",
+      "request_cbor_hex": "a3656e6f6e6365666e2d3032303168636f766572616765a16c65787065637465645f70696e784036343431333730393535643262343038383834373933393632613636346461656336626232356530366437366132663533643861383066363661363735323032677375626a656374a1667265636f7264784032616233353038393566383637643534613563666463316464316161323134636263373233633635393636333436306537353131646666313661356363633835",
+      "deterministic_encoding": false,
+      "expect": {
+        "request_digest": "a6fca795b66e7ccff9657c59ddca08a1a936e8a76aa36414924b65e7f41ae5fa"
+      },
+      "ambiguity": "§3.1, §3.2, §4.2: -00 names digests but not the hash algorithm or representation. Vectors use SHA-256 as 64 lowercase hex characters, as text in both the JSON and CBOR bindings."
+    },
+    {
+      "id": "digest-nonce-distinguishes",
+      "section": [
+        "§3.5 Nonce",
+        "§4.2 The Signed Refusal"
+      ],
+      "description": "digest-json-jcs with only the nonce changed: a distinct request instance with a distinct digest.",
+      "encoding": "json",
+      "request_json": "{\"coverage\":{\"expected_pin\":\"6441370955d2b408884793962a664daec6bb25e06d76a2f53d8a80f66a675202\"},\"nonce\":\"n-0202\",\"subject\":{\"record\":\"2ab350895f867d54a5cfdc1dd1aa214cbc723c659663460e7511dff16a5ccc85\"}}",
+      "deterministic_encoding": true,
+      "expect": {
+        "request_digest": "109c87c4ee97b71af87866976619c6173aee5f8a950da563cd3a861c877dd7f7"
+      },
+      "ambiguity": "§3.1, §3.2, §4.2: -00 names digests but not the hash algorithm or representation. Vectors use SHA-256 as 64 lowercase hex characters, as text in both the JSON and CBOR bindings."
+    },
+    {
+      "id": "neg-refusal-digest-recanonicalized",
+      "section": [
+        "§4.2 The Signed Refusal"
+      ],
+      "description": "A refusal of the pretty-printed request (digest-json-as-received) that carries the digest of the re-canonicalized form does not identify the request as received.",
+      "request_json": "{\n  \"nonce\": \"n-0201\",\n  \"coverage\": {\n    \"expected_pin\": \"6441370955d2b408884793962a664daec6bb25e06d76a2f53d8a80f66a675202\"\n  },\n  \"subject\": {\n    \"record\": \"2ab350895f867d54a5cfdc1dd1aa214cbc723c659663460e7511dff16a5ccc85\"\n  }\n}",
+      "refusal_request_digest": "8f5e0250575fce29af389b723181daa665d35011a9ff93af5b16bb6e7b04b563",
+      "expect": {
+        "identifies_request": false
+      },
+      "ambiguity": "§3.1, §3.2, §4.2: -00 names digests but not the hash algorithm or representation. Vectors use SHA-256 as 64 lowercase hex characters, as text in both the JSON and CBOR bindings."
+    },
+    {
+      "id": "pos-refusal-digest-as-received",
+      "section": [
+        "§4.2 The Signed Refusal"
+      ],
+      "description": "The same refusal carrying the digest of the bytes as received identifies the request.",
+      "request_json": "{\n  \"nonce\": \"n-0201\",\n  \"coverage\": {\n    \"expected_pin\": \"6441370955d2b408884793962a664daec6bb25e06d76a2f53d8a80f66a675202\"\n  },\n  \"subject\": {\n    \"record\": \"2ab350895f867d54a5cfdc1dd1aa214cbc723c659663460e7511dff16a5ccc85\"\n  }\n}",
+      "refusal_request_digest": "5d5fd71bef55a0b17f9f0641d73ed4740840cebf880a34c5022aa92554e1a914",
+      "expect": {
+        "identifies_request": true
+      },
+      "ambiguity": "§3.1, §3.2, §4.2: -00 names digests but not the hash algorithm or representation. Vectors use SHA-256 as 64 lowercase hex characters, as text in both the JSON and CBOR bindings."
+    }
+  ]
+}

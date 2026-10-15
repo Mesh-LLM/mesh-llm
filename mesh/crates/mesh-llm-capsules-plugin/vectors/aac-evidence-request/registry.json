@@ -1,0 +1,60 @@
+{
+  "draft": "draft-mih-agent-evidence-request-00",
+  "provenance": "spec-derived",
+  "section": [
+    "§3 The Request",
+    "§3.1 Subject",
+    "§3.2 Coverage",
+    "§10 Transport Bindings",
+    "§13 IANA Considerations"
+  ],
+  "request_fields": {
+    "subject": "REQUIRED",
+    "coverage": "REQUIRED",
+    "derivation": "OPTIONAL",
+    "deadline": "OPTIONAL",
+    "nonce": "RECOMMENDED",
+    "route": "OPTIONAL"
+  },
+  "subject_forms": [
+    "full_history",
+    "checkpoints",
+    "record",
+    "range",
+    "correlation",
+    "exchange"
+  ],
+  "coverage_members": [
+    "expected_pin",
+    "min_freshness"
+  ],
+  "refusal_reasons": [
+    "not_authorized",
+    "no_such_subject",
+    "coverage_unsatisfiable",
+    "derivation_unsupported",
+    "policy_declined",
+    "deadline_unmet",
+    "request_malformed",
+    "retention_expired"
+  ],
+  "derivations": {
+    "history_card/1": {
+      "declared_fields": []
+    }
+  },
+  "outcomes": [
+    "artifact",
+    "refusal",
+    "recorded_absence"
+  ],
+  "request_states": [
+    "pending"
+  ],
+  "subprotocol": "evidence-request/1",
+  "not_registered_examples": [
+    "no_such_record",
+    "recorded_absence",
+    "chain_segment"
+  ]
+}

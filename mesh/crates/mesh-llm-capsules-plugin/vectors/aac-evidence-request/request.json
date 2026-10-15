@@ -1,0 +1,557 @@
+{
+  "draft": "draft-mih-agent-evidence-request-00",
+  "provenance": "spec-derived",
+  "corpus": "request",
+  "description": "Request map validation: well formed, or the exact refusal reason.",
+  "count": 33,
+  "cases": [
+    {
+      "id": "pos-subject-full_history",
+      "section": [
+        "§3 The Request",
+        "§3.1 Subject",
+        "§3.2 Coverage"
+      ],
+      "description": "full_history subject under an expected_pin.",
+      "request_json": "{\"coverage\":{\"expected_pin\":\"6441370955d2b408884793962a664daec6bb25e06d76a2f53d8a80f66a675202\"},\"nonce\":\"n-0001\",\"subject\":{\"full_history\":null}}",
+      "request_json_digest": "e4c613638aa7ffc5b1b761866c6951f1cab634c98fc4f237d4692a2e3ffc83b1",
+      "request_cbor_hex": "a3656e6f6e6365666e2d30303031677375626a656374a16c66756c6c5f686973746f7279f668636f766572616765a16c65787065637465645f70696e784036343431333730393535643262343038383834373933393632613636346461656336626232356530366437366132663533643861383066363661363735323032",
+      "request_cbor_digest": "a462ddf7939a72756cd973090dbb83a3e934274ccc584f19c27fbeb9b6e2d791",
+      "expect": {
+        "well_formed": true
+      },
+      "ambiguity": "§3.1 Subject: -00 gives six forms and their content but no wire shape. Vectors use a map with exactly one member, named by the form token, whose value is the content: null for full_history and checkpoints, a digest for record and exchange, [a, b] (two unsigned integers) for range, a text string for correlation."
+    },
+    {
+      "id": "pos-subject-checkpoints",
+      "section": [
+        "§3 The Request",
+        "§3.1 Subject",
+        "§3.2 Coverage"
+      ],
+      "description": "checkpoints subject under an expected_pin.",
+      "request_json": "{\"coverage\":{\"expected_pin\":\"6441370955d2b408884793962a664daec6bb25e06d76a2f53d8a80f66a675202\"},\"nonce\":\"n-0002\",\"subject\":{\"checkpoints\":null}}",
+      "request_json_digest": "17108791cce554990d78bd25390c8bd3323809b4a3b47b1889510a0d581bea84",
+      "request_cbor_hex": "a3656e6f6e6365666e2d30303032677375626a656374a16b636865636b706f696e7473f668636f766572616765a16c65787065637465645f70696e784036343431333730393535643262343038383834373933393632613636346461656336626232356530366437366132663533643861383066363661363735323032",
+      "request_cbor_digest": "f51cc21d5aaa4a8ad86fad03a82b2b079b2f2bf6e9c3223e4b7a5806a6776ca0",
+      "expect": {
+        "well_formed": true
+      },
+      "ambiguity": "§3.1 Subject: -00 gives six forms and their content but no wire shape. Vectors use a map with exactly one member, named by the form token, whose value is the content: null for full_history and checkpoints, a digest for record and exchange, [a, b] (two unsigned integers) for range, a text string for correlation."
+    },
+    {
+      "id": "pos-subject-record",
+      "section": [
+        "§3 The Request",
+        "§3.1 Subject",
+        "§3.2 Coverage"
+      ],
+      "description": "record subject named by digest, under an expected_pin.",
+      "request_json": "{\"coverage\":{\"expected_pin\":\"6441370955d2b408884793962a664daec6bb25e06d76a2f53d8a80f66a675202\"},\"nonce\":\"n-0003\",\"subject\":{\"record\":\"2ab350895f867d54a5cfdc1dd1aa214cbc723c659663460e7511dff16a5ccc85\"}}",
+      "request_json_digest": "78e68275f27c83d0f3054beaf858baa14763b2d1fed830e02b05f875f7e0493d",
+      "request_cbor_hex": "a3656e6f6e6365666e2d30303033677375626a656374a1667265636f726478403261623335303839356638363764353461356366646331646431616132313463626337323363363539363633343630653735313164666631366135636363383568636f766572616765a16c65787065637465645f70696e784036343431333730393535643262343038383834373933393632613636346461656336626232356530366437366132663533643861383066363661363735323032",
+      "request_cbor_digest": "0b1a7fe116029cf9a4cb7745dc95e8cf8ddfca3ccd763d79a30749e0fdf77112",
+      "expect": {
+        "well_formed": true
+      },
+      "ambiguity": "§3.1 Subject: -00 gives six forms and their content but no wire shape. Vectors use a map with exactly one member, named by the form token, whose value is the content: null for full_history and checkpoints, a digest for record and exchange, [a, b] (two unsigned integers) for range, a text string for correlation."
+    },
+    {
+      "id": "pos-subject-range",
+      "section": [
+        "§3 The Request",
+        "§3.1 Subject",
+        "§3.2 Coverage"
+      ],
+      "description": "range subject, positions 0 through 2 inclusive, under a size min_freshness.",
+      "request_json": "{\"coverage\":{\"min_freshness\":42},\"nonce\":\"n-0004\",\"subject\":{\"range\":[0,2]}}",
+      "request_json_digest": "71186afe8fcf23c07ff5a47b18bfb5c903826d7475274ad6e8471097a0dc002a",
+      "request_cbor_hex": "a3656e6f6e6365666e2d30303034677375626a656374a16572616e676582000268636f766572616765a16d6d696e5f66726573686e657373182a",
+      "request_cbor_digest": "b1efccd36f414423b3fb33c022b42f29449aaa308b5429f7915f958e909e8a8d",
+      "expect": {
+        "well_formed": true
+      },
+      "ambiguity": "§3.1 Subject: -00 gives six forms and their content but no wire shape. Vectors use a map with exactly one member, named by the form token, whose value is the content: null for full_history and checkpoints, a digest for record and exchange, [a, b] (two unsigned integers) for range, a text string for correlation. §3.2 Coverage: min_freshness is 'size or time' with no shape. Vectors read the value itself: an unsigned integer is a log size, a text string is an RFC 3339 UTC time. Any other type is not a conforming value."
+    },
+    {
+      "id": "pos-subject-correlation",
+      "section": [
+        "§3 The Request",
+        "§3.1 Subject",
+        "§3.2 Coverage"
+      ],
+      "description": "correlation subject under a time min_freshness.",
+      "request_json": "{\"coverage\":{\"min_freshness\":\"2026-09-27T00:00:00Z\"},\"nonce\":\"n-0005\",\"subject\":{\"correlation\":\"c-7d1e9a40\"}}",
+      "request_json_digest": "59d64209b0c06b19c3cc6928a82bf9f15b5e119f82048e7ab672e2542c3648b2",
+      "request_cbor_hex": "a3656e6f6e6365666e2d30303035677375626a656374a16b636f7272656c6174696f6e6a632d376431653961343068636f766572616765a16d6d696e5f66726573686e65737374323032362d30392d32375430303a30303a30305a",
+      "request_cbor_digest": "17233a4d67d7de5ce903e6abc448ff0b86d2649dd61dec2b0c68bdd7da3921ca",
+      "expect": {
+        "well_formed": true
+      },
+      "ambiguity": "§3.1 Subject: -00 gives six forms and their content but no wire shape. Vectors use a map with exactly one member, named by the form token, whose value is the content: null for full_history and checkpoints, a digest for record and exchange, [a, b] (two unsigned integers) for range, a text string for correlation. §3.2 Coverage: min_freshness is 'size or time' with no shape. Vectors read the value itself: an unsigned integer is a log size, a text string is an RFC 3339 UTC time. Any other type is not a conforming value."
+    },
+    {
+      "id": "pos-subject-exchange",
+      "section": [
+        "§3 The Request",
+        "§3.1 Subject",
+        "§3.2 Coverage",
+        "§6 The Symmetric Ask"
+      ],
+      "description": "exchange subject naming the requester's own half, pinned on that same half (§3.2: a requester's own exchange half is a valid pin for an exchange subject).",
+      "request_json": "{\"coverage\":{\"expected_pin\":\"e2c78557e239cd93cf344c2e435158367deac1d3b525deb6e09c23d1a8139227\"},\"nonce\":\"n-0006\",\"subject\":{\"exchange\":\"e2c78557e239cd93cf344c2e435158367deac1d3b525deb6e09c23d1a8139227\"}}",
+      "request_json_digest": "372cdc7860bffbc8ce239e07dde4739448aab8b00546eb0195b237e124341cf4",
+      "request_cbor_hex": "a3656e6f6e6365666e2d30303036677375626a656374a16865786368616e676578406532633738353537653233396364393363663334346332653433353135383336376465616331643362353235646562366530396332336431613831333932323768636f766572616765a16c65787065637465645f70696e784065326337383535376532333963643933636633343463326534333531353833363764656163316433623532356465623665303963323364316138313339323237",
+      "request_cbor_digest": "af18e25ca78f917343519846945a512188de9743b7f9764cb310b87b909eb1c1",
+      "expect": {
+        "well_formed": true
+      },
+      "ambiguity": "§3.1 Subject: -00 gives six forms and their content but no wire shape. Vectors use a map with exactly one member, named by the form token, whose value is the content: null for full_history and checkpoints, a digest for record and exchange, [a, b] (two unsigned integers) for range, a text string for correlation."
+    },
+    {
+      "id": "pos-nonce-absent",
+      "section": [
+        "§3 The Request",
+        "§3.5 Nonce"
+      ],
+      "description": "nonce is RECOMMENDED, not REQUIRED: subject and coverage alone are well formed.",
+      "request_json": "{\"coverage\":{\"expected_pin\":\"6441370955d2b408884793962a664daec6bb25e06d76a2f53d8a80f66a675202\"},\"subject\":{\"record\":\"2ab350895f867d54a5cfdc1dd1aa214cbc723c659663460e7511dff16a5ccc85\"}}",
+      "request_json_digest": "eca319128783503452d2041f56338a4ef0ffbbb4708f348ebf90746e4be51b67",
+      "request_cbor_hex": "a2677375626a656374a1667265636f726478403261623335303839356638363764353461356366646331646431616132313463626337323363363539363633343630653735313164666631366135636363383568636f766572616765a16c65787065637465645f70696e784036343431333730393535643262343038383834373933393632613636346461656336626232356530366437366132663533643861383066363661363735323032",
+      "request_cbor_digest": "d3cd8b492240c6f18fcc9e0759d7ac0627b759e4dff4e61f499e2927f0a2ffc4",
+      "expect": {
+        "well_formed": true
+      }
+    },
+    {
+      "id": "pos-all-optional-fields",
+      "section": [
+        "§3 The Request",
+        "§3.3 Derivation",
+        "§3.4 Deadline",
+        "§3.5 Nonce",
+        "§3.6 Route"
+      ],
+      "description": "Every defined field present.",
+      "request_json": "{\"coverage\":{\"expected_pin\":\"6441370955d2b408884793962a664daec6bb25e06d76a2f53d8a80f66a675202\"},\"deadline\":\"2026-09-28T00:05:00Z\",\"derivation\":\"history_card/1\",\"nonce\":\"n-0007\",\"route\":\"https://responder.example/evidence\",\"subject\":{\"checkpoints\":null}}",
+      "request_json_digest": "c68bb4301157ebc52b4f0ce60f57d28e906dfc52977c52fe82a76cc36d433673",
+      "request_cbor_hex": "a6656e6f6e6365666e2d3030303765726f757465782268747470733a2f2f726573706f6e6465722e6578616d706c652f65766964656e6365677375626a656374a16b636865636b706f696e7473f668636f766572616765a16c65787065637465645f70696e78403634343133373039353564326234303838383437393339363261363634646165633662623235653036643736613266353364386138306636366136373532303268646561646c696e6574323032362d30392d32385430303a30353a30305a6a64657269766174696f6e6e686973746f72795f636172642f31",
+      "request_cbor_digest": "2002dcee40a0b343803d991632ac953791c180d4e412f9a16ad47ef37940f0c7",
+      "expect": {
+        "well_formed": true
+      },
+      "ambiguity": "§3.4-§3.6: deadline, nonce and route have no stated type. Vectors use text strings (deadline as an RFC 3339 UTC time)."
+    },
+    {
+      "id": "pos-unknown-field-ignored",
+      "section": [
+        "§3 The Request"
+      ],
+      "description": "A responder MUST ignore request fields it does not understand.",
+      "request_json": "{\"coverage\":{\"expected_pin\":\"6441370955d2b408884793962a664daec6bb25e06d76a2f53d8a80f66a675202\"},\"nonce\":\"n-0008\",\"page\":{\"size\":10},\"subject\":{\"record\":\"2ab350895f867d54a5cfdc1dd1aa214cbc723c659663460e7511dff16a5ccc85\"}}",
+      "request_json_digest": "760503562b3c0ba27851c111fa78f6e6984b1cb2545254d22373d893ee2e26e3",
+      "request_cbor_hex": "a46470616765a16473697a650a656e6f6e6365666e2d30303038677375626a656374a1667265636f726478403261623335303839356638363764353461356366646331646431616132313463626337323363363539363633343630653735313164666631366135636363383568636f766572616765a16c65787065637465645f70696e784036343431333730393535643262343038383834373933393632613636346461656336626232356530366437366132663533643861383066363661363735323032",
+      "request_cbor_digest": "7739b6bce7acc5cb0b222259956fcbbdb50d86e2e28206d750afe168345f901a",
+      "expect": {
+        "well_formed": true
+      }
+    },
+    {
+      "id": "pos-derivation-history-card",
+      "section": [
+        "§3.3 Derivation",
+        "§8.1 The History Card",
+        "§13 IANA Considerations"
+      ],
+      "description": "The registered derivation token history_card/1.",
+      "request_json": "{\"coverage\":{\"expected_pin\":\"6441370955d2b408884793962a664daec6bb25e06d76a2f53d8a80f66a675202\"},\"derivation\":\"history_card/1\",\"nonce\":\"n-0009\",\"subject\":{\"full_history\":null}}",
+      "request_json_digest": "555bb3ce78324c1796a626752a97e1b42a8049dc88b5922caded9ba83c700498",
+      "request_cbor_hex": "a4656e6f6e6365666e2d30303039677375626a656374a16c66756c6c5f686973746f7279f668636f766572616765a16c65787065637465645f70696e7840363434313337303935356432623430383838343739333936326136363464616563366262323565303664373661326635336438613830663636613637353230326a64657269766174696f6e6e686973746f72795f636172642f31",
+      "request_cbor_digest": "e028603ab94818886c6be360723d4350fd1c6061ca0ba048a5897fdc3eec310d",
+      "expect": {
+        "well_formed": true
+      }
+    },
+    {
+      "id": "pos-derivation-by-digest",
+      "section": [
+        "§3.3 Derivation"
+      ],
+      "description": "A derivation named by the digest of its definition.",
+      "request_json": "{\"coverage\":{\"expected_pin\":\"6441370955d2b408884793962a664daec6bb25e06d76a2f53d8a80f66a675202\"},\"derivation\":\"3637222e34df47210018fdc68ba037a74715ba0eb5ff987976f5d2f54499da02\",\"nonce\":\"n-0010\",\"subject\":{\"record\":\"2ab350895f867d54a5cfdc1dd1aa214cbc723c659663460e7511dff16a5ccc85\"}}",
+      "request_json_digest": "c525b25cf06b9020f294b5a6f9271aaabb20f769438c7c87509910db9af07108",
+      "request_cbor_hex": "a4656e6f6e6365666e2d30303130677375626a656374a1667265636f726478403261623335303839356638363764353461356366646331646431616132313463626337323363363539363633343630653735313164666631366135636363383568636f766572616765a16c65787065637465645f70696e7840363434313337303935356432623430383838343739333936326136363464616563366262323565303664373661326635336438613830663636613637353230326a64657269766174696f6e784033363337323232653334646634373231303031386664633638626130333761373437313562613065623566663938373937366635643266353434393964613032",
+      "request_cbor_digest": "31381ae6dcc007a8ab47cbc93476a26e133c6d661a7c02b2ac61cf8342830894",
+      "expect": {
+        "well_formed": true
+      },
+      "ambiguity": "§3.3: a registered derivation token and the digest of a definition share one field. Vectors tell them apart by form: a token has a '/N' suffix, a digest is 64 lowercase hex."
+    },
+    {
+      "id": "neg-not-a-map",
+      "section": [
+        "§3 The Request"
+      ],
+      "description": "A request that is not a map (an array) is refused request_malformed.",
+      "request_json": "[{\"record\":\"2ab350895f867d54a5cfdc1dd1aa214cbc723c659663460e7511dff16a5ccc85\"},{\"expected_pin\":\"6441370955d2b408884793962a664daec6bb25e06d76a2f53d8a80f66a675202\"}]",
+      "request_json_digest": "1f031136e0fcdc91c55595d34dcbc4a45051facb97d301842aa98d19edc427fa",
+      "request_cbor_hex": "82a1667265636f7264784032616233353038393566383637643534613563666463316464316161323134636263373233633635393636333436306537353131646666313661356363633835a16c65787065637465645f70696e784036343431333730393535643262343038383834373933393632613636346461656336626232356530366437366132663533643861383066363661363735323032",
+      "request_cbor_digest": "f62293eba1274263e11c10a2d49638967756ae78a54ea034541982f4787f7568",
+      "expect": {
+        "well_formed": false,
+        "reason": "request_malformed"
+      }
+    },
+    {
+      "id": "neg-not-well-formed",
+      "section": [
+        "§3 The Request"
+      ],
+      "description": "Bytes that are not well-formed JSON / CBOR are refused request_malformed.",
+      "request_json": "{\"subject\":",
+      "request_json_digest": "e68496963d9587a469ed5bf1b89c7f678ce58bfcc6f1d70d84e12958d01e1814",
+      "request_cbor_hex": "a2",
+      "request_cbor_digest": "0a43b22d89fa2499be5c7704c9bf273260b0ca9588e4cd1897cd80f9c96cd97a",
+      "expect": {
+        "well_formed": false,
+        "reason": "request_malformed"
+      }
+    },
+    {
+      "id": "neg-subject-missing",
+      "section": [
+        "§3 The Request"
+      ],
+      "description": "Missing the REQUIRED subject field.",
+      "request_json": "{\"coverage\":{\"expected_pin\":\"6441370955d2b408884793962a664daec6bb25e06d76a2f53d8a80f66a675202\"},\"nonce\":\"n-0011\"}",
+      "request_json_digest": "039aff647720eba253861b83647e8cdd66b229335ec6542c074ef6201125299b",
+      "request_cbor_hex": "a2656e6f6e6365666e2d3030313168636f766572616765a16c65787065637465645f70696e784036343431333730393535643262343038383834373933393632613636346461656336626232356530366437366132663533643861383066363661363735323032",
+      "request_cbor_digest": "ce4893afafcd35f7df81fd14487a5177ad03dfd6f44e4bb776d6461a19f88a79",
+      "expect": {
+        "well_formed": false,
+        "reason": "request_malformed"
+      }
+    },
+    {
+      "id": "neg-subject-unknown-form",
+      "section": [
+        "§3 The Request",
+        "§3.1 Subject"
+      ],
+      "description": "A subject form outside the six (chain_segment) does not conform.",
+      "request_json": "{\"coverage\":{\"expected_pin\":\"6441370955d2b408884793962a664daec6bb25e06d76a2f53d8a80f66a675202\"},\"nonce\":\"n-0012\",\"subject\":{\"chain_segment\":[0,2]}}",
+      "request_json_digest": "6cac025d2641bae73ec5de1965fddff8068159a7cba61c99e2616c724a47ca6d",
+      "request_cbor_hex": "a3656e6f6e6365666e2d30303132677375626a656374a16d636861696e5f7365676d656e7482000268636f766572616765a16c65787065637465645f70696e784036343431333730393535643262343038383834373933393632613636346461656336626232356530366437366132663533643861383066363661363735323032",
+      "request_cbor_digest": "4005d1810f359d0ee387bc86b9527ad1a84be684f1ffe198fda0232e2cfec0de",
+      "expect": {
+        "well_formed": false,
+        "reason": "request_malformed"
+      },
+      "ambiguity": "§3.1 Subject: -00 gives six forms and their content but no wire shape. Vectors use a map with exactly one member, named by the form token, whose value is the content: null for full_history and checkpoints, a digest for record and exchange, [a, b] (two unsigned integers) for range, a text string for correlation."
+    },
+    {
+      "id": "neg-subject-two-forms",
+      "section": [
+        "§3 The Request",
+        "§3.1 Subject"
+      ],
+      "description": "A subject naming two forms at once does not conform.",
+      "request_json": "{\"coverage\":{\"expected_pin\":\"6441370955d2b408884793962a664daec6bb25e06d76a2f53d8a80f66a675202\"},\"nonce\":\"n-0013\",\"subject\":{\"correlation\":\"c-7d1e9a40\",\"record\":\"2ab350895f867d54a5cfdc1dd1aa214cbc723c659663460e7511dff16a5ccc85\"}}",
+      "request_json_digest": "5b88be3622ae4b246603c76097beb9ed6d3f499a7dae7d7301162e8084eb172f",
+      "request_cbor_hex": "a3656e6f6e6365666e2d30303133677375626a656374a2667265636f72647840326162333530383935663836376435346135636664633164643161613231346362633732336336353936363334363065373531316466663136613563636338356b636f7272656c6174696f6e6a632d376431653961343068636f766572616765a16c65787065637465645f70696e784036343431333730393535643262343038383834373933393632613636346461656336626232356530366437366132663533643861383066363661363735323032",
+      "request_cbor_digest": "d3c76a73ade84734c6644c2c51635f4c08cad3ee093fd37c2bc9c48d8a05bd5a",
+      "expect": {
+        "well_formed": false,
+        "reason": "request_malformed"
+      },
+      "ambiguity": "§3.1 Subject: -00 gives six forms and their content but no wire shape. Vectors use a map with exactly one member, named by the form token, whose value is the content: null for full_history and checkpoints, a digest for record and exchange, [a, b] (two unsigned integers) for range, a text string for correlation."
+    },
+    {
+      "id": "neg-subject-kind-member",
+      "section": [
+        "§3 The Request",
+        "§3.1 Subject"
+      ],
+      "description": "A subject shaped {kind, <id>} carries no form token as a member, so it does not conform under the A1 reading.",
+      "request_json": "{\"coverage\":{\"expected_pin\":\"6441370955d2b408884793962a664daec6bb25e06d76a2f53d8a80f66a675202\"},\"nonce\":\"n-0014\",\"subject\":{\"capsule_id\":\"2ab350895f867d54a5cfdc1dd1aa214cbc723c659663460e7511dff16a5ccc85\",\"kind\":\"record\"}}",
+      "request_json_digest": "90368ef0906f60296833c2dc0654dce5a00f450fadc6c9c080b04d609ac10bed",
+      "request_cbor_hex": "a3656e6f6e6365666e2d30303134677375626a656374a2646b696e64667265636f72646a63617073756c655f696478403261623335303839356638363764353461356366646331646431616132313463626337323363363539363633343630653735313164666631366135636363383568636f766572616765a16c65787065637465645f70696e784036343431333730393535643262343038383834373933393632613636346461656336626232356530366437366132663533643861383066363661363735323032",
+      "request_cbor_digest": "0d0bc75064b1d6c951fbc25d4be028a6904e977132cbf81345c9dedc00667342",
+      "expect": {
+        "well_formed": false,
+        "reason": "request_malformed"
+      },
+      "ambiguity": "§3.1 Subject: -00 gives six forms and their content but no wire shape. Vectors use a map with exactly one member, named by the form token, whose value is the content: null for full_history and checkpoints, a digest for record and exchange, [a, b] (two unsigned integers) for range, a text string for correlation."
+    },
+    {
+      "id": "neg-subject-none-form-with-content",
+      "section": [
+        "§3 The Request",
+        "§3.1 Subject"
+      ],
+      "description": "full_history carries no content; a value other than null does not conform.",
+      "request_json": "{\"coverage\":{\"expected_pin\":\"6441370955d2b408884793962a664daec6bb25e06d76a2f53d8a80f66a675202\"},\"nonce\":\"n-0015\",\"subject\":{\"full_history\":\"everything\"}}",
+      "request_json_digest": "873be9bd1c959bfc331c6f5ce151263ee37da1095e21105cbc52cbaf5af98acc",
+      "request_cbor_hex": "a3656e6f6e6365666e2d30303135677375626a656374a16c66756c6c5f686973746f72796a65766572797468696e6768636f766572616765a16c65787065637465645f70696e784036343431333730393535643262343038383834373933393632613636346461656336626232356530366437366132663533643861383066363661363735323032",
+      "request_cbor_digest": "056befd1f11a166ed7a1cfa5a273cbb38bee907b197872588544b5ebe941d086",
+      "expect": {
+        "well_formed": false,
+        "reason": "request_malformed"
+      },
+      "ambiguity": "§3.1 Subject: -00 gives six forms and their content but no wire shape. Vectors use a map with exactly one member, named by the form token, whose value is the content: null for full_history and checkpoints, a digest for record and exchange, [a, b] (two unsigned integers) for range, a text string for correlation."
+    },
+    {
+      "id": "neg-record-digest-malformed",
+      "section": [
+        "§3 The Request",
+        "§3.1 Subject"
+      ],
+      "description": "A record digest that is not 64 lowercase hex characters does not conform.",
+      "request_json": "{\"coverage\":{\"expected_pin\":\"6441370955d2b408884793962a664daec6bb25e06d76a2f53d8a80f66a675202\"},\"nonce\":\"n-0016\",\"subject\":{\"record\":\"zzb350895f867d54a5cfdc1dd1aa214cbc723c659663460e7511dff16a5ccc85\"}}",
+      "request_json_digest": "3223d7508f8138d6714d6a5078bf8200d8b8f32a89d260c6eac34c90bdff568a",
+      "request_cbor_hex": "a3656e6f6e6365666e2d30303136677375626a656374a1667265636f726478407a7a623335303839356638363764353461356366646331646431616132313463626337323363363539363633343630653735313164666631366135636363383568636f766572616765a16c65787065637465645f70696e784036343431333730393535643262343038383834373933393632613636346461656336626232356530366437366132663533643861383066363661363735323032",
+      "request_cbor_digest": "6192d00d79750333c6dbcb4162eb2072517f46f79021ea1421bcc48944e2073a",
+      "expect": {
+        "well_formed": false,
+        "reason": "request_malformed"
+      },
+      "ambiguity": "§3.1, §3.2, §4.2: -00 names digests but not the hash algorithm or representation. Vectors use SHA-256 as 64 lowercase hex characters, as text in both the JSON and CBOR bindings."
+    },
+    {
+      "id": "neg-record-digest-prefix",
+      "section": [
+        "§3 The Request",
+        "§3.1 Subject"
+      ],
+      "description": "A 16-character prefix of a held record's digest is not a digest: never resolved by prefix (§3.1: no fuzzy or best-effort matching).",
+      "request_json": "{\"coverage\":{\"expected_pin\":\"6441370955d2b408884793962a664daec6bb25e06d76a2f53d8a80f66a675202\"},\"nonce\":\"n-0017\",\"subject\":{\"record\":\"2ab350895f867d54\"}}",
+      "request_json_digest": "9f679525a3beaa857bb8d0ba01b75379ce303b62e31de7e68d1fe304268910be",
+      "request_cbor_hex": "a3656e6f6e6365666e2d30303137677375626a656374a1667265636f7264703261623335303839356638363764353468636f766572616765a16c65787065637465645f70696e784036343431333730393535643262343038383834373933393632613636346461656336626232356530366437366132663533643861383066363661363735323032",
+      "request_cbor_digest": "627fffebb476c2c5abedcc38ebd3c4ce8c3e4ca027b016e7f006e06ac298b907",
+      "expect": {
+        "well_formed": false,
+        "reason": "request_malformed"
+      },
+      "ambiguity": "§3.1, §3.2, §4.2: -00 names digests but not the hash algorithm or representation. Vectors use SHA-256 as 64 lowercase hex characters, as text in both the JSON and CBOR bindings."
+    },
+    {
+      "id": "neg-range-reversed",
+      "section": [
+        "§3 The Request",
+        "§3.1 Subject"
+      ],
+      "description": "range with a > b.",
+      "request_json": "{\"coverage\":{\"expected_pin\":\"6441370955d2b408884793962a664daec6bb25e06d76a2f53d8a80f66a675202\"},\"nonce\":\"n-0018\",\"subject\":{\"range\":[5,2]}}",
+      "request_json_digest": "ddf39f5403e7a5e810d784b170d33db0b88b84f76cc5d15bc0e9cf6527b1b961",
+      "request_cbor_hex": "a3656e6f6e6365666e2d30303138677375626a656374a16572616e676582050268636f766572616765a16c65787065637465645f70696e784036343431333730393535643262343038383834373933393632613636346461656336626232356530366437366132663533643861383066363661363735323032",
+      "request_cbor_digest": "49d6cdf62c8243aca13fdca05e7387d344c65f24743065d2e5615265a36f7dc2",
+      "expect": {
+        "well_formed": false,
+        "reason": "request_malformed"
+      },
+      "ambiguity": "§3.1 range: -00 does not say whether a > b is malformed. Vectors treat it as a value that does not conform (request_malformed)."
+    },
+    {
+      "id": "neg-range-not-a-pair",
+      "section": [
+        "§3 The Request",
+        "§3.1 Subject"
+      ],
+      "description": "range content that is not a pair of positions.",
+      "request_json": "{\"coverage\":{\"expected_pin\":\"6441370955d2b408884793962a664daec6bb25e06d76a2f53d8a80f66a675202\"},\"nonce\":\"n-0019\",\"subject\":{\"range\":\"0..2\"}}",
+      "request_json_digest": "e8273e1b8aa5364f821b555081f3091e22aa557b6e8dd934d2eb47ad2ee537b9",
+      "request_cbor_hex": "a3656e6f6e6365666e2d30303139677375626a656374a16572616e676564302e2e3268636f766572616765a16c65787065637465645f70696e784036343431333730393535643262343038383834373933393632613636346461656336626232356530366437366132663533643861383066363661363735323032",
+      "request_cbor_digest": "ff3bd75a18b1d3bb55640bee3f1c376d359d6c8637ac3a770b414ad6a2ef78e1",
+      "expect": {
+        "well_formed": false,
+        "reason": "request_malformed"
+      },
+      "ambiguity": "§3.1 Subject: -00 gives six forms and their content but no wire shape. Vectors use a map with exactly one member, named by the form token, whose value is the content: null for full_history and checkpoints, a digest for record and exchange, [a, b] (two unsigned integers) for range, a text string for correlation."
+    },
+    {
+      "id": "neg-derivation-not-text",
+      "section": [
+        "§3 The Request",
+        "§3.3 Derivation"
+      ],
+      "description": "derivation that is neither a registered token nor a digest.",
+      "request_json": "{\"coverage\":{\"expected_pin\":\"6441370955d2b408884793962a664daec6bb25e06d76a2f53d8a80f66a675202\"},\"derivation\":7,\"nonce\":\"n-0020\",\"subject\":{\"record\":\"2ab350895f867d54a5cfdc1dd1aa214cbc723c659663460e7511dff16a5ccc85\"}}",
+      "request_json_digest": "fb70e5b72fea3228612fbe4f4718d1841d348218310896718c41e102b8d5cac2",
+      "request_cbor_hex": "a4656e6f6e6365666e2d30303230677375626a656374a1667265636f726478403261623335303839356638363764353461356366646331646431616132313463626337323363363539363633343630653735313164666631366135636363383568636f766572616765a16c65787065637465645f70696e7840363434313337303935356432623430383838343739333936326136363464616563366262323565303664373661326635336438613830663636613637353230326a64657269766174696f6e07",
+      "request_cbor_digest": "cb12bc816c832cebdd1af088c3042edddbaac265b1f10c65efa4c954e146a07e",
+      "expect": {
+        "well_formed": false,
+        "reason": "request_malformed"
+      },
+      "ambiguity": "§3.3: a registered derivation token and the digest of a definition share one field. Vectors tell them apart by form: a token has a '/N' suffix, a digest is 64 lowercase hex."
+    },
+    {
+      "id": "neg-expected-pin-malformed-digest",
+      "section": [
+        "§3 The Request",
+        "§3.2 Coverage"
+      ],
+      "description": "expected_pin whose value is not a digest.",
+      "request_json": "{\"coverage\":{\"expected_pin\":\"6441370955d2b408884793962a664daec6bb25e0\"},\"nonce\":\"n-0021\",\"subject\":{\"record\":\"2ab350895f867d54a5cfdc1dd1aa214cbc723c659663460e7511dff16a5ccc85\"}}",
+      "request_json_digest": "99e203628f36b2a001febde6799259d05e8ba399ec2093c59b9a66bc66ccac8d",
+      "request_cbor_hex": "a3656e6f6e6365666e2d30303231677375626a656374a1667265636f726478403261623335303839356638363764353461356366646331646431616132313463626337323363363539363633343630653735313164666631366135636363383568636f766572616765a16c65787065637465645f70696e782836343431333730393535643262343038383834373933393632613636346461656336626232356530",
+      "request_cbor_digest": "e92e4fba8bbefe3f7beb3a68a8bfef058d0259589c43bb10925304d1011e38ed",
+      "expect": {
+        "well_formed": false,
+        "reason": "request_malformed"
+      },
+      "ambiguity": "§3 / §3.2: coverage_unsatisfiable is assigned for 'both, or neither'. Vectors read an absent coverage field as 'neither' (coverage_unsatisfiable), and a coverage value that is not a map, or a member whose value does not conform, as request_malformed."
+    },
+    {
+      "id": "neg-expected-pin-map",
+      "section": [
+        "§3 The Request",
+        "§3.2 Coverage"
+      ],
+      "description": "expected_pin given as a map {root, mmr_size}; -00 defines it as a digest.",
+      "request_json": "{\"coverage\":{\"expected_pin\":{\"mmr_size\":42,\"root\":\"6441370955d2b408884793962a664daec6bb25e06d76a2f53d8a80f66a675202\"}},\"nonce\":\"n-0022\",\"subject\":{\"record\":\"2ab350895f867d54a5cfdc1dd1aa214cbc723c659663460e7511dff16a5ccc85\"}}",
+      "request_json_digest": "cbce0954056e349e2690873ebcff34498eff1b00becab5a00e9b7416423f7382",
+      "request_cbor_hex": "a3656e6f6e6365666e2d30303232677375626a656374a1667265636f726478403261623335303839356638363764353461356366646331646431616132313463626337323363363539363633343630653735313164666631366135636363383568636f766572616765a16c65787065637465645f70696ea264726f6f74784036343431333730393535643262343038383834373933393632613636346461656336626232356530366437366132663533643861383066363661363735323032686d6d725f73697a65182a",
+      "request_cbor_digest": "9b58313493f5c39acad2ceff23c9db300696560109f166fea281ed911fcb3ebd",
+      "expect": {
+        "well_formed": false,
+        "reason": "request_malformed"
+      },
+      "ambiguity": "§3 / §3.2: coverage_unsatisfiable is assigned for 'both, or neither'. Vectors read an absent coverage field as 'neither' (coverage_unsatisfiable), and a coverage value that is not a map, or a member whose value does not conform, as request_malformed."
+    },
+    {
+      "id": "neg-min-freshness-max-age",
+      "section": [
+        "§3 The Request",
+        "§3.2 Coverage"
+      ],
+      "description": "min_freshness given as {max_age_seconds}; -00 defines it as a size or a time.",
+      "request_json": "{\"coverage\":{\"min_freshness\":{\"max_age_seconds\":60}},\"nonce\":\"n-0023\",\"subject\":{\"record\":\"2ab350895f867d54a5cfdc1dd1aa214cbc723c659663460e7511dff16a5ccc85\"}}",
+      "request_json_digest": "3badf5556ea48147c8486b8908427e5f922677fbfe8b56f172a236792c388ce0",
+      "request_cbor_hex": "a3656e6f6e6365666e2d30303233677375626a656374a1667265636f726478403261623335303839356638363764353461356366646331646431616132313463626337323363363539363633343630653735313164666631366135636363383568636f766572616765a16d6d696e5f66726573686e657373a16f6d61785f6167655f7365636f6e6473183c",
+      "request_cbor_digest": "aa6899fc348dc18d0de2b50af2fc8de103b410fdffc094830507ee3174399c3b",
+      "expect": {
+        "well_formed": false,
+        "reason": "request_malformed"
+      },
+      "ambiguity": "§3.2 Coverage: min_freshness is 'size or time' with no shape. Vectors read the value itself: an unsigned integer is a log size, a text string is an RFC 3339 UTC time. Any other type is not a conforming value. §3 / §3.2: coverage_unsatisfiable is assigned for 'both, or neither'. Vectors read an absent coverage field as 'neither' (coverage_unsatisfiable), and a coverage value that is not a map, or a member whose value does not conform, as request_malformed."
+    },
+    {
+      "id": "neg-coverage-not-a-map",
+      "section": [
+        "§3 The Request",
+        "§3.2 Coverage"
+      ],
+      "description": "coverage whose value is not a map.",
+      "request_json": "{\"coverage\":\"6441370955d2b408884793962a664daec6bb25e06d76a2f53d8a80f66a675202\",\"nonce\":\"n-0024\",\"subject\":{\"record\":\"2ab350895f867d54a5cfdc1dd1aa214cbc723c659663460e7511dff16a5ccc85\"}}",
+      "request_json_digest": "fcb7b5999dc51634316906f229518090094002a65c24bc0b5032592a22b3a7aa",
+      "request_cbor_hex": "a3656e6f6e6365666e2d30303234677375626a656374a1667265636f726478403261623335303839356638363764353461356366646331646431616132313463626337323363363539363633343630653735313164666631366135636363383568636f766572616765784036343431333730393535643262343038383834373933393632613636346461656336626232356530366437366132663533643861383066363661363735323032",
+      "request_cbor_digest": "180d045d58840c97ba374185116bb2210dd8b05179be901869e9eb2cd92e7529",
+      "expect": {
+        "well_formed": false,
+        "reason": "request_malformed"
+      },
+      "ambiguity": "§3 / §3.2: coverage_unsatisfiable is assigned for 'both, or neither'. Vectors read an absent coverage field as 'neither' (coverage_unsatisfiable), and a coverage value that is not a map, or a member whose value does not conform, as request_malformed."
+    },
+    {
+      "id": "neg-coverage-both",
+      "section": [
+        "§3 The Request",
+        "§3.2 Coverage"
+      ],
+      "description": "coverage carrying both members MUST be refused coverage_unsatisfiable, not request_malformed.",
+      "request_json": "{\"coverage\":{\"expected_pin\":\"6441370955d2b408884793962a664daec6bb25e06d76a2f53d8a80f66a675202\",\"min_freshness\":42},\"nonce\":\"n-0025\",\"subject\":{\"record\":\"2ab350895f867d54a5cfdc1dd1aa214cbc723c659663460e7511dff16a5ccc85\"}}",
+      "request_json_digest": "e9087bf348d34d2d1a27da64b280ddedf480491eece4b7684f72c34f50258ce6",
+      "request_cbor_hex": "a3656e6f6e6365666e2d30303235677375626a656374a1667265636f726478403261623335303839356638363764353461356366646331646431616132313463626337323363363539363633343630653735313164666631366135636363383568636f766572616765a26c65787065637465645f70696e7840363434313337303935356432623430383838343739333936326136363464616563366262323565303664373661326635336438613830663636613637353230326d6d696e5f66726573686e657373182a",
+      "request_cbor_digest": "05c4c110d79454924ea3c89839c46421e82cece2d9ecdf8e612b8b8a12437f27",
+      "expect": {
+        "well_formed": false,
+        "reason": "coverage_unsatisfiable"
+      }
+    },
+    {
+      "id": "neg-coverage-neither",
+      "section": [
+        "§3 The Request",
+        "§3.2 Coverage"
+      ],
+      "description": "coverage carrying neither member MUST be refused coverage_unsatisfiable.",
+      "request_json": "{\"coverage\":{},\"nonce\":\"n-0026\",\"subject\":{\"record\":\"2ab350895f867d54a5cfdc1dd1aa214cbc723c659663460e7511dff16a5ccc85\"}}",
+      "request_json_digest": "0040b55c697227d25d394d880fef95f0bccfdfc6ce49a9e7c59eb281198440bc",
+      "request_cbor_hex": "a3656e6f6e6365666e2d30303236677375626a656374a1667265636f726478403261623335303839356638363764353461356366646331646431616132313463626337323363363539363633343630653735313164666631366135636363383568636f766572616765a0",
+      "request_cbor_digest": "dea8d112f1e2b4b752c2632f24072a565b7b0c97bbe5bec69ef00933e88f9918",
+      "expect": {
+        "well_formed": false,
+        "reason": "coverage_unsatisfiable"
+      }
+    },
+    {
+      "id": "neg-coverage-missing",
+      "section": [
+        "§3 The Request",
+        "§3.2 Coverage"
+      ],
+      "description": "No coverage field: the REQUIRED field is missing and the request carries neither member.",
+      "request_json": "{\"nonce\":\"n-0027\",\"subject\":{\"record\":\"2ab350895f867d54a5cfdc1dd1aa214cbc723c659663460e7511dff16a5ccc85\"}}",
+      "request_json_digest": "5a31636ec52efa0ead59c6cd4ef0f12aff90e69daab04cee59c0b20e1425b38c",
+      "request_cbor_hex": "a2656e6f6e6365666e2d30303237677375626a656374a1667265636f7264784032616233353038393566383637643534613563666463316464316161323134636263373233633635393636333436306537353131646666313661356363633835",
+      "request_cbor_digest": "4b201b4073c52a35679e4ee21db1bd070a1b760529596d70ef3d535ddd24c8e5",
+      "expect": {
+        "well_formed": false,
+        "reason": "coverage_unsatisfiable"
+      },
+      "ambiguity": "§3 / §3.2: coverage_unsatisfiable is assigned for 'both, or neither'. Vectors read an absent coverage field as 'neither' (coverage_unsatisfiable), and a coverage value that is not a map, or a member whose value does not conform, as request_malformed."
+    },
+    {
+      "id": "neg-coverage-both-pin-malformed",
+      "section": [
+        "§3 The Request",
+        "§3.2 Coverage"
+      ],
+      "description": "coverage carrying both members where expected_pin is not a digest: the non-conforming value is refused request_malformed before the member count is checked.",
+      "request_json": "{\"coverage\":{\"expected_pin\":\"not-a-digest\",\"min_freshness\":42},\"nonce\":\"n-0028\",\"subject\":{\"record\":\"2ab350895f867d54a5cfdc1dd1aa214cbc723c659663460e7511dff16a5ccc85\"}}",
+      "request_json_digest": "1b88f55efc5ad0da3c6687717228c96a9677581e6a524a527d979d5027620c53",
+      "request_cbor_hex": "a3656e6f6e6365666e2d30303238677375626a656374a1667265636f726478403261623335303839356638363764353461356366646331646431616132313463626337323363363539363633343630653735313164666631366135636363383568636f766572616765a26c65787065637465645f70696e6c6e6f742d612d6469676573746d6d696e5f66726573686e657373182a",
+      "request_cbor_digest": "40b3f8b173c669e637718626a3028f9a31b3d4c0d638e01c7e4e673a4bc46caa",
+      "expect": {
+        "well_formed": false,
+        "reason": "request_malformed"
+      },
+      "ambiguity": "A4 (amended 2026-10-06): -00 does not state which refusal wins when coverage carries both members and a value does not conform. A responder first checks that each member present in coverage has a conforming value; a non-conforming value is refused request_malformed, whether or not the other member is present. Only then is coverage carrying both members, or neither, refused coverage_unsatisfiable."
+    },
+    {
+      "id": "neg-coverage-both-freshness-malformed",
+      "section": [
+        "§3 The Request",
+        "§3.2 Coverage"
+      ],
+      "description": "coverage carrying both members where min_freshness is {max_age_seconds}: the non-conforming value is refused request_malformed before the member count is checked.",
+      "request_json": "{\"coverage\":{\"expected_pin\":\"6441370955d2b408884793962a664daec6bb25e06d76a2f53d8a80f66a675202\",\"min_freshness\":{\"max_age_seconds\":60}},\"nonce\":\"n-0029\",\"subject\":{\"record\":\"2ab350895f867d54a5cfdc1dd1aa214cbc723c659663460e7511dff16a5ccc85\"}}",
+      "request_json_digest": "55d073d10cd5df83e55fc416dfb9161f09ac0df8d0b89b85f6274c232deb6f9a",
+      "request_cbor_hex": "a3656e6f6e6365666e2d30303239677375626a656374a1667265636f726478403261623335303839356638363764353461356366646331646431616132313463626337323363363539363633343630653735313164666631366135636363383568636f766572616765a26c65787065637465645f70696e7840363434313337303935356432623430383838343739333936326136363464616563366262323565303664373661326635336438613830663636613637353230326d6d696e5f66726573686e657373a16f6d61785f6167655f7365636f6e6473183c",
+      "request_cbor_digest": "f14b7d67b683a04232b68836a3f8c1d85f616950ee2f57e5cb0cf32e2be3ba04",
+      "expect": {
+        "well_formed": false,
+        "reason": "request_malformed"
+      },
+      "ambiguity": "§3.2 Coverage: min_freshness is 'size or time' with no shape. Vectors read the value itself: an unsigned integer is a log size, a text string is an RFC 3339 UTC time. Any other type is not a conforming value. A4 (amended 2026-10-06): -00 does not state which refusal wins when coverage carries both members and a value does not conform. A responder first checks that each member present in coverage has a conforming value; a non-conforming value is refused request_malformed, whether or not the other member is present. Only then is coverage carrying both members, or neither, refused coverage_unsatisfiable."
+    },
+    {
+      "id": "neg-coverage-both-both-malformed",
+      "section": [
+        "§3 The Request",
+        "§3.2 Coverage"
+      ],
+      "description": "coverage carrying both members, neither of which conforms: refused request_malformed.",
+      "request_json": "{\"coverage\":{\"expected_pin\":\"not-a-digest\",\"min_freshness\":-1},\"nonce\":\"n-0030\",\"subject\":{\"record\":\"2ab350895f867d54a5cfdc1dd1aa214cbc723c659663460e7511dff16a5ccc85\"}}",
+      "request_json_digest": "ce63da6342ac5428ee06cf650e6d359284d8ba3b5442d4c245557ecd0e83e35b",
+      "request_cbor_hex": "a3656e6f6e6365666e2d30303330677375626a656374a1667265636f726478403261623335303839356638363764353461356366646331646431616132313463626337323363363539363633343630653735313164666631366135636363383568636f766572616765a26c65787065637465645f70696e6c6e6f742d612d6469676573746d6d696e5f66726573686e65737320",
+      "request_cbor_digest": "291a9be9d58d376e1b04be615e66d29c30cc6018510c4eac0bd9e87c2c9c5fa4",
+      "expect": {
+        "well_formed": false,
+        "reason": "request_malformed"
+      },
+      "ambiguity": "§3.2 Coverage: min_freshness is 'size or time' with no shape. Vectors read the value itself: an unsigned integer is a log size, a text string is an RFC 3339 UTC time. Any other type is not a conforming value. A4 (amended 2026-10-06): -00 does not state which refusal wins when coverage carries both members and a value does not conform. A responder first checks that each member present in coverage has a conforming value; a non-conforming value is refused request_malformed, whether or not the other member is present. Only then is coverage carrying both members, or neither, refused coverage_unsatisfiable."
+    }
+  ]
+}

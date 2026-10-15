@@ -15,11 +15,45 @@
 
 ### Changed
 
-- **The evidence request protocol crate is now `evidence-request`** (`=0.1.0`), which
-  `capsule-emit-evidence-request` became when it moved to agent-action-capsule, next to
-  draft-mih-agent-evidence-request-00 and its conformance vectors. 0.1.0 has 0.0.4's API: 0.0.3's,
-  plus requests in the CBOR binding are accepted only in core deterministic encoding. Paths read
-  `evidence_request::` in place of `capsule_emit_evidence_request::`.
+- **An evidence answer is now the interop profile's signed envelope. Upgrade both nodes.** The
+  protocol crate is `evidence-request` `=0.2.0` (what `capsule-emit-evidence-request` became when it
+  moved to agent-action-capsule), which signs and checks the envelope of agent-action-capsule's
+  `spec/interop-profile-v0.md` §6.2 (`evidence-interop/0`), as the Go, Python and evidencebook
+  implementations do. Before, the answer was a pre-profile `{artifact, material, envelope}` that
+  no other implementation signed. A node on an older version cannot read the new answer, and this
+  node cannot read the old one.
+  - **What an anchor is.** A checkpoint is pinned by the SHA-256 of its COSE wire statement (the
+    `checkpoint_cose` the checkpointer already writes beside each checkpoint), not by the digest of
+    its JSON form. A checkpoint without its own statement anchors no answer.
+  - **A record answer** is the record's ledger line, as before, with the profile's Checkpointed
+    Local Log material for its `capsule_id` (the anchor's statement, the inclusion proof, and the
+    consistency proof when the checkpoint extends another). The line is not the `capsule_id`
+    preimage, so a profile verifier reports that check `NOT_CHECKED`, never `FAIL`; this node's
+    requester recomputes the `capsule_id` and checks the proofs, and also accepts a record served as
+    its own octets, which the profile's check passes. The line keeps the producer's signature, which
+    the page's "Ask them for their record" checks. The page reads the artifact as the profile
+    carries it, unpadded base64url.
+  - **The other answers** take evidencebook's artifact forms (record sets, the checkpoint list,
+    `history_card/1`) and `served_summary/1` the same shape. The profile has no material for them
+    and no carrier for witness receipts, so this node also sends, where a profile verifier reads
+    nothing: the anchor's statement and one inclusion proof per record for a record set, and the
+    witness receipts of the checkpoints it carries in a `witness_receipts` member beside the
+    envelope. The requester checks all of it as before.
+  - The builder stays in the plugin (`evidence_artifact`): evidencebook's builder works over its
+    own `CllSubstrate`, which would open the node store the checkpointer owns.
+  - A `served_summary/1` answer's verification now reports `records: []`, like every other
+    answer, not `0`.
+- **`capsule-emit` 0.0.8 and `checkpointed-local-log` 0.3.1**, one CLL line in the build, and no
+  `evidencebook`. capsule-emit 0.0.8 turns on `serde_json`'s `arbitrary_precision` for the whole
+  binary; the strict parser for pushed bodies (`strict_json`) now reads numbers in that form, still
+  refuses a float that overflows, and refuses a key that spells `serde_json`'s private number
+  token.
+- **The evidence-request parity run is judged by agent-action-capsule's vectors.** The
+  self-generated corpus and golden answers are gone from `vectors/parity/evidence_request/`; the
+  draft's conformance vectors are copied into `vectors/aac-evidence-request/` (tag
+  `crates/evidence-request-v0.2.0`), and the responder and requester are run against them. The
+  sharing-policy cases, which no vector states, keep their reviewed expected answers in the
+  runner.
 - **Who asks for evidence is now proven, not stated. Upgrade both nodes.** Each evidence request
   this node sends is signed with the key its host announces for it. The request carries
   `requester_auth` (`key_id`, `sig`), an `audience` (the node it is sent to), a `nonce` and a

@@ -1,0 +1,68 @@
+{
+  "draft": "draft-mih-agent-evidence-request-00",
+  "provenance": "spec-derived",
+  "generator": "python/scripts/generate_evidence_request_vectors.py",
+  "ambiguities": {
+    "A1": "§3.1 Subject: -00 gives six forms and their content but no wire shape. Vectors use a map with exactly one member, named by the form token, whose value is the content: null for full_history and checkpoints, a digest for record and exchange, [a, b] (two unsigned integers) for range, a text string for correlation.",
+    "A2": "§3.1, §3.2, §4.2: -00 names digests but not the hash algorithm or representation. Vectors use SHA-256 as 64 lowercase hex characters, as text in both the JSON and CBOR bindings.",
+    "A3": "§3.2 Coverage: min_freshness is 'size or time' with no shape. Vectors read the value itself: an unsigned integer is a log size, a text string is an RFC 3339 UTC time. Any other type is not a conforming value.",
+    "A4": "§3 / §3.2: coverage_unsatisfiable is assigned for 'both, or neither'. Vectors read an absent coverage field as 'neither' (coverage_unsatisfiable), and a coverage value that is not a map, or a member whose value does not conform, as request_malformed.",
+    "A5": "§3.4-§3.6: deadline, nonce and route have no stated type. Vectors use text strings (deadline as an RFC 3339 UTC time).",
+    "A6": "§3.1 range: -00 does not say whether a > b is malformed. Vectors treat it as a value that does not conform (request_malformed).",
+    "A7": "§4.2 / §10: -00 names the refusal's contents but no member names or signature format. Vectors use request_digest, reason, issued_at, key_id and sig with the signature profile in refusal.json. In the CBOR binding the same map is the frame; the signature is still over the RFC 8785 body.",
+    "A8": "§4.3 / §10: the stream binding says absence is 'the stream closed or timed out without a response frame'; §4.3 says only the close of the waiting window resolves a request. Vectors follow §4.3: a transport failure inside the window leaves the request pending.",
+    "A9": "§9: -00 lists retention_expired only as the correct refusal after until. Inside until, vectors apply the literal 'any other refusal reason' rule: it is a breach.",
+    "A10": "§9: after until, -00 names only retention_expired as correct. Vectors class the four request/capability reasons, policy_declined and deadline_unmet as no breach, and no_such_subject as the wrong token (the lapsed promise must not read as never held, §4.2 item 2).",
+    "A11": "§9: 'a digest or a position under a checkpoint'. Vectors read full_history, checkpoints and correlation subjects in a commitment as malformed.",
+    "A12": "§4.1: the artifact envelope has no member names. Invariance cases compare artifact bytes only; the observation members are local to these vectors.",
+    "A13": "§4.2 item 2 / §4.5: -00 does not say what a correctly signed object with an unregistered reason is. Vectors: not a conforming refusal, and still never recorded as absence.",
+    "A14": "§3.3: a registered derivation token and the digest of a definition share one field. Vectors tell them apart by form: a token has a '/N' suffix, a digest is 64 lowercase hex."
+  },
+  "files": [
+    {
+      "path": "digest.json",
+      "sha256": "2edf8be502d593c395813d26c0372b719bfa6489deeb92355368fc2d5f6a7a05",
+      "count": 7
+    },
+    {
+      "path": "invariance.json",
+      "sha256": "5daf0ff80310628957ebacd2fbcfa9f08a51ef3b5c5aa96c4419c0077d991065",
+      "count": 6
+    },
+    {
+      "path": "outcomes.json",
+      "sha256": "89c250e440ebb7dcce8dd4dc680aee161103d81754fbaa615de3d7c56361b082",
+      "count": 13
+    },
+    {
+      "path": "refusal-imported.json",
+      "sha256": "885d7981f8fd8a22bffd61c5bd10444515e12ea009fa9d70170bb467c7e5a66e",
+      "count": 1
+    },
+    {
+      "path": "refusal.json",
+      "sha256": "51068636d67431f3c0a194007dc89e333b28921638aa2524f18679ed7fbe193d",
+      "count": 21
+    },
+    {
+      "path": "registry.json",
+      "sha256": "cb521c2347918030268f0dc81832caa837dc9db337f889d29c04127fbbcd063a",
+      "count": null
+    },
+    {
+      "path": "request.json",
+      "sha256": "f8889908834a3a7592fe075a30795828ef4eab25b9ad89e904b96504ea7e26d9",
+      "count": 33
+    },
+    {
+      "path": "resolution.json",
+      "sha256": "52a6ef666c4283814770b57275994ad5de07f617763a59d8f685b64d19faf72f",
+      "count": 19
+    },
+    {
+      "path": "retention.json",
+      "sha256": "1257cdae0334526816e9c892def34e07ecae33960edd252819eaaff8c33080ad",
+      "count": 25
+    }
+  ]
+}

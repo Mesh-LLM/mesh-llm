@@ -86,6 +86,10 @@ ed25519-dalek = "2"
 # ECDSA P-256 over the quote and the QE report, and the PCK certificates.
 p256 = { version = "0.13", default-features = false, features = ["ecdsa", "std"] }
 x509-cert = { version = "0.2", default-features = false, features = ["pem", "std"] }
+# The interop profile's MMR proofs in a received evidence answer
+# (`evidence_artifact`): deterministic CBOR. Already in the tree through
+# evidence-request.
+ciborium = "0.2"
 # The `ledger-fetch/1` responder (`ledger_fetch_bridge`) base64-encodes raw
 # COSE_Sign1 bytes for its JSON carrier.
 base64 = "0.22"
@@ -108,17 +112,20 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 # this crate already has a `capsule_emit` module.
 # 0.0.4 carries `settlement` (draft-mih-agent-settlement-records-00 legs);
 # 0.0.6 gives each witness its own client, dialled at the URL given (no
-# built-in service, no redirect followed).
-capsule-emit-lib = { package = "capsule-emit", version = "0.0.6" }
-cll = { package = "checkpointed-local-log", version = "0.2.1" }
+# built-in service, no redirect followed); 0.0.8 sits on cll 0.3.1 directly,
+# with no evidencebook. Its canonicalizer turns on serde_json's
+# `arbitrary_precision` for the whole binary (see `strict_json`).
+capsule-emit-lib = { package = "capsule-emit", version = "0.0.8" }
+cll = { package = "checkpointed-local-log", version = "0.3.1" }
 # Evidence requests are answered in-process (`evidence_answer`): parsing,
-# resolution, signed refusals and the artifact answer come from the protocol
-# crate (draft-mih-agent-evidence-request-00), `evidence-request`, which is
-# what `capsule-emit-evidence-request` became when it moved to
-# agent-action-capsule. Pinned exactly: 0.1.0 is 0.0.4's API (0.0.3's plus
-# requests parsed as core deterministic CBOR only), and a new release may
-# change what verifies.
-evidence-request = "=0.1.0"
+# resolution and signed refusals come from the protocol crate
+# (draft-mih-agent-evidence-request-00), `evidence-request`, which is what
+# `capsule-emit-evidence-request` became when it moved to
+# agent-action-capsule; so do the interop profile's signed envelope and its
+# check of Checkpointed Local Log material (`cll`) and witness receipts
+# (`receipt`). Building the artifact is this plugin's (`evidence_artifact`).
+# Pinned exactly: a new release may change what verifies.
+evidence-request = { version = "=0.2.0", features = ["cll", "receipt"] }
 # The witness's own record of this log (`witness_status`): one blocking GET,
 # no redirects, a capped body. Already in the tree through capsule-emit.
 ureq = { version = "2", features = ["json"] }

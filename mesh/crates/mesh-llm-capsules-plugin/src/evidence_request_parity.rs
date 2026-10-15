@@ -1,26 +1,34 @@
-//! The evidence-request parity run: the in-process responder
-//! (`evidence_answer::answer_and_log`) against the corpus and golden answers
-//! in `vectors/parity/evidence_request/`.
+//! The evidence-request parity run, both halves against what judges them:
 //!
-//! The golden answers are a snapshot this implementation wrote, reviewed
-//! case by case against draft-mih-agent-evidence-request-00. They are not the
-//! draft's own conformance vectors (those run in the protocol crate's
-//! repository), and not the Python reference's answers: that reference departs
-//! from -00 in six ways (see that directory's README), and -00 is what counts.
-//! The served summary is the one part the Python reference still judges: its
-//! value in the golden answers is
-//! checked against `served_summary.py` by `test_served_summary_parity.py`.
+//! - **The protocol**, against agent-action-capsule's conformance vectors
+//!   for draft-mih-agent-evidence-request-00 (`vectors/aac-evidence-request/`,
+//!   copied verbatim at the `crates/evidence-request-v0.2.0` tag): every
+//!   request in `request.json` and `digest.json` through this node's
+//!   responder (`evidence_answer::answer_and_log`), which refuses it with the
+//!   vector's reason and binds the vector's digest; every refusal in
+//!   `refusal.json` through this node's requester
+//!   (`evidence_answer::verify_response`), which accepts exactly the
+//!   conformant ones.
+//! - **This node's own rules**, which no vector states: who may have which
+//!   records (the sharing policy), who asks (`requester_auth`), Standard
+//!   History, the served summary and the limits. The corpus below is a
+//!   ledger and the requests made of it; [`EXPECTED`] states each one's
+//!   answer and what the "asked of you" log records. Each answer is also
+//!   checked as a requester would check it.
 //!
-//! `EVIDENCE_REQUEST_PARITY_OUT=<path>` also writes this run's answers.
-//! `EVIDENCE_REQUEST_PARITY_WRITE=1` with `--ignored` regenerates the corpus
-//! and the golden answers from this implementation: review every changed
-//! line before committing it.
+//! The vectors' other files (resolution, outcomes, invariance, retention)
+//! hold no bytes this node sends or receives: the `evidence-request` crate
+//! is tested against them where it is developed.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use cll::checkpoint::{sign_checkpoint_digest, CheckpointRecord, WitnessRecord};
-use cll::mmr::{add_leaf, leaf_hash, peaks, root_from_peaks, MemoryNodeStore, NodeReader};
+use cll::checkpoint::{
+    checkpoint_to_cose, sign_checkpoint_digest, CheckpointRecord, WitnessRecord,
+};
+use cll::mmr::{
+    add_leaf, consistency_proof, leaf_hash, peaks, root_from_peaks, MemoryNodeStore, NodeReader,
+};
 use ed25519_dalek::SigningKey;
 use evidence_request::digest::request_digest;
 use evidence_request::refusal;
@@ -29,8 +37,8 @@ use sha2::{Digest, Sha256};
 
 use crate::evidence_answer::{self, Outcome, Responder};
 
-fn parity_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("vectors/parity/evidence_request")
+fn aac_dir() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("vectors/aac-evidence-request")
 }
 
 // ---------------------------------------------------------------------------
@@ -207,11 +215,32 @@ pub(crate) fn corpus_ledger() -> Vec<Value> {
     ledger
 }
 
-/// Checkpoints after 16 and after 300 lines, signed by the node key; the
-/// second carries one witness.
-pub(crate) fn corpus_checkpoints(ledger: &[Value], key: &SigningKey) -> Vec<CheckpointRecord> {
+/// A corpus checkpoint: its signed JSON record and its COSE wire statement,
+/// as the checkpointer writes them.
+pub(crate) struct CorpusCheckpoint {
+    pub record: CheckpointRecord,
+    pub statement: Vec<u8>,
+}
+
+impl CorpusCheckpoint {
+    /// The digest a requester pins it by: the SHA-256 of its statement.
+    pub fn anchor(&self) -> String {
+        hex::encode(Sha256::digest(&self.statement))
+    }
+
+    /// Its line in `checkpoints.jsonl`.
+    pub fn line(&self) -> Value {
+        let mut line = serde_json::to_value(&self.record).unwrap();
+        line["checkpoint_cose"] = json!(hex::encode(&self.statement));
+        line
+    }
+}
+
+/// Checkpoints after 16 and after 300 lines, signed by the node key, each
+/// with its COSE wire statement; the second carries one witness.
+pub(crate) fn corpus_checkpoints(ledger: &[Value], key: &SigningKey) -> Vec<CorpusCheckpoint> {
     let mut nodes = MemoryNodeStore::new();
-    let mut out: Vec<CheckpointRecord> = Vec::new();
+    let mut out: Vec<CorpusCheckpoint> = Vec::new();
     for (i, record) in ledger.iter().enumerate() {
         let id: [u8; 32] = hex::decode(record["capsule_id"].as_str().unwrap())
             .unwrap()
@@ -220,18 +249,20 @@ pub(crate) fn corpus_checkpoints(ledger: &[Value], key: &SigningKey) -> Vec<Chec
         add_leaf(&mut nodes, leaf_hash(&id)).unwrap();
         if i + 1 == 16 || i + 1 == 300 {
             let size = nodes.size();
-            let peak_hashes: Vec<_> = peaks(size)
-                .unwrap()
-                .iter()
-                .map(|&p| nodes.node(p))
-                .collect();
-            let prev = out.last();
+            let peak_hashes = |size: u64| -> Vec<_> {
+                peaks(size)
+                    .unwrap()
+                    .iter()
+                    .map(|&p| nodes.node(p))
+                    .collect()
+            };
+            let prev = out.last().map(|c| &c.record);
             let mut cp = CheckpointRecord {
                 v: 1,
                 kind: "mmr_checkpoint".into(),
                 log_id: "corpus-node-log".into(),
                 mmr_size: size,
-                root: hex::encode(root_from_peaks(&peak_hashes)),
+                root: hex::encode(root_from_peaks(&peak_hashes(size))),
                 prev_size: prev.map_or(0, |p| p.mmr_size),
                 prev_root: prev.map_or(String::new(), |p| p.root.clone()),
                 key_id: hex::encode(key.verifying_key().to_bytes()),
@@ -245,6 +276,18 @@ pub(crate) fn corpus_checkpoints(ledger: &[Value], key: &SigningKey) -> Vec<Chec
                 witnesses: Vec::new(),
             };
             cp.signature = sign_checkpoint_digest(&cp, key);
+            let prev_peaks = (cp.prev_size > 0).then(|| peak_hashes(cp.prev_size));
+            let consistency =
+                (cp.prev_size > 0).then(|| consistency_proof(&nodes, cp.prev_size, size).unwrap());
+            let statement = checkpoint_to_cose(
+                &cp,
+                key,
+                &peak_hashes(size),
+                prev_peaks.as_deref(),
+                consistency.as_ref(),
+                None,
+            )
+            .unwrap();
             if !out.is_empty() {
                 cp.witnesses.push(WitnessRecord {
                     ts_url: "https://witness.example".into(),
@@ -255,7 +298,10 @@ pub(crate) fn corpus_checkpoints(ledger: &[Value], key: &SigningKey) -> Vec<Chec
                     is_stub: true,
                 });
             }
-            out.push(cp);
+            out.push(CorpusCheckpoint {
+                record: cp,
+                statement,
+            });
         }
     }
     out
@@ -273,10 +319,10 @@ fn shared(name: &str, covers: &str, history_segments: &str, request: Value) -> V
     c
 }
 
-fn corpus_cases(ledger: &[Value], cps: &[CheckpointRecord]) -> Vec<Value> {
+fn corpus_cases(ledger: &[Value], cps: &[CorpusCheckpoint]) -> Vec<Value> {
     let id = |i: usize| ledger[i]["capsule_id"].as_str().unwrap().to_string();
-    let latest = json!({"expected_pin": cps[1].digest()});
-    let first = json!({"expected_pin": cps[0].digest()});
+    let latest = json!({"expected_pin": cps[1].anchor()});
+    let first = json!({"expected_pin": cps[0].anchor()});
     let fresh = json!({"min_freshness": 1});
     let with = |mut r: Value, k: &str, v: Value| {
         r[k] = v;
@@ -371,7 +417,7 @@ fn corpus_cases(ledger: &[Value], cps: &[CheckpointRecord]) -> Vec<Value> {
                     "record_signature_over_another_request",
                     req(json!({"record": id(0)}), &latest),
                 );
-                r["coverage"] = json!({"expected_pin": cps[0].digest()});
+                r["coverage"] = json!({"expected_pin": cps[0].anchor()});
                 r
             },
         ),
@@ -661,7 +707,7 @@ fn corpus_cases(ledger: &[Value], cps: &[CheckpointRecord]) -> Vec<Value> {
             "peers",
             req(
                 json!({"checkpoints": null}),
-                &json!({"expected_pin": cps[1].digest(), "min_freshness": 1}),
+                &json!({"expected_pin": cps[1].anchor(), "min_freshness": 1}),
             ),
         ),
         shared(
@@ -827,25 +873,8 @@ fn standard_history_cases(latest: &Value, record: &str) -> Vec<Value> {
     ]
 }
 
-fn build_corpus() -> Value {
-    let key = SigningKey::from_bytes(&NODE_KEY_SEED);
-    let ledger = corpus_ledger();
-    let cps = corpus_checkpoints(&ledger, &key);
-    let cases = corpus_cases(&ledger, &cps);
-    json!({
-        "v": 1,
-        "path": "evidence-request",
-        "now": NOW,
-        "announced_keys": announced_keys(),
-        "node_id": RESPONDER_NODE,
-        "ledger": ledger,
-        "checkpoints": cps,
-        "cases": cases,
-    })
-}
-
 // ---------------------------------------------------------------------------
-// Running it.
+// This node's own rules: running the corpus.
 // ---------------------------------------------------------------------------
 
 pub(crate) fn write_jsonl(path: &Path, lines: &[Value]) {
@@ -853,16 +882,41 @@ pub(crate) fn write_jsonl(path: &Path, lines: &[Value]) {
     std::fs::write(path, text).unwrap();
 }
 
-/// One answer, as the golden file records it: the checks, never the
-/// signatures themselves.
-fn summarize(request_bytes: &[u8], outcome: &Outcome, key: &SigningKey, cps: &[Value]) -> Value {
+/// A ledger directory holding the corpus ledger and its checkpoints.
+pub(crate) fn corpus_ledger_dir(dir: &Path, key: &SigningKey) -> Vec<CorpusCheckpoint> {
+    let ledger = corpus_ledger();
+    let cps = corpus_checkpoints(&ledger, key);
+    std::fs::create_dir_all(dir).unwrap();
+    write_jsonl(&dir.join(crate::evidence_log::CAPSULES_FILE), &ledger);
+    let lines: Vec<Value> = cps.iter().map(CorpusCheckpoint::line).collect();
+    write_jsonl(&dir.join(crate::evidence_log::CHECKPOINTS_FILE), &lines);
+    cps
+}
+
+/// One answer as [`EXPECTED`] states it, and anything wrong with it that
+/// holds for every answer: a refusal must be signed by the node, bind the
+/// request as received and be issued now; an artifact answer must verify.
+fn summarize(
+    request_bytes: &[u8],
+    outcome: &Outcome,
+    key: &SigningKey,
+    cps: &[CorpusCheckpoint],
+    problems: &mut Vec<String>,
+) -> Value {
     match outcome {
-        Outcome::Refused { wire, reason, .. } => json!({
-            "refused": reason.token(),
-            "signed_by_node": refusal::verify_for(wire, &key.verifying_key(), &request_digest(request_bytes)) == Ok(*reason),
-            "request_digest_is_body_sha256": wire["request_digest"] == json!(hex::encode(Sha256::digest(request_bytes))),
-            "issued_at_is_now": wire["issued_at"] == json!(NOW),
-        }),
+        Outcome::Refused { wire, reason, .. } => {
+            let digest = request_digest(request_bytes);
+            if refusal::verify_for(wire, &key.verifying_key(), &digest) != Ok(*reason) {
+                problems.push("a refusal is not the node's signed refusal of this request".into());
+            }
+            if wire["request_digest"] != json!(hex::encode(Sha256::digest(request_bytes))) {
+                problems.push("a refusal does not bind the request as received".into());
+            }
+            if wire["issued_at"] != json!(NOW) {
+                problems.push("a refusal is not issued now".into());
+            }
+            json!({"refused": reason.token()})
+        }
         Outcome::Answered { wire, subject_kind } => {
             let mut verification = evidence_answer::verify_response(
                 request_bytes,
@@ -876,19 +930,22 @@ fn summarize(request_bytes: &[u8], outcome: &Outcome, key: &SigningKey, cps: &[V
                 .and_then(Value::as_str)
                 .map(str::to_string)
             {
-                let at = cps.iter().position(|cp| {
-                    serde_json::from_value::<CheckpointRecord>(cp.clone())
-                        .is_ok_and(|cp| cp.digest() == anchor)
-                });
+                let at = cps.iter().position(|cp| cp.anchor() == anchor);
                 verification["anchor"] = json!(at.map(|i| format!("checkpoints[{i}]")));
             }
             let mut reply = json!({"answered": subject_kind, "verification": verification});
             let artifact: Value = wire["artifact"]
                 .as_str()
-                .and_then(|a| serde_json::from_str(a).ok())
+                .and_then(|a| {
+                    use base64::Engine as _;
+                    base64::engine::general_purpose::URL_SAFE_NO_PAD
+                        .decode(a)
+                        .ok()
+                })
+                .and_then(|a| serde_json::from_slice(&a).ok())
                 .unwrap_or(Value::Null);
-            if let Some(summary) = artifact.get("served_summary") {
-                reply["served_summary"] = summary.clone();
+            if artifact.get("served_summary").is_some_and(Value::is_object) {
+                reply["served_summary"] = json!(true);
             }
             reply
         }
@@ -896,27 +953,64 @@ fn summarize(request_bytes: &[u8], outcome: &Outcome, key: &SigningKey, cps: &[V
     }
 }
 
-fn run(corpus: &Value) -> BTreeMap<String, Value> {
-    // The node's key is the runner's own fixed test key, never read from the
-    // corpus: a data file carries no private key material, not even a test
-    // key's.
+/// The "asked of you" log line an answer appended, as [`EXPECTED`] states
+/// it: who asked and how that was established. Its time, path, status,
+/// reason and request digest must be the answer's own.
+fn logged(
+    log_dir: &Path,
+    request_bytes: &[u8],
+    outcome: &Outcome,
+    problems: &mut Vec<String>,
+) -> Value {
+    let lines: Vec<Value> =
+        std::fs::read_to_string(log_dir.join(crate::received_log::RECEIVED_LOG_FILE))
+            .unwrap_or_default()
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+    let [line] = lines.as_slice() else {
+        problems.push(format!("{} log lines, not one", lines.len()));
+        return Value::Null;
+    };
+    let (status, reason) = outcome.log_status();
+    if line["ts"] != json!(NOW)
+        || line["path"] != json!("evidence-request")
+        || line["status"] != json!(status)
+        || line["reason"] != json!(reason)
+        || line["request_digest"] != json!(request_digest(request_bytes))
+    {
+        problems.push(format!("the log line is not this answer's: {line}"));
+    }
+    let mut out = serde_json::Map::new();
+    for member in [
+        "requester_id",
+        "subject_kind",
+        "principal_key_id",
+        "principal_node_id",
+        "principal_binding",
+        "audience",
+        "replay",
+    ] {
+        if let Some(v) = line.get(member).filter(|v| !v.is_null()) {
+            out.insert(member.into(), v.clone());
+        }
+    }
+    Value::Object(out)
+}
+
+/// Every corpus case through the responder: `{name: {"reply", "log"}}`, and
+/// what is wrong with any of them.
+fn run() -> (BTreeMap<String, Value>, Vec<String>) {
     let key = SigningKey::from_bytes(&NODE_KEY_SEED);
     let data = tempfile::tempdir().unwrap();
     let ledger_dir = data.path().join("ledger");
-    std::fs::create_dir_all(&ledger_dir).unwrap();
-    write_jsonl(
-        &ledger_dir.join("capsules.jsonl"),
-        corpus["ledger"].as_array().unwrap(),
-    );
-    let cps = corpus["checkpoints"].as_array().unwrap();
-    write_jsonl(&ledger_dir.join("checkpoints.jsonl"), cps);
-    let now = corpus["now"].as_str().unwrap();
-    // The keys the host announced for the asking nodes: public halves only.
-    let announced: BTreeMap<String, String> =
-        serde_json::from_value(corpus["announced_keys"].clone()).unwrap_or_default();
+    let cps = corpus_ledger_dir(&ledger_dir, &key);
+    let cases = corpus_cases(&corpus_ledger(), &cps);
+    let announced = announced_keys();
 
     let mut answers = BTreeMap::new();
-    for case in corpus["cases"].as_array().unwrap() {
+    let mut problems = Vec::new();
+    for case in &cases {
         let name = case["name"].as_str().unwrap().to_string();
         let bytes = match case.get("request_text").and_then(Value::as_str) {
             Some(text) => text.as_bytes().to_vec(),
@@ -924,15 +1018,15 @@ fn run(corpus: &Value) -> BTreeMap<String, Value> {
         };
         let log_dir = data.path().join(format!("received-log-{name}"));
         std::fs::create_dir_all(&log_dir).unwrap();
-        // Each case's settings as the operator would write them, read the way
-        // the plugin reads them. Standard History is not shared unless the
-        // case says so.
-        // A fresh replay cache per case: each case is one request.
+        // Each case's settings as the operator would write them, read the
+        // way the plugin reads them. Standard History is not shared unless
+        // the case says so. A fresh replay cache per case: each case is one
+        // request.
         let replay = crate::requester_auth::ReplayCache::default();
         let responder = Responder {
             ledger_dir: &ledger_dir,
             signing_key: &key,
-            now,
+            now: NOW,
             history_segments: crate::share_policy::history_segments_for(
                 case["history_segments"].as_str(),
             ),
@@ -942,101 +1036,36 @@ fn run(corpus: &Value) -> BTreeMap<String, Value> {
                 configured: None,
             },
             replay: &replay,
-            node_id: corpus["node_id"].as_str(),
+            node_id: Some(RESPONDER_NODE),
         };
         let busy = case.get("busy").and_then(Value::as_bool).unwrap_or(false);
         let outcome = evidence_answer::answer_and_log(&bytes, busy, &responder, Some(&log_dir));
-        let mut appended = serde_json::Map::new();
-        if let Ok(text) =
-            std::fs::read_to_string(log_dir.join(crate::received_log::RECEIVED_LOG_FILE))
-        {
-            let lines: Vec<Value> = text
-                .lines()
-                .map(|l| serde_json::from_str(l).unwrap())
-                .collect();
-            appended.insert(crate::received_log::RECEIVED_LOG_FILE.into(), json!(lines));
-        }
-        answers.insert(
-            name,
-            json!({"reply": summarize(&bytes, &outcome, &key, cps), "appended": appended}),
-        );
+        let mut found = Vec::new();
+        let reply = summarize(&bytes, &outcome, &key, &cps, &mut found);
+        let log = logged(&log_dir, &bytes, &outcome, &mut found);
+        problems.extend(found.into_iter().map(|p| format!("{name}: {p}")));
+        answers.insert(name, json!({"reply": reply, "log": log}));
     }
-    answers
-}
-
-/// The layout every file here is written in: each top-level array or map
-/// member one entry per line, so a changed case is a one-line diff.
-fn write_layout(path: &Path, doc: &Value) {
-    let obj = doc.as_object().unwrap();
-    let mut out = String::from("{\n");
-    let members: Vec<String> = obj
-        .iter()
-        .map(|(k, v)| match v {
-            Value::Array(items) => format!(
-                " {}: [\n{}\n ]",
-                json!(k),
-                items
-                    .iter()
-                    .map(|i| format!("  {i}"))
-                    .collect::<Vec<_>>()
-                    .join(",\n")
-            ),
-            Value::Object(map) if map.len() > 1 => format!(
-                " {}: {{\n{}\n }}",
-                json!(k),
-                map.iter()
-                    .map(|(k, v)| format!("  {}: {v}", json!(k)))
-                    .collect::<Vec<_>>()
-                    .join(",\n")
-            ),
-            _ => format!(" {}: {v}", json!(k)),
-        })
-        .collect();
-    out.push_str(&members.join(",\n"));
-    out.push_str("\n}\n");
-    assert_eq!(
-        serde_json::from_str::<Value>(&out).unwrap(),
-        *doc,
-        "the layout must not change the value"
-    );
-    std::fs::write(path, out).unwrap();
-}
-
-fn golden_doc(answers: BTreeMap<String, Value>) -> Value {
-    json!({
-        "v": 1,
-        "path": "evidence-request",
-        "implementation": "draft-mih-agent-evidence-request-00 (reviewed)",
-        "answers": answers,
-    })
-}
-
-fn read(path: &Path) -> Value {
-    serde_json::from_str(
-        &std::fs::read_to_string(path).unwrap_or_else(|e| panic!("{}: {e}", path.display())),
-    )
-    .unwrap()
+    (answers, problems)
 }
 
 #[test]
-fn every_answer_is_the_golden_answer() {
-    let corpus = read(&parity_dir().join("corpus.json"));
-    let golden = read(&parity_dir().join("golden.json"));
-    let answers = run(&corpus);
-    if let Ok(out) = std::env::var("EVIDENCE_REQUEST_PARITY_OUT") {
-        write_layout(Path::new(&out), &golden_doc(answers.clone()));
-    }
-    let expected = golden["answers"].as_object().unwrap();
+fn every_case_is_answered_as_expected() {
+    let (answers, problems) = run();
+    assert!(problems.is_empty(), "{}", problems.join("\n"));
     let mut differ = Vec::new();
-    for (name, want) in expected {
-        match answers.get(name) {
-            Some(got) if got == want => {}
-            Some(got) => differ.push(format!("{name}:\n  golden: {want}\n  got:    {got}")),
-            None => differ.push(format!("{name}: no answer")),
+    for (name, want) in EXPECTED {
+        let want: Value = serde_json::from_str(want).unwrap();
+        match answers.get(*name) {
+            Some(got) if *got == want => {}
+            Some(got) => differ.push(format!("{name}:\n  expected: {want}\n  got:      {got}")),
+            None => differ.push(format!("{name}: not in the corpus")),
         }
     }
-    for name in answers.keys().filter(|n| !expected.contains_key(*n)) {
-        differ.push(format!("{name}: not in the golden answers"));
+    for name in answers.keys() {
+        if !EXPECTED.iter().any(|(n, _)| n == name) {
+            differ.push(format!("{name}: no expected answer"));
+        }
     }
     assert!(
         differ.is_empty(),
@@ -1048,12 +1077,9 @@ fn every_answer_is_the_golden_answer() {
 
 #[test]
 fn the_corpus_reaches_every_outcome() {
-    let golden = read(&parity_dir().join("golden.json"));
-    let replies: Vec<&Value> = golden["answers"]
-        .as_object()
-        .unwrap()
-        .values()
-        .map(|a| &a["reply"])
+    let replies: Vec<Value> = EXPECTED
+        .iter()
+        .map(|(_, e)| serde_json::from_str::<Value>(e).unwrap()["reply"].clone())
         .collect();
     let refused: std::collections::BTreeSet<&str> = replies
         .iter()
@@ -1086,22 +1112,467 @@ fn the_corpus_reaches_every_outcome() {
             "no case answers a {form} subject with an artifact that verifies"
         );
     }
-    assert!(
-        replies
-            .iter()
-            .all(|r| r.get("refused").is_none() || r["signed_by_node"] == json!(true)),
-        "every refusal is signed by the node and binds the request"
-    );
 }
 
-#[test]
-#[ignore = "regenerates the corpus and golden answers; review before committing"]
-fn write_corpus_and_golden() {
-    if std::env::var("EVIDENCE_REQUEST_PARITY_WRITE").as_deref() != Ok("1") {
-        return;
-    }
-    let corpus = build_corpus();
-    std::fs::create_dir_all(parity_dir()).unwrap();
-    write_layout(&parity_dir().join("corpus.json"), &corpus);
-    write_layout(&parity_dir().join("golden.json"), &golden_doc(run(&corpus)));
+// ---------------------------------------------------------------------------
+// The protocol: agent-action-capsule's vectors.
+// ---------------------------------------------------------------------------
+
+/// A vector file, checked against the copy's own `SHA256SUMS` first.
+fn aac(file: &str) -> Value {
+    let dir = aac_dir();
+    let bytes = std::fs::read(dir.join(file)).unwrap();
+    let sums = std::fs::read_to_string(dir.join("SHA256SUMS")).unwrap();
+    let pinned = sums
+        .lines()
+        .find_map(|l| l.strip_suffix(&format!("  {file}")))
+        .unwrap_or_else(|| panic!("{file} is not in SHA256SUMS"));
+    assert_eq!(hex::encode(Sha256::digest(&bytes)), pinned, "{file}");
+    serde_json::from_slice(&bytes).unwrap()
 }
+
+/// A node over the corpus ledger that serves records to any peer and shares
+/// Standard History: what it answers depends on the request alone.
+fn answer_openly(dir: &Path, bytes: &[u8]) -> Outcome {
+    let key = SigningKey::from_bytes(&NODE_KEY_SEED);
+    let announced = announced_keys();
+    let replay = crate::requester_auth::ReplayCache::default();
+    evidence_answer::answer_and_log(
+        bytes,
+        false,
+        &Responder {
+            ledger_dir: dir,
+            signing_key: &key,
+            now: NOW,
+            history_segments: "peers",
+            share_standard_history: true,
+            keys: crate::requester_auth::Keys {
+                announced: &announced,
+                configured: None,
+            },
+            replay: &replay,
+            node_id: Some(RESPONDER_NODE),
+        },
+        None,
+    )
+}
+
+/// `request.json`: a request the vectors call malformed is refused with
+/// their reason; a well-formed one is never refused as malformed. Every
+/// refusal binds the vector's digest of the bytes as received. The JSON
+/// binding only: this node takes no CBOR requests.
+#[test]
+fn the_responder_refuses_each_aac_request_as_the_vectors_say() {
+    let data = tempfile::tempdir().unwrap();
+    corpus_ledger_dir(data.path(), &SigningKey::from_bytes(&NODE_KEY_SEED));
+    let vectors = aac("request.json");
+    let cases = vectors["cases"].as_array().unwrap();
+    assert_eq!(cases.len(), 33);
+    let mut differ = Vec::new();
+    for case in cases {
+        let id = case["id"].as_str().unwrap();
+        let bytes = case["request_json"].as_str().unwrap().as_bytes();
+        assert_eq!(request_digest(bytes), case["request_json_digest"], "{id}");
+        let outcome = answer_openly(data.path(), bytes);
+        let refused = match &outcome {
+            Outcome::Refused { wire, reason, .. } => {
+                if wire["request_digest"] != case["request_json_digest"] {
+                    differ.push(format!("{id}: the refusal binds another digest"));
+                }
+                Some(reason.token())
+            }
+            _ => None,
+        };
+        let expect = &case["expect"];
+        let ok = if expect["well_formed"] == json!(true) {
+            refused != Some("request_malformed")
+        } else {
+            refused == expect["reason"].as_str()
+        };
+        if !ok {
+            differ.push(format!("{id}: expected {expect}, got {refused:?}"));
+        }
+    }
+    assert!(differ.is_empty(), "{}", differ.join("\n"));
+}
+
+/// `digest.json`: the digest a refusal binds is over the bytes as received,
+/// whitespace and all, so it is the vector's. The requester takes a refusal
+/// as the answer to its request only when it carries the digest of the bytes
+/// it sent.
+#[test]
+fn a_refusal_binds_the_aac_digest_of_the_bytes_as_received() {
+    let data = tempfile::tempdir().unwrap();
+    corpus_ledger_dir(data.path(), &SigningKey::from_bytes(&NODE_KEY_SEED));
+    let refusals = aac("refusal.json");
+    let seed: [u8; 32] = hex::decode(refusals["keys"]["primary"]["seed_hex"].as_str().unwrap())
+        .unwrap()
+        .try_into()
+        .unwrap();
+    let signer = SigningKey::from_bytes(&seed);
+    let (mut answered, mut identified) = (0, 0);
+    for case in aac("digest.json")["cases"].as_array().unwrap() {
+        let id = case["id"].as_str().unwrap();
+        let Some(bytes) = case["request_json"].as_str().map(str::as_bytes) else {
+            assert_eq!(case["encoding"], json!("cbor"), "{id}");
+            continue;
+        };
+        if let Some(want) = case["expect"].get("request_digest") {
+            let Outcome::Refused { wire, .. } = answer_openly(data.path(), bytes) else {
+                panic!("{id}: the corpus node answers none of these requests");
+            };
+            assert_eq!(&wire["request_digest"], want, "{id}");
+            answered += 1;
+        }
+        if let Some(want) = case["expect"].get("identifies_request") {
+            let refusal = refusal::sign(
+                case["refusal_request_digest"].as_str().unwrap(),
+                evidence_request::registry::Reason::NoSuchSubject,
+                NOW,
+                &signer,
+            )
+            .unwrap()
+            .to_json();
+            let got = evidence_answer::verify_response(
+                bytes,
+                &refusal,
+                &signer.verifying_key(),
+                &Default::default(),
+            );
+            assert_eq!(
+                got["state"] == json!("refusal"),
+                *want == json!(true),
+                "{id}: {got}"
+            );
+            identified += 1;
+        }
+    }
+    assert_eq!((answered, identified), (3, 2));
+}
+
+/// `refusal.json`: the requester accepts a refusal exactly when the vectors
+/// call it conformant, as the refusal of the request it names. The CBOR
+/// frame and the imported file name no request this node sent.
+#[test]
+fn the_requester_accepts_exactly_the_conformant_aac_refusals() {
+    let requests = aac("request.json");
+    let sent_with_digest = |digest: &Value| {
+        requests["cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["request_json_digest"] == *digest)
+            .map(|c| c["request_json"].as_str().unwrap().as_bytes().to_vec())
+    };
+    let vectors = aac("refusal.json");
+    let key_hex = vectors["keys"]["primary"]["public_key_hex"]
+        .as_str()
+        .unwrap();
+    let key =
+        ed25519_dalek::VerifyingKey::from_bytes(&hex::decode(key_hex).unwrap().try_into().unwrap())
+            .unwrap();
+    let mut checked = 0;
+    let mut differ = Vec::new();
+    for case in vectors["cases"].as_array().unwrap() {
+        let id = case["id"].as_str().unwrap();
+        if case.get("refusal_cbor_hex").is_some() || case.get("file").is_some() {
+            continue;
+        }
+        let refusal = &case["refusal"];
+        // The request it refuses, else one it does not: a tampered digest
+        // names no request.
+        let sent = sent_with_digest(&refusal["request_digest"]).unwrap_or_else(|| {
+            requests["cases"][0]["request_json"]
+                .as_str()
+                .unwrap()
+                .as_bytes()
+                .to_vec()
+        });
+        let got = evidence_answer::verify_response(&sent, refusal, &key, &Default::default());
+        let conformant = case["expect"]["conformant"] == json!(true);
+        let accepted = got["state"] == json!("refusal") && got["reason"] == refusal["reason"];
+        if accepted != conformant {
+            differ.push(format!("{id}: conformant {conformant}, got {got}"));
+        }
+        if !accepted && got["state"] != json!("not_evidence") {
+            differ.push(format!("{id}: neither accepted nor not evidence: {got}"));
+        }
+        checked += 1;
+    }
+    assert!(differ.is_empty(), "{}", differ.join("\n"));
+    assert_eq!(checked, 19);
+}
+
+/// What each corpus case is answered, and what the log records of who asked
+/// (`run`). Reviewed case by case against draft-mih-agent-evidence-request-00
+/// and this node's sharing policy (`docs/SHARING-POLICY.md`).
+const EXPECTED: &[(&str, &str)] = &[
+    (
+        "record_to_its_counterparty",
+        r#"{"log":{"audience":"node-r","principal_binding":"bound","principal_key_id":"3e7d04d3813a4c90546bf2dec79da711152dbdc5f927f152485c6555887f2dde","principal_node_id":"node-a","replay":"checked","requester_id":"node-a","subject_kind":"record"},"reply":{"answered":"record","verification":{"anchor":"checkpoints[1]","checkpoints":0,"records":[0],"state":"artifact"}}}"#,
+    ),
+    (
+        "record_to_another_node",
+        r#"{"log":{"audience":"node-r","principal_binding":"bound","principal_key_id":"86f14770b6f56d58727d65f274104d73ecf947c2e0ed1330d09818fad8b8fa05","principal_node_id":"node-b","replay":"checked","requester_id":"node-b","subject_kind":"record"},"reply":{"refused":"not_authorized"}}"#,
+    ),
+    (
+        "record_to_a_stranger",
+        r#"{"log":{"audience":"node-r","principal_binding":"bound","principal_key_id":"7808d43d8cf3775d0d679359fd0771ff3090bc1d23aecc650170af8a0c5bca2d","principal_node_id":"node-z","replay":"checked","subject_kind":"record"},"reply":{"refused":"not_authorized"}}"#,
+    ),
+    (
+        "record_unknown_to_a_stranger",
+        r#"{"log":{"audience":"node-r","principal_binding":"bound","principal_key_id":"7808d43d8cf3775d0d679359fd0771ff3090bc1d23aecc650170af8a0c5bca2d","principal_node_id":"node-z","replay":"checked","subject_kind":"record"},"reply":{"refused":"not_authorized"}}"#,
+    ),
+    (
+        "range_over_limit_to_a_stranger",
+        r#"{"log":{"audience":"node-r","principal_binding":"bound","principal_key_id":"7808d43d8cf3775d0d679359fd0771ff3090bc1d23aecc650170af8a0c5bca2d","principal_node_id":"node-z","replay":"checked","subject_kind":"range"},"reply":{"refused":"not_authorized"}}"#,
+    ),
+    (
+        "record_unsigned_naming_its_counterparty",
+        r#"{"log":{"requester_id":"node-a","subject_kind":"record"},"reply":{"refused":"not_authorized"}}"#,
+    ),
+    (
+        "record_unsigned_asking_nothing_held",
+        r#"{"log":{"subject_kind":"record"},"reply":{"refused":"not_authorized"}}"#,
+    ),
+    (
+        "record_signed_by_one_claiming_another",
+        r#"{"log":{"audience":"node-r","principal_binding":"bound","principal_key_id":"78461563dd9830102634c9eadaaad51c39787a472cef9303f7a23ab31e5ba0d4","principal_node_id":"node-y","replay":"checked","requester_id":"node-a","subject_kind":"record"},"reply":{"refused":"not_authorized"}}"#,
+    ),
+    (
+        "record_signed_under_another_nodes_key_id",
+        r#"{"log":{"subject_kind":"record"},"reply":{"refused":"not_authorized"}}"#,
+    ),
+    (
+        "record_signature_over_another_request",
+        r#"{"log":{"subject_kind":"record"},"reply":{"refused":"not_authorized"}}"#,
+    ),
+    (
+        "record_signed_by_an_unannounced_key",
+        r#"{"log":{"audience":"node-r","principal_binding":"unbound","principal_key_id":"c853ad0f0cd2b619aea92ceec4fd56a24d6499d584ce79257e45cfd8139b60a7","replay":"checked","subject_kind":"record"},"reply":{"answered":"record","verification":{"anchor":"checkpoints[1]","checkpoints":0,"records":[0],"state":"artifact"}}}"#,
+    ),
+    (
+        "record_signed_by_an_unannounced_key_needing_identity",
+        r#"{"log":{"audience":"node-r","principal_binding":"unbound","principal_key_id":"c853ad0f0cd2b619aea92ceec4fd56a24d6499d584ce79257e45cfd8139b60a7","replay":"checked","subject_kind":"record"},"reply":{"refused":"not_authorized"}}"#,
+    ),
+    (
+        "record_signed_without_an_audience",
+        r#"{"log":{"subject_kind":"record"},"reply":{"refused":"request_malformed"}}"#,
+    ),
+    (
+        "record_relayed_from_another_audience",
+        r#"{"log":{"audience":"node-x","principal_key_id":"3e7d04d3813a4c90546bf2dec79da711152dbdc5f927f152485c6555887f2dde","subject_kind":"record"},"reply":{"refused":"not_authorized"}}"#,
+    ),
+    (
+        "requester_auth_short_key",
+        r#"{"log":{"subject_kind":"record"},"reply":{"refused":"request_malformed"}}"#,
+    ),
+    (
+        "record_under_peers",
+        r#"{"log":{"subject_kind":"record"},"reply":{"answered":"record","verification":{"anchor":"checkpoints[1]","checkpoints":0,"records":[0],"state":"artifact"}}}"#,
+    ),
+    (
+        "record_sharing_off",
+        r#"{"log":{"requester_id":"node-a","subject_kind":"record"},"reply":{"refused":"not_authorized"}}"#,
+    ),
+    (
+        "record_counterparties_tier",
+        r#"{"log":{"audience":"node-r","principal_binding":"bound","principal_key_id":"86f14770b6f56d58727d65f274104d73ecf947c2e0ed1330d09818fad8b8fa05","principal_node_id":"node-b","replay":"checked","requester_id":"node-b","subject_kind":"record"},"reply":{"answered":"record","verification":{"anchor":"checkpoints[0]","checkpoints":0,"records":[1],"state":"artifact"}}}"#,
+    ),
+    (
+        "record_local_block_never_leaves",
+        r#"{"log":{"subject_kind":"record"},"reply":{"refused":"not_authorized"}}"#,
+    ),
+    (
+        "record_unknown",
+        r#"{"log":{"subject_kind":"record"},"reply":{"refused":"no_such_subject"}}"#,
+    ),
+    (
+        "record_padding",
+        r#"{"log":{"subject_kind":"record"},"reply":{"refused":"no_such_subject"}}"#,
+    ),
+    (
+        "record_prefix",
+        r#"{"log":{},"reply":{"refused":"request_malformed"}}"#,
+    ),
+    (
+        "record_not_yet_checkpointed",
+        r#"{"log":{"subject_kind":"record"},"reply":{"refused":"coverage_unsatisfiable"}}"#,
+    ),
+    (
+        "record_under_first_anchor",
+        r#"{"log":{"subject_kind":"record"},"reply":{"answered":"record","verification":{"anchor":"checkpoints[0]","checkpoints":0,"records":[3],"state":"artifact"}}}"#,
+    ),
+    (
+        "range_under_peers",
+        r#"{"log":{"subject_kind":"range"},"reply":{"answered":"range","verification":{"anchor":"checkpoints[0]","checkpoints":0,"records":[5,6,7,8,9,10,11,12],"state":"artifact"}}}"#,
+    ),
+    (
+        "range_to_a_counterparty",
+        r#"{"log":{"audience":"node-r","principal_binding":"bound","principal_key_id":"3e7d04d3813a4c90546bf2dec79da711152dbdc5f927f152485c6555887f2dde","principal_node_id":"node-a","replay":"checked","requester_id":"node-a","subject_kind":"range"},"reply":{"answered":"range","verification":{"anchor":"checkpoints[1]","checkpoints":0,"records":[16,17,18,19,20],"state":"artifact"}}}"#,
+    ),
+    (
+        "range_mixed_counterparties",
+        r#"{"log":{"audience":"node-r","principal_binding":"bound","principal_key_id":"3e7d04d3813a4c90546bf2dec79da711152dbdc5f927f152485c6555887f2dde","principal_node_id":"node-a","replay":"checked","requester_id":"node-a","subject_kind":"range"},"reply":{"refused":"not_authorized"}}"#,
+    ),
+    (
+        "range_with_a_local_block",
+        r#"{"log":{"subject_kind":"range"},"reply":{"refused":"not_authorized"}}"#,
+    ),
+    (
+        "range_past_anchor",
+        r#"{"log":{"subject_kind":"range"},"reply":{"refused":"coverage_unsatisfiable"}}"#,
+    ),
+    (
+        "range_over_limit",
+        r#"{"log":{"subject_kind":"range"},"reply":{"refused":"policy_declined"}}"#,
+    ),
+    (
+        "full_history_over_limit",
+        r#"{"log":{"subject_kind":"full_history"},"reply":{"refused":"policy_declined"}}"#,
+    ),
+    (
+        "full_history_under_first_anchor",
+        r#"{"log":{"subject_kind":"full_history"},"reply":{"answered":"full_history","verification":{"anchor":"checkpoints[0]","checkpoints":0,"records":[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15],"state":"artifact"}}}"#,
+    ),
+    (
+        "correlation_to_its_counterparty",
+        r#"{"log":{"audience":"node-r","principal_binding":"bound","principal_key_id":"3e7d04d3813a4c90546bf2dec79da711152dbdc5f927f152485c6555887f2dde","principal_node_id":"node-a","replay":"checked","requester_id":"node-a","subject_kind":"correlation"},"reply":{"answered":"correlation","verification":{"anchor":"checkpoints[1]","checkpoints":0,"records":[0,4],"state":"artifact"}}}"#,
+    ),
+    (
+        "correlation_by_exchange_id",
+        r#"{"log":{"subject_kind":"correlation"},"reply":{"answered":"correlation","verification":{"anchor":"checkpoints[1]","checkpoints":0,"records":[2],"state":"artifact"}}}"#,
+    ),
+    (
+        "correlation_unknown",
+        r#"{"log":{"subject_kind":"correlation"},"reply":{"refused":"no_such_subject"}}"#,
+    ),
+    (
+        "exchange_citing_the_half",
+        r#"{"log":{"subject_kind":"exchange"},"reply":{"answered":"exchange","verification":{"anchor":"checkpoints[0]","checkpoints":0,"records":[6],"state":"artifact"}}}"#,
+    ),
+    (
+        "exchange_nothing_cites",
+        r#"{"log":{"subject_kind":"exchange"},"reply":{"refused":"no_such_subject"}}"#,
+    ),
+    (
+        "checkpoints_with_sharing_off",
+        r#"{"log":{"subject_kind":"checkpoints"},"reply":{"answered":"checkpoints","verification":{"anchor":"checkpoints[1]","checkpoints":2,"records":[],"state":"artifact"}}}"#,
+    ),
+    (
+        "history_card",
+        r#"{"log":{"subject_kind":"full_history"},"reply":{"answered":"full_history","verification":{"anchor":"checkpoints[1]","checkpoints":2,"records":[],"state":"artifact"}}}"#,
+    ),
+    (
+        "history_card_wrong_subject",
+        r#"{"log":{"subject_kind":"record"},"reply":{"refused":"no_such_subject"}}"#,
+    ),
+    (
+        "derivation_unknown",
+        r#"{"log":{"subject_kind":"full_history"},"reply":{"refused":"derivation_unsupported"}}"#,
+    ),
+    (
+        "served_summary",
+        r#"{"log":{"subject_kind":"full_history"},"reply":{"answered":"full_history","served_summary":true,"verification":{"anchor":"checkpoints[1]","checkpoints":0,"records":[],"state":"artifact"}}}"#,
+    ),
+    (
+        "served_summary_older_pin",
+        r#"{"log":{"subject_kind":"full_history"},"reply":{"refused":"coverage_unsatisfiable"}}"#,
+    ),
+    (
+        "served_summary_on_demand",
+        r#"{"log":{"subject_kind":"full_history"},"reply":{"refused":"policy_declined"}}"#,
+    ),
+    (
+        "coverage_unknown_pin",
+        r#"{"log":{"subject_kind":"checkpoints"},"reply":{"refused":"coverage_unsatisfiable"}}"#,
+    ),
+    (
+        "coverage_both_members",
+        r#"{"log":{},"reply":{"refused":"coverage_unsatisfiable"}}"#,
+    ),
+    (
+        "coverage_missing",
+        r#"{"log":{},"reply":{"refused":"coverage_unsatisfiable"}}"#,
+    ),
+    (
+        "coverage_fresher_than_held",
+        r#"{"log":{"subject_kind":"checkpoints"},"reply":{"refused":"coverage_unsatisfiable"}}"#,
+    ),
+    (
+        "coverage_by_time",
+        r#"{"log":{"subject_kind":"checkpoints"},"reply":{"answered":"checkpoints","verification":{"anchor":"checkpoints[1]","checkpoints":2,"records":[],"state":"artifact"}}}"#,
+    ),
+    (
+        "pre_draft_request_shape",
+        r#"{"log":{},"reply":{"refused":"request_malformed"}}"#,
+    ),
+    (
+        "deadline_passed",
+        r#"{"log":{"subject_kind":"checkpoints"},"reply":{"refused":"deadline_unmet"}}"#,
+    ),
+    (
+        "checkpoints_to_a_non_counterparty",
+        r#"{"log":{"audience":"node-r","principal_binding":"bound","principal_key_id":"7808d43d8cf3775d0d679359fd0771ff3090bc1d23aecc650170af8a0c5bca2d","principal_node_id":"node-z","replay":"checked","requester_id":"node-z","subject_kind":"checkpoints"},"reply":{"refused":"policy_declined"}}"#,
+    ),
+    (
+        "checkpoints_to_a_stranger",
+        r#"{"log":{"subject_kind":"checkpoints"},"reply":{"refused":"policy_declined"}}"#,
+    ),
+    (
+        "checkpoints_to_a_non_counterparty_under_peers",
+        r#"{"log":{"audience":"node-r","principal_binding":"bound","principal_key_id":"7808d43d8cf3775d0d679359fd0771ff3090bc1d23aecc650170af8a0c5bca2d","principal_node_id":"node-z","replay":"checked","requester_id":"node-z","subject_kind":"checkpoints"},"reply":{"refused":"policy_declined"}}"#,
+    ),
+    (
+        "checkpoints_to_a_counterparty",
+        r#"{"log":{"audience":"node-r","principal_binding":"bound","principal_key_id":"3e7d04d3813a4c90546bf2dec79da711152dbdc5f927f152485c6555887f2dde","principal_node_id":"node-a","replay":"checked","requester_id":"node-a","subject_kind":"checkpoints"},"reply":{"answered":"checkpoints","verification":{"anchor":"checkpoints[1]","checkpoints":2,"records":[],"state":"artifact"}}}"#,
+    ),
+    (
+        "history_card_to_a_non_counterparty",
+        r#"{"log":{"audience":"node-r","principal_binding":"bound","principal_key_id":"7808d43d8cf3775d0d679359fd0771ff3090bc1d23aecc650170af8a0c5bca2d","principal_node_id":"node-z","replay":"checked","requester_id":"node-z","subject_kind":"full_history"},"reply":{"refused":"policy_declined"}}"#,
+    ),
+    (
+        "history_card_to_a_counterparty",
+        r#"{"log":{"audience":"node-r","principal_binding":"bound","principal_key_id":"86f14770b6f56d58727d65f274104d73ecf947c2e0ed1330d09818fad8b8fa05","principal_node_id":"node-b","replay":"checked","requester_id":"node-b","subject_kind":"full_history"},"reply":{"answered":"full_history","verification":{"anchor":"checkpoints[1]","checkpoints":2,"records":[],"state":"artifact"}}}"#,
+    ),
+    (
+        "served_summary_to_a_non_counterparty",
+        r#"{"log":{"audience":"node-r","principal_binding":"bound","principal_key_id":"7808d43d8cf3775d0d679359fd0771ff3090bc1d23aecc650170af8a0c5bca2d","principal_node_id":"node-z","replay":"checked","requester_id":"node-z","subject_kind":"full_history"},"reply":{"refused":"policy_declined"}}"#,
+    ),
+    (
+        "served_summary_to_a_counterparty",
+        r#"{"log":{"audience":"node-r","principal_binding":"bound","principal_key_id":"3e7d04d3813a4c90546bf2dec79da711152dbdc5f927f152485c6555887f2dde","principal_node_id":"node-a","replay":"checked","requester_id":"node-a","subject_kind":"full_history"},"reply":{"answered":"full_history","served_summary":true,"verification":{"anchor":"checkpoints[1]","checkpoints":0,"records":[],"state":"artifact"}}}"#,
+    ),
+    (
+        "derivation_unknown_to_a_non_counterparty",
+        r#"{"log":{"audience":"node-r","principal_binding":"bound","principal_key_id":"7808d43d8cf3775d0d679359fd0771ff3090bc1d23aecc650170af8a0c5bca2d","principal_node_id":"node-z","replay":"checked","requester_id":"node-z","subject_kind":"full_history"},"reply":{"refused":"policy_declined"}}"#,
+    ),
+    (
+        "standard_history_unknown_pin_to_a_non_counterparty",
+        r#"{"log":{"audience":"node-r","principal_binding":"bound","principal_key_id":"7808d43d8cf3775d0d679359fd0771ff3090bc1d23aecc650170af8a0c5bca2d","principal_node_id":"node-z","replay":"checked","requester_id":"node-z","subject_kind":"checkpoints"},"reply":{"refused":"policy_declined"}}"#,
+    ),
+    (
+        "record_to_its_counterparty_under_prospective",
+        r#"{"log":{"audience":"node-r","principal_binding":"bound","principal_key_id":"3e7d04d3813a4c90546bf2dec79da711152dbdc5f927f152485c6555887f2dde","principal_node_id":"node-a","replay":"checked","requester_id":"node-a","subject_kind":"record"},"reply":{"answered":"record","verification":{"anchor":"checkpoints[1]","checkpoints":0,"records":[0],"state":"artifact"}}}"#,
+    ),
+    (
+        "record_to_another_node_under_prospective",
+        r#"{"log":{"audience":"node-r","principal_binding":"bound","principal_key_id":"86f14770b6f56d58727d65f274104d73ecf947c2e0ed1330d09818fad8b8fa05","principal_node_id":"node-b","replay":"checked","requester_id":"node-b","subject_kind":"record"},"reply":{"refused":"not_authorized"}}"#,
+    ),
+    (
+        "checkpoints_unsigned_naming_a_counterparty",
+        r#"{"log":{"requester_id":"node-a","subject_kind":"checkpoints"},"reply":{"refused":"policy_declined"}}"#,
+    ),
+    (
+        "not_json",
+        r#"{"log":{},"reply":{"refused":"request_malformed"}}"#,
+    ),
+    (
+        "request_too_large",
+        r#"{"log":{},"reply":{"refused":"policy_declined"}}"#,
+    ),
+    (
+        "busy",
+        r#"{"log":{},"reply":{"refused":"policy_declined"}}"#,
+    ),
+];

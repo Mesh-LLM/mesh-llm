@@ -3075,7 +3075,7 @@ mod tests {
         assert!(matches!(
             seal_settlement_record(&ev, None, &key.signing_key),
             Err(SealError::Jcs(
-                crate::producer::jcs::JcsError::UnsafeInteger(_)
+                crate::producer::jcs::JcsError::UnsafeInteger
             ))
         ));
     }

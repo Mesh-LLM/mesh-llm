@@ -1,0 +1,481 @@
+{
+  "draft": "draft-mih-agent-evidence-request-00",
+  "provenance": "spec-derived",
+  "corpus": "refusal",
+  "description": "Signed refusals: every registered reason, tampering, and non-conforming reasons.",
+  "signature_profile": {
+    "note": "-00 section 4.2 item 4 leaves the signature format to the deployment. These vectors use one profile, the one the existing cross-implementation refusal vector already uses: Ed25519 (RFC 8032) over the RFC 8785 serialization of the JSON object with exactly the members issued_at, reason and request_digest; key_id is the raw 32-byte public key and sig the 64-byte signature, both lowercase hex.",
+    "algorithm": "Ed25519",
+    "signed_members": [
+      "issued_at",
+      "reason",
+      "request_digest"
+    ],
+    "signing_body": "RFC 8785 (JCS) of the signed members",
+    "key_id": "raw Ed25519 public key, lowercase hex",
+    "sig": "Ed25519 signature, lowercase hex"
+  },
+  "keys": {
+    "primary": {
+      "seed_hex": "634155f25cc4149fe5a7de93789910c327d001bd5c108b4b918c27a622aa3026",
+      "public_key_hex": "e84fed8190a6116016bf68ef2fc1780a919e9ed2d9f88efb895a954ffd7f0117"
+    },
+    "other": {
+      "seed_hex": "23d9fa361e2ca4b72a8971f4487ef2e7270d55d6e2c66a824739915e3676aed7",
+      "public_key_hex": "c4435ad997cd46b4d7f840ababafcecbf51f7eec05e7c1094247c7b931f93c9e"
+    }
+  },
+  "count": 21,
+  "cases": [
+    {
+      "id": "pos-reason-not_authorized",
+      "section": [
+        "§4.2 The Signed Refusal",
+        "§13 IANA Considerations"
+      ],
+      "description": "A signed refusal of request pos-subject-record (JSON binding) with reason not_authorized.",
+      "refusal": {
+        "issued_at": "2026-09-28T00:00:00Z",
+        "reason": "not_authorized",
+        "request_digest": "78e68275f27c83d0f3054beaf858baa14763b2d1fed830e02b05f875f7e0493d",
+        "key_id": "e84fed8190a6116016bf68ef2fc1780a919e9ed2d9f88efb895a954ffd7f0117",
+        "sig": "a2639dcddd24fd3c4a8a21d166e030c0200adc0ca982791f278dc5f253561bfb5c75be2fa5e9ba7acbb2dd1134346f2b8f4dcb8fc0eaf201c031b59c26f29c07"
+      },
+      "request_case": "pos-subject-record",
+      "signing_body": "{\"issued_at\":\"2026-09-28T00:00:00Z\",\"reason\":\"not_authorized\",\"request_digest\":\"78e68275f27c83d0f3054beaf858baa14763b2d1fed830e02b05f875f7e0493d\"}",
+      "expect": {
+        "signature": "valid",
+        "reason_registered": true,
+        "conformant": true
+      },
+      "ambiguity": "§4.2 / §10: -00 names the refusal's contents but no member names or signature format. Vectors use request_digest, reason, issued_at, key_id and sig with the signature profile in refusal.json. In the CBOR binding the same map is the frame; the signature is still over the RFC 8785 body."
+    },
+    {
+      "id": "pos-reason-no_such_subject",
+      "section": [
+        "§4.2 The Signed Refusal",
+        "§13 IANA Considerations"
+      ],
+      "description": "A signed refusal of request pos-subject-record (JSON binding) with reason no_such_subject.",
+      "refusal": {
+        "issued_at": "2026-09-28T00:00:00Z",
+        "reason": "no_such_subject",
+        "request_digest": "78e68275f27c83d0f3054beaf858baa14763b2d1fed830e02b05f875f7e0493d",
+        "key_id": "e84fed8190a6116016bf68ef2fc1780a919e9ed2d9f88efb895a954ffd7f0117",
+        "sig": "d4ec5ec16fae9cb7f5c47becb1b1abd23741b18fa4e74f3d96b6eb798793cdd481438a64df9684bb7abadada20634fe46b19551116b31c49082545ae8817f701"
+      },
+      "request_case": "pos-subject-record",
+      "signing_body": "{\"issued_at\":\"2026-09-28T00:00:00Z\",\"reason\":\"no_such_subject\",\"request_digest\":\"78e68275f27c83d0f3054beaf858baa14763b2d1fed830e02b05f875f7e0493d\"}",
+      "expect": {
+        "signature": "valid",
+        "reason_registered": true,
+        "conformant": true
+      },
+      "ambiguity": "§4.2 / §10: -00 names the refusal's contents but no member names or signature format. Vectors use request_digest, reason, issued_at, key_id and sig with the signature profile in refusal.json. In the CBOR binding the same map is the frame; the signature is still over the RFC 8785 body."
+    },
+    {
+      "id": "pos-reason-coverage_unsatisfiable",
+      "section": [
+        "§4.2 The Signed Refusal",
+        "§13 IANA Considerations"
+      ],
+      "description": "A signed refusal of request pos-subject-record (JSON binding) with reason coverage_unsatisfiable.",
+      "refusal": {
+        "issued_at": "2026-09-28T00:00:00Z",
+        "reason": "coverage_unsatisfiable",
+        "request_digest": "78e68275f27c83d0f3054beaf858baa14763b2d1fed830e02b05f875f7e0493d",
+        "key_id": "e84fed8190a6116016bf68ef2fc1780a919e9ed2d9f88efb895a954ffd7f0117",
+        "sig": "988cf2ee3fe3c1a353f927b3589bd4a65311b2b8fadf7f24c68ff32736157a72251807f3096cf430ce9dc7fd6e6a3ed502c284da5946c734fb774a797b71da01"
+      },
+      "request_case": "pos-subject-record",
+      "signing_body": "{\"issued_at\":\"2026-09-28T00:00:00Z\",\"reason\":\"coverage_unsatisfiable\",\"request_digest\":\"78e68275f27c83d0f3054beaf858baa14763b2d1fed830e02b05f875f7e0493d\"}",
+      "expect": {
+        "signature": "valid",
+        "reason_registered": true,
+        "conformant": true
+      },
+      "ambiguity": "§4.2 / §10: -00 names the refusal's contents but no member names or signature format. Vectors use request_digest, reason, issued_at, key_id and sig with the signature profile in refusal.json. In the CBOR binding the same map is the frame; the signature is still over the RFC 8785 body."
+    },
+    {
+      "id": "pos-reason-derivation_unsupported",
+      "section": [
+        "§4.2 The Signed Refusal",
+        "§13 IANA Considerations"
+      ],
+      "description": "A signed refusal of request pos-subject-record (JSON binding) with reason derivation_unsupported.",
+      "refusal": {
+        "issued_at": "2026-09-28T00:00:00Z",
+        "reason": "derivation_unsupported",
+        "request_digest": "78e68275f27c83d0f3054beaf858baa14763b2d1fed830e02b05f875f7e0493d",
+        "key_id": "e84fed8190a6116016bf68ef2fc1780a919e9ed2d9f88efb895a954ffd7f0117",
+        "sig": "555e10af15adb78cc02f8d81bf1923e2e84f9f96cbdbc3d59dff90f74b29ed9b8848498448376300181e8b83471900f771e27cf1f21710021b3f70cbc03d8e09"
+      },
+      "request_case": "pos-subject-record",
+      "signing_body": "{\"issued_at\":\"2026-09-28T00:00:00Z\",\"reason\":\"derivation_unsupported\",\"request_digest\":\"78e68275f27c83d0f3054beaf858baa14763b2d1fed830e02b05f875f7e0493d\"}",
+      "expect": {
+        "signature": "valid",
+        "reason_registered": true,
+        "conformant": true
+      },
+      "ambiguity": "§4.2 / §10: -00 names the refusal's contents but no member names or signature format. Vectors use request_digest, reason, issued_at, key_id and sig with the signature profile in refusal.json. In the CBOR binding the same map is the frame; the signature is still over the RFC 8785 body."
+    },
+    {
+      "id": "pos-reason-policy_declined",
+      "section": [
+        "§4.2 The Signed Refusal",
+        "§13 IANA Considerations"
+      ],
+      "description": "A signed refusal of request pos-subject-record (JSON binding) with reason policy_declined.",
+      "refusal": {
+        "issued_at": "2026-09-28T00:00:00Z",
+        "reason": "policy_declined",
+        "request_digest": "78e68275f27c83d0f3054beaf858baa14763b2d1fed830e02b05f875f7e0493d",
+        "key_id": "e84fed8190a6116016bf68ef2fc1780a919e9ed2d9f88efb895a954ffd7f0117",
+        "sig": "6076c8cb16bc082d4b615dd9d69f9fb124e744c5845839eeb9ee0c6522c6bbe932c72e7d1b0e5f6727a21f62a3cc2e6942290096566fbcb222068412a91ee405"
+      },
+      "request_case": "pos-subject-record",
+      "signing_body": "{\"issued_at\":\"2026-09-28T00:00:00Z\",\"reason\":\"policy_declined\",\"request_digest\":\"78e68275f27c83d0f3054beaf858baa14763b2d1fed830e02b05f875f7e0493d\"}",
+      "expect": {
+        "signature": "valid",
+        "reason_registered": true,
+        "conformant": true
+      },
+      "ambiguity": "§4.2 / §10: -00 names the refusal's contents but no member names or signature format. Vectors use request_digest, reason, issued_at, key_id and sig with the signature profile in refusal.json. In the CBOR binding the same map is the frame; the signature is still over the RFC 8785 body."
+    },
+    {
+      "id": "pos-reason-deadline_unmet",
+      "section": [
+        "§4.2 The Signed Refusal",
+        "§13 IANA Considerations"
+      ],
+      "description": "A signed refusal of request pos-subject-record (JSON binding) with reason deadline_unmet.",
+      "refusal": {
+        "issued_at": "2026-09-28T00:00:00Z",
+        "reason": "deadline_unmet",
+        "request_digest": "78e68275f27c83d0f3054beaf858baa14763b2d1fed830e02b05f875f7e0493d",
+        "key_id": "e84fed8190a6116016bf68ef2fc1780a919e9ed2d9f88efb895a954ffd7f0117",
+        "sig": "589e02ea35f6081cc8ccf698bfa01f7d2ea1f0cb9d6a876868ddc29a44a58c6ea6250123f9242a3473d2c19ade64042747dc23a883ced13b9861bff08f07a106"
+      },
+      "request_case": "pos-subject-record",
+      "signing_body": "{\"issued_at\":\"2026-09-28T00:00:00Z\",\"reason\":\"deadline_unmet\",\"request_digest\":\"78e68275f27c83d0f3054beaf858baa14763b2d1fed830e02b05f875f7e0493d\"}",
+      "expect": {
+        "signature": "valid",
+        "reason_registered": true,
+        "conformant": true
+      },
+      "ambiguity": "§4.2 / §10: -00 names the refusal's contents but no member names or signature format. Vectors use request_digest, reason, issued_at, key_id and sig with the signature profile in refusal.json. In the CBOR binding the same map is the frame; the signature is still over the RFC 8785 body."
+    },
+    {
+      "id": "pos-reason-request_malformed",
+      "section": [
+        "§4.2 The Signed Refusal",
+        "§13 IANA Considerations"
+      ],
+      "description": "A signed refusal of request pos-subject-record (JSON binding) with reason request_malformed.",
+      "refusal": {
+        "issued_at": "2026-09-28T00:00:00Z",
+        "reason": "request_malformed",
+        "request_digest": "78e68275f27c83d0f3054beaf858baa14763b2d1fed830e02b05f875f7e0493d",
+        "key_id": "e84fed8190a6116016bf68ef2fc1780a919e9ed2d9f88efb895a954ffd7f0117",
+        "sig": "381ad1fbbef7f0d0f3573b4e9b0d5d0db9654284f07b6ebf2af8ab045aa089c65cd9a881021e8c30d88b45219bcd32c67be6112cfd13a5d9823a826e82e39503"
+      },
+      "request_case": "pos-subject-record",
+      "signing_body": "{\"issued_at\":\"2026-09-28T00:00:00Z\",\"reason\":\"request_malformed\",\"request_digest\":\"78e68275f27c83d0f3054beaf858baa14763b2d1fed830e02b05f875f7e0493d\"}",
+      "expect": {
+        "signature": "valid",
+        "reason_registered": true,
+        "conformant": true
+      },
+      "ambiguity": "§4.2 / §10: -00 names the refusal's contents but no member names or signature format. Vectors use request_digest, reason, issued_at, key_id and sig with the signature profile in refusal.json. In the CBOR binding the same map is the frame; the signature is still over the RFC 8785 body."
+    },
+    {
+      "id": "pos-reason-retention_expired",
+      "section": [
+        "§4.2 The Signed Refusal",
+        "§13 IANA Considerations"
+      ],
+      "description": "A signed refusal of request pos-subject-record (JSON binding) with reason retention_expired.",
+      "refusal": {
+        "issued_at": "2026-09-28T00:00:00Z",
+        "reason": "retention_expired",
+        "request_digest": "78e68275f27c83d0f3054beaf858baa14763b2d1fed830e02b05f875f7e0493d",
+        "key_id": "e84fed8190a6116016bf68ef2fc1780a919e9ed2d9f88efb895a954ffd7f0117",
+        "sig": "fda66cf51d6c21fa1fb9d5622a24a3dfdf8f74446143a57797e6bb2e55114a1250d75969af612b84533f5ea73f9458375e2d1ce9a096ea0ea9171353dc0d620b"
+      },
+      "request_case": "pos-subject-record",
+      "signing_body": "{\"issued_at\":\"2026-09-28T00:00:00Z\",\"reason\":\"retention_expired\",\"request_digest\":\"78e68275f27c83d0f3054beaf858baa14763b2d1fed830e02b05f875f7e0493d\"}",
+      "expect": {
+        "signature": "valid",
+        "reason_registered": true,
+        "conformant": true
+      },
+      "ambiguity": "§4.2 / §10: -00 names the refusal's contents but no member names or signature format. Vectors use request_digest, reason, issued_at, key_id and sig with the signature profile in refusal.json. In the CBOR binding the same map is the frame; the signature is still over the RFC 8785 body."
+    },
+    {
+      "id": "pos-imported-interop-vector",
+      "section": [
+        "§4.2 The Signed Refusal",
+        "§13 IANA Considerations"
+      ],
+      "description": "The refusal vector three implementations already verify, reproduced byte for byte in refusal-imported.json. It carries every item §4.2 requires and a registered reason.",
+      "file": "refusal-imported.json",
+      "file_sha256": "885d7981f8fd8a22bffd61c5bd10444515e12ea009fa9d70170bb467c7e5a66e",
+      "expect": {
+        "signature": "valid",
+        "reason_registered": true,
+        "conformant": true
+      },
+      "ambiguity": "§4.2 / §10: -00 names the refusal's contents but no member names or signature format. Vectors use request_digest, reason, issued_at, key_id and sig with the signature profile in refusal.json. In the CBOR binding the same map is the frame; the signature is still over the RFC 8785 body."
+    },
+    {
+      "id": "pos-cbor-frame",
+      "section": [
+        "§4.2 The Signed Refusal",
+        "§10 Transport Bindings"
+      ],
+      "description": "The policy_declined refusal as a deterministic CBOR response frame. The signature is unchanged: it covers the RFC 8785 body, not the frame.",
+      "refusal": {
+        "issued_at": "2026-09-28T00:00:00Z",
+        "reason": "policy_declined",
+        "request_digest": "78e68275f27c83d0f3054beaf858baa14763b2d1fed830e02b05f875f7e0493d",
+        "key_id": "e84fed8190a6116016bf68ef2fc1780a919e9ed2d9f88efb895a954ffd7f0117",
+        "sig": "6076c8cb16bc082d4b615dd9d69f9fb124e744c5845839eeb9ee0c6522c6bbe932c72e7d1b0e5f6727a21f62a3cc2e6942290096566fbcb222068412a91ee405"
+      },
+      "refusal_cbor_hex": "a56373696778803630373663386362313662633038326434623631356464396436396639666231323465373434633538343538333965656239656530633635323263366262653933326337326537643162306535663637323761323166363261336363326536393432323930303936353636666263623232323036383431326139316565343035666b65795f696478406538346665643831393061363131363031366266363865663266633137383061393139653965643264396638386566623839356139353466666437663031313766726561736f6e6f706f6c6963795f6465636c696e6564696973737565645f617474323032362d30392d32385430303a30303a30305a6e726571756573745f646967657374784037386536383237356632376338336430663330353462656166383538626161313437363362326431666564383330653032623035663837356637653034393364",
+      "refusal_cbor_digest": "aaec168d31106a6f0342e85db83b620bfd0ef09819fb355894df7744361d9b5c",
+      "expect": {
+        "signature": "valid",
+        "reason_registered": true,
+        "conformant": true
+      },
+      "ambiguity": "§4.2 / §10: -00 names the refusal's contents but no member names or signature format. Vectors use request_digest, reason, issued_at, key_id and sig with the signature profile in refusal.json. In the CBOR binding the same map is the frame; the signature is still over the RFC 8785 body."
+    },
+    {
+      "id": "neg-tamper-reason",
+      "section": [
+        "§4.2 The Signed Refusal"
+      ],
+      "description": "reason changed after signing.",
+      "refusal": {
+        "issued_at": "2026-09-28T00:00:00Z",
+        "reason": "not_authorized",
+        "request_digest": "78e68275f27c83d0f3054beaf858baa14763b2d1fed830e02b05f875f7e0493d",
+        "key_id": "e84fed8190a6116016bf68ef2fc1780a919e9ed2d9f88efb895a954ffd7f0117",
+        "sig": "6076c8cb16bc082d4b615dd9d69f9fb124e744c5845839eeb9ee0c6522c6bbe932c72e7d1b0e5f6727a21f62a3cc2e6942290096566fbcb222068412a91ee405"
+      },
+      "expect": {
+        "signature": "invalid",
+        "conformant": false,
+        "reason_registered": true
+      },
+      "ambiguity": "§4.2 / §10: -00 names the refusal's contents but no member names or signature format. Vectors use request_digest, reason, issued_at, key_id and sig with the signature profile in refusal.json. In the CBOR binding the same map is the frame; the signature is still over the RFC 8785 body."
+    },
+    {
+      "id": "neg-tamper-issued_at",
+      "section": [
+        "§4.2 The Signed Refusal"
+      ],
+      "description": "issued_at changed after signing (it MUST be covered).",
+      "refusal": {
+        "issued_at": "2026-09-28T00:00:01Z",
+        "reason": "policy_declined",
+        "request_digest": "78e68275f27c83d0f3054beaf858baa14763b2d1fed830e02b05f875f7e0493d",
+        "key_id": "e84fed8190a6116016bf68ef2fc1780a919e9ed2d9f88efb895a954ffd7f0117",
+        "sig": "6076c8cb16bc082d4b615dd9d69f9fb124e744c5845839eeb9ee0c6522c6bbe932c72e7d1b0e5f6727a21f62a3cc2e6942290096566fbcb222068412a91ee405"
+      },
+      "expect": {
+        "signature": "invalid",
+        "conformant": false,
+        "reason_registered": true
+      },
+      "ambiguity": "§4.2 / §10: -00 names the refusal's contents but no member names or signature format. Vectors use request_digest, reason, issued_at, key_id and sig with the signature profile in refusal.json. In the CBOR binding the same map is the frame; the signature is still over the RFC 8785 body."
+    },
+    {
+      "id": "neg-tamper-request_digest",
+      "section": [
+        "§4.2 The Signed Refusal"
+      ],
+      "description": "request_digest changed after signing.",
+      "refusal": {
+        "issued_at": "2026-09-28T00:00:00Z",
+        "reason": "policy_declined",
+        "request_digest": "88f8bcf9df8ad17377abfbb63a249be54e5ee1664acbeae99474317878122091",
+        "key_id": "e84fed8190a6116016bf68ef2fc1780a919e9ed2d9f88efb895a954ffd7f0117",
+        "sig": "6076c8cb16bc082d4b615dd9d69f9fb124e744c5845839eeb9ee0c6522c6bbe932c72e7d1b0e5f6727a21f62a3cc2e6942290096566fbcb222068412a91ee405"
+      },
+      "expect": {
+        "signature": "invalid",
+        "conformant": false,
+        "reason_registered": true
+      },
+      "ambiguity": "§4.2 / §10: -00 names the refusal's contents but no member names or signature format. Vectors use request_digest, reason, issued_at, key_id and sig with the signature profile in refusal.json. In the CBOR binding the same map is the frame; the signature is still over the RFC 8785 body."
+    },
+    {
+      "id": "neg-tamper-key_id",
+      "section": [
+        "§4.2 The Signed Refusal",
+        "§11 Security Considerations"
+      ],
+      "description": "key_id replaced with another key: a response signed by the wrong key is not a response from the responder.",
+      "refusal": {
+        "issued_at": "2026-09-28T00:00:00Z",
+        "reason": "policy_declined",
+        "request_digest": "78e68275f27c83d0f3054beaf858baa14763b2d1fed830e02b05f875f7e0493d",
+        "key_id": "c4435ad997cd46b4d7f840ababafcecbf51f7eec05e7c1094247c7b931f93c9e",
+        "sig": "6076c8cb16bc082d4b615dd9d69f9fb124e744c5845839eeb9ee0c6522c6bbe932c72e7d1b0e5f6727a21f62a3cc2e6942290096566fbcb222068412a91ee405"
+      },
+      "expect": {
+        "signature": "invalid",
+        "conformant": false,
+        "reason_registered": true
+      },
+      "ambiguity": "§4.2 / §10: -00 names the refusal's contents but no member names or signature format. Vectors use request_digest, reason, issued_at, key_id and sig with the signature profile in refusal.json. In the CBOR binding the same map is the frame; the signature is still over the RFC 8785 body."
+    },
+    {
+      "id": "neg-unsigned",
+      "section": [
+        "§4.2 The Signed Refusal"
+      ],
+      "description": "sig empty: a refusal exists only if the responder signed one.",
+      "refusal": {
+        "issued_at": "2026-09-28T00:00:00Z",
+        "reason": "policy_declined",
+        "request_digest": "78e68275f27c83d0f3054beaf858baa14763b2d1fed830e02b05f875f7e0493d",
+        "key_id": "e84fed8190a6116016bf68ef2fc1780a919e9ed2d9f88efb895a954ffd7f0117",
+        "sig": ""
+      },
+      "expect": {
+        "signature": "invalid",
+        "conformant": false,
+        "reason_registered": true
+      },
+      "ambiguity": "§4.2 / §10: -00 names the refusal's contents but no member names or signature format. Vectors use request_digest, reason, issued_at, key_id and sig with the signature profile in refusal.json. In the CBOR binding the same map is the frame; the signature is still over the RFC 8785 body."
+    },
+    {
+      "id": "neg-unregistered-reason-no_such_record",
+      "section": [
+        "§4.2 The Signed Refusal",
+        "§13 IANA Considerations"
+      ],
+      "description": "Correctly signed, but no_such_record is not in the registry (the -00 token is no_such_subject).",
+      "refusal": {
+        "issued_at": "2026-09-28T00:00:00Z",
+        "reason": "no_such_record",
+        "request_digest": "78e68275f27c83d0f3054beaf858baa14763b2d1fed830e02b05f875f7e0493d",
+        "key_id": "e84fed8190a6116016bf68ef2fc1780a919e9ed2d9f88efb895a954ffd7f0117",
+        "sig": "c39bfd073d46859fb2ee7bfc84ba188f9a3a6f05f1a7da471978b10f1b3e55d8068d2002212e983b2cac8b6841c3f245a1454503e6b58397f2a5e18b03a29e02"
+      },
+      "expect": {
+        "signature": "valid",
+        "reason_registered": false,
+        "conformant": false
+      },
+      "ambiguity": "§4.2 item 2 / §4.5: -00 does not say what a correctly signed object with an unregistered reason is. Vectors: not a conforming refusal, and still never recorded as absence."
+    },
+    {
+      "id": "neg-reason-recorded_absence",
+      "section": [
+        "§4.2 The Signed Refusal",
+        "§4.5 The Three-State Discipline",
+        "§13 IANA Considerations"
+      ],
+      "description": "Correctly signed with reason recorded_absence: absence is not a reason token, and a signed answer is never an absence.",
+      "refusal": {
+        "issued_at": "2026-09-28T00:00:00Z",
+        "reason": "recorded_absence",
+        "request_digest": "78e68275f27c83d0f3054beaf858baa14763b2d1fed830e02b05f875f7e0493d",
+        "key_id": "e84fed8190a6116016bf68ef2fc1780a919e9ed2d9f88efb895a954ffd7f0117",
+        "sig": "e599ef17567f272311a9b20b178dde0099a283050bf1a77556af21373036f5620743ee48cb7a850172f2be63f711946e72a7b32a3471fbdbd334923ad49efe05"
+      },
+      "expect": {
+        "signature": "valid",
+        "reason_registered": false,
+        "conformant": false
+      },
+      "ambiguity": "§4.2 item 2 / §4.5: -00 does not say what a correctly signed object with an unregistered reason is. Vectors: not a conforming refusal, and still never recorded as absence."
+    },
+    {
+      "id": "neg-reason-wrong-case",
+      "section": [
+        "§4.2 The Signed Refusal",
+        "§13 IANA Considerations"
+      ],
+      "description": "NO_SUCH_SUBJECT: tokens are lowercase and matched exactly.",
+      "refusal": {
+        "issued_at": "2026-09-28T00:00:00Z",
+        "reason": "NO_SUCH_SUBJECT",
+        "request_digest": "78e68275f27c83d0f3054beaf858baa14763b2d1fed830e02b05f875f7e0493d",
+        "key_id": "e84fed8190a6116016bf68ef2fc1780a919e9ed2d9f88efb895a954ffd7f0117",
+        "sig": "1360d40f4783dff77eb5a21fa03c478c311d9e69bf53b23b52d271b0aae22753febbd189fb1e98eb29a6ccbdc49addcd25876ba2b0c70764498859b7f596e60c"
+      },
+      "expect": {
+        "signature": "valid",
+        "reason_registered": false,
+        "conformant": false
+      },
+      "ambiguity": "§4.2 item 2 / §4.5: -00 does not say what a correctly signed object with an unregistered reason is. Vectors: not a conforming refusal, and still never recorded as absence."
+    },
+    {
+      "id": "neg-two-reasons",
+      "section": [
+        "§4.2 The Signed Refusal"
+      ],
+      "description": "Two tokens where exactly one is required.",
+      "refusal": {
+        "issued_at": "2026-09-28T00:00:00Z",
+        "reason": [
+          "no_such_subject",
+          "policy_declined"
+        ],
+        "request_digest": "78e68275f27c83d0f3054beaf858baa14763b2d1fed830e02b05f875f7e0493d",
+        "key_id": "e84fed8190a6116016bf68ef2fc1780a919e9ed2d9f88efb895a954ffd7f0117",
+        "sig": "2f9722d01ca525a942506ebbfcf91f3212d2c927c49c21bb594ed8d96ca8cc193e9dc5cab494b7afc161b62a373b66367b9afc92bcd9e61e532075f70fc77301"
+      },
+      "expect": {
+        "signature": "valid",
+        "reason_registered": false,
+        "conformant": false
+      },
+      "ambiguity": "§4.2 item 2 / §4.5: -00 does not say what a correctly signed object with an unregistered reason is. Vectors: not a conforming refusal, and still never recorded as absence."
+    },
+    {
+      "id": "neg-missing-issued_at",
+      "section": [
+        "§4.2 The Signed Refusal"
+      ],
+      "description": "No issued_at (it MUST be present), signed over the remaining members.",
+      "refusal": {
+        "reason": "policy_declined",
+        "request_digest": "78e68275f27c83d0f3054beaf858baa14763b2d1fed830e02b05f875f7e0493d",
+        "key_id": "e84fed8190a6116016bf68ef2fc1780a919e9ed2d9f88efb895a954ffd7f0117",
+        "sig": "d57caed60f74bd1f9568ef3519950e3fe141f72cabbeed622016046edfd599e561b56161af2d4c367f84b02502b389b184f955c5bfc97dd4b3056cb3706c3f04"
+      },
+      "expect": {
+        "signature": "valid",
+        "reason_registered": true,
+        "conformant": false
+      },
+      "ambiguity": "§4.2 / §10: -00 names the refusal's contents but no member names or signature format. Vectors use request_digest, reason, issued_at, key_id and sig with the signature profile in refusal.json. In the CBOR binding the same map is the frame; the signature is still over the RFC 8785 body."
+    },
+    {
+      "id": "neg-malformed-request_digest",
+      "section": [
+        "§4.2 The Signed Refusal"
+      ],
+      "description": "request_digest that is not a SHA-256 digest (8 hex characters), correctly signed.",
+      "refusal": {
+        "issued_at": "2026-09-28T00:00:00Z",
+        "reason": "no_such_subject",
+        "request_digest": "78e68275",
+        "key_id": "e84fed8190a6116016bf68ef2fc1780a919e9ed2d9f88efb895a954ffd7f0117",
+        "sig": "f8a98dc7723511a8aaad00faac08e33698c35eac4c732e5eb69102a1e856d0d654097a89d86942aa7455b077e3dab025798a51a8a81fabd014cf15c9f2662300"
+      },
+      "expect": {
+        "signature": "valid",
+        "reason_registered": true,
+        "conformant": false
+      },
+      "ambiguity": "§3.1, §3.2, §4.2: -00 names digests but not the hash algorithm or representation. Vectors use SHA-256 as 64 lowercase hex characters, as text in both the JSON and CBOR bindings. §4.2 / §10: -00 names the refusal's contents but no member names or signature format. Vectors use request_digest, reason, issued_at, key_id and sig with the signature profile in refusal.json. In the CBOR binding the same map is the frame; the signature is still over the RFC 8785 body."
+    }
+  ]
+}

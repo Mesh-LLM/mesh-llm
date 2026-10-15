@@ -11,14 +11,28 @@
 //! - **An integer outside 64 bits.** `serde_json` quietly reads it as a float.
 //!
 //! This module refuses both, and nesting deeper than [`MAX_JSON_DEPTH`]. What
-//! `serde_json` already refuses (NaN, Infinity, a number that overflows a
-//! float, a lone surrogate, bytes that are not UTF-8, trailing bytes) stays
-//! refused.
+//! `serde_json` refuses on its own (NaN, Infinity, a lone surrogate, bytes
+//! that are not UTF-8, trailing bytes) stays refused, and so does a number
+//! that overflows a float.
+//!
+//! **Numbers under `arbitrary_precision`.** The capsule-emit crate's
+//! canonicalizer turns on `serde_json`'s `arbitrary_precision` feature for
+//! the whole binary. `serde_json` then hands every number to a visitor as a
+//! one-member map keyed by its private [`NUMBER_TOKEN`], holding the number's
+//! text, and no longer refuses a float that overflows. So the visitor reads
+//! that map back as the number it is and refuses one that is not finite, and
+//! a body that spells the token itself as a key is refused: that object
+//! could not be told apart from a number.
 
 use std::fmt;
 
 use serde::de::{self, Deserialize, Deserializer, MapAccess, SeqAccess, Visitor};
 use serde_json::{Map, Number, Value};
+
+/// The key `serde_json` names a number by when it hands one to a visitor
+/// under `arbitrary_precision` (its `number::TOKEN`, which it does not
+/// export).
+const NUMBER_TOKEN: &str = "$serde_json::private::Number";
 
 /// The deepest nesting of arrays and objects a body may have: the most
 /// `serde_json` itself will parse (its recursion limit of 128 lets 127
@@ -31,6 +45,7 @@ pub const MAX_JSON_DEPTH: usize = 127;
 pub enum StrictError {
     TooDeep,
     IntegerOutOf64Bits,
+    NumberToken,
     Invalid(String),
 }
 
@@ -39,6 +54,7 @@ impl fmt::Display for StrictError {
         match self {
             StrictError::TooDeep => write!(f, "nested deeper than {MAX_JSON_DEPTH}"),
             StrictError::IntegerOutOf64Bits => write!(f, "an integer outside 64 bits"),
+            StrictError::NumberToken => write!(f, "a key that spells serde_json's number token"),
             StrictError::Invalid(why) => write!(f, "{why}"),
         }
     }
@@ -56,16 +72,18 @@ pub fn parse(body: &[u8]) -> Result<Value, StrictError> {
     Ok(value.0)
 }
 
-/// One pass over the raw bytes for the two things a parsed value can no
-/// longer tell: how deep the nesting went, and whether an integer literal
-/// fitted 64 bits before `serde_json` turned it into a float. Anything else
-/// that is wrong with the bytes is left for the parser to refuse.
+/// One pass over the raw bytes for the three things a parsed value can no
+/// longer tell: how deep the nesting went, whether an integer literal
+/// fitted 64 bits before `serde_json` turned it into a float, and whether a
+/// key spelled [`NUMBER_TOKEN`]. Anything else that is wrong with the
+/// bytes is left for the parser to refuse.
 fn scan(body: &[u8]) -> Result<(), StrictError> {
     let mut depth = 0usize;
     let mut i = 0usize;
     while i < body.len() {
         match body[i] {
             b'"' => {
+                let start = i;
                 i += 1;
                 while i < body.len() && body[i] != b'"' {
                     // Skip the escaped byte too, so an escaped quote does not
@@ -73,6 +91,15 @@ fn scan(body: &[u8]) -> Result<(), StrictError> {
                     i += if body[i] == b'\\' { 2 } else { 1 };
                 }
                 i += 1;
+                let is_key = body
+                    .get(i..)
+                    .unwrap_or_default()
+                    .iter()
+                    .find(|b| !b.is_ascii_whitespace())
+                    == Some(&b':');
+                if is_key && spells_number_token(&body[start..i.min(body.len())]) {
+                    return Err(StrictError::NumberToken);
+                }
             }
             b'[' | b'{' => {
                 depth += 1;
@@ -98,6 +125,30 @@ fn scan(body: &[u8]) -> Result<(), StrictError> {
         }
     }
     Ok(())
+}
+
+/// Whether a string literal (quotes included) decodes to [`NUMBER_TOKEN`].
+/// Only a literal with an escape needs decoding to tell.
+fn spells_number_token(literal: &[u8]) -> bool {
+    let inner = literal
+        .strip_prefix(b"\"")
+        .and_then(|l| l.strip_suffix(b"\""))
+        .unwrap_or_default();
+    if !inner.contains(&b'\\') {
+        return inner == NUMBER_TOKEN.as_bytes();
+    }
+    serde_json::from_slice::<String>(literal).is_ok_and(|s| s == NUMBER_TOKEN)
+}
+
+/// A number from its text, as `serde_json` hands it over under
+/// `arbitrary_precision`: refused unless it is finite as a float.
+fn number<E: de::Error>(text: &str) -> Result<Value, E> {
+    if !text.parse::<f64>().is_ok_and(f64::is_finite) {
+        return Err(E::custom("a number that is not finite"));
+    }
+    text.parse::<Number>()
+        .map(Value::Number)
+        .map_err(|_| E::custom("not a JSON number"))
 }
 
 /// An integer literal (no fraction, no exponent) must lie in
@@ -196,7 +247,15 @@ impl<'de> Visitor<'de> for StrictVisitor {
 
     fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Value, A::Error> {
         let mut object = Map::new();
+        let mut first = true;
         while let Some(key) = map.next_key::<String>()? {
+            // A number under `arbitrary_precision` (see the module doc): the
+            // body itself never spells the token, `scan` saw to that.
+            if first && key == NUMBER_TOKEN {
+                let text: String = map.next_value()?;
+                return number(&text);
+            }
+            first = false;
             if object.contains_key(&key) {
                 return Err(de::Error::custom(format!("duplicate key {key:?}")));
             }
@@ -249,6 +308,26 @@ mod tests {
             !refused(r#""18446744073709551616""#),
             "digits inside a string are text"
         );
+    }
+
+    /// Under `arbitrary_precision` a number reaches the visitor as a map
+    /// keyed by serde_json's private token: it is read back as a number,
+    /// and a body spelling the token itself is refused.
+    #[test]
+    fn numbers_are_numbers_and_the_number_token_is_refused() {
+        let value = parse(br#"{"t": 0.7, "n": [1, -2, 1e2, 18446744073709551615]}"#).unwrap();
+        assert_eq!(value["t"].as_f64(), Some(0.7));
+        assert_eq!(value["n"][0].as_u64(), Some(1));
+        assert_eq!(value["n"][1].as_i64(), Some(-2));
+        assert_eq!(value["n"][2].as_f64(), Some(100.0));
+        assert_eq!(value["n"][3].as_u64(), Some(u64::MAX));
+        assert!(refused("-1e400"));
+        assert!(refused(r#"{"$serde_json::private::Number": "1"}"#));
+        assert!(refused(r#"{"\u0024serde_json::private::Number": "1"}"#));
+        assert!(refused(r#"{"a": {"$serde_json::private::Number" : "1"}}"#));
+        let text = parse(br#"["$serde_json::private::Number"]"#).unwrap();
+        assert_eq!(text[0], "$serde_json::private::Number", "a value is text");
+        assert!(!refused(r#"{"$serde_json::private::Numbers": "1"}"#));
     }
 
     #[test]

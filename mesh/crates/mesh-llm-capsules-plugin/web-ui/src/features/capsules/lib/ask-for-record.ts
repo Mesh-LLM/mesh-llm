@@ -180,13 +180,27 @@ export type AskJudges = {
 
 const REAL_JUDGES: AskJudges = { recomputeIdMatch, producerSignatureVerifies }
 
-/** The records an artifact answer carries, decoded: each served record's
- *  body is its line in the peer's ledger, hex-encoded, inside the artifact's
- *  exact JSON text. Only the leaf indices the verification proved are kept. */
+/** Unpadded base64url, as the interop profile's JSON binding carries bytes. */
+function base64urlBytes(text: string): Uint8Array | null {
+  if (!/^[A-Za-z0-9_-]*$/.test(text)) return null
+  try {
+    const binary = atob(text.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - (text.length % 4)) % 4))
+    return Uint8Array.from(binary, (c) => c.charCodeAt(0))
+  } catch {
+    return null
+  }
+}
+
+/** The records an artifact answer carries, decoded: the artifact is the
+ *  envelope's `artifact` (the interop profile's reply: its JSON text as
+ *  unpadded base64url), and each served record's body is its line in the
+ *  peer's ledger, hex-encoded. Only the leaf indices the verification proved
+ *  are kept. */
 function artifactRecords(answer: Record<string, unknown>, proven: readonly number[]): Record<string, unknown>[] {
   let artifact: unknown
   try {
-    artifact = typeof answer.artifact === 'string' ? JSON.parse(answer.artifact) : null
+    const bytes = typeof answer.artifact === 'string' ? base64urlBytes(answer.artifact) : null
+    artifact = bytes ? JSON.parse(new TextDecoder().decode(bytes)) : null
   } catch {
     return []
   }

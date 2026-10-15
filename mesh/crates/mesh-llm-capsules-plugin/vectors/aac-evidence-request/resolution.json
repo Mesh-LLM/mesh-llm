@@ -1,0 +1,345 @@
+{
+  "draft": "draft-mih-agent-evidence-request-00",
+  "provenance": "spec-derived",
+  "corpus": "resolution",
+  "description": "Exact-match subject resolution and the most specific refusal reason, against one declared responder state.",
+  "responder": {
+    "evidence_stream": "stream-a",
+    "log_size": 42,
+    "positional_ordering": true,
+    "issues_new_commitments": false,
+    "anchors": [
+      {
+        "digest": "4d4c877328c2f5cdf12523841fbc41cb9b8ef490578ca3a13b93d6bf20faeb6d",
+        "size": 40,
+        "issued_at": "2026-09-26T00:00:00Z"
+      },
+      {
+        "digest": "6441370955d2b408884793962a664daec6bb25e06d76a2f53d8a80f66a675202",
+        "size": 42,
+        "issued_at": "2026-09-27T12:00:00Z"
+      }
+    ],
+    "records": [
+      "2ab350895f867d54a5cfdc1dd1aa214cbc723c659663460e7511dff16a5ccc85",
+      "f48813fbdedec3190e0d81469723c07b4f665b0e18399d2a265d933ecc19b183",
+      "ef53392288cd922e52ce6d54c30196a2f33af60ba87885b89cd34ed3d17a35d1"
+    ],
+    "correlations": {
+      "c-7d1e9a40": [
+        "2ab350895f867d54a5cfdc1dd1aa214cbc723c659663460e7511dff16a5ccc85",
+        "f48813fbdedec3190e0d81469723c07b4f665b0e18399d2a265d933ecc19b183"
+      ]
+    },
+    "exchange_citations": {
+      "e2c78557e239cd93cf344c2e435158367deac1d3b525deb6e09c23d1a8139227": [
+        "ef53392288cd922e52ce6d54c30196a2f33af60ba87885b89cd34ed3d17a35d1"
+      ]
+    },
+    "supported_derivations": {
+      "history_card/1": [
+        "full_history",
+        "checkpoints"
+      ]
+    },
+    "uniform_policy_declined": false
+  },
+  "count": 19,
+  "cases": [
+    {
+      "id": "res-record-exact",
+      "section": [
+        "§3.1 Subject"
+      ],
+      "description": "record digest held exactly: served.",
+      "request_json": "{\"coverage\":{\"expected_pin\":\"6441370955d2b408884793962a664daec6bb25e06d76a2f53d8a80f66a675202\"},\"nonce\":\"n-0101\",\"subject\":{\"record\":\"2ab350895f867d54a5cfdc1dd1aa214cbc723c659663460e7511dff16a5ccc85\"}}",
+      "request_json_digest": "859e2e609e1bf490536585512ce04af68fbcb0e5a5f6f4e19c4309047304f8d8",
+      "request_cbor_hex": "a3656e6f6e6365666e2d30313031677375626a656374a1667265636f726478403261623335303839356638363764353461356366646331646431616132313463626337323363363539363633343630653735313164666631366135636363383568636f766572616765a16c65787065637465645f70696e784036343431333730393535643262343038383834373933393632613636346461656336626232356530366437366132663533643861383066363661363735323032",
+      "request_cbor_digest": "251f37d821ca311e35c325d45598d59ee6cb763a1d3ad4143fa6a4dbac18b445",
+      "expect": {
+        "answer": "artifact"
+      }
+    },
+    {
+      "id": "res-record-not-held",
+      "section": [
+        "§3.1 Subject",
+        "§4.2 The Signed Refusal"
+      ],
+      "description": "well-formed record digest not held.",
+      "request_json": "{\"coverage\":{\"expected_pin\":\"6441370955d2b408884793962a664daec6bb25e06d76a2f53d8a80f66a675202\"},\"nonce\":\"n-0102\",\"subject\":{\"record\":\"88f8bcf9df8ad17377abfbb63a249be54e5ee1664acbeae99474317878122091\"}}",
+      "request_json_digest": "c0447efd3a1b04890cdc232beb74c109fe86730249a115750d27e4214f089da9",
+      "request_cbor_hex": "a3656e6f6e6365666e2d30313032677375626a656374a1667265636f726478403838663862636639646638616431373337376162666262363361323439626535346535656531363634616362656165393934373433313738373831323230393168636f766572616765a16c65787065637465645f70696e784036343431333730393535643262343038383834373933393632613636346461656336626232356530366437366132663533643861383066363661363735323032",
+      "request_cbor_digest": "29f058f0cd1798e941010cf3f0b968b8c068c268a57023028cab4f39da0429d3",
+      "expect": {
+        "answer": "refusal",
+        "reason": "no_such_subject"
+      }
+    },
+    {
+      "id": "res-record-prefix",
+      "section": [
+        "§3.1 Subject"
+      ],
+      "description": "prefix of a held record's digest: never matched.",
+      "request_json": "{\"coverage\":{\"expected_pin\":\"6441370955d2b408884793962a664daec6bb25e06d76a2f53d8a80f66a675202\"},\"nonce\":\"n-0103\",\"subject\":{\"record\":\"2ab35089\"}}",
+      "request_json_digest": "afcedbd08bb0c336a159a604ac98ad41f8a359e37074bb552bd37045f44cb124",
+      "request_cbor_hex": "a3656e6f6e6365666e2d30313033677375626a656374a1667265636f726468326162333530383968636f766572616765a16c65787065637465645f70696e784036343431333730393535643262343038383834373933393632613636346461656336626232356530366437366132663533643861383066363661363735323032",
+      "request_cbor_digest": "547d15f52d936cce119b42a2b6c8bb1325a6d7045de9cb5e69fe96754e7a63a6",
+      "expect": {
+        "answer": "refusal",
+        "reason": "request_malformed"
+      },
+      "ambiguity": "§3.1, §3.2, §4.2: -00 names digests but not the hash algorithm or representation. Vectors use SHA-256 as 64 lowercase hex characters, as text in both the JSON and CBOR bindings."
+    },
+    {
+      "id": "res-correlation-exact",
+      "section": [
+        "§3.1 Subject"
+      ],
+      "description": "correlation identifier held exactly: served.",
+      "request_json": "{\"coverage\":{\"expected_pin\":\"6441370955d2b408884793962a664daec6bb25e06d76a2f53d8a80f66a675202\"},\"nonce\":\"n-0104\",\"subject\":{\"correlation\":\"c-7d1e9a40\"}}",
+      "request_json_digest": "31ddb3f6b1117b88bf86efc47f854d67d06d2e0804f2cd0f20b44d19ef9d1922",
+      "request_cbor_hex": "a3656e6f6e6365666e2d30313034677375626a656374a16b636f7272656c6174696f6e6a632d376431653961343068636f766572616765a16c65787065637465645f70696e784036343431333730393535643262343038383834373933393632613636346461656336626232356530366437366132663533643861383066363661363735323032",
+      "request_cbor_digest": "6bf375e4e2a7b219afb59e90ad9ea3fd800446e888ca32aad623f5f2c65b537d",
+      "expect": {
+        "answer": "artifact"
+      }
+    },
+    {
+      "id": "res-correlation-prefix",
+      "section": [
+        "§3.1 Subject"
+      ],
+      "description": "prefix of a held correlation identifier: no fuzzy matching.",
+      "request_json": "{\"coverage\":{\"expected_pin\":\"6441370955d2b408884793962a664daec6bb25e06d76a2f53d8a80f66a675202\"},\"nonce\":\"n-0105\",\"subject\":{\"correlation\":\"c-7d1e\"}}",
+      "request_json_digest": "1a7df6d1a4bdef102b92ba1ba9ccc9558408bd92142685f2f18b67cfc9fc9c10",
+      "request_cbor_hex": "a3656e6f6e6365666e2d30313035677375626a656374a16b636f7272656c6174696f6e66632d3764316568636f766572616765a16c65787065637465645f70696e784036343431333730393535643262343038383834373933393632613636346461656336626232356530366437366132663533643861383066363661363735323032",
+      "request_cbor_digest": "604552fa12479cf304e3d3ce9dd9ace9b155db66a029d198f0a0c7f83f1e7973",
+      "expect": {
+        "answer": "refusal",
+        "reason": "no_such_subject"
+      }
+    },
+    {
+      "id": "res-correlation-case-folded",
+      "section": [
+        "§3.1 Subject"
+      ],
+      "description": "a case-folded variant of a held correlation identifier: no best-effort matching.",
+      "request_json": "{\"coverage\":{\"expected_pin\":\"6441370955d2b408884793962a664daec6bb25e06d76a2f53d8a80f66a675202\"},\"nonce\":\"n-0106\",\"subject\":{\"correlation\":\"C-7D1E9A40\"}}",
+      "request_json_digest": "616dae222e65c153c9459300310ca32c076a3c1c3c7d8b801553bff1c5bd6a39",
+      "request_cbor_hex": "a3656e6f6e6365666e2d30313036677375626a656374a16b636f7272656c6174696f6e6a432d374431453941343068636f766572616765a16c65787065637465645f70696e784036343431333730393535643262343038383834373933393632613636346461656336626232356530366437366132663533643861383066363661363735323032",
+      "request_cbor_digest": "e29a57a4e4a41169039e349c2119eabc899074cbe0b06615f1c2dffdd8c601d3",
+      "expect": {
+        "answer": "refusal",
+        "reason": "no_such_subject"
+      }
+    },
+    {
+      "id": "res-exchange-cited",
+      "section": [
+        "§3.1 Subject",
+        "§6 The Symmetric Ask"
+      ],
+      "description": "an exchange half the responder's records cite: served.",
+      "request_json": "{\"coverage\":{\"expected_pin\":\"e2c78557e239cd93cf344c2e435158367deac1d3b525deb6e09c23d1a8139227\"},\"nonce\":\"n-0107\",\"subject\":{\"exchange\":\"e2c78557e239cd93cf344c2e435158367deac1d3b525deb6e09c23d1a8139227\"}}",
+      "request_json_digest": "61a78ad010f8eee326f2bd696f21821c4bbf6731bb3e9dbdda257dcb0320ca42",
+      "request_cbor_hex": "a3656e6f6e6365666e2d30313037677375626a656374a16865786368616e676578406532633738353537653233396364393363663334346332653433353135383336376465616331643362353235646562366530396332336431613831333932323768636f766572616765a16c65787065637465645f70696e784065326337383535376532333963643933636633343463326534333531353833363764656163316433623532356465623665303963323364316138313339323237",
+      "request_cbor_digest": "012400bb1d411a0340a5c637e91445b387605c36cd82a329311b89d91f50e120",
+      "expect": {
+        "answer": "artifact"
+      }
+    },
+    {
+      "id": "res-exchange-not-cited",
+      "section": [
+        "§3.1 Subject",
+        "§6 The Symmetric Ask"
+      ],
+      "description": "an exchange half no record cites.",
+      "request_json": "{\"coverage\":{\"expected_pin\":\"a2ad745b1e5290793135b8c1fb20887d6e8de485cccb6c14e63dfc8337038846\"},\"nonce\":\"n-0108\",\"subject\":{\"exchange\":\"a2ad745b1e5290793135b8c1fb20887d6e8de485cccb6c14e63dfc8337038846\"}}",
+      "request_json_digest": "0d60ed530c450e0d3521d9d4bc11aaa76ca3858d471779f30ef9ab280252a580",
+      "request_cbor_hex": "a3656e6f6e6365666e2d30313038677375626a656374a16865786368616e676578406132616437343562316535323930373933313335623863316662323038383764366538646534383563636362366331346536336466633833333730333838343668636f766572616765a16c65787065637465645f70696e784061326164373435623165353239303739333133356238633166623230383837643665386465343835636363623663313465363364666338333337303338383436",
+      "request_cbor_digest": "7fcf11591befd813b0d80dae2a508f79ec7769006a78102714b265c46ada580a",
+      "expect": {
+        "answer": "refusal",
+        "reason": "no_such_subject"
+      }
+    },
+    {
+      "id": "res-range-positional",
+      "section": [
+        "§3.1 Subject"
+      ],
+      "description": "range under a mechanism with positions: served.",
+      "request_json": "{\"coverage\":{\"expected_pin\":\"6441370955d2b408884793962a664daec6bb25e06d76a2f53d8a80f66a675202\"},\"nonce\":\"n-0109\",\"subject\":{\"range\":[0,2]}}",
+      "request_json_digest": "b9d45b3863c3ec8cb66bda1c043e067aa8377fff5831fdf4c5ad47ad77312be3",
+      "request_cbor_hex": "a3656e6f6e6365666e2d30313039677375626a656374a16572616e676582000268636f766572616765a16c65787065637465645f70696e784036343431333730393535643262343038383834373933393632613636346461656336626232356530366437366132663533643861383066363661363735323032",
+      "request_cbor_digest": "aff0639b6e228e64f8a225a63b019e0f35b94f9b6e4c4ca6c69fdb719bfd1811",
+      "expect": {
+        "answer": "artifact"
+      }
+    },
+    {
+      "id": "res-range-no-positional-ordering",
+      "section": [
+        "§3.1 Subject"
+      ],
+      "description": "range under a mechanism that defines no positional ordering.",
+      "request_json": "{\"coverage\":{\"expected_pin\":\"6441370955d2b408884793962a664daec6bb25e06d76a2f53d8a80f66a675202\"},\"nonce\":\"n-0110\",\"subject\":{\"range\":[0,2]}}",
+      "request_json_digest": "7a84b22fd1083a8525a716fbf976964d3d03c24e529009db41a3314d88a93dd6",
+      "request_cbor_hex": "a3656e6f6e6365666e2d30313130677375626a656374a16572616e676582000268636f766572616765a16c65787065637465645f70696e784036343431333730393535643262343038383834373933393632613636346461656336626232356530366437366132663533643861383066363661363735323032",
+      "request_cbor_digest": "ed4d44fb7e8c094e15711921e9ee69f8cdeb5d429f96e4dbe29cf2d462d3452c",
+      "expect": {
+        "answer": "refusal",
+        "reason": "coverage_unsatisfiable"
+      },
+      "responder_overrides": {
+        "positional_ordering": false
+      }
+    },
+    {
+      "id": "res-pin-unknown-anchor",
+      "section": [
+        "§3.2 Coverage"
+      ],
+      "description": "pinned anchor the responder cannot satisfy.",
+      "request_json": "{\"coverage\":{\"expected_pin\":\"56ebca3cbf77bdf180afb53148d3fbeb69bfeef0626abe82a16e29c85d1884d0\"},\"nonce\":\"n-0111\",\"subject\":{\"record\":\"2ab350895f867d54a5cfdc1dd1aa214cbc723c659663460e7511dff16a5ccc85\"}}",
+      "request_json_digest": "f476b911612137f1f2af988c1d16c3514b6a57afb65b2ef41be5132ca7fb3eed",
+      "request_cbor_hex": "a3656e6f6e6365666e2d30313131677375626a656374a1667265636f726478403261623335303839356638363764353461356366646331646431616132313463626337323363363539363633343630653735313164666631366135636363383568636f766572616765a16c65787065637465645f70696e784035366562636133636266373762646631383061666235333134386433666265623639626665656630363236616265383261313665323963383564313838346430",
+      "request_cbor_digest": "73baf72665ce820b551e35f4b7e99ed577877a05244d5bb6b555b67d4298d4b8",
+      "expect": {
+        "answer": "refusal",
+        "reason": "coverage_unsatisfiable"
+      }
+    },
+    {
+      "id": "res-min-freshness-size-met",
+      "section": [
+        "§3.2 Coverage"
+      ],
+      "description": "size floor met by the size-42 anchor.",
+      "request_json": "{\"coverage\":{\"min_freshness\":42},\"nonce\":\"n-0112\",\"subject\":{\"record\":\"2ab350895f867d54a5cfdc1dd1aa214cbc723c659663460e7511dff16a5ccc85\"}}",
+      "request_json_digest": "3a98cfefb19c198d728aa50119ff876b34266278450e65e1c160c9b86b92ff1d",
+      "request_cbor_hex": "a3656e6f6e6365666e2d30313132677375626a656374a1667265636f726478403261623335303839356638363764353461356366646331646431616132313463626337323363363539363633343630653735313164666631366135636363383568636f766572616765a16d6d696e5f66726573686e657373182a",
+      "request_cbor_digest": "6ebe22e5d107f5a7559a5c5a36e619aec209231c464654a0a70446b174d4d18b",
+      "expect": {
+        "answer": "artifact"
+      },
+      "ambiguity": "§3.2 Coverage: min_freshness is 'size or time' with no shape. Vectors read the value itself: an unsigned integer is a log size, a text string is an RFC 3339 UTC time. Any other type is not a conforming value."
+    },
+    {
+      "id": "res-min-freshness-size-unmet",
+      "section": [
+        "§3.2 Coverage",
+        "§12 Privacy Considerations"
+      ],
+      "description": "size floor above every anchor: MUST refuse rather than serve under weaker coverage.",
+      "request_json": "{\"coverage\":{\"min_freshness\":43},\"nonce\":\"n-0113\",\"subject\":{\"record\":\"2ab350895f867d54a5cfdc1dd1aa214cbc723c659663460e7511dff16a5ccc85\"}}",
+      "request_json_digest": "95974703c2c7a0fc88a5e25975db5d8fa056d0eb1581f8d90faba5e40cc85917",
+      "request_cbor_hex": "a3656e6f6e6365666e2d30313133677375626a656374a1667265636f726478403261623335303839356638363764353461356366646331646431616132313463626337323363363539363633343630653735313164666631366135636363383568636f766572616765a16d6d696e5f66726573686e657373182b",
+      "request_cbor_digest": "860c6f73b5c0aaf9fa1c1d95a6ba14eddeb23490e1f44606bb2f1458a758dd7c",
+      "expect": {
+        "answer": "refusal",
+        "reason": "coverage_unsatisfiable"
+      },
+      "ambiguity": "§3.2 Coverage: min_freshness is 'size or time' with no shape. Vectors read the value itself: an unsigned integer is a log size, a text string is an RFC 3339 UTC time. Any other type is not a conforming value."
+    },
+    {
+      "id": "res-min-freshness-time-met",
+      "section": [
+        "§3.2 Coverage"
+      ],
+      "description": "time floor met by the anchor issued 2026-09-27T12:00:00Z.",
+      "request_json": "{\"coverage\":{\"min_freshness\":\"2026-09-27T00:00:00Z\"},\"nonce\":\"n-0114\",\"subject\":{\"record\":\"2ab350895f867d54a5cfdc1dd1aa214cbc723c659663460e7511dff16a5ccc85\"}}",
+      "request_json_digest": "708a3a1ffa221ee358abf6050c37578e41aba96e9681c68bff1e82b4ad11ef60",
+      "request_cbor_hex": "a3656e6f6e6365666e2d30313134677375626a656374a1667265636f726478403261623335303839356638363764353461356366646331646431616132313463626337323363363539363633343630653735313164666631366135636363383568636f766572616765a16d6d696e5f66726573686e65737374323032362d30392d32375430303a30303a30305a",
+      "request_cbor_digest": "05e88570b540d3d3ab3b2e2a961fedce09b66afed2d8c4640d9292c3d902983b",
+      "expect": {
+        "answer": "artifact"
+      },
+      "ambiguity": "§3.2 Coverage: min_freshness is 'size or time' with no shape. Vectors read the value itself: an unsigned integer is a log size, a text string is an RFC 3339 UTC time. Any other type is not a conforming value."
+    },
+    {
+      "id": "res-min-freshness-time-unmet",
+      "section": [
+        "§3.2 Coverage"
+      ],
+      "description": "time floor later than every anchor, and the responder issues no new commitment.",
+      "request_json": "{\"coverage\":{\"min_freshness\":\"2026-09-28T00:00:00Z\"},\"nonce\":\"n-0115\",\"subject\":{\"record\":\"2ab350895f867d54a5cfdc1dd1aa214cbc723c659663460e7511dff16a5ccc85\"}}",
+      "request_json_digest": "3a36cb4dbf85e8a5d0640fcdc63d3c904d02dc454185a3c6f6c8da6db7165482",
+      "request_cbor_hex": "a3656e6f6e6365666e2d30313135677375626a656374a1667265636f726478403261623335303839356638363764353461356366646331646431616132313463626337323363363539363633343630653735313164666631366135636363383568636f766572616765a16d6d696e5f66726573686e65737374323032362d30392d32385430303a30303a30305a",
+      "request_cbor_digest": "5d5a2c8ef3ca84ae03106e2f42b0cdf62fec75b0d6dacb2b6f6411569ab51640",
+      "expect": {
+        "answer": "refusal",
+        "reason": "coverage_unsatisfiable"
+      },
+      "ambiguity": "§3.2 Coverage: min_freshness is 'size or time' with no shape. Vectors read the value itself: an unsigned integer is a log size, a text string is an RFC 3339 UTC time. Any other type is not a conforming value."
+    },
+    {
+      "id": "res-derivation-unsupported",
+      "section": [
+        "§3.3 Derivation"
+      ],
+      "description": "a derivation token the responder does not support at all.",
+      "request_json": "{\"coverage\":{\"expected_pin\":\"6441370955d2b408884793962a664daec6bb25e06d76a2f53d8a80f66a675202\"},\"derivation\":\"record_count/1\",\"nonce\":\"n-0116\",\"subject\":{\"full_history\":null}}",
+      "request_json_digest": "16d011893c0159a6e1bc58a52d8fcef442bdb3321efc7ac3ec9bed15d030347d",
+      "request_cbor_hex": "a4656e6f6e6365666e2d30313136677375626a656374a16c66756c6c5f686973746f7279f668636f766572616765a16c65787065637465645f70696e7840363434313337303935356432623430383838343739333936326136363464616563366262323565303664373661326635336438613830663636613637353230326a64657269766174696f6e6e7265636f72645f636f756e742f31",
+      "request_cbor_digest": "1e175a33c4b14d606d7734a65981fc1c1334e2e4912dee2330cbf0f8ef492dc4",
+      "expect": {
+        "answer": "refusal",
+        "reason": "derivation_unsupported"
+      }
+    },
+    {
+      "id": "res-derivation-not-for-subject",
+      "section": [
+        "§3.3 Derivation"
+      ],
+      "description": "a supported derivation, but not for this subject.",
+      "request_json": "{\"coverage\":{\"expected_pin\":\"6441370955d2b408884793962a664daec6bb25e06d76a2f53d8a80f66a675202\"},\"derivation\":\"history_card/1\",\"nonce\":\"n-0117\",\"subject\":{\"record\":\"2ab350895f867d54a5cfdc1dd1aa214cbc723c659663460e7511dff16a5ccc85\"}}",
+      "request_json_digest": "8ab7e67d69b3c3b49b5eeff21745b75d65104efdd82c8a136c4f2dbb17d4dce3",
+      "request_cbor_hex": "a4656e6f6e6365666e2d30313137677375626a656374a1667265636f726478403261623335303839356638363764353461356366646331646431616132313463626337323363363539363633343630653735313164666631366135636363383568636f766572616765a16c65787065637465645f70696e7840363434313337303935356432623430383838343739333936326136363464616563366262323565303664373661326635336438613830663636613637353230326a64657269766174696f6e6e686973746f72795f636172642f31",
+      "request_cbor_digest": "f04cd1fc5ae15d73b442a5fc51df0011bd24cb2a553ea7a05a55af0ac985006f",
+      "expect": {
+        "answer": "refusal",
+        "reason": "no_such_subject"
+      }
+    },
+    {
+      "id": "res-derivation-history-card",
+      "section": [
+        "§3.3 Derivation",
+        "§8.1 The History Card"
+      ],
+      "description": "history_card/1 over checkpoints: served.",
+      "request_json": "{\"coverage\":{\"expected_pin\":\"6441370955d2b408884793962a664daec6bb25e06d76a2f53d8a80f66a675202\"},\"derivation\":\"history_card/1\",\"nonce\":\"n-0118\",\"subject\":{\"checkpoints\":null}}",
+      "request_json_digest": "949d8fbc88e2aa929e771ee8a08b80d1e2e29edb30bd9fa85e767eeaf99e886c",
+      "request_cbor_hex": "a4656e6f6e6365666e2d30313138677375626a656374a16b636865636b706f696e7473f668636f766572616765a16c65787065637465645f70696e7840363434313337303935356432623430383838343739333936326136363464616563366262323565303664373661326635336438613830663636613637353230326a64657269766174696f6e6e686973746f72795f636172642f31",
+      "request_cbor_digest": "5e7462b54deab92b68155947b74025e87e4c63d462be277dc78772de14b2e211",
+      "expect": {
+        "answer": "artifact"
+      }
+    },
+    {
+      "id": "res-uniform-policy-declined",
+      "section": [
+        "§4.2 The Signed Refusal",
+        "§12 Privacy Considerations"
+      ],
+      "description": "a responder whose policy answers policy_declined uniformly may do so in place of no_such_subject.",
+      "request_json": "{\"coverage\":{\"expected_pin\":\"6441370955d2b408884793962a664daec6bb25e06d76a2f53d8a80f66a675202\"},\"nonce\":\"n-0119\",\"subject\":{\"record\":\"88f8bcf9df8ad17377abfbb63a249be54e5ee1664acbeae99474317878122091\"}}",
+      "request_json_digest": "e45b9f90f57f8bedd58030d9f93451b05cd568b2b7fca799519b1a643335c7b7",
+      "request_cbor_hex": "a3656e6f6e6365666e2d30313139677375626a656374a1667265636f726478403838663862636639646638616431373337376162666262363361323439626535346535656531363634616362656165393934373433313738373831323230393168636f766572616765a16c65787065637465645f70696e784036343431333730393535643262343038383834373933393632613636346461656336626232356530366437366132663533643861383066363661363735323032",
+      "request_cbor_digest": "46b82f19f8bd8bd21ae8e222ec15c3673a1441c56d9513f990773b1003b056f0",
+      "expect": {
+        "answer": "refusal",
+        "reason": "policy_declined"
+      },
+      "responder_overrides": {
+        "uniform_policy_declined": true
+      }
+    }
+  ]
+}

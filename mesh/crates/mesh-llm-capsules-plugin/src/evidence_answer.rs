@@ -3,11 +3,12 @@
 //! `adjudicate` request is not a -00 subject and is refused, signed: this
 //! node has no referee yet.
 //!
-//! The protocol is the `capsule-emit-evidence-request` crate's: this module
-//! parses with `request::parse_json`, resolves with `resolve::resolve`,
-//! builds with `answer::build` and signs refusals with `refusal::sign`. What
-//! stays here is this node's own glue: the limits, the sharing-policy gate,
-//! the served summary (a derivation the crate does not build), and the wire.
+//! The protocol is the `evidence-request` crate's: this module parses with
+//! `request::parse_json`, resolves with `resolve::resolve` and signs
+//! refusals with `refusal::sign`. The artifact answer is the interop
+//! profile's signed envelope, built and checked in `evidence_artifact`. What
+//! stays here is this node's own glue: the limits, the sharing-policy gate
+//! and who asks.
 //!
 //! **Order, cheapest first.** Every step that can refuse runs before the
 //! work after it, so a request is turned away before it costs anything:
@@ -82,29 +83,28 @@
 //! read this log's size or cadence from which refusal it gets. A real
 //! counterparty asking for more than its own records still can.
 //!
-//! **The wire.** An artifact answer is `{"artifact", "material", "envelope"}`:
-//! the artifact and the verification material as the exact RFC 8785 text the
-//! envelope's digest and signature cover (strings, so no re-serialization
-//! can change a byte), and the signed envelope. A refusal is the crate's
-//! refusal object. The carrier is plugin-internal, not a standardized wire.
+//! **The wire.** An artifact answer is the interop profile's reply in the
+//! JSON binding (agent-action-capsule `spec/interop-profile-v0.md` §6.2,
+//! `evidence-interop/0`): the signed envelope with its artifact and
+//! verification material beside it as unpadded base64url, plus this node's
+//! witness receipts (`evidence_artifact::WITNESS_RECEIPTS`). A refusal is
+//! the crate's refusal object.
 
 use cll::mmr::leaf_count;
-use ed25519_dalek::{Signer, SigningKey};
-use evidence_request::answer::{self, BuildError, MAX_RECORDS};
+use ed25519_dalek::SigningKey;
 use evidence_request::digest::request_digest;
-use evidence_request::jcs;
 use evidence_request::refusal;
 use evidence_request::registry::Reason;
 use evidence_request::request::{self, Coverage, Derivation, Request, Subject};
 use evidence_request::resolve::{self, Resolution, ResolvedAnchor};
 use evidence_request::time::parse_utc;
 use serde_json::{json, Map, Value};
-use sha2::{Digest, Sha256};
 use std::path::Path;
 
+use crate::evidence_artifact::{self, Build, CheckError, ReceiptStatus};
 use crate::evidence_log::{self, LedgerIndex, LogView};
 use crate::requester_auth::{self, Form, Principal};
-use crate::served_summary::{self, SERVED_SUMMARY_DERIVATION_TOKEN};
+use crate::served_summary::SERVED_SUMMARY_DERIVATION_TOKEN;
 
 /// The largest request answered. A -00 request is a few hundred bytes; this
 /// turns a large one away before it is parsed.
@@ -121,8 +121,6 @@ pub const MAX_ANSWER_CHECKPOINTS: u64 = 1024;
 /// `mesh_evidence_bridge::MAX_SIDE_STREAM_BYTES`, so a larger answer could
 /// never arrive; it is refused here instead.
 pub const MAX_ANSWER_BYTES: usize = crate::mesh_evidence_bridge::MAX_SIDE_STREAM_BYTES as usize;
-
-const _: () = assert!(MAX_ANSWER_RECORDS <= MAX_RECORDS && MAX_ANSWER_CHECKPOINTS <= MAX_RECORDS);
 
 /// What one request is answered against.
 pub struct Responder<'a> {
@@ -293,7 +291,13 @@ fn answer_inner(request_bytes: &[u8], responder: &Responder<'_>, asker: &mut Ask
     let key_id = hex::encode(responder.signing_key.verifying_key().to_bytes());
     let built = evidence_log::with_index(responder.ledger_dir, &key_id, |index| {
         let view = index.view()?;
-        Ok::<_, std::io::Error>(answer_from(&req, &digest, principal_node, responder, &view))
+        Ok::<_, std::io::Error>(answer_from(
+            &req,
+            request_bytes,
+            principal_node,
+            responder,
+            &view,
+        ))
     });
     match built {
         Ok(Ok(Ok(wire))) => match serde_json::to_vec(&wire) {
@@ -430,7 +434,7 @@ fn policy_gate_applies() -> bool {
 /// Steps 6 to 10, over the index.
 fn answer_from(
     req: &Request,
-    digest: &str,
+    request_bytes: &[u8],
     principal: Option<&str>,
     responder: &Responder<'_>,
     view: &LogView<'_>,
@@ -456,15 +460,26 @@ fn answer_from(
         Resolution::Artifact(anchor) => anchor,
         Resolution::Refuse(reason) => return Err(reason),
     };
-    if matches!(&req.derivation, Some(Derivation::Token(t)) if t == SERVED_SUMMARY_DERIVATION_TOKEN)
-    {
-        return served_summary_answer(req, digest, &anchor, responder, index);
+    let at = serving_position(index, &anchor)?;
+    let served_summary = matches!(&req.derivation,
+        Some(Derivation::Token(t)) if t == SERVED_SUMMARY_DERIVATION_TOKEN);
+    if served_summary {
+        // A static export, answered only under an `expected_pin` naming
+        // this node's latest anchor (the Python reference's rule). A
+        // `min_freshness` request asks for an on-demand export, which this
+        // node declines.
+        if !matches!(req.coverage, Coverage::ExpectedPin(_)) {
+            return Err(Reason::PolicyDeclined);
+        }
+        let latest = index.chain.iter().rposition(|c| c.statement.is_some());
+        if latest != Some(at) {
+            return Err(Reason::CoverageUnsatisfiable);
+        }
     }
 
     // 8. Size, from the index.
-    let anchor_position = anchor_position(index, &anchor).ok_or(Reason::CoverageUnsatisfiable)?;
-    let covered = leaf_count(index.chain[anchor_position].mmr_size)
-        .map_err(|_| Reason::CoverageUnsatisfiable)?;
+    let covered =
+        leaf_count(index.chain[at].record.mmr_size).map_err(|_| Reason::CoverageUnsatisfiable)?;
     let records: Vec<u64> = if carries_records(req) {
         let count = match &req.subject {
             Subject::Range(a, b) => b.saturating_sub(*a).saturating_add(1),
@@ -477,8 +492,14 @@ fn answer_from(
         if count > MAX_ANSWER_RECORDS {
             return Err(Reason::PolicyDeclined);
         }
-        match &req.subject {
-            Subject::Range(a, b) => (*a..=*b).collect(),
+        let records: Vec<u64> = match &req.subject {
+            Subject::Range(a, b) => {
+                // A range reaching past the anchor is not under it.
+                if *b >= covered {
+                    return Err(Reason::NoSuchSubject);
+                }
+                (*a..=*b).collect()
+            }
             Subject::FullHistory => (0..covered).collect(),
             // Held, but after the anchor: not yet committed under it.
             Subject::Record(d) => match index.leaf_index_of(d) {
@@ -491,11 +512,21 @@ fn answer_from(
         }
         .into_iter()
         .filter(|&i| i < covered)
-        .collect()
-    } else {
-        if anchor_position as u64 + 1 > MAX_ANSWER_CHECKPOINTS {
+        .collect();
+        if records.is_empty() {
+            return Err(Reason::NoSuchSubject);
+        }
+        records
+    } else if !served_summary {
+        let listed = index.chain[..=at]
+            .iter()
+            .filter(|c| c.statement.is_some())
+            .count();
+        if listed as u64 > MAX_ANSWER_CHECKPOINTS {
             return Err(Reason::PolicyDeclined);
         }
+        Vec::new()
+    } else {
         Vec::new()
     };
 
@@ -507,49 +538,58 @@ fn answer_from(
     }
 
     // 10. Build and sign.
-    let limit = if carries_records(req) {
-        MAX_ANSWER_RECORDS
-    } else {
-        MAX_ANSWER_CHECKPOINTS
-    };
-    let built = answer::build(
-        req,
-        digest,
-        &anchor,
+    evidence_artifact::build(
+        &Build {
+            request: req,
+            request_bytes,
+            resolved: &anchor,
+            at,
+            records: &records,
+            signing_key: responder.signing_key,
+            issued_at: responder.now,
+        },
         view,
-        limit,
-        responder.signing_key,
-        responder.now,
     )
-    .map_err(|e| {
-        if !matches!(
-            e,
-            BuildError::OverLimit | BuildError::RecordNotFound | BuildError::NoRecords
-        ) {
-            tracing::warn!(error = %e, "an evidence answer could not be built -- declining");
-        }
-        build_error_reason(&e)
-    })?;
-    wire(built.artifact, built.material, built.envelope)
 }
 
-/// The refusal for a build that did not complete.
-fn build_error_reason(e: &BuildError) -> Reason {
-    match e {
-        BuildError::RecordNotFound | BuildError::NoRecords => Reason::NoSuchSubject,
-        BuildError::AnchorNotFound => Reason::CoverageUnsatisfiable,
-        BuildError::DerivationUnsupported => Reason::DerivationUnsupported,
-        BuildError::OverLimit | BuildError::Malformed | BuildError::Proof(_) => {
-            Reason::PolicyDeclined
-        }
-    }
-}
-
-fn anchor_position(index: &LedgerIndex, anchor: &ResolvedAnchor) -> Option<usize> {
+/// The chain position of the checkpoint an answer is served under. For an
+/// anchor, the stated checkpoint it names. For an `exchange` subject pinned
+/// by the requester's own half, the earliest stated checkpoint covering the
+/// last record citing the half among those the latest one covers, so growth
+/// that adds no citing record does not change the artifact (-00 §5), as
+/// evidencebook and the Go responder choose it; `coverage_unsatisfiable`
+/// when no stated checkpoint covers one yet.
+fn serving_position(index: &LedgerIndex, anchor: &ResolvedAnchor) -> Result<usize, Reason> {
+    let stated = || {
+        index
+            .chain
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| c.statement.is_some())
+    };
     match anchor {
-        ResolvedAnchor::Anchor(a) => index.chain.iter().position(|cp| cp.digest() == a.digest),
-        ResolvedAnchor::ExchangeHalf(_) => index.chain.len().checked_sub(1),
+        ResolvedAnchor::Anchor(a) => stated()
+            .find(|(_, c)| c.anchor_digest().as_deref() == Some(a.digest.as_str()))
+            .map(|(i, _)| i),
+        ResolvedAnchor::ExchangeHalf(half) => {
+            let latest = stated()
+                .next_back()
+                .and_then(|(_, c)| leaf_count(c.record.mmr_size).ok())
+                .unwrap_or(0);
+            index
+                .citing(half)
+                .iter()
+                .copied()
+                .filter(|&i| i < latest)
+                .max()
+                .and_then(|last| {
+                    stated()
+                        .find(|(_, c)| leaf_count(c.record.mmr_size).is_ok_and(|n| n > last))
+                        .map(|(i, _)| i)
+                })
+        }
     }
+    .ok_or(Reason::CoverageUnsatisfiable)
 }
 
 /// Whether some record of this node names `principal`, the node a signed
@@ -588,98 +628,6 @@ fn may_serve_all(
             && (history_segments == "peers"
                 || (!leaf.padding && asker.is_some() && leaf.counterparty.as_deref() == asker))
     })
-}
-
-/// The `served_summary/1` derivation: a static export, answered only under
-/// an `expected_pin` naming this node's latest checkpoint (the Python
-/// reference's rule). A `min_freshness` request asks for an on-demand export, which this
-/// node declines.
-fn served_summary_answer(
-    req: &Request,
-    digest: &str,
-    anchor: &ResolvedAnchor,
-    responder: &Responder<'_>,
-    index: &LedgerIndex,
-) -> Result<Value, Reason> {
-    if !matches!(req.coverage, Coverage::ExpectedPin(_)) {
-        return Err(Reason::PolicyDeclined);
-    }
-    let latest = index.chain.last().ok_or(Reason::CoverageUnsatisfiable)?;
-    if anchor_position(index, anchor) != Some(index.chain.len() - 1) {
-        return Err(Reason::CoverageUnsatisfiable);
-    }
-    let covered = leaf_count(latest.mmr_size).map_err(|_| Reason::CoverageUnsatisfiable)?;
-    let facts: Vec<_> = index.leaves.iter().map(|l| &l.facts).collect();
-    let summary = served_summary::summary_value(
-        &facts,
-        &served_summary::Coverage {
-            checkpoint: latest,
-            covered,
-        },
-        &|id| index.leaf_index_of(id).is_some(),
-    );
-    let anchor_digest = latest.digest();
-    let artifact = json!({
-        "anchor": anchor_digest,
-        "evidence_stream": latest.log_id,
-        "subject": answer::subject_json(&req.subject),
-        "derivation": SERVED_SUMMARY_DERIVATION_TOKEN,
-        "served_summary": summary,
-    });
-    let material = json!({ "anchor_checkpoint": serde_json::to_value(latest).map_err(|_| Reason::PolicyDeclined)? });
-    let artifact = jcs::to_string(&artifact).map_err(|_| Reason::PolicyDeclined)?;
-    let material = jcs::to_string(&material).map_err(|_| Reason::PolicyDeclined)?;
-    let envelope = sign_envelope(digest, &anchor_digest, artifact.as_bytes(), responder)?;
-    wire(artifact.into_bytes(), material.into_bytes(), envelope)
-}
-
-/// The envelope of `answer::build`, over a derivation the crate does not
-/// build: Ed25519 over RFC 8785 of `{request_digest, anchor,
-/// artifact_digest, issued_at}`, with `key_id` and `sig` beside them.
-fn sign_envelope(
-    digest: &str,
-    anchor: &str,
-    artifact: &[u8],
-    responder: &Responder<'_>,
-) -> Result<Value, Reason> {
-    let mut signed = Map::new();
-    signed.insert("request_digest".into(), json!(digest));
-    signed.insert("anchor".into(), json!(anchor));
-    signed.insert(
-        "artifact_digest".into(),
-        json!(hex::encode(Sha256::digest(artifact))),
-    );
-    signed.insert("issued_at".into(), json!(responder.now));
-    let body =
-        jcs::to_string(&Value::Object(signed.clone())).map_err(|_| Reason::PolicyDeclined)?;
-    let sig = responder.signing_key.sign(body.as_bytes());
-    signed.insert(
-        "key_id".into(),
-        json!(hex::encode(
-            responder.signing_key.verifying_key().to_bytes()
-        )),
-    );
-    signed.insert("sig".into(), json!(hex::encode(sig.to_bytes())));
-    Ok(Value::Object(signed))
-}
-
-fn wire(artifact: Vec<u8>, material: Vec<u8>, envelope: Value) -> Result<Value, Reason> {
-    let text = |b: Vec<u8>| String::from_utf8(b).map_err(|_| Reason::PolicyDeclined);
-    Ok(json!({
-        "artifact": text(artifact)?,
-        "material": text(material)?,
-        "envelope": envelope,
-    }))
-}
-
-/// Split a received artifact answer into what `answer::verify` takes:
-/// `(envelope, artifact bytes, material bytes)`. `None` for anything else.
-pub fn split_wire(answer: &Value) -> Option<(&Value, &[u8], &[u8])> {
-    Some((
-        answer.get("envelope")?,
-        answer.get("artifact")?.as_str()?.as_bytes(),
-        answer.get("material")?.as_str()?.as_bytes(),
-    ))
 }
 
 /// Answer `request_bytes` (or, when `busy`, decline it unread), and log the
@@ -754,23 +702,23 @@ pub fn decline_busy(request_bytes: &[u8], responder: &Responder<'_>) -> Outcome 
 /// - `{"state": "refusal", "reason"}`: a refusal that key signed, of this
 ///   request (`refusal::verify_for`);
 /// - `{"state": "artifact", "anchor", "records", "checkpoints"}`: an answer
-///   that verifies (`answer::verify`, or for `served_summary/1` its envelope,
-///   artifact digest and anchor checkpoint);
+///   that verifies (`evidence_artifact::check`): `anchor` is the digest of
+///   the checkpoint statement it is served under, `records` the leaf indices
+///   it carries, `checkpoints` how many checkpoints it lists;
 /// - `{"state": "not_evidence", "why"}`: anything else. It is not a refusal
 ///   and not an answer (§4.1).
 ///
 /// `witness_keys` are the witness keys the operator configured, by witness
 /// URL (`checkpoint_cadence::active_witness_keys`): configured keys only,
-/// never a key this node pinned on first contact with a witness. For an
-/// answer `answer::verify` checks, each receipt is checked under the key
-/// configured for ITS witness's URL (URLs normalized, and duplicates resolved,
-/// as `witness_status` does), never under another witness's key. A receipt
+/// never a key this node pinned on first contact with a witness. Each
+/// receipt the answer carries is checked under the key configured for ITS
+/// witness's URL (URLs normalized, and duplicates resolved, as
+/// `witness_status` does), never under another witness's key. A receipt
 /// that fails only because of a configured key makes the answer not
 /// evidence with `reason: "witness_receipt_unverified"`; one that fails with
 /// no key at all fails as before. With keys configured, such an artifact also
 /// reports `witnessed` (receipts verified) and each receipt's status. With
-/// none, the result is exactly what it was before keys were passed. A
-/// `served_summary/1` answer's receipts are not checked here.
+/// none, the result is exactly what it was before keys were passed.
 pub fn verify_response(
     sent: &[u8],
     response: &Value,
@@ -788,58 +736,37 @@ pub fn verify_response(
     let Ok(req) = request::parse_json(sent) else {
         return not_evidence("the request sent is not a -00 request".into());
     };
-    let Some((envelope, artifact, material)) = split_wire(response) else {
-        return not_evidence("neither a refusal nor an artifact answer".into());
-    };
-    if matches!(&req.derivation, Some(Derivation::Token(t)) if t == SERVED_SUMMARY_DERIVATION_TOKEN)
-    {
-        return match verify_served_summary(envelope, artifact, material, &req, &digest, key) {
-            Ok(anchor) => {
-                json!({"state": "artifact", "anchor": anchor, "records": 0, "checkpoints": 0})
-            }
-            Err(why) => not_evidence(why.into()),
-        };
-    }
     let witness_key = |ts_url: &str| {
         if cfg!(feature = "mutant-answer-ignores-witness-keys") {
             return None;
         }
         configured_witness_key(witness_keys, ts_url)
     };
-    match answer::verify(
-        envelope,
-        artifact,
-        material,
-        &req,
-        &digest,
-        key,
-        &evidence_log::record_digest,
-        &witness_key,
-    ) {
+    match evidence_artifact::check(sent, &req, response, key, &witness_key) {
         Ok(v) => {
             let mut out = json!({
                 "state": "artifact",
-                "anchor": v.anchor.digest(),
-                "records": v.records.iter().map(|r| r.leaf_index).collect::<Vec<_>>(),
-                "checkpoints": v.checkpoints.len(),
+                "anchor": v.anchor,
+                "records": v.records,
+                "checkpoints": v.checkpoints,
             });
             if !witness_keys.is_empty() {
                 out["witnessed"] = json!(v
                     .receipts
                     .iter()
-                    .filter(|r| r.status == answer::ReceiptStatus::Verified)
+                    .filter(|r| r.status == ReceiptStatus::Verified)
                     .count());
                 out["receipts"] = v
                     .receipts
                     .iter()
                     .map(|r| {
                         json!({
-                            "checkpoint": r.checkpoint_digest,
+                            "checkpoint": r.checkpoint,
                             "ts_url": r.ts_url,
                             "status": match r.status {
-                                answer::ReceiptStatus::Verified => "verified",
-                                answer::ReceiptStatus::NoKey => "no_key",
-                                answer::ReceiptStatus::Stub => "stub",
+                                ReceiptStatus::Verified => "verified",
+                                ReceiptStatus::NoKey => "no_key",
+                                ReceiptStatus::Stub => "stub",
                             },
                         })
                     })
@@ -849,19 +776,9 @@ pub fn verify_response(
         }
         // A receipt failing under a configured key: the same answer passes
         // with no keys, so the key is what refused it.
-        Err(e @ (answer::VerifyError::ReceiptBinding | answer::VerifyError::ReceiptMalformed))
+        Err(e @ (CheckError::ReceiptBinding | CheckError::ReceiptMalformed))
             if !witness_keys.is_empty()
-                && answer::verify(
-                    envelope,
-                    artifact,
-                    material,
-                    &req,
-                    &digest,
-                    key,
-                    &evidence_log::record_digest,
-                    &|_| None,
-                )
-                .is_ok() =>
+                && evidence_artifact::check(sent, &req, response, key, &|_| None).is_ok() =>
         {
             json!({"state": "not_evidence", "why": e.to_string(), "reason": "witness_receipt_unverified"})
         }
@@ -885,75 +802,6 @@ fn configured_witness_key(
     ed25519_dalek::VerifyingKey::from_bytes(&bytes).ok()
 }
 
-/// The checks `answer::verify` makes of any answer, for the served-summary
-/// derivation it does not know: the envelope is `key`'s and names this
-/// request, the artifact is the one it signed, and the anchor checkpoint is
-/// `key`'s, is the one named, and is the pinned one. Returns the anchor.
-fn verify_served_summary(
-    envelope: &Value,
-    artifact: &[u8],
-    material: &[u8],
-    req: &Request,
-    digest: &str,
-    key: &ed25519_dalek::VerifyingKey,
-) -> Result<String, &'static str> {
-    let text = |k: &str| {
-        envelope
-            .get(k)
-            .and_then(Value::as_str)
-            .ok_or("the envelope is malformed")
-    };
-    let (env_request, env_anchor, env_artifact, issued_at) = (
-        text("request_digest")?,
-        text("anchor")?,
-        text("artifact_digest")?,
-        text("issued_at")?,
-    );
-    if text("key_id")? != hex::encode(key.to_bytes()) {
-        return Err("the envelope is not signed by the expected responder key");
-    }
-    let body = jcs::to_string(&json!({
-        "request_digest": env_request, "anchor": env_anchor,
-        "artifact_digest": env_artifact, "issued_at": issued_at,
-    }))
-    .map_err(|_| "the envelope is malformed")?;
-    let sig: [u8; 64] = hex::decode(text("sig")?)
-        .ok()
-        .and_then(|b| b.try_into().ok())
-        .ok_or("the envelope is malformed")?;
-    key.verify_strict(body.as_bytes(), &ed25519_dalek::Signature::from_bytes(&sig))
-        .map_err(|_| "the envelope is not signed by the expected responder key")?;
-    if env_request != digest {
-        return Err("the envelope names a different request");
-    }
-    if hex::encode(Sha256::digest(artifact)) != env_artifact {
-        return Err("the artifact does not match the envelope's artifact digest");
-    }
-    let art: Value = serde_json::from_slice(artifact).map_err(|_| "the artifact is malformed")?;
-    if art.get("anchor").and_then(Value::as_str) != Some(env_anchor)
-        || art.get("subject") != Some(&answer::subject_json(&req.subject))
-        || art.get("derivation").and_then(Value::as_str) != Some(SERVED_SUMMARY_DERIVATION_TOKEN)
-        || !art.get("served_summary").is_some_and(Value::is_object)
-    {
-        return Err("the artifact is not for the requested subject or derivation");
-    }
-    let mat: Value = serde_json::from_slice(material).map_err(|_| "the material is malformed")?;
-    let cp: cll::checkpoint::CheckpointRecord = mat
-        .get("anchor_checkpoint")
-        .and_then(|v| serde_json::from_value(v.clone()).ok())
-        .ok_or("the anchor checkpoint is malformed")?;
-    if cp.digest() != env_anchor
-        || cp.key_id != hex::encode(key.to_bytes())
-        || !cp.verify_signature_offline()
-    {
-        return Err("the anchor checkpoint is not the responder's, or not the one named");
-    }
-    match &req.coverage {
-        Coverage::ExpectedPin(pin) if pin == env_anchor => Ok(env_anchor.to_string()),
-        _ => Err("the anchor does not satisfy the requested coverage"),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -963,6 +811,9 @@ mod tests {
     };
 
     use crate::requester_auth::{Keys, ReplayCache};
+    use ed25519_dalek::Signer as _;
+    use evidence_request::jcs;
+    use sha2::{Digest, Sha256};
 
     const NOW: &str = "2026-09-29T00:00:00Z";
 
@@ -1043,8 +894,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         write_jsonl(&dir.path().join("capsules.jsonl"), ledger);
         let cps: Vec<Value> = corpus_checkpoints(ledger, &key())
-            .into_iter()
-            .map(|cp| serde_json::to_value(cp).unwrap())
+            .iter()
+            .map(|cp| cp.line())
             .collect();
         write_jsonl(&dir.path().join("checkpoints.jsonl"), &cps);
         dir
@@ -1365,8 +1216,10 @@ mod tests {
             .lines()
             .map(|l| {
                 let mut cp: Value = serde_json::from_str(l).unwrap();
+                let mut json_form = cp.clone();
+                json_form.as_object_mut().unwrap().remove("checkpoint_cose");
                 let record: cll::checkpoint::CheckpointRecord =
-                    serde_json::from_value(cp.clone()).unwrap();
+                    serde_json::from_value(json_form).unwrap();
                 let entry: [u8; 32] = Sha256::digest(hex::decode(record.digest()).unwrap()).into();
                 cp["witnesses"] = witnesses(&entry);
                 cp
@@ -1417,7 +1270,7 @@ mod tests {
         assert_eq!(v["reason"], json!("witness_receipt_unverified"));
         assert_eq!(
             v["why"],
-            json!(answer::VerifyError::ReceiptBinding.to_string())
+            json!(crate::evidence_artifact::CheckError::ReceiptBinding.to_string())
         );
     }
 
@@ -1514,7 +1367,7 @@ mod tests {
     /// newest checkpoint.
     fn standard_history_requests() -> Vec<Value> {
         let ledger = corpus_ledger();
-        let pin = corpus_checkpoints(&ledger, &key())[1].digest();
+        let pin = corpus_checkpoints(&ledger, &key())[1].anchor();
         let coverage = json!({"expected_pin": pin});
         vec![
             json!({"subject": {"checkpoints": null}, "coverage": coverage}),
@@ -1670,7 +1523,7 @@ mod tests {
 
     /// A request for record `i` of `ledger`, pinned to its newest checkpoint.
     fn record_request(ledger: &[Value], i: usize) -> Value {
-        let pin = corpus_checkpoints(ledger, &key())[1].digest();
+        let pin = corpus_checkpoints(ledger, &key())[1].anchor();
         json!({
             "subject": {"record": ledger[i]["capsule_id"]},
             "coverage": {"expected_pin": pin},

@@ -1,0 +1,7 @@
+{
+ "issued_at": "2026-09-26T12:00:00Z",
+ "key_id": "1a965c7d75b9a6b82aea451a40c7de9b770933afb1297d7803b83254b208a863",
+ "reason": "no_such_subject",
+ "request_digest": "abababababababababababababababababababababababababababababababab",
+ "sig": "02d05ae646f078851b834cb27c20aa869bfe78bfe13450fc81b766054f588e3cd3c2a1bd47c4b4234b1c3ecd9a53821e27160228a2842d8330bed7258a898500"
+}

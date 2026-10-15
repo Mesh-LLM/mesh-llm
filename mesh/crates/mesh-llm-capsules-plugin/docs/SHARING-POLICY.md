@@ -150,8 +150,9 @@ pool full.
 
 The checkpoint list, the `history_card/1` derivation and the `served_summary/1`
 derivation carry no record bodies: `share_history_segments` does not govern
-them, and `share_standard_history` does (below). The golden answers are in
-`vectors/parity/evidence_request/`.
+them, and `share_standard_history` does (below). The cases and their
+expected answers are in the plugin's evidence-request parity run
+(`mesh/crates/mesh-llm-capsules-plugin/src/evidence_request_parity.rs`).
 
 ## Standard History (`share_standard_history`)
 

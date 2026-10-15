@@ -1,0 +1,416 @@
+{
+  "draft": "draft-mih-agent-evidence-request-00",
+  "provenance": "spec-derived",
+  "corpus": "retention",
+  "description": "Retention commitments: the breach table and commitment subject forms.",
+  "count": 25,
+  "cases": [
+    {
+      "id": "ret-inside-not_authorized",
+      "section": [
+        "§9 Retention Commitments"
+      ],
+      "description": "A refusal with reason not_authorized inside until.",
+      "facts": {
+        "commitment": "in_force",
+        "refusal_reason": "not_authorized"
+      },
+      "expect": {
+        "classification": "no_breach"
+      }
+    },
+    {
+      "id": "ret-inside-no_such_subject",
+      "section": [
+        "§9 Retention Commitments"
+      ],
+      "description": "A refusal with reason no_such_subject inside until.",
+      "facts": {
+        "commitment": "in_force",
+        "refusal_reason": "no_such_subject"
+      },
+      "expect": {
+        "classification": "breach"
+      }
+    },
+    {
+      "id": "ret-inside-coverage_unsatisfiable",
+      "section": [
+        "§9 Retention Commitments"
+      ],
+      "description": "A refusal with reason coverage_unsatisfiable inside until.",
+      "facts": {
+        "commitment": "in_force",
+        "refusal_reason": "coverage_unsatisfiable"
+      },
+      "expect": {
+        "classification": "no_breach"
+      }
+    },
+    {
+      "id": "ret-inside-derivation_unsupported",
+      "section": [
+        "§9 Retention Commitments"
+      ],
+      "description": "A refusal with reason derivation_unsupported inside until.",
+      "facts": {
+        "commitment": "in_force",
+        "refusal_reason": "derivation_unsupported"
+      },
+      "expect": {
+        "classification": "no_breach"
+      }
+    },
+    {
+      "id": "ret-inside-policy_declined",
+      "section": [
+        "§9 Retention Commitments"
+      ],
+      "description": "A refusal with reason policy_declined inside until.",
+      "facts": {
+        "commitment": "in_force",
+        "refusal_reason": "policy_declined"
+      },
+      "expect": {
+        "classification": "breach"
+      }
+    },
+    {
+      "id": "ret-inside-deadline_unmet",
+      "section": [
+        "§9 Retention Commitments"
+      ],
+      "description": "A refusal with reason deadline_unmet inside until.",
+      "facts": {
+        "commitment": "in_force",
+        "refusal_reason": "deadline_unmet"
+      },
+      "expect": {
+        "classification": "breach"
+      }
+    },
+    {
+      "id": "ret-inside-request_malformed",
+      "section": [
+        "§9 Retention Commitments"
+      ],
+      "description": "A refusal with reason request_malformed inside until.",
+      "facts": {
+        "commitment": "in_force",
+        "refusal_reason": "request_malformed"
+      },
+      "expect": {
+        "classification": "no_breach"
+      }
+    },
+    {
+      "id": "ret-inside-retention_expired",
+      "section": [
+        "§9 Retention Commitments"
+      ],
+      "description": "A refusal with reason retention_expired inside until.",
+      "facts": {
+        "commitment": "in_force",
+        "refusal_reason": "retention_expired"
+      },
+      "expect": {
+        "classification": "breach"
+      },
+      "ambiguity": "§9: -00 lists retention_expired only as the correct refusal after until. Inside until, vectors apply the literal 'any other refusal reason' rule: it is a breach."
+    },
+    {
+      "id": "ret-after-not_authorized",
+      "section": [
+        "§9 Retention Commitments",
+        "§4.2 The Signed Refusal"
+      ],
+      "description": "A refusal with reason not_authorized after until.",
+      "facts": {
+        "commitment": "lapsed",
+        "refusal_reason": "not_authorized"
+      },
+      "expect": {
+        "classification": "no_breach"
+      },
+      "ambiguity": "§9: after until, -00 names only retention_expired as correct. Vectors class the four request/capability reasons, policy_declined and deadline_unmet as no breach, and no_such_subject as the wrong token (the lapsed promise must not read as never held, §4.2 item 2)."
+    },
+    {
+      "id": "ret-after-no_such_subject",
+      "section": [
+        "§9 Retention Commitments",
+        "§4.2 The Signed Refusal"
+      ],
+      "description": "A refusal with reason no_such_subject after until.",
+      "facts": {
+        "commitment": "lapsed",
+        "refusal_reason": "no_such_subject"
+      },
+      "expect": {
+        "classification": "wrong_token"
+      },
+      "ambiguity": "§9: after until, -00 names only retention_expired as correct. Vectors class the four request/capability reasons, policy_declined and deadline_unmet as no breach, and no_such_subject as the wrong token (the lapsed promise must not read as never held, §4.2 item 2)."
+    },
+    {
+      "id": "ret-after-coverage_unsatisfiable",
+      "section": [
+        "§9 Retention Commitments",
+        "§4.2 The Signed Refusal"
+      ],
+      "description": "A refusal with reason coverage_unsatisfiable after until.",
+      "facts": {
+        "commitment": "lapsed",
+        "refusal_reason": "coverage_unsatisfiable"
+      },
+      "expect": {
+        "classification": "no_breach"
+      },
+      "ambiguity": "§9: after until, -00 names only retention_expired as correct. Vectors class the four request/capability reasons, policy_declined and deadline_unmet as no breach, and no_such_subject as the wrong token (the lapsed promise must not read as never held, §4.2 item 2)."
+    },
+    {
+      "id": "ret-after-derivation_unsupported",
+      "section": [
+        "§9 Retention Commitments",
+        "§4.2 The Signed Refusal"
+      ],
+      "description": "A refusal with reason derivation_unsupported after until.",
+      "facts": {
+        "commitment": "lapsed",
+        "refusal_reason": "derivation_unsupported"
+      },
+      "expect": {
+        "classification": "no_breach"
+      },
+      "ambiguity": "§9: after until, -00 names only retention_expired as correct. Vectors class the four request/capability reasons, policy_declined and deadline_unmet as no breach, and no_such_subject as the wrong token (the lapsed promise must not read as never held, §4.2 item 2)."
+    },
+    {
+      "id": "ret-after-policy_declined",
+      "section": [
+        "§9 Retention Commitments",
+        "§4.2 The Signed Refusal"
+      ],
+      "description": "A refusal with reason policy_declined after until.",
+      "facts": {
+        "commitment": "lapsed",
+        "refusal_reason": "policy_declined"
+      },
+      "expect": {
+        "classification": "no_breach"
+      },
+      "ambiguity": "§9: after until, -00 names only retention_expired as correct. Vectors class the four request/capability reasons, policy_declined and deadline_unmet as no breach, and no_such_subject as the wrong token (the lapsed promise must not read as never held, §4.2 item 2)."
+    },
+    {
+      "id": "ret-after-deadline_unmet",
+      "section": [
+        "§9 Retention Commitments",
+        "§4.2 The Signed Refusal"
+      ],
+      "description": "A refusal with reason deadline_unmet after until.",
+      "facts": {
+        "commitment": "lapsed",
+        "refusal_reason": "deadline_unmet"
+      },
+      "expect": {
+        "classification": "no_breach"
+      },
+      "ambiguity": "§9: after until, -00 names only retention_expired as correct. Vectors class the four request/capability reasons, policy_declined and deadline_unmet as no breach, and no_such_subject as the wrong token (the lapsed promise must not read as never held, §4.2 item 2)."
+    },
+    {
+      "id": "ret-after-request_malformed",
+      "section": [
+        "§9 Retention Commitments",
+        "§4.2 The Signed Refusal"
+      ],
+      "description": "A refusal with reason request_malformed after until.",
+      "facts": {
+        "commitment": "lapsed",
+        "refusal_reason": "request_malformed"
+      },
+      "expect": {
+        "classification": "no_breach"
+      },
+      "ambiguity": "§9: after until, -00 names only retention_expired as correct. Vectors class the four request/capability reasons, policy_declined and deadline_unmet as no breach, and no_such_subject as the wrong token (the lapsed promise must not read as never held, §4.2 item 2)."
+    },
+    {
+      "id": "ret-after-retention_expired",
+      "section": [
+        "§9 Retention Commitments",
+        "§4.2 The Signed Refusal"
+      ],
+      "description": "A refusal with reason retention_expired after until.",
+      "facts": {
+        "commitment": "lapsed",
+        "refusal_reason": "retention_expired"
+      },
+      "expect": {
+        "classification": "correct"
+      }
+    },
+    {
+      "id": "ret-absence-inside",
+      "section": [
+        "§9 Retention Commitments",
+        "§4.4 Recorded Absence"
+      ],
+      "description": "An absence inside until is recorded citing the commitment and is chargeable to the responder that signed it.",
+      "facts": {
+        "commitment": "in_force",
+        "received": "nothing",
+        "window": "closed"
+      },
+      "expect": {
+        "classification": "attributable_absence",
+        "state": "recorded_absence"
+      }
+    },
+    {
+      "id": "ret-absence-without-commitment",
+      "section": [
+        "§4.4 Recorded Absence"
+      ],
+      "description": "An absence with no commitment is evidence of nothing but the attempt.",
+      "facts": {
+        "commitment": "none",
+        "received": "nothing",
+        "window": "closed"
+      },
+      "expect": {
+        "classification": "attempt_only",
+        "state": "recorded_absence"
+      }
+    },
+    {
+      "id": "ret-commitment-subject-record",
+      "section": [
+        "§9 Retention Commitments",
+        "§3.1 Subject"
+      ],
+      "description": "A retention commitment naming a record subject.",
+      "commitment": {
+        "evidence_stream": "stream-a",
+        "subject": {
+          "record": "2ab350895f867d54a5cfdc1dd1aa214cbc723c659663460e7511dff16a5ccc85"
+        },
+        "until": "2027-09-28T00:00:00Z"
+      },
+      "expect": {
+        "well_formed": true
+      },
+      "ambiguity": "§3.1 Subject: -00 gives six forms and their content but no wire shape. Vectors use a map with exactly one member, named by the form token, whose value is the content: null for full_history and checkpoints, a digest for record and exchange, [a, b] (two unsigned integers) for range, a text string for correlation."
+    },
+    {
+      "id": "ret-commitment-subject-exchange",
+      "section": [
+        "§9 Retention Commitments",
+        "§3.1 Subject"
+      ],
+      "description": "A retention commitment naming a exchange subject.",
+      "commitment": {
+        "evidence_stream": "stream-a",
+        "subject": {
+          "exchange": "e2c78557e239cd93cf344c2e435158367deac1d3b525deb6e09c23d1a8139227"
+        },
+        "until": "2027-09-28T00:00:00Z"
+      },
+      "expect": {
+        "well_formed": true
+      },
+      "ambiguity": "§3.1 Subject: -00 gives six forms and their content but no wire shape. Vectors use a map with exactly one member, named by the form token, whose value is the content: null for full_history and checkpoints, a digest for record and exchange, [a, b] (two unsigned integers) for range, a text string for correlation."
+    },
+    {
+      "id": "ret-commitment-subject-range",
+      "section": [
+        "§9 Retention Commitments",
+        "§3.1 Subject"
+      ],
+      "description": "A retention commitment naming a range subject.",
+      "commitment": {
+        "evidence_stream": "stream-a",
+        "subject": {
+          "range": [
+            0,
+            2
+          ]
+        },
+        "until": "2027-09-28T00:00:00Z"
+      },
+      "expect": {
+        "well_formed": true
+      },
+      "ambiguity": "§9: 'a digest or a position under a checkpoint'. Vectors read full_history, checkpoints and correlation subjects in a commitment as malformed. §3.1 Subject: -00 gives six forms and their content but no wire shape. Vectors use a map with exactly one member, named by the form token, whose value is the content: null for full_history and checkpoints, a digest for record and exchange, [a, b] (two unsigned integers) for range, a text string for correlation."
+    },
+    {
+      "id": "ret-commitment-subject-correlation",
+      "section": [
+        "§9 Retention Commitments",
+        "§3.1 Subject"
+      ],
+      "description": "A retention commitment naming a correlation subject.",
+      "commitment": {
+        "evidence_stream": "stream-a",
+        "subject": {
+          "correlation": "c-7d1e9a40"
+        },
+        "until": "2027-09-28T00:00:00Z"
+      },
+      "expect": {
+        "well_formed": false
+      },
+      "ambiguity": "§9: 'a digest or a position under a checkpoint'. Vectors read full_history, checkpoints and correlation subjects in a commitment as malformed. §3.1 Subject: -00 gives six forms and their content but no wire shape. Vectors use a map with exactly one member, named by the form token, whose value is the content: null for full_history and checkpoints, a digest for record and exchange, [a, b] (two unsigned integers) for range, a text string for correlation."
+    },
+    {
+      "id": "ret-commitment-subject-full_history",
+      "section": [
+        "§9 Retention Commitments",
+        "§3.1 Subject"
+      ],
+      "description": "A retention commitment naming a full_history subject.",
+      "commitment": {
+        "evidence_stream": "stream-a",
+        "subject": {
+          "full_history": null
+        },
+        "until": "2027-09-28T00:00:00Z"
+      },
+      "expect": {
+        "well_formed": false
+      },
+      "ambiguity": "§9: 'a digest or a position under a checkpoint'. Vectors read full_history, checkpoints and correlation subjects in a commitment as malformed. §3.1 Subject: -00 gives six forms and their content but no wire shape. Vectors use a map with exactly one member, named by the form token, whose value is the content: null for full_history and checkpoints, a digest for record and exchange, [a, b] (two unsigned integers) for range, a text string for correlation."
+    },
+    {
+      "id": "ret-commitment-subject-checkpoints",
+      "section": [
+        "§9 Retention Commitments",
+        "§3.1 Subject"
+      ],
+      "description": "A retention commitment naming a checkpoints subject.",
+      "commitment": {
+        "evidence_stream": "stream-a",
+        "subject": {
+          "checkpoints": null
+        },
+        "until": "2027-09-28T00:00:00Z"
+      },
+      "expect": {
+        "well_formed": false
+      },
+      "ambiguity": "§9: 'a digest or a position under a checkpoint'. Vectors read full_history, checkpoints and correlation subjects in a commitment as malformed. §3.1 Subject: -00 gives six forms and their content but no wire shape. Vectors use a map with exactly one member, named by the form token, whose value is the content: null for full_history and checkpoints, a digest for record and exchange, [a, b] (two unsigned integers) for range, a text string for correlation."
+    },
+    {
+      "id": "ret-commitment-missing-until",
+      "section": [
+        "§9 Retention Commitments"
+      ],
+      "description": "A commitment without until (item 2 is not optional).",
+      "commitment": {
+        "evidence_stream": "stream-a",
+        "subject": {
+          "record": "2ab350895f867d54a5cfdc1dd1aa214cbc723c659663460e7511dff16a5ccc85"
+        }
+      },
+      "expect": {
+        "well_formed": false
+      },
+      "ambiguity": "§3.1 Subject: -00 gives six forms and their content but no wire shape. Vectors use a map with exactly one member, named by the form token, whose value is the content: null for full_history and checkpoints, a digest for record and exchange, [a, b] (two unsigned integers) for range, a text string for correlation."
+    }
+  ]
+}

@@ -72,23 +72,30 @@ function answer(
   return { kind: 'answer' as const, answer: body, verification: found, requestDigest: SENT, announcedKeyId }
 }
 
-/** An artifact answer carrying `records` (the -00 wire the plugin serves:
- *  the artifact as exact JSON text, each record's body hex-encoded). */
+/** An artifact answer carrying `records` (the interop profile's reply the
+ *  plugin serves: the artifact's JSON text as unpadded base64url, each
+ *  record's body hex-encoded). */
 function artifact(records: Record<string, unknown>[]): Record<string, unknown> {
   const served = records.map((record, i) => ({
     leaf_index: i,
     digest: 'd'.repeat(64),
     body: hex(new TextEncoder().encode(JSON.stringify(record)))
   }))
+  const text = JSON.stringify({ anchor: 'a'.repeat(64), evidence_stream: 'log', subject: { correlation: NONCE }, records: served })
   return {
-    artifact: JSON.stringify({ anchor: 'a'.repeat(64), evidence_stream: 'log', subject: { correlation: NONCE }, records: served }),
-    material: '{}',
-    envelope: {}
+    profile: 'evidence-interop/0',
+    artifact_digest: 'b'.repeat(64),
+    artifact: base64url(new TextEncoder().encode(text))
   }
 }
 
+function base64url(bytes: Uint8Array): string {
+  return btoa(String.fromCharCode(...bytes)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+}
+
 function artifactLeafIndices(body: Record<string, unknown>): number[] {
-  const parsed = JSON.parse(String(body.artifact)) as { records: { leaf_index: number }[] }
+  const text = atob(String(body.artifact).replace(/-/g, '+').replace(/_/g, '/'))
+  const parsed = JSON.parse(text) as { records: { leaf_index: number }[] }
   return parsed.records.map((r) => r.leaf_index)
 }
 
@@ -281,6 +288,21 @@ describe('judgeAskReply', () => {
       text: 'Their record is in their log, but it is not verified: its id does not recompute'
     })
     expect(askReplyNote(await judged({ ...trustingJudges, recomputeIdMatch: async () => null }))?.verified).toBe(false)
+  })
+
+  it('reads the artifact as the profile carries it, base64url, never as raw JSON text', async () => {
+    const theirs = { ...fixtureHalfBody({ capsuleId: 'theirs-1' }), signature: 'aa', key_id: 'bb' }
+    const reply = artifact([theirs])
+    const record = await judgeAskReply(answer(reply), FIXTURE_REQUEST_DIGEST, ASKED_AT, trustingJudges)
+    expect(record.kind).toBe('record')
+    const asText = { ...reply, artifact: atob(String(reply.artifact).replace(/-/g, '+').replace(/_/g, '/')) }
+    const outcome = await judgeAskReply(
+      answer(asText, ANNOUNCED, { state: 'artifact', records: [0] }),
+      FIXTURE_REQUEST_DIGEST,
+      ASKED_AT,
+      trustingJudges
+    )
+    expect(outcome).toMatchObject({ kind: 'no_reply', detail: 'their reply carried no record' })
   })
 
   it('reads only the records the plugin proved', async () => {

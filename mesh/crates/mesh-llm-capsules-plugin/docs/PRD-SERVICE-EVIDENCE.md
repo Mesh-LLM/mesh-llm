@@ -134,7 +134,7 @@ network: payment legs record observations, they do not move money.
 
 Today the checkpoint list, `history_card/1` and `served_summary/1` are
 answered under every `share_history_segments` value, including `off`
-(SHARING-POLICY; parity cases in `vectors/parity/evidence_request/`). They
+(SHARING-POLICY; parity cases in `evidence_request_parity.rs`). They
 carry no record bodies, but they are not harmless:
 
 - checkpoint `log_size` and `issued_at` over time give the node's **cadence
@@ -274,9 +274,9 @@ settlement legs, verdict bodies and any TEE quote sidecar.
   discovery (only under R-7): an A2A Agent Card extension naming the draft,
   the supported subjects and derivations and their versions; no history and no
   per-exchange ids in discovery.
-- **R-23 Wire alignment.** The Mesh carrier today is JSON (answer
-  `{"artifact","material","envelope"}` as RFC 8785 text) and "plugin-internal,
-  not a standardized wire" (`evidence_answer.rs` module doc), whereas draft
+- **R-23 Wire alignment.** The Mesh carrier today is the interop profile's
+  reply in its JSON binding (agent-action-capsule `spec/interop-profile-v0.md`
+  §6.2, `evidence-interop/0`; `evidence_answer.rs` module doc), whereas draft
   -00's peer-to-peer binding uses the same `evidence-request/1` identifier with
   deterministic CBOR frames. One normative encoding is chosen, and Mesh either
   conforms or uses a distinct identifier (§9).
@@ -549,7 +549,7 @@ interoperability (M1–M5).
   [PROTOCOL-NOTE.md](PROTOCOL-NOTE.md), `CHANGELOG.md`,
   `mesh/crates/mesh-llm-capsules-plugin/src/evidence_answer.rs`, `served_summary.rs`,
   `verdict_counts.rs`, `producer/capsule.rs`, `capsule_emit.rs`,
-  `vectors/parity/evidence_request/`; PRs #1–#23; releases v0.1.3, v0.1.4.
+  `evidence_request_parity.rs`; PRs #1–#23; releases v0.1.3, v0.1.4.
 - `Mesh-LLM/mesh-llm`: `plugin.proto`; PRs #2138, #2169, #2299; issue #2264;
   issue #1331; release v0.78.1.
 - `capsule-emit-evidence-request` 0.0.3 on crates.io.

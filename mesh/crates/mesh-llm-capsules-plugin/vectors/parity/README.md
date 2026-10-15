@@ -10,17 +10,12 @@ are in the plugin crate and run with `cargo test`.
   --golden`), both at the pinned commit. No Python runs here: CI checks the Rust
   receiver against these files and never reruns the Python reference, so
   changing them means regenerating both at the source and copying them here.
-- **Evidence request:** written by the plugin's own generator
-  (`EVIDENCE_REQUEST_PARITY_WRITE=1`), reviewed case by case against
-  draft-mih-agent-evidence-request-00.
 
 | File | What it is | Runner |
 | --- | --- | --- |
 | `corpus/record_push.json` | Inputs for the record-push receiver: one receiving node per case and the pushes made to it, in order. Public material only. | `record_push_parity` |
 | `golden/record_push.json` | The reference's answer to every case. | `record_push_parity` |
 | `intended_differences.json` | Cases where the Rust receiver is held to a stricter answer than the reference, each with its reason. | `record_push_parity` |
-| `evidence_request/corpus.json` | Inputs for the evidence-request responder's served summary and received log. | `evidence_request_parity` |
-| `evidence_request/golden.json` | The expected answers. | `evidence_request_parity` |
 | `referee/` | The referee's corpus: eight paths (checking and comparing two halves, the referee's signed answer, a verdict received over record-push or at the deliver door, the verdicts a node's references hold, choosing a referee, when one is asked, and the counts with the stop-routing rule). `golden/` holds the reference implementation's answers where it follows the rules, and the rule's where it does not (`intended_differences.json` lists each, with the rule); `rule_answers/` holds the answers stated from the rules for the three paths the reference does not follow. | `referee::parity` |
 
 A runner fails when a single answer differs. Two deliberately broken builds
@@ -30,6 +25,7 @@ checks that they do. The referee's mutants are listed in
 `referee/mutants.json`, each with the cases that must catch it;
 `scripts/referee-mutants.sh` builds each and checks it fails on those cases.
 
-Evidence-request protocol answers are judged by the draft's conformance
-vectors (agent-action-capsule `vectors/evidence-request/`, which the
-`evidence-request` crate is tested against), not by these goldens.
+The evidence-request parity run (`evidence_request_parity`) has no files here:
+its protocol half runs against the draft's conformance vectors, copied in
+`../aac-evidence-request/`, and its sharing-policy cases state their expected
+answers in the runner itself.

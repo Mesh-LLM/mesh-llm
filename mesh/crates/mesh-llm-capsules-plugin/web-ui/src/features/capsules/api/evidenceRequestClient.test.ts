@@ -63,7 +63,7 @@ describe('askForRecord', () => {
   })
 
   it('unwraps an artifact answer and keeps what the verification proved', async () => {
-    const answer = { artifact: '{"records":[]}', material: '{}', envelope: {} }
+    const answer = { profile: 'evidence-interop/0', artifact: 'eyJyZWNvcmRzIjpbXX0' }
     stubRoutes({ answer, request_digest: DIGEST, verification: { state: 'artifact', anchor: 'x', records: [3, 4], checkpoints: 0 } }, null)
     expect(await askForRecord(PEER, BY_NONCE)).toEqual({
       kind: 'answer',
@@ -106,7 +106,7 @@ describe('askForRecord', () => {
       verification: { state: 'refusal', reason: 'no_such_subject' }
     }
     const found = {
-      answer: { artifact: '{"records":[]}', material: '{}', envelope: {} },
+      answer: { profile: 'evidence-interop/0', artifact: 'eyJyZWNvcmRzIjpbXX0' },
       request_digest: 'cd'.repeat(32),
       verification: { state: 'artifact', records: [3] }
     }
@@ -161,10 +161,11 @@ describe('askForRecord', () => {
   it('end to end: a verified artifact from the tool becomes their record on the row', async () => {
     const theirs = { capsule_id: 'theirs-1', effect: { request_digest: 'e'.repeat(64) } }
     const body = Array.from(new TextEncoder().encode(JSON.stringify(theirs)), (b) => b.toString(16).padStart(2, '0')).join('')
+    // The interop profile's reply: the artifact's JSON text as unpadded base64url.
+    const text = JSON.stringify({ records: [{ leaf_index: 7, digest: 'd'.repeat(64), body }] })
     const answer = {
-      artifact: JSON.stringify({ records: [{ leaf_index: 7, digest: 'd'.repeat(64), body }] }),
-      material: '{}',
-      envelope: {}
+      profile: 'evidence-interop/0',
+      artifact: btoa(text).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
     }
     stubRoutes({ answer, request_digest: DIGEST, verification: { state: 'artifact', records: [7] } }, 'ab'.repeat(32))
     const outcome = await judgeAskReply(await askForRecord(PEER, BY_NONCE), 'e'.repeat(64), '2026-09-28T23:00:00Z', {
