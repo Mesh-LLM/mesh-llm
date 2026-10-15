@@ -252,6 +252,10 @@ fn detect_hostname() -> Option<String> {
         ComputerNameDnsHostname, GetComputerNameExW,
     };
 
+    if std::env::var_os("_CLUSTER_NETWORK_NAME_").is_some() {
+        return detect_hostname_from_command();
+    }
+
     let mut buffer = [0_u16; 256];
     let mut size = u32::try_from(buffer.len()).ok()?;
     // SAFETY: buffer is writable for the exact capacity passed to the API.
@@ -263,13 +267,18 @@ fn detect_hostname() -> Option<String> {
     parse_hostname(&name)
 }
 
-#[cfg(not(any(unix, windows)))]
-fn detect_hostname() -> Option<String> {
+#[cfg(not(unix))]
+fn detect_hostname_from_command() -> Option<String> {
     let out = std::process::Command::new("hostname").output().ok()?;
     if !out.status.success() {
         return None;
     }
-    parse_hostname(&String::from_utf8(out.stdout).ok()?)
+    parse_hostname(std::str::from_utf8(&out.stdout).ok()?)
+}
+
+#[cfg(not(any(unix, windows)))]
+fn detect_hostname() -> Option<String> {
+    detect_hostname_from_command()
 }
 
 #[cfg(target_os = "linux")]
