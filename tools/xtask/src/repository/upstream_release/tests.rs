@@ -7,7 +7,8 @@ const TAG: &str = "2222222222222222222222222222222222222222";
 
 fn release() -> Value {
     json!({"id":123,"tag_name":"v0.7.0","draft":false,"prerelease":false,
-        "published_at":"2026-10-15T17:13:19Z","target_commitish":"master"})
+        "created_at":"2026-10-15T17:13:19Z","published_at":"2026-10-15T17:13:19Z",
+        "target_commitish":"master"})
 }
 fn reference(kind: &str, sha: &str) -> Value {
     json!({"ref":"refs/tags/v0.7.0","object":{"type":kind,"sha":sha}})
@@ -16,8 +17,18 @@ fn fixture(requested: &str, rows: Vec<(&str, Value)>) -> DynResult<Selection> {
     let mut rows: VecDeque<_> = rows.into();
     let result = select(requested, |endpoint| {
         let (expected, response) = rows.pop_front().expect("unexpected API request");
-        assert_eq!(endpoint, format!("{REPOSITORY}/{expected}"));
-        Ok(response)
+        if expected == "release-page" {
+            assert_eq!(*endpoint, github::Request::ReleasePage(None));
+            Ok(json!({"data":{"repository":{"releases":{
+                "nodes":[response], "pageInfo":{"hasNextPage":false,"endCursor":null}
+            }}}}))
+        } else {
+            assert_eq!(
+                *endpoint,
+                github::Request::Rest(format!("{REPOSITORY}/{expected}"))
+            );
+            Ok(response)
+        }
     });
     assert!(rows.is_empty(), "fixture left unconsumed responses");
     result
@@ -28,7 +39,7 @@ fn upstream_release_peels_annotated_tag_instead_of_target_commitish() {
     let selected = fixture(
         "",
         vec![
-            ("releases/latest", release()),
+            ("release-page", release()),
             ("git/ref/tags/v0.7.0", reference("tag", TAG)),
             (
                 "git/tags/2222222222222222222222222222222222222222",
@@ -49,7 +60,7 @@ fn upstream_release_latest_alias_and_lightweight_tag() {
     let selected = fixture(
         "latest",
         vec![
-            ("releases/latest", release()),
+            ("release-page", release()),
             ("git/ref/tags/v0.7.0", reference("commit", COMMIT)),
             ("git/ref/tags/v0.7.0", reference("commit", COMMIT)),
         ],
@@ -78,22 +89,19 @@ fn upstream_release_explicit_commit_needs_no_network() {
 }
 
 #[test]
-fn upstream_release_rejects_nonstable_or_unpublished_metadata() {
+fn upstream_release_rejects_malformed_or_unpublished_metadata() {
     for (key, value) in [
         ("draft", json!(true)),
-        ("prerelease", json!(true)),
         ("published_at", Value::Null),
         ("published_at", json!("")),
         ("id", json!(0)),
-        ("tag_name", json!("b11669")),
-        ("tag_name", json!("v0.7.0-rc1")),
         ("tag_name", json!("v0.7.0/../master")),
     ] {
         let mut input = release();
         input[key] = value;
-        assert!(fixture("", vec![("releases/latest", input)]).is_err());
+        assert!(fixture("", vec![("release-page", input)]).is_err());
     }
-    assert!(fixture("", vec![("releases/latest", json!({"tag_name":"v0.7.0"}))]).is_err());
+    assert!(fixture("", vec![("release-page", json!({"tag_name":"v0.7.0"}))]).is_err());
 }
 
 #[test]
@@ -114,7 +122,7 @@ fn upstream_release_rejects_moved_tag() {
         fixture(
             "",
             vec![
-                ("releases/latest", release()),
+                ("release-page", release()),
                 ("git/ref/tags/v0.7.0", reference("commit", COMMIT)),
                 ("git/ref/tags/v0.7.0", reference("commit", TAG)),
             ]
@@ -135,10 +143,7 @@ fn upstream_release_rejects_noncommit_and_wrong_ref() {
         assert!(
             fixture(
                 "",
-                vec![
-                    ("releases/latest", release()),
-                    ("git/ref/tags/v0.7.0", input)
-                ]
+                vec![("release-page", release()), ("git/ref/tags/v0.7.0", input)]
             )
             .is_err()
         );
@@ -155,7 +160,7 @@ fn upstream_release_rejects_tag_cycle_and_wrong_object_identity() {
             fixture(
                 "",
                 vec![
-                    ("releases/latest", release()),
+                    ("release-page", release()),
                     ("git/ref/tags/v0.7.0", reference("tag", TAG)),
                     ("git/tags/2222222222222222222222222222222222222222", input),
                 ]
@@ -174,6 +179,9 @@ fn upstream_release_nested_tags_are_bounded() {
             kind: "tag".into(),
         },
         &mut |endpoint| {
+            let github::Request::Rest(endpoint) = endpoint else {
+                panic!("expected tag request")
+            };
             let old = endpoint.rsplit('/').next().unwrap();
             count += 1;
             Ok(json!({"sha":old,"object":{"type":"tag","sha":format!("{count:040x}")}}))

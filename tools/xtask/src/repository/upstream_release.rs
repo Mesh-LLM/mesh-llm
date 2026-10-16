@@ -1,4 +1,5 @@
-//! Select a published stable llama.cpp release and freeze its peeled commit.
+//! Select the newest published llama.cpp release, including prereleases.
+mod discovery;
 mod github;
 use crate::{automation::command_interrupt::Interrupt, command::DynResult};
 use serde::{Deserialize, Serialize};
@@ -17,6 +18,7 @@ struct Release {
     tag_name: String,
     draft: bool,
     prerelease: bool,
+    created_at: Option<String>,
     published_at: Option<String>,
 }
 
@@ -45,6 +47,8 @@ struct Selection {
     sha: String,
     release_tag: Option<String>,
     release_id: Option<u64>,
+    prerelease: Option<bool>,
+    published_at: Option<String>,
 }
 
 pub(crate) fn run(args: &[String]) -> DynResult<()> {
@@ -77,7 +81,7 @@ pub(crate) fn run(args: &[String]) -> DynResult<()> {
 
 fn select(
     requested: &str,
-    mut read: impl FnMut(&str) -> DynResult<serde_json::Value>,
+    mut read: impl FnMut(&github::Request) -> DynResult<serde_json::Value>,
 ) -> DynResult<Selection> {
     if !matches!(requested, "" | "latest") {
         require_sha(requested)?;
@@ -85,22 +89,23 @@ fn select(
             sha: requested.into(),
             release_tag: None,
             release_id: None,
+            prerelease: None,
+            published_at: None,
         });
     }
-    let release: Release = serde_json::from_value(read(&format!("{REPOSITORY}/releases/latest"))?)?;
-    if release.draft
-        || release.prerelease
-        || release.id == 0
-        || release.published_at.as_ref().is_none_or(String::is_empty)
-        || !stable_tag(&release.tag_name)
+    let release = discovery::newest(&mut read)?;
+    if release.tag_name.is_empty()
+        || release.tag_name.len() > 256
+        || release.tag_name.contains("..")
+        || !release
+            .tag_name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"-_.+".contains(&b))
     {
-        return Err(
-            "latest upstream release must be published, stable and tagged vMAJOR.MINOR.PATCH"
-                .into(),
-        );
+        return Err("upstream release tag is invalid".into());
     }
     // target_commitish is not authoritative: it can be a mutable branch name.
-    let endpoint = format!("{REPOSITORY}/git/ref/tags/{}", release.tag_name);
+    let endpoint = github::Request::Rest(format!("{REPOSITORY}/git/ref/tags/{}", release.tag_name));
     let reference: Reference = serde_json::from_value(read(&endpoint)?)?;
     if reference.name != format!("refs/tags/{}", release.tag_name) {
         return Err("upstream release tag reference mismatch".into());
@@ -114,12 +119,14 @@ fn select(
         sha,
         release_tag: Some(release.tag_name),
         release_id: Some(release.id),
+        prerelease: Some(release.prerelease),
+        published_at: release.published_at,
     })
 }
 
 fn peel(
     mut object: Object,
-    read: &mut impl FnMut(&str) -> DynResult<serde_json::Value>,
+    read: &mut impl FnMut(&github::Request) -> DynResult<serde_json::Value>,
 ) -> DynResult<String> {
     let mut seen = BTreeSet::new();
     for _ in 0..8 {
@@ -130,10 +137,10 @@ fn peel(
         match object.kind.as_str() {
             "commit" => return Ok(object.sha),
             "tag" => {
-                let tag: Tag = serde_json::from_value(read(&format!(
+                let tag: Tag = serde_json::from_value(read(&github::Request::Rest(format!(
                     "{REPOSITORY}/git/tags/{}",
                     object.sha
-                ))?)?;
+                )))?)?;
                 if tag.sha != object.sha {
                     return Err("upstream tag object identity mismatch".into());
                 }
@@ -157,26 +164,19 @@ fn require_sha(value: &str) -> DynResult<()> {
     }
 }
 
-fn stable_tag(value: &str) -> bool {
-    let Some(version) = value.strip_prefix('v') else {
-        return false;
-    };
-    let parts: Vec<_> = version.split('.').collect();
-    parts.len() == 3
-        && parts.iter().all(|part| {
-            !part.is_empty()
-                && part.bytes().all(|b| b.is_ascii_digit())
-                && (part.len() == 1 || !part.starts_with('0'))
-        })
-}
-
 impl Selection {
     fn summary(&self) -> String {
         let source = match &self.release_tag {
             Some(tag) => format!(
-                "Latest stable llama.cpp release: [{tag}](https://github.com/ggml-org/llama.cpp/releases/tag/{tag})"
+                "Newest published llama.cpp {}: [{tag}](https://github.com/ggml-org/llama.cpp/releases/tag/{tag})\n\nPublished: `{}`",
+                if self.prerelease == Some(true) {
+                    "prerelease"
+                } else {
+                    "release"
+                },
+                self.published_at.as_deref().unwrap_or_default(),
             ),
-            None => "Explicit upstream commit override (stable-release selection bypassed)".into(),
+            None => "Explicit upstream commit override (release selection bypassed)".into(),
         };
         format!(
             "{source}\n\nFrozen upstream commit: `{}`\n\nMeshLLM family certification is still required before upgrade publication.\n",

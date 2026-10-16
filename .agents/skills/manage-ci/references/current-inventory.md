@@ -122,15 +122,22 @@ pinned `public cpu` image, has no secrets, records exact seed/step budgets and
 source SHA, and uploads the reproducible failure log.
 **Llama Upgrade** (`llama-upstream-canary.yml`) runs daily or on trusted-main dispatch. It freezes
 one main source SHA and the upstream target before any hardware work. Default
-selection uses `repository llama-upstream-release` to resolve GitHub's latest
-published stable `ggml-org/llama.cpp` release, validate its `vMAJOR.MINOR.PATCH`
-tag, and peel annotated tags to an exact commit. It records the release and
+selection uses `repository llama-upstream-release` to compare publication times
+across pages of `ggml-org/llama.cpp` release metadata, including prereleases and
+excluding drafts, then peel the selected tag to an exact commit. Pages are walked
+newest-created first and the scan stops once a page's oldest creation time
+predates the newest publication found, so a growing feed stays inside its budget;
+a draft published long after it was created is outside that bound and waits for
+the next scheduled run. It records the release kind, publication time, tag and
 commit in the Actions summary and rejects lookup failures or tag movement
 without falling back to `master`. The hosted selection step alone receives
-the workflow's read-only GitHub token; the lookup has a 120-second total budget.
+the workflow's read-only GitHub token; fixed read-only GraphQL queries fetch
+metadata without release assets, and REST resolves the selected tag. The lookup
+has a 180-second total budget, 1 MiB per response and a 1000-page ceiling;
+incomplete pagination fails instead of selecting from a partial feed.
 An explicit full `upstream_sha` bypasses release lookup; empty or `latest` selects
-the stable release. `mesh_ref` skips upstream selection entirely and retains
-its existing-pin contract; publication requires explicit `mesh_action=certify-and-publish`. This selection policy does not replace our full
+the newest published release or prerelease. `mesh_ref` skips upstream selection
+entirely and retains its existing-pin contract; publication requires explicit `mesh_action=certify-and-publish`. This selection policy does not replace our full
 upgrade certification or independent verification. All
 candidate builds compile native tests with `--build-only`, then the generated
 patch checker owns one full native CTest pass after patch equality and
