@@ -1762,3 +1762,7 @@ native crate lists, and removes its research-source preparation step from Rust
 test batches. The WAN Docker lab and its deployment contracts are retired.
 Metrics-server and interactive/debug recipes remain maintained. Frozen legacy
 planner fixtures continue to describe their historical workspace inputs.
+The protected ownership catalog retains its historical `skippy-bench` domain
+entries: PR admission requires byte-for-byte equality with main. Removing a
+workspace member does not require changing these domain mappings; catalog
+cleanup must follow the separate protected-catalog rollout procedure.

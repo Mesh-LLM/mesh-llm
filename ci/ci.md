@@ -1980,6 +1980,10 @@ bridge, model serving or real client requests.
 The retired Skippy benchmark harness no longer selects external research-source
 preparation in Rust test batches. Explicit research source admission remains
 available for the separate optional research tools.
+Its historical domain mappings remain in `ci/ownership.yml` to preserve exact
+equality with the protected planner catalog. Workspace membership and current
+crate selection remove the harness independently; catalog cleanup requires the
+separate protected-catalog rollout described above.
 
 The unused local `audit-depot-pr-isolation` implementation is removed. All 27
 protected callers still use their immutable published `ed07043` action, and the
