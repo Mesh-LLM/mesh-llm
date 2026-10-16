@@ -1759,7 +1759,7 @@ Split parity continues to use native planner evidence and binary stage servers.
 
 ## Jianyang AgentX templates
 
-`.gi/templates.yaml` carries the repository-owned Jianyang inventory, replacing
+`skippy/evals/agentx/templates.yaml` carries the repository-owned Jianyang inventory, replacing
 its `agentic-replay` entry with `agentx`. Other entries are migrated unchanged.
 The benchmark executes in a source-labelled ARM64 CUDA Docker image on the
 leased Spark. JY's template owns image build and the Rust container lifecycle;

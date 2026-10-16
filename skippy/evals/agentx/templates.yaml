@@ -1,4 +1,4 @@
-# Repository-owned Jianyang templates. Sync after merging with jy repos sync mesh-llm.
+# Repository-owned Jianyang templates. See README.md beside this file for cutover.
 # Source migrated from general-inference/jianyang; unrelated jobs are preserved.
 # AgentX replaces the old agentic-replay entry with no compatibility alias.
 

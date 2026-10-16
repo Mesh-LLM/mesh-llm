@@ -740,7 +740,7 @@ verified.
 
 ## Repository-owned Jianyang AgentX
 
-`.gi/templates.yaml` owns Jianyang repository jobs. AgentX orchestration belongs
+`skippy/evals/agentx/templates.yaml` owns Jianyang repository jobs. AgentX orchestration belongs
 in typed Rust automation, with thin Just build/run recipes and a locked upstream
 harness environment under `skippy/evals/agentx`. Smoke results and local-corpus
 exports marked `submission_valid=false` must never enter performance history.

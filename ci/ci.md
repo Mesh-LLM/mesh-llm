@@ -2002,7 +2002,7 @@ on immediate repeated requests without publication sleeps or retries.
 ## Jianyang AgentX
 
 The external Jianyang job inventory is now source-owned in
-[`.gi/templates.yaml`](../.gi/templates.yaml). Its `agentx` job runs paired
+[`skippy/evals/agentx/templates.yaml`](../skippy/evals/agentx/templates.yaml). Its `agentx` job runs paired
 llama.cpp/Skippy cells, with a small smoke profile and pinned upstream harness.
 JY builds and runs one source-labelled ARM64 CUDA Docker image on the Spark;
 both engines and the harness run inside it, with the host's NFS-backed `HF_HOME`

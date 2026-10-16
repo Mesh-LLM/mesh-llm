@@ -12,15 +12,17 @@ RUN cargo install just --version 1.58.0 --locked
 RUN curl -LsSf https://astral.sh/uv/0.13.0/install.sh | sh
 RUN apt-get update && apt-get install -y --no-install-recommends patchelf \
     && rm -rf /var/lib/apt/lists/*
+# One GB10 per job: omit optional multi-GPU NCCL linkage from both engines.
+# NCCL is intentionally outside the native runtime's redistribution policy.
+RUN apt-get purge -y libnccl-dev libnccl2
 ENV SKIPPY_CUDA_ARCHITECTURES=121
-ENV CUDA_LIBRARY_PATH=/usr/lib/aarch64-linux-gnu
 ENV CMAKE_BUILD_PARALLEL_LEVEL=8
 WORKDIR /workspace
 COPY . .
 RUN --mount=type=cache,id=agentx-rust199-registry,target=/root/.cargo/registry,sharing=locked \
     --mount=type=cache,id=agentx-rust199-git,target=/root/.cargo/git,sharing=locked \
     --mount=type=cache,id=agentx-rust199-target,target=/workspace/target,sharing=locked \
-    --mount=type=cache,id=agentx-cuda130-native,target=/workspace/.deps,sharing=locked \
+    --mount=type=cache,id=agentx-cuda130-single-gpu-native,target=/workspace/.deps,sharing=locked \
     --mount=type=cache,id=agentx-cuda130-sccache,target=/root/.cache/sccache,sharing=locked \
     just agentx-build && just automation-bootstrap && \
     mkdir -p /prepared/target/debug /prepared/target/release /prepared/.deps/agentx-llama-build && \

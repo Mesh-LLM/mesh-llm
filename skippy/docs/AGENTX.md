@@ -2,7 +2,7 @@
 
 AgentX replaces the Jianyang `agentic-replay` job. The new `agentx` entry has
 no legacy alias or old command-line compatibility. Its source is
-[the repository template](../../.gi/templates.yaml); the orchestration is Rust
+[the repository template](../evals/agentx/templates.yaml); the orchestration is Rust
 in `tools/xtask/src/automation/agentx`, with the upstream Python harness in a
 [locked external environment](../evals/agentx/pyproject.toml).
 
@@ -29,7 +29,7 @@ jy schemas register agentx 1 skippy/evals/agentx/result.schema.json
 ```
 
 After merging, move the existing repository registration's `templates_repo` to
-null and `templates_path` to `.gi/templates.yaml`, then run
+null and `templates_path` to `skippy/evals/agentx/templates.yaml`, then run
 `jy repos sync mesh-llm`. Sync replaces the installed set: unrelated existing
 jobs are included unchanged, and the old `agentic-replay` entry is absent.
 Before merging, render this validated template with Jianyang's existing

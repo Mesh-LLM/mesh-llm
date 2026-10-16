@@ -45,7 +45,6 @@
     {
       "domain": "ci-control",
       "patterns": [
-        ".gi/**",
         ".github/**",
         ".omo/**",
         "ci/**",
