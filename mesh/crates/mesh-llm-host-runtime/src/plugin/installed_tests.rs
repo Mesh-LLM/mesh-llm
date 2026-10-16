@@ -240,3 +240,23 @@ fn explicit_installed_command_keeps_its_packaged_web_ui() {
         assert_eq!(spec.installed_metadata, Some(metadata));
     }
 }
+
+#[test]
+#[serial_test::serial]
+fn explicit_installed_command_still_runs_when_the_store_copy_is_disabled() {
+    let store = tempfile::TempDir::new().expect("plugin store");
+    let metadata = installed_capsules(store.path(), false);
+    let command = metadata.executable_path().display().to_string();
+
+    let resolved = with_plugin_dir(store.path(), || {
+        configured_external_plugin_spec(&capsules_entry(Some(&command)))
+    })
+    .expect("entry resolves");
+
+    let ConfiguredExternalPlugin::Active(spec) = resolved else {
+        panic!("an entry that names the store's executable ignores the store's enabled flag");
+    };
+    assert_eq!(spec.command, command);
+    assert!(!spec.startup.optional, "explicit commands remain required");
+    assert_eq!(spec.installed_metadata, Some(metadata));
+}
