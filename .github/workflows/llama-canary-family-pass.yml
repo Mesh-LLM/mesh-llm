@@ -6,7 +6,7 @@ on:
         type: string
         required: true
       mesh_source:
-        description: Frozen trusted MeshLLM commit for certify-only mode
+        description: Frozen trusted MeshLLM commit for unchanged certification passes
         type: string
         default: ''
       upstream:

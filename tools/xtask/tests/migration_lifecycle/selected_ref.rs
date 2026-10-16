@@ -135,9 +135,21 @@ impl Fixture {
         upstream: &str,
         origin: &str,
     ) -> process::ProcessReport {
+        self.select_action(reference, event, upstream, origin, "certify")
+    }
+    fn select_action(
+        &self,
+        reference: &str,
+        event: &str,
+        upstream: &str,
+        origin: &str,
+        action: &str,
+    ) -> process::ProcessReport {
         let args = [
             "repository",
             "selected-ref",
+            "--action",
+            action,
             "--repository",
             self.checkout.to_str().unwrap(),
             "--ref",
@@ -291,4 +303,39 @@ fn pin_symlink_whose_target_text_is_a_valid_sha_is_rejected_before_publication()
     std::os::unix::fs::symlink("a".repeat(40), &pin).unwrap();
     fixture.commit("symlink pin");
     fixture.reject("main", "workflow_dispatch", "", &fixture.url);
+}
+
+#[test]
+fn selected_publication_action_freezes_source_and_rejects_missing_source_or_unknown_action() {
+    let fixture = Fixture::new();
+    let report = fixture.select_action(
+        "candidate",
+        "workflow_dispatch",
+        "",
+        &fixture.url,
+        "certify-and-publish",
+    );
+    assert!(
+        report.status.is_some_and(|status| status.success()),
+        "{report:?}"
+    );
+    let frozen: Json = serde_json::from_slice(&report.stdout.bytes_retained).unwrap();
+    assert_eq!(frozen["mesh_source"], fixture.initial);
+    assert_eq!(frozen["publish_selected"], true);
+    assert_eq!(frozen["changed"], "false");
+    assert_eq!(frozen["mode"], "pinned-build");
+    let before = fs::read(&fixture.output).unwrap();
+    for (reference, action) in [
+        ("", "certify-and-publish"),
+        ("candidate", "publish"),
+        ("candidate", "CERTIFY"),
+    ] {
+        let report =
+            fixture.select_action(reference, "workflow_dispatch", "", &fixture.url, action);
+        assert!(
+            !report.status.is_some_and(|status| status.success()),
+            "{report:?}"
+        );
+        assert_eq!(fs::read(&fixture.output).unwrap(), before);
+    }
 }

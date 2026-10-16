@@ -266,7 +266,14 @@ fn current_attempt_inputs(jobs: &Node, index: u8) {
         BTreeSet::from(["resolve", repair_name.as_str()])
     );
     let with = verify.get("with").unwrap();
-    assert_eq!(field(with, "mode"), "verify-build");
+    assert_eq!(
+        field(with, "mode"),
+        if index == 1 {
+            "${{ needs.resolve.outputs.publish_selected == 'true' && 'pinned-build' || 'verify-build' }}"
+        } else {
+            "verify-build"
+        }
+    );
     for key in ["package", "identity", "head"] {
         assert_eq!(
             field(with, &format!("previous_{key}")),
@@ -281,7 +288,7 @@ fn current_attempt_inputs(jobs: &Node, index: u8) {
         );
         assert_eq!(
             field(verify, "if"),
-            "${{ !cancelled() && needs.resolve.outputs.changed == 'true' && needs.repair_1.outputs.green == 'true' }}"
+            "${{ !cancelled() && (needs.resolve.outputs.changed == 'true' || needs.resolve.outputs.publish_selected == 'true') && needs.repair_1.outputs.green == 'true' }}"
         );
     } else {
         let previous = format!("attempt_{}", index - 1);
@@ -358,6 +365,8 @@ fn changed_pin_graph_requires_preflight_candidate_independent_verification_and_p
         BTreeSet::from([
             "resolve",
             "preflight",
+            "repair_1",
+            "verify_1",
             "attempt_1",
             "attempt_2",
             "attempt_3"
