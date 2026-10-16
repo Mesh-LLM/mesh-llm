@@ -159,8 +159,16 @@ pub(super) fn copy2(source: &str, destination: &str) -> Result<(), Raised> {
     let modified = std::fs::metadata(source)
         .and_then(|meta| meta.modified())
         .map_err(|error| failure(error, source))?;
-    std::fs::File::options()
-        .write(true)
+    // The copy keeps the source's permissions, so it may be read-only (e.g. from
+    // a read-only store); setting its time needs no write access to the data.
+    let mut options = std::fs::File::options();
+    options.read(true);
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        options.access_mode(windows_sys::Win32::Storage::FileSystem::FILE_WRITE_ATTRIBUTES);
+    }
+    options
         .open(destination)
         .and_then(|file| file.set_modified(modified))
         .map_err(|error| failure(error, destination))
@@ -201,4 +209,38 @@ fn validate_cuda_redistributable(dependency: &str, cuda_major: &str) -> Result<(
     Err(format!(
         "Linux CUDA runtime dependency is not in the reviewed redistributable allowlist for CUDA {cuda_major}: {dependency}"
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::copy2;
+
+    #[test]
+    fn copy2_keeps_the_time_of_a_read_only_source() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("libcudart.so.12");
+        let destination = dir.path().join("copy.so.12");
+        std::fs::write(&source, b"library").unwrap();
+        let writable = std::fs::metadata(&source).unwrap().permissions();
+        let mut read_only = writable.clone();
+        read_only.set_readonly(true);
+        std::fs::set_permissions(&source, read_only).unwrap();
+
+        let result = copy2(source.to_str().unwrap(), destination.to_str().unwrap());
+
+        let modified = |path| std::fs::metadata(path).unwrap().modified().unwrap();
+        let times = result
+            .as_ref()
+            .ok()
+            .map(|()| (modified(&source), modified(&destination)));
+        // Writable again, so the temporary directory can be removed on Windows.
+        for path in [&source, &destination] {
+            if path.exists() {
+                std::fs::set_permissions(path, writable.clone()).unwrap();
+            }
+        }
+        result.unwrap();
+        let (source_time, destination_time) = times.unwrap();
+        assert_eq!(source_time, destination_time);
+    }
 }
