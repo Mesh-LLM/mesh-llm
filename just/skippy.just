@@ -248,7 +248,7 @@ decisions-smoke *ARGS:
 
 # AgentX's external environment is locked; its Python harness stays upstream-owned.
 agentx-setup:
-    uv sync --locked --project skippy/evals/agentx
+    uv sync --locked --managed-python --python 3.12 --project skippy/evals/agentx
 
 # Independent unpatched llama.cpp baseline, pinned to the candidate's upstream.
 agentx-build: agentx-setup
