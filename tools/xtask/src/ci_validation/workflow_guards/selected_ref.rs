@@ -57,7 +57,7 @@ pub(super) fn check(workflows: &BTreeMap<String, Node>) -> DynResult<()> {
     )?;
     let run = field(step, "run").ok_or("resolver run missing")?;
     if !run.contains("upstream=\"$SELECTED_UPSTREAM\"") || run.contains("ls-remote") {
-        return Err("default upstream must consume the admitted stable release commit".into());
+        return Err("default upstream must consume the admitted release commit".into());
     }
     h::command(
         step,

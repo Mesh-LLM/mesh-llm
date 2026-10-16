@@ -584,9 +584,11 @@ checked-in expiry are the maintainer-controlled approval boundary.
 
 ## Llama canary family fan-out
 
-Default upstream selection uses GitHub's latest published stable release of
-`ggml-org/llama.cpp`, never an unqualified `master` tip or a `b*` prerelease.
-The hosted resolver validates the release and peels its tag to an exact commit
+Default upstream selection uses the most recently published release of
+`ggml-org/llama.cpp`, including prereleases and excluding drafts. Compare
+publication times across the complete paginated metadata feed; neither the
+pinned stable release nor feed position determines the target. The hosted
+resolver validates the release and peels its tag to an exact commit
 before any hardware work. Missing releases, malformed metadata, moved tags or
 API failures stop resolution without a fallback. Record the release tag and
 commit in the run summary. An explicit full `upstream_sha` remains an operator

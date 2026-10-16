@@ -11,6 +11,45 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[derive(Debug, PartialEq)]
+pub(super) enum Request {
+    Rest(String),
+    ReleasePage(Option<String>),
+}
+
+impl Request {
+    fn arguments(&self) -> Vec<Value> {
+        let mut args = vec!["api".to_owned(), "--hostname".into(), "github.com".into()];
+        match self {
+            Self::Rest(endpoint) => {
+                args.extend(["--method".into(), "GET".into(), endpoint.clone()])
+            }
+            Self::ReleasePage(cursor) => {
+                // This fixed GraphQL query only reads release metadata; it cannot mutate GitHub.
+                args.extend([
+                    "--method".into(),
+                    "POST".into(),
+                    "graphql".into(),
+                    "-f".into(),
+                    format!("query={}", super::discovery::QUERY),
+                ]);
+                if let Some(cursor) = cursor {
+                    args.extend(["-f".into(), format!("cursor={cursor}")]);
+                }
+            }
+        }
+        args.extend([
+            "-H".into(),
+            "Accept: application/vnd.github+json".into(),
+            "-H".into(),
+            "X-GitHub-Api-Version: 2022-11-28".into(),
+        ]);
+        args.into_iter()
+            .map(|arg| Value::Public(arg.into()))
+            .collect()
+    }
+}
+
 pub(super) struct Client {
     deadline: Instant,
     cancellation: Cancellation,
@@ -24,7 +63,7 @@ impl Client {
         }
     }
 
-    pub(super) fn read(&mut self, endpoint: &str) -> DynResult<serde_json::Value> {
+    pub(super) fn read(&mut self, request: &Request) -> DynResult<serde_json::Value> {
         let execution = self
             .deadline
             .checked_duration_since(Instant::now())
@@ -57,21 +96,7 @@ impl Client {
         }
         let spec = ProcessSpec {
             executable: std::path::absolute(executable)?,
-            arguments: [
-                "api",
-                "--hostname",
-                "github.com",
-                "--method",
-                "GET",
-                "-H",
-                "Accept: application/vnd.github+json",
-                "-H",
-                "X-GitHub-Api-Version: 2022-11-28",
-                endpoint,
-            ]
-            .into_iter()
-            .map(|arg| Value::Public(arg.into()))
-            .collect(),
+            arguments: request.arguments(),
             cwd: std::env::current_dir()?,
             environment,
         };
@@ -98,7 +123,7 @@ impl Client {
             || report.process.stderr.truncated
         {
             return Err(format!(
-                "upstream release API lookup failed for {endpoint}; outcome={:?}, status={:?}, cleanup={}, failure={:?}, truncated={}/{}; no fallback selected",
+                "upstream release API lookup failed; outcome={:?}, status={:?}, cleanup={}, failure={:?}, truncated={}/{}; no fallback selected",
                 report.process.outcome, report.process.status, report.process.cleanup.complete,
                 report.process.failure, report.process.stdout.truncated, report.process.stderr.truncated,
             )
