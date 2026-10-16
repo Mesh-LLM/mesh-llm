@@ -60,6 +60,11 @@ const MAX_PENDING_PREDICTION_RETURN_SINKS: usize = 64;
 // so idle or unidentified connections cannot exhaust threads.
 const PREDICTION_RETURN_OPEN_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_PREDICTION_RETURN_CONNECTIONS: usize = 1024;
+// How often a reader idle between replies checks that its waiter still exists.
+// `unregister` also shuts the stream down, which wakes the read at once on
+// Unix; on Windows a shutdown does not wake a read blocked on another handle
+// to the socket, so this check is what releases a stalled peer there.
+const PREDICTION_RETURN_WAITER_POLL: Duration = Duration::from_millis(250);
 
 #[derive(Default)]
 pub(crate) struct PredictionReturnSinks {
@@ -350,6 +355,14 @@ impl PredictionReturnHub {
             return Ok(());
         }
         loop {
+            match self.wait_for_reply(key, &stream) {
+                Ok(true) => {}
+                Ok(false) => return Ok(()),
+                Err(error) => {
+                    let _ = sender.send(Err(error.to_string()));
+                    return Err(error).context("wait for direct prediction return");
+                }
+            }
             match recv_reply(&mut stream) {
                 Ok(reply) => {
                     if sender.send(Ok(reply)).is_err() {
@@ -368,6 +381,34 @@ impl PredictionReturnHub {
                 }
             }
         }
+    }
+
+    /// Waits for the next reply to start: `true` once a byte (or the end of
+    /// the stream) is there for `recv_reply`, `false` once the waiter has
+    /// ended first. Only the wait between replies is polled; a reply that has
+    /// started is read without a timeout, so no partial frame is dropped.
+    fn wait_for_reply(&self, key: PredictionReturnKey, stream: &TcpStream) -> io::Result<bool> {
+        stream.set_read_timeout(Some(PREDICTION_RETURN_WAITER_POLL))?;
+        let mut first = [0_u8; 1];
+        let ready = loop {
+            match stream.peek(&mut first) {
+                Ok(_) => break true,
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                    ) =>
+                {
+                    if !self.has_waiter(key) {
+                        break false;
+                    }
+                }
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+                Err(error) => return Err(error),
+            }
+        };
+        stream.set_read_timeout(None)?;
+        Ok(ready)
     }
 }
 
