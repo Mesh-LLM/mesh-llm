@@ -479,7 +479,7 @@ Switches:
 - `--auto-update`: available on most commands; when set, mesh-llm checks for a newer bundled release before proceeding.
 
 Without `--auto-update`, mesh-llm checks for a newer release and only shows it: as a notice at startup, and as the latest version in the web console.
-Set `MESH_LLM_NO_UPDATE_CHECK=1` to skip these checks, for example when a package manager updates mesh-llm.
+Set `updates.check = false` in `config.toml` to turn these checks off, for example when a package manager updates mesh-llm. `MESH_LLM_NO_UPDATE_CHECK=1` does the same for one process and overrides the setting (`0` turns the checks back on).
 
 
 ### `release-attestation inspect`
