@@ -260,4 +260,7 @@ agentx-build: agentx-setup
     cmake --build .deps/agentx-llama-build --config Release --target llama-server -j 8
 
 agentx model profile output:
-    just automation-run automation agentx run --model {{ quote(model) }} --profile {{ quote(profile) }} --output {{ quote(output) }}
+    just automation-run automation agentx container --model {{ quote(model) }} --profile {{ quote(profile) }} --output {{ quote(output) }}
+
+agentx-container-build:
+    docker build --platform linux/arm64 --progress plain --build-arg SOURCE_COMMIT="$JIANYANG_COMMIT" --tag "mesh-agentx:$JIANYANG_COMMIT" --file skippy/evals/agentx/Dockerfile .

@@ -249,6 +249,7 @@ fn launch_identity(
         .collect();
     Ok(json!({
         "engine":engine,"command":arguments,
+        "container_image":std::env::var("AGENTX_CONTAINER_IMAGE")?,
         "binary_sha256":crate::product::digest::file_sha256(&server.executable).map_err(|error|error.error)?,
         "runtime_tree_sha256":crate::product::digest::tree_sha256(&runtime).map_err(|error|error.error)?,
         "harness_lock_sha256":crate::product::digest::file_sha256(&input.root.join("skippy/evals/agentx/uv.lock")).map_err(|error|error.error)?,

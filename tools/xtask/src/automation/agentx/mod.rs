@@ -1,5 +1,6 @@
 //! AgentX owns its workload, provenance and lifecycle independently of replay-matrix.
 mod command;
+mod container;
 mod inputs;
 mod lifecycle;
 mod results;
@@ -64,7 +65,7 @@ struct Prepared {
 }
 pub(crate) fn run(args: &[String]) -> DynResult<()> {
     const GRAMMAR: Grammar = Grammar {
-        usage: "cargo xtool automation agentx {run|worker} --model KEY --profile {smoke|benchmark} --output PATH | worker --input PATH --port PORT --concurrency N",
+        usage: "cargo xtool automation agentx {container|run|worker} --model KEY --profile {smoke|benchmark} --output PATH | worker --input PATH --port PORT --concurrency N",
         values: &[
             "--model",
             "--profile",
@@ -82,7 +83,18 @@ pub(crate) fn run(args: &[String]) -> DynResult<()> {
         return crate::repository::check_report::CheckReport::success(GRAMMAR.usage.into()).emit();
     }
     match parsed.positionals.as_slice() {
+        [verb] if *verb == "container" => container::run(
+            parsed.last("--model").ok_or("missing model")?,
+            Profile::parse(parsed.last("--profile").ok_or("missing profile")?)?,
+            PathBuf::from(parsed.last("--output").ok_or("missing output")?),
+        ),
         [verb] if *verb == "run" => {
+            if !Path::new("/.dockerenv").exists()
+                || !std::env::var("AGENTX_CONTAINER_IMAGE")
+                    .is_ok_and(|image| image.starts_with("sha256:") && image.len() == 71)
+            {
+                return Err("AgentX benchmark cells require the JY GPU container".into());
+            }
             let root = std::env::current_dir()?;
             let profile = Profile::parse(parsed.last("--profile").ok_or("missing profile")?)?;
             let output = PathBuf::from(parsed.last("--output").ok_or("missing output")?);

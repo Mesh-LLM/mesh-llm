@@ -41,6 +41,7 @@
     "just/skippy.just": [
       "agentx",
       "agentx-build",
+      "agentx-container-build",
       "agentx-setup",
       "bench-corpus",
       "competitive-benchmark-build",

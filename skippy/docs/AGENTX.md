@@ -8,7 +8,9 @@ in `tools/xtask/src/automation/agentx`, with the upstream Python harness in a
 
 One job owns one model. It runs unpatched llama.cpp, then standalone Skippy,
 sequentially on the same DGX Spark. Separate model jobs can occupy separate
-Sparks. Each engine gets the identical verified GGUF shards; speculative decode
+Sparks. Both engines and AgentX execute inside the same ARM64 CUDA Docker image,
+built and launched on the JY-leased Spark. No benchmark cells run on the host.
+Each engine gets the identical verified GGUF shards; speculative decode
 is disabled, and both chat templates receive `enable_thinking=false`.
 The baseline source is the exact commit in
 `skippy/llama_cpp/upstream.txt`, built independently with CUDA.
@@ -44,13 +46,26 @@ The template omits `target.os`: Jianyang currently recognises a Linux host only
 when its display name starts with `Linux`, while the Spark reports `Ubuntu`.
 The explicit node list and runtime hardware checks remain mandatory.
 
-For a manually provisioned Spark:
+The Spark needs Docker with NVIDIA Container Toolkit and the JY account in the
+`docker` group. The template uses `sg docker` to acquire that membership even
+when an existing user service still has its old supplementary groups. JY's lab
+executor ignores `runtime.image`, so the template explicitly builds and launches
+Docker through the repository's typed lifecycle controller.
 
-```sh
-just agentx-build
-mkdir -p "$PWD/.deps/agentx-runs"
-just agentx qwen3.5-4b smoke "$PWD/.deps/agentx-runs/local-smoke"
-```
+`just agentx-container-build` builds the image tagged by `JIANYANG_COMMIT`.
+The CUDA base is digest-pinned; Rust, Just, uv and the upstream harness are pinned.
+`just agentx MODEL PROFILE OUTPUT` requires the JY job environment and runs that
+image by immutable ID after checking its ARM64 architecture and source label.
+The image contains both compiled engines, native runtimes, and the harness.
+Build time is outside the measured cells.
+
+Only the persistent input cache, campaign output and JY artifact directory are
+mounted. The container uses the job account's UID/GID and `--gpus all`; neither
+the Docker socket nor host networking is passed into it. Both HTTP servers and
+the harness communicate over container-local loopback. The controller attaches
+stdout/stderr to JY, removes its named container on exit/cancellation, and records
+`container-image.json` and `container-lifecycle.json`. A timeout inside the image
+also enforces the remaining JY deadline if the host controller disappears.
 
 The output directory must be new. `AGENTX_CACHE` can point to a persistent input
 cache; otherwise `.deps/agentx-inputs` is used. Downloads precede measurement and
@@ -84,7 +99,7 @@ single slot's prompt cache. These cache policies are recorded in launch argument
 Sixty seconds is only the smoke measurement window. Building, downloading,
 tokenizer synthesis, server readiness, warmup, outstanding-request drain, and
 cleanup add time. A single cell has a bounded 80-minute lifecycle for smoke;
-the job has a 24-hour hard deadline shared with build and preparation. These are
+the job has a 24-hour hard deadline shared with container build and preparation. These are
 failure ceilings, not runtime estimates.
 
 ## Corpus and validity

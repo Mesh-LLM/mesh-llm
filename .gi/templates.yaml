@@ -1032,7 +1032,7 @@ templates:
       generation_slots: 1
       speculation: false
     description: >
-      Pinned AgentX 1.0.7 and the published 256k Weka traces. Both engines use
+      ARM64 GPU container with pinned AgentX 1.0.7 and the published 256k Weka traces. Both engines use
       identical 16-bit GGUF weights and one 256k generation slot. Smoke uses
       four complete traces and 60 measured seconds per engine; benchmark sweeps
       1, 2, 4, 8 offered agent sessions. Local-corpus exports retain upstream
@@ -1040,7 +1040,7 @@ templates:
     build: |
       export PATH="$HOME/.cargo/bin:$HOME/.local/bin:/usr/local/cuda/bin:$PATH"
       cd "$JIANYANG_REPO_DIR"
-      just agentx-build
+      sg docker -c 'just agentx-container-build'
     inputs:
       - key: model
         label: Model
@@ -1073,7 +1073,7 @@ templates:
       export AGENTX_CACHE="$HOME/.cache/agentx-inputs"
       cd "$JIANYANG_REPO_DIR"
       mkdir -p "$PWD/.deps/agentx-runs"
-      just agentx '${model}' '${profile}' "$PWD/.deps/agentx-runs/$JIANYANG_RUN_ID"
+      sg docker -c 'just agentx "${model}" "${profile}" "$PWD/.deps/agentx-runs/$JIANYANG_RUN_ID"'
   - key: split-2node
     name: Pipeline saturation (2-node split)
     group: Benchmarks
