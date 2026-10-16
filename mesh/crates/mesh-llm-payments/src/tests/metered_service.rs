@@ -485,3 +485,62 @@ async fn buyer_that_dropped_discount_is_refused_before_deposit() -> Result<()> {
     assert_eq!(wallet.calls.load(Ordering::SeqCst), 0);
     Ok(())
 }
+
+#[tokio::test]
+async fn restart_recovery_accepts_a_receipt_net_of_the_receivers_fee() {
+    let dir = tempfile::tempdir().unwrap();
+    let wallet = Arc::new(MockWallet::default());
+    let final_invoice = invoice_with_expiry(92, 1000, 3600);
+    let short = invoice_with_expiry(93, 1000, 3600);
+    {
+        let service = open(dir.path(), wallet.clone());
+        for (id, invoice) in [("net", &final_invoice), ("short", &short)] {
+            service
+                .ledger
+                .metered_admit(&MeteredRequest {
+                    id,
+                    peer: "peer",
+                    pricing: &rates(),
+                    require_deposit: false,
+                })
+                .unwrap();
+            service
+                .ledger
+                .metered_finalize(id, MeteredOutcome::Usage(usage(50, 50)))
+                .unwrap();
+            service
+                .ledger
+                .record_metered_invoice(&MeteredInvoice {
+                    request_id: id.into(),
+                    peer: "peer".into(),
+                    kind: MeteredInvoiceKind::Final,
+                    invoice: invoice.clone(),
+                    paid: false,
+                })
+                .unwrap();
+        }
+        assert_eq!(service.ledger.metered_unpaid_finals("peer").unwrap(), 2);
+    }
+    // The receiving wallet credits 995 and reports its own 5-msat fee, as
+    // Lexe does; a genuinely short payment (990 + 5) must stay unpaid.
+    for (invoice, credited) in [(&final_invoice, 995), (&short, 990)] {
+        received(&wallet, invoice);
+        let mut payments = wallet.payments.lock().unwrap();
+        let payment = payments.get_mut(&invoice.payment_hash).unwrap();
+        payment.amount_msat = credited;
+        payment.fee_msat = 5;
+    }
+    let service = open(dir.path(), wallet.clone());
+    service.metered_refresh("net").await.unwrap();
+    assert!(service.metered_refresh("short").await.is_err());
+    let paid: Vec<_> = service
+        .ledger
+        .metered_invoices(None)
+        .unwrap()
+        .into_iter()
+        .map(|receipt| (receipt.request_id, receipt.paid))
+        .collect();
+    assert!(paid.contains(&("net".into(), true)), "{paid:?}");
+    assert!(paid.contains(&("short".into(), false)), "{paid:?}");
+    assert_eq!(service.ledger.metered_unpaid_finals("peer").unwrap(), 1);
+}

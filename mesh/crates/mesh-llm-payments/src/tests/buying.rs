@@ -677,3 +677,82 @@ async fn expired_metered_charge_needs_authoritative_absence_before_retirement() 
     );
     Ok(())
 }
+
+/// Opens the wallet only once released, so a payment task can be parked on
+/// wallet initialization while the request completes.
+struct GatedFactory {
+    gate: tokio::sync::Semaphore,
+    wallet: Arc<MockWallet>,
+}
+
+#[async_trait]
+impl crate::provisioning::WalletFactory for GatedFactory {
+    fn is_provisioned(&self, _: &std::path::Path) -> bool {
+        true
+    }
+    async fn open(&self, _: &std::path::Path) -> Result<Arc<dyn WalletProvider>> {
+        let _permit = self.gate.acquire().await?;
+        Ok(self.wallet.clone())
+    }
+}
+
+#[tokio::test]
+async fn a_deposit_retired_while_the_wallet_opens_is_never_submitted() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let wallet = Arc::new(MockWallet::default());
+    let factory = Arc::new(GatedFactory {
+        gate: tokio::sync::Semaphore::new(0),
+        wallet: wallet.clone(),
+    });
+    let service = Arc::new(PaymentService::with_factory(dir.path(), factory.clone())?);
+    service.ledger.set_policy(&Policy {
+        mode: ApprovalMode::Automatic,
+        daily_budget_msat: Some(100_000),
+    })?;
+    service
+        .accept_admission(AcceptAdmissionRequest {
+            billing_revision: mesh_llm_payments_types::contract::BillingRevision::V3,
+            terms: local("r", 50_000),
+            admission: admission("r", 1000),
+        })
+        .await?;
+    let deposit = tokio::spawn({
+        let service = service.clone();
+        async move {
+            service
+                .pay_deposit(PayDepositRequest {
+                    request_id: "r".into(),
+                    invoice: invoice(1, 1000),
+                })
+                .await
+        }
+    });
+    // Wait until the deposit is prepared and parked on the wallet gate.
+    while service
+        .ledger
+        .charge_state(&invoice(1, 1000).payment_hash)?
+        .as_deref()
+        != Some("prepared")
+    {
+        tokio::task::yield_now().await;
+    }
+    service.finish_metered("r").await?;
+    assert_eq!(
+        service
+            .ledger
+            .charge_state(&invoice(1, 1000).payment_hash)?
+            .as_deref(),
+        Some("retired")
+    );
+    factory.gate.add_permits(1);
+    assert!(
+        deposit.await?.is_err(),
+        "a retired deposit must not be paid"
+    );
+    assert_eq!(
+        wallet.calls.load(Ordering::SeqCst),
+        0,
+        "nothing was submitted"
+    );
+    Ok(())
+}

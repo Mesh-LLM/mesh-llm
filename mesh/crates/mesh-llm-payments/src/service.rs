@@ -175,6 +175,14 @@ impl PaymentService {
             state != "failed",
             "Lightning payment failed; authorization closed"
         );
+        // A deposit retired by the seller's Complete must never be submitted,
+        // even by a task that was parked on wallet initialization when it was
+        // retired: reconciliation ignores retired charges, so a payment sent
+        // now would leave the wallet uncounted.
+        ensure!(
+            state != "retired",
+            "payment retired before submission; nothing is owed"
+        );
         let wallet = self.wallet().await?;
         // A prepared charge was never submitted, so skip the lookup. If the
         // invoice was paid outside this service, `pay` recovers that payment.
@@ -290,6 +298,9 @@ impl PaymentService {
             payment.status == PaymentStatus::Succeeded,
             "incoming payment did not succeed"
         );
+        if let Some(amount) = invoice.amount_msat {
+            ensure!(incoming_covers(&payment, amount), "incoming underpayment");
+        }
         Ok(payment)
     }
 
@@ -352,6 +363,17 @@ impl PaymentService {
         );
         Ok(payment)
     }
+}
+
+/// Whether a succeeded incoming payment covers an invoice of `amount_msat`.
+/// The receiving wallet may deduct its own fee (Lexe reports a 1000-msat
+/// invoice as 995 credited + 5 fee), so the payer's gross amount is what
+/// must cover the invoice. Live arrival and restart recovery share this rule.
+pub(crate) fn incoming_covers(payment: &Transaction, amount_msat: u64) -> bool {
+    payment
+        .amount_msat
+        .checked_add(payment.fee_msat)
+        .is_some_and(|gross| gross >= amount_msat)
 }
 
 pub(crate) fn validate_payment_update(

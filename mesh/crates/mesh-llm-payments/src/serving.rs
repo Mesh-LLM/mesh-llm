@@ -268,7 +268,10 @@ impl PaymentService {
         crate::service::validate_payment_update(&payment, &receipt.invoice.payment_hash, true)?;
         if payment.status == PaymentStatus::Succeeded {
             ensure!(
-                payment.amount_msat >= receipt.invoice.amount_msat.context("amountless invoice")?,
+                crate::service::incoming_covers(
+                    &payment,
+                    receipt.invoice.amount_msat.context("amountless invoice")?,
+                ),
                 "incoming underpayment"
             );
             self.record_received(&receipt.invoice.payment_hash).await?;
