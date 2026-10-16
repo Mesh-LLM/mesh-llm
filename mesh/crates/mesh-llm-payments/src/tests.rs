@@ -450,3 +450,35 @@ async fn one_policy_command_enables_paid_use_and_free_only_stops_new_work() -> R
     assert_eq!(wallet.calls.load(Ordering::SeqCst), 1);
     Ok(())
 }
+
+#[tokio::test]
+async fn min_payment_control_reads_defaults_sets_and_validates_offline() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let service = PaymentService::open(dir.path())?;
+    let read = service
+        .control(mesh_llm_payments_types::control::ControlCommand::MinPayment { value_msat: None })
+        .await?;
+    assert_eq!(read["min_payment_msat"], 1000);
+    let set = service
+        .control(
+            mesh_llm_payments_types::control::ControlCommand::MinPayment {
+                value_msat: Some(5000),
+            },
+        )
+        .await?;
+    assert_eq!(set["min_payment_msat"], 5000);
+    for invalid in [0, 1_000_001] {
+        assert!(
+            service
+                .control(
+                    mesh_llm_payments_types::control::ControlCommand::MinPayment {
+                        value_msat: Some(invalid),
+                    }
+                )
+                .await
+                .is_err()
+        );
+    }
+    assert_eq!(service.ledger.min_payment_msat()?, 5000);
+    Ok(())
+}

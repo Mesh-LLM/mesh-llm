@@ -11,7 +11,7 @@ use mesh_llm_payments_types::contract::{
     CancelRequest, CancelStage, Empty, RoutingBudgetRequest, RoutingBudgetResponse, ops,
 };
 use mesh_llm_payments_types::metered_wire::{self as wire, AdmissionTerms, Frame};
-use mesh_llm_payments_types::metering::DEPOSIT_MSAT;
+use mesh_llm_payments_types::metering::validate_payment_floor;
 use mesh_llm_payments_types::{RequestTerms, intent::PaymentIntent, pricing::Pricing};
 use tokio::io::{AsyncRead, AsyncWriteExt, DuplexStream};
 
@@ -320,8 +320,10 @@ fn validate_admission(
         terms.id == id && terms.model == request.model && terms.pricing == *price,
         "admission terms mismatch"
     );
+    // The payment service also refuses a seller minimum above this node's own.
+    validate_payment_floor(terms.min_payment_msat)?;
     ensure!(
-        terms.deposit_msat == 0 || terms.deposit_msat == DEPOSIT_MSAT,
+        terms.deposit_msat == 0 || terms.deposit_msat == terms.min_payment_msat,
         "deposit mismatch"
     );
     match &invoice {

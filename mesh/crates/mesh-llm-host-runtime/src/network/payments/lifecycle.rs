@@ -356,6 +356,7 @@ mod tests {
                 cache_discount_percent: 0,
             },
             deposit_msat: 3,
+            min_payment_msat: mesh_llm_payments_types::metering::PAYMENT_FLOOR_MSAT,
         }
     }
 

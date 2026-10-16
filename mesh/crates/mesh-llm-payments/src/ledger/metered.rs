@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{Ledger, read_amount, sql_amount};
 use crate::pricing::Pricing;
-use mesh_llm_payments_types::metering::{DEPOSIT_MSAT, MeteredUsage, final_invoice_msat};
+use mesh_llm_payments_types::metering::{MeteredUsage, final_invoice_msat};
 
 /// Distinct issued, unpaid final invoices at which a buyer is refused.
 pub const STRIKE_LIMIT: u64 = 3;
@@ -26,7 +26,7 @@ pub const STRIKE_LIMIT: u64 = 3;
 const UNPAID_FINALS: &str =
     "SELECT COUNT(*) FROM metered_invoices WHERE peer=?1 AND kind='final' AND state='unpaid'";
 
-/// Admission inputs. The deposit is the flat [`DEPOSIT_MSAT`] when
+/// Admission inputs. The deposit is the flat minimum payment when
 /// `require_deposit`; the provider skips it for peers in its trust cache.
 #[derive(Clone, Copy, Debug)]
 pub struct MeteredRequest<'a> {
@@ -81,7 +81,11 @@ impl Ledger {
             pricing,
             require_deposit,
         } = *request;
-        let deposit = if require_deposit { DEPOSIT_MSAT } else { 0 };
+        let deposit = if require_deposit {
+            self.min_payment_msat()?
+        } else {
+            0
+        };
         let pricing_json = serde_json::to_string(pricing)?;
         let mut connection = self.lock()?;
         let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -124,6 +128,8 @@ impl Ledger {
     /// deposit and record what the final invoice must carry. Replaying the same
     /// outcome returns the stored settlement; a different outcome fails.
     pub fn metered_finalize(&self, id: &str, outcome: MeteredOutcome) -> Result<MeteredSettlement> {
+        // Read before taking the connection: the settings read locks it too.
+        let floor_msat = self.min_payment_msat()?;
         let mut connection = self.lock()?;
         let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let (pricing, deposit, state, stored_outcome): (String, u64, String, Option<String>) = tx
@@ -155,7 +161,11 @@ impl Ledger {
         let (state, bill, remaining) = match outcome {
             MeteredOutcome::Usage(usage) => {
                 let bill = usage.bill_msat(&pricing)?;
-                ("billed", Some(bill), final_invoice_msat(bill, deposit_paid))
+                (
+                    "billed",
+                    Some(bill),
+                    final_invoice_msat(bill, deposit_paid, floor_msat),
+                )
             }
             MeteredOutcome::Abandoned => ("abandoned", None, 0),
         };

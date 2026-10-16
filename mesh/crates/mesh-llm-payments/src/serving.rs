@@ -65,7 +65,10 @@ impl PaymentService {
                 self.ledger.metered_claim_dispatch(&request_id, &buyer)?,
                 "request already dispatched"
             );
-            return Ok(ServeAdmitResponse::Admitted { request_id });
+            return Ok(ServeAdmitResponse::Admitted {
+                request_id,
+                min_payment_msat: self.ledger.min_payment_msat()?,
+            });
         }
         let invoice = self
             .metered_invoice(&request_id, &buyer, MeteredInvoiceKind::Deposit, deposit)
@@ -74,6 +77,7 @@ impl PaymentService {
         Ok(ServeAdmitResponse::Deposit {
             request_id,
             invoice,
+            min_payment_msat: deposit,
         })
     }
 

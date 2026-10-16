@@ -60,6 +60,7 @@ async fn recover_request(
         model: terms.model.clone(),
         pricing: terms.pricing.clone(),
         deposit_msat: 0,
+        min_payment_msat: mesh_llm_payments_types::metering::PAYMENT_FLOOR_MSAT,
     };
     let mut settled = false;
     loop {

@@ -9,7 +9,7 @@ use mesh_llm_payments_types::contract::{
     AcceptAdmissionRequest, PayDepositRequest, SettleFinalRequest, SettleFinalResponse,
 };
 use mesh_llm_payments_types::metered_wire::AdmissionTerms;
-use mesh_llm_payments_types::metering::{DEPOSIT_MSAT, final_invoice_msat};
+use mesh_llm_payments_types::metering::{final_invoice_msat, validate_payment_floor};
 
 use crate::invoice::Invoice;
 use crate::ledger::Charge;
@@ -41,8 +41,13 @@ impl PaymentService {
                 && admission.pricing == terms.pricing,
             "admission does not match the proposed terms"
         );
+        validate_payment_floor(admission.min_payment_msat)?;
         ensure!(
-            admission.deposit_msat == 0 || admission.deposit_msat == DEPOSIT_MSAT,
+            admission.min_payment_msat <= self.ledger.min_payment_msat()?,
+            "seller minimum payment exceeds this node's configured minimum"
+        );
+        ensure!(
+            admission.deposit_msat == 0 || admission.deposit_msat == admission.min_payment_msat,
             "deposit mismatch"
         );
         self.authorize_terms(&terms).await?;
@@ -98,7 +103,7 @@ impl PaymentService {
             "invalid deposit application"
         );
         // Exact remainder; every positive sub-sat remainder is raised to 1 sat.
-        let remaining = final_invoice_msat(bill, deposit_applied_msat);
+        let remaining = final_invoice_msat(bill, deposit_applied_msat, admission.min_payment_msat);
         let payment = match invoice {
             Some(invoice) => {
                 ensure!(remaining > 0, "final invoice for a covered bill");

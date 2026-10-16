@@ -51,6 +51,13 @@ pub enum WalletCommand {
         #[arg(long, requires = "mode")]
         daily_budget_sats: Option<u64>,
     },
+    /// Show or set the minimum Lightning payment (default 1 sat). Sellers ask it as
+    /// the deposit and raise any smaller final remainder to it; buyers refuse sellers
+    /// whose minimum is above theirs.
+    MinPayment {
+        #[arg(long, value_parser = clap::value_parser!(u64).range(1..=1000))]
+        sats: Option<u64>,
+    },
     /// List seller rates, or enable an exact model (defaults: 500 input / 1500 output msat per million).
     Pricing {
         model: Option<String>,

@@ -40,8 +40,8 @@ pub async fn run(command: &WalletCommand, port: u16, config: Option<&Path>) -> R
                 bail!(
                     "mesh-llm is not running on port {port}; wallet operations need the running \
                      node because only it owns the wallet plugin. Start `mesh-llm` and retry. \
-                     (ledger-only commands such as policy, pricing, pending, blocked, \
-                     unblock and unpin work offline)"
+                     (ledger-only commands such as policy, pricing, min-payment, pending, \
+                     blocked, unblock and unpin work offline)"
                 );
             }
             let directory = if let Some(config) = config {
@@ -120,6 +120,11 @@ fn control_command(command: &WalletCommand) -> Result<ControlCommand> {
                             .transpose()?,
                     })
                 })
+                .transpose()?,
+        },
+        WalletCommand::MinPayment { sats } => ControlCommand::MinPayment {
+            value_msat: sats
+                .map(|sats| sats.checked_mul(1000).context("minimum payment overflow"))
                 .transpose()?,
         },
         WalletCommand::Pricing {

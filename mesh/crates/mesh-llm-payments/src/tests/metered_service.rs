@@ -544,3 +544,31 @@ async fn restart_recovery_accepts_a_receipt_net_of_the_receivers_fee() {
     assert!(paid.contains(&("short".into(), false)), "{paid:?}");
     assert_eq!(service.ledger.metered_unpaid_finals("peer").unwrap(), 1);
 }
+
+#[tokio::test]
+async fn an_overridden_minimum_payment_is_the_deposit_and_the_final_round_up() {
+    let dir = tempfile::tempdir().unwrap();
+    let wallet = Arc::new(MockWallet::default());
+    let service = open(dir.path(), wallet.clone());
+    assert!(service.ledger.set_min_payment_msat(0).is_err());
+    service.ledger.set_min_payment_msat(2000).unwrap();
+    let first = service.serve_admit(admit("r", "peer")).await.unwrap();
+    let ServeAdmitResponse::Deposit {
+        invoice,
+        min_payment_msat,
+        ..
+    } = first
+    else {
+        panic!("expected a deposit, got {first:?}");
+    };
+    assert_eq!((invoice.amount_msat, min_payment_msat), (Some(2000), 2000));
+    received(&wallet, &invoice);
+    service.serve_deposit_confirmed("r").await.unwrap();
+    // 10 msat per token: a 2,500-msat bill leaves 500, raised to the 2,000 floor.
+    let bill = service.serve_settle(settle("r", 150, 100)).await.unwrap();
+    assert_eq!(
+        (bill.bill_msat, bill.deposit_msat, bill.remaining_msat),
+        (2500, 2000, 2000)
+    );
+    assert_eq!(bill.invoice.unwrap().amount_msat, Some(2000));
+}

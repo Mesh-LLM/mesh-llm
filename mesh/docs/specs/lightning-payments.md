@@ -450,12 +450,20 @@ replaced, so the strike limit is only a PoC deterrent.
 The seller explicitly configures per-model input/output msat per million
 tokens. Free serving is the default. Charges use wide integer arithmetic and
 ceiling division to the msat. Bills are recorded to the msat, but every
-Lightning payment has a 1 sat floor (`PAYMENT_FLOOR_MSAT`): live Lexe
-payments of 60 and 90 msat found no route while 1000 msat and above settled.
-The deposit is exactly the floor. The final remainder is invoiced exact to the
-msat; every positive remainder below the floor is raised to 1 sat. A zero
-remainder has no final invoice. Both sides derive it from `final_invoice_msat`, so this
-rounding is part of the `/mesh/payment/v3` wire contract. The deprecated
+Lightning payment has a minimum payment, default 1 sat (`PAYMENT_FLOOR_MSAT`):
+live Lexe payments of 60 and 90 msat found no route while 1000 msat and above
+settled. The deposit is exactly the minimum. The final remainder is invoiced
+exact to the msat; every positive remainder below the minimum is raised to it.
+A zero remainder has no final invoice. Both sides derive it from
+`final_invoice_msat`, so this rounding is part of the `/mesh/payment/v3` wire
+contract. Operators override the minimum with `mesh-llm wallet min-payment
+--sats N` (1..=1000, ledger setting, default 1). The seller's value travels as
+`AdmissionTerms.min_payment_msat`, omitted at the 1-sat default so older peers
+still parse the terms. A buyer refuses admission when the seller's minimum is
+above its own configured minimum, so raising it needs buyers to opt in. The
+seller reads its current minimum at admission and again at settlement; changing
+it while a request is in flight can make that request's final invoice fail the
+buyer's check. The deprecated
 `LightningOffer.minimum_invoice_msat` gossip field is sent as 1 and ignored
 on read. The seller
 refuses admission when the pricing in the `Request` differs from its current
@@ -637,6 +645,8 @@ mesh-llm wallet policy --mode automatic --daily-budget-sats 100
 mesh-llm wallet policy --mode free-only
 mesh-llm wallet pricing MODEL --input-msat-per-million 500 --output-msat-per-million 1500
 mesh-llm wallet pricing MODEL --free
+mesh-llm wallet min-payment
+mesh-llm wallet min-payment --sats 2
 ```
 
 `balance`, `transactions`, and `fund` are aliases. `wallet --port PORT` selects

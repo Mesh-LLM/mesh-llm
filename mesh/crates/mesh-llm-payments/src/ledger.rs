@@ -76,6 +76,21 @@ impl Ledger {
         self.set_setting("policy", &serde_json::to_string(policy)?)
     }
 
+    /// The operator's minimum payment in msat (default 1 sat): the seller's
+    /// deposit and sub-minimum final round-up, and the largest seller minimum
+    /// this node will pay as a buyer.
+    pub fn min_payment_msat(&self) -> Result<u64> {
+        Ok(match self.get_setting("min_payment_msat")? {
+            Some(value) => value.parse()?,
+            None => mesh_llm_payments_types::metering::PAYMENT_FLOOR_MSAT,
+        })
+    }
+
+    pub fn set_min_payment_msat(&self, floor_msat: u64) -> Result<()> {
+        mesh_llm_payments_types::metering::validate_payment_floor(floor_msat)?;
+        self.set_setting("min_payment_msat", &floor_msat.to_string())
+    }
+
     pub(crate) fn get_setting(&self, key: &str) -> Result<Option<String>> {
         Ok(self
             .lock()?

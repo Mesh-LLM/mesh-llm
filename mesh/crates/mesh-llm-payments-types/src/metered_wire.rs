@@ -27,6 +27,22 @@ pub struct AdmissionTerms {
     pub model: String,
     pub pricing: Pricing,
     pub deposit_msat: u64,
+    /// The seller's minimum payment: the deposit (when one is asked) and the
+    /// amount any smaller positive final remainder is raised to. Omitted at
+    /// the 1-sat default so older peers keep parsing these terms.
+    #[serde(
+        default = "default_payment_floor",
+        skip_serializing_if = "is_default_payment_floor"
+    )]
+    pub min_payment_msat: u64,
+}
+
+fn default_payment_floor() -> u64 {
+    crate::metering::PAYMENT_FLOOR_MSAT
+}
+
+fn is_default_payment_floor(value: &u64) -> bool {
+    *value == crate::metering::PAYMENT_FLOOR_MSAT
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -92,6 +108,39 @@ pub async fn read(reader: &mut (impl AsyncRead + Unpin)) -> Result<Frame> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn admission_minimum_payment_is_omitted_at_the_default_and_carried_otherwise() {
+        let pricing = Pricing {
+            input_msat_per_million: 1,
+            output_msat_per_million: 1,
+            cache_discount_percent: 0,
+        };
+        let mut terms = AdmissionTerms {
+            id: "r".into(),
+            model: "m".into(),
+            pricing,
+            deposit_msat: 1000,
+            min_payment_msat: crate::metering::PAYMENT_FLOOR_MSAT,
+        };
+        // Default stays off the wire, so older buyers (deny_unknown_fields) parse it.
+        let json = serde_json::to_value(&terms).unwrap();
+        assert!(json.get("min_payment_msat").is_none(), "{json}");
+        let legacy =
+            serde_json::json!({"id":"r","model":"m","pricing":json["pricing"],"deposit_msat":1000});
+        assert_eq!(
+            serde_json::from_value::<AdmissionTerms>(legacy).unwrap(),
+            terms
+        );
+        terms.min_payment_msat = 2000;
+        terms.deposit_msat = 2000;
+        let json = serde_json::to_value(&terms).unwrap();
+        assert_eq!(json["min_payment_msat"], 2000);
+        assert_eq!(
+            serde_json::from_value::<AdmissionTerms>(json).unwrap(),
+            terms
+        );
+    }
 
     #[test]
     fn metered_frames_reject_retired_frames_and_unknown_fields() {

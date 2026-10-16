@@ -144,15 +144,21 @@ async fn admit(
             },
         )
         .await?;
-    let (deposit, deposit_msat) = match admitted {
+    let (deposit, deposit_msat, min_payment_msat) = match admitted {
         ServeAdmitResponse::Blocked { .. } => return Ok(Admission::Refused),
         ServeAdmitResponse::Replayed { request_id } => {
             return Ok(Admission::Replayed(request_id));
         }
-        ServeAdmitResponse::Admitted { .. } => (None, 0),
-        ServeAdmitResponse::Deposit { invoice, .. } => {
+        ServeAdmitResponse::Admitted {
+            min_payment_msat, ..
+        } => (None, 0, min_payment_msat),
+        ServeAdmitResponse::Deposit {
+            invoice,
+            min_payment_msat,
+            ..
+        } => {
             let amount = invoice.amount_msat.context("amountless deposit invoice")?;
-            (Some(invoice), amount)
+            (Some(invoice), amount, min_payment_msat)
         }
     };
     let terms = AdmissionTerms {
@@ -160,6 +166,7 @@ async fn admit(
         model,
         pricing,
         deposit_msat,
+        min_payment_msat,
     };
     let (lifecycle, exchange_id) = provider_observers(node).await;
     let observations = lifecycle.observe(&terms);

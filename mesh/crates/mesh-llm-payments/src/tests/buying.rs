@@ -32,6 +32,7 @@ fn admission(id: &str, deposit_msat: u64) -> AdmissionTerms {
         model: "test".into(),
         pricing: rates(),
         deposit_msat,
+        min_payment_msat: mesh_llm_payments_types::metering::PAYMENT_FLOOR_MSAT,
     }
 }
 
@@ -755,4 +756,60 @@ async fn a_deposit_retired_while_the_wallet_opens_is_never_submitted() -> Result
         "nothing was submitted"
     );
     Ok(())
+}
+
+#[tokio::test]
+async fn a_buyer_pays_a_seller_minimum_up_to_its_own_and_refuses_a_higher_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let (wallet, service) = open(dir.path());
+    let raised = |id: &str| AdmissionTerms {
+        deposit_msat: 2000,
+        min_payment_msat: 2000,
+        ..admission(id, 0)
+    };
+    let request = |id: &str| AcceptAdmissionRequest {
+        billing_revision: mesh_llm_payments_types::contract::BillingRevision::V3,
+        terms: local(id, 50_000),
+        admission: raised(id),
+    };
+    let refused = service.accept_admission(request("high")).await;
+    assert!(
+        refused.unwrap_err().to_string().contains("minimum payment"),
+        "a default buyer refuses a 2-sat seller minimum"
+    );
+    service.ledger.set_min_payment_msat(2000).unwrap();
+    service.accept_admission(request("r")).await.unwrap();
+    service
+        .pay_deposit(PayDepositRequest {
+            request_id: "r".into(),
+            invoice: invoice(1, 2000),
+        })
+        .await
+        .unwrap();
+    // A 2,500-msat bill leaves 500 after the deposit: the final is the
+    // seller's 2,000 minimum, and an exact-remainder invoice is refused.
+    assert!(
+        service
+            .settle_final(settlement(
+                "r",
+                Some((150, 100)),
+                Some(2500),
+                2000,
+                Some(invoice(2, 500))
+            ))
+            .await
+            .is_err()
+    );
+    let settled = service
+        .settle_final(settlement(
+            "r",
+            Some((150, 100)),
+            Some(2500),
+            2000,
+            Some(invoice(3, 2000)),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(settled.payment.unwrap().amount_msat, 2000);
+    assert_eq!(wallet.calls.load(Ordering::SeqCst), 2);
 }

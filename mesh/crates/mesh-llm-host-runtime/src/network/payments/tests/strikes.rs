@@ -2,7 +2,7 @@
 //! buyer; a seller that abandons after delivering output is not.
 use super::*;
 use mesh_llm_payments_types::metered_wire::AdmissionTerms;
-use mesh_llm_payments_types::metering::DEPOSIT_MSAT;
+use mesh_llm_payments_types::metering::PAYMENT_FLOOR_MSAT;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_seller_that_keeps_the_deposit_and_delivers_nothing_is_struck() -> Result<()> {
@@ -33,7 +33,7 @@ async fn fake_seller(deliver: bool) -> Result<()> {
             anyhow::bail!("request expected");
         };
         crate::network::payments::request::PaidRequest::parse(&http)?;
-        let deposit = DEPOSIT_MSAT;
+        let deposit = PAYMENT_FLOOR_MSAT;
         let wallet = TestWallet {
             owner: 1,
             network: seller_network.clone(),
@@ -48,6 +48,7 @@ async fn fake_seller(deliver: bool) -> Result<()> {
                     model: "test".into(),
                     pricing,
                     deposit_msat: deposit,
+                    min_payment_msat: PAYMENT_FLOOR_MSAT,
                 },
                 invoice: Some(invoice),
             },

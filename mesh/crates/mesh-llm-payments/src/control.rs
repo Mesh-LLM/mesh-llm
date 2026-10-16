@@ -65,6 +65,12 @@ impl PaymentService {
                 self.ledger.policy_status(crate::now_ms())
             }
             ControlCommand::Pricing => Ok(serde_json::to_value(self.ledger.pricing()?)?),
+            ControlCommand::MinPayment { value_msat } => {
+                if let Some(value_msat) = value_msat {
+                    self.ledger.set_min_payment_msat(value_msat)?;
+                }
+                Ok(serde_json::json!({ "min_payment_msat": self.ledger.min_payment_msat()? }))
+            }
             ControlCommand::SetCacheDiscount { model, percent } => {
                 let mut pricing = self.ledger.pricing()?.remove(&model).ok_or_else(|| {
                     anyhow::anyhow!("set model input/output rates before a cache discount")

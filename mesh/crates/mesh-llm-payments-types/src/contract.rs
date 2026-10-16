@@ -240,9 +240,16 @@ pub enum ServeAdmitResponse {
     Deposit {
         request_id: String,
         invoice: mesh_llm_wallet::invoice::Invoice,
+        /// The seller's minimum payment, carried into the admission terms.
+        #[serde(default = "crate::contract::default_payment_floor")]
+        min_payment_msat: u64,
     },
     /// Buyer in good standing: dispatch now, no deposit.
-    Admitted { request_id: String },
+    Admitted {
+        request_id: String,
+        #[serde(default = "crate::contract::default_payment_floor")]
+        min_payment_msat: u64,
+    },
     /// Refused: the buyer has too many issued and unpaid final invoices.
     Blocked { reason: String },
     /// This seller already holds the request: answer with
@@ -319,6 +326,10 @@ pub struct ArrivalResponse {
     /// True when a transient claiming state was seen; false when the wait
     /// ended on a terminal status. Diagnostic only.
     pub claiming: bool,
+}
+
+pub(crate) fn default_payment_floor() -> u64 {
+    crate::metering::PAYMENT_FLOOR_MSAT
 }
 
 #[cfg(test)]

@@ -41,24 +41,35 @@ impl MeteredUsage {
     }
 }
 
-/// Smallest Lightning payment the metered flow sends: 1 sat. Sub-sat
+/// Default smallest Lightning payment the metered flow sends: 1 sat. Sub-sat
 /// payments are not reliably routable (live: 60/90 msat found no route).
+/// Operators may override it (`mesh-llm wallet min-payment`); the seller's
+/// value travels in [`crate::metered_wire::AdmissionTerms`].
 pub const PAYMENT_FLOOR_MSAT: u64 = 1_000;
 
-/// Flat deposit asked of a peer outside the provider's trust cache. It only
-/// proves the buyer can pay before backend work starts; it is not sized to
-/// the request and is applied against the final bill.
-pub const DEPOSIT_MSAT: u64 = PAYMENT_FLOOR_MSAT;
+/// Largest minimum payment an operator may configure (1000 sats), so a typo
+/// cannot turn every tiny request into a large charge.
+pub const MAX_PAYMENT_FLOOR_MSAT: u64 = 1_000_000;
+
+/// Reject a minimum payment outside `1..=MAX_PAYMENT_FLOOR_MSAT` msat.
+pub fn validate_payment_floor(floor_msat: u64) -> Result<()> {
+    anyhow::ensure!(
+        (1..=MAX_PAYMENT_FLOOR_MSAT).contains(&floor_msat),
+        "minimum payment must be 1..={MAX_PAYMENT_FLOOR_MSAT} msat"
+    );
+    Ok(())
+}
 
 /// What the seller invoices after the deposit: `bill - deposit`, exact to the
-/// msat. Only a sub-sat remainder is rounded, to respect the 1 sat payment
-/// floor: every positive sub-sat remainder is raised to 1 sat.
+/// msat. Only a remainder below the minimum payment is rounded: every positive
+/// remainder under `floor_msat` is raised to `floor_msat`. The flat deposit a
+/// peer outside the trust cache pays is also `floor_msat`.
 /// Buyer and seller both derive the invoice from this one function.
-pub fn final_invoice_msat(bill_msat: u64, deposit_applied_msat: u64) -> u64 {
+pub fn final_invoice_msat(bill_msat: u64, deposit_applied_msat: u64, floor_msat: u64) -> u64 {
     let remaining = bill_msat.saturating_sub(deposit_applied_msat);
     match remaining {
-        r if r >= PAYMENT_FLOOR_MSAT => r,
-        r if r > 0 => PAYMENT_FLOOR_MSAT,
+        r if r >= floor_msat => r,
+        r if r > 0 => floor_msat,
         _ => 0,
     }
 }
@@ -80,22 +91,36 @@ mod tests {
 
     #[test]
     fn final_invoice_is_exact_and_only_rounds_a_sub_sat_remainder() {
-        assert_eq!(final_invoice_msat(0, 0), 0);
-        assert_eq!(final_invoice_msat(1, 0), 1_000);
-        assert_eq!(final_invoice_msat(1_001, 1_000), 1_000);
-        assert_eq!(final_invoice_msat(1_000, 1_000), 0);
-        assert_eq!(final_invoice_msat(499, 0), 1_000);
-        assert_eq!(final_invoice_msat(500, 0), 1_000);
-        assert_eq!(final_invoice_msat(999, 0), 1_000);
-        assert_eq!(final_invoice_msat(1_000, 0), 1_000);
-        assert_eq!(final_invoice_msat(1_499, 0), 1_499);
-        assert_eq!(final_invoice_msat(4_045, 0), 4_045);
-        assert_eq!(final_invoice_msat(1_499, 1_000), 1_000);
-        assert_eq!(final_invoice_msat(1_500, 1_000), 1_000);
-        assert_eq!(final_invoice_msat(1_640, 1_000), 1_000);
-        assert_eq!(final_invoice_msat(2_640, 1_000), 1_640);
-        assert_eq!(final_invoice_msat(500, 1_000), 0);
-        assert_eq!(final_invoice_msat(u64::MAX, 0), u64::MAX);
+        assert_eq!(final_invoice_msat(0, 0, PAYMENT_FLOOR_MSAT), 0);
+        assert_eq!(final_invoice_msat(1, 0, PAYMENT_FLOOR_MSAT), 1_000);
+        assert_eq!(final_invoice_msat(1_001, 1_000, PAYMENT_FLOOR_MSAT), 1_000);
+        assert_eq!(final_invoice_msat(1_000, 1_000, PAYMENT_FLOOR_MSAT), 0);
+        assert_eq!(final_invoice_msat(499, 0, PAYMENT_FLOOR_MSAT), 1_000);
+        assert_eq!(final_invoice_msat(500, 0, PAYMENT_FLOOR_MSAT), 1_000);
+        assert_eq!(final_invoice_msat(999, 0, PAYMENT_FLOOR_MSAT), 1_000);
+        assert_eq!(final_invoice_msat(1_000, 0, PAYMENT_FLOOR_MSAT), 1_000);
+        assert_eq!(final_invoice_msat(1_499, 0, PAYMENT_FLOOR_MSAT), 1_499);
+        assert_eq!(final_invoice_msat(4_045, 0, PAYMENT_FLOOR_MSAT), 4_045);
+        assert_eq!(final_invoice_msat(1_499, 1_000, PAYMENT_FLOOR_MSAT), 1_000);
+        assert_eq!(final_invoice_msat(1_500, 1_000, PAYMENT_FLOOR_MSAT), 1_000);
+        assert_eq!(final_invoice_msat(1_640, 1_000, PAYMENT_FLOOR_MSAT), 1_000);
+        assert_eq!(final_invoice_msat(2_640, 1_000, PAYMENT_FLOOR_MSAT), 1_640);
+        assert_eq!(final_invoice_msat(500, 1_000, PAYMENT_FLOOR_MSAT), 0);
+    }
+
+    #[test]
+    fn an_overridden_floor_rounds_the_same_way_and_is_bounded() {
+        assert_eq!(final_invoice_msat(1, 0, 2_000), 2_000);
+        assert_eq!(final_invoice_msat(2_500, 1_000, 2_000), 2_000);
+        assert_eq!(final_invoice_msat(4_000, 2_000, 2_000), 2_000);
+        assert_eq!(final_invoice_msat(1_500, 0, 1), 1_500);
+        assert!(validate_payment_floor(0).is_err());
+        assert!(validate_payment_floor(MAX_PAYMENT_FLOOR_MSAT + 1).is_err());
+        assert!(validate_payment_floor(1).is_ok());
+        assert_eq!(
+            final_invoice_msat(u64::MAX, 0, PAYMENT_FLOOR_MSAT),
+            u64::MAX
+        );
     }
 
     #[test]
