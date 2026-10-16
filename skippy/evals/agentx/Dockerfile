@@ -14,7 +14,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends patchelf \
     && rm -rf /var/lib/apt/lists/*
 # One GB10 per job: omit optional multi-GPU NCCL linkage from both engines.
 # NCCL is intentionally outside the native runtime's redistribution policy.
-RUN apt-get purge -y libnccl-dev libnccl2
+RUN apt-mark unhold libnccl-dev libnccl2 && apt-get purge -y libnccl-dev libnccl2
 ENV SKIPPY_CUDA_ARCHITECTURES=121
 ENV CMAKE_BUILD_PARALLEL_LEVEL=8
 WORKDIR /workspace
