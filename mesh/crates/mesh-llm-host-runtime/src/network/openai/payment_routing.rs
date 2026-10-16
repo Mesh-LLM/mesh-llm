@@ -14,12 +14,21 @@ pub(super) async fn rank(
     request_body: Option<&serde_json::Value>,
 ) -> Result<bool, &'static str> {
     let mut prices = std::collections::HashMap::new();
+    let mut unpayable = Vec::new();
     for target in &candidates.ordered {
         if let InferenceTarget::Remote(peer) = target
             && let Some(price) = node.peer_payment_offer(*peer, model).await
         {
-            prices.insert(*peer, price);
+            if node.peer_offers_payable(*peer).await {
+                prices.insert(*peer, price);
+            } else {
+                unpayable.push(*peer);
+            }
         }
+    }
+    drop_unpayable_sellers(model, &unpayable, candidates);
+    if !unpayable.is_empty() && candidates.ordered.is_empty() {
+        return Err("paid providers for this model use a payment protocol this node cannot pay");
     }
     if prices.is_empty() {
         return Ok(false);
@@ -90,6 +99,35 @@ pub(super) async fn rank(
         .take_while(|target| key(target) == first)
         .count();
     Ok(true)
+}
+
+/// Remove sellers charging for `model` over a payment protocol this node
+/// cannot speak (an older release, or a newer one). They cannot be paid, and
+/// serve the model only for payment, so they are not free candidates either.
+#[cfg(feature = "payments")]
+fn drop_unpayable_sellers(
+    model: &str,
+    unpayable: &[iroh::EndpointId],
+    candidates: &mut RankedCandidates<InferenceTarget>,
+) {
+    if unpayable.is_empty() {
+        return;
+    }
+    tracing::info!(
+        model,
+        sellers = ?unpayable.iter().map(|peer| peer.fmt_short().to_string()).collect::<Vec<_>>(),
+        "skipped paid sellers on a payment protocol this node cannot pay"
+    );
+    let removed_prefix = candidates.ordered[..candidates.equivalent_prefix]
+        .iter()
+        .filter(
+            |target| matches!(target, InferenceTarget::Remote(peer) if unpayable.contains(peer)),
+        )
+        .count();
+    candidates.ordered.retain(
+        |target| !matches!(target, InferenceTarget::Remote(peer) if unpayable.contains(peer)),
+    );
+    candidates.equivalent_prefix -= removed_prefix;
 }
 
 /// Remove paid providers this node has blocked for repeatedly taking the input
@@ -216,6 +254,52 @@ pub(super) fn prefer_price_tier(
 mod tests {
     use super::*;
     use mesh_llm_payments::{intent::PaymentIntent, pricing::Pricing, service::PaymentService};
+
+    #[tokio::test]
+    async fn sellers_on_another_payment_protocol_are_neither_paid_nor_free() -> anyhow::Result<()> {
+        let node = Node::new_for_tests(crate::mesh::NodeRole::Client).await?;
+        let seller = Node::new_for_tests(crate::mesh::NodeRole::Client).await?;
+        let mut announcement =
+            seller.build_local_announcement(seller.snapshot_local_announcement_data().await);
+        announcement.lightning_offers.insert(
+            "test".into(),
+            Pricing {
+                input_msat_per_million: 1,
+                output_msat_per_million: 1,
+                cache_discount_percent: 0,
+            },
+        );
+        // As decoded from a release that advertised prices without a version.
+        announcement.lightning_offers.protocol = 0;
+        node.add_peer_after_direct_requirements_validated(
+            seller.id(),
+            seller.endpoint.addr(),
+            &announcement,
+            Some(1),
+        )
+        .await;
+        assert!(!node.peer_offers_payable(seller.id()).await);
+        let free = iroh::SecretKey::generate().public();
+        let mut candidates = RankedCandidates {
+            ordered: vec![
+                InferenceTarget::Remote(seller.id()),
+                InferenceTarget::Remote(free),
+            ],
+            equivalent_prefix: 2,
+        };
+        assert!(!rank(&node, "test", 1, &mut candidates, None).await.unwrap());
+        assert_eq!(candidates.ordered, vec![InferenceTarget::Remote(free)]);
+        assert_eq!(candidates.equivalent_prefix, 1);
+        let mut only_legacy = RankedCandidates {
+            ordered: vec![InferenceTarget::Remote(seller.id())],
+            equivalent_prefix: 1,
+        };
+        let error = rank(&node, "test", 1, &mut only_legacy, None)
+            .await
+            .unwrap_err();
+        assert!(error.contains("payment protocol"), "{error}");
+        Ok(())
+    }
 
     #[tokio::test]
     async fn free_only_excludes_paid_without_provisioning_a_wallet() -> anyhow::Result<()> {

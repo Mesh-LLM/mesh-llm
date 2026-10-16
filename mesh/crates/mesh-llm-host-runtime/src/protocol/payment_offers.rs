@@ -1,11 +1,11 @@
 use std::collections::BTreeMap;
 
-use mesh_llm_payments_types::pricing::Pricing;
+use mesh_llm_payments_types::{offers::LightningOffers, pricing::Pricing};
 
 use crate::proto::node::LightningOffer;
 
-pub(super) fn encode(prices: &BTreeMap<String, Pricing>) -> Vec<LightningOffer> {
-    prices
+pub(super) fn encode(offers: &LightningOffers) -> Vec<LightningOffer> {
+    offers
         .iter()
         .map(|(model, price)| LightningOffer {
             model: model.clone(),
@@ -14,14 +14,24 @@ pub(super) fn encode(prices: &BTreeMap<String, Pricing>) -> Vec<LightningOffer> 
             // Deprecated: always 1 so older buyers (which reject 0) still accept.
             minimum_invoice_msat: 1,
             cache_discount_percent: u32::from(price.cache_discount_percent),
+            payment_protocol: offers.protocol,
         })
         .collect()
 }
 
 /// Reject malformed advertisements instead of accidentally treating an invalid
 /// paid offer as a free provider. Older readers ignore this additive field.
-pub(super) fn decode(offers: &[LightningOffer]) -> Option<BTreeMap<String, Pricing>> {
+/// The payment protocol is kept, not checked: an offer on a protocol this node
+/// cannot pay still marks the peer paid, so it is neither paid nor used free.
+pub(super) fn decode(offers: &[LightningOffer]) -> Option<LightningOffers> {
     if offers.len() > 128 {
+        return None;
+    }
+    let protocol = offers.first().map_or(0, |offer| offer.payment_protocol);
+    if offers
+        .iter()
+        .any(|offer| offer.payment_protocol != protocol)
+    {
         return None;
     }
     let mut result = BTreeMap::new();
@@ -39,7 +49,10 @@ pub(super) fn decode(offers: &[LightningOffer]) -> Option<BTreeMap<String, Prici
             return None;
         }
     }
-    Some(result)
+    Some(LightningOffers {
+        protocol,
+        prices: result,
+    })
 }
 
 #[cfg(test)]
@@ -54,6 +67,7 @@ mod tests {
             output_msat_per_million: 1500,
             minimum_invoice_msat: 1,
             cache_discount_percent: 0,
+            payment_protocol: mesh_llm_payments_types::metered_wire::PAYMENT_PROTOCOL,
         };
         let decoded = decode(std::slice::from_ref(&offer)).unwrap();
         assert_eq!(encode(&decoded), vec![offer.clone()]);
@@ -71,6 +85,18 @@ mod tests {
         let mut invalid_discount = offer.clone();
         invalid_discount.cache_discount_percent = 101;
         assert!(decode(&[invalid_discount]).is_none());
+        // A paid offer from before versioning still decodes, as paid but
+        // unpayable, so it is never mistaken for a free provider.
+        let mut legacy = offer.clone();
+        legacy.payment_protocol = 0;
+        let legacy_decoded = decode(std::slice::from_ref(&legacy)).unwrap();
+        assert_eq!(legacy_decoded.prices, decoded.prices);
+        assert!(decoded.payable() && !legacy_decoded.payable());
+        legacy.model = "other".into();
+        assert!(
+            decode(&[offer.clone(), legacy]).is_none(),
+            "one node, one protocol"
+        );
         let mut invalid = offer;
 
         invalid.input_msat_per_million = 0;

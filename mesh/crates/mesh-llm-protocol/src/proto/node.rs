@@ -396,6 +396,10 @@ pub struct LightningOffer {
     /// Percentage discount for backend-reported cached input (0 = full price).
     #[prost(uint32, tag = "5")]
     pub cache_discount_percent: u32,
+    /// Payment protocol the seller accepts payment over (3 = metered v3).
+    /// Absent (0) on releases before v3; buyers skip such paid offers.
+    #[prost(uint32, tag = "6")]
+    pub payment_protocol: u32,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct SignedMeshGenesisPolicy {

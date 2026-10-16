@@ -74,7 +74,22 @@ async fn serve_inner(
     if let Frame::Recover { id } = initial {
         return recover(&payments, &id, writer).await;
     }
-    let mut session = match admit(node, &payments, peer, initial, targets).await? {
+    let admission = match admit(node, &payments, peer.clone(), initial, targets).await {
+        Ok(admission) => admission,
+        Err(error) => {
+            // Without this line a refused buyer only sees its own 503.
+            tracing::warn!(buyer = %peer, error = %format!("{error:#}"), "refused paid admission");
+            let _ = wire::write(
+                writer,
+                &Frame::Error {
+                    message: format!("admission refused: {error:#}"),
+                },
+            )
+            .await;
+            return Err(error);
+        }
+    };
+    let mut session = match admission {
         Admission::Admitted(session) => session,
         Admission::Refused => {
             return wire::write(
@@ -99,6 +114,21 @@ async fn serve_inner(
             .await;
     }
     result
+}
+
+/// The name this seller priced the requested model under. Offers are
+/// advertised under the priced (often runtime) name and buyers address the
+/// model by its public ID, exactly as `peer_offer_for_model` resolves it, so
+/// the seller sells under either: the name it showed on the mesh is the name
+/// it charges for, without the operator having to price both.
+fn priced_model<'a>(
+    prices: &std::collections::BTreeMap<String, mesh_llm_payments_types::pricing::Pricing>,
+    requested: &'a str,
+    backend: &'a str,
+) -> Option<&'a str> {
+    [requested, backend]
+        .into_iter()
+        .find(|name| prices.contains_key(*name))
 }
 
 enum Admission {
@@ -132,6 +162,10 @@ async fn admit(
         crate::network::openai::ingress::served_model_for_public_id(node, targets, &model).await;
     let backend = Backend::resolve(node, targets, &backend_model, &model).await?;
     request.use_backend_model(&backend_model);
+    let prices = node.advertised_payment_offers().await?;
+    let priced = priced_model(&prices, &model, &backend_model)
+        .with_context(|| format!("this seller has no price for {model}"))?
+        .to_owned();
     let admitted: ServeAdmitResponse = payments
         .call(
             ops::SERVE_ADMIT,
@@ -139,13 +173,16 @@ async fn admit(
                 billing_revision: mesh_llm_payments_types::contract::BillingRevision::V3,
                 request_id: id.clone(),
                 buyer: peer.clone(),
-                model: model.clone(),
+                model: priced.clone(),
                 pricing: pricing.clone(),
             },
         )
         .await?;
     let (deposit, deposit_msat, min_payment_msat) = match admitted {
-        ServeAdmitResponse::Blocked { .. } => return Ok(Admission::Refused),
+        ServeAdmitResponse::Blocked { reason } => {
+            tracing::warn!(buyer = %peer, model = %priced, %reason, "refused paid admission");
+            return Ok(Admission::Refused);
+        }
         ServeAdmitResponse::Replayed { request_id } => {
             return Ok(Admission::Replayed(request_id));
         }
@@ -458,6 +495,32 @@ fn request_id(id: &str) -> RequestIdRequest {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_seller_sells_under_the_public_id_of_a_model_priced_by_runtime_name() {
+        let price = mesh_llm_payments_types::pricing::Pricing {
+            input_msat_per_million: 500,
+            output_msat_per_million: 1500,
+            cache_discount_percent: 0,
+        };
+        let runtime = "local-gguf/sha256-631aa3b9";
+        let public = "bartowski/google_gemma-3-27b-it-GGUF@main:Q4_K_M";
+        let by_runtime = [(runtime.to_owned(), price.clone())].into();
+        assert_eq!(
+            super::priced_model(&by_runtime, public, runtime),
+            Some(runtime)
+        );
+        assert_eq!(
+            super::priced_model(&by_runtime, runtime, runtime),
+            Some(runtime)
+        );
+        let by_public = [(public.to_owned(), price)].into();
+        assert_eq!(
+            super::priced_model(&by_public, public, runtime),
+            Some(public)
+        );
+        assert_eq!(super::priced_model(&by_public, "other", "other"), None);
+    }
+
     use super::*;
     use std::task::Poll;
     use tokio::io::AsyncWriteExt;

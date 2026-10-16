@@ -16,6 +16,11 @@ pub const MAX_FRAME_BYTES: usize = 4 * 1024 * 1024;
 pub const HTTP_UPGRADE: &[u8] =
     b"POST /mesh/payment/v3 HTTP/1.1\r\nHost: mesh\r\nContent-Length: 0\r\n\r\n";
 
+/// Payment protocol a seller advertises with its offers, matching
+/// [`HTTP_UPGRADE`]. A buyer only routes paid work to sellers on this version:
+/// an unversioned (pre-v3) or different paid seller cannot be paid by it.
+pub const PAYMENT_PROTOCOL: u32 = 3;
+
 /// Admission terms are agreed before any backend work. The deposit is a
 /// flat 1 sat proving the buyer can pay; it is applied against the final bill,
 /// never an extra fee or a reservation. Output is

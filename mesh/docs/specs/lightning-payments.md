@@ -470,6 +470,23 @@ refuses admission when the pricing in the `Request` differs from its current
 configuration for that model, so a price change takes effect at the next
 request a payer makes after it has seen the new advertisement.
 
+A seller sells under the name it shows on the mesh. Offers are advertised under
+the priced name (often the runtime ID, e.g. `local-gguf/sha256-…`) and buyers
+address the model by its public ID; the seller resolves the requested name to
+the priced one exactly as the buyer resolved the offer, so pricing either name
+is enough. A refused admission (no price, changed price, strikes) is logged on
+the seller as `refused paid admission` and returned to the buyer as an error
+frame.
+
+Each `LightningOffer` carries `payment_protocol` (3 for this metered v3
+protocol; one value per node). Releases before v3 sent no version (0). A buyer
+routes paid work only to sellers advertising the protocol it speaks: a paid
+seller on another or no version is neither a paid nor a free candidate for its
+priced models, is logged as `skipped paid sellers on a payment protocol this
+node cannot pay`, and is omitted from the `/v1/models` offers. If only such
+sellers serve a model, routing fails with that reason instead of attempting a
+payment the seller cannot accept.
+
 Enabling `wallet pricing MODEL` without explicit rates uses 500 input and 1500
 output msat per million tokens;
 small requests at those rates bill a few msat; any positive amount still owed after the deposit is raised to the 1 sat payment floor.
