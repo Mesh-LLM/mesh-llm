@@ -779,7 +779,7 @@ run_mmproj_smoke() {
       SKIPPY_MM_IMAGE="$ROOT/ci/llama-canary/fixtures/multimodal-smoke.png" \
       SKIPPY_MM_ACTIVATION_WIDTH="$activation_width" \
       SKIPPY_MM_CTX_SIZE=2048 \
-      SKIPPY_MM_MAX_TOKENS=16 \
+      SKIPPY_MM_MAX_TOKENS=256 \
       SKIPPY_MM_N_GPU_LAYERS=999 \
       SKIPPY_MM_SPLIT_LAYER="$split_layer" \
       LLAMA_STAGE_BACKEND=metal \

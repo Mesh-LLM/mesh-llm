@@ -311,6 +311,15 @@ or missing families against the exact producer package, without Goose or
 compilation. Reconciliation retains valid candidate failures from a mixed pass
 and emits automatic-repair input only when every remaining failure is proved
 candidate-class.
+The memory receipt distinguishes host admission and guard success from the
+battery process exit, so a guarded family test failure enters candidate repair.
+Failed admission, guard, output capture, cancellation, and cleanup retain infrastructure routing.
+Projector smokes allow up to 256 tokens with reasoning disabled and require a
+parsed, user-visible image answer. Reasoning-only output or raw protocol
+markers fail the local and split smoke.
+Hybrid and recurrent decoders synchronize an async backend graph before
+advancing to another internal microbatch, so the next graph reads completed
+recurrent state while model layers remain on their selected GPU device.
 
 Each named family job runs `--skip-build --shard-index` on the matching
 `family-certify` pool, with max-parallel 8 and fail-fast disabled. Workers
@@ -1752,8 +1761,9 @@ than reported as a family failure; the evidence records whether and how long the
 worker waited. Available memory is macOS free + inactive + speculative pages;
 purgeable pages are not counted twice. A reserve violation or monitoring failure
 stops only this family's process group and fails certification.
-`memory-admission.json` retains the estimate and host observations even on
-failure. Sampling cannot guarantee that instantaneous allocations never cross
+`memory-admission.json` retains the estimate, host observations, admission
+status, and continuous guard status even when the battery exits nonzero.
+Sampling cannot guarantee that instantaneous allocations never cross
 the reserve. Unrelated workloads must leave enough headroom at admission;
 labels alone are insufficient.
 

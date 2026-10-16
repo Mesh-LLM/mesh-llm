@@ -265,6 +265,16 @@ compilation. Reconciliation retains valid candidate failures from the initial
 pass and emits automatic-repair input only when the remaining failures are
 proved candidate-class; it binds that evidence to the producer identity and
 exact candidate package.
+The memory receipt records admission and continuous guard outcomes separately
+from the battery exit. An admitted, guarded battery that exits with a failing
+family result is candidate-class; a failed admission, guard, cancellation, or
+cleanup remains infrastructure-class.
+Projector smokes request up to 256 tokens with reasoning disabled and require a
+parsed, user-visible image answer. Reasoning-only output and raw chat protocol
+markers fail the smoke, including for Muse-Glimmer's split stage.
+Hybrid and recurrent decoders synchronize an async backend graph before
+advancing to another internal microbatch. This preserves recurrent state
+ordering without moving model layers off the selected GPU.
 
 `cargo xtool automation family-battery-policy` validates the versioned JSON family policy
 before native compilation: the three core parity lanes for certified causal
@@ -1501,8 +1511,9 @@ than reported as a family failure; the evidence records whether and how long the
 worker waited. Available memory is macOS free + inactive + speculative pages;
 purgeable pages are not counted twice. A reserve violation or monitoring failure
 stops only this family's process group and fails certification.
-`memory-admission.json` retains the estimate and host observations even on
-failure. Sampling cannot guarantee that instantaneous allocations never cross
+`memory-admission.json` retains the estimate, host observations, admission
+status, continuous guard status, and output capture status even when the battery exits nonzero.
+Sampling cannot guarantee that instantaneous allocations never cross
 the reserve. Unrelated workloads must leave enough headroom at admission;
 labels alone are insufficient.
 
