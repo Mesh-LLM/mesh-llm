@@ -1,6 +1,7 @@
 use std::ffi::OsString;
 
 use super::commands::Cli;
+use super::suggestion_redaction::redact_suggestion_args;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RuntimeSurface {
@@ -145,7 +146,9 @@ where
 /// Deprecation warning for legacy top-level runtime flags: returns the
 /// suggested explicit rewrite when the invocation implies a surface without
 /// naming one, and `None` when an explicit surface or subcommand is present
-/// or no legacy flags were used.
+/// or no legacy flags were used. The rewrite redacts credential values
+/// (`--relay-auth` tokens, `--join` invite tokens) before echoing the
+/// invocation.
 pub fn legacy_runtime_surface_warning(
     cli: &Cli,
     original_args: &[OsString],
@@ -155,10 +158,15 @@ pub fn legacy_runtime_surface_warning(
         return None;
     }
 
+    // The suggestion echoes the raw invocation, so credential values
+    // (`--relay-auth URL=TOKEN`, `--join TOKEN`) must be stripped before it
+    // is built; the warning lands in terminals, logs, and bug reports.
+    let redacted_args = redact_suggestion_args(original_args);
+
     if cli.client {
         return Some(format!(
             "⚠️ top-level `--client` now maps to `mesh-llm client`.\n  Please use: {}",
-            suggested_client_command(original_args)
+            suggested_client_command(&redacted_args)
         ));
     }
 
@@ -176,7 +184,7 @@ pub fn legacy_runtime_surface_warning(
     {
         return Some(format!(
             "⚠️ top-level serving flags now map to `mesh-llm serve`.\n  Please use: {}",
-            suggested_serve_command(original_args)
+            suggested_serve_command(&redacted_args)
         ));
     }
 
@@ -673,6 +681,99 @@ mod tests {
             legacy_runtime_surface_warning(&cli, &normalized.original, normalized.explicit_surface)
                 .is_none()
         );
+    }
+
+    #[test]
+    fn legacy_warning_suggestion_redacts_relay_auth_token() {
+        // Regression: the suggested rewrite echoed the raw invocation, so a
+        // bare `--auto --relay-auth URL=TOKEN` reprinted the bearer token
+        // into terminal output and logs — the exact leak the `--relay-auth`
+        // value parser's error path promises never to make. The URL is the
+        // relay's public identity and survives; the token does not.
+        for args in [
+            vec![
+                "mesh-llm",
+                "--auto",
+                "--relay-auth",
+                "https://gated.example/=tok",
+            ],
+            vec![
+                "mesh-llm",
+                "--auto",
+                "--relay-auth=https://gated.example/=tok",
+            ],
+        ] {
+            let normalized = normalize_runtime_surface_args(args.clone());
+            let cli = Cli::parse_from(normalized.normalized.clone());
+
+            let warning = legacy_runtime_surface_warning(
+                &cli,
+                &normalized.original,
+                normalized.explicit_surface,
+            )
+            .expect("warning should be present");
+
+            assert!(!warning.contains("tok"), "token leaked for {args:?}");
+            assert!(
+                warning.contains("https://gated.example/=REDACTED"),
+                "URL should survive with the placeholder for {args:?}: {warning}"
+            );
+            assert!(
+                warning.contains("mesh-llm serve --auto"),
+                "non-credential args should pass through for {args:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn legacy_warning_client_suggestion_redacts_relay_auth_token() {
+        let normalized = normalize_runtime_surface_args([
+            "mesh-llm",
+            "--client",
+            "--relay-auth",
+            "https://gated.example/=tok",
+            "--auto",
+        ]);
+        let cli = Cli::parse_from(normalized.normalized.clone());
+
+        let warning =
+            legacy_runtime_surface_warning(&cli, &normalized.original, normalized.explicit_surface)
+                .expect("warning should be present");
+
+        assert!(!warning.contains("tok"), "token leaked: {warning}");
+        assert!(
+            warning.contains("mesh-llm client --relay-auth https://gated.example/=REDACTED"),
+            "client rewrite should keep the shape and redact the token: {warning}"
+        );
+    }
+
+    #[test]
+    fn legacy_warning_suggestion_redacts_join_invite_token() {
+        // Same leak class as relay-auth: the entire `--join` value is an
+        // invite token, so nothing of it survives into the suggestion.
+        for args in [
+            vec!["mesh-llm", "--join", "invite-token-123"],
+            vec!["mesh-llm", "--join=invite-token-123"],
+        ] {
+            let normalized = normalize_runtime_surface_args(args.clone());
+            let cli = Cli::parse_from(normalized.normalized.clone());
+
+            let warning = legacy_runtime_surface_warning(
+                &cli,
+                &normalized.original,
+                normalized.explicit_surface,
+            )
+            .expect("warning should be present");
+
+            assert!(
+                !warning.contains("invite-token-123"),
+                "invite token leaked for {args:?}"
+            );
+            assert!(
+                warning.contains("--join REDACTED") || warning.contains("--join=REDACTED"),
+                "join should survive as a placeholder for {args:?}: {warning}"
+            );
+        }
     }
 
     #[test]

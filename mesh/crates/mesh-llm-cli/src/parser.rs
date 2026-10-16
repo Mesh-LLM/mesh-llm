@@ -2,6 +2,7 @@ mod commands;
 mod logging_help;
 mod normalization;
 mod runtime_surface_help;
+mod suggestion_redaction;
 mod validation;
 
 pub use commands::{
