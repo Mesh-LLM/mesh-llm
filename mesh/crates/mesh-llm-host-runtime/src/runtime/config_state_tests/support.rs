@@ -98,6 +98,7 @@ pub(super) fn minimal_valid_config() -> MeshConfig {
         owner_control: Default::default(),
         telemetry: Default::default(),
         analytics: Default::default(),
+        updates: Default::default(),
         defaults: None,
         runtime: Default::default(),
         models: vec![],

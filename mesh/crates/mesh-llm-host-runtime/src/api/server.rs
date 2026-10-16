@@ -124,6 +124,9 @@ async fn spawn_inflight_watcher(state: MeshApi) {
 
 fn spawn_latest_version_check(state: MeshApi) {
     tokio::spawn(async move {
+        if !state.inner.lock().await.update_check {
+            return;
+        }
         let Some(latest) = crate::system::autoupdate::latest_release_version().await else {
             return;
         };

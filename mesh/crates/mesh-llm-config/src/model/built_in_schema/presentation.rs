@@ -237,6 +237,13 @@ fn process_setting_presentation(rendered: &str) -> Option<SettingPresentation> {
             10,
         )
         .hint("toggle")),
+        "updates.check" => Some(sp(
+            "Check for updates",
+            "Look for a newer release at startup and show it in the console. Turn off when a package manager updates mesh-llm. `MESH_LLM_NO_UPDATE_CHECK` overrides it.",
+            MESHLLM_CATEGORY,
+            40,
+        )
+        .hint("toggle")),
         "telemetry.enabled" => Some(sp(
             "Telemetry export",
             "Enable opt-in metrics export. Ambient OTel environment variables do not enable export by themselves.",
