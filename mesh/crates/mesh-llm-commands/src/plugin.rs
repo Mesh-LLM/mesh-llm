@@ -1,4 +1,5 @@
 use std::io::Write;
+use std::path::Path;
 
 use anyhow::{Result, bail};
 use mesh_llm_plugin_manager::defaults::{
@@ -42,9 +43,10 @@ pub struct InactivePluginRow {
 pub async fn run_plugin_command(
     command: &PluginCommand,
     runtime_rows: Option<&PluginListRows>,
+    config_path: Option<&Path>,
 ) -> Result<bool> {
     match command {
-        PluginCommand::InstallDefaults { off: false } => install_defaults()?,
+        PluginCommand::InstallDefaults { off: false } => install_defaults(config_path)?,
         PluginCommand::InstallDefaults { off: true } => turn_off_default_plugins()?,
         PluginCommand::Install {
             reference,
@@ -89,14 +91,18 @@ fn operator_run_plugins(entries: &[mesh_llm_config::PluginConfigEntry]) -> BTree
         .collect()
 }
 
+fn configured_operator_plugins(config_path: Option<&Path>) -> Result<BTreeSet<String>> {
+    let config = mesh_llm_config::load_config(config_path)?;
+    Ok(operator_run_plugins(&config.plugins))
+}
+
 /// Install the defaults from this release's bundled copy; never downloads.
-fn install_defaults() -> Result<()> {
+fn install_defaults(config_path: Option<&Path>) -> Result<()> {
     if default_plugins_opted_out() || DEFAULT_PLUGINS.is_empty() {
         return Ok(());
     }
     let options = PluginInstallOptions::from_env()?;
-    let config = mesh_llm_config::load_config(None)?;
-    let configured = operator_run_plugins(&config.plugins);
+    let configured = configured_operator_plugins(config_path)?;
     let mut progress = CliPluginProgress::default();
     let outcomes =
         provision_bundled_defaults(DEFAULT_PLUGINS, &configured, &options, &mut progress);
@@ -625,6 +631,21 @@ url = "unix:///run/remote.sock"
         assert!(!configured.contains("capsules"));
         assert!(configured.contains("operator-run"));
         assert!(configured.contains("remote"));
+    }
+
+    #[test]
+    fn install_defaults_uses_the_selected_config_for_operator_plugins() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("alternate.toml");
+        std::fs::write(
+            &path,
+            "[[plugin]]\nname = \"capsules\"\ncommand = \"/opt/capsules\"\n",
+        )
+        .unwrap();
+
+        let configured = configured_operator_plugins(Some(&path)).unwrap();
+
+        assert!(configured.contains("capsules"));
     }
 
     fn installed_default(store: &PluginStore, enabled: bool) {
