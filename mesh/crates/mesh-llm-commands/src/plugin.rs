@@ -9,7 +9,7 @@ use mesh_llm_plugin_manager::defaults::{
 use mesh_llm_plugin_manager::install::install_plugin_archive;
 use mesh_llm_plugin_manager::{
     PluginCatalog, PluginInstallOptions, PluginProgressEvent, PluginProgressReporter, PluginStore,
-    default_store_root, install_plugin, update_plugin,
+    PluginTarget, default_store_root, install_plugin, update_plugin,
 };
 use reqwest::Client;
 use std::collections::BTreeSet;
@@ -201,29 +201,48 @@ async fn update(name: &str) -> Result<()> {
 
 fn set_enabled(name: &str, enabled: bool) -> Result<()> {
     let store = PluginStore::new(default_store_root()?);
-    set_enabled_in(&store, name, enabled, &mut mesh_llm_events::console_err())
+    // The target a node start installs defaults for; none on a platform the
+    // plugin manager does not support.
+    let target = PluginTarget::current().ok();
+    set_enabled_in(
+        &store,
+        name,
+        enabled,
+        target.as_ref().map(PluginTarget::triple),
+        &mut mesh_llm_events::console_err(),
+    )
 }
 
 fn set_enabled_in(
     store: &PluginStore,
     name: &str,
     enabled: bool,
+    target: Option<&str>,
     err: &mut impl Write,
 ) -> Result<()> {
     // A default that is not installed (for example right after a delete) is
     // turned off, or back on, by a record a node start respects.
     // Enabling a default always removes that record, installed or not, so a
     // stale one never outlives an install.
-    let is_default = default_plugin(name).is_some();
+    let default = default_plugin(name);
+    let is_default = default.is_some();
     if is_default && enabled {
         store.set_default_turned_off(name, false)?;
     }
     if is_default && store.load_optional(name)?.is_none() {
-        if enabled {
+        // A start installs a default only on a target this build pins it for.
+        let pinned = default
+            .zip(target)
+            .is_some_and(|(default, target)| default.has_pin_for(target));
+        if enabled && pinned {
             writeln!(
                 err,
                 "✅ Enabled {name}: the node installs it from its bundled copy when it next starts"
             )?;
+        } else if enabled {
+            // Say what `plugins install-defaults` says: the next start installs nothing.
+            writeln!(err, "✅ Enabled {name}")?;
+            writeln!(err, "{}", no_reviewed_release_line(name))?;
         } else {
             store.set_default_turned_off(name, true)?;
             writeln!(
@@ -285,6 +304,11 @@ fn deleted_default_note(name: &str) -> String {
     )
 }
 
+/// A default with no pin for this platform: nothing is installed.
+fn no_reviewed_release_line(name: &str) -> String {
+    format!("ℹ️  No reviewed {name} release for this platform; not installed")
+}
+
 /// One line for a default that provisioning left alone; none for one already current.
 fn left_alone_line(name: &str, outcome: &DefaultPluginOutcome) -> Option<String> {
     match outcome {
@@ -299,9 +323,7 @@ fn left_alone_line(name: &str, outcome: &DefaultPluginOutcome) -> Option<String>
             "ℹ️  Default {name} not installed: you turned it off \
              (run `mesh-llm plugins enable {name}` to have it installed again)"
         )),
-        DefaultPluginOutcome::UnsupportedPlatform => Some(format!(
-            "ℹ️  No reviewed {name} release for this platform; not installed"
-        )),
+        DefaultPluginOutcome::UnsupportedPlatform => Some(no_reviewed_release_line(name)),
         DefaultPluginOutcome::NotBundled => Some(format!(
             "ℹ️  Default {name} not installed: this install carries no bundled copy of it, \
              and a default plugin is never downloaded"
@@ -667,11 +689,54 @@ url = "unix:///run/remote.sock"
             .unwrap();
     }
 
+    /// A target this build pins capsules for.
+    const PINNED: Option<&str> = Some("x86_64-unknown-linux-gnu");
+
+    #[test]
+    fn enabling_an_uninstalled_default_says_the_next_start_installs_it() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = PluginStore::new(temp.path());
+        let mut err = Vec::new();
+        set_enabled_in(&store, "capsules", true, PINNED, &mut err).unwrap();
+        let err = String::from_utf8(err).unwrap();
+        assert_eq!(
+            err,
+            "✅ Enabled capsules: the node installs it from its bundled copy when it next starts\n"
+        );
+    }
+
+    #[test]
+    fn enabling_a_default_with_no_pin_for_the_target_says_what_install_defaults_says() {
+        for target in [Some("x86_64-pc-windows-msvc"), None] {
+            let temp = tempfile::tempdir().unwrap();
+            let store = PluginStore::new(temp.path());
+            store.set_default_turned_off("capsules", true).unwrap();
+            let mut err = Vec::new();
+            set_enabled_in(&store, "capsules", true, target, &mut err).unwrap();
+            let err = String::from_utf8(err).unwrap();
+            assert_eq!(
+                err,
+                format!(
+                    "✅ Enabled capsules\n{}\n",
+                    left_alone_line("capsules", &DefaultPluginOutcome::UnsupportedPlatform)
+                        .unwrap()
+                ),
+                "{target:?}"
+            );
+            assert!(!err.contains("bundled copy"), "{err}");
+            assert!(
+                !store.default_turned_off("capsules"),
+                "enabling still removes the turned-off record"
+            );
+        }
+    }
+
     #[test]
     fn disabling_a_plugin_that_is_not_installed_and_not_a_default_fails() {
         let temp = tempfile::tempdir().unwrap();
         let store = PluginStore::new(temp.path());
-        let error = set_enabled_in(&store, "not-a-default", false, &mut Vec::new()).unwrap_err();
+        let error =
+            set_enabled_in(&store, "not-a-default", false, PINNED, &mut Vec::new()).unwrap_err();
         assert!(error.to_string().contains("not installed"), "{error:#}");
         assert!(!store.default_turned_off("not-a-default"));
     }
@@ -680,9 +745,9 @@ url = "unix:///run/remote.sock"
     fn disabling_an_uninstalled_default_records_it_and_enabling_removes_it() {
         let temp = tempfile::tempdir().unwrap();
         let store = PluginStore::new(temp.path());
-        set_enabled_in(&store, "capsules", false, &mut Vec::new()).unwrap();
+        set_enabled_in(&store, "capsules", false, PINNED, &mut Vec::new()).unwrap();
         assert!(store.default_turned_off("capsules"));
-        set_enabled_in(&store, "capsules", true, &mut Vec::new()).unwrap();
+        set_enabled_in(&store, "capsules", true, PINNED, &mut Vec::new()).unwrap();
         assert!(!store.default_turned_off("capsules"));
     }
 
@@ -693,7 +758,7 @@ url = "unix:///run/remote.sock"
         // Turned off while not installed, then installed explicitly anyway.
         store.set_default_turned_off("capsules", true).unwrap();
         installed_default(&store, false);
-        set_enabled_in(&store, "capsules", true, &mut Vec::new()).unwrap();
+        set_enabled_in(&store, "capsules", true, PINNED, &mut Vec::new()).unwrap();
         assert!(!store.default_turned_off("capsules"));
         assert!(store.load("capsules").unwrap().enabled);
     }
@@ -703,7 +768,7 @@ url = "unix:///run/remote.sock"
         let temp = tempfile::tempdir().unwrap();
         let store = PluginStore::new(temp.path());
         installed_default(&store, true);
-        set_enabled_in(&store, "capsules", false, &mut Vec::new()).unwrap();
+        set_enabled_in(&store, "capsules", false, PINNED, &mut Vec::new()).unwrap();
         assert!(!store.load("capsules").unwrap().enabled);
         assert!(!store.default_turned_off("capsules"));
     }
@@ -727,7 +792,7 @@ url = "unix:///run/remote.sock"
             "{err}"
         );
 
-        set_enabled_in(&store, "capsules", true, &mut Vec::new()).unwrap();
+        set_enabled_in(&store, "capsules", true, PINNED, &mut Vec::new()).unwrap();
         assert!(!store.default_turned_off("capsules"));
     }
 

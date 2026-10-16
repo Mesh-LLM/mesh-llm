@@ -93,6 +93,12 @@ pub fn default_plugin(name: &str) -> Option<&'static DefaultPlugin> {
 }
 
 impl DefaultPlugin {
+    /// Whether this build pins a reviewed release of this default for
+    /// `target`. A target without one never installs it.
+    pub fn has_pin_for(&self, target: &str) -> bool {
+        self.pin_for(target).is_some()
+    }
+
     pub(crate) fn pin_for(&self, target: &str) -> Option<PinnedRelease<'static>> {
         self.sha256
             .iter()
@@ -266,6 +272,12 @@ mod tests {
         allows: &[Surface::WebUi],
         capabilities: &[],
     };
+
+    #[test]
+    fn a_default_has_a_pin_only_for_the_targets_it_lists() {
+        assert!(NOTES.has_pin_for(LINUX));
+        assert!(!NOTES.has_pin_for("x86_64-pc-windows-msvc"));
+    }
 
     fn installed(version: &str, managed: bool, enabled: bool) -> InstalledPluginMetadata {
         InstalledPluginMetadata {
