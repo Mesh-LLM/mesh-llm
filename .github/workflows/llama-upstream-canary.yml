@@ -9,7 +9,7 @@ on:
         type: string
         default: ''
       upstream_sha:
-        description: Optional exact upstream commit (defaults to latest stable release)
+        description: Optional exact upstream commit (defaults to newest release or prerelease)
         type: string
         default: ''
       force_certify:
@@ -46,7 +46,7 @@ jobs:
           runner-profile: hosted-bare
           allow_depot_remote_cache: 'false'
           allow_native_github_cache: 'false'
-      - name: Select stable upstream release or explicit commit
+      - name: Select newest upstream release or prerelease, or explicit commit
         id: upstream
         if: ${{ inputs.mesh_ref == '' }}
         timeout-minutes: 3

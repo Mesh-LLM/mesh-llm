@@ -187,15 +187,19 @@ job, as used by the llama canary, remains a follow-up for this older repair path
 
 **Llama Upgrade** (`llama-upstream-canary.yml`) runs daily or on trusted-main dispatch. It freezes
 one main source SHA and the upstream target before any hardware work. The
-default target is GitHub's latest published stable llama.cpp release, resolved
+default target is the newest published llama.cpp release or prerelease, resolved
 by the Rust `repository llama-upstream-release` command. The hosted resolver
-rejects drafts, prereleases and non-version tags, peels the release tag to an
-exact commit, and records both tag and SHA in the summary. API errors, missing
+compares publication times across the complete paginated metadata feed, excluding
+drafts. It peels the selected tag to an exact commit and records its kind,
+publication time, tag and SHA in the summary. API errors, missing
 releases and moving tags fail before hardware work; there is no `master`
 fallback. Public API reads use the workflow's read-only token only in that
-selection step, with a 120-second total lookup budget. An explicit full
-`upstream_sha` remains a deliberate override; empty or `latest` means the latest
-stable release. `mesh_ref` bypasses this lookup and certifies its existing pin.
+selection step. Fixed read-only GraphQL queries fetch metadata without assets;
+REST resolves the tag. A 120-second total budget, 1 MiB response cap and
+1000-page ceiling bound the lookup; incomplete pagination fails without choosing
+a partial result. An explicit full `upstream_sha` remains a deliberate override;
+empty or `latest` means the newest release or prerelease. `mesh_ref` bypasses
+this lookup and certifies its existing pin.
 Release selection does not waive our candidate or independent verification.
 Unchanged
 scheduled/forced runs build once and certify the complete roster. Every
