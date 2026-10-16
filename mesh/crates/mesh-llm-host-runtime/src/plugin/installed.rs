@@ -73,16 +73,20 @@ pub(crate) fn configured_external_plugin_spec(
         .filter(|value| !value.is_empty())
         .map(str::to_string);
     let mut startup = PluginStartupOptions::from_config(&entry.startup);
-    let installed_metadata = if command.is_none() {
-        installed_plugin_metadata_for_name(&entry.name)
-            .ok()
-            .flatten()
-    } else {
-        None
-    };
-    if installed_metadata
-        .as_ref()
-        .is_some_and(|metadata| metadata.default_managed)
+    // Package assets and identity still belong to an explicitly selected
+    // installed executable, but never to an unrelated same-name command.
+    let installed_metadata = installed_plugin_metadata_for_name(&entry.name)
+        .ok()
+        .flatten()
+        .filter(|metadata| {
+            command
+                .as_deref()
+                .is_none_or(|command| Path::new(command) == metadata.executable_path())
+        });
+    if command.is_none()
+        && installed_metadata
+            .as_ref()
+            .is_some_and(|metadata| metadata.default_managed)
     {
         startup.optional = true;
     }
