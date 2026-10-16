@@ -737,3 +737,13 @@ Also run what applies:
 Finish with changed files, validation results, expected skips, unresolved
 risks, external state changes, and live configuration that could not be
 verified.
+
+## Repository-owned Jianyang AgentX
+
+`.gi/templates.yaml` owns Jianyang repository jobs. AgentX orchestration belongs
+in typed Rust automation, with thin Just build/run recipes and a locked upstream
+harness environment under `skippy/evals/agentx`. Smoke results and local-corpus
+exports marked `submission_valid=false` must never enter performance history.
+Migration of the live template-source registration follows review; preview runs
+use Jianyang's existing template renderer with immutable PR source, then submit
+the rendered specification so unrelated jobs keep their production default ref.

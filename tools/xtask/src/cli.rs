@@ -174,6 +174,7 @@ pub(crate) enum CliCommand<'a> {
     SplitEvidence(&'a [String]),
     CiValidate(&'a str, &'a [String]),
     ReplayMatrix(&'a [String]),
+    Agentx(&'a [String]),
     Laya(&'a [String]),
     AgentPickModel(&'a [String]),
     WorkloadOracleEvidence(&'a [String]),
@@ -481,6 +482,9 @@ impl<'a> Cli<'a> {
             }
             [domain, scope, rest @ ..] if domain == "automation" && scope == "rewriter-report" => {
                 CliCommand::RewriterReport(rest)
+            }
+            [domain, scope, rest @ ..] if domain == "automation" && scope == "agentx" => {
+                CliCommand::Agentx(rest)
             }
             [domain, scope, rest @ ..] if domain == "automation" && scope == "replay-matrix" => {
                 CliCommand::ReplayMatrix(rest)

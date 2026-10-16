@@ -39,6 +39,9 @@
       "release-runtime-build"
     ],
     "just/skippy.just": [
+      "agentx",
+      "agentx-build",
+      "agentx-setup",
       "bench-corpus",
       "competitive-benchmark-build",
       "competitive-inputs-helper-build",

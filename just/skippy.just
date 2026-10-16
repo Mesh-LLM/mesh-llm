@@ -245,3 +245,19 @@ skippy-layer-package-fetch *ARGS:
 [positional-arguments]
 decisions-smoke *ARGS:
     @just automation-run automation decisions-smoke "$@"
+
+# AgentX's external environment is locked; its Python harness stays upstream-owned.
+agentx-setup:
+    uv sync --locked --project skippy/evals/agentx
+
+# Independent unpatched llama.cpp baseline, pinned to the candidate's upstream.
+agentx-build: agentx-setup
+    just skippy-release cuda
+    git init .deps/agentx-llama
+    git -C .deps/agentx-llama fetch --depth 1 https://github.com/ggml-org/llama.cpp.git {{ trim(read("skippy/llama_cpp/upstream.txt")) }}
+    git -C .deps/agentx-llama checkout --detach FETCH_HEAD
+    cmake -S .deps/agentx-llama -B .deps/agentx-llama-build -DCMAKE_BUILD_TYPE=Release -DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=121 -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_SERVER=ON
+    cmake --build .deps/agentx-llama-build --config Release --target llama-server -j 8
+
+agentx model profile output:
+    just automation-run automation agentx run --model {{ quote(model) }} --profile {{ quote(profile) }} --output {{ quote(output) }}

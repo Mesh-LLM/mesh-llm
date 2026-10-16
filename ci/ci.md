@@ -1998,3 +1998,12 @@ configuration or prescribe attention/recurrent cache representations. Loaded
 native graphs and memory exporters own cache admission. Split correctness still
 uses genuine planner output and binary stage servers. Cache-hit assertions run
 on immediate repeated requests without publication sleeps or retries.
+
+## Jianyang AgentX
+
+The external Jianyang job inventory is now source-owned in
+[`.gi/templates.yaml`](../.gi/templates.yaml). Its `agentx` job runs paired
+llama.cpp/Skippy cells, with a small smoke profile and pinned upstream harness.
+See [AgentX operations](../skippy/docs/AGENTX.md) for registration migration and
+validity. This replaces the Jianyang `agentic-replay` entry; the separately
+owned GitHub trajectory qualification workflow is unchanged.

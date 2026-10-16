@@ -1756,3 +1756,10 @@ Standalone OpenAI, cache-reuse, and System One smokes now use `skippy serve
 stage serializer are removed. The server derives cache capabilities from its
 loaded native graph and memory; tests supply only public resource/cache budgets.
 Split parity continues to use native planner evidence and binary stage servers.
+
+## Jianyang AgentX templates
+
+`.gi/templates.yaml` carries the repository-owned Jianyang inventory, replacing
+its `agentic-replay` entry with `agentx`. Other entries are migrated unchanged.
+See [AgentX](../../../../skippy/docs/AGENTX.md) for registration cutover, pinned
+inputs, smoke semantics and the distinction from GitHub trajectory qualification.
