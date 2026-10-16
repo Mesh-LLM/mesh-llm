@@ -590,7 +590,8 @@ The hosted resolver validates the release and peels its tag to an exact commit
 before any hardware work. Missing releases, malformed metadata, moved tags or
 API failures stop resolution without a fallback. Record the release tag and
 commit in the run summary. An explicit full `upstream_sha` remains an operator
-override; `mesh_ref` keeps its existing certify-only semantics. Upstream release
+override; `mesh_ref` defaults to certify-only; explicit `mesh_action=certify-and-publish`
+adds independent verification and publication of the unchanged selected commit. Upstream release
 qualification never replaces the complete candidate and independent family
 passes required before publishing an upgrade PR. Only the hosted upstream
 selection step may receive the read-only GitHub token for public upstream API
@@ -627,7 +628,11 @@ Manual `mesh_ref` is an explicitly authorized trusted-code path, not a PR
 runner exception. Keep the workflow/controller on protected main, resolve only
 same-repository branch-reachable commits once, and bind the controller and
 selected source independently in every handoff. Certify the selected revision's
-existing pin and patches without repair or publication. Selected build scripts
+existing pin and patches without repair. Default `mesh_action=certify` does not
+publish. Explicit `mesh_action=certify-and-publish` requires a complete candidate
+pass and a fresh independent build and complete family pass on the same frozen
+selected commit before publishing that exact commit as a PR to main. It never
+changes the selected pin or invokes coding repair. Selected build scripts
 and battery code execute on persistent lab runners, so operators must choose
 trusted revisions; a main controller does not sandbox that source.
 

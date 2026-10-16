@@ -220,9 +220,16 @@ stops without invoking Goose and denies publication.
 Manual `mesh_ref` dispatches accept an explicitly trusted same-repository branch
 or full commit SHA. Resolution freezes the SHA once, requires it to be reachable
 from a repository branch, and reads its existing llama.cpp pin. `upstream_sha`
-cannot be combined with this input. Keep the Actions workflow ref on `main`;
-selecting `mesh_ref` always runs a complete certify-only pass, without Goose,
-source repair, an independent upgrade-verification pass, or PR publication.
+cannot be combined with this input. Keep the Actions workflow ref on `main`.
+The default `mesh_action=certify` runs one complete pass without repair or
+publication. Explicit `mesh_action=certify-and-publish` runs that pass, then a
+fresh independent build and complete family pass on the same frozen commit.
+Only two green passes permit the hosted publisher to create a PR to `main`
+with that exact commit. Both modes keep its existing pin and never invoke Goose.
+The independent selected build admits the digest-bound first-pass package; each
+pass has separate build directories and evidence. Failed certification publishes
+no branch or PR. Publication refuses a selected revision with no diff from main's
+merge base. Closing an earlier PR and merging the replacement remain operator actions.
 The approved Rust source-plan API uses the current controller planner for every
 selected SHA; source build scripts and the battery remain selected-source code.
 Rust `gguf_metadata` yields `metadata_admitted`; other modes stay `pending`, with downgrade rejection.
@@ -231,11 +238,18 @@ reject any changed source identity. This is an operator-authorized trusted-code
 path on persistent lab machines, not isolation for untrusted PRs or fork code.
 Leaving `mesh_ref` empty preserves scheduled and upstream-upgrade behavior.
 
-To certify a recovered branch after this workflow is on main:
+To certify a recovered branch without publication:
 
 ```sh
 gh workflow run llama-upstream-canary.yml --ref main \
   -f mesh_ref=scammed/recover-llama-pin-35582541955
+```
+
+To independently certify and publish a trusted revision:
+
+```sh
+gh workflow run llama-upstream-canary.yml --ref main \
+  -f mesh_ref=FULL_MESH_COMMIT_SHA -f mesh_action=certify-and-publish
 ```
 
 The run summary records the resolved MeshLLM SHA and existing llama.cpp pin;

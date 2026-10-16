@@ -24,6 +24,7 @@ pub(super) fn check(workflows: &BTreeMap<String, Node>) -> DynResult<()> {
     }
     let env = h::member(step, "env")?;
     h::binding(env, "MESH_REF", "${{ inputs.mesh_ref }}")?;
+    h::binding(env, "MESH_ACTION", "${{ inputs.mesh_action }}")?;
     h::binding(env, "UPSTREAM", "${{ inputs.upstream_sha }}")?;
     h::binding(
         env,
@@ -64,6 +65,7 @@ pub(super) fn check(workflows: &BTreeMap<String, Node>) -> DynResult<()> {
         &["\"$MESH_LLM_AUTOMATION_BIN\"", "repository", "selected-ref"],
         &[
             ("--ref", "\"$MESH_REF\""),
+            ("--action", "\"${MESH_ACTION:-certify}\""),
             ("--event", "\"$GITHUB_EVENT_NAME\""),
             ("--upstream", "\"$UPSTREAM\""),
             (
@@ -79,7 +81,7 @@ pub(super) fn check(workflows: &BTreeMap<String, Node>) -> DynResult<()> {
 fn selected_output_order(run: &str) -> DynResult<()> {
     let run = run.replace("\\\n", " ");
     let (prefix, rest) = run
-        .split_once("if [[ -n \"$MESH_REF\" ]]; then")
+        .split_once("if [[ -n \"$MESH_REF\" || \"${MESH_ACTION:-certify}\" != certify ]]; then")
         .ok_or("explicit selected-ref branch missing")?;
     for key in ["mesh_source=", "certify=", "mode=", "upstream=", "changed="] {
         if prefix.contains(key) {
