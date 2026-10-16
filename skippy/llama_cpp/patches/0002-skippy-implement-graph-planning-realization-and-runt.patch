@@ -1,4 +1,4 @@
-From ca206f0bed26e480725cb1ad580e48627123c264 Mon Sep 17 00:00:00 2001
+From ecb5bedcd83493493b94889d7652aabce960c778 Mon Sep 17 00:00:00 2001
 From: James Dumay <james@generalinference.xyz>
 Date: Tue, 13 Oct 2026 22:06:42 +1100
 Subject: [PATCH 2/6] feat(skippy): realize admitted stages from live graphs
@@ -28,9 +28,9 @@ Subject: [PATCH 2/6] feat(skippy): realize admitted stages from live graphs
  src/skippy/graph_identity.cpp           | 1092 +++++++++++++++++++++
  src/skippy/graph_identity.h             |   71 ++
  src/skippy/model_lifecycle.cpp          |  155 +++
- src/skippy/model_load_config.cpp        |  194 ++++
- src/skippy/model_load_config_internal.h |   25 +
- src/skippy/model_loading.cpp            | 1191 +++++++++++++++++++++++
+ src/skippy/model_load_config.cpp        |  213 ++++
+ src/skippy/model_load_config_internal.h |   35 +
+ src/skippy/model_loading.cpp            | 1189 +++++++++++++++++++++++
  src/skippy/model_loading_internal.h     |   38 +
  src/skippy/model_package.cpp            |  782 +++++++++++++++
  src/skippy/model_source.cpp             |  463 +++++++++
@@ -47,7 +47,7 @@ Subject: [PATCH 2/6] feat(skippy): realize admitted stages from live graphs
  src/skippy/speculative_internal.h       |   32 +
  src/skippy/stage_execution_contract.cpp |   72 ++
  src/skippy/stage_execution_contract.h   |   15 +
- src/skippy/stage_plan.cpp               |  701 +++++++++++++
+ src/skippy/stage_plan.cpp               |  709 ++++++++++++++
  src/skippy/stage_realization.cpp        |  293 ++++++
  src/skippy/stage_realization.h          |   21 +
  src/skippy/stage_slice_plan.cpp         |  871 +++++++++++++++++
@@ -59,9 +59,9 @@ Subject: [PATCH 2/6] feat(skippy): realize admitted stages from live graphs
  src/skippy/state_memory.h               |   16 +
  src/skippy/tokenization.cpp             |  179 ++++
  src/skippy/verification.cpp             |  270 +++++
- src/skippy/workloads.cpp                |  371 +++++++
+ src/skippy/workloads.cpp                |  372 +++++++
  src/skippy/workloads_internal.h         |    8 +
- 57 files changed, 16025 insertions(+)
+ 57 files changed, 16061 insertions(+)
  create mode 100644 src/skippy/abi.cpp
  create mode 100644 src/skippy/activation.cpp
  create mode 100644 src/skippy/activation_internal.h
@@ -6033,10 +6033,10 @@ index 000000000..caa9fcd6d
 +} // extern "C"
 diff --git a/src/skippy/model_load_config.cpp b/src/skippy/model_load_config.cpp
 new file mode 100644
-index 000000000..22aa384f8
+index 000000000..2e8d3c4ed
 --- /dev/null
 +++ b/src/skippy/model_load_config.cpp
-@@ -0,0 +1,194 @@
+@@ -0,0 +1,213 @@
 +#include "skippy.h"
 +#include "skippy/errors.h"
 +#include "skippy/environment.h"
@@ -6231,12 +6231,31 @@ index 000000000..22aa384f8
 +        params.op_offload = config->op_offload == SKIPPY_TRISTATE_TRUE;
 +    }
 +}
++
++skippy_context_capabilities skippy_context_capabilities_of(const llama_model * model) {
++    skippy_context_capabilities capabilities;
++    if (model == nullptr) {
++        return capabilities;
++    }
++    const bool encoder_decoder = llama_model_has_encoder(model) && llama_model_has_decoder(model);
++    // A classifier workload serves the pooled classifier projection. A model
++    // that also carries a generation head keeps its logits, because upstream
++    // drops the LM head when a context runs in pooled embeddings mode.
++    capabilities.classifier = (model->cls != nullptr || model->cls_out != nullptr) &&
++                              model->output == nullptr;
++    capabilities.pooled_embeddings = !encoder_decoder &&
++            (capabilities.classifier ||
++             (llama_model_has_encoder(model) ||
++              (model->hparams.pooling_type != LLAMA_POOLING_TYPE_NONE &&
++               model->hparams.pooling_type != LLAMA_POOLING_TYPE_UNSPECIFIED)));
++    return capabilities;
++}
 diff --git a/src/skippy/model_load_config_internal.h b/src/skippy/model_load_config_internal.h
 new file mode 100644
-index 000000000..0f7c83139
+index 000000000..554d2bdd3
 --- /dev/null
 +++ b/src/skippy/model_load_config_internal.h
-@@ -0,0 +1,25 @@
+@@ -0,0 +1,35 @@
 +#pragma once
 +
 +#include "skippy/common.h"
@@ -6262,12 +6281,22 @@ index 000000000..0f7c83139
 +void skippy_apply_context_hardware_config(
 +        const skippy_runtime_config * config,
 +        llama_context_params & params);
++
++// Model-derived context capabilities. The runtime derives its embedding and
++// classifier mode from the loaded model, and stage planning must observe the
++// same graph shape, so both read them through this one helper.
++struct skippy_context_capabilities {
++    bool classifier        = false;
++    bool pooled_embeddings = false;
++};
++struct llama_model;
++skippy_context_capabilities skippy_context_capabilities_of(const llama_model * model);
 diff --git a/src/skippy/model_loading.cpp b/src/skippy/model_loading.cpp
 new file mode 100644
-index 000000000..ea92120e4
+index 000000000..60a27669f
 --- /dev/null
 +++ b/src/skippy/model_loading.cpp
-@@ -0,0 +1,1191 @@
+@@ -0,0 +1,1189 @@
 +#include "skippy.h"
 +#include "skippy/errors.h"
 +#include "skippy/environment.h"
@@ -6290,6 +6319,7 @@ index 000000000..ea92120e4
 +#include "llama-memory-recurrent.h"
 +#include "llama-model.h"
 +#include "llama-model-loader.h"
++#include "model_load_config_internal.h"
 +#include "skippy/graph_identity.h"
 +#include "../vendor/nlohmann/json.hpp"
 +
@@ -6900,12 +6930,9 @@ index 000000000..ea92120e4
 +    }
 +
 +    const bool encoder_decoder = llama_model_has_encoder(model) && llama_model_has_decoder(model);
-+    const bool classifier_workload = model->cls != nullptr || model->cls_out != nullptr;
-+    const bool embedding_workload = !encoder_decoder &&
-+            (classifier_workload ||
-+             (llama_model_has_encoder(model) ||
-+              (model->hparams.pooling_type != LLAMA_POOLING_TYPE_NONE &&
-+               model->hparams.pooling_type != LLAMA_POOLING_TYPE_UNSPECIFIED)));
++    const auto capabilities = skippy_context_capabilities_of(model);
++    const bool classifier_workload = capabilities.classifier;
++    const bool embedding_workload = capabilities.pooled_embeddings;
 +    const uint32_t configured_lane_count = config != nullptr && config->lane_count > 0
 +        ? static_cast<uint32_t>(config->lane_count)
 +        : 1;
@@ -11749,15 +11776,16 @@ index 000000000..bcb56cdd7
 +                                            bool                              embedding_input = false);
 diff --git a/src/skippy/stage_plan.cpp b/src/skippy/stage_plan.cpp
 new file mode 100644
-index 000000000..d5c645d38
+index 000000000..380e1eaad
 --- /dev/null
 +++ b/src/skippy/stage_plan.cpp
-@@ -0,0 +1,701 @@
+@@ -0,0 +1,709 @@
 +#include "skippy/stage_plan.h"
 +
 +#include "errors.h"
 +#include "graph_build_inputs.h"
 +#include "graph_identity.h"
++#include "model_load_config_internal.h"
 +#include "package_tensor_binding.h"
 +#include "stage_slice_plan.h"
 +#include "../vendor/nlohmann/json.hpp"
@@ -12042,6 +12070,13 @@ index 000000000..d5c645d38
 +    params.n_threads_batch = 1;
 +    // Resolve graph capabilities through the ordinary context, as execution does.
 +    params.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_AUTO;
++    // A classifier or pooled embedding context runs without the LM head, so the
++    // profile must observe the same model-derived context mode as the runtime.
++    const auto capabilities = skippy_context_capabilities_of(planner.model.get());
++    if (capabilities.classifier) {
++        params.pooling_type = LLAMA_POOLING_TYPE_RANK;
++    }
++    params.embeddings = capabilities.pooled_embeddings;
 +    // Semantic planning must observe the model graph before backend rewrites.
 +    params.op_offload = false;
 +    const skippy_graph_build_inputs build_inputs{};
@@ -16098,14 +16133,15 @@ index 000000000..e078d867c
 +} // extern "C"
 diff --git a/src/skippy/workloads.cpp b/src/skippy/workloads.cpp
 new file mode 100644
-index 000000000..be5c49fa0
+index 000000000..82919e864
 --- /dev/null
 +++ b/src/skippy/workloads.cpp
-@@ -0,0 +1,371 @@
+@@ -0,0 +1,372 @@
 +#include "skippy/workloads.h"
 +
 +#include "llama.h"
 +#include "llama-model.h"
++#include "model_load_config_internal.h"
 +#include "skippy/errors.h"
 +#include "skippy/rerank_template.h"
 +#include "skippy/runtime_support.h"
@@ -16128,7 +16164,7 @@ index 000000000..be5c49fa0
 +    const bool                    has_decoder = llama_model_has_decoder(model->model);
 +    const enum llama_pooling_type pooling     = llama_pooling_type(model->ctx);
 +
-+    if (model->model->cls != nullptr || model->model->cls_out != nullptr || pooling == LLAMA_POOLING_TYPE_RANK) {
++    if (skippy_context_capabilities_of(model->model).classifier || pooling == LLAMA_POOLING_TYPE_RANK) {
 +        return SKIPPY_WORKLOAD_RERANK;
 +    }
 +    if (has_encoder && has_decoder) {
@@ -16488,5 +16524,5 @@ index 000000000..cc9279e7e
 +// attached from an earlier chat request.
 +void skippy_prepare_non_chat_workload(skippy_session * session);
 -- 
-2.56.0
+2.55.0
 

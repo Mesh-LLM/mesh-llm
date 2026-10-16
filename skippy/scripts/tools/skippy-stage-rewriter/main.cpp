@@ -1245,6 +1245,195 @@ bool nonOverlapping(std::vector<Edit> edits) {
   return true;
 }
 
+// A builder constructor may keep only the final projection and delegate the
+// decoder body to a same-class member helper (for example
+// `<model>::graph::graph` -> `<model>::graph::build_backbone`). Identify that
+// helper from the token embedding producer it owns so the stage rewrite
+// analyses and edits the helper's body rather than the thin constructor.
+class HelperCallVisitor final : public RecursiveASTVisitor<HelperCallVisitor> {
+public:
+  bool TraverseLambdaExpr(clang::LambdaExpr *) { return true; }
+
+  bool VisitCallExpr(CallExpr *call) {
+    calls_.push_back(call);
+    return true;
+  }
+
+  const std::vector<const CallExpr *> &calls() const { return calls_; }
+
+private:
+  std::vector<const CallExpr *> calls_;
+};
+
+// True when the statement sequence owns exactly one token embedding producer,
+// the same condition the decoder analysis proves for its rewrite target.
+bool ownsTokenEmbeddingProducer(const Stmt *body) {
+  if (body == nullptr) {
+    return false;
+  }
+  HelperCallVisitor visitor;
+  visitor.TraverseStmt(const_cast<Stmt *>(body));
+  size_t embedding_calls = 0;
+  size_t token_gathers = 0;
+  for (const CallExpr *call : visitor.calls()) {
+    const FunctionDecl *callee = directCallee(call);
+    if (callee == nullptr) {
+      continue;
+    }
+    const std::string name = callee->getNameAsString();
+    if (name == "build_inp_embd") {
+      if (call->getNumArgs() > 0) {
+        ++embedding_calls;
+      }
+      continue;
+    }
+    if (name == "ggml_get_rows" && call->getNumArgs() >= 2 &&
+        containsName(call->getArg(1), "tok_embd")) {
+      ++token_gathers;
+    }
+  }
+  if (embedding_calls > 0) {
+    return embedding_calls == 1;
+  }
+  return token_gathers == 1;
+}
+
+// True when `target` is `owner` or one of its base classes. The base chain is
+// walked structurally because a lookup through the DeclContext does not see
+// inherited members.
+bool declaredInClassHierarchy(const clang::CXXRecordDecl *owner,
+                              const clang::CXXRecordDecl *target) {
+  if (owner == nullptr || target == nullptr) {
+    return false;
+  }
+  if (owner->getCanonicalDecl() == target->getCanonicalDecl()) {
+    return true;
+  }
+  const clang::CXXRecordDecl *definition = owner->getDefinition();
+  if (definition == nullptr) {
+    return false;
+  }
+  for (const auto & base : definition->bases()) {
+    if (declaredInClassHierarchy(base.getType()->getAsCXXRecordDecl(),
+                                 target)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// Resolve the single same-class member helper that owns the constructor's
+// decoder body. Only callees reached from the constructor body are inspected,
+// so the evidence stays local to the translation unit. Anything else keeps the
+// constructor body and the existing refusal paths.
+const CompoundStmt *
+delegatedDecoderBody(const CXXConstructorDecl *constructor,
+                     const CompoundStmt *constructor_body) {
+  if (constructor == nullptr || constructor_body == nullptr) {
+    return nullptr;
+  }
+  if (ownsTokenEmbeddingProducer(constructor_body)) {
+    return nullptr;
+  }
+  const clang::CXXRecordDecl *owner = constructor->getParent();
+  if (owner == nullptr) {
+    return nullptr;
+  }
+  HelperCallVisitor visitor;
+  visitor.TraverseStmt(const_cast<CompoundStmt *>(constructor_body));
+  std::vector<const CompoundStmt *> candidates;
+  for (const CallExpr *call : visitor.calls()) {
+    const FunctionDecl *callee = directCallee(call);
+    if (callee == nullptr || !callee->hasBody()) {
+      continue;
+    }
+    // The helper belongs to the constructor's class or to a base class of it,
+    // so a derived builder that reuses an inherited decoder body resolves to
+    // the same translation unit as the class that declares it.
+    if (!declaredInClassHierarchy(
+            owner, llvm::dyn_cast_or_null<clang::CXXRecordDecl>(
+                       callee->getParent()))) {
+      continue;
+    }
+    const auto *callee_body =
+        llvm::dyn_cast<CompoundStmt>(callee->getBody());
+    if (callee_body == nullptr ||
+        !ownsTokenEmbeddingProducer(callee_body)) {
+      continue;
+    }
+    if (std::find(candidates.begin(), candidates.end(), callee_body) ==
+        candidates.end()) {
+      candidates.push_back(callee_body);
+    }
+  }
+  return candidates.size() == 1 ? candidates.front() : nullptr;
+}
+
+// A class may define several same-named constructor overloads (for example a
+// full builder and a helper-only `no_build` variant). Report the parameter
+// types so every declaration keeps a distinct identity in the report.
+std::string constructorIdentity(const CXXConstructorDecl *constructor) {
+  std::string identity = constructor->getQualifiedNameAsString();
+  identity += "(";
+  for (unsigned index = 0; index < constructor->getNumParams(); ++index) {
+    if (index != 0) {
+      identity += ", ";
+    }
+    identity += constructor->getParamDecl(index)->getType().getAsString();
+  }
+  identity += ")";
+  return identity;
+}
+
+// A decoder-body delegate returns the graph's hidden state, so its declared
+// return type is a graph tensor. Void hierarchy callbacks (for example
+// llm_graph_context::cb) only label nodes and own no decoder body.
+bool producesGraphTensor(const FunctionDecl *callee) {
+  if (callee == nullptr) {
+    return false;
+  }
+  const clang::QualType result = callee->getReturnType();
+  if (result.isNull() || !result->isPointerType()) {
+    return false;
+  }
+  const clang::TagDecl *pointee = result->getPointeeType()->getAsTagDecl();
+  return pointee != nullptr && pointee->getName() == "ggml_tensor";
+}
+
+// True when the constructor owns no token embedding producer and reaches
+// exactly one member of its class hierarchy that is declared, but not defined,
+// in this translation unit. Its decoder body therefore lives in the file that
+// declares the class; that file's own builder owns the block annotations.
+bool delegatesRemoteDecoderBody(const CXXConstructorDecl *constructor,
+                                const CompoundStmt *constructor_body) {
+  if (constructor == nullptr || constructor_body == nullptr) {
+    return false;
+  }
+  if (ownsTokenEmbeddingProducer(constructor_body)) {
+    return false;
+  }
+  const clang::CXXRecordDecl *owner = constructor->getParent();
+  if (owner == nullptr || !owner->hasDefinition()) {
+    return false;
+  }
+  HelperCallVisitor visitor;
+  visitor.TraverseStmt(const_cast<CompoundStmt *>(constructor_body));
+  size_t remote = 0;
+  for (const CallExpr *call : visitor.calls()) {
+    const FunctionDecl *callee = directCallee(call);
+    if (callee == nullptr || callee->hasBody() ||
+        !producesGraphTensor(callee)) {
+      continue;
+    }
+    if (declaredInClassHierarchy(
+            owner, llvm::dyn_cast_or_null<clang::CXXRecordDecl>(
+                       callee->getParent()))) {
+      ++remote;
+    }
+  }
+  return remote == 1;
+}
+
 class BuilderCallback final : public MatchFinder::MatchCallback {
 public:
   void run(const MatchFinder::MatchResult &result) override {
@@ -1271,11 +1460,29 @@ public:
     if (llvm::sys::fs::real_path(sm.getFilename(location), canonical_file)) {
       return;
     }
-    const std::string file = canonical_file.str().str();
+    std::string file = canonical_file.str().str();
     const std::string models_root = SourceRoot + "/src/models/";
     if (!llvm::StringRef(file).starts_with(models_root)) {
       return;
     }
+    // A decoder body inherited from a base class lives in the translation unit
+    // that declares it; attribute the analysis to that file so the emitted
+    // edits match the bytes they replace.
+    const auto file_of = [&](SourceLocation at) -> std::optional<std::string> {
+      const SourceLocation spelled = sm.getSpellingLoc(at);
+      if (!spelled.isValid() || !sm.isWrittenInMainFile(spelled)) {
+        return std::nullopt;
+      }
+      llvm::SmallString<256> resolved;
+      if (llvm::sys::fs::real_path(sm.getFilename(spelled), resolved)) {
+        return std::nullopt;
+      }
+      std::string candidate = resolved.str().str();
+      if (!llvm::StringRef(candidate).starts_with(models_root)) {
+        return std::nullopt;
+      }
+      return candidate;
+    };
     const std::string qualified = constructor->getQualifiedNameAsString();
     if (qualified.find("::graph") == std::string::npos) {
       return;
@@ -1283,14 +1490,46 @@ public:
 
     BuilderReport report;
     report.file = llvm::StringRef(file).drop_front(SourceRoot.size() + 1).str();
-    report.constructor = qualified;
+    report.constructor = constructorIdentity(constructor);
     report.line = sm.getSpellingLineNumber(location);
 
-    FactVisitor facts;
-    facts.TraverseStmt(const_cast<Stmt *>(constructor->getBody()));
-
-    const auto *constructor_body =
+    const auto *owner_body =
         llvm::dyn_cast<CompoundStmt>(constructor->getBody());
+
+    // A constructor that only prepares the shared helpers of a derived graph
+    // builds no graph of its own, so it owns no decoder block to partition.
+    if (owner_body != nullptr && owner_body->body_empty()) {
+      report.verdict = "supported_auxiliary";
+      report.proof.execution_scope = "final_stage_sidecar";
+      report.proof.scope_evidence.emplace_back("helper_construction_only");
+      reports_.push_back(std::move(report));
+      return;
+    }
+
+    // A delegated decoder body is the rewrite target; the constructor only
+    // calls it.
+    const CompoundStmt *constructor_body =
+        delegatedDecoderBody(constructor, owner_body);
+    if (constructor_body != nullptr) {
+      report.proof.scope_evidence.emplace_back("delegated_decoder_body");
+      if (const auto delegated_file = file_of(constructor_body->getBeginLoc())) {
+        file = *delegated_file;
+        report.file = llvm::StringRef(file).drop_front(SourceRoot.size() + 1).str();
+      } else {
+        constructor_body = owner_body;
+      }
+    } else if (delegatesRemoteDecoderBody(constructor, owner_body)) {
+      report.verdict = "supported_auxiliary";
+      report.proof.execution_scope = "final_stage_sidecar";
+      report.proof.scope_evidence.emplace_back("inherited_decoder_body");
+      reports_.push_back(std::move(report));
+      return;
+    } else {
+      constructor_body = owner_body;
+    }
+
+    FactVisitor facts;
+    facts.TraverseStmt(const_cast<CompoundStmt *>(constructor_body));
 
     const bool has_begin = facts.calls["begin_block"].size() == 1;
     // A transformed loop has one terminal end marker plus one marker on each
@@ -1750,6 +1989,16 @@ private:
                   return std::tie(left.offset, left.length) >
                          std::tie(right.offset, right.length);
                 });
+      // A decoder body inherited from a base class is reached from every
+      // builder that calls it, so identical replacements arrive more than once.
+      edits.erase(std::unique(edits.begin(), edits.end(),
+                              [](const Edit &left, const Edit &right) {
+                                return std::tie(left.offset, left.length,
+                                                left.text) ==
+                                       std::tie(right.offset, right.length,
+                                                right.text);
+                              }),
+                  edits.end());
       for (const auto &edit : edits) {
         if (edit.offset + edit.length > contents.size()) {
           llvm::errs() << "edit outside file " << source_file << "\n";

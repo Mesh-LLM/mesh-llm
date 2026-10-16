@@ -9,7 +9,7 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/olmo2.cpp b/src/models/olmo2.cpp
-index fe5dc88d4469fd1a8caf74509d68c9e5af7cc1b9..0880c07321143db07245a63e8cf20222c69f5f97 100644
+index db2de3afd72a1d41df80b73b76f3bcfe05a69ffe..1e1ccf957465b9395c0c2862ad28c19b1e920cda 100644
 --- a/src/models/olmo2.cpp
 +++ b/src/models/olmo2.cpp
 @@ -85,6 +85,8 @@ llama_model_olmo2::graph<iswa>::graph(const llama_model & model, const llm_graph

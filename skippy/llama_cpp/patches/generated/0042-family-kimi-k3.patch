@@ -9,7 +9,7 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/kimi-k3.cpp b/src/models/kimi-k3.cpp
-index 5a6282b7cbca298c377a26722bd41adaa4875997..3b0f86313e59e900056310fd2ba4eac7f5221102 100644
+index ac5173683b47d883988eea9d6c69d117732b6b93..3521fd151a0871bb265798df5d2d4cce49294410 100644
 --- a/src/models/kimi-k3.cpp
 +++ b/src/models/kimi-k3.cpp
 @@ -275,6 +275,8 @@ llama_model_kimi_k3::graph::graph(const llama_model & model, const llm_graph_par

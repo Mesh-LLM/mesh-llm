@@ -9,7 +9,7 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/minicpm3.cpp b/src/models/minicpm3.cpp
-index beb8d67b2ab33471dedfeca96116fba877f872ea..b146f3cefd9fd79a5142d6fb62bef09d2246c919 100644
+index 7e01153dc66a7d94e08f03abb92b1c9128555e0b..c70c918257dd5611d1692d0e383ee95e5673d4db 100644
 --- a/src/models/minicpm3.cpp
 +++ b/src/models/minicpm3.cpp
 @@ -89,6 +89,8 @@ llama_model_minicpm3::graph::graph(const llama_model & model, const llm_graph_pa

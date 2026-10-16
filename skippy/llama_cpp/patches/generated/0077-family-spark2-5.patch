@@ -9,7 +9,7 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/spark2-5.cpp b/src/models/spark2-5.cpp
-index 107448777c5cf2d973f5be56d435644168cb7a80..02cb7d914aeb5a4d78050b16ac76cfde71fccf60 100644
+index 970b32ba603ce5977875cf326a0971b9b6cafa0c..7fee374517dbe9b6ebbb199e9c6b07e0384c9649 100644
 --- a/src/models/spark2-5.cpp
 +++ b/src/models/spark2-5.cpp
 @@ -67,6 +67,8 @@ llama_model_spark2_5::graph::graph(const llama_model & model, const llm_graph_pa

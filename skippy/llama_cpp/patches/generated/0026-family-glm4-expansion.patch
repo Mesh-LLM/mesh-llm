@@ -9,7 +9,7 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/chatglm.cpp b/src/models/chatglm.cpp
-index 7ae5b938fde36a916b4ccef10584f077a953aa63..0fa6cca8db0d38642f38c9b8c806735fc7eb1762 100644
+index 54e3913c4a2d5cbb92f691cfed6de08a3875725a..47481e314dbb77992a45b10500df5703d06b6331 100644
 --- a/src/models/chatglm.cpp
 +++ b/src/models/chatglm.cpp
 @@ -73,6 +73,8 @@ llama_model_chatglm::graph::graph(const llama_model & model, const llm_graph_par

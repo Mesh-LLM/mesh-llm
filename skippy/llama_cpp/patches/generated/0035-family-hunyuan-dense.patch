@@ -9,7 +9,7 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/hunyuan-vl.cpp b/src/models/hunyuan-vl.cpp
-index 18b6eaf8cd515b469f0f978b4558bbeb25ac3051..28af2c2b404be3bdd4e1c692c5c54f6c48da17ff 100644
+index fa7183190e47c734d8b28492703cfea35ebda0ce..9315735856b20649b042f2e4003ecdf61ac71f1b 100644
 --- a/src/models/hunyuan-vl.cpp
 +++ b/src/models/hunyuan-vl.cpp
 @@ -83,6 +83,8 @@ llama_model_hunyuan_vl::graph::graph(const llama_model & model, const llm_graph_

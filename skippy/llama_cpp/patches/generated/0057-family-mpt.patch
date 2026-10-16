@@ -9,7 +9,7 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/mpt.cpp b/src/models/mpt.cpp
-index d094fd9f80bcf757b0fda0b30922c07605e52374..8d1814436ca5ed3868492dc353a57edaaa96515c 100644
+index 69d8b8c66bca1c391a26125fa586a75479190487..2cbbce302f58c18f61554b62a2f7a08ec86a7cb1 100644
 --- a/src/models/mpt.cpp
 +++ b/src/models/mpt.cpp
 @@ -90,6 +90,8 @@ llama_model_mpt::graph::graph(const llama_model & model, const llm_graph_params
