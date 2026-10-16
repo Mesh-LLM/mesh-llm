@@ -637,6 +637,7 @@ mod tests {
 
     #[test]
     fn refills_from_an_optimistic_suffix_without_indexing_it() {
+        skippy_runtime::test_support::require_native_runtime();
         let committed = vec![1, 2, 3, 1, 2, 3, 1, 2];
         let mut cache = Some(HistoryNgramProposer::new_cache(2, 2).unwrap());
         let initial = cache.as_mut().unwrap().propose(&committed, &[], 2).unwrap();
