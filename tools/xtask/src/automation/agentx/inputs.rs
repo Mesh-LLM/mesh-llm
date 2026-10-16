@@ -20,49 +20,42 @@ pub(super) fn prepare(
         .into_iter()
         .find(|model| model.key == key)
         .ok_or("unknown AgentX model")?;
-    let cache = std::env::var_os("AGENTX_CACHE")
-        .map(PathBuf::from)
-        .unwrap_or(root.join(".deps/agentx-inputs"));
-    std::fs::create_dir_all(&cache)?;
-    let weights = cache.join(&model.key).join(&model.revision);
+    let mut weights = None;
     for file in &model.files {
-        download(
+        let path = download(
             &root,
             &model.repo,
             &model.revision,
             &file.name,
-            &weights,
             false,
             &output,
         )?;
-        verify(&weights.join(&file.name), &file.sha256)?;
+        verify(&path, &file.sha256)?;
+        weights.get_or_insert(path);
     }
     download(
         &root,
         &model.tokenizer,
         &model.tokenizer_revision,
         "",
-        &weights,
         false,
         &output,
     )?;
-    let dataset = cache.join(DATA_REVISION);
-    download(
+    let dataset = download(
         &root,
         DATA_REPO,
         DATA_REVISION,
         "traces.jsonl",
-        &dataset,
         true,
         &output,
     )?;
-    verify(&dataset.join("traces.jsonl"), DATA_SHA)?;
+    verify(&dataset, DATA_SHA)?;
     let traces = output.join("traces");
-    materialize(&dataset.join("traces.jsonl"), &traces, profile)?;
+    materialize(&dataset, &traces, profile)?;
     let prepared = Prepared {
         root,
         output,
-        weights: weights.join(&model.files.first().ok_or("empty model files")?.name),
+        weights: weights.ok_or("empty model files")?,
         dataset: traces,
         model,
         profile,
@@ -75,16 +68,13 @@ fn download(
     repo: &str,
     revision: &str,
     file: &str,
-    destination: &Path,
     dataset: bool,
     output: &Path,
-) -> DynResult<()> {
+) -> DynResult<PathBuf> {
     let hf = root.join("skippy/evals/agentx/.venv/bin/hf");
-    let mut args = command::strings(&["download", repo, "--revision", revision]);
-    if !file.is_empty() {
-        args.push("--local-dir".into());
-        args.push(destination.to_string_lossy().into());
-    }
+    // Standard HF cache resolution reuses the host's blobs/snapshots and writes
+    // only missing pins into that same mounted HF_HOME. Never use --local-dir.
+    let mut args = command::strings(&["download", repo, "--revision", revision, "--quiet"]);
     if dataset {
         args.extend(command::strings(&["--repo-type", "dataset"]));
     }
@@ -104,11 +94,24 @@ fn download(
             "chat_template*",
         ]));
     }
+    let log = output.join("download");
     command::run(
         &command::spec(root, hf.to_str().ok_or("hf path")?, &args)?,
         7200,
-        &output.join("download"),
-    )
+        &log,
+    )?;
+    cached_path(&std::fs::read_to_string(log.with_extension("stdout.log"))?)
+}
+
+fn cached_path(stdout: &str) -> DynResult<PathBuf> {
+    let text = stdout.trim();
+    let path = PathBuf::from(text);
+    if text.contains(['\n', '\r']) || !path.is_absolute() || !path.exists() {
+        return Err("HF download did not return one existing absolute cache path".into());
+    }
+    // Retain the snapshot path rather than canonicalizing to blobs: split GGUF
+    // loaders and shard verification resolve sibling files in the snapshot.
+    Ok(path)
 }
 pub(super) fn verify(path: &Path, expected: &str) -> DynResult<()> {
     let actual = crate::product::digest::file_sha256(path).map_err(|failure| failure.error)?;
@@ -185,5 +188,21 @@ mod tests {
     fn corrupted_download_fails_before_use() {
         let temp = tempfile::NamedTempFile::new().unwrap();
         assert!(verify(temp.path(), DATA_SHA).is_err());
+    }
+    #[cfg(unix)]
+    #[test]
+    fn hf_cache_resolution_preserves_snapshot_symlinks_and_rejects_ambiguous_output() {
+        let cache = tempfile::tempdir().unwrap();
+        let blob = cache.path().join("blob");
+        std::fs::write(&blob, b"weights").unwrap();
+        let snapshot = cache.path().join("snapshot.gguf");
+        std::os::unix::fs::symlink(&blob, &snapshot).unwrap();
+        assert_eq!(
+            cached_path(&format!("{}\n", snapshot.display())).unwrap(),
+            snapshot
+        );
+        assert!(cached_path(&format!("{}\n{}", blob.display(), snapshot.display())).is_err());
+        assert!(cached_path("relative/model.gguf").is_err());
+        assert!(cached_path(cache.path().join("missing").to_str().unwrap()).is_err());
     }
 }

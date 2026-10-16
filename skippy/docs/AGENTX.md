@@ -59,16 +59,23 @@ image by immutable ID after checking its ARM64 architecture and source label.
 The image contains both compiled engines, native runtimes, and the harness.
 Build time is outside the measured cells.
 
-Only the persistent input cache, campaign output and JY artifact directory are
-mounted. The container uses the job account's UID/GID and `--gpus all`; neither
+The host's `HF_HOME`, campaign output and JY artifact directory are mounted.
+The registered Spark template sets `HF_HOME=/mnt/lab/huggingface`, the existing
+NFS-backed Hugging Face cache, and binds it at the identical path inside Docker.
+Adjust that host setting when enrolling a Spark with a different cache location.
+The container uses the job account's UID/GID and `--gpus all`; neither
 the Docker socket nor host networking is passed into it. Both HTTP servers and
 the harness communicate over container-local loopback. The controller attaches
 stdout/stderr to JY, removes its named container on exit/cancellation, and records
 `container-image.json` and `container-lifecycle.json`. A timeout inside the image
 also enforces the remaining JY deadline if the host controller disappears.
 
-The output directory must be new. `AGENTX_CACHE` can point to a persistent input
-cache; otherwise `.deps/agentx-inputs` is used. Downloads precede measurement and
+The output directory must be new. `HF_HOME` must already exist on the host.
+Weights, tokenizers and the dataset use the standard HF blobs/snapshots cache;
+existing pinned files are reused and missing files download into that same host
+cache. There is no separate weight copy or `--local-dir` download. Snapshot paths
+are preserved so split GGUF shards resolve their siblings correctly.
+Downloads precede measurement and
 verify every weight shard against [models.json](../evals/agentx/models.json).
 No projector is needed for these text-only traces. Tokenizers have independent
 immutable Hugging Face revisions.

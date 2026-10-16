@@ -1763,6 +1763,7 @@ Split parity continues to use native planner evidence and binary stage servers.
 its `agentic-replay` entry with `agentx`. Other entries are migrated unchanged.
 The benchmark executes in a source-labelled ARM64 CUDA Docker image on the
 leased Spark. JY's template owns image build and the Rust container lifecycle;
-there is no host-native benchmark fallback.
+there is no host-native benchmark fallback. The host's `HF_HOME` is mounted at
+the same path and owns all cached model, tokenizer and dataset downloads.
 See [AgentX](../../../../skippy/docs/AGENTX.md) for registration cutover, pinned
 inputs, smoke semantics and the distinction from GitHub trajectory qualification.

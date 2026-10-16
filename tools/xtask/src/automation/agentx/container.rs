@@ -8,7 +8,7 @@ struct Launch {
     root: PathBuf,
     output: PathBuf,
     artifacts: PathBuf,
-    cache: PathBuf,
+    hf_home: PathBuf,
     commit: String,
     name: String,
     seconds: u64,
@@ -64,14 +64,16 @@ fn prepare(output: PathBuf) -> DynResult<Launch> {
         std::env::var_os("JIANYANG_ARTIFACT_DIR").ok_or("JY artifact directory missing")?,
     )
     .canonicalize()?;
-    let cache = PathBuf::from(std::env::var_os("AGENTX_CACHE").ok_or("AGENTX_CACHE missing")?);
-    std::fs::create_dir_all(&cache)?;
+    let hf_home = PathBuf::from(std::env::var_os("HF_HOME").ok_or("host HF_HOME missing")?);
+    if !hf_home.is_absolute() || !hf_home.is_dir() {
+        return Err("host HF_HOME must be an existing absolute directory".into());
+    }
     let seconds = remaining(std::env::var("JIANYANG_DEADLINE_EPOCH")?.parse()?)?;
     Ok(Launch {
         root: std::env::current_dir()?,
         output,
         artifacts,
-        cache: cache.canonicalize()?,
+        hf_home,
         commit,
         name: format!("agentx-{run}"),
         seconds,
@@ -158,11 +160,12 @@ fn create_args(
         "--mount",
         &mount(&launch.artifacts, "/artifacts")?,
         "--mount",
-        &mount(&launch.cache, "/cache")?,
+        &mount(
+            &launch.hf_home,
+            launch.hf_home.to_str().ok_or("HF_HOME path")?,
+        )?,
         "--env",
-        "AGENTX_CACHE=/cache/inputs",
-        "--env",
-        "HF_HOME=/cache/huggingface",
+        &format!("HF_HOME={}", launch.hf_home.display()),
         "--env",
         "JIANYANG_ARTIFACT_DIR=/artifacts",
         "--env",

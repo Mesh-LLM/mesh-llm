@@ -1021,6 +1021,9 @@ templates:
   - key: agentx
     name: AgentX — llama.cpp vs Skippy
     group: Benchmarks
+    env:
+      # The registered Sparks' host HF_HOME, mounted at the same container path.
+      HF_HOME: /mnt/lab/huggingface
     labels:
       model: "${model}"
       profile: "${profile}"
@@ -1070,7 +1073,6 @@ templates:
       grace_s: 60
     command: |
       export PATH="$HOME/.cargo/bin:$HOME/.local/bin:/usr/local/cuda/bin:$PATH"
-      export AGENTX_CACHE="$HOME/.cache/agentx-inputs"
       cd "$JIANYANG_REPO_DIR"
       mkdir -p "$PWD/.deps/agentx-runs"
       sg docker -c 'just agentx "${model}" "${profile}" "$PWD/.deps/agentx-runs/$JIANYANG_RUN_ID"'

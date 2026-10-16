@@ -10,6 +10,8 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
 ENV PATH="/root/.cargo/bin:/root/.local/bin:${PATH}"
 RUN cargo install just --version 1.58.0 --locked
 RUN curl -LsSf https://astral.sh/uv/0.13.0/install.sh | sh
+RUN apt-get update && apt-get install -y --no-install-recommends patchelf \
+    && rm -rf /var/lib/apt/lists/*
 ENV SKIPPY_CUDA_ARCHITECTURES=121
 ENV CMAKE_BUILD_PARALLEL_LEVEL=8
 WORKDIR /workspace
