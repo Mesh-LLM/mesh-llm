@@ -203,7 +203,7 @@ fn attached(launch: &Launch, cancellation: &process::Cancellation) -> DynResult<
     )?;
     let report = process::supervise_inherited_closed_stdin(
         &spec,
-        &command::limits(launch.seconds + 30),
+        &docker_limits(launch.seconds + 30),
         cancellation,
     )?;
     if report.outcome != process::Outcome::Exited
@@ -224,13 +224,22 @@ fn remove(launch: &Launch) -> DynResult<()> {
     )?;
     let report = process::supervise_inherited_closed_stdin(
         &spec,
-        &command::limits(20),
+        &docker_limits(3),
         &process::Cancellation::default(),
     )?;
     if !report.cleanup.complete || !report.status.is_some_and(|status| status.success()) {
         return Err("Docker container removal failed".into());
     }
     Ok(())
+}
+
+fn docker_limits(seconds: u64) -> process::Limits {
+    // JY escalates SIGTERM to SIGKILL after ten seconds. Leave time to remove
+    // the daemon-owned container after terminating an unresponsive Docker client.
+    let mut limits = command::limits(seconds);
+    limits.graceful_shutdown = std::time::Duration::from_secs(1);
+    limits.forced_shutdown = std::time::Duration::from_secs(1);
+    limits
 }
 
 #[cfg(test)]

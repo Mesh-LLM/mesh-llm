@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1
 FROM nvcr.io/nvidia/cuda:13.0.1-devel-ubuntu24.04@sha256:7d2f6a8c2071d911524f95061a0db363e24d27aa51ec831fcccf9e76eb72bc92
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -13,7 +14,17 @@ ENV SKIPPY_CUDA_ARCHITECTURES=121
 ENV CMAKE_BUILD_PARALLEL_LEVEL=8
 WORKDIR /workspace
 COPY . .
-RUN just agentx-build && just automation-bootstrap
+RUN --mount=type=cache,id=agentx-rust199-registry,target=/root/.cargo/registry,sharing=locked \
+    --mount=type=cache,id=agentx-rust199-git,target=/root/.cargo/git,sharing=locked \
+    --mount=type=cache,id=agentx-rust199-target,target=/workspace/target,sharing=locked \
+    --mount=type=cache,id=agentx-cuda130-native,target=/workspace/.deps,sharing=locked \
+    --mount=type=cache,id=agentx-cuda130-sccache,target=/root/.cache/sccache,sharing=locked \
+    just agentx-build && just automation-bootstrap && \
+    mkdir -p /prepared/target/debug /prepared/target/release /prepared/.deps/agentx-llama-build && \
+    cp target/debug/xtask /prepared/target/debug/ && \
+    cp target/release/skippy /prepared/target/release/ && \
+    cp -a .deps/agentx-llama-build/bin /prepared/.deps/agentx-llama-build/
+RUN mv /prepared/target target && mv /prepared/.deps .deps && rmdir /prepared
 ARG SOURCE_COMMIT
 LABEL org.opencontainers.image.revision=$SOURCE_COMMIT
 # Runtime uses the caller's UID; installed tools and the harness remain readable.
