@@ -66,22 +66,26 @@ pub(crate) fn configured_external_plugin_spec(
             "tcp:// plugin control is unsupported because it has no authenticated capability handshake"
         );
     }
-    let mut startup = PluginStartupOptions::from_config(&entry.startup);
-    let installed_metadata = installed_plugin_metadata_for_name(&entry.name)
-        .ok()
-        .flatten();
-    if installed_metadata
-        .as_ref()
-        .is_some_and(|metadata| metadata.default_managed)
-    {
-        startup.optional = true;
-    }
     let command = entry
         .command
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_string);
+    let mut startup = PluginStartupOptions::from_config(&entry.startup);
+    let installed_metadata = if command.is_none() {
+        installed_plugin_metadata_for_name(&entry.name)
+            .ok()
+            .flatten()
+    } else {
+        None
+    };
+    if installed_metadata
+        .as_ref()
+        .is_some_and(|metadata| metadata.default_managed)
+    {
+        startup.optional = true;
+    }
 
     // An entry without its own command runs the store's copy, so the store's
     // enabled flag (`mesh-llm plugins disable`) decides whether it starts.

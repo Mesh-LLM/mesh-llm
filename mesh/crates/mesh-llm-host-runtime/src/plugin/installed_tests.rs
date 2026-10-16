@@ -154,6 +154,8 @@ fn explicit_command_still_runs_when_the_store_copy_is_disabled() {
         panic!("an entry with its own command ignores the store's enabled flag");
     };
     assert_eq!(spec.command, "/opt/capsules/bin");
+    assert!(!spec.startup.optional);
+    assert!(spec.installed_metadata.is_none());
 }
 
 #[test]
@@ -175,4 +177,9 @@ fn settings_only_entry_runs_the_enabled_store_copy() {
         metadata.executable_path().display().to_string()
     );
     assert!(spec.startup.optional);
+    assert!(
+        spec.installed_metadata
+            .as_ref()
+            .is_some_and(|metadata| metadata.default_managed)
+    );
 }
