@@ -248,18 +248,7 @@ fn preparation_and_existing_test_cadence_use_the_compiled_research_pin() {
         env!("CARGO_MANIFEST_DIR"),
         "/../../.github/workflows/ci-rust-tests-slice.yml"
     ));
-    let preparation = workflow
-        .find("uses: ./.github/actions/prepare-python-research-source")
-        .unwrap();
-    assert!(workflow[..preparation].contains(
-        "if: ${{ contains(fromJson(steps.resolve_batch_crates.outputs.crates), 'skippy-bench') }}"
-    ));
-    assert!(
-        preparation
-            < workflow
-                .find("name: Run isolated Cargo tests for the batch")
-                .unwrap()
-    );
+    assert!(!workflow.contains("uses: ./.github/actions/prepare-python-research-source"));
     let recipe = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../just/ci.just"));
     assert!(
         recipe

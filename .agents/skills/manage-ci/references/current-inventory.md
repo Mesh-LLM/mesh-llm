@@ -1365,7 +1365,7 @@ Split-certification roster generation now targets `skippy/crates/skippy-api/src/
 The release-bound recipe build script and admission checks move with this neutral
 owner; canary generation/check commands and enforcement policy are unchanged.
 
-The standalone command now lives in `skippy-cli` (binary `skippy`); `skippy-serving` is the Clap-free embedded service library. CLI source is included in Docker prechecks, affected-crate selection, split-serving ownership and the publish roster after its server dependency. Certification, benchmark, smoke and WAN lab launches use the new binary. `just skippy-cli-build` and `just skippy-cli-release-build` select the dynamic-runtime CLI.
+The standalone command now lives in `skippy-cli` (binary `skippy`); `skippy-serving` is the Clap-free embedded service library. CLI source is included in Docker prechecks, affected-crate selection, split-serving ownership and the publish roster after its server dependency. Certification, smoke and interactive launches use the new binary. `just skippy-cli-build` and `just skippy-cli-release-build` select the dynamic-runtime CLI.
 
 Mesh raw byte-stream interfaces and TCP/QUIC relay are owned by
 `mesh-llm-transport`, consumed by the host and client. The runtime-product
@@ -1756,3 +1756,9 @@ Standalone OpenAI, cache-reuse, and System One smokes now use `skippy serve
 stage serializer are removed. The server derives cache capabilities from its
 loaded native graph and memory; tests supply only public resource/cache budgets.
 Split parity continues to use native planner evidence and binary stage servers.
+
+Skippy benchmark retirement removes `skippy-bench` from current workspace and
+native crate lists, and removes its research-source preparation step from Rust
+test batches. The WAN Docker lab and its deployment contracts are retired.
+Metrics-server and interactive/debug recipes remain maintained. Frozen legacy
+planner fixtures continue to describe their historical workspace inputs.

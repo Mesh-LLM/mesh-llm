@@ -15,7 +15,6 @@ use crate::repo_consistency::{CargoMetadata, workspace_metadata};
 /// future product dependency. `mesh-client` is deliberately NOT exempt: the
 /// shipping host now depends on the `mesh-llm-client` package.
 const NON_PRODUCT_CRATES: &[&str] = &[
-    "skippy-bench",
     "skippy-package-builder",
     "llama-spec-bench",
     "skippy-quantize",

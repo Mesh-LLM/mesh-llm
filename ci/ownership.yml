@@ -598,15 +598,15 @@
     },
     {
       "domain": "backend-cuda",
-      "crates": ["llama-spec-bench", "mesh-llm-gpu-bench", "skippy-bench"]
+      "crates": ["llama-spec-bench", "mesh-llm-gpu-bench"]
     },
     {
       "domain": "backend-rocm",
-      "crates": ["llama-spec-bench", "mesh-llm-gpu-bench", "skippy-bench"]
+      "crates": ["llama-spec-bench", "mesh-llm-gpu-bench"]
     },
     {
       "domain": "backend-vulkan",
-      "crates": ["llama-spec-bench", "mesh-llm-gpu-bench", "skippy-bench"]
+      "crates": ["llama-spec-bench", "mesh-llm-gpu-bench"]
     },
     {
       "domain": "runtime-product",

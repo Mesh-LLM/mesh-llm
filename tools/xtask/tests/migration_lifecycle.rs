@@ -417,6 +417,3 @@ mod cache_family_moe_cli;
 #[cfg(unix)]
 #[path = "migration_lifecycle/mtp_cli.rs"]
 mod mtp_cli;
-
-#[path = "migration_lifecycle/wan_stage_deployment.rs"]
-mod wan_stage_deployment;

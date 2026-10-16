@@ -1977,15 +1977,9 @@ The [SDK checkpoint](required-sdk-python/sdk-source.json) is published; fresh an
 Hosted restore remains unqualified. A passing source contract or mock FFI test does not qualify the native
 bridge, model serving or real client requests.
 
-`prepare-python-research-source` restores and natively admits the fixed external
-research checkpoint in `ci/python-research-source.json` only for resolved Rust
-test batches containing `skippy-bench`. Its source tests retain their existing
-required cadence. For local `just test-all`, restore that checkout and set
-`MESH_PYTHON_RESEARCH_SOURCE` first; the recipe admits the same source before its
-workspace gates and does not download source or install research SDKs. The
-[research checkpoint](python-research-source.json) is published; fresh anonymous restore and native source admission passed.
-Hosted restore remains unqualified. Source admission does not qualify datasets, installed SDKs or
-benchmark results.
+The retired Skippy benchmark harness no longer selects external research-source
+preparation in Rust test batches. Explicit research source admission remains
+available for the separate optional research tools.
 
 The unused local `audit-depot-pr-isolation` implementation is removed. All 27
 protected callers still use their immutable published `ed07043` action, and the
