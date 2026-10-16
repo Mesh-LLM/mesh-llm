@@ -139,6 +139,9 @@ fn gpu_runner_gate(workflow: &Node) -> DynResult<()> {
     h::binding(job, "runs-on", "ubuntu-24.04")?;
     let steps = h::steps(job)?;
     let (check, step) = h::step(steps, "id", "check")?;
+    // With `if: false` the decision step's outputs are empty, which every
+    // consumer reads as "no qualified runner": both rows skip while enabled.
+    unconditional(step, "GPU runner decision")?;
     for backend in ["VULKAN", "ROCM"] {
         h::binding(
             h::member(step, "env")?,
@@ -157,6 +160,15 @@ fn gpu_runner_gate(workflow: &Node) -> DynResult<()> {
     let (report, step) = h::step(steps, "name", "Report GPU rows without a qualified runner")?;
     h::before(check, report)?;
     gpu_skip_report(step)
+}
+
+/// A condition or a tolerated failure would let a gate step vanish while its
+/// script still matches, as `cache_callers` rejects for its selector step.
+fn unconditional(step: &Node, what: &str) -> DynResult<()> {
+    if step.get("if").is_some() || step.get("continue-on-error").is_some() {
+        return Err(format!("{what} must run unconditionally and fail the gate on error").into());
+    }
+    Ok(())
 }
 
 fn script_lines(step: &Node) -> DynResult<Vec<String>> {
@@ -202,11 +214,8 @@ fn gpu_normalization(step: &Node) -> DynResult<()> {
 fn gpu_skip_report(step: &Node) -> DynResult<()> {
     // The summary is the only visible trace of a gated row that never ran, so
     // it reads the normalized decision, never the raw variable, and names every
-    // planned row that stays skipped. A condition or a tolerated failure would
-    // let the step vanish while its script still matches.
-    if step.get("if").is_some() || step.get("continue-on-error").is_some() {
-        return Err("GPU skip report must run unconditionally and fail the gate on error".into());
-    }
+    // planned row that stays skipped.
+    unconditional(step, "GPU skip report")?;
     let env = h::member(step, "env")?;
     for (backend, plan) in [("VULKAN", "linux-vulkan"), ("ROCM", "linux-rocm")] {
         h::binding(
@@ -537,6 +546,23 @@ mod tests {
             unreachable!()
         };
         steps
+    }
+    #[test]
+    fn gpu_decision_cannot_be_conditional_or_failure_tolerant() {
+        platforms(&workflows()).unwrap();
+        for (key, value) in [("if", "${{ false }}"), ("continue-on-error", "true")] {
+            let mut nodes = workflows();
+            let steps = gate_steps(&mut nodes);
+            let index = steps
+                .iter()
+                .position(|step| super::super::field(step, "id") == Some("check"))
+                .unwrap();
+            let Node::Map(entries) = &mut steps[index] else {
+                unreachable!()
+            };
+            entries.push((key.into(), Node::Scalar(value.into())));
+            assert!(platforms(&nodes).is_err(), "decision with {key}");
+        }
     }
     fn report_index(steps: &[Node]) -> usize {
         steps
