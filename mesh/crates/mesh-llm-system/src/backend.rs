@@ -255,11 +255,20 @@ fn send_signal_if_matches(
             crate::process::process_name_matches(pid, expected_comm)
         };
         if !matches {
-            if crate::process::process_liveness(pid) == crate::process::Liveness::Dead {
-                return SignalOutcome::AlreadyDead;
-            }
-            tracing::warn!("pid {pid} no longer matches {expected_comm}, skipping signal");
-            return SignalOutcome::Skipped;
+            // Only a process that is readable and different is someone
+            // else's; one whose identity could not be read is a failure to
+            // stop, not a stale record.
+            return match crate::process::process_liveness(pid) {
+                crate::process::Liveness::Dead => SignalOutcome::AlreadyDead,
+                crate::process::Liveness::Unknown => {
+                    tracing::warn!("could not read what pid {pid} is, not signalling it");
+                    SignalOutcome::Failed
+                }
+                crate::process::Liveness::Alive => {
+                    tracing::warn!("pid {pid} no longer matches {expected_comm}, skipping signal");
+                    SignalOutcome::Skipped
+                }
+            };
         }
     }
 
