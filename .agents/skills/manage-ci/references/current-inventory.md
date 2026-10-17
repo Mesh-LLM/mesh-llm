@@ -1075,7 +1075,9 @@ matched case-sensitively, because a GitHub Actions `==` comparison ignores
 case: the slice validates the raw values in a shell step and both rows depend
 on the normalized result rather than comparing the variable directly. The
 source-checked Laya action repeats the gate from that input, including when an
-older protected workflow definition still admits the job.
+older protected workflow definition still admits the job. The gate job writes
+every planned Vulkan or ROCm row to its step summary from the normalized
+result, and names the variable when the row stays skipped.
 
 The permanent Depot PR gate is documented in `ci/DEPOT_MIGRATION.md`; the
 accepted temporary findings and risks are in
