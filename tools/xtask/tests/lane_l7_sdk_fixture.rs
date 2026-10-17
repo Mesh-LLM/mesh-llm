@@ -18,7 +18,7 @@ fn port() -> u16 {
         .port()
 }
 
-fn execute(fail: bool, install: bool) -> (tempfile::TempDir, std::process::Output) {
+fn execute(fail: bool, install: bool, scenario: &str) -> (tempfile::TempDir, std::process::Output) {
     let root = tempfile::tempdir().unwrap();
     let root_path = root.path().canonicalize().unwrap();
     std::fs::write(
@@ -26,7 +26,7 @@ fn execute(fail: bool, install: bool) -> (tempfile::TempDir, std::process::Outpu
         if install {
             b"sdk-install".as_slice()
         } else {
-            b"success".as_slice()
+            scenario.as_bytes()
         },
     )
     .unwrap();
@@ -68,7 +68,7 @@ fn execute(fail: bool, install: bool) -> (tempfile::TempDir, std::process::Outpu
 
 #[test]
 fn fixture_hands_ready_identity_to_consumer_while_daemon_is_live() {
-    let (root, output) = execute(false, false);
+    let (root, output) = execute(false, false, "success");
     assert!(
         output.status.success(),
         "{}",
@@ -82,18 +82,51 @@ fn fixture_hands_ready_identity_to_consumer_while_daemon_is_live() {
 
 #[test]
 fn consumer_failure_rejects_fixture_after_ready_handoff() {
-    let (root, output) = execute(true, false);
+    let (root, output) = execute(true, false, "success");
     assert!(!output.status.success());
     assert_eq!(
         std::fs::read(root.path().join("consumer-handoff")).unwrap(),
         b"ready"
     );
-    assert!(!String::from_utf8_lossy(&output.stderr).contains("sdk-fixture-invite"));
+    let error = String::from_utf8_lossy(&output.stderr);
+    assert!(!error.contains("sdk-fixture-invite"));
+    assert!(error.contains("consumer: disposition=failure"), "{error}");
+    assert!(error.contains("exit_code=Some(23)"), "{error}");
+}
+
+#[test]
+fn daemon_shutdown_failure_is_distinguished_from_successful_consumer() {
+    let (_, output) = execute(false, false, "nonzero");
+    assert!(!output.status.success());
+    let error = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        error.contains("daemon: disposition=session-cleanup"),
+        "{error}"
+    );
+    assert!(error.contains("exit_code=Some(23)"), "{error}");
+    assert!(
+        error.contains("consumer: disposition=expected-exit"),
+        "{error}"
+    );
+    assert!(!error.contains("sdk-fixture-invite"));
+}
+
+#[test]
+fn forced_daemon_cleanup_is_reported_and_still_fails() {
+    let (_, output) = execute(false, false, "stubborn");
+    assert!(!output.status.success());
+    let error = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        error.contains("daemon: disposition=session-cleanup"),
+        "{error}"
+    );
+    assert!(error.contains("forced=true"), "{error}");
+    assert!(!error.contains("sdk-fixture-invite"));
 }
 
 #[test]
 fn artifact_installation_finishes_before_daemon_and_consumer_start() {
-    let (root, output) = execute(false, true);
+    let (root, output) = execute(false, true, "success");
     assert!(
         output.status.success(),
         "{}",

@@ -470,8 +470,6 @@ pub struct PrefixCacheConfig {
     pub shared_stride_tokens: Option<u32>,
     #[serde(default)]
     pub shared_record_limit: Option<u32>,
-    #[serde(default)]
-    pub payload_mode: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]

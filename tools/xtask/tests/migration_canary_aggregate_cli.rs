@@ -168,11 +168,18 @@ fn tampered_artifact_is_rejected_before_receipt_aggregation() -> TestResult {
 }
 
 #[test]
-fn selected_source_accepts_matching_certify_only_package() -> TestResult {
+fn selected_source_accepts_matching_candidate_and_independent_packages() -> TestResult {
+    for pass in ["repair-1", "verify-1"] {
+        selected_source_package(pass)?;
+    }
+    Ok(())
+}
+fn selected_source_package(pass: &str) -> TestResult {
     let mut given = Fixture::new()?;
     let path = given.path("package/identity.json");
     let mut identity: serde_json::Value = serde_json::from_slice(&fs::read(&path)?)?;
     identity["mesh_source"] = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into();
+    identity["pass_id"] = pass.into();
     let bytes = serde_json::to_vec(&identity)?;
     given.identity = fixture_files::hash_bytes(&bytes);
     fs::write(path, bytes)?;
@@ -180,6 +187,7 @@ fn selected_source_accepts_matching_certify_only_package() -> TestResult {
         let path = given.path(&format!("evidence/{family}/receipt.json"));
         let mut receipt: serde_json::Value = serde_json::from_slice(&fs::read(&path)?)?;
         receipt["identity_sha256"] = given.identity.clone().into();
+        receipt["pass_id"] = pass.into();
         fs::write(path, serde_json::to_vec(&receipt)?)?;
     }
 
@@ -210,13 +218,13 @@ fn help_does_not_read_package_or_emit_github_files() -> TestResult {
 }
 
 #[test]
-fn certify_only_package_mutations_refuse_before_summary_green_or_receipt_work() -> TestResult {
+fn selected_package_mutations_refuse_before_summary_green_or_receipt_work() -> TestResult {
     for (key, value) in [
         ("controller", serde_json::json!("c".repeat(40))),
         ("candidate", serde_json::json!("c".repeat(40))),
         ("base", serde_json::json!("c".repeat(40))),
         ("mesh_source", serde_json::json!("")),
-        ("pass_id", serde_json::json!("verify-1")),
+        ("pass_id", serde_json::json!("verify-2")),
         ("bundle_sha256", serde_json::json!("d".repeat(64))),
     ] {
         let mut given = Fixture::new()?;

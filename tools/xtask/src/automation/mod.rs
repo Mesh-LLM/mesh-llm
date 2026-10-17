@@ -44,7 +44,6 @@ pub(crate) mod logging_recovery;
 pub(crate) mod manual_smoke;
 pub(crate) mod native_artifact_identity;
 mod openai_exchange;
-pub(crate) mod openai_smoke_config;
 pub(crate) mod receipt_files;
 pub(crate) mod runtime_install;
 #[cfg(unix)]
@@ -60,7 +59,6 @@ pub(crate) mod tls_fixture;
 pub(crate) mod ui_build;
 pub(crate) mod wan_observation;
 pub(crate) mod wan_stage_deployment;
-pub(crate) mod workload_smoke_config;
 pub(crate) use crate::command_interrupt;
 pub(crate) mod daemon_readiness;
 pub(crate) mod hf_converted_artifact;

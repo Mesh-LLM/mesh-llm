@@ -6,18 +6,20 @@ and graph planning require no downloaded weights. These tests do not run numeric
 inference or replace real-model, projector, audio, OCR or encoder-decoder certification.
 
 The native CTest table in `src/skippy/tests/graph_contract_cases.cmake` is carried
-by core patch `0024-test-skippy-cover-the-complete-canary-graph-registry.patch`.
+by core patch `0006-test-cover-graph-derived-stage-contracts.patch`.
 `tools/xtask/src/repo_consistency/synthetic_graph_contracts.rs`, run by `just ci-validate`,
 compares every family, architecture, trunk depth, activation width, MTP count and
 test mode against `family-certified.json`. Missing, duplicate or stale rows fail.
 Adding an architecture requires an executable fixture; rejection modes are explicit.
 
-The separate `skippy_stage_program_replay` fixture installs a captured program
-and executes split replay, then deliberately corrupts admitted VIEW and RESHAPE
-recipes. The replay must reject out-of-storage views and changed element counts
-before GGML constructs a tensor. Its existing cases cover unsupported operations,
-input ownership and state binding. These focused checks exercise replay behavior;
-the roster checks below still cover structural contracts only.
+Each metadata profile is built again into independent graph storage, and every
+cut must have identical slice, node, and parameter identities. The native model
+builder supplies geometry at the actual shape; no extracted program or geometry
+recipe remains. The separate live execution fixtures compare ordinary graph
+reuse against independently loaded contexts with graph reuse disabled, including
+logits and serialized sequence state. They cover split prefill/decode, recurrent
+state, and MTP. These numerical fixtures supplement the structural roster checks;
+they do not substitute for real-model family certification.
 
 ## Contracts checked
 
@@ -68,7 +70,7 @@ The generator checks loaded trunk depth, output width and logical MTP count.
   class-specific canary lanes.
 
 The original Kimi/ARWKV activation-export and DeepSeek32 initial-input-leaf
-regressions remain covered. Core patch `0025` rejects encoder-decoder plans cleanly
+regressions remain covered. The planner rejects encoder-decoder plans cleanly
 and excludes router cache slots from auxiliary MTP contracts. No skip-on-failure
 or expected-crash tests are used.
 

@@ -158,7 +158,7 @@ pub(super) fn run(args: &[String]) -> DynResult<()> {
         PathBuf::from,
     );
     let output = values.get("--output").map_or_else(
-        || PathBuf::from("website/src/docs/pages/skippy-api.md"),
+        || PathBuf::from("mesh/website/src/docs/pages/skippy-api.md"),
         PathBuf::from,
     );
     let mut paths = std::fs::read_dir(&include)?

@@ -30,7 +30,7 @@ pub(super) use skippy_inference_api::{
 pub(super) use skippy_metrics::attr as attr_key;
 pub(super) use skippy_protocol::{
     LoadMode, MessageBase, PeerConfig, SCHEMA_VERSION, StageConfig, StageDevice,
-    StageKvCacheConfig, StageKvCacheMode, StageKvCachePayload,
+    StageKvCacheConfig, StageKvCacheMode,
     binary::{LLAMA_TOKEN_NULL, StageReplyStats, WireMessageKind, write_stage_message},
 };
 pub(super) use skippy_runtime::{
@@ -49,6 +49,7 @@ pub(super) use std::{
 };
 pub(super) use tokio::sync::Semaphore;
 
+mod cache_publication;
 mod chat_stream_deltas;
 mod draft_runtime;
 mod generation;

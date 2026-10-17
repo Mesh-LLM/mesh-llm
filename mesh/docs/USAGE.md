@@ -476,7 +476,6 @@ max_bytes            = 0         # 0 = no explicit byte cap
 min_tokens           = 64
 shared_stride_tokens = 32        # stride for shared-prefix record matching
 shared_record_limit  = 4         # max retained shared-prefix records
-payload_mode         = "auto"    # resident-kv kv-recurrent full-state auto
 
 # Schema-reserved fields (accepted but not yet wired to runtime):
 # keep_tokens          = 256     # session prompt retention

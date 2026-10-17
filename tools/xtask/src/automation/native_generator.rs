@@ -19,7 +19,12 @@ pub(crate) const USAGE: &str = "cargo xtool automation native-generator --source
 enum Error {
     #[error(transparent)]
     Interrupt(#[from] super::command_interrupt::Reason),
-    #[error("{phase} failed: {report:?}")]
+    #[error(
+        "{phase} failed: outcome={:?}, exit={:?}, elapsed={:?}, cleanup_complete={}\nstdout:\n{}\nstderr:\n{}",
+        .report.outcome, .report.status, .report.elapsed, .report.cleanup.complete,
+        String::from_utf8_lossy(&.report.stdout.bytes_retained),
+        String::from_utf8_lossy(&.report.stderr.bytes_retained)
+    )]
     Command {
         phase: &'static str,
         report: Box<process::ProcessReport>,

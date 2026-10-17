@@ -50,7 +50,7 @@ impl RuntimeState {
         self.max_idle_sessions = Some(0);
     }
 
-    pub(crate) fn warmup_generation_graph(&self) -> Result<bool> {
+    pub(crate) fn warmup_generation_graph(&mut self) -> Result<bool> {
         // Prewarming invokes decode_step. Encode-only models cannot decode,
         // and encoder-decoder models must encode a source first.
         if self.model.workload_info()?.kind != ModelWorkload::CausalGeneration {
@@ -72,10 +72,41 @@ impl RuntimeState {
             .into_iter()
             .next()
             .unwrap_or(0);
-        let mut session = self.model.create_session()?;
-        session.decode_step(token_id)?;
-        session.reset()?;
+        // Binary startup may already have parked every native lane in the idle
+        // pool. Borrow a clean session instead of requesting an extra lane.
+        // Never overwrite an idle session's retained prefix just for warmup.
+        let idle_index = self
+            .idle_sessions
+            .iter()
+            .position(|idle| idle.resident_prefix.is_none());
+        let mut lane = match idle_index {
+            Some(index) => self.idle_sessions.swap_remove(index),
+            None => self.create_lane_session()?,
+        };
+        let result = lane
+            .session
+            .decode_step(token_id)
+            .and_then(|_| lane.session.reset());
+        self.finish_generation_warmup(lane, result, idle_index.is_some())?;
         Ok(true)
+    }
+
+    fn finish_generation_warmup(
+        &mut self,
+        lane: RuntimeLaneSession,
+        result: Result<()>,
+        return_to_pool: bool,
+    ) -> Result<()> {
+        if result.is_ok() && return_to_pool {
+            self.idle_sessions.push(lane);
+        } else {
+            // A failed decode/reset must not leave a dirty session reusable.
+            // Temporary warmup sessions also release their native lane here.
+            let index = lane.index;
+            drop(lane);
+            self.free_lane_indices.push(index);
+        }
+        result
     }
 
     /// Release the session slot identified by `session_id`.

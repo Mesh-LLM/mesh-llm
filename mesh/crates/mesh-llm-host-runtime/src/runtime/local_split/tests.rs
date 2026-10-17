@@ -61,7 +61,6 @@ fn stage_zero_runtime_config_carries_the_admitted_activation_frontier() {
 
     apply_admitted_activation_frontier(&mut config, &load).expect("copy admitted frontier");
 
-    assert_eq!(config.kv_graph_state, "dense");
     assert_eq!(
         config.activation_import_identities,
         expected.activation_imports

@@ -1,4 +1,4 @@
-From e6c0c994f144c40a9e418cd04de8644061dbee2a Mon Sep 17 00:00:00 2001
+From c33dedca23df05088d225ba8a938950ec9c942bc Mon Sep 17 00:00:00 2001
 From: Daniel Winter <danielwinterw@gmail.com>
 Date: Sun, 27 Sep 2026 21:12:21 +1000
 Subject: [PATCH] models: add Laya decision model support
@@ -77,8 +77,8 @@ index 80ab5b76b..ab0182c3a 100644
  
  #define SKIPPY_ABI_VERSION_MAJOR 0
  #define SKIPPY_ABI_VERSION_MINOR 1
--#define SKIPPY_ABI_VERSION_PATCH 66
-+#define SKIPPY_ABI_VERSION_PATCH 68
+-#define SKIPPY_ABI_VERSION_PATCH 68
++#define SKIPPY_ABI_VERSION_PATCH 70
  
  #if defined(_MSC_VER)
  #define SKIPPY_DEPRECATED(message) __declspec(deprecated(message))
@@ -265,10 +265,10 @@ index 000000000..002fac598
 +
 +#endif // SKIPPY_LAYA_H
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index ac456679a..451bdbe61 100644
+index 0f456cfd2..a9e10078d 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
-@@ -89,6 +89,8 @@ add_library(llama
+@@ -80,6 +80,8 @@ add_library(llama
              skippy/tokenization.cpp
              skippy/events.cpp
              skippy/system_one.cpp
@@ -277,7 +277,7 @@ index ac456679a..451bdbe61 100644
              unicode.h
              ${LLAMA_MODELS_SOURCES}
              )
-@@ -113,7 +115,7 @@ set_source_files_properties(${LLAMA_MODELS_SOURCES}
+@@ -104,7 +106,7 @@ set_source_files_properties(${LLAMA_MODELS_SOURCES}
  
  configure_file(llama-version.h.in ${CMAKE_CURRENT_BINARY_DIR}/llama-version.h @ONLY)
  
@@ -408,10 +408,10 @@ index c4cda0421..7618d8148 100644
              return false;
          default:
 diff --git a/src/llama-model.cpp b/src/llama-model.cpp
-index 650cbd25f..680e1a0f8 100644
+index 2c1cd275f..8fa0d91d5 100644
 --- a/src/llama-model.cpp
 +++ b/src/llama-model.cpp
-@@ -348,6 +348,11 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
+@@ -347,6 +347,11 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
              return new llama_model_spark2_5(params);
          case LLM_ARCH_INKLING:
              return new llama_model_inkling(params);
@@ -423,7 +423,7 @@ index 650cbd25f..680e1a0f8 100644
          default:
              throw std::runtime_error(std::string("unsupported model architecture: '") + llm_arch_name(arch) + "'");
      }
-@@ -2407,6 +2412,7 @@ llama_memory_i * llama_model::create_memory(
+@@ -2406,6 +2411,7 @@ llama_memory_i * llama_model::create_memory(
          case LLM_ARCH_EUROBERT:
          case LLM_ARCH_WAVTOKENIZER_DEC:
          case LLM_ARCH_MODERN_BERT:
@@ -431,7 +431,7 @@ index 650cbd25f..680e1a0f8 100644
          case LLM_ARCH_GEMMA_EMBEDDING:
          case LLM_ARCH_DREAM:
          case LLM_ARCH_LLADA:
-@@ -3156,6 +3162,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
+@@ -3131,6 +3137,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
          case LLM_ARCH_BERT:
          case LLM_ARCH_JINA_BERT_V3:
          case LLM_ARCH_MODERN_BERT:

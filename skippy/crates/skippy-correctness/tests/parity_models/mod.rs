@@ -157,7 +157,7 @@ pub(crate) fn graph_boundary_contract_matches_stage_roles(spec: FamilySpec) -> R
         ("middle stage output", middle_output),
         ("final stage input", final_input),
     ] {
-        boundary.raw_f32_width(edge)?;
+        boundary.primary_token_width(edge)?;
     }
     if first_output != middle_input {
         bail!(
