@@ -356,8 +356,9 @@ impl PredictionReturnHub {
         }
         loop {
             match self.wait_for_reply(key, &stream) {
-                Ok(true) => {}
-                Ok(false) => return Ok(()),
+                // At the end of the stream `recv_reply` reports `UnexpectedEof`.
+                Ok(ReturnWait::Reply | ReturnWait::Closed) => {}
+                Ok(ReturnWait::WaiterEnded) => return Ok(()),
                 Err(error) => {
                     let _ = sender.send(Err(error.to_string()));
                     return Err(error).context("wait for direct prediction return");
@@ -383,16 +384,31 @@ impl PredictionReturnHub {
         }
     }
 
-    /// Waits for the next reply to start: `true` once a byte (or the end of
-    /// the stream) is there for `recv_reply`, `false` once the waiter has
-    /// ended first. Only the wait between replies is polled; a reply that has
-    /// started is read without a timeout, so no partial frame is dropped.
-    fn wait_for_reply(&self, key: PredictionReturnKey, stream: &TcpStream) -> io::Result<bool> {
-        stream.set_read_timeout(Some(PREDICTION_RETURN_WAITER_POLL))?;
+    /// Waits for the next reply to start. Only the wait between replies is
+    /// polled; a reply that has started is read without a timeout, so no
+    /// partial frame is dropped.
+    fn wait_for_reply(
+        &self,
+        key: PredictionReturnKey,
+        stream: &TcpStream,
+    ) -> io::Result<ReturnWait> {
+        // Darwin refuses any socket option once both directions are shut
+        // down, which `unregister` can do at any point. The waiter is removed
+        // before that shutdown, so a refusal without a waiter is its end.
+        let set_timeout = |timeout| match stream.set_read_timeout(timeout) {
+            Err(error) if self.has_waiter(key) => Err(error),
+            Err(_) => Ok(false),
+            Ok(()) => Ok(true),
+        };
+        if !set_timeout(Some(PREDICTION_RETURN_WAITER_POLL))? {
+            return Ok(ReturnWait::WaiterEnded);
+        }
         let mut first = [0_u8; 1];
-        let ready = loop {
+        loop {
             match stream.peek(&mut first) {
-                Ok(_) => break true,
+                // Leave the timeout set: the read sees the end at once.
+                Ok(0) => return Ok(ReturnWait::Closed),
+                Ok(_) => break,
                 Err(error)
                     if matches!(
                         error.kind(),
@@ -400,16 +416,29 @@ impl PredictionReturnHub {
                     ) =>
                 {
                     if !self.has_waiter(key) {
-                        break false;
+                        return Ok(ReturnWait::WaiterEnded);
                     }
                 }
                 Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
                 Err(error) => return Err(error),
             }
-        };
-        stream.set_read_timeout(None)?;
-        Ok(ready)
+        }
+        Ok(if set_timeout(None)? {
+            ReturnWait::Reply
+        } else {
+            ReturnWait::WaiterEnded
+        })
     }
+}
+
+/// What [`PredictionReturnHub::wait_for_reply`] found before the next reply.
+enum ReturnWait {
+    /// A reply has started and the read timeout is cleared for `recv_reply`.
+    Reply,
+    /// The peer, or `unregister`, closed the stream.
+    Closed,
+    /// The waiter ended while the stream was idle.
+    WaiterEnded,
 }
 
 /// Removes a stream handle recorded by [`PredictionReturnHub::track_stream`].
