@@ -1,7 +1,7 @@
-From 931841681ac0d9aee9dc869f9492c3ab980411ce Mon Sep 17 00:00:00 2001
+From 2fb4eee73e45b2d4d12407263a8b435865ec8daf Mon Sep 17 00:00:00 2001
 From: James Dumay <james@generalinference.xyz>
 Date: Tue, 13 Oct 2026 22:06:42 +1100
-Subject: [PATCH 3/6] feat(llama): integrate live stage planning and execution
+Subject: [PATCH] feat(llama): integrate live stage planning and execution
 
 ---
  include/llama.h                |    7 +
@@ -24,12 +24,12 @@ Subject: [PATCH 3/6] feat(llama): integrate live stage planning and execution
  src/llama-mmap.h               |   10 +
  src/llama-model-loader.cpp     |  270 +++++-
  src/llama-model-loader.h       |   55 +-
- src/llama-model.cpp            |  192 +++-
+ src/llama-model.cpp            |  196 +++-
  src/llama-model.h              |   17 +-
  src/llama-quant.cpp            |   12 +-
  src/llama.cpp                  |   91 +-
  src/skippy-verify-checkpoint.h |   24 +
- 25 files changed, 3020 insertions(+), 369 deletions(-)
+ 25 files changed, 3022 insertions(+), 371 deletions(-)
  create mode 100644 src/skippy-verify-checkpoint.h
 
 diff --git a/include/llama.h b/include/llama.h
@@ -4725,7 +4725,7 @@ index 9e51d0ce7..bfe635ac0 100644
      template<typename T>
      typename std::enable_if<std::is_integral<T>::value, bool>::type
 diff --git a/src/llama-model.cpp b/src/llama-model.cpp
-index 3801e5cbe..8bbb935ef 100644
+index 3801e5cbe..a47584d0f 100644
 --- a/src/llama-model.cpp
 +++ b/src/llama-model.cpp
 @@ -7,6 +7,7 @@
@@ -4778,7 +4778,7 @@ index 3801e5cbe..8bbb935ef 100644
  
      std::fill(hparams.xielu_alpha_n.begin(), hparams.xielu_alpha_n.end(), 0.0f);
      std::fill(hparams.xielu_alpha_p.begin(), hparams.xielu_alpha_p.end(), 0.0f);
-@@ -1520,13 +1529,33 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
+@@ -1520,21 +1529,41 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
  
      const int i_gpu_start = std::max(n_layer_all + 1 - n_gpu_layers, 0);
      const int act_gpu_layers = devices.empty() ? 0 : std::min(n_gpu_layers, n_layer_all + 1);
@@ -4813,6 +4813,16 @@ index 3801e5cbe..8bbb935ef 100644
          auto * dev = devices.at(layer_gpu).dev;
          LLAMA_LOG_DEBUG("load_tensors: layer %3d assigned to device %s, is_swa = %d\n", il, ggml_backend_dev_name(dev), is_swa);
          return {dev, &pimpl->gpu_buft_list.at(dev)};
+     };
+ 
+     // assign the input layer
+-    // there is very little benefit to offloading the input layer, so always keep it on the CPU
+-    pimpl->dev_input = { cpu_dev, &pimpl->cpu_buft_list };
++    // Experimental: follow the first layer placement for input embeddings.
++    pimpl->dev_input = get_layer_buft_list(0);
+ 
+     // assign the repeating layers to the devices according to the splits
+     pimpl->dev_layer.resize(n_layer_all);
 @@ -1609,13 +1638,13 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
              }
  
