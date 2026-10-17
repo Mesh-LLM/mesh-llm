@@ -1,8 +1,15 @@
-"""For each prompt where speculation changed the greedy text, measure the trunk's own
-logit margin between the two tokens at the first divergence, decoding the shared prefix
-the way unspeculated generation does. A divergence at a near-tie is a numerical flip
-(batched verification is not bit-identical to single-token decode for this MoE); a large
-margin would mean speculation committed a token the target did not choose."""
+"""For each prompt where speculation changed the greedy text, replay the shared prefix
+through single-token decode, as unspeculated generation runs it, and report the trunk's
+logit gap between the two tokens at the first divergence.
+
+A small gap shows the divergence starts at a near-tie of the target, which batched
+verification can resolve differently from single-token decode. A large gap is a reason
+to inspect the verify window's logits and acceptance for that position; it is not proof
+of a wrong commit, because this replay does not see the batched logits the speculative
+run committed from.
+
+Rows that record `token_ids` are compared by those IDs. Otherwise the returned text is
+re-tokenized, which can differ from the generated sequence, and the result says so."""
 from __future__ import annotations
 
 import argparse
@@ -35,6 +42,13 @@ def chat_messages(messages: list[dict]) -> list[dict]:
     return out
 
 
+def generated_ids(tok, row: dict, content: str) -> tuple[list[int], str]:
+    """The generated token IDs when the bench recorded them, else the re-tokenized text."""
+    if row.get("token_ids"):
+        return list(row["token_ids"]), "generated"
+    return tok(content, add_special_tokens=False)["input_ids"], "retokenized"
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--gguf", required=True)
@@ -43,6 +57,8 @@ def main() -> None:
     ap.add_argument("--spec", type=Path, required=True, help="bench outputs.json with speculation on")
     ap.add_argument("--prompts", type=Path, required=True, help="json list of {id, messages, tools?}")
     ap.add_argument("--work", type=Path, required=True)
+    ap.add_argument("--near-tie", type=float, default=0.5,
+                    help="serial logit gap below which a divergence is reported as a near-tie")
     a = ap.parse_args()
     from transformers import AutoTokenizer
     tok = AutoTokenizer.from_pretrained(a.tokenizer)
@@ -58,23 +74,29 @@ def main() -> None:
         p = prompts[r["id"]]
         prompt = tok.apply_chat_template(chat_messages(p["messages"]), tools=p.get("tools") or None,
                                          tokenize=True, add_generation_prompt=True)
-        t_off = tok(content_off, add_special_tokens=False)["input_ids"]
-        t_spec = tok(content_spec, add_special_tokens=False)["input_ids"]
+        t_off, source = generated_ids(tok, o, content_off)
+        t_spec, spec_source = generated_ids(tok, r, content_spec)
+        if spec_source != source:
+            source = "retokenized"
         k = 0
         while k < min(len(t_off), len(t_spec)) and t_off[k] == t_spec[k]:
             k += 1
         if k >= min(len(t_off), len(t_spec)):
-            report.append({"id": r["id"], "note": "texts differ only in tokenization or length"})
+            report.append({"id": r["id"], "token_source": source,
+                           "verdict": "inconclusive: the sequences differ only in length"})
             continue
         ids = np.asarray(prompt + t_off[:k], dtype=np.int32)
         ids.tofile(a.work / "tokens.i32")
         out = subprocess.run([str(PROBE), a.gguf, str(a.work / "tokens.i32"), str(len(prompt)),
                               str(t_off[k]), str(t_spec[k])], capture_output=True, text=True, check=True)
         m = json.loads(out.stdout.strip().splitlines()[-1])
-        report.append({"id": r["id"], "token_index": k, "off_token": tok.decode([t_off[k]]),
-                       "spec_token": tok.decode([t_spec[k]]), "serial_argmax_is_off": m["argmax"] == t_off[k],
-                       "logit_gap_off_minus_spec": round(m["logit_a"] - m["logit_b"], 4),
-                       "top1_minus_top2": round(m["top1"] - m["top2"], 4)})
+        gap = m["logit_a"] - m["logit_b"]
+        report.append({"id": r["id"], "token_source": source, "token_index": k,
+                       "off_token": tok.decode([t_off[k]]), "spec_token": tok.decode([t_spec[k]]),
+                       "serial_argmax_is_off": m["argmax"] == t_off[k],
+                       "serial_logit_gap_off_minus_spec": round(gap, 4),
+                       "verdict": "serial near-tie" if abs(gap) < a.near_tie
+                       else "inspect the verify window at this position"})
     print(json.dumps(report, indent=1))
 
 

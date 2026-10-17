@@ -45,8 +45,16 @@ greedy text with any speculation can differ from greedy text without it.
 logits of the same tokens decoded one at a time and as one verify window.
 
 `divergence.py` takes two bench output files for the same shape, with
-speculation off and on. For each prompt whose text differs, it decodes the
-shared prefix the way unspeculated generation does and reports the trunk's
-logit margin between the two candidate tokens. A divergence at a near-tie is a
-numerical flip. A large margin means speculation committed a token the target
-did not choose, which is a bug.
+speculation off and on. For each prompt whose text differs, it replays the
+shared prefix through single-token decode, as unspeculated generation runs it,
+and reports the trunk's logit gap between the two candidate tokens.
+
+- **Small gap:** the divergence starts at a near-tie of the target, which
+  batched verification can resolve differently.
+- **Large gap:** inspect the verify window's logits and acceptance at that
+  position. It is not proof of a wrong commit, because the replay does not see
+  the batched logits the speculative run committed from.
+
+Rows that carry `token_ids` are compared by the generated IDs. Otherwise the
+returned text is re-tokenized, which can differ from the generated sequence, and
+each result records which source it used.

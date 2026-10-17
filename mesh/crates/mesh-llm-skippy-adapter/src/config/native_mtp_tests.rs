@@ -437,9 +437,13 @@ draft_max_tokens = 2
 #[test]
 fn multi_block_native_mtp_cannot_draft_past_its_block_count() {
     let generation = chained_native_mtp_generation(vec![47, 48]);
-    let resolved = resolve_with_generation("", &generation);
+    let error = resolve_with_generation("", &generation)
+        .expect_err("three drafts from two NextN blocks must be rejected");
 
-    assert!(resolved.is_err() || !resolved.unwrap().speculative.native_mtp_enabled);
+    assert!(
+        format!("{error:#}").contains("package native MTP proposer is not valid"),
+        "{error:#}"
+    );
 }
 
 #[test]
