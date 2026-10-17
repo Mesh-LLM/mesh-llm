@@ -1993,8 +1993,11 @@ private:
                            std::istreambuf_iterator<char>());
       std::sort(edits.begin(), edits.end(),
                 [](const Edit &left, const Edit &right) {
-                  return std::tie(left.offset, left.length) >
-                         std::tie(right.offset, right.length);
+                  // The text is part of the ordering key so that identical
+                  // replacements are always adjacent: std::sort is not stable
+                  // and std::unique only removes adjacent duplicates.
+                  return std::tie(left.offset, left.length, left.text) >
+                         std::tie(right.offset, right.length, right.text);
                 });
       // A decoder body inherited from a base class is reached from every
       // builder that calls it, so identical replacements arrive more than once.

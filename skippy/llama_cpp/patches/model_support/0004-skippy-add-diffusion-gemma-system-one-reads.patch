@@ -143,7 +143,7 @@ index ceed6e5d3..1e1d2d7c8 100644
  
 diff --git a/src/skippy/system_one.cpp b/src/skippy/system_one.cpp
 new file mode 100644
-index 000000000..5044b13df
+index 000000000..d0c51d87a
 --- /dev/null
 +++ b/src/skippy/system_one.cpp
 @@ -0,0 +1,243 @@
@@ -263,18 +263,7 @@ index 000000000..5044b13df
 +    }
 +
 +    const int32_t n_vocab = llama_vocab_n_tokens(llama_model_get_vocab(model->model));
-+    const int32_t lane = skippy_claim_execution_lane(model);
-+    if (lane < 0) {
-+        return system_one_fail(out_error, SKIPPY_STATUS_RUNTIME_ERROR,
-+                "the system-one execution lane is busy");
-+    }
-+    system_one_scope scope(model, lane);
-+
 +    try {
-+        skippy_synchronize_context_if_pending(model);
-+        llama_set_causal_attn(model->ctx, false);
-+        llama_diffusion_set_sc(model->model, nullptr, 0.0f, 1.0f, false);
-+
 +        std::vector<uint8_t> seen_canvas_positions(canvas_token_count, 0);
 +        std::vector<uint8_t> seen_label_positions(label_token_count, 0);
 +        for (size_t slot_index = 0; slot_index < slot_count; ++slot_index) {
@@ -309,6 +298,17 @@ index 000000000..5044b13df
 +            return system_one_fail(out_error, SKIPPY_STATUS_INVALID_ARGUMENT,
 +                    "system-one label ranges must cover the flattened label-token array exactly");
 +        }
++
++        const int32_t lane = skippy_claim_execution_lane(model);
++        if (lane < 0) {
++            return system_one_fail(out_error, SKIPPY_STATUS_RUNTIME_ERROR,
++                    "the system-one execution lane is busy");
++        }
++        system_one_scope scope(model, lane);
++
++        skippy_synchronize_context_if_pending(model);
++        llama_set_causal_attn(model->ctx, false);
++        llama_diffusion_set_sc(model->model, nullptr, 0.0f, 1.0f, false);
 +
 +        const int32_t prompt_count = static_cast<int32_t>(prompt_token_count);
 +        const int32_t canvas_count = static_cast<int32_t>(canvas_token_count);

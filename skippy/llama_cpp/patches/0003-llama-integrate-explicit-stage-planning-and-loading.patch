@@ -1934,7 +1934,7 @@ index b7dfadef4..3281d8801 100644
              if (!cells.is_empty(idx)) {
                  assert(cells.seq_count(idx) == 1);
  
-@@ -1173,132 +1306,1228 @@ void llama_kv_cache::apply_ubatch(const slot_info & sinfo, const llama_ubatch &
+@@ -1173,132 +1306,1240 @@ void llama_kv_cache::apply_ubatch(const slot_info & sinfo, const llama_ubatch &
                  cells.ext_set(idx, ext);
              }
  
@@ -2964,7 +2964,19 @@ index b7dfadef4..3281d8801 100644
 +            return false;
 +        }
 +    }
++    // MLA caches (DeepSeek/GLM indexers) hold no V stream: their page carries an empty V
++    // payload and the CacheGen encoder emits no V records for it, so V tiles must not be
++    // consumed. Fail closed if a page mixes layers with and without a V stream.
++    const bool has_v_payload = desc.v_row_bytes != 0 || desc.v_element_bytes != 0;
 +    for (const auto * layer : selected) {
++        const bool layer_has_v = layer->v_stream.size() > strm && layer->v_stream[strm] != nullptr;
++        if (layer_has_v != has_v_payload) {
++            error = "CacheGen page V streams disagree with its V geometry";
++            return false;
++        }
++        if (!has_v_payload) {
++            continue;
++        }
 +        const size_t v_row_bytes =
 +            v_trans ? static_cast<size_t>(hparams.n_embd_v_gqa(layer->il)) * desc.v_element_bytes : desc.v_row_bytes;
 +        if (!consume_tiles(layer->v_stream[strm], v_row_bytes, v_trans)) {
@@ -3249,7 +3261,7 @@ index b7dfadef4..3281d8801 100644
  
      const uint64_t kv_size      = get_size();
      const uint64_t n_embd_k_gqa = k->ne[0];
-@@ -1307,18 +2536,17 @@ ggml_tensor * llama_kv_cache::get_k(ggml_context * ctx, int32_t il, uint32_t n_k
+@@ -1307,18 +2548,17 @@ ggml_tensor * llama_kv_cache::get_k(ggml_context * ctx, int32_t il, uint32_t n_k
  
      const uint32_t ns = sinfo.s1 - sinfo.s0 + 1;
  
@@ -3271,7 +3283,7 @@ index b7dfadef4..3281d8801 100644
  
      const uint64_t kv_size      = get_size();
      const uint64_t n_embd_v_gqa = v->ne[0];
-@@ -1330,29 +2558,45 @@ ggml_tensor * llama_kv_cache::get_v(ggml_context * ctx, int32_t il, uint32_t n_k
+@@ -1330,29 +2570,45 @@ ggml_tensor * llama_kv_cache::get_v(ggml_context * ctx, int32_t il, uint32_t n_k
  
      if (!v_trans) {
          // note: v->nb[1] <= v->nb[2]
@@ -3322,7 +3334,7 @@ index b7dfadef4..3281d8801 100644
  
      const int64_t n_embd_head = k_cur->ne[0];
      const int64_t n_head      = k_cur->ne[1];
-@@ -1385,9 +2629,7 @@ ggml_tensor * llama_kv_cache::cpy_k(ggml_context * ctx, ggml_tensor * k_cur, ggm
+@@ -1385,9 +2641,7 @@ ggml_tensor * llama_kv_cache::cpy_k(ggml_context * ctx, ggml_tensor * k_cur, ggm
  ggml_tensor * llama_kv_cache::cpy_v(ggml_context * ctx, ggml_tensor * v_cur, ggml_tensor * v_idxs, int32_t il, const slot_info & sinfo) const {
      GGML_UNUSED(sinfo);
  
@@ -3333,7 +3345,7 @@ index b7dfadef4..3281d8801 100644
  
      const int64_t n_embd_head = v_cur->ne[0];
      const int64_t n_head      = v_cur->ne[1];
-@@ -1449,6 +2691,27 @@ ggml_tensor * llama_kv_cache::build_input_k_idxs(ggml_context * ctx, const llama
+@@ -1449,6 +2703,27 @@ ggml_tensor * llama_kv_cache::build_input_k_idxs(ggml_context * ctx, const llama
      return k_idxs;
  }
  
@@ -3361,7 +3373,7 @@ index b7dfadef4..3281d8801 100644
  ggml_tensor * llama_kv_cache::build_input_v_idxs(ggml_context * ctx, const llama_ubatch & ubatch) const {
      const uint32_t n_tokens = ubatch.n_tokens;
  
-@@ -1827,6 +3090,39 @@ void llama_kv_cache::set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch
+@@ -1827,6 +3102,39 @@ void llama_kv_cache::set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch
      }
  }
  
@@ -3401,7 +3413,7 @@ index b7dfadef4..3281d8801 100644
  void llama_kv_cache::set_input_k_rot(ggml_tensor * dst) const {
      GGML_ASSERT(ggml_backend_buffer_is_host(dst->buffer));
  
-@@ -1939,6 +3235,18 @@ size_t llama_kv_cache::size_v_bytes() const {
+@@ -1939,6 +3247,18 @@ size_t llama_kv_cache::size_v_bytes() const {
      return size_v_bytes;
  }
  
@@ -3420,7 +3432,7 @@ index b7dfadef4..3281d8801 100644
  ggml_tensor * llama_kv_cache::build_rope_shift(
          const llama_cparams & cparams,
                 ggml_context * ctx,
-@@ -2289,6 +3597,36 @@ void llama_kv_cache::state_write_data(llama_io_write_i & io, const cell_ranges_t
+@@ -2289,6 +3609,36 @@ void llama_kv_cache::state_write_data(llama_io_write_i & io, const cell_ranges_t
          }
      }
  
@@ -3457,7 +3469,7 @@ index b7dfadef4..3281d8801 100644
      if (!v_trans) {
          for (const auto & layer : layers) {
              const uint32_t il = layer.il;
-@@ -2619,6 +3957,68 @@ bool llama_kv_cache::state_read_data(llama_io_read_i & io, uint32_t strm, uint32
+@@ -2619,6 +3969,68 @@ bool llama_kv_cache::state_read_data(llama_io_read_i & io, uint32_t strm, uint32
          }
      }
  
@@ -3526,7 +3538,7 @@ index b7dfadef4..3281d8801 100644
      if (!this->v_trans) {
          for (const auto & layer : layers) {
              const uint32_t il = layer.il;
-@@ -2835,8 +4235,9 @@ llama_kv_cache_context::llama_kv_cache_context(
+@@ -2835,8 +4247,9 @@ llama_kv_cache_context::llama_kv_cache_context(
          llama_kv_cache * kv,
          llama_context * lctx,
          bool do_shift,
@@ -3538,7 +3550,7 @@ index b7dfadef4..3281d8801 100644
          status = LLAMA_MEMORY_STATUS_NO_UPDATE;
      }
  }
-@@ -2889,6 +4290,21 @@ uint32_t llama_kv_cache_context::get_n_kv() const {
+@@ -2889,6 +4302,21 @@ uint32_t llama_kv_cache_context::get_n_kv() const {
      return n_kv;
  }
  
@@ -3560,7 +3572,7 @@ index b7dfadef4..3281d8801 100644
  ggml_type llama_kv_cache_context::type_k() const {
      return kv->type_k();
  }
-@@ -2905,6 +4321,18 @@ ggml_tensor * llama_kv_cache_context::get_v(ggml_context * ctx, int32_t il) cons
+@@ -2905,6 +4333,18 @@ ggml_tensor * llama_kv_cache_context::get_v(ggml_context * ctx, int32_t il) cons
      return kv->get_v(ctx, il, n_kv, sinfos[i_cur]);
  }
  
@@ -3579,7 +3591,7 @@ index b7dfadef4..3281d8801 100644
  ggml_tensor * llama_kv_cache_context::cpy_k(ggml_context * ctx, ggml_tensor * k_cur, ggml_tensor * k_idxs, int32_t il) const {
      return kv->cpy_k(ctx, k_cur, k_idxs, il, sinfos[i_cur]);
  }
-@@ -2913,6 +4341,10 @@ ggml_tensor * llama_kv_cache_context::cpy_v(ggml_context * ctx, ggml_tensor * v_
+@@ -2913,6 +4353,10 @@ ggml_tensor * llama_kv_cache_context::cpy_v(ggml_context * ctx, ggml_tensor * v_
      return kv->cpy_v(ctx, v_cur, v_idxs, il, sinfos[i_cur]);
  }
  
@@ -3590,7 +3602,7 @@ index b7dfadef4..3281d8801 100644
  ggml_tensor * llama_kv_cache_context::build_input_k_idxs(ggml_context * ctx, const llama_ubatch & ubatch) const {
      return kv->build_input_k_idxs(ctx, ubatch);
  }
-@@ -2949,6 +4381,10 @@ void llama_kv_cache_context::set_input_pos_bucket(ggml_tensor * dst, const llama
+@@ -2949,6 +4393,10 @@ void llama_kv_cache_context::set_input_pos_bucket(ggml_tensor * dst, const llama
      kv->set_input_pos_bucket(dst, ubatch);
  }
  
