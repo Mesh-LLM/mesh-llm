@@ -241,41 +241,56 @@ pub(crate) fn run_stop() -> Result<()> {
 
     let targets = discovery::collect_runtime_stop_targets(&root)?;
     let mut killed = 0u32;
+    let mut failed = 0u32;
     for target in targets {
         let outcome = backend::terminate_process_blocking(
             target.pid,
             &target.expected_comm,
             target.expected_start_time,
         );
-        if outcome.is_success() {
-            match outcome {
-                backend::TerminationOutcome::Graceful => {
-                    writeln!(
-                        err,
-                        "  Terminated owner pid={} gracefully ({})",
-                        target.pid, target.label
-                    )?;
-                }
-                backend::TerminationOutcome::Killed => {
-                    writeln!(
-                        err,
-                        "  Force-killed owner pid={} ({})",
-                        target.pid, target.label
-                    )?;
-                }
-                backend::TerminationOutcome::NotRunning => {
-                    writeln!(
-                        err,
-                        "  Owner pid={} was already stopped ({})",
-                        target.pid, target.label
-                    )?;
-                }
-                backend::TerminationOutcome::Failed => unreachable!(),
+        match outcome {
+            backend::TerminationOutcome::Graceful => {
+                writeln!(
+                    err,
+                    "  Terminated owner pid={} gracefully ({})",
+                    target.pid, target.label
+                )?;
             }
-            killed += 1;
+            backend::TerminationOutcome::Killed => {
+                writeln!(
+                    err,
+                    "  Force-killed owner pid={} ({})",
+                    target.pid, target.label
+                )?;
+            }
+            backend::TerminationOutcome::NotRunning => {
+                writeln!(
+                    err,
+                    "  Owner pid={} was already stopped ({})",
+                    target.pid, target.label
+                )?;
+            }
+            // A stale record whose id another process now holds: nothing of
+            // ours is running there.
+            backend::TerminationOutcome::NotOurs => continue,
+            backend::TerminationOutcome::Failed => {
+                writeln!(
+                    err,
+                    "  Could not stop owner pid={} ({})",
+                    target.pid, target.label
+                )?;
+                failed += 1;
+                continue;
+            }
         }
+        killed += 1;
     }
 
+    // A process that would not stop is still running, so never report
+    // "Nothing running." for it, and fail the command.
+    if failed > 0 {
+        anyhow::bail!("{failed} mesh-llm process(es) could not be stopped");
+    }
     if killed == 0 {
         writeln!(err, "Nothing running.")?;
     }
