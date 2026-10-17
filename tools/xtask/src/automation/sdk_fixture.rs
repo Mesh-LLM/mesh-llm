@@ -1,4 +1,5 @@
 mod coordinator;
+mod diagnostics;
 mod options;
 mod readiness;
 use super::{daemon_readiness::ports::Reservation, private_state::PrivateState};
@@ -14,7 +15,7 @@ use std::{path::Path, time::Duration};
 
 #[derive(thiserror::Error)]
 enum Failure {
-    #[error("SDK fixture process session failed")]
+    #[error("SDK fixture process session failed: {}", diagnostics::summary(report))]
     Session {
         report: crate::process::retained::Report<String>,
     },

@@ -5,6 +5,8 @@ mod refusal_tests;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
+mod timeout_tests;
+#[cfg(test)]
 mod whitespace_tests;
 
 use super::{Error, Interrupt, invocation, parent, publish_count, scope};
@@ -28,6 +30,9 @@ struct Generated {
 pub(super) fn run(arguments: &[String]) -> DynResult<()> {
     if arguments == ["--help"] {
         println!("{USAGE}");
+        println!(
+            "Default deadlines: 600 seconds per rewriter pass; 60 seconds per Git command. --timeout overrides both."
+        );
         return Ok(());
     }
     let options = options::parse(arguments)?;
@@ -127,6 +132,7 @@ fn rewrite(
                 Pass::Second => "second rewriter",
             },
             capture: false,
+            timeout: options.rewriter_timeout,
         },
         cancellation,
     )?;

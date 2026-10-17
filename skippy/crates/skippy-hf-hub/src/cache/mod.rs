@@ -133,6 +133,22 @@ impl crate::blocking::HFClientSync {
     }
 }
 
+/// Scan one cached repository, without walking the rest of the cache.
+///
+/// Returns `None` when the repository has no folder under `cache_dir`. The
+/// folder layout, revisions, refs, and per-file accounting match
+/// [`HFClient::scan_cache`]; only the scope differs. Use this for a repository
+/// already known by id — a single-model lookup should not pay for every other
+/// cached repository, which matters when the cache is large or on network
+/// storage.
+pub fn scan_cached_repo(
+    cache_dir: &std::path::Path,
+    repo: &str,
+    repo_type: impl crate::RepoType,
+) -> Option<CachedRepoInfo> {
+    storage::scan_cached_repo_dir(cache_dir, repo, repo_type.plural())
+}
+
 /// Resolve only the exact local revision to a validated immutable commit.
 /// This reads cache metadata and never contacts the Hub or selects a latest snapshot.
 pub fn resolve_cached_revision(

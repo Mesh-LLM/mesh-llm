@@ -359,7 +359,7 @@ async fn spawn_bridge_probing_upstream() -> (u16, tokio::sync::oneshot::Receiver
     tokio::spawn(async move {
         let (mut stream, peer) = listener.accept().await.unwrap();
         let _ = proxy::read_http_request(&mut stream).await.unwrap();
-        let _ = tx.send(crate::network::tunnel::is_remote_bridge(peer));
+        let _ = tx.send(crate::network::management_origin::is_untrusted_management_request(peer));
         let body = "<script>alert(1)</script>";
         let resp = format!(
             "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",

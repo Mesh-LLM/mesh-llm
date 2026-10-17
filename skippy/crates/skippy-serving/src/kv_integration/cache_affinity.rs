@@ -58,7 +58,7 @@ mod tests {
         time::{Duration, Instant},
     };
 
-    use skippy_protocol::{LoadMode, StageKvCacheConfig, StageKvCacheMode, StageKvCachePayload};
+    use skippy_protocol::{LoadMode, StageKvCacheConfig, StageKvCacheMode};
 
     use super::*;
 
@@ -106,7 +106,6 @@ mod tests {
             kv_cache: Some(StageKvCacheConfig {
                 exact_max_bytes: None,
                 mode: StageKvCacheMode::LookupRecord,
-                payload: StageKvCachePayload::ResidentKv,
                 max_entries: 8,
                 max_bytes: 0,
                 l2_max_bytes: 0,
@@ -128,7 +127,7 @@ mod tests {
     fn busy_radix_returns_cold_affinity_without_waiting() {
         let config = test_config();
         let integration =
-            KvStageIntegration::from_config(&config, skippy_runtime::ModelStateKind::Dense)
+            KvStageIntegration::from_test_state(&config, skippy_runtime::ModelStateKind::Dense)
                 .unwrap()
                 .unwrap();
         let radix = Arc::clone(&integration.radix);

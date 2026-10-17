@@ -99,12 +99,45 @@ pub(in crate::automation) struct Evidence {
     pub cache_pct: f64,
     pub content_events: usize,
     pub finish_reason: Option<String>,
+    /// Structural completion failures; retained even for throughput-only runs.
+    pub output_problems: Vec<String>,
     pub content_sha256: String,
     /// SHA256 of the first nonempty typed delta, including null optional fields.
     pub first_generated_sha256: Option<String>,
 }
 
 impl Stream {
+    fn output_problems(&self) -> Vec<String> {
+        let mut problems = Vec::new();
+        match self.finish_reason.as_deref() {
+            Some("stop") if self.tools.is_empty() && !self.content.trim().is_empty() => {}
+            Some("tool_calls") if !self.tools.is_empty() => {}
+            Some("length") => problems.push("output token budget exhausted".into()),
+            None => problems.push("missing terminal finish reason".into()),
+            _ => problems.push("finish reason does not describe a complete response".into()),
+        }
+        for (index, tool) in &self.tools {
+            let valid = tool.kind.as_deref() == Some("function")
+                && tool.function.as_ref().is_some_and(|function| {
+                    function
+                        .name
+                        .as_deref()
+                        .is_some_and(|name| !name.trim().is_empty())
+                        && function
+                            .arguments
+                            .as_deref()
+                            .and_then(|arguments| serde_json::from_str::<Value>(arguments).ok())
+                            .is_some_and(|arguments| arguments.is_object())
+                });
+            if !valid {
+                problems.push(format!(
+                    "tool call {index} has incomplete or invalid arguments"
+                ));
+            }
+        }
+        problems
+    }
+
     pub(in crate::automation) fn terminal(&self) -> bool {
         self.done || self.error.is_some()
     }
@@ -245,6 +278,7 @@ impl Stream {
             None if probe => elapsed,
             None => return Err("stream completed without generated content".into()),
         };
+        let output_problems = self.output_problems();
         let usage = self.usage.ok_or("missing or invalid prompt/cache usage")?;
         if usage.prompt_tokens == 0
             || usage.prompt_tokens_details.cached_tokens > usage.prompt_tokens
@@ -273,6 +307,7 @@ impl Stream {
                 / number(usage.prompt_tokens),
             content_events: self.events.len(),
             finish_reason: self.finish_reason,
+            output_problems,
             content_sha256: hex::encode(Sha256::digest(encoded)),
             first_generated_sha256: self.first_generated_sha256,
         })

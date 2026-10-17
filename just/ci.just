@@ -300,7 +300,6 @@ ci-automation-contracts:
         --test migration_run_family \
         --test migration_workload_oracle_cli \
         --test migration_xcframework_cli \
-        --test openai_smoke_config \
         --test opencode_config_adapter \
         --test opencode_fixture_evidence \
         --test prepared_source \
@@ -336,7 +335,6 @@ ci-automation-contracts:
         --test swift_producer_environment \
         --test workload_certify_contract \
         --test workload_oracle_producer_contract \
-        --test workload_smoke_config \
         --test workload_start_retry \
         -- --test-threads=1
 

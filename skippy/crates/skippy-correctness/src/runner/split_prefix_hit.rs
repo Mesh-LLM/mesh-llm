@@ -3,7 +3,7 @@ use std::{
     io::Read,
     net::SocketAddr,
     path::{Path, PathBuf},
-    process::{Command, Stdio},
+    process::Stdio,
     thread,
     time::Duration,
 };
@@ -334,9 +334,11 @@ fn spawn_prefix_hit_stage(
 ) -> Result<ChildGuard> {
     let log = File::create(log_path)
         .with_context(|| format!("failed to create {}", log_path.display()))?;
-    let mut command = Command::new(&args.server.stage_server_bin);
+    let mut command = crate::stage_process::command(
+        &args.server.stage_server_bin,
+        args.server.startup_timeout_secs,
+    );
     command.args([
-        "serve",
         "--stage-transport",
         "binary",
         "--config",

@@ -13,18 +13,29 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Observed effect of the on/off request on the selected template, not whether
+/// the model is currently thinking or obeys the request during generation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ThinkingToggle {
+    Observed,
+    NotObserved,
+    #[default]
+    Unknown,
+}
+
 /// Reasoning controls a client can offer for one served model.
 ///
 /// Absent from a model object that was never probed: an unprobed control is
 /// unknown, not off.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct ThinkingControls {
-    /// Whether the selected template reacted to turning thinking on versus off,
-    /// so a client can offer a thinking toggle.
-    ///
-    /// `false` also covers a probe that could not render one side of the
-    /// comparison: a control this probe could not observe is not advertised.
-    pub enabled: bool,
+    /// Whether both renders succeeded and the on/off control changed the prompt.
+    pub toggle: ThinkingToggle,
+    /// Whether the native parser recognizes reasoning in the default render.
+    /// This does not imply that reasoning can be disabled, or that it will occur.
+    /// `None` means the renderer did not supply this evidence.
+    pub reasoning_parser: Option<bool>,
     /// Effort values that visibly changed the rendered prompt relative to a
     /// plain thinking-on render, in probe order.
     ///
@@ -41,13 +52,14 @@ mod tests {
     #[test]
     fn the_wire_shape_is_the_client_summary_and_nothing_else() {
         let controls = ThinkingControls {
-            enabled: true,
+            toggle: ThinkingToggle::Observed,
+            reasoning_parser: Some(true),
             efforts: vec!["low".to_string(), "medium".to_string(), "high".to_string()],
         };
         let serialized = serde_json::to_value(&controls).expect("serialize thinking controls");
         assert_eq!(
             serialized,
-            serde_json::json!({ "enabled": true, "efforts": ["low", "medium", "high"] })
+            serde_json::json!({ "toggle": "observed", "reasoning_parser": true, "efforts": ["low", "medium", "high"] })
         );
         let restored: ThinkingControls =
             serde_json::from_value(serialized).expect("deserialize thinking controls");
@@ -60,7 +72,7 @@ mod tests {
             serde_json::to_value(ThinkingControls::default()).expect("serialize thinking controls");
         assert_eq!(
             serialized,
-            serde_json::json!({ "enabled": false, "efforts": [] })
+            serde_json::json!({ "toggle": "unknown", "reasoning_parser": null, "efforts": [] })
         );
     }
 }

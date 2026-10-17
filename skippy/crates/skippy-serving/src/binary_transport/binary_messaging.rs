@@ -700,7 +700,7 @@ fn activation_width_from_graph(
         }
         return Ok(0);
     };
-    descriptor.raw_f32_width(edge)
+    descriptor.primary_token_width(edge)
 }
 
 #[cfg(test)]
@@ -749,18 +749,22 @@ mod shutdown_tests {
     }
 
     #[test]
-    fn unsupported_graph_boundary_fails_closed() {
+    fn typed_graph_boundary_width_does_not_select_a_codec() {
         let mut boundary = boundary_f32(1024);
-        boundary.parts[0].ggml_type = 1;
-        let error = activation_width_from_graph("output", Some(boundary), true)
-            .expect_err("non-F32 graph boundary must not use the F32 codec");
-        assert!(error.to_string().contains("not token-indexed F32"));
+        boundary.parts[0].ggml_type = skippy_runtime::GGML_TYPE_I32;
+        assert_eq!(
+            activation_width_from_graph("output", Some(boundary), true).unwrap(),
+            1024
+        );
+    }
 
+    #[test]
+    fn unsupported_graph_boundary_fails_closed() {
         let mut boundary = boundary_f32(1024);
         boundary.parts[0].token_axis = -1;
         let error = activation_width_from_graph("output", Some(boundary), true)
             .expect_err("non-token-indexed graph boundary must fail");
-        assert!(error.to_string().contains("not token-indexed F32"));
+        assert!(error.to_string().contains("not token-indexed"));
 
         let mut boundary = boundary_f32(1024);
         boundary.part_count = 0;

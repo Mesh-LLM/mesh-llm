@@ -5,7 +5,7 @@ mod dynamic_library;
 // without compiling the crate to determine native-runtime compatibility.
 pub const ABI_VERSION_MAJOR: u32 = 0;
 pub const ABI_VERSION_MINOR: u32 = 1;
-pub const ABI_VERSION_PATCH: u32 = 67;
+pub const ABI_VERSION_PATCH: u32 = 70;
 
 // Propagate static native archive changes through Cargo dependency metadata so
 // final binaries are relinked after CMake rebuilds llama.cpp.
@@ -144,17 +144,17 @@ pub use dynamic::{
     skippy_session_encode_prompt, skippy_session_end_external_decode, skippy_session_free,
     skippy_session_last_token_signal, skippy_session_llama_context,
     skippy_session_memory_used_cells, skippy_session_position, skippy_session_rerank,
-    skippy_session_reset, skippy_session_restore_prefix, skippy_session_sample_current,
-    skippy_session_save_prefix, skippy_session_sequence_id, skippy_session_set_position,
-    skippy_session_signal_window, skippy_stage_plan_describe_v1, skippy_stage_plan_free,
-    skippy_stage_plan_profile_at_v1, skippy_stage_plan_resident_tensor_at_v1,
-    skippy_stage_plan_state_at_v1, skippy_stage_plan_string_v1,
-    skippy_stage_plan_validate_chain_v1, skippy_stage_plan_value_at_v1,
-    skippy_stage_planner_create_v1, skippy_stage_planner_free, skippy_stage_planner_realize_v1,
-    skippy_system_one_canvas_length, skippy_system_one_read, skippy_token_is_eog, skippy_tokenize,
-    skippy_trim_session, skippy_verify_tokens, skippy_verify_tokens_frame_sampled,
-    skippy_write_gguf_from_parts, skippy_write_gguf_from_parts_consuming,
-    skippy_write_gguf_metadata_from_parts,
+    skippy_session_reset, skippy_session_restore_prefix, skippy_session_restore_token_history,
+    skippy_session_sample_current, skippy_session_save_prefix, skippy_session_sequence_id,
+    skippy_session_set_position, skippy_session_signal_window, skippy_stage_plan_describe_v1,
+    skippy_stage_plan_free, skippy_stage_plan_profile_at_v1,
+    skippy_stage_plan_resident_tensor_at_v1, skippy_stage_plan_state_at_v1,
+    skippy_stage_plan_string_v1, skippy_stage_plan_validate_chain_v1,
+    skippy_stage_plan_value_at_v1, skippy_stage_planner_create_v1, skippy_stage_planner_free,
+    skippy_stage_planner_realize_v1, skippy_system_one_canvas_length, skippy_system_one_read,
+    skippy_token_is_eog, skippy_tokenize, skippy_trim_session, skippy_verify_tokens,
+    skippy_verify_tokens_frame_sampled, skippy_write_gguf_from_parts,
+    skippy_write_gguf_from_parts_consuming, skippy_write_gguf_metadata_from_parts,
 };
 
 #[cfg(feature = "dynamic-runtime")]
@@ -204,14 +204,15 @@ pub use static_bindings::{
     skippy_session_end_external_decode, skippy_session_free, skippy_session_last_token_signal,
     skippy_session_llama_context, skippy_session_memory_used_cells, skippy_session_position,
     skippy_session_rerank, skippy_session_reset, skippy_session_restore_prefix,
-    skippy_session_sample_current, skippy_session_save_prefix, skippy_session_sequence_id,
-    skippy_session_set_position, skippy_session_signal_window, skippy_stage_plan_describe_v1,
-    skippy_stage_plan_free, skippy_stage_plan_profile_at_v1,
-    skippy_stage_plan_resident_tensor_at_v1, skippy_stage_plan_state_at_v1,
-    skippy_stage_plan_string_v1, skippy_stage_plan_validate_chain_v1,
-    skippy_stage_plan_value_at_v1, skippy_stage_planner_create_v1, skippy_stage_planner_free,
-    skippy_stage_planner_realize_v1, skippy_system_one_canvas_length, skippy_system_one_read,
-    skippy_token_is_eog, skippy_tokenize, skippy_trim_session, skippy_verify_tokens,
-    skippy_verify_tokens_frame_sampled, skippy_write_gguf_from_parts,
-    skippy_write_gguf_from_parts_consuming, skippy_write_gguf_metadata_from_parts,
+    skippy_session_restore_token_history, skippy_session_sample_current,
+    skippy_session_save_prefix, skippy_session_sequence_id, skippy_session_set_position,
+    skippy_session_signal_window, skippy_stage_plan_describe_v1, skippy_stage_plan_free,
+    skippy_stage_plan_profile_at_v1, skippy_stage_plan_resident_tensor_at_v1,
+    skippy_stage_plan_state_at_v1, skippy_stage_plan_string_v1,
+    skippy_stage_plan_validate_chain_v1, skippy_stage_plan_value_at_v1,
+    skippy_stage_planner_create_v1, skippy_stage_planner_free, skippy_stage_planner_realize_v1,
+    skippy_system_one_canvas_length, skippy_system_one_read, skippy_token_is_eog, skippy_tokenize,
+    skippy_trim_session, skippy_verify_tokens, skippy_verify_tokens_frame_sampled,
+    skippy_write_gguf_from_parts, skippy_write_gguf_from_parts_consuming,
+    skippy_write_gguf_metadata_from_parts,
 };

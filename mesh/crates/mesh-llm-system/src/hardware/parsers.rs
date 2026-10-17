@@ -361,7 +361,7 @@ pub fn parse_tegrastats_ram(output: &str) -> Option<u64> {
     Some(mb * 1024 * 1024)
 }
 
-/// Parse `hostname` command output → trimmed hostname string.
+/// Trim and validate a hostname string.
 pub fn parse_hostname(output: &str) -> Option<String> {
     let s = output.trim();
     if s.is_empty() {

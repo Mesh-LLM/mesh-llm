@@ -26,7 +26,6 @@ max_entries = 8
 min_tokens = 96
 shared_stride_tokens = 48
 shared_record_limit = 2
-payload_mode = "resident-kv"
 
 [defaults.hardware]
 device = "CUDA0"

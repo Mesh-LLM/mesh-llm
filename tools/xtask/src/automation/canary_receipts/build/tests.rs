@@ -348,3 +348,32 @@ fn admitted_producer_branch_is_preserved_when_current_verifier_attempt_advances(
     assert_eq!(producer["run_attempt"], "1");
     assert_eq!(producer["branch"], "llama-canary/repair-fixture");
 }
+
+#[test]
+fn selected_independent_build_admits_only_exact_first_pass_without_repair_or_bundle() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut request = input(directory.path());
+    request.mesh_source = "c".repeat(40);
+    request.selected_revision = request.mesh_source.clone();
+    let package_path = directory.path().join("package");
+    previous(&mut request, &package_path);
+    request.mode = Mode::Pinned;
+    let identity_path = package_path.join("identity.json");
+    let mut identity: serde_json::Value =
+        serde_json::from_slice(&fs::read(&identity_path).unwrap()).unwrap();
+    identity["mesh_source"] = json!(request.mesh_source);
+    identity["bundle_sha256"] = serde_json::Value::Null;
+    fs::remove_file(package_path.join("candidate.bundle")).unwrap();
+    fs::write(&identity_path, serde_json::to_vec(&identity).unwrap()).unwrap();
+    request.previous.as_mut().unwrap().identity =
+        Digest::of_file(&identity_path).unwrap().as_str().into();
+    assert!(request.validate().is_ok());
+    assert!(package::previous(&request).is_ok());
+    request.pass_id = "verify-2".into();
+    assert!(request.validate().is_err());
+    request.pass_id = "verify-1".into();
+    request.previous.as_mut().unwrap().candidate = "d".repeat(40);
+    assert!(package::previous(&request).is_err());
+    request.previous = None;
+    assert!(request.validate().is_err());
+}

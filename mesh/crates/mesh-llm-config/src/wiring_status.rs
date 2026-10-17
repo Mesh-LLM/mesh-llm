@@ -699,13 +699,6 @@ pub const WIRING_MANIFEST: &[WiringEntry] = &[
         behavior: WiringBehavior::None,
     },
     WiringEntry {
-        path: "model_fit.prefix_cache.payload_mode",
-        status: WiringStatus::Wired,
-        owner: "n/a",
-        reason: "",
-        behavior: WiringBehavior::None,
-    },
-    WiringEntry {
         path: "model_fit.keep_tokens",
         status: WiringStatus::Unwired,
         owner: "PR2",
