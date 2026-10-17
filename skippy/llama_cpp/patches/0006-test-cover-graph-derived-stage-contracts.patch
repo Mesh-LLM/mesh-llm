@@ -1,7 +1,7 @@
-From 3b3b0c864035951e9a1ed1b2bf552c08da9f7ad9 Mon Sep 17 00:00:00 2001
+From 5928b6b98d9bcdff2658478e6989bc7abbb63098 Mon Sep 17 00:00:00 2001
 From: James Dumay <james@generalinference.xyz>
 Date: Tue, 13 Oct 2026 22:06:43 +1100
-Subject: [PATCH 6/6] test(skippy): cover live graph and state contracts
+Subject: [PATCH] test(skippy): cover live graph and state contracts
 
 ---
  src/skippy/tests/embedding_input_regression.h |   91 +
@@ -25,6 +25,7 @@ Subject: [PATCH 6/6] test(skippy): cover live graph and state contracts
  tests/CMakeLists.txt                          |   26 +
  tests/test-chat-auto-parser.cpp               |   47 +
  tests/test-chat.cpp                           |  170 +-
+ tests/test-cuda-host-readback.cpp             |   76 +
  tests/test-deepseek4-mtp.h                    |   88 +
  tests/test-graph-contract-fixture.h           |  155 ++
  tests/test-llama-archs.cpp                    |  353 +++-
@@ -37,7 +38,7 @@ Subject: [PATCH 6/6] test(skippy): cover live graph and state contracts
  tests/test-skippy-rerank-template.cpp         |   34 +
  tests/test-skippy-sampling-suppress.cpp       |   90 +
  ...st-skippy-verify-checkpoint-retirement.cpp |   26 +
- 33 files changed, 9278 insertions(+), 33 deletions(-)
+ 34 files changed, 9354 insertions(+), 33 deletions(-)
  create mode 100644 src/skippy/tests/embedding_input_regression.h
  create mode 100644 src/skippy/tests/graph_build_inputs.cpp
  create mode 100644 src/skippy/tests/graph_contract_cases.cmake
@@ -56,6 +57,7 @@ Subject: [PATCH 6/6] test(skippy): cover live graph and state contracts
  create mode 100644 src/skippy/tests/stage_plan_header.c
  create mode 100644 src/skippy/tests/stage_plan_header.cpp
  create mode 100644 src/skippy/tests/stage_slice_plan.cpp
+ create mode 100644 tests/test-cuda-host-readback.cpp
  create mode 100644 tests/test-deepseek4-mtp.h
  create mode 100644 tests/test-graph-contract-fixture.h
  create mode 100644 tests/test-skippy-cachegen-metal.cpp
@@ -7226,13 +7228,13 @@ index 000000000..35de1e36c
 +    return result;
 +}
 diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
-index 9b3a4fcc4..aaf82859a 100644
+index 59ab052b3..5c170693b 100644
 --- a/tests/CMakeLists.txt
 +++ b/tests/CMakeLists.txt
-@@ -150,8 +150,14 @@ endif ()
- 
- llama_build(test-recurrent-state-rollback.cpp)
- llama_build(test-save-load-state.cpp)
+@@ -158,8 +158,14 @@ if (GGML_CUDA)
+     set_tests_properties(test-cuda-host-readback-unpinned
+                          PROPERTIES ENVIRONMENT "GGML_CUDA_NO_PINNED=1")
+ endif()
 +llama_build_and_test(test-skippy-rerank-template.cpp)
  
  if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
@@ -7244,7 +7246,7 @@ index 9b3a4fcc4..aaf82859a 100644
      # these tests are disabled on Windows because they use internal functions not exported with LLAMA_API (when building with shared libraries)
      llama_build_and_test(test-unicode.cpp)
      llama_build_and_test(test-sampling.cpp)
-@@ -207,6 +213,22 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
+@@ -215,6 +221,22 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
          FIXTURES_SETUP generate-models
      )
  
@@ -7267,7 +7269,7 @@ index 9b3a4fcc4..aaf82859a 100644
      llama_test(
          test-recurrent-state-rollback
          LABEL main
-@@ -255,6 +277,10 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
+@@ -263,6 +285,10 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
      llama_build(test-fusion.cpp)
  endif()
  
@@ -7604,6 +7606,88 @@ index f2728f7cc..faf95716e 100644
          test_template_output_peg_parsers(detailed_debug);
          std::cout << "\n[chat] All template tests passed!" << '\n';
          return 0;
+diff --git a/tests/test-cuda-host-readback.cpp b/tests/test-cuda-host-readback.cpp
+new file mode 100644
+index 000000000..3b5308950
+--- /dev/null
++++ b/tests/test-cuda-host-readback.cpp
+@@ -0,0 +1,76 @@
++#include "ggml.h"
++#include "ggml-alloc.h"
++#include "ggml-backend.h"
++
++#include <algorithm>
++#include <atomic>
++#include <cstdio>
++#include <cstring>
++#include <thread>
++#include <vector>
++
++static bool matches(const ggml_tensor * tensor, const std::vector<unsigned char> & expected,
++                    size_t offset, size_t size) {
++    // Deliberately unaligned pageable destination; guards detect overwrites.
++    std::vector<unsigned char> output(size + 2, 0xa5);
++    ggml_backend_tensor_get(tensor, output.data() + 1, offset, size);
++    return output.front() == 0xa5 && output.back() == 0xa5 &&
++           std::memcmp(output.data() + 1, expected.data() + offset, size) == 0;
++}
++
++int main() {
++    ggml_backend_load_all();
++    auto * registry = ggml_backend_reg_by_name("CUDA");
++    if (registry == nullptr || ggml_backend_reg_dev_count(registry) == 0) {
++        std::fprintf(stderr, "CUDA host readback requires a CUDA device\n");
++        return 77;
++    }
++    auto * device = ggml_backend_reg_dev_get(registry, 0);
++    constexpr size_t mib = 1024 * 1024;
++    // Exceeds the 64 MiB staging cap and leaves a non-aligned final chunk.
++    constexpr size_t bytes = 65 * mib + 37;
++    std::vector<unsigned char> expected(bytes);
++    for (size_t i = 0; i < bytes; ++i) {
++        expected[i] = static_cast<unsigned char>((i * 131 + i / 4093) % 251);
++    }
++    auto * context = ggml_init({ggml_tensor_overhead() * 2, nullptr, true});
++    auto * tensor = ggml_new_tensor_1d(context, GGML_TYPE_I8, bytes);
++    auto * buffer = ggml_backend_alloc_ctx_tensors_from_buft(context, ggml_backend_dev_buffer_type(device));
++    if (buffer == nullptr) {
++        ggml_free(context);
++        return 1;
++    }
++    ggml_backend_tensor_set(tensor, expected.data(), 0, bytes);
++    bool ok = matches(tensor, expected, 0, bytes) &&
++              matches(tensor, expected, 13, 2 * mib + 17) &&
++              matches(tensor, expected, 5, 4097);
++    // Exercise reuse of the shared staging allocation from concurrent callers.
++    std::atomic<bool> concurrent_ok{true};
++    auto read = [&] {
++        for (int repeat = 0; repeat < 3; ++repeat) {
++            if (!matches(tensor, expected, 7, 2 * mib + 3)) {
++                concurrent_ok = false;
++            }
++        }
++    };
++    std::thread first(read);
++    std::thread second(read);
++    first.join();
++    second.join();
++    ok = ok && concurrent_ok.load();
++    // Already pinned destinations retain the backend's direct readback path.
++    auto * host_type = ggml_backend_dev_host_buffer_type(device);
++    auto * host = host_type == nullptr ? nullptr : ggml_backend_buft_alloc_buffer(host_type, 2 * mib);
++    if (host != nullptr) {
++        auto * output = ggml_backend_buffer_get_base(host);
++        ggml_backend_tensor_get(tensor, output, 3, 2 * mib);
++        ok = ok && std::memcmp(output, expected.data() + 3, 2 * mib) == 0;
++        ggml_backend_buffer_free(host);
++    } else {
++        ok = false;
++    }
++    ggml_backend_buffer_free(buffer);
++    ggml_free(context);
++    std::fprintf(stderr, "CUDA host readback: %s\n", ok ? "byte-exact" : "mismatch");
++    return ok ? 0 : 1;
++}
 diff --git a/tests/test-deepseek4-mtp.h b/tests/test-deepseek4-mtp.h
 new file mode 100644
 index 000000000..87a499031

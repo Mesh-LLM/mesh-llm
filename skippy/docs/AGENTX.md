@@ -112,6 +112,14 @@ Skippy's in-memory prefix retention target is explicitly 8 GiB, with disk
 caching off; exact snapshots can exceed that target. llama-server retains its
 single slot's prompt cache. These cache policies are recorded in launch arguments.
 
+Large CUDA snapshot reads into pageable host memory use a reusable 64 MiB
+pinned staging buffer per physical GPU. Capture remains synchronous so later
+inference cannot change the exported state. Already pinned destinations and
+small reads retain their direct path; unavailable pinned memory or
+`GGML_CUDA_NO_PINNED` selects the original path. The native
+`test-cuda-host-readback` and `test-cuda-host-readback-unpinned` CTest cases
+check byte equality, chunk boundaries, unaligned buffers and concurrent reads.
+
 Sixty seconds is only the smoke measurement window. Building, downloading,
 tokenizer synthesis, server readiness, warmup, outstanding-request drain, and
 cleanup add time. A single cell has a bounded 80-minute lifecycle for smoke;
